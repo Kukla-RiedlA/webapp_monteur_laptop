@@ -63,8 +63,15 @@ try {
     git status --short
     $commitMsg = "Release $Version"
     git commit -m $commitMsg
+    # Tag ggf. aendern: vorhandenen Tag (lokal/remote) auf aktuellen Commit setzen
+    $tagExists = git tag -l $tagName 2>$null
+    if ($tagExists) {
+        git tag -d $tagName 2>$null
+        Write-Host "Alten Tag $tagName entfernt, setze neu auf aktuellen Commit."
+    }
     git tag -a $tagName -m $commitMsg
-    git push --follow-tags
+    git push
+    git push origin $tagName --force
     Write-Host "Release $Version (Tag: $tagName) gepusht."
 } catch {
     Write-Error $_
