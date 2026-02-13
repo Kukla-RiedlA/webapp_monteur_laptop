@@ -3,12 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Monteur WebApp</title>
+  <title>Kukla Monteur Tool</title>
+  <link rel="icon" href="icon.png" type="image/png">
   <style>
     :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --text: #e8e8e8; --muted: #a0a0a0; }
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
-    .toolbar { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1rem; background: var(--card); border-bottom: 1px solid var(--accent); flex-wrap: wrap; }
+    .app-header { background: var(--card); border-bottom: 1px solid var(--accent); }
+    .app-title { margin: 0; font-size: 1.1rem; font-weight: 600; padding: 0.75rem 1rem 0.25rem; color: var(--text); }
+    .toolbar { display: flex; align-items: center; gap: 1rem; padding: 0.25rem 1rem 0.75rem; background: var(--card); flex-wrap: wrap; }
     .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
     .toolbar-technician-name { color: var(--text); font-size: 0.95rem; }
     .app-version { font-size: 0.8rem; color: var(--muted); margin-left: 0.5rem; }
@@ -21,12 +24,21 @@
     .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--accent); }
     .btn-ghost:hover { background: var(--accent); }
     main { padding: 1rem; max-width: 900px; margin: 0 auto; }
+    .view-start { display: flex; flex-direction: row; width: 100%; max-width: none; padding: 1rem; gap: 1rem; box-sizing: border-box; }
+    .view-start .start-left { flex: 1; min-width: 0; }
+    .view-start .start-right { flex: 2; min-width: 0; }
+    .view-start .start-left main, .view-start .start-right main { max-width: none; margin: 0; padding: 0; }
+    .view-start.only-left .start-right { display: none; }
+    .view-start.only-left .start-left { flex: 1 1 100%; }
+    .view-start.only-right .start-left { display: none; }
+    .view-start.only-right .start-right { flex: 1 1 100%; }
     .card { background: var(--card); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--accent); }
     .card h2 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--muted); }
     .job { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; align-items: center; padding: 0.6rem 0; border-bottom: 1px solid var(--accent); }
     .job:last-child { border-bottom: none; }
     .job-info { font-size: 0.9rem; }
-    .job-info strong { color: #fff; }
+    .job-info strong { color: #fff; display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+    .job-flag { vertical-align: middle; display: inline-block; border-radius: 2px; }
     .job-meta { font-size: 0.8rem; color: var(--muted); }
     .job-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
     .job-actions .btn { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
@@ -35,15 +47,17 @@
     .status-in_arbeit { background: #ee6c4d; }
     .status-erledigt { background: #2d6a4f; }
     .empty { color: var(--muted); font-style: italic; padding: 1rem 0; }
+    .connection-badge-wrap {
+      position: relative; display: inline-flex; padding: 2px; border-radius: 6px; --countdown: 1;
+      background: conic-gradient(from -90deg, var(--accent) 0deg, var(--accent) calc(var(--countdown, 1) * 360deg), var(--muted) calc(var(--countdown, 1) * 360deg));
+    }
+    .connection-badge-wrap #connectionBadge { position: relative; z-index: 1; }
     .offline-badge { background: #6c757d; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .online-badge { background: #2d6a4f; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .local-badge { background: #495057; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
-    .view-auftraege { display: block; }
-    .view-kalender { display: none; }
-    .view-kalender.active { display: block; }
     .view-einstellungen { display: none; }
     .view-einstellungen.active { display: block; }
-    .view-auftraege.hidden { display: none; }
+    .view-start.hidden { display: none; }
     .settings-row { margin-bottom: 1rem; }
     .settings-row label { display: block; margin-bottom: 0.25rem; color: var(--muted); font-size: 0.9rem; }
     .settings-row input { width: 100%; max-width: 400px; padding: 0.5rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
@@ -53,39 +67,72 @@
     .cal-month-label { font-weight: bold; min-width: 160px; }
     .cal-grid { display: grid; grid-template-columns: 40px repeat(7, minmax(0,1fr)); gap: 0; border: 1px solid var(--accent); border-radius: 8px; overflow: hidden; }
     .cal-head { background: var(--accent); color: var(--text); padding: 6px 4px; text-align: center; font-size: 0.8rem; font-weight: bold; }
-    .cal-cell { min-height: 56px; border: 1px solid var(--accent); padding: 4px; font-size: 0.75rem; background: var(--card); }
+    .cal-cell { min-height: 56px; border: 1px solid var(--accent); padding: 4px; font-size: 0.75rem; background: var(--card); overflow: visible; display: flex; flex-direction: column; }
     .cal-cell.other-month { opacity: 0.6; }
     .cal-daynum { font-weight: bold; margin-bottom: 4px; }
+    .cal-cell-bars { min-height: 0; }
+    .cal-cell-span-lane { position: relative; overflow: visible; margin-top: 4px; min-height: 0; }
     .cal-bar { font-size: 10px; padding: 2px 4px; border-radius: 3px; margin: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cal-bar.job { color: #000; }
     .cal-bar.absence { background: repeating-linear-gradient(-45deg, transparent 0, transparent 2px, rgba(255,255,255,0.4) 2px, rgba(255,255,255,0.4) 4px); }
     .cal-cell.today { outline: 2px solid #4a90e2; outline-offset: -2px; }
-    .cal-bar-row-spacer { grid-column: 1; min-height: 0; background: var(--card); border: 1px solid var(--accent); border-top: none; }
-    .cal-week-bars { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-auto-rows: 22px; gap: 2px; padding: 2px 4px; min-height: 26px; background: var(--card); border: 1px solid var(--accent); border-left: none; border-top: none; align-content: start; }
-    .cal-bar-span { align-self: stretch; display: flex; align-items: center; padding: 0 6px; }
+    .cal-bar-span { position: absolute; left: 0; height: 20px; display: flex; align-items: center; padding: 0 6px; box-sizing: border-box; min-width: 0; }
+    .cal-legend { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--accent); font-size: 0.85rem; }
+    .cal-legend-title { font-weight: bold; margin-right: 0.5rem; color: var(--muted); }
+    .cal-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .cal-legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
   </style>
 </head>
 <body>
-  <div class="toolbar">
+  <header class="app-header" role="banner">
+    <h1 class="app-title">Kukla Monteur Tool</h1>
+    <nav class="toolbar" aria-label="Hauptnavigation">
+      <button class="btn btn-ghost" id="btnViewStart">Start</button>
     <button class="btn btn-ghost" id="btnViewAuftraege">Aufträge</button>
     <button class="btn btn-ghost" id="btnViewKalender">Kalender</button>
-    <span id="connectionBadge" class="offline-badge">Verbindung wird geprüft…</span>
-    <span id="appVersion" class="app-version"></span>
     <span class="toolbar-right">
       <span id="technicianName" class="toolbar-technician-name"></span>
+      <span class="connection-badge-wrap" id="connectionBadgeWrap">
+        <span id="connectionBadge" class="offline-badge">Verbindung wird geprüft…</span>
+      </span>
       <button type="button" class="btn btn-ghost btn-icon" id="btnViewEinstellungen" title="Einstellungen" aria-label="Einstellungen">⚙</button>
+      <span id="appVersion" class="app-version"></span>
     </span>
+    </nav>
+  </header>
+  <div id="viewStart" class="view-start">
+    <div class="start-left">
+      <main id="viewAuftraege" class="view-auftraege">
+        <div class="card">
+          <h2>Meine Aufträge</h2>
+          <div id="jobsList"><span class="empty">Wird geladen…</span></div>
+        </div>
+        <div class="card">
+          <h2>Abwesenheiten</h2>
+          <div id="absencesList"><span class="empty">Wird geladen…</span></div>
+        </div>
+      </main>
+    </div>
+    <div class="start-right">
+      <main id="viewKalender" class="view-kalender">
+        <div class="card">
+          <h2>Monatskalender</h2>
+          <div class="cal-toolbar">
+            <button type="button" class="btn btn-ghost" id="calPrev">&laquo;</button>
+            <span id="calMonthLabel" class="cal-month-label"></span>
+            <button type="button" class="btn btn-ghost" id="calNext">&raquo;</button>
+            <label style="margin-left: 1rem; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" id="calShowAllTech" checked>
+              <span>Alle Techniker anzeigen</span>
+            </label>
+          </div>
+          <div id="calError" class="cal-error empty" style="display: none;"></div>
+          <div id="calGrid"></div>
+          <div id="calLegend" class="cal-legend" aria-label="Legende: Farbe pro Techniker"></div>
+        </div>
+      </main>
+    </div>
   </div>
-  <main id="viewAuftraege" class="view-auftraege">
-    <div class="card">
-      <h2>Meine Aufträge</h2>
-      <div id="jobsList"><span class="empty">Wird geladen…</span></div>
-    </div>
-    <div class="card">
-      <h2>Abwesenheiten</h2>
-      <div id="absencesList"><span class="empty">Wird geladen…</span></div>
-    </div>
-  </main>
   <main id="viewEinstellungen" class="view-einstellungen">
     <div class="card">
       <h2>Einstellungen</h2>
@@ -106,24 +153,13 @@
         <input type="password" id="serverPassword" placeholder="••••••••" autocomplete="current-password" />
       </div>
       <div class="settings-row">
+        <label for="syncIntervalMinutes">Aktualisierungsintervall (Minuten)</label>
+        <input type="number" id="syncIntervalMinutes" value="5" min="1" max="1440" title="Wie oft die Verbindung zum Server geprüft und Daten synchronisiert werden (Standard: 5)." />
+      </div>
+      <div class="settings-row">
         <button type="button" class="btn btn-primary" id="btnSaveSettings">Speichern</button>
         <span id="settingsSavedHint" class="settings-saved-hint" aria-live="polite"></span>
       </div>
-    </div>
-  </main>
-  <main id="viewKalender" class="view-kalender">
-    <div class="card">
-      <h2>Monatskalender</h2>
-      <div class="cal-toolbar">
-        <button type="button" class="btn btn-ghost" id="calPrev">&laquo;</button>
-        <span id="calMonthLabel" class="cal-month-label"></span>
-        <button type="button" class="btn btn-ghost" id="calNext">&raquo;</button>
-        <label style="margin-left: 1rem; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-          <input type="checkbox" id="calShowAllTech" checked>
-          <span>Alle Techniker anzeigen</span>
-        </label>
-      </div>
-      <div id="calGrid"></div>
     </div>
   </main>
   <script src="app.js"></script>

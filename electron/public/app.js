@@ -5,7 +5,14 @@
   const getServerUsername = () => (document.getElementById('serverUsername') && document.getElementById('serverUsername').value || '').trim();
   const getServerPassword = () => (document.getElementById('serverPassword') && document.getElementById('serverPassword').value || '');
 
-  const SETTINGS_KEYS = { serverUrl: 'monteur_serverUrl', technicianId: 'monteur_technicianId', serverUsername: 'monteur_serverUsername', serverPassword: 'monteur_serverPassword' };
+  const SETTINGS_KEYS = { serverUrl: 'monteur_serverUrl', technicianId: 'monteur_technicianId', serverUsername: 'monteur_serverUsername', serverPassword: 'monteur_serverPassword', syncIntervalMinutes: 'monteur_syncIntervalMinutes' };
+
+  function getSyncIntervalMinutes() {
+    const el = document.getElementById('syncIntervalMinutes');
+    const v = el ? parseInt(el.value, 10) : NaN;
+    if (!Number.isFinite(v) || v < 1) return 5;
+    return Math.min(1440, v);
+  }
 
   function loadSettingsFromStorage() {
     try {
@@ -17,6 +24,11 @@
       if (username != null) document.getElementById('serverUsername').value = username;
       const password = localStorage.getItem(SETTINGS_KEYS.serverPassword);
       if (password != null) document.getElementById('serverPassword').value = password;
+      const interval = localStorage.getItem(SETTINGS_KEYS.syncIntervalMinutes);
+      if (interval != null) {
+        const el = document.getElementById('syncIntervalMinutes');
+        if (el) el.value = Math.max(1, Math.min(1440, parseInt(interval, 10) || 5));
+      }
     } catch (e) { /* ignore */ }
   }
 
@@ -26,6 +38,7 @@
       localStorage.setItem(SETTINGS_KEYS.technicianId, document.getElementById('technicianId').value || '');
       localStorage.setItem(SETTINGS_KEYS.serverUsername, (document.getElementById('serverUsername') && document.getElementById('serverUsername').value) || '');
       localStorage.setItem(SETTINGS_KEYS.serverPassword, (document.getElementById('serverPassword') && document.getElementById('serverPassword').value) || '');
+      localStorage.setItem(SETTINGS_KEYS.syncIntervalMinutes, String(getSyncIntervalMinutes()));
     } catch (e) { /* ignore */ }
   }
 
@@ -59,6 +72,13 @@
     return data;
   }
 
+  function countryFlagImg(code) {
+    if (!code || code.length !== 2) return '';
+    const c = (code || '').toLowerCase();
+    if (!/^[a-z]{2}$/.test(c)) return '';
+    return '<img src="flags/' + c + '.png" alt="" class="job-flag" width="20" height="15" loading="lazy" onerror="this.style.display=\'none\'">';
+  }
+
   function renderJobs(data) {
     const list = document.getElementById('jobsList');
     const jobs = data.jobs || [];
@@ -69,10 +89,20 @@
     list.innerHTML = jobs.map((j) => {
       const start = (j.start_datetime || '').slice(0, 16).replace('T', ' ');
       const status = (j.status || 'geplant').replace(' ', '_');
+      const firma = (j.customer_name || j.customerName || '').trim();
+      const ort = (j.city || '').trim();
+      const land = (j.country || '').trim().toUpperCase().slice(0, 2);
+      const flagHtml = countryFlagImg(land);
+      const parts = [];
+      if (flagHtml) parts.push(flagHtml);
+      if (firma) parts.push(escapeHtml(firma));
+      if (ort) parts.push(escapeHtml(ort));
+      if (land) parts.push(escapeHtml(land));
+      const titleLine = parts.join(' · ');
       return (
         '<div class="job" data-job-id="' + j.id + '">' +
         '<div class="job-info">' +
-        '<strong>' + (j.job_number || '#' + j.id) + '</strong> ' + (j.customer_name || '') + '<br>' +
+        '<strong>' + (titleLine || 'Auftrag') + '</strong><br>' +
         '<span class="job-meta">' + start + ' · ' + (j.job_type || '') + '</span>' +
         '</div>' +
         '<div class="job-actions">' +
@@ -200,6 +230,7 @@
     } catch (e) {
       setConnectionBadge('offline');
     }
+    setNextSyncTime();
     loadJobsAndAbsences();
   }
 
@@ -217,9 +248,52 @@
     }).join('');
   }
 
+  let syncIntervalId = null;
+  let countdownTickId = null;
+  let nextSyncTime = 0;
+
+  function startSyncInterval() {
+    if (syncIntervalId) clearInterval(syncIntervalId);
+    const ms = getSyncIntervalMinutes() * 60 * 1000;
+    syncIntervalId = setInterval(checkConnectionAndSync, ms);
+    if (!countdownTickId) {
+      countdownTickId = setInterval(updateCountdownRing, 1000);
+    }
+  }
+
+  function updateCountdownRing() {
+    const wrap = document.getElementById('connectionBadgeWrap');
+    if (!wrap) return;
+    const intervalMs = getSyncIntervalMinutes() * 60 * 1000;
+    if (nextSyncTime <= 0 || intervalMs <= 0) {
+      wrap.style.setProperty('--countdown', '1');
+      return;
+    }
+    const remaining = Math.max(0, nextSyncTime - Date.now());
+    const value = intervalMs > 0 ? remaining / intervalMs : 1;
+    wrap.style.setProperty('--countdown', String(value));
+  }
+
+  function setNextSyncTime() {
+    nextSyncTime = Date.now() + getSyncIntervalMinutes() * 60 * 1000;
+    updateCountdownRing();
+  }
+
   loadSettingsFromStorage();
   checkConnectionAndSync();
-  setInterval(checkConnectionAndSync, 5 * 60 * 1000);
+  startSyncInterval();
+  // Startansicht und Kalender erst nach Layout-Aufbau, damit das Grid sofort sichtbar ist
+  function initStartView() {
+    showView('start');
+  }
+  function runAfterLayout(fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () { requestAnimationFrame(fn); });
+    } else {
+      requestAnimationFrame(function () { requestAnimationFrame(fn); });
+    }
+  }
+  runAfterLayout(initStartView);
 
   fetch(API_BASE + '/api/version').then(function (r) { return r.json(); }).then(function (d) {
     var el = document.getElementById('appVersion');
@@ -228,6 +302,7 @@
 
   document.getElementById('btnSaveSettings').addEventListener('click', () => {
     saveSettingsToStorage();
+    startSyncInterval();
     updateTechnicianName();
     const base = getServerUrl().trim();
     const techId = getTechId();
@@ -262,12 +337,19 @@
   }
 
   function showView(name) {
-    document.getElementById('viewAuftraege').classList.toggle('hidden', name !== 'auftraege');
-    document.getElementById('viewAuftraege').classList.toggle('view-auftraege', true);
-    document.getElementById('viewKalender').classList.toggle('active', name === 'kalender');
-    document.getElementById('viewEinstellungen').classList.toggle('active', name === 'einstellungen');
-    if (name === 'kalender') loadCalendarMonth();
-    if (name === 'einstellungen') updateTechnicianName();
+    const viewStart = document.getElementById('viewStart');
+    const viewEinstellungen = document.getElementById('viewEinstellungen');
+    viewStart.classList.remove('only-left', 'only-right', 'hidden');
+    viewEinstellungen.classList.remove('active');
+    if (name === 'einstellungen') {
+      viewStart.classList.add('hidden');
+      viewEinstellungen.classList.add('active');
+      updateTechnicianName();
+      return;
+    }
+    if (name === 'auftraege') viewStart.classList.add('only-left');
+    else if (name === 'kalender') viewStart.classList.add('only-right');
+    if (name === 'kalender' || name === 'start') loadCalendarMonth();
   }
 
   async function loadCalendarMonth() {
@@ -280,12 +362,16 @@
 
     let jobs = [];
     let absences = [];
+    let calendarApiData = null;
     const showAll = document.getElementById('calShowAllTech').checked;
+
+    // Sofort leeres Grid rendern, damit Zeilen/Spalten immer sichtbar sind
+    renderCalendarGrid(gridStart, gridEnd, [], [], null);
 
     if (showAll) {
       const base = getServerUrl();
       if (!base) {
-        document.getElementById('calGrid').innerHTML = '<p class="empty">Dispo-Server-URL eintragen und „Alle Techniker“ nutzen.</p>';
+        setCalendarError('Dispo-Server-URL eintragen und „Alle Techniker“ nutzen.');
         return;
       }
       try {
@@ -301,16 +387,18 @@
           })
         }).then(r => r.json());
         if (data.error) throw new Error(data.error);
+        calendarApiData = data;
         jobs = data.jobs || [];
         absences = data.absences || [];
       } catch (e) {
-        document.getElementById('calGrid').innerHTML = '<p class="empty">Kalender laden fehlgeschlagen: ' + e.message + '</p>';
+        renderCalendarGrid(gridStart, gridEnd, [], [], null);
+        setCalendarError('Kalender laden fehlgeschlagen: ' + e.message);
         return;
       }
     } else {
       const techId = getTechId();
       if (!techId) {
-        document.getElementById('calGrid').innerHTML = '<p class="empty">Monteur-ID eingeben.</p>';
+        setCalendarError('Monteur-ID eingeben.');
         return;
       }
       try {
@@ -322,12 +410,14 @@
         jobs = (jRes.jobs || []).map(j => ({ ...j, technician_id: techId, technician_name: '', technician_color: '#4a90e2' }));
         absences = (aRes.absences || []).map(a => ({ ...a, technician_id: techId, technician_name: '', technician_color: '#6c757d' }));
       } catch (e) {
-        document.getElementById('calGrid').innerHTML = '<p class="empty">Fehler: ' + e.message + '</p>';
+        renderCalendarGrid(gridStart, gridEnd, [], [], null);
+        setCalendarError('Fehler: ' + e.message);
         return;
       }
     }
 
-    renderCalendarGrid(gridStart, gridEnd, jobs, absences);
+    const techniciansFromApi = (calendarApiData && calendarApiData.technicians) ? calendarApiData.technicians : null;
+    renderCalendarGrid(gridStart, gridEnd, jobs, absences, techniciansFromApi);
   }
 
   function startYmd(item) { return (item.start_datetime || '').toString().slice(0, 10); }
@@ -362,9 +452,63 @@
     return lanes;
   }
 
-  function renderCalendarGrid(gridStart, gridEnd, jobs, absences) {
+  /** Datum/Zeit formatieren (für Tooltip). */
+  function formatJobTime(s) {
+    if (!s) return '';
+    const d = new Date(s.replace(' ', 'T'));
+    if (isNaN(d.getTime())) return s;
+    return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  /** Zeitzone des Geräts für Tooltip (Zeitverschiebung). */
+  function getTimezoneLabel() {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const offset = -new Date().getTimezoneOffset() / 60;
+      const sign = offset >= 0 ? '+' : '';
+      return tz + ' (UTC' + sign + offset + ')';
+    } catch (_) {
+      const offset = -new Date().getTimezoneOffset() / 60;
+      const sign = offset >= 0 ? '+' : '';
+      return 'UTC' + sign + offset;
+    }
+  }
+
+  /** Firma, Ort, Länderkürzel für Kalender-Balken (Aufträge). Tooltip: alles + Zeitraum + Zeitverschiebung. */
+  function jobBarText(job, maxLen) {
+    const firma = (job.customer_name || job.customerName || job.job_number || 'Auftrag').trim();
+    const ort = (job.city || '').trim();
+    const land = (job.country || '').trim().toUpperCase().slice(0, 2);
+    const parts = [firma];
+    if (ort) parts.push(ort);
+    if (land) parts.push(land);
+    const full = parts.join(', ');
+    const label = maxLen && full.length > maxLen ? full.substring(0, maxLen) : full;
+
+    let title = full || firma;
+    const startStr = formatJobTime(job.start_datetime);
+    const endStr = formatJobTime(job.end_datetime);
+    if (startStr || endStr) {
+      title += '\nZeitraum: ' + (startStr || '?') + ' – ' + (endStr || '?');
+    }
+    title += '\nZeitverschiebung: ' + getTimezoneLabel();
+
+    return { label: label || 'Auftrag', title };
+  }
+
+  function setCalendarError(text) {
+    const el = document.getElementById('calError');
+    if (el) {
+      el.textContent = text || '';
+      el.style.display = text ? 'block' : 'none';
+    }
+  }
+
+  function renderCalendarGrid(gridStart, gridEnd, jobs, absences, techniciansFromApi) {
+    setCalendarError('');
     const monthLabel = new Date(calCurrentMonth.getFullYear(), calCurrentMonth.getMonth(), 1);
-    document.getElementById('calMonthLabel').textContent = monthLabel.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+    const monthEl = document.getElementById('calMonthLabel');
+    if (monthEl) monthEl.textContent = monthLabel.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
 
     const weekDays = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
     const currentMonth = calCurrentMonth.getMonth();
@@ -384,31 +528,6 @@
       const weekEndYmd = toYmd(weekEnd);
       const kw = getWeekNum(weekStart);
 
-      html += '<div class="cal-head">' + kw + '</div>';
-      for (let d = 0; d < 7; d++) {
-        const cellDate = new Date(weekStart);
-        cellDate.setDate(cellDate.getDate() + d);
-        cellDate.setHours(12, 0, 0, 0);
-        const ymd = toYmd(cellDate);
-        const otherMonth = cellDate.getMonth() !== currentMonth;
-        const isToday = ymd === todayYmd;
-        html += '<div class="cal-cell' + (otherMonth ? ' other-month' : '') + (isToday ? ' today' : '') + '">';
-        html += '<div class="cal-daynum">' + cellDate.getDate() + '</div>';
-
-        const dayJobs = jobs.filter(j => ymd >= startYmd(j) && ymd <= endYmd(j) && !isMultiDay(j));
-        const dayAbs = absences.filter(a => ymd >= startYmd(a) && ymd <= endYmd(a) && !isMultiDay(a));
-        dayJobs.forEach(j => {
-          const label = (j.customer_name || j.job_number || 'Auftrag').substring(0, 14);
-          const color = j.technician_color || '#4a90e2';
-          html += '<div class="cal-bar job" style="background:' + color + '" title="' + escapeHtml(j.customer_name || '') + '">' + escapeHtml(label) + '</div>';
-        });
-        dayAbs.forEach(a => {
-          const label = (a.type || 'Abwesenheit').substring(0, 12);
-          html += '<div class="cal-bar absence" style="--stripes:' + (a.technician_color || '#999') + '" title="' + escapeHtml(a.type || '') + '">' + escapeHtml(label) + '</div>';
-        });
-        html += '</div>';
-      }
-
       const spanItems = [];
       jobs.filter(isMultiDay).forEach(j => {
         const sp = getWeekSpan(j, weekStartYmd, weekEndYmd);
@@ -419,25 +538,100 @@
         if (sp) spanItems.push({ ...sp, item: a, type: 'absence' });
       });
       assignLanes(spanItems);
+      const numLanes = spanItems.length ? Math.max(...spanItems.map(s => s.lane)) + 1 : 0;
+      const spanLaneHeight = numLanes * 22;
 
-      html += '<div class="cal-bar-row-spacer"></div>';
-      html += '<div class="cal-week-bars">';
-      spanItems.forEach(({ startCol, span, lane, item, type }) => {
-        const label = type === 'job'
-          ? (item.customer_name || item.job_number || 'Auftrag').substring(0, 20)
-          : (item.type || 'Abwesenheit').substring(0, 20);
-        const color = item.technician_color || (type === 'job' ? '#4a90e2' : '#999');
-        const cls = type === 'job' ? 'cal-bar job' : 'cal-bar absence';
-        const style = type === 'job'
-          ? 'background:' + color + '; grid-column:' + (startCol + 1) + ' / span ' + span + '; grid-row:' + (lane + 1) + ';'
-          : '--stripes:' + color + '; grid-column:' + (startCol + 1) + ' / span ' + span + '; grid-row:' + (lane + 1) + ';';
-        const title = type === 'job' ? (item.customer_name || '') : (item.type || '');
-        html += '<div class="' + cls + ' cal-bar-span" style="' + style + '" title="' + escapeHtml(title) + '">' + escapeHtml(label) + '</div>';
-      });
-      html += '</div>';
+      html += '<div class="cal-head">' + kw + '</div>';
+      for (let d = 0; d < 7; d++) {
+        const cellDate = new Date(weekStart);
+        cellDate.setDate(cellDate.getDate() + d);
+        cellDate.setHours(12, 0, 0, 0);
+        const ymd = toYmd(cellDate);
+        const otherMonth = cellDate.getMonth() !== currentMonth;
+        const isToday = ymd === todayYmd;
+        html += '<div class="cal-cell' + (otherMonth ? ' other-month' : '') + (isToday ? ' today' : '') + '">';
+        html += '<div class="cal-daynum">' + cellDate.getDate() + '</div>';
+        html += '<div class="cal-cell-bars">';
+        const dayJobs = jobs.filter(j => ymd >= startYmd(j) && ymd <= endYmd(j) && !isMultiDay(j));
+        const dayAbs = absences.filter(a => ymd >= startYmd(a) && ymd <= endYmd(a) && !isMultiDay(a));
+        dayJobs.forEach(j => {
+          const bar = jobBarText(j, 14);
+          const color = j.technician_color || '#4a90e2';
+          html += '<div class="cal-bar job" style="background:' + color + '" title="' + escapeHtml(bar.title) + '">' + escapeHtml(bar.label) + '</div>';
+        });
+        dayAbs.forEach(a => {
+          const label = (a.type || 'Abwesenheit').substring(0, 12);
+          html += '<div class="cal-bar absence" style="--stripes:' + (a.technician_color || '#999') + '" title="' + escapeHtml(a.type || '') + '">' + escapeHtml(label) + '</div>';
+        });
+        html += '</div>';
+        html += '<div class="cal-cell-span-lane" style="min-height:' + spanLaneHeight + 'px">';
+        spanItems.filter(s => s.startCol === d).forEach(({ span, lane, item, type }) => {
+          const bar = type === 'job' ? jobBarText(item, 40) : { label: (item.type || 'Abwesenheit').substring(0, 20), title: (item.type || '') };
+          const color = item.technician_color || (type === 'job' ? '#4a90e2' : '#999');
+          const cls = type === 'job' ? 'cal-bar job cal-bar-span' : 'cal-bar absence cal-bar-span';
+          const w = span <= 1 ? '100%' : 'calc(' + span + ' * 100% + ' + (span - 1) + ' * 2px)';
+          const style = type === 'job'
+            ? 'background:' + color + '; top:' + (lane * 22) + 'px; width:' + w + ';'
+            : '--stripes:' + color + '; top:' + (lane * 22) + 'px; width:' + w + ';';
+          html += '<div class="' + cls + '" style="' + style + '" title="' + escapeHtml(bar.title) + '">' + escapeHtml(bar.label) + '</div>';
+        });
+        html += '</div>';
+        html += '</div>';
+      }
     }
     html += '</div>';
-    document.getElementById('calGrid').innerHTML = html;
+    const calGrid = document.getElementById('calGrid');
+    if (calGrid) calGrid.innerHTML = html;
+
+    // Legende: Farbe = Techniker (ID immer normalisiert, damit 3 und "3" nicht doppelt vorkommen)
+    const techMap = new Map();
+    function normId(id) {
+      if (id == null || id === '') return null;
+      const n = Number(id);
+      return Number.isNaN(n) ? id : n;
+    }
+    function addTech(item) {
+      const id = normId(item.technician_id);
+      if (id == null) return;
+      const color = item.technician_color || '#4a90e2';
+      const name = (item.technician_name || item.technicianName || '').trim();
+      if (techMap.has(id)) {
+        if (color) techMap.get(id).color = color;
+        if (name) techMap.get(id).name = name;
+        return;
+      }
+      let displayName = name;
+      if (!displayName && techMap.size === 0) {
+        const el = document.getElementById('technicianName');
+        displayName = (el && el.textContent) ? el.textContent.trim() : '';
+      }
+      techMap.set(id, { name: displayName || 'Techniker ' + id, color });
+    }
+    // Zuerst alle Techniker aus der API-Legende (falls vorhanden), dann aus Jobs/Abwesenheiten ergänzen
+    if (Array.isArray(techniciansFromApi) && techniciansFromApi.length > 0) {
+      techniciansFromApi.forEach(t => {
+        const id = normId(t.id ?? t.technician_id);
+        if (id == null) return;
+        techMap.set(id, {
+          name: (t.name || t.full_name || t.technician_name || '').trim() || 'Techniker ' + id,
+          color: t.color || '#4a90e2'
+        });
+      });
+    }
+    jobs.forEach(addTech);
+    absences.forEach(addTech);
+    const legendEl = document.getElementById('calLegend');
+    if (legendEl) {
+      if (techMap.size === 0) {
+        legendEl.innerHTML = '';
+      } else {
+        const entries = Array.from(techMap.entries()).sort((a, b) => Number(a[0]) - Number(b[0]));
+        const items = entries.map(([id, t]) =>
+          '<span class="cal-legend-item"><span class="cal-legend-swatch" style="background:' + escapeHtml(t.color) + '"></span>' + escapeHtml(t.name) + '</span>'
+        );
+        legendEl.innerHTML = '<span class="cal-legend-title">Legende:</span>' + items.join('');
+      }
+    }
   }
 
   function escapeHtml(s) {
@@ -446,6 +640,7 @@
     return d.innerHTML;
   }
 
+  document.getElementById('btnViewStart').addEventListener('click', () => showView('start'));
   document.getElementById('btnViewAuftraege').addEventListener('click', () => showView('auftraege'));
   document.getElementById('btnViewKalender').addEventListener('click', () => showView('kalender'));
   document.getElementById('btnViewEinstellungen').addEventListener('click', () => showView('einstellungen'));

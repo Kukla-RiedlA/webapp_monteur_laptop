@@ -4,4 +4,4 @@
 // - Die "Hauptversion" (vor dem Punkt) wird nur auf ausdrückliche Anweisung erhöht.
 // - Der "Build"-Teil (nach dem Punkt) kann bei Codeänderungen hochgezählt werden.
 
-$APP_VERSION = 'V 1.2';
+$APP_VERSION = 'V 1.002';

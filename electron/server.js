@@ -376,6 +376,26 @@ function createApp(db) {
       const r = await fetch(`${baseUrl}/api/calendar.php?start=${encodeURIComponent(s)}&end=${encodeURIComponent(e)}`, opts);
       if (!r.ok) throw new Error('Calendar API: ' + r.status);
       const data = await r.json();
+
+      // Jobs anreichern: Firma, Ort, Länderkürzel (wie bei Einzeltechniker), damit Balken/Tooltip gleich angezeigt werden
+      const jobs = data.jobs || [];
+      await Promise.all(jobs.map(async (job) => {
+        const jobId = job.id ?? job.server_id;
+        const techId = job.technician_id;
+        if (jobId == null || techId == null) return;
+        try {
+          const jr = await fetch(`${baseUrl}/api/job.php?id=${encodeURIComponent(jobId)}&technician_id=${encodeURIComponent(techId)}`, opts);
+          if (!jr.ok) return;
+          const jData = await jr.json();
+          const full = jData.job;
+          if (full) {
+            if (full.customer_name != null) job.customer_name = full.customer_name;
+            if (full.city != null) job.city = full.city;
+            if (full.country != null) job.country = full.country;
+          }
+        } catch (_) { /* Einzelauftrag nicht geladen, Balken behält Nummer */ }
+      }));
+
       res.json(data);
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });

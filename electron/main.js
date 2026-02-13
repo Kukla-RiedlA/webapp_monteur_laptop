@@ -8,15 +8,20 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
     },
-    icon: path.join(__dirname, 'public', 'icon.ico'),
+    icon: path.join(__dirname, 'public', 'icon.png'),
   });
 
   mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.maximize();
+    mainWindow.show();
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 

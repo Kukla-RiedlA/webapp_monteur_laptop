@@ -52,3 +52,9 @@ Der integrierte Express-Server läuft auf **Port 39678** und bietet die gleichen
 - `POST /api/sync_push` (Body: `baseUrl`, `technicianId`)
 
 Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Dispo-Server**. Die Monteur-API (my_jobs.php, my_absences.php, job.php, absence.php) ist im Dispo-Projekt unter `htdocs/api/` angelegt – bei Dispo unter `http://localhost/` also z. B. `http://localhost/api/my_jobs.php`.
+
+## Icon (Kukla Monteur Tool)
+
+- **Fenster/Taskbar:** `public/icon.png` (Windows nutzt PNG; für bessere Darstellung z. B. 256×256 px verwenden).
+- **Browser-Tab (Favicon):** `public/icon.svg` (K-Logo auf blauem Grund).  
+Zum Austauschen: `icon.svg` anpassen oder durch eigenes Logo ersetzen; für `icon.png` eine PNG-Version (z. B. aus dem SVG exportiert) nach `public/icon.png` legen.
