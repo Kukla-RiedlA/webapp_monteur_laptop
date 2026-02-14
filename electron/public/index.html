@@ -65,7 +65,12 @@
     .cal-toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
     .cal-toolbar button { min-width: 36px; }
     .cal-month-label { font-weight: bold; min-width: 160px; }
-    .cal-grid { display: grid; grid-template-columns: 40px repeat(7, minmax(0,1fr)); gap: 0; border: 1px solid var(--accent); border-radius: 8px; overflow: hidden; }
+    .cal-grid-wrapper { position: relative; width: 100%; }
+    .cal-bar-layer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; }
+    .cal-bar-layer .cal-bar-span-full { pointer-events: auto; }
+    .cal-bar-layer .cal-bar.job { z-index: 1; }
+    .cal-bar-layer .cal-bar.absence { z-index: 2; }
+    .cal-grid { display: grid; grid-template-columns: 40px repeat(7, minmax(0,1fr)); gap: 0; border: 1px solid var(--accent); border-radius: 8px; overflow: visible; }
     .cal-head { background: var(--accent); color: var(--text); padding: 6px 4px; text-align: center; font-size: 0.8rem; font-weight: bold; }
     .cal-cell { min-height: 56px; border: 1px solid var(--accent); padding: 4px; font-size: 0.75rem; background: var(--card); overflow: visible; display: flex; flex-direction: column; }
     .cal-cell.other-month { opacity: 0.6; }
@@ -74,9 +79,10 @@
     .cal-cell-span-lane { position: relative; overflow: visible; margin-top: 4px; min-height: 0; }
     .cal-bar { font-size: 10px; padding: 2px 4px; border-radius: 3px; margin: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cal-bar.job { color: #000; }
-    .cal-bar.absence { background: repeating-linear-gradient(-45deg, transparent 0, transparent 2px, rgba(255,255,255,0.4) 2px, rgba(255,255,255,0.4) 4px); }
+    .cal-bar.absence { background: repeating-linear-gradient(-45deg, transparent 0, transparent 2px, var(--stripes, #6c757d) 2px, var(--stripes, #6c757d) 4px); }
     .cal-cell.today { outline: 2px solid #4a90e2; outline-offset: -2px; }
-    .cal-bar-span { position: absolute; left: 0; height: 20px; display: flex; align-items: center; padding: 0 6px; box-sizing: border-box; min-width: 0; }
+    .cal-bar-span { position: absolute; left: 0; height: 20px; margin: 0; display: flex; align-items: center; padding: 0 6px; box-sizing: border-box; min-width: 0; }
+    .cal-bar-span-full { position: absolute; height: 20px; display: flex; align-items: center; padding: 0 6px; box-sizing: border-box; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }
     .cal-legend { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--accent); font-size: 0.85rem; }
     .cal-legend-title { font-weight: bold; margin-right: 0.5rem; color: var(--muted); }
     .cal-legend-item { display: inline-flex; align-items: center; gap: 6px; }

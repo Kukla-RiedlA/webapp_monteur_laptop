@@ -4,6 +4,13 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.004
+- **Kalender:** Mehrtägige Balken als ein durchgehendes Element (Overlay-Layer), keine Überlappung mehr; Lanes nach Länge (längere oben, kürzere darunter), keine Überlagerung; Abwesenheitsbalken über Auftragsbalken (z-index); Kalender volle Breite.
+- **Abwesenheiten:** Grund als Überschrift, Datum kleiner darunter; Abwesenheitsbalken des eingeloggten Technikers in Technikerfarbe (auch bei Einzelansicht, via /api/technician).
+- **Datumsanzeige (überall einheitlich):** Nur Datum (TT.MM.JJJJ), keine Uhrzeit; bei eintägigen Terminen kein „bis“, bei mehrtägigen „von – bis“. Gilt für Auftragsliste, Auftragsdetail, Abwesenheiten, Kalender-Tooltips.
+
+---
+
 ## V 1.001
 - **Grundversion**
   - Electron-Desktop-App (Windows) mit lokaler SQLite-DB (sql.js), Offline-fähig.

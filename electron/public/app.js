@@ -147,7 +147,7 @@
       return;
     }
     list.innerHTML = jobs.map((j) => {
-      const start = (j.start_datetime || '').slice(0, 16).replace('T', ' ');
+      const dateStr = formatDateRange(j.start_datetime, j.end_datetime);
       const status = (j.status || 'geplant').replace(' ', '_');
       const firma = (j.customer_name || j.customerName || '').trim();
       const ort = (j.city || '').trim();
@@ -163,7 +163,7 @@
         '<div class="job" data-job-id="' + j.id + '">' +
         '<div class="job-info">' +
         '<strong>' + (titleLine || 'Auftrag') + '</strong><br>' +
-        '<span class="job-meta">' + start + ' · ' + (j.job_type || '') + '</span>' +
+        '<span class="job-meta">' + escapeHtml(dateStr) + (j.job_type ? ' · ' + (j.job_type || '') : '') + '</span>' +
         '</div>' +
         '<div class="job-actions">' +
         '<span class="status-badge status-' + status + '">' + (j.status || 'geplant') + '</span>' +
@@ -266,8 +266,7 @@
 
   function renderJobDetailsContent(job) {
     var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
-    var start = (job.start_datetime || '').slice(0, 16).replace('T', ' ');
-    var end = (job.end_datetime || '').slice(0, 16).replace('T', ' ');
+    var dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
     var countryRaw = (job.country || '').trim();
     var countryCode = normalizeCountryToCode(job.country);
     var countryPart = countryCode ? (countryFlagImg(countryCode) + (countryRaw ? ' ' + escapeHtml(countryRaw) : ' ' + countryCode)) : (countryRaw ? escapeHtml(countryRaw) : '');
@@ -346,7 +345,7 @@
     html += '<div class="modal-detail-section"><h4>Auftrag</h4><dl class="modal-detail-dl">';
     html += '<dt>Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
     html += '<dt>Typ</dt><dd>' + v(job.job_type) + '</dd>';
-    html += '<dt>Zeitraum</dt><dd>' + (start && end ? start + ' – ' + end : v(job.start_datetime)) + '</dd>';
+    html += '<dt>Zeitraum</dt><dd>' + (dateRangeStr ? v(dateRangeStr) : v(formatDateOnly(job.start_datetime) || job.start_datetime)) + '</dd>';
     html += '<dt>Status</dt><dd>' + v(job.status) + '</dd>';
     if (job.description) html += '<dt>Beschreibung</dt><dd>' + v(job.description) + '</dd>';
     html += '</dl></div>';
@@ -595,9 +594,8 @@
       return;
     }
     list.innerHTML = absences.map((a) => {
-      const start = (a.start_datetime || '').slice(0, 10);
-      const end = (a.end_datetime || '').slice(0, 10);
-      return '<div class="job"><div class="job-info"><strong>' + start + ' – ' + end + '</strong><br><span class="job-meta">' + (a.type || '') + '</span></div></div>';
+      const dateStr = formatDateRange(a.start_datetime, a.end_datetime);
+      return '<div class="job"><div class="job-info"><strong>' + escapeHtml(a.type || 'Abwesenheit') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + '</span></div></div>';
     }).join('');
   }
 
@@ -838,12 +836,15 @@
       }
       try {
         const params = { technician_id: techId, date_from: start, date_to: end };
-        const [jRes, aRes] = await Promise.all([
+        const [jRes, aRes, techRes] = await Promise.all([
           fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then(r => r.json()),
-          fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then(r => r.json())
+          fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then(r => r.json()),
+          fetch(API_BASE + '/api/technician?technician_id=' + techId, { headers: { 'X-Technician-Id': String(techId) } }).then(r => r.json()).catch(() => ({}))
         ]);
-        jobs = (jRes.jobs || []).map(j => ({ ...j, technician_id: techId, technician_name: '', technician_color: '#4a90e2' }));
-        absences = (aRes.absences || []).map(a => ({ ...a, technician_id: techId, technician_name: '', technician_color: '#6c757d' }));
+        var techColor = (techRes.color || techRes.farbe || '').toString().trim() || '#4a90e2';
+        var techName = (techRes.full_name || techRes.name || '').toString().trim() || ('Techniker ' + techId);
+        jobs = (jRes.jobs || []).map(j => ({ ...j, technician_id: techId, technician_name: techName, technician_color: techColor }));
+        absences = (aRes.absences || []).map(a => ({ ...a, technician_id: techId, technician_name: techName, technician_color: techColor }));
       } catch (e) {
         renderCalendarGrid(gridStart, gridEnd, [], [], null);
         setCalendarError('Fehler: ' + e.message);
@@ -874,7 +875,8 @@
 
   function assignLanes(spans) {
     const lanes = [];
-    spans.sort((a, b) => a.startCol - b.startCol);
+    // Längere Balken zuerst (bleiben oben), kürzere darunter
+    spans.sort((a, b) => (b.span - a.span) || (a.startCol - b.startCol));
     for (const s of spans) {
       const end = s.startCol + s.span;
       let placed = false;
@@ -887,12 +889,25 @@
     return lanes;
   }
 
-  /** Datum/Zeit formatieren (für Tooltip). */
+  /** Nur Datum anzeigen (ohne Uhrzeit), einheitlich überall. */
+  function formatDateOnly(s) {
+    if (!s || !String(s).trim()) return '';
+    const str = String(s).trim().slice(0, 10);
+    const d = new Date(str + 'T12:00:00');
+    if (isNaN(d.getTime())) return str;
+    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+  /** Datumsbereich: ein Tag = nur ein Datum, sonst „von – bis“. Immer ohne Uhrzeit. */
+  function formatDateRange(start, end) {
+    const s = (start && String(start).trim()) ? String(start).trim().slice(0, 10) : '';
+    const e = (end && String(end).trim()) ? String(end).trim().slice(0, 10) : '';
+    if (!s) return formatDateOnly(e) || '';
+    if (!e || s === e) return formatDateOnly(s);
+    return formatDateOnly(s) + ' – ' + formatDateOnly(e);
+  }
+  /** @deprecated Nutze formatDateOnly/formatDateRange. Datum ohne Uhrzeit für Tooltip. */
   function formatJobTime(s) {
-    if (!s) return '';
-    const d = new Date(s.replace(' ', 'T'));
-    if (isNaN(d.getTime())) return s;
-    return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return formatDateOnly(s);
   }
 
   /** UTC-Offset einer Zeitzone in Stunden. Immer mit aktuellem Datum (new Date()), damit Sommer-/Winterzeit stimmt. */
@@ -1076,11 +1091,8 @@
     const label = maxLen && full.length > maxLen ? full.substring(0, maxLen) : full;
 
     let title = full || firma || 'Auftrag';
-    const startStr = formatJobTime(job.start_datetime);
-    const endStr = formatJobTime(job.end_datetime);
-    if (startStr || endStr) {
-      title += '\nZeitraum: ' + (startStr || '?') + ' – ' + (endStr || '?');
-    }
+    const dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
+    if (dateRangeStr) title += '\nZeitraum: ' + dateRangeStr;
     var tzLabel = null;
     try {
       tzLabel = getTimezoneLabel(land2 || land);
@@ -1108,6 +1120,8 @@
     const currentMonth = calCurrentMonth.getMonth();
     const todayYmd = toYmd(new Date());
 
+    var allSpanBars = [];
+
     let html = '<div class="cal-grid">';
     html += '<div class="cal-head">KW</div>';
     weekDays.forEach(d => { html += '<div class="cal-head">' + d + '</div>'; });
@@ -1132,6 +1146,9 @@
         if (sp) spanItems.push({ ...sp, item: a, type: 'absence' });
       });
       assignLanes(spanItems);
+      spanItems.forEach(function (s) {
+        allSpanBars.push({ weekIndex: w, startCol: s.startCol, span: s.span, lane: s.lane, item: s.item, type: s.type });
+      });
       const numLanes = spanItems.length ? Math.max(...spanItems.map(s => s.lane)) + 1 : 0;
       const spanLaneHeight = numLanes * 22;
 
@@ -1158,24 +1175,49 @@
           html += '<div class="cal-bar absence" style="--stripes:' + (a.technician_color || '#999') + '" title="' + escapeHtml(a.type || '') + '">' + escapeHtml(label) + '</div>';
         });
         html += '</div>';
-        html += '<div class="cal-cell-span-lane" style="min-height:' + spanLaneHeight + 'px">';
-        // Alle mehrtägigen Balken, die an diesem Tag sichtbar sind – je ein Segment pro Zelle (Breite 100%), gleiche Lane → keine Überlappung
-        spanItems.filter(s => d >= s.startCol && d < s.startCol + s.span).forEach(({ lane, item, type }) => {
-          const bar = type === 'job' ? jobBarText(item, 40) : { label: (item.type || 'Abwesenheit').substring(0, 20), title: (item.type || '') };
-          const color = item.technician_color || (type === 'job' ? '#4a90e2' : '#999');
-          const cls = type === 'job' ? 'cal-bar job cal-bar-span' : 'cal-bar absence cal-bar-span';
-          const style = type === 'job'
-            ? 'background:' + color + '; top:' + (lane * 22) + 'px; width:100%;'
-            : '--stripes:' + color + '; top:' + (lane * 22) + 'px; width:100%;';
-          html += '<div class="' + cls + '" style="' + style + '" title="' + escapeHtml(bar.title) + '">' + escapeHtml(bar.label) + '</div>';
-        });
-        html += '</div>';
+        html += '<div class="cal-cell-span-lane" style="min-height:' + spanLaneHeight + 'px"></div>';
         html += '</div>';
       }
     }
     html += '</div>';
     const calGrid = document.getElementById('calGrid');
-    if (calGrid) calGrid.innerHTML = html;
+    if (!calGrid) return;
+    var wrapper = document.createElement('div');
+    wrapper.className = 'cal-grid-wrapper';
+    wrapper.innerHTML = html;
+    var gridEl = wrapper.querySelector('.cal-grid');
+    calGrid.innerHTML = '';
+    calGrid.appendChild(wrapper);
+    var barLayer = document.createElement('div');
+    barLayer.className = 'cal-bar-layer';
+    wrapper.appendChild(barLayer);
+    var lr = barLayer.getBoundingClientRect();
+    allSpanBars.forEach(function (b) {
+      var firstCell = gridEl.children[8 + b.weekIndex * 8 + 1 + b.startCol];
+      var lastCell = gridEl.children[8 + b.weekIndex * 8 + 1 + (b.startCol + b.span - 1)];
+      if (!firstCell || !lastCell) return;
+      var firstLane = firstCell.querySelector('.cal-cell-span-lane');
+      var lastLane = lastCell.querySelector('.cal-cell-span-lane');
+      if (!firstLane || !lastLane) return;
+      var r1 = firstLane.getBoundingClientRect();
+      var r2 = lastLane.getBoundingClientRect();
+      var left = r1.left - lr.left;
+      var top = r1.top - lr.top + b.lane * 22;
+      var width = r2.right - r1.left;
+      var bar = b.type === 'job' ? jobBarText(b.item, 40) : { label: (b.item.type || 'Abwesenheit').substring(0, 20), title: (b.item.type || '') };
+      var color = b.item.technician_color || (b.type === 'job' ? '#4a90e2' : '#999');
+      var cls = b.type === 'job' ? 'cal-bar job cal-bar-span cal-bar-span-full' : 'cal-bar absence cal-bar-span cal-bar-span-full';
+      var style = b.type === 'job'
+        ? 'background:' + color + '; left:' + left + 'px; top:' + top + 'px; width:' + width + 'px;'
+        : '--stripes:' + color + '; left:' + left + 'px; top:' + top + 'px; width:' + width + 'px;';
+      var div = document.createElement('div');
+      div.className = cls;
+      div.setAttribute('style', style);
+      div.setAttribute('title', bar.title || '');
+      div.textContent = bar.label || '';
+      div.style.pointerEvents = 'auto';
+      barLayer.appendChild(div);
+    });
 
     // Legende: Farbe = Techniker (ID immer normalisiert, damit 3 und "3" nicht doppelt vorkommen)
     const techMap = new Map();
