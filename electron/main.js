@@ -21,8 +21,17 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.maximize();
     mainWindow.show();
+    if (process.env.DEBUG === '1' || process.env.NODE_ENV === 'development') {
+      mainWindow.webContents.openDevTools();
+    }
   });
   mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
+      mainWindow.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
 }
 
 app.whenReady().then(() => {

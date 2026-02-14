@@ -37,6 +37,14 @@ if ($method === 'GET') {
         echo json_encode(['ok' => false, 'error' => 'Auftrag nicht gefunden oder nicht zugeordnet.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    if (!empty($_GET['debug'])) {
+        $job['_debug'] = [
+            'fabrikationsnummern_vorhanden' => array_key_exists('fabrikationsnummern', $job),
+            'fabrikationsnummern_typ' => gettype($job['fabrikationsnummern'] ?? null),
+            'fabrikationsnummern_laenge' => isset($job['fabrikationsnummern']) ? strlen((string) $job['fabrikationsnummern']) : 0,
+            'fabrikationsnummern_vorschau' => isset($job['fabrikationsnummern']) ? substr((string) $job['fabrikationsnummern'], 0, 150) : '',
+        ];
+    }
     echo json_encode(['ok' => true, 'job' => $job], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -73,8 +81,28 @@ if ($method === 'PATCH' || $method === 'POST') {
         exit;
     }
 
+    if (array_key_exists('fabrikationsnummern', $data)) {
+        $rows = [];
+        if (is_string($data['fabrikationsnummern'])) {
+            $decoded = json_decode($data['fabrikationsnummern'], true);
+            if (is_array($decoded)) {
+                $rows = $decoded;
+            }
+        } elseif (is_array($data['fabrikationsnummern'])) {
+            $rows = $data['fabrikationsnummern'];
+        }
+        $ok = $repo->updateJobFabrikationsnummern($jobId, $technicianId, $rows);
+        if (!$ok) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => 'Update der Leistungsdaten fehlgeschlagen.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        echo json_encode(['ok' => true, 'updated' => 'fabrikationsnummern'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
     http_response_code(400);
-    echo json_encode(['ok' => false, 'error' => 'Body: status oder description erforderlich.'], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['ok' => false, 'error' => 'Body: status, description oder fabrikationsnummern erforderlich.'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 

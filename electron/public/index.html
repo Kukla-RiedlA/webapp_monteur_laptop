@@ -81,6 +81,30 @@
     .cal-legend-title { font-weight: bold; margin-right: 0.5rem; color: var(--muted); }
     .cal-legend-item { display: inline-flex; align-items: center; gap: 6px; }
     .cal-legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
+    .modal-overlay.active { display: flex; }
+    .modal-overlay.modal-fullscreen .modal-box { width: 100%; max-width: none; height: 100%; max-height: none; border-radius: 0; border-width: 0; }
+    .modal-box { background: var(--card); border: 1px solid var(--accent); border-radius: 8px; padding: 1rem; max-width: 520px; width: 95%; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; margin: 0; }
+    .modal-box h3 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--text); }
+    .modal-detail-content { overflow: auto; flex: 1; min-height: 200px; margin-bottom: 0.75rem; }
+    .modal-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem 2rem; }
+    @media (max-width: 700px) { .modal-detail-grid { grid-template-columns: 1fr; } }
+    .modal-detail-section { margin-bottom: 1.25rem; }
+    .modal-detail-section h4 { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--accent); padding-bottom: 0.25rem; }
+    .modal-detail-dl { margin: 0; font-size: 0.9rem; }
+    .modal-detail-dl dt { clear: left; float: left; width: 10rem; color: var(--muted); }
+    .modal-detail-dl dd { margin: 0 0 0.25rem 10rem; }
+    .modal-detail-dl::after { content: ''; display: block; clear: both; }
+    .modal-detail-section .modal-address { font-size: 0.9rem; color: var(--text); }
+    .modal-detail-muted { font-size: 0.8rem; color: var(--muted); margin: 0.25rem 0 0.5rem 0; }
+    .modal-debug { font-size: 0.75rem; color: #b8860b; word-break: break-all; }
+    .modal-leistung-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin-top: 0.5rem; }
+    .modal-leistung-table th, .modal-leistung-table td { border: 1px solid var(--accent); padding: 4px 6px; text-align: left; }
+    .modal-leistung-table th { background: var(--accent); color: var(--text); font-weight: 600; }
+    .modal-leistung-table tbody tr:nth-child(even) { background: rgba(255,255,255,0.03); }
+    .modal-leistung-table input { width: 100%; padding: 6px 8px; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); font-size: 0.9rem; box-sizing: border-box; }
+    .modal-leistung-actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .modal-job-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; flex-shrink: 0; }
   </style>
 </head>
 <body>
@@ -133,6 +157,15 @@
       </main>
     </div>
   </div>
+  <div id="modalJobDetails" class="modal-overlay modal-fullscreen" aria-hidden="true">
+    <div class="modal-box" role="dialog" aria-labelledby="modalJobDetailsTitle">
+      <h3 id="modalJobDetailsTitle">Projektdaten</h3>
+      <div id="modalJobDetailsContent" class="modal-detail-content"><span class="empty">Wird geladen…</span></div>
+      <div class="modal-job-actions">
+        <button type="button" class="btn btn-ghost" id="modalJobDetailsClose">Schließen</button>
+      </div>
+    </div>
+  </div>
   <main id="viewEinstellungen" class="view-einstellungen">
     <div class="card">
       <h2>Einstellungen</h2>
@@ -155,6 +188,10 @@
       <div class="settings-row">
         <label for="syncIntervalMinutes">Aktualisierungsintervall (Minuten)</label>
         <input type="number" id="syncIntervalMinutes" value="5" min="1" max="1440" title="Wie oft die Verbindung zum Server geprüft und Daten synchronisiert werden (Standard: 5)." />
+      </div>
+      <div class="settings-row">
+        <button type="button" class="btn btn-ghost" id="btnSyncNow" title="Aufträge und Abwesenheiten sofort vom Dispo-Server laden">Vom Dispo-Server holen</button>
+        <span id="syncNowHint" class="settings-saved-hint" aria-live="polite"></span>
       </div>
       <div class="settings-row">
         <button type="button" class="btn btn-primary" id="btnSaveSettings">Speichern</button>

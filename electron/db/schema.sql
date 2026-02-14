@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   required_technicians INTEGER NOT NULL DEFAULT 1,
   description TEXT,
   fabrikationsnummern TEXT,
+  eap_nummer TEXT,
+  bestellnummer TEXT,
   updated_at TEXT,
   synced_at TEXT,
   FOREIGN KEY (customer_id) REFERENCES customers(id)

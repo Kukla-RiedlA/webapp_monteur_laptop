@@ -85,13 +85,14 @@ async function getDb() {
   sqlDb.run('PRAGMA foreign_keys = ON');
   const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
   sqlDb.run(schema);
+  try { sqlDb.run('ALTER TABLE jobs ADD COLUMN eap_nummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
+  try { sqlDb.run('ALTER TABLE jobs ADD COLUMN bestellnummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
   return createDbWrapper(sqlDb);
 }
 
 function createApp(db) {
   const app = express();
   app.use(express.json());
-  app.use(express.static(path.join(__dirname, 'public')));
 
   const getTechnicianId = (req) => {
     const id = req.query.technician_id || req.headers['x-technician-id'];
@@ -150,7 +151,7 @@ function createApp(db) {
     }
   });
 
-  app.get('/api/job', (req, res) => {
+  app.get('/api/job', async (req, res) => {
     const technicianId = getTechnicianId(req);
     const jobId = parseInt(req.query.id, 10);
     if (!technicianId || !jobId) {
@@ -170,12 +171,73 @@ function createApp(db) {
     if (!row) {
       return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
     }
-    res.json({ ok: true, job: row });
+    let job = row;
+    const baseUrl = (req.query.base_url || '').toString().trim();
+    const enrich = req.query.enrich_anlagenstamm === '1' || req.query.enrich_anlagenstamm === 'true';
+    if (enrich && baseUrl) {
+      const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
+      job = await enrichJobFabWithAnlagenstamm(job, baseUrl, auth);
+    }
+    res.json({ ok: true, job });
+  });
+
+  app.post('/api/job_from_dispo', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const { baseUrl, jobId: localJobId } = req.body || {};
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!technicianId || !base || localJobId == null) {
+      return res.status(400).json({ ok: false, error: 'baseUrl, jobId und technician_id erforderlich.' });
+    }
+    const localId = parseInt(localJobId, 10);
+    const row = db.prepare('SELECT id, server_id FROM jobs WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)').get(localId, technicianId);
+    if (!row) {
+      return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+    }
+    const serverJobId = (row.server_id != null && row.server_id !== '') ? row.server_id : localId;
+    const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
+    const url = `${base}/api/job.php?id=${encodeURIComponent(serverJobId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
+    try {
+      const r = await fetch(url, auth ? { headers: auth } : {});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      }
+      if (data.job && typeof data.job === 'object') {
+        if (data.job.fabrikationsnummern == null && data.job.Fabrikationsnummern != null) {
+          data.job.fabrikationsnummern = data.job.Fabrikationsnummern;
+        }
+        data.job = await enrichJobFabWithAnlagenstamm(data.job, base, auth);
+      }
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/anlagenstamm_from_dispo', express.json(), async (req, res) => {
+    const { baseUrl, fabs } = req.body || {};
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const list = Array.isArray(fabs) ? fabs.filter((x) => x != null && String(x).trim() !== '').map((x) => String(x).trim()) : [];
+    if (!base || list.length === 0) {
+      return res.status(400).json({ ok: false, error: 'baseUrl und fabs (Array) erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
+    const url = `${base}/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(list.join(','))}`;
+    try {
+      const r = await fetch(url, auth ? { headers: auth } : {});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      }
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
   });
 
   app.patch('/api/job', (req, res) => {
     const technicianId = getTechnicianId(req);
-    const { job_id, status, description } = req.body || {};
+    const { job_id, status, description, fabrikationsnummern } = req.body || {};
     if (!technicianId || !job_id) {
       return res.status(400).json({ ok: false, error: 'technician_id und job_id erforderlich.' });
     }
@@ -201,6 +263,18 @@ function createApp(db) {
           db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', job_id, 'description', JSON.stringify({ description }));
           save();
           return res.json({ ok: true, updated: 'description' });
+        }
+      }
+      if (fabrikationsnummern !== undefined) {
+        const val = typeof fabrikationsnummern === 'string' ? fabrikationsnummern : (fabrikationsnummern != null ? JSON.stringify(fabrikationsnummern) : null);
+        const r = db.prepare(`
+          UPDATE jobs SET fabrikationsnummern = ?, updated_at = datetime('now')
+          WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)
+        `).run(val, job_id, technicianId);
+        if (r.changes) {
+          db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', job_id, 'fabrikationsnummern', JSON.stringify({ fabrikationsnummern: val }));
+          save();
+          return res.json({ ok: true, updated: 'fabrikationsnummern' });
         }
       }
       res.status(400).json({ ok: false, error: 'Status-Update fehlgeschlagen oder keine Berechtigung.' });
@@ -304,6 +378,45 @@ function createApp(db) {
     return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
   }
 
+  async function enrichJobFabWithAnlagenstamm(job, baseUrl, authHeader) {
+    if (!job || !baseUrl || typeof job.fabrikationsnummern !== 'string') return job;
+    const fab = job.fabrikationsnummern.trim();
+    if (!fab) return job;
+    let parts = [];
+    try {
+      const parsed = JSON.parse(fab);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const hasLeistung = parsed.some((r) => (r.type && r.type.trim()) || (r.leistung && r.leistung.trim()) || (r.nenngeschwindigkeit && r.nenngeschwindigkeit.trim()) || (r.kraftaufnehmer && r.kraftaufnehmer.trim()) || (r.dms_nr && r.dms_nr.trim()) || (r.tacho && r.tacho.trim()) || (r.elektronik && r.elektronik.trim()) || (r.material && r.material.trim()) || (r.position && r.position.trim()));
+        if (hasLeistung) return job;
+        parts = parsed
+          .map((r) => (r && (r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer) != null
+            ? String(r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer).trim()
+            : ''))
+          .filter(Boolean);
+      }
+    } catch (e) { /* no json */ }
+    if (parts.length === 0) parts = fab.split(/[\s;,]+/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 0) return job;
+    const base = baseUrl.toString().trim().replace(/\/$/, '');
+    const url = `${base}/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(parts.join(','))}`;
+    let debugInfo = { url, requestedFabs: parts.slice(), ok: false, matchCount: 0, status: null };
+    try {
+      const r = await fetch(url, authHeader ? { headers: authHeader } : {});
+      const data = await r.json().catch(() => ({}));
+      debugInfo.ok = !!r.ok;
+      debugInfo.status = r.status;
+      debugInfo.matchCount = Array.isArray(data.data) ? data.data.length : 0;
+      if (r.ok && Array.isArray(data.data) && data.data.length > 0) {
+        const j = { ...job, _anlagenstamm_debug: debugInfo };
+        j.fabrikationsnummern = JSON.stringify(data.data);
+        return j;
+      }
+    } catch (e) {
+      debugInfo.error = e && e.message ? e.message : String(e);
+    }
+    return { ...job, _anlagenstamm_debug: debugInfo };
+  }
+
   app.post('/api/check_connection', express.json(), async (req, res) => {
     const { baseUrl, technicianId, serverUsername, serverPassword } = req.body || {};
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
@@ -316,9 +429,25 @@ function createApp(db) {
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
       if (r.ok) return res.json({ ok: true });
-      return res.json({ ok: false, error: 'Server antwortet mit ' + r.status });
+      let msg = 'Server antwortet mit ' + r.status;
+      const body = await r.text();
+      try {
+        const data = JSON.parse(body);
+        if (data && typeof data.error === 'string' && data.error.trim()) {
+          msg = data.error.trim();
+          if (r.status === 403) msg = 'Monteur wird nicht anerkannt: ' + msg;
+        }
+      } catch (_) {
+        if (r.status === 500 && body && body.length > 0) {
+          const snippet = body.replace(/\s+/g, ' ').trim().slice(0, 200);
+          if (/Fatal error|Parse error|Exception|Warning:/i.test(snippet)) {
+            msg = 'Dispo-Server-Fehler (500). In C:\\xampp_2\\apache\\logs\\error.log nachsehen. Vorschau: ' + snippet;
+          }
+        }
+      }
+      return res.json({ ok: false, error: msg });
     } catch (e) {
-      return res.json({ ok: false, error: 'Nicht erreichbar: ' + e.message });
+      return res.json({ ok: false, error: 'Dispo nicht erreichbar: ' + (e.message || String(e)) });
     }
   });
 
@@ -402,6 +531,7 @@ function createApp(db) {
     }
   });
 
+  app.use(express.static(path.join(__dirname, 'public')));
   return app;
 }
 
@@ -488,15 +618,15 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const start = (j.start_datetime || '').replace('T', ' ').substring(0, 19);
   const end = (j.end_datetime || '').replace('T', ' ').substring(0, 19);
   const status = ['geplant', 'in_arbeit', 'erledigt'].includes(j.status) ? j.status : 'geplant';
-  if (existing) {
-    db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
-      j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, existing.id
+    if (existing) {
+    db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
+      j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null, existing.id
     );
     if (j.street != null) insertOrUpdateJobAddress(db, existing.id, j);
     return existing.id;
   }
-  const r2 = db.prepare('INSERT INTO jobs (server_id, job_number, customer_id, job_type, start_datetime, end_datetime, status, description, fabrikationsnummern, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))').run(
-    id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null
+  const r2 = db.prepare('INSERT INTO jobs (server_id, job_number, customer_id, job_type, start_datetime, end_datetime, status, description, fabrikationsnummern, eap_nummer, bestellnummer, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))').run(
+    id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null
   );
   const newId = r2.lastInsertRowid;
   db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(newId, technicianId);
@@ -529,7 +659,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
   const pending = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
   const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authHeader || {}) };
   for (const p of pending) {
-    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description')) {
+    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern')) {
       const job = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(p.entity_id);
       const serverJobId = (job && job.server_id) ? job.server_id : p.entity_id;
       const payload = JSON.parse(p.payload || '{}');
