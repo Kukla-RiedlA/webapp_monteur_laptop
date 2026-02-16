@@ -20,8 +20,8 @@ function Get-CurrentVersion {
 }
 
 function Set-VersionFiles($newVersion) {
-    # Format für Tag: V 1.002 -> v1.002 (ohne Leerzeichen)
-    $tagName = "v" + ($newVersion -replace "\s+", "")
+    # Format für Tag: V 1.002 -> v1.002 (nur Ziffern nach "V", kein doppeltes v)
+    $tagName = "v" + ($newVersion -replace '^\s*V\s*', '')
     $versionPhpContent = Get-Content $versionPhpPath -Raw
     $versionPhpContent = $versionPhpContent -replace "(?<=\$APP_VERSION = ')V \d+\.\d+(?=';)", $newVersion
     Set-Content $versionPhpPath -Value $versionPhpContent -NoNewline
@@ -59,7 +59,8 @@ Write-Host "Tag-Name:     $tagName"
 
 Push-Location $repoRoot
 try {
-    git add config/version.php electron/version.json
+    # Alle geaenderten Dateien fuer den Release-Commit aufnehmen
+    git add -A
     git status --short
     $commitMsg = "Release $Version"
     git commit -m $commitMsg

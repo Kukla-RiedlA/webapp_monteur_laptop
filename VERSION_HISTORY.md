@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.016
+- **Dispo – Dateien (Auftrag):** Größeres Drop-Feld, Dateiname wird im Feld und in der Zeile „Ausgewählt“ angezeigt (Klick und Drag & Drop). Firefox: Drag-Over-Feedback (Zähler, Hervorhebung der Dropzone).
+- **Dispo – Einzeldatei löschen:** API zum Löschen einer Datei, Papierkorb-Button pro Datei in der Liste, Löschen ohne Seiten-Reload.
+
+---
+
 ## V 1.004
 - **Kalender:** Mehrtägige Balken als ein durchgehendes Element (Overlay-Layer), keine Überlappung mehr; Lanes nach Länge (längere oben, kürzere darunter), keine Überlagerung; Abwesenheitsbalken über Auftragsbalken (z-index); Kalender volle Breite.
 - **Abwesenheiten:** Grund als Überschrift, Datum kleiner darunter; Abwesenheitsbalken des eingeloggten Technikers in Technikerfarbe (auch bei Einzelansicht, via /api/technician).
