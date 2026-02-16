@@ -6,7 +6,7 @@
   <title>Kukla Monteur Tool</title>
   <link rel="icon" href="icon.png" type="image/png">
   <style>
-    :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --text: #e8e8e8; --muted: #a0a0a0; }
+    :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --text: #e8e8e8; --muted: #a0a0a0; --header-height: 72px; }
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
     .app-header { background: var(--card); border-bottom: 1px solid var(--accent); }
@@ -87,9 +87,9 @@
     .cal-legend-title { font-weight: bold; margin-right: 0.5rem; color: var(--muted); }
     .cal-legend-item { display: inline-flex; align-items: center; gap: 6px; }
     .cal-legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
-    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
+    .modal-overlay { position: fixed; top: var(--header-height); left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
     .modal-overlay.active { display: flex; }
-    .modal-overlay.modal-fullscreen .modal-box { width: 100%; max-width: none; height: 100%; max-height: none; border-radius: 0; border-width: 0; }
+    .modal-overlay.modal-fullscreen .modal-box { width: 100%; max-width: none; height: 100%; max-height: calc(100vh - var(--header-height)); border-radius: 0; border-width: 0; }
     .modal-box { background: var(--card); border: 1px solid var(--accent); border-radius: 8px; padding: 1rem; max-width: 520px; width: 95%; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; margin: 0; }
     .modal-box h3 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--text); }
     .modal-detail-content { overflow: auto; flex: 1; min-height: 200px; margin-bottom: 0.75rem; }

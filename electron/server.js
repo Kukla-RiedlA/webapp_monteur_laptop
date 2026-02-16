@@ -535,6 +535,31 @@ function createApp(db) {
   return app;
 }
 
+function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
+  const rows = db.prepare(
+    'SELECT j.id, j.server_id FROM jobs j INNER JOIN job_technicians jt ON jt.job_id = j.id WHERE jt.technician_id = ?'
+  ).all(technicianId);
+  for (const row of rows) {
+    const serverId = row.server_id != null && row.server_id !== '' ? row.server_id : row.id;
+    if (receivedJobServerIds.has(Number(serverId)) || receivedJobServerIds.has(String(serverId))) continue;
+    db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(row.id, technicianId);
+    const rest = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ?').get(row.id);
+    if (!rest) {
+      db.prepare('DELETE FROM job_addresses WHERE job_id = ?').run(row.id);
+      db.prepare('DELETE FROM jobs WHERE id = ?').run(row.id);
+    }
+  }
+}
+
+function removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerIds) {
+  const rows = db.prepare('SELECT id, server_id FROM absences WHERE technician_id = ?').all(technicianId);
+  for (const row of rows) {
+    const serverId = row.server_id != null && row.server_id !== '' ? row.server_id : row.id;
+    if (receivedAbsenceServerIds.has(Number(serverId)) || receivedAbsenceServerIds.has(String(serverId))) continue;
+    db.prepare('DELETE FROM absences WHERE id = ?').run(row.id);
+  }
+}
+
 async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, dateTo) {
   const base = baseUrl.replace(/\/$/, '');
   let jobsUrl = `${base}/api/my_jobs.php?technician_id=${technicianId}`;
@@ -561,15 +586,28 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
     throw new Error('Pull fehlgeschlagen (' + parts.join('; ') + '). Dispo-Server-URL muss so sein, dass ' + base + '/api/my_jobs.php erreichbar ist.');
   }
   const jobsData = await jobsRes.json();
-  const { jobs } = jobsData;
-  const { absences } = await absencesRes.json();
+  const jobs = jobsData.jobs || [];
+  const absencesData = await absencesRes.json();
+  const absences = absencesData.absences || [];
+  const receivedJobServerIds = new Set();
+  for (const j of jobs) {
+    const id = j.id;
+    if (id != null) { receivedJobServerIds.add(Number(id)); receivedJobServerIds.add(String(id)); }
+  }
+  const receivedAbsenceServerIds = new Set();
+  for (const a of absences) {
+    const id = a.id;
+    if (id != null) { receivedAbsenceServerIds.add(Number(id)); receivedAbsenceServerIds.add(String(id)); }
+  }
   db.transaction(() => {
     ensureTechnician(db, technicianId);
-    for (const j of jobs || []) {
+    removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds);
+    removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerIds);
+    for (const j of jobs) {
       const custId = ensureCustomer(db, j);
       insertOrUpdateJob(db, j, custId, technicianId);
     }
-    for (const a of absences || []) {
+    for (const a of absences) {
       insertOrUpdateAbsence(db, a, technicianId);
     }
   });
@@ -665,7 +703,18 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       const payload = JSON.parse(p.payload || '{}');
       const body = { job_id: serverJobId, ...payload };
       const r = await fetch(`${base}/api/job.php?technician_id=${technicianId}`, { method: 'PATCH', headers: header, body: JSON.stringify(body) });
-      if (r.ok) db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      if (r.ok) {
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        if (p.action === 'status' && payload.status === 'erledigt') {
+          const localJobId = p.entity_id;
+          db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(localJobId, technicianId);
+          const rest = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ?').get(localJobId);
+          if (!rest) {
+            db.prepare('DELETE FROM job_addresses WHERE job_id = ?').run(localJobId);
+            db.prepare('DELETE FROM jobs WHERE id = ?').run(localJobId);
+          }
+        }
+      }
     }
     if (p.entity_type === 'absence') {
       if (p.action === 'create') {
