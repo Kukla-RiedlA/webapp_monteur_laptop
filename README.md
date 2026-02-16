@@ -153,7 +153,7 @@ curl -X POST "http://localhost/webapp_monteur_laptop/api/receive_dispo.php" \
 
 ## Release (Version setzen, Git-Push, Tag/Label)
 
-Bei jedem Release die Version in `config/version.php` und `electron/version.json` setzen, committen, einen Git-Tag (Label) setzen und pushen – dafür gibt es ein Skript:
+Bei jedem Release die Version in `config/version.php` und `electron/version.json` setzen, committen, einen Git-Tag (Label) setzen und pushen – dafür gibt es ein Skript. *(Cursor-Agent: siehe `.cursor/rules/release-and-push.mdc` im Workspace-Root.)*
 
 ```powershell
 # Neue Version explizit setzen (z.B. V 1.002)
