@@ -1,0 +1,3 @@
+# Einheitliche Zeilenumbrueche: im Repo LF, beim Checkout unter Windows ggf. CRLF (via core.autocrlf).
+# Verhindert, dass nach Push noch geaenderte Dateien angezeigt werden.
+* text=auto

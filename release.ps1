@@ -74,6 +74,9 @@ try {
     git push
     git push origin $tagName --force
     Write-Host "Release $Version (Tag: $tagName) gepusht."
+    # Arbeitskopie mit Commit abgleichen, damit keine "ungleichen Dateien" (z. B. CRLF/LF) angezeigt werden
+    git reset --hard HEAD
+    Write-Host "Arbeitsverzeichnis mit Release-Commit abgeglichen."
 } catch {
     Write-Error $_
     exit 1
