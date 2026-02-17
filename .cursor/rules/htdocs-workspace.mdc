@@ -1,0 +1,13 @@
+---
+description: Dateien nur im htdocs dieses Workspaces bearbeiten
+alwaysApply: true
+---
+
+# Htdocs nur in diesem Workspace
+
+Bei allen Änderungen an Kalender-, API- und App-Dateien (PHP, JS in htdocs) **ausschließlich** die Dateien in diesem Workspace verwenden.
+
+- **Pfad:** Immer den **relativen Pfad** `htdocs/` vom **Workspace-Root** dieses Projekts nutzen (z. B. `htdocs/modules/calendar.php`, `htdocs/calendar_month.php`).
+- **Nicht** absolute Pfade wie `c:\xampp_2\htdocs\` oder andere Workspace-Roots verwenden – nur das htdocs-Verzeichnis **dieses** Workspaces bearbeiten.
+
+Damit landen Änderungen dort, wo die Anwendung für dieses Projekt geladen wird.

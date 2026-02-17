@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.018
+- **Abwesenheitsanfragen mit Freigabe:** Beantragen, Liste offener Anfragen, Toast bei Entscheidung; Sync mit Dispo über dispo_api; Fehlerbehandlung und Aufräumen fehlerhafter Einträge.
+
+---
+
 ## V 1.017
 - **Release/Dokumentation:** Cursor Rule für Release- und Push-Workflow; README-Verweis auf .cursor/rules.
 

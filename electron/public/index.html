@@ -40,6 +40,8 @@
     .job-info strong { color: #fff; display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
     .job-flag { vertical-align: middle; display: inline-block; border-radius: 2px; }
     .job-meta { font-size: 0.8rem; color: var(--muted); }
+    .btn-delete-absence { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0.35rem; border-radius: 4px; }
+    .btn-delete-absence:hover { color: #e07c7c; background: rgba(224,124,124,0.15); }
     .job-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
     .job-actions .btn { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
     .status-badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
@@ -139,7 +141,9 @@
         </div>
         <div class="card">
           <h2>Abwesenheiten</h2>
-          <div id="absencesList"><span class="empty">Wird geladen…</span></div>
+          <button type="button" class="btn btn-ghost" id="btnRequestAbsence">Abwesenheit beantragen</button>
+          <button type="button" class="btn btn-ghost" id="btnCleanupErrorRequests" style="display:none;margin-left:0.25rem">Fehlerhafte Einträge entfernen</button>
+          <div id="absencesList" style="margin-top:0.75rem"><span class="empty">Wird geladen…</span></div>
         </div>
       </main>
     </div>
@@ -163,6 +167,32 @@
       </main>
     </div>
   </div>
+  <div id="modalAbsenceRequest" class="modal-overlay" aria-hidden="true">
+    <div class="modal-box" role="dialog">
+      <h3>Abwesenheit beantragen</h3>
+      <p class="muted" style="margin-bottom:0.75rem">Die Anfrage wird an die Dispo gesendet und muss dort bestätigt werden.</p>
+      <form id="absenceRequestForm">
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="absenceRequestType">Grund</label>
+          <input type="text" id="absenceRequestType" placeholder="z. B. Urlaub, Krankheit" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+        </div>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="absenceRequestStart">Startdatum</label>
+          <input type="date" id="absenceRequestStart" required style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+        </div>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="absenceRequestEnd">Enddatum</label>
+          <input type="date" id="absenceRequestEnd" required style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+        </div>
+        <div id="absenceRequestMsg" class="muted" style="margin-bottom:0.5rem;font-size:0.9rem"></div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button type="submit" class="btn btn-primary">Anfrage senden</button>
+          <button type="button" class="btn btn-ghost" id="absenceRequestCancel">Abbrechen</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <div id="toastContainer" aria-live="polite" style="position:fixed;bottom:1rem;right:1rem;z-index:1000;max-width:320px;pointer-events:none"></div>
   <div id="modalJobDetails" class="modal-overlay modal-fullscreen" aria-hidden="true">
     <div class="modal-box" role="dialog" aria-labelledby="modalJobDetailsTitle">
       <h3 id="modalJobDetailsTitle">Projektdaten</h3>

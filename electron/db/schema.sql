@@ -82,6 +82,22 @@ CREATE TABLE IF NOT EXISTS pending_changes (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS absence_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER,
+  technician_id INTEGER NOT NULL,
+  start_datetime TEXT NOT NULL,
+  end_datetime TEXT NOT NULL,
+  type TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_at TEXT DEFAULT (datetime('now')),
+  synced_at TEXT,
+  FOREIGN KEY (technician_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_absence_requests_tech ON absence_requests(technician_id);
+CREATE INDEX IF NOT EXISTS idx_absence_requests_status ON absence_requests(status);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_start ON jobs(start_datetime);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_job_technicians_tech ON job_technicians(technician_id);

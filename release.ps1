@@ -36,7 +36,8 @@ if ($Version -eq "--bump") {
     $current = Get-CurrentVersion
     if ($current -match 'V\s*(\d+)\.(\d+)') {
         $build = [int]$Matches[2] + 1
-        $Version = "V $($Matches[1]).$build"
+        $buildStr = $build.ToString().PadLeft(3, '0')
+        $Version = "V $($Matches[1]).$buildStr"
     } else {
         Write-Error "Aktuelle Version konnte nicht gelesen werden: $current"
     }

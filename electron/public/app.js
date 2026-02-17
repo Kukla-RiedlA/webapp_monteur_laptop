@@ -485,12 +485,13 @@
     const range = getSyncDateRange();
     const params = { technician_id: techId, date_from: range.date_from, date_to: range.date_to };
     try {
-      const [jRes, aRes] = await Promise.all([
+      const [jRes, aRes, reqRes] = await Promise.all([
         fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()),
-        fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json())
+        fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()),
+        fetch(API_BASE + '/api/my_absence_requests?' + qs({ technician_id: techId }), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()).catch(() => ({ ok: true, requests: [] }))
       ]);
       renderJobs(jRes);
-      renderAbsences(aRes);
+      renderAbsences(aRes, reqRes);
       updateTechnicianName();
     } catch (e) {
       document.getElementById('jobsList').innerHTML = '<span class="empty">Fehler: ' + e.message + '</span>';
@@ -586,17 +587,67 @@
     loadJobsAndAbsences();
   }
 
-  function renderAbsences(data) {
+  function renderAbsences(data, requestsData) {
     const list = document.getElementById('absencesList');
-    const absences = data.absences || [];
-    if (absences.length === 0) {
+    const absences = (data && data.absences) ? data.absences : [];
+    const requests = (requestsData && requestsData.requests) ? requestsData.requests : [];
+    const parts = [];
+    absences.forEach(function(a) {
+      const dateStr = formatDateRange(a.start_datetime, a.end_datetime);
+      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(a.type || 'Abwesenheit') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="delete-absence" data-id="' + escapeHtml(String(a.id)) + '" title="Abwesenheit löschen (lokal und in der Dispo)" aria-label="Löschen">🗑</button></div>');
+    });
+    requests.forEach(function(r) {
+      if (r.status === 'approved') return;
+      const dateStr = formatDateRange(r.start_datetime, r.end_datetime);
+      var statusText;
+      if (r.status === 'pending') statusText = 'Offen (wird geprüft)';
+      else if (r.status === 'rejected') statusText = 'Abgelehnt';
+      else if (r.status === 'error') statusText = 'Fehler bei Übertragung';
+      else statusText = r.status || '';
+      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(r.type || 'Abwesenheit') + '</strong> <span class="job-meta">' + escapeHtml(dateStr) + ' – ' + statusText + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="delete-absence-request" data-id="' + escapeHtml(String(r.id)) + '" title="Anfrage aus der Liste entfernen" aria-label="Löschen">🗑</button></div>');
+    });
+    var hasErrorRequests = requests.some(function(r) { return r.status === 'error'; });
+    var btnCleanup = document.getElementById('btnCleanupErrorRequests');
+    if (btnCleanup) btnCleanup.style.display = hasErrorRequests ? 'inline-block' : 'none';
+    if (parts.length === 0) {
       list.innerHTML = '<span class="empty">Keine Abwesenheiten.</span>';
       return;
     }
-    list.innerHTML = absences.map((a) => {
-      const dateStr = formatDateRange(a.start_datetime, a.end_datetime);
-      return '<div class="job"><div class="job-info"><strong>' + escapeHtml(a.type || 'Abwesenheit') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + '</span></div></div>';
-    }).join('');
+    list.innerHTML = parts.join('');
+  }
+
+  function showToast(message) {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+    const el = document.createElement('div');
+    el.setAttribute('role', 'alert');
+    el.style.cssText = 'background:var(--card);border:1px solid var(--accent);border-radius:8px;padding:0.75rem 1rem;margin-top:0.5rem;box-shadow:0 4px 12px rgba(0,0,0,0.3)';
+    el.textContent = message;
+    container.appendChild(el);
+    setTimeout(function() { el.remove(); }, 5000);
+  }
+
+  var eventSourceRef = null;
+  function startPushEvents() {
+    var techId = getTechId();
+    var baseUrl = getServerUrl();
+    if (eventSourceRef) { eventSourceRef.close(); eventSourceRef = null; }
+    if (!techId) return;
+    var url = API_BASE + '/api/events?technician_id=' + encodeURIComponent(techId) + '&base_url=' + encodeURIComponent(baseUrl || '');
+    try {
+      eventSourceRef = new EventSource(url);
+      eventSourceRef.onmessage = function(ev) {
+        try {
+          var msg = JSON.parse(ev.data);
+          if (msg.channel === 'absence_request_decided' && msg.payload) {
+            var status = msg.payload.status;
+            if (status === 'approved') showToast('Ihre Abwesenheit wurde bestätigt.');
+            else if (status === 'rejected') showToast('Ihre Abwesenheit wurde abgelehnt.');
+            loadJobsAndAbsences();
+          }
+        } catch (e) {}
+      };
+    } catch (e) {}
   }
 
   let syncIntervalId = null;
@@ -633,6 +684,7 @@
   loadSettingsFromStorage();
   checkConnectionAndSync();
   startSyncInterval();
+  startPushEvents();
   // Startansicht und Kalender erst nach Layout-Aufbau, damit das Grid sofort sichtbar ist
   function initStartView() {
     showView('start');
@@ -654,6 +706,7 @@
   document.getElementById('btnSaveSettings').addEventListener('click', () => {
     saveSettingsToStorage();
     startSyncInterval();
+    startPushEvents();
     updateTechnicianName();
     const base = getServerUrl().trim();
     const techId = getTechId();
@@ -695,6 +748,129 @@
   var elJobOverlay = document.getElementById('modalJobDetails');
   if (elJobOverlay) elJobOverlay.addEventListener('click', function (e) {
     if (e.target.id === 'modalJobDetails') closeJobDetailsModal();
+  });
+
+  function openAbsenceRequestModal() {
+    var modal = document.getElementById('modalAbsenceRequest');
+    if (!modal) return;
+    var start = document.getElementById('absenceRequestStart');
+    var end = document.getElementById('absenceRequestEnd');
+    if (start && end) {
+      var t = new Date();
+      start.value = t.toISOString().slice(0, 10);
+      end.value = t.toISOString().slice(0, 10);
+    }
+    document.getElementById('absenceRequestMsg').textContent = '';
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+  }
+  function closeAbsenceRequestModal() {
+    var modal = document.getElementById('modalAbsenceRequest');
+    if (modal) {
+      modal.classList.remove('active');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+  }
+  document.getElementById('btnRequestAbsence').addEventListener('click', openAbsenceRequestModal);
+  document.getElementById('absencesList').addEventListener('click', function(e) {
+    var btn = e.target && e.target.closest && e.target.closest('[data-action="delete-absence"], [data-action="delete-absence-request"]');
+    if (!btn) return;
+    var id = btn.getAttribute('data-id');
+    if (!id) return;
+    var isRequest = btn.getAttribute('data-action') === 'delete-absence-request';
+    if (isRequest) {
+      if (!confirm('Diese Anfrage (z. B. abgelehnt) aus der Liste entfernen?')) return;
+      fetch(API_BASE + '/api/absence_request?id=' + encodeURIComponent(id), {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) }
+      }).then(function(r) { return r.text(); }).then(function(text) {
+        var data;
+        try { data = text ? JSON.parse(text) : {}; } catch (e) {
+          loadJobsAndAbsences();
+          if (text && (text.trim().indexOf('<') === 0 || text.indexOf('<!DOCTYPE') === 0)) {
+            showToast('App-Server antwortete mit HTML statt JSON. Liste wurde aktualisiert.');
+          } else {
+            showToast('Antwort konnte nicht gelesen werden. Liste wurde aktualisiert.');
+          }
+          return;
+        }
+        if (data.ok) {
+          loadJobsAndAbsences();
+          showToast('Anfrage entfernt.');
+        } else {
+          alert(data.error || 'Entfernen fehlgeschlagen');
+        }
+      }).catch(function(err) {
+        loadJobsAndAbsences();
+        alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+      });
+      return;
+    }
+    if (!confirm('Abwesenheit wirklich löschen? (lokal und in der Dispo)')) return;
+    var body = { id: parseInt(id, 10), base_url: getServerUrl() || undefined, serverUsername: getDispoUsername() || undefined, serverPassword: getDispoPassword() || undefined };
+    fetch(API_BASE + '/api/absence?id=' + encodeURIComponent(id), {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+      body: JSON.stringify(body)
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.ok) {
+        loadJobsAndAbsences();
+        showToast('Abwesenheit gelöscht.');
+      } else {
+        alert(data.error || 'Löschen fehlgeschlagen');
+      }
+    }).catch(function(err) { alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt')); });
+  });
+  document.getElementById('btnCleanupErrorRequests').addEventListener('click', function() {
+    fetch(API_BASE + '/api/absence_requests_cleanup_errors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) }
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.ok) {
+        loadJobsAndAbsences();
+        showToast(data.deleted ? data.deleted + ' fehlerhafte Einträge entfernt.' : 'Fertig.');
+      }
+    }).catch(function(e) { showToast('Fehler: ' + (e && e.message ? e.message : 'Unbekannt')); });
+  });
+  document.getElementById('absenceRequestCancel').addEventListener('click', closeAbsenceRequestModal);
+  var modalAbsenceOverlay = document.getElementById('modalAbsenceRequest');
+  if (modalAbsenceOverlay) modalAbsenceOverlay.addEventListener('click', function (e) {
+    if (e.target.id === 'modalAbsenceRequest') closeAbsenceRequestModal();
+  });
+  document.getElementById('absenceRequestForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var startEl = document.getElementById('absenceRequestStart');
+    var endEl = document.getElementById('absenceRequestEnd');
+    var typeEl = document.getElementById('absenceRequestType');
+    var msgEl = document.getElementById('absenceRequestMsg');
+    var start = startEl && startEl.value ? startEl.value : '';
+    var end = endEl && endEl.value ? endEl.value : '';
+    var type = (typeEl && typeEl.value) ? typeEl.value.trim() : 'Abwesenheit';
+    if (!start || !end) {
+      if (msgEl) msgEl.textContent = 'Bitte Start- und Enddatum angeben.';
+      return;
+    }
+    var body = {
+      start_datetime: start + 'T00:00:00',
+      end_datetime: end + 'T23:59:59',
+      type: type || 'Abwesenheit',
+      base_url: getServerUrl() || undefined,
+      serverUsername: getDispoUsername() || undefined,
+      serverPassword: getDispoPassword() || undefined
+    };
+    msgEl.textContent = 'Wird gesendet…';
+    fetch(API_BASE + '/api/absence_request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      closeAbsenceRequestModal();
+      if (msgEl) msgEl.textContent = '';
+      loadJobsAndAbsences();
+      showToast('Anfrage wurde gesendet und wird von der Dispo geprüft.');
+    }).catch(function (err) {
+      if (msgEl) msgEl.textContent = 'Fehler: ' + (err && err.message ? err.message : 'Unbekannt');
+    });
   });
 
   // —— Kalender ———

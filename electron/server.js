@@ -6,6 +6,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const WebSocket = require('ws');
 
 const PORT = 39678;
 const DB_DIR = path.join(__dirname, 'db');
@@ -70,6 +71,17 @@ function createDbWrapper(sqlDb) {
   };
 }
 
+function logAbsenceRequestError(info) {
+  try {
+    const line = new Date().toISOString() + ' ' + JSON.stringify(info) + '\n';
+    const logPath = path.join(DB_DIR, 'absence_request_errors.log');
+    if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+    fs.appendFileSync(logPath, line);
+  } catch (e) {
+    // Logging-Fehler ignorieren
+  }
+}
+
 async function getDb() {
   const initSqlJs = require('sql.js');
   const SQL = await initSqlJs({
@@ -87,12 +99,69 @@ async function getDb() {
   sqlDb.run(schema);
   try { sqlDb.run('ALTER TABLE jobs ADD COLUMN eap_nummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
   try { sqlDb.run('ALTER TABLE jobs ADD COLUMN bestellnummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
+  try {
+    sqlDb.run(`CREATE TABLE IF NOT EXISTS absence_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id INTEGER,
+      technician_id INTEGER NOT NULL,
+      start_datetime TEXT NOT NULL,
+      end_datetime TEXT NOT NULL,
+      type TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      requested_at TEXT DEFAULT (datetime('now')),
+      synced_at TEXT
+    )`);
+  } catch (e) { /* existiert evtl. */ }
   return createDbWrapper(sqlDb);
 }
 
 function createApp(db) {
   const app = express();
   app.use(express.json());
+
+  const sseClients = new Map();
+  const pushWsByTechnician = new Map();
+  function getPushWsUrl(baseUrl) {
+    if (!baseUrl || typeof baseUrl !== 'string') return null;
+    const u = baseUrl.trim().replace(/\/$/, '');
+    try {
+      const url = new URL(u);
+      return (url.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + url.hostname + ':39679/ws';
+    } catch (e) { return null; }
+  }
+  function connectPushForTechnician(technicianId, baseUrl) {
+    const wsUrl = getPushWsUrl(baseUrl);
+    if (!wsUrl || pushWsByTechnician.has(technicianId)) return;
+    try {
+      const ws = new WebSocket(wsUrl);
+      ws.on('open', () => { ws.send(JSON.stringify({ type: 'auth', technician_id: technicianId })); });
+      ws.on('message', (data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.channel === 'absence_request_decided' && msg.payload) {
+            const requestId = msg.payload.request_id;
+            const status = msg.payload.status;
+            if (requestId != null && status) {
+              try {
+                db.prepare('UPDATE absence_requests SET status = ?, synced_at = datetime(\'now\') WHERE server_id = ? AND technician_id = ?').run(status, requestId, technicianId);
+                save();
+              } catch (e) {}
+            }
+            const set = sseClients.get(technicianId);
+            if (set) set.forEach((res) => { res.write('data: ' + JSON.stringify(msg) + '\n\n'); });
+          }
+        } catch (e) {}
+      });
+      ws.on('error', () => {
+        // Push-Server nicht erreichbar: Verbindung verwerfen, App aber nicht crashen lassen.
+        pushWsByTechnician.delete(technicianId);
+      });
+      ws.on('close', () => { pushWsByTechnician.delete(technicianId); });
+      pushWsByTechnician.set(technicianId, ws);
+    } catch (e) {
+      // Fehler beim Aufbau der Verbindung ignorieren – App soll ohne Push weiterlaufen.
+    }
+  }
 
   const getTechnicianId = (req) => {
     const id = req.query.technician_id || req.headers['x-technician-id'];
@@ -299,6 +368,115 @@ function createApp(db) {
     res.json({ ok: true, technician_id: technicianId, absences: rows });
   });
 
+  app.get('/api/my_absence_requests', (req, res) => {
+    const technicianId = getTechnicianId(req);
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id fehlt.' });
+    }
+    const rows = db.prepare('SELECT id, server_id, technician_id, start_datetime, end_datetime, type, status, requested_at, synced_at FROM absence_requests WHERE technician_id = ? ORDER BY requested_at DESC').all(technicianId);
+    res.json({ ok: true, technician_id: technicianId, requests: rows });
+  });
+
+  app.post('/api/absence_requests_cleanup_errors', (req, res) => {
+    const technicianId = getTechnicianId(req);
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id fehlt.' });
+    }
+    const r = db.prepare('DELETE FROM absence_requests WHERE technician_id = ? AND status = ?').run(technicianId, 'error');
+    save();
+    res.json({ ok: true, deleted: r.changes });
+  });
+
+  app.delete('/api/absence_request', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const id = parseInt(req.query.id, 10) || parseInt((req.body || {}).id, 10) || 0;
+      if (!technicianId || !id) {
+        return res.status(400).json({ ok: false, error: 'technician_id und id erforderlich.' });
+      }
+      const r = db.prepare('DELETE FROM absence_requests WHERE id = ? AND technician_id = ?').run(id, technicianId);
+      if (r.changes) {
+        save();
+        return res.json({ ok: true });
+      }
+      return res.status(404).json({ ok: false, error: 'Anfrage nicht gefunden.' });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/absence_request', (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const body = req.body || {};
+    const start = body.start_datetime || body.start || body.date_from || '';
+    const end = body.end_datetime || body.end || body.date_to || '';
+    const type = body.type || body.reason || null;
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!technicianId || !start || !end) {
+      return res.status(400).json({ ok: false, error: 'technician_id, start_datetime und end_datetime erforderlich.' });
+    }
+    const norm = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v).trim()) ? v.trim() + ' 00:00:00' : String(v).trim();
+    const startNorm = norm(start);
+    const endNorm = norm(end);
+    try {
+      const r = db.prepare('INSERT INTO absence_requests (technician_id, start_datetime, end_datetime, type, status) VALUES (?, ?, ?, ?, ?)').run(technicianId, startNorm, endNorm, type || null, 'pending');
+      const localId = r.lastInsertRowid;
+      save();
+      if (baseUrl) {
+        const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId) };
+        const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
+        if (auth) header.Authorization = auth.Authorization;
+        fetch(baseUrl + '/api/absence_request.php', {
+          method: 'POST',
+          headers: header,
+          body: JSON.stringify({ technician_id: technicianId, start_datetime: startNorm, end_datetime: endNorm, type: type || null }),
+        }).then(async (resp) => {
+          const data = await resp.json().catch(() => ({}));
+          if (resp.ok && data.success && data.id) {
+            db.prepare('UPDATE absence_requests SET server_id = ?, synced_at = datetime(\'now\') WHERE id = ?').run(data.id, localId);
+            save();
+          } else if (resp.status >= 400 && resp.status < 500) {
+            // Dauerhafter fachlicher Fehler (z. B. „Kein gültiger Monteur“): nicht endlos pending lassen.
+            logAbsenceRequestError({ context: 'immediate', status: resp.status, body: data, technicianId, baseUrl });
+            db.prepare('UPDATE absence_requests SET status = ?, synced_at = datetime(\'now\') WHERE id = ?').run('error', localId);
+            save();
+          }
+        }).catch(() => {
+          // Verbindungsfehler: Eintrag bleibt pending und wird beim nächsten Sync erneut versucht.
+        });
+      }
+      res.json({ ok: true, id: localId });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.get('/api/events', (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const baseUrl = req.query.base_url || req.query.baseUrl || '';
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id fehlt.' });
+    }
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    if (!sseClients.has(technicianId)) sseClients.set(technicianId, new Set());
+    sseClients.get(technicianId).add(res);
+    connectPushForTechnician(technicianId, baseUrl);
+    req.on('close', () => {
+      const set = sseClients.get(technicianId);
+      if (set) {
+        set.delete(res);
+        if (set.size === 0) {
+          sseClients.delete(technicianId);
+          const ws = pushWsByTechnician.get(technicianId);
+          if (ws) { ws.close(); pushWsByTechnician.delete(technicianId); }
+        }
+      }
+    });
+  });
+
   app.post('/api/absence', (req, res) => {
     const technicianId = getTechnicianId(req);
     const body = req.body || {};
@@ -344,23 +522,38 @@ function createApp(db) {
     }
   });
 
-  app.delete('/api/absence', (req, res) => {
+  app.delete('/api/absence', async (req, res) => {
     const technicianId = getTechnicianId(req);
-    const id = parseInt(req.query.id, 10) || parseInt((req.body || {}).id, 10) || 0;
+    const body = req.body || {};
+    const id = parseInt(req.query.id, 10) || parseInt(body.id, 10) || 0;
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
     if (!technicianId || !id) {
       return res.status(400).json({ ok: false, error: 'technician_id und id erforderlich.' });
     }
     try {
       const row = db.prepare('SELECT server_id FROM absences WHERE id = ? AND technician_id = ?').get(id, technicianId);
-      const r = db.prepare('DELETE FROM absences WHERE id = ? AND technician_id = ?').run(id, technicianId);
-      if (r.changes && row && row.server_id) {
-        db.prepare('INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)').run('absence', row.server_id, 'delete', '{}');
+      if (!row) {
+        return res.status(404).json({ ok: false, error: 'Abwesenheit nicht gefunden.' });
       }
-      if (r.changes) {
-        save();
-        return res.json({ ok: true });
+      const serverId = row.server_id != null && row.server_id !== '' ? row.server_id : null;
+      if (baseUrl && serverId != null) {
+        const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
+        const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(auth || {}) };
+        try {
+          const delRes = await fetch(`${baseUrl}/api/absence.php?id=${encodeURIComponent(serverId)}&technician_id=${encodeURIComponent(technicianId)}`, { method: 'DELETE', headers: header });
+          if (!delRes.ok) {
+            const errText = await delRes.text();
+            return res.status(502).json({ ok: false, error: 'Dispo-Löschen fehlgeschlagen: ' + (errText.slice(0, 80) || delRes.status) });
+          }
+        } catch (e) {
+          return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + (e.message || String(e)) });
+        }
+      } else if (serverId != null) {
+        db.prepare('INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)').run('absence', serverId, 'delete', '{}');
       }
-      res.status(404).json({ ok: false, error: 'Abwesenheit nicht gefunden.' });
+      db.prepare('DELETE FROM absences WHERE id = ? AND technician_id = ?').run(id, technicianId);
+      save();
+      return res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
@@ -737,6 +930,40 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       }
     }
   }
+  const pendingRequests = db.prepare('SELECT id, start_datetime, end_datetime, type FROM absence_requests WHERE technician_id = ? AND status = ? AND (server_id IS NULL OR server_id = \'\')').all(technicianId, 'pending');
+  for (const row of pendingRequests) {
+    try {
+      const r = await fetch(`${base}/api/absence_request.php`, {
+        method: 'POST',
+        headers: header,
+        body: JSON.stringify({
+          technician_id: technicianId,
+          start_datetime: row.start_datetime,
+          end_datetime: row.end_datetime,
+          type: row.type || null,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok && data.success && data.id) {
+        db.prepare('UPDATE absence_requests SET server_id = ?, synced_at = datetime(\'now\') WHERE id = ?').run(data.id, row.id);
+      } else if (r.status >= 400 && r.status < 500) {
+        // Dauerhafter fachlicher Fehler – nicht weiter als pending behandeln.
+        logAbsenceRequestError({ context: 'sync', status: r.status, body: data, technicianId, baseUrl: base });
+        db.prepare('UPDATE absence_requests SET status = ?, synced_at = datetime(\'now\') WHERE id = ?').run('error', row.id);
+      }
+    } catch (e) {}
+  }
+  try {
+    const statusRes = await fetch(`${base}/api/absence_request_status.php?technician_id=${technicianId}`, { headers: authHeader || {} });
+    const statusData = await statusRes.json().catch(() => ({}));
+    if (statusData.success && Array.isArray(statusData.requests)) {
+      for (const req of statusData.requests) {
+        if (req.id != null && req.status && req.status !== 'pending') {
+          db.prepare('UPDATE absence_requests SET status = ?, synced_at = datetime(\'now\') WHERE server_id = ? AND technician_id = ?').run(req.status, req.id, technicianId);
+        }
+      }
+    }
+  } catch (e) {}
 }
 
 module.exports = { createApp, getDb, PORT };

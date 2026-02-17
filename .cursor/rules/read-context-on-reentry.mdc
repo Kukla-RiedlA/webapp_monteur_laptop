@@ -1,0 +1,13 @@
+---
+description: Bei Wiedereinstieg Codebase-Kontext laden
+alwaysApply: true
+---
+
+# Wiedereinstieg in den Workspace
+
+Bei **neuem Chat** oder wenn der Nutzer **weiterarbeiten** / **neu einsteigen** sagt:
+
+1. **Codebase-Kontext laden:** Die Datei `.cursor/CODEBASE_CONTEXT.md` lesen. Sie enthält Projektstruktur, Datenfluss, wichtige Dateien und die Zuordnung Dispo (htdocs) vs. Monteur-WebApp (dieses Repo).
+2. Danach gezielt in den genannten Dateien suchen oder den Nutzer fragen, woran weitergearbeitet werden soll.
+
+So sind die Zusammenhänge schnell wieder verfügbar, ohne den gesamten Code neu zu scannen.
