@@ -112,12 +112,26 @@ async function getDb() {
       synced_at TEXT
     )`);
   } catch (e) { /* existiert evtl. */ }
+  try {
+    sqlDb.run(`CREATE TABLE IF NOT EXISTS dienstreisen (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      year INTEGER NOT NULL,
+      running_number INTEGER NOT NULL,
+      start_date TEXT NOT NULL,
+      company_name TEXT NOT NULL,
+      city TEXT,
+      country_code TEXT,
+      folder_name TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`);
+  } catch (e) { /* existiert evtl. */ }
+  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_dienstreisen_year ON dienstreisen(year)'); } catch (e) { /* ignore */ }
   return createDbWrapper(sqlDb);
 }
 
 function createApp(db) {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
 
   const sseClients = new Map();
   const pushWsByTechnician = new Map();
@@ -176,8 +190,292 @@ function createApp(db) {
     if (v && v.version) appVersion = v.version;
   } catch (e) { /* use default */ }
 
+  const DIENSTREISE_CONFIG_PATH = path.join(DB_DIR, 'dienstreise_config.json');
+
+  function getDienstreiseBasePath() {
+    try {
+      if (fs.existsSync(DIENSTREISE_CONFIG_PATH)) {
+        const data = JSON.parse(fs.readFileSync(DIENSTREISE_CONFIG_PATH, 'utf8'));
+        return (data && data.basePath && typeof data.basePath === 'string') ? data.basePath.trim() : '';
+      }
+    } catch (e) { /* ignore */ }
+    return '';
+  }
+
+  function setDienstreiseBasePath(basePath) {
+    try {
+      if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+      fs.writeFileSync(DIENSTREISE_CONFIG_PATH, JSON.stringify({ basePath: (basePath && typeof basePath === 'string') ? basePath.trim() : '' }, null, 2));
+    } catch (e) {
+      console.error('dienstreise config write failed:', e.message);
+    }
+  }
+
   app.get('/api/version', (req, res) => {
     res.json({ version: appVersion });
+  });
+
+  app.get('/api/dienstreise/config', (req, res) => {
+    res.json({ ok: true, basePath: getDienstreiseBasePath() });
+  });
+
+  app.post('/api/dienstreise/config', express.json(), (req, res) => {
+    const basePath = (req.body && req.body.basePath != null) ? String(req.body.basePath) : '';
+    setDienstreiseBasePath(basePath);
+    res.json({ ok: true, basePath: getDienstreiseBasePath() });
+  });
+
+  const DIENSTREISE_SUBFOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
+
+  function sanitizeDienstreiseFolderPart(str) {
+    if (typeof str !== 'string') return '';
+    const s = str.replace(/[\/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').trim();
+    return s || 'x';
+  }
+
+  function getNextRunningNumber(basePath, year) {
+    const yearDir = path.join(basePath, String(year));
+    if (!fs.existsSync(yearDir)) return 1;
+    let maxNum = 0;
+    try {
+      const entries = fs.readdirSync(yearDir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const m = e.name.match(/^(\d+)_/);
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (n > maxNum) maxNum = n;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return maxNum + 1;
+  }
+
+  function createDienstreiseFolder(basePath, startDateISO, companyName, city, countryCode) {
+    const base = (basePath && typeof basePath === 'string') ? basePath.trim() : getDienstreiseBasePath();
+    if (!base) throw new Error('Speicherort Dienstreise ist nicht konfiguriert.');
+    const datePart = (startDateISO && typeof startDateISO === 'string') ? startDateISO.trim().slice(0, 10) : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) throw new Error('Ungültiges Startdatum (YYYY-MM-DD).');
+    const year = datePart.slice(0, 4);
+    const nr = getNextRunningNumber(base, year);
+    const firm = sanitizeDienstreiseFolderPart(companyName);
+    const ort = sanitizeDienstreiseFolderPart(city);
+    const lk = sanitizeDienstreiseFolderPart(countryCode);
+    const folderName = `${nr}_${datePart}_${firm}_${ort}_${lk}`;
+    const yearDir = path.join(base, year);
+    const reiseDir = path.join(yearDir, folderName);
+    if (!fs.existsSync(yearDir)) fs.mkdirSync(yearDir, { recursive: true });
+    if (fs.existsSync(reiseDir)) throw new Error('Reise-Ordner existiert bereits: ' + folderName);
+    fs.mkdirSync(reiseDir, { recursive: true });
+    for (const sub of DIENSTREISE_SUBFOLDERS) {
+      fs.mkdirSync(path.join(reiseDir, sub), { recursive: true });
+    }
+    return { folderName, fullPath: reiseDir, year: parseInt(year, 10), runningNumber: nr };
+  }
+
+  /** Sucht vorhandenen Reise-Ordner zu Jahr/Datum/Firma/Ort/Land; liefert null wenn keiner existiert. */
+  function findExistingReiseDir(base, year, datePart, firm, ort, lk) {
+    const yearDir = path.join(base, String(year));
+    if (!fs.existsSync(yearDir)) return null;
+    const expectedSuffix = `${datePart}_${firm}_${ort}_${lk}`;
+    try {
+      const entries = fs.readdirSync(yearDir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const m = e.name.match(/^(\d+)_(.+)$/);
+        if (m && m[2] === expectedSuffix) return path.join(yearDir, e.name);
+      }
+    } catch (err) { /* ignore */ }
+    return null;
+  }
+
+  /**
+   * Zielordner für einen Auftrag: Jahr = Beginn des Auftrags, Ordner = Laufende Nr._Datum_Firmenname_Ort_LK.
+   * Verwendet vorhandenen Ordner falls passend, sonst wird er angelegt.
+   */
+  function getOrCreateDienstreiseFolderForJob(localJobId) {
+    const base = getDienstreiseBasePath();
+    if (!base) throw new Error('Speicherort Dienstreise ist nicht konfiguriert.');
+    const row = db.prepare(`
+      SELECT j.id, j.server_id, j.start_datetime, c.name AS customer_name, ja.city, ja.country
+      FROM jobs j
+      LEFT JOIN customers c ON c.id = j.customer_id
+      LEFT JOIN job_addresses ja ON ja.job_id = j.id
+      WHERE j.id = ?
+    `).get(localJobId);
+    if (!row) throw new Error('Auftrag nicht gefunden.');
+    const startStr = (row.start_datetime || '').trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startStr)) throw new Error('Auftrag hat kein gültiges Startdatum.');
+    const year = startStr.slice(0, 4);
+    const companyName = (row.customer_name || '').trim() || 'Auftrag';
+    const city = (row.city || '').trim();
+    const countryRaw = (row.country || '').trim();
+    const countryCode = countryRaw.length >= 2 ? countryRaw.slice(0, 2).toUpperCase() : countryRaw;
+    const firm = sanitizeDienstreiseFolderPart(companyName);
+    const ort = sanitizeDienstreiseFolderPart(city);
+    const lk = sanitizeDienstreiseFolderPart(countryCode);
+    const existing = findExistingReiseDir(base, year, startStr, firm, ort, lk);
+    if (existing) return existing;
+    const result = createDienstreiseFolder(base, startStr, companyName, city, countryCode);
+    return result.fullPath;
+  }
+
+  app.post('/api/dienstreise/create_folder', express.json(), (req, res) => {
+    try {
+      const body = req.body || {};
+      const basePath = body.basePath != null ? body.basePath : getDienstreiseBasePath();
+      const startDate = body.startDate || body.start_date || '';
+      const companyName = body.companyName || body.company_name || '';
+      const city = body.city || '';
+      const countryCode = body.countryCode || body.country_code || '';
+      const result = createDienstreiseFolder(basePath, startDate, companyName, city, countryCode);
+      res.json({ ok: true, folderName: result.folderName, fullPath: result.fullPath, year: result.year, runningNumber: result.runningNumber });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || 'Ordner konnte nicht angelegt werden.' });
+    }
+  });
+
+  function getDienstreiseFullPath(dienstreiseRow) {
+    const base = getDienstreiseBasePath();
+    if (!base || !dienstreiseRow || !dienstreiseRow.folder_name) return null;
+    return path.join(base, String(dienstreiseRow.year), dienstreiseRow.folder_name);
+  }
+
+  app.get('/api/dienstreise/list', (req, res) => {
+    try {
+      const rows = db.prepare('SELECT id, year, running_number, start_date, company_name, city, country_code, folder_name, created_at FROM dienstreisen ORDER BY year DESC, running_number DESC').all();
+      res.json({ ok: true, dienstreisen: rows });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.get('/api/dienstreise/:id', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ ok: false, error: 'id fehlt.' });
+    const row = db.prepare('SELECT id, year, running_number, start_date, company_name, city, country_code, folder_name, created_at FROM dienstreisen WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ ok: false, error: 'Dienstreise nicht gefunden.' });
+    const fullPath = getDienstreiseFullPath(row);
+    res.json({ ok: true, dienstreise: { ...row, fullPath } });
+  });
+
+  app.post('/api/dienstreise', express.json(), (req, res) => {
+    try {
+      const body = req.body || {};
+      const startDate = (body.startDate || body.start_date || '').trim().slice(0, 10);
+      const companyName = (body.companyName || body.company_name || '').trim();
+      const city = (body.city || '').trim();
+      const countryCode = (body.countryCode || body.country_code || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !companyName) {
+        return res.status(400).json({ ok: false, error: 'Startdatum (YYYY-MM-DD) und Firmenname erforderlich.' });
+      }
+      const basePath = body.basePath != null ? body.basePath : getDienstreiseBasePath();
+      const result = createDienstreiseFolder(basePath, startDate, companyName, city, countryCode);
+      const runResult = db.prepare('INSERT INTO dienstreisen (year, running_number, start_date, company_name, city, country_code, folder_name) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+        result.year, result.runningNumber, startDate, companyName, city, countryCode, result.folderName
+      );
+      const row = db.prepare('SELECT id, year, running_number, start_date, company_name, city, country_code, folder_name, created_at FROM dienstreisen WHERE id = ?').get(runResult.lastInsertRowid);
+      const fullPath = getDienstreiseFullPath(row);
+      res.json({ ok: true, dienstreise: { ...row, fullPath } });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || 'Anlegen fehlgeschlagen.' });
+    }
+  });
+
+  app.post('/api/dienstreise/copy_project', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
+      const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
+      const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
+      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
+
+      if (!localJobId || !dispoBaseUrl || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id (lokal), dispoBaseUrl und technicianId erforderlich.' });
+      }
+
+      const jobRow = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const jobId = jobRow.server_id != null ? jobRow.server_id : jobRow.id;
+
+      const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!targetDir || !fs.existsSync(targetDir)) return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
+
+      const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+
+      async function listEntries(relPath) {
+        const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
+        const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + pathQ;
+        const opts = { headers: { 'X-Technician-Id': String(technicianId), ...authHeader } };
+        const r = await fetch(url, opts);
+        if (!r.ok) {
+          const msg = r.status === 404
+            ? 'Dispo-Liste fehlgeschlagen: 404 – URL prüfen (Server-Adresse in Einstellungen). Aufgerufene URL: ' + url
+            : 'Dispo-Liste fehlgeschlagen: ' + r.status;
+          throw new Error(msg);
+        }
+        const data = await r.json();
+        return (data && data.entries) ? data.entries : [];
+      }
+
+      async function downloadFile(relPath, localPath) {
+        const url = dispoBaseUrl + '/api/job_project_file_download.php?technician_id=' + technicianId + '&job_id=' + jobId + '&path=' + encodeURIComponent(relPath);
+        const opts = { headers: { 'X-Technician-Id': String(technicianId), ...authHeader } };
+        const r = await fetch(url, opts);
+        if (!r.ok) throw new Error('Download fehlgeschlagen: ' + relPath + ' (' + r.status + ')');
+        const buf = Buffer.from(await r.arrayBuffer());
+        const dir = path.dirname(localPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(localPath, buf);
+      }
+
+      async function copyRecursive(relPath) {
+        const entries = await listEntries(relPath);
+        for (const e of entries) {
+          const name = e.name || '';
+          if (!name || name === '.' || name === '..') continue;
+          const childRel = relPath ? relPath + '/' + name : name;
+          const localFull = path.join(targetDir, childRel.replace(/\//g, path.sep));
+          if (e.type === 'dir') {
+            if (!fs.existsSync(localFull)) fs.mkdirSync(localFull, { recursive: true });
+            await copyRecursive(childRel);
+          } else if (e.type === 'file') {
+            await downloadFile(childRel, localFull);
+          }
+        }
+      }
+
+      await copyRecursive('');
+      res.json({ ok: true, message: 'Projektordner wurde in den Dienstreise-Ordner kopiert.' });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Kopieren fehlgeschlagen.' });
+    }
+  });
+
+  app.post('/api/dienstreise/upload', (req, res) => {
+    try {
+      const body = req.body || {};
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const subfolder = (body.subfolder || '').trim();
+      const filename = (body.filename || '').trim() || 'datei';
+      const content = body.content;
+      if (!localJobId || !DIENSTREISE_SUBFOLDERS.includes(subfolder)) {
+        return res.status(400).json({ ok: false, error: 'job_id (lokal) und subfolder (Dokumente_Dispo/Dokumente_Monteur/Dokumente_Anlage/Dokumente_Buchhaltung) erforderlich.' });
+      }
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!reiseDir || !fs.existsSync(reiseDir)) return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
+      const subDir = path.join(reiseDir, subfolder);
+      if (!fs.existsSync(subDir)) fs.mkdirSync(subDir, { recursive: true });
+      const safeName = path.basename(filename).replace(/[\/\\:*?"<>|]/g, '_') || 'datei';
+      const targetPath = path.join(subDir, safeName);
+      const buf = typeof content === 'string' ? Buffer.from(content, 'base64') : (Buffer.isBuffer(content) ? content : null);
+      if (!buf || buf.length === 0) return res.status(400).json({ ok: false, error: 'Dateiinhalt (content, base64) fehlt.' });
+      fs.writeFileSync(targetPath, buf);
+      res.json({ ok: true, path: targetPath, filename: safeName });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Upload fehlgeschlagen.' });
+    }
   });
 
   app.get('/api/technician', (req, res) => {

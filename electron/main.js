@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { createApp, getDb, PORT } = require('./server');
 
@@ -33,6 +33,18 @@ function createWindow() {
     }
   });
 }
+
+ipcMain.handle('dienstreise:choose-folder', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Speicherort für Dienstreisen wählen',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || !result.filePaths || !result.filePaths[0]) {
+    return null;
+  }
+  return result.filePaths[0];
+});
 
 app.whenReady().then(() => {
   getDb().then((db) => {

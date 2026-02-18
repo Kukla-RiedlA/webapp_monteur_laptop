@@ -98,6 +98,19 @@ CREATE TABLE IF NOT EXISTS absence_requests (
 CREATE INDEX IF NOT EXISTS idx_absence_requests_tech ON absence_requests(technician_id);
 CREATE INDEX IF NOT EXISTS idx_absence_requests_status ON absence_requests(status);
 
+CREATE TABLE IF NOT EXISTS dienstreisen (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  year INTEGER NOT NULL,
+  running_number INTEGER NOT NULL,
+  start_date TEXT NOT NULL,
+  company_name TEXT NOT NULL,
+  city TEXT,
+  country_code TEXT,
+  folder_name TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dienstreisen_year ON dienstreisen(year);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_start ON jobs(start_datetime);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_job_technicians_tech ON job_technicians(technician_id);

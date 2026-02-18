@@ -1,0 +1,30 @@
+---
+description: Release erstellen – Version setzen, Commit, Tag, Push
+alwaysApply: false
+globs: release.ps1,VERSION_HISTORY.md,config/version.php,electron/version.json
+---
+
+# Release und Push
+
+Bei **Release erstellen** wie folgt vorgehen:
+
+## Ablauf
+
+1. **Optional:** In `VERSION_HISTORY.md` die Änderungen für die neue Version eintragen (unter der neuen Versionsnummer als neuer Block oben einfügen). Format: `## V 1.xxx` mit Bullet-Points.
+2. **Release ausführen:** Im Projektroot (webapp_monteur_laptop) PowerShell:
+   - Build hochzählen: `.\release.ps1 --bump`
+   - Oder Version explizit: `.\release.ps1 "V 1.019"`
+3. Das Skript `release.ps1`:
+   - Setzt die Version in `config/version.php` und `electron/version.json`
+   - Führt `git add -A`, `git commit -m "Release V x.xxx"` aus
+   - Setzt annotierten Tag (z. B. `v1.019`)
+   - Führt `git push` und `git push origin <tag>` aus
+
+## Versionsformat
+
+Wie in der Dispo: **V &lt;Hauptversion&gt;.&lt;Build&gt;** (z. B. V 1.018). Build bei jedem Release um 1 erhöhen (`--bump`).
+
+## Wichtig
+
+- Nur ausführen, wenn alle gewünschten Änderungen (inkl. ggf. `VERSION_HISTORY.md`) bereits vorbereitet sind.
+- Bei `--bump` wird die Build-Nummer aus der aktuellen Version gelesen und um 1 erhöht.

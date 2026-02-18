@@ -9,7 +9,7 @@
     :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --text: #e8e8e8; --muted: #a0a0a0; --header-height: 72px; }
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
-    .app-header { background: var(--card); border-bottom: 1px solid var(--accent); }
+    .app-header { position: relative; z-index: 200; background: var(--card); border-bottom: 1px solid var(--accent); }
     .app-title { margin: 0; font-size: 1.1rem; font-weight: 600; padding: 0.75rem 1rem 0.25rem; color: var(--text); }
     .toolbar { display: flex; align-items: center; gap: 1rem; padding: 0.25rem 1rem 0.75rem; background: var(--card); flex-wrap: wrap; }
     .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
@@ -23,7 +23,7 @@
     .btn-primary:hover { background: #357abd; }
     .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--accent); }
     .btn-ghost:hover { background: var(--accent); }
-    main { padding: 1rem; max-width: 900px; margin: 0 auto; }
+    main { padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-start { display: flex; flex-direction: row; width: 100%; max-width: none; padding: 1rem; gap: 1rem; box-sizing: border-box; }
     .view-start .start-left { flex: 1; min-width: 0; }
     .view-start .start-right { flex: 2; min-width: 0; }
@@ -59,10 +59,25 @@
     .local-badge { background: #495057; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .view-einstellungen { display: none; }
     .view-einstellungen.active { display: block; }
+    .view-dienstreise { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-dienstreise.active { display: block; }
+    .dienstreise-list-wrap { margin-bottom: 1rem; }
+    .dienstreise-list-wrap .job { cursor: pointer; }
+    .dienstreise-list-wrap .job.selected { background: var(--accent); }
+    .dienstreise-list-wrap .job:hover:not(.selected) { background: rgba(255,255,255,0.05); }
+    .dienstreise-detail h3 { margin: 0 0 0.75rem; font-size: 1rem; color: var(--muted); }
+    .dienstreise-copy-row, .dienstreise-upload-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+    .dienstreise-select { padding: 0.4rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); min-width: 200px; }
+    .view-archiv { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-archiv.active { display: block; }
+    .view-projektdaten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-projektdaten.active { display: block; }
+    .view-projektdaten .card { max-width: none; }
     .view-start.hidden { display: none; }
     .settings-row { margin-bottom: 1rem; }
     .settings-row label { display: block; margin-bottom: 0.25rem; color: var(--muted); font-size: 0.9rem; }
     .settings-row input { width: 100%; max-width: 400px; padding: 0.5rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
+    .dienstreise-basepath-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; max-width: 520px; }
     .settings-saved-hint { margin-left: 0.75rem; color: var(--muted); font-size: 0.9rem; }
     .cal-toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
     .cal-toolbar button { min-width: 36px; }
@@ -91,7 +106,7 @@
     .cal-legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
     .modal-overlay { position: fixed; top: var(--header-height); left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
     .modal-overlay.active { display: flex; }
-    .modal-overlay.modal-fullscreen .modal-box { width: 100%; max-width: none; height: 100%; max-height: calc(100vh - var(--header-height)); border-radius: 0; border-width: 0; }
+    .modal-overlay.modal-fullscreen .modal-box { width: 100%; max-width: none; flex: 1; min-height: 0; max-height: 100%; border-radius: 0; border-width: 0; }
     .modal-box { background: var(--card); border: 1px solid var(--accent); border-radius: 8px; padding: 1rem; max-width: 520px; width: 95%; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; margin: 0; }
     .modal-box h3 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--text); }
     .modal-detail-content { overflow: auto; flex: 1; min-height: 200px; margin-bottom: 0.75rem; }
@@ -122,6 +137,8 @@
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
     <button class="btn btn-ghost" id="btnViewAuftraege">Aufträge</button>
     <button class="btn btn-ghost" id="btnViewKalender">Kalender</button>
+    <button class="btn btn-ghost" id="btnViewDienstreise">Dienstreise</button>
+    <button class="btn btn-ghost" id="btnViewArchiv">Archiv</button>
     <span class="toolbar-right">
       <span id="technicianName" class="toolbar-technician-name"></span>
       <span class="connection-badge-wrap" id="connectionBadgeWrap">
@@ -193,15 +210,76 @@
     </div>
   </div>
   <div id="toastContainer" aria-live="polite" style="position:fixed;bottom:1rem;right:1rem;z-index:1000;max-width:320px;pointer-events:none"></div>
-  <div id="modalJobDetails" class="modal-overlay modal-fullscreen" aria-hidden="true">
-    <div class="modal-box" role="dialog" aria-labelledby="modalJobDetailsTitle">
-      <h3 id="modalJobDetailsTitle">Projektdaten</h3>
-      <div id="modalJobDetailsContent" class="modal-detail-content"><span class="empty">Wird geladen…</span></div>
-      <div class="modal-job-actions">
-        <button type="button" class="btn btn-ghost" id="modalJobDetailsClose">Schließen</button>
+  <main id="viewProjektdaten" class="view-projektdaten" aria-label="Projektdaten">
+    <div class="card">
+      <h2>Projektdaten</h2>
+      <div id="viewProjektdatenContent" class="modal-detail-content"><span class="empty">Auftrag per Doppelklick öffnen.</span></div>
+    </div>
+  </main>
+  <main id="viewDienstreise" class="view-dienstreise" aria-label="Dienstreise">
+    <div class="card">
+      <h2>Meine Aufträge</h2>
+      <div id="dienstreiseList" class="dienstreise-list-wrap">
+        <span class="empty">Wird geladen…</span>
+      </div>
+      <div id="dienstreiseDetail" class="dienstreise-detail card" style="display: none;">
+        <h3 id="dienstreiseDetailTitle">Auftrag</h3>
+        <div class="settings-row">
+          <label>Projektordner vom Dispo holen</label>
+          <div class="dienstreise-copy-row">
+            <button type="button" class="btn btn-ghost" id="btnDienstreiseCopyProject">Projektordner holen</button>
+          </div>
+          <span id="dienstreiseCopyHint" class="settings-saved-hint" aria-live="polite"></span>
+        </div>
+        <div class="settings-row">
+          <label>Dokument hochladen</label>
+          <div class="dienstreise-upload-row">
+            <select id="dienstreiseUploadSubfolder" class="dienstreise-select">
+              <option value="Dokumente_Dispo">Dokumente_Dispo</option>
+              <option value="Dokumente_Monteur">Dokumente_Monteur</option>
+              <option value="Dokumente_Anlage">Dokumente_Anlage</option>
+              <option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>
+            </select>
+            <input type="file" id="dienstreiseFileInput" accept="*" style="max-width: 220px;" />
+            <button type="button" class="btn btn-ghost" id="btnDienstreiseUpload">Hochladen</button>
+          </div>
+          <span id="dienstreiseUploadHint" class="settings-saved-hint" aria-live="polite"></span>
+        </div>
       </div>
     </div>
-  </div>
+    <div id="modalDienstreiseNeu" class="modal-overlay" aria-hidden="true">
+      <div class="modal-box">
+        <h3>Neue Dienstreise</h3>
+        <div class="settings-row">
+          <label for="dienstreiseNeuStartDate">Startdatum</label>
+          <input type="date" id="dienstreiseNeuStartDate" />
+        </div>
+        <div class="settings-row">
+          <label for="dienstreiseNeuCompany">Firmenname</label>
+          <input type="text" id="dienstreiseNeuCompany" placeholder="Firma" />
+        </div>
+        <div class="settings-row">
+          <label for="dienstreiseNeuCity">Ort</label>
+          <input type="text" id="dienstreiseNeuCity" placeholder="Ort" />
+        </div>
+        <div class="settings-row">
+          <label for="dienstreiseNeuCountry">Länderkürzel</label>
+          <input type="text" id="dienstreiseNeuCountry" placeholder="z.B. DE" maxlength="4" />
+        </div>
+        <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+          <button type="button" class="btn btn-primary" id="btnDienstreiseNeuSubmit">Anlegen</button>
+          <button type="button" class="btn btn-ghost" id="btnDienstreiseNeuCancel">Abbrechen</button>
+        </div>
+        <span id="dienstreiseNeuHint" class="settings-saved-hint" aria-live="polite"></span>
+      </div>
+    </div>
+  </main>
+  <main id="viewArchiv" class="view-archiv" aria-label="Archiv">
+    <div class="card">
+      <h2>Archiv</h2>
+      <p class="muted">Bereich Archiv – Inhalt folgt.</p>
+    </div>
+  </main>
   <main id="viewEinstellungen" class="view-einstellungen">
     <div class="card">
       <h2>Einstellungen</h2>
@@ -220,6 +298,13 @@
       <div class="settings-row">
         <label for="serverPassword">Passwort (Dispo-Login)</label>
         <input type="password" id="serverPassword" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+      <div class="settings-row">
+        <label for="dienstreiseBasePath">Speicherort Dienstreise-Ordner</label>
+        <div class="dienstreise-basepath-row">
+          <input type="text" id="dienstreiseBasePath" placeholder="z.B. D:\Dienstreisen" title="Basisordner, unter dem Jahr und Reise-Ordner angelegt werden." />
+          <button type="button" class="btn btn-ghost" id="btnDienstreiseBaseBrowse">Durchsuchen…</button>
+        </div>
       </div>
       <div class="settings-row">
         <label for="syncIntervalMinutes">Aktualisierungsintervall (Minuten)</label>

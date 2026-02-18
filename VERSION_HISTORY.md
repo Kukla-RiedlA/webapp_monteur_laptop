@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.019
+- **Dienstreise-Upload:** JSON-Body-Limit auf 50 MB erhöht (Upload großer Dateien); Frontend zeigt bei HTML-Antwort des Servers verständliche Meldung statt JSON-Parse-Fehler.
+- **Cursor Rule:** Release-Workflow in `.cursor/rules/release-and-push.mdc` festgelegt.
+
+---
+
 ## V 1.018
 - **Abwesenheitsanfragen mit Freigabe:** Beantragen, Liste offener Anfragen, Toast bei Entscheidung; Sync mit Dispo über dispo_api; Fehlerbehandlung und Aufräumen fehlerhafter Einträge.
 

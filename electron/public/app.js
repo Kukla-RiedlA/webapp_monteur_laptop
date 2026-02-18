@@ -5,7 +5,7 @@
   const getServerUsername = () => (document.getElementById('serverUsername') && document.getElementById('serverUsername').value || '').trim();
   const getServerPassword = () => (document.getElementById('serverPassword') && document.getElementById('serverPassword').value || '');
 
-  const SETTINGS_KEYS = { serverUrl: 'monteur_serverUrl', technicianId: 'monteur_technicianId', serverUsername: 'monteur_serverUsername', serverPassword: 'monteur_serverPassword', syncIntervalMinutes: 'monteur_syncIntervalMinutes' };
+  const SETTINGS_KEYS = { serverUrl: 'monteur_serverUrl', technicianId: 'monteur_technicianId', serverUsername: 'monteur_serverUsername', serverPassword: 'monteur_serverPassword', syncIntervalMinutes: 'monteur_syncIntervalMinutes', dienstreiseBasePath: 'monteur_dienstreiseBasePath' };
 
   function getDispoBaseUrl() {
     var u = getServerUrl();
@@ -45,6 +45,11 @@
         const el = document.getElementById('syncIntervalMinutes');
         if (el) el.value = Math.max(1, Math.min(1440, parseInt(interval, 10) || 5));
       }
+      const basePath = localStorage.getItem(SETTINGS_KEYS.dienstreiseBasePath);
+      if (basePath != null) {
+        const el = document.getElementById('dienstreiseBasePath');
+        if (el) el.value = basePath;
+      }
     } catch (e) { /* ignore */ }
   }
 
@@ -55,6 +60,8 @@
       localStorage.setItem(SETTINGS_KEYS.serverUsername, (document.getElementById('serverUsername') && document.getElementById('serverUsername').value) || '');
       localStorage.setItem(SETTINGS_KEYS.serverPassword, (document.getElementById('serverPassword') && document.getElementById('serverPassword').value) || '');
       localStorage.setItem(SETTINGS_KEYS.syncIntervalMinutes, String(getSyncIntervalMinutes()));
+      const pathEl = document.getElementById('dienstreiseBasePath');
+      localStorage.setItem(SETTINGS_KEYS.dienstreiseBasePath, (pathEl && pathEl.value ? pathEl.value.trim() : '') || '');
     } catch (e) { /* ignore */ }
   }
 
@@ -192,12 +199,15 @@
       alert('Bitte Monteur-ID in Einstellungen eintragen.');
       return;
     }
-    var modal = document.getElementById('modalJobDetails');
-    var content = document.getElementById('modalJobDetailsContent');
-    if (!modal || !content) return;
+    var content = document.getElementById('viewProjektdatenContent');
+    var viewProjektdaten = document.getElementById('viewProjektdaten');
+    var viewStart = document.getElementById('viewStart');
+    var viewEinstellungen = document.getElementById('viewEinstellungen');
+    if (!content || !viewProjektdaten) return;
     jobDetailsJobId = jobId;
-    modal.classList.add('active');
-    modal.setAttribute('aria-hidden', 'false');
+    if (viewStart) viewStart.classList.add('hidden');
+    if (viewEinstellungen) viewEinstellungen.classList.remove('active');
+    viewProjektdaten.classList.add('active');
     content.innerHTML = '<span class="empty">Wird geladen…</span>';
 
     function showJob(job) {
@@ -256,11 +266,8 @@
   }
 
   function closeJobDetailsModal() {
-    var modal = document.getElementById('modalJobDetails');
-    if (modal) {
-      modal.classList.remove('active');
-      modal.setAttribute('aria-hidden', 'true');
-    }
+    var viewProjektdaten = document.getElementById('viewProjektdaten');
+    if (viewProjektdaten) viewProjektdaten.classList.remove('active');
     jobDetailsJobId = null;
   }
 
@@ -270,15 +277,20 @@
     var countryRaw = (job.country || '').trim();
     var countryCode = normalizeCountryToCode(job.country);
     var countryPart = countryCode ? (countryFlagImg(countryCode) + (countryRaw ? ' ' + escapeHtml(countryRaw) : ' ' + countryCode)) : (countryRaw ? escapeHtml(countryRaw) : '');
-    var addressParts = [
-      (job.street || '').trim(),
-      (job.house_number || '').trim(),
-      [ (job.zip || '').trim(), (job.city || '').trim() ].filter(Boolean).join(' '),
-      countryPart,
-      (job.address_extra_1 || '').trim(),
-      (job.address_extra_2 || '').trim()
-    ].filter(Boolean);
-    var addressLine = addressParts.length ? addressParts.join(', ') : '–';
+    // DIN-Adresse: Empfängername (Kunde) an erster Stelle, dann Straße + Hausnummer, PLZ Ort, Land, Zusatzzeilen
+    var addressLines = [];
+    var nameLine = (job.customer_name || '').trim();
+    if (nameLine) addressLines.push(escapeHtml(nameLine));
+    var streetLine = [ (job.street || '').trim(), (job.house_number || '').trim() ].filter(Boolean).join(' ');
+    if (streetLine) addressLines.push(escapeHtml(streetLine));
+    var zipCityLine = [ (job.zip || '').trim(), (job.city || '').trim() ].filter(Boolean).join(' ');
+    if (zipCityLine) addressLines.push(escapeHtml(zipCityLine));
+    if (countryPart) addressLines.push(countryPart);
+    var extra1 = (job.address_extra_1 || '').trim();
+    if (extra1) addressLines.push(escapeHtml(extra1));
+    var extra2 = (job.address_extra_2 || '').trim();
+    if (extra2) addressLines.push(escapeHtml(extra2));
+    var addressLine = addressLines.length ? addressLines.join('<br>') : '–';
 
     var leistungRows = [];
     var fab = job.fabrikationsnummern != null ? job.fabrikationsnummern : (job.Fabrikationsnummern != null ? job.Fabrikationsnummern : (job.fabrikation != null ? job.fabrikation : (job.job_fabrikation != null ? job.job_fabrikation : null)));
@@ -364,8 +376,8 @@
     html += '</div>';
 
     html += '<div class="modal-detail-section"><h4>Auftrag: ERP-Nummer / Bestellnummer</h4>';
-    html += '<dl class="modal-detail-dl"><dt>ERP-Nummer (vom Auftrag)</dt><dd>' + v(job.eap_nummer) + '</dd>';
-    html += '<dt>Bestellnummer (vom Auftrag)</dt><dd>' + v(job.bestellnummer) + '</dd></dl>';
+    html += '<dl class="modal-detail-dl"><dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
+    html += '<dt>Bestellnummer</dt><dd>' + v(job.bestellnummer) + '</dd></dl>';
     html += '<h4 style="margin-top:1rem">Leistungsdaten (wie Anlagenstamm)</h4>';
     html += '<table class="modal-leistung-table"><thead><tr>';
     html += '<th>Fabrikationsnummer</th><th>Type</th><th>Leistung</th><th>Nenngeschwindigkeit</th><th>Kraftaufnehmer</th><th>DMS Nr.</th><th>Tacho</th><th>Elektronik</th><th>Material</th><th>Position</th>';
@@ -434,7 +446,7 @@
       method: 'PATCH',
       body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
     }).then(function () {
-      var content = document.getElementById('modalJobDetailsContent');
+      var content = document.getElementById('viewProjektdatenContent');
       if (content) content.innerHTML = '<span class="empty">Gespeichert. Lade neu…</span>';
       var url = API_BASE + '/api/job?id=' + encodeURIComponent(jobId);
       fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } })
@@ -454,7 +466,7 @@
   }
 
   function bindLeistungActions() {
-    var content = document.getElementById('modalJobDetailsContent');
+    var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
     var btnAdd = content.querySelector('[data-action="add-leistung-row"]');
     var btnSave = content.querySelector('[data-action="save-leistung"]');
@@ -682,6 +694,16 @@
   }
 
   loadSettingsFromStorage();
+  function loadDienstreiseConfigFromServer() {
+    fetch(API_BASE + '/api/dienstreise/config').then(function (r) { return r.json(); }).then(function (data) {
+      if (data && data.ok && data.basePath) {
+        var el = document.getElementById('dienstreiseBasePath');
+        if (el) el.value = data.basePath;
+        try { localStorage.setItem(SETTINGS_KEYS.dienstreiseBasePath, data.basePath); } catch (e) {}
+      }
+    }).catch(function () {});
+  }
+  loadDienstreiseConfigFromServer();
   checkConnectionAndSync();
   startSyncInterval();
   startPushEvents();
@@ -703,20 +725,40 @@
     if (el && d && d.version) el.textContent = d.version;
   }).catch(function () {});
 
-  document.getElementById('btnSaveSettings').addEventListener('click', () => {
+  var browseBtn = document.getElementById('btnDienstreiseBaseBrowse');
+  if (browseBtn && window.monteurApp && typeof window.monteurApp.chooseDienstreiseBasePath === 'function') {
+    browseBtn.addEventListener('click', function () {
+      window.monteurApp.chooseDienstreiseBasePath().then(function (selectedPath) {
+        if (!selectedPath) return;
+        var input = document.getElementById('dienstreiseBasePath');
+        if (input) input.value = selectedPath;
+        saveSettingsToStorage();
+        fetch(API_BASE + '/api/dienstreise/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ basePath: selectedPath })
+        }).catch(function () {});
+      });
+    });
+  }
+
+  document.getElementById('btnSaveSettings').addEventListener('click', function () {
     saveSettingsToStorage();
+    var pathEl = document.getElementById('dienstreiseBasePath');
+    var basePath = (pathEl && pathEl.value ? pathEl.value.trim() : '') || '';
+    fetch(API_BASE + '/api/dienstreise/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ basePath: basePath }) }).catch(function () {});
     startSyncInterval();
     startPushEvents();
     updateTechnicianName();
-    const base = getServerUrl().trim();
-    const techId = getTechId();
+    var base = getServerUrl().trim();
+    var techId = getTechId();
     if (base && techId) {
       checkConnectionAndSync();
     }
-    const hint = document.getElementById('settingsSavedHint');
+    var hint = document.getElementById('settingsSavedHint');
     hint.textContent = 'Gespeichert.';
     clearTimeout(hint._hideTimeout);
-    hint._hideTimeout = setTimeout(() => { hint.textContent = ''; }, 2000);
+    hint._hideTimeout = setTimeout(function () { hint.textContent = ''; }, 2000);
   });
 
   document.getElementById('btnSyncNow').addEventListener('click', function () {
@@ -743,12 +785,6 @@
     });
   });
 
-  var elJobClose = document.getElementById('modalJobDetailsClose');
-  if (elJobClose) elJobClose.addEventListener('click', closeJobDetailsModal);
-  var elJobOverlay = document.getElementById('modalJobDetails');
-  if (elJobOverlay) elJobOverlay.addEventListener('click', function (e) {
-    if (e.target.id === 'modalJobDetails') closeJobDetailsModal();
-  });
 
   function openAbsenceRequestModal() {
     var modal = document.getElementById('modalAbsenceRequest');
@@ -897,12 +933,29 @@
   function showView(name) {
     const viewStart = document.getElementById('viewStart');
     const viewEinstellungen = document.getElementById('viewEinstellungen');
+    const viewProjektdaten = document.getElementById('viewProjektdaten');
+    const viewDienstreise = document.getElementById('viewDienstreise');
+    const viewArchiv = document.getElementById('viewArchiv');
     viewStart.classList.remove('only-left', 'only-right', 'hidden');
     viewEinstellungen.classList.remove('active');
+    if (viewProjektdaten) viewProjektdaten.classList.remove('active');
+    if (viewDienstreise) viewDienstreise.classList.remove('active');
+    if (viewArchiv) viewArchiv.classList.remove('active');
     if (name === 'einstellungen') {
       viewStart.classList.add('hidden');
       viewEinstellungen.classList.add('active');
       updateTechnicianName();
+      return;
+    }
+    if (name === 'dienstreise') {
+      viewStart.classList.add('hidden');
+      viewDienstreise.classList.add('active');
+      loadDienstreiseList();
+      return;
+    }
+    if (name === 'archiv') {
+      viewStart.classList.add('hidden');
+      viewArchiv.classList.add('active');
       return;
     }
     if (name === 'auftraege') viewStart.classList.add('only-left');
@@ -1452,9 +1505,157 @@
     return d.innerHTML;
   }
 
+  var selectedJobIdOnDienstreisePage = null;
+  var dienstreisePageJobs = [];
+
+  function loadDienstreiseList() {
+    var techId = getTechId();
+    if (!techId) {
+      var listEl = document.getElementById('dienstreiseList');
+      if (listEl) listEl.innerHTML = '<span class="empty">Bitte Monteur-ID in Einstellungen eintragen.</span>';
+      return;
+    }
+    var range = getSyncDateRange();
+    fetch(API_BASE + '/api/my_jobs?technician_id=' + techId + '&date_from=' + range.date_from + '&date_to=' + range.date_to).then(function (r) { return r.json(); }).then(function (data) {
+      var listEl = document.getElementById('dienstreiseList');
+      var detailEl = document.getElementById('dienstreiseDetail');
+      if (!listEl) return;
+      var jobs = (data && data.jobs) ? data.jobs : [];
+      dienstreisePageJobs = jobs;
+      if (jobs.length === 0) {
+        listEl.innerHTML = '<span class="empty">Keine Aufträge.</span>';
+        if (detailEl) detailEl.style.display = 'none';
+        selectedJobIdOnDienstreisePage = null;
+        return;
+      }
+      var html = jobs.map(function (j) {
+        var dateStr = formatDateRange(j.start_datetime, j.end_datetime);
+        var status = (j.status || 'geplant').replace(' ', '_');
+        var firma = (j.customer_name || j.customerName || '').trim();
+        var ort = (j.city || '').trim();
+        var land = normalizeCountryToCode(j.country) || (j.country || '').trim().toUpperCase().slice(0, 2);
+        var flagHtml = countryFlagImg(land);
+        var parts = [];
+        if (flagHtml) parts.push(flagHtml);
+        if (firma) parts.push(escapeHtml(firma));
+        if (ort) parts.push(escapeHtml(ort));
+        if (land) parts.push(escapeHtml(land));
+        var titleLine = parts.join(' · ') || 'Auftrag';
+        var sel = j.id === selectedJobIdOnDienstreisePage ? ' selected' : '';
+        return '<div class="job' + sel + '" data-job-id="' + escapeHtml(String(j.id)) + '">' +
+          '<div class="job-info"><strong>' + (titleLine || 'Auftrag') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + (j.job_type ? ' · ' + (j.job_type || '') : '') + '</span></div>' +
+          '<div class="job-actions">' +
+          '<span class="status-badge status-' + status + '">' + (j.status || 'geplant') + '</span>' +
+          (j.status !== 'in_arbeit' ? '<button class="btn btn-ghost" data-status="in_arbeit">Start</button>' : '') +
+          (j.status !== 'erledigt' ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
+          '</div></div>';
+      }).join('');
+      listEl.innerHTML = html;
+      listEl.querySelectorAll('.job-actions [data-status]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          updateJobStatus(btn.closest('.job').getAttribute('data-job-id'), btn.getAttribute('data-status'));
+        });
+      });
+      listEl.querySelectorAll('.job').forEach(function (el) {
+        el.addEventListener('click', function (e) {
+          if (e.target.closest('button')) return;
+          selectedJobIdOnDienstreisePage = parseInt(el.getAttribute('data-job-id'), 10);
+          loadDienstreiseList();
+          var j = jobs.find(function (x) { return x.id === selectedJobIdOnDienstreisePage; });
+          if (j && detailEl) {
+            detailEl.style.display = 'block';
+            var titleEl = document.getElementById('dienstreiseDetailTitle');
+            if (titleEl) titleEl.textContent = (j.job_number || '') + ' – ' + (j.customer_name || '') + (j.start_datetime ? ' (' + (j.start_datetime + '').slice(0, 10) + ')' : '');
+          }
+        });
+      });
+      if (detailEl) detailEl.style.display = selectedJobIdOnDienstreisePage ? 'block' : 'none';
+      if (selectedJobIdOnDienstreisePage) {
+        var j = jobs.find(function (x) { return x.id === selectedJobIdOnDienstreisePage; });
+        if (j) {
+          var titleEl = document.getElementById('dienstreiseDetailTitle');
+          if (titleEl) titleEl.textContent = (j.job_number || '') + ' – ' + (j.customer_name || '') + (j.start_datetime ? ' (' + (j.start_datetime + '').slice(0, 10) + ')' : '');
+        }
+      }
+    }).catch(function () {
+      var listEl = document.getElementById('dienstreiseList');
+      if (listEl) listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
+    });
+  }
+
+  document.getElementById('btnDienstreiseCopyProject').addEventListener('click', function () {
+    var localJobId = selectedJobIdOnDienstreisePage;
+    var hint = document.getElementById('dienstreiseCopyHint');
+    if (!localJobId) {
+      hint.textContent = 'Bitte einen Auftrag in der Liste auswählen.';
+      return;
+    }
+    hint.textContent = 'Kopieren …';
+    var body = {
+      job_id: localJobId,
+      dispoBaseUrl: getDispoBaseUrl(),
+      technicianId: getTechId(),
+      dispoUsername: getDispoUsername(),
+      dispoPassword: getDispoPassword()
+    };
+    fetch(API_BASE + '/api/dienstreise/copy_project', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      hint.textContent = data.error ? data.error : (data.ok ? 'Fertig.' : 'Fehler.');
+      if (data.ok) setTimeout(function () { hint.textContent = ''; }, 3000);
+    }).catch(function () { hint.textContent = 'Fehler beim Kopieren.'; });
+  });
+
+  document.getElementById('btnDienstreiseUpload').addEventListener('click', function () {
+    var localJobId = selectedJobIdOnDienstreisePage;
+    var subfolder = document.getElementById('dienstreiseUploadSubfolder');
+    var sub = subfolder && subfolder.value ? subfolder.value : 'Dokumente_Monteur';
+    var fileInput = document.getElementById('dienstreiseFileInput');
+    var hint = document.getElementById('dienstreiseUploadHint');
+    if (!localJobId) { hint.textContent = 'Bitte einen Auftrag in der Liste auswählen.'; return; }
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+      hint.textContent = 'Bitte eine Datei wählen.';
+      return;
+    }
+    var file = fileInput.files[0];
+    var reader = new FileReader();
+    reader.onload = function () {
+      var b64 = reader.result;
+      if (typeof b64 === 'string' && b64.indexOf('base64,') !== -1) b64 = b64.slice(b64.indexOf('base64,') + 7);
+      hint.textContent = 'Hochladen …';
+      fetch(API_BASE + '/api/dienstreise/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: localJobId, subfolder: sub, filename: file.name, content: b64 })
+      }).then(function (r) {
+        return r.text().then(function (text) {
+          var data;
+          try { data = text ? JSON.parse(text) : {}; } catch (e) {
+            hint.textContent = r.status === 413 ? 'Datei zu groß.' : ('Server antwortete mit Fehlerseite (Status ' + r.status + ').');
+            return;
+          }
+          if (!r.ok) {
+            hint.textContent = (data && data.error) ? data.error : ('Fehler: ' + r.status);
+            return;
+          }
+          hint.textContent = data.ok ? 'Hochgeladen.' : (data.error || 'Fehler.');
+          if (data.ok) { fileInput.value = ''; setTimeout(function () { hint.textContent = ''; }, 3000); }
+        });
+      }).catch(function (err) {
+        hint.textContent = 'Upload fehlgeschlagen. ' + (err && err.message ? err.message : '');
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+
   document.getElementById('btnViewStart').addEventListener('click', () => showView('start'));
   document.getElementById('btnViewAuftraege').addEventListener('click', () => showView('auftraege'));
   document.getElementById('btnViewKalender').addEventListener('click', () => showView('kalender'));
+  document.getElementById('btnViewDienstreise').addEventListener('click', () => showView('dienstreise'));
+  document.getElementById('btnViewArchiv').addEventListener('click', () => showView('archiv'));
   document.getElementById('btnViewEinstellungen').addEventListener('click', () => showView('einstellungen'));
 
   document.getElementById('calPrev').addEventListener('click', () => {

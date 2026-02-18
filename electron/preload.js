@@ -1,6 +1,7 @@
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('monteurApp', {
   apiBase: 'http://127.0.0.1:' + 39678,
   platform: process.platform,
+  chooseDienstreiseBasePath: () => ipcRenderer.invoke('dienstreise:choose-folder'),
 });
