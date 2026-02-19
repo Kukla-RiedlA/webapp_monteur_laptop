@@ -174,8 +174,6 @@
         '</div>' +
         '<div class="job-actions">' +
         '<span class="status-badge status-' + status + '">' + (j.status || 'geplant') + '</span>' +
-        (j.status !== 'in_arbeit' ? '<button class="btn btn-ghost" data-status="in_arbeit">Start</button>' : '') +
-        (j.status !== 'erledigt' ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
         '</div></div>'
       );
     }).join('');
@@ -475,14 +473,49 @@
   }
 
   async function updateJobStatus(jobId, status) {
+    if (status === 'erledigt' && !confirm('Ist der Auftrag wirklich erledigt?')) return;
     try {
       await api('/api/job', {
         method: 'PATCH',
         body: JSON.stringify({ job_id: parseInt(jobId, 10), status }),
       });
       loadJobsAndAbsences();
+      if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
     } catch (e) {
       alert('Fehler: ' + e.message);
+    }
+  }
+
+  async function finishAndCleanup(jobId) {
+    if (!confirm('Ist der Auftrag wirklich erledigt?')) return;
+    var techId = getTechId();
+    var baseUrl = getDispoBaseUrl();
+    var u = getDispoUsername();
+    var p = getDispoPassword();
+    var protectedSet = dienstreiseProtectedPathsByJob[jobId] || new Set();
+    var body = {
+      job_id: jobId,
+      protectedPaths: Array.from(protectedSet),
+      dispoBaseUrl: baseUrl,
+      technicianId: techId,
+      dispoUsername: u,
+      dispoPassword: p
+    };
+    try {
+      var r = await fetch(API_BASE + '/api/dienstreise/finish_and_cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data || data.ok === false) {
+        alert('Abschluss fehlgeschlagen: ' + (data && data.error ? data.error : ('Status ' + r.status)));
+        return;
+      }
+      loadJobsAndAbsences();
+      loadDienstreiseList();
+    } catch (e) {
+      alert('Abschluss fehlgeschlagen: ' + (e && e.message ? e.message : 'Unbekannter Fehler'));
     }
   }
 
@@ -589,6 +622,21 @@
             body: JSON.stringify(auth)
           }).then((r) => r.json()).then((d) => { if (!d.ok) throw new Error(d.error); });
         } catch (e) { /* Push fehlgeschlagen, Pull-Daten bleiben */ }
+        // Dienstreise-Projektordner (Dokumente_Monteur / Dokumente_Buchhaltung) periodisch mit dem Dispo-Server synchronisieren
+        if (selectedJobIdOnDienstreisePage) {
+          const bodySync = {
+            job_id: selectedJobIdOnDienstreisePage,
+            dispoBaseUrl: base,
+            technicianId: techId,
+            dispoUsername: getServerUsername(),
+            dispoPassword: getServerPassword()
+          };
+          fetch(API_BASE + '/api/dienstreise/sync_to_dispo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bodySync)
+          }).catch(() => { /* Fehler hier ignorieren, Verify bei „Erledigt“ prüft erneut */ });
+        }
       } else {
         setConnectionBadge('offline', check.error || 'Verbindung fehlgeschlagen');
       }
@@ -909,7 +957,7 @@
     });
   });
 
-  // —— Kalender ———
+  // —— Kalender & Archiv ———
   let calCurrentMonth = new Date();
   calCurrentMonth.setDate(1);
   calCurrentMonth.setHours(12, 0, 0, 0);
@@ -928,6 +976,108 @@
     x.setDate(x.getDate() + 3 - (x.getDay() + 6) % 7);
     const w1 = new Date(x.getFullYear(), 0, 4);
     return 1 + Math.round(((x.getTime() - w1.getTime()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7);
+  }
+
+  const ARCHIV_VISIBLE_YEARS = 2;
+  let archivCurrentYear = new Date().getFullYear();
+
+  function getArchivFilters() {
+    const customerEl = document.getElementById('archivFilterCustomer');
+    const monthEl = document.getElementById('archivFilterMonth');
+    const fabEl = document.getElementById('archivFilterFab');
+    const countryEl = document.getElementById('archivFilterCountry');
+    const yearEl = document.getElementById('archivFilterYear');
+    const customer = customerEl && customerEl.value ? customerEl.value.trim() : '';
+    const month = monthEl && monthEl.value ? monthEl.value.trim() : '';
+    const fabrikationsnummer = fabEl && fabEl.value ? fabEl.value.trim() : '';
+    const country = countryEl && countryEl.value ? countryEl.value.trim() : '';
+    let year = archivCurrentYear;
+    if (yearEl && yearEl.value) {
+      const y = parseInt(yearEl.value, 10);
+      if (!isNaN(y) && y > 1900) year = y;
+    }
+    archivCurrentYear = year;
+    return { customer, month, fabrikationsnummer, country, year };
+  }
+
+  function initArchivYearSelect() {
+    const sel = document.getElementById('archivFilterYear');
+    if (!sel) return;
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    archivCurrentYear = currentYear;
+    sel.innerHTML = '';
+    for (let i = 0; i < ARCHIV_VISIBLE_YEARS; i++) {
+      const y = currentYear - i;
+      const opt = document.createElement('option');
+      opt.value = String(y);
+      opt.textContent = y === currentYear ? (y + ' (aktuelles Jahr)') : String(y);
+      sel.appendChild(opt);
+    }
+    sel.value = String(currentYear);
+  }
+
+  function renderArchivJobs(data) {
+    const listEl = document.getElementById('archivList');
+    if (!listEl) return;
+    const jobs = (data && data.jobs) ? data.jobs : [];
+    if (!jobs.length) {
+      listEl.innerHTML = '<span class="empty">Keine Aufträge im Archiv.</span>';
+      return;
+    }
+    const html = jobs.map(function (j) {
+      const dateStr = formatDateRange(j.start_datetime, j.end_datetime);
+      const status = (j.status || 'erledigt').replace(' ', '_');
+      const firma = (j.customer_name || j.customerName || '').trim();
+      const ort = (j.city || '').trim();
+      const land = normalizeCountryToCode(j.country) || (j.country || '').trim().toUpperCase().slice(0, 2);
+      const flagHtml = countryFlagImg(land);
+      const parts = [];
+      if (flagHtml) parts.push(flagHtml);
+      if (firma) parts.push(escapeHtml(firma));
+      if (ort) parts.push(escapeHtml(ort));
+      if (land) parts.push(escapeHtml(land));
+      const titleLine = parts.join(' · ') || 'Auftrag';
+      const jobNum = (j.job_number || '').trim();
+      const subtitle = (jobNum ? escapeHtml(jobNum) + ' · ' : '') + escapeHtml(dateStr);
+      return (
+        '<div class="job" data-job-id="' + j.id + '">' +
+        '<div class="job-info">' +
+        '<strong>' + titleLine + '</strong><br>' +
+        '<span class="job-meta">' + subtitle + (j.job_type ? ' · ' + escapeHtml(j.job_type || '') : '') + '</span>' +
+        '</div>' +
+        '<div class="job-actions">' +
+        '<span class="status-badge status-' + status + '">' + (j.status || 'erledigt') + '</span>' +
+        '</div>' +
+        '</div>'
+      );
+    }).join('');
+    listEl.innerHTML = html;
+  }
+
+  async function loadArchiv() {
+    const listEl = document.getElementById('archivList');
+    if (!listEl) return;
+    const techId = getTechId();
+    if (!techId) {
+      listEl.innerHTML = '<span class="empty">Bitte Monteur-ID in Einstellungen eintragen.</span>';
+      return;
+    }
+    const filters = getArchivFilters();
+    const params = {
+      year: filters.year,
+      customer: filters.customer || undefined,
+      month: filters.month || undefined,
+      fabrikationsnummer: filters.fabrikationsnummer || undefined,
+      country: filters.country || undefined
+    };
+    listEl.innerHTML = '<span class="empty">Wird geladen…</span>';
+    try {
+      const data = await api('/api/my_jobs_archive?' + qs(params));
+      renderArchivJobs(data);
+    } catch (e) {
+      listEl.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message || String(e)) + '</span>';
+    }
   }
 
   function showView(name) {
@@ -956,11 +1106,11 @@
     if (name === 'archiv') {
       viewStart.classList.add('hidden');
       viewArchiv.classList.add('active');
+      initArchivYearSelect();
+      loadArchiv();
       return;
     }
-    if (name === 'auftraege') viewStart.classList.add('only-left');
-    else if (name === 'kalender') viewStart.classList.add('only-right');
-    if (name === 'kalender' || name === 'start') loadCalendarMonth();
+    if (name === 'start') loadCalendarMonth();
   }
 
   async function loadCalendarMonth() {
@@ -1507,6 +1657,133 @@
 
   var selectedJobIdOnDienstreisePage = null;
   var dienstreisePageJobs = [];
+  var dienstreiseExplorerSubpath = '';
+  var dienstreiseExplorerRootEntries = [];
+  var dienstreiseExplorerExpanded = {};
+  var dienstreiseProtectedPathsByJob = {};
+
+  function formatFileSize(bytes) {
+    if (bytes == null || bytes === '') return '';
+    var n = parseInt(bytes, 10);
+    if (isNaN(n) || n < 0) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function formatFileDate(isoStr) {
+    if (!isoStr) return '';
+    var d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function renderDienstreiseExplorerTree() {
+    var listEl = document.getElementById('dienstreiseExplorerList');
+    var jobId = selectedJobIdOnDienstreisePage;
+    if (!listEl || !jobId) return;
+    if (!dienstreiseProtectedPathsByJob[jobId]) dienstreiseProtectedPathsByJob[jobId] = new Set();
+    var protectedSet = dienstreiseProtectedPathsByJob[jobId];
+    var rows = [];
+    var expanded = dienstreiseExplorerExpanded;
+    function addEntries(entries, level) {
+      if (!entries) return;
+      entries.forEach(function (e) {
+        rows.push({ level: level, entry: e });
+        if (e.isDirectory && expanded[e.relativePath]) {
+          addEntries(expanded[e.relativePath], level + 1);
+        }
+      });
+    }
+    addEntries(dienstreiseExplorerRootEntries, 0);
+    if (rows.length === 0) {
+      listEl.innerHTML = '<span class="empty">Ordner leer.</span>';
+      return;
+    }
+    var html = '';
+    rows.forEach(function (r) {
+      var e = r.entry;
+      var levelClass = r.level > 0 ? ' level-' + Math.min(r.level, 6) : '';
+      var icon = e.isDirectory ? '📁' : '📄';
+      var sizeStr = e.isDirectory ? '' : formatFileSize(e.size);
+      var mtimeStr = formatFileDate(e.mtime);
+      var toggle = e.isDirectory ? ('<span class="explorer-toggle" data-explorer-toggle aria-label="' + (expanded[e.relativePath] ? 'Einklappen' : 'Ausklappen') + '">' + (expanded[e.relativePath] ? '▼' : '▶') + '</span>') : '<span class="explorer-toggle empty"></span>';
+      var relPath = e.relativePath || '';
+      var isProtected = relPath && protectedSet.has(relPath);
+      var protectControl = '<label style="display:inline-flex;align-items:center;gap:0.25rem;"><input type="checkbox" data-explorer-protect ' + (isProtected ? 'checked' : '') + '>Nicht löschen</label>';
+      html += '<div class="dienstreise-explorer-row' + levelClass + '" data-full-path="' + escapeHtml(e.fullPath || '') + '" data-is-dir="' + (e.isDirectory ? '1' : '0') + '" data-relative-path="' + escapeHtml(e.relativePath || '') + '">' +
+        '<div class="dienstreise-explorer-name">' + toggle + '<span class="icon" aria-hidden="true">' + icon + '</span> ' + escapeHtml(e.name) + '</div>' +
+        '<div class="dienstreise-explorer-size">' + escapeHtml(sizeStr) + '</div>' +
+        '<div class="dienstreise-explorer-size">' + escapeHtml(mtimeStr) + '</div>' +
+        '<div class="dienstreise-explorer-actions">' +
+        protectControl +
+        '<button type="button" class="btn btn-ghost" data-explorer-open title="Mit Standardprogramm bzw. Explorer öffnen">Öffnen</button>' +
+        '</div></div>';
+    });
+    listEl.innerHTML = html;
+    listEl.querySelectorAll('[data-explorer-open]').forEach(function (btn) {
+      btn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var row = btn.closest('.dienstreise-explorer-row');
+        var fullPath = row && row.getAttribute('data-full-path');
+        if (fullPath && typeof monteurApp !== 'undefined' && monteurApp.openPath) monteurApp.openPath(fullPath);
+      });
+    });
+    listEl.querySelectorAll('[data-explorer-protect]').forEach(function (cb) {
+      cb.addEventListener('change', function (ev) {
+        var row = cb.closest('.dienstreise-explorer-row');
+        if (!row) return;
+        var rel = row.getAttribute('data-relative-path') || '';
+        if (!rel) return;
+        if (cb.checked) protectedSet.add(rel);
+        else protectedSet.delete(rel);
+      });
+    });
+    listEl.querySelectorAll('.dienstreise-explorer-row[data-is-dir="1"]').forEach(function (row) {
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', function (ev) {
+        if (ev.target.closest('.dienstreise-explorer-actions')) return;
+        var rel = row.getAttribute('data-relative-path');
+        if (!rel) return;
+        if (dienstreiseExplorerExpanded[rel]) {
+          delete dienstreiseExplorerExpanded[rel];
+          renderDienstreiseExplorerTree();
+          return;
+        }
+        fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId) + '&subpath=' + encodeURIComponent(rel)).then(function (r) { return r.json(); }).then(function (data) {
+          if (data.ok && data.entries) dienstreiseExplorerExpanded[rel] = data.entries;
+          renderDienstreiseExplorerTree();
+        });
+      });
+    });
+  }
+
+  function loadDienstreiseExplorer(jobId, subpath) {
+    dienstreiseExplorerSubpath = subpath || '';
+    var listEl = document.getElementById('dienstreiseExplorerList');
+    var breadcrumbEl = document.getElementById('dienstreiseExplorerBreadcrumb');
+    if (!listEl) return;
+    if (!jobId) {
+      listEl.innerHTML = '<span class="empty" id="dienstreiseExplorerPlaceholder">Auftrag wählen, dann Ordnerinhalt hier.</span>';
+      if (breadcrumbEl) breadcrumbEl.textContent = 'Projektordner';
+      dienstreiseExplorerRootEntries = [];
+      dienstreiseExplorerExpanded = {};
+      return;
+    }
+    listEl.innerHTML = '<span class="empty">Wird geladen …</span>';
+    if (breadcrumbEl) breadcrumbEl.textContent = 'Projektordner';
+    fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId)).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data.ok || !data.entries) {
+        listEl.innerHTML = '<span class="empty">' + (data.error || 'Laden fehlgeschlagen.') + '</span>';
+        return;
+      }
+      dienstreiseExplorerRootEntries = data.entries;
+      dienstreiseExplorerExpanded = {};
+      renderDienstreiseExplorerTree();
+    }).catch(function () {
+      listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
+    });
+  }
 
   function loadDienstreiseList() {
     var techId = getTechId();
@@ -1546,7 +1823,6 @@
           '<div class="job-info"><strong>' + (titleLine || 'Auftrag') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + (j.job_type ? ' · ' + (j.job_type || '') : '') + '</span></div>' +
           '<div class="job-actions">' +
           '<span class="status-badge status-' + status + '">' + (j.status || 'geplant') + '</span>' +
-          (j.status !== 'in_arbeit' ? '<button class="btn btn-ghost" data-status="in_arbeit">Start</button>' : '') +
           (j.status !== 'erledigt' ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
           '</div></div>';
       }).join('');
@@ -1554,7 +1830,14 @@
       listEl.querySelectorAll('.job-actions [data-status]').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
           e.stopPropagation();
-          updateJobStatus(btn.closest('.job').getAttribute('data-job-id'), btn.getAttribute('data-status'));
+          var status = btn.getAttribute('data-status');
+          var jobId = parseInt(btn.closest('.job').getAttribute('data-job-id'), 10);
+          if (!jobId) return;
+          if (status === 'erledigt') {
+            finishAndCleanup(jobId);
+          } else {
+            updateJobStatus(jobId, status);
+          }
         });
       });
       listEl.querySelectorAll('.job').forEach(function (el) {
@@ -1577,6 +1860,9 @@
           var titleEl = document.getElementById('dienstreiseDetailTitle');
           if (titleEl) titleEl.textContent = (j.job_number || '') + ' – ' + (j.customer_name || '') + (j.start_datetime ? ' (' + (j.start_datetime + '').slice(0, 10) + ')' : '');
         }
+        loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, '');
+      } else {
+        loadDienstreiseExplorer(null, '');
       }
     }).catch(function () {
       var listEl = document.getElementById('dienstreiseList');
@@ -1603,9 +1889,12 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    }).then(function (r) { return r.json(); }).then(function (data) {
+    }).then(function (r) { return r.json();     }).then(function (data) {
       hint.textContent = data.error ? data.error : (data.ok ? 'Fertig.' : 'Fehler.');
-      if (data.ok) setTimeout(function () { hint.textContent = ''; }, 3000);
+      if (data.ok) {
+        setTimeout(function () { hint.textContent = ''; }, 3000);
+        if (selectedJobIdOnDienstreisePage) loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath);
+      }
     }).catch(function () { hint.textContent = 'Fehler beim Kopieren.'; });
   });
 
@@ -1642,7 +1931,25 @@
             return;
           }
           hint.textContent = data.ok ? 'Hochgeladen.' : (data.error || 'Fehler.');
-          if (data.ok) { fileInput.value = ''; setTimeout(function () { hint.textContent = ''; }, 3000); }
+          if (data.ok) {
+            fileInput.value = '';
+            setTimeout(function () { hint.textContent = ''; }, 3000);
+            if (selectedJobIdOnDienstreisePage) loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath);
+            if (sub === 'Dokumente_Monteur' || sub === 'Dokumente_Buchhaltung') {
+              var bodySync = {
+                job_id: localJobId,
+                dispoBaseUrl: getDispoBaseUrl(),
+                technicianId: getTechId(),
+                dispoUsername: getDispoUsername(),
+                dispoPassword: getDispoPassword()
+              };
+              fetch(API_BASE + '/api/dienstreise/sync_to_dispo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(bodySync)
+              }).catch(function () { /* Sync-Fehler hier nur protokollieren/ignorieren; Verify bei Erledigt prüft erneut */ });
+            }
+          }
         });
       }).catch(function (err) {
         hint.textContent = 'Upload fehlgeschlagen. ' + (err && err.message ? err.message : '');
@@ -1652,11 +1959,31 @@
   });
 
   document.getElementById('btnViewStart').addEventListener('click', () => showView('start'));
-  document.getElementById('btnViewAuftraege').addEventListener('click', () => showView('auftraege'));
-  document.getElementById('btnViewKalender').addEventListener('click', () => showView('kalender'));
   document.getElementById('btnViewDienstreise').addEventListener('click', () => showView('dienstreise'));
   document.getElementById('btnViewArchiv').addEventListener('click', () => showView('archiv'));
   document.getElementById('btnViewEinstellungen').addEventListener('click', () => showView('einstellungen'));
+
+  const btnArchivApply = document.getElementById('btnArchivFilterApply');
+  if (btnArchivApply) {
+    btnArchivApply.addEventListener('click', function () {
+      loadArchiv();
+    });
+  }
+  const btnArchivReset = document.getElementById('btnArchivFilterReset');
+  if (btnArchivReset) {
+    btnArchivReset.addEventListener('click', function () {
+      const customerEl = document.getElementById('archivFilterCustomer');
+      const monthEl = document.getElementById('archivFilterMonth');
+      const fabEl = document.getElementById('archivFilterFab');
+      const countryEl = document.getElementById('archivFilterCountry');
+      if (customerEl) customerEl.value = '';
+      if (monthEl) monthEl.value = '';
+      if (fabEl) fabEl.value = '';
+      if (countryEl) countryEl.value = '';
+      initArchivYearSelect();
+      loadArchiv();
+    });
+  }
 
   document.getElementById('calPrev').addEventListener('click', () => {
     calCurrentMonth.setMonth(calCurrentMonth.getMonth() - 1);

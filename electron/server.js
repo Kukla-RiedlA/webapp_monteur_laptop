@@ -7,6 +7,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const WebSocket = require('ws');
+const FormData = require('form-data');
 
 const PORT = 39678;
 const DB_DIR = path.join(__dirname, 'db');
@@ -226,6 +227,7 @@ function createApp(db) {
   });
 
   const DIENSTREISE_SUBFOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
+  const DIENSTREISE_SYNC_FOLDERS = ['Dokumente_Monteur', 'Dokumente_Buchhaltung'];
 
   function sanitizeDienstreiseFolderPart(str) {
     if (typeof str !== 'string') return '';
@@ -249,6 +251,150 @@ function createApp(db) {
       }
     } catch (e) { /* ignore */ }
     return maxNum + 1;
+  }
+
+  function getServerJobId(localJobId) {
+    const row = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
+    if (!row) throw new Error('Auftrag nicht gefunden.');
+    return row.server_id != null ? row.server_id : row.id;
+  }
+
+  async function syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword) {
+    const base = (dispoBaseUrl || '').trim().replace(/\/$/, '');
+    if (!localJobId || !base || !technicianId) throw new Error('job_id (lokal), dispoBaseUrl und technicianId erforderlich.');
+    const jobId = getServerJobId(localJobId);
+    const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+    if (!reiseDir || !fs.existsSync(reiseDir)) throw new Error('Dienstreise-Ordner existiert nicht.');
+
+    const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+
+    async function listRemoteFilesForFolder(folderName) {
+      const seen = new Set();
+      const urlBase = base + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId;
+      async function walk(pathPart) {
+        const url = urlBase + (pathPart ? '&path=' + encodeURIComponent(pathPart) : '');
+        const opts = { headers: { 'X-Technician-Id': String(technicianId), ...authHeader } };
+        const r = await fetch(url, opts);
+        if (!r.ok) throw new Error('Dispo-Dateiliste fehlgeschlagen (' + r.status + '): ' + url);
+        const data = await r.json();
+        const entries = (data && data.entries) ? data.entries : [];
+        for (const e of entries) {
+          const name = e.name || '';
+          if (!name || name === '.' || name === '..') continue;
+          const childPath = pathPart ? pathPart + '/' + name : name;
+          if (e.type === 'dir') {
+            await walk(childPath);
+          } else if (e.type === 'file') {
+            seen.add(childPath);
+          }
+        }
+      }
+      await walk(folderName);
+      return seen;
+    }
+
+    async function uploadFile(relPathFromRoot, fullPath) {
+      const url = base + '/api/job_project_file_upload.php';
+      const fileBuf = fs.readFileSync(fullPath);
+      await new Promise((resolve, reject) => {
+        const form = new FormData();
+        form.append('technician_id', String(technicianId));
+        form.append('job_id', String(jobId));
+        // path-Parameter der Dispo-API ist der Zielordner relativ zum Projektordner,
+        // nicht inkl. Dateinamen. Aus relPathFromRoot (z. B. Dokumente_Monteur/foo/bar.pdf)
+        // wird daher nur der Ordnerteil (Dokumente_Monteur/foo) als path übergeben.
+        var relNorm = relPathFromRoot.replace(/\\/g, '/');
+        var lastSlash = relNorm.lastIndexOf('/');
+        var folderPart = lastSlash > 0 ? relNorm.slice(0, lastSlash) : '';
+        if (folderPart) {
+          form.append('path', folderPart);
+        }
+        form.append('file', fileBuf, path.basename(fullPath));
+
+        const parsed = new URL(url);
+        const headers = form.getHeaders({
+          'X-Technician-Id': String(technicianId),
+          ...authHeader,
+        });
+        const options = {
+          method: 'POST',
+          protocol: parsed.protocol,
+          hostname: parsed.hostname,
+          port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+          path: parsed.pathname + (parsed.search || ''),
+          headers,
+        };
+
+        form.submit(options, (err, res) => {
+          if (err) return reject(err);
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => { body += chunk; });
+          res.on('end', () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              try {
+                const data = body ? JSON.parse(body) : {};
+                if (data && data.ok === false) {
+                  reject(new Error(data.error || 'Upload zu Dispo fehlgeschlagen.'));
+                } else {
+                  resolve();
+                }
+              } catch (e) {
+                resolve(); // HTTP ok, JSON egal
+              }
+            } else {
+              reject(new Error('Upload zu Dispo fehlgeschlagen (' + res.statusCode + '): ' + body));
+            }
+          });
+        });
+      });
+    }
+
+    function collectLocalFiles(rootDir, subfolder) {
+      const result = [];
+      const startDir = path.join(rootDir, subfolder);
+      if (!fs.existsSync(startDir)) return result;
+      function walk(currentDir, relBase) {
+        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        for (const e of entries) {
+          const full = path.join(currentDir, e.name);
+          const rel = relBase ? relBase + '/' + e.name : e.name;
+          if (e.isDirectory()) {
+            walk(full, rel);
+          } else if (e.isFile()) {
+            result.push({ relPathFromSub: rel, fullPath: full });
+          }
+        }
+      }
+      walk(startDir, '');
+      return result.map((f) => ({
+        relPathFromRoot: subfolder + (f.relPathFromSub ? '/' + f.relPathFromSub : ''),
+        fullPath: f.fullPath,
+      }));
+    }
+
+    for (const folder of DIENSTREISE_SYNC_FOLDERS) {
+      const files = collectLocalFiles(reiseDir, folder);
+      if (!files.length) continue;
+      // Idempotent: erst entfernte Dateien auf dem Dispo sammeln,
+      // dann nur hochladen, was dort noch nicht existiert.
+      let remoteFiles;
+      try {
+        remoteFiles = await listRemoteFilesForFolder(folder);
+      } catch (e) {
+        // Wenn die Liste nicht gelesen werden kann, abbrechen – Upload ohne Kenntnis des Server-Zustands
+        // würde zu Duplikaten führen.
+        throw e;
+      }
+      for (const f of files) {
+        // relPathFromRoot z.B. Dokumente_Monteur/foo/bar.pdf → rel ab Ordner:
+        const relNorm = f.relPathFromRoot.replace(/\\/g, '/');
+        const relWithoutRoot = relNorm.startsWith(folder + '/') ? relNorm.slice(folder.length + 1) : relNorm;
+        // Wenn auf dem Dispo bereits eine Datei mit diesem relativen Pfad vorhanden ist, nicht erneut hochladen.
+        if (relWithoutRoot && remoteFiles.has(relWithoutRoot)) continue;
+        await uploadFile(f.relPathFromRoot, f.fullPath);
+      }
+    }
   }
 
   function createDienstreiseFolder(basePath, startDateISO, companyName, city, countryCode) {
@@ -350,6 +496,43 @@ function createApp(db) {
     }
   });
 
+  /** Liste der Dateien/Ordner im Projektordner eines Auftrags (Explorer-Ansicht). subpath = relativer Pfad (z. B. "" oder "Dokumente_Monteur"). */
+  app.get('/api/dienstreise/project_files', (req, res) => {
+    try {
+      const jobId = parseInt(req.query.job_id, 10);
+      if (!jobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const reiseDir = getOrCreateDienstreiseFolderForJob(jobId);
+      if (!reiseDir || !fs.existsSync(reiseDir)) return res.json({ ok: true, folderPath: reiseDir || '', entries: [] });
+      let subpath = (req.query.subpath || '').trim().replace(/^[\/\\]+|[\/\\]+$/g, '');
+      if (subpath && (subpath.includes('..') || path.isAbsolute(subpath))) return res.status(400).json({ ok: false, error: 'Ungültiger Unterpfad.' });
+      const dirPath = subpath ? path.join(reiseDir, subpath) : reiseDir;
+      if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
+      const names = fs.readdirSync(dirPath);
+      const entries = [];
+      for (const name of names) {
+        const fullPath = path.join(dirPath, name);
+        let stat;
+        try { stat = fs.statSync(fullPath); } catch (e) { continue; }
+        const relativePath = subpath ? subpath + path.sep + name : name;
+        entries.push({
+          name,
+          relativePath,
+          fullPath,
+          isDirectory: stat.isDirectory(),
+          size: stat.isFile() ? stat.size : null,
+          mtime: stat.mtime ? stat.mtime.toISOString() : null,
+        });
+      }
+      entries.sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        return (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
+      });
+      res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Dateiliste konnte nicht gelesen werden.' });
+    }
+  });
+
   app.get('/api/dienstreise/:id', (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ ok: false, error: 'id fehlt.' });
@@ -379,6 +562,21 @@ function createApp(db) {
       res.json({ ok: true, dienstreise: { ...row, fullPath } });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message || 'Anlegen fehlgeschlagen.' });
+    }
+  });
+
+  app.post('/api/dienstreise/sync_to_dispo', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim();
+      const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
+      const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
+      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
+      await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Sync zum Dispo-Server fehlgeschlagen.' });
     }
   });
 
@@ -478,6 +676,164 @@ function createApp(db) {
     }
   });
 
+  app.post('/api/dienstreise/finish_and_cleanup', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const protectedPaths = Array.isArray(body.protectedPaths) ? body.protectedPaths.map((p) => String(p || '').replace(/^[\/\\]+|[\/\\]+$/g, '')).filter(Boolean) : [];
+      const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
+      const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
+      const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
+      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id (lokal) erforderlich.' });
+      const jobId = getServerJobId(localJobId);
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!reiseDir || !fs.existsSync(reiseDir)) return res.status(400).json({ ok: false, error: 'Dienstreise-Ordner nicht gefunden.' });
+
+      // Vor Verify: sicherstellen, dass die Sync-Ordner noch einmal aktiv zum Dispo geschoben werden,
+      // damit neue Dateien (z. B. kurz vor „Erledigt“ hochgeladen) berücksichtigt sind.
+      if (dispoBaseUrl && technicianId) {
+        try {
+          await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword);
+        } catch (syncErr) {
+          return res.status(502).json({ ok: false, error: 'Sync zum Dispo-Server vor Abschluss fehlgeschlagen: ' + (syncErr && syncErr.message ? syncErr.message : String(syncErr)) });
+        }
+      }
+
+      async function collectRemoteFilesForFolder(folderName) {
+        if (!dispoBaseUrl || !technicianId) return new Set();
+        const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+        const seen = new Set();
+        async function walk(pathPart) {
+          const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + (pathPart ? '&path=' + encodeURIComponent(pathPart) : '');
+          const opts = { headers: { 'X-Technician-Id': String(technicianId), ...authHeader } };
+          const r = await fetch(url, opts);
+          if (!r.ok) throw new Error('Dispo-Dateiliste fehlgeschlagen (' + r.status + '): ' + url);
+          const data = await r.json();
+          const entries = (data && data.entries) ? data.entries : [];
+          for (const e of entries) {
+            const name = e.name || '';
+            if (!name || name === '.' || name === '..') continue;
+            const childPath = pathPart ? pathPart + '/' + name : name;
+            if (e.type === 'dir') {
+              await walk(childPath);
+            } else if (e.type === 'file') {
+              seen.add(childPath);
+            }
+          }
+        }
+        await walk(folderName);
+        return seen;
+      }
+
+      function collectLocalFilesForFolder(rootDir, folderName) {
+        const result = [];
+        const startDir = path.join(rootDir, folderName);
+        if (!fs.existsSync(startDir)) return result;
+        function walk(currentDir, relBase) {
+          const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+          for (const e of entries) {
+            const full = path.join(currentDir, e.name);
+            const rel = relBase ? relBase + '/' + e.name : e.name;
+            if (e.isDirectory()) {
+              walk(full, rel);
+            } else if (e.isFile()) {
+              result.push(folderName + (rel ? '/' + rel : ''));
+            }
+          }
+        }
+        walk(startDir, '');
+        return result;
+      }
+
+      // Verify: alle lokalen Dateien unter den Sync-Ordnern müssen am Dispo existieren
+      for (const folder of DIENSTREISE_SYNC_FOLDERS) {
+        const localFiles = collectLocalFilesForFolder(reiseDir, folder);
+        if (!localFiles.length) continue;
+        const remoteFiles = await collectRemoteFilesForFolder(folder);
+        const missing = localFiles.filter((p) => !remoteFiles.has(p));
+        if (missing.length > 0) {
+          return res.status(409).json({ ok: false, error: 'Dispo und WebApp sind nicht synchron (fehlende Dateien: ' + missing.slice(0, 5).join(', ') + (missing.length > 5 ? ', …' : '') + ').' });
+        }
+      }
+
+      const protectedSet = new Set(protectedPaths.map((p) => p.replace(/\\/g, '/')));
+      function isProtected(rel) {
+        const norm = rel.replace(/\\/g, '/');
+        for (const p of protectedSet) {
+          if (!p) continue;
+          if (norm === p || norm.startsWith(p + '/')) return true;
+        }
+        return false;
+      }
+
+      function deleteRecursively(dir, relBase) {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const e of entries) {
+          const full = path.join(dir, e.name);
+          const rel = relBase ? relBase + '/' + e.name : e.name;
+          if (isProtected(rel)) continue;
+          if (e.isDirectory()) {
+            deleteRecursively(full, rel);
+            try {
+              const rest = fs.readdirSync(full);
+              if (rest.length === 0 && !isProtected(rel)) fs.rmdirSync(full);
+            } catch (err) { /* ignore */ }
+          } else if (e.isFile()) {
+            try { fs.unlinkSync(full); } catch (err) { /* ignore */ }
+          }
+        }
+      }
+
+      deleteRecursively(reiseDir, '');
+      // Nach dem ersten Durchlauf können ggf. noch leere Ordner übrig sein, deren Eltern zuvor geschützte Kinder hatten.
+      // Zweiter Durchlauf nur zum Entfernen leerer, ungeschützter Ordner.
+      function removeEmptyDirs(dir, relBase) {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const e of entries) {
+          const full = path.join(dir, e.name);
+          const rel = relBase ? relBase + '/' + e.name : e.name;
+          if (e.isDirectory()) {
+            removeEmptyDirs(full, rel);
+            try {
+              const rest = fs.readdirSync(full);
+              if (rest.length === 0 && !isProtected(rel)) fs.rmdirSync(full);
+            } catch (err) { /* ignore */ }
+          }
+        }
+      }
+      removeEmptyDirs(reiseDir, '');
+
+      // Job lokal als "erledigt" markieren UND eine Pending-Änderung anlegen,
+      // damit der Status beim nächsten Sync auch im Dispo gesetzt wird
+      try {
+        if (technicianId) {
+          const r = db.prepare(`
+            UPDATE jobs SET status = ?, updated_at = datetime('now')
+            WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)
+          `).run('erledigt', localJobId, technicianId);
+          if (r.changes) {
+            db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
+              .run('job', localJobId, 'status', JSON.stringify({ status: 'erledigt' }));
+            save();
+          } else {
+            // Fallback: zumindest lokal den Status setzen
+            db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
+          }
+        } else {
+          db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
+        }
+      } catch (statusErr) {
+        // Wenn das Status-Update/Pending-Flag scheitert, soll der Abschluss
+        // trotzdem nicht komplett fehlschlagen.
+      }
+
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Abschluss/Löschung fehlgeschlagen.' });
+    }
+  });
+
   app.get('/api/technician', (req, res) => {
     const technicianId = getTechnicianId(req);
     if (!technicianId) {
@@ -505,7 +861,7 @@ function createApp(db) {
       INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
-      WHERE 1=1`;
+      WHERE j.status != 'erledigt'`;
     const params = [technicianId];
     if (dateFrom) { sql += ' AND j.start_datetime >= ?'; params.push(dateFrom + ' 00:00:00'); }
     if (dateTo) { sql += ' AND j.start_datetime <= ?'; params.push(dateTo + ' 23:59:59'); }
@@ -513,6 +869,71 @@ function createApp(db) {
     try {
       const rows = db.prepare(sql).all(...params);
       res.json({ ok: true, technician_id: technicianId, jobs: rows });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.get('/api/my_jobs_archive', (req, res) => {
+    const technicianId = getTechnicianId(req);
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id fehlt.' });
+    }
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const yearParam = parseInt(req.query.year, 10);
+    const year = Number.isFinite(yearParam) && yearParam > 1900 ? yearParam : currentYear;
+
+    const customer = (req.query.customer || '').trim();
+    const monthRaw = (req.query.month || '').trim();
+    const fab = (req.query.fabrikationsnummer || '').trim();
+    const country = (req.query.country || '').trim();
+
+    let sql = `SELECT j.id, j.server_id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
+        j.status, j.required_technicians, j.description, j.fabrikationsnummern,
+        c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
+        ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+      FROM jobs j
+      INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+      INNER JOIN customers c ON c.id = j.customer_id
+      LEFT JOIN job_addresses ja ON ja.job_id = j.id
+      WHERE j.status = 'erledigt'
+        AND strftime('%Y', j.end_datetime) = ?`;
+    const params = [technicianId, String(year)];
+
+    if (customer) {
+      sql += ' AND c.name LIKE ?';
+      params.push('%' + customer + '%');
+    }
+
+    if (monthRaw) {
+      // Erwartet entweder \"MM\" oder \"YYYY-MM\"
+      if (/^\\d{4}-\\d{2}$/.test(monthRaw)) {
+        sql += ' AND strftime(\'%Y-%m\', j.end_datetime) = ?';
+        params.push(monthRaw);
+      } else if (/^\\d{1,2}$/.test(monthRaw)) {
+        const mm = monthRaw.padStart(2, '0');
+        sql += ' AND strftime(\'%m\', j.end_datetime) = ?';
+        params.push(mm);
+      }
+    }
+
+    if (fab) {
+      sql += ' AND j.fabrikationsnummern IS NOT NULL AND j.fabrikationsnummern LIKE ?';
+      params.push('%' + fab + '%');
+    }
+
+    if (country) {
+      sql += ' AND (ja.country LIKE ? OR c.country LIKE ?)';
+      params.push('%' + country + '%', '%' + country + '%');
+    }
+
+    sql += ' ORDER BY j.end_datetime DESC';
+
+    try {
+      const rows = db.prepare(sql).all(...params);
+      res.json({ ok: true, technician_id: technicianId, year, jobs: rows });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }

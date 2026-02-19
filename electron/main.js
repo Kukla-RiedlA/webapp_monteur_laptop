@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
 const path = require('path');
 const { createApp, getDb, PORT } = require('./server');
 
@@ -44,6 +44,16 @@ ipcMain.handle('dienstreise:choose-folder', async () => {
     return null;
   }
   return result.filePaths[0];
+});
+
+ipcMain.handle('dienstreise:open-path', async (event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath.trim()) return;
+  await shell.openPath(filePath.trim());
+});
+
+ipcMain.handle('dienstreise:copy-path', async (event, filePath) => {
+  if (typeof filePath !== 'string') return;
+  clipboard.writeText(filePath.trim());
 });
 
 app.whenReady().then(() => {

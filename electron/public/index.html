@@ -28,10 +28,6 @@
     .view-start .start-left { flex: 1; min-width: 0; }
     .view-start .start-right { flex: 2; min-width: 0; }
     .view-start .start-left main, .view-start .start-right main { max-width: none; margin: 0; padding: 0; }
-    .view-start.only-left .start-right { display: none; }
-    .view-start.only-left .start-left { flex: 1 1 100%; }
-    .view-start.only-right .start-left { display: none; }
-    .view-start.only-right .start-right { flex: 1 1 100%; }
     .card { background: var(--card); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--accent); }
     .card h2 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--muted); }
     .job { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; align-items: center; padding: 0.6rem 0; border-bottom: 1px solid var(--accent); }
@@ -66,6 +62,29 @@
     .dienstreise-list-wrap .job.selected { background: var(--accent); }
     .dienstreise-list-wrap .job:hover:not(.selected) { background: rgba(255,255,255,0.05); }
     .dienstreise-detail h3 { margin: 0 0 0.75rem; font-size: 1rem; color: var(--muted); }
+    .dienstreise-detail-split { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; min-height: 200px; }
+    @media (max-width: 900px) { .dienstreise-detail-split { grid-template-columns: 1fr; } }
+    .dienstreise-detail-left { min-width: 0; }
+    .dienstreise-detail-right { min-width: 0; display: flex; flex-direction: column; }
+    .dienstreise-explorer-toolbar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--muted); flex-wrap: wrap; }
+    .dienstreise-explorer-breadcrumb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dienstreise-explorer-list { border: 1px solid var(--accent); border-radius: 6px; overflow: auto; max-height: 320px; font-size: 0.85rem; background: var(--bg); }
+    .dienstreise-explorer-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 0.5rem 1rem; align-items: center; padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--accent); }
+    .dienstreise-explorer-row:last-child { border-bottom: none; }
+    .dienstreise-explorer-row:hover { background: rgba(255,255,255,0.05); }
+    .dienstreise-explorer-row.level-1 .dienstreise-explorer-name { padding-left: 1.25rem; }
+    .dienstreise-explorer-row.level-2 .dienstreise-explorer-name { padding-left: 2.5rem; }
+    .dienstreise-explorer-row.level-3 .dienstreise-explorer-name { padding-left: 3.75rem; }
+    .dienstreise-explorer-row.level-4 .dienstreise-explorer-name { padding-left: 5rem; }
+    .dienstreise-explorer-row.level-5 .dienstreise-explorer-name { padding-left: 6.25rem; }
+    .dienstreise-explorer-row.level-6 .dienstreise-explorer-name { padding-left: 7.5rem; }
+    .dienstreise-explorer-row .explorer-toggle { width: 1rem; text-align: center; font-size: 0.7rem; color: var(--muted); user-select: none; }
+    .dienstreise-explorer-row .explorer-toggle.empty { visibility: hidden; }
+    .dienstreise-explorer-name { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+    .dienstreise-explorer-name .icon { font-size: 1rem; opacity: 0.9; }
+    .dienstreise-explorer-size { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+    .dienstreise-explorer-actions { display: flex; gap: 0.25rem; }
+    .dienstreise-explorer-actions .btn { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
     .dienstreise-copy-row, .dienstreise-upload-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
     .dienstreise-select { padding: 0.4rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); min-width: 200px; }
     .view-archiv { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
@@ -104,6 +123,8 @@
     .cal-legend-title { font-weight: bold; margin-right: 0.5rem; color: var(--muted); }
     .cal-legend-item { display: inline-flex; align-items: center; gap: 6px; }
     .cal-legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+    .archiv-filter-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.25rem; }
+    .archiv-filter-row input, .archiv-filter-row select { padding: 0.4rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
     .modal-overlay { position: fixed; top: var(--header-height); left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
     .modal-overlay.active { display: flex; }
     .modal-overlay.modal-fullscreen .modal-box { width: 100%; max-width: none; flex: 1; min-height: 0; max-height: 100%; border-radius: 0; border-width: 0; }
@@ -135,8 +156,6 @@
     <h1 class="app-title">Kukla Monteur Tool</h1>
     <nav class="toolbar" aria-label="Hauptnavigation">
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
-    <button class="btn btn-ghost" id="btnViewAuftraege">Aufträge</button>
-    <button class="btn btn-ghost" id="btnViewKalender">Kalender</button>
     <button class="btn btn-ghost" id="btnViewDienstreise">Dienstreise</button>
     <button class="btn btn-ghost" id="btnViewArchiv">Archiv</button>
     <span class="toolbar-right">
@@ -224,26 +243,38 @@
       </div>
       <div id="dienstreiseDetail" class="dienstreise-detail card" style="display: none;">
         <h3 id="dienstreiseDetailTitle">Auftrag</h3>
-        <div class="settings-row">
-          <label>Projektordner vom Dispo holen</label>
-          <div class="dienstreise-copy-row">
-            <button type="button" class="btn btn-ghost" id="btnDienstreiseCopyProject">Projektordner holen</button>
+        <div class="dienstreise-detail-split">
+          <div class="dienstreise-detail-left">
+            <div class="settings-row">
+              <label>Projektordner vom Dispo holen</label>
+              <div class="dienstreise-copy-row">
+                <button type="button" class="btn btn-ghost" id="btnDienstreiseCopyProject">Projektordner holen</button>
+              </div>
+              <span id="dienstreiseCopyHint" class="settings-saved-hint" aria-live="polite"></span>
+            </div>
+            <div class="settings-row">
+              <label>Dokument hochladen</label>
+              <div class="dienstreise-upload-row">
+                <select id="dienstreiseUploadSubfolder" class="dienstreise-select">
+                  <option value="Dokumente_Dispo">Dokumente_Dispo</option>
+                  <option value="Dokumente_Monteur">Dokumente_Monteur</option>
+                  <option value="Dokumente_Anlage">Dokumente_Anlage</option>
+                  <option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>
+                </select>
+                <input type="file" id="dienstreiseFileInput" accept="*" style="max-width: 220px;" />
+                <button type="button" class="btn btn-ghost" id="btnDienstreiseUpload">Hochladen</button>
+              </div>
+              <span id="dienstreiseUploadHint" class="settings-saved-hint" aria-live="polite"></span>
+            </div>
           </div>
-          <span id="dienstreiseCopyHint" class="settings-saved-hint" aria-live="polite"></span>
-        </div>
-        <div class="settings-row">
-          <label>Dokument hochladen</label>
-          <div class="dienstreise-upload-row">
-            <select id="dienstreiseUploadSubfolder" class="dienstreise-select">
-              <option value="Dokumente_Dispo">Dokumente_Dispo</option>
-              <option value="Dokumente_Monteur">Dokumente_Monteur</option>
-              <option value="Dokumente_Anlage">Dokumente_Anlage</option>
-              <option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>
-            </select>
-            <input type="file" id="dienstreiseFileInput" accept="*" style="max-width: 220px;" />
-            <button type="button" class="btn btn-ghost" id="btnDienstreiseUpload">Hochladen</button>
+          <div class="dienstreise-detail-right">
+            <div class="dienstreise-explorer-toolbar">
+              <span class="dienstreise-explorer-breadcrumb" id="dienstreiseExplorerBreadcrumb" title="Projektordner">Projektordner</span>
+            </div>
+            <div id="dienstreiseExplorerList" class="dienstreise-explorer-list" aria-label="Dateien im Projektordner">
+              <span class="empty" id="dienstreiseExplorerPlaceholder">Auftrag wählen, dann Ordnerinhalt hier.</span>
+            </div>
           </div>
-          <span id="dienstreiseUploadHint" class="settings-saved-hint" aria-live="polite"></span>
         </div>
       </div>
     </div>
@@ -277,7 +308,33 @@
   <main id="viewArchiv" class="view-archiv" aria-label="Archiv">
     <div class="card">
       <h2>Archiv</h2>
-      <p class="muted">Bereich Archiv – Inhalt folgt.</p>
+      <div class="settings-row">
+        <label>Filter</label>
+        <div class="archiv-filter-row">
+          <input type="text" id="archivFilterCustomer" placeholder="Kunde" title="Nach Kunde filtern" />
+          <select id="archivFilterMonth" title="Monat">
+            <option value="">Monat (alle)</option>
+            <option value="01">01 - Januar</option>
+            <option value="02">02 - Februar</option>
+            <option value="03">03 - März</option>
+            <option value="04">04 - April</option>
+            <option value="05">05 - Mai</option>
+            <option value="06">06 - Juni</option>
+            <option value="07">07 - Juli</option>
+            <option value="08">08 - August</option>
+            <option value="09">09 - September</option>
+            <option value="10">10 - Oktober</option>
+            <option value="11">11 - November</option>
+            <option value="12">12 - Dezember</option>
+          </select>
+          <input type="text" id="archivFilterFab" placeholder="Fabrikationsnummer" title="Nach Fabrikationsnummer filtern" />
+          <input type="text" id="archivFilterCountry" placeholder="Land" title="Nach Land filtern" />
+          <select id="archivFilterYear" title="Jahr"></select>
+          <button type="button" class="btn btn-ghost" id="btnArchivFilterApply">Filtern</button>
+          <button type="button" class="btn btn-ghost" id="btnArchivFilterReset">Zurücksetzen</button>
+        </div>
+      </div>
+      <div id="archivList"><span class="empty">Keine Aufträge im Archiv.</span></div>
     </div>
   </main>
   <main id="viewEinstellungen" class="view-einstellungen">

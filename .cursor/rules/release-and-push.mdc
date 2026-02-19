@@ -6,9 +6,14 @@ globs: release.ps1,VERSION_HISTORY.md,config/version.php,electron/version.json
 
 # Release und Push
 
-Bei **Release erstellen** wie folgt vorgehen:
+**Für Release-Anfragen die einheitliche Release-Regel der Dispo verwenden:**  
+`.cursor/rules/release-and-push.mdc` im **Workspace-Root** (xampp_2 / Dispo). Dort ist der Ablauf für beide Repos (Dispo + Monteur-WebApp) definiert; für die WebApp gilt der Abschnitt „Monteur-App (webapp_monteur_laptop)“.
 
-## Ablauf
+---
+
+Kurzablauf **nur WebApp** (wenn ausschließlich dieses Repo betroffen ist):
+
+## Ablauf (nur WebApp)
 
 1. **Optional:** In `VERSION_HISTORY.md` die Änderungen für die neue Version eintragen (unter der neuen Versionsnummer als neuer Block oben einfügen). Format: `## V 1.xxx` mit Bullet-Points.
 2. **Release ausführen:** Im Projektroot (webapp_monteur_laptop) PowerShell:
