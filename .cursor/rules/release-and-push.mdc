@@ -1,6 +1,6 @@
 ---
-description: Release erstellen – Version setzen, Commit, Tag, Push
-alwaysApply: false
+description: Release erstellen – Version setzen, Commit, Tag, Push (Monteur-WebApp). Bei Release-Anfragen Ablauf ohne Rückfragen ausführen.
+alwaysApply: true
 globs: release.ps1,VERSION_HISTORY.md,config/version.php,electron/version.json
 ---
 

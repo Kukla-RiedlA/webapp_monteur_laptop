@@ -50,6 +50,8 @@
       background: conic-gradient(from -90deg, var(--accent) 0deg, var(--accent) calc(var(--countdown, 1) * 360deg), var(--muted) calc(var(--countdown, 1) * 360deg));
     }
     .connection-badge-wrap #connectionBadge { position: relative; z-index: 1; }
+    .connection-badge-wrap.clickable { cursor: pointer; }
+    .connection-badge-wrap.clickable:hover #connectionBadge { filter: brightness(1.1); }
     .offline-badge { background: #6c757d; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .online-badge { background: #2d6a4f; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .local-badge { background: #495057; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
@@ -111,20 +113,52 @@
     .cal-cell { min-height: 56px; border: 1px solid var(--accent); padding: 4px; font-size: 0.75rem; background: var(--card); overflow: visible; display: flex; flex-direction: column; }
     .cal-cell.other-month { opacity: 0.6; }
     .cal-daynum { font-weight: bold; margin-bottom: 4px; }
-    .cal-cell-bars { min-height: 0; }
-    .cal-cell-span-lane { position: relative; overflow: visible; margin-top: 4px; min-height: 0; }
-    .cal-bar { font-size: 10px; padding: 2px 4px; border-radius: 3px; margin: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cal-cell-bars { min-height: 0; display: flex; flex-direction: column; gap: 2px; }
+    .cal-cell-span-lane { position: relative; overflow: visible; margin-top: 4px; min-height: 0; flex-shrink: 0; }
+    .cal-bar { font-size: 10px; padding: 2px 4px; border-radius: 3px; margin: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; justify-content: center; text-align: center; min-width: 0; }
+    .cal-bar .cal-bar-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cal-bar.job { color: #000; }
+    .cal-erledigt-check { color: #1a7f37; font-weight: bold; }
     .cal-bar.absence { background: repeating-linear-gradient(-45deg, transparent 0, transparent 2px, var(--stripes, #6c757d) 2px, var(--stripes, #6c757d) 4px); }
     .cal-cell.today { outline: 2px solid #4a90e2; outline-offset: -2px; }
     .cal-bar-span { position: absolute; left: 0; height: 20px; margin: 0; display: flex; align-items: center; padding: 0 6px; box-sizing: border-box; min-width: 0; }
-    .cal-bar-span-full { position: absolute; height: 20px; display: flex; align-items: center; padding: 0 6px; box-sizing: border-box; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }
+    .cal-bar-span-full { position: absolute; height: 20px; display: flex; align-items: center; justify-content: center; padding: 0 6px; box-sizing: border-box; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; text-align: center; min-width: 0; }
+    .cal-bar-span-full .cal-bar-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cal-legend { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--accent); font-size: 0.85rem; }
     .cal-legend-title { font-weight: bold; margin-right: 0.5rem; color: var(--muted); }
     .cal-legend-item { display: inline-flex; align-items: center; gap: 6px; }
     .cal-legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
     .archiv-filter-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.25rem; }
     .archiv-filter-row input, .archiv-filter-row select { padding: 0.4rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
+    .archiv-job-item { border: 1px solid var(--accent); border-radius: 6px; margin-bottom: 0.5rem; overflow: hidden; }
+    .archiv-job-row { display: flex; align-items: center; padding: 0.5rem 0.75rem; cursor: pointer; background: var(--card); }
+    .archiv-job-row:hover { background: var(--accent); }
+    .archiv-job-row .job { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-width: 0; }
+    .archiv-toggle { display: inline-block; width: 1.2rem; margin-right: 0.5rem; color: var(--muted); font-size: 0.7rem; flex-shrink: 0; }
+    .archiv-job-expand { padding: 1rem 1rem 1rem 2.2rem; border-top: 1px solid var(--accent); background: var(--bg); font-size: 0.9rem; }
+    .archiv-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem 1.5rem; margin-bottom: 1rem; }
+    @media (max-width: 700px) { .archiv-detail-grid { grid-template-columns: 1fr; } }
+    .archiv-detail-section h4 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--muted); }
+    .archiv-detail-section .modal-detail-dl { margin: 0; }
+    .archiv-detail-section .modal-address { margin: 0; font-size: 0.9rem; }
+    .archiv-folder-container { margin-top: 0.5rem; max-height: 280px; overflow: auto; border: 1px solid var(--accent); border-radius: 4px; padding: 0.5rem; background: var(--card); }
+    .archiv-folder-tree { font-family: ui-monospace, monospace; font-size: 0.8rem; }
+    .archiv-folder-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0.4rem; border-radius: 3px; }
+    .archiv-folder-row:hover { background: var(--accent); }
+    .archiv-folder-row.level-1 { padding-left: 1.2rem; }
+    .archiv-folder-row.level-2 { padding-left: 2.4rem; }
+    .archiv-folder-row.level-3 { padding-left: 3.6rem; }
+    .archiv-folder-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .archiv-folder-toggle { width: 1rem; display: inline-block; color: var(--muted); }
+    .archiv-folder-toggle.empty { visibility: hidden; }
+    .archiv-folder-meta { color: var(--muted); font-size: 0.75rem; white-space: nowrap; flex-shrink: 0; }
+    .archiv-folder-actions { flex-shrink: 0; }
+    .archiv-folder-actions .btn { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
+    .archiv-fab-table-wrap { overflow-x: auto; margin-top: 0.5rem; border: 1px solid var(--accent); border-radius: 4px; }
+    .archiv-fab-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .archiv-fab-table th, .archiv-fab-table td { padding: 0.35rem 0.5rem; text-align: left; border-bottom: 1px solid var(--accent); }
+    .archiv-fab-table th { background: var(--accent); font-weight: 600; white-space: nowrap; }
+    .archiv-fab-table td:empty::after { content: '\00a0'; }
     .modal-overlay { position: fixed; top: var(--header-height); left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
     .modal-overlay.active { display: flex; }
     .modal-overlay.modal-fullscreen .modal-box { width: 100%; max-width: none; flex: 1; min-height: 0; max-height: 100%; border-radius: 0; border-width: 0; }

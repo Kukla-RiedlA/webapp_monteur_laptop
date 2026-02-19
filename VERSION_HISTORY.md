@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.021
+- **Abwesenheiten:** Kalender zeigt Abwesenheiten in Technikerfarbe (schraffiert); eigene Abwesenheit auch in Einzeltechniker-Ansicht (ohne „Alle Techniker“); genehmigte/ausstehende Anfragen in my_absences; Löschen von Abwesenheitsanfragen korrekt (Button „Anfrage entfernen“).
+- **Cursor-Regeln:** Release-Regel für Dispo und WebApp (alwaysApply), Dispo-Regel in htdocs angelegt.
+
+---
+
 ## V 1.019
 - **Dienstreise-Upload:** JSON-Body-Limit auf 50 MB erhöht (Upload großer Dateien); Frontend zeigt bei HTML-Antwort des Servers verständliche Meldung statt JSON-Parse-Fehler.
 - **Cursor Rule:** Release-Workflow in `.cursor/rules/release-and-push.mdc` festgelegt.

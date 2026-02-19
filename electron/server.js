@@ -487,6 +487,26 @@ function createApp(db) {
     return path.join(base, String(dienstreiseRow.year), dienstreiseRow.folder_name);
   }
 
+  /** Dateiname, der für "leer" ignoriert wird (versteckte/Systemdateien). */
+  function isIgnorableDirEntry(name) {
+    if (!name || name === '.' || name === '..') return true;
+    if (name.startsWith('.')) return true;
+    const lower = name.toLowerCase();
+    if (lower === 'thumbs.db' || lower === 'desktop.ini' || lower === '.ds_store') return true;
+    return false;
+  }
+
+  /** True, wenn der Ordner keine sichtbaren Einträge hat (nur ignorierbare = effektiv leer). */
+  function isEffectivelyEmptyDir(dirPath) {
+    try {
+      const names = fs.readdirSync(dirPath);
+      const visible = names.filter((n) => !isIgnorableDirEntry(n));
+      return visible.length === 0;
+    } catch (e) {
+      return true;
+    }
+  }
+
   app.get('/api/dienstreise/list', (req, res) => {
     try {
       const rows = db.prepare('SELECT id, year, running_number, start_date, company_name, city, country_code, folder_name, created_at FROM dienstreisen ORDER BY year DESC, running_number DESC').all();
@@ -510,9 +530,13 @@ function createApp(db) {
       const names = fs.readdirSync(dirPath);
       const entries = [];
       for (const name of names) {
+        if (isIgnorableDirEntry(name)) continue; // versteckte/Systemdateien weder anzeigen noch für "leer" zählen
         const fullPath = path.join(dirPath, name);
         let stat;
         try { stat = fs.statSync(fullPath); } catch (e) { continue; }
+        if (stat.isDirectory()) {
+          if (isEffectivelyEmptyDir(fullPath)) continue; // leere bzw. nur Systemdateien = ausblenden
+        }
         const relativePath = subpath ? subpath + path.sep + name : name;
         entries.push({
           name,
@@ -767,6 +791,20 @@ function createApp(db) {
         return false;
       }
 
+      /** Entfernt ignorierbare Dateien in einem Ordner, damit der Ordner danach leer ist und gelöscht werden kann. */
+      function removeIgnorableFilesInDir(dirPath) {
+        try {
+          const names = fs.readdirSync(dirPath);
+          for (const name of names) {
+            if (!isIgnorableDirEntry(name)) continue;
+            const full = path.join(dirPath, name);
+            try {
+              if (fs.statSync(full).isFile()) fs.unlinkSync(full);
+            } catch (err) { /* ignore */ }
+          }
+        } catch (err) { /* ignore */ }
+      }
+
       function deleteRecursively(dir, relBase) {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const e of entries) {
@@ -776,6 +814,7 @@ function createApp(db) {
           if (e.isDirectory()) {
             deleteRecursively(full, rel);
             try {
+              removeIgnorableFilesInDir(full);
               const rest = fs.readdirSync(full);
               if (rest.length === 0 && !isProtected(rel)) fs.rmdirSync(full);
             } catch (err) { /* ignore */ }
@@ -796,6 +835,7 @@ function createApp(db) {
           if (e.isDirectory()) {
             removeEmptyDirs(full, rel);
             try {
+              removeIgnorableFilesInDir(full);
               const rest = fs.readdirSync(full);
               if (rest.length === 0 && !isProtected(rel)) fs.rmdirSync(full);
             } catch (err) { /* ignore */ }
@@ -803,6 +843,14 @@ function createApp(db) {
         }
       }
       removeEmptyDirs(reiseDir, '');
+
+      // Leeren Dienstreise-Ordner selbst entfernen (z. B. 1_2026-02-16_Kopierkunde_sss_AT)
+      try {
+        removeIgnorableFilesInDir(reiseDir);
+        if (fs.existsSync(reiseDir) && fs.readdirSync(reiseDir).length === 0) {
+          fs.rmdirSync(reiseDir);
+        }
+      } catch (err) { /* ignore */ }
 
       // Job lokal als "erledigt" markieren UND eine Pending-Änderung anlegen,
       // damit der Status beim nächsten Sync auch im Dispo gesetzt wird
@@ -853,6 +901,7 @@ function createApp(db) {
     }
     const dateFrom = req.query.date_from || null;
     const dateTo = req.query.date_to || null;
+    const includeErledigt = req.query.include_erledigt === '1' || req.query.include_erledigt === 'true';
     let sql = `SELECT j.id, j.server_id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
         j.status, j.required_technicians, j.description, j.fabrikationsnummern,
         c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
@@ -861,8 +910,11 @@ function createApp(db) {
       INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
-      WHERE j.status != 'erledigt'`;
+      WHERE 1=1`;
     const params = [technicianId];
+    if (!includeErledigt) {
+      sql += ` AND j.status != 'erledigt'`;
+    }
     if (dateFrom) { sql += ' AND j.start_datetime >= ?'; params.push(dateFrom + ' 00:00:00'); }
     if (dateTo) { sql += ' AND j.start_datetime <= ?'; params.push(dateTo + ' 23:59:59'); }
     sql += ' ORDER BY j.start_datetime ASC';
@@ -908,14 +960,16 @@ function createApp(db) {
     }
 
     if (monthRaw) {
-      // Erwartet entweder \"MM\" oder \"YYYY-MM\"
-      if (/^\\d{4}-\\d{2}$/.test(monthRaw)) {
+      // Erwartet "MM" (01-12) oder "YYYY-MM"
+      if (/^\d{4}-\d{2}$/.test(monthRaw)) {
         sql += ' AND strftime(\'%Y-%m\', j.end_datetime) = ?';
         params.push(monthRaw);
-      } else if (/^\\d{1,2}$/.test(monthRaw)) {
+      } else if (/^\d{1,2}$/.test(monthRaw)) {
         const mm = monthRaw.padStart(2, '0');
-        sql += ' AND strftime(\'%m\', j.end_datetime) = ?';
-        params.push(mm);
+        if (parseInt(mm, 10) >= 1 && parseInt(mm, 10) <= 12) {
+          sql += ' AND strftime(\'%m\', j.end_datetime) = ?';
+          params.push(mm);
+        }
       }
     }
 
@@ -1084,6 +1138,23 @@ function createApp(db) {
     if (dateTo) { sql += ' AND start_datetime <= ?'; params.push(dateTo + ' 23:59:59'); }
     sql += ' ORDER BY start_datetime ASC';
     const rows = db.prepare(sql).all(...params);
+    const byKey = new Map();
+    rows.forEach((r) => byKey.set(r.start_datetime + '\t' + r.end_datetime, true));
+    // Genehmigte und ausstehende Abwesenheitsanfragen mit anzeigen (z. B. eigene Abwesenheit in Einzeltechniker-Ansicht)
+    let reqSql = 'SELECT id, server_id, technician_id, start_datetime, end_datetime, type, status FROM absence_requests WHERE technician_id = ? AND status IN (\'approved\', \'pending\')';
+    const reqParams = [technicianId];
+    if (dateFrom) { reqSql += ' AND end_datetime >= ?'; reqParams.push(dateFrom + ' 00:00:00'); }
+    if (dateTo) { reqSql += ' AND start_datetime <= ?'; reqParams.push(dateTo + ' 23:59:59'); }
+    reqSql += ' ORDER BY start_datetime ASC';
+    const requests = db.prepare(reqSql).all(...reqParams);
+    requests.forEach((r) => {
+      const key = r.start_datetime + '\t' + r.end_datetime;
+      if (!byKey.has(key)) {
+        byKey.set(key, true);
+        rows.push({ id: r.id, server_id: r.server_id, technician_id: r.technician_id, start_datetime: r.start_datetime, end_datetime: r.end_datetime, type: r.type, from_absence_request: true, status: r.status });
+      }
+    });
+    rows.sort((a, b) => String(a.start_datetime || '').localeCompare(String(b.start_datetime || '')));
     res.json({ ok: true, technician_id: technicianId, absences: rows });
   });
 

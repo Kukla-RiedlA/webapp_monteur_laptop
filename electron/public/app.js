@@ -563,10 +563,12 @@
 
   function setConnectionBadge(state, reason) {
     const badge = document.getElementById('connectionBadge');
+    const wrap = document.getElementById('connectionBadgeWrap');
+    if (wrap) wrap.classList.toggle('clickable', state === 'online');
     if (state === 'online') {
       badge.textContent = 'Online';
       badge.className = 'online-badge';
-      badge.removeAttribute('title');
+      badge.setAttribute('title', 'Klicken zum sofortigen Synchronisieren');
     } else if (state === 'local') {
       badge.textContent = 'Lokal';
       badge.className = 'local-badge';
@@ -653,8 +655,12 @@
     const requests = (requestsData && requestsData.requests) ? requestsData.requests : [];
     const parts = [];
     absences.forEach(function(a) {
+      if (a.from_absence_request && a.status === 'pending') return;
       const dateStr = formatDateRange(a.start_datetime, a.end_datetime);
-      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(a.type || 'Abwesenheit') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="delete-absence" data-id="' + escapeHtml(String(a.id)) + '" title="Abwesenheit löschen (lokal und in der Dispo)" aria-label="Löschen">🗑</button></div>');
+      const isRequest = a.from_absence_request === true;
+      const action = isRequest ? 'delete-absence-request' : 'delete-absence';
+      const title = isRequest ? 'Anfrage aus der Liste entfernen' : 'Abwesenheit löschen (lokal und in der Dispo)';
+      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(a.type || 'Abwesenheit') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="' + action + '" data-id="' + escapeHtml(String(a.id)) + '" title="' + escapeHtml(title) + '" aria-label="Löschen">🗑</button></div>');
     });
     requests.forEach(function(r) {
       if (r.status === 'approved') return;
@@ -741,6 +747,22 @@
     updateCountdownRing();
   }
 
+  function triggerManualSync() {
+    var base = getServerUrl().trim();
+    var techId = getTechId();
+    if (!techId || !base) return Promise.resolve();
+    var badge = document.getElementById('connectionBadge');
+    if (badge) badge.textContent = 'Wird synchronisiert…';
+    return checkConnectionAndSync().finally(function () {
+      startSyncInterval();
+    });
+  }
+
+  document.getElementById('connectionBadgeWrap').addEventListener('click', function () {
+    if (!this.classList.contains('clickable')) return;
+    triggerManualSync();
+  });
+
   loadSettingsFromStorage();
   function loadDienstreiseConfigFromServer() {
     fetch(API_BASE + '/api/dienstreise/config').then(function (r) { return r.json(); }).then(function (data) {
@@ -823,6 +845,7 @@
     }
     hint.textContent = 'Wird geholt…';
     checkConnectionAndSync().then(function () {
+      startSyncInterval();
       hint.textContent = 'Fertig.';
       clearTimeout(hint._syncHide);
       hint._syncHide = setTimeout(function () { hint.textContent = ''; }, 3000);
@@ -980,6 +1003,11 @@
 
   const ARCHIV_VISIBLE_YEARS = 2;
   let archivCurrentYear = new Date().getFullYear();
+  var archivJobsList = [];
+  var archivExpandedJobId = null;
+  var archivFolderRoot = {};
+  var archivFolderExpanded = {};
+  var archivJobDetailsCache = {};
 
   function getArchivFilters() {
     const customerEl = document.getElementById('archivFilterCustomer');
@@ -1021,6 +1049,8 @@
     const listEl = document.getElementById('archivList');
     if (!listEl) return;
     const jobs = (data && data.jobs) ? data.jobs : [];
+    archivJobsList = jobs;
+    if (archivExpandedJobId != null && !jobs.some(function (j) { return j.id === archivExpandedJobId; })) archivExpandedJobId = null;
     if (!jobs.length) {
       listEl.innerHTML = '<span class="empty">Keine Aufträge im Archiv.</span>';
       return;
@@ -1040,19 +1070,271 @@
       const titleLine = parts.join(' · ') || 'Auftrag';
       const jobNum = (j.job_number || '').trim();
       const subtitle = (jobNum ? escapeHtml(jobNum) + ' · ' : '') + escapeHtml(dateStr);
+      const isExpanded = archivExpandedJobId === j.id;
       return (
-        '<div class="job" data-job-id="' + j.id + '">' +
+        '<div class="archiv-job-item" data-job-id="' + j.id + '">' +
+        '<div class="archiv-job-row' + (isExpanded ? ' expanded' : '') + '" role="button" tabindex="0" aria-expanded="' + isExpanded + '">' +
+        '<span class="archiv-toggle" aria-hidden="true">' + (isExpanded ? '▼' : '▶') + '</span>' +
+        '<div class="job">' +
         '<div class="job-info">' +
         '<strong>' + titleLine + '</strong><br>' +
         '<span class="job-meta">' + subtitle + (j.job_type ? ' · ' + escapeHtml(j.job_type || '') : '') + '</span>' +
         '</div>' +
         '<div class="job-actions">' +
         '<span class="status-badge status-' + status + '">' + (j.status || 'erledigt') + '</span>' +
-        '</div>' +
-        '</div>'
+        '</div></div></div>' +
+        '<div class="archiv-job-expand" style="display:' + (isExpanded ? 'block' : 'none') + '">' +
+        (isExpanded ? '' : '') +
+        '</div></div>'
       );
     }).join('');
     listEl.innerHTML = html;
+    if (archivExpandedJobId != null) {
+      var expandEl = listEl.querySelector('.archiv-job-item[data-job-id="' + archivExpandedJobId + '"] .archiv-job-expand');
+      if (expandEl && expandEl.innerHTML === '') loadArchivJobExpandContent(archivExpandedJobId, expandEl);
+    }
+    listEl.querySelectorAll('.archiv-job-row').forEach(function (row) {
+      function toggleExpand() {
+        var item = row.closest('.archiv-job-item');
+        var jobId = item ? parseInt(item.getAttribute('data-job-id'), 10) : 0;
+        if (!jobId) return;
+        var expandEl = item ? item.querySelector('.archiv-job-expand') : null;
+        if (archivExpandedJobId === jobId) {
+          archivExpandedJobId = null;
+          if (expandEl) expandEl.style.display = 'none';
+          row.classList.remove('expanded');
+          row.setAttribute('aria-expanded', 'false');
+          var t = row.querySelector('.archiv-toggle');
+          if (t) t.textContent = '▶';
+          return;
+        }
+        var prev = listEl.querySelector('.archiv-job-item[data-job-id="' + archivExpandedJobId + '"]');
+        if (prev) {
+          var prevRow = prev.querySelector('.archiv-job-row');
+          var prevExpand = prev.querySelector('.archiv-job-expand');
+          if (prevRow) { prevRow.classList.remove('expanded'); prevRow.setAttribute('aria-expanded', 'false'); var pt = prevRow.querySelector('.archiv-toggle'); if (pt) pt.textContent = '▶'; }
+          if (prevExpand) prevExpand.style.display = 'none';
+        }
+        archivExpandedJobId = jobId;
+        if (expandEl) {
+          expandEl.style.display = 'block';
+          if (expandEl.innerHTML === '') loadArchivJobExpandContent(jobId, expandEl);
+        }
+        row.classList.add('expanded');
+        row.setAttribute('aria-expanded', 'true');
+        var toggle = row.querySelector('.archiv-toggle');
+        if (toggle) toggle.textContent = '▼';
+      }
+      row.addEventListener('click', toggleExpand);
+      row.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggleExpand();
+        }
+      });
+    });
+  }
+
+  function buildArchivJobDetailHtml(job) {
+    var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
+    var dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
+    var addressLines = [];
+    var nameLine = (job.customer_name || '').trim();
+    if (nameLine) addressLines.push(escapeHtml(nameLine));
+    var streetLine = [(job.street || '').trim(), (job.house_number || '').trim()].filter(Boolean).join(' ');
+    if (streetLine) addressLines.push(escapeHtml(streetLine));
+    var zipCityLine = [(job.zip || '').trim(), (job.city || '').trim()].filter(Boolean).join(' ');
+    if (zipCityLine) addressLines.push(escapeHtml(zipCityLine));
+    if ((job.country || '').trim()) addressLines.push(escapeHtml((job.country || '').trim()));
+    var extra1 = (job.address_extra_1 || '').trim();
+    if (extra1) addressLines.push(escapeHtml(extra1));
+    var extra2 = (job.address_extra_2 || '').trim();
+    if (extra2) addressLines.push(escapeHtml(extra2));
+    var addressLine = addressLines.length ? addressLines.join('<br>') : '–';
+    var cell = function (x) { return (x == null || String(x).trim() === '' ? '' : escapeHtml(String(x).trim())); };
+    var html = '<div class="archiv-detail-grid">';
+    html += '<div class="archiv-detail-section"><h4>Auftrag</h4><dl class="modal-detail-dl">';
+    html += '<dt>Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
+    html += '<dt>Typ</dt><dd>' + v(job.job_type) + '</dd>';
+    html += '<dt>Zeitraum</dt><dd>' + (dateRangeStr ? v(dateRangeStr) : v(formatDateOnly(job.start_datetime) || job.start_datetime)) + '</dd>';
+    html += '<dt>Status</dt><dd>' + v(job.status) + '</dd>';
+    if (job.description) html += '<dt>Beschreibung</dt><dd>' + v(job.description) + '</dd>';
+    html += '</dl></div>';
+    html += '<div class="archiv-detail-section"><h4>Kunde</h4><dl class="modal-detail-dl">';
+    html += '<dt>Name</dt><dd>' + v(job.customer_name) + '</dd>';
+    html += '<dt>Straße</dt><dd>' + v(job.customer_street) + ' ' + v(job.customer_house_number) + '</dd>';
+    html += '<dt>Ort</dt><dd>' + v(job.customer_zip) + ' ' + v(job.customer_city) + '</dd>';
+    html += '<dt>Telefon</dt><dd>' + v(job.customer_phone) + '</dd>';
+    html += '</dl></div>';
+    html += '<div class="archiv-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
+    html += '<div class="archiv-detail-section"><h4>Kontakt</h4><dl class="modal-detail-dl">';
+    html += '<dt>Ansprechpartner</dt><dd>' + v(job.contact_person) + '</dd>';
+    html += '<dt>Telefon</dt><dd>' + v(job.contact_phone) + '</dd>';
+    html += '<dt>E-Mail</dt><dd>' + v(job.contact_email) + '</dd>';
+    html += '</dl></div>';
+    html += '<div class="archiv-detail-section"><h4>ERP / Bestellung</h4><dl class="modal-detail-dl">';
+    html += '<dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
+    html += '<dt>Bestellnummer</dt><dd>' + v(job.bestellnummer) + '</dd></dl></div>';
+    html += '</div>';
+    var fabRows = parseFabrikationsnummernRows(job);
+    html += '<div class="archiv-detail-section"><h4>Fabrikationsnummern / Leistungsdaten</h4>';
+    html += '<div class="archiv-fab-table-wrap"><table class="archiv-fab-table"><thead><tr>';
+    html += '<th>Fabrikationsnummer</th><th>Type</th><th>Leistung</th><th>Nenngeschwindigkeit</th><th>Kraftaufnehmer</th><th>DMS Nr.</th><th>Tacho</th><th>Elektronik</th><th>Material</th><th>Position</th>';
+    html += '</tr></thead><tbody>';
+    fabRows.forEach(function (row) {
+      html += '<tr>';
+      html += '<td>' + cell(row.fabrikationsnummer) + '</td><td>' + cell(row.type) + '</td><td>' + cell(row.leistung) + '</td>';
+      html += '<td>' + cell(row.nenngeschwindigkeit) + '</td><td>' + cell(row.kraftaufnehmer) + '</td><td>' + cell(row.dms_nr) + '</td>';
+      html += '<td>' + cell(row.tacho) + '</td><td>' + cell(row.elektronik) + '</td><td>' + cell(row.material) + '</td><td>' + cell(row.position) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+    return html;
+  }
+
+  function parseFabrikationsnummernRows(job) {
+    var fab = job.fabrikationsnummern != null ? job.fabrikationsnummern : (job.Fabrikationsnummern != null ? job.Fabrikationsnummern : (job.fabrikation != null ? job.fabrikation : (job.job_fabrikation != null ? job.job_fabrikation : null)));
+    var parsedList = null;
+    if (fab != null && (typeof fab === 'string' && (fab = fab.trim()) !== '')) {
+      try {
+        var parsed = JSON.parse(fab);
+        parsedList = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : null);
+      } catch (err) {
+        var parts = fab.split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
+        if (parts.length > 0) parsedList = parts.map(function (fn) { return { fabrikationsnummer: fn, type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '' }; });
+      }
+    } else if (fab != null && Array.isArray(fab)) {
+      parsedList = fab;
+    } else if (fab != null && typeof fab === 'object' && !Array.isArray(fab)) {
+      parsedList = [fab];
+    }
+    var get = function (r, keys) {
+      if (!r || typeof r !== 'object') return '';
+      for (var i = 0; i < keys.length; i++) {
+        var val = r[keys[i]];
+        if (val !== undefined && val !== null) { var s = String(val).trim(); if (s.toLowerCase() === 'null') return ''; return s; }
+        var lower = keys[i].toLowerCase();
+        for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k) && k.toLowerCase() === lower) {
+          var v2 = r[k]; if (v2 === undefined || v2 === null) continue;
+          var s2 = String(v2).trim(); if (s2.toLowerCase() === 'null') return ''; return s2;
+        }
+      }
+      return '';
+    };
+    var rows = [];
+    if (parsedList && parsedList.length > 0) {
+      parsedList.forEach(function (row) {
+        var r = row && typeof row === 'object' ? row : {};
+        rows.push({
+          fabrikationsnummer: get(r, ['fabrikationsnummer', 'Fabrikationsnummer', 'fab', 'FabrikationsNr']),
+          type: get(r, ['type', 'Type', 'typ', 'Typ']),
+          leistung: get(r, ['leistung', 'Leistung']),
+          nenngeschwindigkeit: get(r, ['nenngeschwindigkeit', 'Nenngeschwindigkeit']),
+          kraftaufnehmer: get(r, ['kraftaufnehmer', 'Kraftaufnehmer']),
+          dms_nr: get(r, ['dms_nr', 'DMS Nr.', 'dms_nr']),
+          tacho: get(r, ['tacho', 'Tacho']),
+          elektronik: get(r, ['elektronik', 'Elektronik']),
+          material: get(r, ['material', 'Material']),
+          position: get(r, ['position', 'Position'])
+        });
+      });
+    }
+    if (rows.length === 0) rows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '' });
+    return rows;
+  }
+
+  function renderArchivFolderTree(jobId, containerEl) {
+    if (!containerEl) return;
+    var root = archivFolderRoot[jobId];
+    var expanded = archivFolderExpanded[jobId];
+    if (!expanded) archivFolderExpanded[jobId] = {};
+    expanded = archivFolderExpanded[jobId];
+    var rows = [];
+    function addEntries(entries, level) {
+      if (!entries) return;
+      entries.forEach(function (e) {
+        rows.push({ level: level, entry: e });
+        if (e.isDirectory && expanded[e.relativePath]) addEntries(expanded[e.relativePath], level + 1);
+      });
+    }
+    addEntries(root || [], 0);
+    if (rows.length === 0) {
+      containerEl.innerHTML = '<p class="empty">Keine Ordner/Dateien gespeichert.</p>';
+      return;
+    }
+    var html = '<div class="archiv-folder-tree">';
+    rows.forEach(function (r) {
+      var e = r.entry;
+      var levelClass = r.level > 0 ? ' level-' + Math.min(r.level, 6) : '';
+      var icon = e.isDirectory ? '📁' : '📄';
+      var sizeStr = e.isDirectory ? '' : formatFileSize(e.size);
+      var mtimeStr = formatFileDate(e.mtime);
+      var isOpen = e.isDirectory && expanded[e.relativePath];
+      var toggle = e.isDirectory ? ('<span class="archiv-folder-toggle" data-rel="' + escapeHtml(e.relativePath || '') + '">' + (isOpen ? '▼' : '▶') + '</span>') : '<span class="archiv-folder-toggle empty"></span>';
+      var openBtn = e.isDirectory ? '' : '<button type="button" class="btn btn-ghost archiv-folder-open" title="Datei öffnen">Öffnen</button>';
+      html += '<div class="archiv-folder-row' + levelClass + '" data-is-dir="' + (e.isDirectory ? '1' : '0') + '" data-relative-path="' + escapeHtml(e.relativePath || '') + '" data-full-path="' + escapeHtml(e.fullPath || '') + '">' +
+        '<div class="archiv-folder-name">' + toggle + '<span class="icon">' + icon + '</span> ' + escapeHtml(e.name) + '</div>' +
+        '<div class="archiv-folder-meta">' + escapeHtml(sizeStr) + ' ' + escapeHtml(mtimeStr) + '</div>' +
+        (openBtn ? '<div class="archiv-folder-actions">' + openBtn + '</div>' : '') + '</div>';
+    });
+    html += '</div>';
+    containerEl.innerHTML = html;
+    containerEl.querySelectorAll('.archiv-folder-row[data-is-dir="0"]').forEach(function (row) {
+      var fullPath = row.getAttribute('data-full-path');
+      if (!fullPath) return;
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', function (ev) {
+        if (ev.target.closest('.archiv-folder-actions')) return;
+        if (typeof monteurApp !== 'undefined' && monteurApp.openPath) monteurApp.openPath(fullPath);
+      });
+      var openBtn = row.querySelector('.archiv-folder-open');
+      if (openBtn) openBtn.addEventListener('click', function (ev) { ev.stopPropagation(); if (typeof monteurApp !== 'undefined' && monteurApp.openPath) monteurApp.openPath(fullPath); });
+    });
+    containerEl.querySelectorAll('.archiv-folder-row[data-is-dir="1"]').forEach(function (row) {
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', function (ev) {
+        var rel = row.getAttribute('data-relative-path');
+        if (!rel) return;
+        if (expanded[rel]) {
+          delete expanded[rel];
+          renderArchivFolderTree(jobId, containerEl);
+          return;
+        }
+        fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId) + '&subpath=' + encodeURIComponent(rel)).then(function (r) { return r.json(); }).then(function (data) {
+          if (data.ok && data.entries) expanded[rel] = data.entries;
+          renderArchivFolderTree(jobId, containerEl);
+        });
+      });
+    });
+  }
+
+  function loadArchivJobExpandContent(jobId, expandEl) {
+    expandEl.innerHTML = '<p class="empty">Wird geladen…</p>';
+    var headers = {};
+    var techId = getTechId();
+    if (techId) headers['X-Technician-Id'] = String(techId);
+    Promise.all([
+      fetch(API_BASE + '/api/job?id=' + encodeURIComponent(jobId), { headers: headers }).then(function (r) { return r.json(); }),
+      fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId)).then(function (r) { return r.json(); })
+    ]).then(function (results) {
+      var jobRes = results[0];
+      var filesRes = results[1];
+      var job = (jobRes && jobRes.ok && jobRes.job) ? jobRes.job : null;
+      if (!job) {
+        expandEl.innerHTML = '<p class="empty">Auftragsdetails konnten nicht geladen werden.</p>';
+        return;
+      }
+      archivJobDetailsCache[jobId] = job;
+      var rootEntries = (filesRes && filesRes.ok && filesRes.entries) ? filesRes.entries : [];
+      archivFolderRoot[jobId] = rootEntries;
+      if (!archivFolderExpanded[jobId]) archivFolderExpanded[jobId] = {};
+      var detailHtml = buildArchivJobDetailHtml(job);
+      expandEl.innerHTML = detailHtml + '<div class="archiv-detail-section"><h4>Gespeicherte Ordner &amp; Dateien</h4><div class="archiv-folder-container" data-job-id="' + jobId + '"></div></div>';
+      var container = expandEl.querySelector('.archiv-folder-container');
+      if (container) renderArchivFolderTree(jobId, container);
+    }).catch(function (e) {
+      expandEl.innerHTML = '<p class="empty">Fehler: ' + escapeHtml(e.message || String(e)) + '</p>';
+    });
   }
 
   async function loadArchiv() {
@@ -1150,7 +1432,6 @@
         if (data.error) throw new Error(data.error);
         calendarApiData = data;
         jobs = data.jobs || [];
-        absences = data.absences || [];
         var techList = (data.technicians && data.technicians.length) ? data.technicians : [];
         var techById = {};
         techList.forEach(function (t) {
@@ -1162,36 +1443,56 @@
             color: dispColor || '#4a90e2'
           };
         });
-        jobs = jobs.map(function (j) {
-          var tid = j.technician_id != null ? j.technician_id : j.technicianId;
-          var info = techById[tid];
-          return Object.assign({}, j, {
-            technician_name: info ? info.name : ('Techniker ' + tid),
-            technician_color: info ? info.color : '#4a90e2'
-          });
-        });
-        absences = absences.map(function (a) {
+        // Abwesenheiten mit Technikerfarbe/Name anreichern (API liefert ggf. keine Farbe)
+        absences = (data.absences || []).map(function (a) {
           var tid = a.technician_id != null ? a.technician_id : a.technicianId;
-          var info = techById[tid];
+          var info = tid != null ? techById[tid] : null;
           return Object.assign({}, a, {
-            technician_name: info ? info.name : ('Techniker ' + tid),
-            technician_color: info ? info.color : '#6c757d'
+            technician_id: tid,
+            technician_name: info ? info.name : (a.technician_name || (tid ? 'Techniker ' + tid : 'Unbekannt')),
+            technician_color: info ? info.color : (a.technician_color || '#6c757d')
           });
         });
         var myTechId = getTechId();
+        var localJobsByServerId = {};
+        var localJobsById = {};
         if (myTechId) {
           try {
-            var params = { technician_id: myTechId, date_from: start, date_to: end };
+            var params = { technician_id: myTechId, date_from: start, date_to: end, include_erledigt: 1 };
             var local = await Promise.all([
               fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(myTechId) } }).then(function (r) { return r.json(); }),
               fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(myTechId) } }).then(function (r) { return r.json(); })
             ]);
+            (local[0].jobs || []).forEach(function (j) {
+              if (j.server_id != null) { localJobsByServerId[j.server_id] = j; localJobsByServerId[String(j.server_id)] = j; }
+              if (j.id != null) { localJobsById[j.id] = j; localJobsById[String(j.id)] = j; }
+            });
+            var myTechInfo = { name: techById[myTechId] ? techById[myTechId].name : ('Techniker ' + myTechId), color: techById[myTechId] ? techById[myTechId].color : '#4a90e2' };
+            jobs = jobs.map(function (j) {
+              var tid = j.technician_id != null ? j.technician_id : j.technicianId;
+              var info = techById[tid];
+              var techDisplay = { technician_name: info ? info.name : ('Techniker ' + tid), technician_color: info ? info.color : '#4a90e2' };
+              var sid = j.server_id != null ? j.server_id : j.id;
+              var localJob = localJobsByServerId[j.server_id] || localJobsByServerId[j.id] || localJobsByServerId[String(j.server_id)] || localJobsByServerId[String(j.id)] || localJobsById[j.id] || localJobsById[String(j.id)];
+              if (localJob) {
+                return Object.assign({}, localJob, { technician_id: myTechId, technician_name: myTechInfo.name, technician_color: myTechInfo.color });
+              }
+              return Object.assign({}, j, techDisplay);
+            });
             var serverJobIds = {};
             jobs.forEach(function (j) { serverJobIds[j.id] = true; if (j.server_id != null) serverJobIds[j.server_id] = true; });
             (local[0].jobs || []).forEach(function (j) {
               if (!serverJobIds[j.id] && !serverJobIds[j.server_id]) {
-                jobs.push(Object.assign({}, j, { technician_id: myTechId, technician_name: techById[myTechId] ? techById[myTechId].name : ('Techniker ' + myTechId), technician_color: techById[myTechId] ? techById[myTechId].color : '#4a90e2' }));
+                jobs.push(Object.assign({}, j, { technician_id: myTechId, technician_name: myTechInfo.name, technician_color: myTechInfo.color }));
               }
+            });
+            var seenJobKey = {};
+            jobs = jobs.filter(function (j) {
+              var key = j.server_id != null ? String(j.server_id) : (j.id != null ? String(j.id) : null);
+              if (key == null) return true;
+              if (seenJobKey[key]) return false;
+              seenJobKey[key] = true;
+              return true;
             });
             var serverAbsIds = {};
             absences.forEach(function (a) { serverAbsIds[a.id] = true; serverAbsIds[a.server_id] = true; });
@@ -1214,7 +1515,7 @@
         return;
       }
       try {
-        const params = { technician_id: techId, date_from: start, date_to: end };
+        const params = { technician_id: techId, date_from: start, date_to: end, include_erledigt: 1 };
         const [jRes, aRes, techRes] = await Promise.all([
           fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then(r => r.json()),
           fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then(r => r.json()),
@@ -1239,6 +1540,7 @@
   function endYmd(item) { return (item.end_datetime || '').toString().slice(0, 10); }
   function isMultiDay(item) { const s = startYmd(item), e = endYmd(item); return s && e && s !== e; }
 
+  // Mehrtägige Balken: nur an der Wochengrenze (So/Mo) teilen, sonst durchgängig pro Woche.
   function getWeekSpan(item, weekStartYmd, weekEndYmd) {
     const s = startYmd(item), e = endYmd(item);
     if (!s || !e || e < weekStartYmd || s > weekEndYmd) return null;
@@ -1252,10 +1554,11 @@
     return { startCol, span: endCol - startCol + 1 };
   }
 
+  // Kein Balken überdeckt einen anderen; erstes freies Lane (oberste), Reihenfolge: startCol, dann Span.
   function assignLanes(spans) {
     const lanes = [];
-    // Längere Balken zuerst (bleiben oben), kürzere darunter
-    spans.sort((a, b) => (b.span - a.span) || (a.startCol - b.startCol));
+    // startCol aufsteigend, dann Span aufsteigend – damit z. B. 16. und 17.–20. (wenn nicht überlappend) gleiche Lane teilen
+    spans.sort((a, b) => (a.startCol - b.startCol) || (a.span - b.span) || 0);
     for (const s of spans) {
       const end = s.startCol + s.span;
       let placed = false;
@@ -1468,6 +1771,11 @@
     if (land2) parts.push(land2);
     const full = parts.join(', ');
     const label = maxLen && full.length > maxLen ? full.substring(0, maxLen) : full;
+    const statusRaw = (job.status != null ? job.status : job.Status != null ? job.Status : job.job_status != null ? job.job_status : '').toString().trim().toLowerCase();
+    const isErledigt = statusRaw === 'erledigt' || statusRaw === 'completed' || statusRaw === 'done' || statusRaw === 'fertig';
+    const labelHtml = isErledigt
+      ? '<span class="cal-erledigt-check">✓</span> <span class="cal-bar-label">' + (label || 'Auftrag').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') + '</span> <span class="cal-erledigt-check">✓</span>'
+      : null;
 
     let title = full || firma || 'Auftrag';
     const dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
@@ -1478,7 +1786,7 @@
     } catch (_) { }
     if (tzLabel) title += '\n' + tzLabel;
 
-    return { label: label || 'Auftrag', title };
+    return { label: label || 'Auftrag', title, labelHtml };
   }
 
   function setCalendarError(text) {
@@ -1500,6 +1808,7 @@
     const todayYmd = toYmd(new Date());
 
     var allSpanBars = [];
+    var maxLanesByWeek = [];
 
     let html = '<div class="cal-grid">';
     html += '<div class="cal-head">KW</div>';
@@ -1525,10 +1834,11 @@
         if (sp) spanItems.push({ ...sp, item: a, type: 'absence' });
       });
       assignLanes(spanItems);
+      const numLanes = spanItems.length ? Math.max(...spanItems.map(s => s.lane)) + 1 : 0;
+      maxLanesByWeek[w] = numLanes;
       spanItems.forEach(function (s) {
         allSpanBars.push({ weekIndex: w, startCol: s.startCol, span: s.span, lane: s.lane, item: s.item, type: s.type });
       });
-      const numLanes = spanItems.length ? Math.max(...spanItems.map(s => s.lane)) + 1 : 0;
       const spanLaneHeight = numLanes * 22;
 
       html += '<div class="cal-head">' + kw + '</div>';
@@ -1547,11 +1857,15 @@
         dayJobs.forEach(j => {
           const bar = jobBarText(j, 14);
           const color = j.technician_color || '#4a90e2';
-          html += '<div class="cal-bar job" style="background:' + color + '" title="' + escapeHtml(bar.title) + '">' + escapeHtml(bar.label) + '</div>';
+          const barContent = bar.labelHtml || escapeHtml(bar.label);
+          html += '<div class="cal-bar job" style="background:' + color + '" title="' + escapeHtml(bar.title) + '">' + barContent + '</div>';
         });
         dayAbs.forEach(a => {
-          const label = (a.type || 'Abwesenheit').substring(0, 12);
-          html += '<div class="cal-bar absence" style="--stripes:' + (a.technician_color || '#999') + '" title="' + escapeHtml(a.type || '') + '">' + escapeHtml(label) + '</div>';
+          const typeStr = a.type || 'Abwesenheit';
+          const namePart = a.technician_name ? (a.technician_name.split(' ').pop() || a.technician_name).substring(0, 8) : '';
+          const label = (namePart ? typeStr.substring(0, 8) + ' (' + namePart + ')' : typeStr.substring(0, 12));
+          const title = typeStr + (a.technician_name ? ' – ' + a.technician_name : '');
+          html += '<div class="cal-bar absence" style="--stripes:' + (a.technician_color || '#999') + '" title="' + escapeHtml(title) + '">' + escapeHtml(label) + '</div>';
         });
         html += '</div>';
         html += '<div class="cal-cell-span-lane" style="min-height:' + spanLaneHeight + 'px"></div>';
@@ -1567,35 +1881,68 @@
     var gridEl = wrapper.querySelector('.cal-grid');
     calGrid.innerHTML = '';
     calGrid.appendChild(wrapper);
-    var barLayer = document.createElement('div');
-    barLayer.className = 'cal-bar-layer';
-    wrapper.appendChild(barLayer);
-    var lr = barLayer.getBoundingClientRect();
-    allSpanBars.forEach(function (b) {
-      var firstCell = gridEl.children[8 + b.weekIndex * 8 + 1 + b.startCol];
-      var lastCell = gridEl.children[8 + b.weekIndex * 8 + 1 + (b.startCol + b.span - 1)];
-      if (!firstCell || !lastCell) return;
-      var firstLane = firstCell.querySelector('.cal-cell-span-lane');
-      var lastLane = lastCell.querySelector('.cal-cell-span-lane');
-      if (!firstLane || !lastLane) return;
-      var r1 = firstLane.getBoundingClientRect();
-      var r2 = lastLane.getBoundingClientRect();
-      var left = r1.left - lr.left;
-      var top = r1.top - lr.top + b.lane * 22;
-      var width = r2.right - r1.left;
-      var bar = b.type === 'job' ? jobBarText(b.item, 40) : { label: (b.item.type || 'Abwesenheit').substring(0, 20), title: (b.item.type || '') };
-      var color = b.item.technician_color || (b.type === 'job' ? '#4a90e2' : '#999');
-      var cls = b.type === 'job' ? 'cal-bar job cal-bar-span cal-bar-span-full' : 'cal-bar absence cal-bar-span cal-bar-span-full';
-      var style = b.type === 'job'
-        ? 'background:' + color + '; left:' + left + 'px; top:' + top + 'px; width:' + width + 'px;'
-        : '--stripes:' + color + '; left:' + left + 'px; top:' + top + 'px; width:' + width + 'px;';
+    // Mehrtägige Balken: immer als Overlay mit Messung (Subgrid setzt Zeilenhöhen in Electron oft falsch → Balken landen im Kopf)
+    var overlay = document.createElement('div');
+    overlay.className = 'cal-bar-layer';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.style.position = 'absolute';
+    overlay.style.left = '0';
+    overlay.style.top = '0';
+    overlay.style.right = '0';
+    overlay.style.bottom = '0';
+    overlay.style.pointerEvents = 'none';
+    wrapper.appendChild(overlay);
+    function createBarDiv(b, bar, color, cls, lane) {
       var div = document.createElement('div');
       div.className = cls;
-      div.setAttribute('style', style);
       div.setAttribute('title', bar.title || '');
-      div.textContent = bar.label || '';
+      div.style.height = '20px';
+      div.style.minWidth = '0';
+      if (b.type === 'job') div.style.background = color; else div.style.setProperty('--stripes', color);
+      div.style.zIndex = String(100 - lane);
       div.style.pointerEvents = 'auto';
-      barLayer.appendChild(div);
+      div.style.position = 'absolute';
+      if (bar.labelHtml) div.innerHTML = bar.labelHtml; else div.textContent = bar.label || '';
+      return div;
+    }
+    function positionSpanBarsOnce() {
+      var lr = overlay.getBoundingClientRect();
+      if (lr.width <= 0 || lr.height <= 0) return false;
+      var firstCell = gridEl.children[8 + 1];
+      if (!firstCell) return false;
+      var firstLane = firstCell.querySelector('.cal-cell-span-lane');
+      if (!firstLane || firstLane.getBoundingClientRect().width <= 0) return false;
+      allSpanBars.forEach(function (b) {
+        var firstCell = gridEl.children[8 + b.weekIndex * 8 + 1 + b.startCol];
+        var lastCell = gridEl.children[8 + b.weekIndex * 8 + 1 + (b.startCol + b.span - 1)];
+        if (!firstCell || !lastCell) return;
+        var firstLane = firstCell.querySelector('.cal-cell-span-lane');
+        var lastLane = lastCell.querySelector('.cal-cell-span-lane');
+        if (!firstLane || !lastLane) return;
+        var r1 = firstLane.getBoundingClientRect();
+        var r2 = lastLane.getBoundingClientRect();
+        var lane = b.lane || 0;
+        var weekMondayCell = gridEl.children[8 + b.weekIndex * 8 + 1 + 0];
+        var weekMondayLane = weekMondayCell ? weekMondayCell.querySelector('.cal-cell-span-lane') : null;
+        var topY = weekMondayLane ? weekMondayLane.getBoundingClientRect().top : r1.top;
+        var bar = b.type === 'job' ? jobBarText(b.item, 40) : { label: (b.item.type || 'Abwesenheit').substring(0, 14) + (b.item.technician_name ? ' – ' + (b.item.technician_name.substring(0, 12)) : ''), title: (b.item.type || 'Abwesenheit') + (b.item.technician_name ? ' – ' + b.item.technician_name : '') };
+        var color = b.item.technician_color || (b.type === 'job' ? '#4a90e2' : '#999');
+        var cls = b.type === 'job' ? 'cal-bar job cal-bar-span cal-bar-span-full' : 'cal-bar absence cal-bar-span cal-bar-span-full';
+        var div = createBarDiv(b, bar, color, cls, lane);
+        div.style.left = (r1.left - lr.left) + 'px';
+        div.style.top = (topY - lr.top + lane * 22) + 'px';
+        div.style.width = (r2.right - r1.left) + 'px';
+        overlay.appendChild(div);
+      });
+      return true;
+    }
+    function tryPositionSpanBars(retries) {
+      if (positionSpanBarsOnce()) return;
+      if (retries <= 0) return;
+      requestAnimationFrame(function () { tryPositionSpanBars(retries - 1); });
+    }
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { tryPositionSpanBars(15); });
     });
 
     // Legende: Farbe = Techniker (ID immer normalisiert, damit 3 und "3" nicht doppelt vorkommen)

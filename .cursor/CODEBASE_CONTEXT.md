@@ -42,6 +42,7 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 - **fsm:** Dispo-Datenbank (MySQL). Tabellen u. a.: jobs, job_technicians, job_addresses, customers, users, absences.
 - **getCalendarData(start, end):** Liefert `{ jobs, absences, technicians }`. Jobs pro Techniker-Zeile; Felder u. a. id, job_number, start_datetime, end_datetime, customer_name, city, country, technician_id. Erweiterungen wie `offset_to_at`, `country_code`, `technician_name` werden ggf. in der **Dispo** (htdocs) ergänzt.
 - **Kalender-Tooltips (Dispo):** Einheitliches Format in Woche und Monat: „Firmenname – Ort CC – Technikername“, optional „| +1“/„-2“ (Zeitverschiebung zu AT). Keine Auftragsnummer im Tooltip.
+- **Kalender-Balken-Formatierung:** Verbindliche Vorgaben (Inhalt, erledigt = grünes Häkchen vor/nach Text, Layout, CSS) stehen in **`.cursor/rules/kalender-balken-formatierung.mdc`**. Bei Änderungen an Balken-Darstellung diese Regel beachten bzw. anpassen.
 
 ---
 
