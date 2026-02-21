@@ -1158,6 +1158,35 @@ function createApp(db) {
     res.json({ ok: true, technician_id: technicianId, absences: rows });
   });
 
+  app.post('/api/job_file', express.json(), (req, res) => {
+    try {
+      const body = req.body || {};
+      const jobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const fileId = parseInt(body.file_id != null ? body.file_id : body.server_id != null ? body.server_id : body.id, 10);
+      const keepLocal = body.keep_local != null ? (body.keep_local ? 1 : 0) : null;
+      if (!jobId || !fileId) {
+        return res.status(400).json({ ok: false, error: 'job_id und file_id erforderlich.' });
+      }
+      if (keepLocal === null) {
+        return res.status(400).json({ ok: false, error: 'keep_local (0 oder 1) erforderlich.' });
+      }
+      try {
+        const r = db.prepare('UPDATE job_files SET keep_local = ? WHERE job_id = ? AND (id = ? OR server_id = ?)').run(keepLocal, jobId, fileId, fileId);
+        if (r.changes === 0) {
+          db.prepare('INSERT OR IGNORE INTO job_files (id, job_id, server_id, keep_local) VALUES (?, ?, ?, ?)').run(fileId, jobId, fileId, keepLocal);
+        }
+        res.json({ ok: true, keep_local: keepLocal });
+      } catch (e) {
+        if (e.message && (e.message.includes('no such table') || e.message.includes('job_files'))) {
+          return res.status(501).json({ ok: false, error: 'Tabelle job_files nicht vorhanden.' });
+        }
+        throw e;
+      }
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Aktualisierung fehlgeschlagen.' });
+    }
+  });
+
   app.get('/api/my_absence_requests', (req, res) => {
     const technicianId = getTechnicianId(req);
     if (!technicianId) {
@@ -1675,6 +1704,32 @@ function insertOrUpdateAbsence(db, a, technicianId) {
   db.prepare('INSERT INTO absences (server_id, technician_id, start_datetime, end_datetime, type, synced_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\'))').run(serverId, technicianId, start, end, type);
 }
 
+/**
+ * Löscht für einen erledigten Auftrag alle lokalen Job-Dateien, die nicht als „Nicht löschen“ markiert sind:
+ * Einträge in job_files mit keep_local = 0 und ggf. zugehörige Dateien (stored_path).
+ */
+function cleanup_completed_job_files(db, jobId) {
+  try {
+    const rows = db.prepare('SELECT id, stored_path FROM job_files WHERE job_id = ? AND keep_local = 0').all(jobId);
+    for (const r of rows) {
+      if (r.stored_path && typeof r.stored_path === 'string' && r.stored_path.trim() !== '') {
+        try {
+          if (fs.existsSync(r.stored_path) && fs.statSync(r.stored_path).isFile()) {
+            fs.unlinkSync(r.stored_path);
+          }
+        } catch (e) {
+          // Einzelne Datei-Löschfehler ignorieren
+        }
+      }
+    }
+    db.prepare('DELETE FROM job_files WHERE job_id = ? AND keep_local = 0').run(jobId);
+  } catch (e) {
+    if (!e.message || (!e.message.includes('no such table') && !e.message.includes('job_files'))) {
+      console.error('cleanup_completed_job_files:', e.message);
+    }
+  }
+}
+
 async function pushToServer(baseUrl, technicianId, db, authHeader) {
   const base = baseUrl.replace(/\/$/, '');
   const pending = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
@@ -1690,6 +1745,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
         if (p.action === 'status' && payload.status === 'erledigt') {
           const localJobId = p.entity_id;
+          cleanup_completed_job_files(db, localJobId);
           db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(localJobId, technicianId);
           const rest = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ?').get(localJobId);
           if (!rest) {
@@ -1751,6 +1807,15 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         if (req.id != null && req.status && req.status !== 'pending') {
           db.prepare('UPDATE absence_requests SET status = ?, synced_at = datetime(\'now\') WHERE server_id = ? AND technician_id = ?').run(req.status, req.id, technicianId);
         }
+      }
+    }
+  } catch (e) {}
+  try {
+    const erledigtJobs = db.prepare('SELECT id FROM jobs WHERE status = ?').all('erledigt');
+    for (const j of erledigtJobs) {
+      const hasPending = db.prepare('SELECT 1 FROM pending_changes WHERE entity_type = ? AND entity_id = ?').get('job', j.id);
+      if (!hasPending) {
+        cleanup_completed_job_files(db, j.id);
       }
     }
   } catch (e) {}

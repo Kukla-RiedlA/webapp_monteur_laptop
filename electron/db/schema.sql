@@ -111,6 +111,18 @@ CREATE TABLE IF NOT EXISTS dienstreisen (
 );
 CREATE INDEX IF NOT EXISTS idx_dienstreisen_year ON dienstreisen(year);
 
+CREATE TABLE IF NOT EXISTS job_files (
+  id INTEGER PRIMARY KEY,
+  job_id INTEGER NOT NULL,
+  server_id INTEGER,
+  original_name TEXT,
+  stored_name TEXT,
+  stored_path TEXT,
+  keep_local INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_job_files_job ON job_files(job_id);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_start ON jobs(start_datetime);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_job_technicians_tech ON job_technicians(technician_id);

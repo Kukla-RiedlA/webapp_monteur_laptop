@@ -1554,11 +1554,15 @@
     return { startCol, span: endCol - startCol + 1 };
   }
 
-  // Kein Balken überdeckt einen anderen; erstes freies Lane (oberste), Reihenfolge: startCol, dann Span.
+  // Kein Balken überdeckt einen anderen; erstes freies Lane (oberste). Abwesenheiten zuerst, damit sie über Aufträgen liegen (z-index).
   function assignLanes(spans) {
     const lanes = [];
-    // startCol aufsteigend, dann Span aufsteigend – damit z. B. 16. und 17.–20. (wenn nicht überlappend) gleiche Lane teilen
-    spans.sort((a, b) => (a.startCol - b.startCol) || (a.span - b.span) || 0);
+    // Abwesenheit vor Job (type absence = 0), dann startCol, dann Span – damit Abwesenheiten Lane 0 bekommen und sichtbar über Aufträgen liegen
+    spans.sort((a, b) => {
+      const typeOrder = (a.type === 'absence' ? 0 : 1) - (b.type === 'absence' ? 0 : 1);
+      if (typeOrder !== 0) return typeOrder;
+      return (a.startCol - b.startCol) || (a.span - b.span) || 0;
+    });
     for (const s of spans) {
       const end = s.startCol + s.span;
       let placed = false;
@@ -1839,7 +1843,7 @@
       spanItems.forEach(function (s) {
         allSpanBars.push({ weekIndex: w, startCol: s.startCol, span: s.span, lane: s.lane, item: s.item, type: s.type });
       });
-      const spanLaneHeight = numLanes * 22;
+      const spanLaneHeight = Math.max(numLanes * 22, 22);
 
       html += '<div class="cal-head">' + kw + '</div>';
       for (let d = 0; d < 7; d++) {
@@ -1897,9 +1901,11 @@
       div.className = cls;
       div.setAttribute('title', bar.title || '');
       div.style.height = '20px';
+      div.style.lineHeight = '18px';
       div.style.minWidth = '0';
+      div.style.boxSizing = 'border-box';
       if (b.type === 'job') div.style.background = color; else div.style.setProperty('--stripes', color);
-      div.style.zIndex = String(100 - lane);
+      div.style.zIndex = b.type === 'absence' ? String(500 + (100 - lane)) : String(100 - lane);
       div.style.pointerEvents = 'auto';
       div.style.position = 'absolute';
       if (bar.labelHtml) div.innerHTML = bar.labelHtml; else div.textContent = bar.label || '';
@@ -1912,6 +1918,7 @@
       if (!firstCell) return false;
       var firstLane = firstCell.querySelector('.cal-cell-span-lane');
       if (!firstLane || firstLane.getBoundingClientRect().width <= 0) return false;
+      overlay.innerHTML = '';
       allSpanBars.forEach(function (b) {
         var firstCell = gridEl.children[8 + b.weekIndex * 8 + 1 + b.startCol];
         var lastCell = gridEl.children[8 + b.weekIndex * 8 + 1 + (b.startCol + b.span - 1)];
@@ -1924,7 +1931,8 @@
         var lane = b.lane || 0;
         var weekMondayCell = gridEl.children[8 + b.weekIndex * 8 + 1 + 0];
         var weekMondayLane = weekMondayCell ? weekMondayCell.querySelector('.cal-cell-span-lane') : null;
-        var topY = weekMondayLane ? weekMondayLane.getBoundingClientRect().top : r1.top;
+        var mondayRect = weekMondayLane ? weekMondayLane.getBoundingClientRect() : null;
+        var topY = (mondayRect && mondayRect.height >= 18) ? mondayRect.top : r1.top;
         var bar = b.type === 'job' ? jobBarText(b.item, 40) : { label: (b.item.type || 'Abwesenheit').substring(0, 14) + (b.item.technician_name ? ' – ' + (b.item.technician_name.substring(0, 12)) : ''), title: (b.item.type || 'Abwesenheit') + (b.item.technician_name ? ' – ' + b.item.technician_name : '') };
         var color = b.item.technician_color || (b.type === 'job' ? '#4a90e2' : '#999');
         var cls = b.type === 'job' ? 'cal-bar job cal-bar-span cal-bar-span-full' : 'cal-bar absence cal-bar-span cal-bar-span-full';
