@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.023
+- **Kalender:** Gleiche Grundstruktur wie Referenz (Dispo Monat): pro Woche Grid + Bands-Overlay, alle Balken (eintägig und mehrtägig) im Overlay mit grid-column/grid-row; Abwesenheiten zuletzt gerendert (immer sichtbar). CSS: cal-week-row, cal-week-bands, month2-band.
+
 ## V 1.022
 - **Kalender:** Abwesenheitsbalken (mehrtägig) mit höherem z-index als Aufträge, damit Abwesenheiten nicht von Aufträgen überdeckt werden; Mindesthöhe der Lane-Referenz; vertikale Referenz nur bei gültiger Lane-Höhe; Overlay vor Positionierung geleert; Text-Zentrierung (line-height) für Span-Balken.
 

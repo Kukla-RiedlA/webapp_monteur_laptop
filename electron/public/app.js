@@ -1554,14 +1554,12 @@
     return { startCol, span: endCol - startCol + 1 };
   }
 
-  // Kein Balken überdeckt einen anderen; erstes freies Lane (oberste). Abwesenheiten zuerst, damit sie über Aufträgen liegen (z-index).
+  // Referenz: startCol, dann Span absteigend. Kein Balken überdeckt anderen; erstes freies Lane. Abwesenheit über Auftrag durch zwei Ebenen (Jobs zuerst, dann Abwesenheiten ins Overlay).
   function assignLanes(spans) {
     const lanes = [];
-    // Abwesenheit vor Job (type absence = 0), dann startCol, dann Span – damit Abwesenheiten Lane 0 bekommen und sichtbar über Aufträgen liegen
     spans.sort((a, b) => {
-      const typeOrder = (a.type === 'absence' ? 0 : 1) - (b.type === 'absence' ? 0 : 1);
-      if (typeOrder !== 0) return typeOrder;
-      return (a.startCol - b.startCol) || (a.span - b.span) || 0;
+      if (a.startCol !== b.startCol) return a.startCol - b.startCol;
+      return (b.span - a.span) || 0;
     });
     for (const s of spans) {
       const end = s.startCol + s.span;
@@ -1810,14 +1808,26 @@
     const weekDays = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
     const currentMonth = calCurrentMonth.getMonth();
     const todayYmd = toYmd(new Date());
+    const gridCols = '40px repeat(7, minmax(0, 1fr))';
+    const laneHeight = 25;
+    const overlayTop = 22;
+    const overlayBottom = 4;
 
-    var allSpanBars = [];
-    var maxLanesByWeek = [];
+    const calGrid = document.getElementById('calGrid');
+    if (!calGrid) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'cal-grid-wrapper';
 
-    let html = '<div class="cal-grid">';
-    html += '<div class="cal-head">KW</div>';
-    weekDays.forEach(d => { html += '<div class="cal-head">' + d + '</div>'; });
+    // Header-Zeile wie bisher (KW + Mo–So)
+    const headerRow = document.createElement('div');
+    headerRow.className = 'cal-grid cal-month-header';
+    headerRow.style.display = 'grid';
+    headerRow.style.gridTemplateColumns = gridCols;
+    headerRow.style.gap = '0';
+    headerRow.innerHTML = '<div class="cal-head">KW</div>' + weekDays.map(function (d) { return '<div class="cal-head">' + d + '</div>'; }).join('');
+    wrapper.appendChild(headerRow);
 
+    // Pro Woche: gleiche Grundstruktur wie Monatskalender (Grid + Bands-Overlay), alle Balken im Overlay mit grid-column/grid-row
     for (let w = 0; w < 6; w++) {
       const weekStart = new Date(gridStart);
       weekStart.setDate(weekStart.getDate() + w * 7);
@@ -1828,24 +1838,47 @@
       const weekEndYmd = toYmd(weekEnd);
       const kw = getWeekNum(weekStart);
 
-      const spanItems = [];
-      jobs.filter(isMultiDay).forEach(j => {
-        const sp = getWeekSpan(j, weekStartYmd, weekEndYmd);
-        if (sp) spanItems.push({ ...sp, item: j, type: 'job' });
+      const segments = [];
+      jobs.forEach(function (j) {
+        if (isMultiDay(j)) {
+          const sp = getWeekSpan(j, weekStartYmd, weekEndYmd);
+          if (sp) segments.push({ startCol: sp.startCol, span: sp.span, item: j, type: 'job' });
+        } else {
+          const ymd = startYmd(j);
+          if (ymd >= weekStartYmd && ymd <= weekEndYmd) {
+            const d = new Date(ymd + 'T12:00:00');
+            const startCol = Math.round((d - weekStart) / 86400000);
+            segments.push({ startCol: startCol, span: 1, item: j, type: 'job' });
+          }
+        }
       });
-      absences.filter(isMultiDay).forEach(a => {
-        const sp = getWeekSpan(a, weekStartYmd, weekEndYmd);
-        if (sp) spanItems.push({ ...sp, item: a, type: 'absence' });
+      absences.forEach(function (a) {
+        if (isMultiDay(a)) {
+          const sp = getWeekSpan(a, weekStartYmd, weekEndYmd);
+          if (sp) segments.push({ startCol: sp.startCol, span: sp.span, item: a, type: 'absence' });
+        } else {
+          const ymd = startYmd(a);
+          if (ymd >= weekStartYmd && ymd <= weekEndYmd) {
+            const d = new Date(ymd + 'T12:00:00');
+            const startCol = Math.round((d - weekStart) / 86400000);
+            segments.push({ startCol: startCol, span: 1, item: a, type: 'absence' });
+          }
+        }
       });
-      assignLanes(spanItems);
-      const numLanes = spanItems.length ? Math.max(...spanItems.map(s => s.lane)) + 1 : 0;
-      maxLanesByWeek[w] = numLanes;
-      spanItems.forEach(function (s) {
-        allSpanBars.push({ weekIndex: w, startCol: s.startCol, span: s.span, lane: s.lane, item: s.item, type: s.type });
-      });
-      const spanLaneHeight = Math.max(numLanes * 22, 22);
 
-      html += '<div class="cal-head">' + kw + '</div>';
+      assignLanes(segments);
+      const numLanes = segments.length ? Math.max.apply(null, segments.map(function (s) { return s.lane; })) + 1 : 0;
+      const neededHeight = Math.max(56, overlayTop + numLanes * laneHeight + overlayBottom);
+
+      const weekRow = document.createElement('div');
+      weekRow.className = 'cal-week-row';
+
+      const weekGrid = document.createElement('div');
+      weekGrid.className = 'cal-week-grid';
+      weekGrid.style.display = 'grid';
+      weekGrid.style.gridTemplateColumns = gridCols;
+      weekGrid.style.gap = '0';
+      let cellsHtml = '<div class="cal-head">' + kw + '</div>';
       for (let d = 0; d < 7; d++) {
         const cellDate = new Date(weekStart);
         cellDate.setDate(cellDate.getDate() + d);
@@ -1853,105 +1886,47 @@
         const ymd = toYmd(cellDate);
         const otherMonth = cellDate.getMonth() !== currentMonth;
         const isToday = ymd === todayYmd;
-        html += '<div class="cal-cell' + (otherMonth ? ' other-month' : '') + (isToday ? ' today' : '') + '">';
-        html += '<div class="cal-daynum">' + cellDate.getDate() + '</div>';
-        html += '<div class="cal-cell-bars">';
-        const dayJobs = jobs.filter(j => ymd >= startYmd(j) && ymd <= endYmd(j) && !isMultiDay(j));
-        const dayAbs = absences.filter(a => ymd >= startYmd(a) && ymd <= endYmd(a) && !isMultiDay(a));
-        dayJobs.forEach(j => {
-          const bar = jobBarText(j, 14);
-          const color = j.technician_color || '#4a90e2';
-          const barContent = bar.labelHtml || escapeHtml(bar.label);
-          html += '<div class="cal-bar job" style="background:' + color + '" title="' + escapeHtml(bar.title) + '">' + barContent + '</div>';
-        });
-        dayAbs.forEach(a => {
-          const typeStr = a.type || 'Abwesenheit';
-          const namePart = a.technician_name ? (a.technician_name.split(' ').pop() || a.technician_name).substring(0, 8) : '';
-          const label = (namePart ? typeStr.substring(0, 8) + ' (' + namePart + ')' : typeStr.substring(0, 12));
-          const title = typeStr + (a.technician_name ? ' – ' + a.technician_name : '');
-          html += '<div class="cal-bar absence" style="--stripes:' + (a.technician_color || '#999') + '" title="' + escapeHtml(title) + '">' + escapeHtml(label) + '</div>';
-        });
-        html += '</div>';
-        html += '<div class="cal-cell-span-lane" style="min-height:' + spanLaneHeight + 'px"></div>';
-        html += '</div>';
+        cellsHtml += '<div class="cal-cell' + (otherMonth ? ' other-month' : '') + (isToday ? ' today' : '') + '" style="min-height:' + neededHeight + 'px"><div class="cal-daynum">' + cellDate.getDate() + '</div></div>';
       }
+      weekGrid.innerHTML = cellsHtml;
+      weekRow.appendChild(weekGrid);
+
+      const bands = document.createElement('div');
+      bands.className = 'cal-week-bands';
+      bands.style.gridTemplateColumns = gridCols;
+      bands.style.gridAutoRows = laneHeight + 'px';
+
+      var segsOrdered = segments.filter(function (s) { return s.type === 'job'; }).concat(segments.filter(function (s) { return s.type === 'absence'; }));
+      segsOrdered.forEach(function (seg) {
+        const band = document.createElement('div');
+        const o = seg.item;
+        const colStart = 2 + seg.startCol;
+        const colEnd = 2 + seg.startCol + seg.span;
+        band.style.gridColumn = colStart + ' / ' + colEnd;
+        band.style.gridRow = (seg.lane + 1) + ' / ' + (seg.lane + 2);
+
+        if (seg.type === 'absence') {
+          band.className = 'month2-band month2-absence';
+          band.style.setProperty('--stripes', o.technician_color || '#999');
+          band.textContent = (o.type || 'Abwesenheit') + (o.technician_name ? ' – ' + (o.technician_name.substring(0, 20)) : '');
+          band.title = (o.type || 'Abwesenheit') + (o.technician_name ? ' – ' + o.technician_name : '');
+        } else {
+          const j = o;
+          band.className = 'month2-band month2-event';
+          band.style.background = j.technician_color || '#4a90e2';
+          const bar = jobBarText(j, 40);
+          band.title = bar.title || '';
+          if (bar.labelHtml) band.innerHTML = bar.labelHtml; else band.textContent = bar.label || 'Auftrag';
+        }
+        bands.appendChild(band);
+      });
+
+      weekRow.appendChild(bands);
+      wrapper.appendChild(weekRow);
     }
-    html += '</div>';
-    const calGrid = document.getElementById('calGrid');
-    if (!calGrid) return;
-    var wrapper = document.createElement('div');
-    wrapper.className = 'cal-grid-wrapper';
-    wrapper.innerHTML = html;
-    var gridEl = wrapper.querySelector('.cal-grid');
+
     calGrid.innerHTML = '';
     calGrid.appendChild(wrapper);
-    // Mehrtägige Balken: immer als Overlay mit Messung (Subgrid setzt Zeilenhöhen in Electron oft falsch → Balken landen im Kopf)
-    var overlay = document.createElement('div');
-    overlay.className = 'cal-bar-layer';
-    overlay.setAttribute('aria-hidden', 'true');
-    overlay.style.position = 'absolute';
-    overlay.style.left = '0';
-    overlay.style.top = '0';
-    overlay.style.right = '0';
-    overlay.style.bottom = '0';
-    overlay.style.pointerEvents = 'none';
-    wrapper.appendChild(overlay);
-    function createBarDiv(b, bar, color, cls, lane) {
-      var div = document.createElement('div');
-      div.className = cls;
-      div.setAttribute('title', bar.title || '');
-      div.style.height = '20px';
-      div.style.lineHeight = '18px';
-      div.style.minWidth = '0';
-      div.style.boxSizing = 'border-box';
-      if (b.type === 'job') div.style.background = color; else div.style.setProperty('--stripes', color);
-      div.style.zIndex = b.type === 'absence' ? String(500 + (100 - lane)) : String(100 - lane);
-      div.style.pointerEvents = 'auto';
-      div.style.position = 'absolute';
-      if (bar.labelHtml) div.innerHTML = bar.labelHtml; else div.textContent = bar.label || '';
-      return div;
-    }
-    function positionSpanBarsOnce() {
-      var lr = overlay.getBoundingClientRect();
-      if (lr.width <= 0 || lr.height <= 0) return false;
-      var firstCell = gridEl.children[8 + 1];
-      if (!firstCell) return false;
-      var firstLane = firstCell.querySelector('.cal-cell-span-lane');
-      if (!firstLane || firstLane.getBoundingClientRect().width <= 0) return false;
-      overlay.innerHTML = '';
-      allSpanBars.forEach(function (b) {
-        var firstCell = gridEl.children[8 + b.weekIndex * 8 + 1 + b.startCol];
-        var lastCell = gridEl.children[8 + b.weekIndex * 8 + 1 + (b.startCol + b.span - 1)];
-        if (!firstCell || !lastCell) return;
-        var firstLane = firstCell.querySelector('.cal-cell-span-lane');
-        var lastLane = lastCell.querySelector('.cal-cell-span-lane');
-        if (!firstLane || !lastLane) return;
-        var r1 = firstLane.getBoundingClientRect();
-        var r2 = lastLane.getBoundingClientRect();
-        var lane = b.lane || 0;
-        var weekMondayCell = gridEl.children[8 + b.weekIndex * 8 + 1 + 0];
-        var weekMondayLane = weekMondayCell ? weekMondayCell.querySelector('.cal-cell-span-lane') : null;
-        var mondayRect = weekMondayLane ? weekMondayLane.getBoundingClientRect() : null;
-        var topY = (mondayRect && mondayRect.height >= 18) ? mondayRect.top : r1.top;
-        var bar = b.type === 'job' ? jobBarText(b.item, 40) : { label: (b.item.type || 'Abwesenheit').substring(0, 14) + (b.item.technician_name ? ' – ' + (b.item.technician_name.substring(0, 12)) : ''), title: (b.item.type || 'Abwesenheit') + (b.item.technician_name ? ' – ' + b.item.technician_name : '') };
-        var color = b.item.technician_color || (b.type === 'job' ? '#4a90e2' : '#999');
-        var cls = b.type === 'job' ? 'cal-bar job cal-bar-span cal-bar-span-full' : 'cal-bar absence cal-bar-span cal-bar-span-full';
-        var div = createBarDiv(b, bar, color, cls, lane);
-        div.style.left = (r1.left - lr.left) + 'px';
-        div.style.top = (topY - lr.top + lane * 22) + 'px';
-        div.style.width = (r2.right - r1.left) + 'px';
-        overlay.appendChild(div);
-      });
-      return true;
-    }
-    function tryPositionSpanBars(retries) {
-      if (positionSpanBarsOnce()) return;
-      if (retries <= 0) return;
-      requestAnimationFrame(function () { tryPositionSpanBars(retries - 1); });
-    }
-    requestAnimationFrame(function () {
-      requestAnimationFrame(function () { tryPositionSpanBars(15); });
-    });
 
     // Legende: Farbe = Techniker (ID immer normalisiert, damit 3 und "3" nicht doppelt vorkommen)
     const techMap = new Map();
