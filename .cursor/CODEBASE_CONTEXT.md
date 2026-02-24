@@ -8,8 +8,8 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 
 - **Monteur WebApp (Offline/Desktop):** Electron-App mit lokalem Node-Server und SQLite (sql.js). Zeigt Monteuren ihre Aufträge und Abwesenheiten; kann mit dem **Dispo-Server** synchronisieren („Vom Dispo holen“ / „Änderungen senden“).
 - **PHP-APIs in diesem Repo:** Werden genutzt, wenn die Dispo (andere Anwendung) die Monteur-Daten bereitstellt – z. B. `api/calendar.php`, `api/my_jobs.php`, `api/job.php`, `api/absence.php` usw. Sie lesen/schreiben in der **Dispo-Datenbank (fsm)** über `DispoRepository` und `Db::fsm()`.
-- **Dispo (Kalender-UI):** Die **Dispo-Oberfläche** (Wochen-/Monatskalender, Kalender-Tooltips, Auftragsverwaltung) liegt **nicht** in diesem Repo, sondern im **übergeordneten Workspace** unter `htdocs/` (z. B. `c:\xampp_2\htdocs`). Dort: `htdocs/modules/calendar.php`, `htdocs/calendar_month.php`, `htdocs/calendar_month_lanes.php`, `htdocs/api/calendar.php` usw.  
-  **Regel für Bearbeitungen:** Nur im **htdocs dieses Workspaces** arbeiten (siehe `.cursor/rules/htdocs-workspace.mdc`). Wenn der Nutzer „Dispo“ oder „Kalender“ sagt, prüfen, ob die Änderung in `htdocs/` des Workspace-Roots gehört.
+- **Dispo (Kalender-UI):** Die **Dispo-Oberfläche** (Wochen-/Monatskalender, Kalender-Tooltips, Auftragsverwaltung) liegt **nicht** in diesem Repo, sondern im **gleichen Workspace** unter **dispo/** (Workspace-Root: C:\Kukla_Monteur_Plattform). Dort: `dispo/modules/calendar.php`, `dispo/calendar_month.php`, `dispo/calendar_month_lanes.php`, `dispo/api/calendar.php` usw.  
+  **Regel für Bearbeitungen:** Nur die Dateien im **dispo**-Ordner dieses Workspaces bearbeiten (siehe `.cursor/rules/dispo-workspace.mdc`). Wenn der Nutzer „Dispo“ oder „Kalender“ sagt, prüfen, ob die Änderung in **dispo/** gehört.
 
 ---
 
@@ -32,7 +32,7 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 - **Electron mit Dispo-Sync:** Nutzer konfiguriert Dispo-URL. Dann:
   - **Kalender:** `GET /api/calendar?baseUrl=…&start=…&end=…` → server.js ruft `baseUrl/api/calendar.php?start=…&end=…` auf (Dispo-PHP) und gibt JSON durch. Optional Anreicherung mit Einzelauftrag (job.php) für customer_name, city, country.
   - **Aufträge/Abwesenheiten:** Ähnlich Proxy zu Dispo-PHP (my_jobs, my_absences, job, absence).
-- **Dispo (htdocs):** Eigenes Projekt. `htdocs/api/calendar.php` liefert Kalenderdaten (jobs, absences, technicians) – oft mit Anreicherung wie `customer`, `city`, `country_code`, `offset_to_at`, `job_number`, `technician_name` für Tooltips. Die **Tooltip-Logik** (Firma – Ort CC – Techniker, Zeitverschiebung „+1“/„-2“) steht in **htdocs**: `modules/calendar.php` (Woche + Monat Lanes), `calendar_month.php`, `calendar_month_lanes.php`.
+- **Dispo (dispo):** Eigenes Projekt im gleichen Workspace. `dispo/api/calendar.php` liefert Kalenderdaten (jobs, absences, technicians) – oft mit Anreicherung wie `customer`, `city`, `country_code`, `offset_to_at`, `job_number`, `technician_name` für Tooltips. Die **Tooltip-Logik** (Firma – Ort CC – Techniker, Zeitverschiebung „+1“/„-2“) steht in **dispo**: `modules/calendar.php` (Woche + Monat Lanes), `calendar_month.php`, `calendar_month_lanes.php`.
 
 ---
 
@@ -40,7 +40,7 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 
 - **technician_id:** Entspricht `users.id` in der Dispo-DB (Rolle `monteur`). Wird in allen Monteur-APIs erwartet (Query oder Header `X-Technician-Id`).
 - **fsm:** Dispo-Datenbank (MySQL). Tabellen u. a.: jobs, job_technicians, job_addresses, customers, users, absences.
-- **getCalendarData(start, end):** Liefert `{ jobs, absences, technicians }`. Jobs pro Techniker-Zeile; Felder u. a. id, job_number, start_datetime, end_datetime, customer_name, city, country, technician_id. Erweiterungen wie `offset_to_at`, `country_code`, `technician_name` werden ggf. in der **Dispo** (htdocs) ergänzt.
+- **getCalendarData(start, end):** Liefert `{ jobs, absences, technicians }`. Jobs pro Techniker-Zeile; Felder u. a. id, job_number, start_datetime, end_datetime, customer_name, city, country, technician_id. Erweiterungen wie `offset_to_at`, `country_code`, `technician_name` werden ggf. in der **Dispo** (dispo) ergänzt.
 - **Kalender-Tooltips (Dispo):** Einheitliches Format in Woche und Monat: „Firmenname – Ort CC – Technikername“, optional „| +1“/„-2“ (Zeitverschiebung zu AT). Keine Auftragsnummer im Tooltip.
 - **Kalender-Balken-Formatierung:** Verbindliche Vorgaben (Inhalt, erledigt = grünes Häkchen vor/nach Text, Layout, CSS) stehen in **`.cursor/rules/kalender-balken-formatierung.mdc`**. Bei Änderungen an Balken-Darstellung diese Regel beachten bzw. anpassen.
 
@@ -49,10 +49,10 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 ## 5. Wiedereinstieg – so die Daten wieder nutzen
 
 1. **Diese Datei lesen:** `.cursor/CODEBASE_CONTEXT.md` (oder im Chat: „Lies .cursor/CODEBASE_CONTEXT.md“).
-2. **Regel beachten:** `.cursor/rules/htdocs-workspace.mdc` – Änderungen an Kalender/Dispo-UI nur im htdocs dieses Workspaces (relativer Pfad `htdocs/`).
+2. **Regel beachten:** `.cursor/rules/dispo-workspace.mdc` – Änderungen an Kalender/Dispo-UI nur im **dispo**-Ordner dieses Workspaces (relativer Pfad `dispo/`).
 3. **Schnellsuche:**  
    - Kalender-API: `api/calendar.php`, `electron/server.js` („/api/calendar“), `src/DispoRepository.php` (getCalendarData).  
-   - Tooltips/Labels: in **htdocs** in `modules/calendar.php`, `calendar_month.php`, `calendar_month_lanes.php`.  
+   - Tooltips/Labels: in **dispo** in `modules/calendar.php`, `calendar_month.php`, `calendar_month_lanes.php`.  
    - Version: `config/version.php`, `electron/version.json`, `VERSION_HISTORY.md`, `release.ps1`.
 
 ---

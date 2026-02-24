@@ -6,8 +6,9 @@ globs: release.ps1,VERSION_HISTORY.md,config/version.php,electron/version.json
 
 # Release und Push
 
-**Für Release-Anfragen die einheitliche Release-Regel der Dispo verwenden:**  
-`.cursor/rules/release-and-push.mdc` im **Workspace-Root** (xampp_2 / Dispo). Dort ist der Ablauf für beide Repos (Dispo + Monteur-WebApp) definiert; für die WebApp gilt der Abschnitt „Monteur-App (webapp_monteur_laptop)“.
+**Release-Regel Dispo:** `dispo/.cursor/rules/release-and-push.mdc`.  
+**Release-Regel Handy-PWA:** `webapp_handy/.cursor/rules/release-and-push.mdc` (gleiche Regeln: Version, Commit, Tag, Push).  
+**Workspace-Root:** C:\Kukla_Monteur_Plattform (Kukla_Plattform.code-workspace mit dispo, webapp_monteur_laptop, webapp_handy). Für jedes Repo die Regel im jeweiligen Ordner verwenden.
 
 ---
 

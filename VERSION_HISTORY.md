@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.024
+- **Release:** Vollständiges Release nach Rule (Build hochgezählt, Tag, Push).
+
 ## V 1.023
 - **Kalender:** Gleiche Grundstruktur wie Referenz (Dispo Monat): pro Woche Grid + Bands-Overlay, alle Balken (eintägig und mehrtägig) im Overlay mit grid-column/grid-row; Abwesenheiten zuletzt gerendert (immer sichtbar). CSS: cal-week-row, cal-week-bands, month2-band.
 

@@ -11,7 +11,7 @@ Diese Regel ist die **einzige Quelle** für die Darstellung von Auftrags- und Ab
 ## Geltungsbereich
 
 - **WebApp:** `electron/public/app.js` (Kalender-Logik), `electron/public/index.html` (Kalender-CSS)
-- **Dispo:** `htdocs/modules/calendar.php`, `htdocs/calendar_month.php`, `htdocs/calendar_month_lanes.php`, `htdocs/assets/css/dispatch.css`
+- **Dispo:** `dispo/modules/calendar.php`, `dispo/calendar_month.php`, `dispo/calendar_month_lanes.php` (falls vorhanden), `dispo/assets/css/dispatch.css`
 
 ## 1. Inhalt der Balken (Aufträge)
 
@@ -51,5 +51,5 @@ Diese Regel ist die **einzige Quelle** für die Darstellung von Auftrags- und Ab
 ## Änderungen
 
 - Neue Kalender-Ansichten oder -Themen müssen diese Formatierung übernehmen.
-- Wenn die Formatierung geändert werden soll: zuerst diese Regel anpassen, dann Code in WebApp und/oder htdocs.
+- Wenn die Formatierung geändert werden soll: zuerst diese Regel anpassen, dann Code in WebApp und/oder **dispo** (nicht mehr htdocs).
 - WebApp mehrtägige Balken: Bei Änderungen an der Positionierung (Overlay, Messung, Montag-Referenz) diese Regel und `electron/public/app.js` (positionSpanBarsOnce, tryPositionSpanBars) anpassen.

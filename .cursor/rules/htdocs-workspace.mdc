@@ -1,13 +1,10 @@
 ---
-description: Dateien nur im htdocs dieses Workspaces bearbeiten
-alwaysApply: true
+description: Veraltet – siehe dispo-workspace.mdc (Dispo ersetzt htdocs)
+alwaysApply: false
 ---
 
-# Htdocs nur in diesem Workspace
+# Htdocs (veraltet)
 
-Bei allen Änderungen an Kalender-, API- und App-Dateien (PHP, JS in htdocs) **ausschließlich** die Dateien in diesem Workspace verwenden.
+**Diese Regel ist obsolet.** Der Dispo-Ordner heißt jetzt **dispo** (nicht mehr htdocs). Workspace-Root: **C:\Kukla_Monteur_Plattform**.
 
-- **Pfad:** Immer den **relativen Pfad** `htdocs/` vom **Workspace-Root** dieses Projekts nutzen (z. B. `htdocs/modules/calendar.php`, `htdocs/calendar_month.php`).
-- **Nicht** absolute Pfade wie `c:\xampp_2\htdocs\` oder andere Workspace-Roots verwenden – nur das htdocs-Verzeichnis **dieses** Workspaces bearbeiten.
-
-Damit landen Änderungen dort, wo die Anwendung für dieses Projekt geladen wird.
+Siehe stattdessen: **`.cursor/rules/dispo-workspace.mdc`** – dort gelten die gleichen Regeln mit dem Pfad **dispo/**.
