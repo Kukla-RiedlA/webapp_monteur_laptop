@@ -34,3 +34,5 @@ Wie in der Dispo: **V &lt;Hauptversion&gt;.&lt;Build&gt;** (z. B. V 1.018). Bu
 
 - Nur ausführen, wenn alle gewünschten Änderungen (inkl. ggf. `VERSION_HISTORY.md`) bereits vorbereitet sind.
 - Bei `--bump` wird die Build-Nummer aus der aktuellen Version gelesen und um 1 erhöht.
+
+**Vollständiges Plattform-Release (alle Repos):** Nach den Releases in dispo, webapp_monteur_laptop und webapp_handy im **Parent** ausführen: `.\scripts\commit-all-submodules.ps1` – committet in allen drei Submodulen offene Änderungen (modified/untracked), pusht sie und aktualisiert den Parent-Stand. Bei Release-Anfragen für die ganze Plattform diesen Schritt mit ausführen.

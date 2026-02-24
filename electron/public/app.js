@@ -1772,7 +1772,7 @@
     if (ort) parts.push(ort);
     if (land2) parts.push(land2);
     const full = parts.join(', ');
-    const label = maxLen && full.length > maxLen ? full.substring(0, maxLen) : full;
+    const label = maxLen && full.length > maxLen ? (maxLen <= 4 ? full.substring(0, maxLen) : full.substring(0, maxLen - 4) + ',...') : full;
     const statusRaw = (job.status != null ? job.status : job.Status != null ? job.Status : job.job_status != null ? job.job_status : '').toString().trim().toLowerCase();
     const isErledigt = statusRaw === 'erledigt' || statusRaw === 'completed' || statusRaw === 'done' || statusRaw === 'fertig';
     const labelHtml = isErledigt
@@ -1914,7 +1914,9 @@
           const j = o;
           band.className = 'month2-band month2-event';
           band.style.background = j.technician_color || '#4a90e2';
-          const bar = jobBarText(j, 40);
+          const colSpan = colEnd - colStart;
+          const maxChars = colSpan * 20;
+          const bar = jobBarText(j, maxChars);
           band.title = bar.title || '';
           if (bar.labelHtml) band.innerHTML = bar.labelHtml; else band.textContent = bar.label || 'Auftrag';
         }
