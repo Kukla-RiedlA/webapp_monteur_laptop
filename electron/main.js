@@ -56,6 +56,11 @@ ipcMain.handle('dienstreise:copy-path', async (event, filePath) => {
   clipboard.writeText(filePath.trim());
 });
 
+ipcMain.handle('open-external', async (event, url) => {
+  if (typeof url !== 'string' || !url.trim()) return;
+  await shell.openExternal(url.trim());
+});
+
 app.whenReady().then(() => {
   getDb().then((db) => {
     const serverApp = createApp(db);

@@ -6,4 +6,5 @@ contextBridge.exposeInMainWorld('monteurApp', {
   chooseDienstreiseBasePath: () => ipcRenderer.invoke('dienstreise:choose-folder'),
   openPath: (filePath) => ipcRenderer.invoke('dienstreise:open-path', filePath),
   copyPathToClipboard: (filePath) => ipcRenderer.invoke('dienstreise:copy-path', filePath),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
 });

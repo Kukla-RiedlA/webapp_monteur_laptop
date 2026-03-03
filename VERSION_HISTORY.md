@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.025
+- **Release:** Vollständiges Release nach Rule (Build hochgezählt, Tag, Push).
+
 ## V 1.024
 - **Release:** Vollständiges Release nach Rule (Build hochgezählt, Tag, Push).
 

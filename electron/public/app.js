@@ -831,6 +831,23 @@
     hint._hideTimeout = setTimeout(function () { hint.textContent = ''; }, 2000);
   });
 
+  var btnOpenProfileForQr = document.getElementById('btnOpenProfileForQr');
+  if (btnOpenProfileForQr) {
+    btnOpenProfileForQr.addEventListener('click', function () {
+      var base = (getServerUrl() || '').trim().replace(/\/+$/, '');
+      if (!base) {
+        alert('Bitte zuerst Server-Adresse (Dispo) in den Einstellungen eintragen.');
+        return;
+      }
+      var profileUrl = base + '/profile.php';
+      if (typeof monteurApp !== 'undefined' && monteurApp.openExternal) {
+        monteurApp.openExternal(profileUrl);
+      } else {
+        window.open(profileUrl, '_blank');
+      }
+    });
+  }
+
   document.getElementById('btnSyncNow').addEventListener('click', function () {
     var hint = document.getElementById('syncNowHint');
     var base = getServerUrl().trim();
@@ -1757,7 +1774,7 @@
         landName = new Intl.DisplayNames(['de'], { type: 'region' }).of(code) || landName;
       } catch (_) { }
       var diffStr = diff === 0 ? '0 h' : (diff > 0 ? '+' : '') + diff + ' h';
-      return 'Zeitverschiebung nach ' + landName + ': ' + diffStr;
+      return 'ZV: ' + diffStr;
     } catch (_) { return null; }
   }
 
