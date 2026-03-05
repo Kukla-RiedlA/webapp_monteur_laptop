@@ -44,6 +44,8 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 - **Kalender-Tooltips (Dispo):** Einheitliches Format in Woche und Monat: „Firmenname – Ort CC – Technikername“, optional „| +1“/„-2“ (Zeitverschiebung zu AT). Keine Auftragsnummer im Tooltip.
 - **Kalender-Balken-Formatierung:** Verbindliche Vorgaben (Inhalt, erledigt = grünes Häkchen vor/nach Text, Layout, CSS) stehen in **`.cursor/rules/kalender-balken-formatierung.mdc`**. Bei Änderungen an Balken-Darstellung diese Regel beachten bzw. anpassen.
 
+- **Belege (Übergabe-Bestätigung, Arbeitsnachweis, Gelangensbestätigung):** Technische Doku und Nachschlagewerk für Weiterarbeit: **`dispo/docs/BELEGE_DOKUMENTATION.md`**. Enthält Datenmodell, API-Endpunkte, UI-Dateien, offene Erweiterungen. Plan: `.cursor/plans/` (Lieferscheine/Arbeitsnachweise/Gelangensbestätigung).
+
 ---
 
 ## 5. Wiedereinstieg – so die Daten wieder nutzen
@@ -54,6 +56,7 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
    - Kalender-API: `api/calendar.php`, `electron/server.js` („/api/calendar“), `src/DispoRepository.php` (getCalendarData).  
    - Tooltips/Labels: in **dispo** in `modules/calendar.php`, `calendar_month.php`, `calendar_month_lanes.php`.  
    - Version: `config/version.php`, `electron/version.json`, `VERSION_HISTORY.md`, `release.ps1`.
+   - Belege/Signatur: `dispo/docs/BELEGE_DOKUMENTATION.md` (Nachschlagewerk); Dispo-API `document_*.php`, UI `belege.php`, `beleg_edit.php`.
 
 ---
 
