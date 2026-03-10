@@ -11,6 +11,27 @@ const FormData = require('form-data');
 
 const PORT = 39678;
 const DB_DIR = path.join(__dirname, 'db');
+
+/** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). */
+function writeFileWithRetry(filePath, data, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      fs.writeFileSync(filePath, data);
+      return;
+    } catch (e) {
+      const isBusy = e.code === 'EBUSY' || e.errno === -4082;
+      if (isBusy && i < maxRetries - 1) {
+        const delay = 400 * (i + 1);
+        const end = Date.now() + delay;
+        while (Date.now() < end) { /* warten */ }
+      } else if (isBusy) {
+        throw new Error('Datei ist gesperrt (z. B. durch OneDrive-Sync oder geöffnetes Word). Bitte schließen und erneut versuchen.');
+      } else {
+        throw e;
+      }
+    }
+  }
+}
 const DB_PATH = path.join(DB_DIR, 'monteur.db');
 const SCHEMA_PATH = path.join(__dirname, 'db', 'schema.sql');
 
@@ -227,7 +248,7 @@ function createApp(db) {
   });
 
   const DIENSTREISE_SUBFOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
-  const DIENSTREISE_SYNC_FOLDERS = ['Dokumente_Monteur', 'Dokumente_Buchhaltung'];
+  const DIENSTREISE_SYNC_FOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
 
   function sanitizeDienstreiseFolderPart(str) {
     if (typeof str !== 'string') return '';
@@ -387,11 +408,10 @@ function createApp(db) {
         throw e;
       }
       for (const f of files) {
-        // relPathFromRoot z.B. Dokumente_Monteur/foo/bar.pdf → rel ab Ordner:
+        // relPathFromRoot z.B. Dokumente_Buchhaltung/rechnung.pdf – remoteFiles enthält dieselbe Form (folder/name)
         const relNorm = f.relPathFromRoot.replace(/\\/g, '/');
-        const relWithoutRoot = relNorm.startsWith(folder + '/') ? relNorm.slice(folder.length + 1) : relNorm;
-        // Wenn auf dem Dispo bereits eine Datei mit diesem relativen Pfad vorhanden ist, nicht erneut hochladen.
-        if (relWithoutRoot && remoteFiles.has(relWithoutRoot)) continue;
+        // Wenn auf dem Dispo bereits eine Datei mit diesem Pfad vorhanden ist, nicht erneut hochladen.
+        if (relNorm && remoteFiles.has(relNorm)) continue;
         await uploadFile(f.relPathFromRoot, f.fullPath);
       }
     }
@@ -593,11 +613,18 @@ function createApp(db) {
     try {
       const body = req.body || {};
       const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
-      const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim();
+      const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
       const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
       const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
       const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
       await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword);
+      if (dispoBaseUrl) {
+        try {
+          await syncProtokollTemplates(dispoBaseUrl);
+        } catch (tplErr) {
+          console.warn('Protokoll-Vorlagen Sync fehlgeschlagen (offline-Vorlagen weiter nutzbar):', tplErr.message);
+        }
+      }
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Sync zum Dispo-Server fehlgeschlagen.' });
@@ -697,6 +724,74 @@ function createApp(db) {
       res.json({ ok: true, path: targetPath, filename: safeName });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Upload fehlgeschlagen.' });
+    }
+  });
+
+  app.post('/api/dienstreise/delete_file', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const relativePath = (body.relative_path || body.relativePath || '').trim().replace(/\\/g, '/');
+      const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
+      const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
+      const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
+      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
+
+      if (!localJobId || !relativePath) {
+        return res.status(400).json({ ok: false, error: 'job_id (lokal) und relative_path erforderlich.' });
+      }
+
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!reiseDir || !fs.existsSync(reiseDir)) {
+        return res.status(400).json({ ok: false, error: 'Dienstreise-Ordner nicht gefunden.' });
+      }
+
+      const localFullPath = path.join(reiseDir, relativePath.replace(/\//g, path.sep));
+      if (!path.resolve(localFullPath).startsWith(path.resolve(reiseDir))) {
+        return res.status(400).json({ ok: false, error: 'Ungültiger Pfad.' });
+      }
+      if (!fs.existsSync(localFullPath) || !fs.statSync(localFullPath).isFile()) {
+        return res.status(404).json({ ok: false, error: 'Datei nicht gefunden.' });
+      }
+
+      fs.unlinkSync(localFullPath);
+
+      if (dispoBaseUrl && technicianId) {
+        const jobId = getServerJobId(localJobId);
+        const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+        const formBody = new URLSearchParams();
+        formBody.append('technician_id', String(technicianId));
+        formBody.append('job_id', String(jobId));
+        formBody.append('path', relativePath);
+        try {
+          const r = await fetch(dispoBaseUrl + '/api/job_project_file_delete.php', {
+            method: 'POST',
+            headers: {
+              'X-Technician-Id': String(technicianId),
+              'Content-Type': 'application/x-www-form-urlencoded',
+              ...authHeader,
+            },
+            body: formBody.toString(),
+          });
+          if (!r.ok) {
+            const errText = await r.text();
+            let errMsg;
+            try {
+              const errData = errText ? JSON.parse(errText) : {};
+              errMsg = errData.error || errText || 'Löschen auf Dispo fehlgeschlagen.';
+            } catch (e) {
+              errMsg = errText || 'Löschen auf Dispo fehlgeschlagen.';
+            }
+            return res.json({ ok: true, warning: 'Lokal gelöscht, aber Dispo: ' + errMsg });
+          }
+        } catch (e) {
+          return res.json({ ok: true, warning: 'Lokal gelöscht, aber Dispo-Verbindung fehlgeschlagen: ' + (e.message || String(e)) });
+        }
+      }
+
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Löschen fehlgeschlagen.' });
     }
   });
 
@@ -1071,6 +1166,566 @@ function createApp(db) {
       if (!r.ok) {
         return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
       }
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  /** Lädt Montagebericht-Vorlagen von der Dispo und speichert sie lokal (bei sync_to_dispo). */
+  async function syncProtokollTemplates(dispoBaseUrl) {
+    const base = (dispoBaseUrl || '').trim().replace(/\/$/, '');
+    if (!base) return;
+    const cacheDir = path.join(DB_DIR, 'protokoll_templates');
+    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+    for (const lang of ['de', 'en']) {
+      const filename = lang === 'en' ? 'Montagebericht_EN.docx' : 'Montagebericht_DE.docx';
+      const url = base + '/dispo_api/api/protokoll_template_download.php?language=' + encodeURIComponent(lang);
+      try {
+        const r = await fetch(url);
+        if (!r.ok) continue;
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.length > 0) {
+          fs.writeFileSync(path.join(cacheDir, filename), buf);
+        }
+      } catch (e) {
+        console.warn('Protokoll-Vorlage ' + filename + ' Sync fehlgeschlagen:', e.message);
+      }
+    }
+  }
+
+  /** Liest Montagebericht-Vorlage nur aus lokalem Cache oder gebündelten Fallbacks (kein Download zur Laufzeit). */
+  function getProtokollTemplateBuffer(language) {
+    const lang = (language || 'de').toLowerCase().slice(0, 2);
+    const filename = lang === 'en' ? 'Montagebericht_EN.docx' : 'Montagebericht_DE.docx';
+    const cacheDir = path.join(DB_DIR, 'protokoll_templates');
+    const cachePath = path.join(cacheDir, filename);
+    const bundledPath = path.join(__dirname, 'templates', filename);
+    const dispoPath = path.join(__dirname, '..', '..', 'dispo', 'assets', 'templates', 'protokoll', filename);
+
+    // Reihenfolge: Cache (nach Sync), Dispo-Workspace, gebündelt (immer verfügbar)
+    for (const p of [cachePath, dispoPath, bundledPath]) {
+      if (fs.existsSync(p)) {
+        try {
+          return fs.readFileSync(p);
+        } catch (e) {
+          console.warn('Protokoll-Vorlage lesen fehlgeschlagen:', p, e.message);
+        }
+      }
+    }
+    return null;
+  }
+
+  app.get('/api/protokolle/montagebericht', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      const jobRow = db.prepare(`
+        SELECT j.id FROM jobs j
+        INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+        WHERE j.id = ?
+      `).get(technicianId, localJobId);
+      if (!jobRow) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const dataPath = path.join(reiseDir, 'montagebericht.json');
+      if (!fs.existsSync(dataPath)) {
+        return res.json({ ok: true, data: null });
+      }
+      const raw = fs.readFileSync(dataPath, 'utf8');
+      const data = JSON.parse(raw);
+      res.json({ ok: true, data });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
+    }
+  });
+
+  app.post('/api/protokolle/montagebericht', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const dispoBaseUrl = (body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+      const language = (body.language || 'de').toLowerCase().slice(0, 2);
+      const kopfdaten = body.kopfdaten || {};
+      const fabBemerkungen = Array.isArray(body.fabBemerkungen) ? body.fabBemerkungen : [];
+      const grundDesEinsatzes = (body.grundDesEinsatzes || '').trim();
+      const freitext = (body.freitext || '').trim();
+
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+
+      const jobRow = db.prepare(`
+        SELECT j.id, j.server_id, j.start_datetime, j.end_datetime, j.job_number, j.description, j.fabrikationsnummern,
+          c.name AS customer_name, c.street AS cust_street, c.house_number AS cust_house, c.zip AS cust_zip, c.city AS cust_city,
+          ja.street, ja.house_number, ja.zip, ja.city, ja.country
+        FROM jobs j
+        INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+        INNER JOIN customers c ON c.id = j.customer_id
+        LEFT JOIN job_addresses ja ON ja.job_id = j.id
+        WHERE j.id = ?
+      `).get(technicianId, localJobId);
+      if (!jobRow) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+
+      const toFab = (f) => (f != null && (typeof f === 'string' ? f : (f.fabrikationsnummer ?? f.Fabrikationsnummer))) ? String(typeof f === 'string' ? f : (f.fabrikationsnummer ?? f.Fabrikationsnummer)).trim() : '';
+      let dbFabRows = [];
+      const serverJobId = jobRow.server_id != null ? jobRow.server_id : localJobId;
+      if (dispoBaseUrl && serverJobId) {
+        try {
+          const auth = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
+          const url = dispoBaseUrl + '/dispo_api/api/montagebericht_data.php?job_id=' + encodeURIComponent(serverJobId) + '&technician_id=' + encodeURIComponent(technicianId);
+          const r = await fetch(url, auth ? { headers: auth } : {});
+          const apiData = await r.json().catch(() => ({}));
+          if (r.ok && Array.isArray(apiData.data) && apiData.data.length > 0) {
+            dbFabRows = apiData.data.map((row) => ({
+              fabrikationsnummer: String(row.fabrikationsnummer ?? '').trim(),
+              type: String(row.type ?? '').trim(),
+              position: String(row.position ?? '').trim(),
+              textbausteine: Array.isArray(row.textbausteine) ? row.textbausteine.map((t) => ({ text: String(t && t.text != null ? t.text : '').trim() })).filter((t) => t.text) : [],
+            })).filter((row) => row.fabrikationsnummer);
+          }
+        } catch (_) { /* API-Fehler ignorieren */ }
+      }
+      const rawFab = (jobRow.fabrikationsnummern || '').toString().trim();
+      if (rawFab) {
+        try {
+          const parsed = JSON.parse(rawFab);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            dbFabRows = parsed.map((r) => {
+              const fn = (r && (r.fabrikationsnummer ?? r.Fabrikationsnummer) != null) ? String(r.fabrikationsnummer ?? r.Fabrikationsnummer).trim() : '';
+              const t = (r && typeof r === 'object' && (r.type ?? r.Type) != null) ? String(r.type ?? r.Type).trim() : '';
+              const p = (r && typeof r === 'object' && (r.position ?? r.Position) != null) ? String(r.position ?? r.Position).trim() : '';
+              return { fabrikationsnummer: fn, type: t, position: p };
+            }).filter((r) => r.fabrikationsnummer);
+          }
+        } catch (_) { /* kein JSON */ }
+        if (dbFabRows.length === 0) {
+          const parts = rawFab.split(/[\s;,]+/).map((p) => p.trim()).filter(Boolean);
+          dbFabRows = parts.map((fn) => ({ fabrikationsnummer: fn, type: '', position: '' }));
+        }
+      }
+      if (dbFabRows.length === 0 && dispoBaseUrl) {
+        const reqFabs = (kopfdaten.fabrikationsnummern || []).map(toFab).filter(Boolean);
+        const reqFabsAlt = (fabBemerkungen || []).map((fb) => toFab(fb)).filter(Boolean);
+        const parts = reqFabs.length > 0 ? reqFabs : reqFabsAlt;
+        if (parts.length > 0) {
+          try {
+            const auth = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
+            const url = dispoBaseUrl + '/dispo_api/api/anlagenstamm_by_fab.php?fabs=' + encodeURIComponent(parts.join(','));
+            const r = await fetch(url, auth ? { headers: auth } : {});
+            const data = await r.json().catch(() => ({}));
+            if (r.ok && Array.isArray(data.data) && data.data.length > 0) {
+              dbFabRows = data.data.map((row) => ({
+                fabrikationsnummer: String(row.fabrikationsnummer ?? '').trim(),
+                type: String(row.type ?? '').trim(),
+                position: String(row.position ?? '').trim(),
+              })).filter((row) => row.fabrikationsnummer);
+            } else {
+              dbFabRows = parts.map((fn) => ({ fabrikationsnummer: fn, type: '', position: '' }));
+            }
+          } catch (_) {
+            dbFabRows = parts.map((fn) => ({ fabrikationsnummer: fn, type: '', position: '' }));
+          }
+        }
+      } else if (dbFabRows.length > 0 && dispoBaseUrl) {
+        const needsEnrich = dbFabRows.every((r) => !(r.type || r.position));
+        if (needsEnrich) {
+          try {
+            const auth = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
+            const fnList = dbFabRows.map((r) => r.fabrikationsnummer).filter(Boolean).join(',');
+            const url = dispoBaseUrl + '/dispo_api/api/anlagenstamm_by_fab.php?fabs=' + encodeURIComponent(fnList);
+            const r = await fetch(url, auth ? { headers: auth } : {});
+            const data = await r.json().catch(() => ({}));
+            if (r.ok && Array.isArray(data.data) && data.data.length > 0) {
+              const byFn = {};
+              for (const row of data.data) {
+                const fn = String(row.fabrikationsnummer ?? '').trim();
+                if (fn) byFn[fn] = { fabrikationsnummer: fn, type: String(row.type ?? '').trim(), position: String(row.position ?? '').trim() };
+              }
+              dbFabRows = dbFabRows.map((r) => {
+                const enriched = byFn[r.fabrikationsnummer];
+                return enriched || r;
+              });
+            }
+          } catch (_) { /* API-Fehler ignorieren */ }
+        }
+      }
+      if (dbFabRows.length === 0) {
+        dbFabRows = (kopfdaten.fabrikationsnummern || []).map((f) => {
+          const fn = toFab(f);
+          const t = (f && typeof f === 'object' && f.type != null) ? String(f.type).trim() : '';
+          const p = (f && typeof f === 'object' && f.position != null) ? String(f.position).trim() : '';
+          return { fabrikationsnummer: fn, type: t, position: p };
+        }).filter((r) => r.fabrikationsnummer);
+      }
+      if (dbFabRows.length === 0) {
+        dbFabRows = (fabBemerkungen || []).map((fb) => {
+          const fn = toFab(fb);
+          const t = (fb && typeof fb === 'object' && fb.type != null) ? String(fb.type).trim() : '';
+          const p = (fb && typeof fb === 'object' && fb.position != null) ? String(fb.position).trim() : '';
+          return { fabrikationsnummer: fn, type: t, position: p };
+        }).filter((r) => r.fabrikationsnummer);
+      }
+      let fabs = dbFabRows.map((r) => r.fabrikationsnummer).filter(Boolean);
+      if (fabs.length === 0) {
+        return res.status(400).json({ ok: false, error: 'Mindestens eine Fabrikationsnummer erforderlich.' });
+      }
+
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const ordnerName = path.basename(reiseDir);
+      const pdfFilename = ordnerName + '_Montage.pdf';
+
+      const toTextbausteine = (bem) => (bem || '').toString().split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((t) => ({ text: t }));
+      const bemerkungenByFn = {};
+      for (const fb of fabBemerkungen || []) {
+        const fn = toFab(fb);
+        if (fn) {
+          const explicitTb = Array.isArray(fb.textbausteine) && fb.textbausteine.length > 0
+            ? fb.textbausteine.map((t) => ({ text: String(t && t.text != null ? t.text : '').trim() })).filter((t) => t.text)
+            : null;
+          const tb = explicitTb && explicitTb.length > 0 ? explicitTb : toTextbausteine(fb && fb.bemerkungen);
+          bemerkungenByFn[fn] = tb;
+        }
+      }
+      const tableRows = dbFabRows.map((row) => {
+        const fn = (row.fabrikationsnummer || '').toString().trim();
+        const type = (row.type || '').toString().trim();
+        const position = (row.position || '').toString().trim();
+        const userTb = bemerkungenByFn[fn];
+        const tb = (userTb && userTb.length > 0) ? userTb : (Array.isArray(row.textbausteine) ? row.textbausteine.map((t) => ({ text: String(t && t.text != null ? t.text : '').trim() })).filter((t) => t.text) : []);
+        const bemerk = tb.map((x) => x.text).join('\n');
+        return { fabrikationsnummer: fn, type, position, textbausteine: tb, bemerkungen: bemerk };
+      });
+
+      let docxBytes = null;
+      try {
+        const { buildMontageberichtDocx } = require('./montagebericht_docx');
+        docxBytes = await buildMontageberichtDocx({
+          kopfdaten,
+          tableRows,
+          language,
+          jobRow,
+          grundDesEinsatzes,
+          freitext,
+        });
+        if (process.env.MONTAGEBERICHT_DEBUG) {
+          const debugPath = path.join(reiseDir, 'Montagebericht_DEBUG.docx');
+          fs.writeFileSync(debugPath, docxBytes);
+          console.log('[Montagebericht-Debug] DOCX gespeichert unter:', debugPath);
+        }
+      } catch (docxErr) {
+        console.warn('DOCX-Generierung fehlgeschlagen:', docxErr.message);
+        if (docxErr.stack) console.warn('Stack:', docxErr.stack);
+      }
+
+      let pdfBytes = null;
+      if (docxBytes) {
+        const os = require('os');
+        const tmpDir = os.tmpdir();
+        const uid = Date.now().toString(36) + Math.random().toString(36).slice(2);
+        const tempDocx = path.join(tmpDir, `montage_${uid}.docx`);
+        const tempPdf = path.join(tmpDir, `montage_${uid}.pdf`);
+        try {
+          fs.writeFileSync(tempDocx, docxBytes);
+          const { convert } = require('docx2pdf-converter');
+          convert(tempDocx, tempPdf);
+          if (fs.existsSync(tempPdf)) {
+            pdfBytes = fs.readFileSync(tempPdf);
+          }
+        } catch (convErr) {
+          console.warn('DOCX→PDF-Konvertierung fehlgeschlagen:', convErr && convErr.message ? convErr.message : String(convErr));
+          if (convErr && convErr.stack) console.warn('Stack:', convErr.stack);
+        } finally {
+          try { if (fs.existsSync(tempDocx)) fs.unlinkSync(tempDocx); } catch (_) { /* ignore */ }
+          try { if (fs.existsSync(tempPdf)) fs.unlinkSync(tempPdf); } catch (_) { /* ignore */ }
+        }
+      }
+
+      if (!docxBytes) {
+        return res.status(500).json({ ok: false, error: 'DOCX konnte nicht erstellt werden.' });
+      }
+      if (!pdfBytes) {
+        const hint = process.platform === 'win32'
+          ? 'Bitte Microsoft Word installieren. Unter Windows wird Word für die PDF-Konvertierung verwendet.'
+          : process.platform === 'darwin'
+            ? 'Bitte Microsoft Word installieren (macOS).'
+            : 'Bitte LibreOffice oder unoconv installieren (Linux).';
+        return res.status(500).json({
+          ok: false,
+          error: `PDF konnte nicht aus dem DOCX erzeugt werden. ${hint}`,
+        });
+      }
+
+      const jobId = jobRow.server_id != null ? jobRow.server_id : localJobId;
+      const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
+      const docxFilename = ordnerName + '_Montage.docx';
+
+      for (const fab of fabs) {
+        const fabSafe = sanitizeDienstreiseFolderPart(fab);
+        const montageDir = path.join(docAnlageBase, fabSafe, 'Montage');
+        if (!fs.existsSync(montageDir)) {
+          const docFabDir = path.join(docAnlageBase, fabSafe);
+          if (!fs.existsSync(docFabDir)) fs.mkdirSync(docFabDir, { recursive: true });
+          fs.mkdirSync(montageDir, { recursive: true });
+        }
+        const targetPath = path.join(montageDir, pdfFilename);
+        writeFileWithRetry(targetPath, pdfBytes);
+        if (docxBytes) {
+          writeFileWithRetry(path.join(montageDir, docxFilename), docxBytes);
+        }
+      }
+
+      const montageberichtDataPath = path.join(reiseDir, 'montagebericht.json');
+      writeFileWithRetry(montageberichtDataPath, JSON.stringify({
+        grundDesEinsatzes,
+        fabBemerkungen,
+        language,
+      }, null, 2));
+
+      const dispoUsername = (body.dispoUsername || body.serverUsername || '').toString().trim();
+      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.serverPassword != null ? String(body.serverPassword) : '');
+
+      if (dispoBaseUrl && technicianId) {
+        try {
+          await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword);
+        } catch (syncErr) {
+          return res.json({ ok: true, warning: 'PDF gespeichert, Sync zum Dispo fehlgeschlagen: ' + (syncErr && syncErr.message ? syncErr.message : String(syncErr)) });
+        }
+        const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+        try {
+          const saveDataRes = await fetch(dispoBaseUrl + '/dispo_api/api/montagebericht_data_save.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...authHeader },
+            body: JSON.stringify({
+              technician_id: technicianId,
+              job_id: jobId,
+              data: tableRows.map((r) => ({
+                fabrikationsnummer: r.fabrikationsnummer,
+                type: r.type,
+                position: r.position,
+                textbausteine: r.textbausteine,
+              })),
+            }),
+          });
+          if (!saveDataRes.ok) {
+            console.warn('Montagebericht-Daten konnten nicht in Dispo gespeichert werden:', saveDataRes.status);
+          }
+        } catch (saveErr) {
+          console.warn('Montagebericht-Daten-Save fehlgeschlagen:', saveErr && saveErr.message);
+        }
+        const anlagenstammUrl = dispoBaseUrl + '/dispo_api/api/anlagenstamm_montagebericht_save.php';
+        const tableRowByFab = {};
+        for (const r of tableRows) {
+          const fn = (r.fabrikationsnummer || '').toString().trim();
+          if (fn) tableRowByFab[fn] = r;
+        }
+        for (const fab of fabs) {
+          try {
+            const row = tableRowByFab[fab] || {};
+            const form = new FormData();
+            form.append('technician_id', String(technicianId));
+            form.append('job_id', String(jobId));
+            form.append('fabrikationsnummer', fab);
+            form.append('type', (row.type || '').toString());
+            form.append('position', (row.position || '').toString());
+            form.append('textbausteine', JSON.stringify(row.textbausteine || []));
+            form.append('file', Buffer.from(pdfBytes), { filename: pdfFilename });
+            const parsed = new URL(anlagenstammUrl);
+            const headers = form.getHeaders();
+            headers['X-Technician-Id'] = String(technicianId);
+            if (authHeader && authHeader.Authorization) headers.Authorization = authHeader.Authorization;
+            await new Promise((resolve, reject) => {
+              form.submit({
+                protocol: parsed.protocol,
+                hostname: parsed.hostname,
+                port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+                path: parsed.pathname + (parsed.search || ''),
+                method: 'POST',
+                headers,
+              }, (err, res) => {
+                if (err) return reject(err);
+                let body = '';
+                res.setEncoding('utf8');
+                res.on('data', (chunk) => { body += chunk; });
+                res.on('end', () => {
+                  if (res.statusCode >= 200 && res.statusCode < 300) resolve();
+                  else {
+                    try {
+                      const data = body ? JSON.parse(body) : {};
+                      reject(new Error(data.error || 'Upload fehlgeschlagen (' + res.statusCode + ')'));
+                    } catch (e) {
+                      reject(new Error('Upload fehlgeschlagen (' + res.statusCode + '): ' + body));
+                    }
+                  }
+                });
+              });
+            });
+          } catch (uploadErr) {
+            console.warn('Anlagenstamm Montagebericht PDF-Upload für Fab ' + fab + ' fehlgeschlagen:', uploadErr.message);
+          }
+          if (docxBytes) {
+            try {
+              const formDocx = new FormData();
+              formDocx.append('technician_id', String(technicianId));
+              formDocx.append('job_id', String(jobId));
+              formDocx.append('fabrikationsnummer', fab);
+              formDocx.append('file', docxBytes, { filename: docxFilename });
+              const parsedDocx = new URL(anlagenstammUrl);
+              const headersDocx = formDocx.getHeaders();
+              headersDocx['X-Technician-Id'] = String(technicianId);
+              if (authHeader && authHeader.Authorization) headersDocx.Authorization = authHeader.Authorization;
+              await new Promise((resolve, reject) => {
+                formDocx.submit({
+                  protocol: parsedDocx.protocol,
+                  hostname: parsedDocx.hostname,
+                  port: parsedDocx.port || (parsedDocx.protocol === 'https:' ? 443 : 80),
+                  path: parsedDocx.pathname + (parsedDocx.search || ''),
+                  method: 'POST',
+                  headers: headersDocx,
+                }, (err, resDocx) => {
+                  if (err) return reject(err);
+                  let bodyDocx = '';
+                  resDocx.setEncoding('utf8');
+                  resDocx.on('data', (chunk) => { bodyDocx += chunk; });
+                  resDocx.on('end', () => {
+                    if (resDocx.statusCode >= 200 && resDocx.statusCode < 300) resolve();
+                    else {
+                      try {
+                        const dataDocx = bodyDocx ? JSON.parse(bodyDocx) : {};
+                        reject(new Error(dataDocx.error || 'DOCX-Upload fehlgeschlagen (' + resDocx.statusCode + ')'));
+                      } catch (e) {
+                        reject(new Error('DOCX-Upload fehlgeschlagen (' + resDocx.statusCode + '): ' + bodyDocx));
+                      }
+                    }
+                  });
+                });
+              });
+            } catch (docxUploadErr) {
+              console.warn('Anlagenstamm Montagebericht DOCX-Upload für Fab ' + fab + ' fehlgeschlagen:', docxUploadErr.message);
+            }
+          }
+        }
+      }
+
+      res.json({ ok: true, saved: fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', pdfFilename)), savedDocx: docxBytes ? fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', docxFilename)) : null });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Montagebericht konnte nicht erstellt werden.' });
+    }
+  });
+
+  app.get('/api/textbausteine_list', async (req, res) => {
+    const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req);
+    if (!baseUrl) return res.status(400).json({ ok: false, error: 'baseUrl erforderlich.' });
+    try {
+      const url = baseUrl + '/dispo_api/api/textbausteine_list.php?technician_id=' + encodeURIComponent(technicianId || 0);
+      const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId || 0) } });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/textbausteine_category_save', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    if (!baseUrl) return res.status(400).json({ ok: false, error: 'baseUrl erforderlich.' });
+    try {
+      const formBody = new URLSearchParams();
+      formBody.append('technician_id', String(technicianId || 0));
+      if (body.id) formBody.append('id', body.id);
+      formBody.append('name', body.name || '');
+      formBody.append('sort_order', body.sort_order || 0);
+      const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_save.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(technicianId || 0) },
+        body: formBody.toString(),
+      });
+      const raw = await r.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch (_) { /* keine JSON-Antwort */ }
+      if (!r.ok) {
+        const err = data.ok === false && data.error ? data.error
+          : r.status === 404 ? 'Dispo-API nicht gefunden (404). Prüfen Sie die Dispo-URL in den Einstellungen.'
+          : r.status >= 500 ? 'Dispo-Serverfehler (HTTP ' + r.status + ').'
+          : 'HTTP ' + r.status + (raw && raw.length < 200 ? ': ' + raw.replace(/\s+/g, ' ').slice(0, 100) : '');
+        return res.status(r.status).json({ ok: false, error: err });
+      }
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/textbausteine_category_delete', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!baseUrl || !body.id) return res.status(400).json({ ok: false, error: 'baseUrl und id erforderlich.' });
+    try {
+      const formBody = new URLSearchParams();
+      formBody.append('id', body.id);
+      const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_delete.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formBody.toString(),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/textbausteine_save', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    if (!baseUrl || !body.category_id || body.text === undefined) return res.status(400).json({ ok: false, error: 'baseUrl, category_id und text erforderlich.' });
+    try {
+      const formBody = new URLSearchParams();
+      formBody.append('technician_id', String(technicianId || 0));
+      if (body.id) formBody.append('id', body.id);
+      formBody.append('category_id', body.category_id);
+      formBody.append('text', body.text);
+      formBody.append('sort_order', body.sort_order || 0);
+      const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_save.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(technicianId || 0) },
+        body: formBody.toString(),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/textbausteine_delete', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!baseUrl || !body.id) return res.status(400).json({ ok: false, error: 'baseUrl und id erforderlich.' });
+    try {
+      const formBody = new URLSearchParams();
+      formBody.append('id', body.id);
+      const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_delete.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formBody.toString(),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
       res.json(data);
     } catch (e) {
       res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
@@ -1463,16 +2118,25 @@ function createApp(db) {
     }
   });
 
-  app.post('/api/sync_pull', express.json(), (req, res) => {
+  app.post('/api/sync_pull', express.json(), async (req, res) => {
     const { baseUrl, technicianId, serverUsername, serverPassword, date_from, date_to } = req.body || {};
     if (!baseUrl || !technicianId) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technicianId erforderlich.' });
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    pullFromServer(baseUrl, technicianId, db, auth, date_from, date_to).then(() => {
+    const base = (baseUrl || '').trim().replace(/\/$/, '');
+    try {
+      await pullFromServer(base, technicianId, db, auth, date_from, date_to);
       save();
+      try {
+        await syncProtokollTemplates(base);
+      } catch (tplErr) {
+        console.warn('Protokoll-Vorlagen Sync fehlgeschlagen:', tplErr.message);
+      }
       res.json({ ok: true });
-    }).catch((e) => res.status(500).json({ ok: false, error: e.message }));
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   app.post('/api/sync_push', express.json(), (req, res) => {

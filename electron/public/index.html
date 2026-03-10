@@ -59,6 +59,8 @@
     .view-einstellungen.active { display: block; }
     .view-dienstreise { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-dienstreise.active { display: block; }
+    .view-protokolle { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-protokolle.active { display: block; }
     .dienstreise-list-wrap { margin-bottom: 1rem; }
     .dienstreise-list-wrap .job { cursor: pointer; }
     .dienstreise-list-wrap .job.selected { background: var(--accent); }
@@ -116,6 +118,9 @@
     .cal-cell.other-month { opacity: 0.6; }
     .cal-daynum { font-weight: bold; margin-bottom: 4px; }
     .cal-cell.today { outline: 2px solid #4a90e2; outline-offset: -2px; }
+    .cal-cell.day-holiday { background: rgba(180, 80, 80, 0.25); }
+    .cal-cell.other-month.day-holiday { background: rgba(180, 80, 80, 0.2); }
+    .cal-cell .holiday-name { font-size: 0.7em; color: #e07c7c; margin-top: 2px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cal-week-bands { position: absolute; left: 0; right: 0; top: 22px; bottom: 4px; display: grid; pointer-events: none; z-index: 10; }
     .cal-week-bands .month2-band { pointer-events: auto; }
     .month2-band { margin: 2px 1px; font-size: 10px; line-height: 1.3; padding: 2px 6px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-align: center; text-overflow: ellipsis; box-sizing: border-box; display: flex; align-items: center; justify-content: center; color: #000; min-width: 0; font-weight: bold; }
@@ -181,6 +186,36 @@
     .modal-leistung-table input { width: 100%; padding: 6px 8px; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); font-size: 0.9rem; box-sizing: border-box; }
     .modal-leistung-actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .modal-job-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; flex-shrink: 0; }
+    .view-textbausteine { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-textbausteine.active { display: block; }
+    .textbausteine-layout { display: grid; grid-template-columns: 280px 1fr; gap: 1rem; min-height: 400px; }
+    @media (max-width: 800px) { .textbausteine-layout { grid-template-columns: 1fr; } }
+    .montagebericht-layout { display: grid; grid-template-columns: 260px 1fr; gap: 1.25rem; align-items: start; }
+    @media (max-width: 800px) { .montagebericht-layout { grid-template-columns: 1fr; } }
+    .montagebericht-tb-sidebar { position: sticky; top: 1rem; padding: 0.75rem; background: var(--bg); border: 1px solid var(--accent); border-radius: 6px; }
+    .montagebericht-tb-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.25rem; }
+    .montagebericht-tb-list { display: flex; flex-direction: column; gap: 0.4rem; max-height: 320px; overflow-y: auto; }
+    .montagebericht-tb-chip { padding: 0.4rem 0.6rem; background: var(--card); border: 1px solid var(--accent); border-radius: 4px; font-size: 0.85rem; cursor: grab; user-select: none; }
+    .montagebericht-tb-chip:hover { background: var(--accent); }
+    .montagebericht-tb-chip:active { cursor: grabbing; }
+    .montagebericht-tb-chip.dragging { opacity: 0.6; }
+    .montagebericht-fab-felder input[data-fab], .montagebericht-fab-felder textarea[data-fab] { min-height: 2.5rem; }
+    .montagebericht-fab-felder input[data-fab].drop-target, .montagebericht-fab-felder textarea[data-fab].drop-target { outline: 2px solid #4a90e2; outline-offset: 2px; }
+    .textbausteine-sidebar { display: flex; flex-direction: column; gap: 0.5rem; }
+    .textbausteine-category { padding: 0.5rem 0.75rem; border-radius: 6px; cursor: pointer; border: 1px solid var(--accent); background: var(--card); }
+    .textbausteine-category:hover { background: var(--accent); }
+    .textbausteine-category.selected { background: #4a90e2; border-color: #4a90e2; }
+    .textbausteine-editor-wrap { display: flex; flex-direction: column; gap: 0.5rem; }
+    .richtext-toolbar { display: flex; flex-wrap: wrap; gap: 0.25rem; padding: 0.35rem; background: var(--accent); border-radius: 6px 6px 0 0; }
+    .richtext-toolbar button { padding: 0.35rem 0.5rem; min-width: 32px; font-size: 0.9rem; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; background: var(--card); color: var(--text); cursor: pointer; }
+    .richtext-toolbar button:hover { background: rgba(255,255,255,0.15); }
+    .richtext-toolbar button.active { background: #4a90e2; border-color: #4a90e2; }
+    .richtext-editor { min-height: 180px; padding: 0.75rem; border: 1px solid var(--accent); border-top: none; border-radius: 0 0 6px 6px; background: var(--bg); color: var(--text); font-size: 0.95rem; line-height: 1.5; overflow-y: auto; outline: none; }
+    .richtext-editor:focus { border-color: #4a90e2; }
+    .richtext-editor ul, .richtext-editor ol { margin: 0.5rem 0; padding-left: 1.5rem; }
+    .textbausteine-item { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.5rem; border: 1px solid var(--accent); border-radius: 6px; margin-bottom: 0.5rem; background: var(--card); }
+    .textbausteine-item-content { flex: 1; min-width: 0; max-height: 120px; overflow-y: auto; font-size: 0.9rem; }
+    .textbausteine-item-actions { flex-shrink: 0; }
   </style>
 </head>
 <body>
@@ -189,6 +224,8 @@
     <nav class="toolbar" aria-label="Hauptnavigation">
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
     <button class="btn btn-ghost" id="btnViewDienstreise">Dienstreise</button>
+    <button class="btn btn-ghost" id="btnViewProtokolle">Protokolle</button>
+    <button class="btn btn-ghost" id="btnViewTextbausteine">Textbausteine</button>
     <button class="btn btn-ghost" id="btnViewArchiv">Archiv</button>
     <span class="toolbar-right">
       <span id="technicianName" class="toolbar-technician-name"></span>
@@ -334,6 +371,109 @@
           <button type="button" class="btn btn-ghost" id="btnDienstreiseNeuCancel">Abbrechen</button>
         </div>
         <span id="dienstreiseNeuHint" class="settings-saved-hint" aria-live="polite"></span>
+      </div>
+    </div>
+  </main>
+  <main id="viewProtokolle" class="view-protokolle" aria-label="Protokolle">
+    <div class="card">
+      <h2>Protokolle</h2>
+      <div class="protokolle-toolbar" style="margin-bottom:1rem">
+        <button type="button" class="btn btn-primary" id="btnMontagebericht">Montagebericht erstellen</button>
+      </div>
+      <div id="protokolleMontagebericht" class="protokolle-montagebericht" style="display:none">
+        <div class="montagebericht-layout">
+          <div class="montagebericht-tb-sidebar">
+            <div class="montagebericht-tb-title">Textbausteine</div>
+            <p class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">Ziehen Sie Textbausteine in die Bemerkungsfelder.</p>
+            <div id="montageberichtTbList" class="montagebericht-tb-list"></div>
+          </div>
+          <form id="montageberichtForm" class="montagebericht-form-wrap">
+          <div class="form-group" style="margin-bottom:0.75rem">
+            <label>Auftrag</label>
+            <select id="montageberichtJob" class="dienstreise-select" required></select>
+          </div>
+          <div class="form-group" style="margin-bottom:0.75rem">
+            <label>Sprache</label>
+            <select id="montageberichtLang">
+              <option value="de">Deutsch</option>
+              <option value="en">Englisch</option>
+            </select>
+          </div>
+          <div id="montageberichtKopfdaten" class="montagebericht-kopfdaten" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border-radius:4px;font-size:0.9rem"></div>
+          <div class="form-group" style="margin-bottom:0.75rem">
+            <label>Grund des Einsatzes</label>
+            <input type="text" id="montageberichtGrund" placeholder="Grund des Einsatzes eingeben" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+          </div>
+          <div id="montageberichtFabBemerkungen" class="montagebericht-fab-felder" style="margin-bottom:1rem"></div>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+            <button type="submit" class="btn btn-primary">Speichern</button>
+            <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
+          </div>
+        </form>
+        </div>
+      </div>
+      <p id="protokollePlaceholder" class="empty">Montagebericht erstellen.</p>
+    </div>
+  </main>
+  <main id="viewTextbausteine" class="view-textbausteine" aria-label="Textbausteine">
+    <div class="card">
+      <h2>Textbausteine</h2>
+      <p class="muted" style="margin-bottom:1rem">Textbausteine für Montageberichte und andere Protokolle. Jeder Techniker kann Kategorien und Textbausteine anlegen und bearbeiten.</p>
+      <div class="textbausteine-layout">
+        <div class="textbausteine-sidebar">
+          <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem">
+            <button type="button" class="btn btn-primary" id="btnTbNewCategory">+ Kategorie</button>
+          </div>
+          <div id="tbCategoryList"></div>
+        </div>
+        <div class="textbausteine-editor-wrap">
+          <div id="tbDetailArea" style="display:none">
+            <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem">
+              <h3 id="tbCategoryTitle" style="margin:0;font-size:1rem"></h3>
+              <button type="button" class="btn btn-ghost" id="btnTbNewItem">+ Textbaustein</button>
+            </div>
+            <div id="tbItemList"></div>
+          </div>
+          <p id="tbSelectHint" class="empty">Kategorie wählen oder neue anlegen.</p>
+        </div>
+      </div>
+    </div>
+    <div id="modalTbEditor" class="modal-overlay" aria-hidden="true">
+      <div class="modal-box" style="max-width:640px">
+        <h3 id="modalTbEditorTitle">Textbaustein bearbeiten</h3>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label>Text (mit Formatierung)</label>
+          <div class="richtext-toolbar">
+            <button type="button" class="richtext-btn" data-cmd="bold" title="Fett"><b>B</b></button>
+            <button type="button" class="richtext-btn" data-cmd="italic" title="Kursiv"><i>I</i></button>
+            <button type="button" class="richtext-btn" data-cmd="underline" title="Unterstrichen"><u>U</u></button>
+            <span style="width:1px;background:var(--muted);margin:0 0.25rem"></span>
+            <button type="button" class="richtext-btn" data-cmd="justifyLeft" title="Linksbündig">≡</button>
+            <button type="button" class="richtext-btn" data-cmd="justifyCenter" title="Zentriert">⊞</button>
+            <button type="button" class="richtext-btn" data-cmd="justifyRight" title="Rechtsbündig">≡</button>
+            <span style="width:1px;background:var(--muted);margin:0 0.25rem"></span>
+            <button type="button" class="richtext-btn" data-cmd="insertUnorderedList" title="Aufzählung">•</button>
+            <button type="button" class="richtext-btn" data-cmd="insertOrderedList" title="Nummerierung">1.</button>
+          </div>
+          <div id="richtextEditor" class="richtext-editor" contenteditable="true"></div>
+        </div>
+        <div style="display:flex;gap:0.5rem;margin-top:1rem">
+          <button type="button" class="btn btn-primary" id="btnTbEditorSave">Speichern</button>
+          <button type="button" class="btn btn-ghost" id="btnTbEditorCancel">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+    <div id="modalTbCategory" class="modal-overlay" aria-hidden="true">
+      <div class="modal-box">
+        <h3 id="modalTbCategoryTitle">Neue Kategorie</h3>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label>Name</label>
+          <input type="text" id="tbCategoryName" placeholder="z.B. Montage, Service" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+        </div>
+        <div style="display:flex;gap:0.5rem">
+          <button type="button" class="btn btn-primary" id="btnTbCategorySave">Speichern</button>
+          <button type="button" class="btn btn-ghost" id="btnTbCategoryCancel">Abbrechen</button>
+        </div>
       </div>
     </div>
   </main>

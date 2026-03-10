@@ -29,6 +29,17 @@ function Set-VersionFiles($newVersion) {
     $versionJson = @{ version = $newVersion } | ConvertTo-Json
     Set-Content $versionJsonPath -Value $versionJson -NoNewline
 
+    # electron/package.json für electron-builder synchronisieren (V 1.025 -> 1.0.25)
+    $packageJsonPath = Join-Path $repoRoot "electron\package.json"
+    if ($newVersion -match 'V\s*(\d+)\.(\d+)') {
+        $buildNum = $Matches[2].TrimStart('0')
+        if ($buildNum -eq '') { $buildNum = '0' }
+        $semver = "$($Matches[1]).0.$buildNum"
+        $pkg = Get-Content $packageJsonPath -Raw
+        $pkg = $pkg -replace '"version"\s*:\s*"[^"]*"', "`"version`": `"$semver`""
+        Set-Content $packageJsonPath -Value $pkg -NoNewline
+    }
+
     return $tagName
 }
 

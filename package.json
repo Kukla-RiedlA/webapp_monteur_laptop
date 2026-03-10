@@ -1,0 +1,7 @@
+{
+  "name": "webapp-monteur-laptop",
+  "private": true,
+  "devDependencies": {
+    "archiver": "^7.0.1"
+  }
+}

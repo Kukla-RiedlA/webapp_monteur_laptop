@@ -171,3 +171,21 @@ Das Skript:
 4. Fuehrt `git push` und `git push origin <tag>` aus
 
 Optional vorher in `VERSION_HISTORY.md` die Aenderungen fuer die neue Version eintragen und die Datei mit committen (dafuer vor dem Aufruf von `release.ps1` manuell `git add VERSION_HISTORY.md` und in einem separaten Commit oder im Release-Commit mit anlegen).
+
+## Build (Windows-Installer)
+
+Nach dem Release den Electron-Installer bauen:
+
+```powershell
+.\build.ps1
+```
+
+Das Skript liest die Version aus `electron/version.json`, synchronisiert `electron/package.json` und erstellt den NSIS-Installer in `electron/dist/`.
+
+Optional: Installer in Zielordner kopieren (z. B. fuer Verteilung):
+
+```powershell
+.\build.ps1 -DeployPath "C:\deploy\laptop"
+```
+
+Siehe auch `docs/DEPLOYMENT_ZERO_DOWNTIME.md` (Abschnitt Laptop-App).
