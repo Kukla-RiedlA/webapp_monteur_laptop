@@ -1750,7 +1750,7 @@
     TH: 'Asia/Bangkok', TJ: 'Asia/Dushanbe', TK: 'Pacific/Fakaofo', TL: 'Asia/Dili',
     TM: 'Asia/Ashgabat', TN: 'Africa/Tunis', TO: 'Pacific/Tongatapu', TR: 'Europe/Istanbul',
     TT: 'America/Port_of_Spain', TV: 'Pacific/Funafuti', TW: 'Asia/Taipei', TZ: 'Africa/Dar_es_Salaam',
-    UA: 'Europe/Kyiv', UG: 'Africa/Kampala', UM: 'Pacific/Midway', US: 'America/New_York',
+    UA: 'Europe/Kyiv', UG: 'Africa/Kampala', UM: 'Pacific/Midway', US: 'America/Chicago',
     UY: 'America/Montevideo', UZ: 'Asia/Tashkent', VA: 'Europe/Vatican', VC: 'America/St_Vincent',
     VE: 'America/Caracas', VG: 'America/Virgin', VI: 'America/Virgin', VN: 'Asia/Ho_Chi_Minh',
     VU: 'Pacific/Efate', WF: 'Pacific/Wallis', WS: 'Pacific/Apia', YE: 'Asia/Aden',
@@ -1813,7 +1813,7 @@
     THA: 'Asia/Bangkok', TJK: 'Asia/Dushanbe', TKL: 'Pacific/Fakaofo', TLS: 'Asia/Dili',
     TKM: 'Asia/Ashgabat', TUN: 'Africa/Tunis', TON: 'Pacific/Tongatapu', TUR: 'Europe/Istanbul',
     TTO: 'America/Port_of_Spain', TUV: 'Pacific/Funafuti', TWN: 'Asia/Taipei', TZA: 'Africa/Dar_es_Salaam',
-    UKR: 'Europe/Kyiv', UGA: 'Africa/Kampala', UMI: 'Pacific/Midway', USA: 'America/New_York',
+    UKR: 'Europe/Kyiv', UGA: 'Africa/Kampala', UMI: 'Pacific/Midway', USA: 'America/Chicago',
     URY: 'America/Montevideo', UZB: 'Asia/Tashkent', VAT: 'Europe/Vatican', VCT: 'America/St_Vincent',
     VEN: 'America/Caracas', VGB: 'America/Virgin', VIR: 'America/Virgin', VNM: 'Asia/Ho_Chi_Minh',
     VUT: 'Pacific/Efate', WLF: 'Pacific/Wallis', WSM: 'Pacific/Apia', YEM: 'Asia/Aden',
@@ -1822,27 +1822,19 @@
     UK: 'Europe/London'
   };
 
-  /** Zeitverschiebung von Österreich zur Zeit im Auftragsland. countryCode = 2 oder 3 Buchstaben. */
-  function getTimezoneLabel(countryCode) {
+  /** Aktuelle Ortszeit (HH:mm) im Auftragsland. countryCode = 2 oder 3 Buchstaben. */
+  function getLocalTimeHhmm(countryCode) {
     try {
       if (!countryCode || countryCode.length < 2) return null;
       var code = countryCode.toUpperCase().slice(0, 3);
       var tz = countryToTz[code] || countryToTz[code.slice(0, 2)];
       if (!tz) return null;
-      var austria = getTimezoneOffsetHours('Europe/Vienna');
-      var land = getTimezoneOffsetHours(tz);
-      if (austria == null || land == null) return null;
-      var diff = land - austria;
-      var landName = code;
-      try {
-        landName = new Intl.DisplayNames(['de'], { type: 'region' }).of(code) || landName;
-      } catch (_) { }
-      var diffStr = diff === 0 ? '0 h' : (diff > 0 ? '+' : '') + diff + ' h';
-      return 'ZV: ' + diffStr;
+      var now = new Date();
+      return now.toLocaleTimeString('de-DE', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
     } catch (_) { return null; }
   }
 
-  /** Firma, Ort, Länderkürzel für Kalender-Balken (Aufträge). Tooltip: Zeitverschiebung nur zwischen Österreich und Auftragsland (0 h, +1 h, -1 h …). */
+  /** Firma, Ort, Länderkürzel für Kalender-Balken (Aufträge). Tooltip: Lokale Uhrzeit (HH:mm) im Auftragsland. */
   function jobBarText(job, maxLen) {
     const firma = (job.customer_name || job.customerName || job.job_number || 'Auftrag').trim();
     const ort = (job.city || '').trim();
@@ -1864,9 +1856,14 @@
     const dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
     if (dateRangeStr) title += '\nZeitraum: ' + dateRangeStr;
     var tzLabel = null;
-    try {
-      tzLabel = getTimezoneLabel(land2 || land);
-    } catch (_) { }
+    if (job.local_time_hhmm) {
+      tzLabel = 'Lokale Uhrzeit: ' + job.local_time_hhmm;
+    } else {
+      try {
+        var hhmm = getLocalTimeHhmm(land2 || land);
+        if (hhmm) tzLabel = 'Lokale Uhrzeit: ' + hhmm;
+      } catch (_) { }
+    }
     if (tzLabel) title += '\n' + tzLabel;
 
     return { label: label || 'Auftrag', title, labelHtml };
