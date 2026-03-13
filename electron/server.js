@@ -112,6 +112,19 @@ function logAbsenceRequestError(info) {
   }
 }
 
+/** Sync-Push-Fehler in Datei und Konsole (zum Debuggen: Log liegt im Ordner der monteur.db). */
+function logSyncPushError(info) {
+  const line = new Date().toISOString() + ' [sync_push] ' + JSON.stringify(info, null, 0) + '\n';
+  console.error('[sync_push]', info);
+  try {
+    const logPath = path.join(DB_DIR, 'sync_push_errors.log');
+    if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+    fs.appendFileSync(logPath, line);
+  } catch (e) {
+    // Logging-Fehler ignorieren
+  }
+}
+
 async function getDb() {
   const initSqlJs = require('sql.js');
   const SQL = await initSqlJs({
@@ -142,6 +155,23 @@ async function getDb() {
     )`);
   } catch (e) { /* existiert evtl. */ }
   try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_job_contacts_job ON job_contacts(job_id)'); } catch (e) { /* ignore */ }
+  try {
+    sqlDb.run(`CREATE TABLE IF NOT EXISTS job_hotel_addresses (
+      job_id INTEGER PRIMARY KEY,
+      endkunde TEXT,
+      street TEXT,
+      house_number TEXT,
+      zip TEXT,
+      city TEXT,
+      country TEXT,
+      address_extra_1 TEXT,
+      address_extra_2 TEXT,
+      phone TEXT,
+      email TEXT,
+      website TEXT,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    )`);
+  } catch (e) { /* existiert evtl. */ }
   try {
     sqlDb.run(`CREATE TABLE IF NOT EXISTS absence_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -727,10 +757,10 @@ function createApp(db) {
   app.post('/api/dienstreise/copy_project_stream', express.json(), async (req, res) => {
     let clientGone = false;
     req.on('close', () => { clientGone = true; });
-    const send = (obj) => {
+    const send = (obj, cb) => {
       if (clientGone || res.writableEnded) return;
       try {
-        res.write(JSON.stringify(obj) + '\n');
+        res.write(JSON.stringify(obj) + '\n', 'utf8', cb || undefined);
       } catch (e) {
         clientGone = true;
       }
@@ -770,12 +800,17 @@ function createApp(db) {
       send({ phase: 'refresh' });
       const refreshUrl = dispoBaseUrl + '/api/job_project_refresh.php';
       const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+      const refreshTimeoutMs = 60000; // 1 Min – Dispo-Refresh darf nicht ewig hängen
+      const refreshAbort = new AbortController();
+      const refreshTimeoutId = setTimeout(() => refreshAbort.abort(), refreshTimeoutMs);
       try {
         const refreshRes = await fetch(refreshUrl, {
           method: 'POST',
+          signal: refreshAbort.signal,
           headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...authHeader },
           body: JSON.stringify({ job_id: jobId, technician_id: technicianId }),
         });
+        clearTimeout(refreshTimeoutId);
         const refreshData = await refreshRes.json().catch(() => ({}));
         if (!refreshRes.ok) {
           send({ phase: 'error', error: refreshData.error || 'Dispo-Aktualisierung fehlgeschlagen.' });
@@ -783,7 +818,9 @@ function createApp(db) {
           return;
         }
       } catch (refreshErr) {
-        send({ phase: 'error', error: refreshErr.message || 'Dispo-Aktualisierung fehlgeschlagen.' });
+        clearTimeout(refreshTimeoutId);
+        const msg = refreshErr.name === 'AbortError' ? 'Dispo-Antwort: Zeitüberschreitung.' : (refreshErr.message || 'Dispo-Aktualisierung fehlgeschlagen.');
+        send({ phase: 'error', error: msg });
         safeEnd();
         return;
       }
@@ -835,8 +872,9 @@ function createApp(db) {
         send({ phase: 'file', current: i + 1, total, path: relPath });
       }
 
-      send({ phase: 'done' });
-      safeEnd();
+      send({ phase: 'done' }, () => {
+        safeEnd();
+      });
     } catch (e) {
       send({ phase: 'error', error: e.message || 'Kopieren fehlgeschlagen.' });
       safeEnd();
@@ -1041,6 +1079,35 @@ function createApp(db) {
         } catch (err) { /* ignore */ }
       }
 
+      /** Entfernt alle ignorierbaren Einträge (Dateien und Unterordner rekursiv), damit leere Ordner danach mit rmdir entfernt werden können. */
+      function removeAllIgnorableContents(dirPath) {
+        try {
+          const names = fs.readdirSync(dirPath);
+          for (const name of names) {
+            if (!isIgnorableDirEntry(name)) continue;
+            const full = path.join(dirPath, name);
+            try {
+              if (fs.statSync(full).isFile()) {
+                fs.unlinkSync(full);
+              } else {
+                removeAllIgnorableContents(full);
+                fs.rmdirSync(full);
+              }
+            } catch (err) { /* ignore */ }
+          }
+        } catch (err) { /* ignore */ }
+      }
+
+      /** Prüft, ob ein Ordner leer ist (keine Einträge außer evtl. ignorierbare). */
+      function isEmptyOrOnlyIgnorable(dirPath) {
+        try {
+          const names = fs.readdirSync(dirPath);
+          return names.filter((n) => !isIgnorableDirEntry(n)).length === 0;
+        } catch (e) {
+          return true;
+        }
+      }
+
       function deleteRecursively(dir, relBase) {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const e of entries) {
@@ -1050,9 +1117,8 @@ function createApp(db) {
           if (e.isDirectory()) {
             deleteRecursively(full, rel);
             try {
-              removeIgnorableFilesInDir(full);
-              const rest = fs.readdirSync(full);
-              if (rest.length === 0 && !isProtected(rel)) fs.rmdirSync(full);
+              removeAllIgnorableContents(full);
+              if (isEmptyOrOnlyIgnorable(full) && !isProtected(rel)) fs.rmdirSync(full);
             } catch (err) { /* ignore */ }
           } else if (e.isFile()) {
             try { fs.unlinkSync(full); } catch (err) { /* ignore */ }
@@ -1071,19 +1137,42 @@ function createApp(db) {
           if (e.isDirectory()) {
             removeEmptyDirs(full, rel);
             try {
-              removeIgnorableFilesInDir(full);
-              const rest = fs.readdirSync(full);
-              if (rest.length === 0 && !isProtected(rel)) fs.rmdirSync(full);
+              removeAllIgnorableContents(full);
+              if (isEmptyOrOnlyIgnorable(full) && !isProtected(rel)) fs.rmdirSync(full);
             } catch (err) { /* ignore */ }
           }
         }
       }
       removeEmptyDirs(reiseDir, '');
 
+      // Weitere Durchläufe: leere Ordner von unten nach oben entfernen (bis nichts mehr wegfällt)
+      for (let pass = 0; pass < 5; pass++) {
+        let removed = false;
+        function removeEmptyDirsPass(dir, relBase) {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const e of entries) {
+            const full = path.join(dir, e.name);
+            const rel = relBase ? relBase + '/' + e.name : e.name;
+            if (e.isDirectory()) {
+              removeEmptyDirsPass(full, rel);
+              try {
+                removeAllIgnorableContents(full);
+                if (isEmptyOrOnlyIgnorable(full) && !isProtected(rel)) {
+                  fs.rmdirSync(full);
+                  removed = true;
+                }
+              } catch (err) { /* ignore */ }
+            }
+          }
+        }
+        removeEmptyDirsPass(reiseDir, '');
+        if (!removed) break;
+      }
+
       // Leeren Dienstreise-Ordner selbst entfernen (z. B. 1_2026-02-16_Kopierkunde_sss_AT)
       try {
-        removeIgnorableFilesInDir(reiseDir);
-        if (fs.existsSync(reiseDir) && fs.readdirSync(reiseDir).length === 0) {
+        removeAllIgnorableContents(reiseDir);
+        if (fs.existsSync(reiseDir) && isEmptyOrOnlyIgnorable(reiseDir)) {
           fs.rmdirSync(reiseDir);
         }
       } catch (err) { /* ignore */ }
@@ -1141,11 +1230,16 @@ function createApp(db) {
     let sql = `SELECT j.id, j.server_id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
         j.status, j.required_technicians, j.description, j.fabrikationsnummern,
         c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
-        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2,
+        jha.endkunde AS hotel_endkunde, jha.street AS hotel_street, jha.house_number AS hotel_house_number,
+        jha.zip AS hotel_zip, jha.city AS hotel_city, jha.country AS hotel_country,
+        jha.address_extra_1 AS hotel_address_extra_1, jha.address_extra_2 AS hotel_address_extra_2,
+        jha.phone AS hotel_phone, jha.email AS hotel_email, jha.website AS hotel_website
       FROM jobs j
       INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
+      LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
       WHERE 1=1`;
     const params = [technicianId];
     if (!includeErledigt) {
@@ -1181,11 +1275,16 @@ function createApp(db) {
     let sql = `SELECT j.id, j.server_id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
         j.status, j.required_technicians, j.description, j.fabrikationsnummern,
         c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
-        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2,
+        jha.endkunde AS hotel_endkunde, jha.street AS hotel_street, jha.house_number AS hotel_house_number,
+        jha.zip AS hotel_zip, jha.city AS hotel_city, jha.country AS hotel_country,
+        jha.address_extra_1 AS hotel_address_extra_1, jha.address_extra_2 AS hotel_address_extra_2,
+        jha.phone AS hotel_phone, jha.email AS hotel_email, jha.website AS hotel_website
       FROM jobs j
       INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
+      LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
       WHERE j.status = 'erledigt'
         AND strftime('%Y', j.end_datetime) = ?`;
     const params = [technicianId, String(year)];
@@ -1229,6 +1328,27 @@ function createApp(db) {
     }
   });
 
+  app.get('/api/jobs_open', async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!baseUrl || !technicianId) {
+      return res.status(400).json({ error: 'base_url und technician_id erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
+    const url = `${baseUrl}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(technicianId)}`;
+    try {
+      const r = await fetch(url, auth ? { headers: auth } : {});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return res.status(r.status).json(data && data.error ? data : { error: r.statusText || 'Dispo-Fehler' });
+      }
+      res.json(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error('[jobs_open]', e.message);
+      res.status(500).json({ error: e.message || 'Fehler beim Laden der offenen Aufträge.' });
+    }
+  });
+
   app.get('/api/job', async (req, res) => {
     const technicianId = getTechnicianId(req);
     const jobId = parseInt(req.query.id, 10);
@@ -1239,11 +1359,16 @@ function createApp(db) {
       SELECT j.*, c.name AS customer_name, c.street AS customer_street, c.house_number AS customer_house_number,
         c.zip AS customer_zip, c.city AS customer_city, c.phone AS customer_phone,
         c.contact_person, c.contact_phone, c.contact_email,
-        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2,
+        jha.endkunde AS hotel_endkunde, jha.street AS hotel_street, jha.house_number AS hotel_house_number,
+        jha.zip AS hotel_zip, jha.city AS hotel_city, jha.country AS hotel_country,
+        jha.address_extra_1 AS hotel_address_extra_1, jha.address_extra_2 AS hotel_address_extra_2,
+        jha.phone AS hotel_phone, jha.email AS hotel_email, jha.website AS hotel_website
       FROM jobs j
       INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
+      LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
       WHERE j.id = ?
     `).get(technicianId, jobId);
     if (!row) {
@@ -1269,31 +1394,51 @@ function createApp(db) {
   });
 
   app.post('/api/job_from_dispo', express.json(), async (req, res) => {
-    const technicianId = getTechnicianId(req);
-    const { baseUrl, jobId: localJobId } = req.body || {};
-    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
-    if (!technicianId || !base || localJobId == null) {
-      return res.status(400).json({ ok: false, error: 'baseUrl, jobId und technician_id erforderlich.' });
-    }
-    const localId = parseInt(localJobId, 10);
-    const row = db.prepare('SELECT id, server_id FROM jobs WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)').get(localId, technicianId);
-    if (!row) {
-      return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
-    }
-    const serverJobId = (row.server_id != null && row.server_id !== '') ? row.server_id : localId;
-    const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
-    const url = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(serverJobId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
+    const sendError = (status, msg) => {
+      if (!res.headersSent) res.status(status).json({ ok: false, error: msg });
+    };
     try {
+      const technicianId = getTechnicianId(req);
+      const { baseUrl, jobId: localJobId } = req.body || {};
+      const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!technicianId || !base || localJobId == null) {
+        return res.status(400).json({ ok: false, error: 'baseUrl, jobId und technician_id erforderlich.' });
+      }
+      const localId = parseInt(localJobId, 10);
+      const row = db.prepare('SELECT id, server_id FROM jobs WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)').get(localId, technicianId);
+      if (!row) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      const serverJobId = (row.server_id != null && row.server_id !== '') ? row.server_id : localId;
+      const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
+      const url = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(serverJobId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
       const r = await fetch(url, auth ? { headers: auth } : {});
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+        return sendError(r.status, data.error || r.statusText || 'Dispo-Fehler');
       }
       if (data.job && typeof data.job === 'object') {
         if (data.job.fabrikationsnummern == null && data.job.Fabrikationsnummern != null) {
           data.job.fabrikationsnummern = data.job.Fabrikationsnummern;
         }
         data.job = await enrichJobFabWithAnlagenstamm(data.job, base, auth);
+        // Lokale Hotel-Adresse einblenden (übersteuert Dispo, falls lokal gespeichert)
+        try {
+          const hotel = db.prepare('SELECT endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website FROM job_hotel_addresses WHERE job_id = ?').get(localId);
+          if (hotel) {
+            data.job.hotel_endkunde = hotel.endkunde;
+            data.job.hotel_street = hotel.street;
+            data.job.hotel_house_number = hotel.house_number;
+            data.job.hotel_zip = hotel.zip;
+            data.job.hotel_city = hotel.city;
+            data.job.hotel_country = hotel.country;
+            data.job.hotel_address_extra_1 = hotel.address_extra_1;
+            data.job.hotel_address_extra_2 = hotel.address_extra_2;
+            data.job.hotel_phone = hotel.phone;
+            data.job.hotel_email = hotel.email;
+            data.job.hotel_website = hotel.website;
+          }
+        } catch (e) { /* Tabelle fehlt – ignorieren */ }
         // Baustellen-Ansprechpartner lokal speichern, damit sie bei GET /api/job angezeigt werden
         const contacts = Array.isArray(data.job.job_contacts) ? data.job.job_contacts : [];
         try {
@@ -1311,7 +1456,9 @@ function createApp(db) {
       }
       res.json(data);
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      console.error('[job_from_dispo]', e.message, e.stack);
+      logSyncPushError({ reason: 'job_from_dispo', message: e.message, stack: e.stack });
+      sendError(500, e.message || 'Interner Fehler beim Laden von der Dispo');
     }
   });
 
@@ -1682,6 +1829,62 @@ function createApp(db) {
     }
   });
 
+  app.post('/api/kontrollwiegungsprotokoll_save', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!technicianId || !dispoBaseUrl) {
+        return res.status(400).json({ ok: false, error: 'base_url und technician_id erforderlich.' });
+      }
+      const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
+      const url = dispoBaseUrl + '/dispo_api/api/kontrollwiegungsprotokoll_save.php';
+      const payload = {
+        technician_id: body.technician_id != null ? body.technician_id : technicianId,
+        job_id: body.job_id,
+        fabrikationsnummer: body.fabrikationsnummer,
+        durchfuehrungsdatum: body.durchfuehrungsdatum,
+        wiegungen: Array.isArray(body.wiegungen) ? body.wiegungen : [],
+      };
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      }
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.get('/api/kontrollwiegungsprotokoll_pdf', async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const protokollId = parseInt(req.query.id, 10);
+      const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!technicianId || !protokollId || !baseUrl) {
+        return res.status(400).json({ ok: false, error: 'id, base_url und technician_id erforderlich.' });
+      }
+      const url = baseUrl + '/dispo_api/api/kontrollwiegungsprotokoll_pdf.php?id=' + encodeURIComponent(protokollId) + '&technician_id=' + encodeURIComponent(technicianId);
+      const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
+      const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: r.statusText });
+      }
+      const buf = Buffer.from(await r.arrayBuffer());
+      res.set('Content-Type', 'application/pdf');
+      res.set('Content-Disposition', 'attachment; filename="Kontrollwiegungsprotokoll.pdf"');
+      res.send(buf);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
   /** Fabrikationsnummer aus Dateiname extrahieren (z. B. FN11952_PA7_… → 11952). */
   function extractFnFromFilename(filename) {
     if (!filename || typeof filename !== 'string') return null;
@@ -1852,13 +2055,37 @@ function createApp(db) {
   app.post('/api/textbausteine_category_delete', express.json(), async (req, res) => {
     const body = req.body || {};
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
     if (!baseUrl || !body.id) return res.status(400).json({ ok: false, error: 'baseUrl und id erforderlich.' });
     try {
       const formBody = new URLSearchParams();
       formBody.append('id', body.id);
+      formBody.append('technician_id', String(technicianId || 0));
       const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_delete.php', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(technicianId || 0) },
+        body: formBody.toString(),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/textbausteine_publish_global', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    if (!baseUrl || body.item_id == null) return res.status(400).json({ ok: false, error: 'baseUrl und item_id erforderlich.' });
+    try {
+      const formBody = new URLSearchParams();
+      formBody.append('technician_id', String(technicianId || 0));
+      formBody.append('item_id', String(body.item_id));
+      const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_publish_global.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(technicianId || 0) },
         body: formBody.toString(),
       });
       const data = await r.json().catch(() => ({}));
@@ -1914,14 +2141,41 @@ function createApp(db) {
     }
   });
 
-  app.patch('/api/job', (req, res) => {
+  app.patch('/api/job', express.json(), (req, res) => {
     const technicianId = getTechnicianId(req);
-    const { job_id, status, description, fabrikationsnummern } = req.body || {};
+    const body = req.body || {};
+    const { job_id, status, description, fabrikationsnummern } = body;
     if (!technicianId || !job_id) {
       return res.status(400).json({ ok: false, error: 'technician_id und job_id erforderlich.' });
     }
     const allowed = ['geplant', 'in_arbeit', 'erledigt'];
+    const hotelKeys = ['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_address_extra_1', 'hotel_address_extra_2', 'hotel_phone', 'hotel_email', 'hotel_website'];
+    const hasHotelPayload = hotelKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k));
     try {
+      if (hasHotelPayload) {
+        const hotelPayload = {};
+        hotelKeys.forEach((k) => { hotelPayload[k] = body[k] != null ? String(body[k]) : ''; });
+        const jha = db.prepare('SELECT job_id FROM job_hotel_addresses WHERE job_id = ?').get(job_id);
+        const endkunde = hotelPayload.hotel_endkunde || null;
+        const street = hotelPayload.hotel_street || '';
+        const house_number = hotelPayload.hotel_house_number || '';
+        const zip = hotelPayload.hotel_zip || '';
+        const city = hotelPayload.hotel_city || '';
+        const country = hotelPayload.hotel_country || null;
+        const address_extra_1 = hotelPayload.hotel_address_extra_1 || null;
+        const address_extra_2 = hotelPayload.hotel_address_extra_2 || null;
+        const phone = hotelPayload.hotel_phone || null;
+        const email = hotelPayload.hotel_email || null;
+        const website = hotelPayload.hotel_website || null;
+        if (jha) {
+          db.prepare('UPDATE job_hotel_addresses SET endkunde=?, street=?, house_number=?, zip=?, city=?, country=?, address_extra_1=?, address_extra_2=?, phone=?, email=?, website=? WHERE job_id=?').run(endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website, job_id);
+        } else {
+          db.prepare('INSERT INTO job_hotel_addresses (job_id, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(job_id, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website);
+        }
+        db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', job_id, 'hotel_address', JSON.stringify(hotelPayload));
+        save();
+        return res.json({ ok: true, updated: 'hotel_address' });
+      }
       if (status && allowed.includes(status)) {
         const r = db.prepare(`
           UPDATE jobs SET status = ?, updated_at = datetime('now')
@@ -2322,15 +2576,25 @@ function createApp(db) {
   });
 
   app.post('/api/sync_push', express.json(), (req, res) => {
+    const sendError = (msg, reason, extra) => {
+      if (reason) logSyncPushError(Object.assign({ reason, message: msg }, extra || {}));
+      if (!res.headersSent) res.status(500).json({ ok: false, error: msg });
+    };
     const { baseUrl, technicianId, serverUsername, serverPassword } = req.body || {};
     if (!baseUrl || !technicianId) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technicianId erforderlich.' });
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    pushToServer(baseUrl, technicianId, db, auth).then(() => {
-      save();
-      res.json({ ok: true });
-    }).catch((e) => res.status(500).json({ ok: false, error: e.message }));
+    pushToServer(baseUrl, technicianId, db, auth)
+      .then(() => {
+        try {
+          save();
+          if (!res.headersSent) res.json({ ok: true });
+        } catch (e) {
+          sendError(e.message, 'save_fehler', { stack: e.stack });
+        }
+      })
+      .catch((e) => sendError(e.message, 'push_fehler', { stack: e.stack }));
   });
 
   app.get('/api/calendar', async (req, res) => {
@@ -2398,7 +2662,9 @@ function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
     'SELECT j.id, j.server_id FROM jobs j INNER JOIN job_technicians jt ON jt.job_id = j.id WHERE jt.technician_id = ?'
   ).all(technicianId);
   for (const row of rows) {
-    const serverId = row.server_id != null && row.server_id !== '' ? row.server_id : row.id;
+    const hasServerId = row.server_id != null && String(row.server_id).trim() !== '';
+    if (!hasServerId) continue; // Verwaiste Aufträge (ohne server_id) nicht löschen – werden ggf. im gleichen Pull verknüpft
+    const serverId = row.server_id;
     if (receivedJobServerIds.has(Number(serverId)) || receivedJobServerIds.has(String(serverId))) continue;
     db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(row.id, technicianId);
     const rest = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ?').get(row.id);
@@ -2514,12 +2780,44 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const start = (j.start_datetime || '').replace('T', ' ').substring(0, 19);
   const end = (j.end_datetime || '').replace('T', ' ').substring(0, 19);
   const status = ['geplant', 'in_arbeit', 'erledigt'].includes(j.status) ? j.status : 'geplant';
-    if (existing) {
+  if (existing) {
     db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
       j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null, existing.id
     );
     if (j.street != null) insertOrUpdateJobAddress(db, existing.id, j);
+    if (hasHotelFields(j)) insertOrUpdateJobHotel(db, existing.id, j);
     return existing.id;
+  }
+  // Verwaisten lokalen Auftrag (ohne server_id) mit Dispo-Auftrag verknüpfen – dann bleibt die lokale ID erhalten
+  let orphan = null;
+  const jobNumber = (j.job_number != null && String(j.job_number).trim() !== '') ? String(j.job_number).trim() : null;
+  const customerName = (j.customer_name != null && String(j.customer_name).trim() !== '') ? String(j.customer_name).trim() : null;
+  const startDate = start.substring(0, 10); // YYYY-MM-DD
+  if (jobNumber) {
+    orphan = db.prepare(`
+      SELECT j.id FROM jobs j
+      INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+      WHERE (j.server_id IS NULL OR j.server_id = '') AND j.job_number = ?
+      LIMIT 1
+    `).get(technicianId, jobNumber);
+  }
+  if (!orphan && customerName && startDate) {
+    const orphans = db.prepare(`
+      SELECT j.id FROM jobs j
+      INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+      INNER JOIN customers c ON c.id = j.customer_id
+      WHERE (j.server_id IS NULL OR j.server_id = '') AND TRIM(c.name) = ? AND (j.start_datetime IS NULL OR j.start_datetime LIKE ?)
+      LIMIT 2
+    `).all(technicianId, customerName, startDate + '%');
+    if (orphans.length === 1) orphan = orphans[0];
+  }
+  if (orphan) {
+    db.prepare('UPDATE jobs SET server_id = ?, job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
+      id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null, orphan.id
+    );
+    if (j.street != null) insertOrUpdateJobAddress(db, orphan.id, j);
+    if (hasHotelFields(j)) insertOrUpdateJobHotel(db, orphan.id, j);
+    return orphan.id;
   }
   const r2 = db.prepare('INSERT INTO jobs (server_id, job_number, customer_id, job_type, start_datetime, end_datetime, status, description, fabrikationsnummern, eap_nummer, bestellnummer, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))').run(
     id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null
@@ -2527,7 +2825,32 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const newId = r2.lastInsertRowid;
   db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(newId, technicianId);
   if (j.street != null) insertOrUpdateJobAddress(db, newId, j);
+  if (hasHotelFields(j)) insertOrUpdateJobHotel(db, newId, j);
   return newId;
+}
+
+function hasHotelFields(j) {
+  return ['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_phone', 'hotel_email', 'hotel_website'].some((k) => j[k] != null && String(j[k]).trim() !== '');
+}
+
+function insertOrUpdateJobHotel(db, jobId, j) {
+  const endkunde = (j.hotel_endkunde != null ? String(j.hotel_endkunde) : '').trim() || null;
+  const street = (j.hotel_street != null ? String(j.hotel_street) : '').trim() || '';
+  const house_number = (j.hotel_house_number != null ? String(j.hotel_house_number) : '').trim() || '';
+  const zip = (j.hotel_zip != null ? String(j.hotel_zip) : '').trim() || '';
+  const city = (j.hotel_city != null ? String(j.hotel_city) : '').trim() || '';
+  const country = (j.hotel_country != null ? String(j.hotel_country) : '').trim() || null;
+  const address_extra_1 = (j.hotel_address_extra_1 != null ? String(j.hotel_address_extra_1) : '').trim() || null;
+  const address_extra_2 = (j.hotel_address_extra_2 != null ? String(j.hotel_address_extra_2) : '').trim() || null;
+  const phone = (j.hotel_phone != null ? String(j.hotel_phone) : '').trim() || null;
+  const email = (j.hotel_email != null ? String(j.hotel_email) : '').trim() || null;
+  const website = (j.hotel_website != null ? String(j.hotel_website) : '').trim() || null;
+  const existing = db.prepare('SELECT job_id FROM job_hotel_addresses WHERE job_id = ?').get(jobId);
+  if (existing) {
+    db.prepare('UPDATE job_hotel_addresses SET endkunde=?, street=?, house_number=?, zip=?, city=?, country=?, address_extra_1=?, address_extra_2=?, phone=?, email=?, website=? WHERE job_id=?').run(endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website, jobId);
+  } else {
+    db.prepare('INSERT INTO job_hotel_addresses (job_id, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(jobId, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website);
+  }
 }
 
 function insertOrUpdateJobAddress(db, jobId, j) {
@@ -2582,23 +2905,69 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
   const pending = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
   const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authHeader || {}) };
   for (const p of pending) {
-    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern')) {
-      const job = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(p.entity_id);
-      const serverJobId = (job && job.server_id) ? job.server_id : p.entity_id;
-      const payload = JSON.parse(p.payload || '{}');
-      const body = { job_id: serverJobId, ...payload };
-      const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${technicianId}`, { method: 'PATCH', headers: header, body: JSON.stringify(body) });
-      if (r.ok) {
+    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address')) {
+      let job = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(p.entity_id);
+      if (!job) job = db.prepare('SELECT id, server_id FROM jobs WHERE server_id = ?').get(p.entity_id);
+      const hasServerId = job && job.server_id != null && String(job.server_id).trim() !== '';
+      const serverJobId = hasServerId ? job.server_id : null;
+      if (!job) {
+        // Verwaiste Änderung: Auftrag existiert nicht mehr – Eintrag entfernen, Sync fortsetzen
+        logSyncPushError({
+          reason: 'pending_verwaist',
+          pending_entity_id: p.entity_id,
+          pending_action: p.action,
+          hinweis: 'Auftrag wurde lokal nicht gefunden, Eintrag wird entfernt.'
+        });
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
-        if (p.action === 'status' && payload.status === 'erledigt') {
-          const localJobId = p.entity_id;
-          cleanup_completed_job_files(db, localJobId);
-          db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(localJobId, technicianId);
-          const rest = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ?').get(localJobId);
-          if (!rest) {
-            db.prepare('DELETE FROM job_addresses WHERE job_id = ?').run(localJobId);
-            db.prepare('DELETE FROM jobs WHERE id = ?').run(localJobId);
-          }
+        continue;
+      }
+      if (!serverJobId) {
+        logSyncPushError({
+          reason: 'job_ohne_server_id',
+          pending_entity_id: p.entity_id,
+          pending_action: p.action,
+          job_gefunden: true,
+          job_id_lokal: job.id,
+          job_server_id: job.server_id,
+          hinweis: 'Lokaler Auftrag hat keine Dispo-Verknüpfung (server_id). Nach Pull prüfen: gleiche Auftragsnummer/Kunde+Datum wie in der Dispo?'
+        });
+        throw new Error('Auftrag (lokal) ist noch nicht mit der Dispo verknüpft. Bitte zuerst „Von Dispo laden“ (Sync-Pull) ausführen, dann erneut Sync pushen.');
+      }
+      // Techniker-ID aus job_technicians verwenden (Auftrag ist diesem Techniker zugeordnet), nicht aus Einstellungen – sonst meldet Dispo „nicht zugeordnet“
+      const techRow = job && job.id != null ? db.prepare('SELECT technician_id FROM job_technicians WHERE job_id = ? LIMIT 1').get(job.id) : null;
+      const techIdForPush = (techRow && techRow.technician_id != null) ? techRow.technician_id : technicianId;
+      const headerForJob = { 'Content-Type': 'application/json', 'X-Technician-Id': String(techIdForPush), ...(authHeader || {}) };
+      const payload = JSON.parse(p.payload || '{}');
+      const body = p.action === 'hotel_address' ? { job_id: serverJobId, ...payload } : { job_id: serverJobId, ...payload };
+      const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, { method: 'PATCH', headers: headerForJob, body: JSON.stringify(body) });
+      if (!r.ok) {
+        let errMsg = 'Dispo: ' + r.status;
+        let errData = null;
+        try {
+          const text = await r.text();
+          try { errData = JSON.parse(text); } catch (_) { errData = { _raw: text.substring(0, 500) }; }
+          if (errData && typeof errData.error === 'string') errMsg = errData.error;
+        } catch (_) {}
+        logSyncPushError({
+          reason: 'dispo_antwort_fehler',
+          status: r.status,
+          statusText: r.statusText,
+          body: errData,
+          gesendet_job_id: serverJobId,
+          gesendet_technician_id: techIdForPush,
+          action: p.action
+        });
+        throw new Error(errMsg);
+      }
+      db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      if (p.action === 'status' && payload.status === 'erledigt') {
+        const localJobId = (job && job.id) || p.entity_id;
+        cleanup_completed_job_files(db, localJobId);
+        db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(localJobId, techIdForPush);
+        const rest = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ?').get(localJobId);
+        if (!rest) {
+          db.prepare('DELETE FROM job_addresses WHERE job_id = ?').run(localJobId);
+          db.prepare('DELETE FROM jobs WHERE id = ?').run(localJobId);
         }
       }
     }

@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.029
+- **Release:** Nach Rule (Build hochgezählt, Tag, Push). Dispo V 1.030: Anlagenstamm Popup-Aktualisierung ohne Reload.
+
 ## V 1.026
 - **Montagebericht:** PDF wird aus DOCX erzeugt (docx2pdf-converter). Unter Windows wird Microsoft Word für die Konvertierung verwendet, unter Linux LibreOffice/unoconv. PDF und DOCX haben identisches Layout.
 

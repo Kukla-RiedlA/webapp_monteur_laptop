@@ -148,14 +148,13 @@
 
   function renderJobs(data) {
     const list = document.getElementById('jobsList');
-    const jobs = data.jobs || [];
+    const jobs = Array.isArray(data) ? data : (data && data.jobs) ? data.jobs : [];
     if (jobs.length === 0) {
       list.innerHTML = '<span class="empty">Keine Aufträge.</span>';
       return;
     }
     list.innerHTML = jobs.map((j) => {
       const dateStr = formatDateRange(j.start_datetime, j.end_datetime);
-      const status = (j.status || 'geplant').replace(' ', '_');
       const firma = (j.customer_name || j.customerName || '').trim();
       const ort = (j.city || '').trim();
       const land = normalizeCountryToCode(j.country) || (j.country || '').trim().toUpperCase().slice(0, 2);
@@ -166,15 +165,17 @@
       if (ort) parts.push(escapeHtml(ort));
       if (land) parts.push(escapeHtml(land));
       const titleLine = parts.join(' · ');
+      const hasOpenJobMeta = j.assigned_count != null && j.required_technicians != null;
+      const statusHtml = hasOpenJobMeta
+        ? '<span class="job-meta">' + Number(j.assigned_count) + ' / ' + Number(j.required_technicians) + ' Techniker</span>'
+        : '<span class="status-badge status-' + (j.status || 'geplant').replace(' ', '_') + '">' + (j.status || 'geplant') + '</span>';
       return (
         '<div class="job" data-job-id="' + j.id + '">' +
         '<div class="job-info">' +
         '<strong>' + (titleLine || 'Auftrag') + '</strong><br>' +
         '<span class="job-meta">' + escapeHtml(dateStr) + (j.job_type ? ' · ' + (j.job_type || '') : '') + '</span>' +
         '</div>' +
-        '<div class="job-actions">' +
-        '<span class="status-badge status-' + status + '">' + (j.status || 'geplant') + '</span>' +
-        '</div></div>'
+        '<div class="job-actions">' + statusHtml + '</div></div>'
       );
     }).join('');
     list.querySelectorAll('.job-actions [data-status]').forEach((btn) => {
@@ -190,6 +191,10 @@
   }
 
   var jobDetailsJobId = null;
+
+  function getDienstreiseExplorerJobId() {
+    return jobDetailsJobId || selectedJobIdOnDienstreisePage;
+  }
 
   function openJobDetailsModal(jobId) {
     var techId = getTechId();
@@ -213,8 +218,10 @@
         content.innerHTML = '<span class="empty">Fehler: Auftrag nicht gefunden.</span>';
         return;
       }
+      window.currentProjektdatenJob = job;
       content.innerHTML = renderJobDetailsContent(job);
       bindLeistungActions();
+      if (typeof loadDienstreiseExplorer === 'function') loadDienstreiseExplorer(jobDetailsJobId, '');
     }
 
     function loadLocal() {
@@ -229,10 +236,14 @@
       fetch(url, { headers: { 'X-Technician-Id': String(techId) } })
         .then(function (r) { return r.json(); })
         .then(function (data) {
-          if (!data.job) { showJob(null); return; }
-          showJob(data.job);
+          if (data.job) { showJob(data.job); return; }
+          var cached = window.currentProjektdatenJob;
+          if (cached && (cached.id === jobId || cached.id == jobId)) { showJob(cached); return; }
+          showJob(null);
         })
         .catch(function (e) {
+          var cached = window.currentProjektdatenJob;
+          if (cached && (cached.id === jobId || cached.id == jobId)) { showJob(cached); return; }
           content.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
         });
     }
@@ -253,11 +264,17 @@
         .then(function (data) {
           if (data.ok && data.job) {
             showJob(data.job);
-          } else {
-            loadLocal();
+            return;
           }
+          var cached = window.currentProjektdatenJob;
+          if (cached && (cached.id === jobId || cached.id == jobId)) { showJob(cached); return; }
+          loadLocal();
         })
-        .catch(function () { loadLocal(); });
+        .catch(function () {
+          var cached = window.currentProjektdatenJob;
+          if (cached && (cached.id === jobId || cached.id == jobId)) { showJob(cached); return; }
+          loadLocal();
+        });
     } else {
       loadLocal();
     }
@@ -389,6 +406,7 @@
     window.currentProjektdatenLeistungRows = leistungRows;
 
     var html = '<div class="modal-detail-grid">';
+    html += '<div class="modal-detail-section modal-detail-section-address-row"><div class="modal-address-contact-row">';
     html += '<div class="modal-detail-section"><h4>Auftrag</h4><dl class="modal-detail-dl">';
     html += '<dt>Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
     html += '<dt>Typ</dt><dd>' + v(job.job_type) + '</dd>';
@@ -401,24 +419,56 @@
     html += '<dt>Ort</dt><dd>' + v(job.customer_zip) + ' ' + v(job.customer_city) + '</dd>';
     html += '<dt>Telefon</dt><dd>' + v(job.customer_phone) + '</dd>';
     html += '</dl></div>';
-    html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
-    html += '<div class="modal-detail-section"><h4>Kontakt (Baustellen-Ansprechpartner)</h4><dl class="modal-detail-dl">';
+    html += '<div class="modal-detail-section"><h4>Auftrag: ERP-Nummer / Bestellnummer</h4>';
+    html += '<dl class="modal-detail-dl"><dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
+    html += '<dt>Bestellnummer</dt><dd>' + v(job.bestellnummer) + '</dd></dl></div>';
+    html += '</div></div>';
     (function () {
+      var hotelLines = [];
+      var hotelName = (job.hotel_endkunde || '').trim();
+      if (hotelName) hotelLines.push(escapeHtml(hotelName));
+      var hotelStreet = [ (job.hotel_street || '').trim(), (job.hotel_house_number || '').trim() ].filter(Boolean).join(' ');
+      if (hotelStreet) hotelLines.push(escapeHtml(hotelStreet));
+      var hotelZipCity = [ (job.hotel_zip || '').trim(), (job.hotel_city || '').trim() ].filter(Boolean).join(' ');
+      if (hotelZipCity) hotelLines.push(escapeHtml(hotelZipCity));
+      var hotelCountry = (job.hotel_country || '').trim();
+      if (hotelCountry) {
+        var hotelCountryCode = normalizeCountryToCode(job.hotel_country) || (job.hotel_country || '').trim().toUpperCase().slice(0, 2);
+        var hotelFlagHtml = countryFlagImg(hotelCountryCode);
+        var hotelCountryUpper = (hotelCountry || '').toUpperCase();
+        var hotelCountryEntry = (typeof window.HOTEL_COUNTRIES !== 'undefined' && Array.isArray(window.HOTEL_COUNTRIES)) ? window.HOTEL_COUNTRIES.find(function (x) { var c = (x.code || '').toUpperCase(); return c === hotelCountryUpper || c === hotelCountryCode; }) : null;
+        var hotelCountryName = (hotelCountryEntry && hotelCountryEntry.name) ? hotelCountryEntry.name : hotelCountry;
+        hotelLines.push(hotelFlagHtml ? (escapeHtml(hotelCountryName) + ' ' + hotelFlagHtml + ' ' + escapeHtml(hotelCountryCode)) : escapeHtml(hotelCountry));
+      }
+      var hotelExtra1 = (job.hotel_address_extra_1 || '').trim();
+      if (hotelExtra1) hotelLines.push(escapeHtml(hotelExtra1));
+      var hotelExtra2 = (job.hotel_address_extra_2 || '').trim();
+      if (hotelExtra2) hotelLines.push(escapeHtml(hotelExtra2));
+      var hotelPhone = (job.hotel_phone || '').trim();
+      if (hotelPhone) hotelLines.push('Tel. ' + escapeHtml(hotelPhone));
+      var hotelEmail = (job.hotel_email || '').trim();
+      if (hotelEmail) hotelLines.push(escapeHtml(hotelEmail));
+      var hotelWebsite = (job.hotel_website || '').trim();
+      if (hotelWebsite) hotelLines.push(escapeHtml(hotelWebsite));
+      var hotelAddressLine = hotelLines.length ? hotelLines.join('<br>') : '–';
       var c = (job.job_contacts && Array.isArray(job.job_contacts) && job.job_contacts[0]) ? job.job_contacts[0] : null;
       var name = (c && (c.contact_name || c.contactName)) ? (c.contact_name || c.contactName) : (job.contact_person || job.contact_name || '');
       var phone = (c && (c.contact_phone || c.contactPhone)) ? (c.contact_phone || c.contactPhone) : (job.contact_phone || '');
       var email = (c && (c.contact_email || c.contactEmail)) ? (c.contact_email || c.contactEmail) : (job.contact_email || '');
+      html += '<div class="modal-detail-section modal-detail-section-address-row">';
+      html += '<div class="modal-address-contact-row">';
+      html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
+      html += '<div class="modal-detail-section modal-hotel-display-wrap"><h4>Hotel Adresse</h4><p class="modal-address hotel-address-display" data-job-id="' + escapeHtml(String(job.id)) + '" title="Doppelklick zum Bearbeiten">' + hotelAddressLine + '</p><p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p></div>';
+      html += '<div class="modal-detail-section"><h4>Kontakt (Baustellen-Ansprechpartner)</h4><dl class="modal-detail-dl">';
       html += '<dt>Ansprechpartner</dt><dd>' + v(name) + '</dd>';
       html += '<dt>Telefon</dt><dd>' + v(phone) + '</dd>';
       html += '<dt>E-Mail</dt><dd>' + v(email) + '</dd>';
+      html += '</dl></div>';
+      html += '</div></div>';
     })();
-    html += '</dl></div>';
     html += '</div>';
 
-    html += '<div class="modal-detail-section"><h4>Auftrag: ERP-Nummer / Bestellnummer</h4>';
-    html += '<dl class="modal-detail-dl"><dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
-    html += '<dt>Bestellnummer</dt><dd>' + v(job.bestellnummer) + '</dd></dl>';
-    html += '<h4 style="margin-top:1rem">Leistungsdaten (Anlagenstamm)</h4>';
+    html += '<div class="modal-detail-section"><h4>Leistungsdaten (Anlagenstamm)</h4>';
     html += '<p class="modal-leistung-hint">Doppelklick auf eine Anlage öffnet die Anlagendetails.</p>';
     var visibleIndices = [];
     for (var idx = 0; idx < leistungRows.length; idx++) {
@@ -547,23 +597,7 @@
         body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
       }).then(function () {
         closeModal();
-        var content = document.getElementById('viewProjektdatenContent');
-        if (content) content.innerHTML = '<span class="empty">Gespeichert. Lade neu…</span>';
-        var url = API_BASE + '/api/job?id=' + encodeURIComponent(jobId);
-        var base = getDispoBaseUrl();
-        if (base) {
-          url += '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(base);
-          var u = getDispoUsername(); var p = getDispoPassword();
-          if (u) url += '&serverUsername=' + encodeURIComponent(u);
-          if (p) url += '&serverPassword=' + encodeURIComponent(p);
-        }
-        fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } })
-          .then(function (r) { return r.json(); })
-          .then(function (data) {
-            if (data.job && content) content.innerHTML = renderJobDetailsContent(data.job);
-            bindLeistungActions();
-          })
-          .catch(function () { if (content) content.innerHTML = '<span class="empty">Fehler beim Neuladen.</span>'; });
+        openJobDetailsModal(jobId);
         if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync(); } catch (e) {} }
       }).catch(function (e) {
         alert('Speichern fehlgeschlagen: ' + e.message);
@@ -606,17 +640,7 @@
       method: 'PATCH',
       body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
     }).then(function () {
-      var content = document.getElementById('viewProjektdatenContent');
-      if (content) content.innerHTML = '<span class="empty">Gespeichert. Lade neu…</span>';
-      var url = API_BASE + '/api/job?id=' + encodeURIComponent(jobId);
-      fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          if (data.job && content) content.innerHTML = renderJobDetailsContent(data.job);
-          bindLeistungActions();
-        })
-        .catch(function () { if (content) content.innerHTML = '<span class="empty">Fehler beim Neuladen.</span>'; });
-      // Wenn online, Änderungen sofort zum Dispo-Server schieben; sonst bleiben sie in pending_changes für den nächsten Sync.
+      openJobDetailsModal(jobId);
       if (typeof checkConnectionAndSync === 'function') {
         try { checkConnectionAndSync(); } catch (e) {}
       }
@@ -632,6 +656,313 @@
       td.addEventListener('dblclick', function () {
         var idx = td.getAttribute('data-row-index');
         if (idx !== null && idx !== '') openAnlageDetailModal(parseInt(idx, 10));
+      });
+    });
+    bindHotelAddressDblclick();
+  }
+
+  function bindHotelAddressDblclick() {
+    var content = document.getElementById('viewProjektdatenContent');
+    if (!content) return;
+    content.querySelectorAll('.hotel-address-display').forEach(function (el) {
+      el.addEventListener('dblclick', function () {
+        var job = window.currentProjektdatenJob;
+        if (job) openHotelAddressModal(job);
+      });
+    });
+  }
+
+  /**
+   * Parst eingefügten Fließtext (E-Mail, Webseite) in Hotel-Adressfelder.
+   * @param {string} raw - Rohtext
+   * @param {{ code: string, name: string }[]} [countries] - Optionale Länderliste für Land-Erkennung
+   * @returns {{ endkunde: string, street: string, house_number: string, zip: string, city: string, country: string, address_extra_1: string, address_extra_2: string, phone: string, email: string, website: string }}
+   */
+  function parseHotelAddressPaste(raw, countries) {
+    var out = { endkunde: '', street: '', house_number: '', zip: '', city: '', country: '', address_extra_1: '', address_extra_2: '', phone: '', email: '', website: '' };
+    var text = (raw || '').trim();
+    if (!text) return out;
+    var lines = text.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+    if (lines.length === 0 && text) { lines = text.split(',').map(function (s) { return s.trim(); }).filter(Boolean); }
+    // Eine Zeile mit Kommas (z. B. "Vivotel Gelsenkirchen, Hagenstraße 4, 45894 Gelsenkirchen") in Teile zerlegen
+    if (lines.length === 1 && lines[0].indexOf(',') >= 0) {
+      lines = lines[0].split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+    if (lines.length === 0) return out;
+    var remainder = lines.slice();
+    var emailRe = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+    var urlRe = /https?:\/\/[^\s]+/;
+    var urlWwwRe = /www\.[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\s]*/;
+    var phoneRe = /[\+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{8,}/;
+    for (var i = 0; i < remainder.length; i++) {
+      var line = remainder[i];
+      var emailMatch = line.match(emailRe);
+      if (emailMatch && !out.email) { out.email = emailMatch[0]; line = line.replace(emailMatch[0], '').trim(); }
+      var urlMatch = line.match(urlRe);
+      if (urlMatch && !out.website) { out.website = urlMatch[0].replace(/[.,;:!?)]+$/, ''); line = line.replace(urlMatch[0], '').trim(); }
+      if (!out.website) {
+        var urlWwwMatch = line.match(urlWwwRe);
+        if (urlWwwMatch) { out.website = ('https://' + urlWwwMatch[0]).replace(/[.,;:!?)]+$/, ''); line = line.replace(urlWwwMatch[0], '').trim(); }
+      }
+      var phoneMatch = line.match(phoneRe);
+      if (phoneMatch && !out.phone) { out.phone = phoneMatch[0].trim(); line = line.replace(phoneMatch[0], '').trim(); }
+      remainder[i] = line;
+    }
+    remainder = remainder.map(function (s) { return s.replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+    remainder = remainder.filter(function (s) {
+      if (s.length === 0 || /^[\s\-–—,.:;]+$/.test(s)) return false;
+      if (!/[a-zA-Z0-9]{2,}/.test(s)) return false;
+      if (/^(tel|fax|phone|mobile|mobil):/i.test(s) || (/(tel|fax|phone)\s*:/i.test(s) && /[\d+()\-.\s]{5,}/.test(s))) return false;
+      if (/^(tel|fax|phone|telefon|mobile|mobil|e-?mail|webseite|website|www\.?|https?):?\s*[-–—\s]*$/i.test(s)) return false;
+      if (s.length <= 3 && /^[a-z\-]+$/i.test(s)) return false;
+      return true;
+    });
+    var countryCodes = { 'usa': 'US', 'united states': 'US', 'united kingdom': 'GB', 'uk': 'GB', 'great britain': 'GB', 'germany': 'DE', 'deutschland': 'DE', 'austria': 'AT', 'österreich': 'AT', 'switzerland': 'CH', 'schweiz': 'CH', 'india': 'IN', 'indien': 'IN', 'china': 'CN', 'france': 'FR', 'italy': 'IT', 'spain': 'ES', 'netherlands': 'NL' };
+    var countryList = (countries && Array.isArray(countries)) ? countries : [];
+    function matchCountry(str) {
+      var s = (str || '').toLowerCase().trim();
+      if (!s) return '';
+      if (/^a\s*-?\s*/.test(s)) return 'AT';
+      var code = countryCodes[s];
+      if (code) return code;
+      for (var c = 0; c < countryList.length; c++) {
+        var item = countryList[c];
+        var itemCode = (item.code || '').toUpperCase().slice(0, 2);
+        var itemName = (item.name || '').toLowerCase();
+        // Nur exakten 2-Buchstaben-Code matchen, nicht „Vivotel“ → VI (Jungferninseln)
+        if ((s.length === 2 && itemCode === s.toUpperCase()) || itemName === s || (itemName && itemName.indexOf(s) === 0)) return itemCode;
+      }
+      if (/^(at|de|ch|us|gb|uk|fr|it|es|nl|in|cn|jp)$/i.test(s)) return s.toUpperCase().slice(0, 2);
+      return '';
+    }
+    var zip5 = /\b(\d{5})\b/;
+    var zip4 = /\b(\d{4})\b/;
+    var zip5plus4 = /\b(\d{5}-\d{4})\b/;
+    var zip6 = /\b(\d{6})\b/;
+    var ukPostcode = /\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i;
+    var countryLineIdx = -1;
+    var countryCode = '';
+    for (var k = remainder.length - 1; k >= 0; k--) {
+      countryCode = matchCountry(remainder[k]);
+      if (countryCode) { countryLineIdx = k; out.country = countryCode; break; }
+    }
+    if (countryLineIdx >= 0) {
+      var countryLine = remainder[countryLineIdx];
+      if (!/\b\d{4,5}\b/.test(countryLine)) remainder.splice(countryLineIdx, 1);
+    }
+    var zipLineIdx = -1;
+    var zipVal = '';
+    var cityVal = '';
+    var zipLineHadComma = false;
+    var zipLineStreetPart = '';
+    var zipLineBeforePart = '';
+    for (var z = 0; z < remainder.length; z++) {
+      var ln = remainder[z];
+      var m5 = ln.match(zip5);
+      var m54 = ln.match(zip5plus4);
+      var m6 = ln.match(zip6);
+      var m4 = ln.match(zip4);
+      var mUK = ln.match(ukPostcode);
+      function setZipAndCity(matchVal) {
+        zipVal = matchVal;
+        zipLineIdx = z;
+        var idx = ln.indexOf(matchVal);
+        var before = ln.substring(0, idx).trim().replace(/\s*[•·]\s*$/, '').trim();
+        var after = ln.substring(idx + matchVal.length).replace(/\s+/g, ' ').trim();
+        cityVal = after;
+        if (before && /[a-zA-Z]/.test(before)) zipLineBeforePart = before;
+      }
+      if (m54) { setZipAndCity(m54[1]); break; }
+      if (mUK) { setZipAndCity(mUK[1].replace(/\s+/g, ' ')); break; }
+      if (m6) { setZipAndCity(m6[1]); break; }
+      if (m5) { setZipAndCity(m5[1]); break; }
+      var isAddressLine = ln.indexOf(',') >= 0 || /^a\s*-\s*/i.test(ln);
+      if (m4 && !zipVal && isAddressLine && !/tel|fax|phone/i.test(ln)) {
+        zipVal = m4[1]; zipLineIdx = z;
+        if (ln.indexOf(',') >= 0) {
+          var parts2 = ln.split(',').map(function (p) { return p.trim(); });
+          for (var p2 = 0; p2 < parts2.length; p2++) {
+            if (parts2[p2].indexOf(zipVal) >= 0) {
+              zipLineHadComma = true;
+              zipLineStreetPart = p2 === 0 ? (parts2[1] || '') : (parts2[0] || '');
+              cityVal = parts2[p2].replace(m4[1], '').replace(/^a\s*-\s*/i, '').replace(/\s+/g, ' ').trim();
+              break;
+            }
+          }
+        } else {
+          cityVal = ln.replace(m4[1], '').replace(/^a\s*-\s*/i, '').replace(/\s+/g, ' ').trim();
+        }
+        if (/^a\s*-?\s*/i.test(ln)) out.country = 'AT';
+        break;
+      }
+    }
+    if (zipLineIdx >= 0) {
+      out.zip = zipVal;
+      out.city = (cityVal || '').replace(/^[\s,.\-–—]+/, '').replace(/[\s,.\-–—]+$/, '').trim();
+      if (zipLineHadComma && zipLineStreetPart) remainder[zipLineIdx] = zipLineStreetPart;
+      else if (zipLineBeforePart) remainder[zipLineIdx] = zipLineBeforePart;
+      else remainder.splice(zipLineIdx, 1);
+    }
+    var streetLines = remainder.filter(function (s) {
+      if (s.length === 0 || /^[\s\-–—,.:;]+$/.test(s)) return false;
+      if (!/[a-zA-Z]/.test(s)) return false;
+      if (/^(tel|fax|phone|telefon|mobile|mobil):/i.test(s) || (/(tel|fax|phone)\s*:/i.test(s) && /[\d+()\-.\s]{5,}/.test(s))) return false;
+      if (/^(e-?mail|webseite|website|www\.?|https?):?\s*[-–—\s]*$/i.test(s)) return false;
+      return true;
+    });
+    if (streetLines.length > 0) {
+      out.endkunde = streetLines[0];
+      if (streetLines.length > 1) {
+        var lastLine = streetLines[streetLines.length - 1];
+        var rest = streetLines.length > 2 ? lastLine : streetLines[1];
+        var houseMatch = rest.match(/\s+(\d+[a-zA-Z]?)\s*$/);
+        if (houseMatch) {
+          out.house_number = houseMatch[1];
+          out.street = rest.replace(houseMatch[0], '').trim();
+        } else {
+          out.street = rest;
+        }
+        if (streetLines.length > 2) out.address_extra_1 = streetLines[1];
+      }
+    }
+    return out;
+  }
+
+  function openHotelAddressModal(job) {
+    var jobId = job && (job.id != null) ? job.id : jobDetailsJobId;
+    if (!jobId) return;
+    var attr = function (v) { return escapeHtml(String(v == null ? '' : v)).replace(/"/g, '&quot;'); };
+    var modalHtml = '<div id="hotelAddressModalOverlay" class="hotel-modal-overlay">';
+    modalHtml += '<div class="hotel-modal-card address-card">';
+    modalHtml += '<h3>Hotel Adresse</h3>';
+    modalHtml += '<div class="hotel-paste-wrap"><label>Adresse einfügen</label><textarea id="hotel_paste_address" class="hotel-paste-textarea" rows="4" placeholder="Komplette Adresse hier einfügen (z. B. aus E-Mail oder Webseite)"></textarea><button type="button" class="btn btn-ghost hotel-paste-btn" id="hotelPasteApply">In Felder übernehmen</button></div>';
+    modalHtml += '<div class="row row-full-width"><div><label>Hotel</label><input type="text" id="hotel_edit_endkunde" value="' + attr(job.hotel_endkunde) + '" placeholder="Name oder Firma"></div></div>';
+    modalHtml += '<div class="row"><div><label>Straße</label><input type="text" id="hotel_edit_street" value="' + attr(job.hotel_street) + '"></div><div style="max-width:80px"><label>Hausnr.</label><input type="text" id="hotel_edit_house_number" value="' + attr(job.hotel_house_number) + '" maxlength="6"></div></div>';
+    modalHtml += '<div class="row row-city-to-edge"><div style="max-width:70px"><label>PLZ</label><input type="text" id="hotel_edit_zip" value="' + attr(job.hotel_zip) + '" maxlength="7"></div><div><label>Ort</label><input type="text" id="hotel_edit_city" value="' + attr(job.hotel_city) + '"></div></div>';
+    var currentCountry = (job.hotel_country || '').trim();
+    modalHtml += '<label>Land</label><div class="hotel-country-select-wrap">';
+    modalHtml += '<span id="hotel_edit_country_flag" class="hotel-country-flag" aria-hidden="true"></span>';
+    modalHtml += '<select id="hotel_edit_country" autocomplete="off">';
+    modalHtml += '<option value="">Bitte wählen</option>';
+    var countriesList = (typeof window.HOTEL_COUNTRIES !== 'undefined' && Array.isArray(window.HOTEL_COUNTRIES)) ? window.HOTEL_COUNTRIES : [];
+    countriesList.forEach(function (c) {
+      var sel = (currentCountry === (c.code || '')) ? ' selected' : '';
+      var label = (c.name || '') + ' ' + (c.flag || '') + ' (' + (c.code || '') + ')';
+      modalHtml += '<option value="' + attr(c.code) + '"' + sel + '>' + escapeHtml(label) + '</option>';
+    });
+    modalHtml += '</select></div>';
+    modalHtml += '<label>Adresszusatz 1</label><input type="text" id="hotel_edit_extra_1" value="' + attr(job.hotel_address_extra_1) + '">';
+    modalHtml += '<label>Adresszusatz 2</label><input type="text" id="hotel_edit_extra_2" value="' + attr(job.hotel_address_extra_2) + '">';
+    modalHtml += '<label>Telefon</label><input type="tel" id="hotel_edit_phone" value="' + attr(job.hotel_phone) + '" placeholder="+43 ...">';
+    modalHtml += '<label>E-Mail</label><input type="email" id="hotel_edit_email" value="' + attr(job.hotel_email) + '">';
+    modalHtml += '<label>Webseite</label><input type="url" id="hotel_edit_website" value="' + attr(job.hotel_website) + '" placeholder="https://">';
+    modalHtml += '<div class="hotel-modal-actions"><button type="button" class="btn btn-primary" id="hotelModalSave">Speichern</button> <button type="button" class="btn btn-ghost" id="hotelModalCancel">Abbrechen</button></div>';
+    modalHtml += '</div></div>';
+    var existing = document.getElementById('hotelAddressModalOverlay');
+    if (existing) existing.remove();
+    var div = document.createElement('div');
+    div.innerHTML = modalHtml;
+    while (div.firstChild) document.body.appendChild(div.firstChild);
+    var overlay = document.getElementById('hotelAddressModalOverlay');
+    if (!overlay) return;
+    function closeModal() {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) closeModal();
+    });
+    function updateHotelCountryFlag() {
+      var sel = document.getElementById('hotel_edit_country');
+      var flagEl = document.getElementById('hotel_edit_country_flag');
+      if (!sel || !flagEl) return;
+      var code = (sel.value || '').trim().toUpperCase().slice(0, 2);
+      flagEl.innerHTML = code ? countryFlagImg(code) : '';
+    }
+    updateHotelCountryFlag();
+    document.getElementById('hotel_edit_country').addEventListener('change', updateHotelCountryFlag);
+    var hotelPasteApply = document.getElementById('hotelPasteApply');
+    var hotelPasteAddress = document.getElementById('hotel_paste_address');
+    if (hotelPasteApply && hotelPasteAddress) {
+      hotelPasteApply.addEventListener('click', function () {
+        var countriesListForParser = (typeof window.HOTEL_COUNTRIES !== 'undefined' && Array.isArray(window.HOTEL_COUNTRIES)) ? window.HOTEL_COUNTRIES : [];
+        var parsed = parseHotelAddressPaste(hotelPasteAddress.value, countriesListForParser);
+        if (!(document.getElementById('hotel_edit_endkunde'))) return;
+        var set = function (id, val) { var el = document.getElementById(id); if (el) el.value = val || ''; };
+        set('hotel_edit_endkunde', parsed.endkunde);
+        set('hotel_edit_street', parsed.street);
+        set('hotel_edit_house_number', parsed.house_number);
+        set('hotel_edit_zip', parsed.zip);
+        set('hotel_edit_city', parsed.city);
+        set('hotel_edit_extra_1', parsed.address_extra_1);
+        set('hotel_edit_extra_2', parsed.address_extra_2);
+        set('hotel_edit_phone', parsed.phone);
+        set('hotel_edit_email', parsed.email);
+        set('hotel_edit_website', parsed.website);
+        var countrySel = document.getElementById('hotel_edit_country');
+        if (countrySel && parsed.country) {
+          var opt = countrySel.querySelector('option[value="' + parsed.country + '"]');
+          if (opt) countrySel.value = parsed.country; else countrySel.value = '';
+        }
+        updateHotelCountryFlag();
+      });
+    }
+    document.getElementById('hotelModalCancel').addEventListener('click', closeModal);
+    document.getElementById('hotelModalSave').addEventListener('click', function () {
+      var payload = {
+        job_id: parseInt(jobId, 10),
+        hotel_endkunde: (document.getElementById('hotel_edit_endkunde') && document.getElementById('hotel_edit_endkunde').value) || '',
+        hotel_street: (document.getElementById('hotel_edit_street') && document.getElementById('hotel_edit_street').value) || '',
+        hotel_house_number: (document.getElementById('hotel_edit_house_number') && document.getElementById('hotel_edit_house_number').value) || '',
+        hotel_zip: (document.getElementById('hotel_edit_zip') && document.getElementById('hotel_edit_zip').value) || '',
+        hotel_city: (document.getElementById('hotel_edit_city') && document.getElementById('hotel_edit_city').value) || '',
+        hotel_country: (document.getElementById('hotel_edit_country') && document.getElementById('hotel_edit_country').value) || '',
+        hotel_address_extra_1: (document.getElementById('hotel_edit_extra_1') && document.getElementById('hotel_edit_extra_1').value) || '',
+        hotel_address_extra_2: (document.getElementById('hotel_edit_extra_2') && document.getElementById('hotel_edit_extra_2').value) || '',
+        hotel_phone: (document.getElementById('hotel_edit_phone') && document.getElementById('hotel_edit_phone').value) || '',
+        hotel_email: (document.getElementById('hotel_edit_email') && document.getElementById('hotel_edit_email').value) || '',
+        hotel_website: (document.getElementById('hotel_edit_website') && document.getElementById('hotel_edit_website').value) || ''
+      };
+      api('/api/job', { method: 'PATCH', body: JSON.stringify(payload) }).then(function () {
+        closeModal();
+        var updatedJob = { ...job, hotel_endkunde: payload.hotel_endkunde, hotel_street: payload.hotel_street, hotel_house_number: payload.hotel_house_number, hotel_zip: payload.hotel_zip, hotel_city: payload.hotel_city, hotel_country: payload.hotel_country, hotel_address_extra_1: payload.hotel_address_extra_1, hotel_address_extra_2: payload.hotel_address_extra_2, hotel_phone: payload.hotel_phone, hotel_email: payload.hotel_email, hotel_website: payload.hotel_website };
+        var viewProjektdaten = document.getElementById('viewProjektdaten');
+        var viewStart = document.getElementById('viewStart');
+        var viewEinstellungen = document.getElementById('viewEinstellungen');
+        if (viewStart) viewStart.classList.add('hidden');
+        if (viewEinstellungen) viewEinstellungen.classList.remove('active');
+        if (viewProjektdaten) viewProjektdaten.classList.add('active');
+        var content = document.getElementById('viewProjektdatenContent');
+        if (content) {
+          window.currentProjektdatenJob = updatedJob;
+          content.innerHTML = renderJobDetailsContent(updatedJob);
+          bindLeistungActions();
+        }
+        var baseUrl = (typeof getServerUrl === 'function' ? getServerUrl() : '').trim();
+        var techId = typeof getTechId === 'function' ? getTechId() : null;
+        if (baseUrl && techId) {
+          api('/api/sync_push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              baseUrl: getServerUrl(),
+              technicianId: getTechId(),
+              serverUsername: typeof getServerUsername === 'function' ? getServerUsername() : '',
+              serverPassword: typeof getServerPassword === 'function' ? getServerPassword() : ''
+            })
+          }).then(function (d) {
+            if (d && d.ok && typeof showToast === 'function') showToast('Hotel-Adresse wurde in die Dispo übertragen.');
+            else if (d && d.error && typeof showToast === 'function') {
+              console.error('[Sync Push] Fehler:', d.error, d);
+              showToast('Sync fehlgeschlagen: ' + d.error);
+            }
+          }).catch(function (e) {
+            console.error('[Sync Push] Fehler:', e.message, e);
+            if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (e.message || 'Verbindung zur Dispo prüfen'));
+          });
+        }
+        if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync(); } catch (e) {} }
+      }).catch(function (e) {
+        alert('Speichern fehlgeschlagen: ' + e.message);
       });
     });
   }
@@ -683,6 +1014,32 @@
     }
   }
 
+  async function loadOpenJobs() {
+    const techId = getTechId();
+    const list = document.getElementById('jobsList');
+    if (!techId) {
+      if (list) list.innerHTML = '<span class="empty">Monteur-ID in Einstellungen eintragen.</span>';
+      return;
+    }
+    const baseUrl = getServerUrl();
+    if (!baseUrl) {
+      if (list) list.innerHTML = '<span class="empty">Server-Adresse in Einstellungen eintragen.</span>';
+      return;
+    }
+    try {
+      const params = { base_url: baseUrl, serverUsername: getServerUsername(), serverPassword: getServerPassword() };
+      const r = await fetch(API_BASE + '/api/jobs_open?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        if (list) list.innerHTML = '<span class="empty">' + escapeHtml((data && data.error) ? data.error : 'Fehler beim Laden.') + '</span>';
+        return;
+      }
+      renderJobs(Array.isArray(data) ? data : []);
+    } catch (e) {
+      if (list) list.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
+    }
+  }
+
   async function loadJobsAndAbsences() {
     const techId = getTechId();
     if (!techId) {
@@ -694,16 +1051,13 @@
     const range = getSyncDateRange();
     const params = { technician_id: techId, date_from: range.date_from, date_to: range.date_to };
     try {
-      const [jRes, aRes, reqRes] = await Promise.all([
-        fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()),
+      const [aRes, reqRes] = await Promise.all([
         fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()),
         fetch(API_BASE + '/api/my_absence_requests?' + qs({ technician_id: techId }), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()).catch(() => ({ ok: true, requests: [] }))
       ]);
-      renderJobs(jRes);
       renderAbsences(aRes, reqRes);
       updateTechnicianName();
     } catch (e) {
-      document.getElementById('jobsList').innerHTML = '<span class="empty">Fehler: ' + e.message + '</span>';
       document.getElementById('absencesList').innerHTML = '<span class="empty">Fehler: ' + e.message + '</span>';
       updateTechnicianName();
     }
@@ -786,8 +1140,10 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(auth)
-          }).then((r) => r.json()).then((d) => { if (!d.ok) throw new Error(d.error); });
-        } catch (e) { /* Push fehlgeschlagen, Pull-Daten bleiben */ }
+          }).then((r) => r.json()).then((d) => { if (!d.ok) throw new Error(d.error || (d && JSON.stringify(d))); });
+        } catch (e) {
+          console.error('[Sync Push] checkConnectionAndSync:', e.message, e);
+        }
         // Dienstreise-Projektordner (Dokumente_Monteur / Dokumente_Buchhaltung) periodisch mit dem Dispo-Server synchronisieren
         if (selectedJobIdOnDienstreisePage) {
           const bodySync = {
@@ -811,6 +1167,7 @@
     }
     setNextSyncTime();
     loadJobsAndAbsences();
+    loadOpenJobs();
   }
 
   function renderAbsences(data, requestsData) {
@@ -1373,7 +1730,12 @@
     if (streetLine) addressLines.push(escapeHtml(streetLine));
     var zipCityLine = [(job.zip || '').trim(), (job.city || '').trim()].filter(Boolean).join(' ');
     if (zipCityLine) addressLines.push(escapeHtml(zipCityLine));
-    if ((job.country || '').trim()) addressLines.push(escapeHtml((job.country || '').trim()));
+    var archivCountry = (job.country || '').trim();
+    if (archivCountry) {
+      var archivCountryCode = normalizeCountryToCode(job.country) || archivCountry.toUpperCase().slice(0, 2);
+      var archivFlagHtml = countryFlagImg(archivCountryCode);
+      addressLines.push(archivFlagHtml ? (archivFlagHtml + ' ' + escapeHtml(archivCountry)) : escapeHtml(archivCountry));
+    }
     var extra1 = (job.address_extra_1 || '').trim();
     if (extra1) addressLines.push(escapeHtml(extra1));
     var extra2 = (job.address_extra_2 || '').trim();
@@ -1601,16 +1963,21 @@
     const viewEinstellungen = document.getElementById('viewEinstellungen');
     const viewProjektdaten = document.getElementById('viewProjektdaten');
     const viewDienstreise = document.getElementById('viewDienstreise');
-    const viewProtokolle = document.getElementById('viewProtokolle');
     const viewArchiv = document.getElementById('viewArchiv');
+    const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
+    const protokolleViewIds = ['viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleInbetriebnahme', 'viewProtokolleService'];
     viewStart.classList.remove('only-left', 'only-right', 'hidden');
     viewEinstellungen.classList.remove('active');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
     if (viewDienstreise) viewDienstreise.classList.remove('active');
-    if (viewProtokolle) viewProtokolle.classList.remove('active');
+    protokolleViewIds.forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.remove('active');
+    });
     const viewTextbausteine = document.getElementById('viewTextbausteine');
     if (viewTextbausteine) viewTextbausteine.classList.remove('active');
     if (viewArchiv) viewArchiv.classList.remove('active');
+    if (viewAbwesenheiten) viewAbwesenheiten.classList.remove('active');
     if (name === 'einstellungen') {
       viewStart.classList.add('hidden');
       viewEinstellungen.classList.add('active');
@@ -1623,9 +1990,26 @@
       loadDienstreiseList();
       return;
     }
-    if (name === 'protokolle') {
+    if (name && name.startsWith('protokolle-')) {
       viewStart.classList.add('hidden');
-      if (viewProtokolle) viewProtokolle.classList.add('active');
+      const map = {
+        'protokolle-montagebericht': 'viewProtokolleMontagebericht',
+        'protokolle-parameterlisten': 'viewProtokolleParameterlisten',
+        'protokolle-kontrollwiegungen': 'viewProtokolleKontrollwiegungen',
+        'protokolle-inbetriebnahme': 'viewProtokolleInbetriebnahme',
+        'protokolle-service': 'viewProtokolleService'
+      };
+      const viewId = map[name];
+      if (viewId) {
+        const el = document.getElementById(viewId);
+        if (el) el.classList.add('active');
+      }
+      if (name === 'protokolle-montagebericht' && typeof window.openAndResetMontageberichtForm === 'function') {
+        window.openAndResetMontageberichtForm();
+      }
+      if (name === 'protokolle-kontrollwiegungen' && typeof window.openProtokolleKontrollwiegungen === 'function') {
+        window.openProtokolleKontrollwiegungen();
+      }
       return;
     }
     if (name === 'textbausteine') {
@@ -1643,7 +2027,16 @@
       loadArchiv();
       return;
     }
-    if (name === 'start') loadCalendarMonth();
+    if (name === 'abwesenheiten') {
+      viewStart.classList.add('hidden');
+      if (viewAbwesenheiten) viewAbwesenheiten.classList.add('active');
+      loadJobsAndAbsences();
+      return;
+    }
+    if (name === 'start') {
+      loadOpenJobs();
+      loadCalendarMonth();
+    }
   }
 
   async function loadCalendarMonth() {
@@ -2165,11 +2558,16 @@
           const j = o;
           band.className = 'month2-band month2-event';
           band.style.background = j.technician_color || '#4a90e2';
+          band.setAttribute('data-job-id', String(j.id));
+          band.style.cursor = 'pointer';
           const colSpan = colEnd - colStart;
           const maxChars = colSpan * 20;
           const bar = jobBarText(j, maxChars);
-          band.title = bar.title || '';
+          band.title = (bar.title || '') + ' (Doppelklick: Projektdaten)';
           if (bar.labelHtml) band.innerHTML = bar.labelHtml; else band.textContent = bar.label || 'Auftrag';
+          band.addEventListener('dblclick', function () {
+            if (typeof openJobDetailsModal === 'function') openJobDetailsModal(j.id);
+          });
         }
         bands.appendChild(band);
       });
@@ -2263,7 +2661,7 @@
 
   function renderDienstreiseExplorerTree() {
     var listEl = document.getElementById('dienstreiseExplorerList');
-    var jobId = selectedJobIdOnDienstreisePage;
+    var jobId = getDienstreiseExplorerJobId();
     if (!listEl || !jobId) return;
     if (!dienstreiseProtectedPathsByJob[jobId]) dienstreiseProtectedPathsByJob[jobId] = new Set();
     var protectedSet = dienstreiseProtectedPathsByJob[jobId];
@@ -2411,13 +2809,11 @@
     var range = getSyncDateRange();
     fetch(API_BASE + '/api/my_jobs?technician_id=' + techId + '&date_from=' + range.date_from + '&date_to=' + range.date_to).then(function (r) { return r.json(); }).then(function (data) {
       var listEl = document.getElementById('dienstreiseList');
-      var detailEl = document.getElementById('dienstreiseDetail');
       if (!listEl) return;
       var jobs = (data && data.jobs) ? data.jobs : [];
       dienstreisePageJobs = jobs;
       if (jobs.length === 0) {
         listEl.innerHTML = '<span class="empty">Keine Aufträge.</span>';
-        if (detailEl) detailEl.style.display = 'none';
         selectedJobIdOnDienstreisePage = null;
         return;
       }
@@ -2461,25 +2857,13 @@
           if (e.target.closest('button')) return;
           selectedJobIdOnDienstreisePage = parseInt(el.getAttribute('data-job-id'), 10);
           loadDienstreiseList();
-          var j = jobs.find(function (x) { return x.id === selectedJobIdOnDienstreisePage; });
-          if (j && detailEl) {
-            detailEl.style.display = 'block';
-            var titleEl = document.getElementById('dienstreiseDetailTitle');
-            if (titleEl) titleEl.textContent = (j.job_number || '') + ' – ' + (j.customer_name || '') + (j.start_datetime ? ' (' + (j.start_datetime + '').slice(0, 10) + ')' : '');
-          }
+        });
+        el.addEventListener('dblclick', function (e) {
+          if (e.target.closest('button')) return;
+          var jobId = parseInt(el.getAttribute('data-job-id'), 10);
+          if (jobId && typeof openJobDetailsModal === 'function') openJobDetailsModal(jobId);
         });
       });
-      if (detailEl) detailEl.style.display = selectedJobIdOnDienstreisePage ? 'block' : 'none';
-      if (selectedJobIdOnDienstreisePage) {
-        var j = jobs.find(function (x) { return x.id === selectedJobIdOnDienstreisePage; });
-        if (j) {
-          var titleEl = document.getElementById('dienstreiseDetailTitle');
-          if (titleEl) titleEl.textContent = (j.job_number || '') + ' – ' + (j.customer_name || '') + (j.start_datetime ? ' (' + (j.start_datetime + '').slice(0, 10) + ')' : '');
-        }
-        loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, '');
-      } else {
-        loadDienstreiseExplorer(null, '');
-      }
     }).catch(function () {
       var listEl = document.getElementById('dienstreiseList');
       if (listEl) listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
@@ -2487,13 +2871,13 @@
   }
 
   document.getElementById('btnDienstreiseCopyProject').addEventListener('click', function () {
-    var localJobId = selectedJobIdOnDienstreisePage;
+    var localJobId = jobDetailsJobId || selectedJobIdOnDienstreisePage;
     var hint = document.getElementById('dienstreiseCopyHint');
     var progressWrap = document.getElementById('dienstreiseCopyProgressWrap');
     var progressBar = document.getElementById('dienstreiseCopyProgress');
     var progressLabel = document.getElementById('dienstreiseCopyProgressLabel');
     if (!localJobId) {
-      hint.textContent = 'Bitte einen Auftrag in der Liste auswählen.';
+      hint.textContent = 'Bitte einen Auftrag öffnen (Doppelklick auf Auftrag oder Kalenderbalken).';
       return;
     }
     hint.textContent = '';
@@ -2509,12 +2893,26 @@
       dispoUsername: getDispoUsername(),
       dispoPassword: getDispoPassword()
     };
+    var copyTimeoutMs = 120000; // 2 Min – wenn bis dahin weder done noch error kam, UI zurücksetzen
+    var copyTimeoutId = setTimeout(function () {
+      copyTimeoutId = null;
+      var wrap = document.getElementById('dienstreiseCopyProgressWrap');
+      var b = document.getElementById('btnDienstreiseCopyProject');
+      var lbl = document.getElementById('dienstreiseCopyProgressLabel');
+      var h = document.getElementById('dienstreiseCopyHint');
+      if (wrap) wrap.style.display = 'none';
+      if (b) b.disabled = false;
+      if (lbl) lbl.textContent = '';
+      if (h) { h.textContent = 'Zeitüberschreitung – Dispo-Antwort kam nicht. Bitte erneut versuchen.'; setTimeout(function () { var x = document.getElementById('dienstreiseCopyHint'); if (x) x.textContent = ''; }, 5000); }
+    }, copyTimeoutMs);
+
     fetch(API_BASE + '/api/dienstreise/copy_project_stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     }).then(function (response) {
       if (!response.ok) {
+        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
         return response.json().then(function (data) {
           throw new Error(data.error || 'Fehler ' + response.status);
         }).catch(function () { throw new Error('Fehler ' + response.status); });
@@ -2524,68 +2922,92 @@
       var buffer = '';
       var completed = false;
       var hadError = false;
+      function finish() {
+        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
+        var wrap = document.getElementById('dienstreiseCopyProgressWrap');
+        var lbl = document.getElementById('dienstreiseCopyProgressLabel');
+        var b = document.getElementById('btnDienstreiseCopyProject');
+        if (wrap) wrap.style.display = 'none';
+        if (b) b.disabled = false;
+        if (lbl) lbl.textContent = '';
+      }
+      function processLine(line) {
+        line = line.trim();
+        if (!line) return;
+        var data;
+        try { data = JSON.parse(line); } catch (e) { return; }
+        if (data.phase === 'refresh') {
+          if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
+        } else if (data.phase === 'refresh_done') {
+          if (progressLabel) progressLabel.textContent = 'Lade auf Laptop …';
+        } else if (data.phase === 'download' && data.total != null) {
+          if (progressBar) progressBar.max = data.total;
+          if (progressBar) progressBar.value = 0;
+        } else if (data.phase === 'file' && data.total != null) {
+          if (progressBar) progressBar.value = data.current || 0;
+          if (progressLabel && data.total > 0) progressLabel.textContent = 'Lade ' + (data.current || 0) + ' / ' + data.total;
+        } else if (data.phase === 'done') {
+          completed = true;
+          finish();
+          var h = document.getElementById('dienstreiseCopyHint');
+          if (h) h.textContent = 'Fertig.';
+          if (getDienstreiseExplorerJobId()) loadDienstreiseExplorer(getDienstreiseExplorerJobId(), dienstreiseExplorerSubpath);
+          setTimeout(function () { var x = document.getElementById('dienstreiseCopyHint'); if (x) x.textContent = ''; }, 3000);
+        } else if (data.phase === 'error') {
+          hadError = true;
+          finish();
+          var hErr = document.getElementById('dienstreiseCopyHint');
+          if (hErr) hErr.textContent = data.error || 'Fehler.';
+        }
+      }
       function readNext() {
         return reader.read().then(function (result) {
+          if (result.value && result.value.length > 0) {
+            buffer += decoder.decode(result.value, { stream: !result.done });
+            var lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            lines.forEach(function (line) {
+              try { processLine(line); } catch (e) { /* Einzelne Zeile ignorieren */ }
+            });
+          }
           if (result.done) {
-            if (progressWrap) progressWrap.style.display = 'none';
-            if (btn) btn.disabled = false;
+            if (buffer.trim()) try { processLine(buffer); } catch (e) { }
+            finish();
             if (!completed && !hadError) {
-              hint.textContent = 'Fertig.';
-              if (selectedJobIdOnDienstreisePage) loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath);
-              setTimeout(function () { hint.textContent = ''; }, 3000);
+              var hDone = document.getElementById('dienstreiseCopyHint');
+              if (hDone) hDone.textContent = 'Fertig.';
+              if (getDienstreiseExplorerJobId()) loadDienstreiseExplorer(getDienstreiseExplorerJobId(), dienstreiseExplorerSubpath);
+              setTimeout(function () { var x = document.getElementById('dienstreiseCopyHint'); if (x) x.textContent = ''; }, 3000);
             }
             return;
           }
-          buffer += decoder.decode(result.value, { stream: true });
-          var lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          lines.forEach(function (line) {
-            line = line.trim();
-            if (!line) return;
-            var data;
-            try { data = JSON.parse(line); } catch (e) { return; }
-            if (data.phase === 'refresh') {
-              if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
-            } else if (data.phase === 'refresh_done') {
-              if (progressLabel) progressLabel.textContent = 'Lade auf Laptop …';
-            } else if (data.phase === 'download' && data.total != null) {
-              if (progressBar) progressBar.max = data.total;
-              if (progressBar) progressBar.value = 0;
-            } else if (data.phase === 'file' && data.total != null) {
-              if (progressBar) progressBar.value = data.current || 0;
-              if (progressLabel && data.total > 0) progressLabel.textContent = 'Lade ' + (data.current || 0) + ' / ' + data.total;
-            } else if (data.phase === 'done') {
-              completed = true;
-              if (progressWrap) progressWrap.style.display = 'none';
-              if (btn) btn.disabled = false;
-              hint.textContent = 'Fertig.';
-              if (selectedJobIdOnDienstreisePage) loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath);
-              setTimeout(function () { hint.textContent = ''; }, 3000);
-            } else if (data.phase === 'error') {
-              hadError = true;
-              if (progressWrap) progressWrap.style.display = 'none';
-              if (btn) btn.disabled = false;
-              hint.textContent = data.error || 'Fehler.';
-            }
-          });
           return readNext();
         });
       }
-      return readNext();
+      return readNext().catch(function (streamErr) {
+        finish();
+        hint.textContent = streamErr && streamErr.message ? streamErr.message : 'Verbindung abgebrochen.';
+      });
     }).catch(function (err) {
-      if (progressWrap) progressWrap.style.display = 'none';
-      if (btn) btn.disabled = false;
-      hint.textContent = err && err.message ? err.message : 'Fehler beim Kopieren.';
+      if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
+      var wrap = document.getElementById('dienstreiseCopyProgressWrap');
+      var b = document.getElementById('btnDienstreiseCopyProject');
+      var lbl = document.getElementById('dienstreiseCopyProgressLabel');
+      var h = document.getElementById('dienstreiseCopyHint');
+      if (wrap) wrap.style.display = 'none';
+      if (b) b.disabled = false;
+      if (lbl) lbl.textContent = '';
+      if (h) h.textContent = err && err.message ? err.message : 'Fehler beim Kopieren.';
     });
   });
 
   document.getElementById('btnDienstreiseUpload').addEventListener('click', function () {
-    var localJobId = selectedJobIdOnDienstreisePage;
+    var localJobId = getDienstreiseExplorerJobId();
     var subfolder = document.getElementById('dienstreiseUploadSubfolder');
     var sub = subfolder && subfolder.value ? subfolder.value : 'Dokumente_Monteur';
     var fileInput = document.getElementById('dienstreiseFileInput');
     var hint = document.getElementById('dienstreiseUploadHint');
-    if (!localJobId) { hint.textContent = 'Bitte einen Auftrag in der Liste auswählen.'; return; }
+    if (!localJobId) { hint.textContent = 'Bitte einen Auftrag öffnen (Doppelklick auf Auftrag oder Kalenderbalken).'; return; }
     if (!fileInput || !fileInput.files || !fileInput.files[0]) {
       hint.textContent = 'Bitte eine Datei wählen.';
       return;
@@ -2615,7 +3037,7 @@
           if (data.ok) {
             fileInput.value = '';
             setTimeout(function () { hint.textContent = ''; }, 3000);
-            if (selectedJobIdOnDienstreisePage) loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath);
+            if (getDienstreiseExplorerJobId()) loadDienstreiseExplorer(getDienstreiseExplorerJobId(), dienstreiseExplorerSubpath);
             if (sub === 'Dokumente_Dispo' || sub === 'Dokumente_Monteur' || sub === 'Dokumente_Anlage' || sub === 'Dokumente_Buchhaltung') {
               var bodySync = {
                 job_id: localJobId,
@@ -2641,26 +3063,66 @@
 
   document.getElementById('btnViewStart').addEventListener('click', () => showView('start'));
   document.getElementById('btnViewDienstreise').addEventListener('click', () => showView('dienstreise'));
-  document.getElementById('btnViewProtokolle').addEventListener('click', () => showView('protokolle'));
+  (function initProtokolleDropdown() {
+    const btn = document.getElementById('btnViewProtokolle');
+    const dropdown = document.getElementById('protokolleDropdown');
+    if (!btn || !dropdown) return;
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      dropdown.classList.toggle('open');
+      btn.setAttribute('aria-expanded', dropdown.classList.contains('open'));
+    });
+    dropdown.querySelectorAll('.toolbar-dropdown-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        const view = item.getAttribute('data-view');
+        if (view) showView(view);
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+    });
+    document.addEventListener('click', function (e) {
+      if (dropdown.classList.contains('open') && !dropdown.contains(e.target) && !btn.contains(e.target)) {
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
   document.getElementById('btnViewTextbausteine').addEventListener('click', () => showView('textbausteine'));
   document.getElementById('btnViewArchiv').addEventListener('click', () => showView('archiv'));
+  (function initAbwesenheitenDropdown() {
+    const btn = document.getElementById('btnViewAbwesenheiten');
+    const dropdown = document.getElementById('abwesenheitenDropdown');
+    if (!btn || !dropdown) return;
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      dropdown.classList.toggle('open');
+      btn.setAttribute('aria-expanded', dropdown.classList.contains('open'));
+    });
+    dropdown.querySelectorAll('.toolbar-dropdown-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        const view = item.getAttribute('data-view');
+        if (view) showView(view);
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+    });
+    document.addEventListener('click', function (e) {
+      if (dropdown.classList.contains('open') && !dropdown.contains(e.target) && !btn.contains(e.target)) {
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
   document.getElementById('btnViewEinstellungen').addEventListener('click', () => showView('einstellungen'));
 
   (function initProtokolleMontagebericht() {
-    const btnMontagebericht = document.getElementById('btnMontagebericht');
     const btnAbbrechen = document.getElementById('btnMontageberichtAbbrechen');
     const form = document.getElementById('montageberichtForm');
     const divMontage = document.getElementById('protokolleMontagebericht');
-    const placeholder = document.getElementById('protokollePlaceholder');
     const jobSelect = document.getElementById('montageberichtJob');
     const grundInput = document.getElementById('montageberichtGrund');
     const fabContainer = document.getElementById('montageberichtFabBemerkungen');
     const kopfdatenEl = document.getElementById('montageberichtKopfdaten');
-
-    function showSection(section) {
-      if (divMontage) divMontage.style.display = section === 'montage' ? 'block' : 'none';
-      if (placeholder) placeholder.style.display = section === 'none' ? 'block' : 'none';
-    }
 
     let montageberichtJobData = null;
 
@@ -2805,50 +3267,94 @@
       });
     }
 
+    var montageberichtTbCategories = [];
+
+    function renderMontageberichtChips() {
+      var listEl = document.getElementById('montageberichtTbList');
+      var categorySelect = document.getElementById('montageberichtTbCategory');
+      if (!listEl) return;
+      var categoryId = categorySelect && categorySelect.value ? parseInt(categorySelect.value, 10) : null;
+      var items = [];
+      if (categoryId) {
+        var cat = montageberichtTbCategories.find(function (c) { return c.id === categoryId; });
+        if (cat && cat.items) items = cat.items;
+      } else {
+        montageberichtTbCategories.forEach(function (cat) {
+          (cat.items || []).forEach(function (item) { items.push(item); });
+        });
+      }
+      var html = '';
+      items.forEach(function (item) {
+        var plain = stripHtmlForPlain(item.text || '').slice(0, 60) + (stripHtmlForPlain(item.text || '').length > 60 ? '…' : '');
+        html += '<div class="montagebericht-tb-chip" draggable="true" data-text="' + escapeHtml(item.text || '') + '" title="' + escapeHtml(plain) + '">' + escapeHtml(plain) + '</div>';
+      });
+      listEl.innerHTML = html || '<span class="muted" style="font-size:0.8rem">Keine Textbausteine</span>';
+      listEl.querySelectorAll('.montagebericht-tb-chip').forEach(function (chip) {
+        chip.addEventListener('dragstart', function (e) {
+          chip.classList.add('dragging');
+          var text = chip.dataset.text || '';
+          e.dataTransfer.setData('text/plain', stripHtmlForPlain(text));
+          e.dataTransfer.setData('text/html', text);
+          e.dataTransfer.effectAllowed = 'copy';
+        });
+        chip.addEventListener('dragend', function () { chip.classList.remove('dragging'); });
+      });
+    }
+
     async function loadMontageberichtTextbausteine() {
       var listEl = document.getElementById('montageberichtTbList');
+      var categorySelect = document.getElementById('montageberichtTbCategory');
       if (!listEl) return;
       var baseUrl = getDispoBaseUrl();
       if (!baseUrl) { listEl.innerHTML = '<span class="muted" style="font-size:0.8rem">Dispo-URL in Einstellungen eintragen</span>'; return; }
       try {
         var r = await fetch(API_BASE + '/api/textbausteine_list?base_url=' + encodeURIComponent(baseUrl) + '&technician_id=' + getTechId(), { headers: { 'X-Technician-Id': String(getTechId()) } });
         var data = await r.json();
-        if (!data.ok || !data.categories) { listEl.innerHTML = ''; return; }
-        var html = '';
-        data.categories.forEach(function (cat) {
-          (cat.items || []).forEach(function (item) {
-            var plain = stripHtmlForPlain(item.text || '').slice(0, 60) + (stripHtmlForPlain(item.text || '').length > 60 ? '…' : '');
-            html += '<div class="montagebericht-tb-chip" draggable="true" data-text="' + escapeHtml(item.text || '') + '" title="' + escapeHtml(plain) + '">' + escapeHtml(plain) + '</div>';
-          });
-        });
-        listEl.innerHTML = html || '<span class="muted" style="font-size:0.8rem">Keine Textbausteine</span>';
-        listEl.querySelectorAll('.montagebericht-tb-chip').forEach(function (chip) {
-          chip.addEventListener('dragstart', function (e) {
-            chip.classList.add('dragging');
-            var text = chip.dataset.text || '';
-            e.dataTransfer.setData('text/plain', stripHtmlForPlain(text));
-            e.dataTransfer.setData('text/html', text);
-            e.dataTransfer.effectAllowed = 'copy';
-          });
-          chip.addEventListener('dragend', function () { chip.classList.remove('dragging'); });
-        });
+        if (!data.ok || !data.categories) {
+          montageberichtTbCategories = [];
+          if (categorySelect) categorySelect.innerHTML = '<option value="">– Kategorie –</option>';
+          listEl.innerHTML = '<span class="muted" style="font-size:0.8rem">Keine Textbausteine</span>';
+          return;
+        }
+        montageberichtTbCategories = data.categories;
+        if (categorySelect) {
+          categorySelect.innerHTML = '<option value="">Alle</option>' +
+            montageberichtTbCategories.map(function (cat) {
+              return '<option value="' + cat.id + '">' + escapeHtml(cat.name || '') + '</option>';
+            }).join('');
+          if (!categorySelect.dataset.mbBound) {
+            categorySelect.dataset.mbBound = '1';
+            categorySelect.addEventListener('change', renderMontageberichtChips);
+          }
+        }
+        renderMontageberichtChips();
       } catch (e) {
         listEl.innerHTML = '<span class="muted" style="font-size:0.8rem">Fehler: ' + escapeHtml(e.message) + '</span>';
       }
     }
 
-    if (btnMontagebericht) {
-      btnMontagebericht.addEventListener('click', async function () {
-        showSection('montage');
-        jobSelect.innerHTML = '<option value="">Lade…</option>';
-        loadMontageberichtJobs().then(function (jobs) {
+    function openAndResetMontageberichtForm() {
+      if (divMontage) divMontage.style.display = 'block';
+      montageberichtJobData = null;
+      if (jobSelect) jobSelect.innerHTML = '<option value="">Lade…</option>';
+      if (grundInput) grundInput.value = '';
+      var bemerkEl = document.getElementById('montageberichtBemerkungen');
+      if (bemerkEl) bemerkEl.value = '';
+      var langEl = document.getElementById('montageberichtLang');
+      if (langEl) langEl.value = 'de';
+      if (kopfdatenEl) kopfdatenEl.innerHTML = '';
+      if (fabContainer) fabContainer.innerHTML = '';
+      loadMontageberichtJobs().then(function (jobs) {
+        if (jobSelect) {
           jobSelect.innerHTML = '<option value="">-- Auftrag wählen --</option>' +
             jobs.map(function (j) { return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>'; }).join('');
-        });
-        loadMontageberichtTextbausteine();
+        }
       });
+      loadMontageberichtTextbausteine();
     }
-    if (btnAbbrechen) btnAbbrechen.addEventListener('click', function () { showSection('none'); });
+    window.openAndResetMontageberichtForm = openAndResetMontageberichtForm;
+
+    if (btnAbbrechen) btnAbbrechen.addEventListener('click', function () { openAndResetMontageberichtForm(); });
     if (jobSelect) {
       jobSelect.addEventListener('change', async function () {
         var id = parseInt(this.value, 10);
@@ -2962,7 +3468,7 @@
           }
           if (data.warning) alert(data.warning);
           else if (typeof showToast === 'function') showToast('Montagebericht gespeichert.');
-          showSection('none');
+          if (typeof showView === 'function') showView('start');
         } catch (err) {
           alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
         }
@@ -2971,11 +3477,326 @@
 
   })();
 
+  (function initProtokolleKontrollwiegungen() {
+    var jobSelect = document.getElementById('kontrollwiegungJob');
+    var kopfdatenEl = document.getElementById('kontrollwiegungKopfdaten');
+    var fabSelect = document.getElementById('kontrollwiegungFab');
+    var datumEl = document.getElementById('kontrollwiegungDatum');
+    var zeilenContainer = document.getElementById('kontrollwiegungZeilen');
+    var addRowBtn = document.getElementById('kontrollwiegungAddRow');
+    var form = document.getElementById('kontrollwiegungForm');
+    var pdfBtn = document.getElementById('kontrollwiegungPdf');
+    var abbrechenBtn = document.getElementById('kontrollwiegungAbbrechen');
+
+    var kontrollwiegungJobData = null;
+    var wiegungen = [];
+    var lastProtokollId = null;
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+    function formatDateRange(start, end) {
+      if (!start && !end) return '';
+      var s = (start || '').toString().slice(0, 10);
+      var e = (end || '').toString().slice(0, 10);
+      if (s && e && s !== e) return s + ' – ' + e;
+      return s || e;
+    }
+
+    function calcRow(bandwaage, tara, brutto) {
+      var kontrollwaage = (parseFloat(brutto) || 0) - (parseFloat(tara) || 0);
+      var fehlerKg = (parseFloat(bandwaage) || 0) - kontrollwaage;
+      var fehlerProzent = kontrollwaage !== 0 ? (fehlerKg / kontrollwaage) * 100 : null;
+      return { kontrollwaage: kontrollwaage, fehlerKg: fehlerKg, fehlerProzent: fehlerProzent };
+    }
+
+    function renderKopfdatenKontrollwiegung(job) {
+      var techName = '';
+      try {
+        var techEl = document.getElementById('technicianName');
+        if (techEl) techName = techEl.textContent || '';
+      } catch (e) {}
+      var datum = formatDateRange(job.start_datetime, job.end_datetime);
+      var fabList = [];
+      if (job.fabrikationsnummern) {
+        try {
+          var parsed = JSON.parse(job.fabrikationsnummern);
+          if (Array.isArray(parsed)) {
+            fabList = parsed.map(function (r) {
+              if (r && typeof r === 'object' && (r.fabrikationsnummer || r.Fabrikationsnummer)) return String(r.fabrikationsnummer || r.Fabrikationsnummer).trim();
+              if (r != null && (typeof r === 'string' || typeof r === 'number')) return String(r).trim();
+              return '';
+            }).filter(Boolean);
+          }
+        } catch (e) {
+          fabList = (job.fabrikationsnummern || '').split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
+        }
+      }
+      kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(job.customer_name || '') + '</div>' +
+        '<div><strong>Projekt:</strong> ' + escapeHtml(job.job_number || job.description || '') + '</div>' +
+        '<div><strong>FN:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
+        '<div><strong>Datum:</strong> ' + escapeHtml(datum) + '</div>' +
+        '<div><strong>Servicetechniker:</strong> ' + escapeHtml(techName) + '</div>';
+    }
+
+    function fillFabSelect(job) {
+      var opts = ['<option value="">– aus Auftrag –</option>'];
+      var fabList = [];
+      if (job && job.fabrikationsnummern) {
+        try {
+          var parsed = JSON.parse(job.fabrikationsnummern);
+          if (Array.isArray(parsed)) {
+            parsed.forEach(function (r) {
+              var fn = (r && (r.fabrikationsnummer || r.Fabrikationsnummer)) != null ? String(r.fabrikationsnummer || r.Fabrikationsnummer).trim() : '';
+              if (fn) fabList.push(fn);
+            });
+          }
+        } catch (e) {
+          fabList = (job.fabrikationsnummern || '').split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
+        }
+      }
+      fabList.forEach(function (fn) { opts.push('<option value="' + escapeHtml(fn) + '">' + escapeHtml(fn) + '</option>'); });
+      fabSelect.innerHTML = opts.join('');
+    }
+
+    function getRowData(rowEl) {
+      var num = (rowEl.querySelector('.kw-num') || {}).textContent || '';
+      var bandwaage = (rowEl.querySelector('input[name="bandwaage_kg"]') || {}).value;
+      var tara = (rowEl.querySelector('input[name="tara_kg"]') || {}).value;
+      var brutto = (rowEl.querySelector('input[name="brutto_kg"]') || {}).value;
+      var leistung = (rowEl.querySelector('input[name="leistung_th"]') || {}).value;
+      var bemerkung = (rowEl.querySelector('input[name="bemerkung"], textarea[name="bemerkung"]') || {}).value;
+      var teilung = (rowEl.querySelector('input[name="teilung_kontrollwaage"]') || {}).value;
+      var bereichMax = (rowEl.querySelector('input[name="bereich_max"]') || {}).value;
+      var letzteEichung = (rowEl.querySelector('input[name="letzte_eichung"]') || {}).value;
+      return {
+        bandwaage_kg: bandwaage,
+        tara_kg: tara,
+        brutto_kg: brutto,
+        leistung_th: leistung,
+        bemerkung: bemerkung || '',
+        teilung_kontrollwaage: teilung || '',
+        bereich_max: bereichMax || '',
+        letzte_eichung: letzteEichung || ''
+      };
+    }
+
+    function updateRowCalculations(rowEl) {
+      var bandwaage = parseFloat((rowEl.querySelector('input[name="bandwaage_kg"]') || {}).value) || 0;
+      var tara = parseFloat((rowEl.querySelector('input[name="tara_kg"]') || {}).value) || 0;
+      var brutto = parseFloat((rowEl.querySelector('input[name="brutto_kg"]') || {}).value) || 0;
+      var c = calcRow(bandwaage, tara, brutto);
+      var kwEl = rowEl.querySelector('.kw-kontrollwaage');
+      var fkEl = rowEl.querySelector('.kw-fehler-kg');
+      var fpEl = rowEl.querySelector('.kw-fehler-prozent');
+      if (kwEl) kwEl.textContent = c.kontrollwaage.toFixed(2);
+      if (fkEl) fkEl.textContent = c.fehlerKg.toFixed(2);
+      if (fpEl) fpEl.textContent = c.fehlerProzent != null ? c.fehlerProzent.toFixed(2) + ' %' : '–';
+    }
+
+    function buildRowHtml(idx) {
+      var n = idx + 1;
+      var w = wiegungen[idx] || {};
+      var style = 'margin-bottom:0.5rem;padding:0.75rem;background:var(--bg);border:1px solid var(--accent);border-radius:4px';
+      var row = '<div class="kontrollwiegung-row" data-idx="' + idx + '" style="' + style + '">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem">' +
+        '<span class="kw-num" style="font-weight:bold">' + n + '.</span>' +
+        '<button type="button" class="btn btn-ghost kw-remove" style="font-size:0.85rem">Wiegung entfernen</button></div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(10rem,1fr));gap:0.5rem">' +
+        '<div class="form-group"><label>Bandwaage [kg]</label><input type="number" step="any" name="bandwaage_kg" value="' + escapeHtml((w.bandwaage_kg != null ? w.bandwaage_kg : '')) + '" placeholder="kg" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
+        '<div class="form-group"><label>Tara [kg]</label><input type="number" step="any" name="tara_kg" value="' + escapeHtml((w.tara_kg != null ? w.tara_kg : '')) + '" placeholder="kg" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
+        '<div class="form-group"><label>Brutto [kg]</label><input type="number" step="any" name="brutto_kg" value="' + escapeHtml((w.brutto_kg != null ? w.brutto_kg : '')) + '" placeholder="kg" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
+        '<div class="form-group"><label>Leistung [t/h]</label><input type="number" step="any" name="leistung_th" value="' + escapeHtml((w.leistung_th != null ? w.leistung_th : '')) + '" placeholder="t/h" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
+        '<div class="form-group"><label>Teilung Kontrollwaage</label><input type="text" name="teilung_kontrollwaage" value="' + escapeHtml((w.teilung_kontrollwaage != null ? w.teilung_kontrollwaage : '')) + '" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
+        '<div class="form-group"><label>Bereich max</label><input type="text" name="bereich_max" value="' + escapeHtml((w.bereich_max != null ? w.bereich_max : '')) + '" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
+        '<div class="form-group"><label>Letzte Eichung</label><input type="text" name="letzte_eichung" value="' + escapeHtml((w.letzte_eichung != null ? w.letzte_eichung : '')) + '" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
+        '<div class="form-group" style="grid-column:1/-1"><label>Bemerkung</label><input type="text" name="bemerkung" value="' + escapeHtml((w.bemerkung != null ? w.bemerkung : '')) + '" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
+        '</div>' +
+        '<div style="margin-top:0.5rem;font-size:0.9rem;color:var(--text-muted)">' +
+        'Kontrollwaage [kg]: <span class="kw-kontrollwaage">–</span> &nbsp; Fehler [kg]: <span class="kw-fehler-kg">–</span> &nbsp; Fehler [%]: <span class="kw-fehler-prozent">–</span>' +
+        '</div></div>';
+      return row;
+    }
+
+    function renderZeilen() {
+      zeilenContainer.innerHTML = '';
+      wiegungen.forEach(function (w, idx) {
+        var div = document.createElement('div');
+        div.innerHTML = buildRowHtml(idx);
+        var rowEl = div.firstElementChild;
+        zeilenContainer.appendChild(rowEl);
+        rowEl.querySelectorAll('input').forEach(function (inp) {
+          inp.addEventListener('input', function () { updateRowCalculations(rowEl); });
+        });
+        updateRowCalculations(rowEl);
+        rowEl.querySelector('.kw-remove').addEventListener('click', function () {
+          wiegungen.splice(idx, 1);
+          renderZeilen();
+        });
+      });
+    }
+
+    function addRow() {
+      wiegungen.push({
+        bandwaage_kg: '',
+        tara_kg: '',
+        brutto_kg: '',
+        leistung_th: '',
+        bemerkung: '',
+        teilung_kontrollwaage: '',
+        bereich_max: '',
+        letzte_eichung: ''
+      });
+      renderZeilen();
+    }
+
+    async function loadJobWithAnlagenstammKw(jobId) {
+      var baseUrl = getDispoBaseUrl();
+      var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + getTechId() + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl) + '&serverUsername=' + encodeURIComponent(getDispoUsername()) + '&serverPassword=' + encodeURIComponent(getDispoPassword());
+      var r = await fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } });
+      var data = await r.json();
+      return data.job;
+    }
+
+    async function loadKontrollwiegungJobs() {
+      var range = getSyncDateRange();
+      var r = await fetch(API_BASE + '/api/my_jobs?' + qs({ technician_id: getTechId(), date_from: range.date_from, date_to: range.date_to }), { headers: { 'X-Technician-Id': String(getTechId()) } });
+      var data = await r.json();
+      if (!data.ok || !data.jobs) return [];
+      return data.jobs;
+    }
+
+    if (addRowBtn) addRowBtn.addEventListener('click', addRow);
+    if (abbrechenBtn) abbrechenBtn.addEventListener('click', function () { if (typeof showView === 'function') showView('start'); });
+
+    if (jobSelect) {
+      jobSelect.addEventListener('change', async function () {
+        var id = parseInt(this.value, 10);
+        if (!id) {
+          kopfdatenEl.innerHTML = '';
+          fabSelect.innerHTML = '<option value="">– aus Auftrag –</option>';
+          kontrollwiegungJobData = null;
+          return;
+        }
+        try {
+          kontrollwiegungJobData = await loadJobWithAnlagenstammKw(id);
+          renderKopfdatenKontrollwiegung(kontrollwiegungJobData);
+          fillFabSelect(kontrollwiegungJobData);
+        } catch (e) {
+          kopfdatenEl.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
+        }
+      });
+    }
+
+    if (form) {
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        if (!kontrollwiegungJobData) { alert('Bitte Auftrag wählen.'); return; }
+        var fab = (fabSelect && fabSelect.value) ? fabSelect.value.trim() : '';
+        if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
+        var datum = (datumEl && datumEl.value) ? datumEl.value.trim() : '';
+        if (!datum) { alert('Bitte Datum der Durchführung angeben.'); return; }
+        var rows = zeilenContainer.querySelectorAll('.kontrollwiegung-row');
+        var wiegungenPayload = [];
+        rows.forEach(function (rowEl) {
+          wiegungenPayload.push(getRowData(rowEl));
+        });
+        if (wiegungenPayload.length === 0) { alert('Mindestens eine Wiegung erforderlich.'); return; }
+        var body = {
+          technician_id: getTechId(),
+          job_id: parseInt(jobSelect.value, 10),
+          fabrikationsnummer: fab,
+          durchfuehrungsdatum: datum,
+          wiegungen: wiegungenPayload,
+          base_url: getDispoBaseUrl(),
+          serverUsername: getDispoUsername(),
+          serverPassword: getDispoPassword()
+        };
+        try {
+          var r = await fetch(API_BASE + '/api/kontrollwiegungsprotokoll_save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+            body: JSON.stringify(body)
+          });
+          var data = await r.json().catch(function () { return {}; });
+          if (!r.ok || !data.ok) {
+            alert('Fehler: ' + (data.error || r.status));
+            return;
+          }
+          if (data.warning) alert(data.warning);
+          else if (typeof showToast === 'function') showToast('Kontrollwiegungsprotokoll gespeichert.');
+          lastProtokollId = data.protokoll_id != null ? data.protokoll_id : null;
+          if (pdfBtn) {
+            pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+          }
+        } catch (err) {
+          alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+        }
+      });
+    }
+
+    if (pdfBtn) {
+      pdfBtn.addEventListener('click', async function () {
+        if (!lastProtokollId) return;
+        var url = API_BASE + '/api/kontrollwiegungsprotokoll_pdf?id=' + encodeURIComponent(lastProtokollId) + '&base_url=' + encodeURIComponent(getDispoBaseUrl());
+        try {
+          var r = await fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } });
+          if (!r.ok) { alert('PDF konnte nicht geladen werden.'); return; }
+          var blob = await r.blob();
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'Kontrollwiegungsprotokoll.pdf';
+          a.click();
+          URL.revokeObjectURL(a.href);
+        } catch (e) { alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt')); }
+      });
+    }
+
+    window.openProtokolleKontrollwiegungen = function () {
+      loadKontrollwiegungJobs().then(function (jobs) {
+        if (jobSelect) {
+          jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
+            jobs.map(function (j) { return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>'; }).join('');
+        }
+        if (wiegungen.length === 0) addRow();
+        else renderZeilen();
+        if (datumEl && !datumEl.value) {
+          var today = new Date();
+          datumEl.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+        }
+        lastProtokollId = null;
+        if (pdfBtn) pdfBtn.style.display = 'none';
+      });
+    };
+  })();
+
   (function initProtokolleParameterlisten() {
     var jobSelect = document.getElementById('parameterlistenJob');
     var fileInput = document.getElementById('parameterlistenFiles');
     var btnUpload = document.getElementById('btnParameterlistenUpload');
     var resultsEl = document.getElementById('parameterlistenResults');
+
+    // Datei-Dialog nur über Button öffnen, wenn ein Auftrag gewählt ist (vermeidet Absturz beim Abbrechen)
+    var btnChooseFiles = document.getElementById('btnParameterlistenChooseFiles');
+    if (btnChooseFiles && fileInput && jobSelect) {
+      btnChooseFiles.addEventListener('click', function () {
+        if (!jobSelect.value || !String(jobSelect.value).trim()) {
+          alert('Bitte zuerst einen Auftrag wählen.');
+          return;
+        }
+        fileInput.click();
+      });
+      fileInput.addEventListener('change', function () {
+        try {
+          if (!fileInput.files || fileInput.files.length === 0) {
+            fileInput.value = '';
+          }
+        } catch (_) { /* Abbrechen sauber abfangen */ }
+      });
+    }
 
     async function loadParameterlistenJobs() {
       if (!jobSelect) return;
@@ -3085,6 +3906,7 @@
   (function initTextbausteineView() {
     var tbCategories = [];
     var selectedCategoryId = null;
+    var selectedCategoryScope = null;
     var editingItemId = null;
 
     function escapeHtml(s) {
@@ -3119,13 +3941,15 @@
         tbCategories = data.categories;
         var html = '';
         tbCategories.forEach(function (cat) {
-          var sel = selectedCategoryId === cat.id ? ' selected' : '';
-          html += '<div class="textbausteine-category' + sel + '" data-id="' + cat.id + '">' + escapeHtml(cat.name) + '</div>';
+          var scope = cat.scope || 'user';
+          var sel = selectedCategoryId === cat.id && selectedCategoryScope === scope ? ' selected' : '';
+          html += '<div class="textbausteine-category' + sel + '" data-id="' + cat.id + '" data-scope="' + escapeHtml(scope) + '">' + escapeHtml(cat.name) + (scope === 'global' ? ' <span class="muted" style="font-size:0.75rem">(global)</span>' : '') + '</div>';
         });
         if (listEl) listEl.innerHTML = html || '<span class="empty">Keine Kategorien.</span>';
         listEl.querySelectorAll('.textbausteine-category').forEach(function (el) {
           el.addEventListener('click', function () {
             selectedCategoryId = parseInt(el.dataset.id, 10);
+            selectedCategoryScope = el.dataset.scope || 'user';
             loadTbCategories();
             loadTbItems();
           });
@@ -3140,7 +3964,7 @@
       var hint = document.getElementById('tbSelectHint');
       var titleEl = document.getElementById('tbCategoryTitle');
       var itemList = document.getElementById('tbItemList');
-      var cat = tbCategories.find(function (c) { return c.id === selectedCategoryId; });
+      var cat = tbCategories.find(function (c) { return c.id === selectedCategoryId && (c.scope || 'user') === selectedCategoryScope; });
       if (!cat) {
         if (detailArea) detailArea.style.display = 'none';
         if (hint) { hint.style.display = 'block'; hint.textContent = 'Kategorie wählen oder neue anlegen.'; }
@@ -3148,17 +3972,24 @@
       }
       if (detailArea) detailArea.style.display = 'block';
       if (hint) hint.style.display = 'none';
-      if (titleEl) titleEl.textContent = cat.name;
+      if (titleEl) titleEl.textContent = cat.name + (cat.scope === 'global' ? ' (global, nur lesbar)' : '');
+      var isUserCategory = cat.scope === 'user';
+      var btnNewItem = document.getElementById('btnTbNewItem');
+      if (btnNewItem) btnNewItem.style.display = isUserCategory ? '' : 'none';
       var items = cat.items || [];
       var html = '';
       items.forEach(function (item) {
-        var preview = stripHtml(item.text).slice(0, 80) + (stripHtml(item.text).length > 80 ? '…' : '');
-        html += '<div class="textbausteine-item" data-id="' + item.id + '">' +
+        var itemScope = item.scope || cat.scope || 'user';
+        var showActions = itemScope === 'user';
+        var actionsHtml = showActions
+          ? '<div class="textbausteine-item-actions">' +
+            '<button type="button" class="btn btn-ghost btn-edit-tb" data-id="' + item.id + '">Bearbeiten</button> ' +
+            '<button type="button" class="btn btn-ghost btn-delete-tb" data-id="' + item.id + '">Löschen</button> ' +
+            '<button type="button" class="btn btn-ghost btn-publish-tb" data-id="' + item.id + '">Für alle freigeben</button></div>'
+          : '';
+        html += '<div class="textbausteine-item" data-id="' + item.id + '" data-scope="' + escapeHtml(itemScope) + '">' +
           '<div class="textbausteine-item-content">' + (item.text ? item.text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '') : '') + '</div>' +
-          '<div class="textbausteine-item-actions">' +
-          '<button type="button" class="btn btn-ghost btn-edit-tb" data-id="' + item.id + '">Bearbeiten</button>' +
-          '<button type="button" class="btn btn-ghost btn-delete-tb" data-id="' + item.id + '">Löschen</button>' +
-          '</div></div>';
+          actionsHtml + '</div>';
       });
       if (itemList) itemList.innerHTML = html || '<span class="empty">Keine Textbausteine in dieser Kategorie.</span>';
       itemList.querySelectorAll('.btn-edit-tb').forEach(function (btn) {
@@ -3166,6 +3997,9 @@
       });
       itemList.querySelectorAll('.btn-delete-tb').forEach(function (btn) {
         btn.addEventListener('click', function () { deleteTbItem(parseInt(btn.dataset.id, 10)); });
+      });
+      itemList.querySelectorAll('.btn-publish-tb').forEach(function (btn) {
+        btn.addEventListener('click', function () { publishTbItem(parseInt(btn.dataset.id, 10)); });
       });
     }
 
@@ -3240,6 +4074,29 @@
 
     document.getElementById('btnTbEditorCancel').addEventListener('click', closeTbEditor);
 
+    async function publishTbItem(id) {
+      if (!confirm('Diesen Textbaustein für alle Techniker freigeben? Er wird danach nur noch in der Dispo vom Admin bearbeitet.')) return;
+      var baseUrl = getDispoBaseUrl();
+      if (!baseUrl) { alert('Dispo-URL in Einstellungen eintragen.'); return; }
+      try {
+        var r = await fetch(API_BASE + '/api/textbausteine_publish_global', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+          body: JSON.stringify({ base_url: baseUrl, technician_id: getTechId(), item_id: id })
+        });
+        var data = await r.json().catch(function () { return {}; });
+        if (!r.ok || !data.ok) {
+          alert('Fehler: ' + (data.error || r.status));
+          return;
+        }
+        if (typeof showToast === 'function') showToast('Textbaustein für alle freigegeben.');
+        loadTbCategories();
+        loadTbItems();
+      } catch (e) {
+        alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt'));
+      }
+    }
+
     async function deleteTbItem(id) {
       if (!confirm('Textbaustein wirklich löschen?')) return;
       var baseUrl = getDispoBaseUrl();
@@ -3248,7 +4105,7 @@
         var r = await fetch(API_BASE + '/api/textbausteine_delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-          body: JSON.stringify({ base_url: baseUrl, id: id })
+          body: JSON.stringify({ base_url: baseUrl, technician_id: getTechId(), id: id })
         });
         var data = await r.json().catch(function () { return {}; });
         if (!r.ok || !data.ok) {

@@ -61,6 +61,13 @@
     .view-dienstreise.active { display: block; }
     .view-protokolle { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-protokolle.active { display: block; }
+    .view-protokolle-sub { display: none; }
+    .view-protokolle-sub.active { display: block; }
+    .toolbar-dropdown-wrap { position: relative; display: inline-block; }
+    .toolbar-dropdown { position: absolute; top: 100%; left: 0; min-width: 180px; margin-top: 2px; padding: 0.25rem 0; background: var(--card); border: 1px solid var(--accent); border-radius: 6px; box-shadow: 0 6px 16px rgba(0,0,0,0.3); z-index: 300; display: none; }
+    .toolbar-dropdown.open { display: block; }
+    .toolbar-dropdown-item { display: block; width: 100%; padding: 0.5rem 1rem; text-align: left; border: none; background: transparent; color: var(--text); font-size: 0.95rem; cursor: pointer; }
+    .toolbar-dropdown-item:hover { background: var(--accent); }
     .dienstreise-list-wrap { margin-bottom: 1rem; }
     .dienstreise-list-wrap .job { cursor: pointer; }
     .dienstreise-list-wrap .job.selected { background: var(--accent); }
@@ -93,6 +100,8 @@
     .dienstreise-select { padding: 0.4rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); min-width: 200px; }
     .view-archiv { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-archiv.active { display: block; }
+    .view-abwesenheiten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-abwesenheiten.active { display: block; }
     .view-projektdaten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-projektdaten.active { display: block; }
     .view-projektdaten .card { max-width: none; }
@@ -177,6 +186,32 @@
     .modal-detail-dl dd { margin: 0 0 0.25rem 10rem; }
     .modal-detail-dl::after { content: ''; display: block; clear: both; }
     .modal-detail-section .modal-address { font-size: 0.9rem; color: var(--text); }
+    .modal-detail-section-address-row { grid-column: 1 / -1; }
+    .modal-address-contact-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.5rem 2rem; }
+    @media (max-width: 900px) { .modal-address-contact-row { grid-template-columns: 1fr; } }
+    .hotel-address-display { cursor: pointer; min-height: 2rem; }
+    .modal-hotel-hint { font-size: 0.75rem; margin: 0.25rem 0 0 0; }
+    /* Hotel-Adress-Modal: Optik wie Dispo address-card */
+    .hotel-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+    .hotel-modal-card { min-width: 280px; max-width: 420px; max-height: 90vh; overflow: auto; }
+    .hotel-modal-card.address-card { background: #fafafa; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; }
+    .hotel-modal-card h3 { margin: 0 0 8px 0; font-size: 0.95rem; font-weight: 600; }
+    .hotel-modal-card .row { display: flex; gap: 8px; margin-top: 6px; align-items: flex-end; }
+    .hotel-modal-card .row > div:first-child { flex: 1; min-width: 0; }
+    .hotel-modal-card .row > div:last-child { flex: 0 0 auto; }
+    .hotel-modal-card .row.row-full-width > div { flex: 1 1 100%; }
+    .hotel-modal-card .row.row-city-to-edge > div:last-child { flex: 1; min-width: 0; }
+    .hotel-modal-card label { display: block; font-size: 12px; margin-top: 6px; color: var(--muted, #666); }
+    .hotel-modal-card input, .hotel-modal-card select { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
+    .hotel-country-select-wrap { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    .hotel-country-select-wrap .hotel-country-flag { flex: 0 0 auto; line-height: 0; }
+    .hotel-country-select-wrap .hotel-country-flag .job-flag { width: 20px; height: 15px; }
+    .hotel-country-select-wrap select { flex: 1; min-width: 0; }
+    .hotel-modal-actions { margin-top: 1rem; display: flex; gap: 8px; }
+    .hotel-paste-wrap { margin-bottom: 12px; }
+    .hotel-paste-wrap label { display: block; font-size: 12px; margin-top: 6px; color: var(--muted, #666); }
+    .hotel-paste-textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; resize: vertical; min-height: 72px; font-family: inherit; }
+    .hotel-paste-btn { margin-top: 6px; font-size: 0.85rem; }
     /* Beschreibung/Bemerkungen wie Dispo Auftrag bearbeiten: Zeilenumbrüche, einfache HTML-Formatierung */
     .modal-description-display {
       min-height: 1.5em; padding: 0.25rem 0;
@@ -275,9 +310,24 @@
     <nav class="toolbar" aria-label="Hauptnavigation">
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
     <button class="btn btn-ghost" id="btnViewDienstreise">Dienstreise</button>
-    <button class="btn btn-ghost" id="btnViewProtokolle">Protokolle</button>
+    <div class="toolbar-dropdown-wrap">
+      <button type="button" class="btn btn-ghost" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">Protokolle ▾</button>
+      <div class="toolbar-dropdown" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-montagebericht">Montagebericht</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-parameterlisten">Parameterlisten</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-kontrollwiegungen">Kontrollwiegungen</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-service">Service</button>
+      </div>
+    </div>
     <button class="btn btn-ghost" id="btnViewTextbausteine">Textbausteine</button>
     <button class="btn btn-ghost" id="btnViewArchiv">Archiv</button>
+    <div class="toolbar-dropdown-wrap">
+      <button type="button" class="btn btn-ghost" id="btnViewAbwesenheiten" aria-haspopup="true" aria-expanded="false">Abwesenheiten ▾</button>
+      <div id="abwesenheitenDropdown" class="toolbar-dropdown" role="menu" aria-label="Abwesenheiten">
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="abwesenheiten">Abwesenheiten</button>
+      </div>
+    </div>
     <span class="toolbar-right">
       <span id="technicianName" class="toolbar-technician-name"></span>
       <span class="connection-badge-wrap" id="connectionBadgeWrap">
@@ -292,14 +342,8 @@
     <div class="start-left">
       <main id="viewAuftraege" class="view-auftraege">
         <div class="card">
-          <h2>Meine Aufträge</h2>
+          <h2>Offene Aufträge</h2>
           <div id="jobsList"><span class="empty">Wird geladen…</span></div>
-        </div>
-        <div class="card">
-          <h2>Abwesenheiten</h2>
-          <button type="button" class="btn btn-ghost" id="btnRequestAbsence">Abwesenheit beantragen</button>
-          <button type="button" class="btn btn-ghost" id="btnCleanupErrorRequests" style="display:none;margin-left:0.25rem">Fehlerhafte Einträge entfernen</button>
-          <div id="absencesList" style="margin-top:0.75rem"><span class="empty">Wird geladen…</span></div>
         </div>
       </main>
     </div>
@@ -353,16 +397,8 @@
     <div class="card">
       <h2>Projektdaten</h2>
       <div id="viewProjektdatenContent" class="modal-detail-content"><span class="empty">Auftrag per Doppelklick öffnen.</span></div>
-    </div>
-  </main>
-  <main id="viewDienstreise" class="view-dienstreise" aria-label="Dienstreise">
-    <div class="card">
-      <h2>Meine Aufträge</h2>
-      <div id="dienstreiseList" class="dienstreise-list-wrap">
-        <span class="empty">Wird geladen…</span>
-      </div>
-      <div id="dienstreiseDetail" class="dienstreise-detail card" style="display: none;">
-        <h3 id="dienstreiseDetailTitle">Auftrag</h3>
+      <div id="projektdatenOrdnerSection" class="modal-detail-section projektdaten-ordner-section" style="margin-top:1.5rem">
+        <h4>Ordner- und Datenmanagement</h4>
         <div class="dienstreise-detail-split">
           <div class="dienstreise-detail-left">
             <div class="settings-row">
@@ -396,10 +432,18 @@
               <span class="dienstreise-explorer-breadcrumb" id="dienstreiseExplorerBreadcrumb" title="Projektordner">Projektordner</span>
             </div>
             <div id="dienstreiseExplorerList" class="dienstreise-explorer-list" aria-label="Dateien im Projektordner">
-              <span class="empty" id="dienstreiseExplorerPlaceholder">Auftrag wählen, dann Ordnerinhalt hier.</span>
+              <span class="empty" id="dienstreiseExplorerPlaceholder">Auftrag öffnen, dann Ordnerinhalt hier.</span>
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </main>
+  <main id="viewDienstreise" class="view-dienstreise" aria-label="Dienstreise">
+    <div class="card">
+      <h2>Meine Aufträge</h2>
+      <div id="dienstreiseList" class="dienstreise-list-wrap">
+        <span class="empty">Wird geladen…</span>
       </div>
     </div>
     <div id="modalDienstreiseNeu" class="modal-overlay" aria-hidden="true">
@@ -429,17 +473,16 @@
       </div>
     </div>
   </main>
-  <main id="viewProtokolle" class="view-protokolle" aria-label="Protokolle">
+  <main id="viewProtokolleMontagebericht" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Montagebericht">
     <div class="card">
-      <h2>Protokolle</h2>
-      <div class="protokolle-toolbar" style="margin-bottom:1rem">
-        <button type="button" class="btn btn-primary" id="btnMontagebericht">Montagebericht erstellen</button>
-      </div>
-      <div id="protokolleMontagebericht" class="protokolle-montagebericht" style="display:none">
+      <h2>Montagebericht</h2>
+      <div id="protokolleMontagebericht" class="protokolle-montagebericht">
         <div class="montagebericht-layout">
           <div class="montagebericht-tb-sidebar">
             <div class="montagebericht-tb-title">Textbausteine</div>
-            <p class="muted" style="font-size:0.8rem;margin:0 0 0.5rem">Ziehen Sie Textbausteine in die Bemerkungsfelder.</p>
+            <select id="montageberichtTbCategory" class="dienstreise-select" style="width:100%;margin-bottom:0.5rem">
+              <option value="">– Kategorie –</option>
+            </select>
             <div id="montageberichtTbList" class="montagebericht-tb-list"></div>
           </div>
           <form id="montageberichtForm" class="montagebericht-form-wrap">
@@ -471,9 +514,10 @@
         </form>
         </div>
       </div>
-      <p id="protokollePlaceholder" class="empty">Montagebericht erstellen.</p>
     </div>
-    <div class="card" style="margin-top:1.5rem">
+  </main>
+  <main id="viewProtokolleParameterlisten" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Parameterlisten">
+    <div class="card">
       <h2>Parameterlisten</h2>
       <div class="form-group" style="margin-bottom:0.75rem">
         <label>Auftrag</label>
@@ -483,11 +527,59 @@
       </div>
       <div class="form-group" style="margin-bottom:0.75rem">
         <label>CSV-Dateien</label>
-        <input type="file" id="parameterlistenFiles" accept=".csv" multiple>
+        <input type="file" id="parameterlistenFiles" accept=".csv" multiple style="position:absolute;width:0.1px;height:0.1px;opacity:0;overflow:hidden">
+        <button type="button" class="btn btn-ghost" id="btnParameterlistenChooseFiles">Datei auswählen …</button>
       </div>
-      <p class="muted" style="font-size:0.9rem;margin-bottom:0.75rem">CSV-Dateien werden unverändert gespeichert; aus jeder wird ein PDF erzeugt. Beide werden in einem vorhandenen Anlagenordner (von der Dispo) unter Montage/Parameter abgelegt – der Ordner wird anhand der Fabrikationsnummer im Dateinamen ermittelt. Passt keine FN zum Auftrag, erscheint die Meldung „FN im Auftrag nicht vorhanden“.</p>
       <button type="button" class="btn btn-primary" id="btnParameterlistenUpload">Hochladen und PDFs erzeugen</button>
       <div id="parameterlistenResults" class="parameterlisten-results" style="margin-top:1rem;display:none"></div>
+    </div>
+  </main>
+  <main id="viewProtokolleKontrollwiegungen" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Kontrollwiegungen">
+    <div class="card">
+      <h2>Kontrollwiegungsprotokoll</h2>
+      <form id="kontrollwiegungForm" class="montagebericht-form-wrap">
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label>Auftrag</label>
+          <select id="kontrollwiegungJob" class="dienstreise-select" required>
+            <option value="">– Bitte wählen –</option>
+          </select>
+        </div>
+        <div id="kontrollwiegungKopfdaten" class="montagebericht-kopfdaten" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border-radius:4px;font-size:0.9rem"></div>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="kontrollwiegungFab">Fabrikationsnummer</label>
+          <select id="kontrollwiegungFab" class="dienstreise-select" style="width:100%">
+            <option value="">– aus Auftrag –</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="kontrollwiegungDatum">Datum der Durchführung</label>
+          <input type="date" id="kontrollwiegungDatum" required style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+        </div>
+        <div class="kontrollwiegung-zeilen-wrap" style="margin-bottom:1rem">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem">
+            <strong>Wiegungen</strong>
+            <button type="button" class="btn btn-ghost" id="kontrollwiegungAddRow">+ Wiegung hinzufügen</button>
+          </div>
+          <div id="kontrollwiegungZeilen"></div>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button type="submit" class="btn btn-primary">Speichern</button>
+          <button type="button" class="btn btn-ghost" id="kontrollwiegungPdf" style="display:none">PDF erzeugen</button>
+          <button type="button" class="btn btn-ghost" id="kontrollwiegungAbbrechen">Abbrechen</button>
+        </div>
+      </form>
+    </div>
+  </main>
+  <main id="viewProtokolleInbetriebnahme" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Inbetriebnahme">
+    <div class="card">
+      <h2>Inbetriebnahme</h2>
+      <p class="empty">Bereich Inbetriebnahme – Inhalt wird in Kürze bereitgestellt.</p>
+    </div>
+  </main>
+  <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">
+    <div class="card">
+      <h2>Service</h2>
+      <p class="empty">Bereich Service – Inhalt wird in Kürze bereitgestellt.</p>
     </div>
   </main>
   <main id="viewTextbausteine" class="view-textbausteine" aria-label="Textbausteine">
@@ -584,6 +676,14 @@
       <div id="archivList"><span class="empty">Keine Aufträge im Archiv.</span></div>
     </div>
   </main>
+  <main id="viewAbwesenheiten" class="view-abwesenheiten" aria-label="Abwesenheiten">
+    <div class="card">
+      <h2>Abwesenheiten</h2>
+      <button type="button" class="btn btn-ghost" id="btnRequestAbsence">Abwesenheit beantragen</button>
+      <button type="button" class="btn btn-ghost" id="btnCleanupErrorRequests" style="display:none;margin-left:0.25rem">Fehlerhafte Einträge entfernen</button>
+      <div id="absencesList" style="margin-top:0.75rem"><span class="empty">Wird geladen…</span></div>
+    </div>
+  </main>
   <main id="viewEinstellungen" class="view-einstellungen">
     <div class="card">
       <h2>Einstellungen</h2>
@@ -629,6 +729,7 @@
       <button type="button" class="btn btn-ghost" id="btnOpenProfileForQr">Profil im Browser öffnen (QR-Code erzeugen)</button>
     </div>
   </main>
+  <script src="countries.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -55,6 +55,22 @@ CREATE TABLE IF NOT EXISTS job_addresses (
   FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS job_hotel_addresses (
+  job_id INTEGER PRIMARY KEY,
+  endkunde TEXT,
+  street TEXT,
+  house_number TEXT,
+  zip TEXT,
+  city TEXT,
+  country TEXT,
+  address_extra_1 TEXT,
+  address_extra_2 TEXT,
+  phone TEXT,
+  email TEXT,
+  website TEXT,
+  FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS job_technicians (
   job_id INTEGER NOT NULL,
   technician_id INTEGER NOT NULL,
@@ -123,6 +139,30 @@ CREATE TABLE IF NOT EXISTS job_files (
   FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_job_files_job ON job_files(job_id);
+
+-- Benutzer-Textbausteine (lokal + server_id nach Sync mit Dispo)
+CREATE TABLE IF NOT EXISTS textbausteine_user_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  technician_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  server_id INTEGER,
+  updated_at TEXT,
+  FOREIGN KEY (technician_id) REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS textbausteine_user (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  technician_id INTEGER NOT NULL,
+  category_id INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  server_id INTEGER,
+  updated_at TEXT,
+  FOREIGN KEY (technician_id) REFERENCES users(id),
+  FOREIGN KEY (category_id) REFERENCES textbausteine_user_categories(id)
+);
+CREATE INDEX IF NOT EXISTS idx_tb_user_cat_tech ON textbausteine_user_categories(technician_id);
+CREATE INDEX IF NOT EXISTS idx_tb_user_tech ON textbausteine_user(technician_id);
 
 CREATE INDEX IF NOT EXISTS idx_jobs_start ON jobs(start_datetime);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);

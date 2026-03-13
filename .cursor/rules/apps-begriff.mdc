@@ -1,0 +1,14 @@
+---
+description: Begriff "Apps" / "alle Apps" = PWA, Laptop-App, Native Handy-App
+alwaysApply: true
+---
+
+# Apps – einheitliche Begriffe
+
+Wenn von **Apps**, **alle Apps** oder **den Apps** die Rede ist, sind damit stets diese drei Anwendungen gemeint:
+
+1. **PWA-App (Handy-PWA)** – `webapp_handy` (Progressive Web App für Mobilgeräte)
+2. **Laptop-App** – `webapp_monteur_laptop` (Electron-Desktop-App für Monteure)
+3. **Native Handy-App** – `native_handy_app` (Android Native App)
+
+Bei Anforderungen wie „in allen Apps umsetzen“, „mit den Apps synchronisieren“ oder „für die Apps bereitstellen“ sind alle drei zu berücksichtigen, sofern nicht ausdrücklich nur eine genannt wird.
