@@ -8,6 +8,14 @@ const path = require('path');
 const fs = require('fs');
 const WebSocket = require('ws');
 const FormData = require('form-data');
+const csvToPdfPath = path.join(__dirname, 'lib', 'csv-to-pdf.js');
+
+function getCsvToPdfBuffer() {
+  try {
+    delete require.cache[require.resolve(csvToPdfPath)];
+  } catch (_) {}
+  return require(csvToPdfPath).csvToPdfBuffer;
+}
 
 const PORT = 39678;
 const DB_DIR = path.join(__dirname, 'db');
@@ -121,6 +129,19 @@ async function getDb() {
   sqlDb.run(schema);
   try { sqlDb.run('ALTER TABLE jobs ADD COLUMN eap_nummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
   try { sqlDb.run('ALTER TABLE jobs ADD COLUMN bestellnummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
+  try { sqlDb.run('ALTER TABLE job_addresses ADD COLUMN endkunde TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
+  try {
+    sqlDb.run(`CREATE TABLE IF NOT EXISTS job_contacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      contact_name TEXT,
+      contact_phone TEXT,
+      contact_email TEXT,
+      sort_order INTEGER DEFAULT 0,
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    )`);
+  } catch (e) { /* existiert evtl. */ }
+  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_job_contacts_job ON job_contacts(job_id)'); } catch (e) { /* ignore */ }
   try {
     sqlDb.run(`CREATE TABLE IF NOT EXISTS absence_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -702,6 +723,126 @@ function createApp(db) {
     }
   });
 
+  /** Wie copy_project, aber: (1) zuerst Dispo-Projektordner vom File-Server aktualisieren, (2) dann kopieren mit NDJSON-Stream für Ladebalken. Läuft im Hintergrund weiter, wenn der Client die Verbindung schließt. */
+  app.post('/api/dienstreise/copy_project_stream', express.json(), async (req, res) => {
+    let clientGone = false;
+    req.on('close', () => { clientGone = true; });
+    const send = (obj) => {
+      if (clientGone || res.writableEnded) return;
+      try {
+        res.write(JSON.stringify(obj) + '\n');
+      } catch (e) {
+        clientGone = true;
+      }
+    };
+    const safeEnd = () => {
+      if (clientGone || res.writableEnded) return;
+      try {
+        res.end();
+      } catch (e) {
+        clientGone = true;
+      }
+    };
+    try {
+      const body = req.body || {};
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
+      const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
+      const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
+      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
+
+      if (!localJobId || !dispoBaseUrl || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id (lokal), dispoBaseUrl und technicianId erforderlich.' });
+      }
+
+      const jobRow = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const jobId = jobRow.server_id != null ? jobRow.server_id : jobRow.id;
+
+      const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!targetDir || !fs.existsSync(targetDir)) {
+        return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
+      }
+
+      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.flushHeaders();
+
+      send({ phase: 'refresh' });
+      const refreshUrl = dispoBaseUrl + '/api/job_project_refresh.php';
+      const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+      try {
+        const refreshRes = await fetch(refreshUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...authHeader },
+          body: JSON.stringify({ job_id: jobId, technician_id: technicianId }),
+        });
+        const refreshData = await refreshRes.json().catch(() => ({}));
+        if (!refreshRes.ok) {
+          send({ phase: 'error', error: refreshData.error || 'Dispo-Aktualisierung fehlgeschlagen.' });
+          safeEnd();
+          return;
+        }
+      } catch (refreshErr) {
+        send({ phase: 'error', error: refreshErr.message || 'Dispo-Aktualisierung fehlgeschlagen.' });
+        safeEnd();
+        return;
+      }
+      send({ phase: 'refresh_done' });
+
+      const authHeaderForList = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+
+      async function listEntries(relPath) {
+        const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
+        const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + pathQ;
+        const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...authHeaderForList } });
+        if (!r.ok) throw new Error('Dispo-Liste fehlgeschlagen: ' + r.status);
+        const data = await r.json();
+        return (data && data.entries) ? data.entries : [];
+      }
+
+      function collectFilePaths(relPath, list) {
+        return listEntries(relPath).then((entries) => {
+          const next = [];
+          for (const e of entries) {
+            const name = e.name || '';
+            if (!name || name === '.' || name === '..') continue;
+            const childRel = relPath ? relPath + '/' + name : name;
+            if (e.type === 'dir') {
+              next.push(collectFilePaths(childRel, list));
+            } else if (e.type === 'file') {
+              list.push(childRel);
+            }
+          }
+          return Promise.all(next);
+        });
+      }
+
+      const fileList = [];
+      await collectFilePaths('', fileList);
+      const total = fileList.length;
+      send({ phase: 'download', total });
+
+      for (let i = 0; i < fileList.length; i++) {
+        const relPath = fileList[i];
+        const url = dispoBaseUrl + '/api/job_project_file_download.php?technician_id=' + technicianId + '&job_id=' + jobId + '&path=' + encodeURIComponent(relPath);
+        const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...authHeaderForList } });
+        if (!r.ok) throw new Error('Download fehlgeschlagen: ' + relPath);
+        const buf = Buffer.from(await r.arrayBuffer());
+        const localPath = path.join(targetDir, relPath.replace(/\//g, path.sep));
+        const dir = path.dirname(localPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(localPath, buf);
+        send({ phase: 'file', current: i + 1, total, path: relPath });
+      }
+
+      send({ phase: 'done' });
+      safeEnd();
+    } catch (e) {
+      send({ phase: 'error', error: e.message || 'Kopieren fehlgeschlagen.' });
+      safeEnd();
+    }
+  });
+
   app.post('/api/dienstreise/upload', (req, res) => {
     try {
       const body = req.body || {};
@@ -1000,7 +1141,7 @@ function createApp(db) {
     let sql = `SELECT j.id, j.server_id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
         j.status, j.required_technicians, j.description, j.fabrikationsnummern,
         c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
-        ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
       FROM jobs j
       INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
@@ -1040,7 +1181,7 @@ function createApp(db) {
     let sql = `SELECT j.id, j.server_id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
         j.status, j.required_technicians, j.description, j.fabrikationsnummern,
         c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
-        ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
       FROM jobs j
       INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
@@ -1098,7 +1239,7 @@ function createApp(db) {
       SELECT j.*, c.name AS customer_name, c.street AS customer_street, c.house_number AS customer_house_number,
         c.zip AS customer_zip, c.city AS customer_city, c.phone AS customer_phone,
         c.contact_person, c.contact_phone, c.contact_email,
-        ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
       FROM jobs j
       INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
@@ -1108,7 +1249,16 @@ function createApp(db) {
     if (!row) {
       return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
     }
-    let job = row;
+    let job = { ...row };
+    job.job_contacts = job.job_contacts || [];
+    try {
+      const contacts = db.prepare('SELECT contact_name, contact_phone, contact_email FROM job_contacts WHERE job_id = ? ORDER BY sort_order, id').all(jobId);
+      if (contacts && contacts.length > 0) {
+        job.job_contacts = contacts;
+      }
+    } catch (e) {
+      // Tabelle job_contacts fehlt ggf. – Fallback auf contact_person/contact_phone/contact_email vom Job/Kunde
+    }
     const baseUrl = (req.query.base_url || '').toString().trim();
     const enrich = req.query.enrich_anlagenstamm === '1' || req.query.enrich_anlagenstamm === 'true';
     if (enrich && baseUrl) {
@@ -1132,7 +1282,7 @@ function createApp(db) {
     }
     const serverJobId = (row.server_id != null && row.server_id !== '') ? row.server_id : localId;
     const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
-    const url = `${base}/api/job.php?id=${encodeURIComponent(serverJobId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
+    const url = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(serverJobId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
       const data = await r.json().catch(() => ({}));
@@ -1144,6 +1294,20 @@ function createApp(db) {
           data.job.fabrikationsnummern = data.job.Fabrikationsnummern;
         }
         data.job = await enrichJobFabWithAnlagenstamm(data.job, base, auth);
+        // Baustellen-Ansprechpartner lokal speichern, damit sie bei GET /api/job angezeigt werden
+        const contacts = Array.isArray(data.job.job_contacts) ? data.job.job_contacts : [];
+        try {
+          db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(localId);
+          for (let i = 0; i < contacts.length; i++) {
+            const c = contacts[i];
+            const name = (c.contact_name != null ? String(c.contact_name) : '').trim();
+            const phone = (c.contact_phone != null ? String(c.contact_phone) : '').trim();
+            const email = (c.contact_email != null ? String(c.contact_email) : '').trim();
+            if (name || phone || email) {
+              db.prepare('INSERT INTO job_contacts (job_id, contact_name, contact_phone, contact_email, sort_order) VALUES (?, ?, ?, ?, ?)').run(localId, name || null, phone || null, email || null, i);
+            }
+          }
+        } catch (e) { /* Tabelle fehlt oder Fehler – ignorieren */ }
       }
       res.json(data);
     } catch (e) {
@@ -1159,7 +1323,7 @@ function createApp(db) {
       return res.status(400).json({ ok: false, error: 'baseUrl und fabs (Array) erforderlich.' });
     }
     const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
-    const url = `${base}/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(list.join(','))}`;
+    const url = `${base}/dispo_api/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(list.join(','))}`;
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
       const data = await r.json().catch(() => ({}));
@@ -1263,7 +1427,7 @@ function createApp(db) {
       const jobRow = db.prepare(`
         SELECT j.id, j.server_id, j.start_datetime, j.end_datetime, j.job_number, j.description, j.fabrikationsnummern,
           c.name AS customer_name, c.street AS cust_street, c.house_number AS cust_house, c.zip AS cust_zip, c.city AS cust_city,
-          ja.street, ja.house_number, ja.zip, ja.city, ja.country
+          ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country
         FROM jobs j
         INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
         INNER JOIN customers c ON c.id = j.customer_id
@@ -1404,11 +1568,25 @@ function createApp(db) {
         return { fabrikationsnummer: fn, type, position, textbausteine: tb, bemerkungen: bemerk };
       });
 
+      const kopfdatenForDocx = { ...kopfdaten };
+      try {
+        const contacts = db.prepare('SELECT contact_name, contact_phone, contact_email FROM job_contacts WHERE job_id = ? ORDER BY sort_order, id LIMIT 1').all(localJobId);
+        const c = contacts[0];
+        if (c && (c.contact_name || c.contact_phone || c.contact_email)) {
+          const parts = [c.contact_name, c.contact_phone, c.contact_email].filter((x) => x != null && String(x).trim() !== '');
+          kopfdatenForDocx.ansprechperson = parts.join(', ');
+        } else {
+          kopfdatenForDocx.ansprechperson = '';
+        }
+      } catch (_) {
+        kopfdatenForDocx.ansprechperson = '';
+      }
+
       let docxBytes = null;
       try {
         const { buildMontageberichtDocx } = require('./montagebericht_docx');
         docxBytes = await buildMontageberichtDocx({
-          kopfdaten,
+          kopfdaten: kopfdatenForDocx,
           tableRows,
           language,
           jobRow,
@@ -1467,156 +1645,160 @@ function createApp(db) {
       const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
       const docxFilename = ordnerName + '_Montage.docx';
 
+      // Pro FN nur einen Zielordner: vorhandenen Sammelordner (z. B. "11952 - 11958") nutzen, sonst Einzel-FN-Ordner. Bericht nur einmal pro eindeutigem Ordner speichern.
+      const targetFolderNames = new Set();
       for (const fab of fabs) {
-        const fabSafe = sanitizeDienstreiseFolderPart(fab);
-        const montageDir = path.join(docAnlageBase, fabSafe, 'Montage');
+        const fnNum = parseInt(String(fab).trim(), 10);
+        const existingFolder = Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null;
+        const folderName = existingFolder != null ? existingFolder : sanitizeDienstreiseFolderPart(fab);
+        targetFolderNames.add(folderName);
+      }
+      for (const folderName of targetFolderNames) {
+        const montageDir = path.join(docAnlageBase, folderName, 'Montage');
         if (!fs.existsSync(montageDir)) {
-          const docFabDir = path.join(docAnlageBase, fabSafe);
+          const docFabDir = path.join(docAnlageBase, folderName);
           if (!fs.existsSync(docFabDir)) fs.mkdirSync(docFabDir, { recursive: true });
           fs.mkdirSync(montageDir, { recursive: true });
         }
-        const targetPath = path.join(montageDir, pdfFilename);
-        writeFileWithRetry(targetPath, pdfBytes);
+        writeFileWithRetry(path.join(montageDir, pdfFilename), pdfBytes);
         if (docxBytes) {
           writeFileWithRetry(path.join(montageDir, docxFilename), docxBytes);
         }
       }
 
       const montageberichtDataPath = path.join(reiseDir, 'montagebericht.json');
+      const kopfdatenBemerkungen = (kopfdaten && kopfdaten.bemerkungen != null) ? String(kopfdaten.bemerkungen).trim() : '';
       writeFileWithRetry(montageberichtDataPath, JSON.stringify({
         grundDesEinsatzes,
         fabBemerkungen,
         language,
+        bemerkungen: kopfdatenBemerkungen,
       }, null, 2));
 
-      const dispoUsername = (body.dispoUsername || body.serverUsername || '').toString().trim();
-      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.serverPassword != null ? String(body.serverPassword) : '');
-
-      if (dispoBaseUrl && technicianId) {
-        try {
-          await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword);
-        } catch (syncErr) {
-          return res.json({ ok: true, warning: 'PDF gespeichert, Sync zum Dispo fehlgeschlagen: ' + (syncErr && syncErr.message ? syncErr.message : String(syncErr)) });
-        }
-        const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
-        try {
-          const saveDataRes = await fetch(dispoBaseUrl + '/dispo_api/api/montagebericht_data_save.php', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...authHeader },
-            body: JSON.stringify({
-              technician_id: technicianId,
-              job_id: jobId,
-              data: tableRows.map((r) => ({
-                fabrikationsnummer: r.fabrikationsnummer,
-                type: r.type,
-                position: r.position,
-                textbausteine: r.textbausteine,
-              })),
-            }),
-          });
-          if (!saveDataRes.ok) {
-            console.warn('Montagebericht-Daten konnten nicht in Dispo gespeichert werden:', saveDataRes.status);
-          }
-        } catch (saveErr) {
-          console.warn('Montagebericht-Daten-Save fehlgeschlagen:', saveErr && saveErr.message);
-        }
-        const anlagenstammUrl = dispoBaseUrl + '/dispo_api/api/anlagenstamm_montagebericht_save.php';
-        const tableRowByFab = {};
-        for (const r of tableRows) {
-          const fn = (r.fabrikationsnummer || '').toString().trim();
-          if (fn) tableRowByFab[fn] = r;
-        }
-        for (const fab of fabs) {
-          try {
-            const row = tableRowByFab[fab] || {};
-            const form = new FormData();
-            form.append('technician_id', String(technicianId));
-            form.append('job_id', String(jobId));
-            form.append('fabrikationsnummer', fab);
-            form.append('type', (row.type || '').toString());
-            form.append('position', (row.position || '').toString());
-            form.append('textbausteine', JSON.stringify(row.textbausteine || []));
-            form.append('file', Buffer.from(pdfBytes), { filename: pdfFilename });
-            const parsed = new URL(anlagenstammUrl);
-            const headers = form.getHeaders();
-            headers['X-Technician-Id'] = String(technicianId);
-            if (authHeader && authHeader.Authorization) headers.Authorization = authHeader.Authorization;
-            await new Promise((resolve, reject) => {
-              form.submit({
-                protocol: parsed.protocol,
-                hostname: parsed.hostname,
-                port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-                path: parsed.pathname + (parsed.search || ''),
-                method: 'POST',
-                headers,
-              }, (err, res) => {
-                if (err) return reject(err);
-                let body = '';
-                res.setEncoding('utf8');
-                res.on('data', (chunk) => { body += chunk; });
-                res.on('end', () => {
-                  if (res.statusCode >= 200 && res.statusCode < 300) resolve();
-                  else {
-                    try {
-                      const data = body ? JSON.parse(body) : {};
-                      reject(new Error(data.error || 'Upload fehlgeschlagen (' + res.statusCode + ')'));
-                    } catch (e) {
-                      reject(new Error('Upload fehlgeschlagen (' + res.statusCode + '): ' + body));
-                    }
-                  }
-                });
-              });
-            });
-          } catch (uploadErr) {
-            console.warn('Anlagenstamm Montagebericht PDF-Upload für Fab ' + fab + ' fehlgeschlagen:', uploadErr.message);
-          }
-          if (docxBytes) {
-            try {
-              const formDocx = new FormData();
-              formDocx.append('technician_id', String(technicianId));
-              formDocx.append('job_id', String(jobId));
-              formDocx.append('fabrikationsnummer', fab);
-              formDocx.append('file', docxBytes, { filename: docxFilename });
-              const parsedDocx = new URL(anlagenstammUrl);
-              const headersDocx = formDocx.getHeaders();
-              headersDocx['X-Technician-Id'] = String(technicianId);
-              if (authHeader && authHeader.Authorization) headersDocx.Authorization = authHeader.Authorization;
-              await new Promise((resolve, reject) => {
-                formDocx.submit({
-                  protocol: parsedDocx.protocol,
-                  hostname: parsedDocx.hostname,
-                  port: parsedDocx.port || (parsedDocx.protocol === 'https:' ? 443 : 80),
-                  path: parsedDocx.pathname + (parsedDocx.search || ''),
-                  method: 'POST',
-                  headers: headersDocx,
-                }, (err, resDocx) => {
-                  if (err) return reject(err);
-                  let bodyDocx = '';
-                  resDocx.setEncoding('utf8');
-                  resDocx.on('data', (chunk) => { bodyDocx += chunk; });
-                  resDocx.on('end', () => {
-                    if (resDocx.statusCode >= 200 && resDocx.statusCode < 300) resolve();
-                    else {
-                      try {
-                        const dataDocx = bodyDocx ? JSON.parse(bodyDocx) : {};
-                        reject(new Error(dataDocx.error || 'DOCX-Upload fehlgeschlagen (' + resDocx.statusCode + ')'));
-                      } catch (e) {
-                        reject(new Error('DOCX-Upload fehlgeschlagen (' + resDocx.statusCode + '): ' + bodyDocx));
-                      }
-                    }
-                  });
-                });
-              });
-            } catch (docxUploadErr) {
-              console.warn('Anlagenstamm Montagebericht DOCX-Upload für Fab ' + fab + ' fehlgeschlagen:', docxUploadErr.message);
-            }
-          }
-        }
-      }
-
+      // Montagebericht nur lokal speichern – kein Sync und kein Upload zur Dispo
       res.json({ ok: true, saved: fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', pdfFilename)), savedDocx: docxBytes ? fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', docxFilename)) : null });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Montagebericht konnte nicht erstellt werden.' });
+    }
+  });
+
+  /** Fabrikationsnummer aus Dateiname extrahieren (z. B. FN11952_PA7_… → 11952). */
+  function extractFnFromFilename(filename) {
+    if (!filename || typeof filename !== 'string') return null;
+    const m = filename.match(/FN(\d+)/i) || filename.match(/(\d{4,})/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+
+  /**
+   * Findet den vorhandenen Anlagenordner für eine FN unter Dokumente_Anlage.
+   * Möglichkeit 1: Ordner = eine FN (exakt).
+   * Möglichkeit 2/3: Ordner = Bereich "von - bis"; mit oder ohne Leerzeichen, Endzahl gekürzt möglich.
+   * Beispiele: 11952 - 11958, 11952-11958, 11952-58, 11952 - 58.
+   * Gibt den Ordnernamen zurück oder null.
+   */
+  function findParameterlistenFolder(docAnlagePath, fn) {
+    if (fn == null || fn === '' || !Number.isFinite(fn)) return null;
+    const fnNum = parseInt(fn, 10);
+    if (!fs.existsSync(docAnlagePath) || !fs.statSync(docAnlagePath).isDirectory()) return null;
+    let names;
+    try {
+      names = fs.readdirSync(docAnlagePath, { withFileTypes: true });
+    } catch (e) {
+      return null;
+    }
+    const dirs = names.filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name)).map((e) => e.name);
+
+    for (const dirName of dirs) {
+      if (dirName.includes(' - ')) continue;
+      const digitsOnly = dirName.replace(/\D/g, '');
+      if (digitsOnly && parseInt(digitsOnly, 10) === fnNum) return dirName;
+    }
+
+    const rangeRe = /(\d+)\s*-\s*(\d+)/;
+    for (const dirName of dirs) {
+      const m = dirName.match(rangeRe);
+      if (!m) continue;
+      let from = parseInt(m[1], 10);
+      let to = parseInt(m[2], 10);
+      const fromStr = m[1];
+      const toStr = m[2];
+      if (toStr.length < fromStr.length) {
+        const prefix = fromStr.slice(0, fromStr.length - toStr.length);
+        to = parseInt(prefix + toStr, 10);
+      }
+      if (fnNum >= from && fnNum <= to) return dirName;
+    }
+    return null;
+  }
+
+  app.post('/api/protokolle/parameterlisten', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const filename = (body.filename || '').toString().trim();
+      const contentBase64 = body.content;
+
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      if (!filename || !contentBase64) {
+        return res.status(400).json({ ok: false, error: 'filename und content (base64) erforderlich.' });
+      }
+
+      const jobRow = db.prepare(`
+        SELECT j.id FROM jobs j
+        INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+        WHERE j.id = ?
+      `).get(technicianId, localJobId);
+      if (!jobRow) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
+      const fn = extractFnFromFilename(filename);
+      if (fn == null) {
+        return res.status(400).json({ ok: false, error: 'Im Dateinamen konnte keine Fabrikationsnummer erkannt werden (z. B. FN11952).' });
+      }
+
+      const folderName = findParameterlistenFolder(docAnlagePath, fn);
+      if (!folderName) {
+        return res.status(400).json({ ok: false, error: 'FN im Auftrag nicht vorhanden' });
+      }
+
+      const paramDir = path.join(docAnlagePath, folderName, 'Montage', 'Parameter');
+      try {
+        if (!fs.existsSync(paramDir)) fs.mkdirSync(paramDir, { recursive: true });
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: 'Ordner konnte nicht angelegt werden: ' + (e.message || e) });
+      }
+
+      let csvBuffer;
+      try {
+        csvBuffer = Buffer.from(contentBase64, 'base64');
+      } catch (e) {
+        return res.status(400).json({ ok: false, error: 'Ungültiger Base64-Inhalt.' });
+      }
+      const csvPath = path.join(paramDir, filename);
+      writeFileWithRetry(csvPath, csvBuffer);
+
+      let csvText = csvBuffer.toString('utf8');
+      if (!csvText || /[\uFFFD]/.test(csvText)) {
+        csvText = csvBuffer.toString('latin1');
+      }
+
+      const csvToPdfBuffer = getCsvToPdfBuffer();
+      const pdfBytes = await csvToPdfBuffer(csvText, { filename });
+      const pdfBasename = filename.replace(/\.csv$/i, '') + '.pdf';
+      const pdfPath = path.join(paramDir, pdfBasename);
+      writeFileWithRetry(pdfPath, pdfBytes);
+
+      const savedCsv = path.join('Dokumente_Anlage', folderName, 'Montage', 'Parameter', filename);
+      const savedPdf = path.join('Dokumente_Anlage', folderName, 'Montage', 'Parameter', pdfBasename);
+      res.json({ ok: true, savedCsv, savedPdf });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Parameterlisten-Upload fehlgeschlagen.' });
     }
   });
 
@@ -2065,7 +2247,7 @@ function createApp(db) {
     if (parts.length === 0) parts = fab.split(/[\s;,]+/).map((p) => p.trim()).filter(Boolean);
     if (parts.length === 0) return job;
     const base = baseUrl.toString().trim().replace(/\/$/, '');
-    const url = `${base}/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(parts.join(','))}`;
+    const url = `${base}/dispo_api/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(parts.join(','))}`;
     let debugInfo = { url, requestedFabs: parts.slice(), ok: false, matchCount: 0, status: null };
     try {
       const r = await fetch(url, authHeader ? { headers: authHeader } : {});
@@ -2189,7 +2371,7 @@ function createApp(db) {
         const techId = job.technician_id;
         if (jobId == null || techId == null) return;
         try {
-          const jr = await fetch(`${baseUrl}/api/job.php?id=${encodeURIComponent(jobId)}&technician_id=${encodeURIComponent(techId)}`, opts);
+          const jr = await fetch(`${baseUrl}/dispo_api/api/job.php?id=${encodeURIComponent(jobId)}&technician_id=${encodeURIComponent(techId)}`, opts);
           if (!jr.ok) return;
           const jData = await jr.json();
           const full = jData.job;
@@ -2349,9 +2531,10 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
 }
 
 function insertOrUpdateJobAddress(db, jobId, j) {
+  const endkunde = j.endkunde || null;
   const street = j.street || ''; const house = j.house_number || ''; const zip = j.zip || ''; const city = j.city || ''; const country = j.country || 'DE';
-  db.prepare('INSERT OR REPLACE INTO job_addresses (job_id, street, house_number, zip, city, country, address_extra_1, address_extra_2) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-    jobId, street, house, zip, city, country, j.address_extra_1 || null, j.address_extra_2 || null
+  db.prepare('INSERT OR REPLACE INTO job_addresses (job_id, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+    jobId, endkunde, street, house, zip, city, country, j.address_extra_1 || null, j.address_extra_2 || null
   );
 }
 
@@ -2404,7 +2587,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       const serverJobId = (job && job.server_id) ? job.server_id : p.entity_id;
       const payload = JSON.parse(p.payload || '{}');
       const body = { job_id: serverJobId, ...payload };
-      const r = await fetch(`${base}/api/job.php?technician_id=${technicianId}`, { method: 'PATCH', headers: header, body: JSON.stringify(body) });
+      const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${technicianId}`, { method: 'PATCH', headers: header, body: JSON.stringify(body) });
       if (r.ok) {
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
         if (p.action === 'status' && payload.status === 'erledigt') {

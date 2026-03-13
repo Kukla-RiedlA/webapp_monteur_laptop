@@ -5,6 +5,26 @@
 const path = require('path');
 const fs = require('fs');
 
+/** JPG/JPEG-Buffer: weiße Pixel transparent machen, als PNG zurückgeben. Schwellwert 0–255 (z. B. 250 = fast weiß). */
+async function makeWhiteTransparentPng(jpegBuffer, whiteThreshold = 250) {
+  const sharp = require('sharp');
+  const { data, info } = await sharp(jpegBuffer)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    if (r >= whiteThreshold && g >= whiteThreshold && b >= whiteThreshold) {
+      data[i + 3] = 0;
+    }
+  }
+  return sharp(Buffer.from(data), { raw: { width: info.width, height: info.height, channels: 4 } })
+    .png()
+    .toBuffer();
+}
+
 const {
   Document,
   Packer,
@@ -17,6 +37,8 @@ const {
   VerticalAlign,
   TextRun,
   TableLayoutType,
+  BorderStyle,
+  HeightRule,
 } = require('docx');
 
 const sanitize = (v) => {
@@ -70,22 +92,42 @@ function createFnTable(fn, L) {
   });
 }
 
-function getLogoCellContent(dirname) {
+async function getLogoCellContent(dirname) {
   const logoPaths = [
+    path.join(dirname, 'public', 'assets', 'img', 'kukla_logo.png'),
     path.join(dirname, '..', '..', 'dispo', 'assets', 'templates', 'protokoll', '_extract_de', 'word', 'media', 'image1.jpeg'),
     path.join(dirname, 'public', 'assets', 'img', 'kukla_logo.jpg'),
   ];
   for (const logoPath of logoPaths) {
     if (fs.existsSync(logoPath)) {
       try {
-        const logoData = fs.readFileSync(logoPath);
+        let logoData = fs.readFileSync(logoPath);
+        const ext = path.extname(logoPath).toLowerCase();
+        let mimeType = ext === '.png' ? 'png' : 'jpeg';
+        // Bei JPG/JPEG: weißen Hintergrund transparent machen (als PNG einbetten)
+        if (ext === '.jpg' || ext === '.jpeg') {
+          try {
+            logoData = await makeWhiteTransparentPng(logoData, 250);
+            mimeType = 'png';
+          } catch (imgErr) {
+            console.warn('Logo Weiß→transparent fehlgeschlagen, verwende Original:', imgErr.message);
+          }
+        }
+        // Logo als schwebendes Bild hinter die Zelle (behindDocument), damit der Zellenrahmen über dem Bild liegt
         return [
           new Paragraph({
+            spacing: { before: 0, after: 0 },
             children: [
               new ImageRun({
-                type: 'jpeg',
+                type: mimeType,
                 data: logoData,
                 transformation: { width: 137, height: 92 },
+                floating: {
+                  behindDocument: true,
+                  layoutInCell: true,
+                  horizontalPosition: { relative: 'column', align: 'left', offset: 91440 },
+                  verticalPosition: { relative: 'paragraph', align: 'top', offset: 45720 },
+                },
               }),
             ],
           }),
@@ -146,7 +188,7 @@ async function buildMontageberichtDocx(options) {
   const fnList = tableRows.map((r) => r.fabrikationsnummer).filter(Boolean).join(', ');
   const bemerkungen = sanitize(kopfdaten.bemerkungen ?? '');
 
-  const logoCellContent = getLogoCellContent(__dirname);
+  const logoCellContent = await getLogoCellContent(__dirname);
 
   const headerTable = new Table({
     width: { size: 10060, type: WidthType.DXA },
@@ -154,10 +196,18 @@ async function buildMontageberichtDocx(options) {
     layout: TableLayoutType.FIXED,
     rows: [
       new TableRow({
+        height: { value: 1390, rule: HeightRule.EXACT }, // max 2,45 cm (Logo ~2,43 cm), in 1/20 pt (2,45 cm ≈ 69,5 pt)
         children: [
           new TableCell({
             children: logoCellContent,
             verticalAlign: VerticalAlign.CENTER,
+            margins: { top: 0, bottom: 0, left: 0, right: 0 },
+            borders: {
+              top: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+              bottom: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+              left: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+              right: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+            },
           }),
           new TableCell({
             columnSpan: 2,

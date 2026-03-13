@@ -9,5 +9,6 @@ Bei allen Änderungen an Kalender-, API- und App-Dateien der Dispo **ausschließ
 
 - **Pfad:** Immer den **relativen Pfad** `dispo/` vom **Workspace-Root** (C:\Kukla_Monteur_Plattform) nutzen (z. B. `dispo/modules/calendar.php`, `dispo/calendar_month.php`, `dispo/api/calendar.php`).
 - **Nicht** absolute Pfade zu anderen Projektordnern verwenden – nur das **dispo**-Verzeichnis dieses Workspaces bearbeiten.
+- **Wichtig:** Die XAMPP-Version (`c:\xampp_2\htdocs`) ist **nicht mehr gültig**. Es wird ausschließlich in **Kukla_Monteur_Plattform** gearbeitet.
 
 Damit landen Änderungen dort, wo die Dispo-Anwendung für dieses Projekt geladen wird.

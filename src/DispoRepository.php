@@ -93,7 +93,7 @@ final class DispoRepository
                        c.name AS customer_name, c.street AS customer_street, c.house_number AS customer_house_number,
                        c.zip AS customer_zip, c.city AS customer_city, c.phone AS customer_phone,
                        c.contact_person, c.contact_phone, c.contact_email,
-                       ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+                       ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
                 FROM jobs j
                 INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = :technician_id
                 INNER JOIN customers c ON c.id = j.customer_id
@@ -140,7 +140,7 @@ final class DispoRepository
                 $base = $fr;
                 $enr = $fab !== '' && isset($byFab[$fab]) ? $byFab[$fab] : null;
                 // Für jede Spalte: wenn in job_fabrikation leer/NULL, Wert aus Anlagenstamm nehmen.
-                foreach (['type', 'leistung', 'nenngeschwindigkeit', 'kraftaufnehmer', 'dms_nr', 'tacho', 'elektronik', 'material', 'position'] as $field) {
+                foreach (['type', 'leistung', 'nenngeschwindigkeit', 'kraftaufnehmer', 'dms_nr', 'tacho', 'elektronik', 'material', 'position', 'geliefert_ueber', 'projekt', 'bemerkungen'] as $field) {
                     $cur = isset($base[$field]) ? trim((string) $base[$field]) : '';
                     if ($cur === '' && $enr !== null && isset($enr[$field])) {
                         $base[$field] = $enr[$field];
@@ -154,6 +154,17 @@ final class DispoRepository
             if ($fabFromJob !== []) {
                 $row['fabrikationsnummern'] = json_encode($this->enrichFabFromAnlagenstamm($fabFromJob), JSON_UNESCAPED_UNICODE);
             }
+        }
+        // Baustellen-Ansprechpartner (job_contacts) für Kontakt-Block
+        $row['job_contacts'] = [];
+        try {
+            $stmtContacts = $this->fsm->prepare('SELECT contact_name, contact_phone, contact_email FROM job_contacts WHERE job_id = :job_id ORDER BY sort_order, id');
+            $stmtContacts->execute([':job_id' => $jobId]);
+            while ($contact = $stmtContacts->fetch(PDO::FETCH_ASSOC)) {
+                $row['job_contacts'][] = $contact;
+            }
+        } catch (Throwable $e) {
+            // Tabelle job_contacts fehlt ggf.
         }
         return $row;
     }
@@ -532,7 +543,7 @@ final class DispoRepository
             return [];
         }
         $placeholders = implode(',', array_fill(0, count($fabrikationsnummern), '?'));
-        $sql = "SELECT fabrikationsnummer, type, leistung, nenngeschwindigkeit, kraftaufnehmer, dms_nr, tacho, elektronik, material, position FROM anlagenstamm WHERE fabrikationsnummer IN ($placeholders)";
+        $sql = "SELECT fabrikationsnummer, type, leistung, nenngeschwindigkeit, kraftaufnehmer, dms_nr, tacho, elektronik, material, position, geliefert_ueber, projekt, bemerkungen FROM anlagenstamm WHERE fabrikationsnummer IN ($placeholders)";
         $stmt = $this->fsm->prepare($sql);
         $stmt->execute($fabrikationsnummern);
         $byFab = [];
@@ -552,6 +563,9 @@ final class DispoRepository
                 'elektronik'           => $r['elektronik'] ?? '',
                 'material'             => $r['material'] ?? '',
                 'position'             => $r['position'] ?? '',
+                'geliefert_ueber'      => $r['geliefert_ueber'] ?? '',
+                'projekt'              => $r['projekt'] ?? '',
+                'bemerkungen'          => $r['bemerkungen'] ?? '',
             ];
         }
         $emptyRow = [
@@ -565,6 +579,9 @@ final class DispoRepository
             'elektronik'         => '',
             'material'           => '',
             'position'           => '',
+            'geliefert_ueber'    => '',
+            'projekt'            => '',
+            'bemerkungen'        => '',
         ];
         $result = [];
         foreach ($fabrikationsnummern as $fab) {

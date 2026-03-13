@@ -271,13 +271,46 @@
 
   function renderJobDetailsContent(job) {
     var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
+    function decodeHtmlEntities(str) {
+      if (str == null || str === '') return '';
+      var d = document.createElement('div');
+      d.innerHTML = String(str);
+      return (d.textContent || d.innerText || '').trim();
+    }
+    /** Beschreibung/Bemerkungen wie in der Dispo formatieren: HTML erlauben (nur sichere Tags), Zeilenumbrüche erhalten. */
+    function formatDescriptionForDisplay(str) {
+      if (str == null || str === '') return '';
+      var s = String(str).trim();
+      if (!s) return '';
+      if (s.indexOf('\n') !== -1) s = s.replace(/\n/g, '<br>');
+      var allowed = ['b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'p', 'br'];
+      var div = document.createElement('div');
+      div.innerHTML = s;
+      function sanitize(node) {
+        if (node.nodeType === 3) return escapeHtml(node.textContent);
+        if (node.nodeType !== 1) return '';
+        var tag = node.tagName.toLowerCase();
+        if (allowed.indexOf(tag) === -1) {
+          var out = '';
+          for (var i = 0; i < node.childNodes.length; i++) out += sanitize(node.childNodes[i]);
+          return out;
+        }
+        var out = '<' + tag + '>';
+        for (var j = 0; j < node.childNodes.length; j++) out += sanitize(node.childNodes[j]);
+        if (tag !== 'br') out += '</' + tag + '>';
+        return out;
+      }
+      var result = '';
+      for (var k = 0; k < div.childNodes.length; k++) result += sanitize(div.childNodes[k]);
+      return result.trim();
+    }
     var dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
     var countryRaw = (job.country || '').trim();
     var countryCode = normalizeCountryToCode(job.country);
     var countryPart = countryCode ? (countryFlagImg(countryCode) + (countryRaw ? ' ' + escapeHtml(countryRaw) : ' ' + countryCode)) : (countryRaw ? escapeHtml(countryRaw) : '');
-    // DIN-Adresse: Empfängername (Kunde) an erster Stelle, dann Straße + Hausnummer, PLZ Ort, Land, Zusatzzeilen
+    // Auftragsadresse (Einsatzadresse): Endkunde als Firmenname, dann Straße, PLZ Ort, Land
     var addressLines = [];
-    var nameLine = (job.customer_name || '').trim();
+    var nameLine = (job.endkunde != null && String(job.endkunde).trim() !== '') ? String(job.endkunde).trim() : (job.customer_name || '').trim();
     if (nameLine) addressLines.push(escapeHtml(nameLine));
     var streetLine = [ (job.street || '').trim(), (job.house_number || '').trim() ].filter(Boolean).join(' ');
     if (streetLine) addressLines.push(escapeHtml(streetLine));
@@ -343,13 +376,17 @@
           tacho: get(r, ['tacho', 'Tacho']),
           elektronik: get(r, ['elektronik', 'Elektronik']),
           material: get(r, ['material', 'Material']),
-          position: get(r, ['position', 'Position'])
+          position: get(r, ['position', 'Position']),
+          geliefert_ueber: get(r, ['geliefert_ueber', 'geliefertUeber']),
+          projekt: get(r, ['projekt', 'Projekt']),
+          bemerkungen: get(r, ['bemerkungen', 'Bemerkungen'])
         });
       });
     }
     if (leistungRows.length === 0) {
-      leistungRows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '' });
+      leistungRows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '', geliefert_ueber: '', projekt: '', bemerkungen: '' });
     }
+    window.currentProjektdatenLeistungRows = leistungRows;
 
     var html = '<div class="modal-detail-grid">';
     html += '<div class="modal-detail-section"><h4>Auftrag</h4><dl class="modal-detail-dl">';
@@ -357,7 +394,6 @@
     html += '<dt>Typ</dt><dd>' + v(job.job_type) + '</dd>';
     html += '<dt>Zeitraum</dt><dd>' + (dateRangeStr ? v(dateRangeStr) : v(formatDateOnly(job.start_datetime) || job.start_datetime)) + '</dd>';
     html += '<dt>Status</dt><dd>' + v(job.status) + '</dd>';
-    if (job.description) html += '<dt>Beschreibung</dt><dd>' + v(job.description) + '</dd>';
     html += '</dl></div>';
     html += '<div class="modal-detail-section"><h4>Kunde</h4><dl class="modal-detail-dl">';
     html += '<dt>Name</dt><dd>' + v(job.customer_name) + '</dd>';
@@ -366,53 +402,186 @@
     html += '<dt>Telefon</dt><dd>' + v(job.customer_phone) + '</dd>';
     html += '</dl></div>';
     html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
-    html += '<div class="modal-detail-section"><h4>Kontakt</h4><dl class="modal-detail-dl">';
-    html += '<dt>Ansprechpartner</dt><dd>' + v(job.contact_person) + '</dd>';
-    html += '<dt>Telefon</dt><dd>' + v(job.contact_phone) + '</dd>';
-    html += '<dt>E-Mail</dt><dd>' + v(job.contact_email) + '</dd>';
+    html += '<div class="modal-detail-section"><h4>Kontakt (Baustellen-Ansprechpartner)</h4><dl class="modal-detail-dl">';
+    (function () {
+      var c = (job.job_contacts && Array.isArray(job.job_contacts) && job.job_contacts[0]) ? job.job_contacts[0] : null;
+      var name = (c && (c.contact_name || c.contactName)) ? (c.contact_name || c.contactName) : (job.contact_person || job.contact_name || '');
+      var phone = (c && (c.contact_phone || c.contactPhone)) ? (c.contact_phone || c.contactPhone) : (job.contact_phone || '');
+      var email = (c && (c.contact_email || c.contactEmail)) ? (c.contact_email || c.contactEmail) : (job.contact_email || '');
+      html += '<dt>Ansprechpartner</dt><dd>' + v(name) + '</dd>';
+      html += '<dt>Telefon</dt><dd>' + v(phone) + '</dd>';
+      html += '<dt>E-Mail</dt><dd>' + v(email) + '</dd>';
+    })();
     html += '</dl></div>';
     html += '</div>';
 
     html += '<div class="modal-detail-section"><h4>Auftrag: ERP-Nummer / Bestellnummer</h4>';
     html += '<dl class="modal-detail-dl"><dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
     html += '<dt>Bestellnummer</dt><dd>' + v(job.bestellnummer) + '</dd></dl>';
-    html += '<h4 style="margin-top:1rem">Leistungsdaten (wie Anlagenstamm)</h4>';
-    html += '<table class="modal-leistung-table"><thead><tr>';
-    html += '<th>Fabrikationsnummer</th><th>Type</th><th>Leistung</th><th>Nenngeschwindigkeit</th><th>Kraftaufnehmer</th><th>DMS Nr.</th><th>Tacho</th><th>Elektronik</th><th>Material</th><th>Position</th>';
-    html += '</tr></thead><tbody id="modalLeistungTbody">';
-    var attr = function (x) { return escapeHtml(String(x == null ? '' : x)).replace(/"/g, '&quot;'); };
-    leistungRows.forEach(function (row) {
-      html += '<tr><td><input type="text" value="' + attr(row.fabrikationsnummer) + '"></td>';
-      html += '<td><input type="text" value="' + attr(row.type) + '"></td>';
-      html += '<td><input type="text" value="' + attr(row.leistung) + '"></td>';
-      html += '<td><input type="text" value="' + attr(row.nenngeschwindigkeit) + '"></td>';
-      html += '<td><input type="text" value="' + attr(row.kraftaufnehmer) + '"></td>';
-      html += '<td><input type="text" value="' + attr(row.dms_nr) + '"></td>';
-      html += '<td><input type="text" value="' + attr(row.tacho) + '"></td>';
-      html += '<td><input type="text" value="' + attr(row.elektronik) + '"></td>';
-      html += '<td><input type="text" value="' + attr(row.material) + '"></td>';
-      html += '<td><input type="text" value="' + attr(row.position) + '"></td></tr>';
-    });
-    html += '</tbody></table>';
-    html += '<div class="modal-leistung-actions">';
-    html += '<button type="button" class="btn btn-ghost" data-action="add-leistung-row">Zeile hinzufügen</button>';
-    html += '<button type="button" class="btn btn-primary" data-action="save-leistung">Speichern</button>';
-    html += '</div></div>';
+    html += '<h4 style="margin-top:1rem">Leistungsdaten (Anlagenstamm)</h4>';
+    html += '<p class="modal-leistung-hint">Doppelklick auf eine Anlage öffnet die Anlagendetails.</p>';
+    var visibleIndices = [];
+    for (var idx = 0; idx < leistungRows.length; idx++) {
+      var r = leistungRows[idx];
+      if (!r.fabrikationsnummer && !r.type && !r.leistung && !r.geliefert_ueber && !r.projekt && !r.bemerkungen) continue;
+      visibleIndices.push(idx);
+    }
+    var useTwoCards = visibleIndices.length > 2;
+    var vCell = function (x) { return escapeHtml(String(x == null ? '' : x)); };
+    function renderAnlagenTable(indices) {
+      var out = '<div class="modal-leistung-wrap"><table class="modal-leistung-table modal-leistung-table-compact"><thead><tr>';
+      out += '<th>FN</th><th>Type</th><th>Leistung</th>';
+      out += '</tr></thead><tbody>';
+      for (var k = 0; k < indices.length; k++) {
+        var i = indices[k];
+        var row = leistungRows[i];
+        out += '<tr>';
+        out += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.fabrikationsnummer) + '</td>';
+        out += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
+        out += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
+        out += '</tr>';
+      }
+      out += '</tbody></table></div>';
+      return out;
+    }
+    if (useTwoCards) {
+      var mid = Math.ceil(visibleIndices.length / 2);
+      var chunk1 = visibleIndices.slice(0, mid);
+      var chunk2 = visibleIndices.slice(mid);
+      html += '<div class="modal-leistung-cards">';
+      html += '<div class="card modal-leistung-card">' + renderAnlagenTable(chunk1) + '</div>';
+      html += '<div class="card modal-leistung-card">' + renderAnlagenTable(chunk2) + '</div>';
+      html += '</div>';
+    } else {
+      html += '<div class="modal-leistung-wrap"><table class="modal-leistung-table modal-leistung-table-compact"><thead><tr>';
+      html += '<th>FN</th><th>Type</th><th>Leistung</th>';
+      html += '</tr></thead><tbody id="modalLeistungTbody">';
+      for (var i = 0; i < leistungRows.length; i++) {
+        var row = leistungRows[i];
+        if (!row.fabrikationsnummer && !row.type && !row.leistung && !row.geliefert_ueber && !row.projekt && !row.bemerkungen) continue;
+        html += '<tr>';
+        html += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.fabrikationsnummer) + '</td>';
+        html += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
+        html += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+    html += '</div>';
+    if (job.description) html += '<div class="modal-detail-section modal-detail-section-description"><h4>Bemerkungen</h4><div class="modal-description-wrap"><div class="modal-description-display">' + formatDescriptionForDisplay(job.description) + '</div></div></div>';
     return html;
+  }
+
+  function openAnlageDetailModal(rowIndex) {
+    var rows = window.currentProjektdatenLeistungRows;
+    if (!rows || !rows[rowIndex]) return;
+    var row = rows[rowIndex];
+    var jobId = jobDetailsJobId;
+    if (!jobId) return;
+    var attr = function (x) { return escapeHtml(String(x == null ? '' : x)).replace(/"/g, '&quot;'); };
+    var modalHtml = '<div id="anlageDetailModal" class="modal-overlay anlage-detail-modal" role="dialog">';
+    modalHtml += '<div class="modal-box anlage-detail-content">';
+    modalHtml += '<h3>Anlagendetails</h3>';
+    modalHtml += '<p class="anlage-detail-fn"><strong>Fabrikationsnummer:</strong> <span id="anlageDetailFn">' + attr(row.fabrikationsnummer) + '</span></p>';
+    modalHtml += '<input type="hidden" id="anlageDetailRowIndex" value="' + attr(String(rowIndex)) + '">';
+    modalHtml += '<div class="anlage-detail-fields">';
+    modalHtml += '<div class="anlage-detail-col"><dl class="anlage-detail-dl">';
+    modalHtml += '<dt>Type</dt><dd><input type="text" id="anlageDetailType" value="' + attr(row.type) + '"></dd>';
+    modalHtml += '<dt>Leistung</dt><dd><input type="text" id="anlageDetailLeistung" value="' + attr(row.leistung) + '"></dd>';
+    modalHtml += '<dt>Nenngeschwindigkeit</dt><dd><input type="text" id="anlageDetailNenngeschwindigkeit" value="' + attr(row.nenngeschwindigkeit) + '"></dd>';
+    modalHtml += '<dt>Kraftaufnehmer</dt><dd><input type="text" id="anlageDetailKraftaufnehmer" value="' + attr(row.kraftaufnehmer) + '"></dd>';
+    modalHtml += '<dt>DMS Nr.</dt><dd><input type="text" id="anlageDetailDmsNr" value="' + attr(row.dms_nr) + '"></dd>';
+    modalHtml += '<dt>Tacho</dt><dd><input type="text" id="anlageDetailTacho" value="' + attr(row.tacho) + '"></dd>';
+    modalHtml += '</dl></div>';
+    modalHtml += '<div class="anlage-detail-col"><dl class="anlage-detail-dl">';
+    modalHtml += '<dt>Elektronik</dt><dd><input type="text" id="anlageDetailElektronik" value="' + attr(row.elektronik) + '"></dd>';
+    modalHtml += '<dt>Material</dt><dd><input type="text" id="anlageDetailMaterial" value="' + attr(row.material) + '"></dd>';
+    modalHtml += '<dt>Position</dt><dd><input type="text" id="anlageDetailPosition" value="' + attr(row.position) + '"></dd>';
+    modalHtml += '<dt>Geliefert über</dt><dd><input type="text" id="anlageDetailGeliefertUeber" value="' + attr(row.geliefert_ueber) + '"></dd>';
+    modalHtml += '<dt>Projekt</dt><dd><input type="text" id="anlageDetailProjekt" value="' + attr(row.projekt) + '"></dd>';
+    modalHtml += '<dt>Bemerkungen</dt><dd><textarea id="anlageDetailBemerkungen" rows="3">' + attr(row.bemerkungen) + '</textarea></dd>';
+    modalHtml += '</dl></div></div>';
+    modalHtml += '<div class="anlage-detail-actions">';
+    modalHtml += '<button type="button" class="btn btn-primary" id="anlageDetailSave">Speichern</button>';
+    modalHtml += ' <button type="button" class="btn btn-ghost" id="anlageDetailCancel">Abbrechen</button>';
+    modalHtml += '</div></div></div>';
+    var existing = document.getElementById('anlageDetailModal');
+    if (existing) existing.remove();
+    var wrap = document.getElementById('viewProjektdatenContent');
+    if (!wrap) wrap = document.body;
+    var div = document.createElement('div');
+    div.innerHTML = modalHtml;
+    while (div.firstChild) wrap.appendChild(div.firstChild);
+    var modal = document.getElementById('anlageDetailModal');
+    if (!modal) return;
+    function closeModal() {
+      if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
+    }
+    document.getElementById('anlageDetailCancel').addEventListener('click', closeModal);
+    modal.addEventListener('click', function (e) {
+      if (e.target === modal) closeModal();
+    });
+    document.getElementById('anlageDetailSave').addEventListener('click', function () {
+      var idx = parseInt(document.getElementById('anlageDetailRowIndex').value, 10);
+      var rowsCopy = (window.currentProjektdatenLeistungRows || []).slice();
+      if (!rowsCopy[idx]) return;
+      rowsCopy[idx] = {
+        fabrikationsnummer: rowsCopy[idx].fabrikationsnummer,
+        type: (document.getElementById('anlageDetailType') && document.getElementById('anlageDetailType').value) || '',
+        leistung: (document.getElementById('anlageDetailLeistung') && document.getElementById('anlageDetailLeistung').value) || '',
+        nenngeschwindigkeit: (document.getElementById('anlageDetailNenngeschwindigkeit') && document.getElementById('anlageDetailNenngeschwindigkeit').value) || '',
+        kraftaufnehmer: (document.getElementById('anlageDetailKraftaufnehmer') && document.getElementById('anlageDetailKraftaufnehmer').value) || '',
+        dms_nr: (document.getElementById('anlageDetailDmsNr') && document.getElementById('anlageDetailDmsNr').value) || '',
+        tacho: (document.getElementById('anlageDetailTacho') && document.getElementById('anlageDetailTacho').value) || '',
+        elektronik: (document.getElementById('anlageDetailElektronik') && document.getElementById('anlageDetailElektronik').value) || '',
+        material: (document.getElementById('anlageDetailMaterial') && document.getElementById('anlageDetailMaterial').value) || '',
+        position: (document.getElementById('anlageDetailPosition') && document.getElementById('anlageDetailPosition').value) || '',
+        geliefert_ueber: (document.getElementById('anlageDetailGeliefertUeber') && document.getElementById('anlageDetailGeliefertUeber').value) || '',
+        projekt: (document.getElementById('anlageDetailProjekt') && document.getElementById('anlageDetailProjekt').value) || '',
+        bemerkungen: (document.getElementById('anlageDetailBemerkungen') && document.getElementById('anlageDetailBemerkungen').value) || ''
+      };
+      var arr = rowsCopy.filter(function (r) { return r && (r.fabrikationsnummer || r.type || r.leistung || r.geliefert_ueber || r.projekt || r.bemerkungen); });
+      if (arr.length === 0) arr = rowsCopy;
+      api('/api/job', {
+        method: 'PATCH',
+        body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
+      }).then(function () {
+        closeModal();
+        var content = document.getElementById('viewProjektdatenContent');
+        if (content) content.innerHTML = '<span class="empty">Gespeichert. Lade neu…</span>';
+        var url = API_BASE + '/api/job?id=' + encodeURIComponent(jobId);
+        var base = getDispoBaseUrl();
+        if (base) {
+          url += '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(base);
+          var u = getDispoUsername(); var p = getDispoPassword();
+          if (u) url += '&serverUsername=' + encodeURIComponent(u);
+          if (p) url += '&serverPassword=' + encodeURIComponent(p);
+        }
+        fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.job && content) content.innerHTML = renderJobDetailsContent(data.job);
+            bindLeistungActions();
+          })
+          .catch(function () { if (content) content.innerHTML = '<span class="empty">Fehler beim Neuladen.</span>'; });
+        if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync(); } catch (e) {} }
+      }).catch(function (e) {
+        alert('Speichern fehlgeschlagen: ' + e.message);
+      });
+    });
   }
 
   function addLeistungRow() {
     var tbody = document.getElementById('modalLeistungTbody');
     if (!tbody) return;
     var tr = document.createElement('tr');
-    for (var i = 0; i < 10; i++) {
-      var td = document.createElement('td');
-      var input = document.createElement('input');
-      input.type = 'text';
-      input.value = '';
-      td.appendChild(input);
-      tr.appendChild(td);
-    }
+    var td = document.createElement('td');
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.value = '';
+    input.setAttribute('data-fab', '');
+    td.appendChild(input);
+    tr.appendChild(td);
     tbody.appendChild(tr);
   }
 
@@ -424,19 +593,12 @@
     var rows = tbody.getElementsByTagName('tr');
     var arr = [];
     for (var i = 0; i < rows.length; i++) {
-      var inputs = rows[i].getElementsByTagName('input');
-      if (inputs.length >= 10) {
+      var input = rows[i].querySelector('input[data-fab]');
+      if (input) {
+        var fn = input.value.trim();
         arr.push({
-          fabrikationsnummer: inputs[0].value.trim(),
-          type: inputs[1].value.trim(),
-          leistung: inputs[2].value.trim(),
-          nenngeschwindigkeit: inputs[3].value.trim(),
-          kraftaufnehmer: inputs[4].value.trim(),
-          dms_nr: inputs[5].value.trim(),
-          tacho: inputs[6].value.trim(),
-          elektronik: inputs[7].value.trim(),
-          material: inputs[8].value.trim(),
-          position: inputs[9].value.trim()
+          fabrikationsnummer: fn,
+          type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: ''
         });
       }
     }
@@ -466,10 +628,12 @@
   function bindLeistungActions() {
     var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
-    var btnAdd = content.querySelector('[data-action="add-leistung-row"]');
-    var btnSave = content.querySelector('[data-action="save-leistung"]');
-    if (btnAdd) btnAdd.addEventListener('click', addLeistungRow);
-    if (btnSave) btnSave.addEventListener('click', saveLeistungDaten);
+    content.querySelectorAll('.modal-leistung-cell-clickable').forEach(function (td) {
+      td.addEventListener('dblclick', function () {
+        var idx = td.getAttribute('data-row-index');
+        if (idx !== null && idx !== '') openAnlageDetailModal(parseInt(idx, 10));
+      });
+    });
   }
 
   async function updateJobStatus(jobId, status) {
@@ -1203,7 +1367,7 @@
     var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
     var dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
     var addressLines = [];
-    var nameLine = (job.customer_name || '').trim();
+    var nameLine = (job.endkunde != null && String(job.endkunde).trim() !== '') ? String(job.endkunde).trim() : (job.customer_name || '').trim();
     if (nameLine) addressLines.push(escapeHtml(nameLine));
     var streetLine = [(job.street || '').trim(), (job.house_number || '').trim()].filter(Boolean).join(' ');
     if (streetLine) addressLines.push(escapeHtml(streetLine));
@@ -1222,7 +1386,7 @@
     html += '<dt>Typ</dt><dd>' + v(job.job_type) + '</dd>';
     html += '<dt>Zeitraum</dt><dd>' + (dateRangeStr ? v(dateRangeStr) : v(formatDateOnly(job.start_datetime) || job.start_datetime)) + '</dd>';
     html += '<dt>Status</dt><dd>' + v(job.status) + '</dd>';
-    if (job.description) html += '<dt>Beschreibung</dt><dd>' + v(job.description) + '</dd>';
+    if (job.description) html += '<dt>Bemerkungen</dt><dd>' + (escapeHtml(String(job.description).trim()) || '–') + '</dd>';
     html += '</dl></div>';
     html += '<div class="archiv-detail-section"><h4>Kunde</h4><dl class="modal-detail-dl">';
     html += '<dt>Name</dt><dd>' + v(job.customer_name) + '</dd>';
@@ -1232,9 +1396,15 @@
     html += '</dl></div>';
     html += '<div class="archiv-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
     html += '<div class="archiv-detail-section"><h4>Kontakt</h4><dl class="modal-detail-dl">';
-    html += '<dt>Ansprechpartner</dt><dd>' + v(job.contact_person) + '</dd>';
-    html += '<dt>Telefon</dt><dd>' + v(job.contact_phone) + '</dd>';
-    html += '<dt>E-Mail</dt><dd>' + v(job.contact_email) + '</dd>';
+    (function () {
+      var c = (job.job_contacts && job.job_contacts[0]) ? job.job_contacts[0] : null;
+      var name = c ? (c.contact_name || '') : (job.contact_person || '');
+      var phone = c ? (c.contact_phone || '') : (job.contact_phone || '');
+      var email = c ? (c.contact_email || '') : (job.contact_email || '');
+      html += '<dt>Ansprechpartner</dt><dd>' + v(name) + '</dd>';
+      html += '<dt>Telefon</dt><dd>' + v(phone) + '</dd>';
+      html += '<dt>E-Mail</dt><dd>' + v(email) + '</dd>';
+    })();
     html += '</dl></div>';
     html += '<div class="archiv-detail-section"><h4>ERP / Bestellung</h4><dl class="modal-detail-dl">';
     html += '<dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
@@ -2319,11 +2489,19 @@
   document.getElementById('btnDienstreiseCopyProject').addEventListener('click', function () {
     var localJobId = selectedJobIdOnDienstreisePage;
     var hint = document.getElementById('dienstreiseCopyHint');
+    var progressWrap = document.getElementById('dienstreiseCopyProgressWrap');
+    var progressBar = document.getElementById('dienstreiseCopyProgress');
+    var progressLabel = document.getElementById('dienstreiseCopyProgressLabel');
     if (!localJobId) {
       hint.textContent = 'Bitte einen Auftrag in der Liste auswählen.';
       return;
     }
-    hint.textContent = 'Kopieren …';
+    hint.textContent = '';
+    if (progressWrap) progressWrap.style.display = 'block';
+    if (progressBar) { progressBar.value = 0; progressBar.max = 100; }
+    if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
+    var btn = document.getElementById('btnDienstreiseCopyProject');
+    if (btn) btn.disabled = true;
     var body = {
       job_id: localJobId,
       dispoBaseUrl: getDispoBaseUrl(),
@@ -2331,17 +2509,74 @@
       dispoUsername: getDispoUsername(),
       dispoPassword: getDispoPassword()
     };
-    fetch(API_BASE + '/api/dienstreise/copy_project', {
+    fetch(API_BASE + '/api/dienstreise/copy_project_stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    }).then(function (r) { return r.json();     }).then(function (data) {
-      hint.textContent = data.error ? data.error : (data.ok ? 'Fertig.' : 'Fehler.');
-      if (data.ok) {
-        setTimeout(function () { hint.textContent = ''; }, 3000);
-        if (selectedJobIdOnDienstreisePage) loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath);
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.json().then(function (data) {
+          throw new Error(data.error || 'Fehler ' + response.status);
+        }).catch(function () { throw new Error('Fehler ' + response.status); });
       }
-    }).catch(function () { hint.textContent = 'Fehler beim Kopieren.'; });
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = '';
+      var completed = false;
+      var hadError = false;
+      function readNext() {
+        return reader.read().then(function (result) {
+          if (result.done) {
+            if (progressWrap) progressWrap.style.display = 'none';
+            if (btn) btn.disabled = false;
+            if (!completed && !hadError) {
+              hint.textContent = 'Fertig.';
+              if (selectedJobIdOnDienstreisePage) loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath);
+              setTimeout(function () { hint.textContent = ''; }, 3000);
+            }
+            return;
+          }
+          buffer += decoder.decode(result.value, { stream: true });
+          var lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          lines.forEach(function (line) {
+            line = line.trim();
+            if (!line) return;
+            var data;
+            try { data = JSON.parse(line); } catch (e) { return; }
+            if (data.phase === 'refresh') {
+              if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
+            } else if (data.phase === 'refresh_done') {
+              if (progressLabel) progressLabel.textContent = 'Lade auf Laptop …';
+            } else if (data.phase === 'download' && data.total != null) {
+              if (progressBar) progressBar.max = data.total;
+              if (progressBar) progressBar.value = 0;
+            } else if (data.phase === 'file' && data.total != null) {
+              if (progressBar) progressBar.value = data.current || 0;
+              if (progressLabel && data.total > 0) progressLabel.textContent = 'Lade ' + (data.current || 0) + ' / ' + data.total;
+            } else if (data.phase === 'done') {
+              completed = true;
+              if (progressWrap) progressWrap.style.display = 'none';
+              if (btn) btn.disabled = false;
+              hint.textContent = 'Fertig.';
+              if (selectedJobIdOnDienstreisePage) loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath);
+              setTimeout(function () { hint.textContent = ''; }, 3000);
+            } else if (data.phase === 'error') {
+              hadError = true;
+              if (progressWrap) progressWrap.style.display = 'none';
+              if (btn) btn.disabled = false;
+              hint.textContent = data.error || 'Fehler.';
+            }
+          });
+          return readNext();
+        });
+      }
+      return readNext();
+    }).catch(function (err) {
+      if (progressWrap) progressWrap.style.display = 'none';
+      if (btn) btn.disabled = false;
+      hint.textContent = err && err.message ? err.message : 'Fehler beim Kopieren.';
+    });
   });
 
   document.getElementById('btnDienstreiseUpload').addEventListener('click', function () {
@@ -2507,10 +2742,10 @@
       });
       k.geliefertUeber = geliefertUeber || (k.fabrikationsnummern[0] && k.fabrikationsnummern[0].geliefert_ueber) || '';
       kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(k.kunde) + '</div>' +
-        '<div><strong>Projekt:</strong> ' + escapeHtml(k.projekt) + '</div>' +
+        '<div class="kopfdaten-fn"><strong>FN.:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
+        '<div class="kopfdaten-secondary">' + escapeHtml(k.geliefertUeber) + '</div>' +
+        '<div class="kopfdaten-secondary"><strong>Projekt:</strong> ' + escapeHtml(k.projekt) + '</div>' +
         '<div><strong>Datum:</strong> ' + escapeHtml(k.datum) + '</div>' +
-        '<div><strong>FN.:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
-        '<div><strong>Geliefert über:</strong> ' + escapeHtml(k.geliefertUeber) + '</div>' +
         '<div><strong>Servicetechniker:</strong> ' + escapeHtml(k.servicetechniker) + '</div>' +
         '<div><strong>Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson) + '</div>';
       return k;
@@ -2620,6 +2855,7 @@
         if (!id) {
           kopfdatenEl.innerHTML = ''; fabContainer.innerHTML = ''; montageberichtJobData = null;
           if (grundInput) grundInput.value = '';
+          var bemerkEl = document.getElementById('montageberichtBemerkungen'); if (bemerkEl) bemerkEl.value = '';
           var langEl = document.getElementById('montageberichtLang'); if (langEl) langEl.value = 'de';
           return;
         }
@@ -2633,6 +2869,7 @@
             if (loadData.ok && loadData.data) {
               var d = loadData.data;
               if (grundInput && d.grundDesEinsatzes) grundInput.value = d.grundDesEinsatzes;
+              var bemerkEl = document.getElementById('montageberichtBemerkungen'); if (bemerkEl) bemerkEl.value = (d.bemerkungen != null && d.bemerkungen !== '') ? d.bemerkungen : '';
               var langEl = document.getElementById('montageberichtLang'); if (langEl && d.language) langEl.value = d.language;
               if (Array.isArray(d.fabBemerkungen) && d.fabBemerkungen.length) {
                 fabContainer.querySelectorAll('textarea[data-fab], input[data-fab]').forEach(function (el) {
@@ -2689,6 +2926,7 @@
           };
         });
         var geliefertUeberVal = (fabWithDetails[0] && fabWithDetails[0].geliefert_ueber) || '';
+        var bemerkungenVal = (document.getElementById('montageberichtBemerkungen') && document.getElementById('montageberichtBemerkungen').value) ? document.getElementById('montageberichtBemerkungen').value.trim() : '';
         var kopfdaten = {
           kunde: montageberichtJobData.customer_name,
           projekt: montageberichtJobData.job_number || montageberichtJobData.description,
@@ -2696,7 +2934,8 @@
           servicetechniker: (document.getElementById('technicianName') || {}).textContent || '',
           ansprechperson: montageberichtJobData.contact_person || '',
           geliefertUeber: geliefertUeberVal,
-          fabrikationsnummern: fabWithDetails
+          fabrikationsnummern: fabWithDetails,
+          bemerkungen: bemerkungenVal
         };
         var body = {
           job_id: parseInt(jobSelect.value, 10),
@@ -2730,6 +2969,117 @@
       });
     }
 
+  })();
+
+  (function initProtokolleParameterlisten() {
+    var jobSelect = document.getElementById('parameterlistenJob');
+    var fileInput = document.getElementById('parameterlistenFiles');
+    var btnUpload = document.getElementById('btnParameterlistenUpload');
+    var resultsEl = document.getElementById('parameterlistenResults');
+
+    async function loadParameterlistenJobs() {
+      if (!jobSelect) return;
+      var range = getSyncDateRange();
+      var r = await fetch(API_BASE + '/api/my_jobs?' + qs({ technician_id: getTechId(), date_from: range.date_from, date_to: range.date_to }), { headers: { 'X-Technician-Id': String(getTechId()) } });
+      var data = await r.json();
+      if (!data.ok || !data.jobs) return;
+      var jobs = data.jobs;
+      var currentVal = jobSelect.value;
+      jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>';
+      jobs.forEach(function (job) {
+        var opt = document.createElement('option');
+        opt.value = job.id;
+        opt.textContent = (job.job_number || job.id) + (job.customer_name ? ' – ' + job.customer_name : '');
+        jobSelect.appendChild(opt);
+      });
+      if (currentVal) jobSelect.value = currentVal;
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function readFileAsBase64(file) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var b64 = reader.result;
+          if (b64 && b64.indexOf('base64,') !== -1) b64 = b64.split('base64,')[1];
+          resolve(b64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    if (btnUpload) {
+      btnUpload.addEventListener('click', async function () {
+        if (!jobSelect || !fileInput) return;
+        await loadParameterlistenJobs();
+        var jobId = jobSelect.value ? parseInt(jobSelect.value, 10) : null;
+        var files = fileInput.files;
+        if (!jobId) {
+          alert('Bitte einen Auftrag wählen.');
+          return;
+        }
+        if (!files || files.length === 0) {
+          alert('Bitte mindestens eine CSV-Datei auswählen.');
+          return;
+        }
+        if (resultsEl) {
+          resultsEl.style.display = 'block';
+          resultsEl.innerHTML = '<p class="muted">Lade hoch …</p>';
+        }
+        var outcomes = [];
+        for (var i = 0; i < files.length; i++) {
+          var file = files[i];
+          var filename = file.name || 'datei.csv';
+          try {
+            var content = await readFileAsBase64(file);
+            var r = await fetch(API_BASE + '/api/protokolle/parameterlisten', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+              body: JSON.stringify({ job_id: jobId, filename: filename, content: content })
+            });
+            var data = await r.json().catch(function () { return {}; });
+            if (data.ok) {
+              outcomes.push({ file: filename, ok: true, savedCsv: data.savedCsv, savedPdf: data.savedPdf });
+            } else {
+              outcomes.push({ file: filename, ok: false, error: data.error || 'Unbekannter Fehler' });
+            }
+          } catch (err) {
+            outcomes.push({ file: filename, ok: false, error: err && err.message ? err.message : 'Fehler' });
+          }
+        }
+        if (resultsEl) {
+          var html = '';
+          outcomes.forEach(function (o) {
+            if (o.ok) {
+              html += '<p><strong>' + escapeHtml(o.file) + '</strong>: gespeichert (CSV + PDF)</p>';
+            } else {
+              html += '<p><strong>' + escapeHtml(o.file) + '</strong>: <span class="error">' + escapeHtml(o.error) + '</span></p>';
+            }
+          });
+          resultsEl.innerHTML = html || '<p class="muted">Keine Dateien.</p>';
+        }
+        if (typeof showToast === 'function' && outcomes.length > 0) {
+          var okCount = outcomes.filter(function (o) { return o.ok; }).length;
+          if (okCount === outcomes.length) showToast('Alle ' + okCount + ' Datei(en) gespeichert.');
+          else if (okCount > 0) showToast(okCount + ' gespeichert, ' + (outcomes.length - okCount) + ' Fehler.');
+          else showToast('Fehler beim Hochladen.');
+        }
+        fileInput.value = '';
+      });
+    }
+
+    if (document.getElementById('btnViewProtokolle')) {
+      document.getElementById('btnViewProtokolle').addEventListener('click', function () {
+        loadParameterlistenJobs();
+      });
+    }
   })();
 
   (function initTextbausteineView() {

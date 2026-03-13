@@ -58,3 +58,22 @@ Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Di
 - **Fenster/Taskbar:** `public/icon.png` (Windows nutzt PNG; für bessere Darstellung z. B. 256×256 px verwenden).
 - **Browser-Tab (Favicon):** `public/icon.svg` (K-Logo auf blauem Grund).  
 Zum Austauschen: `icon.svg` anpassen oder durch eigenes Logo ersetzen; für `icon.png` eine PNG-Version (z. B. aus dem SVG exportiert) nach `public/icon.png` legen.
+
+## Parameter-PDF testen (Layout 1:1 wie Referenz)
+
+Nach Änderungen an der Parameter-PDF-Generierung (`lib/csv-to-pdf.js`) kannst du das Layout automatisch prüfen:
+
+```bash
+cd electron
+npm run test:parameter-pdf
+```
+
+- Erzeugt eine Test-PDF unter `electron/test-output/parameter-test.pdf`.
+- Prüft, ob alle erwarteten Texte (DWC-7, Printout, Parameter, KUKLA, Vöcklabruck, Name, Value, Unit, Comment, Fußzeile) in der PDF vorkommen. Fehlt etwas, schlägt der Test fehl.
+- Zum sofortigen Öffnen der PDF zum visuellen Vergleich mit dem Original:
+
+```bash
+npm run test:parameter-pdf:open
+```
+
+So siehst du ohne manuelles Exportieren in der App, ob das Layout stimmt.

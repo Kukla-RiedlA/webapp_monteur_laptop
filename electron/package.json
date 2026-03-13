@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "description": "Monteur WebApp – Offline-fähige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -8,14 +8,19 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "test:parameter-pdf": "node scripts/test-parameter-pdf.js",
+    "test:parameter-pdf:open": "node scripts/test-parameter-pdf.js --open"
   },
   "devDependencies": {
     "electron": "^28.0.0",
-    "electron-builder": "^24.9.1"
+    "electron-builder": "^24.9.1",
+    "pdf-parse": "^1.1.4",
+    "pdfjs-dist": "^3.11.174"
   },
   "dependencies": {
     "docx": "^9.6.1",
+    "sharp": "^0.33.5",
     "docx2pdf-converter": "^2.1.1",
     "docxtemplater": "^3.50.0",
     "express": "^4.18.2",
@@ -35,6 +40,7 @@
       "main.js",
       "preload.js",
       "server.js",
+      "lib/**",
       "montagebericht_docx.js",
       "version.json",
       "db/**",

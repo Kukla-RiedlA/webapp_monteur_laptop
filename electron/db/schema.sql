@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE TABLE IF NOT EXISTS job_addresses (
   job_id INTEGER PRIMARY KEY,
+  endkunde TEXT,
   street TEXT NOT NULL,
   house_number TEXT NOT NULL,
   zip TEXT NOT NULL,
