@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.030
+- **Release:** Vollständiges Plattform-Release. Dispo V 1.031: Outlook-Import Urlaub/KM als Abwesenheit.
+
 ## V 1.029
 - **Release:** Nach Rule (Build hochgezählt, Tag, Push). Dispo V 1.030: Anlagenstamm Popup-Aktualisierung ohne Reload.
 
