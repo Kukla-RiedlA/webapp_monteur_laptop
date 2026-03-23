@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "1.0.30",
+  "version": "1.0.31",
   "description": "Monteur WebApp – Offline-fähige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",

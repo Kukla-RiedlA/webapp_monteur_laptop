@@ -52,7 +52,8 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 
 1. **Diese Datei lesen:** `.cursor/CODEBASE_CONTEXT.md` (oder im Chat: „Lies .cursor/CODEBASE_CONTEXT.md“).
 2. **Regel beachten:** `.cursor/rules/dispo-workspace.mdc` – Änderungen an Kalender/Dispo-UI nur im **dispo**-Ordner dieses Workspaces (relativer Pfad `dispo/`).
-3. **Schnellsuche:**  
+3. **API-Contract (Plattform):** `docs/API_CONTRACT.md` – snake_case, `ok`, Geltungsbereich Dispo/Laptop/Handy. Rename-Historie: `CONTRACT_RENAME_LOG.md`.
+4. **Schnellsuche:**  
    - Kalender-API: `api/calendar.php`, `electron/server.js` („/api/calendar“), `src/DispoRepository.php` (getCalendarData).  
    - Tooltips/Labels: in **dispo** in `modules/calendar.php`, `calendar_month.php`, `calendar_month_lanes.php`.  
    - Version: `config/version.php`, `electron/version.json`, `VERSION_HISTORY.md`, `release.ps1`.

@@ -39,6 +39,7 @@ const {
   TableLayoutType,
   BorderStyle,
   HeightRule,
+  AlignmentType,
 } = require('docx');
 
 const sanitize = (v) => {
@@ -47,15 +48,162 @@ const sanitize = (v) => {
   return (s === 'undefined' || s === 'null') ? '' : s;
 };
 
+function sizeFromCssPx(px) {
+  const n = parseFloat((px || '').toString().replace(',', '.'));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.max(16, Math.min(96, Math.round((n * 72 / 96) * 2)));
+}
+
+function parseStyle(styleText) {
+  const out = {};
+  (styleText || '').split(';').forEach((part) => {
+    const idx = part.indexOf(':');
+    if (idx <= 0) return;
+    const k = part.slice(0, idx).trim().toLowerCase();
+    const v = part.slice(idx + 1).trim();
+    if (!k) return;
+    out[k] = v;
+  });
+  return out;
+}
+
+function mergeStyle(base, extra) {
+  return {
+    bold: base.bold || extra.bold,
+    italics: base.italics || extra.italics,
+    underline: base.underline || extra.underline,
+    font: extra.font || base.font || 'Calibri',
+    size: extra.size || base.size || null,
+    align: extra.align || base.align || null,
+  };
+}
+
+function styleFromTag(tag, styleAttr) {
+  const lower = (tag || '').toLowerCase();
+  const css = parseStyle(styleAttr || '');
+  const out = {};
+  if (lower === 'b' || lower === 'strong') out.bold = true;
+  if (lower === 'i' || lower === 'em') out.italics = true;
+  if (lower === 'u') out.underline = true;
+  if (css['font-weight'] && (css['font-weight'] === 'bold' || parseInt(css['font-weight'], 10) >= 600)) out.bold = true;
+  if (css['font-style'] === 'italic') out.italics = true;
+  if (css['text-decoration'] && css['text-decoration'].toLowerCase().indexOf('underline') >= 0) out.underline = true;
+  if (css['font-family']) out.font = css['font-family'].replace(/["']/g, '').split(',')[0].trim();
+  const cssSize = css['font-size'] ? sizeFromCssPx(css['font-size']) : null;
+  if (cssSize) out.size = cssSize;
+  if (css['text-align']) {
+    const a = css['text-align'].toLowerCase();
+    if (a === 'center') out.align = AlignmentType.CENTER;
+    else if (a === 'right') out.align = AlignmentType.RIGHT;
+    else out.align = AlignmentType.LEFT;
+  }
+  return out;
+}
+
+function htmlToParagraphs(html, defaultSizeHalfPt = 24) {
+  const raw = (html || '').toString();
+  if (!raw.trim()) return [];
+  const tokens = raw
+    .replace(/\r\n?/g, '\n')
+    .split(/(<[^>]+>)/g)
+    .filter(Boolean);
+  const paragraphs = [];
+  let current = { runs: [], bullet: false, align: null };
+  let inList = false;
+  let styleStack = [{ bold: false, italics: false, underline: false, font: 'Calibri', size: defaultSizeHalfPt, align: null }];
+  const pushParagraph = () => {
+    if (current.runs.length === 0 && !current.bullet) return;
+    paragraphs.push(current);
+    current = { runs: [], bullet: false, align: null };
+  };
+  const addText = (text) => {
+    const cleaned = (text || '').replace(/\s+/g, ' ');
+    if (!cleaned.trim()) return;
+    const st = styleStack[styleStack.length - 1];
+    current.runs.push({
+      text: cleaned,
+      bold: !!st.bold,
+      italics: !!st.italics,
+      underline: !!st.underline,
+      font: st.font || 'Calibri',
+      size: st.size || defaultSizeHalfPt,
+    });
+    if (!current.align && st.align) current.align = st.align;
+  };
+  tokens.forEach((token) => {
+    if (token.charAt(0) !== '<') {
+      addText(token);
+      return;
+    }
+    const isClose = /^<\s*\//.test(token);
+    const nameMatch = token.match(/^<\s*\/?\s*([a-zA-Z0-9]+)/);
+    const tag = nameMatch ? nameMatch[1].toLowerCase() : '';
+    if (!tag) return;
+    if (isClose) {
+      if (tag === 'li' || tag === 'p' || tag === 'div') pushParagraph();
+      if (tag === 'ul' || tag === 'ol') inList = false;
+      if (styleStack.length > 1) styleStack.pop();
+      return;
+    }
+    const styleAttrMatch = token.match(/\sstyle\s*=\s*["']([^"']*)["']/i);
+    const merged = mergeStyle(styleStack[styleStack.length - 1], styleFromTag(tag, styleAttrMatch ? styleAttrMatch[1] : ''));
+    styleStack.push(merged);
+    if (tag === 'ul' || tag === 'ol') inList = true;
+    if (tag === 'li') current.bullet = true;
+    if (tag === 'p' || tag === 'div') {
+      if (current.runs.length > 0 || current.bullet) pushParagraph();
+      if (merged.align) current.align = merged.align;
+    }
+    if (tag === 'br') {
+      const st = styleStack[styleStack.length - 1];
+      current.runs.push(new TextRun({ break: 1, font: st.font || 'Calibri', size: st.size || defaultSizeHalfPt }));
+    }
+  });
+  pushParagraph();
+  return paragraphs.map((p) => {
+    const runs = p.runs.map((r) => {
+      if (r instanceof TextRun) return r;
+      const runObj = { ...r };
+      if (p.bullet && typeof runObj.text === 'string') {
+        runObj.text = runObj.text.replace(/^\s*([•\-]\s*)+/, '');
+      }
+      return new TextRun(runObj);
+    });
+    return new Paragraph({
+      children: runs.length > 0 ? runs : [new TextRun({ text: '', font: 'Calibri', size: defaultSizeHalfPt })],
+      bullet: p.bullet ? { level: 0 } : undefined,
+      alignment: p.align || undefined,
+    });
+  });
+}
+
 function createFnTable(fn, L) {
   const textbausteine = Array.isArray(fn.textbausteine)
-    ? fn.textbausteine.map((tb) => ({ text: sanitize(tb && tb.text != null ? tb.text : '') })).filter((t) => t.text)
+    ? fn.textbausteine.map((tb) => ({
+        text: sanitize(tb && tb.text != null ? tb.text : ''),
+        html: sanitize(tb && tb.html != null ? tb.html : ''),
+      })).filter((t) => t.text || t.html)
     : [];
   const textbausteinParagraphs = textbausteine.length > 0
-    ? textbausteine.map((tb) => new Paragraph({
-        children: [new TextRun({ text: (tb.text || '').trim(), font: 'Calibri' })],
-        bullet: { level: 0 },
-      }))
+    ? textbausteine.flatMap((tb) => {
+        const rawHtml = (tb.html || '').toString();
+        const hasHtmlMarkup = /<\s*\/?\s*[a-z][^>]*>/i.test(rawHtml);
+        const richParagraphs = hasHtmlMarkup ? htmlToParagraphs(rawHtml, 22) : [];
+        if (hasHtmlMarkup && richParagraphs.length > 0) {
+          return richParagraphs;
+        }
+        const parts = (tb.text || '')
+          .toString()
+          .replace(/\u2022/g, '\n• ')
+          .split(/\r?\n|(?=\s*[•▪◦●]\s+)/)
+          .map((s) => s.replace(/^\s*([•▪◦●\-]\s*)+/, '').trim())
+          .filter(Boolean);
+        if (parts.length > 1) {
+          return parts.map((text) => new Paragraph({ children: [new TextRun({ text, font: 'Calibri', size: 22 })], bullet: { level: 0 } }));
+        }
+        const text = ((parts[0] || tb.text || '').toString()).trim().replace(/^\s*([•▪◦●\-]\s*)+/, '');
+        return [new Paragraph({ children: [new TextRun({ text, font: 'Calibri', size: 22 })], bullet: { level: 0 } })];
+      })
     : [new Paragraph({ children: [new TextRun({ text: '', font: 'Calibri' })] })];
 
   // 3 Spalten: FN. | Type | Pos.Nr. (Bemerkungen-Spalte entfernt), gleichmäßig aufgeteilt
@@ -70,13 +218,28 @@ function createFnTable(fn, L) {
       new TableRow({
         children: [
           new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: `${L.fn}: ${fn.fabrikationsnummer || ''}`, font: 'Calibri', bold: true })] })],
+            children: [new Paragraph({
+              children: [
+                new TextRun({ text: `${L.fn} `, font: 'Calibri', bold: true }),
+                new TextRun({ text: sanitize(fn.fabrikationsnummer), font: 'Calibri', bold: false }),
+              ],
+            })],
           }),
           new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: `${L.type}: ${fn.type || ''}`, font: 'Calibri', bold: true })] })],
+            children: [new Paragraph({
+              children: [
+                new TextRun({ text: `${L.type} `, font: 'Calibri', bold: true }),
+                new TextRun({ text: sanitize(fn.type), font: 'Calibri', bold: false }),
+              ],
+            })],
           }),
           new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: `${L.posNr}: ${fn.position || ''}`, font: 'Calibri', bold: true })] })],
+            children: [new Paragraph({
+              children: [
+                new TextRun({ text: `${L.posNr} `, font: 'Calibri', bold: true }),
+                new TextRun({ text: sanitize(fn.position), font: 'Calibri', bold: false }),
+              ],
+            })],
           }),
         ],
       }),
@@ -157,11 +320,12 @@ function formatDatum(kopfdaten, jobRow) {
  * @param {string} options.language - 'de' oder 'en'
  * @param {Object} options.jobRow - { customer_name, job_number, description, start_datetime, end_datetime }
  * @param {string} options.grundDesEinsatzes
+ * @param {string} options.grundDesEinsatzes_html
  * @param {string} options.freitext
  * @returns {Promise<Buffer>}
  */
 async function buildMontageberichtDocx(options) {
-  const { kopfdaten = {}, tableRows = [], language = 'de', jobRow = {}, grundDesEinsatzes = '', freitext = '' } = options;
+  const { kopfdaten = {}, tableRows = [], language = 'de', jobRow = {}, grundDesEinsatzes = '', grundDesEinsatzes_html = '', freitext = '' } = options;
   const isEn = language === 'en';
   const L = {
     title: isEn ? 'Assembly report' : 'Montagebericht',
@@ -179,14 +343,18 @@ async function buildMontageberichtDocx(options) {
   };
 
   const kunde = sanitize(kopfdaten.kunde ?? jobRow.customer_name ?? '');
-  const projekt = sanitize(kopfdaten.projekt ?? jobRow.job_number ?? jobRow.description ?? '');
+  const projekt = sanitize(kopfdaten.projekt ?? '');
   const datumStr = formatDatum(kopfdaten, jobRow);
   const geliefertUeber = sanitize(kopfdaten.geliefertUeber ?? '');
   const servicetechniker = sanitize(kopfdaten.servicetechniker ?? '');
   const ansprechperson = sanitize(kopfdaten.ansprechperson ?? '');
   const grundVal = sanitize(grundDesEinsatzes) + (freitext ? ' ' + sanitize(freitext) : '');
+  const grundHtml = sanitize(grundDesEinsatzes_html);
   const fnList = tableRows.map((r) => r.fabrikationsnummer).filter(Boolean).join(', ');
   const bemerkungen = sanitize(kopfdaten.bemerkungen ?? '');
+  const bemerkungenHtml = sanitize(kopfdaten.bemerkungen_html ?? '');
+  const grundParagraphs = htmlToParagraphs(grundHtml || grundVal, 24);
+  const bemerkungenParagraphs = htmlToParagraphs(bemerkungenHtml || bemerkungen, 24);
 
   const logoCellContent = await getLogoCellContent(__dirname);
 
@@ -308,7 +476,7 @@ async function buildMontageberichtDocx(options) {
           }),
           new TableCell({
             columnSpan: 2,
-            children: [new Paragraph({ children: [new TextRun({ text: grundVal, font: 'Calibri', size: 24 })] })],
+            children: grundParagraphs.length > 0 ? grundParagraphs : [new Paragraph({ children: [new TextRun({ text: grundVal, font: 'Calibri', size: 24 })] })],
           }),
         ],
       }),
@@ -326,7 +494,7 @@ async function buildMontageberichtDocx(options) {
     new Paragraph({ text: '' }),
     new Paragraph({ children: [new TextRun({ text: L.bemerkungen + ':', font: 'Calibri', bold: true })] }),
     new Paragraph({ text: '' }),
-    new Paragraph({ children: [new TextRun({ text: bemerkungen, font: 'Calibri' })] }),
+    ...(bemerkungenParagraphs.length > 0 ? bemerkungenParagraphs : [new Paragraph({ children: [new TextRun({ text: bemerkungen, font: 'Calibri' })] })]),
     new Paragraph({ text: '' }),
   ];
 

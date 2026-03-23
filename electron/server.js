@@ -206,6 +206,43 @@ function createApp(db) {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
 
+  /** Lokaler Auftrag für Schreibzugriff; blockiert Status „geplant“ (nur Anzeige in der App). */
+  function getWritableLocalJobMetaForPatch(dbConn, technicianId, rawJobId) {
+    const n = parseInt(rawJobId, 10);
+    if (!Number.isFinite(n)) return { error: 'job_id ungültig.', status: 400 };
+    const row = dbConn.prepare(`
+      SELECT j.id, j.status FROM jobs j
+      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+        AND (
+          EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+          OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+        )
+    `).get(n, n, technicianId);
+    if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
+    if (String(row.status || '').toLowerCase() === 'geplant') {
+      return { error: 'Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.', status: 403 };
+    }
+    return { localId: row.id };
+  }
+
+  /** Dienstreise-/Datei-Schreibzugriff: gleiche Regeln wie PATCH (inkl. Techniker-Zuordnung), sonst nur Geplant-Prüfung per lokaler ID (z. B. Upload ohne technicianId im Body). */
+  function gateDienstreiseWrite(dbConn, technicianId, localJobId) {
+    const lid = parseInt(localJobId, 10);
+    if (!Number.isFinite(lid) || lid <= 0) return { error: 'job_id (lokal) erforderlich.', status: 400 };
+    const tid = parseInt(technicianId, 10);
+    if (Number.isFinite(tid) && tid > 0) {
+      const w = getWritableLocalJobMetaForPatch(dbConn, tid, lid);
+      if (w.error) return w;
+      return null;
+    }
+    const row = dbConn.prepare('SELECT id, status FROM jobs WHERE id = ?').get(lid);
+    if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
+    if (String(row.status || '').toLowerCase() === 'geplant') {
+      return { error: 'Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.', status: 403 };
+    }
+    return null;
+  }
+
   const sseClients = new Map();
   const pushWsByTechnician = new Map();
   function getPushWsUrl(baseUrl) {
@@ -253,6 +290,18 @@ function createApp(db) {
   const getTechnicianId = (req) => {
     const id = req.query.technician_id || req.headers['x-technician-id'];
     return id ? parseInt(id, 10) : null;
+  };
+
+  /** Gleiche logische Abwesenheit trotz unterschiedlicher ID (Anfrage vs. Absence) oder T/Space in Datumswerten erkennen. */
+  const absencePeriodDedupeKey = (technicianId, start, end) => {
+    function normDt(v) {
+      if (v == null) return '';
+      let s = String(v).replace('T', ' ').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s + ' 00:00:00';
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s)) return s + ':00';
+      return s;
+    }
+    return String(technicianId || '') + '\t' + normDt(start) + '\t' + normDt(end);
   };
 
   const save = () => db.save();
@@ -663,11 +712,13 @@ function createApp(db) {
   app.post('/api/dienstreise/sync_to_dispo', express.json(), async (req, res) => {
     try {
       const body = req.body || {};
-      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
-      const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
-      const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
-      const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
-      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
+      const localJobId = parseInt(body.job_id, 10);
+      const dispoBaseUrl = (body.dispo_base_url || '').trim().replace(/\/$/, '');
+      const technicianId = parseInt(body.technician_id, 10);
+      const dispoUsername = (body.dispo_username || '').trim();
+      const dispoPassword = (body.dispo_password != null ? String(body.dispo_password) : '');
+      const drGate = gateDienstreiseWrite(db, technicianId, localJobId);
+      if (drGate) return res.status(drGate.status).json({ ok: false, error: drGate.error });
       await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword);
       if (dispoBaseUrl) {
         try {
@@ -685,15 +736,18 @@ function createApp(db) {
   app.post('/api/dienstreise/copy_project', express.json(), async (req, res) => {
     try {
       const body = req.body || {};
-      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
-      const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
-      const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
-      const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
-      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
+      const localJobId = parseInt(body.job_id, 10);
+      const dispoBaseUrl = (body.dispo_base_url || '').trim().replace(/\/$/, '');
+      const technicianId = parseInt(body.technician_id, 10);
+      const dispoUsername = (body.dispo_username || '').trim();
+      const dispoPassword = (body.dispo_password != null ? String(body.dispo_password) : '');
 
       if (!localJobId || !dispoBaseUrl || !technicianId) {
-        return res.status(400).json({ ok: false, error: 'job_id (lokal), dispoBaseUrl und technicianId erforderlich.' });
+        return res.status(400).json({ ok: false, error: 'job_id (lokal), dispo_base_url und technician_id erforderlich.' });
       }
+
+      const drGateCopy = gateDienstreiseWrite(db, technicianId, localJobId);
+      if (drGateCopy) return res.status(drGateCopy.status).json({ ok: false, error: drGateCopy.error });
 
       const jobRow = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
@@ -784,6 +838,9 @@ function createApp(db) {
       if (!localJobId || !dispoBaseUrl || !technicianId) {
         return res.status(400).json({ ok: false, error: 'job_id (lokal), dispoBaseUrl und technicianId erforderlich.' });
       }
+
+      const drGateStream = gateDienstreiseWrite(db, technicianId, localJobId);
+      if (drGateStream) return res.status(drGateStream.status).json({ ok: false, error: drGateStream.error });
 
       const jobRow = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
@@ -891,6 +948,8 @@ function createApp(db) {
       if (!localJobId || !DIENSTREISE_SUBFOLDERS.includes(subfolder)) {
         return res.status(400).json({ ok: false, error: 'job_id (lokal) und subfolder (Dokumente_Dispo/Dokumente_Monteur/Dokumente_Anlage/Dokumente_Buchhaltung) erforderlich.' });
       }
+      const uploadGate = gateDienstreiseWrite(db, null, localJobId);
+      if (uploadGate) return res.status(uploadGate.status).json({ ok: false, error: uploadGate.error });
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       if (!reiseDir || !fs.existsSync(reiseDir)) return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
       const subDir = path.join(reiseDir, subfolder);
@@ -919,6 +978,9 @@ function createApp(db) {
       if (!localJobId || !relativePath) {
         return res.status(400).json({ ok: false, error: 'job_id (lokal) und relative_path erforderlich.' });
       }
+
+      const delGate = gateDienstreiseWrite(db, technicianId, localJobId);
+      if (delGate) return res.status(delGate.status).json({ ok: false, error: delGate.error });
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       if (!reiseDir || !fs.existsSync(reiseDir)) {
@@ -984,6 +1046,8 @@ function createApp(db) {
       const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
       const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
       if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id (lokal) erforderlich.' });
+      const finishGate = gateDienstreiseWrite(db, technicianId, localJobId);
+      if (finishGate) return res.status(finishGate.status).json({ ok: false, error: finishGate.error });
       const jobId = getServerJobId(localJobId);
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       if (!reiseDir || !fs.existsSync(reiseDir)) return res.status(400).json({ ok: false, error: 'Dienstreise-Ordner nicht gefunden.' });
@@ -1183,7 +1247,10 @@ function createApp(db) {
         if (technicianId) {
           const r = db.prepare(`
             UPDATE jobs SET status = ?, updated_at = datetime('now')
-            WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)
+            WHERE id = ? AND (
+              EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
+              OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
+            )
           `).run('erledigt', localJobId, technicianId);
           if (r.changes) {
             db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
@@ -1236,11 +1303,13 @@ function createApp(db) {
         jha.address_extra_1 AS hotel_address_extra_1, jha.address_extra_2 AS hotel_address_extra_2,
         jha.phone AS hotel_phone, jha.email AS hotel_email, jha.website AS hotel_website
       FROM jobs j
-      INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
-      WHERE 1=1`;
+      WHERE (
+        EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+        OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+      )`;
     const params = [technicianId];
     if (!includeErledigt) {
       sql += ` AND j.status != 'erledigt'`;
@@ -1281,13 +1350,16 @@ function createApp(db) {
         jha.address_extra_1 AS hotel_address_extra_1, jha.address_extra_2 AS hotel_address_extra_2,
         jha.phone AS hotel_phone, jha.email AS hotel_email, jha.website AS hotel_website
       FROM jobs j
-      INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
       WHERE j.status = 'erledigt'
-        AND strftime('%Y', j.end_datetime) = ?`;
-    const params = [technicianId, String(year)];
+        AND strftime('%Y', j.end_datetime) = ?
+        AND (
+          EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+          OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+        )`;
+    const params = [String(year), technicianId];
 
     if (customer) {
       sql += ' AND c.name LIKE ?';
@@ -1365,19 +1437,23 @@ function createApp(db) {
         jha.address_extra_1 AS hotel_address_extra_1, jha.address_extra_2 AS hotel_address_extra_2,
         jha.phone AS hotel_phone, jha.email AS hotel_email, jha.website AS hotel_website
       FROM jobs j
-      INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
-      WHERE j.id = ?
-    `).get(technicianId, jobId);
+      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+        AND (
+          EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+          OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+        )
+    `).get(jobId, jobId, technicianId);
     if (!row) {
       return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
     }
+    const localJobPk = row.id;
     let job = { ...row };
     job.job_contacts = job.job_contacts || [];
     try {
-      const contacts = db.prepare('SELECT contact_name, contact_phone, contact_email FROM job_contacts WHERE job_id = ? ORDER BY sort_order, id').all(jobId);
+      const contacts = db.prepare('SELECT contact_name, contact_phone, contact_email FROM job_contacts WHERE job_id = ? ORDER BY sort_order, id').all(localJobPk);
       if (contacts && contacts.length > 0) {
         job.job_contacts = contacts;
       }
@@ -1393,6 +1469,32 @@ function createApp(db) {
     res.json({ ok: true, job });
   });
 
+  function normalizeJobContactsFromPayload(job) {
+    if (!job || typeof job !== 'object') return [];
+    const candidates = []
+      .concat(Array.isArray(job.job_contacts) ? job.job_contacts : [])
+      .concat(Array.isArray(job.jobContacts) ? job.jobContacts : [])
+      .concat(Array.isArray(job.contacts) ? job.contacts : []);
+    const out = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i] || {};
+      const name = (c.contact_name != null ? String(c.contact_name) : (c.name != null ? String(c.name) : (c.contactPerson != null ? String(c.contactPerson) : ''))).trim();
+      const phone = (c.contact_phone != null ? String(c.contact_phone) : (c.phone != null ? String(c.phone) : '')).trim();
+      const email = (c.contact_email != null ? String(c.contact_email) : (c.email != null ? String(c.email) : '')).trim();
+      if (name || phone || email) {
+        out.push({ contact_name: name, contact_phone: phone, contact_email: email });
+      }
+    }
+    if (out.length > 0) return out;
+    const directName = (job.baustellen_ansprechpartner != null ? String(job.baustellen_ansprechpartner) : (job.contact_person != null ? String(job.contact_person) : '')).trim();
+    const directPhone = (job.contact_phone != null ? String(job.contact_phone) : '').trim();
+    const directEmail = (job.contact_email != null ? String(job.contact_email) : '').trim();
+    if (directName || directPhone || directEmail) {
+      return [{ contact_name: directName, contact_phone: directPhone, contact_email: directEmail }];
+    }
+    return [];
+  }
+
   app.post('/api/job_from_dispo', express.json(), async (req, res) => {
     const sendError = (status, msg) => {
       if (!res.headersSent) res.status(status).json({ ok: false, error: msg });
@@ -1405,56 +1507,97 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'baseUrl, jobId und technician_id erforderlich.' });
       }
       const localId = parseInt(localJobId, 10);
-      const row = db.prepare('SELECT id, server_id FROM jobs WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)').get(localId, technicianId);
-      if (!row) {
-        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      if (!Number.isFinite(localId)) {
+        return res.status(400).json({ ok: false, error: 'jobId ungültig.' });
       }
-      const serverJobId = (row.server_id != null && row.server_id !== '') ? row.server_id : localId;
       const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
-      const url = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(serverJobId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
-      const r = await fetch(url, auth ? { headers: auth } : {});
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        return sendError(r.status, data.error || r.statusText || 'Dispo-Fehler');
-      }
-      if (data.job && typeof data.job === 'object') {
+      const row = db.prepare(`
+        SELECT j.id, j.server_id FROM jobs j
+        WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+          AND (
+            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+          )
+      `).get(localId, localId, technicianId);
+
+      async function finishWithDispoJob(data) {
+        if (!data.job || typeof data.job !== 'object') {
+          return sendError(404, (data && data.error) || 'Auftrag nicht gefunden.');
+        }
         if (data.job.fabrikationsnummern == null && data.job.Fabrikationsnummern != null) {
           data.job.fabrikationsnummern = data.job.Fabrikationsnummern;
         }
         data.job = await enrichJobFabWithAnlagenstamm(data.job, base, auth);
-        // Lokale Hotel-Adresse einblenden (übersteuert Dispo, falls lokal gespeichert)
-        try {
-          const hotel = db.prepare('SELECT endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website FROM job_hotel_addresses WHERE job_id = ?').get(localId);
-          if (hotel) {
-            data.job.hotel_endkunde = hotel.endkunde;
-            data.job.hotel_street = hotel.street;
-            data.job.hotel_house_number = hotel.house_number;
-            data.job.hotel_zip = hotel.zip;
-            data.job.hotel_city = hotel.city;
-            data.job.hotel_country = hotel.country;
-            data.job.hotel_address_extra_1 = hotel.address_extra_1;
-            data.job.hotel_address_extra_2 = hotel.address_extra_2;
-            data.job.hotel_phone = hotel.phone;
-            data.job.hotel_email = hotel.email;
-            data.job.hotel_website = hotel.website;
-          }
-        } catch (e) { /* Tabelle fehlt – ignorieren */ }
-        // Baustellen-Ansprechpartner lokal speichern, damit sie bei GET /api/job angezeigt werden
-        const contacts = Array.isArray(data.job.job_contacts) ? data.job.job_contacts : [];
-        try {
-          db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(localId);
-          for (let i = 0; i < contacts.length; i++) {
-            const c = contacts[i];
-            const name = (c.contact_name != null ? String(c.contact_name) : '').trim();
-            const phone = (c.contact_phone != null ? String(c.contact_phone) : '').trim();
-            const email = (c.contact_email != null ? String(c.contact_email) : '').trim();
-            if (name || phone || email) {
-              db.prepare('INSERT INTO job_contacts (job_id, contact_name, contact_phone, contact_email, sort_order) VALUES (?, ?, ?, ?, ?)').run(localId, name || null, phone || null, email || null, i);
+        const localDbId = row ? row.id : null;
+        const contacts = normalizeJobContactsFromPayload(data.job);
+        data.job.job_contacts = contacts;
+        if (localDbId != null) {
+          try {
+            const hotel = db.prepare('SELECT endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website FROM job_hotel_addresses WHERE job_id = ?').get(localDbId);
+            if (hotel) {
+              data.job.hotel_endkunde = hotel.endkunde;
+              data.job.hotel_street = hotel.street;
+              data.job.hotel_house_number = hotel.house_number;
+              data.job.hotel_zip = hotel.zip;
+              data.job.hotel_city = hotel.city;
+              data.job.hotel_country = hotel.country;
+              data.job.hotel_address_extra_1 = hotel.address_extra_1;
+              data.job.hotel_address_extra_2 = hotel.address_extra_2;
+              data.job.hotel_phone = hotel.phone;
+              data.job.hotel_email = hotel.email;
+              data.job.hotel_website = hotel.website;
             }
-          }
-        } catch (e) { /* Tabelle fehlt oder Fehler – ignorieren */ }
+          } catch (e) { /* Tabelle fehlt – ignorieren */ }
+          try {
+            db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(localDbId);
+            for (let i = 0; i < contacts.length; i++) {
+              const c = contacts[i];
+              const name = (c.contact_name != null ? String(c.contact_name) : '').trim();
+              const phone = (c.contact_phone != null ? String(c.contact_phone) : '').trim();
+              const email = (c.contact_email != null ? String(c.contact_email) : '').trim();
+              if (name || phone || email) {
+                db.prepare('INSERT INTO job_contacts (job_id, contact_name, contact_phone, contact_email, sort_order) VALUES (?, ?, ?, ?, ?)').run(localDbId, name || null, phone || null, email || null, i);
+              }
+            }
+          } catch (e) { /* Tabelle fehlt oder Fehler – ignorieren */ }
+        }
+        res.json(data);
       }
-      res.json(data);
+
+      async function fetchDispoJob(urlToFetch) {
+        const r = await fetch(urlToFetch, auth ? { headers: auth } : {});
+        const raw = await r.text();
+        let data = {};
+        try { data = raw ? JSON.parse(raw) : {}; } catch (_) { data = {}; }
+        if (!r.ok) {
+          logSyncPushError({
+            reason: 'job_from_dispo_http_error',
+            status: r.status,
+            statusText: r.statusText,
+            url: urlToFetch,
+            body_preview: (raw || '').slice(0, 1200),
+          });
+        }
+        return { ok: r.ok, status: r.status, statusText: r.statusText, data, raw };
+      }
+
+      // Kein lokaler SQLite-Eintrag: jobId ist oft die Dispo-Server-ID (z. B. Liste „Offene Aufträge“ / noch nicht synchronisiert)
+      if (!row) {
+        const urlDirect = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(localId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
+        const rs0 = await fetchDispoJob(urlDirect);
+        if (!rs0.ok) {
+          return sendError(rs0.status, rs0.data.error || rs0.statusText || 'Dispo-Fehler');
+        }
+        return await finishWithDispoJob({ ok: true, ...rs0.data });
+      }
+
+      const serverJobId = (row.server_id != null && row.server_id !== '') ? row.server_id : row.id;
+      const url = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(serverJobId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
+      const rs = await fetchDispoJob(url);
+      if (!rs.ok) {
+        return sendError(rs.status, rs.data.error || rs.statusText || 'Dispo-Fehler');
+      }
+      await finishWithDispoJob(rs.data);
     } catch (e) {
       console.error('[job_from_dispo]', e.message, e.stack);
       logSyncPushError({ reason: 'job_from_dispo', message: e.message, stack: e.stack });
@@ -1536,9 +1679,12 @@ function createApp(db) {
       }
       const jobRow = db.prepare(`
         SELECT j.id FROM jobs j
-        INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
         WHERE j.id = ?
-      `).get(technicianId, localJobId);
+          AND (
+            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+          )
+      `).get(localJobId, technicianId);
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
@@ -1565,30 +1711,43 @@ function createApp(db) {
       const kopfdaten = body.kopfdaten || {};
       const fabBemerkungen = Array.isArray(body.fabBemerkungen) ? body.fabBemerkungen : [];
       const grundDesEinsatzes = (body.grundDesEinsatzes || '').trim();
+      const grundDesEinsatzesHtml = (body.grundDesEinsatzes_html || '').toString().trim();
       const freitext = (body.freitext || '').trim();
+      const projektPflicht = (kopfdaten.projekt != null ? String(kopfdaten.projekt) : '').trim();
+      if (!projektPflicht) {
+        return res.status(400).json({ ok: false, error: 'Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm / manuell).' });
+      }
 
       if (!localJobId || !technicianId) {
         return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
       }
 
       const jobRow = db.prepare(`
-        SELECT j.id, j.server_id, j.start_datetime, j.end_datetime, j.job_number, j.description, j.fabrikationsnummern,
+        SELECT j.id, j.server_id, j.status, j.start_datetime, j.end_datetime, j.job_number, j.description, j.fabrikationsnummern,
           c.name AS customer_name, c.street AS cust_street, c.house_number AS cust_house, c.zip AS cust_zip, c.city AS cust_city,
           ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country
         FROM jobs j
-        INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
         INNER JOIN customers c ON c.id = j.customer_id
         LEFT JOIN job_addresses ja ON ja.job_id = j.id
         WHERE j.id = ?
-      `).get(technicianId, localJobId);
+          AND (
+            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+          )
+      `).get(localJobId, technicianId);
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      if (String(jobRow.status || '').toLowerCase() === 'geplant') {
+        return res.status(403).json({ ok: false, error: 'Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.' });
       }
 
       const toFab = (f) => (f != null && (typeof f === 'string' ? f : (f.fabrikationsnummer ?? f.Fabrikationsnummer))) ? String(typeof f === 'string' ? f : (f.fabrikationsnummer ?? f.Fabrikationsnummer)).trim() : '';
       let dbFabRows = [];
-      const serverJobId = jobRow.server_id != null ? jobRow.server_id : localJobId;
-      if (dispoBaseUrl && serverJobId) {
+      const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
+      const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
+      const serverJobId = hasServerJobId ? parsedServerJobId : null;
+      if (dispoBaseUrl && hasServerJobId) {
         try {
           const auth = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
           const url = dispoBaseUrl + '/dispo_api/api/montagebericht_data.php?job_id=' + encodeURIComponent(serverJobId) + '&technician_id=' + encodeURIComponent(technicianId);
@@ -1689,28 +1848,160 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'Mindestens eine Fabrikationsnummer erforderlich.' });
       }
 
+      const jsonOnly = body.jsonOnly === true || body.saveJsonOnly === true;
+
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       const ordnerName = path.basename(reiseDir);
+      const montageberichtDataPath = path.join(reiseDir, 'montagebericht.json');
+      const kopfdatenBemerkungen = (kopfdaten && kopfdaten.bemerkungen != null) ? String(kopfdaten.bemerkungen).trim() : '';
+      const kopfdatenBemerkungenHtml = (kopfdaten && kopfdaten.bemerkungen_html != null) ? String(kopfdaten.bemerkungen_html).trim() : '';
+      writeFileWithRetry(montageberichtDataPath, JSON.stringify({
+        grundDesEinsatzes,
+        grundDesEinsatzes_html: grundDesEinsatzesHtml,
+        fabBemerkungen,
+        language,
+        bemerkungen: kopfdatenBemerkungen,
+        bemerkungen_html: kopfdatenBemerkungenHtml,
+        projekt: projektPflicht,
+      }, null, 2));
+
+      let syncWarning = null;
+      const appendSyncWarning = (msg) => {
+        syncWarning = syncWarning ? `${syncWarning}\n\n${msg}` : msg;
+      };
+      if (dispoBaseUrl && hasServerJobId) {
+        const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
+        const syncHeaders = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authSync || {}) };
+        try {
+          const syncUrl = dispoBaseUrl + '/dispo_api/api/anlagenstamm_projekt_job_save.php';
+          const syncRes = await fetch(syncUrl, {
+            method: 'POST',
+            headers: syncHeaders,
+            body: JSON.stringify({ technician_id: technicianId, job_id: serverJobId, projekt: projektPflicht }),
+          });
+          const syncData = await syncRes.json().catch(() => ({}));
+          if (!syncRes.ok || !syncData.ok) {
+            const msg = 'Projekt: Anlagenstamm auf dem Server konnte nicht angepasst werden: ' + (syncData.error || syncRes.statusText || syncRes.status);
+            if (syncRes.status >= 500) console.warn(msg);
+            else appendSyncWarning(msg);
+          }
+        } catch (syncErr) {
+          console.warn('Projekt: Dispo für Anlagenstamm-Update nicht erreichbar.');
+        }
+        const tpRows = (fabBemerkungen || [])
+          .map((fb) => {
+            const fn = toFab(fb);
+            if (!fn) return null;
+            const typeVal = (fb && fb.type != null) ? String(fb.type).trim() : '';
+            const positionVal = (fb && fb.position != null) ? String(fb.position).trim() : '';
+            if (!typeVal && !positionVal) return null;
+            return {
+              fabrikationsnummer: fn,
+              type: typeVal,
+              position: positionVal,
+            };
+          })
+          .filter(Boolean);
+        if (tpRows.length > 0) {
+          try {
+            const tpUrl = dispoBaseUrl + '/dispo_api/api/anlagenstamm_type_position_job_save.php';
+            const tpRes = await fetch(tpUrl, {
+              method: 'POST',
+              headers: syncHeaders,
+              body: JSON.stringify({ technician_id: technicianId, job_id: serverJobId, rows: tpRows }),
+            });
+            const tpData = await tpRes.json().catch(() => ({}));
+            if (!tpRes.ok || !tpData.ok) {
+              const msg = 'Type/Pos.Nr.: Anlagenstamm auf dem Server konnte nicht angepasst werden: ' + (tpData.error || tpRes.statusText || tpRes.status);
+              if (tpRes.status >= 500) console.warn(msg);
+              else appendSyncWarning(msg);
+            }
+          } catch (tpErr) {
+            console.warn('Type/Pos.Nr.: Dispo für Anlagenstamm-Update nicht erreichbar.');
+          }
+        }
+      }
+
+      if (jsonOnly) {
+        return res.json({
+          ok: true,
+          jsonOnly: true,
+          warning: syncWarning || undefined,
+        });
+      }
+
       const pdfFilename = ordnerName + '_Montage.pdf';
 
-      const toTextbausteine = (bem) => (bem || '').toString().split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((t) => ({ text: t }));
+      const toTextbausteine = (bem) => (bem || '').toString().split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((t) => ({ text: t, html: t }));
+      const toTextbausteineFromRich = (html, plain) => {
+        const rawHtml = (html || '').toString();
+        if (rawHtml.trim()) {
+          const liMatches = rawHtml.match(/<li[\s\S]*?>[\s\S]*?<\/li>/gi) || [];
+          if (liMatches.length > 0) {
+            return liMatches
+              .map((li) => {
+                const inner = li.replace(/^<li[\s\S]*?>/i, '').replace(/<\/li>$/i, '').trim();
+                const text = inner.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
+                return { text, html: inner };
+              })
+              .filter((x) => x.text);
+          }
+          const textFallback = rawHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(div|p|li)>/gi, '\n').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+\n/g, '\n').replace(/\n\s+/g, '\n').trim();
+          if (textFallback) {
+            const splitBullets = textFallback
+              .replace(/\u2022/g, '\n• ')
+              .split(/\r?\n|(?=\s*[•▪◦●]\s+)/)
+              .map((s) => s.replace(/^\s*[•▪◦●\-]\s*/, '').trim())
+              .filter(Boolean);
+            if (splitBullets.length > 1) return splitBullets.map((t) => ({ text: t, html: t }));
+            return [{ text: textFallback.replace(/^\s*[•▪◦●\-]\s*/, '').trim(), html: rawHtml.trim() }];
+          }
+        }
+        return toTextbausteine(plain || '');
+      };
       const bemerkungenByFn = {};
+      const typePosByFn = {};
       for (const fb of fabBemerkungen || []) {
         const fn = toFab(fb);
         if (fn) {
+          typePosByFn[fn] = {
+            type: (fb && fb.type != null) ? String(fb.type).trim() : '',
+            position: (fb && fb.position != null) ? String(fb.position).trim() : '',
+          };
           const explicitTb = Array.isArray(fb.textbausteine) && fb.textbausteine.length > 0
-            ? fb.textbausteine.map((t) => ({ text: String(t && t.text != null ? t.text : '').trim() })).filter((t) => t.text)
+            ? fb.textbausteine
+              .map((t) => ({
+                text: String(t && t.text != null ? t.text : '').trim(),
+                html: String(t && t.html != null ? t.html : (t && t.text != null ? t.text : '')).trim(),
+              }))
+              .filter((t) => t.text)
             : null;
-          const tb = explicitTb && explicitTb.length > 0 ? explicitTb : toTextbausteine(fb && fb.bemerkungen);
+          const tb = explicitTb && explicitTb.length > 0
+            ? explicitTb
+            : toTextbausteineFromRich(fb && fb.bemerkungen_html, fb && fb.bemerkungen);
           bemerkungenByFn[fn] = tb;
         }
       }
       const tableRows = dbFabRows.map((row) => {
         const fn = (row.fabrikationsnummer || '').toString().trim();
-        const type = (row.type || '').toString().trim();
-        const position = (row.position || '').toString().trim();
+        const fromForm = typePosByFn[fn];
+        const type = (fromForm != null)
+          ? String(fromForm.type != null ? fromForm.type : '').trim()
+          : (row.type || '').toString().trim();
+        const position = (fromForm != null)
+          ? String(fromForm.position != null ? fromForm.position : '').trim()
+          : (row.position || '').toString().trim();
         const userTb = bemerkungenByFn[fn];
-        const tb = (userTb && userTb.length > 0) ? userTb : (Array.isArray(row.textbausteine) ? row.textbausteine.map((t) => ({ text: String(t && t.text != null ? t.text : '').trim() })).filter((t) => t.text) : []);
+        const tb = (userTb && userTb.length > 0)
+          ? userTb
+          : (Array.isArray(row.textbausteine)
+            ? row.textbausteine
+              .map((t) => ({
+                text: String(t && t.text != null ? t.text : '').trim(),
+                html: String(t && t.html != null ? t.html : (t && t.text != null ? t.text : '')).trim(),
+              }))
+              .filter((t) => t.text)
+            : []);
         const bemerk = tb.map((x) => x.text).join('\n');
         return { fabrikationsnummer: fn, type, position, textbausteine: tb, bemerkungen: bemerk };
       });
@@ -1738,6 +2029,7 @@ function createApp(db) {
           language,
           jobRow,
           grundDesEinsatzes,
+          grundDesEinsatzes_html: grundDesEinsatzesHtml,
           freitext,
         });
         if (process.env.MONTAGEBERICHT_DEBUG) {
@@ -1788,7 +2080,6 @@ function createApp(db) {
         });
       }
 
-      const jobId = jobRow.server_id != null ? jobRow.server_id : localJobId;
       const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
       const docxFilename = ordnerName + '_Montage.docx';
 
@@ -1813,17 +2104,13 @@ function createApp(db) {
         }
       }
 
-      const montageberichtDataPath = path.join(reiseDir, 'montagebericht.json');
-      const kopfdatenBemerkungen = (kopfdaten && kopfdaten.bemerkungen != null) ? String(kopfdaten.bemerkungen).trim() : '';
-      writeFileWithRetry(montageberichtDataPath, JSON.stringify({
-        grundDesEinsatzes,
-        fabBemerkungen,
-        language,
-        bemerkungen: kopfdatenBemerkungen,
-      }, null, 2));
-
-      // Montagebericht nur lokal speichern – kein Sync und kein Upload zur Dispo
-      res.json({ ok: true, saved: fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', pdfFilename)), savedDocx: docxBytes ? fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', docxFilename)) : null });
+      res.json({
+        ok: true,
+        jsonOnly: false,
+        warning: syncWarning || undefined,
+        saved: fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', pdfFilename)),
+        savedDocx: docxBytes ? fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', docxFilename)) : null,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Montagebericht konnte nicht erstellt werden.' });
     }
@@ -1950,12 +2237,18 @@ function createApp(db) {
       }
 
       const jobRow = db.prepare(`
-        SELECT j.id FROM jobs j
-        INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+        SELECT j.id, j.status FROM jobs j
         WHERE j.id = ?
-      `).get(technicianId, localJobId);
+          AND (
+            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+          )
+      `).get(localJobId, technicianId);
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      if (String(jobRow.status || '').toLowerCase() === 'geplant') {
+        return res.status(403).json({ ok: false, error: 'Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.' });
       }
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
@@ -2148,6 +2441,11 @@ function createApp(db) {
     if (!technicianId || !job_id) {
       return res.status(400).json({ ok: false, error: 'technician_id und job_id erforderlich.' });
     }
+    const gate = getWritableLocalJobMetaForPatch(db, technicianId, job_id);
+    if (gate.error) {
+      return res.status(gate.status).json({ ok: false, error: gate.error });
+    }
+    const effectiveJobId = gate.localId;
     const allowed = ['geplant', 'in_arbeit', 'erledigt'];
     const hotelKeys = ['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_address_extra_1', 'hotel_address_extra_2', 'hotel_phone', 'hotel_email', 'hotel_website'];
     const hasHotelPayload = hotelKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k));
@@ -2155,7 +2453,7 @@ function createApp(db) {
       if (hasHotelPayload) {
         const hotelPayload = {};
         hotelKeys.forEach((k) => { hotelPayload[k] = body[k] != null ? String(body[k]) : ''; });
-        const jha = db.prepare('SELECT job_id FROM job_hotel_addresses WHERE job_id = ?').get(job_id);
+        const jha = db.prepare('SELECT job_id FROM job_hotel_addresses WHERE job_id = ?').get(effectiveJobId);
         const endkunde = hotelPayload.hotel_endkunde || null;
         const street = hotelPayload.hotel_street || '';
         const house_number = hotelPayload.hotel_house_number || '';
@@ -2168,21 +2466,24 @@ function createApp(db) {
         const email = hotelPayload.hotel_email || null;
         const website = hotelPayload.hotel_website || null;
         if (jha) {
-          db.prepare('UPDATE job_hotel_addresses SET endkunde=?, street=?, house_number=?, zip=?, city=?, country=?, address_extra_1=?, address_extra_2=?, phone=?, email=?, website=? WHERE job_id=?').run(endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website, job_id);
+          db.prepare('UPDATE job_hotel_addresses SET endkunde=?, street=?, house_number=?, zip=?, city=?, country=?, address_extra_1=?, address_extra_2=?, phone=?, email=?, website=? WHERE job_id=?').run(endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website, effectiveJobId);
         } else {
-          db.prepare('INSERT INTO job_hotel_addresses (job_id, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(job_id, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website);
+          db.prepare('INSERT INTO job_hotel_addresses (job_id, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(effectiveJobId, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website);
         }
-        db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', job_id, 'hotel_address', JSON.stringify(hotelPayload));
+        db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'hotel_address', JSON.stringify(hotelPayload));
         save();
         return res.json({ ok: true, updated: 'hotel_address' });
       }
       if (status && allowed.includes(status)) {
         const r = db.prepare(`
           UPDATE jobs SET status = ?, updated_at = datetime('now')
-          WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)
-        `).run(status, job_id, technicianId);
+          WHERE id = ? AND (
+            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
+            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
+          )
+        `).run(status, effectiveJobId, technicianId);
         if (r.changes) {
-          db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', job_id, 'status', JSON.stringify({ status }));
+          db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'status', JSON.stringify({ status }));
           save();
           return res.json({ ok: true, updated: 'status' });
         }
@@ -2190,10 +2491,13 @@ function createApp(db) {
       if (description !== undefined) {
         const r = db.prepare(`
           UPDATE jobs SET description = ?, updated_at = datetime('now')
-          WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)
-        `).run(description, job_id, technicianId);
+          WHERE id = ? AND (
+            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
+            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
+          )
+        `).run(description, effectiveJobId, technicianId);
         if (r.changes) {
-          db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', job_id, 'description', JSON.stringify({ description }));
+          db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'description', JSON.stringify({ description }));
           save();
           return res.json({ ok: true, updated: 'description' });
         }
@@ -2202,10 +2506,13 @@ function createApp(db) {
         const val = typeof fabrikationsnummern === 'string' ? fabrikationsnummern : (fabrikationsnummern != null ? JSON.stringify(fabrikationsnummern) : null);
         const r = db.prepare(`
           UPDATE jobs SET fabrikationsnummern = ?, updated_at = datetime('now')
-          WHERE id = ? AND id IN (SELECT job_id FROM job_technicians WHERE technician_id = ?)
-        `).run(val, job_id, technicianId);
+          WHERE id = ? AND (
+            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
+            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
+          )
+        `).run(val, effectiveJobId, technicianId);
         if (r.changes) {
-          db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', job_id, 'fabrikationsnummern', JSON.stringify({ fabrikationsnummern: val }));
+          db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'fabrikationsnummern', JSON.stringify({ fabrikationsnummern: val }));
           save();
           return res.json({ ok: true, updated: 'fabrikationsnummern' });
         }
@@ -2230,7 +2537,7 @@ function createApp(db) {
     sql += ' ORDER BY start_datetime ASC';
     const rows = db.prepare(sql).all(...params);
     const byKey = new Map();
-    rows.forEach((r) => byKey.set(r.start_datetime + '\t' + r.end_datetime, true));
+    rows.forEach((r) => byKey.set(absencePeriodDedupeKey(r.technician_id, r.start_datetime, r.end_datetime), true));
     // Genehmigte und ausstehende Abwesenheitsanfragen mit anzeigen (z. B. eigene Abwesenheit in Einzeltechniker-Ansicht)
     let reqSql = 'SELECT id, server_id, technician_id, start_datetime, end_datetime, type, status FROM absence_requests WHERE technician_id = ? AND status IN (\'approved\', \'pending\')';
     const reqParams = [technicianId];
@@ -2239,7 +2546,7 @@ function createApp(db) {
     reqSql += ' ORDER BY start_datetime ASC';
     const requests = db.prepare(reqSql).all(...reqParams);
     requests.forEach((r) => {
-      const key = r.start_datetime + '\t' + r.end_datetime;
+      const key = absencePeriodDedupeKey(r.technician_id, r.start_datetime, r.end_datetime);
       if (!byKey.has(key)) {
         byKey.set(key, true);
         rows.push({ id: r.id, server_id: r.server_id, technician_id: r.technician_id, start_datetime: r.start_datetime, end_datetime: r.end_datetime, type: r.type, from_absence_request: true, status: r.status });
@@ -2342,7 +2649,7 @@ function createApp(db) {
           body: JSON.stringify({ technician_id: technicianId, start_datetime: startNorm, end_datetime: endNorm, type: type || null }),
         }).then(async (resp) => {
           const data = await resp.json().catch(() => ({}));
-          if (resp.ok && data.success && data.id) {
+          if (resp.ok && data.ok && data.id) {
             db.prepare('UPDATE absence_requests SET server_id = ?, synced_at = datetime(\'now\') WHERE id = ?').run(data.id, localId);
             save();
           } else if (resp.status >= 400 && resp.status < 500) {
@@ -2485,19 +2792,26 @@ function createApp(db) {
     if (!job || !baseUrl || typeof job.fabrikationsnummern !== 'string') return job;
     const fab = job.fabrikationsnummern.trim();
     if (!fab) return job;
+    /** Felder aus Dispo-Anlagenstamm – immer nachladen und in bestehende FN-Objekte mergen (u. a. projekt). */
+    const STAMM_KEYS = ['type', 'leistung', 'nenngeschwindigkeit', 'kraftaufnehmer', 'dms_nr', 'tacho', 'elektronik', 'material', 'position', 'geliefert_ueber', 'projekt', 'bemerkungen'];
+    let parsed = null;
     let parts = [];
     try {
-      const parsed = JSON.parse(fab);
+      parsed = JSON.parse(fab);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const hasLeistung = parsed.some((r) => (r.type && r.type.trim()) || (r.leistung && r.leistung.trim()) || (r.nenngeschwindigkeit && r.nenngeschwindigkeit.trim()) || (r.kraftaufnehmer && r.kraftaufnehmer.trim()) || (r.dms_nr && r.dms_nr.trim()) || (r.tacho && r.tacho.trim()) || (r.elektronik && r.elektronik.trim()) || (r.material && r.material.trim()) || (r.position && r.position.trim()));
-        if (hasLeistung) return job;
         parts = parsed
-          .map((r) => (r && (r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer) != null
-            ? String(r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer).trim()
-            : ''))
+          .map((r) => {
+            if (r && typeof r === 'object') {
+              const fn = r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer;
+              return fn != null ? String(fn).trim() : '';
+            }
+            return r != null ? String(r).trim() : '';
+          })
           .filter(Boolean);
       }
-    } catch (e) { /* no json */ }
+    } catch (e) {
+      parsed = null;
+    }
     if (parts.length === 0) parts = fab.split(/[\s;,]+/).map((p) => p.trim()).filter(Boolean);
     if (parts.length === 0) return job;
     const base = baseUrl.toString().trim().replace(/\/$/, '');
@@ -2509,11 +2823,50 @@ function createApp(db) {
       debugInfo.ok = !!r.ok;
       debugInfo.status = r.status;
       debugInfo.matchCount = Array.isArray(data.data) ? data.data.length : 0;
-      if (r.ok && Array.isArray(data.data) && data.data.length > 0) {
-        const j = { ...job, _anlagenstamm_debug: debugInfo };
-        j.fabrikationsnummern = JSON.stringify(data.data);
-        return j;
+      if (!r.ok || !Array.isArray(data.data) || data.data.length === 0) {
+        return { ...job, _anlagenstamm_debug: debugInfo };
       }
+      const byFab = {};
+      for (const row of data.data) {
+        const key = String(row.fabrikationsnummer ?? '').trim();
+        if (key) byFab[key] = row;
+      }
+      const rowForParsedIndex = (i, fnHint) => {
+        if (Array.isArray(data.data) && i >= 0 && i < data.data.length) return data.data[i];
+        const fn = String(fnHint || '').trim();
+        return fn ? byFab[fn] || {} : {};
+      };
+      const hasObjectRows = Array.isArray(parsed) && parsed.length > 0 && parsed.some((x) => x && typeof x === 'object');
+      let newFabJson;
+      if (hasObjectRows) {
+        const sameLen = Array.isArray(data.data) && data.data.length === parsed.length;
+        newFabJson = JSON.stringify(
+          parsed.map((r, i) => {
+            if (!r || typeof r !== 'object') {
+              const fn = String(r).trim();
+              const apiRow = sameLen ? rowForParsedIndex(i, fn) : byFab[fn] || {};
+              const o = { fabrikationsnummer: fn };
+              for (const k of STAMM_KEYS) {
+                o[k] = apiRow[k] != null ? apiRow[k] : '';
+              }
+              return o;
+            }
+            const fn = String(
+              r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer != null ? r.Fabrikationsnummer : '',
+            ).trim();
+            const apiRow = sameLen ? rowForParsedIndex(i, fn) : (fn ? byFab[fn] || {} : {});
+            const merged = { ...r };
+            for (const k of STAMM_KEYS) {
+              merged[k] = apiRow[k] != null ? apiRow[k] : '';
+            }
+            if (fn) merged.fabrikationsnummer = fn;
+            return merged;
+          }),
+        );
+      } else {
+        newFabJson = JSON.stringify(data.data);
+      }
+      return { ...job, fabrikationsnummern: newFabJson, _anlagenstamm_debug: debugInfo };
     } catch (e) {
       debugInfo.error = e && e.message ? e.message : String(e);
     }
@@ -2673,6 +3026,24 @@ function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
       db.prepare('DELETE FROM jobs WHERE id = ?').run(row.id);
     }
   }
+  // Lokale Spiegel ohne job_technicians (unzugewiesen auf Dispo): entfernen, wenn nicht mehr im Pull
+  const unassignedMirror = db.prepare(`
+    SELECT j.id, j.server_id FROM jobs j
+    WHERE j.server_id IS NOT NULL AND TRIM(CAST(j.server_id AS TEXT)) != ''
+    AND NOT EXISTS (SELECT 1 FROM job_technicians jtx WHERE jtx.job_id = j.id)
+  `).all();
+  for (const row of unassignedMirror) {
+    const serverId = row.server_id;
+    if (receivedJobServerIds.has(Number(serverId)) || receivedJobServerIds.has(String(serverId))) continue;
+    try {
+      db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(row.id);
+    } catch (e) { /* Tabelle fehlt */ }
+    try {
+      db.prepare('DELETE FROM job_hotel_addresses WHERE job_id = ?').run(row.id);
+    } catch (e) { /* ignore */ }
+    db.prepare('DELETE FROM job_addresses WHERE job_id = ?').run(row.id);
+    db.prepare('DELETE FROM jobs WHERE id = ?').run(row.id);
+  }
 }
 
 function removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerIds) {
@@ -2786,6 +3157,10 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     );
     if (j.street != null) insertOrUpdateJobAddress(db, existing.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, existing.id, j);
+    const dispCountUpd = Number(j.dispo_jt_count);
+    if (Number.isFinite(dispCountUpd) && dispCountUpd > 0) {
+      db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(existing.id, technicianId);
+    }
     return existing.id;
   }
   // Verwaisten lokalen Auftrag (ohne server_id) mit Dispo-Auftrag verknüpfen – dann bleibt die lokale ID erhalten
@@ -2823,7 +3198,12 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null
   );
   const newId = r2.lastInsertRowid;
-  db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(newId, technicianId);
+  const dispCountNew = Number(j.dispo_jt_count);
+  // Auf Dispo ohne Techniker: keine lokale Zuordnung erzeugen (sonst „nicht unzugewiesen“ mehr). Ohne Feld: Altserver-Verhalten.
+  const assignLocalTech = !Number.isFinite(dispCountNew) || dispCountNew > 0;
+  if (assignLocalTech) {
+    db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(newId, technicianId);
+  }
   if (j.street != null) insertOrUpdateJobAddress(db, newId, j);
   if (hasHotelFields(j)) insertOrUpdateJobHotel(db, newId, j);
   return newId;
@@ -3006,7 +3386,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }),
       });
       const data = await r.json().catch(() => ({}));
-      if (r.ok && data.success && data.id) {
+      if (r.ok && data.ok && data.id) {
         db.prepare('UPDATE absence_requests SET server_id = ?, synced_at = datetime(\'now\') WHERE id = ?').run(data.id, row.id);
       } else if (r.status >= 400 && r.status < 500) {
         // Dauerhafter fachlicher Fehler – nicht weiter als pending behandeln.
@@ -3018,7 +3398,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
   try {
     const statusRes = await fetch(`${base}/api/absence_request_status.php?technician_id=${technicianId}`, { headers: authHeader || {} });
     const statusData = await statusRes.json().catch(() => ({}));
-    if (statusData.success && Array.isArray(statusData.requests)) {
+    if (statusData.ok && Array.isArray(statusData.requests)) {
       for (const req of statusData.requests) {
         if (req.id != null && req.status && req.status !== 'pending') {
           db.prepare('UPDATE absence_requests SET status = ?, synced_at = datetime(\'now\') WHERE server_id = ? AND technician_id = ?').run(req.status, req.id, technicianId);

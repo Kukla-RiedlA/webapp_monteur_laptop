@@ -16,8 +16,8 @@ final class DispoRepository
     }
 
     /**
-     * Aufträge des Monteurs (mit Adresse und Kunde).
-     * Optional nach Datum filtern (start_datetime der Jobs).
+     * Aufträge: diesem Monteur zugeordnet oder noch ohne Techniker-Zuordnung (Planung).
+     * Feld dispo_jt_count: Anzahl Zuordnungen auf dem Server (Sync).
      *
      * @return list<array<string, mixed>>
      */
@@ -26,12 +26,15 @@ final class DispoRepository
         $sql = 'SELECT j.id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
                        j.status, j.required_technicians, j.description, j.fabrikationsnummern, j.eap_nummer, j.bestellnummer,
                        c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
-                       ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+                       ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2,
+                       (SELECT COUNT(*) FROM job_technicians jtc WHERE jtc.job_id = j.id) AS dispo_jt_count
                 FROM jobs j
-                INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = :technician_id
                 INNER JOIN customers c ON c.id = j.customer_id
                 LEFT JOIN job_addresses ja ON ja.job_id = j.id
-                WHERE 1=1';
+                WHERE (
+                    EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = :technician_id)
+                    OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+                )';
         $params = [':technician_id' => $technicianId];
 
         if ($dateFrom !== null && $dateFrom !== '') {
@@ -95,10 +98,13 @@ final class DispoRepository
                        c.contact_person, c.contact_phone, c.contact_email,
                        ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
                 FROM jobs j
-                INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = :technician_id
                 INNER JOIN customers c ON c.id = j.customer_id
                 LEFT JOIN job_addresses ja ON ja.job_id = j.id
-                WHERE j.id = :job_id';
+                WHERE j.id = :job_id
+                  AND (
+                    EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = :technician_id)
+                    OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+                  )';
         $stmt = $this->fsm->prepare($sql);
         $stmt->execute([
             ':job_id' => $jobId,

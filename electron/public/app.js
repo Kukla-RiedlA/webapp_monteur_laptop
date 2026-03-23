@@ -146,6 +146,12 @@
     return '<img src="flags/' + c + '.png" alt="" class="job-flag" width="20" height="15" loading="lazy" onerror="this.style.display=\'none\'">';
   }
 
+  /** Auftrag mit Status „geplant“: in der Laptop-App nur Anzeige, keine Änderungen. */
+  function isJobGeplantReadOnly(job) {
+    if (!job || typeof job !== 'object') return false;
+    return String(job.status || '').trim().toLowerCase() === 'geplant';
+  }
+
   function renderJobs(data) {
     const list = document.getElementById('jobsList');
     const jobs = Array.isArray(data) ? data : (data && data.jobs) ? data.jobs : [];
@@ -155,7 +161,7 @@
     }
     list.innerHTML = jobs.map((j) => {
       const dateStr = formatDateRange(j.start_datetime, j.end_datetime);
-      const firma = (j.customer_name || j.customerName || '').trim();
+      const firma = (j.customer_name || '').trim();
       const ort = (j.city || '').trim();
       const land = normalizeCountryToCode(j.country) || (j.country || '').trim().toUpperCase().slice(0, 2);
       const flagHtml = countryFlagImg(land);
@@ -196,6 +202,39 @@
     return jobDetailsJobId || selectedJobIdOnDienstreisePage;
   }
 
+  function getDienstreiseJobSnapshotByLocalId(localJobId) {
+    var id = parseInt(localJobId, 10);
+    if (!id) return null;
+    var list = Array.isArray(dienstreisePageJobs) ? dienstreisePageJobs : [];
+    for (var i = 0; i < list.length; i++) {
+      var j = list[i];
+      if (j && (j.id === id || j.id == id)) return j;
+    }
+    var cur = window.currentProjektdatenJob;
+    if (cur && (cur.id === id || cur.id == id)) return cur;
+    return null;
+  }
+
+  function updateDienstreiseWriteControlsState() {
+    var jid = getDienstreiseExplorerJobId();
+    var snap = jid ? getDienstreiseJobSnapshotByLocalId(jid) : null;
+    var ro = isJobGeplantReadOnly(snap);
+    var copyBtn = document.getElementById('btnDienstreiseCopyProject');
+    var upBtn = document.getElementById('btnDienstreiseUpload');
+    if (copyBtn) {
+      copyBtn.disabled = !!ro;
+      copyBtn.title = ro ? 'Auftrag ist geplant – nur Anzeige.' : '';
+    }
+    if (upBtn) {
+      upBtn.disabled = !!ro;
+      upBtn.title = ro ? 'Auftrag ist geplant – nur Anzeige.' : '';
+    }
+    var sub = document.getElementById('dienstreiseUploadSubfolder');
+    var fi = document.getElementById('dienstreiseFileInput');
+    if (sub) sub.disabled = !!ro;
+    if (fi) fi.disabled = !!ro;
+  }
+
   function openJobDetailsModal(jobId) {
     var techId = getTechId();
     if (!techId) {
@@ -222,6 +261,7 @@
       content.innerHTML = renderJobDetailsContent(job);
       bindLeistungActions();
       if (typeof loadDienstreiseExplorer === 'function') loadDienstreiseExplorer(jobDetailsJobId, '');
+      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
     }
 
     function loadLocal() {
@@ -287,6 +327,7 @@
   }
 
   function renderJobDetailsContent(job) {
+    var readOnlyGeplant = isJobGeplantReadOnly(job);
     var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
     function decodeHtmlEntities(str) {
       if (str == null || str === '') return '';
@@ -341,7 +382,7 @@
     var addressLine = addressLines.length ? addressLines.join('<br>') : '–';
 
     var leistungRows = [];
-    var fab = job.fabrikationsnummern != null ? job.fabrikationsnummern : (job.Fabrikationsnummern != null ? job.Fabrikationsnummern : (job.fabrikation != null ? job.fabrikation : (job.job_fabrikation != null ? job.job_fabrikation : null)));
+    var fab = job.fabrikationsnummern != null ? job.fabrikationsnummern : (job.fabrikation != null ? job.fabrikation : (job.job_fabrikation != null ? job.job_fabrikation : null));
     var parsedList = null;
     if (fab != null && (typeof fab === 'string' && (fab = fab.trim()) !== '')) {
       try {
@@ -384,7 +425,7 @@
       parsedList.forEach(function (row) {
         var r = row && typeof row === 'object' ? row : {};
         leistungRows.push({
-          fabrikationsnummer: get(r, ['fabrikationsnummer', 'Fabrikationsnummer', 'fab', 'FabrikationsNr']),
+          fabrikationsnummer: get(r, ['fabrikationsnummer', 'fab']),
           type: get(r, ['type', 'Type', 'typ', 'Typ']),
           leistung: get(r, ['leistung', 'Leistung']),
           nenngeschwindigkeit: get(r, ['nenngeschwindigkeit', 'Nenngeschwindigkeit']),
@@ -405,7 +446,11 @@
     }
     window.currentProjektdatenLeistungRows = leistungRows;
 
-    var html = '<div class="modal-detail-grid">';
+    var html = '';
+    if (readOnlyGeplant) {
+      html += '<div class="projektdaten-readonly-banner" role="status">Auftrag ist <strong>geplant</strong> – hier nur Anzeige, keine Bearbeitung.</div>';
+    }
+    html += '<div class="modal-detail-grid">';
     html += '<div class="modal-detail-section modal-detail-section-address-row"><div class="modal-address-contact-row">';
     html += '<div class="modal-detail-section"><h4>Auftrag</h4><dl class="modal-detail-dl">';
     html += '<dt>Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
@@ -458,7 +503,7 @@
       html += '<div class="modal-detail-section modal-detail-section-address-row">';
       html += '<div class="modal-address-contact-row">';
       html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
-      html += '<div class="modal-detail-section modal-hotel-display-wrap"><h4>Hotel Adresse</h4><p class="modal-address hotel-address-display" data-job-id="' + escapeHtml(String(job.id)) + '" title="Doppelklick zum Bearbeiten">' + hotelAddressLine + '</p><p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p></div>';
+      html += '<div class="modal-detail-section modal-hotel-display-wrap"><h4>Hotel Adresse</h4><p class="modal-address hotel-address-display' + (readOnlyGeplant ? ' hotel-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyGeplant ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + hotelAddressLine + '</p>' + (readOnlyGeplant ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
       html += '<div class="modal-detail-section"><h4>Kontakt (Baustellen-Ansprechpartner)</h4><dl class="modal-detail-dl">';
       html += '<dt>Ansprechpartner</dt><dd>' + v(name) + '</dd>';
       html += '<dt>Telefon</dt><dd>' + v(phone) + '</dd>';
@@ -469,7 +514,7 @@
     html += '</div>';
 
     html += '<div class="modal-detail-section"><h4>Leistungsdaten (Anlagenstamm)</h4>';
-    html += '<p class="modal-leistung-hint">Doppelklick auf eine Anlage öffnet die Anlagendetails.</p>';
+    html += '<p class="modal-leistung-hint muted">' + (readOnlyGeplant ? 'Nur Anzeige (Auftrag geplant).' : 'Doppelklick auf eine Anlage öffnet die Anlagendetails.') + '</p>';
     var visibleIndices = [];
     for (var idx = 0; idx < leistungRows.length; idx++) {
       var r = leistungRows[idx];
@@ -478,6 +523,7 @@
     }
     var useTwoCards = visibleIndices.length > 2;
     var vCell = function (x) { return escapeHtml(String(x == null ? '' : x)); };
+    var leistungCellClass = readOnlyGeplant ? 'modal-leistung-cell-readonly' : 'modal-leistung-cell-clickable';
     function renderAnlagenTable(indices) {
       var out = '<div class="modal-leistung-wrap"><table class="modal-leistung-table modal-leistung-table-compact"><thead><tr>';
       out += '<th>FN</th><th>Type</th><th>Leistung</th>';
@@ -486,9 +532,9 @@
         var i = indices[k];
         var row = leistungRows[i];
         out += '<tr>';
-        out += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.fabrikationsnummer) + '</td>';
-        out += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
-        out += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
+        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.fabrikationsnummer) + '</td>';
+        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
+        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
         out += '</tr>';
       }
       out += '</tbody></table></div>';
@@ -510,9 +556,9 @@
         var row = leistungRows[i];
         if (!row.fabrikationsnummer && !row.type && !row.leistung && !row.geliefert_ueber && !row.projekt && !row.bemerkungen) continue;
         html += '<tr>';
-        html += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.fabrikationsnummer) + '</td>';
-        html += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
-        html += '<td class="modal-leistung-cell-clickable" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
+        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.fabrikationsnummer) + '</td>';
+        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
+        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
         html += '</tr>';
       }
       html += '</tbody></table></div>';
@@ -523,6 +569,10 @@
   }
 
   function openAnlageDetailModal(rowIndex) {
+    if (isJobGeplantReadOnly(window.currentProjektdatenJob)) {
+      alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+      return;
+    }
     var rows = window.currentProjektdatenLeistungRows;
     if (!rows || !rows[rowIndex]) return;
     var row = rows[rowIndex];
@@ -606,6 +656,10 @@
   }
 
   function addLeistungRow() {
+    if (isJobGeplantReadOnly(window.currentProjektdatenJob)) {
+      alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+      return;
+    }
     var tbody = document.getElementById('modalLeistungTbody');
     if (!tbody) return;
     var tr = document.createElement('tr');
@@ -620,6 +674,10 @@
   }
 
   function saveLeistungDaten() {
+    if (isJobGeplantReadOnly(window.currentProjektdatenJob)) {
+      alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+      return;
+    }
     var jobId = jobDetailsJobId;
     if (!jobId) return;
     var tbody = document.getElementById('modalLeistungTbody');
@@ -829,6 +887,10 @@
   }
 
   function openHotelAddressModal(job) {
+    if (isJobGeplantReadOnly(job || window.currentProjektdatenJob)) {
+      alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+      return;
+    }
     var jobId = job && (job.id != null) ? job.id : jobDetailsJobId;
     if (!jobId) return;
     var attr = function (v) { return escapeHtml(String(v == null ? '' : v)).replace(/"/g, '&quot;'); };
@@ -936,6 +998,7 @@
           window.currentProjektdatenJob = updatedJob;
           content.innerHTML = renderJobDetailsContent(updatedJob);
           bindLeistungActions();
+          if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
         }
         var baseUrl = (typeof getServerUrl === 'function' ? getServerUrl() : '').trim();
         var techId = typeof getTechId === 'function' ? getTechId() : null;
@@ -968,6 +1031,17 @@
   }
 
   async function updateJobStatus(jobId, status) {
+    var techId = getTechId();
+    if (techId) {
+      try {
+        var jr = await fetch(API_BASE + '/api/job?id=' + encodeURIComponent(jobId), { headers: { 'X-Technician-Id': String(techId) } });
+        var jd = await jr.json();
+        if (jd.job && isJobGeplantReadOnly(jd.job)) {
+          alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+          return;
+        }
+      } catch (e) { /* weiter */ }
+    }
     if (status === 'erledigt' && !confirm('Ist der Auftrag wirklich erledigt?')) return;
     try {
       await api('/api/job', {
@@ -982,6 +1056,17 @@
   }
 
   async function finishAndCleanup(jobId) {
+    var techIdPre = getTechId();
+    if (techIdPre) {
+      try {
+        var jr2 = await fetch(API_BASE + '/api/job?id=' + encodeURIComponent(jobId), { headers: { 'X-Technician-Id': String(techIdPre) } });
+        var jd2 = await jr2.json();
+        if (jd2.job && isJobGeplantReadOnly(jd2.job)) {
+          alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+          return;
+        }
+      } catch (e) { /* weiter */ }
+    }
     if (!confirm('Ist der Auftrag wirklich erledigt?')) return;
     var techId = getTechId();
     var baseUrl = getDispoBaseUrl();
@@ -1146,18 +1231,21 @@
         }
         // Dienstreise-Projektordner (Dokumente_Monteur / Dokumente_Buchhaltung) periodisch mit dem Dispo-Server synchronisieren
         if (selectedJobIdOnDienstreisePage) {
-          const bodySync = {
-            job_id: selectedJobIdOnDienstreisePage,
-            dispoBaseUrl: base,
-            technicianId: techId,
-            dispoUsername: getServerUsername(),
-            dispoPassword: getServerPassword()
-          };
-          fetch(API_BASE + '/api/dienstreise/sync_to_dispo', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(bodySync)
-          }).catch(() => { /* Fehler hier ignorieren, Verify bei „Erledigt“ prüft erneut */ });
+          var syncSnap = typeof getDienstreiseJobSnapshotByLocalId === 'function' ? getDienstreiseJobSnapshotByLocalId(selectedJobIdOnDienstreisePage) : null;
+          if (!isJobGeplantReadOnly(syncSnap)) {
+            const bodySync = {
+              job_id: selectedJobIdOnDienstreisePage,
+              dispo_base_url: base,
+              technician_id: techId,
+              dispo_username: getServerUsername(),
+              dispo_password: getServerPassword()
+            };
+            fetch(API_BASE + '/api/dienstreise/sync_to_dispo', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(bodySync)
+            }).catch(() => { /* Fehler hier ignorieren, Verify bei „Erledigt“ prüft erneut */ });
+          }
         }
       } else {
         setConnectionBadge('offline', check.error || 'Verbindung fehlgeschlagen');
@@ -2039,6 +2127,19 @@
     }
   }
 
+  /** Kalender: gleiche Abwesenheit nicht doppelt (Server-Absence vs. lokale Anfrage / andere IDs). */
+  function absenceCalendarDedupeKey(a, technicianIdOverride) {
+    var tid = technicianIdOverride != null ? technicianIdOverride : (a.technician_id != null ? a.technician_id : a.technicianId);
+    function normDt(v) {
+      if (v == null) return '';
+      var s = String(v).replace('T', ' ').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s + ' 00:00:00';
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s)) return s + ':00';
+      return s;
+    }
+    return String(tid || '') + '\t' + normDt(a.start_datetime) + '\t' + normDt(a.end_datetime);
+  }
+
   async function loadCalendarMonth() {
     const first = new Date(calCurrentMonth.getFullYear(), calCurrentMonth.getMonth(), 1, 12, 0, 0, 0);
     const gridStart = mondayOf(first);
@@ -2139,10 +2240,18 @@
               return true;
             });
             var serverAbsIds = {};
-            absences.forEach(function (a) { serverAbsIds[a.id] = true; serverAbsIds[a.server_id] = true; });
+            var serverAbsPeriodKeys = {};
+            absences.forEach(function (a) {
+              serverAbsIds[a.id] = true;
+              if (a.server_id != null && a.server_id !== '') serverAbsIds[a.server_id] = true;
+              serverAbsPeriodKeys[absenceCalendarDedupeKey(a)] = true;
+            });
             (local[1].absences || []).forEach(function (a) {
-              if (!serverAbsIds[a.id] && !serverAbsIds[a.server_id]) {
-                absences.push(Object.assign({}, a, { technician_id: myTechId, technician_name: techById[myTechId] ? techById[myTechId].name : ('Techniker ' + myTechId), technician_color: techById[myTechId] ? techById[myTechId].color : '#6c757d' }));
+              var enriched = Object.assign({}, a, { technician_id: myTechId, technician_name: techById[myTechId] ? techById[myTechId].name : ('Techniker ' + myTechId), technician_color: techById[myTechId] ? techById[myTechId].color : '#6c757d' });
+              var periodKey = absenceCalendarDedupeKey(enriched, myTechId);
+              if (!serverAbsIds[a.id] && !serverAbsIds[a.server_id] && !serverAbsPeriodKeys[periodKey]) {
+                serverAbsPeriodKeys[periodKey] = true;
+                absences.push(enriched);
               }
             });
           } catch (e) { /* lokale Termine optional */ }
@@ -2665,6 +2774,8 @@
     if (!listEl || !jobId) return;
     if (!dienstreiseProtectedPathsByJob[jobId]) dienstreiseProtectedPathsByJob[jobId] = new Set();
     var protectedSet = dienstreiseProtectedPathsByJob[jobId];
+    var drSnap = getDienstreiseJobSnapshotByLocalId(jobId);
+    var drReadonlyGeplant = isJobGeplantReadOnly(drSnap);
     var rows = [];
     var expanded = dienstreiseExplorerExpanded;
     function addEntries(entries, level) {
@@ -2691,8 +2802,8 @@
       var toggle = e.isDirectory ? ('<span class="explorer-toggle" data-explorer-toggle aria-label="' + (expanded[e.relativePath] ? 'Einklappen' : 'Ausklappen') + '">' + (expanded[e.relativePath] ? '▼' : '▶') + '</span>') : '<span class="explorer-toggle empty"></span>';
       var relPath = e.relativePath || '';
       var isProtected = relPath && protectedSet.has(relPath);
-      var protectControl = '<label style="display:inline-flex;align-items:center;gap:0.25rem;"><input type="checkbox" data-explorer-protect ' + (isProtected ? 'checked' : '') + '>Nicht löschen</label>';
-      var deleteBtn = e.isDirectory ? '' : '<button type="button" class="btn btn-ghost btn-delete-file" data-explorer-delete title="Datei löschen (lokal und auf Dispo)">Löschen</button>';
+      var protectControl = drReadonlyGeplant ? '' : ('<label style="display:inline-flex;align-items:center;gap:0.25rem;"><input type="checkbox" data-explorer-protect ' + (isProtected ? 'checked' : '') + '>Nicht löschen</label>');
+      var deleteBtn = (drReadonlyGeplant || e.isDirectory) ? '' : '<button type="button" class="btn btn-ghost btn-delete-file" data-explorer-delete title="Datei löschen (lokal und auf Dispo)">Löschen</button>';
       html += '<div class="dienstreise-explorer-row' + levelClass + '" data-full-path="' + escapeHtml(e.fullPath || '') + '" data-is-dir="' + (e.isDirectory ? '1' : '0') + '" data-relative-path="' + escapeHtml(e.relativePath || '') + '">' +
         '<div class="dienstreise-explorer-name">' + toggle + '<span class="icon" aria-hidden="true">' + icon + '</span> ' + escapeHtml(e.name) + '</div>' +
         '<div class="dienstreise-explorer-size">' + escapeHtml(sizeStr) + '</div>' +
@@ -2782,6 +2893,7 @@
       if (breadcrumbEl) breadcrumbEl.textContent = 'Projektordner';
       dienstreiseExplorerRootEntries = [];
       dienstreiseExplorerExpanded = {};
+      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
       return;
     }
     listEl.innerHTML = '<span class="empty">Wird geladen …</span>';
@@ -2789,13 +2901,16 @@
     fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId)).then(function (r) { return r.json(); }).then(function (data) {
       if (!data.ok || !data.entries) {
         listEl.innerHTML = '<span class="empty">' + (data.error || 'Laden fehlgeschlagen.') + '</span>';
+        if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
         return;
       }
       dienstreiseExplorerRootEntries = data.entries;
       dienstreiseExplorerExpanded = {};
       renderDienstreiseExplorerTree();
+      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
     }).catch(function () {
       listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
+      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
     });
   }
 
@@ -2815,6 +2930,7 @@
       if (jobs.length === 0) {
         listEl.innerHTML = '<span class="empty">Keine Aufträge.</span>';
         selectedJobIdOnDienstreisePage = null;
+        if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
         return;
       }
       var html = jobs.map(function (j) {
@@ -2835,10 +2951,11 @@
           '<div class="job-info"><strong>' + (titleLine || 'Auftrag') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + (j.job_type ? ' · ' + (j.job_type || '') : '') + '</span></div>' +
           '<div class="job-actions">' +
           '<span class="status-badge status-' + status + '">' + (j.status || 'geplant') + '</span>' +
-          (j.status !== 'erledigt' ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
+          (j.status !== 'erledigt' && String(j.status || '').toLowerCase() !== 'geplant' ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
           '</div></div>';
       }).join('');
       listEl.innerHTML = html;
+      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
       listEl.querySelectorAll('.job-actions [data-status]').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
           e.stopPropagation();
@@ -2872,6 +2989,12 @@
 
   document.getElementById('btnDienstreiseCopyProject').addEventListener('click', function () {
     var localJobId = jobDetailsJobId || selectedJobIdOnDienstreisePage;
+    var snapCopy = localJobId ? getDienstreiseJobSnapshotByLocalId(localJobId) : null;
+    if (isJobGeplantReadOnly(snapCopy)) {
+      var h0 = document.getElementById('dienstreiseCopyHint');
+      if (h0) h0.textContent = 'Auftrag ist geplant – nur Anzeige.';
+      return;
+    }
     var hint = document.getElementById('dienstreiseCopyHint');
     var progressWrap = document.getElementById('dienstreiseCopyProgressWrap');
     var progressBar = document.getElementById('dienstreiseCopyProgress');
@@ -3003,6 +3126,12 @@
 
   document.getElementById('btnDienstreiseUpload').addEventListener('click', function () {
     var localJobId = getDienstreiseExplorerJobId();
+    var snapUp = localJobId ? getDienstreiseJobSnapshotByLocalId(localJobId) : null;
+    if (isJobGeplantReadOnly(snapUp)) {
+      var hintRo = document.getElementById('dienstreiseUploadHint');
+      if (hintRo) hintRo.textContent = 'Auftrag ist geplant – nur Anzeige.';
+      return;
+    }
     var subfolder = document.getElementById('dienstreiseUploadSubfolder');
     var sub = subfolder && subfolder.value ? subfolder.value : 'Dokumente_Monteur';
     var fileInput = document.getElementById('dienstreiseFileInput');
@@ -3041,10 +3170,10 @@
             if (sub === 'Dokumente_Dispo' || sub === 'Dokumente_Monteur' || sub === 'Dokumente_Anlage' || sub === 'Dokumente_Buchhaltung') {
               var bodySync = {
                 job_id: localJobId,
-                dispoBaseUrl: getDispoBaseUrl(),
-                technicianId: getTechId(),
-                dispoUsername: getDispoUsername(),
-                dispoPassword: getDispoPassword()
+                dispo_base_url: getDispoBaseUrl(),
+                technician_id: getTechId(),
+                dispo_username: getDispoUsername(),
+                dispo_password: getDispoPassword()
               };
               fetch(API_BASE + '/api/dienstreise/sync_to_dispo', {
                 method: 'POST',
@@ -3123,8 +3252,12 @@
     const grundInput = document.getElementById('montageberichtGrund');
     const fabContainer = document.getElementById('montageberichtFabBemerkungen');
     const kopfdatenEl = document.getElementById('montageberichtKopfdaten');
+    const toolbarEl = document.getElementById('montageberichtToolbar');
+    const toolbarFont = document.getElementById('mbToolbarFont');
+    const toolbarSize = document.getElementById('mbToolbarSize');
 
     let montageberichtJobData = null;
+    let montageberichtActiveEditor = null;
 
     async function loadMontageberichtJobs() {
       const range = getSyncDateRange();
@@ -3136,8 +3269,26 @@
 
     async function loadJobWithAnlagenstamm(jobId) {
       const baseUrl = getDispoBaseUrl();
-      const url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + getTechId() + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl) + '&serverUsername=' + encodeURIComponent(getDispoUsername()) + '&serverPassword=' + encodeURIComponent(getDispoPassword());
-      const r = await fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } });
+      const techId = getTechId();
+      if (baseUrl) {
+        const liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+          body: JSON.stringify({
+            baseUrl: baseUrl,
+            jobId: jobId,
+            serverUsername: getDispoUsername(),
+            serverPassword: getDispoPassword()
+          })
+        });
+        const liveData = await liveResp.json().catch(function () { return {}; });
+        if (liveResp.ok && liveData && liveData.ok && liveData.job) {
+          return liveData.job;
+        }
+        throw new Error((liveData && liveData.error) || ('Live-Auftragsdaten konnten nicht geladen werden (HTTP ' + liveResp.status + ').'));
+      }
+      const url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl) + '&serverUsername=' + encodeURIComponent(getDispoUsername()) + '&serverPassword=' + encodeURIComponent(getDispoPassword());
+      const r = await fetch(url, { headers: { 'X-Technician-Id': String(techId) } });
       const data = await r.json();
       return data.job;
     }
@@ -3157,6 +3308,72 @@
       return s || e;
     }
 
+    /** Liest projekt aus einem FN-Objekt (Anlagenstamm / angereicherte JSON). */
+    function readProjektFromFabRow(r) {
+      if (r == null) return '';
+      if (typeof r === 'object') {
+        var v = r.projekt != null ? r.projekt : (r.Projekt != null ? r.Projekt : (r.project != null ? r.project : ''));
+        return String(v).replace(/\s+/g, ' ').trim();
+      }
+      return '';
+    }
+
+    /**
+     * Einheitliches Projekt aus Anlagenstamm: alle nicht-leeren projekt-Werte müssen übereinstimmen.
+     * Leere Einträge (fehlender Stamm, noch nicht gemerged) zählen nicht – reicht z. B. wenn alle befüllten FN dasselbe Projekt haben.
+     */
+    function deriveMontageberichtProjektFromAnlagenstamm(job) {
+      if (!job || !job.fabrikationsnummern) return '';
+      var parsed;
+      try {
+        parsed = JSON.parse(job.fabrikationsnummern);
+      } catch (e) {
+        return '';
+      }
+      if (!Array.isArray(parsed) || parsed.length === 0) return '';
+      var projs = [];
+      parsed.forEach(function (r) {
+        projs.push(readProjektFromFabRow(r));
+      });
+      var nonEmpty = projs.filter(function (p) {
+        return p !== '';
+      });
+      if (nonEmpty.length === 0) return '';
+      var first = nonEmpty[0];
+      for (var i = 1; i < nonEmpty.length; i++) {
+        if (nonEmpty[i] !== first) return '';
+      }
+      return first;
+    }
+
+    function resolveMontageberichtAnsprechperson(job) {
+      if (!job || typeof job !== 'object') return '';
+      if (Array.isArray(job.job_contacts)) {
+        for (var i = 0; i < job.job_contacts.length; i++) {
+          var c = job.job_contacts[i] || {};
+          var name = (
+            c.contact_name != null ? String(c.contact_name) :
+            (c.name != null ? String(c.name) :
+            (c.contactPerson != null ? String(c.contactPerson) :
+            (c.ansprechpartner != null ? String(c.ansprechpartner) : '')))
+          ).trim();
+          if (name) return name;
+        }
+      }
+      var direct = [
+        job.baustellen_ansprechpartner,
+        job.job_contact_name,
+        job.contact_person,
+        job.contact_name,
+        job.ansprechpartner
+      ];
+      for (var j = 0; j < direct.length; j++) {
+        var val = (direct[j] != null ? String(direct[j]) : '').trim();
+        if (val) return val;
+      }
+      return '';
+    }
+
     function renderKopfdaten(job) {
       var techName = '';
       try {
@@ -3165,10 +3382,9 @@
       } catch (e) {}
       var k = {
         kunde: job.customer_name || '',
-        projekt: job.job_number || job.description || '',
         datum: formatDateRange(job.start_datetime, job.end_datetime),
         servicetechniker: techName,
-        ansprechperson: job.contact_person || ''
+        ansprechperson: resolveMontageberichtAnsprechperson(job)
       };
       var fabList = [];
       var parsed = null;
@@ -3203,10 +3419,11 @@
         return { fabrikationsnummer: fn, type: type, position: position, geliefert_ueber: gu, bemerkungen: '' };
       });
       k.geliefertUeber = geliefertUeber || (k.fabrikationsnummern[0] && k.fabrikationsnummern[0].geliefert_ueber) || '';
+      var auftragsnr = (job.job_number != null && String(job.job_number).trim()) ? String(job.job_number).trim() : '';
       kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(k.kunde) + '</div>' +
+        (auftragsnr ? '<div class="kopfdaten-secondary"><strong>Auftragsnr.:</strong> ' + escapeHtml(auftragsnr) + '</div>' : '') +
         '<div class="kopfdaten-fn"><strong>FN.:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
         '<div class="kopfdaten-secondary">' + escapeHtml(k.geliefertUeber) + '</div>' +
-        '<div class="kopfdaten-secondary"><strong>Projekt:</strong> ' + escapeHtml(k.projekt) + '</div>' +
         '<div><strong>Datum:</strong> ' + escapeHtml(k.datum) + '</div>' +
         '<div><strong>Servicetechniker:</strong> ' + escapeHtml(k.servicetechniker) + '</div>' +
         '<div><strong>Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson) + '</div>';
@@ -3220,8 +3437,21 @@
         if (fn === 'undefined') fn = '';
         var t = (f && (f.type ?? f.Type)) != null ? String(f.type ?? f.Type).trim() : '';
         var p = (f && (f.position ?? f.Position)) != null ? String(f.position ?? f.Position).trim() : '';
-        html += '<div class="form-group" style="margin-bottom:0.5rem"><label>Fabrikationsnummer ' + escapeHtml(fn || '-') + '</label>' +
-          '<textarea data-fab="' + escapeHtml(fn) + '" data-type="' + escapeHtml(t) + '" data-position="' + escapeHtml(p) + '" placeholder="Textbaustein hierher ziehen" rows="2" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text);resize:vertical"></textarea></div>';
+        var rowInpStyle = 'flex:1 1 8rem;min-width:6rem;box-sizing:border-box;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.9rem';
+        var rowFlex = 'display:flex;align-items:center;gap:0.4rem;flex-wrap:nowrap;width:100%';
+        html += '<div class="montagebericht-fab-block" data-fab="' + escapeHtml(fn) + '" style="margin-bottom:1rem;border:1px solid var(--accent);border-radius:6px;overflow:hidden;background:var(--card)">';
+        html += '<table style="width:100%;border-collapse:collapse;font-size:0.9rem" class="montagebericht-fab-kopf">';
+        html += '<tr>';
+        html += '<td style="border:1px solid var(--accent);padding:0.45rem 0.55rem;vertical-align:middle;width:22%;background:var(--bg)"><strong>FN.:</strong> ' + escapeHtml(fn || '–') + '</td>';
+        html += '<td style="border:1px solid var(--accent);padding:0.45rem 0.55rem;width:39%;vertical-align:middle;background:var(--bg)"><div style="' + rowFlex + '"><strong>Type:</strong>' +
+          '<input type="text" data-mb-type="" autocomplete="off" value="' + escapeHtml(t) + '" placeholder="aus Anlagenstamm" style="' + rowInpStyle + '"></div></td>';
+        html += '<td style="border:1px solid var(--accent);padding:0.45rem 0.55rem;width:39%;vertical-align:middle;background:var(--bg)"><div style="' + rowFlex + '"><strong>Pos.Nr.:</strong>' +
+          '<input type="text" data-mb-position="" autocomplete="off" value="' + escapeHtml(p) + '" placeholder="aus Anlagenstamm" style="' + rowInpStyle + '"></div></td>';
+        html += '</tr></table>';
+        html += '<div style="padding:0.5rem 0.55rem 0.6rem">';
+        html += '<label class="muted" style="font-size:0.8rem;display:block;margin-bottom:0.25rem">Bemerkungen / Textbausteine</label>';
+        html += '<div data-fab-rich="' + escapeHtml(fn) + '" data-mb-editor="fab" class="mb-rich-editor" contenteditable="true" spellcheck="true" style="min-height:3rem" title="Textbaustein hierher ziehen"></div>';
+        html += '</div></div>';
       });
       fabContainer.innerHTML = html;
       initFabBemerkungenDropTargets();
@@ -3234,13 +3464,136 @@
       return (d.textContent || d.innerText || '').trim();
     }
 
+    function normalizeMontageberichtHtml(html) {
+      var raw = (html == null) ? '' : String(html);
+      var d = document.createElement('div');
+      d.innerHTML = raw;
+      d.querySelectorAll('script,style').forEach(function (n) { n.remove(); });
+      d.querySelectorAll('*').forEach(function (node) {
+        var tag = (node.tagName || '').toLowerCase();
+        if (['b', 'strong', 'i', 'em', 'u', 'span', 'div', 'p', 'ul', 'ol', 'li', 'br'].indexOf(tag) === -1) {
+          var txt = document.createTextNode(node.textContent || '');
+          node.parentNode.replaceChild(txt, node);
+          return;
+        }
+        var attrs = Array.prototype.slice.call(node.attributes || []);
+        attrs.forEach(function (a) {
+          if (a.name !== 'style') node.removeAttribute(a.name);
+        });
+      });
+      return d.innerHTML;
+    }
+
+    function setRichEditorHtml(el, html) {
+      if (!el) return;
+      el.innerHTML = normalizeMontageberichtHtml(html || '');
+      autoResizeFabTextarea(el);
+    }
+
+    function getRichEditorHtml(el) {
+      if (!el) return '';
+      return normalizeMontageberichtHtml(el.innerHTML || '');
+    }
+
+    function getRichEditorPlain(el) {
+      return stripHtmlForPlain(getRichEditorHtml(el));
+    }
+
     function autoResizeFabTextarea(el) {
+      if (!el) return;
       el.style.height = 'auto';
       el.style.height = Math.max(el.scrollHeight, 52) + 'px';
     }
 
+    function ensureEditorFocus(el) {
+      if (!el) return false;
+      el.focus();
+      montageberichtActiveEditor = el;
+      return true;
+    }
+
+    function insertHtmlIntoEditor(el, html) {
+      if (!ensureEditorFocus(el)) return;
+      var safeHtml = normalizeMontageberichtHtml(html);
+      try {
+        document.execCommand('insertHTML', false, safeHtml);
+      } catch (e) {
+        el.innerHTML += safeHtml;
+      }
+      autoResizeFabTextarea(el);
+    }
+
+    function extractTextbausteineFromHtml(html, plainFallback) {
+      var rawHtml = normalizeMontageberichtHtml(html || '');
+      var div = document.createElement('div');
+      div.innerHTML = rawHtml;
+      var out = [];
+      div.querySelectorAll('li').forEach(function (li) {
+        var liHtml = normalizeMontageberichtHtml(li.innerHTML || '');
+        var liPlain = stripHtmlForPlain(liHtml);
+        if (liPlain) out.push({ text: liPlain, html: liHtml });
+      });
+      if (out.length > 0) return out;
+      var plain = (plainFallback || stripHtmlForPlain(rawHtml) || '').trim();
+      if (!plain) return [];
+      return plain.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean).map(function (t) {
+        return { text: t, html: escapeHtml(t) };
+      });
+    }
+
+    function updateMontageberichtToolbarState() {
+      if (!toolbarEl || !montageberichtActiveEditor) return;
+      var sel = window.getSelection ? window.getSelection() : null;
+      if (!sel || sel.rangeCount === 0 || !montageberichtActiveEditor.contains(sel.anchorNode)) return;
+      ['bold', 'italic', 'underline', 'insertUnorderedList', 'justifyLeft', 'justifyCenter', 'justifyRight'].forEach(function (cmd) {
+        var btn = toolbarEl.querySelector('[data-mb-cmd="' + cmd + '"]');
+        if (!btn) return;
+        var active = false;
+        try { active = !!document.queryCommandState(cmd); } catch (e) { active = false; }
+        btn.classList.toggle('active', active);
+      });
+    }
+
+    function bindMontageberichtToolbar() {
+      if (!toolbarEl || toolbarEl.dataset.mbBound) return;
+      toolbarEl.dataset.mbBound = '1';
+      if (typeof document.execCommand === 'function') {
+        try { document.execCommand('styleWithCSS', false, true); } catch (e) {}
+      }
+      toolbarEl.querySelectorAll('[data-mb-cmd]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var cmd = btn.getAttribute('data-mb-cmd');
+          if (!cmd || !ensureEditorFocus(montageberichtActiveEditor)) return;
+          try { document.execCommand(cmd, false, null); } catch (e) {}
+          updateMontageberichtToolbarState();
+          autoResizeFabTextarea(montageberichtActiveEditor);
+        });
+      });
+      if (toolbarFont) {
+        toolbarFont.addEventListener('change', function () {
+          if (!ensureEditorFocus(montageberichtActiveEditor)) return;
+          try { document.execCommand('fontName', false, toolbarFont.value || 'Calibri'); } catch (e) {}
+          autoResizeFabTextarea(montageberichtActiveEditor);
+        });
+      }
+      if (toolbarSize) {
+        toolbarSize.addEventListener('change', function () {
+          if (!ensureEditorFocus(montageberichtActiveEditor)) return;
+          try { document.execCommand('fontSize', false, toolbarSize.value || '3'); } catch (e) {}
+          autoResizeFabTextarea(montageberichtActiveEditor);
+        });
+      }
+      document.addEventListener('selectionchange', updateMontageberichtToolbarState);
+      form.addEventListener('focusin', function (ev) {
+        var editor = ev.target && ev.target.closest('[data-mb-editor], [data-fab-rich]');
+        if (!editor) return;
+        montageberichtActiveEditor = editor;
+        updateMontageberichtToolbarState();
+      });
+    }
+
     function initFabBemerkungenDropTargets() {
-      fabContainer.querySelectorAll('textarea[data-fab]').forEach(function (el) {
+      fabContainer.querySelectorAll('[data-fab-rich]').forEach(function (el) {
         el.style.overflow = 'hidden';
         el.addEventListener('input', function () { autoResizeFabTextarea(el); });
         autoResizeFabTextarea(el);
@@ -3255,16 +3608,17 @@
         el.addEventListener('drop', function (e) {
           el.classList.remove('drop-target');
           e.preventDefault();
-          var text = (e.dataTransfer.getData('text/plain') || stripHtmlForPlain(e.dataTransfer.getData('text/html')) || '').trim();
-          if (text) {
-            var cur = el.value.trimEnd();
-            var bullet = '\u2022 '; // Punkt als Aufzählungszeichen
-            var line = bullet + text.replace(/\r?\n/g, ' ').trim();
-            el.value = cur ? cur + '\n' + line : line;
-            autoResizeFabTextarea(el);
+          var html = (e.dataTransfer.getData('text/html') || '').trim();
+          var text = (e.dataTransfer.getData('text/plain') || stripHtmlForPlain(html) || '').trim();
+          if (!html && text) {
+            html = '<ul><li>' + escapeHtml(text.replace(/\r?\n/g, ' ').trim()) + '</li></ul>';
+          } else if (html && html.indexOf('<li') === -1 && text) {
+            html = '<ul><li>' + escapeHtml(text.replace(/\r?\n/g, ' ').trim()) + '</li></ul>';
           }
+          if (html) insertHtmlIntoEditor(el, html);
         });
       });
+      bindMontageberichtToolbar();
     }
 
     var montageberichtTbCategories = [];
@@ -3337,13 +3691,16 @@
       if (divMontage) divMontage.style.display = 'block';
       montageberichtJobData = null;
       if (jobSelect) jobSelect.innerHTML = '<option value="">Lade…</option>';
-      if (grundInput) grundInput.value = '';
+      if (grundInput) setRichEditorHtml(grundInput, '');
       var bemerkEl = document.getElementById('montageberichtBemerkungen');
-      if (bemerkEl) bemerkEl.value = '';
+      if (bemerkEl) setRichEditorHtml(bemerkEl, '');
       var langEl = document.getElementById('montageberichtLang');
       if (langEl) langEl.value = 'de';
+      var projEl = document.getElementById('montageberichtProjekt');
+      if (projEl) projEl.value = '';
       if (kopfdatenEl) kopfdatenEl.innerHTML = '';
       if (fabContainer) fabContainer.innerHTML = '';
+      bindMontageberichtToolbar();
       loadMontageberichtJobs().then(function (jobs) {
         if (jobSelect) {
           jobSelect.innerHTML = '<option value="">-- Auftrag wählen --</option>' +
@@ -3360,36 +3717,46 @@
         var id = parseInt(this.value, 10);
         if (!id) {
           kopfdatenEl.innerHTML = ''; fabContainer.innerHTML = ''; montageberichtJobData = null;
-          if (grundInput) grundInput.value = '';
-          var bemerkEl = document.getElementById('montageberichtBemerkungen'); if (bemerkEl) bemerkEl.value = '';
+          if (grundInput) setRichEditorHtml(grundInput, '');
+          var bemerkEl = document.getElementById('montageberichtBemerkungen'); if (bemerkEl) setRichEditorHtml(bemerkEl, '');
           var langEl = document.getElementById('montageberichtLang'); if (langEl) langEl.value = 'de';
+          var projElClear = document.getElementById('montageberichtProjekt'); if (projElClear) projElClear.value = '';
           return;
         }
         try {
           montageberichtJobData = await loadJobWithAnlagenstamm(id);
           var k = renderKopfdaten(montageberichtJobData);
           renderFabBemerkungen(k.fabrikationsnummern || []);
+          var projEl = document.getElementById('montageberichtProjekt');
+          if (projEl) projEl.value = deriveMontageberichtProjektFromAnlagenstamm(montageberichtJobData);
           try {
             var loadR = await fetch(API_BASE + '/api/protokolle/montagebericht?job_id=' + id, { headers: { 'X-Technician-Id': String(getTechId()) } });
             var loadData = await loadR.json();
             if (loadData.ok && loadData.data) {
               var d = loadData.data;
-              if (grundInput && d.grundDesEinsatzes) grundInput.value = d.grundDesEinsatzes;
-              var bemerkEl = document.getElementById('montageberichtBemerkungen'); if (bemerkEl) bemerkEl.value = (d.bemerkungen != null && d.bemerkungen !== '') ? d.bemerkungen : '';
+              if (grundInput) setRichEditorHtml(grundInput, d.grundDesEinsatzes_html || d.grundDesEinsatzes || '');
+              var bemerkEl = document.getElementById('montageberichtBemerkungen');
+              if (bemerkEl) setRichEditorHtml(bemerkEl, d.bemerkungen_html || ((d.bemerkungen != null && d.bemerkungen !== '') ? d.bemerkungen : ''));
               var langEl = document.getElementById('montageberichtLang'); if (langEl && d.language) langEl.value = d.language;
+              if (projEl && d.projekt != null && String(d.projekt).trim()) projEl.value = String(d.projekt).trim();
               if (Array.isArray(d.fabBemerkungen) && d.fabBemerkungen.length) {
-                fabContainer.querySelectorAll('textarea[data-fab], input[data-fab]').forEach(function (el) {
-                  var fab = el.dataset.fab || '';
+                fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
+                  var fab = (block.getAttribute('data-fab') || '').trim();
                   var fb = d.fabBemerkungen.find(function (x) { return (x.fabrikationsnummer || '') === fab; });
-                  var val = '';
-                  if (fb) {
-                    val = fb.bemerkungen || '';
-                    if (!val && Array.isArray(fb.textbausteine) && fb.textbausteine.length) {
-                      val = fb.textbausteine.map(function (t) { return (t && t.text) || ''; }).filter(Boolean).join('\n');
+                  if (!fb) return;
+                  var ti = block.querySelector('input[data-mb-type]');
+                  var pi = block.querySelector('input[data-mb-position]');
+                  if (ti && fb.type != null) ti.value = String(fb.type);
+                  if (pi && fb.position != null) pi.value = String(fb.position);
+                  var ta = block.querySelector('[data-fab-rich]');
+                  if (ta) {
+                    var valHtml = fb.bemerkungen_html || '';
+                    if (!valHtml && fb.bemerkungen) valHtml = '<p>' + escapeHtml(String(fb.bemerkungen)).replace(/\r?\n/g, '<br>') + '</p>';
+                    if (!valHtml && Array.isArray(fb.textbausteine) && fb.textbausteine.length) {
+                      valHtml = '<ul>' + fb.textbausteine.map(function (t) { return '<li>' + escapeHtml((t && t.text) || '') + '</li>'; }).join('') + '</ul>';
                     }
+                    setRichEditorHtml(ta, valHtml);
                   }
-                  if (val) el.value = val;
-                  if (el.tagName === 'TEXTAREA') autoResizeFabTextarea(el);
                 });
               }
             }
@@ -3402,18 +3769,30 @@
     if (form) {
       form.addEventListener('submit', async function (e) {
         e.preventDefault();
+        var submitBtn = e.submitter;
+        var jsonOnly = !!(submitBtn && submitBtn.id === 'btnMontageberichtSaveJson');
+        if (!submitBtn || (submitBtn.id !== 'btnMontageberichtSaveJson' && submitBtn.id !== 'btnMontageberichtSavePdf')) {
+          return;
+        }
         if (!montageberichtJobData) { alert('Bitte Auftrag wählen.'); return; }
         var fabBemerkungen = [];
-        fabContainer.querySelectorAll('textarea[data-fab], input[data-fab]').forEach(function (inp) {
-          var fn = (inp.dataset.fab ?? '').toString().trim();
-        if (fn === 'undefined') fn = '';
-        var bemerkungen = (inp.value ?? '').trim();
-        var textbausteine = bemerkungen.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean).map(function (t) { return { text: t }; });
-        fabBemerkungen.push({
+        fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
+          var fn = (block.getAttribute('data-fab') || '').trim();
+          if (fn === 'undefined') fn = '';
+          var typeInp = block.querySelector('input[data-mb-type]');
+          var posInp = block.querySelector('input[data-mb-position]');
+          var ta = block.querySelector('[data-fab-rich]');
+          var t = typeInp ? (typeInp.value || '').trim() : '';
+          var pos = posInp ? (posInp.value || '').trim() : '';
+          var bemerkungen = ta ? getRichEditorPlain(ta) : '';
+          var bemerkungenHtml = ta ? getRichEditorHtml(ta) : '';
+          var textbausteine = extractTextbausteineFromHtml(bemerkungenHtml, bemerkungen);
+          fabBemerkungen.push({
             fabrikationsnummer: fn,
-            type: (inp.dataset.type ?? '').toString().trim(),
-            position: (inp.dataset.position ?? '').toString().trim(),
+            type: t,
+            position: pos,
             bemerkungen: bemerkungen,
+            bemerkungen_html: bemerkungenHtml,
             textbausteine: textbausteine
           });
         });
@@ -3431,31 +3810,58 @@
             geliefert_ueber: (r.geliefert_ueber || r.geliefertUeber || '').toString().trim()
           };
         });
+        fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
+          var fn = (block.getAttribute('data-fab') || '').trim();
+          var typeInp = block.querySelector('input[data-mb-type]');
+          var posInp = block.querySelector('input[data-mb-position]');
+          var t = typeInp ? (typeInp.value || '').trim() : '';
+          var pos = posInp ? (posInp.value || '').trim() : '';
+          for (var i = 0; i < fabWithDetails.length; i++) {
+            if (fabWithDetails[i].fabrikationsnummer === fn) {
+              fabWithDetails[i].type = t;
+              fabWithDetails[i].position = pos;
+              break;
+            }
+          }
+        });
         var geliefertUeberVal = (fabWithDetails[0] && fabWithDetails[0].geliefert_ueber) || '';
-        var bemerkungenVal = (document.getElementById('montageberichtBemerkungen') && document.getElementById('montageberichtBemerkungen').value) ? document.getElementById('montageberichtBemerkungen').value.trim() : '';
+        var bemerkungenEl = document.getElementById('montageberichtBemerkungen');
+        var bemerkungenVal = bemerkungenEl ? getRichEditorPlain(bemerkungenEl) : '';
+        var bemerkungenValHtml = bemerkungenEl ? getRichEditorHtml(bemerkungenEl) : '';
+        var grundVal = grundInput ? getRichEditorPlain(grundInput) : '';
+        var grundValHtml = grundInput ? getRichEditorHtml(grundInput) : '';
+        var projektVal = (document.getElementById('montageberichtProjekt') && document.getElementById('montageberichtProjekt').value) ? document.getElementById('montageberichtProjekt').value.trim() : '';
+        if (!projektVal) {
+          alert('Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm oder manuell).');
+          return;
+        }
         var kopfdaten = {
           kunde: montageberichtJobData.customer_name,
-          projekt: montageberichtJobData.job_number || montageberichtJobData.description,
+          projekt: projektVal,
           datum: formatDateRange(montageberichtJobData.start_datetime, montageberichtJobData.end_datetime),
           servicetechniker: (document.getElementById('technicianName') || {}).textContent || '',
-          ansprechperson: montageberichtJobData.contact_person || '',
+          ansprechperson: resolveMontageberichtAnsprechperson(montageberichtJobData),
           geliefertUeber: geliefertUeberVal,
           fabrikationsnummern: fabWithDetails,
-          bemerkungen: bemerkungenVal
+          bemerkungen: bemerkungenVal,
+          bemerkungen_html: bemerkungenValHtml
         };
         var body = {
           job_id: parseInt(jobSelect.value, 10),
           language: document.getElementById('montageberichtLang').value || 'de',
           kopfdaten: kopfdaten,
           fabBemerkungen: fabBemerkungen,
-          grundDesEinsatzes: (grundInput && grundInput.value ? grundInput.value : '').trim(),
+          grundDesEinsatzes: grundVal,
+          grundDesEinsatzes_html: grundValHtml,
           freitext: '',
+          jsonOnly: jsonOnly,
           dispoBaseUrl: getDispoBaseUrl(),
           technicianId: getTechId(),
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
         };
         try {
+          if (submitBtn) submitBtn.disabled = true;
           var r = await fetch(API_BASE + '/api/protokolle/montagebericht', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -3466,11 +3872,18 @@
             alert('Fehler: ' + (data.error || r.status));
             return;
           }
-          if (data.warning) alert(data.warning);
-          else if (typeof showToast === 'function') showToast('Montagebericht gespeichert.');
-          if (typeof showView === 'function') showView('start');
+          if (data.warning) {
+            console.warn('[Montagebericht] Warnung vom Server:', data.warning);
+          }
+          if (typeof showToast === 'function') {
+            if (data.jsonOnly) showToast('Zwischenstand gespeichert (nur Daten, kein PDF/DOCX).');
+            else showToast('Montagebericht gespeichert (inkl. PDF & DOCX).');
+          }
+          if (!data.jsonOnly && typeof showView === 'function') showView('start');
         } catch (err) {
           alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+        } finally {
+          if (submitBtn) submitBtn.disabled = false;
         }
       });
     }

@@ -251,6 +251,9 @@
     .modal-leistung-row-clickable:hover { background: rgba(255,255,255,0.06); }
     .modal-leistung-cell-clickable { cursor: pointer; }
     .modal-leistung-cell-clickable:hover { background: rgba(255,255,255,0.06); }
+    .modal-leistung-cell-readonly { cursor: default; }
+    .projektdaten-readonly-banner { margin-bottom: 1rem; padding: 0.65rem 1rem; border-radius: 6px; border: 1px solid #3d5a80; background: rgba(61, 90, 128, 0.35); font-size: 0.9rem; }
+    .hotel-address-readonly { cursor: default; }
     .modal-leistung-table-compact th, .modal-leistung-table-compact td { padding: 3px 6px; font-size: 0.85rem; }
     .modal-leistung-table-compact { width: auto; max-width: 100%; }
     .modal-leistung-cards { display: grid; grid-template-columns: auto auto; gap: 1rem; margin-top: 0.75rem; justify-content: start; }
@@ -283,10 +286,19 @@
     .montagebericht-tb-chip:hover { background: var(--accent); }
     .montagebericht-tb-chip:active { cursor: grabbing; }
     .montagebericht-tb-chip.dragging { opacity: 0.6; }
-    .montagebericht-fab-felder input[data-fab], .montagebericht-fab-felder textarea[data-fab] { min-height: 2.5rem; }
-    .montagebericht-fab-felder input[data-fab].drop-target, .montagebericht-fab-felder textarea[data-fab].drop-target { outline: 2px solid #4a90e2; outline-offset: 2px; }
+    .montagebericht-fab-felder input[data-fab], .montagebericht-fab-felder [data-fab-rich] { min-height: 2.5rem; }
+    .montagebericht-fab-felder input[data-fab].drop-target, .montagebericht-fab-felder [data-fab-rich].drop-target { outline: 2px solid #4a90e2; outline-offset: 2px; }
     .montagebericht-kopfdaten .kopfdaten-fn { font-size: 1.25rem; font-weight: 600; color: var(--text); margin-bottom: 0.35rem; }
     .montagebericht-kopfdaten .kopfdaten-secondary { font-size: 0.9rem; color: var(--muted); }
+    .montagebericht-toolbar { display:flex; flex-wrap:wrap; gap:0.45rem; align-items:center; margin-bottom:0.6rem; padding:0.55rem; border:1px solid var(--accent); border-radius:6px; background:var(--bg); }
+    .montagebericht-toolbar .toolbar-group { display:inline-flex; gap:0.35rem; align-items:center; }
+    .montagebericht-toolbar select { padding:0.32rem 0.45rem; border:1px solid var(--accent); border-radius:4px; background:var(--card); color:var(--text); }
+    .montagebericht-toolbar .btn { padding:0.28rem 0.55rem; font-size:0.82rem; min-width:2rem; }
+    .montagebericht-toolbar .btn.active { background:var(--accent); }
+    .mb-rich-editor { width:100%; min-height:3.2rem; padding:0.5rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); resize:vertical; overflow:auto; }
+    .mb-rich-editor[contenteditable="true"]:focus { outline:2px solid #4a90e2; outline-offset:1px; }
+    .mb-rich-editor p { margin:0; }
+    .mb-rich-editor ul, .mb-rich-editor ol { margin:0.1rem 0 0.1rem 1.2rem; padding:0; }
     .textbausteine-sidebar { display: flex; flex-direction: column; gap: 0.5rem; }
     .textbausteine-category { padding: 0.5rem 0.75rem; border-radius: 6px; cursor: pointer; border: 1px solid var(--accent); background: var(--card); }
     .textbausteine-category:hover { background: var(--accent); }
@@ -499,18 +511,53 @@
           </div>
           <div id="montageberichtKopfdaten" class="montagebericht-kopfdaten" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border-radius:4px;font-size:0.9rem"></div>
           <div class="form-group" style="margin-bottom:0.75rem">
+            <label for="montageberichtProjekt">Projekt <span class="muted" style="font-weight:normal">(Anlagenstamm, Pflichtfeld)</span></label>
+            <input type="text" id="montageberichtProjekt" required placeholder="Wird aus Anlagenstamm übernommen, wenn alle FN gleich; sonst manuell ausfüllen" autocomplete="off" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)">
+            <p class="muted" style="font-size:0.8rem;margin:0.35rem 0 0">Beim Speichern wird dieser Wert für alle Fabrikationsnummern des Auftrags in der Dispo im Anlagenstamm gesetzt.</p>
+          </div>
+          <div class="montagebericht-toolbar" id="montageberichtToolbar">
+            <div class="toolbar-group">
+              <select id="mbToolbarFont" title="Schriftart">
+                <option value="Calibri">Calibri</option>
+                <option value="Arial">Arial</option>
+                <option value="Times New Roman">Times New Roman</option>
+                <option value="Verdana">Verdana</option>
+              </select>
+              <select id="mbToolbarSize" title="Schriftgröße">
+                <option value="2">10</option>
+                <option value="3" selected>12</option>
+                <option value="4">14</option>
+                <option value="5">18</option>
+              </select>
+            </div>
+            <div class="toolbar-group">
+              <button type="button" class="btn btn-ghost" data-mb-cmd="bold" title="Fett"><strong>B</strong></button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="italic" title="Kursiv"><em>I</em></button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="underline" title="Unterstrichen"><u>U</u></button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="insertUnorderedList" title="Aufzählung">• Liste</button>
+            </div>
+            <div class="toolbar-group">
+              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyLeft" title="Linksbündig">Links</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyCenter" title="Zentriert">Zentriert</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyRight" title="Rechtsbündig">Rechts</button>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom:0.75rem">
             <label>Grund des Einsatzes</label>
-            <input type="text" id="montageberichtGrund" placeholder="Grund des Einsatzes eingeben" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <div id="montageberichtGrund" class="mb-rich-editor" data-mb-editor="grund" contenteditable="true" spellcheck="true"></div>
           </div>
           <div class="form-group" style="margin-bottom:0.75rem">
             <label>Bemerkungen</label>
-            <textarea id="montageberichtBemerkungen" placeholder="Allgemeine Bemerkungen zum Montagebericht" rows="3" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text);resize:vertical"></textarea>
+            <div id="montageberichtBemerkungen" class="mb-rich-editor" data-mb-editor="bemerkungen" contenteditable="true" spellcheck="true"></div>
           </div>
+          <p class="muted" style="font-size:0.8rem;margin:0 0 0.4rem">Pro Fabrikationsnummer: Kopfzeile wie im Bericht (<strong>FN.</strong>, <strong>Type</strong>, <strong>Pos.Nr.</strong>) – Werte aus dem Anlagenstamm, änderbar; beim Speichern werden Type und Pos.Nr. in der Dispo im Anlagenstamm aktualisiert.</p>
           <div id="montageberichtFabBemerkungen" class="montagebericht-fab-felder" style="margin-bottom:1rem"></div>
-          <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-            <button type="submit" class="btn btn-primary">Speichern</button>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+            <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Speichert montagebericht.json und synchronisiert das Projekt – ohne PDF/DOCX">Speichern (nur Daten)</button>
+            <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Wie „nur Daten“ plus PDF und Word-Dokument in Dokumente_Anlage">PDF &amp; DOCX erstellen</button>
             <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
           </div>
+          <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0">„Nur Daten“ legt nur die JSON-Datei an bzw. aktualisiert sie. „PDF &amp; DOCX“ speichert dieselben Daten und erzeugt zusätzlich die Berichtsdateien (Word/PDF).</p>
         </form>
         </div>
       </div>

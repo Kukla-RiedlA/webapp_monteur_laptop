@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.031
+- **Contract-Sync:** Plattformweite API-Konvention vereinheitlicht (`snake_case`, Response-Flag `ok`) inkl. Abwesenheits- und Pairing-Schnittstellen.
+- **Abwesenheiten/Kalender:** Doppelte Anzeige beantragter Abwesenheiten entfernt (stabile Deduplizierung zwischen lokalen Requests und Server-Absences).
+- **Dokumentation/Regeln:** `docs/API_CONTRACT.md` angelegt, Contract-Rules und Rename-Log erweitert.
+
 ## V 1.030
 - **Release:** Vollständiges Plattform-Release. Dispo V 1.031: Outlook-Import Urlaub/KM als Abwesenheit.
 

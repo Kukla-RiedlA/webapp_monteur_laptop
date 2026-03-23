@@ -1,0 +1,19 @@
+---
+description: Plattformweite API-Contract-Synchronisation zwischen Dispo, Laptop und Handy
+alwaysApply: true
+---
+
+# Plattform Contract Sync (Pflicht)
+
+- **Vollständige Beschreibung:** `docs/API_CONTRACT.md` (im Repo `webapp_monteur_laptop`).
+- Kanonische Feldnamen sind `snake_case` (z. B. `job_id`, `technician_id`, `customer_name`, `fabrikationsnummer`).
+- Response-Envelope ist einheitlich: `ok` (bool), optional `error`, optional `code`, optional `meta`.
+- Keine neuen CamelCase-Synonyme in produktiven Schnittstellen (`jobId`, `customerName`, `success`).
+- Bei Änderungen an API-Feldern oder Response-Keys müssen immer alle Gegenstellen im gleichen Arbeitspaket angepasst werden:
+  - `dispo` API/Repository
+  - `webapp_monteur_laptop` (Electron Server + Frontend)
+  - `webapp_handy` (mobile API + PWA)
+- Jede Contract-Änderung benötigt:
+  - aktualisierte Feld-/Endpoint-Dokumentation
+  - aktualisierte Contract-Tests oder äquivalente Validierungschecks
+  - explizites Rename-Protokoll (alt -> neu)
