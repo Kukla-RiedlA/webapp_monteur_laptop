@@ -1,0 +1,38 @@
+---
+description: Gemeinsame Protokollierung für Cursor lokal und Server (ein Git-Stand)
+alwaysApply: true
+---
+
+# Cursor: gemeinsame Quelle (lokal + Server)
+
+Ziel: **Beide Cursor-Instanzen** (Entwicklung und Server) arbeiten nach dem **gleichen dokumentierten Stand**. Dafür gibt es **eine** kanonische Datei im **Dispo-Repository**.
+
+## Kanonische Datei
+
+- Workspace-Root **dispo** (z. B. nur Server-Clone): **`docs/CURSOR_SHARED_CONTEXT.md`**
+- **Plattform-Workspace** (mehrere Roots): **`dispo/docs/CURSOR_SHARED_CONTEXT.md`**
+
+Vor Aufgaben zu **Deployment, Server, Push-Server, Pfade, PHP/Node-Versionen** diese Datei **lesen** (oder den Nutzer fragen, ob die Tabelle/Pfade noch stimmen).
+
+## Pflicht: Was dort mitprotokolliert wird
+
+Im **gleichen Arbeitspaket** wie die Änderung **`CURSOR_SHARED_CONTEXT.md` anpassen** und mit **committen + pushen**, sobald etwas davon betroffen ist:
+
+- Document Root / **Dispo-Pfad** auf dem Server, **öffentliche URL** der Dispo
+- **Push-Server:** Port, pm2-Name, Startpfad (`push-server/`), `$PUSH_SERVER_URL` / `.env`-Hinweise
+- **Neue Server-Abhängigkeiten** (PHP-Extensions, Node-Version, Composer, Cron)
+- **Deploy-Ablauf** (Skripte, Submodule, `PUSH_SERVER_SUBDIR`, Release-Pfade)
+- **Bekannte Stolpersteine** (HTTPS ↔ wss, Firewall, Rechte)
+- **„Letzte bekannte gute“** Commit-Hash/Branch-Zeile aktualisieren, wenn sinnvoll
+
+## Was nicht in die Datei gehört
+
+- **Keine Geheimnisse:** keine Passwörter, API-Keys, Inhalt von `local_config.php`, Keystore-Dateien – nur **Struktur** und **Platzhalter** („hier eintragen“).
+
+## Kurzablauf für den Agenten
+
+1. Relevant für Server/Deploy? → Kontextdatei lesen oder aktualisieren.
+2. Änderung umgesetzt? → `CURSOR_SHARED_CONTEXT.md` ergänzen, falls oben genanntes betroffen.
+3. Git: **mit dem fachlichen Commit zusammen** pushen, damit die andere Instanz per `git pull` den gleichen Stand hat.
+
+Verweis im Plattform-Repo: `docs/CURSOR_GEMEINSAME_QUELLE.md`.

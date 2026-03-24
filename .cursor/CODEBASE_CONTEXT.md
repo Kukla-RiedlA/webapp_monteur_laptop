@@ -2,6 +2,8 @@
 
 Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusammenhänge des Projekts. **Bei neuem Chat oder neuem Einstieg:** diese Datei zuerst lesen (oder dem Agent mitgeben: „Lies .cursor/CODEBASE_CONTEXT.md“).
 
+**Gemeinsame Quelle für Cursor lokal + Server** (Pfade, Push-Server, Server-Checks – im Dispo-Repo versioniert): Workspace `dispo/docs/CURSOR_SHARED_CONTEXT.md`.
+
 ---
 
 ## 1. Was ist dieses Projekt?
