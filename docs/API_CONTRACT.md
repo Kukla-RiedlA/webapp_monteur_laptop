@@ -56,6 +56,16 @@ Erfolg / Fehler einheitlich über **`ok`** (boolean):
 
 Details und Dateilisten: `CONTRACT_RENAME_LOG.md`.
 
+### 5.1 Dispo-Web Admin (nur eingeloggte Dispo-Session, `perm_admin`)
+
+Nur für die **interne** PHP/JS-Oberfläche; keine Monteur-Apps. Antworten nutzen **`ok`** (boolean) wie in Abschnitt 3.
+
+| Endpunkt | Methode | Kurzbeschreibung |
+|----------|---------|------------------|
+| `dispo/api/admin/releases_status.php` | GET | Release-Bäume (test/prod/default), optional `activate_available` |
+| `dispo/api/admin/release_activate.php` | POST JSON | `environment`, `release_id`, `csrf_token` — aktiviert Release (Wrapper) |
+| `dispo/api/admin/migrations_status.php` | GET | Stand `database/migrations` vs. Tabelle `schema_migrations` (nur lesen) |
+
 ---
 
 ## 6. Arbeitspaket bei Contract-Änderungen
