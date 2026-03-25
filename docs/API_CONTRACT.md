@@ -65,6 +65,7 @@ Nur für die **interne** PHP/JS-Oberfläche; keine Monteur-Apps. Antworten nutze
 | `dispo/api/admin/releases_status.php` | GET | Release-Bäume (test/prod/default), optional `activate_available` |
 | `dispo/api/admin/release_activate.php` | POST JSON | `environment`, `release_id`, `csrf_token` — aktiviert Release (Wrapper) |
 | `dispo/api/admin/migrations_status.php` | GET | Stand `database/migrations` vs. Tabelle `schema_migrations` (nur lesen) |
+| `dispo/api/admin/migrations_approval.php` | POST JSON | `action` (`request`/`approve`/`clear`), `reason`, `csrf_token` — Freigabe-Workflow für Prod-Migration |
 
 ---
 
