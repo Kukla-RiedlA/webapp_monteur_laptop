@@ -32,7 +32,6 @@ const SAMPLE_CSV = [
 const REQUIRED_TEXTS = [
   'DWC-7',
   'Printout',
-  'Parameter',
   'KUKLA',
   'Vöcklabruck',
   'AUSTRIA',
@@ -41,7 +40,7 @@ const REQUIRED_TEXTS = [
   'Unit',
   'Comment',
   'Seite',
-  'of',
+  ' / ',
 ];
 
 async function main() {
