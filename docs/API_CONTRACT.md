@@ -62,8 +62,9 @@ Nur für die **interne** PHP/JS-Oberfläche; keine Monteur-Apps. Antworten nutze
 
 | Endpunkt | Methode | Kurzbeschreibung |
 |----------|---------|------------------|
-| `dispo/api/admin/releases_status.php` | GET | Release-Bäume (test/prod/default), optional `activate_available` |
-| `dispo/api/admin/release_activate.php` | POST JSON | `environment`, `release_id`, `csrf_token` — aktiviert Release (Wrapper) |
+| `dispo/api/admin/releases_status.php` | GET | Release-Bäume (test/prod/default), `activate_method` (`wrapper` \| `direct`) |
+| `dispo/api/admin/release_activate.php` | POST JSON | `environment`, `release_id`, `csrf_token` — `current` per Wrapper (falls gesetzt) oder Symlink wie `activate-release.sh` |
+| `dispo/api/admin/git_pull_migrate.php` | POST JSON | `environment`, `csrf_token` (Scope `system_deploy_git_pull_migrate`) — im aktiven Release `git pull --ff-only`, danach `database/run_migrations.php` ohne Prod-Gate |
 | `dispo/api/admin/migrations_status.php` | GET | Stand `database/migrations` vs. Tabelle `schema_migrations` (nur lesen) |
 | `dispo/api/admin/migrations_approval.php` | POST JSON | `action` (`request`/`approve`/`clear`), `reason`, `csrf_token` — Freigabe-Workflow für Prod-Migration |
 | `dispo/api/admin/migrations_run_prod.php` | POST JSON | `csrf_token` — führt Prod-Migrationen aus (nur wenn CLI-Gate ok) |
