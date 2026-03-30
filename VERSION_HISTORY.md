@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.032
+- **Release:** Build hochgezählt (Commit, Tag, Push).
+
 ## V 1.031
 - **Contract-Sync:** Plattformweite API-Konvention vereinheitlicht (`snake_case`, Response-Flag `ok`) inkl. Abwesenheits- und Pairing-Schnittstellen.
 - **Abwesenheiten/Kalender:** Doppelte Anzeige beantragter Abwesenheiten entfernt (stabile Deduplizierung zwischen lokalen Requests und Server-Absences).
