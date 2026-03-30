@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.034
+- **Plattform-Release:** Build mit Dispo V 1.041 (Deploy-Admin, DB-Migration) und Handy-PWA V 0.010.
+
 ## V 1.033
 - **Plattform-Release:** Build hochgezählt im Zuge des gemeinsamen Releases mit Dispo V 1.040 und Handy-PWA.
 
