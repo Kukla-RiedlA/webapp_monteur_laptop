@@ -96,6 +96,20 @@
     return p.toString();
   }
 
+  /** HTTP Basic an den lokalen Electron-Server (127.0.0.1) – Passwort nicht in der URL. */
+  function dispoBasicAuthHeaders(getUserFn, getPassFn) {
+    var u = (getUserFn && typeof getUserFn === 'function' ? getUserFn() : '') || '';
+    u = String(u).trim();
+    var p = getPassFn && typeof getPassFn === 'function' ? getPassFn() : '';
+    p = p != null ? String(p) : '';
+    if (!u) return {};
+    try {
+      return { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(u + ':' + p))) };
+    } catch (e) {
+      return { Authorization: 'Basic ' + btoa(u + ':' + p) };
+    }
+  }
+
   async function api(path, opts = {}) {
     const techId = getTechId();
     const url = API_BASE + path + (path.includes('?') ? '&' : '?') + (techId ? 'technician_id=' + techId : '');
@@ -280,13 +294,11 @@
     function loadLocal() {
       var base = getDispoBaseUrl();
       var url = API_BASE + '/api/job?id=' + encodeURIComponent(jobId);
+      var jobHeaders = Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword));
       if (base) {
         url += '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(base);
-        var u = getDispoUsername(), p = getDispoPassword();
-        if (u) url += '&serverUsername=' + encodeURIComponent(u);
-        if (p) url += '&serverPassword=' + encodeURIComponent(p);
       }
-      fetch(url, { headers: { 'X-Technician-Id': String(techId) } })
+      fetch(url, { headers: jobHeaders })
         .then(function (r) { return r.json(); })
         .then(function (data) {
           if (data.job) { showJob(data.job); return; }
@@ -1125,8 +1137,9 @@
       return;
     }
     try {
-      const params = { base_url: baseUrl, serverUsername: getServerUsername(), serverPassword: getServerPassword() };
-      const r = await fetch(API_BASE + '/api/jobs_open?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } });
+      const r = await fetch(API_BASE + '/api/jobs_open?' + qs({ base_url: baseUrl }), {
+        headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getServerUsername, getServerPassword))
+      });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         if (list) list.innerHTML = '<span class="empty">' + escapeHtml((data && data.error) ? data.error : 'Fehler beim Laden.') + '</span>';
@@ -3325,8 +3338,10 @@
         }
         throw new Error((liveData && liveData.error) || ('Live-Auftragsdaten konnten nicht geladen werden (HTTP ' + liveResp.status + ').'));
       }
-      const url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl) + '&serverUsername=' + encodeURIComponent(getDispoUsername()) + '&serverPassword=' + encodeURIComponent(getDispoPassword());
-      const r = await fetch(url, { headers: { 'X-Technician-Id': String(techId) } });
+      const url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl);
+      const r = await fetch(url, {
+        headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword))
+      });
       const data = await r.json();
       return data.job;
     }
@@ -4106,8 +4121,10 @@
 
     async function loadJobWithAnlagenstammKw(jobId) {
       var baseUrl = getDispoBaseUrl();
-      var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + getTechId() + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl) + '&serverUsername=' + encodeURIComponent(getDispoUsername()) + '&serverPassword=' + encodeURIComponent(getDispoPassword());
-      var r = await fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } });
+      var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + getTechId() + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl);
+      var r = await fetch(url, {
+        headers: Object.assign({ 'X-Technician-Id': String(getTechId()) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword))
+      });
       var data = await r.json();
       return data.job;
     }

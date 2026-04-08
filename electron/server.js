@@ -1442,7 +1442,7 @@ function createApp(db) {
     if (!baseUrl || !technicianId) {
       return res.status(400).json({ error: 'base_url und technician_id erforderlich.' });
     }
-    const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
+    const auth = authHeaderFromIncomingBasicOrQuery(req);
     const url = `${baseUrl}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(technicianId)}`;
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
@@ -1499,7 +1499,7 @@ function createApp(db) {
     const baseUrl = (req.query.base_url || '').toString().trim();
     const enrich = req.query.enrich_anlagenstamm === '1' || req.query.enrich_anlagenstamm === 'true';
     if (enrich && baseUrl) {
-      const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
+      const auth = authHeaderFromIncomingBasicOrQuery(req);
       job = await enrichJobFabWithAnlagenstamm(job, baseUrl, auth);
     }
     res.json({ ok: true, job });
@@ -2822,6 +2822,25 @@ function createApp(db) {
     if (!u) return undefined;
     const p = (password || '').toString();
     return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
+  }
+
+  /** Basic vom Browser an 127.0.0.1 (kein Passwort in der Query); Fallback Query für Alt-Clients. */
+  function authHeaderFromIncomingBasicOrQuery(req) {
+    const raw = req.headers && req.headers.authorization;
+    if (raw && /^\s*Basic\s+/i.test(String(raw))) {
+      try {
+        const b64 = String(raw).replace(/^\s*Basic\s+/i, '').trim();
+        const decoded = Buffer.from(b64, 'base64').toString('utf8');
+        const colon = decoded.indexOf(':');
+        const u = colon >= 0 ? decoded.slice(0, colon) : decoded;
+        const p = colon >= 0 ? decoded.slice(colon + 1) : '';
+        return authHeaderFromCredentials(u, p);
+      } catch (_) {
+        /* Query-Fallback */
+      }
+    }
+    const q = req.query || {};
+    return authHeaderFromCredentials(q.serverUsername || q.server_username, q.serverPassword ?? q.server_password);
   }
 
   async function enrichJobFabWithAnlagenstamm(job, baseUrl, authHeader) {

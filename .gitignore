@@ -2,5 +2,6 @@
 node_modules/
 electron/node_modules/
 electron/db/*.db
+electron/db/.dispo-insecure-tls
 electron/dist/
 electron/test-output/
