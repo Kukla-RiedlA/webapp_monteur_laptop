@@ -1142,7 +1142,10 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        if (list) list.innerHTML = '<span class="empty">' + escapeHtml((data && data.error) ? data.error : 'Fehler beim Laden.') + '</span>';
+        var errLine = (data && data.error) ? data.error : 'Fehler beim Laden.';
+        if (data && data.hint) errLine += ' — ' + data.hint;
+        if (data && data.detail && !data.hint) errLine += ' (' + String(data.detail).slice(0, 200) + ')';
+        if (list) list.innerHTML = '<span class="empty">' + escapeHtml(errLine) + '</span>';
         return;
       }
       renderJobs(Array.isArray(data) ? data : []);

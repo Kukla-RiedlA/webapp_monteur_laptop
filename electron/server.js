@@ -1446,14 +1446,41 @@ function createApp(db) {
     const url = `${baseUrl}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(technicianId)}`;
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        return res.status(r.status).json(data && data.error ? data : { error: r.statusText || 'Dispo-Fehler' });
+      const text = await r.text();
+      let data = null;
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch (_) {
+          data = null;
+        }
       }
-      res.json(Array.isArray(data) ? data : []);
+      if (!r.ok) {
+        const apiErr = data && typeof data.error === 'string' && data.error.trim() ? data.error.trim() : null;
+        const snippet = (text || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+        return res.status(r.status).json({
+          error: apiErr || snippet || r.statusText || 'Dispo-Fehler',
+        });
+      }
+      if (!Array.isArray(data)) {
+        return res.status(502).json({
+          error: 'Unerwartete Antwort von jobs_open (kein JSON-Array).',
+          detail: (text || '').slice(0, 400),
+        });
+      }
+      res.json(data);
     } catch (e) {
-      console.error('[jobs_open]', e.message);
-      res.status(500).json({ error: e.message || 'Fehler beim Laden der offenen Aufträge.' });
+      const msg = e.message || String(e);
+      console.error('[jobs_open]', msg);
+      let hint = '';
+      if (/CERT|TLS|SSL|self-signed|self signed|unable to verify|UNABLE_TO_VERIFY|wrong version number|EPROTO/i.test(msg)) {
+        hint =
+          'Bei HTTPS mit selbstsigniertem Zertifikat: Einstellungen → „Selbstsigniertes HTTPS-Zertifikat akzeptieren“ aktivieren, speichern, App neu starten.';
+      }
+      res.status(502).json({
+        error: 'Dispo nicht erreichbar: ' + msg,
+        hint,
+      });
     }
   });
 
