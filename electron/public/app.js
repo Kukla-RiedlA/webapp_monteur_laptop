@@ -1234,7 +1234,7 @@
       return;
     }
     try {
-      const check = await fetch(API_BASE + '/api/check_connection', {
+      const resCheck = await fetch(API_BASE + '/api/check_connection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1243,8 +1243,9 @@
           serverUsername: getServerUsername(),
           serverPassword: getServerPassword()
         })
-      }).then((r) => r.json());
-      if (check.ok) {
+      });
+      const check = await resCheck.json().catch(function () { return {}; });
+      if (check && check.ok === true) {
         const range = getSyncDateRange();
         const auth = { baseUrl: base, technicianId: techId, serverUsername: getServerUsername(), serverPassword: getServerPassword() };
         var syncProblems = [];
@@ -1292,7 +1293,11 @@
           }
         }
       } else {
-        setConnectionBadge('offline', check.error || 'Verbindung fehlgeschlagen');
+        var offMsg = (check && check.error) ? check.error : 'Verbindung fehlgeschlagen';
+        if (!resCheck.ok && (!check || !check.error)) {
+          offMsg = 'Lokaler Server (check_connection): HTTP ' + resCheck.status;
+        }
+        setConnectionBadge('offline', offMsg);
       }
     } catch (e) {
       setConnectionBadge('offline', e && e.message ? e.message : 'Verbindung fehlgeschlagen');

@@ -2958,16 +2958,18 @@ function createApp(db) {
   app.post('/api/check_connection', express.json(), async (req, res) => {
     const { baseUrl, technicianId, serverUsername, serverPassword } = req.body || {};
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
-    const techId = technicianId != null ? technicianId : 1;
+    let techId = technicianId != null ? Number(technicianId) : 1;
+    if (!Number.isFinite(techId) || techId <= 0) techId = 1;
     if (!base) {
       return res.json({ ok: false, error: 'Server-URL fehlt.' });
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    const url = `${base}/api/my_jobs.php?technician_id=${techId}`;
-    try {
-      const r = await fetch(url, auth ? { headers: auth } : {});
-      if (r.ok) return res.json({ ok: true });
-      let msg = 'Server antwortet mit ' + r.status;
+    const opts = auth ? { headers: auth } : {};
+    const urlMyJobs = `${base}/api/my_jobs.php?technician_id=${encodeURIComponent(techId)}`;
+    const urlJobsOpen = `${base}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(techId)}`;
+
+    async function errorTextFromResponse(r) {
+      let msg = 'HTTP ' + r.status;
       const body = await r.text();
       try {
         const data = JSON.parse(body);
@@ -2979,11 +2981,45 @@ function createApp(db) {
         if (r.status === 500 && body && body.length > 0) {
           const snippet = body.replace(/\s+/g, ' ').trim().slice(0, 200);
           if (/Fatal error|Parse error|Exception|Warning:/i.test(snippet)) {
-            msg = 'Dispo-Server-Fehler (500). In C:\\xampp_2\\apache\\logs\\error.log nachsehen. Vorschau: ' + snippet;
+            msg = 'Dispo-Server-Fehler (500). Vorschau: ' + snippet;
           }
         }
       }
-      return res.json({ ok: false, error: msg });
+      return msg;
+    }
+
+    try {
+      const rMy = await fetch(urlMyJobs, opts);
+      if (rMy.ok) return res.json({ ok: true });
+
+      const errMyJobs = await errorTextFromResponse(rMy);
+
+      const rOpen = await fetch(urlJobsOpen, opts);
+      if (rOpen.ok) {
+        const text = await rOpen.text();
+        let data = null;
+        try {
+          data = text ? JSON.parse(text) : [];
+        } catch (_) {
+          return res.json({
+            ok: false,
+            error: 'dispo_api/jobs_open: kein gültiges JSON. Zusätzlich my_jobs: ' + errMyJobs,
+          });
+        }
+        if (Array.isArray(data)) return res.json({ ok: true });
+        if (data && typeof data === 'object' && data.ok === false && data.error) {
+          return res.json({ ok: false, error: String(data.error) });
+        }
+        return res.json({
+          ok: false,
+          error: 'dispo_api/jobs_open: keine JSON-Liste. my_jobs: ' + errMyJobs,
+        });
+      }
+      const errOpen = await errorTextFromResponse(rOpen);
+      return res.json({
+        ok: false,
+        error: 'my_jobs: ' + errMyJobs + ' · dispo_api/jobs_open: ' + errOpen,
+      });
     } catch (e) {
       return res.json({ ok: false, error: 'Dispo nicht erreichbar: ' + (e.message || String(e)) });
     }
