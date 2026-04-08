@@ -43,6 +43,16 @@ function writeFileWithRetry(filePath, data, maxRetries = 3) {
 const DB_PATH = path.join(DB_DIR, 'monteur.db');
 const SCHEMA_PATH = path.join(__dirname, 'db', 'schema.sql');
 
+/** Selbstsigniertes HTTPS zum Dispo: Datei im db-Ordner oder Umgebung KUKLA_DISP_TLS_INSECURE=1 */
+const DISPO_TLS_INSECURE_FLAG = path.join(DB_DIR, '.dispo-insecure-tls');
+(function applyDispoInsecureTlsFromDisk() {
+  try {
+    if (process.env.KUKLA_DISP_TLS_INSECURE === '1' || fs.existsSync(DISPO_TLS_INSECURE_FLAG)) {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    }
+  } catch (_) {}
+})();
+
 /** Wrapper um sql.js – API wie better-sqlite3 (prepare/get/all/run, transaction). */
 function createDbWrapper(sqlDb) {
   return {
@@ -345,6 +355,32 @@ function createApp(db) {
     const basePath = (req.body && req.body.basePath != null) ? String(req.body.basePath) : '';
     setDienstreiseBasePath(basePath);
     res.json({ ok: true, basePath: getDienstreiseBasePath() });
+  });
+
+  app.get('/api/settings_dispo_tls', (req, res) => {
+    const allow = process.env.KUKLA_DISP_TLS_INSECURE === '1' || fs.existsSync(DISPO_TLS_INSECURE_FLAG);
+    res.json({ ok: true, allowInsecureTls: !!allow });
+  });
+
+  app.post('/api/settings_dispo_tls', express.json(), (req, res) => {
+    const on = !!(req.body && req.body.allowInsecureTls);
+    try {
+      if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+      if (on) {
+        fs.writeFileSync(DISPO_TLS_INSECURE_FLAG, '1');
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+      } else {
+        if (fs.existsSync(DISPO_TLS_INSECURE_FLAG)) fs.unlinkSync(DISPO_TLS_INSECURE_FLAG);
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      }
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+    res.json({
+      ok: true,
+      allowInsecureTls: on,
+      hint: on ? '' : 'Bei weiterhin funktionierender HTTPS-Verbindung: App einmal vollständig neu starten.',
+    });
   });
 
   const DIENSTREISE_SUBFOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
