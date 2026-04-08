@@ -1200,7 +1200,11 @@
     if (state === 'online') {
       badge.textContent = 'Online';
       badge.className = 'online-badge';
-      badge.setAttribute('title', 'Klicken zum sofortigen Synchronisieren');
+      if (reason && String(reason).trim()) {
+        badge.setAttribute('title', String(reason).trim());
+      } else {
+        badge.setAttribute('title', 'Klicken zum sofortigen Synchronisieren');
+      }
     } else if (state === 'local') {
       badge.textContent = 'Lokal';
       badge.className = 'local-badge';
@@ -1241,14 +1245,19 @@
         })
       }).then((r) => r.json());
       if (check.ok) {
-        setConnectionBadge('online');
         const range = getSyncDateRange();
         const auth = { baseUrl: base, technicianId: techId, serverUsername: getServerUsername(), serverPassword: getServerPassword() };
-        await fetch(API_BASE + '/api/sync_pull', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...auth, date_from: range.date_from, date_to: range.date_to })
-        }).then((r) => r.json()).then((d) => { if (!d.ok) throw new Error(d.error); });
+        var syncProblems = [];
+        try {
+          await fetch(API_BASE + '/api/sync_pull', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...auth, date_from: range.date_from, date_to: range.date_to })
+          }).then((r) => r.json()).then((d) => { if (!d.ok) throw new Error(d.error); });
+        } catch (e) {
+          console.error('[Sync Pull] checkConnectionAndSync:', e.message, e);
+          syncProblems.push('Pull: ' + (e && e.message ? e.message : 'Fehler'));
+        }
         try {
           await fetch(API_BASE + '/api/sync_push', {
             method: 'POST',
@@ -1257,6 +1266,12 @@
           }).then((r) => r.json()).then((d) => { if (!d.ok) throw new Error(d.error || (d && JSON.stringify(d))); });
         } catch (e) {
           console.error('[Sync Push] checkConnectionAndSync:', e.message, e);
+          syncProblems.push('Push: ' + (e && e.message ? e.message : 'Fehler'));
+        }
+        if (syncProblems.length) {
+          setConnectionBadge('online', syncProblems.join(' · ') + ' — Klicken zum erneuten Synchronisieren');
+        } else {
+          setConnectionBadge('online');
         }
         // Dienstreise-Projektordner (Dokumente_Monteur / Dokumente_Buchhaltung) periodisch mit dem Dispo-Server synchronisieren
         if (selectedJobIdOnDienstreisePage) {
