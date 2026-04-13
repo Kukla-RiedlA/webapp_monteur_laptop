@@ -2214,6 +2214,21 @@
     return String(tid || '') + '\t' + normDt(a.start_datetime) + '\t' + normDt(a.end_datetime);
   }
 
+  /** Lokaler Kalender (SQLite) für einen Monteur – funktioniert ohne Dispo-Verbindung. */
+  async function loadCalendarLocalMonth(start, end, techId) {
+    const params = { technician_id: techId, date_from: start, date_to: end, include_erledigt: 1 };
+    const [jRes, aRes, techRes] = await Promise.all([
+      fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()),
+      fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()),
+      fetch(API_BASE + '/api/technician?technician_id=' + techId, { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()).catch(() => ({}))
+    ]);
+    var techColor = (techRes.color || techRes.farbe || '').toString().trim() || '#4a90e2';
+    var techName = (techRes.full_name || techRes.name || '').toString().trim() || ('Techniker ' + techId);
+    const jobs = (jRes.jobs || []).map(function (j) { return Object.assign({}, j, { technician_id: techId, technician_name: techName, technician_color: techColor }); });
+    const absences = (aRes.absences || []).map(function (a) { return Object.assign({}, a, { technician_id: techId, technician_name: techName, technician_color: techColor }); });
+    return { jobs: jobs, absences: absences };
+  }
+
   async function loadCalendarMonth() {
     const first = new Date(calCurrentMonth.getFullYear(), calCurrentMonth.getMonth(), 1, 12, 0, 0, 0);
     const gridStart = mondayOf(first);
@@ -2232,8 +2247,23 @@
 
     if (showAll) {
       const base = getServerUrl();
+      const myTechId = getTechId();
       if (!base) {
-        setCalendarError('Dispo-Server-URL eintragen und „Alle Techniker“ nutzen.');
+        if (!myTechId) {
+          setCalendarError('Für „Alle Techniker“ Dispo-Server-URL eintragen – oder Monteur-ID setzen und Häkchen aus für Offline-Kalender.');
+          return;
+        }
+        try {
+          var localOnly = await loadCalendarLocalMonth(start, end, myTechId);
+          jobs = localOnly.jobs;
+          absences = localOnly.absences;
+          showToast('Offline / keine Server-URL: nur Ihre gespeicherten Termine (lokal).');
+        } catch (e) {
+          renderCalendarGrid(gridStart, gridEnd, [], [], null);
+          setCalendarError('Fehler: ' + e.message);
+          return;
+        }
+        renderCalendarGrid(gridStart, gridEnd, jobs, absences, null);
         return;
       }
       try {
@@ -2272,7 +2302,6 @@
             technician_color: info ? info.color : (a.technician_color || '#6c757d')
           });
         });
-        var myTechId = getTechId();
         var localJobsByServerId = {};
         var localJobsById = {};
         if (myTechId) {
@@ -2331,9 +2360,22 @@
           } catch (e) { /* lokale Termine optional */ }
         }
       } catch (e) {
-        renderCalendarGrid(gridStart, gridEnd, [], [], null);
-        setCalendarError('Kalender laden fehlgeschlagen: ' + e.message);
-        return;
+        if (!myTechId) {
+          renderCalendarGrid(gridStart, gridEnd, [], [], null);
+          setCalendarError('Kalender laden fehlgeschlagen: ' + e.message);
+          return;
+        }
+        try {
+          var fb = await loadCalendarLocalMonth(start, end, myTechId);
+          jobs = fb.jobs;
+          absences = fb.absences;
+          calendarApiData = null;
+          showToast('Dispo nicht erreichbar – Anzeige: nur Ihre gespeicherten Termine (Offline).');
+        } catch (e2) {
+          renderCalendarGrid(gridStart, gridEnd, [], [], null);
+          setCalendarError('Kalender laden fehlgeschlagen: ' + e.message);
+          return;
+        }
       }
     } else {
       const techId = getTechId();
@@ -2342,16 +2384,9 @@
         return;
       }
       try {
-        const params = { technician_id: techId, date_from: start, date_to: end, include_erledigt: 1 };
-        const [jRes, aRes, techRes] = await Promise.all([
-          fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then(r => r.json()),
-          fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then(r => r.json()),
-          fetch(API_BASE + '/api/technician?technician_id=' + techId, { headers: { 'X-Technician-Id': String(techId) } }).then(r => r.json()).catch(() => ({}))
-        ]);
-        var techColor = (techRes.color || techRes.farbe || '').toString().trim() || '#4a90e2';
-        var techName = (techRes.full_name || techRes.name || '').toString().trim() || ('Techniker ' + techId);
-        jobs = (jRes.jobs || []).map(j => ({ ...j, technician_id: techId, technician_name: techName, technician_color: techColor }));
-        absences = (aRes.absences || []).map(a => ({ ...a, technician_id: techId, technician_name: techName, technician_color: techColor }));
+        var loc = await loadCalendarLocalMonth(start, end, techId);
+        jobs = loc.jobs;
+        absences = loc.absences;
       } catch (e) {
         renderCalendarGrid(gridStart, gridEnd, [], [], null);
         setCalendarError('Fehler: ' + e.message);

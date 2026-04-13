@@ -5,3 +5,5 @@ electron/db/*.db
 electron/db/.dispo-insecure-tls
 electron/dist/
 electron/test-output/
+tools/MkcertCaInstaller/bin/
+tools/MkcertCaInstaller/obj/
