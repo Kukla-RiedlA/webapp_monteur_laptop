@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.035
+- **Kalender:** „Heute“-Hervorhebung mit `box-shadow: inset` statt `outline`, damit Monatsbalken nicht überdeckt werden; klare z-index-Stapelung Grid vs. Balken-Overlay.
+- **Offline:** Standardansicht nur eigener Monteur (ohne „Alle Techniker“); bei fehlender Dispo-URL oder Serverfehler Fallback auf lokale Termine aus SQLite.
+- **Tool:** `tools/MkcertCaInstaller` – Quellcode zum Herunterladen und Installieren der mkcert-Stamm-CA unter Windows.
+- **Plattform-Release:** mit Dispo V 1.045 und Handy-PWA V 0.011.
+
 ## V 1.034
 - **Plattform-Release:** Build mit Dispo V 1.041 (Deploy-Admin, DB-Migration) und Handy-PWA V 0.010.
 
