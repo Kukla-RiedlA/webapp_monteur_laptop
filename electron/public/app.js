@@ -287,6 +287,7 @@
       window.currentProjektdatenJob = job;
       content.innerHTML = renderJobDetailsContent(job);
       bindLeistungActions();
+      loadMechanikTedLinks(job);
       if (typeof loadDienstreiseExplorer === 'function') loadDienstreiseExplorer(jobDetailsJobId, '');
       if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
     }
@@ -589,8 +590,67 @@
       html += '</tbody></table></div>';
     }
     html += '</div>';
+    html += '<div class="modal-detail-section" id="mechanikTedLinksContainer"><h4>Mechanik-Excel (TED)</h4><p class="muted">Wird geladen…</p></div>';
     if (job.description) html += '<div class="modal-detail-section modal-detail-section-description"><h4>Bemerkungen</h4><div class="modal-description-wrap"><div class="modal-description-display">' + formatDescriptionForDisplay(job.description) + '</div></div></div>';
     return html;
+  }
+
+  function loadMechanikTedLinks(job) {
+    var el = document.getElementById('mechanikTedLinksContainer');
+    if (!el) return;
+    var baseUrl = getDispoBaseUrl();
+    var techId = getTechId();
+    if (!baseUrl || !techId || !job) {
+      el.innerHTML = '<p class="muted">Mechanik-Excel (TED): nur mit Dispo-Server-URL in den Einstellungen und Online-Verbindung.</p>';
+      return;
+    }
+    var jobId = (job.server_id != null && job.server_id !== '') ? job.server_id : job.id;
+    if (jobId == null || jobId === '') {
+      el.innerHTML = '<p class="muted">Keine Auftrags-ID für TED-Abfrage.</p>';
+      return;
+    }
+    el.innerHTML = '<p class="muted">Lade Mechanik-Excel…</p>';
+    fetch(API_BASE + '/api/mechanik_ted_excel_from_dispo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+      body: JSON.stringify({
+        baseUrl: baseUrl,
+        jobId: jobId,
+        serverUsername: getDispoUsername(),
+        serverPassword: getDispoPassword()
+      })
+    })
+      .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+      .then(function (result) {
+        if (!result.ok || !result.data || !result.data.ok) {
+          el.innerHTML = '<p class="muted">Mechanik-Excel konnte nicht geladen werden' + (result.data && result.data.error ? ': ' + escapeHtml(String(result.data.error)) : '.') + '</p>';
+          return;
+        }
+        var byFab = result.data.by_fab || {};
+        var keys = Object.keys(byFab);
+        if (keys.length === 0) {
+          el.innerHTML = '<p class="muted">Keine TED-Dateien im Index für diese Fabrikationsnummern.</p>';
+          return;
+        }
+        var root = baseUrl.replace(/\/$/, '');
+        var html = '';
+        keys.forEach(function (fab) {
+          var files = byFab[fab] || [];
+          if (files.length === 0) return;
+          html += '<div class="kukla-ted-fab"><strong>FN ' + escapeHtml(String(fab)) + '</strong><ul>';
+          files.forEach(function (f) {
+            var href = root + (f.download_path || '');
+            var dt = (f.file_mtime || '').toString();
+            var w = f.fn_matches_filename === false ? ' ⚠' : '';
+            html += '<li><a href="' + String(href).replace(/"/g, '&quot;') + '" target="_blank" rel="noopener">' + escapeHtml(String(f.file_name || '')) + '</a> <span class="muted">' + escapeHtml(dt) + '</span>' + w + '</li>';
+          });
+          html += '</ul></div>';
+        });
+        el.innerHTML = html || '<p class="muted">Keine Einträge.</p>';
+      })
+      .catch(function (e) {
+        el.innerHTML = '<p class="muted">Mechanik-Excel (TED): Offline oder Dispo nicht erreichbar.</p>';
+      });
   }
 
   function openAnlageDetailModal(rowIndex) {
@@ -3118,12 +3178,15 @@
     if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
     var btn = document.getElementById('btnDienstreiseCopyProject');
     if (btn) btn.disabled = true;
+    var includeBilderEl = document.getElementById('dienstreiseCopyIncludeBilder');
+    var includeBilder = includeBilderEl && includeBilderEl.checked;
     var body = {
       job_id: localJobId,
       dispoBaseUrl: getDispoBaseUrl(),
       technicianId: getTechId(),
       dispoUsername: getDispoUsername(),
-      dispoPassword: getDispoPassword()
+      dispoPassword: getDispoPassword(),
+      include_bilder: includeBilder
     };
     var copyTimeoutMs = 120000; // 2 Min – wenn bis dahin weder done noch error kam, UI zurücksetzen
     var copyTimeoutId = setTimeout(function () {

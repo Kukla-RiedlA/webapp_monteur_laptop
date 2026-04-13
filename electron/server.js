@@ -870,6 +870,7 @@ function createApp(db) {
       const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
       const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
       const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
+      const includeBilder = !!body.include_bilder;
 
       if (!localJobId || !dispoBaseUrl || !technicianId) {
         return res.status(400).json({ ok: false, error: 'job_id (lokal), dispoBaseUrl und technicianId erforderlich.' });
@@ -901,7 +902,7 @@ function createApp(db) {
           method: 'POST',
           signal: refreshAbort.signal,
           headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...authHeader },
-          body: JSON.stringify({ job_id: jobId, technician_id: technicianId }),
+          body: JSON.stringify({ job_id: jobId, technician_id: technicianId, include_bilder: includeBilder }),
         });
         clearTimeout(refreshTimeoutId);
         const refreshData = await refreshRes.json().catch(() => ({}));
@@ -1677,6 +1678,29 @@ function createApp(db) {
     }
     const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
     const url = `${base}/dispo_api/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(list.join(','))}`;
+    try {
+      const r = await fetch(url, auth ? { headers: auth } : {});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      }
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  /** TED/Mechanik-Excel-Index: gleiche Auth wie andere Dispo-Proxys (Basic über serverUsername/serverPassword). */
+  app.post('/api/mechanik_ted_excel_from_dispo', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const { baseUrl, jobId: rawJobId, serverUsername, serverPassword } = req.body || {};
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const jobId = parseInt(rawJobId, 10);
+    if (!technicianId || !base || !Number.isFinite(jobId)) {
+      return res.status(400).json({ ok: false, error: 'baseUrl, jobId und technician_id erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+    const url = `${base}/dispo_api/api/mechanik_ted_excel_list.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}`;
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
       const data = await r.json().catch(() => ({}));
