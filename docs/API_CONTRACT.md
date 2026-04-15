@@ -56,6 +56,17 @@ Erfolg / Fehler einheitlich über **`ok`** (boolean):
 
 Details und Dateilisten: `CONTRACT_RENAME_LOG.md`.
 
+### 5.1a Projektordner / Monteur (Dispo `api/`, Login oder Monteur-Session)
+
+Gleiche Basis-URL wie die Dispo. Authentifizierung wie bisher: Monteur mit `technician_id` (Query und/oder Header `X-Technician-Id`) und Dispo-Login (`require_login.php`), wo die jeweilige Datei das vorsieht.
+
+| Endpunkt | Methode | Kurzbeschreibung |
+|----------|---------|------------------|
+| `dispo/api/job_project_files_list.php` | GET | `job_id`, `technician_id`, optional `path` (relativ zum Projektordner). **`Dokumente_Monteur`:** Einträge = physische Uploads ∪ Inhalte vom ELEKTRO-Mount (`$FILESERVER_ELEKTRO_PROJEKTE_NEU_ROOT`), ohne Kopie auf dem Dispo-Server. |
+| `dispo/api/job_project_file_download.php` | GET | `job_id`, `technician_id`, `path` – Datei aus Projektordner; unter `Dokumente_Monteur` zuerst physische Datei, sonst Stream vom ELEKTRO-Mount. |
+| `dispo/api/job_project_refresh.php` | POST JSON | `job_id`, `technician_id`, optional `include_bilder` – aktualisiert **Dokumente_Anlage** vom zentralen Fileserver (`copyJobProjectFromFileServer`); **kein** Kopieren aus PROJEKTE NEU. |
+| `dispo/api/job_project_file_delete.php` | POST form | `job_id`, `technician_id`, `path` – nur **physische** Dateien; reine ELEKTRO-Quelle → 403. |
+
 ### 5.1 Dispo-Web Admin (nur eingeloggte Dispo-Session, `perm_admin`)
 
 Nur für die **interne** PHP/JS-Oberfläche; keine Monteur-Apps. Antworten nutzen **`ok`** (boolean) wie in Abschnitt 3.
