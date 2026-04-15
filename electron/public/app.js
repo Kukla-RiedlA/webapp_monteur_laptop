@@ -958,7 +958,7 @@
       if (streetLines.length > 1) {
         var lastLine = streetLines[streetLines.length - 1];
         var rest = streetLines.length > 2 ? lastLine : streetLines[1];
-        var houseMatch = rest.match(/\s+(\d+[a-zA-Z]?)\s*$/);
+        var houseMatch = rest.match(/\s+(\d+[0-9a-zA-Z\/\-]*)\s*$/);
         if (houseMatch) {
           out.house_number = houseMatch[1];
           out.street = rest.replace(houseMatch[0], '').trim();
