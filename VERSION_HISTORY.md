@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.039
+- **API-Contract:** `docs/API_CONTRACT.md` – `dispo/api/mobile/job.php` für die Handy-PWA dokumentiert; Eintrag zu `dispo_api/api/job.php` (`assigned_to_me`) beibehalten.
+- **Plattform-Release:** mit Dispo V 1.065 und Handy-PWA V 0.022.
+
 ## V 1.038
 - **Offene Aufträge / Filter:** Kombination mehrerer Checkboxen korrigiert; konsistente Neuladung und stabile Anzeige bei aktiven Filtern.
 - **Proxy:** `electron/server.js` reicht Filterparameter für offene Aufträge (`include_erledigt`, `filter_no_date`, `filter_no_technician`) zuverlässig an die Dispo-API weiter.
