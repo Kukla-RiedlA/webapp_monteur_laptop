@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.040
+- **DispoRepository:** `getJobByIdForTechnician` an Dispo angeglichen (Rechnungsadresse, Audit, Kunden-E-Mail, Hotel-Kontakt mit schema-tolerantem Nachladen, `assigned_to_me`).
+- **Dokumentation:** `docs/API_CONTRACT.md` um erweiterte Felder der Handy-Mobile-API ergänzt.
+
 ## V 1.039
 - **API-Contract:** `docs/API_CONTRACT.md` – `dispo/api/mobile/job.php` für die Handy-PWA dokumentiert; Eintrag zu `dispo_api/api/job.php` (`assigned_to_me`) beibehalten.
 - **Plattform-Release:** mit Dispo V 1.065 und Handy-PWA V 0.022.

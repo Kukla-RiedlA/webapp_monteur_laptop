@@ -85,7 +85,9 @@ final class DispoRepository
     }
 
     /**
-     * Ein Auftrag inkl. Adresse und Kunde (nur wenn Monteur zugeordnet).
+     * Ein Auftrag inkl. Adresse und Kunde, wenn dieser Monteur zugeordnet ist
+     * oder der Auftrag noch keinem Monteur zugeordnet ist (Planung).
+     * Gleiche Felder wie Dispo `dispo_api` / Mobile `api/mobile/job.php`.
      *
      * @return array<string, mixed>|null
      */
@@ -93,13 +95,22 @@ final class DispoRepository
     {
         $sql = 'SELECT j.id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
                        j.status, j.required_technicians, j.description, j.fabrikationsnummern, j.eap_nummer, j.bestellnummer,
-                       c.name AS customer_name, c.street AS customer_street, c.house_number AS customer_house_number,
+                       j.created_at, j.updated_at,
+                       u_cr.full_name AS created_by_name, u_up.full_name AS updated_by_name,
+                       c.name AS customer_name, c.email AS customer_email, c.street AS customer_street, c.house_number AS customer_house_number,
                        c.zip AS customer_zip, c.city AS customer_city, c.phone AS customer_phone,
                        c.contact_person, c.contact_phone, c.contact_email,
-                       ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2
+                       ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2,
+                       jha.endkunde AS hotel_endkunde, jha.street AS hotel_street, jha.house_number AS hotel_house_number,
+                       jha.zip AS hotel_zip, jha.city AS hotel_city, jha.country AS hotel_country,
+                       jha.address_extra_1 AS hotel_address_extra_1, jha.address_extra_2 AS hotel_address_extra_2,
+                       \'\' AS hotel_phone, \'\' AS hotel_email, \'\' AS hotel_website
                 FROM jobs j
                 INNER JOIN customers c ON c.id = j.customer_id
+                LEFT JOIN users u_cr ON j.created_by = u_cr.id
+                LEFT JOIN users u_up ON j.updated_by = u_up.id
                 LEFT JOIN job_addresses ja ON ja.job_id = j.id
+                LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
                 WHERE j.id = :job_id
                   AND (
                     EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = :technician_id)
@@ -169,9 +180,46 @@ final class DispoRepository
             while ($contact = $stmtContacts->fetch(PDO::FETCH_ASSOC)) {
                 $row['job_contacts'][] = $contact;
             }
-        } catch (Throwable $e) {
+        } catch (\Throwable $e) {
             // Tabelle job_contacts fehlt ggf.
         }
+        // Rechnungsadresse (wie jobs.php / job_billing_addresses)
+        foreach (['billing_endkunde', 'billing_street', 'billing_house_number', 'billing_zip', 'billing_city', 'billing_country', 'billing_address_extra_1', 'billing_address_extra_2'] as $bk) {
+            $row[$bk] = '';
+        }
+        try {
+            $stmt = $this->fsm->prepare('SELECT endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2 FROM job_billing_addresses WHERE job_id = :job_id LIMIT 1');
+            $stmt->execute([':job_id' => $jobId]);
+            $ba = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($ba)) {
+                $row['billing_endkunde'] = (string) ($ba['endkunde'] ?? '');
+                $row['billing_street'] = (string) ($ba['street'] ?? '');
+                $row['billing_house_number'] = (string) ($ba['house_number'] ?? '');
+                $row['billing_zip'] = (string) ($ba['zip'] ?? '');
+                $row['billing_city'] = (string) ($ba['city'] ?? '');
+                $row['billing_country'] = (string) ($ba['country'] ?? '');
+                $row['billing_address_extra_1'] = (string) ($ba['address_extra_1'] ?? '');
+                $row['billing_address_extra_2'] = (string) ($ba['address_extra_2'] ?? '');
+            }
+        } catch (\Throwable $e) {
+            // Tabelle fehlt o. Ä.
+        }
+        try {
+            $hx = $this->fsm->prepare('SELECT phone, email, website FROM job_hotel_addresses WHERE job_id = :job_id LIMIT 1');
+            $hx->execute([':job_id' => $jobId]);
+            $hc = $hx->fetch(PDO::FETCH_ASSOC);
+            if (is_array($hc)) {
+                $row['hotel_phone'] = (string) ($hc['phone'] ?? '');
+                $row['hotel_email'] = (string) ($hc['email'] ?? '');
+                $row['hotel_website'] = (string) ($hc['website'] ?? '');
+            }
+        } catch (\Throwable $e) {
+            // Schema ohne Kontakt-Spalten
+        }
+        $assignChk = $this->fsm->prepare('SELECT 1 FROM job_technicians WHERE job_id = ? AND technician_id = ? LIMIT 1');
+        $assignChk->execute([$jobId, $technicianId]);
+        $row['assigned_to_me'] = $assignChk->fetchColumn() !== false;
+
         return $row;
     }
 

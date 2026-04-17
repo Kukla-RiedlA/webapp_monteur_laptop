@@ -52,7 +52,7 @@ Erfolg / Fehler einheitlich über **`ok`** (boolean):
 - **Import:** `dispo/dispo_api/api/receive_dispo.php` – u. a. `batch_id`, `processed_jobs`, `processed_absences`, `processed_assignments`.
 - **Pairing / Mobile:** `dispo/api/mobile/pairing.php` – u. a. `base_url` (nicht `baseUrl`).
 - **Monteur-Auftrag (dispo_api):** `dispo/dispo_api/api/job.php` – GET liefert unter `job` u. a. **`assigned_to_me`** (bool): der abfragende Monteur ist in `job_technicians` eingetragen (Steuerung von Schreibzugriffen in PWA/Laptop).
-- **Handy-PWA / Mobile:** `dispo/api/mobile/job.php` – GET `?id=` (Bearer-Token wie `jobs.php`), vollständiger Auftrag inkl. `assigned_to_me`, `technicians_on_job`; POST optional Status, Beschreibung, Hotelfelder u. a.
+- **Handy-PWA / Mobile:** `dispo/api/mobile/job.php` – GET `?id=` (Bearer-Token wie `jobs.php`), vollständiger Auftrag inkl. `assigned_to_me`, `technicians_on_job`; Stammdaten wie in der Dispo-Maske u. a. **`customer_email`**, **`billing_*`** (Rechnungsadresse aus `job_billing_addresses`), **`created_at`/`updated_at`**, **`created_by_name`/`updated_by_name`**, Hotel **`hotel_phone`/`hotel_email`/`hotel_website`** aus `job_hotel_addresses` (nicht mehr leer); POST optional Status, Beschreibung, Hotelfelder u. a.
 - **Abwesenheitsanfragen:** `absence_request*.php`, `absence_requests_pending.php` – `ok`; GET-Liste der Anfragen unter **`requests`** (nicht `data`).
 - **Abwesenheiten Monteure-UI:** `absences_list.php`, `absence_create.php`, `absence_delete.php` – `ok`.
 
