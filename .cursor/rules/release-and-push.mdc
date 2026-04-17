@@ -39,3 +39,5 @@ Wie in der Dispo: **V &lt;Hauptversion&gt;.&lt;Build&gt;** (z. B. V 1.018). Bu
 - Vor `.\release.ps1`: `git status` – wenn **zusätzliche** geänderte Dateien sichtbar sind, die **nicht** ins Release sollen: WIP auslagern oder zurücksetzen (siehe Plattform-Regel *release-staging-keine-regressionen*).
 
 **Vollständiges Plattform-Release (alle Repos):** `.\scripts\commit-all-submodules.ps1` nur, wenn in allen Submodulen der Arbeitsbaum passt (siehe Plattform-Regel); sonst Submodule einzeln releasen.
+
+**Abschluss (Pflicht):** `Kukla_Monteur_Plattform/.cursor/rules/release-staging-keine-regressionen.mdc` → *Keine lokalen Reste*: nach Release/Push `git status` in `webapp_monteur_laptop` und im Parent sauber, alles auf `origin`.
