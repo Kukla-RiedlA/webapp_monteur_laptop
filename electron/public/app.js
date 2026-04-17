@@ -193,7 +193,7 @@
   }
 
   function jobHasNoDateForOpenFilter(job) {
-    if (!job || typeof job !== 'object') return true;
+    if (!job || typeof job !== 'object') return false;
     var s = job.start_datetime && String(job.start_datetime).trim() ? String(job.start_datetime).trim().slice(0, 10) : '';
     var e = job.end_datetime && String(job.end_datetime).trim() ? String(job.end_datetime).trim().slice(0, 10) : '';
     return !s && !e;
@@ -208,6 +208,10 @@
     return false;
   }
 
+  /**
+   * Alle angehakten Filter gleichzeitig (UND / „parallel“):
+   * z. B. „Kein Datum“ + „Kein Techniker“ → nur Aufträge, die beides erfüllen.
+   */
   function filterOpenJobsList(jobs) {
     var arr = Array.isArray(jobs) ? jobs : [];
     var cbNoDate = document.getElementById('openJobsFilterNoDate');
@@ -217,6 +221,7 @@
     var wantNoTech = cbNoTech && cbNoTech.checked;
     var wantExcludeErledigt = !cbAlle || cbAlle.checked;
     return arr.filter(function (j) {
+      if (!j || typeof j !== 'object') return false;
       if (wantExcludeErledigt && isJobErledigtForOpenList(j)) return false;
       if (wantNoDate && !jobHasNoDateForOpenFilter(j)) return false;
       if (wantNoTech && !jobHasNoTechnicianForOpenFilter(j)) return false;
@@ -224,8 +229,32 @@
     });
   }
 
+  /** Einsatzdatum aufsteigend; ohne Datum ans Ende, bei gleichem Datum nach id. */
+  function sortOpenJobsByEinsatzdatumAsc(jobs) {
+    var arr = Array.isArray(jobs) ? jobs.slice() : [];
+    function sortKey(job) {
+      var s = job.start_datetime && String(job.start_datetime).trim()
+        ? String(job.start_datetime).trim().slice(0, 10)
+        : '';
+      var e = job.end_datetime && String(job.end_datetime).trim()
+        ? String(job.end_datetime).trim().slice(0, 10)
+        : '';
+      var d = s || e;
+      if (!d) return { noDate: 1, ymd: '9999-12-31', id: Number(job.id) || 0 };
+      return { noDate: 0, ymd: d, id: Number(job.id) || 0 };
+    }
+    arr.sort(function (a, b) {
+      var ka = sortKey(a);
+      var kb = sortKey(b);
+      if (ka.noDate !== kb.noDate) return ka.noDate - kb.noDate;
+      if (ka.ymd !== kb.ymd) return ka.ymd < kb.ymd ? -1 : ka.ymd > kb.ymd ? 1 : 0;
+      return ka.id - kb.id;
+    });
+    return arr;
+  }
+
   function renderOpenJobsWithFilters() {
-    renderJobs(filterOpenJobsList(cachedOpenJobs));
+    renderJobs(sortOpenJobsByEinsatzdatumAsc(filterOpenJobsList(cachedOpenJobs)));
   }
 
   function renderJobs(data) {
