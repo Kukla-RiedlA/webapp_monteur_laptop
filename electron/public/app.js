@@ -202,9 +202,15 @@
   function jobHasNoTechnicianForOpenFilter(job) {
     if (!job || typeof job !== 'object') return false;
     var ac = job.assigned_count;
+    if (ac != null && String(ac).trim() !== '') {
+      var n = parseInt(String(ac), 10);
+      return !isNaN(n) && n === 0;
+    }
     var req = job.required_technicians;
-    if (ac != null) return Number(ac) === 0;
-    if (req != null && Number(req) > 0) return true;
+    if (req != null && String(req).trim() !== '') {
+      var r = parseInt(String(req), 10);
+      if (!isNaN(r) && r > 0) return false;
+    }
     return false;
   }
 
@@ -220,7 +226,7 @@
   }
 
   /**
-   * Alle angehakten Filter gleichzeitig (UND / „parallel“).
+   * Jede angehakte Option muss zutreffen (UND): predicates.every().
    * Keine aktive Checkbox → leere Ergebnisliste.
    */
   function filterOpenJobsList(jobs) {
@@ -231,14 +237,22 @@
     var cbNoDate = document.getElementById('openJobsFilterNoDate');
     var cbNoTech = document.getElementById('openJobsFilterNoTech');
     var cbAlle = document.getElementById('openJobsFilterAlleNonErledigt');
-    var wantNoDate = cbNoDate && cbNoDate.checked;
-    var wantNoTech = cbNoTech && cbNoTech.checked;
-    var wantExcludeErledigt = Boolean(cbAlle && cbAlle.checked);
+    var predicates = [];
+    if (cbAlle && cbAlle.checked) {
+      predicates.push(function (j) { return !isJobErledigtForOpenList(j); });
+    }
+    if (cbNoDate && cbNoDate.checked) {
+      predicates.push(function (j) { return jobHasNoDateForOpenFilter(j); });
+    }
+    if (cbNoTech && cbNoTech.checked) {
+      predicates.push(function (j) { return jobHasNoTechnicianForOpenFilter(j); });
+    }
+    if (predicates.length === 0) return [];
     return arr.filter(function (j) {
       if (!j || typeof j !== 'object') return false;
-      if (wantExcludeErledigt && isJobErledigtForOpenList(j)) return false;
-      if (wantNoDate && !jobHasNoDateForOpenFilter(j)) return false;
-      if (wantNoTech && !jobHasNoTechnicianForOpenFilter(j)) return false;
+      for (var p = 0; p < predicates.length; p++) {
+        if (!predicates[p](j)) return false;
+      }
       return true;
     });
   }
@@ -1296,7 +1310,11 @@
       return;
     }
     try {
-      const r = await fetch(API_BASE + '/api/jobs_open?' + qs({ base_url: baseUrl }), {
+      const cbAlleOpen = document.getElementById('openJobsFilterAlleNonErledigt');
+      const includeErledigtOpen = cbAlleOpen && !cbAlleOpen.checked;
+      const jobOpenQs = { base_url: baseUrl };
+      if (includeErledigtOpen) jobOpenQs.include_erledigt = '1';
+      const r = await fetch(API_BASE + '/api/jobs_open?' + qs(jobOpenQs), {
         headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getServerUsername, getServerPassword))
       });
       const data = await r.json().catch(() => ({}));
@@ -4886,6 +4904,10 @@
 
   ['openJobsFilterNoDate', 'openJobsFilterNoTech', 'openJobsFilterAlleNonErledigt'].forEach(function (id) {
     var el = document.getElementById(id);
-    if (el) el.addEventListener('change', function () { renderOpenJobsWithFilters(); });
+    if (!el) return;
+    el.addEventListener('change', function () {
+      if (id === 'openJobsFilterAlleNonErledigt' && typeof loadOpenJobs === 'function') loadOpenJobs();
+      else renderOpenJobsWithFilters();
+    });
   });
 })();

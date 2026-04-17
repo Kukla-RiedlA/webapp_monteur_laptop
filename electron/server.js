@@ -1444,7 +1444,10 @@ function createApp(db) {
       return res.status(400).json({ error: 'base_url und technician_id erforderlich.' });
     }
     const auth = authHeaderFromIncomingBasicOrQuery(req);
-    const url = `${baseUrl}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(technicianId)}`;
+    const includeErledigt = (req.query.include_erledigt || '').toString() === '1';
+    const url =
+      `${baseUrl}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(technicianId)}` +
+      (includeErledigt ? '&include_erledigt=1' : '');
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
       const text = await r.text();
