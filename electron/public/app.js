@@ -264,15 +264,31 @@
     return out;
   }
 
+  function filterOpenJobsList(jobs) {
+    var arr = Array.isArray(jobs) ? jobs : [];
+    if (!anyOpenJobFilterChecked()) return [];
+    var cbNoDate = document.getElementById('openJobsFilterNoDate');
+    var cbNoTech = document.getElementById('openJobsFilterNoTech');
+    var cbAlle = document.getElementById('openJobsFilterAlleNonErledigt');
+    var wantNoDate = Boolean(cbNoDate && cbNoDate.checked);
+    var wantNoTech = Boolean(cbNoTech && cbNoTech.checked);
+    var wantAlle = Boolean(cbAlle && cbAlle.checked);
+    return arr.filter(function (j) {
+      if (!j || typeof j !== 'object') return false;
+      if (wantAlle) return true;
+      var byNoDate = wantNoDate && jobHasNoDateForOpenFilter(j);
+      var byNoTech = wantNoTech && jobHasNoTechnicianForOpenFilter(j);
+      return byNoDate || byNoTech;
+    });
+  }
+
   function renderOpenJobsWithFilters() {
     var list = document.getElementById('jobsList');
     if (!anyOpenJobFilterChecked()) {
       if (list) list.innerHTML = '<span class="empty">Kein Filter aktiv – bitte eine Option ankreuzen.</span>';
       return;
     }
-    // Parallel-UND läuft serverseitig über /api/jobs_open-Parameter.
-    // Client-seitig nur noch Dedupe + Sortierung für stabile Darstellung.
-    renderJobs(sortOpenJobsByEinsatzdatumAsc(dedupeOpenJobsById(cachedOpenJobs)));
+    renderJobs(sortOpenJobsByEinsatzdatumAsc(dedupeOpenJobsById(filterOpenJobsList(cachedOpenJobs))));
   }
 
   function renderJobs(data) {
@@ -1311,8 +1327,6 @@
       const includeErledigtOpen = cbAlleOpen && !cbAlleOpen.checked;
       const jobOpenQs = { base_url: baseUrl };
       if (includeErledigtOpen) jobOpenQs.include_erledigt = '1';
-      if (cbNoDateOpen && cbNoDateOpen.checked) jobOpenQs.filter_no_date = '1';
-      if (cbNoTechOpen && cbNoTechOpen.checked) jobOpenQs.filter_no_technician = '1';
       const r = await fetch(API_BASE + '/api/jobs_open?' + qs(jobOpenQs), {
         headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getServerUsername, getServerPassword))
       });

@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.038
+- **Offene Aufträge / Filter:** Kombination mehrerer Checkboxen korrigiert; konsistente Neuladung und stabile Anzeige bei aktiven Filtern.
+- **Proxy:** `electron/server.js` reicht Filterparameter für offene Aufträge (`include_erledigt`, `filter_no_date`, `filter_no_technician`) zuverlässig an die Dispo-API weiter.
+
 ## V 1.035
 - **Kalender:** „Heute“-Hervorhebung mit `box-shadow: inset` statt `outline`, damit Monatsbalken nicht überdeckt werden; klare z-index-Stapelung Grid vs. Balken-Overlay.
 - **Offline:** Standardansicht nur eigener Monteur (ohne „Alle Techniker“); bei fehlender Dispo-URL oder Serverfehler Fallback auf lokale Termine aus SQLite.
