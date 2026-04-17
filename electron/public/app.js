@@ -179,6 +179,55 @@
     return String(job.status || '').trim().toLowerCase() === 'geplant';
   }
 
+  /** Rohliste vom Dispo (jobs_open), für clientseitige Filter unter „Offene Aufträge“. */
+  var cachedOpenJobs = [];
+
+  function isJobErledigtForOpenList(job) {
+    var v = '';
+    if (job && job.status != null) v = job.status;
+    else if (job && job.job_status != null) v = job.job_status;
+    var raw = String(v || '')
+      .trim()
+      .toLowerCase();
+    return raw === 'erledigt' || raw === 'completed' || raw === 'done' || raw === 'fertig';
+  }
+
+  function jobHasNoDateForOpenFilter(job) {
+    if (!job || typeof job !== 'object') return true;
+    var s = job.start_datetime && String(job.start_datetime).trim() ? String(job.start_datetime).trim().slice(0, 10) : '';
+    var e = job.end_datetime && String(job.end_datetime).trim() ? String(job.end_datetime).trim().slice(0, 10) : '';
+    return !s && !e;
+  }
+
+  function jobHasNoTechnicianForOpenFilter(job) {
+    if (!job || typeof job !== 'object') return false;
+    var ac = job.assigned_count;
+    var req = job.required_technicians;
+    if (ac != null) return Number(ac) === 0;
+    if (req != null && Number(req) > 0) return true;
+    return false;
+  }
+
+  function filterOpenJobsList(jobs) {
+    var arr = Array.isArray(jobs) ? jobs : [];
+    var cbNoDate = document.getElementById('openJobsFilterNoDate');
+    var cbNoTech = document.getElementById('openJobsFilterNoTech');
+    var cbAlle = document.getElementById('openJobsFilterAlleNonErledigt');
+    var wantNoDate = cbNoDate && cbNoDate.checked;
+    var wantNoTech = cbNoTech && cbNoTech.checked;
+    var wantExcludeErledigt = !cbAlle || cbAlle.checked;
+    return arr.filter(function (j) {
+      if (wantExcludeErledigt && isJobErledigtForOpenList(j)) return false;
+      if (wantNoDate && !jobHasNoDateForOpenFilter(j)) return false;
+      if (wantNoTech && !jobHasNoTechnicianForOpenFilter(j)) return false;
+      return true;
+    });
+  }
+
+  function renderOpenJobsWithFilters() {
+    renderJobs(filterOpenJobsList(cachedOpenJobs));
+  }
+
   function renderJobs(data) {
     const list = document.getElementById('jobsList');
     const jobs = Array.isArray(data) ? data : (data && data.jobs) ? data.jobs : [];
@@ -1188,11 +1237,13 @@
     const techId = getTechId();
     const list = document.getElementById('jobsList');
     if (!techId) {
+      cachedOpenJobs = [];
       if (list) list.innerHTML = '<span class="empty">Monteur-ID in Einstellungen eintragen.</span>';
       return;
     }
     const baseUrl = getServerUrl();
     if (!baseUrl) {
+      cachedOpenJobs = [];
       if (list) list.innerHTML = '<span class="empty">Server-Adresse in Einstellungen eintragen.</span>';
       return;
     }
@@ -1202,14 +1253,17 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
+        cachedOpenJobs = [];
         var errLine = (data && data.error) ? data.error : 'Fehler beim Laden.';
         if (data && data.hint) errLine += ' — ' + data.hint;
         if (data && data.detail && !data.hint) errLine += ' (' + String(data.detail).slice(0, 200) + ')';
         if (list) list.innerHTML = '<span class="empty">' + escapeHtml(errLine) + '</span>';
         return;
       }
-      renderJobs(Array.isArray(data) ? data : []);
+      cachedOpenJobs = Array.isArray(data) ? data : [];
+      renderOpenJobsWithFilters();
     } catch (e) {
+      cachedOpenJobs = [];
       if (list) list.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
     }
   }
@@ -4781,4 +4835,9 @@
     loadCalendarMonth();
   });
   document.getElementById('calShowAllTech').addEventListener('change', () => loadCalendarMonth());
+
+  ['openJobsFilterNoDate', 'openJobsFilterNoTech', 'openJobsFilterAlleNonErledigt'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('change', function () { renderOpenJobsWithFilters(); });
+  });
 })();
