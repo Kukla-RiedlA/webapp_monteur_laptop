@@ -225,38 +225,6 @@
     );
   }
 
-  /**
-   * Jede angehakte Option muss zutreffen (UND): predicates.every().
-   * Keine aktive Checkbox → leere Ergebnisliste.
-   */
-  function filterOpenJobsList(jobs) {
-    var arr = Array.isArray(jobs) ? jobs : [];
-    if (!anyOpenJobFilterChecked()) {
-      return [];
-    }
-    var cbNoDate = document.getElementById('openJobsFilterNoDate');
-    var cbNoTech = document.getElementById('openJobsFilterNoTech');
-    var cbAlle = document.getElementById('openJobsFilterAlleNonErledigt');
-    var predicates = [];
-    if (cbAlle && cbAlle.checked) {
-      predicates.push(function (j) { return !isJobErledigtForOpenList(j); });
-    }
-    if (cbNoDate && cbNoDate.checked) {
-      predicates.push(function (j) { return jobHasNoDateForOpenFilter(j); });
-    }
-    if (cbNoTech && cbNoTech.checked) {
-      predicates.push(function (j) { return jobHasNoTechnicianForOpenFilter(j); });
-    }
-    if (predicates.length === 0) return [];
-    return arr.filter(function (j) {
-      if (!j || typeof j !== 'object') return false;
-      for (var p = 0; p < predicates.length; p++) {
-        if (!predicates[p](j)) return false;
-      }
-      return true;
-    });
-  }
-
   /** Einsatzdatum aufsteigend; ohne Datum ans Ende, bei gleichem Datum nach id. */
   function sortOpenJobsByEinsatzdatumAsc(jobs) {
     var arr = Array.isArray(jobs) ? jobs.slice() : [];
@@ -302,7 +270,9 @@
       if (list) list.innerHTML = '<span class="empty">Kein Filter aktiv – bitte eine Option ankreuzen.</span>';
       return;
     }
-    renderJobs(sortOpenJobsByEinsatzdatumAsc(dedupeOpenJobsById(filterOpenJobsList(cachedOpenJobs))));
+    // Parallel-UND läuft serverseitig über /api/jobs_open-Parameter.
+    // Client-seitig nur noch Dedupe + Sortierung für stabile Darstellung.
+    renderJobs(sortOpenJobsByEinsatzdatumAsc(dedupeOpenJobsById(cachedOpenJobs)));
   }
 
   function renderJobs(data) {
@@ -1313,6 +1283,19 @@
   async function loadOpenJobs() {
     const techId = getTechId();
     const list = document.getElementById('jobsList');
+    const cbNoDateOpen = document.getElementById('openJobsFilterNoDate');
+    const cbNoTechOpen = document.getElementById('openJobsFilterNoTech');
+    const cbAlleOpen = document.getElementById('openJobsFilterAlleNonErledigt');
+    const anyFilterOn = Boolean(
+      (cbNoDateOpen && cbNoDateOpen.checked) ||
+      (cbNoTechOpen && cbNoTechOpen.checked) ||
+      (cbAlleOpen && cbAlleOpen.checked)
+    );
+    if (!anyFilterOn) {
+      cachedOpenJobs = [];
+      renderOpenJobsWithFilters();
+      return;
+    }
     if (!techId) {
       cachedOpenJobs = [];
       if (list) list.innerHTML = '<span class="empty">Monteur-ID in Einstellungen eintragen.</span>';
@@ -1325,10 +1308,11 @@
       return;
     }
     try {
-      const cbAlleOpen = document.getElementById('openJobsFilterAlleNonErledigt');
       const includeErledigtOpen = cbAlleOpen && !cbAlleOpen.checked;
       const jobOpenQs = { base_url: baseUrl };
       if (includeErledigtOpen) jobOpenQs.include_erledigt = '1';
+      if (cbNoDateOpen && cbNoDateOpen.checked) jobOpenQs.filter_no_date = '1';
+      if (cbNoTechOpen && cbNoTechOpen.checked) jobOpenQs.filter_no_technician = '1';
       const r = await fetch(API_BASE + '/api/jobs_open?' + qs(jobOpenQs), {
         headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getServerUsername, getServerPassword))
       });
@@ -4921,8 +4905,7 @@
     var el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('change', function () {
-      if (id === 'openJobsFilterAlleNonErledigt' && typeof loadOpenJobs === 'function') loadOpenJobs();
-      else renderOpenJobsWithFilters();
+      if (typeof loadOpenJobs === 'function') loadOpenJobs();
     });
   });
 })();

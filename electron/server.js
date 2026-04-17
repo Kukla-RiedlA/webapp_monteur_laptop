@@ -1445,9 +1445,13 @@ function createApp(db) {
     }
     const auth = authHeaderFromIncomingBasicOrQuery(req);
     const includeErledigt = (req.query.include_erledigt || '').toString() === '1';
+    const filterNoDate = (req.query.filter_no_date || '').toString() === '1';
+    const filterNoTechnician = (req.query.filter_no_technician || '').toString() === '1';
     const url =
       `${baseUrl}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(technicianId)}` +
-      (includeErledigt ? '&include_erledigt=1' : '');
+      (includeErledigt ? '&include_erledigt=1' : '') +
+      (filterNoDate ? '&filter_no_date=1' : '') +
+      (filterNoTechnician ? '&filter_no_technician=1' : '');
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
       const text = await r.text();
