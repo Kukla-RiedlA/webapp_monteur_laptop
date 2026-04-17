@@ -281,13 +281,28 @@
     return arr;
   }
 
+  function dedupeOpenJobsById(jobs) {
+    var arr = Array.isArray(jobs) ? jobs : [];
+    var seen = new Set();
+    var out = [];
+    for (var i = 0; i < arr.length; i++) {
+      var j = arr[i];
+      if (!j || j.id == null) continue;
+      var id = String(j.id);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(j);
+    }
+    return out;
+  }
+
   function renderOpenJobsWithFilters() {
     var list = document.getElementById('jobsList');
     if (!anyOpenJobFilterChecked()) {
       if (list) list.innerHTML = '<span class="empty">Kein Filter aktiv – bitte eine Option ankreuzen.</span>';
       return;
     }
-    renderJobs(sortOpenJobsByEinsatzdatumAsc(filterOpenJobsList(cachedOpenJobs)));
+    renderJobs(sortOpenJobsByEinsatzdatumAsc(dedupeOpenJobsById(filterOpenJobsList(cachedOpenJobs))));
   }
 
   function renderJobs(data) {
