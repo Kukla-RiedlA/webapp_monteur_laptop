@@ -117,10 +117,10 @@
     .cal-toolbar button { min-width: 36px; }
     .cal-nav-btns { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
     .cal-month-label { font-weight: bold; min-width: 160px; }
-    .open-jobs-filters { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: flex-end; justify-content: space-between; gap: 6px 8px; margin-bottom: 0.75rem; font-size: 0.82rem; max-width: 100%; }
-    .open-jobs-filter-item { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; flex: 1 1 0; min-width: 0; cursor: pointer; user-select: none; color: var(--muted); text-align: center; }
-    .open-jobs-filter-caption { display: block; line-height: 1.2; min-height: 2.4em; }
-    .open-jobs-filter-subline { display: block; font-size: 0.92em; opacity: 0.88; font-weight: normal; }
+    .open-jobs-filters { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: flex-start; justify-content: space-between; gap: 6px 8px; margin-bottom: 0.75rem; font-size: 0.82rem; max-width: 100%; }
+    .open-jobs-filter-item { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 1px; flex: 1 1 0; min-width: 0; cursor: pointer; user-select: none; color: var(--muted); text-align: center; }
+    .open-jobs-filter-l1, .open-jobs-filter-l2 { display: block; line-height: 1.15; width: 100%; }
+    .open-jobs-filter-l2 { min-height: 1.15em; margin-bottom: 3px; }
     .open-jobs-filter-item input[type="checkbox"] { margin: 0; flex-shrink: 0; }
     .cal-grid-wrapper { position: relative; width: 100%; }
     .cal-month-header { border: 1px solid var(--accent); border-radius: 8px 8px 0 0; }
@@ -367,16 +367,19 @@
           <h2>Offene Aufträge</h2>
           <div class="open-jobs-filters" role="group" aria-label="Filter für offene Aufträge">
             <label class="open-jobs-filter-item">
-              <span class="open-jobs-filter-caption">Kein<br>Datum</span>
+              <span class="open-jobs-filter-l1">Kein</span>
+              <span class="open-jobs-filter-l2">Datum</span>
               <input type="checkbox" id="openJobsFilterNoDate" checked>
             </label>
             <label class="open-jobs-filter-item">
-              <span class="open-jobs-filter-caption">Kein<br>Techniker</span>
+              <span class="open-jobs-filter-l1">Kein</span>
+              <span class="open-jobs-filter-l2">Techniker</span>
               <input type="checkbox" id="openJobsFilterNoTech">
             </label>
             <label class="open-jobs-filter-item" title="Alle Aufträge außer erledigt">
-              <span class="open-jobs-filter-caption">Alle<br><span class="open-jobs-filter-subline">außer erledigt</span></span>
-              <input type="checkbox" id="openJobsFilterAlleNonErledigt" checked>
+              <span class="open-jobs-filter-l1">Alle</span>
+              <span class="open-jobs-filter-l2">außer erledigt</span>
+              <input type="checkbox" id="openJobsFilterAlleNonErledigt">
             </label>
           </div>
           <div id="jobsList"><span class="empty">Wird geladen…</span></div>

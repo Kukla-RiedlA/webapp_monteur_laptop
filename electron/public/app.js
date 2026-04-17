@@ -208,18 +208,32 @@
     return false;
   }
 
+  function anyOpenJobFilterChecked() {
+    var cbNoDate = document.getElementById('openJobsFilterNoDate');
+    var cbNoTech = document.getElementById('openJobsFilterNoTech');
+    var cbAlle = document.getElementById('openJobsFilterAlleNonErledigt');
+    return Boolean(
+      (cbNoDate && cbNoDate.checked) ||
+      (cbNoTech && cbNoTech.checked) ||
+      (cbAlle && cbAlle.checked)
+    );
+  }
+
   /**
-   * Alle angehakten Filter gleichzeitig (UND / „parallel“):
-   * z. B. „Kein Datum“ + „Kein Techniker“ → nur Aufträge, die beides erfüllen.
+   * Alle angehakten Filter gleichzeitig (UND / „parallel“).
+   * Keine aktive Checkbox → leere Ergebnisliste.
    */
   function filterOpenJobsList(jobs) {
     var arr = Array.isArray(jobs) ? jobs : [];
+    if (!anyOpenJobFilterChecked()) {
+      return [];
+    }
     var cbNoDate = document.getElementById('openJobsFilterNoDate');
     var cbNoTech = document.getElementById('openJobsFilterNoTech');
     var cbAlle = document.getElementById('openJobsFilterAlleNonErledigt');
     var wantNoDate = cbNoDate && cbNoDate.checked;
     var wantNoTech = cbNoTech && cbNoTech.checked;
-    var wantExcludeErledigt = !cbAlle || cbAlle.checked;
+    var wantExcludeErledigt = Boolean(cbAlle && cbAlle.checked);
     return arr.filter(function (j) {
       if (!j || typeof j !== 'object') return false;
       if (wantExcludeErledigt && isJobErledigtForOpenList(j)) return false;
@@ -254,6 +268,11 @@
   }
 
   function renderOpenJobsWithFilters() {
+    var list = document.getElementById('jobsList');
+    if (!anyOpenJobFilterChecked()) {
+      if (list) list.innerHTML = '<span class="empty">Kein Filter aktiv – bitte eine Option ankreuzen.</span>';
+      return;
+    }
     renderJobs(sortOpenJobsByEinsatzdatumAsc(filterOpenJobsList(cachedOpenJobs)));
   }
 
