@@ -2313,6 +2313,102 @@
     }
   }
 
+  function formatAnlagenstammSize(size) {
+    var s = Number(size || 0);
+    if (s < 1024) return s + ' B';
+    if (s < 1024 * 1024) return Math.round(s / 1024) + ' KB';
+    return (s / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  async function loadAnlagenstamm() {
+    const msgEl = document.getElementById('anlagenstammMessage');
+    const cardEl = document.getElementById('anlagenstammCard');
+    const filesEl = document.getElementById('anlagenstammFiles');
+    const fab = ((document.getElementById('anlagenstammFabInput') || {}).value || '').trim();
+    if (!fab) {
+      if (msgEl) msgEl.textContent = 'Bitte Fabrikationsnummer eingeben.';
+      if (cardEl) cardEl.innerHTML = '';
+      if (filesEl) { filesEl.style.display = 'none'; filesEl.innerHTML = ''; }
+      return;
+    }
+    if (msgEl) msgEl.textContent = 'Lade...';
+    if (cardEl) cardEl.innerHTML = '';
+    if (filesEl) { filesEl.style.display = 'none'; filesEl.innerHTML = ''; }
+    try {
+      const payload = {
+        baseUrl: getServerUrl(),
+        fab,
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword()
+      };
+      const lookup = await api('/api/anlagenstamm_lookup', { method: 'POST', body: JSON.stringify(payload) });
+      const files = await api('/api/anlagenstamm_files_list', { method: 'POST', body: JSON.stringify(payload) });
+      const a = lookup && lookup.anlage ? lookup.anlage : null;
+      if (cardEl) {
+        cardEl.innerHTML = a
+          ? '<div class="card" style="margin-top:0.5rem"><strong>F.N.:</strong> ' + escapeHtml(a.fabrikationsnummer || fab) +
+            ' &nbsp; <strong>Type:</strong> ' + escapeHtml(a.type || '-') +
+            ' &nbsp; <strong>Leistung:</strong> ' + escapeHtml(a.leistung || '-') +
+            ' &nbsp; <strong>Position:</strong> ' + escapeHtml(a.position || '-') +
+            ' &nbsp; <strong>Projekt:</strong> ' + escapeHtml(a.projekt || '-') + '</div>'
+          : '<div class="empty">Keine Stammdaten gefunden.</div>';
+      }
+      const list = (files && files.files) ? files.files : [];
+      if (filesEl) {
+        filesEl.style.display = '';
+        filesEl.innerHTML = list.length
+          ? list.map(function (f) {
+              return '<div class="anlagenstamm-files-row"><span>' + escapeHtml(f.name || '') + ' <span class="muted">(' + escapeHtml(formatAnlagenstammSize(f.size)) + ')</span></span>' +
+                '<button class="btn btn-ghost" data-anlage-file="' + encodeURIComponent(f.name || '') + '">Download</button></div>';
+            }).join('')
+          : '<div class="anlagenstamm-files-row"><span class="empty">Keine Dokumente gefunden.</span></div>';
+        filesEl.querySelectorAll('[data-anlage-file]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            downloadAnlagenstammFile(fab, decodeURIComponent(btn.getAttribute('data-anlage-file') || '')).catch(function (err) {
+              if (msgEl) msgEl.textContent = 'Fehler: ' + (err.message || String(err));
+            });
+          });
+        });
+      }
+      if (msgEl) msgEl.textContent = '';
+    } catch (e) {
+      if (msgEl) msgEl.textContent = 'Fehler: ' + (e.message || String(e));
+    }
+  }
+
+  async function downloadAnlagenstammFile(fab, file) {
+    if (!fab || !file) return;
+    const technicianId = getTechId();
+    const resp = await fetch(API_BASE + '/api/anlagenstamm_file_download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
+      body: JSON.stringify({
+        baseUrl: getServerUrl(),
+        fab: fab,
+        file: file,
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword()
+      })
+    });
+    if (!resp.ok) {
+      let err = 'Download fehlgeschlagen.';
+      try {
+        const j = await resp.json();
+        if (j && j.error) err = j.error;
+      } catch (_) {}
+      throw new Error(err);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
   function showView(name) {
     const viewStart = document.getElementById('viewStart');
     const viewEinstellungen = document.getElementById('viewEinstellungen');
@@ -2320,6 +2416,7 @@
     const viewDienstreise = document.getElementById('viewDienstreise');
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
+    const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
     const protokolleViewIds = ['viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleInbetriebnahme', 'viewProtokolleService'];
     viewStart.classList.remove('only-left', 'only-right', 'hidden');
     viewEinstellungen.classList.remove('active');
@@ -2333,6 +2430,7 @@
     if (viewTextbausteine) viewTextbausteine.classList.remove('active');
     if (viewArchiv) viewArchiv.classList.remove('active');
     if (viewAbwesenheiten) viewAbwesenheiten.classList.remove('active');
+    if (viewAnlagenstamm) viewAnlagenstamm.classList.remove('active');
     if (name === 'einstellungen') {
       viewStart.classList.add('hidden');
       viewEinstellungen.classList.add('active');
@@ -2386,6 +2484,12 @@
       viewStart.classList.add('hidden');
       if (viewAbwesenheiten) viewAbwesenheiten.classList.add('active');
       loadJobsAndAbsences();
+      return;
+    }
+    if (name === 'anlagenstamm') {
+      viewStart.classList.add('hidden');
+      if (viewAnlagenstamm) viewAnlagenstamm.classList.add('active');
+      loadAnlagenstamm();
       return;
     }
     if (name === 'start') {
@@ -3523,6 +3627,14 @@
   })();
   document.getElementById('btnViewTextbausteine').addEventListener('click', () => showView('textbausteine'));
   document.getElementById('btnViewArchiv').addEventListener('click', () => showView('archiv'));
+  document.getElementById('btnViewAnlagenstamm').addEventListener('click', () => showView('anlagenstamm'));
+  document.getElementById('btnAnlagenstammSearch').addEventListener('click', () => loadAnlagenstamm());
+  document.getElementById('anlagenstammFabInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      loadAnlagenstamm();
+    }
+  });
   (function initAbwesenheitenDropdown() {
     const btn = document.getElementById('btnViewAbwesenheiten');
     const dropdown = document.getElementById('abwesenheitenDropdown');

@@ -102,6 +102,13 @@
     .view-archiv.active { display: block; }
     .view-abwesenheiten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-abwesenheiten.active { display: block; }
+    .view-anlagenstamm { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-anlagenstamm.active { display: block; }
+    .anlagenstamm-search-row { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem; }
+    .anlagenstamm-search-row input { flex:1; min-width:220px; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
+    .anlagenstamm-files-list { margin-top:0.5rem; border:1px solid var(--accent); border-radius:6px; overflow:hidden; }
+    .anlagenstamm-files-row { padding:0.55rem 0.7rem; border-bottom:1px solid var(--accent); display:flex; align-items:center; justify-content:space-between; gap:0.6rem; }
+    .anlagenstamm-files-row:last-child { border-bottom:none; }
     .view-projektdaten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-projektdaten.active { display: block; }
     .view-projektdaten .card { max-width: none; }
@@ -344,6 +351,7 @@
     </div>
     <button class="btn btn-ghost" id="btnViewTextbausteine">Textbausteine</button>
     <button class="btn btn-ghost" id="btnViewArchiv">Archiv</button>
+    <button class="btn btn-ghost" id="btnViewAnlagenstamm">Anlagenstamm</button>
     <div class="toolbar-dropdown-wrap">
       <button type="button" class="btn btn-ghost" id="btnViewAbwesenheiten" aria-haspopup="true" aria-expanded="false">Abwesenheiten ▾</button>
       <div id="abwesenheitenDropdown" class="toolbar-dropdown" role="menu" aria-label="Abwesenheiten">
@@ -759,6 +767,18 @@
       <button type="button" class="btn btn-ghost" id="btnRequestAbsence">Abwesenheit beantragen</button>
       <button type="button" class="btn btn-ghost" id="btnCleanupErrorRequests" style="display:none;margin-left:0.25rem">Fehlerhafte Einträge entfernen</button>
       <div id="absencesList" style="margin-top:0.75rem"><span class="empty">Wird geladen…</span></div>
+    </div>
+  </main>
+  <main id="viewAnlagenstamm" class="view-anlagenstamm" aria-label="Anlagenstamm">
+    <div class="card">
+      <h2>Anlagenstamm</h2>
+      <div class="anlagenstamm-search-row">
+        <input type="text" id="anlagenstammFabInput" placeholder="Fabrikationsnummer">
+        <button type="button" class="btn btn-primary" id="btnAnlagenstammSearch">Suchen</button>
+      </div>
+      <div id="anlagenstammMessage" class="empty">Bitte Fabrikationsnummer eingeben.</div>
+      <div id="anlagenstammCard"></div>
+      <div id="anlagenstammFiles" class="anlagenstamm-files-list" style="display:none"></div>
     </div>
   </main>
   <main id="viewEinstellungen" class="view-einstellungen">

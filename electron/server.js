@@ -1697,6 +1697,75 @@ function createApp(db) {
     }
   });
 
+  app.post('/api/anlagenstamm_lookup', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const { baseUrl, fab, serverUsername, serverPassword } = req.body || {};
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const fabValue = (fab || '').toString().trim();
+    if (!technicianId || !base || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+    const url = `${base}/dispo_api/api/anlagenstamm_lookup.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}`;
+    try {
+      const r = await fetch(url, auth ? { headers: auth } : {});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/anlagenstamm_files_list', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const { baseUrl, fab, serverUsername, serverPassword } = req.body || {};
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const fabValue = (fab || '').toString().trim();
+    if (!technicianId || !base || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+    const url = `${base}/dispo_api/api/anlagenstamm_files_list.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}`;
+    try {
+      const r = await fetch(url, auth ? { headers: auth } : {});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/anlagenstamm_file_download', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const { baseUrl, fab, file, serverUsername, serverPassword } = req.body || {};
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const fabValue = (fab || '').toString().trim();
+    const fileValue = (file || '').toString().trim();
+    if (!technicianId || !base || !fabValue || !fileValue) {
+      return res.status(400).json({ ok: false, error: 'baseUrl, fab, file und technician_id erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+    const url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&file=${encodeURIComponent(fileValue)}`;
+    try {
+      const r = await fetch(url, auth ? { headers: auth } : {});
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      }
+      const buf = Buffer.from(await r.arrayBuffer());
+      const ct = r.headers.get('content-type') || 'application/octet-stream';
+      const cd = r.headers.get('content-disposition') || ('attachment; filename="' + encodeURIComponent(fileValue) + '"');
+      res.setHeader('Content-Type', ct);
+      res.setHeader('Content-Disposition', cd);
+      res.setHeader('Content-Length', String(buf.length));
+      res.send(buf);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
   /** TED/Mechanik-Excel-Index: gleiche Auth wie andere Dispo-Proxys (Basic über serverUsername/serverPassword). */
   app.post('/api/mechanik_ted_excel_from_dispo', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
