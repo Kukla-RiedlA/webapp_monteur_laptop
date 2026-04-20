@@ -843,7 +843,7 @@ function createApp(db) {
     }
   });
 
-  /** Wie copy_project, aber: (1) zuerst Dispo-Projektordner vom File-Server aktualisieren (Anlage; kein ELEKTRO-Kopieren mehr), (2) dann kopieren mit NDJSON-Stream für Ladebalken. Läuft im Hintergrund weiter, wenn der Client die Verbindung schließt. */
+  /** Wie copy_project, aber: (1) Dispo-Refresh (stellt nur Projekt-Unterordner sicher; kein Fileserver-Spiegeln mehr), (2) dann per API listen/download in den Dienstreise-Ordner kopieren (NDJSON-Stream). Läuft im Hintergrund weiter, wenn der Client die Verbindung schließt. */
   app.post('/api/dienstreise/copy_project_stream', express.json(), async (req, res) => {
     let clientGone = false;
     req.on('close', () => { clientGone = true; });
