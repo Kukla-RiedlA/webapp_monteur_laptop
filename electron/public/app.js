@@ -754,15 +754,45 @@
             var href = root + (f.download_path || '');
             var dt = (f.file_mtime || '').toString();
             var w = f.fn_matches_filename === false ? ' ⚠' : '';
-            html += '<li><a href="' + String(href).replace(/"/g, '&quot;') + '" target="_blank" rel="noopener">' + escapeHtml(String(f.file_name || '')) + '</a> <span class="muted">' + escapeHtml(dt) + '</span>' + w + '</li>';
+            html += '<li><button type="button" class="btn btn-ghost ted-open-file" data-ted-url="' + String(href).replace(/"/g, '&quot;') + '">' + escapeHtml(String(f.file_name || '')) + '</button> <span class="muted">' + escapeHtml(dt) + '</span>' + w + '</li>';
           });
           html += '</ul></div>';
         });
         el.innerHTML = html || '<p class="muted">Keine Einträge.</p>';
+        el.querySelectorAll('.ted-open-file[data-ted-url]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var fileUrl = btn.getAttribute('data-ted-url') || '';
+            if (!fileUrl) return;
+            openTedExcelOnDevice(fileUrl);
+          });
+        });
       })
       .catch(function (e) {
         el.innerHTML = '<p class="muted">Mechanik-Excel (TED): Offline oder Dispo nicht erreichbar.</p>';
       });
+  }
+
+  function openTedExcelOnDevice(fileUrl) {
+    var isWindows = /windows/i.test(navigator.userAgent || '');
+    // Windows: bevorzugt direkt in Excel-App öffnen; sonst auf normale URL zurückfallen.
+    var excelProtocolUrl = 'ms-excel:ofe|u|' + fileUrl;
+    if (typeof monteurApp !== 'undefined' && monteurApp.openExternal) {
+      try {
+        if (isWindows) {
+          monteurApp.openExternal(excelProtocolUrl);
+          return;
+        }
+      } catch (_) {}
+      monteurApp.openExternal(fileUrl);
+      return;
+    }
+    if (isWindows) {
+      try {
+        window.location.href = excelProtocolUrl;
+        return;
+      } catch (_) {}
+    }
+    window.open(fileUrl, '_blank');
   }
 
   function openAnlageDetailModal(rowIndex) {
