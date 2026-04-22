@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.042
+- **Release/Regelwerk:** `release-and-push` Regel im Repo aktualisiert; Versionsstände in `config/version.php`, `electron/version.json` und `electron/package.json` wieder synchron.
+
 ## V 1.041
 - **Anlagenstamm (neu):** Eigene Ansicht in der Laptop-App mit Suche per Fabrikationsnummer, Stammdatenanzeige und Dokumentliste.
 - **Proxy-API:** `electron/server.js` ergänzt um `anlagenstamm_lookup`, `anlagenstamm_files_list` und `anlagenstamm_file_download` zur Weiterleitung an die Dispo-Endpunkte.
