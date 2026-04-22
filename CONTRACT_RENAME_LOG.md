@@ -7,6 +7,10 @@ Stand: 2026-03-12
 - Naming: `snake_case`
 - Response-Flag: `ok` (statt `success`)
 
+## Neue Endpunkte (ohne Rename)
+
+- **2026-04-22:** `GET dispo/api/mobile/mechanik_ted_excel_by_fab.php` — `fab`; JSON `{ "ok": true, "rows": [ … ] }` (Monteur-Token). `GET dispo/api/mobile/mechanik_ted_excel_download_by_fab.php` — `fab`, `rel_path` (Download). Duplikate unter `webapp_handy/api/mobile/`.
+
 ## Durchgefuehrte Umbenennungen
 
 ### Response-Keys (Handy API)
