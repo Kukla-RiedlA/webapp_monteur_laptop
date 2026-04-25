@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.043
+- **Plattform-Release:** Build um eins erhöht und Versionsstände in `config/version.php`, `electron/version.json` sowie `electron/package.json` synchronisiert.
+
 ## V 1.042
 - **Release/Regelwerk:** `release-and-push` Regel im Repo aktualisiert; Versionsstände in `config/version.php`, `electron/version.json` und `electron/package.json` wieder synchron.
 
