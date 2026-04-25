@@ -9,6 +9,7 @@ Stand: 2026-03-12
 
 ## Neue Endpunkte (ohne Rename)
 
+- **2026-04-25:** `POST dispo/api/mobile/upload_job_photo.php` — Form: `job_id`, `fabrikationsnummer`, `photo` (Datei). JSON-Erfolg: `ok`, `file_name`, `relative_path`, `job_id`, `fabrikationsnummer` (Monteur-Token; FN muss im Auftrag existieren).
 - **2026-04-22:** `GET dispo/api/mobile/mechanik_ted_excel_by_fab.php` — `fab`; JSON `{ "ok": true, "rows": [ … ] }` (Monteur-Token). `GET dispo/api/mobile/mechanik_ted_excel_download_by_fab.php` — `fab`, `rel_path` (Download). Duplikate unter `webapp_handy/api/mobile/`.
 
 ## Durchgefuehrte Umbenennungen
