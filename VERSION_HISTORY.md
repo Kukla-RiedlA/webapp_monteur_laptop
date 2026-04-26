@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.046
+- **Anlagenstamm PROJEKTE NEU:** Elternordner als **Überschrift**, darunter klassische Baumliste (nur Namen der Einträge).
+
 ## V 1.045
 - **Anlagenstamm:** PROJEKTE-NEU-Baum (Lesepfad wie Dispo) mit **Überordner / Name**-Labels; Download über Proxy mit **`source: projekte_neu`** und **`path`**. `electron/server.js`: `POST /api/anlagenstamm_file_download` leitet optional an Dispo `source=projekte_neu&path=` weiter.
 

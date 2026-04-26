@@ -2365,26 +2365,25 @@
     }
   }
 
-  function pnDisplayLabelNode(n) {
-    if (!n) return '';
-    var pn = String(n.parent_name || n.parentName || '').trim();
-    var nm = String(n.name || '').trim();
-    if (pn) return pn + ' / ' + (nm || '(Eintrag)');
-    return nm || '';
+  function pnParentHeadingForSiblings(nodes) {
+    if (!nodes || !nodes.length) return '';
+    return String(nodes[0].parent_name || nodes[0].parentName || '').trim();
   }
 
-  function renderAnlagenstammPnTreeUl(fab, nodes) {
+  function renderAnlagenstammPnTreeUl(fab, nodes, depth) {
+    depth = depth || 0;
+    nodes = nodes || [];
     var ul = document.createElement('ul');
-    (nodes || []).forEach(function (n) {
+    nodes.forEach(function (n) {
       if (!n || !n.type) return;
       var li = document.createElement('li');
       if (n.type === 'dir') {
         var st = document.createElement('strong');
         st.className = 'anlagenstamm-pn-dir';
-        st.textContent = pnDisplayLabelNode(n) || n.name || '';
+        st.textContent = n.name || '';
         li.appendChild(st);
         if (n.children && n.children.length) {
-          li.appendChild(renderAnlagenstammPnTreeUl(fab, n.children));
+          li.appendChild(renderAnlagenstammPnTreeUl(fab, n.children, depth + 1));
         }
       } else if (n.type === 'file') {
         var rel = String(n.rel || '');
@@ -2395,7 +2394,7 @@
         btn.style.font = 'inherit';
         btn.style.textAlign = 'left';
         btn.style.width = '100%';
-        btn.textContent = pnDisplayLabelNode(n) || n.name || rel;
+        btn.textContent = n.name || rel;
         btn.addEventListener('click', function () {
           downloadAnlagenstammProjekteNeu(fab, rel, String(n.name || '')).catch(function (err) {
             var m = document.getElementById('anlagenstammMessage');
@@ -2410,6 +2409,19 @@
       }
       ul.appendChild(li);
     });
+    if (depth === 0) {
+      var htxt = pnParentHeadingForSiblings(nodes);
+      if (htxt) {
+        var block = document.createElement('div');
+        block.className = 'anlagenstamm-pn-tree-block';
+        var head = document.createElement('div');
+        head.className = 'anlagenstamm-pn-parent-heading';
+        head.textContent = htxt;
+        block.appendChild(head);
+        block.appendChild(ul);
+        return block;
+      }
+    }
     return ul;
   }
 
