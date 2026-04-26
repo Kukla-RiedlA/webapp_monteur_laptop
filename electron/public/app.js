@@ -1541,7 +1541,8 @@
       const isRequest = a.from_absence_request === true;
       const action = isRequest ? 'delete-absence-request' : 'delete-absence';
       const title = isRequest ? 'Anfrage aus der Liste entfernen' : 'Abwesenheit löschen (lokal und in der Dispo)';
-      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(a.type || 'Abwesenheit') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="' + action + '" data-id="' + escapeHtml(String(a.id)) + '" title="' + escapeHtml(title) + '" aria-label="Löschen">🗑</button></div>');
+      var cmt = (a.comment && String(a.comment).trim()) ? (' · ' + escapeHtml(String(a.comment).trim())) : '';
+      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(a.type || 'Abwesenheit') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + cmt + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="' + action + '" data-id="' + escapeHtml(String(a.id)) + '" title="' + escapeHtml(title) + '" aria-label="Löschen">🗑</button></div>');
     });
     requests.forEach(function(r) {
       if (r.status === 'approved') return;
@@ -1551,7 +1552,8 @@
       else if (r.status === 'rejected') statusText = 'Abgelehnt';
       else if (r.status === 'error') statusText = 'Fehler bei Übertragung';
       else statusText = r.status || '';
-      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(r.type || 'Abwesenheit') + '</strong> <span class="job-meta">' + escapeHtml(dateStr) + ' – ' + statusText + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="delete-absence-request" data-id="' + escapeHtml(String(r.id)) + '" title="Anfrage aus der Liste entfernen" aria-label="Löschen">🗑</button></div>');
+      var cmt2 = (r.comment && String(r.comment).trim()) ? (' · ' + escapeHtml(String(r.comment).trim())) : '';
+      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(r.type || 'Abwesenheit') + '</strong> <span class="job-meta">' + escapeHtml(dateStr) + ' – ' + escapeHtml(statusText) + cmt2 + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="delete-absence-request" data-id="' + escapeHtml(String(r.id)) + '" title="Anfrage aus der Liste entfernen" aria-label="Löschen">🗑</button></div>');
     });
     var hasErrorRequests = requests.some(function(r) { return r.status === 'error'; });
     var btnCleanup = document.getElementById('btnCleanupErrorRequests');
@@ -1876,6 +1878,8 @@
     var start = startEl && startEl.value ? startEl.value : '';
     var end = endEl && endEl.value ? endEl.value : '';
     var type = (typeEl && typeEl.value) ? typeEl.value.trim() : 'Abwesenheit';
+    var commentEl = document.getElementById('absenceRequestComment');
+    var cmtV = (commentEl && commentEl.value) ? commentEl.value.trim() : '';
     if (!start || !end) {
       if (msgEl) msgEl.textContent = 'Bitte Start- und Enddatum angeben.';
       return;
@@ -1884,6 +1888,7 @@
       start_datetime: start + 'T00:00:00',
       end_datetime: end + 'T23:59:59',
       type: type || 'Abwesenheit',
+      comment: cmtV === '' ? null : cmtV,
       base_url: getServerUrl() || undefined,
       serverUsername: getDispoUsername() || undefined,
       serverPassword: getDispoPassword() || undefined
@@ -3098,7 +3103,9 @@
           band.className = 'month2-band month2-absence';
           band.style.setProperty('--stripes', o.technician_color || '#999');
           band.textContent = (o.type || 'Abwesenheit') + (o.technician_name ? ' – ' + (o.technician_name.substring(0, 20)) : '');
-          band.title = (o.type || 'Abwesenheit') + (o.technician_name ? ' – ' + o.technician_name : '');
+          var ttip = (o.type || 'Abwesenheit') + (o.technician_name ? ' – ' + o.technician_name : '');
+          if (o.comment && String(o.comment).trim()) ttip += ' | ' + String(o.comment).trim();
+          band.title = ttip;
         } else {
           const j = o;
           band.className = 'month2-band month2-event';

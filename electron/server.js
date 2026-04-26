@@ -153,6 +153,8 @@ async function getDb() {
   try { sqlDb.run('ALTER TABLE jobs ADD COLUMN eap_nummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
   try { sqlDb.run('ALTER TABLE jobs ADD COLUMN bestellnummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
   try { sqlDb.run('ALTER TABLE job_addresses ADD COLUMN endkunde TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
+  try { sqlDb.run('ALTER TABLE absences ADD COLUMN comment TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
+  try { sqlDb.run('ALTER TABLE absence_requests ADD COLUMN comment TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
   try {
     sqlDb.run(`CREATE TABLE IF NOT EXISTS job_contacts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2693,7 +2695,7 @@ function createApp(db) {
     }
     const dateFrom = req.query.date_from || null;
     const dateTo = req.query.date_to || null;
-    let sql = 'SELECT id, server_id, technician_id, start_datetime, end_datetime, type FROM absences WHERE technician_id = ?';
+    let sql = 'SELECT id, server_id, technician_id, start_datetime, end_datetime, type, comment FROM absences WHERE technician_id = ?';
     const params = [technicianId];
     if (dateFrom) { sql += ' AND end_datetime >= ?'; params.push(dateFrom + ' 00:00:00'); }
     if (dateTo) { sql += ' AND start_datetime <= ?'; params.push(dateTo + ' 23:59:59'); }
@@ -2702,7 +2704,7 @@ function createApp(db) {
     const byKey = new Map();
     rows.forEach((r) => byKey.set(absencePeriodDedupeKey(r.technician_id, r.start_datetime, r.end_datetime), true));
     // Genehmigte und ausstehende Abwesenheitsanfragen mit anzeigen (z. B. eigene Abwesenheit in Einzeltechniker-Ansicht)
-    let reqSql = 'SELECT id, server_id, technician_id, start_datetime, end_datetime, type, status FROM absence_requests WHERE technician_id = ? AND status IN (\'approved\', \'pending\')';
+    let reqSql = 'SELECT id, server_id, technician_id, start_datetime, end_datetime, type, comment, status FROM absence_requests WHERE technician_id = ? AND status IN (\'approved\', \'pending\')';
     const reqParams = [technicianId];
     if (dateFrom) { reqSql += ' AND end_datetime >= ?'; reqParams.push(dateFrom + ' 00:00:00'); }
     if (dateTo) { reqSql += ' AND start_datetime <= ?'; reqParams.push(dateTo + ' 23:59:59'); }
@@ -2712,7 +2714,7 @@ function createApp(db) {
       const key = absencePeriodDedupeKey(r.technician_id, r.start_datetime, r.end_datetime);
       if (!byKey.has(key)) {
         byKey.set(key, true);
-        rows.push({ id: r.id, server_id: r.server_id, technician_id: r.technician_id, start_datetime: r.start_datetime, end_datetime: r.end_datetime, type: r.type, from_absence_request: true, status: r.status });
+        rows.push({ id: r.id, server_id: r.server_id, technician_id: r.technician_id, start_datetime: r.start_datetime, end_datetime: r.end_datetime, type: r.type, comment: r.comment != null ? r.comment : null, from_absence_request: true, status: r.status });
       }
     });
     rows.sort((a, b) => String(a.start_datetime || '').localeCompare(String(b.start_datetime || '')));
@@ -2753,7 +2755,7 @@ function createApp(db) {
     if (!technicianId) {
       return res.status(400).json({ ok: false, error: 'technician_id fehlt.' });
     }
-    const rows = db.prepare('SELECT id, server_id, technician_id, start_datetime, end_datetime, type, status, requested_at, synced_at FROM absence_requests WHERE technician_id = ? ORDER BY requested_at DESC').all(technicianId);
+    const rows = db.prepare('SELECT id, server_id, technician_id, start_datetime, end_datetime, type, comment, status, requested_at, synced_at FROM absence_requests WHERE technician_id = ? ORDER BY requested_at DESC').all(technicianId);
     res.json({ ok: true, technician_id: technicianId, requests: rows });
   });
 
@@ -2791,6 +2793,7 @@ function createApp(db) {
     const start = body.start_datetime || body.start || body.date_from || '';
     const end = body.end_datetime || body.end || body.date_to || '';
     const type = body.type || body.reason || null;
+    let comment = body.comment != null && String(body.comment).trim() !== '' ? String(body.comment).trim() : null;
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
     if (!technicianId || !start || !end) {
       return res.status(400).json({ ok: false, error: 'technician_id, start_datetime und end_datetime erforderlich.' });
@@ -2799,7 +2802,7 @@ function createApp(db) {
     const startNorm = norm(start);
     const endNorm = norm(end);
     try {
-      const r = db.prepare('INSERT INTO absence_requests (technician_id, start_datetime, end_datetime, type, status) VALUES (?, ?, ?, ?, ?)').run(technicianId, startNorm, endNorm, type || null, 'pending');
+      const r = db.prepare('INSERT INTO absence_requests (technician_id, start_datetime, end_datetime, type, comment, status) VALUES (?, ?, ?, ?, ?, ?)').run(technicianId, startNorm, endNorm, type || null, comment, 'pending');
       const localId = r.lastInsertRowid;
       save();
       if (baseUrl) {
@@ -2809,7 +2812,7 @@ function createApp(db) {
         fetch(baseUrl + '/api/absence_request.php', {
           method: 'POST',
           headers: header,
-          body: JSON.stringify({ technician_id: technicianId, start_datetime: startNorm, end_datetime: endNorm, type: type || null }),
+          body: JSON.stringify({ technician_id: technicianId, start_datetime: startNorm, end_datetime: endNorm, type: type || null, comment: comment }),
         }).then(async (resp) => {
           const data = await resp.json().catch(() => ({}));
           if (resp.ok && data.ok && data.id) {
@@ -2863,14 +2866,15 @@ function createApp(db) {
     const start = body.start_datetime || body.start || body.date_from || '';
     const end = body.end_datetime || body.end || body.date_to || '';
     const type = body.type || null;
+    const comment = body.comment != null && String(body.comment).trim() !== '' ? String(body.comment).trim() : null;
     if (!technicianId || !start || !end) {
       return res.status(400).json({ ok: false, error: 'technician_id, start_datetime und end_datetime erforderlich.' });
     }
     const norm = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v).trim()) ? v.trim() + ' 00:00:00' : v.trim();
     try {
-      const r = db.prepare('INSERT INTO absences (technician_id, start_datetime, end_datetime, type) VALUES (?, ?, ?, ?)').run(technicianId, norm(start), norm(end), type || '');
+      const r = db.prepare('INSERT INTO absences (technician_id, start_datetime, end_datetime, type, comment) VALUES (?, ?, ?, ?, ?)').run(technicianId, norm(start), norm(end), type || '', comment);
       const id = r.lastInsertRowid;
-      db.prepare('INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)').run('absence', id, 'create', JSON.stringify({ start_datetime: norm(start), end_datetime: norm(end), type }));
+      db.prepare('INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)').run('absence', id, 'create', JSON.stringify({ start_datetime: norm(start), end_datetime: norm(end), type, comment }));
       save();
       res.json({ ok: true, id });
     } catch (e) {
@@ -2885,14 +2889,23 @@ function createApp(db) {
     const start = body.start_datetime || body.start || body.date_from || '';
     const end = body.end_datetime || body.end || body.date_to || '';
     const type = body.type || null;
+    const hasComment = Object.prototype.hasOwnProperty.call(body, 'comment');
+    const comment = hasComment && body.comment != null && String(body.comment).trim() !== '' ? String(body.comment).trim() : (hasComment ? null : undefined);
     if (!technicianId || !id || !start || !end) {
       return res.status(400).json({ ok: false, error: 'technician_id, id, start_datetime und end_datetime erforderlich.' });
     }
     const norm = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v).trim()) ? v.trim() + ' 00:00:00' : v.trim();
     try {
-      const r = db.prepare('UPDATE absences SET start_datetime = ?, end_datetime = ?, type = ? WHERE id = ? AND technician_id = ?').run(norm(start), norm(end), type || '', id, technicianId);
+      let r;
+      if (hasComment) {
+        r = db.prepare('UPDATE absences SET start_datetime = ?, end_datetime = ?, type = ?, comment = ? WHERE id = ? AND technician_id = ?').run(norm(start), norm(end), type || '', comment, id, technicianId);
+      } else {
+        r = db.prepare('UPDATE absences SET start_datetime = ?, end_datetime = ?, type = ? WHERE id = ? AND technician_id = ?').run(norm(start), norm(end), type || '', id, technicianId);
+      }
       if (r.changes) {
-        db.prepare('INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)').run('absence', id, 'update', JSON.stringify({ start_datetime: norm(start), end_datetime: norm(end), type }));
+        const pl = { start_datetime: norm(start), end_datetime: norm(end), type: type || '' };
+        if (hasComment) pl.comment = comment;
+        db.prepare('INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)').run('absence', id, 'update', JSON.stringify(pl));
         save();
         return res.json({ ok: true });
       }
@@ -3464,12 +3477,13 @@ function insertOrUpdateAbsence(db, a, technicianId) {
   const start = (a.start_datetime || '').replace('T', ' ').substring(0, 19);
   const end = (a.end_datetime || '').replace('T', ' ').substring(0, 19);
   const type = a.type || '';
+  const comment = a.comment != null && String(a.comment).trim() !== '' ? String(a.comment).trim() : null;
   const existing = db.prepare('SELECT id FROM absences WHERE server_id = ?').get(serverId);
   if (existing) {
-    db.prepare('UPDATE absences SET start_datetime = ?, end_datetime = ?, type = ?, synced_at = datetime(\'now\') WHERE id = ?').run(start, end, type, existing.id);
+    db.prepare('UPDATE absences SET start_datetime = ?, end_datetime = ?, type = ?, comment = ?, synced_at = datetime(\'now\') WHERE id = ?').run(start, end, type, comment, existing.id);
     return;
   }
-  db.prepare('INSERT INTO absences (server_id, technician_id, start_datetime, end_datetime, type, synced_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\'))').run(serverId, technicianId, start, end, type);
+  db.prepare('INSERT INTO absences (server_id, technician_id, start_datetime, end_datetime, type, comment, synced_at) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'))').run(serverId, technicianId, start, end, type, comment);
 }
 
 /**
@@ -3590,7 +3604,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       }
     }
   }
-  const pendingRequests = db.prepare('SELECT id, start_datetime, end_datetime, type FROM absence_requests WHERE technician_id = ? AND status = ? AND (server_id IS NULL OR server_id = \'\')').all(technicianId, 'pending');
+  const pendingRequests = db.prepare('SELECT id, start_datetime, end_datetime, type, comment FROM absence_requests WHERE technician_id = ? AND status = ? AND (server_id IS NULL OR server_id = \'\')').all(technicianId, 'pending');
   for (const row of pendingRequests) {
     try {
       const r = await fetch(`${base}/api/absence_request.php`, {
@@ -3601,6 +3615,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           start_datetime: row.start_datetime,
           end_datetime: row.end_datetime,
           type: row.type || null,
+          comment: row.comment != null && String(row.comment).trim() !== '' ? String(row.comment).trim() : null,
         }),
       });
       const data = await r.json().catch(() => ({}));

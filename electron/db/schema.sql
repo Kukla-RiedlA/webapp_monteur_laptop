@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS absences (
   start_datetime TEXT NOT NULL,
   end_datetime TEXT NOT NULL,
   type TEXT,
+  comment TEXT,
   synced_at TEXT,
   FOREIGN KEY (technician_id) REFERENCES users(id)
 );
@@ -106,6 +107,7 @@ CREATE TABLE IF NOT EXISTS absence_requests (
   start_datetime TEXT NOT NULL,
   end_datetime TEXT NOT NULL,
   type TEXT,
+  comment TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   requested_at TEXT DEFAULT (datetime('now')),
   synced_at TEXT,

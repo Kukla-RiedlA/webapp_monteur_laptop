@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.044
+- **Abwesenheit: Kommentar:** SQLite `absences`/`absence_requests` Spalte `comment`; `DispoRepository` + `api/absence.php`; `electron/server.js` (Sync, pending_changes, my_absences); `electron/public` (Modal, Liste, Kalender-Tooltip). Migration per `ALTER` in `getDb()`.
+
 ## V 1.043
 - **Plattform-Release:** Build um eins erhöht und Versionsstände in `config/version.php`, `electron/version.json` sowie `electron/package.json` synchronisiert.
 

@@ -30,12 +30,14 @@ if ($method === 'POST') {
     $start = $data['start_datetime'] ?? $data['start'] ?? $data['date_from'] ?? '';
     $end = $data['end_datetime'] ?? $data['end'] ?? $data['date_to'] ?? '';
     $type = $data['type'] ?? null;
+    $comment = isset($data['comment']) ? trim((string) $data['comment']) : '';
+    $comment = $comment === '' ? null : $comment;
     if ($start === '' || $end === '') {
         http_response_code(400);
         echo json_encode(['ok' => false, 'error' => 'start_datetime und end_datetime (oder start/end, date_from/date_to) erforderlich.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
-    $id = $repo->createAbsence($technicianId, $start, $end, $type !== null ? (string) $type : null);
+    $id = $repo->createAbsence($technicianId, $start, $end, $type !== null ? (string) $type : null, $comment);
     echo json_encode(['ok' => true, 'id' => $id], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -45,12 +47,19 @@ if ($method === 'PATCH' || $method === 'PUT') {
     $start = $data['start_datetime'] ?? $data['start'] ?? $data['date_from'] ?? '';
     $end = $data['end_datetime'] ?? $data['end'] ?? $data['date_to'] ?? '';
     $type = $data['type'] ?? null;
+    $hasComment = array_key_exists('comment', $data);
     if ($id <= 0 || $start === '' || $end === '') {
         http_response_code(400);
         echo json_encode(['ok' => false, 'error' => 'id, start_datetime und end_datetime erforderlich.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
-    $ok = $repo->updateAbsence($id, $technicianId, $start, $end, $type !== null ? (string) $type : null);
+    if ($hasComment) {
+        $c = isset($data['comment']) ? trim((string) $data['comment']) : '';
+        $c = $c === '' ? null : $c;
+        $ok = $repo->updateAbsence($id, $technicianId, $start, $end, $type !== null ? (string) $type : null, $c, true);
+    } else {
+        $ok = $repo->updateAbsence($id, $technicianId, $start, $end, $type !== null ? (string) $type : null, null, false);
+    }
     if (!$ok) {
         http_response_code(404);
         echo json_encode(['ok' => false, 'error' => 'Abwesenheit nicht gefunden oder keine Berechtigung.'], JSON_UNESCAPED_UNICODE);

@@ -379,7 +379,7 @@ final class DispoRepository
      */
     public function getAbsencesForTechnician(int $technicianId, ?string $dateFrom = null, ?string $dateTo = null): array
     {
-        $sql = 'SELECT id, technician_id, start_datetime, end_datetime, type
+        $sql = 'SELECT id, technician_id, start_datetime, end_datetime, type, comment
                 FROM absences
                 WHERE technician_id = :technician_id';
         $params = [':technician_id' => $technicianId];
@@ -405,18 +405,19 @@ final class DispoRepository
      * Eine Abwesenheit anlegen.
      * start_datetime / end_datetime Format: Y-m-d H:i:s oder Y-m-d
      */
-    public function createAbsence(int $technicianId, string $startDatetime, string $endDatetime, ?string $type = null): int
+    public function createAbsence(int $technicianId, string $startDatetime, string $endDatetime, ?string $type = null, ?string $comment = null): int
     {
         $start = $this->normalizeDatetime($startDatetime);
         $end = $this->normalizeDatetime($endDatetime);
-        $sql = 'INSERT INTO absences (technician_id, start_datetime, end_datetime, type)
-                VALUES (:technician_id, :start_datetime, :end_datetime, :type)';
+        $sql = 'INSERT INTO absences (technician_id, start_datetime, end_datetime, type, comment)
+                VALUES (:technician_id, :start_datetime, :end_datetime, :type, :comment)';
         $stmt = $this->fsm->prepare($sql);
         $stmt->execute([
             ':technician_id' => $technicianId,
             ':start_datetime' => $start,
             ':end_datetime' => $end,
             ':type' => $type ?? '',
+            ':comment' => $comment !== null && $comment !== '' ? $comment : null,
         ]);
         return (int) $this->fsm->lastInsertId();
     }
@@ -424,21 +425,36 @@ final class DispoRepository
     /**
      * Abwesenheit aktualisieren (nur eigene).
      */
-    public function updateAbsence(int $absenceId, int $technicianId, string $startDatetime, string $endDatetime, ?string $type = null): bool
+    public function updateAbsence(int $absenceId, int $technicianId, string $startDatetime, string $endDatetime, ?string $type = null, ?string $comment = null, bool $setComment = false): bool
     {
         $start = $this->normalizeDatetime($startDatetime);
         $end = $this->normalizeDatetime($endDatetime);
-        $sql = 'UPDATE absences
+        if ($setComment) {
+            $sql = 'UPDATE absences
+                SET start_datetime = :start_datetime, end_datetime = :end_datetime, type = :type, comment = :comment
+                WHERE id = :id AND technician_id = :technician_id';
+            $stmt = $this->fsm->prepare($sql);
+            $stmt->execute([
+                ':id' => $absenceId,
+                ':technician_id' => $technicianId,
+                ':start_datetime' => $start,
+                ':end_datetime' => $end,
+                ':type' => $type ?? '',
+                ':comment' => $comment !== null && $comment !== '' ? $comment : null,
+            ]);
+        } else {
+            $sql = 'UPDATE absences
                 SET start_datetime = :start_datetime, end_datetime = :end_datetime, type = :type
                 WHERE id = :id AND technician_id = :technician_id';
-        $stmt = $this->fsm->prepare($sql);
-        $stmt->execute([
-            ':id' => $absenceId,
-            ':technician_id' => $technicianId,
-            ':start_datetime' => $start,
-            ':end_datetime' => $end,
-            ':type' => $type ?? '',
-        ]);
+            $stmt = $this->fsm->prepare($sql);
+            $stmt->execute([
+                ':id' => $absenceId,
+                ':technician_id' => $technicianId,
+                ':start_datetime' => $start,
+                ':end_datetime' => $end,
+                ':type' => $type ?? '',
+            ]);
+        }
         return $stmt->rowCount() > 0;
     }
 
