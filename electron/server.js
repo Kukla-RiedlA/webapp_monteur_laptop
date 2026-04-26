@@ -1741,15 +1741,28 @@ function createApp(db) {
 
   app.post('/api/anlagenstamm_file_download', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
-    const { baseUrl, fab, file, serverUsername, serverPassword } = req.body || {};
+    const { baseUrl, fab, file, path: pnPathRaw, source: sourceRaw, serverUsername, serverPassword } = req.body || {};
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
     const fabValue = (fab || '').toString().trim();
     const fileValue = (file || '').toString().trim();
-    if (!technicianId || !base || !fabValue || !fileValue) {
-      return res.status(400).json({ ok: false, error: 'baseUrl, fab, file und technician_id erforderlich.' });
+    const sourceNorm = String(sourceRaw || '').toLowerCase().trim();
+    const pnPath = (pnPathRaw || '').toString().trim();
+    if (!technicianId || !base || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    const url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&file=${encodeURIComponent(fileValue)}`;
+    let url;
+    if (sourceNorm === 'projekte_neu') {
+      if (!pnPath) {
+        return res.status(400).json({ ok: false, error: 'path erforderlich für PROJEKTE NEU.' });
+      }
+      url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&source=projekte_neu&path=${encodeURIComponent(pnPath)}`;
+    } else {
+      if (!fileValue) {
+        return res.status(400).json({ ok: false, error: 'baseUrl, fab, file und technician_id erforderlich.' });
+      }
+      url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&file=${encodeURIComponent(fileValue)}`;
+    }
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
       if (!r.ok) {
@@ -1758,7 +1771,10 @@ function createApp(db) {
       }
       const buf = Buffer.from(await r.arrayBuffer());
       const ct = r.headers.get('content-type') || 'application/octet-stream';
-      const cd = r.headers.get('content-disposition') || ('attachment; filename="' + encodeURIComponent(fileValue) + '"');
+      const fallbackFn = sourceNorm === 'projekte_neu'
+        ? (pnPath.split(/[/\\]/).pop() || 'download')
+        : fileValue;
+      const cd = r.headers.get('content-disposition') || ('attachment; filename="' + encodeURIComponent(fallbackFn) + '"');
       res.setHeader('Content-Type', ct);
       res.setHeader('Content-Disposition', cd);
       res.setHeader('Content-Length', String(buf.length));

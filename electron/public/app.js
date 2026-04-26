@@ -2355,6 +2355,64 @@
     return (s / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
+  function formatAnlagenstammMtime(ts) {
+    var n = Number(ts || 0);
+    if (!n) return '';
+    try {
+      return new Date(n * 1000).toLocaleDateString('de-AT');
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function pnDisplayLabelNode(n) {
+    if (!n) return '';
+    var pn = String(n.parent_name || n.parentName || '').trim();
+    var nm = String(n.name || '').trim();
+    if (pn) return pn + ' / ' + (nm || '(Eintrag)');
+    return nm || '';
+  }
+
+  function renderAnlagenstammPnTreeUl(fab, nodes) {
+    var ul = document.createElement('ul');
+    (nodes || []).forEach(function (n) {
+      if (!n || !n.type) return;
+      var li = document.createElement('li');
+      if (n.type === 'dir') {
+        var st = document.createElement('strong');
+        st.className = 'anlagenstamm-pn-dir';
+        st.textContent = pnDisplayLabelNode(n) || n.name || '';
+        li.appendChild(st);
+        if (n.children && n.children.length) {
+          li.appendChild(renderAnlagenstammPnTreeUl(fab, n.children));
+        }
+      } else if (n.type === 'file') {
+        var rel = String(n.rel || '');
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost';
+        btn.style.padding = '0.15rem 0';
+        btn.style.font = 'inherit';
+        btn.style.textAlign = 'left';
+        btn.style.width = '100%';
+        btn.textContent = pnDisplayLabelNode(n) || n.name || rel;
+        btn.addEventListener('click', function () {
+          downloadAnlagenstammProjekteNeu(fab, rel, String(n.name || '')).catch(function (err) {
+            var m = document.getElementById('anlagenstammMessage');
+            if (m) m.textContent = 'Fehler: ' + (err.message || String(err));
+          });
+        });
+        li.appendChild(btn);
+        var meta = document.createElement('span');
+        meta.className = 'muted';
+        meta.textContent = ' ' + formatAnlagenstammSize(n.size) + ' · ' + formatAnlagenstammMtime(n.mtime);
+        li.appendChild(meta);
+      }
+      ul.appendChild(li);
+    });
+    return ul;
+  }
+
   async function loadAnlagenstamm() {
     const msgEl = document.getElementById('anlagenstammMessage');
     const cardEl = document.getElementById('anlagenstammCard');
@@ -2364,11 +2422,23 @@
       if (msgEl) msgEl.textContent = 'Bitte Fabrikationsnummer eingeben.';
       if (cardEl) cardEl.innerHTML = '';
       if (filesEl) { filesEl.style.display = 'none'; filesEl.innerHTML = ''; }
+      var pnSec0 = document.getElementById('anlagenstammPnSection');
+      var pnTree0 = document.getElementById('anlagenstammPnTree');
+      var pnHint0 = document.getElementById('anlagenstammPnHint');
+      if (pnSec0) pnSec0.style.display = 'none';
+      if (pnTree0) pnTree0.innerHTML = '';
+      if (pnHint0) pnHint0.textContent = '';
       return;
     }
     if (msgEl) msgEl.textContent = 'Lade...';
     if (cardEl) cardEl.innerHTML = '';
     if (filesEl) { filesEl.style.display = 'none'; filesEl.innerHTML = ''; }
+    var pnSecL = document.getElementById('anlagenstammPnSection');
+    var pnTreeL = document.getElementById('anlagenstammPnTree');
+    var pnHintL = document.getElementById('anlagenstammPnHint');
+    if (pnSecL) pnSecL.style.display = 'none';
+    if (pnTreeL) pnTreeL.innerHTML = '';
+    if (pnHintL) pnHintL.textContent = '';
     try {
       const payload = {
         baseUrl: getServerUrl(),
@@ -2405,9 +2475,34 @@
           });
         });
       }
+      var pnSection = document.getElementById('anlagenstammPnSection');
+      var pnTreeEl = document.getElementById('anlagenstammPnTree');
+      var pnHintEl = document.getElementById('anlagenstammPnHint');
+      if (pnSection && pnTreeEl && pnHintEl) {
+        pnSection.style.display = 'block';
+        pnTreeEl.innerHTML = '';
+        var pnRaw = files && files.projekte_neu ? files.projekte_neu : {};
+        if (!pnRaw.enabled) {
+          pnHintEl.textContent = 'PROJEKTE NEU ist nicht verfügbar oder der Fabrikationsordner wurde auf dem Mount nicht gefunden.';
+        } else {
+          pnHintEl.textContent = '';
+          var tr = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
+          if (!tr.length) {
+            pnTreeEl.innerHTML = '<div class="empty" style="padding:0.35rem 0">Keine Einträge in diesem Fabrikationsordner.</div>';
+          } else {
+            pnTreeEl.appendChild(renderAnlagenstammPnTreeUl(fab, tr));
+          }
+        }
+      }
       if (msgEl) msgEl.textContent = '';
     } catch (e) {
       if (msgEl) msgEl.textContent = 'Fehler: ' + (e.message || String(e));
+      var pnSecE = document.getElementById('anlagenstammPnSection');
+      var pnTreeE = document.getElementById('anlagenstammPnTree');
+      var pnHintE = document.getElementById('anlagenstammPnHint');
+      if (pnSecE) pnSecE.style.display = 'none';
+      if (pnTreeE) pnTreeE.innerHTML = '';
+      if (pnHintE) pnHintE.textContent = '';
     }
   }
 
@@ -2438,6 +2533,41 @@
     const a = document.createElement('a');
     a.href = url;
     a.download = file;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  async function downloadAnlagenstammProjekteNeu(fab, relPath, fallbackName) {
+    if (!fab || !relPath) return;
+    const technicianId = getTechId();
+    const resp = await fetch(API_BASE + '/api/anlagenstamm_file_download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
+      body: JSON.stringify({
+        baseUrl: getServerUrl(),
+        fab: fab,
+        source: 'projekte_neu',
+        path: relPath,
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword()
+      })
+    });
+    if (!resp.ok) {
+      let err = 'Download fehlgeschlagen.';
+      try {
+        const j = await resp.json();
+        if (j && j.error) err = j.error;
+      } catch (_) {}
+      throw new Error(err);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    var parts = relPath.split('/');
+    a.download = (fallbackName && String(fallbackName).trim()) || parts[parts.length - 1] || 'download';
     document.body.appendChild(a);
     a.click();
     a.remove();

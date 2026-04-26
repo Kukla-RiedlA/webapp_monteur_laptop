@@ -109,6 +109,11 @@
     .anlagenstamm-files-list { margin-top:0.5rem; border:1px solid var(--accent); border-radius:6px; overflow:hidden; }
     .anlagenstamm-files-row { padding:0.55rem 0.7rem; border-bottom:1px solid var(--accent); display:flex; align-items:center; justify-content:space-between; gap:0.6rem; }
     .anlagenstamm-files-row:last-child { border-bottom:none; }
+    .anlagenstamm-pn-section { margin-top: 0.75rem; }
+    .anlagenstamm-pn-hint { font-size: 0.85rem; color: #888; margin: 0 0 0.35rem 0; }
+    .anlagenstamm-pn-tree { border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.75rem; max-height: 40vh; overflow: auto; }
+    .anlagenstamm-pn-tree ul { list-style: disc; margin: 0.25rem 0; padding-left: 1.15rem; }
+    .anlagenstamm-pn-tree .anlagenstamm-pn-dir { display: block; margin: 0.35rem 0 0.1rem; font-weight: 600; }
     .view-projektdaten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-projektdaten.active { display: block; }
     .view-projektdaten .card { max-width: none; }
@@ -783,6 +788,11 @@
       <div id="anlagenstammMessage" class="empty">Bitte Fabrikationsnummer eingeben.</div>
       <div id="anlagenstammCard"></div>
       <div id="anlagenstammFiles" class="anlagenstamm-files-list" style="display:none"></div>
+      <div id="anlagenstammPnSection" class="anlagenstamm-pn-section" style="display:none">
+        <h3 style="font-size:1rem;margin:0.75rem 0 0.25rem 0">PROJEKTE NEU</h3>
+        <p id="anlagenstammPnHint" class="anlagenstamm-pn-hint"></p>
+        <div id="anlagenstammPnTree" class="anlagenstamm-pn-tree"></div>
+      </div>
     </div>
   </main>
   <main id="viewEinstellungen" class="view-einstellungen">

@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.045
+- **Anlagenstamm:** PROJEKTE-NEU-Baum (Lesepfad wie Dispo) mit **Überordner / Name**-Labels; Download über Proxy mit **`source: projekte_neu`** und **`path`**. `electron/server.js`: `POST /api/anlagenstamm_file_download` leitet optional an Dispo `source=projekte_neu&path=` weiter.
+
 ## V 1.044
 - **Abwesenheit: Kommentar:** SQLite `absences`/`absence_requests` Spalte `comment`; `DispoRepository` + `api/absence.php`; `electron/server.js` (Sync, pending_changes, my_absences); `electron/public` (Modal, Liste, Kalender-Tooltip). Migration per `ALTER` in `getDb()`.
 
