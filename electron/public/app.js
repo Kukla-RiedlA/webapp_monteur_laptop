@@ -1410,16 +1410,25 @@
     }
     try {
       const data = await fetch(API_BASE + '/api/technician?technician_id=' + techId, { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json());
-      el.textContent = (data.full_name && data.full_name.trim()) ? data.full_name.trim() : 'Techniker';
+      const fullName = (data && data.full_name && String(data.full_name).trim()) ? String(data.full_name).trim() : '';
+      const username = (data && data.username && String(data.username).trim()) ? String(data.username).trim() : '';
+      if (fullName) {
+        el.textContent = fullName;
+      } else if (username) {
+        el.textContent = username;
+      } else {
+        el.textContent = 'Techniker ' + String(techId);
+      }
     } catch (e) {
-      el.textContent = 'Techniker';
+      el.textContent = 'Techniker ' + String(techId);
     }
   }
 
   function setConnectionBadge(state, reason) {
     const badge = document.getElementById('connectionBadge');
     const wrap = document.getElementById('connectionBadgeWrap');
-    if (wrap) wrap.classList.toggle('clickable', state === 'online');
+    // Manuelles Prüfen/Sync soll jederzeit per Klick möglich sein.
+    if (wrap) wrap.classList.add('clickable');
     if (state === 'online') {
       badge.textContent = 'Online';
       badge.className = 'online-badge';
@@ -1633,16 +1642,16 @@
   function triggerManualSync() {
     var base = getServerUrl().trim();
     var techId = getTechId();
-    if (!techId || !base) return Promise.resolve();
     var badge = document.getElementById('connectionBadge');
     if (badge) badge.textContent = 'Wird synchronisiert…';
+    // Auch ohne vollständige Einstellungen aktiv prüfen:
+    // checkConnectionAndSync setzt dann konsistent "Offline"/"Lokal" inkl. Grund.
     return checkConnectionAndSync().finally(function () {
       startSyncInterval();
     });
   }
 
   document.getElementById('connectionBadgeWrap').addEventListener('click', function () {
-    if (!this.classList.contains('clickable')) return;
     triggerManualSync();
   });
 
