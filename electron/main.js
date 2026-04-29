@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
+const { spawn } = require('child_process');
 const { createApp, getDb, PORT } = require('./server');
 
 let mainWindow;
@@ -125,8 +127,159 @@ ipcMain.handle('dienstreise:choose-folder', async () => {
 });
 
 ipcMain.handle('dienstreise:open-path', async (event, filePath) => {
-  if (typeof filePath !== 'string' || !filePath.trim()) return;
-  await shell.openPath(filePath.trim());
+  if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
+  const raw = filePath.trim();
+  const normalized = path.normalize(raw);
+  const win = process.platform === 'win32';
+  const openTrace = [];
+  function trace(step, info) {
+    const line = '[open-path] ' + step + (info ? ' | ' + info : '');
+    openTrace.push(line);
+    try { console.log(line); } catch (_) {}
+  }
+  function isExcelFile(targetPath) {
+    const ext = String(path.extname(targetPath || '')).toLowerCase();
+    return ext === '.xls' || ext === '.xlsx' || ext === '.xlsm' || ext === '.xlsb' || ext === '.csv';
+  }
+  function tryLaunchExcelDirect(targetPath) {
+    if (!win || !isExcelFile(targetPath)) return false;
+    trace('tryLaunchExcelDirect', targetPath);
+    const candidates = [
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE',
+      'C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\EXCEL.EXE',
+      'C:\\Program Files\\Microsoft Office\\Office16\\EXCEL.EXE',
+      'C:\\Program Files (x86)\\Microsoft Office\\Office16\\EXCEL.EXE',
+      'C:\\Program Files\\Microsoft Office\\Office15\\EXCEL.EXE',
+      'C:\\Program Files (x86)\\Microsoft Office\\Office15\\EXCEL.EXE'
+    ];
+    const exe = candidates.find((p) => {
+      try { return fs.existsSync(p); } catch (_) { return false; }
+    });
+    if (!exe) return false;
+    try {
+      const p = spawn(exe, [targetPath], { windowsHide: true, detached: true, stdio: 'ignore' });
+      p.unref();
+      trace('tryLaunchExcelDirect.ok', exe);
+      return true;
+    } catch (_) {
+      trace('tryLaunchExcelDirect.fail');
+      return false;
+    }
+  }
+  function tryLaunchExcelByCom(targetPath) {
+    if (!win || !isExcelFile(targetPath)) return false;
+    trace('tryLaunchExcelByCom', targetPath);
+    try {
+      const ps = [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        '$p=$args[0];',
+        'try {',
+        '  $excel = New-Object -ComObject Excel.Application;',
+        '  $excel.Visible = $true;',
+        '  $excel.DisplayAlerts = $false;',
+        '  $null = $excel.Workbooks.Open($p);',
+        '  exit 0;',
+        '} catch {',
+        '  exit 1;',
+        '}'
+      ];
+      const p = spawn('powershell.exe', ps.concat([targetPath]), {
+        windowsHide: true,
+        detached: true,
+        stdio: 'ignore'
+      });
+      p.unref();
+      trace('tryLaunchExcelByCom.started');
+      return true;
+    } catch (_) {
+      trace('tryLaunchExcelByCom.fail');
+      return false;
+    }
+  }
+  function tryWindowsStartProcess(targetPath) {
+    try {
+      trace('tryWindowsStartProcess', targetPath);
+      // LiteralPath verhindert Probleme mit Sonderzeichen/Leerzeichen.
+      const p = spawn('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        'Start-Process -LiteralPath $args[0]',
+        targetPath
+      ], { windowsHide: true, detached: true, stdio: 'ignore' });
+      p.unref();
+      trace('tryWindowsStartProcess.started');
+      return true;
+    } catch (_) {
+      trace('tryWindowsStartProcess.fail');
+      return false;
+    }
+  }
+  function tryWindowsCmdStart(targetPath) {
+    try {
+      trace('tryWindowsCmdStart', targetPath);
+      const p = spawn('cmd.exe', ['/c', 'start', '', `"${targetPath}"`], {
+        windowsHide: true,
+        detached: true,
+        stdio: 'ignore'
+      });
+      p.unref();
+      trace('tryWindowsCmdStart.started');
+      return true;
+    } catch (_) {
+      trace('tryWindowsCmdStart.fail');
+      return false;
+    }
+  }
+  try {
+    trace('start', normalized);
+    if (!fs.existsSync(normalized)) {
+      trace('missing', normalized);
+      return { ok: false, error: 'Datei nicht gefunden: ' + normalized };
+    }
+    trace('exists', normalized);
+    const openResult = await shell.openPath(normalized);
+    trace('shell.openPath.result', String(openResult || 'ok'));
+    if (typeof openResult === 'string' && openResult.trim()) {
+      try {
+        await shell.openExternal(pathToFileURL(normalized).toString());
+        trace('shell.openExternal.fileurl.ok');
+        return { ok: true, fallback: true, warning: openResult.trim() };
+      } catch (_) {
+        if (tryLaunchExcelByCom(normalized)) {
+          return { ok: true, fallback: true, warning: openResult.trim() };
+        }
+        if (tryLaunchExcelDirect(normalized)) {
+          return { ok: true, fallback: true, warning: openResult.trim() };
+        }
+        // Zusätzliche robuste Windows-Fallbacks über Shell-Dateizuordnung.
+        if (win && (tryWindowsStartProcess(normalized) || tryWindowsCmdStart(normalized))) {
+          return { ok: true, fallback: true, warning: openResult.trim() };
+        }
+        trace('all-fallbacks-failed', openResult.trim());
+        return { ok: false, error: openResult.trim() };
+      }
+    }
+    trace('shell.openPath.ok');
+    return { ok: true };
+  } catch (e) {
+    trace('exception', e && e.message ? e.message : String(e));
+    if (tryLaunchExcelByCom(normalized)) {
+      return { ok: true, fallback: true, warning: e && e.message ? e.message : String(e) };
+    }
+    if (tryLaunchExcelDirect(normalized)) {
+      return { ok: true, fallback: true, warning: e && e.message ? e.message : String(e) };
+    }
+    if (win && fs.existsSync(normalized) && (tryWindowsStartProcess(normalized) || tryWindowsCmdStart(normalized))) {
+      return { ok: true, fallback: true, warning: e && e.message ? e.message : String(e) };
+    }
+    trace('exception-no-fallback', e && e.message ? e.message : String(e));
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
 });
 
 ipcMain.handle('dienstreise:copy-path', async (event, filePath) => {

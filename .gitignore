@@ -2,6 +2,8 @@
 node_modules/
 electron/node_modules/
 electron/db/*.db
+electron/db/sync_push_errors.log
+electron/db/anlagenstamm_open/
 electron/db/.dispo-insecure-tls
 electron/dist/
 electron/test-output/

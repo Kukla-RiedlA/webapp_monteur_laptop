@@ -80,10 +80,10 @@
 
   function getSyncDateRange() {
     const today = new Date();
+    // Nur Zukunft: alle Termine ab heute, weit in die Zukunft.
     const from = new Date(today);
-    from.setMonth(from.getMonth() - 1);
     const to = new Date(today);
-    to.setFullYear(to.getFullYear() + 1);
+    to.setFullYear(to.getFullYear() + 10);
     return {
       date_from: from.toISOString().slice(0, 10),
       date_to: to.toISOString().slice(0, 10)
@@ -530,7 +530,21 @@
         var parts = fab.split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
         if (parts.length > 0) {
           parsedList = parts.map(function (fn) {
-            return { fabrikationsnummer: fn, type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '' };
+            return {
+              fabrikationsnummer: fn,
+              type: '',
+              leistung: '',
+              nenngeschwindigkeit: '',
+              kraftaufnehmer: '',
+              dms_nr: '',
+              tacho: '',
+              elektronik: '',
+              material: '',
+              position: '',
+              geliefert_ueber: '',
+              projekt: '',
+              bemerkungen: ''
+            };
           });
         }
       }
@@ -773,24 +787,9 @@
   }
 
   function openTedExcelOnDevice(fileUrl) {
-    var isWindows = /windows/i.test(navigator.userAgent || '');
-    // Windows: bevorzugt direkt in Excel-App öffnen; sonst auf normale URL zurückfallen.
-    var excelProtocolUrl = 'ms-excel:ofe|u|' + fileUrl;
     if (typeof monteurApp !== 'undefined' && monteurApp.openExternal) {
-      try {
-        if (isWindows) {
-          monteurApp.openExternal(excelProtocolUrl);
-          return;
-        }
-      } catch (_) {}
       monteurApp.openExternal(fileUrl);
       return;
-    }
-    if (isWindows) {
-      try {
-        window.location.href = excelProtocolUrl;
-        return;
-      } catch (_) {}
     }
     window.open(fileUrl, '_blank');
   }
@@ -828,6 +827,11 @@
     modalHtml += '<dt>Projekt</dt><dd><input type="text" id="anlageDetailProjekt" value="' + attr(row.projekt) + '"></dd>';
     modalHtml += '<dt>Bemerkungen</dt><dd><textarea id="anlageDetailBemerkungen" rows="3">' + attr(row.bemerkungen) + '</textarea></dd>';
     modalHtml += '</dl></div></div>';
+    modalHtml += '<details class="anlage-detail-projekte-neu" id="anlageDetailProjekteNeuToggle">';
+    modalHtml += '<summary><strong>PROJEKTE NEU</strong> <span class="muted"> (eingeklappt)</span></summary>';
+    modalHtml += '<div id="anlageDetailProjekteNeuMessage" class="muted" style="margin:0.5rem 0">Aufklappen zum Laden…</div>';
+    modalHtml += '<div id="anlageDetailProjekteNeuTree" style="margin-top:0.35rem"></div>';
+    modalHtml += '</details>';
     modalHtml += '<div class="anlage-detail-actions">';
     modalHtml += '<button type="button" class="btn btn-primary" id="anlageDetailSave">Speichern</button>';
     modalHtml += ' <button type="button" class="btn btn-ghost" id="anlageDetailCancel">Abbrechen</button>';
@@ -841,6 +845,13 @@
     while (div.firstChild) wrap.appendChild(div.firstChild);
     var modal = document.getElementById('anlageDetailModal');
     if (!modal) return;
+    var pnToggle = document.getElementById('anlageDetailProjekteNeuToggle');
+    if (pnToggle) {
+      pnToggle.addEventListener('toggle', function () {
+        if (!pnToggle.open || pnToggle.getAttribute('data-loaded') === '1') return;
+        loadAnlageDetailProjekteNeuTree(String(row.fabrikationsnummer || '').trim(), pnToggle);
+      });
+    }
     function closeModal() {
       if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
     }
@@ -873,9 +884,20 @@
         method: 'PATCH',
         body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
       }).then(function () {
+        showToast('Anlagendetails lokal gespeichert.');
         closeModal();
         openJobDetailsModal(jobId);
-        if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync(); } catch (e) {} }
+        if (typeof checkConnectionAndSync === 'function') {
+          try {
+            Promise.resolve(checkConnectionAndSync()).then(function () {
+              showToast('Synchronisierung angestoßen.');
+            }).catch(function (err) {
+              showToast('Lokal gespeichert, Sync aktuell fehlgeschlagen: ' + ((err && err.message) ? err.message : 'Verbindung prüfen'));
+            });
+          } catch (e) {
+            showToast('Lokal gespeichert. Sync konnte nicht gestartet werden.');
+          }
+        }
       }).catch(function (e) {
         alert('Speichern fehlgeschlagen: ' + e.message);
       });
@@ -917,7 +939,18 @@
         var fn = input.value.trim();
         arr.push({
           fabrikationsnummer: fn,
-          type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: ''
+          type: '',
+          leistung: '',
+          nenngeschwindigkeit: '',
+          kraftaufnehmer: '',
+          dms_nr: '',
+          tacho: '',
+          elektronik: '',
+          material: '',
+          position: '',
+          geliefert_ueber: '',
+          projekt: '',
+          bemerkungen: ''
         });
       }
     }
@@ -2196,7 +2229,25 @@
         parsedList = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : null);
       } catch (err) {
         var parts = fab.split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
-        if (parts.length > 0) parsedList = parts.map(function (fn) { return { fabrikationsnummer: fn, type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '' }; });
+        if (parts.length > 0) {
+          parsedList = parts.map(function (fn) {
+            return {
+              fabrikationsnummer: fn,
+              type: '',
+              leistung: '',
+              nenngeschwindigkeit: '',
+              kraftaufnehmer: '',
+              dms_nr: '',
+              tacho: '',
+              elektronik: '',
+              material: '',
+              position: '',
+              geliefert_ueber: '',
+              projekt: '',
+              bemerkungen: ''
+            };
+          });
+        }
       }
     } else if (fab != null && Array.isArray(fab)) {
       parsedList = fab;
@@ -2230,11 +2281,30 @@
           tacho: get(r, ['tacho', 'Tacho']),
           elektronik: get(r, ['elektronik', 'Elektronik']),
           material: get(r, ['material', 'Material']),
-          position: get(r, ['position', 'Position'])
+          position: get(r, ['position', 'Position']),
+          geliefert_ueber: get(r, ['geliefert_ueber', 'geliefertUeber']),
+          projekt: get(r, ['projekt', 'Projekt']),
+          bemerkungen: get(r, ['bemerkungen', 'Bemerkungen'])
         });
       });
     }
-    if (rows.length === 0) rows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '' });
+    if (rows.length === 0) {
+      rows.push({
+        fabrikationsnummer: '',
+        type: '',
+        leistung: '',
+        nenngeschwindigkeit: '',
+        kraftaufnehmer: '',
+        dms_nr: '',
+        tacho: '',
+        elektronik: '',
+        material: '',
+        position: '',
+        geliefert_ueber: '',
+        projekt: '',
+        bemerkungen: ''
+      });
+    }
     return rows;
   }
 
@@ -2530,6 +2600,33 @@
   async function downloadAnlagenstammFile(fab, file) {
     if (!fab || !file) return;
     const technicianId = getTechId();
+    // Bevorzugt direkt lokal öffnen (Windows-Dateizuordnung).
+    const openResp = await fetch(API_BASE + '/api/anlagenstamm_file_open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
+      body: JSON.stringify({
+        baseUrl: getServerUrl(),
+        fab: fab,
+        file: file,
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword()
+      })
+    });
+    const openData = await openResp.json().catch(function () { return {}; });
+    if (openResp.ok && openData && openData.ok === true && openData.path && typeof monteurApp !== 'undefined' && monteurApp.openPath) {
+      const openResult = await monteurApp.openPath(String(openData.path));
+      if (!openResult || openResult.ok !== false) {
+        showToast('Datei wird direkt lokal geöffnet.');
+        return;
+      }
+      if (openResult && openResult.error) {
+        showToast('Direkt öffnen fehlgeschlagen: ' + openResult.error);
+      }
+      // Wenn direktes Öffnen fehlschlägt, auf Download zurückfallen.
+    } else if (openData && openData.error) {
+      showToast('Direkt öffnen nicht möglich: ' + openData.error + ' – Download wird verwendet.');
+    }
+
     const resp = await fetch(API_BASE + '/api/anlagenstamm_file_download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
@@ -2542,7 +2639,7 @@
       })
     });
     if (!resp.ok) {
-      let err = 'Download fehlgeschlagen.';
+      let err = 'Öffnen/Download fehlgeschlagen.';
       try {
         const j = await resp.json();
         if (j && j.error) err = j.error;
@@ -2563,6 +2660,35 @@
   async function downloadAnlagenstammProjekteNeu(fab, relPath, fallbackName) {
     if (!fab || !relPath) return;
     const technicianId = getTechId();
+    // Bevorzugt direkt lokal öffnen (Windows-Dateizuordnung).
+    const openResp = await fetch(API_BASE + '/api/anlagenstamm_file_open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
+      body: JSON.stringify({
+        baseUrl: getServerUrl(),
+        fab: fab,
+        source: 'projekte_neu',
+        path: relPath,
+        fallbackName: fallbackName || '',
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword()
+      })
+    });
+    const openData = await openResp.json().catch(function () { return {}; });
+    if (openResp.ok && openData && openData.ok === true && openData.path && typeof monteurApp !== 'undefined' && monteurApp.openPath) {
+      const openResult = await monteurApp.openPath(String(openData.path));
+      if (!openResult || openResult.ok !== false) {
+        showToast('Datei wird direkt lokal geöffnet.');
+        return;
+      }
+      if (openResult && openResult.error) {
+        showToast('Direkt öffnen fehlgeschlagen: ' + openResult.error);
+      }
+      // Wenn direktes Öffnen fehlschlägt, auf Download zurückfallen.
+    } else if (openData && openData.error) {
+      showToast('Direkt öffnen nicht möglich: ' + openData.error + ' – Download wird verwendet.');
+    }
+
     const resp = await fetch(API_BASE + '/api/anlagenstamm_file_download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
@@ -2576,7 +2702,7 @@
       })
     });
     if (!resp.ok) {
-      let err = 'Download fehlgeschlagen.';
+      let err = 'Öffnen/Download fehlgeschlagen.';
       try {
         const j = await resp.json();
         if (j && j.error) err = j.error;
@@ -2593,6 +2719,145 @@
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  async function openAnlagenstammProjekteNeuLocal(fab, relPath, fallbackName) {
+    if (!fab || !relPath) return;
+    const technicianId = getTechId();
+    const resp = await fetch(API_BASE + '/api/anlagenstamm_file_open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
+      body: JSON.stringify({
+        baseUrl: getServerUrl(),
+        fab: fab,
+        source: 'projekte_neu',
+        path: relPath,
+        fallbackName: fallbackName || '',
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword()
+      })
+    });
+    const data = await resp.json().catch(function () { return {}; });
+    if (!resp.ok || !data || data.ok !== true || !data.path) {
+      throw new Error((data && data.error) ? data.error : 'Öffnen fehlgeschlagen.');
+    }
+    if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
+      const openRes = await monteurApp.openPath(String(data.path));
+      if (openRes && openRes.ok === false) {
+        throw new Error(openRes.error || 'Datei konnte nicht mit lokalem Programm geöffnet werden.');
+      }
+      return;
+    }
+    throw new Error('Lokales Öffnen ist in dieser Umgebung nicht verfügbar.');
+  }
+
+  function buildAnlageDetailProjekteNeuTree(fab, nodes, depth) {
+    depth = depth || 0;
+    var wrap = document.createElement('ul');
+    wrap.style.margin = depth === 0 ? '0.35rem 0 0.2rem 0' : '0.2rem 0 0.2rem 1rem';
+    wrap.style.paddingLeft = depth === 0 ? '0.3rem' : '0.85rem';
+    (nodes || []).forEach(function (n) {
+      if (!n || !n.type) return;
+      var li = document.createElement('li');
+      li.style.margin = '0.15rem 0';
+      if (n.type === 'dir') {
+        var details = document.createElement('details');
+        var summary = document.createElement('summary');
+        summary.style.cursor = 'pointer';
+        summary.textContent = String(n.name || 'Ordner');
+        details.appendChild(summary);
+        if (Array.isArray(n.children) && n.children.length) {
+          details.appendChild(buildAnlageDetailProjekteNeuTree(fab, n.children, depth + 1));
+        } else {
+          var em = document.createElement('div');
+          em.className = 'muted';
+          em.textContent = 'Keine Untereinträge.';
+          em.style.margin = '0.25rem 0 0.2rem 0.8rem';
+          details.appendChild(em);
+        }
+        li.appendChild(details);
+      } else if (n.type === 'file') {
+        var rel = String(n.rel || '').trim();
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost';
+        btn.style.padding = '0.15rem 0.25rem';
+        btn.style.textAlign = 'left';
+        btn.style.width = '100%';
+        btn.textContent = String(n.name || rel || 'Datei');
+        btn.addEventListener('click', function () {
+          openAnlagenstammProjekteNeuLocal(fab, rel, String(n.name || '')).catch(function (err) {
+            var msg = document.getElementById('anlageDetailProjekteNeuMessage');
+            if (msg) msg.textContent = 'Fehler: ' + ((err && err.message) ? err.message : String(err));
+            showToast('Dokument konnte nicht geöffnet werden.');
+          });
+        });
+        li.appendChild(btn);
+        if (n.size != null || n.mtime != null) {
+          var meta = document.createElement('span');
+          meta.className = 'muted';
+          meta.textContent = ' ' + formatAnlagenstammSize(n.size || 0) + (n.mtime ? (' · ' + formatAnlagenstammMtime(n.mtime)) : '');
+          li.appendChild(meta);
+        }
+      }
+      wrap.appendChild(li);
+    });
+    return wrap;
+  }
+
+  async function loadAnlageDetailProjekteNeuTree(fab, toggleEl) {
+    var msg = document.getElementById('anlageDetailProjekteNeuMessage');
+    var treeHost = document.getElementById('anlageDetailProjekteNeuTree');
+    if (!treeHost) return;
+    if (!fab) {
+      if (msg) msg.textContent = 'Keine Fabrikationsnummer vorhanden.';
+      return;
+    }
+    if (!getServerUrl()) {
+      if (msg) msg.textContent = 'Dispo-Server-URL fehlt.';
+      return;
+    }
+    if (msg) msg.textContent = 'Lade Struktur…';
+    treeHost.innerHTML = '';
+    try {
+      var cached = await fetch(API_BASE + '/api/anlagenstamm_tree_cached?fab=' + encodeURIComponent(fab), {
+        headers: { 'X-Technician-Id': String(getTechId() || '') }
+      }).then(function (r) { return r.json().catch(function () { return {}; }); }).catch(function () { return {}; });
+      var cachedTree = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
+      var usedCache = cached && cached.found && (cached.projects_enabled === true || cached.projects_enabled === 1);
+      if (usedCache && cachedTree.length) {
+        treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, cachedTree, 0));
+        if (msg) msg.textContent = 'Aus lokalem Cache geladen. Aktualisierung läuft…';
+      }
+
+      const payload = {
+        baseUrl: getServerUrl(),
+        fab: fab,
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword()
+      };
+      const files = await api('/api/anlagenstamm_files_list', { method: 'POST', body: JSON.stringify(payload) });
+      const pnRaw = files && files.projekte_neu ? files.projekte_neu : {};
+      if (!pnRaw || !pnRaw.enabled) {
+        if (!usedCache || !cachedTree.length) {
+          if (msg) msg.textContent = 'PROJEKTE NEU ist für diese Anlage nicht verfügbar.';
+        }
+        return;
+      }
+      const tree = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
+      if (!tree.length) {
+        if (!usedCache || !cachedTree.length) {
+          if (msg) msg.textContent = 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
+        }
+        return;
+      }
+      treeHost.innerHTML = '';
+      treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, tree, 0));
+      if (msg) msg.textContent = 'Datei per Klick lokal öffnen (lokal gespeichert/synchronisiert).';
+      if (toggleEl) toggleEl.setAttribute('data-loaded', '1');
+    } catch (e) {
+      if (msg) msg.textContent = 'Fehler: ' + ((e && e.message) ? e.message : String(e));
+    }
   }
 
   function showView(name) {
@@ -2750,17 +3015,23 @@
         return;
       }
       try {
-        const data = await fetch(API_BASE + '/api/calendar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            baseUrl: base,
-            start,
-            end,
-            serverUsername: getServerUsername(),
-            serverPassword: getServerPassword()
-          })
-        }).then(r => r.json());
+        let data = await fetch(API_BASE + '/api/calendar_cached?' + qs({ start: start, end: end }), {
+          headers: { 'X-Technician-Id': String(myTechId || 0) }
+        }).then(function (r) { return r.json().catch(function () { return {}; }); });
+        var hasCached = data && data.ok === true && (Array.isArray(data.jobs) || Array.isArray(data.absences));
+        if (!hasCached || ((data.jobs || []).length === 0 && (data.absences || []).length === 0)) {
+          data = await fetch(API_BASE + '/api/calendar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              baseUrl: base,
+              start,
+              end,
+              serverUsername: getServerUsername(),
+              serverPassword: getServerPassword()
+            })
+          }).then(r => r.json());
+        }
         if (data.error) throw new Error(data.error);
         calendarApiData = data;
         jobs = data.jobs || [];
@@ -2879,6 +3150,31 @@
 
     const techniciansFromApi = (calendarApiData && calendarApiData.technicians) ? calendarApiData.technicians : null;
     renderCalendarGrid(gridStart, gridEnd, jobs, absences, techniciansFromApi);
+
+    // Performance: Eigener-Techniker-Modus rendert sofort aus lokaler DB.
+    // Optionale zentrale Dispo-Farbe wird asynchron nachgeladen und bei Bedarf nachgerendert.
+    if (!showAll) {
+      const techId = getTechId();
+      if (techId) {
+        fetch(API_BASE + '/api/calendar_cached?' + qs({ start: start, end: end }), {
+          headers: { 'X-Technician-Id': String(techId) }
+        })
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function (cached) {
+            const tlist = Array.isArray(cached && cached.technicians) ? cached.technicians : [];
+            const me = tlist.find(function (t) {
+              const id = t && (t.id != null ? t.id : t.technician_id);
+              return Number(id) === Number(techId);
+            });
+            const dispoColor = me && (me.color || me.farbe) ? String(me.color || me.farbe).trim() : '';
+            if (!dispoColor) return;
+            const recoloredJobs = jobs.map(function (j) { return Object.assign({}, j, { technician_color: dispoColor }); });
+            const recoloredAbsences = absences.map(function (a) { return Object.assign({}, a, { technician_color: dispoColor }); });
+            renderCalendarGrid(gridStart, gridEnd, recoloredJobs, recoloredAbsences, techniciansFromApi);
+          })
+          .catch(function () { /* optional */ });
+      }
+    }
   }
 
   function startYmd(item) { return (item.start_datetime || '').toString().slice(0, 10); }
@@ -3143,6 +3439,7 @@
 
   function renderCalendarGrid(gridStart, gridEnd, jobs, absences, techniciansFromApi) {
     setCalendarError('');
+    const myTechIdForDetails = Number(getTechId());
     const monthLabel = new Date(calCurrentMonth.getFullYear(), calCurrentMonth.getMonth(), 1);
     const monthEl = document.getElementById('calMonthLabel');
     if (monthEl) monthEl.textContent = monthLabel.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
@@ -3151,7 +3448,7 @@
     const currentMonth = calCurrentMonth.getMonth();
     const todayYmd = toYmd(new Date());
     const gridCols = '40px repeat(7, minmax(0, 1fr))';
-    const laneHeight = 25;
+    const laneHeight = 21;
     const overlayTop = 22;
     const overlayBottom = 4;
 
@@ -3262,15 +3559,19 @@
           band.className = 'month2-band month2-event';
           band.style.background = j.technician_color || '#4a90e2';
           band.setAttribute('data-job-id', String(j.id));
-          band.style.cursor = 'pointer';
+          const jobTechId = Number(j.technician_id);
+          const isOwnTechJob = Number.isFinite(myTechIdForDetails) && myTechIdForDetails > 0 && Number.isFinite(jobTechId) && jobTechId === myTechIdForDetails;
+          band.style.cursor = isOwnTechJob ? 'pointer' : 'default';
           const colSpan = colEnd - colStart;
           const maxChars = colSpan * 20;
           const bar = jobBarText(j, maxChars);
-          band.title = (bar.title || '') + ' (Doppelklick: Projektdaten)';
+          band.title = isOwnTechJob ? ((bar.title || '') + ' (Doppelklick: Projektdaten)') : (bar.title || '');
           if (bar.labelHtml) band.innerHTML = bar.labelHtml; else band.textContent = bar.label || 'Auftrag';
-          band.addEventListener('dblclick', function () {
-            if (typeof openJobDetailsModal === 'function') openJobDetailsModal(j.id);
-          });
+          if (isOwnTechJob) {
+            band.addEventListener('dblclick', function () {
+              if (typeof openJobDetailsModal === 'function') openJobDetailsModal(j.id);
+            });
+          }
         }
         bands.appendChild(band);
       });
@@ -5211,6 +5512,11 @@
   });
   document.getElementById('calNext').addEventListener('click', () => {
     calCurrentMonth.setMonth(calCurrentMonth.getMonth() + 1);
+    loadCalendarMonth();
+  });
+  document.getElementById('calToday').addEventListener('click', () => {
+    const now = new Date();
+    calCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     loadCalendarMonth();
   });
   document.getElementById('calShowAllTech').addEventListener('change', () => loadCalendarMonth());

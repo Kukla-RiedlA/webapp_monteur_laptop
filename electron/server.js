@@ -211,6 +211,56 @@ async function getDb() {
     )`);
   } catch (e) { /* existiert evtl. */ }
   try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_dienstreisen_year ON dienstreisen(year)'); } catch (e) { /* ignore */ }
+  try {
+    sqlDb.run(`CREATE TABLE IF NOT EXISTS calendar_cache_technicians (
+      technician_id INTEGER PRIMARY KEY,
+      name TEXT,
+      color TEXT,
+      synced_at TEXT
+    )`);
+  } catch (e) { /* existiert evtl. */ }
+  try {
+    sqlDb.run(`CREATE TABLE IF NOT EXISTS calendar_cache_jobs (
+      cache_key TEXT PRIMARY KEY,
+      server_job_id INTEGER,
+      technician_id INTEGER,
+      customer_name TEXT,
+      job_number TEXT,
+      city TEXT,
+      country TEXT,
+      status TEXT,
+      start_datetime TEXT,
+      end_datetime TEXT,
+      technician_name TEXT,
+      technician_color TEXT,
+      synced_at TEXT
+    )`);
+  } catch (e) { /* existiert evtl. */ }
+  try {
+    sqlDb.run(`CREATE TABLE IF NOT EXISTS calendar_cache_absences (
+      cache_key TEXT PRIMARY KEY,
+      server_absence_id INTEGER,
+      technician_id INTEGER,
+      type TEXT,
+      comment TEXT,
+      start_datetime TEXT,
+      end_datetime TEXT,
+      technician_name TEXT,
+      technician_color TEXT,
+      synced_at TEXT
+    )`);
+  } catch (e) { /* existiert evtl. */ }
+  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_calendar_cache_jobs_range ON calendar_cache_jobs(start_datetime, end_datetime)'); } catch (e) { /* ignore */ }
+  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_calendar_cache_absences_range ON calendar_cache_absences(start_datetime, end_datetime)'); } catch (e) { /* ignore */ }
+  try {
+    sqlDb.run(`CREATE TABLE IF NOT EXISTS anlagenstamm_tree_cache (
+      fab TEXT PRIMARY KEY,
+      projects_enabled INTEGER NOT NULL DEFAULT 0,
+      tree_json TEXT,
+      synced_at TEXT
+    )`);
+  } catch (e) { /* existiert evtl. */ }
+  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_tree_cache_synced ON anlagenstamm_tree_cache(synced_at)'); } catch (e) { /* ignore */ }
   return createDbWrapper(sqlDb);
 }
 
@@ -1353,7 +1403,7 @@ function createApp(db) {
     if (!includeErledigt) {
       sql += ` AND j.status != 'erledigt'`;
     }
-    if (dateFrom) { sql += ' AND j.start_datetime >= ?'; params.push(dateFrom + ' 00:00:00'); }
+    if (dateFrom) { sql += ' AND j.end_datetime >= ?'; params.push(dateFrom + ' 00:00:00'); }
     if (dateTo) { sql += ' AND j.start_datetime <= ?'; params.push(dateTo + ' 23:59:59'); }
     sql += ' ORDER BY j.start_datetime ASC';
     try {
@@ -1733,9 +1783,35 @@ function createApp(db) {
       const r = await fetch(url, auth ? { headers: auth } : {});
       const data = await r.json().catch(() => ({}));
       if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      try {
+        const pnRaw = data && data.projekte_neu ? data.projekte_neu : { enabled: false, tree: [] };
+        upsertAnlagenstammTreeCache(db, fabValue, pnRaw);
+        save();
+      } catch (_) { /* cache ist best-effort */ }
       res.json(data);
     } catch (e) {
       res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.get('/api/anlagenstamm_tree_cached', (req, res) => {
+    const fab = String(req.query.fab || '').trim();
+    if (!fab) return res.status(400).json({ ok: false, error: 'fab erforderlich.' });
+    try {
+      const row = db.prepare('SELECT fab, projects_enabled, tree_json, synced_at FROM anlagenstamm_tree_cache WHERE fab = ?').get(fab);
+      if (!row) return res.json({ ok: true, found: false, fab: fab, projects_enabled: false, tree: [] });
+      let tree = [];
+      try { tree = row.tree_json ? JSON.parse(row.tree_json) : []; } catch (_) { tree = []; }
+      return res.json({
+        ok: true,
+        found: true,
+        fab: row.fab,
+        projects_enabled: Number(row.projects_enabled) === 1,
+        tree: Array.isArray(tree) ? tree : [],
+        synced_at: row.synced_at || null
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -1781,6 +1857,52 @@ function createApp(db) {
       res.send(buf);
     } catch (e) {
       res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/anlagenstamm_file_open', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const { baseUrl, fab, file, path: pnPathRaw, source: sourceRaw, fallbackName, serverUsername, serverPassword } = req.body || {};
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const fabValue = (fab || '').toString().trim();
+    const fileValue = (file || '').toString().trim();
+    const sourceNorm = String(sourceRaw || '').toLowerCase().trim();
+    const pnPath = (pnPathRaw || '').toString().trim();
+    if (!technicianId || !base || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+    let url;
+    if (sourceNorm === 'projekte_neu') {
+      if (!pnPath) return res.status(400).json({ ok: false, error: 'path erforderlich für PROJEKTE NEU.' });
+      url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&source=projekte_neu&path=${encodeURIComponent(pnPath)}`;
+    } else {
+      if (!fileValue) return res.status(400).json({ ok: false, error: 'file erforderlich.' });
+      url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&file=${encodeURIComponent(fileValue)}`;
+    }
+    try {
+      const r = await fetch(url, auth ? { headers: auth } : {});
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        try { console.warn('[anlagenstamm_file_open] upstream error', r.status, data && data.error ? data.error : r.statusText); } catch (_) {}
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      }
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (!buf.length) return res.status(500).json({ ok: false, error: 'Datei ist leer.' });
+      const openDir = path.join(DB_DIR, 'anlagenstamm_open');
+      if (!fs.existsSync(openDir)) fs.mkdirSync(openDir, { recursive: true });
+      const rawName = sourceNorm === 'projekte_neu'
+        ? (pnPath.split(/[/\\]/).pop() || String(fallbackName || '').trim() || 'download')
+        : (fileValue || String(fallbackName || '').trim() || 'download');
+      const safeName = String(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'download';
+      const stamp = new Date().toISOString().replace(/[^\d]/g, '').slice(0, 14);
+      const targetPath = path.join(openDir, `${stamp}_${safeName}`);
+      fs.writeFileSync(targetPath, buf);
+      try { console.log('[anlagenstamm_file_open] ready', targetPath, 'bytes=' + buf.length); } catch (_) {}
+      return res.json({ ok: true, path: targetPath, filename: safeName, size: buf.length });
+    } catch (e) {
+      try { console.warn('[anlagenstamm_file_open] fetch exception', e.message); } catch (_) {}
+      return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
     }
   });
 
@@ -3162,8 +3284,25 @@ function createApp(db) {
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     const base = (baseUrl || '').trim().replace(/\/$/, '');
     try {
-      await pullFromServer(base, technicianId, db, auth, date_from, date_to);
+      const pullInfo = await pullFromServer(base, technicianId, db, auth, date_from, date_to);
       save();
+      const range = defaultFutureRange();
+      const cacheStart = (date_from && String(date_from).trim()) ? String(date_from).trim() : range.start;
+      const cacheEnd = (date_to && String(date_to).trim()) ? String(date_to).trim() : range.end;
+      setTimeout(async () => {
+        try {
+          const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, auth);
+          upsertCalendarCache(db, calData);
+          const fabs = pullInfo && Array.isArray(pullInfo.fabs) ? pullInfo.fabs : [];
+          const subset = fabs.slice(0, 200);
+          for (const fab of subset) {
+            try {
+              await fetchAndCacheAnlagenstammTree(base, technicianId, fab, auth, db);
+            } catch (_) { /* einzelner Fab darf Hintergrundsync nicht blockieren */ }
+          }
+          save();
+        } catch (_) { /* optional: Kalender-Cache ist nur Beschleuniger */ }
+      }, 0);
       try {
         await syncProtokollTemplates(base);
       } catch (tplErr) {
@@ -3252,9 +3391,177 @@ function createApp(db) {
       res.status(500).json({ ok: false, error: err.message });
     }
   });
+  app.get('/api/calendar_cached', (req, res) => {
+    const start = String(req.query.start || '').trim();
+    const end = String(req.query.end || '').trim();
+    if (!start || !end) {
+      return res.status(400).json({ ok: false, error: 'start und end erforderlich.' });
+    }
+    try {
+      const technicians = db.prepare('SELECT technician_id AS id, name, color FROM calendar_cache_technicians ORDER BY technician_id').all();
+      const jobs = db.prepare(`
+        SELECT
+          server_job_id AS id, technician_id, customer_name, job_number, city, country, status,
+          start_datetime, end_datetime, technician_name, technician_color
+        FROM calendar_cache_jobs
+        WHERE end_datetime >= ? AND start_datetime <= ?
+      `).all(start + ' 00:00:00', end + ' 23:59:59');
+      const absences = db.prepare(`
+        SELECT
+          server_absence_id AS id, technician_id, type, comment, start_datetime, end_datetime,
+          technician_name, technician_color
+        FROM calendar_cache_absences
+        WHERE end_datetime >= ? AND start_datetime <= ?
+      `).all(start + ' 00:00:00', end + ' 23:59:59');
+      return res.json({ ok: true, technicians, jobs, absences });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
 
   app.use(express.static(path.join(__dirname, 'public')));
   return app;
+}
+
+function defaultFutureRange() {
+  const from = new Date();
+  const to = new Date(from);
+  to.setFullYear(to.getFullYear() + 10);
+  return { start: from.toISOString().slice(0, 10), end: to.toISOString().slice(0, 10) };
+}
+
+async function fetchCalendarFromDispo(baseUrl, start, end, authHeader) {
+  const base = baseUrl.replace(/\/$/, '');
+  const url = `${base}/api/calendar.php?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+  const opts = authHeader ? { headers: authHeader } : {};
+  const r = await fetch(url, opts);
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (_) { data = null; }
+  if (!r.ok) {
+    const msg = (data && data.error) ? data.error : ('HTTP ' + r.status + ' ' + (r.statusText || ''));
+    throw new Error('Kalender-Cache Pull fehlgeschlagen: ' + msg);
+  }
+  if (!data || typeof data !== 'object') throw new Error('Kalender-Cache Pull: ungültige Antwort.');
+  return data;
+}
+
+function extractFabsFromJobs(jobs) {
+  const result = [];
+  const seen = new Set();
+  const list = Array.isArray(jobs) ? jobs : [];
+  for (const j of list) {
+    const raw = (j && j.fabrikationsnummern != null) ? j.fabrikationsnummern : '';
+    if (typeof raw === 'string' && raw.trim() !== '') {
+      try {
+        const parsed = JSON.parse(raw);
+        const rows = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
+        for (const row of rows) {
+          const fab = String((row && (row.fabrikationsnummer || row.Fabrikationsnummer || row.fab)) || '').trim();
+          if (!fab || seen.has(fab)) continue;
+          seen.add(fab);
+          result.push(fab);
+        }
+      } catch (_) {
+        const parts = raw.split(/[\s;,]+/).map((p) => p.trim()).filter(Boolean);
+        for (const fab of parts) {
+          if (seen.has(fab)) continue;
+          seen.add(fab);
+          result.push(fab);
+        }
+      }
+    } else if (Array.isArray(raw)) {
+      for (const row of raw) {
+        const fab = String((row && (row.fabrikationsnummer || row.Fabrikationsnummer || row.fab)) || '').trim();
+        if (!fab || seen.has(fab)) continue;
+        seen.add(fab);
+        result.push(fab);
+      }
+    }
+  }
+  return result;
+}
+
+function upsertAnlagenstammTreeCache(db, fab, pnRaw) {
+  const fabNorm = String(fab || '').trim();
+  if (!fabNorm) return;
+  const enabled = pnRaw && pnRaw.enabled ? 1 : 0;
+  const tree = pnRaw && Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
+  const treeJson = JSON.stringify(tree);
+  const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  db.prepare(`
+    INSERT OR REPLACE INTO anlagenstamm_tree_cache (fab, projects_enabled, tree_json, synced_at)
+    VALUES (?, ?, ?, ?)
+  `).run(fabNorm, enabled, treeJson, syncedAt);
+}
+
+async function fetchAndCacheAnlagenstammTree(baseUrl, technicianId, fab, authHeader, db) {
+  const base = String(baseUrl || '').trim().replace(/\/$/, '');
+  const fabNorm = String(fab || '').trim();
+  if (!base || !technicianId || !fabNorm) return null;
+  const url = `${base}/dispo_api/api/anlagenstamm_files_list.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabNorm)}`;
+  const r = await fetch(url, authHeader ? { headers: authHeader } : {});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((data && data.error) ? data.error : ('HTTP ' + r.status));
+  const pnRaw = data && data.projekte_neu ? data.projekte_neu : { enabled: false, tree: [] };
+  upsertAnlagenstammTreeCache(db, fabNorm, pnRaw);
+  return pnRaw;
+}
+
+function upsertCalendarCache(db, calendarData) {
+  const technicians = Array.isArray(calendarData.technicians) ? calendarData.technicians : [];
+  const jobs = Array.isArray(calendarData.jobs) ? calendarData.jobs : [];
+  const absences = Array.isArray(calendarData.absences) ? calendarData.absences : [];
+  const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  db.transaction(() => {
+    db.prepare('DELETE FROM calendar_cache_technicians').run();
+    db.prepare('DELETE FROM calendar_cache_jobs').run();
+    db.prepare('DELETE FROM calendar_cache_absences').run();
+
+    for (const t of technicians) {
+      const tid = Number(t.id != null ? t.id : t.technician_id);
+      if (!Number.isFinite(tid) || tid <= 0) continue;
+      const name = String(t.name || t.full_name || t.technician_name || '').trim() || ('Techniker ' + tid);
+      const color = String(t.color || t.farbe || '').trim() || '#4a90e2';
+      db.prepare('INSERT OR REPLACE INTO calendar_cache_technicians (technician_id, name, color, synced_at) VALUES (?, ?, ?, ?)')
+        .run(tid, name, color, syncedAt);
+    }
+
+    for (const j of jobs) {
+      const sid = Number(j.id != null ? j.id : j.server_id);
+      const tid = Number(j.technician_id != null ? j.technician_id : j.technicianId);
+      const start = String(j.start_datetime || '').replace('T', ' ').slice(0, 19);
+      const end = String(j.end_datetime || '').replace('T', ' ').slice(0, 19);
+      if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(tid) || tid <= 0 || !start || !end) continue;
+      const cacheKey = String(sid) + ':' + String(tid);
+      db.prepare(`INSERT OR REPLACE INTO calendar_cache_jobs
+        (cache_key, server_job_id, technician_id, customer_name, job_number, city, country, status, start_datetime, end_datetime, technician_name, technician_color, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        cacheKey, sid, tid,
+        String(j.customer_name || ''), String(j.job_number || ''),
+        String(j.city || ''), String(j.country || ''), String(j.status || ''),
+        start, end, String(j.technician_name || ''), String(j.technician_color || ''), syncedAt
+      );
+    }
+
+    for (const a of absences) {
+      const sidRaw = a.id != null ? String(a.id) : '';
+      const tid = Number(a.technician_id != null ? a.technician_id : a.technicianId);
+      const start = String(a.start_datetime || '').replace('T', ' ').slice(0, 19);
+      const end = String(a.end_datetime || '').replace('T', ' ').slice(0, 19);
+      const type = String(a.type || '');
+      if (!Number.isFinite(tid) || tid <= 0 || !start || !end) continue;
+      const cacheKey = [sidRaw || 'x', tid, start, end, type].join(':');
+      db.prepare(`INSERT OR REPLACE INTO calendar_cache_absences
+        (cache_key, server_absence_id, technician_id, type, comment, start_datetime, end_datetime, technician_name, technician_color, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        cacheKey, sidRaw !== '' ? Number(sidRaw) : null, tid, type, String(a.comment || ''),
+        start, end, String(a.technician_name || ''), String(a.technician_color || ''), syncedAt
+      );
+    }
+  });
 }
 
 function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
@@ -3331,6 +3638,7 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
   const jobs = jobsData.jobs || [];
   const absencesData = await absencesRes.json();
   const absences = absencesData.absences || [];
+  const fabs = extractFabsFromJobs(jobs);
   const receivedJobServerIds = new Set();
   for (const j of jobs) {
     const id = j.id;
@@ -3368,6 +3676,7 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
       }
     }
   }
+  return { fabs };
 }
 
 function ensureTechnician(db, technicianId) {

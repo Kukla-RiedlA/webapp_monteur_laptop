@@ -156,7 +156,7 @@
     .cal-cell .holiday-name { font-size: 0.7em; color: #e07c7c; margin-top: 2px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cal-week-bands { position: absolute; left: 0; right: 0; top: 22px; bottom: 4px; display: grid; pointer-events: none; z-index: 2; }
     .cal-week-bands .month2-band { pointer-events: auto; }
-    .month2-band { margin: 2px 1px; font-size: 10px; line-height: 1.3; padding: 2px 6px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-align: center; text-overflow: ellipsis; box-sizing: border-box; display: flex; align-items: center; justify-content: center; color: #000; min-width: 0; font-weight: bold; }
+    .month2-band { margin: 1px 1px; font-size: 10px; line-height: 1.3; padding: 1px 6px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-align: center; text-overflow: ellipsis; box-sizing: border-box; display: flex; align-items: center; justify-content: center; color: #000; min-width: 0; font-weight: bold; }
     .month2-event { background: var(--card); }
     .month2-absence { background: #fff; border: 1px solid rgba(0,0,0,0.2); background-image: repeating-linear-gradient(-45deg, transparent 0, transparent 2px, var(--stripes, #6c757d) 2px, var(--stripes, #6c757d) 4px); font-weight: bold; }
     .cal-erledigt-check { color: #1a7f37; font-weight: bold; }
@@ -408,6 +408,7 @@
           <div class="cal-toolbar">
             <div class="cal-nav-btns">
               <button type="button" class="btn btn-ghost" id="calPrev" aria-label="Vorheriger Monat">&laquo;</button>
+              <button type="button" class="btn btn-ghost" id="calToday" aria-label="Zum aktuellen Monat">Heute</button>
               <button type="button" class="btn btn-ghost" id="calNext" aria-label="Nächster Monat">&raquo;</button>
             </div>
             <span id="calMonthLabel" class="cal-month-label"></span>
