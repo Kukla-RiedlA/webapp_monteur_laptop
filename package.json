@@ -1,6 +1,9 @@
 {
   "name": "webapp-monteur-laptop",
   "private": true,
+  "scripts": {
+    "prepare": "node scripts/install-githooks.cjs"
+  },
   "devDependencies": {
     "archiver": "^7.0.1"
   }

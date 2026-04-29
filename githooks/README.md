@@ -2,13 +2,17 @@
 
 Der `pre-commit`-Hook erhoeht die App-Version in `electron/version.json`, `config/version.php` und `electron/package.json` (SemVer) um **Patch +1** gegenueber `HEAD`, sobald `HEAD` bereits das Format `V major.release.patch` nutzt.
 
-## Einmalige Aktivierung (im Repo-Root `webapp_monteur_laptop/`)
+## Automatisch
+
+Im Repo-Root **`npm install`** / **`npm ci`**: `prepare` setzt `core.hooksPath` auf `githooks` (siehe `package.json`, `scripts/install-githooks.cjs`).
+
+## Manuell
 
 ```bash
 git config core.hooksPath githooks
 ```
 
-Voraussetzung: `node` im PATH.
+Voraussetzung beim Commit: **`node`** im PATH.
 
 ## Notfall / Amend
 
