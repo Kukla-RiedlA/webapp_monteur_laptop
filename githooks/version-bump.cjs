@@ -28,8 +28,12 @@ function formatApp(v) {
   return `V ${v.maj}.${String(v.rel).padStart(3, '0')}.${String(v.pat).padStart(3, '0')}`;
 }
 
+function stripBom(s) {
+  return String(s).replace(/^\uFEFF/, '');
+}
+
 function readVersionFromJson(content) {
-  const j = JSON.parse(content);
+  const j = JSON.parse(stripBom(content));
   return parseAppVersion(j.version);
 }
 
