@@ -32,7 +32,7 @@ Kurzablauf **nur WebApp** (wenn ausschließlich dieses Repo betroffen ist):
 
 **V &lt;major&gt;.&lt;release&gt;.&lt;patch&gt;** (z. B. `V 1.100.000`) – Major ohne führende Null; Release und Patch je dreistellig. Git-Tag: `v1.100.000`.
 
-**Pre-commit:** `git config core.hooksPath githooks` (siehe `githooks/README.md`) – Patch +1 bei jedem Commit, sobald `HEAD` das neue Format nutzt. **Notfall:** `KUKLA_SKIP_VERSION_HOOK=1`.
+**Pre-commit:** **`npm install`** / **`npm ci`** setzt `core.hooksPath` per `prepare` (siehe `package.json`, `githooks/README.md`) – Patch +1 bei jedem Commit, sobald `HEAD` das neue Format nutzt. Ohne npm: `git config core.hooksPath githooks`. **Notfall:** `KUKLA_SKIP_VERSION_HOOK=1`.
 
 ## Wichtig
 
