@@ -13,27 +13,25 @@ $electronDir = Join-Path $repoRoot "electron"
 $versionJsonPath = Join-Path $electronDir "version.json"
 $packageJsonPath = Join-Path $electronDir "package.json"
 
-# Version aus version.json lesen (Format: V 1.025)
 $versionJson = Get-Content $versionJsonPath -Raw | ConvertFrom-Json
 $appVersion = $versionJson.version.Trim()
 
-# In SemVer für package.json umwandeln: V 1.025 -> 1.0.25
-if ($appVersion -match 'V\s*(\d+)\.(\d+)') {
-    $buildNum = $Matches[2].TrimStart('0')
-    if ($buildNum -eq '') { $buildNum = '0' }
-    $semver = "$($Matches[1]).0.$buildNum"
+# SemVer: V 1.100.000 -> 1.100.0 (Integer-Segmente)
+if ($appVersion -match '^\s*V\s*([1-9]\d*)\.(\d{3})\.(\d{3})\s*$') {
+    $maj = [int]$Matches[1]
+    $rel = [int]$Matches[2]
+    $pat = [int]$Matches[3]
+    $semver = "$maj.$rel.$pat"
 } else {
     $semver = "1.0.0"
 }
 
 Write-Host "Version: $appVersion (package.json: $semver)"
 
-# package.json Version aktualisieren
 $packageContent = Get-Content $packageJsonPath -Raw
 $packageContent = $packageContent -replace '"version"\s*:\s*"[^"]*"', "`"version`": `"$semver`""
 Set-Content $packageJsonPath -Value $packageContent -NoNewline
 
-# Build ausführen
 Push-Location $electronDir
 try {
     npm run dist
@@ -41,7 +39,6 @@ try {
         throw "npm run dist fehlgeschlagen"
     }
 
-    # Installer-Pfad (electron-builder Standard)
     $distDir = Join-Path $electronDir "dist"
     $installer = Get-ChildItem -Path $distDir -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 
