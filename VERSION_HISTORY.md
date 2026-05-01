@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.001.020
+- **Versionskennung:** Einheitlich **V 1.001.020** mit Dispo und Handy-PWA; `config/version.php`, `electron/version.json`, `electron/package.json` (SemVer `1.1.20`).
+
 ## V 1.046
 - **Anlagenstamm PROJEKTE NEU:** Elternordner als **Überschrift**, darunter klassische Baumliste (nur Namen der Einträge).
 
