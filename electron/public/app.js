@@ -253,6 +253,12 @@
       var base = (getDispoBaseUrl() || '').trim();
       var params = { job_server_id: jobId, bucket: bucket, name: fileName };
       if (base) params.base_url = base;
+      var u = getDispoUsername();
+      var p = getDispoPassword();
+      if (u != null && String(u).trim() !== '') {
+        params.serverUsername = String(u).trim();
+        params.serverPassword = p != null ? String(p) : '';
+      }
       var r = await fetch(API_BASE + '/api/abrechnung/file?' + qs(params), { headers: abrechnungAuthHeaders() });
       if (!r.ok) {
         var errText = await r.text().catch(function () { return ''; });
@@ -281,7 +287,10 @@
   function renderAbrechnungFileList(ulEl, bucket, files, jobId, canWrite) {
     if (!ulEl) return;
     ulEl.innerHTML = '';
-    var list = (files || []).filter(function (f) { return f.bucket === bucket; });
+    var list = (files || []).filter(function (f) {
+      var b = f.bucket != null ? String(f.bucket) : '';
+      return b === bucket;
+    });
     list.forEach(function (f) {
       var li = document.createElement('li');
       var a = document.createElement('a');
@@ -387,13 +396,28 @@
     var bundleQs = { technician_id: tid, job_server_id: jid };
     var baseDispo = (getDispoBaseUrl() || '').trim();
     if (baseDispo) bundleQs.base_url = baseDispo;
+    var uAuth = getDispoUsername();
+    var pAuth = getDispoPassword();
+    if (uAuth != null && String(uAuth).trim() !== '') {
+      bundleQs.serverUsername = String(uAuth).trim();
+      bundleQs.serverPassword = pAuth != null ? String(pAuth) : '';
+    }
     var r = await fetch(API_BASE + '/api/abrechnung/bundle?' + qs(bundleQs), { headers: abrechnungAuthHeaders() });
     var j = await r.json();
     if (!j.ok) {
       if (meta) meta.textContent = j.error || 'Daten konnten nicht geladen werden.';
       return;
     }
-    if (meta) meta.textContent = canWrite ? 'Bearbeitung für diesen Auftrag erlaubt.' : 'Nur Lesen: Auftrag nicht zur Bearbeitung freigegeben.';
+    var metaParts = [];
+    metaParts.push(canWrite ? 'Bearbeitung für diesen Auftrag erlaubt.' : 'Nur Lesen: Auftrag nicht zur Bearbeitung freigegeben.');
+    if (j.job_id_for_dispo != null && parseInt(j.job_id_for_dispo, 10) !== jid) {
+      metaParts.push('Dispo-Auftrags-ID ' + j.job_id_for_dispo + ' (Auswahl ' + jid + ').');
+    }
+    var fc = Array.isArray(j.files) ? j.files.length : 0;
+    if (fc === 0 && j.dispo_files_error) {
+      metaParts.push('Dateien von Dispo: ' + j.dispo_files_error);
+    }
+    if (meta) meta.textContent = metaParts.join(' ');
     var notes = j.notes || {};
     if (nd) { nd.value = notes.dispo != null ? String(notes.dispo) : ''; nd.disabled = !canWrite; }
     if (nb) { nb.value = notes.buchhaltung != null ? String(notes.buchhaltung) : ''; nb.disabled = !canWrite; }

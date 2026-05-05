@@ -60,6 +60,64 @@ function dispoBase(baseUrl) {
   return String(baseUrl || '').trim().replace(/\/$/, '');
 }
 
+/**
+ * Dispo und abrechnung_*-Cache verwenden die Auftrags-ID vom Server; das Dropdown kann jobs.id (lokal) liefern.
+ */
+function resolveDispoJobIdForAbrechnung(db, idFromClient) {
+  const jid = parseInt(idFromClient, 10);
+  if (!Number.isFinite(jid) || jid <= 0) return jid;
+  try {
+    const hitServer = db.prepare('SELECT server_id FROM jobs WHERE server_id = ?').get(jid);
+    if (hitServer && hitServer.server_id != null) return Number(hitServer.server_id);
+    const hitLocal = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(jid);
+    if (hitLocal && hitLocal.server_id != null && hitLocal.server_id !== '') {
+      const sid = Number(hitLocal.server_id);
+      if (Number.isFinite(sid) && sid > 0) return sid;
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return jid;
+}
+
+function dedupeAbrechnungFileRows(rows) {
+  const m = new Map();
+  for (const row of rows || []) {
+    const b = row.bucket != null ? String(row.bucket) : '';
+    const fn =
+      row.file_name != null ? String(row.file_name) : row.name != null ? String(row.name) : '';
+    if (!b || !fn) continue;
+    const k = `${b}\0${fn}`;
+    if (!m.has(k)) {
+      m.set(k, {
+        bucket: b,
+        file_name: fn,
+        size_bytes: row.size_bytes != null ? row.size_bytes : null,
+        synced_at: row.synced_at != null ? row.synced_at : null,
+        remote_only: row.remote_only === true,
+      });
+    }
+  }
+  return Array.from(m.values());
+}
+
+function findLocalAbrechnungFilePath(dbDir, db, jobServerIdFromQuery, bucket, name) {
+  const resolved = resolveDispoJobIdForAbrechnung(db, jobServerIdFromQuery);
+  const ids = Array.from(
+    new Set(
+      [jobServerIdFromQuery, resolved].filter((x) => {
+        const n = parseInt(String(x), 10);
+        return Number.isFinite(n) && n > 0;
+      }),
+    ),
+  );
+  for (const id of ids) {
+    const fp = filePathLocal(dbDir, id, bucket, name);
+    if (fs.existsSync(fp) && fs.statSync(fp).isFile()) return fp;
+  }
+  return null;
+}
+
 /** Wenn die Abrechnungs-API auf dem Server fehlt: Aufträge aus der normalen SQLite-Sync-DB (gleicher Monat). */
 function buildAbrechnungJobsFallbackFromSqlite(db, technicianId, periodYm) {
   if (!/^\d{4}-\d{2}$/.test(String(periodYm))) return [];
@@ -152,7 +210,12 @@ async function dispoFetchJson(baseUrl, pathName, qs, authHeader, technicianId) {
       if (tryNext) continue;
       throw lastErr;
     }
-    if (!r.ok || data.ok === false) {
+    if (!r.ok) {
+      lastErr = new Error(data.error || ('HTTP ' + r.status));
+      if (tryNext) continue;
+      throw lastErr;
+    }
+    if (data && typeof data === 'object' && data.ok === false) {
       lastErr = new Error(data.error || ('HTTP ' + r.status));
       if (tryNext) continue;
       throw lastErr;
@@ -421,18 +484,43 @@ function registerAbrechnungRoutes(app, ctx) {
   app.get('/api/abrechnung/bundle', async (req, res) => {
     try {
       const technicianId = parseInt(req.query.technician_id, 10);
-      const jobServerId = parseInt(req.query.job_server_id, 10);
-      if (!technicianId || !jobServerId) {
+      const jobServerIdRaw = parseInt(req.query.job_server_id, 10);
+      if (!technicianId || !jobServerIdRaw) {
         return res.status(400).json({ ok: false, error: 'technician_id und job_server_id erforderlich.' });
       }
-      const notes = db.prepare('SELECT dispo, buchhaltung, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?').get(jobServerId);
-      let files = db.prepare(
-        'SELECT bucket, file_name, size_bytes, synced_at FROM abrechnung_files_meta WHERE job_server_id = ? ORDER BY bucket, file_name'
-      ).all(jobServerId);
+      const dispoJobId = resolveDispoJobIdForAbrechnung(db, jobServerIdRaw);
+      let notes = db.prepare('SELECT dispo, buchhaltung, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?').get(
+        dispoJobId,
+      );
+      if (!notes) {
+        notes = db.prepare('SELECT dispo, buchhaltung, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?').get(
+          jobServerIdRaw,
+        );
+      }
+      let files = dedupeAbrechnungFileRows(
+        db
+          .prepare(
+            `SELECT bucket, file_name, size_bytes, synced_at FROM abrechnung_files_meta
+             WHERE job_server_id = ? OR job_server_id = ?
+             ORDER BY bucket, file_name`,
+          )
+          .all(dispoJobId, jobServerIdRaw),
+      );
       const baseUrlRaw = (req.query.base_url || req.query.baseUrl || '').toString().trim();
-      const auth =
+      let auth =
         typeof authHeaderFromIncomingBasicOrQuery === 'function' ? authHeaderFromIncomingBasicOrQuery(req) : undefined;
-      if (baseUrlRaw && auth && technicianId && jobServerId) {
+      if (!auth && typeof authHeaderFromCredentials === 'function') {
+        const q = req.query || {};
+        auth = authHeaderFromCredentials(q.serverUsername || q.server_username, q.serverPassword ?? q.server_password);
+      }
+      let dispoFilesError = null;
+      if (baseUrlRaw && technicianId && dispoJobId) {
+        if (!auth) {
+          dispoFilesError =
+            'Keine Zugangsdaten für Dispo (Benutzername/Passwort in den Einstellungen oder Authorization-Header).';
+        }
+      }
+      if (baseUrlRaw && auth && technicianId && dispoJobId) {
         const base = dispoBase(baseUrlRaw);
         const seenByBucket = new Map();
         for (const row of files) {
@@ -445,7 +533,7 @@ function registerAbrechnungRoutes(app, ctx) {
             const data = await dispoFetchJson(
               base,
               'abrechnung_bucket_list.php',
-              { job_id: String(jobServerId), bucket },
+              { job_id: String(dispoJobId), bucket },
               auth,
               technicianId,
             );
@@ -466,7 +554,8 @@ function registerAbrechnungRoutes(app, ctx) {
             }
           }
         } catch (e) {
-          console.warn('[abrechnung/bundle] Dispo-Dateiliste:', e && e.message ? e.message : e);
+          dispoFilesError = e && e.message ? String(e.message) : String(e);
+          console.warn('[abrechnung/bundle] Dispo-Dateiliste:', dispoFilesError);
         }
       }
       files.sort((a, b) => {
@@ -478,6 +567,9 @@ function registerAbrechnungRoutes(app, ctx) {
         ok: true,
         notes: notes || { dispo: '', buchhaltung: '', synced_at: null },
         files: files || [],
+        job_id_for_dispo: dispoJobId,
+        job_id_from_client: jobServerIdRaw,
+        dispo_files_error: dispoFilesError,
       });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
@@ -487,21 +579,26 @@ function registerAbrechnungRoutes(app, ctx) {
   /** Abrechnung-Datei: zuerst lokal, sonst Proxy zur Dispo (Authorization + optional base_url) */
   app.get('/api/abrechnung/file', async (req, res) => {
     try {
-      const jobServerId = parseInt(req.query.job_server_id, 10);
+      const jobServerIdRaw = parseInt(req.query.job_server_id, 10);
       const bucket = (req.query.bucket || '').trim();
       const name = path.basename((req.query.name || '').toString());
       const baseUrlRaw = (req.query.base_url || req.query.baseUrl || '').toString().trim();
       const technicianId = parseInt(String(req.headers['x-technician-id'] || req.query.technician_id || ''), 10);
-      if (!jobServerId || !['dispo', 'buchhaltung'].includes(bucket) || !name) {
+      if (!jobServerIdRaw || !['dispo', 'buchhaltung'].includes(bucket) || !name) {
         return res.status(400).send('Ungültige Parameter.');
       }
-      const fp = filePathLocal(dbDir, jobServerId, bucket, name);
-      if (fs.existsSync(fp) && fs.statSync(fp).isFile()) {
+      const dispoJobId = resolveDispoJobIdForAbrechnung(db, jobServerIdRaw);
+      const fp = findLocalAbrechnungFilePath(dbDir, db, jobServerIdRaw, bucket, name);
+      if (fp) {
         return res.sendFile(path.resolve(fp));
       }
       const base = dispoBase(baseUrlRaw);
-      const auth =
+      let auth =
         typeof authHeaderFromIncomingBasicOrQuery === 'function' ? authHeaderFromIncomingBasicOrQuery(req) : undefined;
+      if (!auth && typeof authHeaderFromCredentials === 'function') {
+        const q = req.query || {};
+        auth = authHeaderFromCredentials(q.serverUsername || q.server_username, q.serverPassword ?? q.server_password);
+      }
       if (!base || !technicianId || !auth) {
         return res
           .status(404)
@@ -511,7 +608,7 @@ function registerAbrechnungRoutes(app, ctx) {
       }
       const q = new URLSearchParams({
         technician_id: String(technicianId),
-        job_id: String(jobServerId),
+        job_id: String(dispoJobId),
         bucket,
         name,
       });
