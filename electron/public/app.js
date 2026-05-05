@@ -4090,6 +4090,23 @@
 
   document.getElementById('btnViewStart').addEventListener('click', () => showView('start'));
   document.getElementById('btnViewDienstreise').addEventListener('click', () => showView('dienstreise'));
+  (function initAbrechnungLink() {
+    var btn = document.getElementById('btnOpenAbrechnung');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var base = getServerUrl().replace(/\/+$/, '');
+      if (!base) {
+        window.alert('Bitte unter Einstellungen die Server-Adresse (Dispo) eintragen.');
+        return;
+      }
+      var url = base + '/abrechnung.php?from_laptop=1';
+      if (typeof monteurApp !== 'undefined' && monteurApp.openExternal) {
+        monteurApp.openExternal(url);
+      } else {
+        window.open(url, '_blank');
+      }
+    });
+  })();
   (function initProtokolleDropdown() {
     const btn = document.getElementById('btnViewProtokolle');
     const dropdown = document.getElementById('protokolleDropdown');
