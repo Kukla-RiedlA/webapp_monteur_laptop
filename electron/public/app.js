@@ -184,6 +184,17 @@
     }, extra || {});
   }
 
+  /** Nur Abrechnungs-Ansicht: bearbeiten solange nicht endgültig abgerechnet (Status oder beide Flags). */
+  function abrechnungEffectiveCanWrite(job) {
+    if (!job || typeof job !== 'object') return true;
+    var st = String(job.status != null ? job.status : '').trim();
+    if (st === 'abgerechnet') return false;
+    var ma = Number(job.montage_abgerechnet);
+    var mv = Number(job.montage_verrechnet);
+    if (Number.isFinite(ma) && Number.isFinite(mv) && ma === 1 && mv === 1) return false;
+    return true;
+  }
+
   async function abrechnungFetchOutboxCount() {
     try {
       const r = await fetch(API_BASE + '/api/abrechnung/outbox_count?technician_id=' + encodeURIComponent(getTechId()), {
@@ -314,7 +325,7 @@
     var ud = document.getElementById('abrechnungUploadDispo');
     var ub = document.getElementById('abrechnungUploadBuch');
     var job = abrechnungSelectedJobObj();
-    var canWrite = job && job.can_write !== false;
+    var canWrite = abrechnungEffectiveCanWrite(job);
 
     if (!jid) {
       if (nd) { nd.value = ''; nd.disabled = true; }

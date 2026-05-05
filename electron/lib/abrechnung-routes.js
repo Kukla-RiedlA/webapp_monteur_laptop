@@ -78,11 +78,12 @@ function buildAbrechnungJobsFallbackFromSqlite(db, technicianId, periodYm) {
          FROM jobs j
          INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
          INNER JOIN customers c ON c.id = j.customer_id
-         WHERE j.start_datetime >= ? AND j.start_datetime <= ?
+         WHERE j.start_datetime <= ?
+           AND COALESCE(j.end_datetime, j.start_datetime) >= ?
            AND j.status != 'abgerechnet'
          ORDER BY j.start_datetime ASC, j.id ASC`,
       )
-      .all(technicianId, start, end);
+      .all(technicianId, end, start);
     return rows.map((r) => {
       const sid = r.server_id != null && r.server_id !== '' ? Number(r.server_id) : Number(r.local_id);
       const num = String(r.job_number || '').trim();
@@ -101,6 +102,27 @@ function buildAbrechnungJobsFallbackFromSqlite(db, technicianId, periodYm) {
   } catch (_) {
     return [];
   }
+}
+
+/** Snapshot-Dispo kann weniger Jobs enthalten als lokale Überlappungs-Logik — ohne Duplikate zusammenführen. */
+function mergeAbrechnungJobsUnique(primary, secondary) {
+  const seen = new Set();
+  const out = [];
+  for (const j of Array.isArray(primary) ? primary : []) {
+    const id = j && j.id != null ? Number(j.id) : NaN;
+    if (!Number.isFinite(id)) continue;
+    seen.add(id);
+    out.push(j);
+  }
+  const extras = [];
+  for (const j of Array.isArray(secondary) ? secondary : []) {
+    const id = j && j.id != null ? Number(j.id) : NaN;
+    if (!Number.isFinite(id) || seen.has(id)) continue;
+    seen.add(id);
+    extras.push(j);
+  }
+  extras.sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  return out.concat(extras);
 }
 
 /** Zwei URL-Varianten: direkt unter dispo_api (Standard) oder unter /api/ (Apache/XAMPP, wenn dispo_api nicht als URL erreichbar ist). */
@@ -377,9 +399,16 @@ function registerAbrechnungRoutes(app, ctx) {
         } catch (_) {}
       }
       let source = 'snapshot';
+      const sqliteOverlap = buildAbrechnungJobsFallbackFromSqlite(db, technicianId, period);
       if (!Array.isArray(jobs) || jobs.length === 0) {
-        jobs = buildAbrechnungJobsFallbackFromSqlite(db, technicianId, period);
+        jobs = sqliteOverlap;
         source = jobs.length ? 'sqlite_fallback' : source;
+      } else {
+        const merged = mergeAbrechnungJobsUnique(jobs, sqliteOverlap);
+        if (merged.length > jobs.length) {
+          jobs = merged;
+          source = 'snapshot_merged_sqlite';
+        }
       }
       return res.json({ ok: true, jobs, synced_at: row ? row.synced_at : null, jobs_source: source });
     } catch (e) {
