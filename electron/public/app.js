@@ -1,12 +1,12 @@
 (function () {
   const API_BASE = typeof monteurApp !== 'undefined' ? monteurApp.apiBase : 'http://127.0.0.1:39678';
   const getTechId = () => parseInt(document.getElementById('technicianId').value, 10) || 0;
-  const getServerUrl = () => (document.getElementById('serverUrl').value || '').trim();
   const getServerUsername = () => (document.getElementById('serverUsername') && document.getElementById('serverUsername').value || '').trim();
   const getServerPassword = () => (document.getElementById('serverPassword') && document.getElementById('serverPassword').value || '');
 
   const SETTINGS_KEYS = {
     serverUrl: 'monteur_serverUrl',
+    serverUrlInternal: 'monteur_serverUrlInternal',
     technicianId: 'monteur_technicianId',
     serverUsername: 'monteur_serverUsername',
     serverPassword: 'monteur_serverPassword',
@@ -15,10 +15,75 @@
     allowInsecureTls: 'monteur_allowInsecureTls',
   };
 
+  const LS_ACTIVE_BASE = 'monteur_dispoActiveBase';
+  const LS_ACTIVE_SOURCE = 'monteur_dispoActiveSource';
+
+  function getDispoExternalUrl() {
+    return (document.getElementById('serverUrl').value || '').trim();
+  }
+
+  function getDispoInternalUrl() {
+    var el = document.getElementById('serverUrlInternal');
+    return el ? (el.value || '').trim() : '';
+  }
+
+  /** Alias: externe Dispo-Basis-URL (Einstellungen). */
+  function getServerUrl() {
+    return getDispoExternalUrl();
+  }
+
+  /** Für Sync/Dispo: zuletzt erfolgreich gewählte Basis (intern/extern), sonst externe URL. */
   function getDispoBaseUrl() {
-    var u = getServerUrl();
+    try {
+      var active = (localStorage.getItem(LS_ACTIVE_BASE) || '').trim();
+      if (active) return active;
+    } catch (e) { /* ignore */ }
+    var u = getDispoExternalUrl();
     if (u) return u;
-    try { return (localStorage.getItem(SETTINGS_KEYS.serverUrl) || '').trim(); } catch (e) { return ''; }
+    try { return (localStorage.getItem(SETTINGS_KEYS.serverUrl) || '').trim(); } catch (e2) { return ''; }
+  }
+
+  /** Auto-Probe parallel (10 s serverseitig); gewählte URL in localStorage. */
+  async function pickDispoBase() {
+    var ext = getDispoExternalUrl();
+    var int = getDispoInternalUrl();
+    var techId = getTechId();
+    function clearActive() {
+      try {
+        localStorage.removeItem(LS_ACTIVE_BASE);
+        localStorage.removeItem(LS_ACTIVE_SOURCE);
+      } catch (e) { /* ignore */ }
+    }
+    if (!techId || (!ext && !int)) {
+      clearActive();
+      return { ok: false };
+    }
+    try {
+      var r = await fetch(API_BASE + '/api/dispo_pick_base', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+        body: JSON.stringify({
+          externalUrl: ext,
+          internalUrl: int,
+          technicianId: techId,
+          serverUsername: getDispoUsername(),
+          serverPassword: getDispoPassword(),
+        }),
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (data && data.ok && data.selected_base_url) {
+        try {
+          localStorage.setItem(LS_ACTIVE_BASE, String(data.selected_base_url).trim());
+          localStorage.setItem(LS_ACTIVE_SOURCE, (data.preferred_source || '').toString());
+        } catch (e) { /* ignore */ }
+        return data;
+      }
+      clearActive();
+      return data && typeof data === 'object' ? data : { ok: false };
+    } catch (e) {
+      clearActive();
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
   }
   function getDispoUsername() {
     var u = getServerUsername();
@@ -42,6 +107,9 @@
     try {
       const url = localStorage.getItem(SETTINGS_KEYS.serverUrl);
       if (url != null) document.getElementById('serverUrl').value = url;
+      const urlInt = localStorage.getItem(SETTINGS_KEYS.serverUrlInternal);
+      var elInt = document.getElementById('serverUrlInternal');
+      if (elInt && urlInt != null) elInt.value = urlInt;
       const techId = localStorage.getItem(SETTINGS_KEYS.technicianId);
       if (techId != null) document.getElementById('technicianId').value = techId;
       const username = localStorage.getItem(SETTINGS_KEYS.serverUsername);
@@ -67,6 +135,8 @@
   function saveSettingsToStorage() {
     try {
       localStorage.setItem(SETTINGS_KEYS.serverUrl, (document.getElementById('serverUrl').value || '').trim());
+      var intEl = document.getElementById('serverUrlInternal');
+      localStorage.setItem(SETTINGS_KEYS.serverUrlInternal, intEl ? (intEl.value || '').trim() : '');
       localStorage.setItem(SETTINGS_KEYS.technicianId, document.getElementById('technicianId').value || '');
       localStorage.setItem(SETTINGS_KEYS.serverUsername, (document.getElementById('serverUsername') && document.getElementById('serverUsername').value) || '');
       localStorage.setItem(SETTINGS_KEYS.serverPassword, (document.getElementById('serverPassword') && document.getElementById('serverPassword').value) || '');
@@ -94,6 +164,290 @@
     const p = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => { if (v != null && v !== '') p.set(k, v); });
     return p.toString();
+  }
+
+  var abrechnungCurrentJobs = [];
+
+  function abrechnungAuthHeaders() {
+    return Object.assign(
+      { 'X-Technician-Id': String(getTechId()) },
+      dispoBasicAuthHeaders(getDispoUsername, getDispoPassword)
+    );
+  }
+
+  function abrechnungBody(extra) {
+    return Object.assign({
+      baseUrl: getDispoBaseUrl(),
+      technicianId: getTechId(),
+      serverUsername: getDispoUsername(),
+      serverPassword: getDispoPassword()
+    }, extra || {});
+  }
+
+  async function abrechnungFetchOutboxCount() {
+    try {
+      const r = await fetch(API_BASE + '/api/abrechnung/outbox_count?technician_id=' + encodeURIComponent(getTechId()), {
+        headers: abrechnungAuthHeaders()
+      });
+      const j = await r.json();
+      return j && j.ok ? (j.count != null ? j.count : 0) : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  async function updateAbrechnungStatusLine() {
+    var el = document.getElementById('abrechnungStatusLine');
+    if (!el) return;
+    var parts = [];
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      parts.push('Offline — Anzeige aus lokalem Cache.');
+    } else {
+      parts.push('Netzwerk verfügbar.');
+    }
+    var n = await abrechnungFetchOutboxCount();
+    if (n > 0) {
+      parts.push('<span class="pending">' + n + ' ausstehende Änderungen (Sync)</span>');
+    }
+    el.innerHTML = parts.join(' ');
+  }
+
+  function abrechnungSelectedJobObj() {
+    var sel = document.getElementById('abrechnungJobSelect');
+    var id = sel && sel.value ? parseInt(sel.value, 10) : 0;
+    if (!id) return null;
+    for (var i = 0; i < abrechnungCurrentJobs.length; i++) {
+      if (abrechnungCurrentJobs[i].id === id) return abrechnungCurrentJobs[i];
+    }
+    return { id: id, can_write: true };
+  }
+
+  function formatAbrechnungFileSize(n) {
+    if (n == null || !Number.isFinite(Number(n))) return '';
+    var b = Number(n);
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1048576).toFixed(1) + ' MB';
+  }
+
+  function renderAbrechnungFileList(ulEl, bucket, files, jobId, canWrite) {
+    if (!ulEl) return;
+    ulEl.innerHTML = '';
+    var list = (files || []).filter(function (f) { return f.bucket === bucket; });
+    list.forEach(function (f) {
+      var li = document.createElement('li');
+      var a = document.createElement('a');
+      a.href = API_BASE + '/api/abrechnung/file?' + qs({ job_server_id: jobId, bucket: bucket, name: f.file_name });
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = f.file_name + (f.size_bytes != null ? ' (' + formatAbrechnungFileSize(f.size_bytes) + ')' : '');
+      li.appendChild(a);
+      if (canWrite) {
+        var del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'btn btn-ghost';
+        del.textContent = 'Löschen';
+        del.addEventListener('click', function () {
+          if (!window.confirm('Datei wirklich löschen?')) return;
+          abrechnungDeleteFile(jobId, bucket, f.file_name);
+        });
+        li.appendChild(del);
+      }
+      ulEl.appendChild(li);
+    });
+    if (list.length === 0) {
+      var empty = document.createElement('li');
+      empty.className = 'empty';
+      empty.textContent = 'Keine Dateien (nach „Mit Dispo abgleichen“ erscheinen sie hier).';
+      ulEl.appendChild(empty);
+    }
+  }
+
+  async function abrechnungDeleteFile(jobId, bucket, name) {
+    try {
+      var r = await fetch(API_BASE + '/api/abrechnung/delete_file', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
+        body: JSON.stringify(abrechnungBody({ job_server_id: jobId, bucket: bucket, name: name }))
+      });
+      var j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'Löschen fehlgeschlagen');
+      if (j.queued && typeof showToast === 'function') showToast('Löschen wird ausgeführt, sobald die Dispo erreichbar ist.');
+      await refreshAbrechnungNativeUi(false);
+    } catch (e) {
+      window.alert((e && e.message) ? e.message : String(e));
+    }
+  }
+
+  async function loadAbrechnungJobsIntoSelect(period) {
+    var tid = getTechId();
+    var sel = document.getElementById('abrechnungJobSelect');
+    if (!sel) return;
+    var prev = sel.value;
+    var r = await fetch(API_BASE + '/api/abrechnung/jobs?' + qs({ technician_id: tid, period: period }), { headers: abrechnungAuthHeaders() });
+    var j = await r.json();
+    abrechnungCurrentJobs = (j && j.jobs) ? j.jobs : [];
+    sel.innerHTML = '';
+    var opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = abrechnungCurrentJobs.length ? '— Auftrag wählen —' : '— Keine Aufträge im Cache (Monat abgleichen) —';
+    sel.appendChild(opt0);
+    abrechnungCurrentJobs.forEach(function (job) {
+      var o = document.createElement('option');
+      o.value = String(job.id);
+      o.textContent = job.label || ('#' + job.id);
+      sel.appendChild(o);
+    });
+    if (prev && abrechnungCurrentJobs.some(function (x) { return String(x.id) === prev; })) sel.value = prev;
+  }
+
+  async function loadAbrechnungBundleForSelection() {
+    var sel = document.getElementById('abrechnungJobSelect');
+    var jid = sel && sel.value ? parseInt(sel.value, 10) : 0;
+    var nd = document.getElementById('abrechnungNoteDispo');
+    var nb = document.getElementById('abrechnungNoteBuch');
+    var fd = document.getElementById('abrechnungFilesDispo');
+    var fb = document.getElementById('abrechnungFilesBuch');
+    var meta = document.getElementById('abrechnungJobMeta');
+    var sd = document.getElementById('btnAbrechnungSaveDispo');
+    var sb = document.getElementById('btnAbrechnungSaveBuch');
+    var ud = document.getElementById('abrechnungUploadDispo');
+    var ub = document.getElementById('abrechnungUploadBuch');
+    var job = abrechnungSelectedJobObj();
+    var canWrite = job && job.can_write !== false;
+
+    if (!jid) {
+      if (nd) { nd.value = ''; nd.disabled = true; }
+      if (nb) { nb.value = ''; nb.disabled = true; }
+      if (fd) fd.innerHTML = '';
+      if (fb) fb.innerHTML = '';
+      if (sd) sd.disabled = true;
+      if (sb) sb.disabled = true;
+      if (ud) { ud.disabled = true; ud.value = ''; }
+      if (ub) { ub.disabled = true; ub.value = ''; }
+      if (meta) meta.textContent = '';
+      return;
+    }
+
+    var tid = getTechId();
+    var r = await fetch(API_BASE + '/api/abrechnung/bundle?' + qs({ technician_id: tid, job_server_id: jid }), { headers: abrechnungAuthHeaders() });
+    var j = await r.json();
+    if (!j.ok) {
+      if (meta) meta.textContent = j.error || 'Daten konnten nicht geladen werden.';
+      return;
+    }
+    if (meta) meta.textContent = canWrite ? 'Bearbeitung für diesen Auftrag erlaubt.' : 'Nur Lesen: Auftrag nicht zur Bearbeitung freigegeben.';
+    var notes = j.notes || {};
+    if (nd) { nd.value = notes.dispo != null ? String(notes.dispo) : ''; nd.disabled = !canWrite; }
+    if (nb) { nb.value = notes.buchhaltung != null ? String(notes.buchhaltung) : ''; nb.disabled = !canWrite; }
+    renderAbrechnungFileList(fd, 'dispo', j.files, jid, canWrite);
+    renderAbrechnungFileList(fb, 'buchhaltung', j.files, jid, canWrite);
+    if (sd) sd.disabled = !canWrite;
+    if (sb) sb.disabled = !canWrite;
+    if (ud) ud.disabled = !canWrite;
+    if (ub) ub.disabled = !canWrite;
+  }
+
+  async function refreshAbrechnungNativeUi(withServerSync) {
+    var view = document.getElementById('viewAbrechnung');
+    if (!view || !view.classList.contains('active')) return;
+    var periodEl = document.getElementById('abrechnungPeriod');
+    var period = (periodEl && periodEl.value) ? periodEl.value : new Date().toISOString().slice(0, 7);
+    var tid = getTechId();
+    var meta = document.getElementById('abrechnungJobMeta');
+    if (!tid) {
+      if (meta) meta.textContent = 'Monteur-ID fehlt — bitte unter Einstellungen setzen.';
+      return;
+    }
+    var base = (getDispoBaseUrl() || '').trim();
+    if (withServerSync && base && typeof navigator !== 'undefined' && navigator.onLine !== false) {
+      try {
+        var selEl = document.getElementById('abrechnungJobSelect');
+        var selId = selEl && selEl.value ? parseInt(selEl.value, 10) : 0;
+        var r = await fetch(API_BASE + '/api/abrechnung/refresh', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
+          body: JSON.stringify(abrechnungBody({ period_ym: period, job_server_id: selId > 0 ? selId : 0 }))
+        });
+        var j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Abgleich fehlgeschlagen');
+        if (typeof showToast === 'function') showToast('Abrechnung mit Dispo abgeglichen.');
+      } catch (e) {
+        var msg = (e && e.message) ? e.message : String(e);
+        if (typeof showToast === 'function') showToast('Abgleich: ' + msg);
+        else window.alert('Abgleich: ' + msg);
+      }
+    } else if (withServerSync && !base) {
+      if (typeof showToast === 'function') showToast('Keine Dispo-URL — nur lokaler Cache.');
+    }
+    await updateAbrechnungStatusLine();
+    try {
+      await loadAbrechnungJobsIntoSelect(period);
+      await loadAbrechnungBundleForSelection();
+    } catch (e) {
+      if (meta) meta.textContent = (e && e.message) ? e.message : String(e);
+    }
+  }
+
+  async function abrechnungSaveNote(bucket) {
+    var sel = document.getElementById('abrechnungJobSelect');
+    var jid = sel && sel.value ? parseInt(sel.value, 10) : 0;
+    var ta = bucket === 'dispo' ? document.getElementById('abrechnungNoteDispo') : document.getElementById('abrechnungNoteBuch');
+    if (!jid || !ta) return;
+    try {
+      var r = await fetch(API_BASE + '/api/abrechnung/note', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
+        body: JSON.stringify(abrechnungBody({ job_server_id: jid, bucket: bucket, body: ta.value }))
+      });
+      var j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'Speichern fehlgeschlagen');
+      if (j.queued && typeof showToast === 'function') showToast('Notiz lokal gespeichert; Sync bei Verbindung.');
+      else if (typeof showToast === 'function') showToast('Notiz gespeichert.');
+      await updateAbrechnungStatusLine();
+      await loadAbrechnungBundleForSelection();
+    } catch (e) {
+      window.alert((e && e.message) ? e.message : String(e));
+    }
+  }
+
+  function wireAbrechnungFileUpload(inputId, bucket) {
+    var inp = document.getElementById(inputId);
+    if (!inp) return;
+    inp.addEventListener('change', function () {
+      var f = inp.files && inp.files[0];
+      if (!f) return;
+      var sel = document.getElementById('abrechnungJobSelect');
+      var jid = sel && sel.value ? parseInt(sel.value, 10) : 0;
+      if (!jid) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var dataUrl = reader.result;
+        var b64 = typeof dataUrl === 'string' && dataUrl.indexOf(',') >= 0 ? dataUrl.split(',')[1] : '';
+        fetch(API_BASE + '/api/abrechnung/upload', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
+          body: JSON.stringify(abrechnungBody({
+            job_server_id: jid,
+            bucket: bucket,
+            filename: f.name,
+            content_base64: b64
+          }))
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            inp.value = '';
+            if (!j.ok) throw new Error(j.error || 'Upload fehlgeschlagen');
+            if (j.queued && typeof showToast === 'function') showToast('Upload eingereiht (wird synchronisiert).');
+            return refreshAbrechnungNativeUi(false);
+          })
+          .catch(function (e) {
+            inp.value = '';
+            window.alert((e && e.message) ? e.message : String(e));
+          });
+      };
+      reader.readAsDataURL(f);
+    });
   }
 
   /** HTTP Basic an den lokalen Electron-Server (127.0.0.1) – Passwort nicht in der URL. */
@@ -1260,14 +1614,14 @@
           bindLeistungActions();
           if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
         }
-        var baseUrl = (typeof getServerUrl === 'function' ? getServerUrl() : '').trim();
+        var baseUrl = (typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '').trim();
         var techId = typeof getTechId === 'function' ? getTechId() : null;
         if (baseUrl && techId) {
           api('/api/sync_push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              baseUrl: getServerUrl(),
+              baseUrl: baseUrl,
               technicianId: getTechId(),
               serverUsername: typeof getServerUsername === 'function' ? getServerUsername() : '',
               serverPassword: typeof getServerPassword === 'function' ? getServerPassword() : ''
@@ -1380,10 +1734,15 @@
       if (list) list.innerHTML = '<span class="empty">Monteur-ID in Einstellungen eintragen.</span>';
       return;
     }
-    const baseUrl = getServerUrl();
+    if (!getDispoExternalUrl() && !getDispoInternalUrl()) {
+      cachedOpenJobs = [];
+      if (list) list.innerHTML = '<span class="empty">Mindestens eine Dispo-Adresse (extern oder intern) in den Einstellungen eintragen.</span>';
+      return;
+    }
+    const baseUrl = getDispoBaseUrl().trim();
     if (!baseUrl) {
       cachedOpenJobs = [];
-      if (list) list.innerHTML = '<span class="empty">Server-Adresse in Einstellungen eintragen.</span>';
+      if (list) list.innerHTML = '<span class="empty">Dispo-Basis noch nicht ermittelt — kurz warten oder synchronisieren.</span>';
       return;
     }
     try {
@@ -1486,16 +1845,25 @@
   }
 
   async function checkConnectionAndSync() {
-    const base = getServerUrl().trim();
     const techId = getTechId();
     if (!techId) {
       setConnectionBadge('offline');
       loadJobsAndAbsences();
       return;
     }
+    var ext = getDispoExternalUrl();
+    var intUrl = getDispoInternalUrl();
+    if (!ext && !intUrl) {
+      setConnectionBadge('local');
+      loadJobsAndAbsences();
+      return;
+    }
+    await pickDispoBase();
+    var base = getDispoBaseUrl().trim();
     if (!base) {
       setConnectionBadge('local');
       loadJobsAndAbsences();
+      loadOpenJobs();
       return;
     }
     try {
@@ -1512,7 +1880,8 @@
       const check = await resCheck.json().catch(function () { return {}; });
       if (check && check.ok === true) {
         const range = getSyncDateRange();
-        const auth = { baseUrl: base, technicianId: techId, serverUsername: getServerUsername(), serverPassword: getServerPassword() };
+        var syncBase = getDispoBaseUrl().trim() || base;
+        const auth = { baseUrl: syncBase, technicianId: techId, serverUsername: getServerUsername(), serverPassword: getServerPassword() };
         var syncProblems = [];
         try {
           await fetch(API_BASE + '/api/sync_pull', {
@@ -1545,7 +1914,7 @@
           if (!isJobGeplantReadOnly(syncSnap)) {
             const bodySync = {
               job_id: selectedJobIdOnDienstreisePage,
-              dispo_base_url: base,
+              dispo_base_url: syncBase,
               technician_id: techId,
               dispo_username: getServerUsername(),
               dispo_password: getServerPassword()
@@ -1621,7 +1990,7 @@
   var eventSourceRef = null;
   function startPushEvents() {
     var techId = getTechId();
-    var baseUrl = getServerUrl();
+    var baseUrl = getDispoBaseUrl();
     if (eventSourceRef) { eventSourceRef.close(); eventSourceRef = null; }
     if (!techId) return;
     var url = API_BASE + '/api/events?technician_id=' + encodeURIComponent(techId) + '&base_url=' + encodeURIComponent(baseUrl || '');
@@ -1673,7 +2042,6 @@
   }
 
   function triggerManualSync() {
-    var base = getServerUrl().trim();
     var techId = getTechId();
     var badge = document.getElementById('connectionBadge');
     if (badge) badge.textContent = 'Wird synchronisiert…';
@@ -1708,11 +2076,22 @@
     }).catch(function () {});
   }
   loadDienstreiseConfigFromServer();
-  loadDispoTlsSettingFromServer().then(function () {
-    checkConnectionAndSync();
-  });
+  loadDispoTlsSettingFromServer()
+    .then(function () {
+      return checkConnectionAndSync();
+    })
+    .then(function () {
+      startPushEvents();
+    })
+    .catch(function () {
+      startPushEvents();
+    });
   startSyncInterval();
-  startPushEvents();
+  window.addEventListener('online', function () {
+    if (typeof checkConnectionAndSync === 'function') {
+      try { checkConnectionAndSync(); } catch (e) { /* ignore */ }
+    }
+  });
   // Startansicht und Kalender erst nach Layout-Aufbau, damit das Grid sofort sichtbar ist
   function initStartView() {
     showView('start');
@@ -1766,9 +2145,8 @@
         startSyncInterval();
         startPushEvents();
         updateTechnicianName();
-        var base = getServerUrl().trim();
         var techId = getTechId();
-        if (base && techId) {
+        if ((getDispoExternalUrl() || getDispoInternalUrl()) && techId) {
           return checkConnectionAndSync();
         }
         return Promise.resolve();
@@ -1784,9 +2162,9 @@
   var btnOpenProfileForQr = document.getElementById('btnOpenProfileForQr');
   if (btnOpenProfileForQr) {
     btnOpenProfileForQr.addEventListener('click', function () {
-      var base = (getServerUrl() || '').trim().replace(/\/+$/, '');
+      var base = (getDispoBaseUrl() || '').trim().replace(/\/+$/, '');
       if (!base) {
-        alert('Bitte zuerst Server-Adresse (Dispo) in den Einstellungen eintragen.');
+        alert('Bitte zuerst eine Dispo-Adresse eintragen und Verbindung prüfen (Einstellungen).');
         return;
       }
       var profileUrl = base + '/profile.php';
@@ -1800,14 +2178,13 @@
 
   document.getElementById('btnSyncNow').addEventListener('click', function () {
     var hint = document.getElementById('syncNowHint');
-    var base = getServerUrl().trim();
     var techId = getTechId();
     if (!techId) {
       hint.textContent = 'Bitte zuerst Monteur-ID eintragen.';
       return;
     }
-    if (!base) {
-      hint.textContent = 'Bitte zuerst Server-Adresse (Dispo) eintragen.';
+    if (!getDispoExternalUrl() && !getDispoInternalUrl()) {
+      hint.textContent = 'Bitte mindestens eine Dispo-Adresse (extern oder intern) eintragen.';
       return;
     }
     hint.textContent = 'Wird geholt…';
@@ -1881,7 +2258,7 @@
       return;
     }
     if (!confirm('Abwesenheit wirklich löschen? (lokal und in der Dispo)')) return;
-    var body = { id: parseInt(id, 10), base_url: getServerUrl() || undefined, serverUsername: getDispoUsername() || undefined, serverPassword: getDispoPassword() || undefined };
+    var body = { id: parseInt(id, 10), base_url: getDispoBaseUrl() || undefined, serverUsername: getDispoUsername() || undefined, serverPassword: getDispoPassword() || undefined };
     fetch(API_BASE + '/api/absence?id=' + encodeURIComponent(id), {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -1931,7 +2308,7 @@
       end_datetime: end + 'T23:59:59',
       type: type || 'Abwesenheit',
       comment: cmtV === '' ? null : cmtV,
-      base_url: getServerUrl() || undefined,
+      base_url: getDispoBaseUrl() || undefined,
       serverUsername: getDispoUsername() || undefined,
       serverPassword: getDispoPassword() || undefined
     };
@@ -2532,7 +2909,7 @@
     if (pnHintL) pnHintL.textContent = '';
     try {
       const payload = {
-        baseUrl: getServerUrl(),
+        baseUrl: getDispoBaseUrl(),
         fab,
         serverUsername: getServerUsername(),
         serverPassword: getServerPassword()
@@ -2605,7 +2982,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
       body: JSON.stringify({
-        baseUrl: getServerUrl(),
+        baseUrl: getDispoBaseUrl(),
         fab: fab,
         file: file,
         serverUsername: getServerUsername(),
@@ -2631,7 +3008,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
       body: JSON.stringify({
-        baseUrl: getServerUrl(),
+        baseUrl: getDispoBaseUrl(),
         fab: fab,
         file: file,
         serverUsername: getServerUsername(),
@@ -2665,7 +3042,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
       body: JSON.stringify({
-        baseUrl: getServerUrl(),
+        baseUrl: getDispoBaseUrl(),
         fab: fab,
         source: 'projekte_neu',
         path: relPath,
@@ -2693,7 +3070,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
       body: JSON.stringify({
-        baseUrl: getServerUrl(),
+        baseUrl: getDispoBaseUrl(),
         fab: fab,
         source: 'projekte_neu',
         path: relPath,
@@ -2728,7 +3105,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
       body: JSON.stringify({
-        baseUrl: getServerUrl(),
+        baseUrl: getDispoBaseUrl(),
         fab: fab,
         source: 'projekte_neu',
         path: relPath,
@@ -2813,8 +3190,8 @@
       if (msg) msg.textContent = 'Keine Fabrikationsnummer vorhanden.';
       return;
     }
-    if (!getServerUrl()) {
-      if (msg) msg.textContent = 'Dispo-Server-URL fehlt.';
+    if (!getDispoExternalUrl() && !getDispoInternalUrl()) {
+      if (msg) msg.textContent = 'Dispo-Adresse (extern oder intern) fehlt.';
       return;
     }
     if (msg) msg.textContent = 'Lade Struktur…';
@@ -2831,7 +3208,7 @@
       }
 
       const payload = {
-        baseUrl: getServerUrl(),
+        baseUrl: getDispoBaseUrl(),
         fab: fab,
         serverUsername: getServerUsername(),
         serverPassword: getServerPassword()
@@ -2875,10 +3252,6 @@
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
     if (viewDienstreise) viewDienstreise.classList.remove('active');
     if (viewAbrechnung) viewAbrechnung.classList.remove('active');
-    if (name !== 'abrechnung') {
-      const abFr = document.getElementById('abrechnungDispoFrame');
-      if (abFr) abFr.src = 'about:blank';
-    }
     protokolleViewIds.forEach(function (id) {
       const el = document.getElementById(id);
       if (el) el.classList.remove('active');
@@ -2903,7 +3276,11 @@
     if (name === 'abrechnung') {
       viewStart.classList.add('hidden');
       if (viewAbrechnung) viewAbrechnung.classList.add('active');
-      refreshAbrechnungEmbeddedUi(false);
+      var perEl = document.getElementById('abrechnungPeriod');
+      if (perEl && !perEl.value) {
+        perEl.value = new Date().toISOString().slice(0, 7);
+      }
+      refreshAbrechnungNativeUi(false);
       return;
     }
     if (name && name.startsWith('protokolle-')) {
@@ -2961,30 +3338,6 @@
     }
   }
 
-  function refreshAbrechnungEmbeddedUi(forceReload) {
-    var view = document.getElementById('viewAbrechnung');
-    if (!view || !view.classList.contains('active')) return;
-    var frame = document.getElementById('abrechnungDispoFrame');
-    var off = document.getElementById('abrechnungOfflineWrap');
-    var base = (typeof getServerUrl === 'function' ? getServerUrl() : '').trim().replace(/\/+$/, '');
-    var online = typeof navigator === 'undefined' || navigator.onLine !== false;
-    if (!base || !online) {
-      if (off) off.hidden = false;
-      if (frame) {
-        frame.hidden = true;
-        frame.src = 'about:blank';
-      }
-      return;
-    }
-    if (off) off.hidden = true;
-    if (frame) {
-      frame.hidden = false;
-      var u = base + '/abrechnung.php?from_laptop=1';
-      if (forceReload) u += (u.indexOf('?') >= 0 ? '&' : '?') + '_=' + Date.now();
-      frame.src = u;
-    }
-  }
-
   /** Kalender: gleiche Abwesenheit nicht doppelt (Server-Absence vs. lokale Anfrage / andere IDs). */
   function absenceCalendarDedupeKey(a, technicianIdOverride) {
     var tid = technicianIdOverride != null ? technicianIdOverride : (a.technician_id != null ? a.technician_id : a.technicianId);
@@ -3030,11 +3383,11 @@
     renderCalendarGrid(gridStart, gridEnd, [], [], null);
 
     if (showAll) {
-      const base = getServerUrl();
+      const base = getDispoBaseUrl().trim();
       const myTechId = getTechId();
       if (!base) {
         if (!myTechId) {
-          setCalendarError('Für „Alle Techniker“ Dispo-Server-URL eintragen – oder Monteur-ID setzen und Häkchen aus für Offline-Kalender.');
+          setCalendarError('Für „Alle Techniker“ Dispo-Adresse eintragen oder synchronisieren – oder Monteur-ID setzen und Häkchen aus für Offline-Kalender.');
           return;
         }
         try {
@@ -4130,20 +4483,35 @@
     var btn = document.getElementById('btnViewAbrechnung');
     if (btn) {
       btn.addEventListener('click', function () {
-        var base = (typeof getServerUrl === 'function' ? getServerUrl() : '').trim();
-        if (!base) {
-          window.alert('Bitte unter Einstellungen die Server-Adresse (Dispo) eintragen.');
+        if (!getTechId()) {
+          window.alert('Bitte unter Einstellungen die Monteur-ID eintragen.');
           return;
         }
         showView('abrechnung');
       });
     }
+    var sync = document.getElementById('btnAbrechnungSync');
+    if (sync) sync.addEventListener('click', function () { refreshAbrechnungNativeUi(true); });
     var reload = document.getElementById('btnAbrechnungReload');
-    if (reload) reload.addEventListener('click', function () { refreshAbrechnungEmbeddedUi(true); });
-    var retry = document.getElementById('btnAbrechnungRetry');
-    if (retry) retry.addEventListener('click', function () { refreshAbrechnungEmbeddedUi(true); });
-    window.addEventListener('online', function () { refreshAbrechnungEmbeddedUi(false); });
-    window.addEventListener('offline', function () { refreshAbrechnungEmbeddedUi(false); });
+    if (reload) reload.addEventListener('click', function () { refreshAbrechnungNativeUi(false); });
+    var period = document.getElementById('abrechnungPeriod');
+    if (period) period.addEventListener('change', function () { refreshAbrechnungNativeUi(false); });
+    var jobSel = document.getElementById('abrechnungJobSelect');
+    if (jobSel) jobSel.addEventListener('change', function () { loadAbrechnungBundleForSelection(); });
+    var sd = document.getElementById('btnAbrechnungSaveDispo');
+    if (sd) sd.addEventListener('click', function () { abrechnungSaveNote('dispo'); });
+    var sb = document.getElementById('btnAbrechnungSaveBuch');
+    if (sb) sb.addEventListener('click', function () { abrechnungSaveNote('buchhaltung'); });
+    wireAbrechnungFileUpload('abrechnungUploadDispo', 'dispo');
+    wireAbrechnungFileUpload('abrechnungUploadBuch', 'buchhaltung');
+    window.addEventListener('online', function () {
+      var v = document.getElementById('viewAbrechnung');
+      if (v && v.classList.contains('active')) refreshAbrechnungNativeUi(false);
+    });
+    window.addEventListener('offline', function () {
+      var v = document.getElementById('viewAbrechnung');
+      if (v && v.classList.contains('active')) updateAbrechnungStatusLine();
+    });
   })();
   (function initProtokolleDropdown() {
     const btn = document.getElementById('btnViewProtokolle');

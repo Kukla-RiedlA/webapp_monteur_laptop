@@ -49,6 +49,21 @@ Erfolg / Fehler einheitlich über **`ok`** (boolean):
 
 ## 5. Bekannte plattformrelevante Endpunkte (Stichworte)
 
+### 5.0 Monteur-Laptop – lokaler Electron-Gateway (`electron/server.js`)
+
+Der **Renderer** (`electron/public/app.js`) spricht nur **`API_BASE`** (lokaler Express). Dispo wird nicht direkt vom Renderer angesprochen; die gewählte Basis-URL wird vom Main-Prozess für Proxys und Sync verwendet.
+
+| Route | Methode | Body (JSON, Keys wie im Code) | Antwort (Kern) |
+|-------|---------|-------------------------------|----------------|
+| `/api/check_connection` | POST | `baseUrl`, `technicianId`, `serverUsername`, `serverPassword` | `{ "ok": true }` oder `{ "ok": false, "error": "…" }` |
+| `/api/dispo_pick_base` | POST | `externalUrl`, `internalUrl` (optional leer), `technicianId`, `serverUsername`, `serverPassword` | `{ "ok": true, "selected_base_url": "https://…", "preferred_source": "internal"\|"external"\|"single", "tried": [ { "url", "ok", "error"? } ] }` oder `{ "ok": false, "error": "…", "tried": … }` |
+
+Hinweis: Das sind **lokale** Laptop-Gateway-Payloads (historisch camelCase). Neue **Dispo-öffentliche** APIs bleiben bei `snake_case` gemäß Abschnitt 2.
+
+**Semantik `dispo_pick_base`:** Beide URLs werden **parallel** geprüft (gleiche Probe wie `check_connection`: `my_jobs.php` → `dispo_api/api/jobs_open.php`), **Timeout 10 s** pro Probe. Sind **beide** erreichbar, wird die **interne** Basis gewählt. Nur eine URL konfiguriert → entsprechend `preferred_source: "single"`.
+
+Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über denselben Host; sie erwarten die vom Client gesetzte **`baseUrl`** / aktive Basis aus der Pick-Antwort.
+
 - **Import:** `dispo/dispo_api/api/receive_dispo.php` – u. a. `batch_id`, `processed_jobs`, `processed_absences`, `processed_assignments`.
 - **Pairing / Mobile:** `dispo/api/mobile/pairing.php` – u. a. `base_url` (nicht `baseUrl`).
 - **Monteur-Auftrag (dispo_api):** `dispo/dispo_api/api/job.php` – GET liefert unter `job` u. a. **`assigned_to_me`** (bool): der abfragende Monteur ist in `job_technicians` eingetragen (Steuerung von Schreibzugriffen in PWA/Laptop).

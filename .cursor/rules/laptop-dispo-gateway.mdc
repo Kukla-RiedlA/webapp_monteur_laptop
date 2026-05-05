@@ -1,0 +1,26 @@
+---
+description: Monteur-Laptop – Dispo nur über Electron-Gateway; zwei Basis-URLs (extern/intern)
+globs: webapp_monteur_laptop/electron/**/*
+alwaysApply: false
+---
+
+# Laptop Dispo-Gateway (Pflicht)
+
+## Renderer vs. Main
+
+- **`electron/public/app.js` (Renderer):** Spricht für Daten und Sync nur mit dem **lokalen** Express (`API_BASE`, gleicher Origin wie die UI). **Keine** direkten `fetch`-Aufrufe gegen die öffentliche oder interne Dispo-Basis-URL für geschäftliche APIs (Ausnahmen nur, wenn ausdrücklich so spezifiziert und dokumentiert).
+- **`electron/server.js`:** Alle Proxys, Sync (`sync_pull`, Push), Projektdownloads, Anlagenstamm und **`POST /api/dispo_pick_base`** leben hier. TLS/Basic-Auth wie bei bestehenden Dispo-Probes.
+
+## Zwei Dispo-URLs
+
+- **Extern (Standard)** und optional **intern (Firmennetz)** in den Einstellungen.
+- Auswahl: **`POST /api/dispo_pick_base`** – parallele Probe, Timeout 10 s pro URL; wenn **beide** erreichbar → **intern**; sonst die erreichbare URL; Ergebnis wird clientseitig als aktive Basis persistiert (`getDispoBaseUrl()`).
+
+## Dokumentation
+
+- Gateway-Routen und Konventionen: `docs/API_CONTRACT.md` im Repo `webapp_monteur_laptop`.
+- Offline-Verhalten und Tabellen: `docs/OFFLINE_DATA_MATRIX.md`.
+
+## Contract
+
+- Neue oder geänderte JSON-Felder für Laptop ↔ Dispo: `snake_case`, Envelope `ok` – siehe `platform-contract-sync` und `CONTRACT_RENAME_LOG.md`.

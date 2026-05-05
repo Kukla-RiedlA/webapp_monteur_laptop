@@ -19,6 +19,7 @@ function getCsvToPdfBuffer() {
 
 const PORT = 39678;
 const DB_DIR = path.join(__dirname, 'db');
+const { registerAbrechnungRoutes, flushAbrechnungOutbox } = require('./lib/abrechnung-routes');
 
 /** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). */
 function writeFileWithRetry(filePath, data, maxRetries = 3) {
@@ -3102,6 +3103,8 @@ function createApp(db) {
     return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
   }
 
+  registerAbrechnungRoutes(app, { db, save, dbDir: DB_DIR, authHeaderFromCredentials });
+
   /** Basic vom Browser an 127.0.0.1 (kein Passwort in der Query); Fallback Query für Alt-Clients. */
   function authHeaderFromIncomingBasicOrQuery(req) {
     const raw = req.headers && req.headers.authorization;
@@ -3206,44 +3209,49 @@ function createApp(db) {
     return { ...job, _anlagenstamm_debug: debugInfo };
   }
 
-  app.post('/api/check_connection', express.json(), async (req, res) => {
-    const { baseUrl, technicianId, serverUsername, serverPassword } = req.body || {};
-    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+  const DISPO_PROBE_TIMEOUT_MS = 10000;
+
+  async function errorTextFromDispoResponse(r) {
+    let msg = 'HTTP ' + r.status;
+    const body = await r.text();
+    try {
+      const data = JSON.parse(body);
+      if (data && typeof data.error === 'string' && data.error.trim()) {
+        msg = data.error.trim();
+        if (r.status === 403) msg = 'Monteur wird nicht anerkannt: ' + msg;
+      }
+    } catch (_) {
+      if (r.status === 500 && body && body.length > 0) {
+        const snippet = body.replace(/\s+/g, ' ').trim().slice(0, 200);
+        if (/Fatal error|Parse error|Exception|Warning:/i.test(snippet)) {
+          msg = 'Dispo-Server-Fehler (500). Vorschau: ' + snippet;
+        }
+      }
+    }
+    return msg;
+  }
+
+  /**
+   * Gleiche Erreichbarkeitslogik wie /api/check_connection (my_jobs → jobs_open).
+   * @returns {{ ok: true } | { ok: false, error: string }}
+   */
+  async function probeDispoConnection(baseUrlRaw, technicianId, serverUsername, serverPassword, signal) {
+    const base = (baseUrlRaw || '').toString().trim().replace(/\/$/, '');
     let techId = technicianId != null ? Number(technicianId) : 1;
     if (!Number.isFinite(techId) || techId <= 0) techId = 1;
     if (!base) {
-      return res.json({ ok: false, error: 'Server-URL fehlt.' });
+      return { ok: false, error: 'Server-URL fehlt.' };
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    const opts = auth ? { headers: auth } : {};
+    const opts = auth ? { headers: auth, signal } : { signal };
     const urlMyJobs = `${base}/api/my_jobs.php?technician_id=${encodeURIComponent(techId)}`;
     const urlJobsOpen = `${base}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(techId)}`;
 
-    async function errorTextFromResponse(r) {
-      let msg = 'HTTP ' + r.status;
-      const body = await r.text();
-      try {
-        const data = JSON.parse(body);
-        if (data && typeof data.error === 'string' && data.error.trim()) {
-          msg = data.error.trim();
-          if (r.status === 403) msg = 'Monteur wird nicht anerkannt: ' + msg;
-        }
-      } catch (_) {
-        if (r.status === 500 && body && body.length > 0) {
-          const snippet = body.replace(/\s+/g, ' ').trim().slice(0, 200);
-          if (/Fatal error|Parse error|Exception|Warning:/i.test(snippet)) {
-            msg = 'Dispo-Server-Fehler (500). Vorschau: ' + snippet;
-          }
-        }
-      }
-      return msg;
-    }
-
     try {
       const rMy = await fetch(urlMyJobs, opts);
-      if (rMy.ok) return res.json({ ok: true });
+      if (rMy.ok) return { ok: true };
 
-      const errMyJobs = await errorTextFromResponse(rMy);
+      const errMyJobs = await errorTextFromDispoResponse(rMy);
 
       const rOpen = await fetch(urlJobsOpen, opts);
       if (rOpen.ok) {
@@ -3252,27 +3260,93 @@ function createApp(db) {
         try {
           data = text ? JSON.parse(text) : [];
         } catch (_) {
-          return res.json({
+          return {
             ok: false,
             error: 'dispo_api/jobs_open: kein gültiges JSON. Zusätzlich my_jobs: ' + errMyJobs,
-          });
+          };
         }
-        if (Array.isArray(data)) return res.json({ ok: true });
+        if (Array.isArray(data)) return { ok: true };
         if (data && typeof data === 'object' && data.ok === false && data.error) {
-          return res.json({ ok: false, error: String(data.error) });
+          return { ok: false, error: String(data.error) };
         }
-        return res.json({
+        return {
           ok: false,
           error: 'dispo_api/jobs_open: keine JSON-Liste. my_jobs: ' + errMyJobs,
-        });
+        };
       }
-      const errOpen = await errorTextFromResponse(rOpen);
-      return res.json({
+      const errOpen = await errorTextFromDispoResponse(rOpen);
+      return {
         ok: false,
         error: 'my_jobs: ' + errMyJobs + ' · dispo_api/jobs_open: ' + errOpen,
-      });
+      };
     } catch (e) {
-      return res.json({ ok: false, error: 'Dispo nicht erreichbar: ' + (e.message || String(e)) });
+      if (e && e.name === 'AbortError') {
+        return { ok: false, error: 'Timeout nach ' + DISPO_PROBE_TIMEOUT_MS / 1000 + ' s (Dispo-Probe)' };
+      }
+      return { ok: false, error: 'Dispo nicht erreichbar: ' + (e.message || String(e)) };
+    }
+  }
+
+  app.post('/api/check_connection', express.json(), async (req, res) => {
+    const { baseUrl, technicianId, serverUsername, serverPassword } = req.body || {};
+    const result = await probeDispoConnection(baseUrl, technicianId, serverUsername, serverPassword, undefined);
+    return res.json(result.ok ? { ok: true } : { ok: false, error: result.error });
+  });
+
+  /** Zwei Basis-URLs (extern/intern): parallel prüfen, bei beidem OK interne wählen (10 s Timeout pro Probe). */
+  app.post('/api/dispo_pick_base', express.json(), async (req, res) => {
+    const { externalUrl, internalUrl, technicianId, serverUsername, serverPassword } = req.body || {};
+    const ext = (externalUrl || '').toString().trim().replace(/\/$/, '');
+    const int = (internalUrl || '').toString().trim().replace(/\/$/, '');
+    if (!ext && !int) {
+      return res.json({ ok: false, error: 'Mindestens eine Dispo-Basis-URL erforderlich.', tried: [] });
+    }
+
+    const runProbe = (url) => {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), DISPO_PROBE_TIMEOUT_MS);
+      return probeDispoConnection(url, technicianId, serverUsername, serverPassword, ac.signal).finally(() =>
+        clearTimeout(timer),
+      );
+    };
+
+    try {
+      if (ext && !int) {
+        const r = await runProbe(ext);
+        return res.json({
+          ok: r.ok,
+          selected_base_url: r.ok ? ext : null,
+          preferred_source: 'single',
+          tried: [{ url: ext, ok: r.ok, error: r.ok ? undefined : r.error }],
+        });
+      }
+      if (int && !ext) {
+        const r = await runProbe(int);
+        return res.json({
+          ok: r.ok,
+          selected_base_url: r.ok ? int : null,
+          preferred_source: 'single',
+          tried: [{ url: int, ok: r.ok, error: r.ok ? undefined : r.error }],
+        });
+      }
+
+      const [rInt, rExt] = await Promise.all([runProbe(int), runProbe(ext)]);
+      const tried = [
+        { url: int, ok: rInt.ok, error: rInt.ok ? undefined : rInt.error },
+        { url: ext, ok: rExt.ok, error: rExt.ok ? undefined : rExt.error },
+      ];
+      if (rInt.ok && rExt.ok) {
+        return res.json({ ok: true, selected_base_url: int, preferred_source: 'internal', tried });
+      }
+      if (rInt.ok) {
+        return res.json({ ok: true, selected_base_url: int, preferred_source: 'internal', tried });
+      }
+      if (rExt.ok) {
+        return res.json({ ok: true, selected_base_url: ext, preferred_source: 'external', tried });
+      }
+      return res.json({ ok: false, error: 'Keine erreichbare Dispo-URL.', tried });
+    } catch (e) {
+      return res.json({ ok: false, error: e.message || String(e), tried: [] });
     }
   });
 
@@ -3325,8 +3399,19 @@ function createApp(db) {
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     pushToServer(baseUrl, technicianId, db, auth)
-      .then(() => {
+      .then(async () => {
         try {
+          try {
+            await flushAbrechnungOutbox(
+              { db, save, dbDir: DB_DIR, authHeaderFromCredentials },
+              baseUrl,
+              technicianId,
+              serverUsername,
+              serverPassword,
+            );
+          } catch (e) {
+            console.warn('[abrechnung] flush after sync_push:', e && e.message ? e.message : e);
+          }
           save();
           if (!res.headersSent) res.json({ ok: true });
         } catch (e) {

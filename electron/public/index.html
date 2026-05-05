@@ -107,11 +107,27 @@
     .view-abrechnung { display: none; flex-direction: column; padding: 0.75rem 1rem 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; flex: 1; min-height: 0; }
     .view-abrechnung.active { display: flex; }
     .abrechnung-embed-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
-    .abrechnung-embed-hint { margin: 0; font-size: 0.88rem; color: var(--text); opacity: 0.9; max-width: 42rem; }
-    .abrechnung-dispo-frame { flex: 1; width: 100%; min-height: calc(100vh - 10.5rem); border: 1px solid var(--accent); border-radius: 6px; background: var(--card); }
-    .abrechnung-offline-wrap { flex: 1; display: flex; align-items: flex-start; justify-content: center; min-height: 240px; }
-    .abrechnung-offline-wrap[hidden] { display: none !important; }
-    .abrechnung-offline-card { max-width: 36rem; margin-top: 1rem; }
+    .abrechnung-embed-hint { margin: 0; font-size: 0.88rem; color: var(--text); opacity: 0.9; max-width: 36rem; flex: 1; min-width: 12rem; }
+    .abrechnung-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+    .abrechnung-period { padding: 0.35rem 0.5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
+    .abrechnung-status { font-size: 0.82rem; color: var(--muted); margin: 0 0 0.5rem 0; }
+    .abrechnung-status .pending { color: #c9a227; }
+    .abrechnung-native { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.75rem; overflow: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); padding: 0.75rem; box-sizing: border-box; }
+    .abrechnung-job-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+    .abrechnung-job-row label { font-size: 0.88rem; color: var(--muted); }
+    .abrechnung-job-select { flex: 1; min-width: 220px; padding: 0.4rem 0.5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
+    .abrechnung-buckets { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem; }
+    .abrechnung-bucket { border: 1px solid var(--accent); border-radius: 6px; padding: 0.6rem 0.75rem; background: var(--bg); display: flex; flex-direction: column; gap: 0.45rem; min-height: 0; }
+    .abrechnung-bucket h3 { margin: 0; font-size: 1rem; }
+    .abrechnung-bucket .hint { margin: 0; font-size: 0.8rem; color: var(--muted); }
+    .abrechnung-bucket textarea { width: 100%; min-height: 6rem; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.9rem; resize: vertical; }
+    .abrechnung-files { list-style: none; margin: 0; padding: 0; max-height: 14rem; overflow: auto; font-size: 0.88rem; }
+    .abrechnung-files li { display: flex; align-items: center; justify-content: space-between; gap: 0.35rem; padding: 0.35rem 0; border-bottom: 1px solid var(--accent); }
+    .abrechnung-files li:last-child { border-bottom: none; }
+    .abrechnung-files a { color: var(--text); text-decoration: underline; word-break: break-all; }
+    .abrechnung-files .btn { padding: 0.15rem 0.45rem; font-size: 0.75rem; }
+    .abrechnung-upload { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+    .abrechnung-upload input[type=file] { font-size: 0.8rem; max-width: 100%; }
     .anlagenstamm-search-row { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem; }
     .anlagenstamm-search-row input { flex:1; min-width:220px; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
     .anlagenstamm-files-list { margin-top:0.5rem; border:1px solid var(--accent); border-radius:6px; overflow:hidden; }
@@ -512,17 +528,47 @@
   </main>
   <main id="viewAbrechnung" class="view-abrechnung" aria-label="Abrechnung">
     <div class="abrechnung-embed-toolbar">
-      <p class="abrechnung-embed-hint">Abrechnung aus der Dispo (eingebettet). Ohne erreichbare Dispo-URL zeigen wir einen Offline-Hinweis — die App bleibt bedienbar.</p>
-      <button type="button" class="btn btn-ghost" id="btnAbrechnungReload">Neu laden</button>
-    </div>
-    <div id="abrechnungOfflineWrap" class="abrechnung-offline-wrap" hidden>
-      <div class="card abrechnung-offline-card">
-        <h2>Keine Verbindung zur Dispo</h2>
-        <p class="empty">Für Dokumente und Uploads muss die unter Einstellungen eingetragene Dispo-Adresse erreichbar sein. Sie können diese Meldung offline lesen; mit Netzwerk auf „Erneut versuchen“ oder „Neu laden“ tippen.</p>
-        <p class="empty" style="margin-top:0.75rem"><button type="button" class="btn btn-primary" id="btnAbrechnungRetry">Erneut versuchen</button></p>
+      <p class="abrechnung-embed-hint">Abrechnung lokal in der App: Aufträge und Dateien werden zwischengespeichert und bei Verbindung zur Dispo abgeglichen (kein eingebettetes Dispo-Fenster).</p>
+      <div class="abrechnung-toolbar-actions">
+        <label class="settings-row" style="margin:0;display:flex;align-items:center;gap:0.35rem"><span style="color:var(--muted);font-size:0.85rem">Monat</span>
+          <input type="month" id="abrechnungPeriod" class="abrechnung-period" />
+        </label>
+        <button type="button" class="btn btn-primary" id="btnAbrechnungSync">Mit Dispo abgleichen</button>
+        <button type="button" class="btn btn-ghost" id="btnAbrechnungReload">Ansicht aktualisieren</button>
       </div>
     </div>
-    <iframe id="abrechnungDispoFrame" class="abrechnung-dispo-frame" title="Abrechnung (Dispo)"></iframe>
+    <p id="abrechnungStatusLine" class="abrechnung-status" aria-live="polite"></p>
+    <div id="abrechnungNative" class="abrechnung-native">
+      <div class="abrechnung-job-row">
+        <label for="abrechnungJobSelect">Auftrag</label>
+        <select id="abrechnungJobSelect" class="abrechnung-job-select" aria-label="Auftrag für Abrechnung">
+          <option value="">— Monat wählen / abgleichen —</option>
+        </select>
+      </div>
+      <p id="abrechnungJobMeta" class="hint" style="margin:0;font-size:0.85rem;color:var(--muted)"></p>
+      <div class="abrechnung-buckets">
+        <section class="abrechnung-bucket" aria-label="Dispo">
+          <h3>Dispo</h3>
+          <p class="hint">Notizen und Dateien für die Dispo-Abrechnung.</p>
+          <textarea id="abrechnungNoteDispo" placeholder="Notiz Dispo…" disabled></textarea>
+          <button type="button" class="btn btn-primary" id="btnAbrechnungSaveDispo" disabled>Notiz speichern</button>
+          <ul id="abrechnungFilesDispo" class="abrechnung-files"></ul>
+          <div class="abrechnung-upload">
+            <input type="file" id="abrechnungUploadDispo" disabled />
+          </div>
+        </section>
+        <section class="abrechnung-bucket" aria-label="Buchhaltung">
+          <h3>Buchhaltung</h3>
+          <p class="hint">Notizen und Dateien für die Buchhaltung.</p>
+          <textarea id="abrechnungNoteBuch" placeholder="Notiz Buchhaltung…" disabled></textarea>
+          <button type="button" class="btn btn-primary" id="btnAbrechnungSaveBuch" disabled>Notiz speichern</button>
+          <ul id="abrechnungFilesBuch" class="abrechnung-files"></ul>
+          <div class="abrechnung-upload">
+            <input type="file" id="abrechnungUploadBuch" disabled />
+          </div>
+        </section>
+      </div>
+    </div>
   </main>
   <main id="viewDienstreise" class="view-dienstreise" aria-label="Dienstreise">
     <div class="card">
@@ -825,8 +871,12 @@
     <div class="card">
       <h2>Einstellungen</h2>
       <div class="settings-row">
-        <label for="serverUrl">Server-Adresse (Dispo)</label>
-        <input type="text" id="serverUrl" placeholder="z.B. http://localhost/" value="http://localhost/" title="Basis-URL des Dispo-Servers (api/my_jobs.php, api/my_absences.php). Der Techniker-Name kommt aus der my_jobs-Antwort (technician_full_name)." />
+        <label for="serverUrl">Dispo (extern / Standard)</label>
+        <input type="text" id="serverUrl" placeholder="z.B. https://dispo.example.com/" value="http://localhost/" title="Öffentliche oder Standard-Basis-URL der Dispo (ohne abschließenden Slash). Wird genutzt, wenn keine interne URL erreichbar ist." />
+      </div>
+      <div class="settings-row">
+        <label for="serverUrlInternal">Dispo (Firmennetz / intern)</label>
+        <input type="text" id="serverUrlInternal" placeholder="optional, z.B. http://192.168.x.x/dispo" title="Optional: direkter Zugriff im Büro-LAN. Die App prüft parallel extern und intern (10 s); wenn beide erreichbar sind, wird die interne Adresse bevorzugt." />
       </div>
       <div class="settings-row">
         <label for="technicianId">Monteur-ID</label>
