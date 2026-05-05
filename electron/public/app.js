@@ -2865,6 +2865,7 @@
     const viewEinstellungen = document.getElementById('viewEinstellungen');
     const viewProjektdaten = document.getElementById('viewProjektdaten');
     const viewDienstreise = document.getElementById('viewDienstreise');
+    const viewAbrechnung = document.getElementById('viewAbrechnung');
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
     const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
@@ -2873,6 +2874,11 @@
     viewEinstellungen.classList.remove('active');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
     if (viewDienstreise) viewDienstreise.classList.remove('active');
+    if (viewAbrechnung) viewAbrechnung.classList.remove('active');
+    if (name !== 'abrechnung') {
+      const abFr = document.getElementById('abrechnungDispoFrame');
+      if (abFr) abFr.src = 'about:blank';
+    }
     protokolleViewIds.forEach(function (id) {
       const el = document.getElementById(id);
       if (el) el.classList.remove('active');
@@ -2892,6 +2898,12 @@
       viewStart.classList.add('hidden');
       viewDienstreise.classList.add('active');
       loadDienstreiseList();
+      return;
+    }
+    if (name === 'abrechnung') {
+      viewStart.classList.add('hidden');
+      if (viewAbrechnung) viewAbrechnung.classList.add('active');
+      refreshAbrechnungEmbeddedUi(false);
       return;
     }
     if (name && name.startsWith('protokolle-')) {
@@ -2946,6 +2958,30 @@
     if (name === 'start') {
       loadOpenJobs();
       loadCalendarMonth();
+    }
+  }
+
+  function refreshAbrechnungEmbeddedUi(forceReload) {
+    var view = document.getElementById('viewAbrechnung');
+    if (!view || !view.classList.contains('active')) return;
+    var frame = document.getElementById('abrechnungDispoFrame');
+    var off = document.getElementById('abrechnungOfflineWrap');
+    var base = (typeof getServerUrl === 'function' ? getServerUrl() : '').trim().replace(/\/+$/, '');
+    var online = typeof navigator === 'undefined' || navigator.onLine !== false;
+    if (!base || !online) {
+      if (off) off.hidden = false;
+      if (frame) {
+        frame.hidden = true;
+        frame.src = 'about:blank';
+      }
+      return;
+    }
+    if (off) off.hidden = true;
+    if (frame) {
+      frame.hidden = false;
+      var u = base + '/abrechnung.php?from_laptop=1';
+      if (forceReload) u += (u.indexOf('?') >= 0 ? '&' : '?') + '_=' + Date.now();
+      frame.src = u;
     }
   }
 
@@ -4090,22 +4126,24 @@
 
   document.getElementById('btnViewStart').addEventListener('click', () => showView('start'));
   document.getElementById('btnViewDienstreise').addEventListener('click', () => showView('dienstreise'));
-  (function initAbrechnungLink() {
-    var btn = document.getElementById('btnOpenAbrechnung');
-    if (!btn) return;
-    btn.addEventListener('click', function () {
-      var base = getServerUrl().replace(/\/+$/, '');
-      if (!base) {
-        window.alert('Bitte unter Einstellungen die Server-Adresse (Dispo) eintragen.');
-        return;
-      }
-      var url = base + '/abrechnung.php?from_laptop=1';
-      if (typeof monteurApp !== 'undefined' && monteurApp.openExternal) {
-        monteurApp.openExternal(url);
-      } else {
-        window.open(url, '_blank');
-      }
-    });
+  (function initAbrechnungView() {
+    var btn = document.getElementById('btnViewAbrechnung');
+    if (btn) {
+      btn.addEventListener('click', function () {
+        var base = (typeof getServerUrl === 'function' ? getServerUrl() : '').trim();
+        if (!base) {
+          window.alert('Bitte unter Einstellungen die Server-Adresse (Dispo) eintragen.');
+          return;
+        }
+        showView('abrechnung');
+      });
+    }
+    var reload = document.getElementById('btnAbrechnungReload');
+    if (reload) reload.addEventListener('click', function () { refreshAbrechnungEmbeddedUi(true); });
+    var retry = document.getElementById('btnAbrechnungRetry');
+    if (retry) retry.addEventListener('click', function () { refreshAbrechnungEmbeddedUi(true); });
+    window.addEventListener('online', function () { refreshAbrechnungEmbeddedUi(false); });
+    window.addEventListener('offline', function () { refreshAbrechnungEmbeddedUi(false); });
   })();
   (function initProtokolleDropdown() {
     const btn = document.getElementById('btnViewProtokolle');

@@ -104,6 +104,14 @@
     .view-abwesenheiten.active { display: block; }
     .view-anlagenstamm { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-anlagenstamm.active { display: block; }
+    .view-abrechnung { display: none; flex-direction: column; padding: 0.75rem 1rem 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; flex: 1; min-height: 0; }
+    .view-abrechnung.active { display: flex; }
+    .abrechnung-embed-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .abrechnung-embed-hint { margin: 0; font-size: 0.88rem; color: var(--text); opacity: 0.9; max-width: 42rem; }
+    .abrechnung-dispo-frame { flex: 1; width: 100%; min-height: calc(100vh - 10.5rem); border: 1px solid var(--accent); border-radius: 6px; background: var(--card); }
+    .abrechnung-offline-wrap { flex: 1; display: flex; align-items: flex-start; justify-content: center; min-height: 240px; }
+    .abrechnung-offline-wrap[hidden] { display: none !important; }
+    .abrechnung-offline-card { max-width: 36rem; margin-top: 1rem; }
     .anlagenstamm-search-row { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem; }
     .anlagenstamm-search-row input { flex:1; min-width:220px; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
     .anlagenstamm-files-list { margin-top:0.5rem; border:1px solid var(--accent); border-radius:6px; overflow:hidden; }
@@ -346,7 +354,7 @@
     <nav class="toolbar" aria-label="Hauptnavigation">
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
     <button class="btn btn-ghost" id="btnViewDienstreise">Dienstreise</button>
-    <button type="button" class="btn btn-ghost" id="btnOpenAbrechnung" title="Abrechnung im Dispo-Browser">Abrechnung</button>
+    <button type="button" class="btn btn-ghost" id="btnViewAbrechnung" title="Abrechnung (eingebettet, mit Offline-Hinweis)">Abrechnung</button>
     <div class="toolbar-dropdown-wrap">
       <button type="button" class="btn btn-ghost" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">Protokolle ▾</button>
       <div class="toolbar-dropdown" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
@@ -501,6 +509,20 @@
         </div>
       </div>
     </div>
+  </main>
+  <main id="viewAbrechnung" class="view-abrechnung" aria-label="Abrechnung">
+    <div class="abrechnung-embed-toolbar">
+      <p class="abrechnung-embed-hint">Abrechnung aus der Dispo (eingebettet). Ohne erreichbare Dispo-URL zeigen wir einen Offline-Hinweis — die App bleibt bedienbar.</p>
+      <button type="button" class="btn btn-ghost" id="btnAbrechnungReload">Neu laden</button>
+    </div>
+    <div id="abrechnungOfflineWrap" class="abrechnung-offline-wrap" hidden>
+      <div class="card abrechnung-offline-card">
+        <h2>Keine Verbindung zur Dispo</h2>
+        <p class="empty">Für Dokumente und Uploads muss die unter Einstellungen eingetragene Dispo-Adresse erreichbar sein. Sie können diese Meldung offline lesen; mit Netzwerk auf „Erneut versuchen“ oder „Neu laden“ tippen.</p>
+        <p class="empty" style="margin-top:0.75rem"><button type="button" class="btn btn-primary" id="btnAbrechnungRetry">Erneut versuchen</button></p>
+      </div>
+    </div>
+    <iframe id="abrechnungDispoFrame" class="abrechnung-dispo-frame" title="Abrechnung (Dispo)"></iframe>
   </main>
   <main id="viewDienstreise" class="view-dienstreise" aria-label="Dienstreise">
     <div class="card">
