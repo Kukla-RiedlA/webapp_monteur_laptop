@@ -3211,18 +3211,23 @@ function createApp(db) {
 
   const DISPO_PROBE_TIMEOUT_MS = 10000;
 
-  async function errorTextFromDispoResponse(r) {
-    let msg = 'HTTP ' + r.status;
-    const body = await r.text();
+  /** @param {number} status @param {string} body */
+  function errorTextFromDispoBody(status, body) {
+    let msg = 'HTTP ' + status;
+    const bodyStr = body != null ? String(body) : '';
     try {
-      const data = JSON.parse(body);
+      const data = JSON.parse(bodyStr);
       if (data && typeof data.error === 'string' && data.error.trim()) {
         msg = data.error.trim();
-        if (r.status === 403) msg = 'Monteur wird nicht anerkannt: ' + msg;
+        if (status === 403) msg = 'Monteur wird nicht anerkannt: ' + msg;
       }
     } catch (_) {
-      if (r.status === 500 && body && body.length > 0) {
-        const snippet = body.replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (status === 404 && bodyStr.length > 0) {
+        msg =
+          'Pfad nicht gefunden (404). Unter dieser Basis-URL muss …/dispo_api/api/ vom Webserver auslieferbar sein (Monteur-Sync, offene Aufträge, Abrechnung).';
+      }
+      if (status === 500 && bodyStr.length > 0) {
+        const snippet = bodyStr.replace(/\s+/g, ' ').trim().slice(0, 200);
         if (/Fatal error|Parse error|Exception|Warning:/i.test(snippet)) {
           msg = 'Dispo-Server-Fehler (500). Vorschau: ' + snippet;
         }
@@ -3231,8 +3236,13 @@ function createApp(db) {
     return msg;
   }
 
+  async function errorTextFromDispoResponse(r) {
+    const body = await r.text();
+    return errorTextFromDispoBody(r.status, body);
+  }
+
   /**
-   * Gleiche Erreichbarkeitslogik wie /api/check_connection (my_jobs → jobs_open).
+   * Erreichbarkeit für Monteur-Laptop: zuerst dispo_api/jobs_open (wie Sync-Features), dann Diagnose über my_jobs.
    * @returns {{ ok: true } | { ok: false, error: string }}
    */
   async function probeDispoConnection(baseUrlRaw, technicianId, serverUsername, serverPassword, signal) {
@@ -3248,33 +3258,41 @@ function createApp(db) {
     const urlJobsOpen = `${base}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(techId)}`;
 
     try {
-      const rMy = await fetch(urlMyJobs, opts);
-      if (rMy.ok) return { ok: true };
-
-      const errMyJobs = await errorTextFromDispoResponse(rMy);
-
       const rOpen = await fetch(urlJobsOpen, opts);
+      const textOpen = await rOpen.text();
+      let dataOpen = null;
+      try {
+        dataOpen = textOpen ? JSON.parse(textOpen) : null;
+      } catch (_) {
+        dataOpen = null;
+      }
+
+      if (rOpen.ok && Array.isArray(dataOpen)) {
+        return { ok: true };
+      }
+      if (rOpen.ok && dataOpen && typeof dataOpen === 'object' && dataOpen.ok === false && dataOpen.error) {
+        return { ok: false, error: String(dataOpen.error) };
+      }
       if (rOpen.ok) {
-        const text = await rOpen.text();
-        let data = null;
-        try {
-          data = text ? JSON.parse(text) : [];
-        } catch (_) {
-          return {
-            ok: false,
-            error: 'dispo_api/jobs_open: kein gültiges JSON. Zusätzlich my_jobs: ' + errMyJobs,
-          };
-        }
-        if (Array.isArray(data)) return { ok: true };
-        if (data && typeof data === 'object' && data.ok === false && data.error) {
-          return { ok: false, error: String(data.error) };
-        }
         return {
           ok: false,
-          error: 'dispo_api/jobs_open: keine JSON-Liste. my_jobs: ' + errMyJobs,
+          error: 'dispo_api/jobs_open: unerwartete Antwort (kein JSON-Array).',
         };
       }
-      const errOpen = await errorTextFromDispoResponse(rOpen);
+
+      const errOpen = errorTextFromDispoBody(rOpen.status, textOpen || '');
+
+      const rMy = await fetch(urlMyJobs, opts);
+      if (rMy.ok) {
+        return {
+          ok: false,
+          error:
+            'dispo_api ist unter dieser Basis-URL nicht nutzbar (jobs_open: ' +
+            errOpen +
+            '). /api/my_jobs.php antwortet, aber der Laptop benötigt …/dispo_api/api/ für offene Aufträge, Abrechnung und weitere APIs. Webserver-Konfiguration oder Basis-URL prüfen.',
+        };
+      }
+      const errMyJobs = await errorTextFromDispoResponse(rMy);
       return {
         ok: false,
         error: 'my_jobs: ' + errMyJobs + ' · dispo_api/jobs_open: ' + errOpen,
