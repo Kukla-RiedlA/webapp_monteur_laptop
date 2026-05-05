@@ -371,7 +371,13 @@
         });
         var j = await r.json();
         if (!j.ok) throw new Error(j.error || 'Abgleich fehlgeschlagen');
-        if (typeof showToast === 'function') showToast('Abrechnung mit Dispo abgeglichen.');
+        if (typeof showToast === 'function') {
+          showToast(
+            j.partial
+              ? 'Abrechnung aktualisiert (teilweise nur lokaler Stand — gleicher Datenbestand wie Kalender/Dienstreise).'
+              : 'Abrechnung mit Dispo abgeglichen.'
+          );
+        }
       } catch (e) {
         var msg = (e && e.message) ? e.message : String(e);
         if (typeof showToast === 'function') showToast('Abgleich: ' + msg);

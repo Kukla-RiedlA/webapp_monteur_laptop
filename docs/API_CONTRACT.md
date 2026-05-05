@@ -60,7 +60,7 @@ Der **Renderer** (`electron/public/app.js`) spricht nur **`API_BASE`** (lokaler 
 
 Hinweis: Das sind **lokale** Laptop-Gateway-Payloads (historisch camelCase). Neue **Dispo-öffentliche** APIs bleiben bei `snake_case` gemäß Abschnitt 2.
 
-**Semantik `dispo_pick_base`:** Beide URLs werden **parallel** geprüft mit **Timeout 10 s** pro Probe. Die Probe verlangt eine gültige Antwort von **`…/dispo_api/api/jobs_open.php`** (JSON-Array); nur `/api/my_jobs.php` ohne erreichbares `dispo_api` gilt als **nicht OK** (sonst schlagen u. a. Abrechnung und „Offene Aufträge“ mit 404 fehl). Sind **beide** URLs OK, wird die **interne** Basis gewählt. Nur eine URL konfiguriert → `preferred_source: "single"`.
+**Semantik `dispo_pick_base`:** Beide URLs werden **parallel** geprüft mit **Timeout 10 s** pro Probe (wie `check_connection`: zuerst **`/api/my_jobs.php`**, bei Fehlschlag **`…/dispo_api/api/jobs_open.php`**). Sind **beide** URLs OK, wird die **interne** Basis gewählt. Nur eine URL konfiguriert → `preferred_source: "single"`. Abrechnung: wenn die dedizierte Abrechnungs-API nicht erreichbar ist, kann die App die Auftragsliste aus dem **lokalen Sync** befüllen (`/api/abrechnung/refresh` mit `partial`/`warnings`).
 
 Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über denselben Host; sie erwarten die vom Client gesetzte **`baseUrl`** / aktive Basis aus der Pick-Antwort.
 

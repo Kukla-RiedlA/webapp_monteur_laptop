@@ -138,11 +138,7 @@ async function dispoFetchJson(baseUrl, pathName, qs, authHeader, technicianId) {
   }
   throw (
     lastErr ||
-    new Error(
-      'Dispo: Abrechnungs-Endpunkt nicht gefunden (404). Versucht: ' +
-        urls.join(' | ') +
-        '. Dispo deployen (dispo_api/api/* und api/monteur_*) oder Basis-URL prüfen.',
-    )
+    new Error('Abrechnungs-Endpunkt nicht erreichbar (404). Versucht: ' + urls.join(' | ') + '.')
   );
 }
 
@@ -440,24 +436,50 @@ function registerAbrechnungRoutes(app, ctx) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technicianId erforderlich.' });
     }
     const authHeader = authHeaderFromCredentials(serverUsername, serverPassword);
+    const warnings = [];
+    let partial = false;
     try {
       if (period_ym && /^\d{4}-\d{2}$/.test(String(period_ym))) {
-        const data = await dispoFetchJson(base, 'abrechnung_job_list.php', { monat: String(period_ym) }, authHeader, tid);
+        let jobsPayload = [];
+        try {
+          const data = await dispoFetchJson(base, 'abrechnung_job_list.php', { monat: String(period_ym) }, authHeader, tid);
+          jobsPayload = Array.isArray(data.jobs) ? data.jobs : [];
+        } catch (e) {
+          jobsPayload = buildAbrechnungJobsFallbackFromSqlite(db, tid, period_ym);
+          partial = true;
+          const hint = e && e.message ? String(e.message) : String(e);
+          warnings.push('Auftragsliste aus lokalem Auftragsspeicher (' + hint + ')');
+          console.warn('[abrechnung/refresh] Dispo job list skipped, using SQLite:', hint);
+        }
         db.prepare(`
           INSERT INTO abrechnung_jobs_snapshot (technician_id, period_ym, jobs_json, synced_at)
           VALUES (?, ?, ?, datetime('now'))
           ON CONFLICT(technician_id, period_ym) DO UPDATE SET
             jobs_json = excluded.jobs_json,
             synced_at = excluded.synced_at
-        `).run(tid, period_ym, JSON.stringify(data.jobs || []));
+        `).run(tid, period_ym, JSON.stringify(jobsPayload));
         save();
       }
       const jid = parseInt(job_server_id, 10);
       if (jid > 0) {
-        await syncJobFromDispo(ctx, base, tid, authHeader, jid);
+        try {
+          await syncJobFromDispo(ctx, base, tid, authHeader, jid);
+        } catch (e) {
+          partial = true;
+          const hint = e && e.message ? String(e.message) : String(e);
+          warnings.push('Detail-Daten (Notizen/Dateien) nicht von Dispo geladen: ' + hint);
+          console.warn('[abrechnung/refresh] syncJobFromDispo:', hint);
+        }
       }
-      await flushAbrechnungOutbox(ctx, base, tid, serverUsername, serverPassword);
-      return res.json({ ok: true });
+      try {
+        await flushAbrechnungOutbox(ctx, base, tid, serverUsername, serverPassword);
+      } catch (e) {
+        partial = true;
+        const hint = e && e.message ? String(e.message) : String(e);
+        warnings.push('Ausstehende Änderungen nicht vollständig übertragen: ' + hint);
+        console.warn('[abrechnung/refresh] outbox:', hint);
+      }
+      return res.json({ ok: true, partial, warnings });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
