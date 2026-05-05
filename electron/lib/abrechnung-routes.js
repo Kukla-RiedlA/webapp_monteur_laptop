@@ -184,77 +184,165 @@ function mergeAbrechnungJobsUnique(primary, secondary) {
   return out.concat(extras);
 }
 
-/** Zwei URL-Varianten: direkt unter dispo_api (Standard) oder unter /api/ (Apache/XAMPP, wenn dispo_api nicht als URL erreichbar ist). */
+/**
+ * Zwei URL-Varianten (Reihenfolge wie job_project_*.php unter /api/):
+ * 1) /api/monteur_* — oft die einzige öffentlich erreichbare Route (Apache-Docroot = dispo).
+ * 2) /dispo_api/api/* — direkter API-Pfad.
+ */
 function abrechnungScriptUrlCandidates(baseUrl, scriptFile) {
   const b = dispoBase(baseUrl);
-  return [`${b}/dispo_api/api/${scriptFile}`, `${b}/api/monteur_${scriptFile}`];
+  return [`${b}/api/monteur_${scriptFile}`, `${b}/dispo_api/api/${scriptFile}`];
+}
+
+function appendTriedUrls(errMsg, urls) {
+  const suffix = ' Versucht: ' + urls.join(' | ');
+  if (String(errMsg || '').includes('Versucht:')) return String(errMsg);
+  return String(errMsg || '') + suffix;
+}
+
+/** Apache übergibt Authorization oft nicht an PHP — gleicher Basic-Wert zusätzlich für require_login.php. */
+function dispoMonteurFetchHeaders(authHeader, technicianId) {
+  const h = Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {});
+  const a = authHeader && authHeader.Authorization;
+  if (a) {
+    h['X-Kukla-Authorization'] = a;
+  }
+  return h;
+}
+
+/** Gleiche Zuordnung wie abrechnung_monteur_api.inc.php — über job_project_* erreichbar. */
+function abrechnungBucketProjectSubdir(bucket) {
+  if (bucket === 'dispo') return 'Dokumente_Dispo';
+  if (bucket === 'buchhaltung') return 'Dokumente_Buchhaltung';
+  return null;
+}
+
+async function dispoJobProjectFilesListJson(baseUrl, dispoJobId, relPath, authHeader, technicianId) {
+  const b = dispoBase(baseUrl);
+  const q = new URLSearchParams({
+    technician_id: String(technicianId),
+    job_id: String(dispoJobId),
+    path: String(relPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, ''),
+  });
+  const url = `${b}/api/job_project_files_list.php?${q}`;
+  const headers = dispoMonteurFetchHeaders(authHeader, technicianId);
+  const r = await fetch(url, { headers });
+  const text = await r.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (_) {
+    throw new Error('job_project_files_list: kein JSON (' + r.status + ')');
+  }
+  if (!r.ok || (data && data.ok === false)) {
+    throw new Error((data && data.error) || 'HTTP ' + r.status);
+  }
+  return data;
+}
+
+/**
+ * Dateiliste Abrechnungs-Bucket: zuerst monteur_abrechnung_*, bei 404/fehlendem Endpunkt Fallback job_project_files_list
+ * (Ordner Dokumente_Dispo / Dokumente_Buchhaltung — wie auf der Dispo üblich).
+ */
+async function dispoFetchAbrechnungBucketList(baseUrl, dispoJobId, bucket, authHeader, technicianId) {
+  try {
+    return await dispoFetchJson(
+      baseUrl,
+      'abrechnung_bucket_list.php',
+      { job_id: String(dispoJobId), bucket },
+      authHeader,
+      technicianId,
+    );
+  } catch (primaryErr) {
+    const sub = abrechnungBucketProjectSubdir(bucket);
+    if (!sub) throw primaryErr;
+    try {
+      const data = await dispoJobProjectFilesListJson(baseUrl, dispoJobId, sub, authHeader, technicianId);
+      const entries = Array.isArray(data.entries) ? data.entries : [];
+      const files = [];
+      for (const ent of entries) {
+        if (!ent || ent.type !== 'file') continue;
+        const fn = String(ent.name || '').trim();
+        if (!fn) continue;
+        files.push({
+          name: fn,
+          size_bytes: ent.size != null ? Number(ent.size) : null,
+        });
+      }
+      return { ok: true, files };
+    } catch (fallbackErr) {
+      const p = primaryErr && primaryErr.message ? primaryErr.message : String(primaryErr);
+      const f = fallbackErr && fallbackErr.message ? fallbackErr.message : String(fallbackErr);
+      throw new Error(`${p} — Fallback job_project_files_list (${sub}): ${f}`);
+    }
+  }
 }
 
 async function dispoFetchJson(baseUrl, pathName, qs, authHeader, technicianId) {
   const q = new URLSearchParams(qs);
   if (technicianId != null) q.set('technician_id', String(technicianId));
   const query = q.toString();
-  const headers = Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {});
+  const headers = dispoMonteurFetchHeaders(authHeader, technicianId);
   const urls = abrechnungScriptUrlCandidates(baseUrl, pathName).map((u) => `${u}?${query}`);
   let lastErr;
+  const hasMore = (i) => i < urls.length - 1;
   for (let i = 0; i < urls.length; i++) {
     const url = urls[i];
     const r = await fetch(url, { headers });
     const text = await r.text();
-    const tryNext = r.status === 404 && i < urls.length - 1;
     let data = {};
     try {
       data = text ? JSON.parse(text) : {};
     } catch (_) {
       lastErr = new Error('Dispo: kein JSON (' + r.status + '): ' + text.slice(0, 200));
-      if (tryNext) continue;
-      throw lastErr;
+      // Falsche Route liefert oft HTML (404/403/…): nächste Basis-URL versuchen.
+      if (hasMore(i)) continue;
+      throw new Error(appendTriedUrls(lastErr.message, urls));
     }
+    const tryHttpNext = hasMore(i) && r.status === 404;
     if (!r.ok) {
-      lastErr = new Error(data.error || ('HTTP ' + r.status));
-      if (tryNext) continue;
+      lastErr = new Error(data.error || 'HTTP ' + r.status);
+      if (tryHttpNext) continue;
       throw lastErr;
     }
     if (data && typeof data === 'object' && data.ok === false) {
       lastErr = new Error(data.error || ('HTTP ' + r.status));
-      if (tryNext) continue;
+      if (tryHttpNext) continue;
       throw lastErr;
     }
     return data;
   }
-  throw (
-    lastErr ||
-    new Error('Abrechnungs-Endpunkt nicht erreichbar (404). Versucht: ' + urls.join(' | ') + '.')
-  );
+  throw new Error(appendTriedUrls(lastErr ? lastErr.message : 'Abrechnungs-Endpunkt nicht erreichbar.', urls));
 }
 
 async function dispoAbrechnungPostJson(baseUrl, scriptFile, jsonBody, authHeader, technicianId) {
   const headers = Object.assign(
     { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId) },
-    authHeader || {},
+    dispoMonteurFetchHeaders(authHeader, technicianId),
   );
   const urls = abrechnungScriptUrlCandidates(baseUrl, scriptFile);
   let lastErr;
+  const hasMore = (i) => i < urls.length - 1;
   for (let i = 0; i < urls.length; i++) {
     const r = await fetch(urls[i], { method: 'POST', headers, body: JSON.stringify(jsonBody) });
     const t = await r.text();
-    const tryNext = r.status === 404 && i < urls.length - 1;
     let j = {};
     try {
       j = t ? JSON.parse(t) : {};
     } catch (_) {
       lastErr = new Error(t ? t.slice(0, 240) : 'Ungültige Antwort');
-      if (tryNext) continue;
-      throw lastErr;
+      if (hasMore(i)) continue;
+      throw new Error(appendTriedUrls(lastErr.message, urls));
     }
+    const tryHttpNext = hasMore(i) && r.status === 404;
     if (!r.ok || j.ok === false) {
       lastErr = new Error(j.error || t || ('HTTP ' + r.status));
-      if (tryNext) continue;
+      if (tryHttpNext) continue;
       throw lastErr;
     }
     return j;
   }
-  throw lastErr || new Error('Abrechnungs-API nicht erreichbar');
+  throw new Error(appendTriedUrls(lastErr ? lastErr.message : 'Abrechnungs-API nicht erreichbar', urls));
 }
 
 async function dispoDownloadFile(baseUrl, jobId, bucket, name, destPath, authHeader, technicianId) {
@@ -265,21 +353,43 @@ async function dispoDownloadFile(baseUrl, jobId, bucket, name, destPath, authHea
     name,
   });
   const qs = q.toString();
-  const headers = Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {});
+  const headers = dispoMonteurFetchHeaders(authHeader, technicianId);
   const urls = abrechnungScriptUrlCandidates(baseUrl, 'abrechnung_file_download.php').map((u) => `${u}?${qs}`);
   let lastErr;
   for (let i = 0; i < urls.length; i++) {
     const r = await fetch(urls[i], { headers });
-    if (r.status === 404 && i < urls.length - 1) continue;
     if (!r.ok) {
       lastErr = new Error('Download fehlgeschlagen: ' + r.status);
       if (r.status === 404 && i < urls.length - 1) continue;
+      if (r.status === 404 && i === urls.length - 1) break;
       throw lastErr;
     }
     mkdirpSync(path.dirname(destPath));
     const buf = Buffer.from(await r.arrayBuffer());
     fs.writeFileSync(destPath, buf);
     return;
+  }
+  const sub = abrechnungBucketProjectSubdir(bucket);
+  const safeName = path.basename(String(name || ''));
+  if (sub && safeName) {
+    const relPath = `${sub}/${safeName}`.replace(/\\/g, '/');
+    const qjp = new URLSearchParams({
+      technician_id: String(technicianId),
+      job_id: String(jobId),
+      path: relPath,
+    });
+    const urlJp = `${dispoBase(baseUrl)}/api/job_project_file_download.php?${qjp}`;
+    try {
+      const rj = await fetch(urlJp, { headers });
+      if (rj.ok) {
+        mkdirpSync(path.dirname(destPath));
+        fs.writeFileSync(destPath, Buffer.from(await rj.arrayBuffer()));
+        return;
+      }
+      lastErr = new Error('Download fehlgeschlagen: ' + rj.status);
+    } catch (e) {
+      lastErr = e;
+    }
   }
   throw lastErr || new Error('Download fehlgeschlagen: 404');
 }
@@ -319,7 +429,7 @@ function dispoUploadMultipartOnce(urlStr, fields, fileBuf, fileName, authHeader,
             reject(new Error((data && data.error) || body || ('HTTP ' + code)));
           }
         } catch (e) {
-          reject(new Error(body || e.message));
+          reject(Object.assign(new Error(body ? body.slice(0, 240) : e.message), { nonJson: true }));
         }
       });
     });
@@ -334,7 +444,8 @@ async function dispoUploadMultipart(baseUrl, fields, fileBuf, fileName, authHead
       return await dispoUploadMultipartOnce(urls[i], fields, fileBuf, fileName, authHeader, technicianId);
     } catch (e) {
       lastErr = e;
-      if (e && e.code404 && i < urls.length - 1) continue;
+      const tryAlt = i < urls.length - 1 && e && (e.code404 || e.nonJson);
+      if (tryAlt) continue;
       throw e;
     }
   }
@@ -354,7 +465,7 @@ async function syncJobFromDispo(ctx, baseUrl, technicianId, authHeader, jobServe
       synced_at = excluded.synced_at
   `).run(jobServerId, n.dispo || '', n.buchhaltung || '');
   for (const bucket of ['dispo', 'buchhaltung']) {
-    const data = await dispoFetchJson(baseUrl, 'abrechnung_bucket_list.php', { job_id: String(jobServerId), bucket }, authHeader, technicianId);
+    const data = await dispoFetchAbrechnungBucketList(baseUrl, jobServerId, bucket, authHeader, technicianId);
     const files = data.files || [];
     db.prepare('DELETE FROM abrechnung_files_meta WHERE job_server_id = ? AND bucket = ?').run(jobServerId, bucket);
     const destBase = path.join(jobDir(dbDir, jobServerId), bucket);
@@ -530,13 +641,7 @@ function registerAbrechnungRoutes(app, ctx) {
         }
         try {
           for (const bucket of ['dispo', 'buchhaltung']) {
-            const data = await dispoFetchJson(
-              base,
-              'abrechnung_bucket_list.php',
-              { job_id: String(dispoJobId), bucket },
-              auth,
-              technicianId,
-            );
+            const data = await dispoFetchAbrechnungBucketList(base, dispoJobId, bucket, auth, technicianId);
             const remoteFiles = data.files || [];
             if (!seenByBucket.has(bucket)) seenByBucket.set(bucket, new Set());
             const seen = seenByBucket.get(bucket);
@@ -613,15 +718,15 @@ function registerAbrechnungRoutes(app, ctx) {
         name,
       });
       const qsStr = q.toString();
-      const hdrs = Object.assign({ 'X-Technician-Id': String(technicianId) }, auth);
+      const hdrs = dispoMonteurFetchHeaders(auth, technicianId);
       const urls = abrechnungScriptUrlCandidates(base, 'abrechnung_file_download.php').map((u) => `${u}?${qsStr}`);
       let lastBody = '';
       for (let i = 0; i < urls.length; i++) {
         const r = await fetch(urls[i], { headers: hdrs });
-        if (r.status === 404 && i < urls.length - 1) continue;
         if (!r.ok) {
           lastBody = await r.text().catch(() => '');
           if (r.status === 404 && i < urls.length - 1) continue;
+          if (r.status === 404 && i === urls.length - 1) break;
           return res.status(r.status).send(lastBody || r.statusText || String(r.status));
         }
         const ct = r.headers.get('content-type');
@@ -640,6 +745,36 @@ function registerAbrechnungRoutes(app, ctx) {
         }
         const buf = Buffer.from(await r.arrayBuffer());
         return res.send(buf);
+      }
+      const subPb = abrechnungBucketProjectSubdir(bucket);
+      if (subPb && name) {
+        const relPath = `${subPb}/${name}`.replace(/\\/g, '/');
+        const qJp = new URLSearchParams({
+          technician_id: String(technicianId),
+          job_id: String(dispoJobId),
+          path: relPath,
+        });
+        const urlJp = `${base}/api/job_project_file_download.php?${qJp}`;
+        const rJp = await fetch(urlJp, { headers: hdrs });
+        if (rJp.ok) {
+          const ct = rJp.headers.get('content-type');
+          if (ct) res.setHeader('Content-Type', ct);
+          const cd = rJp.headers.get('content-disposition');
+          if (cd) res.setHeader('Content-Disposition', cd);
+          if (rJp.body && typeof Readable.fromWeb === 'function') {
+            Readable.fromWeb(rJp.body)
+              .on('error', () => {
+                try {
+                  res.destroy();
+                } catch (_) {}
+              })
+              .pipe(res);
+            return;
+          }
+          const buf = Buffer.from(await rJp.arrayBuffer());
+          return res.send(buf);
+        }
+        lastBody = await rJp.text().catch(() => '');
       }
       return res.status(404).send(lastBody || 'Download nicht gefunden.');
     } catch (e) {

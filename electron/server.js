@@ -298,7 +298,10 @@ function createApp(db) {
       if (w.error) return w;
       return null;
     }
-    const row = dbConn.prepare('SELECT id, status FROM jobs WHERE id = ?').get(lid);
+    const row = dbConn.prepare(`
+      SELECT id, status FROM jobs j
+      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+    `).get(lid, lid);
     if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
     if (String(row.status || '').toLowerCase() === 'geplant') {
       return { error: 'Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.', status: 403 };
@@ -463,8 +466,18 @@ function createApp(db) {
     return maxNum + 1;
   }
 
-  function getServerJobId(localJobId) {
-    const row = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
+  /** rawJobId kann lokale jobs.id oder jobs.server_id sein (Kalender-Cache liefert server_job_id als id). */
+  function getJobRowByLocalOrServerId(rawJobId) {
+    const n = parseInt(rawJobId, 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return db.prepare(`
+      SELECT id, server_id FROM jobs j
+      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+    `).get(n, n);
+  }
+
+  function getServerJobId(localJobIdOrServerId) {
+    const row = getJobRowByLocalOrServerId(localJobIdOrServerId);
     if (!row) throw new Error('Auftrag nicht gefunden.');
     return row.server_id != null ? row.server_id : row.id;
   }
@@ -483,7 +496,7 @@ function createApp(db) {
       const urlBase = base + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId;
       async function walk(pathPart) {
         const url = urlBase + (pathPart ? '&path=' + encodeURIComponent(pathPart) : '');
-        const opts = { headers: { 'X-Technician-Id': String(technicianId), ...authHeader } };
+        const opts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
         const r = await fetch(url, opts);
         if (!r.ok) throw new Error('Dispo-Dateiliste fehlgeschlagen (' + r.status + '): ' + url);
         const data = await r.json();
@@ -523,8 +536,7 @@ function createApp(db) {
 
         const parsed = new URL(url);
         const headers = form.getHeaders({
-          'X-Technician-Id': String(technicianId),
-          ...authHeader,
+          ...dispoMonteurFetchHeaders(technicianId, authHeader),
         });
         const options = {
           method: 'POST',
@@ -656,8 +668,8 @@ function createApp(db) {
       FROM jobs j
       LEFT JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
-      WHERE j.id = ?
-    `).get(localJobId);
+      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+    `).get(localJobId, localJobId);
     if (!row) throw new Error('Auftrag nicht gefunden.');
     const startStr = (row.start_datetime || '').trim().slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(startStr)) throw new Error('Auftrag hat kein gültiges Startdatum.');
@@ -825,24 +837,24 @@ function createApp(db) {
   app.post('/api/dienstreise/copy_project', express.json(), async (req, res) => {
     try {
       const body = req.body || {};
-      const localJobId = parseInt(body.job_id, 10);
+      const rawJobId = parseInt(body.job_id, 10);
       const dispoBaseUrl = (body.dispo_base_url || '').trim().replace(/\/$/, '');
       const technicianId = parseInt(body.technician_id, 10);
       const dispoUsername = (body.dispo_username || '').trim();
       const dispoPassword = (body.dispo_password != null ? String(body.dispo_password) : '');
 
-      if (!localJobId || !dispoBaseUrl || !technicianId) {
+      if (!rawJobId || !dispoBaseUrl || !technicianId) {
         return res.status(400).json({ ok: false, error: 'job_id (lokal), dispo_base_url und technician_id erforderlich.' });
       }
 
-      const drGateCopy = gateDienstreiseWrite(db, technicianId, localJobId);
+      const drGateCopy = gateDienstreiseWrite(db, technicianId, rawJobId);
       if (drGateCopy) return res.status(drGateCopy.status).json({ ok: false, error: drGateCopy.error });
 
-      const jobRow = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
+      const jobRow = getJobRowByLocalOrServerId(rawJobId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       const jobId = jobRow.server_id != null ? jobRow.server_id : jobRow.id;
 
-      const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const targetDir = getOrCreateDienstreiseFolderForJob(jobRow.id);
       if (!targetDir || !fs.existsSync(targetDir)) return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
 
       const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
@@ -850,7 +862,7 @@ function createApp(db) {
       async function listEntries(relPath) {
         const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
         const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + pathQ;
-        const opts = { headers: { 'X-Technician-Id': String(technicianId), ...authHeader } };
+        const opts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
         const r = await fetch(url, opts);
         if (!r.ok) {
           const msg = r.status === 404
@@ -864,7 +876,7 @@ function createApp(db) {
 
       async function downloadFile(relPath, localPath) {
         const url = dispoBaseUrl + '/api/job_project_file_download.php?technician_id=' + technicianId + '&job_id=' + jobId + '&path=' + encodeURIComponent(relPath);
-        const opts = { headers: { 'X-Technician-Id': String(technicianId), ...authHeader } };
+        const opts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
         const r = await fetch(url, opts);
         if (!r.ok) throw new Error('Download fehlgeschlagen: ' + relPath + ' (' + r.status + ')');
         const buf = Buffer.from(await r.arrayBuffer());
@@ -918,25 +930,25 @@ function createApp(db) {
     };
     try {
       const body = req.body || {};
-      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const rawJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
       const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
       const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
       const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
       const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
       const includeBilder = !!body.include_bilder;
 
-      if (!localJobId || !dispoBaseUrl || !technicianId) {
+      if (!rawJobId || !dispoBaseUrl || !technicianId) {
         return res.status(400).json({ ok: false, error: 'job_id (lokal), dispoBaseUrl und technicianId erforderlich.' });
       }
 
-      const drGateStream = gateDienstreiseWrite(db, technicianId, localJobId);
+      const drGateStream = gateDienstreiseWrite(db, technicianId, rawJobId);
       if (drGateStream) return res.status(drGateStream.status).json({ ok: false, error: drGateStream.error });
 
-      const jobRow = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
+      const jobRow = getJobRowByLocalOrServerId(rawJobId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       const jobId = jobRow.server_id != null ? jobRow.server_id : jobRow.id;
 
-      const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const targetDir = getOrCreateDienstreiseFolderForJob(jobRow.id);
       if (!targetDir || !fs.existsSync(targetDir)) {
         return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
       }
@@ -954,7 +966,7 @@ function createApp(db) {
         const refreshRes = await fetch(refreshUrl, {
           method: 'POST',
           signal: refreshAbort.signal,
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...authHeader },
+          headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, authHeader)),
           body: JSON.stringify({ job_id: jobId, technician_id: technicianId, include_bilder: includeBilder }),
         });
         clearTimeout(refreshTimeoutId);
@@ -978,7 +990,7 @@ function createApp(db) {
       async function listEntries(relPath) {
         const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
         const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + pathQ;
-        const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...authHeaderForList } });
+        const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeaderForList) });
         if (!r.ok) throw new Error('Dispo-Liste fehlgeschlagen: ' + r.status);
         const data = await r.json();
         return (data && data.entries) ? data.entries : [];
@@ -1009,7 +1021,7 @@ function createApp(db) {
       for (let i = 0; i < fileList.length; i++) {
         const relPath = fileList[i];
         const url = dispoBaseUrl + '/api/job_project_file_download.php?technician_id=' + technicianId + '&job_id=' + jobId + '&path=' + encodeURIComponent(relPath);
-        const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...authHeaderForList } });
+        const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeaderForList) });
         if (!r.ok) throw new Error('Download fehlgeschlagen: ' + relPath);
         const buf = Buffer.from(await r.arrayBuffer());
         const localPath = path.join(targetDir, relPath.replace(/\//g, path.sep));
@@ -1097,11 +1109,10 @@ function createApp(db) {
         try {
           const r = await fetch(dispoBaseUrl + '/api/job_project_file_delete.php', {
             method: 'POST',
-            headers: {
-              'X-Technician-Id': String(technicianId),
-              'Content-Type': 'application/x-www-form-urlencoded',
-              ...authHeader,
-            },
+            headers: Object.assign(
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+              dispoMonteurFetchHeaders(technicianId, authHeader),
+            ),
             body: formBody.toString(),
           });
           if (!r.ok) {
@@ -1158,7 +1169,7 @@ function createApp(db) {
         const seen = new Set();
         async function walk(pathPart) {
           const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + (pathPart ? '&path=' + encodeURIComponent(pathPart) : '');
-          const opts = { headers: { 'X-Technician-Id': String(technicianId), ...authHeader } };
+          const opts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
           const r = await fetch(url, opts);
           if (!r.ok) throw new Error('Dispo-Dateiliste fehlgeschlagen (' + r.status + '): ' + url);
           const data = await r.json();
@@ -3101,6 +3112,16 @@ function createApp(db) {
     if (!u) return undefined;
     const p = (password || '').toString();
     return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
+  }
+
+  /** Apache/FPM liefert Authorization oft nicht an PHP — Dispo require_login.php liest X-Kukla-Authorization. */
+  function dispoMonteurFetchHeaders(technicianId, authHeader) {
+    const h = Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {});
+    const a = authHeader && authHeader.Authorization;
+    if (a) {
+      h['X-Kukla-Authorization'] = a;
+    }
+    return h;
   }
 
   /** Basic vom Browser an 127.0.0.1 (kein Passwort in der Query); Fallback Query für Alt-Clients. */
