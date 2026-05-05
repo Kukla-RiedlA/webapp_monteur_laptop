@@ -241,6 +241,43 @@
     return (b / 1048576).toFixed(1) + ' MB';
   }
 
+  function abrechnungFileBasename(fn) {
+    var s = String(fn || '');
+    var i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+    return i >= 0 ? s.slice(i + 1) : s;
+  }
+
+  /** Öffnen/Download mit Basic-Auth (Browser-Link ohne fetch sendet keine Authorization-Header). */
+  async function openAbrechnungFile(jobId, bucket, fileName) {
+    try {
+      var base = (getDispoBaseUrl() || '').trim();
+      var params = { job_server_id: jobId, bucket: bucket, name: fileName };
+      if (base) params.base_url = base;
+      var r = await fetch(API_BASE + '/api/abrechnung/file?' + qs(params), { headers: abrechnungAuthHeaders() });
+      if (!r.ok) {
+        var errText = await r.text().catch(function () { return ''; });
+        throw new Error(errText || ('HTTP ' + r.status));
+      }
+      var blob = await r.blob();
+      var url = URL.createObjectURL(blob);
+      var lower = abrechnungFileBasename(fileName).toLowerCase();
+      if (/\.(pdf|png|jpg|jpeg|gif|webp|svg)$/i.test(lower)) {
+        window.open(url, '_blank', 'noopener');
+        setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 120000);
+      } else {
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = abrechnungFileBasename(fileName) || 'datei';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e2) {} }, 3000);
+      }
+    } catch (e) {
+      window.alert((e && e.message) ? e.message : String(e));
+    }
+  }
+
   function renderAbrechnungFileList(ulEl, bucket, files, jobId, canWrite) {
     if (!ulEl) return;
     ulEl.innerHTML = '';
@@ -248,10 +285,16 @@
     list.forEach(function (f) {
       var li = document.createElement('li');
       var a = document.createElement('a');
-      a.href = API_BASE + '/api/abrechnung/file?' + qs({ job_server_id: jobId, bucket: bucket, name: f.file_name });
-      a.target = '_blank';
-      a.rel = 'noopener';
-      a.textContent = f.file_name + (f.size_bytes != null ? ' (' + formatAbrechnungFileSize(f.size_bytes) + ')' : '');
+      a.href = '#';
+      a.className = 'abrechnung-file-link';
+      a.setAttribute('role', 'button');
+      var label = (f.file_name || f.name || '') + (f.size_bytes != null ? ' (' + formatAbrechnungFileSize(f.size_bytes) + ')' : '');
+      if (f.remote_only) label += ' · Dispo';
+      a.textContent = label || '(Datei)';
+      a.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        openAbrechnungFile(jobId, bucket, f.file_name || f.name);
+      });
       li.appendChild(a);
       if (canWrite) {
         var del = document.createElement('button');
@@ -260,7 +303,7 @@
         del.textContent = 'Löschen';
         del.addEventListener('click', function () {
           if (!window.confirm('Datei wirklich löschen?')) return;
-          abrechnungDeleteFile(jobId, bucket, f.file_name);
+          abrechnungDeleteFile(jobId, bucket, f.file_name || f.name);
         });
         li.appendChild(del);
       }
@@ -269,7 +312,7 @@
     if (list.length === 0) {
       var empty = document.createElement('li');
       empty.className = 'empty';
-      empty.textContent = 'Keine Dateien (nach „Mit Dispo abgleichen“ erscheinen sie hier).';
+      empty.textContent = 'Keine Dateien (mit Dispo-URL unter Einstellungen werden Namen geladen; Klick lädt die Datei).';
       ulEl.appendChild(empty);
     }
   }
@@ -341,7 +384,10 @@
     }
 
     var tid = getTechId();
-    var r = await fetch(API_BASE + '/api/abrechnung/bundle?' + qs({ technician_id: tid, job_server_id: jid }), { headers: abrechnungAuthHeaders() });
+    var bundleQs = { technician_id: tid, job_server_id: jid };
+    var baseDispo = (getDispoBaseUrl() || '').trim();
+    if (baseDispo) bundleQs.base_url = baseDispo;
+    var r = await fetch(API_BASE + '/api/abrechnung/bundle?' + qs(bundleQs), { headers: abrechnungAuthHeaders() });
     var j = await r.json();
     if (!j.ok) {
       if (meta) meta.textContent = j.error || 'Daten konnten nicht geladen werden.';

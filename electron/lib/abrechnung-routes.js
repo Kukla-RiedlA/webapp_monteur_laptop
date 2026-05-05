@@ -2,6 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { Readable } = require('stream');
 const FormData = require('form-data');
 const express = require('express');
 
@@ -378,7 +379,7 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
 }
 
 function registerAbrechnungRoutes(app, ctx) {
-  const { db, save, dbDir, authHeaderFromCredentials } = ctx;
+  const { db, save, dbDir, authHeaderFromCredentials, authHeaderFromIncomingBasicOrQuery } = ctx;
   ensureSchema(db);
 
   /** Jobs für Monat: aus Cache oder optional Dispo */
@@ -416,8 +417,8 @@ function registerAbrechnungRoutes(app, ctx) {
     }
   });
 
-  /** Bundle: Notizen + Dateiliste (Meta), offline aus Cache */
-  app.get('/api/abrechnung/bundle', (req, res) => {
+  /** Bundle: Notizen + Dateiliste (Meta), offline aus Cache; optional Dateinamen von Dispo nachladen */
+  app.get('/api/abrechnung/bundle', async (req, res) => {
     try {
       const technicianId = parseInt(req.query.technician_id, 10);
       const jobServerId = parseInt(req.query.job_server_id, 10);
@@ -425,9 +426,54 @@ function registerAbrechnungRoutes(app, ctx) {
         return res.status(400).json({ ok: false, error: 'technician_id und job_server_id erforderlich.' });
       }
       const notes = db.prepare('SELECT dispo, buchhaltung, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?').get(jobServerId);
-      const files = db.prepare(
+      let files = db.prepare(
         'SELECT bucket, file_name, size_bytes, synced_at FROM abrechnung_files_meta WHERE job_server_id = ? ORDER BY bucket, file_name'
       ).all(jobServerId);
+      const baseUrlRaw = (req.query.base_url || req.query.baseUrl || '').toString().trim();
+      const auth =
+        typeof authHeaderFromIncomingBasicOrQuery === 'function' ? authHeaderFromIncomingBasicOrQuery(req) : undefined;
+      if (baseUrlRaw && auth && technicianId && jobServerId) {
+        const base = dispoBase(baseUrlRaw);
+        const seenByBucket = new Map();
+        for (const row of files) {
+          const b = row.bucket;
+          if (!seenByBucket.has(b)) seenByBucket.set(b, new Set());
+          seenByBucket.get(b).add(row.file_name);
+        }
+        try {
+          for (const bucket of ['dispo', 'buchhaltung']) {
+            const data = await dispoFetchJson(
+              base,
+              'abrechnung_bucket_list.php',
+              { job_id: String(jobServerId), bucket },
+              auth,
+              technicianId,
+            );
+            const remoteFiles = data.files || [];
+            if (!seenByBucket.has(bucket)) seenByBucket.set(bucket, new Set());
+            const seen = seenByBucket.get(bucket);
+            for (const rf of remoteFiles) {
+              const fn = String(rf.name || rf.file_name || '').trim();
+              if (!fn || seen.has(fn)) continue;
+              seen.add(fn);
+              files.push({
+                bucket,
+                file_name: fn,
+                size_bytes: rf.size_bytes != null ? rf.size_bytes : null,
+                synced_at: null,
+                remote_only: true,
+              });
+            }
+          }
+        } catch (e) {
+          console.warn('[abrechnung/bundle] Dispo-Dateiliste:', e && e.message ? e.message : e);
+        }
+      }
+      files.sort((a, b) => {
+        const c = String(a.bucket || '').localeCompare(String(b.bucket || ''));
+        if (c !== 0) return c;
+        return String(a.file_name || '').localeCompare(String(b.file_name || ''));
+      });
       return res.json({
         ok: true,
         notes: notes || { dispo: '', buchhaltung: '', synced_at: null },
@@ -438,22 +484,69 @@ function registerAbrechnungRoutes(app, ctx) {
     }
   });
 
-  /** Abrechnung-Datei lokal (nach Sync) */
-  app.get('/api/abrechnung/file', (req, res) => {
+  /** Abrechnung-Datei: zuerst lokal, sonst Proxy zur Dispo (Authorization + optional base_url) */
+  app.get('/api/abrechnung/file', async (req, res) => {
     try {
       const jobServerId = parseInt(req.query.job_server_id, 10);
       const bucket = (req.query.bucket || '').trim();
       const name = path.basename((req.query.name || '').toString());
+      const baseUrlRaw = (req.query.base_url || req.query.baseUrl || '').toString().trim();
+      const technicianId = parseInt(String(req.headers['x-technician-id'] || req.query.technician_id || ''), 10);
       if (!jobServerId || !['dispo', 'buchhaltung'].includes(bucket) || !name) {
         return res.status(400).send('Ungültige Parameter.');
       }
       const fp = filePathLocal(dbDir, jobServerId, bucket, name);
-      if (!fs.existsSync(fp) || !fs.statSync(fp).isFile()) {
-        return res.status(404).send('Datei nicht lokal vorhanden (zuerst synchronisieren oder online laden).');
+      if (fs.existsSync(fp) && fs.statSync(fp).isFile()) {
+        return res.sendFile(path.resolve(fp));
       }
-      res.sendFile(path.resolve(fp));
+      const base = dispoBase(baseUrlRaw);
+      const auth =
+        typeof authHeaderFromIncomingBasicOrQuery === 'function' ? authHeaderFromIncomingBasicOrQuery(req) : undefined;
+      if (!base || !technicianId || !auth) {
+        return res
+          .status(404)
+          .send(
+            'Datei nicht lokal. Zum Laden von der Dispo in den Einstellungen Dispo-URL und Zugangsdaten setzen, dann erneut öffnen.',
+          );
+      }
+      const q = new URLSearchParams({
+        technician_id: String(technicianId),
+        job_id: String(jobServerId),
+        bucket,
+        name,
+      });
+      const qsStr = q.toString();
+      const hdrs = Object.assign({ 'X-Technician-Id': String(technicianId) }, auth);
+      const urls = abrechnungScriptUrlCandidates(base, 'abrechnung_file_download.php').map((u) => `${u}?${qsStr}`);
+      let lastBody = '';
+      for (let i = 0; i < urls.length; i++) {
+        const r = await fetch(urls[i], { headers: hdrs });
+        if (r.status === 404 && i < urls.length - 1) continue;
+        if (!r.ok) {
+          lastBody = await r.text().catch(() => '');
+          if (r.status === 404 && i < urls.length - 1) continue;
+          return res.status(r.status).send(lastBody || r.statusText || String(r.status));
+        }
+        const ct = r.headers.get('content-type');
+        if (ct) res.setHeader('Content-Type', ct);
+        const cd = r.headers.get('content-disposition');
+        if (cd) res.setHeader('Content-Disposition', cd);
+        if (r.body && typeof Readable.fromWeb === 'function') {
+          Readable.fromWeb(r.body)
+            .on('error', () => {
+              try {
+                res.destroy();
+              } catch (_) {}
+            })
+            .pipe(res);
+          return;
+        }
+        const buf = Buffer.from(await r.arrayBuffer());
+        return res.send(buf);
+      }
+      return res.status(404).send(lastBody || 'Download nicht gefunden.');
     } catch (e) {
-      res.status(500).send(e.message);
+      res.status(500).send(e.message || String(e));
     }
   });
 

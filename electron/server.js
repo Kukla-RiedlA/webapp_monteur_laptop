@@ -3103,8 +3103,6 @@ function createApp(db) {
     return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
   }
 
-  registerAbrechnungRoutes(app, { db, save, dbDir: DB_DIR, authHeaderFromCredentials });
-
   /** Basic vom Browser an 127.0.0.1 (kein Passwort in der Query); Fallback Query für Alt-Clients. */
   function authHeaderFromIncomingBasicOrQuery(req) {
     const raw = req.headers && req.headers.authorization;
@@ -3123,6 +3121,14 @@ function createApp(db) {
     const q = req.query || {};
     return authHeaderFromCredentials(q.serverUsername || q.server_username, q.serverPassword ?? q.server_password);
   }
+
+  registerAbrechnungRoutes(app, {
+    db,
+    save,
+    dbDir: DB_DIR,
+    authHeaderFromCredentials,
+    authHeaderFromIncomingBasicOrQuery,
+  });
 
   async function enrichJobFabWithAnlagenstamm(job, baseUrl, authHeader) {
     if (!job || !baseUrl || typeof job.fabrikationsnummern !== 'string') return job;
