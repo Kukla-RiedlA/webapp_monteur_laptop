@@ -1801,13 +1801,17 @@
     modalHtml += '<label>E-Mail</label><input type="email" id="hotel_edit_email" value="' + attr(job.hotel_email) + '">';
     modalHtml += '<label>Webseite</label><input type="url" id="hotel_edit_website" value="' + attr(job.hotel_website) + '" placeholder="https://">';
     modalHtml += '<label>Kommentar zum Hotel</label><textarea id="hotel_edit_comment" rows="2" placeholder="Interner Kommentar">' + attr(job.hotel_comment || '') + '</textarea>';
-    modalHtml += '<label>Bewertung</label><select id="hotel_edit_rating">';
-    modalHtml += '<option value="">Keine Bewertung</option>';
-    for (var rs = 0; rs <= 5; rs++) {
-      var selRs = (String(job.hotel_rating_stars || '') === String(rs)) ? ' selected' : '';
-      modalHtml += '<option value="' + String(rs) + '"' + selRs + '>' + String(rs) + ' Sterne</option>';
+    var rParsed = parseInt(String(job.hotel_rating_stars || ''), 10);
+    var rInit = isFinite(rParsed) && rParsed >= 1 && rParsed <= 5 ? String(rParsed) : '';
+    modalHtml += '<label>Bewertung</label>';
+    modalHtml += '<input type="hidden" id="hotel_edit_rating" value="' + attr(rInit) + '">';
+    modalHtml += '<div class="hotel-star-rating" role="group" aria-label="Hotelbewertung">';
+    for (var ri = 1; ri <= 5; ri++) {
+      var rOn = rInit !== '' && ri <= parseInt(rInit, 10);
+      modalHtml += '<button type="button" class="hotel-star-btn' + (rOn ? ' hotel-star-btn--active' : '') + '" data-star="' + ri + '" aria-label="' + ri + ' von 5 Sternen">' + (rOn ? '★' : '☆') + '</button>';
     }
-    modalHtml += '</select>';
+    modalHtml += '</div>';
+    modalHtml += '<button type="button" class="btn btn-ghost hotel-rating-clear" id="hotel_rating_clear">Keine Bewertung</button>';
     modalHtml += '<div class="hotel-modal-actions"><button type="button" class="btn btn-primary" id="hotelModalSave">Speichern</button> <button type="button" class="btn btn-ghost" id="hotelModalCancel">Abbrechen</button></div>';
     modalHtml += '</div></div>';
     var existing = document.getElementById('hotelAddressModalOverlay');
@@ -1832,6 +1836,35 @@
     }
     updateHotelCountryFlag();
     document.getElementById('hotel_edit_country').addEventListener('change', updateHotelCountryFlag);
+    function applyHotelModalStars(n) {
+      var num = parseInt(String(n), 10);
+      if (!isFinite(num) || num < 1) num = 0;
+      var hidR = document.getElementById('hotel_edit_rating');
+      if (hidR) hidR.value = num > 0 ? String(num) : '';
+      var wrapStars = document.querySelector('#hotelAddressModalOverlay .hotel-star-rating');
+      if (!wrapStars) return;
+      wrapStars.querySelectorAll('.hotel-star-btn').forEach(function (b) {
+        var si = parseInt(b.getAttribute('data-star'), 10);
+        var on = isFinite(si) && si <= num;
+        b.classList.toggle('hotel-star-btn--active', on);
+        b.textContent = on ? '★' : '☆';
+      });
+    }
+    var starWrapInit = document.querySelector('#hotelAddressModalOverlay .hotel-star-rating');
+    if (starWrapInit) {
+      starWrapInit.querySelectorAll('.hotel-star-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var ns = parseInt(b.getAttribute('data-star'), 10);
+          if (isFinite(ns)) applyHotelModalStars(ns);
+        });
+      });
+    }
+    var hotelRatingClear = document.getElementById('hotel_rating_clear');
+    if (hotelRatingClear) {
+      hotelRatingClear.addEventListener('click', function () {
+        applyHotelModalStars(0);
+      });
+    }
     var hotelPasteApply = document.getElementById('hotelPasteApply');
     var hotelPasteAddress = document.getElementById('hotel_paste_address');
     if (hotelPasteApply && hotelPasteAddress) {

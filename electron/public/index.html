@@ -256,6 +256,14 @@
     .hotel-country-select-wrap .hotel-country-flag .job-flag { width: 20px; height: 15px; }
     .hotel-country-select-wrap select { flex: 1; min-width: 0; }
     .hotel-modal-actions { margin-top: 1rem; display: flex; gap: 8px; }
+    .hotel-star-rating { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+    .hotel-star-btn {
+      font: inherit; font-size: 1.35rem; line-height: 1; padding: 4px 4px; border: none;
+      background: transparent; color: #b8860b; cursor: pointer; min-width: 32px;
+    }
+    .hotel-star-btn--active { color: #e6b800; }
+    .hotel-star-btn:focus-visible { outline: 2px solid var(--primary, #0e7b5a); outline-offset: 2px; border-radius: 4px; }
+    .hotel-rating-clear { margin-top: 8px; font-size: 0.85rem; }
     .hotel-paste-wrap { margin-bottom: 12px; }
     .hotel-paste-wrap label { display: block; font-size: 12px; margin-top: 6px; color: var(--muted, #666); }
     .hotel-paste-textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; resize: vertical; min-height: 72px; font-family: inherit; }
