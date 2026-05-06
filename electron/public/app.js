@@ -13,7 +13,29 @@
     syncIntervalMinutes: 'monteur_syncIntervalMinutes',
     dienstreiseBasePath: 'monteur_dienstreiseBasePath',
     allowInsecureTls: 'monteur_allowInsecureTls',
+    uiTheme: 'monteur_uiTheme',
   };
+
+  function normalizeUiTheme(theme) {
+    return theme === 'dark' ? 'dark' : 'kukla';
+  }
+
+  function applyUiTheme(theme) {
+    var t = normalizeUiTheme(theme);
+    document.documentElement.setAttribute('data-ui-theme', t);
+    var el = document.getElementById('uiThemeDarkToggle');
+    if (el) {
+      el.checked = t === 'dark';
+      el.setAttribute('aria-checked', t === 'dark' ? 'true' : 'false');
+    }
+  }
+
+  function persistUiThemeFromToggle() {
+    var el = document.getElementById('uiThemeDarkToggle');
+    var th = el && el.checked ? 'dark' : 'kukla';
+    try { localStorage.setItem(SETTINGS_KEYS.uiTheme, th); } catch (e) { /* ignore */ }
+    applyUiTheme(th);
+  }
 
   const LS_ACTIVE_BASE = 'monteur_dispoActiveBase';
   const LS_ACTIVE_SOURCE = 'monteur_dispoActiveSource';
@@ -129,6 +151,8 @@
       const tls = localStorage.getItem(SETTINGS_KEYS.allowInsecureTls);
       const tlsEl = document.getElementById('allowInsecureDispoTls');
       if (tlsEl && tls != null) tlsEl.checked = tls === '1';
+      const uiTh = localStorage.getItem(SETTINGS_KEYS.uiTheme);
+      applyUiTheme(uiTh);
     } catch (e) { /* ignore */ }
   }
 
@@ -145,6 +169,9 @@
       localStorage.setItem(SETTINGS_KEYS.dienstreiseBasePath, (pathEl && pathEl.value ? pathEl.value.trim() : '') || '');
       const tlsEl = document.getElementById('allowInsecureDispoTls');
       localStorage.setItem(SETTINGS_KEYS.allowInsecureTls, tlsEl && tlsEl.checked ? '1' : '0');
+      const themeEl = document.getElementById('uiThemeDarkToggle');
+      const th = themeEl && themeEl.checked ? 'dark' : 'kukla';
+      localStorage.setItem(SETTINGS_KEYS.uiTheme, th);
     } catch (e) { /* ignore */ }
   }
 
@@ -2396,6 +2423,14 @@
   });
 
   loadSettingsFromStorage();
+  (function wireUiThemeToggle() {
+    var themeToggle = document.getElementById('uiThemeDarkToggle');
+    if (themeToggle) {
+      themeToggle.addEventListener('change', function () {
+        persistUiThemeFromToggle();
+      });
+    }
+  })();
   function loadDienstreiseConfigFromServer() {
     fetch(API_BASE + '/api/dienstreise/config').then(function (r) { return r.json(); }).then(function (data) {
       if (data && data.ok && data.basePath) {

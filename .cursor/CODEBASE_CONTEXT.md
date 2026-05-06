@@ -22,7 +22,8 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 | **api/** | PHP-API-Endpunkte für Dispo-Backend: `calendar.php`, `job.php`, `my_jobs.php`, `my_absences.php`, `absence.php`, `technician_info.php`, `anlagenstamm_by_fab.php`, `receive_dispo.php`. Alle (außer receive_dispo) nutzen `Db::fsm()` + `DispoRepository`. |
 | **src/** | `Db.php` (connection = WebApp-DB, fsm = Dispo-DB), `DispoRepository.php` (Lese/Schreibzugriff auf jobs, job_technicians, job_addresses, absences, getCalendarData, getJobsForTechnician, …), `DispoImportService.php`, `DispoPayloadValidator.php`. |
 | **config/** | `version.php` – Versionsnummer für die App. |
-| **electron/** | Desktop-App: `main.js` (Electron-Fenster, lädt Node-Server), `server.js` (Express, Port 39678, sql.js-SQLite, implementiert /api/calendar, /api/job, /api/absence, …; bei „Vom Dispo holen“ Proxy zu Dispo-PHP-APIs), `public/app.js` (Frontend-Logik, Kalender, Aufträge, Abwesenheiten), `public/index.html`, `db/schema.sql`, `version.json`. |
+| **electron/** | Desktop-App: `main.js` (Electron-Fenster, lädt Node-Server), `server.js` (Express, Port 39678, sql.js-SQLite, implementiert /api/calendar, /api/job, /api/absence, …; bei „Vom Dispo holen“ Proxy zu Dispo-PHP-APIs), `public/app.js` (Frontend-Logik, Kalender, Aufträge, Abwesenheiten), `public/index.html`, `public/ui-theme.css` (Themes **Kukla hell** / **Klassisch dunkel**, Schalter in der Kopfzeile), `db/schema.sql`, `version.json`. |
+| **docs/UI_THEME.md** | Erscheinungsbild: `data-ui-theme`, localStorage `monteur_uiTheme`, Verweis auf Dispo `kukla-brand.css`. |
 | **db/** | Schema/Migrationen für die WebApp-DB (receive_dispo). |
 | **bootstrap.php** | Lädt Autoload, .env; wird von allen api/*.php per `require_once __DIR__ . '/../bootstrap.php'` eingebunden. |
 
