@@ -74,7 +74,7 @@ html[data-ui-theme="kukla"] .app-version {
   color: rgba(255, 255, 255, 0.88);
 }
 
-/* Theme-Schalter (Toolbar) */
+/* Theme-Schalter: iOS-ähnliche Pillen-Schalter (Referenz: grauer Track links, dunkel/grün „an“ rechts) */
 .theme-toggle-wrap {
   display: inline-flex;
   align-items: center;
@@ -96,64 +96,82 @@ html[data-ui-theme="kukla"] .app-version {
 }
 
 .theme-toggle {
+  /* Proportionen wie gängige System-Schalter: lange Pille, Kreis fast in voller Höhe */
+  --toggle-w: 51px;
+  --toggle-h: 31px;
+  --toggle-pad: 2px;
+  --toggle-thumb: 27px;
+  --toggle-travel: calc(var(--toggle-w) - var(--toggle-pad) * 2 - var(--toggle-thumb));
   position: relative;
-  width: 44px;
-  height: 24px;
+  width: var(--toggle-w);
+  height: var(--toggle-h);
   margin: 0;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   appearance: none;
   -webkit-appearance: none;
+  flex-shrink: 0;
 }
 
+/* Aus / links = Kukla hell: neutrale graue Bahn (sichtbar auf grüner und dunkler Kopfzeile) */
 .theme-toggle-track {
   position: absolute;
   inset: 0;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.28);
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  transition: background 0.15s ease;
+  border-radius: 999px;
+  background: #e9e9eb;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  transition: background-color 0.2s ease, border-color 0.2s ease;
   pointer-events: none;
 }
 
-html[data-ui-theme="dark"] .theme-toggle-track {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.25);
+html[data-ui-theme="kukla"] .theme-toggle:not(:checked) + .theme-toggle-track {
+  background: rgba(255, 255, 255, 0.52);
+  border-color: rgba(255, 255, 255, 0.65);
+}
+
+html[data-ui-theme="dark"] .theme-toggle:not(:checked) + .theme-toggle-track {
+  background: #636366;
+  border-color: rgba(0, 0, 0, 0.2);
 }
 
 .theme-toggle-thumb {
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
+  top: 50%;
+  left: var(--toggle-pad);
+  width: var(--toggle-thumb);
+  height: var(--toggle-thumb);
+  margin-top: calc(var(--toggle-thumb) / -2);
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-  transition: transform 0.15s ease;
+  background: #ffffff;
+  border: 0.5px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18), 0 1px 1px rgba(0, 0, 0, 0.08);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
 }
 
 .theme-toggle:checked + .theme-toggle-track .theme-toggle-thumb {
-  transform: translateX(20px);
+  transform: translateX(var(--toggle-travel));
 }
 
 .theme-toggle:focus-visible + .theme-toggle-track {
-  box-shadow: 0 0 0 3px rgba(14, 123, 90, 0.35);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(14, 123, 90, 0.4);
 }
 
 html[data-ui-theme="dark"] .theme-toggle:focus-visible + .theme-toggle-track {
   box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.45);
 }
 
+/* An / rechts = Dunkelmodus aktiv: volle grüne Bahn wie Referenz „ON“, weißer Kreis rechts */
 .theme-toggle:checked + .theme-toggle-track {
-  background: rgba(15, 52, 96, 0.95);
-  border-color: rgba(255, 255, 255, 0.35);
+  background: #0e7b5a;
+  border-color: rgba(0, 0, 0, 0.12);
 }
 
-html[data-ui-theme="kukla"] .theme-toggle:checked + .theme-toggle-track {
-  background: rgba(26, 26, 26, 0.45);
-  border-color: rgba(255, 255, 255, 0.4);
+/* Kukla: helle Schrift auf blau/grün Primärflächen (nicht im Dark-Mode erzwingen) */
+html[data-ui-theme="kukla"] .textbausteine-category.selected,
+html[data-ui-theme="kukla"] .richtext-toolbar button.active {
+  color: #fff;
 }
 
 /* Kukla: helle Schrift auf grünem Accent (Hover/Tabellenköpfe) */
