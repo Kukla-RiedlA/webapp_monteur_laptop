@@ -3200,6 +3200,50 @@
     return String(nodes[0].parent_name || nodes[0].parentName || '').trim();
   }
 
+  function buildAnlagenstammFormHtml(a, fabFallback) {
+    var fab = (a && a.fabrikationsnummer) ? String(a.fabrikationsnummer) : String(fabFallback || '');
+    var idVal = (a && a.id) ? String(a.id) : '';
+    function v(key) {
+      return a && a[key] != null ? escapeHtml(String(a[key])) : '';
+    }
+    if (!a || !a.id) {
+      return '<div class="empty" style="margin-top:0.5rem">Kein Stammdatensatz für <strong>' + escapeHtml(fab) + '</strong>. Bitte in der Dispo anlegen oder andere F.N. wählen.</div>';
+    }
+    return '<div class="anlagenstamm-form-wrap">' +
+      '<input type="hidden" id="as-form-id" value="' + escapeHtml(idVal) + '">' +
+      '<div class="anlagenstamm-form-section"><h4>Identifikation</h4><div class="anlagenstamm-form-grid">' +
+      '<div class="form-full"><label for="as-form-fab">Fabrikationsnummer</label><input type="text" id="as-form-fab" value="' + v('fabrikationsnummer') + '" required></div>' +
+      '</div></div>' +
+      '<div class="anlagenstamm-form-section"><h4>Technik</h4><div class="anlagenstamm-form-grid">' +
+      '<div><label for="as-form-type">Type</label><input type="text" id="as-form-type" value="' + v('type') + '"></div>' +
+      '<div><label for="as-form-leistung">Leistung</label><input type="text" id="as-form-leistung" value="' + v('leistung') + '"></div>' +
+      '<div><label for="as-form-nenngeschwindigkeit">Nenngeschwindigkeit</label><input type="text" id="as-form-nenngeschwindigkeit" value="' + v('nenngeschwindigkeit') + '"></div>' +
+      '<div><label for="as-form-kraftaufnehmer">Kraftaufnehmer</label><input type="text" id="as-form-kraftaufnehmer" value="' + v('kraftaufnehmer') + '"></div>' +
+      '<div><label for="as-form-material">Material</label><input type="text" id="as-form-material" value="' + v('material') + '"></div>' +
+      '<div><label for="as-form-position">Position</label><input type="text" id="as-form-position" value="' + v('position') + '"></div>' +
+      '</div></div>' +
+      '<div class="anlagenstamm-form-section"><h4>Elektronik</h4><div class="anlagenstamm-form-grid">' +
+      '<div><label for="as-form-tacho">Tacho</label><input type="text" id="as-form-tacho" value="' + v('tacho') + '"></div>' +
+      '<div><label for="as-form-elektronik">Elektronik</label><input type="text" id="as-form-elektronik" value="' + v('elektronik') + '"></div>' +
+      '<div><label for="as-form-dms">DMS-Nr.</label><input type="text" id="as-form-dms" value="' + v('dms_nr') + '"></div>' +
+      '</div></div>' +
+      '<div class="anlagenstamm-form-section"><h4>Vertrieb / Projekt</h4><div class="anlagenstamm-form-grid">' +
+      '<div class="form-full"><label for="as-form-geliefert">Geliefert über</label><input type="text" id="as-form-geliefert" value="' + v('geliefert_ueber') + '" placeholder="z. B. Kunde, Händler"></div>' +
+      '<div class="form-full"><label for="as-form-projekt">Projekt</label><input type="text" id="as-form-projekt" value="' + v('projekt') + '"></div>' +
+      '</div></div>' +
+      '<div class="anlagenstamm-form-section"><h4>Letzter Kunde (nur Anzeige)</h4><div class="anlagenstamm-form-grid">' +
+      '<div><label>Letzter Kunde</label><input type="text" readonly value="' + (a && a.aktueller_kunde != null ? escapeHtml(String(a.aktueller_kunde)) : '') + '"></div>' +
+      '<div><label>Letzter Besuch</label><input type="text" readonly value="' + (a && a.letzter_besuch != null ? escapeHtml(String(a.letzter_besuch)) : '') + '"></div>' +
+      '</div><p class="muted" style="font-size:0.78rem;margin:0.35rem 0 0 0">Wird durch Auftragsabschluss in der Dispo gepflegt, nicht hier.</p></div>' +
+      '<div class="anlagenstamm-form-section"><h4>Bemerkungen</h4><div class="anlagenstamm-form-grid">' +
+      '<div class="form-full"><label for="as-form-bemerkungen">Bemerkungen</label><textarea id="as-form-bemerkungen" rows="3">' + v('bemerkungen') + '</textarea></div>' +
+      '</div></div>' +
+      '<div class="anlagenstamm-form-actions">' +
+      '<button type="button" class="btn btn-primary" id="btnAnlagenstammSave">In Dispo speichern</button>' +
+      '<span class="muted" style="font-size:0.8rem">Änderungen gehen direkt in den zentralen Anlagenstamm (Datenbank).</span>' +
+      '</div></div>';
+  }
+
   function renderAnlagenstammPnTreeUl(fab, nodes, depth) {
     depth = depth || 0;
     nodes = nodes || [];
@@ -3208,13 +3252,16 @@
       if (!n || !n.type) return;
       var li = document.createElement('li');
       if (n.type === 'dir') {
-        var st = document.createElement('strong');
-        st.className = 'anlagenstamm-pn-dir';
-        st.textContent = n.name || '';
-        li.appendChild(st);
+        var det = document.createElement('details');
+        det.className = 'anlagenstamm-pn-details';
+        var sum = document.createElement('summary');
+        sum.className = 'anlagenstamm-pn-dir';
+        sum.textContent = n.name || '';
+        det.appendChild(sum);
         if (n.children && n.children.length) {
-          li.appendChild(renderAnlagenstammPnTreeUl(fab, n.children, depth + 1));
+          det.appendChild(renderAnlagenstammPnTreeUl(fab, n.children, depth + 1));
         }
+        li.appendChild(det);
       } else if (n.type === 'file') {
         var rel = String(n.rel || '');
         var btn = document.createElement('button');
@@ -3244,35 +3291,140 @@
       if (htxt) {
         var block = document.createElement('div');
         block.className = 'anlagenstamm-pn-tree-block';
-        var head = document.createElement('div');
-        head.className = 'anlagenstamm-pn-parent-heading';
-        head.textContent = htxt;
-        block.appendChild(head);
-        block.appendChild(ul);
+        var det = document.createElement('details');
+        det.className = 'anlagenstamm-pn-details';
+        var sum = document.createElement('summary');
+        sum.className = 'anlagenstamm-pn-parent-heading';
+        sum.textContent = htxt;
+        det.appendChild(sum);
+        det.appendChild(ul);
+        block.appendChild(det);
         return block;
       }
     }
     return ul;
   }
 
-  async function loadAnlagenstamm() {
-    const msgEl = document.getElementById('anlagenstammMessage');
-    const cardEl = document.getElementById('anlagenstammCard');
-    const filesEl = document.getElementById('anlagenstammFiles');
-    const fab = ((document.getElementById('anlagenstammFabInput') || {}).value || '').trim();
-    if (!fab) {
-      if (msgEl) msgEl.textContent = 'Bitte Fabrikationsnummer eingeben.';
-      if (cardEl) cardEl.innerHTML = '';
-      if (filesEl) { filesEl.style.display = 'none'; filesEl.innerHTML = ''; }
-      var pnSec0 = document.getElementById('anlagenstammPnSection');
-      var pnTree0 = document.getElementById('anlagenstammPnTree');
-      var pnHint0 = document.getElementById('anlagenstammPnHint');
-      if (pnSec0) pnSec0.style.display = 'none';
-      if (pnTree0) pnTree0.innerHTML = '';
-      if (pnHint0) pnHint0.textContent = '';
+  async function searchAnlagenstammList() {
+    var msgEl = document.getElementById('anlagenstammMessage');
+    var resEl = document.getElementById('anlagenstammSearchResults');
+    var fn = ((document.getElementById('anlagenstammFilterFn') || {}).value || '').trim();
+    var kunde = ((document.getElementById('anlagenstammFilterKunde') || {}).value || '').trim();
+    var typ = ((document.getElementById('anlagenstammFilterType') || {}).value || '').trim();
+    var land = ((document.getElementById('anlagenstammFilterLand') || {}).value || '').trim();
+    if (!fn && !kunde && !typ && !land) {
+      if (msgEl) msgEl.textContent = 'Mindestens ein Suchkriterium eintragen.';
+      if (resEl) { resEl.style.display = 'none'; resEl.innerHTML = ''; }
       return;
     }
-    if (msgEl) msgEl.textContent = 'Lade...';
+    if (msgEl) msgEl.textContent = 'Suche läuft…';
+    if (resEl) { resEl.style.display = 'none'; resEl.innerHTML = ''; }
+    try {
+      var data = await api('/api/anlagenstamm_search', {
+        method: 'POST',
+        body: JSON.stringify({
+          baseUrl: getDispoBaseUrl(),
+          serverUsername: getServerUsername(),
+          serverPassword: getServerPassword(),
+          filter_fn: fn,
+          filter_aktueller_kunde: kunde,
+          filter_type: typ,
+          filter_land: land,
+          page: 1,
+          page_size: 50
+        })
+      });
+      var rows = (data && data.rows) ? data.rows : [];
+      if (resEl) {
+        if (!rows.length) {
+          resEl.style.display = 'block';
+          resEl.innerHTML = '<div class="empty" style="padding:0.5rem">Keine Treffer.</div>';
+        } else {
+          var th = '<thead><tr><th>F.N.</th><th>Type</th><th>Letzter Kunde</th><th>Projekt</th></tr></thead>';
+          var tb = rows.map(function (r) {
+            var f = String(r.fabrikationsnummer || '').trim();
+            return '<tr data-as-fab="' + escapeHtml(f) + '" tabindex="0"><td>' + escapeHtml(f) + '</td><td>' + escapeHtml(r.type || '') + '</td><td>' + escapeHtml(r.aktueller_kunde || '') + '</td><td>' + escapeHtml(r.projekt || '') + '</td></tr>';
+          }).join('');
+          resEl.style.display = 'block';
+          resEl.innerHTML = '<table>' + th + '<tbody>' + tb + '</tbody></table>';
+          resEl.querySelectorAll('tbody tr[data-as-fab]').forEach(function (tr) {
+            function open() {
+              var f = (tr.getAttribute('data-as-fab') || '').trim();
+              if (f) loadAnlagenstammDetail(f);
+            }
+            tr.addEventListener('click', open);
+            tr.addEventListener('keydown', function (ev) {
+              if (ev.key === 'Enter' || ev.key === ' ') {
+                ev.preventDefault();
+                open();
+              }
+            });
+          });
+        }
+      }
+      if (msgEl) msgEl.textContent = rows.length ? rows.length + ' Treffer. Zeile anklicken für Details.' : '';
+      if (rows.length === 1) {
+        var onlyFab = String(rows[0].fabrikationsnummer || '').trim();
+        if (onlyFab) loadAnlagenstammDetail(onlyFab);
+      }
+    } catch (e) {
+      if (msgEl) msgEl.textContent = 'Fehler: ' + (e.message || String(e));
+      if (resEl) { resEl.style.display = 'none'; resEl.innerHTML = ''; }
+    }
+  }
+
+  async function saveAnlagenstammFromForm() {
+    var msgEl = document.getElementById('anlagenstammMessage');
+    var fabEl = document.getElementById('as-form-fab');
+    if (!fabEl) return;
+    var payload = {
+      baseUrl: getDispoBaseUrl(),
+      serverUsername: getServerUsername(),
+      serverPassword: getServerPassword(),
+      id: parseInt((document.getElementById('as-form-id') || {}).value || '0', 10) || 0,
+      fabrikationsnummer: (fabEl.value || '').trim(),
+      type: ((document.getElementById('as-form-type') || {}).value || ''),
+      leistung: ((document.getElementById('as-form-leistung') || {}).value || ''),
+      nenngeschwindigkeit: ((document.getElementById('as-form-nenngeschwindigkeit') || {}).value || ''),
+      kraftaufnehmer: ((document.getElementById('as-form-kraftaufnehmer') || {}).value || ''),
+      material: ((document.getElementById('as-form-material') || {}).value || ''),
+      tacho: ((document.getElementById('as-form-tacho') || {}).value || ''),
+      elektronik: ((document.getElementById('as-form-elektronik') || {}).value || ''),
+      dms_nr: ((document.getElementById('as-form-dms') || {}).value || ''),
+      position: ((document.getElementById('as-form-position') || {}).value || ''),
+      geliefert_ueber: ((document.getElementById('as-form-geliefert') || {}).value || ''),
+      projekt: ((document.getElementById('as-form-projekt') || {}).value || ''),
+      bemerkungen: ((document.getElementById('as-form-bemerkungen') || {}).value || '')
+    };
+    if (!payload.fabrikationsnummer) {
+      if (msgEl) msgEl.textContent = 'Fabrikationsnummer fehlt.';
+      return;
+    }
+    if (msgEl) msgEl.textContent = 'Speichern…';
+    try {
+      var data = await api('/api/anlagenstamm_save', { method: 'POST', body: JSON.stringify(payload) });
+      if (data && data.ok && data.id) {
+        showToast('In Dispo gespeichert.');
+        if (msgEl) msgEl.textContent = 'Gespeichert.';
+        await loadAnlagenstammDetail(payload.fabrikationsnummer);
+      } else {
+        throw new Error((data && data.error) ? data.error : 'Speichern fehlgeschlagen');
+      }
+    } catch (e) {
+      if (msgEl) msgEl.textContent = 'Fehler: ' + (e.message || String(e));
+    }
+  }
+
+  async function loadAnlagenstammDetail(fab) {
+    var msgEl = document.getElementById('anlagenstammMessage');
+    var cardEl = document.getElementById('anlagenstammCard');
+    var filesEl = document.getElementById('anlagenstammFiles');
+    fab = (fab || '').trim();
+    if (!fab) {
+      if (msgEl) msgEl.textContent = 'Keine Fabrikationsnummer.';
+      return;
+    }
+    if (msgEl) msgEl.textContent = 'Lade Stammdaten…';
     if (cardEl) cardEl.innerHTML = '';
     if (filesEl) { filesEl.style.display = 'none'; filesEl.innerHTML = ''; }
     var pnSecL = document.getElementById('anlagenstammPnSection');
@@ -3282,25 +3434,21 @@
     if (pnTreeL) pnTreeL.innerHTML = '';
     if (pnHintL) pnHintL.textContent = '';
     try {
-      const payload = {
+      var payload = {
         baseUrl: getDispoBaseUrl(),
-        fab,
+        fab: fab,
         serverUsername: getServerUsername(),
         serverPassword: getServerPassword()
       };
-      const lookup = await api('/api/anlagenstamm_lookup', { method: 'POST', body: JSON.stringify(payload) });
-      const files = await api('/api/anlagenstamm_files_list', { method: 'POST', body: JSON.stringify(payload) });
-      const a = lookup && lookup.anlage ? lookup.anlage : null;
+      var lookup = await api('/api/anlagenstamm_lookup', { method: 'POST', body: JSON.stringify(payload) });
+      var files = await api('/api/anlagenstamm_files_list', { method: 'POST', body: JSON.stringify(payload) });
+      var a = lookup && lookup.anlage ? lookup.anlage : null;
       if (cardEl) {
-        cardEl.innerHTML = a
-          ? '<div class="card" style="margin-top:0.5rem"><strong>F.N.:</strong> ' + escapeHtml(a.fabrikationsnummer || fab) +
-            ' &nbsp; <strong>Type:</strong> ' + escapeHtml(a.type || '-') +
-            ' &nbsp; <strong>Leistung:</strong> ' + escapeHtml(a.leistung || '-') +
-            ' &nbsp; <strong>Position:</strong> ' + escapeHtml(a.position || '-') +
-            ' &nbsp; <strong>Projekt:</strong> ' + escapeHtml(a.projekt || '-') + '</div>'
-          : '<div class="empty">Keine Stammdaten gefunden.</div>';
+        cardEl.innerHTML = buildAnlagenstammFormHtml(a, fab);
+        var saveBtn = document.getElementById('btnAnlagenstammSave');
+        if (saveBtn) saveBtn.addEventListener('click', function () { saveAnlagenstammFromForm(); });
       }
-      const list = (files && files.files) ? files.files : [];
+      var list = (files && files.files) ? files.files : [];
       if (filesEl) {
         filesEl.style.display = '';
         filesEl.innerHTML = list.length
@@ -3324,16 +3472,24 @@
         pnSection.style.display = 'block';
         pnTreeEl.innerHTML = '';
         var pnRaw = files && files.projekte_neu ? files.projekte_neu : {};
-        if (!pnRaw.enabled) {
-          pnHintEl.textContent = 'PROJEKTE NEU ist nicht verfügbar oder der Fabrikationsordner wurde auf dem Mount nicht gefunden.';
-        } else {
-          pnHintEl.textContent = '';
+        var cached = await fetch(API_BASE + '/api/anlagenstamm_tree_cached?fab=' + encodeURIComponent(fab), {
+          headers: { 'X-Technician-Id': String(getTechId() || '') }
+        }).then(function (r) { return r.json().catch(function () { return {}; }); }).catch(function () { return {}; });
+        var cachedTree = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
+        var usedCache = cached && cached.found && (cached.projects_enabled === true || cached.projects_enabled === 1);
+        if (pnRaw && pnRaw.enabled) {
+          pnHintEl.textContent = 'Ordner zum Aufklappen – Datei per Klick öffnen.';
           var tr = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
           if (!tr.length) {
             pnTreeEl.innerHTML = '<div class="empty" style="padding:0.35rem 0">Keine Einträge in diesem Fabrikationsordner.</div>';
           } else {
             pnTreeEl.appendChild(renderAnlagenstammPnTreeUl(fab, tr));
           }
+        } else if (usedCache && cachedTree.length) {
+          pnHintEl.textContent = 'PROJEKTE NEU (lokaler Cache). Verbindung prüfen für Aktualisierung.';
+          pnTreeEl.appendChild(renderAnlagenstammPnTreeUl(fab, cachedTree));
+        } else {
+          pnHintEl.textContent = 'PROJEKTE NEU ist nicht verfügbar oder der Fabrikationsordner wurde auf dem Mount nicht gefunden.';
         }
       }
       if (msgEl) msgEl.textContent = '';
@@ -3703,7 +3859,6 @@
     if (name === 'anlagenstamm') {
       viewStart.classList.add('hidden');
       if (viewAnlagenstamm) viewAnlagenstamm.classList.add('active');
-      loadAnlagenstamm();
       return;
     }
     if (name === 'start') {
@@ -4938,11 +5093,16 @@
   document.getElementById('btnViewTextbausteine').addEventListener('click', () => showView('textbausteine'));
   document.getElementById('btnViewArchiv').addEventListener('click', () => showView('archiv'));
   document.getElementById('btnViewAnlagenstamm').addEventListener('click', () => showView('anlagenstamm'));
-  document.getElementById('btnAnlagenstammSearch').addEventListener('click', () => loadAnlagenstamm());
-  document.getElementById('anlagenstammFabInput').addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      loadAnlagenstamm();
+  document.getElementById('btnAnlagenstammSearch').addEventListener('click', () => searchAnlagenstammList());
+  ['anlagenstammFilterFn', 'anlagenstammFilterKunde', 'anlagenstammFilterType', 'anlagenstammFilterLand'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          searchAnlagenstammList();
+        }
+      });
     }
   });
   (function initAbwesenheitenDropdown() {

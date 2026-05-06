@@ -1835,6 +1835,66 @@ function createApp(db) {
     }
   });
 
+  app.post('/api/anlagenstamm_search', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const body = req.body || {};
+    const base = (body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!technicianId || !base) {
+      return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
+    const url = `${base}/dispo_api/api/anlagenstamm_monteur_search.php?technician_id=${encodeURIComponent(technicianId)}`;
+    const forward = {
+      filter_fn: body.filter_fn,
+      filter_type: body.filter_type,
+      filter_aktueller_kunde: body.filter_aktueller_kunde,
+      filter_land: body.filter_land,
+      page: body.page,
+      page_size: body.page_size
+    };
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(auth || {}) },
+        body: JSON.stringify(forward)
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/anlagenstamm_save', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const body = req.body || {};
+    const base = (body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!technicianId || !base) {
+      return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
+    const url = `${base}/dispo_api/api/anlagenstamm_monteur_save.php?technician_id=${encodeURIComponent(technicianId)}`;
+    const {
+      baseUrl: _b,
+      serverUsername: _u,
+      serverPassword: _p,
+      ...savePayload
+    } = body;
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(auth || {}) },
+        body: JSON.stringify(savePayload)
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
   app.post('/api/anlagenstamm_files_list', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
     const { baseUrl, fab, serverUsername, serverPassword } = req.body || {};

@@ -29,6 +29,13 @@
     .app-version { font-size: 0.8rem; color: var(--muted); margin-left: 0.5rem; }
     .btn-icon { padding: 0.5rem; min-width: 2.5rem; display: inline-flex; align-items: center; justify-content: center; font-size: 1.25rem; }
     .toolbar label { display: flex; align-items: center; gap: 0.5rem; }
+    /* Theme-Schalter: nicht die generische Toolbar-Label-Flex-Zeile (sonst Track/Input zerlegt) */
+    .toolbar label.theme-toggle-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      position: relative;
+    }
     .toolbar input, .toolbar select { padding: 0.4rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
     .btn { padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.95rem; }
     .btn-primary { background: var(--btn-primary); color: #fff; }
@@ -142,6 +149,28 @@
     .abrechnung-upload input[type=file] { font-size: 0.8rem; max-width: 100%; }
     .anlagenstamm-search-row { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem; }
     .anlagenstamm-search-row input { flex:1; min-width:220px; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
+    .anlagenstamm-search-filters { display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:0.5rem; width:100%; margin-bottom:0.5rem; }
+    .anlagenstamm-search-filters input { min-width:0; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
+    .anlagenstamm-search-actions { margin-bottom:0.65rem; }
+    .anlagenstamm-search-results { margin-top:0.35rem; max-height:30vh; overflow:auto; border:1px solid var(--accent); border-radius:6px; }
+    .anlagenstamm-search-results table { width:100%; border-collapse:collapse; font-size:0.86rem; }
+    .anlagenstamm-search-results th, .anlagenstamm-search-results td { padding:0.35rem 0.5rem; border-bottom:1px solid var(--accent); text-align:left; }
+    .anlagenstamm-search-results tbody tr { cursor:pointer; }
+    .anlagenstamm-search-results tbody tr:hover { background: rgba(128,128,128,0.12); }
+    .anlagenstamm-form-wrap { margin-top:0.65rem; }
+    .anlagenstamm-form-section { margin-top:0.55rem; padding:0.55rem 0.65rem; border:1px solid var(--accent); border-radius:6px; }
+    .anlagenstamm-form-section h4 { margin:0 0 0.45rem 0; font-size:0.92rem; }
+    .anlagenstamm-form-grid { display:grid; grid-template-columns: 1fr 1fr; gap:0.4rem 0.65rem; }
+    .anlagenstamm-form-grid .form-full { grid-column: 1 / -1; }
+    .anlagenstamm-form-grid label { display:block; font-size:0.76rem; font-weight:600; margin-bottom:0.12rem; color: var(--muted, #888); }
+    .anlagenstamm-form-grid input, .anlagenstamm-form-grid textarea { width:100%; box-sizing:border-box; padding:0.38rem 0.5rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); font: inherit; }
+    .anlagenstamm-form-grid textarea { min-height:4rem; resize:vertical; }
+    .anlagenstamm-form-actions { margin-top:0.65rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; }
+    .anlagenstamm-pn-details { margin:0.15rem 0; }
+    .anlagenstamm-pn-details > summary { cursor:pointer; font-weight:600; list-style: none; }
+    .anlagenstamm-pn-details > summary::-webkit-details-marker { display: none; }
+    .anlagenstamm-pn-details > summary::before { content: '▸ '; display:inline-block; transition: transform 0.12s; }
+    .anlagenstamm-pn-details[open] > summary::before { transform: rotate(90deg); }
     .anlagenstamm-files-list { margin-top:0.5rem; border:1px solid var(--accent); border-radius:6px; overflow:hidden; }
     .anlagenstamm-files-row { padding:0.55rem 0.7rem; border-bottom:1px solid var(--accent); display:flex; align-items:center; justify-content:space-between; gap:0.6rem; }
     .anlagenstamm-files-row:last-child { border-bottom:none; }
@@ -439,8 +468,10 @@
       <button type="button" class="btn btn-ghost btn-icon" id="btnViewEinstellungen" title="Einstellungen" aria-label="Einstellungen">⚙</button>
       <label class="theme-toggle-wrap" for="uiThemeDarkToggle" title="Klassisches dunkles Erscheinungsbild (ein/aus)">
         <span class="theme-toggle-label">Klassisches dunkles Erscheinungsbild</span>
-        <input type="checkbox" class="theme-toggle" id="uiThemeDarkToggle" role="switch" />
-        <span class="theme-toggle-track"><span class="theme-toggle-thumb"></span></span>
+        <span class="theme-toggle-shell">
+          <input type="checkbox" class="theme-toggle" id="uiThemeDarkToggle" role="switch" aria-label="Klassisches dunkles Erscheinungsbild" />
+          <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-thumb"></span></span>
+        </span>
       </label>
       <span id="appVersion" class="app-version"></span>
     </span>
@@ -899,11 +930,18 @@
   <main id="viewAnlagenstamm" class="view-anlagenstamm" aria-label="Anlagenstamm">
     <div class="card">
       <h2>Anlagenstamm</h2>
-      <div class="anlagenstamm-search-row">
-        <input type="text" id="anlagenstammFabInput" placeholder="Fabrikationsnummer">
+      <p class="muted" style="font-size:0.82rem;margin:0 0 0.5rem 0">Suche nach F.N., letztem Kunden, Type oder Land (Land über Kundenstamm zur Adresse des letzten Kunden). Ergebnis anklicken für Stammdaten und Dateien.</p>
+      <div class="anlagenstamm-search-filters">
+        <input type="text" id="anlagenstammFilterFn" placeholder="Fabrikationsnummer" autocomplete="off">
+        <input type="text" id="anlagenstammFilterKunde" placeholder="Letzter Kunde" autocomplete="off">
+        <input type="text" id="anlagenstammFilterType" placeholder="Type" autocomplete="off">
+        <input type="text" id="anlagenstammFilterLand" placeholder="Land (Kundenadresse)" autocomplete="off">
+      </div>
+      <div class="anlagenstamm-search-actions">
         <button type="button" class="btn btn-primary" id="btnAnlagenstammSearch">Suchen</button>
       </div>
-      <div id="anlagenstammMessage" class="empty">Bitte Fabrikationsnummer eingeben.</div>
+      <div id="anlagenstammSearchResults" class="anlagenstamm-search-results" style="display:none" aria-label="Suchergebnisse"></div>
+      <div id="anlagenstammMessage" class="empty">Suchkriterien eingeben und „Suchen“ wählen.</div>
       <div id="anlagenstammCard"></div>
       <div id="anlagenstammFiles" class="anlagenstamm-files-list" style="display:none"></div>
       <div id="anlagenstammPnSection" class="anlagenstamm-pn-section" style="display:none">
