@@ -186,6 +186,18 @@ async function getDb() {
     )`);
   } catch (e) { /* existiert evtl. */ }
   try {
+    sqlDb.run(`CREATE TABLE IF NOT EXISTS job_hotel_selection (
+      job_id INTEGER PRIMARY KEY,
+      hotel_id INTEGER,
+      comment TEXT,
+      rating_stars INTEGER,
+      rating_avg REAL,
+      rating_count INTEGER DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    )`);
+  } catch (e) { /* existiert evtl. */ }
+  try {
     sqlDb.run(`CREATE TABLE IF NOT EXISTS absence_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       server_id INTEGER,
@@ -953,12 +965,19 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
       }
 
+      const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+      if (!authHeader.Authorization) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Dispo-Zugangsdaten fehlen: Benutzername und Passwort in den Einstellungen eintragen (erforderlich für Projektordner holen).',
+        });
+      }
+
       res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
       res.flushHeaders();
 
       send({ phase: 'refresh' });
       const refreshUrl = dispoBaseUrl + '/api/job_project_refresh.php';
-      const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
       const refreshTimeoutMs = 60000; // 1 Min – Dispo-Refresh darf nicht ewig hängen
       const refreshAbort = new AbortController();
       const refreshTimeoutId = setTimeout(() => refreshAbort.abort(), refreshTimeoutMs);
@@ -971,8 +990,11 @@ function createApp(db) {
         });
         clearTimeout(refreshTimeoutId);
         const refreshData = await refreshRes.json().catch(() => ({}));
-        if (!refreshRes.ok) {
-          send({ phase: 'error', error: refreshData.error || 'Dispo-Aktualisierung fehlgeschlagen.' });
+        if (!refreshRes.ok || (refreshData && refreshData.ok === false)) {
+          send({
+            phase: 'error',
+            error: (refreshData && refreshData.error) ? String(refreshData.error) : 'Dispo-Aktualisierung fehlgeschlagen (HTTP ' + refreshRes.status + ').',
+          });
           safeEnd();
           return;
         }
@@ -985,15 +1007,21 @@ function createApp(db) {
       }
       send({ phase: 'refresh_done' });
 
-      const authHeaderForList = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
-
       async function listEntries(relPath) {
         const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
         const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + pathQ;
-        const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeaderForList) });
-        if (!r.ok) throw new Error('Dispo-Liste fehlgeschlagen: ' + r.status);
-        const data = await r.json();
-        return (data && data.entries) ? data.entries : [];
+        const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader) });
+        const text = await r.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (_) {
+          throw new Error('Dispo-Liste: ungültige Antwort (' + r.status + '): ' + text.slice(0, 160));
+        }
+        if (!r.ok || data.ok === false) {
+          throw new Error((data && data.error) ? String(data.error) : 'Dispo-Liste fehlgeschlagen (HTTP ' + r.status + ').');
+        }
+        return Array.isArray(data.entries) ? data.entries : [];
       }
 
       function collectFilePaths(relPath, list) {
@@ -1003,9 +1031,10 @@ function createApp(db) {
             const name = e.name || '';
             if (!name || name === '.' || name === '..') continue;
             const childRel = relPath ? relPath + '/' + name : name;
-            if (e.type === 'dir') {
+            const t = String(e.type || '').toLowerCase();
+            if (t === 'dir') {
               next.push(collectFilePaths(childRel, list));
-            } else if (e.type === 'file') {
+            } else if (t === 'file') {
               list.push(childRel);
             }
           }
@@ -1017,13 +1046,35 @@ function createApp(db) {
       await collectFilePaths('', fileList);
       const total = fileList.length;
       send({ phase: 'download', total });
+      if (total === 0) {
+        send({ phase: 'done', message: 'Keine Dateien im Projektordner auf der Dispo (nach Aktualisierung).' }, () => {
+          safeEnd();
+        });
+        return;
+      }
 
       for (let i = 0; i < fileList.length; i++) {
         const relPath = fileList[i];
         const url = dispoBaseUrl + '/api/job_project_file_download.php?technician_id=' + technicianId + '&job_id=' + jobId + '&path=' + encodeURIComponent(relPath);
-        const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeaderForList) });
-        if (!r.ok) throw new Error('Download fehlgeschlagen: ' + relPath);
+        const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader) });
         const buf = Buffer.from(await r.arrayBuffer());
+        if (!r.ok) {
+          let msg = 'HTTP ' + r.status;
+          try {
+            const j = JSON.parse(buf.toString('utf8'));
+            if (j && j.error) msg = String(j.error);
+          } catch (_) { /* Rohbytes */ }
+          throw new Error('Download fehlgeschlagen (' + relPath + '): ' + msg);
+        }
+        const ctDl = (r.headers.get('content-type') || '').toLowerCase();
+        if (ctDl.includes('application/json')) {
+          try {
+            const j = JSON.parse(buf.toString('utf8'));
+            if (j && j.ok === false && j.error) throw new Error('Download fehlgeschlagen (' + relPath + '): ' + String(j.error));
+          } catch (e) {
+            if (e.message && e.message.startsWith('Download fehlgeschlagen')) throw e;
+          }
+        }
         const localPath = path.join(targetDir, relPath.replace(/\//g, path.sep));
         const dir = path.dirname(localPath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -1570,11 +1621,14 @@ function createApp(db) {
         jha.endkunde AS hotel_endkunde, jha.street AS hotel_street, jha.house_number AS hotel_house_number,
         jha.zip AS hotel_zip, jha.city AS hotel_city, jha.country AS hotel_country,
         jha.address_extra_1 AS hotel_address_extra_1, jha.address_extra_2 AS hotel_address_extra_2,
-        jha.phone AS hotel_phone, jha.email AS hotel_email, jha.website AS hotel_website
+        jha.phone AS hotel_phone, jha.email AS hotel_email, jha.website AS hotel_website,
+        jhs.hotel_id AS hotel_id, jhs.comment AS hotel_comment, jhs.rating_stars AS hotel_rating_stars,
+        jhs.rating_avg AS hotel_rating_avg, jhs.rating_count AS hotel_rating_count
       FROM jobs j
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
+      LEFT JOIN job_hotel_selection jhs ON jhs.job_id = j.id
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
         AND (
           EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
@@ -1929,6 +1983,28 @@ function createApp(db) {
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     const url = `${base}/dispo_api/api/mechanik_ted_excel_list.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}`;
+    try {
+      const r = await fetch(url, auth ? { headers: auth } : {});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      }
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/job_hotels_from_dispo', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const { baseUrl, jobId: rawJobId, serverUsername, serverPassword } = req.body || {};
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const jobId = parseInt(rawJobId, 10);
+    if (!technicianId || !base || !Number.isFinite(jobId)) {
+      return res.status(400).json({ ok: false, error: 'baseUrl, jobId und technician_id erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+    const url = `${base}/dispo_api/api/job_hotels_by_fab.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}`;
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
       const data = await r.json().catch(() => ({}));
@@ -2494,6 +2570,36 @@ function createApp(db) {
     return m ? parseInt(m[1], 10) : null;
   }
 
+  /** Zahlen-FN aus jobs.fabrikationsnummern (JSON-Leistungszeilen oder Fallback Split-Liste). */
+  function fabNumbersFromJobFabrikationsnummern(raw) {
+    const set = new Set();
+    const addNum = (v) => {
+      const d = String(v || '').replace(/\D/g, '');
+      if (!d) return;
+      const n = parseInt(d, 10);
+      if (Number.isFinite(n) && n > 0) set.add(n);
+    };
+    if (raw == null || raw === '') return set;
+    const s = String(raw).trim();
+    if (!s) return set;
+    try {
+      const parsed = JSON.parse(s);
+      const rows = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
+      for (const row of rows) {
+        if (!row || typeof row !== 'object') continue;
+        const fab = row.fabrikationsnummer != null ? row.fabrikationsnummer : row.Fabrikationsnummer;
+        addNum(fab);
+      }
+      if (set.size > 0) return set;
+    } catch (_) {
+      /* kein JSON */
+    }
+    for (const part of s.split(/[\s;,]+/)) {
+      if (part.trim()) addNum(part);
+    }
+    return set;
+  }
+
   /**
    * Findet den vorhandenen Anlagenordner für eine FN unter Dokumente_Anlage.
    * Möglichkeit 1: Ordner = eine FN (exakt).
@@ -2552,7 +2658,7 @@ function createApp(db) {
       }
 
       const jobRow = db.prepare(`
-        SELECT j.id, j.status FROM jobs j
+        SELECT j.id, j.status, j.fabrikationsnummern FROM jobs j
         WHERE j.id = ?
           AND (
             EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
@@ -2573,9 +2679,17 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'Im Dateinamen konnte keine Fabrikationsnummer erkannt werden (z. B. FN11952).' });
       }
 
-      const folderName = findParameterlistenFolder(docAnlagePath, fn);
+      const fnAllowedOnJob = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern).has(fn);
+      let folderName = findParameterlistenFolder(docAnlagePath, fn);
+      if (!folderName && fnAllowedOnJob) {
+        folderName = String(fn);
+      }
       if (!folderName) {
-        return res.status(400).json({ ok: false, error: 'FN im Auftrag nicht vorhanden' });
+        return res.status(400).json({
+          ok: false,
+          error:
+            'FN passt nicht zum Auftrag (Fabrikationsnummer in den Projektdaten prüfen; Dateiname z. B. FN12186_….csv).',
+        });
       }
 
       const paramDir = path.join(docAnlagePath, folderName, 'Montage', 'Parameter');
@@ -2752,7 +2866,7 @@ function createApp(db) {
   app.patch('/api/job', express.json(), (req, res) => {
     const technicianId = getTechnicianId(req);
     const body = req.body || {};
-    const { job_id, status, description, fabrikationsnummern } = body;
+    const { job_id, status, description, fabrikationsnummern, hotel_selection } = body;
     if (!technicianId || !job_id) {
       return res.status(400).json({ ok: false, error: 'technician_id und job_id erforderlich.' });
     }
@@ -2762,7 +2876,7 @@ function createApp(db) {
     }
     const effectiveJobId = gate.localId;
     const allowed = ['geplant', 'in_arbeit', 'erledigt'];
-    const hotelKeys = ['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_address_extra_1', 'hotel_address_extra_2', 'hotel_phone', 'hotel_email', 'hotel_website'];
+    const hotelKeys = ['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_address_extra_1', 'hotel_address_extra_2', 'hotel_phone', 'hotel_email', 'hotel_website', 'hotel_comment', 'hotel_rating_stars'];
     const hasHotelPayload = hotelKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k));
     try {
       if (hasHotelPayload) {
@@ -2788,6 +2902,34 @@ function createApp(db) {
         db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'hotel_address', JSON.stringify(hotelPayload));
         save();
         return res.json({ ok: true, updated: 'hotel_address' });
+      }
+      if (hotel_selection && typeof hotel_selection === 'object') {
+        const hotelId = Number(hotel_selection.hotel_id || 0);
+        if (!Number.isFinite(hotelId) || hotelId <= 0) {
+          return res.status(400).json({ ok: false, error: 'hotel_selection.hotel_id fehlt oder ungültig.' });
+        }
+        const comment = hotel_selection.comment != null ? String(hotel_selection.comment) : null;
+        let ratingStars = null;
+        if (Object.prototype.hasOwnProperty.call(hotel_selection, 'rating_stars') && hotel_selection.rating_stars !== null && hotel_selection.rating_stars !== '') {
+          ratingStars = Math.max(0, Math.min(5, Number(hotel_selection.rating_stars)));
+          if (!Number.isFinite(ratingStars)) ratingStars = null;
+        }
+        const ratingAvg = hotel_selection.rating_avg != null ? Number(hotel_selection.rating_avg) : null;
+        const ratingCount = hotel_selection.rating_count != null ? Number(hotel_selection.rating_count) : 0;
+        db.prepare(`
+          INSERT INTO job_hotel_selection (job_id, hotel_id, comment, rating_stars, rating_avg, rating_count, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+          ON CONFLICT(job_id) DO UPDATE SET
+            hotel_id=excluded.hotel_id,
+            comment=excluded.comment,
+            rating_stars=excluded.rating_stars,
+            rating_avg=excluded.rating_avg,
+            rating_count=excluded.rating_count,
+            updated_at=datetime('now')
+        `).run(effectiveJobId, hotelId, comment, ratingStars, ratingAvg, ratingCount);
+        db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'hotel_selection', JSON.stringify({ hotel_selection: { hotel_id: hotelId, comment: comment, rating_stars: ratingStars } }));
+        save();
+        return res.json({ ok: true, updated: 'hotel_selection' });
       }
       if (status && allowed.includes(status)) {
         const r = db.prepare(`
@@ -3909,6 +4051,24 @@ function insertOrUpdateJobHotel(db, jobId, j) {
   } else {
     db.prepare('INSERT INTO job_hotel_addresses (job_id, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(jobId, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website);
   }
+  const hotelId = Number(j.hotel_id || 0);
+  const comment = j.hotel_comment != null ? String(j.hotel_comment) : null;
+  const ratingStars = (j.hotel_rating_stars != null && String(j.hotel_rating_stars).trim() !== '') ? Number(j.hotel_rating_stars) : null;
+  const ratingAvg = (j.hotel_rating_avg != null && String(j.hotel_rating_avg).trim() !== '') ? Number(j.hotel_rating_avg) : null;
+  const ratingCount = (j.hotel_rating_count != null && String(j.hotel_rating_count).trim() !== '') ? Number(j.hotel_rating_count) : 0;
+  if (Number.isFinite(hotelId) && hotelId > 0) {
+    db.prepare(`
+      INSERT INTO job_hotel_selection (job_id, hotel_id, comment, rating_stars, rating_avg, rating_count, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(job_id) DO UPDATE SET
+        hotel_id=excluded.hotel_id,
+        comment=excluded.comment,
+        rating_stars=excluded.rating_stars,
+        rating_avg=excluded.rating_avg,
+        rating_count=excluded.rating_count,
+        updated_at=datetime('now')
+    `).run(jobId, hotelId, comment, Number.isFinite(ratingStars) ? ratingStars : null, Number.isFinite(ratingAvg) ? ratingAvg : null, Number.isFinite(ratingCount) ? ratingCount : 0);
+  }
 }
 
 function insertOrUpdateJobAddress(db, jobId, j) {
@@ -3964,7 +4124,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
   const pending = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
   const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authHeader || {}) };
   for (const p of pending) {
-    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address')) {
+    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address' || p.action === 'hotel_selection')) {
       let job = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(p.entity_id);
       if (!job) job = db.prepare('SELECT id, server_id FROM jobs WHERE server_id = ?').get(p.entity_id);
       const hasServerId = job && job.server_id != null && String(job.server_id).trim() !== '';
@@ -3997,7 +4157,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       const techIdForPush = (techRow && techRow.technician_id != null) ? techRow.technician_id : technicianId;
       const headerForJob = { 'Content-Type': 'application/json', 'X-Technician-Id': String(techIdForPush), ...(authHeader || {}) };
       const payload = JSON.parse(p.payload || '{}');
-      const body = p.action === 'hotel_address' ? { job_id: serverJobId, ...payload } : { job_id: serverJobId, ...payload };
+      const body = { job_id: serverJobId, ...payload };
       const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, { method: 'PATCH', headers: headerForJob, body: JSON.stringify(body) });
       if (!r.ok) {
         let errMsg = 'Dispo: ' + r.status;

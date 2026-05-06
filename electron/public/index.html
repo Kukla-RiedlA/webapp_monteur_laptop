@@ -308,6 +308,27 @@
     @media (max-width: 720px) { .modal-leistung-cards { grid-template-columns: 1fr; } }
     .modal-leistung-card { margin-bottom: 0; width: fit-content; max-width: 100%; }
     .modal-leistung-card .modal-leistung-wrap { margin-top: 0; }
+    /* Mechanik TED + PROJEKTE NEU je Fabrikationsnummer */
+    .kukla-ted-fab-list { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.35rem; }
+    .kukla-ted-fab-box.card {
+      margin: 0; padding: 0.65rem 0.85rem; max-width: 100%;
+      border: 1px solid var(--accent); border-radius: 8px; background: rgba(0,0,0,0.12);
+      box-sizing: border-box;
+    }
+    .kukla-ted-fab-head { margin-bottom: 0.45rem; font-size: 0.95rem; }
+    .kukla-ted-fab-body { min-width: 0; }
+    .kukla-ted-ul { margin: 0 0 0.5rem 1.1rem; padding: 0; }
+    .kukla-ted-ul li { margin: 0.25rem 0; }
+    .kukla-ted-empty { margin: 0 0 0.5rem 0; font-size: 0.85rem; }
+    .kukla-ted-pn-details { margin-top: 0.35rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.45rem; }
+    .kukla-ted-pn-summary { cursor: pointer; font-size: 0.88rem; color: var(--muted); user-select: none; list-style: none; }
+    .kukla-ted-pn-summary::-webkit-details-marker { display: none; }
+    .kukla-ted-pn-summary::before { content: '▸ '; display: inline-block; transition: transform 0.12s ease; }
+    .kukla-ted-pn-details[open] > .kukla-ted-pn-summary::before { transform: rotate(90deg); }
+    .kukla-ted-pn-path {
+      margin-top: 0.4rem; padding: 0.45rem 0.5rem; font-size: 0.85rem; line-height: 1.35;
+      word-break: break-word; background: rgba(0,0,0,0.2); border-radius: 4px; border: 1px solid rgba(255,255,255,0.06);
+    }
     .anlage-detail-modal.modal-overlay { display: flex; align-items: center; justify-content: center; padding: 1rem; background: rgba(0,0,0,0.5); }
     .anlage-detail-modal .modal-box.anlage-detail-content { background: var(--card); border: 1px solid var(--accent); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); max-width: 640px; width: 95%; max-height: 90vh; overflow-y: auto; padding: 1.25rem; margin: 0; }
     .anlage-detail-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.5rem; margin-top: 0.75rem; }

@@ -841,6 +841,7 @@
       content.innerHTML = renderJobDetailsContent(job);
       bindLeistungActions();
       loadMechanikTedLinks(job);
+      loadHotelChoicesByFab(job);
       if (typeof loadDienstreiseExplorer === 'function') loadDienstreiseExplorer(jobDetailsJobId, '');
       if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
     }
@@ -1062,9 +1063,23 @@
     html += '<dt>Bestellnummer</dt><dd>' + v(job.bestellnummer) + '</dd></dl></div>';
     html += '</div></div>';
     (function () {
+      function renderHotelRatingStars(avgRaw, countRaw) {
+        var count = Number(countRaw || 0);
+        var avg = Number(avgRaw);
+        if (!count || !isFinite(avg)) return '<span class="muted">Keine Bewertung</span>';
+        var rounded = Math.round(avg * 2) / 2;
+        var full = Math.floor(rounded);
+        var hasHalf = (rounded - full) >= 0.5;
+        var empty = 5 - full - (hasHalf ? 1 : 0);
+        var stars = '';
+        for (var i = 0; i < full; i++) stars += '★';
+        if (hasHalf) stars += '½';
+        for (var j = 0; j < empty; j++) stars += '☆';
+        return '<span class="hotel-rating-stars">' + escapeHtml(stars) + '</span> <span class="muted">(' + escapeHtml(String(count)) + ')</span>';
+      }
       var hotelLines = [];
       var hotelName = (job.hotel_endkunde || '').trim();
-      if (hotelName) hotelLines.push(escapeHtml(hotelName));
+      if (hotelName) hotelLines.push(escapeHtml(hotelName) + ' ' + renderHotelRatingStars(job.hotel_rating_avg, job.hotel_rating_count));
       var hotelStreet = [ (job.hotel_street || '').trim(), (job.hotel_house_number || '').trim() ].filter(Boolean).join(' ');
       if (hotelStreet) hotelLines.push(escapeHtml(hotelStreet));
       var hotelZipCity = [ (job.hotel_zip || '').trim(), (job.hotel_city || '').trim() ].filter(Boolean).join(' ');
@@ -1125,7 +1140,7 @@
         var i = indices[k];
         var row = leistungRows[i];
         out += '<tr>';
-        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.fabrikationsnummer) + '</td>';
+        out += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCell(row.fabrikationsnummer) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
         out += '</tr>';
@@ -1149,7 +1164,7 @@
         var row = leistungRows[i];
         if (!row.fabrikationsnummer && !row.type && !row.leistung && !row.geliefert_ueber && !row.projekt && !row.bemerkungen) continue;
         html += '<tr>';
-        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.fabrikationsnummer) + '</td>';
+        html += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCell(row.fabrikationsnummer) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
         html += '</tr>';
@@ -1160,6 +1175,46 @@
     html += '<div class="modal-detail-section" id="mechanikTedLinksContainer"><h4>Mechanik-Excel (TED)</h4><p class="muted">Wird geladen…</p></div>';
     if (job.description) html += '<div class="modal-detail-section modal-detail-section-description"><h4>Bemerkungen</h4><div class="modal-description-wrap"><div class="modal-description-display">' + formatDescriptionForDisplay(job.description) + '</div></div></div>';
     return html;
+  }
+
+  /** @returns {string[]} Fabrikationsnummern in Auftragsreihenfolge (wie Modal-Tabelle). */
+  function parseJobFabrikationsnummernOrdered(job) {
+    var raw = job && job.fabrikationsnummern;
+    if (raw == null || raw === '') return [];
+    try {
+      var parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map(function (r) {
+          if (r && typeof r === 'object') return String(r.fabrikationsnummer || r.Fabrikationsnummer || '').trim();
+          if (r != null) return String(r).trim();
+          return '';
+        }).filter(Boolean);
+      }
+    } catch (e) { /* legacy Semikolon/Komma */ }
+    return String(raw).split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
+  }
+
+  /** Kurzname oder Index-Relativpfad zu PROJEKTE NEU (Schlüssel inkl. numerischer FN-Normalisierung). */
+  function projekteNeuDisplayPathForFab(fab, pnByFab, pnRelByFab) {
+    var keys = [];
+    var s = String(fab || '').trim();
+    if (s) keys.push(s);
+    if (s && /^\d+$/.test(s)) {
+      var n = String(parseInt(s, 10));
+      if (keys.indexOf(n) === -1) keys.push(n);
+    }
+    var i;
+    for (i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      var label = pnByFab && pnByFab[k];
+      if (label != null && String(label).trim() !== '') return String(label).trim();
+    }
+    for (i = 0; i < keys.length; i++) {
+      var k2 = keys[i];
+      var rel = pnRelByFab && pnRelByFab[k2];
+      if (rel != null && String(rel).trim() !== '') return String(rel).trim();
+    }
+    return '';
   }
 
   function loadMechanikTedLinks(job) {
@@ -1194,26 +1249,56 @@
           return;
         }
         var byFab = result.data.by_fab || {};
-        var keys = Object.keys(byFab);
-        if (keys.length === 0) {
-          el.innerHTML = '<p class="muted">Keine TED-Dateien im Index für diese Fabrikationsnummern.</p>';
+        var pnByFab = result.data.pn_by_fab || {};
+        var pnRelByFab = result.data.pn_folder_relpath_by_fab || {};
+        var keysFromApi = Object.keys(byFab);
+        if (keysFromApi.length === 0) {
+          el.innerHTML = '<p class="muted">Keine Fabrikationsnummern am Auftrag (oder keine Daten von der Dispo).</p>';
           return;
         }
-        var root = baseUrl.replace(/\/$/, '');
-        var html = '';
-        keys.forEach(function (fab) {
-          var files = byFab[fab] || [];
-          if (files.length === 0) return;
-          html += '<div class="kukla-ted-fab"><strong>FN ' + escapeHtml(String(fab)) + '</strong><ul>';
-          files.forEach(function (f) {
-            var href = root + (f.download_path || '');
-            var dt = (f.file_mtime || '').toString();
-            var w = f.fn_matches_filename === false ? ' ⚠' : '';
-            html += '<li><button type="button" class="btn btn-ghost ted-open-file" data-ted-url="' + String(href).replace(/"/g, '&quot;') + '">' + escapeHtml(String(f.file_name || '')) + '</button> <span class="muted">' + escapeHtml(dt) + '</span>' + w + '</li>';
-          });
-          html += '</ul></div>';
+        var fabOrder = parseJobFabrikationsnummernOrdered(job);
+        var seenFab = {};
+        var orderedFabs = [];
+        fabOrder.forEach(function (f) {
+          if (!f || seenFab[f]) return;
+          if (keysFromApi.indexOf(f) === -1) return;
+          seenFab[f] = true;
+          orderedFabs.push(f);
         });
-        el.innerHTML = html || '<p class="muted">Keine Einträge.</p>';
+        keysFromApi.forEach(function (f) {
+          if (!seenFab[f]) {
+            seenFab[f] = true;
+            orderedFabs.push(f);
+          }
+        });
+        var root = baseUrl.replace(/\/$/, '');
+        var html = '<div class="kukla-ted-fab-list">';
+        orderedFabs.forEach(function (fab) {
+          var files = byFab[fab] || [];
+          var pnLabel = projekteNeuDisplayPathForFab(fab, pnByFab, pnRelByFab);
+          html += '<div class="kukla-ted-fab-box card">';
+          html += '<div class="kukla-ted-fab-head"><strong>FN ' + escapeHtml(String(fab)) + '</strong></div>';
+          html += '<div class="kukla-ted-fab-body">';
+          if (files.length === 0) {
+            html += '<p class="muted kukla-ted-empty">Keine TED-Dateien im Index für diese FN.</p>';
+          } else {
+            html += '<ul class="kukla-ted-ul">';
+            files.forEach(function (f) {
+              var href = root + (f.download_path || '');
+              var dt = (f.file_mtime || '').toString();
+              var w = f.fn_matches_filename === false ? ' ⚠' : '';
+              html += '<li><button type="button" class="btn btn-ghost ted-open-file" data-ted-url="' + String(href).replace(/"/g, '&quot;') + '">' + escapeHtml(String(f.file_name || '')) + '</button> <span class="muted">' + escapeHtml(dt) + '</span>' + w + '</li>';
+            });
+            html += '</ul>';
+          }
+          html += '<details class="kukla-ted-pn-details">';
+          html += '<summary class="kukla-ted-pn-summary">Projekte Neu Pfad</summary>';
+          html += '<div class="kukla-ted-pn-path">' + (pnLabel ? escapeHtml(pnLabel) : '<span class="muted">—</span>') + '</div>';
+          html += '</details>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+        el.innerHTML = html;
         el.querySelectorAll('.ted-open-file[data-ted-url]').forEach(function (btn) {
           btn.addEventListener('click', function () {
             var fileUrl = btn.getAttribute('data-ted-url') || '';
@@ -1225,6 +1310,102 @@
       .catch(function (e) {
         el.innerHTML = '<p class="muted">Mechanik-Excel (TED): Offline oder Dispo nicht erreichbar.</p>';
       });
+  }
+
+  function loadHotelChoicesByFab(job) {
+    var content = document.getElementById('viewProjektdatenContent');
+    if (!content || !job) return;
+    var baseUrl = getDispoBaseUrl();
+    var techId = getTechId();
+    if (!baseUrl || !techId) return;
+    var jobId = (job.server_id != null && job.server_id !== '') ? job.server_id : job.id;
+    if (jobId == null || jobId === '') return;
+    fetch(API_BASE + '/api/job_hotels_from_dispo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+      body: JSON.stringify({
+        baseUrl: baseUrl,
+        jobId: jobId,
+        serverUsername: getDispoUsername(),
+        serverPassword: getDispoPassword()
+      })
+    }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.data || !res.data.ok) return;
+        var byFab = res.data.by_fab || {};
+        content.querySelectorAll('.hotel-fab-cell[data-fab]').forEach(function (cell) {
+          var fab = (cell.getAttribute('data-fab') || '').trim();
+          if (!fab || !Array.isArray(byFab[fab]) || byFab[fab].length === 0) return;
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-ghost';
+          btn.style.marginLeft = '8px';
+          btn.textContent = '🏨';
+          btn.title = 'Hotels zu dieser FN anzeigen';
+          btn.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var hotels = byFab[fab] || [];
+            openHotelSelectionByFabModal(job, hotels);
+          });
+          cell.appendChild(btn);
+        });
+      }).catch(function () {});
+  }
+
+  function openHotelSelectionByFabModal(job, hotels) {
+    if (!Array.isArray(hotels) || hotels.length === 0) return;
+    var modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    var html = '<div class="modal-box"><h3>Hoteladresse auswählen</h3><div class="modal-detail-section">';
+    hotels.forEach(function (h, idx) {
+      var name = (h.name || '').trim() || 'Hotel';
+      var line2 = [h.street || '', h.house_number || ''].filter(Boolean).join(' ');
+      var line3 = [h.zip || '', h.city || ''].filter(Boolean).join(' ');
+      html += '<div style="border:1px solid #3b4756;border-radius:8px;padding:8px;margin-bottom:8px;">';
+      html += '<div><strong>' + escapeHtml(name) + '</strong></div>';
+      if (line2) html += '<div class="muted">' + escapeHtml(line2) + '</div>';
+      if (line3) html += '<div class="muted">' + escapeHtml(line3) + '</div>';
+      html += '<button type="button" class="btn btn-primary js-hotel-select" data-idx="' + String(idx) + '">Als Auftrags-Hotel übernehmen</button>';
+      html += '</div>';
+    });
+    html += '</div><div class="modal-actions"><button type="button" class="btn btn-ghost" id="hotelSelectClose">Schließen</button></div></div>';
+    modal.innerHTML = html;
+    document.body.appendChild(modal);
+    function close() { if (modal && modal.parentNode) modal.parentNode.removeChild(modal); }
+    var closeBtn = modal.querySelector('#hotelSelectClose');
+    if (closeBtn) closeBtn.addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    modal.querySelectorAll('.js-hotel-select').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var idx = Number(btn.getAttribute('data-idx') || -1);
+        if (!Number.isFinite(idx) || idx < 0 || !hotels[idx]) return;
+        var h = hotels[idx];
+        api('/api/job', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            job_id: Number(job.id),
+            hotel_endkunde: h.name || '',
+            hotel_street: h.street || '',
+            hotel_house_number: h.house_number || '',
+            hotel_zip: h.zip || '',
+            hotel_city: h.city || '',
+            hotel_country: h.country || '',
+            hotel_address_extra_1: h.address_extra_1 || '',
+            hotel_address_extra_2: h.address_extra_2 || '',
+            hotel_phone: h.phone || '',
+            hotel_email: h.email || '',
+            hotel_website: h.website || '',
+            hotel_selection: { hotel_id: Number(h.id || 0), comment: '', rating_stars: null }
+          })
+        }).then(function () {
+          close();
+          openJobDetailsModal(job.id);
+        }).catch(function (e) {
+          alert('Hotelauswahl fehlgeschlagen: ' + e.message);
+        });
+      });
+    });
   }
 
   function openTedExcelOnDevice(fileUrl) {
@@ -1619,6 +1800,14 @@
     modalHtml += '<label>Telefon</label><input type="tel" id="hotel_edit_phone" value="' + attr(job.hotel_phone) + '" placeholder="+43 ...">';
     modalHtml += '<label>E-Mail</label><input type="email" id="hotel_edit_email" value="' + attr(job.hotel_email) + '">';
     modalHtml += '<label>Webseite</label><input type="url" id="hotel_edit_website" value="' + attr(job.hotel_website) + '" placeholder="https://">';
+    modalHtml += '<label>Kommentar zum Hotel</label><textarea id="hotel_edit_comment" rows="2" placeholder="Interner Kommentar">' + attr(job.hotel_comment || '') + '</textarea>';
+    modalHtml += '<label>Bewertung</label><select id="hotel_edit_rating">';
+    modalHtml += '<option value="">Keine Bewertung</option>';
+    for (var rs = 0; rs <= 5; rs++) {
+      var selRs = (String(job.hotel_rating_stars || '') === String(rs)) ? ' selected' : '';
+      modalHtml += '<option value="' + String(rs) + '"' + selRs + '>' + String(rs) + ' Sterne</option>';
+    }
+    modalHtml += '</select>';
     modalHtml += '<div class="hotel-modal-actions"><button type="button" class="btn btn-primary" id="hotelModalSave">Speichern</button> <button type="button" class="btn btn-ghost" id="hotelModalCancel">Abbrechen</button></div>';
     modalHtml += '</div></div>';
     var existing = document.getElementById('hotelAddressModalOverlay');
@@ -1683,11 +1872,13 @@
         hotel_address_extra_2: (document.getElementById('hotel_edit_extra_2') && document.getElementById('hotel_edit_extra_2').value) || '',
         hotel_phone: (document.getElementById('hotel_edit_phone') && document.getElementById('hotel_edit_phone').value) || '',
         hotel_email: (document.getElementById('hotel_edit_email') && document.getElementById('hotel_edit_email').value) || '',
-        hotel_website: (document.getElementById('hotel_edit_website') && document.getElementById('hotel_edit_website').value) || ''
+        hotel_website: (document.getElementById('hotel_edit_website') && document.getElementById('hotel_edit_website').value) || '',
+        hotel_comment: (document.getElementById('hotel_edit_comment') && document.getElementById('hotel_edit_comment').value) || '',
+        hotel_rating_stars: (document.getElementById('hotel_edit_rating') && document.getElementById('hotel_edit_rating').value) || ''
       };
       api('/api/job', { method: 'PATCH', body: JSON.stringify(payload) }).then(function () {
         closeModal();
-        var updatedJob = { ...job, hotel_endkunde: payload.hotel_endkunde, hotel_street: payload.hotel_street, hotel_house_number: payload.hotel_house_number, hotel_zip: payload.hotel_zip, hotel_city: payload.hotel_city, hotel_country: payload.hotel_country, hotel_address_extra_1: payload.hotel_address_extra_1, hotel_address_extra_2: payload.hotel_address_extra_2, hotel_phone: payload.hotel_phone, hotel_email: payload.hotel_email, hotel_website: payload.hotel_website };
+        var updatedJob = { ...job, hotel_endkunde: payload.hotel_endkunde, hotel_street: payload.hotel_street, hotel_house_number: payload.hotel_house_number, hotel_zip: payload.hotel_zip, hotel_city: payload.hotel_city, hotel_country: payload.hotel_country, hotel_address_extra_1: payload.hotel_address_extra_1, hotel_address_extra_2: payload.hotel_address_extra_2, hotel_phone: payload.hotel_phone, hotel_email: payload.hotel_email, hotel_website: payload.hotel_website, hotel_comment: payload.hotel_comment, hotel_rating_stars: payload.hotel_rating_stars };
         var viewProjektdaten = document.getElementById('viewProjektdaten');
         var viewStart = document.getElementById('viewStart');
         var viewEinstellungen = document.getElementById('viewEinstellungen');
@@ -4390,7 +4581,7 @@
       dispoPassword: getDispoPassword(),
       include_bilder: includeBilder
     };
-    var copyTimeoutMs = 120000; // 2 Min – wenn bis dahin weder done noch error kam, UI zurücksetzen
+    var copyTimeoutMs = 600000; // 10 Min – große Projektordner / langsame Verbindung
     var copyTimeoutId = setTimeout(function () {
       copyTimeoutId = null;
       var wrap = document.getElementById('dienstreiseCopyProgressWrap');
@@ -4414,6 +4605,23 @@
           throw new Error(data.error || 'Fehler ' + response.status);
         }).catch(function () { throw new Error('Fehler ' + response.status); });
       }
+      var ctPeek = (response.headers.get('content-type') || '').toLowerCase();
+      if (ctPeek.indexOf('json') !== -1 && ctPeek.indexOf('ndjson') === -1) {
+        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
+        return response.json().then(function (data) {
+          var msg = (data && data.error) ? String(data.error) : '';
+          throw new Error(msg || 'Server hat JSON statt Datenstrom gesendet (Projektordner holen).');
+        }).catch(function (e) {
+          if (e instanceof Error && e.message) throw e;
+          throw new Error('Antwort konnte nicht gelesen werden.');
+        });
+      }
+      if (!response.body || typeof response.body.getReader !== 'function') {
+        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
+        return response.text().then(function (t) {
+          throw new Error(t ? t.slice(0, 200) : 'Kein Stream-Datenstrom (Projektordner holen).');
+        });
+      }
       var reader = response.body.getReader();
       var decoder = new TextDecoder();
       var buffer = '';
@@ -4433,6 +4641,13 @@
         if (!line) return;
         var data;
         try { data = JSON.parse(line); } catch (e) { return; }
+        if (data.ok === false && data.error && !data.phase) {
+          hadError = true;
+          finish();
+          var hApi = document.getElementById('dienstreiseCopyHint');
+          if (hApi) hApi.textContent = String(data.error);
+          return;
+        }
         if (data.phase === 'refresh') {
           if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
         } else if (data.phase === 'refresh_done') {
@@ -4447,7 +4662,7 @@
           completed = true;
           finish();
           var h = document.getElementById('dienstreiseCopyHint');
-          if (h) h.textContent = 'Fertig.';
+          if (h) h.textContent = (data.message != null && String(data.message).trim()) ? String(data.message).trim() : 'Fertig.';
           if (getDienstreiseExplorerJobId()) loadDienstreiseExplorer(getDienstreiseExplorerJobId(), dienstreiseExplorerSubpath);
           setTimeout(function () { var x = document.getElementById('dienstreiseCopyHint'); if (x) x.textContent = ''; }, 3000);
         } else if (data.phase === 'error') {

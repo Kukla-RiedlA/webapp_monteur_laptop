@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.002.000
+- **Hotel/FN Workflow:** Hotelauswahl pro Fabrikationsnummer direkt im Auftragsdetail (FN-Zeile mit Hotel-Icon und Auswahl-Popup).
+- **Hotelbewertung:** Kommentar und Sternebewertung (0-5) im Hotel-Dialog; Anzeige des Durchschnitts als Sterne inkl. halber Sterne und Anzahl Bewertungen.
+- **Contract/Sync:** `hotel_selection`-Payload in lokalem Gateway/Sync ergänzt; API-Contract-Doku um neue Hotel-/Rating-Felder aktualisiert.
+
 ## V 1.001.020
 - **Versionskennung:** Einheitlich **V 1.001.020** mit Dispo und Handy-PWA; `config/version.php`, `electron/version.json`, `electron/package.json` (SemVer `1.1.20`).
 
