@@ -1338,7 +1338,7 @@
           if (!fab || !Array.isArray(byFab[fab]) || byFab[fab].length === 0) return;
           var btn = document.createElement('button');
           btn.type = 'button';
-          btn.className = 'btn btn-ghost';
+          btn.className = 'btn btn-ghost fn-hotel-picker-btn';
           btn.style.marginLeft = '8px';
           btn.textContent = '🏨';
           btn.title = 'Hotels zu dieser FN anzeigen';
@@ -1347,6 +1347,11 @@
             ev.stopPropagation();
             var hotels = byFab[fab] || [];
             openHotelSelectionByFabModal(job, hotels);
+          });
+          // Sonst feuert dblclick auf der übergeordneten Zelle → Anlagendetails (siehe bindLeistungActions).
+          btn.addEventListener('dblclick', function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
           });
           cell.appendChild(btn);
         });
@@ -1593,7 +1598,8 @@
     var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
     content.querySelectorAll('.modal-leistung-cell-clickable').forEach(function (td) {
-      td.addEventListener('dblclick', function () {
+      td.addEventListener('dblclick', function (e) {
+        if (e.target && e.target.closest && e.target.closest('.fn-hotel-picker-btn')) return;
         var idx = td.getAttribute('data-row-index');
         if (idx !== null && idx !== '') openAnlageDetailModal(parseInt(idx, 10));
       });
