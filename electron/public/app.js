@@ -1333,9 +1333,29 @@
       .then(function (res) {
         if (!res.ok || !res.data || !res.data.ok) return;
         var byFab = res.data.by_fab || {};
+        function hotelListForFab(byFabMap, fabKey) {
+          var f = String(fabKey || '').trim();
+          if (!f) return null;
+          var list = byFabMap[f];
+          if (Array.isArray(list) && list.length > 0) return list;
+          if (/^\d+$/.test(f)) {
+            var num = parseInt(f, 10);
+            var k;
+            for (k in byFabMap) {
+              if (!Object.prototype.hasOwnProperty.call(byFabMap, k)) continue;
+              var ks = String(k).trim();
+              if (!/^\d+$/.test(ks)) continue;
+              if (parseInt(ks, 10) !== num) continue;
+              list = byFabMap[k];
+              if (Array.isArray(list) && list.length > 0) return list;
+            }
+          }
+          return null;
+        }
         content.querySelectorAll('.hotel-fab-cell[data-fab]').forEach(function (cell) {
           var fab = (cell.getAttribute('data-fab') || '').trim();
-          if (!fab || !Array.isArray(byFab[fab]) || byFab[fab].length === 0) return;
+          var hotels = hotelListForFab(byFab, fab);
+          if (!hotels) return;
           var btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'btn btn-ghost fn-hotel-picker-btn';
@@ -1345,7 +1365,6 @@
           btn.addEventListener('click', function (ev) {
             ev.preventDefault();
             ev.stopPropagation();
-            var hotels = byFab[fab] || [];
             openHotelSelectionByFabModal(job, hotels);
           });
           // Sonst feuert dblclick auf der übergeordneten Zelle → Anlagendetails (siehe bindLeistungActions).
@@ -1361,7 +1380,10 @@
   function openHotelSelectionByFabModal(job, hotels) {
     if (!Array.isArray(hotels) || hotels.length === 0) return;
     var modal = document.createElement('div');
-    modal.className = 'modal-overlay';
+    // .modal-overlay allein ist display:none – wie Anlagen-Dialog .anlage-detail-modal nutzen (sichtbar + zentriert).
+    modal.className = 'modal-overlay anlage-detail-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
     var html = '<div class="modal-box"><h3>Hoteladresse auswählen</h3><div class="modal-detail-section">';
     hotels.forEach(function (h, idx) {
       var name = (h.name || '').trim() || 'Hotel';
