@@ -1842,7 +1842,7 @@ function createApp(db) {
     if (!technicianId || !base) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
-    const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
+    const authHeader = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
     const url = `${base}/dispo_api/api/anlagenstamm_monteur_search.php?technician_id=${encodeURIComponent(technicianId)}`;
     const forward = {
       filter_fn: body.filter_fn,
@@ -1855,7 +1855,10 @@ function createApp(db) {
     try {
       const r = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(auth || {}) },
+        headers: Object.assign(
+          { 'Content-Type': 'application/json' },
+          dispoMonteurFetchHeaders(technicianId, authHeader)
+        ),
         body: JSON.stringify(forward)
       });
       const data = await r.json().catch(() => ({}));
@@ -1873,7 +1876,7 @@ function createApp(db) {
     if (!technicianId || !base) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
-    const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
+    const authHeader = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
     const url = `${base}/dispo_api/api/anlagenstamm_monteur_save.php?technician_id=${encodeURIComponent(technicianId)}`;
     const {
       baseUrl: _b,
@@ -1884,7 +1887,10 @@ function createApp(db) {
     try {
       const r = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(auth || {}) },
+        headers: Object.assign(
+          { 'Content-Type': 'application/json' },
+          dispoMonteurFetchHeaders(technicianId, authHeader)
+        ),
         body: JSON.stringify(savePayload)
       });
       const data = await r.json().catch(() => ({}));

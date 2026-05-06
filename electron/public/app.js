@@ -3308,6 +3308,18 @@
   async function searchAnlagenstammList() {
     var msgEl = document.getElementById('anlagenstammMessage');
     var resEl = document.getElementById('anlagenstammSearchResults');
+    if (!getDispoBaseUrl()) {
+      try {
+        var picked = await pickDispoBase();
+        if (!picked || !picked.ok) {
+          if (msgEl) msgEl.textContent = 'Dispo-Basis fehlt oder nicht erreichbar. Bitte unter Einstellungen URLs prüfen und Verbindung testen.';
+          return;
+        }
+      } catch (e) {
+        if (msgEl) msgEl.textContent = 'Dispo-Basis konnte nicht gewählt werden: ' + (e.message || String(e));
+        return;
+      }
+    }
     var fn = ((document.getElementById('anlagenstammFilterFn') || {}).value || '').trim();
     var kunde = ((document.getElementById('anlagenstammFilterKunde') || {}).value || '').trim();
     var typ = ((document.getElementById('anlagenstammFilterType') || {}).value || '').trim();
