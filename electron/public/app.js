@@ -591,9 +591,80 @@
       if (res.status === 404 && String(path).indexOf('anlagenstamm_search') !== -1) {
         msg = 'Lokaler Server: Route nicht gefunden (404). Bitte die Monteur-App vollständig beenden (auch aus dem Infobereich) und neu starten – oder Installer/Update einspielen, damit der aktuelle Electron-Server mit Anlagenstamm-Suche geladen wird.';
       }
+      if (res.status === 404 && String(path).indexOf('anlagenstamm_save') !== -1) {
+        msg = 'Lokaler Server: Route nicht gefunden (404). Bitte die Monteur-App vollständig beenden (auch aus dem Infobereich) und neu starten – oder Installer/Update einspielen, damit der aktuelle Electron-Server mit Anlagenstamm-Speichern geladen wird.';
+      }
       throw new Error(msg);
     }
     return data;
+  }
+
+  function monteurBridge() {
+    try {
+      if (typeof monteurApp !== 'undefined' && monteurApp) return monteurApp;
+      if (typeof window !== 'undefined' && window.monteurApp) return window.monteurApp;
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  /**
+   * IPC-Antwort vom Main-Prozess: ok kann fehlen, wenn nur rows geliefert wird.
+   */
+  function normalizeAnlagenstammSearchResponse(d) {
+    if (!d || typeof d !== 'object') throw new Error('Suche fehlgeschlagen');
+    if (d.ok === false) throw new Error(d.error ? d.error : 'Suche fehlgeschlagen');
+    if (d.ok === true) {
+      if ('_httpStatus' in d) delete d._httpStatus;
+      return d;
+    }
+    if (Array.isArray(d.rows)) {
+      if ('_httpStatus' in d) delete d._httpStatus;
+      return d;
+    }
+    throw new Error(d.error ? d.error : 'Suche fehlgeschlagen');
+  }
+
+  function normalizeAnlagenstammSaveResponse(d) {
+    if (!d || typeof d !== 'object') throw new Error('Speichern fehlgeschlagen');
+    if (d.ok === false) throw new Error(d.error ? d.error : 'Speichern fehlgeschlagen');
+    if (d.ok !== true && d.id == null) {
+      throw new Error(d.error ? d.error : 'Speichern fehlgeschlagen');
+    }
+    if ('_httpStatus' in d) delete d._httpStatus;
+    return d;
+  }
+
+  /**
+   * Anlagenstamm: immer zuerst IPC (Main → dispo_api-Proxy), nie von einem fehlenden
+   * POST /api/anlagenstamm_* auf :39678 abhängig. Reihenfolge: benannte Preload-Methode,
+   * dann ipcInvoke (gleicher Kanal), zuletzt nur für Nicht-Electron lokaler Express.
+   */
+  async function anlagenstammSearchDispo(payload) {
+    var body = Object.assign({}, payload, { technician_id: getTechId() });
+    var ma = monteurBridge();
+    if (ma) {
+      if (typeof ma.ipcInvoke === 'function') {
+        return normalizeAnlagenstammSearchResponse(await ma.ipcInvoke('anlagenstamm:search', body));
+      }
+      if (typeof ma.anlagenstammSearch === 'function') {
+        return normalizeAnlagenstammSearchResponse(await ma.anlagenstammSearch(body));
+      }
+    }
+    return api('/api/anlagenstamm_search', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async function anlagenstammSaveDispo(payload) {
+    var body = Object.assign({}, payload, { technician_id: getTechId() });
+    var ma = monteurBridge();
+    if (ma) {
+      if (typeof ma.ipcInvoke === 'function') {
+        return normalizeAnlagenstammSaveResponse(await ma.ipcInvoke('anlagenstamm:save', body));
+      }
+      if (typeof ma.anlagenstammSave === 'function') {
+        return normalizeAnlagenstammSaveResponse(await ma.anlagenstammSave(body));
+      }
+    }
+    return api('/api/anlagenstamm_save', { method: 'POST', body: JSON.stringify(body) });
   }
 
   /** Ländername (DE) oder Bezeichnung → ISO-2-Code für Flagge und Zeitverschiebung. */
@@ -3326,17 +3397,6 @@
         return;
       }
     }
-    try {
-      var verRes = await fetch(API_BASE + '/api/version');
-      var verData = await verRes.json().catch(function () { return {}; });
-      if (!verData.capabilities || !verData.capabilities.anlagenstamm_search) {
-        if (msgEl) {
-          msgEl.textContent = 'Diese App-Version hat noch den alten lokalen Server (ohne Anlagenstamm-Suche). Bitte Monteur-App komplett schließen und neu starten, oder aktuelle Version installieren.';
-        }
-        showToast('Lokalen Server aktualisieren: App beenden und neu starten.');
-        return;
-      }
-    } catch (eVer) { /* ignore – Fallback über api()-404 */ }
     var fn = ((document.getElementById('anlagenstammFilterFn') || {}).value || '').trim();
     var kunde = ((document.getElementById('anlagenstammFilterKunde') || {}).value || '').trim();
     var typ = ((document.getElementById('anlagenstammFilterType') || {}).value || '').trim();
@@ -3349,19 +3409,16 @@
     if (msgEl) msgEl.textContent = 'Suche läuft…';
     if (resEl) { resEl.style.display = 'none'; resEl.innerHTML = ''; }
     try {
-      var data = await api('/api/anlagenstamm_search', {
-        method: 'POST',
-        body: JSON.stringify({
-          baseUrl: getDispoBaseUrl(),
-          serverUsername: getServerUsername(),
-          serverPassword: getServerPassword(),
-          filter_fn: fn,
-          filter_aktueller_kunde: kunde,
-          filter_type: typ,
-          filter_land: land,
-          page: 1,
-          page_size: 50
-        })
+      var data = await anlagenstammSearchDispo({
+        baseUrl: getDispoBaseUrl(),
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword(),
+        filter_fn: fn,
+        filter_aktueller_kunde: kunde,
+        filter_type: typ,
+        filter_land: land,
+        page: 1,
+        page_size: 50
       });
       var rows = (data && data.rows) ? data.rows : [];
       if (resEl) {
@@ -3431,7 +3488,7 @@
     }
     if (msgEl) msgEl.textContent = 'Speichern…';
     try {
-      var data = await api('/api/anlagenstamm_save', { method: 'POST', body: JSON.stringify(payload) });
+      var data = await anlagenstammSaveDispo(payload);
       if (data && data.ok && data.id) {
         showToast('In Dispo gespeichert.');
         if (msgEl) msgEl.textContent = 'Gespeichert.';

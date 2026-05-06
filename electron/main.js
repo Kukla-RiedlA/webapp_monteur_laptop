@@ -4,6 +4,7 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const { createApp, getDb, PORT } = require('./server');
+const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
 
 let mainWindow;
 let updateCheckStarted = false;
@@ -113,6 +114,22 @@ function createWindow() {
     }
   });
 }
+
+ipcMain.handle('anlagenstamm:search', async (event, payload) => {
+  try {
+    return await proxyAnlagenstammSearch(payload || {});
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+});
+
+ipcMain.handle('anlagenstamm:save', async (event, payload) => {
+  try {
+    return await proxyAnlagenstammSave(payload || {});
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+});
 
 ipcMain.handle('dienstreise:choose-folder', async () => {
   if (!mainWindow) return null;

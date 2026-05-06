@@ -20,6 +20,7 @@ function getCsvToPdfBuffer() {
 const PORT = 39678;
 const DB_DIR = path.join(__dirname, 'db');
 const { registerAbrechnungRoutes, flushAbrechnungOutbox } = require('./lib/abrechnung-routes');
+const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
 
 /** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). */
 function writeFileWithRetry(filePath, data, maxRetries = 3) {
@@ -1842,66 +1843,50 @@ function createApp(db) {
   });
 
   app.post('/api/anlagenstamm_search', express.json(), async (req, res) => {
-    const technicianId = getTechnicianId(req);
     const body = req.body || {};
+    const technicianId =
+      getTechnicianId(req) ??
+      (body.technician_id != null ? parseInt(String(body.technician_id), 10) : null);
     const base = (body.baseUrl || '').toString().trim().replace(/\/$/, '');
     if (!technicianId || !base) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
-    const authHeader = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
-    const url = `${base}/dispo_api/api/anlagenstamm_monteur_search.php?technician_id=${encodeURIComponent(technicianId)}`;
-    const forward = {
-      filter_fn: body.filter_fn,
-      filter_type: body.filter_type,
-      filter_aktueller_kunde: body.filter_aktueller_kunde,
-      filter_land: body.filter_land,
-      page: body.page,
-      page_size: body.page_size
-    };
     try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: Object.assign(
-          { 'Content-Type': 'application/json' },
-          dispoMonteurFetchHeaders(technicianId, authHeader)
-        ),
-        body: JSON.stringify(forward)
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
-      res.json(data);
+      const data = await proxyAnlagenstammSearch(Object.assign({}, body, { technician_id: technicianId }));
+      if (data && data.ok === false) {
+        const code = Number(data._httpStatus) >= 400 ? Number(data._httpStatus) : 502;
+        const out = Object.assign({}, data);
+        delete out._httpStatus;
+        return res.status(code).json(out);
+      }
+      const ok = Object.assign({}, data);
+      delete ok._httpStatus;
+      res.json(ok);
     } catch (e) {
       res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
     }
   });
 
   app.post('/api/anlagenstamm_save', express.json(), async (req, res) => {
-    const technicianId = getTechnicianId(req);
     const body = req.body || {};
+    const technicianId =
+      getTechnicianId(req) ??
+      (body.technician_id != null ? parseInt(String(body.technician_id), 10) : null);
     const base = (body.baseUrl || '').toString().trim().replace(/\/$/, '');
     if (!technicianId || !base) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
-    const authHeader = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
-    const url = `${base}/dispo_api/api/anlagenstamm_monteur_save.php?technician_id=${encodeURIComponent(technicianId)}`;
-    const {
-      baseUrl: _b,
-      serverUsername: _u,
-      serverPassword: _p,
-      ...savePayload
-    } = body;
     try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: Object.assign(
-          { 'Content-Type': 'application/json' },
-          dispoMonteurFetchHeaders(technicianId, authHeader)
-        ),
-        body: JSON.stringify(savePayload)
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
-      res.json(data);
+      const data = await proxyAnlagenstammSave(Object.assign({}, body, { technician_id: technicianId }));
+      if (data && data.ok === false) {
+        const code = Number(data._httpStatus) >= 400 ? Number(data._httpStatus) : 502;
+        const out = Object.assign({}, data);
+        delete out._httpStatus;
+        return res.status(code).json(out);
+      }
+      const ok = Object.assign({}, data);
+      delete ok._httpStatus;
+      res.json(ok);
     } catch (e) {
       res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
     }
