@@ -299,6 +299,7 @@ app.whenReady().then(() => {
     const server = http.createServer(serverApp);
     server.listen(PORT, '127.0.0.1', () => {
       console.log('Monteur WebApp lokal auf http://127.0.0.1:' + PORT);
+      console.log('[monteur] Lokaler API-Server: Anlagenstamm POST /api/anlagenstamm_search – nach Update App neu starten, falls 404.');
       createWindow();
       setTimeout(checkForServerInstallerUpdate, 6000);
     });

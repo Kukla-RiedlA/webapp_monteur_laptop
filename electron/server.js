@@ -412,7 +412,13 @@ function createApp(db) {
   }
 
   app.get('/api/version', (req, res) => {
-    res.json({ version: appVersion });
+    res.json({
+      version: appVersion,
+      capabilities: {
+        anlagenstamm_search: true,
+        anlagenstamm_save: true,
+      },
+    });
   });
 
   app.get('/api/dienstreise/config', (req, res) => {

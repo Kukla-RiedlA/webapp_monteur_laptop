@@ -586,7 +586,13 @@
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId), ...opts.headers },
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || res.statusText);
+    if (!res.ok) {
+      let msg = data.error || res.statusText || 'Anfrage fehlgeschlagen';
+      if (res.status === 404 && String(path).indexOf('anlagenstamm_search') !== -1) {
+        msg = 'Lokaler Server: Route nicht gefunden (404). Bitte die Monteur-App vollständig beenden (auch aus dem Infobereich) und neu starten – oder Installer/Update einspielen, damit der aktuelle Electron-Server mit Anlagenstamm-Suche geladen wird.';
+      }
+      throw new Error(msg);
+    }
     return data;
   }
 
@@ -3320,6 +3326,17 @@
         return;
       }
     }
+    try {
+      var verRes = await fetch(API_BASE + '/api/version');
+      var verData = await verRes.json().catch(function () { return {}; });
+      if (!verData.capabilities || !verData.capabilities.anlagenstamm_search) {
+        if (msgEl) {
+          msgEl.textContent = 'Diese App-Version hat noch den alten lokalen Server (ohne Anlagenstamm-Suche). Bitte Monteur-App komplett schließen und neu starten, oder aktuelle Version installieren.';
+        }
+        showToast('Lokalen Server aktualisieren: App beenden und neu starten.');
+        return;
+      }
+    } catch (eVer) { /* ignore – Fallback über api()-404 */ }
     var fn = ((document.getElementById('anlagenstammFilterFn') || {}).value || '').trim();
     var kunde = ((document.getElementById('anlagenstammFilterKunde') || {}).value || '').trim();
     var typ = ((document.getElementById('anlagenstammFilterType') || {}).value || '').trim();

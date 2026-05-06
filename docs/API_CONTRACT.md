@@ -51,6 +51,8 @@ Erfolg / Fehler einheitlich über **`ok`** (boolean):
 
 ### 5.0 Monteur-Laptop – lokaler Electron-Gateway (`electron/server.js`)
 
+**Hinweis:** `GET /api/version` liefert u. a. `capabilities` (z. B. `anlagenstamm_search`, `anlagenstamm_save`), damit der Renderer erkennt, ob der laufende Prozess die aktuelle `server.js` geladen hat (nach Update: App neu starten, sonst 404 auf neue Routen).
+
 Der **Renderer** (`electron/public/app.js`) spricht nur **`API_BASE`** (lokaler Express). Dispo wird nicht direkt vom Renderer angesprochen; die gewählte Basis-URL wird vom Main-Prozess für Proxys und Sync verwendet.
 
 | Route | Methode | Body (JSON, Keys wie im Code) | Antwort (Kern) |
