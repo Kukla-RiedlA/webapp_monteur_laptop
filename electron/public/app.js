@@ -3454,7 +3454,17 @@
         if (onlyFab) loadAnlagenstammDetail(onlyFab);
       }
     } catch (e) {
-      if (msgEl) msgEl.textContent = 'Fehler: ' + (e.message || String(e));
+      var errText = (e && e.message) ? e.message : String(e);
+      try {
+        console.error(
+          '[Kukla Anlagenstamm Suche]',
+          errText,
+          '| Dispo-Basis:',
+          getDispoBaseUrl(),
+          '| Hinweis: Die Abfrage läuft im Electron-Hauptprozess (IPC), sie erscheint nicht als „fetch“ zur Dispo im Renderer-Network-Tab.'
+        );
+      } catch (logEx) { /* ignore */ }
+      if (msgEl) msgEl.textContent = 'Fehler: ' + errText;
       if (resEl) { resEl.style.display = 'none'; resEl.innerHTML = ''; }
     }
   }
@@ -3497,7 +3507,11 @@
         throw new Error((data && data.error) ? data.error : 'Speichern fehlgeschlagen');
       }
     } catch (e) {
-      if (msgEl) msgEl.textContent = 'Fehler: ' + (e.message || String(e));
+      var saveErr = (e && e.message) ? e.message : String(e);
+      try {
+        console.error('[Kukla Anlagenstamm Speichern]', saveErr, '| Dispo-Basis:', getDispoBaseUrl());
+      } catch (logEx) { /* ignore */ }
+      if (msgEl) msgEl.textContent = 'Fehler: ' + saveErr;
     }
   }
 
