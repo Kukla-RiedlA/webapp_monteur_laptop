@@ -1801,6 +1801,137 @@ function createApp(db) {
     }
   });
 
+  /** Proxys: Dispo Signatur-API (dispo_api) mit Basic-Auth wie job_from_dispo */
+  app.post('/api/dispo_signature_session_open', express.json(), async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const { baseUrl, serverUsername, serverPassword, payload } = req.body || {};
+      const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!technicianId || !base) {
+        return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
+      }
+      const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+      const url = `${base}/dispo_api/api/signature_session_open.php?technician_id=${encodeURIComponent(technicianId)}`;
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json' }, auth || {}),
+        body: JSON.stringify(payload && typeof payload === 'object' ? payload : {}),
+      });
+      const raw = await r.text();
+      res.status(r.status).type('application/json').send(raw);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'signature_session_open' });
+    }
+  });
+
+  app.post('/api/dispo_signature_submit', express.json(), async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const { baseUrl, serverUsername, serverPassword, payload } = req.body || {};
+      const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!technicianId || !base) {
+        return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
+      }
+      const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+      const url = `${base}/dispo_api/api/signature_submit.php?technician_id=${encodeURIComponent(technicianId)}`;
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json' }, auth || {}),
+        body: JSON.stringify(payload && typeof payload === 'object' ? payload : {}),
+      });
+      const raw = await r.text();
+      res.status(r.status).type('application/json').send(raw);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'signature_submit' });
+    }
+  });
+
+  app.post('/api/dispo_signature_stage_pdf_b64', express.json({ limit: '80mb' }), async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const { baseUrl, serverUsername, serverPassword, pdfBase64, fileName } = req.body || {};
+      const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!technicianId || !base || !pdfBase64) {
+        return res.status(400).json({ ok: false, error: 'baseUrl, pdfBase64 und technician_id erforderlich.' });
+      }
+      const buf = Buffer.from(String(pdfBase64), 'base64');
+      if (buf.length < 8 || buf.slice(0, 5).toString('ascii') !== '%PDF-') {
+        return res.status(400).json({ ok: false, error: 'Kein gültiges PDF (Base64).' });
+      }
+      const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+      const fd = new FormData();
+      fd.append('technician_id', String(technicianId));
+      fd.append('file', buf, { filename: (fileName && String(fileName)) || 'upload.pdf', contentType: 'application/pdf' });
+      const url = `${base}/dispo_api/api/signature_stage_pdf.php`;
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: Object.assign({}, auth || {}, fd.getHeaders()),
+        body: fd,
+      });
+      const raw = await r.text();
+      res.status(r.status).type('application/json').send(raw);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'signature_stage' });
+    }
+  });
+
+  /** PDF aus lokalem Dienstreise-Ordner stagen (Montagebericht → Dispo-Signatur). */
+  app.post('/api/montagebericht_signature_stage', express.json(), async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const {
+        localJobId,
+        relativePath,
+        baseUrl,
+        serverUsername,
+        serverPassword,
+      } = req.body || {};
+      const jid = parseInt(String(localJobId || ''), 10);
+      const rel = (relativePath || '').toString().trim().replace(/\\/g, '/');
+      if (!technicianId || !jid || !rel) {
+        return res.status(400).json({ ok: false, error: 'localJobId und relativePath erforderlich.' });
+      }
+      const reiseDir = getOrCreateDienstreiseFolderForJob(jid);
+      if (!reiseDir || !fs.existsSync(reiseDir)) {
+        return res.status(400).json({ ok: false, error: 'Dienstreise-Ordner nicht gefunden.' });
+      }
+      const fullPath = path.join(reiseDir, rel.split('/').join(path.sep));
+      const resolved = path.resolve(fullPath);
+      const baseResolved = path.resolve(reiseDir);
+      if (!resolved.startsWith(baseResolved)) {
+        return res.status(400).json({ ok: false, error: 'Pfad ungültig.' });
+      }
+      if (!fs.existsSync(resolved)) {
+        return res.status(400).json({ ok: false, error: 'PDF nicht gefunden.' });
+      }
+      const buf = fs.readFileSync(resolved);
+      if (buf.length < 8 || buf.slice(0, 5).toString('ascii') !== '%PDF-') {
+        return res.status(400).json({ ok: false, error: 'Kein gültiges PDF.' });
+      }
+      const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!base) {
+        return res.status(400).json({ ok: false, error: 'Dispo baseUrl erforderlich.' });
+      }
+      const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+      const fd = new FormData();
+      fd.append('technician_id', String(technicianId));
+      fd.append('file', buf, {
+        filename: path.basename(rel) || 'montage.pdf',
+        contentType: 'application/pdf',
+      });
+      const url = `${base}/dispo_api/api/signature_stage_pdf.php`;
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: Object.assign({}, auth || {}, fd.getHeaders()),
+        body: fd,
+      });
+      const raw = await r.text();
+      res.status(r.status).type('application/json').send(raw);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'montagebericht_signature_stage' });
+    }
+  });
+
   app.post('/api/anlagenstamm_from_dispo', express.json(), async (req, res) => {
     const { baseUrl, fabs } = req.body || {};
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');

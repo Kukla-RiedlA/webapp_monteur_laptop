@@ -5678,6 +5678,7 @@
 
     function openAndResetMontageberichtForm() {
       if (divMontage) divMontage.style.display = 'block';
+      try { delete window._kuklaMontageberichtSign; } catch (e) { window._kuklaMontageberichtSign = null; }
       montageberichtJobData = null;
       if (jobSelect) jobSelect.innerHTML = '<option value="">Lade…</option>';
       if (grundInput) setRichEditorHtml(grundInput, '');
@@ -5753,6 +5754,134 @@
         } catch (e) {
           kopfdatenEl.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
         }
+      });
+    }
+    var btnSignMb = document.getElementById('btnMontageberichtSign');
+    if (btnSignMb) {
+      btnSignMb.addEventListener('click', function () {
+        var st = window._kuklaMontageberichtSign;
+        if (!st || !st.pdfRel || !st.localJobId) {
+          alert('Zuerst „PDF & DOCX erstellen“ ausführen – danach ist der Montagebericht-PDF für die Signatur verfügbar.');
+          return;
+        }
+        if (typeof window.SignatureWidget === 'undefined' || typeof window.SignatureWidget.open !== 'function') {
+          alert('Signatur-Widget nicht geladen.');
+          return;
+        }
+        var baseUrl = getDispoBaseUrl();
+        if (!baseUrl) {
+          alert('Dispo-Server-URL in den Einstellungen setzen.');
+          return;
+        }
+        var techId = getTechId();
+        var techName = '';
+        try {
+          var tel = document.getElementById('technicianName');
+          if (tel) techName = (tel.textContent || '').trim();
+        } catch (err) {}
+        btnSignMb.disabled = true;
+        fetch(API_BASE + '/api/montagebericht_signature_stage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+          body: JSON.stringify({
+            localJobId: st.localJobId,
+            relativePath: st.pdfRel,
+            baseUrl: baseUrl,
+            serverUsername: getDispoUsername(),
+            serverPassword: getDispoPassword()
+          })
+        })
+          .then(function (r) {
+            return r.text().then(function (t) {
+              return { ok: r.ok, status: r.status, text: t };
+            });
+          })
+          .then(function (res) {
+            var stageJ;
+            try {
+              stageJ = JSON.parse(res.text || '{}');
+            } catch (e) {
+              throw new Error('Staging-Antwort ist kein JSON.');
+            }
+            if (!res.ok || !stageJ.staging_key) {
+              throw new Error((stageJ && stageJ.error) ? stageJ.error : 'PDF-Staging fehlgeschlagen.');
+            }
+            var stagingKey = stageJ.staging_key;
+            window.SignatureWidget.open({
+              refType: 'montagebericht',
+              refId: 0,
+              stagingKey: stagingKey,
+              signerRole: 'techniker',
+              technicianUserId: techId,
+              signerUserId: techId,
+              signerNameSuggestion: techName,
+              customSessionOpen: function () {
+                return fetch(API_BASE + '/api/dispo_signature_session_open', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+                  body: JSON.stringify({
+                    baseUrl: baseUrl,
+                    serverUsername: getDispoUsername(),
+                    serverPassword: getDispoPassword(),
+                    payload: {
+                      ref_type: 'montagebericht',
+                      ref_id: 0,
+                      signer_role: 'techniker',
+                      pdf_language: 'DE',
+                      staging_key: stagingKey,
+                      technician_id: techId
+                    }
+                  })
+                }).then(function (r2) {
+                  return r2.text().then(function (t2) {
+                    var j2;
+                    try {
+                      j2 = JSON.parse(t2 || '{}');
+                    } catch (e2) {
+                      throw new Error('Ungültige JSON-Antwort (Session).');
+                    }
+                    if (!r2.ok) throw new Error((j2 && j2.error) ? j2.error : 'Session HTTP ' + r2.status);
+                    if (j2.ok === false) throw new Error((j2 && j2.error) ? j2.error : 'Session fehlgeschlagen');
+                    return j2;
+                  });
+                });
+              },
+              customSubmit: function (payload) {
+                return fetch(API_BASE + '/api/dispo_signature_submit', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+                  body: JSON.stringify({
+                    baseUrl: baseUrl,
+                    serverUsername: getDispoUsername(),
+                    serverPassword: getDispoPassword(),
+                    payload: payload
+                  })
+                }).then(function (r3) {
+                  return r3.text().then(function (t3) {
+                    var j3;
+                    try {
+                      j3 = JSON.parse(t3 || '{}');
+                    } catch (e3) {
+                      throw new Error('Ungültige JSON-Antwort (Submit).');
+                    }
+                    if (!r3.ok) throw new Error((j3 && j3.error) ? j3.error : 'Submit HTTP ' + r3.status);
+                    if (j3.ok === false) throw new Error((j3 && j3.error) ? j3.error : 'Signatur fehlgeschlagen');
+                    return j3;
+                  });
+                });
+              },
+              onSigned: function () {
+                if (typeof showToast === 'function') showToast('Montagebericht signiert (Dispo).');
+              },
+              onCancel: function () {}
+            });
+          })
+          .catch(function (err) {
+            alert(err && err.message ? err.message : 'Signatur fehlgeschlagen.');
+          })
+          .then(function () {
+            btnSignMb.disabled = false;
+          });
       });
     }
     if (form) {
@@ -5860,6 +5989,12 @@
           if (!r.ok || !data.ok) {
             alert('Fehler: ' + (data.error || r.status));
             return;
+          }
+          if (!data.jsonOnly && data.saved && data.saved.length) {
+            window._kuklaMontageberichtSign = {
+              localJobId: parseInt(jobSelect.value, 10),
+              pdfRel: data.saved[0]
+            };
           }
           if (data.warning) {
             console.warn('[Montagebericht] Warnung vom Server:', data.warning);

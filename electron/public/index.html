@@ -751,6 +751,7 @@
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
             <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Speichert montagebericht.json und synchronisiert das Projekt – ohne PDF/DOCX">Speichern (nur Daten)</button>
             <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Wie „nur Daten“ plus PDF und Word-Dokument in Dokumente_Anlage">PDF &amp; DOCX erstellen</button>
+            <button type="button" class="btn btn-ghost" id="btnMontageberichtSign" title="Erfordert zuvor erzeugtes PDF; signiert auf dem Dispo-Server">Bericht unterschreiben</button>
             <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
           </div>
           <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0">„Nur Daten“ legt nur die JSON-Datei an bzw. aktualisiert sie. „PDF &amp; DOCX“ speichert dieselben Daten und erzeugt zusätzlich die Berichtsdateien (Word/PDF).</p>
@@ -1008,6 +1009,7 @@
     </div>
   </main>
   <script src="countries.js"></script>
+  <script src="signature_widget.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
