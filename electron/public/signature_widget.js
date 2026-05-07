@@ -210,7 +210,11 @@
 
   function open(opts) {
     opts = opts || {};
-    var refType = opts.refType || 'rams';
+    // Default-refType: vor Dispo-Migration 022 war 'rams' (job_rams). Seit 022
+    // ist dieser Wert nicht mehr in der Whitelist des Signaturmoduls. Wir
+    // setzen den Default auf 'rams_iso'. Der Laptop nutzt das Widget aktuell
+    // nur mit refType='montagebericht', daher rein defensiver Wert.
+    var refType = opts.refType || 'rams_iso';
     var refId = parseInt(String(opts.refId || '0'), 10);
     var signerRole = opts.signerRole || 'techniker';
     var pdfLang = opts.pdfLanguage || 'DE';
