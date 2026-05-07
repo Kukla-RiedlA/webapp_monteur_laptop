@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.003.000
+- **Montagebericht:** Nach „PDF & DOCX erstellen“ kann der Bericht über den Dispo-Server signiert werden (lokales PDF-Staging, Proxy `montagebericht_signature_stage`, Widget + `dispo_signature_*`).
+- **Signatur-Widget:** `electron/public/signature_widget.js`, Einbindung in `index.html`.
+
 ## V 1.002.000
 - **Hotel/FN Workflow:** Hotelauswahl pro Fabrikationsnummer direkt im Auftragsdetail (FN-Zeile mit Hotel-Icon und Auswahl-Popup).
 - **Hotelbewertung:** Kommentar und Sternebewertung (0-5) im Hotel-Dialog; Anzeige des Durchschnitts als Sterne inkl. halber Sterne und Anzahl Bewertungen.
