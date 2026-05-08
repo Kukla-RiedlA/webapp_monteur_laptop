@@ -31,6 +31,22 @@
     return B;
   }
 
+  /** Gleiche Textzusammenstellung wie PwaApi bei validation_failed (JSON-Felder error, code, validation). */
+  function ramsProxyErrorMessage(j) {
+    var base = (j && typeof j.error === 'string' && j.error) ? j.error : 'Fehler';
+    if (!j || j.code !== 'validation_failed' || !j.validation || !Array.isArray(j.validation.issues)) {
+      return base;
+    }
+    var lines = [];
+    j.validation.issues.forEach(function (it) {
+      if (!it) return;
+      var line = it.message_t || it.message || it.code;
+      if (line) lines.push(String(line));
+    });
+    if (!lines.length) return base;
+    return base + '\n\n' + lines.map(function (l) { return '\u2022 ' + l; }).join('\n');
+  }
+
   function monteurRamsProxy(body) {
     var B = getBridge();
     if (!B) return Promise.reject(new Error('MonteurRamsBridge fehlt'));
@@ -53,7 +69,7 @@
           throw new Error('Ungueltige JSON-Antwort vom Server.');
         }
         if (j.ok === false) {
-          throw new Error(j.error || 'Fehler');
+          throw new Error(ramsProxyErrorMessage(j));
         }
         if (j.ok === true && j.data !== undefined) {
           return j.data;
@@ -84,7 +100,7 @@
           throw new Error('Ungueltige JSON-Antwort.');
         }
         if (!j || j.ok === false) {
-          throw new Error((j && j.error) || 'Fehler');
+          throw new Error(ramsProxyErrorMessage(j || {}));
         }
         return j;
       });
