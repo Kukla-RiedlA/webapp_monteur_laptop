@@ -47,6 +47,89 @@
     return base + '\n\n' + lines.map(function (l) { return '\u2022 ' + l; }).join('\n');
   }
 
+  /**
+   * Nach FES: PDF-Vorschau (Dispo-URL), dann confirm_completion oder discard_preview.
+   */
+  function openCompletionPreviewOverlay(ramsId) {
+    var B = getBridge();
+    if (!B || !B.getDispoBaseUrl) return Promise.reject(new Error('MonteurRamsBridge fehlt'));
+    var baseUrl = B.getDispoBaseUrl().replace(/\/$/, '');
+    var backdrop =
+      document.getElementById('ramsWizardOverlay') ||
+      document.querySelector('.rams-wizard-overlay-host') ||
+      document.getElementById('ramsWizardOverlayHost') ||
+      document.body;
+    var overlay = document.createElement('div');
+    overlay.setAttribute('role', 'dialog');
+    overlay.style.cssText =
+      'position:absolute;inset:0;z-index:120;background:rgba(0,0,0,.55);display:flex;flex-direction:column;padding:12px;box-sizing:border-box;';
+    var inner = document.createElement('div');
+    inner.style.cssText =
+      'flex:1;display:flex;flex-direction:column;min-height:0;background:#fff;border-radius:8px;overflow:hidden;max-width:100%;';
+    var bar = document.createElement('div');
+    bar.style.cssText = 'padding:10px 12px;border-bottom:1px solid #ddd;font-weight:600;';
+    bar.textContent = 'RAMS pruefen und abschliessen';
+    var hint = document.createElement('div');
+    hint.style.cssText = 'padding:8px 12px;font-size:13px;color:#444;border-bottom:1px solid #eee;';
+    hint.textContent = 'Vorschau nach Signatur. Uebernehmen schliesst das RAMS ab; Verwerfen setzt auf Entwurf zurueck.';
+    var iframe = document.createElement('iframe');
+    iframe.style.cssText = 'flex:1;width:100%;min-height:280px;border:0;';
+    iframe.setAttribute('title', 'RAMS PDF');
+    iframe.src = baseUrl + '/api/rams/pdf.php?id=' + encodeURIComponent(String(ramsId)) + '&inline=1';
+    var btnRow = document.createElement('div');
+    btnRow.style.cssText =
+      'display:flex;gap:10px;padding:12px;border-top:1px solid #ddd;justify-content:flex-end;flex-wrap:wrap;';
+    var btnDiscard = document.createElement('button');
+    btnDiscard.type = 'button';
+    btnDiscard.className = 'btn btn-secondary';
+    btnDiscard.textContent = 'Verwerfen';
+    var btnOk = document.createElement('button');
+    btnOk.type = 'button';
+    btnOk.className = 'btn btn-primary';
+    btnOk.textContent = 'Uebernehmen';
+    btnRow.appendChild(btnDiscard);
+    btnRow.appendChild(btnOk);
+    inner.appendChild(bar);
+    inner.appendChild(hint);
+    inner.appendChild(iframe);
+    inner.appendChild(btnRow);
+    overlay.appendChild(inner);
+    backdrop.appendChild(overlay);
+    function cleanup() {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    return new Promise(function (resolve, reject) {
+      btnOk.addEventListener('click', function () {
+        btnOk.disabled = true;
+        btnDiscard.disabled = true;
+        monteurRamsProxy({ action: 'confirm_completion', method: 'POST', payload: { id: ramsId } })
+          .then(function () {
+            cleanup();
+            resolve(true);
+          })
+          .catch(function (e) {
+            btnOk.disabled = false;
+            btnDiscard.disabled = false;
+            reject(e);
+          });
+      });
+      btnDiscard.addEventListener('click', function () {
+        btnOk.disabled = true;
+        btnDiscard.disabled = true;
+        monteurRamsProxy({ action: 'discard_preview', method: 'POST', payload: { id: ramsId } })
+          .then(function () {
+            cleanup();
+            resolve(false);
+          })
+          .catch(function (e) {
+            btnOk.disabled = false;
+            btnDiscard.disabled = false;
+            reject(e);
+          });
+      });
+    });
+  }
+
   function monteurRamsProxy(body) {
     var B = getBridge();
     if (!B) return Promise.reject(new Error('MonteurRamsBridge fehlt'));
@@ -297,17 +380,11 @@
               throw err;
             });
           },
-          onTechnicianChecklist: function (id, answers, note) {
-            return monteurRamsProxy({
-              action: 'technician_checklist',
-              method: 'POST',
-              payload: {
-                id: id,
-                role_key: 'prepared_by',
-                answers: answers,
-                note: note || ''
-              }
-            });
+          onCompletionPreview: function (docAfterSign) {
+            var rid = docAfterSign && docAfterSign.id ? parseInt(String(docAfterSign.id), 10) : 0;
+            if (!rid) rid = ramsId;
+            if (!rid) return Promise.reject(new Error('Keine RAMS-ID.'));
+            return openCompletionPreviewOverlay(rid);
           },
           onSign: function (savedDoc) {
             return new Promise(function (resolve, reject) {
@@ -356,8 +433,6 @@
                   var signerName = '';
                   if (sigRes && sigRes.signer_name != null && String(sigRes.signer_name).trim() !== '') {
                     signerName = String(sigRes.signer_name).trim();
-                  } else if (nameSug && String(nameSug).trim() !== '') {
-                    signerName = String(nameSug).trim();
                   }
                   monteurRamsProxy({
                     action: 'sign_link',

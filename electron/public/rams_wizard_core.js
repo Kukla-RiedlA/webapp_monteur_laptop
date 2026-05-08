@@ -9,7 +9,7 @@
  *
  * Veroeffentlicht als window.RamsWizardCore mit der Methode open(opts).
  *
- * opts (alle optional ausser doc/catalog/container/onSavePayload/onSubmit/onTechnicianChecklist/onSign):
+ * opts (Pflicht: doc, catalog, container, onSavePayload, onSubmit, onSign, onCompletionPreview):
  *   container: HTMLElement              -> Container zum Rendern
  *   doc:       object                   -> aktuelles Dokument (action=document)
  *   catalog:   object                   -> aktueller Katalog (action=catalog)
@@ -17,8 +17,9 @@
  *   onLanguageChange(newLang) -> Promise<{ doc, catalog }>
  *   onSavePayload(payload) -> Promise<savedDoc>
  *   onSubmit(id) -> Promise<submittedDoc>
- *   onTechnicianChecklist(id, answers, note) -> Promise<void>
- *   onSign(savedDoc) -> Promise<{ event_id, sealed_pdf_relative_path, ... }>
+ *   onSign(savedDoc) -> Promise<docNachSignLink>
+ *   onCompletionPreview(docNachSign) -> Promise<boolean>
+ *                          true = RAMS uebernehmen (approved); false = verworfen (Adapter ruft onClose)
  *   onClose() -> void
  *   onError(err) -> void
  */
@@ -784,12 +785,23 @@
         saved = savedDoc || { id: payload.id };
         return opts.onSubmit(saved.id || payload.id);
       }).then(function () {
-        var note = '';
-        return opts.onTechnicianChecklist(saved.id || payload.id, state.checklistAnswers, note);
-      }).then(function () {
         return opts.onSign(saved);
-      }).then(function () {
+      }).then(function (signedDoc) {
+        if (signedDoc && typeof signedDoc === 'object') {
+          saved = signedDoc;
+        }
+        if (typeof opts.onCompletionPreview !== 'function') {
+          throw new Error('RamsWizardCore: onCompletionPreview fehlt');
+        }
+        return opts.onCompletionPreview(saved);
+      }).then(function (accepted) {
         state.busy = false;
+        if (accepted === false) {
+          if (typeof opts.onClose === 'function') {
+            opts.onClose();
+          }
+          return;
+        }
         renderFinished();
       }).catch(function (err) {
         state.busy = false;
