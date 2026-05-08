@@ -511,9 +511,29 @@
     function showError(msg) {
       var el = state.container.querySelector('#ramsWizardError');
       if (!el) return;
-      if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+      if (!msg) {
+        el.style.display = 'none';
+        el.textContent = '';
+        return;
+      }
       el.style.display = 'block';
-      el.textContent = msg;
+      var s = String(msg);
+      var chunks = s.split(/\n\n+/);
+      if (chunks.length < 2) {
+        el.textContent = s;
+        return;
+      }
+      while (el.firstChild) {
+        el.removeChild(el.firstChild);
+      }
+      var lead = document.createElement('strong');
+      lead.className = 'kukla-rams-wizard__error-lead';
+      lead.textContent = chunks[0].trim();
+      el.appendChild(lead);
+      var detail = document.createElement('div');
+      detail.className = 'kukla-rams-wizard__error-detail';
+      detail.textContent = chunks.slice(1).join('\n\n').trim();
+      el.appendChild(detail);
     }
 
     function bindEvents() {
