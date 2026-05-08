@@ -6744,4 +6744,18 @@
       if (typeof loadOpenJobs === 'function') loadOpenJobs();
     });
   });
+
+  /** Bridge fuer rams_wizard.js (nach Laden von app.js verfuegbar). */
+  window.MonteurRamsBridge = {
+    API_BASE: API_BASE,
+    getDispoBaseUrl: getDispoBaseUrl,
+    getTechId: getTechId,
+    authHeaders: function () {
+      return dispoBasicAuthHeaders(getServerUsername, getServerPassword);
+    },
+    getTechnicianDisplayName: function () {
+      return '';
+    }
+  };
+  window.loadDienstreiseList = loadDienstreiseList;
 })();

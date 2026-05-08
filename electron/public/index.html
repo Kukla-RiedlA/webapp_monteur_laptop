@@ -78,6 +78,59 @@
     .view-einstellungen.active { display: block; }
     .view-dienstreise { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-dienstreise.active { display: block; }
+    .auftraege-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--accent); margin-bottom: 1rem; flex-wrap: wrap; }
+    .auftraege-tab { background: transparent; border: 1px solid transparent; border-bottom: none; padding: 0.5rem 0.9rem; font: inherit; color: var(--muted); cursor: pointer; border-top-left-radius: 6px; border-top-right-radius: 6px; }
+    .auftraege-tab:hover { color: var(--text); }
+    .auftraege-tab.is-active { color: var(--text); background: var(--card); border-color: var(--accent); margin-bottom: -1px; }
+    .auftraege-pane { display: none; }
+    .auftraege-pane.is-active { display: block; }
+    .auftraege-pane-toolbar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+    .auftraege-pane-filter { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--muted); }
+    .rams-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+    .rams-list li { background: var(--card); border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.75rem; }
+    .rams-list .rams-line { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
+    .rams-list .rams-status { font-size: 0.75rem; background: var(--accent); border-radius: 4px; padding: 0.1rem 0.4rem; color: var(--text); }
+    .rams-list .rams-actions { margin-top: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .rams-list .btn { padding: 0.25rem 0.6rem; font-size: 0.8rem; }
+    .rams-wizard-modal-box { width: 92vw; max-width: 760px; max-height: 90vh; padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+    .kukla-rams-wizard { display: flex; flex-direction: column; max-height: 90vh; }
+    .kukla-rams-wizard__header { display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--accent); }
+    .kukla-rams-wizard__title { flex: 1; font-size: 1rem; font-weight: 600; }
+    .kukla-rams-wizard__lang { display: flex; gap: 2px; border: 1px solid var(--accent); border-radius: 6px; overflow: hidden; }
+    .kukla-rams-wizard__lang-btn { background: transparent; border: 0; padding: 0.2rem 0.6rem; font-size: 0.8rem; cursor: pointer; color: var(--muted); }
+    .kukla-rams-wizard__lang-btn.is-active { background: var(--accent); color: var(--text); }
+    .kukla-rams-wizard__close { background: transparent; border: 0; font-size: 1.2rem; color: var(--muted); cursor: pointer; }
+    .kukla-rams-wizard__progress { padding: 0.3rem 1rem; font-size: 0.78rem; color: var(--muted); background: rgba(255,255,255,0.04); }
+    .kukla-rams-wizard__body { padding: 0.75rem 1rem; overflow-y: auto; flex: 1; }
+    .kukla-rams-wizard__step-title { margin: 0 0 0.25rem; font-size: 1rem; }
+    .kukla-rams-wizard__step-sub { margin: 0 0 0.6rem; font-size: 0.85rem; color: var(--muted); }
+    .kukla-rams-wizard__field { margin-bottom: 0.7rem; }
+    .kukla-rams-wizard__field > label { display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 0.3rem; }
+    .kukla-rams-wizard__choices { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+    .kukla-rams-wizard__choice { background: var(--card); border: 1px solid var(--accent); border-radius: 16px; padding: 0.25rem 0.7rem; font: inherit; font-size: 0.85rem; cursor: pointer; color: var(--text); }
+    .kukla-rams-wizard__choice.is-selected { background: var(--accent); color: var(--text); border-color: var(--accent); }
+    .kukla-rams-wizard__check { display: flex; align-items: flex-start; gap: 0.4rem; padding: 0.4rem 0.5rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); font-size: 0.85rem; cursor: pointer; flex: 1 1 calc(50% - 6px); min-width: 200px; }
+    .kukla-rams-wizard__check.is-selected { background: var(--accent); }
+    .kukla-rams-wizard__check input[type="checkbox"] { margin-top: 2px; }
+    .kukla-rams-wizard__group { margin-bottom: 0.6rem; }
+    .kukla-rams-wizard__group-title { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .kukla-rams-wizard__hazard { border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; background: var(--card); }
+    .kukla-rams-wizard__hazard-title { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.4rem; }
+    .kukla-rams-wizard__risk-row { display: grid; grid-template-columns: 110px 1fr; gap: 0.3rem 0.6rem; align-items: center; margin-bottom: 0.3rem; }
+    .kukla-rams-wizard__risk-label { font-size: 0.78rem; color: var(--muted); }
+    .kukla-rams-wizard__risk-pills { display: flex; align-items: center; gap: 0.2rem; flex-wrap: wrap; }
+    .kukla-rams-wizard__risk-axis { font-size: 0.7rem; color: var(--muted); margin-right: 0.4rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .kukla-rams-wizard__pill { background: var(--card); border: 1px solid var(--accent); border-radius: 50%; width: 30px; height: 30px; font: inherit; font-size: 0.85rem; cursor: pointer; color: var(--text); }
+    .kukla-rams-wizard__pill.is-selected { background: var(--accent); }
+    .kukla-rams-wizard__hazard-score { margin-top: 0.3rem; font-size: 0.8rem; color: var(--muted); }
+    .kukla-rams-wizard__warn { color: #ff7777; font-weight: 600; margin-left: 0.4rem; }
+    .kukla-rams-wizard__error { margin: 0 1rem 0.6rem; padding: 0.4rem 0.5rem; background: rgba(255,77,77,0.15); border: 1px solid rgba(255,77,77,0.4); color: #ffd1d1; border-radius: 4px; font-size: 0.85rem; }
+    .kukla-rams-wizard__footer { display: flex; gap: 0.5rem; justify-content: flex-end; padding: 0.5rem 1rem; border-top: 1px solid var(--accent); background: rgba(255,255,255,0.04); }
+    .kukla-rams-wizard__btn { background: var(--card); border: 1px solid var(--accent); border-radius: 4px; padding: 0.3rem 0.8rem; font: inherit; font-size: 0.9rem; cursor: pointer; color: var(--text); }
+    .kukla-rams-wizard__btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+    .kukla-rams-wizard__btn--primary { background: #2d6a4f; color: #fff; border-color: #2d6a4f; }
+    .kukla-rams-wizard__checklist { display: grid; gap: 0.3rem; }
     .view-protokolle { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-protokolle.active { display: block; }
     .view-protokolle-sub { display: none; }
@@ -262,6 +315,7 @@
     .archiv-fab-table td:empty::after { content: '\00a0'; }
     .modal-overlay { position: fixed; top: var(--header-height); left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
     .modal-overlay.active { display: flex; }
+    .rams-wizard-overlay.modal-overlay.active { align-items: center; justify-content: center; padding: 1rem; }
     .modal-overlay.modal-fullscreen .modal-box { width: 100%; max-width: none; flex: 1; min-height: 0; max-height: 100%; border-radius: 0; border-width: 0; }
     .modal-box { background: var(--card); border: 1px solid var(--accent); border-radius: 8px; padding: 1rem; max-width: 520px; width: 95%; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; margin: 0; }
     .modal-box h3 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--text); }
@@ -439,7 +493,7 @@
     <h1 class="app-title">Kukla Monteur Tool</h1>
     <nav class="toolbar" aria-label="Hauptnavigation">
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
-    <button class="btn btn-ghost" id="btnViewDienstreise">Dienstreise</button>
+    <button class="btn btn-ghost" id="btnViewDienstreise" title="Auftragsliste, RAMS Abrufen und Erstellen">Aufträge</button>
     <button type="button" class="btn btn-ghost" id="btnViewAbrechnung" title="Abrechnung (eingebettet, mit Offline-Hinweis)">Abrechnung</button>
     <div class="toolbar-dropdown-wrap">
       <button type="button" class="btn btn-ghost" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">Protokolle ▾</button>
@@ -647,37 +701,51 @@
       </div>
     </div>
   </main>
-  <main id="viewDienstreise" class="view-dienstreise" aria-label="Dienstreise">
+  <main id="viewDienstreise" class="view-dienstreise view-auftraege" aria-label="Aufträge">
     <div class="card">
-      <h2>Meine Aufträge</h2>
-      <div id="dienstreiseList" class="dienstreise-list-wrap">
-        <span class="empty">Wird geladen…</span>
+      <div class="auftraege-tabs" role="tablist" aria-label="Aufträge Untermenü">
+        <button type="button" class="auftraege-tab is-active" role="tab" aria-selected="true" id="auftraegeTabList" data-auftraege-tab="list">Auftragsliste</button>
+        <button type="button" class="auftraege-tab" role="tab" aria-selected="false" id="auftraegeTabRamsFetch" data-auftraege-tab="rams-fetch">RAMS Abrufen</button>
+        <button type="button" class="auftraege-tab" role="tab" aria-selected="false" id="auftraegeTabRamsCreate" data-auftraege-tab="rams-create">RAMS Erstellen</button>
       </div>
+      <section id="auftraegePaneList" class="auftraege-pane is-active" role="tabpanel" aria-labelledby="auftraegeTabList">
+        <h2>Meine Aufträge</h2>
+        <div id="dienstreiseList" class="dienstreise-list-wrap">
+          <span class="empty">Wird geladen…</span>
+        </div>
+      </section>
+      <section id="auftraegePaneRamsFetch" class="auftraege-pane" role="tabpanel" aria-labelledby="auftraegeTabRamsFetch" hidden>
+        <div class="auftraege-pane-toolbar">
+          <h2 style="margin:0">RAMS Abrufen</h2>
+          <label class="auftraege-pane-filter">
+            <span>Status</span>
+            <select id="ramsListStatusFilter" class="dienstreise-select">
+              <option value="">Alle</option>
+              <option value="draft">Entwurf</option>
+              <option value="validated">Validiert</option>
+              <option value="submitted_for_review">Eingereicht</option>
+              <option value="approved">Freigegeben</option>
+              <option value="rejected">Abgelehnt</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn-ghost" id="ramsListReload">Aktualisieren</button>
+        </div>
+        <div id="ramsListMessage" class="muted" style="margin:0.25rem 0 0.5rem 0;font-size:0.85rem"></div>
+        <ul id="ramsListItems" class="rams-list" aria-live="polite"></ul>
+      </section>
+      <section id="auftraegePaneRamsCreate" class="auftraege-pane" role="tabpanel" aria-labelledby="auftraegeTabRamsCreate" hidden>
+        <div class="auftraege-pane-toolbar">
+          <h2 style="margin:0">RAMS Erstellen</h2>
+          <button type="button" class="btn btn-ghost" id="ramsJobsReload">Aktualisieren</button>
+        </div>
+        <div id="ramsJobsMessage" class="muted" style="margin:0.25rem 0 0.5rem 0;font-size:0.85rem"></div>
+        <ul id="ramsJobsItems" class="rams-list"></ul>
+      </section>
     </div>
-    <div id="modalDienstreiseNeu" class="modal-overlay" aria-hidden="true">
-      <div class="modal-box">
-        <h3>Neue Dienstreise</h3>
-        <div class="settings-row">
-          <label for="dienstreiseNeuStartDate">Startdatum</label>
-          <input type="date" id="dienstreiseNeuStartDate" />
-        </div>
-        <div class="settings-row">
-          <label for="dienstreiseNeuCompany">Firmenname</label>
-          <input type="text" id="dienstreiseNeuCompany" placeholder="Firma" />
-        </div>
-        <div class="settings-row">
-          <label for="dienstreiseNeuCity">Ort</label>
-          <input type="text" id="dienstreiseNeuCity" placeholder="Ort" />
-        </div>
-        <div class="settings-row">
-          <label for="dienstreiseNeuCountry">Länderkürzel</label>
-          <input type="text" id="dienstreiseNeuCountry" placeholder="z.B. DE" maxlength="4" />
-        </div>
-        <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
-          <button type="button" class="btn btn-primary" id="btnDienstreiseNeuSubmit">Anlegen</button>
-          <button type="button" class="btn btn-ghost" id="btnDienstreiseNeuCancel">Abbrechen</button>
-        </div>
-        <span id="dienstreiseNeuHint" class="settings-saved-hint" aria-live="polite"></span>
+    <div id="ramsWizardOverlay" class="modal-overlay rams-wizard-overlay" aria-hidden="true" role="dialog" aria-labelledby="ramsWizardOverlayTitle">
+      <div class="modal-box rams-wizard-modal-box">
+        <h3 id="ramsWizardOverlayTitle" class="visually-hidden">RAMS Quiz</h3>
+        <div id="ramsWizardContainer"></div>
       </div>
     </div>
   </main>
@@ -1010,6 +1078,8 @@
   </main>
   <script src="countries.js"></script>
   <script src="signature_widget.js"></script>
+  <script src="rams_wizard_core.js"></script>
   <script src="app.js"></script>
+  <script src="rams_wizard.js"></script>
 </body>
 </html>

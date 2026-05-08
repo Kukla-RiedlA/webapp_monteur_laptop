@@ -1875,6 +1875,123 @@ function createApp(db) {
     }
   });
 
+  /**
+   * Generischer Proxy fuer die Mobile-RAMS-API (`/api/mobile/rams.php`).
+   * Auth: HTTP-Basic gegen `users` (siehe `dispo/auth/require_token.php`).
+   * Body: { action, method, queryParams?, payload?, baseUrl }
+   * Wird vom Laptop-Frontend (rams_wizard.js) aufgerufen, damit der gleiche
+   * Mobile-Endpoint wie in der PWA genutzt werden kann.
+   */
+  app.all('/api/laptop_rams_proxy', express.json({ limit: '50mb' }), async (req, res) => {
+    try {
+      const body = (req.body && typeof req.body === 'object') ? req.body : {};
+      const baseUrl = (body.baseUrl || body.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+      const action = (body.action || req.query.action || '').toString().trim();
+      const method = (body.method || (body.payload ? 'POST' : 'GET')).toString().toUpperCase();
+      const queryParams = (body.queryParams && typeof body.queryParams === 'object') ? body.queryParams : {};
+      const payload = body.payload;
+      if (!baseUrl) {
+        return res.status(400).json({ ok: false, error: 'baseUrl erforderlich.' });
+      }
+      if (!action) {
+        return res.status(400).json({ ok: false, error: 'action erforderlich.' });
+      }
+      const auth = authHeaderFromIncomingBasicOrQuery(req);
+      if (!auth) {
+        return res.status(401).json({ ok: false, error: 'Basic-Auth erforderlich.' });
+      }
+      const qs = new URLSearchParams();
+      qs.set('action', action);
+      Object.keys(queryParams).forEach((k) => {
+        if (queryParams[k] !== undefined && queryParams[k] !== null) qs.set(k, String(queryParams[k]));
+      });
+      const url = `${baseUrl}/api/mobile/rams.php?${qs.toString()}`;
+      const headers = Object.assign(
+        { Accept: 'application/json' },
+        auth || {},
+        auth && auth.Authorization ? { 'X-Kukla-Authorization': auth.Authorization } : {}
+      );
+      const opts = { method: method, headers: headers };
+      if (method !== 'GET' && method !== 'HEAD') {
+        headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(payload && typeof payload === 'object' ? payload : (payload || {}));
+      }
+      const r = await fetch(url, opts);
+      const raw = await r.text();
+      res.status(r.status).type('application/json').send(raw);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'rams_proxy' });
+    }
+  });
+
+  /**
+   * Aktive Auftraege des Technikers fuer "RAMS Erstellen" im Laptop.
+   * Liefert das schon vorhandene Dispo-Endpoint `dispo_api/api/jobs_open.php`.
+   * Diese Route ist ein Convenience-Wrapper um POST mit JSON-Body, weil das
+   * Laptop-Frontend dieselbe Calling-Convention wie der RAMS-Proxy nutzt.
+   */
+  app.post('/api/laptop_active_jobs_for_rams', express.json(), async (req, res) => {
+    try {
+      const body = (req.body && typeof req.body === 'object') ? req.body : {};
+      const baseUrl = (body.baseUrl || body.base_url || '').toString().trim().replace(/\/$/, '');
+      const technicianId = body.technicianId || body.technician_id || getTechnicianId(req);
+      if (!baseUrl || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'baseUrl und technicianId erforderlich.' });
+      }
+      const auth = authHeaderFromIncomingBasicOrQuery(req);
+      const url = `${baseUrl}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(technicianId)}`;
+      const r = await fetch(url, { method: 'GET', headers: Object.assign({ Accept: 'application/json' }, auth || {}) });
+      const raw = await r.text();
+      let parsed = null;
+      try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
+      if (!r.ok) {
+        return res.status(r.status).json({ ok: false, error: (parsed && parsed.error) || 'Dispo-Fehler', raw: raw.slice(0, 400) });
+      }
+      const jobs = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.jobs) ? parsed.jobs : []);
+      res.json({ ok: true, jobs: jobs });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'jobs_proxy' });
+    }
+  });
+
+  /**
+   * Whitelist-Proxy fuer ausgewaehlte Mobile-API-Skripte (Signatur-Session/Submit).
+   * Gleiche Basic-Auth wie laptop_rams_proxy. Pfad relativ zur Dispo-Base.
+   */
+  app.post('/api/laptop_mobile_post', express.json({ limit: '80mb' }), async (req, res) => {
+    try {
+      const allowed = new Set([
+        '/api/mobile/signature_session_open.php',
+        '/api/mobile/signature_submit.php',
+      ]);
+      const body = (req.body && typeof req.body === 'object') ? req.body : {};
+      const baseUrl = (body.baseUrl || body.base_url || '').toString().trim().replace(/\/$/, '');
+      let relPath = (body.path || '').toString().trim();
+      if (!relPath.startsWith('/')) {
+        relPath = '/' + relPath;
+      }
+      if (!baseUrl || !allowed.has(relPath)) {
+        return res.status(400).json({ ok: false, error: 'baseUrl oder path ungueltig.' });
+      }
+      const auth = authHeaderFromIncomingBasicOrQuery(req);
+      if (!auth) {
+        return res.status(401).json({ ok: false, error: 'Basic-Auth erforderlich.' });
+      }
+      const payload = body.payload && typeof body.payload === 'object' ? body.payload : {};
+      const url = `${baseUrl}${relPath}`;
+      const headers = Object.assign(
+        { Accept: 'application/json', 'Content-Type': 'application/json' },
+        auth || {},
+        auth && auth.Authorization ? { 'X-Kukla-Authorization': auth.Authorization } : {}
+      );
+      const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+      const raw = await r.text();
+      res.status(r.status).type('application/json').send(raw);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'laptop_mobile_post' });
+    }
+  });
+
   /** PDF aus lokalem Dienstreise-Ordner stagen (Montagebericht → Dispo-Signatur). */
   app.post('/api/montagebericht_signature_stage', express.json(), async (req, res) => {
     try {
