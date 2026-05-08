@@ -341,12 +341,24 @@
                   return monteurMobilePost('/api/mobile/signature_submit.php', pl);
                 },
                 onSigned: function (sigRes) {
-                  var evId = sigRes && sigRes.event_id ? parseInt(String(sigRes.event_id), 10) : 0;
+                  var evId = 0;
+                  if (sigRes) {
+                    if (sigRes.event_id != null && sigRes.event_id !== '') {
+                      evId = parseInt(String(sigRes.event_id), 10);
+                    } else if (sigRes.signature_event_id != null && sigRes.signature_event_id !== '') {
+                      evId = parseInt(String(sigRes.signature_event_id), 10);
+                    }
+                  }
                   if (!evId) {
                     reject(new Error('Signatur ohne event_id.'));
                     return;
                   }
-                  var signerName = sigRes && sigRes.signer_name ? sigRes.signer_name : nameSug;
+                  var signerName = '';
+                  if (sigRes && sigRes.signer_name != null && String(sigRes.signer_name).trim() !== '') {
+                    signerName = String(sigRes.signer_name).trim();
+                  } else if (nameSug && String(nameSug).trim() !== '') {
+                    signerName = String(nameSug).trim();
+                  }
                   monteurRamsProxy({
                     action: 'sign_link',
                     method: 'POST',
