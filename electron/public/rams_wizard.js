@@ -239,6 +239,9 @@
           html += '<span class="rams-status">' + htmlEscape(st) + '</span></div>';
           html += '<div class="rams-actions">';
           html += '<button type="button" class="btn btn-primary" data-rams-quiz="' + String(id) + '">Quiz oeffnen</button>';
+          if (it.can_delete) {
+            html += '<button type="button" class="btn btn-ghost" data-rams-del="' + String(id) + '" title="Endgueltig loeschen" aria-label="Loeschen" style="color:#b91c1c">&#128465;</button>';
+          }
           var base = B.getDispoBaseUrl();
           if (base) {
             html += '<a class="btn btn-ghost" target="_blank" rel="noopener" href="' + htmlEscape(base + '/api/rams/pdf.php?id=' + encodeURIComponent(String(id)) + '&inline=1') + '">PDF</a>';
@@ -251,6 +254,15 @@
           btn.addEventListener('click', function () {
             var rid = parseInt(btn.getAttribute('data-rams-quiz'), 10);
             if (rid > 0) startWizardForRamsId(rid);
+          });
+        });
+        Array.prototype.forEach.call(ul.querySelectorAll('[data-rams-del]'), function (btn) {
+          btn.addEventListener('click', function () {
+            var delId = parseInt(btn.getAttribute('data-rams-del'), 10);
+            if (!delId || !window.confirm('RAMS endgueltig loeschen?')) return;
+            monteurRamsProxy({ action: 'delete', method: 'POST', payload: { id: delId } })
+              .then(function () { loadRamsMyList(); })
+              .catch(function (e) { window.alert((e && e.message) ? e.message : 'Fehler'); });
           });
         });
       })
