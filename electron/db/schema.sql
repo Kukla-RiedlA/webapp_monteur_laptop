@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   job_type TEXT NOT NULL,
   start_datetime TEXT NOT NULL,
   end_datetime TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'geplant',
+  status TEXT NOT NULL DEFAULT 'angelegt',
   required_technicians INTEGER NOT NULL DEFAULT 1,
   description TEXT,
   fabrikationsnummern TEXT,

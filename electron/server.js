@@ -275,6 +275,16 @@ async function getDb() {
     )`);
   } catch (e) { /* existiert evtl. */ }
   try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_tree_cache_synced ON anlagenstamm_tree_cache(synced_at)'); } catch (e) { /* ignore */ }
+  try {
+    sqlDb.run("UPDATE jobs SET status = 'angelegt' WHERE LOWER(COALESCE(status, '')) = 'geplant'");
+    const n = typeof sqlDb.getRowsModified === 'function' ? sqlDb.getRowsModified() : 0;
+    if (n > 0) {
+      const data = sqlDb.export();
+      const buffer = Buffer.from(data);
+      if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+      writeFileWithRetry(DB_PATH, buffer);
+    }
+  } catch (e) { /* ignore */ }
   return createDbWrapper(sqlDb);
 }
 
@@ -282,7 +292,19 @@ function createApp(db) {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
 
-  /** Lokaler Auftrag für Schreibzugriff; blockiert Status „geplant“ (nur Anzeige in der App). */
+  /** Schreibzugriff blockiert für „angelegt“ (inkl. Legacy „geplant“) und „abgerechnet“. */
+  function localJobWriteBlocked(status) {
+    const s = String(status || '').toLowerCase();
+    if (s === 'angelegt' || s === 'geplant') {
+      return { error: 'Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.', status: 403 };
+    }
+    if (s === 'abgerechnet') {
+      return { error: 'Auftrag ist abgerechnet – Bearbeitung in der App nicht erlaubt.', status: 403 };
+    }
+    return null;
+  }
+
+  /** Lokaler Auftrag für Schreibzugriff; blockiert Status nur Anzeige / abgerechnet. */
   function getWritableLocalJobMetaForPatch(dbConn, technicianId, rawJobId) {
     const n = parseInt(rawJobId, 10);
     if (!Number.isFinite(n)) return { error: 'job_id ungültig.', status: 400 };
@@ -295,13 +317,12 @@ function createApp(db) {
         )
     `).get(n, n, technicianId);
     if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
-    if (String(row.status || '').toLowerCase() === 'geplant') {
-      return { error: 'Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.', status: 403 };
-    }
+    const blocked = localJobWriteBlocked(row.status);
+    if (blocked) return blocked;
     return { localId: row.id };
   }
 
-  /** Dienstreise-/Datei-Schreibzugriff: gleiche Regeln wie PATCH (inkl. Techniker-Zuordnung), sonst nur Geplant-Prüfung per lokaler ID (z. B. Upload ohne technicianId im Body). */
+  /** Dienstreise-/Datei-Schreibzugriff: gleiche Regeln wie PATCH (inkl. Techniker-Zuordnung), sonst nur Status-Prüfung per lokaler ID (z. B. Upload ohne technicianId im Body). */
   function gateDienstreiseWrite(dbConn, technicianId, localJobId) {
     const lid = parseInt(localJobId, 10);
     if (!Number.isFinite(lid) || lid <= 0) return { error: 'job_id (lokal) erforderlich.', status: 400 };
@@ -316,9 +337,8 @@ function createApp(db) {
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
     `).get(lid, lid);
     if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
-    if (String(row.status || '').toLowerCase() === 'geplant') {
-      return { error: 'Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.', status: 403 };
-    }
+    const blocked = localJobWriteBlocked(row.status);
+    if (blocked) return blocked;
     return null;
   }
 
@@ -1014,6 +1034,23 @@ function createApp(db) {
       }
       send({ phase: 'refresh_done' });
 
+      async function notifyMarkDocsLoaded() {
+        try {
+          const url = dispoBaseUrl + '/api/job_mark_docs_loaded.php';
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, authHeader)),
+            body: JSON.stringify({ job_id: jobId, technician_id: technicianId }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || data.ok === false) {
+            console.warn('[copy_project_stream] job_mark_docs_loaded', r.status, data && data.error);
+          }
+        } catch (e) {
+          console.warn('[copy_project_stream] job_mark_docs_loaded', e && e.message ? e.message : e);
+        }
+      }
+
       async function listEntries(relPath) {
         const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
         const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + pathQ;
@@ -1054,6 +1091,7 @@ function createApp(db) {
       const total = fileList.length;
       send({ phase: 'download', total });
       if (total === 0) {
+        await notifyMarkDocsLoaded();
         send({ phase: 'done', message: 'Keine Dateien im Projektordner auf der Dispo (nach Aktualisierung).' }, () => {
           safeEnd();
         });
@@ -1089,6 +1127,7 @@ function createApp(db) {
         send({ phase: 'file', current: i + 1, total, path: relPath });
       }
 
+      await notifyMarkDocsLoaded();
       send({ phase: 'done' }, () => {
         safeEnd();
       });
@@ -2434,8 +2473,9 @@ function createApp(db) {
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
-      if (String(jobRow.status || '').toLowerCase() === 'geplant') {
-        return res.status(403).json({ ok: false, error: 'Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.' });
+      const blocked = localJobWriteBlocked(jobRow.status);
+      if (blocked) {
+        return res.status(blocked.status).json({ ok: false, error: blocked.error });
       }
 
       const toFab = (f) => (f != null && (typeof f === 'string' ? f : (f.fabrikationsnummer ?? f.Fabrikationsnummer))) ? String(typeof f === 'string' ? f : (f.fabrikationsnummer ?? f.Fabrikationsnummer)).trim() : '';
@@ -2973,8 +3013,9 @@ function createApp(db) {
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
-      if (String(jobRow.status || '').toLowerCase() === 'geplant') {
-        return res.status(403).json({ ok: false, error: 'Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.' });
+      const blocked = localJobWriteBlocked(jobRow.status);
+      if (blocked) {
+        return res.status(blocked.status).json({ ok: false, error: blocked.error });
       }
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
@@ -3180,7 +3221,7 @@ function createApp(db) {
       return res.status(gate.status).json({ ok: false, error: gate.error });
     }
     const effectiveJobId = gate.localId;
-    const allowed = ['geplant', 'in_arbeit', 'erledigt'];
+    const allowed = ['angelegt', 'zugeteilt', 'in_arbeit', 'erledigt', 'abgerechnet', 'geplant'];
     const hotelKeys = ['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_address_extra_1', 'hotel_address_extra_2', 'hotel_phone', 'hotel_email', 'hotel_website', 'hotel_comment', 'hotel_rating_stars'];
     const hasHotelPayload = hotelKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k));
     try {
@@ -4275,7 +4316,9 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const existing = db.prepare('SELECT id FROM jobs WHERE server_id = ?').get(id);
   const start = (j.start_datetime || '').replace('T', ' ').substring(0, 19);
   const end = (j.end_datetime || '').replace('T', ' ').substring(0, 19);
-  const status = ['geplant', 'in_arbeit', 'erledigt'].includes(j.status) ? j.status : 'geplant';
+  const rawSt = String(j.status || '').toLowerCase();
+  const KNOWN = new Set(['angelegt', 'zugeteilt', 'in_arbeit', 'erledigt', 'abgerechnet', 'geplant']);
+  const status = KNOWN.has(rawSt) ? rawSt : 'angelegt';
   if (existing) {
     db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
       j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null, existing.id

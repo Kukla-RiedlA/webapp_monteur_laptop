@@ -753,10 +753,29 @@
     return '<img src="flags/' + c + '.png" alt="" class="job-flag" width="20" height="15" loading="lazy" onerror="this.style.display=\'none\'">';
   }
 
-  /** Auftrag mit Status „geplant“: in der Laptop-App nur Anzeige, keine Änderungen. */
-  function isJobGeplantReadOnly(job) {
+  /** Auftrag mit Status „angelegt“ (nur Anzeige). Legacy lokaler Cache: „geplant“. */
+  function isJobAngelegtReadOnly(job) {
     if (!job || typeof job !== 'object') return false;
-    return String(job.status || '').trim().toLowerCase() === 'geplant';
+    var s = String(job.status || '').trim().toLowerCase();
+    return s === 'angelegt' || s === 'geplant';
+  }
+
+  /** CSS-Klasse status-* (geplant aus Cache wird wie angelegt gemappt). */
+  function jobStatusBadgeClass(statusRaw) {
+    var s = String(statusRaw || 'angelegt').trim().toLowerCase().replace(/\s+/g, '_');
+    if (s === 'geplant') return 'angelegt';
+    return s;
+  }
+
+  /** Kurzlabel fuer Anzeige (nicht die internen Langtexte). */
+  function jobStatusDisplayLabel(statusRaw) {
+    var s = String(statusRaw || '').trim().toLowerCase();
+    if (s === 'geplant' || s === 'angelegt') return 'Angelegt';
+    if (s === 'zugeteilt') return 'Zugeteilt';
+    if (s === 'in_arbeit') return 'In Arbeit';
+    if (s === 'erledigt') return 'Erledigt';
+    if (s === 'abgerechnet') return 'Abgerechnet';
+    return statusRaw ? String(statusRaw) : 'Angelegt';
   }
 
   /** Rohliste vom Dispo (jobs_open), für clientseitige Filter unter „Offene Aufträge“. */
@@ -893,7 +912,7 @@
       const hasOpenJobMeta = j.assigned_count != null && j.required_technicians != null;
       const statusHtml = hasOpenJobMeta
         ? '<span class="job-meta">' + Number(j.assigned_count) + ' / ' + Number(j.required_technicians) + ' Techniker</span>'
-        : '<span class="status-badge status-' + (j.status || 'geplant').replace(' ', '_') + '">' + (j.status || 'geplant') + '</span>';
+        : '<span class="status-badge status-' + jobStatusBadgeClass(j.status) + '">' + escapeHtml(jobStatusDisplayLabel(j.status)) + '</span>';
       return (
         '<div class="job" data-job-id="' + j.id + '">' +
         '<div class="job-info">' +
@@ -937,16 +956,16 @@
   function updateDienstreiseWriteControlsState() {
     var jid = getDienstreiseExplorerJobId();
     var snap = jid ? getDienstreiseJobSnapshotByLocalId(jid) : null;
-    var ro = isJobGeplantReadOnly(snap);
+    var ro = isJobAngelegtReadOnly(snap);
     var copyBtn = document.getElementById('btnDienstreiseCopyProject');
     var upBtn = document.getElementById('btnDienstreiseUpload');
     if (copyBtn) {
       copyBtn.disabled = !!ro;
-      copyBtn.title = ro ? 'Auftrag ist geplant – nur Anzeige.' : '';
+      copyBtn.title = ro ? 'Auftrag ist angelegt – nur Anzeige.' : '';
     }
     if (upBtn) {
       upBtn.disabled = !!ro;
-      upBtn.title = ro ? 'Auftrag ist geplant – nur Anzeige.' : '';
+      upBtn.title = ro ? 'Auftrag ist angelegt – nur Anzeige.' : '';
     }
     var sub = document.getElementById('dienstreiseUploadSubfolder');
     var fi = document.getElementById('dienstreiseFileInput');
@@ -1046,7 +1065,7 @@
   }
 
   function renderJobDetailsContent(job) {
-    var readOnlyGeplant = isJobGeplantReadOnly(job);
+    var readOnlyAngelegt = isJobAngelegtReadOnly(job);
     var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
     function decodeHtmlEntities(str) {
       if (str == null || str === '') return '';
@@ -1180,8 +1199,8 @@
     window.currentProjektdatenLeistungRows = leistungRows;
 
     var html = '';
-    if (readOnlyGeplant) {
-      html += '<div class="projektdaten-readonly-banner" role="status">Auftrag ist <strong>geplant</strong> – hier nur Anzeige, keine Bearbeitung.</div>';
+    if (readOnlyAngelegt) {
+      html += '<div class="projektdaten-readonly-banner" role="status">Auftrag ist <strong>angelegt</strong> – hier nur Anzeige, keine Bearbeitung.</div>';
     }
     html += '<div class="modal-detail-grid">';
     html += '<div class="modal-detail-section modal-detail-section-address-row"><div class="modal-address-contact-row">';
@@ -1250,7 +1269,7 @@
       html += '<div class="modal-detail-section modal-detail-section-address-row">';
       html += '<div class="modal-address-contact-row">';
       html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
-      html += '<div class="modal-detail-section modal-hotel-display-wrap"><h4>Hotel Adresse</h4><p class="modal-address hotel-address-display' + (readOnlyGeplant ? ' hotel-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyGeplant ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + hotelAddressLine + '</p>' + (readOnlyGeplant ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
+      html += '<div class="modal-detail-section modal-hotel-display-wrap"><h4>Hotel Adresse</h4><p class="modal-address hotel-address-display' + (readOnlyAngelegt ? ' hotel-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + hotelAddressLine + '</p>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
       html += '<div class="modal-detail-section"><h4>Kontakt (Baustellen-Ansprechpartner)</h4><dl class="modal-detail-dl">';
       html += '<dt>Ansprechpartner</dt><dd>' + v(name) + '</dd>';
       html += '<dt>Telefon</dt><dd>' + v(phone) + '</dd>';
@@ -1261,7 +1280,7 @@
     html += '</div>';
 
     html += '<div class="modal-detail-section"><h4>Leistungsdaten (Anlagenstamm)</h4>';
-    html += '<p class="modal-leistung-hint muted">' + (readOnlyGeplant ? 'Nur Anzeige (Auftrag geplant).' : 'Doppelklick auf eine Anlage öffnet die Anlagendetails.') + '</p>';
+    html += '<p class="modal-leistung-hint muted">' + (readOnlyAngelegt ? 'Nur Anzeige (Auftrag angelegt).' : 'Doppelklick auf eine Anlage öffnet die Anlagendetails.') + '</p>';
     var visibleIndices = [];
     for (var idx = 0; idx < leistungRows.length; idx++) {
       var r = leistungRows[idx];
@@ -1270,7 +1289,7 @@
     }
     var useTwoCards = visibleIndices.length > 2;
     var vCell = function (x) { return escapeHtml(String(x == null ? '' : x)); };
-    var leistungCellClass = readOnlyGeplant ? 'modal-leistung-cell-readonly' : 'modal-leistung-cell-clickable';
+    var leistungCellClass = readOnlyAngelegt ? 'modal-leistung-cell-readonly' : 'modal-leistung-cell-clickable';
     function renderAnlagenTable(indices) {
       var out = '<div class="modal-leistung-wrap"><table class="modal-leistung-table modal-leistung-table-compact"><thead><tr>';
       out += '<th>FN</th><th>Type</th><th>Leistung</th>';
@@ -1583,8 +1602,8 @@
   }
 
   function openAnlageDetailModal(rowIndex) {
-    if (isJobGeplantReadOnly(window.currentProjektdatenJob)) {
-      alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+    if (isJobAngelegtReadOnly(window.currentProjektdatenJob)) {
+      alert('Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.');
       return;
     }
     var rows = window.currentProjektdatenLeistungRows;
@@ -1693,8 +1712,8 @@
   }
 
   function addLeistungRow() {
-    if (isJobGeplantReadOnly(window.currentProjektdatenJob)) {
-      alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+    if (isJobAngelegtReadOnly(window.currentProjektdatenJob)) {
+      alert('Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.');
       return;
     }
     var tbody = document.getElementById('modalLeistungTbody');
@@ -1711,8 +1730,8 @@
   }
 
   function saveLeistungDaten() {
-    if (isJobGeplantReadOnly(window.currentProjektdatenJob)) {
-      alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+    if (isJobAngelegtReadOnly(window.currentProjektdatenJob)) {
+      alert('Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.');
       return;
     }
     var jobId = jobDetailsJobId;
@@ -1936,8 +1955,8 @@
   }
 
   function openHotelAddressModal(job) {
-    if (isJobGeplantReadOnly(job || window.currentProjektdatenJob)) {
-      alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+    if (isJobAngelegtReadOnly(job || window.currentProjektdatenJob)) {
+      alert('Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.');
       return;
     }
     var jobId = job && (job.id != null) ? job.id : jobDetailsJobId;
@@ -2128,8 +2147,8 @@
       try {
         var jr = await fetch(API_BASE + '/api/job?id=' + encodeURIComponent(jobId), { headers: { 'X-Technician-Id': String(techId) } });
         var jd = await jr.json();
-        if (jd.job && isJobGeplantReadOnly(jd.job)) {
-          alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+        if (jd.job && isJobAngelegtReadOnly(jd.job)) {
+          alert('Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.');
           return;
         }
       } catch (e) { /* weiter */ }
@@ -2153,8 +2172,8 @@
       try {
         var jr2 = await fetch(API_BASE + '/api/job?id=' + encodeURIComponent(jobId), { headers: { 'X-Technician-Id': String(techIdPre) } });
         var jd2 = await jr2.json();
-        if (jd2.job && isJobGeplantReadOnly(jd2.job)) {
-          alert('Auftrag ist geplant – Bearbeitung in der App nicht erlaubt.');
+        if (jd2.job && isJobAngelegtReadOnly(jd2.job)) {
+          alert('Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.');
           return;
         }
       } catch (e) { /* weiter */ }
@@ -2389,7 +2408,7 @@
         // Dienstreise-Projektordner (Dokumente_Monteur / Dokumente_Buchhaltung) periodisch mit dem Dispo-Server synchronisieren
         if (selectedJobIdOnDienstreisePage) {
           var syncSnap = typeof getDienstreiseJobSnapshotByLocalId === 'function' ? getDienstreiseJobSnapshotByLocalId(selectedJobIdOnDienstreisePage) : null;
-          if (!isJobGeplantReadOnly(syncSnap)) {
+          if (!isJobAngelegtReadOnly(syncSnap)) {
             const bodySync = {
               job_id: selectedJobIdOnDienstreisePage,
               dispo_base_url: syncBase,
@@ -2937,7 +2956,8 @@
     }
     const html = jobs.map(function (j) {
       const dateStr = formatDateRange(j.start_datetime, j.end_datetime);
-      const status = (j.status || 'erledigt').replace(' ', '_');
+      const status = jobStatusBadgeClass(j.status || 'erledigt');
+      const statusLabel = jobStatusDisplayLabel(j.status || 'erledigt');
       const firma = (j.customer_name || j.customerName || '').trim();
       const ort = (j.city || '').trim();
       const land = normalizeCountryToCode(j.country) || (j.country || '').trim().toUpperCase().slice(0, 2);
@@ -2961,7 +2981,7 @@
         '<span class="job-meta">' + subtitle + (j.job_type ? ' · ' + escapeHtml(j.job_type || '') : '') + '</span>' +
         '</div>' +
         '<div class="job-actions">' +
-        '<span class="status-badge status-' + status + '">' + (j.status || 'erledigt') + '</span>' +
+        '<span class="status-badge status-' + status + '">' + escapeHtml(statusLabel) + '</span>' +
         '</div></div></div>' +
         '<div class="archiv-job-expand" style="display:' + (isExpanded ? 'block' : 'none') + '">' +
         (isExpanded ? '' : '') +
@@ -4723,7 +4743,7 @@
     if (!dienstreiseProtectedPathsByJob[jobId]) dienstreiseProtectedPathsByJob[jobId] = new Set();
     var protectedSet = dienstreiseProtectedPathsByJob[jobId];
     var drSnap = getDienstreiseJobSnapshotByLocalId(jobId);
-    var drReadonlyGeplant = isJobGeplantReadOnly(drSnap);
+    var drReadonlyGeplant = isJobAngelegtReadOnly(drSnap);
     var rows = [];
     var expanded = dienstreiseExplorerExpanded;
     function addEntries(entries, level) {
@@ -4883,7 +4903,8 @@
       }
       var html = jobs.map(function (j) {
         var dateStr = formatDateRange(j.start_datetime, j.end_datetime);
-        var status = (j.status || 'geplant').replace(' ', '_');
+        var stClass = jobStatusBadgeClass(j.status);
+        var stLabel = jobStatusDisplayLabel(j.status);
         var firma = (j.customer_name || j.customerName || '').trim();
         var ort = (j.city || '').trim();
         var land = normalizeCountryToCode(j.country) || (j.country || '').trim().toUpperCase().slice(0, 2);
@@ -4898,8 +4919,8 @@
         return '<div class="job' + sel + '" data-job-id="' + escapeHtml(String(j.id)) + '">' +
           '<div class="job-info"><strong>' + (titleLine || 'Auftrag') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + (j.job_type ? ' · ' + (j.job_type || '') : '') + '</span></div>' +
           '<div class="job-actions">' +
-          '<span class="status-badge status-' + status + '">' + (j.status || 'geplant') + '</span>' +
-          (j.status !== 'erledigt' && String(j.status || '').toLowerCase() !== 'geplant' ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
+          '<span class="status-badge status-' + stClass + '">' + escapeHtml(stLabel) + '</span>' +
+          (j.status !== 'erledigt' && String(j.status || '').toLowerCase() !== 'abgerechnet' && !isJobAngelegtReadOnly(j) ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
           '</div></div>';
       }).join('');
       listEl.innerHTML = html;
@@ -4938,9 +4959,9 @@
   document.getElementById('btnDienstreiseCopyProject').addEventListener('click', function () {
     var localJobId = jobDetailsJobId || selectedJobIdOnDienstreisePage;
     var snapCopy = localJobId ? getDienstreiseJobSnapshotByLocalId(localJobId) : null;
-    if (isJobGeplantReadOnly(snapCopy)) {
+    if (isJobAngelegtReadOnly(snapCopy)) {
       var h0 = document.getElementById('dienstreiseCopyHint');
-      if (h0) h0.textContent = 'Auftrag ist geplant – nur Anzeige.';
+      if (h0) h0.textContent = 'Auftrag ist angelegt – nur Anzeige.';
       return;
     }
     var hint = document.getElementById('dienstreiseCopyHint');
@@ -5102,9 +5123,9 @@
   document.getElementById('btnDienstreiseUpload').addEventListener('click', function () {
     var localJobId = getDienstreiseExplorerJobId();
     var snapUp = localJobId ? getDienstreiseJobSnapshotByLocalId(localJobId) : null;
-    if (isJobGeplantReadOnly(snapUp)) {
+    if (isJobAngelegtReadOnly(snapUp)) {
       var hintRo = document.getElementById('dienstreiseUploadHint');
-      if (hintRo) hintRo.textContent = 'Auftrag ist geplant – nur Anzeige.';
+      if (hintRo) hintRo.textContent = 'Auftrag ist angelegt – nur Anzeige.';
       return;
     }
     var subfolder = document.getElementById('dienstreiseUploadSubfolder');

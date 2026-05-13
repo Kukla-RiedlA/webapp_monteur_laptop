@@ -66,7 +66,7 @@ Hinweis: Das sind **lokale** Laptop-Gateway-Payloads (historisch camelCase). Neu
 
 **Abrechnung (Electron-Gateway):** `GET /api/abrechnung/bundle` liefert neben Dateimetadaten **`comments`**: `{ "dispo": [ … ], "buchhaltung": [ … ] }` (Felder wie Dispo `dispo_api/api/abrechnung_notes.php`: u. a. `id`, `body`, `created_at`, `author_name`). **`notes`** (`dispo`/`buchhaltung` als Strings) bleibt für ältere Cache-Zeilen kompatibel; neue Daten liegen in **`comments_json`** im lokalen Cache.
 
-Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über denselben Host; sie erwarten die vom Client gesetzte **`baseUrl`** / aktive Basis aus der Pick-Antwort.
+Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über denselben Host; sie erwarten die vom Client gesetzte **`baseUrl`** / aktive Basis aus der Pick-Antwort. **`POST /api/dienstreise/copy_project_stream`:** nach erfolgreichem Refresh und Kopieren (auch **0 Dateien**) wird im Main-Prozess **`POST …/api/job_mark_docs_loaded.php`** (JSON `job_id`, `technician_id`, gleiche Monteur-Auth-Header wie Projekt-APIs) aufgerufen; Fehler dort **verwerfen** den lokalen Kopiererfolg nicht (nur `console.warn`).
 
 - **Import:** `dispo/dispo_api/api/receive_dispo.php` – u. a. `batch_id`, `processed_jobs`, `processed_absences`, `processed_assignments`.
 - **Pairing / Mobile:** `dispo/api/mobile/pairing.php` – u. a. `base_url` (nicht `baseUrl`).
@@ -102,6 +102,9 @@ Gleiche Basis-URL wie die Dispo. Authentifizierung wie bisher: Monteur mit `tech
 | `dispo/api/job_project_file_download.php` | GET | `job_id`, `technician_id`, `path` – Datei aus Projektordner; unter `Dokumente_Monteur` bzw. `Dokumente_Anlage` zuerst physische Datei, sonst Stream vom Mount bzw. Zentral-Anlagen-Pfad. |
 | `dispo/api/job_project_refresh.php` | POST JSON | `job_id`, `technician_id`, optional `include_bilder` (wird ignoriert) – stellt nur die Standard-Unterordner sicher; **kein** Kopieren vom Fileserver. |
 | `dispo/api/job_project_file_delete.php` | POST form | `job_id`, `technician_id`, `path` – nur **physische** Dateien; reine ELEKTRO- oder Zentral-Anlagen-Quelle → 403. |
+| `dispo/api/job_mark_docs_loaded.php` | POST JSON | `job_id`, `technician_id` – nach erfolgreichem Projektordner-Kopieren: Status **`zugeteilt` → `in_arbeit`** (idempotent wenn schon `in_arbeit`; 409 wenn anderer Ausgangsstatus). Monteur-Session bzw. Basic wie `require_login.php`. |
+| `dispo/api/job_status_dispo_set_in_arbeit.php` | POST form | Dispo/Admin, CSRF-Scope `job_status_dispo_in_arbeit`: `job_id` – **`angelegt`/`zugeteilt` → `in_arbeit`** (mind. eine `job_technicians`-Zeile). |
+| `dispo/api/job_status_admin_revert_erledigt.php` | POST form | Nur Admin, CSRF-Scope `job_status_admin_revert`: `job_id` – **`abgerechnet` → `erledigt`**. |
 
 ### 5.1 Dispo-Web Admin (nur eingeloggte Dispo-Session, `perm_admin`)
 
