@@ -3437,6 +3437,53 @@
     return ul;
   }
 
+  /** Index der Ergebniszeile, die am ehesten zu den Suchfeldern passt (für Scroll + Fokus). */
+  function pickAnlagenstammFocusRowIndex(rows, fn, kunde, typ, land) {
+    if (!rows || !rows.length) return 0;
+    var fnT = (fn || '').trim();
+    var fnL = fnT.toLowerCase();
+    if (fnL) {
+      var i;
+      for (i = 0; i < rows.length; i++) {
+        var ex = String(rows[i].fabrikationsnummer || '').trim().toLowerCase();
+        if (ex === fnL) return i;
+      }
+      for (i = 0; i < rows.length; i++) {
+        var pr = String(rows[i].fabrikationsnummer || '').trim().toLowerCase();
+        if (pr.indexOf(fnL) !== -1) return i;
+      }
+    }
+    var terms = [fnT, (kunde || '').trim(), (typ || '').trim(), (land || '').trim()]
+      .map(function (t) { return t.toLowerCase(); })
+      .filter(Boolean);
+    if (!terms.length) return 0;
+    var bestI = 0;
+    var bestScore = -1;
+    for (var k = 0; k < rows.length; k++) {
+      var r = rows[k];
+      var blob = [r.fabrikationsnummer, r.type, r.aktueller_kunde, r.projekt]
+        .map(function (x) { return String(x || '').toLowerCase(); })
+        .join('\u0001');
+      var sc = 0;
+      for (var t = 0; t < terms.length; t++) {
+        if (terms[t] && blob.indexOf(terms[t]) !== -1) sc++;
+      }
+      if (sc > bestScore) {
+        bestScore = sc;
+        bestI = k;
+      }
+    }
+    return bestI;
+  }
+
+  function scrollAnlagenstammResultsToTr(resEl, tr) {
+    if (!resEl || !tr) return;
+    var thead = resEl.querySelector('thead');
+    var anchorBottom = thead ? thead.getBoundingClientRect().bottom : resEl.getBoundingClientRect().top;
+    var trTop = tr.getBoundingClientRect().top;
+    resEl.scrollTop += trTop - anchorBottom;
+  }
+
   async function searchAnlagenstammList() {
     var msgEl = document.getElementById('anlagenstammMessage');
     var resEl = document.getElementById('anlagenstammSearchResults');
@@ -3493,17 +3540,48 @@
               var f = (tr.getAttribute('data-as-fab') || '').trim();
               if (f) loadAnlagenstammDetail(f);
             }
-            tr.addEventListener('click', open);
+            tr.addEventListener('click', function () {
+              resEl.querySelectorAll('tbody tr.anlagenstamm-search-row-focus').forEach(function (x) {
+                x.classList.remove('anlagenstamm-search-row-focus');
+              });
+              tr.classList.add('anlagenstamm-search-row-focus');
+              open();
+            });
             tr.addEventListener('keydown', function (ev) {
               if (ev.key === 'Enter' || ev.key === ' ') {
                 ev.preventDefault();
+                resEl.querySelectorAll('tbody tr.anlagenstamm-search-row-focus').forEach(function (x) {
+                  x.classList.remove('anlagenstamm-search-row-focus');
+                });
+                tr.classList.add('anlagenstamm-search-row-focus');
                 open();
               }
             });
           });
+          var focusIdx = pickAnlagenstammFocusRowIndex(rows, fn, kunde, typ, land);
+          var trArr = resEl.querySelectorAll('tbody tr[data-as-fab]');
+          if (trArr.length && focusIdx >= 0 && focusIdx < trArr.length) {
+            var focusTr = trArr[focusIdx];
+            focusTr.classList.add('anlagenstamm-search-row-focus');
+            requestAnimationFrame(function () {
+              requestAnimationFrame(function () {
+                try {
+                  resEl.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+                  scrollAnlagenstammResultsToTr(resEl, focusTr);
+                  try {
+                    focusTr.focus({ preventScroll: true });
+                  } catch (fe) { /* ignore */ }
+                } catch (scrollEx) { /* ignore */ }
+              });
+            });
+          }
         }
       }
-      if (msgEl) msgEl.textContent = rows.length ? rows.length + ' Treffer. Zeile anklicken für Details.' : '';
+      if (msgEl) {
+        msgEl.textContent = rows.length
+          ? rows.length + ' Treffer. Passende Zeile markiert; in der Liste nach oben/unten scrollen. Anklicken für Details.'
+          : '';
+      }
       if (rows.length === 1) {
         var onlyFab = String(rows[0].fabrikationsnummer || '').trim();
         if (onlyFab) loadAnlagenstammDetail(onlyFab);

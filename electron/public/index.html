@@ -216,11 +216,35 @@
     .anlagenstamm-search-filters { display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:0.5rem; width:100%; margin-bottom:0.5rem; }
     .anlagenstamm-search-filters input { min-width:0; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
     .anlagenstamm-search-actions { margin-bottom:0.65rem; }
-    .anlagenstamm-search-results { margin-top:0.35rem; max-height:30vh; overflow:auto; border:1px solid var(--accent); border-radius:6px; }
+    .anlagenstamm-search-results {
+      margin-top:0.35rem;
+      max-height: min(50vh, 420px);
+      overflow-x: auto;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      border:1px solid var(--accent);
+      border-radius:6px;
+      position: relative;
+    }
     .anlagenstamm-search-results table { width:100%; border-collapse:collapse; font-size:0.86rem; }
+    .anlagenstamm-search-results thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--card);
+      box-shadow: 0 1px 0 var(--accent);
+    }
     .anlagenstamm-search-results th, .anlagenstamm-search-results td { padding:0.35rem 0.5rem; border-bottom:1px solid var(--accent); text-align:left; }
     .anlagenstamm-search-results tbody tr { cursor:pointer; }
     .anlagenstamm-search-results tbody tr:hover { background: rgba(128,128,128,0.12); }
+    .anlagenstamm-search-results tbody tr.anlagenstamm-search-row-focus {
+      background: rgba(14, 123, 90, 0.14);
+      box-shadow: inset 3px 0 0 0 var(--btn-primary, #0e7b5a);
+    }
+    .anlagenstamm-search-results tbody tr.anlagenstamm-search-row-focus:hover {
+      background: rgba(14, 123, 90, 0.22);
+    }
     .anlagenstamm-form-wrap { margin-top:0.65rem; }
     .anlagenstamm-form-section { margin-top:0.55rem; padding:0.55rem 0.65rem; border:1px solid var(--accent); border-radius:6px; }
     .anlagenstamm-form-section h4 { margin:0 0 0.45rem 0; font-size:0.92rem; }
