@@ -214,6 +214,7 @@
   /** Nur Abrechnungs-Ansicht: bearbeiten solange nicht endgültig abgerechnet (Status oder beide Flags). */
   function abrechnungEffectiveCanWrite(job) {
     if (!job || typeof job !== 'object') return true;
+    if (job.can_write === false) return false;
     var st = String(job.status != null ? job.status : '').trim();
     if (st === 'abgerechnet') return false;
     var ma = Number(job.montage_abgerechnet);
@@ -258,6 +259,34 @@
       if (abrechnungCurrentJobs[i].id === id) return abrechnungCurrentJobs[i];
     }
     return { id: id, can_write: true };
+  }
+
+  function renderAbrechnungCommentList(ulEl, items) {
+    if (!ulEl) return;
+    ulEl.innerHTML = '';
+    var list = Array.isArray(items) ? items : [];
+    list.forEach(function (c) {
+      var li = document.createElement('li');
+      li.className = 'abrechnung-comment-item';
+      var meta = document.createElement('div');
+      meta.className = 'abrechnung-comment-meta';
+      var parts = [];
+      if (c.author_name) parts.push(String(c.author_name));
+      if (c.created_at) parts.push(String(c.created_at));
+      meta.textContent = parts.join(' · ');
+      var body = document.createElement('div');
+      body.className = 'abrechnung-comment-body';
+      body.textContent = c.body != null ? String(c.body) : '';
+      li.appendChild(meta);
+      li.appendChild(body);
+      ulEl.appendChild(li);
+    });
+    if (list.length === 0) {
+      var empty = document.createElement('li');
+      empty.className = 'empty';
+      empty.textContent = 'Noch keine Kommentare.';
+      ulEl.appendChild(empty);
+    }
   }
 
   function formatAbrechnungFileSize(n) {
@@ -396,6 +425,8 @@
     var jid = sel && sel.value ? parseInt(sel.value, 10) : 0;
     var nd = document.getElementById('abrechnungNoteDispo');
     var nb = document.getElementById('abrechnungNoteBuch');
+    var cd = document.getElementById('abrechnungCommentsDispo');
+    var cb = document.getElementById('abrechnungCommentsBuch');
     var fd = document.getElementById('abrechnungFilesDispo');
     var fb = document.getElementById('abrechnungFilesBuch');
     var meta = document.getElementById('abrechnungJobMeta');
@@ -407,6 +438,8 @@
     var canWrite = abrechnungEffectiveCanWrite(job);
 
     if (!jid) {
+      if (cd) cd.innerHTML = '';
+      if (cb) cb.innerHTML = '';
       if (nd) { nd.value = ''; nd.disabled = true; }
       if (nb) { nb.value = ''; nb.disabled = true; }
       if (fd) fd.innerHTML = '';
@@ -445,9 +478,11 @@
       metaParts.push('Dateien von Dispo: ' + j.dispo_files_error);
     }
     if (meta) meta.textContent = metaParts.join(' ');
-    var notes = j.notes || {};
-    if (nd) { nd.value = notes.dispo != null ? String(notes.dispo) : ''; nd.disabled = !canWrite; }
-    if (nb) { nb.value = notes.buchhaltung != null ? String(notes.buchhaltung) : ''; nb.disabled = !canWrite; }
+    var comments = j.comments || { dispo: [], buchhaltung: [] };
+    renderAbrechnungCommentList(cd, comments.dispo);
+    renderAbrechnungCommentList(cb, comments.buchhaltung);
+    if (nd) { nd.value = ''; nd.placeholder = 'Neuen Kommentar …'; nd.disabled = !canWrite; }
+    if (nb) { nb.value = ''; nb.placeholder = 'Neuen Kommentar …'; nb.disabled = !canWrite; }
     renderAbrechnungFileList(fd, 'dispo', j.files, jid, canWrite);
     renderAbrechnungFileList(fb, 'buchhaltung', j.files, jid, canWrite);
     if (sd) sd.disabled = !canWrite;
@@ -516,8 +551,8 @@
       });
       var j = await r.json();
       if (!j.ok) throw new Error(j.error || 'Speichern fehlgeschlagen');
-      if (j.queued && typeof showToast === 'function') showToast('Notiz lokal gespeichert; Sync bei Verbindung.');
-      else if (typeof showToast === 'function') showToast('Notiz gespeichert.');
+      if (j.queued && typeof showToast === 'function') showToast('Kommentar lokal gespeichert; Sync bei Verbindung.');
+      else if (typeof showToast === 'function') showToast('Kommentar gespeichert.');
       await updateAbrechnungStatusLine();
       await loadAbrechnungBundleForSelection();
     } catch (e) {

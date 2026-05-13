@@ -64,6 +64,8 @@ Hinweis: Das sind **lokale** Laptop-Gateway-Payloads (historisch camelCase). Neu
 
 **Semantik `dispo_pick_base`:** Beide URLs werden **parallel** geprüft mit **Timeout 10 s** pro Probe (wie `check_connection`: zuerst **`/api/my_jobs.php`**, bei Fehlschlag **`…/dispo_api/api/jobs_open.php`**). Sind **beide** URLs OK, wird die **interne** Basis gewählt. Nur eine URL konfiguriert → `preferred_source: "single"`. Abrechnung: wenn die dedizierte Abrechnungs-API nicht erreichbar ist, kann die App die Auftragsliste aus dem **lokalen Sync** befüllen (`/api/abrechnung/refresh` mit `partial`/`warnings`).
 
+**Abrechnung (Electron-Gateway):** `GET /api/abrechnung/bundle` liefert neben Dateimetadaten **`comments`**: `{ "dispo": [ … ], "buchhaltung": [ … ] }` (Felder wie Dispo `dispo_api/api/abrechnung_notes.php`: u. a. `id`, `body`, `created_at`, `author_name`). **`notes`** (`dispo`/`buchhaltung` als Strings) bleibt für ältere Cache-Zeilen kompatibel; neue Daten liegen in **`comments_json`** im lokalen Cache.
+
 Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über denselben Host; sie erwarten die vom Client gesetzte **`baseUrl`** / aktive Basis aus der Pick-Antwort.
 
 - **Import:** `dispo/dispo_api/api/receive_dispo.php` – u. a. `batch_id`, `processed_jobs`, `processed_absences`, `processed_assignments`.

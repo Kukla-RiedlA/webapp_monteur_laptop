@@ -39,6 +39,11 @@ function ensureSchema(db) {
     synced_at TEXT,
     PRIMARY KEY (job_server_id)
   )`).run();
+  try {
+    db.prepare('ALTER TABLE abrechnung_notes_cache ADD COLUMN comments_json TEXT').run();
+  } catch (_) {
+    /* Spalte existiert bereits */
+  }
   db.prepare(`CREATE TABLE IF NOT EXISTS abrechnung_files_meta (
     job_server_id INTEGER NOT NULL,
     bucket TEXT NOT NULL,
@@ -78,6 +83,97 @@ function resolveDispoJobIdForAbrechnung(db, idFromClient) {
     /* ignore */
   }
   return jid;
+}
+
+function readCommentsFromRow(row) {
+  const empty = { dispo: [], buchhaltung: [] };
+  if (!row) {
+    return empty;
+  }
+  if (row.comments_json) {
+    try {
+      const j = JSON.parse(row.comments_json);
+      return {
+        dispo: Array.isArray(j.dispo) ? j.dispo : [],
+        buchhaltung: Array.isArray(j.buchhaltung) ? j.buchhaltung : [],
+      };
+    } catch (_) {
+      /* fall through */
+    }
+  }
+  const d = row.dispo != null ? String(row.dispo).trim() : '';
+  const bh = row.buchhaltung != null ? String(row.buchhaltung).trim() : '';
+  return {
+    dispo: d
+      ? [
+          {
+            id: 0,
+            body: d,
+            created_at: '',
+            author_name: '(ältere Notiz)',
+            can_edit: false,
+            can_delete: false,
+          },
+        ]
+      : [],
+    buchhaltung: bh
+      ? [
+          {
+            id: 0,
+            body: bh,
+            created_at: '',
+            author_name: '(ältere Notiz)',
+            can_edit: false,
+            can_delete: false,
+          },
+        ]
+      : [],
+  };
+}
+
+function writeCommentsCache(db, jobServerId, comments) {
+  const payload = JSON.stringify({
+    dispo: comments.dispo || [],
+    buchhaltung: comments.buchhaltung || [],
+  });
+  db.prepare(`
+    INSERT INTO abrechnung_notes_cache (job_server_id, dispo, buchhaltung, comments_json, synced_at)
+    VALUES (?, '', '', ?, datetime('now'))
+    ON CONFLICT(job_server_id) DO UPDATE SET
+      comments_json = excluded.comments_json,
+      synced_at = excluded.synced_at
+  `).run(jobServerId, payload);
+}
+
+function appendOptimisticComment(db, jobServerId, bucket, text) {
+  const row = db
+    .prepare('SELECT dispo, buchhaltung, comments_json, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?')
+    .get(jobServerId);
+  const c = readCommentsFromRow(row);
+  const list = bucket === 'dispo' ? c.dispo : c.buchhaltung;
+  list.push({
+    id: 0,
+    body: text,
+    created_at: new Date().toISOString(),
+    author_name: '',
+    can_edit: true,
+    can_delete: true,
+  });
+  writeCommentsCache(db, jobServerId, c);
+}
+
+async function syncCommentsOnlyFromDispo(ctx, baseUrl, technicianId, authHeader, jobServerId) {
+  const { db, save } = ctx;
+  const data = await dispoFetchJson(
+    baseUrl,
+    'abrechnung_notes.php',
+    { job_id: String(jobServerId) },
+    authHeader,
+    technicianId,
+  );
+  const comments = data.comments || { dispo: [], buchhaltung: [] };
+  writeCommentsCache(db, jobServerId, comments);
+  save();
 }
 
 function dedupeAbrechnungFileRows(rows) {
@@ -454,16 +550,7 @@ async function dispoUploadMultipart(baseUrl, fields, fileBuf, fileName, authHead
 
 async function syncJobFromDispo(ctx, baseUrl, technicianId, authHeader, jobServerId) {
   const { db, save, dbDir } = ctx;
-  const notes = await dispoFetchJson(baseUrl, 'abrechnung_notes.php', { job_id: String(jobServerId) }, authHeader, technicianId);
-  const n = notes.notes || {};
-  db.prepare(`
-    INSERT INTO abrechnung_notes_cache (job_server_id, dispo, buchhaltung, synced_at)
-    VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(job_server_id) DO UPDATE SET
-      dispo = excluded.dispo,
-      buchhaltung = excluded.buchhaltung,
-      synced_at = excluded.synced_at
-  `).run(jobServerId, n.dispo || '', n.buchhaltung || '');
+  await syncCommentsOnlyFromDispo(ctx, baseUrl, technicianId, authHeader, jobServerId);
   for (const bucket of ['dispo', 'buchhaltung']) {
     const data = await dispoFetchAbrechnungBucketList(baseUrl, jobServerId, bucket, authHeader, technicianId);
     const files = data.files || [];
@@ -517,6 +604,11 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
           authHeader,
           technicianId,
         );
+        try {
+          await syncCommentsOnlyFromDispo(ctx, baseUrl, technicianId, authHeader, payload.job_id);
+        } catch (_) {
+          /* Kommentarliste folgt beim nächsten Refresh */
+        }
       } else if (row.op === 'upload') {
         const fp = payload.local_path;
         if (!fp || !fs.existsSync(fp)) throw new Error('Lokale Datei fehlt');
@@ -600,14 +692,20 @@ function registerAbrechnungRoutes(app, ctx) {
         return res.status(400).json({ ok: false, error: 'technician_id und job_server_id erforderlich.' });
       }
       const dispoJobId = resolveDispoJobIdForAbrechnung(db, jobServerIdRaw);
-      let notes = db.prepare('SELECT dispo, buchhaltung, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?').get(
-        dispoJobId,
-      );
-      if (!notes) {
-        notes = db.prepare('SELECT dispo, buchhaltung, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?').get(
-          jobServerIdRaw,
-        );
+      let row = db
+        .prepare('SELECT dispo, buchhaltung, comments_json, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?')
+        .get(dispoJobId);
+      if (!row) {
+        row = db
+          .prepare('SELECT dispo, buchhaltung, comments_json, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?')
+          .get(jobServerIdRaw);
       }
+      const comments = readCommentsFromRow(row);
+      const notes = {
+        dispo: row && row.dispo != null ? String(row.dispo) : '',
+        buchhaltung: row && row.buchhaltung != null ? String(row.buchhaltung) : '',
+        synced_at: row && row.synced_at != null ? row.synced_at : null,
+      };
       let files = dedupeAbrechnungFileRows(
         db
           .prepare(
@@ -634,10 +732,10 @@ function registerAbrechnungRoutes(app, ctx) {
       if (baseUrlRaw && auth && technicianId && dispoJobId) {
         const base = dispoBase(baseUrlRaw);
         const seenByBucket = new Map();
-        for (const row of files) {
-          const b = row.bucket;
+        for (const fileRow of files) {
+          const b = fileRow.bucket;
           if (!seenByBucket.has(b)) seenByBucket.set(b, new Set());
-          seenByBucket.get(b).add(row.file_name);
+          seenByBucket.get(b).add(fileRow.file_name);
         }
         try {
           for (const bucket of ['dispo', 'buchhaltung']) {
@@ -670,6 +768,7 @@ function registerAbrechnungRoutes(app, ctx) {
       });
       return res.json({
         ok: true,
+        comments,
         notes: notes || { dispo: '', buchhaltung: '', synced_at: null },
         files: files || [],
         job_id_for_dispo: dispoJobId,
@@ -848,19 +947,6 @@ function registerAbrechnungRoutes(app, ctx) {
       return res.status(400).json({ ok: false, error: 'Ungültige Parameter.' });
     }
     const text = body != null ? String(body) : '';
-    const row = db.prepare('SELECT dispo, buchhaltung FROM abrechnung_notes_cache WHERE job_server_id = ?').get(jid);
-    const dispoVal = b === 'dispo' ? text : (row && row.dispo != null ? String(row.dispo) : '');
-    const buchVal = b === 'buchhaltung' ? text : (row && row.buchhaltung != null ? String(row.buchhaltung) : '');
-    db.prepare(`
-      INSERT INTO abrechnung_notes_cache (job_server_id, dispo, buchhaltung, synced_at)
-      VALUES (?, ?, ?, datetime('now'))
-      ON CONFLICT(job_server_id) DO UPDATE SET
-        dispo = excluded.dispo,
-        buchhaltung = excluded.buchhaltung,
-        synced_at = datetime('now')
-    `).run(jid, dispoVal, buchVal);
-    save();
-
     const base = dispoBase(baseUrl);
     if (base) {
       try {
@@ -872,8 +958,11 @@ function registerAbrechnungRoutes(app, ctx) {
           authHeader,
           tid,
         );
+        await syncCommentsOnlyFromDispo(ctx, baseUrl, tid, authHeader, jid);
         return res.json({ ok: true, synced: true });
       } catch (e) {
+        appendOptimisticComment(db, jid, b, text);
+        save();
         db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
           'note',
           JSON.stringify({ job_id: jid, bucket: b, body: text })
@@ -882,6 +971,8 @@ function registerAbrechnungRoutes(app, ctx) {
         return res.json({ ok: true, synced: false, queued: true, error: e.message });
       }
     }
+    appendOptimisticComment(db, jid, b, text);
+    save();
     db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
       'note',
       JSON.stringify({ job_id: jid, bucket: b, body: text })
