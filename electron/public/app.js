@@ -4355,67 +4355,6 @@
       '</div></div>';
   }
 
-  function renderAnlagenstammPnTreeUl(fab, nodes, depth) {
-    depth = depth || 0;
-    nodes = nodes || [];
-    var ul = document.createElement('ul');
-    nodes.forEach(function (n) {
-      if (!n || !n.type) return;
-      var li = document.createElement('li');
-      if (n.type === 'dir') {
-        var det = document.createElement('details');
-        det.className = 'anlagenstamm-pn-details';
-        var sum = document.createElement('summary');
-        sum.className = 'anlagenstamm-pn-dir';
-        sum.textContent = n.name || '';
-        det.appendChild(sum);
-        if (n.children && n.children.length) {
-          det.appendChild(renderAnlagenstammPnTreeUl(fab, n.children, depth + 1));
-        }
-        li.appendChild(det);
-      } else if (n.type === 'file') {
-        var rel = String(n.rel || '');
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-ghost';
-        btn.style.padding = '0.15rem 0';
-        btn.style.font = 'inherit';
-        btn.style.textAlign = 'left';
-        btn.style.width = '100%';
-        btn.textContent = n.name || rel;
-        btn.addEventListener('click', function () {
-          downloadAnlagenstammProjekteNeu(fab, rel, String(n.name || '')).catch(function (err) {
-            var m = document.getElementById('anlagenstammMessage');
-            if (m) m.textContent = 'Fehler: ' + (err.message || String(err));
-          });
-        });
-        li.appendChild(btn);
-        var meta = document.createElement('span');
-        meta.className = 'muted';
-        meta.textContent = ' ' + formatAnlagenstammSize(n.size) + ' · ' + formatAnlagenstammMtime(n.mtime);
-        li.appendChild(meta);
-      }
-      ul.appendChild(li);
-    });
-    if (depth === 0) {
-      var htxt = pnParentHeadingForSiblings(nodes);
-      if (htxt) {
-        var block = document.createElement('div');
-        block.className = 'anlagenstamm-pn-tree-block';
-        var det = document.createElement('details');
-        det.className = 'anlagenstamm-pn-details';
-        var sum = document.createElement('summary');
-        sum.className = 'anlagenstamm-pn-parent-heading';
-        sum.textContent = htxt;
-        det.appendChild(sum);
-        det.appendChild(ul);
-        block.appendChild(det);
-        return block;
-      }
-    }
-    return ul;
-  }
-
   /** Index der Ergebniszeile, die am ehesten zu den Suchfeldern passt (für Scroll + Fokus). */
   function pickAnlagenstammFocusRowIndex(rows, fn, kunde, typ, land) {
     if (!rows || !rows.length) return 0;
@@ -4695,11 +4634,11 @@
           if (!tr.length) {
             pnTreeEl.innerHTML = '<div class="empty" style="padding:0.35rem 0">Keine Einträge in diesem Fabrikationsordner.</div>';
           } else {
-            pnTreeEl.appendChild(renderAnlagenstammPnTreeUl(fab, tr));
+            appendProjekteNeuTreeForAnlagenstamm(pnTreeEl, fab, tr, msgEl);
           }
         } else if (usedCache && cachedTree.length) {
           pnHintEl.textContent = 'PROJEKTE NEU (lokaler Cache). Verbindung prüfen für Aktualisierung.';
-          pnTreeEl.appendChild(renderAnlagenstammPnTreeUl(fab, cachedTree));
+          appendProjekteNeuTreeForAnlagenstamm(pnTreeEl, fab, cachedTree, msgEl);
         } else {
           pnHintEl.textContent = 'PROJEKTE NEU ist nicht verfügbar oder der Fabrikationsordner wurde auf dem Mount nicht gefunden.';
         }
@@ -5056,6 +4995,29 @@
       wrap.appendChild(li);
     });
     return wrap;
+  }
+
+  /** Wie Projektdaten: Vorschaubilder + Lightbox; optional gleicher Parent-Heading wie früher im reinen UL-Renderer. */
+  function appendProjekteNeuTreeForAnlagenstamm(pnTreeEl, fab, nodes, msgEl) {
+    if (!pnTreeEl || !nodes || !nodes.length) return;
+    bindProjekteNeuLightboxOnce();
+    var treeRoot = buildAnlageDetailProjekteNeuTree(fab, nodes, 0, msgEl);
+    var htxt = pnParentHeadingForSiblings(nodes);
+    if (htxt) {
+      var block = document.createElement('div');
+      block.className = 'anlagenstamm-pn-tree-block';
+      var det = document.createElement('details');
+      det.className = 'anlagenstamm-pn-details';
+      var sum = document.createElement('summary');
+      sum.className = 'anlagenstamm-pn-parent-heading';
+      sum.textContent = htxt;
+      det.appendChild(sum);
+      det.appendChild(treeRoot);
+      block.appendChild(det);
+      pnTreeEl.appendChild(block);
+    } else {
+      pnTreeEl.appendChild(treeRoot);
+    }
   }
 
   async function loadProjekteNeuTreeIntoHost(fab, opts) {
