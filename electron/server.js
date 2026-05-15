@@ -2202,12 +2202,34 @@ function createApp(db) {
 
   app.post('/api/anlagenstamm_file_download', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
-    const { baseUrl, fab, file, path: pnPathRaw, source: sourceRaw, serverUsername, serverPassword } = req.body || {};
+    const {
+      baseUrl,
+      fab,
+      file,
+      path: pnPathRaw,
+      source: sourceRaw,
+      serverUsername,
+      serverPassword,
+      thumb: thumbRaw,
+      thumbMax: thumbMaxRaw,
+      inline: inlineRaw
+    } = req.body || {};
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
     const fabValue = (fab || '').toString().trim();
     const fileValue = (file || '').toString().trim();
     const sourceNorm = String(sourceRaw || '').toLowerCase().trim();
     const pnPath = (pnPathRaw || '').toString().trim();
+    const wantThumb =
+      thumbRaw === true ||
+      thumbRaw === 1 ||
+      String(thumbRaw || '').toLowerCase() === 'true';
+    const wantInline =
+      inlineRaw === true ||
+      inlineRaw === 1 ||
+      String(inlineRaw || '').toLowerCase() === 'true';
+    let thumbMax = parseInt(thumbMaxRaw, 10);
+    if (!Number.isFinite(thumbMax)) thumbMax = 256;
+    thumbMax = Math.min(512, Math.max(64, thumbMax));
     if (!technicianId || !base || !fabValue) {
       return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
     }
@@ -2224,6 +2246,13 @@ function createApp(db) {
       }
       url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&file=${encodeURIComponent(fileValue)}`;
     }
+    const qs = [];
+    if (wantThumb) {
+      qs.push('thumb=1');
+      qs.push(`thumb_max=${encodeURIComponent(String(thumbMax))}`);
+    }
+    if (wantInline) qs.push('inline=1');
+    if (qs.length) url += '&' + qs.join('&');
     try {
       const r = await fetch(url, auth ? { headers: auth } : {});
       if (!r.ok) {

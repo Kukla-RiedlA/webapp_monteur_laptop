@@ -935,6 +935,155 @@
   var acceptJobLastProgressRow = null;
   /** @type {HTMLButtonElement | null} */
   var acceptJobActiveButton = null;
+  var acceptJobUiTimeoutId = null;
+  var restoreAcceptJobBgFetchInFlight = false;
+
+  function finishAcceptJobStreamUi() {
+    acceptJobStreamBusy = false;
+    acceptJobActiveLocalJobId = null;
+    acceptJobLastProgressRow = null;
+    acceptJobActiveButton = null;
+    if (acceptJobUiTimeoutId) {
+      clearTimeout(acceptJobUiTimeoutId);
+      acceptJobUiTimeoutId = null;
+    }
+    var wrap = document.getElementById('acceptJobProgressWrap');
+    var lbl = document.getElementById('acceptJobProgressLabel');
+    if (wrap) wrap.style.display = 'none';
+    if (lbl) lbl.textContent = '';
+    document.querySelectorAll('[data-action="accept-job"]').forEach(function (b) {
+      b.disabled = false;
+      b.classList.remove('btn-accept-job--busy');
+      b.removeAttribute('aria-busy');
+      b.style.pointerEvents = '';
+      var bar = b.querySelector('.btn-accept-job-progress');
+      if (bar) {
+        try {
+          bar.indeterminate = false;
+        } catch (e) {}
+        bar.removeAttribute('value');
+        bar.setAttribute('max', '100');
+        bar.value = 0;
+      }
+    });
+  }
+
+  /** Nach Abschluss des Background-Jobs (normal oder nach App-Neustart). */
+  function handleAcceptJobPollFinished(localJobId, j, hint) {
+    var chk = j.checkpoint && typeof j.checkpoint === 'object' ? j.checkpoint : {};
+    var warn = chk.status_sync_warning;
+    if (j.status === 'completed') {
+      var doneMsg = 'Auftrag angenommen.';
+      if (warn) doneMsg += ' Hinweis: ' + String(warn);
+      if (hint) hint.textContent = doneMsg;
+      if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
+      if (getDienstreiseExplorerJobId() == localJobId && typeof loadDienstreiseExplorer === 'function') {
+        loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath);
+      }
+      if (jobDetailsJobId == localJobId && typeof openJobDetailsModal === 'function') {
+        openJobDetailsModal(localJobId);
+      }
+      setTimeout(function () {
+        var x = document.getElementById('acceptJobHint');
+        if (x && (!warn || !x.textContent.includes('Hinweis:'))) x.textContent = '';
+      }, warn ? 8000 : 4000);
+    } else {
+      if (hint) hint.textContent = j.error || j.message || 'Auftrag annehmen fehlgeschlagen.';
+    }
+  }
+
+  /**
+   * Nach Neustart: RAM-Zustand leer, aber SQLite kann noch queued/running/interrupted
+   * dienstreise_pull mit accept_job haben — UI und Polling wieder anbinden.
+   */
+  function restoreAcceptJobStreamFromBackgroundJobs() {
+    if (acceptJobStreamBusy || restoreAcceptJobBgFetchInFlight) return;
+    restoreAcceptJobBgFetchInFlight = true;
+    fetch(API_BASE + '/api/background_jobs?active=1&limit=25')
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data || !data.ok || !Array.isArray(data.jobs)) return;
+        var jobs = data.jobs;
+        var accepts = [];
+        for (var i = 0; i < jobs.length; i++) {
+          var j = jobs[i];
+          if (!j || j.type !== 'dienstreise_pull') continue;
+          var p = j.payload;
+          if (!p || !p.accept_job) continue;
+          var st = j.status;
+          if (st !== 'queued' && st !== 'running' && st !== 'interrupted') continue;
+          accepts.push(j);
+        }
+        if (!accepts.length) return;
+        accepts.sort(function (a, b) {
+          var pr = { running: 3, queued: 2, interrupted: 1 };
+          var pa = pr[a.status] || 0;
+          var pb = pr[b.status] || 0;
+          if (pb !== pa) return pb - pa;
+          return 0;
+        });
+        var bg = accepts[0];
+        var localId = parseInt(bg.payload.job_id, 10);
+        if (!localId) return;
+        var hint = document.getElementById('acceptJobHint');
+        acceptJobStreamBusy = true;
+        acceptJobActiveLocalJobId = localId;
+        acceptJobLastProgressRow = {
+          progress_phase: bg.progress_phase,
+          progress_current: bg.progress_current,
+          progress_total: bg.progress_total,
+          message: bg.message
+        };
+        acceptJobActiveButton = null;
+        if (hint) hint.textContent = '';
+        var progressWrap = document.getElementById('acceptJobProgressWrap');
+        if (progressWrap) progressWrap.style.display = 'none';
+        applyAcceptJobStreamBusyUi();
+        updateAcceptJobButtonProgress({
+          progress_phase: bg.progress_phase,
+          progress_current: bg.progress_current,
+          progress_total: bg.progress_total,
+          message: bg.message
+        });
+        acceptJobUiTimeoutId = setTimeout(function () {
+          acceptJobUiTimeoutId = null;
+          finishAcceptJobStreamUi();
+          var h = document.getElementById('acceptJobHint');
+          if (h) {
+            h.textContent = 'Zeitüberschreitung – Auftrag annehmen. Bitte erneut versuchen.';
+            setTimeout(function () {
+              var x = document.getElementById('acceptJobHint');
+              if (x) x.textContent = '';
+            }, 5000);
+          }
+        }, 600000);
+        pollBackgroundJobUntilTerminal(bg.id, function (j) {
+          updateAcceptJobButtonProgress(j);
+        })
+          .then(function (j) {
+            if (acceptJobUiTimeoutId) {
+              clearTimeout(acceptJobUiTimeoutId);
+              acceptJobUiTimeoutId = null;
+            }
+            finishAcceptJobStreamUi();
+            handleAcceptJobPollFinished(localId, j, hint);
+          })
+          .catch(function (err) {
+            if (acceptJobUiTimeoutId) {
+              clearTimeout(acceptJobUiTimeoutId);
+              acceptJobUiTimeoutId = null;
+            }
+            finishAcceptJobStreamUi();
+            if (hint) hint.textContent = err && err.message ? err.message : 'Fehler beim Annehmen.';
+          });
+      })
+      .catch(function () {})
+      .finally(function () {
+        restoreAcceptJobBgFetchInFlight = false;
+      });
+  }
 
   function resolveAcceptJobActiveButton() {
     var btn = acceptJobActiveButton;
@@ -1059,41 +1208,14 @@
       include_bilder: false
     };
     var copyTimeoutMs = 600000;
-    var copyTimeoutId = setTimeout(function () {
-      copyTimeoutId = null;
-      finishAcceptUi();
+    acceptJobUiTimeoutId = setTimeout(function () {
+      acceptJobUiTimeoutId = null;
+      finishAcceptJobStreamUi();
       if (hint) {
         hint.textContent = 'Zeitüberschreitung – Dispo-Antwort kam nicht. Bitte erneut versuchen.';
         setTimeout(function () { var x = document.getElementById('acceptJobHint'); if (x) x.textContent = ''; }, 5000);
       }
     }, copyTimeoutMs);
-
-    function finishAcceptUi() {
-      acceptJobStreamBusy = false;
-      acceptJobActiveLocalJobId = null;
-      acceptJobLastProgressRow = null;
-      acceptJobActiveButton = null;
-      if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
-      var wrap = document.getElementById('acceptJobProgressWrap');
-      var lbl = document.getElementById('acceptJobProgressLabel');
-      if (wrap) wrap.style.display = 'none';
-      if (lbl) lbl.textContent = '';
-      document.querySelectorAll('[data-action="accept-job"]').forEach(function (b) {
-        b.disabled = false;
-        b.classList.remove('btn-accept-job--busy');
-        b.removeAttribute('aria-busy');
-        b.style.pointerEvents = '';
-        var bar = b.querySelector('.btn-accept-job-progress');
-        if (bar) {
-          try {
-            bar.indeterminate = false;
-          } catch (e) {}
-          bar.removeAttribute('value');
-          bar.setAttribute('max', '100');
-          bar.value = 0;
-        }
-      });
-    }
 
     fetch(API_BASE + '/api/dienstreise/accept_job_stream', {
       method: 'POST',
@@ -1102,9 +1224,9 @@
     })
       .then(function (response) {
         if (!response.ok) {
-          if (copyTimeoutId) {
-            clearTimeout(copyTimeoutId);
-            copyTimeoutId = null;
+          if (acceptJobUiTimeoutId) {
+            clearTimeout(acceptJobUiTimeoutId);
+            acceptJobUiTimeoutId = null;
           }
           return response.json().then(function (data) {
             throw new Error((data && data.error) || 'Fehler ' + response.status);
@@ -1117,46 +1239,27 @@
             return pollBackgroundJobUntilTerminal(jobId, function (j) {
               updateAcceptJobButtonProgress(j);
             }).then(function (j) {
-              if (copyTimeoutId) {
-                clearTimeout(copyTimeoutId);
-                copyTimeoutId = null;
+              if (acceptJobUiTimeoutId) {
+                clearTimeout(acceptJobUiTimeoutId);
+                acceptJobUiTimeoutId = null;
               }
-              finishAcceptUi();
-              var chk = j.checkpoint && typeof j.checkpoint === 'object' ? j.checkpoint : {};
-              var warn = chk.status_sync_warning;
-              if (j.status === 'completed') {
-                var doneMsg = 'Auftrag angenommen.';
-                if (warn) doneMsg += ' Hinweis: ' + String(warn);
-                if (hint) hint.textContent = doneMsg;
-                if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
-                if (getDienstreiseExplorerJobId() == localJobId && typeof loadDienstreiseExplorer === 'function') {
-                  loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath);
-                }
-                if (jobDetailsJobId == localJobId && typeof openJobDetailsModal === 'function') {
-                  openJobDetailsModal(localJobId);
-                }
-                setTimeout(function () {
-                  var x = document.getElementById('acceptJobHint');
-                  if (x && (!warn || !x.textContent.includes('Hinweis:'))) x.textContent = '';
-                }, warn ? 8000 : 4000);
-              } else {
-                if (hint) hint.textContent = j.error || j.message || 'Auftrag annehmen fehlgeschlagen.';
-              }
+              finishAcceptJobStreamUi();
+              handleAcceptJobPollFinished(localJobId, j, hint);
             });
           });
         }
-        if (copyTimeoutId) {
-          clearTimeout(copyTimeoutId);
-          copyTimeoutId = null;
+        if (acceptJobUiTimeoutId) {
+          clearTimeout(acceptJobUiTimeoutId);
+          acceptJobUiTimeoutId = null;
         }
         throw new Error('Unerwartete Server-Antwort (Status ' + response.status + ').');
       })
       .catch(function (err) {
-        if (copyTimeoutId) {
-          clearTimeout(copyTimeoutId);
-          copyTimeoutId = null;
+        if (acceptJobUiTimeoutId) {
+          clearTimeout(acceptJobUiTimeoutId);
+          acceptJobUiTimeoutId = null;
         }
-        finishAcceptUi();
+        finishAcceptJobStreamUi();
         if (hint) hint.textContent = err && err.message ? err.message : 'Fehler beim Annehmen.';
       });
   }
@@ -1369,17 +1472,47 @@
     if (fi) fi.disabled = !!ro;
   }
 
+  /** Firmenname / Ort / Flagge neben der Überschrift „Projektdaten“. */
+  function updateProjektdatenHeadingMeta(job) {
+    var el = document.getElementById('projektdatenHeadingMeta');
+    if (!el) return;
+    if (!job || typeof job !== 'object') {
+      el.innerHTML = '';
+      el.hidden = true;
+      return;
+    }
+    var firma = (job.endkunde != null && String(job.endkunde).trim() !== '')
+      ? String(job.endkunde).trim()
+      : (job.customer_name || '').trim();
+    var ort = (job.city || '').trim();
+    var land = normalizeCountryToCode(job.country) || (job.country || '').trim().toUpperCase().slice(0, 2);
+    var flagHtml = countryFlagImg(land);
+    var chunks = [];
+    if (firma) chunks.push('<span class="projektdaten-heading-firma">' + escapeHtml(firma) + '</span>');
+    if (ort) chunks.push('<span class="projektdaten-heading-ort">' + escapeHtml(ort) + '</span>');
+    if (flagHtml) chunks.push(flagHtml);
+    if (!chunks.length) {
+      el.innerHTML = '';
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    el.innerHTML = chunks.join('<span class="projektdaten-heading-sep">·</span>');
+  }
+
   var projektdatenFabSaveBusy = false;
 
   function showProjektdatenJob(job) {
     var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
     if (!job) {
+      updateProjektdatenHeadingMeta(null);
       content.innerHTML = '<span class="empty">Fehler: Auftrag nicht gefunden.</span>';
       return;
     }
     if (job.id != null) jobDetailsJobId = job.id;
     window.currentProjektdatenJob = job;
+    updateProjektdatenHeadingMeta(job);
     content.innerHTML = renderJobDetailsContent(job);
     bindLeistungActions();
     loadMechanikTedLinks(job);
@@ -1404,6 +1537,7 @@
     if (viewEinstellungen) viewEinstellungen.classList.remove('active');
     viewProjektdaten.classList.add('active');
     content.innerHTML = '<span class="empty">Wird geladen…</span>';
+    updateProjektdatenHeadingMeta(null);
 
     function showJob(job) {
       showProjektdatenJob(job);
@@ -1466,6 +1600,7 @@
   function closeJobDetailsModal() {
     var viewProjektdaten = document.getElementById('viewProjektdaten');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
+    updateProjektdatenHeadingMeta(null);
     jobDetailsJobId = null;
   }
 
@@ -1753,7 +1888,10 @@
     if (readOnlyAngelegt) {
       html += '<div class="projektdaten-readonly-banner" role="status">Auftrag ist <strong>angelegt</strong> – hier nur Anzeige, keine Bearbeitung.</div>';
     }
-    html += '<div class="modal-detail-grid">';
+    html += '<div class="projektdaten-meta-stack">';
+    html += '<details class="projektdaten-meta-details">';
+    html += '<summary>Auftrag, Kunde &amp; ERP-Nummern</summary>';
+    html += '<div class="projektdaten-meta-details-body">';
     html += '<div class="modal-detail-section modal-detail-section-address-row"><div class="modal-address-contact-row">';
     html += '<div class="modal-detail-section"><h4>Auftrag</h4><dl class="modal-detail-dl">';
     html += '<dt>Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
@@ -1771,6 +1909,7 @@
     html += '<dl class="modal-detail-dl"><dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
     html += '<dt>Bestellnummer</dt><dd>' + v(job.bestellnummer) + '</dd></dl></div>';
     html += '</div></div>';
+    html += '</div></details>';
     (function () {
       function renderHotelRatingStars(avgRaw, countRaw) {
         var count = Number(countRaw || 0);
@@ -1817,6 +1956,9 @@
       var name = (c && (c.contact_name || c.contactName)) ? (c.contact_name || c.contactName) : (job.contact_person || job.contact_name || '');
       var phone = (c && (c.contact_phone || c.contactPhone)) ? (c.contact_phone || c.contactPhone) : (job.contact_phone || '');
       var email = (c && (c.contact_email || c.contactEmail)) ? (c.contact_email || c.contactEmail) : (job.contact_email || '');
+      html += '<details class="projektdaten-meta-details">';
+      html += '<summary>Adressen &amp; Kontakt</summary>';
+      html += '<div class="projektdaten-meta-details-body">';
       html += '<div class="modal-detail-section modal-detail-section-address-row">';
       html += '<div class="modal-address-contact-row">';
       html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
@@ -1827,11 +1969,14 @@
       html += '<dt>E-Mail</dt><dd>' + v(email) + '</dd>';
       html += '</dl></div>';
       html += '</div></div>';
+      html += '</div></details>';
     })();
     html += '</div>';
 
+    html += '<div class="projektdaten-leistung-split">';
+    html += '<div class="projektdaten-leistung-split-main">';
     html += '<div class="modal-detail-section"><h4>Leistungsdaten (Anlagenstamm)</h4>';
-    html += '<p class="modal-leistung-hint muted">' + (readOnlyAngelegt ? 'Nur Anzeige (Auftrag angelegt).' : 'Doppelklick auf eine Anlage öffnet die Anlagendetails.') + '</p>';
+    html += '<p class="modal-leistung-hint muted">' + (readOnlyAngelegt ? 'Nur Anzeige (Auftrag angelegt).' : 'Zeile anklicken für PROJEKTE NEU rechts; Doppelklick auf eine Zelle öffnet die Anlagendetails.') + '</p>';
     var fabInputValue = formatFabrikationsnummernInputValue(leistungRows);
     var fabEditAllowed = canEditProjektdatenFabrikationsnummern(job);
     if (!fabEditAllowed) {
@@ -1859,7 +2004,7 @@
       for (var k = 0; k < indices.length; k++) {
         var i = indices[k];
         var row = leistungRows[i];
-        out += '<tr>';
+        out += '<tr class="projektdaten-leistung-row" data-row-index="' + escapeHtml(String(i)) + '">';
         out += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCell(row.fabrikationsnummer) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
@@ -1884,7 +2029,7 @@
       for (var i = 0; i < leistungRows.length; i++) {
         var row = leistungRows[i];
         if (!leistungRowHasVisibleData(row)) continue;
-        html += '<tr>';
+        html += '<tr class="projektdaten-leistung-row" data-row-index="' + escapeHtml(String(i)) + '">';
         html += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCell(row.fabrikationsnummer) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
@@ -1893,6 +2038,14 @@
       }
       html += '</tbody></table></div>';
     }
+    html += '</div>';
+    html += '</div>';
+    html += '<aside class="projektdaten-leistung-split-side" aria-label="PROJEKTE NEU">';
+    html += '<h4 class="projektdaten-projekte-neu-heading">PROJEKTE NEU</h4>';
+    html += '<p class="modal-leistung-hint muted projektdaten-projekte-neu-hint">Ordnerstruktur zur gewählten Fabrikationsnummer (links Zeile anklicken).</p>';
+    html += '<div id="projektdatenProjekteNeuMsg" class="projektdaten-projekte-neu-msg muted"></div>';
+    html += '<div id="projektdatenProjekteNeuTree" class="projektdaten-projekte-neu-tree"></div>';
+    html += '</aside>';
     html += '</div>';
     html += '<div class="modal-detail-section projektdaten-projektordner-section" style="margin-top:1rem">';
     html += '<h4>Projektordner (lokal)</h4>';
@@ -2434,6 +2587,25 @@
   function bindLeistungActions() {
     var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
+    if (content.getAttribute('data-leistung-delegate-bound') !== '1') {
+      content.setAttribute('data-leistung-delegate-bound', '1');
+      content.addEventListener('click', function (ev) {
+        if (ev.button !== 0) return;
+        if (ev.target.closest && (ev.target.closest('.fn-hotel-picker-btn') || ev.target.closest('button') || ev.target.closest('a'))) return;
+        var tr = ev.target.closest('.projektdaten-leistung-row');
+        if (!tr || !content.contains(tr)) return;
+        var treeHost = document.getElementById('projektdatenProjekteNeuTree');
+        var msgEl = document.getElementById('projektdatenProjekteNeuMsg');
+        if (!treeHost || !msgEl) return;
+        content.querySelectorAll('.projektdaten-leistung-row').forEach(function (r) {
+          r.classList.remove('projektdaten-fn-row-selected');
+        });
+        tr.classList.add('projektdaten-fn-row-selected');
+        var fabCell = tr.querySelector('[data-fab]');
+        var fabVal = fabCell ? String(fabCell.getAttribute('data-fab') || '').trim() : '';
+        loadProjekteNeuTreeIntoHost(fabVal, { msgEl: msgEl, treeHost: treeHost });
+      });
+    }
     bindProjektdatenFabInput();
     content.querySelectorAll('.modal-leistung-cell-clickable').forEach(function (td) {
       td.addEventListener('dblclick', function (e) {
@@ -2443,6 +2615,23 @@
       });
     });
     bindHotelAddressDblclick();
+    var treeHostInit = document.getElementById('projektdatenProjekteNeuTree');
+    var msgElInit = document.getElementById('projektdatenProjekteNeuMsg');
+    if (treeHostInit && msgElInit) {
+      content.querySelectorAll('.projektdaten-fn-row-selected').forEach(function (r) {
+        r.classList.remove('projektdaten-fn-row-selected');
+      });
+      var firstRow = content.querySelector('.projektdaten-leistung-row');
+      if (firstRow) {
+        firstRow.classList.add('projektdaten-fn-row-selected');
+        var fc = firstRow.querySelector('[data-fab]');
+        var fv = fc ? String(fc.getAttribute('data-fab') || '').trim() : '';
+        loadProjekteNeuTreeIntoHost(fv, { msgEl: msgElInit, treeHost: treeHostInit });
+      } else {
+        msgElInit.textContent = '';
+        treeHostInit.innerHTML = '';
+      }
+    }
   }
 
   function bindHotelAddressDblclick() {
@@ -4681,8 +4870,96 @@
     throw new Error('Lokales Öffnen ist in dieser Umgebung nicht verfügbar.');
   }
 
-  function buildAnlageDetailProjekteNeuTree(fab, nodes, depth) {
+  function isProjekteNeuRasterImage(fileName) {
+    var m = String(fileName || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+    var ext = m ? m[1] : '';
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].indexOf(ext) >= 0;
+  }
+
+  function fetchProjekteNeuFileBlob(fab, relPath, opts) {
+    opts = opts || {};
+    var technicianId = getTechId();
+    return fetch(API_BASE + '/api/anlagenstamm_file_download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
+      body: JSON.stringify({
+        baseUrl: getDispoBaseUrl(),
+        fab: fab,
+        source: 'projekte_neu',
+        path: relPath,
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword(),
+        thumb: !!opts.thumb,
+        thumbMax: opts.thumbMax || 256,
+        inline: !!opts.inline
+      })
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.json().catch(function () { return {}; }).then(function (j) {
+          throw new Error((j && j.error) ? j.error : ('HTTP ' + resp.status));
+        });
+      }
+      if (opts.thumb) {
+        var ct = (resp.headers.get('content-type') || '').toLowerCase();
+        if (ct.indexOf('image/') !== 0) {
+          throw new Error('thumb_not_image');
+        }
+      }
+      return resp.blob();
+    });
+  }
+
+  function bindProjekteNeuLightboxOnce() {
+    var lb = document.getElementById('projekteNeuImageLightbox');
+    if (!lb || lb.getAttribute('data-bound') === '1') return;
+    lb.setAttribute('data-bound', '1');
+    var bd = lb.querySelector('.projekte-neu-lightbox-backdrop');
+    var cl = lb.querySelector('.projekte-neu-lightbox-close');
+    if (bd) bd.addEventListener('click', closeProjekteNeuImageLightbox);
+    if (cl) cl.addEventListener('click', closeProjekteNeuImageLightbox);
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && lb.style.display === 'flex') closeProjekteNeuImageLightbox();
+    });
+  }
+
+  function projekteNeuRevokeLightboxBlobUrl() {
+    var lb = document.getElementById('projekteNeuImageLightbox');
+    if (!lb) return;
+    var prev = lb.getAttribute('data-blob-url') || '';
+    if (prev) {
+      try { URL.revokeObjectURL(prev); } catch (_) {}
+      lb.removeAttribute('data-blob-url');
+    }
+    var im = lb.querySelector('.projekte-neu-lightbox-img');
+    if (im) im.removeAttribute('src');
+  }
+
+  function closeProjekteNeuImageLightbox() {
+    var lb = document.getElementById('projekteNeuImageLightbox');
+    if (!lb) return;
+    lb.hidden = true;
+    lb.style.display = 'none';
+    projekteNeuRevokeLightboxBlobUrl();
+  }
+
+  function openProjekteNeuImageLightbox(blobUrl) {
+    bindProjekteNeuLightboxOnce();
+    projekteNeuRevokeLightboxBlobUrl();
+    var lb = document.getElementById('projekteNeuImageLightbox');
+    if (!lb) return;
+    var im = lb.querySelector('.projekte-neu-lightbox-img');
+    if (im) im.src = blobUrl;
+    lb.setAttribute('data-blob-url', blobUrl);
+    lb.hidden = false;
+    lb.style.display = 'flex';
+  }
+
+  function buildAnlageDetailProjekteNeuTree(fab, nodes, depth, msgEl) {
     depth = depth || 0;
+    function notifyErr(err) {
+      var msgNode = msgEl || document.getElementById('anlageDetailProjekteNeuMessage');
+      if (msgNode) msgNode.textContent = 'Fehler: ' + ((err && err.message) ? err.message : String(err));
+    }
     var wrap = document.createElement('ul');
     wrap.style.margin = depth === 0 ? '0.35rem 0 0.2rem 0' : '0.2rem 0 0.2rem 1rem';
     wrap.style.paddingLeft = depth === 0 ? '0.3rem' : '0.85rem';
@@ -4697,7 +4974,7 @@
         summary.textContent = String(n.name || 'Ordner');
         details.appendChild(summary);
         if (Array.isArray(n.children) && n.children.length) {
-          details.appendChild(buildAnlageDetailProjekteNeuTree(fab, n.children, depth + 1));
+          details.appendChild(buildAnlageDetailProjekteNeuTree(fab, n.children, depth + 1, msgEl));
         } else {
           var em = document.createElement('div');
           em.className = 'muted';
@@ -4708,21 +4985,58 @@
         li.appendChild(details);
       } else if (n.type === 'file') {
         var rel = String(n.rel || '').trim();
+        var label = String(n.name || rel || 'Datei');
+        var fileRow = document.createElement('div');
+        fileRow.className = 'projekte-neu-file-row';
+        if (isProjekteNeuRasterImage(label)) {
+          var timg = document.createElement('img');
+          timg.className = 'projekte-neu-thumb';
+          timg.alt = label;
+          timg.loading = 'lazy';
+          fetchProjekteNeuFileBlob(fab, rel, { thumb: true, thumbMax: 256 }).then(function (blob) {
+            timg.src = URL.createObjectURL(blob);
+          }).catch(function () {
+            var ic = document.createElement('span');
+            ic.className = 'projekte-neu-file-icon';
+            ic.setAttribute('aria-hidden', 'true');
+            ic.textContent = '\uD83D\uDCC4';
+            fileRow.replaceChild(ic, timg);
+          });
+          timg.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            fetchProjekteNeuFileBlob(fab, rel, { inline: true }).then(function (blob) {
+              openProjekteNeuImageLightbox(URL.createObjectURL(blob));
+            }).catch(function (err) {
+              notifyErr(err);
+              showToast('Bild konnte nicht geladen werden.');
+            });
+          });
+          fileRow.appendChild(timg);
+        } else {
+          var ic0 = document.createElement('span');
+          ic0.className = 'projekte-neu-file-icon';
+          ic0.setAttribute('aria-hidden', 'true');
+          ic0.textContent = '\uD83D\uDCC4';
+          fileRow.appendChild(ic0);
+        }
+        var actions = document.createElement('div');
+        actions.className = 'projekte-neu-file-actions';
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn btn-ghost';
         btn.style.padding = '0.15rem 0.25rem';
         btn.style.textAlign = 'left';
-        btn.style.width = '100%';
-        btn.textContent = String(n.name || rel || 'Datei');
+        btn.textContent = label;
         btn.addEventListener('click', function () {
           openAnlagenstammProjekteNeuLocal(fab, rel, String(n.name || '')).catch(function (err) {
-            var msg = document.getElementById('anlageDetailProjekteNeuMessage');
-            if (msg) msg.textContent = 'Fehler: ' + ((err && err.message) ? err.message : String(err));
+            notifyErr(err);
             showToast('Dokument konnte nicht geöffnet werden.');
           });
         });
-        li.appendChild(btn);
+        actions.appendChild(btn);
+        fileRow.appendChild(actions);
+        li.appendChild(fileRow);
         if (n.size != null || n.mtime != null) {
           var meta = document.createElement('span');
           meta.className = 'muted';
@@ -4735,16 +5049,20 @@
     return wrap;
   }
 
-  async function loadAnlageDetailProjekteNeuTree(fab, toggleEl) {
-    var msg = document.getElementById('anlageDetailProjekteNeuMessage');
-    var treeHost = document.getElementById('anlageDetailProjekteNeuTree');
+  async function loadProjekteNeuTreeIntoHost(fab, opts) {
+    opts = opts || {};
+    var msg = opts.msgEl || null;
+    var treeHost = opts.treeHost || null;
+    var toggleEl = opts.toggleEl != null ? opts.toggleEl : null;
     if (!treeHost) return;
     if (!fab) {
       if (msg) msg.textContent = 'Keine Fabrikationsnummer vorhanden.';
+      treeHost.innerHTML = '';
       return;
     }
     if (!getDispoExternalUrl() && !getDispoInternalUrl()) {
       if (msg) msg.textContent = 'Dispo-Adresse (extern oder intern) fehlt.';
+      treeHost.innerHTML = '';
       return;
     }
     if (msg) msg.textContent = 'Lade Struktur…';
@@ -4756,7 +5074,7 @@
       var cachedTree = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
       var usedCache = cached && cached.found && (cached.projects_enabled === true || cached.projects_enabled === 1);
       if (usedCache && cachedTree.length) {
-        treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, cachedTree, 0));
+        treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, cachedTree, 0, msg));
         if (msg) msg.textContent = 'Aus lokalem Cache geladen. Aktualisierung läuft…';
       }
 
@@ -4782,12 +5100,20 @@
         return;
       }
       treeHost.innerHTML = '';
-      treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, tree, 0));
+      treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, tree, 0, msg));
       if (msg) msg.textContent = 'Datei per Klick lokal öffnen (lokal gespeichert/synchronisiert).';
       if (toggleEl) toggleEl.setAttribute('data-loaded', '1');
     } catch (e) {
       if (msg) msg.textContent = 'Fehler: ' + ((e && e.message) ? e.message : String(e));
     }
+  }
+
+  async function loadAnlageDetailProjekteNeuTree(fab, toggleEl) {
+    await loadProjekteNeuTreeIntoHost(fab, {
+      msgEl: document.getElementById('anlageDetailProjekteNeuMessage'),
+      treeHost: document.getElementById('anlageDetailProjekteNeuTree'),
+      toggleEl: toggleEl
+    });
   }
 
   function showView(name) {
@@ -5841,6 +6167,7 @@
           updateAcceptJobButtonProgress(acceptJobLastProgressRow);
         }
       }
+      restoreAcceptJobStreamFromBackgroundJobs();
     }).catch(function () {
       var listEl = document.getElementById('dienstreiseList');
       if (listEl) listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';

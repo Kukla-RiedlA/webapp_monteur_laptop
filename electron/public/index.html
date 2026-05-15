@@ -337,6 +337,189 @@
     .view-projektdaten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-projektdaten.active { display: block; }
     .view-projektdaten .card { max-width: none; }
+    .projektdaten-heading-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem 0.65rem;
+      margin-bottom: 0.75rem;
+    }
+    .view-projektdaten .card .projektdaten-heading-row h2 {
+      margin: 0;
+      flex-shrink: 0;
+    }
+    #projektdatenHeadingMeta {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.35;
+      min-height: 1.35em;
+    }
+    #projektdatenHeadingMeta[hidden] {
+      display: none !important;
+    }
+    #projektdatenHeadingMeta .job-flag {
+      vertical-align: middle;
+      margin-right: 0.15rem;
+    }
+    #projektdatenHeadingMeta .projektdaten-heading-sep {
+      color: var(--muted);
+      font-weight: 400;
+      padding: 0 0.1rem;
+    }
+    .projektdaten-meta-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      margin-bottom: 0.35rem;
+    }
+    .projektdaten-meta-stack .projektdaten-meta-details {
+      margin: 0;
+    }
+    .projektdaten-meta-details {
+      margin: 0 0 0.65rem 0;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 0 0.65rem 0.5rem;
+      background: var(--card, var(--bg));
+    }
+    .projektdaten-meta-details > summary {
+      cursor: pointer;
+      font-weight: 600;
+      list-style: none;
+      padding: 0.45rem 0;
+      user-select: none;
+    }
+    .projektdaten-meta-details > summary::-webkit-details-marker { display: none; }
+    .projektdaten-meta-details > summary::before {
+      content: '▸ ';
+      display: inline-block;
+      transition: transform 0.12s;
+    }
+    .projektdaten-meta-details[open] > summary::before { transform: rotate(90deg); }
+    .projektdaten-meta-details-body { padding-top: 0.15rem; }
+    .projektdaten-leistung-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 380px);
+      gap: 0.75rem 1rem;
+      align-items: start;
+      margin-top: 0.5rem;
+    }
+    .projektdaten-leistung-split-side { min-width: 0; }
+    .projektdaten-leistung-split-side h4 { margin: 0 0 0.35rem 0; font-size: 0.95rem; }
+    .projektdaten-projekte-neu-hint {
+      font-size: 0.8rem;
+      color: var(--muted, #888);
+      margin: 0 0 0.45rem 0;
+      line-height: 1.35;
+    }
+    #projektdatenProjekteNeuMsg {
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin: 0 0 0.4rem 0;
+      min-height: 1.2em;
+    }
+    #projektdatenProjekteNeuTree.projektdaten-projekte-neu-tree,
+    .projektdaten-projekte-neu-tree {
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 0.45rem 0.55rem;
+      max-height: 42vh;
+      min-height: 8rem;
+      overflow: auto;
+      font-size: 0.85rem;
+    }
+    .projektdaten-fn-row-selected {
+      outline: 2px solid var(--accent, #2a8);
+      outline-offset: -2px;
+      background: rgba(14, 123, 90, 0.12);
+    }
+    .projekte-neu-file-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.45rem;
+      max-width: 100%;
+    }
+    .projekte-neu-file-actions {
+      flex: 1;
+      min-width: 0;
+    }
+    .projekte-neu-file-actions .btn.btn-ghost {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .projekte-neu-thumb {
+      width: 48px;
+      height: 48px;
+      object-fit: cover;
+      border-radius: 4px;
+      border: 1px solid var(--accent);
+      cursor: pointer;
+      flex-shrink: 0;
+      background: var(--card);
+    }
+    .projekte-neu-file-icon {
+      width: 48px;
+      height: 48px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      background: var(--card);
+      font-size: 1.35rem;
+      line-height: 1;
+      user-select: none;
+    }
+    .projekte-neu-lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 12000;
+      align-items: center;
+      justify-content: center;
+    }
+    .projekte-neu-lightbox-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+    }
+    .projekte-neu-lightbox-inner {
+      position: relative;
+      z-index: 1;
+      max-width: 96vw;
+      max-height: 96vh;
+      margin: 1rem;
+    }
+    .projekte-neu-lightbox-inner img {
+      max-width: 96vw;
+      max-height: 92vh;
+      display: block;
+      border-radius: 6px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+    .projekte-neu-lightbox-close {
+      position: absolute;
+      top: -0.85rem;
+      right: -0.85rem;
+      width: 2rem;
+      height: 2rem;
+      border: none;
+      border-radius: 50%;
+      background: #222;
+      color: #fff;
+      font-size: 1.35rem;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    @media (max-width: 900px) {
+      .projektdaten-leistung-split { grid-template-columns: 1fr; }
+    }
     .view-start.hidden { display: none; }
     .settings-row { margin-bottom: 1rem; }
     .settings-row label { display: block; margin-bottom: 0.25rem; color: var(--muted); font-size: 0.9rem; }
@@ -719,7 +902,10 @@
   <div id="toastContainer" aria-live="polite" style="position:fixed;bottom:1rem;right:1rem;z-index:1000;max-width:320px;pointer-events:none"></div>
   <main id="viewProjektdaten" class="view-projektdaten" aria-label="Projektdaten">
     <div class="card">
-      <h2>Projektdaten</h2>
+      <div class="projektdaten-heading-row">
+        <h2>Projektdaten</h2>
+        <div id="projektdatenHeadingMeta" class="projektdaten-heading-meta" hidden aria-live="polite"></div>
+      </div>
       <div id="viewProjektdatenContent" class="modal-detail-content"><span class="empty">Auftrag per Doppelklick öffnen.</span></div>
     </div>
   </main>
@@ -1149,6 +1335,13 @@
       <button type="button" class="btn btn-ghost" id="btnOpenProfileForQr">Profil im Browser öffnen (QR-Code erzeugen)</button>
     </div>
   </main>
+  <div id="projekteNeuImageLightbox" class="projekte-neu-lightbox" hidden aria-modal="true" role="dialog">
+    <div class="projekte-neu-lightbox-backdrop" tabindex="-1"></div>
+    <div class="projekte-neu-lightbox-inner">
+      <button type="button" class="projekte-neu-lightbox-close" aria-label="Schließen">&times;</button>
+      <img class="projekte-neu-lightbox-img" alt="" />
+    </div>
+  </div>
   <script src="countries.js"></script>
   <script src="signature_widget.js"></script>
   <script src="rams_wizard_core.js"></script>
