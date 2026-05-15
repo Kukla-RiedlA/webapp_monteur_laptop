@@ -59,6 +59,61 @@
     .btn-delete-absence:hover { color: #e07c7c; background: rgba(224,124,124,0.15); }
     .job-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
     .job-actions .btn { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+    /* Auftrag annehmen: gelb, Fortschritt im Button */
+    .btn-accept-job {
+      background: linear-gradient(180deg, #ffe082 0%, #ffc107 55%, #ffb300 100%);
+      color: #2c2416;
+      border: 1px solid #d39e00;
+      font-weight: 600;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: center;
+      gap: 0.28rem;
+      min-width: 12rem;
+      text-align: center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.12);
+    }
+    .btn-accept-job:hover:not(:disabled) {
+      filter: brightness(1.03);
+      border-color: #c49000;
+    }
+    .btn-accept-job:focus-visible {
+      outline: 2px solid #ff8f00;
+      outline-offset: 2px;
+    }
+    .btn-accept-job-label { display: block; line-height: 1.2; }
+    .btn-accept-job-progress-wrap {
+      display: none;
+      flex-direction: column;
+      gap: 0.22rem;
+      width: 100%;
+      align-items: stretch;
+    }
+    .btn-accept-job.btn-accept-job--busy .btn-accept-job-label { display: none; }
+    .btn-accept-job.btn-accept-job--busy .btn-accept-job-progress-wrap { display: flex; }
+    .btn-accept-job-progress-text {
+      font-size: 0.68rem;
+      font-weight: 600;
+      line-height: 1.15;
+      color: #2c2416;
+    }
+    .btn-accept-job-progress {
+      width: 100%;
+      height: 7px;
+      border: none;
+      border-radius: 3px;
+      vertical-align: middle;
+      accent-color: #e65100;
+    }
+    .btn-accept-job-progress::-webkit-progress-bar {
+      background: rgba(255,255,255,0.55);
+      border-radius: 3px;
+    }
+    .btn-accept-job-progress::-webkit-progress-value {
+      background: #e65100;
+      border-radius: 3px;
+    }
     .status-badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .status-angelegt,
     .status-geplant { background: #3d5a80; }

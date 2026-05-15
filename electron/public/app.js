@@ -929,6 +929,96 @@
   }
 
   var acceptJobStreamBusy = false;
+  /** @type {number | null} */
+  var acceptJobActiveLocalJobId = null;
+  /** Letzter Poll-Stand, damit nach erneutem Rendern der Liste der Balken wiederhergestellt werden kann. */
+  var acceptJobLastProgressRow = null;
+  /** @type {HTMLButtonElement | null} */
+  var acceptJobActiveButton = null;
+
+  function resolveAcceptJobActiveButton() {
+    var btn = acceptJobActiveButton;
+    if (btn && typeof btn.isConnected === 'boolean' && btn.isConnected) return btn;
+    var lid = acceptJobActiveLocalJobId;
+    if (lid == null) return null;
+    var jobEl = document.querySelector('#dienstreiseList .job[data-job-id="' + String(lid) + '"]');
+    btn = jobEl ? jobEl.querySelector('[data-action="accept-job"]') : null;
+    acceptJobActiveButton = btn;
+    return btn;
+  }
+
+  /** Während accept_job_stream: Busy-Zustand auf alle Annahme-Buttons; aktiver Auftrag per ID. */
+  function applyAcceptJobStreamBusyUi() {
+    var activeId = acceptJobActiveLocalJobId;
+    acceptJobActiveButton = null;
+    document.querySelectorAll('[data-action="accept-job"]').forEach(function (b) {
+      var row = b.closest('.job');
+      var jid = row ? parseInt(row.getAttribute('data-job-id'), 10) : NaN;
+      if (activeId != null && jid === activeId) {
+        acceptJobActiveButton = b;
+        b.classList.add('btn-accept-job--busy');
+        b.setAttribute('aria-busy', 'true');
+        b.style.pointerEvents = 'none';
+        b.disabled = false;
+        var t = b.querySelector('.btn-accept-job-progress-text');
+        var bar = b.querySelector('.btn-accept-job-progress');
+        if (t && !acceptJobLastProgressRow) t.textContent = 'Dispo wird aktualisiert …';
+        if (bar && !acceptJobLastProgressRow) {
+          try {
+            bar.indeterminate = true;
+          } catch (e) {}
+        }
+      } else {
+        b.disabled = true;
+      }
+    });
+  }
+
+  function updateAcceptJobButtonProgress(jobRow) {
+    if (!jobRow || typeof jobRow !== 'object') return;
+    acceptJobLastProgressRow = {
+      progress_phase: jobRow.progress_phase,
+      progress_current: jobRow.progress_current,
+      progress_total: jobRow.progress_total,
+      message: jobRow.message
+    };
+    var btn = resolveAcceptJobActiveButton();
+    if (!btn) return;
+    var lbl = btn.querySelector('.btn-accept-job-progress-text');
+    var bar = btn.querySelector('.btn-accept-job-progress');
+    if (!lbl || !bar) return;
+    var phase = (jobRow.progress_phase || '').toString();
+    var cur = jobRow.progress_current != null ? jobRow.progress_current : 0;
+    var tot = jobRow.progress_total != null ? jobRow.progress_total : 0;
+    var msg = jobRow.message ? String(jobRow.message) : '';
+
+    if (phase === 'refresh' || phase === 'start') {
+      lbl.textContent = msg || 'Dispo wird aktualisiert …';
+      try {
+        bar.indeterminate = true;
+      } catch (e) {}
+    } else if (phase === 'refresh_done' || phase === 'manifest') {
+      lbl.textContent = msg || 'Unterlagen werden vorbereitet …';
+      try {
+        bar.indeterminate = true;
+      } catch (e) {}
+    } else if (phase === 'download' || phase === 'file') {
+      lbl.textContent = msg && String(msg).trim() ? String(msg) : 'Unterlagen werden geladen …';
+      if (tot > 0) {
+        try {
+          bar.indeterminate = false;
+        } catch (e2) {}
+        bar.max = tot;
+        bar.value = Math.min(cur, tot);
+      } else {
+        try {
+          bar.indeterminate = true;
+        } catch (e3) {}
+      }
+    } else if (msg) {
+      lbl.textContent = msg;
+    }
+  }
 
   function validateAcceptJobPrerequisites(localJobId) {
     if (!localJobId) return 'Bitte einen Auftrag wählen.';
@@ -942,7 +1032,7 @@
     return null;
   }
 
-  function runAcceptJobStream(localJobId) {
+  function runAcceptJobStream(localJobId, triggerButton) {
     if (acceptJobStreamBusy) return;
     var errMsg = validateAcceptJobPrerequisites(localJobId);
     var hint = document.getElementById('acceptJobHint');
@@ -951,14 +1041,14 @@
       return;
     }
     acceptJobStreamBusy = true;
+    acceptJobActiveLocalJobId = localJobId;
+    acceptJobLastProgressRow = null;
+    acceptJobActiveButton = triggerButton && triggerButton.nodeType === 1 ? triggerButton : null;
     if (hint) hint.textContent = '';
     var progressWrap = document.getElementById('acceptJobProgressWrap');
-    var progressBar = document.getElementById('acceptJobProgress');
-    var progressLabel = document.getElementById('acceptJobProgressLabel');
-    if (progressWrap) progressWrap.style.display = 'block';
-    if (progressBar) { progressBar.value = 0; progressBar.max = 100; }
-    if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
-    document.querySelectorAll('[data-action="accept-job"]').forEach(function (b) { b.disabled = true; });
+    if (progressWrap) progressWrap.style.display = 'none';
+
+    applyAcceptJobStreamBusyUi();
 
     var body = {
       job_id: localJobId,
@@ -980,12 +1070,29 @@
 
     function finishAcceptUi() {
       acceptJobStreamBusy = false;
+      acceptJobActiveLocalJobId = null;
+      acceptJobLastProgressRow = null;
+      acceptJobActiveButton = null;
       if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
       var wrap = document.getElementById('acceptJobProgressWrap');
       var lbl = document.getElementById('acceptJobProgressLabel');
       if (wrap) wrap.style.display = 'none';
       if (lbl) lbl.textContent = '';
-      document.querySelectorAll('[data-action="accept-job"]').forEach(function (b) { b.disabled = false; });
+      document.querySelectorAll('[data-action="accept-job"]').forEach(function (b) {
+        b.disabled = false;
+        b.classList.remove('btn-accept-job--busy');
+        b.removeAttribute('aria-busy');
+        b.style.pointerEvents = '';
+        var bar = b.querySelector('.btn-accept-job-progress');
+        if (bar) {
+          try {
+            bar.indeterminate = false;
+          } catch (e) {}
+          bar.removeAttribute('value');
+          bar.setAttribute('max', '100');
+          bar.value = 0;
+        }
+      });
     }
 
     fetch(API_BASE + '/api/dienstreise/accept_job_stream', {
@@ -1008,27 +1115,7 @@
             var jobId = data && data.job_id;
             if (!jobId) throw new Error('Keine job_id vom Server.');
             return pollBackgroundJobUntilTerminal(jobId, function (j) {
-              var phase = j.progress_phase || '';
-              var cur = j.progress_current != null ? j.progress_current : 0;
-              var tot = j.progress_total != null ? j.progress_total : 0;
-              var msg = j.message ? String(j.message) : '';
-              if (phase === 'refresh' || phase === 'start') {
-                if (progressLabel) progressLabel.textContent = msg || 'Dispo wird aktualisiert …';
-              } else if (phase === 'refresh_done' || phase === 'manifest' || phase === 'download') {
-                if (progressLabel) progressLabel.textContent = msg || 'Lade auf Laptop …';
-                if (progressBar && tot > 0) {
-                  progressBar.max = tot;
-                  progressBar.value = Math.min(cur, tot);
-                }
-              } else if (phase === 'file') {
-                if (progressBar && tot > 0) {
-                  progressBar.max = tot;
-                  progressBar.value = Math.min(cur, tot);
-                }
-                if (progressLabel && tot > 0) progressLabel.textContent = msg || ('Lade ' + cur + ' / ' + tot);
-              } else if (msg && progressLabel) {
-                progressLabel.textContent = msg;
-              }
+              updateAcceptJobButtonProgress(j);
             }).then(function (j) {
               if (copyTimeoutId) {
                 clearTimeout(copyTimeoutId);
@@ -2169,10 +2256,13 @@
     modal.addEventListener('click', function (e) {
       if (e.target === modal) closeModal();
     });
-    document.getElementById('anlageDetailSave').addEventListener('click', function () {
+    var anlageSaveBusy = false;
+    var anlageSaveNeedsRetry = false;
+    var anlageSaveRetryCloseAfter = false;
+    function buildAnlageRowsFromModalDom() {
       var idx = parseInt(document.getElementById('anlageDetailRowIndex').value, 10);
       var rowsCopy = (window.currentProjektdatenLeistungRows || []).slice();
-      if (!rowsCopy[idx]) return;
+      if (!Number.isFinite(idx) || !rowsCopy[idx]) return null;
       rowsCopy[idx] = {
         fabrikationsnummer: rowsCopy[idx].fabrikationsnummer,
         type: (document.getElementById('anlageDetailType') && document.getElementById('anlageDetailType').value) || '',
@@ -2190,27 +2280,75 @@
       };
       var arr = rowsCopy.filter(leistungRowHasVisibleData);
       if (arr.length === 0) arr = rowsCopy;
+      return { rowsCopy: rowsCopy, arr: arr };
+    }
+    function persistAnlageDetail(closeAfter) {
+      if (!document.getElementById('anlageDetailModal')) return;
+      if (anlageSaveBusy) {
+        anlageSaveNeedsRetry = true;
+        anlageSaveRetryCloseAfter = anlageSaveRetryCloseAfter || closeAfter;
+        return;
+      }
+      var built = buildAnlageRowsFromModalDom();
+      if (!built) return;
+      anlageSaveBusy = true;
       api('/api/job', {
         method: 'PATCH',
-        body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
+        body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(built.arr) })
       }).then(function () {
-        showToast('Anlagendetails lokal gespeichert.');
-        closeModal();
-        openJobDetailsModal(jobId);
-        if (typeof checkConnectionAndSync === 'function') {
-          try {
-            Promise.resolve(checkConnectionAndSync()).then(function () {
-              showToast('Synchronisierung angestoßen.');
-            }).catch(function (err) {
-              showToast('Lokal gespeichert, Sync aktuell fehlgeschlagen: ' + ((err && err.message) ? err.message : 'Verbindung prüfen'));
-            });
-          } catch (e) {
-            showToast('Lokal gespeichert. Sync konnte nicht gestartet werden.');
+        window.currentProjektdatenLeistungRows = built.rowsCopy;
+        if (window.currentProjektdatenJob) {
+          window.currentProjektdatenJob = Object.assign({}, window.currentProjektdatenJob, {
+            fabrikationsnummern: JSON.stringify(built.arr)
+          });
+        }
+        if (closeAfter) {
+          showToast('Anlagendetails lokal gespeichert.');
+          closeModal();
+          openJobDetailsModal(jobId);
+          if (typeof checkConnectionAndSync === 'function') {
+            try {
+              Promise.resolve(checkConnectionAndSync()).then(function () {
+                showToast('Synchronisierung angestoßen.');
+              }).catch(function (err) {
+                showToast('Lokal gespeichert, Sync aktuell fehlgeschlagen: ' + ((err && err.message) ? err.message : 'Verbindung prüfen'));
+              });
+            } catch (e) {
+              showToast('Lokal gespeichert. Sync konnte nicht gestartet werden.');
+            }
           }
         }
       }).catch(function (e) {
         alert('Speichern fehlgeschlagen: ' + e.message);
+      }).finally(function () {
+        anlageSaveBusy = false;
+        if (anlageSaveNeedsRetry && document.getElementById('anlageDetailModal')) {
+          anlageSaveNeedsRetry = false;
+          var rc = anlageSaveRetryCloseAfter;
+          anlageSaveRetryCloseAfter = false;
+          persistAnlageDetail(rc);
+        }
       });
+    }
+    modal.querySelectorAll('input[type="text"]').forEach(function (inp) {
+      inp.addEventListener('blur', function () {
+        persistAnlageDetail(false);
+      });
+      inp.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          persistAnlageDetail(false);
+        }
+      });
+    });
+    var anlageTa = document.getElementById('anlageDetailBemerkungen');
+    if (anlageTa) {
+      anlageTa.addEventListener('blur', function () {
+        persistAnlageDetail(false);
+      });
+    }
+    document.getElementById('anlageDetailSave').addEventListener('click', function () {
+      persistAnlageDetail(true);
     });
   }
 
@@ -2533,6 +2671,135 @@
     overlay.addEventListener('click', function (e) {
       if (e.target === overlay) closeModal();
     });
+    function collectHotelModalPayload() {
+      return {
+        job_id: parseInt(jobId, 10),
+        hotel_endkunde: (document.getElementById('hotel_edit_endkunde') && document.getElementById('hotel_edit_endkunde').value) || '',
+        hotel_street: (document.getElementById('hotel_edit_street') && document.getElementById('hotel_edit_street').value) || '',
+        hotel_house_number: (document.getElementById('hotel_edit_house_number') && document.getElementById('hotel_edit_house_number').value) || '',
+        hotel_zip: (document.getElementById('hotel_edit_zip') && document.getElementById('hotel_edit_zip').value) || '',
+        hotel_city: (document.getElementById('hotel_edit_city') && document.getElementById('hotel_edit_city').value) || '',
+        hotel_country: (document.getElementById('hotel_edit_country') && document.getElementById('hotel_edit_country').value) || '',
+        hotel_address_extra_1: (document.getElementById('hotel_edit_extra_1') && document.getElementById('hotel_edit_extra_1').value) || '',
+        hotel_address_extra_2: (document.getElementById('hotel_edit_extra_2') && document.getElementById('hotel_edit_extra_2').value) || '',
+        hotel_phone: (document.getElementById('hotel_edit_phone') && document.getElementById('hotel_edit_phone').value) || '',
+        hotel_email: (document.getElementById('hotel_edit_email') && document.getElementById('hotel_edit_email').value) || '',
+        hotel_website: (document.getElementById('hotel_edit_website') && document.getElementById('hotel_edit_website').value) || '',
+        hotel_comment: (document.getElementById('hotel_edit_comment') && document.getElementById('hotel_edit_comment').value) || '',
+        hotel_rating_stars: (document.getElementById('hotel_edit_rating') && document.getElementById('hotel_edit_rating').value) || ''
+      };
+    }
+    function applyHotelPayloadToJob(payload) {
+      var updatedJob = Object.assign({}, job, {
+        hotel_endkunde: payload.hotel_endkunde,
+        hotel_street: payload.hotel_street,
+        hotel_house_number: payload.hotel_house_number,
+        hotel_zip: payload.hotel_zip,
+        hotel_city: payload.hotel_city,
+        hotel_country: payload.hotel_country,
+        hotel_address_extra_1: payload.hotel_address_extra_1,
+        hotel_address_extra_2: payload.hotel_address_extra_2,
+        hotel_phone: payload.hotel_phone,
+        hotel_email: payload.hotel_email,
+        hotel_website: payload.hotel_website,
+        hotel_comment: payload.hotel_comment,
+        hotel_rating_stars: payload.hotel_rating_stars
+      });
+      Object.assign(job, updatedJob);
+      window.currentProjektdatenJob = updatedJob;
+      return updatedJob;
+    }
+    function refreshHotelProjektdatenContent(updatedJob) {
+      var viewProjektdaten = document.getElementById('viewProjektdaten');
+      var viewStart = document.getElementById('viewStart');
+      var viewEinstellungen = document.getElementById('viewEinstellungen');
+      if (viewStart) viewStart.classList.add('hidden');
+      if (viewEinstellungen) viewEinstellungen.classList.remove('active');
+      if (viewProjektdaten) viewProjektdaten.classList.add('active');
+      var content = document.getElementById('viewProjektdatenContent');
+      if (content) {
+        window.currentProjektdatenJob = updatedJob;
+        content.innerHTML = renderJobDetailsContent(updatedJob);
+        bindLeistungActions();
+        if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+      }
+    }
+    function runHotelDispoSyncPush() {
+      var baseUrl = (typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '').trim();
+      var techId = typeof getTechId === 'function' ? getTechId() : null;
+      if (!baseUrl || !techId) return;
+      fetch(API_BASE + '/api/sync_push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: baseUrl,
+          technicianId: getTechId(),
+          serverUsername: typeof getServerUsername === 'function' ? getServerUsername() : '',
+          serverPassword: typeof getServerPassword === 'function' ? getServerPassword() : ''
+        })
+      })
+        .then(function (res) {
+          return res.json().then(function (d) {
+            return { d: d };
+          });
+        })
+        .then(function (x) {
+          var d = x.d;
+          if (!d || !d.ok) {
+            if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (d && d.error ? d.error : 'Unbekannt'));
+            return;
+          }
+          if (d.job_id) {
+            return pollBackgroundJobUntilTerminal(d.job_id, null, {}).then(function (j) {
+              if (j.status === 'completed' && typeof showToast === 'function') {
+                showToast('Hotel-Adresse wurde in die Dispo übertragen.');
+              } else if (j.status !== 'completed' && typeof showToast === 'function') {
+                showToast('Sync fehlgeschlagen: ' + (j.error || j.message || j.status));
+              }
+            });
+          }
+          if (typeof showToast === 'function') showToast('Hotel-Adresse wurde in die Dispo übertragen.');
+        })
+        .catch(function (e) {
+          console.error('[Sync Push] Fehler:', e.message, e);
+          if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (e.message || 'Verbindung zur Dispo prüfen'));
+        });
+    }
+    var hotelSaveBusy = false;
+    var hotelSaveNeedsRetry = false;
+    var hotelSaveRetryCloseAfter = false;
+    function persistHotelModal(closeAfter) {
+      if (!document.getElementById('hotelAddressModalOverlay')) return;
+      if (hotelSaveBusy) {
+        hotelSaveNeedsRetry = true;
+        hotelSaveRetryCloseAfter = hotelSaveRetryCloseAfter || closeAfter;
+        return;
+      }
+      var payload = collectHotelModalPayload();
+      hotelSaveBusy = true;
+      api('/api/job', { method: 'PATCH', body: JSON.stringify(payload) })
+        .then(function () {
+          var updatedJob = applyHotelPayloadToJob(payload);
+          if (closeAfter) {
+            closeModal();
+            refreshHotelProjektdatenContent(updatedJob);
+            runHotelDispoSyncPush();
+            if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync(); } catch (e) {} }
+          }
+        })
+        .catch(function (e) {
+          alert('Speichern fehlgeschlagen: ' + e.message);
+        })
+        .finally(function () {
+          hotelSaveBusy = false;
+          if (hotelSaveNeedsRetry && document.getElementById('hotelAddressModalOverlay')) {
+            hotelSaveNeedsRetry = false;
+            var rc = hotelSaveRetryCloseAfter;
+            hotelSaveRetryCloseAfter = false;
+            persistHotelModal(rc);
+          }
+        });
+    }
     function updateHotelCountryFlag() {
       var sel = document.getElementById('hotel_edit_country');
       var flagEl = document.getElementById('hotel_edit_country_flag');
@@ -2541,7 +2808,10 @@
       flagEl.innerHTML = code ? countryFlagImg(code) : '';
     }
     updateHotelCountryFlag();
-    document.getElementById('hotel_edit_country').addEventListener('change', updateHotelCountryFlag);
+    document.getElementById('hotel_edit_country').addEventListener('change', function () {
+      updateHotelCountryFlag();
+      persistHotelModal(false);
+    });
     function applyHotelModalStars(n) {
       var num = parseInt(String(n), 10);
       if (!isFinite(num) || num < 1) num = 0;
@@ -2562,6 +2832,7 @@
         b.addEventListener('click', function () {
           var ns = parseInt(b.getAttribute('data-star'), 10);
           if (isFinite(ns)) applyHotelModalStars(ns);
+          persistHotelModal(false);
         });
       });
     }
@@ -2569,6 +2840,7 @@
     if (hotelRatingClear) {
       hotelRatingClear.addEventListener('click', function () {
         applyHotelModalStars(0);
+        persistHotelModal(false);
       });
     }
     var hotelPasteApply = document.getElementById('hotelPasteApply');
@@ -2595,86 +2867,30 @@
           if (opt) countrySel.value = parsed.country; else countrySel.value = '';
         }
         updateHotelCountryFlag();
+        persistHotelModal(false);
+      });
+    }
+    overlay.querySelectorAll('input').forEach(function (inp) {
+      if (inp.type === 'hidden') return;
+      inp.addEventListener('blur', function () {
+        persistHotelModal(false);
+      });
+      inp.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          persistHotelModal(false);
+        }
+      });
+    });
+    var hotelCommentTa = document.getElementById('hotel_edit_comment');
+    if (hotelCommentTa) {
+      hotelCommentTa.addEventListener('blur', function () {
+        persistHotelModal(false);
       });
     }
     document.getElementById('hotelModalCancel').addEventListener('click', closeModal);
     document.getElementById('hotelModalSave').addEventListener('click', function () {
-      var payload = {
-        job_id: parseInt(jobId, 10),
-        hotel_endkunde: (document.getElementById('hotel_edit_endkunde') && document.getElementById('hotel_edit_endkunde').value) || '',
-        hotel_street: (document.getElementById('hotel_edit_street') && document.getElementById('hotel_edit_street').value) || '',
-        hotel_house_number: (document.getElementById('hotel_edit_house_number') && document.getElementById('hotel_edit_house_number').value) || '',
-        hotel_zip: (document.getElementById('hotel_edit_zip') && document.getElementById('hotel_edit_zip').value) || '',
-        hotel_city: (document.getElementById('hotel_edit_city') && document.getElementById('hotel_edit_city').value) || '',
-        hotel_country: (document.getElementById('hotel_edit_country') && document.getElementById('hotel_edit_country').value) || '',
-        hotel_address_extra_1: (document.getElementById('hotel_edit_extra_1') && document.getElementById('hotel_edit_extra_1').value) || '',
-        hotel_address_extra_2: (document.getElementById('hotel_edit_extra_2') && document.getElementById('hotel_edit_extra_2').value) || '',
-        hotel_phone: (document.getElementById('hotel_edit_phone') && document.getElementById('hotel_edit_phone').value) || '',
-        hotel_email: (document.getElementById('hotel_edit_email') && document.getElementById('hotel_edit_email').value) || '',
-        hotel_website: (document.getElementById('hotel_edit_website') && document.getElementById('hotel_edit_website').value) || '',
-        hotel_comment: (document.getElementById('hotel_edit_comment') && document.getElementById('hotel_edit_comment').value) || '',
-        hotel_rating_stars: (document.getElementById('hotel_edit_rating') && document.getElementById('hotel_edit_rating').value) || ''
-      };
-      api('/api/job', { method: 'PATCH', body: JSON.stringify(payload) }).then(function () {
-        closeModal();
-        var updatedJob = { ...job, hotel_endkunde: payload.hotel_endkunde, hotel_street: payload.hotel_street, hotel_house_number: payload.hotel_house_number, hotel_zip: payload.hotel_zip, hotel_city: payload.hotel_city, hotel_country: payload.hotel_country, hotel_address_extra_1: payload.hotel_address_extra_1, hotel_address_extra_2: payload.hotel_address_extra_2, hotel_phone: payload.hotel_phone, hotel_email: payload.hotel_email, hotel_website: payload.hotel_website, hotel_comment: payload.hotel_comment, hotel_rating_stars: payload.hotel_rating_stars };
-        var viewProjektdaten = document.getElementById('viewProjektdaten');
-        var viewStart = document.getElementById('viewStart');
-        var viewEinstellungen = document.getElementById('viewEinstellungen');
-        if (viewStart) viewStart.classList.add('hidden');
-        if (viewEinstellungen) viewEinstellungen.classList.remove('active');
-        if (viewProjektdaten) viewProjektdaten.classList.add('active');
-        var content = document.getElementById('viewProjektdatenContent');
-        if (content) {
-          window.currentProjektdatenJob = updatedJob;
-          content.innerHTML = renderJobDetailsContent(updatedJob);
-          bindLeistungActions();
-          if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-        }
-        var baseUrl = (typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '').trim();
-        var techId = typeof getTechId === 'function' ? getTechId() : null;
-        if (baseUrl && techId) {
-          fetch(API_BASE + '/api/sync_push', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              baseUrl: baseUrl,
-              technicianId: getTechId(),
-              serverUsername: typeof getServerUsername === 'function' ? getServerUsername() : '',
-              serverPassword: typeof getServerPassword === 'function' ? getServerPassword() : ''
-            })
-          })
-            .then(function (res) {
-              return res.json().then(function (d) {
-                return { d: d };
-              });
-            })
-            .then(function (x) {
-              var d = x.d;
-              if (!d || !d.ok) {
-                if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (d && d.error ? d.error : 'Unbekannt'));
-                return;
-              }
-              if (d.job_id) {
-                return pollBackgroundJobUntilTerminal(d.job_id, null, {}).then(function (j) {
-                  if (j.status === 'completed' && typeof showToast === 'function') {
-                    showToast('Hotel-Adresse wurde in die Dispo übertragen.');
-                  } else if (j.status !== 'completed' && typeof showToast === 'function') {
-                    showToast('Sync fehlgeschlagen: ' + (j.error || j.message || j.status));
-                  }
-                });
-              }
-              if (typeof showToast === 'function') showToast('Hotel-Adresse wurde in die Dispo übertragen.');
-            })
-            .catch(function (e) {
-              console.error('[Sync Push] Fehler:', e.message, e);
-              if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (e.message || 'Verbindung zur Dispo prüfen'));
-            });
-        }
-        if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync(); } catch (e) {} }
-      }).catch(function (e) {
-        alert('Speichern fehlgeschlagen: ' + e.message);
-      });
+      persistHotelModal(true);
     });
   }
 
@@ -5572,7 +5788,14 @@
           '<div class="job-info"><strong>' + (titleLine || 'Auftrag') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + (j.job_type ? ' · ' + (j.job_type || '') : '') + '</span></div>' +
           '<div class="job-actions">' +
           '<span class="status-badge status-' + stClass + '">' + escapeHtml(stLabel) + '</span>' +
-          (jobCanAcceptJob(j) ? '<button type="button" class="btn btn-primary" data-action="accept-job">Auftrag annehmen</button>' : '') +
+          (jobCanAcceptJob(j)
+            ? '<button type="button" class="btn btn-accept-job" data-action="accept-job">' +
+              '<span class="btn-accept-job-label">Auftrag annehmen</span>' +
+              '<span class="btn-accept-job-progress-wrap">' +
+              '<span class="btn-accept-job-progress-text"></span>' +
+              '<progress class="btn-accept-job-progress" max="100" value="0"></progress>' +
+              '</span></button>'
+            : '') +
           (j.status !== 'erledigt' && String(j.status || '').toLowerCase() !== 'abgerechnet' && !isJobAngelegtReadOnly(j) ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
           '</div></div>';
       }).join('');
@@ -5584,7 +5807,7 @@
           var jobId = parseInt(btn.closest('.job').getAttribute('data-job-id'), 10);
           if (!jobId) return;
           selectedJobIdOnDienstreisePage = jobId;
-          runAcceptJobStream(jobId);
+          runAcceptJobStream(jobId, btn);
         });
       });
       listEl.querySelectorAll('.job-actions [data-status]').forEach(function (btn) {
@@ -5612,6 +5835,12 @@
           if (jobId && typeof openJobDetailsModal === 'function') openJobDetailsModal(jobId);
         });
       });
+      if (acceptJobStreamBusy && acceptJobActiveLocalJobId != null) {
+        applyAcceptJobStreamBusyUi();
+        if (acceptJobLastProgressRow) {
+          updateAcceptJobButtonProgress(acceptJobLastProgressRow);
+        }
+      }
     }).catch(function () {
       var listEl = document.getElementById('dienstreiseList');
       if (listEl) listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
