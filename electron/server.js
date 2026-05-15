@@ -2165,7 +2165,7 @@ function createApp(db) {
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     const url = `${base}/dispo_api/api/anlagenstamm_files_list.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}`;
     try {
-      const r = await fetch(url, auth ? { headers: auth } : {});
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
       try {
@@ -2254,7 +2254,7 @@ function createApp(db) {
     if (wantInline) qs.push('inline=1');
     if (qs.length) url += '&' + qs.join('&');
     try {
-      const r = await fetch(url, auth ? { headers: auth } : {});
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
         return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
@@ -2295,7 +2295,7 @@ function createApp(db) {
       url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&file=${encodeURIComponent(fileValue)}`;
     }
     try {
-      const r = await fetch(url, auth ? { headers: auth } : {});
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
         try { console.warn('[anlagenstamm_file_open] upstream error', r.status, data && data.error ? data.error : r.statusText); } catch (_) {}

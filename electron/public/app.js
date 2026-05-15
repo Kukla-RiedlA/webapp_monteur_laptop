@@ -4899,13 +4899,21 @@
           throw new Error((j && j.error) ? j.error : ('HTTP ' + resp.status));
         });
       }
-      if (opts.thumb) {
-        var ct = (resp.headers.get('content-type') || '').toLowerCase();
-        if (ct.indexOf('image/') !== 0) {
-          throw new Error('thumb_not_image');
+      return resp.blob().then(function (blob) {
+        if (opts.thumb) {
+          function normMime(s) {
+            var x = String(s || '').toLowerCase().trim().split(';')[0].trim();
+            return x;
+          }
+          var hdrCt = normMime(resp.headers.get('content-type'));
+          var blobCt = normMime(blob.type);
+          var ct = hdrCt || blobCt;
+          if (ct && ct.indexOf('image/') !== 0) {
+            throw new Error('thumb_not_image');
+          }
         }
-      }
-      return resp.blob();
+        return blob;
+      });
     });
   }
 
