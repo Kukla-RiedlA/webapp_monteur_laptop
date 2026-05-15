@@ -4,6 +4,7 @@
  */
 
 const express = require('express');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const WebSocket = require('ws');
@@ -19,7 +20,8 @@ function getCsvToPdfBuffer() {
 
 const PORT = 39678;
 const DB_DIR = path.join(__dirname, 'db');
-const { registerAbrechnungRoutes, flushAbrechnungOutbox } = require('./lib/abrechnung-routes');
+const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore } = require('./lib/abrechnung-routes');
+const { ensureBackgroundJobsSchema, createBackgroundJobService } = require('./lib/background_jobs');
 const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
 const { buildDispoBaseCandidates } = require('./lib/dispo-base-fallback');
 
@@ -286,6 +288,7 @@ async function getDb() {
       writeFileWithRetry(DB_PATH, buffer);
     }
   } catch (e) { /* ignore */ }
+  ensureBackgroundJobsSchema(sqlDb);
   return createDbWrapper(sqlDb);
 }
 
@@ -405,6 +408,9 @@ function createApp(db) {
   };
 
   const save = () => db.save();
+
+  /** @type {ReturnType<typeof createBackgroundJobService> | null} */
+  let bgJobs = null;
 
   let appVersion = 'V 1.001';
   try {
@@ -917,15 +923,20 @@ function createApp(db) {
       const dispoPassword = (body.dispo_password != null ? String(body.dispo_password) : '');
       const drGate = gateDienstreiseWrite(db, technicianId, localJobId);
       if (drGate) return res.status(drGate.status).json({ ok: false, error: drGate.error });
-      await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword);
-      if (dispoBaseUrl) {
-        try {
-          await syncProtokollTemplates(dispoBaseUrl);
-        } catch (tplErr) {
-          console.warn('Protokoll-Vorlagen Sync fehlgeschlagen (offline-Vorlagen weiter nutzbar):', tplErr.message);
-        }
-      }
-      res.json({ ok: true });
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      const dedupeKey = 'dienstreise_push:' + localJobId;
+      const { job_id } = bgJobs.enqueue(
+        'dienstreise_push',
+        {
+          job_id: localJobId,
+          dispo_base_url: dispoBaseUrl,
+          technician_id: technicianId,
+          dispo_username: dispoUsername,
+          dispo_password: dispoPassword,
+        },
+        dedupeKey,
+      );
+      return res.status(202).json({ ok: true, job_id, async: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Sync zum Dispo-Server fehlgeschlagen.' });
     }
@@ -1006,36 +1017,20 @@ function createApp(db) {
   });
 
   /**
-   * NDJSON-Stream: Dispo-Refresh, dann Projektordner in den Dienstreise-Ordner kopieren.
-   * @param {{ acceptJob?: boolean }} options – acceptJob: Gate-Bypass für angelegt/geplant/zugeteilt, danach Status in_arbeit
+   * Queued Hintergrund-Job: Dispo-Refresh, Projektordner kopieren, optional Auftrag annehmen.
+   * @param {{ acceptJob?: boolean }} options
    */
-  async function handleDienstreiseCopyProjectStream(req, res, options) {
+  function enqueueDienstreisePullFromRequest(req, res, options) {
     const acceptJob = !!(options && options.acceptJob);
-    let clientGone = false;
-    req.on('close', () => { clientGone = true; });
-    const send = (obj, cb) => {
-      if (clientGone || res.writableEnded) return;
-      try {
-        res.write(JSON.stringify(obj) + '\n', 'utf8', cb || undefined);
-      } catch (e) {
-        clientGone = true;
-      }
-    };
-    const safeEnd = () => {
-      if (clientGone || res.writableEnded) return;
-      try {
-        res.end();
-      } catch (e) {
-        clientGone = true;
-      }
-    };
     try {
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
       const body = req.body || {};
       const rawJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
       const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
       const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
       const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
-      const dispoPassword = (body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '');
+      const dispoPassword =
+        body.dispoPassword != null ? String(body.dispoPassword) : body.dispo_password != null ? String(body.dispo_password) : '';
       const includeBilder = !!body.include_bilder;
 
       if (!rawJobId || !dispoBaseUrl || !technicianId) {
@@ -1062,193 +1057,51 @@ function createApp(db) {
       }
 
       const localJobId = jobRowFull.id;
-      const jobId = jobRowFull.server_id != null ? jobRowFull.server_id : jobRowFull.id;
-
       const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
       if (!targetDir || !fs.existsSync(targetDir)) {
         return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
       }
 
-      const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+      const authHeader =
+        dispoUsername || dispoPassword
+          ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') }
+          : {};
       if (!authHeader.Authorization) {
         return res.status(400).json({
           ok: false,
-          error: 'Dispo-Zugangsdaten fehlen: Benutzername und Passwort in den Einstellungen eintragen (erforderlich für Projektordner holen).',
+          error:
+            'Dispo-Zugangsdaten fehlen: Benutzername und Passwort in den Einstellungen eintragen (erforderlich für Projektordner holen).',
         });
       }
 
-      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
-      res.flushHeaders();
-
-      send({ phase: 'refresh' });
-      const refreshUrl = dispoBaseUrl + '/api/job_project_refresh.php';
-      const refreshTimeoutMs = 60000;
-      const refreshAbort = new AbortController();
-      const refreshTimeoutId = setTimeout(() => refreshAbort.abort(), refreshTimeoutMs);
-      try {
-        const refreshRes = await fetch(refreshUrl, {
-          method: 'POST',
-          signal: refreshAbort.signal,
-          headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, authHeader)),
-          body: JSON.stringify({ job_id: jobId, technician_id: technicianId, include_bilder: includeBilder }),
-        });
-        clearTimeout(refreshTimeoutId);
-        const refreshData = await refreshRes.json().catch(() => ({}));
-        if (!refreshRes.ok || (refreshData && refreshData.ok === false)) {
-          send({
-            phase: 'error',
-            error: (refreshData && refreshData.error) ? String(refreshData.error) : 'Dispo-Aktualisierung fehlgeschlagen (HTTP ' + refreshRes.status + ').',
-          });
-          safeEnd();
-          return;
-        }
-      } catch (refreshErr) {
-        clearTimeout(refreshTimeoutId);
-        const msg = refreshErr.name === 'AbortError' ? 'Dispo-Antwort: Zeitüberschreitung.' : (refreshErr.message || 'Dispo-Aktualisierung fehlgeschlagen.');
-        send({ phase: 'error', error: msg });
-        safeEnd();
-        return;
-      }
-      send({ phase: 'refresh_done' });
-
-      const streamTag = acceptJob ? 'accept_job_stream' : 'copy_project_stream';
-
-      async function notifyMarkDocsLoaded() {
-        try {
-          const url = dispoBaseUrl + '/api/job_mark_docs_loaded.php';
-          const r = await fetch(url, {
-            method: 'POST',
-            headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, authHeader)),
-            body: JSON.stringify({ job_id: jobId, technician_id: technicianId }),
-          });
-          const data = await r.json().catch(() => ({}));
-          if (!r.ok || data.ok === false) {
-            console.warn('[' + streamTag + '] job_mark_docs_loaded', r.status, data && data.error);
-          }
-        } catch (e) {
-          console.warn('[' + streamTag + '] job_mark_docs_loaded', e && e.message ? e.message : e);
-        }
-      }
-
-      async function finalizeAcceptIfNeeded(doneMessage) {
-        if (!acceptJob) {
-          send({ phase: 'done', message: doneMessage }, () => { safeEnd(); });
-          return;
-        }
-        applyJobStatusInArbeitAfterAccept(localJobId, technicianId);
-        let statusSyncWarning = null;
-        const serverJobId = jobRowFull.server_id != null ? jobRowFull.server_id : null;
-        if (serverJobId) {
-          const pushRes = await pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader);
-          if (pushRes.ok) {
-            db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`).run(localJobId);
-            save();
-          } else {
-            statusSyncWarning = pushRes.error || 'Status konnte nicht sofort zur Dispo gesendet werden.';
-          }
-        }
-        const msg = doneMessage || 'Auftrag angenommen – Projektordner kopiert, Status: In Arbeit.';
-        send({
-          phase: 'done',
-          message: msg,
-          status: 'in_arbeit',
-          status_sync_warning: statusSyncWarning,
-        }, () => { safeEnd(); });
-      }
-
-      async function listEntries(relPath) {
-        const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
-        const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + pathQ;
-        const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader) });
-        const text = await r.text();
-        let data = {};
-        try {
-          data = text ? JSON.parse(text) : {};
-        } catch (_) {
-          throw new Error('Dispo-Liste: ungültige Antwort (' + r.status + '): ' + text.slice(0, 160));
-        }
-        if (!r.ok || data.ok === false) {
-          throw new Error((data && data.error) ? String(data.error) : 'Dispo-Liste fehlgeschlagen (HTTP ' + r.status + ').');
-        }
-        return Array.isArray(data.entries) ? data.entries : [];
-      }
-
-      function collectFilePaths(relPath, list) {
-        return listEntries(relPath).then((entries) => {
-          const next = [];
-          for (const e of entries) {
-            const name = e.name || '';
-            if (!name || name === '.' || name === '..') continue;
-            const childRel = relPath ? relPath + '/' + name : name;
-            const t = String(e.type || '').toLowerCase();
-            if (t === 'dir') {
-              next.push(collectFilePaths(childRel, list));
-            } else if (t === 'file') {
-              list.push(childRel);
-            }
-          }
-          return Promise.all(next);
-        });
-      }
-
-      const fileList = [];
-      await collectFilePaths('', fileList);
-      const total = fileList.length;
-      send({ phase: 'download', total });
-      if (total === 0) {
-        await notifyMarkDocsLoaded();
-        const emptyMsg = acceptJob
-          ? 'Auftrag angenommen. Keine Dateien im Projektordner auf der Dispo (nach Aktualisierung).'
-          : 'Keine Dateien im Projektordner auf der Dispo (nach Aktualisierung).';
-        await finalizeAcceptIfNeeded(emptyMsg);
-        return;
-      }
-
-      for (let i = 0; i < fileList.length; i++) {
-        const relPath = fileList[i];
-        const url = dispoBaseUrl + '/api/job_project_file_download.php?technician_id=' + technicianId + '&job_id=' + jobId + '&path=' + encodeURIComponent(relPath);
-        const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader) });
-        const buf = Buffer.from(await r.arrayBuffer());
-        if (!r.ok) {
-          let msg = 'HTTP ' + r.status;
-          try {
-            const j = JSON.parse(buf.toString('utf8'));
-            if (j && j.error) msg = String(j.error);
-          } catch (_) { /* Rohbytes */ }
-          throw new Error('Download fehlgeschlagen (' + relPath + '): ' + msg);
-        }
-        const ctDl = (r.headers.get('content-type') || '').toLowerCase();
-        if (ctDl.includes('application/json')) {
-          try {
-            const j = JSON.parse(buf.toString('utf8'));
-            if (j && j.ok === false && j.error) throw new Error('Download fehlgeschlagen (' + relPath + '): ' + String(j.error));
-          } catch (e) {
-            if (e.message && e.message.startsWith('Download fehlgeschlagen')) throw e;
-          }
-        }
-        const localPath = path.join(targetDir, relPath.replace(/\//g, path.sep));
-        const dir = path.dirname(localPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(localPath, buf);
-        send({ phase: 'file', current: i + 1, total, path: relPath });
-      }
-
-      await notifyMarkDocsLoaded();
-      await finalizeAcceptIfNeeded(null);
+      const dedupeKey = 'dienstreise_pull:' + localJobId + ':' + (acceptJob ? 'accept' : 'copy');
+      const { job_id } = bgJobs.enqueue(
+        'dienstreise_pull',
+        {
+          job_id: rawJobId,
+          dispo_base_url: dispoBaseUrl,
+          technician_id: technicianId,
+          dispo_username: dispoUsername,
+          dispo_password: dispoPassword,
+          include_bilder: includeBilder,
+          accept_job: acceptJob,
+        },
+        dedupeKey,
+      );
+      return res.status(202).json({ ok: true, job_id, async: true });
     } catch (e) {
-      send({ phase: 'error', error: e.message || 'Kopieren fehlgeschlagen.' });
-      safeEnd();
+      return res.status(500).json({ ok: false, error: e.message || 'Job konnte nicht gestartet werden.' });
     }
   }
 
-  /** @deprecated Nur noch intern; UI nutzt accept_job_stream. */
+  /** @deprecated NDJSON entfernt — Antwort 202 + job_id; siehe GET /api/background_jobs/:id */
   app.post('/api/dienstreise/copy_project_stream', express.json(), (req, res) => {
-    handleDienstreiseCopyProjectStream(req, res, { acceptJob: false });
+    enqueueDienstreisePullFromRequest(req, res, { acceptJob: false });
   });
 
-  /** Auftrag annehmen: Projektordner kopieren (inkl. PROJEKTE NEU live) und Status auf in_arbeit setzen. */
+  /** Auftrag annehmen (Hintergrund-Job). */
   app.post('/api/dienstreise/accept_job_stream', express.json(), (req, res) => {
-    handleDienstreiseCopyProjectStream(req, res, { acceptJob: true });
+    enqueueDienstreisePullFromRequest(req, res, { acceptJob: true });
   });
 
   app.post('/api/dienstreise/upload', (req, res) => {
@@ -3788,6 +3641,382 @@ function createApp(db) {
     authHeaderFromIncomingBasicOrQuery,
   });
 
+  const abrechnungRefreshCtx = { db, save, dbDir: DB_DIR, authHeaderFromCredentials };
+
+  function fingerprintDispoBase(urlRaw) {
+    const base = (urlRaw || '').trim().replace(/\/$/, '');
+    return crypto.createHash('sha256').update(base, 'utf8').digest('hex').slice(0, 24);
+  }
+
+  function combineAbortSignals(a, b) {
+    if (!b) return a;
+    if (!a) return b;
+    if (a.aborted || b.aborted) {
+      const ac = new AbortController();
+      ac.abort();
+      return ac.signal;
+    }
+    const ac = new AbortController();
+    const onAbort = () => ac.abort();
+    a.addEventListener('abort', onAbort, { once: true });
+    b.addEventListener('abort', onAbort, { once: true });
+    return ac.signal;
+  }
+
+  async function executeBackgroundJob(job, helpers) {
+    const { signal, setProgress, mergeCheckpoint, readCheckpoint } = helpers;
+    switch (job.type) {
+      case 'dienstreise_pull': {
+        const p = job.payload || {};
+        const rawJobId = parseInt(p.job_id, 10);
+        const dispoBaseUrl = (p.dispo_base_url || '').trim().replace(/\/$/, '');
+        const technicianId = parseInt(p.technician_id, 10);
+        const includeBilder = !!p.include_bilder;
+        const acceptJob = !!p.accept_job;
+        const dispoUsername = (p.dispo_username || '').trim();
+        const dispoPassword = p.dispo_password != null ? String(p.dispo_password) : '';
+        if (!rawJobId || !dispoBaseUrl || !technicianId) throw new Error('dienstreise_pull: job_id, dispo_base_url und technician_id erforderlich.');
+        const authHeader =
+          dispoUsername || dispoPassword
+            ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') }
+            : {};
+        if (!authHeader.Authorization) throw new Error('Dispo-Zugangsdaten fehlen.');
+        const jobRowFull = getJobRowWithStatusByLocalOrServerId(rawJobId);
+        if (!jobRowFull) throw new Error('Auftrag nicht gefunden.');
+        const localJobId = jobRowFull.id;
+        const serverJobId = jobRowFull.server_id != null ? jobRowFull.server_id : jobRowFull.id;
+        const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+        if (!targetDir || !fs.existsSync(targetDir)) throw new Error('Zielordner konnte nicht erstellt werden.');
+        const fp = fingerprintDispoBase(dispoBaseUrl);
+        let chk = readCheckpoint();
+        if (chk.dispo_base_fingerprint && chk.dispo_base_fingerprint !== fp) {
+          throw new Error('Dispo-Basis-URL hat sich geändert — Kopie nicht automatisch fortgesetzt.');
+        }
+        if (chk.server_job_id != null && Number(chk.server_job_id) !== Number(serverJobId)) {
+          throw new Error('Server-Auftrags-ID hat sich geändert — Checkpoint verworfen.');
+        }
+        const refreshAge = chk.refresh_done_at ? Date.now() - new Date(chk.refresh_done_at).getTime() : Infinity;
+        const skipRefresh = !!(chk.refresh_done_at && refreshAge < 15 * 60 * 1000 && chk.dispo_base_fingerprint === fp);
+        setProgress('refresh', 0, 1, skipRefresh ? 'Dispo-Refresh (Checkpoint, TTL).' : 'Dispo wird aktualisiert …');
+        if (!skipRefresh) {
+          const refreshUrl = dispoBaseUrl + '/api/job_project_refresh.php';
+          const refreshTimeoutMs = 60000;
+          const refreshAbort = new AbortController();
+          const refreshTimeoutId = setTimeout(() => refreshAbort.abort(), refreshTimeoutMs);
+          try {
+            const refreshRes = await fetch(refreshUrl, {
+              method: 'POST',
+              signal: combineAbortSignals(signal, refreshAbort.signal),
+              headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, authHeader)),
+              body: JSON.stringify({ job_id: serverJobId, technician_id: technicianId, include_bilder: includeBilder }),
+            });
+            const refreshData = await refreshRes.json().catch(() => ({}));
+            if (!refreshRes.ok || (refreshData && refreshData.ok === false)) {
+              throw new Error(
+                (refreshData && refreshData.error)
+                  ? String(refreshData.error)
+                  : 'Dispo-Aktualisierung fehlgeschlagen (HTTP ' + refreshRes.status + ').',
+              );
+            }
+          } finally {
+            clearTimeout(refreshTimeoutId);
+          }
+          mergeCheckpoint({
+            refresh_done_at: new Date().toISOString(),
+            dispo_base_fingerprint: fp,
+            server_job_id: serverJobId,
+            local_job_id: localJobId,
+          });
+        } else {
+          mergeCheckpoint({
+            dispo_base_fingerprint: fp,
+            server_job_id: serverJobId,
+            local_job_id: localJobId,
+          });
+        }
+        setProgress('refresh_done', 1, 1, 'Liste und Downloads …');
+        chk = readCheckpoint();
+
+        async function listEntries(relPath) {
+          const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
+          const url =
+            dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + serverJobId + pathQ;
+          const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader), signal });
+          const text = await r.text();
+          let data = {};
+          try {
+            data = text ? JSON.parse(text) : {};
+          } catch (_) {
+            throw new Error('Dispo-Liste: ungültige Antwort (' + r.status + '): ' + text.slice(0, 160));
+          }
+          if (!r.ok || data.ok === false) {
+            throw new Error((data && data.error) ? String(data.error) : 'Dispo-Liste fehlgeschlagen (HTTP ' + r.status + ').');
+          }
+          return Array.isArray(data.entries) ? data.entries : [];
+        }
+
+        async function collectManifest(relPath, acc) {
+          const entries = await listEntries(relPath);
+          for (const e of entries) {
+            const name = e.name || '';
+            if (!name || name === '.' || name === '..') continue;
+            const childRel = relPath ? relPath + '/' + name : name;
+            const t = String(e.type || '').toLowerCase();
+            if (t === 'dir') await collectManifest(childRel, acc);
+            else if (t === 'file') {
+              let sz = null;
+              if (e.size != null) sz = Number(e.size);
+              else if (e.size_bytes != null) sz = Number(e.size_bytes);
+              acc.push({ path: childRel, size: Number.isFinite(sz) ? sz : null });
+            }
+          }
+        }
+
+        let files = Array.isArray(chk.files) && chk.files.length ? chk.files : null;
+        if (!files) {
+          files = [];
+          await collectManifest('', files);
+          mergeCheckpoint({ files });
+        }
+
+        function shouldSkip(relPath, expectedSize, completedArr) {
+          if (!completedArr || !completedArr.includes(relPath)) return false;
+          const lp = path.join(targetDir, relPath.replace(/\//g, path.sep));
+          if (!fs.existsSync(lp)) return false;
+          if (expectedSize == null || !Number.isFinite(expectedSize)) return true;
+          try {
+            return fs.statSync(lp).size === expectedSize;
+          } catch (_) {
+            return false;
+          }
+        }
+
+        async function notifyMarkDocsLoaded() {
+          try {
+            const url = dispoBaseUrl + '/api/job_mark_docs_loaded.php';
+            const r = await fetch(url, {
+              method: 'POST',
+              headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, authHeader)),
+              body: JSON.stringify({ job_id: serverJobId, technician_id: technicianId }),
+              signal,
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || data.ok === false) {
+              console.warn('[dienstreise_pull] job_mark_docs_loaded', r.status, data && data.error);
+            }
+          } catch (e) {
+            console.warn('[dienstreise_pull] job_mark_docs_loaded', e && e.message ? e.message : e);
+          }
+        }
+
+        const total = files.length;
+        let completed = Array.isArray(chk.completed) ? chk.completed.slice() : [];
+        let skippedStart = 0;
+        for (const f of files) {
+          if (shouldSkip(f.path, f.size, completed)) skippedStart++;
+        }
+        setProgress('download', skippedStart, total, total ? '' : 'Keine Dateien.');
+        if (total === 0) {
+          await notifyMarkDocsLoaded();
+          if (acceptJob) {
+            applyJobStatusInArbeitAfterAccept(localJobId, technicianId);
+            let statusSyncWarning = null;
+            const srvId = jobRowFull.server_id != null ? jobRowFull.server_id : null;
+            if (srvId) {
+              const pushRes = await pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, srvId, authHeader);
+              if (pushRes.ok) {
+                db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`).run(localJobId);
+                save();
+              } else {
+                statusSyncWarning = pushRes.error || 'Status konnte nicht sofort zur Dispo gesendet werden.';
+              }
+            }
+            mergeCheckpoint({
+              finalize_done: true,
+              status_sync_warning: statusSyncWarning,
+              empty_copy: true,
+            });
+          } else {
+            mergeCheckpoint({ finalize_done: true, empty_copy: true });
+          }
+          break;
+        }
+
+        for (let i = 0; i < files.length; i++) {
+          const relPath = files[i].path;
+          const expectedSize = files[i].size;
+          if (shouldSkip(relPath, expectedSize, completed)) {
+            setProgress('file', i + 1, total, relPath);
+            continue;
+          }
+          const url =
+            dispoBaseUrl +
+            '/api/job_project_file_download.php?technician_id=' +
+            technicianId +
+            '&job_id=' +
+            serverJobId +
+            '&path=' +
+            encodeURIComponent(relPath);
+          const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader), signal });
+          const buf = Buffer.from(await r.arrayBuffer());
+          if (!r.ok) {
+            let msg = 'HTTP ' + r.status;
+            try {
+              const j = JSON.parse(buf.toString('utf8'));
+              if (j && j.error) msg = String(j.error);
+            } catch (_) {}
+            throw new Error('Download fehlgeschlagen (' + relPath + '): ' + msg);
+          }
+          const ctDl = (r.headers.get('content-type') || '').toLowerCase();
+          if (ctDl.includes('application/json')) {
+            try {
+              const j = JSON.parse(buf.toString('utf8'));
+              if (j && j.ok === false && j.error) throw new Error('Download fehlgeschlagen (' + relPath + '): ' + String(j.error));
+            } catch (e) {
+              if (e.message && e.message.startsWith('Download fehlgeschlagen')) throw e;
+            }
+          }
+          const localPath = path.join(targetDir, relPath.replace(/\//g, path.sep));
+          const dir = path.dirname(localPath);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          const partPath = localPath + '.part';
+          fs.writeFileSync(partPath, buf);
+          try {
+            if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+          } catch (_) {}
+          fs.renameSync(partPath, localPath);
+          if (!completed.includes(relPath)) completed.push(relPath);
+          mergeCheckpoint({ completed });
+          setProgress('file', i + 1, total, relPath);
+        }
+
+        await notifyMarkDocsLoaded();
+
+        chk = readCheckpoint();
+        if (!chk.finalize_done) {
+          if (acceptJob) {
+            applyJobStatusInArbeitAfterAccept(localJobId, technicianId);
+            let statusSyncWarning = null;
+            const srvId = jobRowFull.server_id != null ? jobRowFull.server_id : null;
+            if (srvId) {
+              const pushRes = await pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, srvId, authHeader);
+              if (pushRes.ok) {
+                db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`).run(localJobId);
+                save();
+              } else {
+                statusSyncWarning = pushRes.error || 'Status konnte nicht sofort zur Dispo gesendet werden.';
+              }
+            }
+            mergeCheckpoint({ finalize_done: true, status_sync_warning: statusSyncWarning });
+          } else {
+            mergeCheckpoint({ finalize_done: true });
+          }
+        }
+        break;
+      }
+      case 'dienstreise_push': {
+        const p = job.payload || {};
+        const localJobId = parseInt(p.job_id, 10);
+        const dispoBaseUrl = (p.dispo_base_url || '').trim().replace(/\/$/, '');
+        const technicianId = parseInt(p.technician_id, 10);
+        setProgress('dienstreise_push', 0, 1, 'Synchronisiere Dienstreise-Ordner …');
+        await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, String(p.dispo_username || ''), String(p.dispo_password || ''));
+        if (dispoBaseUrl) {
+          try {
+            await syncProtokollTemplates(dispoBaseUrl);
+          } catch (tplErr) {
+            console.warn('Protokoll-Vorlagen Sync fehlgeschlagen (offline-Vorlagen weiter nutzbar):', tplErr.message);
+          }
+        }
+        break;
+      }
+      case 'sync_pull': {
+        const p = job.payload || {};
+        const base = (p.baseUrl || '').trim().replace(/\/$/, '');
+        const technicianId = parseInt(p.technicianId, 10);
+        const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
+        setProgress('sync_pull', 0, 4, 'Ziehe Aufträge von Dispo …');
+        const pullInfo = await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
+        save();
+        setProgress('sync_pull', 1, 4, 'Kalender-Cache …');
+        const range = defaultFutureRange();
+        const cacheStart = p.date_from && String(p.date_from).trim() ? String(p.date_from).trim() : range.start;
+        const cacheEnd = p.date_to && String(p.date_to).trim() ? String(p.date_to).trim() : range.end;
+        try {
+          const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, auth);
+          upsertCalendarCache(db, calData);
+          const fabs = pullInfo && Array.isArray(pullInfo.fabs) ? pullInfo.fabs : [];
+          const subset = fabs.slice(0, 200);
+          let fi = 0;
+          for (const fab of subset) {
+            if (signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
+            fi++;
+            setProgress('anlagenstamm_tree', fi, subset.length, fab);
+            try {
+              await fetchAndCacheAnlagenstammTree(base, technicianId, fab, auth, db);
+            } catch (_) {}
+          }
+        } catch (_) {}
+        save();
+        setProgress('sync_pull', 3, 4, 'Protokoll-Vorlagen …');
+        try {
+          await syncProtokollTemplates(base);
+        } catch (tplErr) {
+          console.warn('Protokoll-Vorlagen Sync fehlgeschlagen:', tplErr.message);
+        }
+        break;
+      }
+      case 'sync_push': {
+        const p = job.payload || {};
+        const baseUrl = (p.baseUrl || '').trim();
+        const technicianId = parseInt(p.technicianId, 10);
+        const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
+        setProgress('sync_push', 0, 2, 'Sende Änderungen zur Dispo …');
+        await pushToServer(baseUrl, technicianId, db, auth);
+        setProgress('sync_push', 1, 2, 'Abrechnungs-Outbox …');
+        try {
+          await flushAbrechnungOutbox(
+            { db, save, dbDir: DB_DIR, authHeaderFromCredentials },
+            baseUrl,
+            technicianId,
+            p.serverUsername,
+            p.serverPassword,
+          );
+        } catch (e) {
+          console.warn('[abrechnung] flush after sync_push:', e && e.message ? e.message : e);
+        }
+        save();
+        break;
+      }
+      case 'abrechnung_refresh': {
+        const p = job.payload || {};
+        setProgress('abrechnung_refresh', 0, 1, 'Abrechnung wird abgeglichen …');
+        const result = await runAbrechnungRefreshCore(abrechnungRefreshCtx, {
+          baseUrl: p.baseUrl,
+          technicianId: p.technicianId,
+          serverUsername: p.serverUsername,
+          serverPassword: p.serverPassword,
+          period_ym: p.period_ym,
+          job_server_id: p.job_server_id,
+        });
+        let msg = 'Abrechnung synchronisiert.';
+        if (result.partial && result.warnings && result.warnings.length) msg += ' ' + result.warnings.join('; ');
+        mergeCheckpoint({
+          abrechnung_partial: !!result.partial,
+          abrechnung_warnings: Array.isArray(result.warnings) ? result.warnings : [],
+        });
+        setProgress('done', 1, 1, msg);
+        break;
+      }
+      default:
+        throw new Error('Unbekannter Job-Typ (Runner): ' + job.type);
+    }
+  }
+
+  bgJobs = createBackgroundJobService(db, save, { executeJob: executeBackgroundJob });
+  bgJobs.markStaleRunningAsInterrupted();
+  bgJobs.kick();
+
   async function enrichJobFabWithAnlagenstamm(job, baseUrl, authHeader) {
     if (!job || !baseUrl || typeof job.fabrikationsnummern !== 'string') return job;
     const fab = job.fabrikationsnummern.trim();
@@ -4040,70 +4269,108 @@ function createApp(db) {
     if (!baseUrl || !technicianId) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technicianId erforderlich.' });
     }
-    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    const base = (baseUrl || '').trim().replace(/\/$/, '');
     try {
-      const pullInfo = await pullFromServer(base, technicianId, db, auth, date_from, date_to);
-      save();
-      const range = defaultFutureRange();
-      const cacheStart = (date_from && String(date_from).trim()) ? String(date_from).trim() : range.start;
-      const cacheEnd = (date_to && String(date_to).trim()) ? String(date_to).trim() : range.end;
-      setTimeout(async () => {
-        try {
-          const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, auth);
-          upsertCalendarCache(db, calData);
-          const fabs = pullInfo && Array.isArray(pullInfo.fabs) ? pullInfo.fabs : [];
-          const subset = fabs.slice(0, 200);
-          for (const fab of subset) {
-            try {
-              await fetchAndCacheAnlagenstammTree(base, technicianId, fab, auth, db);
-            } catch (_) { /* einzelner Fab darf Hintergrundsync nicht blockieren */ }
-          }
-          save();
-        } catch (_) { /* optional: Kalender-Cache ist nur Beschleuniger */ }
-      }, 0);
-      try {
-        await syncProtokollTemplates(base);
-      } catch (tplErr) {
-        console.warn('Protokoll-Vorlagen Sync fehlgeschlagen:', tplErr.message);
-      }
-      res.json({ ok: true });
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      const base = (baseUrl || '').trim().replace(/\/$/, '');
+      const tid = parseInt(technicianId, 10);
+      const dedupeKey = 'sync_pull:' + tid + ':' + fingerprintDispoBase(base);
+      const { job_id } = bgJobs.enqueue(
+        'sync_pull',
+        {
+          baseUrl: base,
+          technicianId: tid,
+          serverUsername,
+          serverPassword,
+          date_from,
+          date_to,
+        },
+        dedupeKey,
+      );
+      return res.status(202).json({ ok: true, job_id, async: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
   });
 
   app.post('/api/sync_push', express.json(), (req, res) => {
-    const sendError = (msg, reason, extra) => {
-      if (reason) logSyncPushError(Object.assign({ reason, message: msg }, extra || {}));
-      if (!res.headersSent) res.status(500).json({ ok: false, error: msg });
-    };
     const { baseUrl, technicianId, serverUsername, serverPassword } = req.body || {};
     if (!baseUrl || !technicianId) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technicianId erforderlich.' });
     }
-    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    pushToServer(baseUrl, technicianId, db, auth)
-      .then(async () => {
-        try {
-          try {
-            await flushAbrechnungOutbox(
-              { db, save, dbDir: DB_DIR, authHeaderFromCredentials },
-              baseUrl,
-              technicianId,
-              serverUsername,
-              serverPassword,
-            );
-          } catch (e) {
-            console.warn('[abrechnung] flush after sync_push:', e && e.message ? e.message : e);
-          }
-          save();
-          if (!res.headersSent) res.json({ ok: true });
-        } catch (e) {
-          sendError(e.message, 'save_fehler', { stack: e.stack });
-        }
-      })
-      .catch((e) => sendError(e.message, 'push_fehler', { stack: e.stack }));
+    try {
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      const base = (baseUrl || '').trim().replace(/\/$/, '');
+      const tid = parseInt(technicianId, 10);
+      const dedupeKey = 'sync_push:' + tid + ':' + fingerprintDispoBase(base);
+      const { job_id } = bgJobs.enqueue(
+        'sync_push',
+        {
+          baseUrl: base,
+          technicianId: tid,
+          serverUsername,
+          serverPassword,
+        },
+        dedupeKey,
+      );
+      return res.status(202).json({ ok: true, job_id, async: true });
+    } catch (e) {
+      logSyncPushError(Object.assign({ reason: 'enqueue_fehler', message: e.message }));
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/background_jobs', express.json(), (req, res) => {
+    try {
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      const { type, payload, dedupe_key } = req.body || {};
+      const { job_id } = bgJobs.enqueue(type, payload || {}, dedupe_key || null);
+      return res.status(202).json({ ok: true, job_id });
+    } catch (e) {
+      return res.status(400).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/background_jobs/recover', express.json(), (req, res) => {
+    try {
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      const r = bgJobs.recoverPullJobs();
+      return res.json({ ok: true, reopened: r.reopened });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get('/api/background_jobs', (req, res) => {
+    try {
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      const activeOnly = req.query.active === '1' || req.query.active === 'true';
+      const jobs = bgJobs.listJobs(req.query.limit, activeOnly);
+      return res.json({ ok: true, jobs });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get('/api/background_jobs/:id', (req, res) => {
+    try {
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      const job = bgJobs.getJob(req.params.id);
+      if (!job) return res.status(404).json({ ok: false, error: 'Job nicht gefunden.' });
+      return res.json({ ok: true, job });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/background_jobs/:id/cancel', express.json(), (req, res) => {
+    try {
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      const x = bgJobs.cancelJob(req.params.id);
+      if (!x.ok) return res.status(400).json({ ok: false, error: x.error });
+      return res.json({ ok: true });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
   });
 
   app.get('/api/calendar', async (req, res) => {

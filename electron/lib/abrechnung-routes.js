@@ -644,6 +644,66 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
   save();
 }
 
+/**
+ * Kernlogik von POST /api/abrechnung/refresh (für direkten Aufruf und Background-Jobs).
+ * @returns {Promise<{ partial: boolean, warnings: string[] }>}
+ */
+async function runAbrechnungRefreshCore(ctx, body) {
+  const { db, save, authHeaderFromCredentials } = ctx;
+  const { baseUrl, technicianId, serverUsername, serverPassword, period_ym, job_server_id } = body || {};
+  const tid = parseInt(technicianId, 10);
+  const base = dispoBase(baseUrl);
+  if (!base || !tid) {
+    const err = new Error('baseUrl und technicianId erforderlich.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const authHeader = authHeaderFromCredentials(serverUsername, serverPassword);
+  const warnings = [];
+  let partial = false;
+  if (period_ym && /^\d{4}-\d{2}$/.test(String(period_ym))) {
+    let jobsPayload = [];
+    try {
+      const data = await dispoFetchJson(base, 'abrechnung_job_list.php', { monat: String(period_ym) }, authHeader, tid);
+      jobsPayload = Array.isArray(data.jobs) ? data.jobs : [];
+    } catch (e) {
+      jobsPayload = buildAbrechnungJobsFallbackFromSqlite(db, tid, period_ym);
+      partial = true;
+      const hint = e && e.message ? String(e.message) : String(e);
+      warnings.push('Auftragsliste aus lokalem Auftragsspeicher (' + hint + ')');
+      console.warn('[abrechnung/refresh] Dispo job list skipped, using SQLite:', hint);
+    }
+    db.prepare(`
+      INSERT INTO abrechnung_jobs_snapshot (technician_id, period_ym, jobs_json, synced_at)
+      VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(technician_id, period_ym) DO UPDATE SET
+        jobs_json = excluded.jobs_json,
+        synced_at = excluded.synced_at
+    `).run(tid, period_ym, JSON.stringify(jobsPayload));
+    save();
+  }
+  const jid = parseInt(job_server_id, 10);
+  if (jid > 0) {
+    try {
+      await syncJobFromDispo(ctx, base, tid, authHeader, jid);
+    } catch (e) {
+      partial = true;
+      const hint = e && e.message ? String(e.message) : String(e);
+      warnings.push('Detail-Daten (Notizen/Dateien) nicht von Dispo geladen: ' + hint);
+      console.warn('[abrechnung/refresh] syncJobFromDispo:', hint);
+    }
+  }
+  try {
+    await flushAbrechnungOutbox(ctx, base, tid, serverUsername, serverPassword);
+  } catch (e) {
+    partial = true;
+    const hint = e && e.message ? String(e.message) : String(e);
+    warnings.push('Ausstehende Änderungen nicht vollständig übertragen: ' + hint);
+    console.warn('[abrechnung/refresh] outbox:', hint);
+  }
+  return { partial, warnings };
+}
+
 function registerAbrechnungRoutes(app, ctx) {
   const { db, save, dbDir, authHeaderFromCredentials, authHeaderFromIncomingBasicOrQuery } = ctx;
   ensureSchema(db);
@@ -882,59 +942,12 @@ function registerAbrechnungRoutes(app, ctx) {
   });
 
   app.post('/api/abrechnung/refresh', express.json(), async (req, res) => {
-    const { baseUrl, technicianId, serverUsername, serverPassword, period_ym, job_server_id } = req.body || {};
-    const tid = parseInt(technicianId, 10);
-    const base = dispoBase(baseUrl);
-    if (!base || !tid) {
-      return res.status(400).json({ ok: false, error: 'baseUrl und technicianId erforderlich.' });
-    }
-    const authHeader = authHeaderFromCredentials(serverUsername, serverPassword);
-    const warnings = [];
-    let partial = false;
     try {
-      if (period_ym && /^\d{4}-\d{2}$/.test(String(period_ym))) {
-        let jobsPayload = [];
-        try {
-          const data = await dispoFetchJson(base, 'abrechnung_job_list.php', { monat: String(period_ym) }, authHeader, tid);
-          jobsPayload = Array.isArray(data.jobs) ? data.jobs : [];
-        } catch (e) {
-          jobsPayload = buildAbrechnungJobsFallbackFromSqlite(db, tid, period_ym);
-          partial = true;
-          const hint = e && e.message ? String(e.message) : String(e);
-          warnings.push('Auftragsliste aus lokalem Auftragsspeicher (' + hint + ')');
-          console.warn('[abrechnung/refresh] Dispo job list skipped, using SQLite:', hint);
-        }
-        db.prepare(`
-          INSERT INTO abrechnung_jobs_snapshot (technician_id, period_ym, jobs_json, synced_at)
-          VALUES (?, ?, ?, datetime('now'))
-          ON CONFLICT(technician_id, period_ym) DO UPDATE SET
-            jobs_json = excluded.jobs_json,
-            synced_at = excluded.synced_at
-        `).run(tid, period_ym, JSON.stringify(jobsPayload));
-        save();
-      }
-      const jid = parseInt(job_server_id, 10);
-      if (jid > 0) {
-        try {
-          await syncJobFromDispo(ctx, base, tid, authHeader, jid);
-        } catch (e) {
-          partial = true;
-          const hint = e && e.message ? String(e.message) : String(e);
-          warnings.push('Detail-Daten (Notizen/Dateien) nicht von Dispo geladen: ' + hint);
-          console.warn('[abrechnung/refresh] syncJobFromDispo:', hint);
-        }
-      }
-      try {
-        await flushAbrechnungOutbox(ctx, base, tid, serverUsername, serverPassword);
-      } catch (e) {
-        partial = true;
-        const hint = e && e.message ? String(e.message) : String(e);
-        warnings.push('Ausstehende Änderungen nicht vollständig übertragen: ' + hint);
-        console.warn('[abrechnung/refresh] outbox:', hint);
-      }
-      return res.json({ ok: true, partial, warnings });
+      const result = await runAbrechnungRefreshCore(ctx, req.body || {});
+      return res.json({ ok: true, partial: result.partial, warnings: result.warnings });
     } catch (e) {
-      return res.status(500).json({ ok: false, error: e.message || String(e) });
+      const code = e && e.statusCode === 400 ? 400 : 500;
+      return res.status(code).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -1082,4 +1095,4 @@ function registerAbrechnungRoutes(app, ctx) {
   });
 }
 
-module.exports = { registerAbrechnungRoutes, flushAbrechnungOutbox };
+module.exports = { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore };

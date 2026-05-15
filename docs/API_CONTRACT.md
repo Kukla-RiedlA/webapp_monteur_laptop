@@ -68,9 +68,29 @@ Hinweis: Das sind **lokale** Laptop-Gateway-Payloads (historisch camelCase). Neu
 
 Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über denselben Host; sie erwarten die vom Client gesetzte **`baseUrl`** / aktive Basis aus der Pick-Antwort.
 
-**`POST /api/dienstreise/accept_job_stream` (Auftrag annehmen):** NDJSON wie `copy_project_stream` (Phasen `refresh`, `refresh_done`, `download`, `file`, `done`/`error`). Body: `job_id` (lokal), `dispoBaseUrl`, `technicianId`, `dispoUsername`, `dispoPassword`, optional `include_bilder`. Nur wenn lokaler Status **`angelegt`**, **`geplant`** oder **`zugeteilt`** (Gate-Bypass für Schreibsperre „angelegt“). Nach erfolgreichem Kopieren: lokaler Status **`in_arbeit`**, optional sofort **`PATCH …/dispo_api/api/job.php`** mit `{ "job_id": <server_id>, "status": "in_arbeit" }`; bei Fehlschlag bleibt `pending_changes` und `done` enthält **`status_sync_warning`**. Abschluss-`done` kann **`status`**: `"in_arbeit"` und **`message`** liefern. Wie beim Kopieren: **`POST …/api/job_mark_docs_loaded.php`** (falls vorhanden) nach Erfolg, Fehler nur `console.warn`.
+**`POST /api/dienstreise/accept_job_stream` (Auftrag annehmen):** **`202 Accepted`** mit JSON `{ "ok": true, "job_id": "<uuid>", "async": true }`. Die eigentliche Arbeit läuft als Hintergrund-Job-Typ **`dienstreise_pull`** (SQLite `background_jobs`). Fortschritt und Abschluss: **`GET /api/background_jobs/:id`** (`status`, `progress_phase`, `progress_current`, `progress_total`, `message`, `error`, `checkpoint`). Ablauf wie zuvor logisch gleich: Dispo-**`job_project_refresh`**, rekursive Dateiliste, Downloads über temporäre **`.part`**-Dateien, danach **`job_mark_docs_loaded`**. Nach erfolgreichem Abschluss (auch **0 Dateien**): lokaler Status **`in_arbeit`**, optional sofort **`PATCH …/dispo_api/api/job.php`** mit `{ "job_id": <server_id>, "status": "in_arbeit" }`; bei Fehlschlag bleibt `pending_changes`. Hinweis auf entfallenen Sofort-Sync liegt im Checkpoint unter **`status_sync_warning`** (Client kann `done`-Toast anreichern). Nur wenn lokaler Status **`angelegt`**, **`geplant`** oder **`zugeteilt`**. **`checkpoint_json`** ermöglicht Resume nach Abbruch; **`POST /api/background_jobs/recover`** stellt wiederaufnehmbare **`dienstreise_pull`**-Zeilen idempotent auf **`queued`**.
 
-**`POST /api/dienstreise/copy_project_stream`:** deprecated (interner Wrapper ohne Status-Wechsel); UI nutzt **`accept_job_stream`**. Nach erfolgreichem Refresh und Kopieren (auch **0 Dateien**) wird im Main-Prozess **`POST …/api/job_mark_docs_loaded.php`** aufgerufen; Fehler dort **verwerfen** den lokalen Kopiererfolg nicht (nur `console.warn`).
+**`POST /api/dienstreise/copy_project_stream`:** gleiches **`202`**/`job_id`-Muster ohne Status-Wechsel (Dedupe-Key unterscheidet **`accept`** vs. **`copy`**).
+
+**`POST /api/dienstreise/sync_to_dispo`:** **`202`** + `job_id`; Typ **`dienstreise_push`** (`syncDienstreiseFoldersToDispo` + optional Protokoll-Vorlagen).
+
+**`POST /api/sync_pull`** / **`POST /api/sync_push`:** jeweils **`202`** + `job_id` (globale Queue, max. ein Job gleichzeitig). Pull umfasst weiterhin Kalender-Cache, Fab-Anlagenstamm (bis 200) und Protokoll-Vorlagen im selben Job.
+
+**Hintergrund-Jobs (Express, nur Laptop):**
+
+| Route | Methode | Kurzbeschreibung |
+|-------|---------|------------------|
+| `/api/background_jobs` | POST | Body: `type`, `payload`, optional `dedupe_key` → **`202`**, `{ ok, job_id }`. |
+| `/api/background_jobs` | GET | Query `active=1`\|`true`, optional `limit` → `{ ok, jobs }`. |
+| `/api/background_jobs/:id` | GET | `{ ok, job }` inkl. geparstem `checkpoint`-Objekt. |
+| `/api/background_jobs/:id/cancel` | POST | `{ ok }` oder Fehler. |
+| `/api/background_jobs/recover` | POST | `{ ok, reopened }` — zählt wieder eingereihte **`dienstreise_pull`**-Jobs. |
+
+**Typen:** `dienstreise_pull`, `dienstreise_push`, `sync_pull`, `sync_push`, `abrechnung_refresh` (Payload wie die bisherigen JSON-Body der jeweiligen Legacy-Routen).
+
+**`POST /api/abrechnung/refresh`:** unverändert synchron über `runAbrechnungRefreshCore` (`partial`/`warnings`); die UI kann stattdessen **`POST /api/background_jobs`** mit `type: "abrechnung_refresh"` nutzen.
+
+**Legacy-Hinweis:** Früher lieferte `accept_job_stream` einen **NDJSON**-Stream; Clients müssen auf **`202` + Polling** umstellen.
 
 - **Import:** `dispo/dispo_api/api/receive_dispo.php` – u. a. `batch_id`, `processed_jobs`, `processed_absences`, `processed_assignments`.
 - **Pairing / Mobile:** `dispo/api/mobile/pairing.php` – u. a. `base_url` (nicht `baseUrl`).

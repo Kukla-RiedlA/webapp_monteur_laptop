@@ -77,6 +77,16 @@
     .offline-badge { background: #6c757d; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .online-badge { background: #2d6a4f; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .local-badge { background: #495057; color: #fff; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
+    .jobs-badge-wrap { display: inline-flex; align-items: center; }
+    .jobs-badge {
+      background: #6f42c1;
+      color: #fff;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      cursor: default;
+      white-space: nowrap;
+    }
     .view-einstellungen { display: none; }
     .view-einstellungen.active { display: block; }
     .view-dienstreise { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
@@ -555,6 +565,9 @@
     </div>
     <span class="toolbar-right">
       <span id="technicianName" class="toolbar-technician-name"></span>
+      <span class="jobs-badge-wrap" id="backgroundJobsWrap" style="display:none;" title="">
+        <span id="backgroundJobsBadge" class="jobs-badge">Jobs</span>
+      </span>
       <span class="connection-badge-wrap" id="connectionBadgeWrap">
         <span id="connectionBadge" class="offline-badge">Verbindung wird geprüft…</span>
       </span>

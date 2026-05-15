@@ -1,5 +1,80 @@
 (function () {
   const API_BASE = typeof monteurApp !== 'undefined' ? monteurApp.apiBase : 'http://127.0.0.1:39678';
+
+  /** @param {string} jobId */
+  function pollBackgroundJobUntilTerminal(jobId, onProgress, opts) {
+    opts = opts || {};
+    var interval = opts.interval || 750;
+    var maxMs = opts.maxMs || 45 * 60 * 1000;
+    var t0 = Date.now();
+    return new Promise(function (resolve, reject) {
+      function tick() {
+        if (Date.now() - t0 > maxMs) {
+          reject(new Error('Zeitüberschreitung beim Hintergrund-Job'));
+          return;
+        }
+        fetch(API_BASE + '/api/background_jobs/' + encodeURIComponent(jobId))
+          .then(function (r) {
+            return r.json().then(function (data) {
+              return { data: data };
+            });
+          })
+          .then(function (x) {
+            var data = x.data;
+            var j = data && data.job;
+            if (!j) {
+              reject(new Error((data && data.error) || 'Job nicht gefunden'));
+              return;
+            }
+            if (typeof onProgress === 'function') {
+              try {
+                onProgress(j);
+              } catch (e) { /* ignore */ }
+            }
+            var st = j.status;
+            if (st === 'completed' || st === 'failed' || st === 'cancelled') {
+              resolve(j);
+              return;
+            }
+            setTimeout(tick, interval);
+          })
+          .catch(reject);
+      }
+      tick();
+    });
+  }
+
+  function startBackgroundJobsPollingUi() {
+    function refresh() {
+      fetch(API_BASE + '/api/background_jobs?active=1&limit=25')
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (data) {
+          var wrap = document.getElementById('backgroundJobsWrap');
+          var badge = document.getElementById('backgroundJobsBadge');
+          var jobs = data && data.jobs ? data.jobs : [];
+          if (!wrap || !badge) return;
+          if (!jobs.length) {
+            wrap.style.display = 'none';
+            wrap.removeAttribute('title');
+            return;
+          }
+          wrap.style.display = '';
+          badge.textContent = 'Jobs ' + jobs.length;
+          var lines = jobs.slice(0, 10).map(function (j) {
+            var ph = j.progress_phase || j.status || '';
+            var msg = j.message ? String(j.message) : '';
+            return (j.type || '?') + ': ' + ph + (msg ? ' — ' + msg : '');
+          });
+          wrap.setAttribute('title', lines.join('\n'));
+        })
+        .catch(function () {});
+    }
+    refresh();
+    setInterval(refresh, 2800);
+  }
+
   const getTechId = () => parseInt(document.getElementById('technicianId').value, 10) || 0;
   const getServerUsername = () => (document.getElementById('serverUsername') && document.getElementById('serverUsername').value || '').trim();
   const getServerPassword = () => (document.getElementById('serverPassword') && document.getElementById('serverPassword').value || '');
@@ -575,16 +650,25 @@
       try {
         var selEl = document.getElementById('abrechnungJobSelect');
         var selId = selEl && selEl.value ? parseInt(selEl.value, 10) : 0;
-        var r = await fetch(API_BASE + '/api/abrechnung/refresh', {
+        var r = await fetch(API_BASE + '/api/background_jobs', {
           method: 'POST',
           headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
-          body: JSON.stringify(abrechnungBody({ period_ym: period, job_server_id: selId > 0 ? selId : 0 }))
+          body: JSON.stringify({
+            type: 'abrechnung_refresh',
+            payload: abrechnungBody({ period_ym: period, job_server_id: selId > 0 ? selId : 0 }),
+            dedupe_key: 'abrechnung_refresh:' + tid + ':' + period
+          })
         });
-        var j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'Abgleich fehlgeschlagen');
+        var dj = await r.json();
+        if (!dj.ok) throw new Error(dj.error || 'Abgleich-Job konnte nicht gestartet werden.');
+        if (!dj.job_id) throw new Error('Keine job_id vom Server.');
+        var fj = await pollBackgroundJobUntilTerminal(dj.job_id, null, {});
+        if (fj.status !== 'completed') throw new Error(fj.error || fj.message || 'Abgleich fehlgeschlagen.');
+        var chk = fj.checkpoint && typeof fj.checkpoint === 'object' ? fj.checkpoint : {};
+        var partial = !!chk.abrechnung_partial;
         if (typeof showToast === 'function') {
           showToast(
-            j.partial
+            partial
               ? 'Abrechnung aktualisiert (teilweise nur lokaler Stand — gleicher Datenbestand wie Kalender/Dienstreise).'
               : 'Abrechnung mit Dispo abgeglichen.'
           );
@@ -908,109 +992,86 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    }).then(function (response) {
-      if (!response.ok) {
-        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
-        return response.json().then(function (data) {
-          throw new Error(data.error || 'Fehler ' + response.status);
-        }).catch(function () { throw new Error('Fehler ' + response.status); });
-      }
-      var ctPeek = (response.headers.get('content-type') || '').toLowerCase();
-      if (ctPeek.indexOf('json') !== -1 && ctPeek.indexOf('ndjson') === -1) {
-        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
-        return response.json().then(function (data) {
-          var msg = (data && data.error) ? String(data.error) : '';
-          throw new Error(msg || 'Server hat JSON statt Datenstrom gesendet.');
-        }).catch(function (e) {
-          if (e instanceof Error && e.message) throw e;
-          throw new Error('Antwort konnte nicht gelesen werden.');
-        });
-      }
-      if (!response.body || typeof response.body.getReader !== 'function') {
-        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
-        return response.text().then(function (t) {
-          throw new Error(t ? t.slice(0, 200) : 'Kein Stream-Datenstrom.');
-        });
-      }
-      var reader = response.body.getReader();
-      var decoder = new TextDecoder();
-      var buffer = '';
-      var completed = false;
-      var hadError = false;
-      function processLine(line) {
-        line = line.trim();
-        if (!line) return;
-        var data;
-        try { data = JSON.parse(line); } catch (e) { return; }
-        if (data.ok === false && data.error && !data.phase) {
-          hadError = true;
-          finishAcceptUi();
-          if (hint) hint.textContent = String(data.error);
-          return;
+    })
+      .then(function (response) {
+        if (!response.ok) {
+          if (copyTimeoutId) {
+            clearTimeout(copyTimeoutId);
+            copyTimeoutId = null;
+          }
+          return response.json().then(function (data) {
+            throw new Error((data && data.error) || 'Fehler ' + response.status);
+          });
         }
-        if (data.phase === 'refresh') {
-          if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
-        } else if (data.phase === 'refresh_done') {
-          if (progressLabel) progressLabel.textContent = 'Lade auf Laptop …';
-        } else if (data.phase === 'download' && data.total != null) {
-          if (progressBar) progressBar.max = data.total;
-          if (progressBar) progressBar.value = 0;
-        } else if (data.phase === 'file' && data.total != null) {
-          if (progressBar) progressBar.value = data.current || 0;
-          if (progressLabel && data.total > 0) progressLabel.textContent = 'Lade ' + (data.current || 0) + ' / ' + data.total;
-        } else if (data.phase === 'done') {
-          completed = true;
-          finishAcceptUi();
-          var doneMsg = (data.message != null && String(data.message).trim()) ? String(data.message).trim() : 'Auftrag angenommen.';
-          if (data.status_sync_warning) doneMsg += ' Hinweis: ' + String(data.status_sync_warning);
-          if (hint) hint.textContent = doneMsg;
-          if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
-          if (getDienstreiseExplorerJobId() == localJobId && typeof loadDienstreiseExplorer === 'function') {
-            loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath);
-          }
-          if (jobDetailsJobId == localJobId && typeof openJobDetailsModal === 'function') {
-            openJobDetailsModal(localJobId);
-          }
-          setTimeout(function () { var x = document.getElementById('acceptJobHint'); if (x && !x.textContent.includes('Hinweis:')) x.textContent = ''; }, data.status_sync_warning ? 8000 : 4000);
-        } else if (data.phase === 'error') {
-          hadError = true;
-          finishAcceptUi();
-          if (hint) hint.textContent = data.error || 'Fehler.';
-        }
-      }
-      function readNext() {
-        return reader.read().then(function (result) {
-          if (result.value && result.value.length > 0) {
-            buffer += decoder.decode(result.value, { stream: !result.done });
-            var lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-            lines.forEach(function (line) {
-              try { processLine(line); } catch (e) { /* Einzelzeile ignorieren */ }
-            });
-          }
-          if (result.done) {
-            if (buffer.trim()) try { processLine(buffer); } catch (e) { }
-            if (!completed && !hadError) {
-              finishAcceptUi();
-              if (hint) hint.textContent = 'Fertig.';
-              if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
-              if (getDienstreiseExplorerJobId() === localJobId && typeof loadDienstreiseExplorer === 'function') {
-                loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath);
+        if (response.status === 202) {
+          return response.json().then(function (data) {
+            var jobId = data && data.job_id;
+            if (!jobId) throw new Error('Keine job_id vom Server.');
+            return pollBackgroundJobUntilTerminal(jobId, function (j) {
+              var phase = j.progress_phase || '';
+              var cur = j.progress_current != null ? j.progress_current : 0;
+              var tot = j.progress_total != null ? j.progress_total : 0;
+              var msg = j.message ? String(j.message) : '';
+              if (phase === 'refresh' || phase === 'start') {
+                if (progressLabel) progressLabel.textContent = msg || 'Dispo wird aktualisiert …';
+              } else if (phase === 'refresh_done' || phase === 'manifest' || phase === 'download') {
+                if (progressLabel) progressLabel.textContent = msg || 'Lade auf Laptop …';
+                if (progressBar && tot > 0) {
+                  progressBar.max = tot;
+                  progressBar.value = Math.min(cur, tot);
+                }
+              } else if (phase === 'file') {
+                if (progressBar && tot > 0) {
+                  progressBar.max = tot;
+                  progressBar.value = Math.min(cur, tot);
+                }
+                if (progressLabel && tot > 0) progressLabel.textContent = msg || ('Lade ' + cur + ' / ' + tot);
+              } else if (msg && progressLabel) {
+                progressLabel.textContent = msg;
               }
-            }
-            return;
-          }
-          return readNext();
-        });
-      }
-      return readNext().catch(function (streamErr) {
+            }).then(function (j) {
+              if (copyTimeoutId) {
+                clearTimeout(copyTimeoutId);
+                copyTimeoutId = null;
+              }
+              finishAcceptUi();
+              var chk = j.checkpoint && typeof j.checkpoint === 'object' ? j.checkpoint : {};
+              var warn = chk.status_sync_warning;
+              if (j.status === 'completed') {
+                var doneMsg = 'Auftrag angenommen.';
+                if (warn) doneMsg += ' Hinweis: ' + String(warn);
+                if (hint) hint.textContent = doneMsg;
+                if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
+                if (getDienstreiseExplorerJobId() == localJobId && typeof loadDienstreiseExplorer === 'function') {
+                  loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath);
+                }
+                if (jobDetailsJobId == localJobId && typeof openJobDetailsModal === 'function') {
+                  openJobDetailsModal(localJobId);
+                }
+                setTimeout(function () {
+                  var x = document.getElementById('acceptJobHint');
+                  if (x && (!warn || !x.textContent.includes('Hinweis:'))) x.textContent = '';
+                }, warn ? 8000 : 4000);
+              } else {
+                if (hint) hint.textContent = j.error || j.message || 'Auftrag annehmen fehlgeschlagen.';
+              }
+            });
+          });
+        }
+        if (copyTimeoutId) {
+          clearTimeout(copyTimeoutId);
+          copyTimeoutId = null;
+        }
+        throw new Error('Unerwartete Server-Antwort (Status ' + response.status + ').');
+      })
+      .catch(function (err) {
+        if (copyTimeoutId) {
+          clearTimeout(copyTimeoutId);
+          copyTimeoutId = null;
+        }
         finishAcceptUi();
-        if (hint) hint.textContent = streamErr && streamErr.message ? streamErr.message : 'Verbindung abgebrochen.';
+        if (hint) hint.textContent = err && err.message ? err.message : 'Fehler beim Annehmen.';
       });
-    }).catch(function (err) {
-      finishAcceptUi();
-      if (hint) hint.textContent = err && err.message ? err.message : 'Fehler beim Annehmen.';
-    });
   }
 
   /** CSS-Klasse status-* (geplant aus Cache wird wie angelegt gemappt). */
@@ -2573,7 +2634,7 @@
         var baseUrl = (typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '').trim();
         var techId = typeof getTechId === 'function' ? getTechId() : null;
         if (baseUrl && techId) {
-          api('/api/sync_push', {
+          fetch(API_BASE + '/api/sync_push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2582,16 +2643,33 @@
               serverUsername: typeof getServerUsername === 'function' ? getServerUsername() : '',
               serverPassword: typeof getServerPassword === 'function' ? getServerPassword() : ''
             })
-          }).then(function (d) {
-            if (d && d.ok && typeof showToast === 'function') showToast('Hotel-Adresse wurde in die Dispo übertragen.');
-            else if (d && d.error && typeof showToast === 'function') {
-              console.error('[Sync Push] Fehler:', d.error, d);
-              showToast('Sync fehlgeschlagen: ' + d.error);
-            }
-          }).catch(function (e) {
-            console.error('[Sync Push] Fehler:', e.message, e);
-            if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (e.message || 'Verbindung zur Dispo prüfen'));
-          });
+          })
+            .then(function (res) {
+              return res.json().then(function (d) {
+                return { d: d };
+              });
+            })
+            .then(function (x) {
+              var d = x.d;
+              if (!d || !d.ok) {
+                if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (d && d.error ? d.error : 'Unbekannt'));
+                return;
+              }
+              if (d.job_id) {
+                return pollBackgroundJobUntilTerminal(d.job_id, null, {}).then(function (j) {
+                  if (j.status === 'completed' && typeof showToast === 'function') {
+                    showToast('Hotel-Adresse wurde in die Dispo übertragen.');
+                  } else if (j.status !== 'completed' && typeof showToast === 'function') {
+                    showToast('Sync fehlgeschlagen: ' + (j.error || j.message || j.status));
+                  }
+                });
+              }
+              if (typeof showToast === 'function') showToast('Hotel-Adresse wurde in die Dispo übertragen.');
+            })
+            .catch(function (e) {
+              console.error('[Sync Push] Fehler:', e.message, e);
+              if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (e.message || 'Verbindung zur Dispo prüfen'));
+            });
         }
         if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync(); } catch (e) {} }
       }).catch(function (e) {
@@ -2857,21 +2935,43 @@
         const auth = { baseUrl: syncBase, technicianId: techId, serverUsername: getServerUsername(), serverPassword: getServerPassword() };
         var syncProblems = [];
         try {
-          await fetch(API_BASE + '/api/sync_pull', {
+          await fetch(API_BASE + '/api/background_jobs/recover', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...auth, date_from: range.date_from, date_to: range.date_to })
-          }).then((r) => r.json()).then((d) => { if (!d.ok) throw new Error(d.error); });
+            body: '{}'
+          }).catch(function () {});
+        } catch (e) { /* ignore */ }
+        try {
+          var pullRes = await fetch(API_BASE + '/api/sync_pull', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({}, auth, { date_from: range.date_from, date_to: range.date_to }))
+          });
+          var pullData = await pullRes.json().catch(function () { return {}; });
+          if (!pullData.ok) throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
+          if (pullData.job_id) {
+            pollBackgroundJobUntilTerminal(pullData.job_id, null, {}).then(function (j) {
+              if (j.status === 'completed') {
+                loadJobsAndAbsences();
+                loadOpenJobs();
+              }
+            }).catch(function () {});
+          }
         } catch (e) {
           console.error('[Sync Pull] checkConnectionAndSync:', e.message, e);
           syncProblems.push('Pull: ' + (e && e.message ? e.message : 'Fehler'));
         }
         try {
-          await fetch(API_BASE + '/api/sync_push', {
+          var pushRes = await fetch(API_BASE + '/api/sync_push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(auth)
-          }).then((r) => r.json()).then((d) => { if (!d.ok) throw new Error(d.error || (d && JSON.stringify(d))); });
+          });
+          var pushData = await pushRes.json().catch(function () { return {}; });
+          if (!pushData.ok) throw new Error(pushData.error || 'Push konnte nicht gestartet werden.');
+          if (pushData.job_id) {
+            pollBackgroundJobUntilTerminal(pushData.job_id, null, {}).catch(function () {});
+          }
         } catch (e) {
           console.error('[Sync Push] checkConnectionAndSync:', e.message, e);
           syncProblems.push('Push: ' + (e && e.message ? e.message : 'Fehler'));
@@ -3065,6 +3165,7 @@
       startPushEvents();
     });
   startSyncInterval();
+  startBackgroundJobsPollingUi();
   window.addEventListener('online', function () {
     if (typeof checkConnectionAndSync === 'function') {
       try { checkConnectionAndSync(); } catch (e) { /* ignore */ }

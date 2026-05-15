@@ -5,10 +5,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 ---
 
 ## V 1.004.000
-- **Auftrag annehmen:** Button in der Auftragsliste, `POST /api/dienstreise/accept_job_stream` (Projektordner kopieren, danach Status `in_arbeit`, Dispo-Sync).
+- **Auftrag annehmen:** Button in der Auftragsliste, `POST /api/dienstreise/accept_job_stream` (**202** + `job_id`, Hintergrund-Job `dienstreise_pull`: Projektordner kopieren, danach Status `in_arbeit`, Dispo-Sync). Fortschritt per `GET /api/background_jobs/:id`; Resume nach Abbruch über Checkpoint + `POST /api/background_jobs/recover` bei erneutem Online-Badge.
 - **Projektdaten:** Projektordner-Explorer und Upload unter Leistungsdaten; FN-Zeile (Semikolon/Bereiche wie Dispo); Tabelle mit Spalte **Position**.
-- **Sync:** Abgelehnter Status-Push bricht gesamten `sync_push` nicht mehr ab; FN-Patch auch bei angelegt/geplant/zugeteilt.
-- **Doku:** `docs/API_CONTRACT.md` um `accept_job_stream` ergänzt.
+- **Sync:** Abgelehnter Status-Push bricht gesamten `sync_push` nicht mehr ab; FN-Patch auch bei angelegt/geplant/zugeteilt. **`sync_pull` / `sync_push` / `sync_to_dispo`** stellen ebenfalls **202** + Background-Job bereit (globale Queue, ein Worker).
+- **Abrechnung:** UI kann Abgleich per Background-Job `abrechnung_refresh` auslösen; `POST /api/abrechnung/refresh` bleibt synchron verfügbar.
+- **Doku:** `docs/API_CONTRACT.md` um Hintergrund-Jobs und neue Antwort-Codes ergänzt.
 
 ## V 1.003.000
 - **Montagebericht:** Nach „PDF & DOCX erstellen“ kann der Bericht über den Dispo-Server signiert werden (lokales PDF-Staging, Proxy `montagebericht_signature_stage`, Widget + `dispo_signature_*`).
