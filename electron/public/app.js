@@ -4908,7 +4908,8 @@
           var hdrCt = normMime(resp.headers.get('content-type'));
           var blobCt = normMime(blob.type);
           var ct = hdrCt || blobCt;
-          if (ct && ct.indexOf('image/') !== 0) {
+          // Proxys/Express koennen echte Bilder als application/octet-stream ausliefern — nicht verwerfen.
+          if (ct.indexOf('application/json') === 0 || ct.indexOf('text/html') === 0 || ct.indexOf('text/plain') === 0) {
             throw new Error('thumb_not_image');
           }
         }
