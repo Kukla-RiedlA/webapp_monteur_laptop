@@ -1,6 +1,11 @@
 /**
  * Gemeinsame Weiterleitung an Dispo anlagenstamm_monteur_* (für Express und IPC).
  */
+const {
+  buildDispoBaseCandidates,
+  tryDispoBasesInOrder,
+} = require('./dispo-base-fallback');
+
 function authHeaderFromCredentials(username, password) {
   const u = (username || '').toString().trim();
   if (!u) return undefined;
@@ -44,15 +49,8 @@ function monteurUpstreamHttpError(status, statusText, jsonError, relativePhpPath
   return detail || statusText || 'HTTP ' + status;
 }
 
-/**
- * @param {Record<string, unknown>} payload
- */
-async function proxyAnlagenstammSearch(payload) {
+async function proxyAnlagenstammSearchOnce(payload, base) {
   const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
-  const base = (payload.baseUrl || '').toString().trim().replace(/\/$/, '');
-  if (!technicianId || !base) {
-    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
-  }
   const authHeader = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const relativePhp = '/dispo_api/api/anlagenstamm_monteur_search.php';
   const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
@@ -64,28 +62,14 @@ async function proxyAnlagenstammSearch(payload) {
     page: payload.page,
     page_size: payload.page_size,
   };
-  let r;
-  try {
-    r = await fetch(url, {
-      method: 'POST',
-      headers: Object.assign(
-        { 'Content-Type': 'application/json' },
-        dispoMonteurFetchHeaders(technicianId, authHeader)
-      ),
-      body: JSON.stringify(forward),
-    });
-  } catch (netErr) {
-    const msg = netErr && netErr.message ? netErr.message : String(netErr);
-    return {
-      ok: false,
-      error:
-        'Keine Verbindung zur Dispo (Netzwerk/TLS): ' +
-        msg +
-        '. Ziel ohne Query: ' +
-        base +
-        relativePhp,
-    };
-  }
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: Object.assign(
+      { 'Content-Type': 'application/json' },
+      dispoMonteurFetchHeaders(technicianId, authHeader)
+    ),
+    body: JSON.stringify(forward),
+  });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const apiErr = data && data.error ? data.error : '';
@@ -95,49 +79,30 @@ async function proxyAnlagenstammSearch(payload) {
     } catch (_) {}
     return Object.assign({}, data, { ok: false, error: friendly, _httpStatus: r.status });
   }
-  return data;
+  return Object.assign({}, data, { _used_base_url: base });
 }
 
-/**
- * @param {Record<string, unknown>} payload
- */
-async function proxyAnlagenstammSave(payload) {
+async function proxyAnlagenstammSaveOnce(payload, base) {
   const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
-  const base = (payload.baseUrl || '').toString().trim().replace(/\/$/, '');
-  if (!technicianId || !base) {
-    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
-  }
   const authHeader = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const relativePhp = '/dispo_api/api/anlagenstamm_monteur_save.php';
   const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
   const savePayload = Object.assign({}, payload);
   delete savePayload.baseUrl;
+  delete savePayload.externalUrl;
+  delete savePayload.internalUrl;
   delete savePayload.serverUsername;
   delete savePayload.serverPassword;
   delete savePayload.technician_id;
   delete savePayload.technicianId;
-  let r;
-  try {
-    r = await fetch(url, {
-      method: 'POST',
-      headers: Object.assign(
-        { 'Content-Type': 'application/json' },
-        dispoMonteurFetchHeaders(technicianId, authHeader)
-      ),
-      body: JSON.stringify(savePayload),
-    });
-  } catch (netErr) {
-    const msg = netErr && netErr.message ? netErr.message : String(netErr);
-    return {
-      ok: false,
-      error:
-        'Keine Verbindung zur Dispo (Netzwerk/TLS): ' +
-        msg +
-        '. Ziel ohne Query: ' +
-        base +
-        relativePhp,
-    };
-  }
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: Object.assign(
+      { 'Content-Type': 'application/json' },
+      dispoMonteurFetchHeaders(technicianId, authHeader)
+    ),
+    body: JSON.stringify(savePayload),
+  });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const apiErr = data && data.error ? data.error : '';
@@ -147,7 +112,73 @@ async function proxyAnlagenstammSave(payload) {
     } catch (_) {}
     return Object.assign({}, data, { ok: false, error: friendly, _httpStatus: r.status });
   }
-  return data;
+  return Object.assign({}, data, { _used_base_url: base });
+}
+
+/**
+ * @param {Record<string, unknown>} payload
+ */
+async function proxyAnlagenstammSearch(payload) {
+  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+  if (!technicianId) {
+    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
+  }
+  const candidates = buildDispoBaseCandidates({
+    baseUrl: payload.baseUrl,
+    externalUrl: payload.externalUrl,
+    internalUrl: payload.internalUrl,
+  });
+  if (candidates.length === 0) {
+    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
+  }
+  const relativePhp = '/dispo_api/api/anlagenstamm_monteur_search.php';
+  const tried = await tryDispoBasesInOrder(candidates, (base) => proxyAnlagenstammSearchOnce(payload, base));
+  if (tried.error) {
+    return {
+      ok: false,
+      error:
+        'Keine Verbindung zur Dispo (Netzwerk/TLS): ' +
+        tried.error +
+        '. Ziel ohne Query: ' +
+        (candidates[0] || '') +
+        relativePhp +
+        (candidates.length > 1 ? ' (auch ' + candidates.slice(1).join(', ') + ' probiert)' : ''),
+    };
+  }
+  return tried.result;
+}
+
+/**
+ * @param {Record<string, unknown>} payload
+ */
+async function proxyAnlagenstammSave(payload) {
+  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+  if (!technicianId) {
+    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
+  }
+  const candidates = buildDispoBaseCandidates({
+    baseUrl: payload.baseUrl,
+    externalUrl: payload.externalUrl,
+    internalUrl: payload.internalUrl,
+  });
+  if (candidates.length === 0) {
+    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
+  }
+  const relativePhp = '/dispo_api/api/anlagenstamm_monteur_save.php';
+  const tried = await tryDispoBasesInOrder(candidates, (base) => proxyAnlagenstammSaveOnce(payload, base));
+  if (tried.error) {
+    return {
+      ok: false,
+      error:
+        'Keine Verbindung zur Dispo (Netzwerk/TLS): ' +
+        tried.error +
+        '. Ziel ohne Query: ' +
+        (candidates[0] || '') +
+        relativePhp +
+        (candidates.length > 1 ? ' (auch ' + candidates.slice(1).join(', ') + ' probiert)' : ''),
+    };
+  }
+  return tried.result;
 }
 
 module.exports = {

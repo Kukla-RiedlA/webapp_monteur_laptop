@@ -21,6 +21,7 @@ const PORT = 39678;
 const DB_DIR = path.join(__dirname, 'db');
 const { registerAbrechnungRoutes, flushAbrechnungOutbox } = require('./lib/abrechnung-routes');
 const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
+const { buildDispoBaseCandidates } = require('./lib/dispo-base-fallback');
 
 /** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). */
 function writeFileWithRetry(filePath, data, maxRetries = 3) {
@@ -2134,8 +2135,12 @@ function createApp(db) {
     const technicianId =
       getTechnicianId(req) ??
       (body.technician_id != null ? parseInt(String(body.technician_id), 10) : null);
-    const base = (body.baseUrl || '').toString().trim().replace(/\/$/, '');
-    if (!technicianId || !base) {
+    const hasBase = buildDispoBaseCandidates({
+      baseUrl: body.baseUrl,
+      externalUrl: body.externalUrl,
+      internalUrl: body.internalUrl,
+    }).length > 0;
+    if (!technicianId || !hasBase) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
     try {
@@ -2159,8 +2164,12 @@ function createApp(db) {
     const technicianId =
       getTechnicianId(req) ??
       (body.technician_id != null ? parseInt(String(body.technician_id), 10) : null);
-    const base = (body.baseUrl || '').toString().trim().replace(/\/$/, '');
-    if (!technicianId || !base) {
+    const hasBaseSave = buildDispoBaseCandidates({
+      baseUrl: body.baseUrl,
+      externalUrl: body.externalUrl,
+      internalUrl: body.internalUrl,
+    }).length > 0;
+    if (!technicianId || !hasBaseSave) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
     try {
@@ -3813,9 +3822,20 @@ function createApp(db) {
   }
 
   app.post('/api/check_connection', express.json(), async (req, res) => {
-    const { baseUrl, technicianId, serverUsername, serverPassword } = req.body || {};
-    const result = await probeDispoConnection(baseUrl, technicianId, serverUsername, serverPassword, undefined);
-    return res.json(result.ok ? { ok: true } : { ok: false, error: result.error });
+    const { baseUrl, externalUrl, internalUrl, technicianId, serverUsername, serverPassword } = req.body || {};
+    const candidates = buildDispoBaseCandidates({ baseUrl, externalUrl, internalUrl });
+    if (candidates.length === 0) {
+      return res.json({ ok: false, error: 'Server-URL fehlt.' });
+    }
+    let lastErr = 'Verbindung fehlgeschlagen';
+    for (const base of candidates) {
+      const result = await probeDispoConnection(base, technicianId, serverUsername, serverPassword, undefined);
+      if (result.ok) {
+        return res.json({ ok: true, used_base_url: base });
+      }
+      lastErr = result.error || lastErr;
+    }
+    return res.json({ ok: false, error: lastErr });
   });
 
   /** Zwei Basis-URLs (extern/intern): parallel prüfen, bei beidem OK interne wählen (10 s Timeout pro Probe). */

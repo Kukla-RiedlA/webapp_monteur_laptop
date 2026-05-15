@@ -65,6 +65,74 @@
     try { return (localStorage.getItem(SETTINGS_KEYS.serverUrl) || '').trim(); } catch (e2) { return ''; }
   }
 
+  function setDispoActiveBase(url, source) {
+    var u = (url || '').toString().trim().replace(/\/+$/, '');
+    if (!u) return;
+    try {
+      localStorage.setItem(LS_ACTIVE_BASE, u);
+      if (source) localStorage.setItem(LS_ACTIVE_SOURCE, String(source));
+    } catch (e) { /* ignore */ }
+  }
+
+  function isPrivateLanHostname(hostname) {
+    var h = (hostname || '').toString().trim().toLowerCase();
+    if (!h) return false;
+    if (h === 'localhost' || h === '127.0.0.1') return true;
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    return false;
+  }
+
+  /** Kandidaten für Verbindungs-/Dispo-Abfragen (aktiv → extern → intern). */
+  function buildDispoBaseCandidatesClient() {
+    var active = (getDispoBaseUrl() || '').trim().replace(/\/+$/, '');
+    var ext = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
+    var intUrl = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
+    var out = [];
+    var seen = {};
+    function add(u) {
+      if (!u || seen[u]) return;
+      seen[u] = true;
+      out.push(u);
+    }
+    add(active);
+    var activePrivate = false;
+    try {
+      activePrivate = active && isPrivateLanHostname(new URL(active).hostname);
+    } catch (e) { /* ignore */ }
+    if (activePrivate) {
+      add(ext);
+      add(intUrl);
+    } else {
+      add(ext);
+      add(intUrl);
+    }
+    return out;
+  }
+
+  function dispoBasePayloadExtra() {
+    return {
+      externalUrl: getDispoExternalUrl(),
+      internalUrl: getDispoInternalUrl(),
+    };
+  }
+
+  function applyDispoUsedBaseUrl(d) {
+    if (!d || !d._used_base_url) return d;
+    var used = String(d._used_base_url).trim().replace(/\/+$/, '');
+    if (used) {
+      var ext = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
+      var intUrl = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
+      var src = used === ext ? 'external' : (used === intUrl ? 'internal' : 'fallback');
+      if (used !== (getDispoBaseUrl() || '').trim().replace(/\/+$/, '')) {
+        setDispoActiveBase(used, src);
+      }
+    }
+    delete d._used_base_url;
+    return d;
+  }
+
   /** Auto-Probe parallel (10 s serverseitig); gewählte URL in localStorage. */
   async function pickDispoBase() {
     var ext = getDispoExternalUrl();
@@ -648,6 +716,7 @@
   function normalizeAnlagenstammSearchResponse(d) {
     if (!d || typeof d !== 'object') throw new Error('Suche fehlgeschlagen');
     if (d.ok === false) throw new Error(d.error ? d.error : 'Suche fehlgeschlagen');
+    applyDispoUsedBaseUrl(d);
     if (d.ok === true) {
       if ('_httpStatus' in d) delete d._httpStatus;
       return d;
@@ -662,6 +731,7 @@
   function normalizeAnlagenstammSaveResponse(d) {
     if (!d || typeof d !== 'object') throw new Error('Speichern fehlgeschlagen');
     if (d.ok === false) throw new Error(d.error ? d.error : 'Speichern fehlgeschlagen');
+    applyDispoUsedBaseUrl(d);
     if (d.ok !== true && d.id == null) {
       throw new Error(d.error ? d.error : 'Speichern fehlgeschlagen');
     }
@@ -2356,28 +2426,45 @@
       return;
     }
     await pickDispoBase();
-    var base = getDispoBaseUrl().trim();
-    if (!base) {
+    var bases = buildDispoBaseCandidatesClient();
+    if (!bases.length) {
       setConnectionBadge('local');
       loadJobsAndAbsences();
       loadOpenJobs();
       return;
     }
     try {
-      const resCheck = await fetch(API_BASE + '/api/check_connection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          baseUrl: base,
-          technicianId: techId,
-          serverUsername: getServerUsername(),
-          serverPassword: getServerPassword()
-        })
-      });
-      const check = await resCheck.json().catch(function () { return {}; });
+      var check = null;
+      var connectedBase = '';
+      var lastCheckErr = '';
+      for (var bi = 0; bi < bases.length; bi++) {
+        var tryBase = bases[bi];
+        const resCheck = await fetch(API_BASE + '/api/check_connection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            baseUrl: tryBase,
+            externalUrl: getDispoExternalUrl(),
+            internalUrl: getDispoInternalUrl(),
+            technicianId: techId,
+            serverUsername: getServerUsername(),
+            serverPassword: getServerPassword()
+          })
+        });
+        check = await resCheck.json().catch(function () { return {}; });
+        if (check && check.ok === true) {
+          connectedBase = (check.used_base_url || tryBase).toString().trim().replace(/\/+$/, '');
+          var extNorm = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
+          var intNorm = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
+          var src = connectedBase === intNorm ? 'internal' : (connectedBase === extNorm ? 'external' : 'fallback');
+          setDispoActiveBase(connectedBase, src);
+          break;
+        }
+        lastCheckErr = (check && check.error) ? check.error : ('HTTP ' + resCheck.status);
+      }
       if (check && check.ok === true) {
         const range = getSyncDateRange();
-        var syncBase = getDispoBaseUrl().trim() || base;
+        var syncBase = getDispoBaseUrl().trim() || connectedBase;
         const auth = { baseUrl: syncBase, technicianId: techId, serverUsername: getServerUsername(), serverPassword: getServerPassword() };
         var syncProblems = [];
         try {
@@ -2424,10 +2511,7 @@
           }
         }
       } else {
-        var offMsg = (check && check.error) ? check.error : 'Verbindung fehlgeschlagen';
-        if (!resCheck.ok && (!check || !check.error)) {
-          offMsg = 'Lokaler Server (check_connection): HTTP ' + resCheck.status;
-        }
+        var offMsg = lastCheckErr || ((check && check.error) ? check.error : 'Verbindung fehlgeschlagen');
         setConnectionBadge('offline', offMsg);
       }
     } catch (e) {
@@ -3511,7 +3595,7 @@
     if (msgEl) msgEl.textContent = 'Suche läuft…';
     if (resEl) { resEl.style.display = 'none'; resEl.innerHTML = ''; }
     try {
-      var data = await anlagenstammSearchDispo({
+      var data = await anlagenstammSearchDispo(Object.assign({
         baseUrl: getDispoBaseUrl(),
         serverUsername: getServerUsername(),
         serverPassword: getServerPassword(),
@@ -3521,7 +3605,7 @@
         filter_land: land,
         page: 1,
         page_size: 50
-      });
+      }, dispoBasePayloadExtra()));
       var rows = (data && data.rows) ? data.rows : [];
       if (resEl) {
         if (!rows.length) {
@@ -3606,7 +3690,7 @@
     var msgEl = document.getElementById('anlagenstammMessage');
     var fabEl = document.getElementById('as-form-fab');
     if (!fabEl) return;
-    var payload = {
+    var payload = Object.assign({
       baseUrl: getDispoBaseUrl(),
       serverUsername: getServerUsername(),
       serverPassword: getServerPassword(),
@@ -3624,7 +3708,7 @@
       geliefert_ueber: ((document.getElementById('as-form-geliefert') || {}).value || ''),
       projekt: ((document.getElementById('as-form-projekt') || {}).value || ''),
       bemerkungen: ((document.getElementById('as-form-bemerkungen') || {}).value || '')
-    };
+    }, dispoBasePayloadExtra());
     if (!payload.fabrikationsnummer) {
       if (msgEl) msgEl.textContent = 'Fabrikationsnummer fehlt.';
       return;
