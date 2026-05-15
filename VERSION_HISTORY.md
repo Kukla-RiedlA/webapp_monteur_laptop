@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.004.000
+- **Auftrag annehmen:** Button in der Auftragsliste, `POST /api/dienstreise/accept_job_stream` (Projektordner kopieren, danach Status `in_arbeit`, Dispo-Sync).
+- **Projektdaten:** Projektordner-Explorer und Upload unter Leistungsdaten; FN-Zeile (Semikolon/Bereiche wie Dispo); Tabelle mit Spalte **Position**.
+- **Sync:** Abgelehnter Status-Push bricht gesamten `sync_push` nicht mehr ab; FN-Patch auch bei angelegt/geplant/zugeteilt.
+- **Doku:** `docs/API_CONTRACT.md` um `accept_job_stream` ergänzt.
+
 ## V 1.003.000
 - **Montagebericht:** Nach „PDF & DOCX erstellen“ kann der Bericht über den Dispo-Server signiert werden (lokales PDF-Staging, Proxy `montagebericht_signature_stage`, Widget + `dispo_signature_*`).
 - **Signatur-Widget:** `electron/public/signature_widget.js`, Einbindung in `index.html`.

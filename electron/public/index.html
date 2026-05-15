@@ -433,6 +433,10 @@
     .modal-leistung-table-readonly { min-width: 900px; }
     .modal-leistung-table-compact { min-width: auto; }
     .modal-leistung-hint { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
+    .modal-leistung-fab-row { margin-bottom: 0.75rem; }
+    .modal-leistung-fab-row label { display: block; margin-bottom: 0.25rem; color: var(--muted); font-size: 0.9rem; }
+    .modal-leistung-fab-input { width: 100%; max-width: none; padding: 0.5rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); font-size: 0.9rem; box-sizing: border-box; }
+    .modal-leistung-fab-display { font-size: 0.9rem; margin: 0 0 0.5rem 0; }
     .modal-leistung-row-clickable { cursor: pointer; }
     .modal-leistung-row-clickable:hover { background: var(--subtle-row-hover); }
     .modal-leistung-cell-clickable { cursor: pointer; }
@@ -649,47 +653,6 @@
     <div class="card">
       <h2>Projektdaten</h2>
       <div id="viewProjektdatenContent" class="modal-detail-content"><span class="empty">Auftrag per Doppelklick öffnen.</span></div>
-      <div id="projektdatenOrdnerSection" class="modal-detail-section projektdaten-ordner-section" style="margin-top:1.5rem">
-        <h4>Ordner- und Datenmanagement</h4>
-        <div class="dienstreise-detail-split">
-          <div class="dienstreise-detail-left">
-            <div class="settings-row">
-              <label>Projektordner vom Dispo holen</label>
-              <p class="settings-hint" style="font-size:0.85rem;color:#666;margin:0.15rem 0 0.35rem 0;">Der Dispo lädt zuerst <strong>Dokumente_Anlage</strong> vom Fileserver. <strong>Dokumente_Monteur</strong> (PROJEKTE&nbsp;NEU) werden beim Kopieren direkt vom ELEKTRO-Mount gelesen – ohne Zwischenspeicher auf dem Server.</p>
-              <div class="dienstreise-copy-row">
-                <button type="button" class="btn btn-ghost" id="btnDienstreiseCopyProject">Projektordner holen</button>
-              </div>
-              <div id="dienstreiseCopyProgressWrap" class="dienstreise-copy-progress" style="display:none; margin-top:0.5rem;">
-                <div class="dienstreise-copy-progress-label" id="dienstreiseCopyProgressLabel">Lade …</div>
-                <progress id="dienstreiseCopyProgress" value="0" max="100" style="width:100%; height:8px;"></progress>
-              </div>
-              <span id="dienstreiseCopyHint" class="settings-saved-hint" aria-live="polite"></span>
-            </div>
-            <div class="settings-row">
-              <label>Dokument hochladen</label>
-              <div class="dienstreise-upload-row">
-                <select id="dienstreiseUploadSubfolder" class="dienstreise-select">
-                  <option value="Dokumente_Dispo">Dokumente_Dispo</option>
-                  <option value="Dokumente_Monteur">Dokumente_Monteur</option>
-                  <option value="Dokumente_Anlage">Dokumente_Anlage</option>
-                  <option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>
-                </select>
-                <input type="file" id="dienstreiseFileInput" accept="*" style="max-width: 220px;" />
-                <button type="button" class="btn btn-ghost" id="btnDienstreiseUpload">Hochladen</button>
-              </div>
-              <span id="dienstreiseUploadHint" class="settings-saved-hint" aria-live="polite"></span>
-            </div>
-          </div>
-          <div class="dienstreise-detail-right">
-            <div class="dienstreise-explorer-toolbar">
-              <span class="dienstreise-explorer-breadcrumb" id="dienstreiseExplorerBreadcrumb" title="Projektordner">Projektordner</span>
-            </div>
-            <div id="dienstreiseExplorerList" class="dienstreise-explorer-list" aria-label="Dateien im Projektordner">
-              <span class="empty" id="dienstreiseExplorerPlaceholder">Auftrag öffnen, dann Ordnerinhalt hier.</span>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   </main>
   <main id="viewAbrechnung" class="view-abrechnung" aria-label="Abrechnung">
@@ -747,6 +710,11 @@
       </div>
       <section id="auftraegePaneList" class="auftraege-pane is-active" role="tabpanel" aria-labelledby="auftraegeTabList">
         <h2>Meine Aufträge</h2>
+        <div id="acceptJobProgressWrap" class="dienstreise-copy-progress" style="display:none; margin-bottom:0.75rem;">
+          <div class="dienstreise-copy-progress-label" id="acceptJobProgressLabel">Lade …</div>
+          <progress id="acceptJobProgress" value="0" max="100" style="width:100%; height:8px;"></progress>
+        </div>
+        <span id="acceptJobHint" class="settings-saved-hint" aria-live="polite" style="display:block;margin-bottom:0.5rem;"></span>
         <div id="dienstreiseList" class="dienstreise-list-wrap">
           <span class="empty">Wird geladen…</span>
         </div>

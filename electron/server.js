@@ -516,6 +516,63 @@ function createApp(db) {
     `).get(n, n);
   }
 
+  function getJobRowWithStatusByLocalOrServerId(rawJobId) {
+    const n = parseInt(rawJobId, 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return db.prepare(`
+      SELECT id, server_id, status FROM jobs j
+      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+    `).get(n, n);
+  }
+
+  /** Auftrag annehmen: nur aus angelegt/geplant/zugeteilt. */
+  function jobStatusAllowsAcceptJob(status) {
+    const s = String(status || '').trim().toLowerCase();
+    return s === 'angelegt' || s === 'geplant' || s === 'zugeteilt';
+  }
+
+  function applyJobStatusInArbeitAfterAccept(localJobId, technicianId) {
+    const lid = parseInt(localJobId, 10);
+    if (!Number.isFinite(lid) || lid <= 0) return;
+    const r = db.prepare(`
+      UPDATE jobs SET status = 'in_arbeit', updated_at = datetime('now')
+      WHERE id = ? AND (
+        EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
+        OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
+      )
+    `).run(lid, technicianId);
+    if (r.changes) {
+      db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
+        'job', lid, 'status', JSON.stringify({ status: 'in_arbeit' })
+      );
+      save();
+    }
+  }
+
+  async function pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader) {
+    if (!dispoBaseUrl || !serverJobId) return { ok: false, error: 'Keine Dispo-Verknüpfung.' };
+    const base = dispoBaseUrl.replace(/\/$/, '');
+    const headerForJob = {
+      'Content-Type': 'application/json',
+      'X-Technician-Id': String(technicianId),
+      ...(authHeader || {}),
+    };
+    const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${technicianId}`, {
+      method: 'PATCH',
+      headers: headerForJob,
+      body: JSON.stringify({ job_id: serverJobId, status: 'in_arbeit' }),
+    });
+    if (!r.ok) {
+      let errMsg = 'Dispo: ' + r.status;
+      try {
+        const errData = await r.json();
+        if (errData && typeof errData.error === 'string') errMsg = errData.error;
+      } catch (_) { /* ignore */ }
+      return { ok: false, error: errMsg };
+    }
+    return { ok: true };
+  }
+
   function getServerJobId(localJobIdOrServerId) {
     const row = getJobRowByLocalOrServerId(localJobIdOrServerId);
     if (!row) throw new Error('Auftrag nicht gefunden.');
@@ -948,8 +1005,12 @@ function createApp(db) {
     }
   });
 
-  /** Wie copy_project, aber: (1) Dispo-Refresh (stellt nur Projekt-Unterordner sicher; kein Fileserver-Spiegeln mehr), (2) dann per API listen/download in den Dienstreise-Ordner kopieren (NDJSON-Stream). Läuft im Hintergrund weiter, wenn der Client die Verbindung schließt. */
-  app.post('/api/dienstreise/copy_project_stream', express.json(), async (req, res) => {
+  /**
+   * NDJSON-Stream: Dispo-Refresh, dann Projektordner in den Dienstreise-Ordner kopieren.
+   * @param {{ acceptJob?: boolean }} options – acceptJob: Gate-Bypass für angelegt/geplant/zugeteilt, danach Status in_arbeit
+   */
+  async function handleDienstreiseCopyProjectStream(req, res, options) {
+    const acceptJob = !!(options && options.acceptJob);
     let clientGone = false;
     req.on('close', () => { clientGone = true; });
     const send = (obj, cb) => {
@@ -981,14 +1042,29 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'job_id (lokal), dispoBaseUrl und technicianId erforderlich.' });
       }
 
-      const drGateStream = gateDienstreiseWrite(db, technicianId, rawJobId);
-      if (drGateStream) return res.status(drGateStream.status).json({ ok: false, error: drGateStream.error });
+      const jobRowFull = getJobRowWithStatusByLocalOrServerId(rawJobId);
+      if (!jobRowFull) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
 
-      const jobRow = getJobRowByLocalOrServerId(rawJobId);
-      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
-      const jobId = jobRow.server_id != null ? jobRow.server_id : jobRow.id;
+      if (acceptJob) {
+        const st = String(jobRowFull.status || '').trim().toLowerCase();
+        if (st === 'in_arbeit') {
+          return res.status(400).json({ ok: false, error: 'Auftrag ist bereits in Arbeit.' });
+        }
+        if (st === 'erledigt' || st === 'abgerechnet') {
+          return res.status(400).json({ ok: false, error: 'Auftrag kann in diesem Status nicht angenommen werden.' });
+        }
+        if (!jobStatusAllowsAcceptJob(jobRowFull.status)) {
+          return res.status(400).json({ ok: false, error: 'Auftrag kann nur im Status Angelegt oder Zugeteilt angenommen werden.' });
+        }
+      } else {
+        const drGateStream = gateDienstreiseWrite(db, technicianId, rawJobId);
+        if (drGateStream) return res.status(drGateStream.status).json({ ok: false, error: drGateStream.error });
+      }
 
-      const targetDir = getOrCreateDienstreiseFolderForJob(jobRow.id);
+      const localJobId = jobRowFull.id;
+      const jobId = jobRowFull.server_id != null ? jobRowFull.server_id : jobRowFull.id;
+
+      const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
       if (!targetDir || !fs.existsSync(targetDir)) {
         return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
       }
@@ -1006,7 +1082,7 @@ function createApp(db) {
 
       send({ phase: 'refresh' });
       const refreshUrl = dispoBaseUrl + '/api/job_project_refresh.php';
-      const refreshTimeoutMs = 60000; // 1 Min – Dispo-Refresh darf nicht ewig hängen
+      const refreshTimeoutMs = 60000;
       const refreshAbort = new AbortController();
       const refreshTimeoutId = setTimeout(() => refreshAbort.abort(), refreshTimeoutMs);
       try {
@@ -1035,6 +1111,8 @@ function createApp(db) {
       }
       send({ phase: 'refresh_done' });
 
+      const streamTag = acceptJob ? 'accept_job_stream' : 'copy_project_stream';
+
       async function notifyMarkDocsLoaded() {
         try {
           const url = dispoBaseUrl + '/api/job_mark_docs_loaded.php';
@@ -1045,11 +1123,37 @@ function createApp(db) {
           });
           const data = await r.json().catch(() => ({}));
           if (!r.ok || data.ok === false) {
-            console.warn('[copy_project_stream] job_mark_docs_loaded', r.status, data && data.error);
+            console.warn('[' + streamTag + '] job_mark_docs_loaded', r.status, data && data.error);
           }
         } catch (e) {
-          console.warn('[copy_project_stream] job_mark_docs_loaded', e && e.message ? e.message : e);
+          console.warn('[' + streamTag + '] job_mark_docs_loaded', e && e.message ? e.message : e);
         }
+      }
+
+      async function finalizeAcceptIfNeeded(doneMessage) {
+        if (!acceptJob) {
+          send({ phase: 'done', message: doneMessage }, () => { safeEnd(); });
+          return;
+        }
+        applyJobStatusInArbeitAfterAccept(localJobId, technicianId);
+        let statusSyncWarning = null;
+        const serverJobId = jobRowFull.server_id != null ? jobRowFull.server_id : null;
+        if (serverJobId) {
+          const pushRes = await pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader);
+          if (pushRes.ok) {
+            db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`).run(localJobId);
+            save();
+          } else {
+            statusSyncWarning = pushRes.error || 'Status konnte nicht sofort zur Dispo gesendet werden.';
+          }
+        }
+        const msg = doneMessage || 'Auftrag angenommen – Projektordner kopiert, Status: In Arbeit.';
+        send({
+          phase: 'done',
+          message: msg,
+          status: 'in_arbeit',
+          status_sync_warning: statusSyncWarning,
+        }, () => { safeEnd(); });
       }
 
       async function listEntries(relPath) {
@@ -1093,9 +1197,10 @@ function createApp(db) {
       send({ phase: 'download', total });
       if (total === 0) {
         await notifyMarkDocsLoaded();
-        send({ phase: 'done', message: 'Keine Dateien im Projektordner auf der Dispo (nach Aktualisierung).' }, () => {
-          safeEnd();
-        });
+        const emptyMsg = acceptJob
+          ? 'Auftrag angenommen. Keine Dateien im Projektordner auf der Dispo (nach Aktualisierung).'
+          : 'Keine Dateien im Projektordner auf der Dispo (nach Aktualisierung).';
+        await finalizeAcceptIfNeeded(emptyMsg);
         return;
       }
 
@@ -1129,13 +1234,21 @@ function createApp(db) {
       }
 
       await notifyMarkDocsLoaded();
-      send({ phase: 'done' }, () => {
-        safeEnd();
-      });
+      await finalizeAcceptIfNeeded(null);
     } catch (e) {
       send({ phase: 'error', error: e.message || 'Kopieren fehlgeschlagen.' });
       safeEnd();
     }
+  }
+
+  /** @deprecated Nur noch intern; UI nutzt accept_job_stream. */
+  app.post('/api/dienstreise/copy_project_stream', express.json(), (req, res) => {
+    handleDienstreiseCopyProjectStream(req, res, { acceptJob: false });
+  });
+
+  /** Auftrag annehmen: Projektordner kopieren (inkl. PROJEKTE NEU live) und Status auf in_arbeit setzen. */
+  app.post('/api/dienstreise/accept_job_stream', express.json(), (req, res) => {
+    handleDienstreiseCopyProjectStream(req, res, { acceptJob: true });
   });
 
   app.post('/api/dienstreise/upload', (req, res) => {
@@ -3218,6 +3331,26 @@ function createApp(db) {
     }
   });
 
+  /** Fabrikationsnummern dürfen auch bei „angelegt/geplant/zugeteilt“ gesetzt werden (vor „Auftrag annehmen“). */
+  function getLocalJobMetaForFabrikationsnummernPatch(dbConn, technicianId, rawJobId) {
+    const n = parseInt(rawJobId, 10);
+    if (!Number.isFinite(n)) return { error: 'job_id ungültig.', status: 400 };
+    const row = dbConn.prepare(`
+      SELECT j.id, j.status FROM jobs j
+      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+        AND (
+          EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+          OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+        )
+    `).get(n, n, technicianId);
+    if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
+    const s = String(row.status || '').trim().toLowerCase();
+    if (s === 'abgerechnet') {
+      return { error: 'Auftrag ist abgerechnet – Bearbeitung in der App nicht erlaubt.', status: 403 };
+    }
+    return { localId: row.id };
+  }
+
   app.patch('/api/job', express.json(), (req, res) => {
     const technicianId = getTechnicianId(req);
     const body = req.body || {};
@@ -3225,7 +3358,14 @@ function createApp(db) {
     if (!technicianId || !job_id) {
       return res.status(400).json({ ok: false, error: 'technician_id und job_id erforderlich.' });
     }
-    const gate = getWritableLocalJobMetaForPatch(db, technicianId, job_id);
+    const fabOnlyPatch = fabrikationsnummern !== undefined
+      && status === undefined
+      && description === undefined
+      && !hotel_selection
+      && !['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_address_extra_1', 'hotel_address_extra_2', 'hotel_phone', 'hotel_email', 'hotel_website', 'hotel_comment', 'hotel_rating_stars'].some((k) => Object.prototype.hasOwnProperty.call(body, k));
+    const gate = fabOnlyPatch
+      ? getLocalJobMetaForFabrikationsnummernPatch(db, technicianId, job_id)
+      : getWritableLocalJobMetaForPatch(db, technicianId, job_id);
     if (gate.error) {
       return res.status(gate.status).json({ ok: false, error: gate.error });
     }
@@ -4535,6 +4675,18 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           try { errData = JSON.parse(text); } catch (_) { errData = { _raw: text.substring(0, 500) }; }
           if (errData && typeof errData.error === 'string') errMsg = errData.error;
         } catch (_) {}
+        const statusPushRejected = p.action === 'status'
+          && r.status === 400
+          && /Status-Update fehlgeschlagen/i.test(errMsg);
+        if (statusPushRejected) {
+          console.warn('[sync_push] Status nicht übernommen (Dispo-Übergang):', {
+            job_id: serverJobId,
+            technician_id: techIdForPush,
+            payload_status: payload.status,
+            error: errMsg,
+          });
+          continue;
+        }
         logSyncPushError({
           reason: 'dispo_antwort_fehler',
           status: r.status,

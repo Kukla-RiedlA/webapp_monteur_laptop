@@ -823,11 +823,194 @@
     return '<img src="flags/' + c + '.png" alt="" class="job-flag" width="20" height="15" loading="lazy" onerror="this.style.display=\'none\'">';
   }
 
-  /** Auftrag mit Status „angelegt“ (nur Anzeige). Legacy lokaler Cache: „geplant“. */
+  /** Auftrag mit Status „angelegt“ (nur Anzeige, außer Fabrikationsnummern-Zeile). Legacy: „geplant“. */
   function isJobAngelegtReadOnly(job) {
     if (!job || typeof job !== 'object') return false;
     var s = String(job.status || '').trim().toLowerCase();
     return s === 'angelegt' || s === 'geplant';
+  }
+
+  /** Fabrikationsnummern dürfen auch bei angelegt/geplant/zugeteilt bearbeitet werden. */
+  function canEditProjektdatenFabrikationsnummern(job) {
+    if (!job || typeof job !== 'object') return false;
+    var s = String(job.status || '').trim().toLowerCase();
+    return s !== 'abgerechnet';
+  }
+
+  /** Button „Auftrag annehmen“ (wie Server: angelegt / geplant / zugeteilt). */
+  function jobCanAcceptJob(job) {
+    if (!job || typeof job !== 'object') return false;
+    var s = String(job.status || '').trim().toLowerCase();
+    return s === 'angelegt' || s === 'geplant' || s === 'zugeteilt';
+  }
+
+  var acceptJobStreamBusy = false;
+
+  function validateAcceptJobPrerequisites(localJobId) {
+    if (!localJobId) return 'Bitte einen Auftrag wählen.';
+    if (!getTechId()) return 'Bitte Monteur-ID in Einstellungen eintragen.';
+    if (!(getDispoBaseUrl() || '').trim()) return 'Bitte Dispo-URL in Einstellungen eintragen.';
+    if (!getDispoUsername() || !getDispoPassword()) {
+      return 'Dispo-Zugangsdaten fehlen: Benutzername und Passwort in den Einstellungen eintragen.';
+    }
+    var snap = getDienstreiseJobSnapshotByLocalId(localJobId);
+    if (!jobCanAcceptJob(snap)) return 'Auftrag kann nur im Status Angelegt oder Zugeteilt angenommen werden.';
+    return null;
+  }
+
+  function runAcceptJobStream(localJobId) {
+    if (acceptJobStreamBusy) return;
+    var errMsg = validateAcceptJobPrerequisites(localJobId);
+    var hint = document.getElementById('acceptJobHint');
+    if (errMsg) {
+      if (hint) hint.textContent = errMsg;
+      return;
+    }
+    acceptJobStreamBusy = true;
+    if (hint) hint.textContent = '';
+    var progressWrap = document.getElementById('acceptJobProgressWrap');
+    var progressBar = document.getElementById('acceptJobProgress');
+    var progressLabel = document.getElementById('acceptJobProgressLabel');
+    if (progressWrap) progressWrap.style.display = 'block';
+    if (progressBar) { progressBar.value = 0; progressBar.max = 100; }
+    if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
+    document.querySelectorAll('[data-action="accept-job"]').forEach(function (b) { b.disabled = true; });
+
+    var body = {
+      job_id: localJobId,
+      dispoBaseUrl: getDispoBaseUrl(),
+      technicianId: getTechId(),
+      dispoUsername: getDispoUsername(),
+      dispoPassword: getDispoPassword(),
+      include_bilder: false
+    };
+    var copyTimeoutMs = 600000;
+    var copyTimeoutId = setTimeout(function () {
+      copyTimeoutId = null;
+      finishAcceptUi();
+      if (hint) {
+        hint.textContent = 'Zeitüberschreitung – Dispo-Antwort kam nicht. Bitte erneut versuchen.';
+        setTimeout(function () { var x = document.getElementById('acceptJobHint'); if (x) x.textContent = ''; }, 5000);
+      }
+    }, copyTimeoutMs);
+
+    function finishAcceptUi() {
+      acceptJobStreamBusy = false;
+      if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
+      var wrap = document.getElementById('acceptJobProgressWrap');
+      var lbl = document.getElementById('acceptJobProgressLabel');
+      if (wrap) wrap.style.display = 'none';
+      if (lbl) lbl.textContent = '';
+      document.querySelectorAll('[data-action="accept-job"]').forEach(function (b) { b.disabled = false; });
+    }
+
+    fetch(API_BASE + '/api/dienstreise/accept_job_stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (response) {
+      if (!response.ok) {
+        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
+        return response.json().then(function (data) {
+          throw new Error(data.error || 'Fehler ' + response.status);
+        }).catch(function () { throw new Error('Fehler ' + response.status); });
+      }
+      var ctPeek = (response.headers.get('content-type') || '').toLowerCase();
+      if (ctPeek.indexOf('json') !== -1 && ctPeek.indexOf('ndjson') === -1) {
+        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
+        return response.json().then(function (data) {
+          var msg = (data && data.error) ? String(data.error) : '';
+          throw new Error(msg || 'Server hat JSON statt Datenstrom gesendet.');
+        }).catch(function (e) {
+          if (e instanceof Error && e.message) throw e;
+          throw new Error('Antwort konnte nicht gelesen werden.');
+        });
+      }
+      if (!response.body || typeof response.body.getReader !== 'function') {
+        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
+        return response.text().then(function (t) {
+          throw new Error(t ? t.slice(0, 200) : 'Kein Stream-Datenstrom.');
+        });
+      }
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = '';
+      var completed = false;
+      var hadError = false;
+      function processLine(line) {
+        line = line.trim();
+        if (!line) return;
+        var data;
+        try { data = JSON.parse(line); } catch (e) { return; }
+        if (data.ok === false && data.error && !data.phase) {
+          hadError = true;
+          finishAcceptUi();
+          if (hint) hint.textContent = String(data.error);
+          return;
+        }
+        if (data.phase === 'refresh') {
+          if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
+        } else if (data.phase === 'refresh_done') {
+          if (progressLabel) progressLabel.textContent = 'Lade auf Laptop …';
+        } else if (data.phase === 'download' && data.total != null) {
+          if (progressBar) progressBar.max = data.total;
+          if (progressBar) progressBar.value = 0;
+        } else if (data.phase === 'file' && data.total != null) {
+          if (progressBar) progressBar.value = data.current || 0;
+          if (progressLabel && data.total > 0) progressLabel.textContent = 'Lade ' + (data.current || 0) + ' / ' + data.total;
+        } else if (data.phase === 'done') {
+          completed = true;
+          finishAcceptUi();
+          var doneMsg = (data.message != null && String(data.message).trim()) ? String(data.message).trim() : 'Auftrag angenommen.';
+          if (data.status_sync_warning) doneMsg += ' Hinweis: ' + String(data.status_sync_warning);
+          if (hint) hint.textContent = doneMsg;
+          if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
+          if (getDienstreiseExplorerJobId() == localJobId && typeof loadDienstreiseExplorer === 'function') {
+            loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath);
+          }
+          if (jobDetailsJobId == localJobId && typeof openJobDetailsModal === 'function') {
+            openJobDetailsModal(localJobId);
+          }
+          setTimeout(function () { var x = document.getElementById('acceptJobHint'); if (x && !x.textContent.includes('Hinweis:')) x.textContent = ''; }, data.status_sync_warning ? 8000 : 4000);
+        } else if (data.phase === 'error') {
+          hadError = true;
+          finishAcceptUi();
+          if (hint) hint.textContent = data.error || 'Fehler.';
+        }
+      }
+      function readNext() {
+        return reader.read().then(function (result) {
+          if (result.value && result.value.length > 0) {
+            buffer += decoder.decode(result.value, { stream: !result.done });
+            var lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            lines.forEach(function (line) {
+              try { processLine(line); } catch (e) { /* Einzelzeile ignorieren */ }
+            });
+          }
+          if (result.done) {
+            if (buffer.trim()) try { processLine(buffer); } catch (e) { }
+            if (!completed && !hadError) {
+              finishAcceptUi();
+              if (hint) hint.textContent = 'Fertig.';
+              if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
+              if (getDienstreiseExplorerJobId() === localJobId && typeof loadDienstreiseExplorer === 'function') {
+                loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath);
+              }
+            }
+            return;
+          }
+          return readNext();
+        });
+      }
+      return readNext().catch(function (streamErr) {
+        finishAcceptUi();
+        if (hint) hint.textContent = streamErr && streamErr.message ? streamErr.message : 'Verbindung abgebrochen.';
+      });
+    }).catch(function (err) {
+      finishAcceptUi();
+      if (hint) hint.textContent = err && err.message ? err.message : 'Fehler beim Annehmen.';
+    });
   }
 
   /** CSS-Klasse status-* (geplant aus Cache wird wie angelegt gemappt). */
@@ -1027,12 +1210,7 @@
     var jid = getDienstreiseExplorerJobId();
     var snap = jid ? getDienstreiseJobSnapshotByLocalId(jid) : null;
     var ro = isJobAngelegtReadOnly(snap);
-    var copyBtn = document.getElementById('btnDienstreiseCopyProject');
     var upBtn = document.getElementById('btnDienstreiseUpload');
-    if (copyBtn) {
-      copyBtn.disabled = !!ro;
-      copyBtn.title = ro ? 'Auftrag ist angelegt – nur Anzeige.' : '';
-    }
     if (upBtn) {
       upBtn.disabled = !!ro;
       upBtn.title = ro ? 'Auftrag ist angelegt – nur Anzeige.' : '';
@@ -1041,6 +1219,25 @@
     var fi = document.getElementById('dienstreiseFileInput');
     if (sub) sub.disabled = !!ro;
     if (fi) fi.disabled = !!ro;
+  }
+
+  var projektdatenFabSaveBusy = false;
+
+  function showProjektdatenJob(job) {
+    var content = document.getElementById('viewProjektdatenContent');
+    if (!content) return;
+    if (!job) {
+      content.innerHTML = '<span class="empty">Fehler: Auftrag nicht gefunden.</span>';
+      return;
+    }
+    if (job.id != null) jobDetailsJobId = job.id;
+    window.currentProjektdatenJob = job;
+    content.innerHTML = renderJobDetailsContent(job);
+    bindLeistungActions();
+    loadMechanikTedLinks(job);
+    loadHotelChoicesByFab(job);
+    if (typeof loadDienstreiseExplorer === 'function') loadDienstreiseExplorer(jobDetailsJobId, '');
+    if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
   }
 
   function openJobDetailsModal(jobId) {
@@ -1061,17 +1258,7 @@
     content.innerHTML = '<span class="empty">Wird geladen…</span>';
 
     function showJob(job) {
-      if (!job) {
-        content.innerHTML = '<span class="empty">Fehler: Auftrag nicht gefunden.</span>';
-        return;
-      }
-      window.currentProjektdatenJob = job;
-      content.innerHTML = renderJobDetailsContent(job);
-      bindLeistungActions();
-      loadMechanikTedLinks(job);
-      loadHotelChoicesByFab(job);
-      if (typeof loadDienstreiseExplorer === 'function') loadDienstreiseExplorer(jobDetailsJobId, '');
-      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+      showProjektdatenJob(job);
     }
 
     function loadLocal() {
@@ -1132,6 +1319,152 @@
     var viewProjektdaten = document.getElementById('viewProjektdaten');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
     jobDetailsJobId = null;
+  }
+
+  /** Wie Dispo job_form.js: Komma/Semikolon, Bereiche 100-103 und Kurzform 11030-32. */
+  function parseFabInputSemicolonList(str) {
+    if (!str || typeof str !== 'string') return [];
+    var parts = str.split(/[\s]*[,;][\s]*/).map(function (p) { return p.trim(); }).filter(Boolean);
+    var numbers = [];
+    for (var pi = 0; pi < parts.length; pi++) {
+      var p = parts[pi];
+      var m = p.match(/^(\d+)\s*-\s*(\d+)$/);
+      if (m) {
+        var a = parseInt(m[1], 10);
+        var b = parseInt(m[2], 10);
+        if (String(m[2]).length < String(a).length) {
+          var pow = Math.pow(10, m[2].length);
+          b = Math.floor(a / pow) * pow + b;
+        }
+        for (var n = a; n <= b; n++) numbers.push(String(n));
+      } else {
+        numbers.push(p);
+      }
+    }
+    return numbers;
+  }
+
+  function formatFabrikationsnummernInputValue(rows) {
+    if (!rows || !rows.length) return '';
+    return rows.map(function (r) { return String(r && r.fabrikationsnummer != null ? r.fabrikationsnummer : '').trim(); }).filter(Boolean).join('; ');
+  }
+
+  function findLeistungRowByFab(rows, fn) {
+    var fnStr = String(fn || '').trim();
+    if (!fnStr) return null;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r) continue;
+      var rfn = String(r.fabrikationsnummer || '').trim();
+      if (rfn === fnStr) return r;
+      var a = Number(rfn);
+      var b = Number(fnStr);
+      if (rfn !== '' && fnStr !== '' && !isNaN(a) && !isNaN(b) && a === b) return r;
+    }
+    return null;
+  }
+
+  function emptyLeistungRowTemplate(fn) {
+    return {
+      fabrikationsnummer: fn || '',
+      type: '',
+      leistung: '',
+      nenngeschwindigkeit: '',
+      kraftaufnehmer: '',
+      dms_nr: '',
+      tacho: '',
+      elektronik: '',
+      material: '',
+      position: '',
+      geliefert_ueber: '',
+      projekt: '',
+      bemerkungen: ''
+    };
+  }
+
+  function mergeFabListIntoLeistungRows(numbers, existingRows) {
+    var existing = Array.isArray(existingRows) ? existingRows : [];
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < numbers.length; i++) {
+      var fn = String(numbers[i] || '').trim();
+      if (!fn || seen[fn]) continue;
+      seen[fn] = true;
+      var prev = findLeistungRowByFab(existing, fn);
+      if (prev) {
+        out.push({
+          fabrikationsnummer: fn,
+          type: prev.type || '',
+          leistung: prev.leistung || '',
+          nenngeschwindigkeit: prev.nenngeschwindigkeit || '',
+          kraftaufnehmer: prev.kraftaufnehmer || '',
+          dms_nr: prev.dms_nr || '',
+          tacho: prev.tacho || '',
+          elektronik: prev.elektronik || '',
+          material: prev.material || '',
+          position: prev.position || '',
+          geliefert_ueber: prev.geliefert_ueber || '',
+          projekt: prev.projekt || '',
+          bemerkungen: prev.bemerkungen || ''
+        });
+      } else {
+        out.push(emptyLeistungRowTemplate(fn));
+      }
+    }
+    return out;
+  }
+
+  function leistungRowHasVisibleData(r) {
+    if (!r) return false;
+    return !!(r.fabrikationsnummer || r.type || r.leistung || r.position || r.geliefert_ueber || r.projekt || r.bemerkungen);
+  }
+
+  function saveProjektdatenFabrikationsnummernFromRows(rows, hintEl) {
+    var jobId = jobDetailsJobId;
+    if (!jobId) return Promise.reject(new Error('Kein Auftrag'));
+    var arr = (rows || []).filter(leistungRowHasVisibleData);
+    projektdatenFabSaveBusy = true;
+    return api('/api/job', {
+      method: 'PATCH',
+      body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
+    }).then(function () {
+      window.currentProjektdatenLeistungRows = arr;
+      var job = Object.assign({}, window.currentProjektdatenJob || {});
+      job.fabrikationsnummern = JSON.stringify(arr);
+      window.currentProjektdatenJob = job;
+      if (hintEl) {
+        hintEl.textContent = 'Fabrikationsnummern gespeichert.';
+        setTimeout(function () { if (hintEl) hintEl.textContent = ''; }, 2500);
+      }
+      showProjektdatenJob(job);
+    }).finally(function () {
+      projektdatenFabSaveBusy = false;
+    });
+  }
+
+  function applyProjektdatenFabInput() {
+    if (projektdatenFabSaveBusy) return;
+    if (!canEditProjektdatenFabrikationsnummern(window.currentProjektdatenJob)) return;
+    var input = document.getElementById('projektdatenFabrikationsnummern');
+    var hint = document.getElementById('projektdatenFabHint');
+    if (!input) return;
+    var raw = (input.value || '').trim();
+    if (!raw) {
+      return saveProjektdatenFabrikationsnummernFromRows([], hint).catch(function (e) {
+        if (hint) hint.textContent = 'Speichern fehlgeschlagen.';
+        alert('Speichern fehlgeschlagen: ' + (e && e.message ? e.message : String(e)));
+      });
+    }
+    var numbers = parseFabInputSemicolonList(raw);
+    if (numbers.length === 0) {
+      if (hint) hint.textContent = 'Keine gültige Fabrikationsnummer erkannt.';
+      return;
+    }
+    var merged = mergeFabListIntoLeistungRows(numbers, window.currentProjektdatenLeistungRows || []);
+    return saveProjektdatenFabrikationsnummernFromRows(merged, hint).catch(function (e) {
+      if (hint) hint.textContent = 'Speichern fehlgeschlagen.';
+      alert('Speichern fehlgeschlagen: ' + (e && e.message ? e.message : String(e)));
+    });
   }
 
   function renderJobDetailsContent(job) {
@@ -1351,10 +1684,21 @@
 
     html += '<div class="modal-detail-section"><h4>Leistungsdaten (Anlagenstamm)</h4>';
     html += '<p class="modal-leistung-hint muted">' + (readOnlyAngelegt ? 'Nur Anzeige (Auftrag angelegt).' : 'Doppelklick auf eine Anlage öffnet die Anlagendetails.') + '</p>';
+    var fabInputValue = formatFabrikationsnummernInputValue(leistungRows);
+    var fabEditAllowed = canEditProjektdatenFabrikationsnummern(job);
+    if (!fabEditAllowed) {
+      html += '<p class="modal-leistung-fab-display"><strong>Fabrikationsnummern:</strong> ' + (fabInputValue ? escapeHtml(fabInputValue) : '–') + '</p>';
+    } else {
+      html += '<div class="modal-leistung-fab-row">';
+      html += '<label for="projektdatenFabrikationsnummern">Fabrikationsnummern</label>';
+      html += '<input type="text" id="projektdatenFabrikationsnummern" class="modal-leistung-fab-input" autocomplete="off" placeholder="z.B. 11030-32; 5060, 4603" value="' + escapeHtml(fabInputValue) + '" />';
+      html += '<span class="modal-leistung-hint muted" style="margin-top:0.25rem;display:block">Trennzeichen: Komma oder Semikolon. Bereich 100-103 oder Kurzform 11030-32.</span>';
+      html += '<span id="projektdatenFabHint" class="settings-saved-hint" aria-live="polite"></span>';
+      html += '</div>';
+    }
     var visibleIndices = [];
     for (var idx = 0; idx < leistungRows.length; idx++) {
-      var r = leistungRows[idx];
-      if (!r.fabrikationsnummer && !r.type && !r.leistung && !r.geliefert_ueber && !r.projekt && !r.bemerkungen) continue;
+      if (!leistungRowHasVisibleData(leistungRows[idx])) continue;
       visibleIndices.push(idx);
     }
     var useTwoCards = visibleIndices.length > 2;
@@ -1362,7 +1706,7 @@
     var leistungCellClass = readOnlyAngelegt ? 'modal-leistung-cell-readonly' : 'modal-leistung-cell-clickable';
     function renderAnlagenTable(indices) {
       var out = '<div class="modal-leistung-wrap"><table class="modal-leistung-table modal-leistung-table-compact"><thead><tr>';
-      out += '<th>FN</th><th>Type</th><th>Leistung</th>';
+      out += '<th>FN</th><th>Type</th><th>Leistung</th><th>Position</th>';
       out += '</tr></thead><tbody>';
       for (var k = 0; k < indices.length; k++) {
         var i = indices[k];
@@ -1371,6 +1715,7 @@
         out += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCell(row.fabrikationsnummer) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
+        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.position) + '</td>';
         out += '</tr>';
       }
       out += '</tbody></table></div>';
@@ -1386,18 +1731,45 @@
       html += '</div>';
     } else {
       html += '<div class="modal-leistung-wrap"><table class="modal-leistung-table modal-leistung-table-compact"><thead><tr>';
-      html += '<th>FN</th><th>Type</th><th>Leistung</th>';
+      html += '<th>FN</th><th>Type</th><th>Leistung</th><th>Position</th>';
       html += '</tr></thead><tbody id="modalLeistungTbody">';
       for (var i = 0; i < leistungRows.length; i++) {
         var row = leistungRows[i];
-        if (!row.fabrikationsnummer && !row.type && !row.leistung && !row.geliefert_ueber && !row.projekt && !row.bemerkungen) continue;
+        if (!leistungRowHasVisibleData(row)) continue;
         html += '<tr>';
         html += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCell(row.fabrikationsnummer) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
+        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.position) + '</td>';
         html += '</tr>';
       }
       html += '</tbody></table></div>';
+    }
+    html += '</div>';
+    html += '<div class="modal-detail-section projektdaten-projektordner-section" style="margin-top:1rem">';
+    html += '<h4>Projektordner (lokal)</h4>';
+    html += '<p class="modal-leistung-hint muted">Projektordner erscheint nach „Auftrag annehmen“ unter Aufträge.</p>';
+    html += '<div class="dienstreise-explorer-toolbar" style="margin:0.35rem 0">';
+    html += '<span class="dienstreise-explorer-breadcrumb" id="dienstreiseExplorerBreadcrumb" title="Projektordner">Projektordner</span>';
+    html += '</div>';
+    html += '<div id="dienstreiseExplorerList" class="dienstreise-explorer-list" aria-label="Dateien im Projektordner">';
+    html += '<span class="empty" id="dienstreiseExplorerPlaceholder">Noch kein Projektordner – Auftrag unter Aufträge annehmen.</span>';
+    html += '</div>';
+    if (!readOnlyAngelegt) {
+      html += '<div class="settings-row" style="margin-top:0.75rem">';
+      html += '<label>Dokument hochladen</label>';
+      html += '<div class="dienstreise-upload-row">';
+      html += '<select id="dienstreiseUploadSubfolder" class="dienstreise-select">';
+      html += '<option value="Dokumente_Dispo">Dokumente_Dispo</option>';
+      html += '<option value="Dokumente_Monteur">Dokumente_Monteur</option>';
+      html += '<option value="Dokumente_Anlage">Dokumente_Anlage</option>';
+      html += '<option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>';
+      html += '</select>';
+      html += '<input type="file" id="dienstreiseFileInput" accept="*" style="max-width: 220px;" />';
+      html += '<button type="button" class="btn btn-ghost" id="btnDienstreiseUpload">Hochladen</button>';
+      html += '</div>';
+      html += '<span id="dienstreiseUploadHint" class="settings-saved-hint" aria-live="polite"></span>';
+      html += '</div>';
     }
     html += '</div>';
     html += '<div class="modal-detail-section" id="mechanikTedLinksContainer"><h4>Mechanik-Excel (TED)</h4><p class="muted">Wird geladen…</p></div>';
@@ -1755,7 +2127,7 @@
         projekt: (document.getElementById('anlageDetailProjekt') && document.getElementById('anlageDetailProjekt').value) || '',
         bemerkungen: (document.getElementById('anlageDetailBemerkungen') && document.getElementById('anlageDetailBemerkungen').value) || ''
       };
-      var arr = rowsCopy.filter(function (r) { return r && (r.fabrikationsnummer || r.type || r.leistung || r.geliefert_ueber || r.projekt || r.bemerkungen); });
+      var arr = rowsCopy.filter(leistungRowHasVisibleData);
       if (arr.length === 0) arr = rowsCopy;
       api('/api/job', {
         method: 'PATCH',
@@ -1844,9 +2216,26 @@
     });
   }
 
+  function bindProjektdatenFabInput() {
+    var input = document.getElementById('projektdatenFabrikationsnummern');
+    if (!input || input.getAttribute('data-fab-bound') === '1') return;
+    input.setAttribute('data-fab-bound', '1');
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+      }
+    });
+    input.addEventListener('blur', function () {
+      if (projektdatenFabSaveBusy) return;
+      applyProjektdatenFabInput();
+    });
+  }
+
   function bindLeistungActions() {
     var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
+    bindProjektdatenFabInput();
     content.querySelectorAll('.modal-leistung-cell-clickable').forEach(function (td) {
       td.addEventListener('dblclick', function (e) {
         if (e.target && e.target.closest && e.target.closest('.fn-hotel-picker-btn')) return;
@@ -5082,11 +5471,21 @@
           '<div class="job-info"><strong>' + (titleLine || 'Auftrag') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + (j.job_type ? ' · ' + (j.job_type || '') : '') + '</span></div>' +
           '<div class="job-actions">' +
           '<span class="status-badge status-' + stClass + '">' + escapeHtml(stLabel) + '</span>' +
+          (jobCanAcceptJob(j) ? '<button type="button" class="btn btn-primary" data-action="accept-job">Auftrag annehmen</button>' : '') +
           (j.status !== 'erledigt' && String(j.status || '').toLowerCase() !== 'abgerechnet' && !isJobAngelegtReadOnly(j) ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
           '</div></div>';
       }).join('');
       listEl.innerHTML = html;
       if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+      listEl.querySelectorAll('.job-actions [data-action="accept-job"]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var jobId = parseInt(btn.closest('.job').getAttribute('data-job-id'), 10);
+          if (!jobId) return;
+          selectedJobIdOnDienstreisePage = jobId;
+          runAcceptJobStream(jobId);
+        });
+      });
       listEl.querySelectorAll('.job-actions [data-status]').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
           e.stopPropagation();
@@ -5118,171 +5517,12 @@
     });
   }
 
-  document.getElementById('btnDienstreiseCopyProject').addEventListener('click', function () {
-    var localJobId = jobDetailsJobId || selectedJobIdOnDienstreisePage;
-    var snapCopy = localJobId ? getDienstreiseJobSnapshotByLocalId(localJobId) : null;
-    if (isJobAngelegtReadOnly(snapCopy)) {
-      var h0 = document.getElementById('dienstreiseCopyHint');
-      if (h0) h0.textContent = 'Auftrag ist angelegt – nur Anzeige.';
-      return;
-    }
-    var hint = document.getElementById('dienstreiseCopyHint');
-    var progressWrap = document.getElementById('dienstreiseCopyProgressWrap');
-    var progressBar = document.getElementById('dienstreiseCopyProgress');
-    var progressLabel = document.getElementById('dienstreiseCopyProgressLabel');
-    if (!localJobId) {
-      hint.textContent = 'Bitte einen Auftrag öffnen (Doppelklick auf Auftrag oder Kalenderbalken).';
-      return;
-    }
-    hint.textContent = '';
-    if (progressWrap) progressWrap.style.display = 'block';
-    if (progressBar) { progressBar.value = 0; progressBar.max = 100; }
-    if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
-    var btn = document.getElementById('btnDienstreiseCopyProject');
-    if (btn) btn.disabled = true;
-    var includeBilderEl = document.getElementById('dienstreiseCopyIncludeBilder');
-    var includeBilder = includeBilderEl && includeBilderEl.checked;
-    var body = {
-      job_id: localJobId,
-      dispoBaseUrl: getDispoBaseUrl(),
-      technicianId: getTechId(),
-      dispoUsername: getDispoUsername(),
-      dispoPassword: getDispoPassword(),
-      include_bilder: includeBilder
-    };
-    var copyTimeoutMs = 600000; // 10 Min – große Projektordner / langsame Verbindung
-    var copyTimeoutId = setTimeout(function () {
-      copyTimeoutId = null;
-      var wrap = document.getElementById('dienstreiseCopyProgressWrap');
-      var b = document.getElementById('btnDienstreiseCopyProject');
-      var lbl = document.getElementById('dienstreiseCopyProgressLabel');
-      var h = document.getElementById('dienstreiseCopyHint');
-      if (wrap) wrap.style.display = 'none';
-      if (b) b.disabled = false;
-      if (lbl) lbl.textContent = '';
-      if (h) { h.textContent = 'Zeitüberschreitung – Dispo-Antwort kam nicht. Bitte erneut versuchen.'; setTimeout(function () { var x = document.getElementById('dienstreiseCopyHint'); if (x) x.textContent = ''; }, 5000); }
-    }, copyTimeoutMs);
-
-    fetch(API_BASE + '/api/dienstreise/copy_project_stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }).then(function (response) {
-      if (!response.ok) {
-        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
-        return response.json().then(function (data) {
-          throw new Error(data.error || 'Fehler ' + response.status);
-        }).catch(function () { throw new Error('Fehler ' + response.status); });
-      }
-      var ctPeek = (response.headers.get('content-type') || '').toLowerCase();
-      if (ctPeek.indexOf('json') !== -1 && ctPeek.indexOf('ndjson') === -1) {
-        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
-        return response.json().then(function (data) {
-          var msg = (data && data.error) ? String(data.error) : '';
-          throw new Error(msg || 'Server hat JSON statt Datenstrom gesendet (Projektordner holen).');
-        }).catch(function (e) {
-          if (e instanceof Error && e.message) throw e;
-          throw new Error('Antwort konnte nicht gelesen werden.');
-        });
-      }
-      if (!response.body || typeof response.body.getReader !== 'function') {
-        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
-        return response.text().then(function (t) {
-          throw new Error(t ? t.slice(0, 200) : 'Kein Stream-Datenstrom (Projektordner holen).');
-        });
-      }
-      var reader = response.body.getReader();
-      var decoder = new TextDecoder();
-      var buffer = '';
-      var completed = false;
-      var hadError = false;
-      function finish() {
-        if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
-        var wrap = document.getElementById('dienstreiseCopyProgressWrap');
-        var lbl = document.getElementById('dienstreiseCopyProgressLabel');
-        var b = document.getElementById('btnDienstreiseCopyProject');
-        if (wrap) wrap.style.display = 'none';
-        if (b) b.disabled = false;
-        if (lbl) lbl.textContent = '';
-      }
-      function processLine(line) {
-        line = line.trim();
-        if (!line) return;
-        var data;
-        try { data = JSON.parse(line); } catch (e) { return; }
-        if (data.ok === false && data.error && !data.phase) {
-          hadError = true;
-          finish();
-          var hApi = document.getElementById('dienstreiseCopyHint');
-          if (hApi) hApi.textContent = String(data.error);
-          return;
-        }
-        if (data.phase === 'refresh') {
-          if (progressLabel) progressLabel.textContent = 'Dispo wird aktualisiert …';
-        } else if (data.phase === 'refresh_done') {
-          if (progressLabel) progressLabel.textContent = 'Lade auf Laptop …';
-        } else if (data.phase === 'download' && data.total != null) {
-          if (progressBar) progressBar.max = data.total;
-          if (progressBar) progressBar.value = 0;
-        } else if (data.phase === 'file' && data.total != null) {
-          if (progressBar) progressBar.value = data.current || 0;
-          if (progressLabel && data.total > 0) progressLabel.textContent = 'Lade ' + (data.current || 0) + ' / ' + data.total;
-        } else if (data.phase === 'done') {
-          completed = true;
-          finish();
-          var h = document.getElementById('dienstreiseCopyHint');
-          if (h) h.textContent = (data.message != null && String(data.message).trim()) ? String(data.message).trim() : 'Fertig.';
-          if (getDienstreiseExplorerJobId()) loadDienstreiseExplorer(getDienstreiseExplorerJobId(), dienstreiseExplorerSubpath);
-          setTimeout(function () { var x = document.getElementById('dienstreiseCopyHint'); if (x) x.textContent = ''; }, 3000);
-        } else if (data.phase === 'error') {
-          hadError = true;
-          finish();
-          var hErr = document.getElementById('dienstreiseCopyHint');
-          if (hErr) hErr.textContent = data.error || 'Fehler.';
-        }
-      }
-      function readNext() {
-        return reader.read().then(function (result) {
-          if (result.value && result.value.length > 0) {
-            buffer += decoder.decode(result.value, { stream: !result.done });
-            var lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-            lines.forEach(function (line) {
-              try { processLine(line); } catch (e) { /* Einzelne Zeile ignorieren */ }
-            });
-          }
-          if (result.done) {
-            if (buffer.trim()) try { processLine(buffer); } catch (e) { }
-            finish();
-            if (!completed && !hadError) {
-              var hDone = document.getElementById('dienstreiseCopyHint');
-              if (hDone) hDone.textContent = 'Fertig.';
-              if (getDienstreiseExplorerJobId()) loadDienstreiseExplorer(getDienstreiseExplorerJobId(), dienstreiseExplorerSubpath);
-              setTimeout(function () { var x = document.getElementById('dienstreiseCopyHint'); if (x) x.textContent = ''; }, 3000);
-            }
-            return;
-          }
-          return readNext();
-        });
-      }
-      return readNext().catch(function (streamErr) {
-        finish();
-        hint.textContent = streamErr && streamErr.message ? streamErr.message : 'Verbindung abgebrochen.';
-      });
-    }).catch(function (err) {
-      if (copyTimeoutId) { clearTimeout(copyTimeoutId); copyTimeoutId = null; }
-      var wrap = document.getElementById('dienstreiseCopyProgressWrap');
-      var b = document.getElementById('btnDienstreiseCopyProject');
-      var lbl = document.getElementById('dienstreiseCopyProgressLabel');
-      var h = document.getElementById('dienstreiseCopyHint');
-      if (wrap) wrap.style.display = 'none';
-      if (b) b.disabled = false;
-      if (lbl) lbl.textContent = '';
-      if (h) h.textContent = err && err.message ? err.message : 'Fehler beim Kopieren.';
-    });
-  });
-
-  document.getElementById('btnDienstreiseUpload').addEventListener('click', function () {
+  (function initDienstreiseUploadDelegation() {
+    var root = document.getElementById('viewProjektdaten');
+    if (!root) return;
+    root.addEventListener('click', function (e) {
+      var btn = e.target.closest('#btnDienstreiseUpload');
+      if (!btn || btn.disabled) return;
     var localJobId = getDienstreiseExplorerJobId();
     var snapUp = localJobId ? getDienstreiseJobSnapshotByLocalId(localJobId) : null;
     if (isJobAngelegtReadOnly(snapUp)) {
@@ -5294,9 +5534,9 @@
     var sub = subfolder && subfolder.value ? subfolder.value : 'Dokumente_Monteur';
     var fileInput = document.getElementById('dienstreiseFileInput');
     var hint = document.getElementById('dienstreiseUploadHint');
-    if (!localJobId) { hint.textContent = 'Bitte einen Auftrag öffnen (Doppelklick auf Auftrag oder Kalenderbalken).'; return; }
+    if (!localJobId) { if (hint) hint.textContent = 'Bitte einen Auftrag öffnen (Doppelklick auf Auftrag oder Kalenderbalken).'; return; }
     if (!fileInput || !fileInput.files || !fileInput.files[0]) {
-      hint.textContent = 'Bitte eine Datei wählen.';
+      if (hint) hint.textContent = 'Bitte eine Datei wählen.';
       return;
     }
     var file = fileInput.files[0];
@@ -5346,7 +5586,8 @@
       });
     };
     reader.readAsDataURL(file);
-  });
+    });
+  })();
 
   document.getElementById('btnViewStart').addEventListener('click', () => showView('start'));
   document.getElementById('btnViewDienstreise').addEventListener('click', () => showView('dienstreise'));
