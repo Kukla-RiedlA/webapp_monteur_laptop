@@ -2603,7 +2603,7 @@
         tr.classList.add('projektdaten-fn-row-selected');
         var fabCell = tr.querySelector('[data-fab]');
         var fabVal = fabCell ? String(fabCell.getAttribute('data-fab') || '').trim() : '';
-        loadProjekteNeuTreeIntoHost(fabVal, { msgEl: msgEl, treeHost: treeHost });
+        loadProjekteNeuTreeIntoHost(fabVal, { msgEl: msgEl, treeHost: treeHost, jobId: jobDetailsJobId });
       });
     }
     bindProjektdatenFabInput();
@@ -2626,7 +2626,7 @@
         firstRow.classList.add('projektdaten-fn-row-selected');
         var fc = firstRow.querySelector('[data-fab]');
         var fv = fc ? String(fc.getAttribute('data-fab') || '').trim() : '';
-        loadProjekteNeuTreeIntoHost(fv, { msgEl: msgElInit, treeHost: treeHostInit });
+        loadProjekteNeuTreeIntoHost(fv, { msgEl: msgElInit, treeHost: treeHostInit, jobId: jobDetailsJobId });
       } else {
         msgElInit.textContent = '';
         treeHostInit.innerHTML = '';
@@ -4815,27 +4815,43 @@
     return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].indexOf(ext) >= 0;
   }
 
+  function resolveProjekteNeuJobId(opts) {
+    opts = opts || {};
+    if (opts.jobId != null && opts.jobId !== '') return parseInt(opts.jobId, 10) || null;
+    if (typeof jobDetailsJobId !== 'undefined' && jobDetailsJobId) return jobDetailsJobId;
+    if (typeof getDienstreiseExplorerJobId === 'function') {
+      var ex = getDienstreiseExplorerJobId();
+      if (ex) return ex;
+    }
+    return null;
+  }
+
   function fetchProjekteNeuFileBlob(fab, relPath, opts) {
     opts = opts || {};
     var technicianId = getTechId();
-    return fetch(API_BASE + '/api/anlagenstamm_file_download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
-      body: JSON.stringify({
-        baseUrl: getDispoBaseUrl(),
-        fab: fab,
-        source: 'projekte_neu',
-        path: relPath,
-        serverUsername: getServerUsername(),
-        serverPassword: getServerPassword(),
-        thumb: !!opts.thumb,
-        thumbMax: opts.thumbMax || 256,
-        inline: !!opts.inline
-      })
-    }).then(function (resp) {
+    var jobId = resolveProjekteNeuJobId(opts);
+    function fetchLocal() {
+      if (!jobId) {
+        return fetch(API_BASE + '/api/anlagenstamm/projekte_neu_resolve_local?fab=' + encodeURIComponent(fab), {
+          headers: { 'X-Technician-Id': String(technicianId || '') }
+        }).then(function (r) { return r.json(); }).then(function (j) {
+          if (j && j.found && j.job_id) jobId = j.job_id;
+          return jobId;
+        });
+      }
+      return Promise.resolve(jobId);
+    }
+    function fetchBlobFromUrl(url) {
+      return fetch(url, { headers: { 'X-Technician-Id': String(technicianId || '') } }).then(function (resp) {
+        return handleProjekteNeuFileResponse(resp, opts);
+      });
+    }
+    function handleProjekteNeuFileResponse(resp, opts) {
       if (!resp.ok) {
         return resp.json().catch(function () { return {}; }).then(function (j) {
-          throw new Error((j && j.error) ? j.error : ('HTTP ' + resp.status));
+          var err = new Error((j && j.error) ? j.error : ('HTTP ' + resp.status));
+          err.localUnavailable = resp.status === 404 || (j && j.error === 'local_unavailable');
+          throw err;
         });
       }
       return resp.blob().then(function (blob) {
@@ -4847,13 +4863,46 @@
           var hdrCt = normMime(resp.headers.get('content-type'));
           var blobCt = normMime(blob.type);
           var ct = hdrCt || blobCt;
-          // Proxys/Express koennen echte Bilder als application/octet-stream ausliefern — nicht verwerfen.
           if (ct.indexOf('application/json') === 0 || ct.indexOf('text/html') === 0 || ct.indexOf('text/plain') === 0) {
             throw new Error('thumb_not_image');
           }
         }
         return blob;
       });
+    }
+    return fetchLocal().then(function (resolvedJobId) {
+      if (resolvedJobId) {
+        var q = 'job_id=' + encodeURIComponent(resolvedJobId) + '&fab=' + encodeURIComponent(fab) +
+          '&path=' + encodeURIComponent(relPath);
+        if (opts.thumb) q += '&thumb=1&thumbMax=' + encodeURIComponent(String(opts.thumbMax || 256));
+        if (opts.inline) q += '&inline=1';
+        return fetchBlobFromUrl(API_BASE + '/api/dienstreise/projekte_neu_file?' + q).catch(function (err) {
+          if (!err || !err.localUnavailable) throw err;
+          return fetchDispoProjekteNeuFileBlob(fab, relPath, opts, technicianId);
+        });
+      }
+      return fetchDispoProjekteNeuFileBlob(fab, relPath, opts, technicianId);
+    });
+  }
+
+  function fetchDispoProjekteNeuFileBlob(fab, relPath, opts, technicianId) {
+    return fetch(API_BASE + '/api/anlagenstamm_file_download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
+      body: JSON.stringify({
+        baseUrl: getDispoBaseUrl(),
+        fab: fab,
+        source: 'projekte_neu',
+        path: relPath,
+        job_id: resolveProjekteNeuJobId(opts),
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword(),
+        thumb: !!opts.thumb,
+        thumbMax: opts.thumbMax || 256,
+        inline: !!opts.inline
+      })
+    }).then(function (resp) {
+      return handleProjekteNeuFileResponse(resp, opts);
     });
   }
 
@@ -5025,30 +5074,53 @@
     var msg = opts.msgEl || null;
     var treeHost = opts.treeHost || null;
     var toggleEl = opts.toggleEl != null ? opts.toggleEl : null;
+    var technicianId = getTechId();
     if (!treeHost) return;
     if (!fab) {
       if (msg) msg.textContent = 'Keine Fabrikationsnummer vorhanden.';
       treeHost.innerHTML = '';
       return;
     }
-    if (!getDispoExternalUrl() && !getDispoInternalUrl()) {
-      if (msg) msg.textContent = 'Dispo-Adresse (extern oder intern) fehlt.';
-      treeHost.innerHTML = '';
-      return;
-    }
     if (msg) msg.textContent = 'Lade Struktur…';
     treeHost.innerHTML = '';
+    function renderTree(tree, statusText) {
+      treeHost.innerHTML = '';
+      if (tree && tree.length) {
+        treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, tree, 0, msg));
+        if (msg) msg.textContent = statusText || 'Lokale Projektdateien (nach Auftragsübernahme).';
+      } else if (msg) {
+        msg.textContent = statusText || 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
+      }
+      if (toggleEl) toggleEl.setAttribute('data-loaded', '1');
+    }
     try {
+      var jobId = resolveProjekteNeuJobId(opts);
+      if (!jobId) {
+        var resolved = await fetch(API_BASE + '/api/anlagenstamm/projekte_neu_resolve_local?fab=' + encodeURIComponent(fab), {
+          headers: { 'X-Technician-Id': String(technicianId || '') }
+        }).then(function (r) { return r.json().catch(function () { return {}; }); });
+        if (resolved && resolved.found && resolved.job_id) jobId = resolved.job_id;
+      }
+      if (jobId) {
+        var localTree = await fetch(
+          API_BASE + '/api/dienstreise/projekte_neu_tree?job_id=' + encodeURIComponent(jobId) + '&fab=' + encodeURIComponent(fab),
+          { headers: { 'X-Technician-Id': String(technicianId || '') } }
+        ).then(function (r) { return r.json().catch(function () { return {}; }); });
+        if (localTree && localTree.ok && localTree.enabled && Array.isArray(localTree.tree) && localTree.tree.length) {
+          return renderTree(localTree.tree, 'Lokale Kopie aus Dienstreise-Ordner.');
+        }
+      }
       var cached = await fetch(API_BASE + '/api/anlagenstamm_tree_cached?fab=' + encodeURIComponent(fab), {
-        headers: { 'X-Technician-Id': String(getTechId() || '') }
+        headers: { 'X-Technician-Id': String(technicianId || '') }
       }).then(function (r) { return r.json().catch(function () { return {}; }); }).catch(function () { return {}; });
       var cachedTree = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
-      var usedCache = cached && cached.found && (cached.projects_enabled === true || cached.projects_enabled === 1);
-      if (usedCache && cachedTree.length) {
-        treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, cachedTree, 0, msg));
-        if (msg) msg.textContent = 'Aus lokalem Cache geladen. Aktualisierung läuft…';
+      if (cachedTree.length) {
+        renderTree(cachedTree, 'Aus lokalem Cache (Stand nach letztem Download).');
       }
-
+      if (!getDispoExternalUrl() && !getDispoInternalUrl()) {
+        if (!cachedTree.length && msg) msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten. Dispo-Adresse fehlt für Online-Aktualisierung.';
+        return;
+      }
       const payload = {
         baseUrl: getDispoBaseUrl(),
         fab: fab,
@@ -5058,22 +5130,19 @@
       const files = await api('/api/anlagenstamm_files_list', { method: 'POST', body: JSON.stringify(payload) });
       const pnRaw = files && files.projekte_neu ? files.projekte_neu : {};
       if (!pnRaw || !pnRaw.enabled) {
-        if (!usedCache || !cachedTree.length) {
+        if (!cachedTree.length) {
           if (msg) msg.textContent = 'PROJEKTE NEU ist für diese Anlage nicht verfügbar.';
         }
         return;
       }
       const tree = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
       if (!tree.length) {
-        if (!usedCache || !cachedTree.length) {
+        if (!cachedTree.length) {
           if (msg) msg.textContent = 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
         }
         return;
       }
-      treeHost.innerHTML = '';
-      treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, tree, 0, msg));
-      if (msg) msg.textContent = 'Datei per Klick lokal öffnen (lokal gespeichert/synchronisiert).';
-      if (toggleEl) toggleEl.setAttribute('data-loaded', '1');
+      renderTree(tree, 'Online vom Server (Fallback).');
     } catch (e) {
       if (msg) msg.textContent = 'Fehler: ' + ((e && e.message) ? e.message : String(e));
     }

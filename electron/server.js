@@ -24,6 +24,21 @@ const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCor
 const { ensureBackgroundJobsSchema, createBackgroundJobService } = require('./lib/background_jobs');
 const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
 const { buildDispoBaseCandidates } = require('./lib/dispo-base-fallback');
+const {
+  resolveProjekteNeuRoot,
+  scanProjekteNeuTree,
+  safeResolveUnderRoot,
+} = require('./lib/projekte-neu-local');
+const {
+  ensureAnlagenstammLocalSchema,
+  rowCount: anlagenstammLocalRowCount,
+  searchLocal: anlagenstammSearchLocal,
+  lookupByFab: anlagenstammLookupByFab,
+  getRowsByFabs: anlagenstammGetRowsByFabs,
+  saveLocal: anlagenstammSaveLocal,
+  syncAnlagenstammFromDispo,
+  uploadCachePath,
+} = require('./lib/anlagenstamm-local');
 
 /** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). */
 function writeFileWithRetry(filePath, data, maxRetries = 3) {
@@ -279,6 +294,11 @@ async function getDb() {
   } catch (e) { /* existiert evtl. */ }
   try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_tree_cache_synced ON anlagenstamm_tree_cache(synced_at)'); } catch (e) { /* ignore */ }
   try {
+    ensureAnlagenstammLocalSchema(sqlDb);
+  } catch (e) {
+    console.warn('[anlagenstamm_local] schema:', e && e.message ? e.message : e);
+  }
+  try {
     sqlDb.run("UPDATE jobs SET status = 'angelegt' WHERE LOWER(COALESCE(status, '')) = 'geplant'");
     const n = typeof sqlDb.getRowsModified === 'function' ? sqlDb.getRowsModified() : 0;
     if (n > 0) {
@@ -445,6 +465,8 @@ function createApp(db) {
       capabilities: {
         anlagenstamm_search: true,
         anlagenstamm_save: true,
+        anlagenstamm_local_sync: true,
+        projekte_neu_local: true,
       },
     });
   });
@@ -878,6 +900,160 @@ function createApp(db) {
       res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Dateiliste konnte nicht gelesen werden.' });
+    }
+  });
+
+  function getProjekteNeuLocalContext(localJobId, fab) {
+    const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+    if (!reiseDir) return null;
+    const dm = path.join(reiseDir, 'Dokumente_Monteur');
+    const resolved = resolveProjekteNeuRoot(dm, fab);
+    if (!resolved) return null;
+    return { reiseDir, dm, resolved };
+  }
+
+  function cacheProjekteNeuTreesForJob(localJobId) {
+    const jobRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
+    if (!jobRow) return;
+    const ctxBase = getOrCreateDienstreiseFolderForJob(localJobId);
+    if (!ctxBase || !fs.existsSync(ctxBase)) return;
+    const dm = path.join(ctxBase, 'Dokumente_Monteur');
+    const fabs = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern);
+    for (const fabNum of fabs) {
+      const fab = String(fabNum);
+      const resolved = resolveProjekteNeuRoot(dm, fab);
+      if (!resolved) continue;
+      const scanned = scanProjekteNeuTree(resolved.root);
+      upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
+    }
+    save();
+  }
+
+  function resolveLocalJobIdForFab(technicianId, fab) {
+    const fabNorm = String(fab || '').trim();
+    if (!fabNorm || !technicianId) return null;
+    const jobs = db
+      .prepare(
+        `SELECT j.id FROM jobs j
+         WHERE EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+         ORDER BY j.id DESC`,
+      )
+      .all(technicianId);
+    let bestId = null;
+    let bestTs = 0;
+    for (const row of jobs) {
+      const jid = row.id;
+      const ctx = getProjekteNeuLocalContext(jid, fabNorm);
+      if (!ctx) continue;
+      const pull = db
+        .prepare(
+          `SELECT updated_at FROM background_jobs
+           WHERE type = 'dienstreise_pull' AND status = 'done'
+             AND dedupe_key LIKE ? ORDER BY updated_at DESC LIMIT 1`,
+        )
+        .get('dienstreise_pull:' + jid + ':%');
+      const ts = pull && pull.updated_at ? Date.parse(String(pull.updated_at).replace(' ', 'T') + 'Z') : 0;
+      if (!bestId || ts >= bestTs) {
+        bestId = jid;
+        bestTs = ts || Date.now();
+      }
+    }
+    return bestId;
+  }
+
+  app.get('/api/dienstreise/projekte_neu_tree', (req, res) => {
+    try {
+      const jobId = parseInt(req.query.job_id, 10);
+      const fab = String(req.query.fab || '').trim();
+      if (!jobId || !fab) return res.status(400).json({ ok: false, error: 'job_id und fab erforderlich.' });
+      const ctx = getProjekteNeuLocalContext(jobId, fab);
+      if (!ctx) {
+        return res.json({ ok: true, local: false, enabled: false, tree: [], message: 'Kein lokaler PROJEKTE-NEU-Ordner für diese FN.' });
+      }
+      const scanned = scanProjekteNeuTree(ctx.resolved.root);
+      upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
+      save();
+      return res.json({
+        ok: true,
+        local: true,
+        enabled: true,
+        tree: scanned.tree,
+        truncated: scanned.truncated,
+        folder: ctx.resolved.folderName,
+        job_id: jobId,
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get('/api/anlagenstamm/projekte_neu_resolve_local', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const fab = String(req.query.fab || '').trim();
+      if (!technicianId || !fab) return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+      const jobId = resolveLocalJobIdForFab(technicianId, fab);
+      if (!jobId) {
+        return res.json({ ok: true, found: false, job_id: null });
+      }
+      return res.json({ ok: true, found: true, job_id: jobId });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get('/api/dienstreise/projekte_neu_file', async (req, res) => {
+    try {
+      const jobId = parseInt(req.query.job_id, 10);
+      const fab = String(req.query.fab || '').trim();
+      const relPath = String(req.query.path || '').trim();
+      const wantThumb = String(req.query.thumb || '').toLowerCase() === '1' || req.query.thumb === 'true';
+      const wantInline = String(req.query.inline || '').toLowerCase() === '1' || req.query.inline === 'true';
+      let thumbMax = parseInt(req.query.thumbMax || req.query.thumb_max, 10);
+      if (!Number.isFinite(thumbMax)) thumbMax = 256;
+      thumbMax = Math.min(512, Math.max(64, thumbMax));
+      if (!jobId || !fab || !relPath) {
+        return res.status(400).json({ ok: false, error: 'job_id, fab und path erforderlich.' });
+      }
+      const ctx = getProjekteNeuLocalContext(jobId, fab);
+      if (!ctx) return res.status(404).json({ ok: false, error: 'local_unavailable', message: 'Kein lokaler Ordner.' });
+      const filePath = safeResolveUnderRoot(ctx.resolved.root, relPath);
+      if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        return res.status(404).json({ ok: false, error: 'Datei nicht gefunden.' });
+      }
+      const baseName = path.basename(filePath);
+      if (wantThumb) {
+        try {
+          const sharp = require('sharp');
+          const buf = await sharp(filePath).rotate().resize(thumbMax, thumbMax, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
+          res.setHeader('Content-Type', 'image/webp');
+          res.setHeader('Content-Length', String(buf.length));
+          return res.send(buf);
+        } catch (thumbErr) {
+          return res.status(415).json({ ok: false, error: thumbErr.message || 'thumb_not_image' });
+        }
+      }
+      const buf = fs.readFileSync(filePath);
+      const ext = path.extname(baseName).toLowerCase();
+      const mimeMap = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.pdf': 'application/pdf',
+      };
+      const ct = mimeMap[ext] || 'application/octet-stream';
+      res.setHeader('Content-Type', ct);
+      res.setHeader(
+        'Content-Disposition',
+        (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+      );
+      res.setHeader('Content-Length', String(buf.length));
+      return res.send(buf);
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -2057,9 +2233,17 @@ function createApp(db) {
 
   app.post('/api/anlagenstamm_from_dispo', express.json(), async (req, res) => {
     const { baseUrl, fabs } = req.body || {};
-    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
     const list = Array.isArray(fabs) ? fabs.filter((x) => x != null && String(x).trim() !== '').map((x) => String(x).trim()) : [];
-    if (!base || list.length === 0) {
+    if (list.length === 0) {
+      return res.status(400).json({ ok: false, error: 'fabs (Array) erforderlich.' });
+    }
+    ensureAnlagenstammLocalSchema(db);
+    const localRows = anlagenstammGetRowsByFabs(db, list);
+    if (localRows.length > 0 && anlagenstammLocalRowCount(db) > 0) {
+      return res.json({ ok: true, data: localRows, _source: 'local' });
+    }
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!base) {
       return res.status(400).json({ ok: false, error: 'baseUrl und fabs (Array) erforderlich.' });
     }
     const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
@@ -2078,10 +2262,20 @@ function createApp(db) {
 
   app.post('/api/anlagenstamm_lookup', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
-    const { baseUrl, fab, serverUsername, serverPassword } = req.body || {};
-    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const { baseUrl, fab, serverUsername, serverPassword, force_online: forceOnline } = req.body || {};
     const fabValue = (fab || '').toString().trim();
-    if (!technicianId || !base || !fabValue) {
+    if (!technicianId || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+    }
+    ensureAnlagenstammLocalSchema(db);
+    if (!forceOnline && anlagenstammLocalRowCount(db) > 0) {
+      const row = anlagenstammLookupByFab(db, fabValue);
+      if (row) {
+        return res.json({ ok: true, row, _source: 'local' });
+      }
+    }
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!base) {
       return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
@@ -2101,12 +2295,24 @@ function createApp(db) {
     const technicianId =
       getTechnicianId(req) ??
       (body.technician_id != null ? parseInt(String(body.technician_id), 10) : null);
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+    }
+    ensureAnlagenstammLocalSchema(db);
+    const forceOnline =
+      body.force_online === true ||
+      body.force_online === 1 ||
+      String(body.force_online || '').toLowerCase() === 'true';
+    if (!forceOnline && anlagenstammLocalRowCount(db) > 0) {
+      const local = anlagenstammSearchLocal(db, body);
+      if (local.ok) return res.json(local);
+    }
     const hasBase = buildDispoBaseCandidates({
       baseUrl: body.baseUrl,
       externalUrl: body.externalUrl,
       internalUrl: body.internalUrl,
     }).length > 0;
-    if (!technicianId || !hasBase) {
+    if (!hasBase) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
     try {
@@ -2130,28 +2336,63 @@ function createApp(db) {
     const technicianId =
       getTechnicianId(req) ??
       (body.technician_id != null ? parseInt(String(body.technician_id), 10) : null);
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+    }
+    ensureAnlagenstammLocalSchema(db);
+    const localResult = anlagenstammSaveLocal(db, body);
+    if (!localResult.ok) {
+      return res.status(400).json(localResult);
+    }
+    const entityId = localResult.id > 0 ? localResult.id : String(localResult.fabrikationsnummer || '').trim();
+    db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
+      'anlagenstamm',
+      entityId,
+      'save',
+      JSON.stringify(
+        Object.assign({}, body, {
+          id: localResult.id,
+          fabrikationsnummer: localResult.fabrikationsnummer,
+          serverUsername: body.serverUsername,
+          serverPassword: body.serverPassword,
+          baseUrl: body.baseUrl,
+          externalUrl: body.externalUrl,
+          internalUrl: body.internalUrl,
+          technician_id: technicianId,
+        }),
+      ),
+    );
+    save();
     const hasBaseSave = buildDispoBaseCandidates({
       baseUrl: body.baseUrl,
       externalUrl: body.externalUrl,
       internalUrl: body.internalUrl,
     }).length > 0;
-    if (!technicianId || !hasBaseSave) {
-      return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
-    }
-    try {
-      const data = await proxyAnlagenstammSave(Object.assign({}, body, { technician_id: technicianId }));
-      if (data && data.ok === false) {
-        const code = Number(data._httpStatus) >= 400 ? Number(data._httpStatus) : 502;
-        const out = Object.assign({}, data);
-        delete out._httpStatus;
-        return res.status(code).json(out);
+    if (hasBaseSave) {
+      try {
+        const data = await proxyAnlagenstammSave(Object.assign({}, body, { technician_id: technicianId, id: localResult.id }));
+        if (data && data.ok !== false) {
+          if (data.id) {
+            db.prepare('UPDATE anlagenstamm_local SET id = ?, dirty = 0 WHERE fabrikationsnummer = ?').run(
+              parseInt(data.id, 10),
+              localResult.fabrikationsnummer,
+            );
+          } else {
+            db.prepare('UPDATE anlagenstamm_local SET dirty = 0 WHERE fabrikationsnummer = ?').run(localResult.fabrikationsnummer);
+          }
+          db.prepare(
+            `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`,
+          ).run(entityId);
+          save();
+          const ok = Object.assign({}, data);
+          delete ok._httpStatus;
+          return res.json(ok);
+        }
+      } catch (_) {
+        /* offline: pending bleibt */
       }
-      const ok = Object.assign({}, data);
-      delete ok._httpStatus;
-      res.json(ok);
-    } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
     }
+    res.json({ ok: true, id: localResult.id, pending_sync: true, _source: 'local' });
   });
 
   app.post('/api/anlagenstamm_files_list', express.json(), async (req, res) => {
@@ -2212,7 +2453,8 @@ function createApp(db) {
       serverPassword,
       thumb: thumbRaw,
       thumbMax: thumbMaxRaw,
-      inline: inlineRaw
+      inline: inlineRaw,
+      job_id: jobIdRaw,
     } = req.body || {};
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
     const fabValue = (fab || '').toString().trim();
@@ -2230,7 +2472,58 @@ function createApp(db) {
     let thumbMax = parseInt(thumbMaxRaw, 10);
     if (!Number.isFinite(thumbMax)) thumbMax = 256;
     thumbMax = Math.min(512, Math.max(64, thumbMax));
-    if (!technicianId || !base || !fabValue) {
+    if (!technicianId || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+    }
+    if (sourceNorm === 'projekte_neu' && pnPath) {
+      let localJobId = parseInt(jobIdRaw, 10);
+      if (!localJobId) localJobId = resolveLocalJobIdForFab(technicianId, fabValue);
+      if (localJobId) {
+        const ctx = getProjekteNeuLocalContext(localJobId, fabValue);
+        if (ctx) {
+          const filePath = safeResolveUnderRoot(ctx.resolved.root, pnPath);
+          if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+            try {
+              if (wantThumb) {
+                const sharp = require('sharp');
+                const buf = await sharp(filePath)
+                  .rotate()
+                  .resize(thumbMax, thumbMax, { fit: 'inside', withoutEnlargement: true })
+                  .webp({ quality: 82 })
+                  .toBuffer();
+                res.setHeader('Content-Type', 'image/webp');
+                res.setHeader('Content-Length', String(buf.length));
+                return res.send(buf);
+              }
+              const buf = fs.readFileSync(filePath);
+              const baseName = path.basename(filePath);
+              res.setHeader('Content-Type', 'application/octet-stream');
+              res.setHeader(
+                'Content-Disposition',
+                (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+              );
+              res.setHeader('Content-Length', String(buf.length));
+              return res.send(buf);
+            } catch (localErr) {
+              if (wantThumb) {
+                return res.status(415).json({ ok: false, error: localErr.message || 'thumb_not_image' });
+              }
+            }
+          }
+        }
+      }
+    }
+    if (sourceNorm !== 'projekte_neu' && fileValue) {
+      const cacheFile = uploadCachePath(DB_DIR, fabValue, fileValue);
+      if (fs.existsSync(cacheFile) && fs.statSync(cacheFile).isFile()) {
+        const buf = fs.readFileSync(cacheFile);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', 'inline; filename="' + encodeURIComponent(fileValue) + '"');
+        res.setHeader('Content-Length', String(buf.length));
+        return res.send(buf);
+      }
+    }
+    if (!base) {
       return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
@@ -2264,6 +2557,14 @@ function createApp(db) {
       const fallbackFn = sourceNorm === 'projekte_neu'
         ? (pnPath.split(/[/\\]/).pop() || 'download')
         : fileValue;
+      if (sourceNorm !== 'projekte_neu' && fileValue && buf.length) {
+        try {
+          const cacheFile = uploadCachePath(DB_DIR, fabValue, fileValue);
+          const cacheDir = path.dirname(cacheFile);
+          if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+          fs.writeFileSync(cacheFile, buf);
+        } catch (_) {}
+      }
       const cd = r.headers.get('content-disposition') || ('attachment; filename="' + encodeURIComponent(fallbackFn) + '"');
       res.setHeader('Content-Type', ct);
       res.setHeader('Content-Disposition', cd);
@@ -3868,6 +4169,11 @@ function createApp(db) {
           } else {
             mergeCheckpoint({ finalize_done: true, empty_copy: true });
           }
+          try {
+            cacheProjekteNeuTreesForJob(localJobId);
+          } catch (cacheErr) {
+            console.warn('[dienstreise_pull] projekte_neu cache:', cacheErr && cacheErr.message ? cacheErr.message : cacheErr);
+          }
           break;
         }
 
@@ -3941,6 +4247,11 @@ function createApp(db) {
             mergeCheckpoint({ finalize_done: true });
           }
         }
+        try {
+          cacheProjekteNeuTreesForJob(localJobId);
+        } catch (cacheErr) {
+          console.warn('[dienstreise_pull] projekte_neu cache:', cacheErr && cacheErr.message ? cacheErr.message : cacheErr);
+        }
         break;
       }
       case 'dienstreise_push': {
@@ -3993,6 +4304,50 @@ function createApp(db) {
         } catch (tplErr) {
           console.warn('Protokoll-Vorlagen Sync fehlgeschlagen:', tplErr.message);
         }
+        setProgress('anlagenstamm_db_sync', 0, 1, 'Anlagenstamm-Stammdaten …');
+        try {
+          const syncResult = await syncAnlagenstammFromDispo(db, {
+            baseUrl: base,
+            technician_id: technicianId,
+            serverUsername: p.serverUsername,
+            serverPassword: p.serverPassword,
+          }, (prog) => {
+            if (prog && prog.page && prog.totalPages) {
+              setProgress('anlagenstamm_db_sync', prog.page, prog.totalPages, 'Seite ' + prog.page + '/' + prog.totalPages);
+            }
+          });
+          if (!syncResult.ok) {
+            console.warn('[sync_pull] anlagenstamm_db_sync:', syncResult.error || 'fehlgeschlagen');
+          }
+          save();
+        } catch (syncErr) {
+          console.warn('[sync_pull] anlagenstamm_db_sync:', syncErr && syncErr.message ? syncErr.message : syncErr);
+        }
+        break;
+      }
+      case 'anlagenstamm_db_sync': {
+        const p = job.payload || {};
+        const base = (p.baseUrl || '').trim().replace(/\/$/, '');
+        const technicianId = parseInt(p.technicianId, 10);
+        const syncResult = await syncAnlagenstammFromDispo(
+          db,
+          {
+            baseUrl: base,
+            externalUrl: p.externalUrl,
+            internalUrl: p.internalUrl,
+            technician_id: technicianId,
+            serverUsername: p.serverUsername,
+            serverPassword: p.serverPassword,
+          },
+          (prog) => {
+            if (prog && prog.page && prog.totalPages) {
+              setProgress('anlagenstamm_db_sync', prog.page, prog.totalPages, 'Seite ' + prog.page + '/' + prog.totalPages);
+            }
+          },
+        );
+        if (!syncResult.ok) throw new Error(syncResult.error || 'Anlagenstamm-Sync fehlgeschlagen.');
+        save();
+        setProgress('done', 1, 1, 'Anlagenstamm synchronisiert (' + (syncResult.row_count || 0) + ' Zeilen).');
         break;
       }
       case 'sync_push': {
@@ -4072,16 +4427,35 @@ function createApp(db) {
     }
     if (parts.length === 0) parts = fab.split(/[\s;,]+/).map((p) => p.trim()).filter(Boolean);
     if (parts.length === 0) return job;
+    ensureAnlagenstammLocalSchema(db);
+    let data = { data: [] };
+    let debugInfo = { requestedFabs: parts.slice(), ok: false, matchCount: 0, status: null, _source: null };
+    if (anlagenstammLocalRowCount(db) > 0) {
+      const localRows = anlagenstammGetRowsByFabs(db, parts);
+      if (localRows.length > 0) {
+        data = { data: localRows };
+        debugInfo.ok = true;
+        debugInfo.matchCount = localRows.length;
+        debugInfo._source = 'local';
+      }
+    }
     const base = baseUrl.toString().trim().replace(/\/$/, '');
-    const url = `${base}/dispo_api/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(parts.join(','))}`;
-    let debugInfo = { url, requestedFabs: parts.slice(), ok: false, matchCount: 0, status: null };
+    if (!debugInfo.ok && base) {
+      const url = `${base}/dispo_api/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(parts.join(','))}`;
+      debugInfo.url = url;
+      try {
+        const r = await fetch(url, authHeader ? { headers: authHeader } : {});
+        data = await r.json().catch(() => ({}));
+        debugInfo.ok = !!r.ok;
+        debugInfo.status = r.status;
+        debugInfo.matchCount = Array.isArray(data.data) ? data.data.length : 0;
+        debugInfo._source = 'dispo';
+      } catch (e) {
+        return { ...job, _anlagenstamm_debug: debugInfo };
+      }
+    }
     try {
-      const r = await fetch(url, authHeader ? { headers: authHeader } : {});
-      const data = await r.json().catch(() => ({}));
-      debugInfo.ok = !!r.ok;
-      debugInfo.status = r.status;
-      debugInfo.matchCount = Array.isArray(data.data) ? data.data.length : 0;
-      if (!r.ok || !Array.isArray(data.data) || data.data.length === 0) {
+      if (!debugInfo.ok || !Array.isArray(data.data) || data.data.length === 0) {
         return { ...job, _anlagenstamm_debug: debugInfo };
       }
       const byFab = {};
@@ -5024,6 +5398,35 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       } else if (p.action === 'delete') {
         const r = await fetch(`${base}/api/absence.php?id=${p.entity_id}&technician_id=${technicianId}`, { method: 'DELETE' });
         if (r.ok) db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      }
+    }
+    if (p.entity_type === 'anlagenstamm' && p.action === 'save') {
+      const payload = JSON.parse(p.payload || '{}');
+      const techId = parseInt(String(payload.technician_id ?? technicianId), 10) || technicianId;
+      try {
+        const data = await proxyAnlagenstammSave(Object.assign({}, payload, { technician_id: techId }));
+        if (data && data.ok === false) {
+          throw new Error(data.error || 'Anlagenstamm speichern fehlgeschlagen.');
+        }
+        const fab = String(payload.fabrikationsnummer ?? '').trim();
+        if (fab) {
+          if (data && data.id) {
+            db.prepare('UPDATE anlagenstamm_local SET id = ?, dirty = 0 WHERE fabrikationsnummer = ?').run(
+              parseInt(data.id, 10),
+              fab,
+            );
+          } else {
+            db.prepare('UPDATE anlagenstamm_local SET dirty = 0 WHERE fabrikationsnummer = ?').run(fab);
+          }
+        }
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        logSyncPushError({
+          reason: 'anlagenstamm_save',
+          error: e && e.message ? e.message : String(e),
+          entity_id: p.entity_id,
+        });
+        throw e;
       }
     }
   }

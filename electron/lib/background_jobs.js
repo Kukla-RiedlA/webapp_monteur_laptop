@@ -8,6 +8,7 @@ const ALLOWED_TYPES = new Set([
   'sync_pull',
   'sync_push',
   'abrechnung_refresh',
+  'anlagenstamm_db_sync',
 ]);
 
 function ensureBackgroundJobsSchema(sqlDb) {
