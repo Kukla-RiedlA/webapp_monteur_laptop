@@ -5061,22 +5061,42 @@ function removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerId
   }
 }
 
+async function fetchMyJobsForPull(base, technicianId, authHeader, dateFrom, dateTo) {
+  const q = new URLSearchParams({ technician_id: String(technicianId) });
+  if (dateFrom) q.set('date_from', String(dateFrom));
+  if (dateTo) q.set('date_to', String(dateTo));
+  const fetchOpts = authHeader ? { headers: authHeader } : {};
+  const candidates = [
+    `${base}/dispo_api/api/my_jobs.php?${q}`,
+    `${base}/api/my_jobs.php?${q}`,
+  ];
+  let lastErr = null;
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, fetchOpts);
+      if (r.ok) return { res: r, url };
+      lastErr = new Error('Aufträge: ' + r.status + ' ' + r.statusText + ' (' + url + ')');
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('Auftragsliste nicht erreichbar.');
+}
+
 async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, dateTo) {
   const base = baseUrl.replace(/\/$/, '');
-  let jobsUrl = `${base}/api/my_jobs.php?technician_id=${technicianId}`;
   let absencesUrl = `${base}/api/my_absences.php?technician_id=${technicianId}`;
-  if (dateFrom) jobsUrl += '&date_from=' + encodeURIComponent(dateFrom);
-  if (dateTo) jobsUrl += '&date_to=' + encodeURIComponent(dateTo);
   if (dateFrom) absencesUrl += '&date_from=' + encodeURIComponent(dateFrom);
   if (dateTo) absencesUrl += '&date_to=' + encodeURIComponent(dateTo);
   const fetchOpts = authHeader ? { headers: authHeader } : {};
   let jobsRes;
   let absencesRes;
+  let jobsPullUrl = '';
   try {
-    [jobsRes, absencesRes] = await Promise.all([
-      fetch(jobsUrl, fetchOpts),
-      fetch(absencesUrl, fetchOpts)
-    ]);
+    const jobsFetch = await fetchMyJobsForPull(base, technicianId, authHeader, dateFrom, dateTo);
+    jobsRes = jobsFetch.res;
+    jobsPullUrl = jobsFetch.url;
+    absencesRes = await fetch(absencesUrl, fetchOpts);
   } catch (e) {
     throw new Error('Dispo-Server nicht erreichbar: ' + e.message + '. Prüfen Sie die Adresse (z. B. http://localhost/) und ob der Server läuft.');
   }
@@ -5084,7 +5104,15 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
     const parts = [];
     if (!jobsRes.ok) parts.push('Aufträge: ' + jobsRes.status + ' ' + jobsRes.statusText);
     if (!absencesRes.ok) parts.push('Abwesenheiten: ' + absencesRes.status + ' ' + absencesRes.statusText);
-    throw new Error('Pull fehlgeschlagen (' + parts.join('; ') + '). Dispo-Server-URL muss so sein, dass ' + base + '/api/my_jobs.php erreichbar ist.');
+    throw new Error(
+      'Pull fehlgeschlagen (' +
+        parts.join('; ') +
+        '). Erwartet erreichbar: ' +
+        (jobsPullUrl || base + '/dispo_api/api/my_jobs.php') +
+        ' oder ' +
+        base +
+        '/api/my_jobs.php',
+    );
   }
   const jobsData = await jobsRes.json();
   const jobs = jobsData.jobs || [];
