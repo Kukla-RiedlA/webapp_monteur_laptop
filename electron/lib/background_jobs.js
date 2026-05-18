@@ -233,8 +233,23 @@ function createBackgroundJobService(db, save, hooks) {
     return { ok: true };
   }
 
-  function listJobs(limit, activeOnly) {
+  /**
+   * @param {number|string} limit
+   * @param {boolean | { activeOnly?: boolean, runningOnly?: boolean }} filter
+   */
+  function listJobs(limit, filter) {
     const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+    const activeOnly = filter === true || (filter && filter.activeOnly);
+    const runningOnly = filter && filter.runningOnly;
+    if (runningOnly) {
+      return db
+        .prepare(
+          `SELECT * FROM background_jobs WHERE status = 'running'
+           ORDER BY datetime(updated_at) DESC LIMIT ?`,
+        )
+        .all(lim)
+        .map((r) => parseRow(r));
+    }
     if (activeOnly) {
       return db
         .prepare(

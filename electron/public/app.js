@@ -46,7 +46,7 @@
 
   function startBackgroundJobsPollingUi() {
     function refresh() {
-      fetch(API_BASE + '/api/background_jobs?active=1&limit=25')
+      fetch(API_BASE + '/api/background_jobs?running=1&limit=10')
         .then(function (r) {
           return r.json();
         })
@@ -61,13 +61,19 @@
             return;
           }
           wrap.style.display = '';
-          badge.textContent = 'Jobs ' + jobs.length;
-          var lines = jobs.slice(0, 10).map(function (j) {
+          badge.textContent = 'Sync ' + jobs.length;
+          var lines = jobs.slice(0, 8).map(function (j) {
             var ph = j.progress_phase || j.status || '';
             var msg = j.message ? String(j.message) : '';
-            return (j.type || '?') + ': ' + ph + (msg ? ' — ' + msg : '');
+            var cur = j.progress_current != null ? j.progress_current : '';
+            var tot = j.progress_total != null ? j.progress_total : '';
+            var prog = tot !== '' && Number(tot) > 0 ? ' (' + cur + '/' + tot + ')' : '';
+            return (j.type || '?') + ': ' + ph + prog + (msg ? ' — ' + msg : '');
           });
-          wrap.setAttribute('title', lines.join('\n'));
+          wrap.setAttribute(
+            'title',
+            'Laufende Hintergrund-Synchronisation (keine abgeschlossenen Aufträge):\n' + lines.join('\n'),
+          );
         })
         .catch(function () {});
     }
@@ -1378,10 +1384,13 @@
     var wantAlle = Boolean(cbAlle && cbAlle.checked);
     return arr.filter(function (j) {
       if (!j || typeof j !== 'object') return false;
-      if (wantAlle) return true;
+      if (wantAlle) return !isJobErledigtForOpenList(j);
       var byNoDate = wantNoDate && jobHasNoDateForOpenFilter(j);
       var byNoTech = wantNoTech && jobHasNoTechnicianForOpenFilter(j);
-      return byNoDate || byNoTech;
+      if (wantNoDate && wantNoTech) return byNoDate && byNoTech;
+      if (wantNoDate) return byNoDate;
+      if (wantNoTech) return byNoTech;
+      return false;
     });
   }
 
@@ -3374,9 +3383,13 @@
       return;
     }
     try {
-      const includeErledigtOpen = cbAlleOpen && !cbAlleOpen.checked;
       const jobOpenQs = { base_url: baseUrl };
-      if (includeErledigtOpen) jobOpenQs.include_erledigt = '1';
+      if (cbAlleOpen && cbAlleOpen.checked) {
+        /* Standard: erledigt/abgerechnet ausgeschlossen (Dispo jobs_open). */
+      } else {
+        if (cbNoDateOpen && cbNoDateOpen.checked) jobOpenQs.filter_no_date = '1';
+        if (cbNoTechOpen && cbNoTechOpen.checked) jobOpenQs.filter_no_technician = '1';
+      }
       const r = await fetch(API_BASE + '/api/jobs_open?' + qs(jobOpenQs), {
         headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getServerUsername, getServerPassword))
       });
@@ -6370,7 +6383,12 @@
       return;
     }
     var range = getSyncDateRange();
-    fetch(API_BASE + '/api/my_jobs?technician_id=' + techId + '&date_from=' + range.date_from + '&date_to=' + range.date_to).then(function (r) { return r.json(); }).then(function (data) {
+    fetch(API_BASE + '/api/my_jobs?' + qs({
+      technician_id: techId,
+      date_from: range.date_from,
+      date_to: range.date_to,
+      assigned_only: '1'
+    })).then(function (r) { return r.json(); }).then(function (data) {
       var listEl = document.getElementById('dienstreiseList');
       if (!listEl) return;
       var jobs = (data && data.jobs) ? data.jobs : [];

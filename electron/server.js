@@ -1638,6 +1638,7 @@ function createApp(db) {
     const dateFrom = req.query.date_from || null;
     const dateTo = req.query.date_to || null;
     const includeErledigt = req.query.include_erledigt === '1' || req.query.include_erledigt === 'true';
+    const assignedOnly = req.query.assigned_only === '1' || req.query.assigned_only === 'true';
     let sql = `SELECT j.id, j.server_id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
         j.status, j.required_technicians, j.description, j.fabrikationsnummern,
         c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
@@ -1650,10 +1651,15 @@ function createApp(db) {
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
-      WHERE (
+      WHERE `;
+    if (assignedOnly) {
+      sql += `EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)`;
+    } else {
+      sql += `(
         EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
         OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
       )`;
+    }
     const params = [technicianId];
     if (!includeErledigt) {
       sql += ` AND j.status != 'erledigt'`;
@@ -4758,8 +4764,9 @@ function createApp(db) {
   app.get('/api/background_jobs', (req, res) => {
     try {
       if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
-      const activeOnly = req.query.active === '1' || req.query.active === 'true';
-      const jobs = bgJobs.listJobs(req.query.limit, activeOnly);
+      const runningOnly = req.query.running === '1' || req.query.running === 'true';
+      const activeOnly = !runningOnly && (req.query.active === '1' || req.query.active === 'true');
+      const jobs = bgJobs.listJobs(req.query.limit, { activeOnly, runningOnly });
       return res.json({ ok: true, jobs });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
