@@ -2271,7 +2271,7 @@ function createApp(db) {
     if (!forceOnline && anlagenstammLocalRowCount(db) > 0) {
       const row = anlagenstammLookupByFab(db, fabValue);
       if (row) {
-        return res.json({ ok: true, row, _source: 'local' });
+        return res.json({ ok: true, row, anlage: row, _source: 'local' });
       }
     }
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
@@ -2363,36 +2363,13 @@ function createApp(db) {
       ),
     );
     save();
-    const hasBaseSave = buildDispoBaseCandidates({
-      baseUrl: body.baseUrl,
-      externalUrl: body.externalUrl,
-      internalUrl: body.internalUrl,
-    }).length > 0;
-    if (hasBaseSave) {
-      try {
-        const data = await proxyAnlagenstammSave(Object.assign({}, body, { technician_id: technicianId, id: localResult.id }));
-        if (data && data.ok !== false) {
-          if (data.id) {
-            db.prepare('UPDATE anlagenstamm_local SET id = ?, dirty = 0 WHERE fabrikationsnummer = ?').run(
-              parseInt(data.id, 10),
-              localResult.fabrikationsnummer,
-            );
-          } else {
-            db.prepare('UPDATE anlagenstamm_local SET dirty = 0 WHERE fabrikationsnummer = ?').run(localResult.fabrikationsnummer);
-          }
-          db.prepare(
-            `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`,
-          ).run(entityId);
-          save();
-          const ok = Object.assign({}, data);
-          delete ok._httpStatus;
-          return res.json(ok);
-        }
-      } catch (_) {
-        /* offline: pending bleibt */
-      }
-    }
-    res.json({ ok: true, id: localResult.id, pending_sync: true, _source: 'local' });
+    res.json({
+      ok: true,
+      id: localResult.id,
+      fabrikationsnummer: localResult.fabrikationsnummer,
+      pending_sync: true,
+      _source: 'local',
+    });
   });
 
   app.post('/api/anlagenstamm_files_list', express.json(), async (req, res) => {
