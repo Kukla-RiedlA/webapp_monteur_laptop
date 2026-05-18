@@ -162,13 +162,24 @@ const UPSERT_ANLAGENSTAMM_SQL = `
 
 function upsertAnlagenstammRows(db, rows) {
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const dirtyByIdStmt = db.prepare('SELECT dirty FROM anlagenstamm_local WHERE id = ?');
+  const dirtyByFabStmt = db.prepare(
+    'SELECT dirty FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1',
+  );
   for (const raw of rows) {
     const row = clampForDispoAnlagenstamm(raw);
     const id = parseInt(row.id, 10);
     if (!Number.isFinite(id) || id <= 0) continue;
+    const fab = clampDispoField(row.fabrikationsnummer, DISPO_ANLAGENSTAMM_MAX.fabrikationsnummer).trim();
+    const dirtyById = dirtyByIdStmt.get(id);
+    if (dirtyById && Number(dirtyById.dirty) === 1) continue;
+    if (fab) {
+      const dirtyByFab = dirtyByFabStmt.get(fab);
+      if (dirtyByFab && Number(dirtyByFab.dirty) === 1) continue;
+    }
     db.prepare(UPSERT_ANLAGENSTAMM_SQL).run(
       id,
-      clampDispoField(row.fabrikationsnummer, DISPO_ANLAGENSTAMM_MAX.fabrikationsnummer).trim(),
+      fab,
       row.type != null ? String(row.type) : '',
       row.leistung != null ? String(row.leistung) : '',
       row.kraftaufnehmer != null ? String(row.kraftaufnehmer) : '',
