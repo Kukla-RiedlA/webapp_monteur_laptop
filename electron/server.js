@@ -43,6 +43,121 @@ const {
   uploadCachePath,
 } = require('./lib/anlagenstamm-local');
 
+/** Felder Leistungszeile / Anlagenstamm (Abgleich Projektdaten ↔ Sync). */
+const JOB_FAB_STAMM_KEYS = [
+  'type',
+  'leistung',
+  'nenngeschwindigkeit',
+  'kraftaufnehmer',
+  'dms_nr',
+  'tacho',
+  'elektronik',
+  'material',
+  'position',
+  'geliefert_ueber',
+  'projekt',
+  'bemerkungen',
+];
+
+function normJobFabKey(rowOrFn) {
+  if (rowOrFn == null) return '';
+  if (typeof rowOrFn === 'string' || typeof rowOrFn === 'number') return String(rowOrFn).trim();
+  return String(rowOrFn.fabrikationsnummer ?? rowOrFn.Fabrikationsnummer ?? '').trim();
+}
+
+function parseJobFabrikationsnummernRows(raw) {
+  if (raw == null || raw === '') return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+  try {
+    const parsed = JSON.parse(s);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((r) => {
+          if (r && typeof r === 'object') return r;
+          const fn = normJobFabKey(r);
+          return fn ? { fabrikationsnummer: fn } : null;
+        })
+        .filter(Boolean);
+    }
+    if (parsed && typeof parsed === 'object') {
+      return [parsed];
+    }
+  } catch (_) {
+    /* Semikolon-/Komma-Liste */
+  }
+  return s
+    .split(/[\s;,]+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((fn) => ({ fabrikationsnummer: fn }));
+}
+
+function mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty) {
+  const fn = normJobFabKey(jobRow);
+  const merged = jobRow && typeof jobRow === 'object' ? Object.assign({}, jobRow) : { fabrikationsnummer: fn };
+  const api = apiRow && typeof apiRow === 'object' ? apiRow : {};
+  const local = localRow && typeof localRow === 'object' ? localRow : {};
+  for (const k of JOB_FAB_STAMM_KEYS) {
+    const jobVal = merged[k] != null ? String(merged[k]).trim() : '';
+    const localVal = local[k] != null ? String(local[k]).trim() : '';
+    const apiVal = api[k] != null ? String(api[k]).trim() : '';
+    if (jobVal !== '') {
+      continue;
+    }
+    if (localDirty && localVal !== '') {
+      merged[k] = local[k];
+    } else if (apiVal !== '') {
+      merged[k] = api[k];
+    } else {
+      merged[k] = '';
+    }
+  }
+  if (fn) merged.fabrikationsnummer = fn;
+  return merged;
+}
+
+function mergeFabRowsPreferLocal(localRows, serverRows) {
+  const localList = Array.isArray(localRows) ? localRows : [];
+  const serverList = Array.isArray(serverRows) ? serverRows : [];
+  if (localList.length === 0) {
+    return serverList.length ? JSON.stringify(serverList) : null;
+  }
+  const serverByFn = {};
+  for (const r of serverList) {
+    const fn = normJobFabKey(r);
+    if (fn) serverByFn[fn] = r;
+  }
+  const order = [];
+  const seen = new Set();
+  for (const r of localList) {
+    const fn = normJobFabKey(r);
+    if (fn && !seen.has(fn)) {
+      seen.add(fn);
+      order.push(fn);
+    }
+  }
+  for (const r of serverList) {
+    const fn = normJobFabKey(r);
+    if (fn && !seen.has(fn)) {
+      seen.add(fn);
+      order.push(fn);
+    }
+  }
+  const mergedRows = order.map((fn) => {
+    const localR = localList.find((r) => normJobFabKey(r) === fn) || { fabrikationsnummer: fn };
+    const serverR = serverByFn[fn] || {};
+    return mergeStammIntoJobRow(localR, serverR, null, false);
+  });
+  return JSON.stringify(mergedRows);
+}
+
+function mergeJobFabrikationsnummernJson(localRaw, serverRaw) {
+  const pendingFromLocal = parseJobFabrikationsnummernRows(localRaw);
+  const fromServer = parseJobFabrikationsnummernRows(serverRaw);
+  return mergeFabRowsPreferLocal(pendingFromLocal, fromServer);
+}
+
 /** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). */
 function writeFileWithRetry(filePath, data, maxRetries = 3) {
   for (let i = 0; i < maxRetries; i++) {
@@ -4413,27 +4528,9 @@ function createApp(db) {
     if (!baseUrl || typeof job.fabrikationsnummern !== 'string') return job;
     const fab = job.fabrikationsnummern.trim();
     if (!fab) return job;
-    /** Felder aus Dispo-Anlagenstamm – immer nachladen und in bestehende FN-Objekte mergen (u. a. projekt). */
-    const STAMM_KEYS = ['type', 'leistung', 'nenngeschwindigkeit', 'kraftaufnehmer', 'dms_nr', 'tacho', 'elektronik', 'material', 'position', 'geliefert_ueber', 'projekt', 'bemerkungen'];
-    let parsed = null;
-    let parts = [];
-    try {
-      parsed = JSON.parse(fab);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        parts = parsed
-          .map((r) => {
-            if (r && typeof r === 'object') {
-              const fn = r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer;
-              return fn != null ? String(fn).trim() : '';
-            }
-            return r != null ? String(r).trim() : '';
-          })
-          .filter(Boolean);
-      }
-    } catch (e) {
-      parsed = null;
-    }
-    if (parts.length === 0) parts = fab.split(/[\s;,]+/).map((p) => p.trim()).filter(Boolean);
+    /** Nur leere Felder aus Anlagenstamm auffüllen – gespeicherte Auftrags-Leistungszeilen nie überschreiben. */
+    const jobRows = parseJobFabrikationsnummernRows(fab);
+    const parts = jobRows.map((r) => normJobFabKey(r)).filter(Boolean);
     if (parts.length === 0) return job;
     ensureAnlagenstammLocalSchema(db);
     let data = { data: [] };
@@ -4471,51 +4568,16 @@ function createApp(db) {
         const key = String(row.fabrikationsnummer ?? '').trim();
         if (key) byFab[key] = row;
       }
-      const rowForParsedIndex = (i, fnHint) => {
-        if (Array.isArray(data.data) && i >= 0 && i < data.data.length) return data.data[i];
-        const fn = String(fnHint || '').trim();
-        return fn ? byFab[fn] || {} : {};
-      };
-      const hasObjectRows = Array.isArray(parsed) && parsed.length > 0 && parsed.some((x) => x && typeof x === 'object');
-      let newFabJson;
-      if (hasObjectRows) {
-        const sameLen = Array.isArray(data.data) && data.data.length === parsed.length;
-        newFabJson = JSON.stringify(
-          parsed.map((r, i) => {
-            if (!r || typeof r !== 'object') {
-              const fn = String(r).trim();
-              const apiRow = sameLen ? rowForParsedIndex(i, fn) : byFab[fn] || {};
-              const o = { fabrikationsnummer: fn };
-              for (const k of STAMM_KEYS) {
-                o[k] = apiRow[k] != null ? apiRow[k] : '';
-              }
-              return o;
-            }
-            const fn = String(
-              r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer != null ? r.Fabrikationsnummer : '',
-            ).trim();
-            const apiRow = sameLen ? rowForParsedIndex(i, fn) : (fn ? byFab[fn] || {} : {});
-            const localRow = fn ? anlagenstammLookupByFab(db, fn) : null;
-            const localDirty = localRow && Number(localRow.dirty) === 1;
-            const merged = { ...r };
-            for (const k of STAMM_KEYS) {
-              if (localDirty && localRow[k] != null && String(localRow[k]).trim() !== '') {
-                merged[k] = localRow[k];
-              } else if (apiRow[k] != null && String(apiRow[k]).trim() !== '') {
-                merged[k] = apiRow[k];
-              } else if (r[k] != null && String(r[k]).trim() !== '') {
-                merged[k] = r[k];
-              } else {
-                merged[k] = '';
-              }
-            }
-            if (fn) merged.fabrikationsnummer = fn;
-            return merged;
-          }),
-        );
-      } else {
-        newFabJson = JSON.stringify(data.data);
-      }
+      const newFabJson = JSON.stringify(
+        jobRows.map((r) => {
+          const fn = normJobFabKey(r);
+          const apiRow = fn ? byFab[fn] || {} : {};
+          const localRow = fn ? anlagenstammLookupByFab(db, fn) : null;
+          const localDirty = localRow && Number(localRow.dirty) === 1;
+          const jobRow = r && typeof r === 'object' ? r : { fabrikationsnummer: fn };
+          return mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty);
+        }),
+      );
       return { ...job, fabrikationsnummern: newFabJson, _anlagenstamm_debug: debugInfo };
     } catch (e) {
       debugInfo.error = e && e.message ? e.message : String(e);
@@ -5222,7 +5284,14 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const KNOWN = new Set(['angelegt', 'zugeteilt', 'in_arbeit', 'erledigt', 'abgerechnet', 'geplant']);
   const status = KNOWN.has(rawSt) ? rawSt : 'angelegt';
   if (existing) {
-    const fabForLocal = resolveFabrikationsnummernForPull(db, existing.id, j.fabrikationsnummern);
+    let fabForLocal = resolveFabrikationsnummernForPull(db, existing.id, j.fabrikationsnummern);
+    if (fabForLocal === j.fabrikationsnummern) {
+      const curFab = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(existing.id);
+      if (curFab && curFab.fabrikationsnummern) {
+        const merged = mergeJobFabrikationsnummernJson(curFab.fabrikationsnummern, j.fabrikationsnummern);
+        if (merged) fabForLocal = merged;
+      }
+    }
     db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
       j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabForLocal, j.eap_nummer || null, j.bestellnummer || null, existing.id
     );
@@ -5258,7 +5327,14 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     if (orphans.length === 1) orphan = orphans[0];
   }
   if (orphan) {
-    const fabOrphan = resolveFabrikationsnummernForPull(db, orphan.id, j.fabrikationsnummern);
+    let fabOrphan = resolveFabrikationsnummernForPull(db, orphan.id, j.fabrikationsnummern);
+    if (fabOrphan === j.fabrikationsnummern) {
+      const curFab = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(orphan.id);
+      if (curFab && curFab.fabrikationsnummern) {
+        const merged = mergeJobFabrikationsnummernJson(curFab.fabrikationsnummern, j.fabrikationsnummern);
+        if (merged) fabOrphan = merged;
+      }
+    }
     db.prepare('UPDATE jobs SET server_id = ?, job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
       id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabOrphan, j.eap_nummer || null, j.bestellnummer || null, orphan.id
     );

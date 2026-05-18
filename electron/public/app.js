@@ -830,36 +830,46 @@
   }
 
   /**
-   * Anlagenstamm: immer zuerst IPC (Main → dispo_api-Proxy), nie von einem fehlenden
-   * POST /api/anlagenstamm_* auf :39678 abhängig. Reihenfolge: benannte Preload-Methode,
-   * dann ipcInvoke (gleicher Kanal), zuletzt nur für Nicht-Electron lokaler Express.
+   * Anlagenstamm: lokal-first (SQLite + pending_changes), Dispo-IPC nur als Fallback.
    */
   async function anlagenstammSearchDispo(payload) {
     var body = Object.assign({}, payload, { technician_id: getTechId() });
-    var ma = monteurBridge();
-    if (ma) {
-      if (typeof ma.ipcInvoke === 'function') {
-        return normalizeAnlagenstammSearchResponse(await ma.ipcInvoke('anlagenstamm:search', body));
+    try {
+      return normalizeAnlagenstammSearchResponse(
+        await api('/api/anlagenstamm_search', { method: 'POST', body: JSON.stringify(body) }),
+      );
+    } catch (localErr) {
+      var ma = monteurBridge();
+      if (ma) {
+        if (typeof ma.ipcInvoke === 'function') {
+          return normalizeAnlagenstammSearchResponse(await ma.ipcInvoke('anlagenstamm:search', body));
+        }
+        if (typeof ma.anlagenstammSearch === 'function') {
+          return normalizeAnlagenstammSearchResponse(await ma.anlagenstammSearch(body));
+        }
       }
-      if (typeof ma.anlagenstammSearch === 'function') {
-        return normalizeAnlagenstammSearchResponse(await ma.anlagenstammSearch(body));
-      }
+      throw localErr;
     }
-    return api('/api/anlagenstamm_search', { method: 'POST', body: JSON.stringify(body) });
   }
 
   async function anlagenstammSaveDispo(payload) {
     var body = Object.assign({}, payload, { technician_id: getTechId() });
-    var ma = monteurBridge();
-    if (ma) {
-      if (typeof ma.ipcInvoke === 'function') {
-        return normalizeAnlagenstammSaveResponse(await ma.ipcInvoke('anlagenstamm:save', body));
+    try {
+      return normalizeAnlagenstammSaveResponse(
+        await api('/api/anlagenstamm_save', { method: 'POST', body: JSON.stringify(body) }),
+      );
+    } catch (localErr) {
+      var ma = monteurBridge();
+      if (ma) {
+        if (typeof ma.ipcInvoke === 'function') {
+          return normalizeAnlagenstammSaveResponse(await ma.ipcInvoke('anlagenstamm:save', body));
+        }
+        if (typeof ma.anlagenstammSave === 'function') {
+          return normalizeAnlagenstammSaveResponse(await ma.anlagenstammSave(body));
+        }
       }
-      if (typeof ma.anlagenstammSave === 'function') {
-        return normalizeAnlagenstammSaveResponse(await ma.anlagenstammSave(body));
-      }
+      throw localErr;
     }
-    return api('/api/anlagenstamm_save', { method: 'POST', body: JSON.stringify(body) });
   }
 
   /** Ländername (DE) oder Bezeichnung → ISO-2-Code für Flagge und Zeitverschiebung. */
@@ -1582,7 +1592,7 @@
         silent &&
         window.currentProjektdatenJob &&
         projektdatenFabSavedAt &&
-        Date.now() - projektdatenFabSavedAt < 15000
+        Date.now() - projektdatenFabSavedAt < 60000
       ) {
         job = Object.assign({}, job, {
           fabrikationsnummern: window.currentProjektdatenJob.fabrikationsnummern,
@@ -1663,11 +1673,7 @@
 
     if (hasCachedJob) {
       loadLocal(true, true).then(function (ok) {
-        if (!ok) {
-          loadFromDispo();
-          return;
-        }
-        loadLocal(false, true);
+        if (!ok) loadFromDispo();
       });
     } else {
       loadLocal(false, false).then(function (ok) {
@@ -1779,7 +1785,21 @@
 
   function leistungRowHasVisibleData(r) {
     if (!r) return false;
-    return !!(r.fabrikationsnummer || r.type || r.leistung || r.position || r.geliefert_ueber || r.projekt || r.bemerkungen);
+    return !!(
+      r.fabrikationsnummer ||
+      r.type ||
+      r.leistung ||
+      r.nenngeschwindigkeit ||
+      r.kraftaufnehmer ||
+      r.dms_nr ||
+      r.tacho ||
+      r.elektronik ||
+      r.material ||
+      r.position ||
+      r.geliefert_ueber ||
+      r.projekt ||
+      r.bemerkungen
+    );
   }
 
   function jobIdsEqual(a, b) {
@@ -2643,12 +2663,15 @@
         method: 'PATCH',
         body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(built.arr) })
       }).then(function () {
-        if (rowForStamm && rowForStamm.fabrikationsnummer) {
-          persistAnlageRowToAnlagenstamm(rowForStamm);
-        }
-        if (closeAfter) {
-          showToast('Lokal gespeichert – Abgleich mit Dispo beim nächsten Sync.');
-        }
+        projektdatenFabSavedAt = Date.now();
+        var stammPromise = (rowForStamm && rowForStamm.fabrikationsnummer)
+          ? persistAnlageRowToAnlagenstamm(rowForStamm)
+          : Promise.resolve();
+        return stammPromise.then(function () {
+          if (closeAfter) {
+            showToast('Lokal gespeichert – Abgleich mit Dispo beim nächsten Sync.');
+          }
+        });
       }).catch(function (e) {
         alert('Speichern fehlgeschlagen: ' + e.message);
       }).finally(function () {
