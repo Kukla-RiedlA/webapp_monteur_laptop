@@ -3639,6 +3639,12 @@ function createApp(db) {
           save();
           return res.json({ ok: true, updated: 'fabrikationsnummern', pending_sync: true });
         }
+        if (fabOnlyPatch) {
+          return res.status(403).json({
+            ok: false,
+            error: 'Fabrikationsnummern konnten nicht gespeichert werden (Auftrag nicht gefunden oder nicht diesem Monteur zugeordnet).',
+          });
+        }
       }
       res.status(400).json({ ok: false, error: 'Status-Update fehlgeschlagen oder keine Berechtigung.' });
     } catch (e) {

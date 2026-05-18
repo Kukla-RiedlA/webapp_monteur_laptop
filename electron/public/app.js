@@ -1501,6 +1501,8 @@
   }
 
   var projektdatenFabSaveBusy = false;
+  /** Verhindert, dass ein veralteter Hintergrund-/api/job-Refresh frisch gespeicherte FN überschreibt. */
+  var projektdatenFabSavedAt = 0;
 
   function showProjektdatenJob(job, displayOpts) {
     displayOpts = displayOpts || {};
@@ -1566,6 +1568,16 @@
       if (!job) {
         if (!silent) showJob(null);
         return true;
+      }
+      if (
+        silent &&
+        window.currentProjektdatenJob &&
+        projektdatenFabSavedAt &&
+        Date.now() - projektdatenFabSavedAt < 15000
+      ) {
+        job = Object.assign({}, job, {
+          fabrikationsnummern: window.currentProjektdatenJob.fabrikationsnummern,
+        });
       }
       if (silent) {
         window.currentProjektdatenJob = job;
@@ -1945,6 +1957,20 @@
 
   var projektdatenExplorerJobId = null;
 
+  function refreshProjektdatenAfterFabSave(job, hintEl) {
+    projektdatenFabSavedAt = Date.now();
+    window.currentProjektdatenLeistungRows = buildLeistungRowsFromJob(job);
+    window.currentProjektdatenJob = job;
+    showProjektdatenJob(job, { skipExplorerReload: true, skipDeferredLoads: true });
+    if (hintEl) {
+      hintEl.textContent = 'Fabrikationsnummern gespeichert.';
+      setTimeout(function () {
+        var h = document.getElementById('projektdatenFabHint');
+        if (h) h.textContent = '';
+      }, 2500);
+    }
+  }
+
   function saveProjektdatenFabrikationsnummernFromRows(rows, hintEl) {
     var jobId = jobDetailsJobId;
     if (!jobId) return Promise.reject(new Error('Kein Auftrag'));
@@ -1954,15 +1980,9 @@
       method: 'PATCH',
       body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
     }).then(function () {
-      window.currentProjektdatenLeistungRows = arr;
       var job = Object.assign({}, window.currentProjektdatenJob || {});
       job.fabrikationsnummern = JSON.stringify(arr);
-      window.currentProjektdatenJob = job;
-      if (hintEl) {
-        hintEl.textContent = 'Fabrikationsnummern gespeichert.';
-        setTimeout(function () { if (hintEl) hintEl.textContent = ''; }, 2500);
-      }
-      refreshProjektdatenLeistungTableFromRows();
+      refreshProjektdatenAfterFabSave(job, hintEl);
     }).finally(function () {
       projektdatenFabSaveBusy = false;
     });
@@ -2729,13 +2749,9 @@
       method: 'PATCH',
       body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
     }).then(function () {
-      window.currentProjektdatenLeistungRows = arr;
-      if (window.currentProjektdatenJob) {
-        window.currentProjektdatenJob = Object.assign({}, window.currentProjektdatenJob, {
-          fabrikationsnummern: JSON.stringify(arr)
-        });
-      }
-      refreshProjektdatenLeistungTableFromRows();
+      var job = Object.assign({}, window.currentProjektdatenJob || {});
+      job.fabrikationsnummern = JSON.stringify(arr);
+      refreshProjektdatenAfterFabSave(job, null);
     }).catch(function (e) {
       alert('Speichern fehlgeschlagen: ' + e.message);
     });
