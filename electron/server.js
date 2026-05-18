@@ -37,6 +37,9 @@ const {
   getRowsByFabs: anlagenstammGetRowsByFabs,
   saveLocal: anlagenstammSaveLocal,
   syncAnlagenstammFromDispo,
+  clampForDispoAnlagenstamm,
+  clampForDispoJobFabrikation,
+  clampFabrikationsnummernJson,
   uploadCachePath,
 } = require('./lib/anlagenstamm-local');
 
@@ -2340,17 +2343,21 @@ function createApp(db) {
       return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
     }
     ensureAnlagenstammLocalSchema(db);
-    const localResult = anlagenstammSaveLocal(db, body);
+    const bodyNorm = clampForDispoAnlagenstamm(body);
+    const localResult = anlagenstammSaveLocal(db, bodyNorm);
     if (!localResult.ok) {
       return res.status(400).json(localResult);
     }
     const entityId = localResult.id > 0 ? localResult.id : String(localResult.fabrikationsnummer || '').trim();
+    db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`).run(
+      entityId,
+    );
     db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
       'anlagenstamm',
       entityId,
       'save',
       JSON.stringify(
-        Object.assign({}, body, {
+        Object.assign({}, bodyNorm, {
           id: localResult.id,
           fabrikationsnummer: localResult.fabrikationsnummer,
           serverUsername: body.serverUsername,
@@ -3615,7 +3622,8 @@ function createApp(db) {
         }
       }
       if (fabrikationsnummern !== undefined) {
-        const val = typeof fabrikationsnummern === 'string' ? fabrikationsnummern : (fabrikationsnummern != null ? JSON.stringify(fabrikationsnummern) : null);
+        let val = typeof fabrikationsnummern === 'string' ? fabrikationsnummern : (fabrikationsnummern != null ? JSON.stringify(fabrikationsnummern) : null);
+        if (val != null) val = clampFabrikationsnummernJson(val);
         const r = db.prepare(`
           UPDATE jobs SET fabrikationsnummern = ?, updated_at = datetime('now')
           WHERE id = ? AND (
@@ -3624,9 +3632,12 @@ function createApp(db) {
           )
         `).run(val, effectiveJobId, technicianId);
         if (r.changes) {
+          db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'fabrikationsnummern'`).run(
+            effectiveJobId,
+          );
           db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'fabrikationsnummern', JSON.stringify({ fabrikationsnummern: val }));
           save();
-          return res.json({ ok: true, updated: 'fabrikationsnummern' });
+          return res.json({ ok: true, updated: 'fabrikationsnummern', pending_sync: true });
         }
       }
       res.status(400).json({ ok: false, error: 'Status-Update fehlgeschlagen oder keine Berechtigung.' });
@@ -4379,7 +4390,15 @@ function createApp(db) {
   bgJobs.kick();
 
   async function enrichJobFabWithAnlagenstamm(job, baseUrl, authHeader) {
-    if (!job || !baseUrl || typeof job.fabrikationsnummern !== 'string') return job;
+    if (!job) return job;
+    const localJobPk = job.id != null ? parseInt(job.id, 10) : NaN;
+    if (Number.isFinite(localJobPk)) {
+      const pendingFab = getPendingJobFabrikationsnummern(db, localJobPk);
+      if (pendingFab !== undefined) {
+        job = Object.assign({}, job, { fabrikationsnummern: pendingFab });
+      }
+    }
+    if (!baseUrl || typeof job.fabrikationsnummern !== 'string') return job;
     const fab = job.fabrikationsnummern.trim();
     if (!fab) return job;
     /** Felder aus Dispo-Anlagenstamm – immer nachladen und in bestehende FN-Objekte mergen (u. a. projekt). */
@@ -4464,9 +4483,19 @@ function createApp(db) {
               r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer != null ? r.Fabrikationsnummer : '',
             ).trim();
             const apiRow = sameLen ? rowForParsedIndex(i, fn) : (fn ? byFab[fn] || {} : {});
+            const localRow = fn ? anlagenstammLookupByFab(db, fn) : null;
+            const localDirty = localRow && Number(localRow.dirty) === 1;
             const merged = { ...r };
             for (const k of STAMM_KEYS) {
-              merged[k] = apiRow[k] != null ? apiRow[k] : '';
+              if (localDirty && localRow[k] != null && String(localRow[k]).trim() !== '') {
+                merged[k] = localRow[k];
+              } else if (apiRow[k] != null && String(apiRow[k]).trim() !== '') {
+                merged[k] = apiRow[k];
+              } else if (r[k] != null && String(r[k]).trim() !== '') {
+                merged[k] = r[k];
+              } else {
+                merged[k] = '';
+              }
             }
             if (fn) merged.fabrikationsnummer = fn;
             return merged;
@@ -5118,6 +5147,31 @@ function ensureCustomer(db, j) {
   return r.lastInsertRowid;
 }
 
+function getPendingJobFabrikationsnummern(db, localJobId) {
+  const row = db
+    .prepare(
+      `SELECT payload FROM pending_changes
+       WHERE entity_type = 'job' AND entity_id = ? AND action = 'fabrikationsnummern'
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get(localJobId);
+  if (!row) return undefined;
+  try {
+    const p = JSON.parse(row.payload || '{}');
+    if (p.fabrikationsnummern === undefined) return undefined;
+    const v = p.fabrikationsnummern;
+    return typeof v === 'string' ? v : JSON.stringify(v);
+  } catch (_) {
+    return undefined;
+  }
+}
+
+function resolveFabrikationsnummernForPull(db, localJobId, serverFab) {
+  const pending = getPendingJobFabrikationsnummern(db, localJobId);
+  if (pending !== undefined) return pending;
+  return serverFab != null ? serverFab : null;
+}
+
 function insertOrUpdateJob(db, j, customerId, technicianId) {
   const id = j.id;
   const existing = db.prepare('SELECT id FROM jobs WHERE server_id = ?').get(id);
@@ -5127,8 +5181,9 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const KNOWN = new Set(['angelegt', 'zugeteilt', 'in_arbeit', 'erledigt', 'abgerechnet', 'geplant']);
   const status = KNOWN.has(rawSt) ? rawSt : 'angelegt';
   if (existing) {
+    const fabForLocal = resolveFabrikationsnummernForPull(db, existing.id, j.fabrikationsnummern);
     db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
-      j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null, existing.id
+      j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabForLocal, j.eap_nummer || null, j.bestellnummer || null, existing.id
     );
     if (j.street != null) insertOrUpdateJobAddress(db, existing.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, existing.id, j);
@@ -5162,8 +5217,9 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     if (orphans.length === 1) orphan = orphans[0];
   }
   if (orphan) {
+    const fabOrphan = resolveFabrikationsnummernForPull(db, orphan.id, j.fabrikationsnummern);
     db.prepare('UPDATE jobs SET server_id = ?, job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
-      id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null, orphan.id
+      id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabOrphan, j.eap_nummer || null, j.bestellnummer || null, orphan.id
     );
     if (j.street != null) insertOrUpdateJobAddress(db, orphan.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, orphan.id, j);
@@ -5312,6 +5368,16 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       const techIdForPush = (techRow && techRow.technician_id != null) ? techRow.technician_id : technicianId;
       const headerForJob = { 'Content-Type': 'application/json', 'X-Technician-Id': String(techIdForPush), ...(authHeader || {}) };
       const payload = JSON.parse(p.payload || '{}');
+      if (p.action === 'fabrikationsnummern' && payload.fabrikationsnummern != null) {
+        payload.fabrikationsnummern =
+          typeof payload.fabrikationsnummern === 'string'
+            ? clampFabrikationsnummernJson(payload.fabrikationsnummern)
+            : JSON.stringify(
+                (Array.isArray(payload.fabrikationsnummern) ? payload.fabrikationsnummern : []).map((row) =>
+                  clampForDispoJobFabrikation(row),
+                ),
+              );
+      }
       const body = { job_id: serverJobId, ...payload };
       const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, { method: 'PATCH', headers: headerForJob, body: JSON.stringify(body) });
       if (!r.ok) {
@@ -5346,6 +5412,13 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         throw new Error(errMsg);
       }
       db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      if (p.action === 'fabrikationsnummern' && payload.fabrikationsnummern !== undefined && job && job.id != null) {
+        const fabVal =
+          typeof payload.fabrikationsnummern === 'string'
+            ? payload.fabrikationsnummern
+            : JSON.stringify(payload.fabrikationsnummern);
+        db.prepare(`UPDATE jobs SET fabrikationsnummern = ?, updated_at = datetime('now') WHERE id = ?`).run(fabVal, job.id);
+      }
       if (p.action === 'status' && payload.status === 'erledigt') {
         const localJobId = (job && job.id) || p.entity_id;
         cleanup_completed_job_files(db, localJobId);
@@ -5381,7 +5454,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       const payload = JSON.parse(p.payload || '{}');
       const techId = parseInt(String(payload.technician_id ?? technicianId), 10) || technicianId;
       try {
-        const data = await proxyAnlagenstammSave(Object.assign({}, payload, { technician_id: techId }));
+        const data = await proxyAnlagenstammSave(
+          Object.assign({}, clampForDispoAnlagenstamm(payload), { technician_id: techId }),
+        );
         if (data && data.ok === false) {
           throw new Error(data.error || 'Anlagenstamm speichern fehlgeschlagen.');
         }

@@ -64,8 +64,74 @@ function rowCount(db) {
   return r && r.c != null ? Number(r.c) : 0;
 }
 
-function upsertAnlagenstammRows(db, rows) {
-  const stmt = db.prepare(`
+/** Dispo `anlagenstamm` – Spaltenlängen (fsm_init.sql). */
+const DISPO_ANLAGENSTAMM_MAX = {
+  fabrikationsnummer: 50,
+  type: 100,
+  leistung: 100,
+  kraftaufnehmer: 100,
+  nenngeschwindigkeit: 100,
+  material: 100,
+  tacho: 100,
+  elektronik: 100,
+  dms_nr: 100,
+  position: 100,
+  aktueller_kunde: 255,
+  geliefert_ueber: 255,
+  projekt: 255,
+};
+
+/** Dispo `job_fabrikation` – teils kürzer als Anlagenstamm (z. B. leistung 50). */
+const DISPO_JOB_FABRIKATION_MAX = {
+  fabrikationsnummer: 50,
+  type: 100,
+  baujahr: 20,
+  leistung: 50,
+  nenngeschwindigkeit: 100,
+  kraftaufnehmer: 100,
+  tacho: 100,
+  dms_nr: 100,
+  elektronik: 100,
+  material: 100,
+  position: 100,
+};
+
+function clampDispoField(value, maxLen) {
+  if (value == null) return '';
+  let s = String(value);
+  if (maxLen > 0 && s.length > maxLen) return s.slice(0, maxLen);
+  return s;
+}
+
+function clampRowToDispoLimits(row, limits) {
+  if (!row || typeof row !== 'object') return row;
+  const out = Object.assign({}, row);
+  for (const key of Object.keys(limits)) {
+    if (out[key] != null) out[key] = clampDispoField(out[key], limits[key]);
+  }
+  return out;
+}
+
+function clampForDispoAnlagenstamm(rowOrPayload) {
+  return clampRowToDispoLimits(rowOrPayload, DISPO_ANLAGENSTAMM_MAX);
+}
+
+function clampForDispoJobFabrikation(row) {
+  return clampRowToDispoLimits(row, DISPO_JOB_FABRIKATION_MAX);
+}
+
+function clampFabrikationsnummernJson(jsonStr) {
+  if (jsonStr == null || jsonStr === '') return jsonStr;
+  try {
+    const arr = JSON.parse(jsonStr);
+    if (!Array.isArray(arr)) return jsonStr;
+    return JSON.stringify(arr.map((r) => clampForDispoJobFabrikation(r)));
+  } catch (_) {
+    return jsonStr;
+  }
+}
+
+const UPSERT_ANLAGENSTAMM_SQL = `
     INSERT INTO anlagenstamm_local (
       id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
       material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
@@ -92,14 +158,17 @@ function upsertAnlagenstammRows(db, rows) {
       customer_country = excluded.customer_country,
       synced_at = excluded.synced_at,
       dirty = CASE WHEN anlagenstamm_local.dirty = 1 THEN 1 ELSE 0 END
-  `);
+  `;
+
+function upsertAnlagenstammRows(db, rows) {
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  for (const row of rows) {
+  for (const raw of rows) {
+    const row = clampForDispoAnlagenstamm(raw);
     const id = parseInt(row.id, 10);
     if (!Number.isFinite(id) || id <= 0) continue;
-    stmt.run(
+    db.prepare(UPSERT_ANLAGENSTAMM_SQL).run(
       id,
-      String(row.fabrikationsnummer ?? '').trim(),
+      clampDispoField(row.fabrikationsnummer, DISPO_ANLAGENSTAMM_MAX.fabrikationsnummer).trim(),
       row.type != null ? String(row.type) : '',
       row.leistung != null ? String(row.leistung) : '',
       row.kraftaufnehmer != null ? String(row.kraftaufnehmer) : '',
@@ -181,7 +250,7 @@ function lookupByFab(db, fab) {
       .prepare(
         `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
           material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
-          geliefert_ueber, projekt, bemerkungen
+          geliefert_ueber, projekt, bemerkungen, dirty
          FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1`,
       )
       .get(fabNorm) || null
@@ -200,26 +269,27 @@ function getRowsByFabs(db, fabs) {
 }
 
 function saveLocal(db, payload) {
-  const fab = String(payload.fabrikationsnummer ?? '').trim();
+  const normalized = clampForDispoAnlagenstamm(payload || {});
+  const fab = String(normalized.fabrikationsnummer ?? '').trim();
   if (!fab) return { ok: false, error: 'Fabrikationsnummer fehlt' };
-  let id = parseInt(payload.id, 10);
+  let id = parseInt(normalized.id, 10);
   const existing = lookupByFab(db, fab);
   if (!Number.isFinite(id) || id <= 0) {
     id = existing && existing.id ? existing.id : 0;
   }
   const fields = {
-    type: payload.type != null ? String(payload.type) : '',
-    leistung: payload.leistung != null ? String(payload.leistung) : '',
-    kraftaufnehmer: payload.kraftaufnehmer != null ? String(payload.kraftaufnehmer) : '',
-    nenngeschwindigkeit: payload.nenngeschwindigkeit != null ? String(payload.nenngeschwindigkeit) : '',
-    material: payload.material != null ? String(payload.material) : '',
-    tacho: payload.tacho != null ? String(payload.tacho) : '',
-    elektronik: payload.elektronik != null ? String(payload.elektronik) : '',
-    dms_nr: payload.dms_nr != null ? String(payload.dms_nr) : '',
-    position: payload.position != null ? String(payload.position) : '',
-    geliefert_ueber: payload.geliefert_ueber != null ? String(payload.geliefert_ueber) : '',
-    projekt: payload.projekt != null ? String(payload.projekt) : '',
-    bemerkungen: payload.bemerkungen != null ? String(payload.bemerkungen) : '',
+    type: normalized.type != null ? String(normalized.type) : '',
+    leistung: normalized.leistung != null ? String(normalized.leistung) : '',
+    kraftaufnehmer: normalized.kraftaufnehmer != null ? String(normalized.kraftaufnehmer) : '',
+    nenngeschwindigkeit: normalized.nenngeschwindigkeit != null ? String(normalized.nenngeschwindigkeit) : '',
+    material: normalized.material != null ? String(normalized.material) : '',
+    tacho: normalized.tacho != null ? String(normalized.tacho) : '',
+    elektronik: normalized.elektronik != null ? String(normalized.elektronik) : '',
+    dms_nr: normalized.dms_nr != null ? String(normalized.dms_nr) : '',
+    position: normalized.position != null ? String(normalized.position) : '',
+    geliefert_ueber: normalized.geliefert_ueber != null ? String(normalized.geliefert_ueber) : '',
+    projekt: normalized.projekt != null ? String(normalized.projekt) : '',
+    bemerkungen: normalized.bemerkungen != null ? String(normalized.bemerkungen) : '',
   };
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
   if (id > 0) {
@@ -336,7 +406,15 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress) {
   };
 
   try {
-    return await tryDispoBasesInOrder(bases, runOnBase);
+    const tried = await tryDispoBasesInOrder(bases, runOnBase);
+    if (tried.error) {
+      return { ok: false, error: tried.error };
+    }
+    const inner = tried.result;
+    if (inner && inner.ok === false) {
+      return { ok: false, error: inner.error || 'Export fehlgeschlagen.' };
+    }
+    return Object.assign({ ok: true }, inner || {});
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);
     try {
@@ -361,6 +439,9 @@ module.exports = {
   ensureAnlagenstammLocalSchema,
   rowCount,
   upsertAnlagenstammRows,
+  clampForDispoAnlagenstamm,
+  clampForDispoJobFabrikation,
+  clampFabrikationsnummernJson,
   searchLocal,
   lookupByFab,
   getRowsByFabs,

@@ -1502,7 +1502,8 @@
 
   var projektdatenFabSaveBusy = false;
 
-  function showProjektdatenJob(job) {
+  function showProjektdatenJob(job, displayOpts) {
+    displayOpts = displayOpts || {};
     var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
     if (!job) {
@@ -1515,11 +1516,19 @@
     updateProjektdatenHeadingMeta(job);
     content.innerHTML = renderJobDetailsContent(job);
     bindLeistungActions();
-    setTimeout(function () {
-      loadMechanikTedLinks(job);
-      loadHotelChoicesByFab(job);
-    }, 0);
-    if (typeof loadDienstreiseExplorer === 'function') loadDienstreiseExplorer(jobDetailsJobId, '');
+    if (!displayOpts.skipDeferredLoads) {
+      setTimeout(function () {
+        loadMechanikTedLinks(job);
+        loadHotelChoicesByFab(job);
+      }, 0);
+    }
+    var skipExplorer = displayOpts.skipExplorerReload === true;
+    if (!skipExplorer && typeof loadDienstreiseExplorer === 'function') {
+      if (!jobIdsEqual(projektdatenExplorerJobId, jobDetailsJobId)) {
+        loadDienstreiseExplorer(jobDetailsJobId, '');
+        projektdatenExplorerJobId = jobDetailsJobId;
+      }
+    }
     if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
   }
 
@@ -1539,42 +1548,60 @@
     if (viewStart) viewStart.classList.add('hidden');
     if (viewEinstellungen) viewEinstellungen.classList.remove('active');
     viewProjektdaten.classList.add('active');
-    content.innerHTML = '<span class="empty">Wird geladen…</span>';
     updateProjektdatenHeadingMeta(null);
 
-    function showJob(job) {
-      showProjektdatenJob(job);
+    function showJob(job, opts) {
+      showProjektdatenJob(job, opts || {});
     }
 
-    function loadLocal() {
+    var cachedJob = window.currentProjektdatenJob;
+    var hasCachedJob = cachedJob && jobIdsEqual(cachedJob.id, jobId);
+    if (hasCachedJob && !options.fromDispo) {
+      showJob(cachedJob, { skipExplorerReload: true });
+    } else {
+      content.innerHTML = '<span class="empty">Wird geladen…</span>';
+    }
+
+    function applyJobFromFetch(job, silent) {
+      if (!job) {
+        if (!silent) showJob(null);
+        return true;
+      }
+      if (silent) {
+        window.currentProjektdatenJob = job;
+        if (jobIdsEqual(jobDetailsJobId, jobId) && !document.getElementById('anlageDetailModal')) {
+          window.currentProjektdatenLeistungRows = buildLeistungRowsFromJob(job);
+          refreshProjektdatenLeistungTableFromRows();
+          updateProjektdatenHeadingMeta(job);
+        }
+        return true;
+      }
+      showJob(job);
+      return true;
+    }
+
+    function loadLocal(skipEnrich, silent) {
       var base = getDispoBaseUrl();
       var url = API_BASE + '/api/job?id=' + encodeURIComponent(jobId);
       var jobHeaders = Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword));
-      if (base) {
+      if (base && !skipEnrich) {
         url += '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(base);
       }
       return fetch(url, { headers: jobHeaders })
         .then(function (r) { return r.json(); })
         .then(function (data) {
-          if (data.job) {
-            showJob(data.job);
-            return true;
-          }
+          if (data.job) return applyJobFromFetch(data.job, silent);
           var cached = window.currentProjektdatenJob;
-          if (cached && (cached.id === jobId || cached.id == jobId)) {
-            showJob(cached);
-            return true;
-          }
-          showJob(null);
+          if (cached && jobIdsEqual(cached.id, jobId)) return applyJobFromFetch(cached, silent);
+          if (!silent) showJob(null);
           return false;
         })
         .catch(function (e) {
           var cached = window.currentProjektdatenJob;
-          if (cached && (cached.id === jobId || cached.id == jobId)) {
-            showJob(cached);
-            return true;
+          if (cached && jobIdsEqual(cached.id, jobId)) return applyJobFromFetch(cached, silent);
+          if (!silent) {
+            content.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
           }
-          content.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
           return false;
         });
     }
@@ -1606,15 +1633,26 @@
     }
 
     if (options.fromDispo) {
+      content.innerHTML = '<span class="empty">Wird geladen…</span>';
       loadFromDispo().then(function (ok) {
-        if (!ok) loadLocal();
+        if (!ok) loadLocal(false, false);
       });
       return;
     }
 
-    loadLocal().then(function (ok) {
-      if (!ok) loadFromDispo();
-    });
+    if (hasCachedJob) {
+      loadLocal(true, true).then(function (ok) {
+        if (!ok) {
+          loadFromDispo();
+          return;
+        }
+        loadLocal(false, true);
+      });
+    } else {
+      loadLocal(false, false).then(function (ok) {
+        if (!ok) loadFromDispo();
+      });
+    }
   }
 
   function closeJobDetailsModal() {
@@ -1622,6 +1660,7 @@
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
     updateProjektdatenHeadingMeta(null);
     jobDetailsJobId = null;
+    projektdatenExplorerJobId = null;
   }
 
   /** Wie Dispo job_form.js: Komma/Semikolon, Bereiche 100-103 und Kurzform 11030-32. */
@@ -1722,6 +1761,190 @@
     return !!(r.fabrikationsnummer || r.type || r.leistung || r.position || r.geliefert_ueber || r.projekt || r.bemerkungen);
   }
 
+  function jobIdsEqual(a, b) {
+    return a != null && b != null && (a === b || String(a) === String(b));
+  }
+
+  function buildLeistungRowsFromJob(job) {
+    var leistungRows = [];
+    if (!job) return leistungRows;
+    var fab = job.fabrikationsnummern != null ? job.fabrikationsnummern : (job.fabrikation != null ? job.fabrikation : (job.job_fabrikation != null ? job.job_fabrikation : null));
+    var parsedList = null;
+    if (fab != null && (typeof fab === 'string' && (fab = fab.trim()) !== '')) {
+      try {
+        var parsed = JSON.parse(fab);
+        parsedList = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : null);
+      } catch (err) {
+        var parts = fab.split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
+        if (parts.length > 0) {
+          parsedList = parts.map(function (fn) {
+            return {
+              fabrikationsnummer: fn,
+              type: '',
+              leistung: '',
+              nenngeschwindigkeit: '',
+              kraftaufnehmer: '',
+              dms_nr: '',
+              tacho: '',
+              elektronik: '',
+              material: '',
+              position: '',
+              geliefert_ueber: '',
+              projekt: '',
+              bemerkungen: ''
+            };
+          });
+        }
+      }
+    } else if (fab != null && Array.isArray(fab)) {
+      parsedList = fab;
+    } else if (fab != null && typeof fab === 'object' && !Array.isArray(fab)) {
+      parsedList = [fab];
+    }
+    var get = function (r, keys) {
+      if (!r || typeof r !== 'object') return '';
+      for (var i = 0; i < keys.length; i++) {
+        var val = r[keys[i]];
+        if (val !== undefined && val !== null) {
+          var s = String(val).trim();
+          if (s.toLowerCase() === 'null') return '';
+          return s;
+        }
+        var lower = keys[i].toLowerCase();
+        for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k) && k.toLowerCase() === lower) {
+          var v2 = r[k];
+          if (v2 === undefined || v2 === null) continue;
+          var s2 = String(v2).trim();
+          if (s2.toLowerCase() === 'null') return '';
+          return s2;
+        }
+      }
+      return '';
+    };
+    if (parsedList && parsedList.length > 0) {
+      parsedList.forEach(function (row) {
+        var r = row && typeof row === 'object' ? row : {};
+        leistungRows.push({
+          fabrikationsnummer: get(r, ['fabrikationsnummer', 'fab']),
+          type: get(r, ['type', 'Type', 'typ', 'Typ']),
+          leistung: get(r, ['leistung', 'Leistung']),
+          nenngeschwindigkeit: get(r, ['nenngeschwindigkeit', 'Nenngeschwindigkeit']),
+          kraftaufnehmer: get(r, ['kraftaufnehmer', 'Kraftaufnehmer']),
+          dms_nr: get(r, ['dms_nr', 'DMS Nr.', 'dms_nr']),
+          tacho: get(r, ['tacho', 'Tacho']),
+          elektronik: get(r, ['elektronik', 'Elektronik']),
+          material: get(r, ['material', 'Material']),
+          position: get(r, ['position', 'Position']),
+          geliefert_ueber: get(r, ['geliefert_ueber', 'geliefertUeber']),
+          projekt: get(r, ['projekt', 'Projekt']),
+          bemerkungen: get(r, ['bemerkungen', 'Bemerkungen'])
+        });
+      });
+    }
+    if (leistungRows.length === 0) {
+      leistungRows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '', geliefert_ueber: '', projekt: '', bemerkungen: '' });
+    }
+    return leistungRows;
+  }
+
+  function leistungRowsForJobPatch(rows) {
+    var arr = (rows || []).filter(leistungRowHasVisibleData);
+    return arr.length > 0 ? arr : (rows || []).slice();
+  }
+
+  function refreshProjektdatenLeistungTableFromRows() {
+    var rows = window.currentProjektdatenLeistungRows || [];
+    var vCell = function (x) { return String(x == null ? '' : x); };
+    var content = document.getElementById('viewProjektdatenContent');
+    if (!content) return;
+    function applyRowToTr(tr, row) {
+      var cells = tr.querySelectorAll('td');
+      if (cells.length < 4) return;
+      cells[0].textContent = vCell(row.fabrikationsnummer);
+      if (cells[0].getAttribute('data-fab') != null) cells[0].setAttribute('data-fab', vCell(row.fabrikationsnummer));
+      cells[1].textContent = vCell(row.type);
+      cells[2].textContent = vCell(row.leistung);
+      cells[3].textContent = vCell(row.position);
+    }
+    content.querySelectorAll('.projektdaten-leistung-row[data-row-index]').forEach(function (tr) {
+      var i = parseInt(tr.getAttribute('data-row-index'), 10);
+      if (!Number.isFinite(i) || !rows[i]) return;
+      applyRowToTr(tr, rows[i]);
+    });
+    content.querySelectorAll('td.modal-leistung-cell-clickable[data-row-index]').forEach(function (td) {
+      var i = parseInt(td.getAttribute('data-row-index'), 10);
+      if (!Number.isFinite(i) || !rows[i]) return;
+      var row = rows[i];
+      var col = td.cellIndex;
+      if (col === 0) {
+        td.textContent = vCell(row.fabrikationsnummer);
+        if (td.getAttribute('data-fab') != null) td.setAttribute('data-fab', vCell(row.fabrikationsnummer));
+      } else if (col === 1) td.textContent = vCell(row.type);
+      else if (col === 2) td.textContent = vCell(row.leistung);
+      else if (col === 3) td.textContent = vCell(row.position);
+    });
+  }
+
+  function applyAnlageDetailBuiltToProjektdaten(built) {
+    if (!built) return;
+    window.currentProjektdatenLeistungRows = built.rowsCopy;
+    if (window.currentProjektdatenJob) {
+      window.currentProjektdatenJob = Object.assign({}, window.currentProjektdatenJob, {
+        fabrikationsnummern: JSON.stringify(built.arr)
+      });
+    }
+    refreshProjektdatenLeistungTableFromRows();
+  }
+
+  function mergeAnlagenstammFieldsIntoOpenJob(fab, fields) {
+    fab = String(fab || '').trim();
+    if (!fab || !fields) return false;
+    var rows = (window.currentProjektdatenLeistungRows || []).slice();
+    var touched = false;
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].fabrikationsnummer || '').trim() !== fab) continue;
+      rows[i] = Object.assign({}, rows[i], fields);
+      touched = true;
+    }
+    if (!touched) return false;
+    window.currentProjektdatenLeistungRows = rows;
+    var arr = leistungRowsForJobPatch(rows);
+    if (window.currentProjektdatenJob) {
+      window.currentProjektdatenJob = Object.assign({}, window.currentProjektdatenJob, {
+        fabrikationsnummern: JSON.stringify(arr)
+      });
+    }
+    refreshProjektdatenLeistungTableFromRows();
+    return true;
+  }
+
+  function persistAnlageRowToAnlagenstamm(row) {
+    var fab = String((row && row.fabrikationsnummer) || '').trim();
+    if (!fab) return Promise.resolve();
+    var payload = Object.assign({
+      baseUrl: getDispoBaseUrl(),
+      serverUsername: getServerUsername(),
+      serverPassword: getServerPassword(),
+      id: parseInt(row.id, 10) || 0,
+      fabrikationsnummer: fab,
+      type: row.type || '',
+      leistung: row.leistung || '',
+      nenngeschwindigkeit: row.nenngeschwindigkeit || '',
+      kraftaufnehmer: row.kraftaufnehmer || '',
+      material: row.material || '',
+      tacho: row.tacho || '',
+      elektronik: row.elektronik || '',
+      dms_nr: row.dms_nr || '',
+      position: row.position || '',
+      geliefert_ueber: row.geliefert_ueber || '',
+      projekt: row.projekt || '',
+      bemerkungen: row.bemerkungen || ''
+    }, dispoBasePayloadExtra());
+    return anlagenstammSaveDispo(payload).catch(function () { return null; });
+  }
+
+  var projektdatenExplorerJobId = null;
+
   function saveProjektdatenFabrikationsnummernFromRows(rows, hintEl) {
     var jobId = jobDetailsJobId;
     if (!jobId) return Promise.reject(new Error('Kein Auftrag'));
@@ -1739,7 +1962,7 @@
         hintEl.textContent = 'Fabrikationsnummern gespeichert.';
         setTimeout(function () { if (hintEl) hintEl.textContent = ''; }, 2500);
       }
-      showProjektdatenJob(job);
+      refreshProjektdatenLeistungTableFromRows();
     }).finally(function () {
       projektdatenFabSaveBusy = false;
     });
@@ -1825,83 +2048,7 @@
     if (extra2) addressLines.push(escapeHtml(extra2));
     var addressLine = addressLines.length ? addressLines.join('<br>') : '–';
 
-    var leistungRows = [];
-    var fab = job.fabrikationsnummern != null ? job.fabrikationsnummern : (job.fabrikation != null ? job.fabrikation : (job.job_fabrikation != null ? job.job_fabrikation : null));
-    var parsedList = null;
-    if (fab != null && (typeof fab === 'string' && (fab = fab.trim()) !== '')) {
-      try {
-        var parsed = JSON.parse(fab);
-        parsedList = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : null);
-      } catch (err) {
-        var parts = fab.split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
-        if (parts.length > 0) {
-          parsedList = parts.map(function (fn) {
-            return {
-              fabrikationsnummer: fn,
-              type: '',
-              leistung: '',
-              nenngeschwindigkeit: '',
-              kraftaufnehmer: '',
-              dms_nr: '',
-              tacho: '',
-              elektronik: '',
-              material: '',
-              position: '',
-              geliefert_ueber: '',
-              projekt: '',
-              bemerkungen: ''
-            };
-          });
-        }
-      }
-    } else if (fab != null && Array.isArray(fab)) {
-      parsedList = fab;
-    } else if (fab != null && typeof fab === 'object' && !Array.isArray(fab)) {
-      parsedList = [fab];
-    }
-    var get = function (r, keys) {
-      if (!r || typeof r !== 'object') return '';
-      for (var i = 0; i < keys.length; i++) {
-        var val = r[keys[i]];
-        if (val !== undefined && val !== null) {
-          var s = String(val).trim();
-          if (s.toLowerCase() === 'null') return '';
-          return s;
-        }
-        var lower = keys[i].toLowerCase();
-        for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k) && k.toLowerCase() === lower) {
-          var v2 = r[k];
-          if (v2 === undefined || v2 === null) continue;
-          var s2 = String(v2).trim();
-          if (s2.toLowerCase() === 'null') return '';
-          return s2;
-        }
-      }
-      return '';
-    };
-    if (parsedList && parsedList.length > 0) {
-      parsedList.forEach(function (row) {
-        var r = row && typeof row === 'object' ? row : {};
-        leistungRows.push({
-          fabrikationsnummer: get(r, ['fabrikationsnummer', 'fab']),
-          type: get(r, ['type', 'Type', 'typ', 'Typ']),
-          leistung: get(r, ['leistung', 'Leistung']),
-          nenngeschwindigkeit: get(r, ['nenngeschwindigkeit', 'Nenngeschwindigkeit']),
-          kraftaufnehmer: get(r, ['kraftaufnehmer', 'Kraftaufnehmer']),
-          dms_nr: get(r, ['dms_nr', 'DMS Nr.', 'dms_nr']),
-          tacho: get(r, ['tacho', 'Tacho']),
-          elektronik: get(r, ['elektronik', 'Elektronik']),
-          material: get(r, ['material', 'Material']),
-          position: get(r, ['position', 'Position']),
-          geliefert_ueber: get(r, ['geliefert_ueber', 'geliefertUeber']),
-          projekt: get(r, ['projekt', 'Projekt']),
-          bemerkungen: get(r, ['bemerkungen', 'Bemerkungen'])
-        });
-      });
-    }
-    if (leistungRows.length === 0) {
-      leistungRows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '', geliefert_ueber: '', projekt: '', bemerkungen: '' });
-    }
+    var leistungRows = buildLeistungRowsFromJob(job);
     window.currentProjektdatenLeistungRows = leistungRows;
 
     var html = '';
@@ -2062,7 +2209,7 @@
     html += '</div>';
     html += '<aside class="projektdaten-leistung-split-side" aria-label="PROJEKTE NEU">';
     html += '<h4 class="projektdaten-projekte-neu-heading">PROJEKTE NEU</h4>';
-    html += '<p class="modal-leistung-hint muted projektdaten-projekte-neu-hint">Ordnerstruktur zur gewählten Fabrikationsnummer (links Zeile anklicken).</p>';
+    html += '<p class="modal-leistung-hint muted projektdaten-projekte-neu-hint">Ordnerstruktur zur gewählten Fabrikationsnummer (links Zeile anklicken). Stammdaten kommen aus der lokalen Anlagenstamm-DB; die Ordnerliste aus dem Dienstreise-Pull (nicht aus dem DB-Vollsync).</p>';
     html += '<div id="projektdatenProjekteNeuMsg" class="projektdaten-projekte-neu-msg muted"></div>';
     html += '<div id="projektdatenProjekteNeuTree" class="projektdaten-projekte-neu-tree"></div>';
     html += '</aside>';
@@ -2430,8 +2577,8 @@
       if (e.target === modal) closeModal();
     });
     var anlageSaveBusy = false;
-    var anlageSaveNeedsRetry = false;
-    var anlageSaveRetryCloseAfter = false;
+    var anlageSaveQueued = null;
+    var anlageDetailIgnoreBlur = false;
     function buildAnlageRowsFromModalDom() {
       var idx = parseInt(document.getElementById('anlageDetailRowIndex').value, 10);
       var rowsCopy = (window.currentProjektdatenLeistungRows || []).slice();
@@ -2451,79 +2598,81 @@
         projekt: (document.getElementById('anlageDetailProjekt') && document.getElementById('anlageDetailProjekt').value) || '',
         bemerkungen: (document.getElementById('anlageDetailBemerkungen') && document.getElementById('anlageDetailBemerkungen').value) || ''
       };
-      var arr = rowsCopy.filter(leistungRowHasVisibleData);
-      if (arr.length === 0) arr = rowsCopy;
+      var arr = leistungRowsForJobPatch(rowsCopy);
       return { rowsCopy: rowsCopy, arr: arr };
     }
-    function persistAnlageDetail(closeAfter) {
-      if (!document.getElementById('anlageDetailModal')) return;
-      if (anlageSaveBusy) {
-        anlageSaveNeedsRetry = true;
-        anlageSaveRetryCloseAfter = anlageSaveRetryCloseAfter || closeAfter;
-        return;
-      }
-      var built = buildAnlageRowsFromModalDom();
-      if (!built) return;
-      anlageSaveBusy = true;
+    function flushAnlageDetailSaveQueue() {
+      if (!anlageSaveQueued) return;
+      var next = anlageSaveQueued;
+      anlageSaveQueued = null;
+      runAnlageDetailPersist(next.built, next.closeAfter);
+    }
+    function runAnlageDetailPersist(built, closeAfter) {
+      var rowIdx = parseInt(document.getElementById('anlageDetailRowIndex').value, 10);
+      var rowForStamm = Number.isFinite(rowIdx) ? built.rowsCopy[rowIdx] : null;
       api('/api/job', {
         method: 'PATCH',
         body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(built.arr) })
       }).then(function () {
-        window.currentProjektdatenLeistungRows = built.rowsCopy;
-        if (window.currentProjektdatenJob) {
-          window.currentProjektdatenJob = Object.assign({}, window.currentProjektdatenJob, {
-            fabrikationsnummern: JSON.stringify(built.arr)
-          });
+        if (rowForStamm && rowForStamm.fabrikationsnummer) {
+          persistAnlageRowToAnlagenstamm(rowForStamm);
         }
         if (closeAfter) {
           showToast('Lokal gespeichert – Abgleich mit Dispo beim nächsten Sync.');
-          closeModal();
-          var updatedJob = window.currentProjektdatenJob
-            ? Object.assign({}, window.currentProjektdatenJob, { fabrikationsnummern: JSON.stringify(built.arr) })
-            : null;
-          if (updatedJob) {
-            window.currentProjektdatenJob = updatedJob;
-            var contentEl = document.getElementById('viewProjektdatenContent');
-            if (contentEl) {
-              contentEl.innerHTML = renderJobDetailsContent(updatedJob);
-              bindLeistungActions();
-              if (typeof loadDienstreiseExplorer === 'function') loadDienstreiseExplorer(jobDetailsJobId, '');
-              if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-            }
-          }
         }
       }).catch(function (e) {
         alert('Speichern fehlgeschlagen: ' + e.message);
       }).finally(function () {
         anlageSaveBusy = false;
-        if (anlageSaveNeedsRetry && document.getElementById('anlageDetailModal')) {
-          anlageSaveNeedsRetry = false;
-          var rc = anlageSaveRetryCloseAfter;
-          anlageSaveRetryCloseAfter = false;
-          persistAnlageDetail(rc);
-        }
+        if (anlageSaveQueued) flushAnlageDetailSaveQueue();
       });
+    }
+    function persistAnlageDetail(closeAfter) {
+      if (!document.getElementById('anlageDetailModal')) return;
+      var built = buildAnlageRowsFromModalDom();
+      if (!built) return;
+      applyAnlageDetailBuiltToProjektdaten(built);
+      if (closeAfter) {
+        anlageDetailIgnoreBlur = true;
+        closeModal();
+        setTimeout(function () { anlageDetailIgnoreBlur = false; }, 0);
+      }
+      if (anlageSaveBusy) {
+        anlageSaveQueued = { built: built, closeAfter: closeAfter };
+        return;
+      }
+      anlageSaveBusy = true;
+      runAnlageDetailPersist(built, closeAfter);
     }
     modal.querySelectorAll('input[type="text"]').forEach(function (inp) {
       inp.addEventListener('blur', function () {
+        if (anlageDetailIgnoreBlur) return;
         persistAnlageDetail(false);
       });
       inp.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') {
           e.preventDefault();
-          persistAnlageDetail(false);
+          persistAnlageDetail(true);
         }
       });
     });
     var anlageTa = document.getElementById('anlageDetailBemerkungen');
     if (anlageTa) {
       anlageTa.addEventListener('blur', function () {
+        if (anlageDetailIgnoreBlur) return;
         persistAnlageDetail(false);
       });
     }
-    document.getElementById('anlageDetailSave').addEventListener('click', function () {
-      persistAnlageDetail(true);
-    });
+    var saveBtn = document.getElementById('anlageDetailSave');
+    if (saveBtn) {
+      saveBtn.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+      });
+      saveBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        persistAnlageDetail(true);
+      });
+    }
   }
 
   function addLeistungRow() {
@@ -2580,10 +2729,13 @@
       method: 'PATCH',
       body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
     }).then(function () {
-      openJobDetailsModal(jobId);
-      if (typeof checkConnectionAndSync === 'function') {
-        try { checkConnectionAndSync(); } catch (e) {}
+      window.currentProjektdatenLeistungRows = arr;
+      if (window.currentProjektdatenJob) {
+        window.currentProjektdatenJob = Object.assign({}, window.currentProjektdatenJob, {
+          fabrikationsnummern: JSON.stringify(arr)
+        });
       }
+      refreshProjektdatenLeistungTableFromRows();
     }).catch(function (e) {
       alert('Speichern fehlgeschlagen: ' + e.message);
     });
@@ -3368,26 +3520,6 @@
           }).catch(function () {});
         } catch (e) { /* ignore */ }
         try {
-          var pullRes = await fetch(API_BASE + '/api/sync_pull', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(Object.assign({}, auth, { date_from: range.date_from, date_to: range.date_to }))
-          });
-          var pullData = await pullRes.json().catch(function () { return {}; });
-          if (!pullData.ok) throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
-          if (pullData.job_id) {
-            pollBackgroundJobUntilTerminal(pullData.job_id, null, {}).then(function (j) {
-              if (j.status === 'completed') {
-                loadJobsAndAbsences();
-                loadOpenJobs();
-              }
-            }).catch(function () {});
-          }
-        } catch (e) {
-          console.error('[Sync Pull] checkConnectionAndSync:', e.message, e);
-          syncProblems.push('Pull: ' + (e && e.message ? e.message : 'Fehler'));
-        }
-        try {
           var pushRes = await fetch(API_BASE + '/api/sync_push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3396,11 +3528,38 @@
           var pushData = await pushRes.json().catch(function () { return {}; });
           if (!pushData.ok) throw new Error(pushData.error || 'Push konnte nicht gestartet werden.');
           if (pushData.job_id) {
-            pollBackgroundJobUntilTerminal(pushData.job_id, null, {}).catch(function () {});
+            var pushJob = await pollBackgroundJobUntilTerminal(pushData.job_id, null, {});
+            if (pushJob.status === 'failed') {
+              throw new Error(pushJob.error || 'Push fehlgeschlagen.');
+            }
           }
         } catch (e) {
           console.error('[Sync Push] checkConnectionAndSync:', e.message, e);
           syncProblems.push('Push: ' + (e && e.message ? e.message : 'Fehler'));
+        }
+        try {
+          var pullRes = await fetch(API_BASE + '/api/sync_pull', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({}, auth, { date_from: range.date_from, date_to: range.date_to }))
+          });
+          var pullData = await pullRes.json().catch(function () { return {}; });
+          if (!pullData.ok) throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
+          if (pullData.job_id) {
+            var pullJob = await pollBackgroundJobUntilTerminal(pullData.job_id, null, {});
+            if (pullJob.status === 'completed') {
+              loadJobsAndAbsences();
+              loadOpenJobs();
+              if (jobDetailsJobId && window.currentProjektdatenJob && typeof openJobDetailsModal === 'function') {
+                openJobDetailsModal(jobDetailsJobId);
+              }
+            } else if (pullJob.status === 'failed') {
+              throw new Error(pullJob.error || 'Pull fehlgeschlagen.');
+            }
+          }
+        } catch (e) {
+          console.error('[Sync Pull] checkConnectionAndSync:', e.message, e);
+          syncProblems.push('Pull: ' + (e && e.message ? e.message : 'Fehler'));
         }
         if (syncProblems.length) {
           setConnectionBadge('online', syncProblems.join(' · ') + ' — Klicken zum erneuten Synchronisieren');
@@ -4604,6 +4763,18 @@
         bemerkungen: payload.bemerkungen
       };
       applyAnlagenstammFormFromRow(row, payload.fabrikationsnummer);
+      mergeAnlagenstammFieldsIntoOpenJob(payload.fabrikationsnummer, row);
+      if (jobDetailsJobId) {
+        var arr = leistungRowsForJobPatch(window.currentProjektdatenLeistungRows || []);
+        api('/api/job', {
+          method: 'PATCH',
+          body: JSON.stringify({ job_id: parseInt(jobDetailsJobId, 10), fabrikationsnummern: JSON.stringify(arr) })
+        }).catch(function () { /* Auftrag-Patch best-effort */ });
+      }
+      var detailModal = document.getElementById('anlageDetailModal');
+      if (detailModal && detailModal.parentNode) {
+        detailModal.parentNode.removeChild(detailModal);
+      }
       if (msgEl) {
         msgEl.textContent = data.pending_sync
           ? 'Lokal gespeichert – wird beim nächsten Sync mit Dispo abgeglichen.'
@@ -5126,6 +5297,7 @@
     var msg = opts.msgEl || null;
     var treeHost = opts.treeHost || null;
     var toggleEl = opts.toggleEl != null ? opts.toggleEl : null;
+    var allowOnline = opts.allowOnline !== false;
     var technicianId = getTechId();
     if (!treeHost) return;
     if (!fab) {
@@ -5145,6 +5317,14 @@
       }
       if (toggleEl) toggleEl.setAttribute('data-loaded', '1');
     }
+    function cacheStatusLabel(cached) {
+      var base = 'Lokaler Baum-Cache (nach Dienstreise-Pull oder früherem Scan)';
+      if (cached && cached.synced_at) {
+        var d = String(cached.synced_at).replace('T', ' ').slice(0, 16);
+        if (d) base += ', Stand ' + d;
+      }
+      return base + '.';
+    }
     try {
       var jobId = resolveProjekteNeuJobId(opts);
       if (!jobId) {
@@ -5159,7 +5339,7 @@
           { headers: { 'X-Technician-Id': String(technicianId || '') } }
         ).then(function (r) { return r.json().catch(function () { return {}; }); });
         if (localTree && localTree.ok && localTree.enabled && Array.isArray(localTree.tree) && localTree.tree.length) {
-          return renderTree(localTree.tree, 'Lokale Kopie aus Dienstreise-Ordner.');
+          return renderTree(localTree.tree, 'Lokale Kopie (Dienstreise-Ordner Dokumente_Monteur).');
         }
       }
       var cached = await fetch(API_BASE + '/api/anlagenstamm_tree_cached?fab=' + encodeURIComponent(fab), {
@@ -5167,34 +5347,32 @@
       }).then(function (r) { return r.json().catch(function () { return {}; }); }).catch(function () { return {}; });
       var cachedTree = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
       if (cachedTree.length) {
-        renderTree(cachedTree, 'Aus lokalem Cache (Stand nach letztem Download).');
+        return renderTree(cachedTree, cacheStatusLabel(cached));
       }
-      if (!getDispoExternalUrl() && !getDispoInternalUrl()) {
-        if (!cachedTree.length && msg) msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten. Dispo-Adresse fehlt für Online-Aktualisierung.';
+      if (!allowOnline || (!getDispoExternalUrl() && !getDispoInternalUrl())) {
+        if (msg) {
+          msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten für diese FN. Bitte Auftrag annehmen (Dienstreise-Pull kopiert Dokumente_Monteur) – der Anlagenstamm-DB-Sync enthält nur Stammdaten, keine Ordnerliste.';
+        }
         return;
       }
-      const payload = {
+      var payload = {
         baseUrl: getDispoBaseUrl(),
         fab: fab,
         serverUsername: getServerUsername(),
         serverPassword: getServerPassword()
       };
-      const files = await api('/api/anlagenstamm_files_list', { method: 'POST', body: JSON.stringify(payload) });
-      const pnRaw = files && files.projekte_neu ? files.projekte_neu : {};
+      var files = await api('/api/anlagenstamm_files_list', { method: 'POST', body: JSON.stringify(payload) });
+      var pnRaw = files && files.projekte_neu ? files.projekte_neu : {};
       if (!pnRaw || !pnRaw.enabled) {
-        if (!cachedTree.length) {
-          if (msg) msg.textContent = 'PROJEKTE NEU ist für diese Anlage nicht verfügbar.';
-        }
+        if (msg) msg.textContent = 'PROJEKTE NEU ist für diese Anlage nicht verfügbar (weder lokal noch am Server).';
         return;
       }
-      const tree = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
+      var tree = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
       if (!tree.length) {
-        if (!cachedTree.length) {
-          if (msg) msg.textContent = 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
-        }
+        if (msg) msg.textContent = 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
         return;
       }
-      renderTree(tree, 'Online vom Server (Fallback).');
+      renderTree(tree, 'Noch keine lokale Kopie – Struktur vom Server (nach „Auftrag annehmen“ offline nutzbar).');
     } catch (e) {
       if (msg) msg.textContent = 'Fehler: ' + ((e && e.message) ? e.message : String(e));
     }

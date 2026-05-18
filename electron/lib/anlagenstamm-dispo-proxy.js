@@ -5,6 +5,7 @@ const {
   buildDispoBaseCandidates,
   tryDispoBasesInOrder,
 } = require('./dispo-base-fallback');
+const { clampForDispoAnlagenstamm } = require('./anlagenstamm-local');
 
 function authHeaderFromCredentials(username, password) {
   const u = (username || '').toString().trim();
@@ -87,7 +88,7 @@ async function proxyAnlagenstammSaveOnce(payload, base) {
   const authHeader = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const relativePhp = '/dispo_api/api/anlagenstamm_monteur_save.php';
   const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
-  const savePayload = Object.assign({}, payload);
+  const savePayload = clampForDispoAnlagenstamm(Object.assign({}, payload));
   delete savePayload.baseUrl;
   delete savePayload.externalUrl;
   delete savePayload.internalUrl;
@@ -108,7 +109,7 @@ async function proxyAnlagenstammSaveOnce(payload, base) {
     const apiErr = data && data.error ? data.error : '';
     const friendly = monteurUpstreamHttpError(r.status, r.statusText, apiErr, relativePhp, url);
     try {
-      console.warn('[anlagenstamm-dispo-proxy] save HTTP', r.status, url);
+      console.warn('[anlagenstamm-dispo-proxy] save HTTP', r.status, url, apiErr || '');
     } catch (_) {}
     return Object.assign({}, data, { ok: false, error: friendly, _httpStatus: r.status });
   }
