@@ -1318,7 +1318,12 @@
     var raw = String(v || '')
       .trim()
       .toLowerCase();
-    return raw === 'erledigt' || raw === 'completed' || raw === 'done' || raw === 'fertig';
+    return raw === 'erledigt' || raw === 'abgerechnet' || raw === 'completed' || raw === 'done' || raw === 'fertig';
+  }
+
+  function isJobAbgerechnet(job) {
+    if (!job || typeof job !== 'object') return false;
+    return String(job.status || '').trim().toLowerCase() === 'abgerechnet';
   }
 
   function jobHasNoDateForOpenFilter(job) {
@@ -2126,9 +2131,19 @@
       var s = String(str).trim();
       if (!s) return '';
       if (s.indexOf('\n') !== -1) s = s.replace(/\n/g, '<br>');
-      var allowed = ['b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'p', 'br'];
+      var allowed = ['b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'p', 'br', 'span', 'h1', 'h2', 'h3', 'div'];
       var div = document.createElement('div');
       div.innerHTML = s;
+      function safeSpanStyle(el) {
+        var style = (el.getAttribute('style') || '').trim();
+        if (!style) return '';
+        var parts = [];
+        var cm = style.match(/(?:^|;\s*)color\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))/i);
+        if (cm) parts.push('color:' + cm[1].trim());
+        var bm = style.match(/(?:^|;\s*)background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))/i);
+        if (bm) parts.push('background-color:' + bm[1].trim());
+        return parts.length ? ' style="' + parts.join(';') + '"' : '';
+      }
       function sanitize(node) {
         if (node.nodeType === 3) return escapeHtml(node.textContent);
         if (node.nodeType !== 1) return '';
@@ -2138,7 +2153,10 @@
           for (var i = 0; i < node.childNodes.length; i++) out += sanitize(node.childNodes[i]);
           return out;
         }
-        var out = '<' + tag + '>';
+        var open = '<' + tag;
+        if (tag === 'span') open += safeSpanStyle(node);
+        open += '>';
+        var out = open;
         for (var j = 0; j < node.childNodes.length; j++) out += sanitize(node.childNodes[j]);
         if (tag !== 'br') out += '</' + tag + '>';
         return out;
@@ -4001,6 +4019,26 @@
     }
   }
 
+  function absenceEndDateYmd(item) {
+    if (!item || item.end_datetime == null) return '';
+    var s = String(item.end_datetime).trim().replace('T', ' ');
+    return s ? s.slice(0, 10) : '';
+  }
+
+  /** Abwesenheit abgelaufen, wenn das Enddatum vor dem heutigen Kalendertag liegt. */
+  function isAbsenceExpired(item) {
+    var endYmd = absenceEndDateYmd(item);
+    if (!endYmd || !/^\d{4}-\d{2}-\d{2}$/.test(endYmd)) return false;
+    var today = new Date();
+    var todayYmd =
+      today.getFullYear() +
+      '-' +
+      String(today.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(today.getDate()).padStart(2, '0');
+    return endYmd < todayYmd;
+  }
+
   function renderAbsences(data, requestsData) {
     const list = document.getElementById('absencesList');
     const absences = (data && data.absences) ? data.absences : [];
@@ -4008,6 +4046,7 @@
     const parts = [];
     absences.forEach(function(a) {
       if (a.from_absence_request && a.status === 'pending') return;
+      if (isAbsenceExpired(a)) return;
       const dateStr = formatDateRange(a.start_datetime, a.end_datetime);
       const isRequest = a.from_absence_request === true;
       const action = isRequest ? 'delete-absence-request' : 'delete-absence';
@@ -4017,6 +4056,7 @@
     });
     requests.forEach(function(r) {
       if (r.status === 'approved') return;
+      if (isAbsenceExpired(r)) return;
       const dateStr = formatDateRange(r.start_datetime, r.end_datetime);
       var statusText;
       if (r.status === 'pending') statusText = 'Offen (wird geprüft)';
@@ -4026,7 +4066,7 @@
       var cmt2 = (r.comment && String(r.comment).trim()) ? (' · ' + escapeHtml(String(r.comment).trim())) : '';
       parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(r.type || 'Abwesenheit') + '</strong> <span class="job-meta">' + escapeHtml(dateStr) + ' – ' + escapeHtml(statusText) + cmt2 + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="delete-absence-request" data-id="' + escapeHtml(String(r.id)) + '" title="Anfrage aus der Liste entfernen" aria-label="Löschen">🗑</button></div>');
     });
-    var hasErrorRequests = requests.some(function(r) { return r.status === 'error'; });
+    var hasErrorRequests = requests.some(function(r) { return r.status === 'error' && !isAbsenceExpired(r); });
     var btnCleanup = document.getElementById('btnCleanupErrorRequests');
     if (btnCleanup) btnCleanup.style.display = hasErrorRequests ? 'inline-block' : 'none';
     if (parts.length === 0) {
@@ -6150,6 +6190,59 @@
     return out;
   }
 
+  var CALENDAR_UNASSIGNED_COLOR_DEFAULT = '#94a3b8';
+
+  function isCalendarJobUnassigned(job) {
+    if (!job || typeof job !== 'object') return false;
+    var tid = job.technician_id != null ? job.technician_id : job.technicianId;
+    if (tid === 0 || tid === '0') return true;
+    if (String(job.technician_name || '').trim() === 'Nicht zugewiesen') return true;
+    return jobHasNoTechnicianForOpenFilter(job);
+  }
+
+  function calendarUnassignedLane(techById, job) {
+    var u = techById && (techById[0] || techById['0']);
+    var fromJobColor = job && job.technician_color ? String(job.technician_color).trim() : '';
+    return {
+      technician_id: 0,
+      technician_name: (job && job.technician_name) || (u && u.name) || 'Nicht zugewiesen',
+      technician_color: fromJobColor || (u && u.color) || CALENDAR_UNASSIGNED_COLOR_DEFAULT
+    };
+  }
+
+  function calendarJobTechFields(job, techById, viewerTechId) {
+    if (isCalendarJobUnassigned(job)) {
+      return calendarUnassignedLane(techById, job);
+    }
+    var tid = job.technician_id != null ? job.technician_id : job.technicianId;
+    if (tid == null || tid === '') {
+      tid = viewerTechId != null ? viewerTechId : tid;
+    }
+    var info = tid != null ? (techById[tid] || techById[Number(tid)]) : null;
+    return {
+      technician_id: tid,
+      technician_name: info ? info.name : (job.technician_name || (tid != null ? 'Techniker ' + tid : 'Unbekannt')),
+      technician_color: info ? info.color : (job.technician_color || '#4a90e2')
+    };
+  }
+
+  function buildTechByIdFromCalendarTechnicians(techList) {
+    var techById = {};
+    (techList || []).forEach(function (t) {
+      var id = t.id != null ? t.id : t.technician_id;
+      if (id == null) return;
+      var dispColor = (t.color || t.farbe || '').toString().trim();
+      var n = Number(id);
+      var entry = {
+        name: (t.full_name || t.name || t.technician_name || '').trim() || (n === 0 ? 'Nicht zugewiesen' : 'Techniker ' + id),
+        color: dispColor || (n === 0 ? CALENDAR_UNASSIGNED_COLOR_DEFAULT : '#4a90e2')
+      };
+      techById[id] = entry;
+      if (!Number.isNaN(n)) techById[n] = entry;
+    });
+    return techById;
+  }
+
   /** Billing-Flags aus Kalender-Jobs (Cache/API) in lokale Job-Liste übernehmen. */
   function mergeCalendarBillingIntoJobs(jobs, billingSources, techId) {
     if (!Array.isArray(jobs) || !Array.isArray(billingSources) || !billingSources.length) return jobs;
@@ -6177,18 +6270,42 @@
     }).then(function (r) { return r.json().catch(function () { return {}; }); });
   }
 
+  /** Ohne „Alle Techniker“: keine Lane „Nicht zugewiesen“ / keine unzugewiesenen Aufträge. */
+  function filterCalendarJobsForView(jobs, showAll) {
+    if (showAll) return Array.isArray(jobs) ? jobs : [];
+    return (Array.isArray(jobs) ? jobs : []).filter(function (j) { return !isCalendarJobUnassigned(j); });
+  }
+
+  function filterCalendarTechniciansForLegend(technicians, showAll) {
+    if (showAll || !Array.isArray(technicians)) return technicians;
+    return technicians.filter(function (t) {
+      var id = t.id != null ? t.id : t.technician_id;
+      return Number(id) !== 0;
+    });
+  }
+
   /** Lokaler Kalender (SQLite) für einen Monteur – funktioniert ohne Dispo-Verbindung. */
-  async function loadCalendarLocalMonth(start, end, techId) {
+  async function loadCalendarLocalMonth(start, end, techId, includeUnassigned) {
     const params = { technician_id: techId, date_from: start, date_to: end, include_erledigt: 1 };
-    const [jRes, aRes, techRes] = await Promise.all([
+    if (!includeUnassigned) {
+      params.assigned_only = '1';
+    }
+    const [jRes, aRes, techRes, cached] = await Promise.all([
       fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()),
       fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()),
-      fetch(API_BASE + '/api/technician?technician_id=' + techId, { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()).catch(() => ({}))
+      fetch(API_BASE + '/api/technician?technician_id=' + techId, { headers: { 'X-Technician-Id': String(techId) } }).then((r) => r.json()).catch(() => ({})),
+      fetchCalendarCachedMonth(start, end, techId).catch(function () { return {}; })
     ]);
     var techColor = (techRes.color || techRes.farbe || '').toString().trim() || '#4a90e2';
     var techName = (techRes.full_name || techRes.name || '').toString().trim() || ('Techniker ' + techId);
-    const jobs = (jRes.jobs || []).map(function (j) { return Object.assign({}, j, { technician_id: techId, technician_name: techName, technician_color: techColor }); });
-    const absences = (aRes.absences || []).map(function (a) { return Object.assign({}, a, { technician_id: techId, technician_name: techName, technician_color: techColor }); });
+    var techById = buildTechByIdFromCalendarTechnicians(cached && cached.ok ? cached.technicians : []);
+    techById[techId] = { name: techName, color: techColor };
+    const jobs = (jRes.jobs || []).map(function (j) {
+      return Object.assign({}, j, calendarJobTechFields(j, techById, techId));
+    });
+    const absences = (aRes.absences || []).map(function (a) {
+      return Object.assign({}, a, { technician_id: techId, technician_name: techName, technician_color: techColor });
+    });
     return { jobs: jobs, absences: absences };
   }
 
@@ -6217,7 +6334,7 @@
           return;
         }
         try {
-          var localOnly = await loadCalendarLocalMonth(start, end, myTechId);
+          var localOnly = await loadCalendarLocalMonth(start, end, myTechId, true);
           jobs = localOnly.jobs;
           absences = localOnly.absences;
           showToast('Offline / keine Server-URL: nur Ihre gespeicherten Termine (lokal).');
@@ -6254,16 +6371,7 @@
         calendarApiData = data;
         jobs = data.jobs || [];
         var techList = (data.technicians && data.technicians.length) ? data.technicians : [];
-        var techById = {};
-        techList.forEach(function (t) {
-          var id = t.id != null ? t.id : t.technician_id;
-          if (id == null) return;
-          var dispColor = (t.color || t.farbe || '').toString().trim();
-          techById[id] = {
-            name: (t.full_name || t.name || t.technician_name || '').trim() || ('Techniker ' + id),
-            color: dispColor || '#4a90e2'
-          };
-        });
+        var techById = buildTechByIdFromCalendarTechnicians(techList);
         // Abwesenheiten mit Technikerfarbe/Name anreichern (API liefert ggf. keine Farbe)
         absences = (data.absences || []).map(function (a) {
           var tid = a.technician_id != null ? a.technician_id : a.technicianId;
@@ -6287,19 +6395,12 @@
               if (j.server_id != null) { localJobsByServerId[j.server_id] = j; localJobsByServerId[String(j.server_id)] = j; }
               if (j.id != null) { localJobsById[j.id] = j; localJobsById[String(j.id)] = j; }
             });
-            var myTechInfo = { name: techById[myTechId] ? techById[myTechId].name : ('Techniker ' + myTechId), color: techById[myTechId] ? techById[myTechId].color : '#4a90e2' };
             jobs = jobs.map(function (j) {
-              var tid = j.technician_id != null ? j.technician_id : j.technicianId;
-              var info = techById[tid];
-              var techDisplay = { technician_name: info ? info.name : ('Techniker ' + tid), technician_color: info ? info.color : '#4a90e2' };
               var sid = j.server_id != null ? j.server_id : j.id;
               var localJob = localJobsByServerId[j.server_id] || localJobsByServerId[j.id] || localJobsByServerId[String(j.server_id)] || localJobsByServerId[String(j.id)] || localJobsById[j.id] || localJobsById[String(j.id)];
+              var techDisplay = calendarJobTechFields(j, techById, myTechId);
               if (localJob) {
-                return Object.assign({}, localJob, calendarBillingFlagsFrom(j), {
-                  technician_id: myTechId,
-                  technician_name: myTechInfo.name,
-                  technician_color: myTechInfo.color
-                });
+                return Object.assign({}, localJob, calendarBillingFlagsFrom(j), techDisplay);
               }
               return Object.assign({}, j, techDisplay);
             });
@@ -6307,7 +6408,7 @@
             jobs.forEach(function (j) { serverJobIds[j.id] = true; if (j.server_id != null) serverJobIds[j.server_id] = true; });
             (local[0].jobs || []).forEach(function (j) {
               if (!serverJobIds[j.id] && !serverJobIds[j.server_id]) {
-                jobs.push(Object.assign({}, j, { technician_id: myTechId, technician_name: myTechInfo.name, technician_color: myTechInfo.color }));
+                jobs.push(Object.assign({}, j, calendarJobTechFields(j, techById, myTechId)));
               }
             });
             var seenJobKey = {};
@@ -6342,7 +6443,7 @@
           return;
         }
         try {
-          var fb = await loadCalendarLocalMonth(start, end, myTechId);
+          var fb = await loadCalendarLocalMonth(start, end, myTechId, true);
           jobs = fb.jobs;
           absences = fb.absences;
           calendarApiData = null;
@@ -6360,7 +6461,7 @@
         return;
       }
       try {
-        var loc = await loadCalendarLocalMonth(start, end, techId);
+        var loc = await loadCalendarLocalMonth(start, end, techId, false);
         jobs = loc.jobs;
         absences = loc.absences;
         try {
@@ -6377,7 +6478,11 @@
       }
     }
 
-    const techniciansFromApi = (calendarApiData && calendarApiData.technicians) ? calendarApiData.technicians : null;
+    jobs = filterCalendarJobsForView(jobs, showAll);
+    const techniciansFromApi = filterCalendarTechniciansForLegend(
+      (calendarApiData && calendarApiData.technicians) ? calendarApiData.technicians : null,
+      showAll
+    );
     renderCalendarGrid(gridStart, gridEnd, jobs, absences, techniciansFromApi);
 
     // Performance: Eigener-Techniker-Modus rendert sofort aus lokaler DB.
@@ -6398,13 +6503,22 @@
               patchedJobs = mergeCalendarBillingIntoJobs(jobs, cached.jobs, techId);
             }
             if (dispoColor) {
-              patchedJobs = patchedJobs.map(function (j) { return Object.assign({}, j, { technician_color: dispoColor }); });
+              patchedJobs = patchedJobs.map(function (j) {
+                if (isCalendarJobUnassigned(j)) return j;
+                return Object.assign({}, j, { technician_color: dispoColor });
+              });
             }
             var patchedAbsences = dispoColor
               ? absences.map(function (a) { return Object.assign({}, a, { technician_color: dispoColor }); })
               : absences;
             if (dispoColor || (cached && cached.ok === true && Array.isArray(cached.jobs))) {
-              renderCalendarGrid(gridStart, gridEnd, patchedJobs, patchedAbsences, techniciansFromApi);
+              renderCalendarGrid(
+                gridStart,
+                gridEnd,
+                filterCalendarJobsForView(patchedJobs, false),
+                patchedAbsences,
+                filterCalendarTechniciansForLegend(techniciansFromApi, false)
+              );
             }
           })
           .catch(function () { /* optional */ });
@@ -7106,6 +7220,7 @@
       var listEl = document.getElementById('dienstreiseList');
       if (!listEl) return;
       var jobs = (data && data.jobs) ? data.jobs : [];
+      jobs = jobs.filter(function (j) { return !isJobAbgerechnet(j); });
       dienstreisePageJobs = jobs;
       if (jobs.length === 0) {
         listEl.innerHTML = '<span class="empty">Keine Aufträge.</span>';
