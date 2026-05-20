@@ -2476,7 +2476,7 @@
             var tedFab = btn.getAttribute('data-ted-fab') || '';
             var tedFileName = btn.getAttribute('data-ted-filename') || '';
             if (!rel) return;
-            openTedExcelOnDevice(rel, tedJobId, tedLocalJobId, tedFab, tedFileName);
+            openTedExcelOnDevice(rel, tedJobId, tedLocalJobId, tedFab, tedFileName, btn);
           });
         });
       })
@@ -2614,7 +2614,23 @@
     });
   }
 
-  function openTedExcelOnDevice(relPath, jobId, localJobId, fab, fileName) {
+  var tedExcelDownloadToken = 0;
+
+  function setTedExcelDownloadLoading(isLoading, label) {
+    var ov = document.getElementById('tedExcelDownloadOverlay');
+    if (!ov) return;
+    if (isLoading) {
+      ov.hidden = false;
+      ov.setAttribute('aria-busy', 'true');
+      var lbl = ov.querySelector('.ted-excel-download-label');
+      if (lbl) lbl.textContent = label || 'Excel wird geladen…';
+    } else {
+      ov.hidden = true;
+      ov.setAttribute('aria-busy', 'false');
+    }
+  }
+
+  function openTedExcelOnDevice(relPath, jobId, localJobId, fab, fileName, triggerBtn) {
     relPath = String(relPath || '').trim();
     jobId = jobId != null && jobId !== '' ? jobId : null;
     localJobId = localJobId != null && localJobId !== '' ? localJobId : null;
@@ -2625,6 +2641,23 @@
     if (!relPath || !baseUrl || !techId || jobId == null || jobId === '') {
       alert('TED-Datei kann nicht geöffnet werden (Pfad, Auftrag oder Verbindung fehlt).');
       return;
+    }
+    var loadToken = ++tedExcelDownloadToken;
+    var loadLabel = fileName
+      ? 'Lädt ' + fileName + '…'
+      : 'Excel wird geladen…';
+    setTedExcelDownloadLoading(true, loadLabel);
+    if (triggerBtn) {
+      triggerBtn.disabled = true;
+      triggerBtn.setAttribute('aria-busy', 'true');
+    }
+    function finishLoading() {
+      if (loadToken !== tedExcelDownloadToken) return;
+      setTedExcelDownloadLoading(false);
+      if (triggerBtn) {
+        triggerBtn.disabled = false;
+        triggerBtn.removeAttribute('aria-busy');
+      }
     }
     fetch(API_BASE + '/api/mechanik_ted_excel_open', {
       method: 'POST',
@@ -2647,6 +2680,7 @@
           alert('TED-Datei: ' + err);
           return;
         }
+        setTedExcelDownloadLoading(true, 'Starte Excel…');
         var openFn = (typeof monteurApp !== 'undefined' && (monteurApp.openExcel || monteurApp.openPath))
           ? (monteurApp.openExcel || monteurApp.openPath)
           : null;
@@ -2659,7 +2693,8 @@
       })
       .catch(function (e) {
         alert('TED-Datei: ' + (e && e.message ? e.message : 'Netzwerkfehler'));
-      });
+      })
+      .finally(finishLoading);
   }
 
   function fillAnlageDetailFieldsFromLocalStamm(fab, rowIndex) {
@@ -6533,9 +6568,16 @@
     const full = parts.join(', ');
     const label = maxLen && full.length > maxLen ? (maxLen <= 4 ? full.substring(0, maxLen) : full.substring(0, maxLen - 4) + ',...') : full;
     const statusRaw = (job.status != null ? job.status : job.Status != null ? job.Status : job.job_status != null ? job.job_status : '').toString().trim().toLowerCase();
-    const isErledigt = statusRaw === 'erledigt' || statusRaw === 'completed' || statusRaw === 'done' || statusRaw === 'fertig';
-    const labelHtml = isErledigt
-      ? '<span class="cal-erledigt-check">✓</span> <span class="cal-bar-label">' + (label || 'Auftrag').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') + '</span> <span class="cal-erledigt-check">✓</span>'
+    const isErledigt = statusRaw === 'erledigt' || statusRaw === 'abgerechnet' || statusRaw === 'completed' || statusRaw === 'done' || statusRaw === 'fertig';
+    const isMontage = Number(job.montage_verrechnet) === 1;
+    const isReise = Number(job.billing_travel_complete) === 1;
+    const escLabel = (label || 'Auftrag').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const checkParts = [];
+    if (isErledigt) checkParts.push('<span class="cal-check cal-check-erledigt" title="Erledigt">✓</span>');
+    if (isMontage) checkParts.push('<span class="cal-check cal-check-montage" title="Fakturierung Montage">✓</span>');
+    if (isReise) checkParts.push('<span class="cal-check cal-check-reise" title="Reisekosten abgerechnet">✓</span>');
+    const labelHtml = checkParts.length
+      ? checkParts.join('') + ' <span class="cal-bar-label">' + escLabel + '</span>'
       : null;
 
     let title = full || firma || 'Auftrag';

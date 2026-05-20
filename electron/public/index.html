@@ -611,7 +611,10 @@
     .month2-band { margin: 1px 1px; font-size: 10px; line-height: 1.3; padding: 1px 6px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-align: center; text-overflow: ellipsis; box-sizing: border-box; display: flex; align-items: center; justify-content: center; color: #000; min-width: 0; font-weight: bold; }
     .month2-event { background: var(--card); }
     .month2-absence { background: #fff; border: 1px solid rgba(0,0,0,0.2); background-image: repeating-linear-gradient(-45deg, transparent 0, transparent 2px, var(--stripes, #6c757d) 2px, var(--stripes, #6c757d) 4px); font-weight: bold; }
-    .cal-erledigt-check { color: #1a7f37; font-weight: bold; }
+    .cal-check { font-weight: bold; margin-right: 1px; }
+    .cal-check-erledigt { color: #2563eb; }
+    .cal-check-montage { color: #b45309; text-shadow: 0 0 1px #fff, 0 0 2px #fff; }
+    .cal-check-reise { color: #16a34a; }
     .cal-legend { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--accent); font-size: 0.85rem; }
     .cal-legend-title { font-weight: bold; margin-right: 0.5rem; color: var(--muted); }
     .cal-legend-item { display: inline-flex; align-items: center; gap: 6px; }
@@ -770,6 +773,23 @@
       margin-top: 0.4rem; padding: 0.45rem 0.5rem; font-size: 0.85rem; line-height: 1.35;
       word-break: break-word; background: rgba(0,0,0,0.2); border-radius: 4px; border: 1px solid rgba(255,255,255,0.06);
     }
+    .ted-excel-download-overlay {
+      position: fixed; inset: 0; z-index: 10050;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.42);
+    }
+    .ted-excel-download-overlay[hidden] { display: none !important; }
+    .ted-excel-download-panel {
+      min-width: 280px; max-width: min(420px, 92vw);
+      padding: 1.15rem 1.35rem; box-sizing: border-box;
+      background: var(--card); border: 1px solid var(--accent); border-radius: 8px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+    }
+    .ted-excel-download-label {
+      margin: 0 0 0.75rem; font-size: 0.92rem; color: var(--text);
+      word-break: break-word;
+    }
+    .ted-excel-download-panel .projekte-neu-lightbox-progress { margin: 0; }
     .anlage-detail-modal.modal-overlay { display: flex; align-items: center; justify-content: center; padding: 1rem; background: rgba(0,0,0,0.5); }
     .anlage-detail-modal .modal-box.anlage-detail-content { background: var(--card); border: 1px solid var(--accent); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); max-width: 640px; width: 95%; max-height: 90vh; overflow-y: auto; padding: 1.25rem; margin: 0; }
     .anlage-detail-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.5rem; margin-top: 0.75rem; }
@@ -1388,6 +1408,14 @@
       <button type="button" class="btn btn-ghost" id="btnOpenProfileForQr">Profil im Browser öffnen (QR-Code erzeugen)</button>
     </div>
   </main>
+  <div id="tedExcelDownloadOverlay" class="ted-excel-download-overlay" hidden aria-live="polite" aria-busy="false">
+    <div class="ted-excel-download-panel" role="status">
+      <p class="ted-excel-download-label">Excel wird geladen…</p>
+      <div class="projekte-neu-lightbox-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Download läuft">
+        <div class="projekte-neu-lightbox-progress-bar"></div>
+      </div>
+    </div>
+  </div>
   <div id="projekteNeuImageLightbox" class="projekte-neu-lightbox" hidden aria-modal="true" role="dialog">
     <div class="projekte-neu-lightbox-backdrop" tabindex="-1"></div>
     <div class="projekte-neu-lightbox-inner">

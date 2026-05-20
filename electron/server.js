@@ -386,9 +386,13 @@ async function getDb() {
       end_datetime TEXT,
       technician_name TEXT,
       technician_color TEXT,
+      montage_verrechnet INTEGER DEFAULT 0,
+      billing_travel_complete INTEGER DEFAULT 0,
       synced_at TEXT
     )`);
   } catch (e) { /* existiert evtl. */ }
+  try { sqlDb.run('ALTER TABLE calendar_cache_jobs ADD COLUMN montage_verrechnet INTEGER DEFAULT 0'); } catch (e) { /* Spalte existiert */ }
+  try { sqlDb.run('ALTER TABLE calendar_cache_jobs ADD COLUMN billing_travel_complete INTEGER DEFAULT 0'); } catch (e) { /* Spalte existiert */ }
   try {
     sqlDb.run(`CREATE TABLE IF NOT EXISTS calendar_cache_absences (
       cache_key TEXT PRIMARY KEY,
@@ -5397,7 +5401,8 @@ ORDER BY
       const jobs = db.prepare(`
         SELECT
           server_job_id AS id, technician_id, customer_name, job_number, city, country, status,
-          start_datetime, end_datetime, technician_name, technician_color
+          start_datetime, end_datetime, technician_name, technician_color,
+          montage_verrechnet, billing_travel_complete
         FROM calendar_cache_jobs
         WHERE end_datetime >= ? AND start_datetime <= ?
       `).all(start + ' 00:00:00', end + ' 23:59:59');
@@ -5563,13 +5568,16 @@ function upsertCalendarCache(db, calendarData) {
       if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(tid) || tid <= 0 || !start || !end) continue;
       const cacheKey = String(sid) + ':' + String(tid);
       db.prepare(`INSERT OR REPLACE INTO calendar_cache_jobs
-        (cache_key, server_job_id, technician_id, customer_name, job_number, city, country, status, start_datetime, end_datetime, technician_name, technician_color, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (cache_key, server_job_id, technician_id, customer_name, job_number, city, country, status, start_datetime, end_datetime, technician_name, technician_color, montage_verrechnet, billing_travel_complete, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         cacheKey, sid, tid,
         String(j.customer_name || ''), String(j.job_number || ''),
         String(j.city || ''), String(j.country || ''), String(j.status || ''),
-        start, end, String(j.technician_name || ''), String(j.technician_color || ''), syncedAt
+        start, end, String(j.technician_name || ''), String(j.technician_color || ''),
+        Number(j.montage_verrechnet) === 1 ? 1 : 0,
+        Number(j.billing_travel_complete) === 1 ? 1 : 0,
+        syncedAt
       );
     }
 
