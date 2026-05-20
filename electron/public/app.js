@@ -6,7 +6,9 @@
     opts = opts || {};
     var interval = opts.interval || 750;
     var maxMs = opts.maxMs || 45 * 60 * 1000;
+    var missingRetries = opts.missingRetries != null ? opts.missingRetries : 8;
     var t0 = Date.now();
+    var missingCount = 0;
     return new Promise(function (resolve, reject) {
       function tick() {
         if (Date.now() - t0 > maxMs) {
@@ -16,16 +18,23 @@
         fetch(API_BASE + '/api/background_jobs/' + encodeURIComponent(jobId))
           .then(function (r) {
             return r.json().then(function (data) {
-              return { data: data };
+              return { status: r.status, data: data };
             });
           })
           .then(function (x) {
             var data = x.data;
             var j = data && data.job;
             if (!j) {
-              reject(new Error((data && data.error) || 'Job nicht gefunden'));
+              var errMsg = (data && data.error) || 'Job nicht gefunden';
+              if (x.status === 404 && missingCount < missingRetries) {
+                missingCount++;
+                setTimeout(tick, Math.min(interval, 400));
+                return;
+              }
+              reject(new Error(errMsg));
               return;
             }
+            missingCount = 0;
             if (typeof onProgress === 'function') {
               try {
                 onProgress(j);
@@ -326,8 +335,9 @@
 
   function getSyncDateRange() {
     const today = new Date();
-    // Nur Zukunft: alle Termine ab heute, weit in die Zukunft.
+    // Vergangenheit einbeziehen: laufende in_arbeit-Aufträge haben oft Enddatum vor „heute“ und fehlen sonst im Dispo-Pull → wurden lokal gelöscht.
     const from = new Date(today);
+    from.setFullYear(from.getFullYear() - 1);
     const to = new Date(today);
     to.setFullYear(to.getFullYear() + 10);
     return {
@@ -1522,6 +1532,7 @@
   var projektdatenFabSaveBusy = false;
   /** Verhindert, dass ein veralteter Hintergrund-/api/job-Refresh frisch gespeicherte FN überschreibt. */
   var projektdatenFabSavedAt = 0;
+  var PROJEKTDATEN_FAB_SAVE_GUARD_MS = 120000;
 
   function showProjektdatenJob(job, displayOpts) {
     displayOpts = displayOpts || {};
@@ -1537,7 +1548,7 @@
     updateProjektdatenHeadingMeta(job);
     content.innerHTML = renderJobDetailsContent(job);
     bindLeistungActions();
-    if (!displayOpts.skipDeferredLoads) {
+    if (!displayOpts.skipDeferredLoads && getDispoBaseUrl()) {
       setTimeout(function () {
         loadMechanikTedLinks(job);
         loadHotelChoicesByFab(job);
@@ -1545,7 +1556,13 @@
     }
     var skipExplorer = displayOpts.skipExplorerReload === true;
     if (!skipExplorer && typeof loadDienstreiseExplorer === 'function') {
-      if (!jobIdsEqual(projektdatenExplorerJobId, jobDetailsJobId)) {
+      var listEl = document.getElementById('dienstreiseExplorerList');
+      var explorerStale =
+        !jobIdsEqual(projektdatenExplorerJobId, jobDetailsJobId) ||
+        !listEl ||
+        !!listEl.querySelector('#dienstreiseExplorerPlaceholder') ||
+        (listEl.textContent && /Wird geladen/i.test(listEl.textContent));
+      if (explorerStale) {
         loadDienstreiseExplorer(jobDetailsJobId, '');
         projektdatenExplorerJobId = jobDetailsJobId;
       }
@@ -1577,10 +1594,29 @@
 
     var cachedJob = window.currentProjektdatenJob;
     var hasCachedJob = cachedJob && jobIdsEqual(cachedJob.id, jobId);
-    if (hasCachedJob && !options.fromDispo) {
-      showJob(cachedJob, { skipExplorerReload: true });
-    } else {
+    var syncPullRefresh = options.syncPullRefresh === true;
+    if (hasCachedJob && !options.fromDispo && !syncPullRefresh) {
+      showJob(cachedJob, {});
+    } else if (!hasCachedJob || options.fromDispo) {
       content.innerHTML = '<span class="empty">Wird geladen…</span>';
+    }
+
+    function applyRecentFabSaveToJob(job) {
+      if (!job || !projektdatenFabSavedAt || Date.now() - projektdatenFabSavedAt >= PROJEKTDATEN_FAB_SAVE_GUARD_MS) {
+        return job;
+      }
+      var rows = window.currentProjektdatenLeistungRows;
+      if (rows && rows.length) {
+        return Object.assign({}, job, {
+          fabrikationsnummern: JSON.stringify(leistungRowsForJobPatch(rows)),
+        });
+      }
+      if (window.currentProjektdatenJob && window.currentProjektdatenJob.fabrikationsnummern) {
+        return Object.assign({}, job, {
+          fabrikationsnummern: window.currentProjektdatenJob.fabrikationsnummern,
+        });
+      }
+      return job;
     }
 
     function applyJobFromFetch(job, silent) {
@@ -1588,20 +1624,28 @@
         if (!silent) showJob(null);
         return true;
       }
-      if (
-        silent &&
-        window.currentProjektdatenJob &&
-        projektdatenFabSavedAt &&
-        Date.now() - projektdatenFabSavedAt < 60000
-      ) {
-        job = Object.assign({}, job, {
-          fabrikationsnummern: window.currentProjektdatenJob.fabrikationsnummern,
-        });
+      if (silent) {
+        job = applyRecentFabSaveToJob(job);
       }
       if (silent) {
+        var prevRows = window.currentProjektdatenLeistungRows || [];
+        var nextRows = buildLeistungRowsFromJob(job);
+        var prevFns = prevRows.map(function (r) { return String(r.fabrikationsnummer || '').trim(); }).join('\t');
+        var nextFns = nextRows.map(function (r) { return String(r.fabrikationsnummer || '').trim(); }).join('\t');
+        var tableNeedsRebuild =
+          prevRows.length !== nextRows.length ||
+          prevFns !== nextFns;
+        if (
+          jobIdsEqual(jobDetailsJobId, jobId) &&
+          !document.getElementById('anlageDetailModal') &&
+          tableNeedsRebuild
+        ) {
+          showProjektdatenJob(job, { skipExplorerReload: true, skipDeferredLoads: true });
+          return true;
+        }
         window.currentProjektdatenJob = job;
         if (jobIdsEqual(jobDetailsJobId, jobId) && !document.getElementById('anlageDetailModal')) {
-          window.currentProjektdatenLeistungRows = buildLeistungRowsFromJob(job);
+          window.currentProjektdatenLeistungRows = nextRows;
           refreshProjektdatenLeistungTableFromRows();
           updateProjektdatenHeadingMeta(job);
         }
@@ -1612,11 +1656,10 @@
     }
 
     function loadLocal(skipEnrich, silent) {
-      var base = getDispoBaseUrl();
       var url = API_BASE + '/api/job?id=' + encodeURIComponent(jobId);
       var jobHeaders = Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword));
-      if (base && !skipEnrich) {
-        url += '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(base);
+      if (!skipEnrich) {
+        url += '&enrich_anlagenstamm=1&enrich_local_only=1';
       }
       return fetch(url, { headers: jobHeaders })
         .then(function (r) { return r.json(); })
@@ -1671,14 +1714,10 @@
       return;
     }
 
-    if (hasCachedJob) {
-      loadLocal(true, true).then(function (ok) {
-        if (!ok) loadFromDispo();
-      });
+    if (hasCachedJob || syncPullRefresh) {
+      loadLocal(false, true);
     } else {
-      loadLocal(false, false).then(function (ok) {
-        if (!ok) loadFromDispo();
-      });
+      loadLocal(false, false);
     }
   }
 
@@ -1781,6 +1820,13 @@
       }
     }
     return out;
+  }
+
+  /** Zeile in der FN-Tabelle anzeigen (FN reicht; leere Platzhalterzeile ohne FN ausblenden). */
+  function leistungRowShowInTable(r) {
+    if (!r) return false;
+    if (String(r.fabrikationsnummer || '').trim()) return true;
+    return leistungRowHasVisibleData(r);
   }
 
   function leistungRowHasVisibleData(r) {
@@ -1928,6 +1974,7 @@
 
   function applyAnlageDetailBuiltToProjektdaten(built) {
     if (!built) return;
+    projektdatenFabSavedAt = Date.now();
     window.currentProjektdatenLeistungRows = built.rowsCopy;
     if (window.currentProjektdatenJob) {
       window.currentProjektdatenJob = Object.assign({}, window.currentProjektdatenJob, {
@@ -1981,7 +2028,7 @@
       projekt: row.projekt || '',
       bemerkungen: row.bemerkungen || ''
     }, dispoBasePayloadExtra());
-    return anlagenstammSaveDispo(payload).catch(function () { return null; });
+    return anlagenstammSaveDispo(payload);
   }
 
   var projektdatenExplorerJobId = null;
@@ -2207,7 +2254,7 @@
     }
     var visibleIndices = [];
     for (var idx = 0; idx < leistungRows.length; idx++) {
-      if (!leistungRowHasVisibleData(leistungRows[idx])) continue;
+      if (!leistungRowShowInTable(leistungRows[idx])) continue;
       visibleIndices.push(idx);
     }
     var useTwoCards = visibleIndices.length > 2;
@@ -2244,7 +2291,7 @@
       html += '</tr></thead><tbody id="modalLeistungTbody">';
       for (var i = 0; i < leistungRows.length; i++) {
         var row = leistungRows[i];
-        if (!leistungRowHasVisibleData(row)) continue;
+        if (!leistungRowShowInTable(row)) continue;
         html += '<tr class="projektdaten-leistung-row" data-row-index="' + escapeHtml(String(i)) + '">';
         html += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCell(row.fabrikationsnummer) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
@@ -2334,9 +2381,13 @@
     return '';
   }
 
+  var mechanikTedLoadToken = 0;
+
   function loadMechanikTedLinks(job) {
     var el = document.getElementById('mechanikTedLinksContainer');
     if (!el) return;
+    var loadToken = ++mechanikTedLoadToken;
+    var expectedJobId = job && job.id != null ? job.id : null;
     var baseUrl = getDispoBaseUrl();
     var techId = getTechId();
     if (!baseUrl || !techId || !job) {
@@ -2361,6 +2412,7 @@
     })
       .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
       .then(function (result) {
+        if (loadToken !== mechanikTedLoadToken || !jobIdsEqual(expectedJobId, jobDetailsJobId)) return;
         if (!result.ok || !result.data || !result.data.ok) {
           el.innerHTML = '<p class="muted">Mechanik-Excel konnte nicht geladen werden' + (result.data && result.data.error ? ': ' + escapeHtml(String(result.data.error)) : '.') + '</p>';
           return;
@@ -2388,7 +2440,6 @@
             orderedFabs.push(f);
           }
         });
-        var root = baseUrl.replace(/\/$/, '');
         var html = '<div class="kukla-ted-fab-list">';
         orderedFabs.forEach(function (fab) {
           var files = byFab[fab] || [];
@@ -2401,10 +2452,11 @@
           } else {
             html += '<ul class="kukla-ted-ul">';
             files.forEach(function (f) {
-              var href = root + (f.download_path || '');
+              var rel = String(f.rel_path || '').trim();
               var dt = (f.file_mtime || '').toString();
               var w = f.fn_matches_filename === false ? ' ⚠' : '';
-              html += '<li><button type="button" class="btn btn-ghost ted-open-file" data-ted-url="' + String(href).replace(/"/g, '&quot;') + '">' + escapeHtml(String(f.file_name || '')) + '</button> <span class="muted">' + escapeHtml(dt) + '</span>' + w + '</li>';
+              var fn = String(f.file_name || '').trim();
+              html += '<li><button type="button" class="btn btn-ghost ted-open-file" data-ted-rel="' + String(rel).replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '" data-ted-job-id="' + String(jobId).replace(/"/g, '&quot;') + '" data-ted-local-job-id="' + String(job.id).replace(/"/g, '&quot;') + '" data-ted-fab="' + String(fab).replace(/"/g, '&quot;') + '" data-ted-filename="' + String(fn).replace(/"/g, '&quot;') + '">' + escapeHtml(fn || rel.split(/[/\\]/).pop() || 'Excel') + '</button> <span class="muted">' + escapeHtml(dt) + '</span>' + w + '</li>';
             });
             html += '</ul>';
           }
@@ -2416,22 +2468,31 @@
         });
         html += '</div>';
         el.innerHTML = html;
-        el.querySelectorAll('.ted-open-file[data-ted-url]').forEach(function (btn) {
+        el.querySelectorAll('.ted-open-file[data-ted-rel]').forEach(function (btn) {
           btn.addEventListener('click', function () {
-            var fileUrl = btn.getAttribute('data-ted-url') || '';
-            if (!fileUrl) return;
-            openTedExcelOnDevice(fileUrl);
+            var rel = btn.getAttribute('data-ted-rel') || '';
+            var tedJobId = btn.getAttribute('data-ted-job-id') || '';
+            var tedLocalJobId = btn.getAttribute('data-ted-local-job-id') || '';
+            var tedFab = btn.getAttribute('data-ted-fab') || '';
+            var tedFileName = btn.getAttribute('data-ted-filename') || '';
+            if (!rel) return;
+            openTedExcelOnDevice(rel, tedJobId, tedLocalJobId, tedFab, tedFileName);
           });
         });
       })
       .catch(function (e) {
+        if (loadToken !== mechanikTedLoadToken || !jobIdsEqual(expectedJobId, jobDetailsJobId)) return;
         el.innerHTML = '<p class="muted">Mechanik-Excel (TED): Offline oder Dispo nicht erreichbar.</p>';
       });
   }
 
+  var hotelChoicesLoadToken = 0;
+
   function loadHotelChoicesByFab(job) {
     var content = document.getElementById('viewProjektdatenContent');
     if (!content || !job) return;
+    var loadToken = ++hotelChoicesLoadToken;
+    var expectedJobId = job.id;
     var baseUrl = getDispoBaseUrl();
     var techId = getTechId();
     if (!baseUrl || !techId) return;
@@ -2448,6 +2509,7 @@
       })
     }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
       .then(function (res) {
+        if (loadToken !== hotelChoicesLoadToken || !jobIdsEqual(expectedJobId, jobDetailsJobId)) return;
         if (!res.ok || !res.data || !res.data.ok) return;
         var byFab = res.data.by_fab || {};
         function hotelListForFab(byFabMap, fabKey) {
@@ -2552,12 +2614,113 @@
     });
   }
 
-  function openTedExcelOnDevice(fileUrl) {
-    if (typeof monteurApp !== 'undefined' && monteurApp.openExternal) {
-      monteurApp.openExternal(fileUrl);
+  function openTedExcelOnDevice(relPath, jobId, localJobId, fab, fileName) {
+    relPath = String(relPath || '').trim();
+    jobId = jobId != null && jobId !== '' ? jobId : null;
+    localJobId = localJobId != null && localJobId !== '' ? localJobId : null;
+    fab = String(fab || '').trim();
+    fileName = String(fileName || '').trim();
+    var baseUrl = getDispoBaseUrl();
+    var techId = getTechId();
+    if (!relPath || !baseUrl || !techId || jobId == null || jobId === '') {
+      alert('TED-Datei kann nicht geöffnet werden (Pfad, Auftrag oder Verbindung fehlt).');
       return;
     }
-    window.open(fileUrl, '_blank');
+    fetch(API_BASE + '/api/mechanik_ted_excel_open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+      body: JSON.stringify({
+        baseUrl: baseUrl,
+        jobId: jobId,
+        local_job_id: localJobId,
+        rel_path: relPath,
+        fab: fab,
+        file_name: fileName,
+        serverUsername: getDispoUsername(),
+        serverPassword: getDispoPassword()
+      })
+    })
+      .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+      .then(function (result) {
+        if (!result.ok || !result.data || result.data.ok !== true || !result.data.path) {
+          var err = (result.data && result.data.error) ? String(result.data.error) : 'Download fehlgeschlagen.';
+          alert('TED-Datei: ' + err);
+          return;
+        }
+        var openFn = (typeof monteurApp !== 'undefined' && (monteurApp.openExcel || monteurApp.openPath))
+          ? (monteurApp.openExcel || monteurApp.openPath)
+          : null;
+        if (openFn) {
+          return openFn(String(result.data.path)).then(function (openRes) {
+            if (openRes && openRes.error) alert('Excel konnte nicht gestartet werden: ' + openRes.error);
+          });
+        }
+        alert('Datei gespeichert unter: ' + result.data.path);
+      })
+      .catch(function (e) {
+        alert('TED-Datei: ' + (e && e.message ? e.message : 'Netzwerkfehler'));
+      });
+  }
+
+  function fillAnlageDetailFieldsFromLocalStamm(fab, rowIndex) {
+    fab = String(fab || '').trim();
+    if (!fab) return Promise.resolve();
+    return fetch(API_BASE + '/api/anlagenstamm_lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+      body: JSON.stringify({ fab: fab })
+    })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) {
+        if (!data || !data.ok || !data.row) return;
+        var st = data.row;
+        function setFromStamm(id, val) {
+          var el = document.getElementById(id);
+          if (!el) return;
+          var v = val != null ? String(val).trim() : '';
+          if (v) el.value = v;
+        }
+        setFromStamm('anlageDetailType', st.type);
+        setFromStamm('anlageDetailLeistung', st.leistung);
+        setFromStamm('anlageDetailNenngeschwindigkeit', st.nenngeschwindigkeit);
+        setFromStamm('anlageDetailKraftaufnehmer', st.kraftaufnehmer);
+        setFromStamm('anlageDetailDmsNr', st.dms_nr);
+        setFromStamm('anlageDetailTacho', st.tacho);
+        setFromStamm('anlageDetailElektronik', st.elektronik);
+        setFromStamm('anlageDetailMaterial', st.material);
+        setFromStamm('anlageDetailPosition', st.position);
+        setFromStamm('anlageDetailGeliefertUeber', st.geliefert_ueber);
+        setFromStamm('anlageDetailProjekt', st.projekt);
+        var ta = document.getElementById('anlageDetailBemerkungen');
+        if (ta && st.bemerkungen) {
+          var bv = String(st.bemerkungen).trim();
+          if (bv) ta.value = bv;
+        }
+        if (!Number.isFinite(rowIndex)) return;
+        var rowsCopy = (window.currentProjektdatenLeistungRows || []).slice();
+        if (!rowsCopy[rowIndex]) return;
+        var cur = rowsCopy[rowIndex];
+        rowsCopy[rowIndex] = {
+          fabrikationsnummer: cur.fabrikationsnummer,
+          type: String(document.getElementById('anlageDetailType') && document.getElementById('anlageDetailType').value) || cur.type || '',
+          leistung: String(document.getElementById('anlageDetailLeistung') && document.getElementById('anlageDetailLeistung').value) || cur.leistung || '',
+          nenngeschwindigkeit: String(document.getElementById('anlageDetailNenngeschwindigkeit') && document.getElementById('anlageDetailNenngeschwindigkeit').value) || cur.nenngeschwindigkeit || '',
+          kraftaufnehmer: String(document.getElementById('anlageDetailKraftaufnehmer') && document.getElementById('anlageDetailKraftaufnehmer').value) || cur.kraftaufnehmer || '',
+          dms_nr: String(document.getElementById('anlageDetailDmsNr') && document.getElementById('anlageDetailDmsNr').value) || cur.dms_nr || '',
+          tacho: String(document.getElementById('anlageDetailTacho') && document.getElementById('anlageDetailTacho').value) || cur.tacho || '',
+          elektronik: String(document.getElementById('anlageDetailElektronik') && document.getElementById('anlageDetailElektronik').value) || cur.elektronik || '',
+          material: String(document.getElementById('anlageDetailMaterial') && document.getElementById('anlageDetailMaterial').value) || cur.material || '',
+          position: String(document.getElementById('anlageDetailPosition') && document.getElementById('anlageDetailPosition').value) || cur.position || '',
+          geliefert_ueber: String(document.getElementById('anlageDetailGeliefertUeber') && document.getElementById('anlageDetailGeliefertUeber').value) || cur.geliefert_ueber || '',
+          projekt: String(document.getElementById('anlageDetailProjekt') && document.getElementById('anlageDetailProjekt').value) || cur.projekt || '',
+          bemerkungen: (document.getElementById('anlageDetailBemerkungen') && document.getElementById('anlageDetailBemerkungen').value) || cur.bemerkungen || ''
+        };
+        window.currentProjektdatenLeistungRows = rowsCopy;
+        if (!document.getElementById('anlageDetailModal')) {
+          refreshProjektdatenLeistungTableFromRows();
+        }
+      })
+      .catch(function () {});
   }
 
   function openAnlageDetailModal(rowIndex) {
@@ -2593,9 +2756,9 @@
     modalHtml += '<dt>Projekt</dt><dd><input type="text" id="anlageDetailProjekt" value="' + attr(row.projekt) + '"></dd>';
     modalHtml += '<dt>Bemerkungen</dt><dd><textarea id="anlageDetailBemerkungen" rows="3">' + attr(row.bemerkungen) + '</textarea></dd>';
     modalHtml += '</dl></div></div>';
-    modalHtml += '<details class="anlage-detail-projekte-neu" id="anlageDetailProjekteNeuToggle">';
-    modalHtml += '<summary><strong>PROJEKTE NEU</strong> <span class="muted"> (eingeklappt)</span></summary>';
-    modalHtml += '<div id="anlageDetailProjekteNeuMessage" class="muted" style="margin:0.5rem 0">Aufklappen zum Laden…</div>';
+    modalHtml += '<details class="anlage-detail-projekte-neu" id="anlageDetailProjekteNeuToggle" open>';
+    modalHtml += '<summary><strong>PROJEKTE NEU</strong></summary>';
+    modalHtml += '<div id="anlageDetailProjekteNeuMessage" class="muted" style="margin:0.5rem 0">Lade Struktur…</div>';
     modalHtml += '<div id="anlageDetailProjekteNeuTree" style="margin-top:0.35rem"></div>';
     modalHtml += '</details>';
     modalHtml += '<div class="anlage-detail-actions">';
@@ -2612,12 +2775,24 @@
     var modal = document.getElementById('anlageDetailModal');
     if (!modal) return;
     var pnToggle = document.getElementById('anlageDetailProjekteNeuToggle');
+    var pnFab = String(row.fabrikationsnummer || '').trim();
+    function loadAnlagePnTree() {
+      loadProjekteNeuTreeIntoHost(pnFab, {
+        msgEl: document.getElementById('anlageDetailProjekteNeuMessage'),
+        treeHost: document.getElementById('anlageDetailProjekteNeuTree'),
+        toggleEl: pnToggle,
+        jobId: jobId,
+        allowOnline: false
+      });
+    }
     if (pnToggle) {
       pnToggle.addEventListener('toggle', function () {
         if (!pnToggle.open || pnToggle.getAttribute('data-loaded') === '1') return;
-        loadAnlageDetailProjekteNeuTree(String(row.fabrikationsnummer || '').trim(), pnToggle);
+        loadAnlagePnTree();
       });
+      if (pnToggle.open && pnFab) loadAnlagePnTree();
     }
+    fillAnlageDetailFieldsFromLocalStamm(pnFab, rowIndex);
     function closeModal() {
       if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
     }
@@ -2659,25 +2834,38 @@
     function runAnlageDetailPersist(built, closeAfter) {
       var rowIdx = parseInt(document.getElementById('anlageDetailRowIndex').value, 10);
       var rowForStamm = Number.isFinite(rowIdx) ? built.rowsCopy[rowIdx] : null;
-      api('/api/job', {
-        method: 'PATCH',
-        body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(built.arr) })
-      }).then(function () {
-        projektdatenFabSavedAt = Date.now();
-        var stammPromise = (rowForStamm && rowForStamm.fabrikationsnummer)
+      var stammPromise =
+        rowForStamm && rowForStamm.fabrikationsnummer
           ? persistAnlageRowToAnlagenstamm(rowForStamm)
           : Promise.resolve();
-        return stammPromise.then(function () {
-          if (closeAfter) {
-            showToast('Lokal gespeichert – Abgleich mit Dispo beim nächsten Sync.');
+      stammPromise
+        .then(function (stammRes) {
+          return api('/api/job', {
+            method: 'PATCH',
+            body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(built.arr) }),
+          }).then(function () {
+            return stammRes;
+          });
+        })
+        .then(function (stammRes) {
+          projektdatenFabSavedAt = Date.now();
+          if (stammRes && stammRes.push_error && typeof showToast === 'function') {
+            showToast('Lokal gespeichert – Dispo: ' + stammRes.push_error);
+          } else if (closeAfter) {
+            showToast(
+              stammRes && stammRes.pending_sync
+                ? 'Lokal gespeichert – Abgleich mit Dispo beim nächsten Sync.'
+                : 'Gespeichert (lokal und Dispo).',
+            );
           }
+        })
+        .catch(function (e) {
+          alert('Speichern fehlgeschlagen: ' + e.message);
+        })
+        .finally(function () {
+          anlageSaveBusy = false;
+          if (anlageSaveQueued) flushAnlageDetailSaveQueue();
         });
-      }).catch(function (e) {
-        alert('Speichern fehlgeschlagen: ' + e.message);
-      }).finally(function () {
-        anlageSaveBusy = false;
-        if (anlageSaveQueued) flushAnlageDetailSaveQueue();
-      });
     }
     function persistAnlageDetail(closeAfter) {
       if (!document.getElementById('anlageDetailModal')) return;
@@ -2824,7 +3012,13 @@
         tr.classList.add('projektdaten-fn-row-selected');
         var fabCell = tr.querySelector('[data-fab]');
         var fabVal = fabCell ? String(fabCell.getAttribute('data-fab') || '').trim() : '';
-        loadProjekteNeuTreeIntoHost(fabVal, { msgEl: msgEl, treeHost: treeHost, jobId: jobDetailsJobId });
+        loadProjekteNeuTreeIntoHost(fabVal, {
+          msgEl: msgEl,
+          treeHost: treeHost,
+          jobId: jobDetailsJobId,
+          allowOnline: false,
+          keepTreeWhileLoading: true,
+        });
       });
     }
     bindProjektdatenFabInput();
@@ -2847,7 +3041,13 @@
         firstRow.classList.add('projektdaten-fn-row-selected');
         var fc = firstRow.querySelector('[data-fab]');
         var fv = fc ? String(fc.getAttribute('data-fab') || '').trim() : '';
-        loadProjekteNeuTreeIntoHost(fv, { msgEl: msgElInit, treeHost: treeHostInit, jobId: jobDetailsJobId });
+        loadProjekteNeuTreeIntoHost(fv, {
+          msgEl: msgElInit,
+          treeHost: treeHostInit,
+          jobId: jobDetailsJobId,
+          allowOnline: false,
+          keepTreeWhileLoading: true,
+        });
       } else {
         msgElInit.textContent = '';
         treeHostInit.innerHTML = '';
@@ -3194,7 +3394,7 @@
             closeModal();
             refreshHotelProjektdatenContent(updatedJob);
             runHotelDispoSyncPush();
-            if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync(); } catch (e) {} }
+            if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync({ blockingSync: false }); } catch (e) {} }
           }
         })
         .catch(function (e) {
@@ -3394,42 +3594,53 @@
       if (list) list.innerHTML = '<span class="empty">Monteur-ID in Einstellungen eintragen.</span>';
       return;
     }
-    if (!getDispoExternalUrl() && !getDispoInternalUrl()) {
-      cachedOpenJobs = [];
-      if (list) list.innerHTML = '<span class="empty">Mindestens eine Dispo-Adresse (extern oder intern) in den Einstellungen eintragen.</span>';
+    const jobOpenQs = {};
+    if (cbAlleOpen && cbAlleOpen.checked) {
+      jobOpenQs.include_erledigt = '0';
+    } else {
+      if (cbNoDateOpen && cbNoDateOpen.checked) jobOpenQs.filter_no_date = '1';
+      if (cbNoTechOpen && cbNoTechOpen.checked) jobOpenQs.filter_no_technician = '1';
+    }
+    try {
+      const localRes = await fetch(API_BASE + '/api/jobs_open_local?' + qs(jobOpenQs), {
+        headers: { 'X-Technician-Id': String(techId) },
+      });
+      const localData = await localRes.json().catch(function () { return []; });
+      if (localRes.ok && Array.isArray(localData)) {
+        cachedOpenJobs = localData;
+        renderOpenJobsWithFilters();
+      }
+    } catch (e) {
+      /* lokale Liste optional – Live-Refresh versuchen */
+    }
+    var baseUrl = getDispoBaseUrl().trim();
+    if (!baseUrl && (getDispoExternalUrl() || getDispoInternalUrl())) {
       return;
     }
-    const baseUrl = getDispoBaseUrl().trim();
     if (!baseUrl) {
-      cachedOpenJobs = [];
-      if (list) list.innerHTML = '<span class="empty">Dispo-Basis noch nicht ermittelt — kurz warten oder synchronisieren.</span>';
       return;
     }
     try {
-      const jobOpenQs = { base_url: baseUrl };
-      if (cbAlleOpen && cbAlleOpen.checked) {
-        /* Standard: erledigt/abgerechnet ausgeschlossen (Dispo jobs_open). */
-      } else {
-        if (cbNoDateOpen && cbNoDateOpen.checked) jobOpenQs.filter_no_date = '1';
-        if (cbNoTechOpen && cbNoTechOpen.checked) jobOpenQs.filter_no_technician = '1';
-      }
-      const r = await fetch(API_BASE + '/api/jobs_open?' + qs(jobOpenQs), {
-        headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getServerUsername, getServerPassword))
+      const liveQs = Object.assign({ base_url: baseUrl }, jobOpenQs);
+      const r = await fetch(API_BASE + '/api/jobs_open?' + qs(liveQs), {
+        headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getServerUsername, getServerPassword)),
       });
-      const data = await r.json().catch(() => ({}));
+      const data = await r.json().catch(function () { return {}; });
       if (!r.ok) {
-        cachedOpenJobs = [];
-        var errLine = (data && data.error) ? data.error : 'Fehler beim Laden.';
-        if (data && data.hint) errLine += ' — ' + data.hint;
-        if (data && data.detail && !data.hint) errLine += ' (' + String(data.detail).slice(0, 200) + ')';
-        if (list) list.innerHTML = '<span class="empty">' + escapeHtml(errLine) + '</span>';
+        if (!cachedOpenJobs.length && list) {
+          var errLine = (data && data.error) ? data.error : 'Fehler beim Laden.';
+          if (data && data.hint) errLine += ' — ' + data.hint;
+          if (data && data.detail && !data.hint) errLine += ' (' + String(data.detail).slice(0, 200) + ')';
+          list.innerHTML = '<span class="empty">' + escapeHtml(errLine) + '</span>';
+        }
         return;
       }
       cachedOpenJobs = Array.isArray(data) ? data : [];
       renderOpenJobsWithFilters();
     } catch (e) {
-      cachedOpenJobs = [];
-      if (list) list.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
+      if (!cachedOpenJobs.length && list) {
+        list.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
+      }
     }
   }
 
@@ -3480,16 +3691,26 @@
     }
   }
 
+  /** idle | checking | local | offline | online | online_syncing | degraded */
+  var connectionUiState = 'idle';
+
   function setConnectionBadge(state, reason) {
     const badge = document.getElementById('connectionBadge');
     const wrap = document.getElementById('connectionBadgeWrap');
-    // Manuelles Prüfen/Sync soll jederzeit per Klick möglich sein.
+    if (!badge) return;
+    connectionUiState = state || 'idle';
     if (wrap) wrap.classList.add('clickable');
-    if (state === 'online') {
+    if (state === 'checking') {
+      badge.textContent = 'Prüfe…';
+      badge.className = 'offline-badge';
+      badge.setAttribute('title', reason && String(reason).trim() ? String(reason).trim() : 'Verbindung wird geprüft…');
+    } else if (state === 'online' || state === 'online_syncing' || state === 'degraded') {
       badge.textContent = 'Online';
-      badge.className = 'online-badge';
+      badge.className = state === 'degraded' ? 'offline-badge' : 'online-badge';
       if (reason && String(reason).trim()) {
         badge.setAttribute('title', String(reason).trim());
+      } else if (state === 'online_syncing') {
+        badge.setAttribute('title', 'Synchronisiere…');
       } else {
         badge.setAttribute('title', 'Klicken zum sofortigen Synchronisieren');
       }
@@ -3508,7 +3729,143 @@
     }
   }
 
-  async function checkConnectionAndSync() {
+  var checkConnectionAndSyncInFlight = null;
+  var localListsRefreshAt = 0;
+  var LOCAL_LISTS_REFRESH_MS = 12000;
+  var startViewDataLoadedAt = 0;
+  var START_VIEW_DATA_MS = 8000;
+
+  function maybeRefreshLocalLists(force) {
+    var now = Date.now();
+    if (!force && now - localListsRefreshAt < LOCAL_LISTS_REFRESH_MS) return;
+    localListsRefreshAt = now;
+    loadJobsAndAbsences();
+    loadOpenJobs();
+  }
+
+  var backgroundDispoSyncInFlight = null;
+
+  function applySyncBadgeAfterRun(syncProblems) {
+    if (syncProblems && syncProblems.length) {
+      setConnectionBadge('degraded', syncProblems.join(' · ') + ' — Klicken zum erneuten Synchronisieren');
+    } else {
+      setConnectionBadge('online');
+    }
+  }
+
+  async function runDispoPushPull(auth, range, opts) {
+    opts = opts || {};
+    var syncProblems = [];
+    try {
+      await fetch(API_BASE + '/api/background_jobs/recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      }).catch(function () {});
+    } catch (e) { /* ignore */ }
+    try {
+      var pushRes = await fetch(API_BASE + '/api/sync_push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(auth),
+      });
+      var pushData = await pushRes.json().catch(function () { return {}; });
+      if (!pushData.ok) throw new Error(pushData.error || 'Push konnte nicht gestartet werden.');
+      if (pushData.job_id) {
+        var pushJob = await pollBackgroundJobUntilTerminal(pushData.job_id, null, {});
+        if (pushJob.status === 'failed') {
+          throw new Error(pushJob.error || 'Push fehlgeschlagen.');
+        }
+      }
+    } catch (e) {
+      console.error('[Sync Push] runDispoPushPull:', e.message, e);
+      syncProblems.push('Push: ' + (e && e.message ? e.message : 'Fehler'));
+    }
+    try {
+      var pullRes = await fetch(API_BASE + '/api/sync_pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({}, auth, { date_from: range.date_from, date_to: range.date_to })),
+      });
+      var pullData = await pullRes.json().catch(function () { return {}; });
+      if (!pullData.ok) throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
+      if (pullData.job_id) {
+        var pullJob = await pollBackgroundJobUntilTerminal(pullData.job_id, null, {});
+        if (pullJob.status === 'completed') {
+          maybeRefreshLocalLists(true);
+          var skipProjektRefresh =
+            jobDetailsJobId &&
+            projektdatenFabSavedAt &&
+            Date.now() - projektdatenFabSavedAt < PROJEKTDATEN_FAB_SAVE_GUARD_MS;
+          if (
+            !skipProjektRefresh &&
+            jobDetailsJobId &&
+            window.currentProjektdatenJob &&
+            typeof openJobDetailsModal === 'function'
+          ) {
+            openJobDetailsModal(jobDetailsJobId, { syncPullRefresh: true });
+          }
+        } else if (pullJob.status === 'failed') {
+          throw new Error(pullJob.error || 'Pull fehlgeschlagen.');
+        }
+      }
+    } catch (e) {
+      console.error('[Sync Pull] runDispoPushPull:', e.message, e);
+      syncProblems.push('Pull: ' + (e && e.message ? e.message : 'Fehler'));
+    }
+    return syncProblems;
+  }
+
+  function runDispoPushPullInBackground(auth, range, syncBase, techId) {
+    if (backgroundDispoSyncInFlight) return backgroundDispoSyncInFlight;
+    setConnectionBadge('online_syncing', 'Synchronisiere im Hintergrund…');
+    backgroundDispoSyncInFlight = runDispoPushPull(auth, range, {})
+      .then(function (syncProblems) {
+        applySyncBadgeAfterRun(syncProblems);
+        if (selectedJobIdOnDienstreisePage) {
+          var syncSnap =
+            typeof getDienstreiseJobSnapshotByLocalId === 'function'
+              ? getDienstreiseJobSnapshotByLocalId(selectedJobIdOnDienstreisePage)
+              : null;
+          if (!isJobAngelegtReadOnly(syncSnap)) {
+            fetch(API_BASE + '/api/dienstreise/sync_to_dispo', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                job_id: selectedJobIdOnDienstreisePage,
+                dispo_base_url: syncBase,
+                technician_id: techId,
+                dispo_username: getServerUsername(),
+                dispo_password: getServerPassword(),
+              }),
+            }).catch(function () {});
+          }
+        }
+      })
+      .catch(function (e) {
+        console.error('[Sync] Hintergrund:', e && e.message ? e.message : e);
+        setConnectionBadge('degraded', (e && e.message ? e.message : 'Sync-Fehler') + ' — Klicken zum erneuten Synchronisieren');
+      })
+      .finally(function () {
+        backgroundDispoSyncInFlight = null;
+      });
+    return backgroundDispoSyncInFlight;
+  }
+
+  async function checkConnectionAndSync(opts) {
+    opts = opts || {};
+    if (checkConnectionAndSyncInFlight) {
+      return checkConnectionAndSyncInFlight;
+    }
+    checkConnectionAndSyncInFlight = checkConnectionAndSyncBody(opts).finally(function () {
+      checkConnectionAndSyncInFlight = null;
+    });
+    return checkConnectionAndSyncInFlight;
+  }
+
+  async function checkConnectionAndSyncBody(opts) {
+    opts = opts || {};
+    var blockingSync = opts.blockingSync === true;
     const techId = getTechId();
     if (!techId) {
       setConnectionBadge('offline');
@@ -3520,132 +3877,79 @@
     if (!ext && !intUrl) {
       setConnectionBadge('local');
       loadJobsAndAbsences();
-      return;
-    }
-    await pickDispoBase();
-    var bases = buildDispoBaseCandidatesClient();
-    if (!bases.length) {
-      setConnectionBadge('local');
-      loadJobsAndAbsences();
       loadOpenJobs();
       return;
     }
+    setConnectionBadge('checking');
     try {
-      var check = null;
-      var connectedBase = '';
-      var lastCheckErr = '';
-      for (var bi = 0; bi < bases.length; bi++) {
-        var tryBase = bases[bi];
-        const resCheck = await fetch(API_BASE + '/api/check_connection', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            baseUrl: tryBase,
-            externalUrl: getDispoExternalUrl(),
-            internalUrl: getDispoInternalUrl(),
-            technicianId: techId,
-            serverUsername: getServerUsername(),
-            serverPassword: getServerPassword()
-          })
-        });
-        check = await resCheck.json().catch(function () { return {}; });
-        if (check && check.ok === true) {
-          connectedBase = (check.used_base_url || tryBase).toString().trim().replace(/\/+$/, '');
+      const resCheck = await fetch(API_BASE + '/api/check_connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          externalUrl: ext,
+          internalUrl: intUrl,
+          technicianId: techId,
+          serverUsername: getServerUsername(),
+          serverPassword: getServerPassword(),
+        }),
+      });
+      var check = await resCheck.json().catch(function () { return {}; });
+      if (check && check.ok === true) {
+        var connectedBase = (check.used_base_url || '').toString().trim().replace(/\/+$/, '');
+        if (connectedBase) {
           var extNorm = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
           var intNorm = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
-          var src = connectedBase === intNorm ? 'internal' : (connectedBase === extNorm ? 'external' : 'fallback');
+          var src = connectedBase === intNorm ? 'internal' : connectedBase === extNorm ? 'external' : 'fallback';
           setDispoActiveBase(connectedBase, src);
-          break;
         }
-        lastCheckErr = (check && check.error) ? check.error : ('HTTP ' + resCheck.status);
-      }
-      if (check && check.ok === true) {
         const range = getSyncDateRange();
         var syncBase = getDispoBaseUrl().trim() || connectedBase;
-        const auth = { baseUrl: syncBase, technicianId: techId, serverUsername: getServerUsername(), serverPassword: getServerPassword() };
-        var syncProblems = [];
-        try {
-          await fetch(API_BASE + '/api/background_jobs/recover', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}'
-          }).catch(function () {});
-        } catch (e) { /* ignore */ }
-        try {
-          var pushRes = await fetch(API_BASE + '/api/sync_push', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(auth)
-          });
-          var pushData = await pushRes.json().catch(function () { return {}; });
-          if (!pushData.ok) throw new Error(pushData.error || 'Push konnte nicht gestartet werden.');
-          if (pushData.job_id) {
-            var pushJob = await pollBackgroundJobUntilTerminal(pushData.job_id, null, {});
-            if (pushJob.status === 'failed') {
-              throw new Error(pushJob.error || 'Push fehlgeschlagen.');
+        const auth = {
+          baseUrl: syncBase,
+          technicianId: techId,
+          serverUsername: getServerUsername(),
+          serverPassword: getServerPassword(),
+        };
+        if (blockingSync) {
+          setConnectionBadge('online_syncing', 'Synchronisiere mit Dispo…');
+          var syncProblems = await runDispoPushPull(auth, range, {});
+          applySyncBadgeAfterRun(syncProblems);
+          if (selectedJobIdOnDienstreisePage) {
+            var syncSnap =
+              typeof getDienstreiseJobSnapshotByLocalId === 'function'
+                ? getDienstreiseJobSnapshotByLocalId(selectedJobIdOnDienstreisePage)
+                : null;
+            if (!isJobAngelegtReadOnly(syncSnap)) {
+              fetch(API_BASE + '/api/dienstreise/sync_to_dispo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  job_id: selectedJobIdOnDienstreisePage,
+                  dispo_base_url: syncBase,
+                  technician_id: techId,
+                  dispo_username: getServerUsername(),
+                  dispo_password: getServerPassword(),
+                }),
+              }).catch(function () {});
             }
           }
-        } catch (e) {
-          console.error('[Sync Push] checkConnectionAndSync:', e.message, e);
-          syncProblems.push('Push: ' + (e && e.message ? e.message : 'Fehler'));
-        }
-        try {
-          var pullRes = await fetch(API_BASE + '/api/sync_pull', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(Object.assign({}, auth, { date_from: range.date_from, date_to: range.date_to }))
-          });
-          var pullData = await pullRes.json().catch(function () { return {}; });
-          if (!pullData.ok) throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
-          if (pullData.job_id) {
-            var pullJob = await pollBackgroundJobUntilTerminal(pullData.job_id, null, {});
-            if (pullJob.status === 'completed') {
-              loadJobsAndAbsences();
-              loadOpenJobs();
-              if (jobDetailsJobId && window.currentProjektdatenJob && typeof openJobDetailsModal === 'function') {
-                openJobDetailsModal(jobDetailsJobId);
-              }
-            } else if (pullJob.status === 'failed') {
-              throw new Error(pullJob.error || 'Pull fehlgeschlagen.');
-            }
-          }
-        } catch (e) {
-          console.error('[Sync Pull] checkConnectionAndSync:', e.message, e);
-          syncProblems.push('Pull: ' + (e && e.message ? e.message : 'Fehler'));
-        }
-        if (syncProblems.length) {
-          setConnectionBadge('online', syncProblems.join(' · ') + ' — Klicken zum erneuten Synchronisieren');
         } else {
           setConnectionBadge('online');
-        }
-        // Dienstreise-Projektordner (Dokumente_Monteur / Dokumente_Buchhaltung) periodisch mit dem Dispo-Server synchronisieren
-        if (selectedJobIdOnDienstreisePage) {
-          var syncSnap = typeof getDienstreiseJobSnapshotByLocalId === 'function' ? getDienstreiseJobSnapshotByLocalId(selectedJobIdOnDienstreisePage) : null;
-          if (!isJobAngelegtReadOnly(syncSnap)) {
-            const bodySync = {
-              job_id: selectedJobIdOnDienstreisePage,
-              dispo_base_url: syncBase,
-              technician_id: techId,
-              dispo_username: getServerUsername(),
-              dispo_password: getServerPassword()
-            };
-            fetch(API_BASE + '/api/dienstreise/sync_to_dispo', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(bodySync)
-            }).catch(() => { /* Fehler hier ignorieren, Verify bei „Erledigt“ prüft erneut */ });
-          }
+          runDispoPushPullInBackground(auth, range, syncBase, techId);
         }
       } else {
-        var offMsg = lastCheckErr || ((check && check.error) ? check.error : 'Verbindung fehlgeschlagen');
+        var offMsg = (check && check.error) ? check.error : 'Verbindung fehlgeschlagen';
         setConnectionBadge('offline', offMsg);
       }
     } catch (e) {
       setConnectionBadge('offline', e && e.message ? e.message : 'Verbindung fehlgeschlagen');
     }
     setNextSyncTime();
-    loadJobsAndAbsences();
-    loadOpenJobs();
+    var viewPd = document.getElementById('viewProjektdaten');
+    var onProjektdaten = viewPd && viewPd.classList.contains('active');
+    if (!onProjektdaten) {
+      maybeRefreshLocalLists(false);
+    }
   }
 
   function renderAbsences(data, requestsData) {
@@ -3724,7 +4028,9 @@
   function startSyncInterval() {
     if (syncIntervalId) clearInterval(syncIntervalId);
     const ms = getSyncIntervalMinutes() * 60 * 1000;
-    syncIntervalId = setInterval(checkConnectionAndSync, ms);
+    syncIntervalId = setInterval(function () {
+      checkConnectionAndSync({ blockingSync: false });
+    }, ms);
     if (!countdownTickId) {
       countdownTickId = setInterval(updateCountdownRing, 1000);
     }
@@ -3749,12 +4055,8 @@
   }
 
   function triggerManualSync() {
-    var techId = getTechId();
-    var badge = document.getElementById('connectionBadge');
-    if (badge) badge.textContent = 'Wird synchronisiert…';
-    // Auch ohne vollständige Einstellungen aktiv prüfen:
-    // checkConnectionAndSync setzt dann konsistent "Offline"/"Lokal" inkl. Grund.
-    return checkConnectionAndSync().finally(function () {
+    setConnectionBadge('checking', 'Manueller Sync…');
+    return checkConnectionAndSync({ blockingSync: true }).finally(function () {
       startSyncInterval();
     });
   }
@@ -3793,7 +4095,7 @@
   loadDienstreiseConfigFromServer();
   loadDispoTlsSettingFromServer()
     .then(function () {
-      return checkConnectionAndSync();
+      return checkConnectionAndSync({ blockingSync: false });
     })
     .then(function () {
       startPushEvents();
@@ -3805,7 +4107,7 @@
   startBackgroundJobsPollingUi();
   window.addEventListener('online', function () {
     if (typeof checkConnectionAndSync === 'function') {
-      try { checkConnectionAndSync(); } catch (e) { /* ignore */ }
+      try { checkConnectionAndSync({ blockingSync: false }); } catch (e) { /* ignore */ }
     }
   });
   // Startansicht und Kalender erst nach Layout-Aufbau, damit das Grid sofort sichtbar ist
@@ -3863,7 +4165,7 @@
         updateTechnicianName();
         var techId = getTechId();
         if ((getDispoExternalUrl() || getDispoInternalUrl()) && techId) {
-          return checkConnectionAndSync();
+          return checkConnectionAndSync({ blockingSync: false });
         }
         return Promise.resolve();
       })
@@ -3904,7 +4206,7 @@
       return;
     }
     hint.textContent = 'Wird geholt…';
-    checkConnectionAndSync().then(function () {
+    checkConnectionAndSync({ blockingSync: true }).then(function () {
       startSyncInterval();
       hint.textContent = 'Fertig.';
       clearTimeout(hint._syncHide);
@@ -4828,11 +5130,19 @@
         detailModal.parentNode.removeChild(detailModal);
       }
       if (msgEl) {
-        msgEl.textContent = data.pending_sync
-          ? 'Lokal gespeichert – wird beim nächsten Sync mit Dispo abgeglichen.'
-          : 'Gespeichert.';
+        if (data.push_error) {
+          msgEl.textContent = 'Lokal gespeichert – Dispo: ' + data.push_error;
+        } else {
+          msgEl.textContent = data.pending_sync
+            ? 'Lokal gespeichert – wird beim nächsten Sync mit Dispo abgeglichen.'
+            : 'Gespeichert (lokal und Dispo).';
+        }
       }
-      showToast(data.pending_sync ? 'Lokal gespeichert.' : 'Gespeichert.');
+      if (data.push_error) {
+        showToast('Lokal gespeichert – Dispo: ' + data.push_error);
+      } else {
+        showToast(data.pending_sync ? 'Lokal gespeichert.' : 'Gespeichert.');
+      }
     } catch (e) {
       var saveErr = (e && e.message) ? e.message : String(e);
       try {
@@ -5087,7 +5397,69 @@
   function isProjekteNeuRasterImage(fileName) {
     var m = String(fileName || '').toLowerCase().match(/\.([a-z0-9]+)$/);
     var ext = m ? m[1] : '';
-    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].indexOf(ext) >= 0;
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic', 'heif'].indexOf(ext) >= 0;
+  }
+
+  function handleProjekteNeuFileResponse(resp, opts) {
+    opts = opts || {};
+    if (!resp.ok) {
+      return resp.json().catch(function () { return {}; }).then(function (j) {
+        var err = new Error((j && j.error) ? j.error : 'HTTP ' + resp.status);
+        err.localUnavailable = resp.status === 404 || (j && j.error === 'local_unavailable');
+        throw err;
+      });
+    }
+    return resp.blob().then(function (blob) {
+      if (opts.thumb) {
+        function normMime(s) {
+          return String(s || '').toLowerCase().trim().split(';')[0].trim();
+        }
+        var hdrCt = normMime(resp.headers.get('content-type'));
+        var blobCt = normMime(blob.type);
+        var ct = hdrCt || blobCt;
+        if (ct.indexOf('image/') === 0) return blob;
+        if (ct.indexOf('application/json') === 0 || ct.indexOf('text/html') === 0 || ct.indexOf('text/plain') === 0) {
+          throw new Error('thumb_not_image');
+        }
+        if (blob.size > 0 && blob.size < 12 * 1024 * 1024) return blob;
+        throw new Error('thumb_not_image');
+      }
+      return blob;
+    });
+  }
+
+  function loadProjekteNeuThumbnailImg(timg, fab, rel, opts) {
+    opts = opts || {};
+    var fetchOpts = {
+      thumb: true,
+      thumbMax: opts.thumbMax || 256,
+      jobId: resolveProjekteNeuJobId(opts),
+    };
+    function setThumbBlob(blob) {
+      if (!timg || !timg.parentNode) return;
+      var prev = timg.getAttribute('data-blob-url');
+      if (prev) {
+        try { URL.revokeObjectURL(prev); } catch (_) {}
+      }
+      var url = URL.createObjectURL(blob);
+      timg.setAttribute('data-blob-url', url);
+      timg.src = url;
+    }
+    function showFileIcon() {
+      if (!timg || !timg.parentNode) return;
+      var fileRow = timg.parentNode;
+      var ic = document.createElement('span');
+      ic.className = 'projekte-neu-file-icon';
+      ic.setAttribute('aria-hidden', 'true');
+      ic.textContent = '\uD83D\uDCC4';
+      fileRow.replaceChild(ic, timg);
+    }
+    fetchProjekteNeuFileBlob(fab, rel, fetchOpts)
+      .catch(function () {
+        return fetchProjekteNeuFileBlob(fab, rel, { jobId: fetchOpts.jobId, inline: true });
+      })
+      .then(setThumbBlob)
+      .catch(showFileIcon);
   }
 
   function resolveProjekteNeuJobId(opts) {
@@ -5119,30 +5491,6 @@
     function fetchBlobFromUrl(url) {
       return fetch(url, { headers: { 'X-Technician-Id': String(technicianId || '') } }).then(function (resp) {
         return handleProjekteNeuFileResponse(resp, opts);
-      });
-    }
-    function handleProjekteNeuFileResponse(resp, opts) {
-      if (!resp.ok) {
-        return resp.json().catch(function () { return {}; }).then(function (j) {
-          var err = new Error((j && j.error) ? j.error : ('HTTP ' + resp.status));
-          err.localUnavailable = resp.status === 404 || (j && j.error === 'local_unavailable');
-          throw err;
-        });
-      }
-      return resp.blob().then(function (blob) {
-        if (opts.thumb) {
-          function normMime(s) {
-            var x = String(s || '').toLowerCase().trim().split(';')[0].trim();
-            return x;
-          }
-          var hdrCt = normMime(resp.headers.get('content-type'));
-          var blobCt = normMime(blob.type);
-          var ct = hdrCt || blobCt;
-          if (ct.indexOf('application/json') === 0 || ct.indexOf('text/html') === 0 || ct.indexOf('text/plain') === 0) {
-            throw new Error('thumb_not_image');
-          }
-        }
-        return blob;
       });
     }
     return fetchLocal().then(function (resolvedJobId) {
@@ -5206,24 +5554,155 @@
     if (im) im.removeAttribute('src');
   }
 
+  function setProjekteNeuLightboxLoading(isLoading, label) {
+    var lb = document.getElementById('projekteNeuImageLightbox');
+    if (!lb) return;
+    var loader = lb.querySelector('.projekte-neu-lightbox-loader');
+    var im = lb.querySelector('.projekte-neu-lightbox-img');
+    if (loader) {
+      loader.hidden = !isLoading;
+      loader.style.display = isLoading ? 'block' : 'none';
+      var lbl = loader.querySelector('.projekte-neu-lightbox-loader-label');
+      if (lbl && label) lbl.textContent = label;
+    }
+    if (im) {
+      im.style.visibility = isLoading ? 'hidden' : 'visible';
+      im.style.opacity = isLoading ? '0' : '1';
+    }
+  }
+
+  function showProjekteNeuImageLightboxShell() {
+    bindProjekteNeuLightboxOnce();
+    var lb = document.getElementById('projekteNeuImageLightbox');
+    if (!lb) return;
+    lb.hidden = false;
+    lb.style.display = 'flex';
+  }
+
   function closeProjekteNeuImageLightbox() {
     var lb = document.getElementById('projekteNeuImageLightbox');
     if (!lb) return;
     lb.hidden = true;
     lb.style.display = 'none';
+    setProjekteNeuLightboxLoading(false);
+    var im = lb.querySelector('.projekte-neu-lightbox-img');
+    if (im) {
+      im.onload = null;
+      im.onerror = null;
+    }
     projekteNeuRevokeLightboxBlobUrl();
   }
 
-  function openProjekteNeuImageLightbox(blobUrl) {
-    bindProjekteNeuLightboxOnce();
+  function openProjekteNeuImageLightbox(blobUrl, altText) {
+    showProjekteNeuImageLightboxShell();
+    setProjekteNeuLightboxLoading(true, 'Bild wird geladen…');
     projekteNeuRevokeLightboxBlobUrl();
     var lb = document.getElementById('projekteNeuImageLightbox');
     if (!lb) return;
     var im = lb.querySelector('.projekte-neu-lightbox-img');
-    if (im) im.src = blobUrl;
+    if (!im) return;
+    if (altText) im.alt = String(altText);
+    im.onload = function () {
+      setProjekteNeuLightboxLoading(false);
+    };
+    im.onerror = function () {
+      setProjekteNeuLightboxLoading(false);
+      showToast('Bild konnte nicht angezeigt werden.');
+    };
+    im.src = blobUrl;
     lb.setAttribute('data-blob-url', blobUrl);
-    lb.hidden = false;
-    lb.style.display = 'flex';
+    if (im.complete && im.naturalWidth > 0) {
+      setProjekteNeuLightboxLoading(false);
+    }
+  }
+
+  function openProjekteNeuImageInLightbox(fab, rel, opts) {
+    opts = opts || {};
+    showProjekteNeuImageLightboxShell();
+    setProjekteNeuLightboxLoading(true, 'Bild wird geladen…');
+    var lb = document.getElementById('projekteNeuImageLightbox');
+    var im = lb ? lb.querySelector('.projekte-neu-lightbox-img') : null;
+    if (im) {
+      im.removeAttribute('src');
+      if (opts.alt) im.alt = String(opts.alt);
+    }
+    fetchProjekteNeuFileBlob(fab, rel, { inline: true, jobId: resolveProjekteNeuJobId(opts) })
+      .then(function (blob) {
+        openProjekteNeuImageLightbox(URL.createObjectURL(blob), opts.alt);
+      })
+      .catch(function (err) {
+        closeProjekteNeuImageLightbox();
+        if (typeof opts.onError === 'function') opts.onError(err);
+        else showToast('Bild konnte nicht geladen werden.');
+      });
+  }
+
+  function fetchDienstreiseProjectFileBlob(jobId, relativePath, opts) {
+    opts = opts || {};
+    var q =
+      'job_id=' +
+      encodeURIComponent(jobId) +
+      '&path=' +
+      encodeURIComponent(relativePath);
+    if (opts.thumb) q += '&thumb=1&thumbMax=' + encodeURIComponent(String(opts.thumbMax || 256));
+    if (opts.inline) q += '&inline=1';
+    return fetch(API_BASE + '/api/dienstreise/project_file?' + q, {
+      headers: { 'X-Technician-Id': String(getTechId() || '') },
+    }).then(function (resp) {
+      return handleProjekteNeuFileResponse(resp, opts);
+    });
+  }
+
+  function loadDienstreiseExplorerThumbnailImg(img, jobId, relativePath) {
+    if (!img || !jobId || !relativePath) return;
+    var fetchOpts = { thumb: true, thumbMax: 256 };
+    function setThumbBlob(blob) {
+      if (!img.parentNode) return;
+      var prev = img.getAttribute('data-blob-url');
+      if (prev) {
+        try { URL.revokeObjectURL(prev); } catch (_) {}
+      }
+      var url = URL.createObjectURL(blob);
+      img.setAttribute('data-blob-url', url);
+      img.src = url;
+    }
+    function showFileIcon() {
+      if (!img.parentNode) return;
+      var nameCell = img.closest('.dienstreise-explorer-name');
+      if (!nameCell) return;
+      var ic = document.createElement('span');
+      ic.className = 'icon';
+      ic.setAttribute('aria-hidden', 'true');
+      ic.textContent = '\uD83D\uDCC4';
+      nameCell.replaceChild(ic, img);
+    }
+    fetchDienstreiseProjectFileBlob(jobId, relativePath, fetchOpts)
+      .catch(function () {
+        return fetchDienstreiseProjectFileBlob(jobId, relativePath, { inline: true });
+      })
+      .then(setThumbBlob)
+      .catch(showFileIcon);
+  }
+
+  function openDienstreiseProjectImageInLightbox(jobId, relativePath, opts) {
+    opts = opts || {};
+    showProjekteNeuImageLightboxShell();
+    setProjekteNeuLightboxLoading(true, 'Bild wird geladen…');
+    var lb = document.getElementById('projekteNeuImageLightbox');
+    var im = lb ? lb.querySelector('.projekte-neu-lightbox-img') : null;
+    if (im) {
+      im.removeAttribute('src');
+      if (opts.alt) im.alt = String(opts.alt);
+    }
+    fetchDienstreiseProjectFileBlob(jobId, relativePath, { inline: true })
+      .then(function (blob) {
+        openProjekteNeuImageLightbox(URL.createObjectURL(blob), opts.alt);
+      })
+      .catch(function (err) {
+        closeProjekteNeuImageLightbox();
+        if (typeof opts.onError === 'function') opts.onError(err);
+        else showToast('Bild konnte nicht geladen werden.');
+      });
   }
 
   function buildAnlageDetailProjekteNeuTree(fab, nodes, depth, msgEl) {
@@ -5265,26 +5744,17 @@
           timg.className = 'projekte-neu-thumb';
           timg.alt = label;
           timg.loading = 'lazy';
-          fetchProjekteNeuFileBlob(fab, rel, { thumb: true, thumbMax: 256 }).then(function (blob) {
-            timg.src = URL.createObjectURL(blob);
-          }).catch(function () {
-            var ic = document.createElement('span');
-            ic.className = 'projekte-neu-file-icon';
-            ic.setAttribute('aria-hidden', 'true');
-            ic.textContent = '\uD83D\uDCC4';
-            fileRow.replaceChild(ic, timg);
-          });
+          fileRow.appendChild(timg);
+          loadProjekteNeuThumbnailImg(timg, fab, rel, { jobId: jobDetailsJobId, thumbMax: 256 });
           timg.addEventListener('click', function (ev) {
             ev.preventDefault();
             ev.stopPropagation();
-            fetchProjekteNeuFileBlob(fab, rel, { inline: true }).then(function (blob) {
-              openProjekteNeuImageLightbox(URL.createObjectURL(blob));
-            }).catch(function (err) {
-              notifyErr(err);
-              showToast('Bild konnte nicht geladen werden.');
+            openProjekteNeuImageInLightbox(fab, rel, {
+              jobId: jobDetailsJobId,
+              alt: label,
+              onError: notifyErr,
             });
           });
-          fileRow.appendChild(timg);
         } else {
           var ic0 = document.createElement('span');
           ic0.className = 'projekte-neu-file-icon';
@@ -5344,6 +5814,36 @@
     }
   }
 
+  function fetchJsonLocal(path, hdrs, timeoutMs) {
+    timeoutMs = timeoutMs || 12000;
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = setTimeout(function () {
+      if (ctrl) ctrl.abort();
+    }, timeoutMs);
+    var fetchOpts = Object.assign({}, hdrs || {});
+    if (ctrl) fetchOpts.signal = ctrl.signal;
+    return fetch(path, fetchOpts)
+      .then(function (r) {
+        return r.json().catch(function () { return {}; });
+      })
+      .finally(function () {
+        clearTimeout(timer);
+      });
+  }
+
+  if (!loadProjekteNeuTreeIntoHost._tokensByHost) {
+    loadProjekteNeuTreeIntoHost._tokensByHost = new WeakMap();
+  }
+  function bumpProjekteNeuHostToken(treeHost) {
+    var prev = loadProjekteNeuTreeIntoHost._tokensByHost.get(treeHost) || 0;
+    var next = prev + 1;
+    loadProjekteNeuTreeIntoHost._tokensByHost.set(treeHost, next);
+    return next;
+  }
+  function isProjekteNeuHostTokenCurrent(treeHost, loadToken) {
+    return loadProjekteNeuTreeIntoHost._tokensByHost.get(treeHost) === loadToken;
+  }
+
   async function loadProjekteNeuTreeIntoHost(fab, opts) {
     opts = opts || {};
     var msg = opts.msgEl || null;
@@ -5352,13 +5852,14 @@
     var allowOnline = opts.allowOnline !== false;
     var technicianId = getTechId();
     if (!treeHost) return;
+    var loadToken = bumpProjekteNeuHostToken(treeHost);
     if (!fab) {
       if (msg) msg.textContent = 'Keine Fabrikationsnummer vorhanden.';
       treeHost.innerHTML = '';
       return;
     }
     if (msg) msg.textContent = 'Lade Struktur…';
-    treeHost.innerHTML = '';
+    if (!opts.keepTreeWhileLoading) treeHost.innerHTML = '';
     function renderTree(tree, statusText) {
       treeHost.innerHTML = '';
       if (tree && tree.length) {
@@ -5379,27 +5880,46 @@
     }
     try {
       var jobId = resolveProjekteNeuJobId(opts);
-      if (!jobId) {
-        var resolved = await fetch(API_BASE + '/api/anlagenstamm/projekte_neu_resolve_local?fab=' + encodeURIComponent(fab), {
-          headers: { 'X-Technician-Id': String(technicianId || '') }
-        }).then(function (r) { return r.json().catch(function () { return {}; }); });
-        if (resolved && resolved.found && resolved.job_id) jobId = resolved.job_id;
+      var hdrs = { headers: { 'X-Technician-Id': String(technicianId || '') } };
+      var resolved = jobId
+        ? { found: true, job_id: jobId }
+        : await fetchJsonLocal(
+            API_BASE + '/api/anlagenstamm/projekte_neu_resolve_local?fab=' + encodeURIComponent(fab),
+            hdrs,
+            12000,
+          );
+      if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
+      if (resolved && resolved.found && resolved.job_id) jobId = resolved.job_id;
+      var cached = await fetchJsonLocal(
+        API_BASE + '/api/anlagenstamm_tree_cached?fab=' + encodeURIComponent(fab),
+        hdrs,
+        12000,
+      );
+      if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
+      var cachedTreeEarly = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
+      if (cachedTreeEarly.length) {
+        return renderTree(cachedTreeEarly, cacheStatusLabel(cached));
       }
       if (jobId) {
-        var localTree = await fetch(
-          API_BASE + '/api/dienstreise/projekte_neu_tree?job_id=' + encodeURIComponent(jobId) + '&fab=' + encodeURIComponent(fab),
-          { headers: { 'X-Technician-Id': String(technicianId || '') } }
-        ).then(function (r) { return r.json().catch(function () { return {}; }); });
+        var localTree = await fetchJsonLocal(
+          API_BASE +
+            '/api/dienstreise/projekte_neu_tree?job_id=' +
+            encodeURIComponent(jobId) +
+            '&fab=' +
+            encodeURIComponent(fab) +
+            '&rescan=0',
+          hdrs,
+          60000,
+        );
+        if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
         if (localTree && localTree.ok && localTree.enabled && Array.isArray(localTree.tree) && localTree.tree.length) {
-          return renderTree(localTree.tree, 'Lokale Kopie (Dienstreise-Ordner Dokumente_Monteur).');
+          return renderTree(
+            localTree.tree,
+            localTree.from_cache
+              ? cacheStatusLabel({ synced_at: localTree.synced_at })
+              : 'Lokale Kopie (Dienstreise-Ordner Dokumente_Monteur).',
+          );
         }
-      }
-      var cached = await fetch(API_BASE + '/api/anlagenstamm_tree_cached?fab=' + encodeURIComponent(fab), {
-        headers: { 'X-Technician-Id': String(technicianId || '') }
-      }).then(function (r) { return r.json().catch(function () { return {}; }); }).catch(function () { return {}; });
-      var cachedTree = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
-      if (cachedTree.length) {
-        return renderTree(cachedTree, cacheStatusLabel(cached));
       }
       if (!allowOnline || (!getDispoExternalUrl() && !getDispoInternalUrl())) {
         if (msg) {
@@ -5426,7 +5946,18 @@
       }
       renderTree(tree, 'Noch keine lokale Kopie – Struktur vom Server (nach „Auftrag annehmen“ offline nutzbar).');
     } catch (e) {
-      if (msg) msg.textContent = 'Fehler: ' + ((e && e.message) ? e.message : String(e));
+      if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
+      var errText = (e && e.message) ? e.message : String(e);
+      if (msg) {
+        msg.textContent =
+          errText.indexOf('abort') >= 0 || errText === 'The user aborted a request.'
+            ? 'Lokale Abfrage Zeitüberschreitung – Server beschäftigt? Bitte kurz warten und FN-Zeile erneut anklicken.'
+            : 'Fehler: ' + errText;
+      }
+    } finally {
+      if (isProjekteNeuHostTokenCurrent(treeHost, loadToken) && msg && msg.textContent === 'Lade Struktur…') {
+        msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten für diese FN.';
+      }
     }
   }
 
@@ -5434,7 +5965,9 @@
     await loadProjekteNeuTreeIntoHost(fab, {
       msgEl: document.getElementById('anlageDetailProjekteNeuMessage'),
       treeHost: document.getElementById('anlageDetailProjekteNeuTree'),
-      toggleEl: toggleEl
+      toggleEl: toggleEl,
+      jobId: jobDetailsJobId,
+      allowOnline: false
     });
   }
 
@@ -5533,8 +6066,12 @@
       return;
     }
     if (name === 'start') {
-      loadOpenJobs();
-      loadCalendarMonth();
+      var nowStart = Date.now();
+      if (nowStart - startViewDataLoadedAt >= START_VIEW_DATA_MS) {
+        startViewDataLoadedAt = nowStart;
+        loadOpenJobs();
+        loadCalendarMonth();
+      }
     }
   }
 
@@ -6288,17 +6825,51 @@
       var isProtected = relPath && protectedSet.has(relPath);
       var protectControl = drReadonlyGeplant ? '' : ('<label style="display:inline-flex;align-items:center;gap:0.25rem;"><input type="checkbox" data-explorer-protect ' + (isProtected ? 'checked' : '') + '>Nicht löschen</label>');
       var deleteBtn = (drReadonlyGeplant || e.isDirectory) ? '' : '<button type="button" class="btn btn-ghost btn-delete-file" data-explorer-delete title="Datei löschen (lokal und auf Dispo)">Löschen</button>';
-      html += '<div class="dienstreise-explorer-row' + levelClass + '" data-full-path="' + escapeHtml(e.fullPath || '') + '" data-is-dir="' + (e.isDirectory ? '1' : '0') + '" data-relative-path="' + escapeHtml(e.relativePath || '') + '">' +
-        '<div class="dienstreise-explorer-name">' + toggle + '<span class="icon" aria-hidden="true">' + icon + '</span> ' + escapeHtml(e.name) + '</div>' +
+      var isRasterImage = !e.isDirectory && isProjekteNeuRasterImage(e.name);
+      var previewBtn = isRasterImage
+        ? '<button type="button" class="btn btn-ghost" data-explorer-preview title="Bild in der App anzeigen">Vorschau</button>'
+        : '';
+      var nameVisual = isRasterImage
+        ? '<img class="dienstreise-explorer-thumb" data-explorer-thumb alt="" />'
+        : ('<span class="icon" aria-hidden="true">' + icon + '</span>');
+      html += '<div class="dienstreise-explorer-row' + levelClass + '" data-full-path="' + escapeHtml(e.fullPath || '') + '" data-is-dir="' + (e.isDirectory ? '1' : '0') + '" data-relative-path="' + escapeHtml(relPath) + '">' +
+        '<div class="dienstreise-explorer-name">' + toggle + nameVisual + ' <span class="dienstreise-explorer-filename">' + escapeHtml(e.name) + '</span></div>' +
         '<div class="dienstreise-explorer-size">' + escapeHtml(sizeStr) + '</div>' +
         '<div class="dienstreise-explorer-size">' + escapeHtml(mtimeStr) + '</div>' +
         '<div class="dienstreise-explorer-actions">' +
         protectControl +
+        previewBtn +
         '<button type="button" class="btn btn-ghost" data-explorer-open title="Mit Standardprogramm bzw. Explorer öffnen">Öffnen</button>' +
         deleteBtn +
         '</div></div>';
     });
     listEl.innerHTML = html;
+    listEl.querySelectorAll('[data-explorer-thumb]').forEach(function (img) {
+      var row = img.closest('.dienstreise-explorer-row');
+      var rel = row && row.getAttribute('data-relative-path');
+      var fileName = row && row.querySelector('.dienstreise-explorer-filename');
+      if (rel) loadDienstreiseExplorerThumbnailImg(img, jobId, rel);
+      img.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (!rel) return;
+        openDienstreiseProjectImageInLightbox(jobId, rel, {
+          alt: fileName ? fileName.textContent : '',
+        });
+      });
+    });
+    listEl.querySelectorAll('[data-explorer-preview]').forEach(function (btn) {
+      btn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var row = btn.closest('.dienstreise-explorer-row');
+        var rel = row && row.getAttribute('data-relative-path');
+        var fileName = row && row.querySelector('.dienstreise-explorer-filename');
+        if (!rel) return;
+        openDienstreiseProjectImageInLightbox(jobId, rel, {
+          alt: fileName ? fileName.textContent : '',
+        });
+      });
+    });
     listEl.querySelectorAll('[data-explorer-open]').forEach(function (btn) {
       btn.addEventListener('click', function (ev) {
         ev.stopPropagation();
@@ -6352,6 +6923,7 @@
       row.style.cursor = 'pointer';
       row.addEventListener('click', function (ev) {
         if (ev.target.closest('.dienstreise-explorer-actions')) return;
+        if (ev.target.closest('[data-explorer-thumb]')) return;
         var rel = row.getAttribute('data-relative-path');
         if (!rel) return;
         if (dienstreiseExplorerExpanded[rel]) {
@@ -6369,6 +6941,7 @@
 
   function loadDienstreiseExplorer(jobId, subpath) {
     dienstreiseExplorerSubpath = subpath || '';
+    var requestJobId = jobId;
     var listEl = document.getElementById('dienstreiseExplorerList');
     var breadcrumbEl = document.getElementById('dienstreiseExplorerBreadcrumb');
     if (!listEl) return;
@@ -6383,6 +6956,7 @@
     listEl.innerHTML = '<span class="empty">Wird geladen …</span>';
     if (breadcrumbEl) breadcrumbEl.textContent = 'Projektordner';
     fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId)).then(function (r) { return r.json(); }).then(function (data) {
+      if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId())) return;
       if (!data.ok || !data.entries) {
         listEl.innerHTML = '<span class="empty">' + (data.error || 'Laden fehlgeschlagen.') + '</span>';
         if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
@@ -6393,6 +6967,7 @@
       renderDienstreiseExplorerTree();
       if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
     }).catch(function () {
+      if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId())) return;
       listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
       if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
     });

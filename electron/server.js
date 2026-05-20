@@ -22,6 +22,7 @@ const PORT = 39678;
 const DB_DIR = path.join(__dirname, 'db');
 const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore } = require('./lib/abrechnung-routes');
 const { ensureBackgroundJobsSchema, createBackgroundJobService } = require('./lib/background_jobs');
+const { createDbLock } = require('./lib/db-lock');
 const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
 const { buildDispoBaseCandidates } = require('./lib/dispo-base-fallback');
 const {
@@ -29,11 +30,13 @@ const {
   scanProjekteNeuTree,
   safeResolveUnderRoot,
 } = require('./lib/projekte-neu-local');
+const { resolveTedExcelLocal, isExcelFilePath } = require('./lib/ted-excel-local');
 const {
   ensureAnlagenstammLocalSchema,
   rowCount: anlagenstammLocalRowCount,
   searchLocal: anlagenstammSearchLocal,
   lookupByFab: anlagenstammLookupByFab,
+  dedupeAnlagenstammLocalByFab,
   getRowsByFabs: anlagenstammGetRowsByFabs,
   saveLocal: anlagenstammSaveLocal,
   syncAnlagenstammFromDispo,
@@ -105,7 +108,7 @@ function mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty) {
     if (jobVal !== '') {
       continue;
     }
-    if (localDirty && localVal !== '') {
+    if (localVal !== '') {
       merged[k] = local[k];
     } else if (apiVal !== '') {
       merged[k] = api[k];
@@ -545,7 +548,10 @@ function createApp(db) {
     return String(technicianId || '') + '\t' + normDt(start) + '\t' + normDt(end);
   };
 
-  const save = () => db.save();
+  const dbLock = createDbLock();
+  const persistDbToDisk = db.save.bind(db);
+  const save = dbLock.wrapSave(persistDbToDisk);
+  db.save = save;
 
   /** @type {ReturnType<typeof createBackgroundJobService> | null} */
   let bgJobs = null;
@@ -900,34 +906,112 @@ function createApp(db) {
   }
 
   /**
+   * Nach „Auftrag annehmen“: Ordner existiert, aber Kunde/Ort/Datum in der DB kann sich nach Sync unterscheiden.
+   * Sucht den Reise-Ordner über vorhandene FN unter Dokumente_Monteur (typisch nach Dienstreise-Pull).
+   */
+  function findReiseDirByMonteurFabScan(base, row) {
+    if (!base || !row) return null;
+    const fabs = fabNumbersFromJobFabrikationsnummern(row.fabrikationsnummern);
+    if (!fabs || fabs.size === 0) return null;
+    const years = new Set();
+    const startStr = (row.start_datetime || '').trim().slice(0, 10);
+    if (/^\d{4}/.test(startStr)) years.add(startStr.slice(0, 4));
+    years.add(String(new Date().getFullYear()));
+    const py = new Date().getFullYear() - 1;
+    years.add(String(py));
+    for (const year of years) {
+      const yearDir = path.join(base, String(year));
+      if (!fs.existsSync(yearDir)) continue;
+      let entries;
+      try {
+        entries = fs.readdirSync(yearDir, { withFileTypes: true });
+      } catch (_) {
+        continue;
+      }
+      for (const ent of entries) {
+        if (!ent.isDirectory()) continue;
+        const reiseDir = path.join(yearDir, ent.name);
+        const dm = path.join(reiseDir, 'Dokumente_Monteur');
+        if (!fs.existsSync(dm) || !fs.statSync(dm).isDirectory()) continue;
+        for (const fab of fabs) {
+          if (resolveProjekteNeuRoot(dm, fab)) return reiseDir;
+        }
+      }
+    }
+    return null;
+  }
+
+  function lookupDienstreiseJobRow(jobIdRef) {
+    if (jobIdRef == null || jobIdRef === '') return null;
+    const id = typeof jobIdRef === 'number' ? jobIdRef : parseInt(jobIdRef, 10);
+    if (!Number.isFinite(id)) return null;
+    return (
+      db
+        .prepare(
+          `
+      SELECT j.id, j.server_id, j.start_datetime, j.fabrikationsnummern, c.name AS customer_name, ja.city, ja.country
+      FROM jobs j
+      LEFT JOIN customers c ON c.id = j.customer_id
+      LEFT JOIN job_addresses ja ON ja.job_id = j.id
+      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+    `,
+        )
+        .get(id, id) || null
+    );
+  }
+
+  /**
+   * Dienstreise-Ordner zu einem Auftrag (lokal oder server_id).
+   * @param {number|string} jobIdRef
+   * @param {{ createIfMissing?: boolean }} [opts] – nur bei true anlegen (Schreibpfade); PROJEKTE NEU nur lesen.
+   * @returns {string|null}
+   */
+  function resolveDienstreiseReiseDirForJob(jobIdRef, opts) {
+    const createIfMissing = !!(opts && opts.createIfMissing);
+    const base = getDienstreiseBasePath();
+    if (!base) return null;
+    const row = lookupDienstreiseJobRow(jobIdRef);
+    if (!row) return null;
+    const startStr = (row.start_datetime || '').trim().slice(0, 10);
+    const hasValidStart = /^\d{4}-\d{2}-\d{2}$/.test(startStr);
+    if (hasValidStart) {
+      const year = startStr.slice(0, 4);
+      const companyName = (row.customer_name || '').trim() || 'Auftrag';
+      const city = (row.city || '').trim();
+      const countryRaw = (row.country || '').trim();
+      const countryCode = countryRaw.length >= 2 ? countryRaw.slice(0, 2).toUpperCase() : countryRaw;
+      const firm = sanitizeDienstreiseFolderPart(companyName);
+      const ort = sanitizeDienstreiseFolderPart(city);
+      const lk = sanitizeDienstreiseFolderPart(countryCode);
+      const existing = findExistingReiseDir(base, year, startStr, firm, ort, lk);
+      if (existing) return existing;
+    }
+    const scanned = findReiseDirByMonteurFabScan(base, row);
+    if (scanned) return scanned;
+    if (!createIfMissing || !hasValidStart) return null;
+    try {
+      const companyName = (row.customer_name || '').trim() || 'Auftrag';
+      const city = (row.city || '').trim();
+      const countryRaw = (row.country || '').trim();
+      const countryCode = countryRaw.length >= 2 ? countryRaw.slice(0, 2).toUpperCase() : countryRaw;
+      return createDienstreiseFolder(base, startStr, companyName, city, countryCode).fullPath;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
    * Zielordner für einen Auftrag: Jahr = Beginn des Auftrags, Ordner = Laufende Nr._Datum_Firmenname_Ort_LK.
    * Verwendet vorhandenen Ordner falls passend, sonst wird er angelegt.
    */
   function getOrCreateDienstreiseFolderForJob(localJobId) {
     const base = getDienstreiseBasePath();
     if (!base) throw new Error('Speicherort Dienstreise ist nicht konfiguriert.');
-    const row = db.prepare(`
-      SELECT j.id, j.server_id, j.start_datetime, c.name AS customer_name, ja.city, ja.country
-      FROM jobs j
-      LEFT JOIN customers c ON c.id = j.customer_id
-      LEFT JOIN job_addresses ja ON ja.job_id = j.id
-      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-    `).get(localJobId, localJobId);
+    const row = lookupDienstreiseJobRow(localJobId);
     if (!row) throw new Error('Auftrag nicht gefunden.');
-    const startStr = (row.start_datetime || '').trim().slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(startStr)) throw new Error('Auftrag hat kein gültiges Startdatum.');
-    const year = startStr.slice(0, 4);
-    const companyName = (row.customer_name || '').trim() || 'Auftrag';
-    const city = (row.city || '').trim();
-    const countryRaw = (row.country || '').trim();
-    const countryCode = countryRaw.length >= 2 ? countryRaw.slice(0, 2).toUpperCase() : countryRaw;
-    const firm = sanitizeDienstreiseFolderPart(companyName);
-    const ort = sanitizeDienstreiseFolderPart(city);
-    const lk = sanitizeDienstreiseFolderPart(countryCode);
-    const existing = findExistingReiseDir(base, year, startStr, firm, ort, lk);
-    if (existing) return existing;
-    const result = createDienstreiseFolder(base, startStr, companyName, city, countryCode);
-    return result.fullPath;
+    const dir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true });
+    if (!dir) throw new Error('Auftrag hat kein gültiges Startdatum.');
+    return dir;
   }
 
   app.post('/api/dienstreise/create_folder', express.json(), (req, res) => {
@@ -1021,8 +1105,88 @@ function createApp(db) {
     }
   });
 
+  function resolveDienstreiseProjectFilePath(jobIdRef, relPathRaw) {
+    const mapped = getJobRowByLocalOrServerId(jobIdRef);
+    const jobId = mapped ? mapped.id : parseInt(jobIdRef, 10);
+    if (!Number.isFinite(jobId) || jobId <= 0) return null;
+    const reiseDir = resolveDienstreiseReiseDirForJob(jobId, { createIfMissing: false });
+    if (!reiseDir) return null;
+    let rel = String(relPathRaw || '').trim().replace(/^[\\/]+|[\\/]+$/g, '');
+    if (rel && (rel.includes('..') || path.isAbsolute(rel))) return null;
+    const parts = rel ? rel.split(/[/\\]/).filter(Boolean) : [];
+    if (!parts.length) return null;
+    const filePath = path.join(reiseDir, ...parts);
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+    let realReise;
+    let realFile;
+    try {
+      realReise = fs.realpathSync(reiseDir);
+      realFile = fs.realpathSync(filePath);
+    } catch (_) {
+      return null;
+    }
+    if (realFile !== realReise && !realFile.startsWith(realReise + path.sep)) return null;
+    return filePath;
+  }
+
+  /** Bild/Datei aus lokalem Projektordner (Explorer), optional Thumbnail. */
+  app.get('/api/dienstreise/project_file', async (req, res) => {
+    try {
+      const rawJobId = parseInt(req.query.job_id, 10);
+      const relPath = String(req.query.path || '').trim();
+      const wantThumb = String(req.query.thumb || '').toLowerCase() === '1' || req.query.thumb === 'true';
+      const wantInline = String(req.query.inline || '').toLowerCase() === '1' || req.query.inline === 'true';
+      let thumbMax = parseInt(req.query.thumbMax || req.query.thumb_max, 10);
+      if (!Number.isFinite(thumbMax)) thumbMax = 256;
+      thumbMax = Math.min(512, Math.max(64, thumbMax));
+      if (!rawJobId || !relPath) {
+        return res.status(400).json({ ok: false, error: 'job_id und path erforderlich.' });
+      }
+      const filePath = resolveDienstreiseProjectFilePath(rawJobId, relPath);
+      if (!filePath) {
+        return res.status(404).json({ ok: false, error: 'Datei nicht gefunden.', local_unavailable: true });
+      }
+      const baseName = path.basename(filePath);
+      if (wantThumb) {
+        try {
+          const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
+          res.setHeader('Content-Type', thumbOut.contentType);
+          res.setHeader('Content-Length', String(thumbOut.buf.length));
+          return res.send(thumbOut.buf);
+        } catch (thumbErr) {
+          return res.status(415).json({ ok: false, error: thumbErr.message || 'thumb_not_image' });
+        }
+      }
+      const buf = fs.readFileSync(filePath);
+      const ext = path.extname(baseName).toLowerCase();
+      const mimeMap = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+        '.tif': 'image/tiff',
+        '.tiff': 'image/tiff',
+        '.heic': 'image/heic',
+        '.heif': 'image/heif',
+        '.pdf': 'application/pdf',
+      };
+      const ct = mimeMap[ext] || 'application/octet-stream';
+      res.setHeader('Content-Type', ct);
+      res.setHeader(
+        'Content-Disposition',
+        (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+      );
+      res.setHeader('Content-Length', String(buf.length));
+      return res.send(buf);
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
   function getProjekteNeuLocalContext(localJobId, fab) {
-    const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
     if (!reiseDir) return null;
     const dm = path.join(reiseDir, 'Dokumente_Monteur');
     const resolved = resolveProjekteNeuRoot(dm, fab);
@@ -1030,10 +1194,55 @@ function createApp(db) {
     return { reiseDir, dm, resolved };
   }
 
+  const PROJEKTE_NEU_RASTER_EXT = new Set([
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.webp',
+    '.bmp',
+    '.tif',
+    '.tiff',
+    '.heic',
+    '.heif',
+  ]);
+  const PROJEKTE_NEU_RASTER_MIME = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.tif': 'image/tiff',
+    '.tiff': 'image/tiff',
+    '.heic': 'image/heic',
+    '.heif': 'image/heif',
+  };
+
+  /** WebP-Vorschau; bei sharp-Fehler Originalbild (Browser zeigt ggf. kleineres Icon). */
+  async function buildProjekteNeuThumbnailBuffer(filePath, thumbMax) {
+    try {
+      const sharp = require('sharp');
+      const buf = await sharp(filePath)
+        .rotate()
+        .resize(thumbMax, thumbMax, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 82 })
+        .toBuffer();
+      return { buf, contentType: 'image/webp' };
+    } catch (thumbErr) {
+      const ext = path.extname(filePath).toLowerCase();
+      if (!PROJEKTE_NEU_RASTER_EXT.has(ext)) throw thumbErr;
+      return {
+        buf: fs.readFileSync(filePath),
+        contentType: PROJEKTE_NEU_RASTER_MIME[ext] || 'image/jpeg',
+      };
+    }
+  }
+
   function cacheProjekteNeuTreesForJob(localJobId) {
     const jobRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
     if (!jobRow) return;
-    const ctxBase = getOrCreateDienstreiseFolderForJob(localJobId);
+    const ctxBase = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
     if (!ctxBase || !fs.existsSync(ctxBase)) return;
     const dm = path.join(ctxBase, 'Dokumente_Monteur');
     const fabs = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern);
@@ -1058,33 +1267,57 @@ function createApp(db) {
          ORDER BY j.id DESC`,
       )
       .all(technicianId);
-    let bestId = null;
-    let bestTs = 0;
+    let bestPullId = null;
+    let bestPullTs = 0;
+    let bestCtxId = null;
+    let bestCtxTs = 0;
     for (const row of jobs) {
       const jid = row.id;
-      const ctx = getProjekteNeuLocalContext(jid, fabNorm);
-      if (!ctx) continue;
       const pull = db
         .prepare(
-          `SELECT updated_at FROM background_jobs
-           WHERE type = 'dienstreise_pull' AND status = 'done'
+          `SELECT updated_at, status FROM background_jobs
+           WHERE type = 'dienstreise_pull' AND status = 'completed'
              AND dedupe_key LIKE ? ORDER BY updated_at DESC LIMIT 1`,
         )
         .get('dienstreise_pull:' + jid + ':%');
-      const ts = pull && pull.updated_at ? Date.parse(String(pull.updated_at).replace(' ', 'T') + 'Z') : 0;
-      if (!bestId || ts >= bestTs) {
-        bestId = jid;
-        bestTs = ts || Date.now();
+      const pullTs = pull && pull.updated_at ? Date.parse(String(pull.updated_at).replace(' ', 'T') + 'Z') : 0;
+      const ctx = getProjekteNeuLocalContext(jid, fabNorm);
+      if (!ctx) continue;
+      if (pullTs > 0 && pullTs >= bestPullTs) {
+        bestPullId = jid;
+        bestPullTs = pullTs;
+      }
+      const ctxTs = pullTs || Date.now();
+      if (!bestCtxId || ctxTs >= bestCtxTs) {
+        bestCtxId = jid;
+        bestCtxTs = ctxTs;
       }
     }
-    return bestId;
+    return bestPullId != null ? bestPullId : bestCtxId;
   }
 
   app.get('/api/dienstreise/projekte_neu_tree', (req, res) => {
     try {
-      const jobId = parseInt(req.query.job_id, 10);
+      const rawJobId = parseInt(req.query.job_id, 10);
       const fab = String(req.query.fab || '').trim();
-      if (!jobId || !fab) return res.status(400).json({ ok: false, error: 'job_id und fab erforderlich.' });
+      const rescan = req.query.rescan === '1' || req.query.rescan === 'true';
+      if (!rawJobId || !fab) return res.status(400).json({ ok: false, error: 'job_id und fab erforderlich.' });
+      const mapped = getJobRowByLocalOrServerId(rawJobId);
+      const jobId = mapped ? mapped.id : rawJobId;
+      if (!rescan) {
+        const cached = readAnlagenstammTreeCache(db, fab);
+        if (cached && cached.tree.length > 0) {
+          return res.json({
+            ok: true,
+            local: true,
+            enabled: true,
+            tree: cached.tree,
+            from_cache: true,
+            synced_at: cached.synced_at,
+            job_id: jobId,
+          });
+        }
+      }
       const ctx = getProjekteNeuLocalContext(jobId, fab);
       if (!ctx) {
         return res.json({ ok: true, local: false, enabled: false, tree: [], message: 'Kein lokaler PROJEKTE-NEU-Ordner für diese FN.' });
@@ -1123,7 +1356,7 @@ function createApp(db) {
 
   app.get('/api/dienstreise/projekte_neu_file', async (req, res) => {
     try {
-      const jobId = parseInt(req.query.job_id, 10);
+      const rawJobId = parseInt(req.query.job_id, 10);
       const fab = String(req.query.fab || '').trim();
       const relPath = String(req.query.path || '').trim();
       const wantThumb = String(req.query.thumb || '').toLowerCase() === '1' || req.query.thumb === 'true';
@@ -1131,9 +1364,11 @@ function createApp(db) {
       let thumbMax = parseInt(req.query.thumbMax || req.query.thumb_max, 10);
       if (!Number.isFinite(thumbMax)) thumbMax = 256;
       thumbMax = Math.min(512, Math.max(64, thumbMax));
-      if (!jobId || !fab || !relPath) {
+      if (!rawJobId || !fab || !relPath) {
         return res.status(400).json({ ok: false, error: 'job_id, fab und path erforderlich.' });
       }
+      const mapped = getJobRowByLocalOrServerId(rawJobId);
+      const jobId = mapped ? mapped.id : rawJobId;
       const ctx = getProjekteNeuLocalContext(jobId, fab);
       if (!ctx) return res.status(404).json({ ok: false, error: 'local_unavailable', message: 'Kein lokaler Ordner.' });
       const filePath = safeResolveUnderRoot(ctx.resolved.root, relPath);
@@ -1143,11 +1378,10 @@ function createApp(db) {
       const baseName = path.basename(filePath);
       if (wantThumb) {
         try {
-          const sharp = require('sharp');
-          const buf = await sharp(filePath).rotate().resize(thumbMax, thumbMax, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
-          res.setHeader('Content-Type', 'image/webp');
-          res.setHeader('Content-Length', String(buf.length));
-          return res.send(buf);
+          const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
+          res.setHeader('Content-Type', thumbOut.contentType);
+          res.setHeader('Content-Length', String(thumbOut.buf.length));
+          return res.send(thumbOut.buf);
         } catch (thumbErr) {
           return res.status(415).json({ ok: false, error: thumbErr.message || 'thumb_not_image' });
         }
@@ -1161,6 +1395,11 @@ function createApp(db) {
         '.gif': 'image/gif',
         '.webp': 'image/webp',
         '.pdf': 'application/pdf',
+        '.bmp': 'image/bmp',
+        '.tif': 'image/tiff',
+        '.tiff': 'image/tiff',
+        '.heic': 'image/heic',
+        '.heif': 'image/heif',
       };
       const ct = mimeMap[ext] || 'application/octet-stream';
       res.setHeader('Content-Type', ct);
@@ -1920,6 +2159,75 @@ function createApp(db) {
     }
   });
 
+  /** Offene Aufträge aus lokaler SQLite (gleiche Filter wie Dispo jobs_open.php). */
+  app.get('/api/jobs_open_local', (req, res) => {
+    const technicianId = getTechnicianId(req);
+    if (!technicianId) {
+      return res.status(400).json({ error: 'technician_id fehlt.' });
+    }
+    const includeErledigt = (req.query.include_erledigt || '').toString() === '1';
+    const filterNoDate = (req.query.filter_no_date || '').toString() === '1';
+    const filterNoTechnician = (req.query.filter_no_technician || '').toString() === '1';
+    const whereParts = [];
+    if (!includeErledigt) {
+      whereParts.push("j.status NOT IN ('erledigt','abgerechnet')");
+    }
+    if (filterNoDate) {
+      whereParts.push(
+        "((j.start_datetime IS NULL AND j.end_datetime IS NULL) OR (date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01'))",
+      );
+    }
+    if (filterNoTechnician) {
+      whereParts.push('NOT EXISTS (SELECT 1 FROM job_technicians jt3 WHERE jt3.job_id = j.id)');
+    }
+    const whereSql = whereParts.length ? whereParts.join(' AND ') : '1=1';
+    const sql = `
+SELECT
+  j.id,
+  j.server_id,
+  j.job_number,
+  j.status,
+  c.name AS customer_name,
+  ja.endkunde,
+  ja.street,
+  ja.house_number,
+  ja.zip,
+  ja.city,
+  ja.country,
+  ja.address_extra_1,
+  ja.address_extra_2,
+  j.start_datetime AS start_datetime_raw,
+  j.end_datetime AS end_datetime_raw,
+  CASE
+    WHEN date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01' THEN NULL
+    ELSE substr(j.start_datetime, 1, 10)
+  END AS start_datetime,
+  CASE
+    WHEN date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01' THEN NULL
+    ELSE substr(j.end_datetime, 1, 10)
+  END AS end_datetime,
+  j.required_technicians,
+  (
+    SELECT COUNT(DISTINCT jt2.technician_id)
+    FROM job_technicians jt2
+    WHERE jt2.job_id = j.id
+  ) AS assigned_count
+FROM jobs j
+JOIN customers c ON c.id = j.customer_id
+LEFT JOIN job_addresses ja ON ja.job_id = j.id
+WHERE ${whereSql}
+ORDER BY
+  (CASE WHEN ((j.start_datetime IS NULL AND j.end_datetime IS NULL) OR (date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01')) THEN 1 ELSE 0 END) ASC,
+  COALESCE(j.start_datetime, j.end_datetime) ASC,
+  j.id ASC`;
+    try {
+      const rows = db.prepare(sql).all();
+      res.json(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      res.status(500).json({ error: e.message || String(e) });
+    }
+  });
+
   app.get('/api/job', async (req, res) => {
     const technicianId = getTechnicianId(req);
     const jobId = parseInt(req.query.id, 10);
@@ -1964,9 +2272,10 @@ function createApp(db) {
     }
     const baseUrl = (req.query.base_url || '').toString().trim();
     const enrich = req.query.enrich_anlagenstamm === '1' || req.query.enrich_anlagenstamm === 'true';
-    if (enrich && baseUrl) {
+    const enrichLocalOnly = req.query.enrich_local_only === '1' || req.query.enrich_local_only === 'true';
+    if (enrich && (baseUrl || enrichLocalOnly)) {
       const auth = authHeaderFromIncomingBasicOrQuery(req);
-      job = await enrichJobFabWithAnlagenstamm(job, baseUrl, auth);
+      job = await enrichJobFabWithAnlagenstamm(job, baseUrl, auth, { localOnly: enrichLocalOnly });
     }
     res.json({ ok: true, job });
   });
@@ -2400,7 +2709,7 @@ function createApp(db) {
     }
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
     if (!base) {
-      return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
+      return res.json({ ok: true, row: null, anlage: null, _source: 'none' });
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     const url = `${base}/dispo_api/api/anlagenstamm_lookup.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}`;
@@ -2469,33 +2778,71 @@ function createApp(db) {
     if (!localResult.ok) {
       return res.status(400).json(localResult);
     }
-    const entityId = localResult.id > 0 ? localResult.id : String(localResult.fabrikationsnummer || '').trim();
-    db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`).run(
-      entityId,
-    );
-    db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
-      'anlagenstamm',
-      entityId,
-      'save',
-      JSON.stringify(
-        Object.assign({}, bodyNorm, {
-          id: localResult.id,
-          fabrikationsnummer: localResult.fabrikationsnummer,
-          serverUsername: body.serverUsername,
-          serverPassword: body.serverPassword,
-          baseUrl: body.baseUrl,
-          externalUrl: body.externalUrl,
-          internalUrl: body.internalUrl,
-          technician_id: technicianId,
-        }),
-      ),
-    );
-    save();
-    res.json({
-      ok: true,
+    const fabKey = String(localResult.fabrikationsnummer || '').trim();
+    const pushPayload = Object.assign({}, bodyNorm, {
       id: localResult.id,
       fabrikationsnummer: localResult.fabrikationsnummer,
-      pending_sync: true,
+      serverUsername: body.serverUsername,
+      serverPassword: body.serverPassword,
+      baseUrl: body.baseUrl,
+      externalUrl: body.externalUrl,
+      internalUrl: body.internalUrl,
+      technician_id: technicianId,
+    });
+    let pendingSync = true;
+    let pushError = null;
+    const hasDispoBase =
+      buildDispoBaseCandidates({
+        baseUrl: body.baseUrl,
+        externalUrl: body.externalUrl,
+        internalUrl: body.internalUrl,
+      }).length > 0;
+    if (hasDispoBase) {
+      try {
+        const remote = await proxyAnlagenstammSave(pushPayload);
+        if (remote && remote.ok !== false) {
+          pendingSync = false;
+          if (fabKey) {
+            if (remote.id) {
+              db.prepare(
+                'UPDATE anlagenstamm_local SET id = ?, dirty = 0 WHERE TRIM(fabrikationsnummer) = TRIM(?)',
+              ).run(parseInt(remote.id, 10), fabKey);
+            } else {
+              db.prepare('UPDATE anlagenstamm_local SET dirty = 0 WHERE TRIM(fabrikationsnummer) = TRIM(?)').run(
+                fabKey,
+              );
+            }
+            dedupeAnlagenstammLocalByFab(db, fabKey);
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`,
+            ).run(fabKey);
+          }
+        } else {
+          pushError = (remote && remote.error) || 'Dispo hat Speichern abgelehnt.';
+        }
+      } catch (e) {
+        pushError = e && e.message ? e.message : String(e);
+      }
+    }
+    if (pendingSync && fabKey) {
+      db.prepare(
+        `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`,
+      ).run(fabKey);
+      db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
+        'anlagenstamm',
+        fabKey,
+        'save',
+        JSON.stringify(pushPayload),
+      );
+    }
+    save();
+    const kept = fabKey ? anlagenstammLookupByFab(db, fabKey) : null;
+    res.json({
+      ok: true,
+      id: kept && kept.id ? kept.id : localResult.id,
+      fabrikationsnummer: localResult.fabrikationsnummer,
+      pending_sync: pendingSync,
+      push_error: pushError,
       _source: 'local',
     });
   });
@@ -2529,17 +2876,17 @@ function createApp(db) {
     const fab = String(req.query.fab || '').trim();
     if (!fab) return res.status(400).json({ ok: false, error: 'fab erforderlich.' });
     try {
-      const row = db.prepare('SELECT fab, projects_enabled, tree_json, synced_at FROM anlagenstamm_tree_cache WHERE fab = ?').get(fab);
-      if (!row) return res.json({ ok: true, found: false, fab: fab, projects_enabled: false, tree: [] });
-      let tree = [];
-      try { tree = row.tree_json ? JSON.parse(row.tree_json) : []; } catch (_) { tree = []; }
+      const cached = readAnlagenstammTreeCache(db, fab);
+      if (!cached || !cached.tree.length) {
+        return res.json({ ok: true, found: false, fab: fab, projects_enabled: false, tree: [] });
+      }
       return res.json({
         ok: true,
         found: true,
-        fab: row.fab,
-        projects_enabled: Number(row.projects_enabled) === 1,
-        tree: Array.isArray(tree) ? tree : [],
-        synced_at: row.synced_at || null
+        fab: cached.fab,
+        projects_enabled: cached.projects_enabled,
+        tree: cached.tree,
+        synced_at: cached.synced_at,
       });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
@@ -2582,23 +2929,28 @@ function createApp(db) {
     }
     if (sourceNorm === 'projekte_neu' && pnPath) {
       let localJobId = parseInt(jobIdRaw, 10);
+      if (!Number.isFinite(localJobId) || localJobId <= 0) localJobId = null;
+      if (localJobId) {
+        const mapped = getJobRowByLocalOrServerId(localJobId);
+        localJobId = mapped ? mapped.id : null;
+      }
       if (!localJobId) localJobId = resolveLocalJobIdForFab(technicianId, fabValue);
       if (localJobId) {
-        const ctx = getProjekteNeuLocalContext(localJobId, fabValue);
+        let ctx = null;
+        try {
+          ctx = getProjekteNeuLocalContext(localJobId, fabValue);
+        } catch (pnCtxErr) {
+          console.warn('[anlagenstamm_file_download] projekte_neu local:', pnCtxErr && pnCtxErr.message ? pnCtxErr.message : pnCtxErr);
+        }
         if (ctx) {
           const filePath = safeResolveUnderRoot(ctx.resolved.root, pnPath);
           if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
             try {
               if (wantThumb) {
-                const sharp = require('sharp');
-                const buf = await sharp(filePath)
-                  .rotate()
-                  .resize(thumbMax, thumbMax, { fit: 'inside', withoutEnlargement: true })
-                  .webp({ quality: 82 })
-                  .toBuffer();
-                res.setHeader('Content-Type', 'image/webp');
-                res.setHeader('Content-Length', String(buf.length));
-                return res.send(buf);
+                const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
+                res.setHeader('Content-Type', thumbOut.contentType);
+                res.setHeader('Content-Length', String(thumbOut.buf.length));
+                return res.send(thumbOut.buf);
               }
               const buf = fs.readFileSync(filePath);
               const baseName = path.basename(filePath);
@@ -2738,7 +3090,7 @@ function createApp(db) {
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     const url = `${base}/dispo_api/api/mechanik_ted_excel_list.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}`;
     try {
-      const r = await fetch(url, auth ? { headers: auth } : {});
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
@@ -2746,6 +3098,122 @@ function createApp(db) {
       res.json(data);
     } catch (e) {
       res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  /** TED-Excel: Dispo-Download, sonst Suche im lokalen Projektordner / bekannten TED-Pfaden. */
+  app.post('/api/mechanik_ted_excel_open', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const {
+      baseUrl,
+      jobId: rawJobId,
+      local_job_id: localJobIdRaw,
+      rel_path: relPathRaw,
+      fab: fabRaw,
+      file_name: fileNameRaw,
+      serverUsername,
+      serverPassword,
+    } = req.body || {};
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const jobId = parseInt(rawJobId, 10);
+    const localJobId = parseInt(localJobIdRaw, 10);
+    const relPath = String(relPathRaw || '').trim().replace(/\\/g, '/');
+    const fab = String(fabRaw || '').trim();
+    if (!technicianId || !base || !Number.isFinite(jobId) || !relPath || relPath.includes('..')) {
+      return res.status(400).json({ ok: false, error: 'baseUrl, jobId und rel_path erforderlich.' });
+    }
+    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+    const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
+    const dispoUrls = [
+      `${base}/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}&rel_path=${encodeURIComponent(relPath)}`,
+      `${base}/dispo/api/mechanik_ted_excel_download.php?rel_path=${encodeURIComponent(relPath)}`,
+    ];
+    let lastDispoError = 'Datei nicht gefunden.';
+    try {
+      for (const url of dispoUrls) {
+        let r;
+        try {
+          r = await fetch(url, { headers: fetchHeaders });
+        } catch (fetchErr) {
+          lastDispoError = 'Dispo nicht erreichbar: ' + (fetchErr.message || String(fetchErr));
+          continue;
+        }
+        const ct = (r.headers.get('content-type') || '').toLowerCase();
+        if (!r.ok || ct.includes('application/json')) {
+          const data = await r.json().catch(() => ({}));
+          if (data && data.error) lastDispoError = String(data.error);
+          else if (!r.ok) lastDispoError = r.statusText || lastDispoError;
+          continue;
+        }
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (!buf.length) {
+          lastDispoError = 'Datei ist leer.';
+          continue;
+        }
+        const openDir = path.join(DB_DIR, 'anlagenstamm_open');
+        if (!fs.existsSync(openDir)) fs.mkdirSync(openDir, { recursive: true });
+        let rawName = String(fileNameRaw || '').trim() || relPath.split(/[/\\]/).pop() || 'ted.xlsx';
+        const disp = r.headers.get('content-disposition') || '';
+        const fnStar = /filename\*=UTF-8''([^;\s]+)/i.exec(disp);
+        const fnPlain = /filename="([^"]+)"/i.exec(disp);
+        if (fnStar && fnStar[1]) {
+          try {
+            rawName = decodeURIComponent(fnStar[1]);
+          } catch (_) {
+            rawName = fnStar[1];
+          }
+        } else if (fnPlain && fnPlain[1]) {
+          rawName = fnPlain[1];
+        }
+        if (!/\.(xlsx|xlsm|xls|xlsb)$/i.test(rawName)) {
+          const relExt = path.extname(relPath);
+          if (/^\.(xlsx|xlsm|xls|xlsb)$/i.test(relExt)) {
+            rawName = path.basename(rawName, path.extname(rawName)) + relExt;
+          } else if (!path.extname(rawName)) {
+            rawName += '.xlsx';
+          }
+        }
+        const safeName = String(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'ted.xlsx';
+        const stamp = new Date().toISOString().replace(/[^\d]/g, '').slice(0, 14);
+        const targetPath = path.join(openDir, `${stamp}_${safeName}`);
+        fs.writeFileSync(targetPath, buf);
+        try {
+          console.log('[mechanik_ted_excel_open] dispo ok', safeName, 'bytes=' + buf.length);
+        } catch (_) {}
+        return res.json({ ok: true, path: targetPath, filename: safeName, size: buf.length, source: 'dispo' });
+      }
+
+      const reiseDir =
+        Number.isFinite(localJobId) && localJobId > 0
+          ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false })
+          : null;
+      const localHit = resolveTedExcelLocal({ reiseDir, relPath, fab });
+      if (localHit && isExcelFilePath(localHit)) {
+        try {
+          console.log('[mechanik_ted_excel_open] local', localHit);
+        } catch (_) {}
+        const st = fs.statSync(localHit);
+        return res.json({
+          ok: true,
+          path: localHit,
+          filename: path.basename(localHit),
+          size: st.size,
+          source: 'local',
+        });
+      }
+
+      try {
+        console.warn('[mechanik_ted_excel_open] miss', relPath, 'job', jobId, 'reise', reiseDir || '-', lastDispoError);
+      } catch (_) {}
+      return res.status(404).json({
+        ok: false,
+        error:
+          lastDispoError === 'Datei nicht gefunden.'
+            ? 'Datei nicht gefunden (weder auf dem Server noch im lokalen Projektordner). Nach Dienstreise-Pull oder Dispo-Deploy erneut versuchen.'
+            : lastDispoError,
+      });
+    } catch (e) {
+      return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
     }
   });
 
@@ -4516,7 +4984,8 @@ function createApp(db) {
   bgJobs.markStaleRunningAsInterrupted();
   bgJobs.kick();
 
-  async function enrichJobFabWithAnlagenstamm(job, baseUrl, authHeader) {
+  async function enrichJobFabWithAnlagenstamm(job, baseUrl, authHeader, opts) {
+    opts = opts || {};
     if (!job) return job;
     const localJobPk = job.id != null ? parseInt(job.id, 10) : NaN;
     if (Number.isFinite(localJobPk)) {
@@ -4525,7 +4994,7 @@ function createApp(db) {
         job = Object.assign({}, job, { fabrikationsnummern: pendingFab });
       }
     }
-    if (!baseUrl || typeof job.fabrikationsnummern !== 'string') return job;
+    if (typeof job.fabrikationsnummern !== 'string') return job;
     const fab = job.fabrikationsnummern.trim();
     if (!fab) return job;
     /** Nur leere Felder aus Anlagenstamm auffüllen – gespeicherte Auftrags-Leistungszeilen nie überschreiben. */
@@ -4535,17 +5004,16 @@ function createApp(db) {
     ensureAnlagenstammLocalSchema(db);
     let data = { data: [] };
     let debugInfo = { requestedFabs: parts.slice(), ok: false, matchCount: 0, status: null, _source: null };
-    if (anlagenstammLocalRowCount(db) > 0) {
+    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const localOnly = !!opts.localOnly;
+    const tryLocal = localOnly || anlagenstammLocalRowCount(db) > 0;
+    if (tryLocal) {
       const localRows = anlagenstammGetRowsByFabs(db, parts);
-      if (localRows.length > 0) {
-        data = { data: localRows };
-        debugInfo.ok = true;
-        debugInfo.matchCount = localRows.length;
-        debugInfo._source = 'local';
-      }
-    }
-    const base = baseUrl.toString().trim().replace(/\/$/, '');
-    if (!debugInfo.ok && base) {
+      data = { data: localRows };
+      debugInfo.ok = localRows.length > 0;
+      debugInfo.matchCount = localRows.length;
+      debugInfo._source = 'local';
+    } else if (base && !localOnly) {
       const url = `${base}/dispo_api/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(parts.join(','))}`;
       debugInfo.url = url;
       try {
@@ -4558,15 +5026,20 @@ function createApp(db) {
       } catch (e) {
         return { ...job, _anlagenstamm_debug: debugInfo };
       }
+    } else if (!tryLocal && !base) {
+      return { ...job, _anlagenstamm_debug: debugInfo };
     }
     try {
-      if (!debugInfo.ok || !Array.isArray(data.data) || data.data.length === 0) {
-        return { ...job, _anlagenstamm_debug: debugInfo };
-      }
       const byFab = {};
-      for (const row of data.data) {
-        const key = String(row.fabrikationsnummer ?? '').trim();
-        if (key) byFab[key] = row;
+      if (Array.isArray(data.data)) {
+        for (const row of data.data) {
+          const key = String(row.fabrikationsnummer ?? '').trim();
+          if (!key) continue;
+          byFab[key] = row;
+          for (const k of fabCacheLookupKeys(key)) {
+            if (!byFab[k]) byFab[k] = row;
+          }
+        }
       }
       const newFabJson = JSON.stringify(
         jobRows.map((r) => {
@@ -4578,6 +5051,7 @@ function createApp(db) {
           return mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty);
         }),
       );
+      debugInfo.ok = true;
       return { ...job, fabrikationsnummern: newFabJson, _anlagenstamm_debug: debugInfo };
     } catch (e) {
       debugInfo.error = e && e.message ? e.message : String(e);
@@ -5003,6 +5477,39 @@ function extractFabsFromJobs(jobs) {
   return result;
 }
 
+function fabCacheLookupKeys(fab) {
+  const keys = [];
+  const s = String(fab || '').trim();
+  if (s) keys.push(s);
+  if (/^\d+$/.test(s)) {
+    const n = String(parseInt(s, 10));
+    if (keys.indexOf(n) === -1) keys.push(n);
+  }
+  return keys;
+}
+
+function readAnlagenstammTreeCache(db, fab) {
+  for (const k of fabCacheLookupKeys(fab)) {
+    const row = db
+      .prepare('SELECT fab, projects_enabled, tree_json, synced_at FROM anlagenstamm_tree_cache WHERE fab = ?')
+      .get(k);
+    if (!row) continue;
+    let tree = [];
+    try {
+      tree = row.tree_json ? JSON.parse(row.tree_json) : [];
+    } catch (_) {
+      tree = [];
+    }
+    return {
+      fab: row.fab,
+      projects_enabled: Number(row.projects_enabled) === 1,
+      tree: Array.isArray(tree) ? tree : [],
+      synced_at: row.synced_at || null,
+    };
+  }
+  return null;
+}
+
 function upsertAnlagenstammTreeCache(db, fab, pnRaw) {
   const fabNorm = String(fab || '').trim();
   if (!fabNorm) return;
@@ -5085,6 +5592,37 @@ function upsertCalendarCache(db, calendarData) {
   });
 }
 
+function jobHasPendingLocalChanges(db, localJobId) {
+  const n = parseInt(localJobId, 10);
+  if (!Number.isFinite(n)) return false;
+  if (db.prepare(`SELECT 1 FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? LIMIT 1`).get(n)) {
+    return true;
+  }
+  const mapped = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(n);
+  if (mapped && mapped.server_id != null) {
+    return !!db
+      .prepare(`SELECT 1 FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? LIMIT 1`)
+      .get(mapped.server_id);
+  }
+  return false;
+}
+
+/** Laufende / lokale Arbeit nie durch Pull-Listenlücke löschen (z. B. Enddatum in der Vergangenheit). */
+function shouldPreserveLocalJobOnPull(db, localJobId) {
+  const row = db.prepare('SELECT status FROM jobs WHERE id = ?').get(localJobId);
+  const st = row ? String(row.status || '').trim().toLowerCase() : '';
+  if (st === 'in_arbeit' || st === 'zugeteilt' || st === 'angelegt' || st === 'geplant') return true;
+  if (jobHasPendingLocalChanges(db, localJobId)) return true;
+  const pull = db
+    .prepare(
+      `SELECT 1 FROM background_jobs
+       WHERE type = 'dienstreise_pull' AND status IN ('queued', 'running', 'completed', 'done')
+         AND dedupe_key LIKE ? LIMIT 1`,
+    )
+    .get('dienstreise_pull:' + localJobId + ':%');
+  return !!pull;
+}
+
 function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
   const rows = db.prepare(
     'SELECT j.id, j.server_id FROM jobs j INNER JOIN job_technicians jt ON jt.job_id = j.id WHERE jt.technician_id = ?'
@@ -5094,6 +5632,7 @@ function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
     if (!hasServerId) continue; // Verwaiste Aufträge (ohne server_id) nicht löschen – werden ggf. im gleichen Pull verknüpft
     const serverId = row.server_id;
     if (receivedJobServerIds.has(Number(serverId)) || receivedJobServerIds.has(String(serverId))) continue;
+    if (shouldPreserveLocalJobOnPull(db, row.id)) continue;
     db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(row.id, technicianId);
     const rest = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ?').get(row.id);
     if (!rest) {
@@ -5110,6 +5649,7 @@ function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
   for (const row of unassignedMirror) {
     const serverId = row.server_id;
     if (receivedJobServerIds.has(Number(serverId)) || receivedJobServerIds.has(String(serverId))) continue;
+    if (shouldPreserveLocalJobOnPull(db, row.id)) continue;
     try {
       db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(row.id);
     } catch (e) { /* Tabelle fehlt */ }
@@ -5275,6 +5815,22 @@ function resolveFabrikationsnummernForPull(db, localJobId, serverFab) {
   return serverFab != null ? serverFab : null;
 }
 
+/** Pull: lokale/pending Leistungszeilen mit Dispo-Stand zusammenführen (nie blind überschreiben). */
+function mergeFabForJobPull(db, localJobId, serverFab) {
+  const pending = getPendingJobFabrikationsnummern(db, localJobId);
+  const curRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
+  const curFab = curRow && curRow.fabrikationsnummern ? curRow.fabrikationsnummern : null;
+  let localFab = curFab;
+  if (pending !== undefined) {
+    localFab = curFab ? mergeJobFabrikationsnummernJson(curFab, pending) || pending : pending;
+  }
+  if (serverFab == null || serverFab === '') {
+    return localFab != null ? localFab : null;
+  }
+  if (!localFab) return serverFab;
+  return mergeJobFabrikationsnummernJson(localFab, serverFab) || localFab;
+}
+
 function insertOrUpdateJob(db, j, customerId, technicianId) {
   const id = j.id;
   const existing = db.prepare('SELECT id FROM jobs WHERE server_id = ?').get(id);
@@ -5284,14 +5840,7 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const KNOWN = new Set(['angelegt', 'zugeteilt', 'in_arbeit', 'erledigt', 'abgerechnet', 'geplant']);
   const status = KNOWN.has(rawSt) ? rawSt : 'angelegt';
   if (existing) {
-    let fabForLocal = resolveFabrikationsnummernForPull(db, existing.id, j.fabrikationsnummern);
-    if (fabForLocal === j.fabrikationsnummern) {
-      const curFab = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(existing.id);
-      if (curFab && curFab.fabrikationsnummern) {
-        const merged = mergeJobFabrikationsnummernJson(curFab.fabrikationsnummern, j.fabrikationsnummern);
-        if (merged) fabForLocal = merged;
-      }
-    }
+    const fabForLocal = mergeFabForJobPull(db, existing.id, j.fabrikationsnummern);
     db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
       j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabForLocal, j.eap_nummer || null, j.bestellnummer || null, existing.id
     );
@@ -5327,14 +5876,7 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     if (orphans.length === 1) orphan = orphans[0];
   }
   if (orphan) {
-    let fabOrphan = resolveFabrikationsnummernForPull(db, orphan.id, j.fabrikationsnummern);
-    if (fabOrphan === j.fabrikationsnummern) {
-      const curFab = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(orphan.id);
-      if (curFab && curFab.fabrikationsnummern) {
-        const merged = mergeJobFabrikationsnummernJson(curFab.fabrikationsnummern, j.fabrikationsnummern);
-        if (merged) fabOrphan = merged;
-      }
-    }
+    const fabOrphan = mergeFabForJobPull(db, orphan.id, j.fabrikationsnummern);
     db.prepare('UPDATE jobs SET server_id = ?, job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
       id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabOrphan, j.eap_nummer || null, j.bestellnummer || null, orphan.id
     );
@@ -5580,13 +6122,13 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         const fab = String(payload.fabrikationsnummer ?? '').trim();
         if (fab) {
           if (data && data.id) {
-            db.prepare('UPDATE anlagenstamm_local SET id = ?, dirty = 0 WHERE fabrikationsnummer = ?').run(
-              parseInt(data.id, 10),
-              fab,
-            );
+            db.prepare(
+              'UPDATE anlagenstamm_local SET id = ?, dirty = 0 WHERE TRIM(fabrikationsnummer) = TRIM(?)',
+            ).run(parseInt(data.id, 10), fab);
           } else {
-            db.prepare('UPDATE anlagenstamm_local SET dirty = 0 WHERE fabrikationsnummer = ?').run(fab);
+            db.prepare('UPDATE anlagenstamm_local SET dirty = 0 WHERE TRIM(fabrikationsnummer) = TRIM(?)').run(fab);
           }
+          dedupeAnlagenstammLocalByFab(db, fab);
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {

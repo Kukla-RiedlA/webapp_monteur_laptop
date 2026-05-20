@@ -234,7 +234,21 @@
     .dienstreise-explorer-row .explorer-toggle { width: 1rem; text-align: center; font-size: 0.7rem; color: var(--muted); user-select: none; }
     .dienstreise-explorer-row .explorer-toggle.empty { visibility: hidden; }
     .dienstreise-explorer-name { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
-    .dienstreise-explorer-name .icon { font-size: 1rem; opacity: 0.9; }
+    .dienstreise-explorer-name .icon { font-size: 1rem; opacity: 0.9; flex-shrink: 0; }
+    .dienstreise-explorer-name .dienstreise-explorer-thumb {
+      width: 40px;
+      height: 40px;
+      min-width: 40px;
+      min-height: 40px;
+      object-fit: cover;
+      border-radius: 4px;
+      border: 1px solid var(--accent);
+      cursor: pointer;
+      flex-shrink: 0;
+      background: var(--card);
+      display: block;
+    }
+    .dienstreise-explorer-filename { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dienstreise-explorer-size { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
     .dienstreise-explorer-actions { display: flex; gap: 0.25rem; }
     .dienstreise-explorer-actions .btn { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
@@ -451,12 +465,15 @@
     .projekte-neu-thumb {
       width: 48px;
       height: 48px;
+      min-width: 48px;
+      min-height: 48px;
       object-fit: cover;
       border-radius: 4px;
       border: 1px solid var(--accent);
       cursor: pointer;
       flex-shrink: 0;
       background: var(--card);
+      display: block;
     }
     .projekte-neu-file-icon {
       width: 48px;
@@ -491,6 +508,40 @@
       max-width: 96vw;
       max-height: 96vh;
       margin: 1rem;
+      min-width: 12rem;
+      min-height: 8rem;
+    }
+    .projekte-neu-lightbox-loader {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(320px, 82vw);
+      z-index: 2;
+      text-align: center;
+      color: #fff;
+      pointer-events: none;
+    }
+    .projekte-neu-lightbox-loader-label {
+      margin: 0 0 0.65rem;
+      font-size: 0.95rem;
+    }
+    .projekte-neu-lightbox-progress {
+      height: 5px;
+      background: rgba(255, 255, 255, 0.28);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .projekte-neu-lightbox-progress-bar {
+      height: 100%;
+      width: 38%;
+      border-radius: 3px;
+      background: var(--accent, #0e7b5a);
+      animation: projekteNeuLightboxProgress 1.15s ease-in-out infinite;
+    }
+    @keyframes projekteNeuLightboxProgress {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(320%); }
     }
     .projekte-neu-lightbox-inner img {
       max-width: 96vw;
@@ -730,6 +781,8 @@
     .anlage-detail-dl dd { margin: 0.15rem 0 0 0; }
     .anlage-detail-dl input, .anlage-detail-dl textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); font-size: 0.9rem; box-sizing: border-box; }
     .anlage-detail-actions { margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .anlage-detail-projekte-neu { margin-top: 0.75rem; border-top: 1px solid var(--accent); padding-top: 0.5rem; }
+    #anlageDetailProjekteNeuTree { min-height: 3rem; max-height: min(42vh, 320px); overflow: auto; margin-top: 0.35rem; }
     .modal-leistung-actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .modal-job-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; flex-shrink: 0; }
     .view-textbausteine { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
@@ -1339,6 +1392,12 @@
     <div class="projekte-neu-lightbox-backdrop" tabindex="-1"></div>
     <div class="projekte-neu-lightbox-inner">
       <button type="button" class="projekte-neu-lightbox-close" aria-label="Schließen">&times;</button>
+      <div class="projekte-neu-lightbox-loader" hidden aria-live="polite">
+        <p class="projekte-neu-lightbox-loader-label">Bild wird geladen…</p>
+        <div class="projekte-neu-lightbox-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+          <div class="projekte-neu-lightbox-progress-bar"></div>
+        </div>
+      </div>
       <img class="projekte-neu-lightbox-img" alt="" />
     </div>
   </div>

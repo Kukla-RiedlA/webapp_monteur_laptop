@@ -162,19 +162,23 @@ const UPSERT_ANLAGENSTAMM_SQL = `
 
 function upsertAnlagenstammRows(db, rows) {
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  const dirtyByIdStmt = db.prepare('SELECT dirty FROM anlagenstamm_local WHERE id = ?');
-  const dirtyByFabStmt = db.prepare(
-    'SELECT dirty FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1',
-  );
+  // sql.js-Wrapper: jedes prepare().get/run gibt das Statement frei – nicht wiederverwenden.
   for (const raw of rows) {
     const row = clampForDispoAnlagenstamm(raw);
     const id = parseInt(row.id, 10);
     if (!Number.isFinite(id) || id <= 0) continue;
     const fab = clampDispoField(row.fabrikationsnummer, DISPO_ANLAGENSTAMM_MAX.fabrikationsnummer).trim();
-    const dirtyById = dirtyByIdStmt.get(id);
+    const dirtyById = db.prepare('SELECT dirty FROM anlagenstamm_local WHERE id = ?').get(id);
     if (dirtyById && Number(dirtyById.dirty) === 1) continue;
     if (fab) {
-      const dirtyByFab = dirtyByFabStmt.get(fab);
+      const dirtyByFab = db
+        .prepare(
+          `SELECT dirty FROM anlagenstamm_local
+           WHERE TRIM(fabrikationsnummer) = TRIM(?)
+           ORDER BY dirty DESC, synced_at DESC, id DESC
+           LIMIT 1`,
+        )
+        .get(fab);
       if (dirtyByFab && Number(dirtyByFab.dirty) === 1) continue;
     }
     db.prepare(UPSERT_ANLAGENSTAMM_SQL).run(
@@ -253,19 +257,52 @@ function searchLocal(db, filters) {
   };
 }
 
+/** FN-Varianten für Lookup (exakt, nur Ziffern, führende Nullen). */
+function fabLookupKeys(fab) {
+  const keys = [];
+  const s = String(fab || '').trim();
+  if (s) keys.push(s);
+  const digits = s.replace(/\D/g, '');
+  if (digits) {
+    if (keys.indexOf(digits) === -1) keys.push(digits);
+    const n = String(parseInt(digits, 10));
+    if (Number.isFinite(parseInt(digits, 10)) && keys.indexOf(n) === -1) keys.push(n);
+  }
+  return keys;
+}
+
 function lookupByFab(db, fab) {
-  const fabNorm = String(fab || '').trim();
-  if (!fabNorm) return null;
-  return (
-    db
-      .prepare(
-        `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+  const sql = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
           material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
           geliefert_ueber, projekt, bemerkungen, dirty
-         FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1`,
-      )
-      .get(fabNorm) || null
-  );
+         FROM anlagenstamm_local
+         WHERE TRIM(fabrikationsnummer) = TRIM(?)
+         ORDER BY dirty DESC, synced_at DESC, id DESC
+         LIMIT 1`;
+  for (const k of fabLookupKeys(fab)) {
+    const row = db.prepare(sql).get(k);
+    if (row) return row;
+  }
+  return null;
+}
+
+/** Doppelte Zeilen pro FN (lokale vs. Server-id) bereinigen – behält dirty, sonst neueste. */
+function dedupeAnlagenstammLocalByFab(db, fab) {
+  const fabNorm = String(fab || '').trim();
+  if (!fabNorm) return null;
+  const rows = db
+    .prepare(
+      `SELECT id FROM anlagenstamm_local
+       WHERE TRIM(fabrikationsnummer) = TRIM(?)
+       ORDER BY dirty DESC, synced_at DESC, id DESC`,
+    )
+    .all(fabNorm);
+  if (!rows.length) return null;
+  const keepId = rows[0].id;
+  for (let i = 1; i < rows.length; i++) {
+    db.prepare('DELETE FROM anlagenstamm_local WHERE id = ?').run(rows[i].id);
+  }
+  return keepId;
 }
 
 function getRowsByFabs(db, fabs) {
@@ -285,8 +322,10 @@ function saveLocal(db, payload) {
   if (!fab) return { ok: false, error: 'Fabrikationsnummer fehlt' };
   let id = parseInt(normalized.id, 10);
   const existing = lookupByFab(db, fab);
-  if (!Number.isFinite(id) || id <= 0) {
-    id = existing && existing.id ? existing.id : 0;
+  if (existing && existing.id) {
+    id = existing.id;
+  } else if (!Number.isFinite(id) || id <= 0) {
+    id = 0;
   }
   const fields = {
     type: normalized.type != null ? String(normalized.type) : '',
@@ -303,30 +342,38 @@ function saveLocal(db, payload) {
     bemerkungen: normalized.bemerkungen != null ? String(normalized.bemerkungen) : '',
   };
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  if (id > 0) {
+  const fieldArgs = [
+    fab,
+    fields.type,
+    fields.leistung,
+    fields.kraftaufnehmer,
+    fields.nenngeschwindigkeit,
+    fields.material,
+    fields.tacho,
+    fields.elektronik,
+    fields.dms_nr,
+    fields.position,
+    fields.geliefert_ueber,
+    fields.projekt,
+    fields.bemerkungen,
+    syncedAt,
+  ];
+  if (existing && existing.id) {
     db.prepare(
       `UPDATE anlagenstamm_local SET
         fabrikationsnummer = ?, type = ?, leistung = ?, kraftaufnehmer = ?, nenngeschwindigkeit = ?,
         material = ?, tacho = ?, elektronik = ?, dms_nr = ?, position = ?,
         geliefert_ueber = ?, projekt = ?, bemerkungen = ?, dirty = 1, synced_at = ?
        WHERE id = ?`,
-    ).run(
-      fab,
-      fields.type,
-      fields.leistung,
-      fields.kraftaufnehmer,
-      fields.nenngeschwindigkeit,
-      fields.material,
-      fields.tacho,
-      fields.elektronik,
-      fields.dms_nr,
-      fields.position,
-      fields.geliefert_ueber,
-      fields.projekt,
-      fields.bemerkungen,
-      syncedAt,
-      id,
-    );
+    ).run(...fieldArgs, existing.id);
+    id = existing.id;
+  } else if (id > 0) {
+    db.prepare(
+      `INSERT INTO anlagenstamm_local (
+        id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+        material, tacho, elektronik, dms_nr, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    ).run(id, ...fieldArgs);
   } else {
     const ins = db.prepare(
       `INSERT INTO anlagenstamm_local (
@@ -334,24 +381,12 @@ function saveLocal(db, payload) {
         material, tacho, elektronik, dms_nr, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     );
-    const r = ins.run(
-      fab,
-      fields.type,
-      fields.leistung,
-      fields.kraftaufnehmer,
-      fields.nenngeschwindigkeit,
-      fields.material,
-      fields.tacho,
-      fields.elektronik,
-      fields.dms_nr,
-      fields.position,
-      fields.geliefert_ueber,
-      fields.projekt,
-      fields.bemerkungen,
-      syncedAt,
-    );
+    const r = ins.run(...fieldArgs);
     id = Number(r.lastInsertRowid);
   }
+  dedupeAnlagenstammLocalByFab(db, fab);
+  const kept = lookupByFab(db, fab);
+  if (kept && kept.id) id = kept.id;
   return { ok: true, id, fabrikationsnummer: fab, fields, _pending: true };
 }
 
@@ -454,7 +489,9 @@ module.exports = {
   clampForDispoJobFabrikation,
   clampFabrikationsnummernJson,
   searchLocal,
+  fabLookupKeys,
   lookupByFab,
+  dedupeAnlagenstammLocalByFab,
   getRowsByFabs,
   saveLocal,
   syncAnlagenstammFromDispo,

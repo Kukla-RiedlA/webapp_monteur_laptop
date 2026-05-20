@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('monteurApp', {
   platform: process.platform,
   chooseDienstreiseBasePath: () => ipcRenderer.invoke('dienstreise:choose-folder'),
   openPath: (filePath) => ipcRenderer.invoke('dienstreise:open-path', filePath),
+  /** TED/Mechanik-Excel: gleicher IPC, dokumentiert als Excel-Öffnen (EXCEL.EXE zuerst unter Windows). */
+  openExcel: (filePath) => ipcRenderer.invoke('dienstreise:open-path', filePath),
   copyPathToClipboard: (filePath) => ipcRenderer.invoke('dienstreise:copy-path', filePath),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   anlagenstammSearch: (payload) => ipcRenderer.invoke('anlagenstamm:search', payload),

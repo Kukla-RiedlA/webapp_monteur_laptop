@@ -252,6 +252,14 @@ ipcMain.handle('dienstreise:open-path', async (event, filePath) => {
       return false;
     }
   }
+  function tryOpenExcelFirst(targetPath) {
+    if (!win || !isExcelFile(targetPath)) return false;
+    trace('tryOpenExcelFirst', targetPath);
+    if (tryLaunchExcelDirect(targetPath)) return true;
+    if (tryLaunchExcelByCom(targetPath)) return true;
+    if (tryWindowsStartProcess(targetPath) || tryWindowsCmdStart(targetPath)) return true;
+    return false;
+  }
   try {
     trace('start', normalized);
     if (!fs.existsSync(normalized)) {
@@ -259,37 +267,36 @@ ipcMain.handle('dienstreise:open-path', async (event, filePath) => {
       return { ok: false, error: 'Datei nicht gefunden: ' + normalized };
     }
     trace('exists', normalized);
+    // TED/Excel: zuerst EXCEL.EXE bzw. COM – nicht Browser oder generische Standard-App.
+    if (tryOpenExcelFirst(normalized)) {
+      trace('excel-first.ok');
+      return { ok: true, via: 'excel' };
+    }
     const openResult = await shell.openPath(normalized);
     trace('shell.openPath.result', String(openResult || 'ok'));
     if (typeof openResult === 'string' && openResult.trim()) {
-      try {
-        await shell.openExternal(pathToFileURL(normalized).toString());
-        trace('shell.openExternal.fileurl.ok');
-        return { ok: true, fallback: true, warning: openResult.trim() };
-      } catch (_) {
-        if (tryLaunchExcelByCom(normalized)) {
-          return { ok: true, fallback: true, warning: openResult.trim() };
-        }
-        if (tryLaunchExcelDirect(normalized)) {
-          return { ok: true, fallback: true, warning: openResult.trim() };
-        }
-        // Zusätzliche robuste Windows-Fallbacks über Shell-Dateizuordnung.
-        if (win && (tryWindowsStartProcess(normalized) || tryWindowsCmdStart(normalized))) {
-          return { ok: true, fallback: true, warning: openResult.trim() };
-        }
-        trace('all-fallbacks-failed', openResult.trim());
-        return { ok: false, error: openResult.trim() };
+      if (isExcelFile(normalized) && tryOpenExcelFirst(normalized)) {
+        return { ok: true, fallback: true, warning: openResult.trim(), via: 'excel' };
       }
+      if (!isExcelFile(normalized)) {
+        try {
+          await shell.openExternal(pathToFileURL(normalized).toString());
+          trace('shell.openExternal.fileurl.ok');
+          return { ok: true, fallback: true, warning: openResult.trim() };
+        } catch (_) { /* weiter unten */ }
+      }
+      if (win && (tryWindowsStartProcess(normalized) || tryWindowsCmdStart(normalized))) {
+        return { ok: true, fallback: true, warning: openResult.trim() };
+      }
+      trace('all-fallbacks-failed', openResult.trim());
+      return { ok: false, error: openResult.trim() };
     }
     trace('shell.openPath.ok');
     return { ok: true };
   } catch (e) {
     trace('exception', e && e.message ? e.message : String(e));
-    if (tryLaunchExcelByCom(normalized)) {
-      return { ok: true, fallback: true, warning: e && e.message ? e.message : String(e) };
-    }
-    if (tryLaunchExcelDirect(normalized)) {
-      return { ok: true, fallback: true, warning: e && e.message ? e.message : String(e) };
+    if (tryOpenExcelFirst(normalized)) {
+      return { ok: true, fallback: true, warning: e && e.message ? e.message : String(e), via: 'excel' };
     }
     if (win && fs.existsSync(normalized) && (tryWindowsStartProcess(normalized) || tryWindowsCmdStart(normalized))) {
       return { ok: true, fallback: true, warning: e && e.message ? e.message : String(e) };

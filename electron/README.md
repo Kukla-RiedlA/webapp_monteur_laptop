@@ -50,8 +50,27 @@ Der integrierte Express-Server läuft auf **Port 39678** und bietet die gleichen
 - `POST /api/absence`, `PATCH /api/absence`, `DELETE /api/absence`
 - `POST /api/sync_pull` (Body: `baseUrl`, `technicianId`)
 - `POST /api/sync_push` (Body: `baseUrl`, `technicianId`)
+- `GET /api/jobs_open_local` – offene Aufträge aus SQLite (Filter wie Dispo `jobs_open.php`)
 
-Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Dispo-Server**. Die Monteur-API (my_jobs.php, my_absences.php, job.php, absence.php) ist im Dispo-Projekt unter `htdocs/api/` angelegt – bei Dispo unter `http://localhost/` also z. B. `http://localhost/api/my_jobs.php`.
+Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Dispo-Server**.
+
+### Verbindungs-Badge und Sync
+
+- **Lokal:** keine Dispo-URL konfiguriert (reines Offline-Arbeiten mit SQLite).
+- **Offline:** URLs gesetzt, Dispo nicht erreichbar.
+- **Online:** Probe erfolgreich; Push/Pull laufen im Hintergrund (Intervall) bzw. blockierend bei Klick auf Badge oder „Jetzt synchronisieren“.
+- **Offene Aufträge:** Filter zeigen zuerst den lokalen Stand (`jobs_open_local`), bei erreichbarer Dispo optional Live-Aktualisierung.
+
+### Manuelle Abnahme (Kurzcheckliste)
+
+1. Badge „Online“ nach erfolgreicher Probe ohne langes Warten auf vollständigen Pull.
+2. Projektdaten speichern → Reload behält Werte (kein Zurückspringen durch Sync).
+3. Anlagendetails: Felder aus lokalem Stamm + PROJEKTE NEU (Cache, kein Dauer-„Lade Struktur…“).
+4. Intervall-Sync blockiert UI nicht (kein Poll auf Intervall).
+5. Manueller Sync (Badge) wartet auf Push/Pull.
+6. `in_arbeit`-Auftrag bleibt nach Pull unter „Meine Aufträge“.
+7. Offene Aufträge mit Filter offline aus SQLite sichtbar.
+8. Terminal: kein wiederholtes `[sync_pull] anlagenstamm_db_sync: Statement closed`. Die Monteur-API (my_jobs.php, my_absences.php, job.php, absence.php) ist im Dispo-Projekt unter `htdocs/api/` angelegt – bei Dispo unter `http://localhost/` also z. B. `http://localhost/api/my_jobs.php`.
 
 ## Icon (Kukla Monteur Tool)
 

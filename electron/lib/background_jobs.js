@@ -79,6 +79,15 @@ function createBackgroundJobService(db, save, hooks) {
     const vals = keys.map((k) => patch[k]);
     vals.push(rowId);
     db.prepare(`UPDATE background_jobs SET ${sets}, updated_at = datetime('now') WHERE id = ?`).run(...vals);
+    const progressOnly =
+      keys.length > 0 &&
+      keys.every((k) =>
+        k === 'progress_phase' || k === 'progress_current' || k === 'progress_total' || k === 'message',
+      );
+    if (progressOnly) {
+      /* Fortschritt nur im RAM/Job-Zeile – kein save() (sql.js export während upsert). */
+      return;
+    }
     save();
   }
 
@@ -179,9 +188,32 @@ function createBackgroundJobService(db, save, hooks) {
     }
   }
 
+  function findActiveJobIdByDedupe(dedupeKey) {
+    if (!dedupeKey) return null;
+    const row = db
+      .prepare(
+        `SELECT id, status FROM background_jobs
+         WHERE dedupe_key = ? AND status IN ('queued', 'running')
+         ORDER BY datetime(created_at) DESC LIMIT 1`,
+      )
+      .get(dedupeKey);
+    return row && row.id ? row.id : null;
+  }
+
   function enqueue(type, payload, dedupeKey) {
     if (!ALLOWED_TYPES.has(type)) {
       throw new Error('Unbekannter Job-Typ: ' + type);
+    }
+    const existingId = findActiveJobIdByDedupe(dedupeKey);
+    if (existingId) {
+      const row = db.prepare('SELECT status FROM background_jobs WHERE id = ?').get(existingId);
+      if (row && row.status === 'queued') {
+        bump(existingId, { payload_json: JSON.stringify(payload || {}) });
+      }
+      setImmediate(() => {
+        pump().catch(() => {});
+      });
+      return { job_id: existingId };
     }
     const id = newJobId();
     deleteQueuedByDedupe(dedupeKey);
