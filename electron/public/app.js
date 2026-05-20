@@ -1790,6 +1790,18 @@
     };
   }
 
+  function sanitizeLeistungField(val) {
+    if (val == null) return '';
+    var s = String(val).trim();
+    if (!s || s.toLowerCase() === 'null') return '';
+    return s;
+  }
+
+  function formatLeistungCellDisplay(val) {
+    var s = sanitizeLeistungField(val);
+    return s === '' ? '–' : s;
+  }
+
   function mergeFabListIntoLeistungRows(numbers, existingRows) {
     var existing = Array.isArray(existingRows) ? existingRows : [];
     var out = [];
@@ -1802,18 +1814,18 @@
       if (prev) {
         out.push({
           fabrikationsnummer: fn,
-          type: prev.type || '',
-          leistung: prev.leistung || '',
-          nenngeschwindigkeit: prev.nenngeschwindigkeit || '',
-          kraftaufnehmer: prev.kraftaufnehmer || '',
-          dms_nr: prev.dms_nr || '',
-          tacho: prev.tacho || '',
-          elektronik: prev.elektronik || '',
-          material: prev.material || '',
-          position: prev.position || '',
-          geliefert_ueber: prev.geliefert_ueber || '',
-          projekt: prev.projekt || '',
-          bemerkungen: prev.bemerkungen || ''
+          type: sanitizeLeistungField(prev.type),
+          leistung: sanitizeLeistungField(prev.leistung),
+          nenngeschwindigkeit: sanitizeLeistungField(prev.nenngeschwindigkeit),
+          kraftaufnehmer: sanitizeLeistungField(prev.kraftaufnehmer),
+          dms_nr: sanitizeLeistungField(prev.dms_nr),
+          tacho: sanitizeLeistungField(prev.tacho),
+          elektronik: sanitizeLeistungField(prev.elektronik),
+          material: sanitizeLeistungField(prev.material),
+          position: sanitizeLeistungField(prev.position),
+          geliefert_ueber: sanitizeLeistungField(prev.geliefert_ueber),
+          projekt: sanitizeLeistungField(prev.projekt),
+          bemerkungen: sanitizeLeistungField(prev.bemerkungen)
         });
       } else {
         out.push(emptyLeistungRowTemplate(fn));
@@ -1832,19 +1844,19 @@
   function leistungRowHasVisibleData(r) {
     if (!r) return false;
     return !!(
-      r.fabrikationsnummer ||
-      r.type ||
-      r.leistung ||
-      r.nenngeschwindigkeit ||
-      r.kraftaufnehmer ||
-      r.dms_nr ||
-      r.tacho ||
-      r.elektronik ||
-      r.material ||
-      r.position ||
-      r.geliefert_ueber ||
-      r.projekt ||
-      r.bemerkungen
+      sanitizeLeistungField(r.fabrikationsnummer) ||
+      sanitizeLeistungField(r.type) ||
+      sanitizeLeistungField(r.leistung) ||
+      sanitizeLeistungField(r.nenngeschwindigkeit) ||
+      sanitizeLeistungField(r.kraftaufnehmer) ||
+      sanitizeLeistungField(r.dms_nr) ||
+      sanitizeLeistungField(r.tacho) ||
+      sanitizeLeistungField(r.elektronik) ||
+      sanitizeLeistungField(r.material) ||
+      sanitizeLeistungField(r.position) ||
+      sanitizeLeistungField(r.geliefert_ueber) ||
+      sanitizeLeistungField(r.projekt) ||
+      sanitizeLeistungField(r.bemerkungen)
     );
   }
 
@@ -1891,19 +1903,10 @@
     var get = function (r, keys) {
       if (!r || typeof r !== 'object') return '';
       for (var i = 0; i < keys.length; i++) {
-        var val = r[keys[i]];
-        if (val !== undefined && val !== null) {
-          var s = String(val).trim();
-          if (s.toLowerCase() === 'null') return '';
-          return s;
-        }
+        if (r[keys[i]] !== undefined) return sanitizeLeistungField(r[keys[i]]);
         var lower = keys[i].toLowerCase();
         for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k) && k.toLowerCase() === lower) {
-          var v2 = r[k];
-          if (v2 === undefined || v2 === null) continue;
-          var s2 = String(v2).trim();
-          if (s2.toLowerCase() === 'null') return '';
-          return s2;
+          return sanitizeLeistungField(r[k]);
         }
       }
       return '';
@@ -1941,17 +1944,17 @@
 
   function refreshProjektdatenLeistungTableFromRows() {
     var rows = window.currentProjektdatenLeistungRows || [];
-    var vCell = function (x) { return String(x == null ? '' : x); };
     var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
     function applyRowToTr(tr, row) {
       var cells = tr.querySelectorAll('td');
       if (cells.length < 4) return;
-      cells[0].textContent = vCell(row.fabrikationsnummer);
-      if (cells[0].getAttribute('data-fab') != null) cells[0].setAttribute('data-fab', vCell(row.fabrikationsnummer));
-      cells[1].textContent = vCell(row.type);
-      cells[2].textContent = vCell(row.leistung);
-      cells[3].textContent = vCell(row.position);
+      var fabDisp = sanitizeLeistungField(row.fabrikationsnummer);
+      cells[0].textContent = fabDisp;
+      if (cells[0].getAttribute('data-fab') != null) cells[0].setAttribute('data-fab', fabDisp);
+      cells[1].textContent = formatLeistungCellDisplay(row.type);
+      cells[2].textContent = formatLeistungCellDisplay(row.leistung);
+      cells[3].textContent = formatLeistungCellDisplay(row.position);
     }
     content.querySelectorAll('.projektdaten-leistung-row[data-row-index]').forEach(function (tr) {
       var i = parseInt(tr.getAttribute('data-row-index'), 10);
@@ -1964,11 +1967,12 @@
       var row = rows[i];
       var col = td.cellIndex;
       if (col === 0) {
-        td.textContent = vCell(row.fabrikationsnummer);
-        if (td.getAttribute('data-fab') != null) td.setAttribute('data-fab', vCell(row.fabrikationsnummer));
-      } else if (col === 1) td.textContent = vCell(row.type);
-      else if (col === 2) td.textContent = vCell(row.leistung);
-      else if (col === 3) td.textContent = vCell(row.position);
+        var fabTd = sanitizeLeistungField(row.fabrikationsnummer);
+        td.textContent = fabTd;
+        if (td.getAttribute('data-fab') != null) td.setAttribute('data-fab', fabTd);
+      } else if (col === 1) td.textContent = formatLeistungCellDisplay(row.type);
+      else if (col === 2) td.textContent = formatLeistungCellDisplay(row.leistung);
+      else if (col === 3) td.textContent = formatLeistungCellDisplay(row.position);
     });
   }
 
@@ -1987,11 +1991,25 @@
   function mergeAnlagenstammFieldsIntoOpenJob(fab, fields) {
     fab = String(fab || '').trim();
     if (!fab || !fields) return false;
+    var normalized = {
+      type: sanitizeLeistungField(fields.type),
+      leistung: sanitizeLeistungField(fields.leistung),
+      nenngeschwindigkeit: sanitizeLeistungField(fields.nenngeschwindigkeit),
+      kraftaufnehmer: sanitizeLeistungField(fields.kraftaufnehmer),
+      dms_nr: sanitizeLeistungField(fields.dms_nr),
+      tacho: sanitizeLeistungField(fields.tacho),
+      elektronik: sanitizeLeistungField(fields.elektronik),
+      material: sanitizeLeistungField(fields.material),
+      position: sanitizeLeistungField(fields.position),
+      geliefert_ueber: sanitizeLeistungField(fields.geliefert_ueber),
+      projekt: sanitizeLeistungField(fields.projekt),
+      bemerkungen: sanitizeLeistungField(fields.bemerkungen)
+    };
     var rows = (window.currentProjektdatenLeistungRows || []).slice();
     var touched = false;
     for (var i = 0; i < rows.length; i++) {
       if (String(rows[i].fabrikationsnummer || '').trim() !== fab) continue;
-      rows[i] = Object.assign({}, rows[i], fields);
+      rows[i] = Object.assign({}, rows[i], normalized);
       touched = true;
     }
     if (!touched) return false;
@@ -2006,27 +2024,31 @@
     return true;
   }
 
+  var anlageDetailStammLoadToken = 0;
+
   function persistAnlageRowToAnlagenstamm(row) {
     var fab = String((row && row.fabrikationsnummer) || '').trim();
     if (!fab) return Promise.resolve();
+    var stammIdEl = document.getElementById('anlageDetailStammId');
+    var stammId = stammIdEl && stammIdEl.value ? parseInt(stammIdEl.value, 10) : parseInt(row.id, 10);
     var payload = Object.assign({
       baseUrl: getDispoBaseUrl(),
       serverUsername: getServerUsername(),
       serverPassword: getServerPassword(),
-      id: parseInt(row.id, 10) || 0,
+      id: Number.isFinite(stammId) && stammId > 0 ? stammId : 0,
       fabrikationsnummer: fab,
-      type: row.type || '',
-      leistung: row.leistung || '',
-      nenngeschwindigkeit: row.nenngeschwindigkeit || '',
-      kraftaufnehmer: row.kraftaufnehmer || '',
-      material: row.material || '',
-      tacho: row.tacho || '',
-      elektronik: row.elektronik || '',
-      dms_nr: row.dms_nr || '',
-      position: row.position || '',
-      geliefert_ueber: row.geliefert_ueber || '',
-      projekt: row.projekt || '',
-      bemerkungen: row.bemerkungen || ''
+      type: sanitizeLeistungField(row.type),
+      leistung: sanitizeLeistungField(row.leistung),
+      nenngeschwindigkeit: sanitizeLeistungField(row.nenngeschwindigkeit),
+      kraftaufnehmer: sanitizeLeistungField(row.kraftaufnehmer),
+      material: sanitizeLeistungField(row.material),
+      tacho: sanitizeLeistungField(row.tacho),
+      elektronik: sanitizeLeistungField(row.elektronik),
+      dms_nr: sanitizeLeistungField(row.dms_nr),
+      position: sanitizeLeistungField(row.position),
+      geliefert_ueber: sanitizeLeistungField(row.geliefert_ueber),
+      projekt: sanitizeLeistungField(row.projekt),
+      bemerkungen: sanitizeLeistungField(row.bemerkungen)
     }, dispoBasePayloadExtra());
     return anlagenstammSaveDispo(payload);
   }
@@ -2258,7 +2280,8 @@
       visibleIndices.push(idx);
     }
     var useTwoCards = visibleIndices.length > 2;
-    var vCell = function (x) { return escapeHtml(String(x == null ? '' : x)); };
+    var vCellFab = function (x) { return escapeHtml(sanitizeLeistungField(x)); };
+    var vCellStamm = function (x) { return escapeHtml(formatLeistungCellDisplay(x)); };
     var leistungCellClass = readOnlyAngelegt ? 'modal-leistung-cell-readonly' : 'modal-leistung-cell-clickable';
     function renderAnlagenTable(indices) {
       var out = '<div class="modal-leistung-wrap"><table class="modal-leistung-table modal-leistung-table-compact"><thead><tr>';
@@ -2268,10 +2291,10 @@
         var i = indices[k];
         var row = leistungRows[i];
         out += '<tr class="projektdaten-leistung-row" data-row-index="' + escapeHtml(String(i)) + '">';
-        out += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCell(row.fabrikationsnummer) + '</td>';
-        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
-        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
-        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.position) + '</td>';
+        out += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCellFab(row.fabrikationsnummer) + '</td>';
+        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.type) + '</td>';
+        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.leistung) + '</td>';
+        out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.position) + '</td>';
         out += '</tr>';
       }
       out += '</tbody></table></div>';
@@ -2293,10 +2316,10 @@
         var row = leistungRows[i];
         if (!leistungRowShowInTable(row)) continue;
         html += '<tr class="projektdaten-leistung-row" data-row-index="' + escapeHtml(String(i)) + '">';
-        html += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCell(row.fabrikationsnummer) + '</td>';
-        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.type) + '</td>';
-        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.leistung) + '</td>';
-        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCell(row.position) + '</td>';
+        html += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCellFab(row.fabrikationsnummer) + '</td>';
+        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.type) + '</td>';
+        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.leistung) + '</td>';
+        html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.position) + '</td>';
         html += '</tr>';
       }
       html += '</tbody></table></div>';
@@ -2700,6 +2723,7 @@
   function fillAnlageDetailFieldsFromLocalStamm(fab, rowIndex) {
     fab = String(fab || '').trim();
     if (!fab) return Promise.resolve();
+    var loadToken = ++anlageDetailStammLoadToken;
     return fetch(API_BASE + '/api/anlagenstamm_lookup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
@@ -2707,52 +2731,36 @@
     })
       .then(function (r) { return r.json().catch(function () { return {}; }); })
       .then(function (data) {
+        if (loadToken !== anlageDetailStammLoadToken) return;
+        if (!document.getElementById('anlageDetailModal')) return;
         if (!data || !data.ok || !data.row) return;
         var st = data.row;
-        function setFromStamm(id, val) {
+        var idEl = document.getElementById('anlageDetailStammId');
+        if (idEl && st.id != null && parseInt(st.id, 10) > 0) {
+          idEl.value = String(parseInt(st.id, 10));
+        }
+        function setFromStammIfEmpty(id, val) {
           var el = document.getElementById(id);
           if (!el) return;
-          var v = val != null ? String(val).trim() : '';
-          if (v) el.value = v;
+          var v = sanitizeLeistungField(val);
+          if (!v) return;
+          if (!String(el.value || '').trim()) el.value = v;
         }
-        setFromStamm('anlageDetailType', st.type);
-        setFromStamm('anlageDetailLeistung', st.leistung);
-        setFromStamm('anlageDetailNenngeschwindigkeit', st.nenngeschwindigkeit);
-        setFromStamm('anlageDetailKraftaufnehmer', st.kraftaufnehmer);
-        setFromStamm('anlageDetailDmsNr', st.dms_nr);
-        setFromStamm('anlageDetailTacho', st.tacho);
-        setFromStamm('anlageDetailElektronik', st.elektronik);
-        setFromStamm('anlageDetailMaterial', st.material);
-        setFromStamm('anlageDetailPosition', st.position);
-        setFromStamm('anlageDetailGeliefertUeber', st.geliefert_ueber);
-        setFromStamm('anlageDetailProjekt', st.projekt);
+        setFromStammIfEmpty('anlageDetailType', st.type);
+        setFromStammIfEmpty('anlageDetailLeistung', st.leistung);
+        setFromStammIfEmpty('anlageDetailNenngeschwindigkeit', st.nenngeschwindigkeit);
+        setFromStammIfEmpty('anlageDetailKraftaufnehmer', st.kraftaufnehmer);
+        setFromStammIfEmpty('anlageDetailDmsNr', st.dms_nr);
+        setFromStammIfEmpty('anlageDetailTacho', st.tacho);
+        setFromStammIfEmpty('anlageDetailElektronik', st.elektronik);
+        setFromStammIfEmpty('anlageDetailMaterial', st.material);
+        setFromStammIfEmpty('anlageDetailPosition', st.position);
+        setFromStammIfEmpty('anlageDetailGeliefertUeber', st.geliefert_ueber);
+        setFromStammIfEmpty('anlageDetailProjekt', st.projekt);
         var ta = document.getElementById('anlageDetailBemerkungen');
-        if (ta && st.bemerkungen) {
-          var bv = String(st.bemerkungen).trim();
+        if (ta && !String(ta.value || '').trim()) {
+          var bv = sanitizeLeistungField(st.bemerkungen);
           if (bv) ta.value = bv;
-        }
-        if (!Number.isFinite(rowIndex)) return;
-        var rowsCopy = (window.currentProjektdatenLeistungRows || []).slice();
-        if (!rowsCopy[rowIndex]) return;
-        var cur = rowsCopy[rowIndex];
-        rowsCopy[rowIndex] = {
-          fabrikationsnummer: cur.fabrikationsnummer,
-          type: String(document.getElementById('anlageDetailType') && document.getElementById('anlageDetailType').value) || cur.type || '',
-          leistung: String(document.getElementById('anlageDetailLeistung') && document.getElementById('anlageDetailLeistung').value) || cur.leistung || '',
-          nenngeschwindigkeit: String(document.getElementById('anlageDetailNenngeschwindigkeit') && document.getElementById('anlageDetailNenngeschwindigkeit').value) || cur.nenngeschwindigkeit || '',
-          kraftaufnehmer: String(document.getElementById('anlageDetailKraftaufnehmer') && document.getElementById('anlageDetailKraftaufnehmer').value) || cur.kraftaufnehmer || '',
-          dms_nr: String(document.getElementById('anlageDetailDmsNr') && document.getElementById('anlageDetailDmsNr').value) || cur.dms_nr || '',
-          tacho: String(document.getElementById('anlageDetailTacho') && document.getElementById('anlageDetailTacho').value) || cur.tacho || '',
-          elektronik: String(document.getElementById('anlageDetailElektronik') && document.getElementById('anlageDetailElektronik').value) || cur.elektronik || '',
-          material: String(document.getElementById('anlageDetailMaterial') && document.getElementById('anlageDetailMaterial').value) || cur.material || '',
-          position: String(document.getElementById('anlageDetailPosition') && document.getElementById('anlageDetailPosition').value) || cur.position || '',
-          geliefert_ueber: String(document.getElementById('anlageDetailGeliefertUeber') && document.getElementById('anlageDetailGeliefertUeber').value) || cur.geliefert_ueber || '',
-          projekt: String(document.getElementById('anlageDetailProjekt') && document.getElementById('anlageDetailProjekt').value) || cur.projekt || '',
-          bemerkungen: (document.getElementById('anlageDetailBemerkungen') && document.getElementById('anlageDetailBemerkungen').value) || cur.bemerkungen || ''
-        };
-        window.currentProjektdatenLeistungRows = rowsCopy;
-        if (!document.getElementById('anlageDetailModal')) {
-          refreshProjektdatenLeistungTableFromRows();
         }
       })
       .catch(function () {});
@@ -2774,6 +2782,7 @@
     modalHtml += '<h3>Anlagendetails</h3>';
     modalHtml += '<p class="anlage-detail-fn"><strong>Fabrikationsnummer:</strong> <span id="anlageDetailFn">' + attr(row.fabrikationsnummer) + '</span></p>';
     modalHtml += '<input type="hidden" id="anlageDetailRowIndex" value="' + attr(String(rowIndex)) + '">';
+    modalHtml += '<input type="hidden" id="anlageDetailStammId" value="0">';
     modalHtml += '<div class="anlage-detail-fields">';
     modalHtml += '<div class="anlage-detail-col"><dl class="anlage-detail-dl">';
     modalHtml += '<dt>Type</dt><dd><input type="text" id="anlageDetailType" value="' + attr(row.type) + '"></dd>';
@@ -2829,6 +2838,7 @@
     }
     fillAnlageDetailFieldsFromLocalStamm(pnFab, rowIndex);
     function closeModal() {
+      anlageDetailStammLoadToken += 1;
       if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
     }
     document.getElementById('anlageDetailCancel').addEventListener('click', closeModal);
@@ -2844,18 +2854,18 @@
       if (!Number.isFinite(idx) || !rowsCopy[idx]) return null;
       rowsCopy[idx] = {
         fabrikationsnummer: rowsCopy[idx].fabrikationsnummer,
-        type: (document.getElementById('anlageDetailType') && document.getElementById('anlageDetailType').value) || '',
-        leistung: (document.getElementById('anlageDetailLeistung') && document.getElementById('anlageDetailLeistung').value) || '',
-        nenngeschwindigkeit: (document.getElementById('anlageDetailNenngeschwindigkeit') && document.getElementById('anlageDetailNenngeschwindigkeit').value) || '',
-        kraftaufnehmer: (document.getElementById('anlageDetailKraftaufnehmer') && document.getElementById('anlageDetailKraftaufnehmer').value) || '',
-        dms_nr: (document.getElementById('anlageDetailDmsNr') && document.getElementById('anlageDetailDmsNr').value) || '',
-        tacho: (document.getElementById('anlageDetailTacho') && document.getElementById('anlageDetailTacho').value) || '',
-        elektronik: (document.getElementById('anlageDetailElektronik') && document.getElementById('anlageDetailElektronik').value) || '',
-        material: (document.getElementById('anlageDetailMaterial') && document.getElementById('anlageDetailMaterial').value) || '',
-        position: (document.getElementById('anlageDetailPosition') && document.getElementById('anlageDetailPosition').value) || '',
-        geliefert_ueber: (document.getElementById('anlageDetailGeliefertUeber') && document.getElementById('anlageDetailGeliefertUeber').value) || '',
-        projekt: (document.getElementById('anlageDetailProjekt') && document.getElementById('anlageDetailProjekt').value) || '',
-        bemerkungen: (document.getElementById('anlageDetailBemerkungen') && document.getElementById('anlageDetailBemerkungen').value) || ''
+        type: sanitizeLeistungField(document.getElementById('anlageDetailType') && document.getElementById('anlageDetailType').value),
+        leistung: sanitizeLeistungField(document.getElementById('anlageDetailLeistung') && document.getElementById('anlageDetailLeistung').value),
+        nenngeschwindigkeit: sanitizeLeistungField(document.getElementById('anlageDetailNenngeschwindigkeit') && document.getElementById('anlageDetailNenngeschwindigkeit').value),
+        kraftaufnehmer: sanitizeLeistungField(document.getElementById('anlageDetailKraftaufnehmer') && document.getElementById('anlageDetailKraftaufnehmer').value),
+        dms_nr: sanitizeLeistungField(document.getElementById('anlageDetailDmsNr') && document.getElementById('anlageDetailDmsNr').value),
+        tacho: sanitizeLeistungField(document.getElementById('anlageDetailTacho') && document.getElementById('anlageDetailTacho').value),
+        elektronik: sanitizeLeistungField(document.getElementById('anlageDetailElektronik') && document.getElementById('anlageDetailElektronik').value),
+        material: sanitizeLeistungField(document.getElementById('anlageDetailMaterial') && document.getElementById('anlageDetailMaterial').value),
+        position: sanitizeLeistungField(document.getElementById('anlageDetailPosition') && document.getElementById('anlageDetailPosition').value),
+        geliefert_ueber: sanitizeLeistungField(document.getElementById('anlageDetailGeliefertUeber') && document.getElementById('anlageDetailGeliefertUeber').value),
+        projekt: sanitizeLeistungField(document.getElementById('anlageDetailProjekt') && document.getElementById('anlageDetailProjekt').value),
+        bemerkungen: sanitizeLeistungField(document.getElementById('anlageDetailBemerkungen') && document.getElementById('anlageDetailBemerkungen').value)
       };
       var arr = leistungRowsForJobPatch(rowsCopy);
       return { rowsCopy: rowsCopy, arr: arr };
@@ -2884,6 +2894,10 @@
         })
         .then(function (stammRes) {
           projektdatenFabSavedAt = Date.now();
+          if (stammRes && stammRes.id) {
+            var idEl = document.getElementById('anlageDetailStammId');
+            if (idEl) idEl.value = String(stammRes.id);
+          }
           if (stammRes && stammRes.push_error && typeof showToast === 'function') {
             showToast('Lokal gespeichert – Dispo: ' + stammRes.push_error);
           } else if (closeAfter) {
@@ -6123,6 +6137,46 @@
     return String(tid || '') + '\t' + normDt(a.start_datetime) + '\t' + normDt(a.end_datetime);
   }
 
+  /** Abrechnungs-Flags aus Kalender-API/Cache (montage_verrechnet, billing_travel_complete). */
+  function calendarBillingFlagsFrom(src) {
+    if (!src) return {};
+    var out = {};
+    if (src.montage_verrechnet != null && src.montage_verrechnet !== '') {
+      out.montage_verrechnet = Number(src.montage_verrechnet) === 1 ? 1 : 0;
+    }
+    if (src.billing_travel_complete != null && src.billing_travel_complete !== '') {
+      out.billing_travel_complete = Number(src.billing_travel_complete) === 1 ? 1 : 0;
+    }
+    return out;
+  }
+
+  /** Billing-Flags aus Kalender-Jobs (Cache/API) in lokale Job-Liste übernehmen. */
+  function mergeCalendarBillingIntoJobs(jobs, billingSources, techId) {
+    if (!Array.isArray(jobs) || !Array.isArray(billingSources) || !billingSources.length) return jobs;
+    var billingByKey = {};
+    billingSources.forEach(function (cj) {
+      var sid = cj.id != null ? String(cj.id) : (cj.server_job_id != null ? String(cj.server_job_id) : '');
+      var tid = cj.technician_id != null ? String(cj.technician_id) : '';
+      if (!sid) return;
+      if (tid) billingByKey[sid + ':' + tid] = cj;
+      billingByKey[sid] = cj;
+    });
+    return jobs.map(function (j) {
+      var sid = j.server_id != null ? String(j.server_id) : (j.id != null ? String(j.id) : '');
+      if (!sid) return j;
+      var tid = techId != null ? String(techId) : (j.technician_id != null ? String(j.technician_id) : '');
+      var cj = (tid && billingByKey[sid + ':' + tid]) || billingByKey[sid];
+      if (!cj) return j;
+      return Object.assign({}, j, calendarBillingFlagsFrom(cj));
+    });
+  }
+
+  async function fetchCalendarCachedMonth(start, end, techId) {
+    return fetch(API_BASE + '/api/calendar_cached?' + qs({ start: start, end: end }), {
+      headers: { 'X-Technician-Id': String(techId || 0) }
+    }).then(function (r) { return r.json().catch(function () { return {}; }); });
+  }
+
   /** Lokaler Kalender (SQLite) für einen Monteur – funktioniert ohne Dispo-Verbindung. */
   async function loadCalendarLocalMonth(start, end, techId) {
     const params = { technician_id: techId, date_from: start, date_to: end, include_erledigt: 1 };
@@ -6176,11 +6230,8 @@
         return;
       }
       try {
-        let data = await fetch(API_BASE + '/api/calendar_cached?' + qs({ start: start, end: end }), {
-          headers: { 'X-Technician-Id': String(myTechId || 0) }
-        }).then(function (r) { return r.json().catch(function () { return {}; }); });
-        var hasCached = data && data.ok === true && (Array.isArray(data.jobs) || Array.isArray(data.absences));
-        if (!hasCached || ((data.jobs || []).length === 0 && (data.absences || []).length === 0)) {
+        let data = null;
+        try {
           data = await fetch(API_BASE + '/api/calendar', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -6191,7 +6242,13 @@
               serverUsername: getServerUsername(),
               serverPassword: getServerPassword()
             })
-          }).then(r => r.json());
+          }).then(function (r) { return r.json(); });
+          if (!data || data.error) throw new Error((data && data.error) || 'Kalender-API fehlgeschlagen');
+        } catch (liveErr) {
+          data = await fetchCalendarCachedMonth(start, end, myTechId || 0);
+          var hasCached = data && data.ok === true && ((data.jobs || []).length > 0 || (data.absences || []).length > 0);
+          if (!hasCached) throw liveErr;
+          showToast('Dispo nicht erreichbar – Kalender aus lokalem Cache.');
         }
         if (data.error) throw new Error(data.error);
         calendarApiData = data;
@@ -6238,7 +6295,11 @@
               var sid = j.server_id != null ? j.server_id : j.id;
               var localJob = localJobsByServerId[j.server_id] || localJobsByServerId[j.id] || localJobsByServerId[String(j.server_id)] || localJobsByServerId[String(j.id)] || localJobsById[j.id] || localJobsById[String(j.id)];
               if (localJob) {
-                return Object.assign({}, localJob, { technician_id: myTechId, technician_name: myTechInfo.name, technician_color: myTechInfo.color });
+                return Object.assign({}, localJob, calendarBillingFlagsFrom(j), {
+                  technician_id: myTechId,
+                  technician_name: myTechInfo.name,
+                  technician_color: myTechInfo.color
+                });
               }
               return Object.assign({}, j, techDisplay);
             });
@@ -6302,6 +6363,13 @@
         var loc = await loadCalendarLocalMonth(start, end, techId);
         jobs = loc.jobs;
         absences = loc.absences;
+        try {
+          var cachedBilling = await fetchCalendarCachedMonth(start, end, techId);
+          if (cachedBilling && cachedBilling.ok === true && Array.isArray(cachedBilling.jobs)) {
+            jobs = mergeCalendarBillingIntoJobs(jobs, cachedBilling.jobs, techId);
+            calendarApiData = cachedBilling;
+          }
+        } catch (_) { /* Billing aus Cache optional */ }
       } catch (e) {
         renderCalendarGrid(gridStart, gridEnd, [], [], null);
         setCalendarError('Fehler: ' + e.message);
@@ -6317,10 +6385,7 @@
     if (!showAll) {
       const techId = getTechId();
       if (techId) {
-        fetch(API_BASE + '/api/calendar_cached?' + qs({ start: start, end: end }), {
-          headers: { 'X-Technician-Id': String(techId) }
-        })
-          .then(function (r) { return r.json().catch(function () { return {}; }); })
+        fetchCalendarCachedMonth(start, end, techId)
           .then(function (cached) {
             const tlist = Array.isArray(cached && cached.technicians) ? cached.technicians : [];
             const me = tlist.find(function (t) {
@@ -6328,10 +6393,19 @@
               return Number(id) === Number(techId);
             });
             const dispoColor = me && (me.color || me.farbe) ? String(me.color || me.farbe).trim() : '';
-            if (!dispoColor) return;
-            const recoloredJobs = jobs.map(function (j) { return Object.assign({}, j, { technician_color: dispoColor }); });
-            const recoloredAbsences = absences.map(function (a) { return Object.assign({}, a, { technician_color: dispoColor }); });
-            renderCalendarGrid(gridStart, gridEnd, recoloredJobs, recoloredAbsences, techniciansFromApi);
+            var patchedJobs = jobs;
+            if (cached && cached.ok === true && Array.isArray(cached.jobs)) {
+              patchedJobs = mergeCalendarBillingIntoJobs(jobs, cached.jobs, techId);
+            }
+            if (dispoColor) {
+              patchedJobs = patchedJobs.map(function (j) { return Object.assign({}, j, { technician_color: dispoColor }); });
+            }
+            var patchedAbsences = dispoColor
+              ? absences.map(function (a) { return Object.assign({}, a, { technician_color: dispoColor }); })
+              : absences;
+            if (dispoColor || (cached && cached.ok === true && Array.isArray(cached.jobs))) {
+              renderCalendarGrid(gridStart, gridEnd, patchedJobs, patchedAbsences, techniciansFromApi);
+            }
           })
           .catch(function () { /* optional */ });
       }
@@ -6557,7 +6631,7 @@
 
   /** Firma, Ort, Länderkürzel für Kalender-Balken (Aufträge). Tooltip: Lokale Uhrzeit (HH:mm) im Auftragsland. */
   function jobBarText(job, maxLen) {
-    const firma = (job.customer_name || job.customerName || job.job_number || 'Auftrag').trim();
+    const firma = (job.customer_name || job.customer || job.customerName || job.job_number || 'Auftrag').trim();
     const ort = (job.city || '').trim();
     const countryCode = normalizeCountryToCode(job.country) || (job.country || '').trim().toUpperCase().slice(0, 2);
     const land = countryCode.slice(0, 3);

@@ -68,6 +68,14 @@ function normJobFabKey(rowOrFn) {
   return String(rowOrFn.fabrikationsnummer ?? rowOrFn.Fabrikationsnummer ?? '').trim();
 }
 
+/** Leere DB-/JSON-Werte (inkl. Literal-String "null") nicht in Leistungszeilen übernehmen. */
+function stammFieldTrim(val) {
+  if (val == null) return '';
+  const s = String(val).trim();
+  if (!s || s.toLowerCase() === 'null') return '';
+  return s;
+}
+
 function parseJobFabrikationsnummernRows(raw) {
   if (raw == null || raw === '') return [];
   const s = String(raw).trim();
@@ -102,16 +110,21 @@ function mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty) {
   const api = apiRow && typeof apiRow === 'object' ? apiRow : {};
   const local = localRow && typeof localRow === 'object' ? localRow : {};
   for (const k of JOB_FAB_STAMM_KEYS) {
-    const jobVal = merged[k] != null ? String(merged[k]).trim() : '';
-    const localVal = local[k] != null ? String(local[k]).trim() : '';
-    const apiVal = api[k] != null ? String(api[k]).trim() : '';
+    const jobVal = stammFieldTrim(merged[k]);
+    const localVal = stammFieldTrim(local[k]);
+    const apiVal = stammFieldTrim(api[k]);
+    if (localDirty && localVal !== '') {
+      merged[k] = localVal;
+      continue;
+    }
     if (jobVal !== '') {
+      merged[k] = jobVal;
       continue;
     }
     if (localVal !== '') {
-      merged[k] = local[k];
+      merged[k] = localVal;
     } else if (apiVal !== '') {
-      merged[k] = api[k];
+      merged[k] = apiVal;
     } else {
       merged[k] = '';
     }
@@ -5385,6 +5398,10 @@ ORDER BY
         } catch (_) { /* Einzelauftrag nicht geladen, Balken behält Nummer */ }
       }));
 
+      try {
+        upsertCalendarCache(db, data);
+      } catch (_) { /* Cache optional */ }
+
       res.json(data);
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
@@ -5572,8 +5589,8 @@ function upsertCalendarCache(db, calendarData) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         cacheKey, sid, tid,
-        String(j.customer_name || ''), String(j.job_number || ''),
-        String(j.city || ''), String(j.country || ''), String(j.status || ''),
+        String(j.customer_name || j.customer || ''), String(j.job_number || ''),
+        String(j.city || ''), String(j.country || j.country_code || ''), String(j.status || ''),
         start, end, String(j.technician_name || ''), String(j.technician_color || ''),
         Number(j.montage_verrechnet) === 1 ? 1 : 0,
         Number(j.billing_travel_complete) === 1 ? 1 : 0,
