@@ -1474,6 +1474,7 @@ function createApp(db) {
       try {
         await pullTedExcelIntoReiseDir({
           db,
+          dbLock,
           dispoBaseUrl: base,
           technicianId,
           serverJobId,
@@ -1818,7 +1819,7 @@ function createApp(db) {
       const fab = String(fabNum);
       const resolved = resolveProjekteNeuRoot(dm, fab);
       if (!resolved) continue;
-      const scanned = scanProjekteNeuTree(resolved.root);
+      const scanned = scanProjekteNeuTree(resolved.root, {});
       upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
     }
     save();
@@ -1890,7 +1891,7 @@ function createApp(db) {
       if (!ctx) {
         return res.json({ ok: true, local: false, enabled: false, tree: [], message: 'Kein lokaler PROJEKTE-NEU-Ordner für diese FN.' });
       }
-      const scanned = scanProjekteNeuTree(ctx.resolved.root);
+      const scanned = scanProjekteNeuTree(ctx.resolved.root, {});
       upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
       save();
       return res.json({
@@ -5449,6 +5450,7 @@ ORDER BY
           try {
             await pullTedExcelIntoReiseDir({
               db,
+              dbLock,
               dispoBaseUrl,
               technicianId,
               serverJobId,
@@ -5471,8 +5473,10 @@ ORDER BY
             if (srvId) {
               const pushRes = await pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, srvId, authHeader);
               if (pushRes.ok) {
-                db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`).run(localJobId);
-                save();
+                await dbLock.runWithDbLock(async () => {
+                  db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`).run(localJobId);
+                  save();
+                });
               } else {
                 statusSyncWarning = pushRes.error || 'Status konnte nicht sofort zur Dispo gesendet werden.';
               }
@@ -5486,7 +5490,9 @@ ORDER BY
             mergeCheckpoint({ finalize_done: true, empty_copy: true });
           }
           try {
-            cacheProjekteNeuTreesForJob(localJobId);
+            await dbLock.runWithDbLock(async () => {
+              cacheProjekteNeuTreesForJob(localJobId);
+            });
           } catch (cacheErr) {
             console.warn('[dienstreise_pull] projekte_neu cache:', cacheErr && cacheErr.message ? cacheErr.message : cacheErr);
           }
@@ -5552,6 +5558,7 @@ ORDER BY
         try {
           await pullTedExcelIntoReiseDir({
             db,
+            dbLock,
             dispoBaseUrl,
             technicianId,
             serverJobId,
@@ -5578,8 +5585,10 @@ ORDER BY
             if (srvId) {
               const pushRes = await pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, srvId, authHeader);
               if (pushRes.ok) {
-                db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`).run(localJobId);
-                save();
+                await dbLock.runWithDbLock(async () => {
+                  db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`).run(localJobId);
+                  save();
+                });
               } else {
                 statusSyncWarning = pushRes.error || 'Status konnte nicht sofort zur Dispo gesendet werden.';
               }
@@ -5590,7 +5599,9 @@ ORDER BY
           }
         }
         try {
-          cacheProjekteNeuTreesForJob(localJobId);
+          await dbLock.runWithDbLock(async () => {
+            cacheProjekteNeuTreesForJob(localJobId);
+          });
         } catch (cacheErr) {
           console.warn('[dienstreise_pull] projekte_neu cache:', cacheErr && cacheErr.message ? cacheErr.message : cacheErr);
         }
@@ -6714,6 +6725,7 @@ async function syncTedIndexForTechnicianJobs(db, base, technicianId, authHeader,
 async function pullTedExcelIntoReiseDir(opts) {
   const {
     db,
+    dbLock,
     dispoBaseUrl,
     technicianId,
     serverJobId,
@@ -6725,15 +6737,27 @@ async function pullTedExcelIntoReiseDir(opts) {
     mergeCheckpoint,
     readCheckpoint,
   } = opts;
+
+  async function withDbLock(fn) {
+    if (dbLock && typeof dbLock.runWithDbLock === 'function') {
+      return dbLock.runWithDbLock(fn);
+    }
+    return fn();
+  }
+
   const tedDir = path.join(targetDir, 'TED');
   if (!fs.existsSync(tedDir)) fs.mkdirSync(tedDir, { recursive: true });
   let entries = [];
   try {
     entries = await fetchMechanikTedListFromDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, signal);
-    upsertJobTedIndex(db, localJobId, serverJobId, entries);
+    await withDbLock(async () => {
+      upsertJobTedIndex(db, localJobId, serverJobId, entries);
+    });
   } catch (e) {
     console.warn('[dienstreise_pull] TED-Liste:', e && e.message ? e.message : e);
-    entries = db.prepare(`SELECT rel_path, file_name, fab FROM job_ted_index WHERE local_job_id = ?`).all(localJobId);
+    await withDbLock(async () => {
+      entries = db.prepare(`SELECT rel_path, file_name, fab FROM job_ted_index WHERE local_job_id = ?`).all(localJobId);
+    });
   }
   let chk = readCheckpoint();
   let completed = Array.isArray(chk.ted_completed) ? chk.ted_completed.slice() : [];

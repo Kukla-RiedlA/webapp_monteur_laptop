@@ -89,11 +89,12 @@ function safeResolveUnderRoot(root, relPath) {
  * @returns {{ tree: object[], truncated: boolean }}
  */
 function scanProjekteNeuTree(absRoot, opts) {
-  const maxDepth = opts.maxDepth != null ? opts.maxDepth : DEFAULT_MAX_DEPTH;
-  const maxEntries = opts.maxEntries != null ? opts.maxEntries : DEFAULT_MAX_ENTRIES;
-  const relPrefix = opts.relPrefix != null ? String(opts.relPrefix) : '';
-  const depth = opts.depth != null ? opts.depth : 0;
-  const counter = opts._counter || { n: 0 };
+  const o = opts && typeof opts === 'object' ? opts : {};
+  const maxDepth = o.maxDepth != null ? o.maxDepth : DEFAULT_MAX_DEPTH;
+  const maxEntries = o.maxEntries != null ? o.maxEntries : DEFAULT_MAX_ENTRIES;
+  const relPrefix = o.relPrefix != null ? String(o.relPrefix) : '';
+  const depth = o.depth != null ? o.depth : 0;
+  const counter = o._counter || { n: 0 };
   let truncated = false;
 
   if (!fs.existsSync(absRoot) || !fs.statSync(absRoot).isDirectory()) {
