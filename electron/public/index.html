@@ -1358,11 +1358,11 @@
       <p class="muted" style="font-size:0.88rem;margin:0 0 1rem 0">Erscheinungsbild (hell Kukla / dunkel klassisch): Schalter in der Kopfzeile rechts neben dem Zahnrad.</p>
       <div class="settings-row">
         <label for="serverUrl">Dispo (extern / Standard)</label>
-        <input type="text" id="serverUrl" placeholder="z.B. https://dispo.example.com/" value="http://localhost/" title="Öffentliche oder Standard-Basis-URL der Dispo (ohne abschließenden Slash). Wird genutzt, wenn keine interne URL erreichbar ist." />
+        <input type="text" id="serverUrl" placeholder="z.B. https://fsm.kukla.co.at:4433" value="https://fsm.kukla.co.at:4433" title="Öffentliche oder Standard-Basis-URL der Dispo (ohne abschließenden Slash). Wird genutzt, wenn keine interne URL erreichbar ist." />
       </div>
       <div class="settings-row">
         <label for="serverUrlInternal">Dispo (Firmennetz / intern)</label>
-        <input type="text" id="serverUrlInternal" placeholder="optional, z.B. http://192.168.x.x/dispo" title="Optional: direkter Zugriff im Büro-LAN. Die App prüft parallel extern und intern (10 s); wenn beide erreichbar sind, wird die interne Adresse bevorzugt." />
+        <input type="text" id="serverUrlInternal" placeholder="z.B. https://10.0.0.180" value="https://10.0.0.180" title="Optional: direkter Zugriff im Büro-LAN. Die App prüft parallel extern und intern (10 s); wenn beide erreichbar sind, wird die interne Adresse bevorzugt." />
       </div>
       <div class="settings-row">
         <label for="technicianId">Monteur-ID</label>
@@ -1382,7 +1382,7 @@
       </div>
       <div class="settings-row settings-row-checkbox">
         <label class="settings-checkbox-label" title="Nur für interne Server mit selbstsigniertem Zertifikat (z. B. https://…:4433).">
-          <input type="checkbox" id="allowInsecureDispoTls" />
+          <input type="checkbox" id="allowInsecureDispoTls" checked />
           Selbstsigniertes HTTPS-Zertifikat akzeptieren
         </label>
       </div>

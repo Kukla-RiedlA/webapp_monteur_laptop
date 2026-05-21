@@ -198,12 +198,43 @@ function writeFileWithRetry(filePath, data, maxRetries = 3) {
 const DB_PATH = path.join(DB_DIR, 'monteur.db');
 const SCHEMA_PATH = path.join(__dirname, 'db', 'schema.sql');
 
-/** Selbstsigniertes HTTPS zum Dispo: Datei im db-Ordner oder Umgebung KUKLA_DISP_TLS_INSECURE=1 */
+/** Selbstsigniertes HTTPS zum Dispo (Legacy-Flag + Präferenzdatei 0/1). */
 const DISPO_TLS_INSECURE_FLAG = path.join(DB_DIR, '.dispo-insecure-tls');
+const DISPO_TLS_PREF = path.join(DB_DIR, '.dispo-tls-insecure');
+
+function isDispoInsecureTlsAllowed() {
+  if (process.env.KUKLA_DISP_TLS_INSECURE === '1') return true;
+  if (process.env.KUKLA_DISP_TLS_INSECURE === '0') return false;
+  if (fs.existsSync(DISPO_TLS_INSECURE_FLAG)) return true;
+  try {
+    if (fs.existsSync(DISPO_TLS_PREF)) {
+      return fs.readFileSync(DISPO_TLS_PREF, 'utf8').trim() !== '0';
+    }
+  } catch (_) {}
+  return !fs.existsSync(DB_PATH);
+}
+
+function setDispoInsecureTlsPreference(on) {
+  if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+  fs.writeFileSync(DISPO_TLS_PREF, on ? '1' : '0');
+  if (on) {
+    fs.writeFileSync(DISPO_TLS_INSECURE_FLAG, '1');
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  } else {
+    try {
+      if (fs.existsSync(DISPO_TLS_INSECURE_FLAG)) fs.unlinkSync(DISPO_TLS_INSECURE_FLAG);
+    } catch (_) {}
+    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  }
+}
+
 (function applyDispoInsecureTlsFromDisk() {
   try {
-    if (process.env.KUKLA_DISP_TLS_INSECURE === '1' || fs.existsSync(DISPO_TLS_INSECURE_FLAG)) {
+    if (isDispoInsecureTlsAllowed()) {
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+      if (!fs.existsSync(DB_PATH) && !fs.existsSync(DISPO_TLS_PREF) && !fs.existsSync(DISPO_TLS_INSECURE_FLAG)) {
+        setDispoInsecureTlsPreference(true);
+      }
     }
   } catch (_) {}
 })();
@@ -635,21 +666,13 @@ function createApp(db) {
   });
 
   app.get('/api/settings_dispo_tls', (req, res) => {
-    const allow = process.env.KUKLA_DISP_TLS_INSECURE === '1' || fs.existsSync(DISPO_TLS_INSECURE_FLAG);
-    res.json({ ok: true, allowInsecureTls: !!allow });
+    res.json({ ok: true, allowInsecureTls: isDispoInsecureTlsAllowed() });
   });
 
   app.post('/api/settings_dispo_tls', express.json(), (req, res) => {
     const on = !!(req.body && req.body.allowInsecureTls);
     try {
-      if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
-      if (on) {
-        fs.writeFileSync(DISPO_TLS_INSECURE_FLAG, '1');
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-      } else {
-        if (fs.existsSync(DISPO_TLS_INSECURE_FLAG)) fs.unlinkSync(DISPO_TLS_INSECURE_FLAG);
-        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-      }
+      setDispoInsecureTlsPreference(on);
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
     }

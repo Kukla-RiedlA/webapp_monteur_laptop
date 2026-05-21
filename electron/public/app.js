@@ -94,6 +94,11 @@
   const getServerUsername = () => (document.getElementById('serverUsername') && document.getElementById('serverUsername').value || '').trim();
   const getServerPassword = () => (document.getElementById('serverPassword') && document.getElementById('serverPassword').value || '');
 
+  /** Standard bei Neuinstallation (ohne gespeicherte Einstellungen); weiterhin editierbar. */
+  const DEFAULT_DISPO_SERVER_URL = 'https://fsm.kukla.co.at:4433';
+  const DEFAULT_DISPO_SERVER_URL_INTERNAL = 'https://10.0.0.180';
+  const DEFAULT_ALLOW_INSECURE_TLS = true;
+
   const SETTINGS_KEYS = {
     serverUrl: 'monteur_serverUrl',
     serverUrlInternal: 'monteur_serverUrlInternal',
@@ -287,10 +292,13 @@
   function loadSettingsFromStorage() {
     try {
       const url = localStorage.getItem(SETTINGS_KEYS.serverUrl);
-      if (url != null) document.getElementById('serverUrl').value = url;
+      document.getElementById('serverUrl').value =
+        url != null ? url : DEFAULT_DISPO_SERVER_URL;
       const urlInt = localStorage.getItem(SETTINGS_KEYS.serverUrlInternal);
       var elInt = document.getElementById('serverUrlInternal');
-      if (elInt && urlInt != null) elInt.value = urlInt;
+      if (elInt) {
+        elInt.value = urlInt != null ? urlInt : DEFAULT_DISPO_SERVER_URL_INTERNAL;
+      }
       const techId = localStorage.getItem(SETTINGS_KEYS.technicianId);
       if (techId != null) document.getElementById('technicianId').value = techId;
       const fullNameStored = localStorage.getItem(SETTINGS_KEYS.monteurFullName);
@@ -312,7 +320,9 @@
       }
       const tls = localStorage.getItem(SETTINGS_KEYS.allowInsecureTls);
       const tlsEl = document.getElementById('allowInsecureDispoTls');
-      if (tlsEl && tls != null) tlsEl.checked = tls === '1';
+      if (tlsEl) {
+        tlsEl.checked = tls != null ? tls === '1' : DEFAULT_ALLOW_INSECURE_TLS;
+      }
       const uiTh = localStorage.getItem(SETTINGS_KEYS.uiTheme);
       applyUiTheme(uiTh);
     } catch (e) { /* ignore */ }
@@ -4237,6 +4247,32 @@
       }
     }).catch(function () {});
   }
+  function ensureDefaultDispoTlsIfUnset() {
+    var stored = null;
+    try {
+      stored = localStorage.getItem(SETTINGS_KEYS.allowInsecureTls);
+    } catch (e) { /* ignore */ }
+    if (stored != null) return Promise.resolve();
+    var el = document.getElementById('allowInsecureDispoTls');
+    if (el) el.checked = DEFAULT_ALLOW_INSECURE_TLS;
+    return fetch(API_BASE + '/api/settings_dispo_tls', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allowInsecureTls: DEFAULT_ALLOW_INSECURE_TLS }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (data && data.ok) {
+          try {
+            localStorage.setItem(SETTINGS_KEYS.allowInsecureTls, DEFAULT_ALLOW_INSECURE_TLS ? '1' : '0');
+          } catch (e) { /* ignore */ }
+        }
+      })
+      .catch(function () {});
+  }
+
   function loadDispoTlsSettingFromServer() {
     return fetch(API_BASE + '/api/settings_dispo_tls').then(function (r) { return r.json(); }).then(function (data) {
       if (data && data.ok) {
@@ -4248,6 +4284,9 @@
   }
   loadDienstreiseConfigFromServer();
   bootstrapLocalData(false)
+    .then(function () {
+      return ensureDefaultDispoTlsIfUnset();
+    })
     .then(function () {
       return loadDispoTlsSettingFromServer();
     })
