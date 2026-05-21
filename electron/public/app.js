@@ -98,6 +98,7 @@
     serverUrl: 'monteur_serverUrl',
     serverUrlInternal: 'monteur_serverUrlInternal',
     technicianId: 'monteur_technicianId',
+    monteurFullName: 'monteur_fullName',
     serverUsername: 'monteur_serverUsername',
     serverPassword: 'monteur_serverPassword',
     syncIntervalMinutes: 'monteur_syncIntervalMinutes',
@@ -292,6 +293,9 @@
       if (elInt && urlInt != null) elInt.value = urlInt;
       const techId = localStorage.getItem(SETTINGS_KEYS.technicianId);
       if (techId != null) document.getElementById('technicianId').value = techId;
+      const fullNameStored = localStorage.getItem(SETTINGS_KEYS.monteurFullName);
+      var elFullName = document.getElementById('monteurFullName');
+      if (elFullName && fullNameStored != null) elFullName.value = fullNameStored;
       const username = localStorage.getItem(SETTINGS_KEYS.serverUsername);
       if (username != null) document.getElementById('serverUsername').value = username;
       const password = localStorage.getItem(SETTINGS_KEYS.serverPassword);
@@ -320,6 +324,8 @@
       var intEl = document.getElementById('serverUrlInternal');
       localStorage.setItem(SETTINGS_KEYS.serverUrlInternal, intEl ? (intEl.value || '').trim() : '');
       localStorage.setItem(SETTINGS_KEYS.technicianId, document.getElementById('technicianId').value || '');
+      var elFn = document.getElementById('monteurFullName');
+      localStorage.setItem(SETTINGS_KEYS.monteurFullName, elFn ? (elFn.value || '').trim() : '');
       localStorage.setItem(SETTINGS_KEYS.serverUsername, (document.getElementById('serverUsername') && document.getElementById('serverUsername').value) || '');
       localStorage.setItem(SETTINGS_KEYS.serverPassword, (document.getElementById('serverPassword') && document.getElementById('serverPassword').value) || '');
       localStorage.setItem(SETTINGS_KEYS.syncIntervalMinutes, String(getSyncIntervalMinutes()));
@@ -3712,6 +3718,35 @@
     }
   }
 
+  function applyMonteurProfileFromConnection(check) {
+    if (!check || check.ok !== true) return false;
+    var changed = false;
+    var tid = parseInt(check.technician_id, 10);
+    if (Number.isFinite(tid) && tid > 0) {
+      var elId = document.getElementById('technicianId');
+      if (elId && String(elId.value) !== String(tid)) {
+        elId.value = String(tid);
+        changed = true;
+      }
+    }
+    var fullName = check.full_name != null ? String(check.full_name).trim() : '';
+    if (fullName) {
+      var elFn = document.getElementById('monteurFullName');
+      if (elFn && elFn.value !== fullName) {
+        elFn.value = fullName;
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveSettingsToStorage();
+    }
+    if (fullName) {
+      var elToolbar = document.getElementById('technicianName');
+      if (elToolbar) elToolbar.textContent = fullName;
+    }
+    return changed || !!fullName || (Number.isFinite(tid) && tid > 0);
+  }
+
   async function updateTechnicianName() {
     const el = document.getElementById('technicianName');
     if (!el) return;
@@ -3962,8 +3997,9 @@
   async function checkConnectionAndSyncBody(opts) {
     opts = opts || {};
     var blockingSync = opts.blockingSync === true;
-    const techId = getTechId();
-    if (!techId) {
+    var techId = getTechId();
+    var hasLogin = !!(getServerUsername() && getServerPassword());
+    if (!techId && !hasLogin) {
       setConnectionBadge('offline');
       return bootstrapLocalData(true);
     }
@@ -3990,6 +4026,7 @@
       });
       var check = await resCheck.json().catch(function () { return {}; });
       if (check && check.ok === true) {
+        applyMonteurProfileFromConnection(check);
         var connectedBase = (check.used_base_url || '').toString().trim().replace(/\/+$/, '');
         if (connectedBase) {
           var extNorm = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
@@ -3997,8 +4034,10 @@
           var src = connectedBase === intNorm ? 'internal' : connectedBase === extNorm ? 'external' : 'fallback';
           setDispoActiveBase(connectedBase, src);
         }
+        updateTechnicianName();
         const range = getSyncDateRange();
         var syncBase = getDispoBaseUrl().trim() || connectedBase;
+        techId = getTechId();
         const auth = {
           baseUrl: syncBase,
           technicianId: techId,
@@ -4281,8 +4320,9 @@
         startSyncInterval();
         startPushEvents();
         updateTechnicianName();
-        var techId = getTechId();
-        if ((getDispoExternalUrl() || getDispoInternalUrl()) && techId) {
+        var techIdAfterSave = getTechId();
+        var hasLoginAfterSave = !!(getServerUsername() && getServerPassword());
+        if ((getDispoExternalUrl() || getDispoInternalUrl()) && (techIdAfterSave || hasLoginAfterSave)) {
           return checkConnectionAndSync({ blockingSync: false });
         }
         return Promise.resolve();

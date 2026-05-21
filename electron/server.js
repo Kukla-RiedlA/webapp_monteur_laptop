@@ -5342,26 +5342,103 @@ ORDER BY
     }
   }
 
+  /** Monteur-ID und Name aus Dispo-Login (HTTP Basic). */
+  async function resolveMonteurFromDispoAuth(baseUrlRaw, serverUsername, serverPassword, signal) {
+    const base = (baseUrlRaw || '').toString().trim().replace(/\/$/, '');
+    const user = (serverUsername || '').toString().trim();
+    if (!base || !user) {
+      return { ok: false, error: 'Benutzername fehlt.' };
+    }
+    const auth = authHeaderFromCredentials(user, serverPassword);
+    const headers = Object.assign({ 'X-Technician-Id': '0' }, auth || {});
+    if (auth && auth.Authorization) {
+      headers['X-Kukla-Authorization'] = auth.Authorization;
+    }
+    const urls = [`${base}/dispo_api/api/monteur_auth.php`, `${base}/api/monteur_auth.php`];
+    for (const url of urls) {
+      try {
+        const r = await fetch(url, { headers, signal });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data && data.ok === true && data.technician_id) {
+          return {
+            ok: true,
+            technician_id: Number(data.technician_id),
+            full_name: data.full_name != null ? String(data.full_name).trim() : '',
+            username: data.username != null ? String(data.username).trim() : user,
+          };
+        }
+        if (r.status === 404) continue;
+        if (data && data.error) {
+          return { ok: false, error: String(data.error) };
+        }
+      } catch (e) {
+        if (e && e.name === 'AbortError') {
+          return { ok: false, error: 'Timeout nach ' + DISPO_PROBE_TIMEOUT_MS / 1000 + ' s (Login-Probe)' };
+        }
+      }
+    }
+    return { ok: false, error: 'monteur_auth nicht verfügbar' };
+  }
+
+  function upsertLocalMonteurProfile(profile) {
+    const id = parseInt(profile.technician_id, 10);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const fullName = (profile.full_name || '').toString().trim() || 'Monteur';
+    const username = (profile.username || '').toString().trim() || 'tech_' + id;
+    const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
+    if (existing) {
+      db.prepare('UPDATE users SET full_name = ?, username = ? WHERE id = ?').run(fullName, username, id);
+    } else {
+      db.prepare('INSERT INTO users (id, username, full_name, role, active) VALUES (?, ?, ?, ?, ?)').run(
+        id,
+        username,
+        fullName,
+        'monteur',
+        1,
+      );
+    }
+    save();
+  }
+
   app.post('/api/check_connection', express.json(), async (req, res) => {
     const { baseUrl, externalUrl, internalUrl, technicianId, serverUsername, serverPassword } = req.body || {};
     const candidates = buildDispoBaseCandidates({ baseUrl, externalUrl, internalUrl });
     if (candidates.length === 0) {
       return res.json({ ok: false, error: 'Server-URL fehlt.' });
     }
+    const hasCreds = (serverUsername || '').toString().trim() !== '';
     let lastErr = 'Verbindung fehlgeschlagen';
     for (const base of candidates) {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), DISPO_PROBE_TIMEOUT_MS);
-      let result;
       try {
-        result = await probeDispoConnection(base, technicianId, serverUsername, serverPassword, ac.signal);
+        let probeTechId = technicianId;
+        let profile = null;
+        if (hasCreds) {
+          profile = await resolveMonteurFromDispoAuth(base, serverUsername, serverPassword, ac.signal);
+          if (profile.ok && profile.technician_id) {
+            probeTechId = profile.technician_id;
+          }
+        }
+        const result = await probeDispoConnection(base, probeTechId, serverUsername, serverPassword, ac.signal);
+        if (result.ok) {
+          const payload = { ok: true, used_base_url: base };
+          if (profile && profile.ok) {
+            try {
+              upsertLocalMonteurProfile(profile);
+            } catch (_) {}
+            payload.technician_id = profile.technician_id;
+            payload.full_name = profile.full_name;
+            payload.username = profile.username;
+          }
+          return res.json(payload);
+        }
+        lastErr = result.error || lastErr;
+      } catch (e) {
+        lastErr = e && e.message ? e.message : lastErr;
       } finally {
         clearTimeout(timer);
       }
-      if (result.ok) {
-        return res.json({ ok: true, used_base_url: base });
-      }
-      lastErr = result.error || lastErr;
     }
     return res.json({ ok: false, error: lastErr });
   });
