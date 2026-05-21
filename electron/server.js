@@ -29,6 +29,7 @@ const {
   resolveProjekteNeuRoot,
   scanProjekteNeuTree,
   safeResolveUnderRoot,
+  isIgnorableDirEntry,
 } = require('./lib/projekte-neu-local');
 const { resolveTedExcelLocal, isExcelFilePath } = require('./lib/ted-excel-local');
 const {
@@ -1222,6 +1223,61 @@ function createApp(db) {
     return { reiseDir, dm, resolved };
   }
 
+  /** PROJEKTE-NEU-Datei: Baum-relativer Pfad, ggf. unter Dienstreise-Pull (Dokumente_Monteur/…). */
+  function resolveProjekteNeuLocalFilePath(localJobId, fab, relPathRaw) {
+    const rel = String(relPathRaw || '').trim().replace(/\\/g, '/');
+    if (!rel || rel.includes('..')) return null;
+    const ctx = getProjekteNeuLocalContext(localJobId, fab);
+    if (!ctx) return null;
+    const candidates = [];
+    const underPn = safeResolveUnderRoot(ctx.resolved.root, rel);
+    if (underPn) candidates.push(underPn);
+    candidates.push(path.join(ctx.resolved.root, ...rel.split('/').filter(Boolean)));
+    candidates.push(path.join(ctx.dm, ctx.resolved.folderName, ...rel.split('/').filter(Boolean)));
+    candidates.push(path.join(ctx.dm, ...rel.split('/').filter(Boolean)));
+    candidates.push(path.join(ctx.reiseDir, ...rel.split('/').filter(Boolean)));
+    candidates.push(path.join(ctx.reiseDir, 'Dokumente_Monteur', ...rel.split('/').filter(Boolean)));
+    candidates.push(
+      path.join(ctx.reiseDir, 'Dokumente_Monteur', ctx.resolved.folderName, ...rel.split('/').filter(Boolean)),
+    );
+    const seen = new Set();
+    for (const p of candidates) {
+      const key = String(p).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      try {
+        if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+      } catch (_) {}
+    }
+    const baseName = path.basename(rel);
+    if (baseName) {
+      const maxWalk = 8000;
+      let walked = 0;
+      const stack = [ctx.dm];
+      while (stack.length && walked < maxWalk) {
+        const dir = stack.pop();
+        walked += 1;
+        let entries;
+        try {
+          entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch (_) {
+          continue;
+        }
+        for (const ent of entries) {
+          if (!ent.isDirectory() && ent.name === baseName) {
+            const hit = path.join(dir, ent.name);
+            try {
+              if (fs.statSync(hit).isFile()) return hit;
+            } catch (_) {}
+          } else if (ent.isDirectory() && !isIgnorableDirEntry(ent.name)) {
+            stack.push(path.join(dir, ent.name));
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   const PROJEKTE_NEU_RASTER_EXT = new Set([
     '.jpg',
     '.jpeg',
@@ -1399,9 +1455,9 @@ function createApp(db) {
       const jobId = mapped ? mapped.id : rawJobId;
       const ctx = getProjekteNeuLocalContext(jobId, fab);
       if (!ctx) return res.status(404).json({ ok: false, error: 'local_unavailable', message: 'Kein lokaler Ordner.' });
-      const filePath = safeResolveUnderRoot(ctx.resolved.root, relPath);
-      if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-        return res.status(404).json({ ok: false, error: 'Datei nicht gefunden.' });
+      const filePath = resolveProjekteNeuLocalFilePath(jobId, fab, relPath);
+      if (!filePath) {
+        return res.status(404).json({ ok: false, error: 'local_unavailable', message: 'Datei nicht lokal gefunden.' });
       }
       const baseName = path.basename(filePath);
       if (wantThumb) {
@@ -2965,35 +3021,32 @@ ORDER BY
       }
       if (!localJobId) localJobId = resolveLocalJobIdForFab(technicianId, fabValue);
       if (localJobId) {
-        let ctx = null;
+        let filePath = null;
         try {
-          ctx = getProjekteNeuLocalContext(localJobId, fabValue);
+          filePath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath);
         } catch (pnCtxErr) {
           console.warn('[anlagenstamm_file_download] projekte_neu local:', pnCtxErr && pnCtxErr.message ? pnCtxErr.message : pnCtxErr);
         }
-        if (ctx) {
-          const filePath = safeResolveUnderRoot(ctx.resolved.root, pnPath);
-          if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-            try {
-              if (wantThumb) {
-                const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
-                res.setHeader('Content-Type', thumbOut.contentType);
-                res.setHeader('Content-Length', String(thumbOut.buf.length));
-                return res.send(thumbOut.buf);
-              }
-              const buf = fs.readFileSync(filePath);
-              const baseName = path.basename(filePath);
-              res.setHeader('Content-Type', 'application/octet-stream');
-              res.setHeader(
-                'Content-Disposition',
-                (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
-              );
-              res.setHeader('Content-Length', String(buf.length));
-              return res.send(buf);
-            } catch (localErr) {
-              if (wantThumb) {
-                return res.status(415).json({ ok: false, error: localErr.message || 'thumb_not_image' });
-              }
+        if (filePath) {
+          try {
+            if (wantThumb) {
+              const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
+              res.setHeader('Content-Type', thumbOut.contentType);
+              res.setHeader('Content-Length', String(thumbOut.buf.length));
+              return res.send(thumbOut.buf);
+            }
+            const buf = fs.readFileSync(filePath);
+            const baseName = path.basename(filePath);
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader(
+              'Content-Disposition',
+              (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+            );
+            res.setHeader('Content-Length', String(buf.length));
+            return res.send(buf);
+          } catch (localErr) {
+            if (wantThumb) {
+              return res.status(415).json({ ok: false, error: localErr.message || 'thumb_not_image' });
             }
           }
         }
@@ -3008,6 +3061,13 @@ ORDER BY
         res.setHeader('Content-Length', String(buf.length));
         return res.send(buf);
       }
+    }
+    if (sourceNorm === 'projekte_neu' && pnPath && !base) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Datei nicht lokal verfügbar (offline). Bitte Auftrag mit Dienstreise-Pull übernehmen.',
+        local_unavailable: true,
+      });
     }
     if (!base) {
       return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
@@ -3063,14 +3123,52 @@ ORDER BY
 
   app.post('/api/anlagenstamm_file_open', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
-    const { baseUrl, fab, file, path: pnPathRaw, source: sourceRaw, fallbackName, serverUsername, serverPassword } = req.body || {};
+    const {
+      baseUrl,
+      fab,
+      file,
+      path: pnPathRaw,
+      source: sourceRaw,
+      fallbackName,
+      serverUsername,
+      serverPassword,
+      job_id: jobIdRaw,
+    } = req.body || {};
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
     const fabValue = (fab || '').toString().trim();
     const fileValue = (file || '').toString().trim();
     const sourceNorm = String(sourceRaw || '').toLowerCase().trim();
     const pnPath = (pnPathRaw || '').toString().trim();
-    if (!technicianId || !base || !fabValue) {
-      return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
+    if (!technicianId || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+    }
+    if (sourceNorm === 'projekte_neu' && pnPath) {
+      let localJobId = parseInt(jobIdRaw, 10);
+      if (!Number.isFinite(localJobId) || localJobId <= 0) localJobId = null;
+      if (localJobId) {
+        const mapped = getJobRowByLocalOrServerId(localJobId);
+        localJobId = mapped ? mapped.id : null;
+      }
+      if (!localJobId) localJobId = resolveLocalJobIdForFab(technicianId, fabValue);
+      if (localJobId) {
+        const localPath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath);
+        if (localPath) {
+          try {
+            console.log('[anlagenstamm_file_open] local', localPath);
+          } catch (_) {}
+          return res.json({ ok: true, path: localPath, filename: path.basename(localPath), source: 'local' });
+        }
+      }
+      if (!base) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Datei nicht lokal verfügbar (offline). Bitte Auftrag mit Dienstreise-Pull übernehmen.',
+          local_unavailable: true,
+        });
+      }
+    }
+    if (!base) {
+      return res.status(400).json({ ok: false, error: 'baseUrl erforderlich (keine lokale Kopie).' });
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     let url;

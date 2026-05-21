@@ -3739,6 +3739,11 @@
   /** idle | checking | local | offline | online | online_syncing | degraded */
   var connectionUiState = 'idle';
 
+  function preferLocalProjekteNeuOnly() {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+    return connectionUiState === 'offline' || connectionUiState === 'local';
+  }
+
   function setConnectionBadge(state, reason) {
     const badge = document.getElementById('connectionBadge');
     const wrap = document.getElementById('connectionBadgeWrap');
@@ -5477,21 +5482,27 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
-  async function openAnlagenstammProjekteNeuLocal(fab, relPath, fallbackName) {
+  async function openAnlagenstammProjekteNeuLocal(fab, relPath, fallbackName, opts) {
+    opts = opts || {};
     if (!fab || !relPath) return;
     const technicianId = getTechId();
+    const jobId = resolveProjekteNeuJobId(opts);
+    const body = {
+      fab: fab,
+      source: 'projekte_neu',
+      path: relPath,
+      fallbackName: fallbackName || '',
+      job_id: jobId,
+    };
+    if (!preferLocalProjekteNeuOnly()) {
+      body.baseUrl = getDispoBaseUrl();
+      body.serverUsername = getServerUsername();
+      body.serverPassword = getServerPassword();
+    }
     const resp = await fetch(API_BASE + '/api/anlagenstamm_file_open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
-      body: JSON.stringify({
-        baseUrl: getDispoBaseUrl(),
-        fab: fab,
-        source: 'projekte_neu',
-        path: relPath,
-        fallbackName: fallbackName || '',
-        serverUsername: getServerUsername(),
-        serverPassword: getServerPassword()
-      })
+      body: JSON.stringify(body),
     });
     const data = await resp.json().catch(function () { return {}; });
     if (!resp.ok || !data || data.ok !== true || !data.path) {
@@ -5518,7 +5529,9 @@
     if (!resp.ok) {
       return resp.json().catch(function () { return {}; }).then(function (j) {
         var err = new Error((j && j.error) ? j.error : 'HTTP ' + resp.status);
-        err.localUnavailable = resp.status === 404 || (j && j.error === 'local_unavailable');
+        err.localUnavailable =
+          resp.status === 404 ||
+          (j && (j.error === 'local_unavailable' || j.local_unavailable === true));
         throw err;
       });
     }
@@ -5606,22 +5619,63 @@
         return handleProjekteNeuFileResponse(resp, opts);
       });
     }
-    return fetchLocal().then(function (resolvedJobId) {
-      if (resolvedJobId) {
-        var q = 'job_id=' + encodeURIComponent(resolvedJobId) + '&fab=' + encodeURIComponent(fab) +
-          '&path=' + encodeURIComponent(relPath);
-        if (opts.thumb) q += '&thumb=1&thumbMax=' + encodeURIComponent(String(opts.thumbMax || 256));
-        if (opts.inline) q += '&inline=1';
-        return fetchBlobFromUrl(API_BASE + '/api/dienstreise/projekte_neu_file?' + q).catch(function (err) {
-          if (!err || !err.localUnavailable) throw err;
-          return fetchDispoProjekteNeuFileBlob(fab, relPath, opts, technicianId);
+    function tryLocalProjekteNeuFile(resolvedJobId) {
+      var q =
+        'job_id=' +
+        encodeURIComponent(resolvedJobId) +
+        '&fab=' +
+        encodeURIComponent(fab) +
+        '&path=' +
+        encodeURIComponent(relPath);
+      if (opts.thumb) q += '&thumb=1&thumbMax=' + encodeURIComponent(String(opts.thumbMax || 256));
+      if (opts.inline) q += '&inline=1';
+      return fetchBlobFromUrl(API_BASE + '/api/dienstreise/projekte_neu_file?' + q);
+    }
+    function tryLocalProjectFile(resolvedJobId) {
+      var relNorm = String(relPath || '').replace(/^\/+/, '');
+      var candidates = [relNorm, 'Dokumente_Monteur/' + relNorm];
+      var chain = Promise.reject(new Error('local_unavailable'));
+      candidates.forEach(function (relTry) {
+        chain = chain.catch(function () {
+          var q =
+            'job_id=' +
+            encodeURIComponent(resolvedJobId) +
+            '&path=' +
+            encodeURIComponent(relTry);
+          if (opts.thumb) q += '&thumb=1&thumbMax=' + encodeURIComponent(String(opts.thumbMax || 256));
+          if (opts.inline) q += '&inline=1';
+          return fetchBlobFromUrl(API_BASE + '/api/dienstreise/project_file?' + q);
         });
+      });
+      return chain;
+    }
+    return fetchLocal().then(function (resolvedJobId) {
+      if (!resolvedJobId) {
+        if (opts.allowDispo === true && !preferLocalProjekteNeuOnly()) {
+          return fetchDispoProjekteNeuFileBlob(fab, relPath, opts, technicianId);
+        }
+        return Promise.reject(
+          new Error('Kein lokaler Auftrag für diese FN – Dateien erst nach „Auftrag annehmen“ (Dienstreise-Pull) offline nutzbar.'),
+        );
       }
-      return fetchDispoProjekteNeuFileBlob(fab, relPath, opts, technicianId);
+      return tryLocalProjekteNeuFile(resolvedJobId)
+        .catch(function (err) {
+          if (!err || !err.localUnavailable) throw err;
+          return tryLocalProjectFile(resolvedJobId);
+        })
+        .catch(function (err) {
+          if (opts.allowDispo === true && !preferLocalProjekteNeuOnly()) {
+            return fetchDispoProjekteNeuFileBlob(fab, relPath, opts, technicianId);
+          }
+          throw err;
+        });
     });
   }
 
   function fetchDispoProjekteNeuFileBlob(fab, relPath, opts, technicianId) {
+    if (preferLocalProjekteNeuOnly()) {
+      return Promise.reject(new Error('Datei nicht lokal verfügbar (offline).'));
+    }
     return fetch(API_BASE + '/api/anlagenstamm_file_download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
@@ -5820,9 +5874,15 @@
 
   function buildAnlageDetailProjekteNeuTree(fab, nodes, depth, msgEl) {
     depth = depth || 0;
-    function notifyErr(err) {
+    function notifyErr(err, optsNotify) {
+      optsNotify = optsNotify || {};
+      var msg = (err && err.message) ? err.message : String(err);
+      if (optsNotify.thumbOnly) {
+        try { console.warn('[PROJEKTE NEU]', msg); } catch (_) {}
+        return;
+      }
       var msgNode = msgEl || document.getElementById('anlageDetailProjekteNeuMessage');
-      if (msgNode) msgNode.textContent = 'Fehler: ' + ((err && err.message) ? err.message : String(err));
+      if (msgNode) msgNode.textContent = 'Fehler: ' + msg;
     }
     var wrap = document.createElement('ul');
     wrap.style.margin = depth === 0 ? '0.35rem 0 0.2rem 0' : '0.2rem 0 0.2rem 1rem';
@@ -5865,7 +5925,7 @@
             openProjekteNeuImageInLightbox(fab, rel, {
               jobId: jobDetailsJobId,
               alt: label,
-              onError: notifyErr,
+              onError: function (err) { notifyErr(err, { thumbOnly: false }); },
             });
           });
         } else {
@@ -5884,9 +5944,10 @@
         btn.style.textAlign = 'left';
         btn.textContent = label;
         btn.addEventListener('click', function () {
-          openAnlagenstammProjekteNeuLocal(fab, rel, String(n.name || '')).catch(function (err) {
+          openAnlagenstammProjekteNeuLocal(fab, rel, String(n.name || ''), { jobId: jobDetailsJobId }).catch(function (err) {
             notifyErr(err);
-            showToast('Dokument konnte nicht geöffnet werden.');
+            var hint = (err && err.message) ? err.message : 'Dokument konnte nicht geöffnet werden.';
+            showToast(hint.indexOf('offline') >= 0 || hint.indexOf('lokal') >= 0 ? hint : 'Dokument konnte nicht geöffnet werden.');
           });
         });
         actions.appendChild(btn);
@@ -6011,7 +6072,8 @@
       if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
       var cachedTreeEarly = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
       if (cachedTreeEarly.length) {
-        return renderTree(cachedTreeEarly, cacheStatusLabel(cached));
+        renderTree(cachedTreeEarly, cacheStatusLabel(cached));
+        return;
       }
       if (jobId) {
         var localTree = await fetchJsonLocal(
