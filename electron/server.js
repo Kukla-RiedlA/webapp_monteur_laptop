@@ -2216,28 +2216,30 @@ function createApp(db) {
    * @returns {{ enqueued: number, skipped: number }}
    */
   function enqueuePeriodicDienstreiseDeltaPulls(opts) {
-    if (!bgJobs) return { enqueued: 0, skipped: 0 };
+    if (!bgJobs) return { enqueued: 0, skipped: 0, job_ids: [] };
     const dispoBaseUrl = (opts.dispoBaseUrl || '').trim().replace(/\/$/, '');
     const technicianId = parseInt(opts.technicianId, 10);
     const dispoUsername = (opts.dispoUsername || '').trim();
     const dispoPassword = opts.dispoPassword != null ? String(opts.dispoPassword) : '';
+    const force = !!(opts && opts.force);
     if (!dispoBaseUrl || !Number.isFinite(technicianId) || technicianId <= 0) {
-      return { enqueued: 0, skipped: 0 };
+      return { enqueued: 0, skipped: 0, job_ids: [] };
     }
-    if (!dispoUsername && !dispoPassword) return { enqueued: 0, skipped: 0 };
+    if (!dispoUsername && !dispoPassword) return { enqueued: 0, skipped: 0, job_ids: [] };
     const jobs = listLocalJobsForPeriodicDienstreisePull(technicianId);
     let enqueued = 0;
     let skipped = 0;
+    const jobIds = [];
     const now = Date.now();
     for (const row of jobs) {
       const localJobId = row.id;
       const lastMs = lastDienstreisePullCompletedAtMs(localJobId);
-      if (lastMs > 0 && now - lastMs < DIENSTREISE_DELTA_MIN_INTERVAL_MS) {
+      if (!force && lastMs > 0 && now - lastMs < DIENSTREISE_DELTA_MIN_INTERVAL_MS) {
         skipped++;
         continue;
       }
       const dedupeKey = 'dienstreise_pull:' + localJobId + ':copy';
-      bgJobs.enqueue(
+      const { job_id: pullJobId } = bgJobs.enqueue(
         'dienstreise_pull',
         {
           job_id: localJobId,
@@ -2251,9 +2253,10 @@ function createApp(db) {
         },
         dedupeKey,
       );
+      if (pullJobId) jobIds.push(pullJobId);
       enqueued++;
     }
-    return { enqueued, skipped };
+    return { enqueued, skipped, job_ids: jobIds };
   }
 
   /**
@@ -5773,6 +5776,7 @@ ORDER BY
               dispoBaseUrl: base,
               dispoUsername: p.serverUsername,
               dispoPassword: p.serverPassword,
+              force: true,
             });
             if (delta.enqueued > 0) {
               console.log('[sync_pull] dienstreise_delta enqueued:', delta.enqueued);

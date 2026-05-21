@@ -53,6 +53,42 @@
     });
   }
 
+  /** Nach sync_pull: auf dienstreise_pull-Jobs warten (Projektordner-Kopie läuft separat). */
+  function waitForActiveDienstreisePullJobs(opts) {
+    opts = opts || {};
+    var interval = opts.interval || 800;
+    var maxMs = opts.maxMs || 25 * 60 * 1000;
+    var t0 = Date.now();
+    return new Promise(function (resolve) {
+      function tick() {
+        if (Date.now() - t0 > maxMs) {
+          console.warn('[Sync] Timeout beim Warten auf Projektordner-Kopie');
+          resolve();
+          return;
+        }
+        fetch(API_BASE + '/api/background_jobs?active=1&limit=80')
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            var jobs = (data && data.jobs) || [];
+            var pulls = jobs.filter(function (j) {
+              return j && j.type === 'dienstreise_pull';
+            });
+            if (!pulls.length) {
+              resolve();
+              return;
+            }
+            setTimeout(tick, interval);
+          })
+          .catch(function () {
+            resolve();
+          });
+      }
+      tick();
+    });
+  }
+
   function startBackgroundJobsPollingUi() {
     function refresh() {
       fetch(API_BASE + '/api/background_jobs?running=1&limit=10')
@@ -2692,7 +2728,9 @@
     html += '<div class="projektdaten-leistung-split">';
     html += '<div class="projektdaten-leistung-split-main">';
     html += '<div class="modal-detail-section"><h4>Leistungsdaten (Anlagenstamm)</h4>';
-    html += '<p class="modal-leistung-hint muted">' + (readOnlyAngelegt ? 'Nur Anzeige (Auftrag angelegt).' : 'Zeile anklicken für PROJEKTE NEU rechts; Doppelklick auf eine Zelle öffnet die Anlagendetails.') + '</p>';
+    if (readOnlyAngelegt) {
+      html += '<p class="modal-leistung-hint muted">Nur Anzeige (Auftrag angelegt).</p>';
+    }
     var fabInputValue = formatFabrikationsnummernInputValue(leistungRows);
     var fabEditAllowed = canEditProjektdatenFabrikationsnummern(job);
     if (!fabEditAllowed) {
@@ -2759,14 +2797,12 @@
     html += '</div>';
     html += '<aside class="projektdaten-leistung-split-side" aria-label="PROJEKTE NEU">';
     html += '<h4 class="projektdaten-projekte-neu-heading">PROJEKTE NEU</h4>';
-    html += '<p class="modal-leistung-hint muted projektdaten-projekte-neu-hint">Ordnerstruktur zur gewählten Fabrikationsnummer (links Zeile anklicken). Stammdaten kommen aus der lokalen Anlagenstamm-DB; die Ordnerliste aus dem Dienstreise-Pull (nicht aus dem DB-Vollsync).</p>';
     html += '<div id="projektdatenProjekteNeuMsg" class="projektdaten-projekte-neu-msg muted"></div>';
     html += '<div id="projektdatenProjekteNeuTree" class="projektdaten-projekte-neu-tree"></div>';
     html += '</aside>';
     html += '</div>';
     html += '<div class="modal-detail-section projektdaten-projektordner-section" style="margin-top:1rem">';
     html += '<h4>Projektordner (lokal)</h4>';
-    html += '<p class="modal-leistung-hint muted">Projektordner erscheint nach „Auftrag annehmen“ unter Aufträge.</p>';
     html += '<div class="dienstreise-explorer-toolbar" style="margin:0.35rem 0">';
     html += '<span class="dienstreise-explorer-breadcrumb" id="dienstreiseExplorerBreadcrumb" title="Projektordner">Projektordner</span>';
     html += '</div>';
@@ -4618,7 +4654,18 @@
       } else if (pullData.job_id) {
         var pullJob = await pollBackgroundJobUntilTerminal(pullData.job_id, null, {});
         if (pullJob.status === 'completed') {
+          await waitForActiveDienstreisePullJobs({});
           maybeRefreshLocalLists(true);
+          if (
+            selectedJobIdOnDienstreisePage &&
+            typeof loadDienstreiseExplorer === 'function'
+          ) {
+            try {
+              loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath, 'page');
+            } catch (explorerErr) {
+              console.warn('[Sync] Explorer-Refresh:', explorerErr);
+            }
+          }
           var skipProjektRefresh =
             jobDetailsJobId &&
             projektdatenFabSavedAt &&
@@ -5059,9 +5106,20 @@
           clearCheckHintLater(8000);
         }
       } else if (payload.state === 'downloading') {
+        var dlLabel = 'Lädt …';
         var pct = payload.percent != null ? payload.percent : 0;
-        setChipVisible(true, 'Lädt … ' + pct + '%');
-        if (checkHint) checkHint.textContent = 'Download … ' + pct + '%';
+        if (pct > 0) {
+          dlLabel += ' ' + pct + '%';
+        } else if (payload.transferred > 0 && payload.total > 0) {
+          dlLabel +=
+            ' ' +
+            (Math.round(payload.transferred / 1048576) || 0) +
+            ' / ' +
+            (Math.round(payload.total / 1048576) || 0) +
+            ' MB';
+        }
+        setChipVisible(true, dlLabel);
+        if (checkHint) checkHint.textContent = dlLabel.replace('Lädt', 'Download');
       } else if (payload.state === 'ready') {
         setChipVisible(true, 'Installieren');
         if (chip) chip.title = 'Update bereit — Klick zum Installieren';
@@ -6998,14 +7056,6 @@
       }
       if (toggleEl) toggleEl.setAttribute('data-loaded', '1');
     }
-    function cacheStatusLabel(cached) {
-      var base = 'Lokaler Baum-Cache (nach Dienstreise-Pull oder früherem Scan)';
-      if (cached && cached.synced_at) {
-        var d = String(cached.synced_at).replace('T', ' ').slice(0, 16);
-        if (d) base += ', Stand ' + d;
-      }
-      return base + '.';
-    }
     try {
       var jobId = resolveProjekteNeuJobId(opts);
       var hdrs = { headers: { 'X-Technician-Id': String(technicianId || '') } };
@@ -7026,11 +7076,7 @@
       if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
       var cachedTreeEarly = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
       if (cachedTreeEarly.length) {
-        renderTree(
-          cachedTreeEarly,
-          cacheStatusLabel(cached) +
-            ' Vorschaubilder: lokal falls kopiert, sonst online von Dispo (max. 3 parallel).',
-        );
+        renderTree(cachedTreeEarly);
         return;
       }
       if (jobId) {
@@ -7046,12 +7092,7 @@
         );
         if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
         if (localTree && localTree.ok && localTree.enabled && Array.isArray(localTree.tree) && localTree.tree.length) {
-          return renderTree(
-            localTree.tree,
-            localTree.from_cache
-              ? cacheStatusLabel({ synced_at: localTree.synced_at })
-              : 'Lokale Kopie (Dienstreise-Ordner Dokumente_Monteur).',
-          );
+          return renderTree(localTree.tree);
         }
       }
       if (!allowOnline || (!getDispoExternalUrl() && !getDispoInternalUrl())) {

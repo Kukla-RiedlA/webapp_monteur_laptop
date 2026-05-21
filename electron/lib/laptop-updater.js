@@ -61,6 +61,26 @@ function applyInsecureTlsToProcess(on) {
   }
 }
 
+function downloadProgressPayload(progress) {
+  if (!progress || typeof progress !== 'object') {
+    return { percent: 0 };
+  }
+  const transferred = Number(progress.transferred);
+  const total = Number(progress.total);
+  let percent = null;
+  if (typeof progress.percent === 'number' && Number.isFinite(progress.percent)) {
+    percent = Math.round(progress.percent);
+  } else if (Number.isFinite(transferred) && Number.isFinite(total) && total > 0) {
+    percent = Math.round((transferred / total) * 100);
+  }
+  return {
+    percent: percent != null ? percent : 0,
+    transferred: Number.isFinite(transferred) ? transferred : null,
+    total: Number.isFinite(total) ? total : null,
+    bytesPerSecond: progress.bytesPerSecond != null ? Math.round(progress.bytesPerSecond) : null,
+  };
+}
+
 function sendStatus(state, extra) {
   const payload = Object.assign(
     {
@@ -174,6 +194,8 @@ function initLaptopUpdater(opts) {
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
+  // Unter Windows feuert download-progress bei Differential-Updates oft nicht (bleibt 0 %).
+  autoUpdater.disableDifferentialDownload = true;
   autoUpdater.logger = null;
 
   autoUpdater.on('update-not-available', () => {
@@ -190,8 +212,7 @@ function initLaptopUpdater(opts) {
   });
 
   autoUpdater.on('download-progress', (progress) => {
-    const percent = progress && progress.percent != null ? Math.round(progress.percent) : 0;
-    sendStatus('downloading', { percent });
+    sendStatus('downloading', downloadProgressPayload(progress));
   });
 
   autoUpdater.on('update-downloaded', () => {
