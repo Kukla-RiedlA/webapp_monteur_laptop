@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "1.4.23",
+  "version": "1.4.24",
   "description": "Monteur WebApp – Offline-fähige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -8,6 +8,8 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
+    "generate-icons": "node scripts/generate-icons.js",
+    "predist": "node scripts/generate-icons.js",
     "dist": "electron-builder --win",
     "test:parameter-pdf": "node scripts/test-parameter-pdf.js",
     "test:parameter-pdf:open": "node scripts/test-parameter-pdf.js --open"
@@ -57,9 +59,10 @@
       "url": "https://update.local.invalid/api/laptop_release_feed.php/"
     },
     "artifactName": "Monteur-WebApp-Setup-${version}.${ext}",
+    "icon": "public/icon.png",
     "win": {
       "target": ["nsis"],
-      "icon": "public/icon.ico"
+      "icon": "public/icon.png"
     },
     "nsis": {
       "oneClick": false,

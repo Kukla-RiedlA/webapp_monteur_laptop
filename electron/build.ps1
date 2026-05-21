@@ -11,11 +11,16 @@ $here = $PSScriptRoot
 Push-Location $here
 try {
     if (-not $SkipNpmInstall) {
-        Write-Host "npm install …"
+        Write-Host "npm install ..."
         npm install
+        if ($LASTEXITCODE -ne 0) { throw "npm install fehlgeschlagen (exit $LASTEXITCODE)." }
     }
-    Write-Host "electron-builder (win) …"
+    Write-Host "App-Icons (Kukla-Logo) ..."
+    npm run generate-icons
+    if ($LASTEXITCODE -ne 0) { throw "generate-icons fehlgeschlagen (exit $LASTEXITCODE)." }
+    Write-Host "electron-builder (win) ..."
     npm run dist
+    if ($LASTEXITCODE -ne 0) { throw "npm run dist fehlgeschlagen (exit $LASTEXITCODE)." }
 
     $dist = Join-Path $here "dist"
     if (-not (Test-Path $dist)) {
@@ -39,12 +44,12 @@ try {
 
     $latestYml = Join-Path $dist "latest.yml"
     if (-not (Test-Path $latestYml)) {
-        Write-Warning "latest.yml fehlt — electron-updater braucht diese Datei im Feed (current/)."
-    } else {
-        Write-Host ""
-        Write-Host "Feed-Test (nach Upload + Activate auf dem Server):"
-        Write-Host "  {dispoBase}/api/laptop_release_feed.php/latest.yml"
+        Write-Warning "latest.yml fehlt - electron-updater braucht diese Datei im Feed (current/)."
+        exit 1
     }
+    Write-Host ""
+    Write-Host "Feed-Test (nach Upload + Activate auf dem Server):"
+    Write-Host '  {dispoBase}/api/laptop_release_feed.php/latest.yml'
 } finally {
     Pop-Location
 }
