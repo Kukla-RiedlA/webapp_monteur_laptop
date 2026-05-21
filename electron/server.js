@@ -1064,6 +1064,42 @@ function createApp(db) {
   const DIENSTREISE_SUBFOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
   const DIENSTREISE_SYNC_FOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
 
+  /** Relativer Pfad unter Reiseordner; erstes Segment muss Standard-Unterordner sein. */
+  function parseDienstreiseRelativeSubpath(relRaw) {
+    const rel = String(relRaw || '')
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '')
+      .replace(/\/+$/, '');
+    if (!rel || rel.includes('..')) return { error: 'Ungültiger Pfad.' };
+    const parts = rel.split('/').filter(Boolean);
+    if (!parts.length) return { error: 'Pfad erforderlich.' };
+    if (!DIENSTREISE_SUBFOLDERS.includes(parts[0])) {
+      return {
+        error:
+          'Pfad muss mit Dokumente_Dispo, Dokumente_Monteur, Dokumente_Anlage oder Dokumente_Buchhaltung beginnen.',
+      };
+    }
+    return { parts };
+  }
+
+  function assertPathUnderReiseDir(reiseDir, absPath) {
+    let realReise;
+    let realPath;
+    try {
+      realReise = fs.realpathSync(reiseDir);
+      const parent = path.dirname(absPath);
+      if (!fs.existsSync(parent)) return { error: 'Zielordner existiert nicht.' };
+      realPath = fs.realpathSync(parent);
+    } catch (_) {
+      return { error: 'Pfad konnte nicht aufgelöst werden.' };
+    }
+    if (realPath !== realReise && !realPath.startsWith(realReise + path.sep)) {
+      return { error: 'Pfad außerhalb des Projektordners.' };
+    }
+    return { ok: true };
+  }
+
   function sanitizeDienstreiseFolderPart(str) {
     if (typeof str !== 'string') return '';
     const s = str.replace(/[\/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').trim();
@@ -2313,25 +2349,86 @@ function createApp(db) {
       const body = req.body || {};
       const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
       const subfolder = (body.subfolder || '').trim();
+      const relativePathRaw = (body.relative_path || body.relativePath || '').trim().replace(/\\/g, '/');
       const filename = (body.filename || '').trim() || 'datei';
       const content = body.content;
-      if (!localJobId || !DIENSTREISE_SUBFOLDERS.includes(subfolder)) {
-        return res.status(400).json({ ok: false, error: 'job_id (lokal) und subfolder (Dokumente_Dispo/Dokumente_Monteur/Dokumente_Anlage/Dokumente_Buchhaltung) erforderlich.' });
+      if (!localJobId) {
+        return res.status(400).json({ ok: false, error: 'job_id (lokal) erforderlich.' });
       }
       const uploadGate = gateDienstreiseWrite(db, null, localJobId);
       if (uploadGate) return res.status(uploadGate.status).json({ ok: false, error: uploadGate.error });
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       if (!reiseDir || !fs.existsSync(reiseDir)) return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
-      const subDir = path.join(reiseDir, subfolder);
-      if (!fs.existsSync(subDir)) fs.mkdirSync(subDir, { recursive: true });
-      const safeName = path.basename(filename).replace(/[\/\\:*?"<>|]/g, '_') || 'datei';
-      const targetPath = path.join(subDir, safeName);
+
+      let relParts;
+      if (relativePathRaw) {
+        const parsed = parseDienstreiseRelativeSubpath(relativePathRaw);
+        if (parsed.error) return res.status(400).json({ ok: false, error: parsed.error });
+        relParts = parsed.parts.slice();
+        const safeName = path.basename(filename).replace(/[\/\\:*?"<>|]/g, '_') || 'datei';
+        const last = relParts[relParts.length - 1] || '';
+        const looksLikeFile = /\.[a-z0-9]{1,8}$/i.test(last);
+        if (!looksLikeFile) relParts.push(safeName);
+      } else if (DIENSTREISE_SUBFOLDERS.includes(subfolder)) {
+        const safeName = path.basename(filename).replace(/[\/\\:*?"<>|]/g, '_') || 'datei';
+        relParts = [subfolder, safeName];
+      } else {
+        return res.status(400).json({
+          ok: false,
+          error: 'subfolder oder relative_path (unter Dokumente_*) erforderlich.',
+        });
+      }
+
+      const targetPath = path.join(reiseDir, ...relParts);
+      const under = assertPathUnderReiseDir(reiseDir, targetPath);
+      if (under.error) return res.status(400).json({ ok: false, error: under.error });
+      const parentDir = path.dirname(targetPath);
+      if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
+      const safeName = path.basename(targetPath);
       const buf = typeof content === 'string' ? Buffer.from(content, 'base64') : (Buffer.isBuffer(content) ? content : null);
       if (!buf || buf.length === 0) return res.status(400).json({ ok: false, error: 'Dateiinhalt (content, base64) fehlt.' });
       fs.writeFileSync(targetPath, buf);
-      res.json({ ok: true, path: targetPath, filename: safeName });
+      res.json({
+        ok: true,
+        path: targetPath,
+        filename: safeName,
+        relative_path: relParts.join('/'),
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Upload fehlgeschlagen.' });
+    }
+  });
+
+  app.post('/api/dienstreise/mkdir', express.json(), (req, res) => {
+    try {
+      const body = req.body || {};
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const parentSubpath = (body.parent_subpath || body.parentSubpath || '').trim().replace(/\\/g, '/');
+      const folderName = (body.folder_name || body.folderName || '').trim().replace(/[\/\\:*?"<>|]/g, '_');
+      if (!localJobId || !parentSubpath || !folderName) {
+        return res.status(400).json({ ok: false, error: 'job_id, parent_subpath und folder_name erforderlich.' });
+      }
+      const uploadGate = gateDienstreiseWrite(db, null, localJobId);
+      if (uploadGate) return res.status(uploadGate.status).json({ ok: false, error: uploadGate.error });
+      const parsed = parseDienstreiseRelativeSubpath(parentSubpath);
+      if (parsed.error) return res.status(400).json({ ok: false, error: parsed.error });
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!reiseDir || !fs.existsSync(reiseDir)) return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
+      const parts = parsed.parts.concat([folderName]);
+      const targetPath = path.join(reiseDir, ...parts);
+      const under = assertPathUnderReiseDir(reiseDir, targetPath);
+      if (under.error) return res.status(400).json({ ok: false, error: under.error });
+      const parentDir = path.dirname(targetPath);
+      if (!fs.existsSync(parentDir)) {
+        return res.status(400).json({ ok: false, error: 'Übergeordneter Ordner existiert nicht.' });
+      }
+      if (fs.existsSync(targetPath)) {
+        return res.status(400).json({ ok: false, error: 'Ordner existiert bereits.' });
+      }
+      fs.mkdirSync(targetPath, { recursive: false });
+      res.json({ ok: true, relative_path: parts.join('/'), path: targetPath });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Ordner konnte nicht angelegt werden.' });
     }
   });
 
@@ -2695,6 +2792,7 @@ function createApp(db) {
     sql += ' ORDER BY j.start_datetime ASC';
     try {
       const rows = db.prepare(sql).all(...params);
+      attachJobContactsToJobs(db, rows);
       res.json({ ok: true, technician_id: technicianId, jobs: rows });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
@@ -2951,32 +3049,6 @@ ORDER BY
     }
     res.json({ ok: true, job });
   });
-
-  function normalizeJobContactsFromPayload(job) {
-    if (!job || typeof job !== 'object') return [];
-    const candidates = []
-      .concat(Array.isArray(job.job_contacts) ? job.job_contacts : [])
-      .concat(Array.isArray(job.jobContacts) ? job.jobContacts : [])
-      .concat(Array.isArray(job.contacts) ? job.contacts : []);
-    const out = [];
-    for (let i = 0; i < candidates.length; i++) {
-      const c = candidates[i] || {};
-      const name = (c.contact_name != null ? String(c.contact_name) : (c.name != null ? String(c.name) : (c.contactPerson != null ? String(c.contactPerson) : ''))).trim();
-      const phone = (c.contact_phone != null ? String(c.contact_phone) : (c.phone != null ? String(c.phone) : '')).trim();
-      const email = (c.contact_email != null ? String(c.contact_email) : (c.email != null ? String(c.email) : '')).trim();
-      if (name || phone || email) {
-        out.push({ contact_name: name, contact_phone: phone, contact_email: email });
-      }
-    }
-    if (out.length > 0) return out;
-    const directName = (job.baustellen_ansprechpartner != null ? String(job.baustellen_ansprechpartner) : (job.contact_person != null ? String(job.contact_person) : '')).trim();
-    const directPhone = (job.contact_phone != null ? String(job.contact_phone) : '').trim();
-    const directEmail = (job.contact_email != null ? String(job.contact_email) : '').trim();
-    if (directName || directPhone || directEmail) {
-      return [{ contact_name: directName, contact_phone: directPhone, contact_email: directEmail }];
-    }
-    return [];
-  }
 
   app.post('/api/job_from_dispo', express.json(), async (req, res) => {
     const sendError = (status, msg) => {
@@ -7154,6 +7226,77 @@ function mergeFabForJobPull(db, localJobId, serverFab) {
   return enrichFabJsonWithLocalAnlagenstamm(db, merged);
 }
 
+/** Baustellen-Ansprechpartner aus Dispo-Payload (nicht Kunden-contact_person). */
+function normalizeJobContactsFromPayload(job) {
+  if (!job || typeof job !== 'object') return [];
+  const candidates = []
+    .concat(Array.isArray(job.job_contacts) ? job.job_contacts : [])
+    .concat(Array.isArray(job.jobContacts) ? job.jobContacts : [])
+    .concat(Array.isArray(job.contacts) ? job.contacts : []);
+  const out = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i] || {};
+    const name = (c.contact_name != null ? String(c.contact_name) : (c.name != null ? String(c.name) : (c.contactPerson != null ? String(c.contactPerson) : ''))).trim();
+    const phone = (c.contact_phone != null ? String(c.contact_phone) : (c.phone != null ? String(c.phone) : '')).trim();
+    const email = (c.contact_email != null ? String(c.contact_email) : (c.email != null ? String(c.email) : '')).trim();
+    if (name || phone || email) {
+      out.push({ contact_name: name, contact_phone: phone, contact_email: email });
+    }
+  }
+  if (out.length > 0) return out;
+  const directName = (job.baustellen_ansprechpartner != null ? String(job.baustellen_ansprechpartner) : '').trim();
+  const directPhone = (job.job_contact_phone != null ? String(job.job_contact_phone) : (job.baustelle_phone != null ? String(job.baustelle_phone) : '')).trim();
+  const directEmail = (job.job_contact_email != null ? String(job.job_contact_email) : (job.baustelle_email != null ? String(job.baustelle_email) : '')).trim();
+  if (directName || directPhone || directEmail) {
+    return [{ contact_name: directName, contact_phone: directPhone, contact_email: directEmail }];
+  }
+  return [];
+}
+
+function upsertJobContactsForLocalJob(db, localJobId, j) {
+  const contacts = normalizeJobContactsFromPayload(j);
+  if (!contacts.length) return;
+  try {
+    db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(localJobId);
+    for (let i = 0; i < contacts.length; i++) {
+      const c = contacts[i];
+      const name = (c.contact_name != null ? String(c.contact_name) : '').trim();
+      const phone = (c.contact_phone != null ? String(c.contact_phone) : '').trim();
+      const email = (c.contact_email != null ? String(c.contact_email) : '').trim();
+      db.prepare('INSERT INTO job_contacts (job_id, contact_name, contact_phone, contact_email, sort_order) VALUES (?, ?, ?, ?, ?)').run(
+        localJobId, name || null, phone || null, email || null, i,
+      );
+    }
+  } catch (e) { /* Tabelle fehlt */ }
+}
+
+function attachJobContactsToJobs(db, jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return;
+  const ids = jobs.map((row) => row.id).filter((id) => id != null);
+  if (!ids.length) return;
+  const placeholders = ids.map(() => '?').join(',');
+  let rows = [];
+  try {
+    rows = db.prepare(
+      `SELECT job_id, contact_name, contact_phone, contact_email FROM job_contacts WHERE job_id IN (${placeholders}) ORDER BY sort_order, id`,
+    ).all(...ids);
+  } catch (e) {
+    return;
+  }
+  const byJob = {};
+  for (const r of rows) {
+    if (!byJob[r.job_id]) byJob[r.job_id] = [];
+    byJob[r.job_id].push({
+      contact_name: r.contact_name,
+      contact_phone: r.contact_phone,
+      contact_email: r.contact_email,
+    });
+  }
+  for (const job of jobs) {
+    job.job_contacts = byJob[job.id] || [];
+  }
+}
+
 function insertOrUpdateJob(db, j, customerId, technicianId) {
   const id = j.id;
   const existing = db.prepare('SELECT id FROM jobs WHERE server_id = ?').get(id);
@@ -7173,6 +7316,7 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     if (Number.isFinite(dispCountUpd) && dispCountUpd > 0) {
       db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(existing.id, technicianId);
     }
+    upsertJobContactsForLocalJob(db, existing.id, j);
     return existing.id;
   }
   // Verwaisten lokalen Auftrag (ohne server_id) mit Dispo-Auftrag verknüpfen – dann bleibt die lokale ID erhalten
@@ -7205,6 +7349,7 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     );
     if (j.street != null) insertOrUpdateJobAddress(db, orphan.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, orphan.id, j);
+    upsertJobContactsForLocalJob(db, orphan.id, j);
     return orphan.id;
   }
   const r2 = db.prepare('INSERT INTO jobs (server_id, job_number, customer_id, job_type, start_datetime, end_datetime, status, description, fabrikationsnummern, eap_nummer, bestellnummer, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))').run(
@@ -7219,6 +7364,7 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   }
   if (j.street != null) insertOrUpdateJobAddress(db, newId, j);
   if (hasHotelFields(j)) insertOrUpdateJobHotel(db, newId, j);
+  upsertJobContactsForLocalJob(db, newId, j);
   return newId;
 }
 

@@ -44,8 +44,30 @@
     .btn-ghost:hover { background: var(--accent); }
     main { padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-start { display: flex; flex-direction: row; width: 100%; max-width: none; padding: 1rem; gap: 1rem; box-sizing: border-box; }
-    .view-start .start-left { flex: 1; min-width: 0; }
-    .view-start .start-right { flex: 2; min-width: 0; }
+    .view-start .start-left { flex: 2; min-width: 0; }
+    .view-start .start-right { flex: 1; min-width: 0; }
+    .start-active-job-title { margin: 0 0 0.35rem; font-size: 1.25rem; color: var(--text-strong); display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; line-height: 1.3; }
+    .start-active-job-contacts-label { margin: 0.1rem 0 0.15rem; font-size: 0.78rem; letter-spacing: 0.02em; }
+    .start-active-job-subtitle { margin: 0 0 0.5rem; font-size: 0.9rem; color: var(--text); line-height: 1.45; }
+    .start-active-job-subtitle .start-contact-line { display: block; }
+    .start-active-job-meta { margin: 0 0 0.75rem; font-size: 0.82rem; color: var(--muted); }
+    .start-card-nested { margin-top: 0.5rem; margin-bottom: 0.75rem; padding: 0.75rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); }
+    .start-card-nested h3 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--muted); font-weight: 600; }
+    .start-drop-zone {
+      border: 2px dashed var(--accent);
+      border-radius: 8px;
+      padding: 1.25rem 1rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin-bottom: 0.65rem;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .start-drop-zone.drop-target { border-color: var(--focus-ring-color, #6eb5ff); background: rgba(110, 181, 255, 0.08); }
+    .start-drop-zone.start-drop-readonly { opacity: 0.55; pointer-events: none; }
+    .start-mkdir-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.5rem; font-size: 0.88rem; }
+    .start-mkdir-row input[type="text"] { flex: 1; min-width: 120px; max-width: 200px; padding: 0.35rem 0.5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
+    #startExplorerList.dienstreise-explorer-list { max-height: 240px; }
     .view-start .start-left main, .view-start .start-right main { max-width: none; margin: 0; padding: 0; }
     .card { background: var(--card); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--accent); }
     .card h2 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--muted); }
@@ -583,11 +605,6 @@
     .cal-toolbar button { min-width: 36px; }
     .cal-nav-btns { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
     .cal-month-label { font-weight: bold; min-width: 160px; }
-    .open-jobs-filters { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: flex-start; justify-content: space-between; gap: 6px 8px; margin-bottom: 0.75rem; font-size: 0.82rem; max-width: 100%; }
-    .open-jobs-filter-item { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 1px; flex: 1 1 0; min-width: 0; cursor: pointer; user-select: none; color: var(--muted); text-align: center; }
-    .open-jobs-filter-l1, .open-jobs-filter-l2 { display: block; line-height: 1.15; width: 100%; }
-    .open-jobs-filter-l2 { min-height: 1.15em; margin-bottom: 3px; }
-    .open-jobs-filter-item input[type="checkbox"] { margin: 0; flex-shrink: 0; }
     .cal-grid-wrapper { position: relative; width: 100%; }
     .cal-month-header { border: 1px solid var(--accent); border-radius: 8px 8px 0 0; }
     .cal-head { background: var(--accent); color: var(--text); padding: 6px 4px; text-align: center; font-size: 0.8rem; font-weight: bold; }
@@ -896,31 +913,6 @@
   </header>
   <div id="viewStart" class="view-start">
     <div class="start-left">
-      <main id="viewAuftraege" class="view-auftraege">
-        <div class="card">
-          <h2>Offene Aufträge</h2>
-          <div class="open-jobs-filters" role="group" aria-label="Filter für offene Aufträge">
-            <label class="open-jobs-filter-item">
-              <span class="open-jobs-filter-l1">Kein</span>
-              <span class="open-jobs-filter-l2">Datum</span>
-              <input type="checkbox" id="openJobsFilterNoDate" checked>
-            </label>
-            <label class="open-jobs-filter-item">
-              <span class="open-jobs-filter-l1">Kein</span>
-              <span class="open-jobs-filter-l2">Techniker</span>
-              <input type="checkbox" id="openJobsFilterNoTech">
-            </label>
-            <label class="open-jobs-filter-item" title="Alle Aufträge außer erledigt">
-              <span class="open-jobs-filter-l1">Alle</span>
-              <span class="open-jobs-filter-l2">außer erledigt</span>
-              <input type="checkbox" id="openJobsFilterAlleNonErledigt">
-            </label>
-          </div>
-          <div id="jobsList"><span class="empty">Wird geladen…</span></div>
-        </div>
-      </main>
-    </div>
-    <div class="start-right">
       <main id="viewKalender" class="view-kalender">
         <div class="card">
           <h2>Monatskalender</h2>
@@ -939,6 +931,56 @@
           <div id="calError" class="cal-error empty" style="display: none;"></div>
           <div id="calGrid"></div>
           <div id="calLegend" class="cal-legend" aria-label="Legende: Farbe pro Techniker"></div>
+        </div>
+      </main>
+    </div>
+    <div class="start-right">
+      <main id="viewStartActiveJob" class="view-start-active-job" aria-label="Aktiver Auftrag">
+        <div class="card start-active-job" id="startActiveJobCard">
+          <h2 class="muted" style="margin:0 0 0.5rem;font-size:1rem;">Aktiver Auftrag</h2>
+          <div id="startActiveJobTitle" class="start-active-job-title"><span class="empty">Wird geladen…</span></div>
+          <div class="start-active-job-contacts-label muted">Baustellen-Ansprechpartner</div>
+          <div id="startActiveJobSubtitle" class="start-active-job-subtitle"></div>
+          <div id="startActiveJobMeta" class="start-active-job-meta"></div>
+          <div class="start-card-nested" id="startExplorerCard">
+            <h3>Projektordner</h3>
+            <div class="dienstreise-explorer-toolbar">
+              <span class="dienstreise-explorer-breadcrumb" id="startExplorerBreadcrumb" title="Projektordner">Projektordner</span>
+            </div>
+            <div id="startExplorerList" class="dienstreise-explorer-list" aria-label="Dateien im Projektordner">
+              <span class="empty">Kein Auftrag ausgewählt.</span>
+            </div>
+          </div>
+          <div class="start-card-nested" id="startDropCard">
+            <h3>Dateien ablegen</h3>
+            <div id="startDropZone" class="start-drop-zone" tabindex="0">
+              Dateien hierher ziehen oder einfügen (Strg+V)<br>
+              <span class="muted" style="font-size:0.8rem;">oder Datei wählen und Hochladen</span>
+            </div>
+            <div class="dienstreise-upload-row">
+              <select id="startUploadSubfolder" class="dienstreise-select" aria-label="Zielordner">
+                <option value="Dokumente_Dispo">Dokumente_Dispo</option>
+                <option value="Dokumente_Monteur" selected>Dokumente_Monteur</option>
+                <option value="Dokumente_Anlage">Dokumente_Anlage</option>
+                <option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>
+              </select>
+              <input type="file" id="startFileInput" accept="*" multiple style="max-width: 200px;" />
+              <button type="button" class="btn btn-ghost" id="btnStartUpload">Hochladen</button>
+            </div>
+            <span id="startUploadHint" class="settings-saved-hint" aria-live="polite"></span>
+            <div class="start-mkdir-row">
+              <label for="startMkdirParent" class="muted">Neuer Unterordner in</label>
+              <select id="startMkdirParent" class="dienstreise-select">
+                <option value="Dokumente_Dispo">Dokumente_Dispo</option>
+                <option value="Dokumente_Monteur" selected>Dokumente_Monteur</option>
+                <option value="Dokumente_Anlage">Dokumente_Anlage</option>
+                <option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>
+              </select>
+              <input type="text" id="startMkdirName" placeholder="Ordnername" maxlength="120" />
+              <button type="button" class="btn btn-ghost" id="startBtnMkdir">Anlegen</button>
+            </div>
+            <span id="startMkdirHint" class="settings-saved-hint" aria-live="polite"></span>
+          </div>
         </div>
       </main>
     </div>
