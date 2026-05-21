@@ -1366,7 +1366,8 @@
       </div>
       <div class="settings-row">
         <label for="technicianId">Monteur-ID</label>
-        <input type="number" id="technicianId" value="3" min="1" title="Wird nach erfolgreichem Dispo-Login automatisch gesetzt." />
+        <input type="number" id="technicianId" min="1" readonly placeholder="Nach Dispo-Login" title="Wird automatisch aus Benutzername und Passwort ermittelt." />
+        <span id="monteurProfileHint" class="settings-saved-hint" style="display:block;margin-top:0.35rem" aria-live="polite"></span>
       </div>
       <div class="settings-row">
         <label for="monteurFullName">Name (vollständig)</label>

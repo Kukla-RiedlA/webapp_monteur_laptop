@@ -7,6 +7,7 @@
 function createDbLock() {
   /** @type {Promise<void>} */
   let tail = Promise.resolve();
+  let saveInProgress = false;
 
   function runWithDbLock(fn) {
     const run = async () => {
@@ -22,15 +23,23 @@ function createDbLock() {
   }
 
   /**
-   * @param {() => void} syncSave – synchroner save()-Body des DB-Wrappers
+   * @param {() => boolean} syncSave – synchroner save()-Body des DB-Wrappers (true = OK)
+   * Rückgabewert muss synchron sein (Express: if (!save())).
    */
   function wrapSave(syncSave) {
     return function queuedSave() {
-      runWithDbLock(() => {
-        syncSave();
-      }).catch((e) => {
+      if (saveInProgress) {
+        console.warn('[db-lock] paralleler save() – warte auf vorherigen Schreibvorgang');
+      }
+      saveInProgress = true;
+      try {
+        return syncSave() !== false;
+      } catch (e) {
         console.error('[db-lock] save failed:', e && e.message ? e.message : e);
-      });
+        return false;
+      } finally {
+        saveInProgress = false;
+      }
     };
   }
 

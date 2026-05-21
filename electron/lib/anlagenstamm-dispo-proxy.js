@@ -119,10 +119,9 @@ async function proxyAnlagenstammSaveOnce(payload, base) {
 /**
  * @param {Record<string, unknown>} payload
  */
-async function proxyAnlagenstammSearch(payload) {
-  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+function dispoAuthRequirementError(payload, technicianId) {
   if (!technicianId) {
-    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
+    return 'Monteur-ID fehlt (Einstellungen: Dispo-Login).';
   }
   const candidates = buildDispoBaseCandidates({
     baseUrl: payload.baseUrl,
@@ -130,8 +129,22 @@ async function proxyAnlagenstammSearch(payload) {
     internalUrl: payload.internalUrl,
   });
   if (candidates.length === 0) {
-    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
+    return 'Dispo-Basis-URL fehlt (Einstellungen: extern oder intern).';
   }
+  return null;
+}
+
+async function proxyAnlagenstammSearch(payload) {
+  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+  const reqErr = dispoAuthRequirementError(payload, technicianId);
+  if (reqErr) {
+    return { ok: false, error: reqErr };
+  }
+  const candidates = buildDispoBaseCandidates({
+    baseUrl: payload.baseUrl,
+    externalUrl: payload.externalUrl,
+    internalUrl: payload.internalUrl,
+  });
   const relativePhp = '/dispo_api/api/anlagenstamm_monteur_search.php';
   const tried = await tryDispoBasesInOrder(candidates, (base) => proxyAnlagenstammSearchOnce(payload, base));
   if (tried.error) {
@@ -154,17 +167,15 @@ async function proxyAnlagenstammSearch(payload) {
  */
 async function proxyAnlagenstammSave(payload) {
   const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
-  if (!technicianId) {
-    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
+  const reqErr = dispoAuthRequirementError(payload, technicianId);
+  if (reqErr) {
+    return { ok: false, error: reqErr };
   }
   const candidates = buildDispoBaseCandidates({
     baseUrl: payload.baseUrl,
     externalUrl: payload.externalUrl,
     internalUrl: payload.internalUrl,
   });
-  if (candidates.length === 0) {
-    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
-  }
   const relativePhp = '/dispo_api/api/anlagenstamm_monteur_save.php';
   const tried = await tryDispoBasesInOrder(candidates, (base) => proxyAnlagenstammSaveOnce(payload, base));
   if (tried.error) {

@@ -3,8 +3,12 @@ const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
-const { createApp, getDb, PORT } = require('./server');
-const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
+const { createApp, getDb, getMonteurDb, PORT, performAnlagenstammSave, flushMonteurDb } = require('./server');
+const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
+const {
+  searchLocal: anlagenstammSearchLocal,
+  rowCount: anlagenstammLocalRowCount,
+} = require('./lib/anlagenstamm-local');
 
 let mainWindow;
 let updateCheckStarted = false;
@@ -116,8 +120,15 @@ function createWindow() {
 }
 
 ipcMain.handle('anlagenstamm:search', async (event, payload) => {
+  const body = payload || {};
   try {
-    return await proxyAnlagenstammSearch(payload || {});
+    await getDb();
+    const db = getMonteurDb();
+    if (db && anlagenstammLocalRowCount(db) > 0) {
+      const local = anlagenstammSearchLocal(db, body);
+      if (local.ok) return local;
+    }
+    return await proxyAnlagenstammSearch(body);
   } catch (e) {
     return { ok: false, error: e.message || String(e) };
   }
@@ -125,7 +136,10 @@ ipcMain.handle('anlagenstamm:search', async (event, payload) => {
 
 ipcMain.handle('anlagenstamm:save', async (event, payload) => {
   try {
-    return await proxyAnlagenstammSave(payload || {});
+    await getDb();
+    const body = payload || {};
+    const technicianId = parseInt(String(body.technician_id ?? body.technicianId ?? '0'), 10);
+    return await performAnlagenstammSave(body, technicianId);
   } catch (e) {
     return { ok: false, error: e.message || String(e) };
   }
@@ -336,6 +350,11 @@ app.whenReady().then(() => {
   });
 });
 
+app.on('before-quit', () => {
+  flushMonteurDb();
+});
+
 app.on('window-all-closed', () => {
+  flushMonteurDb();
   app.quit();
 });
