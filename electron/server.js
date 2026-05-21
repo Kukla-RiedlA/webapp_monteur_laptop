@@ -1444,6 +1444,57 @@ function createApp(db) {
     return dir;
   }
 
+  /** Alle TED-Excel eines Monteurs sofort unter Reiseordner/TED/ (nach TED-Index in sync_pull). */
+  async function pullTedExcelFilesForTechnicianJobsInSync(base, technicianId, authHeader, signal, setProgress) {
+    const rows = db
+      .prepare(
+        `SELECT j.id AS local_id, j.server_id FROM jobs j
+         INNER JOIN job_technicians jt ON jt.job_id = j.id
+         WHERE jt.technician_id = ? AND j.status IN ('in_arbeit', 'zugeteilt')`,
+      )
+      .all(technicianId);
+    const jobs = [];
+    for (const row of rows) {
+      try {
+        const targetDir = getOrCreateDienstreiseFolderForJob(row.local_id);
+        if (targetDir && fs.existsSync(targetDir)) jobs.push({ local_id: row.local_id, server_id: row.server_id, targetDir });
+      } catch (_) {
+        /* kein Reiseordner (z. B. fehlendes Startdatum) */
+      }
+    }
+    const total = jobs.length;
+    if (!total) return { downloaded_jobs: 0 };
+    const noopCheckpoint = () => {};
+    let i = 0;
+    for (const row of jobs) {
+      if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
+      i++;
+      const serverJobId = row.server_id != null ? Number(row.server_id) : Number(row.local_id);
+      if (setProgress) setProgress('ted_files', i, total, 'TED-Excel ' + i + '/' + total);
+      try {
+        await pullTedExcelIntoReiseDir({
+          db,
+          dispoBaseUrl: base,
+          technicianId,
+          serverJobId,
+          localJobId: row.local_id,
+          targetDir: row.targetDir,
+          authHeader,
+          signal,
+          setProgress: (phase, cur, tot, msg) => {
+            if (setProgress && phase === 'ted' && msg) setProgress('ted_files', i, total, msg);
+          },
+          mergeCheckpoint: noopCheckpoint,
+          readCheckpoint: () => ({}),
+        });
+      } catch (err) {
+        console.warn('[sync_pull] ted_files job', serverJobId, err && err.message ? err.message : err);
+      }
+    }
+    save();
+    return { downloaded_jobs: total };
+  }
+
   app.post('/api/dienstreise/create_folder', express.json(), (req, res) => {
     try {
       const body = req.body || {};
@@ -5568,7 +5619,7 @@ ORDER BY
         const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
         const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
         await dbLock.runWithDbLock(async () => {
-          setProgress('sync_pull', 0, 7, 'Sende ausstehende Änderungen …');
+          setProgress('sync_pull', 0, 8, 'Sende ausstehende Änderungen …');
           try {
             await pushToServer(base, technicianId, db, auth);
             save();
@@ -5578,10 +5629,10 @@ ORDER BY
               pushErr && pushErr.message ? pushErr.message : pushErr,
             );
           }
-          setProgress('sync_pull', 1, 7, 'Ziehe Aufträge von Dispo …');
+          setProgress('sync_pull', 1, 8, 'Ziehe Aufträge von Dispo …');
           const pullInfo = await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
           save();
-          setProgress('sync_pull', 2, 7, 'Kalender-Cache …');
+          setProgress('sync_pull', 2, 8, 'Kalender-Cache …');
           const range = defaultFutureRange();
           const cacheStart = p.date_from && String(p.date_from).trim() ? String(p.date_from).trim() : range.start;
           const cacheEnd = p.date_to && String(p.date_to).trim() ? String(p.date_to).trim() : range.end;
@@ -5603,20 +5654,36 @@ ORDER BY
             console.warn('[sync_pull] kalender/anlagenstamm_baum:', calErr && calErr.message ? calErr.message : calErr);
           }
           save();
-          setProgress('sync_pull', 3, 7, 'TED-Index …');
+          setProgress('sync_pull', 3, 8, 'TED-Index …');
           try {
             await syncTedIndexForTechnicianJobs(db, base, technicianId, fetchHeaders, signal, setProgress);
           } catch (tedErr) {
             console.warn('[sync_pull] ted_index:', tedErr && tedErr.message ? tedErr.message : tedErr);
           }
           save();
-          setProgress('sync_pull', 4, 7, 'Protokoll-Vorlagen …');
+          setProgress('sync_pull', 4, 8, 'TED-Excel in Projektordner …');
+          try {
+            const tedDl = await pullTedExcelFilesForTechnicianJobsInSync(
+              base,
+              technicianId,
+              fetchHeaders,
+              signal,
+              setProgress,
+            );
+            if (tedDl.downloaded_jobs > 0) {
+              console.log('[sync_pull] ted_files jobs:', tedDl.downloaded_jobs);
+            }
+          } catch (tedDlErr) {
+            console.warn('[sync_pull] ted_files:', tedDlErr && tedDlErr.message ? tedDlErr.message : tedDlErr);
+          }
+          save();
+          setProgress('sync_pull', 5, 8, 'Protokoll-Vorlagen …');
           try {
             await syncProtokollTemplates(base);
           } catch (tplErr) {
             console.warn('Protokoll-Vorlagen Sync fehlgeschlagen:', tplErr.message);
           }
-          setProgress('sync_pull', 5, 7, 'Projektordner (Änderungen) …');
+          setProgress('sync_pull', 6, 8, 'Projektordner (Änderungen) …');
           try {
             const delta = enqueuePeriodicDienstreiseDeltaPulls({
               technicianId,
@@ -6677,9 +6744,16 @@ async function pullTedExcelIntoReiseDir(opts) {
     if (!rel || rel.includes('..')) continue;
     const expectedName = safeTedFileName(ent.file_name, rel);
     const localPath = path.join(tedDir, expectedName);
-    if (completed.includes(rel) && fs.existsSync(localPath)) {
-      idx++;
-      continue;
+    if (fs.existsSync(localPath)) {
+      try {
+        if (fs.statSync(localPath).size > 0) {
+          if (!completed.includes(rel)) completed.push(rel);
+          idx++;
+          continue;
+        }
+      } catch (_) {
+        /* fehlerhaft → neu laden */
+      }
     }
     if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
     idx++;
