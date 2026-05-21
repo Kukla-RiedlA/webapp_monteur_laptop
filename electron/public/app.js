@@ -168,6 +168,24 @@
       localStorage.setItem(LS_ACTIVE_BASE, u);
       if (source) localStorage.setItem(LS_ACTIVE_SOURCE, String(source));
     } catch (e) { /* ignore */ }
+    syncUpdateFeedToMain();
+  }
+
+  function getAllowInsecureTlsSetting() {
+    var el = document.getElementById('allowInsecureDispoTls');
+    if (el) return !!el.checked;
+    try {
+      return localStorage.getItem(SETTINGS_KEYS.allowInsecureTls) === '1';
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function syncUpdateFeedToMain() {
+    if (!window.monteurApp || typeof window.monteurApp.setUpdateFeedBase !== 'function') return;
+    var base = getDispoBaseUrl();
+    if (!base) return;
+    window.monteurApp.setUpdateFeedBase(base, getAllowInsecureTlsSetting()).catch(function () {});
   }
 
   function isPrivateLanHostname(hostname) {
@@ -262,6 +280,7 @@
           localStorage.setItem(LS_ACTIVE_BASE, String(data.selected_base_url).trim());
           localStorage.setItem(LS_ACTIVE_SOURCE, (data.preferred_source || '').toString());
         } catch (e) { /* ignore */ }
+        syncUpdateFeedToMain();
         return data;
       }
       clearActive();
@@ -4970,6 +4989,7 @@
       return loadDispoTlsSettingFromServer();
     })
     .then(function () {
+      syncUpdateFeedToMain();
       return checkConnectionAndSync({ blockingSync: false });
     })
     .then(function () {
@@ -4998,6 +5018,131 @@
   }
   runAfterLayout(initStartView);
 
+  (function initAppUpdateUi() {
+    var chip = document.getElementById('appUpdateHint');
+    var btnCheck = document.getElementById('btnCheckAppUpdate');
+    var checkHint = document.getElementById('checkAppUpdateHint');
+    var updateState = 'idle';
+
+    function setChipVisible(show, label) {
+      if (!chip) return;
+      if (show) {
+        chip.hidden = false;
+        if (label) chip.textContent = label;
+      } else {
+        chip.hidden = true;
+      }
+    }
+
+    function clearCheckHintLater(ms) {
+      if (!checkHint) return;
+      clearTimeout(checkHint._hideTimeout);
+      checkHint._hideTimeout = setTimeout(function () {
+        if (checkHint.textContent && checkHint.textContent !== 'Prüfe …') {
+          checkHint.textContent = '';
+        }
+      }, ms || 5000);
+    }
+
+    function applyUpdateStatus(payload) {
+      if (!payload || !payload.state) return;
+      updateState = payload.state;
+      if (payload.state === 'available') {
+        setChipVisible(true, 'Update verfügbar');
+        if (chip && payload.latestVersion) {
+          chip.title = 'Neu: ' + payload.latestVersion + ' — Klick zum Herunterladen';
+        }
+        if (checkHint) {
+          checkHint.textContent = payload.latestVersion
+            ? 'Update ' + payload.latestVersion + ' verfügbar.'
+            : 'Update verfügbar.';
+          clearCheckHintLater(8000);
+        }
+      } else if (payload.state === 'downloading') {
+        var pct = payload.percent != null ? payload.percent : 0;
+        setChipVisible(true, 'Lädt … ' + pct + '%');
+        if (checkHint) checkHint.textContent = 'Download … ' + pct + '%';
+      } else if (payload.state === 'ready') {
+        setChipVisible(true, 'Installieren');
+        if (chip) chip.title = 'Update bereit — Klick zum Installieren';
+        if (checkHint) {
+          checkHint.textContent = 'Update bereit — im Dialog oder hier installieren.';
+          clearCheckHintLater(10000);
+        }
+      } else if (payload.state === 'not-available') {
+        setChipVisible(false);
+        if (checkHint && checkHint.textContent === 'Prüfe …') {
+          checkHint.textContent = 'Keine neuere Version gefunden.';
+          clearCheckHintLater(5000);
+        }
+      } else if (payload.state === 'error') {
+        if (checkHint && payload.message) {
+          checkHint.textContent = payload.message;
+          clearCheckHintLater(8000);
+        }
+      }
+    }
+
+    if (chip) {
+      chip.addEventListener('click', function () {
+        if (!window.monteurApp) return;
+        if (updateState === 'ready' && typeof monteurApp.installAppUpdateNow === 'function') {
+          monteurApp.installAppUpdateNow();
+        } else if (updateState === 'available' && typeof monteurApp.startAppUpdateDownload === 'function') {
+          monteurApp.startAppUpdateDownload();
+        } else if (typeof monteurApp.checkForAppUpdates === 'function') {
+          syncUpdateFeedToMain();
+          monteurApp.checkForAppUpdates();
+        }
+      });
+    }
+
+    if (btnCheck) {
+      btnCheck.addEventListener('click', function () {
+        if (!window.monteurApp || typeof monteurApp.checkForAppUpdates !== 'function') {
+          if (checkHint) checkHint.textContent = 'Nur in der installierten Desktop-App verfügbar.';
+          clearCheckHintLater(6000);
+          return;
+        }
+        if (!getDispoBaseUrl()) {
+          if (checkHint) checkHint.textContent = 'Bitte Dispo-Adresse eintragen und Verbindung prüfen.';
+          clearCheckHintLater(6000);
+          return;
+        }
+        if (checkHint) checkHint.textContent = 'Prüfe …';
+        syncUpdateFeedToMain();
+        monteurApp.checkForAppUpdates().then(function (res) {
+          if (res && res.skipped) {
+            if (checkHint) checkHint.textContent = 'Entwicklungsmodus — kein Auto-Update.';
+            clearCheckHintLater(6000);
+            return;
+          }
+          if (res && res.ok === false) {
+            if (checkHint) {
+              checkHint.textContent = res.error || 'Prüfung fehlgeschlagen.';
+              clearCheckHintLater(8000);
+            }
+          }
+        }).catch(function (e) {
+          if (checkHint) {
+            checkHint.textContent = e && e.message ? e.message : 'Prüfung fehlgeschlagen.';
+            clearCheckHintLater(8000);
+          }
+        });
+      });
+    }
+
+    var tlsElUpdate = document.getElementById('allowInsecureDispoTls');
+    if (tlsElUpdate) {
+      tlsElUpdate.addEventListener('change', syncUpdateFeedToMain);
+    }
+
+    if (window.monteurApp && typeof monteurApp.onAppUpdateStatus === 'function') {
+      monteurApp.onAppUpdateStatus(applyUpdateStatus);
+    }
+    syncUpdateFeedToMain();
+  })();
+
   fetch(API_BASE + '/api/version').then(function (r) { return r.json(); }).then(function (d) {
     var el = document.getElementById('appVersion');
     if (el && d && d.version) el.textContent = d.version;
@@ -5022,6 +5167,7 @@
 
   document.getElementById('btnSaveSettings').addEventListener('click', function () {
     saveSettingsToStorage();
+    syncUpdateFeedToMain();
     var pathEl = document.getElementById('dienstreiseBasePath');
     var basePath = (pathEl && pathEl.value ? pathEl.value.trim() : '') || '';
     var tlsEl = document.getElementById('allowInsecureDispoTls');

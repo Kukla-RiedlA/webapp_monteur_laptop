@@ -20,4 +20,18 @@ contextBridge.exposeInMainWorld('monteurApp', {
     }
     return ipcRenderer.invoke(channel, payload);
   },
+  setUpdateFeedBase: (dispoBaseUrl, allowInsecureTls) =>
+    ipcRenderer.invoke('laptop:set-update-feed', {
+      dispoBaseUrl: dispoBaseUrl,
+      allowInsecureTls: !!allowInsecureTls,
+    }),
+  checkForAppUpdates: () => ipcRenderer.invoke('laptop:update-check-now'),
+  startAppUpdateDownload: () => ipcRenderer.invoke('laptop:update-start-download'),
+  installAppUpdateNow: () => ipcRenderer.invoke('laptop:update-install-now'),
+  onAppUpdateStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('laptop:update-status', handler);
+    return () => ipcRenderer.removeListener('laptop:update-status', handler);
+  },
 });

@@ -1,0 +1,251 @@
+/**
+ * electron-updater: Feed vom Dispo-Server (generic), UX per Plan, TLS wie Dispo-Proxys.
+ */
+const { app, dialog } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const { autoUpdater } = require('electron-updater');
+
+let mainWindowGetter = () => null;
+let updateHintDialogShown = false;
+let pendingInstallOnQuit = false;
+let latestVersionLabel = '';
+let feedBaseUrl = '';
+let allowInsecureTls = false;
+
+function readJsonFileSafe(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const data = JSON.parse(raw);
+    return data && typeof data === 'object' ? data : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeUserAppConfig(patch) {
+  try {
+    const userConfigPath = path.join(app.getPath('userData'), 'app_config.json');
+    const cur = readJsonFileSafe(userConfigPath) || {};
+    Object.assign(cur, patch);
+    fs.writeFileSync(userConfigPath, JSON.stringify(cur, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('[laptop-updater] app_config write:', e && e.message ? e.message : e);
+  }
+}
+
+function readAppVersionLabel() {
+  try {
+    const file = path.join(__dirname, '..', 'version.json');
+    const raw = fs.readFileSync(file, 'utf8');
+    const data = JSON.parse(raw);
+    const v = data && typeof data.version === 'string' ? data.version.trim() : '';
+    return v || 'V 0.000';
+  } catch (e) {
+    return 'V 0.000';
+  }
+}
+
+function normalizeFeedBase(dispoBase) {
+  const base = (dispoBase || '').trim().replace(/\/+$/, '');
+  if (!base) return '';
+  return base + '/api/laptop_release_feed.php/';
+}
+
+function applyInsecureTlsToProcess(on) {
+  if (on) {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  } else if (process.env.KUKLA_DISP_TLS_INSECURE !== '1') {
+    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  }
+}
+
+function sendStatus(state, extra) {
+  const payload = Object.assign(
+    {
+      state,
+      installedVersion: readAppVersionLabel(),
+      latestVersion: latestVersionLabel,
+    },
+    extra || {},
+  );
+  const win = mainWindowGetter();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('laptop:update-status', payload);
+  }
+}
+
+function buildFeedUrl() {
+  if (feedBaseUrl) return feedBaseUrl;
+  const userCfg = readJsonFileSafe(path.join(app.getPath('userData'), 'app_config.json'));
+  const fromCfg =
+    userCfg && typeof userCfg.laptopUpdateFeedBase === 'string' ? userCfg.laptopUpdateFeedBase.trim() : '';
+  if (fromCfg) return fromCfg.endsWith('/') ? fromCfg : fromCfg + '/';
+  return '';
+}
+
+function applyFeedUrl(url) {
+  const u = (url || '').trim();
+  if (!u) return false;
+  feedBaseUrl = u.endsWith('/') ? u : u + '/';
+  applyInsecureTlsToProcess(allowInsecureTls);
+  autoUpdater.setFeedURL({
+    provider: 'generic',
+    url: feedBaseUrl,
+  });
+  return true;
+}
+
+async function showUpdateAvailableDialog() {
+  if (updateHintDialogShown) return;
+  updateHintDialogShown = true;
+  const installed = readAppVersionLabel();
+  const btn = await dialog.showMessageBox(mainWindowGetter() || undefined, {
+    type: 'info',
+    buttons: ['Jetzt aktualisieren', 'Später'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Update verfügbar',
+    message: 'Eine neuere Version der Monteur WebApp ist auf dem Server verfügbar.',
+    detail:
+      'Installiert: ' +
+      installed +
+      '\nNeu: ' +
+      (latestVersionLabel || 'unbekannt') +
+      '\n\nDas Update wird nur nach Ihrer Bestätigung heruntergeladen.',
+  });
+  if (btn && btn.response === 0) {
+    await startDownload();
+  }
+}
+
+async function showUpdateReadyDialog() {
+  const installed = readAppVersionLabel();
+  const btn = await dialog.showMessageBox(mainWindowGetter() || undefined, {
+    type: 'info',
+    buttons: ['Jetzt installieren', 'Beim Beenden installieren', 'Später'],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Update bereit',
+    message: 'Das Update wurde heruntergeladen und kann jetzt installiert werden.',
+    detail:
+      'Die App wird kurz geschlossen. Der Installationsassistent startet automatisch.\n\nInstalliert: ' +
+      installed +
+      '\nNeu: ' +
+      (latestVersionLabel || 'unbekannt'),
+  });
+  if (btn.response === 0) {
+    pendingInstallOnQuit = false;
+    autoUpdater.quitAndInstall(false, true);
+  } else if (btn.response === 1) {
+    pendingInstallOnQuit = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    sendStatus('ready', { installOnQuit: true });
+  }
+}
+
+async function startDownload() {
+  if (!buildFeedUrl()) {
+    sendStatus('error', { message: 'Keine Dispo-Basis-URL für Updates.' });
+    return;
+  }
+  sendStatus('downloading', { percent: 0 });
+  try {
+    await autoUpdater.downloadUpdate();
+  } catch (e) {
+    sendStatus('error', { message: e && e.message ? e.message : String(e) });
+    await dialog.showMessageBox(mainWindowGetter() || undefined, {
+      type: 'warning',
+      buttons: ['OK'],
+      title: 'Update fehlgeschlagen',
+      message: 'Das Update konnte nicht geladen werden.',
+      detail:
+        (e && e.message ? e.message : String(e)) +
+        '\n\nPrüfen Sie die Verbindung zur Dispo und ob ein Release aktiv ist.',
+    });
+  }
+}
+
+function initLaptopUpdater(opts) {
+  if (!app.isPackaged) return;
+
+  mainWindowGetter = opts.getMainWindow || (() => null);
+
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.logger = null;
+
+  autoUpdater.on('update-not-available', () => {
+    latestVersionLabel = '';
+    sendStatus('not-available');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    if (info && info.version) {
+      latestVersionLabel = String(info.version);
+    }
+    sendStatus('available');
+    showUpdateAvailableDialog();
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    const percent = progress && progress.percent != null ? Math.round(progress.percent) : 0;
+    sendStatus('downloading', { percent });
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    sendStatus('ready');
+    showUpdateReadyDialog();
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.warn('[laptop-updater]', err && err.message ? err.message : err);
+    sendStatus('error', { message: err && err.message ? err.message : String(err) });
+  });
+
+  const existingFeed = buildFeedUrl();
+  if (existingFeed) {
+    applyFeedUrl(existingFeed);
+  }
+}
+
+function setUpdateFeedFromDispoBase(dispoBase, insecureTls) {
+  if (!app.isPackaged) return { ok: false, skipped: true };
+  allowInsecureTls = !!insecureTls;
+  const feed = normalizeFeedBase(dispoBase);
+  if (!feed) return { ok: false, error: 'empty_base' };
+  writeUserAppConfig({
+    laptopUpdateFeedBase: feed,
+    laptopUpdateCheckUrl: '',
+  });
+  feedBaseUrl = feed;
+  applyInsecureTlsToProcess(allowInsecureTls);
+  applyFeedUrl(feed);
+  return { ok: true, feed };
+}
+
+async function checkForUpdatesNow() {
+  if (!app.isPackaged) return { ok: false, skipped: true };
+  if (!applyFeedUrl(buildFeedUrl())) {
+    return { ok: false, error: 'no_feed' };
+  }
+  updateHintDialogShown = false;
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { ok: true, result };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
+module.exports = {
+  initLaptopUpdater,
+  setUpdateFeedFromDispoBase,
+  checkForUpdatesNow,
+  startDownload,
+  installUpdateNow: () => {
+    autoUpdater.quitAndInstall(false, true);
+  },
+  readAppVersionLabel,
+};

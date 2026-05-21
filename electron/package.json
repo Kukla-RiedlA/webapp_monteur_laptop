@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "1.4.22",
+  "version": "1.4.23",
   "description": "Monteur WebApp – Offline-fähige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -19,6 +19,7 @@
     "pdfjs-dist": "^5.6.205"
   },
   "dependencies": {
+    "electron-updater": "^6.8.3",
     "docx": "^9.6.1",
     "docx2pdf-converter": "^2.1.1",
     "docxtemplater": "^3.50.0",
@@ -41,6 +42,7 @@
       "preload.js",
       "server.js",
       "lib/**",
+      "lib/laptop-updater.js",
       "montagebericht_docx.js",
       "version.json",
       "db/**",
@@ -50,13 +52,19 @@
     "asarUnpack": [
       "**/node_modules/docx2pdf-converter/**"
     ],
+    "publish": {
+      "provider": "generic",
+      "url": "https://update.local.invalid/api/laptop_release_feed.php/"
+    },
+    "artifactName": "Monteur-WebApp-Setup-${version}.${ext}",
     "win": {
-      "target": "nsis",
+      "target": ["nsis"],
       "icon": "public/icon.ico"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": true
     }
   }
 }

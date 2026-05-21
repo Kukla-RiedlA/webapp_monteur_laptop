@@ -9,84 +9,25 @@ const {
   searchLocal: anlagenstammSearchLocal,
   rowCount: anlagenstammLocalRowCount,
 } = require('./lib/anlagenstamm-local');
+const {
+  initLaptopUpdater,
+  setUpdateFeedFromDispoBase,
+  checkForUpdatesNow,
+  startDownload,
+  installUpdateNow,
+} = require('./lib/laptop-updater');
 
 let mainWindow;
-let updateCheckStarted = false;
+let updateCheckScheduled = false;
 
-function readJsonFileSafe(filePath) {
-  try {
-    if (!filePath || !fs.existsSync(filePath)) return null;
-    const raw = fs.readFileSync(filePath, 'utf8');
-    const data = JSON.parse(raw);
-    return data && typeof data === 'object' ? data : null;
-  } catch (e) {
-    return null;
-  }
-}
-
-function resolveUpdateCheckUrl() {
-  const envUrl = (process.env.KUKLA_LAPTOP_UPDATE_CHECK_URL || '').trim();
-  if (envUrl) return envUrl;
-
-  // Nutzer-spezifische Konfiguration (auch in installierter App beschreibbar)
-  const userConfigPath = path.join(app.getPath('userData'), 'app_config.json');
-  const userCfg = readJsonFileSafe(userConfigPath);
-  const userUrl = userCfg && typeof userCfg.laptopUpdateCheckUrl === 'string'
-    ? userCfg.laptopUpdateCheckUrl.trim()
-    : '';
-  if (userUrl) return userUrl;
-
-  // Fallback für lokale Entwicklung im Repo
-  const localConfigPath = path.join(__dirname, 'db', 'app_config.json');
-  const localCfg = readJsonFileSafe(localConfigPath);
-  const localUrl = localCfg && typeof localCfg.laptopUpdateCheckUrl === 'string'
-    ? localCfg.laptopUpdateCheckUrl.trim()
-    : '';
-  if (localUrl) return localUrl;
-
-  return '';
-}
-
-function readAppVersionLabel() {
-  try {
-    const file = path.join(__dirname, 'version.json');
-    const raw = fs.readFileSync(file, 'utf8');
-    const data = JSON.parse(raw);
-    const v = data && typeof data.version === 'string' ? data.version.trim() : '';
-    return v || 'V 0.000';
-  } catch (e) {
-    return 'V 0.000';
-  }
-}
-
-async function checkForServerInstallerUpdate() {
-  if (updateCheckStarted) return;
-  updateCheckStarted = true;
-  const checkUrlRaw = resolveUpdateCheckUrl();
-  if (!checkUrlRaw || typeof fetch !== 'function') return;
-  const appVersion = readAppVersionLabel();
-  const sep = checkUrlRaw.includes('?') ? '&' : '?';
-  const checkUrl = checkUrlRaw + sep + 'current_version=' + encodeURIComponent(appVersion);
-  try {
-    const r = await fetch(checkUrl, { method: 'GET' });
-    if (!r.ok) return;
-    const data = await r.json();
-    if (!data || data.ok !== true || data.update_available !== true || !data.download_url) return;
-    const btn = await dialog.showMessageBox(mainWindow || undefined, {
-      type: 'info',
-      buttons: ['Jetzt herunterladen', 'Später'],
-      defaultId: 0,
-      cancelId: 1,
-      title: 'Update verfügbar',
-      message: 'Eine neuere Installer-Version ist verfügbar.',
-      detail: 'Installiert: ' + appVersion + '\nNeu: ' + String(data.latest_version || 'unbekannt'),
+function scheduleUpdateCheck() {
+  if (updateCheckScheduled || !app.isPackaged) return;
+  updateCheckScheduled = true;
+  setTimeout(() => {
+    checkForUpdatesNow().catch((e) => {
+      console.warn('[laptop-updater] check:', e && e.message ? e.message : e);
     });
-    if (btn && btn.response === 0) {
-      await shell.openExternal(String(data.download_url));
-    }
-  } catch (e) {
-    // kein Abbruch der App bei fehlendem Update-Check
-  }
+  }, 6000);
 }
 
 function createWindow() {
@@ -330,7 +271,27 @@ ipcMain.handle('open-external', async (event, url) => {
   await shell.openExternal(url.trim());
 });
 
+ipcMain.handle('laptop:set-update-feed', async (event, payload) => {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const base = (p.dispoBaseUrl || p.baseUrl || '').trim();
+  const insecure = !!(p.allowInsecureTls || p.insecureTls);
+  return setUpdateFeedFromDispoBase(base, insecure);
+});
+
+ipcMain.handle('laptop:update-check-now', async () => checkForUpdatesNow());
+
+ipcMain.handle('laptop:update-start-download', async () => {
+  await startDownload();
+  return { ok: true };
+});
+
+ipcMain.handle('laptop:update-install-now', async () => {
+  installUpdateNow();
+  return { ok: true };
+});
+
 app.whenReady().then(() => {
+  initLaptopUpdater({ getMainWindow: () => mainWindow });
   getDb().then((db) => {
     const serverApp = createApp(db);
     const http = require('http');
@@ -339,7 +300,7 @@ app.whenReady().then(() => {
       console.log('Monteur WebApp lokal auf http://127.0.0.1:' + PORT);
       console.log('[monteur] Lokaler API-Server: Anlagenstamm POST /api/anlagenstamm_search – nach Update App neu starten, falls 404.');
       createWindow();
-      setTimeout(checkForServerInstallerUpdate, 6000);
+      scheduleUpdateCheck();
     });
   }).catch((err) => {
     console.error('DB-Start fehlgeschlagen:', err);
