@@ -54,14 +54,27 @@ Der integrierte Express-Server läuft auf **Port 39678** und bietet die gleichen
 
 Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Dispo-Server**.
 
-### Verbindungs-Badge und Sync
+### Verbindungs-Badge und Sync (Offline-First)
 
+- **Start:** Listen/Kalender/Abwesenheiten sofort aus SQLite (`bootstrapLocalData`); Badge zunächst „Lokale Daten — Sync im Hintergrund“.
 - **Lokal:** keine Dispo-URL konfiguriert (reines Offline-Arbeiten mit SQLite).
-- **Offline:** URLs gesetzt, Dispo nicht erreichbar.
-- **Online:** Probe erfolgreich; Push/Pull laufen im Hintergrund (Intervall) bzw. blockierend bei Klick auf Badge oder „Jetzt synchronisieren“.
-- **Offene Aufträge:** Filter zeigen zuerst den lokalen Stand (`jobs_open_local`), bei erreichbarer Dispo optional Live-Aktualisierung.
+- **Offline:** URLs gesetzt, Dispo nicht erreichbar (`check_connection` mit 10 s Timeout).
+- **Online / Syncing / Degraded:** `GET /api/sync_status` nach Hintergrund-Push/Pull; letzter fehlgeschlagener Pull oder ausstehende `pending_changes` → Badge „degraded“.
+- **Offene Aufträge / Kalender:** nur **`jobs_open_local`** bzw. **`calendar_cached`** (kein Live-`jobs_open` / Live-`calendar` im Standard-Render-Pfad).
+- **Queue-Priorität:** `dienstreise_pull` → `dienstreise_push` → `sync_push` → `sync_pull`; Intervall-`sync_pull` wird bei laufender Kopie mit `deferred` zurückgestellt.
+- **TED:** nach „Auftrag annehmen“ unter `{Projektordner}/TED/`; Metadaten in `job_ted_index`.
 
 ### Manuelle Abnahme (Kurzcheckliste)
+
+**Offline-First (neu):**
+
+1. DevTools **Slow 3G**: App-Neustart → Startansicht & Kalender **&lt; ~2 s** mit lokalen Daten (Badge „Lokale Daten“).
+2. **Flugmodus**: Listen/Kalender/Meine Aufträge weiter nutzbar aus SQLite.
+3. **Auftrag annehmen** bei langsamer Leitung: UI nicht blockiert; Hintergrund-Job; nach Abschluss Dateien unter Projektordner, **TED/** mit XLSX.
+4. Während `dienstreise_pull`: Intervall-`sync_pull` loggt „zurückgestellt“ (409/deferred), kein Fehler-Toast.
+5. `GET /api/sync_status` und `GET /api/offline_manifest?job_id=` liefern sinnvolle Werte nach Pull.
+
+**Regression (bestehend):**
 
 1. Badge „Online“ nach erfolgreicher Probe ohne langes Warten auf vollständigen Pull.
 2. Projektdaten speichern → Reload behält Werte (kein Zurückspringen durch Sync).
@@ -70,7 +83,7 @@ Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Di
 5. Manueller Sync (Badge) wartet auf Push/Pull.
 6. `in_arbeit`-Auftrag bleibt nach Pull unter „Meine Aufträge“.
 7. Offene Aufträge mit Filter offline aus SQLite sichtbar.
-8. Terminal: kein wiederholtes `[sync_pull] anlagenstamm_db_sync: Statement closed`. Die Monteur-API (my_jobs.php, my_absences.php, job.php, absence.php) ist im Dispo-Projekt unter `htdocs/api/` angelegt – bei Dispo unter `http://localhost/` also z. B. `http://localhost/api/my_jobs.php`.
+8. Terminal: kein wiederholtes `[sync_pull] anlagenstamm_db_sync: Statement closed`.
 
 ## Icon (Kukla Monteur Tool)
 

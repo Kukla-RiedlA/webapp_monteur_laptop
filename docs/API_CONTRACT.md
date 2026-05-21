@@ -57,7 +57,9 @@ Der **Renderer** (`electron/public/app.js`) spricht **`API_BASE`** (lokaler Expr
 
 | Route | Methode | Body (JSON, Keys wie im Code) | Antwort (Kern) |
 |-------|---------|-------------------------------|----------------|
-| `/api/check_connection` | POST | `baseUrl`, `technicianId`, `serverUsername`, `serverPassword` | `{ "ok": true }` oder `{ "ok": false, "error": "…" }` |
+| `/api/check_connection` | POST | `baseUrl`, `technicianId`, `serverUsername`, `serverPassword` | `{ "ok": true, "used_base_url"? }` oder `{ "ok": false, "error": "…" }` — Probe mit **Timeout 10 s** (wie `dispo_pick_base`). |
+| `/api/sync_status` | GET | — (optional Session/`technician_id`) | `{ "ok": true, "last_sync_pull", "active_jobs", "pending_changes", "calendar_cache_synced_at", "anlagenstamm_local_count", "high_priority_jobs" }` |
+| `/api/offline_manifest` | GET | Query `job_id` (lokal oder Server-ID) | `{ "ok": true, "local_job_id", "reise_dir", "dienstreise_pull", "ted_index", "projekte_neu_enabled", "project_file_count" }` |
 | `/api/dispo_pick_base` | POST | `externalUrl`, `internalUrl` (optional leer), `technicianId`, `serverUsername`, `serverPassword` | `{ "ok": true, "selected_base_url": "https://…", "preferred_source": "internal"\|"external"\|"single", "tried": [ { "url", "ok", "error"? } ] }` oder `{ "ok": false, "error": "…", "tried": … }` |
 
 Hinweis: Das sind **lokale** Laptop-Gateway-Payloads (historisch camelCase). Neue **Dispo-öffentliche** APIs bleiben bei `snake_case` gemäß Abschnitt 2.
@@ -74,7 +76,9 @@ Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über d
 
 **`POST /api/dienstreise/sync_to_dispo`:** **`202`** + `job_id`; Typ **`dienstreise_push`** (`syncDienstreiseFoldersToDispo` + optional Protokoll-Vorlagen).
 
-**`POST /api/sync_pull`** / **`POST /api/sync_push`:** jeweils **`202`** + `job_id` (globale Queue, max. ein Job gleichzeitig). Pull umfasst weiterhin Kalender-Cache, Fab-Anlagenstamm (bis 200) und Protokoll-Vorlagen im selben Job.
+**`POST /api/sync_pull`** / **`POST /api/sync_push`:** jeweils **`202`** + `job_id` (globale Queue, max. ein Job gleichzeitig). Pull umfasst Kalender-Cache, Fab-Anlagenstamm (bis 200 FN, **Priorität angenommene/in_arbeit-Jobs**), **TED-Metadaten** (`job_ted_index` via `mechanik_ted_excel_list`) und Protokoll-Vorlagen. **`sync_pull`** antwortet mit **HTTP 409** und `{ "ok": false, "deferred": true, "error": "…" }`, wenn **`dienstreise_pull`** / **`dienstreise_push`** / **`sync_push`** noch in der Queue sind (Client wertet `deferred` nicht als harten Fehler).
+
+**TED im Projektordner:** `dienstreise_pull` lädt nach Projektdateien (auch bei **0 Projektdateien**) XLSX nach `{DienstreiseOrdner}/TED/` (`checkpoint_json.ted_completed`). `POST /api/mechanik_ted_excel_open` speichert bei bekannter `local_job_id` zuerst dorthin (sonst Fallback `anlagenstamm_open/`).
 
 **Hintergrund-Jobs (Express, nur Laptop):**
 

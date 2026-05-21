@@ -11,6 +11,18 @@ const ALLOWED_TYPES = new Set([
   'anlagenstamm_db_sync',
 ]);
 
+/** Niedrigere Zahl = früher in der Queue (vor sync_pull). */
+const JOB_TYPE_PRIORITY = {
+  dienstreise_pull: 10,
+  dienstreise_push: 20,
+  sync_push: 30,
+  sync_pull: 40,
+  abrechnung_refresh: 50,
+  anlagenstamm_db_sync: 60,
+};
+
+const HIGH_PRIORITY_TYPES = new Set(['dienstreise_pull', 'dienstreise_push', 'sync_push']);
+
 function ensureBackgroundJobsSchema(sqlDb) {
   try {
     sqlDb.run(`CREATE TABLE IF NOT EXISTS background_jobs (
@@ -108,9 +120,35 @@ function createBackgroundJobService(db, save, hooks) {
     }
   }
 
+  function countQueuedHighPriority() {
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM background_jobs
+         WHERE status IN ('queued', 'running') AND type IN ('dienstreise_pull', 'dienstreise_push', 'sync_push')`,
+      )
+      .get();
+    return row && row.n != null ? Number(row.n) : 0;
+  }
+
   async function pump() {
     if (runnerBusy) return;
-    const raw = db.prepare(`SELECT * FROM background_jobs WHERE status = 'queued' ORDER BY datetime(created_at) ASC LIMIT 1`).get();
+    const raw = db
+      .prepare(
+        `SELECT * FROM background_jobs WHERE status = 'queued'
+         ORDER BY
+           CASE type
+             WHEN 'dienstreise_pull' THEN 10
+             WHEN 'dienstreise_push' THEN 20
+             WHEN 'sync_push' THEN 30
+             WHEN 'sync_pull' THEN 40
+             WHEN 'abrechnung_refresh' THEN 50
+             WHEN 'anlagenstamm_db_sync' THEN 60
+             ELSE 99
+           END ASC,
+           datetime(created_at) ASC
+         LIMIT 1`,
+      )
+      .get();
     if (!raw) return;
     runnerBusy = true;
     const job = parseRow(raw);
@@ -162,6 +200,7 @@ function createBackgroundJobService(db, save, hooks) {
       const hasResume =
         !!chk.refresh_done_at ||
         (Array.isArray(chk.completed) && chk.completed.length > 0) ||
+        (Array.isArray(chk.ted_completed) && chk.ted_completed.length > 0) ||
         (chk.manifest && typeof chk.manifest === 'object' && Object.keys(chk.manifest).length > 0);
       if (aborted) {
         bump(job.id, { status: 'cancelled', error: 'Abgebrochen.', message: null });
@@ -311,6 +350,7 @@ function createBackgroundJobService(db, save, hooks) {
     getJob,
     markStaleRunningAsInterrupted,
     kick,
+    countQueuedHighPriority,
     ALLOWED_TYPES,
   };
 }
@@ -319,4 +359,6 @@ module.exports = {
   ensureBackgroundJobsSchema,
   createBackgroundJobService,
   ALLOWED_TYPES,
+  JOB_TYPE_PRIORITY,
+  HIGH_PRIORITY_TYPES,
 };

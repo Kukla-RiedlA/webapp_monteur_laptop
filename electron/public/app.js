@@ -3678,36 +3678,14 @@
         renderOpenJobsWithFilters();
       }
     } catch (e) {
-      /* lokale Liste optional – Live-Refresh versuchen */
-    }
-    var baseUrl = getDispoBaseUrl().trim();
-    if (!baseUrl && (getDispoExternalUrl() || getDispoInternalUrl())) {
-      return;
-    }
-    if (!baseUrl) {
-      return;
-    }
-    try {
-      const liveQs = Object.assign({ base_url: baseUrl }, jobOpenQs);
-      const r = await fetch(API_BASE + '/api/jobs_open?' + qs(liveQs), {
-        headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getServerUsername, getServerPassword)),
-      });
-      const data = await r.json().catch(function () { return {}; });
-      if (!r.ok) {
-        if (!cachedOpenJobs.length && list) {
-          var errLine = (data && data.error) ? data.error : 'Fehler beim Laden.';
-          if (data && data.hint) errLine += ' — ' + data.hint;
-          if (data && data.detail && !data.hint) errLine += ' (' + String(data.detail).slice(0, 200) + ')';
-          list.innerHTML = '<span class="empty">' + escapeHtml(errLine) + '</span>';
-        }
-        return;
-      }
-      cachedOpenJobs = Array.isArray(data) ? data : [];
-      renderOpenJobsWithFilters();
-    } catch (e) {
       if (!cachedOpenJobs.length && list) {
-        list.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
+        list.innerHTML = '<span class="empty">Lokale Aufträge nicht lesbar: ' + escapeHtml(e.message) + '</span>';
       }
+      return;
+    }
+    if (!cachedOpenJobs.length && list) {
+      list.innerHTML =
+        '<span class="empty">Keine lokalen offenen Aufträge. Filter setzen oder einmal mit Dispo synchronisieren (Badge).</span>';
     }
   }
 
@@ -3800,7 +3778,25 @@
   var localListsRefreshAt = 0;
   var LOCAL_LISTS_REFRESH_MS = 12000;
   var startViewDataLoadedAt = 0;
-  var START_VIEW_DATA_MS = 8000;
+  var START_VIEW_DATA_MS = 0;
+
+  /** Sofort lokale Listen/Kalender/Abwesenheiten — ohne Dispo-Probe. */
+  function bootstrapLocalData(force) {
+    var techId = getTechId();
+    if (!techId) {
+      setConnectionBadge('offline');
+      return Promise.resolve();
+    }
+    setConnectionBadge('local', 'Lokale Daten — Sync im Hintergrund');
+    localListsRefreshAt = Date.now();
+    return Promise.all([
+      loadJobsAndAbsences(),
+      loadOpenJobs(),
+      loadCalendarMonth().catch(function () {}),
+    ]).then(function () {
+      if (force) localListsRefreshAt = 0;
+    });
+  }
 
   function maybeRefreshLocalLists(force) {
     var now = Date.now();
@@ -3812,10 +3808,33 @@
 
   var backgroundDispoSyncInFlight = null;
 
-  function applySyncBadgeAfterRun(syncProblems) {
+  async function applySyncBadgeAfterRun(syncProblems) {
     if (syncProblems && syncProblems.length) {
       setConnectionBadge('degraded', syncProblems.join(' · ') + ' — Klicken zum erneuten Synchronisieren');
-    } else {
+      return;
+    }
+    try {
+      var stRes = await fetch(API_BASE + '/api/sync_status');
+      var st = await stRes.json().catch(function () { return {}; });
+      if (!st.ok) {
+        setConnectionBadge('online');
+        return;
+      }
+      if (st.last_sync_pull && st.last_sync_pull.status === 'failed') {
+        var errMsg = st.last_sync_pull.error || 'Letzter Sync fehlgeschlagen';
+        setConnectionBadge('degraded', errMsg + ' — Klicken zum erneuten Synchronisieren');
+        return;
+      }
+      if (st.high_priority_jobs > 0) {
+        setConnectionBadge('online_syncing', 'Kopie/Sync läuft — Daten lokal verfügbar');
+        return;
+      }
+      if (st.pending_changes > 0) {
+        setConnectionBadge('online', 'Online — ' + st.pending_changes + ' Änderung(en) ausstehend');
+        return;
+      }
+      setConnectionBadge('online');
+    } catch (_) {
       setConnectionBadge('online');
     }
   }
@@ -3855,8 +3874,13 @@
         body: JSON.stringify(Object.assign({}, auth, { date_from: range.date_from, date_to: range.date_to })),
       });
       var pullData = await pullRes.json().catch(function () { return {}; });
-      if (!pullData.ok) throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
-      if (pullData.job_id) {
+      if (!pullData.ok) {
+        if (pullData.deferred) {
+          console.log('[Sync Pull] zurückgestellt:', pullData.error || 'Kopie/Push aktiv');
+        } else {
+          throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
+        }
+      } else if (pullData.job_id) {
         var pullJob = await pollBackgroundJobUntilTerminal(pullData.job_id, null, {});
         if (pullJob.status === 'completed') {
           maybeRefreshLocalLists(true);
@@ -3936,18 +3960,17 @@
     const techId = getTechId();
     if (!techId) {
       setConnectionBadge('offline');
-      loadJobsAndAbsences();
-      return;
+      return bootstrapLocalData(true);
     }
     var ext = getDispoExternalUrl();
     var intUrl = getDispoInternalUrl();
     if (!ext && !intUrl) {
-      setConnectionBadge('local');
-      loadJobsAndAbsences();
-      loadOpenJobs();
-      return;
+      return bootstrapLocalData(true);
     }
-    setConnectionBadge('checking');
+    if (!blockingSync) {
+      bootstrapLocalData(false);
+    }
+    setConnectionBadge('checking', 'Prüfe Verbindung…');
     try {
       const resCheck = await fetch(API_BASE + '/api/check_connection', {
         method: 'POST',
@@ -4012,10 +4035,8 @@
       setConnectionBadge('offline', e && e.message ? e.message : 'Verbindung fehlgeschlagen');
     }
     setNextSyncTime();
-    var viewPd = document.getElementById('viewProjektdaten');
-    var onProjektdaten = viewPd && viewPd.classList.contains('active');
-    if (!onProjektdaten) {
-      maybeRefreshLocalLists(false);
+    if (blockingSync) {
+      return bootstrapLocalData(true);
     }
   }
 
@@ -4182,7 +4203,10 @@
     }).catch(function () {});
   }
   loadDienstreiseConfigFromServer();
-  loadDispoTlsSettingFromServer()
+  bootstrapLocalData(false)
+    .then(function () {
+      return loadDispoTlsSettingFromServer();
+    })
     .then(function () {
       return checkConnectionAndSync({ blockingSync: false });
     })
@@ -6326,53 +6350,26 @@
     renderCalendarGrid(gridStart, gridEnd, [], [], null);
 
     if (showAll) {
-      const base = getDispoBaseUrl().trim();
       const myTechId = getTechId();
-      if (!base) {
-        if (!myTechId) {
-          setCalendarError('Für „Alle Techniker“ Dispo-Adresse eintragen oder synchronisieren – oder Monteur-ID setzen und Häkchen aus für Offline-Kalender.');
-          return;
-        }
-        try {
-          var localOnly = await loadCalendarLocalMonth(start, end, myTechId, true);
-          jobs = localOnly.jobs;
-          absences = localOnly.absences;
-          showToast('Offline / keine Server-URL: nur Ihre gespeicherten Termine (lokal).');
-        } catch (e) {
-          renderCalendarGrid(gridStart, gridEnd, [], [], null);
-          setCalendarError('Fehler: ' + e.message);
-          return;
-        }
-        renderCalendarGrid(gridStart, gridEnd, jobs, absences, null);
+      if (!myTechId) {
+        setCalendarError('Monteur-ID eingeben (oder Häkchen „Alle Techniker“ aus für nur eigene Termine).');
         return;
       }
       try {
-        let data = null;
-        try {
-          data = await fetch(API_BASE + '/api/calendar', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              baseUrl: base,
-              start,
-              end,
-              serverUsername: getServerUsername(),
-              serverPassword: getServerPassword()
-            })
-          }).then(function (r) { return r.json(); });
-          if (!data || data.error) throw new Error((data && data.error) || 'Kalender-API fehlgeschlagen');
-        } catch (liveErr) {
-          data = await fetchCalendarCachedMonth(start, end, myTechId || 0);
-          var hasCached = data && data.ok === true && ((data.jobs || []).length > 0 || (data.absences || []).length > 0);
-          if (!hasCached) throw liveErr;
-          showToast('Dispo nicht erreichbar – Kalender aus lokalem Cache.');
+        var data = await fetchCalendarCachedMonth(start, end, myTechId);
+        if (!data || data.ok !== true) {
+          throw new Error((data && data.error) || 'Kalender-Cache nicht lesbar.');
         }
-        if (data.error) throw new Error(data.error);
+        var hasCached = (data.jobs || []).length > 0 || (data.absences || []).length > 0;
+        if (!hasCached) {
+          setCalendarError('Kalender noch nicht synchronisiert — Badge klicken (Sync mit Dispo).');
+          renderCalendarGrid(gridStart, gridEnd, [], [], null);
+          return;
+        }
         calendarApiData = data;
         jobs = data.jobs || [];
         var techList = (data.technicians && data.technicians.length) ? data.technicians : [];
         var techById = buildTechByIdFromCalendarTechnicians(techList);
-        // Abwesenheiten mit Technikerfarbe/Name anreichern (API liefert ggf. keine Farbe)
         absences = (data.absences || []).map(function (a) {
           var tid = a.technician_id != null ? a.technician_id : a.technicianId;
           var info = tid != null ? techById[tid] : null;
@@ -6384,75 +6381,71 @@
         });
         var localJobsByServerId = {};
         var localJobsById = {};
-        if (myTechId) {
-          try {
-            var params = { technician_id: myTechId, date_from: start, date_to: end, include_erledigt: 1 };
-            var local = await Promise.all([
-              fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(myTechId) } }).then(function (r) { return r.json(); }),
-              fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(myTechId) } }).then(function (r) { return r.json(); })
-            ]);
-            (local[0].jobs || []).forEach(function (j) {
-              if (j.server_id != null) { localJobsByServerId[j.server_id] = j; localJobsByServerId[String(j.server_id)] = j; }
-              if (j.id != null) { localJobsById[j.id] = j; localJobsById[String(j.id)] = j; }
-            });
-            jobs = jobs.map(function (j) {
-              var sid = j.server_id != null ? j.server_id : j.id;
-              var localJob = localJobsByServerId[j.server_id] || localJobsByServerId[j.id] || localJobsByServerId[String(j.server_id)] || localJobsByServerId[String(j.id)] || localJobsById[j.id] || localJobsById[String(j.id)];
-              var techDisplay = calendarJobTechFields(j, techById, myTechId);
-              if (localJob) {
-                return Object.assign({}, localJob, calendarBillingFlagsFrom(j), techDisplay);
-              }
-              return Object.assign({}, j, techDisplay);
-            });
-            var serverJobIds = {};
-            jobs.forEach(function (j) { serverJobIds[j.id] = true; if (j.server_id != null) serverJobIds[j.server_id] = true; });
-            (local[0].jobs || []).forEach(function (j) {
-              if (!serverJobIds[j.id] && !serverJobIds[j.server_id]) {
-                jobs.push(Object.assign({}, j, calendarJobTechFields(j, techById, myTechId)));
-              }
-            });
-            var seenJobKey = {};
-            jobs = jobs.filter(function (j) {
-              var key = j.server_id != null ? String(j.server_id) : (j.id != null ? String(j.id) : null);
-              if (key == null) return true;
-              if (seenJobKey[key]) return false;
-              seenJobKey[key] = true;
-              return true;
-            });
-            var serverAbsIds = {};
-            var serverAbsPeriodKeys = {};
-            absences.forEach(function (a) {
-              serverAbsIds[a.id] = true;
-              if (a.server_id != null && a.server_id !== '') serverAbsIds[a.server_id] = true;
-              serverAbsPeriodKeys[absenceCalendarDedupeKey(a)] = true;
-            });
-            (local[1].absences || []).forEach(function (a) {
-              var enriched = Object.assign({}, a, { technician_id: myTechId, technician_name: techById[myTechId] ? techById[myTechId].name : ('Techniker ' + myTechId), technician_color: techById[myTechId] ? techById[myTechId].color : '#6c757d' });
-              var periodKey = absenceCalendarDedupeKey(enriched, myTechId);
-              if (!serverAbsIds[a.id] && !serverAbsIds[a.server_id] && !serverAbsPeriodKeys[periodKey]) {
-                serverAbsPeriodKeys[periodKey] = true;
-                absences.push(enriched);
-              }
-            });
-          } catch (e) { /* lokale Termine optional */ }
-        }
+        var params = { technician_id: myTechId, date_from: start, date_to: end, include_erledigt: 1 };
+        var local = await Promise.all([
+          fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(myTechId) } }).then(function (r) { return r.json(); }),
+          fetch(API_BASE + '/api/my_absences?' + qs(params), { headers: { 'X-Technician-Id': String(myTechId) } }).then(function (r) { return r.json(); })
+        ]);
+        (local[0].jobs || []).forEach(function (j) {
+          if (j.server_id != null) { localJobsByServerId[j.server_id] = j; localJobsByServerId[String(j.server_id)] = j; }
+          if (j.id != null) { localJobsById[j.id] = j; localJobsById[String(j.id)] = j; }
+        });
+        jobs = jobs.map(function (j) {
+          var localJob =
+            localJobsByServerId[j.server_id] ||
+            localJobsByServerId[j.id] ||
+            localJobsByServerId[String(j.server_id)] ||
+            localJobsByServerId[String(j.id)] ||
+            localJobsById[j.id] ||
+            localJobsById[String(j.id)];
+          var techDisplay = calendarJobTechFields(j, techById, myTechId);
+          if (localJob) {
+            return Object.assign({}, localJob, calendarBillingFlagsFrom(j), techDisplay);
+          }
+          return Object.assign({}, j, techDisplay);
+        });
+        var serverJobIds = {};
+        jobs.forEach(function (j) {
+          serverJobIds[j.id] = true;
+          if (j.server_id != null) serverJobIds[j.server_id] = true;
+        });
+        (local[0].jobs || []).forEach(function (j) {
+          if (!serverJobIds[j.id] && !serverJobIds[j.server_id]) {
+            jobs.push(Object.assign({}, j, calendarJobTechFields(j, techById, myTechId)));
+          }
+        });
+        var seenJobKey = {};
+        jobs = jobs.filter(function (j) {
+          var key = j.server_id != null ? String(j.server_id) : (j.id != null ? String(j.id) : null);
+          if (key == null) return true;
+          if (seenJobKey[key]) return false;
+          seenJobKey[key] = true;
+          return true;
+        });
+        jobs = filterCalendarJobsForView(jobs, true);
+        var serverAbsIds = {};
+        var serverAbsPeriodKeys = {};
+        absences.forEach(function (a) {
+          serverAbsIds[a.id] = true;
+          if (a.server_id != null && a.server_id !== '') serverAbsIds[a.server_id] = true;
+          serverAbsPeriodKeys[absenceCalendarDedupeKey(a)] = true;
+        });
+        (local[1].absences || []).forEach(function (a) {
+          var enriched = Object.assign({}, a, {
+            technician_id: myTechId,
+            technician_name: techById[myTechId] ? techById[myTechId].name : 'Techniker ' + myTechId,
+            technician_color: techById[myTechId] ? techById[myTechId].color : '#6c757d'
+          });
+          var periodKey = absenceCalendarDedupeKey(enriched, myTechId);
+          if (!serverAbsIds[a.id] && !serverAbsIds[a.server_id] && !serverAbsPeriodKeys[periodKey]) {
+            serverAbsPeriodKeys[periodKey] = true;
+            absences.push(enriched);
+          }
+        });
       } catch (e) {
-        if (!myTechId) {
-          renderCalendarGrid(gridStart, gridEnd, [], [], null);
-          setCalendarError('Kalender laden fehlgeschlagen: ' + e.message);
-          return;
-        }
-        try {
-          var fb = await loadCalendarLocalMonth(start, end, myTechId, true);
-          jobs = fb.jobs;
-          absences = fb.absences;
-          calendarApiData = null;
-          showToast('Dispo nicht erreichbar – Anzeige: nur Ihre gespeicherten Termine (Offline).');
-        } catch (e2) {
-          renderCalendarGrid(gridStart, gridEnd, [], [], null);
-          setCalendarError('Kalender laden fehlgeschlagen: ' + e.message);
-          return;
-        }
+        renderCalendarGrid(gridStart, gridEnd, [], [], null);
+        setCalendarError('Kalender (Cache): ' + e.message);
+        return;
       }
     } else {
       const techId = getTechId();
