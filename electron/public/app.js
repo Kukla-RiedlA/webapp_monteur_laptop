@@ -707,6 +707,9 @@
     if (fc === 0 && j.dispo_files_error) {
       metaParts.push('Dateien von Dispo: ' + j.dispo_files_error);
     }
+    if (j.dispo_comments_error) {
+      metaParts.push('Kommentare von Dispo: ' + j.dispo_comments_error);
+    }
     if (meta) meta.textContent = metaParts.join(' ');
     var comments = j.comments || { dispo: [], buchhaltung: [] };
     renderAbrechnungCommentList(cd, comments.dispo);
@@ -4123,6 +4126,8 @@
       job_id: jobId,
       protectedPaths: Array.from(protectedSet),
       dispoBaseUrl: baseUrl,
+      dispoExternalUrl: getDispoExternalUrl(),
+      dispoInternalUrl: getDispoInternalUrl(),
       technicianId: techId,
       dispoUsername: u,
       dispoPassword: p

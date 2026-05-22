@@ -18,6 +18,24 @@ try {
     Write-Host "App-Icons (Kukla-Logo) ..."
     npm run generate-icons
     if ($LASTEXITCODE -ne 0) { throw "generate-icons fehlgeschlagen (exit $LASTEXITCODE)." }
+    $devDb = Join-Path $here "db\monteur.db"
+    if (Test-Path $devDb) {
+        throw @"
+Build abgebrochen: electron\db\monteur.db ist vorhanden (Entwickler-Daten).
+Diese Datei wuerde mit dem Installer an andere Monteure verteilt.
+Loeschen oder verschieben, dann erneut .\build.ps1 ausfuehren.
+"@
+    }
+    $devDr = Join-Path $here "db\dienstreise_config.json"
+    if (Test-Path $devDr) {
+        $cfg = Get-Content $devDr -Raw | ConvertFrom-Json
+        if ($cfg.basePath -and ($cfg.basePath.ToString().Trim().Length -gt 0)) {
+            throw @"
+Build abgebrochen: electron\db\dienstreise_config.json enthaelt basePath ($($cfg.basePath)).
+Fuer Installer nur leere Vorlage oder Datei entfernen.
+"@
+        }
+    }
     Write-Host "electron-builder (win) ..."
     npm run dist
     if ($LASTEXITCODE -ne 0) { throw "npm run dist fehlgeschlagen (exit $LASTEXITCODE)." }

@@ -7,6 +7,7 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 const WebSocket = require('ws');
 const FormData = require('form-data');
 const csvToPdfPath = path.join(__dirname, 'lib', 'csv-to-pdf.js');
@@ -23,28 +24,23 @@ const PORT = 39678;
 let DB_DIR = path.join(__dirname, 'db');
 let DB_PATH = path.join(DB_DIR, 'monteur.db');
 
-/** Electron: DB unter userData (beschreibbar); einmalig von electron/db migrieren. */
+/** Electron: DB unter userData (beschreibbar). Keine Dev-monteur.db aus dem Installer übernehmen. */
 function configurePersistentDbDir() {
   try {
     const { app } = require('electron');
     if (!app || typeof app.getPath !== 'function') return;
     const targetDir = path.join(app.getPath('userData'), 'db');
-    const legacyDir = path.join(__dirname, 'db');
-    const legacyDb = path.join(legacyDir, 'monteur.db');
     const targetDb = path.join(targetDir, 'monteur.db');
     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-    if (fs.existsSync(legacyDb) && !fs.existsSync(targetDb)) {
-      fs.copyFileSync(legacyDb, targetDb);
-      console.log('[monteur-db] Datenbank migriert nach', targetDb);
+    const bundledDb = path.join(__dirname, 'db', 'monteur.db');
+    if (fs.existsSync(bundledDb)) {
+      console.warn(
+        '[monteur-db] Bundle enthält monteur.db — wird ignoriert (Neuinstallation = leere DB unter userData).',
+      );
     }
-    for (const name of ['.dispo-tls-insecure', 'dienstreise_config.json', 'app_config.json']) {
-      const from = path.join(legacyDir, name);
-      const to = path.join(targetDir, name);
-      if (fs.existsSync(from) && !fs.existsSync(to)) {
-        try {
-          fs.copyFileSync(from, to);
-        } catch (_) {}
-      }
+    const dienstreiseCfg = path.join(targetDir, 'dienstreise_config.json');
+    if (!fs.existsSync(dienstreiseCfg)) {
+      fs.writeFileSync(dienstreiseCfg, JSON.stringify({ basePath: '' }, null, 2), 'utf8');
     }
     DB_DIR = targetDir;
     DB_PATH = targetDb;
@@ -57,7 +53,7 @@ const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCor
 const { ensureBackgroundJobsSchema, createBackgroundJobService } = require('./lib/background_jobs');
 const { createDbLock } = require('./lib/db-lock');
 const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
-const { buildDispoBaseCandidates } = require('./lib/dispo-base-fallback');
+const { buildDispoBaseCandidates, tryDispoBasesInOrder } = require('./lib/dispo-base-fallback');
 const {
   resolveProjekteNeuRoot,
   scanProjekteNeuTree,
@@ -1197,7 +1193,87 @@ function createApp(db) {
     return row.server_id != null ? row.server_id : row.id;
   }
 
-  async function syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword) {
+  function formatDispoSyncNetworkError(rawMsg, triedBases) {
+    let msg = rawMsg != null ? String(rawMsg) : 'Netzwerkfehler';
+    if (Array.isArray(triedBases) && triedBases.length) {
+      msg += ' Versucht: ' + triedBases.join(' | ');
+    }
+    return msg;
+  }
+
+  /**
+   * Remote-Dateiliste nur für relevante Unterordner (kein Rekursions-Walk durch ELEKTRO/Anlagen-Mount).
+   * Verhindert hunderte API-Aufrufe und „fetch failed“ beim Abschluss-Sync.
+   */
+  async function listRemoteProjectFilesOnDispo(base, serverJobId, technicianId, authHeader, folderName, localRelPaths) {
+    const seen = new Set();
+    const urlBase = base + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + serverJobId;
+    const dirsToList = new Set([folderName]);
+    const folderPrefix = folderName + '/';
+    for (const relPathFromRoot of localRelPaths || []) {
+      const rel = String(relPathFromRoot || '').replace(/\\/g, '/');
+      if (rel !== folderName && !rel.startsWith(folderPrefix)) continue;
+      const tail = rel === folderName ? '' : rel.slice(folderPrefix.length);
+      if (!tail) continue;
+      const parts = tail.split('/').filter(Boolean);
+      for (let i = 1; i < parts.length; i++) {
+        dirsToList.add(folderName + '/' + parts.slice(0, i).join('/'));
+      }
+    }
+    async function fetchList(pathPart) {
+      const url = urlBase + (pathPart ? '&path=' + encodeURIComponent(pathPart) : '');
+      const opts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
+      let r;
+      try {
+        r = await fetch(url, opts);
+      } catch (err) {
+        const cause = err && err.cause ? err.cause : err;
+        const code = cause && cause.code ? String(cause.code) : '';
+        throw new Error(
+          'Dispo-Dateiliste nicht erreichbar' +
+            (code ? ' (' + code + ')' : '') +
+            ': ' +
+            (err && err.message ? err.message : String(err)) +
+            ' — ' +
+            url,
+        );
+      }
+      if (!r.ok) throw new Error('Dispo-Dateiliste fehlgeschlagen (' + r.status + '): ' + url);
+      const data = await r.json();
+      return Array.isArray(data.entries) ? data.entries : [];
+    }
+    for (const dirPath of dirsToList) {
+      const entries = await fetchList(dirPath);
+      for (const e of entries) {
+        const name = e.name || '';
+        if (!name || name === '.' || name === '..') continue;
+        if (String(e.type || '').toLowerCase() !== 'file') continue;
+        const childPath = dirPath ? dirPath + '/' + name : name;
+        seen.add(childPath);
+      }
+    }
+    return seen;
+  }
+
+  async function syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword, urlOpts) {
+    const opts = urlOpts && typeof urlOpts === 'object' ? urlOpts : {};
+    const candidates = buildDispoBaseCandidates({
+      baseUrl: dispoBaseUrl,
+      externalUrl: opts.externalUrl || opts.dispoExternalUrl,
+      internalUrl: opts.internalUrl || opts.dispoInternalUrl,
+    });
+    if (!localJobId || !technicianId) throw new Error('job_id (lokal) und technicianId erforderlich.');
+    if (!candidates.length) throw new Error('Dispo-Server-URL fehlt (Einstellungen).');
+    const outcome = await tryDispoBasesInOrder(candidates, (base) =>
+      syncDienstreiseFoldersToDispoForBase(localJobId, base, technicianId, dispoUsername, dispoPassword),
+    );
+    if (outcome.error) {
+      throw new Error(formatDispoSyncNetworkError(outcome.error, outcome.tried));
+    }
+    return outcome.base;
+  }
+
+  async function syncDienstreiseFoldersToDispoForBase(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword) {
     const base = (dispoBaseUrl || '').trim().replace(/\/$/, '');
     if (!localJobId || !base || !technicianId) throw new Error('job_id (lokal), dispoBaseUrl und technicianId erforderlich.');
     const jobId = getServerJobId(localJobId);
@@ -1205,31 +1281,7 @@ function createApp(db) {
     if (!reiseDir || !fs.existsSync(reiseDir)) throw new Error('Dienstreise-Ordner existiert nicht.');
 
     const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
-
-    async function listRemoteFilesForFolder(folderName) {
-      const seen = new Set();
-      const urlBase = base + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId;
-      async function walk(pathPart) {
-        const url = urlBase + (pathPart ? '&path=' + encodeURIComponent(pathPart) : '');
-        const opts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
-        const r = await fetch(url, opts);
-        if (!r.ok) throw new Error('Dispo-Dateiliste fehlgeschlagen (' + r.status + '): ' + url);
-        const data = await r.json();
-        const entries = (data && data.entries) ? data.entries : [];
-        for (const e of entries) {
-          const name = e.name || '';
-          if (!name || name === '.' || name === '..') continue;
-          const childPath = pathPart ? pathPart + '/' + name : name;
-          if (e.type === 'dir') {
-            await walk(childPath);
-          } else if (e.type === 'file') {
-            seen.add(childPath);
-          }
-        }
-      }
-      await walk(folderName);
-      return seen;
-    }
+    const httpsUploadAgent = isDispoInsecureTlsAllowed() ? new https.Agent({ rejectUnauthorized: false }) : undefined;
 
     async function uploadFile(relPathFromRoot, fullPath) {
       const url = base + '/api/job_project_file_upload.php';
@@ -1261,6 +1313,9 @@ function createApp(db) {
           path: parsed.pathname + (parsed.search || ''),
           headers,
         };
+        if (httpsUploadAgent && parsed.protocol === 'https:') {
+          options.agent = httpsUploadAgent;
+        }
 
         form.submit(options, (err, res) => {
           if (err) return reject(err);
@@ -1316,8 +1371,9 @@ function createApp(db) {
       // Idempotent: erst entfernte Dateien auf dem Dispo sammeln,
       // dann nur hochladen, was dort noch nicht existiert.
       let remoteFiles;
+      const localRelPaths = files.map((f) => f.relPathFromRoot);
       try {
-        remoteFiles = await listRemoteFilesForFolder(folder);
+        remoteFiles = await listRemoteProjectFilesOnDispo(base, jobId, technicianId, authHeader, folder, localRelPaths);
       } catch (e) {
         // Wenn die Liste nicht gelesen werden kann, abbrechen – Upload ohne Kenntnis des Server-Zustands
         // würde zu Duplikaten führen.
@@ -2523,38 +2579,29 @@ function createApp(db) {
 
       // Vor Verify: sicherstellen, dass die Sync-Ordner noch einmal aktiv zum Dispo geschoben werden,
       // damit neue Dateien (z. B. kurz vor „Erledigt“ hochgeladen) berücksichtigt sind.
-      if (dispoBaseUrl && technicianId) {
+      let effectiveDispoBase = dispoBaseUrl;
+      if (technicianId) {
         try {
-          await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword);
+          effectiveDispoBase = await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword, {
+            externalUrl: body.dispoExternalUrl || body.externalUrl,
+            internalUrl: body.dispoInternalUrl || body.internalUrl,
+          });
         } catch (syncErr) {
           return res.status(502).json({ ok: false, error: 'Sync zum Dispo-Server vor Abschluss fehlgeschlagen: ' + (syncErr && syncErr.message ? syncErr.message : String(syncErr)) });
         }
       }
 
-      async function collectRemoteFilesForFolder(folderName) {
-        if (!dispoBaseUrl || !technicianId) return new Set();
+      async function collectRemoteFilesForFolder(folderName, localRelPaths) {
+        if (!effectiveDispoBase || !technicianId) return new Set();
         const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
-        const seen = new Set();
-        async function walk(pathPart) {
-          const url = dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + jobId + (pathPart ? '&path=' + encodeURIComponent(pathPart) : '');
-          const opts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
-          const r = await fetch(url, opts);
-          if (!r.ok) throw new Error('Dispo-Dateiliste fehlgeschlagen (' + r.status + '): ' + url);
-          const data = await r.json();
-          const entries = (data && data.entries) ? data.entries : [];
-          for (const e of entries) {
-            const name = e.name || '';
-            if (!name || name === '.' || name === '..') continue;
-            const childPath = pathPart ? pathPart + '/' + name : name;
-            if (e.type === 'dir') {
-              await walk(childPath);
-            } else if (e.type === 'file') {
-              seen.add(childPath);
-            }
-          }
-        }
-        await walk(folderName);
-        return seen;
+        return listRemoteProjectFilesOnDispo(
+          effectiveDispoBase,
+          jobId,
+          technicianId,
+          authHeader,
+          folderName,
+          localRelPaths,
+        );
       }
 
       function collectLocalFilesForFolder(rootDir, folderName) {
@@ -2581,7 +2628,7 @@ function createApp(db) {
       for (const folder of DIENSTREISE_SYNC_FOLDERS) {
         const localFiles = collectLocalFilesForFolder(reiseDir, folder);
         if (!localFiles.length) continue;
-        const remoteFiles = await collectRemoteFilesForFolder(folder);
+        const remoteFiles = await collectRemoteFilesForFolder(folder, localFiles);
         const missing = localFiles.filter((p) => !remoteFiles.has(p));
         if (missing.length > 0) {
           return res.status(409).json({ ok: false, error: 'Dispo und WebApp sind nicht synchron (fehlende Dateien: ' + missing.slice(0, 5).join(', ') + (missing.length > 5 ? ', …' : '') + ').' });
@@ -2988,13 +3035,17 @@ SELECT
 FROM jobs j
 JOIN customers c ON c.id = j.customer_id
 LEFT JOIN job_addresses ja ON ja.job_id = j.id
-WHERE ${whereSql}
+WHERE (${whereSql})
+  AND (
+    EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+    OR NOT EXISTS (SELECT 1 FROM job_technicians jt0 WHERE jt0.job_id = j.id)
+  )
 ORDER BY
   (CASE WHEN ((j.start_datetime IS NULL AND j.end_datetime IS NULL) OR (date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01')) THEN 1 ELSE 0 END) ASC,
   COALESCE(j.start_datetime, j.end_datetime) ASC,
   j.id ASC`;
     try {
-      const rows = db.prepare(sql).all();
+      const rows = db.prepare(sql).all(technicianId);
       res.json(Array.isArray(rows) ? rows : []);
     } catch (e) {
       res.status(500).json({ error: e.message || String(e) });

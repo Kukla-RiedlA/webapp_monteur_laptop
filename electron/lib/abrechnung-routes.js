@@ -592,12 +592,13 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
     }
     try {
       if (row.op === 'note') {
+        const outboxJobId = resolveDispoJobIdForAbrechnung(db, payload.job_id);
         await dispoAbrechnungPostJson(
           baseUrl,
           'abrechnung_note_save.php',
           {
             technician_id: technicianId,
-            job_id: payload.job_id,
+            job_id: outboxJobId,
             bucket: payload.bucket,
             body: payload.body || '',
           },
@@ -605,7 +606,7 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
           technicianId,
         );
         try {
-          await syncCommentsOnlyFromDispo(ctx, baseUrl, technicianId, authHeader, payload.job_id);
+          await syncCommentsOnlyFromDispo(ctx, baseUrl, technicianId, authHeader, outboxJobId);
         } catch (_) {
           /* Kommentarliste folgt beim nächsten Refresh */
         }
@@ -682,7 +683,7 @@ async function runAbrechnungRefreshCore(ctx, body) {
     `).run(tid, period_ym, JSON.stringify(jobsPayload));
     save();
   }
-  const jid = parseInt(job_server_id, 10);
+  const jid = resolveDispoJobIdForAbrechnung(db, parseInt(job_server_id, 10));
   if (jid > 0) {
     try {
       await syncJobFromDispo(ctx, base, tid, authHeader, jid);
@@ -752,6 +753,22 @@ function registerAbrechnungRoutes(app, ctx) {
         return res.status(400).json({ ok: false, error: 'technician_id und job_server_id erforderlich.' });
       }
       const dispoJobId = resolveDispoJobIdForAbrechnung(db, jobServerIdRaw);
+      const baseUrlRaw = (req.query.base_url || req.query.baseUrl || '').toString().trim();
+      let auth =
+        typeof authHeaderFromIncomingBasicOrQuery === 'function' ? authHeaderFromIncomingBasicOrQuery(req) : undefined;
+      if (!auth && typeof authHeaderFromCredentials === 'function') {
+        const q = req.query || {};
+        auth = authHeaderFromCredentials(q.serverUsername || q.server_username, q.serverPassword ?? q.server_password);
+      }
+      let dispoCommentsError = null;
+      if (baseUrlRaw && auth && technicianId && dispoJobId) {
+        try {
+          await syncCommentsOnlyFromDispo(ctx, baseUrlRaw, technicianId, auth, dispoJobId);
+        } catch (e) {
+          dispoCommentsError = e && e.message ? String(e.message) : String(e);
+          console.warn('[abrechnung/bundle] Kommentare von Dispo:', dispoCommentsError);
+        }
+      }
       let row = db
         .prepare('SELECT dispo, buchhaltung, comments_json, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?')
         .get(dispoJobId);
@@ -775,13 +792,6 @@ function registerAbrechnungRoutes(app, ctx) {
           )
           .all(dispoJobId, jobServerIdRaw),
       );
-      const baseUrlRaw = (req.query.base_url || req.query.baseUrl || '').toString().trim();
-      let auth =
-        typeof authHeaderFromIncomingBasicOrQuery === 'function' ? authHeaderFromIncomingBasicOrQuery(req) : undefined;
-      if (!auth && typeof authHeaderFromCredentials === 'function') {
-        const q = req.query || {};
-        auth = authHeaderFromCredentials(q.serverUsername || q.server_username, q.serverPassword ?? q.server_password);
-      }
       let dispoFilesError = null;
       if (baseUrlRaw && technicianId && dispoJobId) {
         if (!auth) {
@@ -834,6 +844,7 @@ function registerAbrechnungRoutes(app, ctx) {
         job_id_for_dispo: dispoJobId,
         job_id_from_client: jobServerIdRaw,
         dispo_files_error: dispoFilesError,
+        dispo_comments_error: dispoCommentsError,
       });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
@@ -954,9 +965,10 @@ function registerAbrechnungRoutes(app, ctx) {
   app.post('/api/abrechnung/note', express.json(), async (req, res) => {
     const { baseUrl, technicianId, serverUsername, serverPassword, job_server_id, bucket, body } = req.body || {};
     const tid = parseInt(technicianId, 10);
-    const jid = parseInt(job_server_id, 10);
+    const jidRaw = parseInt(job_server_id, 10);
+    const dispoJid = resolveDispoJobIdForAbrechnung(db, jidRaw);
     const b = (bucket || '').trim();
-    if (!tid || !jid || !['dispo', 'buchhaltung'].includes(b)) {
+    if (!tid || !dispoJid || !['dispo', 'buchhaltung'].includes(b)) {
       return res.status(400).json({ ok: false, error: 'Ungültige Parameter.' });
     }
     const text = body != null ? String(body) : '';
@@ -967,28 +979,28 @@ function registerAbrechnungRoutes(app, ctx) {
         await dispoAbrechnungPostJson(
           baseUrl,
           'abrechnung_note_save.php',
-          { technician_id: tid, job_id: jid, bucket: b, body: text },
+          { technician_id: tid, job_id: dispoJid, bucket: b, body: text },
           authHeader,
           tid,
         );
-        await syncCommentsOnlyFromDispo(ctx, baseUrl, tid, authHeader, jid);
+        await syncCommentsOnlyFromDispo(ctx, baseUrl, tid, authHeader, dispoJid);
         return res.json({ ok: true, synced: true });
       } catch (e) {
-        appendOptimisticComment(db, jid, b, text);
+        appendOptimisticComment(db, dispoJid, b, text);
         save();
         db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
           'note',
-          JSON.stringify({ job_id: jid, bucket: b, body: text })
+          JSON.stringify({ job_id: dispoJid, bucket: b, body: text })
         );
         save();
         return res.json({ ok: true, synced: false, queued: true, error: e.message });
       }
     }
-    appendOptimisticComment(db, jid, b, text);
+    appendOptimisticComment(db, dispoJid, b, text);
     save();
     db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
       'note',
-      JSON.stringify({ job_id: jid, bucket: b, body: text })
+      JSON.stringify({ job_id: dispoJid, bucket: b, body: text })
     );
     save();
     return res.json({ ok: true, synced: false, queued: true });
