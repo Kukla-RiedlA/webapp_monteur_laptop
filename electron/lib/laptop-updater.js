@@ -8,10 +8,17 @@ const { autoUpdater } = require('electron-updater');
 
 let mainWindowGetter = () => null;
 let updateHintDialogShown = false;
+let sessionUpdatePromptShown = false;
+let lastCheckWasManual = false;
 let pendingInstallOnQuit = false;
 let latestVersionLabel = '';
 let feedBaseUrl = '';
 let allowInsecureTls = false;
+let feedCheckDebounce = null;
+let periodicCheckTimer = null;
+
+const AUTO_CHECK_AFTER_FEED_MS = 2000;
+const PERIODIC_UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
 
 function readJsonFileSafe(filePath) {
   try {
@@ -117,9 +124,15 @@ function applyFeedUrl(url) {
   return true;
 }
 
+function shouldShowUpdateAvailableDialog() {
+  if (updateHintDialogShown) return false;
+  return lastCheckWasManual || !sessionUpdatePromptShown;
+}
+
 async function showUpdateAvailableDialog() {
-  if (updateHintDialogShown) return;
+  if (!shouldShowUpdateAvailableDialog()) return;
   updateHintDialogShown = true;
+  sessionUpdatePromptShown = true;
   const installed = readAppVersionLabel();
   const btn = await dialog.showMessageBox(mainWindowGetter() || undefined, {
     type: 'info',
@@ -208,7 +221,9 @@ function initLaptopUpdater(opts) {
       latestVersionLabel = String(info.version);
     }
     sendStatus('available');
-    showUpdateAvailableDialog();
+    showUpdateAvailableDialog().catch((e) => {
+      console.warn('[laptop-updater] dialog:', e && e.message ? e.message : e);
+    });
   });
 
   autoUpdater.on('download-progress', (progress) => {
@@ -228,7 +243,30 @@ function initLaptopUpdater(opts) {
   const existingFeed = buildFeedUrl();
   if (existingFeed) {
     applyFeedUrl(existingFeed);
+    scheduleCheckAfterFeedSet();
   }
+  schedulePeriodicUpdateChecks();
+}
+
+function schedulePeriodicUpdateChecks() {
+  if (!app.isPackaged) return;
+  if (periodicCheckTimer) return;
+  periodicCheckTimer = setInterval(() => {
+    checkForUpdatesNow({ source: 'periodic' }).catch((e) => {
+      console.warn('[laptop-updater] periodic:', e && e.message ? e.message : e);
+    });
+  }, PERIODIC_UPDATE_CHECK_MS);
+}
+
+function scheduleCheckAfterFeedSet() {
+  if (!app.isPackaged) return;
+  if (feedCheckDebounce) clearTimeout(feedCheckDebounce);
+  feedCheckDebounce = setTimeout(() => {
+    feedCheckDebounce = null;
+    checkForUpdatesNow({ source: 'feed' }).catch((e) => {
+      console.warn('[laptop-updater] after feed:', e && e.message ? e.message : e);
+    });
+  }, AUTO_CHECK_AFTER_FEED_MS);
 }
 
 function setUpdateFeedFromDispoBase(dispoBase, insecureTls) {
@@ -243,19 +281,27 @@ function setUpdateFeedFromDispoBase(dispoBase, insecureTls) {
   feedBaseUrl = feed;
   applyInsecureTlsToProcess(allowInsecureTls);
   applyFeedUrl(feed);
+  scheduleCheckAfterFeedSet();
+  schedulePeriodicUpdateChecks();
   return { ok: true, feed };
 }
 
-async function checkForUpdatesNow() {
+async function checkForUpdatesNow(opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
   if (!app.isPackaged) return { ok: false, skipped: true };
   if (!applyFeedUrl(buildFeedUrl())) {
     return { ok: false, error: 'no_feed' };
   }
-  updateHintDialogShown = false;
+  lastCheckWasManual = !!opts.manual;
+  if (opts.manual) {
+    updateHintDialogShown = false;
+  }
+  sendStatus('checking');
   try {
     const result = await autoUpdater.checkForUpdates();
     return { ok: true, result };
   } catch (e) {
+    sendStatus('error', { message: e && e.message ? e.message : String(e) });
     return { ok: false, error: e && e.message ? e.message : String(e) };
   }
 }

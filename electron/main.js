@@ -24,10 +24,10 @@ function scheduleUpdateCheck() {
   if (updateCheckScheduled || !app.isPackaged) return;
   updateCheckScheduled = true;
   setTimeout(() => {
-    checkForUpdatesNow().catch((e) => {
+    checkForUpdatesNow({ source: 'startup' }).catch((e) => {
       console.warn('[laptop-updater] check:', e && e.message ? e.message : e);
     });
-  }, 6000);
+  }, 4000);
 }
 
 function createWindow() {
@@ -278,7 +278,7 @@ ipcMain.handle('laptop:set-update-feed', async (event, payload) => {
   return setUpdateFeedFromDispoBase(base, insecure);
 });
 
-ipcMain.handle('laptop:update-check-now', async () => checkForUpdatesNow());
+ipcMain.handle('laptop:update-check-now', async (_event, opts) => checkForUpdatesNow(opts));
 
 ipcMain.handle('laptop:update-start-download', async () => {
   await startDownload();

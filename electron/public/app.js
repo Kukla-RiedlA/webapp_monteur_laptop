@@ -41,7 +41,7 @@
               } catch (e) { /* ignore */ }
             }
             var st = j.status;
-            if (st === 'completed' || st === 'failed' || st === 'cancelled') {
+            if (st === 'completed' || st === 'failed' || st === 'cancelled' || st === 'interrupted') {
               resolve(j);
               return;
             }
@@ -73,7 +73,11 @@
           .then(function (data) {
             var jobs = (data && data.jobs) || [];
             var pulls = jobs.filter(function (j) {
-              return j && j.type === 'dienstreise_pull';
+              return (
+                j &&
+                j.type === 'dienstreise_pull' &&
+                (j.status === 'queued' || j.status === 'running')
+              );
             });
             if (!pulls.length) {
               resolve();
@@ -217,11 +221,37 @@
     }
   }
 
+  var autoAppUpdateCheckTimer = null;
+
+  function triggerAutoAppUpdateCheck() {
+    if (!window.monteurApp || typeof monteurApp.checkForAppUpdates !== 'function') {
+      return Promise.resolve();
+    }
+    if (!getDispoBaseUrl()) return Promise.resolve();
+    syncUpdateFeedToMain();
+    return window.monteurApp.checkForAppUpdates({ manual: false }).catch(function () {
+      return null;
+    });
+  }
+
+  function scheduleAutoAppUpdateCheck() {
+    if (autoAppUpdateCheckTimer) clearTimeout(autoAppUpdateCheckTimer);
+    autoAppUpdateCheckTimer = setTimeout(function () {
+      autoAppUpdateCheckTimer = null;
+      triggerAutoAppUpdateCheck();
+    }, 2500);
+  }
+
   function syncUpdateFeedToMain() {
     if (!window.monteurApp || typeof window.monteurApp.setUpdateFeedBase !== 'function') return;
     var base = getDispoBaseUrl();
     if (!base) return;
-    window.monteurApp.setUpdateFeedBase(base, getAllowInsecureTlsSetting()).catch(function () {});
+    window.monteurApp
+      .setUpdateFeedBase(base, getAllowInsecureTlsSetting())
+      .then(function () {
+        scheduleAutoAppUpdateCheck();
+      })
+      .catch(function () {});
   }
 
   function isPrivateLanHostname(hostname) {
@@ -1095,13 +1125,19 @@
         if (x && (!warn || !x.textContent.includes('Hinweis:'))) x.textContent = '';
       }, warn ? 8000 : 4000);
     } else {
-      if (hint) hint.textContent = j.error || j.message || 'Auftrag annehmen fehlgeschlagen.';
+      var failMsg = j.error || j.message;
+      if (j.status === 'interrupted') {
+        failMsg =
+          failMsg ||
+          'Kopie unterbrochen (automatisch beendet). Bitte Verbindung prüfen und „Auftrag annehmen“ erneut versuchen.';
+      }
+      if (hint) hint.textContent = failMsg || 'Auftrag annehmen fehlgeschlagen.';
+      if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
     }
   }
 
   /**
-   * Nach Neustart: RAM-Zustand leer, aber SQLite kann noch queued/running/interrupted
-   * dienstreise_pull mit accept_job haben — UI und Polling wieder anbinden.
+   * Nach Neustart: laufende accept_job-Pulls wieder an die UI binden (nicht interrupted — die sind beendet).
    */
   function restoreAcceptJobStreamFromBackgroundJobs() {
     if (acceptJobStreamBusy || restoreAcceptJobBgFetchInFlight) return;
@@ -1120,10 +1156,13 @@
           var p = j.payload;
           if (!p || !p.accept_job) continue;
           var st = j.status;
-          if (st !== 'queued' && st !== 'running' && st !== 'interrupted') continue;
+          if (st !== 'queued' && st !== 'running') continue;
           accepts.push(j);
         }
-        if (!accepts.length) return;
+        if (!accepts.length) {
+          finishAcceptJobStreamUi();
+          return;
+        }
         accepts.sort(function (a, b) {
           var pr = { running: 3, queued: 2, interrupted: 1 };
           var pa = pr[a.status] || 0;
@@ -4612,10 +4651,15 @@
       return syncProblems;
     }
     try {
-      await fetch(API_BASE + '/api/background_jobs/recover', {
+      await fetch(API_BASE + '/api/background_jobs/reap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
+      }).catch(function () {});
+      await fetch(API_BASE + '/api/background_jobs/recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skipAcceptJob: true }),
       }).catch(function () {});
     } catch (e) { /* ignore */ }
     try {
@@ -4628,7 +4672,7 @@
       if (!pushData.ok) throw new Error(pushData.error || 'Push konnte nicht gestartet werden.');
       if (pushData.job_id) {
         var pushJob = await pollBackgroundJobUntilTerminal(pushData.job_id, null, {});
-        if (pushJob.status === 'failed') {
+        if (pushJob.status === 'failed' || pushJob.status === 'interrupted') {
           throw new Error(pushJob.error || 'Push fehlgeschlagen.');
         }
       }
@@ -4653,10 +4697,36 @@
       if (!pullData.ok) {
         if (pullData.deferred) {
           console.log('[Sync Pull] zurückgestellt:', pullData.error || 'Kopie/Push aktiv');
+          await fetch(API_BASE + '/api/background_jobs/reap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          }).catch(function () {});
+          await waitForActiveDienstreisePullJobs({ maxMs: 3 * 60 * 1000 });
+          pullRes = await fetch(API_BASE + '/api/sync_pull', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(
+              Object.assign({}, syncPayload, { date_from: range.date_from, date_to: range.date_to }),
+            ),
+          });
+          pullData = await pullRes.json().catch(function () {
+            return {};
+          });
+          if (!pullData.ok && !pullData.deferred) {
+            throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
+          }
+          if (pullData.deferred) {
+            throw new Error(
+              pullData.error ||
+                'Sync konnte nicht starten — ein anderer Kopiervorgang läuft noch. Bitte kurz warten und erneut versuchen.',
+            );
+          }
         } else {
           throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
         }
-      } else if (pullData.job_id) {
+      }
+      if (pullData.ok && pullData.job_id) {
         var pullJob = await pollBackgroundJobUntilTerminal(pullData.job_id, null, {});
         if (pullJob.status === 'completed') {
           await waitForActiveDienstreisePullJobs({});
@@ -4683,7 +4753,7 @@
           ) {
             openJobDetailsModal(jobDetailsJobId, { syncPullRefresh: true });
           }
-        } else if (pullJob.status === 'failed') {
+        } else if (pullJob.status === 'failed' || pullJob.status === 'interrupted') {
           throw new Error(pullJob.error || 'Pull fehlgeschlagen.');
         }
       }
@@ -4802,6 +4872,7 @@
           setConnectionBadge('online_syncing', 'Synchronisiere mit Dispo…');
           var syncProblems = await runDispoPushPull(auth, range, { connectedBaseFallback: connectedBase });
           applySyncBadgeAfterRun(syncProblems);
+          scheduleAutoAppUpdateCheck();
           if (selectedJobIdOnDienstreisePage) {
             var syncSnap =
               typeof getDienstreiseJobSnapshotByLocalId === 'function'
@@ -4823,6 +4894,7 @@
           }
         } else if (isValidDispoSyncAuth(auth)) {
           setConnectionBadge('online');
+          scheduleAutoAppUpdateCheck();
           runDispoPushPullInBackground(auth, range, syncBase, techId);
         } else {
           setConnectionBadge('online', 'Online — Dispo-Zugangsdaten für Sync eintragen');
@@ -5033,6 +5105,11 @@
     }).catch(function () {});
   }
   loadDienstreiseConfigFromServer();
+  fetch(API_BASE + '/api/background_jobs/reap', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  }).catch(function () {});
   bootstrapLocalData(false)
     .then(function () {
       return ensureDefaultDispoTlsIfUnset();
@@ -5056,6 +5133,7 @@
     if (typeof checkConnectionAndSync === 'function') {
       try { checkConnectionAndSync({ blockingSync: false }); } catch (e) { /* ignore */ }
     }
+    scheduleAutoAppUpdateCheck();
   });
   // Startansicht und Kalender erst nach Layout-Aufbau, damit das Grid sofort sichtbar ist
   function initStartView() {
@@ -5099,7 +5177,10 @@
     function applyUpdateStatus(payload) {
       if (!payload || !payload.state) return;
       updateState = payload.state;
-      if (payload.state === 'available') {
+      if (payload.state === 'checking') {
+        setChipVisible(true, 'Prüfe Update…');
+        if (chip) chip.title = 'Server-Update wird geprüft';
+      } else if (payload.state === 'available') {
         setChipVisible(true, 'Update verfügbar');
         if (chip && payload.latestVersion) {
           chip.title = 'Neu: ' + payload.latestVersion + ' — Klick zum Herunterladen';
@@ -5174,7 +5255,7 @@
         }
         if (checkHint) checkHint.textContent = 'Prüfe …';
         syncUpdateFeedToMain();
-        monteurApp.checkForAppUpdates().then(function (res) {
+        monteurApp.checkForAppUpdates({ manual: true }).then(function (res) {
           if (res && res.skipped) {
             if (checkHint) checkHint.textContent = 'Entwicklungsmodus — kein Auto-Update.';
             clearCheckHintLater(6000);
@@ -5204,6 +5285,7 @@
       monteurApp.onAppUpdateStatus(applyUpdateStatus);
     }
     syncUpdateFeedToMain();
+    scheduleAutoAppUpdateCheck();
   })();
 
   fetch(API_BASE + '/api/version').then(function (r) { return r.json(); }).then(function (d) {
@@ -5296,18 +5378,45 @@
     }
     hint.textContent = 'Wird geholt…';
     var prep = hasLogin && !techId ? resolveMonteurProfileFromDispo() : Promise.resolve();
-    prep.then(function () {
+    var syncNowMaxMs = 40 * 60 * 1000;
+    var syncWork = prep.then(function () {
       return checkConnectionAndSync({ blockingSync: true });
-    }).then(function () {
-      startSyncInterval();
-      hint.textContent = 'Fertig.';
-      clearTimeout(hint._syncHide);
-      hint._syncHide = setTimeout(function () { hint.textContent = ''; }, 3000);
-    }).catch(function (e) {
-      hint.textContent = 'Fehler: ' + (e && e.message ? e.message : 'Unbekannt');
-      clearTimeout(hint._syncHide);
-      hint._syncHide = setTimeout(function () { hint.textContent = ''; }, 5000);
     });
+    Promise.race([
+      syncWork,
+      new Promise(function (_resolve, reject) {
+        setTimeout(function () {
+          reject(
+            new Error(
+              'Zeitüberschreitung beim Holen von Dispo. Bitte Verbindung prüfen und erneut versuchen.',
+            ),
+          );
+        }, syncNowMaxMs);
+      }),
+    ])
+      .then(function () {
+        startSyncInterval();
+        hint.textContent = 'Fertig.';
+        clearTimeout(hint._syncHide);
+        hint._syncHide = setTimeout(function () {
+          hint.textContent = '';
+        }, 3000);
+      })
+      .catch(function (e) {
+        hint.textContent = 'Fehler: ' + (e && e.message ? e.message : 'Unbekannt');
+        clearTimeout(hint._syncHide);
+        hint._syncHide = setTimeout(function () {
+          hint.textContent = '';
+        }, 8000);
+        finishAcceptJobStreamUi();
+      })
+      .finally(function () {
+        fetch(API_BASE + '/api/background_jobs/reap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        }).catch(function () {});
+      });
   });
 
 

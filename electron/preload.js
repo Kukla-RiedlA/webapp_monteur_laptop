@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld('monteurApp', {
       dispoBaseUrl: dispoBaseUrl,
       allowInsecureTls: !!allowInsecureTls,
     }),
-  checkForAppUpdates: () => ipcRenderer.invoke('laptop:update-check-now'),
+  checkForAppUpdates: (opts) => ipcRenderer.invoke('laptop:update-check-now', opts || {}),
   startAppUpdateDownload: () => ipcRenderer.invoke('laptop:update-start-download'),
   installAppUpdateNow: () => ipcRenderer.invoke('laptop:update-install-now'),
   onAppUpdateStatus: (callback) => {

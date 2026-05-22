@@ -23,6 +23,12 @@ const JOB_TYPE_PRIORITY = {
 
 const HIGH_PRIORITY_TYPES = new Set(['dienstreise_pull', 'dienstreise_push', 'sync_push']);
 
+/** running ohne Fortschritt → abbrechen (Refresh-Timeout Server ist 60 s). */
+const STALE_RUNNING_MS = 12 * 60 * 1000;
+/** interrupted blockiert Sync/UI nicht ewig. */
+const STALE_INTERRUPTED_MS = 8 * 60 * 1000;
+const MAX_RECOVER_ATTEMPTS = 2;
+
 function ensureBackgroundJobsSchema(sqlDb) {
   try {
     sqlDb.run(`CREATE TABLE IF NOT EXISTS background_jobs (
@@ -109,15 +115,104 @@ function createBackgroundJobService(db, save, hooks) {
     save();
   }
 
+  function pullCheckpointHasResume(chk) {
+    if (!chk || typeof chk !== 'object') return false;
+    return (
+      !!chk.refresh_done_at ||
+      (Array.isArray(chk.completed) && chk.completed.length > 0) ||
+      (Array.isArray(chk.ted_completed) && chk.ted_completed.length > 0) ||
+      (chk.manifest && typeof chk.manifest === 'object' && Object.keys(chk.manifest).length > 0)
+    );
+  }
+
+  function parsePayloadJson(raw) {
+    try {
+      return JSON.parse(raw || '{}');
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /** Hängende / blockierende Jobs beenden — ohne manuelles DB-Eingreifen. */
+  function reapStuckJobs() {
+    const now = Date.now();
+    const runningRows = db
+      .prepare(
+        `SELECT id, type, payload_json, checkpoint_json, progress_phase, updated_at
+         FROM background_jobs WHERE status = 'running'`,
+      )
+      .all();
+    for (const r of runningRows) {
+      const updatedMs = r.updated_at ? Date.parse(String(r.updated_at).replace(' ', 'T') + 'Z') : NaN;
+      const age = Number.isFinite(updatedMs) ? now - updatedMs : STALE_RUNNING_MS + 1;
+      if (age < STALE_RUNNING_MS) continue;
+      const ac = abortControllers.get(r.id);
+      if (ac) {
+        try {
+          ac.abort();
+        } catch (_) {
+          /* ignore */
+        }
+      }
+      bump(r.id, {
+        status: 'failed',
+        error: 'Zeitüberschreitung – Hintergrund-Job wurde automatisch beendet.',
+        message: null,
+        progress_phase: null,
+      });
+    }
+
+    const interruptedRows = db
+      .prepare(
+        `SELECT id, type, payload_json, checkpoint_json, error, updated_at
+         FROM background_jobs WHERE status = 'interrupted'`,
+      )
+      .all();
+    for (const r of interruptedRows) {
+      const payload = parsePayloadJson(r.payload_json);
+      let chk = {};
+      try {
+        chk = r.checkpoint_json ? JSON.parse(r.checkpoint_json) : {};
+      } catch (_) {}
+      const updatedMs = r.updated_at ? Date.parse(String(r.updated_at).replace(' ', 'T') + 'Z') : NaN;
+      const age = Number.isFinite(updatedMs) ? now - updatedMs : STALE_INTERRUPTED_MS + 1;
+      const attempts = Number(chk.recover_attempts) || 0;
+      const acceptJob = !!(payload && payload.accept_job);
+      const hasResume = pullCheckpointHasResume(chk);
+      const shouldFail =
+        attempts >= MAX_RECOVER_ATTEMPTS ||
+        age >= STALE_INTERRUPTED_MS ||
+        (acceptJob && !hasResume);
+      if (!shouldFail) continue;
+      bump(r.id, {
+        status: 'failed',
+        error:
+          (r.error && String(r.error).trim()) ||
+          'Unterbrochen – automatisch beendet. Bitte erneut versuchen (Sync oder Auftrag annehmen).',
+        message: null,
+      });
+    }
+    save();
+  }
+
   function markStaleRunningAsInterrupted() {
     const rows = db.prepare(`SELECT id FROM background_jobs WHERE status = 'running'`).all();
     for (const r of rows) {
+      const ac = abortControllers.get(r.id);
+      if (ac) {
+        try {
+          ac.abort();
+        } catch (_) {
+          /* ignore */
+        }
+      }
       bump(r.id, {
         status: 'interrupted',
         message: 'Unterbrochen (App-Neustart).',
         error: null,
       });
     }
+    reapStuckJobs();
   }
 
   function countQueuedHighPriority() {
@@ -132,6 +227,7 @@ function createBackgroundJobService(db, save, hooks) {
 
   async function pump() {
     if (runnerBusy) return;
+    reapStuckJobs();
     const raw = db
       .prepare(
         `SELECT * FROM background_jobs WHERE status = 'queued'
@@ -256,6 +352,12 @@ function createBackgroundJobService(db, save, hooks) {
     }
     const id = newJobId();
     deleteQueuedByDedupe(dedupeKey);
+    if (dedupeKey) {
+      db.prepare(
+        `UPDATE background_jobs SET status = 'cancelled', error = 'Ersetzt durch neuen Job.', message = NULL
+         WHERE dedupe_key = ? AND status IN ('interrupted', 'failed')`,
+      ).run(dedupeKey);
+    }
     db.prepare(
       `INSERT INTO background_jobs (id, type, status, payload_json, dedupe_key, progress_phase, progress_current, progress_total)
        VALUES (?, ?, 'queued', ?, ?, NULL, 0, 0)`,
@@ -267,22 +369,42 @@ function createBackgroundJobService(db, save, hooks) {
     return { job_id: id };
   }
 
-  /** Wiederaufnehmbare dienstreise_pull-Jobs nach Online-Badge erneut einreihen (idempotent). */
-  function recoverPullJobs() {
-    const rows = db.prepare(
-      `SELECT id, checkpoint_json, status FROM background_jobs WHERE type = 'dienstreise_pull' AND status IN ('failed', 'interrupted')`,
-    ).all();
+  /**
+   * Wiederaufnehmbare dienstreise_pull-Jobs (Delta-Kopie), nicht „Auftrag annehmen“ beim Sync.
+   * @param {{ skipAcceptJob?: boolean }} opts
+   */
+  function recoverPullJobs(opts) {
+    opts = opts || {};
+    const skipAcceptJob = opts.skipAcceptJob !== false;
+    reapStuckJobs();
+    const rows = db
+      .prepare(
+        `SELECT id, payload_json, checkpoint_json, status FROM background_jobs
+         WHERE type = 'dienstreise_pull' AND status IN ('failed', 'interrupted')`,
+      )
+      .all();
     let n = 0;
     for (const r of rows) {
+      const payload = parsePayloadJson(r.payload_json);
+      if (skipAcceptJob && payload.accept_job) continue;
+      let chk = {};
+      try {
+        chk = r.checkpoint_json ? JSON.parse(r.checkpoint_json) : {};
+      } catch (_) {}
+      const attempts = Number(chk.recover_attempts) || 0;
+      if (attempts >= MAX_RECOVER_ATTEMPTS) continue;
       let recoverable = r.status === 'interrupted';
-      if (!recoverable && r.checkpoint_json) {
-        try {
-          const c = JSON.parse(r.checkpoint_json);
-          if (c.refresh_done_at || (Array.isArray(c.completed) && c.completed.length > 0)) recoverable = true;
-        } catch (_) {}
+      if (!recoverable) {
+        recoverable = pullCheckpointHasResume(chk);
       }
       if (!recoverable) continue;
-      bump(r.id, { status: 'queued', error: null, message: 'Wiederaufnahme nach Online…' });
+      chk.recover_attempts = attempts + 1;
+      bump(r.id, {
+        status: 'queued',
+        error: null,
+        message: 'Wiederaufnahme nach Online…',
+        checkpoint_json: JSON.stringify(chk),
+      });
       n++;
     }
     save();
@@ -324,7 +446,7 @@ function createBackgroundJobService(db, save, hooks) {
     if (activeOnly) {
       return db
         .prepare(
-          `SELECT * FROM background_jobs WHERE status IN ('queued','running','interrupted')
+          `SELECT * FROM background_jobs WHERE status IN ('queued','running')
            ORDER BY datetime(updated_at) DESC LIMIT ?`,
         )
         .all(lim)
@@ -345,6 +467,7 @@ function createBackgroundJobService(db, save, hooks) {
   return {
     enqueue,
     recoverPullJobs,
+    reapStuckJobs,
     cancelJob,
     listJobs,
     getJob,

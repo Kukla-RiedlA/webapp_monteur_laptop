@@ -1127,7 +1127,9 @@ function createApp(db) {
     return db.prepare(`
       SELECT id, server_id FROM jobs j
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-    `).get(n, n);
+      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+      LIMIT 1
+    `).get(n, n, n);
   }
 
   function getJobRowWithStatusByLocalOrServerId(rawJobId) {
@@ -1136,7 +1138,37 @@ function createApp(db) {
     return db.prepare(`
       SELECT id, server_id, status FROM jobs j
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-    `).get(n, n);
+      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+      LIMIT 1
+    `).get(n, n, n);
+  }
+
+  /** Nach Admin-Rücksetzung in Dispo: lokales erledigt + pending erledigt mit Server-Status abgleichen. */
+  async function reconcileLocalJobStatusFromDispoBeforeAccept(rawJobId, dispoBaseUrl, technicianId, authHeader) {
+    let row = getJobRowWithStatusByLocalOrServerId(rawJobId);
+    if (!row) return null;
+    const st = String(row.status || '').trim().toLowerCase();
+    if (st !== 'erledigt' && st !== 'abgerechnet') return row;
+    const serverId = row.server_id != null && String(row.server_id).trim() !== '' ? row.server_id : null;
+    if (!serverId || !dispoBaseUrl) return row;
+    const base = String(dispoBaseUrl).replace(/\/$/, '');
+    const url = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(serverId)}&technician_id=${encodeURIComponent(technicianId)}`;
+    try {
+      const r = await fetch(url, authHeader && authHeader.Authorization ? { headers: authHeader } : {});
+      if (!r.ok) return row;
+      const data = await r.json();
+      const remote = data && data.job ? data.job : null;
+      if (!remote || remote.status == null) return row;
+      const remoteSt = String(remote.status).trim().toLowerCase();
+      if (remoteSt === 'erledigt' || remoteSt === 'abgerechnet') return row;
+      db.prepare(`UPDATE jobs SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(remoteSt, row.id);
+      clearSupersededPendingJobStatusOnPull(db, row.id, remoteSt);
+      save();
+      return getJobRowWithStatusByLocalOrServerId(row.id);
+    } catch (e) {
+      console.warn('[accept_job] reconcile status from dispo:', e && e.message ? e.message : e);
+      return row;
+    }
   }
 
   /** Auftrag annehmen: nur aus angelegt/geplant/zugeteilt. */
@@ -2319,7 +2351,7 @@ function createApp(db) {
    * Queued Hintergrund-Job: Dispo-Refresh, Projektordner kopieren, optional Auftrag annehmen.
    * @param {{ acceptJob?: boolean }} options
    */
-  function enqueueDienstreisePullFromRequest(req, res, options) {
+  async function enqueueDienstreisePullFromRequest(req, res, options) {
     const acceptJob = !!(options && options.acceptJob);
     try {
       if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
@@ -2336,8 +2368,18 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'job_id (lokal), dispoBaseUrl und technicianId erforderlich.' });
       }
 
-      const jobRowFull = getJobRowWithStatusByLocalOrServerId(rawJobId);
+      const authHeader =
+        dispoUsername || dispoPassword
+          ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') }
+          : {};
+
+      let jobRowFull = getJobRowWithStatusByLocalOrServerId(rawJobId);
       if (!jobRowFull) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+
+      if (acceptJob && authHeader.Authorization) {
+        jobRowFull = await reconcileLocalJobStatusFromDispoBeforeAccept(rawJobId, dispoBaseUrl, technicianId, authHeader);
+        if (!jobRowFull) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
 
       if (acceptJob) {
         const st = String(jobRowFull.status || '').trim().toLowerCase();
@@ -2361,10 +2403,6 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
       }
 
-      const authHeader =
-        dispoUsername || dispoPassword
-          ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') }
-          : {};
       if (!authHeader.Authorization) {
         return res.status(400).json({
           ok: false,
@@ -2395,12 +2433,16 @@ function createApp(db) {
 
   /** @deprecated NDJSON entfernt — Antwort 202 + job_id; siehe GET /api/background_jobs/:id */
   app.post('/api/dienstreise/copy_project_stream', express.json(), (req, res) => {
-    enqueueDienstreisePullFromRequest(req, res, { acceptJob: false });
+    enqueueDienstreisePullFromRequest(req, res, { acceptJob: false }).catch((e) => {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message || String(e) });
+    });
   });
 
   /** Auftrag annehmen (Hintergrund-Job). */
   app.post('/api/dienstreise/accept_job_stream', express.json(), (req, res) => {
-    enqueueDienstreisePullFromRequest(req, res, { acceptJob: true });
+    enqueueDienstreisePullFromRequest(req, res, { acceptJob: true }).catch((e) => {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message || String(e) });
+    });
   });
 
   app.post('/api/dienstreise/upload', (req, res) => {
@@ -6439,6 +6481,7 @@ ORDER BY
     }
     try {
       if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      bgJobs.reapStuckJobs();
       if (bgJobs.countQueuedHighPriority() > 0) {
         return res.status(409).json({
           ok: false,
@@ -6511,8 +6554,20 @@ ORDER BY
   app.post('/api/background_jobs/recover', express.json(), (req, res) => {
     try {
       if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
-      const r = bgJobs.recoverPullJobs();
+      const body = req.body || {};
+      const skipAcceptJob = body.skipAcceptJob !== false;
+      const r = bgJobs.recoverPullJobs({ skipAcceptJob });
       return res.json({ ok: true, reopened: r.reopened });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/background_jobs/reap', express.json(), (req, res) => {
+    try {
+      if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      bgJobs.reapStuckJobs();
+      return res.json({ ok: true });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
@@ -6521,6 +6576,7 @@ ORDER BY
   app.get('/api/background_jobs', (req, res) => {
     try {
       if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
+      bgJobs.reapStuckJobs();
       const runningOnly = req.query.running === '1' || req.query.running === 'true';
       const activeOnly = !runningOnly && (req.query.active === '1' || req.query.active === 'true');
       const jobs = bgJobs.listJobs(req.query.limit, { activeOnly, runningOnly });
@@ -7352,6 +7408,36 @@ function attachJobContactsToJobs(db, jobs) {
   }
 }
 
+/** Entfernt ausstehendes „erledigt“-Push, wenn Dispo den Auftrag wieder geöffnet hat (Admin-Rücksetzung). */
+function clearSupersededPendingJobStatusOnPull(db, localJobId, serverStatus) {
+  const st = String(serverStatus || '').trim().toLowerCase();
+  if (st === 'erledigt' || st === 'abgerechnet') return;
+  const lid = parseInt(localJobId, 10);
+  if (!Number.isFinite(lid) || lid <= 0) return;
+  const entityIds = [lid];
+  const mapped = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(lid);
+  if (mapped && mapped.server_id != null && String(mapped.server_id).trim() !== '') {
+    entityIds.push(mapped.server_id);
+  }
+  for (const eid of entityIds) {
+    const pending = db
+      .prepare(
+        `SELECT id, payload FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`,
+      )
+      .all(eid);
+    for (const p of pending) {
+      try {
+        const pl = JSON.parse(p.payload || '{}');
+        if (String(pl.status || '').trim().toLowerCase() === 'erledigt') {
+          db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function insertOrUpdateJob(db, j, customerId, technicianId) {
   const id = j.id;
   const existing = db.prepare('SELECT id FROM jobs WHERE server_id = ?').get(id);
@@ -7365,6 +7451,7 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
       j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabForLocal, j.eap_nummer || null, j.bestellnummer || null, existing.id
     );
+    clearSupersededPendingJobStatusOnPull(db, existing.id, status);
     if (j.street != null) insertOrUpdateJobAddress(db, existing.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, existing.id, j);
     const dispCountUpd = Number(j.dispo_jt_count);
@@ -7402,6 +7489,7 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     db.prepare('UPDATE jobs SET server_id = ?, job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
       id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabOrphan, j.eap_nummer || null, j.bestellnummer || null, orphan.id
     );
+    clearSupersededPendingJobStatusOnPull(db, orphan.id, status);
     if (j.street != null) insertOrUpdateJobAddress(db, orphan.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, orphan.id, j);
     upsertJobContactsForLocalJob(db, orphan.id, j);

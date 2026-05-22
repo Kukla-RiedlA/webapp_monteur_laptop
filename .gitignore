@@ -2,6 +2,7 @@
 node_modules/
 electron/node_modules/
 electron/db/*.db
+electron/db/_dev_backup/
 electron/db/dienstreise_config.json
 electron/db/app_config.json
 electron/db/.dispo-tls-insecure
