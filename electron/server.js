@@ -1732,7 +1732,9 @@ function createApp(db) {
         let stat;
         try { stat = fs.statSync(fullPath); } catch (e) { continue; }
         if (stat.isDirectory()) {
-          if (isEffectivelyEmptyDir(fullPath)) continue; // leere bzw. nur Systemdateien = ausblenden
+          // Frisch angelegte Projektordner enthalten zuerst nur leere Standardordner.
+          // Diese Wurzelordner sichtbar lassen, sonst wirkt der Projektordner nicht angelegt.
+          if (subpath && isEffectivelyEmptyDir(fullPath)) continue;
         }
         const relativePath = subpath ? subpath + path.sep + name : name;
         entries.push({

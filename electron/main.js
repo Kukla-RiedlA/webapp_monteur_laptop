@@ -20,6 +20,80 @@ const {
 let mainWindow;
 let updateCheckScheduled = false;
 
+function findWindowsUninstaller() {
+  if (process.platform !== 'win32') return null;
+  const installDir = path.dirname(process.execPath);
+  const names = [
+    'Uninstall Monteur WebApp.exe',
+    'Uninstall monteur-webapp.exe',
+    'Uninstall ' + app.getName() + '.exe',
+  ];
+  for (const name of names) {
+    const candidate = path.join(installDir, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  try {
+    const match = fs
+      .readdirSync(installDir)
+      .find((name) => /^uninstall.*\.exe$/i.test(name));
+    return match ? path.join(installDir, match) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function scheduleSelfUninstallAndDataRemoval() {
+  if (process.platform !== 'win32') {
+    return { ok: false, error: 'Deinstallation ist nur unter Windows verfügbar.' };
+  }
+  if (!app.isPackaged) {
+    return { ok: false, error: 'Deinstallation ist nur in der installierten App verfügbar.' };
+  }
+  const uninstaller = findWindowsUninstaller();
+  if (!uninstaller) {
+    return { ok: false, error: 'Windows-Uninstaller wurde nicht gefunden.' };
+  }
+  const userDataDir = app.getPath('userData');
+  flushMonteurDb();
+  const psScript = [
+    '$pidToWait = [int]$args[0];',
+    '$userDataDir = $args[1];',
+    '$uninstaller = $args[2];',
+    'try { Wait-Process -Id $pidToWait -Timeout 30 -ErrorAction SilentlyContinue } catch {}',
+    'Start-Sleep -Seconds 1;',
+    'if ($userDataDir -and (Test-Path -LiteralPath $userDataDir)) {',
+    '  Remove-Item -LiteralPath $userDataDir -Recurse -Force -ErrorAction SilentlyContinue;',
+    '}',
+    'if ($uninstaller -and (Test-Path -LiteralPath $uninstaller)) {',
+    '  Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait;',
+    '}',
+  ].join(' ');
+  try {
+    const child = spawn(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        psScript,
+        String(process.pid),
+        userDataDir,
+        uninstaller,
+      ],
+      { windowsHide: true, detached: true, stdio: 'ignore' },
+    );
+    child.unref();
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+  setTimeout(() => {
+    app.quit();
+  }, 1200);
+  return { ok: true };
+}
+
 function scheduleUpdateCheck() {
   if (updateCheckScheduled || !app.isPackaged) return;
   updateCheckScheduled = true;
@@ -289,6 +363,8 @@ ipcMain.handle('laptop:update-install-now', async () => {
   installUpdateNow();
   return { ok: true };
 });
+
+ipcMain.handle('app:self-uninstall-remove-data', async () => scheduleSelfUninstallAndDataRemoval());
 
 app.whenReady().then(() => {
   initLaptopUpdater({ getMainWindow: () => mainWindow });

@@ -1095,10 +1095,11 @@
       if (warn) doneMsg += ' Hinweis: ' + String(warn);
       if (hint) hint.textContent = doneMsg;
       if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
-      if (getDienstreiseExplorerJobId() == localJobId && typeof loadDienstreiseExplorer === 'function') {
-        if (startPageActiveJobId == localJobId) {
+      if (typeof loadDienstreiseExplorer === 'function') {
+        if (getDienstreiseExplorerJobId('start') == localJobId) {
           loadDienstreiseExplorer(localJobId, startExplorerSubpath, 'start');
-        } else {
+        }
+        if (getDienstreiseExplorerJobId('modal') == localJobId) {
           loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath, 'modal');
         }
       }
@@ -1750,12 +1751,12 @@
         hintEl.textContent = okCount ? okCount + ' Datei(en) hochgeladen.' : 'Upload fehlgeschlagen.';
         if (okCount) setTimeout(function () { hintEl.textContent = ''; }, 3000);
       }
-      if (okCount && getDienstreiseExplorerJobId()) {
-        var ejid = getDienstreiseExplorerJobId();
-        if (startPageActiveJobId == ejid) {
-          loadDienstreiseExplorer(ejid, startExplorerSubpath, 'start');
-        } else {
-          loadDienstreiseExplorer(ejid, dienstreiseExplorerSubpath, 'modal');
+      if (okCount) {
+        if (getDienstreiseExplorerJobId('start') == localJobId) {
+          loadDienstreiseExplorer(localJobId, startExplorerSubpath, 'start');
+        }
+        if (getDienstreiseExplorerJobId('modal') == localJobId) {
+          loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath, 'modal');
         }
       }
       return okCount > 0;
@@ -1853,7 +1854,10 @@
 
   var jobDetailsJobId = null;
 
-  function getDienstreiseExplorerJobId() {
+  function getDienstreiseExplorerJobId(uiKey) {
+    if (uiKey === 'start') return startPageActiveJobId;
+    if (uiKey === 'page') return selectedJobIdOnDienstreisePage;
+    if (uiKey === 'modal') return jobDetailsJobId || selectedJobIdOnDienstreisePage;
     return jobDetailsJobId || selectedJobIdOnDienstreisePage || startPageActiveJobId;
   }
 
@@ -1933,7 +1937,7 @@
   }
 
   function updateDienstreiseWriteControlsState() {
-    var jid = getDienstreiseExplorerJobId();
+    var jid = getDienstreiseExplorerJobId('modal');
     var snap = jid ? getDienstreiseJobSnapshotByLocalId(jid) : null;
     var ro = isJobAngelegtReadOnly(snap);
     var upBtn = document.getElementById('btnDienstreiseUpload');
@@ -1952,15 +1956,18 @@
     var startMkName = document.getElementById('startMkdirName');
     var startMkParent = document.getElementById('startMkdirParent');
     var startDrop = document.getElementById('startDropZone');
-    if (startUp) startUp.disabled = !!ro;
-    if (startFi) startFi.disabled = !!ro;
-    if (startSub) startSub.disabled = !!ro;
-    if (startMk) startMk.disabled = !!ro;
-    if (startMkName) startMkName.disabled = !!ro;
-    if (startMkParent) startMkParent.disabled = !!ro;
+    var startJid = getDienstreiseExplorerJobId('start');
+    var startSnap = startJid ? getDienstreiseJobSnapshotByLocalId(startJid) : null;
+    var startRo = isJobAngelegtReadOnly(startSnap);
+    if (startUp) startUp.disabled = !!startRo;
+    if (startFi) startFi.disabled = !!startRo;
+    if (startSub) startSub.disabled = !!startRo;
+    if (startMk) startMk.disabled = !!startRo;
+    if (startMkName) startMkName.disabled = !!startRo;
+    if (startMkParent) startMkParent.disabled = !!startRo;
     if (startDrop) {
-      startDrop.classList.toggle('start-drop-readonly', !!ro);
-      startDrop.setAttribute('aria-disabled', ro ? 'true' : 'false');
+      startDrop.classList.toggle('start-drop-readonly', !!startRo);
+      startDrop.setAttribute('aria-disabled', startRo ? 'true' : 'false');
     }
   }
 
@@ -5288,6 +5295,43 @@
       });
   });
 
+  var btnSelfUninstall = document.getElementById('btnSelfUninstall');
+  if (btnSelfUninstall) {
+    btnSelfUninstall.addEventListener('click', function () {
+      var hint = document.getElementById('selfUninstallHint');
+      if (!window.monteurApp || typeof window.monteurApp.uninstallAppAndRemoveLocalData !== 'function') {
+        if (hint) hint.textContent = 'Deinstallation ist in dieser Umgebung nicht verfügbar.';
+        return;
+      }
+      var firstOk = window.confirm(
+        'Diese Aktion deinstalliert die Monteur-WebApp auf diesem PC und löscht die lokale App-Datenbank vollständig. Fortfahren?',
+      );
+      if (!firstOk) return;
+      var typed = window.prompt(
+        'Zur Bestätigung bitte DEINSTALLIEREN eingeben. Danach wird die App geschlossen.',
+        '',
+      );
+      if (typed !== 'DEINSTALLIEREN') {
+        if (hint) hint.textContent = 'Abgebrochen.';
+        return;
+      }
+      btnSelfUninstall.disabled = true;
+      if (hint) hint.textContent = 'Deinstallation wird vorbereitet …';
+      window.monteurApp
+        .uninstallAppAndRemoveLocalData()
+        .then(function (result) {
+          if (!result || !result.ok) {
+            throw new Error((result && result.error) || 'Deinstallation konnte nicht gestartet werden.');
+          }
+          if (hint) hint.textContent = 'App wird geschlossen, lokale Daten werden gelöscht und die Deinstallation startet …';
+        })
+        .catch(function (err) {
+          btnSelfUninstall.disabled = false;
+          if (hint) hint.textContent = 'Fehler: ' + (err && err.message ? err.message : String(err));
+        });
+    });
+  }
+
   var btnOpenProfileForQr = document.getElementById('btnOpenProfileForQr');
   if (btnOpenProfileForQr) {
     btnOpenProfileForQr.addEventListener('click', function () {
@@ -7301,6 +7345,8 @@
         startViewDataLoadedAt = nowStart;
         loadStartActiveJob();
         loadCalendarMonth();
+      } else if (startPageActiveJobId) {
+        loadDienstreiseExplorer(startPageActiveJobId, startExplorerSubpath, 'start');
       }
     }
   }
@@ -8119,6 +8165,9 @@
   var startExplorerRootEntries = [];
   var startExplorerExpanded = {};
   var dienstreiseProtectedPathsByJob = {};
+  var projectFolderAutoPullInFlightByJob = {};
+  var projectFolderAutoPullLastStartedAt = {};
+  var PROJECT_FOLDER_AUTO_PULL_MIN_INTERVAL_MS = 5 * 60 * 1000;
 
   function formatFileSize(bytes) {
     if (bytes == null || bytes === '') return '';
@@ -8139,7 +8188,7 @@
   function renderDienstreiseExplorerTree(uiKey) {
     var ui = getDienstreiseExplorerUi(uiKey || 'modal');
     var listEl = ui.getListEl();
-    var jobId = getDienstreiseExplorerJobId();
+    var jobId = getDienstreiseExplorerJobId(ui.key);
     if (!listEl || !jobId) return;
     if (!dienstreiseProtectedPathsByJob[jobId]) dienstreiseProtectedPathsByJob[jobId] = new Set();
     var protectedSet = dienstreiseProtectedPathsByJob[jobId];
@@ -8296,7 +8345,61 @@
     });
   }
 
-  function loadDienstreiseExplorer(jobId, subpath, uiKey) {
+  function maybeAutoPullDienstreiseProjectFolder(jobId, uiKey) {
+    var localJobId = parseInt(jobId, 10);
+    if (!localJobId) return;
+    if (projectFolderAutoPullInFlightByJob[localJobId]) return;
+    var lastStarted = projectFolderAutoPullLastStartedAt[localJobId] || 0;
+    if (Date.now() - lastStarted < PROJECT_FOLDER_AUTO_PULL_MIN_INTERVAL_MS) return;
+    var dispoBaseUrl = (getDispoBaseUrl() || '').trim();
+    var technicianId = getTechId();
+    if (!dispoBaseUrl || !technicianId || !getDispoUsername() || !getDispoPassword()) return;
+    var snap = getDienstreiseJobSnapshotByLocalId(localJobId);
+    if (snap && (isJobAngelegtReadOnly(snap) || isJobAbgerechnet(snap))) return;
+    projectFolderAutoPullLastStartedAt[localJobId] = Date.now();
+    projectFolderAutoPullInFlightByJob[localJobId] = true;
+    setConnectionBadge('online_syncing', 'Projektordner wird mit Dispo aktualisiert …');
+    fetch(API_BASE + '/api/dienstreise/copy_project_stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job_id: localJobId,
+        dispoBaseUrl: dispoBaseUrl,
+        technicianId: technicianId,
+        dispoUsername: getDispoUsername(),
+        dispoPassword: getDispoPassword(),
+        include_bilder: false,
+      }),
+    })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+          if (!response.ok || !data.ok) {
+            throw new Error((data && data.error) || 'Projektordner-Pull konnte nicht gestartet werden.');
+          }
+          if (!data.job_id) return null;
+          return pollBackgroundJobUntilTerminal(data.job_id, null, { maxMs: 25 * 60 * 1000 });
+        });
+      })
+      .then(function (jobRow) {
+        if (jobRow && (jobRow.status === 'failed' || jobRow.status === 'interrupted')) {
+          throw new Error(jobRow.error || 'Projektordner-Pull fehlgeschlagen.');
+        }
+        if (!jobIdsEqual(localJobId, getDienstreiseExplorerJobId(uiKey))) return;
+        loadDienstreiseExplorer(localJobId, uiKey === 'start' ? startExplorerSubpath : dienstreiseExplorerSubpath, uiKey, {
+          skipAutoPull: true,
+        });
+        setConnectionBadge('online');
+      })
+      .catch(function (err) {
+        console.warn('[dienstreise_auto_pull]', err && err.message ? err.message : err);
+      })
+      .finally(function () {
+        delete projectFolderAutoPullInFlightByJob[localJobId];
+      });
+  }
+
+  function loadDienstreiseExplorer(jobId, subpath, uiKey, opts) {
+    opts = opts || {};
     var ui = getDienstreiseExplorerUi(uiKey || 'modal');
     ui.setSubpath(subpath || '');
     var requestJobId = jobId;
@@ -8319,7 +8422,7 @@
       breadcrumbEl.textContent = ui.getSubpath() ? 'Projektordner / ' + ui.getSubpath() : 'Projektordner';
     }
     fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId)).then(function (r) { return r.json(); }).then(function (data) {
-      if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId())) return;
+      if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId(ui.key))) return;
       if (!data.ok || !data.entries) {
         listEl.innerHTML = '<span class="empty">' + (data.error || 'Laden fehlgeschlagen.') + '</span>';
         if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
@@ -8329,8 +8432,9 @@
       ui.clearExpanded();
       renderDienstreiseExplorerTree(ui.key);
       if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+      if (!opts.skipAutoPull) maybeAutoPullDienstreiseProjectFolder(jobId, ui.key);
     }).catch(function () {
-      if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId())) return;
+      if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId(ui.key))) return;
       listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
       if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
     });
@@ -8446,7 +8550,7 @@
     root.addEventListener('click', function (e) {
       var btn = e.target.closest('#btnDienstreiseUpload');
       if (!btn || btn.disabled) return;
-    var localJobId = getDienstreiseExplorerJobId();
+    var localJobId = getDienstreiseExplorerJobId('modal');
     var snapUp = localJobId ? getDienstreiseJobSnapshotByLocalId(localJobId) : null;
     if (isJobAngelegtReadOnly(snapUp)) {
       var hintRo = document.getElementById('dienstreiseUploadHint');
@@ -8487,11 +8591,12 @@
           if (data.ok) {
             fileInput.value = '';
             setTimeout(function () { hint.textContent = ''; }, 3000);
-            if (getDienstreiseExplorerJobId()) {
-              if (startPageActiveJobId == getDienstreiseExplorerJobId()) {
-                loadDienstreiseExplorer(getDienstreiseExplorerJobId(), startExplorerSubpath, 'start');
-              } else {
-                loadDienstreiseExplorer(getDienstreiseExplorerJobId(), dienstreiseExplorerSubpath, 'modal');
+            if (localJobId) {
+              if (getDienstreiseExplorerJobId('start') == localJobId) {
+                loadDienstreiseExplorer(localJobId, startExplorerSubpath, 'start');
+              }
+              if (getDienstreiseExplorerJobId('modal') == localJobId) {
+                loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath, 'modal');
               }
             }
             if (sub === 'Dokumente_Dispo' || sub === 'Dokumente_Monteur' || sub === 'Dokumente_Anlage' || sub === 'Dokumente_Buchhaltung') {
