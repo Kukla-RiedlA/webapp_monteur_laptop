@@ -16,9 +16,13 @@ let feedBaseUrl = '';
 let allowInsecureTls = false;
 let feedCheckDebounce = null;
 let periodicCheckTimer = null;
+let updateCheckInFlight = null;
+let lastAutoCheckStartedAt = 0;
+let lastFeedScheduledCheckAt = 0;
 
 const AUTO_CHECK_AFTER_FEED_MS = 2000;
 const PERIODIC_UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
+const MIN_AUTO_UPDATE_CHECK_MS = 30 * 60 * 1000;
 
 function readJsonFileSafe(filePath) {
   try {
@@ -260,6 +264,9 @@ function schedulePeriodicUpdateChecks() {
 
 function scheduleCheckAfterFeedSet() {
   if (!app.isPackaged) return;
+  const now = Date.now();
+  if (lastFeedScheduledCheckAt > 0 && now - lastFeedScheduledCheckAt < MIN_AUTO_UPDATE_CHECK_MS) return;
+  lastFeedScheduledCheckAt = now;
   if (feedCheckDebounce) clearTimeout(feedCheckDebounce);
   feedCheckDebounce = setTimeout(() => {
     feedCheckDebounce = null;
@@ -292,17 +299,27 @@ async function checkForUpdatesNow(opts) {
   if (!applyFeedUrl(buildFeedUrl())) {
     return { ok: false, error: 'no_feed' };
   }
+  if (updateCheckInFlight) return { ok: false, skipped: true, reason: 'check_in_flight' };
   lastCheckWasManual = !!opts.manual;
   if (opts.manual) {
     updateHintDialogShown = false;
+  } else {
+    const now = Date.now();
+    if (lastAutoCheckStartedAt > 0 && now - lastAutoCheckStartedAt < MIN_AUTO_UPDATE_CHECK_MS) {
+      return { ok: false, skipped: true, reason: 'auto_check_throttled' };
+    }
+    lastAutoCheckStartedAt = now;
   }
-  sendStatus('checking');
+  sendStatus('checking', { manual: !!opts.manual });
+  updateCheckInFlight = autoUpdater.checkForUpdates();
   try {
-    const result = await autoUpdater.checkForUpdates();
+    const result = await updateCheckInFlight;
     return { ok: true, result };
   } catch (e) {
     sendStatus('error', { message: e && e.message ? e.message : String(e) });
     return { ok: false, error: e && e.message ? e.message : String(e) };
+  } finally {
+    updateCheckInFlight = null;
   }
 }
 

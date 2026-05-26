@@ -5137,10 +5137,19 @@
 
     function applyUpdateStatus(payload) {
       if (!payload || !payload.state) return;
-      updateState = payload.state;
+      var prevUpdateState = updateState;
+      var keepCurrentUpdateAction =
+        payload.state === 'checking' &&
+        !payload.manual &&
+        (prevUpdateState === 'available' || prevUpdateState === 'downloading' || prevUpdateState === 'ready');
+      if (!keepCurrentUpdateAction) updateState = payload.state;
       if (payload.state === 'checking') {
-        setChipVisible(true, 'Prüfe Update…');
-        if (chip) chip.title = 'Server-Update wird geprüft';
+        if (payload.manual) {
+          setChipVisible(true, 'Prüfe Update…');
+          if (chip) chip.title = 'Server-Update wird geprüft';
+        } else if (prevUpdateState !== 'available' && prevUpdateState !== 'downloading' && prevUpdateState !== 'ready') {
+          setChipVisible(false);
+        }
       } else if (payload.state === 'available') {
         setChipVisible(true, 'Update verfügbar');
         if (chip && payload.latestVersion) {
