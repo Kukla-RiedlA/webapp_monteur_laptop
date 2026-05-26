@@ -611,6 +611,7 @@
     .settings-row input { width: 100%; max-width: 400px; padding: 0.5rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
     .settings-row-checkbox .settings-checkbox-label { display: flex; align-items: flex-start; gap: 0.5rem; max-width: 420px; cursor: pointer; color: var(--muted); font-size: 0.9rem; }
     .settings-row-checkbox input[type="checkbox"] { width: auto; max-width: none; margin-top: 0.2rem; flex-shrink: 0; }
+    .settings-hint-tls { margin: 0 0 1rem; max-width: 420px; font-size: 0.9rem; color: var(--muted); line-height: 1.4; }
     .dienstreise-basepath-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; max-width: 520px; }
     .settings-saved-hint { margin-left: 0.75rem; color: var(--muted); font-size: 0.9rem; }
     .cal-toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
@@ -1436,12 +1437,9 @@
         <label for="serverPassword">Passwort (Dispo-Login)</label>
         <input type="password" id="serverPassword" placeholder="••••••••" autocomplete="current-password" />
       </div>
-      <div class="settings-row settings-row-checkbox">
-        <label class="settings-checkbox-label" title="Nur für interne Server mit selbstsigniertem Zertifikat (z. B. https://…:4433).">
-          <input type="checkbox" id="allowInsecureDispoTls" checked />
-          Selbstsigniertes HTTPS-Zertifikat akzeptieren
-        </label>
-      </div>
+      <p class="settings-hint settings-hint-tls" id="dispoTlsFixedHint">
+        HTTPS zum Dispo-Server: selbstsigniertes Zertifikat wird akzeptiert (fest voreingestellt, z.&nbsp;B. interne Kukla-URL).
+      </p>
       <div class="settings-row">
         <label for="dienstreiseBasePath">Speicherort Dienstreise-Ordner</label>
         <div class="dienstreise-basepath-row">

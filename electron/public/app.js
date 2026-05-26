@@ -137,8 +137,6 @@
   /** Standard bei Neuinstallation (ohne gespeicherte Einstellungen); weiterhin editierbar. */
   const DEFAULT_DISPO_SERVER_URL = 'https://fsm.kukla.co.at:4433';
   const DEFAULT_DISPO_SERVER_URL_INTERNAL = 'https://10.0.0.180';
-  const DEFAULT_ALLOW_INSECURE_TLS = true;
-
   const SETTINGS_KEYS = {
     serverUrl: 'monteur_serverUrl',
     serverUrlInternal: 'monteur_serverUrlInternal',
@@ -148,7 +146,6 @@
     serverPassword: 'monteur_serverPassword',
     syncIntervalMinutes: 'monteur_syncIntervalMinutes',
     dienstreiseBasePath: 'monteur_dienstreiseBasePath',
-    allowInsecureTls: 'monteur_allowInsecureTls',
     uiTheme: 'monteur_uiTheme',
   };
 
@@ -211,14 +208,9 @@
     syncUpdateFeedToMain();
   }
 
+  /** Fest: selbstsigniertes Dispo-HTTPS (kein UI-Schalter). */
   function getAllowInsecureTlsSetting() {
-    var el = document.getElementById('allowInsecureDispoTls');
-    if (el) return !!el.checked;
-    try {
-      return localStorage.getItem(SETTINGS_KEYS.allowInsecureTls) === '1';
-    } catch (e) {
-      return true;
-    }
+    return true;
   }
 
   var autoAppUpdateCheckTimer = null;
@@ -403,11 +395,6 @@
         const el = document.getElementById('dienstreiseBasePath');
         if (el) el.value = basePath;
       }
-      const tls = localStorage.getItem(SETTINGS_KEYS.allowInsecureTls);
-      const tlsEl = document.getElementById('allowInsecureDispoTls');
-      if (tlsEl) {
-        tlsEl.checked = tls != null ? tls === '1' : DEFAULT_ALLOW_INSECURE_TLS;
-      }
       const uiTh = localStorage.getItem(SETTINGS_KEYS.uiTheme);
       applyUiTheme(uiTh);
     } catch (e) { /* ignore */ }
@@ -426,8 +413,6 @@
       localStorage.setItem(SETTINGS_KEYS.syncIntervalMinutes, String(getSyncIntervalMinutes()));
       const pathEl = document.getElementById('dienstreiseBasePath');
       localStorage.setItem(SETTINGS_KEYS.dienstreiseBasePath, (pathEl && pathEl.value ? pathEl.value.trim() : '') || '');
-      const tlsEl = document.getElementById('allowInsecureDispoTls');
-      localStorage.setItem(SETTINGS_KEYS.allowInsecureTls, tlsEl && tlsEl.checked ? '1' : '0');
       const themeEl = document.getElementById('uiThemeDarkToggle');
       const th = themeEl && themeEl.checked ? 'dark' : 'kukla';
       localStorage.setItem(SETTINGS_KEYS.uiTheme, th);
@@ -5069,39 +5054,11 @@
       }
     }).catch(function () {});
   }
-  function ensureDefaultDispoTlsIfUnset() {
-    var stored = null;
-    try {
-      stored = localStorage.getItem(SETTINGS_KEYS.allowInsecureTls);
-    } catch (e) { /* ignore */ }
-    if (stored != null) return Promise.resolve();
-    var el = document.getElementById('allowInsecureDispoTls');
-    if (el) el.checked = DEFAULT_ALLOW_INSECURE_TLS;
+  function applyFixedDispoTlsOnServer() {
     return fetch(API_BASE + '/api/settings_dispo_tls', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ allowInsecureTls: DEFAULT_ALLOW_INSECURE_TLS }),
-    })
-      .then(function (r) {
-        return r.json();
-      })
-      .then(function (data) {
-        if (data && data.ok) {
-          try {
-            localStorage.setItem(SETTINGS_KEYS.allowInsecureTls, DEFAULT_ALLOW_INSECURE_TLS ? '1' : '0');
-          } catch (e) { /* ignore */ }
-        }
-      })
-      .catch(function () {});
-  }
-
-  function loadDispoTlsSettingFromServer() {
-    return fetch(API_BASE + '/api/settings_dispo_tls').then(function (r) { return r.json(); }).then(function (data) {
-      if (data && data.ok) {
-        var el = document.getElementById('allowInsecureDispoTls');
-        if (el) el.checked = !!data.allowInsecureTls;
-        try { localStorage.setItem(SETTINGS_KEYS.allowInsecureTls, data.allowInsecureTls ? '1' : '0'); } catch (e) {}
-      }
+      body: JSON.stringify({ allowInsecureTls: true }),
     }).catch(function () {});
   }
   loadDienstreiseConfigFromServer();
@@ -5112,10 +5069,7 @@
   }).catch(function () {});
   bootstrapLocalData(false)
     .then(function () {
-      return ensureDefaultDispoTlsIfUnset();
-    })
-    .then(function () {
-      return loadDispoTlsSettingFromServer();
+      return applyFixedDispoTlsOnServer();
     })
     .then(function () {
       syncUpdateFeedToMain();
@@ -5276,11 +5230,6 @@
       });
     }
 
-    var tlsElUpdate = document.getElementById('allowInsecureDispoTls');
-    if (tlsElUpdate) {
-      tlsElUpdate.addEventListener('change', syncUpdateFeedToMain);
-    }
-
     if (window.monteurApp && typeof monteurApp.onAppUpdateStatus === 'function') {
       monteurApp.onAppUpdateStatus(applyUpdateStatus);
     }
@@ -5315,16 +5264,8 @@
     syncUpdateFeedToMain();
     var pathEl = document.getElementById('dienstreiseBasePath');
     var basePath = (pathEl && pathEl.value ? pathEl.value.trim() : '') || '';
-    var tlsEl = document.getElementById('allowInsecureDispoTls');
-    var tlsOn = !!(tlsEl && tlsEl.checked);
     fetch(API_BASE + '/api/dienstreise/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ basePath: basePath }) }).catch(function () {});
-    fetch(API_BASE + '/api/settings_dispo_tls', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ allowInsecureTls: tlsOn }),
-    })
-      .then(function (r) { return r.json(); })
-      .catch(function () { return {}; })
+    applyFixedDispoTlsOnServer()
       .then(function () {
         startSyncInterval();
         startPushEvents();

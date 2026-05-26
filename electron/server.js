@@ -42,6 +42,14 @@ function configurePersistentDbDir() {
     if (!fs.existsSync(dienstreiseCfg)) {
       fs.writeFileSync(dienstreiseCfg, JSON.stringify({ basePath: '' }, null, 2), 'utf8');
     }
+    const appCfgPath = path.join(targetDir, 'app_config.json');
+    if (!fs.existsSync(appCfgPath)) {
+      fs.writeFileSync(
+        appCfgPath,
+        JSON.stringify({ acceptSelfSignedDispoTls: true }, null, 2),
+        'utf8',
+      );
+    }
     DB_DIR = targetDir;
     DB_PATH = targetDb;
     console.log('[monteur-db] Persistenz:', DB_PATH);
@@ -372,46 +380,66 @@ function monteurDbSaveErrorMessage() {
 }
 const SCHEMA_PATH = path.join(__dirname, 'db', 'schema.sql');
 
-/** Selbstsigniertes HTTPS zum Dispo (Legacy-Flag + Präferenzdatei 0/1). */
+/** Selbstsigniertes HTTPS zum Dispo (Kukla-Standard: an, nicht in der UI abschaltbar). */
 const DISPO_TLS_INSECURE_FLAG = path.join(DB_DIR, '.dispo-insecure-tls');
 const DISPO_TLS_PREF = path.join(DB_DIR, '.dispo-tls-insecure');
+const DISPO_ACCEPT_SELF_SIGNED_TLS_DEFAULT = true;
+
+function getUserAppConfigPath() {
+  return path.join(DB_DIR, 'app_config.json');
+}
+
+function readUserAppConfig() {
+  try {
+    const p = getUserAppConfigPath();
+    if (!fs.existsSync(p)) return {};
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return data && typeof data === 'object' ? data : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeUserAppConfig(patch) {
+  if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+  const cur = readUserAppConfig();
+  Object.assign(cur, patch);
+  fs.writeFileSync(getUserAppConfigPath(), JSON.stringify(cur, null, 2), 'utf8');
+}
 
 function isDispoInsecureTlsAllowed() {
   if (process.env.KUKLA_DISP_TLS_INSECURE === '1') return true;
   if (process.env.KUKLA_DISP_TLS_INSECURE === '0') return false;
+  const cfg = readUserAppConfig();
+  if (cfg.acceptSelfSignedDispoTls === false) return false;
+  if (cfg.acceptSelfSignedDispoTls === true) return true;
   if (fs.existsSync(DISPO_TLS_INSECURE_FLAG)) return true;
   try {
     if (fs.existsSync(DISPO_TLS_PREF)) {
       return fs.readFileSync(DISPO_TLS_PREF, 'utf8').trim() !== '0';
     }
   } catch (_) {}
-  return !fs.existsSync(DB_PATH);
+  return DISPO_ACCEPT_SELF_SIGNED_TLS_DEFAULT;
 }
 
-function setDispoInsecureTlsPreference(on) {
+function applyDispoInsecureTlsPreference() {
   if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
-  fs.writeFileSync(DISPO_TLS_PREF, on ? '1' : '0');
-  if (on) {
-    fs.writeFileSync(DISPO_TLS_INSECURE_FLAG, '1');
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-  } else {
+  if (!isDispoInsecureTlsAllowed()) {
     try {
       if (fs.existsSync(DISPO_TLS_INSECURE_FLAG)) fs.unlinkSync(DISPO_TLS_INSECURE_FLAG);
     } catch (_) {}
-    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    fs.writeFileSync(DISPO_TLS_PREF, '0');
+    if (process.env.KUKLA_DISP_TLS_INSECURE !== '1') {
+      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    }
+    return;
   }
+  fs.writeFileSync(DISPO_TLS_PREF, '1');
+  fs.writeFileSync(DISPO_TLS_INSECURE_FLAG, '1');
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  writeUserAppConfig({ acceptSelfSignedDispoTls: true });
 }
 
-(function applyDispoInsecureTlsFromDisk() {
-  try {
-    if (isDispoInsecureTlsAllowed()) {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-      if (!fs.existsSync(DB_PATH) && !fs.existsSync(DISPO_TLS_PREF) && !fs.existsSync(DISPO_TLS_INSECURE_FLAG)) {
-        setDispoInsecureTlsPreference(true);
-      }
-    }
-  } catch (_) {}
-})();
 
 /** Wrapper um sql.js – API wie better-sqlite3 (prepare/get/all/run, transaction). */
 function createDbWrapper(sqlDb) {
@@ -514,6 +542,11 @@ async function getDb() {
 
 async function loadDbOnce() {
   configurePersistentDbDir();
+  try {
+    applyDispoInsecureTlsPreference();
+  } catch (tlsErr) {
+    console.warn('[dispo-tls] apply:', tlsErr && tlsErr.message ? tlsErr.message : tlsErr);
+  }
   const initSqlJs = require('sql.js');
   const SQL = await initSqlJs({
     locateFile: (file) => path.join(__dirname, 'node_modules', 'sql.js', 'dist', file),
@@ -894,7 +927,9 @@ function createApp(db) {
           EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
           OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
         )
-    `).get(n, n, technicianId);
+      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+      LIMIT 1
+    `).get(n, n, technicianId, n);
     if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
     const blocked = localJobWriteBlocked(row.status);
     if (blocked) return blocked;
@@ -914,7 +949,9 @@ function createApp(db) {
     const row = dbConn.prepare(`
       SELECT id, status FROM jobs j
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-    `).get(lid, lid);
+      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+      LIMIT 1
+    `).get(lid, lid, lid);
     if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
     const blocked = localJobWriteBlocked(row.status);
     if (blocked) return blocked;
@@ -1040,20 +1077,24 @@ function createApp(db) {
   });
 
   app.get('/api/settings_dispo_tls', (req, res) => {
-    res.json({ ok: true, allowInsecureTls: isDispoInsecureTlsAllowed() });
+    res.json({
+      ok: true,
+      allowInsecureTls: isDispoInsecureTlsAllowed(),
+      fixed: true,
+      hint: 'Selbstsigniertes Dispo-HTTPS ist fest aktiviert (Kukla-Standard).',
+    });
   });
 
   app.post('/api/settings_dispo_tls', express.json(), (req, res) => {
-    const on = !!(req.body && req.body.allowInsecureTls);
     try {
-      setDispoInsecureTlsPreference(on);
+      applyDispoInsecureTlsPreference();
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
     res.json({
       ok: true,
-      allowInsecureTls: on,
-      hint: on ? '' : 'Bei weiterhin funktionierender HTTPS-Verbindung: App einmal vollständig neu starten.',
+      allowInsecureTls: true,
+      fixed: true,
     });
   });
 
@@ -1508,9 +1549,11 @@ function createApp(db) {
       LEFT JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+      LIMIT 1
     `,
         )
-        .get(id, id) || null
+        .get(id, id, id) || null
     );
   }
 
@@ -3012,7 +3055,7 @@ function createApp(db) {
       let hint = '';
       if (/CERT|TLS|SSL|self-signed|self signed|unable to verify|UNABLE_TO_VERIFY|wrong version number|EPROTO/i.test(msg)) {
         hint =
-          'Bei HTTPS mit selbstsigniertem Zertifikat: Einstellungen → „Selbstsigniertes HTTPS-Zertifikat akzeptieren“ aktivieren, speichern, App neu starten.';
+          'HTTPS-Verbindung zum Dispo-Server fehlgeschlagen (Zertifikat/Netz). IT prüfen: Erreichbarkeit und URL in den Einstellungen.';
       }
       res.status(502).json({
         error: 'Dispo nicht erreichbar: ' + msg,
@@ -3121,7 +3164,9 @@ ORDER BY
           EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
           OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
         )
-    `).get(jobId, jobId, technicianId);
+      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+      LIMIT 1
+    `).get(jobId, jobId, technicianId, jobId);
     if (!row) {
       return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
     }
@@ -3169,7 +3214,9 @@ ORDER BY
             EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
             OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
           )
-      `).get(localId, localId, technicianId);
+        ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+        LIMIT 1
+      `).get(localId, localId, technicianId, localId);
 
       async function finishWithDispoJob(data) {
         if (!data.job || typeof data.job !== 'object') {
@@ -4924,7 +4971,9 @@ ORDER BY
           EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
           OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
         )
-    `).get(n, n, technicianId);
+      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+      LIMIT 1
+    `).get(n, n, technicianId, n);
     if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
     const s = String(row.status || '').trim().toLowerCase();
     if (s === 'abgerechnet') {
