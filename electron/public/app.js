@@ -506,6 +506,30 @@
     return { id: id, can_write: true };
   }
 
+  function mergeAbrechnungComments(comments) {
+    var c = comments || {};
+    var list = [];
+    (c.dispo || []).forEach(function (item) {
+      var copy = {};
+      Object.keys(item).forEach(function (k) { copy[k] = item[k]; });
+      copy._bucket = 'dispo';
+      list.push(copy);
+    });
+    (c.buchhaltung || []).forEach(function (item) {
+      var copy2 = {};
+      Object.keys(item).forEach(function (k) { copy2[k] = item[k]; });
+      copy2._bucket = 'buchhaltung';
+      list.push(copy2);
+    });
+    list.sort(function (a, b) {
+      var da = String(a.created_at || '');
+      var db = String(b.created_at || '');
+      if (da !== db) return da < db ? -1 : (da > db ? 1 : 0);
+      return (parseInt(a.id, 10) || 0) - (parseInt(b.id, 10) || 0);
+    });
+    return list;
+  }
+
   function renderAbrechnungCommentList(ulEl, items) {
     if (!ulEl) return;
     ulEl.innerHTML = '';
@@ -518,6 +542,7 @@
       var parts = [];
       if (c.author_name) parts.push(String(c.author_name));
       if (c.created_at) parts.push(String(c.created_at));
+      if (c._bucket === 'buchhaltung') parts.push('Buchhaltung');
       meta.textContent = parts.join(' · ');
       var body = document.createElement('div');
       body.className = 'abrechnung-comment-body';
@@ -585,14 +610,33 @@
     }
   }
 
-  function renderAbrechnungFileList(ulEl, bucket, files, jobId, canWrite) {
+  function dedupeAbrechnungFilesForDisplay(files) {
+    var m = new Map();
+    (files || []).forEach(function (f) {
+      var fn = f.file_name || f.name || '';
+      if (!fn) return;
+      var bucket = f.bucket != null ? String(f.bucket) : 'dispo';
+      var existing = m.get(fn);
+      if (!existing || (existing.bucket === 'buchhaltung' && bucket === 'dispo')) {
+        m.set(fn, {
+          file_name: fn,
+          bucket: bucket,
+          size_bytes: f.size_bytes,
+          remote_only: f.remote_only
+        });
+      }
+    });
+    return Array.from(m.values()).sort(function (a, b) {
+      return String(a.file_name).localeCompare(String(b.file_name));
+    });
+  }
+
+  function renderAbrechnungFileList(ulEl, files, jobId, canWrite) {
     if (!ulEl) return;
     ulEl.innerHTML = '';
-    var list = (files || []).filter(function (f) {
-      var b = f.bucket != null ? String(f.bucket) : '';
-      return b === bucket;
-    });
+    var list = dedupeAbrechnungFilesForDisplay(files);
     list.forEach(function (f) {
+      var bucket = f.bucket != null ? String(f.bucket) : 'dispo';
       var li = document.createElement('li');
       var a = document.createElement('a');
       a.href = '#';
@@ -668,31 +712,21 @@
   async function loadAbrechnungBundleForSelection() {
     var sel = document.getElementById('abrechnungJobSelect');
     var jid = sel && sel.value ? parseInt(sel.value, 10) : 0;
-    var nd = document.getElementById('abrechnungNoteDispo');
-    var nb = document.getElementById('abrechnungNoteBuch');
-    var cd = document.getElementById('abrechnungCommentsDispo');
-    var cb = document.getElementById('abrechnungCommentsBuch');
-    var fd = document.getElementById('abrechnungFilesDispo');
-    var fb = document.getElementById('abrechnungFilesBuch');
+    var noteEl = document.getElementById('abrechnungNote');
+    var commentsEl = document.getElementById('abrechnungComments');
+    var filesEl = document.getElementById('abrechnungFiles');
     var meta = document.getElementById('abrechnungJobMeta');
-    var sd = document.getElementById('btnAbrechnungSaveDispo');
-    var sb = document.getElementById('btnAbrechnungSaveBuch');
-    var ud = document.getElementById('abrechnungUploadDispo');
-    var ub = document.getElementById('abrechnungUploadBuch');
+    var saveBtn = document.getElementById('btnAbrechnungSaveNote');
+    var uploadEl = document.getElementById('abrechnungUpload');
     var job = abrechnungSelectedJobObj();
     var canWrite = abrechnungEffectiveCanWrite(job);
 
     if (!jid) {
-      if (cd) cd.innerHTML = '';
-      if (cb) cb.innerHTML = '';
-      if (nd) { nd.value = ''; nd.disabled = true; }
-      if (nb) { nb.value = ''; nb.disabled = true; }
-      if (fd) fd.innerHTML = '';
-      if (fb) fb.innerHTML = '';
-      if (sd) sd.disabled = true;
-      if (sb) sb.disabled = true;
-      if (ud) { ud.disabled = true; ud.value = ''; }
-      if (ub) { ub.disabled = true; ub.value = ''; }
+      if (commentsEl) commentsEl.innerHTML = '';
+      if (noteEl) { noteEl.value = ''; noteEl.disabled = true; }
+      if (filesEl) filesEl.innerHTML = '';
+      if (saveBtn) saveBtn.disabled = true;
+      if (uploadEl) { uploadEl.disabled = true; uploadEl.value = ''; }
       if (meta) meta.textContent = '';
       return;
     }
@@ -727,16 +761,11 @@
     }
     if (meta) meta.textContent = metaParts.join(' ');
     var comments = j.comments || { dispo: [], buchhaltung: [] };
-    renderAbrechnungCommentList(cd, comments.dispo);
-    renderAbrechnungCommentList(cb, comments.buchhaltung);
-    if (nd) { nd.value = ''; nd.placeholder = 'Neuen Kommentar …'; nd.disabled = !canWrite; }
-    if (nb) { nb.value = ''; nb.placeholder = 'Neuen Kommentar …'; nb.disabled = !canWrite; }
-    renderAbrechnungFileList(fd, 'dispo', j.files, jid, canWrite);
-    renderAbrechnungFileList(fb, 'buchhaltung', j.files, jid, canWrite);
-    if (sd) sd.disabled = !canWrite;
-    if (sb) sb.disabled = !canWrite;
-    if (ud) ud.disabled = !canWrite;
-    if (ub) ub.disabled = !canWrite;
+    renderAbrechnungCommentList(commentsEl, mergeAbrechnungComments(comments));
+    if (noteEl) { noteEl.value = ''; noteEl.placeholder = 'Neuen Kommentar …'; noteEl.disabled = !canWrite; }
+    renderAbrechnungFileList(filesEl, j.files, jid, canWrite);
+    if (saveBtn) saveBtn.disabled = !canWrite;
+    if (uploadEl) uploadEl.disabled = !canWrite;
   }
 
   async function refreshAbrechnungNativeUi(withServerSync) {
@@ -795,16 +824,16 @@
     }
   }
 
-  async function abrechnungSaveNote(bucket) {
+  async function abrechnungSaveNote() {
     var sel = document.getElementById('abrechnungJobSelect');
     var jid = sel && sel.value ? parseInt(sel.value, 10) : 0;
-    var ta = bucket === 'dispo' ? document.getElementById('abrechnungNoteDispo') : document.getElementById('abrechnungNoteBuch');
+    var ta = document.getElementById('abrechnungNote');
     if (!jid || !ta) return;
     try {
       var r = await fetch(API_BASE + '/api/abrechnung/note', {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
-        body: JSON.stringify(abrechnungBody({ job_server_id: jid, bucket: bucket, body: ta.value }))
+        body: JSON.stringify(abrechnungBody({ job_server_id: jid, bucket: 'dispo', body: ta.value }))
       });
       var j = await r.json();
       if (!j.ok) throw new Error(j.error || 'Speichern fehlgeschlagen');
@@ -8653,12 +8682,9 @@
     if (period) period.addEventListener('change', function () { refreshAbrechnungNativeUi(false); });
     var jobSel = document.getElementById('abrechnungJobSelect');
     if (jobSel) jobSel.addEventListener('change', function () { loadAbrechnungBundleForSelection(); });
-    var sd = document.getElementById('btnAbrechnungSaveDispo');
-    if (sd) sd.addEventListener('click', function () { abrechnungSaveNote('dispo'); });
-    var sb = document.getElementById('btnAbrechnungSaveBuch');
-    if (sb) sb.addEventListener('click', function () { abrechnungSaveNote('buchhaltung'); });
-    wireAbrechnungFileUpload('abrechnungUploadDispo', 'dispo');
-    wireAbrechnungFileUpload('abrechnungUploadBuch', 'buchhaltung');
+    var saveNote = document.getElementById('btnAbrechnungSaveNote');
+    if (saveNote) saveNote.addEventListener('click', function () { abrechnungSaveNote(); });
+    wireAbrechnungFileUpload('abrechnungUpload', 'dispo');
     window.addEventListener('online', function () {
       var v = document.getElementById('viewAbrechnung');
       if (v && v.classList.contains('active')) refreshAbrechnungNativeUi(false);

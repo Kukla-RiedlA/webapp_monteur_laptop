@@ -197,6 +197,27 @@ function dedupeAbrechnungFileRows(rows) {
   return Array.from(m.values());
 }
 
+/** Anzeige: gleicher Dateiname nur einmal (Dispo bevorzugt). */
+function dedupeAbrechnungFilesByFilename(rows) {
+  const m = new Map();
+  for (const row of dedupeAbrechnungFileRows(rows)) {
+    const fn = row.file_name != null ? String(row.file_name) : '';
+    if (!fn) continue;
+    const bucket = row.bucket != null ? String(row.bucket) : 'dispo';
+    const existing = m.get(fn);
+    if (!existing || (existing.bucket === 'buchhaltung' && bucket === 'dispo')) {
+      m.set(fn, {
+        bucket,
+        file_name: fn,
+        size_bytes: row.size_bytes != null ? row.size_bytes : null,
+        synced_at: row.synced_at != null ? row.synced_at : null,
+        remote_only: row.remote_only === true,
+      });
+    }
+  }
+  return Array.from(m.values()).sort((a, b) => String(a.file_name || '').localeCompare(String(b.file_name || '')));
+}
+
 function findLocalAbrechnungFilePath(dbDir, db, jobServerIdFromQuery, bucket, name) {
   const resolved = resolveDispoJobIdForAbrechnung(db, jobServerIdFromQuery);
   const ids = Array.from(
@@ -309,7 +330,7 @@ function dispoMonteurFetchHeaders(authHeader, technicianId) {
 /** Gleiche Zuordnung wie abrechnung_monteur_api.inc.php — über job_project_* erreichbar. */
 function abrechnungBucketProjectSubdir(bucket) {
   if (bucket === 'dispo') return 'Dokumente_Dispo';
-  if (bucket === 'buchhaltung') return 'Dokumente_Buchhaltung';
+  if (bucket === 'buchhaltung') return 'Dokumente_Dispo';
   return null;
 }
 
@@ -831,11 +852,7 @@ function registerAbrechnungRoutes(app, ctx) {
           console.warn('[abrechnung/bundle] Dispo-Dateiliste:', dispoFilesError);
         }
       }
-      files.sort((a, b) => {
-        const c = String(a.bucket || '').localeCompare(String(b.bucket || ''));
-        if (c !== 0) return c;
-        return String(a.file_name || '').localeCompare(String(b.file_name || ''));
-      });
+      files = dedupeAbrechnungFilesByFilename(files);
       return res.json({
         ok: true,
         comments,

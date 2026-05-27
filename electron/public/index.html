@@ -308,7 +308,7 @@
     .abrechnung-job-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
     .abrechnung-job-row label { font-size: 0.88rem; color: var(--muted); }
     .abrechnung-job-select { flex: 1; min-width: 220px; padding: 0.4rem 0.5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
-    .abrechnung-buckets { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem; }
+    .abrechnung-buckets { display: grid; grid-template-columns: 1fr; gap: 0.75rem; max-width: 720px; }
     .abrechnung-bucket { border: 1px solid var(--accent); border-radius: 6px; padding: 0.6rem 0.75rem; background: var(--bg); display: flex; flex-direction: column; gap: 0.45rem; min-height: 0; }
     .abrechnung-bucket h3 { margin: 0; font-size: 1rem; }
     .abrechnung-bucket .hint { margin: 0; font-size: 0.8rem; color: var(--muted); }
@@ -1064,26 +1064,15 @@
       </div>
       <p id="abrechnungJobMeta" class="hint" style="margin:0;font-size:0.85rem;color:var(--muted)"></p>
       <div class="abrechnung-buckets">
-        <section class="abrechnung-bucket" aria-label="Dispo">
-          <h3>Dispo</h3>
-          <p class="hint">Kommentarverlauf und Dateien für die Dispo-Abrechnung.</p>
-          <ul id="abrechnungCommentsDispo" class="abrechnung-comments" aria-label="Kommentare Dispo"></ul>
-          <textarea id="abrechnungNoteDispo" placeholder="Neuen Kommentar …" disabled></textarea>
-          <button type="button" class="btn btn-primary" id="btnAbrechnungSaveDispo" disabled>Kommentar speichern</button>
-          <ul id="abrechnungFilesDispo" class="abrechnung-files"></ul>
+        <section class="abrechnung-bucket" aria-label="Abrechnung">
+          <h3>Abrechnung</h3>
+          <p class="hint">Kommentarverlauf und Dateien (Dispo und Buchhaltung zusammengeführt).</p>
+          <ul id="abrechnungComments" class="abrechnung-comments" aria-label="Kommentare Abrechnung"></ul>
+          <textarea id="abrechnungNote" placeholder="Neuen Kommentar …" disabled></textarea>
+          <button type="button" class="btn btn-primary" id="btnAbrechnungSaveNote" disabled>Kommentar speichern</button>
+          <ul id="abrechnungFiles" class="abrechnung-files"></ul>
           <div class="abrechnung-upload">
-            <input type="file" id="abrechnungUploadDispo" disabled />
-          </div>
-        </section>
-        <section class="abrechnung-bucket" aria-label="Buchhaltung">
-          <h3>Buchhaltung</h3>
-          <p class="hint">Kommentarverlauf und Dateien für die Buchhaltung.</p>
-          <ul id="abrechnungCommentsBuch" class="abrechnung-comments" aria-label="Kommentare Buchhaltung"></ul>
-          <textarea id="abrechnungNoteBuch" placeholder="Neuen Kommentar …" disabled></textarea>
-          <button type="button" class="btn btn-primary" id="btnAbrechnungSaveBuch" disabled>Kommentar speichern</button>
-          <ul id="abrechnungFilesBuch" class="abrechnung-files"></ul>
-          <div class="abrechnung-upload">
-            <input type="file" id="abrechnungUploadBuch" disabled />
+            <input type="file" id="abrechnungUpload" disabled />
           </div>
         </section>
       </div>
