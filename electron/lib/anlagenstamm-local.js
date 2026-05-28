@@ -75,6 +75,7 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       filename_fn TEXT,
       content_fn TEXT,
       used_fn TEXT,
+      server_file_id INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
@@ -656,24 +657,29 @@ function upsertParameterFile(db, payload) {
       server_file_id = COALESCE(excluded.server_file_id, server_file_id),
       updated_at = datetime('now')
   `);
-  ins.run(
-    fab,
-    source,
-    sourceFileStatus,
-    payload && payload.technician_id != null ? Number(payload.technician_id) : null,
-    payload && payload.technician_name != null ? String(payload.technician_name) : null,
-    uploadedAt,
-    originalFilename,
-    payload && payload.mime != null ? String(payload.mime) : null,
-    Math.max(0, Number((payload && payload.size) || 0) || 0),
-    sha256,
-    payload && payload.storage_relpath != null ? String(payload.storage_relpath) : null,
-    payload && payload.source_path != null ? String(payload.source_path) : null,
-    payload && payload.filename_fn != null ? String(payload.filename_fn) : null,
-    payload && payload.content_fn != null ? String(payload.content_fn) : null,
-    payload && payload.used_fn != null ? String(payload.used_fn) : null,
-    payload && payload.server_file_id != null ? Number(payload.server_file_id) : null,
-  );
+  try {
+    ins.run(
+      fab,
+      source,
+      sourceFileStatus,
+      payload && payload.technician_id != null ? Number(payload.technician_id) : null,
+      payload && payload.technician_name != null ? String(payload.technician_name) : null,
+      uploadedAt,
+      originalFilename,
+      payload && payload.mime != null ? String(payload.mime) : null,
+      Math.max(0, Number((payload && payload.size) || 0) || 0),
+      sha256,
+      payload && payload.storage_relpath != null ? String(payload.storage_relpath) : null,
+      payload && payload.source_path != null ? String(payload.source_path) : null,
+      payload && payload.filename_fn != null ? String(payload.filename_fn) : null,
+      payload && payload.content_fn != null ? String(payload.content_fn) : null,
+      payload && payload.used_fn != null ? String(payload.used_fn) : null,
+      payload && payload.server_file_id != null ? Number(payload.server_file_id) : null,
+    );
+  } catch (err) {
+    const msg = err && err.message ? String(err.message) : String(err);
+    return { ok: false, error: msg };
+  }
   const row = db
     .prepare('SELECT id FROM anlagenstamm_parameter_files WHERE fab = ? AND source = ? AND sha256 = ? LIMIT 1')
     .get(fab, source, sha256);

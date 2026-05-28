@@ -10584,8 +10584,23 @@
               body: JSON.stringify(anlagenstammDispoBody({ job_id: jobId, filename: filename, content: content }))
             });
             var data = await r.json().catch(function () { return {}; });
-            if (data.ok) {
-              outcomes.push({ file: filename, ok: true, savedCsv: data.savedCsv, savedPdf: data.savedPdf });
+            if (!r.ok) {
+              outcomes.push({
+                file: filename,
+                ok: false,
+                error: (data && data.error) ? data.error : ('HTTP ' + r.status),
+              });
+            } else if (data.ok) {
+              var warnParts = [];
+              if (data.ingest_error) warnParts.push('Cache: ' + data.ingest_error);
+              if (data.dispo_ingest_error) warnParts.push('Dispo: ' + data.dispo_ingest_error);
+              outcomes.push({
+                file: filename,
+                ok: true,
+                savedCsv: data.savedCsv,
+                savedPdf: data.savedPdf,
+                warn: warnParts.length ? warnParts.join(' · ') : '',
+              });
             } else {
               outcomes.push({ file: filename, ok: false, error: data.error || 'Unbekannter Fehler' });
             }
@@ -10597,7 +10612,8 @@
           var html = '';
           outcomes.forEach(function (o) {
             if (o.ok) {
-              html += '<p><strong>' + escapeHtml(o.file) + '</strong>: gespeichert (CSV + PDF)</p>';
+              html += '<p><strong>' + escapeHtml(o.file) + '</strong>: gespeichert (CSV + PDF)' +
+                (o.warn ? ' <span class="muted">(' + escapeHtml(o.warn) + ')</span>' : '') + '</p>';
             } else {
               html += '<p><strong>' + escapeHtml(o.file) + '</strong>: <span class="error">' + escapeHtml(o.error) + '</span></p>';
             }

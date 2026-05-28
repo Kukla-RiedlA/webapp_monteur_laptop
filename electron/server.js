@@ -5351,8 +5351,17 @@ ORDER BY
         csvText = csvBuffer.toString('latin1');
       }
 
-      const csvToPdfBuffer = getCsvToPdfBuffer();
-      const pdfBytes = await csvToPdfBuffer(csvText, { filename });
+      let pdfBytes;
+      try {
+        const csvToPdfBuffer = getCsvToPdfBuffer();
+        pdfBytes = await csvToPdfBuffer(csvText, { filename });
+      } catch (pdfErr) {
+        const pdfMsg = pdfErr && pdfErr.message ? pdfErr.message : String(pdfErr);
+        return res.status(500).json({
+          ok: false,
+          error: 'PDF-Erzeugung fehlgeschlagen: ' + pdfMsg,
+        });
+      }
       const pdfBasename = filename.replace(/\.csv$/i, '') + '.pdf';
       const pdfPath = path.join(paramDir, pdfBasename);
       writeFileWithRetry(pdfPath, pdfBytes);
@@ -5390,22 +5399,33 @@ ORDER BY
           dispoIngestError = dispoErr && dispoErr.message ? dispoErr.message : String(dispoErr);
         }
       }
-      const ingest = ingestParameterFileIntoAnlagenstamm({
-        fileName: filename,
-        source: 'upload',
-        sourcePath: savedCsv.replace(/\\/g, '/'),
-        storageRelPath: csvPath,
-        buffer: csvBuffer,
-        mime: 'text/plain',
-        technicianId,
-        technicianName,
-        serverFileId,
-      });
+      let ingest = null;
+      let ingestError = null;
+      try {
+        ingest = ingestParameterFileIntoAnlagenstamm({
+          fileName: filename,
+          source: 'upload',
+          sourcePath: savedCsv.replace(/\\/g, '/'),
+          storageRelPath: csvPath,
+          buffer: csvBuffer,
+          mime: 'text/plain',
+          technicianId,
+          technicianName,
+          serverFileId,
+        });
+        if (ingest && ingest.ok === false && ingest.error) {
+          ingestError = String(ingest.error);
+        }
+      } catch (ingestErr) {
+        ingestError = ingestErr && ingestErr.message ? ingestErr.message : String(ingestErr);
+        console.warn('[parameterlisten] lokaler Cache:', ingestError);
+      }
       res.json({
         ok: true,
         savedCsv,
         savedPdf,
         ingest_ok: !!(ingest && ingest.ok),
+        ingest_error: ingestError,
         dispo_ingest_ok: serverFileId != null,
         dispo_ingest_error: dispoIngestError,
         dispo_file_id: serverFileId,
@@ -5414,7 +5434,13 @@ ORDER BY
         content_fn: Number.isFinite(contentFn) ? contentFn : null,
       });
     } catch (e) {
-      res.status(500).json({ ok: false, error: e.message || 'Parameterlisten-Upload fehlgeschlagen.' });
+      const errMsg =
+        (e && e.message) ||
+        (typeof e === 'string' ? e : '') ||
+        (e ? String(e) : '') ||
+        'Unbekannter Fehler';
+      console.error('[parameterlisten] Upload:', errMsg, e);
+      res.status(500).json({ ok: false, error: 'Parameterlisten-Upload fehlgeschlagen: ' + errMsg });
     }
   });
 
