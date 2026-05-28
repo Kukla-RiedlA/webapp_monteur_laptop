@@ -6,6 +6,58 @@ const path = require('path');
 const EXCEL_EXT = new Set(['.xls', '.xlsx', '.xlsm', '.xlsb']);
 
 /**
+ * Anzeige-/Fallback-Dateiname aus Server-Name oder rel_path.
+ * @param {string} rawName
+ * @param {string} relPath
+ */
+function safeTedFileName(rawName, relPath) {
+  let rawNameStr =
+    String(rawName || '').trim() || String(relPath || '').split(/[/\\]/).pop() || 'ted.xlsx';
+  if (!/\.(xlsx|xlsm|xls|xlsb)$/i.test(rawNameStr)) {
+    const relExt = path.extname(String(relPath || ''));
+    if (/^\.(xlsx|xlsm|xls|xlsb)$/i.test(relExt)) {
+      rawNameStr = path.basename(rawNameStr, path.extname(rawNameStr)) + relExt;
+    } else if (!path.extname(rawNameStr)) {
+      rawNameStr += '.xlsx';
+    }
+  }
+  return String(rawNameStr).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'ted.xlsx';
+}
+
+function sanitizeTedFabPrefix(fab) {
+  return String(fab || '')
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+}
+
+/**
+ * Lokaler Dateiname unter Reiseordner/TED/: Server-Dateiname (z. B. 1218001DF-Schenck-U.xls).
+ * Die Dateinamen sind pro FN bereits eindeutig – kein FN-Präfix.
+ * @param {{ rel_path?: string, file_name?: string, fab?: string }} ent
+ * @param {Set<string>} [usedNames] bereits vergebene Namen in diesem Lauf
+ */
+function safeTedLocalFileName(ent, usedNames) {
+  const rel = String((ent && ent.rel_path) || '')
+    .trim()
+    .replace(/\\/g, '/');
+  let base = safeTedFileName(ent && ent.file_name, rel);
+  const used = usedNames || null;
+  if (!used) return base;
+  const key = base.toLowerCase();
+  if (!used.has(key)) {
+    used.add(key);
+    return base;
+  }
+  const ext = path.extname(base) || '.xlsx';
+  const root = path.basename(base, ext);
+  let n = 2;
+  while (used.has((root + '_' + n + ext).toLowerCase())) n++;
+  base = root + '_' + n + ext;
+  used.add(base.toLowerCase());
+  return base;
+}
+
+/**
  * @param {string} targetPath
  */
 function isExcelFilePath(targetPath) {
@@ -163,6 +215,16 @@ function resolveTedExcelLocal(opts) {
     try {
       if (fs.existsSync(reiseDir) && fs.statSync(reiseDir).isDirectory()) {
         roots.unshift(reiseDir);
+        const ent = {
+          rel_path: relPath,
+          file_name: opts.fileName,
+          fab: opts.fab,
+        };
+        const nameCandidates = [safeTedLocalFileName(ent, null)];
+        for (const nm of [...new Set(nameCandidates)]) {
+          const tedCached = path.join(reiseDir, 'TED', nm);
+          if (fs.existsSync(tedCached) && isExcelFilePath(tedCached)) return tedCached;
+        }
       }
     } catch (_) {}
   }
@@ -187,4 +249,6 @@ module.exports = {
   resolveTedExcelLocal,
   isExcelFilePath,
   tedRelPathVariants,
+  safeTedFileName,
+  safeTedLocalFileName,
 };

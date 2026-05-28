@@ -1,6 +1,35 @@
 (function () {
   const API_BASE = typeof monteurApp !== 'undefined' ? monteurApp.apiBase : 'http://127.0.0.1:39678';
 
+  /** POST mit Timeout (verhindert endloses „Prüfe…“ wenn der Server blockiert). */
+  function fetchApiPostJson(path, body, timeoutMs) {
+    var ac = new AbortController();
+    var ms = timeoutMs || 28000;
+    var timer = setTimeout(function () {
+      ac.abort();
+    }, ms);
+    return fetch(API_BASE + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+      signal: ac.signal,
+    })
+      .then(function (r) {
+        return r.json().catch(function () {
+          return { ok: false, error: 'HTTP ' + r.status };
+        });
+      })
+      .catch(function (e) {
+        if (e && e.name === 'AbortError') {
+          return { ok: false, error: 'Timeout nach ' + Math.round(ms / 1000) + ' s' };
+        }
+        throw e;
+      })
+      .finally(function () {
+        clearTimeout(timer);
+      });
+  }
+
   /** @param {string} jobId */
   function pollBackgroundJobUntilTerminal(jobId, onProgress, opts) {
     opts = opts || {};
@@ -94,22 +123,72 @@
   }
 
   function startBackgroundJobsPollingUi() {
+    var wrap = document.getElementById('backgroundJobsWrap');
+    if (wrap && !wrap._syncCancelBound) {
+      wrap._syncCancelBound = true;
+      wrap.style.cursor = 'pointer';
+      wrap.addEventListener('click', function () {
+        fetch(API_BASE + '/api/background_jobs?running=1&limit=10')
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            var jobs = (data && data.jobs) || [];
+            if (!jobs.length) return;
+            var first = jobs[0];
+            var label = (first.type || 'Sync') + (first.progress_phase ? ' (' + first.progress_phase + ')' : '');
+            if (!window.confirm('Hängenden Sync abbrechen?\n\n' + label + '\n\nFortsetzung beim nächsten Online-Sync.')) {
+              return;
+            }
+            return Promise.all(
+              jobs.map(function (j) {
+                return fetch(API_BASE + '/api/background_jobs/' + encodeURIComponent(j.id) + '/cancel', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: '{}',
+                });
+              }),
+            ).then(function () {
+              return fetch(API_BASE + '/api/background_jobs/reap', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}',
+              });
+            });
+          })
+          .then(function () {
+            if (typeof applySyncBadgeAfterRun === 'function') applySyncBadgeAfterRun([]);
+          })
+          .catch(function () {});
+      });
+    }
     function refresh() {
-      fetch(API_BASE + '/api/background_jobs?running=1&limit=10')
+      fetch(API_BASE + '/api/background_jobs/reap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+        .catch(function () {})
+        .then(function () {
+          return fetch(API_BASE + '/api/background_jobs?running=1&limit=10');
+        })
         .then(function (r) {
           return r.json();
         })
         .then(function (data) {
-          var wrap = document.getElementById('backgroundJobsWrap');
+          var wrapEl = document.getElementById('backgroundJobsWrap');
           var badge = document.getElementById('backgroundJobsBadge');
           var jobs = data && data.jobs ? data.jobs : [];
-          if (!wrap || !badge) return;
+          if (!wrapEl || !badge) return;
           if (!jobs.length) {
-            wrap.style.display = 'none';
-            wrap.removeAttribute('title');
+            wrapEl.style.display = 'none';
+            wrapEl.removeAttribute('title');
+            if (typeof applySyncBadgeAfterRun === 'function') {
+              applySyncBadgeAfterRun([]).catch(function () {});
+            }
             return;
           }
-          wrap.style.display = '';
+          wrapEl.style.display = '';
           badge.textContent = 'Sync ' + jobs.length;
           var lines = jobs.slice(0, 8).map(function (j) {
             var ph = j.progress_phase || j.status || '';
@@ -119,9 +198,9 @@
             var prog = tot !== '' && Number(tot) > 0 ? ' (' + cur + '/' + tot + ')' : '';
             return (j.type || '?') + ': ' + ph + prog + (msg ? ' — ' + msg : '');
           });
-          wrap.setAttribute(
+          wrapEl.setAttribute(
             'title',
-            'Laufende Hintergrund-Synchronisation (keine abgeschlossenen Aufträge):\n' + lines.join('\n'),
+            'Laufende Hintergrund-Synchronisation — Klick zum Abbrechen:\n' + lines.join('\n'),
           );
         })
         .catch(function () {});
@@ -136,7 +215,7 @@
 
   /** Standard bei Neuinstallation (ohne gespeicherte Einstellungen); weiterhin editierbar. */
   const DEFAULT_DISPO_SERVER_URL = 'https://fsm.kukla.co.at:4433';
-  const DEFAULT_DISPO_SERVER_URL_INTERNAL = 'https://10.0.0.180';
+  const DEFAULT_DISPO_SERVER_URL_INTERNAL = 'https://10.0.0.180:4433';
   const SETTINGS_KEYS = {
     serverUrl: 'monteur_serverUrl',
     serverUrlInternal: 'monteur_serverUrlInternal',
@@ -177,9 +256,30 @@
     return (document.getElementById('serverUrl').value || '').trim();
   }
 
+  /** Port von externer URL übernehmen, wenn intern nur Schema-Standardport (z. B. :443 statt :4433). */
+  function alignDispoInternalPortFromExternal(extUrl, intUrl) {
+    try {
+      var ext = (extUrl || '').trim().replace(/\/+$/, '');
+      var intU = (intUrl || '').trim().replace(/\/+$/, '');
+      if (!ext || !intU) return intU;
+      var r = new URL(ext);
+      var t = new URL(intU);
+      var refPort = r.port || (r.protocol === 'https:' ? '443' : '80');
+      var tgtPort = t.port || (t.protocol === 'https:' ? '443' : '80');
+      if (refPort && refPort !== '443' && refPort !== '80' && (tgtPort === '443' || tgtPort === '80')) {
+        if (r.protocol === t.protocol) {
+          t.port = refPort;
+          return t.origin;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return (intUrl || '').trim().replace(/\/+$/, '');
+  }
+
   function getDispoInternalUrl() {
     var el = document.getElementById('serverUrlInternal');
-    return el ? (el.value || '').trim() : '';
+    var raw = el ? (el.value || '').trim() : '';
+    return alignDispoInternalPortFromExternal(getDispoExternalUrl(), raw);
   }
 
   /** Alias: externe Dispo-Basis-URL (Einstellungen). */
@@ -189,13 +289,30 @@
 
   /** Für Sync/Dispo: zuletzt erfolgreich gewählte Basis (intern/extern), sonst externe URL. */
   function getDispoBaseUrl() {
+    var ext = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
     try {
-      var active = (localStorage.getItem(LS_ACTIVE_BASE) || '').trim();
-      if (active) return active;
+      var active = (localStorage.getItem(LS_ACTIVE_BASE) || '').trim().replace(/\/+$/, '');
+      if (active) {
+        var host = '';
+        try {
+          host = new URL(active).hostname;
+        } catch (e) { /* ignore */ }
+        var src = '';
+        try {
+          src = (localStorage.getItem(LS_ACTIVE_SOURCE) || '').trim();
+        } catch (e2) { /* ignore */ }
+        if (ext && isPrivateLanHostname(host) && src === 'internal') {
+          return ext;
+        }
+        return active;
+      }
     } catch (e) { /* ignore */ }
-    var u = getDispoExternalUrl();
-    if (u) return u;
-    try { return (localStorage.getItem(SETTINGS_KEYS.serverUrl) || '').trim(); } catch (e2) { return ''; }
+    if (ext) return ext;
+    try {
+      return (localStorage.getItem(SETTINGS_KEYS.serverUrl) || '').trim();
+    } catch (e2) {
+      return '';
+    }
   }
 
   function setDispoActiveBase(url, source) {
@@ -256,11 +373,20 @@
     return false;
   }
 
-  /** Kandidaten für Verbindungs-/Dispo-Abfragen (aktiv → extern → intern). */
+  /** Kandidaten für Fallback (extern vor LAN, wenn aktiv nur intern aus Büro-Session). */
   function buildDispoBaseCandidatesClient() {
-    var active = (getDispoBaseUrl() || '').trim().replace(/\/+$/, '');
+    var active = '';
+    try {
+      active = (localStorage.getItem(LS_ACTIVE_BASE) || '').trim().replace(/\/+$/, '');
+    } catch (e) { /* ignore */ }
     var ext = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
     var intUrl = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
+    var activePrivate = false;
+    if (active) {
+      try {
+        activePrivate = isPrivateLanHostname(new URL(active).hostname);
+      } catch (e) { /* ignore */ }
+    }
     var out = [];
     var seen = {};
     function add(u) {
@@ -268,18 +394,10 @@
       seen[u] = true;
       out.push(u);
     }
-    add(active);
-    var activePrivate = false;
-    try {
-      activePrivate = active && isPrivateLanHostname(new URL(active).hostname);
-    } catch (e) { /* ignore */ }
-    if (activePrivate) {
-      add(ext);
-      add(intUrl);
-    } else {
-      add(ext);
-      add(intUrl);
-    }
+    if (active && !activePrivate) add(active);
+    add(ext);
+    if (activePrivate) add(active);
+    add(intUrl);
     return out;
   }
 
@@ -374,7 +492,15 @@
       const urlInt = localStorage.getItem(SETTINGS_KEYS.serverUrlInternal);
       var elInt = document.getElementById('serverUrlInternal');
       if (elInt) {
-        elInt.value = urlInt != null ? urlInt : DEFAULT_DISPO_SERVER_URL_INTERNAL;
+        var intLoaded = urlInt != null ? urlInt : DEFAULT_DISPO_SERVER_URL_INTERNAL;
+        var extLoaded = document.getElementById('serverUrl').value || DEFAULT_DISPO_SERVER_URL;
+        intLoaded = alignDispoInternalPortFromExternal(extLoaded, intLoaded);
+        elInt.value = intLoaded;
+        if (urlInt != null && intLoaded !== urlInt.trim().replace(/\/+$/, '')) {
+          try {
+            localStorage.setItem(SETTINGS_KEYS.serverUrlInternal, intLoaded);
+          } catch (e) { /* ignore */ }
+        }
       }
       const techId = localStorage.getItem(SETTINGS_KEYS.technicianId);
       if (techId != null) document.getElementById('technicianId').value = techId;
@@ -404,7 +530,12 @@
     try {
       localStorage.setItem(SETTINGS_KEYS.serverUrl, (document.getElementById('serverUrl').value || '').trim());
       var intEl = document.getElementById('serverUrlInternal');
-      localStorage.setItem(SETTINGS_KEYS.serverUrlInternal, intEl ? (intEl.value || '').trim() : '');
+      var intSave = intEl ? alignDispoInternalPortFromExternal(
+        document.getElementById('serverUrl').value || '',
+        intEl.value || '',
+      ) : '';
+      if (intEl && intSave) intEl.value = intSave;
+      localStorage.setItem(SETTINGS_KEYS.serverUrlInternal, intSave);
       localStorage.setItem(SETTINGS_KEYS.technicianId, document.getElementById('technicianId').value || '');
       var elFn = document.getElementById('monteurFullName');
       localStorage.setItem(SETTINGS_KEYS.monteurFullName, elFn ? (elFn.value || '').trim() : '');
@@ -1073,6 +1204,12 @@
     if (!job || typeof job !== 'object') return false;
     var s = String(job.status || '').trim().toLowerCase();
     return s === 'angelegt' || s === 'geplant' || s === 'zugeteilt';
+  }
+
+  /** TED-Excel in Projektordner/TED nur nach Annahme (lokal in_arbeit). */
+  function jobStatusAllowsTedFilePull(job) {
+    if (!job || typeof job !== 'object') return false;
+    return String(job.status || '').trim().toLowerCase() === 'in_arbeit';
   }
 
   var acceptJobStreamBusy = false;
@@ -2935,6 +3072,115 @@
   }
 
   var mechanikTedLoadToken = 0;
+  var mechanikTedPullInFlightByJob = {};
+  var mechanikTedPullLastStartedAt = {};
+  var mechanikTedPulledForJobId = null;
+  var MECHANIK_TED_PULL_MIN_INTERVAL_MS = 30000;
+
+  /**
+   * TED-Liste kommt live von Dispo; Projektordner/TED zeigt nur lokal Gespeichertes.
+   * Nach Anzeige der FN-Liste fehlende Excel-Dateien nachladen.
+   */
+  function refreshTedFoldersAfterSync() {
+    var seen = {};
+    function pullForLocalId(localId) {
+      var lid = parseInt(localId, 10);
+      if (!lid || seen[lid]) return;
+      seen[lid] = true;
+      var snap =
+        typeof getDienstreiseJobSnapshotByLocalId === 'function' ? getDienstreiseJobSnapshotByLocalId(lid) : null;
+      if (!snap || isJobAngelegtReadOnly(snap) || isJobAbgerechnet(snap) || !jobStatusAllowsTedFilePull(snap)) return;
+      pullMechanikTedExcelIntoProjectFolder(snap, { forceRetry: true });
+    }
+    if (window.currentProjektdatenJob && window.currentProjektdatenJob.id != null) {
+      pullForLocalId(window.currentProjektdatenJob.id);
+    }
+    if (typeof startPageActiveJobId !== 'undefined' && startPageActiveJobId) pullForLocalId(startPageActiveJobId);
+    if (selectedJobIdOnDienstreisePage) pullForLocalId(selectedJobIdOnDienstreisePage);
+  }
+
+  function pullMechanikTedExcelIntoProjectFolder(job, pullOpts) {
+    pullOpts = pullOpts || {};
+    if (!job || job.id == null) return;
+    var localJobId = parseInt(job.id, 10);
+    if (!localJobId) return;
+    if (isJobAngelegtReadOnly(job) || isJobAbgerechnet(job) || !jobStatusAllowsTedFilePull(job)) return;
+    var baseUrl = (getDispoBaseUrl() || '').trim();
+    var techId = getTechId();
+    if (!baseUrl || !techId || !getDispoUsername() || !getDispoPassword()) return;
+    if (mechanikTedPullInFlightByJob[localJobId]) return;
+    var last = mechanikTedPullLastStartedAt[localJobId] || 0;
+    var forcePull = !!pullOpts.forceRetry || mechanikTedPulledForJobId !== localJobId;
+    if (Date.now() - last < MECHANIK_TED_PULL_MIN_INTERVAL_MS && !forcePull) return;
+    var serverJobId = job.server_id != null && job.server_id !== '' ? job.server_id : job.id;
+    mechanikTedPullLastStartedAt[localJobId] = Date.now();
+    mechanikTedPullInFlightByJob[localJobId] = true;
+    fetchApiPostJson(
+      '/api/mechanik_ted_excel_pull_job',
+      {
+        baseUrl: baseUrl,
+        externalUrl: getDispoExternalUrl(),
+        internalUrl: getDispoInternalUrl(),
+        jobId: serverJobId,
+        local_job_id: localJobId,
+        serverUsername: getDispoUsername(),
+        serverPassword: getDispoPassword(),
+        force: !!pullOpts.forceRetry,
+      },
+      120000,
+    )
+      .then(function (data) {
+        if (!data || data.ok !== true) {
+          console.warn('[ted_pull_job]', data && data.error ? data.error : 'fehlgeschlagen');
+          return;
+        }
+        if (data.present < data.expected) {
+          console.warn(
+            '[ted_pull_job] unvollständig:',
+            data.present + '/' + data.expected,
+            'failed=' + (data.failed || 0),
+            'job',
+            localJobId,
+            data.dispo_base_url || '',
+          );
+          if (!pullOpts.forceRetry && (data.failed || 0) > 0) {
+            setTimeout(function () {
+              pullMechanikTedExcelIntoProjectFolder(job, { forceRetry: true });
+            }, 4000);
+          } else if (!pullOpts.forceRetry && data.expected > 0 && data.present === 0) {
+            setTimeout(function () {
+              pullMechanikTedExcelIntoProjectFolder(job, { forceRetry: true });
+            }, 4000);
+          }
+        }
+        if (data.present > 0 && typeof showToast === 'function' && pullOpts.showToastOnComplete) {
+          showToast('TED: ' + data.present + ' Datei(en) im Projektordner.');
+        }
+        if (data.dispo_base_url) {
+          var used = String(data.dispo_base_url).trim().replace(/\/+$/, '');
+          var extNorm = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
+          var intNorm = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
+          var src = used === intNorm ? 'internal' : used === extNorm ? 'external' : 'fallback';
+          setDispoActiveBase(used, src);
+        }
+        mechanikTedPulledForJobId = localJobId;
+        if (!jobIdsEqual(localJobId, jobDetailsJobId) && localJobId !== startPageActiveJobId) return;
+        if (typeof loadDienstreiseExplorer === 'function') {
+          if (jobIdsEqual(localJobId, jobDetailsJobId)) {
+            loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath, 'modal', { skipAutoPull: true });
+          }
+          if (localJobId === startPageActiveJobId) {
+            loadDienstreiseExplorer(localJobId, startExplorerSubpath, 'start', { skipAutoPull: true });
+          }
+        }
+      })
+      .catch(function (e) {
+        console.warn('[ted_pull_job]', e && e.message ? e.message : e);
+      })
+      .finally(function () {
+        delete mechanikTedPullInFlightByJob[localJobId];
+      });
+  }
 
   function loadMechanikTedLinks(job) {
     var el = document.getElementById('mechanikTedLinksContainer');
@@ -3032,6 +3278,9 @@
             openTedExcelOnDevice(rel, tedJobId, tedLocalJobId, tedFab, tedFileName, btn);
           });
         });
+        if (jobStatusAllowsTedFilePull(job)) {
+          pullMechanikTedExcelIntoProjectFolder(job);
+        }
       })
       .catch(function (e) {
         if (loadToken !== mechanikTedLoadToken || !jobIdsEqual(expectedJobId, jobDetailsJobId)) return;
@@ -4331,19 +4580,17 @@
       setMonteurProfileResolveHint('Bitte mindestens eine Dispo-URL eintragen.');
       return Promise.resolve(false);
     }
-    return fetch(API_BASE + '/api/check_connection', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    return fetchApiPostJson(
+      '/api/check_connection',
+      {
         externalUrl: ext,
         internalUrl: intUrl,
         technicianId: getTechId(),
         serverUsername: getServerUsername(),
         serverPassword: getServerPassword(),
-      }),
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (check) {
+      },
+      28000,
+    ).then(function (check) {
         applyMonteurProfileFromConnection(check);
         if (check && check.used_base_url) {
           var connectedBase = String(check.used_base_url).trim().replace(/\/+$/, '');
@@ -4353,7 +4600,7 @@
           setDispoActiveBase(connectedBase, src);
         }
         if (getTechId()) {
-          setMonteurProfileResolveHint('Monteur-ID aus Dispo übernommen.', true);
+          setMonteurProfileResolveHint('Monteur-ID ' + getTechId() + ' (gespeichert).', true);
           updateTechnicianName();
           return true;
         }
@@ -4362,6 +4609,43 @@
           'Monteur-ID konnte nicht ermittelt werden (Dispo-Login oder monteur_auth prüfen).';
         setMonteurProfileResolveHint(err);
         return false;
+      });
+  }
+
+  /** Einstellungen: gespeicherte ID anzeigen; Dispo nur still prüfen (kein Hinweis-Flackern). */
+  function refreshMonteurProfileHintForSettings() {
+    var tid = getTechId();
+    if (tid > 0) {
+      setMonteurProfileResolveHint('Monteur-ID ' + tid + ' (gespeichert).', true);
+      if (getServerUsername() && getServerPassword() && (getDispoExternalUrl() || getDispoInternalUrl())) {
+        verifyMonteurProfileInBackground();
+      }
+      return;
+    }
+    if (getServerUsername() && getServerPassword()) {
+      resolveMonteurProfileFromDispo();
+    }
+  }
+
+  var verifyMonteurProfileInBackgroundInFlight = false;
+  function verifyMonteurProfileInBackground() {
+    var tid = getTechId();
+    if (!tid || verifyMonteurProfileInBackgroundInFlight || resolveMonteurProfileInFlight) {
+      return Promise.resolve(false);
+    }
+    verifyMonteurProfileInBackgroundInFlight = true;
+    return tryResolveMonteurProfileViaCheckConnection()
+      .then(function (ok) {
+        if (!ok && getTechId() > 0) {
+          setMonteurProfileResolveHint(
+            'Monteur-ID ' + getTechId() + ' — Dispo nicht erreichbar (URL/Login prüfen).',
+            false,
+          );
+        }
+        return ok;
+      })
+      .finally(function () {
+        verifyMonteurProfileInBackgroundInFlight = false;
       });
   }
 
@@ -4381,55 +4665,67 @@
       setMonteurProfileResolveHint('Bitte mindestens eine Dispo-URL eintragen.');
       return Promise.resolve(false);
     }
+    var existingId = getTechId();
+    if (existingId > 0) {
+      setMonteurProfileResolveHint('Monteur-ID ' + existingId + ' (gespeichert).', true);
+    }
     if (resolveMonteurProfileInFlight) return resolveMonteurProfileInFlight;
-    setMonteurProfileResolveHint('Ermittle Monteur-ID…');
-    resolveMonteurProfileInFlight = fetch(API_BASE + '/api/monteur_profile', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        externalUrl: ext,
-        internalUrl: intUrl,
-        serverUsername: user,
-        serverPassword: getServerPassword(),
-      }),
-    })
-      .then(function (r) {
-        return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; });
-      })
-      .then(function (data) {
-        if (data && data.ok === true) {
-          applyMonteurProfileFromConnection(data);
-          if (data.used_base_url) {
-            var connectedBase = String(data.used_base_url).trim().replace(/\/+$/, '');
-            var extNorm = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
-            var intNorm = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
-            var src = connectedBase === intNorm ? 'internal' : connectedBase === extNorm ? 'external' : 'fallback';
-            setDispoActiveBase(connectedBase, src);
-          }
+    if (!existingId) {
+      setMonteurProfileResolveHint('Ermittle Monteur-ID…');
+    } else {
+      return verifyMonteurProfileInBackground();
+    }
+    resolveMonteurProfileInFlight = tryResolveMonteurProfileViaCheckConnection()
+      .then(function (ok) {
+        if (ok) {
           if (getTechId()) {
-            setMonteurProfileResolveHint('Monteur-ID aus Dispo übernommen.', true);
-            updateTechnicianName();
-            return true;
+            setMonteurProfileResolveHint('Monteur-ID ' + getTechId() + ' (gespeichert).', true);
           }
+          return true;
         }
-        if (data && parseInt(data.technician_id, 10) > 0) {
-          applyMonteurProfileFromConnection(data);
-          if (getTechId()) {
-            setMonteurProfileResolveHint('Monteur-ID aus Dispo übernommen.', true);
-            updateTechnicianName();
-            return true;
-          }
-        }
-        if (data && data.error) {
-          return tryResolveMonteurProfileViaCheckConnection().then(function (ok) {
-            if (!ok && data.error) setMonteurProfileResolveHint(data.error);
-            return ok;
+        return fetch(API_BASE + '/api/monteur_profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            externalUrl: ext,
+            internalUrl: intUrl,
+            serverUsername: user,
+            serverPassword: getServerPassword(),
+          }),
+        })
+          .then(function (r) {
+            return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; });
+          })
+          .then(function (data) {
+            if (data && data.ok === true) {
+              applyMonteurProfileFromConnection(data);
+              if (data.used_base_url) {
+                var connectedBase = String(data.used_base_url).trim().replace(/\/+$/, '');
+                var extNorm = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
+                var intNorm = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
+                var src =
+                  connectedBase === intNorm ? 'internal' : connectedBase === extNorm ? 'external' : 'fallback';
+                setDispoActiveBase(connectedBase, src);
+              }
+              if (getTechId()) {
+                setMonteurProfileResolveHint('Monteur-ID ' + getTechId() + ' (gespeichert).', true);
+                updateTechnicianName();
+                return true;
+              }
+            }
+            if (data && parseInt(data.technician_id, 10) > 0) {
+              applyMonteurProfileFromConnection(data);
+              if (getTechId()) {
+                setMonteurProfileResolveHint('Monteur-ID ' + getTechId() + ' (gespeichert).', true);
+                updateTechnicianName();
+                return true;
+              }
+            }
+            if (data && data.error) {
+              setMonteurProfileResolveHint(data.error);
+            }
+            return false;
           });
-        }
-        return tryResolveMonteurProfileViaCheckConnection();
-      })
-      .catch(function () {
-        return tryResolveMonteurProfileViaCheckConnection();
       })
       .finally(function () {
         resolveMonteurProfileInFlight = null;
@@ -4645,8 +4941,12 @@
       var intUrl = (typeof getDispoInternalUrl === 'function' ? getDispoInternalUrl() : '').trim().replace(/\/+$/, '');
       syncBase = ext || intUrl;
     }
+    var ext = (typeof getDispoExternalUrl === 'function' ? getDispoExternalUrl() : '').trim().replace(/\/+$/, '');
+    var intUrl = (typeof getDispoInternalUrl === 'function' ? getDispoInternalUrl() : '').trim().replace(/\/+$/, '');
     return {
       baseUrl: syncBase,
+      externalUrl: ext,
+      internalUrl: intUrl,
       technicianId: typeof getTechId === 'function' ? getTechId() : 0,
       serverUsername: typeof getServerUsername === 'function' ? getServerUsername() : '',
       serverPassword: typeof getServerPassword === 'function' ? getServerPassword() : '',
@@ -4683,29 +4983,6 @@
         body: JSON.stringify({ skipAcceptJob: true }),
       }).catch(function () {});
     } catch (e) { /* ignore */ }
-    try {
-      var pushRes = await fetch(API_BASE + '/api/sync_push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(syncPayload),
-      });
-      var pushData = await pushRes.json().catch(function () { return {}; });
-      if (!pushData.ok) throw new Error(pushData.error || 'Push konnte nicht gestartet werden.');
-      if (pushData.job_id) {
-        var pushJob = await pollBackgroundJobUntilTerminal(pushData.job_id, null, {});
-        if (pushJob.status === 'failed' || pushJob.status === 'interrupted') {
-          throw new Error(pushJob.error || 'Push fehlgeschlagen.');
-        }
-      }
-    } catch (e) {
-      var pushMsg = e && e.message ? e.message : 'Fehler';
-      if (/technician/i.test(pushMsg) && /baseUrl/i.test(pushMsg)) {
-        console.log('[Sync Push] übersprungen:', pushMsg);
-      } else {
-        console.warn('[Sync Push]', pushMsg, e);
-      }
-      syncProblems.push('Push: ' + pushMsg);
-    }
     try {
       var pullRes = await fetch(API_BASE + '/api/sync_pull', {
         method: 'POST',
@@ -4782,6 +5059,29 @@
       console.error('[Sync Pull] runDispoPushPull:', e.message, e);
       syncProblems.push('Pull: ' + (e && e.message ? e.message : 'Fehler'));
     }
+    try {
+      var pushRes = await fetch(API_BASE + '/api/sync_push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(syncPayload),
+      });
+      var pushData = await pushRes.json().catch(function () { return {}; });
+      if (!pushData.ok) throw new Error(pushData.error || 'Push konnte nicht gestartet werden.');
+      if (pushData.job_id) {
+        var pushJob = await pollBackgroundJobUntilTerminal(pushData.job_id, null, {});
+        if (pushJob.status === 'failed' || pushJob.status === 'interrupted') {
+          throw new Error(pushJob.error || 'Push fehlgeschlagen.');
+        }
+      }
+    } catch (e) {
+      var pushMsg = e && e.message ? e.message : 'Fehler';
+      if (/technician/i.test(pushMsg) && /baseUrl/i.test(pushMsg)) {
+        console.log('[Sync Push] übersprungen:', pushMsg);
+      } else {
+        console.warn('[Sync Push]', pushMsg, e);
+      }
+      syncProblems.push('Push: ' + pushMsg);
+    }
     return syncProblems;
   }
 
@@ -4791,6 +5091,7 @@
     backgroundDispoSyncInFlight = runDispoPushPull(auth, range, { connectedBaseFallback: syncBase })
       .then(function (syncProblems) {
         applySyncBadgeAfterRun(syncProblems);
+        refreshTedFoldersAfterSync();
         if (selectedJobIdOnDienstreisePage) {
           var syncSnap =
             typeof getDienstreiseJobSnapshotByLocalId === 'function'
@@ -4855,18 +5156,17 @@
         await resolveMonteurProfileFromDispo();
         techId = getTechId();
       }
-      const resCheck = await fetch(API_BASE + '/api/check_connection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      var check = await fetchApiPostJson(
+        '/api/check_connection',
+        {
           externalUrl: ext,
           internalUrl: intUrl,
           technicianId: techId,
           serverUsername: getServerUsername(),
           serverPassword: getServerPassword(),
-        }),
-      });
-      var check = await resCheck.json().catch(function () { return {}; });
+        },
+        28000,
+      );
       applyMonteurProfileFromConnection(check);
       if (check && check.ok === true) {
         var connectedBase = (check.used_base_url || '').toString().trim().replace(/\/+$/, '');
@@ -4894,6 +5194,7 @@
           var syncProblems = await runDispoPushPull(auth, range, { connectedBaseFallback: connectedBase });
           applySyncBadgeAfterRun(syncProblems);
           scheduleAutoAppUpdateCheck();
+          refreshTedFoldersAfterSync();
           if (selectedJobIdOnDienstreisePage) {
             var syncSnap =
               typeof getDienstreiseJobSnapshotByLocalId === 'function'
@@ -5058,10 +5359,27 @@
   }
 
   function triggerManualSync() {
+    if (checkConnectionAndSyncInFlight) {
+      return checkConnectionAndSyncInFlight;
+    }
     setConnectionBadge('checking', 'Manueller Sync…');
-    return checkConnectionAndSync({ blockingSync: true }).finally(function () {
-      startSyncInterval();
+    var maxMs = 10 * 60 * 1000;
+    var guard = new Promise(function (_, reject) {
+      setTimeout(function () {
+        reject(new Error('Sync dauert zu lange (>' + Math.round(maxMs / 60000) + ' Min) — bitte erneut versuchen'));
+      }, maxMs);
     });
+    return Promise.race([checkConnectionAndSync({ blockingSync: true }), guard])
+      .catch(function (e) {
+        console.warn('[manual_sync]', e && e.message ? e.message : e);
+        setConnectionBadge(
+          'degraded',
+          (e && e.message ? e.message : 'Sync fehlgeschlagen') + ' — erneut klicken',
+        );
+      })
+      .finally(function () {
+        startSyncInterval();
+      });
   }
 
   document.getElementById('connectionBadgeWrap').addEventListener('click', function () {
@@ -5070,8 +5388,8 @@
 
   loadSettingsFromStorage();
   wireMonteurProfileAutoResolve();
-  if (getServerUsername() && getServerPassword()) {
-    resolveMonteurProfileFromDispo();
+  if (getTechId() > 0) {
+    setMonteurProfileResolveHint('Monteur-ID ' + getTechId() + ' (gespeichert).', true);
   }
   (function wireUiThemeToggle() {
     var themeToggle = document.getElementById('uiThemeDarkToggle');
@@ -6376,10 +6694,262 @@
     }
   }
 
+  function fmtDateTimeLocal(v) {
+    var s = String(v || '').trim();
+    if (!s) return '';
+    var d = new Date(s.replace(' ', 'T'));
+    if (isNaN(d.getTime())) return s;
+    return d.toLocaleString('de-DE', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  function readDownloadNameFromResponse(resp, fallbackName) {
+    if (!resp || !resp.headers) return fallbackName;
+    var xName = resp.headers.get('x-download-filename');
+    if (xName) {
+      try { return decodeURIComponent(xName); } catch (_) { return xName; }
+    }
+    var cd = resp.headers.get('content-disposition') || '';
+    var utf = cd.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    if (utf && utf[1]) {
+      try { return decodeURIComponent(utf[1].trim().replace(/^"|"$/g, '')); } catch (_) {}
+    }
+    var plain = cd.match(/filename\s*=\s*("?)([^";]+)\1/i);
+    if (plain && plain[2]) {
+      try { return decodeURIComponent(plain[2].trim()); } catch (_) { return plain[2].trim(); }
+    }
+    return fallbackName;
+  }
+
+  function aspTrendOptionLabel(f) {
+    var name = String(f.original_filename || 'Datei');
+    var date = fmtDateTimeLocal(f.uploaded_at);
+    return name + ' (' + date + ')';
+  }
+
+  function renderAspTrendChangesTable(changes, showUnchanged) {
+    var rows = Array.isArray(changes) ? changes : [];
+    if (!showUnchanged) {
+      rows = rows.filter(function (c) { return c.status !== 'unchanged'; });
+    }
+    if (!rows.length) {
+      return '<p class="empty" style="padding:0.5rem 0.7rem">Keine Änderungen (oder nur unveränderte Werte – Filter aktivieren).</p>';
+    }
+    var statusLabel = { changed: 'Geändert', added: 'Neu', removed: 'Entfernt', unchanged: 'Gleich' };
+    var statusClass = { changed: 'asp-trend-changed', added: 'asp-trend-added', removed: 'asp-trend-removed', unchanged: 'asp-trend-unchanged' };
+    var body = rows.map(function (c) {
+      var st = c.status || 'unchanged';
+      var unit = c.unit ? ' <span class="muted">[' + escapeHtml(c.unit) + ']</span>' : '';
+      return '<tr>' +
+        '<td><span class="asp-trend-badge ' + (statusClass[st] || '') + '">' + escapeHtml(statusLabel[st] || st) + '</span></td>' +
+        '<td>' + escapeHtml(c.param_key || '') + unit + '</td>' +
+        '<td>' + escapeHtml(c.value_old != null ? String(c.value_old) : '') + '</td>' +
+        '<td>' + escapeHtml(c.value_new != null ? String(c.value_new) : '') + '</td>' +
+        '</tr>';
+    }).join('');
+    return '<table class="anlagenstamm-trend-table"><thead><tr>' +
+      '<th>Status</th><th>Parameter</th><th>Wert vorher</th><th>Wert nachher</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table>';
+  }
+
+  function wireAspTrendToolbar(fabNorm, list) {
+    var chron = list.slice().sort(function (a, b) {
+      var ta = Date.parse(String(a.uploaded_at || '').replace(' ', 'T'));
+      var tb = Date.parse(String(b.uploaded_at || '').replace(' ', 'T'));
+      if (isNaN(ta)) ta = 0;
+      if (isNaN(tb)) tb = 0;
+      return ta - tb;
+    });
+    var selFrom = document.getElementById('aspTrendFrom');
+    var selTo = document.getElementById('aspTrendTo');
+    if (!selFrom || !selTo) return;
+    var opts = chron.map(function (f) {
+      return '<option value="' + escapeHtml(String(f.id)) + '">' + escapeHtml(aspTrendOptionLabel(f)) + '</option>';
+    }).join('');
+    selFrom.innerHTML = opts;
+    selTo.innerHTML = opts;
+    if (chron.length >= 2) {
+      selFrom.value = String(chron[0].id);
+      selTo.value = String(chron[chron.length - 1].id);
+    }
+    var btnCompare = document.getElementById('btnAspTrendCompare');
+    var btnChain = document.getElementById('btnAspTrendChain');
+    if (btnCompare) {
+      btnCompare.disabled = chron.length < 2;
+      btnCompare.onclick = function () {
+        loadAnlagenstammParameterTrend(fabNorm, {
+          from_file_id: parseInt(selFrom.value, 10),
+          to_file_id: parseInt(selTo.value, 10)
+        });
+      };
+    }
+    if (btnChain) {
+      btnChain.disabled = chron.length < 2;
+      btnChain.onclick = function () {
+        loadAnlagenstammParameterTrend(fabNorm, { chain: true });
+      };
+    }
+  }
+
+  async function loadAnlagenstammParameterTrend(fab, opts) {
+    opts = opts || {};
+    var trendEl = document.getElementById('anlagenstammParameterTrend');
+    var msgEl = document.getElementById('anlagenstammMessage');
+    if (!trendEl) return;
+    var fabNorm = String(fab || '').trim();
+    if (!fabNorm) {
+      trendEl.style.display = 'none';
+      trendEl.innerHTML = '';
+      return;
+    }
+    var showUnchanged = !!(document.getElementById('aspTrendShowUnchanged') && document.getElementById('aspTrendShowUnchanged').checked);
+    trendEl.style.display = '';
+    trendEl.innerHTML = '<div class="anlagenstamm-trend-head">Trend wird berechnet…</div>';
+    try {
+      var body = { fab: fabNorm };
+      if (opts.chain) body.mode = 'chain';
+      else {
+        if (opts.from_file_id) body.from_file_id = opts.from_file_id;
+        if (opts.to_file_id) body.to_file_id = opts.to_file_id;
+      }
+      var data = await api('/api/anlagenstamm_parameter_trend', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+      if (!data || !data.ok) {
+        throw new Error((data && data.error) ? data.error : 'Trend fehlgeschlagen');
+      }
+      if (data.steps && Array.isArray(data.steps)) {
+        if (!data.steps.length) {
+          trendEl.innerHTML = '<div class="anlagenstamm-trend-head">Parameter-Trend (alle Schritte)</div>' +
+            '<p class="empty" style="padding:0.5rem 0.7rem">' + escapeHtml(data.message || 'Keine aufeinanderfolgenden Vergleiche möglich.') + '</p>';
+          return;
+        }
+        trendEl.innerHTML = '<div class="anlagenstamm-trend-head">Parameter-Trend: ' + data.steps.length + ' Schritt(e), jeweils alle Einzelwerte</div>' +
+          data.steps.map(function (step) {
+            var sum = step.summary || {};
+            var title = 'Schritt ' + step.step_index + ': ' + escapeHtml(step.from_label || '') + ' → ' + escapeHtml(step.to_label || '') +
+              ' <span class="muted">(' + escapeHtml(fmtDateTimeLocal(step.from_uploaded_at)) + ' → ' + escapeHtml(fmtDateTimeLocal(step.to_uploaded_at)) + ')</span>' +
+              ' — geändert: ' + (sum.changed || 0) + ', neu: ' + (sum.added || 0) + ', entfernt: ' + (sum.removed || 0) + ', gleich: ' + (sum.unchanged || 0);
+            return '<details class="anlagenstamm-trend-step"><summary>' + title + '</summary>' +
+              renderAspTrendChangesTable(step.changes, showUnchanged) + '</details>';
+          }).join('');
+        return;
+      }
+      var fromF = data.from_file || {};
+      var toF = data.to_file || {};
+      var sum = data.summary || {};
+      trendEl.innerHTML = '<div class="anlagenstamm-trend-head">Vergleich: ' + escapeHtml(fromF.original_filename || '') + ' → ' + escapeHtml(toF.original_filename || '') +
+        ' <span class="muted">(' + escapeHtml(fmtDateTimeLocal(fromF.uploaded_at)) + ' → ' + escapeHtml(fmtDateTimeLocal(toF.uploaded_at)) + ')</span></div>' +
+        '<p style="padding:0.35rem 0.7rem;margin:0;font-size:0.84rem" class="muted">Einzelwerte: geändert ' + (sum.changed || 0) +
+        ', neu ' + (sum.added || 0) + ', entfernt ' + (sum.removed || 0) + ', unverändert ' + (sum.unchanged || 0) + ' (von ' + (sum.total_keys || 0) + ' Zeilen)</p>' +
+        renderAspTrendChangesTable(data.changes, showUnchanged);
+    } catch (e) {
+      trendEl.innerHTML = '<div class="anlagenstamm-trend-head">Parameter-Trend</div>' +
+        '<p class="empty" style="padding:0.5rem 0.7rem">Fehler: ' + escapeHtml(e.message || String(e)) + '</p>';
+      if (msgEl) msgEl.textContent = 'Trend: ' + (e.message || String(e));
+    }
+  }
+
+  async function loadAnlagenstammParameterFiles(fab) {
+    var msgEl = document.getElementById('anlagenstammMessage');
+    var wrapEl = document.getElementById('anlagenstammParameterList');
+    var trendEl = document.getElementById('anlagenstammParameterTrend');
+    if (!wrapEl) return;
+    var fabNorm = String(fab || '').trim();
+    if (!fabNorm) {
+      wrapEl.style.display = 'none';
+      wrapEl.innerHTML = '';
+      if (trendEl) { trendEl.style.display = 'none'; trendEl.innerHTML = ''; }
+      return;
+    }
+    try {
+      var data = await api('/api/anlagenstamm_parameter_files_list', {
+        method: 'POST',
+        body: JSON.stringify({ fab: fabNorm })
+      });
+      var list = data && Array.isArray(data.files) ? data.files : [];
+      wrapEl._aspFiles = list;
+      if (!list.length) {
+        wrapEl.style.display = '';
+        wrapEl.innerHTML = '<div class="anlagenstamm-paramlist-head">Parameterlisten</div>' +
+          '<div class="anlagenstamm-paramlist-row"><span class="empty">Noch keine gespeicherten Parameterdateien für diese F.N.</span></div>';
+        if (trendEl) { trendEl.style.display = 'none'; trendEl.innerHTML = ''; }
+        return;
+      }
+      wrapEl.style.display = '';
+      var trendToolbar = '<div class="anlagenstamm-trend-toolbar">' +
+        '<label>Von <select id="aspTrendFrom"></select></label>' +
+        '<label>Zu <select id="aspTrendTo"></select></label>' +
+        '<button type="button" class="btn btn-primary" id="btnAspTrendCompare">Einzelvergleich</button>' +
+        '<button type="button" class="btn btn-ghost" id="btnAspTrendChain">Gesamttrend (alle Schritte)</button>' +
+        '<label><input type="checkbox" id="aspTrendShowUnchanged"> Unveränderte anzeigen</label>' +
+        '</div>';
+      wrapEl.innerHTML = '<div class="anlagenstamm-paramlist-head">Parameterlisten (' + list.length + ')</div>' +
+        trendToolbar +
+        list.map(function (f) {
+          var sourceLabel = f.source === 'projekte_neu' ? 'Projekte neu' : 'Upload';
+          var who = f.technician_name ? String(f.technician_name) : (f.source === 'projekte_neu' ? '—' : 'Unbekannt');
+          var status = f.source_file_status === 'original_deleted' ? 'Originaldatei gelöscht' : '';
+          var name = String(f.original_filename || '');
+          var date = fmtDateTimeLocal(f.uploaded_at);
+          return '<div class="anlagenstamm-paramlist-row">' +
+            '<div><strong>' + escapeHtml(name) + '</strong>' + (status ? '<div class="muted">' + escapeHtml(status) + '</div>' : '') + '</div>' +
+            '<div>' + escapeHtml(sourceLabel) + '</div>' +
+            '<div>' + escapeHtml(who) + '<div class="muted">' + escapeHtml(date) + '</div></div>' +
+            '<div>' + escapeHtml(String(f.entry_count || 0)) + ' Werte</div>' +
+            '<div><button class="btn btn-ghost" data-asp-download="' + encodeURIComponent(name) + '">Download</button></div>' +
+            '</div>';
+        }).join('');
+      wireAspTrendToolbar(fabNorm, list);
+      var chkUnchanged = document.getElementById('aspTrendShowUnchanged');
+      if (chkUnchanged) {
+        chkUnchanged.addEventListener('change', function () {
+          var fromSel = document.getElementById('aspTrendFrom');
+          var toSel = document.getElementById('aspTrendTo');
+          if (fromSel && toSel && fromSel.value && toSel.value) {
+            loadAnlagenstammParameterTrend(fabNorm, {
+              from_file_id: parseInt(fromSel.value, 10),
+              to_file_id: parseInt(toSel.value, 10)
+            });
+          }
+        });
+      }
+      if (list.length >= 2 && trendEl) {
+        loadAnlagenstammParameterTrend(fabNorm, {
+          from_file_id: list[list.length - 1].id,
+          to_file_id: list[0].id
+        });
+      }
+      wrapEl.querySelectorAll('[data-asp-download]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var file = decodeURIComponent(btn.getAttribute('data-asp-download') || '');
+          if (!file) return;
+          downloadAnlagenstammFile(fabNorm, file).catch(function (err) {
+            if (msgEl) msgEl.textContent = 'Fehler: ' + (err.message || String(err));
+          });
+        });
+      });
+    } catch (e) {
+      wrapEl.style.display = '';
+      wrapEl.innerHTML = '<div class="anlagenstamm-paramlist-head">Parameterlisten</div>' +
+        '<div class="anlagenstamm-paramlist-row"><span class="empty">Fehler beim Laden: ' + escapeHtml(e.message || String(e)) + '</span></div>';
+      if (trendEl) { trendEl.style.display = 'none'; trendEl.innerHTML = ''; }
+    }
+  }
+
   async function loadAnlagenstammDetail(fab) {
     var msgEl = document.getElementById('anlagenstammMessage');
     var cardEl = document.getElementById('anlagenstammCard');
     var filesEl = document.getElementById('anlagenstammFiles');
+    var paramEl = document.getElementById('anlagenstammParameterList');
+    var trendEl = document.getElementById('anlagenstammParameterTrend');
+    var paramBtn = document.getElementById('btnAnlagenstammParameterList');
     fab = (fab || '').trim();
     if (!fab) {
       if (msgEl) msgEl.textContent = 'Keine Fabrikationsnummer.';
@@ -6388,6 +6958,12 @@
     if (msgEl) msgEl.textContent = 'Lade Stammdaten…';
     if (cardEl) cardEl.innerHTML = '';
     if (filesEl) { filesEl.style.display = 'none'; filesEl.innerHTML = ''; }
+    if (paramEl) { paramEl.style.display = 'none'; paramEl.innerHTML = ''; }
+    if (trendEl) { trendEl.style.display = 'none'; trendEl.innerHTML = ''; }
+    if (paramBtn) {
+      paramBtn.disabled = false;
+      paramBtn.setAttribute('data-fab', fab);
+    }
     var pnSecL = document.getElementById('anlagenstammPnSection');
     var pnTreeL = document.getElementById('anlagenstammPnTree');
     var pnHintL = document.getElementById('anlagenstammPnHint');
@@ -6407,6 +6983,7 @@
         applyAnlagenstammFormFromRow(a, fab);
       }
       if (msgEl) msgEl.textContent = '';
+      await loadAnlagenstammParameterFiles(fab);
       var files = await api('/api/anlagenstamm_files_list', { method: 'POST', body: JSON.stringify(payload) });
       var list = (files && files.files) ? files.files : [];
       if (filesEl) {
@@ -6517,7 +7094,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = file;
+    a.download = readDownloadNameFromResponse(resp, file);
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -6581,7 +7158,8 @@
     const a = document.createElement('a');
     a.href = url;
     var parts = relPath.split('/');
-    a.download = (fallbackName && String(fallbackName).trim()) || parts[parts.length - 1] || 'download';
+    var fallback = (fallbackName && String(fallbackName).trim()) || parts[parts.length - 1] || 'download';
+    a.download = readDownloadNameFromResponse(resp, fallback);
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -7310,7 +7888,7 @@
       viewStart.classList.add('hidden');
       viewEinstellungen.classList.add('active');
       updateTechnicianName();
-      if (getServerUsername() && getServerPassword()) resolveMonteurProfileFromDispo();
+      refreshMonteurProfileHintForSettings();
       return;
     }
     if (name === 'dienstreise') {
@@ -8394,6 +8972,7 @@
     if (!dispoBaseUrl || !technicianId || !getDispoUsername() || !getDispoPassword()) return;
     var snap = getDienstreiseJobSnapshotByLocalId(localJobId);
     if (snap && (isJobAngelegtReadOnly(snap) || isJobAbgerechnet(snap))) return;
+    if (snap && jobCanAcceptJob(snap)) return;
     projectFolderAutoPullLastStartedAt[localJobId] = Date.now();
     projectFolderAutoPullInFlightByJob[localJobId] = true;
     setConnectionBadge('online_syncing', 'Projektordner wird mit Dispo aktualisiert …');
@@ -8722,6 +9301,14 @@
   document.getElementById('btnViewArchiv').addEventListener('click', () => showView('archiv'));
   document.getElementById('btnViewAnlagenstamm').addEventListener('click', () => showView('anlagenstamm'));
   document.getElementById('btnAnlagenstammSearch').addEventListener('click', () => searchAnlagenstammList());
+  var btnAnlagenstammParameterList = document.getElementById('btnAnlagenstammParameterList');
+  if (btnAnlagenstammParameterList) {
+    btnAnlagenstammParameterList.addEventListener('click', function () {
+      var fab = (btnAnlagenstammParameterList.getAttribute('data-fab') || '').trim();
+      if (!fab) return;
+      loadAnlagenstammParameterFiles(fab);
+    });
+  }
   ['anlagenstammFilterFn', 'anlagenstammFilterKunde', 'anlagenstammFilterType', 'anlagenstammFilterLand'].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) {

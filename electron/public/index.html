@@ -330,7 +330,7 @@
     .anlagenstamm-search-row input { flex:1; min-width:220px; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
     .anlagenstamm-search-filters { display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:0.5rem; width:100%; margin-bottom:0.5rem; }
     .anlagenstamm-search-filters input { min-width:0; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
-    .anlagenstamm-search-actions { margin-bottom:0.65rem; }
+    .anlagenstamm-search-actions { margin-bottom:0.65rem; display:flex; gap:0.5rem; flex-wrap:wrap; }
     .anlagenstamm-search-results {
       margin-top:0.35rem;
       max-height: min(50vh, 420px);
@@ -377,6 +377,26 @@
     .anlagenstamm-files-list { margin-top:0.5rem; border:1px solid var(--accent); border-radius:6px; overflow:hidden; }
     .anlagenstamm-files-row { padding:0.55rem 0.7rem; border-bottom:1px solid var(--accent); display:flex; align-items:center; justify-content:space-between; gap:0.6rem; }
     .anlagenstamm-files-row:last-child { border-bottom:none; }
+    .anlagenstamm-paramlist-wrap { margin-top: 0.75rem; border: 1px solid var(--accent); border-radius: 6px; overflow: hidden; }
+    .anlagenstamm-paramlist-head { padding: 0.5rem 0.7rem; font-weight: 600; border-bottom: 1px solid var(--accent); }
+    .anlagenstamm-paramlist-row { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--accent); display: grid; grid-template-columns: 1.3fr 0.8fr 1fr 0.6fr auto; gap: 0.5rem; align-items: center; }
+    .anlagenstamm-paramlist-row:last-child { border-bottom: none; }
+    .anlagenstamm-paramlist-row .muted { font-size: 0.82rem; }
+    .anlagenstamm-trend-toolbar { padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--accent); display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .anlagenstamm-trend-toolbar label { font-size: 0.82rem; display: flex; align-items: center; gap: 0.35rem; }
+    .anlagenstamm-trend-toolbar select { min-width: 12rem; max-width: 100%; padding: 0.3rem 0.45rem; }
+    .anlagenstamm-trend-wrap { margin-top: 0.75rem; border: 1px solid var(--accent); border-radius: 6px; overflow: hidden; }
+    .anlagenstamm-trend-head { padding: 0.5rem 0.7rem; font-weight: 600; border-bottom: 1px solid var(--accent); }
+    .anlagenstamm-trend-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+    .anlagenstamm-trend-table th, .anlagenstamm-trend-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--accent); text-align: left; vertical-align: top; }
+    .anlagenstamm-trend-table thead th { background: rgba(128,128,128,0.08); }
+    .asp-trend-badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .asp-trend-changed { background: rgba(255, 193, 7, 0.25); }
+    .asp-trend-added { background: rgba(40, 167, 69, 0.2); }
+    .asp-trend-removed { background: rgba(220, 53, 69, 0.2); }
+    .asp-trend-unchanged { background: rgba(128,128,128,0.15); color: var(--muted, #888); }
+    .anlagenstamm-trend-step { border-top: 1px solid var(--accent); }
+    .anlagenstamm-trend-step summary { cursor: pointer; padding: 0.45rem 0.7rem; font-weight: 600; }
     .anlagenstamm-pn-section { margin-top: 0.75rem; }
     .anlagenstamm-pn-hint { font-size: 0.85rem; color: #888; margin: 0 0 0.35rem 0; }
     .anlagenstamm-pn-tree { border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.75rem; max-height: 40vh; overflow: auto; }
@@ -1390,11 +1410,14 @@
       </div>
       <div class="anlagenstamm-search-actions">
         <button type="button" class="btn btn-primary" id="btnAnlagenstammSearch">Suchen</button>
+        <button type="button" class="btn btn-ghost" id="btnAnlagenstammParameterList" disabled>Parameterlisten anzeigen</button>
       </div>
       <div id="anlagenstammSearchResults" class="anlagenstamm-search-results" style="display:none" aria-label="Suchergebnisse"></div>
       <div id="anlagenstammMessage" class="empty">Suchkriterien eingeben und „Suchen“ wählen.</div>
       <div id="anlagenstammCard"></div>
       <div id="anlagenstammFiles" class="anlagenstamm-files-list" style="display:none"></div>
+      <div id="anlagenstammParameterList" class="anlagenstamm-paramlist-wrap" style="display:none"></div>
+      <div id="anlagenstammParameterTrend" class="anlagenstamm-trend-wrap" style="display:none"></div>
       <div id="anlagenstammPnSection" class="anlagenstamm-pn-section" style="display:none">
         <h3 style="font-size:1rem;margin:0.75rem 0 0.25rem 0">PROJEKTE NEU</h3>
         <p id="anlagenstammPnHint" class="anlagenstamm-pn-hint"></p>
@@ -1412,7 +1435,7 @@
       </div>
       <div class="settings-row">
         <label for="serverUrlInternal">Dispo (Firmennetz / intern)</label>
-        <input type="text" id="serverUrlInternal" placeholder="z.B. https://10.0.0.180" value="https://10.0.0.180" title="Optional: direkter Zugriff im Büro-LAN. Die App prüft parallel extern und intern (10 s); wenn beide erreichbar sind, wird die interne Adresse bevorzugt." />
+        <input type="text" id="serverUrlInternal" placeholder="z.B. https://10.0.0.180:4433" value="https://10.0.0.180:4433" title="Optional: direkter Zugriff im Büro-LAN (gleicher Port wie extern, z. B. :4433). Die App prüft parallel extern und intern (10 s); wenn beide erreichbar sind, wird die interne Adresse bevorzugt." />
       </div>
       <div class="settings-row">
         <label for="technicianId">Monteur-ID</label>

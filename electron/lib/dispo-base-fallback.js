@@ -1,5 +1,5 @@
 /**
- * Dispo-Basis-URLs: bei Netzwerkfehler nächste Kandidatin (extern vor intern).
+ * Dispo-Basis-URLs: Port-Abgleich intern/extern, Erreichbarkeitswahl (intern bevorzugt im LAN).
  */
 
 function normalizeDispoBase(url) {
@@ -16,16 +16,76 @@ function isPrivateLanHostname(hostname) {
   return false;
 }
 
+function safeHostname(baseUrl) {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch (e) {
+    return '';
+  }
+}
+
+function defaultPortForProtocol(protocol) {
+  if (protocol === 'https:') return '443';
+  if (protocol === 'http:') return '80';
+  return '';
+}
+
 /**
- * Reihenfolge: aktive Basis, dann extern (wenn anders), dann intern.
+ * Wenn die Referenz-URL einen expliziten Nicht-Standard-Port hat (z. B. :4433),
+ * die Ziel-URL aber nur den Schema-Standardport nutzt, Port von der Referenz übernehmen.
+ */
+function alignDispoBasePort(referenceUrl, targetUrl) {
+  const ref = normalizeDispoBase(referenceUrl);
+  const tgt = normalizeDispoBase(targetUrl);
+  if (!ref || !tgt) return tgt;
+  try {
+    const r = new URL(ref);
+    const t = new URL(tgt);
+    const refPort = r.port || defaultPortForProtocol(r.protocol);
+    const tgtPort = t.port || defaultPortForProtocol(t.protocol);
+    const refNonDefault = refPort && refPort !== '443' && refPort !== '80';
+    const tgtIsDefault = !t.port || tgtPort === defaultPortForProtocol(t.protocol);
+    if (refNonDefault && tgtIsDefault && r.protocol === t.protocol) {
+      t.port = refPort;
+      return normalizeDispoBase(t.toString());
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return tgt;
+}
+
+/**
+ * @param {string} [externalUrl]
+ * @param {string} [internalUrl]
+ * @returns {{ external: string, internal: string }}
+ */
+function normalizeDispoBasePair(externalUrl, internalUrl) {
+  const ext = normalizeDispoBase(externalUrl);
+  let int = normalizeDispoBase(internalUrl);
+  if (ext && int) int = alignDispoBasePort(ext, int);
+  return { external: ext, internal: int };
+}
+
+/**
+ * Reihenfolge für Fallback: zuerst erreichbare öffentliche Basis, LAN zuletzt.
+ * (Verhindert 10s-Timeouts auf 10.x, wenn Monteur extern unterwegs ist.)
  *
  * @param {{ baseUrl?: string, externalUrl?: string, internalUrl?: string }} opts
  * @returns {string[]}
  */
 function buildDispoBaseCandidates(opts) {
-  const active = normalizeDispoBase(opts && opts.baseUrl);
-  const ext = normalizeDispoBase(opts && opts.externalUrl);
-  const int = normalizeDispoBase(opts && opts.internalUrl);
+  const pair = normalizeDispoBasePair(opts && opts.externalUrl, opts && opts.internalUrl);
+  let active = normalizeDispoBase(opts && opts.baseUrl);
+  let ext = pair.external || normalizeDispoBase(opts && opts.externalUrl);
+  let int = pair.internal || normalizeDispoBase(opts && opts.internalUrl);
+  if (ext && int && int === normalizeDispoBase(opts && opts.internalUrl)) {
+    int = alignDispoBasePort(ext, int);
+  }
+  if (active && ext && int && isPrivateLanHostname(safeHostname(active))) {
+    active = alignDispoBasePort(ext, active);
+  }
+  const activePrivate = active && isPrivateLanHostname(safeHostname(active));
   const out = [];
   const seen = new Set();
   function add(u) {
@@ -33,23 +93,11 @@ function buildDispoBaseCandidates(opts) {
     seen.add(u);
     out.push(u);
   }
-  add(active);
-  if (ext && active && isPrivateLanHostname(safeHostname(active))) {
-    add(ext);
-    add(int);
-  } else {
-    add(ext);
-    add(int);
-  }
+  if (active && !activePrivate) add(active);
+  add(ext);
+  if (activePrivate) add(active);
+  add(int);
   return out;
-}
-
-function safeHostname(baseUrl) {
-  try {
-    return new URL(baseUrl).hostname;
-  } catch (e) {
-    return '';
-  }
 }
 
 function isFetchNetworkError(err) {
@@ -66,6 +114,67 @@ function isFetchNetworkError(err) {
     msg.includes('certificate') ||
     msg.includes('tls')
   );
+}
+
+/**
+ * Parallel prüfen; bei beiden OK interne Basis bevorzugen (Firmennetz).
+ *
+ * @param {{ externalUrl?: string, internalUrl?: string, probe: (url: string) => Promise<{ ok: boolean, error?: string }> }} opts
+ */
+async function pickReachableDispoBase(opts) {
+  const pair = normalizeDispoBasePair(opts && opts.externalUrl, opts && opts.internalUrl);
+  const ext = pair.external;
+  const int = pair.internal;
+  const probe = opts && opts.probe;
+  if (typeof probe !== 'function') {
+    return { ok: false, error: 'Probe fehlt.', tried: [] };
+  }
+  if (!ext && !int) {
+    return { ok: false, error: 'Mindestens eine Dispo-Basis-URL erforderlich.', tried: [] };
+  }
+  if (ext && !int) {
+    const r = await probe(ext);
+    return {
+      ok: r.ok,
+      selected_base_url: r.ok ? ext : null,
+      preferred_source: 'single',
+      tried: [{ url: ext, ok: r.ok, error: r.ok ? undefined : r.error }],
+      error: r.ok ? undefined : r.error,
+    };
+  }
+  if (int && !ext) {
+    const r = await probe(int);
+    return {
+      ok: r.ok,
+      selected_base_url: r.ok ? int : null,
+      preferred_source: 'single',
+      tried: [{ url: int, ok: r.ok, error: r.ok ? undefined : r.error }],
+      error: r.ok ? undefined : r.error,
+    };
+  }
+
+  const [rInt, rExt] = await Promise.all([probe(int), probe(ext)]);
+  const tried = [
+    { url: int, ok: rInt.ok, error: rInt.ok ? undefined : rInt.error },
+    { url: ext, ok: rExt.ok, error: rExt.ok ? undefined : rExt.error },
+  ];
+  if (rInt.ok && rExt.ok) {
+    return { ok: true, selected_base_url: int, preferred_source: 'internal', tried };
+  }
+  if (rInt.ok) {
+    return { ok: true, selected_base_url: int, preferred_source: 'internal', tried };
+  }
+  if (rExt.ok) {
+    return { ok: true, selected_base_url: ext, preferred_source: 'external', tried };
+  }
+  const errParts = tried
+    .filter((t) => !t.ok && t.error)
+    .map((t) => t.url + ': ' + t.error);
+  return {
+    ok: false,
+    error: errParts.length ? errParts.join(' · ') : 'Keine erreichbare Dispo-URL.',
+    tried,
+  };
 }
 
 /**
@@ -99,8 +208,12 @@ async function tryDispoBasesInOrder(candidates, runForBase) {
 
 module.exports = {
   normalizeDispoBase,
+  normalizeDispoBasePair,
+  alignDispoBasePort,
   buildDispoBaseCandidates,
   isFetchNetworkError,
   isPrivateLanHostname,
+  safeHostname,
+  pickReachableDispoBase,
   tryDispoBasesInOrder,
 };

@@ -61,14 +61,26 @@ const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCor
 const { ensureBackgroundJobsSchema, createBackgroundJobService } = require('./lib/background_jobs');
 const { createDbLock } = require('./lib/db-lock');
 const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
-const { buildDispoBaseCandidates, tryDispoBasesInOrder } = require('./lib/dispo-base-fallback');
+const {
+  buildDispoBaseCandidates,
+  normalizeDispoBasePair,
+  pickReachableDispoBase,
+  tryDispoBasesInOrder,
+  isPrivateLanHostname,
+  safeHostname,
+} = require('./lib/dispo-base-fallback');
 const {
   resolveProjekteNeuRoot,
   scanProjekteNeuTree,
   safeResolveUnderRoot,
   isIgnorableDirEntry,
 } = require('./lib/projekte-neu-local');
-const { resolveTedExcelLocal, isExcelFilePath } = require('./lib/ted-excel-local');
+const {
+  resolveTedExcelLocal,
+  isExcelFilePath,
+  safeTedFileName,
+  safeTedLocalFileName,
+} = require('./lib/ted-excel-local');
 const {
   ensureAnlagenstammLocalSchema,
   rowCount: anlagenstammLocalRowCount,
@@ -81,8 +93,21 @@ const {
   clampForDispoAnlagenstamm,
   clampForDispoJobFabrikation,
   clampFabrikationsnummernJson,
+  mergeAnlagenstammPayload,
+  hasNonemptyStammField,
+  stripEmptyStammFieldsForDispoPush,
   uploadCachePath,
+  upsertParameterFile,
+  listParameterFilesByFab,
+  markMissingProjekteNeuFiles,
+  compareParameterFilesById,
+  buildParameterTrendChain,
 } = require('./lib/anlagenstamm-local');
+const {
+  isSupportedParameterFileName,
+  parseParameterFile,
+  normalizeFabDigits: normalizeParameterFab,
+} = require('./lib/anlagenstamm-parameter-parser');
 
 /** Felder Leistungszeile / Anlagenstamm (Abgleich Projektdaten ↔ Sync). */
 const JOB_FAB_STAMM_KEYS = [
@@ -263,24 +288,54 @@ function applyLocalAnlagenstammToMatchingJobs(db, fab) {
   return updated;
 }
 
+/** Neu hinzugefügte FNs gegen bisherige jobs.fabrikationsnummern (nur Diff – kein Massen-Sync). */
+function computeAddedJobFabNums(oldFabJson, newFabJson) {
+  const oldSet = new Set(
+    parseJobFabrikationsnummernRows(oldFabJson)
+      .map((r) => normJobFabKey(r))
+      .filter(Boolean),
+  );
+  const added = [];
+  const seen = new Set();
+  for (const r of parseJobFabrikationsnummernRows(newFabJson)) {
+    const fn = normJobFabKey(r);
+    if (!fn || oldSet.has(fn) || seen.has(fn)) continue;
+    seen.add(fn);
+    added.push(fn);
+  }
+  return added;
+}
+
+function jobFabRowFilterByOnlyFns(rows, onlyFns) {
+  if (onlyFns == null) return rows;
+  const set = new Set((Array.isArray(onlyFns) ? onlyFns : []).map((f) => normJobFabKey(f)).filter(Boolean));
+  if (!set.size) return [];
+  return rows.filter((r) => set.has(normJobFabKey(r)));
+}
+
 /**
  * Projektdaten/Anlagendetails: Leistungszeilen aus jobs.fabrikationsnummern in anlagenstamm_local spiegeln (dirty).
+ * opts.onlyFns: nur diese FN (z. B. beim PATCH fabrikationsnummern).
  */
-function syncJobFabRowsToAnlagenstammLocal(db, fabJson) {
+function syncJobFabRowsToAnlagenstammLocal(db, fabJson, opts) {
   ensureAnlagenstammLocalSchema(db);
-  const rows = parseJobFabrikationsnummernRows(fabJson);
+  let rows = parseJobFabrikationsnummernRows(fabJson);
+  rows = jobFabRowFilterByOnlyFns(rows, opts && opts.onlyFns);
   let n = 0;
   for (const r of rows) {
     const fn = normJobFabKey(r);
     if (!fn) continue;
     const existing = anlagenstammLookupByFab(db, fn);
-    const payload = clampForDispoAnlagenstamm(
-      Object.assign(
-        {
-          id: existing && existing.id ? existing.id : 0,
-          fabrikationsnummer: fn,
-        },
-        r,
+    const payload = mergeAnlagenstammPayload(
+      existing || {},
+      clampForDispoAnlagenstamm(
+        Object.assign(
+          {
+            id: existing && existing.id ? existing.id : 0,
+            fabrikationsnummer: fn,
+          },
+          r,
+        ),
       ),
     );
     const saved = anlagenstammSaveLocal(db, payload);
@@ -289,14 +344,16 @@ function syncJobFabRowsToAnlagenstammLocal(db, fabJson) {
   return n;
 }
 
-/** Pending für Dispo-Stamm aus gespeicherten Auftrags-Leistungszeilen (Projektdaten/Anlagendetails). */
-function enqueueAnlagenstammPendingFromFabJson(db, fabJson) {
-  const rows = parseJobFabrikationsnummernRows(fabJson);
+/** Pending für Dispo-Stamm – nur neue FN mit Stamm-Inhalt (keine leeren Voll-Pushes). */
+function enqueueAnlagenstammPendingFromFabJson(db, fabJson, opts) {
+  ensureAnlagenstammLocalSchema(db);
+  let rows = parseJobFabrikationsnummernRows(fabJson);
+  rows = jobFabRowFilterByOnlyFns(rows, opts && opts.onlyFns);
   for (const r of rows) {
     const fn = normJobFabKey(r);
     if (!fn) continue;
     const existing = anlagenstammLookupByFab(db, fn);
-    const pushPayload = clampForDispoAnlagenstamm(
+    const incoming = clampForDispoAnlagenstamm(
       Object.assign(
         {
           id: existing && existing.id ? existing.id : 0,
@@ -305,6 +362,9 @@ function enqueueAnlagenstammPendingFromFabJson(db, fabJson) {
         r,
       ),
     );
+    const merged = mergeAnlagenstammPayload(existing || {}, incoming);
+    if (!hasNonemptyStammField(merged)) continue;
+    const pushPayload = stripEmptyStammFieldsForDispoPush(incoming, existing || {});
     db.prepare(
       `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`,
     ).run(fn);
@@ -693,10 +753,11 @@ async function loadDbOnce() {
       server_job_id INTEGER,
       rel_path TEXT NOT NULL,
       file_name TEXT,
-      fab TEXT,
+      fab TEXT NOT NULL DEFAULT '',
       synced_at TEXT DEFAULT (datetime('now')),
-      PRIMARY KEY (local_job_id, rel_path)
+      PRIMARY KEY (local_job_id, fab, rel_path)
     )`);
+    migrateJobTedIndexToFabRelPk(sqlDb);
   } catch (e) { /* existiert evtl. */ }
   try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_tree_cache_synced ON anlagenstamm_tree_cache(synced_at)'); } catch (e) { /* ignore */ }
   try {
@@ -746,7 +807,10 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
   }
   ensureAnlagenstammLocalSchema(db);
   const bodyNorm = clampForDispoAnlagenstamm(body || {});
-  const localResult = anlagenstammSaveLocal(db, bodyNorm);
+  const fabForLookup = String(bodyNorm.fabrikationsnummer || '').trim();
+  const existingBeforeSave = fabForLookup ? anlagenstammLookupByFab(db, fabForLookup) : null;
+  const bodyMerged = mergeAnlagenstammPayload(existingBeforeSave || {}, bodyNorm);
+  const localResult = anlagenstammSaveLocal(db, bodyMerged);
   if (!localResult.ok) {
     return localResult;
   }
@@ -760,7 +824,9 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
     internalUrl: body.internalUrl,
   });
   const defaultBase = baseCandidates.length ? baseCandidates[0] : '';
-  const pushPayload = Object.assign({}, bodyNorm, {
+  const existingAfterSave = fabKey ? anlagenstammLookupByFab(db, fabKey) : null;
+  const pushStamm = stripEmptyStammFieldsForDispoPush(bodyNorm, existingBeforeSave || existingAfterSave || {});
+  const pushPayload = Object.assign({}, pushStamm, {
     id: localResult.id,
     fabrikationsnummer: localResult.fabrikationsnummer,
     serverUsername: body.serverUsername,
@@ -1007,6 +1073,142 @@ function createApp(db) {
     return id ? parseInt(id, 10) : null;
   };
 
+  function getTechnicianDisplayName(technicianId) {
+    const tid = parseInt(technicianId, 10);
+    if (!Number.isFinite(tid) || tid <= 0) return null;
+    try {
+      const row = db.prepare('SELECT full_name, username FROM users WHERE id = ? LIMIT 1').get(tid);
+      if (!row) return null;
+      const fullName = String(row.full_name || '').trim();
+      if (fullName) return fullName;
+      const username = String(row.username || '').trim();
+      return username || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function contentDispositionFilename(headerValue) {
+    const raw = String(headerValue || '');
+    if (!raw) return null;
+    const utf = raw.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    if (utf && utf[1]) {
+      try {
+        return decodeURIComponent(utf[1].trim().replace(/^"|"$/g, ''));
+      } catch (_) {}
+    }
+    const plain = raw.match(/filename\s*=\s*("?)([^";]+)\1/i);
+    if (plain && plain[2]) {
+      try {
+        return decodeURIComponent(plain[2].trim());
+      } catch (_) {
+        return plain[2].trim();
+      }
+    }
+    return null;
+  }
+
+  function ingestParameterFileIntoAnlagenstamm(opts) {
+    const fileName = String((opts && opts.fileName) || '').trim();
+    const source = String((opts && opts.source) || '').trim() || 'upload';
+    const sourcePath = String((opts && opts.sourcePath) || '').trim() || null;
+    const storageRelPath = String((opts && opts.storageRelPath) || '').trim() || null;
+    if (!isSupportedParameterFileName(fileName)) return { ok: false, skipped: true, reason: 'unsupported_extension' };
+    const buf = opts && opts.buffer;
+    if (!Buffer.isBuffer(buf) || buf.length === 0) return { ok: false, skipped: true, reason: 'empty_buffer' };
+    const parsed = parseParameterFile(buf, { fileName });
+    if (!parsed || !parsed.ok) return { ok: false, skipped: true, reason: 'parse_failed' };
+    const usedFab = normalizeParameterFab(parsed.used_fab);
+    if (!usedFab) return { ok: false, skipped: true, reason: 'fab_missing' };
+    const uploadedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const insert = upsertParameterFile(db, {
+      fab: usedFab,
+      source,
+      source_file_status: 'present',
+      technician_id: opts && opts.technicianId != null ? Number(opts.technicianId) : null,
+      technician_name: opts && opts.technicianName ? String(opts.technicianName) : null,
+      uploaded_at: uploadedAt,
+      original_filename: parsed.file_name || path.basename(fileName),
+      mime: opts && opts.mime ? String(opts.mime) : 'application/octet-stream',
+      size: buf.length,
+      sha256: parsed.sha256,
+      storage_relpath: storageRelPath,
+      source_path: sourcePath,
+      filename_fn: parsed.filename_fab || null,
+      content_fn: parsed.content_fab || null,
+      used_fn: usedFab,
+      entries: parsed.entries || [],
+    });
+    if (insert && insert.ok) save();
+    return Object.assign({ fab: usedFab }, insert || {});
+  }
+
+  function flattenProjekteNeuFiles(tree, prefix, out) {
+    const list = Array.isArray(tree) ? tree : [];
+    const pfx = String(prefix || '').trim();
+    for (const node of list) {
+      if (!node || typeof node !== 'object') continue;
+      const name = String(node.name || '').trim();
+      const rel = String(node.rel || '').trim();
+      const type = String(node.type || '').trim();
+      const nextRel = rel || (pfx && name ? (pfx + '/' + name) : name);
+      if (type === 'file') {
+        out.push({
+          rel: nextRel.replace(/\\/g, '/'),
+          name: name || path.basename(nextRel),
+          size: node.size != null ? Number(node.size) : 0,
+          mtime: node.mtime || null,
+        });
+        continue;
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        flattenProjekteNeuFiles(node.children, nextRel, out);
+      }
+    }
+  }
+
+  function ingestProjekteNeuParameterTree(localJobId, fab, tree) {
+    const fabNorm = normalizeParameterFab(fab);
+    if (!fabNorm) return { scanned: 0, ingested: 0 };
+    const flat = [];
+    flattenProjekteNeuFiles(tree, '', flat);
+    const presentPaths = [];
+    let ingested = 0;
+    for (const item of flat) {
+      if (!isSupportedParameterFileName(item.name)) continue;
+      const rel = String(item.rel || '').trim().replace(/\\/g, '/');
+      if (!rel) continue;
+      presentPaths.push(rel);
+      let filePath = null;
+      try {
+        filePath = resolveProjekteNeuLocalFilePath(localJobId, fabNorm, rel);
+      } catch (_) {
+        filePath = null;
+      }
+      if (!filePath || !fs.existsSync(filePath)) continue;
+      let buf;
+      try {
+        buf = fs.readFileSync(filePath);
+      } catch (_) {
+        continue;
+      }
+      const parsed = ingestParameterFileIntoAnlagenstamm({
+        fileName: item.name,
+        source: 'projekte_neu',
+        sourcePath: rel,
+        storageRelPath: filePath,
+        buffer: buf,
+        mime: 'application/octet-stream',
+        technicianId: null,
+        technicianName: null,
+      });
+      if (parsed && parsed.ok) ingested += 1;
+    }
+    markMissingProjekteNeuFiles(db, fabNorm, presentPaths);
+    save();
+    return { scanned: flat.length, ingested, tracked: presentPaths.length };
+  }
+
   /** Gleiche logische Abwesenheit trotz unterschiedlicher ID (Anfrage vs. Absence) oder T/Space in Datumswerten erkennen. */
   const absencePeriodDedupeKey = (technicianId, start, end) => {
     function normDt(v) {
@@ -1221,6 +1423,8 @@ function createApp(db) {
   function applyJobStatusInArbeitAfterAccept(localJobId, technicianId) {
     const lid = parseInt(localJobId, 10);
     if (!Number.isFinite(lid) || lid <= 0) return;
+    const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(lid);
+    if (!jobStatusAllowsAcceptJob(statusRow && statusRow.status)) return;
     const r = db.prepare(`
       UPDATE jobs SET status = 'in_arbeit', updated_at = datetime('now')
       WHERE id = ? AND (
@@ -1611,37 +1815,43 @@ function createApp(db) {
     return dir;
   }
 
-  /** Alle TED-Excel eines Monteurs sofort unter Reiseordner/TED/ (nach TED-Index in sync_pull). */
-  async function pullTedExcelFilesForTechnicianJobsInSync(base, technicianId, authHeader, signal, setProgress) {
+  /** Alle TED-Excel eines Monteurs sofort unter Reiseordner/TED/ (nach TED-Index in sync_pull). Nur in_arbeit. */
+  async function pullTedExcelFilesForTechnicianJobsInSync(base, technicianId, authHeader, signal, setProgress, lock) {
     const rows = db
       .prepare(
         `SELECT j.id AS local_id, j.server_id FROM jobs j
          INNER JOIN job_technicians jt ON jt.job_id = j.id
-         WHERE jt.technician_id = ? AND j.status IN ('in_arbeit', 'zugeteilt')`,
+         WHERE jt.technician_id = ? AND j.status = 'in_arbeit'`,
       )
       .all(technicianId);
     const jobs = [];
+    let skippedNoFolder = 0;
     for (const row of rows) {
       try {
-        const targetDir = getOrCreateDienstreiseFolderForJob(row.local_id);
+        const targetDir = resolveDienstreiseReiseDirForJob(row.local_id, { createIfMissing: false });
         if (targetDir && fs.existsSync(targetDir)) jobs.push({ local_id: row.local_id, server_id: row.server_id, targetDir });
+        else skippedNoFolder++;
       } catch (_) {
-        /* kein Reiseordner (z. B. fehlendes Startdatum) */
+        skippedNoFolder++;
       }
     }
     const total = jobs.length;
-    if (!total) return { downloaded_jobs: 0 };
+    if (!total) {
+      return { downloaded_jobs: 0, attempted_jobs: 0, skipped_no_folder: skippedNoFolder, files_downloaded: 0, files_failed: 0 };
+    }
     const noopCheckpoint = () => {};
     let i = 0;
+    let filesDownloaded = 0;
+    let filesFailed = 0;
     for (const row of jobs) {
       if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
       i++;
       const serverJobId = row.server_id != null ? Number(row.server_id) : Number(row.local_id);
       if (setProgress) setProgress('ted_files', i, total, 'TED-Excel ' + i + '/' + total);
       try {
-        await pullTedExcelIntoReiseDir({
+        const stats = await pullTedExcelIntoReiseDir({
           db,
-          dbLock,
+          dbLock: lock || dbLock,
           dispoBaseUrl: base,
           technicianId,
           serverJobId,
@@ -1654,13 +1864,31 @@ function createApp(db) {
           },
           mergeCheckpoint: noopCheckpoint,
           readCheckpoint: () => ({}),
+          force: false,
         });
+        filesDownloaded += stats.downloaded || 0;
+        filesFailed += stats.failed || 0;
+        if (stats.total > 0 && stats.present === 0) {
+          console.warn('[sync_pull] ted_files job', serverJobId, '0/' + stats.total + ' lokal nach Pull');
+        }
       } catch (err) {
         console.warn('[sync_pull] ted_files job', serverJobId, err && err.message ? err.message : err);
       }
     }
-    save();
-    return { downloaded_jobs: total };
+    if (lock && typeof lock.runWithDbLock === 'function') {
+      await lock.runWithDbLock(async () => {
+        if (typeof db.save === 'function') db.save();
+      });
+    } else if (typeof db.save === 'function') {
+      db.save();
+    }
+    return {
+      downloaded_jobs: total,
+      attempted_jobs: total,
+      skipped_no_folder: skippedNoFolder,
+      files_downloaded: filesDownloaded,
+      files_failed: filesFailed,
+    };
   }
 
   app.post('/api/dienstreise/create_folder', express.json(), (req, res) => {
@@ -1825,6 +2053,7 @@ function createApp(db) {
       };
       const ct = mimeMap[ext] || 'application/octet-stream';
       res.setHeader('Content-Type', ct);
+      res.setHeader('X-Download-Filename', encodeURIComponent(baseName));
       res.setHeader(
         'Content-Disposition',
         (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
@@ -1990,6 +2219,7 @@ function createApp(db) {
       if (!resolved) continue;
       const scanned = scanProjekteNeuTree(resolved.root, {});
       upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
+      ingestProjekteNeuParameterTree(localJobId, fab, scanned.tree);
     }
     save();
   }
@@ -2062,6 +2292,7 @@ function createApp(db) {
       }
       const scanned = scanProjekteNeuTree(ctx.resolved.root, {});
       upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
+      ingestProjekteNeuParameterTree(jobId, fab, scanned.tree);
       save();
       return res.json({
         ok: true,
@@ -2330,9 +2561,8 @@ function createApp(db) {
          FROM jobs j
          INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
          WHERE j.server_id IS NOT NULL AND TRIM(CAST(j.server_id AS TEXT)) != ''
-           AND LOWER(TRIM(COALESCE(j.status, ''))) IN ('in_arbeit', 'zugeteilt')
-         ORDER BY CASE WHEN LOWER(TRIM(COALESCE(j.status, ''))) = 'in_arbeit' THEN 0 ELSE 1 END,
-                  j.id DESC`,
+           AND LOWER(TRIM(COALESCE(j.status, ''))) = 'in_arbeit'
+         ORDER BY j.id DESC`,
       )
       .all(tid);
     const out = [];
@@ -3690,6 +3920,81 @@ ORDER BY
     }
   });
 
+  app.post('/api/anlagenstamm_parameter_files_list', express.json(), (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const fabValue = String((req.body && req.body.fab) || '').trim();
+    if (!technicianId || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+    }
+    try {
+      const fabNorm = normalizeParameterFab(fabValue);
+      if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
+      const files = listParameterFilesByFab(db, fabNorm).map((row) => ({
+        id: row.id,
+        fab: row.fab,
+        source: row.source,
+        source_file_status: row.source_file_status || 'present',
+        technician_id: row.technician_id,
+        technician_name: row.technician_name || null,
+        uploaded_at: row.uploaded_at || null,
+        original_filename: row.original_filename || '',
+        size: row.size != null ? Number(row.size) : 0,
+        mime: row.mime || 'application/octet-stream',
+        entry_count: row.entry_count != null ? Number(row.entry_count) : 0,
+        source_path: row.source_path || null,
+      }));
+      return res.json({ ok: true, fab: fabNorm, files });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/anlagenstamm_parameter_trend', express.json(), (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const body = req.body || {};
+    const fabValue = String(body.fab || '').trim();
+    if (!technicianId || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+    }
+    try {
+      const fabNorm = normalizeParameterFab(fabValue);
+      if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
+      const mode = String(body.mode || 'pair').toLowerCase().trim();
+      if (mode === 'chain' || mode === 'all' || body.chain === true) {
+        const chain = buildParameterTrendChain(db, fabNorm);
+        if (!chain.ok) return res.status(400).json(chain);
+        return res.json(chain);
+      }
+      let fromId = parseInt(body.from_file_id, 10);
+      let toId = parseInt(body.to_file_id, 10);
+      const files = listParameterFilesByFab(db, fabNorm);
+      if (!Number.isFinite(fromId) || fromId <= 0 || !Number.isFinite(toId) || toId <= 0) {
+        if (files.length < 2) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Mindestens zwei Parameterlisten nötig. Bitte Von/Zu auswählen.',
+          });
+        }
+        const chron = db
+          .prepare(
+            `SELECT id FROM anlagenstamm_parameter_files
+             WHERE fab = ? ORDER BY datetime(uploaded_at) ASC, id ASC`,
+          )
+          .all(fabNorm);
+        fromId = chron[0].id;
+        toId = chron[chron.length - 1].id;
+      }
+      if (fromId === toId) {
+        return res.status(400).json({ ok: false, error: 'Von- und Zu-Liste müssen unterschiedlich sein.' });
+      }
+      const result = compareParameterFilesById(db, fabNorm, fromId, toId);
+      if (!result.ok) return res.status(404).json(result);
+      return res.json(Object.assign({ ok: true, fab: fabNorm, mode: 'pair' }, result));
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
   app.get('/api/anlagenstamm_tree_cached', (req, res) => {
     const fab = String(req.query.fab || '').trim();
     if (!fab) return res.status(400).json({ ok: false, error: 'fab erforderlich.' });
@@ -3771,6 +4076,7 @@ ORDER BY
             const buf = fs.readFileSync(filePath);
             const baseName = path.basename(filePath);
             res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('X-Download-Filename', encodeURIComponent(baseName));
             res.setHeader(
               'Content-Disposition',
               (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
@@ -3790,6 +4096,7 @@ ORDER BY
       if (fs.existsSync(cacheFile) && fs.statSync(cacheFile).isFile()) {
         const buf = fs.readFileSync(cacheFile);
         res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('X-Download-Filename', encodeURIComponent(fileValue));
         res.setHeader('Content-Disposition', 'inline; filename="' + encodeURIComponent(fileValue) + '"');
         res.setHeader('Content-Length', String(buf.length));
         return res.send(buf);
@@ -3845,8 +4152,10 @@ ORDER BY
         } catch (_) {}
       }
       const cd = r.headers.get('content-disposition') || ('attachment; filename="' + encodeURIComponent(fallbackFn) + '"');
+      const downloadName = contentDispositionFilename(cd) || fallbackFn;
       res.setHeader('Content-Type', ct);
       res.setHeader('Content-Disposition', cd);
+      res.setHeader('X-Download-Filename', encodeURIComponent(downloadName));
       res.setHeader('Content-Length', String(buf.length));
       res.send(buf);
     } catch (e) {
@@ -3961,6 +4270,86 @@ ORDER BY
     }
   });
 
+  /** Alle TED-Excel eines Auftrags in Reiseordner/TED/ laden (gleiche Quelle wie FN-Liste). */
+  app.post('/api/mechanik_ted_excel_pull_job', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const {
+      baseUrl,
+      jobId: rawJobId,
+      local_job_id: localJobIdRaw,
+      serverUsername,
+      serverPassword,
+      externalUrl,
+      internalUrl,
+      force,
+    } = req.body || {};
+    const localJobId = parseInt(localJobIdRaw, 10);
+    const serverJobId = parseInt(rawJobId, 10);
+    const pair = normalizeDispoBasePair(externalUrl || baseUrl, internalUrl);
+    let dispoBase = (baseUrl || pair.external || pair.internal || '').toString().trim().replace(/\/$/, '');
+    if (!technicianId || !dispoBase || !Number.isFinite(localJobId) || localJobId <= 0 || !Number.isFinite(serverJobId)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'baseUrl, jobId, local_job_id und technician_id erforderlich.',
+      });
+    }
+    if (!localJobStatusAllowsTedFilePull(db, localJobId)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'TED-Dateien werden erst nach „Auftrag annehmen“ (Status in Arbeit) in den Projektordner geladen.',
+      });
+    }
+    const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+    if (!targetDir || !fs.existsSync(targetDir)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Projektordner konnte nicht angelegt werden (Startdatum/Kunde in den Auftragsdaten prüfen).',
+      });
+    }
+    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+    const authHeader = dispoMonteurFetchHeaders(technicianId, auth);
+    try {
+      if (pair.external && pair.internal) {
+        const pick = await pickReachableDispoBase({
+          externalUrl: pair.external,
+          internalUrl: pair.internal,
+          probe: (url) => probeDispoConnection(url, technicianId, serverUsername, serverPassword),
+        });
+        if (pick.ok && pick.selected_base_url) dispoBase = pick.selected_base_url;
+      }
+      const stats = await pullTedExcelIntoReiseDir({
+        db,
+        dbLock,
+        dispoBaseUrl: dispoBase,
+        technicianId,
+        serverJobId,
+        localJobId,
+        targetDir,
+        authHeader,
+        signal: undefined,
+        setProgress: null,
+        mergeCheckpoint: () => {},
+        readCheckpoint: () => ({}),
+        force: !!force,
+      });
+      try {
+        save();
+      } catch (_) {}
+      return res.json({
+        ok: true,
+        dispo_base_url: dispoBase,
+        ted_dir: path.join(targetDir, 'TED'),
+        expected: stats.total,
+        present: stats.present,
+        downloaded: stats.downloaded,
+        skipped: stats.skipped,
+        failed: stats.failed,
+      });
+    } catch (e) {
+      return res.status(502).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
   /** TED-Excel: Dispo-Download, sonst Suche im lokalen Projektordner / bekannten TED-Pfaden. */
   app.post('/api/mechanik_ted_excel_open', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
@@ -3984,10 +4373,13 @@ ORDER BY
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
-    const dispoUrls = [
-      `${base}/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}&rel_path=${encodeURIComponent(relPath)}`,
-      `${base}/dispo/api/mechanik_ted_excel_download.php?rel_path=${encodeURIComponent(relPath)}`,
-    ];
+    const relQ = `rel_path=${encodeURIComponent(relPath)}`;
+    const baseDl = `${base}/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}&${relQ}`;
+    const dispoUrls = [baseDl];
+    if (fab) {
+      dispoUrls.push(`${baseDl}&fab=${encodeURIComponent(String(fab).trim())}`);
+    }
+    dispoUrls.push(`${base}/dispo/api/mechanik_ted_excel_download.php?${relQ}`);
     let lastDispoError = 'Datei nicht gefunden.';
     try {
       for (const url of dispoUrls) {
@@ -4023,11 +4415,15 @@ ORDER BY
         } else if (fnPlain && fnPlain[1]) {
           rawName = fnPlain[1];
         }
-        const safeName = safeTedFileName(rawName, relPath);
         const reiseDir =
           Number.isFinite(localJobId) && localJobId > 0
             ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true })
             : null;
+        const safeName = safeTedLocalFileName({
+          rel_path: relPath,
+          file_name: rawName,
+          fab,
+        });
         if (reiseDir) {
           const tedDir = path.join(reiseDir, 'TED');
           if (!fs.existsSync(tedDir)) fs.mkdirSync(tedDir, { recursive: true });
@@ -4062,7 +4458,12 @@ ORDER BY
         Number.isFinite(localJobId) && localJobId > 0
           ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false })
           : null;
-      const localHit = resolveTedExcelLocal({ reiseDir, relPath, fab });
+      const localHit = resolveTedExcelLocal({
+        reiseDir,
+        relPath,
+        fab,
+        fileName: fileNameRaw,
+      });
       if (localHit && isExcelFilePath(localHit)) {
         try {
           console.log('[mechanik_ted_excel_open] local', localHit);
@@ -4773,9 +5174,20 @@ ORDER BY
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
-      const fn = extractFnFromFilename(filename);
+      let csvBuffer;
+      try {
+        csvBuffer = Buffer.from(contentBase64, 'base64');
+      } catch (e) {
+        return res.status(400).json({ ok: false, error: 'Ungültiger Base64-Inhalt.' });
+      }
+      const parsedParam = parseParameterFile(csvBuffer, { fileName: filename });
+      const filenameFn = parsedParam && parsedParam.filename_fab ? parseInt(parsedParam.filename_fab, 10) : null;
+      const contentFn = parsedParam && parsedParam.content_fab ? parseInt(parsedParam.content_fab, 10) : null;
+      const fn = Number.isFinite(contentFn) && contentFn > 0
+        ? contentFn
+        : (Number.isFinite(filenameFn) && filenameFn > 0 ? filenameFn : null);
       if (fn == null) {
-        return res.status(400).json({ ok: false, error: 'Im Dateinamen konnte keine Fabrikationsnummer erkannt werden (z. B. FN11952).' });
+        return res.status(400).json({ ok: false, error: 'Keine Fabrikationsnummer erkannt (Dateiname oder Dateiinhalt).' });
       }
 
       const fnAllowedOnJob = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern).has(fn);
@@ -4798,12 +5210,6 @@ ORDER BY
         return res.status(500).json({ ok: false, error: 'Ordner konnte nicht angelegt werden: ' + (e.message || e) });
       }
 
-      let csvBuffer;
-      try {
-        csvBuffer = Buffer.from(contentBase64, 'base64');
-      } catch (e) {
-        return res.status(400).json({ ok: false, error: 'Ungültiger Base64-Inhalt.' });
-      }
       const csvPath = path.join(paramDir, filename);
       writeFileWithRetry(csvPath, csvBuffer);
 
@@ -4820,7 +5226,26 @@ ORDER BY
 
       const savedCsv = path.join('Dokumente_Anlage', folderName, 'Montage', 'Parameter', filename);
       const savedPdf = path.join('Dokumente_Anlage', folderName, 'Montage', 'Parameter', pdfBasename);
-      res.json({ ok: true, savedCsv, savedPdf });
+      const technicianName = getTechnicianDisplayName(technicianId);
+      const ingest = ingestParameterFileIntoAnlagenstamm({
+        fileName: filename,
+        source: 'upload',
+        sourcePath: savedCsv.replace(/\\/g, '/'),
+        storageRelPath: csvPath,
+        buffer: csvBuffer,
+        mime: 'text/plain',
+        technicianId,
+        technicianName,
+      });
+      res.json({
+        ok: true,
+        savedCsv,
+        savedPdf,
+        ingest_ok: !!(ingest && ingest.ok),
+        fab_used: fn,
+        filename_fn: Number.isFinite(filenameFn) ? filenameFn : null,
+        content_fn: Number.isFinite(contentFn) ? contentFn : null,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Parameterlisten-Upload fehlgeschlagen.' });
     }
@@ -5090,6 +5515,9 @@ ORDER BY
       if (fabrikationsnummern !== undefined) {
         let val = typeof fabrikationsnummern === 'string' ? fabrikationsnummern : (fabrikationsnummern != null ? JSON.stringify(fabrikationsnummern) : null);
         if (val != null) val = clampFabrikationsnummernJson(val);
+        const jobFabBefore = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(effectiveJobId);
+        const oldFabJson = jobFabBefore && jobFabBefore.fabrikationsnummern;
+        const addedFns = computeAddedJobFabNums(oldFabJson, val);
         const r = db.prepare(`
           UPDATE jobs SET fabrikationsnummern = ?, updated_at = datetime('now')
           WHERE id = ? AND (
@@ -5098,8 +5526,8 @@ ORDER BY
           )
         `).run(val, effectiveJobId, technicianId);
         if (r.changes) {
-          syncJobFabRowsToAnlagenstammLocal(db, val);
-          enqueueAnlagenstammPendingFromFabJson(db, val);
+          syncJobFabRowsToAnlagenstammLocal(db, val, { onlyFns: addedFns });
+          enqueueAnlagenstammPendingFromFabJson(db, val, { onlyFns: addedFns });
           db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'fabrikationsnummern'`).run(
             effectiveJobId,
           );
@@ -5578,6 +6006,7 @@ ORDER BY
           return Array.isArray(data.entries) ? data.entries : [];
         }
 
+        let manifestListed = 0;
         async function collectManifest(relPath, acc) {
           const entries = await listEntries(relPath);
           for (const e of entries) {
@@ -5596,6 +6025,10 @@ ORDER BY
                 size: Number.isFinite(sz) ? sz : null,
                 mtime_ms: mtimeMs,
               });
+              manifestListed++;
+              if (manifestListed === 1 || manifestListed % 20 === 0) {
+                setProgress('manifest', manifestListed, 0, childRel);
+              }
             }
           }
         }
@@ -5684,8 +6117,8 @@ ORDER BY
           } catch (tedPullErr) {
             console.warn('[dienstreise_pull] TED (0 Dateien):', tedPullErr && tedPullErr.message ? tedPullErr.message : tedPullErr);
           }
-          await notifyMarkDocsLoaded();
           if (acceptJob) {
+            await notifyMarkDocsLoaded();
             applyJobStatusInArbeitAfterAccept(localJobId, technicianId);
             let statusSyncWarning = null;
             const srvId = jobRowFull.server_id != null ? jobRowFull.server_id : null;
@@ -5793,11 +6226,10 @@ ORDER BY
           console.warn('[dienstreise_pull] TED:', tedPullErr && tedPullErr.message ? tedPullErr.message : tedPullErr);
         }
 
-        await notifyMarkDocsLoaded();
-
         chk = readCheckpoint();
         if (!chk.finalize_done) {
           if (acceptJob) {
+            await notifyMarkDocsLoaded();
             applyJobStatusInArbeitAfterAccept(localJobId, technicianId);
             let statusSyncWarning = null;
             const srvId = jobRowFull.server_id != null ? jobRowFull.server_id : null;
@@ -5844,75 +6276,99 @@ ORDER BY
       }
       case 'sync_pull': {
         const p = job.payload || {};
-        const base = (p.baseUrl || '').trim().replace(/\/$/, '');
+        const pair = normalizeDispoBasePair(p.externalUrl, p.internalUrl);
+        let base = (p.baseUrl || pair.external || pair.internal || '').trim().replace(/\/$/, '');
         const technicianId = parseInt(p.technicianId, 10);
         const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
         const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
+        if (pair.external && pair.internal) {
+          const pick = await pickReachableDispoBase({
+            externalUrl: pair.external,
+            internalUrl: pair.internal,
+            probe: (url) => probeDispoConnection(url, technicianId, p.serverUsername, p.serverPassword),
+          });
+          if (pick.ok && pick.selected_base_url) {
+            base = pick.selected_base_url;
+          }
+        }
+        let pullInfo = null;
         await dbLock.runWithDbLock(async () => {
-          setProgress('sync_pull', 0, 8, 'Sende ausstehende Änderungen …');
+          setProgress('sync_pull', 0, 8, 'Ziehe Aufträge von Dispo …');
+          pullInfo = await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
+          save();
+        });
+        await dbLock.runWithDbLock(async () => {
+          setProgress('sync_pull', 1, 8, 'Sende ausstehende Änderungen …');
           try {
             await pushToServer(base, technicianId, db, auth);
             save();
           } catch (pushErr) {
             console.warn(
-              '[sync_pull] vorab-push:',
+              '[sync_pull] nach-pull-push:',
               pushErr && pushErr.message ? pushErr.message : pushErr,
             );
           }
-          setProgress('sync_pull', 1, 8, 'Ziehe Aufträge von Dispo …');
-          const pullInfo = await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
-          save();
-          setProgress('sync_pull', 2, 8, 'Kalender-Cache …');
-          const range = defaultFutureRange();
-          const cacheStart = p.date_from && String(p.date_from).trim() ? String(p.date_from).trim() : range.start;
-          const cacheEnd = p.date_to && String(p.date_to).trim() ? String(p.date_to).trim() : range.end;
-          try {
-            const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, auth);
+        });
+        setProgress('sync_pull', 2, 8, 'Kalender-Cache …');
+        const range = defaultFutureRange();
+        const cacheStart = p.date_from && String(p.date_from).trim() ? String(p.date_from).trim() : range.start;
+        const cacheEnd = p.date_to && String(p.date_to).trim() ? String(p.date_to).trim() : range.end;
+        try {
+          const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, auth);
+          const fabs = pullInfo && Array.isArray(pullInfo.fabs) ? pullInfo.fabs : [];
+          let subset = [];
+          await dbLock.runWithDbLock(async () => {
             upsertCalendarCache(db, calData);
-            const fabs = pullInfo && Array.isArray(pullInfo.fabs) ? pullInfo.fabs : [];
-            const subset = prioritiseFabsForAnlagenstammSync(db, technicianId, fabs);
-            let fi = 0;
-            for (const fab of subset) {
-              if (signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
-              fi++;
-              setProgress('anlagenstamm_tree', fi, subset.length, fab);
-              try {
+            save();
+            subset = prioritiseFabsForAnlagenstammSync(db, technicianId, fabs);
+          });
+          let fi = 0;
+          for (const fab of subset) {
+            if (signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
+            fi++;
+            setProgress('anlagenstamm_tree', fi, subset.length, fab);
+            try {
+              await dbLock.runWithDbLock(async () => {
                 await fetchAndCacheAnlagenstammTree(base, technicianId, fab, auth, db);
-              } catch (_) {}
-            }
-          } catch (calErr) {
-            console.warn('[sync_pull] kalender/anlagenstamm_baum:', calErr && calErr.message ? calErr.message : calErr);
+              });
+            } catch (_) {}
           }
-          save();
-          setProgress('sync_pull', 3, 8, 'TED-Index …');
-          try {
-            await syncTedIndexForTechnicianJobs(db, base, technicianId, fetchHeaders, signal, setProgress);
-          } catch (tedErr) {
-            console.warn('[sync_pull] ted_index:', tedErr && tedErr.message ? tedErr.message : tedErr);
-          }
-          save();
-          setProgress('sync_pull', 4, 8, 'TED-Excel in Projektordner …');
-          try {
-            const tedDl = await pullTedExcelFilesForTechnicianJobsInSync(
-              base,
-              technicianId,
-              fetchHeaders,
-              signal,
-              setProgress,
-            );
-            if (tedDl.downloaded_jobs > 0) {
-              console.log('[sync_pull] ted_files jobs:', tedDl.downloaded_jobs);
-            }
-          } catch (tedDlErr) {
-            console.warn('[sync_pull] ted_files:', tedDlErr && tedDlErr.message ? tedDlErr.message : tedDlErr);
-          }
-          save();
-          setProgress('sync_pull', 5, 8, 'Protokoll-Vorlagen …');
-          try {
-            await syncProtokollTemplates(base);
-          } catch (tplErr) {
-            console.warn('Protokoll-Vorlagen Sync fehlgeschlagen:', tplErr.message);
-          }
+        } catch (calErr) {
+          console.warn('[sync_pull] kalender/anlagenstamm_baum:', calErr && calErr.message ? calErr.message : calErr);
+        }
+        setProgress('sync_pull', 3, 8, 'TED-Index …');
+        try {
+          await syncTedIndexForTechnicianJobs(db, base, technicianId, fetchHeaders, signal, setProgress, dbLock);
+        } catch (tedErr) {
+          console.warn('[sync_pull] ted_index:', tedErr && tedErr.message ? tedErr.message : tedErr);
+        }
+        setProgress('sync_pull', 4, 8, 'TED-Excel in Projektordner …');
+        try {
+          const tedDl = await pullTedExcelFilesForTechnicianJobsInSync(
+            base,
+            technicianId,
+            fetchHeaders,
+            signal,
+            setProgress,
+            dbLock,
+          );
+          console.log(
+            '[sync_pull] ted_files:',
+            'jobs=' + (tedDl.attempted_jobs || tedDl.downloaded_jobs || 0),
+            'files=' + (tedDl.files_downloaded || 0),
+            'failed=' + (tedDl.files_failed || 0),
+            'skip_no_folder=' + (tedDl.skipped_no_folder || 0),
+          );
+        } catch (tedDlErr) {
+          console.warn('[sync_pull] ted_files:', tedDlErr && tedDlErr.message ? tedDlErr.message : tedDlErr);
+        }
+        setProgress('sync_pull', 5, 8, 'Protokoll-Vorlagen …');
+        try {
+          await syncProtokollTemplates(base);
+        } catch (tplErr) {
+          console.warn('Protokoll-Vorlagen Sync fehlgeschlagen:', tplErr.message);
+        }
+        await dbLock.runWithDbLock(async () => {
           setProgress('sync_pull', 6, 8, 'Projektordner (Änderungen) …');
           try {
             const delta = enqueuePeriodicDienstreiseDeltaPulls({
@@ -6266,47 +6722,105 @@ ORDER BY
     save();
   }
 
+  async function probeDispoBaseWithOptionalAuth(base, technicianId, serverUsername, serverPassword) {
+    const hasCreds = (serverUsername || '').toString().trim() !== '';
+    const ac = new AbortController();
+    const probeMs = isPrivateLanHostname(safeHostname(base)) ? 3500 : DISPO_PROBE_TIMEOUT_MS;
+    const timer = setTimeout(() => ac.abort(), probeMs);
+    try {
+      let probeTechId = technicianId;
+      let profile = null;
+      if (hasCreds) {
+        profile = await resolveMonteurFromDispoAuth(base, serverUsername, serverPassword, ac.signal);
+        if (profile.ok && profile.technician_id) {
+          probeTechId = profile.technician_id;
+        }
+      }
+      const result = await probeDispoConnection(base, probeTechId, serverUsername, serverPassword, ac.signal);
+      return { result, profile };
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        return {
+          result: { ok: false, error: 'Timeout nach ' + probeMs / 1000 + ' s (Dispo-Probe)' },
+          profile: null,
+        };
+      }
+      return {
+        result: { ok: false, error: e && e.message ? e.message : String(e) },
+        profile: null,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   app.post('/api/check_connection', express.json(), async (req, res) => {
     const { baseUrl, externalUrl, internalUrl, technicianId, serverUsername, serverPassword } = req.body || {};
-    const candidates = buildDispoBaseCandidates({ baseUrl, externalUrl, internalUrl });
+    const pair = normalizeDispoBasePair(externalUrl, internalUrl);
+    const ext = pair.external;
+    const int = pair.internal;
+    const candidates = buildDispoBaseCandidates({ baseUrl, externalUrl: ext, internalUrl: int });
     if (candidates.length === 0) {
       return res.json({ ok: false, error: 'Server-URL fehlt.' });
     }
-    const hasCreds = (serverUsername || '').toString().trim() !== '';
-    let lastErr = 'Verbindung fehlgeschlagen';
     let lastProfile = null;
-    for (const base of candidates) {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), DISPO_PROBE_TIMEOUT_MS);
-      try {
-        let probeTechId = technicianId;
-        let profile = null;
-        if (hasCreds) {
-          profile = await resolveMonteurFromDispoAuth(base, serverUsername, serverPassword, ac.signal);
-          if (profile.ok && profile.technician_id) {
-            lastProfile = profile;
-            probeTechId = profile.technician_id;
-          }
-        }
-        const result = await probeDispoConnection(base, probeTechId, serverUsername, serverPassword, ac.signal);
-        if (result.ok) {
-          const payload = { ok: true, used_base_url: base };
-          if (profile && profile.ok) {
-            try {
-              upsertLocalMonteurProfile(profile);
-            } catch (_) {}
-            payload.technician_id = profile.technician_id;
-            payload.full_name = profile.full_name;
-            payload.username = profile.username;
-          }
-          return res.json(payload);
-        }
-        lastErr = result.error || lastErr;
-      } catch (e) {
-        lastErr = e && e.message ? e.message : lastErr;
-      } finally {
-        clearTimeout(timer);
+
+    async function finishSuccess(base, profile) {
+      const payload = { ok: true, used_base_url: base };
+      if (profile && profile.ok) {
+        try {
+          upsertLocalMonteurProfile(profile);
+        } catch (_) {}
+        payload.technician_id = profile.technician_id;
+        payload.full_name = profile.full_name;
+        payload.username = profile.username;
       }
+      return res.json(payload);
+    }
+
+    if (ext && int) {
+      const pick = await pickReachableDispoBase({
+        externalUrl: ext,
+        internalUrl: int,
+        probe: async (base) => {
+          const { result, profile } = await probeDispoBaseWithOptionalAuth(
+            base,
+            technicianId,
+            serverUsername,
+            serverPassword,
+          );
+          if (profile && profile.ok && profile.technician_id) lastProfile = profile;
+          return result;
+        },
+      });
+      if (pick.ok && pick.selected_base_url) {
+        return finishSuccess(pick.selected_base_url, lastProfile);
+      }
+      const failPayload = { ok: false, error: pick.error || 'Verbindung fehlgeschlagen' };
+      if (lastProfile && lastProfile.ok && lastProfile.technician_id) {
+        try {
+          upsertLocalMonteurProfile(lastProfile);
+        } catch (_) {}
+        failPayload.technician_id = lastProfile.technician_id;
+        failPayload.full_name = lastProfile.full_name;
+        failPayload.username = lastProfile.username;
+      }
+      return res.json(failPayload);
+    }
+
+    let lastErr = 'Verbindung fehlgeschlagen';
+    for (const base of candidates) {
+      const { result, profile } = await probeDispoBaseWithOptionalAuth(
+        base,
+        technicianId,
+        serverUsername,
+        serverPassword,
+      );
+      if (profile && profile.ok && profile.technician_id) lastProfile = profile;
+      if (result.ok) {
+        return finishSuccess(base, profile);
+      }
+      lastErr = result.error || lastErr;
     }
     const failPayload = { ok: false, error: lastErr };
     if (lastProfile && lastProfile.ok && lastProfile.technician_id) {
@@ -6323,7 +6837,12 @@ ORDER BY
   /** Monteur-ID/Name nur aus Dispo-Login (ohne jobs_open/my_jobs-Probe). */
   app.post('/api/monteur_profile', express.json(), async (req, res) => {
     const { baseUrl, externalUrl, internalUrl, serverUsername, serverPassword } = req.body || {};
-    const candidates = buildDispoBaseCandidates({ baseUrl, externalUrl, internalUrl });
+    const pair = normalizeDispoBasePair(externalUrl, internalUrl);
+    const candidates = buildDispoBaseCandidates({
+      baseUrl,
+      externalUrl: pair.external,
+      internalUrl: pair.internal,
+    });
     if (candidates.length === 0) {
       return res.json({ ok: false, error: 'Server-URL fehlt.' });
     }
@@ -6331,12 +6850,66 @@ ORDER BY
     if (!user) {
       return res.json({ ok: false, error: 'Benutzername fehlt.' });
     }
+    const DISPO_AUTH_PROBE_LAN_MS = 3500;
+
+    async function authProfileOnBase(base) {
+      const ac = new AbortController();
+      const ms = isPrivateLanHostname(safeHostname(base))
+        ? DISPO_AUTH_PROBE_LAN_MS
+        : DISPO_PROBE_TIMEOUT_MS;
+      const timer = setTimeout(() => ac.abort(), ms);
+      try {
+        return await resolveMonteurFromDispoAuth(base, serverUsername, serverPassword, ac.signal);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    if (pair.external && pair.internal) {
+      let profileOnPick = null;
+      const pick = await pickReachableDispoBase({
+        externalUrl: pair.external,
+        internalUrl: pair.internal,
+        probe: async (url) => {
+          try {
+            const profile = await authProfileOnBase(url);
+            if (profile.ok && profile.technician_id) profileOnPick = profile;
+            return {
+              ok: !!(profile.ok && profile.technician_id),
+              error: profile.error || (profile.ok ? undefined : 'Login fehlgeschlagen'),
+            };
+          } catch (e) {
+            const msg =
+              e && e.name === 'AbortError'
+                ? 'Timeout (Login)'
+                : e && e.message
+                  ? e.message
+                  : String(e);
+            return { ok: false, error: msg };
+          }
+        },
+      });
+      if (pick.ok && pick.selected_base_url && profileOnPick) {
+        try {
+          upsertLocalMonteurProfile(profileOnPick);
+        } catch (_) {}
+        return res.json({
+          ok: true,
+          used_base_url: pick.selected_base_url,
+          technician_id: profileOnPick.technician_id,
+          full_name: profileOnPick.full_name,
+          username: profileOnPick.username,
+        });
+      }
+      if (!pick.ok && pick.error) {
+        return res.json({ ok: false, error: pick.error });
+      }
+    }
+
     let lastErr = 'Profil nicht ermittelt';
     for (const base of candidates) {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), DISPO_PROBE_TIMEOUT_MS);
       try {
-        const profile = await resolveMonteurFromDispoAuth(base, serverUsername, serverPassword, ac.signal);
+        const profile = await authProfileOnBase(base);
         if (profile.ok && profile.technician_id) {
           try {
             upsertLocalMonteurProfile(profile);
@@ -6352,12 +6925,10 @@ ORDER BY
         lastErr = profile.error || lastErr;
       } catch (e) {
         if (e && e.name === 'AbortError') {
-          lastErr = 'Timeout nach ' + DISPO_PROBE_TIMEOUT_MS / 1000 + ' s (Login-Probe)';
+          lastErr = 'Timeout (Login-Probe)';
         } else {
           lastErr = e && e.message ? e.message : lastErr;
         }
-      } finally {
-        clearTimeout(timer);
       }
     }
     return res.json({ ok: false, error: lastErr });
@@ -6468,55 +7039,20 @@ ORDER BY
   /** Zwei Basis-URLs (extern/intern): parallel prüfen, bei beidem OK interne wählen (10 s Timeout pro Probe). */
   app.post('/api/dispo_pick_base', express.json(), async (req, res) => {
     const { externalUrl, internalUrl, technicianId, serverUsername, serverPassword } = req.body || {};
-    const ext = (externalUrl || '').toString().trim().replace(/\/$/, '');
-    const int = (internalUrl || '').toString().trim().replace(/\/$/, '');
-    if (!ext && !int) {
-      return res.json({ ok: false, error: 'Mindestens eine Dispo-Basis-URL erforderlich.', tried: [] });
-    }
-
-    const runProbe = (url) => {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), DISPO_PROBE_TIMEOUT_MS);
-      return probeDispoConnection(url, technicianId, serverUsername, serverPassword, ac.signal).finally(() =>
-        clearTimeout(timer),
-      );
-    };
-
+    const pair = normalizeDispoBasePair(externalUrl, internalUrl);
     try {
-      if (ext && !int) {
-        const r = await runProbe(ext);
-        return res.json({
-          ok: r.ok,
-          selected_base_url: r.ok ? ext : null,
-          preferred_source: 'single',
-          tried: [{ url: ext, ok: r.ok, error: r.ok ? undefined : r.error }],
-        });
-      }
-      if (int && !ext) {
-        const r = await runProbe(int);
-        return res.json({
-          ok: r.ok,
-          selected_base_url: r.ok ? int : null,
-          preferred_source: 'single',
-          tried: [{ url: int, ok: r.ok, error: r.ok ? undefined : r.error }],
-        });
-      }
-
-      const [rInt, rExt] = await Promise.all([runProbe(int), runProbe(ext)]);
-      const tried = [
-        { url: int, ok: rInt.ok, error: rInt.ok ? undefined : rInt.error },
-        { url: ext, ok: rExt.ok, error: rExt.ok ? undefined : rExt.error },
-      ];
-      if (rInt.ok && rExt.ok) {
-        return res.json({ ok: true, selected_base_url: int, preferred_source: 'internal', tried });
-      }
-      if (rInt.ok) {
-        return res.json({ ok: true, selected_base_url: int, preferred_source: 'internal', tried });
-      }
-      if (rExt.ok) {
-        return res.json({ ok: true, selected_base_url: ext, preferred_source: 'external', tried });
-      }
-      return res.json({ ok: false, error: 'Keine erreichbare Dispo-URL.', tried });
+      const pick = await pickReachableDispoBase({
+        externalUrl: pair.external,
+        internalUrl: pair.internal,
+        probe: (url) => {
+          const ac = new AbortController();
+          const timer = setTimeout(() => ac.abort(), DISPO_PROBE_TIMEOUT_MS);
+          return probeDispoConnection(url, technicianId, serverUsername, serverPassword, ac.signal).finally(() =>
+            clearTimeout(timer),
+          );
+        },
+      });
+      return res.json(pick);
     } catch (e) {
       return res.json({ ok: false, error: e.message || String(e), tried: [] });
     }
@@ -6524,7 +7060,16 @@ ORDER BY
 
   app.post('/api/sync_pull', express.json(), async (req, res) => {
     const body = req.body || {};
-    const baseUrl = (body.baseUrl || body.base_url || '').toString().trim();
+    const pair = normalizeDispoBasePair(body.externalUrl, body.internalUrl);
+    const baseUrl = (
+      body.baseUrl ||
+      body.base_url ||
+      pair.external ||
+      pair.internal ||
+      ''
+    )
+      .toString()
+      .trim();
     const technicianId = parseInt(body.technicianId ?? body.technician_id, 10);
     const { serverUsername, serverPassword, date_from, date_to } = body;
     if (!baseUrl || !Number.isFinite(technicianId) || technicianId <= 0) {
@@ -6547,6 +7092,8 @@ ORDER BY
         'sync_pull',
         {
           baseUrl: base,
+          externalUrl: pair.external,
+          internalUrl: pair.internal,
           technicianId: tid,
           serverUsername,
           serverPassword,
@@ -6563,7 +7110,16 @@ ORDER BY
 
   app.post('/api/sync_push', express.json(), (req, res) => {
     const body = req.body || {};
-    const baseUrl = (body.baseUrl || body.base_url || '').toString().trim();
+    const pair = normalizeDispoBasePair(body.externalUrl, body.internalUrl);
+    const baseUrl = (
+      body.baseUrl ||
+      body.base_url ||
+      pair.external ||
+      pair.internal ||
+      ''
+    )
+      .toString()
+      .trim();
     const technicianId = parseInt(body.technicianId ?? body.technician_id, 10);
     const { serverUsername, serverPassword } = body;
     if (!baseUrl || !Number.isFinite(technicianId) || technicianId <= 0) {
@@ -6578,6 +7134,8 @@ ORDER BY
         'sync_push',
         {
           baseUrl: base,
+          externalUrl: pair.external,
+          internalUrl: pair.internal,
           technicianId: tid,
           serverUsername,
           serverPassword,
@@ -6618,6 +7176,7 @@ ORDER BY
     try {
       if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
       bgJobs.reapStuckJobs();
+      bgJobs.kick();
       return res.json({ ok: true });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
@@ -6628,6 +7187,7 @@ ORDER BY
     try {
       if (!bgJobs) return res.status(503).json({ ok: false, error: 'Hintergrund-Jobs nicht bereit.' });
       bgJobs.reapStuckJobs();
+      bgJobs.kick();
       const runningOnly = req.query.running === '1' || req.query.running === 'true';
       const activeOnly = !runningOnly && (req.query.active === '1' || req.query.active === 'true');
       const jobs = bgJobs.listJobs(req.query.limit, { activeOnly, runningOnly });
@@ -6827,6 +7387,74 @@ function flattenMechanikTedByFab(data) {
   return out;
 }
 
+function normTedFabKey(fab) {
+  return String(fab || '')
+    .trim()
+    .replace(/\D/g, '');
+}
+
+function tedEntryKey(ent) {
+  const fab = normTedFabKey(ent && ent.fab) || String((ent && ent.fab) || '').trim();
+  const rel = String((ent && ent.rel_path) || '')
+    .trim()
+    .replace(/\\/g, '/');
+  const fn = String((ent && ent.file_name) || '').trim();
+  return fab + '|' + rel + '|' + fn;
+}
+
+function migrateJobTedIndexToFabRelPk(sqlDb) {
+  const row = sqlDb.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='job_ted_index'").get();
+  if (!row || !row.sql || row.sql.includes('PRIMARY KEY (local_job_id, fab, rel_path)')) return;
+  sqlDb.run('BEGIN');
+  try {
+    sqlDb.run(`CREATE TABLE job_ted_index_v2 (
+      local_job_id INTEGER NOT NULL,
+      server_job_id INTEGER,
+      rel_path TEXT NOT NULL,
+      file_name TEXT,
+      fab TEXT NOT NULL DEFAULT '',
+      synced_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (local_job_id, fab, rel_path)
+    )`);
+    sqlDb.run(`INSERT OR IGNORE INTO job_ted_index_v2 (local_job_id, server_job_id, rel_path, file_name, fab, synced_at)
+      SELECT local_job_id, server_job_id, rel_path, file_name, COALESCE(NULLIF(TRIM(fab), ''), ''), synced_at FROM job_ted_index`);
+    sqlDb.run('DROP TABLE job_ted_index');
+    sqlDb.run('ALTER TABLE job_ted_index_v2 RENAME TO job_ted_index');
+    sqlDb.run('COMMIT');
+  } catch (e) {
+    try {
+      sqlDb.run('ROLLBACK');
+    } catch (_) {}
+    throw e;
+  }
+}
+
+/** TED-/Projektordner-Dateien nur nach „Auftrag annehmen“ (lokal in_arbeit). */
+function localJobStatusAllowsTedFilePull(db, localJobId) {
+  const lid = parseInt(localJobId, 10);
+  if (!Number.isFinite(lid) || lid <= 0) return false;
+  const row = db.prepare('SELECT status FROM jobs WHERE id = ?').get(lid);
+  return row && String(row.status || '').trim().toLowerCase() === 'in_arbeit';
+}
+
+function jobFabKeysFromLocalJob(db, localJobId) {
+  const lid = parseInt(localJobId, 10);
+  if (!Number.isFinite(lid) || lid <= 0) return [];
+  const row = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(lid);
+  if (!row) return [];
+  const out = [];
+  const seen = new Set();
+  for (const r of parseJobFabrikationsnummernRows(row.fabrikationsnummern)) {
+    const f = String(r.fabrikationsnummer ?? r.Fabrikationsnummer ?? '').trim();
+    if (!f) continue;
+    const k = normTedFabKey(f) || f;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(f);
+  }
+  return out;
+}
+
 function prioritiseFabsForAnlagenstammSync(db, technicianId, fabs) {
   const priority = new Set();
   try {
@@ -6860,40 +7488,108 @@ function prioritiseFabsForAnlagenstammSync(db, technicianId, fabs) {
 }
 
 function upsertJobTedIndex(db, localJobId, serverJobId, entries) {
-  db.prepare(`DELETE FROM job_ted_index WHERE local_job_id = ?`).run(localJobId);
-  const ins = db.prepare(
-    `INSERT INTO job_ted_index (local_job_id, server_job_id, rel_path, file_name, fab, synced_at)
-     VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-  );
-  for (const e of entries || []) {
-    const rel = String(e.rel_path || '').trim().replace(/\\/g, '/');
-    if (!rel || rel.includes('..')) continue;
-    ins.run(
-      localJobId,
-      serverJobId,
-      rel,
-      String(e.file_name || '').trim() || null,
-      String(e.fab || '').trim() || null,
-    );
-  }
+  db.transaction(() => {
+    db.prepare(`DELETE FROM job_ted_index WHERE local_job_id = ?`).run(localJobId);
+    for (const e of entries || []) {
+      const rel = String(e.rel_path || '').trim().replace(/\\/g, '/');
+      if (!rel || rel.includes('..')) continue;
+      db.prepare(
+        `INSERT INTO job_ted_index (local_job_id, server_job_id, rel_path, file_name, fab, synced_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+      ).run(
+        localJobId,
+        serverJobId,
+        rel,
+        String(e.file_name || '').trim() || null,
+        String(e.fab || '').trim() || '',
+      );
+    }
+  });
 }
 
-async function fetchMechanikTedListFromDispo(base, technicianId, serverJobId, authHeader, signal) {
-  const url =
+function tedCompletedIncludes(completed, entryKey, ent) {
+  if (!Array.isArray(completed) || !completed.length) return false;
+  if (completed.includes(entryKey)) return true;
+  const rel = String((ent && ent.rel_path) || '')
+    .trim()
+    .replace(/\\/g, '/');
+  return !!(rel && completed.includes(rel));
+}
+
+async function fetchMechanikTedListFromDispo(base, technicianId, serverJobId, authHeader, signal, opts) {
+  opts = opts || {};
+  const listBase =
     `${base}/dispo_api/api/mechanik_ted_excel_list.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(serverJobId)}`;
-  const r = await fetch(url, { headers: authHeader, signal });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok || data.ok === false) {
-    throw new Error((data && data.error) || 'TED-Liste fehlgeschlagen (HTTP ' + r.status + ').');
+  const byKey = new Map();
+
+  function mergeListPayload(data) {
+    for (const ent of flattenMechanikTedByFab(data)) {
+      const rel = String(ent.rel_path || '').trim();
+      if (!rel) continue;
+      const key = tedEntryKey(ent);
+      if (!byKey.has(key)) byKey.set(key, ent);
+    }
   }
-  return flattenMechanikTedByFab(data);
+
+  async function fetchListUrl(url) {
+    const r = await fetch(url, { headers: authHeader, signal });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.ok === false) {
+      throw new Error((data && data.error) || 'TED-Liste fehlgeschlagen (HTTP ' + r.status + ').');
+    }
+    mergeListPayload(data);
+  }
+
+  async function fetchListUrlWithRetry(url, attempts) {
+    const max = attempts != null ? attempts : 3;
+    let lastErr = null;
+    for (let i = 0; i < max; i++) {
+      try {
+        await fetchListUrl(url);
+        return;
+      } catch (e) {
+        lastErr = e;
+        if (i < max - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 800 * (i + 1)));
+        }
+      }
+    }
+    throw lastErr || new Error('TED-Liste fehlgeschlagen.');
+  }
+
+  await fetchListUrlWithRetry(listBase);
+
+  const extraFabs = Array.isArray(opts.extraFabs) ? opts.extraFabs : [];
+  if (extraFabs.length > 1) {
+    for (const fab of extraFabs) {
+      const fabStr = String(fab || '').trim();
+      if (!fabStr) continue;
+      const urlFab = listBase + '&fab=' + encodeURIComponent(fabStr);
+      try {
+        await fetchListUrl(urlFab);
+      } catch (e) {
+        console.warn('[ted_list] fab', fabStr, e && e.message ? e.message : e);
+      }
+    }
+  }
+
+  const result = [...byKey.values()];
+  try {
+    const fabCount = new Set(result.map((e) => String(e.fab || '').trim()).filter(Boolean)).size;
+    console.log('[ted_list] job=' + serverJobId + ' entries=' + result.length + ' fabs=' + fabCount);
+  } catch (_) {}
+  return result;
 }
 
-async function downloadMechanikTedBuffer(base, technicianId, serverJobId, relPath, authHeader, signal) {
-  const urls = [
-    `${base}/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(serverJobId)}&rel_path=${encodeURIComponent(relPath)}`,
-    `${base}/dispo/api/mechanik_ted_excel_download.php?rel_path=${encodeURIComponent(relPath)}`,
-  ];
+async function downloadMechanikTedBuffer(base, technicianId, serverJobId, relPath, authHeader, signal, fabOpt) {
+  const relQ = `rel_path=${encodeURIComponent(relPath)}`;
+  const baseDl = `${base}/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(serverJobId)}&${relQ}`;
+  const fabStr = fabOpt != null && String(fabOpt).trim() !== '' ? String(fabOpt).trim() : '';
+  const urls = [baseDl];
+  if (fabStr) {
+    urls.push(`${baseDl}&fab=${encodeURIComponent(fabStr)}`);
+  }
+  urls.push(`${base}/dispo/api/mechanik_ted_excel_download.php?${relQ}`);
   let lastErr = 'Datei nicht gefunden.';
   for (const url of urls) {
     let r;
@@ -6919,25 +7615,12 @@ async function downloadMechanikTedBuffer(base, technicianId, serverJobId, relPat
   throw new Error(lastErr);
 }
 
-function safeTedFileName(rawName, relPath) {
-  let rawNameStr = String(rawName || '').trim() || relPath.split(/[/\\]/).pop() || 'ted.xlsx';
-  if (!/\.(xlsx|xlsm|xls|xlsb)$/i.test(rawNameStr)) {
-    const relExt = path.extname(relPath);
-    if (/^\.(xlsx|xlsm|xls|xlsb)$/i.test(relExt)) {
-      rawNameStr = path.basename(rawNameStr, path.extname(rawNameStr)) + relExt;
-    } else if (!path.extname(rawNameStr)) {
-      rawNameStr += '.xlsx';
-    }
-  }
-  return String(rawNameStr).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'ted.xlsx';
-}
-
-async function syncTedIndexForTechnicianJobs(db, base, technicianId, authHeader, signal, setProgress) {
+async function syncTedIndexForTechnicianJobs(db, base, technicianId, authHeader, signal, setProgress, lock) {
   const rows = db
     .prepare(
       `SELECT j.id AS local_id, j.server_id FROM jobs j
        INNER JOIN job_technicians jt ON jt.job_id = j.id
-       WHERE jt.technician_id = ? AND j.status IN ('in_arbeit', 'zugeteilt')`,
+       WHERE jt.technician_id = ? AND j.status = 'in_arbeit'`,
     )
     .all(technicianId);
   const total = rows.length;
@@ -6948,8 +7631,26 @@ async function syncTedIndexForTechnicianJobs(db, base, technicianId, authHeader,
     if (setProgress) setProgress('ted_index', i, total, 'TED-Index ' + i + '/' + total);
     const serverJobId = row.server_id != null ? Number(row.server_id) : Number(row.local_id);
     try {
-      const list = await fetchMechanikTedListFromDispo(base, technicianId, serverJobId, authHeader, signal);
-      upsertJobTedIndex(db, row.local_id, serverJobId, list);
+      let extraFabs = [];
+      if (lock && typeof lock.runWithDbLock === 'function') {
+        await lock.runWithDbLock(async () => {
+          extraFabs = jobFabKeysFromLocalJob(db, row.local_id);
+        });
+      } else {
+        extraFabs = jobFabKeysFromLocalJob(db, row.local_id);
+      }
+      const list = await fetchMechanikTedListFromDispo(base, technicianId, serverJobId, authHeader, signal, {
+        extraFabs,
+      });
+      if (lock && typeof lock.runWithDbLock === 'function') {
+        await lock.runWithDbLock(async () => {
+          upsertJobTedIndex(db, row.local_id, serverJobId, list);
+          if (typeof db.save === 'function') db.save();
+        });
+      } else {
+        upsertJobTedIndex(db, row.local_id, serverJobId, list);
+        if (typeof db.save === 'function') db.save();
+      }
     } catch (err) {
       console.warn('[sync_pull] ted_index job', serverJobId, err && err.message ? err.message : err);
     }
@@ -6970,6 +7671,7 @@ async function pullTedExcelIntoReiseDir(opts) {
     setProgress,
     mergeCheckpoint,
     readCheckpoint,
+    force: forcePull,
   } = opts;
 
   async function withDbLock(fn) {
@@ -6981,53 +7683,126 @@ async function pullTedExcelIntoReiseDir(opts) {
 
   const tedDir = path.join(targetDir, 'TED');
   if (!fs.existsSync(tedDir)) fs.mkdirSync(tedDir, { recursive: true });
+  let jobFabKeys = [];
+  await withDbLock(async () => {
+    jobFabKeys = jobFabKeysFromLocalJob(db, localJobId);
+  });
   let entries = [];
+  let listSource = 'list';
   try {
-    entries = await fetchMechanikTedListFromDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, signal);
+    entries = await fetchMechanikTedListFromDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, signal, {
+      extraFabs: jobFabKeys,
+    });
     await withDbLock(async () => {
       upsertJobTedIndex(db, localJobId, serverJobId, entries);
+      if (typeof db.save === 'function') db.save();
     });
   } catch (e) {
-    console.warn('[dienstreise_pull] TED-Liste:', e && e.message ? e.message : e);
+    const errMsg = e && e.message ? e.message : String(e);
+    console.warn('[dienstreise_pull] TED-Liste:', errMsg, 'job=' + serverJobId);
+    listSource = 'cache';
     await withDbLock(async () => {
       entries = db.prepare(`SELECT rel_path, file_name, fab FROM job_ted_index WHERE local_job_id = ?`).all(localJobId);
     });
   }
+  try {
+    console.log(
+      '[pullTedExcel] start job=' + serverJobId + ' expected=' + entries.length + ' source=' + listSource,
+    );
+  } catch (_) {}
   let chk = readCheckpoint();
-  let completed = Array.isArray(chk.ted_completed) ? chk.ted_completed.slice() : [];
+  let completed = forcePull ? [] : Array.isArray(chk.ted_completed) ? chk.ted_completed.slice() : [];
   const total = entries.length;
   let idx = 0;
+  let tedErrors = 0;
+  let downloaded = 0;
+  let skipped = 0;
+  const usedLocalNames = new Set();
   for (const ent of entries) {
+    const entryKey = tedEntryKey(ent);
     const rel = String(ent.rel_path || '').trim().replace(/\\/g, '/');
     if (!rel || rel.includes('..')) continue;
-    const expectedName = safeTedFileName(ent.file_name, rel);
-    const localPath = path.join(tedDir, expectedName);
-    if (fs.existsSync(localPath)) {
+    const safeName = safeTedLocalFileName(ent, usedLocalNames);
+    const localPath = path.join(tedDir, safeName);
+    const alreadyDone = !forcePull && tedCompletedIncludes(completed, entryKey, ent);
+    if (alreadyDone) {
       try {
-        if (fs.statSync(localPath).size > 0) {
-          if (!completed.includes(rel)) completed.push(rel);
+        if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
           idx++;
+          skipped++;
           continue;
         }
       } catch (_) {
         /* fehlerhaft → neu laden */
       }
     }
+    try {
+      if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
+        if (!completed.includes(entryKey)) completed.push(entryKey);
+        mergeCheckpoint({ ted_completed: completed });
+        idx++;
+        skipped++;
+        continue;
+      }
+    } catch (_) {
+      /* neu laden */
+    }
     if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
     idx++;
     if (setProgress) setProgress('ted', idx, total, rel);
-    const dl = await downloadMechanikTedBuffer(dispoBaseUrl, technicianId, serverJobId, rel, authHeader, signal);
-    const safeName = safeTedFileName(ent.file_name, rel);
-    const finalPath = path.join(tedDir, safeName);
-    const partPath = finalPath + '.part';
-    fs.writeFileSync(partPath, dl.buf);
     try {
-      if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
-    } catch (_) {}
-    fs.renameSync(partPath, finalPath);
-    if (!completed.includes(rel)) completed.push(rel);
-    mergeCheckpoint({ ted_completed: completed });
+      const dl = await downloadMechanikTedBuffer(
+        dispoBaseUrl,
+        technicianId,
+        serverJobId,
+        rel,
+        authHeader,
+        signal,
+        ent.fab,
+      );
+      const finalPath = path.join(tedDir, safeName);
+      const partPath = finalPath + '.part';
+      fs.writeFileSync(partPath, dl.buf);
+      try {
+        if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
+      } catch (_) {}
+      fs.renameSync(partPath, finalPath);
+      if (!completed.includes(entryKey)) completed.push(entryKey);
+      mergeCheckpoint({ ted_completed: completed });
+      downloaded++;
+      console.log(
+        '[pullTedExcel] OK',
+        'fn=' + String(ent.fab || ''),
+        'file=' + safeName,
+        'rel=' + rel,
+        'bytes=' + dl.buf.length,
+      );
+    } catch (dlErr) {
+      tedErrors++;
+      console.warn(
+        '[pullTedExcel] Download fehlgeschlagen',
+        'fn=' + String(ent.fab || ''),
+        rel,
+        '→',
+        safeName,
+        dlErr && dlErr.message ? dlErr.message : dlErr,
+      );
+    }
   }
+  if (tedErrors > 0) {
+    console.warn('[pullTedExcel] ' + tedErrors + ' von ' + total + ' TED-Dateien fehlgeschlagen (job ' + serverJobId + ').');
+  }
+  let present = 0;
+  const countUsed = new Set();
+  for (const ent of entries) {
+    const rel = String(ent.rel_path || '').trim().replace(/\\/g, '/');
+    if (!rel || rel.includes('..')) continue;
+    const p = path.join(tedDir, safeTedLocalFileName(ent, countUsed));
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).size > 0) present++;
+    } catch (_) {}
+  }
+  return { total, downloaded, skipped, failed: tedErrors, present };
 }
 
 function fabCacheLookupKeys(fab) {
@@ -7459,7 +8234,21 @@ function attachJobContactsToJobs(db, jobs) {
   }
 }
 
-/** Entfernt ausstehendes „erledigt“-Push, wenn Dispo den Auftrag wieder geöffnet hat (Admin-Rücksetzung). */
+const JOB_STATUS_RANK = {
+  angelegt: 10,
+  geplant: 20,
+  zugeteilt: 30,
+  in_arbeit: 40,
+  erledigt: 50,
+  abgerechnet: 60,
+};
+
+function jobStatusRank(status) {
+  const s = String(status || '').trim().toLowerCase();
+  return JOB_STATUS_RANK[s] != null ? JOB_STATUS_RANK[s] : 0;
+}
+
+/** Verwirft ausstehende Status-Pushes, wenn Dispo (nach Pull) älteren Stand hat (z. B. Admin: zurück auf zugeteilt). */
 function clearSupersededPendingJobStatusOnPull(db, localJobId, serverStatus) {
   const st = String(serverStatus || '').trim().toLowerCase();
   if (st === 'erledigt' || st === 'abgerechnet') return;
@@ -7470,6 +8259,7 @@ function clearSupersededPendingJobStatusOnPull(db, localJobId, serverStatus) {
   if (mapped && mapped.server_id != null && String(mapped.server_id).trim() !== '') {
     entityIds.push(mapped.server_id);
   }
+  const serverRank = jobStatusRank(st);
   for (const eid of entityIds) {
     const pending = db
       .prepare(
@@ -7479,7 +8269,11 @@ function clearSupersededPendingJobStatusOnPull(db, localJobId, serverStatus) {
     for (const p of pending) {
       try {
         const pl = JSON.parse(p.payload || '{}');
-        if (String(pl.status || '').trim().toLowerCase() === 'erledigt') {
+        const plSt = String(pl.status || '').trim().toLowerCase();
+        const pendingRank = jobStatusRank(plSt);
+        const dropErledigtPending = plSt === 'erledigt';
+        const dropAheadOfServer = pendingRank > 0 && serverRank > 0 && pendingRank > serverRank;
+        if (dropErledigtPending || dropAheadOfServer) {
           db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
         }
       } catch (_) {
@@ -7725,6 +8519,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
             payload_status: payload.status,
             error: errMsg,
           });
+          db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
           continue;
         }
         logSyncPushError({
@@ -7782,9 +8577,21 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       const techId =
         parseInt(String(payloadRaw.technician_id ?? payloadRaw.technicianId ?? technicianId), 10) ||
         technicianId;
-      const payload = Object.assign({}, payloadRaw, {
+      const fabPending = String(payloadRaw.fabrikationsnummer ?? p.entity_id ?? '').trim();
+      const existingStamm = fabPending ? anlagenstammLookupByFab(db, fabPending) : null;
+      const mergedPending = mergeAnlagenstammPayload(existingStamm || {}, payloadRaw);
+      if (!hasNonemptyStammField(mergedPending)) {
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        continue;
+      }
+      const pushStammBody = stripEmptyStammFieldsForDispoPush(payloadRaw, existingStamm || {});
+      const payload = Object.assign({}, pushStammBody, {
         technician_id: techId,
         baseUrl: (payloadRaw.baseUrl || baseUrl || '').toString().trim().replace(/\/$/, ''),
+        serverUsername: payloadRaw.serverUsername,
+        serverPassword: payloadRaw.serverPassword,
+        externalUrl: payloadRaw.externalUrl,
+        internalUrl: payloadRaw.internalUrl,
       });
       const canReachDispo =
         techId > 0 &&
@@ -7803,7 +8610,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       }
       try {
         const data = await proxyAnlagenstammSave(
-          Object.assign({}, clampForDispoAnlagenstamm(payload), { technician_id: techId }),
+          Object.assign({}, payload, { technician_id: techId }),
         );
         if (data && data.ok === false) {
           throw new Error(data.error || 'Anlagenstamm speichern fehlgeschlagen.');

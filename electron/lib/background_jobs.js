@@ -24,10 +24,22 @@ const JOB_TYPE_PRIORITY = {
 const HIGH_PRIORITY_TYPES = new Set(['dienstreise_pull', 'dienstreise_push', 'sync_push']);
 
 /** running ohne Fortschritt → abbrechen (Refresh-Timeout Server ist 60 s). */
-const STALE_RUNNING_MS = 12 * 60 * 1000;
+const STALE_RUNNING_MS = 8 * 60 * 1000;
+/** Manifest/Liste nach refresh_done soll nicht stundenlang „Sync 1“ zeigen. */
+const STALE_SLOW_PHASE_MS = 5 * 60 * 1000;
+const SLOW_PROGRESS_PHASES = new Set(['refresh', 'refresh_done', 'manifest', 'start']);
 /** interrupted blockiert Sync/UI nicht ewig. */
 const STALE_INTERRUPTED_MS = 8 * 60 * 1000;
 const MAX_RECOVER_ATTEMPTS = 2;
+
+const JOB_TIMEOUT_MS = {
+  dienstreise_pull: 90 * 60 * 1000,
+  dienstreise_push: 25 * 60 * 1000,
+  sync_push: 20 * 60 * 1000,
+  sync_pull: 35 * 60 * 1000,
+  abrechnung_refresh: 15 * 60 * 1000,
+  anlagenstamm_db_sync: 25 * 60 * 1000,
+};
 
 function ensureBackgroundJobsSchema(sqlDb) {
   try {
@@ -133,9 +145,33 @@ function createBackgroundJobService(db, save, hooks) {
     }
   }
 
+  function jobAgeMs(updatedAt, now) {
+    const updatedMs = updatedAt ? Date.parse(String(updatedAt).replace(' ', 'T') + 'Z') : NaN;
+    return Number.isFinite(updatedMs) ? now - updatedMs : STALE_RUNNING_MS + 1;
+  }
+
+  /** status=running, aber kein aktiver Worker (z. B. nach Absturz ohne Neustart-Reap). */
+  function reapOrphanRunningJobs(now) {
+    if (runnerBusy) return 0;
+    const runningRows = db.prepare(`SELECT id FROM background_jobs WHERE status = 'running'`).all();
+    let n = 0;
+    for (const r of runningRows) {
+      if (abortControllers.has(r.id)) continue;
+      bump(r.id, {
+        status: 'interrupted',
+        message: 'Hänger erkannt – wird bei Sync fortgesetzt.',
+        error: null,
+        progress_phase: null,
+      });
+      n++;
+    }
+    return n;
+  }
+
   /** Hängende / blockierende Jobs beenden — ohne manuelles DB-Eingreifen. */
   function reapStuckJobs() {
     const now = Date.now();
+    reapOrphanRunningJobs(now);
     const runningRows = db
       .prepare(
         `SELECT id, type, payload_json, checkpoint_json, progress_phase, updated_at
@@ -143,9 +179,10 @@ function createBackgroundJobService(db, save, hooks) {
       )
       .all();
     for (const r of runningRows) {
-      const updatedMs = r.updated_at ? Date.parse(String(r.updated_at).replace(' ', 'T') + 'Z') : NaN;
-      const age = Number.isFinite(updatedMs) ? now - updatedMs : STALE_RUNNING_MS + 1;
-      if (age < STALE_RUNNING_MS) continue;
+      const age = jobAgeMs(r.updated_at, now);
+      const phase = r.progress_phase ? String(r.progress_phase) : '';
+      const staleLimit = SLOW_PROGRESS_PHASES.has(phase) ? STALE_SLOW_PHASE_MS : STALE_RUNNING_MS;
+      if (age < staleLimit) continue;
       const ac = abortControllers.get(r.id);
       if (ac) {
         try {
@@ -174,8 +211,7 @@ function createBackgroundJobService(db, save, hooks) {
       try {
         chk = r.checkpoint_json ? JSON.parse(r.checkpoint_json) : {};
       } catch (_) {}
-      const updatedMs = r.updated_at ? Date.parse(String(r.updated_at).replace(' ', 'T') + 'Z') : NaN;
-      const age = Number.isFinite(updatedMs) ? now - updatedMs : STALE_INTERRUPTED_MS + 1;
+      const age = jobAgeMs(r.updated_at, now);
       const attempts = Number(chk.recover_attempts) || 0;
       const acceptJob = !!(payload && payload.accept_job);
       const hasResume = pullCheckpointHasResume(chk);
@@ -256,8 +292,25 @@ function createBackgroundJobService(db, save, hooks) {
       message: null,
       error: null,
     });
+    const jobTimeoutMs = JOB_TIMEOUT_MS[job.type] || 30 * 60 * 1000;
+    let jobTimeoutId = null;
+    const jobTimedOut = new Promise((_, reject) => {
+      jobTimeoutId = setTimeout(() => {
+        try {
+          ac.abort();
+        } catch (_) {
+          /* ignore */
+        }
+        reject(
+          new Error(
+            'Zeitüberschreitung (' + Math.round(jobTimeoutMs / 60000) + ' Min) – Job wurde beendet.',
+          ),
+        );
+      }, jobTimeoutMs);
+    });
     try {
-      await executeJob(job, {
+      await Promise.race([
+        executeJob(job, {
         signal: ac.signal,
         setProgress: (phase, cur, total, msg) =>
           bump(job.id, {
@@ -284,7 +337,9 @@ function createBackgroundJobService(db, save, hooks) {
             return {};
           }
         },
-      });
+      }),
+        jobTimedOut,
+      ]);
       bump(job.id, { status: 'completed', progress_phase: 'done', message: 'Fertig.', error: null });
     } catch (e) {
       const aborted = ac.signal.aborted || (e && e.name === 'AbortError');
@@ -314,6 +369,7 @@ function createBackgroundJobService(db, save, hooks) {
         });
       }
     } finally {
+      if (jobTimeoutId) clearTimeout(jobTimeoutId);
       abortControllers.delete(job.id);
       runnerBusy = false;
       save();

@@ -3,6 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const { buildDispoBaseCandidates, tryDispoBasesInOrder } = require('./dispo-base-fallback');
+const { compareParameterEntryLists } = require('./anlagenstamm-parameter-trend');
 
 function authHeaderFromCredentials(username, password) {
   const u = (username || '').toString().trim();
@@ -57,6 +58,48 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       total_count INTEGER,
       sync_error TEXT
     )`);
+  run(`CREATE TABLE IF NOT EXISTS anlagenstamm_parameter_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fab TEXT NOT NULL,
+      source TEXT NOT NULL,
+      source_file_status TEXT NOT NULL DEFAULT 'present',
+      technician_id INTEGER,
+      technician_name TEXT,
+      uploaded_at TEXT NOT NULL,
+      original_filename TEXT NOT NULL,
+      mime TEXT,
+      size INTEGER NOT NULL DEFAULT 0,
+      sha256 TEXT NOT NULL,
+      storage_relpath TEXT,
+      source_path TEXT,
+      filename_fn TEXT,
+      content_fn TEXT,
+      used_fn TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  run(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_as_param_files_unique ON anlagenstamm_parameter_files(fab, source, sha256)',
+  );
+  run(
+    'CREATE INDEX IF NOT EXISTS idx_as_param_files_fab_uploaded ON anlagenstamm_parameter_files(fab, uploaded_at DESC)',
+  );
+  run(
+    'CREATE INDEX IF NOT EXISTS idx_as_param_files_source_path ON anlagenstamm_parameter_files(source, source_path)',
+  );
+  run(`CREATE TABLE IF NOT EXISTS anlagenstamm_parameter_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_id INTEGER NOT NULL,
+      line_no INTEGER,
+      param_key TEXT NOT NULL,
+      param_value TEXT,
+      unit TEXT,
+      raw_line TEXT,
+      FOREIGN KEY(file_id) REFERENCES anlagenstamm_parameter_files(id) ON DELETE CASCADE
+    )`);
+  run(
+    'CREATE INDEX IF NOT EXISTS idx_as_param_entries_file ON anlagenstamm_parameter_entries(file_id)',
+  );
 }
 
 function rowCount(db) {
@@ -114,6 +157,76 @@ function clampRowToDispoLimits(row, limits) {
 
 function clampForDispoAnlagenstamm(rowOrPayload) {
   return clampRowToDispoLimits(rowOrPayload, DISPO_ANLAGENSTAMM_MAX);
+}
+
+/** Leere/null/Whitespace – nie bestehende Stammwerte überschreiben (Sync + saveLocal). */
+function stammFieldTrim(val) {
+  if (val == null) return '';
+  const s = String(val).trim();
+  if (!s || s.toLowerCase() === 'null') return '';
+  return s;
+}
+
+/** Abgleich mit JOB_FAB_STAMM_KEYS in server.js + Formularfelder. */
+const ANLAGENSTAMM_MERGE_KEYS = [
+  'type',
+  'leistung',
+  'nenngeschwindigkeit',
+  'kraftaufnehmer',
+  'dms_nr',
+  'tacho',
+  'elektronik',
+  'material',
+  'position',
+  'geliefert_ueber',
+  'projekt',
+  'bemerkungen',
+  'aktueller_kunde',
+  'letzter_besuch',
+];
+
+/**
+ * incoming: nur nicht-leere Felder ersetzen existing; leere incoming-Werte behalten existing.
+ */
+function mergeAnlagenstammPayload(existing, incoming) {
+  const ex = existing && typeof existing === 'object' ? existing : {};
+  const inc = incoming && typeof incoming === 'object' ? incoming : {};
+  const out = {};
+  const fab = stammFieldTrim(inc.fabrikationsnummer) || stammFieldTrim(ex.fabrikationsnummer);
+  if (fab) out.fabrikationsnummer = fab;
+  const incId = parseInt(inc.id, 10);
+  const exId = parseInt(ex.id, 10);
+  if (Number.isFinite(incId) && incId > 0) out.id = incId;
+  else if (Number.isFinite(exId) && exId > 0) out.id = exId;
+  for (const k of ANLAGENSTAMM_MERGE_KEYS) {
+    const incVal = stammFieldTrim(inc[k]);
+    const exVal = stammFieldTrim(ex[k]);
+    if (incVal !== '') out[k] = incVal;
+    else if (exVal !== '') out[k] = exVal;
+    else out[k] = '';
+  }
+  return out;
+}
+
+function hasNonemptyStammField(merged) {
+  if (!merged || typeof merged !== 'object') return false;
+  for (const k of ANLAGENSTAMM_MERGE_KEYS) {
+    if (stammFieldTrim(merged[k]) !== '') return true;
+  }
+  return false;
+}
+
+/** HTTP an Dispo: nur Felder mit effektiv gesetztem Wert (nach Merge), nie leere Keys senden. */
+function stripEmptyStammFieldsForDispoPush(payload, existing) {
+  const merged = mergeAnlagenstammPayload(existing, payload);
+  const out = {};
+  if (merged.fabrikationsnummer) out.fabrikationsnummer = merged.fabrikationsnummer;
+  if (merged.id != null && Number(merged.id) > 0) out.id = merged.id;
+  for (const k of ANLAGENSTAMM_MERGE_KEYS) {
+    const v = stammFieldTrim(merged[k]);
+    if (v !== '') out[k] = v;
+  }
+  return clampForDispoAnlagenstamm(out);
 }
 
 function clampForDispoJobFabrikation(row) {
@@ -322,24 +435,27 @@ function saveLocal(db, payload) {
   if (!fab) return { ok: false, error: 'Fabrikationsnummer fehlt' };
   let id = parseInt(normalized.id, 10);
   const existing = lookupByFab(db, fab);
+  const merged = mergeAnlagenstammPayload(existing || {}, normalized);
   if (existing && existing.id) {
     id = existing.id;
+  } else if (merged.id != null && Number(merged.id) > 0) {
+    id = merged.id;
   } else if (!Number.isFinite(id) || id <= 0) {
     id = 0;
   }
   const fields = {
-    type: normalized.type != null ? String(normalized.type) : '',
-    leistung: normalized.leistung != null ? String(normalized.leistung) : '',
-    kraftaufnehmer: normalized.kraftaufnehmer != null ? String(normalized.kraftaufnehmer) : '',
-    nenngeschwindigkeit: normalized.nenngeschwindigkeit != null ? String(normalized.nenngeschwindigkeit) : '',
-    material: normalized.material != null ? String(normalized.material) : '',
-    tacho: normalized.tacho != null ? String(normalized.tacho) : '',
-    elektronik: normalized.elektronik != null ? String(normalized.elektronik) : '',
-    dms_nr: normalized.dms_nr != null ? String(normalized.dms_nr) : '',
-    position: normalized.position != null ? String(normalized.position) : '',
-    geliefert_ueber: normalized.geliefert_ueber != null ? String(normalized.geliefert_ueber) : '',
-    projekt: normalized.projekt != null ? String(normalized.projekt) : '',
-    bemerkungen: normalized.bemerkungen != null ? String(normalized.bemerkungen) : '',
+    type: merged.type != null ? String(merged.type) : '',
+    leistung: merged.leistung != null ? String(merged.leistung) : '',
+    kraftaufnehmer: merged.kraftaufnehmer != null ? String(merged.kraftaufnehmer) : '',
+    nenngeschwindigkeit: merged.nenngeschwindigkeit != null ? String(merged.nenngeschwindigkeit) : '',
+    material: merged.material != null ? String(merged.material) : '',
+    tacho: merged.tacho != null ? String(merged.tacho) : '',
+    elektronik: merged.elektronik != null ? String(merged.elektronik) : '',
+    dms_nr: merged.dms_nr != null ? String(merged.dms_nr) : '',
+    position: merged.position != null ? String(merged.position) : '',
+    geliefert_ueber: merged.geliefert_ueber != null ? String(merged.geliefert_ueber) : '',
+    projekt: merged.projekt != null ? String(merged.projekt) : '',
+    bemerkungen: merged.bemerkungen != null ? String(merged.bemerkungen) : '',
   };
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
   const fieldArgs = [
@@ -481,6 +597,241 @@ function uploadCachePath(dbDir, fab, fileName) {
   return path.join(dbDir, 'anlagenstamm_upload_cache', fabDirForCache(fab), String(fileName || '').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_'));
 }
 
+function normalizeFabDigits(fab) {
+  const s = String(fab || '').trim();
+  if (!s) return '';
+  const digits = s.replace(/\D/g, '');
+  if (!digits) return '';
+  const n = parseInt(digits, 10);
+  return Number.isFinite(n) && n > 0 ? String(n) : '';
+}
+
+function sanitizeSource(source) {
+  return String(source || '').toLowerCase().trim() === 'projekte_neu' ? 'projekte_neu' : 'upload';
+}
+
+function upsertParameterFile(db, payload) {
+  const fab = normalizeFabDigits(payload && payload.fab);
+  if (!fab) return { ok: false, error: 'fab fehlt' };
+  const source = sanitizeSource(payload && payload.source);
+  const sha256 = String((payload && payload.sha256) || '').trim();
+  if (!sha256) return { ok: false, error: 'sha256 fehlt' };
+  const uploadedAt = String((payload && payload.uploaded_at) || '').trim() || new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const originalFilename = String((payload && payload.original_filename) || '').trim();
+  if (!originalFilename) return { ok: false, error: 'original_filename fehlt' };
+  const sourceFileStatus = String((payload && payload.source_file_status) || '').trim() === 'original_deleted'
+    ? 'original_deleted'
+    : 'present';
+  const ins = db.prepare(`INSERT INTO anlagenstamm_parameter_files
+    (fab, source, source_file_status, technician_id, technician_name, uploaded_at, original_filename, mime, size, sha256, storage_relpath, source_path, filename_fn, content_fn, used_fn, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(fab, source, sha256) DO UPDATE SET
+      source_file_status = excluded.source_file_status,
+      technician_id = excluded.technician_id,
+      technician_name = excluded.technician_name,
+      uploaded_at = excluded.uploaded_at,
+      original_filename = excluded.original_filename,
+      mime = excluded.mime,
+      size = excluded.size,
+      storage_relpath = excluded.storage_relpath,
+      source_path = excluded.source_path,
+      filename_fn = excluded.filename_fn,
+      content_fn = excluded.content_fn,
+      used_fn = excluded.used_fn,
+      updated_at = datetime('now')
+  `);
+  ins.run(
+    fab,
+    source,
+    sourceFileStatus,
+    payload && payload.technician_id != null ? Number(payload.technician_id) : null,
+    payload && payload.technician_name != null ? String(payload.technician_name) : null,
+    uploadedAt,
+    originalFilename,
+    payload && payload.mime != null ? String(payload.mime) : null,
+    Math.max(0, Number((payload && payload.size) || 0) || 0),
+    sha256,
+    payload && payload.storage_relpath != null ? String(payload.storage_relpath) : null,
+    payload && payload.source_path != null ? String(payload.source_path) : null,
+    payload && payload.filename_fn != null ? String(payload.filename_fn) : null,
+    payload && payload.content_fn != null ? String(payload.content_fn) : null,
+    payload && payload.used_fn != null ? String(payload.used_fn) : null,
+  );
+  const row = db
+    .prepare('SELECT id FROM anlagenstamm_parameter_files WHERE fab = ? AND source = ? AND sha256 = ? LIMIT 1')
+    .get(fab, source, sha256);
+  const fileId = row && row.id ? Number(row.id) : 0;
+  if (!fileId) return { ok: false, error: 'file_id konnte nicht ermittelt werden' };
+  const entries = Array.isArray(payload && payload.entries) ? payload.entries : [];
+  db.prepare('DELETE FROM anlagenstamm_parameter_entries WHERE file_id = ?').run(fileId);
+  if (entries.length) {
+    const insEntry = db.prepare(
+      'INSERT INTO anlagenstamm_parameter_entries (file_id, line_no, param_key, param_value, unit, raw_line) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    for (const ent of entries) {
+      const key = String((ent && ent.param_key) || '').trim();
+      if (!key) continue;
+      insEntry.run(
+        fileId,
+        ent && ent.line_no != null ? Number(ent.line_no) : null,
+        key,
+        ent && ent.param_value != null ? String(ent.param_value) : null,
+        ent && ent.unit != null ? String(ent.unit) : null,
+        ent && ent.raw_line != null ? String(ent.raw_line) : null,
+      );
+    }
+  }
+  return { ok: true, file_id: fileId, fab, source };
+}
+
+function markMissingProjekteNeuFiles(db, fab, presentSourcePaths) {
+  const fabNorm = normalizeFabDigits(fab);
+  if (!fabNorm) return 0;
+  const present = new Set(
+    (Array.isArray(presentSourcePaths) ? presentSourcePaths : [])
+      .map((p) => String(p || '').trim())
+      .filter(Boolean),
+  );
+  const rows = db
+    .prepare(
+      `SELECT id, source_path
+       FROM anlagenstamm_parameter_files
+       WHERE fab = ? AND source = 'projekte_neu'`,
+    )
+    .all(fabNorm);
+  let changed = 0;
+  for (const row of rows) {
+    const src = String(row.source_path || '').trim();
+    const status = src && present.has(src) ? 'present' : 'original_deleted';
+    const r = db
+      .prepare(
+        `UPDATE anlagenstamm_parameter_files
+         SET source_file_status = ?, updated_at = datetime('now')
+         WHERE id = ? AND source_file_status <> ?`,
+      )
+      .run(status, row.id, status);
+    if (r && r.changes) changed += Number(r.changes);
+  }
+  return changed;
+}
+
+function listParameterFilesByFab(db, fab) {
+  const fabNorm = normalizeFabDigits(fab);
+  if (!fabNorm) return [];
+  return db
+    .prepare(
+      `SELECT f.id, f.fab, f.source, f.source_file_status, f.technician_id, f.technician_name,
+              f.uploaded_at, f.original_filename, f.mime, f.size, f.sha256, f.storage_relpath,
+              f.source_path, f.filename_fn, f.content_fn, f.used_fn,
+              (SELECT COUNT(*) FROM anlagenstamm_parameter_entries e WHERE e.file_id = f.id) AS entry_count
+       FROM anlagenstamm_parameter_files f
+       WHERE f.fab = ?
+       ORDER BY datetime(f.uploaded_at) DESC, f.id DESC`,
+    )
+    .all(fabNorm);
+}
+
+function listParameterEntriesByFileId(db, fileId) {
+  const fid = parseInt(fileId, 10);
+  if (!Number.isFinite(fid) || fid <= 0) return [];
+  return db
+    .prepare(
+      `SELECT line_no, param_key, param_value, unit, raw_line
+       FROM anlagenstamm_parameter_entries
+       WHERE file_id = ?
+       ORDER BY line_no ASC, id ASC`,
+    )
+    .all(fid);
+}
+
+function getParameterFileMeta(db, fileId, fab) {
+  const fid = parseInt(fileId, 10);
+  const fabNorm = normalizeFabDigits(fab);
+  if (!Number.isFinite(fid) || fid <= 0 || !fabNorm) return null;
+  return db
+    .prepare(
+      `SELECT f.id, f.fab, f.source, f.uploaded_at, f.original_filename, f.technician_name,
+              (SELECT COUNT(*) FROM anlagenstamm_parameter_entries e WHERE e.file_id = f.id) AS entry_count
+       FROM anlagenstamm_parameter_files f
+       WHERE f.id = ? AND f.fab = ?`,
+    )
+    .get(fid, fabNorm);
+}
+
+function compareParameterFilesById(db, fab, fromFileId, toFileId) {
+  const fromMeta = getParameterFileMeta(db, fromFileId, fab);
+  const toMeta = getParameterFileMeta(db, toFileId, fab);
+  if (!fromMeta || !toMeta) {
+    return { ok: false, error: 'Eine oder beide Listen wurden nicht gefunden.' };
+  }
+  const fromEntries = listParameterEntriesByFileId(db, fromFileId);
+  const toEntries = listParameterEntriesByFileId(db, toFileId);
+  const diff = compareParameterEntryLists(fromEntries, toEntries);
+  return {
+    ok: true,
+    from_file: {
+      id: fromMeta.id,
+      original_filename: fromMeta.original_filename,
+      uploaded_at: fromMeta.uploaded_at,
+      source: fromMeta.source,
+      technician_name: fromMeta.technician_name,
+      entry_count: fromMeta.entry_count,
+    },
+    to_file: {
+      id: toMeta.id,
+      original_filename: toMeta.original_filename,
+      uploaded_at: toMeta.uploaded_at,
+      source: toMeta.source,
+      technician_name: toMeta.technician_name,
+      entry_count: toMeta.entry_count,
+    },
+    changes: diff.changes,
+    summary: diff.summary,
+  };
+}
+
+/** Aufeinanderfolgende Vergleiche chronologisch (älter → neuer). */
+function buildParameterTrendChain(db, fab) {
+  const fabNorm = normalizeFabDigits(fab);
+  if (!fabNorm) return { ok: false, error: 'Ungültige Fabrikationsnummer.' };
+  const files = db
+    .prepare(
+      `SELECT id, uploaded_at, original_filename
+       FROM anlagenstamm_parameter_files
+       WHERE fab = ?
+       ORDER BY datetime(uploaded_at) ASC, id ASC`,
+    )
+    .all(fabNorm);
+  if (files.length < 2) {
+    return {
+      ok: true,
+      fab: fabNorm,
+      steps: [],
+      message: 'Mindestens zwei Parameterlisten nötig für einen Trend.',
+    };
+  }
+  const steps = [];
+  for (let i = 0; i < files.length - 1; i++) {
+    const fromF = files[i];
+    const toF = files[i + 1];
+    const step = compareParameterFilesById(db, fabNorm, fromF.id, toF.id);
+    if (step && step.ok) {
+      steps.push({
+        step_index: i + 1,
+        from_file_id: fromF.id,
+        to_file_id: toF.id,
+        from_label: fromF.original_filename,
+        to_label: toF.original_filename,
+        from_uploaded_at: fromF.uploaded_at,
+        to_uploaded_at: toF.uploaded_at,
+        summary: step.summary,
+        changes: step.changes,
+      });
+    }
+  }
+  return { ok: true, fab: fabNorm, steps };
+}
+
 module.exports = {
   ensureAnlagenstammLocalSchema,
   rowCount,
@@ -488,6 +839,11 @@ module.exports = {
   clampForDispoAnlagenstamm,
   clampForDispoJobFabrikation,
   clampFabrikationsnummernJson,
+  stammFieldTrim,
+  ANLAGENSTAMM_MERGE_KEYS,
+  mergeAnlagenstammPayload,
+  hasNonemptyStammField,
+  stripEmptyStammFieldsForDispoPush,
   searchLocal,
   fabLookupKeys,
   lookupByFab,
@@ -499,4 +855,11 @@ module.exports = {
   dispoMonteurFetchHeaders,
   fabDirForCache,
   uploadCachePath,
+  upsertParameterFile,
+  listParameterFilesByFab,
+  markMissingProjekteNeuFiles,
+  normalizeFabDigits,
+  listParameterEntriesByFileId,
+  compareParameterFilesById,
+  buildParameterTrendChain,
 };

@@ -5,7 +5,10 @@ const {
   buildDispoBaseCandidates,
   tryDispoBasesInOrder,
 } = require('./dispo-base-fallback');
-const { clampForDispoAnlagenstamm } = require('./anlagenstamm-local');
+const {
+  clampForDispoAnlagenstamm,
+  stripEmptyStammFieldsForDispoPush,
+} = require('./anlagenstamm-local');
 
 function authHeaderFromCredentials(username, password) {
   const u = (username || '').toString().trim();
@@ -88,7 +91,7 @@ async function proxyAnlagenstammSaveOnce(payload, base) {
   const authHeader = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const relativePhp = '/dispo_api/api/anlagenstamm_monteur_save.php';
   const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
-  const savePayload = clampForDispoAnlagenstamm(Object.assign({}, payload));
+  const savePayload = stripEmptyStammFieldsForDispoPush(clampForDispoAnlagenstamm(Object.assign({}, payload)), null);
   delete savePayload.baseUrl;
   delete savePayload.externalUrl;
   delete savePayload.internalUrl;
