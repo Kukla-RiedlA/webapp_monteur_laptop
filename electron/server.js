@@ -5428,6 +5428,7 @@ ORDER BY
         ingest_error: ingestError,
         dispo_ingest_ok: serverFileId != null,
         dispo_ingest_error: dispoIngestError,
+        dispo_ingest_skipped: dispoCandidates.length === 0,
         dispo_file_id: serverFileId,
         fab_used: fn,
         filename_fn: Number.isFinite(filenameFn) ? filenameFn : null,

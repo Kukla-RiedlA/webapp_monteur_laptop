@@ -687,22 +687,20 @@ function upsertParameterFile(db, payload) {
   if (!fileId) return { ok: false, error: 'file_id konnte nicht ermittelt werden' };
   const entries = Array.isArray(payload && payload.entries) ? payload.entries : [];
   db.prepare('DELETE FROM anlagenstamm_parameter_entries WHERE file_id = ?').run(fileId);
-  if (entries.length) {
-    const insEntry = db.prepare(
-      'INSERT INTO anlagenstamm_parameter_entries (file_id, line_no, param_key, param_value, unit, raw_line) VALUES (?, ?, ?, ?, ?, ?)',
+  const insEntrySql =
+    'INSERT INTO anlagenstamm_parameter_entries (file_id, line_no, param_key, param_value, unit, raw_line) VALUES (?, ?, ?, ?, ?, ?)';
+  for (const ent of entries) {
+    const key = String((ent && ent.param_key) || '').trim();
+    if (!key) continue;
+    // sql.js-Wrapper gibt Statement nach jedem run() frei — nicht wiederverwenden.
+    db.prepare(insEntrySql).run(
+      fileId,
+      ent && ent.line_no != null ? Number(ent.line_no) : null,
+      key,
+      ent && ent.param_value != null ? String(ent.param_value) : null,
+      ent && ent.unit != null ? String(ent.unit) : null,
+      ent && ent.raw_line != null ? String(ent.raw_line) : null,
     );
-    for (const ent of entries) {
-      const key = String((ent && ent.param_key) || '').trim();
-      if (!key) continue;
-      insEntry.run(
-        fileId,
-        ent && ent.line_no != null ? Number(ent.line_no) : null,
-        key,
-        ent && ent.param_value != null ? String(ent.param_value) : null,
-        ent && ent.unit != null ? String(ent.unit) : null,
-        ent && ent.raw_line != null ? String(ent.raw_line) : null,
-      );
-    }
   }
   return { ok: true, file_id: fileId, fab, source };
 }

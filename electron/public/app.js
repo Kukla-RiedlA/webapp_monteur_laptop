@@ -563,6 +563,27 @@
     };
   }
 
+  /** Lokale Aufträge nur für den eingeloggten Monteur (mit job_technicians-Zuordnung). */
+  async function fetchMyAssignedJobs() {
+    var techId = getTechId();
+    if (!techId) return [];
+    var range = getSyncDateRange();
+    var r = await fetch(
+      API_BASE +
+        '/api/my_jobs?' +
+        qs({
+          technician_id: techId,
+          date_from: range.date_from,
+          date_to: range.date_to,
+          assigned_only: '1',
+        }),
+      { headers: { 'X-Technician-Id': String(techId) } },
+    );
+    var data = await r.json();
+    if (!data.ok || !data.jobs) return [];
+    return data.jobs;
+  }
+
   function qs(params) {
     const p = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => { if (v != null && v !== '') p.set(k, v); });
@@ -9426,11 +9447,7 @@
     let montageberichtActiveEditor = null;
 
     async function loadMontageberichtJobs() {
-      const range = getSyncDateRange();
-      const r = await fetch(API_BASE + '/api/my_jobs?' + qs({ technician_id: getTechId(), date_from: range.date_from, date_to: range.date_to }), { headers: { 'X-Technician-Id': String(getTechId()) } });
-      const data = await r.json();
-      if (!data.ok || !data.jobs) return [];
-      return data.jobs;
+      return fetchMyAssignedJobs();
     }
 
     async function loadJobWithAnlagenstamm(jobId) {
@@ -10380,11 +10397,7 @@
     }
 
     async function loadKontrollwiegungJobs() {
-      var range = getSyncDateRange();
-      var r = await fetch(API_BASE + '/api/my_jobs?' + qs({ technician_id: getTechId(), date_from: range.date_from, date_to: range.date_to }), { headers: { 'X-Technician-Id': String(getTechId()) } });
-      var data = await r.json();
-      if (!data.ok || !data.jobs) return [];
-      return data.jobs;
+      return fetchMyAssignedJobs();
     }
 
     if (addRowBtn) addRowBtn.addEventListener('click', addRow);
@@ -10518,11 +10531,7 @@
 
     async function loadParameterlistenJobs() {
       if (!jobSelect) return;
-      var range = getSyncDateRange();
-      var r = await fetch(API_BASE + '/api/my_jobs?' + qs({ technician_id: getTechId(), date_from: range.date_from, date_to: range.date_to }), { headers: { 'X-Technician-Id': String(getTechId()) } });
-      var data = await r.json();
-      if (!data.ok || !data.jobs) return;
-      var jobs = data.jobs;
+      var jobs = await fetchMyAssignedJobs();
       var currentVal = jobSelect.value;
       jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>';
       jobs.forEach(function (job) {
@@ -10594,6 +10603,8 @@
               var warnParts = [];
               if (data.ingest_error) warnParts.push('Cache: ' + data.ingest_error);
               if (data.dispo_ingest_error) warnParts.push('Dispo: ' + data.dispo_ingest_error);
+              else if (data.dispo_ingest_skipped) warnParts.push('Dispo: nicht konfiguriert (Einstellungen prüfen)');
+              else if (data.dispo_ingest_ok) warnParts.push('Dispo: übernommen');
               outcomes.push({
                 file: filename,
                 ok: true,
