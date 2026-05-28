@@ -196,9 +196,152 @@ async function proxyAnlagenstammSave(payload) {
   return tried.result;
 }
 
+async function proxyDispoPostJsonOnce(payload, base, relativePhp, forwardBody) {
+  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+  const authHeader = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
+  const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: Object.assign(
+      { 'Content-Type': 'application/json' },
+      dispoMonteurFetchHeaders(technicianId, authHeader),
+    ),
+    body: JSON.stringify(forwardBody || {}),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const apiErr = data && data.error ? data.error : '';
+    const friendly = monteurUpstreamHttpError(r.status, r.statusText, apiErr, relativePhp, url);
+    return Object.assign({}, data, { ok: false, error: friendly, _httpStatus: r.status });
+  }
+  return Object.assign({}, data, { _used_base_url: base });
+}
+
+async function proxyDispoPostJson(payload, relativePhp, forwardBody) {
+  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+  const reqErr = dispoAuthRequirementError(payload, technicianId);
+  if (reqErr) {
+    return { ok: false, error: reqErr };
+  }
+  const candidates = buildDispoBaseCandidates({
+    baseUrl: payload.baseUrl,
+    externalUrl: payload.externalUrl,
+    internalUrl: payload.internalUrl,
+  });
+  const tried = await tryDispoBasesInOrder(candidates, (base) =>
+    proxyDispoPostJsonOnce(payload, base, relativePhp, forwardBody),
+  );
+  if (tried.error) {
+    return {
+      ok: false,
+      error:
+        'Keine Verbindung zur Dispo (Netzwerk/TLS): ' +
+        tried.error +
+        '. Ziel: ' +
+        (candidates[0] || '') +
+        relativePhp,
+    };
+  }
+  return tried.result;
+}
+
+async function proxyAnlagenstammParameterFilesList(payload) {
+  const fab = String(payload.fab || '').trim();
+  return proxyDispoPostJson(
+    payload,
+    '/dispo_api/api/anlagenstamm_parameter_files_list.php',
+    { fab },
+  );
+}
+
+async function proxyAnlagenstammParameterTrend(payload) {
+  const body = {
+    fab: String(payload.fab || '').trim(),
+    mode: payload.mode,
+    from_file_id: payload.from_file_id,
+    to_file_id: payload.to_file_id,
+    chain: payload.chain,
+  };
+  return proxyDispoPostJson(payload, '/dispo_api/api/anlagenstamm_parameter_trend.php', body);
+}
+
+async function proxyAnlagenstammParameterIngest(payload) {
+  const body = {
+    filename: payload.filename,
+    content: payload.content,
+    source: payload.source || 'upload',
+    storage_rel_path: payload.storage_rel_path,
+    mime: payload.mime,
+  };
+  return proxyDispoPostJson(payload, '/dispo_api/api/anlagenstamm_parameter_ingest.php', body);
+}
+
+async function proxyAnlagenstammParameterDownloadOnce(payload, base) {
+  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+  const authHeader = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
+  const relativePhp = '/dispo_api/api/anlagenstamm_parameter_download.php';
+  const q = new URLSearchParams({
+    technician_id: String(technicianId),
+    fab: String(payload.fab || '').trim(),
+    file_id: String(payload.file_id || ''),
+  });
+  const url = `${base}${relativePhp}?${q.toString()}`;
+  const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader) });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    const apiErr = data && data.error ? data.error : '';
+    return {
+      ok: false,
+      error: monteurUpstreamHttpError(r.status, r.statusText, apiErr, relativePhp, url),
+      _httpStatus: r.status,
+    };
+  }
+  const buf = Buffer.from(await r.arrayBuffer());
+  const disp =
+    r.headers.get('content-disposition') ||
+    r.headers.get('Content-Disposition') ||
+    '';
+  const xName = r.headers.get('x-download-filename') || r.headers.get('X-Download-Filename') || '';
+  return {
+    ok: true,
+    buffer: buf,
+    contentType: r.headers.get('content-type') || 'application/octet-stream',
+    contentDisposition: disp,
+    xDownloadFilename: xName,
+    _used_base_url: base,
+  };
+}
+
+async function proxyAnlagenstammParameterDownload(payload) {
+  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+  const reqErr = dispoAuthRequirementError(payload, technicianId);
+  if (reqErr) {
+    return { ok: false, error: reqErr };
+  }
+  if (!payload.file_id) {
+    return { ok: false, error: 'file_id fehlt.' };
+  }
+  const candidates = buildDispoBaseCandidates({
+    baseUrl: payload.baseUrl,
+    externalUrl: payload.externalUrl,
+    internalUrl: payload.internalUrl,
+  });
+  const tried = await tryDispoBasesInOrder(candidates, (base) =>
+    proxyAnlagenstammParameterDownloadOnce(payload, base),
+  );
+  if (tried.error) {
+    return { ok: false, error: 'Keine Verbindung zur Dispo: ' + tried.error };
+  }
+  return tried.result;
+}
+
 module.exports = {
   proxyAnlagenstammSearch,
   proxyAnlagenstammSave,
+  proxyAnlagenstammParameterFilesList,
+  proxyAnlagenstammParameterTrend,
+  proxyAnlagenstammParameterIngest,
+  proxyAnlagenstammParameterDownload,
   authHeaderFromCredentials,
   dispoMonteurFetchHeaders,
 };

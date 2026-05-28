@@ -60,7 +60,14 @@ function configurePersistentDbDir() {
 const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore } = require('./lib/abrechnung-routes');
 const { ensureBackgroundJobsSchema, createBackgroundJobService } = require('./lib/background_jobs');
 const { createDbLock } = require('./lib/db-lock');
-const { proxyAnlagenstammSearch, proxyAnlagenstammSave } = require('./lib/anlagenstamm-dispo-proxy');
+const {
+  proxyAnlagenstammSearch,
+  proxyAnlagenstammSave,
+  proxyAnlagenstammParameterFilesList,
+  proxyAnlagenstammParameterTrend,
+  proxyAnlagenstammParameterIngest,
+  proxyAnlagenstammParameterDownload,
+} = require('./lib/anlagenstamm-dispo-proxy');
 const {
   buildDispoBaseCandidates,
   normalizeDispoBasePair,
@@ -98,6 +105,7 @@ const {
   stripEmptyStammFieldsForDispoPush,
   uploadCachePath,
   upsertParameterFile,
+  cacheParameterFilesFromDispo,
   listParameterFilesByFab,
   markMissingProjekteNeuFiles,
   compareParameterFilesById,
@@ -1137,6 +1145,7 @@ function createApp(db) {
       filename_fn: parsed.filename_fab || null,
       content_fn: parsed.content_fab || null,
       used_fn: usedFab,
+      server_file_id: opts && opts.serverFileId != null ? Number(opts.serverFileId) : null,
       entries: parsed.entries || [],
     });
     if (insert && insert.ok) save();
@@ -3920,36 +3929,7 @@ ORDER BY
     }
   });
 
-  app.post('/api/anlagenstamm_parameter_files_list', express.json(), (req, res) => {
-    const technicianId = getTechnicianId(req);
-    const fabValue = String((req.body && req.body.fab) || '').trim();
-    if (!technicianId || !fabValue) {
-      return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
-    }
-    try {
-      const fabNorm = normalizeParameterFab(fabValue);
-      if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
-      const files = listParameterFilesByFab(db, fabNorm).map((row) => ({
-        id: row.id,
-        fab: row.fab,
-        source: row.source,
-        source_file_status: row.source_file_status || 'present',
-        technician_id: row.technician_id,
-        technician_name: row.technician_name || null,
-        uploaded_at: row.uploaded_at || null,
-        original_filename: row.original_filename || '',
-        size: row.size != null ? Number(row.size) : 0,
-        mime: row.mime || 'application/octet-stream',
-        entry_count: row.entry_count != null ? Number(row.entry_count) : 0,
-        source_path: row.source_path || null,
-      }));
-      return res.json({ ok: true, fab: fabNorm, files });
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: e.message || String(e) });
-    }
-  });
-
-  app.post('/api/anlagenstamm_parameter_trend', express.json(), (req, res) => {
+  app.post('/api/anlagenstamm_parameter_files_list', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
     const body = req.body || {};
     const fabValue = String(body.fab || '').trim();
@@ -3959,16 +3939,114 @@ ORDER BY
     try {
       const fabNorm = normalizeParameterFab(fabValue);
       if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
+      ensureAnlagenstammLocalSchema(db);
+      const mapLocalFiles = (rows) =>
+        rows.map((row) => ({
+          id: row.server_file_id != null ? Number(row.server_file_id) : row.id,
+          local_id: row.id,
+          fab: row.fab,
+          source: row.source,
+          source_file_status: row.source_file_status || 'present',
+          technician_id: row.technician_id,
+          technician_name: row.technician_name || null,
+          uploaded_at: row.uploaded_at || null,
+          original_filename: row.original_filename || '',
+          size: row.size != null ? Number(row.size) : 0,
+          mime: row.mime || 'application/octet-stream',
+          entry_count: row.entry_count != null ? Number(row.entry_count) : 0,
+          source_path: row.source_path || null,
+        }));
+      const candidates = buildDispoBaseCandidates({
+        baseUrl: body.baseUrl,
+        externalUrl: body.externalUrl,
+        internalUrl: body.internalUrl,
+      });
+      if (candidates.length > 0) {
+        try {
+          const remote = await proxyAnlagenstammParameterFilesList(
+            Object.assign({}, body, { technician_id: technicianId, fab: fabNorm }),
+          );
+          if (remote && remote.ok !== false && Array.isArray(remote.files)) {
+            cacheParameterFilesFromDispo(db, fabNorm, remote.files);
+            save();
+            return res.json({
+              ok: true,
+              fab: fabNorm,
+              files: remote.files,
+              data_source: 'dispo',
+            });
+          }
+        } catch (dispoErr) {
+          console.warn('[parameter_files_list] Dispo:', dispoErr && dispoErr.message ? dispoErr.message : dispoErr);
+        }
+      }
+      const files = mapLocalFiles(listParameterFilesByFab(db, fabNorm));
+      return res.json({
+        ok: true,
+        fab: fabNorm,
+        files,
+        data_source: 'cache',
+        cache_notice: 'Cache – nicht mit Dispo synchron (offline oder keine Verbindung).',
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/anlagenstamm_parameter_trend', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const body = req.body || {};
+    const fabValue = String(body.fab || '').trim();
+    if (!technicianId || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+    }
+    try {
+      const fabNorm = normalizeParameterFab(fabValue);
+      if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
+      ensureAnlagenstammLocalSchema(db);
+      const candidates = buildDispoBaseCandidates({
+        baseUrl: body.baseUrl,
+        externalUrl: body.externalUrl,
+        internalUrl: body.internalUrl,
+      });
+      if (candidates.length > 0) {
+        try {
+          const remote = await proxyAnlagenstammParameterTrend(
+            Object.assign({}, body, { technician_id: technicianId, fab: fabNorm }),
+          );
+          if (remote && remote.ok !== false) {
+            return res.json(Object.assign({ data_source: 'dispo' }, remote));
+          }
+        } catch (dispoErr) {
+          console.warn('[parameter_trend] Dispo:', dispoErr && dispoErr.message ? dispoErr.message : dispoErr);
+        }
+      }
       const mode = String(body.mode || 'pair').toLowerCase().trim();
       if (mode === 'chain' || mode === 'all' || body.chain === true) {
         const chain = buildParameterTrendChain(db, fabNorm);
         if (!chain.ok) return res.status(400).json(chain);
-        return res.json(chain);
+        return res.json(
+          Object.assign({ data_source: 'cache', cache_notice: 'Cache – nicht mit Dispo synchron.' }, chain),
+        );
       }
       let fromId = parseInt(body.from_file_id, 10);
       let toId = parseInt(body.to_file_id, 10);
+      const resolveLocalId = (serverOrLocalId) => {
+        const n = parseInt(serverOrLocalId, 10);
+        if (!Number.isFinite(n) || n <= 0) return 0;
+        const byServer = db
+          .prepare('SELECT id FROM anlagenstamm_parameter_files WHERE fab = ? AND server_file_id = ? LIMIT 1')
+          .get(fabNorm, n);
+        if (byServer && byServer.id) return Number(byServer.id);
+        const byLocal = db
+          .prepare('SELECT id FROM anlagenstamm_parameter_files WHERE fab = ? AND id = ? LIMIT 1')
+          .get(fabNorm, n);
+        return byLocal && byLocal.id ? Number(byLocal.id) : 0;
+      };
+      fromId = resolveLocalId(fromId);
+      toId = resolveLocalId(toId);
       const files = listParameterFilesByFab(db, fabNorm);
-      if (!Number.isFinite(fromId) || fromId <= 0 || !Number.isFinite(toId) || toId <= 0) {
+      if (!fromId || !toId) {
         if (files.length < 2) {
           return res.status(400).json({
             ok: false,
@@ -3989,10 +4067,64 @@ ORDER BY
       }
       const result = compareParameterFilesById(db, fabNorm, fromId, toId);
       if (!result.ok) return res.status(404).json(result);
-      return res.json(Object.assign({ ok: true, fab: fabNorm, mode: 'pair' }, result));
+      return res.json(
+        Object.assign(
+          {
+            ok: true,
+            fab: fabNorm,
+            mode: 'pair',
+            data_source: 'cache',
+            cache_notice: 'Cache – nicht mit Dispo synchron.',
+          },
+          result,
+        ),
+      );
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
+  });
+
+  app.post('/api/anlagenstamm_parameter_download', express.json(), async (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const body = req.body || {};
+    const fabValue = String(body.fab || '').trim();
+    const fileId = parseInt(body.file_id, 10);
+    if (!technicianId || !fabValue || !Number.isFinite(fileId) || fileId <= 0) {
+      return res.status(400).json({ ok: false, error: 'fab, file_id und technician_id erforderlich.' });
+    }
+    const fabNorm = normalizeParameterFab(fabValue);
+    if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
+    const candidates = buildDispoBaseCandidates({
+      baseUrl: body.baseUrl,
+      externalUrl: body.externalUrl,
+      internalUrl: body.internalUrl,
+    });
+    if (candidates.length > 0) {
+      try {
+        const remote = await proxyAnlagenstammParameterDownload(
+          Object.assign({}, body, { technician_id: technicianId, fab: fabNorm, file_id: fileId }),
+        );
+        if (remote && remote.ok && remote.buffer) {
+          const disp = remote.contentDisposition || '';
+          const xName = remote.xDownloadFilename || '';
+          if (disp) res.setHeader('Content-Disposition', disp);
+          if (xName) res.setHeader('X-Download-Filename', xName);
+          res.setHeader('Content-Type', remote.contentType || 'application/octet-stream');
+          res.setHeader('Content-Length', String(remote.buffer.length));
+          return res.send(remote.buffer);
+        }
+        if (remote && remote.ok === false && remote._httpStatus !== 404) {
+          return res.status(Number(remote._httpStatus) || 502).json(remote);
+        }
+      } catch (dispoErr) {
+        console.warn('[parameter_download] Dispo:', dispoErr && dispoErr.message ? dispoErr.message : dispoErr);
+      }
+    }
+    return res.status(404).json({
+      ok: false,
+      error: 'Download nur online über Dispo verfügbar (file_id).',
+      cache_only: true,
+    });
   });
 
   app.get('/api/anlagenstamm_tree_cached', (req, res) => {
@@ -5227,6 +5359,36 @@ ORDER BY
       const savedCsv = path.join('Dokumente_Anlage', folderName, 'Montage', 'Parameter', filename);
       const savedPdf = path.join('Dokumente_Anlage', folderName, 'Montage', 'Parameter', pdfBasename);
       const technicianName = getTechnicianDisplayName(technicianId);
+      let serverFileId = null;
+      let dispoIngestError = null;
+      const dispoCandidates = buildDispoBaseCandidates({
+        baseUrl: body.baseUrl,
+        externalUrl: body.externalUrl,
+        internalUrl: body.internalUrl,
+      });
+      if (dispoCandidates.length > 0) {
+        try {
+          const remote = await proxyAnlagenstammParameterIngest({
+            technician_id: technicianId,
+            baseUrl: body.baseUrl,
+            externalUrl: body.externalUrl,
+            internalUrl: body.internalUrl,
+            serverUsername: body.serverUsername,
+            serverPassword: body.serverPassword,
+            filename,
+            content: contentBase64,
+            source: 'upload',
+            mime: 'text/plain',
+          });
+          if (remote && remote.ok !== false) {
+            serverFileId = remote.id != null ? Number(remote.id) : null;
+          } else {
+            dispoIngestError = remote && remote.error ? String(remote.error) : 'Dispo-Ingest fehlgeschlagen';
+          }
+        } catch (dispoErr) {
+          dispoIngestError = dispoErr && dispoErr.message ? dispoErr.message : String(dispoErr);
+        }
+      }
       const ingest = ingestParameterFileIntoAnlagenstamm({
         fileName: filename,
         source: 'upload',
@@ -5236,12 +5398,16 @@ ORDER BY
         mime: 'text/plain',
         technicianId,
         technicianName,
+        serverFileId,
       });
       res.json({
         ok: true,
         savedCsv,
         savedPdf,
         ingest_ok: !!(ingest && ingest.ok),
+        dispo_ingest_ok: serverFileId != null,
+        dispo_ingest_error: dispoIngestError,
+        dispo_file_id: serverFileId,
         fab_used: fn,
         filename_fn: Number.isFinite(filenameFn) ? filenameFn : null,
         content_fn: Number.isFinite(contentFn) ? contentFn : null,

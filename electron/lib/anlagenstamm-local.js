@@ -100,6 +100,15 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
   run(
     'CREATE INDEX IF NOT EXISTS idx_as_param_entries_file ON anlagenstamm_parameter_entries(file_id)',
   );
+  try {
+    const cols = db.prepare('PRAGMA table_info(anlagenstamm_parameter_files)').all();
+    const hasServerId = cols.some((c) => c && c.name === 'server_file_id');
+    if (!hasServerId) {
+      run('ALTER TABLE anlagenstamm_parameter_files ADD COLUMN server_file_id INTEGER');
+    }
+  } catch (_) {
+    /* Spalte bereits vorhanden oder Schema alt */
+  }
 }
 
 function rowCount(db) {
@@ -623,8 +632,8 @@ function upsertParameterFile(db, payload) {
     ? 'original_deleted'
     : 'present';
   const ins = db.prepare(`INSERT INTO anlagenstamm_parameter_files
-    (fab, source, source_file_status, technician_id, technician_name, uploaded_at, original_filename, mime, size, sha256, storage_relpath, source_path, filename_fn, content_fn, used_fn, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    (fab, source, source_file_status, technician_id, technician_name, uploaded_at, original_filename, mime, size, sha256, storage_relpath, source_path, filename_fn, content_fn, used_fn, server_file_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     ON CONFLICT(fab, source, sha256) DO UPDATE SET
       source_file_status = excluded.source_file_status,
       technician_id = excluded.technician_id,
@@ -638,6 +647,7 @@ function upsertParameterFile(db, payload) {
       filename_fn = excluded.filename_fn,
       content_fn = excluded.content_fn,
       used_fn = excluded.used_fn,
+      server_file_id = COALESCE(excluded.server_file_id, server_file_id),
       updated_at = datetime('now')
   `);
   ins.run(
@@ -656,6 +666,7 @@ function upsertParameterFile(db, payload) {
     payload && payload.filename_fn != null ? String(payload.filename_fn) : null,
     payload && payload.content_fn != null ? String(payload.content_fn) : null,
     payload && payload.used_fn != null ? String(payload.used_fn) : null,
+    payload && payload.server_file_id != null ? Number(payload.server_file_id) : null,
   );
   const row = db
     .prepare('SELECT id FROM anlagenstamm_parameter_files WHERE fab = ? AND source = ? AND sha256 = ? LIMIT 1')
@@ -682,6 +693,33 @@ function upsertParameterFile(db, payload) {
     }
   }
   return { ok: true, file_id: fileId, fab, source };
+}
+
+/** Metadaten aus Dispo-Listenantwort in lokalen Cache spiegeln (ohne Einzelwerte). */
+function cacheParameterFilesFromDispo(db, fab, files) {
+  const fabNorm = normalizeFabDigits(fab);
+  if (!fabNorm || !Array.isArray(files)) return;
+  for (const f of files) {
+    if (!f || typeof f !== 'object') continue;
+    const sha = String(f.sha256 || '').trim();
+    if (!sha) continue;
+    upsertParameterFile(db, {
+      fab: fabNorm,
+      source: f.source,
+      source_file_status: f.source_file_status || 'present',
+      technician_id: f.technician_id,
+      technician_name: f.technician_name,
+      uploaded_at: f.uploaded_at,
+      original_filename: f.original_filename,
+      mime: f.mime,
+      size: f.size,
+      sha256: sha,
+      storage_relpath: f.source_path || f.storage_rel_path || null,
+      source_path: f.source_path || null,
+      server_file_id: f.id != null ? Number(f.id) : null,
+      entries: [],
+    });
+  }
 }
 
 function markMissingProjekteNeuFiles(db, fab, presentSourcePaths) {
@@ -856,6 +894,7 @@ module.exports = {
   fabDirForCache,
   uploadCachePath,
   upsertParameterFile,
+  cacheParameterFilesFromDispo,
   listParameterFilesByFab,
   markMissingProjekteNeuFiles,
   normalizeFabDigits,

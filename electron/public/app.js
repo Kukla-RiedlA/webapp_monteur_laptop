@@ -587,6 +587,16 @@
     }, extra || {});
   }
 
+  function anlagenstammDispoBody(extra) {
+    return Object.assign({
+      baseUrl: getDispoBaseUrl(),
+      externalUrl: getDispoExternalUrl(),
+      internalUrl: getDispoInternalUrl(),
+      serverUsername: getDispoUsername(),
+      serverPassword: getDispoPassword()
+    }, extra || {});
+  }
+
   /** Nur Abrechnungs-Ansicht: bearbeiten solange nicht endgültig abgerechnet (Status oder beide Flags). */
   function abrechnungEffectiveCanWrite(job) {
     if (!job || typeof job !== 'object') return true;
@@ -6811,7 +6821,7 @@
     trendEl.style.display = '';
     trendEl.innerHTML = '<div class="anlagenstamm-trend-head">Trend wird berechnet…</div>';
     try {
-      var body = { fab: fabNorm };
+      var body = anlagenstammDispoBody({ fab: fabNorm });
       if (opts.chain) body.mode = 'chain';
       else {
         if (opts.from_file_id) body.from_file_id = opts.from_file_id;
@@ -6821,6 +6831,9 @@
         method: 'POST',
         body: JSON.stringify(body)
       });
+      if (data && data.cache_notice) {
+        if (msgEl) msgEl.textContent = data.cache_notice;
+      }
       if (!data || !data.ok) {
         throw new Error((data && data.error) ? data.error : 'Trend fehlgeschlagen');
       }
@@ -6871,8 +6884,13 @@
     try {
       var data = await api('/api/anlagenstamm_parameter_files_list', {
         method: 'POST',
-        body: JSON.stringify({ fab: fabNorm })
+        body: JSON.stringify(anlagenstammDispoBody({ fab: fabNorm }))
       });
+      if (data && data.cache_notice && msgEl) {
+        msgEl.textContent = data.cache_notice;
+      } else if (msgEl && data && data.data_source === 'dispo') {
+        msgEl.textContent = '';
+      }
       var list = data && Array.isArray(data.files) ? data.files : [];
       wrapEl._aspFiles = list;
       if (!list.length) {
@@ -6890,7 +6908,13 @@
         '<button type="button" class="btn btn-ghost" id="btnAspTrendChain">Gesamttrend (alle Schritte)</button>' +
         '<label><input type="checkbox" id="aspTrendShowUnchanged"> Unveränderte anzeigen</label>' +
         '</div>';
-      wrapEl.innerHTML = '<div class="anlagenstamm-paramlist-head">Parameterlisten (' + list.length + ')</div>' +
+      var cacheBanner = (data && data.data_source === 'cache')
+        ? '<p class="muted" style="padding:0.35rem 0.7rem;margin:0">' +
+          escapeHtml(data.cache_notice || 'Cache – nicht mit Dispo synchron') +
+          '</p>'
+        : '';
+      wrapEl.innerHTML = cacheBanner +
+        '<div class="anlagenstamm-paramlist-head">Parameterlisten (' + list.length + ')</div>' +
         trendToolbar +
         list.map(function (f) {
           var sourceLabel = f.source === 'projekte_neu' ? 'Projekte neu' : 'Upload';
@@ -6903,7 +6927,7 @@
             '<div>' + escapeHtml(sourceLabel) + '</div>' +
             '<div>' + escapeHtml(who) + '<div class="muted">' + escapeHtml(date) + '</div></div>' +
             '<div>' + escapeHtml(String(f.entry_count || 0)) + ' Werte</div>' +
-            '<div><button class="btn btn-ghost" data-asp-download="' + encodeURIComponent(name) + '">Download</button></div>' +
+            '<div><button class="btn btn-ghost" data-asp-file-id="' + encodeURIComponent(String(f.id || '')) + '" data-asp-filename="' + encodeURIComponent(name) + '">Download</button></div>' +
             '</div>';
         }).join('');
       wireAspTrendToolbar(fabNorm, list);
@@ -6926,11 +6950,12 @@
           to_file_id: list[0].id
         });
       }
-      wrapEl.querySelectorAll('[data-asp-download]').forEach(function (btn) {
+      wrapEl.querySelectorAll('[data-asp-file-id]').forEach(function (btn) {
         btn.addEventListener('click', function () {
-          var file = decodeURIComponent(btn.getAttribute('data-asp-download') || '');
-          if (!file) return;
-          downloadAnlagenstammFile(fabNorm, file).catch(function (err) {
+          var fileId = parseInt(decodeURIComponent(btn.getAttribute('data-asp-file-id') || ''), 10);
+          var fileName = decodeURIComponent(btn.getAttribute('data-asp-filename') || '');
+          if (!fileId) return;
+          downloadAnlagenstammParameterFile(fabNorm, fileId, fileName).catch(function (err) {
             if (msgEl) msgEl.textContent = 'Fehler: ' + (err.message || String(err));
           });
         });
@@ -7039,6 +7064,45 @@
       if (pnTreeE) pnTreeE.innerHTML = '';
       if (pnHintE) pnHintE.textContent = '';
     }
+  }
+
+  async function downloadAnlagenstammParameterFile(fab, fileId, fileName) {
+    if (!fab || !fileId) return;
+    const technicianId = getTechId();
+    const resp = await fetch(API_BASE + '/api/anlagenstamm_parameter_download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
+      body: JSON.stringify(anlagenstammDispoBody({ fab: fab, file_id: fileId }))
+    });
+    if (!resp.ok) {
+      let err = 'Download fehlgeschlagen.';
+      try {
+        const j = await resp.json();
+        if (j && j.error) err = j.error;
+      } catch (_) {}
+      throw new Error(err);
+    }
+    const blob = await resp.blob();
+    const disp = resp.headers.get('content-disposition') || '';
+    const xName = resp.headers.get('x-download-filename') || '';
+    let name = fileName || 'parameterliste';
+    if (xName) {
+      try { name = decodeURIComponent(xName); } catch (_) { name = xName; }
+    } else {
+      const m = disp.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)/i);
+      if (m && m[1]) {
+        try { name = decodeURIComponent(m[1]); } catch (_) { name = m[1]; }
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Download gestartet.');
   }
 
   async function downloadAnlagenstammFile(fab, file) {
@@ -10517,7 +10581,7 @@
             var r = await fetch(API_BASE + '/api/protokolle/parameterlisten', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-              body: JSON.stringify({ job_id: jobId, filename: filename, content: content })
+              body: JSON.stringify(anlagenstammDispoBody({ job_id: jobId, filename: filename, content: content }))
             });
             var data = await r.json().catch(function () { return {}; });
             if (data.ok) {
