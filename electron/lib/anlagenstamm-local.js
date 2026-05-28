@@ -100,14 +100,19 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
   run(
     'CREATE INDEX IF NOT EXISTS idx_as_param_entries_file ON anlagenstamm_parameter_entries(file_id)',
   );
-  try {
-    const cols = db.prepare('PRAGMA table_info(anlagenstamm_parameter_files)').all();
-    const hasServerId = cols.some((c) => c && c.name === 'server_file_id');
-    if (!hasServerId) {
-      run('ALTER TABLE anlagenstamm_parameter_files ADD COLUMN server_file_id INTEGER');
+  if (dbOrSql && typeof dbOrSql.prepare === 'function') {
+    try {
+      const cols = dbOrSql.prepare('PRAGMA table_info(anlagenstamm_parameter_files)').all();
+      const hasServerId = cols.some((c) => c && c.name === 'server_file_id');
+      if (!hasServerId) {
+        run('ALTER TABLE anlagenstamm_parameter_files ADD COLUMN server_file_id INTEGER');
+      }
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err);
+      if (!/duplicate column name/i.test(msg)) {
+        console.warn('[anlagenstamm-local] server_file_id migration:', msg);
+      }
     }
-  } catch (_) {
-    /* Spalte bereits vorhanden oder Schema alt */
   }
 }
 
@@ -620,6 +625,7 @@ function sanitizeSource(source) {
 }
 
 function upsertParameterFile(db, payload) {
+  ensureAnlagenstammLocalSchema(db);
   const fab = normalizeFabDigits(payload && payload.fab);
   if (!fab) return { ok: false, error: 'fab fehlt' };
   const source = sanitizeSource(payload && payload.source);

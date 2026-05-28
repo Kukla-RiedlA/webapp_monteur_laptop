@@ -1117,6 +1117,7 @@ function createApp(db) {
   }
 
   function ingestParameterFileIntoAnlagenstamm(opts) {
+    ensureAnlagenstammLocalSchema(db);
     const fileName = String((opts && opts.fileName) || '').trim();
     const source = String((opts && opts.source) || '').trim() || 'upload';
     const sourcePath = String((opts && opts.sourcePath) || '').trim() || null;
