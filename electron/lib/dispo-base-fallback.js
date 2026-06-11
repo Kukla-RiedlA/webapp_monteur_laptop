@@ -24,47 +24,16 @@ function safeHostname(baseUrl) {
   }
 }
 
-function defaultPortForProtocol(protocol) {
-  if (protocol === 'https:') return '443';
-  if (protocol === 'http:') return '80';
-  return '';
-}
-
-/**
- * Wenn die Referenz-URL einen expliziten Nicht-Standard-Port hat (z. B. :4433),
- * die Ziel-URL aber nur den Schema-Standardport nutzt, Port von der Referenz übernehmen.
- */
-function alignDispoBasePort(referenceUrl, targetUrl) {
-  const ref = normalizeDispoBase(referenceUrl);
-  const tgt = normalizeDispoBase(targetUrl);
-  if (!ref || !tgt) return tgt;
-  try {
-    const r = new URL(ref);
-    const t = new URL(tgt);
-    const refPort = r.port || defaultPortForProtocol(r.protocol);
-    const tgtPort = t.port || defaultPortForProtocol(t.protocol);
-    const refNonDefault = refPort && refPort !== '443' && refPort !== '80';
-    const tgtIsDefault = !t.port || tgtPort === defaultPortForProtocol(t.protocol);
-    if (refNonDefault && tgtIsDefault && r.protocol === t.protocol) {
-      t.port = refPort;
-      return normalizeDispoBase(t.toString());
-    }
-  } catch (_) {
-    /* ignore */
-  }
-  return tgt;
-}
-
 /**
  * @param {string} [externalUrl]
  * @param {string} [internalUrl]
  * @returns {{ external: string, internal: string }}
  */
 function normalizeDispoBasePair(externalUrl, internalUrl) {
-  const ext = normalizeDispoBase(externalUrl);
-  let int = normalizeDispoBase(internalUrl);
-  if (ext && int) int = alignDispoBasePort(ext, int);
-  return { external: ext, internal: int };
+  return {
+    external: normalizeDispoBase(externalUrl),
+    internal: normalizeDispoBase(internalUrl),
+  };
 }
 
 /**
@@ -76,15 +45,9 @@ function normalizeDispoBasePair(externalUrl, internalUrl) {
  */
 function buildDispoBaseCandidates(opts) {
   const pair = normalizeDispoBasePair(opts && opts.externalUrl, opts && opts.internalUrl);
-  let active = normalizeDispoBase(opts && opts.baseUrl);
-  let ext = pair.external || normalizeDispoBase(opts && opts.externalUrl);
-  let int = pair.internal || normalizeDispoBase(opts && opts.internalUrl);
-  if (ext && int && int === normalizeDispoBase(opts && opts.internalUrl)) {
-    int = alignDispoBasePort(ext, int);
-  }
-  if (active && ext && int && isPrivateLanHostname(safeHostname(active))) {
-    active = alignDispoBasePort(ext, active);
-  }
+  const active = normalizeDispoBase(opts && opts.baseUrl);
+  const ext = pair.external || normalizeDispoBase(opts && opts.externalUrl);
+  const int = pair.internal || normalizeDispoBase(opts && opts.internalUrl);
   const activePrivate = active && isPrivateLanHostname(safeHostname(active));
   const out = [];
   const seen = new Set();
@@ -153,13 +116,19 @@ async function pickReachableDispoBase(opts) {
     };
   }
 
+  const preferInternal = !(opts && opts.preferInternal === false);
   const [rInt, rExt] = await Promise.all([probe(int), probe(ext)]);
   const tried = [
     { url: int, ok: rInt.ok, error: rInt.ok ? undefined : rInt.error },
     { url: ext, ok: rExt.ok, error: rExt.ok ? undefined : rExt.error },
   ];
   if (rInt.ok && rExt.ok) {
-    return { ok: true, selected_base_url: int, preferred_source: 'internal', tried };
+    return {
+      ok: true,
+      selected_base_url: preferInternal ? int : ext,
+      preferred_source: preferInternal ? 'internal' : 'external',
+      tried,
+    };
   }
   if (rInt.ok) {
     return { ok: true, selected_base_url: int, preferred_source: 'internal', tried };
@@ -209,7 +178,6 @@ async function tryDispoBasesInOrder(candidates, runForBase) {
 module.exports = {
   normalizeDispoBase,
   normalizeDispoBasePair,
-  alignDispoBasePort,
   buildDispoBaseCandidates,
   isFetchNetworkError,
   isPrivateLanHostname,

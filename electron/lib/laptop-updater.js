@@ -1,7 +1,7 @@
 /**
  * electron-updater: Feed vom Dispo-Server (generic), UX per Plan, TLS wie Dispo-Proxys.
  */
-const { app, dialog } = require('electron');
+const { app, dialog, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -13,7 +13,9 @@ let lastCheckWasManual = false;
 let pendingInstallOnQuit = false;
 let latestVersionLabel = '';
 let feedBaseUrl = '';
-let allowInsecureTls = false;
+let allowInsecureTls = true;
+let certificateVerifyProcInstalled = false;
+const trustedInsecureHosts = new Set();
 let feedCheckDebounce = null;
 let periodicCheckTimer = null;
 let updateCheckInFlight = null;
@@ -64,9 +66,56 @@ function normalizeFeedBase(dispoBase) {
   return base + '/api/laptop_release_feed.php/';
 }
 
+function isPrivateLanHost(hostname) {
+  const h = (hostname || '').toString().trim().toLowerCase();
+  if (!h || h === 'localhost' || h === '127.0.0.1') return true;
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  return false;
+}
+
+function rememberInsecureHostsFromUrl(url) {
+  const raw = (url || '').toString().trim();
+  if (!raw) return;
+  try {
+    const u = new URL(raw.includes('://') ? raw : 'https://' + raw.replace(/^\/+/, ''));
+    if (u.hostname) trustedInsecureHosts.add(u.hostname.toLowerCase());
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function shouldTrustCertificate(hostname) {
+  const h = (hostname || '').toLowerCase();
+  if (!h) return false;
+  if (trustedInsecureHosts.has(h)) return true;
+  if (isPrivateLanHost(h)) return true;
+  if (/\.kukla\.co\.at$/i.test(h) || h === 'kukla.co.at') return true;
+  return false;
+}
+
+function installCertificateVerifyProc() {
+  if (certificateVerifyProcInstalled || !session || !session.defaultSession) return;
+  certificateVerifyProcInstalled = true;
+  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    if (!allowInsecureTls) {
+      callback(-3);
+      return;
+    }
+    if (shouldTrustCertificate(request.hostname)) {
+      callback(0);
+      return;
+    }
+    callback(-3);
+  });
+}
+
 function applyInsecureTlsToProcess(on) {
+  allowInsecureTls = !!on;
   if (on) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    installCertificateVerifyProc();
   } else if (process.env.KUKLA_DISP_TLS_INSECURE !== '1') {
     delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
   }
@@ -110,9 +159,17 @@ function sendStatus(state, extra) {
 function buildFeedUrl() {
   if (feedBaseUrl) return feedBaseUrl;
   const userCfg = readJsonFileSafe(path.join(app.getPath('userData'), 'app_config.json'));
+  if (userCfg && userCfg.laptopUpdateAllowInsecureTls === false) {
+    allowInsecureTls = false;
+  } else if (userCfg && userCfg.laptopUpdateAllowInsecureTls === true) {
+    allowInsecureTls = true;
+  }
   const fromCfg =
     userCfg && typeof userCfg.laptopUpdateFeedBase === 'string' ? userCfg.laptopUpdateFeedBase.trim() : '';
-  if (fromCfg) return fromCfg.endsWith('/') ? fromCfg : fromCfg + '/';
+  if (fromCfg) {
+    rememberInsecureHostsFromUrl(fromCfg);
+    return fromCfg.endsWith('/') ? fromCfg : fromCfg + '/';
+  }
   return '';
 }
 
@@ -208,6 +265,8 @@ function initLaptopUpdater(opts) {
   if (!app.isPackaged) return;
 
   mainWindowGetter = opts.getMainWindow || (() => null);
+  installCertificateVerifyProc();
+  applyInsecureTlsToProcess(allowInsecureTls);
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -281,9 +340,12 @@ function setUpdateFeedFromDispoBase(dispoBase, insecureTls) {
   allowInsecureTls = !!insecureTls;
   const feed = normalizeFeedBase(dispoBase);
   if (!feed) return { ok: false, error: 'empty_base' };
+  rememberInsecureHostsFromUrl(feed);
+  rememberInsecureHostsFromUrl(dispoBase);
   writeUserAppConfig({
     laptopUpdateFeedBase: feed,
     laptopUpdateCheckUrl: '',
+    laptopUpdateAllowInsecureTls: !!insecureTls,
   });
   feedBaseUrl = feed;
   applyInsecureTlsToProcess(allowInsecureTls);

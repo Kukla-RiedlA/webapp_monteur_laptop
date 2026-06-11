@@ -150,6 +150,61 @@
       background: #e65100;
       border-radius: 3px;
     }
+  /* Auftrag erledigt: Fortschritt im Button (wie Annehmen) */
+    .btn-finish-job {
+      background: linear-gradient(180deg, #a5d6a7 0%, #66bb6a 55%, #43a047 100%);
+      color: #1b3d1f;
+      border: 1px solid #2e7d32;
+      font-weight: 600;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: center;
+      gap: 0.28rem;
+      min-width: 12rem;
+      text-align: center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.12);
+    }
+    .btn-finish-job:hover:not(:disabled) {
+      filter: brightness(1.03);
+      border-color: #1b5e20;
+    }
+    .btn-finish-job:focus-visible {
+      outline: 2px solid #2e7d32;
+      outline-offset: 2px;
+    }
+    .btn-finish-job-label { display: block; line-height: 1.2; }
+    .btn-finish-job-progress-wrap {
+      display: none;
+      flex-direction: column;
+      gap: 0.22rem;
+      width: 100%;
+      align-items: stretch;
+    }
+    .btn-finish-job.btn-finish-job--busy .btn-finish-job-label { display: none; }
+    .btn-finish-job.btn-finish-job--busy .btn-finish-job-progress-wrap { display: flex; }
+    .btn-finish-job-progress-text {
+      font-size: 0.68rem;
+      font-weight: 600;
+      line-height: 1.15;
+      color: #1b3d1f;
+    }
+    .btn-finish-job-progress {
+      width: 100%;
+      height: 7px;
+      border: none;
+      border-radius: 3px;
+      vertical-align: middle;
+      accent-color: #1b5e20;
+    }
+    .btn-finish-job-progress::-webkit-progress-bar {
+      background: rgba(255,255,255,0.55);
+      border-radius: 3px;
+    }
+    .btn-finish-job-progress::-webkit-progress-value {
+      background: #1b5e20;
+      border-radius: 3px;
+    }
     .status-badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .status-angelegt,
     .status-geplant { background: #3d5a80; }
@@ -1112,6 +1167,7 @@
           <progress id="acceptJobProgress" value="0" max="100" style="width:100%; height:8px;"></progress>
         </div>
         <span id="acceptJobHint" class="settings-saved-hint" aria-live="polite" style="display:block;margin-bottom:0.5rem;"></span>
+        <span id="finishJobHint" class="settings-saved-hint" aria-live="polite" style="display:block;margin-bottom:0.5rem;"></span>
         <div id="dienstreiseList" class="dienstreise-list-wrap">
           <span class="empty">Wird geladen…</span>
         </div>
@@ -1435,7 +1491,7 @@
       </div>
       <div class="settings-row">
         <label for="serverUrlInternal">Dispo (Firmennetz / intern)</label>
-        <input type="text" id="serverUrlInternal" placeholder="z.B. https://10.0.0.180:4433" value="https://10.0.0.180:4433" title="Optional: direkter Zugriff im Büro-LAN (gleicher Port wie extern, z. B. :4433). Die App prüft parallel extern und intern (10 s); wenn beide erreichbar sind, wird die interne Adresse bevorzugt." />
+        <input type="text" id="serverUrlInternal" placeholder="z.B. https://10.0.0.180" value="https://10.0.0.180" title="Optional: direkter Zugriff im Büro-LAN (z. B. https://10.0.0.180 ohne abweichenden Port). Die App prüft parallel extern und intern (10 s); wenn beide erreichbar sind, wird die interne Adresse bevorzugt." />
       </div>
       <div class="settings-row">
         <label for="technicianId">Monteur-ID</label>

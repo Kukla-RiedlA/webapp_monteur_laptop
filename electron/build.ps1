@@ -8,6 +8,36 @@ param(
 
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
+
+function Stop-MonteurElectronForBuild {
+    $names = @("electron", "Monteur WebApp")
+    foreach ($name in $names) {
+        Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "Beende Prozess: $($_.ProcessName) (PID $($_.Id))"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Start-Sleep -Milliseconds 800
+}
+
+# dist-build statt dist: altes dist/ bleibt oft durch laufende App/Cursor/AV gesperrt (app.asar).
+$script:BuildOutputDirName = "dist-build"
+
+function Clear-BuildOutputDirBeforeBuild {
+    $outRoot = Join-Path $here $script:BuildOutputDirName
+    if (-not (Test-Path -LiteralPath $outRoot)) {
+        return
+    }
+    Write-Host "Bereinige $script:BuildOutputDirName (vorherige Build-Artefakte) ..."
+    try {
+        Remove-Item -LiteralPath $outRoot -Recurse -Force -ErrorAction Stop
+    } catch {
+        $stamp = Get-Date -Format "yyyyMMddHHmmss"
+        $script:BuildOutputDirName = "dist-build-$stamp"
+        Write-Warning "Konnte $outRoot nicht loeschen ($($_.Exception.Message)) - nutze $script:BuildOutputDirName"
+    }
+}
+
 Push-Location $here
 try {
     if (-not $SkipNpmInstall) {
@@ -36,11 +66,14 @@ Fuer Installer nur leere Vorlage oder Datei entfernen.
 "@
         }
     }
-    Write-Host "electron-builder (win) ..."
-    npm run dist
+    Stop-MonteurElectronForBuild
+    Clear-BuildOutputDirBeforeBuild
+    $outputDir = $script:BuildOutputDirName
+    Write-Host "electron-builder (win) -> $outputDir ..."
+    & npm.cmd run dist -- "--config.directories.output=$outputDir"
     if ($LASTEXITCODE -ne 0) { throw "npm run dist fehlgeschlagen (exit $LASTEXITCODE)." }
 
-    $dist = Join-Path $here "dist"
+    $dist = Join-Path $here $script:BuildOutputDirName
     if (-not (Test-Path $dist)) {
         throw "dist/ fehlt nach Build."
     }

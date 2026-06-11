@@ -43,3 +43,14 @@ Kurzablauf **nur WebApp** (wenn ausschließlich dieses Repo betroffen ist):
 **Vollständiges Plattform-Release (alle Repos):** `.\scripts\commit-all-submodules.ps1` nur, wenn in allen Submodulen der Arbeitsbaum passt (siehe Plattform-Regel); sonst Submodule einzeln releasen.
 
 **Abschluss (Pflicht):** `Kukla_Monteur_Plattform/.cursor/rules/release-staging-keine-regressionen.mdc` → *Keine lokalen Reste*: nach Release/Push `git status` in `webapp_monteur_laptop` und im Parent sauber, alles auf `origin`.
+
+## Installer auf Dispo (Auto-Update für Monteure)
+
+Git-Tag allein verteilt **keinen** Windows-Installer. Danach (oder in einem Schritt mit Build):
+
+```powershell
+# vom Plattform-Root Kukla_Monteur_Plattform
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish-laptop-release.ps1
+```
+
+Detail-Anleitung: `Kukla_Monteur_Plattform/.cursor/rules/laptop-upload-deploy.mdc` und `webapp_monteur_laptop/.cursor/rules/laptop-upload-deploy.mdc`.

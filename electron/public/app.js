@@ -215,7 +215,7 @@
 
   /** Standard bei Neuinstallation (ohne gespeicherte Einstellungen); weiterhin editierbar. */
   const DEFAULT_DISPO_SERVER_URL = 'https://fsm.kukla.co.at:4433';
-  const DEFAULT_DISPO_SERVER_URL_INTERNAL = 'https://10.0.0.180:4433';
+  const DEFAULT_DISPO_SERVER_URL_INTERNAL = 'https://10.0.0.180';
   const SETTINGS_KEYS = {
     serverUrl: 'monteur_serverUrl',
     serverUrlInternal: 'monteur_serverUrlInternal',
@@ -256,30 +256,9 @@
     return (document.getElementById('serverUrl').value || '').trim();
   }
 
-  /** Port von externer URL übernehmen, wenn intern nur Schema-Standardport (z. B. :443 statt :4433). */
-  function alignDispoInternalPortFromExternal(extUrl, intUrl) {
-    try {
-      var ext = (extUrl || '').trim().replace(/\/+$/, '');
-      var intU = (intUrl || '').trim().replace(/\/+$/, '');
-      if (!ext || !intU) return intU;
-      var r = new URL(ext);
-      var t = new URL(intU);
-      var refPort = r.port || (r.protocol === 'https:' ? '443' : '80');
-      var tgtPort = t.port || (t.protocol === 'https:' ? '443' : '80');
-      if (refPort && refPort !== '443' && refPort !== '80' && (tgtPort === '443' || tgtPort === '80')) {
-        if (r.protocol === t.protocol) {
-          t.port = refPort;
-          return t.origin;
-        }
-      }
-    } catch (e) { /* ignore */ }
-    return (intUrl || '').trim().replace(/\/+$/, '');
-  }
-
   function getDispoInternalUrl() {
     var el = document.getElementById('serverUrlInternal');
-    var raw = el ? (el.value || '').trim() : '';
-    return alignDispoInternalPortFromExternal(getDispoExternalUrl(), raw);
+    return el ? (el.value || '').trim().replace(/\/+$/, '') : '';
   }
 
   /** Alias: externe Dispo-Basis-URL (Einstellungen). */
@@ -287,27 +266,36 @@
     return getDispoExternalUrl();
   }
 
+  /** Alte interne Default-URL (:4433) auf Standard-HTTPS ohne Port normalisieren. */
+  function migrateLegacyInternalDispoBase(url) {
+    var u = (url || '').toString().trim().replace(/\/+$/, '');
+    if (!u) return u;
+    try {
+      var p = new URL(u);
+      if (p.hostname === '10.0.0.180' && p.port === '4433') {
+        p.port = '';
+        return p.origin;
+      }
+    } catch (e) { /* ignore */ }
+    return u;
+  }
+
   /** Für Sync/Dispo: zuletzt erfolgreich gewählte Basis (intern/extern), sonst externe URL. */
   function getDispoBaseUrl() {
-    var ext = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
     try {
-      var active = (localStorage.getItem(LS_ACTIVE_BASE) || '').trim().replace(/\/+$/, '');
+      var active = migrateLegacyInternalDispoBase(localStorage.getItem(LS_ACTIVE_BASE));
       if (active) {
-        var host = '';
-        try {
-          host = new URL(active).hostname;
-        } catch (e) { /* ignore */ }
-        var src = '';
-        try {
-          src = (localStorage.getItem(LS_ACTIVE_SOURCE) || '').trim();
-        } catch (e2) { /* ignore */ }
-        if (ext && isPrivateLanHostname(host) && src === 'internal') {
-          return ext;
+        var stored = (localStorage.getItem(LS_ACTIVE_BASE) || '').trim().replace(/\/+$/, '');
+        if (stored && stored !== active) {
+          try { localStorage.setItem(LS_ACTIVE_BASE, active); } catch (e) { /* ignore */ }
         }
         return active;
       }
     } catch (e) { /* ignore */ }
+    var ext = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
     if (ext) return ext;
+    var intUrl = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
+    if (intUrl) return intUrl;
     try {
       return (localStorage.getItem(SETTINGS_KEYS.serverUrl) || '').trim();
     } catch (e2) {
@@ -493,14 +481,11 @@
       var elInt = document.getElementById('serverUrlInternal');
       if (elInt) {
         var intLoaded = urlInt != null ? urlInt : DEFAULT_DISPO_SERVER_URL_INTERNAL;
-        var extLoaded = document.getElementById('serverUrl').value || DEFAULT_DISPO_SERVER_URL;
-        intLoaded = alignDispoInternalPortFromExternal(extLoaded, intLoaded);
-        elInt.value = intLoaded;
-        if (urlInt != null && intLoaded !== urlInt.trim().replace(/\/+$/, '')) {
-          try {
-            localStorage.setItem(SETTINGS_KEYS.serverUrlInternal, intLoaded);
-          } catch (e) { /* ignore */ }
+        if (intLoaded.replace(/\/+$/, '') === 'https://10.0.0.180:4433') {
+          intLoaded = DEFAULT_DISPO_SERVER_URL_INTERNAL;
+          try { localStorage.setItem(SETTINGS_KEYS.serverUrlInternal, intLoaded); } catch (e) { /* ignore */ }
         }
+        elInt.value = intLoaded;
       }
       const techId = localStorage.getItem(SETTINGS_KEYS.technicianId);
       if (techId != null) document.getElementById('technicianId').value = techId;
@@ -530,11 +515,7 @@
     try {
       localStorage.setItem(SETTINGS_KEYS.serverUrl, (document.getElementById('serverUrl').value || '').trim());
       var intEl = document.getElementById('serverUrlInternal');
-      var intSave = intEl ? alignDispoInternalPortFromExternal(
-        document.getElementById('serverUrl').value || '',
-        intEl.value || '',
-      ) : '';
-      if (intEl && intSave) intEl.value = intSave;
+      var intSave = intEl ? (intEl.value || '').trim().replace(/\/+$/, '') : '';
       localStorage.setItem(SETTINGS_KEYS.serverUrlInternal, intSave);
       localStorage.setItem(SETTINGS_KEYS.technicianId, document.getElementById('technicianId').value || '');
       var elFn = document.getElementById('monteurFullName');
@@ -1251,6 +1232,13 @@
   /** @type {HTMLButtonElement | null} */
   var acceptJobActiveButton = null;
   var acceptJobUiTimeoutId = null;
+
+  var finishJobStreamBusy = false;
+  var finishJobActiveLocalJobId = null;
+  var finishJobLastProgressRow = null;
+  var finishJobActiveButton = null;
+  var finishJobUiTimeoutId = null;
+  var restoreFinishJobBgFetchInFlight = false;
   var restoreAcceptJobBgFetchInFlight = false;
 
   function finishAcceptJobStreamUi() {
@@ -1528,14 +1516,14 @@
 
     applyAcceptJobStreamBusyUi();
 
-    var body = {
+    var body = Object.assign({
       job_id: localJobId,
       dispoBaseUrl: getDispoBaseUrl(),
       technicianId: getTechId(),
       dispoUsername: getDispoUsername(),
       dispoPassword: getDispoPassword(),
       include_bilder: false
-    };
+    }, dispoBasePayloadExtra());
     var copyTimeoutMs = 600000;
     acceptJobUiTimeoutId = setTimeout(function () {
       acceptJobUiTimeoutId = null;
@@ -2356,12 +2344,12 @@
       return fetch(API_BASE + '/api/job_from_dispo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
-        body: JSON.stringify({
+        body: JSON.stringify(Object.assign({
           baseUrl: baseUrl,
           jobId: jobId,
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
-        })
+        }, dispoBasePayloadExtra()))
       })
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -4444,50 +4432,264 @@
     }
   }
 
-  async function finishAndCleanup(jobId) {
+  function finishFinishJobStreamUi() {
+    finishJobStreamBusy = false;
+    finishJobActiveLocalJobId = null;
+    finishJobLastProgressRow = null;
+    finishJobActiveButton = null;
+    if (finishJobUiTimeoutId) {
+      clearTimeout(finishJobUiTimeoutId);
+      finishJobUiTimeoutId = null;
+    }
+    document.querySelectorAll('[data-action="finish-job"]').forEach(function (b) {
+      b.disabled = false;
+      b.classList.remove('btn-finish-job--busy');
+      var bar = b.querySelector('.btn-finish-job-progress');
+      if (bar) {
+        try {
+          bar.indeterminate = false;
+          bar.removeAttribute('value');
+        } catch (e) { /* ignore */ }
+      }
+    });
+  }
+
+  function handleFinishJobPollFinished(localJobId, j, hint) {
+    if (j.status === 'completed') {
+      if (hint) hint.textContent = 'Auftrag abgeschlossen.';
+      if (typeof loadJobsAndAbsences === 'function') loadJobsAndAbsences();
+      if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
+      setTimeout(function () {
+        var x = document.getElementById('finishJobHint');
+        if (x) x.textContent = '';
+      }, 4000);
+    } else {
+      var failMsg = j.error || j.message;
+      if (j.status === 'interrupted') {
+        failMsg =
+          failMsg ||
+          'Abschluss unterbrochen. Bitte Verbindung prüfen und erneut „Erledigt“ wählen.';
+      }
+      if (hint) hint.textContent = failMsg || 'Abschluss fehlgeschlagen.';
+      if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
+    }
+  }
+
+  function restoreFinishJobStreamFromBackgroundJobs() {
+    if (finishJobStreamBusy || restoreFinishJobBgFetchInFlight) return;
+    restoreFinishJobBgFetchInFlight = true;
+    fetch(API_BASE + '/api/background_jobs?active=1&limit=80')
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        var jobs = (data && data.jobs) || [];
+        for (var i = 0; i < jobs.length; i++) {
+          var bg = jobs[i];
+          if (!bg || bg.type !== 'dienstreise_finish' || bg.status !== 'running') continue;
+          var p = bg.payload || {};
+          var localId = parseInt(p.job_id, 10);
+          if (!localId) continue;
+          var hint = document.getElementById('finishJobHint');
+          finishJobStreamBusy = true;
+          finishJobActiveLocalJobId = localId;
+          finishJobLastProgressRow = {
+            progress_phase: bg.progress_phase,
+            progress_current: bg.progress_current,
+            progress_total: bg.progress_total,
+            message: bg.message,
+          };
+          applyFinishJobStreamBusyUi();
+          if (finishJobLastProgressRow) updateFinishJobButtonProgress(finishJobLastProgressRow);
+          finishJobUiTimeoutId = setTimeout(function () {
+            finishJobUiTimeoutId = null;
+            finishFinishJobStreamUi();
+            if (hint) hint.textContent = 'Zeitüberschreitung beim Abschluss.';
+          }, 25 * 60 * 1000);
+          pollBackgroundJobUntilTerminal(
+            bg.id,
+            function (j) {
+              finishJobLastProgressRow = j;
+              updateFinishJobButtonProgress(j);
+            },
+            { maxMs: 25 * 60 * 1000 },
+          )
+            .then(function (j) {
+              if (finishJobUiTimeoutId) {
+                clearTimeout(finishJobUiTimeoutId);
+                finishJobUiTimeoutId = null;
+              }
+              finishFinishJobStreamUi();
+              handleFinishJobPollFinished(localId, j, hint);
+            })
+            .catch(function (err) {
+              if (finishJobUiTimeoutId) {
+                clearTimeout(finishJobUiTimeoutId);
+                finishJobUiTimeoutId = null;
+              }
+              finishFinishJobStreamUi();
+              if (hint) hint.textContent = err && err.message ? err.message : 'Abschluss fehlgeschlagen.';
+            });
+          break;
+        }
+      })
+      .catch(function () {})
+      .finally(function () {
+        restoreFinishJobBgFetchInFlight = false;
+      });
+  }
+
+  function applyFinishJobStreamBusyUi() {
+    var activeId = finishJobActiveLocalJobId;
+    finishJobActiveButton = null;
+    document.querySelectorAll('[data-action="finish-job"]').forEach(function (b) {
+      var row = b.closest('.job');
+      var jid = row ? parseInt(row.getAttribute('data-job-id'), 10) : NaN;
+      b.disabled = true;
+      if (activeId != null && jid === activeId) {
+        finishJobActiveButton = b;
+        b.classList.add('btn-finish-job--busy');
+        b.disabled = false;
+      }
+    });
+  }
+
+  function updateFinishJobButtonProgress(jobRow) {
+    var btn = finishJobActiveButton;
+    if (!btn) {
+      var lid = finishJobActiveLocalJobId;
+      if (lid == null) return;
+      var jobEl = document.querySelector('#dienstreiseList .job[data-job-id="' + String(lid) + '"]');
+      btn = jobEl ? jobEl.querySelector('[data-action="finish-job"]') : null;
+      finishJobActiveButton = btn;
+    }
+    if (!btn) return;
+    var lbl = btn.querySelector('.btn-finish-job-progress-text');
+    var bar = btn.querySelector('.btn-finish-job-progress');
+    if (!lbl || !bar) return;
+    var phase = (jobRow.progress_phase || '').toString();
+    var cur = jobRow.progress_current != null ? jobRow.progress_current : 0;
+    var tot = jobRow.progress_total != null ? jobRow.progress_total : 0;
+    var msg = jobRow.message ? String(jobRow.message) : '';
+
+    if (
+      phase === 'finish_sync' ||
+      phase === 'finish_cleanup' ||
+      phase === 'finish_status' ||
+      phase === 'start'
+    ) {
+      lbl.textContent = msg || 'Abschluss läuft …';
+      try {
+        bar.indeterminate = true;
+      } catch (e) { /* ignore */ }
+    } else if (phase === 'finish_verify' || phase === 'finish') {
+      lbl.textContent = msg && String(msg).trim() ? String(msg) : 'Abgleich mit Dispo …';
+      if (tot > 0) {
+        try {
+          bar.indeterminate = false;
+        } catch (e2) { /* ignore */ }
+        bar.max = tot;
+        bar.value = Math.min(cur, tot);
+      } else {
+        try {
+          bar.indeterminate = true;
+        } catch (e3) { /* ignore */ }
+      }
+    } else if (msg) {
+      lbl.textContent = msg;
+    }
+  }
+
+  function runFinishJobStream(localJobId, triggerButton) {
+    if (finishJobStreamBusy) return;
     var techIdPre = getTechId();
     if (techIdPre) {
       try {
-        var jr2 = await fetch(API_BASE + '/api/job?id=' + encodeURIComponent(jobId), { headers: { 'X-Technician-Id': String(techIdPre) } });
-        var jd2 = await jr2.json();
-        if (jd2.job && isJobAngelegtReadOnly(jd2.job)) {
+        var snap = getDienstreiseJobSnapshotByLocalId(localJobId);
+        if (snap && isJobAngelegtReadOnly(snap)) {
           alert('Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.');
           return;
         }
       } catch (e) { /* weiter */ }
     }
     if (!confirm('Ist der Auftrag wirklich erledigt?')) return;
-    var techId = getTechId();
-    var baseUrl = getDispoBaseUrl();
-    var u = getDispoUsername();
-    var p = getDispoPassword();
-    var protectedSet = dienstreiseProtectedPathsByJob[jobId] || new Set();
+
+    finishJobStreamBusy = true;
+    finishJobActiveLocalJobId = localJobId;
+    finishJobLastProgressRow = null;
+    finishJobActiveButton = triggerButton && triggerButton.nodeType === 1 ? triggerButton : null;
+    var hint = document.getElementById('finishJobHint');
+    if (hint) hint.textContent = '';
+    applyFinishJobStreamBusyUi();
+
+    var protectedSet = dienstreiseProtectedPathsByJob[localJobId] || new Set();
     var body = {
-      job_id: jobId,
+      job_id: localJobId,
       protectedPaths: Array.from(protectedSet),
-      dispoBaseUrl: baseUrl,
+      dispoBaseUrl: getDispoBaseUrl(),
       dispoExternalUrl: getDispoExternalUrl(),
       dispoInternalUrl: getDispoInternalUrl(),
-      technicianId: techId,
-      dispoUsername: u,
-      dispoPassword: p
+      technicianId: getTechId(),
+      dispoUsername: getDispoUsername(),
+      dispoPassword: getDispoPassword(),
     };
-    try {
-      var r = await fetch(API_BASE + '/api/dienstreise/finish_and_cleanup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+
+    finishJobUiTimeoutId = setTimeout(function () {
+      finishJobUiTimeoutId = null;
+      finishFinishJobStreamUi();
+      if (hint) hint.textContent = 'Zeitüberschreitung – Abschluss antwortet nicht. Bitte erneut versuchen.';
+    }, 25 * 60 * 1000);
+
+    fetch(API_BASE + '/api/dienstreise/finish_and_cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { response: response, data: data };
+        });
+      })
+      .then(function (pack) {
+        var response = pack.response;
+        var data = pack.data;
+        if (!response.ok || !data || data.ok === false) {
+          throw new Error((data && data.error) || 'Fehler ' + response.status);
+        }
+        if (response.status !== 202) {
+          throw new Error('Unerwartete Server-Antwort (Status ' + response.status + ').');
+        }
+        var bgJobId = data && data.job_id;
+        if (!bgJobId) throw new Error('Keine job_id vom Server.');
+        return pollBackgroundJobUntilTerminal(
+          bgJobId,
+          function (j) {
+            updateFinishJobButtonProgress(j);
+          },
+          { maxMs: 25 * 60 * 1000 },
+        ).then(function (j) {
+          if (finishJobUiTimeoutId) {
+            clearTimeout(finishJobUiTimeoutId);
+            finishJobUiTimeoutId = null;
+          }
+          finishFinishJobStreamUi();
+          handleFinishJobPollFinished(localJobId, j, hint);
+        });
+      })
+      .catch(function (err) {
+        if (finishJobUiTimeoutId) {
+          clearTimeout(finishJobUiTimeoutId);
+          finishJobUiTimeoutId = null;
+        }
+        finishFinishJobStreamUi();
+        var msg = err && err.message ? err.message : 'Unbekannter Fehler';
+        if (hint) hint.textContent = msg;
+        else alert('Abschluss fehlgeschlagen: ' + msg);
       });
-      var data = await r.json().catch(function () { return {}; });
-      if (!r.ok || !data || data.ok === false) {
-        alert('Abschluss fehlgeschlagen: ' + (data && data.error ? data.error : ('Status ' + r.status)));
-        return;
-      }
-      loadJobsAndAbsences();
-      loadDienstreiseList();
-    } catch (e) {
-      alert('Abschluss fehlgeschlagen: ' + (e && e.message ? e.message : 'Unbekannter Fehler'));
-    }
+  }
+
+  function finishAndCleanup(jobId, triggerButton) {
+    runFinishJobStream(jobId, triggerButton);
   }
 
   async function loadOpenJobs() {
@@ -4903,6 +5105,7 @@
   }
 
   var backgroundDispoSyncInFlight = null;
+  var pendingBackgroundDispoSync = null;
 
   async function applySyncBadgeAfterRun(syncProblems) {
     if (syncProblems && syncProblems.length) {
@@ -5026,26 +5229,33 @@
       if (!pullData.ok) {
         if (pullData.deferred) {
           console.log('[Sync Pull] zurückgestellt:', pullData.error || 'Kopie/Push aktiv');
-          await fetch(API_BASE + '/api/background_jobs/reap', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-          }).catch(function () {});
-          await waitForActiveDienstreisePullJobs({ maxMs: 3 * 60 * 1000 });
-          pullRes = await fetch(API_BASE + '/api/sync_pull', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(
-              Object.assign({}, syncPayload, { date_from: range.date_from, date_to: range.date_to }),
-            ),
-          });
-          pullData = await pullRes.json().catch(function () {
-            return {};
-          });
-          if (!pullData.ok && !pullData.deferred) {
-            throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
+          var deferredOk = false;
+          for (var deferAttempt = 0; deferAttempt < 12 && !deferredOk; deferAttempt++) {
+            await fetch(API_BASE + '/api/background_jobs/reap', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: '{}',
+            }).catch(function () {});
+            await waitForActiveDienstreisePullJobs({ maxMs: 2 * 60 * 1000 });
+            pullRes = await fetch(API_BASE + '/api/sync_pull', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(
+                Object.assign({}, syncPayload, { date_from: range.date_from, date_to: range.date_to }),
+              ),
+            });
+            pullData = await pullRes.json().catch(function () {
+              return {};
+            });
+            if (pullData.ok) {
+              deferredOk = true;
+              break;
+            }
+            if (!pullData.deferred) {
+              throw new Error(pullData.error || 'Pull konnte nicht gestartet werden.');
+            }
           }
-          if (pullData.deferred) {
+          if (!deferredOk) {
             throw new Error(
               pullData.error ||
                 'Sync konnte nicht starten — ein anderer Kopiervorgang läuft noch. Bitte kurz warten und erneut versuchen.',
@@ -5117,11 +5327,19 @@
   }
 
   function runDispoPushPullInBackground(auth, range, syncBase, techId) {
-    if (backgroundDispoSyncInFlight) return backgroundDispoSyncInFlight;
+    if (backgroundDispoSyncInFlight) {
+      pendingBackgroundDispoSync = { auth: auth, range: range, syncBase: syncBase, techId: techId };
+      return backgroundDispoSyncInFlight;
+    }
     setConnectionBadge('online_syncing', 'Synchronisiere im Hintergrund…');
     backgroundDispoSyncInFlight = runDispoPushPull(auth, range, { connectedBaseFallback: syncBase })
       .then(function (syncProblems) {
         applySyncBadgeAfterRun(syncProblems);
+        if (!syncProblems || !syncProblems.length) {
+          bootstrapLocalData(true);
+        } else {
+          maybeRefreshLocalLists(true);
+        }
         refreshTedFoldersAfterSync();
         if (selectedJobIdOnDienstreisePage) {
           var syncSnap =
@@ -5149,6 +5367,11 @@
       })
       .finally(function () {
         backgroundDispoSyncInFlight = null;
+        if (pendingBackgroundDispoSync) {
+          var pending = pendingBackgroundDispoSync;
+          pendingBackgroundDispoSync = null;
+          runDispoPushPullInBackground(pending.auth, pending.range, pending.syncBase, pending.techId);
+        }
       });
     return backgroundDispoSyncInFlight;
   }
@@ -9064,14 +9287,14 @@
     fetch(API_BASE + '/api/dienstreise/copy_project_stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.stringify(Object.assign({
         job_id: localJobId,
         dispoBaseUrl: dispoBaseUrl,
         technicianId: technicianId,
         dispoUsername: getDispoUsername(),
         dispoPassword: getDispoPassword(),
         include_bilder: false,
-      }),
+      }, dispoBasePayloadExtra())),
     })
       .then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) {
@@ -9194,7 +9417,14 @@
               '<progress class="btn-accept-job-progress" max="100" value="0"></progress>' +
               '</span></button>'
             : '') +
-          (j.status !== 'erledigt' && String(j.status || '').toLowerCase() !== 'abgerechnet' && !isJobAngelegtReadOnly(j) ? '<button class="btn btn-primary" data-status="erledigt">Erledigt</button>' : '') +
+          (j.status !== 'erledigt' && String(j.status || '').toLowerCase() !== 'abgerechnet' && !isJobAngelegtReadOnly(j)
+            ? '<button type="button" class="btn btn-finish-job" data-action="finish-job">' +
+              '<span class="btn-finish-job-label">Erledigt</span>' +
+              '<span class="btn-finish-job-progress-wrap">' +
+              '<span class="btn-finish-job-progress-text"></span>' +
+              '<progress class="btn-finish-job-progress" max="100" value="0"></progress>' +
+              '</span></button>'
+            : '') +
           '</div></div>';
       }).join('');
       listEl.innerHTML = html;
@@ -9208,17 +9438,21 @@
           runAcceptJobStream(jobId, btn);
         });
       });
+      listEl.querySelectorAll('.job-actions [data-action="finish-job"]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var jobId = parseInt(btn.closest('.job').getAttribute('data-job-id'), 10);
+          if (!jobId) return;
+          finishAndCleanup(jobId, btn);
+        });
+      });
       listEl.querySelectorAll('.job-actions [data-status]').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
           e.stopPropagation();
           var status = btn.getAttribute('data-status');
           var jobId = parseInt(btn.closest('.job').getAttribute('data-job-id'), 10);
-          if (!jobId) return;
-          if (status === 'erledigt') {
-            finishAndCleanup(jobId);
-          } else {
-            updateJobStatus(jobId, status);
-          }
+          if (!jobId || status === 'erledigt') return;
+          updateJobStatus(jobId, status);
         });
       });
       listEl.querySelectorAll('.job').forEach(function (el) {
@@ -9239,7 +9473,14 @@
           updateAcceptJobButtonProgress(acceptJobLastProgressRow);
         }
       }
+      if (finishJobStreamBusy && finishJobActiveLocalJobId != null) {
+        applyFinishJobStreamBusyUi();
+        if (finishJobLastProgressRow) {
+          updateFinishJobButtonProgress(finishJobLastProgressRow);
+        }
+      }
       restoreAcceptJobStreamFromBackgroundJobs();
+      restoreFinishJobStreamFromBackgroundJobs();
     }).catch(function () {
       var listEl = document.getElementById('dienstreiseList');
       if (listEl) listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
@@ -9457,12 +9698,12 @@
         const liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
-          body: JSON.stringify({
+          body: JSON.stringify(Object.assign({
             baseUrl: baseUrl,
             jobId: jobId,
             serverUsername: getDispoUsername(),
             serverPassword: getDispoPassword()
-          })
+          }, dispoBasePayloadExtra()))
         });
         const liveData = await liveResp.json().catch(function () { return {}; });
         if (liveResp.ok && liveData && liveData.ok && liveData.job) {

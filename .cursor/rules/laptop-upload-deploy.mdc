@@ -1,0 +1,24 @@
+---
+description: Laptop-Installer auf Dispo hochladen (Build, publish-laptop-release.ps1). Ergänzt release-and-push.mdc.
+globs: build.ps1,electron/build.ps1,electron/version.json,electron/dist-build/**
+alwaysApply: false
+---
+
+# Laptop: Upload und Deploy (Kurz)
+
+Vollständige Anleitung: **`Kukla_Monteur_Plattform/.cursor/rules/laptop-upload-deploy.mdc`**
+
+## Schnellablauf
+
+1. **Git-Release** (optional aber üblich): `.\release.ps1 --bump` in diesem Repo → commit + push + Tag; danach Parent-Submodule-Zeiger.
+2. **Build + Upload + Activate** vom Plattform-Root:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish-laptop-release.ps1
+   ```
+3. Config: `%USERPROFILE%\.kukla\laptop-publish.json` (Vorlage `scripts\laptop-publish.example.json`).
+
+## Wichtig
+
+- Build-Ausgabe: `electron/dist-build/` (nicht `dist/`).
+- Git-Release allein reicht **nicht** für installierte Monteure – Upload über Dispo Laptop-Releases ist Pflicht für Auto-Update.
+- Upload-Admin-Zugangsdaten **nicht** ins Git.

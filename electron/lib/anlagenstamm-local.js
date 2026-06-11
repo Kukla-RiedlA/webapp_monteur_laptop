@@ -2,7 +2,49 @@
 
 const path = require('path');
 const fs = require('fs');
-const { buildDispoBaseCandidates, tryDispoBasesInOrder } = require('./dispo-base-fallback');
+const {
+  buildDispoBaseCandidates,
+  tryDispoBasesInOrder,
+  normalizeDispoBase,
+  isFetchNetworkError,
+} = require('./dispo-base-fallback');
+
+const DISPO_EXPORT_CHUNK_TIMEOUT_MS = 90 * 1000;
+
+/** Bekannte Dispo-Basis zuerst (nach resolveDispoWorkingBase), dann Fallback-Kandidaten. */
+function buildAnlagenstammSyncBases(payload) {
+  const resolved = normalizeDispoBase(payload && payload.baseUrl);
+  const rest = buildDispoBaseCandidates({
+    baseUrl: payload && payload.baseUrl,
+    externalUrl: payload && payload.externalUrl,
+    internalUrl: payload && payload.internalUrl,
+  });
+  if (!resolved) return rest;
+  const out = [resolved];
+  for (const u of rest) {
+    if (u !== resolved) out.push(u);
+  }
+  return out;
+}
+
+function isRetryableExportChunkFailure(data, err) {
+  if (err) return isFetchNetworkError(err);
+  if (!data || data.ok !== false) return false;
+  const status = Number(data._httpStatus) || 0;
+  if (status === 401 || status === 403) return false;
+  if (status >= 500 || status === 408 || status === 429 || status === 0) return true;
+  const msg = String(data.error || '').toLowerCase();
+  return (
+    msg.includes('fetch failed') ||
+    msg.includes('timeout') ||
+    msg.includes('network') ||
+    msg.includes('econnrefused') ||
+    msg.includes('etimedout') ||
+    msg.includes('enotfound') ||
+    msg.includes('certificate') ||
+    msg.includes('tls')
+  );
+}
 const { compareParameterEntryLists } = require('./anlagenstamm-parameter-trend');
 
 function authHeaderFromCredentials(username, password) {
@@ -524,30 +566,53 @@ function saveLocal(db, payload) {
 async function fetchExportChunk(base, technicianId, authHeader, page, pageSize) {
   const relativePhp = '/dispo_api/api/anlagenstamm_monteur_export_chunk.php';
   const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: Object.assign(
-      { 'Content-Type': 'application/json' },
-      dispoMonteurFetchHeaders(technicianId, authHeader),
-    ),
-    body: JSON.stringify({ page, page_size: pageSize }),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const err = (data && data.error) || r.statusText || 'HTTP ' + r.status;
-    return { ok: false, error: err, _httpStatus: r.status };
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), DISPO_EXPORT_CHUNK_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: Object.assign(
+        { 'Content-Type': 'application/json' },
+        dispoMonteurFetchHeaders(technicianId, authHeader),
+      ),
+      body: JSON.stringify({ page, page_size: pageSize }),
+      signal: ac.signal,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const err = (data && data.error) || r.statusText || 'HTTP ' + r.status;
+      return { ok: false, error: err, _httpStatus: r.status };
+    }
+    return Object.assign({}, data, { ok: true, _used_base_url: base });
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      return {
+        ok: false,
+        error: 'Timeout nach ' + Math.round(DISPO_EXPORT_CHUNK_TIMEOUT_MS / 1000) + ' s (Anlagenstamm-Export)',
+        _httpStatus: 0,
+      };
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
   }
-  return Object.assign({}, data, { ok: true, _used_base_url: base });
 }
 
-async function syncAnlagenstammFromDispo(db, payload, onProgress) {
+async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
+  options = options || {};
+  const dbLock = options.dbLock;
+  const saveFn = options.save;
+
+  function withDbLock(fn) {
+    if (dbLock && typeof dbLock.runWithDbLock === 'function') {
+      return dbLock.runWithDbLock(fn);
+    }
+    return Promise.resolve(fn());
+  }
+
   ensureAnlagenstammLocalSchema(db);
   const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
-  const bases = buildDispoBaseCandidates({
-    baseUrl: payload.baseUrl,
-    externalUrl: payload.externalUrl,
-    internalUrl: payload.internalUrl,
-  });
+  const bases = buildAnlagenstammSyncBases(payload);
   if (!technicianId || !bases.length) {
     return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
   }
@@ -560,25 +625,44 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress) {
   const runOnBase = async (base) => {
     page = 1;
     do {
-      const data = await fetchExportChunk(base, technicianId, auth, page, pageSize);
-      if (!data.ok) return data;
+      let data;
+      try {
+        data = await fetchExportChunk(base, technicianId, auth, page, pageSize);
+      } catch (err) {
+        if (isRetryableExportChunkFailure(null, err)) throw err;
+        return { ok: false, error: err && err.message ? err.message : String(err) };
+      }
+      if (!data.ok) {
+        if (isRetryableExportChunkFailure(data)) {
+          throw Object.assign(new Error(data.error || 'Anlagenstamm-Export fehlgeschlagen'), {
+            _httpStatus: data._httpStatus,
+          });
+        }
+        return data;
+      }
       totalPages = data.total_pages != null ? Number(data.total_pages) : 1;
       totalCount = data.total_count != null ? Number(data.total_count) : 0;
       const rows = Array.isArray(data.rows) ? data.rows : [];
-      if (rows.length) upsertAnlagenstammRows(db, rows);
+      await withDbLock(async () => {
+        if (rows.length) upsertAnlagenstammRows(db, rows);
+        db.prepare(
+          `INSERT INTO anlagenstamm_sync_state (id, last_full_sync_at, last_page, total_count, sync_error)
+           VALUES (1, datetime('now'), ?, ?, NULL)
+           ON CONFLICT(id) DO UPDATE SET last_page = excluded.last_page, total_count = excluded.total_count, sync_error = NULL`,
+        ).run(page, totalCount);
+        if (typeof saveFn === 'function') saveFn();
+      });
       if (onProgress) onProgress({ page, totalPages, totalCount });
+      page += 1;
+    } while (page <= totalPages);
+    await withDbLock(async () => {
       db.prepare(
         `INSERT INTO anlagenstamm_sync_state (id, last_full_sync_at, last_page, total_count, sync_error)
          VALUES (1, datetime('now'), ?, ?, NULL)
-         ON CONFLICT(id) DO UPDATE SET last_page = excluded.last_page, total_count = excluded.total_count, sync_error = NULL`,
-      ).run(page, totalCount);
-      page += 1;
-    } while (page <= totalPages);
-    db.prepare(
-      `INSERT INTO anlagenstamm_sync_state (id, last_full_sync_at, last_page, total_count, sync_error)
-       VALUES (1, datetime('now'), ?, ?, NULL)
-       ON CONFLICT(id) DO UPDATE SET last_full_sync_at = datetime('now'), last_page = excluded.last_page, total_count = excluded.total_count`,
-    ).run(totalPages, totalCount);
+         ON CONFLICT(id) DO UPDATE SET last_full_sync_at = datetime('now'), last_page = excluded.last_page, total_count = excluded.total_count`,
+      ).run(totalPages, totalCount);
+      if (typeof saveFn === 'function') saveFn();
+    });
     return { ok: true, total_count: totalCount, row_count: rowCount(db) };
   };
 
@@ -595,10 +679,13 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress) {
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);
     try {
-      db.prepare(
-        `INSERT INTO anlagenstamm_sync_state (id, sync_error) VALUES (1, ?)
-         ON CONFLICT(id) DO UPDATE SET sync_error = excluded.sync_error`,
-      ).run(msg);
+      await withDbLock(async () => {
+        db.prepare(
+          `INSERT INTO anlagenstamm_sync_state (id, sync_error) VALUES (1, ?)
+           ON CONFLICT(id) DO UPDATE SET sync_error = excluded.sync_error`,
+        ).run(msg);
+        if (typeof saveFn === 'function') saveFn();
+      });
     } catch (_) {}
     return { ok: false, error: msg };
   }

@@ -11,6 +11,7 @@ electron/db/anlagenstamm_open/
 electron/db/abrechnung_cache/
 electron/db/.dispo-insecure-tls
 electron/dist/
+electron/dist-build/
 electron/test-output/
 tools/MkcertCaInstaller/bin/
 tools/MkcertCaInstaller/obj/

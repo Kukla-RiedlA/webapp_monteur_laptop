@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const ALLOWED_TYPES = new Set([
   'dienstreise_pull',
   'dienstreise_push',
+  'dienstreise_finish',
   'sync_pull',
   'sync_push',
   'abrechnung_refresh',
@@ -14,6 +15,7 @@ const ALLOWED_TYPES = new Set([
 /** Niedrigere Zahl = früher in der Queue (vor sync_pull). */
 const JOB_TYPE_PRIORITY = {
   dienstreise_pull: 10,
+  dienstreise_finish: 15,
   dienstreise_push: 20,
   sync_push: 30,
   sync_pull: 40,
@@ -21,7 +23,7 @@ const JOB_TYPE_PRIORITY = {
   anlagenstamm_db_sync: 60,
 };
 
-const HIGH_PRIORITY_TYPES = new Set(['dienstreise_pull', 'dienstreise_push', 'sync_push']);
+const HIGH_PRIORITY_TYPES = new Set(['dienstreise_pull', 'dienstreise_push', 'dienstreise_finish', 'sync_push']);
 
 /** running ohne Fortschritt → abbrechen (Refresh-Timeout Server ist 60 s). */
 const STALE_RUNNING_MS = 8 * 60 * 1000;
@@ -35,6 +37,7 @@ const MAX_RECOVER_ATTEMPTS = 2;
 const JOB_TIMEOUT_MS = {
   dienstreise_pull: 90 * 60 * 1000,
   dienstreise_push: 25 * 60 * 1000,
+  dienstreise_finish: 25 * 60 * 1000,
   sync_push: 20 * 60 * 1000,
   sync_pull: 35 * 60 * 1000,
   abrechnung_refresh: 15 * 60 * 1000,
@@ -270,6 +273,7 @@ function createBackgroundJobService(db, save, hooks) {
          ORDER BY
            CASE type
              WHEN 'dienstreise_pull' THEN 10
+             WHEN 'dienstreise_finish' THEN 15
              WHEN 'dienstreise_push' THEN 20
              WHEN 'sync_push' THEN 30
              WHEN 'sync_pull' THEN 40
