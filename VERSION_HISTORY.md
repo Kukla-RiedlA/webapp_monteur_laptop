@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.004.042
+- **Release-Nummer:** Korrektur nach Server-Drift (Uploads 041 ohne Git-Tag); Auto-Update wieder linear über 041.
+- **Inhalt:** identisch zu V 1.004.040 (better-sqlite3, Anlagenstamm-Sync-Fix).
+
 ## V 1.004.040
 - **SQLite:** Umstellung von sql.js auf **better-sqlite3** (WAL, `db.js` + `db-compat.js`).
 - **Anlagenstamm-Sync:** Leere dirty-Stubs aus `jobs.fabrikationsnummern` blockieren keine Server-Daten mehr; Lookup/Anzeige nutzt lokalen Cache zuerst.
