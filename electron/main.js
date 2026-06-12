@@ -15,6 +15,7 @@ const {
   checkForUpdatesNow,
   startDownload,
   installUpdateNow,
+  trustCertificateForUrl,
 } = require('./lib/laptop-updater');
 
 let mainWindow;
@@ -97,11 +98,12 @@ function scheduleSelfUninstallAndDataRemoval() {
 function scheduleUpdateCheck() {
   if (updateCheckScheduled || !app.isPackaged) return;
   updateCheckScheduled = true;
+  // Erst nach UI-Zeit (syncUpdateFeedToMain) — sonst Feed/TLS noch nicht gesetzt.
   setTimeout(() => {
     checkForUpdatesNow({ source: 'startup' }).catch((e) => {
       console.warn('[laptop-updater] check:', e && e.message ? e.message : e);
     });
-  }, 4000);
+  }, 12000);
 }
 
 function createWindow() {
@@ -365,6 +367,13 @@ ipcMain.handle('laptop:update-install-now', async () => {
 });
 
 ipcMain.handle('app:self-uninstall-remove-data', async () => scheduleSelfUninstallAndDataRemoval());
+
+app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
+  if (trustCertificateForUrl(url)) {
+    event.preventDefault();
+    callback(true);
+  }
+});
 
 app.whenReady().then(() => {
   initLaptopUpdater({ getMainWindow: () => mainWindow });

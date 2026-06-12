@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.004.043
+- **Auto-Update/TLS:** `ERR_CERT_AUTHORITY_INVALID` beim Update-Check behoben — selbstsigniertes Dispo-Zertifikat (`fsm.kukla.co.at`, LAN) wird für `electron-updater`/`electron.net` zuverlässig akzeptiert; `app_config` unter `userData/db` vereinheitlicht.
+
 ## V 1.004.042
 - **Release-Nummer:** Korrektur nach Server-Drift (Uploads 041 ohne Git-Tag); Auto-Update wieder linear über 041.
 - **Inhalt:** identisch zu V 1.004.040 (better-sqlite3, Anlagenstamm-Sync-Fix).

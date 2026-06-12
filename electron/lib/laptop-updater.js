@@ -37,12 +37,31 @@ function readJsonFileSafe(filePath) {
   }
 }
 
+/** Gleicher Speicherort wie server.js (userData/db) + Legacy userData/app_config.json. */
+function userAppConfigPaths() {
+  const root = app.getPath('userData');
+  return [path.join(root, 'db', 'app_config.json'), path.join(root, 'app_config.json')];
+}
+
+function readMergedUserAppConfig() {
+  const merged = {};
+  for (const p of userAppConfigPaths()) {
+    const part = readJsonFileSafe(p);
+    if (part) Object.assign(merged, part);
+  }
+  return merged;
+}
+
 function writeUserAppConfig(patch) {
   try {
-    const userConfigPath = path.join(app.getPath('userData'), 'app_config.json');
-    const cur = readJsonFileSafe(userConfigPath) || {};
-    Object.assign(cur, patch);
-    fs.writeFileSync(userConfigPath, JSON.stringify(cur, null, 2), 'utf8');
+    const paths = userAppConfigPaths();
+    for (const userConfigPath of paths) {
+      const dir = path.dirname(userConfigPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const cur = readJsonFileSafe(userConfigPath) || {};
+      Object.assign(cur, patch);
+      fs.writeFileSync(userConfigPath, JSON.stringify(cur, null, 2), 'utf8');
+    }
   } catch (e) {
     console.warn('[laptop-updater] app_config write:', e && e.message ? e.message : e);
   }
@@ -99,16 +118,26 @@ function installCertificateVerifyProc() {
   if (certificateVerifyProcInstalled || !session || !session.defaultSession) return;
   certificateVerifyProcInstalled = true;
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    const host = (request && request.hostname) || '';
+    if (shouldTrustCertificate(host)) {
+      callback(0);
+      return;
+    }
     if (!allowInsecureTls) {
       callback(-3);
       return;
     }
-    if (shouldTrustCertificate(request.hostname)) {
-      callback(0);
-      return;
-    }
     callback(-3);
   });
+}
+
+/** Selbstsigniertes Dispo-HTTPS (Kukla-Standard) — vor jedem Update-Check. */
+function ensureUpdaterTlsReady(feedUrl) {
+  allowInsecureTls = true;
+  if (feedUrl) rememberInsecureHostsFromUrl(feedUrl);
+  if (feedBaseUrl) rememberInsecureHostsFromUrl(feedBaseUrl);
+  applyInsecureTlsToProcess(true);
+  installCertificateVerifyProc();
 }
 
 function applyInsecureTlsToProcess(on) {
@@ -157,18 +186,17 @@ function sendStatus(state, extra) {
 }
 
 function buildFeedUrl() {
-  if (feedBaseUrl) return feedBaseUrl;
-  const userCfg = readJsonFileSafe(path.join(app.getPath('userData'), 'app_config.json'));
-  if (userCfg && userCfg.laptopUpdateAllowInsecureTls === false) {
-    allowInsecureTls = false;
-  } else if (userCfg && userCfg.laptopUpdateAllowInsecureTls === true) {
-    allowInsecureTls = true;
+  if (feedBaseUrl) {
+    ensureUpdaterTlsReady(feedBaseUrl);
+    return feedBaseUrl;
   }
+  const userCfg = readMergedUserAppConfig();
   const fromCfg =
     userCfg && typeof userCfg.laptopUpdateFeedBase === 'string' ? userCfg.laptopUpdateFeedBase.trim() : '';
   if (fromCfg) {
-    rememberInsecureHostsFromUrl(fromCfg);
-    return fromCfg.endsWith('/') ? fromCfg : fromCfg + '/';
+    const feed = fromCfg.endsWith('/') ? fromCfg : fromCfg + '/';
+    ensureUpdaterTlsReady(feed);
+    return feed;
   }
   return '';
 }
@@ -177,7 +205,7 @@ function applyFeedUrl(url) {
   const u = (url || '').trim();
   if (!u) return false;
   feedBaseUrl = u.endsWith('/') ? u : u + '/';
-  applyInsecureTlsToProcess(allowInsecureTls);
+  ensureUpdaterTlsReady(feedBaseUrl);
   autoUpdater.setFeedURL({
     provider: 'generic',
     url: feedBaseUrl,
@@ -265,8 +293,7 @@ function initLaptopUpdater(opts) {
   if (!app.isPackaged) return;
 
   mainWindowGetter = opts.getMainWindow || (() => null);
-  installCertificateVerifyProc();
-  applyInsecureTlsToProcess(allowInsecureTls);
+  ensureUpdaterTlsReady();
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -337,7 +364,6 @@ function scheduleCheckAfterFeedSet() {
 
 function setUpdateFeedFromDispoBase(dispoBase, insecureTls) {
   if (!app.isPackaged) return { ok: false, skipped: true };
-  allowInsecureTls = !!insecureTls;
   const feed = normalizeFeedBase(dispoBase);
   if (!feed) return { ok: false, error: 'empty_base' };
   rememberInsecureHostsFromUrl(feed);
@@ -345,10 +371,11 @@ function setUpdateFeedFromDispoBase(dispoBase, insecureTls) {
   writeUserAppConfig({
     laptopUpdateFeedBase: feed,
     laptopUpdateCheckUrl: '',
-    laptopUpdateAllowInsecureTls: !!insecureTls,
+    laptopUpdateAllowInsecureTls: true,
+    acceptSelfSignedDispoTls: true,
   });
   feedBaseUrl = feed;
-  applyInsecureTlsToProcess(allowInsecureTls);
+  ensureUpdaterTlsReady(feed);
   applyFeedUrl(feed);
   scheduleCheckAfterFeedSet();
   schedulePeriodicUpdateChecks();
@@ -385,6 +412,15 @@ async function checkForUpdatesNow(opts) {
   }
 }
 
+function trustCertificateForUrl(url) {
+  try {
+    const u = new URL(url.includes('://') ? url : 'https://' + url.replace(/^\/+/, ''));
+    return shouldTrustCertificate(u.hostname);
+  } catch (_) {
+    return false;
+  }
+}
+
 module.exports = {
   initLaptopUpdater,
   setUpdateFeedFromDispoBase,
@@ -394,4 +430,5 @@ module.exports = {
     autoUpdater.quitAndInstall(false, true);
   },
   readAppVersionLabel,
+  trustCertificateForUrl,
 };
