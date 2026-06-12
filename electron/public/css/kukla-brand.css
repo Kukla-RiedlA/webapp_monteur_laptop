@@ -1,0 +1,19 @@
+/**
+ * KUKLA Corporate Styles – Parität zu dispo/assets/css/kukla-brand.css
+ */
+@import url("https://fonts.googleapis.com/css2?family=Kanit:wght@200;300;400;500;600;700&display=swap");
+
+:root {
+  --kukla-primary: #0e7b5a;
+  --kukla-primary-hover: #0c6b4f;
+  --kukla-secondary: #000000;
+  --kukla-white: #ffffff;
+  --kukla-gray: #e3e3e3;
+  --kukla-gray-soft: #f5f5f5;
+  --kukla-accent-yellow: #fac82d;
+  --kukla-body-text: #1a1a1a;
+  --kukla-muted: #5c5c5c;
+  --kukla-font: "Kanit", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --kukla-radius: 0;
+  --kukla-focus-ring: 0 0 0 2px rgba(14, 123, 90, 0.35);
+}

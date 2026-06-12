@@ -472,6 +472,49 @@
     return Math.min(1440, v);
   }
 
+  async function loadSettingsSyncStatus() {
+    var summaryEl = document.getElementById('settings-sync-summary');
+    var dbEl = document.getElementById('settings-db-size');
+    if (!summaryEl && !dbEl) return;
+    if (summaryEl) summaryEl.textContent = 'Wird geladen…';
+    try {
+      var r = await fetch(API_BASE + '/api/sync_status');
+      var data = await r.json().catch(function () {
+        return {};
+      });
+      if (!data.ok) {
+        if (summaryEl) summaryEl.textContent = 'Sync-Status nicht verfügbar.';
+        return;
+      }
+      if (summaryEl) {
+        summaryEl.textContent =
+          'Uploads ausstehend: ' +
+          (data.pending_uploads != null ? data.pending_uploads : 0) +
+          ', Events: ' +
+          (data.pending_events != null ? data.pending_events : data.pending_changes || 0) +
+          ', Kalender: ' +
+          (data.calendar_cache_synced_at || '—') +
+          ', Jobs: ' +
+          (data.last_jobs_sync || '—');
+      }
+      if (dbEl) {
+        var size = data.db_size_human || '—';
+        var files = data.dienstreise_files_configured
+          ? data.dienstreise_files_cache_human || '—'
+          : '—';
+        dbEl.textContent =
+          'Lokale Datenbank: ' +
+          size +
+          ' · Projektordner (Dienstreise): ' +
+          files +
+          ', lokal';
+        dbEl.title = data.db_path ? 'Pfad: ' + data.db_path : '';
+      }
+    } catch (e) {
+      if (summaryEl) summaryEl.textContent = 'Sync-Status konnte nicht geladen werden.';
+    }
+  }
+
   function loadSettingsFromStorage() {
     try {
       const url = localStorage.getItem(SETTINGS_KEYS.serverUrl);
@@ -5675,9 +5718,22 @@
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
   }).catch(function () {});
+  if (window.monteurWebEmbed && typeof monteurWebEmbed.init === 'function') {
+    monteurWebEmbed.init().catch(function () {});
+  }
+  window.addEventListener('message', function (ev) {
+    var d = ev.data;
+    if (!d || d.type !== 'dispo-desktop-open-pdf' || !d.url) return;
+    if (window.monteurApp && typeof monteurApp.openExternal === 'function') {
+      monteurApp.openExternal(d.url);
+    }
+  });
   bootstrapLocalData(false)
     .then(function () {
       return applyFixedDispoTlsOnServer();
+    })
+    .then(function () {
+      return ensureDispoWebSession();
     })
     .then(function () {
       syncUpdateFeedToMain();
@@ -5992,6 +6048,7 @@
       .then(function () {
         startSyncInterval();
         hint.textContent = 'Fertig.';
+        loadSettingsSyncStatus().catch(function () {});
         clearTimeout(hint._syncHide);
         hint._syncHide = setTimeout(function () {
           hint.textContent = '';
@@ -6730,6 +6787,69 @@
     var anchorBottom = thead ? thead.getBoundingClientRect().bottom : resEl.getBoundingClientRect().top;
     var trTop = tr.getBoundingClientRect().top;
     resEl.scrollTop += trTop - anchorBottom;
+  }
+
+  function updateAnlagenstammModeBadge(useWeb) {
+    var badge = document.getElementById('anlagenstammModeBadge');
+    if (!badge) return;
+    badge.hidden = false;
+    if (useWeb) {
+      badge.textContent = 'Dispo-Web';
+      badge.classList.remove('offline');
+      badge.title = 'Anlagenstamm wie dispo/anlagenstamm.php (online)';
+    } else {
+      badge.textContent = 'Offline';
+      badge.classList.add('offline');
+      badge.title = 'Lokale Cache-Liste im Layout von anlagenstamm.php';
+    }
+  }
+
+  async function ensureDispoWebSession() {
+    var base = getDispoBaseUrl();
+    if (!base || !getDispoUsername() || !getServerPassword()) return false;
+    try {
+      var r = await fetch(API_BASE + '/api/dispo/ensure-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: base,
+          externalUrl: getDispoExternalUrl(),
+          internalUrl: getDispoInternalUrl(),
+          serverUsername: getDispoUsername(),
+          serverPassword: getServerPassword(),
+        }),
+      });
+      var d = await r.json().catch(function () {
+        return {};
+      });
+      return !!d.ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function loadAnlagenstammViewDesktopStyle() {
+    var legacy = document.getElementById('anlagenstamm-legacy-wrap');
+    var host = document.getElementById('anlagenstamm-host');
+    var web = window.monteurWebEmbed;
+    if (web && (await web.shouldUseWeb('anlagenstamm'))) {
+      var sessionOk = await ensureDispoWebSession();
+      if (sessionOk) {
+        var shown = await web.show('anlagenstamm');
+        if (shown) {
+          updateAnlagenstammModeBadge(true);
+          if (legacy) legacy.hidden = true;
+          return;
+        }
+      }
+    }
+    if (web) web.showNativeContent('anlagenstamm');
+    if (legacy) legacy.hidden = true;
+    if (host && window.monteurAnlagenstammOffline) {
+      host.hidden = false;
+      await window.monteurAnlagenstammOffline.load(host);
+    }
+    updateAnlagenstammModeBadge(false);
   }
 
   async function searchAnlagenstammList() {
@@ -8197,6 +8317,7 @@
       viewEinstellungen.classList.add('active');
       updateTechnicianName();
       refreshMonteurProfileHintForSettings();
+      loadSettingsSyncStatus().catch(function () {});
       return;
     }
     if (name === 'dienstreise') {
@@ -8261,6 +8382,9 @@
     if (name === 'anlagenstamm') {
       viewStart.classList.add('hidden');
       if (viewAnlagenstamm) viewAnlagenstamm.classList.add('active');
+      loadAnlagenstammViewDesktopStyle().catch(function (e) {
+        console.warn('[anlagenstamm]', e && e.message ? e.message : e);
+      });
       return;
     }
     if (name === 'start') {

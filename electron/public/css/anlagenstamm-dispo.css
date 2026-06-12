@@ -1,0 +1,272 @@
+/**
+ * Anlagenstamm — Look & Feel wie dispo/anlagenstamm.php (Offline-Host + Shell).
+ */
+
+#viewAnlagenstamm.active {
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  max-width: none;
+  height: calc(100vh - 108px);
+  background: #fff;
+  color: var(--kukla-body-text, #1a1a1a);
+  position: relative;
+  box-sizing: border-box;
+}
+
+#viewAnlagenstamm.view-web-active {
+  height: calc(100vh - 108px);
+}
+
+#viewAnlagenstamm #anlagenstammModeBadge {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 5;
+  font-size: 0.72rem;
+  margin: 0;
+}
+
+#viewAnlagenstamm .web-embed-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+#viewAnlagenstamm .web-embed-frame {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+
+#anlagenstamm-host {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: none;
+  overflow: auto;
+  font-family: var(--kukla-font, "Kanit", system-ui, sans-serif);
+  color: var(--kukla-body-text, #1a1a1a);
+  background: #fff;
+  box-sizing: border-box;
+}
+
+#anlagenstamm-host .page {
+  padding: 8px 12px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+#anlagenstamm-host .muted {
+  color: #666;
+  font-size: 12px;
+}
+
+#anlagenstamm-host .anlagen-page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 8px;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+#anlagenstamm-host .anlagen-page-head-left {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+#anlagenstamm-host .anlagen-page-head-left h2 {
+  margin: 0 0 8px 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--kukla-primary, #0e7b5a);
+}
+
+#anlagenstamm-host .anlagen-column-panel {
+  flex: 0 1 440px;
+  max-width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #f9fafb;
+  font-size: 11px;
+  box-sizing: border-box;
+}
+
+#anlagenstamm-host .anlagen-column-panel-title {
+  font-weight: 600;
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  color: #333;
+}
+
+#anlagenstamm-host .anlagen-column-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+}
+
+#anlagenstamm-host .anlagen-col-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+#anlagenstamm-host .anlagen-col-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+#anlagenstamm-host .anlagen-table-scroll {
+  overflow: auto;
+  height: calc(100vh - 300px);
+  min-height: 320px;
+  margin-top: 8px;
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  margin-bottom: 16px;
+}
+
+#anlagenstamm-host .anlagen-table-scroll table {
+  min-width: 100%;
+  font-size: 12px;
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  table-layout: auto;
+}
+
+#anlagenstamm-host .anlagen-table-scroll th,
+#anlagenstamm-host .anlagen-table-scroll td {
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: left;
+  border-bottom: 1px solid #ddd;
+}
+
+#anlagenstamm-host .anlagen-table-scroll thead tr:first-child th {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: #f0f0f0;
+  box-shadow: 0 1px 0 #ddd;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 4px 6px;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+
+#anlagenstamm-host .anlagen-table-scroll thead tr.filter-row th {
+  position: sticky;
+  top: 26px;
+  z-index: 99;
+  background: #f0f0f0;
+  box-shadow: 0 1px 0 #ddd;
+}
+
+#anlagenstamm-host .anlagen-table-scroll thead tr:first-child th .headcell-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#anlagenstamm-host .filter-row th {
+  padding: 4px 6px;
+  vertical-align: top;
+}
+
+#anlagenstamm-host .filter-row input {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding: 4px 6px;
+  font-size: 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+#anlagenstamm-host .filter-row input::placeholder {
+  color: #999;
+}
+
+#anlagenstamm-host .anlagen-table-scroll tbody tr:hover {
+  background: #f9f9f9;
+}
+
+#anlagenstamm-host .anlagen-table-scroll tbody tr.anlagenstamm-row-focus {
+  background: rgba(14, 123, 90, 0.12);
+  box-shadow: inset 3px 0 0 0 var(--kukla-primary, #0e7b5a);
+}
+
+#anlagenstamm-host .anlagen-pagination {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+#anlagenstamm-host .anlagen-pagination select {
+  width: auto;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+#anlagenstamm-host .btn {
+  box-sizing: border-box;
+  font-family: var(--kukla-font, inherit);
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid #999;
+  background: #f7f7f7;
+  color: var(--kukla-body-text, #1a1a1a);
+}
+
+#anlagenstamm-host .btn-primary {
+  background: var(--kukla-primary, #0e7b5a);
+  color: #fff;
+  border-color: var(--kukla-primary, #0e7b5a);
+}
+
+#anlagenstamm-host .btn-secondary {
+  background: #6b7280;
+  color: #fff;
+  border-color: #6b7280;
+}
+
+#anlagenstamm-host .btn:hover {
+  filter: brightness(0.95);
+}
+
+#anlagenstamm-host [data-anlagen-col].anlagen-col-hidden {
+  display: none;
+}

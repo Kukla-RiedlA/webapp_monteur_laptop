@@ -18,6 +18,8 @@
     })();
   </script>
   <link rel="stylesheet" href="ui-theme.css">
+  <link rel="stylesheet" href="css/kukla-brand.css">
+  <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
   <style>
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -349,8 +351,9 @@
     .view-archiv.active { display: block; }
     .view-abwesenheiten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-abwesenheiten.active { display: block; }
-    .view-anlagenstamm { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
-    .view-anlagenstamm.active { display: block; }
+    .view-anlagenstamm { display: none; padding: 0; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-anlagenstamm.active { display: flex; flex-direction: column; width: 100%; max-width: none; }
+    #viewAnlagenstamm .view-module-host { width: 100%; max-width: none; flex: 1; min-width: 0; }
     .view-abrechnung { display: none; flex-direction: column; padding: 0.75rem 1rem 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; flex: 1; min-height: 0; }
     .view-abrechnung.active { display: flex; }
     .abrechnung-embed-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
@@ -689,6 +692,10 @@
     .settings-row-checkbox .settings-checkbox-label { display: flex; align-items: flex-start; gap: 0.5rem; max-width: 420px; cursor: pointer; color: var(--muted); font-size: 0.9rem; }
     .settings-row-checkbox input[type="checkbox"] { width: auto; max-width: none; margin-top: 0.2rem; flex-shrink: 0; }
     .settings-hint-tls { margin: 0 0 1rem; max-width: 420px; font-size: 0.9rem; color: var(--muted); line-height: 1.4; }
+    .settings-sync-section { margin: 1rem 0; padding: 0.85rem 0 0.25rem; border-top: 1px solid var(--accent); max-width: 620px; }
+    .settings-sync-section h3 { margin: 0 0 0.65rem; font-size: 1rem; color: var(--text); }
+    .settings-sync-hint, .settings-db-size { margin: 0.35rem 0 0.75rem; font-size: 0.88rem; color: var(--muted); line-height: 1.45; word-break: break-word; }
+    .settings-db-size { margin-bottom: 1rem; }
     .settings-danger-zone { border: 1px solid rgba(179, 38, 30, 0.5); border-radius: 6px; padding: 0.85rem; margin-top: 1rem; max-width: 620px; background: rgba(179, 38, 30, 0.08); }
     .settings-danger-zone h3 { margin: 0 0 0.4rem; font-size: 1rem; color: #ffb4ab; }
     .settings-danger-zone p { margin: 0 0 0.65rem; font-size: 0.9rem; color: var(--muted); line-height: 1.4; }
@@ -1454,9 +1461,11 @@
       <div id="absencesList" style="margin-top:0.75rem"><span class="empty">Wird geladen…</span></div>
     </div>
   </main>
-  <main id="viewAnlagenstamm" class="view-anlagenstamm" aria-label="Anlagenstamm">
-    <div class="card">
-      <h2>Anlagenstamm</h2>
+  <main id="viewAnlagenstamm" class="view-anlagenstamm view-host-panel" data-view="anlagenstamm" aria-label="Anlagenstamm">
+    <span id="anlagenstammModeBadge" class="connection-badge offline-badge" style="margin:0.5rem 0.75rem;display:none" hidden title="Anlagenstamm-Modus"></span>
+    <div id="anlagenstamm-host" class="view-module-host"></div>
+    <div id="anlagenstamm-legacy-wrap" class="card anlagenstamm-legacy-wrap" hidden>
+      <h2>Anlagenstamm (Monteur-Detail)</h2>
       <p class="muted" style="font-size:0.82rem;margin:0 0 0.5rem 0">Suche nach F.N., letztem Kunden, Type oder Land (Land über Kundenstamm zur Adresse des letzten Kunden). Ergebnis anklicken für Stammdaten und Dateien.</p>
       <div class="anlagenstamm-search-filters">
         <input type="text" id="anlagenstammFilterFn" placeholder="Fabrikationsnummer" autocomplete="off">
@@ -1520,17 +1529,22 @@
           <button type="button" class="btn btn-ghost" id="btnDienstreiseBaseBrowse">Durchsuchen…</button>
         </div>
       </div>
-      <div class="settings-row">
-        <label for="syncIntervalMinutes">Aktualisierungsintervall (Minuten)</label>
-        <input type="number" id="syncIntervalMinutes" value="5" min="1" max="1440" title="Wie oft die Verbindung zum Server geprüft und Daten synchronisiert werden (Standard: 5)." />
+      <div class="settings-sync-section">
+        <h3>Synchronisation</h3>
+        <p id="settings-sync-summary" class="settings-sync-hint muted">Wird geladen…</p>
+        <p id="settings-db-size" class="settings-db-size muted">Lokale Datenbank: …</p>
+        <div class="settings-row">
+          <label for="syncIntervalMinutes">Aktualisierungsintervall (Minuten)</label>
+          <input type="number" id="syncIntervalMinutes" value="5" min="1" max="1440" title="Wie oft die Verbindung zum Server geprüft und Daten synchronisiert werden (Standard: 5)." />
+        </div>
+        <div class="settings-row">
+          <button type="button" class="btn btn-primary" id="btnSyncNow" title="Aufträge und Abwesenheiten sofort vom Dispo-Server laden">Jetzt synchronisieren</button>
+          <span id="syncNowHint" class="settings-saved-hint" aria-live="polite"></span>
+        </div>
       </div>
       <div class="settings-row">
         <button type="button" class="btn btn-ghost" id="btnCheckAppUpdate" title="Prüft, ob eine neuere Monteur-WebApp auf dem Dispo-Server bereitsteht">Auf Updates prüfen</button>
         <span id="checkAppUpdateHint" class="settings-saved-hint" aria-live="polite"></span>
-      </div>
-      <div class="settings-row">
-        <button type="button" class="btn btn-ghost" id="btnSyncNow" title="Aufträge und Abwesenheiten sofort vom Dispo-Server laden">Vom Dispo-Server holen</button>
-        <span id="syncNowHint" class="settings-saved-hint" aria-live="polite"></span>
       </div>
       <div class="settings-row">
         <button type="button" class="btn btn-primary" id="btnSaveSettings">Speichern</button>
@@ -1573,6 +1587,8 @@
   <script src="countries.js"></script>
   <script src="signature_widget.js"></script>
   <script src="rams_wizard_core.js"></script>
+  <script src="js/view-web-embed.js"></script>
+  <script src="js/anlagenstamm-offline-view.js"></script>
   <script src="app.js"></script>
   <script src="rams_wizard.js"></script>
 </body>

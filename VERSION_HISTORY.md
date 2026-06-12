@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.004.044
+- **Anlagenstamm (Dispo-Parität):** Online-Iframe `anlagenstamm.php` über `/dispo-remote`; offline Cache-Liste im Layout von `anlagenstamm.php` (Filter, Spalten-Panel, volle Breite).
+- **Dispo-Web-Proxy:** Session, HTML-Rewrite und Routen für Monteur-Desktop-Embed (`dispo-proxy`, `monteur-dispo-web-routes`).
+- **Anlagenstamm-Sync:** Vollständiger Pull über `anlagenstamm_list.php?omit_fn_filter=1` (wie Dispo Desktop).
+- **Einstellungen:** Sync-Status und DB-/Projektordner-Größe wie Dispo Desktop (`/api/sync_status` erweitert).
+
 ## V 1.004.043
 - **Auto-Update/TLS:** `ERR_CERT_AUTHORITY_INVALID` beim Update-Check behoben — selbstsigniertes Dispo-Zertifikat (`fsm.kukla.co.at`, LAN) wird für `electron-updater`/`electron.net` zuverlässig akzeptiert; `app_config` unter `userData/db` vereinheitlicht.
 

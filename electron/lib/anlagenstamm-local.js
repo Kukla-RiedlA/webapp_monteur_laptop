@@ -164,6 +164,40 @@ function rowCount(db) {
   return r && r.c != null ? Number(r.c) : 0;
 }
 
+/** Liste für GET /api/anlagenstamm/list (wie Dispo Desktop, aus lokalem Cache). */
+function listAnlagenstammForApi(db, limit, offset) {
+  ensureAnlagenstammLocalSchema(db);
+  const rows = db
+    .prepare(
+      `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+              material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
+              geliefert_ueber, projekt, bemerkungen, customer_country
+       FROM anlagenstamm_local
+       ORDER BY TRIM(fabrikationsnummer) ASC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(limit, offset);
+  return rows.map((r) => ({
+    id: r.id,
+    fabrikationsnummer: r.fabrikationsnummer,
+    type: r.type || '',
+    leistung: r.leistung || '',
+    kraftaufnehmer: r.kraftaufnehmer || '',
+    nenngeschwindigkeit: r.nenngeschwindigkeit || '',
+    material: r.material || '',
+    tacho: r.tacho || '',
+    elektronik: r.elektronik || '',
+    dms_nr: r.dms_nr || '',
+    position: r.position || '',
+    aktueller_kunde: r.aktueller_kunde || '',
+    letzter_besuch: r.letzter_besuch || '',
+    geliefert_ueber: r.geliefert_ueber || '',
+    projekt: r.projekt || '',
+    bemerkungen: r.bemerkungen || '',
+    customer_country: r.customer_country || '',
+  }));
+}
+
 /** Dispo `anlagenstamm` – Spaltenlängen (fsm_init.sql). */
 const DISPO_ANLAGENSTAMM_MAX = {
   fabrikationsnummer: 50,
@@ -588,6 +622,44 @@ function saveLocal(db, payload) {
   return { ok: true, id, fabrikationsnummer: fab, fields, _pending: true };
 }
 
+/** Vollsync wie Dispo Desktop: GET /api/anlagenstamm_list.php?omit_fn_filter=1 */
+async function fetchAnlagenstammListPage(base, authHeader, page, pageSize) {
+  const url = `${base}/api/anlagenstamm_list.php?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}&omit_fn_filter=1`;
+  const headers = {};
+  if (authHeader && authHeader.Authorization) {
+    headers.Authorization = authHeader.Authorization;
+    headers['X-Kukla-Authorization'] = authHeader.Authorization;
+  }
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), DISPO_EXPORT_CHUNK_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, { method: 'GET', headers, signal: ac.signal });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.success === false) {
+      const err = (data && data.error) || r.statusText || 'HTTP ' + r.status;
+      return { ok: false, error: err, _httpStatus: r.status };
+    }
+    return {
+      ok: true,
+      rows: Array.isArray(data.data) ? data.data : [],
+      total_count: data.total_count != null ? Number(data.total_count) : 0,
+      total_pages: data.total_pages != null ? Number(data.total_pages) : 1,
+      _used_base_url: base,
+    };
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      return {
+        ok: false,
+        error: 'Timeout nach ' + Math.round(DISPO_EXPORT_CHUNK_TIMEOUT_MS / 1000) + ' s (Anlagenstamm-Liste)',
+        _httpStatus: 0,
+      };
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchExportChunk(base, technicianId, authHeader, page, pageSize) {
   const relativePhp = '/dispo_api/api/anlagenstamm_monteur_export_chunk.php';
   const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
@@ -640,10 +712,10 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
     const removed = clearEmptyDirtyAnlagenstammStubs(db);
     if (removed > 0 && typeof saveFn === 'function') saveFn();
   });
-  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
   const bases = buildAnlagenstammSyncBases(payload);
-  if (!technicianId || !bases.length) {
-    return { ok: false, error: 'baseUrl und technician_id erforderlich.' };
+  const username = (payload.serverUsername || '').toString().trim();
+  if (!bases.length || !username) {
+    return { ok: false, error: 'baseUrl und Anmeldedaten erforderlich.' };
   }
   const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const pageSize = 500;
@@ -656,7 +728,7 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
     do {
       let data;
       try {
-        data = await fetchExportChunk(base, technicianId, auth, page, pageSize);
+        data = await fetchAnlagenstammListPage(base, auth, page, pageSize);
       } catch (err) {
         if (isRetryableExportChunkFailure(null, err)) throw err;
         return { ok: false, error: err && err.message ? err.message : String(err) };
@@ -998,6 +1070,7 @@ function buildParameterTrendChain(db, fab) {
 module.exports = {
   ensureAnlagenstammLocalSchema,
   rowCount,
+  listAnlagenstammForApi,
   upsertAnlagenstammRows,
   clearEmptyDirtyAnlagenstammStubs,
   clampForDispoAnlagenstamm,

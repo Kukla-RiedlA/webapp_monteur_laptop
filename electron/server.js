@@ -760,6 +760,8 @@ function fingerprintDispoBaseForRuntime(urlRaw) {
 
 function createApp(db) {
   const app = express();
+  const { registerMonteurDispoWebRoutes } = require('./lib/monteur-dispo-web-routes');
+  registerMonteurDispoWebRoutes(app, { db, dbDir: DB_DIR });
   app.use(express.json({ limit: '50mb' }));
 
   /** Schreibzugriff blockiert für „angelegt“ (inkl. Legacy „geplant“) und „abgerechnet“. */
@@ -7333,6 +7335,63 @@ ORDER BY
     return res.json({ ok: false, error: lastErr });
   });
 
+  function formatBytesHuman(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n < 0) return null;
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+
+  function getLocalDbStats() {
+    try {
+      flushDb();
+    } catch (_) {}
+    if (!fs.existsSync(DB_PATH)) {
+      return { db_path: DB_PATH, db_size_bytes: 0, db_size_human: '0 B' };
+    }
+    const st = fs.statSync(DB_PATH);
+    return {
+      db_path: DB_PATH,
+      db_size_bytes: st.size,
+      db_size_human: formatBytesHuman(st.size),
+    };
+  }
+
+  function dirSizeBytesRecursive(root, depth) {
+    if (!root || !fs.existsSync(root) || depth > 10) return 0;
+    let total = 0;
+    let entries;
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch (_) {
+      return 0;
+    }
+    for (const ent of entries) {
+      const p = path.join(root, ent.name);
+      try {
+        if (ent.isDirectory()) total += dirSizeBytesRecursive(p, depth + 1);
+        else if (ent.isFile()) total += fs.statSync(p).size;
+      } catch (_) {}
+    }
+    return total;
+  }
+
+  function getDienstreiseFilesStats() {
+    const base = getDienstreiseBasePath();
+    if (!base) {
+      return { configured: false, bytes: 0, human: '—', base_path: '' };
+    }
+    const bytes = dirSizeBytesRecursive(base, 0);
+    return {
+      configured: true,
+      bytes,
+      human: formatBytesHuman(bytes),
+      base_path: base,
+    };
+  }
+
   app.get('/api/sync_status', (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
@@ -7350,6 +7409,16 @@ ORDER BY
         )
         .all();
       const pendingN = db.prepare(`SELECT COUNT(*) AS n FROM pending_changes`).get();
+      let pendingUploadsN = 0;
+      try {
+        const upRow = db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM dienstreise_push_cache
+             WHERE synced_at IS NULL OR local_mtime_ms != synced_mtime_ms OR local_size != synced_size`,
+          )
+          .get();
+        pendingUploadsN = upRow && upRow.n != null ? Number(upRow.n) : 0;
+      } catch (_) {}
       const calRow = db
         .prepare(`SELECT MAX(synced_at) AS synced_at FROM calendar_cache_jobs`)
         .get();
@@ -7363,16 +7432,29 @@ ORDER BY
           .get();
       } catch (_) {}
       const highPri = bgJobs ? bgJobs.countQueuedHighPriority() : 0;
+      const dbStats = getLocalDbStats();
+      const dienstreiseStats = getDienstreiseFilesStats();
+      const lastJobsSync = lastPull && lastPull.updated_at ? lastPull.updated_at : null;
       return res.json({
         ok: true,
         technician_id: technicianId,
         last_sync_pull: lastPull || null,
+        last_jobs_sync: lastJobsSync,
         active_jobs: running || [],
         pending_changes: pendingN && pendingN.n != null ? Number(pendingN.n) : 0,
+        pending_uploads: pendingUploadsN,
+        pending_events: pendingN && pendingN.n != null ? Number(pendingN.n) : 0,
         calendar_cache_synced_at: calRow && calRow.synced_at ? calRow.synced_at : null,
         anlagenstamm_local_count: stammN && stammN.n != null ? Number(stammN.n) : 0,
         anlagenstamm_sync_state: anlagenSyncState || null,
         high_priority_jobs: highPri,
+        db_path: dbStats.db_path,
+        db_size_bytes: dbStats.db_size_bytes,
+        db_size_human: dbStats.db_size_human,
+        dienstreise_files_cache_bytes: dienstreiseStats.bytes,
+        dienstreise_files_cache_human: dienstreiseStats.human,
+        dienstreise_files_configured: dienstreiseStats.configured,
+        dienstreise_base_path: dienstreiseStats.base_path || null,
       });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
