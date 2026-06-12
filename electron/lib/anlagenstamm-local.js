@@ -330,28 +330,53 @@ const UPSERT_ANLAGENSTAMM_SQL = `
       dirty = CASE WHEN anlagenstamm_local.dirty = 1 THEN 1 ELSE 0 END
   `;
 
+/** Leere dirty-Stubs (nur FN aus jobs.fabrikationsnummern) blockieren Server-Upserts — entfernen. */
+function clearEmptyDirtyAnlagenstammStubs(db) {
+  const rows = db
+    .prepare(
+      `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+              material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
+              geliefert_ueber, projekt, bemerkungen, customer_country
+       FROM anlagenstamm_local WHERE dirty = 1`,
+    )
+    .all();
+  const del = db.prepare('DELETE FROM anlagenstamm_local WHERE id = ?');
+  let removed = 0;
+  for (const r of rows) {
+    if (!hasNonemptyStammField(r)) {
+      del.run(r.id);
+      removed++;
+    }
+  }
+  return removed;
+}
+
 function upsertAnlagenstammRows(db, rows) {
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  // sql.js-Wrapper: jedes prepare().get/run gibt das Statement frei – nicht wiederverwenden.
+  const getByIdStmt = db.prepare('SELECT * FROM anlagenstamm_local WHERE id = ?');
+  const delStubStmt = db.prepare('DELETE FROM anlagenstamm_local WHERE id = ?');
+  const upsertStmt = db.prepare(UPSERT_ANLAGENSTAMM_SQL);
+
+  function removeEmptyDirtyStub(existing) {
+    if (!existing || Number(existing.dirty) !== 1 || hasNonemptyStammField(existing)) return false;
+    delStubStmt.run(existing.id);
+    return true;
+  }
+
   for (const raw of rows) {
     const row = clampForDispoAnlagenstamm(raw);
     const id = parseInt(row.id, 10);
     if (!Number.isFinite(id) || id <= 0) continue;
     const fab = clampDispoField(row.fabrikationsnummer, DISPO_ANLAGENSTAMM_MAX.fabrikationsnummer).trim();
-    const dirtyById = db.prepare('SELECT dirty FROM anlagenstamm_local WHERE id = ?').get(id);
-    if (dirtyById && Number(dirtyById.dirty) === 1) continue;
+    const byId = getByIdStmt.get(id);
+    if (byId && Number(byId.dirty) === 1 && hasNonemptyStammField(byId)) continue;
     if (fab) {
-      const dirtyByFab = db
-        .prepare(
-          `SELECT dirty FROM anlagenstamm_local
-           WHERE TRIM(fabrikationsnummer) = TRIM(?)
-           ORDER BY dirty DESC, synced_at DESC, id DESC
-           LIMIT 1`,
-        )
-        .get(fab);
-      if (dirtyByFab && Number(dirtyByFab.dirty) === 1) continue;
+      const byFab = lookupByFab(db, fab);
+      if (byFab && Number(byFab.dirty) === 1 && hasNonemptyStammField(byFab)) continue;
+      if (byFab && byFab.id !== id) removeEmptyDirtyStub(byFab);
     }
-    db.prepare(UPSERT_ANLAGENSTAMM_SQL).run(
+    removeEmptyDirtyStub(byId);
+    upsertStmt.run(
       id,
       fab,
       row.type != null ? String(row.type) : '',
@@ -611,6 +636,10 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
   }
 
   ensureAnlagenstammLocalSchema(db);
+  await withDbLock(async () => {
+    const removed = clearEmptyDirtyAnlagenstammStubs(db);
+    if (removed > 0 && typeof saveFn === 'function') saveFn();
+  });
   const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
   const bases = buildAnlagenstammSyncBases(payload);
   if (!technicianId || !bases.length) {
@@ -779,7 +808,6 @@ function upsertParameterFile(db, payload) {
   for (const ent of entries) {
     const key = String((ent && ent.param_key) || '').trim();
     if (!key) continue;
-    // sql.js-Wrapper gibt Statement nach jedem run() frei — nicht wiederverwenden.
     db.prepare(insEntrySql).run(
       fileId,
       ent && ent.line_no != null ? Number(ent.line_no) : null,
@@ -971,6 +999,7 @@ module.exports = {
   ensureAnlagenstammLocalSchema,
   rowCount,
   upsertAnlagenstammRows,
+  clearEmptyDirtyAnlagenstammStubs,
   clampForDispoAnlagenstamm,
   clampForDispoJobFabrikation,
   clampFabrikationsnummernJson,

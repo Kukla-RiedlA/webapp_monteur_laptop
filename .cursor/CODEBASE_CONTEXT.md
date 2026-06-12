@@ -8,7 +8,7 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 
 ## 1. Was ist dieses Projekt?
 
-- **Monteur WebApp (Offline/Desktop):** Electron-App mit lokalem Node-Server und SQLite (sql.js). Zeigt Monteuren ihre Aufträge und Abwesenheiten; kann mit dem **Dispo-Server** synchronisieren („Vom Dispo holen“ / „Änderungen senden“).
+- **Monteur WebApp (Offline/Desktop):** Electron-App mit lokalem Node-Server und SQLite (**better-sqlite3**, WAL). Zeigt Monteuren ihre Aufträge und Abwesenheiten; kann mit dem **Dispo-Server** synchronisieren („Vom Dispo holen“ / „Änderungen senden“).
 - **PHP-APIs in diesem Repo:** Werden genutzt, wenn die Dispo (andere Anwendung) die Monteur-Daten bereitstellt – z. B. `api/calendar.php`, `api/my_jobs.php`, `api/job.php`, `api/absence.php` usw. Sie lesen/schreiben in der **Dispo-Datenbank (fsm)** über `DispoRepository` und `Db::fsm()`.
 - **Dispo (Kalender-UI):** Die **Dispo-Oberfläche** (Wochen-/Monatskalender, Kalender-Tooltips, Auftragsverwaltung) liegt **nicht** in diesem Repo, sondern im **gleichen Workspace** unter **dispo/** (Workspace-Root: C:\Kukla_Monteur_Plattform). Dort: `dispo/modules/calendar.php`, `dispo/calendar_month.php`, `dispo/calendar_month_lanes.php`, `dispo/api/calendar.php` usw.  
   **Regel für Bearbeitungen:** Nur die Dateien im **dispo**-Ordner dieses Workspaces bearbeiten (siehe `.cursor/rules/dispo-workspace.mdc`). Wenn der Nutzer „Dispo“ oder „Kalender“ sagt, prüfen, ob die Änderung in **dispo/** gehört.
@@ -22,7 +22,7 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 | **api/** | PHP-API-Endpunkte für Dispo-Backend: `calendar.php`, `job.php`, `my_jobs.php`, `my_absences.php`, `absence.php`, `technician_info.php`, `anlagenstamm_by_fab.php`, `receive_dispo.php`. Alle (außer receive_dispo) nutzen `Db::fsm()` + `DispoRepository`. |
 | **src/** | `Db.php` (connection = WebApp-DB, fsm = Dispo-DB), `DispoRepository.php` (Lese/Schreibzugriff auf jobs, job_technicians, job_addresses, absences, getCalendarData, getJobsForTechnician, …), `DispoImportService.php`, `DispoPayloadValidator.php`. |
 | **config/** | `version.php` – Versionsnummer für die App. |
-| **electron/** | Desktop-App: `main.js` (Electron-Fenster, lädt Node-Server), `server.js` (Express, Port 39678, sql.js-SQLite, implementiert /api/calendar, /api/job, /api/absence, …; bei „Vom Dispo holen“ Proxy zu Dispo-PHP-APIs), `public/app.js` (Frontend-Logik, Kalender, Aufträge, Abwesenheiten), `public/index.html`, `public/ui-theme.css` (Themes **Kukla hell** / **Klassisch dunkel**, Schalter in der Kopfzeile), `db/schema.sql`, `version.json`. |
+| **electron/** | Desktop-App: `main.js` (Electron-Fenster, lädt Node-Server), `server.js` (Express, Port 39678, better-sqlite3, implementiert /api/calendar, /api/job, /api/absence, …; bei „Vom Dispo holen“ Proxy zu Dispo-PHP-APIs), `lib/db.js` + `lib/db-compat.js`, `public/app.js` (Frontend-Logik, Kalender, Aufträge, Abwesenheiten), `public/index.html`, `public/ui-theme.css` (Themes **Kukla hell** / **Klassisch dunkel**, Schalter in der Kopfzeile), `db/schema.sql`, `version.json`. |
 | **docs/UI_THEME.md** | Erscheinungsbild: `data-ui-theme`, localStorage `monteur_uiTheme`, Verweis auf Dispo `kukla-brand.css`. |
 | **db/** | Schema/Migrationen für die WebApp-DB (receive_dispo). |
 | **bootstrap.php** | Lädt Autoload, .env; wird von allen api/*.php per `require_once __DIR__ . '/../bootstrap.php'` eingebunden. |
@@ -31,7 +31,7 @@ Diese Datei dient dem schnellen Wiedereinstieg: Sie beschreibt Aufbau und Zusamm
 
 ## 3. Datenfluss
 
-- **Electron offline:** App spricht mit `http://127.0.0.1:39678` → `electron/server.js` → lokale SQLite (sql.js). Keine PHP-APIs.
+- **Electron offline:** App spricht mit `http://127.0.0.1:39678` → `electron/server.js` → lokale SQLite (better-sqlite3). Keine PHP-APIs.
 - **Electron mit Dispo-Sync:** Nutzer konfiguriert Dispo-URL. Dann:
   - **Kalender:** `GET /api/calendar?baseUrl=…&start=…&end=…` → server.js ruft `baseUrl/api/calendar.php?start=…&end=…` auf (Dispo-PHP) und gibt JSON durch. Optional Anreicherung mit Einzelauftrag (job.php) für customer_name, city, country.
   - **Aufträge/Abwesenheiten:** Ähnlich Proxy zu Dispo-PHP (my_jobs, my_absences, job, absence).

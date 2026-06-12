@@ -6,7 +6,7 @@ Desktop-App mit **eigener lokaler SQLite-DB** für Offline-Nutzung. Bei Bedarf S
 
 - Node.js 18+ (z. B. von [nodejs.org](https://nodejs.org))
 - Windows (für `npm run dist` → Windows-Installer)
-- **Keine Build-Tools nötig:** Es wird **sql.js** (reines JavaScript/WASM) statt better-sqlite3 verwendet – kein C++-Compiler erforderlich.
+- **Native SQLite:** **better-sqlite3** (WAL) — `npm install` baut das Modul per `electron-builder install-app-deps` für Electron. Auf dem Dev-PC: Visual Studio Build Tools (MSVC) für node-gyp, falls der Rebuild fehlschlägt.
 
 ## Schnellstart
 
@@ -16,7 +16,7 @@ npm install
 npm start
 ```
 
-Es öffnet sich ein Fenster mit der Monteur-Oberfläche. Die App läuft **offline** gegen die lokale SQLite-DB unter `electron/db/monteur.db`.
+Es öffnet sich ein Fenster mit der Monteur-Oberfläche. Die App läuft **offline** gegen die lokale SQLite-DB (`monteur.db` unter `%APPDATA%\monteur-webapp\db\` in der installierten App, Dev: `electron/db/`).
 
 ## Ablauf
 

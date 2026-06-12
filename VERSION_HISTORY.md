@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.004.040
+- **SQLite:** Umstellung von sql.js auf **better-sqlite3** (WAL, `db.js` + `db-compat.js`).
+- **Anlagenstamm-Sync:** Leere dirty-Stubs aus `jobs.fabrikationsnummern` blockieren keine Server-Daten mehr; Lookup/Anzeige nutzt lokalen Cache zuerst.
+- **Diagnose:** Skripte unter `electron/scripts/` für FN-Abfrage und Reparatur leerer dirty-Stubs.
+
 ## V 1.004.000
 - **Auftrag annehmen:** Button in der Auftragsliste, `POST /api/dienstreise/accept_job_stream` (**202** + `job_id`, Hintergrund-Job `dienstreise_pull`: Projektordner kopieren, danach Status `in_arbeit`, Dispo-Sync). Fortschritt per `GET /api/background_jobs/:id`; Resume nach Abbruch über Checkpoint + `POST /api/background_jobs/recover` bei erneutem Online-Badge.
 - **Projektdaten:** Projektordner-Explorer und Upload unter Leistungsdaten; FN-Zeile (Semikolon/Bereiche wie Dispo); Tabelle mit Spalte **Position**.

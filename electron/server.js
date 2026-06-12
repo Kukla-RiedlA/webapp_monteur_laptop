@@ -1,6 +1,6 @@
 /**
  * Lokaler API-Server für die Monteur WebApp (Offline).
- * Verwendet sql.js (WASM, kein nativer Build); läuft im Electron-Hauptprozess.
+ * SQLite via better-sqlite3 (WAL) im Electron-Hauptprozess.
  */
 
 const express = require('express');
@@ -58,8 +58,10 @@ function configurePersistentDbDir() {
   }
 }
 const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore } = require('./lib/abrechnung-routes');
-const { ensureBackgroundJobsSchema, createBackgroundJobService } = require('./lib/background_jobs');
+const { createBackgroundJobService } = require('./lib/background_jobs');
 const { createDbLock } = require('./lib/db-lock');
+const { openMonteurDatabase, flushDb, getLastPersistError, getDb: getNativeDb } = require('./lib/db');
+const { createDbCompat } = require('./lib/db-compat');
 const {
   proxyAnlagenstammSearch,
   proxyAnlagenstammSave,
@@ -258,7 +260,7 @@ function enrichFabJsonWithLocalAnlagenstamm(db, fabJson) {
     if (!fn) return r;
     const localRow = anlagenstammLookupByFab(db, fn);
     if (!localRow) return r;
-    const localDirty = Number(localRow.dirty) === 1;
+    const localDirty = Number(localRow.dirty) === 1 && hasNonemptyStammField(localRow);
     return mergeStammIntoJobRow(r, {}, localRow, localDirty);
   });
   return JSON.stringify(out);
@@ -336,18 +338,17 @@ function syncJobFabRowsToAnlagenstammLocal(db, fabJson, opts) {
     const fn = normJobFabKey(r);
     if (!fn) continue;
     const existing = anlagenstammLookupByFab(db, fn);
-    const payload = mergeAnlagenstammPayload(
-      existing || {},
-      clampForDispoAnlagenstamm(
-        Object.assign(
-          {
-            id: existing && existing.id ? existing.id : 0,
-            fabrikationsnummer: fn,
-          },
-          r,
-        ),
+    const incoming = clampForDispoAnlagenstamm(
+      Object.assign(
+        {
+          id: existing && existing.id ? existing.id : 0,
+          fabrikationsnummer: fn,
+        },
+        r,
       ),
     );
+    if (!hasNonemptyStammField(incoming)) continue;
+    const payload = mergeAnlagenstammPayload(existing || {}, incoming);
     const saved = anlagenstammSaveLocal(db, payload);
     if (saved.ok) n++;
   }
@@ -398,8 +399,6 @@ function hasPendingOrDirtyAnlagenstamm(db) {
   return (dirty && Number(dirty.c) > 0) || (pending && Number(pending.c) > 0);
 }
 
-/** Letzter Fehler beim DB-Schreiben (für API-Antworten). */
-let lastMonteurDbSaveError = null;
 
 /** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). */
 function writeFileWithRetry(filePath, data, maxRetries = 3) {
@@ -422,33 +421,15 @@ function writeFileWithRetry(filePath, data, maxRetries = 3) {
   }
 }
 
-/** Atomar: zuerst .tmp, dann Zieldatei ersetzen (weniger korrupte DB bei Abbruch). */
-function writeDbFileAtomic(filePath, data) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const tmpPath = filePath + '.writing';
-  writeFileWithRetry(tmpPath, data);
-  try {
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch (e) {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch (_) {}
-    throw e;
-  }
-  fs.renameSync(tmpPath, filePath);
-}
-
 function monteurDbSaveErrorMessage() {
-  if (!lastMonteurDbSaveError) {
+  const e = getLastPersistError();
+  if (!e) {
     return 'Datenbank konnte nicht auf die Festplatte geschrieben werden.';
   }
-  const e = lastMonteurDbSaveError;
   const msg = e && e.message ? String(e.message) : String(e);
   const p = DB_PATH ? ' Pfad: ' + DB_PATH : '';
   return msg + p;
 }
-const SCHEMA_PATH = path.join(__dirname, 'db', 'schema.sql');
 
 /** Selbstsigniertes HTTPS zum Dispo (Kukla-Standard: an, nicht in der UI abschaltbar). */
 const DISPO_TLS_INSECURE_FLAG = path.join(DB_DIR, '.dispo-insecure-tls');
@@ -510,67 +491,6 @@ function applyDispoInsecureTlsPreference() {
   writeUserAppConfig({ acceptSelfSignedDispoTls: true });
 }
 
-
-/** Wrapper um sql.js – API wie better-sqlite3 (prepare/get/all/run, transaction). */
-function createDbWrapper(sqlDb) {
-  return {
-    _db: sqlDb,
-    save() {
-      try {
-        const data = sqlDb.export();
-        const buffer = Buffer.from(data);
-        writeDbFileAtomic(DB_PATH, buffer);
-        lastMonteurDbSaveError = null;
-        return true;
-      } catch (e) {
-        lastMonteurDbSaveError = e;
-        console.error('DB save failed:', DB_PATH, e && e.message ? e.message : e);
-        return false;
-      }
-    },
-    prepare(sql) {
-      const stmt = sqlDb.prepare(sql);
-      return {
-        get(...params) {
-          stmt.bind(params);
-          const row = stmt.step() ? stmt.getAsObject() : null;
-          stmt.reset();
-          stmt.free();
-          return row;
-        },
-        all(...params) {
-          stmt.bind(params);
-          const rows = [];
-          while (stmt.step()) rows.push(stmt.getAsObject());
-          stmt.reset();
-          stmt.free();
-          return rows;
-        },
-        run(...params) {
-          stmt.bind(params);
-          stmt.step();
-          stmt.reset();
-          stmt.free();
-          const changes = sqlDb.getRowsModified();
-          const idResult = sqlDb.exec('SELECT last_insert_rowid() as id');
-          const lastInsertRowid = idResult.length && idResult[0].values.length ? idResult[0].values[0][0] : 0;
-          return { changes, lastInsertRowid };
-        },
-      };
-    },
-    transaction(fn) {
-      sqlDb.run('BEGIN TRANSACTION');
-      try {
-        fn();
-        sqlDb.run('COMMIT');
-        this.save();
-      } catch (e) {
-        sqlDb.run('ROLLBACK');
-        throw e;
-      }
-    },
-  };
-}
 
 function logAbsenceRequestError(info) {
   try {
@@ -638,172 +558,9 @@ async function loadDbOnce() {
   } catch (tlsErr) {
     console.warn('[dispo-tls] apply:', tlsErr && tlsErr.message ? tlsErr.message : tlsErr);
   }
-  const initSqlJs = require('sql.js');
-  const SQL = await initSqlJs({
-    locateFile: (file) => path.join(__dirname, 'node_modules', 'sql.js', 'dist', file),
-  });
-  let sqlDb;
-  if (fs.existsSync(DB_PATH)) {
-    const buffer = fs.readFileSync(DB_PATH);
-    sqlDb = new SQL.Database(buffer);
-  } else {
-    sqlDb = new SQL.Database();
-  }
-  sqlDb.run('PRAGMA foreign_keys = ON');
-  const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
-  sqlDb.run(schema);
-  try { sqlDb.run('ALTER TABLE jobs ADD COLUMN eap_nummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
-  try { sqlDb.run('ALTER TABLE jobs ADD COLUMN bestellnummer TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
-  try { sqlDb.run('ALTER TABLE job_addresses ADD COLUMN endkunde TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
-  try { sqlDb.run('ALTER TABLE absences ADD COLUMN comment TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
-  try { sqlDb.run('ALTER TABLE absence_requests ADD COLUMN comment TEXT'); } catch (e) { /* Spalte existiert evtl. */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS job_contacts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      job_id INTEGER NOT NULL,
-      contact_name TEXT,
-      contact_phone TEXT,
-      contact_email TEXT,
-      sort_order INTEGER DEFAULT 0,
-      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
-    )`);
-  } catch (e) { /* existiert evtl. */ }
-  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_job_contacts_job ON job_contacts(job_id)'); } catch (e) { /* ignore */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS job_hotel_addresses (
-      job_id INTEGER PRIMARY KEY,
-      endkunde TEXT,
-      street TEXT,
-      house_number TEXT,
-      zip TEXT,
-      city TEXT,
-      country TEXT,
-      address_extra_1 TEXT,
-      address_extra_2 TEXT,
-      phone TEXT,
-      email TEXT,
-      website TEXT,
-      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
-    )`);
-  } catch (e) { /* existiert evtl. */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS job_hotel_selection (
-      job_id INTEGER PRIMARY KEY,
-      hotel_id INTEGER,
-      comment TEXT,
-      rating_stars INTEGER,
-      rating_avg REAL,
-      rating_count INTEGER DEFAULT 0,
-      updated_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
-    )`);
-  } catch (e) { /* existiert evtl. */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS absence_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      server_id INTEGER,
-      technician_id INTEGER NOT NULL,
-      start_datetime TEXT NOT NULL,
-      end_datetime TEXT NOT NULL,
-      type TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      requested_at TEXT DEFAULT (datetime('now')),
-      synced_at TEXT
-    )`);
-  } catch (e) { /* existiert evtl. */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS dienstreisen (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      year INTEGER NOT NULL,
-      running_number INTEGER NOT NULL,
-      start_date TEXT NOT NULL,
-      company_name TEXT NOT NULL,
-      city TEXT,
-      country_code TEXT,
-      folder_name TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
-    )`);
-  } catch (e) { /* existiert evtl. */ }
-  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_dienstreisen_year ON dienstreisen(year)'); } catch (e) { /* ignore */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS calendar_cache_technicians (
-      technician_id INTEGER PRIMARY KEY,
-      name TEXT,
-      color TEXT,
-      synced_at TEXT
-    )`);
-  } catch (e) { /* existiert evtl. */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS calendar_cache_jobs (
-      cache_key TEXT PRIMARY KEY,
-      server_job_id INTEGER,
-      technician_id INTEGER,
-      customer_name TEXT,
-      job_number TEXT,
-      city TEXT,
-      country TEXT,
-      status TEXT,
-      start_datetime TEXT,
-      end_datetime TEXT,
-      technician_name TEXT,
-      technician_color TEXT,
-      montage_verrechnet INTEGER DEFAULT 0,
-      billing_travel_complete INTEGER DEFAULT 0,
-      synced_at TEXT
-    )`);
-  } catch (e) { /* existiert evtl. */ }
-  try { sqlDb.run('ALTER TABLE calendar_cache_jobs ADD COLUMN montage_verrechnet INTEGER DEFAULT 0'); } catch (e) { /* Spalte existiert */ }
-  try { sqlDb.run('ALTER TABLE calendar_cache_jobs ADD COLUMN billing_travel_complete INTEGER DEFAULT 0'); } catch (e) { /* Spalte existiert */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS calendar_cache_absences (
-      cache_key TEXT PRIMARY KEY,
-      server_absence_id INTEGER,
-      technician_id INTEGER,
-      type TEXT,
-      comment TEXT,
-      start_datetime TEXT,
-      end_datetime TEXT,
-      technician_name TEXT,
-      technician_color TEXT,
-      synced_at TEXT
-    )`);
-  } catch (e) { /* existiert evtl. */ }
-  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_calendar_cache_jobs_range ON calendar_cache_jobs(start_datetime, end_datetime)'); } catch (e) { /* ignore */ }
-  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_calendar_cache_absences_range ON calendar_cache_absences(start_datetime, end_datetime)'); } catch (e) { /* ignore */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS anlagenstamm_tree_cache (
-      fab TEXT PRIMARY KEY,
-      projects_enabled INTEGER NOT NULL DEFAULT 0,
-      tree_json TEXT,
-      synced_at TEXT
-    )`);
-  } catch (e) { /* existiert evtl. */ }
-  try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS job_ted_index (
-      local_job_id INTEGER NOT NULL,
-      server_job_id INTEGER,
-      rel_path TEXT NOT NULL,
-      file_name TEXT,
-      fab TEXT NOT NULL DEFAULT '',
-      synced_at TEXT DEFAULT (datetime('now')),
-      PRIMARY KEY (local_job_id, fab, rel_path)
-    )`);
-    migrateJobTedIndexToFabRelPk(sqlDb);
-  } catch (e) { /* existiert evtl. */ }
-  try { sqlDb.run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_tree_cache_synced ON anlagenstamm_tree_cache(synced_at)'); } catch (e) { /* ignore */ }
-  try {
-    sqlDb.run("UPDATE jobs SET status = 'angelegt' WHERE LOWER(COALESCE(status, '')) = 'geplant'");
-    const n = typeof sqlDb.getRowsModified === 'function' ? sqlDb.getRowsModified() : 0;
-    if (n > 0) {
-      const data = sqlDb.export();
-      const buffer = Buffer.from(data);
-      if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
-      writeFileWithRetry(DB_PATH, buffer);
-    }
-  } catch (e) { /* ignore */ }
-  ensureBackgroundJobsSchema(sqlDb);
-  ensureDienstreisePushCacheSchema(sqlDb);
-  const wrapper = createDbWrapper(sqlDb);
+  await openMonteurDatabase({ dbPath: DB_PATH });
+  ensureDienstreisePushCacheSchema(getNativeDb());
+  const wrapper = createDbCompat();
   try {
     ensureAnlagenstammLocalSchema(wrapper);
   } catch (e) {
@@ -815,8 +572,9 @@ async function loadDbOnce() {
 }
 
 function flushMonteurDb() {
+  flushDb();
   if (monteurRuntime.save) return monteurRuntime.save();
-  return false;
+  return true;
 }
 
 /**
@@ -4142,11 +3900,10 @@ ORDER BY
   });
 
   app.post('/api/anlagenstamm_lookup', express.json(), async (req, res) => {
-    const technicianId = getTechnicianId(req);
     const { baseUrl, fab, serverUsername, serverPassword, force_online: forceOnline } = req.body || {};
     const fabValue = (fab || '').toString().trim();
-    if (!technicianId || !fabValue) {
-      return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+    if (!fabValue) {
+      return res.status(400).json({ ok: false, error: 'fab erforderlich.' });
     }
     ensureAnlagenstammLocalSchema(db);
     if (!forceOnline && anlagenstammLocalRowCount(db) > 0) {
@@ -4154,6 +3911,10 @@ ORDER BY
       if (row) {
         return res.json({ ok: true, row, anlage: row, _source: 'local' });
       }
+    }
+    const technicianId = getTechnicianId(req);
+    if (!technicianId) {
+      return res.json({ ok: true, row: null, anlage: null, _source: 'local_miss' });
     }
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
     if (!base) {
@@ -4173,12 +3934,6 @@ ORDER BY
 
   app.post('/api/anlagenstamm_search', express.json(), async (req, res) => {
     const body = req.body || {};
-    const technicianId =
-      getTechnicianId(req) ??
-      (body.technician_id != null ? parseInt(String(body.technician_id), 10) : null);
-    if (!technicianId) {
-      return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
-    }
     ensureAnlagenstammLocalSchema(db);
     const forceOnline =
       body.force_online === true ||
@@ -4187,6 +3942,12 @@ ORDER BY
     if (!forceOnline && anlagenstammLocalRowCount(db) > 0) {
       const local = anlagenstammSearchLocal(db, body);
       if (local.ok) return res.json(local);
+    }
+    const technicianId =
+      getTechnicianId(req) ??
+      (body.technician_id != null ? parseInt(String(body.technician_id), 10) : null);
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id erforderlich (kein lokaler Treffer).' });
     }
     const hasBase = buildDispoBaseCandidates({
       baseUrl: body.baseUrl,
@@ -7009,6 +6770,7 @@ ORDER BY
             console.warn('[sync_pull] anlagenstamm_db_sync:', syncResult.error || 'fehlgeschlagen');
           } else if (syncResult.row_count != null) {
             console.log('[sync_pull] anlagenstamm_db_sync ok, Zeilen lokal:', syncResult.row_count);
+            flushDb();
           }
         } catch (syncErr) {
           console.warn('[sync_pull] anlagenstamm_db_sync:', syncErr && syncErr.message ? syncErr.message : syncErr);
@@ -7592,6 +7354,14 @@ ORDER BY
         .prepare(`SELECT MAX(synced_at) AS synced_at FROM calendar_cache_jobs`)
         .get();
       const stammN = db.prepare(`SELECT COUNT(*) AS n FROM anlagenstamm_local`).get();
+      let anlagenSyncState = null;
+      try {
+        anlagenSyncState = db
+          .prepare(
+            'SELECT last_full_sync_at, last_page, total_count, sync_error FROM anlagenstamm_sync_state WHERE id = 1',
+          )
+          .get();
+      } catch (_) {}
       const highPri = bgJobs ? bgJobs.countQueuedHighPriority() : 0;
       return res.json({
         ok: true,
@@ -7601,6 +7371,7 @@ ORDER BY
         pending_changes: pendingN && pendingN.n != null ? Number(pendingN.n) : 0,
         calendar_cache_synced_at: calRow && calRow.synced_at ? calRow.synced_at : null,
         anlagenstamm_local_count: stammN && stammN.n != null ? Number(stammN.n) : 0,
+        anlagenstamm_sync_state: anlagenSyncState || null,
         high_priority_jobs: highPri,
       });
     } catch (e) {
@@ -8031,33 +7802,6 @@ function tedEntryKey(ent) {
     .replace(/\\/g, '/');
   const fn = String((ent && ent.file_name) || '').trim();
   return fab + '|' + rel + '|' + fn;
-}
-
-function migrateJobTedIndexToFabRelPk(sqlDb) {
-  const row = sqlDb.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='job_ted_index'").get();
-  if (!row || !row.sql || row.sql.includes('PRIMARY KEY (local_job_id, fab, rel_path)')) return;
-  sqlDb.run('BEGIN');
-  try {
-    sqlDb.run(`CREATE TABLE job_ted_index_v2 (
-      local_job_id INTEGER NOT NULL,
-      server_job_id INTEGER,
-      rel_path TEXT NOT NULL,
-      file_name TEXT,
-      fab TEXT NOT NULL DEFAULT '',
-      synced_at TEXT DEFAULT (datetime('now')),
-      PRIMARY KEY (local_job_id, fab, rel_path)
-    )`);
-    sqlDb.run(`INSERT OR IGNORE INTO job_ted_index_v2 (local_job_id, server_job_id, rel_path, file_name, fab, synced_at)
-      SELECT local_job_id, server_job_id, rel_path, file_name, COALESCE(NULLIF(TRIM(fab), ''), ''), synced_at FROM job_ted_index`);
-    sqlDb.run('DROP TABLE job_ted_index');
-    sqlDb.run('ALTER TABLE job_ted_index_v2 RENAME TO job_ted_index');
-    sqlDb.run('COMMIT');
-  } catch (e) {
-    try {
-      sqlDb.run('ROLLBACK');
-    } catch (_) {}
-    throw e;
-  }
 }
 
 /** TED-/Projektordner-Dateien nur nach „Auftrag annehmen“ (lokal in_arbeit). */

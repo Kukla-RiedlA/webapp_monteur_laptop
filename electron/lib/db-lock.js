@@ -1,8 +1,7 @@
 'use strict';
 
 /**
- * Serialisiert SQLite-Persistenz (sql.js export) und optionale kritische DB-Abschnitte.
- * Verhindert „Statement closed“ / korrupte DB bei parallelem save() und prepare().
+ * Serialisiert parallele save()/Checkpoint-Aufrufe und kritische DB-Abschnitte (Express-Handler).
  */
 function createDbLock() {
   /** @type {Promise<void>} */

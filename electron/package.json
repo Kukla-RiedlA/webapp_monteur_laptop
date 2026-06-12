@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "1.4.39",
+  "version": "1.4.40",
   "description": "Monteur WebApp – Offline-fähige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -11,6 +11,7 @@
     "generate-icons": "node scripts/generate-icons.js",
     "predist": "node scripts/generate-icons.js",
     "dist": "electron-builder --win",
+    "postinstall": "electron-builder install-app-deps",
     "test:parameter-pdf": "node scripts/test-parameter-pdf.js",
     "test:parameter-pdf:open": "node scripts/test-parameter-pdf.js --open"
   },
@@ -30,7 +31,7 @@
     "pdf-lib": "^1.17.1",
     "pizzip": "^3.1.6",
     "sharp": "^0.33.5",
-    "sql.js": "^1.10.0",
+    "better-sqlite3": "^12.10.0",
     "ws": "^8.14.2"
   },
   "build": {
@@ -52,6 +53,7 @@
       "templates/**"
     ],
     "asarUnpack": [
+      "**/node_modules/better-sqlite3/**",
       "**/node_modules/docx2pdf-converter/**"
     ],
     "publish": {

@@ -24,7 +24,7 @@ function filePathLocal(dbDir, jobServerId, bucket, name) {
 }
 
 function ensureSchema(db) {
-  /** sql.js-Wrapper in server.js: nur db.prepare(…).run/get/all — kein db.run. */
+  /** DB-Wrapper: db.prepare(…).run/get/all */
   db.prepare(`CREATE TABLE IF NOT EXISTS abrechnung_jobs_snapshot (
     technician_id INTEGER NOT NULL,
     period_ym TEXT NOT NULL,

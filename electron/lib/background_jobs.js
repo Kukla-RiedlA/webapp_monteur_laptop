@@ -44,9 +44,19 @@ const JOB_TIMEOUT_MS = {
   anlagenstamm_db_sync: 25 * 60 * 1000,
 };
 
-function ensureBackgroundJobsSchema(sqlDb) {
+function execSchemaSql(db, sql) {
+  if (db && typeof db.exec === 'function') {
+    db.exec(sql);
+  } else if (db && typeof db.run === 'function') {
+    db.run(sql);
+  } else if (db && db.prepare) {
+    db.prepare(sql).run();
+  }
+}
+
+function ensureBackgroundJobsSchema(db) {
   try {
-    sqlDb.run(`CREATE TABLE IF NOT EXISTS background_jobs (
+    execSchemaSql(db, `CREATE TABLE IF NOT EXISTS background_jobs (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'queued',
@@ -65,12 +75,12 @@ function ensureBackgroundJobsSchema(sqlDb) {
     /* ignore */
   }
   try {
-    sqlDb.run('CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)');
+    execSchemaSql(db, 'CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)');
   } catch (e) {
     /* ignore */
   }
   try {
-    sqlDb.run('CREATE INDEX IF NOT EXISTS idx_background_jobs_dedupe ON background_jobs(dedupe_key)');
+    execSchemaSql(db, 'CREATE INDEX IF NOT EXISTS idx_background_jobs_dedupe ON background_jobs(dedupe_key)');
   } catch (e) {
     /* ignore */
   }
@@ -82,7 +92,7 @@ function newJobId() {
 }
 
 /**
- * @param {*} db sql.js DB-Wrapper (prepare/run wie in server.js)
+ * @param {*} db DB-Wrapper (prepare/get/all/run, transaction, save)
  * @param {() => void} save
  * @param {{ executeJob: (job: object, helpers: object) => Promise<void> }} hooks
  */
@@ -118,7 +128,7 @@ function createBackgroundJobService(db, save, hooks) {
         k === 'progress_phase' || k === 'progress_current' || k === 'progress_total' || k === 'message',
       );
     if (progressOnly) {
-      /* Fortschritt nur im RAM/Job-Zeile – kein save() (sql.js export während upsert). */
+      /* Fortschritt: WAL persistiert ohne Full-Export; save() optional übersprungen. */
       return;
     }
     save();
