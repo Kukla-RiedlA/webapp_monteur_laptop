@@ -1,0 +1,83 @@
+/* Web-1:1 Modul-Seiten (customers, monteure, anlagenstamm, service-intervals) */
+.page{padding:20px;width:100%;box-sizing:border-box}
+.page-actions{margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;padding:20px}
+.modal-overlay.open{display:flex}
+.modal-dialog{background:#fff;border-radius:8px;min-width:400px;max-width:560px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 4px 20px rgba(0,0,0,0.2)}
+.modal-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #ddd;background:#f5f5f5}
+.modal-header h3{margin:0;font-size:1.1rem}
+.modal-close{background:none;border:none;font-size:24px;cursor:pointer;line-height:1;color:#666}
+.modal-body{padding:16px}
+.modal-body label{display:block;font-size:12px;margin-top:10px}
+#view-customers .modal-body input,#view-customers .modal-body select,
+#customers-host .modal-body input,#customers-host .modal-body select{width:100%;height:32px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box}
+.modal-actions{margin-top:16px;display:flex;gap:8px;justify-content:flex-end}
+.btn-delete{background:#b91c1c;color:#fff;border-color:#b91c1c}
+.table-wrap{overflow:auto;height:calc(100vh - 260px);min-height:320px;margin-top:8px;border:1px solid #ddd;border-radius:4px;background:#fff}
+.table-wrap table{min-width:1400px;font-size:12px;width:100%}
+.filter-row input{width:100%;min-width:60px;max-width:140px;padding:4px 6px;font-size:12px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box}
+#view-customers .contact-block,#customers-host .contact-block{border:1px solid #e0e0e0;border-radius:6px;padding:10px;margin-top:8px;background:#fafafa}
+#view-customers .contact-row-struct,#customers-host .contact-row-struct{display:grid;grid-template-columns:1fr 1fr minmax(0,7rem) auto;gap:8px}
+#view-customers .contact-row-tel,#customers-host .contact-row-tel{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px}
+.form-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center}
+.form-modal.open,.form-modal.active{display:flex}
+.form-modal-content{background:#fff;padding:24px;border-radius:8px;max-width:95vw;max-height:90vh;overflow-y:auto}
+.page-header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.badge{display:inline-block;padding:4px 8px;border-radius:4px;font-size:12px;font-weight:500}
+.badge-active{background:#d1fae5;color:#065f46}
+.badge-inactive{background:#fee2e2;color:#991b1b}
+.badge-role{background:#dbeafe;color:#1e40af}
+.badge-cat{display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-right:4px}
+.badge-cat-tech{background:#dcfce7;color:#166534}
+.badge-cat-temp{background:#fef3c7;color:#92400e}
+.badge-cat-verk{background:#e0e7ff;color:#3730a3}
+.unassigned-lane-card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:18px;max-width:720px}
+.anlagen-table-scroll{overflow:auto;height:calc(100vh - 260px);min-height:320px;border:1px solid #ddd;border-radius:4px;background:#fff;margin-bottom:16px}
+.anlagen-table-scroll table{min-width:1780px;font-size:12px;width:100%;border-collapse:collapse}
+.anlagen-page-head{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:8px}
+.anlagen-page-head-left{flex:1 1 280px;min-width:0}
+.anlagen-page-head-left h2{margin:0 0 8px 0}
+.anlagen-column-panel{width:100%;max-width:100%;border:1px solid #ddd;border-radius:6px;padding:8px 12px;background:#f9fafb;font-size:11px;box-sizing:border-box;margin-bottom:8px;display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:10px 14px}
+.anlagen-column-panel-title{font-weight:600;margin:0;font-size:12px;color:#333;flex:0 0 auto;white-space:nowrap}
+.anlagen-column-panel-grid{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:4px 10px;flex:1 1 auto;min-width:0;overflow-x:auto}
+.anlagen-column-panel .anlagen-col-label{display:inline-flex;align-items:center;gap:4px;margin:0;font-size:11px;font-weight:400;cursor:pointer;width:auto;flex:0 0 auto;white-space:nowrap}
+.anlagen-column-panel .anlagen-col-label input[type=checkbox]{width:14px;height:14px;margin:0;flex-shrink:0;padding:0;min-width:auto}
+.anlagen-table-scroll thead tr:first-child th{
+  position:sticky;
+  top:0;
+  z-index:100;
+  background:#f0f0f0;
+  box-shadow:0 1px 0 #ddd;
+  font-weight:600;
+  white-space:nowrap;
+  padding:4px 6px;
+  vertical-align:middle;
+  line-height:1.2;
+}
+.anlagen-table-scroll thead tr.filter-row th{
+  position:sticky;
+  top:26px;
+  z-index:99;
+  background:#f0f0f0;
+  box-shadow:0 1px 0 #ddd;
+}
+.anlagen-table-scroll tr:hover td.actions-cell{background:#f9f9f9}
+.anlagen-table-scroll .actions-cell .btn{display:inline-block;margin-right:4px}
+.anlagen-table-scroll .actions-cell .btn:last-child{margin-right:0}
+.anlagen-table-scroll thead tr:first-child th .headcell-wrap{display:flex;align-items:center;gap:4px}
+.anlagen-table-scroll thead tr:first-child th .sort-btns{display:flex;flex-direction:row;gap:0;flex-shrink:0}
+.anlagen-table-scroll thead tr:first-child th .sort-btn{width:18px;height:18px;padding:0;line-height:1;font-size:10px;border:1px solid #aaa;background:#f0f0f0;border-radius:2px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.anlagen-table-scroll thead tr:first-child th .sort-btn:hover{background:#e0e0e0}
+.anlagen-table-scroll thead tr:first-child th .sort-btn.active{background:var(--kukla-primary,#0e7b5a);color:#fff;border-color:var(--kukla-primary,#0e7b5a)}
+#view-anlagenstamm .anlagen-table-scroll thead th,
+.anlagen-table-scroll thead th{padding:4px 6px;font-weight:600;white-space:nowrap;vertical-align:middle}
+.filter-row th{padding:4px 6px;vertical-align:top}
+.anlagen-table-scroll th:last-child,.anlagen-table-scroll td.actions-cell{position:sticky;right:0;background:#fff;box-shadow:-4px 0 8px rgba(0,0,0,0.06);z-index:1}
+.anlagen-table-scroll thead tr:first-child th:last-child,.anlagen-table-scroll thead tr.filter-row th:last-child{background:#f0f0f0;z-index:101}
+.anlagen-table-scroll .actions-cell{white-space:nowrap;min-width:100px}
+.anlagen-table-scroll tbody tr.anlagenstamm-row-focus{background:rgba(14,123,90,0.12);box-shadow:inset 3px 0 0 0 var(--kukla-primary,#0e7b5a)}
+.anlagen-form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.form-group-full{grid-column:1/-1}
+.service-intervals-table-wrap table{width:100%;border-collapse:collapse;background:#fff}
+.service-intervals-table-wrap tr.row-overdue{background:#fef2f2}
+.service-intervals-table-wrap tr.row-reminder{background:#fffbeb}

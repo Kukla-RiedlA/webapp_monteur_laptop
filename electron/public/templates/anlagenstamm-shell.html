@@ -1,0 +1,144 @@
+<div class="page">
+  <div class="anlagen-page-head">
+    <div class="anlagen-page-head-left">
+      <h2>Anlagenstamm</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button type="button" class="btn btn-primary" id="btnNew">+ Neue Anlage</button>
+        <span id="importDocxWrap" style="position:relative;display:inline-flex;align-items:center;gap:8px">
+          <span class="btn btn-secondary" id="importDocxBtn" style="position:relative;overflow:hidden;margin:0">
+            Import DOCX
+            <input type="file" id="importDocxInput" accept=".docx" multiple style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:0;z-index:1">
+          </span>
+          <span id="importDocxStatus" class="muted" style="font-size:12px"></span>
+        </span>
+      </div>
+    </div>
+  </div>
+  <div id="anlagenColumnPanel" class="anlagen-column-panel" aria-label="Spalten ein- und ausblenden">
+    <div class="anlagen-column-panel-title">Spalten einblenden</div>
+    <div class="anlagen-column-panel-grid">
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="leistung" checked> Leistung</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="nenngeschwindigkeit"> v</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="kraftaufnehmer" checked> Kraftaufnehmer</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="dms_nr"> DMS Nr.</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="tacho" checked> Tacho</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="elektronik" checked> Elektronik</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="material" checked> Material</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="position"> Position</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="aktueller_kunde" checked> Letzter Kunde</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="letzter_besuch" checked> Letzter Besuch</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="geliefert_ueber" checked> Geliefert über</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="projekt" checked> Projekt</label>
+      <label class="anlagen-col-label"><input type="checkbox" class="anlagen-col-toggle" data-anlagen-col-toggle="bemerkungen"> Bemerkungen</label>
+    </div>
+  </div>
+  <div class="anlagen-table-scroll">
+    <table id="anlagenstammTable">
+      <thead>
+        <tr>
+          <th><div class="headcell-wrap">F.N.<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="0" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="0" title="Absteigend">↓</button></span></div></th>
+          <th><div class="headcell-wrap">Type<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="1" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="1" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="leistung"><div class="headcell-wrap">Leistung<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="2" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="2" title="Absteigend">↓</button></span></div></th>
+          <th><div class="headcell-wrap">TED / Mechanik<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="3" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="3" title="Absteigend">↓</button></span></div></th>
+          <th><div class="headcell-wrap">PROJEKTE NEU<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="4" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="4" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="nenngeschwindigkeit"><div class="headcell-wrap">v<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="5" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="5" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="kraftaufnehmer"><div class="headcell-wrap">Kraftaufnehmer<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="6" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="6" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="dms_nr"><div class="headcell-wrap">DMS Nr.<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="7" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="7" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="tacho"><div class="headcell-wrap">Tacho<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="8" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="8" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="elektronik"><div class="headcell-wrap">Elektronik<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="9" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="9" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="material"><div class="headcell-wrap">Material<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="10" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="10" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="position"><div class="headcell-wrap">Position<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="11" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="11" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="aktueller_kunde"><div class="headcell-wrap">Letzter Kunde<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="12" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="12" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="letzter_besuch"><div class="headcell-wrap">Letzter Besuch<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="13" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="13" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="geliefert_ueber"><div class="headcell-wrap">Geliefert über<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="14" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="14" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="projekt"><div class="headcell-wrap">Projekt<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="15" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="15" title="Absteigend">↓</button></span></div></th>
+          <th data-anlagen-col="bemerkungen"><div class="headcell-wrap">Bemerkungen<span class="sort-btns"><button type="button" class="sort-btn sort-asc" data-col="16" title="Aufsteigend">↑</button><button type="button" class="sort-btn sort-desc" data-col="16" title="Absteigend">↓</button></span></div></th>
+          <th>Aktionen</th>
+        </tr>
+        <tr class="filter-row">
+          <th><input type="text" id="filterFn" placeholder="F.N." title="Filter: Teiltext eingeben" autocomplete="off"></th>
+          <th><input type="text" id="filterType" placeholder="Type" autocomplete="off"></th>
+          <th data-anlagen-col="leistung"><input type="text" id="filterLeistung" placeholder="Leistung" autocomplete="off"></th>
+          <th><input type="text" id="filterTed" placeholder="TED / Mechanik" autocomplete="off"></th>
+          <th><input type="text" id="filterPnRoot" placeholder="PROJEKTE NEU" autocomplete="off"></th>
+          <th data-anlagen-col="nenngeschwindigkeit"><input type="text" id="filterV" placeholder="v" autocomplete="off"></th>
+          <th data-anlagen-col="kraftaufnehmer"><input type="text" id="filterKraftaufnehmer" placeholder="Kraftaufnehmer" autocomplete="off"></th>
+          <th data-anlagen-col="dms_nr"><input type="text" id="filterDmsNr" placeholder="DMS Nr." autocomplete="off"></th>
+          <th data-anlagen-col="tacho"><input type="text" id="filterTacho" placeholder="Tacho" autocomplete="off"></th>
+          <th data-anlagen-col="elektronik"><input type="text" id="filterElektronik" placeholder="Elektronik" autocomplete="off"></th>
+          <th data-anlagen-col="material"><input type="text" id="filterMaterial" placeholder="Material" autocomplete="off"></th>
+          <th data-anlagen-col="position"><input type="text" id="filterPosition" placeholder="Position" autocomplete="off"></th>
+          <th data-anlagen-col="aktueller_kunde"><input type="text" id="filterAktuellerKunde" placeholder="Letzter Kunde" autocomplete="off"></th>
+          <th data-anlagen-col="letzter_besuch"><input type="text" id="filterLetzterBesuch" placeholder="Letzter Besuch" autocomplete="off"></th>
+          <th data-anlagen-col="geliefert_ueber"><input type="text" id="filterGeliefertUeber" placeholder="Geliefert über" autocomplete="off"></th>
+          <th data-anlagen-col="projekt"><input type="text" id="filterProjekt" placeholder="Projekt" autocomplete="off"></th>
+          <th data-anlagen-col="bemerkungen"><input type="text" id="filterBemerkungen" placeholder="Bemerkungen" autocomplete="off"></th>
+          <th><button type="button" class="btn btn-secondary" id="btnApplyFilter" style="font-size:11px;padding:4px 8px">Filter anwenden</button></th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+  <div id="anlagenPagination" style="display:flex;gap:8px;align-items:center;margin:8px 0">
+    <button type="button" class="btn btn-secondary" id="pagePrev">Nach oben</button>
+    <span id="pageInfo" class="muted">0 geladen</span>
+    <button type="button" class="btn btn-secondary" id="pageNext">Mehr laden</button>
+    <select id="pageSize" style="width:auto;padding:6px 8px">
+      <option value="100">100</option><option value="200">200</option><option value="300" selected>300</option>
+      <option value="500">500</option><option value="1000">1000</option>
+    </select>
+  </div>
+  <p id="anlagenCount" class="muted anlagen-count">0 Anlage(n)</p>
+  <p id="emptyMsg" class="muted" style="display:none">Keine Anlagen für die aktuelle Filterung.</p>
+</div>
+<div id="formModal" class="form-modal">
+  <div class="form-modal-content">
+    <div class="popup-header"><h2 id="modalTitle">Neue Anlage</h2></div>
+    <form id="anlagenForm">
+      <input type="hidden" name="id" id="formId" value="">
+      <div class="anlagen-form-grid">
+        <div class="form-group"><label>Fabrikationsnummer *</label><input type="text" name="fabrikationsnummer" id="formFab" required></div>
+        <div class="form-group"><label>Type</label><input type="text" name="type" id="formType"></div>
+        <div class="form-group"><label>Leistung</label><input type="text" name="leistung" id="formLeistung"></div>
+        <div class="form-group"><label>Nenngeschwindigkeit</label><input type="text" name="nenngeschwindigkeit" id="formNenngeschwindigkeit"></div>
+        <div class="form-group"><label>Kraftaufnehmer</label><input type="text" name="kraftaufnehmer" id="formKraftaufnehmer"></div>
+        <div class="form-group"><label>Material</label><input type="text" name="material" id="formMaterial"></div>
+        <div class="form-group"><label>Tacho</label><input type="text" name="tacho" id="formTacho"></div>
+        <div class="form-group"><label>Elektronik</label><input type="text" name="elektronik" id="formElektronik"></div>
+        <div class="form-group"><label>DMS Nr.</label><input type="text" name="dms_nr" id="formDmsNr"></div>
+        <div class="form-group"><label>Position</label><input type="text" name="position" id="formPosition"></div>
+        <div class="form-group"><label>Geliefert über</label><input type="text" name="geliefert_ueber" id="formGeliefertUeber"></div>
+        <div class="form-group"><label>Projekt</label><input type="text" name="projekt" id="formProjekt"></div>
+        <div class="form-group form-group-full"><label>Bemerkungen</label><textarea name="bemerkungen" id="formBemerkungen" rows="3"></textarea></div>
+      </div>
+      <div class="upload-section">
+        <div id="anlagenDocsRoot" data-active-tab="docs"></div>
+        <div id="modalPnTreeForm" class="anlagen-pn-tree"></div>
+      </div>
+      <div class="form-actions" style="margin-top:20px">
+        <span id="modalDeleteWrap" style="display:none;margin-right:auto"><button type="button" class="btn btn-delete" id="modalBtnDelete">Löschen</button></span>
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Abbrechen</button>
+        <button type="submit" class="btn btn-primary">Speichern</button>
+      </div>
+    </form>
+  </div>
+</div>
+<div id="importPreviewModal" class="form-modal import-preview-modal">
+  <div class="form-modal-content">
+    <h2>Import-Vorschau</h2>
+    <table class="import-preview-table" id="importPreviewTable"><tbody id="importPreviewBody"></tbody></table>
+    <div class="form-actions"><button type="button" class="btn btn-secondary" id="btnImportVerwerfen">Verwerfen</button>
+      <button type="button" class="btn btn-primary" id="btnImportSpeichern">Speichern</button></div>
+  </div>
+</div>
+<div id="pnTreeModal" class="form-modal">
+  <div class="form-modal-content anlagen-pn-tree-modal">
+    <button type="button" class="form-modal-close" id="pnTreeModalCloseTop" aria-label="Schließen">&times;</button>
+    <h2 id="pnTreeModalTitle">PROJEKTE NEU</h2>
+    <p id="pnTreeModalHint" class="muted" style="margin:0 0 12px"></p>
+    <div id="pnTreeModalBody" class="anlagen-pn-tree-body"></div>
+    <div class="form-actions" style="margin-top:16px">
+      <button type="button" class="btn btn-secondary" id="pnTreeModalClose">Schließen</button>
+    </div>
+  </div>
+</div>

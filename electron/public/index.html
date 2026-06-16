@@ -19,7 +19,9 @@
   </script>
   <link rel="stylesheet" href="ui-theme.css">
   <link rel="stylesheet" href="css/kukla-brand.css">
+  <link rel="stylesheet" href="css/modules-web-parity.css">
   <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
+  <link rel="stylesheet" href="css/abrechnung-web-parity.css?v=20260616f">
   <style>
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -354,36 +356,10 @@
     .view-anlagenstamm { display: none; padding: 0; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-anlagenstamm.active { display: flex; flex-direction: column; width: 100%; max-width: none; }
     #viewAnlagenstamm .view-module-host { width: 100%; max-width: none; flex: 1; min-width: 0; }
-    .view-abrechnung { display: none; flex-direction: column; padding: 0.75rem 1rem 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; flex: 1; min-height: 0; }
-    .view-abrechnung.active { display: flex; }
-    .abrechnung-embed-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
-    .abrechnung-embed-hint { margin: 0; font-size: 0.88rem; color: var(--text); opacity: 0.9; max-width: 36rem; flex: 1; min-width: 12rem; }
-    .abrechnung-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-    .abrechnung-period { padding: 0.35rem 0.5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
-    .abrechnung-status { font-size: 0.82rem; color: var(--muted); margin: 0 0 0.5rem 0; }
-    .abrechnung-status .pending { color: #c9a227; }
-    .abrechnung-native { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.75rem; overflow: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); padding: 0.75rem; box-sizing: border-box; }
-    .abrechnung-job-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-    .abrechnung-job-row label { font-size: 0.88rem; color: var(--muted); }
-    .abrechnung-job-select { flex: 1; min-width: 220px; padding: 0.4rem 0.5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
-    .abrechnung-buckets { display: grid; grid-template-columns: 1fr; gap: 0.75rem; max-width: 720px; }
-    .abrechnung-bucket { border: 1px solid var(--accent); border-radius: 6px; padding: 0.6rem 0.75rem; background: var(--bg); display: flex; flex-direction: column; gap: 0.45rem; min-height: 0; }
-    .abrechnung-bucket h3 { margin: 0; font-size: 1rem; }
-    .abrechnung-bucket .hint { margin: 0; font-size: 0.8rem; color: var(--muted); }
-    .abrechnung-comments { list-style: none; margin: 0 0 0.35rem 0; padding: 0; max-height: 12rem; overflow: auto; font-size: 0.85rem; border: 1px solid var(--accent); border-radius: 4px; padding: 0.35rem 0.45rem; background: rgba(0,0,0,0.03); }
-    .abrechnung-comment-item { padding: 0.35rem 0; border-bottom: 1px solid var(--accent); }
-    .abrechnung-comment-item:last-child { border-bottom: none; }
-    .abrechnung-comment-meta { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.2rem; }
-    .abrechnung-comment-body { white-space: pre-wrap; word-break: break-word; }
-    .abrechnung-comments .empty { border: none; padding: 0.25rem 0; color: var(--muted); font-style: italic; }
-    .abrechnung-bucket textarea { width: 100%; min-height: 6rem; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.9rem; resize: vertical; }
-    .abrechnung-files { list-style: none; margin: 0; padding: 0; max-height: 14rem; overflow: auto; font-size: 0.88rem; }
-    .abrechnung-files li { display: flex; align-items: center; justify-content: space-between; gap: 0.35rem; padding: 0.35rem 0; border-bottom: 1px solid var(--accent); }
-    .abrechnung-files li:last-child { border-bottom: none; }
-    .abrechnung-files a { color: var(--text); text-decoration: underline; word-break: break-all; }
-    .abrechnung-files .btn { padding: 0.15rem 0.45rem; font-size: 0.75rem; }
-    .abrechnung-upload { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
-    .abrechnung-upload input[type=file] { font-size: 0.8rem; max-width: 100%; }
+    .view-abrechnung { display: none; padding: 0; width: 100%; max-width: none; margin: 0; box-sizing: border-box; flex: 1; min-height: 0; }
+    .view-abrechnung.active { display: flex; flex-direction: column; width: 100%; max-width: none; }
+    #view-abrechnung #abrechnung-host { flex: 1; min-height: 0; overflow: auto; width: 100%; }
+    #view-abrechnung .page-abrechnung .btn { font-family: inherit; }
     .anlagenstamm-search-row { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem; }
     .anlagenstamm-search-row input { flex:1; min-width:220px; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
     .anlagenstamm-search-filters { display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:0.5rem; width:100%; margin-bottom:0.5rem; }
@@ -971,7 +947,7 @@
     <nav class="toolbar" aria-label="Hauptnavigation">
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
     <button class="btn btn-ghost" id="btnViewDienstreise" title="Auftragsliste, RAMS Abrufen und Erstellen">Aufträge</button>
-    <button type="button" class="btn btn-ghost" id="btnViewAbrechnung" title="Abrechnung (eingebettet, mit Offline-Hinweis)">Abrechnung</button>
+    <button type="button" class="btn btn-ghost" id="btnViewAbrechnung" title="Abrechnung">Abrechnung</button>
     <div class="toolbar-dropdown-wrap">
       <button type="button" class="btn btn-ghost" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">Protokolle ▾</button>
       <div class="toolbar-dropdown" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
@@ -1125,40 +1101,8 @@
       <div id="viewProjektdatenContent" class="modal-detail-content"><span class="empty">Auftrag per Doppelklick öffnen.</span></div>
     </div>
   </main>
-  <main id="viewAbrechnung" class="view-abrechnung" aria-label="Abrechnung">
-    <div class="abrechnung-embed-toolbar">
-      <p class="abrechnung-embed-hint">Abrechnung lokal in der App: Aufträge und Dateien werden zwischengespeichert und bei Verbindung zur Dispo abgeglichen (kein eingebettetes Dispo-Fenster).</p>
-      <div class="abrechnung-toolbar-actions">
-        <label class="settings-row" style="margin:0;display:flex;align-items:center;gap:0.35rem"><span style="color:var(--muted);font-size:0.85rem">Monat</span>
-          <input type="month" id="abrechnungPeriod" class="abrechnung-period" />
-        </label>
-        <button type="button" class="btn btn-primary" id="btnAbrechnungSync">Mit Dispo abgleichen</button>
-        <button type="button" class="btn btn-ghost" id="btnAbrechnungReload">Ansicht aktualisieren</button>
-      </div>
-    </div>
-    <p id="abrechnungStatusLine" class="abrechnung-status" aria-live="polite"></p>
-    <div id="abrechnungNative" class="abrechnung-native">
-      <div class="abrechnung-job-row">
-        <label for="abrechnungJobSelect">Auftrag</label>
-        <select id="abrechnungJobSelect" class="abrechnung-job-select" aria-label="Auftrag für Abrechnung">
-          <option value="">— Monat wählen / abgleichen —</option>
-        </select>
-      </div>
-      <p id="abrechnungJobMeta" class="hint" style="margin:0;font-size:0.85rem;color:var(--muted)"></p>
-      <div class="abrechnung-buckets">
-        <section class="abrechnung-bucket" aria-label="Abrechnung">
-          <h3>Abrechnung</h3>
-          <p class="hint">Kommentarverlauf und Dateien (Dispo und Buchhaltung zusammengeführt).</p>
-          <ul id="abrechnungComments" class="abrechnung-comments" aria-label="Kommentare Abrechnung"></ul>
-          <textarea id="abrechnungNote" placeholder="Neuen Kommentar …" disabled></textarea>
-          <button type="button" class="btn btn-primary" id="btnAbrechnungSaveNote" disabled>Kommentar speichern</button>
-          <ul id="abrechnungFiles" class="abrechnung-files"></ul>
-          <div class="abrechnung-upload">
-            <input type="file" id="abrechnungUpload" disabled />
-          </div>
-        </section>
-      </div>
-    </div>
+  <main id="view-abrechnung" class="view-abrechnung view-host-panel" aria-label="Abrechnung">
+    <div id="abrechnung-host"></div>
   </main>
   <main id="viewDienstreise" class="view-dienstreise view-auftraege" aria-label="Aufträge">
     <div class="card">
@@ -1588,8 +1532,11 @@
   <script src="signature_widget.js"></script>
   <script src="rams_wizard_core.js"></script>
   <script src="js/view-web-embed.js"></script>
-  <script src="js/anlagenstamm-offline-view.js"></script>
+  <script src="js/web-page-host.js"></script>
+  <script src="js/view-anlagenstamm.js"></script>
+  <script src="js/view-abrechnung.js?v=20260616f"></script>
   <script src="app.js"></script>
+  <script src="js/abrechnung-laptop-bridge.js?v=20260616f"></script>
   <script src="rams_wizard.js"></script>
 </body>
 </html>

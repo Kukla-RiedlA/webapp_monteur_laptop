@@ -93,6 +93,16 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_fab ON anlagenstamm_local(fabrikationsnummer)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_type ON anlagenstamm_local(type)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_kunde ON anlagenstamm_local(aktueller_kunde)');
+  for (const col of ['pn_root_name TEXT', 'ted_mechanik TEXT']) {
+    try {
+      run(`ALTER TABLE anlagenstamm_local ADD COLUMN ${col}`);
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err);
+      if (!/duplicate column name/i.test(msg)) {
+        console.warn('[anlagenstamm-local] column migration:', msg);
+      }
+    }
+  }
   run(`CREATE TABLE IF NOT EXISTS anlagenstamm_sync_state (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       last_full_sync_at TEXT,
@@ -162,6 +172,80 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
 function rowCount(db) {
   const r = db.prepare('SELECT COUNT(*) AS c FROM anlagenstamm_local').get();
   return r && r.c != null ? Number(r.c) : 0;
+}
+
+const ANLAGENSTAMM_LOCAL_SELECT = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+              material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
+              geliefert_ueber, projekt, bemerkungen, customer_country,
+              pn_root_name, ted_mechanik, dirty, synced_at
+       FROM anlagenstamm_local`;
+
+function parseTedMechanik(raw) {
+  if (raw == null || raw === '') return [];
+  if (Array.isArray(raw)) return raw;
+  try {
+    const parsed = JSON.parse(String(raw));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [String(raw)];
+  }
+}
+
+function mapRowToListApi(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    fabrikationsnummer: row.fabrikationsnummer || '',
+    type: row.type || '',
+    leistung: row.leistung || '',
+    kraftaufnehmer: row.kraftaufnehmer || '',
+    nenngeschwindigkeit: row.nenngeschwindigkeit || '',
+    material: row.material || '',
+    tacho: row.tacho || '',
+    elektronik: row.elektronik || '',
+    dms_nr: row.dms_nr || '',
+    position: row.position || '',
+    aktueller_kunde: row.aktueller_kunde || '',
+    letzter_besuch: row.letzter_besuch || '',
+    geliefert_ueber: row.geliefert_ueber || '',
+    projekt: row.projekt || '',
+    bemerkungen: row.bemerkungen || '',
+    customer_country: row.customer_country || '',
+    pn_root_name: row.pn_root_name || '',
+    ted_mechanik: parseTedMechanik(row.ted_mechanik),
+  };
+}
+
+function listAllAnlagenstammLocal(db) {
+  ensureAnlagenstammLocalSchema(db);
+  const rows = db
+    .prepare(`${ANLAGENSTAMM_LOCAL_SELECT} ORDER BY TRIM(fabrikationsnummer) ASC, id ASC`)
+    .all();
+  return rows.map(mapRowToListApi);
+}
+
+function lookupById(db, id) {
+  ensureAnlagenstammLocalSchema(db);
+  const n = parseInt(id, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const row = db.prepare(`${ANLAGENSTAMM_LOCAL_SELECT} WHERE id = ?`).get(n);
+  return row ? mapRowToListApi(row) : null;
+}
+
+function deleteLocal(db, id) {
+  ensureAnlagenstammLocalSchema(db);
+  const n = parseInt(id, 10);
+  if (!Number.isFinite(n) || n <= 0) return { success: false, error: 'id ungültig' };
+  const row = db.prepare('SELECT id, fabrikationsnummer FROM anlagenstamm_local WHERE id = ?').get(n);
+  if (!row) return { success: false, error: 'Anlage nicht gefunden' };
+  const fab = String(row.fabrikationsnummer || '').trim();
+  db.prepare('DELETE FROM anlagenstamm_local WHERE id = ?').run(n);
+  if (fab) {
+    db.prepare(
+      `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`,
+    ).run(fab);
+  }
+  return { success: true, id: n, fabrikationsnummer: fab, source: 'local_cache' };
 }
 
 /** Liste für GET /api/anlagenstamm/list (wie Dispo Desktop, aus lokalem Cache). */
@@ -339,9 +423,10 @@ const UPSERT_ANLAGENSTAMM_SQL = `
     INSERT INTO anlagenstamm_local (
       id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
       material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
-      geliefert_ueber, projekt, bemerkungen, customer_country, synced_at, dirty
+      geliefert_ueber, projekt, bemerkungen, customer_country, pn_root_name, ted_mechanik,
+      synced_at, dirty
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
     )
     ON CONFLICT(id) DO UPDATE SET
       fabrikationsnummer = excluded.fabrikationsnummer,
@@ -360,9 +445,137 @@ const UPSERT_ANLAGENSTAMM_SQL = `
       projekt = excluded.projekt,
       bemerkungen = excluded.bemerkungen,
       customer_country = excluded.customer_country,
+      pn_root_name = excluded.pn_root_name,
+      ted_mechanik = excluded.ted_mechanik,
       synced_at = excluded.synced_at,
       dirty = CASE WHEN anlagenstamm_local.dirty = 1 THEN 1 ELSE 0 END
   `;
+
+function serializeTedMechanikForDb(ted) {
+  if (ted == null || ted === '') return '';
+  if (Array.isArray(ted)) {
+    if (!ted.length) return '';
+    try {
+      return JSON.stringify(ted);
+    } catch (_) {
+      return '';
+    }
+  }
+  return String(ted);
+}
+
+function lookupFabInExtrasMap(map, fab) {
+  if (!map || !fab) return undefined;
+  const f = String(fab).trim();
+  if (map[f] != null) return map[f];
+  const digits = f.replace(/\D/g, '');
+  if (digits) {
+    if (map[digits] != null) return map[digits];
+    if (map[Number(digits)] != null) return map[Number(digits)];
+    const fnKey = `FN${digits}`;
+    if (map[fnKey] != null) return map[fnKey];
+    for (const k of Object.keys(map)) {
+      if (String(k).replace(/\D/g, '') === digits) return map[k];
+    }
+  }
+  return undefined;
+}
+
+async function fetchAnlagenstammListExtrasChunk(base, authHeader, fabs) {
+  const url = `${base}/api/anlagenstamm_list_extras.php`;
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, authHeader || {});
+  if (authHeader && authHeader.Authorization) {
+    headers['X-Kukla-Authorization'] = authHeader.Authorization;
+  }
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), DISPO_EXPORT_CHUNK_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ fabs }),
+      signal: ac.signal,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.success === false) return null;
+    return data;
+  } catch (_) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** TED / PROJEKTE NEU vom Server nachladen (wie Dispo Desktop). */
+async function mergeExtrasIntoRows(base, authHeader, rows) {
+  const fabs = (rows || [])
+    .map((r) => String(r.fabrikationsnummer || r.fab || '').trim())
+    .filter(Boolean);
+  if (!fabs.length) return rows || [];
+
+  const pnByFab = {};
+  const tedByFab = {};
+  const chunkSize = 50;
+  try {
+    for (let i = 0; i < fabs.length; i += chunkSize) {
+      const chunk = fabs.slice(i, i + chunkSize);
+      const data = await fetchAnlagenstammListExtrasChunk(base, authHeader, chunk);
+      if (!data) continue;
+      Object.assign(pnByFab, data.pn_by_fab || {});
+      Object.assign(tedByFab, data.ted_by_fab || {});
+    }
+  } catch (_) {
+    return rows;
+  }
+
+  return (rows || []).map((row) => {
+    const fab = String(row.fabrikationsnummer || row.fab || '').trim();
+    if (!fab) return row;
+    const pn = lookupFabInExtrasMap(pnByFab, fab);
+    const ted = lookupFabInExtrasMap(tedByFab, fab);
+    const out = { ...row };
+    if (pn != null && String(pn).trim() !== '') out.pn_root_name = String(pn);
+    if (ted != null) out.ted_mechanik = ted;
+    return out;
+  });
+}
+
+/** TED/PN-Extras in SQLite persistieren (nach Online-Merge). */
+function persistAnlagenstammExtras(db, pnByFab, tedByFab) {
+  if (!db) return 0;
+  ensureAnlagenstammLocalSchema(db);
+  const updateStmt = db.prepare(
+    `UPDATE anlagenstamm_local SET pn_root_name = ?, ted_mechanik = ?
+     WHERE TRIM(fabrikationsnummer) = TRIM(?) AND dirty = 0`,
+  );
+  let updated = 0;
+  const allFabs = new Set([
+    ...Object.keys(pnByFab || {}),
+    ...Object.keys(tedByFab || {}),
+  ]);
+  for (const fab of allFabs) {
+    const f = String(fab || '').trim();
+    if (!f) continue;
+    const pn = String((pnByFab && pnByFab[fab]) || '').trim();
+    const ted = tedByFab && tedByFab[fab];
+    const tedJson = serializeTedMechanikForDb(ted);
+    if (!pn && !tedJson) continue;
+    const existing = db
+      .prepare(
+        'SELECT pn_root_name, ted_mechanik FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) AND dirty = 0 LIMIT 1',
+      )
+      .get(f);
+    if (!existing) continue;
+    const curPn = String(existing.pn_root_name || '').trim();
+    const curTed = parseTedMechanik(existing.ted_mechanik);
+    const nextPn = pn || curPn;
+    const nextTedJson = tedJson || (curTed.length ? JSON.stringify(curTed) : '');
+    if (nextPn === curPn && nextTedJson === String(existing.ted_mechanik || '')) continue;
+    updateStmt.run(nextPn, nextTedJson, f);
+    updated++;
+  }
+  return updated;
+}
 
 /** Leere dirty-Stubs (nur FN aus jobs.fabrikationsnummern) blockieren Server-Upserts — entfernen. */
 function clearEmptyDirtyAnlagenstammStubs(db) {
@@ -410,6 +623,8 @@ function upsertAnlagenstammRows(db, rows) {
       if (byFab && byFab.id !== id) removeEmptyDirtyStub(byFab);
     }
     removeEmptyDirtyStub(byId);
+    const pnRoot = row.pn_root_name != null ? String(row.pn_root_name).trim() : '';
+    const tedJson = serializeTedMechanikForDb(row.ted_mechanik);
     upsertStmt.run(
       id,
       fab,
@@ -428,6 +643,8 @@ function upsertAnlagenstammRows(db, rows) {
       row.projekt != null ? String(row.projekt) : '',
       row.bemerkungen != null ? String(row.bemerkungen) : '',
       row.customer_country != null ? String(row.customer_country) : '',
+      pnRoot,
+      tedJson,
       syncedAt,
     );
   }
@@ -743,7 +960,10 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
       }
       totalPages = data.total_pages != null ? Number(data.total_pages) : 1;
       totalCount = data.total_count != null ? Number(data.total_count) : 0;
-      const rows = Array.isArray(data.rows) ? data.rows : [];
+      let rows = Array.isArray(data.rows) ? data.rows : [];
+      if (rows.length) {
+        rows = await mergeExtrasIntoRows(base, auth, rows);
+      }
       await withDbLock(async () => {
         if (rows.length) upsertAnlagenstammRows(db, rows);
         db.prepare(
@@ -1070,8 +1290,16 @@ function buildParameterTrendChain(db, fab) {
 module.exports = {
   ensureAnlagenstammLocalSchema,
   rowCount,
+  listAllAnlagenstammLocal,
+  lookupById,
+  deleteLocal,
+  mapRowToListApi,
+  parseTedMechanik,
   listAnlagenstammForApi,
   upsertAnlagenstammRows,
+  mergeExtrasIntoRows,
+  persistAnlagenstammExtras,
+  lookupFabInExtrasMap,
   clearEmptyDirtyAnlagenstammStubs,
   clampForDispoAnlagenstamm,
   clampForDispoJobFabrikation,

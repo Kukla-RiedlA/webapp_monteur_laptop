@@ -1,0 +1,447 @@
+/* Abrechnung — Parität Dispo Desktop/Web: Karte = gleiche Breite wie Filterzeile */
+
+.page-abrechnung {
+  padding: 20px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.page-abrechnung > h1,
+.abrechnung-col > h1 {
+  margin: 0 0 16px 0;
+  font-size: 1.25rem;
+  align-self: flex-start;
+  width: 100%;
+}
+
+.abrechnung-col {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.abrechnung-filters {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 20px;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.abrechnung-filters label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.abrechnung-filters select {
+  min-width: 200px;
+  padding: 6px 8px;
+  width: auto;
+  max-width: none;
+  display: block;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  background: #fff;
+  color: #1a1a1a;
+  box-sizing: border-box;
+  -webkit-appearance: menulist;
+  appearance: menulist;
+}
+
+.abrechnung-filters label.ab-filter-job {
+  flex: 1 1 0;
+  min-width: 280px;
+}
+
+.abrechnung-filters #abJobSelect {
+  width: 100%;
+  min-width: 0;
+}
+
+.ab-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.ab-card {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 14px;
+  text-align: left;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ab-card h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+
+.ab-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 0;
+}
+
+.ab-billing-fields {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  margin-bottom: 12px;
+  text-align: left;
+}
+
+.ab-montage-billing-box {
+  width: 100%;
+  margin-top: 0;
+  margin-bottom: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #eee;
+  box-sizing: border-box;
+}
+
+.ab-montage-mv-block {
+  margin-bottom: 4px;
+}
+
+.ab-montage-mv-label,
+.ab-montage-et-label {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
+  margin: 6px 0 0 0;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #b91c1c;
+  line-height: 1.25;
+}
+
+.ab-montage-billing-box input[type="checkbox"] {
+  width: 1.15em;
+  height: 1.15em;
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: #b91c1c;
+}
+
+.ab-montage-billing-box label span {
+  user-select: none;
+}
+
+.ab-montage-billing-box label input[disabled] ~ span {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.ab-montage-meta-line {
+  font-size: 0.75em;
+  font-weight: 400;
+  color: #64748b;
+  line-height: 1.25;
+  margin-top: 2px;
+  text-align: left;
+}
+
+.ab-et-row {
+  display: none;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e5e7eb;
+}
+
+.ab-et-row.visible {
+  display: block;
+}
+
+.ab-travel-box {
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #eee;
+  max-height: min(280px, 42vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.ab-travel-box > div {
+  width: 100%;
+}
+
+.ab-travel-box label {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #b91c1c;
+}
+
+.ab-travel-box input[type="checkbox"] {
+  width: 1.15em;
+  height: 1.15em;
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: #b91c1c;
+}
+
+.ab-billing-meta {
+  font-size: 0.75em;
+  font-weight: 400;
+  color: #64748b;
+  line-height: 1.25;
+  margin-top: 2px;
+  text-align: left;
+}
+
+.ab-dropzone {
+  border: 2px dashed #9ca3af;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  background: #fafafa;
+}
+
+.ab-dropzone.dragover {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+.ab-dropzone.hidden {
+  display: none;
+}
+
+.ab-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ab-files li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #eee;
+  font-size: 13px;
+}
+
+.ab-files li .ab-file-delete-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: #6b7280;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.ab-files li .ab-file-delete-btn:hover {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.ab-files li .ab-file-delete-btn svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.ab-files a {
+  color: #1d4ed8;
+  flex: 1;
+  min-width: 0;
+}
+
+.ab-note {
+  display: block;
+  width: 100%;
+  max-width: none;
+  min-height: 90px;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+#view-abrechnung .ab-comments-block,
+.page-abrechnung .ab-comments-block {
+  width: 100%;
+}
+
+.ab-comments-label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+#view-abrechnung.view-host-panel .ab-card textarea.ab-note,
+#view-abrechnung .page-abrechnung .ab-card textarea.ab-note,
+.page-abrechnung .ab-comments-block textarea.ab-note {
+  display: block;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.ab-note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.ab-note[readonly] {
+  background: #f3f4f6;
+}
+
+.ab-muted {
+  color: #6b7280;
+  font-size: 12px;
+  margin-top: 8px;
+  text-align: left;
+}
+
+.ab-banner {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ab-status-actions {
+  display: flex;
+  width: 100%;
+}
+
+.ab-comment-list {
+  margin: 10px 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.ab-comment-item {
+  border-bottom: 1px solid #eee;
+  padding: 8px 0;
+  font-size: 13px;
+}
+
+.ab-comment-head {
+  font-size: 11px;
+  color: #64748b;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.ab-comment-head > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.ab-comment-actions {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.ab-comment-actions button {
+  background: none;
+  border: none;
+  padding: 6px;
+  cursor: pointer;
+  color: #64748b;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.ab-comment-actions button:hover {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.ab-comment-actions button svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+#view-abrechnung.view-host-panel {
+  padding: 0;
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#view-abrechnung #abrechnung-host {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  width: 100%;
+}
+
+#view-abrechnung .page-abrechnung .btn {
+  font-family: inherit;
+}
+
+#view-abrechnung .page-abrechnung select,
+#view-abrechnung .page-abrechnung textarea.ab-note {
+  background: #fff;
+  color: #1a1a1a;
+  border-color: #ccc;
+}

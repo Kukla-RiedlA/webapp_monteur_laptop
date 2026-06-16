@@ -210,6 +210,12 @@
   }
 
   const getTechId = () => parseInt(document.getElementById('technicianId').value, 10) || 0;
+  window.getTechId = getTechId;
+  window.getDispoBaseUrl = getDispoBaseUrl;
+  window.getDispoUsername = getDispoUsername;
+  window.getDispoPassword = getDispoPassword;
+  window.getDispoExternalUrl = getDispoExternalUrl;
+  window.getDispoInternalUrl = getDispoInternalUrl;
   const getServerUsername = () => (document.getElementById('serverUsername') && document.getElementById('serverUsername').value || '').trim();
   const getServerPassword = () => (document.getElementById('serverPassword') && document.getElementById('serverPassword').value || '');
 
@@ -456,12 +462,12 @@
   }
   function getDispoUsername() {
     var u = getServerUsername();
-    if (u !== undefined) return u;
+    if (u) return u;
     try { return (localStorage.getItem(SETTINGS_KEYS.serverUsername) || '').trim(); } catch (e) { return ''; }
   }
   function getDispoPassword() {
     var p = getServerPassword();
-    if (p !== undefined) return p;
+    if (p) return p;
     try { return localStorage.getItem(SETTINGS_KEYS.serverPassword) || ''; } catch (e) { return ''; }
   }
 
@@ -614,24 +620,6 @@
     return p.toString();
   }
 
-  var abrechnungCurrentJobs = [];
-
-  function abrechnungAuthHeaders() {
-    return Object.assign(
-      { 'X-Technician-Id': String(getTechId()) },
-      dispoBasicAuthHeaders(getDispoUsername, getDispoPassword)
-    );
-  }
-
-  function abrechnungBody(extra) {
-    return Object.assign({
-      baseUrl: getDispoBaseUrl(),
-      technicianId: getTechId(),
-      serverUsername: getDispoUsername(),
-      serverPassword: getDispoPassword()
-    }, extra || {});
-  }
-
   function anlagenstammDispoBody(extra) {
     return Object.assign({
       baseUrl: getDispoBaseUrl(),
@@ -640,435 +628,6 @@
       serverUsername: getDispoUsername(),
       serverPassword: getDispoPassword()
     }, extra || {});
-  }
-
-  /** Nur Abrechnungs-Ansicht: bearbeiten solange nicht endgültig abgerechnet (Status oder beide Flags). */
-  function abrechnungEffectiveCanWrite(job) {
-    if (!job || typeof job !== 'object') return true;
-    if (job.can_write === false) return false;
-    var st = String(job.status != null ? job.status : '').trim();
-    if (st === 'abgerechnet') return false;
-    var ma = Number(job.montage_abgerechnet);
-    var mv = Number(job.montage_verrechnet);
-    if (Number.isFinite(ma) && Number.isFinite(mv) && ma === 1 && mv === 1) return false;
-    return true;
-  }
-
-  async function abrechnungFetchOutboxCount() {
-    try {
-      const r = await fetch(API_BASE + '/api/abrechnung/outbox_count?technician_id=' + encodeURIComponent(getTechId()), {
-        headers: abrechnungAuthHeaders()
-      });
-      const j = await r.json();
-      return j && j.ok ? (j.count != null ? j.count : 0) : 0;
-    } catch (e) {
-      return 0;
-    }
-  }
-
-  async function updateAbrechnungStatusLine() {
-    var el = document.getElementById('abrechnungStatusLine');
-    if (!el) return;
-    var parts = [];
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      parts.push('Offline — Anzeige aus lokalem Cache.');
-    } else {
-      parts.push('Netzwerk verfügbar.');
-    }
-    var n = await abrechnungFetchOutboxCount();
-    if (n > 0) {
-      parts.push('<span class="pending">' + n + ' ausstehende Änderungen (Sync)</span>');
-    }
-    el.innerHTML = parts.join(' ');
-  }
-
-  function abrechnungSelectedJobObj() {
-    var sel = document.getElementById('abrechnungJobSelect');
-    var id = sel && sel.value ? parseInt(sel.value, 10) : 0;
-    if (!id) return null;
-    for (var i = 0; i < abrechnungCurrentJobs.length; i++) {
-      if (abrechnungCurrentJobs[i].id === id) return abrechnungCurrentJobs[i];
-    }
-    return { id: id, can_write: true };
-  }
-
-  function mergeAbrechnungComments(comments) {
-    var c = comments || {};
-    var list = [];
-    (c.dispo || []).forEach(function (item) {
-      var copy = {};
-      Object.keys(item).forEach(function (k) { copy[k] = item[k]; });
-      copy._bucket = 'dispo';
-      list.push(copy);
-    });
-    (c.buchhaltung || []).forEach(function (item) {
-      var copy2 = {};
-      Object.keys(item).forEach(function (k) { copy2[k] = item[k]; });
-      copy2._bucket = 'buchhaltung';
-      list.push(copy2);
-    });
-    list.sort(function (a, b) {
-      var da = String(a.created_at || '');
-      var db = String(b.created_at || '');
-      if (da !== db) return da < db ? -1 : (da > db ? 1 : 0);
-      return (parseInt(a.id, 10) || 0) - (parseInt(b.id, 10) || 0);
-    });
-    return list;
-  }
-
-  function renderAbrechnungCommentList(ulEl, items) {
-    if (!ulEl) return;
-    ulEl.innerHTML = '';
-    var list = Array.isArray(items) ? items : [];
-    list.forEach(function (c) {
-      var li = document.createElement('li');
-      li.className = 'abrechnung-comment-item';
-      var meta = document.createElement('div');
-      meta.className = 'abrechnung-comment-meta';
-      var parts = [];
-      if (c.author_name) parts.push(String(c.author_name));
-      if (c.created_at) parts.push(String(c.created_at));
-      if (c._bucket === 'buchhaltung') parts.push('Buchhaltung');
-      meta.textContent = parts.join(' · ');
-      var body = document.createElement('div');
-      body.className = 'abrechnung-comment-body';
-      body.textContent = c.body != null ? String(c.body) : '';
-      li.appendChild(meta);
-      li.appendChild(body);
-      ulEl.appendChild(li);
-    });
-    if (list.length === 0) {
-      var empty = document.createElement('li');
-      empty.className = 'empty';
-      empty.textContent = 'Noch keine Kommentare.';
-      ulEl.appendChild(empty);
-    }
-  }
-
-  function formatAbrechnungFileSize(n) {
-    if (n == null || !Number.isFinite(Number(n))) return '';
-    var b = Number(n);
-    if (b < 1024) return b + ' B';
-    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
-    return (b / 1048576).toFixed(1) + ' MB';
-  }
-
-  function abrechnungFileBasename(fn) {
-    var s = String(fn || '');
-    var i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
-    return i >= 0 ? s.slice(i + 1) : s;
-  }
-
-  /** Öffnen/Download mit Basic-Auth (Browser-Link ohne fetch sendet keine Authorization-Header). */
-  async function openAbrechnungFile(jobId, bucket, fileName) {
-    try {
-      var base = (getDispoBaseUrl() || '').trim();
-      var params = { job_server_id: jobId, bucket: bucket, name: fileName };
-      if (base) params.base_url = base;
-      var u = getDispoUsername();
-      var p = getDispoPassword();
-      if (u != null && String(u).trim() !== '') {
-        params.serverUsername = String(u).trim();
-        params.serverPassword = p != null ? String(p) : '';
-      }
-      var r = await fetch(API_BASE + '/api/abrechnung/file?' + qs(params), { headers: abrechnungAuthHeaders() });
-      if (!r.ok) {
-        var errText = await r.text().catch(function () { return ''; });
-        throw new Error(errText || ('HTTP ' + r.status));
-      }
-      var blob = await r.blob();
-      var url = URL.createObjectURL(blob);
-      var lower = abrechnungFileBasename(fileName).toLowerCase();
-      if (/\.(pdf|png|jpg|jpeg|gif|webp|svg)$/i.test(lower)) {
-        window.open(url, '_blank', 'noopener');
-        setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 120000);
-      } else {
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = abrechnungFileBasename(fileName) || 'datei';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e2) {} }, 3000);
-      }
-    } catch (e) {
-      window.alert((e && e.message) ? e.message : String(e));
-    }
-  }
-
-  function dedupeAbrechnungFilesForDisplay(files) {
-    var m = new Map();
-    (files || []).forEach(function (f) {
-      var fn = f.file_name || f.name || '';
-      if (!fn) return;
-      var bucket = f.bucket != null ? String(f.bucket) : 'dispo';
-      var existing = m.get(fn);
-      if (!existing || (existing.bucket === 'buchhaltung' && bucket === 'dispo')) {
-        m.set(fn, {
-          file_name: fn,
-          bucket: bucket,
-          size_bytes: f.size_bytes,
-          remote_only: f.remote_only
-        });
-      }
-    });
-    return Array.from(m.values()).sort(function (a, b) {
-      return String(a.file_name).localeCompare(String(b.file_name));
-    });
-  }
-
-  function renderAbrechnungFileList(ulEl, files, jobId, canWrite) {
-    if (!ulEl) return;
-    ulEl.innerHTML = '';
-    var list = dedupeAbrechnungFilesForDisplay(files);
-    list.forEach(function (f) {
-      var bucket = f.bucket != null ? String(f.bucket) : 'dispo';
-      var li = document.createElement('li');
-      var a = document.createElement('a');
-      a.href = '#';
-      a.className = 'abrechnung-file-link';
-      a.setAttribute('role', 'button');
-      var label = (f.file_name || f.name || '') + (f.size_bytes != null ? ' (' + formatAbrechnungFileSize(f.size_bytes) + ')' : '');
-      if (f.remote_only) label += ' · Dispo';
-      a.textContent = label || '(Datei)';
-      a.addEventListener('click', function (ev) {
-        ev.preventDefault();
-        openAbrechnungFile(jobId, bucket, f.file_name || f.name);
-      });
-      li.appendChild(a);
-      if (canWrite) {
-        var del = document.createElement('button');
-        del.type = 'button';
-        del.className = 'btn btn-ghost';
-        del.textContent = 'Löschen';
-        del.addEventListener('click', function () {
-          if (!window.confirm('Datei wirklich löschen?')) return;
-          abrechnungDeleteFile(jobId, bucket, f.file_name || f.name);
-        });
-        li.appendChild(del);
-      }
-      ulEl.appendChild(li);
-    });
-    if (list.length === 0) {
-      var empty = document.createElement('li');
-      empty.className = 'empty';
-      empty.textContent = 'Keine Dateien (mit Dispo-URL unter Einstellungen werden Namen geladen; Klick lädt die Datei).';
-      ulEl.appendChild(empty);
-    }
-  }
-
-  async function abrechnungDeleteFile(jobId, bucket, name) {
-    try {
-      var r = await fetch(API_BASE + '/api/abrechnung/delete_file', {
-        method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
-        body: JSON.stringify(abrechnungBody({ job_server_id: jobId, bucket: bucket, name: name }))
-      });
-      var j = await r.json();
-      if (!j.ok) throw new Error(j.error || 'Löschen fehlgeschlagen');
-      if (j.queued && typeof showToast === 'function') showToast('Löschen wird ausgeführt, sobald die Dispo erreichbar ist.');
-      await refreshAbrechnungNativeUi(false);
-    } catch (e) {
-      window.alert((e && e.message) ? e.message : String(e));
-    }
-  }
-
-  async function loadAbrechnungJobsIntoSelect(period) {
-    var tid = getTechId();
-    var sel = document.getElementById('abrechnungJobSelect');
-    if (!sel) return;
-    var prev = sel.value;
-    var r = await fetch(API_BASE + '/api/abrechnung/jobs?' + qs({ technician_id: tid, period: period }), { headers: abrechnungAuthHeaders() });
-    var j = await r.json();
-    abrechnungCurrentJobs = (j && j.jobs) ? j.jobs : [];
-    sel.innerHTML = '';
-    var opt0 = document.createElement('option');
-    opt0.value = '';
-    opt0.textContent = abrechnungCurrentJobs.length ? '— Auftrag wählen —' : '— Keine Aufträge im Cache (Monat abgleichen) —';
-    sel.appendChild(opt0);
-    abrechnungCurrentJobs.forEach(function (job) {
-      var o = document.createElement('option');
-      o.value = String(job.id);
-      o.textContent = job.label || ('#' + job.id);
-      sel.appendChild(o);
-    });
-    if (prev && abrechnungCurrentJobs.some(function (x) { return String(x.id) === prev; })) sel.value = prev;
-  }
-
-  async function loadAbrechnungBundleForSelection() {
-    var sel = document.getElementById('abrechnungJobSelect');
-    var jid = sel && sel.value ? parseInt(sel.value, 10) : 0;
-    var noteEl = document.getElementById('abrechnungNote');
-    var commentsEl = document.getElementById('abrechnungComments');
-    var filesEl = document.getElementById('abrechnungFiles');
-    var meta = document.getElementById('abrechnungJobMeta');
-    var saveBtn = document.getElementById('btnAbrechnungSaveNote');
-    var uploadEl = document.getElementById('abrechnungUpload');
-    var job = abrechnungSelectedJobObj();
-    var canWrite = abrechnungEffectiveCanWrite(job);
-
-    if (!jid) {
-      if (commentsEl) commentsEl.innerHTML = '';
-      if (noteEl) { noteEl.value = ''; noteEl.disabled = true; }
-      if (filesEl) filesEl.innerHTML = '';
-      if (saveBtn) saveBtn.disabled = true;
-      if (uploadEl) { uploadEl.disabled = true; uploadEl.value = ''; }
-      if (meta) meta.textContent = '';
-      return;
-    }
-
-    var tid = getTechId();
-    var bundleQs = { technician_id: tid, job_server_id: jid };
-    var baseDispo = (getDispoBaseUrl() || '').trim();
-    if (baseDispo) bundleQs.base_url = baseDispo;
-    var uAuth = getDispoUsername();
-    var pAuth = getDispoPassword();
-    if (uAuth != null && String(uAuth).trim() !== '') {
-      bundleQs.serverUsername = String(uAuth).trim();
-      bundleQs.serverPassword = pAuth != null ? String(pAuth) : '';
-    }
-    var r = await fetch(API_BASE + '/api/abrechnung/bundle?' + qs(bundleQs), { headers: abrechnungAuthHeaders() });
-    var j = await r.json();
-    if (!j.ok) {
-      if (meta) meta.textContent = j.error || 'Daten konnten nicht geladen werden.';
-      return;
-    }
-    var metaParts = [];
-    metaParts.push(canWrite ? 'Bearbeitung für diesen Auftrag erlaubt.' : 'Nur Lesen: Auftrag nicht zur Bearbeitung freigegeben.');
-    if (j.job_id_for_dispo != null && parseInt(j.job_id_for_dispo, 10) !== jid) {
-      metaParts.push('Dispo-Auftrags-ID ' + j.job_id_for_dispo + ' (Auswahl ' + jid + ').');
-    }
-    var fc = Array.isArray(j.files) ? j.files.length : 0;
-    if (fc === 0 && j.dispo_files_error) {
-      metaParts.push('Dateien von Dispo: ' + j.dispo_files_error);
-    }
-    if (j.dispo_comments_error) {
-      metaParts.push('Kommentare von Dispo: ' + j.dispo_comments_error);
-    }
-    if (meta) meta.textContent = metaParts.join(' ');
-    var comments = j.comments || { dispo: [], buchhaltung: [] };
-    renderAbrechnungCommentList(commentsEl, mergeAbrechnungComments(comments));
-    if (noteEl) { noteEl.value = ''; noteEl.placeholder = 'Neuen Kommentar …'; noteEl.disabled = !canWrite; }
-    renderAbrechnungFileList(filesEl, j.files, jid, canWrite);
-    if (saveBtn) saveBtn.disabled = !canWrite;
-    if (uploadEl) uploadEl.disabled = !canWrite;
-  }
-
-  async function refreshAbrechnungNativeUi(withServerSync) {
-    var view = document.getElementById('viewAbrechnung');
-    if (!view || !view.classList.contains('active')) return;
-    var periodEl = document.getElementById('abrechnungPeriod');
-    var period = (periodEl && periodEl.value) ? periodEl.value : new Date().toISOString().slice(0, 7);
-    var tid = getTechId();
-    var meta = document.getElementById('abrechnungJobMeta');
-    if (!tid) {
-      if (meta) meta.textContent = 'Monteur-ID fehlt — bitte unter Einstellungen setzen.';
-      return;
-    }
-    var base = (getDispoBaseUrl() || '').trim();
-    if (withServerSync && base && typeof navigator !== 'undefined' && navigator.onLine !== false) {
-      try {
-        var selEl = document.getElementById('abrechnungJobSelect');
-        var selId = selEl && selEl.value ? parseInt(selEl.value, 10) : 0;
-        var r = await fetch(API_BASE + '/api/background_jobs', {
-          method: 'POST',
-          headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
-          body: JSON.stringify({
-            type: 'abrechnung_refresh',
-            payload: abrechnungBody({ period_ym: period, job_server_id: selId > 0 ? selId : 0 }),
-            dedupe_key: 'abrechnung_refresh:' + tid + ':' + period
-          })
-        });
-        var dj = await r.json();
-        if (!dj.ok) throw new Error(dj.error || 'Abgleich-Job konnte nicht gestartet werden.');
-        if (!dj.job_id) throw new Error('Keine job_id vom Server.');
-        var fj = await pollBackgroundJobUntilTerminal(dj.job_id, null, {});
-        if (fj.status !== 'completed') throw new Error(fj.error || fj.message || 'Abgleich fehlgeschlagen.');
-        var chk = fj.checkpoint && typeof fj.checkpoint === 'object' ? fj.checkpoint : {};
-        var partial = !!chk.abrechnung_partial;
-        if (typeof showToast === 'function') {
-          showToast(
-            partial
-              ? 'Abrechnung aktualisiert (teilweise nur lokaler Stand — gleicher Datenbestand wie Kalender/Dienstreise).'
-              : 'Abrechnung mit Dispo abgeglichen.'
-          );
-        }
-      } catch (e) {
-        var msg = (e && e.message) ? e.message : String(e);
-        if (typeof showToast === 'function') showToast('Abgleich: ' + msg);
-        else window.alert('Abgleich: ' + msg);
-      }
-    } else if (withServerSync && !base) {
-      if (typeof showToast === 'function') showToast('Keine Dispo-URL — nur lokaler Cache.');
-    }
-    await updateAbrechnungStatusLine();
-    try {
-      await loadAbrechnungJobsIntoSelect(period);
-      await loadAbrechnungBundleForSelection();
-    } catch (e) {
-      if (meta) meta.textContent = (e && e.message) ? e.message : String(e);
-    }
-  }
-
-  async function abrechnungSaveNote() {
-    var sel = document.getElementById('abrechnungJobSelect');
-    var jid = sel && sel.value ? parseInt(sel.value, 10) : 0;
-    var ta = document.getElementById('abrechnungNote');
-    if (!jid || !ta) return;
-    try {
-      var r = await fetch(API_BASE + '/api/abrechnung/note', {
-        method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
-        body: JSON.stringify(abrechnungBody({ job_server_id: jid, bucket: 'dispo', body: ta.value }))
-      });
-      var j = await r.json();
-      if (!j.ok) throw new Error(j.error || 'Speichern fehlgeschlagen');
-      if (j.queued && typeof showToast === 'function') showToast('Kommentar lokal gespeichert; Sync bei Verbindung.');
-      else if (typeof showToast === 'function') showToast('Kommentar gespeichert.');
-      await updateAbrechnungStatusLine();
-      await loadAbrechnungBundleForSelection();
-    } catch (e) {
-      window.alert((e && e.message) ? e.message : String(e));
-    }
-  }
-
-  function wireAbrechnungFileUpload(inputId, bucket) {
-    var inp = document.getElementById(inputId);
-    if (!inp) return;
-    inp.addEventListener('change', function () {
-      var f = inp.files && inp.files[0];
-      if (!f) return;
-      var sel = document.getElementById('abrechnungJobSelect');
-      var jid = sel && sel.value ? parseInt(sel.value, 10) : 0;
-      if (!jid) return;
-      var reader = new FileReader();
-      reader.onload = function () {
-        var dataUrl = reader.result;
-        var b64 = typeof dataUrl === 'string' && dataUrl.indexOf(',') >= 0 ? dataUrl.split(',')[1] : '';
-        fetch(API_BASE + '/api/abrechnung/upload', {
-          method: 'POST',
-          headers: Object.assign({ 'Content-Type': 'application/json' }, abrechnungAuthHeaders()),
-          body: JSON.stringify(abrechnungBody({
-            job_server_id: jid,
-            bucket: bucket,
-            filename: f.name,
-            content_base64: b64
-          }))
-        })
-          .then(function (r) { return r.json(); })
-          .then(function (j) {
-            inp.value = '';
-            if (!j.ok) throw new Error(j.error || 'Upload fehlgeschlagen');
-            if (j.queued && typeof showToast === 'function') showToast('Upload eingereiht (wird synchronisiert).');
-            return refreshAbrechnungNativeUi(false);
-          })
-          .catch(function (e) {
-            inp.value = '';
-            window.alert((e && e.message) ? e.message : String(e));
-          });
-      };
-      reader.readAsDataURL(f);
-    });
   }
 
   /** HTTP Basic an den lokalen Electron-Server (127.0.0.1) – Passwort nicht in der URL. */
@@ -5313,6 +4872,9 @@
         if (pullJob.status === 'completed') {
           await waitForActiveDienstreisePullJobs({});
           maybeRefreshLocalLists(true);
+          try {
+            document.dispatchEvent(new CustomEvent('anlagenstamm-data-synced'));
+          } catch (_) { /* ignore */ }
           if (
             selectedJobIdOnDienstreisePage &&
             typeof loadDienstreiseExplorer === 'function'
@@ -6798,9 +6360,9 @@
       badge.classList.remove('offline');
       badge.title = 'Anlagenstamm wie dispo/anlagenstamm.php (online)';
     } else {
-      badge.textContent = 'Offline';
+      badge.textContent = 'Offline (lokaler Cache)';
       badge.classList.add('offline');
-      badge.title = 'Lokale Cache-Liste im Layout von anlagenstamm.php';
+      badge.title = 'Anlagenstamm offline-first — Daten aus monteur.db';
     }
   }
 
@@ -6828,26 +6390,35 @@
     }
   }
 
+  async function loadAbrechnungViewDesktopStyle() {
+    var host = document.getElementById('abrechnung-host');
+    if (!host) return;
+    delete host.dataset.inited;
+    delete host.dataset.reloadBound;
+    if (window.monteurAbrechnung && typeof window.monteurAbrechnung.load === 'function') {
+      await window.monteurAbrechnung.load(host);
+    } else {
+      host.innerHTML = '<p class="ab-muted">Abrechnungsmodul konnte nicht geladen werden.</p>';
+    }
+  }
+
   async function loadAnlagenstammViewDesktopStyle() {
     var legacy = document.getElementById('anlagenstamm-legacy-wrap');
     var host = document.getElementById('anlagenstamm-host');
     var web = window.monteurWebEmbed;
-    if (web && (await web.shouldUseWeb('anlagenstamm'))) {
-      var sessionOk = await ensureDispoWebSession();
-      if (sessionOk) {
-        var shown = await web.show('anlagenstamm');
-        if (shown) {
-          updateAnlagenstammModeBadge(true);
-          if (legacy) legacy.hidden = true;
-          return;
-        }
-      }
-    }
-    if (web) web.showNativeContent('anlagenstamm');
+    if (web && web.showNativeContent) web.showNativeContent('anlagenstamm');
     if (legacy) legacy.hidden = true;
-    if (host && window.monteurAnlagenstammOffline) {
+    if (host) {
       host.hidden = false;
-      await window.monteurAnlagenstammOffline.load(host);
+      if (host.dataset.inited === '1' && host.querySelector('#tableBody')) {
+        updateAnlagenstammModeBadge(false);
+        return;
+      }
+      host.innerHTML = '';
+      if (window.monteurAnlagenstamm && typeof window.monteurAnlagenstamm.load === 'function') {
+        await window.monteurAnlagenstamm.load(host, false);
+        host.dataset.inited = '1';
+      }
     }
     updateAnlagenstammModeBadge(false);
   }
@@ -8293,7 +7864,7 @@
     const viewEinstellungen = document.getElementById('viewEinstellungen');
     const viewProjektdaten = document.getElementById('viewProjektdaten');
     const viewDienstreise = document.getElementById('viewDienstreise');
-    const viewAbrechnung = document.getElementById('viewAbrechnung');
+    const viewAbrechnung = document.getElementById('view-abrechnung');
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
     const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
@@ -8329,11 +7900,9 @@
     if (name === 'abrechnung') {
       viewStart.classList.add('hidden');
       if (viewAbrechnung) viewAbrechnung.classList.add('active');
-      var perEl = document.getElementById('abrechnungPeriod');
-      if (perEl && !perEl.value) {
-        perEl.value = new Date().toISOString().slice(0, 7);
-      }
-      refreshAbrechnungNativeUi(false);
+      loadAbrechnungViewDesktopStyle().catch(function (e) {
+        window.alert((e && e.message) ? e.message : String(e));
+      });
       return;
     }
     if (name && name.startsWith('protokolle-')) {
@@ -9364,6 +8933,18 @@
         else protectedSet.delete(rel);
       });
     });
+    listEl.querySelectorAll('.dienstreise-explorer-row[data-is-dir="0"]').forEach(function (row) {
+      row.addEventListener('contextmenu', function (ev) {
+        if (ev.target.closest('.dienstreise-explorer-actions')) return;
+        if (!window.monteurApp || typeof monteurApp.showFileContextMenu !== 'function') return;
+        ev.preventDefault();
+        var fullPath = row.getAttribute('data-full-path');
+        if (!fullPath) return;
+        var fileNameEl = row.querySelector('.dienstreise-explorer-filename');
+        var fileName = fileNameEl ? fileNameEl.textContent.trim() : '';
+        monteurApp.showFileContextMenu({ localPath: fullPath, fileName: fileName || fullPath.split(/[/\\]/).pop() || 'Datei' });
+      });
+    });
     listEl.querySelectorAll('.dienstreise-explorer-row[data-is-dir="1"]').forEach(function (row) {
       row.style.cursor = 'pointer';
       row.addEventListener('click', function (ev) {
@@ -9703,25 +9284,6 @@
         showView('abrechnung');
       });
     }
-    var sync = document.getElementById('btnAbrechnungSync');
-    if (sync) sync.addEventListener('click', function () { refreshAbrechnungNativeUi(true); });
-    var reload = document.getElementById('btnAbrechnungReload');
-    if (reload) reload.addEventListener('click', function () { refreshAbrechnungNativeUi(false); });
-    var period = document.getElementById('abrechnungPeriod');
-    if (period) period.addEventListener('change', function () { refreshAbrechnungNativeUi(false); });
-    var jobSel = document.getElementById('abrechnungJobSelect');
-    if (jobSel) jobSel.addEventListener('change', function () { loadAbrechnungBundleForSelection(); });
-    var saveNote = document.getElementById('btnAbrechnungSaveNote');
-    if (saveNote) saveNote.addEventListener('click', function () { abrechnungSaveNote(); });
-    wireAbrechnungFileUpload('abrechnungUpload', 'dispo');
-    window.addEventListener('online', function () {
-      var v = document.getElementById('viewAbrechnung');
-      if (v && v.classList.contains('active')) refreshAbrechnungNativeUi(false);
-    });
-    window.addEventListener('offline', function () {
-      var v = document.getElementById('viewAbrechnung');
-      if (v && v.classList.contains('active')) updateAbrechnungStatusLine();
-    });
   })();
   (function initProtokolleDropdown() {
     const btn = document.getElementById('btnViewProtokolle');

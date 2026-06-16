@@ -18,9 +18,104 @@ function jobDir(dbDir, jobServerId) {
   return path.join(cacheRoot(dbDir), String(jobServerId));
 }
 
-function filePathLocal(dbDir, jobServerId, bucket, name) {
-  const safe = path.basename(String(name || ''));
-  return path.join(jobDir(dbDir, jobServerId), bucket, safe);
+/** Wie dispo/inc/abrechnung_access.php abrechnung_bucket_subdir — Dateien im Dienstreise-Projektordner. */
+function abrechnungBucketDienstreiseSubdir(bucket) {
+  if (bucket === 'dispo' || bucket === 'buchhaltung') return 'Dokumente_Dispo';
+  if (bucket === 'ordner_buchhaltung') return 'Dokumente_Buchhaltung';
+  return null;
+}
+
+function abrechnungFileCtxFrom(ctx) {
+  if (!ctx || typeof ctx.resolveDienstreiseReiseDirForJob !== 'function') return null;
+  return { resolveDienstreiseReiseDirForJob: ctx.resolveDienstreiseReiseDirForJob };
+}
+
+function normalizeAbrechnungRelativeName(name) {
+  const raw = String(name || '').replace(/\\/g, '/').replace(/^\/+/, '').trim();
+  const parts = raw.split('/').map((p) => path.basename(p)).filter((p) => p && p !== '.' && p !== '..');
+  return parts.join('/');
+}
+
+function filePathLocal(dbDir, jobServerId, bucket, name, fileCtx) {
+  const rel = normalizeAbrechnungRelativeName(name);
+  if (!rel) return path.join(jobDir(dbDir, jobServerId), bucket, '');
+  const sub = abrechnungBucketDienstreiseSubdir(bucket);
+  if (fileCtx && sub) {
+    const reiseDir = fileCtx.resolveDienstreiseReiseDirForJob(jobServerId, { createIfMissing: true });
+    if (reiseDir) return path.join(reiseDir, sub, ...rel.split('/'));
+  }
+  return path.join(jobDir(dbDir, jobServerId), bucket, ...rel.split('/'));
+}
+
+function walkFilesRecursive(rootDir, relBase) {
+  const out = [];
+  if (!rootDir || !fs.existsSync(rootDir) || !fs.statSync(rootDir).isDirectory()) return out;
+  let entries;
+  try {
+    entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  } catch (_) {
+    return out;
+  }
+  for (const ent of entries) {
+    const n = ent.name;
+    if (!n || n.startsWith('.')) continue;
+    const fp = path.join(rootDir, n);
+    const rel = relBase ? `${relBase}/${n}` : n;
+    try {
+      if (ent.isDirectory()) {
+        out.push(...walkFilesRecursive(fp, rel));
+      } else if (ent.isFile()) {
+        out.push({
+          file_name: rel.replace(/\\/g, '/'),
+          size_bytes: fs.statSync(fp).size,
+        });
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  return out;
+}
+
+function scanLocalAbrechnungFilesFromDisk(fileCtx, db, jobServerIdFromQuery, bucket, dbDir) {
+  if (!bucket) return [];
+  const sub = abrechnungBucketDienstreiseSubdir(bucket);
+  const resolved = resolveDispoJobIdForAbrechnung(db, jobServerIdFromQuery);
+  const ids = Array.from(
+    new Set(
+      [jobServerIdFromQuery, resolved].filter((x) => {
+        const n = parseInt(String(x), 10);
+        return Number.isFinite(n) && n > 0;
+      }),
+    ),
+  );
+  const seen = new Set();
+  const out = [];
+  function pushRow(row) {
+    const fn = row.file_name != null ? String(row.file_name) : '';
+    if (!fn || seen.has(fn)) return;
+    seen.add(fn);
+    out.push({
+      bucket,
+      file_name: fn,
+      size_bytes: row.size_bytes != null ? row.size_bytes : null,
+      synced_at: null,
+    });
+  }
+  for (const id of ids) {
+    if (fileCtx && sub) {
+      const reiseDir = fileCtx.resolveDienstreiseReiseDirForJob(id, { createIfMissing: false });
+      if (reiseDir) {
+        const dir = path.join(reiseDir, sub);
+        for (const f of walkFilesRecursive(dir, '')) pushRow(f);
+      }
+    }
+    if (dbDir) {
+      const legacyDir = path.join(jobDir(dbDir, id), bucket);
+      for (const f of walkFilesRecursive(legacyDir, '')) pushRow(f);
+    }
+  }
+  return out;
 }
 
 function ensureSchema(db) {
@@ -58,6 +153,11 @@ function ensureSchema(db) {
     payload TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
     attempts INTEGER NOT NULL DEFAULT 0
+  )`).run();
+  db.prepare(`CREATE TABLE IF NOT EXISTS abrechnung_billing_cache (
+    job_server_id INTEGER PRIMARY KEY,
+    billing_json TEXT NOT NULL,
+    synced_at TEXT
   )`).run();
 }
 
@@ -218,7 +318,7 @@ function dedupeAbrechnungFilesByFilename(rows) {
   return Array.from(m.values()).sort((a, b) => String(a.file_name || '').localeCompare(String(b.file_name || '')));
 }
 
-function findLocalAbrechnungFilePath(dbDir, db, jobServerIdFromQuery, bucket, name) {
+function findLocalAbrechnungFilePath(dbDir, db, jobServerIdFromQuery, bucket, name, fileCtx) {
   const resolved = resolveDispoJobIdForAbrechnung(db, jobServerIdFromQuery);
   const ids = Array.from(
     new Set(
@@ -229,8 +329,11 @@ function findLocalAbrechnungFilePath(dbDir, db, jobServerIdFromQuery, bucket, na
     ),
   );
   for (const id of ids) {
-    const fp = filePathLocal(dbDir, id, bucket, name);
+    const fp = filePathLocal(dbDir, id, bucket, name, fileCtx);
     if (fs.existsSync(fp) && fs.statSync(fp).isFile()) return fp;
+    const rel = normalizeAbrechnungRelativeName(name);
+    const legacy = path.join(jobDir(dbDir, id), bucket, ...(rel ? rel.split('/') : []));
+    if (fs.existsSync(legacy) && fs.statSync(legacy).isFile()) return legacy;
   }
   return null;
 }
@@ -359,40 +462,79 @@ async function dispoJobProjectFilesListJson(baseUrl, dispoJobId, relPath, authHe
 
 /**
  * Dateiliste Abrechnungs-Bucket: zuerst monteur_abrechnung_*, bei 404/fehlendem Endpunkt Fallback job_project_files_list
- * (Ordner Dokumente_Dispo / Dokumente_Buchhaltung — wie auf der Dispo üblich).
+ * (Ordner Dokumente_Dispo inkl. Unterordner — wie nach dienstreise_pull lokal).
  */
+async function dispoListProjectFilesRecursive(baseUrl, dispoJobId, rootRelPath, authHeader, technicianId) {
+  const files = [];
+  async function walk(relPath) {
+    const data = await dispoJobProjectFilesListJson(baseUrl, dispoJobId, relPath, authHeader, technicianId);
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    for (const ent of entries) {
+      if (!ent || !ent.name) continue;
+      const name = String(ent.name).trim();
+      if (!name || name === '.' || name === '..') continue;
+      const childRel = relPath ? `${relPath}/${name}` : name;
+      const type = String(ent.type || '').toLowerCase();
+      if (type === 'dir' || type === 'directory') {
+        await walk(childRel);
+      } else if (type === 'file') {
+        const root = String(rootRelPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+        let relInBucket = childRel.replace(/\\/g, '/');
+        if (root && relInBucket.startsWith(root + '/')) {
+          relInBucket = relInBucket.slice(root.length + 1);
+        } else if (relInBucket === root) {
+          relInBucket = path.basename(relInBucket);
+        }
+        files.push({
+          name: relInBucket,
+          size_bytes: ent.size != null ? Number(ent.size) : null,
+        });
+      }
+    }
+  }
+  await walk(rootRelPath);
+  return files;
+}
+
 async function dispoFetchAbrechnungBucketList(baseUrl, dispoJobId, bucket, authHeader, technicianId) {
+  let files = [];
+  let primaryErr = null;
   try {
-    return await dispoFetchJson(
+    const data = await dispoFetchJson(
       baseUrl,
       'abrechnung_bucket_list.php',
       { job_id: String(dispoJobId), bucket },
       authHeader,
       technicianId,
     );
-  } catch (primaryErr) {
-    const sub = abrechnungBucketProjectSubdir(bucket);
-    if (!sub) throw primaryErr;
-    try {
-      const data = await dispoJobProjectFilesListJson(baseUrl, dispoJobId, sub, authHeader, technicianId);
-      const entries = Array.isArray(data.entries) ? data.entries : [];
-      const files = [];
-      for (const ent of entries) {
-        if (!ent || ent.type !== 'file') continue;
-        const fn = String(ent.name || '').trim();
-        if (!fn) continue;
-        files.push({
-          name: fn,
-          size_bytes: ent.size != null ? Number(ent.size) : null,
-        });
-      }
-      return { ok: true, files };
-    } catch (fallbackErr) {
-      const p = primaryErr && primaryErr.message ? primaryErr.message : String(primaryErr);
-      const f = fallbackErr && fallbackErr.message ? fallbackErr.message : String(fallbackErr);
-      throw new Error(`${p} — Fallback job_project_files_list (${sub}): ${f}`);
-    }
+    files = Array.isArray(data.files) ? data.files : [];
+  } catch (e) {
+    primaryErr = e;
   }
+  const sub = abrechnungBucketProjectSubdir(bucket);
+  if (sub) {
+    try {
+      const proj = await dispoListProjectFilesRecursive(baseUrl, dispoJobId, sub, authHeader, technicianId);
+      const seen = new Set(
+        files.map((f) => normalizeAbrechnungRelativeName(f && (f.name || f.file_name))),
+      );
+      for (const pf of proj) {
+        const n = normalizeAbrechnungRelativeName(pf.name);
+        if (!n || seen.has(n)) continue;
+        seen.add(n);
+        files.push(pf);
+      }
+    } catch (fallbackErr) {
+      if (!files.length) {
+        const p = primaryErr && primaryErr.message ? primaryErr.message : String(primaryErr || '');
+        const f = fallbackErr && fallbackErr.message ? fallbackErr.message : String(fallbackErr);
+        throw new Error(`${p} — Fallback job_project_files_list (${sub}): ${f}`);
+      }
+    }
+  } else if (!files.length && primaryErr) {
+    throw primaryErr;
+  }
+  return { ok: true, files };
 }
 
 async function dispoFetchJson(baseUrl, pathName, qs, authHeader, technicianId) {
@@ -487,9 +629,9 @@ async function dispoDownloadFile(baseUrl, jobId, bucket, name, destPath, authHea
     return;
   }
   const sub = abrechnungBucketProjectSubdir(bucket);
-  const safeName = path.basename(String(name || ''));
-  if (sub && safeName) {
-    const relPath = `${sub}/${safeName}`.replace(/\\/g, '/');
+  const relName = normalizeAbrechnungRelativeName(name);
+  if (sub && relName) {
+    const relPath = `${sub}/${relName}`.replace(/\\/g, '/');
     const qjp = new URLSearchParams({
       technician_id: String(technicianId),
       job_id: String(jobId),
@@ -571,26 +713,47 @@ async function dispoUploadMultipart(baseUrl, fields, fileBuf, fileName, authHead
 
 async function syncJobFromDispo(ctx, baseUrl, technicianId, authHeader, jobServerId) {
   const { db, save, dbDir } = ctx;
+  const fileCtx = abrechnungFileCtxFrom(ctx);
   await syncCommentsOnlyFromDispo(ctx, baseUrl, technicianId, authHeader, jobServerId);
   for (const bucket of ['dispo', 'buchhaltung']) {
     const data = await dispoFetchAbrechnungBucketList(baseUrl, jobServerId, bucket, authHeader, technicianId);
     const files = data.files || [];
     db.prepare('DELETE FROM abrechnung_files_meta WHERE job_server_id = ? AND bucket = ?').run(jobServerId, bucket);
-    const destBase = path.join(jobDir(dbDir, jobServerId), bucket);
-    mkdirpSync(destBase);
     for (const f of files) {
-      const fn = f.name;
+      const fn = normalizeAbrechnungRelativeName(f.name || f.file_name);
       if (!fn) continue;
-      const localPath = path.join(destBase, path.basename(fn));
+      const localPath = filePathLocal(dbDir, jobServerId, bucket, fn, fileCtx);
       try {
-        await dispoDownloadFile(baseUrl, jobServerId, bucket, fn, localPath, authHeader, technicianId);
+        mkdirpSync(path.dirname(localPath));
+        if (!fs.existsSync(localPath) || !fs.statSync(localPath).isFile()) {
+          await dispoDownloadFile(baseUrl, jobServerId, bucket, fn, localPath, authHeader, technicianId);
+        }
         db.prepare(`
           INSERT INTO abrechnung_files_meta (job_server_id, bucket, file_name, size_bytes, synced_at)
           VALUES (?, ?, ?, ?, datetime('now'))
-        `).run(jobServerId, bucket, fn, f.size_bytes != null ? f.size_bytes : fs.statSync(localPath).size);
+        `).run(
+          jobServerId,
+          bucket,
+          fn,
+          f.size_bytes != null ? f.size_bytes : fs.statSync(localPath).size,
+        );
       } catch (e) {
         console.warn('[abrechnung] download skip', fn, e.message);
       }
+    }
+    const diskOnly = scanLocalAbrechnungFilesFromDisk(fileCtx, db, jobServerId, bucket, dbDir);
+    for (const row of diskOnly) {
+      const fn = row.file_name;
+      const exists = db
+        .prepare(
+          'SELECT 1 FROM abrechnung_files_meta WHERE job_server_id = ? AND bucket = ? AND file_name = ?',
+        )
+        .get(jobServerId, bucket, fn);
+      if (exists) continue;
+      db.prepare(`
+        INSERT INTO abrechnung_files_meta (job_server_id, bucket, file_name, size_bytes, synced_at)
+        VALUES (?, ?, ?, ?, datetime('now'))
+      `).run(jobServerId, bucket, fn, row.size_bytes);
     }
   }
   save();
@@ -670,9 +833,10 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
  * Kernlogik von POST /api/abrechnung/refresh (für direkten Aufruf und Background-Jobs).
  * @returns {Promise<{ partial: boolean, warnings: string[] }>}
  */
-async function runAbrechnungRefreshCore(ctx, body) {
+async function runAbrechnungRefreshCore(ctx, body, onProgress) {
   const { db, save, authHeaderFromCredentials } = ctx;
-  const { baseUrl, technicianId, serverUsername, serverPassword, period_ym, job_server_id } = body || {};
+  const { baseUrl, technicianId, serverUsername, serverPassword, period_ym, job_server_id, sync_all_jobs } =
+    body || {};
   const tid = parseInt(technicianId, 10);
   const base = dispoBase(baseUrl);
   if (!base || !tid) {
@@ -683,8 +847,8 @@ async function runAbrechnungRefreshCore(ctx, body) {
   const authHeader = authHeaderFromCredentials(serverUsername, serverPassword);
   const warnings = [];
   let partial = false;
+  let jobsPayload = [];
   if (period_ym && /^\d{4}-\d{2}$/.test(String(period_ym))) {
-    let jobsPayload = [];
     try {
       const data = await dispoFetchJson(base, 'abrechnung_job_list.php', { monat: String(period_ym) }, authHeader, tid);
       jobsPayload = Array.isArray(data.jobs) ? data.jobs : [];
@@ -704,10 +868,60 @@ async function runAbrechnungRefreshCore(ctx, body) {
     `).run(tid, period_ym, JSON.stringify(jobsPayload));
     save();
   }
-  const jid = resolveDispoJobIdForAbrechnung(db, parseInt(job_server_id, 10));
-  if (jid > 0) {
+  const syncAll = sync_all_jobs === true;
+  const priorityJid = resolveDispoJobIdForAbrechnung(db, parseInt(job_server_id, 10));
+  if (syncAll && period_ym) {
+    let jobs = jobsPayload;
+    if (!jobs.length) {
+      const row = db
+        .prepare(
+          'SELECT jobs_json FROM abrechnung_jobs_snapshot WHERE technician_id = ? AND period_ym = ?',
+        )
+        .get(tid, period_ym);
+      if (row && row.jobs_json) {
+        try {
+          jobs = JSON.parse(row.jobs_json);
+        } catch (_) {
+          jobs = [];
+        }
+      }
+    }
+    if (!Array.isArray(jobs) || !jobs.length) {
+      jobs = buildAbrechnungJobsFallbackFromSqlite(db, tid, period_ym);
+    }
+    const ordered = [];
+    const seen = new Set();
+    if (priorityJid > 0) {
+      ordered.push({ id: priorityJid });
+      seen.add(priorityJid);
+    }
+    for (const j of jobs) {
+      const jid = resolveDispoJobIdForAbrechnung(db, j && j.id != null ? j.id : 0);
+      if (jid > 0 && !seen.has(jid)) {
+        seen.add(jid);
+        ordered.push({ id: jid });
+      }
+    }
+    const total = ordered.length;
+    let idx = 0;
+    for (const j of ordered) {
+      const jid = j.id;
+      idx += 1;
+      if (typeof onProgress === 'function') {
+        onProgress(idx, total, 'Auftrag ' + jid + ' (' + idx + '/' + total + ')');
+      }
+      try {
+        await syncJobFromDispo(ctx, base, tid, authHeader, jid);
+      } catch (e) {
+        partial = true;
+        const hint = e && e.message ? String(e.message) : String(e);
+        warnings.push('Auftrag ' + jid + ': ' + hint);
+        console.warn('[abrechnung/refresh] syncJobFromDispo', jid, hint);
+      }
+    }
+  } else if (priorityJid > 0) {
     try {
-      await syncJobFromDispo(ctx, base, tid, authHeader, jid);
+      await syncJobFromDispo(ctx, base, tid, authHeader, priorityJid);
     } catch (e) {
       partial = true;
       const hint = e && e.message ? String(e.message) : String(e);
@@ -726,8 +940,9 @@ async function runAbrechnungRefreshCore(ctx, body) {
   return { partial, warnings };
 }
 
-function registerAbrechnungRoutes(app, ctx) {
+function registerAbrechnungRoutesInner(app, ctx) {
   const { db, save, dbDir, authHeaderFromCredentials, authHeaderFromIncomingBasicOrQuery } = ctx;
+  const fileCtx = abrechnungFileCtxFrom(ctx);
   ensureSchema(db);
 
   /** Jobs für Monat: aus Cache oder optional Dispo */
@@ -852,6 +1067,16 @@ function registerAbrechnungRoutes(app, ctx) {
           console.warn('[abrechnung/bundle] Dispo-Dateiliste:', dispoFilesError);
         }
       }
+      for (const bucket of ['dispo', 'buchhaltung']) {
+        const diskOnly = scanLocalAbrechnungFilesFromDisk(fileCtx, db, jobServerIdRaw, bucket, dbDir);
+        const seenFn = new Set(files.map((fr) => `${fr.bucket}\0${fr.file_name}`));
+        for (const dr of diskOnly) {
+          const k = `${dr.bucket}\0${dr.file_name}`;
+          if (seenFn.has(k)) continue;
+          seenFn.add(k);
+          files.push(dr);
+        }
+      }
       files = dedupeAbrechnungFilesByFilename(files);
       return res.json({
         ok: true,
@@ -880,7 +1105,7 @@ function registerAbrechnungRoutes(app, ctx) {
         return res.status(400).send('Ungültige Parameter.');
       }
       const dispoJobId = resolveDispoJobIdForAbrechnung(db, jobServerIdRaw);
-      const fp = findLocalAbrechnungFilePath(dbDir, db, jobServerIdRaw, bucket, name);
+      const fp = findLocalAbrechnungFilePath(dbDir, db, jobServerIdRaw, bucket, name, fileCtx);
       if (fp) {
         return res.sendFile(path.resolve(fp));
       }
@@ -895,75 +1120,30 @@ function registerAbrechnungRoutes(app, ctx) {
         return res
           .status(404)
           .send(
-            'Datei nicht lokal. Zum Laden von der Dispo in den Einstellungen Dispo-URL und Zugangsdaten setzen, dann erneut öffnen.',
+            'Datei nicht lokal. Hintergrund-Sync lädt fehlende Dateien nach — bitte kurz warten und erneut öffnen.',
           );
       }
-      const q = new URLSearchParams({
-        technician_id: String(technicianId),
-        job_id: String(dispoJobId),
-        bucket,
-        name,
-      });
-      const qsStr = q.toString();
-      const hdrs = dispoMonteurFetchHeaders(auth, technicianId);
-      const urls = abrechnungScriptUrlCandidates(base, 'abrechnung_file_download.php').map((u) => `${u}?${qsStr}`);
-      let lastBody = '';
-      for (let i = 0; i < urls.length; i++) {
-        const r = await fetch(urls[i], { headers: hdrs });
-        if (!r.ok) {
-          lastBody = await r.text().catch(() => '');
-          if (r.status === 404 && i < urls.length - 1) continue;
-          if (r.status === 404 && i === urls.length - 1) break;
-          return res.status(r.status).send(lastBody || r.statusText || String(r.status));
-        }
-        const ct = r.headers.get('content-type');
-        if (ct) res.setHeader('Content-Type', ct);
-        const cd = r.headers.get('content-disposition');
-        if (cd) res.setHeader('Content-Disposition', cd);
-        if (r.body && typeof Readable.fromWeb === 'function') {
-          Readable.fromWeb(r.body)
-            .on('error', () => {
-              try {
-                res.destroy();
-              } catch (_) {}
-            })
-            .pipe(res);
-          return;
-        }
-        const buf = Buffer.from(await r.arrayBuffer());
-        return res.send(buf);
+      const dest = filePathLocal(dbDir, dispoJobId, bucket, name, fileCtx);
+      try {
+        mkdirpSync(path.dirname(dest));
+        await dispoDownloadFile(base, dispoJobId, bucket, name, dest, auth, technicianId);
+        db.prepare(`
+          INSERT INTO abrechnung_files_meta (job_server_id, bucket, file_name, size_bytes, synced_at)
+          VALUES (?, ?, ?, ?, datetime('now'))
+          ON CONFLICT(job_server_id, bucket, file_name) DO UPDATE SET
+            size_bytes = excluded.size_bytes,
+            synced_at = excluded.synced_at
+        `).run(
+          dispoJobId,
+          bucket,
+          name,
+          fs.existsSync(dest) ? fs.statSync(dest).size : null,
+        );
+        save();
+        return res.sendFile(path.resolve(dest));
+      } catch (dlErr) {
+        return res.status(404).send((dlErr && dlErr.message) || 'Download nicht gefunden.');
       }
-      const subPb = abrechnungBucketProjectSubdir(bucket);
-      if (subPb && name) {
-        const relPath = `${subPb}/${name}`.replace(/\\/g, '/');
-        const qJp = new URLSearchParams({
-          technician_id: String(technicianId),
-          job_id: String(dispoJobId),
-          path: relPath,
-        });
-        const urlJp = `${base}/api/job_project_file_download.php?${qJp}`;
-        const rJp = await fetch(urlJp, { headers: hdrs });
-        if (rJp.ok) {
-          const ct = rJp.headers.get('content-type');
-          if (ct) res.setHeader('Content-Type', ct);
-          const cd = rJp.headers.get('content-disposition');
-          if (cd) res.setHeader('Content-Disposition', cd);
-          if (rJp.body && typeof Readable.fromWeb === 'function') {
-            Readable.fromWeb(rJp.body)
-              .on('error', () => {
-                try {
-                  res.destroy();
-                } catch (_) {}
-              })
-              .pipe(res);
-            return;
-          }
-          const buf = Buffer.from(await rJp.arrayBuffer());
-          return res.send(buf);
-        }
-        lastBody = await rJp.text().catch(() => '');
-      }
-      return res.status(404).send(lastBody || 'Download nicht gefunden.');
     } catch (e) {
       res.status(500).send(e.message || String(e));
     }
@@ -1038,8 +1218,8 @@ function registerAbrechnungRoutes(app, ctx) {
       return res.status(400).json({ ok: false, error: 'content_base64 ungültig.' });
     }
     const safeName = path.basename((filename || 'datei').toString()).replace(/[\/\\:*?"<>|]/g, '_') || 'datei';
-    mkdirpSync(path.join(jobDir(dbDir, jid), b));
-    const localPath = filePathLocal(dbDir, jid, b, safeName);
+    const localPath = filePathLocal(dbDir, jid, b, safeName, fileCtx);
+    mkdirpSync(path.dirname(localPath));
     fs.writeFileSync(localPath, buf);
     db.prepare(`
       INSERT INTO abrechnung_files_meta (job_server_id, bucket, file_name, size_bytes, synced_at)
@@ -1082,7 +1262,7 @@ function registerAbrechnungRoutes(app, ctx) {
     if (!tid || !jid || !['dispo', 'buchhaltung'].includes(b) || !fn) {
       return res.status(400).json({ ok: false, error: 'Parameter fehlen.' });
     }
-    const localPath = filePathLocal(dbDir, jid, b, fn);
+    const localPath = filePathLocal(dbDir, jid, b, fn, fileCtx);
     try {
       if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
     } catch (_) { /* ignore */ }
@@ -1124,4 +1304,33 @@ function registerAbrechnungRoutes(app, ctx) {
   });
 }
 
-module.exports = { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore };
+function registerAbrechnungRoutes(app, ctx) {
+  ensureSchema(ctx.db);
+  registerAbrechnungRoutesInner(app, ctx);
+}
+
+module.exports = {
+  registerAbrechnungRoutes,
+  flushAbrechnungOutbox,
+  runAbrechnungRefreshCore,
+  resolveDispoJobIdForAbrechnung,
+  readCommentsFromRow,
+  writeCommentsCache,
+  appendOptimisticComment,
+  syncCommentsOnlyFromDispo,
+  dispoFetchJson,
+  dispoAbrechnungPostJson,
+  dispoUploadMultipart,
+  normalizeAbrechnungRelativeName,
+  walkFilesRecursive,
+  scanLocalAbrechnungFilesFromDisk,
+  abrechnungFileCtxFrom,
+  abrechnungBucketDienstreiseSubdir,
+  findLocalAbrechnungFilePath,
+  filePathLocal,
+  jobDir,
+  cacheRoot,
+  mkdirpSync,
+  dedupeAbrechnungFileRows,
+  dispoDownloadFile,
+};

@@ -270,3 +270,16 @@
 #anlagenstamm-host [data-anlagen-col].anlagen-col-hidden {
   display: none;
 }
+
+#anlagenstamm-host .form-modal.active {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  z-index: 1200;
+}
+
+#anlagenstamm-host .form-modal.active .form-modal-content {
+  width: min(960px, 96vw);
+  max-height: calc(100vh - 48px);
+  margin: 24px 0;
+}

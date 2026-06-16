@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -174,7 +174,7 @@ ipcMain.handle('dienstreise:choose-folder', async () => {
   return result.filePaths[0];
 });
 
-ipcMain.handle('dienstreise:open-path', async (event, filePath) => {
+async function openDienstreisePath(filePath) {
   if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
   const raw = filePath.trim();
   const normalized = path.normalize(raw);
@@ -335,6 +335,99 @@ ipcMain.handle('dienstreise:open-path', async (event, filePath) => {
     trace('exception-no-fallback', e && e.message ? e.message : String(e));
     return { ok: false, error: e && e.message ? e.message : String(e) };
   }
+}
+
+ipcMain.handle('dienstreise:open-path', async (_event, filePath) => openDienstreisePath(filePath));
+
+function openWithDialogMonteur(filePath) {
+  if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
+  const normalized = path.normalize(filePath.trim());
+  if (!fs.existsSync(normalized)) return { ok: false, error: 'file_not_found' };
+  if (process.platform !== 'win32') {
+    return shell.openPath(normalized).then((r) => (r ? { ok: false, error: r } : { ok: true }));
+  }
+  const rundll = path.join(process.env.WINDIR || 'C:\\Windows', 'System32', 'rundll32.exe');
+  try {
+    const p = spawn(rundll, ['shell32.dll,OpenAs_RunDLL', normalized], {
+      windowsHide: true,
+      detached: true,
+      stdio: 'ignore',
+    });
+    p.unref();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
+ipcMain.handle('dienstreise:open-with-dialog', async (_event, filePath) => openWithDialogMonteur(filePath));
+
+ipcMain.handle('dienstreise:save-file-as', async (event, filePath, defaultName) => {
+  if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
+  const normalized = path.normalize(filePath.trim());
+  if (!fs.existsSync(normalized)) return { ok: false, error: 'file_not_found' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showSaveDialog(win || undefined, {
+    defaultPath: defaultName || path.basename(normalized),
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  try {
+    fs.copyFileSync(normalized, result.filePath);
+    return { ok: true, path: result.filePath };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+});
+
+ipcMain.handle('dienstreise:show-in-folder', async (_event, filePath) => {
+  if (typeof filePath === 'string' && filePath.trim()) {
+    shell.showItemInFolder(path.normalize(filePath.trim()));
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('dienstreise:file-context-menu', async (event, spec) => {
+  const filePath = spec && spec.localPath;
+  const fileName = (spec && spec.fileName) || (filePath ? path.basename(filePath) : 'Datei');
+  if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: 'file_not_found' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return new Promise((resolve) => {
+    const menu = Menu.buildFromTemplate([
+      {
+        label: 'Öffnen',
+        click: () => {
+          void openDienstreisePath(filePath);
+        },
+      },
+      {
+        label: 'Öffnen mit…',
+        click: () => {
+          void openWithDialogMonteur(filePath);
+        },
+      },
+      {
+        label: 'Speichern unter…',
+        click: async () => {
+          const result = await dialog.showSaveDialog(win || undefined, { defaultPath: fileName });
+          if (!result.canceled && result.filePath) {
+            try {
+              fs.copyFileSync(filePath, result.filePath);
+            } catch (_) {
+              /* ignore */
+            }
+          }
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Im Explorer anzeigen',
+        click: () => {
+          shell.showItemInFolder(filePath);
+        },
+      },
+    ]);
+    menu.popup({ window: win || undefined, callback: () => resolve({ ok: true }) });
+  });
 });
 
 ipcMain.handle('dienstreise:copy-path', async (event, filePath) => {

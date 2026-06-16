@@ -760,7 +760,98 @@ function fingerprintDispoBaseForRuntime(urlRaw) {
 
 function createApp(db) {
   const app = express();
-  const { registerMonteurDispoWebRoutes } = require('./lib/monteur-dispo-web-routes');
+
+  const getTechnicianId = (req) => {
+    const id = req.query.technician_id || req.headers['x-technician-id'];
+    return id ? parseInt(id, 10) : null;
+  };
+
+  function loadDispoWebSessionCreds() {
+    try {
+      const p = path.join(DB_DIR, 'dispo_web_session.json');
+      if (!fs.existsSync(p)) return {};
+      const s = JSON.parse(fs.readFileSync(p, 'utf8'));
+      return {
+        serverUsername: s.dispo_username || '',
+        serverPassword: s.dispo_password || '',
+        baseUrl: s.dispo_base || s.dispo_external_url || '',
+        externalUrl: s.dispo_external_url || '',
+        internalUrl: s.dispo_internal_url || '',
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /** Dispo-Zugangsdaten: Request-Body nur wenn nicht leer, sonst gespeicherte Session. */
+  function resolveDispoServerCreds(body) {
+    const session = loadDispoWebSessionCreds();
+    const b = body && typeof body === 'object' ? body : {};
+    const bodyUser = String(b.serverUsername || b.dispo_username || '').trim();
+    const bodyPass = b.serverPassword != null ? String(b.serverPassword) : b.dispo_password != null ? String(b.dispo_password) : '';
+    const user = bodyUser || String(session.serverUsername || '').trim();
+    const pass = bodyPass || String(session.serverPassword || '');
+    const baseUrl = String(b.baseUrl || session.baseUrl || session.externalUrl || '')
+      .trim()
+      .replace(/\/$/, '');
+    return {
+      serverUsername: user,
+      serverPassword: pass,
+      baseUrl,
+      externalUrl: String(b.externalUrl || session.externalUrl || '').trim().replace(/\/$/, ''),
+      internalUrl: String(b.internalUrl || session.internalUrl || '').trim().replace(/\/$/, ''),
+    };
+  }
+
+  const { registerAnlagenstammPhpRoutes } = require('./lib/anlagenstamm-php-routes');
+  const { registerAbrechnungPhpRoutes } = require('./lib/abrechnung-php-routes');
+  const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated } = require('./lib/monteur-dispo-web-routes');
+  registerAnlagenstammPhpRoutes(app, {
+    db,
+    getTechnicianId,
+    performAnlagenstammSave,
+    saveDb: () => (monteurRuntime.save ? monteurRuntime.save() : false),
+    ensureProxyAuthenticated: () => ensureProxyAuthenticated(DB_DIR, null),
+    readAnlagenstammTreeCache,
+    upsertAnlagenstammTreeCache,
+    buildLocalProjekteNeuTreeForFab: (technicianId, fab) => {
+      const f = String(fab || '').trim();
+      if (!f || !technicianId) return null;
+      const cached = readAnlagenstammTreeCache(db, f);
+      if (cached && cached.tree && cached.tree.length) {
+        const first = cached.tree[0];
+        return {
+          enabled: cached.projects_enabled !== false,
+          tree: cached.tree,
+          root_name: first && (first.name || first.label) ? String(first.name || first.label) : '',
+        };
+      }
+      const jobId = resolveLocalJobIdForFab(technicianId, f);
+      if (!jobId) return null;
+      const pnCtx = getProjekteNeuLocalContext(jobId, f);
+      if (!pnCtx) return null;
+      const scanned = scanProjekteNeuTree(pnCtx.resolved.root, {});
+      return {
+        enabled: true,
+        tree: scanned.tree,
+        root_name: pnCtx.resolved.folderName || '',
+      };
+    },
+    getDispoUsername: () => loadDispoWebSessionCreds().serverUsername || '',
+    getDispoPassword: () => loadDispoWebSessionCreds().serverPassword || '',
+    getDispoBaseUrl: () => loadDispoWebSessionCreds().baseUrl || '',
+    getDispoExternalUrl: () => loadDispoWebSessionCreds().externalUrl || '',
+    getDispoInternalUrl: () => loadDispoWebSessionCreds().internalUrl || '',
+  });
+  registerAbrechnungPhpRoutes(app, {
+    db,
+    save: () => (monteurRuntime.save ? monteurRuntime.save() : false),
+    dbDir: DB_DIR,
+    getTechnicianId,
+    loadDispoCreds: loadDispoWebSessionCreds,
+    resolveDienstreiseReiseDirForJob: (jobIdRef, opts) => resolveDienstreiseReiseDirForJob(jobIdRef, opts),
+    getDienstreiseBasePath: () => getDienstreiseBasePath(),
+  });
   registerMonteurDispoWebRoutes(app, { db, dbDir: DB_DIR });
   app.use(express.json({ limit: '50mb' }));
 
@@ -861,11 +952,6 @@ function createApp(db) {
       // Fehler beim Aufbau der Verbindung ignorieren – App soll ohne Push weiterlaufen.
     }
   }
-
-  const getTechnicianId = (req) => {
-    const id = req.query.technician_id || req.headers['x-technician-id'];
-    return id ? parseInt(id, 10) : null;
-  };
 
   function getTechnicianDisplayName(technicianId) {
     const tid = parseInt(technicianId, 10);
@@ -4378,6 +4464,113 @@ ORDER BY
     }
   });
 
+  /** GET-Variante für Thumbnails/Links in Anlagenstamm-UI (offline: lokaler Projektordner). */
+  app.get('/api/anlagenstamm_file_download.php', async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const fabValue = String(req.query.fabrikationsnummer || req.query.fab || '').trim();
+      const pnPath = String(req.query.path || '').trim();
+      const sourceNorm = String(req.query.source || '').toLowerCase().trim();
+      const wantThumb =
+        String(req.query.thumb || '').toLowerCase() === '1' || req.query.thumb === 'true';
+      const wantInline =
+        String(req.query.inline || '').toLowerCase() === '1' || req.query.inline === 'true';
+      let thumbMax = parseInt(req.query.thumbMax || req.query.thumb_max, 10);
+      if (!Number.isFinite(thumbMax)) thumbMax = 256;
+      thumbMax = Math.min(512, Math.max(64, thumbMax));
+      if (!technicianId || !fabValue) {
+        return res.status(400).json({ success: false, error: 'fab erforderlich.' });
+      }
+      let localJobId = parseInt(req.query.job_id, 10);
+      if (!Number.isFinite(localJobId) || localJobId <= 0) {
+        localJobId = resolveLocalJobIdForFab(technicianId, fabValue);
+      }
+      if (localJobId && pnPath) {
+        let filePath = null;
+        if (sourceNorm === 'projekte_neu') {
+          filePath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath, { skipDeepSearch: wantThumb });
+        }
+        if (!filePath) {
+          const relNorm = pnPath.replace(/\//g, path.sep);
+          filePath = resolveDienstreiseProjectFilePath(localJobId, relNorm);
+        }
+        if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+          if (wantThumb) {
+            const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
+            res.setHeader('Content-Type', thumbOut.contentType);
+            res.setHeader('Content-Length', String(thumbOut.buf.length));
+            return res.send(thumbOut.buf);
+          }
+          const buf = fs.readFileSync(filePath);
+          const baseName = path.basename(filePath);
+          res.setHeader('Content-Type', 'application/octet-stream');
+          res.setHeader(
+            'Content-Disposition',
+            (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+          );
+          res.setHeader('Content-Length', String(buf.length));
+          return res.send(buf);
+        }
+      }
+      const fileValue = String(req.query.file || '').trim();
+      if (sourceNorm !== 'projekte_neu' && fileValue) {
+        const cacheFile = uploadCachePath(DB_DIR, fabValue, fileValue);
+        if (fs.existsSync(cacheFile) && fs.statSync(cacheFile).isFile()) {
+          const buf = fs.readFileSync(cacheFile);
+          res.setHeader('Content-Type', 'application/octet-stream');
+          res.setHeader('X-Download-Filename', encodeURIComponent(fileValue));
+          res.setHeader('Content-Disposition', 'inline; filename="' + encodeURIComponent(fileValue) + '"');
+          res.setHeader('Content-Length', String(buf.length));
+          return res.send(buf);
+        }
+      }
+      const creds = loadDispoWebSessionCreds();
+      const base = (creds.baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!base) {
+        return res.status(404).json({ success: false, error: 'Datei nicht lokal gefunden.' });
+      }
+      const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+      let url;
+      if (sourceNorm === 'projekte_neu') {
+        if (!pnPath) {
+          return res.status(400).json({ success: false, error: 'path erforderlich für PROJEKTE NEU.' });
+        }
+        url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&source=projekte_neu&path=${encodeURIComponent(pnPath)}`;
+      } else {
+        if (!fileValue) {
+          return res.status(404).json({ success: false, error: 'Datei nicht lokal gefunden.' });
+        }
+        url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&file=${encodeURIComponent(fileValue)}`;
+      }
+      const qs = [];
+      if (wantThumb) {
+        qs.push('thumb=1');
+        qs.push(`thumb_max=${encodeURIComponent(String(thumbMax))}`);
+      }
+      if (wantInline) qs.push('inline=1');
+      if (qs.length) url += '&' + qs.join('&');
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        return res
+          .status(r.status)
+          .json(data.ok === false || data.success === false ? data : { success: false, error: data.error || r.statusText });
+      }
+      const buf = Buffer.from(await r.arrayBuffer());
+      const ct = r.headers.get('content-type') || 'application/octet-stream';
+      const fallbackFn =
+        sourceNorm === 'projekte_neu' ? pnPath.split(/[/\\]/).pop() || 'download' : fileValue;
+      const cd = r.headers.get('content-disposition') || ('attachment; filename="' + encodeURIComponent(fallbackFn) + '"');
+      res.setHeader('Content-Type', ct);
+      res.setHeader('Content-Disposition', cd);
+      res.setHeader('X-Download-Filename', encodeURIComponent(fallbackFn));
+      res.setHeader('Content-Length', String(buf.length));
+      return res.send(buf);
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message || String(e) });
+    }
+  });
+
   app.post('/api/anlagenstamm_file_open', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
     const {
@@ -4390,12 +4583,18 @@ ORDER BY
       serverUsername,
       serverPassword,
       job_id: jobIdRaw,
+      local_only: localOnlyRaw,
     } = req.body || {};
-    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
+    const sessionCreds = loadDispoWebSessionCreds();
+    const base = (baseUrl || sessionCreds.baseUrl || '').toString().trim().replace(/\/$/, '');
     const fabValue = (fab || '').toString().trim();
     const fileValue = (file || '').toString().trim();
     const sourceNorm = String(sourceRaw || '').toLowerCase().trim();
     const pnPath = (pnPathRaw || '').toString().trim();
+    const localOnly =
+      localOnlyRaw === true ||
+      localOnlyRaw === 1 ||
+      String(localOnlyRaw || '').toLowerCase() === 'true';
     if (!technicianId || !fabValue) {
       return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
     }
@@ -4416,18 +4615,52 @@ ORDER BY
           return res.json({ ok: true, path: localPath, filename: path.basename(localPath), source: 'local' });
         }
       }
-      if (!base) {
+      if (localOnly) {
         return res.status(404).json({
           ok: false,
-          error: 'Datei nicht lokal verfügbar (offline). Bitte Auftrag mit Dienstreise-Pull übernehmen.',
+          code: 'local_miss',
+          error: 'Datei nicht lokal gefunden.',
           local_unavailable: true,
         });
       }
+      if (!base) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Datei nicht lokal gefunden. Bitte Dispo-Verbindung prüfen.',
+          local_unavailable: true,
+        });
+      }
+    } else if (fileValue) {
+      const cacheFile = uploadCachePath(DB_DIR, fabValue, fileValue);
+      if (fs.existsSync(cacheFile) && fs.statSync(cacheFile).isFile()) {
+        return res.json({
+          ok: true,
+          path: cacheFile,
+          filename: fileValue,
+          source: 'local_cache',
+        });
+      }
+      if (localOnly) {
+        return res.status(404).json({
+          ok: false,
+          code: 'local_miss',
+          error: 'Datei nicht lokal gefunden.',
+        });
+      }
+    } else if (localOnly) {
+      return res.status(404).json({
+        ok: false,
+        code: 'local_miss',
+        error: 'Datei nicht lokal gefunden.',
+      });
     }
     if (!base) {
       return res.status(400).json({ ok: false, error: 'baseUrl erforderlich (keine lokale Kopie).' });
     }
-    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
+    const auth = authHeaderFromCredentials(
+      serverUsername || sessionCreds.serverUsername,
+      serverPassword || sessionCreds.serverPassword,
+    );
     let url;
     if (sourceNorm === 'projekte_neu') {
       if (!pnPath) return res.status(400).json({ ok: false, error: 'path erforderlich für PROJEKTE NEU.' });
@@ -4455,7 +4688,7 @@ ORDER BY
       const targetPath = path.join(openDir, `${stamp}_${safeName}`);
       fs.writeFileSync(targetPath, buf);
       try { console.log('[anlagenstamm_file_open] ready', targetPath, 'bytes=' + buf.length); } catch (_) {}
-      return res.json({ ok: true, path: targetPath, filename: safeName, size: buf.length });
+      return res.json({ ok: true, path: targetPath, filename: safeName, size: buf.length, source: 'dispo' });
     } catch (e) {
       try { console.warn('[anlagenstamm_file_open] fetch exception', e.message); } catch (_) {}
       return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
@@ -4565,7 +4798,119 @@ ORDER BY
     }
   });
 
-  /** TED-Excel: Dispo-Download, sonst Suche im lokalen Projektordner / bekannten TED-Pfaden. */
+  /** TED-Excel lokal auflösen (Projektordner/TED, Cache). */
+  function tryOpenLocalTedExcel(localJobId, relPath, fab, fileName) {
+    const reiseDir =
+      localJobId && Number(localJobId) > 0
+        ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false })
+        : null;
+    const hit = resolveTedExcelLocal({
+      reiseDir,
+      relPath,
+      fab,
+      fileName,
+    });
+    if (!hit || !isExcelFilePath(hit)) return null;
+    const st = fs.statSync(hit);
+    return { path: hit, filename: path.basename(hit), size: st.size };
+  }
+
+  function resolveServerJobIdForFab(technicianId, fab) {
+    const fabStr = String(fab || '').trim();
+    if (!fabStr || !technicianId) return null;
+    const fabNum = parseInt(fabStr.replace(/\D/g, ''), 10);
+    try {
+      const tedRow = db
+        .prepare(
+          `SELECT server_job_id FROM job_ted_index
+           WHERE TRIM(COALESCE(fab, '')) = TRIM(?)
+           ORDER BY datetime(synced_at) DESC LIMIT 1`,
+        )
+        .get(fabStr);
+      if (tedRow && tedRow.server_job_id != null) {
+        const sid = parseInt(tedRow.server_job_id, 10);
+        if (Number.isFinite(sid) && sid > 0) return sid;
+      }
+    } catch (_) { /* ignore */ }
+    const jobs = db
+      .prepare(
+        `SELECT j.id, j.server_id, j.fabrikationsnummern FROM jobs j
+         WHERE EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+         ORDER BY j.id DESC`,
+      )
+      .all(technicianId);
+    for (const row of jobs) {
+      const fabs = fabNumbersFromJobFabrikationsnummern(row.fabrikationsnummern);
+      if (Number.isFinite(fabNum) && fabNum > 0 && fabs.has(fabNum)) {
+        const sid = row.server_id != null ? parseInt(row.server_id, 10) : NaN;
+        if (Number.isFinite(sid) && sid > 0) return sid;
+      }
+    }
+    return null;
+  }
+
+  function resolveTedOpenJobIds(technicianId, fab, localJobIdRaw, rawJobId) {
+    let localJobId = parseInt(localJobIdRaw, 10);
+    if (!Number.isFinite(localJobId) || localJobId <= 0) {
+      localJobId = fab ? resolveLocalJobIdForFab(technicianId, fab) : null;
+    }
+    let serverJobId = parseInt(rawJobId, 10);
+    if ((!Number.isFinite(serverJobId) || serverJobId <= 0) && localJobId) {
+      const row = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
+      if (row) {
+        const sid = row.server_id != null ? parseInt(row.server_id, 10) : NaN;
+        if (Number.isFinite(sid) && sid > 0) serverJobId = sid;
+      }
+    }
+    if ((!Number.isFinite(serverJobId) || serverJobId <= 0) && fab) {
+      const fromFab = resolveServerJobIdForFab(technicianId, fab);
+      if (fromFab) serverJobId = fromFab;
+    }
+    return { localJobId, serverJobId };
+  }
+
+  async function serveLocalTedExcelGet(req, res, inline) {
+    const technicianId = getTechnicianId(req);
+    const relPath = String(req.query.rel_path || '').trim().replace(/\\/g, '/');
+    const fab = String(req.query.fab || req.query.fabrikationsnummer || '').trim();
+    const fileName = String(req.query.file_name || req.query.file || '').trim();
+    if (!relPath || relPath.includes('..')) {
+      return res.status(400).json({ success: false, error: 'rel_path erforderlich.' });
+    }
+    const { localJobId } = resolveTedOpenJobIds(technicianId, fab, req.query.local_job_id, req.query.job_id);
+    const local = tryOpenLocalTedExcel(localJobId, relPath, fab, fileName);
+    if (!local) {
+      return res.status(404).json({ success: false, error: 'TED-Datei nicht lokal gefunden.' });
+    }
+    const buf = fs.readFileSync(local.path);
+    const ext = path.extname(local.filename).toLowerCase();
+    const mime =
+      ext === '.xls'
+        ? 'application/vnd.ms-excel'
+        : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    res.setHeader('Content-Type', mime);
+    res.setHeader(
+      'Content-Disposition',
+      (inline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(local.filename) + '"',
+    );
+    res.setHeader('Content-Length', String(buf.length));
+    return res.send(buf);
+  }
+
+  app.get('/api/mechanik_ted_excel_download.php', (req, res) => {
+    serveLocalTedExcelGet(req, res, false).catch((e) =>
+      res.status(500).json({ success: false, error: e.message || String(e) }),
+    );
+  });
+
+  app.get('/api/mechanik_ted_excel_view.php', (req, res) => {
+    serveLocalTedExcelGet(req, res, true).catch((e) =>
+      res.status(500).json({ success: false, error: e.message || String(e) }),
+    );
+  });
+
+  /** TED-Excel: zuerst lokal, sonst Dispo-Download in Projektordner/TED. */
   app.post('/api/mechanik_ted_excel_open', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
     const {
@@ -4577,135 +4922,160 @@ ORDER BY
       file_name: fileNameRaw,
       serverUsername,
       serverPassword,
+      local_only: localOnlyRaw,
     } = req.body || {};
-    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
-    const jobId = parseInt(rawJobId, 10);
-    const localJobId = parseInt(localJobIdRaw, 10);
+    const sessionCreds = loadDispoWebSessionCreds();
+    const dispoCreds = resolveDispoServerCreds(req.body || {});
+    const base = dispoCreds.baseUrl;
     const relPath = String(relPathRaw || '').trim().replace(/\\/g, '/');
     const fab = String(fabRaw || '').trim();
-    if (!technicianId || !base || !Number.isFinite(jobId) || !relPath || relPath.includes('..')) {
-      return res.status(400).json({ ok: false, error: 'baseUrl, jobId und rel_path erforderlich.' });
+    const localOnly =
+      localOnlyRaw === true ||
+      localOnlyRaw === 1 ||
+      String(localOnlyRaw || '').toLowerCase() === 'true';
+    if (!technicianId || !relPath || relPath.includes('..')) {
+      return res.status(400).json({ ok: false, error: 'rel_path erforderlich.' });
     }
-    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
-    const relQ = `rel_path=${encodeURIComponent(relPath)}`;
-    const baseDl = `${base}/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}&${relQ}`;
-    const dispoUrls = [baseDl];
-    if (fab) {
-      dispoUrls.push(`${baseDl}&fab=${encodeURIComponent(String(fab).trim())}`);
+    const { localJobId, serverJobId: jobIdResolved } = resolveTedOpenJobIds(
+      technicianId,
+      fab,
+      localJobIdRaw,
+      rawJobId,
+    );
+    let jobId = jobIdResolved;
+    const localFirst = tryOpenLocalTedExcel(localJobId, relPath, fab, fileNameRaw);
+    if (localFirst) {
+      return res.json({ ok: true, ...localFirst, source: 'local' });
     }
-    dispoUrls.push(`${base}/dispo/api/mechanik_ted_excel_download.php?${relQ}`);
-    let lastDispoError = 'Datei nicht gefunden.';
-    try {
-      for (const url of dispoUrls) {
-        let r;
-        try {
-          r = await fetch(url, { headers: fetchHeaders });
-        } catch (fetchErr) {
-          lastDispoError = 'Dispo nicht erreichbar: ' + (fetchErr.message || String(fetchErr));
-          continue;
-        }
-        const ct = (r.headers.get('content-type') || '').toLowerCase();
-        if (!r.ok || ct.includes('application/json')) {
-          const data = await r.json().catch(() => ({}));
-          if (data && data.error) lastDispoError = String(data.error);
-          else if (!r.ok) lastDispoError = r.statusText || lastDispoError;
-          continue;
-        }
-        const buf = Buffer.from(await r.arrayBuffer());
-        if (!buf.length) {
-          lastDispoError = 'Datei ist leer.';
-          continue;
-        }
-        const disp = r.headers.get('content-disposition') || '';
-        let rawName = String(fileNameRaw || '').trim() || relPath.split(/[/\\]/).pop() || 'ted.xlsx';
-        const fnStar = /filename\*=UTF-8''([^;\s]+)/i.exec(disp);
-        const fnPlain = /filename="([^"]+)"/i.exec(disp);
-        if (fnStar && fnStar[1]) {
-          try {
-            rawName = decodeURIComponent(fnStar[1]);
-          } catch (_) {
-            rawName = fnStar[1];
-          }
-        } else if (fnPlain && fnPlain[1]) {
-          rawName = fnPlain[1];
-        }
-        const reiseDir =
-          Number.isFinite(localJobId) && localJobId > 0
-            ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true })
-            : null;
-        const safeName = safeTedLocalFileName({
-          rel_path: relPath,
-          file_name: rawName,
-          fab,
-        });
-        if (reiseDir) {
-          const tedDir = path.join(reiseDir, 'TED');
-          if (!fs.existsSync(tedDir)) fs.mkdirSync(tedDir, { recursive: true });
-          const targetPath = path.join(tedDir, safeName);
-          const partPath = targetPath + '.part';
-          fs.writeFileSync(partPath, buf);
-          try {
-            if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
-          } catch (_) {}
-          fs.renameSync(partPath, targetPath);
-          try {
-            upsertJobTedIndex(db, localJobId, jobId, [{ rel_path: relPath, file_name: safeName, fab }]);
-            save();
-          } catch (_) {}
-          try {
-            console.log('[mechanik_ted_excel_open] projektordner', targetPath, 'bytes=' + buf.length);
-          } catch (_) {}
-          return res.json({ ok: true, path: targetPath, filename: safeName, size: buf.length, source: 'projektordner' });
-        }
-        const openDir = path.join(DB_DIR, 'anlagenstamm_open');
-        if (!fs.existsSync(openDir)) fs.mkdirSync(openDir, { recursive: true });
-        const stamp = new Date().toISOString().replace(/[^\d]/g, '').slice(0, 14);
-        const targetPath = path.join(openDir, `${stamp}_${safeName}`);
-        fs.writeFileSync(targetPath, buf);
-        try {
-          console.log('[mechanik_ted_excel_open] dispo ok', safeName, 'bytes=' + buf.length);
-        } catch (_) {}
-        return res.json({ ok: true, path: targetPath, filename: safeName, size: buf.length, source: 'dispo' });
-      }
-
-      const reiseDir =
-        Number.isFinite(localJobId) && localJobId > 0
-          ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false })
-          : null;
-      const localHit = resolveTedExcelLocal({
-        reiseDir,
-        relPath,
-        fab,
-        fileName: fileNameRaw,
-      });
-      if (localHit && isExcelFilePath(localHit)) {
-        try {
-          console.log('[mechanik_ted_excel_open] local', localHit);
-        } catch (_) {}
-        const st = fs.statSync(localHit);
-        return res.json({
-          ok: true,
-          path: localHit,
-          filename: path.basename(localHit),
-          size: st.size,
-          source: 'local',
-        });
-      }
-
-      try {
-        console.warn('[mechanik_ted_excel_open] miss', relPath, 'job', jobId, 'reise', reiseDir || '-', lastDispoError);
-      } catch (_) {}
+    if (localOnly) {
       return res.status(404).json({
         ok: false,
-        error:
-          lastDispoError === 'Datei nicht gefunden.'
-            ? 'Datei nicht gefunden (weder auf dem Server noch im lokalen Projektordner). Nach Dienstreise-Pull oder Dispo-Deploy erneut versuchen.'
-            : lastDispoError,
+        code: 'local_miss',
+        error: 'TED-Datei nicht lokal gefunden.',
       });
-    } catch (e) {
-      return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
     }
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+      const fromFab = resolveServerJobIdForFab(technicianId, fab);
+      if (fromFab) jobId = fromFab;
+    }
+    const auth = authHeaderFromCredentials(dispoCreds.serverUsername, dispoCreds.serverPassword);
+    const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
+    let lastDispoError = 'Datei nicht gefunden.';
+    let buf = null;
+    let disp = '';
+    if (!buf && base) {
+      try {
+        const urls = buildMechanikTedDownloadUrls(base, technicianId, jobId, relPath, fab);
+        const dl = await fetchFirstOkBinary(urls, fetchHeaders, 22000);
+        buf = dl.buf;
+        disp = dl.contentDisposition || '';
+      } catch (dlErr) {
+        lastDispoError = dlErr.message || String(dlErr);
+      }
+    }
+    if (!buf) {
+      try {
+        const proxyDl = await downloadMechanikTedViaSessionProxy(DB_DIR, technicianId, jobId, relPath, fab, {
+          serverUsername: dispoCreds.serverUsername,
+          serverPassword: dispoCreds.serverPassword,
+          baseUrl: base,
+          externalUrl: dispoCreds.externalUrl,
+          internalUrl: dispoCreds.internalUrl,
+        });
+        if (proxyDl && proxyDl.buf && proxyDl.buf.length) {
+          buf = proxyDl.buf;
+          disp = proxyDl.contentDisposition || '';
+        }
+      } catch (proxyErr) {
+        lastDispoError = proxyErr.message || String(proxyErr);
+      }
+    }
+    if (buf && buf.length) {
+      let rawName = String(fileNameRaw || '').trim() || relPath.split(/[/\\]/).pop() || 'ted.xlsx';
+      const fnStar = /filename\*=UTF-8''([^;\s]+)/i.exec(disp);
+      const fnPlain = /filename="([^"]+)"/i.exec(disp);
+      if (fnStar && fnStar[1]) {
+        try {
+          rawName = decodeURIComponent(fnStar[1]);
+        } catch (_) {
+          rawName = fnStar[1];
+        }
+      } else if (fnPlain && fnPlain[1]) {
+        rawName = fnPlain[1];
+      }
+      const reiseDir =
+        localJobId && localJobId > 0
+          ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true })
+          : null;
+      const safeName = safeTedLocalFileName({
+        rel_path: relPath,
+        file_name: rawName,
+        fab,
+      });
+      if (reiseDir) {
+        const tedDir = path.join(reiseDir, 'TED');
+        if (!fs.existsSync(tedDir)) fs.mkdirSync(tedDir, { recursive: true });
+        const targetPath = path.join(tedDir, safeName);
+        const partPath = targetPath + '.part';
+        fs.writeFileSync(partPath, buf);
+        try {
+          if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+        } catch (_) {}
+        fs.renameSync(partPath, targetPath);
+        try {
+          upsertJobTedIndex(db, localJobId, jobId, [{ rel_path: relPath, file_name: safeName, fab }]);
+          save();
+        } catch (_) {}
+        try {
+          console.log('[mechanik_ted_excel_open] projektordner', targetPath, 'bytes=' + buf.length);
+        } catch (_) {}
+        return res.json({ ok: true, path: targetPath, filename: safeName, size: buf.length, source: 'projektordner' });
+      }
+      const openDir = path.join(DB_DIR, 'anlagenstamm_open');
+      if (!fs.existsSync(openDir)) fs.mkdirSync(openDir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[^\d]/g, '').slice(0, 14);
+      const targetPath = path.join(openDir, `${stamp}_${safeName}`);
+      fs.writeFileSync(targetPath, buf);
+      try {
+        console.log('[mechanik_ted_excel_open] dispo ok', safeName, 'bytes=' + buf.length);
+      } catch (_) {}
+      return res.json({ ok: true, path: targetPath, filename: safeName, size: buf.length, source: 'dispo' });
+    }
+
+    const reiseDir =
+      localJobId && localJobId > 0
+        ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false })
+        : null;
+    const localHit = resolveTedExcelLocal({
+      reiseDir,
+      relPath,
+      fab,
+      fileName: fileNameRaw,
+    });
+    if (localHit && isExcelFilePath(localHit)) {
+      try {
+        console.log('[mechanik_ted_excel_open] local', localHit);
+      } catch (_) {}
+      const st = fs.statSync(localHit);
+      return res.json({
+        ok: true,
+        path: localHit,
+        filename: path.basename(localHit),
+        size: st.size,
+        source: 'local',
+      });
+    }
+
+    try {
+      console.warn('[mechanik_ted_excel_open] miss', relPath, 'job', jobId, 'reise', reiseDir || '-', lastDispoError);
+    } catch (_) {}
+    return res.status(404).json({
+      ok: false,
+      error:
+        lastDispoError === 'Datei nicht gefunden.'
+          ? 'Datei nicht gefunden (weder auf dem Server noch im lokalen Projektordner). Nach Dienstreise-Pull oder Dispo-Deploy erneut versuchen.'
+          : lastDispoError,
+    });
   });
 
   app.post('/api/job_hotels_from_dispo', express.json(), async (req, res) => {
@@ -6140,9 +6510,20 @@ ORDER BY
     dbDir: DB_DIR,
     authHeaderFromCredentials,
     authHeaderFromIncomingBasicOrQuery,
+    getTechnicianId,
+    loadDispoCreds: loadDispoWebSessionCreds,
+    resolveDienstreiseReiseDirForJob: (jobIdRef, opts) => resolveDienstreiseReiseDirForJob(jobIdRef, opts),
+    getDienstreiseBasePath: () => getDienstreiseBasePath(),
   });
 
-  const abrechnungRefreshCtx = { db, save, dbDir: DB_DIR, authHeaderFromCredentials };
+  const abrechnungRefreshCtx = {
+    db,
+    save,
+    dbDir: DB_DIR,
+    authHeaderFromCredentials,
+    resolveDienstreiseReiseDirForJob: (jobIdRef, opts) => resolveDienstreiseReiseDirForJob(jobIdRef, opts),
+    getDienstreiseBasePath: () => getDienstreiseBasePath(),
+  };
 
   function fingerprintDispoBase(urlRaw) {
     const base = (urlRaw || '').trim().replace(/\/$/, '');
@@ -6672,7 +7053,6 @@ ORDER BY
                 save,
                 signal,
                 timeoutMs: 18000,
-                skipPnTree: true,
               });
             } catch (treeErr) {
               console.warn(
@@ -6773,9 +7153,36 @@ ORDER BY
           } else if (syncResult.row_count != null) {
             console.log('[sync_pull] anlagenstamm_db_sync ok, Zeilen lokal:', syncResult.row_count);
             flushDb();
+            try {
+              const pnPrefetch = await prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, {
+                dbLock,
+                save,
+                signal,
+                setProgress,
+                maxFabs: 40,
+              });
+              if (pnPrefetch.prefetched > 0) {
+                console.log('[sync_pull] pn_tree_prefetch:', pnPrefetch.prefetched, '/', pnPrefetch.attempted);
+              }
+            } catch (pnErr) {
+              console.warn('[sync_pull] pn_tree_prefetch:', pnErr && pnErr.message ? pnErr.message : pnErr);
+            }
           }
         } catch (syncErr) {
           console.warn('[sync_pull] anlagenstamm_db_sync:', syncErr && syncErr.message ? syncErr.message : syncErr);
+        }
+        try {
+          const abSync = enqueueAbrechnungBackgroundSync({
+            baseUrl: base,
+            technicianId,
+            serverUsername: p.serverUsername,
+            serverPassword: p.serverPassword,
+          });
+          if (abSync.enqueued > 0) {
+            console.log('[sync_pull] abrechnung_refresh enqueued:', abSync.enqueued, abSync.periods);
+          }
+        } catch (abErr) {
+          console.warn('[sync_pull] abrechnung_refresh:', abErr && abErr.message ? abErr.message : abErr);
         }
         break;
       }
@@ -6801,6 +7208,22 @@ ORDER BY
           { dbLock, save },
         );
         if (!syncResult.ok) throw new Error(syncResult.error || 'Anlagenstamm-Sync fehlgeschlagen.');
+        const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
+        const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
+        try {
+          const pnPrefetch = await prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, {
+            dbLock,
+            save,
+            signal,
+            setProgress,
+            maxFabs: 40,
+          });
+          if (pnPrefetch.prefetched > 0) {
+            console.log('[anlagenstamm_db_sync] pn_tree_prefetch:', pnPrefetch.prefetched, '/', pnPrefetch.attempted);
+          }
+        } catch (pnErr) {
+          console.warn('[anlagenstamm_db_sync] pn_tree_prefetch:', pnErr && pnErr.message ? pnErr.message : pnErr);
+        }
         setProgress('done', 1, 1, 'Anlagenstamm synchronisiert (' + (syncResult.row_count || 0) + ' Zeilen).');
         break;
       }
@@ -6838,14 +7261,19 @@ ORDER BY
       case 'abrechnung_refresh': {
         const p = job.payload || {};
         setProgress('abrechnung_refresh', 0, 1, 'Abrechnung wird abgeglichen …');
-        const result = await runAbrechnungRefreshCore(abrechnungRefreshCtx, {
-          baseUrl: p.baseUrl,
-          technicianId: p.technicianId,
-          serverUsername: p.serverUsername,
-          serverPassword: p.serverPassword,
-          period_ym: p.period_ym,
-          job_server_id: p.job_server_id,
-        });
+        const result = await runAbrechnungRefreshCore(
+          abrechnungRefreshCtx,
+          {
+            baseUrl: p.baseUrl,
+            technicianId: p.technicianId,
+            serverUsername: p.serverUsername,
+            serverPassword: p.serverPassword,
+            period_ym: p.period_ym,
+            job_server_id: p.job_server_id,
+            sync_all_jobs: p.sync_all_jobs !== false,
+          },
+          (cur, tot, msg) => setProgress('abrechnung_refresh', cur, tot, msg || 'Abrechnung …'),
+        );
         let msg = 'Abrechnung synchronisiert.';
         if (result.partial && result.warnings && result.warnings.length) msg += ' ' + result.warnings.join('; ');
         mergeCheckpoint({
@@ -6864,6 +7292,82 @@ ORDER BY
   monteurRuntime.bgJobs = bgJobs;
   bgJobs.markStaleRunningAsInterrupted();
   bgJobs.kick();
+
+  function defaultAbrechnungSyncPeriods(extraYm) {
+    const periods = [];
+    if (extraYm && /^\d{4}-\d{2}$/.test(String(extraYm))) periods.push(String(extraYm));
+    const now = new Date();
+    for (let offset = 0; offset <= 1; offset += 1) {
+      const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      const ym = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      if (!periods.includes(ym)) periods.push(ym);
+    }
+    return periods;
+  }
+
+  function enqueueAbrechnungBackgroundSync(opts) {
+    opts = opts || {};
+    if (!bgJobs) return { enqueued: 0, job_ids: [], periods: [] };
+    const dispoBaseUrl = (opts.baseUrl || opts.dispoBaseUrl || '').trim().replace(/\/+$/, '');
+    const technicianId = parseInt(opts.technicianId, 10);
+    const serverUsername = (opts.serverUsername || '').trim();
+    const serverPassword = opts.serverPassword != null ? String(opts.serverPassword) : '';
+    const jobServerId = parseInt(opts.job_server_id, 10) || 0;
+    if (!dispoBaseUrl || !Number.isFinite(technicianId) || technicianId <= 0) {
+      return { enqueued: 0, job_ids: [], periods: [] };
+    }
+    const periods = defaultAbrechnungSyncPeriods(opts.period_ym);
+    const job_ids = [];
+    let enqueued = 0;
+    for (const period of periods) {
+      const dedupeKey = 'abrechnung_refresh:' + technicianId + ':' + period;
+      const enq = bgJobs.enqueue(
+        'abrechnung_refresh',
+        {
+          baseUrl: dispoBaseUrl,
+          technicianId,
+          serverUsername,
+          serverPassword,
+          period_ym: period,
+          job_server_id: jobServerId,
+          sync_all_jobs: opts.sync_all_jobs !== false,
+        },
+        dedupeKey,
+      );
+      if (enq && enq.job_id) {
+        job_ids.push(enq.job_id);
+        enqueued += 1;
+      }
+    }
+    return { enqueued, job_ids, periods };
+  }
+
+  app.post('/api/abrechnung/schedule_refresh', express.json(), (req, res) => {
+    try {
+      const body = req.body || {};
+      const creds = loadDispoWebSessionCreds();
+      const baseUrl = (body.baseUrl || body.base_url || creds.baseUrl || '').trim();
+      const technicianId = parseInt(
+        body.technicianId != null
+          ? body.technicianId
+          : body.technician_id != null
+            ? body.technician_id
+            : getTechnicianId({ query: body, headers: req.headers }),
+        10,
+      );
+      const result = enqueueAbrechnungBackgroundSync({
+        baseUrl,
+        technicianId,
+        serverUsername: body.serverUsername || creds.serverUsername,
+        serverPassword: body.serverPassword != null ? body.serverPassword : creds.serverPassword,
+        period_ym: body.period_ym,
+        job_server_id: body.job_server_id,
+      });
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
 
   async function enrichJobFabWithAnlagenstamm(job, baseUrl, authHeader, opts) {
     opts = opts || {};
@@ -7912,7 +8416,7 @@ function jobFabKeysFromLocalJob(db, localJobId) {
   return out;
 }
 
-/** Nur FNs offener Aufträge — PROJEKTE-NEU-Vollscan pro FN kann am Server Minuten dauern. */
+/** FNs für PROJEKTE-NEU-Baum-Prefetch: offene Aufträge + alle Anlagenstamm-FNs (uncached bevorzugt). */
 function selectFabsForAnlagenstammTreePrefetch(db, technicianId, fabs) {
   const priority = new Set();
   try {
@@ -7925,6 +8429,18 @@ function selectFabsForAnlagenstammTreePrefetch(db, technicianId, fabs) {
       .all(technicianId);
     for (const row of rows) {
       extractFabsFromJobs([row]).forEach((fab) => priority.add(fab));
+    }
+  } catch (_) {}
+  try {
+    const localRows = db
+      .prepare(
+        `SELECT DISTINCT TRIM(fabrikationsnummer) AS fab FROM anlagenstamm_local
+         WHERE fabrikationsnummer IS NOT NULL AND TRIM(fabrikationsnummer) != ''`,
+      )
+      .all();
+    for (const row of localRows) {
+      const f = String(row.fab || '').trim();
+      if (f) priority.add(f);
     }
   } catch (_) {}
   const seen = new Set();
@@ -7940,7 +8456,7 @@ function selectFabsForAnlagenstammTreePrefetch(db, technicianId, fabs) {
     seen.add(f);
     out.push(f);
   }
-  return out.slice(0, 15);
+  return out.slice(0, 40);
 }
 
 function upsertJobTedIndex(db, localJobId, serverJobId, entries) {
@@ -8037,15 +8553,197 @@ async function fetchMechanikTedListFromDispo(base, technicianId, serverJobId, au
   return result;
 }
 
+/** Erster erfolgreicher Binary-Download aus parallelen URLs (schneller als Kette). */
+async function fetchFirstOkBinary(urls, headers, timeoutMs) {
+  const list = (urls || []).filter(Boolean);
+  if (!list.length) throw new Error('Datei nicht gefunden.');
+  const ms = timeoutMs != null ? timeoutMs : 22000;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  let lastErr = 'Datei nicht gefunden.';
+  try {
+    return await Promise.any(
+      list.map((url) =>
+        (async () => {
+          const r = await fetch(url, { headers, signal: ac.signal });
+          const ct = (r.headers.get('content-type') || '').toLowerCase();
+          if (!r.ok || ct.includes('application/json')) {
+            const data = await r.json().catch(() => ({}));
+            throw new Error((data && data.error) || 'HTTP ' + r.status);
+          }
+          const buf = Buffer.from(await r.arrayBuffer());
+          if (!buf.length) throw new Error('Datei ist leer.');
+          ac.abort();
+          return { buf, contentDisposition: r.headers.get('content-disposition') || '' };
+        })(),
+      ),
+    );
+  } catch (e) {
+    if (e && e.errors && e.errors.length) {
+      const tail = e.errors[e.errors.length - 1];
+      if (tail && tail.message) lastErr = tail.message;
+    } else if (e && e.message) {
+      lastErr = e.message;
+    }
+    throw new Error(lastErr);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildMechanikTedDownloadUrls(base, technicianId, serverJobId, relPath, fabOpt) {
+  const baseNorm = String(base || '').trim().replace(/\/$/, '');
+  if (!baseNorm || !relPath) return [];
+  const relQ = `rel_path=${encodeURIComponent(relPath)}`;
+  const fabStr = fabOpt != null && String(fabOpt).trim() !== '' ? String(fabOpt).trim() : '';
+  const urls = [];
+  if (fabStr) {
+    const fabQs = `fab=${encodeURIComponent(fabStr)}&${relQ}`;
+    urls.push(`${baseNorm}/api/mobile/mechanik_ted_excel_download_by_fab.php?${fabQs}`);
+    urls.push(`${baseNorm}/dispo/api/mobile/mechanik_ted_excel_download_by_fab.php?${fabQs}`);
+  }
+  urls.push(`${baseNorm}/api/mechanik_ted_excel_download.php?${relQ}`);
+  urls.push(`${baseNorm}/dispo/api/mechanik_ted_excel_download.php?${relQ}`);
+  const jobId = parseInt(serverJobId, 10);
+  if (Number.isFinite(jobId) && jobId > 0) {
+    const baseDl = `${baseNorm}/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}&${relQ}`;
+    urls.push(baseDl);
+    if (fabStr) urls.push(`${baseDl}&fab=${encodeURIComponent(fabStr)}`);
+  }
+  return urls;
+}
+
+/** TED-Download wie PWA: Mobile-API mit fab+rel_path (Basic-Auth, kein job_id). */
+async function downloadMechanikTedByFabMobile(base, relPath, fabOpt, authHeader, signal) {
+  const fabStr = fabOpt != null && String(fabOpt).trim() !== '' ? String(fabOpt).trim() : '';
+  if (!fabStr || !relPath) return null;
+  const baseNorm = String(base || '').trim().replace(/\/$/, '');
+  if (!baseNorm) return null;
+  const qs = `fab=${encodeURIComponent(fabStr)}&rel_path=${encodeURIComponent(relPath)}`;
+  const urls = [
+    `${baseNorm}/api/mobile/mechanik_ted_excel_download_by_fab.php?${qs}`,
+    `${baseNorm}/dispo/api/mobile/mechanik_ted_excel_download_by_fab.php?${qs}`,
+  ];
+  let lastErr = 'Datei nicht gefunden.';
+  for (const url of urls) {
+    let r;
+    try {
+      r = await fetch(url, { headers: authHeader, signal });
+    } catch (fetchErr) {
+      lastErr = fetchErr.message || String(fetchErr);
+      continue;
+    }
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    if (!r.ok || ct.includes('application/json')) {
+      const data = await r.json().catch(() => ({}));
+      if (data && data.error) lastErr = String(data.error);
+      continue;
+    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length) {
+      lastErr = 'Datei ist leer.';
+      continue;
+    }
+    return { buf, contentDisposition: r.headers.get('content-disposition') || '' };
+  }
+  throw new Error(lastErr);
+}
+
+/** TED-Download über Dispo-Web-Session (Cookies) — rel_path reicht ohne job_id. */
+async function downloadMechanikTedViaSessionProxy(dbDir, technicianId, serverJobId, relPath, fabOpt, credsOpt) {
+  const { ensureProxyAuthenticated, tryProxyFetchDispoBinary } = require('./lib/monteur-dispo-web-routes');
+  const relQ = `rel_path=${encodeURIComponent(relPath)}`;
+  const fast = await tryProxyFetchDispoBinary(dbDir, `/api/mechanik_ted_excel_download.php?${relQ}`);
+  if (fast && fast.buf && fast.buf.length) return fast;
+  const creds = credsOpt && typeof credsOpt === 'object' ? credsOpt : null;
+  const auth = await ensureProxyAuthenticated(dbDir, creds);
+  if (!auth.ok || !auth.authenticated || !auth.proxy) return null;
+  const paths = [`/api/mechanik_ted_excel_download.php?${relQ}`];
+  const jobId = parseInt(serverJobId, 10);
+  if (Number.isFinite(jobId) && jobId > 0) {
+    const baseDl = `/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}&${relQ}`;
+    paths.push(baseDl);
+    const fabStr = fabOpt != null && String(fabOpt).trim() !== '' ? String(fabOpt).trim() : '';
+    if (fabStr) {
+      paths.push(`${baseDl}&fab=${encodeURIComponent(fabStr)}`);
+    }
+  }
+  for (const suffix of paths) {
+    try {
+      const { res } = await auth.proxy.fetchDispo(suffix, { method: 'GET' });
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      if (!res.ok || ct.includes('application/json')) continue;
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (!buf.length) continue;
+      return { buf, contentDisposition: res.headers.get('content-disposition') || '' };
+    } catch (_) {
+      /* nächster Pfad */
+    }
+  }
+  return null;
+}
+
+async function prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, opts) {
+  opts = opts || {};
+  const need = [];
+  try {
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT TRIM(fabrikationsnummer) AS fab FROM anlagenstamm_local
+         WHERE fabrikationsnummer IS NOT NULL AND TRIM(fabrikationsnummer) != ''`,
+      )
+      .all();
+    for (const row of rows) {
+      const f = String(row.fab || '').trim();
+      if (!f) continue;
+      const cached = readAnlagenstammTreeCache(db, f);
+      if (cached && cached.tree && cached.tree.length) continue;
+      need.push(f);
+    }
+  } catch (_) {
+    return { attempted: 0, prefetched: 0 };
+  }
+  const limit = opts.maxFabs != null ? opts.maxFabs : 40;
+  let prefetched = 0;
+  for (const fab of need.slice(0, limit)) {
+    if (opts.signal && opts.signal.aborted) break;
+    if (opts.setProgress) opts.setProgress('anlagenstamm_tree', prefetched + 1, Math.min(need.length, limit), fab);
+    try {
+      await fetchAndCacheAnlagenstammTree(base, technicianId, fab, fetchHeaders, db, {
+        dbLock: opts.dbLock,
+        save: opts.save,
+        signal: opts.signal,
+        timeoutMs: opts.timeoutMs || 25000,
+      });
+      prefetched += 1;
+    } catch (treeErr) {
+      console.warn('[prefetch_pn_tree]', fab, treeErr && treeErr.message ? treeErr.message : treeErr);
+    }
+  }
+  return { attempted: need.length, prefetched };
+}
+
 async function downloadMechanikTedBuffer(base, technicianId, serverJobId, relPath, authHeader, signal, fabOpt) {
   const relQ = `rel_path=${encodeURIComponent(relPath)}`;
-  const baseDl = `${base}/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(serverJobId)}&${relQ}`;
+  const jobId = parseInt(serverJobId, 10);
+  const baseNorm = String(base || '').trim().replace(/\/$/, '');
   const fabStr = fabOpt != null && String(fabOpt).trim() !== '' ? String(fabOpt).trim() : '';
-  const urls = [baseDl];
+  const urls = [];
   if (fabStr) {
-    urls.push(`${baseDl}&fab=${encodeURIComponent(fabStr)}`);
+    const fabQs = `fab=${encodeURIComponent(fabStr)}&${relQ}`;
+    urls.push(`${baseNorm}/api/mobile/mechanik_ted_excel_download_by_fab.php?${fabQs}`);
+    urls.push(`${baseNorm}/dispo/api/mobile/mechanik_ted_excel_download_by_fab.php?${fabQs}`);
   }
-  urls.push(`${base}/dispo/api/mechanik_ted_excel_download.php?${relQ}`);
+  urls.push(`${baseNorm}/api/mechanik_ted_excel_download.php?${relQ}`);
+  urls.push(`${baseNorm}/dispo/api/mechanik_ted_excel_download.php?${relQ}`);
+  if (Number.isFinite(jobId) && jobId > 0) {
+    const baseDl = `${baseNorm}/dispo_api/api/mechanik_ted_excel_download.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}&${relQ}`;
+    urls.unshift(baseDl);
+    const fabStr = fabOpt != null && String(fabOpt).trim() !== '' ? String(fabOpt).trim() : '';
+    if (fabStr) {
+      urls.unshift(`${baseDl}&fab=${encodeURIComponent(fabStr)}`);
+    }
+  }
   let lastErr = 'Datei nicht gefunden.';
   for (const url of urls) {
     let r;
@@ -8297,7 +8995,7 @@ function readAnlagenstammTreeCache(db, fab) {
 function upsertAnlagenstammTreeCache(db, fab, pnRaw) {
   const fabNorm = String(fab || '').trim();
   if (!fabNorm) return;
-  const enabled = pnRaw && pnRaw.enabled ? 1 : 0;
+  const enabled = !pnRaw || pnRaw.enabled !== false ? 1 : 0;
   const tree = pnRaw && Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
   const treeJson = JSON.stringify(tree);
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);

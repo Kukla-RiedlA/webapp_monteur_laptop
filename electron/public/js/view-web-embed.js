@@ -10,7 +10,6 @@
   let forceNative = false;
 
   const VIEW_PATHS = {
-    anlagenstamm: `/anlagenstamm.php?${EMBED}`,
   };
 
   const WEB_VIEWS = new Set(Object.keys(VIEW_PATHS));

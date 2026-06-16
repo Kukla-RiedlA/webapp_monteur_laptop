@@ -227,11 +227,26 @@ function createDispoHtmlProxyHandler(ctx) {
   };
 }
 
+/** Lokale Laptop-/Desktop-APIs (nicht an Dispo-Server proxen). req.path ist relativ zu /api-Mount. */
+const LOCAL_API_PHP_PREFIXES = [
+  '/abrechnung_',
+  '/job_billing_',
+  '/job_status_',
+  '/mechanik_ted_excel_',
+  '/anlagenstamm_file_download.php',
+];
+
+function isLocalPhpApi(req) {
+  const p = String(req.path || '');
+  return LOCAL_API_PHP_PREFIXES.some((prefix) => p.startsWith(prefix));
+}
+
 function registerDispoApiPhpProxyRoutes(app, ctx) {
   const handler = createDispoHtmlProxyHandler(ctx);
   const rawBody = express.raw({ type: () => true, limit: '128mb' });
   app.use('/api', (req, res, next) => {
     if (!/\.php$/i.test(req.path || '')) return next();
+    if (isLocalPhpApi(req)) return next();
     rawBody(req, res, (err) => {
       if (err) return next(err);
       req.proxySuffix = req.originalUrl || req.url;

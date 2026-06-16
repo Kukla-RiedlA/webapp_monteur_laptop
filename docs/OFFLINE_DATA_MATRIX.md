@@ -27,6 +27,7 @@ Legende:
 | Dienstreisen | `dienstreisen` | über Sync mit Dispo-Basis | wie implementiert | Ja | lokal + Sync |
 | Kalender-Ansicht (Dispo-Spiegel) | `calendar_cache_technicians`, `calendar_cache_jobs`, `calendar_cache_absences` | nach Pull / Fetch vom Server | — | Ja (Cache-Stand) | — |
 | Anlagenstamm-Baum (Cache) | `anlagenstamm_tree_cache` | Lazy/Fetch über Gateway | — | Ja nach Sync | — |
+| **Anlagenstamm (Liste/Edit)** | `anlagenstamm_local`, `pending_changes` | `sync_pull` (Vollsync) | `sync_push` / `anlagenstamm_save` | Ja (offline-first UI) | Ja (lokal + Push) |
 | Benutzer-Textbausteine | `textbausteine_user_categories`, `textbausteine_user` | Sync mit Dispo | Sync | Ja | Ja (lokal; Sync später) |
 
 ---

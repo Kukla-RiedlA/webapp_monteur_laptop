@@ -13,7 +13,6 @@ const { registerDispoApiPhpProxyRoutes, createDispoHtmlProxyHandler } = require(
 const { setDispoPingResult } = require('./connection-state');
 const { DEFAULT_DISPO_EXTERNAL_URL, DEFAULT_DISPO_INTERNAL_URL } = require('./dispo-defaults');
 const { normalizeDispoBase, buildDispoBaseCandidates } = require('./dispo-base-fallback');
-const { rowCount: anlagenstammLocalRowCount, listAnlagenstammForApi } = require('./anlagenstamm-local');
 
 let dispoProxy = null;
 
@@ -64,8 +63,11 @@ function applySessionToProxy(dbDir) {
 
 async function ensureProxyAuthenticated(dbDir, creds) {
   const { proxy, stored } = applySessionToProxy(dbDir);
-  const username = (creds && creds.serverUsername) || stored.dispo_username || '';
-  const password = (creds && creds.serverPassword) != null ? String(creds.serverPassword) : stored.dispo_password || '';
+  const username = ((creds && creds.serverUsername) || stored.dispo_username || '').trim();
+  const password =
+    creds && creds.serverPassword != null && String(creds.serverPassword) !== ''
+      ? String(creds.serverPassword)
+      : stored.dispo_password || '';
   const externalUrl = normalizeDispoBase(
     (creds && (creds.externalUrl || creds.baseUrl)) || stored.dispo_external_url || DEFAULT_DISPO_EXTERNAL_URL,
   );
@@ -173,61 +175,27 @@ function registerMonteurDispoWebRoutes(app, ctx) {
       res.status(401).json({ ok: false, error: e.message || String(e) });
     }
   });
+}
 
-  app.get('/api/anlagenstamm/list', async (req, res) => {
-    try {
-      const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
-      const pageSize = Math.min(1000, Math.max(10, parseInt(String(req.query.page_size || '100'), 10) || 100));
-      const offset = (page - 1) * pageSize;
-      const db = ctx.db;
-      const total = db ? anlagenstammLocalRowCount(db) : 0;
-      if (db && total > 0) {
-        const rows = listAnlagenstammForApi(db, pageSize, offset);
-        return res.json({
-          ok: true,
-          success: true,
-          data: rows,
-          rows,
-          page,
-          page_size: pageSize,
-          total_count: total,
-          total_pages: Math.ceil(total / pageSize) || 1,
-          source: 'local_cache',
-        });
-      }
-      const auth = await ensureProxyAuthenticated(dbDir, null);
-      if (!auth.ok || !auth.authenticated) {
-        return res.status(401).json({ ok: false, error: auth.error || 'Nicht angemeldet', needLogin: true });
-      }
-      const qs = new URLSearchParams(req.query).toString();
-      const data = await auth.proxy.getJson('/api/anlagenstamm_list.php' + (qs ? '?' + qs : ''));
-      return res.json(Object.assign({ source: 'dispo_online' }, data));
-    } catch (e) {
-      res.status(e.status || 502).json({ ok: false, error: e.message, data: e.data });
-    }
-  });
-
-  app.post('/api/anlagenstamm/save', express.json(), async (req, res) => {
-    try {
-      const auth = await ensureProxyAuthenticated(dbDir, req.body || {});
-      if (!auth.ok || !auth.authenticated) {
-        return res.status(401).json({ ok: false, error: auth.error || 'Nicht angemeldet', needLogin: true });
-      }
-      const { res: upstream } = await auth.proxy.fetchDispo('/api/anlagenstamm_save.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req.body || {}),
-      });
-      const data = await upstream.json().catch(() => ({}));
-      res.status(upstream.status).json(data);
-    } catch (e) {
-      res.status(e.status || 502).json({ ok: false, error: e.message });
-    }
-  });
+/** Schneller Download-Versuch mit vorhandenen Session-Cookies (ohne Login-Probe). */
+async function tryProxyFetchDispoBinary(dbDir, pathSuffix) {
+  const { proxy } = applySessionToProxy(dbDir);
+  const suffix = pathSuffix.startsWith('/') ? pathSuffix : `/${pathSuffix}`;
+  try {
+    const { res } = await proxy.fetchDispo(suffix, { method: 'GET' });
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (!res.ok || ct.includes('application/json')) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length) return null;
+    return { buf, contentDisposition: res.headers.get('content-disposition') || '' };
+  } catch (_) {
+    return null;
+  }
 }
 
 module.exports = {
   registerMonteurDispoWebRoutes,
   ensureProxyAuthenticated,
+  tryProxyFetchDispoBinary,
   getOrCreateProxy,
 };

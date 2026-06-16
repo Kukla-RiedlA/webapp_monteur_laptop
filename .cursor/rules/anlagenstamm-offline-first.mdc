@@ -1,0 +1,14 @@
+---
+description: Monteur-Laptop — Anlagenstamm offline-first (wie Dispo Desktop)
+alwaysApply: false
+globs:
+  - webapp_monteur_laptop/electron/**/*
+---
+
+# Anlagenstamm offline-first (Laptop)
+
+- Liste, Filter, Bearbeiten: **nur** gegen lokale SQLite (`anlagenstamm_local`) via `/api/anlagenstamm_*.php` im Express-Gateway.
+- **Kein** iframe `/dispo-remote/anlagenstamm.php` für die Haupt-UI.
+- **Kein** `window.open(?popup=1)` — Bearbeiten über Inline-`#formModal`.
+- Speichern: `POST /api/anlagenstamm_save.php` → `performAnlagenstammSave` (lokal + `pending_changes` + Push).
+- Erlaubt online: TED/PN-Extras-Hybrid, Datei-Download/-Öffnen, Sync.
