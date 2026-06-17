@@ -114,7 +114,17 @@ const {
   markMissingProjekteNeuFiles,
   compareParameterFilesById,
   buildParameterTrendChain,
+  syncProjekteNeuTreesFromDispo,
+  ensureAnlagenstammTreeCacheSchema,
+  readAnlagenstammTreeCacheRow,
+  upsertAnlagenstammTreeCacheRow,
 } = require('./lib/anlagenstamm-local');
+const {
+  readCachedProjekteNeuFile,
+  writeCachedProjekteNeuFile,
+  readCachedProjekteNeuThumb,
+  writeCachedProjekteNeuThumb,
+} = require('./lib/projekte-neu-file-cache');
 const {
   isSupportedParameterFileName,
   parseParameterFile,
@@ -563,6 +573,7 @@ async function loadDbOnce() {
   const wrapper = createDbCompat();
   try {
     ensureAnlagenstammLocalSchema(wrapper);
+    ensureAnlagenstammTreeCacheSchema(wrapper);
   } catch (e) {
     console.warn('[anlagenstamm_local] schema:', e && e.message ? e.message : e);
   }
@@ -2216,6 +2227,47 @@ function createApp(db) {
         contentType: PROJEKTE_NEU_RASTER_MIME[ext] || 'image/jpeg',
       };
     }
+  }
+
+  function resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdOpt) {
+    let localJobId = jobIdOpt != null ? parseInt(jobIdOpt, 10) : null;
+    if (!Number.isFinite(localJobId) || localJobId <= 0) localJobId = null;
+    if (localJobId) {
+      const mapped = getJobRowByLocalOrServerId(localJobId);
+      localJobId = mapped ? mapped.id : null;
+    }
+    if (!localJobId) localJobId = resolveLocalJobIdForFab(technicianId, fabValue);
+    if (localJobId) {
+      try {
+        const dienstreisePath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath);
+        if (dienstreisePath) return dienstreisePath;
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    return readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
+  }
+
+  async function serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePathOpt) {
+    const cachedThumb = readCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax);
+    if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
+      res.setHeader('Content-Type', cachedThumb.contentType);
+      res.setHeader('Content-Length', String(cachedThumb.buf.length));
+      return res.send(cachedThumb.buf);
+    }
+    const filePath = filePathOpt || resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath);
+    if (!filePath) {
+      return res.status(404).json({ ok: false, error: 'thumb_not_image', local_unavailable: true });
+    }
+    const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
+    try {
+      writeCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax, thumbOut.buf);
+    } catch (_) {
+      /* ignore */
+    }
+    res.setHeader('Content-Type', thumbOut.contentType);
+    res.setHeader('Content-Length', String(thumbOut.buf.length));
+    return res.send(thumbOut.buf);
   }
 
   function cacheProjekteNeuTreesForJob(localJobId) {
@@ -4352,43 +4404,34 @@ ORDER BY
       return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
     }
     if (sourceNorm === 'projekte_neu' && pnPath) {
-      let localJobId = parseInt(jobIdRaw, 10);
-      if (!Number.isFinite(localJobId) || localJobId <= 0) localJobId = null;
-      if (localJobId) {
-        const mapped = getJobRowByLocalOrServerId(localJobId);
-        localJobId = mapped ? mapped.id : null;
-      }
-      if (!localJobId) localJobId = resolveLocalJobIdForFab(technicianId, fabValue);
-      if (localJobId) {
-        let filePath = null;
+      const filePath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdRaw);
+      if (filePath) {
         try {
-          filePath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath);
-        } catch (pnCtxErr) {
-          console.warn('[anlagenstamm_file_download] projekte_neu local:', pnCtxErr && pnCtxErr.message ? pnCtxErr.message : pnCtxErr);
-        }
-        if (filePath) {
-          try {
-            if (wantThumb) {
-              const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
-              res.setHeader('Content-Type', thumbOut.contentType);
-              res.setHeader('Content-Length', String(thumbOut.buf.length));
-              return res.send(thumbOut.buf);
-            }
-            const buf = fs.readFileSync(filePath);
-            const baseName = path.basename(filePath);
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('X-Download-Filename', encodeURIComponent(baseName));
-            res.setHeader(
-              'Content-Disposition',
-              (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
-            );
-            res.setHeader('Content-Length', String(buf.length));
-            return res.send(buf);
-          } catch (localErr) {
-            if (wantThumb) {
-              return res.status(415).json({ ok: false, error: localErr.message || 'thumb_not_image' });
-            }
+          if (wantThumb) {
+            return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePath);
           }
+          const buf = fs.readFileSync(filePath);
+          const baseName = path.basename(filePath);
+          res.setHeader('Content-Type', 'application/octet-stream');
+          res.setHeader('X-Download-Filename', encodeURIComponent(baseName));
+          res.setHeader(
+            'Content-Disposition',
+            (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+          );
+          res.setHeader('Content-Length', String(buf.length));
+          return res.send(buf);
+        } catch (localErr) {
+          if (wantThumb) {
+            return res.status(415).json({ ok: false, error: localErr.message || 'thumb_not_image' });
+          }
+        }
+      }
+      if (wantThumb) {
+        const cachedThumb = readCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax);
+        if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
+          res.setHeader('Content-Type', cachedThumb.contentType);
+          res.setHeader('Content-Length', String(cachedThumb.buf.length));
+          return res.send(cachedThumb.buf);
         }
       }
     }
@@ -4406,7 +4449,7 @@ ORDER BY
     if (sourceNorm === 'projekte_neu' && pnPath && !base) {
       return res.status(404).json({
         ok: false,
-        error: 'Datei nicht lokal verfügbar (offline). Bitte Auftrag mit Dienstreise-Pull übernehmen.',
+        error: 'Datei nicht lokal verfügbar (offline). Einmal online öffnen zum Herunterladen.',
         local_unavailable: true,
       });
     }
@@ -4452,6 +4495,15 @@ ORDER BY
           fs.writeFileSync(cacheFile, buf);
         } catch (_) {}
       }
+      if (sourceNorm === 'projekte_neu' && pnPath && buf.length) {
+        try {
+          if (wantThumb) {
+            writeCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax, buf);
+          } else {
+            writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, buf);
+          }
+        } catch (_) {}
+      }
       const cd = r.headers.get('content-disposition') || ('attachment; filename="' + encodeURIComponent(fallbackFn) + '"');
       const downloadName = contentDispositionFilename(cd) || fallbackFn;
       res.setHeader('Content-Type', ct);
@@ -4480,6 +4532,37 @@ ORDER BY
       thumbMax = Math.min(512, Math.max(64, thumbMax));
       if (!technicianId || !fabValue) {
         return res.status(400).json({ success: false, error: 'fab erforderlich.' });
+      }
+      if (sourceNorm === 'projekte_neu' && pnPath) {
+        const localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id);
+        if (localPath) {
+          try {
+            if (wantThumb) {
+              return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, localPath);
+            }
+            const buf = fs.readFileSync(localPath);
+            const baseName = path.basename(localPath);
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader(
+              'Content-Disposition',
+              (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+            );
+            res.setHeader('Content-Length', String(buf.length));
+            return res.send(buf);
+          } catch (localErr) {
+            if (wantThumb) {
+              return res.status(415).json({ success: false, error: localErr.message || 'thumb_not_image' });
+            }
+          }
+        }
+        if (wantThumb) {
+          const cachedThumb = readCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax);
+          if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
+            res.setHeader('Content-Type', cachedThumb.contentType);
+            res.setHeader('Content-Length', String(cachedThumb.buf.length));
+            return res.send(cachedThumb.buf);
+          }
+        }
       }
       let localJobId = parseInt(req.query.job_id, 10);
       if (!Number.isFinite(localJobId) || localJobId <= 0) {
@@ -4560,6 +4643,15 @@ ORDER BY
       const ct = r.headers.get('content-type') || 'application/octet-stream';
       const fallbackFn =
         sourceNorm === 'projekte_neu' ? pnPath.split(/[/\\]/).pop() || 'download' : fileValue;
+      if (sourceNorm === 'projekte_neu' && pnPath && buf.length) {
+        try {
+          if (wantThumb) {
+            writeCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax, buf);
+          } else {
+            writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, buf);
+          }
+        } catch (_) {}
+      }
       const cd = r.headers.get('content-disposition') || ('attachment; filename="' + encodeURIComponent(fallbackFn) + '"');
       res.setHeader('Content-Type', ct);
       res.setHeader('Content-Disposition', cd);
@@ -7154,18 +7246,51 @@ ORDER BY
             console.log('[sync_pull] anlagenstamm_db_sync ok, Zeilen lokal:', syncResult.row_count);
             flushDb();
             try {
-              const pnPrefetch = await prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, {
-                dbLock,
-                save,
-                signal,
-                setProgress,
-                maxFabs: 40,
-              });
-              if (pnPrefetch.prefetched > 0) {
-                console.log('[sync_pull] pn_tree_prefetch:', pnPrefetch.prefetched, '/', pnPrefetch.attempted);
+              const pnTreeSync = await syncProjekteNeuTreesFromDispo(
+                db,
+                {
+                  baseUrl: base,
+                  externalUrl: p.externalUrl,
+                  internalUrl: p.internalUrl,
+                  technician_id: technicianId,
+                  serverUsername: p.serverUsername,
+                  serverPassword: p.serverPassword,
+                },
+                (prog) => {
+                  if (prog && prog.page && prog.totalPages) {
+                    setProgress(
+                      'anlagenstamm_pn_tree',
+                      prog.page,
+                      prog.totalPages,
+                      'PROJEKTE-NEU-Bäume ' + prog.page + '/' + prog.totalPages,
+                    );
+                  }
+                },
+                { dbLock, save },
+              );
+              if (pnTreeSync.ok) {
+                console.log(
+                  '[sync_pull] anlagenstamm_pn_tree:',
+                  pnTreeSync.written || 0,
+                  'geschrieben,',
+                  pnTreeSync.skipped || 0,
+                  'unverändert, gesamt',
+                  pnTreeSync.total_count || 0,
+                );
+              } else if (pnTreeSync._notFound) {
+                const pnPrefetch = await prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, {
+                  dbLock,
+                  save,
+                  signal,
+                  setProgress,
+                  maxFabs: null,
+                });
+                console.log('[sync_pull] pn_tree_prefetch (Fallback):', pnPrefetch.prefetched, '/', pnPrefetch.attempted);
+              } else {
+                console.warn('[sync_pull] anlagenstamm_pn_tree:', pnTreeSync.error || 'fehlgeschlagen');
               }
             } catch (pnErr) {
-              console.warn('[sync_pull] pn_tree_prefetch:', pnErr && pnErr.message ? pnErr.message : pnErr);
+              console.warn('[sync_pull] anlagenstamm_pn_tree:', pnErr && pnErr.message ? pnErr.message : pnErr);
             }
           }
         } catch (syncErr) {
@@ -7211,20 +7336,53 @@ ORDER BY
         const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
         const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
         try {
-          const pnPrefetch = await prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, {
-            dbLock,
-            save,
-            signal,
-            setProgress,
-            maxFabs: 40,
-          });
-          if (pnPrefetch.prefetched > 0) {
-            console.log('[anlagenstamm_db_sync] pn_tree_prefetch:', pnPrefetch.prefetched, '/', pnPrefetch.attempted);
+          const pnTreeSync = await syncProjekteNeuTreesFromDispo(
+            db,
+            {
+              baseUrl: base,
+              externalUrl: p.externalUrl,
+              internalUrl: p.internalUrl,
+              technician_id: technicianId,
+              serverUsername: p.serverUsername,
+              serverPassword: p.serverPassword,
+            },
+            (prog) => {
+              if (prog && prog.page && prog.totalPages) {
+                setProgress(
+                  'anlagenstamm_pn_tree',
+                  prog.page,
+                  prog.totalPages,
+                  'PROJEKTE-NEU-Bäume ' + prog.page + '/' + prog.totalPages,
+                );
+              }
+            },
+            { dbLock, save },
+          );
+          if (pnTreeSync.ok) {
+            console.log(
+              '[anlagenstamm_db_sync] anlagenstamm_pn_tree:',
+              pnTreeSync.written || 0,
+              'geschrieben,',
+              pnTreeSync.skipped || 0,
+              'unverändert, gesamt',
+              pnTreeSync.total_count || 0,
+            );
+          } else if (pnTreeSync._notFound) {
+            const pnPrefetch = await prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, {
+              dbLock,
+              save,
+              signal,
+              setProgress,
+              maxFabs: null,
+            });
+            console.log('[anlagenstamm_db_sync] pn_tree_prefetch (Fallback):', pnPrefetch.prefetched, '/', pnPrefetch.attempted);
+          } else {
+            console.warn('[anlagenstamm_db_sync] anlagenstamm_pn_tree:', pnTreeSync.error || 'fehlgeschlagen');
           }
         } catch (pnErr) {
-          console.warn('[anlagenstamm_db_sync] pn_tree_prefetch:', pnErr && pnErr.message ? pnErr.message : pnErr);
+          console.warn('[anlagenstamm_db_sync] anlagenstamm_pn_tree:', pnErr && pnErr.message ? pnErr.message : pnErr);
         }
-        setProgress('done', 1, 1, 'Anlagenstamm synchronisiert (' + (syncResult.row_count || 0) + ' Zeilen).');
+        setProgress('done', 1, 1, 'Anlagenstamm synchronisiert (' + (syncResult.row_count || 0) + ' Zeilen, PROJEKTE-NEU-Bäume abgeglichen).');
         break;
       }
       case 'sync_push': {
@@ -8456,7 +8614,7 @@ function selectFabsForAnlagenstammTreePrefetch(db, technicianId, fabs) {
     seen.add(f);
     out.push(f);
   }
-  return out.slice(0, 40);
+  return out;
 }
 
 function upsertJobTedIndex(db, localJobId, serverJobId, entries) {
@@ -8703,7 +8861,7 @@ async function prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetch
   } catch (_) {
     return { attempted: 0, prefetched: 0 };
   }
-  const limit = opts.maxFabs != null ? opts.maxFabs : 40;
+  const limit = opts.maxFabs != null ? opts.maxFabs : need.length;
   let prefetched = 0;
   for (const fab of need.slice(0, limit)) {
     if (opts.signal && opts.signal.aborted) break;
@@ -8971,38 +9129,11 @@ function fabCacheLookupKeys(fab) {
 }
 
 function readAnlagenstammTreeCache(db, fab) {
-  for (const k of fabCacheLookupKeys(fab)) {
-    const row = db
-      .prepare('SELECT fab, projects_enabled, tree_json, synced_at FROM anlagenstamm_tree_cache WHERE fab = ?')
-      .get(k);
-    if (!row) continue;
-    let tree = [];
-    try {
-      tree = row.tree_json ? JSON.parse(row.tree_json) : [];
-    } catch (_) {
-      tree = [];
-    }
-    return {
-      fab: row.fab,
-      projects_enabled: Number(row.projects_enabled) === 1,
-      tree: Array.isArray(tree) ? tree : [],
-      synced_at: row.synced_at || null,
-    };
-  }
-  return null;
+  return readAnlagenstammTreeCacheRow(db, fab);
 }
 
-function upsertAnlagenstammTreeCache(db, fab, pnRaw) {
-  const fabNorm = String(fab || '').trim();
-  if (!fabNorm) return;
-  const enabled = !pnRaw || pnRaw.enabled !== false ? 1 : 0;
-  const tree = pnRaw && Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
-  const treeJson = JSON.stringify(tree);
-  const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  db.prepare(`
-    INSERT OR REPLACE INTO anlagenstamm_tree_cache (fab, projects_enabled, tree_json, synced_at)
-    VALUES (?, ?, ?, ?)
-  `).run(fabNorm, enabled, treeJson, syncedAt);
+function upsertAnlagenstammTreeCache(db, fab, pnRaw, meta) {
+  upsertAnlagenstammTreeCacheRow(db, fab, pnRaw, meta);
 }
 
 async function fetchAndCacheAnlagenstammTree(baseUrl, technicianId, fab, fetchHeaders, db, opts) {

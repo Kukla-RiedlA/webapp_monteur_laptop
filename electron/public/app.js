@@ -7811,7 +7811,7 @@
       }
       if (!allowOnline || (!getDispoExternalUrl() && !getDispoInternalUrl())) {
         if (msg) {
-          msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten für diese FN. Bitte Auftrag annehmen (Dienstreise-Pull kopiert Dokumente_Monteur) – der Anlagenstamm-DB-Sync enthält nur Stammdaten, keine Ordnerliste.';
+          msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten für diese FN. Bitte Anlagenstamm synchronisieren (lädt Ordnerstruktur aus der Server-DB) – Dateien werden bei Bedarf online geladen und lokal zwischengespeichert.';
         }
         return;
       }

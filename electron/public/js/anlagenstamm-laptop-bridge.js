@@ -313,7 +313,7 @@
     if (!tree.length) {
       const offlineMiss =
         data.source === 'local_empty' || data.source === 'cache_miss'
-          ? 'Ordnerstruktur noch nicht offline verfügbar. Bitte einmal online synchronisieren (Anlagenstamm-Sync).'
+          ? 'Ordnerstruktur noch nicht offline verfügbar. Bitte einmal online Anlagenstamm synchronisieren (lädt PROJEKTE-NEU-Bäume aus der Server-DB).'
           : pn.enabled === false
             ? 'PROJEKTE NEU ist für diese Fabrikationsnummer nicht verfügbar.'
             : 'Keine Einträge gefunden.';

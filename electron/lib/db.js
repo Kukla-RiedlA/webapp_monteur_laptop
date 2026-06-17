@@ -149,8 +149,12 @@ function applyRuntimeMigrations(db) {
       fab TEXT PRIMARY KEY,
       projects_enabled INTEGER NOT NULL DEFAULT 0,
       tree_json TEXT,
-      synced_at TEXT
+      synced_at TEXT,
+      content_signature TEXT,
+      truncated INTEGER NOT NULL DEFAULT 0
     )`);
+  tryExec(db, 'ALTER TABLE anlagenstamm_tree_cache ADD COLUMN content_signature TEXT');
+  tryExec(db, 'ALTER TABLE anlagenstamm_tree_cache ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0');
   tryExec(db, `CREATE TABLE IF NOT EXISTS job_ted_index (
       local_job_id INTEGER NOT NULL,
       server_job_id INTEGER,

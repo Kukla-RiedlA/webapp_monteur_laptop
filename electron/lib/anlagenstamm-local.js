@@ -1012,6 +1012,241 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
   }
 }
 
+const PN_TREE_EXPORT_CHUNK_TIMEOUT_MS = 120000;
+
+function ensureAnlagenstammTreeCacheSchema(dbOrSql) {
+  const run = (sql) => {
+    if (dbOrSql && typeof dbOrSql.run === 'function' && !dbOrSql.prepare) {
+      dbOrSql.run(sql);
+    } else if (dbOrSql && dbOrSql.prepare) {
+      dbOrSql.prepare(sql).run();
+    }
+  };
+  run(`CREATE TABLE IF NOT EXISTS anlagenstamm_tree_cache (
+      fab TEXT PRIMARY KEY,
+      projects_enabled INTEGER NOT NULL DEFAULT 0,
+      tree_json TEXT,
+      synced_at TEXT,
+      content_signature TEXT,
+      truncated INTEGER NOT NULL DEFAULT 0
+    )`);
+  if (dbOrSql && typeof dbOrSql.prepare === 'function') {
+    try {
+      const cols = dbOrSql.prepare('PRAGMA table_info(anlagenstamm_tree_cache)').all();
+      const names = new Set(cols.map((c) => c && c.name));
+      if (!names.has('content_signature')) {
+        run('ALTER TABLE anlagenstamm_tree_cache ADD COLUMN content_signature TEXT');
+      }
+      if (!names.has('truncated')) {
+        run('ALTER TABLE anlagenstamm_tree_cache ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0');
+      }
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err);
+      if (!/duplicate column name/i.test(msg)) {
+        console.warn('[anlagenstamm_tree_cache] column migration:', msg);
+      }
+    }
+  }
+  run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_tree_cache_synced ON anlagenstamm_tree_cache(synced_at)');
+}
+
+function fabCacheLookupKeys(fab) {
+  const s = String(fab || '').trim();
+  const keys = [];
+  if (s) keys.push(s);
+  if (/^\d+$/.test(s)) {
+    const n = String(parseInt(s, 10));
+    if (keys.indexOf(n) === -1) keys.push(n);
+  }
+  return keys;
+}
+
+function readAnlagenstammTreeCacheRow(db, fab) {
+  ensureAnlagenstammTreeCacheSchema(db);
+  for (const k of fabCacheLookupKeys(fab)) {
+    const row = db
+      .prepare(
+        'SELECT fab, projects_enabled, tree_json, synced_at, content_signature, truncated FROM anlagenstamm_tree_cache WHERE fab = ?',
+      )
+      .get(k);
+    if (!row) continue;
+    let tree = [];
+    try {
+      tree = row.tree_json ? JSON.parse(row.tree_json) : [];
+    } catch (_) {
+      tree = [];
+    }
+    return {
+      fab: row.fab,
+      projects_enabled: Number(row.projects_enabled) === 1,
+      tree: Array.isArray(tree) ? tree : [],
+      synced_at: row.synced_at || null,
+      content_signature: row.content_signature || '',
+      truncated: Number(row.truncated) === 1,
+    };
+  }
+  return null;
+}
+
+function upsertAnlagenstammTreeCacheRow(db, fab, pnRaw, meta) {
+  ensureAnlagenstammTreeCacheSchema(db);
+  const fabNorm = String(fab || '').trim();
+  if (!fabNorm) return;
+  meta = meta || {};
+  const enabled =
+    !pnRaw || (pnRaw.enabled !== false && pnRaw.projects_enabled !== false) ? 1 : 0;
+  const tree = pnRaw && Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
+  const treeJson = JSON.stringify(tree);
+  const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const sig = String(meta.content_signature || '').trim();
+  const truncated = meta.truncated === true || Number(meta.truncated) === 1 ? 1 : 0;
+  db.prepare(`
+    INSERT OR REPLACE INTO anlagenstamm_tree_cache (fab, projects_enabled, tree_json, synced_at, content_signature, truncated)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(fabNorm, enabled, treeJson, syncedAt, sig || null, truncated);
+}
+
+async function fetchPnTreeExportChunk(base, technicianId, authHeader, page, pageSize) {
+  const relativePhp = '/dispo_api/api/anlagenstamm_pn_tree_export_chunk.php';
+  const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), PN_TREE_EXPORT_CHUNK_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: Object.assign(
+        { 'Content-Type': 'application/json' },
+        dispoMonteurFetchHeaders(technicianId, authHeader),
+      ),
+      body: JSON.stringify({ page, page_size: pageSize }),
+      signal: ac.signal,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const err = (data && data.error) || r.statusText || 'HTTP ' + r.status;
+      return { ok: false, error: err, _httpStatus: r.status };
+    }
+    return Object.assign({}, data, { ok: true, _used_base_url: base });
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      return {
+        ok: false,
+        error: 'Timeout nach ' + Math.round(PN_TREE_EXPORT_CHUNK_TIMEOUT_MS / 1000) + ' s (PROJEKTE-NEU-Baum-Export)',
+        _httpStatus: 0,
+      };
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Vollständiger Abgleich aller PROJEKTE-NEU-Bäume aus der Server-DB in anlagenstamm_tree_cache.
+ */
+async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
+  options = options || {};
+  const dbLock = options.dbLock;
+  const saveFn = options.save;
+
+  function withDbLock(fn) {
+    if (dbLock && typeof dbLock.runWithDbLock === 'function') {
+      return dbLock.runWithDbLock(fn);
+    }
+    return Promise.resolve(fn());
+  }
+
+  ensureAnlagenstammTreeCacheSchema(db);
+  const bases = buildAnlagenstammSyncBases(payload);
+  const technicianId = parseInt(payload.technician_id, 10);
+  const username = (payload.serverUsername || '').toString().trim();
+  if (!bases.length || !username || !Number.isFinite(technicianId) || technicianId <= 0) {
+    return { ok: false, error: 'baseUrl, technician_id und Anmeldedaten erforderlich.' };
+  }
+  const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
+  const pageSize = 25;
+  let page = 1;
+  let totalPages = 1;
+  let totalCount = 0;
+  let written = 0;
+  let skipped = 0;
+
+  const runOnBase = async (base) => {
+    page = 1;
+    do {
+      let data;
+      try {
+        data = await fetchPnTreeExportChunk(base, technicianId, auth, page, pageSize);
+      } catch (err) {
+        if (isRetryableExportChunkFailure(null, err)) throw err;
+        return { ok: false, error: err && err.message ? err.message : String(err) };
+      }
+      if (!data.ok) {
+        if (data._httpStatus === 404) {
+          return { ok: false, error: 'PROJEKTE-NEU-Baum-Export nicht verfügbar (Server-Update erforderlich).', _notFound: true };
+        }
+        if (isRetryableExportChunkFailure(data)) {
+          throw Object.assign(new Error(data.error || 'PROJEKTE-NEU-Export fehlgeschlagen'), {
+            _httpStatus: data._httpStatus,
+          });
+        }
+        return data;
+      }
+      totalPages = data.total_pages != null ? Number(data.total_pages) : 1;
+      totalCount = data.total_count != null ? Number(data.total_count) : 0;
+      const items = Array.isArray(data.items) ? data.items : [];
+      await withDbLock(async () => {
+        for (const item of items) {
+          const fab = String(item.fab || '').trim();
+          if (!fab) continue;
+          const sig = String(item.content_signature || '').trim();
+          if (sig) {
+            const existing = readAnlagenstammTreeCacheRow(db, fab);
+            if (existing && existing.content_signature === sig && existing.tree && existing.tree.length) {
+              skipped += 1;
+              continue;
+            }
+          }
+          upsertAnlagenstammTreeCacheRow(
+            db,
+            fab,
+            {
+              enabled: item.projects_enabled !== false,
+              tree: Array.isArray(item.tree) ? item.tree : [],
+            },
+            {
+              content_signature: sig,
+              truncated: !!item.truncated,
+            },
+          );
+          written += 1;
+        }
+        if (typeof saveFn === 'function') saveFn();
+      });
+      if (onProgress) {
+        onProgress({ page, totalPages, totalCount, written, skipped });
+      }
+      page += 1;
+    } while (page <= totalPages);
+    return { ok: true, total_count: totalCount, written, skipped };
+  };
+
+  try {
+    const tried = await tryDispoBasesInOrder(bases, runOnBase);
+    if (tried.error) {
+      return { ok: false, error: tried.error };
+    }
+    const inner = tried.result;
+    if (inner && inner.ok === false) {
+      return { ok: false, error: inner.error || 'PROJEKTE-NEU-Export fehlgeschlagen.', _notFound: !!inner._notFound };
+    }
+    return Object.assign({ ok: true }, inner || {});
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e);
+    return { ok: false, error: msg };
+  }
+}
+
 function fabDirForCache(fab) {
   return String(fab || '').replace(/[^a-zA-Z0-9_\-]/g, '_');
 }
@@ -1316,6 +1551,10 @@ module.exports = {
   getRowsByFabs,
   saveLocal,
   syncAnlagenstammFromDispo,
+  syncProjekteNeuTreesFromDispo,
+  ensureAnlagenstammTreeCacheSchema,
+  readAnlagenstammTreeCacheRow,
+  upsertAnlagenstammTreeCacheRow,
   authHeaderFromCredentials,
   dispoMonteurFetchHeaders,
   fabDirForCache,
