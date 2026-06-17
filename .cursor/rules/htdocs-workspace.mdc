@@ -5,6 +5,6 @@ alwaysApply: false
 
 # Htdocs (veraltet)
 
-**Diese Regel ist obsolet.** Der Dispo-Ordner heißt jetzt **dispo** (nicht mehr htdocs). Workspace-Root: **C:\Kukla_Monteur_Plattform**.
+**Diese Regel ist obsolet.** Der Dispo-Ordner heißt jetzt **dispo** (nicht mehr htdocs). Workspace-Root: **OneDrive-Workspace `Kukla_Monteur_Plattform`** (`P:\OneDrive - KUKLA Waagenfabrik GmbH & Co KG\Software Tools AI\Kukla_Monteur_Plattform`).
 
 Siehe stattdessen: **`.cursor/rules/dispo-workspace.mdc`** – dort gelten die gleichen Regeln mit dem Pfad **dispo/**.
