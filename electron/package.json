@@ -1,16 +1,16 @@
 {
   "name": "monteur-webapp",
-  "version": "1.4.47",
+  "version": "1.4.48",
   "description": "Monteur WebApp – Offline-fähige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
   "license": "MIT",
   "scripts": {
-    "start": "electron .",
-    "pack": "electron-builder --dir",
+    "start": "node ./node_modules/electron/cli.js .",
+    "pack": "node ./node_modules/electron-builder/cli.js --dir",
     "generate-icons": "node scripts/generate-icons.js",
     "predist": "node scripts/generate-icons.js",
-    "dist": "electron-builder --win",
+    "dist": "node ./node_modules/electron-builder/cli.js --win",
     "postinstall": "electron-builder install-app-deps",
     "test:parameter-pdf": "node scripts/test-parameter-pdf.js",
     "test:parameter-pdf:open": "node scripts/test-parameter-pdf.js --open"

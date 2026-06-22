@@ -72,7 +72,7 @@ function createDispoProxy(options = {}) {
       const alt = httpsAltBase(b);
       if (alt && !candidateBases.includes(alt)) candidateBases.push(alt);
     }
-    return tryDispoBasesInOrder(candidateBases, async (base) => {
+    const outcome = await tryDispoBasesInOrder(candidateBases, async (base) => {
       const url = base + suffix;
       const headers = { ...(init.headers || {}) };
       const cookie = jar.headerFor(base);
@@ -92,6 +92,12 @@ function createDispoProxy(options = {}) {
       jar.setFromResponse(res, base);
       return { res, base };
     });
+    if (outcome.error) {
+      const err = new Error(outcome.error);
+      if (outcome.tried) err.tried = outcome.tried;
+      throw err;
+    }
+    return outcome.result;
   }
 
   async function getJson(pathSuffix) {

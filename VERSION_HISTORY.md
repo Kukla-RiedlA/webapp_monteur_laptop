@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.004.048
+- **Sync Büro-LAN:** Interne Dispo-URL (`10.0.0.180`) wird bei aktiver LAN-Session bevorzugt; laufender `sync_pull` wird bei Auftrag annehmen/Erledigt abgebrochen (kein Hängen mehr hinter langem Sync).
+- **Dispo-Proxy:** `fetchDispo` liefert wieder `{ res, base }` statt verschachteltem Ergebnis — behebt Login-Crash (`Cannot read properties of undefined (reading 'status')`) bei Anlagenstamm-Remote-Aufrufen.
+- **Anlagenstamm:** PROJEKTE-NEU-Cache, erweiterte lokale Suche, Bildergalerie-Fenster, Parameterlisten/Trend-Vergleich (Fortsetzung 1.004.045–047).
+
 ## V 1.004.044
 - **Anlagenstamm (Dispo-Parität):** Online-Iframe `anlagenstamm.php` über `/dispo-remote`; offline Cache-Liste im Layout von `anlagenstamm.php` (Filter, Spalten-Panel, volle Breite).
 - **Dispo-Web-Proxy:** Session, HTML-Rewrite und Routen für Monteur-Desktop-Embed (`dispo-proxy`, `monteur-dispo-web-routes`).

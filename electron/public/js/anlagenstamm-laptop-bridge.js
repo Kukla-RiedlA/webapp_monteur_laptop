@@ -51,7 +51,7 @@
 
   function isRasterImage(name) {
     const m = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
-    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(m ? m[1] : '');
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic', 'heif'].includes(m ? m[1] : '');
   }
 
   function formatFileSize(bytes) {
@@ -328,12 +328,33 @@
     if (!fabNorm) return Promise.resolve(null);
     const key = fabNorm + '|' + (extraQs || 'full');
     if (pnTreeInflight.has(key)) return pnTreeInflight.get(key);
-    const p = fetch(pnTreeListUrl(fabNorm, extraQs), { headers: techHeaders(), cache: 'no-store' })
+
+    const isCacheOnly = extraQs && extraQs.indexOf('cache_only') >= 0;
+    const creds = getDispoCreds();
+
+    const p = (isCacheOnly
+      ? fetch(pnTreeListUrl(fabNorm, extraQs), { headers: techHeaders(), cache: 'no-store' })
+      : fetch(api + '/api/anlagenstamm_files_list', {
+          method: 'POST',
+          headers: techHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            baseUrl: creds.baseUrl,
+            fab: fabNorm,
+            serverUsername: creds.serverUsername,
+            serverPassword: creds.serverPassword,
+          }),
+          cache: 'no-store',
+        })
+    )
       .then((r) => r.json().catch(() => null))
       .then((data) => {
         if (!data || (!data.success && !data.ok)) return null;
-        if (!extraQs || extraQs.indexOf('cache_only') < 0) {
+        const pn = (data && data.projekte_neu) || {};
+        const hasTree = Array.isArray(pn.tree) && pn.tree.length > 0;
+        if (!isCacheOnly && hasTree) {
           pnTreeCache.set(fabNorm, data);
+        } else if (!isCacheOnly && !hasTree) {
+          pnTreeCache.delete(fabNorm);
         }
         return data;
       })
@@ -405,34 +426,87 @@
       encodeURIComponent(fab) +
       '&source=projekte_neu&path=' +
       encodeURIComponent(relPath);
+    try {
+      const tid = localStorage.getItem('monteur_technicianId');
+      if (tid) u += '&technician_id=' + encodeURIComponent(String(tid));
+    } catch (_) { /* ignore */ }
+    if (pnExplorerState.jobId) {
+      u += '&job_id=' + encodeURIComponent(String(pnExplorerState.jobId));
+    }
     if (extraQs) u += '&' + extraQs;
     return u;
   }
 
+  function collectPnGalleryImages(fab) {
+    if (!global.MonteurImageGallery) return [];
+    return global.MonteurImageGallery.collectRasterFilesFromTree(pnExplorerState.tree, function (_n, name, rel) {
+      return {
+        url: pnDownloadUrl(fab, rel, 'inline=1'),
+        thumbUrl: pnDownloadUrl(fab, rel, 'thumb=1&thumb_max=256'),
+        label: name || rel,
+      };
+    });
+  }
+
+  function openPnImageGallery(fab, relPath, fileName) {
+    const gallery = collectPnGalleryImages(fab);
+    const label = fileName || relPath.split('/').pop() || 'Bild';
+    let idx = 0;
+    for (let i = 0; i < gallery.length; i++) {
+      if (
+        gallery[i].label === label ||
+        String(gallery[i].url || '').indexOf(encodeURIComponent(relPath)) >= 0
+      ) {
+        idx = i;
+        break;
+      }
+    }
+    if (global.MonteurImageGallery) {
+      return global.MonteurImageGallery.open(gallery, idx, {
+        title: label,
+        fallback: function () {
+          return openPnFileExternal(fab, relPath);
+        },
+      });
+    }
+    return openPnFileExternal(fab, relPath);
+  }
+
   function loadPnThumb(img, fab, relPath) {
     if (!img || !fab || !relPath) return;
-    fetch(pnDownloadUrl(fab, relPath, 'thumb=1&thumb_max=256'), { headers: techHeaders() })
-      .then((r) => {
-        if (!r.ok) throw new Error('thumb');
-        return r.blob();
-      })
-      .then((blob) => {
-        if (!img.parentNode) return;
-        const prev = img.getAttribute('data-blob-url');
-        if (prev) {
-          try { URL.revokeObjectURL(prev); } catch (_) { /* ignore */ }
-        }
-        const objUrl = URL.createObjectURL(blob);
-        img.setAttribute('data-blob-url', objUrl);
-        img.src = objUrl;
-      })
-      .catch(() => {
-        if (!img.parentNode) return;
-        const ic = document.createElement('span');
-        ic.className = 'icon';
-        ic.textContent = '\uD83D\uDCC4';
-        img.replaceWith(ic);
-      });
+    img.loading = 'lazy';
+    img.src = pnDownloadUrl(fab, relPath, 'thumb=1&thumb_max=256');
+    img.onerror = function () {
+      img.onerror = null;
+      fetch(pnDownloadUrl(fab, relPath, 'thumb=1&thumb_max=256'), { headers: techHeaders() })
+        .then((r) => {
+          if (!r.ok) throw new Error('thumb');
+          return r.blob();
+        })
+        .then((blob) => {
+          if (!img.parentNode) return;
+          const prev = img.getAttribute('data-blob-url');
+          if (prev) {
+            try { URL.revokeObjectURL(prev); } catch (_) { /* ignore */ }
+          }
+          const objUrl = URL.createObjectURL(blob);
+          img.setAttribute('data-blob-url', objUrl);
+          img.src = objUrl;
+        })
+        .catch(() => {
+          if (!img.parentNode) return;
+          const ic = document.createElement('span');
+          ic.className = 'icon';
+          ic.textContent = '\uD83D\uDCC4';
+          img.replaceWith(ic);
+        });
+    };
+  }
+
+  async function openPnFileExternal(fab, relPath) {
+    const localPath = await resolvePnLocalPath(fab, relPath);
+    await openLocalFilePath(localPath, { excel: false });
+    return { ok: true, path: localPath };
   }
 
   async function resolvePnLocalPath(fab, relPath) {
@@ -466,9 +540,11 @@
   }
 
   async function openPnFile(fab, relPath) {
-    const localPath = await resolvePnLocalPath(fab, relPath);
-    await openLocalFilePath(localPath, { excel: false });
-    return { ok: true, path: localPath };
+    const fileName = relPath.split('/').pop() || '';
+    if (isRasterImage(fileName)) {
+      return openPnImageGallery(fab, relPath, fileName);
+    }
+    return openPnFileExternal(fab, relPath);
   }
 
   async function showPnFileContextMenu(fab, relPath, fileName) {
@@ -551,7 +627,10 @@
         '<div class="dienstreise-explorer-actions">' +
         (r.isDir
           ? ''
-          : '<button type="button" class="btn btn-ghost" data-pn-open title="Mit Standardprogramm öffnen">Öffnen</button>') +
+          : (isImg
+            ? '<button type="button" class="btn btn-ghost" data-pn-preview title="Bild in der App anzeigen">Vorschau</button>'
+            : '') +
+            '<button type="button" class="btn btn-ghost" data-pn-open title="Mit Standardprogramm öffnen">Öffnen</button>') +
         '</div></div>';
     });
     html += '</div>';
@@ -561,6 +640,32 @@
       const row = img.closest('.dienstreise-explorer-row');
       const rel = row && row.getAttribute('data-relative-path');
       if (rel) loadPnThumb(img, fab, rel);
+      img.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (!rel) return;
+        const fileNameEl = row && row.querySelector('.dienstreise-explorer-filename');
+        openPnImageGallery(fab, rel, fileNameEl ? fileNameEl.textContent.trim() : '').catch((e) => {
+          if (!bridgeStatusEl || bridgeStatusEl.style.display === 'none') {
+            showBridgeError(e && e.message ? e.message : String(e));
+          }
+        });
+      });
+    });
+
+    target.querySelectorAll('[data-pn-preview]').forEach((btn) => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const row = btn.closest('.dienstreise-explorer-row');
+        const rel = row && row.getAttribute('data-relative-path');
+        if (!rel) return;
+        const fileNameEl = row && row.querySelector('.dienstreise-explorer-filename');
+        openPnImageGallery(fab, rel, fileNameEl ? fileNameEl.textContent.trim() : '').catch((e) => {
+          if (!bridgeStatusEl || bridgeStatusEl.style.display === 'none') {
+            showBridgeError(e && e.message ? e.message : String(e));
+          }
+        });
+      });
     });
 
     target.querySelectorAll('[data-pn-open]').forEach((btn) => {
@@ -569,7 +674,7 @@
         const row = btn.closest('.dienstreise-explorer-row');
         const rel = row && row.getAttribute('data-relative-path');
         if (!rel) return;
-        openPnFile(fab, rel).catch((e) => {
+        openPnFileExternal(fab, rel).catch((e) => {
           if (!bridgeStatusEl || bridgeStatusEl.style.display === 'none') {
             showBridgeError(e && e.message ? e.message : String(e));
           }
@@ -578,14 +683,27 @@
     });
 
     target.querySelectorAll('.dienstreise-explorer-row[data-is-dir="0"]').forEach((row) => {
+      const rel = row.getAttribute('data-relative-path') || '';
+      const fileNameEl = row.querySelector('.dienstreise-explorer-filename');
+      const fileName = (fileNameEl && fileNameEl.textContent.trim()) || rel.split('/').pop() || '';
+      const isImg = isRasterImage(fileName);
       row.style.cursor = 'pointer';
-      row.setAttribute('title', 'Datei öffnen');
+      row.setAttribute('title', isImg ? 'Bild in der App anzeigen' : 'Datei öffnen');
       row.addEventListener('click', (ev) => {
         if (ev.target.closest('.dienstreise-explorer-actions')) return;
         if (ev.target.closest('[data-pn-open]')) return;
-        const rel = row.getAttribute('data-relative-path');
+        if (ev.target.closest('[data-pn-preview]')) return;
+        if (ev.target.closest('[data-pn-thumb]')) return;
         if (!rel) return;
-        openPnFile(fab, rel).catch((e) => {
+        if (isImg) {
+          openPnImageGallery(fab, rel, fileName).catch((e) => {
+            if (!bridgeStatusEl || bridgeStatusEl.style.display === 'none') {
+              showBridgeError(e && e.message ? e.message : String(e));
+            }
+          });
+          return;
+        }
+        openPnFileExternal(fab, rel).catch((e) => {
           if (!bridgeStatusEl || bridgeStatusEl.style.display === 'none') {
             showBridgeError(e && e.message ? e.message : String(e));
           }

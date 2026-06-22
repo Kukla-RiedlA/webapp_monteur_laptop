@@ -154,7 +154,47 @@
     return el;
   }
 
-  function pnOpenProjekteNeuImageLightboxLists(url, title) {
+  function pnProjekteNeuDownloadQueryLists(fab, rel) {
+    var q =
+      'fabrikationsnummer=' +
+      encodeURIComponent(fab) +
+      '&fab=' +
+      encodeURIComponent(fab) +
+      '&source=projekte_neu&path=' +
+      encodeURIComponent(rel);
+    try {
+      var tid = localStorage.getItem('monteur_technicianId');
+      if (tid) q += '&technician_id=' + encodeURIComponent(String(tid));
+    } catch (e) {}
+    return q;
+  }
+
+  function pnBuildGalleryImagesForLists(fab, nodes) {
+    if (!window.MonteurImageGallery) return [];
+    return window.MonteurImageGallery.collectRasterFilesFromTree(nodes, function (_n, name, rel) {
+      var hrefBase = '/api/anlagenstamm_file_download.php?' + pnProjekteNeuDownloadQueryLists(fab, rel);
+      return {
+        url: hrefBase + '&inline=1',
+        thumbUrl: hrefBase + '&thumb=1&thumb_max=256',
+        label: name || rel,
+      };
+    });
+  }
+
+  function pnOpenProjekteNeuImageLightboxLists(url, title, galleryImages, galleryIndex) {
+    if (window.MonteurImageGallery && Array.isArray(galleryImages) && galleryImages.length) {
+      window.MonteurImageGallery.open(galleryImages, galleryIndex != null ? galleryIndex : 0, {
+        title: title,
+        fallback: function (item) {
+          pnOpenProjekteNeuImageLightboxListsSingle((item && item.url) || url, title);
+        },
+      });
+      return;
+    }
+    pnOpenProjekteNeuImageLightboxListsSingle(url, title);
+  }
+
+  function pnOpenProjekteNeuImageLightboxListsSingle(url, title) {
     var el = pnEnsureProjekteNeuImageLightboxLists();
     var img = el.querySelector('.kukla-pn-lightbox-img');
     if (img) {
@@ -164,8 +204,11 @@
     el.style.display = 'flex';
   }
 
-  function walkTreeUl(fab, nodes, depth) {
+  function walkTreeUl(fab, nodes, depth, galleryImages) {
     depth = depth || 0;
+    if (depth === 0 && !galleryImages) {
+      galleryImages = pnBuildGalleryImagesForLists(fab, nodes);
+    }
     nodes = nodes || [];
     var ul = document.createElement('ul');
     ul.className = 'anlagen-pn-tree-ul';
@@ -178,18 +221,12 @@
         strong.textContent = n.name || '(Ordner)';
         li.appendChild(strong);
         if (n.children && n.children.length) {
-          li.appendChild(walkTreeUl(fab, n.children, depth + 1));
+          li.appendChild(walkTreeUl(fab, n.children, depth + 1, galleryImages));
         }
       } else if (n.type === 'file') {
         var rel = n.rel || '';
         var label = n.name || rel || '(Datei)';
-        var hrefBase =
-          '/api/anlagenstamm_file_download.php?fabrikationsnummer=' +
-          encodeURIComponent(fab) +
-          '&fab=' +
-          encodeURIComponent(fab) +
-          '&source=projekte_neu&path=' +
-          encodeURIComponent(rel);
+        var hrefBase = '/api/anlagenstamm_file_download.php?' + pnProjekteNeuDownloadQueryLists(fab, rel);
         var wrap = document.createElement('div');
         wrap.className = 'anlagen-pn-file-row';
         if (pnRasterImageByNameForLists(label)) {
@@ -199,7 +236,15 @@
           thumb.alt = label;
           thumb.src = hrefBase + '&thumb=1&thumb_max=256';
           thumb.addEventListener('click', function () {
-            pnOpenProjekteNeuImageLightboxLists(hrefBase + '&inline=1', label);
+            var fullUrl = hrefBase + '&inline=1';
+            var idx = 0;
+            for (var gi = 0; gi < galleryImages.length; gi++) {
+              if (galleryImages[gi].url === fullUrl || String(galleryImages[gi].label) === label) {
+                idx = gi;
+                break;
+              }
+            }
+            pnOpenProjekteNeuImageLightboxLists(fullUrl, label, galleryImages, idx);
           });
           wrap.appendChild(thumb);
         } else {
@@ -217,7 +262,15 @@
         if (pnRasterImageByNameForLists(label)) {
           link.addEventListener('click', function (ev) {
             ev.preventDefault();
-            pnOpenProjekteNeuImageLightboxLists(hrefBase + '&inline=1', label);
+            var fullUrl = hrefBase + '&inline=1';
+            var idx = 0;
+            for (var gj = 0; gj < galleryImages.length; gj++) {
+              if (galleryImages[gj].url === fullUrl || String(galleryImages[gj].label) === label) {
+                idx = gj;
+                break;
+              }
+            }
+            pnOpenProjekteNeuImageLightboxLists(fullUrl, label, galleryImages, idx);
           });
         }
         wrap.appendChild(link);

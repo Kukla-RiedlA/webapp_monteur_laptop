@@ -496,6 +496,17 @@ function createBackgroundJobService(db, save, hooks) {
     return { ok: true };
   }
 
+  /** Laufende Jobs eines Typs abbrechen (z. B. sync_pull vor Auftrag annehmen). */
+  function cancelRunningOfType(type) {
+    const rows = db.prepare(`SELECT id FROM background_jobs WHERE status = 'running' AND type = ?`).all(type);
+    let n = 0;
+    for (const r of rows) {
+      const x = cancelJob(r.id);
+      if (x.ok) n++;
+    }
+    return n;
+  }
+
   /**
    * @param {number|string} limit
    * @param {boolean | { activeOnly?: boolean, runningOnly?: boolean }} filter
@@ -539,6 +550,7 @@ function createBackgroundJobService(db, save, hooks) {
     recoverPullJobs,
     reapStuckJobs,
     cancelJob,
+    cancelRunningOfType,
     listJobs,
     getJob,
     markStaleRunningAsInterrupted,

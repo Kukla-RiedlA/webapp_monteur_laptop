@@ -74,7 +74,20 @@
     if (lb) lb.remove();
   }
 
-  function openLightbox(url, title) {
+  function openLightbox(url, title, galleryImages, galleryIndex) {
+    if (window.MonteurImageGallery && Array.isArray(galleryImages) && galleryImages.length) {
+      window.MonteurImageGallery.open(galleryImages, galleryIndex != null ? galleryIndex : 0, {
+        title: title,
+        fallback: function (item) {
+          openLightboxSingle((item && item.url) || url, title);
+        },
+      });
+      return;
+    }
+    openLightboxSingle(url, title);
+  }
+
+  function openLightboxSingle(url, title) {
     closeLightbox();
     var wrap = document.createElement('div');
     wrap.id = 'anlagenLightbox';
@@ -535,10 +548,29 @@
         uploadCategory(btn.getAttribute('data-slug') || '');
       });
     });
+    var docGallery = [];
+    root.querySelectorAll('.anlagen-doc-thumb').forEach(function (thumb) {
+      var full = thumb.getAttribute('data-full') || '';
+      if (!full) return;
+      docGallery.push({
+        url: full,
+        thumbUrl: thumb.getAttribute('src') || full,
+        label: thumb.getAttribute('data-title') || '',
+      });
+    });
     root.querySelectorAll('.anlagen-doc-thumb').forEach(function (img) {
       img.addEventListener('click', function (e) {
         e.preventDefault();
-        openLightbox(img.getAttribute('data-full') || '', img.getAttribute('data-title') || '');
+        var full = img.getAttribute('data-full') || '';
+        var title = img.getAttribute('data-title') || '';
+        var idx = 0;
+        for (var i = 0; i < docGallery.length; i++) {
+          if (docGallery[i].url === full) {
+            idx = i;
+            break;
+          }
+        }
+        openLightbox(full, title, docGallery, idx);
       });
     });
     root.querySelectorAll('.anlagen-doc-del').forEach(function (btn) {

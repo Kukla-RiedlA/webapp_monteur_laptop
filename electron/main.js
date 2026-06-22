@@ -4,6 +4,7 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const { createApp, getDb, getMonteurDb, PORT, performAnlagenstammSave, flushMonteurDb } = require('./server');
+const { createImageGalleryWindowManager } = require('./lib/image-gallery-window');
 const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
 const {
   searchLocal: anlagenstammSearchLocal,
@@ -20,6 +21,7 @@ const {
 
 let mainWindow;
 let updateCheckScheduled = false;
+let imageGalleryWindows = null;
 
 function findWindowsUninstaller() {
   if (process.platform !== 'win32') return null;
@@ -440,6 +442,13 @@ ipcMain.handle('open-external', async (event, url) => {
   await shell.openExternal(url.trim());
 });
 
+ipcMain.handle('image-gallery:open', async (_event, payload) => {
+  if (!imageGalleryWindows) {
+    imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
+  }
+  return imageGalleryWindows.openImageGallery(payload || {});
+});
+
 ipcMain.handle('laptop:set-update-feed', async (event, payload) => {
   const p = payload && typeof payload === 'object' ? payload : {};
   const base = (p.dispoBaseUrl || p.baseUrl || '').trim();
@@ -469,6 +478,7 @@ app.on('certificate-error', (event, _webContents, url, _error, _certificate, cal
 });
 
 app.whenReady().then(() => {
+  imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
   initLaptopUpdater({ getMainWindow: () => mainWindow });
   getDb().then((db) => {
     const serverApp = createApp(db);

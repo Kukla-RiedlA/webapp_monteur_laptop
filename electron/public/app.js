@@ -367,7 +367,7 @@
     return false;
   }
 
-  /** Kandidaten für Fallback (extern vor LAN, wenn aktiv nur intern aus Büro-Session). */
+  /** Kandidaten für Fallback (LAN zuerst wenn interne URL ein Privatnetz ist). */
   function buildDispoBaseCandidatesClient() {
     var active = '';
     try {
@@ -376,9 +376,15 @@
     var ext = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
     var intUrl = (getDispoInternalUrl() || '').trim().replace(/\/+$/, '');
     var activePrivate = false;
+    var intPrivate = false;
     if (active) {
       try {
         activePrivate = isPrivateLanHostname(new URL(active).hostname);
+      } catch (e) { /* ignore */ }
+    }
+    if (intUrl) {
+      try {
+        intPrivate = isPrivateLanHostname(new URL(intUrl).hostname);
       } catch (e) { /* ignore */ }
     }
     var out = [];
@@ -387,6 +393,12 @@
       if (!u || seen[u]) return;
       seen[u] = true;
       out.push(u);
+    }
+    if (intPrivate && activePrivate) {
+      add(active);
+      add(intUrl);
+      add(ext);
+      return out;
     }
     if (active && !activePrivate) add(active);
     add(ext);
@@ -4824,7 +4836,11 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
-          Object.assign({}, syncPayload, { date_from: range.date_from, date_to: range.date_to }),
+          Object.assign({}, syncPayload, {
+            date_from: range.date_from,
+            date_to: range.date_to,
+            force_anlagenstamm_full: opts.forceAnlagenstammFull === true,
+          }),
         ),
       });
       var pullData = await pullRes.json().catch(function () { return {}; });
@@ -4843,7 +4859,11 @@
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(
-                Object.assign({}, syncPayload, { date_from: range.date_from, date_to: range.date_to }),
+                Object.assign({}, syncPayload, {
+                  date_from: range.date_from,
+                  date_to: range.date_to,
+                  force_anlagenstamm_full: opts.forceAnlagenstammFull === true,
+                }),
               ),
             });
             pullData = await pullRes.json().catch(function () {
@@ -5050,7 +5070,10 @@
         var syncBase = auth.baseUrl;
         if (blockingSync) {
           setConnectionBadge('online_syncing', 'Synchronisiere mit Dispo…');
-          var syncProblems = await runDispoPushPull(auth, range, { connectedBaseFallback: connectedBase });
+          var syncProblems = await runDispoPushPull(auth, range, {
+            connectedBaseFallback: connectedBase,
+            forceAnlagenstammFull: opts.forceAnlagenstammFull === true,
+          });
           applySyncBadgeAfterRun(syncProblems);
           scheduleAutoAppUpdateCheck();
           refreshTedFoldersAfterSync();
@@ -5228,7 +5251,7 @@
         reject(new Error('Sync dauert zu lange (>' + Math.round(maxMs / 60000) + ' Min) — bitte erneut versuchen'));
       }, maxMs);
     });
-    return Promise.race([checkConnectionAndSync({ blockingSync: true }), guard])
+    return Promise.race([checkConnectionAndSync({ blockingSync: true, forceAnlagenstammFull: true }), guard])
       .catch(function (e) {
         console.warn('[manual_sync]', e && e.message ? e.message : e);
         setConnectionBadge(
@@ -5593,7 +5616,7 @@
     var prep = hasLogin && !techId ? resolveMonteurProfileFromDispo() : Promise.resolve();
     var syncNowMaxMs = 40 * 60 * 1000;
     var syncWork = prep.then(function () {
-      return checkConnectionAndSync({ blockingSync: true });
+      return checkConnectionAndSync({ blockingSync: true, forceAnlagenstammFull: true });
     });
     Promise.race([
       syncWork,
@@ -7168,6 +7191,16 @@
   async function openAnlagenstammProjekteNeuLocal(fab, relPath, fallbackName, opts) {
     opts = opts || {};
     if (!fab || !relPath) return;
+    if (isProjekteNeuRasterImage(fallbackName || relPath)) {
+      openProjekteNeuImageInLightbox(fab, relPath, {
+        jobId: resolveProjekteNeuJobId(opts),
+        alt: fallbackName || relPath,
+        galleryImages: opts.galleryImages,
+        treeNodes: opts.treeNodes,
+        onError: opts.onError,
+      });
+      return;
+    }
     const technicianId = getTechId();
     const jobId = resolveProjekteNeuJobId(opts);
     const body = {
@@ -7256,6 +7289,56 @@
     }
   }
 
+  function projekteNeuThumbImgUrl(fab, rel, opts) {
+    opts = opts || {};
+    var q =
+      'fabrikationsnummer=' +
+      encodeURIComponent(fab) +
+      '&fab=' +
+      encodeURIComponent(fab) +
+      '&source=projekte_neu&path=' +
+      encodeURIComponent(rel) +
+      '&thumb=1&thumb_max=256';
+    var tid = typeof getTechId === 'function' ? getTechId() : null;
+    if (tid) q += '&technician_id=' + encodeURIComponent(String(tid));
+    var jid = resolveProjekteNeuJobId(opts);
+    if (jid) q += '&job_id=' + encodeURIComponent(String(jid));
+    return API_BASE + '/api/anlagenstamm_file_download.php?' + q;
+  }
+
+  function dienstreiseThumbImgUrl(jobId, rel) {
+    var q =
+      'job_id=' +
+      encodeURIComponent(jobId) +
+      '&path=' +
+      encodeURIComponent(rel) +
+      '&thumb=1&thumbMax=256';
+    var tid = typeof getTechId === 'function' ? getTechId() : null;
+    if (tid) q += '&technician_id=' + encodeURIComponent(String(tid));
+    return API_BASE + '/api/dienstreise/project_file?' + q;
+  }
+
+  function showProjekteNeuThumbFileIcon(timg) {
+    if (!timg || !timg.parentNode) return;
+    var fileRow = timg.parentNode;
+    var ic = document.createElement('span');
+    ic.className = 'projekte-neu-file-icon';
+    ic.setAttribute('aria-hidden', 'true');
+    ic.textContent = '\uD83D\uDCC4';
+    fileRow.replaceChild(ic, timg);
+  }
+
+  function showDienstreiseExplorerThumbFileIcon(img) {
+    if (!img || !img.parentNode) return;
+    var nameCell = img.closest('.dienstreise-explorer-name');
+    if (!nameCell) return;
+    var ic = document.createElement('span');
+    ic.className = 'icon';
+    ic.setAttribute('aria-hidden', 'true');
+    ic.textContent = '\uD83D\uDCC4';
+    nameCell.replaceChild(ic, img);
+  }
+
   function enqueueProjekteNeuThumbnailLoad(timg, fab, rel, opts) {
     opts = opts || {};
     var fetchOpts = {
@@ -7274,13 +7357,7 @@
       timg.src = url;
     }
     function showFileIcon() {
-      if (!timg || !timg.parentNode) return;
-      var fileRow = timg.parentNode;
-      var ic = document.createElement('span');
-      ic.className = 'projekte-neu-file-icon';
-      ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = '\uD83D\uDCC4';
-      fileRow.replaceChild(ic, timg);
+      showProjekteNeuThumbFileIcon(timg);
     }
     projekteNeuThumbQueue.push({ timg: timg, fab: fab, rel: rel, fetchOpts: fetchOpts, setThumbBlob: setThumbBlob, showFileIcon: showFileIcon });
     drainProjekteNeuThumbQueue();
@@ -7288,23 +7365,13 @@
 
   function loadProjekteNeuThumbnailImg(timg, fab, rel, opts) {
     if (!timg || !timg.parentNode) return;
-    if (typeof IntersectionObserver !== 'undefined') {
-      if (timg.getAttribute('data-pn-thumb-io') === '1') return;
-      timg.setAttribute('data-pn-thumb-io', '1');
-      var io = new IntersectionObserver(
-        function (entries) {
-          entries.forEach(function (ent) {
-            if (!ent.isIntersecting) return;
-            io.disconnect();
-            enqueueProjekteNeuThumbnailLoad(timg, fab, rel, opts);
-          });
-        },
-        { rootMargin: '120px', threshold: 0.01 },
-      );
-      io.observe(timg);
-      return;
-    }
-    enqueueProjekteNeuThumbnailLoad(timg, fab, rel, opts);
+    var directUrl = projekteNeuThumbImgUrl(fab, rel, opts);
+    timg.loading = 'lazy';
+    timg.src = directUrl;
+    timg.onerror = function () {
+      timg.onerror = null;
+      enqueueProjekteNeuThumbnailLoad(timg, fab, rel, opts);
+    };
   }
 
   function resolveProjekteNeuJobId(opts) {
@@ -7425,6 +7492,76 @@
     });
   }
 
+  function projekteNeuImageApiUrl(fab, rel, inline, jobIdOpt) {
+    var q =
+      'fabrikationsnummer=' +
+      encodeURIComponent(fab) +
+      '&fab=' +
+      encodeURIComponent(fab) +
+      '&source=projekte_neu&path=' +
+      encodeURIComponent(rel);
+    var tid = typeof getTechId === 'function' ? getTechId() : null;
+    if (tid) q += '&technician_id=' + encodeURIComponent(String(tid));
+    var jid = jobIdOpt != null ? jobIdOpt : (typeof jobDetailsJobId !== 'undefined' ? jobDetailsJobId : null);
+    if (jid) q += '&job_id=' + encodeURIComponent(String(jid));
+    if (inline) q += '&inline=1';
+    return API_BASE + '/api/anlagenstamm_file_download.php?' + q;
+  }
+
+  function collectProjekteNeuGalleryImages(fab, nodes, jobIdOpt) {
+    if (!window.MonteurImageGallery) return [];
+    return window.MonteurImageGallery.collectRasterFilesFromTree(nodes, function (_n, name, rel) {
+      return {
+        url: projekteNeuImageApiUrl(fab, rel, true, jobIdOpt),
+        thumbUrl: projekteNeuImageApiUrl(fab, rel, false, jobIdOpt) + '&thumb=1&thumb_max=256',
+        label: name || rel,
+      };
+    });
+  }
+
+  function collectDienstreiseExplorerGalleryImages(jobId, listEl) {
+    if (!listEl || !window.MonteurImageGallery) return [];
+    var tid = typeof getTechId === 'function' ? getTechId() : null;
+    var out = [];
+    listEl.querySelectorAll('.dienstreise-explorer-row[data-relative-path]').forEach(function (row) {
+      var rel = row.getAttribute('data-relative-path') || '';
+      var nameEl = row.querySelector('.dienstreise-explorer-filename');
+      var name = nameEl ? nameEl.textContent : rel;
+      if (!rel || !isProjekteNeuRasterImage(name)) return;
+      var base =
+        API_BASE +
+        '/api/dienstreise/project_file?job_id=' +
+        encodeURIComponent(jobId) +
+        '&path=' +
+        encodeURIComponent(rel);
+      if (tid) base += '&technician_id=' + encodeURIComponent(String(tid));
+      out.push({
+        url: base + '&inline=1',
+        thumbUrl: base + '&thumb=1&thumbMax=256',
+        label: String(name || rel).trim(),
+      });
+    });
+    return out;
+  }
+
+  function openMonteurImageGalleryOrLightbox(images, index, lightboxFn, title) {
+    if (window.MonteurImageGallery && window.monteurApp && window.monteurApp.openImageGallery) {
+      return window.MonteurImageGallery.open(images, index, {
+        title: title,
+        fallback: function (item) {
+          if (typeof lightboxFn === 'function') lightboxFn(item);
+        },
+      }).then(function (res) {
+        if ((!res || res.ok === false) && typeof lightboxFn === 'function' && images && images[index]) {
+          lightboxFn(images[index]);
+        }
+        return res;
+      });
+    }
+    if (typeof lightboxFn === 'function' && images && images[index]) lightboxFn(images[index]);
+    return Promise.resolve({ ok: false, fallback: true });
+  }
+
   function bindProjekteNeuLightboxOnce() {
     var lb = document.getElementById('projekteNeuImageLightbox');
     if (!lb || lb.getAttribute('data-bound') === '1') return;
@@ -7514,6 +7651,28 @@
 
   function openProjekteNeuImageInLightbox(fab, rel, opts) {
     opts = opts || {};
+    var gallery = Array.isArray(opts.galleryImages) ? opts.galleryImages : null;
+    if (!gallery && Array.isArray(opts.treeNodes)) {
+      gallery = collectProjekteNeuGalleryImages(fab, opts.treeNodes);
+    }
+    if (gallery && gallery.length && window.MonteurImageGallery) {
+      var idx = 0;
+      for (var gi = 0; gi < gallery.length; gi++) {
+        if (String(gallery[gi].url || '').indexOf(encodeURIComponent(rel)) >= 0) {
+          idx = gi;
+          break;
+        }
+      }
+      openMonteurImageGalleryOrLightbox(gallery, idx, function (item) {
+        openProjekteNeuImageInLightboxBlob(fab, rel, opts);
+      }, opts.alt || fab);
+      return;
+    }
+    openProjekteNeuImageInLightboxBlob(fab, rel, opts);
+  }
+
+  function openProjekteNeuImageInLightboxBlob(fab, rel, opts) {
+    opts = opts || {};
     showProjekteNeuImageLightboxShell();
     setProjekteNeuLightboxLoading(true, 'Bild wird geladen…');
     var lb = document.getElementById('projekteNeuImageLightbox');
@@ -7551,33 +7710,50 @@
 
   function loadDienstreiseExplorerThumbnailImg(img, jobId, relativePath) {
     if (!img || !jobId || !relativePath) return;
-    var fetchOpts = { thumb: true, thumbMax: 256 };
-    function setThumbBlob(blob) {
-      if (!img.parentNode) return;
-      var prev = img.getAttribute('data-blob-url');
-      if (prev) {
-        try { URL.revokeObjectURL(prev); } catch (_) {}
-      }
-      var url = URL.createObjectURL(blob);
-      img.setAttribute('data-blob-url', url);
-      img.src = url;
-    }
-    function showFileIcon() {
-      if (!img.parentNode) return;
-      var nameCell = img.closest('.dienstreise-explorer-name');
-      if (!nameCell) return;
-      var ic = document.createElement('span');
-      ic.className = 'icon';
-      ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = '\uD83D\uDCC4';
-      nameCell.replaceChild(ic, img);
-    }
-    fetchDienstreiseProjectFileBlob(jobId, relativePath, fetchOpts)
-      .then(setThumbBlob)
-      .catch(showFileIcon);
+    img.loading = 'lazy';
+    img.src = dienstreiseThumbImgUrl(jobId, relativePath);
+    img.onerror = function () {
+      img.onerror = null;
+      fetchDienstreiseProjectFileBlob(jobId, relativePath, { thumb: true, thumbMax: 256 })
+        .then(function (blob) {
+          if (!img.parentNode) return;
+          var prev = img.getAttribute('data-blob-url');
+          if (prev) {
+            try { URL.revokeObjectURL(prev); } catch (_) {}
+          }
+          var url = URL.createObjectURL(blob);
+          img.setAttribute('data-blob-url', url);
+          img.src = url;
+        })
+        .catch(function () {
+          showDienstreiseExplorerThumbFileIcon(img);
+        });
+    };
   }
 
   function openDienstreiseProjectImageInLightbox(jobId, relativePath, opts) {
+    opts = opts || {};
+    var gallery = Array.isArray(opts.galleryImages) ? opts.galleryImages : null;
+    if (!gallery && opts.listEl) {
+      gallery = collectDienstreiseExplorerGalleryImages(jobId, opts.listEl);
+    }
+    if (gallery && gallery.length && window.MonteurImageGallery) {
+      var idx = 0;
+      for (var gi = 0; gi < gallery.length; gi++) {
+        if (String(gallery[gi].label || '').trim() === String(opts.alt || '').trim()) {
+          idx = gi;
+          break;
+        }
+      }
+      openMonteurImageGalleryOrLightbox(gallery, idx, function () {
+        openDienstreiseProjectImageInLightboxBlob(jobId, relativePath, opts);
+      }, opts.alt || 'Bildergalerie');
+      return;
+    }
+    openDienstreiseProjectImageInLightboxBlob(jobId, relativePath, opts);
+  }
+
+  function openDienstreiseProjectImageInLightboxBlob(jobId, relativePath, opts) {
     opts = opts || {};
     showProjekteNeuImageLightboxShell();
     setProjekteNeuLightboxLoading(true, 'Bild wird geladen…');
@@ -7598,8 +7774,11 @@
       });
   }
 
-  function buildAnlageDetailProjekteNeuTree(fab, nodes, depth, msgEl) {
+  function buildAnlageDetailProjekteNeuTree(fab, nodes, depth, msgEl, galleryImages) {
     depth = depth || 0;
+    if (depth === 0 && !galleryImages) {
+      galleryImages = collectProjekteNeuGalleryImages(fab, nodes, jobDetailsJobId);
+    }
     function notifyErr(err, optsNotify) {
       optsNotify = optsNotify || {};
       var msg = (err && err.message) ? err.message : String(err);
@@ -7624,7 +7803,7 @@
         summary.textContent = String(n.name || 'Ordner');
         details.appendChild(summary);
         if (Array.isArray(n.children) && n.children.length) {
-          details.appendChild(buildAnlageDetailProjekteNeuTree(fab, n.children, depth + 1, msgEl));
+          details.appendChild(buildAnlageDetailProjekteNeuTree(fab, n.children, depth + 1, msgEl, galleryImages));
         } else {
           var em = document.createElement('div');
           em.className = 'muted';
@@ -7651,6 +7830,7 @@
             openProjekteNeuImageInLightbox(fab, rel, {
               jobId: jobDetailsJobId,
               alt: label,
+              galleryImages: galleryImages,
               onError: function (err) { notifyErr(err, { thumbOnly: false }); },
             });
           });
@@ -7670,6 +7850,15 @@
         btn.style.textAlign = 'left';
         btn.textContent = label;
         btn.addEventListener('click', function () {
+          if (isProjekteNeuRasterImage(label)) {
+            openProjekteNeuImageInLightbox(fab, rel, {
+              jobId: jobDetailsJobId,
+              alt: label,
+              galleryImages: galleryImages,
+              onError: function (err) { notifyErr(err, { thumbOnly: false }); },
+            });
+            return;
+          }
           openAnlagenstammProjekteNeuLocal(fab, rel, String(n.name || ''), { jobId: jobDetailsJobId }).catch(function (err) {
             notifyErr(err);
             var hint = (err && err.message) ? err.message : 'Dokument konnte nicht geöffnet werden.';
@@ -7855,7 +8044,7 @@
       treeHost: document.getElementById('anlageDetailProjekteNeuTree'),
       toggleEl: toggleEl,
       jobId: jobDetailsJobId,
-      allowOnline: false
+      allowOnline: true,
     });
   }
 
@@ -8869,6 +9058,7 @@
         if (!rel) return;
         openDienstreiseProjectImageInLightbox(jobId, rel, {
           alt: fileName ? fileName.textContent : '',
+          listEl: listEl,
         });
       });
     });
@@ -8881,6 +9071,7 @@
         if (!rel) return;
         openDienstreiseProjectImageInLightbox(jobId, rel, {
           alt: fileName ? fileName.textContent : '',
+          listEl: listEl,
         });
       });
     });

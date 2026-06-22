@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('monteurApp', {
   showItemInFolder: (filePath) => ipcRenderer.invoke('dienstreise:show-in-folder', filePath),
   copyPathToClipboard: (filePath) => ipcRenderer.invoke('dienstreise:copy-path', filePath),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  openImageGallery: (payload) => ipcRenderer.invoke('image-gallery:open', payload),
   anlagenstammSearch: (payload) => ipcRenderer.invoke('anlagenstamm:search', payload),
   anlagenstammSave: (payload) => ipcRenderer.invoke('anlagenstamm:save', payload),
   ipcInvoke: (channel, payload) => {

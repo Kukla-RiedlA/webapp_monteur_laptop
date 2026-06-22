@@ -13,10 +13,11 @@
     await global.kuklaWebPage.mount(host, {
       html: shell,
       scripts: [
+        '/js/monteur-image-gallery.js',
         '/assets/js/dispo/anlagenstamm_file_lists.js?v=20260616',
         '/assets/js/dispo/anlagenstamm_documents.js?v=20260616',
         '/assets/js/dispo/anlagenstamm.js?v=20260616',
-        '/js/anlagenstamm-laptop-bridge.js?v=20260616j',
+        '/js/anlagenstamm-laptop-bridge.js?v=20260618',
       ],
       reloadHandler: reload,
     });

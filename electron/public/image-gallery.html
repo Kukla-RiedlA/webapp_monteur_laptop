@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bildergalerie</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #141414;
+      color: #f2f2f2;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      overflow: hidden;
+    }
+    .gallery-root {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    .gallery-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      background: #1f1f1f;
+      border-bottom: 1px solid #333;
+      flex-shrink: 0;
+    }
+    .gallery-title {
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .gallery-counter {
+      font-size: 13px;
+      color: #bbb;
+      white-space: nowrap;
+    }
+    .gallery-btn {
+      border: 1px solid #555;
+      background: #2a2a2a;
+      color: #fff;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .gallery-btn:hover { background: #383838; }
+    .gallery-btn:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+    .gallery-stage-wrap {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      background: #0d0d0d;
+    }
+    .gallery-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 44px;
+      height: 72px;
+      border: none;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.45);
+      color: #fff;
+      font-size: 28px;
+      cursor: pointer;
+      z-index: 2;
+    }
+    .gallery-nav:hover { background: rgba(0, 0, 0, 0.65); }
+    .gallery-nav.prev { left: 12px; }
+    .gallery-nav.next { right: 12px; }
+    .gallery-stage {
+      max-width: calc(100% - 120px);
+      max-height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .gallery-stage img {
+      max-width: 100%;
+      max-height: calc(100vh - 180px);
+      object-fit: contain;
+      border-radius: 4px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+      user-select: none;
+    }
+    .gallery-loader, .gallery-error {
+      font-size: 14px;
+      color: #ccc;
+      text-align: center;
+      padding: 24px;
+    }
+    .gallery-error { color: #f5a3a3; }
+    .gallery-strip-wrap {
+      flex-shrink: 0;
+      border-top: 1px solid #333;
+      background: #1a1a1a;
+      padding: 10px 12px;
+      overflow-x: auto;
+    }
+    .gallery-strip {
+      display: flex;
+      gap: 8px;
+      min-height: 72px;
+      align-items: center;
+    }
+    .gallery-thumb {
+      flex: 0 0 auto;
+      width: 72px;
+      height: 72px;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      overflow: hidden;
+      cursor: pointer;
+      background: #222;
+      padding: 0;
+    }
+    .gallery-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .gallery-thumb.active {
+      border-color: #4ea3ff;
+      box-shadow: 0 0 0 1px #4ea3ff;
+    }
+  </style>
+</head>
+<body>
+  <div class="gallery-root">
+    <div class="gallery-toolbar">
+      <div class="gallery-title" id="galleryTitle">Bildergalerie</div>
+      <div class="gallery-counter" id="galleryCounter"></div>
+      <button type="button" class="gallery-btn" id="galleryOpenExternal" hidden>Extern öffnen</button>
+      <button type="button" class="gallery-btn" id="galleryClose">Schließen</button>
+    </div>
+    <div class="gallery-stage-wrap">
+      <button type="button" class="gallery-nav prev" id="galleryPrev" aria-label="Vorheriges Bild">&#8249;</button>
+      <div class="gallery-stage" id="galleryStage">
+        <div class="gallery-loader" id="galleryLoader">Bilder werden geladen…</div>
+      </div>
+      <button type="button" class="gallery-nav next" id="galleryNext" aria-label="Nächstes Bild">&#8250;</button>
+    </div>
+    <div class="gallery-strip-wrap">
+      <div class="gallery-strip" id="galleryStrip"></div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var sessionId = params.get('id') || '';
+      var index = Math.max(0, parseInt(params.get('index') || '0', 10) || 0);
+      var images = [];
+      var current = 0;
+
+      var elTitle = document.getElementById('galleryTitle');
+      var elCounter = document.getElementById('galleryCounter');
+      var elStage = document.getElementById('galleryStage');
+      var elLoader = document.getElementById('galleryLoader');
+      var elStrip = document.getElementById('galleryStrip');
+      var btnPrev = document.getElementById('galleryPrev');
+      var btnNext = document.getElementById('galleryNext');
+      var btnClose = document.getElementById('galleryClose');
+      var btnExternal = document.getElementById('galleryOpenExternal');
+
+      function showError(msg) {
+        elStage.innerHTML = '<div class="gallery-error">' + String(msg || 'Fehler') + '</div>';
+      }
+
+      function updateNav() {
+        var multi = images.length > 1;
+        btnPrev.disabled = !multi || current <= 0;
+        btnNext.disabled = !multi || current >= images.length - 1;
+        elCounter.textContent = images.length ? (current + 1) + ' / ' + images.length : '';
+        var thumbs = elStrip.querySelectorAll('.gallery-thumb');
+        thumbs.forEach(function (btn, i) {
+          btn.classList.toggle('active', i === current);
+        });
+        var activeThumb = thumbs[current];
+        if (activeThumb && activeThumb.scrollIntoView) {
+          activeThumb.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+        }
+      }
+
+      function galleryMediaUrl(idx, thumb) {
+        var q = thumb ? '?thumb=1' : '';
+        return (
+          '/api/image-gallery/media/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(String(idx)) + q
+        );
+      }
+
+      function renderMain() {
+        var item = images[current];
+        if (!item) return;
+        elStage.innerHTML = '';
+        var img = document.createElement('img');
+        img.alt = item.label || '';
+        img.src = galleryMediaUrl(current, false);
+        img.addEventListener('error', function () {
+          showError('Bild konnte nicht geladen werden.');
+        });
+        elStage.appendChild(img);
+        elTitle.textContent = item.label || 'Bildergalerie';
+        document.title = item.label ? item.label + ' – Galerie' : 'Bildergalerie';
+        btnExternal.hidden = false;
+        updateNav();
+      }
+
+      function buildStrip() {
+        elStrip.innerHTML = '';
+        images.forEach(function (item, i) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'gallery-thumb' + (i === current ? ' active' : '');
+          btn.title = item.label || '';
+          var th = document.createElement('img');
+          th.alt = item.label || '';
+          th.src = galleryMediaUrl(i, true);
+          btn.appendChild(th);
+          btn.addEventListener('click', function () {
+            current = i;
+            renderMain();
+          });
+          elStrip.appendChild(btn);
+        });
+      }
+
+      function go(delta) {
+        if (!images.length) return;
+        var next = current + delta;
+        if (next < 0 || next >= images.length) return;
+        current = next;
+        renderMain();
+      }
+
+      btnPrev.addEventListener('click', function () { go(-1); });
+      btnNext.addEventListener('click', function () { go(1); });
+      btnClose.addEventListener('click', function () { window.close(); });
+      btnExternal.addEventListener('click', function () {
+        var item = images[current];
+        if (item && item.url) window.open(item.url, '_blank');
+      });
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'ArrowLeft') go(-1);
+        else if (ev.key === 'ArrowRight') go(1);
+        else if (ev.key === 'Escape') window.close();
+      });
+
+      if (!sessionId) {
+        showError('Galerie-Sitzung fehlt.');
+        return;
+      }
+
+      fetch('/api/image-gallery/session/' + encodeURIComponent(sessionId), { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          images = Array.isArray(data && data.images) ? data.images : [];
+          if (!images.length) {
+            showError('Keine Bilder in dieser Galerie.');
+            return;
+          }
+          current = Math.min(Math.max(0, index), images.length - 1);
+          if (elLoader && elLoader.parentNode) elLoader.parentNode.removeChild(elLoader);
+          buildStrip();
+          renderMain();
+        })
+        .catch(function () {
+          showError('Galerie konnte nicht geladen werden.');
+        });
+    })();
+  </script>
+</body>
+</html>

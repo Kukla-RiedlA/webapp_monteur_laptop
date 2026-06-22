@@ -108,8 +108,43 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       last_full_sync_at TEXT,
       last_page INTEGER,
       total_count INTEGER,
-      sync_error TEXT
+      sync_error TEXT,
+      stamm_next_page INTEGER NOT NULL DEFAULT 1,
+      stamm_total_pages INTEGER NOT NULL DEFAULT 0,
+      stamm_phase_completed INTEGER NOT NULL DEFAULT 0,
+      pn_tree_next_page INTEGER NOT NULL DEFAULT 1,
+      pn_tree_total_pages INTEGER NOT NULL DEFAULT 0,
+      pn_tree_phase_completed INTEGER NOT NULL DEFAULT 0
     )`);
+  if (dbOrSql && typeof dbOrSql.prepare === 'function') {
+    try {
+      const cols = dbOrSql.prepare('PRAGMA table_info(anlagenstamm_sync_state)').all();
+      const names = new Set(cols.map((c) => c && c.name));
+      if (!names.has('stamm_next_page')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN stamm_next_page INTEGER NOT NULL DEFAULT 1');
+      }
+      if (!names.has('stamm_total_pages')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN stamm_total_pages INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!names.has('stamm_phase_completed')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN stamm_phase_completed INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!names.has('pn_tree_next_page')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_tree_next_page INTEGER NOT NULL DEFAULT 1');
+      }
+      if (!names.has('pn_tree_total_pages')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_tree_total_pages INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!names.has('pn_tree_phase_completed')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_tree_phase_completed INTEGER NOT NULL DEFAULT 0');
+      }
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err);
+      if (!/duplicate column name/i.test(msg)) {
+        console.warn('[anlagenstamm_sync_state] column migration:', msg);
+      }
+    }
+  }
   run(`CREATE TABLE IF NOT EXISTS anlagenstamm_parameter_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       fab TEXT NOT NULL,
@@ -623,8 +658,19 @@ function upsertAnlagenstammRows(db, rows) {
       if (byFab && byFab.id !== id) removeEmptyDirtyStub(byFab);
     }
     removeEmptyDirtyStub(byId);
-    const pnRoot = row.pn_root_name != null ? String(row.pn_root_name).trim() : '';
-    const tedJson = serializeTedMechanikForDb(row.ted_mechanik);
+    let pnRoot = row.pn_root_name != null ? String(row.pn_root_name).trim() : '';
+    let tedJson = serializeTedMechanikForDb(row.ted_mechanik);
+    const preserveFrom = byId || (fab ? lookupByFab(db, fab) : null);
+    if (preserveFrom && Number(preserveFrom.dirty) !== 1) {
+      if (!pnRoot) {
+        const existingPn = String(preserveFrom.pn_root_name || '').trim();
+        if (existingPn) pnRoot = existingPn;
+      }
+      if (!tedJson) {
+        const existingTedJson = serializeTedMechanikForDb(parseTedMechanik(preserveFrom.ted_mechanik));
+        if (existingTedJson) tedJson = existingTedJson;
+      }
+    }
     upsertStmt.run(
       id,
       fab,
@@ -912,6 +958,146 @@ async function fetchExportChunk(base, technicianId, authHeader, page, pageSize) 
   }
 }
 
+function defaultAnlagenstammSyncResumeState() {
+  return {
+    last_full_sync_at: null,
+    last_page: 0,
+    total_count: 0,
+    sync_error: null,
+    stamm_next_page: 1,
+    stamm_total_pages: 0,
+    stamm_phase_completed: false,
+    pn_tree_next_page: 1,
+    pn_tree_total_pages: 0,
+    pn_tree_phase_completed: false,
+    resume_pending: false,
+  };
+}
+
+function getAnlagenstammSyncResumeState(db) {
+  ensureAnlagenstammLocalSchema(db);
+  const row = db
+    .prepare(
+      `SELECT last_full_sync_at, last_page, total_count, sync_error,
+              stamm_next_page, stamm_total_pages, stamm_phase_completed,
+              pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed
+       FROM anlagenstamm_sync_state WHERE id = 1`,
+    )
+    .get();
+  if (!row) return defaultAnlagenstammSyncResumeState();
+  const stammDone = Number(row.stamm_phase_completed) === 1;
+  const pnDone = Number(row.pn_tree_phase_completed) === 1;
+  const stammNext = Math.max(1, Number(row.stamm_next_page) || 1);
+  const pnNext = Math.max(1, Number(row.pn_tree_next_page) || 1);
+  return {
+    last_full_sync_at: row.last_full_sync_at || null,
+    last_page: row.last_page != null ? Number(row.last_page) : 0,
+    total_count: row.total_count != null ? Number(row.total_count) : 0,
+    sync_error: row.sync_error || null,
+    stamm_next_page: stammNext,
+    stamm_total_pages: Number(row.stamm_total_pages) || 0,
+    stamm_phase_completed: stammDone,
+    pn_tree_next_page: pnNext,
+    pn_tree_total_pages: Number(row.pn_tree_total_pages) || 0,
+    pn_tree_phase_completed: pnDone,
+    resume_pending: (!stammDone && stammNext > 1) || (!pnDone && pnNext > 1) || (stammDone && !pnDone),
+  };
+}
+
+/** Sync-Phasen zurücksetzen (nur manueller Vollabgleich / Einstellungen „Jetzt holen“). */
+function resetAnlagenstammSyncPhases(db) {
+  ensureAnlagenstammLocalSchema(db);
+  db.prepare(
+    `INSERT INTO anlagenstamm_sync_state (id, stamm_next_page, stamm_total_pages, stamm_phase_completed,
+      pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed, sync_error)
+     VALUES (1, 1, 0, 0, 1, 0, 0, NULL)
+     ON CONFLICT(id) DO UPDATE SET
+       stamm_next_page = 1, stamm_total_pages = 0, stamm_phase_completed = 0,
+       pn_tree_next_page = 1, pn_tree_total_pages = 0, pn_tree_phase_completed = 0,
+       sync_error = NULL`,
+  ).run();
+  return getAnlagenstammSyncResumeState(db);
+}
+
+/**
+ * Vor Anlagenstamm-Sync: unterbrochene Läufe fortsetzen; Routine-Sync lässt abgeschlossene Phasen stehen
+ * (lokaler Cache bleibt sofort nutzbar). Nur bei options.forceFull Phasen neu starten.
+ */
+function prepareAnlagenstammSyncRun(db, options) {
+  ensureAnlagenstammLocalSchema(db);
+  if (options && options.forceFull) {
+    return resetAnlagenstammSyncPhases(db);
+  }
+  return getAnlagenstammSyncResumeState(db);
+}
+
+function updateStammResumeProgress(db, completedPage, totalPages, totalCount) {
+  db.prepare(
+    `INSERT INTO anlagenstamm_sync_state (id, last_page, total_count, stamm_next_page, stamm_total_pages, stamm_phase_completed, sync_error)
+     VALUES (1, ?, ?, ?, ?, 0, NULL)
+     ON CONFLICT(id) DO UPDATE SET
+       last_page = excluded.last_page,
+       total_count = excluded.total_count,
+       stamm_next_page = excluded.stamm_next_page,
+       stamm_total_pages = excluded.stamm_total_pages,
+       stamm_phase_completed = 0,
+       sync_error = NULL`,
+  ).run(completedPage, totalCount, completedPage + 1, totalPages);
+}
+
+function markStammPhaseCompleted(db, totalPages, totalCount) {
+  db.prepare(
+    `INSERT INTO anlagenstamm_sync_state (id, last_page, total_count, stamm_next_page, stamm_total_pages, stamm_phase_completed, sync_error)
+     VALUES (1, ?, ?, 1, ?, 1, NULL)
+     ON CONFLICT(id) DO UPDATE SET
+       last_page = excluded.last_page,
+       total_count = excluded.total_count,
+       stamm_next_page = 1,
+       stamm_total_pages = excluded.stamm_total_pages,
+       stamm_phase_completed = 1,
+       sync_error = NULL`,
+  ).run(totalPages, totalCount, totalPages);
+}
+
+function updatePnTreeResumeProgress(db, completedPage, totalPages) {
+  db.prepare(
+    `INSERT INTO anlagenstamm_sync_state (id, pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed, sync_error)
+     VALUES (1, ?, ?, 0, NULL)
+     ON CONFLICT(id) DO UPDATE SET
+       pn_tree_next_page = excluded.pn_tree_next_page,
+       pn_tree_total_pages = excluded.pn_tree_total_pages,
+       pn_tree_phase_completed = 0,
+       sync_error = NULL`,
+  ).run(completedPage + 1, totalPages);
+}
+
+function markPnTreePhaseCompleted(db, totalPages) {
+  db.prepare(
+    `INSERT INTO anlagenstamm_sync_state (id, pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed, sync_error)
+     VALUES (1, 1, ?, 1, NULL)
+     ON CONFLICT(id) DO UPDATE SET
+       pn_tree_next_page = 1,
+       pn_tree_total_pages = excluded.pn_tree_total_pages,
+       pn_tree_phase_completed = 1,
+       sync_error = NULL`,
+  ).run(totalPages);
+}
+
+function finalizeAnlagenstammSyncRun(db) {
+  db.prepare(
+    `INSERT INTO anlagenstamm_sync_state (id, last_full_sync_at, stamm_phase_completed, pn_tree_phase_completed,
+      stamm_next_page, pn_tree_next_page, sync_error)
+     VALUES (1, datetime('now'), 1, 1, 1, 1, NULL)
+     ON CONFLICT(id) DO UPDATE SET
+       last_full_sync_at = datetime('now'),
+       stamm_phase_completed = 1,
+       pn_tree_phase_completed = 1,
+       stamm_next_page = 1,
+       pn_tree_next_page = 1,
+       sync_error = NULL`,
+  ).run();
+}
+
 async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
   options = options || {};
   const dbLock = options.dbLock;
@@ -934,14 +1120,26 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
   if (!bases.length || !username) {
     return { ok: false, error: 'baseUrl und Anmeldedaten erforderlich.' };
   }
+
+  const resumeBefore = getAnlagenstammSyncResumeState(db);
+  if (resumeBefore.stamm_phase_completed) {
+    return {
+      ok: true,
+      skipped: true,
+      resumed: false,
+      total_count: resumeBefore.stamm_total_pages || resumeBefore.total_count || 0,
+      row_count: rowCount(db),
+    };
+  }
+
   const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const pageSize = 500;
-  let page = 1;
-  let totalPages = 1;
-  let totalCount = 0;
+  let page = Math.max(1, resumeBefore.stamm_next_page || 1);
+  const resuming = page > 1;
+  let totalPages = resumeBefore.stamm_total_pages || 1;
+  let totalCount = resumeBefore.total_count || 0;
 
   const runOnBase = async (base) => {
-    page = 1;
     do {
       let data;
       try {
@@ -966,25 +1164,17 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
       }
       await withDbLock(async () => {
         if (rows.length) upsertAnlagenstammRows(db, rows);
-        db.prepare(
-          `INSERT INTO anlagenstamm_sync_state (id, last_full_sync_at, last_page, total_count, sync_error)
-           VALUES (1, datetime('now'), ?, ?, NULL)
-           ON CONFLICT(id) DO UPDATE SET last_page = excluded.last_page, total_count = excluded.total_count, sync_error = NULL`,
-        ).run(page, totalCount);
+        updateStammResumeProgress(db, page, totalPages, totalCount);
         if (typeof saveFn === 'function') saveFn();
       });
-      if (onProgress) onProgress({ page, totalPages, totalCount });
+      if (onProgress) onProgress({ page, totalPages, totalCount, resuming: resuming || page > 1 });
       page += 1;
     } while (page <= totalPages);
     await withDbLock(async () => {
-      db.prepare(
-        `INSERT INTO anlagenstamm_sync_state (id, last_full_sync_at, last_page, total_count, sync_error)
-         VALUES (1, datetime('now'), ?, ?, NULL)
-         ON CONFLICT(id) DO UPDATE SET last_full_sync_at = datetime('now'), last_page = excluded.last_page, total_count = excluded.total_count`,
-      ).run(totalPages, totalCount);
+      markStammPhaseCompleted(db, totalPages, totalCount);
       if (typeof saveFn === 'function') saveFn();
     });
-    return { ok: true, total_count: totalCount, row_count: rowCount(db) };
+    return { ok: true, total_count: totalCount, row_count: rowCount(db), resumed: resuming };
   };
 
   try {
@@ -1096,9 +1286,15 @@ function upsertAnlagenstammTreeCacheRow(db, fab, pnRaw, meta) {
   const enabled =
     !pnRaw || (pnRaw.enabled !== false && pnRaw.projects_enabled !== false) ? 1 : 0;
   const tree = pnRaw && Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
+  const sig = String(meta.content_signature || '').trim();
+  if (!tree.length && !sig) {
+    const existing = readAnlagenstammTreeCacheRow(db, fabNorm);
+    if (existing && existing.tree && existing.tree.length) {
+      return;
+    }
+  }
   const treeJson = JSON.stringify(tree);
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  const sig = String(meta.content_signature || '').trim();
   const truncated = meta.truncated === true || Number(meta.truncated) === 1 ? 1 : 0;
   db.prepare(`
     INSERT OR REPLACE INTO anlagenstamm_tree_cache (fab, projects_enabled, tree_json, synced_at, content_signature, truncated)
@@ -1163,16 +1359,29 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
   if (!bases.length || !username || !Number.isFinite(technicianId) || technicianId <= 0) {
     return { ok: false, error: 'baseUrl, technician_id und Anmeldedaten erforderlich.' };
   }
+
+  const resumeBefore = getAnlagenstammSyncResumeState(db);
+  if (resumeBefore.pn_tree_phase_completed) {
+    return {
+      ok: true,
+      skipped: true,
+      resumed: false,
+      total_count: resumeBefore.pn_tree_total_pages || 0,
+      written: 0,
+      skipped_count: 0,
+    };
+  }
+
   const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const pageSize = 25;
-  let page = 1;
-  let totalPages = 1;
+  let page = Math.max(1, resumeBefore.pn_tree_next_page || 1);
+  const resuming = page > 1;
+  let totalPages = resumeBefore.pn_tree_total_pages || 1;
   let totalCount = 0;
   let written = 0;
   let skipped = 0;
 
   const runOnBase = async (base) => {
-    page = 1;
     do {
       let data;
       try {
@@ -1221,14 +1430,19 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
           );
           written += 1;
         }
+        updatePnTreeResumeProgress(db, page, totalPages);
         if (typeof saveFn === 'function') saveFn();
       });
       if (onProgress) {
-        onProgress({ page, totalPages, totalCount, written, skipped });
+        onProgress({ page, totalPages, totalCount, written, skipped, resuming: resuming || page > 1 });
       }
       page += 1;
     } while (page <= totalPages);
-    return { ok: true, total_count: totalCount, written, skipped };
+    await withDbLock(async () => {
+      markPnTreePhaseCompleted(db, totalPages);
+      if (typeof saveFn === 'function') saveFn();
+    });
+    return { ok: true, total_count: totalCount, written, skipped, resumed: resuming };
   };
 
   try {
@@ -1552,6 +1766,10 @@ module.exports = {
   saveLocal,
   syncAnlagenstammFromDispo,
   syncProjekteNeuTreesFromDispo,
+  getAnlagenstammSyncResumeState,
+  resetAnlagenstammSyncPhases,
+  prepareAnlagenstammSyncRun,
+  finalizeAnlagenstammSyncRun,
   ensureAnlagenstammTreeCacheSchema,
   readAnlagenstammTreeCacheRow,
   upsertAnlagenstammTreeCacheRow,

@@ -37,8 +37,9 @@ function normalizeDispoBasePair(externalUrl, internalUrl) {
 }
 
 /**
- * Reihenfolge für Fallback: zuerst erreichbare öffentliche Basis, LAN zuletzt.
- * (Verhindert 10s-Timeouts auf 10.x, wenn Monteur extern unterwegs ist.)
+ * Reihenfolge für Fallback.
+ * Unterwegs: externe Basis vor LAN (vermeidet Timeouts auf 10.x).
+ * Büro (aktive interne Session): interne Basis zuerst.
  *
  * @param {{ baseUrl?: string, externalUrl?: string, internalUrl?: string }} opts
  * @returns {string[]}
@@ -49,12 +50,20 @@ function buildDispoBaseCandidates(opts) {
   const ext = pair.external || normalizeDispoBase(opts && opts.externalUrl);
   const int = pair.internal || normalizeDispoBase(opts && opts.internalUrl);
   const activePrivate = active && isPrivateLanHostname(safeHostname(active));
+  const intPrivate = int && isPrivateLanHostname(safeHostname(int));
   const out = [];
   const seen = new Set();
   function add(u) {
     if (!u || seen.has(u)) return;
     seen.add(u);
     out.push(u);
+  }
+  /** Büro-LAN: interne Basis zuerst, wenn die aktive Session bereits die interne URL nutzt. */
+  if (intPrivate && activePrivate) {
+    if (activePrivate) add(active);
+    add(int);
+    add(ext);
+    return out;
   }
   if (active && !activePrivate) add(active);
   add(ext);

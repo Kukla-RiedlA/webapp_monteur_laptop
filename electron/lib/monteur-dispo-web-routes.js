@@ -92,23 +92,31 @@ async function ensureProxyAuthenticated(dbDir, creds) {
     dispoUsername: username,
     dispoPassword: password,
   });
-  const { sessionData, base } = await performDispoLogin(proxy, {
-    username,
-    password,
-    dispo_base: externalUrl,
-  });
-  saveWebSession(dbDir, {
-    cookies: proxy.jar.toJSON(),
-    dispo_base: base,
-    dispo_external_url: externalUrl,
-    dispo_internal_url: internalUrl,
-    dispo_username: sessionData.dispo_username || username,
-    dispo_password: password,
-    user_id: sessionData.user_id,
-    role: sessionData.role,
-  });
-  proxy.setConfig({ baseUrl: base, dispoUsername: username, dispoPassword: password });
-  return { ok: true, proxy, authenticated: true, base, reauth: true };
+  try {
+    const { sessionData, base } = await performDispoLogin(proxy, {
+      username,
+      password,
+      dispo_base: externalUrl,
+    });
+    saveWebSession(dbDir, {
+      cookies: proxy.jar.toJSON(),
+      dispo_base: base,
+      dispo_external_url: externalUrl,
+      dispo_internal_url: internalUrl,
+      dispo_username: sessionData.dispo_username || username,
+      dispo_password: password,
+      user_id: sessionData.user_id,
+      role: sessionData.role,
+    });
+    proxy.setConfig({ baseUrl: base, dispoUsername: username, dispoPassword: password });
+    return { ok: true, proxy, authenticated: true, base, reauth: true };
+  } catch (loginErr) {
+    return {
+      ok: false,
+      authenticated: false,
+      error: loginErr && loginErr.message ? loginErr.message : 'Dispo-Login fehlgeschlagen.',
+    };
+  }
 }
 
 function registerMonteurDispoWebRoutes(app, ctx) {
@@ -198,4 +206,5 @@ module.exports = {
   ensureProxyAuthenticated,
   tryProxyFetchDispoBinary,
   getOrCreateProxy,
+  saveWebSession,
 };

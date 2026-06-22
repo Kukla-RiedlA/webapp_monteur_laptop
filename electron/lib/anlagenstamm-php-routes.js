@@ -13,9 +13,17 @@ const {
   deleteAnlagenstammLocal,
 } = require('./anlagenstamm-php-local');
 
-function dispoMonteurHeaders(ctx, technicianId) {
-  const u = ctx.getDispoUsername ? String(ctx.getDispoUsername() || '').trim() : '';
-  const p = ctx.getDispoPassword != null ? String(ctx.getDispoPassword() || '') : '';
+function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
+  const creds =
+    credsOpt && typeof credsOpt === 'object'
+      ? credsOpt
+      : ctx.resolveDispoServerCreds
+        ? ctx.resolveDispoServerCreds({})
+        : {};
+  const u = String(
+    creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : '') || '',
+  ).trim();
+  const p = creds.serverPassword != null ? String(creds.serverPassword) : ctx.getDispoPassword ? String(ctx.getDispoPassword() || '') : '';
   const h = { 'X-Technician-Id': String(technicianId || '') };
   if (u) {
     const auth = 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64');
@@ -25,19 +33,27 @@ function dispoMonteurHeaders(ctx, technicianId) {
   return h;
 }
 
-/** Wie PWA/Monteur-API: dispo_api mit Basic-Auth (ohne Dispo-Web-Session). */
-async function fetchDispoApiFilesList(ctx, technicianId, fab) {
-  const base = ctx.getDispoBaseUrl ? String(ctx.getDispoBaseUrl() || '').trim().replace(/\/$/, '') : '';
+/** Monteur-API (dispo_api): Basic-Auth, optional Request-Creds oder persistierte Session. */
+async function fetchDispoApiFilesList(ctx, technicianId, fab, credsOpt) {
+  const creds =
+    credsOpt && typeof credsOpt === 'object'
+      ? credsOpt
+      : ctx.resolveDispoServerCreds
+        ? ctx.resolveDispoServerCreds({})
+        : {};
+  const base = String(creds.baseUrl || (ctx.getDispoBaseUrl ? ctx.getDispoBaseUrl() : '') || '')
+    .trim()
+    .replace(/\/$/, '');
   const fabNorm = String(fab || '').trim();
   if (!base || !technicianId || !fabNorm) return null;
-  const u = ctx.getDispoUsername ? String(ctx.getDispoUsername() || '').trim() : '';
+  const u = String(creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : '') || '').trim();
   if (!u) return null;
   const url =
     `${base}/dispo_api/api/anlagenstamm_files_list.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabNorm)}`;
   try {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 12000);
-    const r = await fetch(url, { headers: dispoMonteurHeaders(ctx, technicianId), signal: ac.signal });
+    const r = await fetch(url, { headers: dispoMonteurHeaders(ctx, technicianId, creds), signal: ac.signal });
     clearTimeout(timer);
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data) return null;
@@ -47,8 +63,56 @@ async function fetchDispoApiFilesList(ctx, technicianId, fab) {
   }
 }
 
-async function proxyGetJson(ctx, path) {
-  const auth = await ctx.ensureProxyAuthenticated();
+/** TED/PN-Extras direkt per Basic-Auth (wie Sync), unabhängig von Proxy-Session. */
+async function fetchDispoApiListExtras(ctx, body, credsOpt) {
+  const creds =
+    credsOpt && typeof credsOpt === 'object'
+      ? credsOpt
+      : ctx.resolveDispoServerCreds
+        ? ctx.resolveDispoServerCreds(body || {})
+        : {};
+  const base = String(creds.baseUrl || (ctx.getDispoBaseUrl ? ctx.getDispoBaseUrl() : '') || '')
+    .trim()
+    .replace(/\/$/, '');
+  const fabs = Array.isArray(body && body.fabs)
+    ? body.fabs.map((v) => String(v || '').trim()).filter(Boolean)
+    : [];
+  const u = String(creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : '') || '').trim();
+  if (!base || !u || !fabs.length) return null;
+  const url = `${base}/api/anlagenstamm_list_extras.php`;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30000);
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurHeaders(ctx, null, creds)),
+      body: JSON.stringify({ fabs }),
+      signal: ac.signal,
+    });
+    clearTimeout(timer);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data || data.success === false) return null;
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function fetchRemoteListExtras(ctx, body) {
+  const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds(body || {}) : {};
+  const viaApi = await fetchDispoApiListExtras(ctx, body, creds);
+  if (viaApi) return viaApi;
+  return proxyPostJson(ctx, '/api/anlagenstamm_list_extras.php', body || {}, creds);
+}
+
+async function proxyGetJson(ctx, path, credsOpt) {
+  const creds =
+    credsOpt && typeof credsOpt === 'object'
+      ? credsOpt
+      : ctx.resolveDispoServerCreds
+        ? ctx.resolveDispoServerCreds({})
+        : null;
+  const auth = await ctx.ensureProxyAuthenticated(creds);
   if (!auth.ok || !auth.authenticated) return null;
   try {
     return await auth.proxy.getJson(path);
@@ -57,8 +121,14 @@ async function proxyGetJson(ctx, path) {
   }
 }
 
-async function proxyPostJson(ctx, path, body) {
-  const auth = await ctx.ensureProxyAuthenticated();
+async function proxyPostJson(ctx, path, body, credsOpt) {
+  const creds =
+    credsOpt && typeof credsOpt === 'object'
+      ? credsOpt
+      : ctx.resolveDispoServerCreds
+        ? ctx.resolveDispoServerCreds(body || {})
+        : null;
+  const auth = await ctx.ensureProxyAuthenticated(creds);
   if (!auth.ok || !auth.authenticated) return null;
   try {
     const { res } = await auth.proxy.fetchDispo(path, {
@@ -92,8 +162,8 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
   app.get('/api/anlagenstamm_list_extras.php', async (req, res) => {
     const local = getAnlagenstammExtrasResponse(db(), req.query || {});
     if (!hasLocalAnlagenstammData(db())) return res.json(local);
-    const qs = new URLSearchParams(req.query).toString();
-    const remote = await proxyGetJson(ctx, `/api/anlagenstamm_list_extras.php${qs ? `?${qs}` : ''}`);
+    const body = req.query && req.query.fabs != null ? { fabs: req.query.fabs } : req.query || {};
+    const remote = await fetchRemoteListExtras(ctx, body);
     const merged = mergeAnlagenstammExtrasWithRemote(local, remote);
     const n = persistMergedExtrasToDb(db(), merged);
     if (n > 0 && typeof ctx.saveDb === 'function') ctx.saveDb();
@@ -103,7 +173,7 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
   app.post('/api/anlagenstamm_list_extras.php', express.json({ limit: '4mb' }), async (req, res) => {
     const local = getAnlagenstammExtrasResponse(db(), req.body || {});
     if (!hasLocalAnlagenstammData(db())) return res.json(local);
-    const remote = await proxyPostJson(ctx, '/api/anlagenstamm_list_extras.php', req.body || {});
+    const remote = await fetchRemoteListExtras(ctx, req.body || {});
     const merged = mergeAnlagenstammExtrasWithRemote(local, remote);
     const n = persistMergedExtrasToDb(db(), merged);
     if (n > 0 && typeof ctx.saveDb === 'function') ctx.saveDb();
@@ -193,6 +263,18 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
         );
         return res.json(payload);
       }
+      if (
+        cached &&
+        (!cached.tree || !cached.tree.length) &&
+        !(cached.content_signature && String(cached.content_signature).trim())
+      ) {
+        try {
+          db().prepare('DELETE FROM anlagenstamm_tree_cache WHERE fab = ?').run(fab);
+          if (typeof ctx.saveDb === 'function') ctx.saveDb();
+        } catch (_) {
+          /* ignore */
+        }
+      }
     }
 
     if (cacheOnly) {
@@ -219,7 +301,8 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       return res.json(Object.assign({ source: 'dispo_api' }, apiData));
     }
 
-    const auth = await ctx.ensureProxyAuthenticated();
+    const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds({}) : null;
+    const auth = await ctx.ensureProxyAuthenticated(creds);
     if (!auth.ok || !auth.authenticated) {
       return res.json(filesListPayload({ enabled: false, tree: [], root_name: '' }, 'local_empty'));
     }

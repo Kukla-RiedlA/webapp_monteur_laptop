@@ -166,6 +166,20 @@ CREATE TABLE IF NOT EXISTS textbausteine_user (
 CREATE INDEX IF NOT EXISTS idx_tb_user_cat_tech ON textbausteine_user_categories(technician_id);
 CREATE INDEX IF NOT EXISTS idx_tb_user_tech ON textbausteine_user(technician_id);
 
+CREATE TABLE IF NOT EXISTS image_thumb_cache (
+  cache_kind TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  rel_path TEXT NOT NULL,
+  thumb_max INTEGER NOT NULL DEFAULT 256,
+  content_type TEXT NOT NULL DEFAULT 'image/webp',
+  thumb_blob BLOB NOT NULL,
+  source_mtime TEXT,
+  source_size INTEGER,
+  cached_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (cache_kind, scope_id, rel_path, thumb_max)
+);
+CREATE INDEX IF NOT EXISTS idx_image_thumb_cache_scope ON image_thumb_cache(cache_kind, scope_id);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_start ON jobs(start_datetime);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_job_technicians_tech ON job_technicians(technician_id);

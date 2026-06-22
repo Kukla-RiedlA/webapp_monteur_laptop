@@ -111,9 +111,10 @@ function lookupAnlagenExtrasForFab(db, fab) {
 }
 
 function getAnlagenstammExtrasResponse(db, body = {}) {
-  const fabs = Array.isArray(body.fabs)
-    ? body.fabs.map((v) => String(v || '').trim()).filter(Boolean)
-    : [];
+  const rawFabs = body && body.fabs != null ? body.fabs : [];
+  const fabs = (Array.isArray(rawFabs) ? rawFabs : [rawFabs])
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
   const pn_by_fab = {};
   const ted_by_fab = {};
   let source = 'local_empty';

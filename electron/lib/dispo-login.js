@@ -81,11 +81,19 @@ async function loginViaFormAction(proxy, username, password) {
 
 async function loginViaBasicAuth(proxy, username, password) {
   const auth = basicAuthHeader(username, password);
-  const { res } = await proxy.fetchDispo('/api/jobs_open.php', {
-    method: 'GET',
-    headers: { Authorization: auth },
-    redirect: 'manual',
-  });
+  let res;
+  try {
+    ({ res } = await proxy.fetchDispo('/api/jobs_open.php', {
+      method: 'GET',
+      headers: { Authorization: auth },
+      redirect: 'manual',
+    }));
+  } catch (err) {
+    throw new Error(err && err.message ? err.message : 'Dispo nicht erreichbar (Basic-Auth-Prüfung).');
+  }
+  if (!res || typeof res.status !== 'number') {
+    throw new Error('Login-Prüfung: keine Antwort von der Dispo.');
+  }
   if (res.status === 401) {
     throw new Error('Benutzername oder Passwort falsch');
   }

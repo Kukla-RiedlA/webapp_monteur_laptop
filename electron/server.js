@@ -24,6 +24,37 @@ const PORT = 39678;
 let DB_DIR = path.join(__dirname, 'db');
 let DB_PATH = path.join(DB_DIR, 'monteur.db');
 
+function lastTechnicianIdPath() {
+  return path.join(DB_DIR, 'monteur_last_technician.json');
+}
+
+function readLastTechnicianId() {
+  try {
+    const p = lastTechnicianIdPath();
+    if (!fs.existsSync(p)) return null;
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const n = parseInt(j && (j.id != null ? j.id : j.technician_id), 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeLastTechnicianId(id) {
+  const n = parseInt(id, 10);
+  if (!Number.isFinite(n) || n <= 0) return;
+  try {
+    fs.mkdirSync(DB_DIR, { recursive: true });
+    fs.writeFileSync(
+      lastTechnicianIdPath(),
+      JSON.stringify({ id: n, saved_at: new Date().toISOString() }),
+      'utf8',
+    );
+  } catch (_) {
+    /* ignore */
+  }
+}
+
 /** Electron: DB unter userData (beschreibbar). Keine Dev-monteur.db aus dem Installer übernehmen. */
 function configurePersistentDbDir() {
   try {
@@ -118,6 +149,9 @@ const {
   ensureAnlagenstammTreeCacheSchema,
   readAnlagenstammTreeCacheRow,
   upsertAnlagenstammTreeCacheRow,
+  getAnlagenstammSyncResumeState,
+  prepareAnlagenstammSyncRun,
+  finalizeAnlagenstammSyncRun,
 } = require('./lib/anlagenstamm-local');
 const {
   readCachedProjekteNeuFile,
@@ -125,6 +159,11 @@ const {
   readCachedProjekteNeuThumb,
   writeCachedProjekteNeuThumb,
 } = require('./lib/projekte-neu-file-cache');
+const {
+  readImageThumbCache,
+  writeImageThumbCache,
+  THUMB_KIND_DIENSTREISE,
+} = require('./lib/image-thumb-cache');
 const {
   isSupportedParameterFileName,
   parseParameterFile,
@@ -773,8 +812,15 @@ function createApp(db) {
   const app = express();
 
   const getTechnicianId = (req) => {
-    const id = req.query.technician_id || req.headers['x-technician-id'];
-    return id ? parseInt(id, 10) : null;
+    const raw = req.query.technician_id || req.headers['x-technician-id'];
+    if (raw) {
+      const n = parseInt(raw, 10);
+      if (Number.isFinite(n) && n > 0) {
+        writeLastTechnicianId(n);
+        return n;
+      }
+    }
+    return readLastTechnicianId();
   };
 
   function loadDispoWebSessionCreds() {
@@ -816,13 +862,14 @@ function createApp(db) {
 
   const { registerAnlagenstammPhpRoutes } = require('./lib/anlagenstamm-php-routes');
   const { registerAbrechnungPhpRoutes } = require('./lib/abrechnung-php-routes');
-  const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated } = require('./lib/monteur-dispo-web-routes');
+  const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession } = require('./lib/monteur-dispo-web-routes');
   registerAnlagenstammPhpRoutes(app, {
     db,
     getTechnicianId,
     performAnlagenstammSave,
     saveDb: () => (monteurRuntime.save ? monteurRuntime.save() : false),
-    ensureProxyAuthenticated: () => ensureProxyAuthenticated(DB_DIR, null),
+    ensureProxyAuthenticated: (creds) => ensureProxyAuthenticated(DB_DIR, creds || null),
+    resolveDispoServerCreds: (body) => resolveDispoServerCreds(body || {}),
     readAnlagenstammTreeCache,
     upsertAnlagenstammTreeCache,
     buildLocalProjekteNeuTreeForFab: (technicianId, fab) => {
@@ -848,11 +895,11 @@ function createApp(db) {
         root_name: pnCtx.resolved.folderName || '',
       };
     },
-    getDispoUsername: () => loadDispoWebSessionCreds().serverUsername || '',
-    getDispoPassword: () => loadDispoWebSessionCreds().serverPassword || '',
-    getDispoBaseUrl: () => loadDispoWebSessionCreds().baseUrl || '',
-    getDispoExternalUrl: () => loadDispoWebSessionCreds().externalUrl || '',
-    getDispoInternalUrl: () => loadDispoWebSessionCreds().internalUrl || '',
+    getDispoUsername: () => resolveDispoServerCreds({}).serverUsername || '',
+    getDispoPassword: () => resolveDispoServerCreds({}).serverPassword || '',
+    getDispoBaseUrl: () => resolveDispoServerCreds({}).baseUrl || '',
+    getDispoExternalUrl: () => resolveDispoServerCreds({}).externalUrl || '',
+    getDispoInternalUrl: () => resolveDispoServerCreds({}).internalUrl || '',
   });
   registerAbrechnungPhpRoutes(app, {
     db,
@@ -2050,9 +2097,36 @@ function createApp(db) {
       }
       const baseName = path.basename(filePath);
       if (wantThumb) {
+        const mappedJob = getJobRowByLocalOrServerId(rawJobId);
+        const localJobId = mappedJob ? mappedJob.id : rawJobId;
+        const cachedThumb = readImageThumbCache(
+          db,
+          THUMB_KIND_DIENSTREISE,
+          String(localJobId),
+          relPath,
+          thumbMax,
+          filePath,
+        );
+        if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
+          res.setHeader('Content-Type', cachedThumb.contentType);
+          res.setHeader('Content-Length', String(cachedThumb.buf.length));
+          return res.send(cachedThumb.buf);
+        }
         try {
           const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
+          writeImageThumbCache(
+            db,
+            THUMB_KIND_DIENSTREISE,
+            String(localJobId),
+            relPath,
+            thumbMax,
+            thumbOut.buf,
+            thumbOut.contentType,
+            filePath,
+          );
+          if (monteurRuntime.save) monteurRuntime.save();
           res.setHeader('Content-Type', thumbOut.contentType);
+          res.setHeader('Cache-Control', 'private, max-age=604800');
           res.setHeader('Content-Length', String(thumbOut.buf.length));
           return res.send(thumbOut.buf);
         } catch (thumbErr) {
@@ -2249,23 +2323,35 @@ function createApp(db) {
   }
 
   async function serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePathOpt) {
-    const cachedThumb = readCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax);
+    const filePath = filePathOpt || resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath);
+    const cachedThumb = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, filePath);
     if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
       res.setHeader('Content-Type', cachedThumb.contentType);
+      res.setHeader('Cache-Control', 'private, max-age=604800');
       res.setHeader('Content-Length', String(cachedThumb.buf.length));
       return res.send(cachedThumb.buf);
     }
-    const filePath = filePathOpt || resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath);
     if (!filePath) {
       return res.status(404).json({ ok: false, error: 'thumb_not_image', local_unavailable: true });
     }
     const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
     try {
-      writeCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax, thumbOut.buf);
+      writeCachedProjekteNeuThumb(
+        db,
+        DB_DIR,
+        fabValue,
+        pnPath,
+        thumbMax,
+        thumbOut.buf,
+        thumbOut.contentType,
+        filePath,
+      );
+      if (monteurRuntime.save) monteurRuntime.save();
     } catch (_) {
       /* ignore */
     }
     res.setHeader('Content-Type', thumbOut.contentType);
+    res.setHeader('Cache-Control', 'private, max-age=604800');
     res.setHeader('Content-Length', String(thumbOut.buf.length));
     return res.send(thumbOut.buf);
   }
@@ -2408,14 +2494,7 @@ function createApp(db) {
       }
       const baseName = path.basename(filePath);
       if (wantThumb) {
-        try {
-          const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
-          res.setHeader('Content-Type', thumbOut.contentType);
-          res.setHeader('Content-Length', String(thumbOut.buf.length));
-          return res.send(thumbOut.buf);
-        } catch (thumbErr) {
-          return res.status(415).json({ ok: false, error: thumbErr.message || 'thumb_not_image' });
-        }
+        return serveProjekteNeuThumb(res, getTechnicianId(req), fab, relPath, thumbMax, filePath);
       }
       const buf = fs.readFileSync(filePath);
       const ext = path.extname(baseName).toLowerCase();
@@ -2723,7 +2802,6 @@ function createApp(db) {
         technicianId,
         serverUsername: dispoUsername,
         serverPassword: dispoPassword,
-        preferInternal: false,
       });
       if (resolvedBase.base) {
         dispoBaseUrl = resolvedBase.base;
@@ -2771,6 +2849,10 @@ function createApp(db) {
           error:
             'Dispo-Zugangsdaten fehlen: Benutzername und Passwort in den Einstellungen eintragen (erforderlich für Projektordner holen).',
         });
+      }
+
+      if (acceptJob && bgJobs) {
+        bgJobs.cancelRunningOfType('sync_pull');
       }
 
       const dedupeKey = 'dienstreise_pull:' + localJobId + ':' + (acceptJob ? 'accept' : 'copy');
@@ -3280,6 +3362,7 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'Dienstreise-Ordner nicht gefunden.' });
       }
       bgJobs.reapStuckJobs();
+      bgJobs.cancelRunningOfType('sync_pull');
       const dedupeKey = 'dienstreise_finish:' + localJobId;
       const { job_id } = bgJobs.enqueue(
         'dienstreise_finish',
@@ -4427,7 +4510,7 @@ ORDER BY
         }
       }
       if (wantThumb) {
-        const cachedThumb = readCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax);
+        const cachedThumb = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, filePath);
         if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
           res.setHeader('Content-Type', cachedThumb.contentType);
           res.setHeader('Content-Length', String(cachedThumb.buf.length));
@@ -4498,7 +4581,8 @@ ORDER BY
       if (sourceNorm === 'projekte_neu' && pnPath && buf.length) {
         try {
           if (wantThumb) {
-            writeCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax, buf);
+            writeCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, buf, 'image/webp', null);
+            if (monteurRuntime.save) monteurRuntime.save();
           } else {
             writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, buf);
           }
@@ -4556,7 +4640,7 @@ ORDER BY
           }
         }
         if (wantThumb) {
-          const cachedThumb = readCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax);
+          const cachedThumb = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, localPath);
           if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
             res.setHeader('Content-Type', cachedThumb.contentType);
             res.setHeader('Content-Length', String(cachedThumb.buf.length));
@@ -4579,10 +4663,7 @@ ORDER BY
         }
         if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
           if (wantThumb) {
-            const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
-            res.setHeader('Content-Type', thumbOut.contentType);
-            res.setHeader('Content-Length', String(thumbOut.buf.length));
-            return res.send(thumbOut.buf);
+            return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePath);
           }
           const buf = fs.readFileSync(filePath);
           const baseName = path.basename(filePath);
@@ -4646,7 +4727,8 @@ ORDER BY
       if (sourceNorm === 'projekte_neu' && pnPath && buf.length) {
         try {
           if (wantThumb) {
-            writeCachedProjekteNeuThumb(DB_DIR, fabValue, pnPath, thumbMax, buf);
+            writeCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, buf, 'image/webp', null);
+            if (monteurRuntime.save) monteurRuntime.save();
           } else {
             writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, buf);
           }
@@ -6663,7 +6745,6 @@ ORDER BY
           technicianId,
           serverUsername: dispoUsername,
           serverPassword: dispoPassword,
-          preferInternal: false,
         });
         if (resolvedPull.base) dispoBaseUrl = resolvedPull.base;
         if (!dispoBaseUrl) {
@@ -7103,10 +7184,22 @@ ORDER BY
           });
           if (resolved.base) base = resolved.base;
         }
-        let pullInfo = null;
+        if (p.serverUsername && p.serverPassword) {
+          try {
+            saveWebSession(DB_DIR, {
+              dispo_username: String(p.serverUsername),
+              dispo_password: String(p.serverPassword),
+              dispo_base: base,
+              dispo_external_url: p.externalUrl || pair.external || base,
+              dispo_internal_url: p.internalUrl || pair.internal || '',
+            });
+          } catch (sessErr) {
+            console.warn('[sync_pull] session persist:', sessErr && sessErr.message ? sessErr.message : sessErr);
+          }
+        }
         await dbLock.runWithDbLock(async () => {
           setProgress('sync_pull', 0, 8, 'Ziehe Aufträge von Dispo …');
-          pullInfo = await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
+          await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
           save();
         });
         await dbLock.runWithDbLock(async () => {
@@ -7127,35 +7220,12 @@ ORDER BY
         const cacheEnd = p.date_to && String(p.date_to).trim() ? String(p.date_to).trim() : range.end;
         try {
           const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, auth);
-          const fabs = pullInfo && Array.isArray(pullInfo.fabs) ? pullInfo.fabs : [];
-          let subset = [];
           await dbLock.runWithDbLock(async () => {
             upsertCalendarCache(db, calData);
             save();
-            subset = selectFabsForAnlagenstammTreePrefetch(db, technicianId, fabs);
           });
-          let fi = 0;
-          for (const fab of subset) {
-            if (signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
-            fi++;
-            setProgress('anlagenstamm_tree', fi, subset.length, fab);
-            try {
-              await fetchAndCacheAnlagenstammTree(base, technicianId, fab, fetchHeaders, db, {
-                dbLock,
-                save,
-                signal,
-                timeoutMs: 18000,
-              });
-            } catch (treeErr) {
-              console.warn(
-                '[sync_pull] anlagenstamm_tree',
-                fab,
-                treeErr && treeErr.message ? treeErr.message : treeErr,
-              );
-            }
-          }
         } catch (calErr) {
-          console.warn('[sync_pull] kalender/anlagenstamm_baum:', calErr && calErr.message ? calErr.message : calErr);
+          console.warn('[sync_pull] kalender:', calErr && calErr.message ? calErr.message : calErr);
         }
         setProgress('sync_pull', 3, 8, 'TED-Index …');
         try {
@@ -7218,6 +7288,10 @@ ORDER BY
         });
         setProgress('anlagenstamm_db_sync', 0, 1, 'Anlagenstamm-Stammdaten …');
         try {
+          await dbLock.runWithDbLock(async () => {
+            prepareAnlagenstammSyncRun(db, { forceFull: !!p.forceAnlagenstammFull });
+            save();
+          });
           const syncResult = await syncAnlagenstammFromDispo(
             db,
             {
@@ -7230,20 +7304,21 @@ ORDER BY
             },
             (prog) => {
               if (prog && prog.page && prog.totalPages) {
-                setProgress(
-                  'anlagenstamm_db_sync',
-                  prog.page,
-                  prog.totalPages,
-                  'Seite ' + prog.page + '/' + prog.totalPages,
-                );
+                const label =
+                  (prog.resuming ? 'Fortsetzung ' : '') + 'Seite ' + prog.page + '/' + prog.totalPages;
+                setProgress('anlagenstamm_db_sync', prog.page, prog.totalPages, label);
               }
             },
             { dbLock, save },
           );
           if (!syncResult.ok) {
             console.warn('[sync_pull] anlagenstamm_db_sync:', syncResult.error || 'fehlgeschlagen');
-          } else if (syncResult.row_count != null) {
-            console.log('[sync_pull] anlagenstamm_db_sync ok, Zeilen lokal:', syncResult.row_count);
+          } else if (syncResult.row_count != null || syncResult.skipped) {
+            if (syncResult.skipped) {
+              console.log('[sync_pull] anlagenstamm_db_sync: Stammdaten bereits vollständig, übersprungen');
+            } else {
+              console.log('[sync_pull] anlagenstamm_db_sync ok, Zeilen lokal:', syncResult.row_count);
+            }
             flushDb();
             try {
               const pnTreeSync = await syncProjekteNeuTreesFromDispo(
@@ -7258,34 +7333,38 @@ ORDER BY
                 },
                 (prog) => {
                   if (prog && prog.page && prog.totalPages) {
-                    setProgress(
-                      'anlagenstamm_pn_tree',
-                      prog.page,
-                      prog.totalPages,
-                      'PROJEKTE-NEU-Bäume ' + prog.page + '/' + prog.totalPages,
-                    );
+                    const label =
+                      (prog.resuming ? 'Fortsetzung ' : '') +
+                      'PROJEKTE-NEU-Bäume ' +
+                      prog.page +
+                      '/' +
+                      prog.totalPages;
+                    setProgress('anlagenstamm_pn_tree', prog.page, prog.totalPages, label);
                   }
                 },
                 { dbLock, save },
               );
               if (pnTreeSync.ok) {
-                console.log(
-                  '[sync_pull] anlagenstamm_pn_tree:',
-                  pnTreeSync.written || 0,
-                  'geschrieben,',
-                  pnTreeSync.skipped || 0,
-                  'unverändert, gesamt',
-                  pnTreeSync.total_count || 0,
-                );
-              } else if (pnTreeSync._notFound) {
-                const pnPrefetch = await prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, {
-                  dbLock,
-                  save,
-                  signal,
-                  setProgress,
-                  maxFabs: null,
+                if (pnTreeSync.skipped) {
+                  console.log('[sync_pull] anlagenstamm_pn_tree: bereits vollständig, übersprungen');
+                } else {
+                  console.log(
+                    '[sync_pull] anlagenstamm_pn_tree:',
+                    pnTreeSync.written || 0,
+                    'geschrieben,',
+                    pnTreeSync.skipped || 0,
+                    'unverändert, gesamt',
+                    pnTreeSync.total_count || 0,
+                  );
+                }
+                await dbLock.runWithDbLock(async () => {
+                  finalizeAnlagenstammSyncRun(db);
+                  save();
                 });
-                console.log('[sync_pull] pn_tree_prefetch (Fallback):', pnPrefetch.prefetched, '/', pnPrefetch.attempted);
+              } else if (pnTreeSync._notFound) {
+                console.warn(
+                  '[sync_pull] anlagenstamm_pn_tree: DB-Export nicht verfügbar (Server-Update / anlagenstamm_pn_tree_export_chunk.php). Kein Dateisystem-Fallback im Sync.',
+                );
               } else {
                 console.warn('[sync_pull] anlagenstamm_pn_tree:', pnTreeSync.error || 'fehlgeschlagen');
               }
@@ -7315,6 +7394,10 @@ ORDER BY
         const p = job.payload || {};
         const base = (p.baseUrl || '').trim().replace(/\/$/, '');
         const technicianId = parseInt(p.technicianId, 10);
+        await dbLock.runWithDbLock(async () => {
+          prepareAnlagenstammSyncRun(db, { forceFull: !!p.forceAnlagenstammFull });
+          save();
+        });
         const syncResult = await syncAnlagenstammFromDispo(
           db,
           {
@@ -7327,7 +7410,9 @@ ORDER BY
           },
           (prog) => {
             if (prog && prog.page && prog.totalPages) {
-              setProgress('anlagenstamm_db_sync', prog.page, prog.totalPages, 'Seite ' + prog.page + '/' + prog.totalPages);
+              const label =
+                (prog.resuming ? 'Fortsetzung ' : '') + 'Seite ' + prog.page + '/' + prog.totalPages;
+              setProgress('anlagenstamm_db_sync', prog.page, prog.totalPages, label);
             }
           },
           { dbLock, save },
@@ -7348,17 +7433,22 @@ ORDER BY
             },
             (prog) => {
               if (prog && prog.page && prog.totalPages) {
-                setProgress(
-                  'anlagenstamm_pn_tree',
-                  prog.page,
-                  prog.totalPages,
-                  'PROJEKTE-NEU-Bäume ' + prog.page + '/' + prog.totalPages,
-                );
+                const label =
+                  (prog.resuming ? 'Fortsetzung ' : '') +
+                  'PROJEKTE-NEU-Bäume ' +
+                  prog.page +
+                  '/' +
+                  prog.totalPages;
+                setProgress('anlagenstamm_pn_tree', prog.page, prog.totalPages, label);
               }
             },
             { dbLock, save },
           );
           if (pnTreeSync.ok) {
+            await dbLock.runWithDbLock(async () => {
+              finalizeAnlagenstammSyncRun(db);
+              save();
+            });
             console.log(
               '[anlagenstamm_db_sync] anlagenstamm_pn_tree:',
               pnTreeSync.written || 0,
@@ -7368,14 +7458,9 @@ ORDER BY
               pnTreeSync.total_count || 0,
             );
           } else if (pnTreeSync._notFound) {
-            const pnPrefetch = await prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, {
-              dbLock,
-              save,
-              signal,
-              setProgress,
-              maxFabs: null,
-            });
-            console.log('[anlagenstamm_db_sync] pn_tree_prefetch (Fallback):', pnPrefetch.prefetched, '/', pnPrefetch.attempted);
+            console.warn(
+              '[anlagenstamm_db_sync] anlagenstamm_pn_tree: DB-Export nicht verfügbar — kein Dateisystem-Fallback im Sync.',
+            );
           } else {
             console.warn('[anlagenstamm_db_sync] anlagenstamm_pn_tree:', pnTreeSync.error || 'fehlgeschlagen');
           }
@@ -7831,6 +7916,19 @@ ORDER BY
     let lastProfile = null;
 
     async function finishSuccess(base, profile) {
+      if (serverUsername && serverPassword) {
+        try {
+          saveWebSession(DB_DIR, {
+            dispo_username: String(serverUsername),
+            dispo_password: String(serverPassword),
+            dispo_base: base,
+            dispo_external_url: ext || base,
+            dispo_internal_url: int || '',
+          });
+        } catch (_) {
+          /* ignore */
+        }
+      }
       const payload = { ok: true, used_base_url: base };
       if (profile && profile.ok) {
         try {
@@ -8087,11 +8185,7 @@ ORDER BY
       const stammN = db.prepare(`SELECT COUNT(*) AS n FROM anlagenstamm_local`).get();
       let anlagenSyncState = null;
       try {
-        anlagenSyncState = db
-          .prepare(
-            'SELECT last_full_sync_at, last_page, total_count, sync_error FROM anlagenstamm_sync_state WHERE id = 1',
-          )
-          .get();
+        anlagenSyncState = getAnlagenstammSyncResumeState(db);
       } catch (_) {}
       const highPri = bgJobs ? bgJobs.countQueuedHighPriority() : 0;
       const dbStats = getLocalDbStats();
@@ -8225,6 +8319,11 @@ ORDER BY
       .trim();
     const technicianId = parseInt(body.technicianId ?? body.technician_id, 10);
     const { serverUsername, serverPassword, date_from, date_to } = body;
+    const forceAnlagenstammFull =
+      body.forceAnlagenstammFull === true ||
+      body.force_anlagenstamm_full === true ||
+      body.forceAnlagenstammFull === 1 ||
+      body.force_anlagenstamm_full === 1;
     if (!baseUrl || !Number.isFinite(technicianId) || technicianId <= 0) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
@@ -8245,6 +8344,7 @@ ORDER BY
           serverPassword,
           date_from,
           date_to,
+          forceAnlagenstammFull,
         },
         dedupeKey,
       );
@@ -8453,6 +8553,66 @@ ORDER BY
     }
   });
 
+  const {
+    createImageGallerySession,
+    getImageGallerySession,
+  } = require('./lib/image-gallery-sessions');
+
+  app.post('/api/image-gallery/session', express.json({ limit: '4mb' }), (req, res) => {
+    const id = createImageGallerySession((req.body && req.body.images) || []);
+    if (!id) return res.status(400).json({ ok: false, error: 'no_images' });
+    res.json({ ok: true, id });
+  });
+
+  app.get('/api/image-gallery/session/:id', (req, res) => {
+    const session = getImageGallerySession(req.params.id);
+    if (!session) return res.status(404).json({ ok: false, error: 'not_found' });
+    res.json({ ok: true, images: session.images || [] });
+  });
+
+  /** Galerie-Fenster: Bilder serverseitig laden (Technician-Id + Thumb-Cache). */
+  app.get('/api/image-gallery/media/:sessionId/:index', async (req, res) => {
+    try {
+      const session = getImageGallerySession(req.params.sessionId);
+      if (!session) return res.status(404).json({ ok: false, error: 'not_found' });
+      const idx = Math.max(0, parseInt(req.params.index, 10) || 0);
+      const item = (session.images || [])[idx];
+      if (!item) return res.status(404).json({ ok: false, error: 'index' });
+      const wantThumb = String(req.query.thumb || '') === '1';
+      let sourceUrl = String(wantThumb ? item.thumbUrl || item.url : item.url || '').trim();
+      if (!sourceUrl) return res.status(404).json({ ok: false, error: 'url' });
+
+      let parsed;
+      try {
+        parsed = new URL(sourceUrl, `http://127.0.0.1:${PORT}`);
+      } catch (_) {
+        return res.status(400).json({ ok: false, error: 'invalid_url' });
+      }
+      const techId = getTechnicianId(req);
+      if (techId && !parsed.searchParams.get('technician_id')) {
+        parsed.searchParams.set('technician_id', String(techId));
+      }
+      const internalUrl = `http://127.0.0.1:${PORT}${parsed.pathname}?${parsed.searchParams.toString()}`;
+      const headers = {};
+      if (techId) headers['X-Technician-Id'] = String(techId);
+      const r = await fetch(internalUrl, { headers });
+      if (!r.ok) {
+        const errBody = await r.text().catch(() => '');
+        return res
+          .status(r.status)
+          .json({ ok: false, error: errBody || 'upstream_' + r.status });
+      }
+      const buf = Buffer.from(await r.arrayBuffer());
+      const ct = r.headers.get('content-type') || 'application/octet-stream';
+      res.setHeader('Content-Type', ct);
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.setHeader('Content-Length', String(buf.length));
+      return res.send(buf);
+    } catch (e) {
+      return res.status(502).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
   app.use(express.static(path.join(__dirname, 'public')));
   return app;
 }
@@ -8569,49 +8729,6 @@ function jobFabKeysFromLocalJob(db, localJobId) {
     const k = normTedFabKey(f) || f;
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push(f);
-  }
-  return out;
-}
-
-/** FNs für PROJEKTE-NEU-Baum-Prefetch: offene Aufträge + alle Anlagenstamm-FNs (uncached bevorzugt). */
-function selectFabsForAnlagenstammTreePrefetch(db, technicianId, fabs) {
-  const priority = new Set();
-  try {
-    const rows = db
-      .prepare(
-        `SELECT j.fabrikationsnummern FROM jobs j
-         INNER JOIN job_technicians jt ON jt.job_id = j.id
-         WHERE jt.technician_id = ? AND j.status IN ('in_arbeit', 'zugeteilt')`,
-      )
-      .all(technicianId);
-    for (const row of rows) {
-      extractFabsFromJobs([row]).forEach((fab) => priority.add(fab));
-    }
-  } catch (_) {}
-  try {
-    const localRows = db
-      .prepare(
-        `SELECT DISTINCT TRIM(fabrikationsnummer) AS fab FROM anlagenstamm_local
-         WHERE fabrikationsnummer IS NOT NULL AND TRIM(fabrikationsnummer) != ''`,
-      )
-      .all();
-    for (const row of localRows) {
-      const f = String(row.fab || '').trim();
-      if (f) priority.add(f);
-    }
-  } catch (_) {}
-  const seen = new Set();
-  const out = [];
-  for (const fab of fabs || []) {
-    const f = String(fab || '').trim();
-    if (!f || !priority.has(f) || seen.has(f)) continue;
-    seen.add(f);
-    out.push(f);
-  }
-  for (const f of priority) {
-    if (seen.has(f)) continue;
-    seen.add(f);
     out.push(f);
   }
   return out;
@@ -8839,46 +8956,6 @@ async function downloadMechanikTedViaSessionProxy(dbDir, technicianId, serverJob
     }
   }
   return null;
-}
-
-async function prefetchUncachedAnlagenstammPnTrees(db, base, technicianId, fetchHeaders, opts) {
-  opts = opts || {};
-  const need = [];
-  try {
-    const rows = db
-      .prepare(
-        `SELECT DISTINCT TRIM(fabrikationsnummer) AS fab FROM anlagenstamm_local
-         WHERE fabrikationsnummer IS NOT NULL AND TRIM(fabrikationsnummer) != ''`,
-      )
-      .all();
-    for (const row of rows) {
-      const f = String(row.fab || '').trim();
-      if (!f) continue;
-      const cached = readAnlagenstammTreeCache(db, f);
-      if (cached && cached.tree && cached.tree.length) continue;
-      need.push(f);
-    }
-  } catch (_) {
-    return { attempted: 0, prefetched: 0 };
-  }
-  const limit = opts.maxFabs != null ? opts.maxFabs : need.length;
-  let prefetched = 0;
-  for (const fab of need.slice(0, limit)) {
-    if (opts.signal && opts.signal.aborted) break;
-    if (opts.setProgress) opts.setProgress('anlagenstamm_tree', prefetched + 1, Math.min(need.length, limit), fab);
-    try {
-      await fetchAndCacheAnlagenstammTree(base, technicianId, fab, fetchHeaders, db, {
-        dbLock: opts.dbLock,
-        save: opts.save,
-        signal: opts.signal,
-        timeoutMs: opts.timeoutMs || 25000,
-      });
-      prefetched += 1;
-    } catch (treeErr) {
-      console.warn('[prefetch_pn_tree]', fab, treeErr && treeErr.message ? treeErr.message : treeErr);
-    }
-  }
-  return { attempted: need.length, prefetched };
 }
 
 async function downloadMechanikTedBuffer(base, technicianId, serverJobId, relPath, authHeader, signal, fabOpt) {
@@ -9134,56 +9211,6 @@ function readAnlagenstammTreeCache(db, fab) {
 
 function upsertAnlagenstammTreeCache(db, fab, pnRaw, meta) {
   upsertAnlagenstammTreeCacheRow(db, fab, pnRaw, meta);
-}
-
-async function fetchAndCacheAnlagenstammTree(baseUrl, technicianId, fab, fetchHeaders, db, opts) {
-  opts = opts || {};
-  const base = String(baseUrl || '').trim().replace(/\/$/, '');
-  const fabNorm = String(fab || '').trim();
-  if (!base || !technicianId || !fabNorm) return null;
-  let url =
-    `${base}/dispo_api/api/anlagenstamm_files_list.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabNorm)}`;
-  if (opts.skipPnTree) {
-    url += '&skip_pn_tree=1';
-  }
-  const ac = new AbortController();
-  const timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 45000;
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  const parentSignal = opts.signal;
-  if (parentSignal) {
-    if (parentSignal.aborted) {
-      clearTimeout(timer);
-      throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
-    }
-    parentSignal.addEventListener('abort', () => ac.abort(), { once: true });
-  }
-  let data;
-  try {
-    const r = await fetch(url, {
-      signal: ac.signal,
-      headers: fetchHeaders && typeof fetchHeaders === 'object' ? fetchHeaders : {},
-    });
-    data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error((data && data.error) ? data.error : ('HTTP ' + r.status));
-  } catch (e) {
-    if (e && e.name === 'AbortError') {
-      throw new Error('Timeout nach ' + Math.round(timeoutMs / 1000) + ' s (Anlagenstamm-Baum ' + fabNorm + ')');
-    }
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
-  const pnRaw = data && data.projekte_neu ? data.projekte_neu : { enabled: false, tree: [] };
-  const writeCache = () => upsertAnlagenstammTreeCache(db, fabNorm, pnRaw);
-  if (opts.dbLock && typeof opts.dbLock.runWithDbLock === 'function') {
-    await opts.dbLock.runWithDbLock(async () => {
-      writeCache();
-      if (typeof opts.save === 'function') opts.save();
-    });
-  } else {
-    writeCache();
-  }
-  return pnRaw;
 }
 
 function upsertCalendarCache(db, calendarData) {
