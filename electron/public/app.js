@@ -8170,7 +8170,7 @@
     return String(tid || '') + '\t' + normDt(a.start_datetime) + '\t' + normDt(a.end_datetime);
   }
 
-  /** Abrechnungs-Flags aus Kalender-API/Cache (montage_verrechnet, billing_travel_complete). */
+  /** Kalender-Flags aus Cache/API (Abrechnung + „Datum nicht fix“). */
   function calendarBillingFlagsFrom(src) {
     if (!src) return {};
     var out = {};
@@ -8179,6 +8179,9 @@
     }
     if (src.billing_travel_complete != null && src.billing_travel_complete !== '') {
       out.billing_travel_complete = Number(src.billing_travel_complete) === 1 ? 1 : 0;
+    }
+    if (src.date_not_fixed != null && src.date_not_fixed !== '') {
+      out.date_not_fixed = Number(src.date_not_fixed) === 1 ? 1 : 0;
     }
     return out;
   }
