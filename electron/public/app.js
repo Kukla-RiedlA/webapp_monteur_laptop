@@ -8721,8 +8721,12 @@
     const isErledigt = statusRaw === 'erledigt' || statusRaw === 'abgerechnet' || statusRaw === 'completed' || statusRaw === 'done' || statusRaw === 'fertig';
     const isMontage = Number(job.montage_verrechnet) === 1;
     const isReise = Number(job.billing_travel_complete) === 1;
+    const dateNotFixed = Number(job.date_not_fixed) === 1;
     const escLabel = (label || 'Auftrag').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const checkParts = [];
+    if (dateNotFixed) checkParts.push('<strong class="cal-date-not-fixed" title="Datum nicht fix">???</strong>');
+    const flagHtml = countryFlagImg(countryCode);
+    if (flagHtml) checkParts.push('<span class="cal-bar-flag">' + flagHtml + '</span>');
     if (isErledigt) checkParts.push('<span class="cal-check cal-check-erledigt" title="Erledigt">✓</span>');
     if (isMontage) checkParts.push('<span class="cal-check cal-check-montage" title="Fakturierung Montage">✓</span>');
     if (isReise) checkParts.push('<span class="cal-check cal-check-reise" title="Reisekosten abgerechnet">✓</span>');

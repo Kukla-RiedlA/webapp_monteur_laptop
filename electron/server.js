@@ -8536,7 +8536,7 @@ ORDER BY
         SELECT
           server_job_id AS id, technician_id, customer_name, job_number, city, country, status,
           start_datetime, end_datetime, technician_name, technician_color,
-          montage_verrechnet, billing_travel_complete
+          montage_verrechnet, billing_travel_complete, date_not_fixed
         FROM calendar_cache_jobs
         WHERE end_datetime >= ? AND start_datetime <= ?
       `).all(start + ' 00:00:00', end + ' 23:59:59');
@@ -9240,8 +9240,8 @@ function upsertCalendarCache(db, calendarData) {
       if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(tid) || tid <= 0 || !start || !end) continue;
       const cacheKey = String(sid) + ':' + String(tid);
       db.prepare(`INSERT OR REPLACE INTO calendar_cache_jobs
-        (cache_key, server_job_id, technician_id, customer_name, job_number, city, country, status, start_datetime, end_datetime, technician_name, technician_color, montage_verrechnet, billing_travel_complete, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (cache_key, server_job_id, technician_id, customer_name, job_number, city, country, status, start_datetime, end_datetime, technician_name, technician_color, montage_verrechnet, billing_travel_complete, date_not_fixed, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         cacheKey, sid, tid,
         String(j.customer_name || j.customer || ''), String(j.job_number || ''),
@@ -9249,6 +9249,7 @@ function upsertCalendarCache(db, calendarData) {
         start, end, String(j.technician_name || ''), String(j.technician_color || ''),
         Number(j.montage_verrechnet) === 1 ? 1 : 0,
         Number(j.billing_travel_complete) === 1 ? 1 : 0,
+        Number(j.date_not_fixed) === 1 ? 1 : 0,
         syncedAt
       );
     }

@@ -127,10 +127,12 @@ function applyRuntimeMigrations(db) {
       technician_color TEXT,
       montage_verrechnet INTEGER DEFAULT 0,
       billing_travel_complete INTEGER DEFAULT 0,
+      date_not_fixed INTEGER DEFAULT 0,
       synced_at TEXT
     )`);
   tryExec(db, 'ALTER TABLE calendar_cache_jobs ADD COLUMN montage_verrechnet INTEGER DEFAULT 0');
   tryExec(db, 'ALTER TABLE calendar_cache_jobs ADD COLUMN billing_travel_complete INTEGER DEFAULT 0');
+  tryExec(db, 'ALTER TABLE calendar_cache_jobs ADD COLUMN date_not_fixed INTEGER DEFAULT 0');
   tryExec(db, `CREATE TABLE IF NOT EXISTS calendar_cache_absences (
       cache_key TEXT PRIMARY KEY,
       server_absence_id INTEGER,

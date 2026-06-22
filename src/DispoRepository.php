@@ -530,7 +530,7 @@ final class DispoRepository
             unset($t);
         }
 
-        $jobSql = "SELECT j.id, j.job_number, j.job_type, j.start_datetime, j.end_datetime,
+        $jobSql = "SELECT j.id, j.job_number, j.job_type, j.start_datetime, j.end_datetime, j.status, j.date_not_fixed,
                    c.name AS customer_name, ja.city, ja.country, jt.technician_id
                    FROM jobs j
                    INNER JOIN job_technicians jt ON jt.job_id = j.id
