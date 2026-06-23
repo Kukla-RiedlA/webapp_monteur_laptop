@@ -8717,7 +8717,6 @@
     const land2 = countryCode.slice(0, 2);
     const parts = [firma];
     if (ort) parts.push(ort);
-    if (land2) parts.push(land2);
     const full = parts.join(', ');
     const label = maxLen && full.length > maxLen ? (maxLen <= 4 ? full.substring(0, maxLen) : full.substring(0, maxLen - 4) + ',...') : full;
     const statusRaw = (job.status != null ? job.status : job.Status != null ? job.Status : job.job_status != null ? job.job_status : '').toString().trim().toLowerCase();
@@ -8728,14 +8727,19 @@
     const escLabel = (label || 'Auftrag').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const checkParts = [];
     if (dateNotFixed) checkParts.push('<strong class="cal-date-not-fixed" title="Datum nicht fix">???</strong>');
+    const flagHtml = countryFlagImg(countryCode);
+    if (flagHtml) checkParts.push('<span class="cal-bar-flag">' + flagHtml + '</span>');
     if (isErledigt) checkParts.push('<span class="cal-check cal-check-erledigt" title="Erledigt">✓</span>');
     if (isMontage) checkParts.push('<span class="cal-check cal-check-montage" title="Fakturierung Montage">✓</span>');
     if (isReise) checkParts.push('<span class="cal-check cal-check-reise" title="Reisekosten abgerechnet">✓</span>');
     const labelHtml = checkParts.length
-      ? checkParts.join('') + ' <span class="cal-bar-label">' + escLabel + '</span>'
+      ? '<span class="cal-bar-inner">' + checkParts.join('') + '<span class="cal-bar-label">' + escLabel + '</span></span>'
       : null;
 
-    let title = full || firma || 'Auftrag';
+    let titleParts = [firma];
+    if (ort) titleParts.push(ort);
+    if (land2) titleParts.push(land2);
+    let title = titleParts.join(', ') || firma || 'Auftrag';
     const dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
     if (dateRangeStr) title += '\nZeitraum: ' + dateRangeStr;
     var tzLabel = null;
