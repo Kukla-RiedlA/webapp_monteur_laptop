@@ -8734,7 +8734,7 @@
     if (isMontage) checkParts.push('<span class="cal-check cal-check-montage" title="Fakturierung Montage">✓</span>');
     if (isReise) checkParts.push('<span class="cal-check cal-check-reise" title="Reisekosten abgerechnet">✓</span>');
     const labelHtml = checkParts.length
-      ? checkParts.join('') + ' <span class="cal-bar-label">' + escLabel + '</span>'
+      ? '<span class="cal-bar-inner"><span class="cal-bar-prefixes">' + checkParts.join('') + '</span><span class="cal-bar-label">' + escLabel + '</span></span>'
       : null;
 
     let title = full || firma || 'Auftrag';
