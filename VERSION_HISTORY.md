@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 1.004.058
+- **Sync FN:** Leeres Fabrikationsnummern-Pending wird nicht mehr an Dispo gepusht (verhindert Löschen der Admin-FN nach Pull/Annehmen).
+- **Sync Pull:** Veraltetes leeres FN-Pending wird verworfen, wenn der Server Leistungszeilen liefert.
+- **Kalender/Techniker:** Nach Kalender-Sync Zuordnung und Termin-Daten mit Server abgleichen; Techniker-Wechsel verschwindet aus eigener Ansicht nach Sync.
+- **UI:** Nach Sync Kalender, Meine Aufträge und Listen automatisch aktualisieren.
+
 ## V 1.004.048
 - **Sync Büro-LAN:** Interne Dispo-URL (`10.0.0.180`) wird bei aktiver LAN-Session bevorzugt; laufender `sync_pull` wird bei Auftrag annehmen/Erledigt abgebrochen (kein Hängen mehr hinter langem Sync).
 - **Dispo-Proxy:** `fetchDispo` liefert wieder `{ res, base }` statt verschachteltem Ergebnis — behebt Login-Crash (`Cannot read properties of undefined (reading 'status')`) bei Anlagenstamm-Remote-Aufrufen.

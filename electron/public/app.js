@@ -4705,6 +4705,7 @@
       loadJobsAndAbsences(),
       loadStartActiveJob(),
       loadCalendarMonth().catch(function () {}),
+      typeof loadDienstreiseList === 'function' ? Promise.resolve(loadDienstreiseList()) : Promise.resolve(),
     ]).then(function () {
       if (force) localListsRefreshAt = 0;
     });
@@ -4716,6 +4717,8 @@
     localListsRefreshAt = now;
     loadJobsAndAbsences();
     if (isStartViewVisible()) loadStartActiveJob();
+    loadCalendarMonth().catch(function () {});
+    if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
   }
 
   var backgroundDispoSyncInFlight = null;

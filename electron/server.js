@@ -7362,6 +7362,7 @@ ORDER BY
           const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, auth);
           await dbLock.runWithDbLock(async () => {
             upsertCalendarCache(db, calData);
+            reconcileLocalJobsFromCalendarCache(db, technicianId, calData);
             save();
           });
         } catch (calErr) {
@@ -8657,6 +8658,10 @@ ORDER BY
 
       try {
         upsertCalendarCache(db, data);
+        const calTechId = getTechnicianId(req);
+        if (calTechId) {
+          reconcileLocalJobsFromCalendarCache(db, calTechId, data);
+        }
       } catch (_) { /* Cache optional */ }
 
       res.json(data);
@@ -9413,6 +9418,67 @@ function upsertCalendarCache(db, calendarData) {
   });
 }
 
+/**
+ * Lokale jobs/job_technicians und Termin-Daten an Kalender-Stand (Dispo) angleichen.
+ * Der Kalender-Cache enthält alle Techniker-Zeilen; my_jobs-Pull kann Zuordnungen
+ * wegen shouldPreserveLocalJobOnPull fälschlich behalten.
+ */
+function reconcileLocalJobsFromCalendarCache(db, technicianId, calendarData) {
+  const tid = Number(technicianId);
+  if (!Number.isFinite(tid) || tid <= 0) return;
+  const jobs = Array.isArray(calendarData && calendarData.jobs) ? calendarData.jobs : [];
+  if (!jobs.length) return;
+
+  const serverIdsForTech = new Set();
+  const calendarByServerId = new Map();
+
+  for (const j of jobs) {
+    const sid = Number(j.id != null ? j.id : j.server_id);
+    const jt = Number(j.technician_id != null ? j.technician_id : j.technicianId);
+    if (!Number.isFinite(sid) || sid <= 0) continue;
+    if (!calendarByServerId.has(sid)) calendarByServerId.set(sid, []);
+    calendarByServerId.get(sid).push(j);
+    if (jt === tid) serverIdsForTech.add(sid);
+  }
+
+  db.transaction(() => {
+    for (const [sid, entries] of calendarByServerId) {
+      const local = db.prepare('SELECT id FROM jobs WHERE server_id = ?').get(sid);
+      if (!local) continue;
+      const entry =
+        entries.find((e) => Number(e.technician_id != null ? e.technician_id : e.technicianId) === tid) ||
+        entries[0];
+      const start = String(entry.start_datetime || '').replace('T', ' ').slice(0, 19);
+      const end = String(entry.end_datetime || '').replace('T', ' ').slice(0, 19);
+      if (!start || !end) continue;
+      const dateNotFixed = Number(entry.date_not_fixed) === 1 ? 1 : 0;
+      db.prepare(
+        `UPDATE jobs SET start_datetime = ?, end_datetime = ?, date_not_fixed = ?, synced_at = datetime('now') WHERE id = ?`,
+      ).run(start, end, dateNotFixed, local.id);
+    }
+
+    for (const sid of serverIdsForTech) {
+      const local = db.prepare('SELECT id FROM jobs WHERE server_id = ?').get(sid);
+      if (!local) continue;
+      db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(local.id, tid);
+    }
+
+    const assignedLocal = db.prepare(`
+      SELECT j.id, j.server_id FROM jobs j
+      INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+      WHERE j.server_id IS NOT NULL AND TRIM(CAST(j.server_id AS TEXT)) != ''
+    `).all(tid);
+
+    for (const row of assignedLocal) {
+      const sid = Number(row.server_id);
+      if (serverIdsForTech.has(sid)) continue;
+      db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(row.id, tid);
+      if (shouldPreserveLocalJobOnPull(db, row.id)) continue;
+      deleteLocalJobRowIfUnassigned(db, row.id);
+    }
+  });
+}
+
 function jobHasPendingLocalChanges(db, localJobId) {
   const n = parseInt(localJobId, 10);
   if (!Number.isFinite(n)) return false;
@@ -9444,6 +9510,19 @@ function shouldPreserveLocalJobOnPull(db, localJobId) {
   return !!pull;
 }
 
+function deleteLocalJobRowIfUnassigned(db, localJobId) {
+  const rest = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ?').get(localJobId);
+  if (rest) return;
+  try {
+    db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(localJobId);
+  } catch (e) { /* Tabelle fehlt */ }
+  try {
+    db.prepare('DELETE FROM job_hotel_addresses WHERE job_id = ?').run(localJobId);
+  } catch (e) { /* ignore */ }
+  db.prepare('DELETE FROM job_addresses WHERE job_id = ?').run(localJobId);
+  db.prepare('DELETE FROM jobs WHERE id = ?').run(localJobId);
+}
+
 function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
   const rows = db.prepare(
     'SELECT j.id, j.server_id FROM jobs j INNER JOIN job_technicians jt ON jt.job_id = j.id WHERE jt.technician_id = ?'
@@ -9453,13 +9532,10 @@ function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
     if (!hasServerId) continue; // Verwaiste Aufträge (ohne server_id) nicht löschen – werden ggf. im gleichen Pull verknüpft
     const serverId = row.server_id;
     if (receivedJobServerIds.has(Number(serverId)) || receivedJobServerIds.has(String(serverId))) continue;
-    if (shouldPreserveLocalJobOnPull(db, row.id)) continue;
+    // Techniker-Zuordnung immer entfernen wenn Dispo den Auftrag nicht mehr liefert (Server = Quelle).
     db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(row.id, technicianId);
-    const rest = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ?').get(row.id);
-    if (!rest) {
-      db.prepare('DELETE FROM job_addresses WHERE job_id = ?').run(row.id);
-      db.prepare('DELETE FROM jobs WHERE id = ?').run(row.id);
-    }
+    if (shouldPreserveLocalJobOnPull(db, row.id)) continue;
+    deleteLocalJobRowIfUnassigned(db, row.id);
   }
   // Lokale Spiegel ohne job_technicians (unzugewiesen auf Dispo): entfernen, wenn nicht mehr im Pull
   const unassignedMirror = db.prepare(`
@@ -9565,7 +9641,8 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
     removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerIds);
     for (const j of jobs) {
       const custId = ensureCustomer(db, j);
-      insertOrUpdateJob(db, j, custId, technicianId);
+      const localId = insertOrUpdateJob(db, j, custId, technicianId);
+      dropStaleEmptyFabPendingOnPull(db, localId, j.fabrikationsnummern);
     }
     for (const a of absences) {
       insertOrUpdateAbsence(db, a, technicianId);
@@ -9634,6 +9711,25 @@ function resolveFabrikationsnummernForPull(db, localJobId, serverFab) {
   const pending = getPendingJobFabrikationsnummern(db, localJobId);
   if (pending !== undefined) return pending;
   return serverFab != null ? serverFab : null;
+}
+
+/** Nach Pull: leeres FN-Pending verwerfen, wenn Dispo bereits Leistungszeilen liefert (Race sync_push). */
+function dropStaleEmptyFabPendingOnPull(db, localJobId, serverFab) {
+  const serverRows = parseJobFabrikationsnummernRows(serverFab);
+  if (serverRows.length === 0) return;
+  const pending = getPendingJobFabrikationsnummern(db, localJobId);
+  if (pending === undefined) return;
+  if (parseJobFabrikationsnummernRows(pending).length > 0) return;
+  const entityIds = [localJobId];
+  const mapped = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+  if (mapped && mapped.server_id != null && String(mapped.server_id).trim() !== '') {
+    entityIds.push(mapped.server_id);
+  }
+  for (const eid of entityIds) {
+    db.prepare(
+      `DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'fabrikationsnummern'`,
+    ).run(eid);
+  }
 }
 
 /** Pull: lokale/pending Leistungszeilen mit Dispo-Stand zusammenführen (nie blind überschreiben). */
@@ -10000,6 +10096,15 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
                   clampForDispoJobFabrikation(row),
                 ),
               );
+        const pushFabRows = parseJobFabrikationsnummernRows(payload.fabrikationsnummern);
+        if (pushFabRows.length === 0) {
+          console.warn('[sync_push] fabrikationsnummern: leeres Pending verworfen (würde Dispo-FN löschen)', {
+            job_id: serverJobId,
+            pending_id: p.id,
+          });
+          db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+          continue;
+        }
       }
       const body = { job_id: serverJobId, ...payload };
       const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, { method: 'PATCH', headers: headerForJob, body: JSON.stringify(body) });
