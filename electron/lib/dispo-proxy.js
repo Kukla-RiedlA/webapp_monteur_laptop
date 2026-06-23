@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildDispoBaseCandidates, tryDispoBasesInOrder, normalizeDispoBase, isFetchNetworkError } = require('./dispo-base-fallback');
 const { formatFetchError } = require('./dispo-tls');
+const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 
 function createCookieJar() {
   const cookies = new Map();
@@ -74,7 +75,7 @@ function createDispoProxy(options = {}) {
     }
     const outcome = await tryDispoBasesInOrder(candidateBases, async (base) => {
       const url = base + suffix;
-      const headers = { ...(init.headers || {}) };
+      const headers = applyKuklaAuditHeaders({ ...(init.headers || {}) });
       const cookie = jar.headerFor(base);
       if (cookie) headers.Cookie = cookie;
       if (!headers.Authorization && config.dispoUsername) {

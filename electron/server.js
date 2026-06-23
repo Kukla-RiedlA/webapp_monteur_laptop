@@ -96,6 +96,7 @@ const { createDbCompat } = require('./lib/db-compat');
 const {
   proxyAnlagenstammSearch,
   proxyAnlagenstammSave,
+  proxyAnlagenstammDelete,
   proxyAnlagenstammParameterFilesList,
   proxyAnlagenstammParameterTrend,
   proxyAnlagenstammParameterIngest,
@@ -123,6 +124,7 @@ const {
   safeTedFileName,
   safeTedLocalFileName,
 } = require('./lib/ted-excel-local');
+const { applyKuklaAuditHeaders } = require('./lib/audit-client-headers');
 const {
   ensureAnlagenstammLocalSchema,
   rowCount: anlagenstammLocalRowCount,
@@ -759,6 +761,141 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
   };
 }
 
+/**
+ * Lokales Anlagenstamm-Löschen (SQLite + pending) – für HTTP und IPC.
+ * @param {object} body
+ * @param {number|null} technicianIdFromHeader
+ */
+async function performAnlagenstammDelete(body, technicianIdFromHeader) {
+  const db = monteurRuntime.db;
+  const save = monteurRuntime.save;
+  const bgJobs = monteurRuntime.bgJobs;
+  if (!db || !save) {
+    return { success: false, error: 'Lokale Datenbank nicht bereit (App startet noch).' };
+  }
+  const technicianId =
+    technicianIdFromHeader ??
+    (body.technician_id != null ? parseInt(String(body.technician_id), 10) : null);
+  const id = parseInt(String(body.id ?? ''), 10);
+  if (!technicianId) {
+    return { success: false, error: 'technician_id erforderlich.' };
+  }
+  if (!Number.isFinite(id) || id <= 0) {
+    return { success: false, error: 'id erforderlich.' };
+  }
+  ensureAnlagenstammLocalSchema(db);
+  const row = db.prepare('SELECT id, fabrikationsnummer FROM anlagenstamm_local WHERE id = ?').get(id);
+  if (!row) {
+    return { success: false, error: 'Anlage nicht gefunden' };
+  }
+  const fab = String(row.fabrikationsnummer || '').trim();
+  const baseCandidates = buildDispoBaseCandidates({
+    baseUrl: body.baseUrl,
+    externalUrl: body.externalUrl,
+    internalUrl: body.internalUrl,
+  });
+  const defaultBase = baseCandidates.length ? baseCandidates[0] : '';
+  const pushPayload = {
+    id: row.id,
+    fabrikationsnummer: fab,
+    serverUsername: body.serverUsername,
+    serverPassword: body.serverPassword,
+    baseUrl: body.baseUrl || defaultBase,
+    externalUrl: body.externalUrl,
+    internalUrl: body.internalUrl,
+    technician_id: technicianId,
+  };
+  let pendingSync = false;
+  let pushError = null;
+  const hasDispoBase = baseCandidates.length > 0 && row.id > 0;
+  if (hasDispoBase) {
+    try {
+      const remote = await proxyAnlagenstammDelete(pushPayload);
+      if (remote && remote.ok !== false) {
+        pendingSync = false;
+      } else {
+        pendingSync = true;
+        pushError = (remote && remote.error) || 'Dispo hat Löschen abgelehnt.';
+      }
+    } catch (e) {
+      pendingSync = true;
+      pushError = e && e.message ? e.message : String(e);
+    }
+  } else {
+    pendingSync = true;
+    if (!row.id) {
+      pushError = 'Keine Server-ID – Löschen nur lokal.';
+    }
+  }
+  db.prepare('DELETE FROM anlagenstamm_local WHERE id = ?').run(id);
+  if (fab) {
+    db.prepare(
+      `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`,
+    ).run(fab);
+    try {
+      db.prepare('DELETE FROM anlagenstamm_tree_cache WHERE fab = ?').run(fab);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  const pendingKey = fab || String(id);
+  if (pendingSync && pendingKey) {
+    db.prepare(
+      `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'delete'`,
+    ).run(pendingKey);
+    db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
+      'anlagenstamm',
+      pendingKey,
+      'delete',
+      JSON.stringify(pushPayload),
+    );
+  } else if (!pendingSync && pendingKey) {
+    db.prepare(
+      `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'delete'`,
+    ).run(pendingKey);
+  }
+  if (!save()) {
+    return {
+      success: false,
+      error:
+        'Lokale Datenbank konnte nicht auf die Festplatte geschrieben werden. ' +
+        monteurDbSaveErrorMessage(),
+    };
+  }
+  if (pendingSync && bgJobs && hasDispoBase) {
+    const baseForPush = (pushPayload.baseUrl || defaultBase || '').toString().trim().replace(/\/$/, '');
+    if (baseForPush) {
+      try {
+        bgJobs.enqueue(
+          'sync_push',
+          {
+            baseUrl: baseForPush,
+            externalUrl: body.externalUrl,
+            internalUrl: body.internalUrl,
+            technicianId,
+            serverUsername: body.serverUsername,
+            serverPassword: body.serverPassword,
+          },
+          'sync_push:' + technicianId + ':' + fingerprintDispoBaseForRuntime(baseForPush),
+        );
+      } catch (enqueueErr) {
+        console.warn(
+          '[anlagenstamm_delete] sync_push enqueue:',
+          enqueueErr && enqueueErr.message ? enqueueErr.message : enqueueErr,
+        );
+      }
+    }
+  }
+  return {
+    success: true,
+    id,
+    fabrikationsnummer: fab,
+    pending_sync: pendingSync,
+    push_error: pushError,
+    source: 'local_cache',
+  };
+}
+
 /** Dispo-Dateizeitstempel (Sekunden oder ms, ISO) → ms seit Epoch; null wenn unbekannt. */
 function parseDispoFileMtimeMs(value) {
   if (value == null || value === '') return null;
@@ -867,6 +1004,7 @@ function createApp(db) {
     db,
     getTechnicianId,
     performAnlagenstammSave,
+    performAnlagenstammDelete,
     saveDb: () => (monteurRuntime.save ? monteurRuntime.save() : false),
     ensureProxyAuthenticated: (creds) => ensureProxyAuthenticated(DB_DIR, creds || null),
     resolveDispoServerCreds: (body) => resolveDispoServerCreds(body || {}),
@@ -6651,7 +6789,9 @@ ORDER BY
 
   /** Apache/FPM liefert Authorization oft nicht an PHP — Dispo require_login.php liest X-Kukla-Authorization. */
   function dispoMonteurFetchHeaders(technicianId, authHeader) {
-    const h = Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {});
+    const h = applyKuklaAuditHeaders(
+      Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {}),
+    );
     const a = authHeader && authHeader.Authorization;
     if (a) {
       h['X-Kukla-Authorization'] = a;
@@ -9801,11 +9941,22 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
   const base = baseUrl.replace(/\/$/, '');
   const pending = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
   pending.sort((a, b) => {
-    const score = (p) => (p.entity_type === 'anlagenstamm' ? 0 : 1);
-    if (score(a) !== score(b)) return score(a) - score(b);
+    const score = (p) => {
+      if (p.entity_type !== 'anlagenstamm') return 10;
+      if (p.action === 'delete') return 0;
+      if (p.action === 'save') return 1;
+      return 2;
+    };
+    const sa = score(a);
+    const sb = score(b);
+    if (sa !== sb) return sa - sb;
     return (a.id || 0) - (b.id || 0);
   });
-  const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authHeader || {}) };
+  const header = applyKuklaAuditHeaders({
+    'Content-Type': 'application/json',
+    'X-Technician-Id': String(technicianId),
+    ...(authHeader || {}),
+  });
   for (const p of pending) {
     if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address' || p.action === 'hotel_selection')) {
       let job = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(p.entity_id);
@@ -9992,6 +10143,51 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         throw e;
       }
     }
+    if (p.entity_type === 'anlagenstamm' && p.action === 'delete') {
+      const payloadRaw = JSON.parse(p.payload || '{}');
+      const techId =
+        parseInt(String(payloadRaw.technician_id ?? payloadRaw.technicianId ?? technicianId), 10) ||
+        technicianId;
+      const serverId = parseInt(String(payloadRaw.id ?? ''), 10);
+      if (serverId <= 0) {
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        continue;
+      }
+      const payload = Object.assign({}, payloadRaw, {
+        id: serverId,
+        technician_id: techId,
+        baseUrl: (payloadRaw.baseUrl || baseUrl || '').toString().trim().replace(/\/$/, ''),
+      });
+      const canReachDispo =
+        techId > 0 &&
+        buildDispoBaseCandidates({
+          baseUrl: payload.baseUrl,
+          externalUrl: payload.externalUrl,
+          internalUrl: payload.internalUrl,
+        }).length > 0;
+      if (!canReachDispo) {
+        logSyncPushError({
+          reason: 'anlagenstamm_delete',
+          error: 'Dispo-URL oder Monteur-ID fehlt (Einstellungen prüfen, dann Sync).',
+          entity_id: p.entity_id,
+        });
+        continue;
+      }
+      try {
+        const data = await proxyAnlagenstammDelete(Object.assign({}, payload, { technician_id: techId }));
+        if (data && data.ok === false) {
+          throw new Error(data.error || 'Anlagenstamm löschen fehlgeschlagen.');
+        }
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        logSyncPushError({
+          reason: 'anlagenstamm_delete',
+          error: e && e.message ? e.message : String(e),
+          entity_id: p.entity_id,
+        });
+        throw e;
+      }
+    }
   }
   const pendingRequests = db.prepare('SELECT id, start_datetime, end_datetime, type, comment FROM absence_requests WHERE technician_id = ? AND status = ? AND (server_id IS NULL OR server_id = \'\')').all(technicianId, 'pending');
   for (const row of pendingRequests) {
@@ -10045,5 +10241,6 @@ module.exports = {
   getMonteurDb,
   PORT,
   performAnlagenstammSave,
+  performAnlagenstammDelete,
   flushMonteurDb,
 };

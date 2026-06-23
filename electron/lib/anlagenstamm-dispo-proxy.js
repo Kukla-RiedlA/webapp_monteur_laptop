@@ -9,6 +9,7 @@ const {
   clampForDispoAnlagenstamm,
   stripEmptyStammFieldsForDispoPush,
 } = require('./anlagenstamm-local');
+const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 
 function authHeaderFromCredentials(username, password) {
   const u = (username || '').toString().trim();
@@ -18,7 +19,9 @@ function authHeaderFromCredentials(username, password) {
 }
 
 function dispoMonteurFetchHeaders(technicianId, authHeader) {
-  const h = Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {});
+  const h = applyKuklaAuditHeaders(
+    Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {}),
+  );
   const a = authHeader && authHeader.Authorization;
   if (a) {
     h['X-Kukla-Authorization'] = a;
@@ -245,6 +248,60 @@ async function proxyDispoPostJson(payload, relativePhp, forwardBody) {
   return tried.result;
 }
 
+async function proxyAnlagenstammDeleteOnce(payload, base) {
+  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+  const serverId = parseInt(String(payload.id ?? '0'), 10);
+  const authHeader = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
+  const relativePhp = '/dispo_api/api/anlagenstamm_monteur_delete.php';
+  const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: Object.assign(
+      { 'Content-Type': 'application/json' },
+      dispoMonteurFetchHeaders(technicianId, authHeader),
+    ),
+    body: JSON.stringify({ id: serverId }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const apiErr = data && data.error ? data.error : '';
+    const friendly = monteurUpstreamHttpError(r.status, r.statusText, apiErr, relativePhp, url);
+    return Object.assign({}, data, { ok: false, error: friendly, _httpStatus: r.status });
+  }
+  return Object.assign({}, data, { ok: true, _used_base_url: base });
+}
+
+async function proxyAnlagenstammDelete(payload) {
+  const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
+  const serverId = parseInt(String(payload.id ?? '0'), 10);
+  const reqErr = dispoAuthRequirementError(payload, technicianId);
+  if (reqErr) {
+    return { ok: false, error: reqErr };
+  }
+  if (serverId <= 0) {
+    return { ok: false, error: 'Server-ID (id) fehlt für Löschen.' };
+  }
+  const candidates = buildDispoBaseCandidates({
+    baseUrl: payload.baseUrl,
+    externalUrl: payload.externalUrl,
+    internalUrl: payload.internalUrl,
+  });
+  const relativePhp = '/dispo_api/api/anlagenstamm_monteur_delete.php';
+  const tried = await tryDispoBasesInOrder(candidates, (base) => proxyAnlagenstammDeleteOnce(payload, base));
+  if (tried.error) {
+    return {
+      ok: false,
+      error:
+        'Keine Verbindung zur Dispo (Netzwerk/TLS): ' +
+        tried.error +
+        '. Ziel: ' +
+        (candidates[0] || '') +
+        relativePhp,
+    };
+  }
+  return tried.result;
+}
+
 async function proxyAnlagenstammParameterFilesList(payload) {
   const fab = String(payload.fab || '').trim();
   return proxyDispoPostJson(
@@ -338,6 +395,7 @@ async function proxyAnlagenstammParameterDownload(payload) {
 module.exports = {
   proxyAnlagenstammSearch,
   proxyAnlagenstammSave,
+  proxyAnlagenstammDelete,
   proxyAnlagenstammParameterFilesList,
   proxyAnlagenstammParameterTrend,
   proxyAnlagenstammParameterIngest,

@@ -10,8 +10,8 @@ const {
   mergeAnlagenstammExtrasWithRemote,
   persistMergedExtrasToDb,
   getAnlagenstammByIdResponse,
-  deleteAnlagenstammLocal,
 } = require('./anlagenstamm-php-local');
+const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 
 function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
   const creds =
@@ -24,7 +24,7 @@ function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
     creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : '') || '',
   ).trim();
   const p = creds.serverPassword != null ? String(creds.serverPassword) : ctx.getDispoPassword ? String(ctx.getDispoPassword() || '') : '';
-  const h = { 'X-Technician-Id': String(technicianId || '') };
+  const h = applyKuklaAuditHeaders({ 'X-Technician-Id': String(technicianId || '') });
   if (u) {
     const auth = 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64');
     h.Authorization = auth;
@@ -212,12 +212,33 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     }
   });
 
-  app.post('/api/anlagenstamm_delete.php', express.json(), (req, res) => {
+  app.post('/api/anlagenstamm_delete.php', express.json(), async (req, res) => {
     try {
+      const technicianId = ctx.getTechnicianId(req);
       const payload = req.body || {};
-      const out = deleteAnlagenstammLocal(db(), payload);
-      if (out.success && typeof ctx.saveDb === 'function') ctx.saveDb();
-      res.json(out);
+      const body = Object.assign({}, payload, {
+        technician_id: technicianId,
+        serverUsername: payload.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : ''),
+        serverPassword: payload.serverPassword || (ctx.getDispoPassword ? ctx.getDispoPassword() : ''),
+        baseUrl: payload.baseUrl || (ctx.getDispoBaseUrl ? ctx.getDispoBaseUrl() : ''),
+        externalUrl: ctx.getDispoExternalUrl ? ctx.getDispoExternalUrl() : '',
+        internalUrl: ctx.getDispoInternalUrl ? ctx.getDispoInternalUrl() : '',
+      });
+      if (typeof ctx.performAnlagenstammDelete === 'function') {
+        const result = await ctx.performAnlagenstammDelete(body, technicianId);
+        if (!result.success) {
+          return res.json({ success: false, error: result.error || 'Löschen fehlgeschlagen' });
+        }
+        return res.json({
+          success: true,
+          id: result.id,
+          fabrikationsnummer: result.fabrikationsnummer,
+          pending_sync: !!result.pending_sync,
+          push_error: result.push_error || null,
+          source: result.source || 'local_cache',
+        });
+      }
+      return res.status(501).json({ success: false, error: 'Löschen nicht verfügbar.' });
     } catch (e) {
       res.status(500).json({ success: false, error: e.message || String(e) });
     }
