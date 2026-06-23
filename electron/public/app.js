@@ -8170,6 +8170,11 @@
     return String(tid || '') + '\t' + normDt(a.start_datetime) + '\t' + normDt(a.end_datetime);
   }
 
+  /** „Datum nicht fix“: Anzeige wenn lokal oder Kalender-Cache gesetzt (0 blockiert nicht 1). */
+  function mergeDateNotFixedFlag(localVal, cacheVal) {
+    return Number(localVal) === 1 || Number(cacheVal) === 1 ? 1 : 0;
+  }
+
   /** Kalender-Flags aus Cache/API (Abrechnung + „Datum nicht fix“). */
   function calendarBillingFlagsFrom(src) {
     if (!src) return {};
@@ -8257,10 +8262,9 @@
       var cj = (tid && billingByKey[sid + ':' + tid]) || billingByKey[sid];
       if (!cj) return j;
       var fromCache = calendarBillingFlagsFrom(cj);
-      if (j.date_not_fixed != null && j.date_not_fixed !== '') {
-        delete fromCache.date_not_fixed;
-      }
-      return Object.assign({}, j, fromCache);
+      var merged = Object.assign({}, j, fromCache);
+      merged.date_not_fixed = mergeDateNotFixedFlag(j.date_not_fixed, cj.date_not_fixed);
+      return merged;
     });
   }
 
@@ -8377,10 +8381,9 @@
           var techDisplay = calendarJobTechFields(j, techById, myTechId);
           if (localJob) {
             var cacheFlags = calendarBillingFlagsFrom(j);
-            if (localJob.date_not_fixed != null && localJob.date_not_fixed !== '') {
-              delete cacheFlags.date_not_fixed;
-            }
-            return Object.assign({}, localJob, cacheFlags, techDisplay);
+            var mergedJob = Object.assign({}, localJob, cacheFlags, techDisplay);
+            mergedJob.date_not_fixed = mergeDateNotFixedFlag(localJob.date_not_fixed, j.date_not_fixed);
+            return mergedJob;
           }
           return Object.assign({}, j, techDisplay);
         });
