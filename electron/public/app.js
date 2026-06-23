@@ -8728,13 +8728,11 @@
     const escLabel = (label || 'Auftrag').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const checkParts = [];
     if (dateNotFixed) checkParts.push('<strong class="cal-date-not-fixed" title="Datum nicht fix">???</strong>');
-    const flagHtml = countryFlagImg(countryCode);
-    if (flagHtml) checkParts.push('<span class="cal-bar-flag">' + flagHtml + '</span>');
     if (isErledigt) checkParts.push('<span class="cal-check cal-check-erledigt" title="Erledigt">✓</span>');
     if (isMontage) checkParts.push('<span class="cal-check cal-check-montage" title="Fakturierung Montage">✓</span>');
     if (isReise) checkParts.push('<span class="cal-check cal-check-reise" title="Reisekosten abgerechnet">✓</span>');
     const labelHtml = checkParts.length
-      ? '<span class="cal-bar-inner"><span class="cal-bar-prefixes">' + checkParts.join('') + '</span><span class="cal-bar-label">' + escLabel + '</span></span>'
+      ? checkParts.join('') + ' <span class="cal-bar-label">' + escLabel + '</span>'
       : null;
 
     let title = full || firma || 'Auftrag';
