@@ -3422,7 +3422,7 @@ function createApp(db) {
     const includeErledigt = req.query.include_erledigt === '1' || req.query.include_erledigt === 'true';
     const assignedOnly = req.query.assigned_only === '1' || req.query.assigned_only === 'true';
     let sql = `SELECT j.id, j.server_id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
-        j.status, j.required_technicians, j.description, j.fabrikationsnummern,
+        j.status, j.date_not_fixed, j.required_technicians, j.description, j.fabrikationsnummern,
         (SELECT COUNT(*) FROM job_technicians jt_cnt WHERE jt_cnt.job_id = j.id) AS assigned_count,
         c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
         ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2,
@@ -9641,10 +9641,11 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const rawSt = String(j.status || '').toLowerCase();
   const KNOWN = new Set(['angelegt', 'zugeteilt', 'in_arbeit', 'erledigt', 'abgerechnet', 'geplant']);
   const status = KNOWN.has(rawSt) ? rawSt : 'angelegt';
+  const dateNotFixed = Number(j.date_not_fixed) === 1 ? 1 : 0;
   if (existing) {
     const fabForLocal = mergeFabForJobPull(db, existing.id, j.fabrikationsnummern);
-    db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
-      j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabForLocal, j.eap_nummer || null, j.bestellnummer || null, existing.id
+    db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, date_not_fixed = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
+      j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, fabForLocal, j.eap_nummer || null, j.bestellnummer || null, existing.id
     );
     clearSupersededPendingJobStatusOnPull(db, existing.id, status);
     if (j.street != null) insertOrUpdateJobAddress(db, existing.id, j);
@@ -9681,8 +9682,8 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   }
   if (orphan) {
     const fabOrphan = mergeFabForJobPull(db, orphan.id, j.fabrikationsnummern);
-    db.prepare('UPDATE jobs SET server_id = ?, job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
-      id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, fabOrphan, j.eap_nummer || null, j.bestellnummer || null, orphan.id
+    db.prepare('UPDATE jobs SET server_id = ?, job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, date_not_fixed = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
+      id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, fabOrphan, j.eap_nummer || null, j.bestellnummer || null, orphan.id
     );
     clearSupersededPendingJobStatusOnPull(db, orphan.id, status);
     if (j.street != null) insertOrUpdateJobAddress(db, orphan.id, j);
@@ -9690,8 +9691,8 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     upsertJobContactsForLocalJob(db, orphan.id, j);
     return orphan.id;
   }
-  const r2 = db.prepare('INSERT INTO jobs (server_id, job_number, customer_id, job_type, start_datetime, end_datetime, status, description, fabrikationsnummern, eap_nummer, bestellnummer, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))').run(
-    id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null
+  const r2 = db.prepare('INSERT INTO jobs (server_id, job_number, customer_id, job_type, start_datetime, end_datetime, status, date_not_fixed, description, fabrikationsnummern, eap_nummer, bestellnummer, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))').run(
+    id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null
   );
   const newId = r2.lastInsertRowid;
   const dispCountNew = Number(j.dispo_jt_count);

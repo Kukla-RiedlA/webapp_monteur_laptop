@@ -24,7 +24,7 @@ final class DispoRepository
     public function getJobsForTechnician(int $technicianId, ?string $dateFrom = null, ?string $dateTo = null): array
     {
         $sql = 'SELECT j.id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
-                       j.status, j.required_technicians, j.description, j.fabrikationsnummern, j.eap_nummer, j.bestellnummer,
+                       j.status, j.date_not_fixed, j.required_technicians, j.description, j.fabrikationsnummern, j.eap_nummer, j.bestellnummer,
                        c.name AS customer_name, c.phone AS customer_phone, c.contact_person, c.contact_phone,
                        ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2,
                        (SELECT COUNT(*) FROM job_technicians jtc WHERE jtc.job_id = j.id) AS dispo_jt_count

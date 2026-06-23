@@ -8256,7 +8256,11 @@
       var tid = techId != null ? String(techId) : (j.technician_id != null ? String(j.technician_id) : '');
       var cj = (tid && billingByKey[sid + ':' + tid]) || billingByKey[sid];
       if (!cj) return j;
-      return Object.assign({}, j, calendarBillingFlagsFrom(cj));
+      var fromCache = calendarBillingFlagsFrom(cj);
+      if (j.date_not_fixed != null && j.date_not_fixed !== '') {
+        delete fromCache.date_not_fixed;
+      }
+      return Object.assign({}, j, fromCache);
     });
   }
 
@@ -8372,7 +8376,11 @@
             localJobsById[String(j.id)];
           var techDisplay = calendarJobTechFields(j, techById, myTechId);
           if (localJob) {
-            return Object.assign({}, localJob, calendarBillingFlagsFrom(j), techDisplay);
+            var cacheFlags = calendarBillingFlagsFrom(j);
+            if (localJob.date_not_fixed != null && localJob.date_not_fixed !== '') {
+              delete cacheFlags.date_not_fixed;
+            }
+            return Object.assign({}, localJob, cacheFlags, techDisplay);
           }
           return Object.assign({}, j, techDisplay);
         });
