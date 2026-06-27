@@ -114,10 +114,45 @@ const {
 } = require('./lib/dispo-base-fallback');
 const {
   resolveProjekteNeuRoot,
+  resolveCanonicalFolderFromDirList,
   scanProjekteNeuTree,
   safeResolveUnderRoot,
   isIgnorableDirEntry,
+  findMonteurFolderForFab,
 } = require('./lib/projekte-neu-local');
+const {
+  buildMonteurMontageFolderName,
+  buildMonteurWorkRelPath,
+  buildMonteurWorkAbsDir,
+  isMonteurWorkRelPath,
+  ensureAnlageFnDirs,
+  ensureMonteurMontageDirs,
+  removeLegacyMonteurAuftragsordnerTopLevel,
+  removeStaleBareFabMonteurDirs,
+  isBareFabFolderName,
+  mapServerManifestPathToLocalAnlageRel,
+  getMonteurWorkRoot,
+  buildTedAnlageRelPath,
+  resolveCanonicalProjekteNeuFolderName,
+  buildOfflinePreviewTree,
+  migrateBareFabAnlageDirs,
+  resolveFabMapLocal,
+} = require('./lib/monteur-montage-paths');
+const {
+  ensureJobOfflinePullSchema,
+  getOfflinePullConfig,
+  getOfflinePullPathsByFab,
+  filterManifestForPull,
+  normalizeOfflinePathsInput,
+  saveOfflinePullSelection,
+  updateOfflinePullFabMap,
+  ensureMontageFolderNameInConfig,
+} = require('./lib/job-offline-pull');
+const {
+  isAnlageDbExplorerSubpath,
+  buildAnlageExplorerEntries,
+  folderNameForFab,
+} = require('./lib/anlage-explorer-tree');
 const {
   resolveTedExcelLocal,
   isExcelFilePath,
@@ -600,6 +635,9 @@ function ensureDienstreisePushCacheSchema(dbOrSql) {
     PRIMARY KEY (local_job_id, rel_path)
   )`);
   run('CREATE INDEX IF NOT EXISTS idx_dienstreise_push_cache_job ON dienstreise_push_cache(local_job_id)');
+  if (dbOrSql && dbOrSql.prepare) {
+    ensureJobOfflinePullSchema(dbOrSql);
+  }
 }
 
 async function loadDbOnce() {
@@ -1380,6 +1418,7 @@ function createApp(db) {
 
   const DIENSTREISE_SUBFOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
   const DIENSTREISE_SYNC_FOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
+  const FINISH_SYNC_FOLDERS = ['Dokumente_Monteur'];
 
   /** Relativer Pfad unter Reiseordner; erstes Segment muss Standard-Unterordner sein. */
   function parseDienstreiseRelativeSubpath(relRaw) {
@@ -1518,8 +1557,110 @@ function createApp(db) {
     }
   }
 
-  async function pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader) {
+  /** Freigeben: nur aus in_arbeit — lokale Daten löschen, Status zugeteilt (Dispo + lokal, ohne Datei-Sync). */
+  function jobStatusAllowsReleaseJob(status) {
+    return String(status || '').trim().toLowerCase() === 'in_arbeit';
+  }
+
+  function clearDienstreiseJobLocalReleaseArtifacts(dbConn, localJobId) {
+    const lid = parseInt(localJobId, 10);
+    if (!Number.isFinite(lid) || lid <= 0) return;
+    dbConn.prepare('DELETE FROM job_offline_pull_paths WHERE local_job_id = ?').run(lid);
+    dbConn.prepare('DELETE FROM job_offline_pull_config WHERE local_job_id = ?').run(lid);
+    dbConn.prepare('DELETE FROM job_ted_index WHERE local_job_id = ?').run(lid);
+    dbConn.prepare('DELETE FROM dienstreise_push_cache WHERE local_job_id = ?').run(lid);
+    dbConn.prepare(
+      `DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`,
+    ).run(lid);
+  }
+
+  function applyJobStatusZugeteiltAfterRelease(localJobId, technicianId) {
+    const lid = parseInt(localJobId, 10);
+    if (!Number.isFinite(lid) || lid <= 0) return false;
+    const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(lid);
+    if (!jobStatusAllowsReleaseJob(statusRow && statusRow.status)) return false;
+    const r = db.prepare(`
+      UPDATE jobs SET status = 'zugeteilt', updated_at = datetime('now')
+      WHERE id = ? AND (
+        EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
+        OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
+      )
+    `).run(lid, technicianId);
+    return r.changes > 0;
+  }
+
+  function performReleaseDienstreiseJob(localJobId, technicianId) {
+    const lid = parseInt(localJobId, 10);
+    const row = db.prepare('SELECT status FROM jobs WHERE id = ?').get(lid);
+    if (!row || !jobStatusAllowsReleaseJob(row.status)) {
+      throw Object.assign(new Error('Freigeben ist nur bei Status „In Arbeit“ möglich.'), { httpStatus: 409 });
+    }
+    if (bgJobs && typeof bgJobs.cancelRunningDienstreiseForLocalJob === 'function') {
+      bgJobs.cancelRunningDienstreiseForLocalJob(lid);
+    }
+    const reiseDir = resolveDienstreiseReiseDirForJob(lid, { createIfMissing: false });
+    if (reiseDir && fs.existsSync(reiseDir)) {
+      cleanupDienstreiseReiseDir(reiseDir, [], { fastNoUpload: true });
+    }
+    clearDienstreiseJobLocalReleaseArtifacts(db, lid);
+    const ok = applyJobStatusZugeteiltAfterRelease(lid, technicianId);
+    if (!ok) {
+      throw Object.assign(new Error('Status konnte nicht zurückgesetzt werden.'), { httpStatus: 409 });
+    }
+    save();
+  }
+
+  async function performReleaseDienstreiseJobWithDispo(localJobId, technicianId, dispoOpts) {
+    const lid = parseInt(localJobId, 10);
+    const row = db.prepare('SELECT status, server_id FROM jobs WHERE id = ?').get(lid);
+    if (!row || !jobStatusAllowsReleaseJob(row.status)) {
+      throw Object.assign(new Error('Freigeben ist nur bei Status „In Arbeit“ möglich.'), { httpStatus: 409 });
+    }
+
+    const dispoUsername = String((dispoOpts && dispoOpts.dispoUsername) || '').trim();
+    const dispoPassword =
+      dispoOpts && dispoOpts.dispoPassword != null ? String(dispoOpts.dispoPassword) : '';
+    if (!dispoUsername) {
+      throw Object.assign(
+        new Error(
+          'Dispo-Zugangsdaten fehlen: Benutzername und Passwort in den Einstellungen eintragen (erforderlich für Freigeben).',
+        ),
+        { httpStatus: 400 },
+      );
+    }
+    const authHeader = authHeaderFromCredentials(dispoUsername, dispoPassword);
+    const resolvedBase = await resolveDispoWorkingBase({
+      baseUrl: (dispoOpts && dispoOpts.dispoBaseUrl) || '',
+      externalUrl: dispoOpts && dispoOpts.externalUrl,
+      internalUrl: dispoOpts && dispoOpts.internalUrl,
+      technicianId,
+      serverUsername: dispoUsername,
+      serverPassword: dispoPassword,
+    });
+    const dispoBaseUrl = resolvedBase.base;
+    if (!dispoBaseUrl) {
+      throw Object.assign(
+        new Error(resolvedBase.error || 'Keine erreichbare Dispo-URL für Freigeben.'),
+        { httpStatus: 502 },
+      );
+    }
+
+    const srvId = row.server_id != null ? row.server_id : lid;
+    const pushRes = await pushJobStatusToDispo(dispoBaseUrl, technicianId, srvId, authHeader, 'zugeteilt');
+    if (!pushRes.ok) {
+      throw Object.assign(
+        new Error(pushRes.error || 'Status konnte nicht in der Dispo zurückgesetzt werden.'),
+        { httpStatus: 502 },
+      );
+    }
+
+    performReleaseDienstreiseJob(lid, technicianId);
+  }
+
+  async function pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, status) {
     if (!dispoBaseUrl || !serverJobId) return { ok: false, error: 'Keine Dispo-Verknüpfung.' };
+    const st = String(status || '').trim().toLowerCase();
+    if (!st) return { ok: false, error: 'Status fehlt.' };
     const base = dispoBaseUrl.replace(/\/$/, '');
     const headerForJob = {
       'Content-Type': 'application/json',
@@ -1529,7 +1670,7 @@ function createApp(db) {
     const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${technicianId}`, {
       method: 'PATCH',
       headers: headerForJob,
-      body: JSON.stringify({ job_id: serverJobId, status: 'in_arbeit' }),
+      body: JSON.stringify({ job_id: serverJobId, status: st }),
     });
     if (!r.ok) {
       let errMsg = 'Dispo: ' + r.status;
@@ -1540,6 +1681,10 @@ function createApp(db) {
       return { ok: false, error: errMsg };
     }
     return { ok: true };
+  }
+
+  async function pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader) {
+    return pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'in_arbeit');
   }
 
   function getServerJobId(localJobIdOrServerId) {
@@ -1653,17 +1798,29 @@ function createApp(db) {
   }
 
   /** Nur geänderte Dateien in Sync-Ordnern (gegen letzten erfolgreichen Push/Pull-Stand). */
-  function collectChangedDienstreiseSyncFileEntries(dbConn, reiseDir, localJobId) {
+  function collectChangedDienstreiseSyncFileEntries(dbConn, reiseDir, localJobId, foldersOpt, relPathPredicate) {
+    const folderList = Array.isArray(foldersOpt) && foldersOpt.length ? foldersOpt : DIENSTREISE_SYNC_FOLDERS;
+    const pred = typeof relPathPredicate === 'function' ? relPathPredicate : null;
     const out = [];
-    for (const folder of DIENSTREISE_SYNC_FOLDERS) {
+    for (const folder of folderList) {
       const files = collectLocalSyncFolderFileEntries(reiseDir, folder);
       for (const f of files) {
+        if (pred && !pred(f.relPathFromRoot)) continue;
         if (localDienstreiseFileNeedsDispoPush(dbConn, localJobId, f.relPathFromRoot, f.fullPath)) {
           out.push(f);
         }
       }
     }
     return out;
+  }
+
+  function resolveMonteurAuftragsordnerName(localJobId, technicianId) {
+    const offlineCfg = getOfflinePullConfig(db, localJobId);
+    const fromCfg = offlineCfg && offlineCfg.montage_folder_name ? String(offlineCfg.montage_folder_name).trim() : '';
+    if (fromCfg) return fromCfg;
+    const jobRow = lookupDienstreiseJobRow(localJobId);
+    if (!jobRow) return '';
+    return buildMonteurMontageFolderName(jobRow, getTechnicianDisplayName(technicianId));
   }
 
   function uploadJobProjectFileToDispo(base, serverJobId, technicianId, authHeader, relPathFromRoot, fullPath) {
@@ -1799,6 +1956,8 @@ function createApp(db) {
     const base = (dispoBaseUrl || '').trim().replace(/\/$/, '');
     if (!localJobId || !base || !technicianId) throw new Error('job_id (lokal), dispoBaseUrl und technicianId erforderlich.');
     const onlyChanged = !!(syncOpts && syncOpts.onlyChanged);
+    const foldersFilter =
+      syncOpts && Array.isArray(syncOpts.folders) && syncOpts.folders.length ? syncOpts.folders : DIENSTREISE_SYNC_FOLDERS;
     const jobId = getServerJobId(localJobId);
     const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
     if (!reiseDir || !fs.existsSync(reiseDir)) throw new Error('Dienstreise-Ordner existiert nicht.');
@@ -1850,11 +2009,12 @@ function createApp(db) {
     }
 
     if (onlyChanged) {
-      const changed = collectChangedDienstreiseSyncFileEntries(db, reiseDir, localJobId);
+      const relPred = syncOpts && typeof syncOpts.relPathPredicate === 'function' ? syncOpts.relPathPredicate : null;
+      const changed = collectChangedDienstreiseSyncFileEntries(db, reiseDir, localJobId, foldersFilter, relPred);
       if (!changed.length) return;
       const byFolder = new Map();
       for (const f of changed) {
-        const folder = DIENSTREISE_SYNC_FOLDERS.find(
+        const folder = foldersFilter.find(
           (fd) => f.relPathFromRoot === fd || f.relPathFromRoot.startsWith(fd + '/'),
         );
         if (!folder) continue;
@@ -1867,7 +2027,7 @@ function createApp(db) {
       return;
     }
 
-    for (const folder of DIENSTREISE_SYNC_FOLDERS) {
+    for (const folder of foldersFilter) {
       const files = collectLocalFiles(reiseDir, folder);
       if (!files.length) continue;
       await pushFileBatch(folder, files);
@@ -1914,7 +2074,7 @@ function createApp(db) {
 
   /**
    * Nach „Auftrag annehmen“: Ordner existiert, aber Kunde/Ort/Datum in der DB kann sich nach Sync unterscheiden.
-   * Sucht den Reise-Ordner über vorhandene FN unter Dokumente_Monteur (typisch nach Dienstreise-Pull).
+   * Sucht den Reise-Ordner über vorhandene FN unter Dokumente_Anlage (nach Dienstreise-Pull).
    */
   function findReiseDirByMonteurFabScan(base, row) {
     if (!base || !row) return null;
@@ -1938,10 +2098,10 @@ function createApp(db) {
       for (const ent of entries) {
         if (!ent.isDirectory()) continue;
         const reiseDir = path.join(yearDir, ent.name);
-        const dm = path.join(reiseDir, 'Dokumente_Monteur');
-        if (!fs.existsSync(dm) || !fs.statSync(dm).isDirectory()) continue;
+        const da = path.join(reiseDir, 'Dokumente_Anlage');
+        if (!fs.existsSync(da) || !fs.statSync(da).isDirectory()) continue;
         for (const fab of fabs) {
-          if (resolveProjekteNeuRoot(dm, fab)) return reiseDir;
+          if (resolveProjekteNeuRoot(da, fab)) return reiseDir;
         }
       }
     }
@@ -2149,15 +2309,96 @@ function createApp(db) {
     }
   });
 
+  /** Kanonische Fileserver-FN-Namen für Explorer/Pfade (Cache + Platte, fab_map persistieren). */
+  function ensureFabMapCanonicalForJob(localJobId, reiseDir) {
+    const jobRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
+    const jobFabs = jobRow ? fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern) : [];
+    const offlineCfg = getOfflinePullConfig(db, localJobId);
+    const fabMap = resolveFabMapLocal(reiseDir, offlineCfg.fab_map || [], jobFabs, (fab) =>
+      readAnlagenstammRootFolderName(db, fab),
+    );
+    if (!fabMapJsonEqual(offlineCfg.fab_map, fabMap)) {
+      updateOfflinePullFabMap(db, localJobId, fabMap);
+      save();
+    }
+    if (reiseDir && fs.existsSync(reiseDir)) {
+      migrateBareFabAnlageDirs(reiseDir, fabMap);
+      removeStaleBareFabMonteurDirs(reiseDir, fabMap);
+      ensureAnlageFnDirs(reiseDir, fabMap);
+    }
+    return fabMap;
+  }
+
+  function resolveTechnicianIdForLocalJob(localJobId, overrideId) {
+    const tid = parseInt(overrideId, 10);
+    if (Number.isFinite(tid) && tid > 0) return tid;
+    const row = db.prepare('SELECT technician_id FROM job_technicians WHERE job_id = ? LIMIT 1').get(localJobId);
+    return row && row.technician_id != null ? parseInt(row.technician_id, 10) : null;
+  }
+
+  /**
+   * Dokumente_Monteur/<FN>/Montage/<Auftragsordner>/ für alle FNs des Auftrags anlegen.
+   */
+  function ensureJobReiseFolderLayout(localJobId, reiseDir, technicianIdOpt) {
+    if (!reiseDir || !fs.existsSync(reiseDir)) return { fabMap: [], montageFolderName: '' };
+    const fabMap = ensureFabMapCanonicalForJob(localJobId, reiseDir);
+    const techId = resolveTechnicianIdForLocalJob(localJobId, technicianIdOpt);
+    let montageFolderName = resolveMonteurAuftragsordnerName(localJobId, techId);
+    if (!montageFolderName) {
+      const jobRow = lookupDienstreiseJobRow(localJobId);
+      montageFolderName = buildMonteurMontageFolderName(
+        jobRow || {},
+        getTechnicianDisplayName(techId) || 'Monteur',
+      );
+    }
+    if (montageFolderName && fabMap.length) {
+      ensureMonteurMontageDirs(reiseDir, fabMap, montageFolderName);
+      if (ensureMontageFolderNameInConfig(db, localJobId, montageFolderName)) save();
+    }
+    return { fabMap, montageFolderName };
+  }
+
   /** Liste der Dateien/Ordner im Projektordner eines Auftrags (Explorer-Ansicht). subpath = relativer Pfad (z. B. "" oder "Dokumente_Monteur"). */
   app.get('/api/dienstreise/project_files', (req, res) => {
     try {
       const jobId = parseInt(req.query.job_id, 10);
       if (!jobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
-      const reiseDir = getOrCreateDienstreiseFolderForJob(jobId);
+      const mapped = getJobRowByLocalOrServerId(jobId);
+      const localJobId = mapped ? mapped.id : jobId;
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       if (!reiseDir || !fs.existsSync(reiseDir)) return res.json({ ok: true, folderPath: reiseDir || '', entries: [] });
+      ensureJobReiseFolderLayout(localJobId, reiseDir, getTechnicianId(req));
       let subpath = (req.query.subpath || '').trim().replace(/^[\/\\]+|[\/\\]+$/g, '');
       if (subpath && (subpath.includes('..') || path.isAbsolute(subpath))) return res.status(400).json({ ok: false, error: 'Ungültiger Unterpfad.' });
+
+      if (isAnlageDbExplorerSubpath(subpath)) {
+        const offlineCfg = getOfflinePullConfig(db, localJobId);
+        const jobRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
+        const jobFabs = jobRow ? fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern) : [];
+        const fabMap = resolveFabMapLocal(reiseDir, offlineCfg.fab_map || [], jobFabs, (fab) =>
+          readAnlagenstammRootFolderName(db, fab),
+        );
+        const anlageResult = buildAnlageExplorerEntries({
+          localJobId,
+          reiseDir,
+          subpath,
+          fabMap,
+          db,
+          readTreeCache: (fab) => readAnlagenstammTreeCache(db, fab),
+          resolveLocalFile: (lid, fab, pnRel) => resolveProjekteNeuLocalFilePath(lid, fab, pnRel),
+        });
+        if (anlageResult) {
+          return res.json({
+            ok: true,
+            folderPath: reiseDir,
+            subpath: subpath || '',
+            entries: anlageResult.entries,
+            anlage_db: true,
+            tree_empty: !!anlageResult.treeEmpty,
+          });
+        }
+      }
+
       const dirPath = subpath ? path.join(reiseDir, subpath) : reiseDir;
       if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
       const names = fs.readdirSync(dirPath);
@@ -2303,10 +2544,15 @@ function createApp(db) {
   function getProjekteNeuLocalContext(localJobId, fab) {
     const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
     if (!reiseDir) return null;
-    const dm = path.join(reiseDir, 'Dokumente_Monteur');
-    const resolved = resolveProjekteNeuRoot(dm, fab);
+    const da = path.join(reiseDir, 'Dokumente_Anlage');
+    const resolved = resolveProjekteNeuRoot(da, fab);
     if (!resolved) return null;
-    return { reiseDir, dm, resolved };
+    const offlineCfg = getOfflinePullConfig(db, localJobId);
+    return {
+      reiseDir,
+      dm: da,
+      resolved: { ...resolved, montageFolderName: offlineCfg.montage_folder_name || null },
+    };
   }
 
   /** FN aus Pfad (z. B. Bilder/11521/…) und alle FNs des Auftrags – für Multi-FN-Jobs. */
@@ -2340,10 +2586,22 @@ function createApp(db) {
     candidates.push(path.join(ctx.dm, ctx.resolved.folderName, ...rel.split('/').filter(Boolean)));
     candidates.push(path.join(ctx.dm, ...rel.split('/').filter(Boolean)));
     candidates.push(path.join(ctx.reiseDir, ...rel.split('/').filter(Boolean)));
-    candidates.push(path.join(ctx.reiseDir, 'Dokumente_Monteur', ...rel.split('/').filter(Boolean)));
+    candidates.push(path.join(ctx.reiseDir, 'Dokumente_Anlage', ...rel.split('/').filter(Boolean)));
     candidates.push(
-      path.join(ctx.reiseDir, 'Dokumente_Monteur', ctx.resolved.folderName, ...rel.split('/').filter(Boolean)),
+      path.join(ctx.reiseDir, 'Dokumente_Anlage', ctx.resolved.folderName, ...rel.split('/').filter(Boolean)),
     );
+    if (ctx.resolved.montageFolderName) {
+      candidates.push(
+        path.join(
+          ctx.reiseDir,
+          'Dokumente_Monteur',
+          ctx.resolved.folderName,
+          'Montage',
+          ctx.resolved.montageFolderName,
+          ...rel.split('/').filter(Boolean),
+        ),
+      );
+    }
     const seen = new Set();
     for (const p of candidates) {
       const key = String(p).toLowerCase();
@@ -2499,14 +2757,21 @@ function createApp(db) {
     if (!jobRow) return;
     const ctxBase = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
     if (!ctxBase || !fs.existsSync(ctxBase)) return;
-    const dm = path.join(ctxBase, 'Dokumente_Monteur');
+    const dm = path.join(ctxBase, 'Dokumente_Anlage');
     const fabs = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern);
     for (const fabNum of fabs) {
       const fab = String(fabNum);
-      const resolved = resolveProjekteNeuRoot(dm, fab);
-      if (!resolved) continue;
-      const scanned = scanProjekteNeuTree(resolved.root, {});
-      upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
+      const cached = readAnlagenstammTreeCache(db, fab);
+      if (cached && Array.isArray(cached.tree) && cached.tree.length > 0) {
+        ingestProjekteNeuParameterTree(localJobId, fab, cached.tree);
+        continue;
+      }
+      const ctx = getProjekteNeuLocalContext(localJobId, fab);
+      if (!ctx) continue;
+      const scanned = scanProjekteNeuTree(ctx.resolved.root, {});
+      if (scanned.tree.length > 0) {
+        upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
+      }
       ingestProjekteNeuParameterTree(localJobId, fab, scanned.tree);
     }
     save();
@@ -2660,15 +2925,6 @@ function createApp(db) {
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
-  });
-
-  app.get('/api/dienstreise/:id', (req, res) => {
-    const id = parseInt(req.params.id, 10);
-    if (!id) return res.status(400).json({ ok: false, error: 'id fehlt.' });
-    const row = db.prepare('SELECT id, year, running_number, start_date, company_name, city, country_code, folder_name, created_at FROM dienstreisen WHERE id = ?').get(id);
-    if (!row) return res.status(404).json({ ok: false, error: 'Dienstreise nicht gefunden.' });
-    const fullPath = getDienstreiseFullPath(row);
-    res.json({ ok: true, dienstreise: { ...row, fullPath } });
   });
 
   app.post('/api/dienstreise', express.json(), (req, res) => {
@@ -2905,6 +3161,329 @@ function createApp(db) {
     return { enqueued, skipped, job_ids: jobIds };
   }
 
+  const PREVIEW_DISPO_TIMEOUT_MS = 20000;
+  const PREVIEW_RESOLVE_BASE_MS = 15000;
+
+  function previewFetchSignal(timeoutMs) {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), timeoutMs != null ? timeoutMs : PREVIEW_DISPO_TIMEOUT_MS);
+    return ac.signal;
+  }
+
+  function buildLocalAcceptOfflinePreview(localJobId, technicianId, degradedHint) {
+    const jobDetail = lookupDienstreiseJobRow(localJobId);
+    if (!jobDetail) throw new Error('Auftrag nicht gefunden.');
+    const montageFolderName = buildMonteurMontageFolderName(jobDetail, getTechnicianDisplayName(technicianId));
+    const fabsOut = [];
+    for (const fabNum of fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)) {
+      const fab = String(fabNum);
+      let folder_name_canonical = fab;
+      const cachedRoot = readAnlagenstammRootFolderName(db, fab);
+      if (cachedRoot && !isBareFabFolderName(cachedRoot)) folder_name_canonical = cachedRoot;
+      fabsOut.push({ fab, folder_name_canonical, tree: [] });
+    }
+    return {
+      ok: true,
+      preview_degraded: true,
+      hint:
+        degradedHint ||
+        'Server-Ordnerliste nicht verfügbar – „Keine“ für nur TED oder erneut versuchen.',
+      fabs: fabsOut,
+      montage_folder_name: montageFolderName,
+      fab_map: fabsOut.map((f) => ({ fab: f.fab, folder_name_canonical: f.folder_name_canonical })),
+    };
+  }
+
+  async function resolveDispoBaseForPreview(creds, technicianId) {
+    const fallback = String(creds.baseUrl || creds.externalUrl || '')
+      .trim()
+      .replace(/\/$/, '');
+    try {
+      const resolved = await Promise.race([
+        resolveDispoWorkingBase({
+          baseUrl: creds.baseUrl,
+          externalUrl: creds.externalUrl,
+          internalUrl: creds.internalUrl,
+          technicianId,
+          serverUsername: creds.serverUsername,
+          serverPassword: creds.serverPassword,
+        }),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Dispo-Basis-URL: Zeitüberschreitung')), PREVIEW_RESOLVE_BASE_MS);
+        }),
+      ]);
+      if (resolved && resolved.base) return resolved.base;
+    } catch (e) {
+      console.warn('[accept_offline_preview] resolve base:', e && e.message ? e.message : e);
+    }
+    return fallback || null;
+  }
+
+  async function listDispoProjectEntries(dispoBaseUrl, serverJobId, technicianId, authHeader, relPath, signal) {
+    const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
+    const url =
+      dispoBaseUrl + '/api/job_project_files_list.php?technician_id=' + technicianId + '&job_id=' + serverJobId + pathQ;
+    const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader), signal });
+    const text = await r.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (_) {
+      throw new Error('Dispo-Liste: ungültige Antwort (' + r.status + ').');
+    }
+    if (!r.ok || data.ok === false) {
+      throw new Error((data && data.error) ? String(data.error) : 'Dispo-Liste fehlgeschlagen (HTTP ' + r.status + ').');
+    }
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+
+  /**
+   * FN-Ordnernamen vom Fileserver (nicht nur Ziffer „7118“), für fab_map / Monteur-Pfade.
+   */
+  async function resolveFabMapCanonicalFolderNames(
+    dispoBaseUrl,
+    serverJobId,
+    technicianId,
+    authHeader,
+    fabMapIn,
+    jobFabNums,
+    signal,
+  ) {
+    let monteurDirNames = [];
+    try {
+      const entries = await listDispoProjectEntries(
+        dispoBaseUrl,
+        serverJobId,
+        technicianId,
+        authHeader,
+        'Dokumente_Monteur',
+        signal,
+      );
+      monteurDirNames = entries
+        .filter((e) => String(e.type || '').toLowerCase() === 'dir')
+        .map((e) => e.name)
+        .filter(Boolean);
+    } catch (listErr) {
+      console.warn(
+        '[fab_map] Monteur-Listing:',
+        listErr && listErr.message ? listErr.message : listErr,
+      );
+    }
+
+    const byFab = new Map();
+    for (const e of fabMapIn || []) {
+      if (e && e.fab != null) byFab.set(String(e.fab).trim(), e);
+    }
+    const fabNums =
+      jobFabNums && jobFabNums.length
+        ? jobFabNums.map((f) => String(f).trim()).filter(Boolean)
+        : [...byFab.keys()];
+    if (!fabNums.length) return [];
+
+    const out = [];
+    for (const fab of fabNums) {
+      const existing = byFab.get(fab);
+      let folder_name_canonical =
+        existing && existing.folder_name_canonical != null
+          ? String(existing.folder_name_canonical).trim()
+          : '';
+
+      if (!folder_name_canonical || folder_name_canonical === fab || isBareFabFolderName(folder_name_canonical)) {
+        const fromList =
+          resolveCanonicalProjekteNeuFolderName(monteurDirNames, fab) ||
+          resolveCanonicalFolderFromDirList(monteurDirNames, fab);
+        if (fromList) folder_name_canonical = fromList;
+      }
+
+      if (!folder_name_canonical || folder_name_canonical === fab || isBareFabFolderName(folder_name_canonical)) {
+        try {
+          const anlUrl =
+            dispoBaseUrl +
+            '/dispo_api/api/anlagenstamm_files_list.php?technician_id=' +
+            encodeURIComponent(technicianId) +
+            '&fab=' +
+            encodeURIComponent(fab);
+          const r = await fetch(anlUrl, {
+            headers: dispoMonteurFetchHeaders(technicianId, authHeader),
+            signal,
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data && data.projekte_neu && data.projekte_neu.folder_name) {
+            folder_name_canonical = String(data.projekte_neu.folder_name).trim();
+          }
+        } catch (_) {
+          /* optional */
+        }
+      }
+
+      if (!folder_name_canonical) folder_name_canonical = fab;
+      out.push({ fab, folder_name_canonical });
+    }
+    return out;
+  }
+
+  async function buildAcceptOfflinePreview(localJobId, technicianId, dispoBaseUrl, authHeader, urlOpts) {
+    const jobDetail = lookupDienstreiseJobRow(localJobId);
+    if (!jobDetail) throw new Error('Auftrag nicht gefunden.');
+    const serverJobId = jobDetail.server_id != null ? jobDetail.server_id : localJobId;
+    const montageFolderName = buildMonteurMontageFolderName(jobDetail, getTechnicianDisplayName(technicianId));
+    let monteurDirNames = [];
+    try {
+      const entries = await listDispoProjectEntries(
+        dispoBaseUrl,
+        serverJobId,
+        technicianId,
+        authHeader,
+        'Dokumente_Monteur',
+        previewFetchSignal(PREVIEW_DISPO_TIMEOUT_MS),
+      );
+      monteurDirNames = entries
+        .filter((e) => String(e.type || '').toLowerCase() === 'dir')
+        .map((e) => e.name)
+        .filter(Boolean);
+    } catch (listErr) {
+      console.warn('[accept_offline_preview] Monteur-Listing:', listErr && listErr.message ? listErr.message : listErr);
+    }
+    const fabNums = [...fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)];
+    const creds = resolveDispoServerCreds(urlOpts || {});
+    const hdr =
+      authHeader && authHeader.Authorization
+        ? authHeader
+        : authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+
+    async function loadFabPreview(fabNum) {
+      const fab = String(fabNum);
+      let folder_name_canonical =
+        resolveCanonicalProjekteNeuFolderName(monteurDirNames, fab) ||
+        resolveCanonicalFolderFromDirList(monteurDirNames, fab);
+      if (!folder_name_canonical) folder_name_canonical = fab;
+      let tree = [];
+      const anlUrl =
+        dispoBaseUrl +
+        '/dispo_api/api/anlagenstamm_files_list.php?technician_id=' +
+        encodeURIComponent(technicianId) +
+        '&fab=' +
+        encodeURIComponent(fab);
+      try {
+        const r = await fetch(anlUrl, {
+          headers: dispoMonteurFetchHeaders(technicianId, hdr),
+          signal: previewFetchSignal(PREVIEW_DISPO_TIMEOUT_MS),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data && data.projekte_neu && Array.isArray(data.projekte_neu.tree)) {
+          try {
+            upsertAnlagenstammTreeCache(db, fab, data.projekte_neu);
+          } catch (_) {}
+          tree = buildOfflinePreviewTree(data.projekte_neu.tree);
+          if (data.projekte_neu.folder_name) folder_name_canonical = String(data.projekte_neu.folder_name);
+        }
+      } catch (anlErr) {
+        console.warn('[accept_offline_preview] anlagenstamm', fab, anlErr && anlErr.message ? anlErr.message : anlErr);
+      }
+      if (!tree.length && folder_name_canonical) {
+        try {
+          const subPath = 'Dokumente_Monteur/' + folder_name_canonical;
+          const subEntries = await listDispoProjectEntries(
+            dispoBaseUrl,
+            serverJobId,
+            technicianId,
+            authHeader,
+            subPath,
+            previewFetchSignal(PREVIEW_DISPO_TIMEOUT_MS),
+          );
+          tree = subEntries
+            .filter((e) => String(e.type || '').toLowerCase() === 'dir')
+            .map((e) => ({ name: e.name, rel: e.name, children: [] }));
+        } catch (subErr) {
+          console.warn('[accept_offline_preview] subdirs', fab, subErr && subErr.message ? subErr.message : subErr);
+        }
+      }
+      return { fab, folder_name_canonical, tree };
+    }
+
+    const fabsOut = await Promise.all(fabNums.map((fn) => loadFabPreview(fn)));
+    const anyTree = fabsOut.some((f) => f.tree && f.tree.length > 0);
+    return {
+      ok: true,
+      preview_degraded: !anyTree && monteurDirNames.length === 0,
+      hint: !anyTree && monteurDirNames.length === 0
+        ? 'Keine Server-Ordner geladen – „Keine“ für nur TED oder erneut versuchen.'
+        : undefined,
+      fabs: fabsOut,
+      montage_folder_name: montageFolderName,
+      fab_map: fabsOut.map((f) => ({ fab: f.fab, folder_name_canonical: f.folder_name_canonical })),
+    };
+  }
+
+  app.get('/api/dienstreise/accept_offline_preview', async (req, res) => {
+    try {
+      const rawJobId = parseInt(req.query.job_id, 10);
+      const technicianId = getTechnicianId(req) || parseInt(req.query.technician_id, 10);
+      if (!rawJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      const mapped = getJobRowByLocalOrServerId(rawJobId);
+      const localJobId = mapped ? mapped.id : rawJobId;
+      const creds = resolveDispoServerCreds({
+        baseUrl: req.query.dispoBaseUrl || req.query.dispo_base_url,
+        externalUrl: req.query.externalUrl,
+        internalUrl: req.query.internalUrl,
+        dispo_username: req.query.dispo_username,
+        dispo_password: req.query.dispo_password,
+      });
+      const authHeader =
+        creds.serverUsername || creds.serverPassword
+          ? { Authorization: 'Basic ' + Buffer.from(creds.serverUsername + ':' + creds.serverPassword).toString('base64') }
+          : {};
+      if (!authHeader.Authorization) {
+        return res.status(400).json({ ok: false, error: 'Dispo-Zugangsdaten fehlen.' });
+      }
+      const resolved = await resolveDispoBaseForPreview(creds, technicianId);
+      if (!resolved) {
+        return res.json(
+          buildLocalAcceptOfflinePreview(
+            localJobId,
+            technicianId,
+            'Dispo nicht erreichbar – „Keine“ für nur TED & Status.',
+          ),
+        );
+      }
+      try {
+        const preview = await buildAcceptOfflinePreview(localJobId, technicianId, resolved, authHeader, creds);
+        return res.json(preview);
+      } catch (buildErr) {
+        console.warn('[accept_offline_preview] build:', buildErr && buildErr.message ? buildErr.message : buildErr);
+        return res.json(
+          buildLocalAcceptOfflinePreview(
+            localJobId,
+            technicianId,
+            buildErr && buildErr.message ? String(buildErr.message) : 'Vorschau eingeschränkt.',
+          ),
+        );
+      }
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      try {
+        const mapped = getJobRowByLocalOrServerId(parseInt(req.query.job_id, 10));
+        const technicianId = getTechnicianId(req) || parseInt(req.query.technician_id, 10);
+        if (mapped && technicianId) {
+          return res.json(buildLocalAcceptOfflinePreview(mapped.id, technicianId, msg));
+        }
+      } catch (_) {}
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  /** Nach allen festen /api/dienstreise/…-Pfaden — :id würde sonst z. B. accept_offline_preview abfangen. */
+  app.get('/api/dienstreise/:id', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ ok: false, error: 'id fehlt.' });
+    const row = db.prepare('SELECT id, year, running_number, start_date, company_name, city, country_code, folder_name, created_at FROM dienstreisen WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ ok: false, error: 'Dienstreise nicht gefunden.' });
+    const fullPath = getDienstreiseFullPath(row);
+    res.json({ ok: true, dienstreise: { ...row, fullPath } });
+  });
+
   /**
    * Queued Hintergrund-Job: Dispo-Refresh, Projektordner kopieren, optional Auftrag annehmen.
    * @param {{ acceptJob?: boolean }} options
@@ -2993,6 +3572,32 @@ function createApp(db) {
         bgJobs.cancelRunningOfType('sync_pull');
       }
 
+      let offlinePullMode = null;
+      if (acceptJob && Object.prototype.hasOwnProperty.call(body, 'offline_paths')) {
+        const jobDetail = lookupDienstreiseJobRow(localJobId);
+        let fabMap = Array.isArray(body.fab_map) ? body.fab_map : [];
+        if (!fabMap.length && jobDetail) {
+          for (const fn of fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)) {
+            fabMap.push({ fab: String(fn), folder_name_canonical: String(fn) });
+          }
+        }
+        const montageName =
+          (body.montage_folder_name && String(body.montage_folder_name).trim()) ||
+          buildMonteurMontageFolderName(jobDetail || {}, getTechnicianDisplayName(technicianId));
+        saveOfflinePullSelection(db, localJobId, 'explicit', body.offline_paths, fabMap, montageName);
+        offlinePullMode = 'explicit';
+        save();
+        try {
+          const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+          ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
+        } catch (layoutErr) {
+          console.warn(
+            '[accept] Montage-Ordner:',
+            layoutErr && layoutErr.message ? layoutErr.message : layoutErr,
+          );
+        }
+      }
+
       const dedupeKey = 'dienstreise_pull:' + localJobId + ':' + (acceptJob ? 'accept' : 'copy');
       const { job_id } = bgJobs.enqueue(
         'dienstreise_pull',
@@ -3006,6 +3611,7 @@ function createApp(db) {
           dispo_password: dispoPassword,
           include_bilder: includeBilder,
           accept_job: acceptJob,
+          offline_pull_mode: offlinePullMode,
         },
         dedupeKey,
       );
@@ -3188,6 +3794,183 @@ function createApp(db) {
     }
   });
 
+  const FINISH_CLEANUP_HINT =
+    'Lokale Downloads werden entfernt (auf OneDrive/Netzlaufwerk kann das etwas dauern)';
+
+  function buildDienstreiseProtectedMatcher(protectedPaths) {
+    const protectedSet = new Set(
+      (protectedPaths || []).map((p) => String(p || '').replace(/\\/g, '/')).filter(Boolean),
+    );
+    return function isProtected(rel) {
+      const norm = String(rel || '').replace(/\\/g, '/');
+      for (const p of protectedSet) {
+        if (norm === p || norm.startsWith(p + '/')) return true;
+      }
+      return false;
+    };
+  }
+
+  /** True wenn ein Top-Level-Eintrag unter reiseDir per rmSync komplett gelöscht werden darf. */
+  function canRmSyncTopLevelEntry(relName, protectedPathsNorm) {
+    const norm = String(relName || '').replace(/\\/g, '/');
+    for (const p of protectedPathsNorm) {
+      if (p === norm || p.startsWith(norm + '/') || norm.startsWith(p + '/')) return false;
+    }
+    return true;
+  }
+
+  function collectDeletableFilesUnder(reiseDir, isProtected, out) {
+    function walk(dir, relBase) {
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch (_) {
+        return;
+      }
+      for (const e of entries) {
+        if (isIgnorableDirEntry(e.name) && e.isFile()) {
+          const fullIgn = path.join(dir, e.name);
+          const relIgn = relBase ? relBase + '/' + e.name : e.name;
+          if (!isProtected(relIgn)) out.push({ full: fullIgn, rel: relIgn });
+          continue;
+        }
+        const full = path.join(dir, e.name);
+        const rel = relBase ? relBase + '/' + e.name : e.name;
+        if (isProtected(rel)) continue;
+        if (e.isDirectory()) walk(full, rel);
+        else if (e.isFile()) out.push({ full, rel });
+      }
+    }
+    walk(reiseDir, '');
+  }
+
+  function pruneEmptyDirsUnder(reiseDir, isProtected) {
+    let removedAny = false;
+    function walk(dir, relBase) {
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch (_) {
+        return;
+      }
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const full = path.join(dir, e.name);
+        const rel = relBase ? relBase + '/' + e.name : e.name;
+        walk(full, rel);
+        if (isProtected(rel)) continue;
+        try {
+          const names = fs.readdirSync(full);
+          const visible = names.filter((n) => !isIgnorableDirEntry(n));
+          if (visible.length === 0) {
+            for (const n of names) {
+              try {
+                fs.unlinkSync(path.join(full, n));
+              } catch (_) {}
+            }
+            fs.rmdirSync(full);
+            removedAny = true;
+          }
+        } catch (_) {}
+      }
+    }
+    walk(reiseDir, '');
+    return removedAny;
+  }
+
+  /**
+   * Reiseordner bereinigen (ohne DB-Lock). fastNoUpload: rmSync ganzer Baum wenn nichts geschützt.
+   * @param {(cur: number, tot: number, msg: string) => void} onProgress
+   */
+  function cleanupDienstreiseReiseDir(reiseDir, protectedPaths, opts) {
+    const signal = opts && opts.signal;
+    const fastNoUpload = !!(opts && opts.fastNoUpload);
+    const onProgress =
+      opts && typeof opts.onProgress === 'function'
+        ? opts.onProgress
+        : function () {};
+    const isProtected = buildDienstreiseProtectedMatcher(protectedPaths);
+    const protNorm = (protectedPaths || [])
+      .map((p) => String(p || '').replace(/\\/g, '/'))
+      .filter(Boolean);
+
+    if (!reiseDir || !fs.existsSync(reiseDir)) return;
+
+    const finishMsg = (suffix) => FINISH_CLEANUP_HINT + (suffix || ' …');
+
+    if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
+
+    if (fastNoUpload && protNorm.length === 0) {
+      onProgress(0, 1, finishMsg(' …'));
+      try {
+        fs.rmSync(reiseDir, { recursive: true, force: true });
+        onProgress(1, 1, finishMsg(' – fertig.'));
+        return;
+      } catch (err) {
+        console.warn('[finish_cleanup] rmSync:', err && err.message ? err.message : err);
+      }
+    }
+
+    if (fastNoUpload && protNorm.length > 0) {
+      let topEntries;
+      try {
+        topEntries = fs.readdirSync(reiseDir, { withFileTypes: true });
+      } catch (_) {
+        topEntries = [];
+      }
+      for (const e of topEntries) {
+        if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
+        const full = path.join(reiseDir, e.name);
+        if (!canRmSyncTopLevelEntry(e.name, protNorm)) continue;
+        try {
+          fs.rmSync(full, { recursive: true, force: true });
+        } catch (err) {
+          console.warn('[finish_cleanup] rmSync', e.name, err && err.message ? err.message : err);
+        }
+      }
+    }
+
+    const files = [];
+    collectDeletableFilesUnder(reiseDir, isProtected, files);
+    const total = Math.max(files.length, 1);
+    onProgress(
+      0,
+      total,
+      finishMsg(files.length ? ' – 0 / ' + files.length + ' Dateien …' : ' (keine Dateien) …'),
+    );
+
+    for (let i = 0; i < files.length; i++) {
+      if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
+      try {
+        fs.unlinkSync(files[i].full);
+      } catch (_) {}
+      if (files.length <= 1 || i === files.length - 1 || (i + 1) % 8 === 0) {
+        onProgress(i + 1, total, finishMsg(' – ' + (i + 1) + ' / ' + files.length + ' Dateien …'));
+      }
+    }
+
+    for (let pass = 0; pass < 3; pass++) {
+      if (!pruneEmptyDirsUnder(reiseDir, isProtected)) break;
+    }
+
+    try {
+      if (fs.existsSync(reiseDir)) {
+        const rest = fs.readdirSync(reiseDir);
+        const visible = rest.filter((n) => !isIgnorableDirEntry(n));
+        if (visible.length === 0) {
+          for (const n of rest) {
+            try {
+              fs.unlinkSync(path.join(reiseDir, n));
+            } catch (_) {}
+          }
+          fs.rmdirSync(reiseDir);
+        }
+      }
+    } catch (_) {}
+
+    onProgress(total, total, finishMsg(' – fertig.'));
+  }
+
   async function performFinishAndCleanupWork(body, helpers) {
     const setProgress = helpers && helpers.setProgress;
     const signal = helpers && helpers.signal;
@@ -3221,9 +4004,17 @@ function createApp(db) {
     const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
     if (!reiseDir || !fs.existsSync(reiseDir)) throw new Error('Dienstreise-Ordner nicht gefunden.');
 
-    const changedBeforeFinish = collectChangedDienstreiseSyncFileEntries(db, reiseDir, localJobId);
+    const auftragsordner = resolveMonteurAuftragsordnerName(localJobId, technicianId);
+    const monteurWorkOnly = (rel) => isMonteurWorkRelPath(rel, auftragsordner);
+    const changedBeforeFinish = collectChangedDienstreiseSyncFileEntries(
+      db,
+      reiseDir,
+      localJobId,
+      FINISH_SYNC_FOLDERS,
+      monteurWorkOnly,
+    );
     const verifyPlan = [];
-    for (const folder of DIENSTREISE_SYNC_FOLDERS) {
+    for (const folder of FINISH_SYNC_FOLDERS) {
       const paths = changedBeforeFinish
         .filter((f) => f.relPathFromRoot === folder || f.relPathFromRoot.startsWith(folder + '/'))
         .map((f) => normProjectRelPath(f.relPathFromRoot))
@@ -3238,16 +4029,18 @@ function createApp(db) {
       step,
       totalSteps,
       changedCount
-        ? changedCount + ' geänderte Projektdatei(en) werden übertragen …'
-        : 'Keine geänderten Projektdateien – Upload übersprungen.',
+        ? changedCount + ' geänderte Monteur-Datei(en) werden übertragen …'
+        : 'Keine geänderten Monteur-Dokumente – Upload übersprungen.',
     );
 
       // Nur geänderte Dateien (mtime/Größe vs. letzter Pull/Push), nicht den gesamten Ordner.
       let effectiveDispoBase = dispoBaseUrl;
       if (technicianId && changedCount > 0) {
         try {
-          effectiveDispoBase = await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword, {
+          effectiveDispoBase =           await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword, {
             onlyChanged: true,
+            folders: FINISH_SYNC_FOLDERS,
+            relPathPredicate: monteurWorkOnly,
             externalUrl: body.dispoExternalUrl || body.externalUrl,
             internalUrl: body.dispoInternalUrl || body.internalUrl,
           });
@@ -3332,128 +4125,21 @@ function createApp(db) {
         step += 1;
       }
 
-      bumpProgress('finish_cleanup', step, totalSteps, 'Lokale Projektordner werden bereinigt …');
-      const protectedSet = new Set(protectedPaths.map((p) => p.replace(/\\/g, '/')));
-      function isProtected(rel) {
-        const norm = rel.replace(/\\/g, '/');
-        for (const p of protectedSet) {
-          if (!p) continue;
-          if (norm === p || norm.startsWith(p + '/')) return true;
-        }
-        return false;
-      }
+      bumpProgress(
+        'finish_cleanup',
+        step,
+        totalSteps,
+        FINISH_CLEANUP_HINT +
+          (changedCount === 0 ? ' …' : ' (nach Upload) …'),
+      );
 
-      /** Entfernt ignorierbare Dateien in einem Ordner, damit der Ordner danach leer ist und gelöscht werden kann. */
-      function removeIgnorableFilesInDir(dirPath) {
-        try {
-          const names = fs.readdirSync(dirPath);
-          for (const name of names) {
-            if (!isIgnorableDirEntry(name)) continue;
-            const full = path.join(dirPath, name);
-            try {
-              if (fs.statSync(full).isFile()) fs.unlinkSync(full);
-            } catch (err) { /* ignore */ }
-          }
-        } catch (err) { /* ignore */ }
-      }
-
-      /** Entfernt alle ignorierbaren Einträge (Dateien und Unterordner rekursiv), damit leere Ordner danach mit rmdir entfernt werden können. */
-      function removeAllIgnorableContents(dirPath) {
-        try {
-          const names = fs.readdirSync(dirPath);
-          for (const name of names) {
-            if (!isIgnorableDirEntry(name)) continue;
-            const full = path.join(dirPath, name);
-            try {
-              if (fs.statSync(full).isFile()) {
-                fs.unlinkSync(full);
-              } else {
-                removeAllIgnorableContents(full);
-                fs.rmdirSync(full);
-              }
-            } catch (err) { /* ignore */ }
-          }
-        } catch (err) { /* ignore */ }
-      }
-
-      /** Prüft, ob ein Ordner leer ist (keine Einträge außer evtl. ignorierbare). */
-      function isEmptyOrOnlyIgnorable(dirPath) {
-        try {
-          const names = fs.readdirSync(dirPath);
-          return names.filter((n) => !isIgnorableDirEntry(n)).length === 0;
-        } catch (e) {
-          return true;
-        }
-      }
-
-      function deleteRecursively(dir, relBase) {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const e of entries) {
-          const full = path.join(dir, e.name);
-          const rel = relBase ? relBase + '/' + e.name : e.name;
-          if (isProtected(rel)) continue;
-          if (e.isDirectory()) {
-            deleteRecursively(full, rel);
-            try {
-              removeAllIgnorableContents(full);
-              if (isEmptyOrOnlyIgnorable(full) && !isProtected(rel)) fs.rmdirSync(full);
-            } catch (err) { /* ignore */ }
-          } else if (e.isFile()) {
-            try { fs.unlinkSync(full); } catch (err) { /* ignore */ }
-          }
-        }
-      }
-
-      deleteRecursively(reiseDir, '');
-      // Nach dem ersten Durchlauf können ggf. noch leere Ordner übrig sein, deren Eltern zuvor geschützte Kinder hatten.
-      // Zweiter Durchlauf nur zum Entfernen leerer, ungeschützter Ordner.
-      function removeEmptyDirs(dir, relBase) {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const e of entries) {
-          const full = path.join(dir, e.name);
-          const rel = relBase ? relBase + '/' + e.name : e.name;
-          if (e.isDirectory()) {
-            removeEmptyDirs(full, rel);
-            try {
-              removeAllIgnorableContents(full);
-              if (isEmptyOrOnlyIgnorable(full) && !isProtected(rel)) fs.rmdirSync(full);
-            } catch (err) { /* ignore */ }
-          }
-        }
-      }
-      removeEmptyDirs(reiseDir, '');
-
-      // Weitere Durchläufe: leere Ordner von unten nach oben entfernen (bis nichts mehr wegfällt)
-      for (let pass = 0; pass < 5; pass++) {
-        let removed = false;
-        function removeEmptyDirsPass(dir, relBase) {
-          const entries = fs.readdirSync(dir, { withFileTypes: true });
-          for (const e of entries) {
-            const full = path.join(dir, e.name);
-            const rel = relBase ? relBase + '/' + e.name : e.name;
-            if (e.isDirectory()) {
-              removeEmptyDirsPass(full, rel);
-              try {
-                removeAllIgnorableContents(full);
-                if (isEmptyOrOnlyIgnorable(full) && !isProtected(rel)) {
-                  fs.rmdirSync(full);
-                  removed = true;
-                }
-              } catch (err) { /* ignore */ }
-            }
-          }
-        }
-        removeEmptyDirsPass(reiseDir, '');
-        if (!removed) break;
-      }
-
-      // Leeren Dienstreise-Ordner selbst entfernen (z. B. 1_2026-02-16_Kopierkunde_sss_AT)
-      try {
-        removeAllIgnorableContents(reiseDir);
-        if (fs.existsSync(reiseDir) && isEmptyOrOnlyIgnorable(reiseDir)) {
-          fs.rmdirSync(reiseDir);
-        }
-      } catch (err) { /* ignore */ }
+      cleanupDienstreiseReiseDir(reiseDir, protectedPaths, {
+        signal,
+        fastNoUpload: changedCount === 0,
+        onProgress(cur, tot, msg) {
+          bumpProgress('finish_cleanup', cur, tot, msg);
+        },
+      });
 
       step += 1;
       bumpProgress('finish_status', step, totalSteps, 'Auftrag wird als erledigt markiert …');
@@ -3472,9 +4158,7 @@ function createApp(db) {
           if (r.changes) {
             db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
               .run('job', localJobId, 'status', JSON.stringify({ status: 'erledigt' }));
-            save();
           } else {
-            // Fallback: zumindest lokal den Status setzen
             db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
           }
         } else {
@@ -3501,6 +4185,9 @@ function createApp(db) {
       }
       bgJobs.reapStuckJobs();
       bgJobs.cancelRunningOfType('sync_pull');
+      if (typeof bgJobs.cancelRunningDienstreiseForLocalJob === 'function') {
+        bgJobs.cancelRunningDienstreiseForLocalJob(localJobId);
+      }
       const dedupeKey = 'dienstreise_finish:' + localJobId;
       const { job_id } = bgJobs.enqueue(
         'dienstreise_finish',
@@ -3532,9 +4219,47 @@ function createApp(db) {
         },
         dedupeKey,
       );
+      bgJobs.kick();
       return res.status(202).json({ ok: true, job_id, async: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Abschluss konnte nicht gestartet werden.' });
+    }
+  });
+
+  app.post('/api/dienstreise/release_job', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id (lokal) erforderlich.' });
+      const technicianId = parseInt(
+        body.technicianId != null
+          ? body.technicianId
+          : body.technician_id != null
+            ? body.technician_id
+            : getTechnicianId(req),
+        10,
+      );
+      if (!Number.isFinite(technicianId) || technicianId <= 0) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      }
+      const gate = getWritableLocalJobMetaForPatch(db, technicianId, localJobId);
+      if (gate.error) return res.status(gate.status).json({ ok: false, error: gate.error });
+      await performReleaseDienstreiseJobWithDispo(gate.localId, technicianId, {
+        dispoBaseUrl: (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, ''),
+        externalUrl: body.dispoExternalUrl || body.externalUrl,
+        internalUrl: body.dispoInternalUrl || body.internalUrl,
+        dispoUsername: (body.dispoUsername || body.dispo_username || '').trim(),
+        dispoPassword:
+          body.dispoPassword != null
+            ? String(body.dispoPassword)
+            : body.dispo_password != null
+              ? String(body.dispo_password)
+              : '',
+      });
+      return res.json({ ok: true, status: 'zugeteilt' });
+    } catch (e) {
+      const status = e && e.httpStatus ? e.httpStatus : 500;
+      res.status(status).json({ ok: false, error: e.message || 'Freigabe fehlgeschlagen.' });
     }
   });
 
@@ -5867,24 +6592,31 @@ ORDER BY
         });
       }
 
+      const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
       const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
+      const offlineCfgMb = getOfflinePullConfig(db, localJobId);
+      const montageFolderNameMb =
+        offlineCfgMb.montage_folder_name ||
+        buildMonteurMontageFolderName(lookupDienstreiseJobRow(localJobId) || {}, getTechnicianDisplayName(technicianId));
       const docxFilename = ordnerName + '_Montage.docx';
 
-      // Pro FN nur einen Zielordner: vorhandenen Sammelordner (z. B. "11952 - 11958") nutzen, sonst Einzel-FN-Ordner. Bericht nur einmal pro eindeutigem Ordner speichern.
       const targetFolderNames = new Set();
       for (const fab of fabs) {
-        const fnNum = parseInt(String(fab).trim(), 10);
-        const existingFolder = Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null;
-        const folderName = existingFolder != null ? existingFolder : sanitizeDienstreiseFolderPart(fab);
+        let folderName = null;
+        const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(fab));
+        if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
+        if (!folderName) {
+          const fnNum = parseInt(String(fab).trim(), 10);
+          folderName =
+            (Number.isFinite(fnNum) ? findMonteurFolderForFab(docMonteurBase, fnNum) : null) ||
+            (Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null) ||
+            sanitizeDienstreiseFolderPart(fab);
+        }
         targetFolderNames.add(folderName);
       }
       for (const folderName of targetFolderNames) {
-        const montageDir = path.join(docAnlageBase, folderName, 'Montage');
-        if (!fs.existsSync(montageDir)) {
-          const docFabDir = path.join(docAnlageBase, folderName);
-          if (!fs.existsSync(docFabDir)) fs.mkdirSync(docFabDir, { recursive: true });
-          fs.mkdirSync(montageDir, { recursive: true });
-        }
+        const montageDir = buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderNameMb);
+        if (!fs.existsSync(montageDir)) fs.mkdirSync(montageDir, { recursive: true });
         writeFileWithRetry(path.join(montageDir, pdfFilename), pdfBytes);
         if (docxBytes) {
           writeFileWithRetry(path.join(montageDir, docxFilename), docxBytes);
@@ -5895,8 +6627,26 @@ ORDER BY
         ok: true,
         jsonOnly: false,
         warning: syncWarning || undefined,
-        saved: fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', pdfFilename)),
-        savedDocx: docxBytes ? fabs.map((f) => path.join('Dokumente_Anlage', sanitizeDienstreiseFolderPart(f), 'Montage', docxFilename)) : null,
+        saved: fabs.map((f) => {
+          const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(f));
+          const fnFolder =
+            (fromMap && fromMap.folder_name_canonical) ||
+            findMonteurFolderForFab(docMonteurBase, f) ||
+            findParameterlistenFolder(docAnlageBase, f) ||
+            sanitizeDienstreiseFolderPart(f);
+          return buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, pdfFilename);
+        }),
+        savedDocx: docxBytes
+          ? fabs.map((f) => {
+            const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(f));
+            const fnFolder =
+              (fromMap && fromMap.folder_name_canonical) ||
+              findMonteurFolderForFab(docMonteurBase, f) ||
+              findParameterlistenFolder(docAnlageBase, f) ||
+              sanitizeDienstreiseFolderPart(f);
+            return buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, docxFilename);
+          })
+          : null,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Montagebericht konnte nicht erstellt werden.' });
@@ -6070,7 +6820,15 @@ ORDER BY
       }
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const docMonteurPath = path.join(reiseDir, 'Dokumente_Monteur');
       const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
+      const offlineCfgPl = getOfflinePullConfig(db, localJobId);
+      const montageFolderNamePl =
+        offlineCfgPl.montage_folder_name ||
+        buildMonteurMontageFolderName(
+          db.prepare('SELECT j.start_datetime, c.name AS customer_name, ja.city, ja.country FROM jobs j LEFT JOIN customers c ON c.id = j.customer_id LEFT JOIN job_addresses ja ON ja.job_id = j.id WHERE j.id = ?').get(localJobId) || {},
+          getTechnicianDisplayName(technicianId),
+        );
       let csvBuffer;
       try {
         csvBuffer = Buffer.from(contentBase64, 'base64');
@@ -6088,7 +6846,11 @@ ORDER BY
       }
 
       const fnAllowedOnJob = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern).has(fn);
-      let folderName = findParameterlistenFolder(docAnlagePath, fn);
+      let folderName = null;
+      const fromMap = (offlineCfgPl.fab_map || []).find((e) => String(e.fab) === String(fn));
+      if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
+      if (!folderName) folderName = findMonteurFolderForFab(docMonteurPath, fn);
+      if (!folderName) folderName = findParameterlistenFolder(docAnlagePath, fn);
       if (!folderName && fnAllowedOnJob) {
         folderName = String(fn);
       }
@@ -6100,7 +6862,7 @@ ORDER BY
         });
       }
 
-      const paramDir = path.join(docAnlagePath, folderName, 'Montage', 'Parameter');
+      const paramDir = buildMonteurWorkAbsDir(docMonteurPath, folderName, montageFolderNamePl, 'Parameter');
       try {
         if (!fs.existsSync(paramDir)) fs.mkdirSync(paramDir, { recursive: true });
       } catch (e) {
@@ -6130,8 +6892,8 @@ ORDER BY
       const pdfPath = path.join(paramDir, pdfBasename);
       writeFileWithRetry(pdfPath, pdfBytes);
 
-      const savedCsv = path.join('Dokumente_Anlage', folderName, 'Montage', 'Parameter', filename);
-      const savedPdf = path.join('Dokumente_Anlage', folderName, 'Montage', 'Parameter', pdfBasename);
+      const savedCsv = buildMonteurWorkRelPath(folderName, montageFolderNamePl, path.join('Parameter', filename));
+      const savedPdf = buildMonteurWorkRelPath(folderName, montageFolderNamePl, path.join('Parameter', pdfBasename));
       const technicianName = getTechnicianDisplayName(technicianId);
       let serverFileId = null;
       let dispoIngestError = null;
@@ -6518,6 +7280,12 @@ ORDER BY
     }
     const dateFrom = req.query.date_from || null;
     const dateTo = req.query.date_to || null;
+    try {
+      const orphanResult = reconcileLocalAbsenceOrphans(db, technicianId, new Set());
+      if (orphanResult.absences > 0 || orphanResult.requests > 0) save();
+    } catch (orphanErr) {
+      console.warn('[my_absences] orphan reconcile:', orphanErr && orphanErr.message ? orphanErr.message : orphanErr);
+    }
     let sql = 'SELECT id, server_id, technician_id, start_datetime, end_datetime, type, comment FROM absences WHERE technician_id = ?';
     const params = [technicianId];
     if (dateFrom) { sql += ' AND end_datetime >= ?'; params.push(dateFrom + ' 00:00:00'); }
@@ -6896,6 +7664,41 @@ ORDER BY
         const serverJobId = jobRowFull.server_id != null ? jobRowFull.server_id : jobRowFull.id;
         const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
         if (!targetDir || !fs.existsSync(targetDir)) throw new Error('Zielordner konnte nicht erstellt werden.');
+        const offlineCfg = getOfflinePullConfig(db, localJobId);
+        const pullMode = p.offline_pull_mode || offlineCfg.pull_mode || 'legacy';
+        const pathsByFab = getOfflinePullPathsByFab(db, localJobId);
+        let montageFolderName =
+          offlineCfg.montage_folder_name ||
+          buildMonteurMontageFolderName(jobRowFull, getTechnicianDisplayName(technicianId));
+        let fabMap = offlineCfg.fab_map || [];
+        if (!fabMap.length) {
+          fabMap = [];
+          for (const fn of fabNumbersFromJobFabrikationsnummern(jobRowFull.fabrikationsnummern)) {
+            fabMap.push({ fab: String(fn), folder_name_canonical: String(fn) });
+          }
+        }
+        fabMap = await resolveFabMapCanonicalFolderNames(
+          dispoBaseUrl,
+          serverJobId,
+          technicianId,
+          authHeader,
+          fabMap,
+          [...fabNumbersFromJobFabrikationsnummern(jobRowFull.fabrikationsnummern)],
+          signal,
+        );
+        if (fabMap.length) {
+          await dbLock.runWithDbLock(async () => {
+            updateOfflinePullFabMap(db, localJobId, fabMap);
+            save();
+          });
+        }
+        if (montageFolderName && fabMap.length) {
+          ensureAnlageFnDirs(targetDir, fabMap);
+          migrateBareFabAnlageDirs(targetDir, fabMap);
+          removeLegacyMonteurAuftragsordnerTopLevel(targetDir, montageFolderName, fabMap);
+          removeStaleBareFabMonteurDirs(targetDir, fabMap);
+          ensureMonteurMontageDirs(targetDir, fabMap, montageFolderName);
+        }
         let fp = fingerprintDispoBase(dispoBaseUrl);
         let chk = readCheckpoint();
         if (chk.dispo_base_fingerprint && chk.dispo_base_fingerprint !== fp) {
@@ -7041,11 +7844,12 @@ ORDER BY
 
         let files = null;
         if (!periodicDelta && Array.isArray(chk.files) && chk.files.length) {
-          files = chk.files;
+          files = filterManifestForPull(chk.files, pullMode, pathsByFab, fabMap);
         } else {
           files = [];
           await collectManifest('', files);
-          mergeCheckpoint({ files });
+          files = filterManifestForPull(files, pullMode, pathsByFab, fabMap);
+          mergeCheckpoint({ files, completed: [] });
         }
 
         const FS_MTIME_TOLERANCE_MS = 2000;
@@ -7055,7 +7859,11 @@ ORDER BY
          * Download nur wenn Dispo-Datei fehlt lokal, neuer ist (mtime) oder Größe abweicht.
          */
         function shouldSkip(relPath, expectedSize, expectedMtimeMs, completedArr) {
-          const lp = path.join(targetDir, relPath.replace(/\//g, path.sep));
+          const localRel =
+            String(relPath || '').startsWith('Dokumente_Monteur/')
+              ? mapServerManifestPathToLocalAnlageRel(relPath)
+              : relPath;
+          const lp = path.join(targetDir, localRel.replace(/\//g, path.sep));
           if (!fs.existsSync(lp)) return false;
           let localSize = null;
           let localMtimeMs = null;
@@ -7162,12 +7970,16 @@ ORDER BY
           const expectedSize = files[i].size;
           const expectedMtimeMs = files[i].mtime_ms;
           if (shouldSkip(relPath, expectedSize, expectedMtimeMs, completed)) {
-            const relNormSkip = normProjectRelPath(relPath);
+            const localRelSkip =
+              String(relPath || '').startsWith('Dokumente_Monteur/')
+                ? mapServerManifestPathToLocalAnlageRel(relPath)
+                : relPath;
+            const relNormSkip = normProjectRelPath(localRelSkip);
             if (
               relNormSkip &&
               DIENSTREISE_SYNC_FOLDERS.some((fd) => relNormSkip === fd || relNormSkip.startsWith(fd + '/'))
             ) {
-              const lpSkip = path.join(targetDir, relPath.replace(/\//g, path.sep));
+              const lpSkip = path.join(targetDir, localRelSkip.replace(/\//g, path.sep));
               if (fs.existsSync(lpSkip)) recordDienstreisePushCache(db, localJobId, relNormSkip, lpSkip);
             }
             setProgress('file', i + 1, total, relPath);
@@ -7205,7 +8017,11 @@ ORDER BY
               if (e.message && e.message.startsWith('Download fehlgeschlagen')) throw e;
             }
           }
-          const localPath = path.join(targetDir, relPath.replace(/\//g, path.sep));
+          const localRelPath =
+            String(relPath || '').startsWith('Dokumente_Monteur/')
+              ? mapServerManifestPathToLocalAnlageRel(relPath)
+              : relPath;
+          const localPath = path.join(targetDir, localRelPath.replace(/\//g, path.sep));
           const dir = path.dirname(localPath);
           if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
           const partPath = localPath + '.part';
@@ -7215,7 +8031,7 @@ ORDER BY
           } catch (_) {}
           fs.renameSync(partPath, localPath);
           applyLocalFileMtimeFromDispo(localPath, fileMtimeMs);
-          const relNormPull = normProjectRelPath(relPath);
+          const relNormPull = normProjectRelPath(localRelPath);
           if (
             relNormPull &&
             DIENSTREISE_SYNC_FOLDERS.some((fd) => relNormPull === fd || relNormPull.startsWith(fd + '/'))
@@ -7283,8 +8099,8 @@ ORDER BY
         const p = job.payload || {};
         const localJobId = parseInt(p.job_id, 10);
         if (!localJobId) throw new Error('dienstreise_finish: job_id fehlt.');
+        await performFinishAndCleanupWork(p, { setProgress, signal });
         await dbLock.runWithDbLock(async () => {
-          await performFinishAndCleanupWork(p, { setProgress, signal });
           save();
         });
         setProgress('done', 1, 1, 'Auftrag abgeschlossen.');
@@ -7367,6 +8183,17 @@ ORDER BY
           });
         } catch (calErr) {
           console.warn('[sync_pull] kalender:', calErr && calErr.message ? calErr.message : calErr);
+          try {
+            await dbLock.runWithDbLock(async () => {
+              const pruned = reconcileCalendarCacheAbsencesForTechnician(db, technicianId);
+              if (pruned > 0) {
+                console.log('[sync_pull] kalender-cache bereinigt (Monteur ' + technicianId + '): ' + pruned + ' veraltete Abwesenheit(en)');
+                save();
+              }
+            });
+          } catch (reconcileErr) {
+            console.warn('[sync_pull] kalender-cache reconcile:', reconcileErr && reconcileErr.message ? reconcileErr.message : reconcileErr);
+          }
         }
         setProgress('sync_pull', 3, 8, 'TED-Index …');
         try {
@@ -8676,6 +9503,11 @@ ORDER BY
       return res.status(400).json({ ok: false, error: 'start und end erforderlich.' });
     }
     try {
+      const technicianId = getTechnicianId(req);
+      if (technicianId) {
+        const pruned = reconcileCalendarCacheAbsencesForTechnician(db, technicianId);
+        if (pruned > 0) save();
+      }
       const technicians = db.prepare('SELECT technician_id AS id, name, color FROM calendar_cache_technicians ORDER BY technician_id').all();
       const jobs = db.prepare(`
         SELECT
@@ -8685,13 +9517,14 @@ ORDER BY
         FROM calendar_cache_jobs
         WHERE end_datetime >= ? AND start_datetime <= ?
       `).all(start + ' 00:00:00', end + ' 23:59:59');
-      const absences = db.prepare(`
+      const absencesRaw = db.prepare(`
         SELECT
           server_absence_id AS id, technician_id, type, comment, start_datetime, end_datetime,
           technician_name, technician_color
         FROM calendar_cache_absences
         WHERE end_datetime >= ? AND start_datetime <= ?
       `).all(start + ' 00:00:00', end + ' 23:59:59');
+      const absences = absencesRaw.filter((a) => !isAbsenceExpiredByEnd(a.end_datetime));
       return res.json({ ok: true, technicians, jobs, absences });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
@@ -9191,6 +10024,27 @@ async function syncTedIndexForTechnicianJobs(db, base, technicianId, authHeader,
   }
 }
 
+function resolveTedFnFolderForPull(db, localJobId, ent) {
+  const cfg = getOfflinePullConfig(db, localJobId);
+  const fromMap = (cfg.fab_map || []).find((e) => String(e.fab) === String(ent.fab));
+  if (fromMap && fromMap.folder_name_canonical) return fromMap.folder_name_canonical;
+  const digits = String(ent.fab || '').replace(/\D/g, '');
+  return digits || String(ent.fab || '').trim() || 'unknown';
+}
+
+function resolveTedLocalAbsPath(targetDir, db, localJobId, ent, usedLocalNames) {
+  const rel = String(ent.rel_path || '').trim().replace(/\\/g, '/');
+  if (!rel || rel.includes('..')) {
+    return path.join(targetDir, 'TED', safeTedLocalFileName(ent, usedLocalNames));
+  }
+  const fnFolder = resolveTedFnFolderForPull(db, localJobId, ent);
+  const relAnlage = buildTedAnlageRelPath(fnFolder, rel);
+  if (relAnlage) {
+    return path.join(targetDir, ...relAnlage.split('/'));
+  }
+  return path.join(targetDir, 'TED', safeTedLocalFileName(ent, usedLocalNames));
+}
+
 async function pullTedExcelIntoReiseDir(opts) {
   const {
     db,
@@ -9215,11 +10069,14 @@ async function pullTedExcelIntoReiseDir(opts) {
     return fn();
   }
 
-  const tedDir = path.join(targetDir, 'TED');
-  if (!fs.existsSync(tedDir)) fs.mkdirSync(tedDir, { recursive: true });
   let jobFabKeys = [];
   await withDbLock(async () => {
     jobFabKeys = jobFabKeysFromLocalJob(db, localJobId);
+    const cfg = getOfflinePullConfig(db, localJobId);
+    const fabEntries = (cfg.fab_map || []).length
+      ? cfg.fab_map
+      : jobFabKeys.map((fab) => ({ fab: String(fab), folder_name_canonical: String(fab) }));
+    if (fabEntries.length) ensureAnlageFnDirs(targetDir, fabEntries);
   });
   let entries = [];
   let listSource = 'list';
@@ -9256,8 +10113,7 @@ async function pullTedExcelIntoReiseDir(opts) {
     const entryKey = tedEntryKey(ent);
     const rel = String(ent.rel_path || '').trim().replace(/\\/g, '/');
     if (!rel || rel.includes('..')) continue;
-    const safeName = safeTedLocalFileName(ent, usedLocalNames);
-    const localPath = path.join(tedDir, safeName);
+    const localPath = resolveTedLocalAbsPath(targetDir, db, localJobId, ent, usedLocalNames);
     const alreadyDone = !forcePull && tedCompletedIncludes(completed, entryKey, ent);
     if (alreadyDone) {
       try {
@@ -9294,8 +10150,10 @@ async function pullTedExcelIntoReiseDir(opts) {
         signal,
         ent.fab,
       );
-      const finalPath = path.join(tedDir, safeName);
+      const finalPath = resolveTedLocalAbsPath(targetDir, db, localJobId, ent, usedLocalNames);
       const partPath = finalPath + '.part';
+      const finalDir = path.dirname(finalPath);
+      if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
       fs.writeFileSync(partPath, dl.buf);
       try {
         if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
@@ -9307,7 +10165,7 @@ async function pullTedExcelIntoReiseDir(opts) {
       console.log(
         '[pullTedExcel] OK',
         'fn=' + String(ent.fab || ''),
-        'file=' + safeName,
+        'file=' + path.basename(finalPath),
         'rel=' + rel,
         'bytes=' + dl.buf.length,
       );
@@ -9318,7 +10176,7 @@ async function pullTedExcelIntoReiseDir(opts) {
         'fn=' + String(ent.fab || ''),
         rel,
         '→',
-        safeName,
+        path.basename(localPath),
         dlErr && dlErr.message ? dlErr.message : dlErr,
       );
     }
@@ -9327,11 +10185,10 @@ async function pullTedExcelIntoReiseDir(opts) {
     console.warn('[pullTedExcel] ' + tedErrors + ' von ' + total + ' TED-Dateien fehlgeschlagen (job ' + serverJobId + ').');
   }
   let present = 0;
-  const countUsed = new Set();
   for (const ent of entries) {
     const rel = String(ent.rel_path || '').trim().replace(/\\/g, '/');
     if (!rel || rel.includes('..')) continue;
-    const p = path.join(tedDir, safeTedLocalFileName(ent, countUsed));
+    const p = resolveTedLocalAbsPath(targetDir, db, localJobId, ent, new Set());
     try {
       if (fs.existsSync(p) && fs.statSync(p).size > 0) present++;
     } catch (_) {}
@@ -9352,6 +10209,28 @@ function fabCacheLookupKeys(fab) {
 
 function readAnlagenstammTreeCache(db, fab) {
   return readAnlagenstammTreeCacheRow(db, fab);
+}
+
+function readAnlagenstammRootFolderName(db, fab) {
+  const cached = readAnlagenstammTreeCache(db, fab);
+  const fromTree = cached && cached.root_folder_name ? String(cached.root_folder_name).trim() : '';
+  if (fromTree && !isBareFabFolderName(fromTree)) return fromTree;
+  try {
+    const row = db
+      .prepare('SELECT pn_root_name FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1')
+      .get(String(fab || '').trim());
+    const pn = row && row.pn_root_name ? String(row.pn_root_name).trim() : '';
+    if (pn && !isBareFabFolderName(pn)) return pn;
+  } catch (_) {}
+  return null;
+}
+
+function fabMapJsonEqual(a, b) {
+  try {
+    return JSON.stringify(a || []) === JSON.stringify(b || []);
+  } catch (_) {
+    return false;
+  }
 }
 
 function upsertAnlagenstammTreeCache(db, fab, pnRaw, meta) {
@@ -9567,6 +10446,169 @@ function removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerId
   }
 }
 
+function absencePeriodDedupeKeyGlobal(technicianId, start, end) {
+  function normDt(v) {
+    if (v == null) return '';
+    let s = String(v).replace('T', ' ').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s + ' 00:00:00';
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s)) return s + ':00';
+    return s;
+  }
+  return String(technicianId || '') + '\t' + normDt(start) + '\t' + normDt(end);
+}
+
+function isAbsenceExpiredByEnd(endDatetime) {
+  const endYmd = String(endDatetime || '').replace('T', ' ').trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(endYmd)) return false;
+  const today = new Date();
+  const todayYmd =
+    today.getFullYear() +
+    '-' +
+    String(today.getMonth() + 1).padStart(2, '0') +
+    '-' +
+    String(today.getDate()).padStart(2, '0');
+  return endYmd < todayYmd;
+}
+
+/**
+ * Kalender-Cache kann veraltete Abwesenheiten enthalten (z. B. wenn calendar.php-Sync fehlschlug,
+ * während my_absences-Pull bereits gelöscht hat). Für den eingeloggten Monteur Cache an lokale DB angleichen.
+ */
+function reconcileCalendarCacheAbsencesForTechnician(db, technicianId) {
+  const tid = Number(technicianId);
+  if (!Number.isFinite(tid) || tid <= 0) return 0;
+  const localAbs = db
+    .prepare('SELECT server_id, start_datetime, end_datetime FROM absences WHERE technician_id = ?')
+    .all(tid);
+  const localReq = db
+    .prepare(
+      "SELECT server_id, start_datetime, end_datetime FROM absence_requests WHERE technician_id = ? AND status IN ('approved', 'pending')",
+    )
+    .all(tid);
+  const allowedServerIds = new Set();
+  const allowedPeriodKeys = new Set();
+  const remember = (r) => {
+    if (r.server_id != null && r.server_id !== '') {
+      allowedServerIds.add(Number(r.server_id));
+      allowedServerIds.add(String(r.server_id));
+    }
+    allowedPeriodKeys.add(absencePeriodDedupeKeyGlobal(tid, r.start_datetime, r.end_datetime));
+  };
+  localAbs.forEach(remember);
+  localReq.forEach(remember);
+  const cacheRows = db
+    .prepare(
+      'SELECT cache_key, server_absence_id, start_datetime, end_datetime FROM calendar_cache_absences WHERE technician_id = ?',
+    )
+    .all(tid);
+  let deleted = 0;
+  for (const c of cacheRows) {
+    const sid = c.server_absence_id;
+    const periodKey = absencePeriodDedupeKeyGlobal(tid, c.start_datetime, c.end_datetime);
+    if (sid != null && sid !== '' && (allowedServerIds.has(Number(sid)) || allowedServerIds.has(String(sid)))) {
+      continue;
+    }
+    if (allowedPeriodKeys.has(periodKey)) continue;
+    db.prepare('DELETE FROM calendar_cache_absences WHERE cache_key = ?').run(c.cache_key);
+    deleted++;
+  }
+  return deleted;
+}
+
+/**
+ * Verwaiste lokale Abwesenheits-Daten entfernen (Geister im Kalender ohne Server-/Listen-Entsprechung).
+ * @param {Set<number|string>} receivedAbsenceServerIds IDs aus dem letzten my_absences-Pull
+ */
+function reconcileLocalAbsenceOrphans(db, technicianId, receivedAbsenceServerIds) {
+  const tid = Number(technicianId);
+  if (!Number.isFinite(tid) || tid <= 0) return { absences: 0, requests: 0 };
+  const received = receivedAbsenceServerIds || new Set();
+  let absencesDeleted = 0;
+  let requestsDeleted = 0;
+
+  const localAbsRows = db.prepare('SELECT id, server_id FROM absences WHERE technician_id = ?').all(tid);
+  for (const row of localAbsRows) {
+    const sid = row.server_id;
+    if (sid != null && sid !== '') continue;
+    const pending = db
+      .prepare(
+        `SELECT 1 FROM pending_changes WHERE entity_type = 'absence' AND entity_id = ? AND action IN ('create', 'update', 'delete') LIMIT 1`,
+      )
+      .get(row.id);
+    if (pending) continue;
+    db.prepare('DELETE FROM absences WHERE id = ?').run(row.id);
+    absencesDeleted++;
+  }
+
+  const periodKeys = new Set();
+  db.prepare('SELECT server_id, start_datetime, end_datetime FROM absences WHERE technician_id = ?').all(tid).forEach((r) => {
+    periodKeys.add(absencePeriodDedupeKeyGlobal(tid, r.start_datetime, r.end_datetime));
+    if (r.server_id != null && r.server_id !== '') {
+      periodKeys.add('sid:' + String(r.server_id));
+    }
+  });
+
+  const reqs = db
+    .prepare(
+      `SELECT id, server_id, start_datetime, end_datetime, status FROM absence_requests WHERE technician_id = ? AND status IN ('approved', 'pending')`,
+    )
+    .all(tid);
+
+  for (const r of reqs) {
+    const periodKey = absencePeriodDedupeKeyGlobal(tid, r.start_datetime, r.end_datetime);
+    if (periodKeys.has(periodKey)) {
+      if (r.status === 'approved') {
+        db.prepare('DELETE FROM absence_requests WHERE id = ?').run(r.id);
+        requestsDeleted++;
+      }
+      continue;
+    }
+    const reqSid = r.server_id;
+    if (reqSid != null && reqSid !== '' && (received.has(Number(reqSid)) || received.has(String(reqSid)))) {
+      continue;
+    }
+    if (r.status === 'approved') {
+      db.prepare('DELETE FROM absence_requests WHERE id = ?').run(r.id);
+      requestsDeleted++;
+      continue;
+    }
+    if (r.status === 'pending' && reqSid != null && reqSid !== '' && received.size > 0) {
+      db.prepare('DELETE FROM absence_requests WHERE id = ?').run(r.id);
+      requestsDeleted++;
+    }
+  }
+
+  return { absences: absencesDeleted, requests: requestsDeleted };
+}
+
+/**
+ * Entfernt lokale Anfragen, die der Server in absence_request_status nicht mehr kennt.
+ */
+function reconcileAbsenceRequestsWithServerStatus(db, technicianId, serverRequestRows) {
+  const tid = Number(technicianId);
+  if (!Number.isFinite(tid) || tid <= 0 || !Array.isArray(serverRequestRows)) return 0;
+  const serverIds = new Set();
+  for (const req of serverRequestRows) {
+    if (req && req.id != null) {
+      serverIds.add(Number(req.id));
+      serverIds.add(String(req.id));
+    }
+  }
+  let deleted = 0;
+  const localRows = db
+    .prepare(
+      `SELECT id, server_id FROM absence_requests WHERE technician_id = ? AND server_id IS NOT NULL AND server_id != ''`,
+    )
+    .all(tid);
+  for (const row of localRows) {
+    const sid = row.server_id;
+    if (serverIds.has(Number(sid)) || serverIds.has(String(sid))) continue;
+    db.prepare('DELETE FROM absence_requests WHERE id = ?').run(row.id);
+    deleted++;
+  }
+  return deleted;
+}
+
 async function fetchMyJobsForPull(base, technicianId, authHeader, dateFrom, dateTo) {
   const q = new URLSearchParams({ technician_id: String(technicianId) });
   if (dateFrom) q.set('date_from', String(dateFrom));
@@ -9646,6 +10688,18 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
     }
     for (const a of absences) {
       insertOrUpdateAbsence(db, a, technicianId);
+    }
+    reconcileCalendarCacheAbsencesForTechnician(db, technicianId);
+    const orphanResult = reconcileLocalAbsenceOrphans(db, technicianId, receivedAbsenceServerIds);
+    if (orphanResult.absences > 0 || orphanResult.requests > 0) {
+      console.log(
+        '[sync_pull] verwaiste Abwesenheiten bereinigt (Monteur ' +
+          technicianId +
+          '): absences=' +
+          orphanResult.absences +
+          ', requests=' +
+          orphanResult.requests,
+      );
     }
   });
 
@@ -10322,6 +11376,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
     const statusRes = await fetch(`${base}/api/absence_request_status.php?technician_id=${technicianId}`, { headers: authHeader || {} });
     const statusData = await statusRes.json().catch(() => ({}));
     if (statusData.ok && Array.isArray(statusData.requests)) {
+      reconcileAbsenceRequestsWithServerStatus(db, technicianId, statusData.requests);
       for (const req of statusData.requests) {
         if (req.id != null && req.status && req.status !== 'pending') {
           db.prepare('UPDATE absence_requests SET status = ?, synced_at = datetime(\'now\') WHERE server_id = ? AND technician_id = ?').run(req.status, req.id, technicianId);

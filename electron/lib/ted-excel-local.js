@@ -215,6 +215,18 @@ function resolveTedExcelLocal(opts) {
     try {
       if (fs.existsSync(reiseDir) && fs.statSync(reiseDir).isDirectory()) {
         roots.unshift(reiseDir);
+        const rel = String(relPath || '').trim().replace(/\\/g, '/');
+        const fabStr = String(opts.fab || '').trim();
+        const fnDigits = fabStr.replace(/\D/g, '') || fabStr;
+        if (fnDigits && rel && !rel.includes('..')) {
+          const anlageHit = path.join(reiseDir, 'Dokumente_Anlage', fnDigits, ...rel.split('/').filter(Boolean));
+          if (fs.existsSync(anlageHit) && isExcelFilePath(anlageHit)) return anlageHit;
+          const anlageBase = path.join(reiseDir, 'Dokumente_Anlage', fnDigits);
+          if (fs.existsSync(anlageBase)) {
+            const byNameAnlage = findExcelByBasename(anlageBase, path.basename(rel), { maxDepth: 12 });
+            if (byNameAnlage) return byNameAnlage;
+          }
+        }
         const ent = {
           rel_path: relPath,
           file_name: opts.fileName,

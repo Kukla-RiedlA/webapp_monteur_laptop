@@ -44,6 +44,29 @@ const JOB_TIMEOUT_MS = {
   anlagenstamm_db_sync: 25 * 60 * 1000,
 };
 
+/** Gleichzeitig laufende Worker (z. B. Finish Job A während Pull Job B). */
+const MAX_CONCURRENT_JOBS = 4;
+
+/** Nur ein Lauf pro Typ (DB-/Sync-Exklusivität). */
+const EXCLUSIVE_SINGLE_TYPES = new Set(['sync_pull', 'sync_push', 'abrechnung_refresh', 'anlagenstamm_db_sync']);
+
+const DIENSTREISE_JOB_TYPES = new Set(['dienstreise_pull', 'dienstreise_push', 'dienstreise_finish']);
+
+function localJobIdFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const raw = payload.job_id ?? payload.jobId ?? payload.local_job_id ?? payload.localJobId;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function jobsWouldConflict(typeA, payloadA, typeB, payloadB) {
+  if (typeA === typeB && EXCLUSIVE_SINGLE_TYPES.has(typeA)) return true;
+  const idA = DIENSTREISE_JOB_TYPES.has(typeA) ? localJobIdFromPayload(payloadA) : null;
+  const idB = DIENSTREISE_JOB_TYPES.has(typeB) ? localJobIdFromPayload(payloadB) : null;
+  if (idA != null && idB != null && idA === idB) return true;
+  return false;
+}
+
 function execSchemaSql(db, sql) {
   if (db && typeof db.exec === 'function') {
     db.exec(sql);
@@ -98,9 +121,24 @@ function newJobId() {
  */
 function createBackgroundJobService(db, save, hooks) {
   const { executeJob } = hooks;
-  let runnerBusy = false;
+  let activeRunnerCount = 0;
+  /** @type {Map<string, { type: string, payload: object }>} */
+  const runningWorkers = new Map();
   /** @type {Map<string, AbortController>} */
   const abortControllers = new Map();
+
+  function conflictsWithRunning(type, payload) {
+    for (const running of runningWorkers.values()) {
+      if (jobsWouldConflict(type, payload, running.type, running.payload)) return true;
+    }
+    return false;
+  }
+
+  function schedulePump() {
+    setImmediate(() => {
+      pump().catch(() => {});
+    });
+  }
 
   function parseRow(row) {
     if (!row) return null;
@@ -165,7 +203,6 @@ function createBackgroundJobService(db, save, hooks) {
 
   /** status=running, aber kein aktiver Worker (z. B. nach Absturz ohne Neustart-Reap). */
   function reapOrphanRunningJobs(now) {
-    if (runnerBusy) return 0;
     const runningRows = db.prepare(`SELECT id FROM background_jobs WHERE status = 'running'`).all();
     let n = 0;
     for (const r of runningRows) {
@@ -274,12 +311,7 @@ function createBackgroundJobService(db, save, hooks) {
     return row && row.n != null ? Number(row.n) : 0;
   }
 
-  async function pump() {
-    if (runnerBusy) return;
-    reapStuckJobs();
-    const raw = db
-      .prepare(
-        `SELECT * FROM background_jobs WHERE status = 'queued'
+  const QUEUED_ORDER_SQL = `SELECT * FROM background_jobs WHERE status = 'queued'
          ORDER BY
            CASE type
              WHEN 'dienstreise_pull' THEN 10
@@ -291,13 +323,17 @@ function createBackgroundJobService(db, save, hooks) {
              WHEN 'anlagenstamm_db_sync' THEN 60
              ELSE 99
            END ASC,
-           datetime(created_at) ASC
-         LIMIT 1`,
-      )
-      .get();
-    if (!raw) return;
-    runnerBusy = true;
-    const job = parseRow(raw);
+           datetime(created_at) ASC`;
+
+  function startJobIfQueued(job) {
+    if (activeRunnerCount >= MAX_CONCURRENT_JOBS) return false;
+    const row = db.prepare('SELECT status FROM background_jobs WHERE id = ?').get(job.id);
+    if (!row || row.status !== 'queued') return false;
+    if (conflictsWithRunning(job.type, job.payload)) return false;
+
+    activeRunnerCount++;
+    runningWorkers.set(job.id, { type: job.type, payload: job.payload });
+
     const ac = new AbortController();
     abortControllers.set(job.id, ac);
     bump(job.id, {
@@ -306,6 +342,7 @@ function createBackgroundJobService(db, save, hooks) {
       message: null,
       error: null,
     });
+
     const jobTimeoutMs = JOB_TIMEOUT_MS[job.type] || 30 * 60 * 1000;
     let jobTimeoutId = null;
     const jobTimedOut = new Promise((_, reject) => {
@@ -322,74 +359,94 @@ function createBackgroundJobService(db, save, hooks) {
         );
       }, jobTimeoutMs);
     });
-    try {
-      await Promise.race([
-        executeJob(job, {
-        signal: ac.signal,
-        setProgress: (phase, cur, total, msg) =>
-          bump(job.id, {
-            progress_phase: phase || null,
-            progress_current: cur != null ? cur : 0,
-            progress_total: total != null ? total : 0,
-            message: msg != null ? msg : null,
-          }),
-        mergeCheckpoint: (partial) => {
-          const row = db.prepare('SELECT checkpoint_json FROM background_jobs WHERE id = ?').get(job.id);
-          let cur = {};
-          try {
-            cur = row && row.checkpoint_json ? JSON.parse(row.checkpoint_json) : {};
-          } catch (_) {}
-          const merged = Object.assign({}, cur, partial);
-          job.checkpoint = merged;
-          bump(job.id, { checkpoint_json: JSON.stringify(merged) });
-        },
-        readCheckpoint: () => {
-          const row = db.prepare('SELECT checkpoint_json FROM background_jobs WHERE id = ?').get(job.id);
-          try {
-            return row && row.checkpoint_json ? JSON.parse(row.checkpoint_json) : {};
-          } catch (_) {
-            return {};
-          }
-        },
-      }),
-        jobTimedOut,
-      ]);
-      bump(job.id, { status: 'completed', progress_phase: 'done', message: 'Fertig.', error: null });
-    } catch (e) {
-      const aborted = ac.signal.aborted || (e && e.name === 'AbortError');
-      const row = db.prepare('SELECT checkpoint_json FROM background_jobs WHERE id = ?').get(job.id);
-      let chk = {};
+
+    (async () => {
       try {
-        chk = row && row.checkpoint_json ? JSON.parse(row.checkpoint_json) : {};
-      } catch (_) {}
-      const hasResume =
-        !!chk.refresh_done_at ||
-        (Array.isArray(chk.completed) && chk.completed.length > 0) ||
-        (Array.isArray(chk.ted_completed) && chk.ted_completed.length > 0) ||
-        (chk.manifest && typeof chk.manifest === 'object' && Object.keys(chk.manifest).length > 0);
-      if (aborted) {
-        bump(job.id, { status: 'cancelled', error: 'Abgebrochen.', message: null });
-      } else if (job.type === 'dienstreise_pull' && hasResume) {
-        bump(job.id, {
-          status: 'interrupted',
-          error: e && e.message ? String(e.message) : String(e),
-          message: 'Kopie unterbrochen – wird bei Online fortgesetzt.',
-        });
-      } else {
-        bump(job.id, {
-          status: 'failed',
-          error: e && e.message ? String(e.message) : String(e),
-          message: null,
-        });
+        await Promise.race([
+          executeJob(job, {
+            signal: ac.signal,
+            setProgress: (phase, cur, total, msg) =>
+              bump(job.id, {
+                progress_phase: phase || null,
+                progress_current: cur != null ? cur : 0,
+                progress_total: total != null ? total : 0,
+                message: msg != null ? msg : null,
+              }),
+            mergeCheckpoint: (partial) => {
+              const chkRow = db.prepare('SELECT checkpoint_json FROM background_jobs WHERE id = ?').get(job.id);
+              let cur = {};
+              try {
+                cur = chkRow && chkRow.checkpoint_json ? JSON.parse(chkRow.checkpoint_json) : {};
+              } catch (_) {}
+              const merged = Object.assign({}, cur, partial);
+              job.checkpoint = merged;
+              bump(job.id, { checkpoint_json: JSON.stringify(merged) });
+            },
+            readCheckpoint: () => {
+              const chkRow = db.prepare('SELECT checkpoint_json FROM background_jobs WHERE id = ?').get(job.id);
+              try {
+                return chkRow && chkRow.checkpoint_json ? JSON.parse(chkRow.checkpoint_json) : {};
+              } catch (_) {
+                return {};
+              }
+            },
+          }),
+          jobTimedOut,
+        ]);
+        bump(job.id, { status: 'completed', progress_phase: 'done', message: 'Fertig.', error: null });
+      } catch (e) {
+        const aborted = ac.signal.aborted || (e && e.name === 'AbortError');
+        const chkRow = db.prepare('SELECT checkpoint_json FROM background_jobs WHERE id = ?').get(job.id);
+        let chk = {};
+        try {
+          chk = chkRow && chkRow.checkpoint_json ? JSON.parse(chkRow.checkpoint_json) : {};
+        } catch (_) {}
+        const hasResume =
+          !!chk.refresh_done_at ||
+          (Array.isArray(chk.completed) && chk.completed.length > 0) ||
+          (Array.isArray(chk.ted_completed) && chk.ted_completed.length > 0) ||
+          (chk.manifest && typeof chk.manifest === 'object' && Object.keys(chk.manifest).length > 0);
+        if (aborted) {
+          bump(job.id, { status: 'cancelled', error: 'Abgebrochen.', message: null });
+        } else if (job.type === 'dienstreise_pull' && hasResume) {
+          bump(job.id, {
+            status: 'interrupted',
+            error: e && e.message ? String(e.message) : String(e),
+            message: 'Kopie unterbrochen – wird bei Online fortgesetzt.',
+          });
+        } else {
+          bump(job.id, {
+            status: 'failed',
+            error: e && e.message ? String(e.message) : String(e),
+            message: null,
+          });
+        }
+      } finally {
+        if (jobTimeoutId) clearTimeout(jobTimeoutId);
+        abortControllers.delete(job.id);
+        runningWorkers.delete(job.id);
+        activeRunnerCount = Math.max(0, activeRunnerCount - 1);
+        save();
+        schedulePump();
       }
-    } finally {
-      if (jobTimeoutId) clearTimeout(jobTimeoutId);
-      abortControllers.delete(job.id);
-      runnerBusy = false;
-      save();
-      setImmediate(() => {
-        pump().catch(() => {});
-      });
+    })().catch(() => {});
+
+    return true;
+  }
+
+  async function pump() {
+    reapStuckJobs();
+    if (activeRunnerCount >= MAX_CONCURRENT_JOBS) return;
+    const queuedRows = db.prepare(QUEUED_ORDER_SQL).all();
+    if (!queuedRows.length) return;
+    let started = 0;
+    for (const raw of queuedRows) {
+      if (activeRunnerCount >= MAX_CONCURRENT_JOBS) break;
+      const job = parseRow(raw);
+      if (startJobIfQueued(job)) started++;
+    }
+    if (!started && queuedRows.length > 0 && activeRunnerCount < MAX_CONCURRENT_JOBS) {
+      /* Alle wartenden Jobs kollidieren mit laufenden — nichts zu tun bis ein Worker endet. */
     }
   }
 
@@ -507,6 +564,32 @@ function createBackgroundJobService(db, save, hooks) {
     return n;
   }
 
+  /** Pull/Push/Finish für denselben lokalen Auftrag abbrechen (vor Abschluss). */
+  function cancelRunningDienstreiseForLocalJob(localJobId) {
+    const lid = parseInt(localJobId, 10);
+    if (!Number.isFinite(lid) || lid <= 0) return 0;
+    const rows = db
+      .prepare(
+        `SELECT id, type, payload_json FROM background_jobs
+         WHERE status IN ('queued', 'running') AND type IN ('dienstreise_pull', 'dienstreise_push', 'dienstreise_finish')`,
+      )
+      .all();
+    let n = 0;
+    for (const r of rows) {
+      const payload = parsePayloadJson(r.payload_json);
+      if (localJobIdFromPayload(payload) !== lid) continue;
+      if (r.status === 'queued') {
+        bump(r.id, { status: 'cancelled', error: 'Abgebrochen für Abschluss.', message: null });
+        n++;
+        continue;
+      }
+      const x = cancelJob(r.id);
+      if (x.ok) n++;
+    }
+    if (n) save();
+    return n;
+  }
+
   /**
    * @param {number|string} limit
    * @param {boolean | { activeOnly?: boolean, runningOnly?: boolean }} filter
@@ -542,7 +625,7 @@ function createBackgroundJobService(db, save, hooks) {
   }
 
   function kick() {
-    setImmediate(() => pump().catch(() => {}));
+    schedulePump();
   }
 
   return {
@@ -551,6 +634,7 @@ function createBackgroundJobService(db, save, hooks) {
     reapStuckJobs,
     cancelJob,
     cancelRunningOfType,
+    cancelRunningDienstreiseForLocalJob,
     listJobs,
     getJob,
     markStaleRunningAsInterrupted,

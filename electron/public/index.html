@@ -209,6 +209,25 @@
       background: #1b5e20;
       border-radius: 3px;
     }
+    .btn-release-job {
+      background: linear-gradient(180deg, #ffcc80 0%, #ff9800 55%, #f57c00 100%);
+      color: #2c2416;
+      border: 1px solid #e65100;
+      font-weight: 600;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.12);
+    }
+    .btn-release-job:hover:not(:disabled) {
+      filter: brightness(1.03);
+      border-color: #bf360c;
+    }
+    .btn-release-job:focus-visible {
+      outline: 2px solid #ff6d00;
+      outline-offset: 2px;
+    }
+    .btn-release-job:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
     .status-badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
     .status-angelegt,
     .status-geplant { background: #3d5a80; }
@@ -750,6 +769,9 @@
     .archiv-fab-table td:empty::after { content: '\00a0'; }
     .modal-overlay { position: fixed; top: var(--header-height); left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
     .modal-overlay.active { display: flex; }
+    .accept-offline-overlay.modal-overlay.active { align-items: center; justify-content: center; padding: 1rem; z-index: 250; }
+    .accept-offline-loading { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; padding: 1.5rem 0.5rem; text-align: center; }
+    .accept-offline-loading progress { width: 100%; max-width: 20rem; height: 8px; }
     .rams-wizard-overlay.modal-overlay.active { align-items: center; justify-content: center; padding: 1rem; }
     .modal-overlay.modal-fullscreen .modal-box { width: 100%; max-width: none; flex: 1; min-height: 0; max-height: 100%; border-radius: 0; border-width: 0; }
     .modal-box { background: var(--card); border: 1px solid var(--accent); border-radius: 8px; padding: 1rem; max-width: 520px; width: 95%; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; margin: 0; }
@@ -1041,22 +1063,17 @@
             </div>
             <div class="dienstreise-upload-row">
               <select id="startUploadSubfolder" class="dienstreise-select" aria-label="Zielordner">
-                <option value="Dokumente_Dispo">Dokumente_Dispo</option>
-                <option value="Dokumente_Monteur" selected>Dokumente_Monteur</option>
-                <option value="Dokumente_Anlage">Dokumente_Anlage</option>
-                <option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>
+                <option value="Dokumente_Anlage" selected>Dokumente_Anlage (temporär)</option>
               </select>
               <input type="file" id="startFileInput" accept="*" multiple style="max-width: 200px;" />
               <button type="button" class="btn btn-ghost" id="btnStartUpload">Hochladen</button>
             </div>
+            <p class="muted" style="font-size:0.8rem;margin:0.25rem 0 0.5rem;">Unter <strong>Dokumente_Anlage</strong>: voller PROJEKTE-NEU-Baum aus der DB (● offline nach Annehmen, ☁ erst beim Öffnen laden; TED nur unter Mechanik-TED). Monteur-Dokumente unter Dokumente_Monteur/&lt;Fileserver-FN&gt;/Montage/&lt;Auftragsordner&gt;/.</p>
             <span id="startUploadHint" class="settings-saved-hint" aria-live="polite"></span>
             <div class="start-mkdir-row">
               <label for="startMkdirParent" class="muted">Neuer Unterordner in</label>
               <select id="startMkdirParent" class="dienstreise-select">
-                <option value="Dokumente_Dispo">Dokumente_Dispo</option>
-                <option value="Dokumente_Monteur" selected>Dokumente_Monteur</option>
-                <option value="Dokumente_Anlage">Dokumente_Anlage</option>
-                <option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>
+                <option value="Dokumente_Anlage" selected>Dokumente_Anlage (temporär)</option>
               </select>
               <input type="text" id="startMkdirName" placeholder="Ordnername" maxlength="120" />
               <button type="button" class="btn btn-ghost" id="startBtnMkdir">Anlegen</button>
@@ -1094,6 +1111,20 @@
           <button type="button" class="btn btn-ghost" id="absenceRequestCancel">Abbrechen</button>
         </div>
       </form>
+    </div>
+  </div>
+  <div id="modalAcceptOffline" class="modal-overlay accept-offline-overlay" aria-hidden="true">
+    <div class="modal-box modal-box--wide" role="dialog" style="max-width:42rem;max-height:85vh;display:flex;flex-direction:column;">
+      <h3>Offline-Ordner für PROJEKTE NEU</h3>
+      <p class="muted" style="margin-bottom:0.5rem;font-size:0.9rem;">Nicht ausgewählte Ordner bleiben online und werden beim Öffnen geladen. TED-Excel wird immer mitgeladen.</p>
+      <div id="acceptOfflineBody" style="flex:1;overflow:auto;min-height:8rem;margin-bottom:0.75rem;"></div>
+      <p id="acceptOfflineHint" class="muted" style="font-size:0.85rem;margin-bottom:0.5rem;" aria-live="polite"></p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end;">
+        <button type="button" class="btn btn-ghost" id="acceptOfflineBtnAll">Alle</button>
+        <button type="button" class="btn btn-ghost" id="acceptOfflineBtnNone">Keine</button>
+        <button type="button" class="btn btn-ghost" id="acceptOfflineBtnCancel">Abbrechen</button>
+        <button type="button" class="btn btn-primary" id="acceptOfflineBtnConfirm">Annehmen &amp; laden</button>
+      </div>
     </div>
   </div>
   <div id="toastContainer" aria-live="polite" style="position:fixed;bottom:1rem;right:1rem;z-index:1000;max-width:320px;pointer-events:none"></div>

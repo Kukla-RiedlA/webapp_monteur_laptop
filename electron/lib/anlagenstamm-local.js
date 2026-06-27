@@ -1230,6 +1230,9 @@ function ensureAnlagenstammTreeCacheSchema(dbOrSql) {
       if (!names.has('truncated')) {
         run('ALTER TABLE anlagenstamm_tree_cache ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0');
       }
+      if (!names.has('root_folder_name')) {
+        run('ALTER TABLE anlagenstamm_tree_cache ADD COLUMN root_folder_name TEXT');
+      }
     } catch (err) {
       const msg = err && err.message ? String(err.message) : String(err);
       if (!/duplicate column name/i.test(msg)) {
@@ -1256,7 +1259,7 @@ function readAnlagenstammTreeCacheRow(db, fab) {
   for (const k of fabCacheLookupKeys(fab)) {
     const row = db
       .prepare(
-        'SELECT fab, projects_enabled, tree_json, synced_at, content_signature, truncated FROM anlagenstamm_tree_cache WHERE fab = ?',
+        'SELECT fab, projects_enabled, tree_json, synced_at, content_signature, truncated, root_folder_name FROM anlagenstamm_tree_cache WHERE fab = ?',
       )
       .get(k);
     if (!row) continue;
@@ -1273,6 +1276,7 @@ function readAnlagenstammTreeCacheRow(db, fab) {
       synced_at: row.synced_at || null,
       content_signature: row.content_signature || '',
       truncated: Number(row.truncated) === 1,
+      root_folder_name: row.root_folder_name ? String(row.root_folder_name).trim() : '',
     };
   }
   return null;
@@ -1296,10 +1300,18 @@ function upsertAnlagenstammTreeCacheRow(db, fab, pnRaw, meta) {
   const treeJson = JSON.stringify(tree);
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
   const truncated = meta.truncated === true || Number(meta.truncated) === 1 ? 1 : 0;
+  let rootFolderName = String(meta.root_folder_name || '').trim();
+  if (!rootFolderName && pnRaw && pnRaw.folder_name) {
+    rootFolderName = String(pnRaw.folder_name).trim();
+  }
+  const existing = readAnlagenstammTreeCacheRow(db, fabNorm);
+  if (!rootFolderName && existing && existing.root_folder_name) {
+    rootFolderName = String(existing.root_folder_name).trim();
+  }
   db.prepare(`
-    INSERT OR REPLACE INTO anlagenstamm_tree_cache (fab, projects_enabled, tree_json, synced_at, content_signature, truncated)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(fabNorm, enabled, treeJson, syncedAt, sig || null, truncated);
+    INSERT OR REPLACE INTO anlagenstamm_tree_cache (fab, projects_enabled, tree_json, synced_at, content_signature, truncated, root_folder_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(fabNorm, enabled, treeJson, syncedAt, sig || null, truncated, rootFolderName || null);
 }
 
 async function fetchPnTreeExportChunk(base, technicianId, authHeader, page, pageSize) {
@@ -1422,10 +1434,12 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
             {
               enabled: item.projects_enabled !== false,
               tree: Array.isArray(item.tree) ? item.tree : [],
+              folder_name: item.root_name || '',
             },
             {
               content_signature: sig,
               truncated: !!item.truncated,
+              root_folder_name: item.root_name || '',
             },
           );
           written += 1;

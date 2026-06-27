@@ -167,8 +167,46 @@ function resolveProjekteNeuRoot(dokumenteMonteurPath, fab) {
   return { root, folderName };
 }
 
+/**
+ * Kanonischer FN-Ordnername aus einer Liste (z. B. Dispo-Listing), ohne Dateisystem.
+ * @param {string[]} dirNames
+ * @param {string|number} fab
+ * @returns {string|null}
+ */
+function resolveCanonicalFolderFromDirList(dirNames, fab) {
+  const fabStr = String(fab ?? '').trim();
+  const digits = fabStr.replace(/\D/g, '');
+  if (!digits) return null;
+  const fnNum = parseInt(digits, 10);
+  if (!Number.isFinite(fnNum)) return null;
+  const dirs = (dirNames || []).map((n) => String(n || '').trim()).filter(Boolean);
+
+  for (const dirName of dirs) {
+    if (dirName.includes(' - ')) continue;
+    const digitsOnly = dirName.replace(/\D/g, '');
+    if (digitsOnly && parseInt(digitsOnly, 10) === fnNum) return dirName;
+  }
+
+  const rangeRe = /(\d+)\s*-\s*(\d+)/;
+  for (const dirName of dirs) {
+    const m = dirName.match(rangeRe);
+    if (!m) continue;
+    let from = parseInt(m[1], 10);
+    let to = parseInt(m[2], 10);
+    const fromStr = m[1];
+    const toStr = m[2];
+    if (toStr.length < fromStr.length) {
+      const prefix = fromStr.slice(0, fromStr.length - toStr.length);
+      to = parseInt(prefix + toStr, 10);
+    }
+    if (fnNum >= from && fnNum <= to) return dirName;
+  }
+  return null;
+}
+
 module.exports = {
   findMonteurFolderForFab,
+  resolveCanonicalFolderFromDirList,
   safeResolveUnderRoot,
   scanProjekteNeuTree,
   resolveProjekteNeuRoot,

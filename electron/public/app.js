@@ -838,6 +838,12 @@
     return String(job.status || '').trim().toLowerCase() === 'in_arbeit';
   }
 
+  /** Button „Freigeben“: lokale Daten löschen, Status zurück auf zugeteilt (Dispo + lokal, ohne Datei-Sync). */
+  function jobStatusAllowsReleaseJob(job) {
+    if (!job || typeof job !== 'object') return false;
+    return String(job.status || '').trim().toLowerCase() === 'in_arbeit';
+  }
+
   var acceptJobStreamBusy = false;
   /** @type {number | null} */
   var acceptJobActiveLocalJobId = null;
@@ -1112,7 +1118,289 @@
     return null;
   }
 
-  function runAcceptJobStream(localJobId, triggerButton) {
+  var ACCEPT_OFFLINE_LS_KEY = 'kukla_accept_offline_paths_v1';
+  var acceptOfflinePending = null;
+  var acceptOfflinePreviewAbort = null;
+  var acceptOfflinePreviewTimer = null;
+  var acceptOfflinePreviewTriggerBtn = null;
+  var ACCEPT_OFFLINE_PREVIEW_TIMEOUT_MS = 120000;
+
+  function acceptOfflineLoadingHtml(message) {
+    var msg = message || 'Verbinde mit Dispo …';
+    return (
+      '<div class="accept-offline-loading">' +
+      '<p class="muted" id="acceptOfflineLoadingMsg">' + escapeHtml(msg) + '</p>' +
+      '<progress max="100" value="0" id="acceptOfflineLoadingBar"></progress>' +
+      '<p class="muted" style="font-size:0.8rem;">Bei langsamer Verbindung kann dies eine Minute dauern. Sie können „Keine“ wählen und nur TED offline laden.</p>' +
+      '</div>'
+    );
+  }
+
+  function setAcceptOfflinePreviewTriggerBusy(busy) {
+    var btn = acceptOfflinePreviewTriggerBtn;
+    if (!btn || !btn.nodeType) return;
+    if (busy) {
+      btn.setAttribute('aria-busy', 'true');
+      btn.disabled = true;
+      btn.classList.add('btn-accept-job--busy');
+      var bar = btn.querySelector('.btn-accept-job-progress');
+      if (bar) {
+        try {
+          bar.indeterminate = true;
+        } catch (e) {}
+      }
+      var lbl = btn.querySelector('.btn-accept-job-progress-text');
+      if (lbl) lbl.textContent = 'Lade Auswahl …';
+    } else if (!acceptJobStreamBusy) {
+      btn.disabled = false;
+      btn.classList.remove('btn-accept-job--busy');
+      btn.removeAttribute('aria-busy');
+      var bar2 = btn.querySelector('.btn-accept-job-progress');
+      if (bar2) {
+        try {
+          bar2.indeterminate = false;
+        } catch (e2) {}
+        bar2.value = 0;
+      }
+      var lbl2 = btn.querySelector('.btn-accept-job-progress-text');
+      if (lbl2) lbl2.textContent = '';
+    }
+  }
+
+  function clearAcceptOfflinePreviewFetch() {
+    if (acceptOfflinePreviewAbort) {
+      try {
+        acceptOfflinePreviewAbort.abort();
+      } catch (_) {}
+      acceptOfflinePreviewAbort = null;
+    }
+    if (acceptOfflinePreviewTimer) {
+      clearInterval(acceptOfflinePreviewTimer);
+      acceptOfflinePreviewTimer = null;
+    }
+    setAcceptOfflinePreviewTriggerBusy(false);
+    acceptOfflinePreviewTriggerBtn = null;
+  }
+
+  function loadRememberedOfflinePaths() {
+    try {
+      var raw = localStorage.getItem(ACCEPT_OFFLINE_LS_KEY);
+      var parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveRememberedOfflinePaths(paths) {
+    try {
+      localStorage.setItem(ACCEPT_OFFLINE_LS_KEY, JSON.stringify(paths || []));
+    } catch (_) {}
+  }
+
+  function offlinePathKey(fab, rel) {
+    return String(fab) + ':' + String(rel || '').replace(/^\/+|\/+$/g, '');
+  }
+
+  function closeAcceptOfflineModal() {
+    clearAcceptOfflinePreviewFetch();
+    var modal = document.getElementById('modalAcceptOffline');
+    if (modal) {
+      modal.classList.remove('active');
+      modal.setAttribute('aria-hidden', 'true');
+      modal.style.display = '';
+    }
+    var hintEl = document.getElementById('acceptOfflineHint');
+    if (hintEl) hintEl.textContent = '';
+    var confirmBtn = document.getElementById('acceptOfflineBtnConfirm');
+    if (confirmBtn) confirmBtn.disabled = false;
+    acceptOfflinePending = null;
+    var jobHint = document.getElementById('acceptJobHint');
+    if (jobHint && jobHint.textContent && jobHint.textContent.indexOf('Ordnerauswahl') !== -1) {
+      jobHint.textContent = '';
+    }
+  }
+
+  function collectCheckedOfflinePaths() {
+    var out = [];
+    var bodyEl = document.getElementById('acceptOfflineBody');
+    if (!bodyEl) return out;
+    bodyEl.querySelectorAll('input[type="checkbox"][data-offline-path]:checked').forEach(function (cb) {
+      var fab = cb.getAttribute('data-fab');
+      var rel = cb.getAttribute('data-offline-path');
+      if (fab && rel) out.push({ fab: fab, path: rel });
+    });
+    return out;
+  }
+
+  function setAllOfflineCheckboxes(checked) {
+    var bodyEl = document.getElementById('acceptOfflineBody');
+    if (!bodyEl) return;
+    bodyEl.querySelectorAll('input[type="checkbox"][data-offline-path]').forEach(function (cb) {
+      cb.checked = !!checked;
+    });
+  }
+
+  function renderAcceptOfflinePreview(preview) {
+    var bodyEl = document.getElementById('acceptOfflineBody');
+    var hintEl = document.getElementById('acceptOfflineHint');
+    if (!bodyEl) return;
+    var remembered = loadRememberedOfflinePaths();
+    var rememberSet = new Set(remembered.map(function (p) {
+      if (p && typeof p === 'object') return offlinePathKey(p.fab, p.path);
+      return String(p || '');
+    }));
+    var validKeys = new Set();
+    var html = '';
+    (preview.fabs || []).forEach(function (fabBlock) {
+      var fab = fabBlock.fab;
+      var fnName = fabBlock.folder_name_canonical || fab;
+      html += '<div class="accept-offline-fab" style="margin-bottom:0.75rem;">';
+      html += '<strong>FN ' + escapeHtml(String(fab)) + '</strong>';
+      html += ' <span class="muted">(' + escapeHtml(String(fnName)) + ')</span>';
+      var tree = fabBlock.tree || [];
+      if (!tree.length) {
+        html += '<p class="muted" style="font-size:0.85rem;margin:0.35rem 0;">Keine Unterordner am Server – nur TED &amp; Status offline.</p>';
+      }
+      tree.forEach(function (node) {
+        var rel = node.rel || node.name;
+        var key = offlinePathKey(fab, rel);
+        validKeys.add(key);
+        var checked = rememberSet.has(key) ? ' checked' : '';
+        html += '<label style="display:block;margin:0.2rem 0 0.2rem 1rem;font-size:0.9rem;">';
+        html += '<input type="checkbox" data-fab="' + escapeHtml(String(fab)) + '" data-offline-path="' + escapeHtml(rel) + '"' + checked + '> ';
+        html += escapeHtml(node.name || rel);
+        html += '</label>';
+        (node.children || []).forEach(function (ch) {
+          var relCh = ch.rel || (rel + '/' + ch.name);
+          var keyCh = offlinePathKey(fab, relCh);
+          validKeys.add(keyCh);
+          var checkedCh = rememberSet.has(keyCh) ? ' checked' : '';
+          html += '<label style="display:block;margin:0.15rem 0 0.15rem 2rem;font-size:0.85rem;">';
+          html += '<input type="checkbox" data-fab="' + escapeHtml(String(fab)) + '" data-offline-path="' + escapeHtml(relCh) + '"' + checkedCh + '> ';
+          html += escapeHtml(ch.name || relCh);
+          html += '</label>';
+        });
+      });
+      html += '</div>';
+    });
+    bodyEl.innerHTML = html || '<p class="muted">Keine PROJEKTE-NEU-Ordner verfügbar.</p>';
+    if (hintEl) {
+      hintEl.textContent = preview.preview_degraded
+        ? (preview.hint || preview.error || 'Vorschau eingeschränkt – Sie können trotzdem annehmen (nur TED).')
+        : '';
+    }
+    if (acceptOfflinePending) acceptOfflinePending.validKeys = validKeys;
+    var confirmBtn = document.getElementById('acceptOfflineBtnConfirm');
+    if (confirmBtn) confirmBtn.disabled = false;
+  }
+
+  function openAcceptOfflineModal(localJobId, triggerButton) {
+    var errMsg = validateAcceptJobPrerequisites(localJobId);
+    var hint = document.getElementById('acceptJobHint');
+    if (errMsg) {
+      if (hint) hint.textContent = errMsg;
+      return;
+    }
+    var modal = document.getElementById('modalAcceptOffline');
+    var bodyEl = document.getElementById('acceptOfflineBody');
+    if (!modal || !bodyEl) {
+      runAcceptJobStream(localJobId, triggerButton, { offline_paths: [] });
+      return;
+    }
+    clearAcceptOfflinePreviewFetch();
+    acceptOfflinePending = { localJobId: localJobId, triggerButton: triggerButton, fab_map: [], montage_folder_name: null };
+    acceptOfflinePreviewTriggerBtn = triggerButton && triggerButton.nodeType === 1 ? triggerButton : null;
+    setAcceptOfflinePreviewTriggerBusy(true);
+    if (hint) hint.textContent = 'Verbinde mit Dispo – Ordnerauswahl wird geladen …';
+    if (typeof showToast === 'function') showToast('Ordnerauswahl wird geladen …');
+    bodyEl.innerHTML = acceptOfflineLoadingHtml('Verbinde mit Dispo …');
+    var confirmBtn = document.getElementById('acceptOfflineBtnConfirm');
+    if (confirmBtn) confirmBtn.disabled = true;
+    var hintEl = document.getElementById('acceptOfflineHint');
+    if (hintEl) hintEl.textContent = '';
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    var loadStart = Date.now();
+    acceptOfflinePreviewTimer = setInterval(function () {
+      var sec = Math.floor((Date.now() - loadStart) / 1000);
+      var msgEl = document.getElementById('acceptOfflineLoadingMsg');
+      if (msgEl) {
+        msgEl.textContent = 'Verbinde mit Dispo … (' + sec + ' s – langsame Verbindung?)';
+      }
+      var bar = document.getElementById('acceptOfflineLoadingBar');
+      if (bar) {
+        var pct = Math.min(95, Math.floor((sec / 90) * 100));
+        try {
+          bar.value = pct;
+        } catch (_) {}
+      }
+    }, 1000);
+    acceptOfflinePreviewAbort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var previewTimeoutId = setTimeout(function () {
+      if (acceptOfflinePreviewAbort) {
+        try {
+          acceptOfflinePreviewAbort.abort();
+        } catch (_) {}
+      }
+    }, ACCEPT_OFFLINE_PREVIEW_TIMEOUT_MS);
+    var q =
+      'job_id=' + encodeURIComponent(localJobId) +
+      '&technician_id=' + encodeURIComponent(getTechId()) +
+      '&dispoBaseUrl=' + encodeURIComponent(getDispoBaseUrl() || '');
+    var extra = dispoBasePayloadExtra();
+    if (extra.externalUrl) q += '&externalUrl=' + encodeURIComponent(extra.externalUrl);
+    if (extra.internalUrl) q += '&internalUrl=' + encodeURIComponent(extra.internalUrl);
+    if (getDispoUsername()) q += '&dispo_username=' + encodeURIComponent(getDispoUsername());
+    if (getDispoPassword()) q += '&dispo_password=' + encodeURIComponent(getDispoPassword());
+    var fetchOpts = {};
+    if (acceptOfflinePreviewAbort) fetchOpts.signal = acceptOfflinePreviewAbort.signal;
+    fetch(API_BASE + '/api/dienstreise/accept_offline_preview?' + q, fetchOpts)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || data.ok === false) throw new Error((data && data.error) || 'Vorschau fehlgeschlagen.');
+        if (!acceptOfflinePending || acceptOfflinePending.localJobId !== localJobId) return;
+        acceptOfflinePending.fab_map = data.fab_map || [];
+        acceptOfflinePending.montage_folder_name = data.montage_folder_name || null;
+        renderAcceptOfflinePreview(data);
+        if (confirmBtn) confirmBtn.disabled = false;
+        if (hint) hint.textContent = '';
+      })
+      .catch(function (err) {
+        if (!acceptOfflinePending || acceptOfflinePending.localJobId !== localJobId) return;
+        var aborted = err && err.name === 'AbortError';
+        bodyEl.innerHTML =
+          '<p class="muted">' +
+          escapeHtml(
+            aborted
+              ? 'Zeitüberschreitung bei der Dispo-Verbindung.'
+              : err && err.message
+                ? err.message
+                : 'Vorschau fehlgeschlagen.',
+          ) +
+          '</p>';
+        if (hintEl) {
+          hintEl.textContent = aborted
+            ? '„Keine“ wählen → nur TED & Status offline. Oder erneut versuchen.'
+            : 'Sie können „Keine“ wählen und nur TED laden.';
+        }
+        acceptOfflinePending.previewFailed = true;
+        acceptOfflinePending.fab_map = [];
+        if (confirmBtn) confirmBtn.disabled = false;
+        if (hint && !aborted) hint.textContent = hintEl ? hintEl.textContent : '';
+      })
+      .finally(function () {
+        clearTimeout(previewTimeoutId);
+        if (acceptOfflinePreviewTimer) {
+          clearInterval(acceptOfflinePreviewTimer);
+          acceptOfflinePreviewTimer = null;
+        }
+        acceptOfflinePreviewAbort = null;
+        setAcceptOfflinePreviewTriggerBusy(false);
+      });
+  }
+
+  function runAcceptJobStream(localJobId, triggerButton, acceptOpts) {
     if (acceptJobStreamBusy) return;
     var errMsg = validateAcceptJobPrerequisites(localJobId);
     var hint = document.getElementById('acceptJobHint');
@@ -1138,6 +1426,11 @@
       dispoPassword: getDispoPassword(),
       include_bilder: false
     }, dispoBasePayloadExtra());
+    if (acceptOpts && Object.prototype.hasOwnProperty.call(acceptOpts, 'offline_paths')) {
+      body.offline_paths = acceptOpts.offline_paths;
+      if (acceptOpts.fab_map) body.fab_map = acceptOpts.fab_map;
+      if (acceptOpts.montage_folder_name) body.montage_folder_name = acceptOpts.montage_folder_name;
+    }
     var copyTimeoutMs = 600000;
     acceptJobUiTimeoutId = setTimeout(function () {
       acceptJobUiTimeoutId = null;
@@ -1485,7 +1778,7 @@
       return String(startExplorerSubpath).trim().replace(/\\/g, '/').replace(/\/+$/, '');
     }
     var subEl = document.getElementById('startUploadSubfolder');
-    return subEl && subEl.value ? subEl.value : 'Dokumente_Monteur';
+    return subEl && subEl.value ? subEl.value : 'Dokumente_Anlage';
   }
 
   function uploadDienstreiseFiles(localJobId, relativeDir, fileList, hintEl) {
@@ -1493,7 +1786,7 @@
       if (hintEl) hintEl.textContent = 'Keine Dateien.';
       return Promise.resolve(false);
     }
-    var relDir = (relativeDir || 'Dokumente_Monteur').replace(/\\/g, '/').replace(/\/+$/, '');
+    var relDir = (relativeDir || 'Dokumente_Anlage').replace(/\\/g, '/').replace(/\/+$/, '');
     var snap = getDienstreiseJobSnapshotByLocalId(localJobId) || startPageActiveJobSnapshot;
     if (isJobAngelegtReadOnly(snap)) {
       if (hintEl) hintEl.textContent = 'Auftrag ist angelegt – nur Anzeige.';
@@ -2647,14 +2940,12 @@
       html += '<label>Dokument hochladen</label>';
       html += '<div class="dienstreise-upload-row">';
       html += '<select id="dienstreiseUploadSubfolder" class="dienstreise-select">';
-      html += '<option value="Dokumente_Dispo">Dokumente_Dispo</option>';
-      html += '<option value="Dokumente_Monteur">Dokumente_Monteur</option>';
-      html += '<option value="Dokumente_Anlage">Dokumente_Anlage</option>';
-      html += '<option value="Dokumente_Buchhaltung">Dokumente_Buchhaltung</option>';
+      html += '<option value="Dokumente_Anlage" selected>Dokumente_Anlage (temporär)</option>';
       html += '</select>';
       html += '<input type="file" id="dienstreiseFileInput" accept="*" style="max-width: 220px;" />';
       html += '<button type="button" class="btn btn-ghost" id="btnDienstreiseUpload">Hochladen</button>';
       html += '</div>';
+      html += '<p class="muted" style="font-size:0.8rem;margin:0.25rem 0;">Temporäre Uploads – werden beim Abschluss gelöscht.</p>';
       html += '<span id="dienstreiseUploadHint" class="settings-saved-hint" aria-live="polite"></span>';
       html += '</div>';
     }
@@ -4100,7 +4391,7 @@
         var jobs = (data && data.jobs) || [];
         for (var i = 0; i < jobs.length; i++) {
           var bg = jobs[i];
-          if (!bg || bg.type !== 'dienstreise_finish' || bg.status !== 'running') continue;
+          if (!bg || bg.type !== 'dienstreise_finish' || (bg.status !== 'running' && bg.status !== 'queued')) continue;
           var p = bg.payload || {};
           var localId = parseInt(p.job_id, 10);
           if (!localId) continue;
@@ -4182,13 +4473,21 @@
     var bar = btn.querySelector('.btn-finish-job-progress');
     if (!lbl || !bar) return;
     var phase = (jobRow.progress_phase || '').toString();
+    var st = (jobRow.status || '').toString();
     var cur = jobRow.progress_current != null ? jobRow.progress_current : 0;
     var tot = jobRow.progress_total != null ? jobRow.progress_total : 0;
     var msg = jobRow.message ? String(jobRow.message) : '';
 
+    if (st === 'queued' && !phase) {
+      lbl.textContent = 'Wartet auf Start …';
+      try {
+        bar.indeterminate = true;
+      } catch (eQ) { /* ignore */ }
+      return;
+    }
+
     if (
       phase === 'finish_sync' ||
-      phase === 'finish_cleanup' ||
       phase === 'finish_status' ||
       phase === 'start'
     ) {
@@ -4196,6 +4495,19 @@
       try {
         bar.indeterminate = true;
       } catch (e) { /* ignore */ }
+    } else if (phase === 'finish_cleanup') {
+      lbl.textContent = msg && String(msg).trim() ? String(msg) : 'Lokale Downloads werden entfernt …';
+      if (tot > 0) {
+        try {
+          bar.indeterminate = false;
+          bar.max = tot;
+          bar.value = Math.min(cur, tot);
+        } catch (e2) { /* ignore */ }
+      } else {
+        try {
+          bar.indeterminate = true;
+        } catch (e3) { /* ignore */ }
+      }
     } else if (phase === 'finish_verify' || phase === 'finish') {
       lbl.textContent = msg && String(msg).trim() ? String(msg) : 'Abgleich mit Dispo …';
       if (tot > 0) {
@@ -4233,7 +4545,10 @@
     finishJobLastProgressRow = null;
     finishJobActiveButton = triggerButton && triggerButton.nodeType === 1 ? triggerButton : null;
     var hint = document.getElementById('finishJobHint');
-    if (hint) hint.textContent = '';
+    if (hint) {
+      hint.textContent =
+        'Hinweis: Lokale Downloads werden danach entfernt (auf OneDrive kann das kurz dauern).';
+    }
     applyFinishJobStreamBusyUi();
 
     var protectedSet = dienstreiseProtectedPathsByJob[localJobId] || new Set();
@@ -4304,6 +4619,60 @@
 
   function finishAndCleanup(jobId, triggerButton) {
     runFinishJobStream(jobId, triggerButton);
+  }
+
+  function releaseDienstreiseJob(jobId, triggerButton) {
+    if (!jobId) return;
+    if (
+      !confirm(
+        'Auftrag freigeben?\n\nAlle lokal geladenen Dateien und der gesamte Projektordner am Laptop werden gelöscht (ohne Datei-Upload). Der Status wird in Dispo und lokal wieder auf „Zugeteilt“ gesetzt.',
+      )
+    ) {
+      return;
+    }
+    var techId = getTechId();
+    if (!techId) {
+      alert('Monteur-ID in Einstellungen eintragen.');
+      return;
+    }
+    var btn = triggerButton;
+    if (btn) btn.disabled = true;
+    fetch(API_BASE + '/api/dienstreise/release_job', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Technician-Id': String(techId),
+      },
+      body: JSON.stringify({
+        job_id: jobId,
+        technician_id: techId,
+        dispoBaseUrl: getDispoBaseUrl(),
+        dispoExternalUrl: getDispoExternalUrl(),
+        dispoInternalUrl: getDispoInternalUrl(),
+        dispoUsername: getDispoUsername(),
+        dispoPassword: getDispoPassword(),
+      }),
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          return { ok: r.ok, data: data };
+        });
+      })
+      .then(function (res) {
+        if (!res.ok || !res.data || !res.data.ok) {
+          throw new Error((res.data && res.data.error) || 'Freigabe fehlgeschlagen.');
+        }
+        if (jobIdsEqual(selectedJobIdOnDienstreisePage, jobId)) {
+          loadDienstreiseExplorer(jobId, '', 'modal', { skipAutoPull: true });
+          loadDienstreiseExplorer(jobId, '', 'start', { skipAutoPull: true });
+        }
+        if (typeof loadJobsAndAbsences === 'function') loadJobsAndAbsences();
+        loadDienstreiseList();
+      })
+      .catch(function (err) {
+        if (btn) btn.disabled = false;
+        alert(err && err.message ? err.message : 'Freigabe fehlgeschlagen.');
+      });
   }
 
   async function loadOpenJobs() {
@@ -5139,6 +5508,21 @@
     return endYmd < todayYmd;
   }
 
+  /** Kalender: abgelaufene Abwesenheiten ausblenden (wie in der Abwesenheiten-Liste). */
+  function filterActiveCalendarAbsences(absences) {
+    return (Array.isArray(absences) ? absences : []).filter(function (a) {
+      return !isAbsenceExpired(a);
+    });
+  }
+
+  /** Kalender = gleiche sichtbare Menge wie Abwesenheiten-View (pending nur unter Anfragen, nicht doppelt). */
+  function filterCalendarAbsencesForView(absences) {
+    return filterActiveCalendarAbsences(absences).filter(function (a) {
+      if (a.from_absence_request && a.status === 'pending') return false;
+      return true;
+    });
+  }
+
   function renderAbsences(data, requestsData) {
     const list = document.getElementById('absencesList');
     const absences = (data && data.absences) ? data.absences : [];
@@ -5743,6 +6127,33 @@
     }).catch(function(e) { showToast('Fehler: ' + (e && e.message ? e.message : 'Unbekannt')); });
   });
   document.getElementById('absenceRequestCancel').addEventListener('click', closeAbsenceRequestModal);
+  var acceptOfflineBtnCancel = document.getElementById('acceptOfflineBtnCancel');
+  if (acceptOfflineBtnCancel) acceptOfflineBtnCancel.addEventListener('click', closeAcceptOfflineModal);
+  var acceptOfflineBtnAll = document.getElementById('acceptOfflineBtnAll');
+  if (acceptOfflineBtnAll) acceptOfflineBtnAll.addEventListener('click', function () { setAllOfflineCheckboxes(true); });
+  var acceptOfflineBtnNone = document.getElementById('acceptOfflineBtnNone');
+  if (acceptOfflineBtnNone) acceptOfflineBtnNone.addEventListener('click', function () { setAllOfflineCheckboxes(false); });
+  var acceptOfflineBtnConfirm = document.getElementById('acceptOfflineBtnConfirm');
+  if (acceptOfflineBtnConfirm) {
+    acceptOfflineBtnConfirm.addEventListener('click', function () {
+      if (!acceptOfflinePending) return;
+      var paths = collectCheckedOfflinePaths();
+      saveRememberedOfflinePaths(paths);
+      var pending = acceptOfflinePending;
+      closeAcceptOfflineModal();
+      runAcceptJobStream(pending.localJobId, pending.triggerButton, {
+        offline_paths: paths,
+        fab_map: pending.fab_map,
+        montage_folder_name: pending.montage_folder_name,
+      });
+    });
+  }
+  var modalAcceptOffline = document.getElementById('modalAcceptOffline');
+  if (modalAcceptOffline) {
+    modalAcceptOffline.addEventListener('click', function (e) {
+      if (e.target.id === 'modalAcceptOffline') closeAcceptOfflineModal();
+    });
+  }
   var modalAbsenceOverlay = document.getElementById('modalAbsenceRequest');
   if (modalAbsenceOverlay) modalAbsenceOverlay.addEventListener('click', function (e) {
     if (e.target.id === 'modalAbsenceRequest') closeAbsenceRequestModal();
@@ -7423,7 +7834,7 @@
     }
     function tryLocalProjectFile(resolvedJobId) {
       var relNorm = String(relPath || '').replace(/^\/+/, '');
-      var candidates = [relNorm, 'Dokumente_Monteur/' + relNorm];
+      var candidates = [relNorm, 'Dokumente_Anlage/' + relNorm];
       var chain = Promise.reject(new Error('local_unavailable'));
       candidates.forEach(function (relTry) {
         chain = chain.catch(function () {
@@ -8458,6 +8869,7 @@
     }
 
     jobs = filterCalendarJobsForView(jobs, showAll);
+    absences = filterCalendarAbsencesForView(absences);
     const techniciansFromApi = filterCalendarTechniciansForLegend(
       (calendarApiData && calendarApiData.technicians) ? calendarApiData.technicians : null,
       showAll
@@ -9014,6 +9426,31 @@
     return d.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
 
+  function isDienstreiseAnlageDbEntry(e) {
+    return !!(e && (e.isAnlageDb || e.is_anlage_db));
+  }
+
+  function dienstreiseAnlageOfflineBadge(e) {
+    if (!isDienstreiseAnlageDbEntry(e) || e.isDirectory) return '';
+    if (e.isOffline || e.is_offline) {
+      return ' <span class="dienstreise-anlage-offline-badge" title="Offline verfügbar" style="color:#2e7d32;font-size:0.75rem;">●</span>';
+    }
+    return ' <span class="dienstreise-anlage-online-badge muted" title="Online – wird beim Öffnen geladen" style="font-size:0.75rem;">☁</span>';
+  }
+
+  function openDienstreiseAnlageDbFile(row, jobId) {
+    var fab = row.getAttribute('data-fab');
+    var pnRel = row.getAttribute('data-pn-rel');
+    var fileNameEl = row.querySelector('.dienstreise-explorer-filename');
+    var name = fileNameEl ? fileNameEl.textContent.trim() : '';
+    if (!fab || !pnRel) return Promise.reject(new Error('Pfad unvollständig.'));
+    if (isProjekteNeuRasterImage(name || pnRel)) {
+      openProjekteNeuImageInLightbox(fab, pnRel, { jobId: jobId, alt: name });
+      return Promise.resolve();
+    }
+    return openAnlagenstammProjekteNeuLocal(fab, pnRel, name, { jobId: jobId });
+  }
+
   function renderDienstreiseExplorerTree(uiKey) {
     var ui = getDienstreiseExplorerUi(uiKey || 'modal');
     var listEl = ui.getListEl();
@@ -9049,8 +9486,13 @@
       var toggle = e.isDirectory ? ('<span class="explorer-toggle" data-explorer-toggle aria-label="' + (expanded[e.relativePath] ? 'Einklappen' : 'Ausklappen') + '">' + (expanded[e.relativePath] ? '▼' : '▶') + '</span>') : '<span class="explorer-toggle empty"></span>';
       var relPath = e.relativePath || '';
       var isProtected = relPath && protectedSet.has(relPath);
+      var isAnlageDb = isDienstreiseAnlageDbEntry(e);
+      var isOfflineAnlage = !!(e.isOffline || e.is_offline);
       var protectControl = drReadonlyGeplant ? '' : ('<label style="display:inline-flex;align-items:center;gap:0.25rem;"><input type="checkbox" data-explorer-protect ' + (isProtected ? 'checked' : '') + '>Nicht löschen</label>');
-      var deleteBtn = (drReadonlyGeplant || e.isDirectory) ? '' : '<button type="button" class="btn btn-ghost btn-delete-file" data-explorer-delete title="Datei löschen (lokal und auf Dispo)">Löschen</button>';
+      var deleteBtn =
+        drReadonlyGeplant || e.isDirectory || (isAnlageDb && !isOfflineAnlage)
+          ? ''
+          : '<button type="button" class="btn btn-ghost btn-delete-file" data-explorer-delete title="Datei löschen (lokal und auf Dispo)">Löschen</button>';
       var isRasterImage = !e.isDirectory && isProjekteNeuRasterImage(e.name);
       var previewBtn = isRasterImage
         ? '<button type="button" class="btn btn-ghost" data-explorer-preview title="Bild in der App anzeigen">Vorschau</button>'
@@ -9058,8 +9500,36 @@
       var nameVisual = isRasterImage
         ? '<img class="dienstreise-explorer-thumb" data-explorer-thumb alt="" />'
         : ('<span class="icon" aria-hidden="true">' + icon + '</span>');
-      html += '<div class="dienstreise-explorer-row' + levelClass + '" data-full-path="' + escapeHtml(e.fullPath || '') + '" data-is-dir="' + (e.isDirectory ? '1' : '0') + '" data-relative-path="' + escapeHtml(relPath) + '">' +
-        '<div class="dienstreise-explorer-name">' + toggle + nameVisual + ' <span class="dienstreise-explorer-filename">' + escapeHtml(e.name) + '</span></div>' +
+      var anlageAttrs =
+        isAnlageDb
+          ? ' data-anlage-db="1" data-fab="' +
+            escapeHtml(String(e.fab || '')) +
+            '" data-pn-rel="' +
+            escapeHtml(String(e.pnRel || e.pn_rel || '')) +
+            '" data-is-offline="' +
+            (isOfflineAnlage ? '1' : '0') +
+            '"'
+          : '';
+      html +=
+        '<div class="dienstreise-explorer-row' +
+        levelClass +
+        '" data-full-path="' +
+        escapeHtml(e.fullPath || '') +
+        '" data-is-dir="' +
+        (e.isDirectory ? '1' : '0') +
+        '" data-relative-path="' +
+        escapeHtml(relPath) +
+        '"' +
+        anlageAttrs +
+        '>' +
+        '<div class="dienstreise-explorer-name">' +
+        toggle +
+        nameVisual +
+        ' <span class="dienstreise-explorer-filename">' +
+        escapeHtml(e.name) +
+        '</span>' +
+        dienstreiseAnlageOfflineBadge(e) +
+        '</div>' +
         '<div class="dienstreise-explorer-size">' + escapeHtml(sizeStr) + '</div>' +
         '<div class="dienstreise-explorer-size">' + escapeHtml(mtimeStr) + '</div>' +
         '<div class="dienstreise-explorer-actions">' +
@@ -9074,10 +9544,25 @@
       var row = img.closest('.dienstreise-explorer-row');
       var rel = row && row.getAttribute('data-relative-path');
       var fileName = row && row.querySelector('.dienstreise-explorer-filename');
-      if (rel) loadDienstreiseExplorerThumbnailImg(img, jobId, rel);
+      if (row && row.getAttribute('data-anlage-db') === '1') {
+        var fabThumb = row.getAttribute('data-fab');
+        var pnRelThumb = row.getAttribute('data-pn-rel');
+        if (fabThumb && pnRelThumb) {
+          loadProjekteNeuThumbnailImg(img, fabThumb, pnRelThumb, { jobId: jobId, thumbMax: 256 });
+        }
+      } else if (rel) {
+        loadDienstreiseExplorerThumbnailImg(img, jobId, rel);
+      }
       img.addEventListener('click', function (ev) {
         ev.preventDefault();
         ev.stopPropagation();
+        if (!row) return;
+        if (row.getAttribute('data-anlage-db') === '1') {
+          openDienstreiseAnlageDbFile(row, jobId).catch(function (err) {
+            showToast((err && err.message) ? err.message : 'Bild konnte nicht geladen werden.');
+          });
+          return;
+        }
         if (!rel) return;
         openDienstreiseProjectImageInLightbox(jobId, rel, {
           alt: fileName ? fileName.textContent : '',
@@ -9091,6 +9576,12 @@
         var row = btn.closest('.dienstreise-explorer-row');
         var rel = row && row.getAttribute('data-relative-path');
         var fileName = row && row.querySelector('.dienstreise-explorer-filename');
+        if (row && row.getAttribute('data-anlage-db') === '1') {
+          openDienstreiseAnlageDbFile(row, jobId).catch(function (err) {
+            showToast((err && err.message) ? err.message : 'Vorschau fehlgeschlagen.');
+          });
+          return;
+        }
         if (!rel) return;
         openDienstreiseProjectImageInLightbox(jobId, rel, {
           alt: fileName ? fileName.textContent : '',
@@ -9102,7 +9593,14 @@
       btn.addEventListener('click', function (ev) {
         ev.stopPropagation();
         var row = btn.closest('.dienstreise-explorer-row');
-        var fullPath = row && row.getAttribute('data-full-path');
+        if (!row) return;
+        if (row.getAttribute('data-anlage-db') === '1' && row.getAttribute('data-is-dir') === '0') {
+          openDienstreiseAnlageDbFile(row, jobId).catch(function (err) {
+            alert((err && err.message) ? err.message : 'Öffnen fehlgeschlagen.');
+          });
+          return;
+        }
+        var fullPath = row.getAttribute('data-full-path');
         if (fullPath && typeof monteurApp !== 'undefined' && monteurApp.openPath) monteurApp.openPath(fullPath);
       });
     });
@@ -9148,6 +9646,16 @@
       });
     });
     listEl.querySelectorAll('.dienstreise-explorer-row[data-is-dir="0"]').forEach(function (row) {
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', function (ev) {
+        if (ev.target.closest('.dienstreise-explorer-actions')) return;
+        if (ev.target.closest('[data-explorer-thumb]')) return;
+        if (row.getAttribute('data-anlage-db') === '1') {
+          openDienstreiseAnlageDbFile(row, jobId).catch(function (err) {
+            showToast((err && err.message) ? err.message : 'Datei konnte nicht geöffnet werden.');
+          });
+        }
+      });
       row.addEventListener('contextmenu', function (ev) {
         if (ev.target.closest('.dienstreise-explorer-actions')) return;
         if (!window.monteurApp || typeof monteurApp.showFileContextMenu !== 'function') return;
@@ -9336,6 +9844,9 @@
               '<progress class="btn-accept-job-progress" max="100" value="0"></progress>' +
               '</span></button>'
             : '') +
+          (jobStatusAllowsReleaseJob(j)
+            ? '<button type="button" class="btn btn-release-job" data-action="release-job">Freigeben</button>'
+            : '') +
           (j.status !== 'erledigt' && String(j.status || '').toLowerCase() !== 'abgerechnet' && !isJobAngelegtReadOnly(j)
             ? '<button type="button" class="btn btn-finish-job" data-action="finish-job">' +
               '<span class="btn-finish-job-label">Erledigt</span>' +
@@ -9354,7 +9865,7 @@
           var jobId = parseInt(btn.closest('.job').getAttribute('data-job-id'), 10);
           if (!jobId) return;
           selectedJobIdOnDienstreisePage = jobId;
-          runAcceptJobStream(jobId, btn);
+          openAcceptOfflineModal(jobId, btn);
         });
       });
       listEl.querySelectorAll('.job-actions [data-action="finish-job"]').forEach(function (btn) {
@@ -9363,6 +9874,14 @@
           var jobId = parseInt(btn.closest('.job').getAttribute('data-job-id'), 10);
           if (!jobId) return;
           finishAndCleanup(jobId, btn);
+        });
+      });
+      listEl.querySelectorAll('.job-actions [data-action="release-job"]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var jobId = parseInt(btn.closest('.job').getAttribute('data-job-id'), 10);
+          if (!jobId) return;
+          releaseDienstreiseJob(jobId, btn);
         });
       });
       listEl.querySelectorAll('.job-actions [data-status]').forEach(function (btn) {
@@ -9420,7 +9939,7 @@
       return;
     }
     var subfolder = document.getElementById('dienstreiseUploadSubfolder');
-    var sub = subfolder && subfolder.value ? subfolder.value : 'Dokumente_Monteur';
+    var sub = subfolder && subfolder.value ? subfolder.value : 'Dokumente_Anlage';
     var fileInput = document.getElementById('dienstreiseFileInput');
     var hint = document.getElementById('dienstreiseUploadHint');
     if (!localJobId) { if (hint) hint.textContent = 'Bitte einen Auftrag öffnen (Doppelklick auf Auftrag oder Kalenderbalken).'; return; }
@@ -11143,7 +11662,7 @@
           if (hint) hint.textContent = 'Kein aktiver Auftrag.';
           return;
         }
-        var parentPath = parentEl && parentEl.value ? parentEl.value : 'Dokumente_Monteur';
+        var parentPath = parentEl && parentEl.value ? parentEl.value : 'Dokumente_Anlage';
         var folderName = nameEl && nameEl.value ? nameEl.value.trim() : '';
         if (!folderName) {
           if (hint) hint.textContent = 'Ordnername eingeben.';
