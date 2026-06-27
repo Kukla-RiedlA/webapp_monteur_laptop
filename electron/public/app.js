@@ -1202,32 +1202,127 @@
     return String(fab) + ':' + String(rel || '').replace(/^\/+|\/+$/g, '') + ':' + (kind || 'dir');
   }
 
+  function offlinePathFromKey(key) {
+    var s = String(key || '');
+    var last = s.lastIndexOf(':');
+    if (last <= 0) return null;
+    var kind = s.slice(last + 1);
+    var rest = s.slice(0, last);
+    var first = rest.indexOf(':');
+    if (first < 0) return null;
+    return {
+      fab: rest.slice(0, first),
+      path: rest.slice(first + 1),
+      kind: kind || 'dir',
+    };
+  }
+
+  function ensureAcceptOfflineSelectedKeys() {
+    if (!acceptOfflinePending) return new Set();
+    if (!acceptOfflinePending.selectedKeys) acceptOfflinePending.selectedKeys = new Set();
+    return acceptOfflinePending.selectedKeys;
+  }
+
+  function offlineFolderCheckboxState(nodeId, selectedKeys, nodeIndex, nodeMeta) {
+    var meta = nodeMeta && nodeMeta[nodeId];
+    if (!meta) return { checked: false, indeterminate: false };
+    if (selectedKeys.has(meta.key)) return { checked: true, indeterminate: false };
+    var kids = (nodeIndex && nodeIndex[nodeId]) || [];
+    if (!kids.length) return { checked: false, indeterminate: false };
+    var nSel = 0;
+    kids.forEach(function (d) {
+      var dm = nodeMeta[d.id];
+      if (dm && selectedKeys.has(dm.key)) nSel++;
+    });
+    if (nSel === 0) return { checked: false, indeterminate: false };
+    if (nSel === kids.length) return { checked: true, indeterminate: false };
+    return { checked: false, indeterminate: true };
+  }
+
+  function applyOfflineNodeSelection(nodeId, selected, selectedKeys, nodeIndex, nodeMeta) {
+    var meta = nodeMeta && nodeMeta[nodeId];
+    if (!meta || !selectedKeys) return;
+    if (meta.kind === 'dir') {
+      if (selected) {
+        selectedKeys.add(meta.key);
+        (nodeIndex[nodeId] || []).forEach(function (d) {
+          var dm = nodeMeta[d.id];
+          if (dm) selectedKeys.add(dm.key);
+        });
+      } else {
+        selectedKeys.delete(meta.key);
+        (nodeIndex[nodeId] || []).forEach(function (d) {
+          var dm = nodeMeta[d.id];
+          if (dm) selectedKeys.delete(dm.key);
+        });
+      }
+      return;
+    }
+    if (selected) selectedKeys.add(meta.key);
+    else selectedKeys.delete(meta.key);
+  }
+
+  function refreshAcceptOfflineCheckboxStates(bodyEl) {
+    if (!bodyEl || !acceptOfflinePending) return;
+    var selectedKeys = acceptOfflinePending.selectedKeys;
+    var nodeIndex = acceptOfflinePending.nodeIndex || {};
+    var nodeMeta = acceptOfflinePending.nodeMeta || {};
+    if (!selectedKeys) return;
+    bodyEl.querySelectorAll('input[data-offline-path]').forEach(function (cb) {
+      var nodeId = cb.getAttribute('data-offline-node');
+      var kind = cb.getAttribute('data-offline-kind');
+      if (kind === 'dir') {
+        var st = offlineFolderCheckboxState(nodeId, selectedKeys, nodeIndex, nodeMeta);
+        cb.checked = st.checked;
+        cb.indeterminate = st.indeterminate;
+      } else {
+        cb.indeterminate = false;
+        var meta = nodeMeta[nodeId];
+        cb.checked = !!(meta && selectedKeys.has(meta.key));
+      }
+    });
+  }
+
+  function acceptOfflineNodeRel(node, parentRel) {
+    var name = String(node && node.name != null ? node.name : '').trim();
+    var parent = String(parentRel || '')
+      .replace(/\\/g, '/')
+      .replace(/^\/+|\/+$/g, '');
+    var raw = String(node && node.rel != null ? node.rel : name)
+      .replace(/\\/g, '/')
+      .replace(/^\/+|\/+$/g, '');
+    if (raw && raw.indexOf('/') >= 0) return raw;
+    if (parent) return parent + '/' + (raw || name);
+    return raw || name;
+  }
+
   function acceptOfflineNodeId(fab, rel) {
     return 'ao_' + String(fab) + '_' + String(rel || '').replace(/[^a-zA-Z0-9]+/g, '_');
   }
 
-  function flattenAcceptOfflineNodes(nodes, fab, out) {
+  function flattenAcceptOfflineNodes(nodes, fab, out, parentRel) {
     (nodes || []).forEach(function (node) {
       if (!node) return;
-      var rel = node.rel || node.name || '';
+      var rel = acceptOfflineNodeRel(node, parentRel);
       var kind = node.type === 'file' ? 'file' : 'dir';
       out.push({ fab: fab, rel: rel, kind: kind, is_ted: !!node.is_ted });
-      if (node.children && node.children.length) flattenAcceptOfflineNodes(node.children, fab, out);
+      if (node.children && node.children.length) flattenAcceptOfflineNodes(node.children, fab, out, rel);
     });
     return out;
   }
 
-  function renderAcceptOfflineTreeNodes(fab, nodes, level, expanded, rememberSet, validKeys) {
+  function renderAcceptOfflineTreeNodes(fab, nodes, level, expanded, selectedKeys, validKeys, nodeMeta, nodeIndex, parentRel) {
     var html = '';
     (nodes || []).forEach(function (node) {
       if (!node) return;
-      var rel = node.rel || node.name || '';
+      var rel = acceptOfflineNodeRel(node, parentRel);
       var kind = node.type === 'file' ? 'file' : 'dir';
       var isDir = kind === 'dir';
       var isTed = !!node.is_ted;
       var key = offlinePathKey(fab, rel, kind);
       validKeys.add(key);
       var nodeId = acceptOfflineNodeId(fab, rel);
+      if (nodeMeta) nodeMeta[nodeId] = { fab: fab, rel: rel, kind: kind, key: key };
       var pad = 0.35 + Math.min(level, 8) * 0.85;
       var icon = isDir ? '📁' : '📄';
       if (isTed) {
@@ -1240,7 +1335,10 @@
           escapeHtml(node.name || rel) +
           ' <span class="muted">(Anlagenstamm)</span></div>';
       } else {
-        var checked = rememberSet.has(key) ? ' checked' : '';
+        var st = isDir
+          ? offlineFolderCheckboxState(nodeId, selectedKeys, nodeIndex, nodeMeta)
+          : { checked: selectedKeys.has(key), indeterminate: false };
+        var checked = st.checked ? ' checked' : '';
         html += '<div class="accept-offline-row" style="margin-left:' + pad + 'rem;display:flex;align-items:center;gap:0.25rem;font-size:0.85rem;">';
         if (isDir) {
           var isExp = !!expanded[nodeId];
@@ -1271,7 +1369,17 @@
           escapeHtml(node.name || rel) +
           '</label></div>';
         if (isDir && expanded[nodeId] && node.children && node.children.length) {
-          html += renderAcceptOfflineTreeNodes(fab, node.children, level + 1, expanded, rememberSet, validKeys);
+          html += renderAcceptOfflineTreeNodes(
+            fab,
+            node.children,
+            level + 1,
+            expanded,
+            selectedKeys,
+            validKeys,
+            nodeMeta,
+            nodeIndex,
+            rel,
+          );
         }
       }
     });
@@ -1296,53 +1404,41 @@
       var cb = e.target;
       if (!cb || cb.type !== 'checkbox' || !cb.hasAttribute('data-offline-path')) return;
       if (!acceptOfflinePending || !acceptOfflinePending.nodeIndex) return;
+      var selectedKeys = ensureAcceptOfflineSelectedKeys();
       var nodeId = cb.getAttribute('data-offline-node');
-      var descend = acceptOfflinePending.nodeIndex[nodeId];
-      if (cb.checked && descend && descend.length) {
-        descend.forEach(function (d) {
-          var sel = 'input[data-offline-node="' + d.id + '"]';
-          var other = bodyEl.querySelector(sel);
-          if (other && !other.disabled) other.checked = true;
-        });
-      }
-      bodyEl.querySelectorAll('input[data-offline-path][data-offline-kind="dir"]').forEach(function (dirCb) {
-        var did = dirCb.getAttribute('data-offline-node');
-        var kids = acceptOfflinePending.nodeIndex[did] || [];
-        if (!kids.length) {
-          dirCb.indeterminate = false;
-          return;
-        }
-        var checkedCount = 0;
-        kids.forEach(function (k) {
-          var kcb = bodyEl.querySelector('input[data-offline-node="' + k.id + '"]');
-          if (kcb && kcb.checked) checkedCount++;
-        });
-        if (checkedCount === 0) {
-          dirCb.indeterminate = false;
-          dirCb.checked = false;
-        } else if (checkedCount === kids.length && dirCb.checked) {
-          dirCb.indeterminate = false;
-        } else {
-          dirCb.indeterminate = true;
-        }
-      });
+      var kind = cb.getAttribute('data-offline-kind');
+      applyOfflineNodeSelection(
+        nodeId,
+        cb.checked,
+        selectedKeys,
+        acceptOfflinePending.nodeIndex,
+        acceptOfflinePending.nodeMeta,
+      );
+      refreshAcceptOfflineCheckboxStates(bodyEl);
     });
   }
 
-  function buildAcceptOfflineNodeIndex(fab, nodes, index, list) {
+  function buildAcceptOfflineNodeIndex(fab, nodes, index, list, meta, parentRel) {
     (nodes || []).forEach(function (node) {
       if (!node || node.is_ted) return;
-      var rel = node.rel || node.name || '';
+      var rel = acceptOfflineNodeRel(node, parentRel);
+      var kind = node.type === 'file' ? 'file' : 'dir';
       var nodeId = acceptOfflineNodeId(fab, rel);
+      var key = offlinePathKey(fab, rel, kind);
+      if (meta) meta[nodeId] = { fab: fab, rel: rel, kind: kind, key: key };
       var descend = [];
-      flattenAcceptOfflineNodes(node.children || [], fab, []).forEach(function (d) {
+      flattenAcceptOfflineNodes(node.children || [], fab, [], rel).forEach(function (d) {
         if (d.is_ted) return;
         var cid = acceptOfflineNodeId(fab, d.rel);
-        descend.push({ id: cid, rel: d.rel, kind: d.kind });
+        var dkey = offlinePathKey(fab, d.rel, d.kind);
+        if (meta) meta[cid] = { fab: fab, rel: d.rel, kind: d.kind, key: dkey };
+        descend.push({ id: cid, rel: d.rel, kind: d.kind, key: dkey });
       });
       index[nodeId] = descend;
-      list.push({ id: nodeId, fab: fab, rel: rel, kind: node.type === 'file' ? 'file' : 'dir' });
-      if (node.children && node.children.length) buildAcceptOfflineNodeIndex(fab, node.children, index, list);
+      list.push({ id: nodeId, fab: fab, rel: rel, kind: kind, key: key });
+      if (node.children && node.children.length) {
+        buildAcceptOfflineNodeIndex(fab, node.children, index, list, meta, rel);
+      }
     });
   }
 
@@ -1367,6 +1463,15 @@
 
   function collectCheckedOfflinePaths() {
     var out = [];
+    if (acceptOfflinePending && acceptOfflinePending.selectedKeys && acceptOfflinePending.selectedKeys.size) {
+      var validKeys = acceptOfflinePending.validKeys || new Set();
+      acceptOfflinePending.selectedKeys.forEach(function (key) {
+        if (validKeys.size && !validKeys.has(key)) return;
+        var p = offlinePathFromKey(key);
+        if (p && p.path) out.push({ fab: p.fab, path: p.path, kind: p.kind || 'dir' });
+      });
+      return out;
+    }
     var bodyEl = document.getElementById('acceptOfflineBody');
     if (!bodyEl) return out;
     bodyEl.querySelectorAll('input[type="checkbox"][data-offline-path]:checked').forEach(function (cb) {
@@ -1379,13 +1484,18 @@
   }
 
   function setAllOfflineCheckboxes(checked) {
+    if (!acceptOfflinePending) return;
+    var selectedKeys = ensureAcceptOfflineSelectedKeys();
+    if (checked) {
+      selectedKeys.clear();
+      (acceptOfflinePending.validKeys || new Set()).forEach(function (k) {
+        selectedKeys.add(k);
+      });
+    } else {
+      selectedKeys.clear();
+    }
     var bodyEl = document.getElementById('acceptOfflineBody');
-    if (!bodyEl) return;
-    bodyEl.querySelectorAll('input[type="checkbox"][data-offline-path]').forEach(function (cb) {
-      if (cb.disabled) return;
-      cb.checked = !!checked;
-      cb.indeterminate = false;
-    });
+    if (bodyEl) refreshAcceptOfflineCheckboxStates(bodyEl);
   }
 
   function renderAcceptOfflinePreview(preview) {
@@ -1394,39 +1504,60 @@
     if (!bodyEl) return;
     if (acceptOfflinePending) acceptOfflinePending.lastPreview = preview;
     var remembered = loadRememberedOfflinePaths();
-    var rememberSet = new Set(remembered.map(function (p) {
-      if (p && typeof p === 'object') return offlinePathKey(p.fab, p.path, p.kind || 'dir');
-      return String(p || '');
-    }));
     var validKeys = new Set();
     var expanded = (acceptOfflinePending && acceptOfflinePending.expanded) || {};
     var nodeIndex = {};
+    var nodeMeta = {};
+    var selectedKeys = ensureAcceptOfflineSelectedKeys();
     var html = '';
     (preview.fabs || []).forEach(function (fabBlock) {
       var fab = fabBlock.fab;
       var fnName = fabBlock.folder_name_canonical || fab;
+      var tree = fabBlock.tree || [];
       html += '<div class="accept-offline-fab" style="margin-bottom:0.75rem;">';
       html += '<strong>FN ' + escapeHtml(String(fab)) + '</strong>';
       html += ' <span class="muted">(' + escapeHtml(String(fnName)) + ')</span>';
-      var tree = fabBlock.tree || [];
       if (!tree.length) {
         html += '<p class="muted" style="font-size:0.85rem;margin:0.35rem 0;">Keine Projektordner am Server – nur Status/Struktur offline.</p>';
       } else {
-        buildAcceptOfflineNodeIndex(fab, tree, nodeIndex, []);
-        html += renderAcceptOfflineTreeNodes(fab, tree, 0, expanded, rememberSet, validKeys);
+        buildAcceptOfflineNodeIndex(fab, tree, nodeIndex, [], nodeMeta, '');
+        html += renderAcceptOfflineTreeNodes(
+          fab,
+          tree,
+          0,
+          expanded,
+          selectedKeys,
+          validKeys,
+          nodeMeta,
+          nodeIndex,
+          '',
+        );
       }
       html += '</div>';
     });
     bodyEl.innerHTML = html || '<p class="muted">Keine PROJEKTE-NEU-Ordner verfügbar.</p>';
     bindAcceptOfflineTreeEvents(bodyEl);
+    if (acceptOfflinePending && !acceptOfflinePending.selectedKeysInitialized) {
+      selectedKeys.clear();
+      remembered.forEach(function (p) {
+        var k =
+          p && typeof p === 'object'
+            ? offlinePathKey(p.fab, p.path, p.kind || 'dir')
+            : String(p || '');
+        if (validKeys.has(k)) selectedKeys.add(k);
+      });
+      acceptOfflinePending.selectedKeysInitialized = true;
+    }
+    refreshAcceptOfflineCheckboxStates(bodyEl);
     if (hintEl) {
       hintEl.textContent = preview.preview_degraded
         ? (preview.hint || preview.error || 'Vorschau eingeschränkt – Sie können trotzdem annehmen (ohne Projektdateien).')
-        : 'Ordner ankreuzen übernimmt alle Dateien darin; einzelne Dateien können abgewählt werden. TED liegt im Anlagenstamm.';
+        : 'Dokumente_Dispo und Dokumente_Buchhaltung werden immer vollständig geladen. Hier nur PROJEKTE NEU wählen; TED liegt im Anlagenstamm.';
     }
     if (acceptOfflinePending) {
       acceptOfflinePending.validKeys = validKeys;
       acceptOfflinePending.nodeIndex = nodeIndex;
+      acceptOfflinePending.nodeMeta = nodeMeta;
       if (!acceptOfflinePending.expanded) acceptOfflinePending.expanded = expanded;
     }
     var confirmBtn = document.getElementById('acceptOfflineBtnConfirm');
@@ -1447,7 +1578,15 @@
       return;
     }
     clearAcceptOfflinePreviewFetch();
-    acceptOfflinePending = { localJobId: localJobId, triggerButton: triggerButton, fab_map: [], montage_folder_name: null };
+    acceptOfflinePending = {
+      localJobId: localJobId,
+      triggerButton: triggerButton,
+      fab_map: [],
+      montage_folder_name: null,
+      selectedKeys: null,
+      selectedKeysInitialized: false,
+      expanded: {},
+    };
     acceptOfflinePreviewTriggerBtn = triggerButton && triggerButton.nodeType === 1 ? triggerButton : null;
     setAcceptOfflinePreviewTriggerBusy(true);
     if (hint) hint.textContent = 'Verbinde mit Dispo – Ordnerauswahl wird geladen …';
@@ -1729,17 +1868,11 @@
 
   function pickStartActiveJob(jobs) {
     var arr = Array.isArray(jobs) ? jobs : [];
-    var open = arr.filter(function (j) {
-      return j && !isJobErledigtForOpenList(j);
+    var inArbeit = arr.filter(function (j) {
+      return j && String(j.status || '').trim().toLowerCase() === 'in_arbeit';
     });
-    if (!open.length) return null;
-    var inArbeit = open.filter(function (j) {
-      return String(j.status || '').trim().toLowerCase() === 'in_arbeit';
-    });
-    if (inArbeit.length) {
-      return sortOpenJobsByEinsatzdatumAsc(inArbeit)[0];
-    }
-    return sortOpenJobsByEinsatzdatumAsc(open)[0];
+    if (!inArbeit.length) return null;
+    return sortOpenJobsByEinsatzdatumAsc(inArbeit)[0];
   }
 
   /** Nur Baustellen-Ansprechpartner (job_contacts / baustellen_ansprechpartner), nicht Kundenkontakt. */
@@ -9871,7 +10004,7 @@
     if (!dispoBaseUrl || !technicianId || !getDispoUsername() || !getDispoPassword()) return;
     var snap = getDienstreiseJobSnapshotByLocalId(localJobId);
     if (snap && (isJobAngelegtReadOnly(snap) || isJobAbgerechnet(snap))) return;
-    if (snap && jobCanAcceptJob(snap)) return;
+    if (!snap || String(snap.status || '').trim().toLowerCase() !== 'in_arbeit') return;
     projectFolderAutoPullLastStartedAt[localJobId] = Date.now();
     projectFolderAutoPullInFlightByJob[localJobId] = true;
     setConnectionBadge('online_syncing', 'Projektordner wird mit Dispo aktualisiert …');
@@ -9939,8 +10072,19 @@
     }
     fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId)).then(function (r) { return r.json(); }).then(function (data) {
       if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId(ui.key))) return;
-      if (!data.ok || !data.entries) {
-        listEl.innerHTML = '<span class="empty">' + (data.error || 'Laden fehlgeschlagen.') + '</span>';
+      if (!data.ok) {
+        listEl.innerHTML = '<span class="empty">' + escapeHtml(data.error || 'Laden fehlgeschlagen.') + '</span>';
+        if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+        return;
+      }
+      if (data.folder_missing) {
+        listEl.innerHTML =
+          '<span class="empty">' + escapeHtml(data.hint || 'Noch kein Projektordner — bitte Auftrag annehmen.') + '</span>';
+        if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+        return;
+      }
+      if (!Array.isArray(data.entries)) {
+        listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
         if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
         return;
       }

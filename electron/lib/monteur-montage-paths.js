@@ -327,14 +327,23 @@ function normRelPath(p) {
     .replace(/^\/+|\/+$/g, '');
 }
 
-function buildOfflinePreviewTree(tree) {
+function resolveOfflinePreviewNodeRel(node, parentRel) {
+  const name = String(node && node.name != null ? node.name : '').trim();
+  const parent = normRelPath(parentRel);
+  const raw = normRelPath(node && node.rel != null ? node.rel : name);
+  if (raw && raw.includes('/')) return raw;
+  if (parent) return parent + '/' + (raw || name);
+  return raw || name;
+}
+
+function buildOfflinePreviewTree(tree, parentRel) {
   const out = [];
   for (const node of tree || []) {
     if (!node || typeof node !== 'object') continue;
     const type = String(node.type || 'dir').toLowerCase();
     const name = String(node.name || '').trim();
     if (!name) continue;
-    const rel = normRelPath(node.rel || name);
+    const rel = resolveOfflinePreviewNodeRel(node, parentRel);
     if (type === 'file') {
       out.push({
         name,
@@ -350,7 +359,7 @@ function buildOfflinePreviewTree(tree) {
       rel,
       type: 'dir',
       is_ted: /^TED(\/|$)/i.test(rel),
-      children: buildOfflinePreviewTree(node.children || []),
+      children: buildOfflinePreviewTree(node.children || [], rel),
     });
   }
   return out;

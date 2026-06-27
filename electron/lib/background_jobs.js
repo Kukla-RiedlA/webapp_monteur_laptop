@@ -503,6 +503,50 @@ function createBackgroundJobService(db, save, hooks) {
    * Wiederaufnehmbare dienstreise_pull-Jobs (Delta-Kopie), nicht „Auftrag annehmen“ beim Sync.
    * @param {{ skipAcceptJob?: boolean }} opts
    */
+  function cancelDienstreisePullRow(r, reason) {
+    bump(r.id, { status: 'cancelled', error: reason, message: null });
+    return 1;
+  }
+
+  function shouldKeepOtherPullOnAccept(payload, keepId, tid) {
+    const lid = localJobIdFromPayload(payload);
+    if (lid === keepId) return true;
+    const pullTech = parseInt(payload.technician_id, 10);
+    return (
+      !!payload.periodic_delta &&
+      pullTech === tid &&
+      lid &&
+      isJobAssignedToTechnician(db, lid, tid)
+    );
+  }
+
+  /** Projektordner-Kopie (weder Delta noch Accept) nur für in_arbeit — sonst Ordner-Leichen. */
+  function purgeNonInArbeitDienstreiseCopyPulls() {
+    const rows = db
+      .prepare(
+        `SELECT id, payload_json, status FROM background_jobs
+         WHERE type = 'dienstreise_pull' AND status IN ('failed', 'interrupted', 'queued')`,
+      )
+      .all();
+    let n = 0;
+    for (const r of rows) {
+      const payload = parsePayloadJson(r.payload_json);
+      if (payload.periodic_delta || payload.accept_job) continue;
+      const lid = localJobIdFromPayload(payload);
+      if (!lid) continue;
+      const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(lid);
+      const st = statusRow ? String(statusRow.status || '').trim().toLowerCase() : '';
+      if (st !== 'in_arbeit') {
+        n += cancelDienstreisePullRow(
+          r,
+          'Projektordner-Kopie nur für in_arbeit — Pull verworfen (Status: ' + (st || '?') + ').',
+        );
+      }
+    }
+    if (n) save();
+    return n;
+  }
+
   function purgeUnassignedDienstreisePullJobs() {
     const rows = db
       .prepare(
@@ -516,17 +560,11 @@ function createBackgroundJobService(db, save, hooks) {
       const lid = localJobIdFromPayload(payload);
       const tid = parseInt(payload.technician_id, 10);
       if (!lid || !Number.isFinite(tid) || tid <= 0) {
-        bump(r.id, { status: 'cancelled', error: 'Ungültiger Pull-Job (kein Auftrag/Monteur).', message: null });
-        n++;
+        n += cancelDienstreisePullRow(r, 'Ungültiger Pull-Job (kein Auftrag/Monteur).');
         continue;
       }
       if (!isJobAssignedToTechnician(db, lid, tid)) {
-        bump(r.id, {
-          status: 'cancelled',
-          error: 'Keine Monteur-Zuordnung — Pull verworfen.',
-          message: null,
-        });
-        n++;
+        n += cancelDienstreisePullRow(r, 'Keine Monteur-Zuordnung — Pull verworfen.');
       }
     }
     if (n) save();
@@ -538,6 +576,7 @@ function createBackgroundJobService(db, save, hooks) {
     const skipAcceptJob = opts.skipAcceptJob !== false;
     reapStuckJobs();
     purgeUnassignedDienstreisePullJobs();
+    purgeNonInArbeitDienstreiseCopyPulls();
     const rows = db
       .prepare(
         `SELECT id, payload_json, checkpoint_json, status FROM background_jobs
@@ -572,6 +611,14 @@ function createBackgroundJobService(db, save, hooks) {
       }
       if (acceptJob && st !== 'angelegt' && st !== 'geplant' && st !== 'zugeteilt') {
         bump(r.id, { status: 'cancelled', error: 'Accept-Wiederaufnahme: Status ungültig.', message: null });
+        continue;
+      }
+      if (!periodicDelta && !acceptJob && st !== 'in_arbeit') {
+        bump(r.id, {
+          status: 'cancelled',
+          error: 'Projektordner-Kopie nur für in_arbeit — Wiederaufnahme verworfen.',
+          message: null,
+        });
         continue;
       }
       let chk = {};
@@ -609,30 +656,15 @@ function createBackgroundJobService(db, save, hooks) {
     const rows = db
       .prepare(
         `SELECT id, status, payload_json FROM background_jobs
-         WHERE type = 'dienstreise_pull' AND status IN ('queued', 'running')`,
+         WHERE type = 'dienstreise_pull' AND status IN ('queued', 'running', 'failed', 'interrupted')`,
       )
       .all();
     let n = 0;
     for (const r of rows) {
       const payload = parsePayloadJson(r.payload_json);
-      const lid = localJobIdFromPayload(payload);
-      if (lid === keepId) continue;
-      const pullTech = parseInt(payload.technician_id, 10);
-      if (
-        payload.periodic_delta &&
-        pullTech === tid &&
-        lid &&
-        isJobAssignedToTechnician(db, lid, tid)
-      ) {
-        continue;
-      }
-      if (r.status === 'queued') {
-        bump(r.id, {
-          status: 'cancelled',
-          error: 'Abgebrochen — anderer Auftrag wird angenommen.',
-          message: null,
-        });
-        n++;
+      if (shouldKeepOtherPullOnAccept(payload, keepId, tid)) continue;
+      if (r.status === 'queued' || r.status === 'failed' || r.status === 'interrupted') {
+        n += cancelDienstreisePullRow(r, 'Abgebrochen — anderer Auftrag wird angenommen.');
         continue;
       }
       const x = cancelJob(r.id);
@@ -738,6 +770,7 @@ function createBackgroundJobService(db, save, hooks) {
     cancelRunningDienstreiseForLocalJob,
     cancelUnsafeDienstreisePullsOnAccept,
     purgeUnassignedDienstreisePullJobs,
+    purgeNonInArbeitDienstreiseCopyPulls,
     listJobs,
     getJob,
     markStaleRunningAsInterrupted,

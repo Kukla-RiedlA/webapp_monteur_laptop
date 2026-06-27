@@ -1,7 +1,10 @@
 'use strict';
 
 const DM_PREFIX = 'Dokumente_Monteur/';
-const SKIP_PULL_PREFIXES = ['Dokumente_Dispo', 'Dokumente_Buchhaltung', 'Dokumente_Anlage'];
+/** Im Modus explicit: PROJEKTE NEU / Anlage nur über Baumauswahl, nicht pauschal aus Manifest. */
+const SKIP_PULL_PREFIXES = ['Dokumente_Anlage'];
+/** Im Modus explicit: immer vollständig laden (ohne Häkchen in der Offline-Auswahl). */
+const ALWAYS_PULL_PREFIXES = ['Dokumente_Dispo', 'Dokumente_Buchhaltung'];
 
 function ensureJobOfflinePullSchema(db) {
   db.prepare(
@@ -113,6 +116,14 @@ function shouldSkipPullPrefix(relPath) {
   return false;
 }
 
+function shouldAlwaysPullPrefix(relPath) {
+  const norm = normManifestPath(relPath);
+  for (const p of ALWAYS_PULL_PREFIXES) {
+    if (norm === p || norm.startsWith(p + '/')) return true;
+  }
+  return false;
+}
+
 /**
  * @param {Map<string, Map<string, 'dir'|'file'>>} pathsByFab
  */
@@ -140,6 +151,7 @@ function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
   const norm = normManifestPath(relPath);
   if (!norm) return false;
   if (pullMode === 'legacy') return true;
+  if (shouldAlwaysPullPrefix(norm)) return true;
   if (shouldSkipPullPrefix(norm)) return false;
   if (!norm.startsWith(DM_PREFIX)) return false;
   const tail = norm.slice(DM_PREFIX.length);
@@ -248,6 +260,7 @@ module.exports = {
   getOfflinePullPathsByFab,
   findFabForCanonicalFolder,
   shouldPullManifestFile,
+  shouldAlwaysPullPrefix,
   filterManifestForPull,
   normalizeOfflinePathsInput,
   updateOfflinePullFabMap,

@@ -1106,6 +1106,16 @@ function createApp(db) {
     return null;
   }
 
+  /** Projektordner anlegen/kopieren nur nach Annahme (lokal in_arbeit). */
+  function dienstreiseProjectFolderBlocked(status) {
+    const s = String(status || '').trim().toLowerCase();
+    if (s === 'in_arbeit') return null;
+    return {
+      error: 'Projektordner erst nach „Auftrag annehmen“ (Status in Arbeit).',
+      status: 403,
+    };
+  }
+
   /** Lokaler Auftrag für Schreibzugriff; blockiert Status nur Anzeige / abgerechnet. */
   function getWritableLocalJobMetaForPatch(dbConn, technicianId, rawJobId) {
     const resolved = resolveLocalJobIdForTechnician(dbConn, technicianId, rawJobId, { mode: 'auto' });
@@ -1474,27 +1484,33 @@ function createApp(db) {
     return maxNum + 1;
   }
 
-  /** rawJobId kann lokale jobs.id oder jobs.server_id sein (Kalender-Cache liefert server_job_id als id). */
-  function getJobRowByLocalOrServerId(rawJobId) {
+  /**
+   * rawJobId = lokale jobs.id oder Dispo server_id.
+   * Bei Kollision (z. B. Etex server_id 47 vs. Gebtron jobs.id 47): Dispo server_id gewinnt.
+   */
+  function resolveJobRowByAmbiguousRef(rawJobId, selectSql) {
     const n = parseInt(rawJobId, 10);
     if (!Number.isFinite(n) || n <= 0) return null;
-    return db.prepare(`
-      SELECT id, server_id FROM jobs j
-      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
-      LIMIT 1
-    `).get(n, n, n);
+    const byLocal = db.prepare(`SELECT ${selectSql} FROM jobs j WHERE j.id = ? LIMIT 1`).get(n);
+    const byServer = db
+      .prepare(`SELECT ${selectSql} FROM jobs j WHERE CAST(j.server_id AS TEXT) = CAST(? AS TEXT) LIMIT 1`)
+      .get(n);
+    if (byLocal && byServer && byLocal.id !== byServer.id) {
+      console.warn('[resolveJobRowByAmbiguousRef] ID-Konflikt ref=' + n + ' — bevorzuge server_id-Zeile', {
+        local_match_id: byLocal.id,
+        server_match_id: byServer.id,
+      });
+      return byServer;
+    }
+    return byLocal || byServer || null;
+  }
+
+  function getJobRowByLocalOrServerId(rawJobId) {
+    return resolveJobRowByAmbiguousRef(rawJobId, 'j.id, j.server_id');
   }
 
   function getJobRowWithStatusByLocalOrServerId(rawJobId) {
-    const n = parseInt(rawJobId, 10);
-    if (!Number.isFinite(n) || n <= 0) return null;
-    return db.prepare(`
-      SELECT id, server_id, status FROM jobs j
-      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
-      LIMIT 1
-    `).get(n, n, n);
+    return resolveJobRowByAmbiguousRef(rawJobId, 'j.id, j.server_id, j.status');
   }
 
   /** Nach Admin-Rücksetzung in Dispo: lokales erledigt + pending erledigt mit Server-Status abgleichen. */
@@ -2038,6 +2054,9 @@ function createApp(db) {
     if (!fs.existsSync(yearDir)) fs.mkdirSync(yearDir, { recursive: true });
     if (fs.existsSync(reiseDir)) throw new Error('Reise-Ordner existiert bereits: ' + folderName);
     fs.mkdirSync(reiseDir, { recursive: true });
+    try {
+      console.log('[dienstreise] Ordner angelegt:', reiseDir);
+    } catch (_) {}
     for (const sub of DIENSTREISE_SUBFOLDERS) {
       fs.mkdirSync(path.join(reiseDir, sub), { recursive: true });
     }
@@ -2100,21 +2119,26 @@ function createApp(db) {
     if (jobIdRef == null || jobIdRef === '') return null;
     const id = typeof jobIdRef === 'number' ? jobIdRef : parseInt(jobIdRef, 10);
     if (!Number.isFinite(id)) return null;
-    return (
-      db
-        .prepare(
-          `
-      SELECT j.id, j.server_id, j.start_datetime, j.fabrikationsnummern, c.name AS customer_name, ja.city, ja.country
+    const joinSql = `
       FROM jobs j
       LEFT JOIN customers c ON c.id = j.customer_id
-      LEFT JOIN job_addresses ja ON ja.job_id = j.id
-      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
-      LIMIT 1
-    `,
-        )
-        .get(id, id, id) || null
-    );
+      LEFT JOIN job_addresses ja ON ja.job_id = j.id`;
+    const cols =
+      'j.id, j.server_id, j.start_datetime, j.fabrikationsnummern, c.name AS customer_name, ja.city, ja.country';
+    const byLocal = db
+      .prepare(`SELECT ${cols} ${joinSql} WHERE j.id = ? LIMIT 1`)
+      .get(id);
+    const byServer = db
+      .prepare(`SELECT ${cols} ${joinSql} WHERE CAST(j.server_id AS TEXT) = CAST(? AS TEXT) LIMIT 1`)
+      .get(id);
+    if (byLocal && byServer && byLocal.id !== byServer.id) {
+      console.warn('[lookupDienstreiseJobRow] ID-Konflikt ref=' + id + ' — bevorzuge server_id-Zeile', {
+        local_match_id: byLocal.id,
+        server_match_id: byServer.id,
+      });
+      return byServer;
+    }
+    return byLocal || byServer || null;
   }
 
   function ensureJobReiseFolderBindingSchema(dbConn) {
@@ -2134,6 +2158,12 @@ function createApp(db) {
     const row = db.prepare('SELECT folder_path FROM job_reise_folder_binding WHERE local_job_id = ?').get(lid);
     const p = row && row.folder_path ? String(row.folder_path).trim() : '';
     if (p && fs.existsSync(p)) return p;
+    if (p) {
+      try {
+        db.prepare('DELETE FROM job_reise_folder_binding WHERE local_job_id = ?').run(lid);
+        save();
+      } catch (_) {}
+    }
     return null;
   }
 
@@ -2142,10 +2172,46 @@ function createApp(db) {
     const lid = parseInt(localJobId, 10);
     const p = String(folderPath || '').trim();
     if (!Number.isFinite(lid) || lid <= 0 || !p) return;
+    const assigned = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ? LIMIT 1').get(lid);
+    if (!assigned) return;
     db.prepare(
       `INSERT OR REPLACE INTO job_reise_folder_binding (local_job_id, folder_path, created_at)
        VALUES (?, ?, datetime('now'))`,
     ).run(lid, p);
+  }
+
+  /** Projektordner nur für zugewiesene Aufträge (Ausnahme: Accept-Flow mit skipAssignmentCheck). */
+  function requireJobHasTechnicianAssignment(dbConn, localJobId) {
+    const lid = parseInt(localJobId, 10);
+    if (!Number.isFinite(lid) || lid <= 0) {
+      return { error: 'job_id (lokal) ungültig.', status: 400 };
+    }
+    const row = dbConn.prepare('SELECT 1 FROM job_technicians WHERE job_id = ? LIMIT 1').get(lid);
+    if (!row) {
+      return { error: 'Auftrag ist keinem Monteur zugeordnet — kein Projektordner.', status: 403 };
+    }
+    return null;
+  }
+
+  function purgeOrphanReiseFolderBindings() {
+    ensureJobReiseFolderBindingSchema(db);
+    const rows = db.prepare('SELECT local_job_id, folder_path FROM job_reise_folder_binding').all();
+    let n = 0;
+    for (const row of rows) {
+      const lid = parseInt(row.local_job_id, 10);
+      if (!Number.isFinite(lid) || lid <= 0) continue;
+      const assigned = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ? LIMIT 1').get(lid);
+      const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(lid);
+      const st = statusRow ? String(statusRow.status || '').trim().toLowerCase() : '';
+      const folderPath = String(row.folder_path || '').trim();
+      const missing = !folderPath || !fs.existsSync(folderPath);
+      if (!assigned || (missing && st !== 'in_arbeit')) {
+        db.prepare('DELETE FROM job_reise_folder_binding WHERE local_job_id = ?').run(lid);
+        n++;
+      }
+    }
+    if (n) save();
+    return n;
   }
 
   /**
@@ -2160,6 +2226,12 @@ function createApp(db) {
     if (!base) return null;
     const row = lookupDienstreiseJobRow(jobIdRef);
     if (!row) return null;
+    if (createIfMissing && !opts.skipFolderStatusGate) {
+      const assignGate = requireJobHasTechnicianAssignment(db, row.id);
+      if (assignGate) return null;
+      const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(row.id);
+      if (dienstreiseProjectFolderBlocked(statusRow ? statusRow.status : null)) return null;
+    }
     const bound = getBoundReiseDirForJob(row.id);
     if (bound) return bound;
     const startStr = (row.start_datetime || '').trim().slice(0, 10);
@@ -2202,12 +2274,25 @@ function createApp(db) {
    * Zielordner für einen Auftrag: Jahr = Beginn des Auftrags, Ordner = Laufende Nr._Datum_Firmenname_Ort_LK.
    * Verwendet vorhandenen Ordner falls passend, sonst wird er angelegt.
    */
-  function getOrCreateDienstreiseFolderForJob(localJobId) {
+  function getOrCreateDienstreiseFolderForJob(localJobId, opts) {
+    opts = opts || {};
+    if (!opts.skipAssignmentCheck) {
+      const assignGate = requireJobHasTechnicianAssignment(db, localJobId);
+      if (assignGate) throw new Error(assignGate.error);
+      const tid = parseInt(opts.technicianId, 10);
+      if (Number.isFinite(tid) && tid > 0) {
+        const tg = requireJobAssignedToTechnician(db, localJobId, tid);
+        if (tg) throw new Error(tg.error);
+      }
+    }
     const base = getDienstreiseBasePath();
     if (!base) throw new Error('Speicherort Dienstreise ist nicht konfiguriert.');
     const row = lookupDienstreiseJobRow(localJobId);
     if (!row) throw new Error('Auftrag nicht gefunden.');
-    const dir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true });
+    const dir = resolveDienstreiseReiseDirForJob(localJobId, {
+      createIfMissing: true,
+      skipFolderStatusGate: !!opts.skipAssignmentCheck,
+    });
     if (!dir) throw new Error('Auftrag hat kein gültiges Startdatum.');
     return dir;
   }
@@ -2392,11 +2477,37 @@ function createApp(db) {
     try {
       const jobId = parseInt(req.query.job_id, 10);
       if (!jobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
-      const mapped = getJobRowByLocalOrServerId(jobId);
-      const localJobId = mapped ? mapped.id : jobId;
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      if (!reiseDir || !fs.existsSync(reiseDir)) return res.json({ ok: true, folderPath: reiseDir || '', entries: [] });
-      ensureJobReiseFolderLayout(localJobId, reiseDir, getTechnicianId(req));
+      const technicianId = getTechnicianId(req);
+      const resolved =
+        technicianId && Number.isFinite(technicianId) && technicianId > 0
+          ? resolveLocalJobIdForTechnician(db, technicianId, jobId, { mode: 'auto' })
+          : null;
+      let localJobId = jobId;
+      if (resolved) {
+        if (!resolved.ok) {
+          return res.status(resolved.status || 404).json({ ok: false, error: resolved.error });
+        }
+        localJobId = resolved.localId;
+      } else {
+        const mapped = getJobRowByLocalOrServerId(jobId);
+        if (!mapped) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+        localJobId = mapped.id;
+      }
+      const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(localJobId);
+      const folderGate = dienstreiseProjectFolderBlocked(statusRow ? statusRow.status : null);
+      const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      if (folderGate || !reiseDir || !fs.existsSync(reiseDir)) {
+        return res.json({
+          ok: true,
+          folderPath: reiseDir || '',
+          entries: [],
+          folder_missing: true,
+          hint: folderGate
+            ? folderGate.error
+            : 'Noch kein Projektordner — bitte Auftrag annehmen.',
+        });
+      }
+      ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
       let subpath = (req.query.subpath || '').trim().replace(/^[\/\\]+|[\/\\]+$/g, '');
       if (subpath && (subpath.includes('..') || path.isAbsolute(subpath))) return res.status(400).json({ ok: false, error: 'Ungültiger Unterpfad.' });
 
@@ -2731,7 +2842,11 @@ function createApp(db) {
   function resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdOpt) {
     let localJobId = jobIdOpt != null ? parseInt(jobIdOpt, 10) : null;
     if (!Number.isFinite(localJobId) || localJobId <= 0) localJobId = null;
-    if (localJobId) {
+    if (localJobId && technicianId) {
+      const resolved = resolveLocalJobIdForTechnician(db, technicianId, localJobId, { mode: 'auto' });
+      if (resolved.ok) localJobId = resolved.localId;
+      else localJobId = null;
+    } else if (localJobId) {
       const mapped = getJobRowByLocalOrServerId(localJobId);
       localJobId = mapped ? mapped.id : null;
     }
@@ -2851,8 +2966,18 @@ function createApp(db) {
       const fab = String(req.query.fab || '').trim();
       const rescan = req.query.rescan === '1' || req.query.rescan === 'true';
       if (!rawJobId || !fab) return res.status(400).json({ ok: false, error: 'job_id und fab erforderlich.' });
-      const mapped = getJobRowByLocalOrServerId(rawJobId);
-      const jobId = mapped ? mapped.id : rawJobId;
+      const calTechId = getTechnicianId(req);
+      let jobId = rawJobId;
+      if (calTechId) {
+        const resolved = resolveLocalJobIdForTechnician(db, calTechId, rawJobId, { mode: 'auto' });
+        if (!resolved.ok) {
+          return res.status(resolved.status || 404).json({ ok: false, error: resolved.error });
+        }
+        jobId = resolved.localId;
+      } else {
+        const mapped = getJobRowByLocalOrServerId(rawJobId);
+        jobId = mapped ? mapped.id : rawJobId;
+      }
       if (!rescan) {
         const cached = readAnlagenstammTreeCache(db, fab);
         if (cached && cached.tree.length > 0) {
@@ -2917,8 +3042,18 @@ function createApp(db) {
       if (!rawJobId || !fab || !relPath) {
         return res.status(400).json({ ok: false, error: 'job_id, fab und path erforderlich.' });
       }
-      const mapped = getJobRowByLocalOrServerId(rawJobId);
-      const jobId = mapped ? mapped.id : rawJobId;
+      const calTechId = getTechnicianId(req);
+      let jobId = rawJobId;
+      if (calTechId) {
+        const resolved = resolveLocalJobIdForTechnician(db, calTechId, rawJobId, { mode: 'auto' });
+        if (!resolved.ok) {
+          return res.status(resolved.status || 404).json({ ok: false, error: resolved.error });
+        }
+        jobId = resolved.localId;
+      } else {
+        const mapped = getJobRowByLocalOrServerId(rawJobId);
+        jobId = mapped ? mapped.id : rawJobId;
+      }
       const filePath = resolveProjekteNeuLocalFilePath(jobId, fab, relPath, { skipDeepSearch: wantThumb });
       if (!filePath) {
         return res.status(404).json({ ok: false, error: 'local_unavailable', message: 'Datei nicht lokal gefunden.' });
@@ -3025,6 +3160,9 @@ function createApp(db) {
 
       const jobRow = getJobRowByLocalOrServerId(rawJobId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(jobRow.id);
+      const folderGate = dienstreiseProjectFolderBlocked(statusRow ? statusRow.status : null);
+      if (folderGate) return res.status(folderGate.status).json({ ok: false, error: folderGate.error });
       const jobId = jobRow.server_id != null ? jobRow.server_id : jobRow.id;
 
       const targetDir = getOrCreateDienstreiseFolderForJob(jobRow.id);
@@ -3589,10 +3727,17 @@ function createApp(db) {
       } else {
         const drGateStream = gateDienstreiseWrite(db, technicianId, resolvedJob.localId);
         if (drGateStream) return res.status(drGateStream.status).json({ ok: false, error: drGateStream.error });
+        const folderGate = dienstreiseProjectFolderBlocked(jobRowFull.status);
+        if (folderGate) {
+          return res.status(folderGate.status).json({ ok: false, error: folderGate.error });
+        }
       }
 
       const localJobId = jobRowFull.id;
-      const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const targetDir = getOrCreateDienstreiseFolderForJob(localJobId, {
+        skipAssignmentCheck: true,
+        technicianId,
+      });
       if (!targetDir || !fs.existsSync(targetDir)) {
         return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
       }
@@ -3626,7 +3771,10 @@ function createApp(db) {
         offlinePullMode = 'explicit';
         save();
         try {
-          const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+          const targetDir = getOrCreateDienstreiseFolderForJob(localJobId, {
+          skipAssignmentCheck: true,
+          technicianId,
+        });
           ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
         } catch (layoutErr) {
           console.warn(
@@ -6077,7 +6225,10 @@ ORDER BY
         rawName = fnPlain[1];
       }
       const reiseDir =
-        localJobId && localJobId > 0
+        localJobId &&
+        localJobId > 0 &&
+        localJobStatusAllowsTedFilePull(db, localJobId) &&
+        !requireJobHasTechnicianAssignment(db, localJobId)
           ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true })
           : null;
       const safeName = safeTedLocalFileName({
@@ -7681,9 +7832,16 @@ ORDER BY
         if (!jobRowFull) throw new Error('Auftrag nicht gefunden.');
         const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(resolvedJob.localId);
         jobRowFull.status = statusRow ? statusRow.status : null;
+        if (!acceptJob) {
+          const folderGate = dienstreiseProjectFolderBlocked(jobRowFull.status);
+          if (folderGate) throw new Error(folderGate.error);
+        }
         const localJobId = jobRowFull.id;
         const serverJobId = jobRowFull.server_id != null ? jobRowFull.server_id : jobRowFull.id;
-        const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
+        const targetDir = getOrCreateDienstreiseFolderForJob(localJobId, {
+          skipAssignmentCheck: true,
+          technicianId,
+        });
         if (!targetDir || !fs.existsSync(targetDir)) throw new Error('Zielordner konnte nicht erstellt werden.');
         console.log('[dienstreise_pull] start', {
           local_job_id: localJobId,
@@ -8545,8 +8703,17 @@ ORDER BY
   bgJobs = createBackgroundJobService(db, save, { executeJob: executeBackgroundJob });
   monteurRuntime.bgJobs = bgJobs;
   bgJobs.markStaleRunningAsInterrupted();
+  purgeOrphanReiseFolderBindings();
+  const purgedMirrors = purgeUnassignedMirrorJobs(db);
+  if (purgedMirrors) {
+    save();
+    console.log('[startup] unzugewiesene Spiegel-Aufträge entfernt:', purgedMirrors);
+  }
   if (typeof bgJobs.purgeUnassignedDienstreisePullJobs === 'function') {
     bgJobs.purgeUnassignedDienstreisePullJobs();
+  }
+  if (typeof bgJobs.purgeNonInArbeitDienstreiseCopyPulls === 'function') {
+    bgJobs.purgeNonInArbeitDienstreiseCopyPulls();
   }
   bgJobs.kick();
 
@@ -10446,6 +10613,8 @@ function jobHasPendingLocalChanges(db, localJobId) {
 
 /** Laufende / lokale Arbeit nie durch Pull-Listenlücke löschen (z. B. Enddatum in der Vergangenheit). */
 function shouldPreserveLocalJobOnPull(db, localJobId) {
+  const assigned = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ? LIMIT 1').get(localJobId);
+  if (!assigned) return false;
   const row = db.prepare('SELECT status FROM jobs WHERE id = ?').get(localJobId);
   const st = row ? String(row.status || '').trim().toLowerCase() : '';
   if (st === 'in_arbeit' || st === 'zugeteilt' || st === 'angelegt' || st === 'geplant') return true;
@@ -10479,8 +10648,29 @@ function deleteLocalJobRowIfUnassigned(db, localJobId) {
   try {
     db.prepare('DELETE FROM job_hotel_addresses WHERE job_id = ?').run(localJobId);
   } catch (e) { /* ignore */ }
+  try {
+    db.prepare('DELETE FROM job_reise_folder_binding WHERE local_job_id = ?').run(localJobId);
+  } catch (_) {}
   db.prepare('DELETE FROM job_addresses WHERE job_id = ?').run(localJobId);
   db.prepare('DELETE FROM jobs WHERE id = ?').run(localJobId);
+}
+
+/** Fremde Spiegel-Jobs ohne Monteur-Zuordnung (z. B. Gebtron id 47) — verursachen ID-Kollisionen. */
+function purgeUnassignedMirrorJobs(dbConn) {
+  const rows = dbConn
+    .prepare(
+      `SELECT j.id FROM jobs j
+       WHERE NOT EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id)
+         AND LOWER(TRIM(COALESCE(j.status, ''))) != 'in_arbeit'`,
+    )
+    .all();
+  let n = 0;
+  for (const row of rows) {
+    if (shouldPreserveLocalJobOnPull(dbConn, row.id)) continue;
+    deleteLocalJobRowIfUnassigned(dbConn, row.id);
+    n++;
+  }
+  return n;
 }
 
 function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
@@ -10761,6 +10951,10 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
   db.transaction(() => {
     ensureTechnician(db, technicianId);
     removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds);
+    const purgedMirrors = purgeUnassignedMirrorJobs(db);
+    if (purgedMirrors) {
+      console.log('[sync_pull] unzugewiesene Spiegel-Aufträge entfernt:', purgedMirrors);
+    }
     removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerIds);
     for (const j of jobs) {
       const custId = ensureCustomer(db, j);
