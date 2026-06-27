@@ -79,6 +79,21 @@ function readAppVersionLabel() {
   }
 }
 
+/** SemVer aus latest.yml (z. B. 1.4.61) → Kukla-Label wie version.json (V 1.004.061). */
+function formatUpdateVersionLabel(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const kukla = s.match(/^\s*V\s+(\d+)\.(\d{3})\.(\d{3})\s*$/i);
+  if (kukla) return `V ${kukla[1]}.${kukla[2]}.${kukla[3]}`;
+  const semver = s.replace(/^\s*[vV]\s*/, '');
+  const m = semver.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return s.startsWith('V') ? s : `V ${s}`;
+  const maj = m[1];
+  const rel = String(parseInt(m[2], 10)).padStart(3, '0');
+  const pat = String(parseInt(m[3], 10)).padStart(3, '0');
+  return `V ${maj}.${rel}.${pat}`;
+}
+
 function normalizeFeedBase(dispoBase) {
   const base = (dispoBase || '').trim().replace(/\/+$/, '');
   if (!base) return '';
@@ -308,7 +323,7 @@ function initLaptopUpdater(opts) {
 
   autoUpdater.on('update-available', (info) => {
     if (info && info.version) {
-      latestVersionLabel = String(info.version);
+      latestVersionLabel = formatUpdateVersionLabel(info.version);
     }
     sendStatus('available');
     showUpdateAvailableDialog().catch((e) => {
@@ -430,5 +445,6 @@ module.exports = {
     autoUpdater.quitAndInstall(false, true);
   },
   readAppVersionLabel,
+  formatUpdateVersionLabel,
   trustCertificateForUrl,
 };
