@@ -1131,7 +1131,7 @@
       '<div class="accept-offline-loading">' +
       '<p class="muted" id="acceptOfflineLoadingMsg">' + escapeHtml(msg) + '</p>' +
       '<progress max="100" value="0" id="acceptOfflineLoadingBar"></progress>' +
-      '<p class="muted" style="font-size:0.8rem;">Bei langsamer Verbindung kann dies eine Minute dauern. Sie können „Keine“ wählen und nur TED offline laden.</p>' +
+      '<p class="muted" style="font-size:0.8rem;">Bei langsamer Verbindung kann dies eine Minute dauern. Sie können „Keine“ wählen und nur Status/Struktur offline laden.</p>' +
       '</div>'
     );
   }
@@ -1198,8 +1198,152 @@
     } catch (_) {}
   }
 
-  function offlinePathKey(fab, rel) {
-    return String(fab) + ':' + String(rel || '').replace(/^\/+|\/+$/g, '');
+  function offlinePathKey(fab, rel, kind) {
+    return String(fab) + ':' + String(rel || '').replace(/^\/+|\/+$/g, '') + ':' + (kind || 'dir');
+  }
+
+  function acceptOfflineNodeId(fab, rel) {
+    return 'ao_' + String(fab) + '_' + String(rel || '').replace(/[^a-zA-Z0-9]+/g, '_');
+  }
+
+  function flattenAcceptOfflineNodes(nodes, fab, out) {
+    (nodes || []).forEach(function (node) {
+      if (!node) return;
+      var rel = node.rel || node.name || '';
+      var kind = node.type === 'file' ? 'file' : 'dir';
+      out.push({ fab: fab, rel: rel, kind: kind, is_ted: !!node.is_ted });
+      if (node.children && node.children.length) flattenAcceptOfflineNodes(node.children, fab, out);
+    });
+    return out;
+  }
+
+  function renderAcceptOfflineTreeNodes(fab, nodes, level, expanded, rememberSet, validKeys) {
+    var html = '';
+    (nodes || []).forEach(function (node) {
+      if (!node) return;
+      var rel = node.rel || node.name || '';
+      var kind = node.type === 'file' ? 'file' : 'dir';
+      var isDir = kind === 'dir';
+      var isTed = !!node.is_ted;
+      var key = offlinePathKey(fab, rel, kind);
+      validKeys.add(key);
+      var nodeId = acceptOfflineNodeId(fab, rel);
+      var pad = 0.35 + Math.min(level, 8) * 0.85;
+      var icon = isDir ? '📁' : '📄';
+      if (isTed) {
+        html +=
+          '<div class="accept-offline-row muted" style="margin-left:' +
+          pad +
+          'rem;font-size:0.85rem;" title="Bereits im Anlagenstamm (TED)">' +
+          icon +
+          ' ' +
+          escapeHtml(node.name || rel) +
+          ' <span class="muted">(Anlagenstamm)</span></div>';
+      } else {
+        var checked = rememberSet.has(key) ? ' checked' : '';
+        html += '<div class="accept-offline-row" style="margin-left:' + pad + 'rem;display:flex;align-items:center;gap:0.25rem;font-size:0.85rem;">';
+        if (isDir) {
+          var isExp = !!expanded[nodeId];
+          html +=
+            '<button type="button" class="btn btn-ghost accept-offline-toggle" data-offline-toggle="' +
+            escapeHtml(nodeId) +
+            '" style="min-width:1.25rem;padding:0;">' +
+            (isExp ? '▼' : '▶') +
+            '</button>';
+        } else {
+          html += '<span style="display:inline-block;min-width:1.25rem;"></span>';
+        }
+        html +=
+          '<label style="display:inline-flex;align-items:center;gap:0.35rem;flex:1;">' +
+          '<input type="checkbox" data-offline-path data-fab="' +
+          escapeHtml(String(fab)) +
+          '" data-offline-path-val="' +
+          escapeHtml(rel) +
+          '" data-offline-kind="' +
+          kind +
+          '" data-offline-node="' +
+          escapeHtml(nodeId) +
+          '"' +
+          checked +
+          '> ' +
+          icon +
+          ' ' +
+          escapeHtml(node.name || rel) +
+          '</label></div>';
+        if (isDir && expanded[nodeId] && node.children && node.children.length) {
+          html += renderAcceptOfflineTreeNodes(fab, node.children, level + 1, expanded, rememberSet, validKeys);
+        }
+      }
+    });
+    return html;
+  }
+
+  function bindAcceptOfflineTreeEvents(bodyEl) {
+    if (!bodyEl || bodyEl._acceptOfflineBound) return;
+    bodyEl._acceptOfflineBound = true;
+    bodyEl.addEventListener('click', function (e) {
+      var toggle = e.target.closest('[data-offline-toggle]');
+      if (toggle && acceptOfflinePending) {
+        e.preventDefault();
+        var id = toggle.getAttribute('data-offline-toggle');
+        if (!acceptOfflinePending.expanded) acceptOfflinePending.expanded = {};
+        acceptOfflinePending.expanded[id] = !acceptOfflinePending.expanded[id];
+        if (acceptOfflinePending.lastPreview) renderAcceptOfflinePreview(acceptOfflinePending.lastPreview);
+        return;
+      }
+    });
+    bodyEl.addEventListener('change', function (e) {
+      var cb = e.target;
+      if (!cb || cb.type !== 'checkbox' || !cb.hasAttribute('data-offline-path')) return;
+      if (!acceptOfflinePending || !acceptOfflinePending.nodeIndex) return;
+      var nodeId = cb.getAttribute('data-offline-node');
+      var descend = acceptOfflinePending.nodeIndex[nodeId];
+      if (cb.checked && descend && descend.length) {
+        descend.forEach(function (d) {
+          var sel = 'input[data-offline-node="' + d.id + '"]';
+          var other = bodyEl.querySelector(sel);
+          if (other && !other.disabled) other.checked = true;
+        });
+      }
+      bodyEl.querySelectorAll('input[data-offline-path][data-offline-kind="dir"]').forEach(function (dirCb) {
+        var did = dirCb.getAttribute('data-offline-node');
+        var kids = acceptOfflinePending.nodeIndex[did] || [];
+        if (!kids.length) {
+          dirCb.indeterminate = false;
+          return;
+        }
+        var checkedCount = 0;
+        kids.forEach(function (k) {
+          var kcb = bodyEl.querySelector('input[data-offline-node="' + k.id + '"]');
+          if (kcb && kcb.checked) checkedCount++;
+        });
+        if (checkedCount === 0) {
+          dirCb.indeterminate = false;
+          dirCb.checked = false;
+        } else if (checkedCount === kids.length && dirCb.checked) {
+          dirCb.indeterminate = false;
+        } else {
+          dirCb.indeterminate = true;
+        }
+      });
+    });
+  }
+
+  function buildAcceptOfflineNodeIndex(fab, nodes, index, list) {
+    (nodes || []).forEach(function (node) {
+      if (!node || node.is_ted) return;
+      var rel = node.rel || node.name || '';
+      var nodeId = acceptOfflineNodeId(fab, rel);
+      var descend = [];
+      flattenAcceptOfflineNodes(node.children || [], fab, []).forEach(function (d) {
+        if (d.is_ted) return;
+        var cid = acceptOfflineNodeId(fab, d.rel);
+        descend.push({ id: cid, rel: d.rel, kind: d.kind });
+      });
+      index[nodeId] = descend;
+      list.push({ id: nodeId, fab: fab, rel: rel, kind: node.type === 'file' ? 'file' : 'dir' });
+      if (node.children && node.children.length) buildAcceptOfflineNodeIndex(fab, node.children, index, list);
+    });
   }
 
   function closeAcceptOfflineModal() {
@@ -1227,8 +1371,9 @@
     if (!bodyEl) return out;
     bodyEl.querySelectorAll('input[type="checkbox"][data-offline-path]:checked').forEach(function (cb) {
       var fab = cb.getAttribute('data-fab');
-      var rel = cb.getAttribute('data-offline-path');
-      if (fab && rel) out.push({ fab: fab, path: rel });
+      var rel = cb.getAttribute('data-offline-path-val') || cb.getAttribute('data-offline-path');
+      var kind = cb.getAttribute('data-offline-kind') || 'dir';
+      if (fab && rel) out.push({ fab: fab, path: rel, kind: kind });
     });
     return out;
   }
@@ -1237,7 +1382,9 @@
     var bodyEl = document.getElementById('acceptOfflineBody');
     if (!bodyEl) return;
     bodyEl.querySelectorAll('input[type="checkbox"][data-offline-path]').forEach(function (cb) {
+      if (cb.disabled) return;
       cb.checked = !!checked;
+      cb.indeterminate = false;
     });
   }
 
@@ -1245,12 +1392,15 @@
     var bodyEl = document.getElementById('acceptOfflineBody');
     var hintEl = document.getElementById('acceptOfflineHint');
     if (!bodyEl) return;
+    if (acceptOfflinePending) acceptOfflinePending.lastPreview = preview;
     var remembered = loadRememberedOfflinePaths();
     var rememberSet = new Set(remembered.map(function (p) {
-      if (p && typeof p === 'object') return offlinePathKey(p.fab, p.path);
+      if (p && typeof p === 'object') return offlinePathKey(p.fab, p.path, p.kind || 'dir');
       return String(p || '');
     }));
     var validKeys = new Set();
+    var expanded = (acceptOfflinePending && acceptOfflinePending.expanded) || {};
+    var nodeIndex = {};
     var html = '';
     (preview.fabs || []).forEach(function (fabBlock) {
       var fab = fabBlock.fab;
@@ -1260,37 +1410,25 @@
       html += ' <span class="muted">(' + escapeHtml(String(fnName)) + ')</span>';
       var tree = fabBlock.tree || [];
       if (!tree.length) {
-        html += '<p class="muted" style="font-size:0.85rem;margin:0.35rem 0;">Keine Unterordner am Server – nur TED &amp; Status offline.</p>';
+        html += '<p class="muted" style="font-size:0.85rem;margin:0.35rem 0;">Keine Projektordner am Server – nur Status/Struktur offline.</p>';
+      } else {
+        buildAcceptOfflineNodeIndex(fab, tree, nodeIndex, []);
+        html += renderAcceptOfflineTreeNodes(fab, tree, 0, expanded, rememberSet, validKeys);
       }
-      tree.forEach(function (node) {
-        var rel = node.rel || node.name;
-        var key = offlinePathKey(fab, rel);
-        validKeys.add(key);
-        var checked = rememberSet.has(key) ? ' checked' : '';
-        html += '<label style="display:block;margin:0.2rem 0 0.2rem 1rem;font-size:0.9rem;">';
-        html += '<input type="checkbox" data-fab="' + escapeHtml(String(fab)) + '" data-offline-path="' + escapeHtml(rel) + '"' + checked + '> ';
-        html += escapeHtml(node.name || rel);
-        html += '</label>';
-        (node.children || []).forEach(function (ch) {
-          var relCh = ch.rel || (rel + '/' + ch.name);
-          var keyCh = offlinePathKey(fab, relCh);
-          validKeys.add(keyCh);
-          var checkedCh = rememberSet.has(keyCh) ? ' checked' : '';
-          html += '<label style="display:block;margin:0.15rem 0 0.15rem 2rem;font-size:0.85rem;">';
-          html += '<input type="checkbox" data-fab="' + escapeHtml(String(fab)) + '" data-offline-path="' + escapeHtml(relCh) + '"' + checkedCh + '> ';
-          html += escapeHtml(ch.name || relCh);
-          html += '</label>';
-        });
-      });
       html += '</div>';
     });
     bodyEl.innerHTML = html || '<p class="muted">Keine PROJEKTE-NEU-Ordner verfügbar.</p>';
+    bindAcceptOfflineTreeEvents(bodyEl);
     if (hintEl) {
       hintEl.textContent = preview.preview_degraded
-        ? (preview.hint || preview.error || 'Vorschau eingeschränkt – Sie können trotzdem annehmen (nur TED).')
-        : '';
+        ? (preview.hint || preview.error || 'Vorschau eingeschränkt – Sie können trotzdem annehmen (ohne Projektdateien).')
+        : 'Ordner ankreuzen übernimmt alle Dateien darin; einzelne Dateien können abgewählt werden. TED liegt im Anlagenstamm.';
     }
-    if (acceptOfflinePending) acceptOfflinePending.validKeys = validKeys;
+    if (acceptOfflinePending) {
+      acceptOfflinePending.validKeys = validKeys;
+      acceptOfflinePending.nodeIndex = nodeIndex;
+      if (!acceptOfflinePending.expanded) acceptOfflinePending.expanded = expanded;
+    }
     var confirmBtn = document.getElementById('acceptOfflineBtnConfirm');
     if (confirmBtn) confirmBtn.disabled = false;
   }
@@ -1381,8 +1519,8 @@
           '</p>';
         if (hintEl) {
           hintEl.textContent = aborted
-            ? '„Keine“ wählen → nur TED & Status offline. Oder erneut versuchen.'
-            : 'Sie können „Keine“ wählen und nur TED laden.';
+            ? '„Keine“ wählen → nur Status/Struktur offline. Oder erneut versuchen.'
+            : 'Sie können „Keine“ wählen und ohne Projektdateien annehmen.';
         }
         acceptOfflinePending.previewFailed = true;
         acceptOfflinePending.fab_map = [];
@@ -8625,6 +8763,20 @@
     };
   }
 
+  /** Lokale jobs.id für Kalender-Aktionen (Klick, Modal) — nie blind server_job_id. */
+  function calendarLocalActionJobId(job) {
+    if (!job) return null;
+    var lid = job.local_job_id != null ? parseInt(job.local_job_id, 10) : NaN;
+    if (Number.isFinite(lid) && lid > 0) return lid;
+    var sid = job.server_id != null ? String(job.server_id).trim() : '';
+    var jid = job.id != null ? String(job.id).trim() : '';
+    if (jid && (!sid || jid !== sid)) {
+      var idNum = parseInt(job.id, 10);
+      if (Number.isFinite(idNum) && idNum > 0) return idNum;
+    }
+    return null;
+  }
+
   function calendarJobTechFields(job, techById, viewerTechId) {
     if (isCalendarJobUnassigned(job)) {
       return calendarUnassignedLane(techById, job);
@@ -8677,6 +8829,7 @@
       if (!cj) return j;
       var fromCache = calendarBillingFlagsFrom(cj);
       var merged = Object.assign({}, j, fromCache);
+      if (cj.local_job_id != null) merged.local_job_id = cj.local_job_id;
       merged.date_not_fixed = mergeDateNotFixedFlag(j.date_not_fixed, cj.date_not_fixed);
       return merged;
     });
@@ -8719,7 +8872,9 @@
     var techById = buildTechByIdFromCalendarTechnicians(cached && cached.ok ? cached.technicians : []);
     techById[techId] = { name: techName, color: techColor };
     const jobs = (jRes.jobs || []).map(function (j) {
-      return Object.assign({}, j, calendarJobTechFields(j, techById, techId));
+      return Object.assign({}, j, calendarJobTechFields(j, techById, techId), {
+        local_job_id: j.id != null ? j.id : null,
+      });
     });
     const absences = (aRes.absences || []).map(function (a) {
       return Object.assign({}, a, { technician_id: techId, technician_name: techName, technician_color: techColor });
@@ -8796,10 +8951,13 @@
           if (localJob) {
             var cacheFlags = calendarBillingFlagsFrom(j);
             var mergedJob = Object.assign({}, localJob, cacheFlags, techDisplay);
+            mergedJob.local_job_id = localJob.id;
             mergedJob.date_not_fixed = mergeDateNotFixedFlag(localJob.date_not_fixed, j.date_not_fixed);
             return mergedJob;
           }
-          return Object.assign({}, j, techDisplay);
+          return Object.assign({}, j, techDisplay, {
+            local_job_id: j.local_job_id != null ? j.local_job_id : null,
+          });
         });
         var serverJobIds = {};
         jobs.forEach(function (j) {
@@ -9314,19 +9472,25 @@
           band.setAttribute('data-job-id', String(j.id));
           const jobTechId = Number(j.technician_id);
           const isOwnTechJob = Number.isFinite(myTechIdForDetails) && myTechIdForDetails > 0 && Number.isFinite(jobTechId) && jobTechId === myTechIdForDetails;
-          band.style.cursor = isOwnTechJob ? 'pointer' : 'default';
+          const actionJobId = calendarLocalActionJobId(j);
+          const canActOnJob = isOwnTechJob && actionJobId != null;
+          band.style.cursor = canActOnJob ? 'pointer' : 'default';
           const colSpan = colEnd - colStart;
           const maxChars = colSpan * 20;
           const bar = jobBarText(j, maxChars);
-          band.title = isOwnTechJob ? ((bar.title || '') + ' (Doppelklick: Projektdaten)') : (bar.title || '');
+          band.title = canActOnJob
+            ? ((bar.title || '') + ' (Doppelklick: Projektdaten)')
+            : isOwnTechJob && !actionJobId
+              ? ((bar.title || '') + ' (noch nicht lokal zugeordnet – Sync ausführen)')
+              : (bar.title || '');
           if (bar.labelHtml) band.innerHTML = bar.labelHtml; else band.textContent = bar.label || 'Auftrag';
-          if (isOwnTechJob) {
+          if (canActOnJob) {
             band.addEventListener('click', function (ev) {
               if (ev.detail > 1) return;
-              if (typeof loadStartActiveJobById === 'function') loadStartActiveJobById(j.id, j);
+              if (typeof loadStartActiveJobById === 'function') loadStartActiveJobById(actionJobId, j);
             });
             band.addEventListener('dblclick', function () {
-              if (typeof openJobDetailsModal === 'function') openJobDetailsModal(j.id);
+              if (typeof openJobDetailsModal === 'function') openJobDetailsModal(actionJobId);
             });
           }
         }

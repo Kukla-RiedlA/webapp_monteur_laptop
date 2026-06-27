@@ -90,6 +90,11 @@ function configurePersistentDbDir() {
 }
 const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore } = require('./lib/abrechnung-routes');
 const { createBackgroundJobService } = require('./lib/background_jobs');
+const {
+  isJobAssignedToTechnician,
+  requireJobAssignedToTechnician,
+  resolveLocalJobIdForTechnician,
+} = require('./lib/job-technician-gate');
 const { createDbLock } = require('./lib/db-lock');
 const { openMonteurDatabase, flushDb, getLastPersistError, getDb: getNativeDb } = require('./lib/db');
 const { createDbCompat } = require('./lib/db-compat');
@@ -1103,22 +1108,11 @@ function createApp(db) {
 
   /** Lokaler Auftrag für Schreibzugriff; blockiert Status nur Anzeige / abgerechnet. */
   function getWritableLocalJobMetaForPatch(dbConn, technicianId, rawJobId) {
-    const n = parseInt(rawJobId, 10);
-    if (!Number.isFinite(n)) return { error: 'job_id ungültig.', status: 400 };
-    const row = dbConn.prepare(`
-      SELECT j.id, j.status FROM jobs j
-      WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-        AND (
-          EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-          OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
-        )
-      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
-      LIMIT 1
-    `).get(n, n, technicianId, n);
-    if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
-    const blocked = localJobWriteBlocked(row.status);
+    const resolved = resolveLocalJobIdForTechnician(dbConn, technicianId, rawJobId, { mode: 'auto' });
+    if (!resolved.ok) return { error: resolved.error, status: resolved.status };
+    const blocked = localJobWriteBlocked(resolved.status);
     if (blocked) return blocked;
-    return { localId: row.id };
+    return { localId: resolved.localId };
   }
 
   /** Dienstreise-/Datei-Schreibzugriff: gleiche Regeln wie PATCH (inkl. Techniker-Zuordnung), sonst nur Status-Prüfung per lokaler ID (z. B. Upload ohne technicianId im Body). */
@@ -1544,10 +1538,7 @@ function createApp(db) {
     if (!jobStatusAllowsAcceptJob(statusRow && statusRow.status)) return;
     const r = db.prepare(`
       UPDATE jobs SET status = 'in_arbeit', updated_at = datetime('now')
-      WHERE id = ? AND (
-        EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
-        OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
-      )
+      WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
     `).run(lid, technicianId);
     if (r.changes) {
       db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
@@ -1581,10 +1572,7 @@ function createApp(db) {
     if (!jobStatusAllowsReleaseJob(statusRow && statusRow.status)) return false;
     const r = db.prepare(`
       UPDATE jobs SET status = 'zugeteilt', updated_at = datetime('now')
-      WHERE id = ? AND (
-        EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
-        OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
-      )
+      WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
     `).run(lid, technicianId);
     return r.changes > 0;
   }
@@ -2129,6 +2117,37 @@ function createApp(db) {
     );
   }
 
+  function ensureJobReiseFolderBindingSchema(dbConn) {
+    dbConn.prepare(
+      `CREATE TABLE IF NOT EXISTS job_reise_folder_binding (
+        local_job_id INTEGER PRIMARY KEY,
+        folder_path TEXT NOT NULL,
+        created_at TEXT
+      )`,
+    ).run();
+  }
+
+  function getBoundReiseDirForJob(localJobId) {
+    ensureJobReiseFolderBindingSchema(db);
+    const lid = parseInt(localJobId, 10);
+    if (!Number.isFinite(lid) || lid <= 0) return null;
+    const row = db.prepare('SELECT folder_path FROM job_reise_folder_binding WHERE local_job_id = ?').get(lid);
+    const p = row && row.folder_path ? String(row.folder_path).trim() : '';
+    if (p && fs.existsSync(p)) return p;
+    return null;
+  }
+
+  function bindReiseFolderForJob(localJobId, folderPath) {
+    ensureJobReiseFolderBindingSchema(db);
+    const lid = parseInt(localJobId, 10);
+    const p = String(folderPath || '').trim();
+    if (!Number.isFinite(lid) || lid <= 0 || !p) return;
+    db.prepare(
+      `INSERT OR REPLACE INTO job_reise_folder_binding (local_job_id, folder_path, created_at)
+       VALUES (?, ?, datetime('now'))`,
+    ).run(lid, p);
+  }
+
   /**
    * Dienstreise-Ordner zu einem Auftrag (lokal oder server_id).
    * @param {number|string} jobIdRef
@@ -2141,6 +2160,8 @@ function createApp(db) {
     if (!base) return null;
     const row = lookupDienstreiseJobRow(jobIdRef);
     if (!row) return null;
+    const bound = getBoundReiseDirForJob(row.id);
+    if (bound) return bound;
     const startStr = (row.start_datetime || '').trim().slice(0, 10);
     const hasValidStart = /^\d{4}-\d{2}-\d{2}$/.test(startStr);
     if (hasValidStart) {
@@ -2153,17 +2174,25 @@ function createApp(db) {
       const ort = sanitizeDienstreiseFolderPart(city);
       const lk = sanitizeDienstreiseFolderPart(countryCode);
       const existing = findExistingReiseDir(base, year, startStr, firm, ort, lk);
-      if (existing) return existing;
+      if (existing) {
+        bindReiseFolderForJob(row.id, existing);
+        return existing;
+      }
     }
-    const scanned = findReiseDirByMonteurFabScan(base, row);
-    if (scanned) return scanned;
-    if (!createIfMissing || !hasValidStart) return null;
+    if (!createIfMissing) {
+      const scanned = findReiseDirByMonteurFabScan(base, row);
+      if (scanned) return scanned;
+      return null;
+    }
+    if (!hasValidStart) return null;
     try {
       const companyName = (row.customer_name || '').trim() || 'Auftrag';
       const city = (row.city || '').trim();
       const countryRaw = (row.country || '').trim();
       const countryCode = countryRaw.length >= 2 ? countryRaw.slice(0, 2).toUpperCase() : countryRaw;
-      return createDienstreiseFolder(base, startStr, companyName, city, countryCode).fullPath;
+      const created = createDienstreiseFolder(base, startStr, companyName, city, countryCode);
+      bindReiseFolderForJob(row.id, created.fullPath);
+      return created.fullPath;
     } catch (_) {
       return null;
     }
@@ -2783,8 +2812,7 @@ function createApp(db) {
     const jobs = db
       .prepare(
         `SELECT j.id FROM jobs j
-         WHERE EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+         INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
          ORDER BY j.id DESC`,
       )
       .all(technicianId);
@@ -3187,7 +3215,7 @@ function createApp(db) {
       preview_degraded: true,
       hint:
         degradedHint ||
-        'Server-Ordnerliste nicht verfügbar – „Keine“ für nur TED oder erneut versuchen.',
+        'Server-Ordnerliste nicht verfügbar – „Keine“ für nur Status/Struktur oder erneut versuchen.',
       fabs: fabsOut,
       montage_folder_name: montageFolderName,
       fab_map: fabsOut.map((f) => ({ fab: f.fab, folder_name_canonical: f.folder_name_canonical })),
@@ -3407,7 +3435,7 @@ function createApp(db) {
       ok: true,
       preview_degraded: !anyTree && monteurDirNames.length === 0,
       hint: !anyTree && monteurDirNames.length === 0
-        ? 'Keine Server-Ordner geladen – „Keine“ für nur TED oder erneut versuchen.'
+        ? 'Keine Server-Ordner geladen – „Keine“ für nur Status/Struktur oder erneut versuchen.'
         : undefined,
       fabs: fabsOut,
       montage_folder_name: montageFolderName,
@@ -3444,7 +3472,7 @@ function createApp(db) {
           buildLocalAcceptOfflinePreview(
             localJobId,
             technicianId,
-            'Dispo nicht erreichbar – „Keine“ für nur TED & Status.',
+            'Dispo nicht erreichbar – „Keine“ für nur Status offline.',
           ),
         );
       }
@@ -3530,11 +3558,20 @@ function createApp(db) {
         });
       }
 
-      let jobRowFull = getJobRowWithStatusByLocalOrServerId(rawJobId);
+      const resolvedJob = resolveLocalJobIdForTechnician(db, technicianId, rawJobId, { mode: 'auto' });
+      if (!resolvedJob.ok) {
+        return res.status(resolvedJob.status).json({ ok: false, error: resolvedJob.error, code: resolvedJob.conflict ? 'job_id_conflict' : undefined });
+      }
+      const assignGate = requireJobAssignedToTechnician(db, resolvedJob.localId, technicianId);
+      if (assignGate) {
+        return res.status(assignGate.status).json({ ok: false, error: assignGate.error });
+      }
+
+      let jobRowFull = db.prepare('SELECT id, server_id, status FROM jobs WHERE id = ?').get(resolvedJob.localId);
       if (!jobRowFull) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
 
       if (acceptJob && authHeader.Authorization) {
-        jobRowFull = await reconcileLocalJobStatusFromDispoBeforeAccept(rawJobId, dispoBaseUrl, technicianId, authHeader);
+        jobRowFull = await reconcileLocalJobStatusFromDispoBeforeAccept(resolvedJob.localId, dispoBaseUrl, technicianId, authHeader);
         if (!jobRowFull) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
 
@@ -3550,7 +3587,7 @@ function createApp(db) {
           return res.status(400).json({ ok: false, error: 'Auftrag kann nur im Status Angelegt oder Zugeteilt angenommen werden.' });
         }
       } else {
-        const drGateStream = gateDienstreiseWrite(db, technicianId, rawJobId);
+        const drGateStream = gateDienstreiseWrite(db, technicianId, resolvedJob.localId);
         if (drGateStream) return res.status(drGateStream.status).json({ ok: false, error: drGateStream.error });
       }
 
@@ -3570,6 +3607,7 @@ function createApp(db) {
 
       if (acceptJob && bgJobs) {
         bgJobs.cancelRunningOfType('sync_pull');
+        bgJobs.cancelUnsafeDienstreisePullsOnAccept(localJobId, technicianId);
       }
 
       let offlinePullMode = null;
@@ -4150,10 +4188,7 @@ function createApp(db) {
         if (technicianId) {
           const r = db.prepare(`
             UPDATE jobs SET status = ?, updated_at = datetime('now')
-            WHERE id = ? AND (
-              EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
-              OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
-            )
+            WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
           `).run('erledigt', localJobId, technicianId);
           if (r.changes) {
             db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
@@ -4548,10 +4583,7 @@ ORDER BY
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
       LEFT JOIN job_hotel_selection jhs ON jhs.job_id = j.id
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-        AND (
-          EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-          OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
-        )
+        AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
       LIMIT 1
     `).get(jobId, jobId, technicianId, jobId);
@@ -4606,16 +4638,21 @@ ORDER BY
         return res.status(400).json({ ok: false, error: 'jobId ungültig.' });
       }
       const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
-      const row = db.prepare(`
-        SELECT j.id, j.server_id FROM jobs j
-        WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-          AND (
-            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
-          )
-        ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
-        LIMIT 1
-      `).get(localId, localId, technicianId, localId);
+      let row = db
+        .prepare(
+          `SELECT j.id, j.server_id FROM jobs j
+           WHERE j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT)
+           ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+           LIMIT 1`,
+        )
+        .get(localId, localId, localId);
+      if (row) {
+        const resolvedJob = resolveLocalJobIdForTechnician(db, technicianId, row.id, { mode: 'local' });
+        if (!resolvedJob.ok) {
+          return sendError(resolvedJob.status || 403, resolvedJob.error || 'Auftrag nicht zugeordnet.');
+        }
+        row = { id: resolvedJob.localId, server_id: resolvedJob.serverId };
+      }
 
       async function finishWithDispoJob(data) {
         if (!data.job || typeof data.job !== 'object') {
@@ -5872,8 +5909,7 @@ ORDER BY
     const jobs = db
       .prepare(
         `SELECT j.id, j.server_id, j.fabrikationsnummern FROM jobs j
-         WHERE EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+         INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
          ORDER BY j.id DESC`,
       )
       .all(technicianId);
@@ -6191,10 +6227,7 @@ ORDER BY
       const jobRow = db.prepare(`
         SELECT j.id FROM jobs j
         WHERE j.id = ?
-          AND (
-            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
-          )
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
@@ -6241,10 +6274,7 @@ ORDER BY
         INNER JOIN customers c ON c.id = j.customer_id
         LEFT JOIN job_addresses ja ON ja.job_id = j.id
         WHERE j.id = ?
-          AND (
-            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
-          )
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
@@ -6806,10 +6836,7 @@ ORDER BY
       const jobRow = db.prepare(`
         SELECT j.id, j.status, j.fabrikationsnummern FROM jobs j
         WHERE j.id = ?
-          AND (
-            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
-          )
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
@@ -7114,10 +7141,7 @@ ORDER BY
     const row = dbConn.prepare(`
       SELECT j.id, j.status FROM jobs j
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-        AND (
-          EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-          OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
-        )
+        AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
       LIMIT 1
     `).get(n, n, technicianId, n);
@@ -7207,10 +7231,7 @@ ORDER BY
       if (status && allowed.includes(status)) {
         const r = db.prepare(`
           UPDATE jobs SET status = ?, updated_at = datetime('now')
-          WHERE id = ? AND (
-            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
-            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
-          )
+          WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
         `).run(status, effectiveJobId, technicianId);
         if (r.changes) {
           db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'status', JSON.stringify({ status }));
@@ -7221,10 +7242,7 @@ ORDER BY
       if (description !== undefined) {
         const r = db.prepare(`
           UPDATE jobs SET description = ?, updated_at = datetime('now')
-          WHERE id = ? AND (
-            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
-            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
-          )
+          WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
         `).run(description, effectiveJobId, technicianId);
         if (r.changes) {
           db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'description', JSON.stringify({ description }));
@@ -7240,10 +7258,7 @@ ORDER BY
         const addedFns = computeAddedJobFabNums(oldFabJson, val);
         const r = db.prepare(`
           UPDATE jobs SET fabrikationsnummern = ?, updated_at = datetime('now')
-          WHERE id = ? AND (
-            EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
-            OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = jobs.id)
-          )
+          WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
         `).run(val, effectiveJobId, technicianId);
         if (r.changes) {
           syncJobFabRowsToAnlagenstammLocal(db, val, { onlyFns: addedFns });
@@ -7658,14 +7673,29 @@ ORDER BY
         if (!dispoBaseUrl) {
           throw new Error(resolvedPull.error || 'Keine erreichbare Dispo-URL für Projektordner.');
         }
-        const jobRowFull = getJobRowWithStatusByLocalOrServerId(rawJobId);
+        const resolvedJob = resolveLocalJobIdForTechnician(db, technicianId, rawJobId, { mode: 'auto' });
+        if (!resolvedJob.ok) throw new Error(resolvedJob.error);
+        const assignGate = requireJobAssignedToTechnician(db, resolvedJob.localId, technicianId);
+        if (assignGate) throw new Error(assignGate.error);
+        const jobRowFull = lookupDienstreiseJobRow(resolvedJob.localId);
         if (!jobRowFull) throw new Error('Auftrag nicht gefunden.');
+        const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(resolvedJob.localId);
+        jobRowFull.status = statusRow ? statusRow.status : null;
         const localJobId = jobRowFull.id;
         const serverJobId = jobRowFull.server_id != null ? jobRowFull.server_id : jobRowFull.id;
         const targetDir = getOrCreateDienstreiseFolderForJob(localJobId);
         if (!targetDir || !fs.existsSync(targetDir)) throw new Error('Zielordner konnte nicht erstellt werden.');
+        console.log('[dienstreise_pull] start', {
+          local_job_id: localJobId,
+          server_job_id: serverJobId,
+          technician_id: technicianId,
+          accept_job: acceptJob,
+          periodic_delta: periodicDelta,
+          target_dir: targetDir,
+        });
         const offlineCfg = getOfflinePullConfig(db, localJobId);
         const pullMode = p.offline_pull_mode || offlineCfg.pull_mode || 'legacy';
+        const skipTedOnPull = acceptJob || pullMode === 'explicit';
         const pathsByFab = getOfflinePullPathsByFab(db, localJobId);
         let montageFolderName =
           offlineCfg.montage_folder_name ||
@@ -7851,6 +7881,15 @@ ORDER BY
           files = filterManifestForPull(files, pullMode, pathsByFab, fabMap);
           mergeCheckpoint({ files, completed: [] });
         }
+        mergeCheckpoint({
+          pull_audit: {
+            pull_mode: pullMode,
+            manifest_matched: files.length,
+            explicit_paths: pathsByFab
+              ? [...pathsByFab.values()].reduce((n, m) => n + (m && m.size ? m.size : 0), 0)
+              : 0,
+          },
+        });
 
         const FS_MTIME_TOLERANCE_MS = 2000;
 
@@ -7912,24 +7951,26 @@ ORDER BY
         }
         setProgress('download', skippedStart, total, total ? '' : 'Keine Dateien.');
         if (total === 0) {
-          setProgress('ted', 0, 1, 'TED-Excel in Projektordner …');
-          try {
-            await pullTedExcelIntoReiseDir({
-              db,
-              dbLock,
-              dispoBaseUrl,
-              technicianId,
-              serverJobId,
-              localJobId,
-              targetDir,
-              authHeader: dispoMonteurFetchHeaders(technicianId, authHeader),
-              signal,
-              setProgress,
-              mergeCheckpoint,
-              readCheckpoint,
-            });
-          } catch (tedPullErr) {
-            console.warn('[dienstreise_pull] TED (0 Dateien):', tedPullErr && tedPullErr.message ? tedPullErr.message : tedPullErr);
+          if (!skipTedOnPull) {
+            setProgress('ted', 0, 1, 'TED-Excel in Projektordner …');
+            try {
+              await pullTedExcelIntoReiseDir({
+                db,
+                dbLock,
+                dispoBaseUrl,
+                technicianId,
+                serverJobId,
+                localJobId,
+                targetDir,
+                authHeader: dispoMonteurFetchHeaders(technicianId, authHeader),
+                signal,
+                setProgress,
+                mergeCheckpoint,
+                readCheckpoint,
+              });
+            } catch (tedPullErr) {
+              console.warn('[dienstreise_pull] TED (0 Dateien):', tedPullErr && tedPullErr.message ? tedPullErr.message : tedPullErr);
+            }
           }
           if (acceptJob) {
             await notifyMarkDocsLoaded();
@@ -8043,24 +8084,26 @@ ORDER BY
           setProgress('file', i + 1, total, relPath);
         }
 
-        setProgress('ted', 0, 1, 'TED-Excel in Projektordner …');
-        try {
-          await pullTedExcelIntoReiseDir({
-            db,
-            dbLock,
-            dispoBaseUrl,
-            technicianId,
-            serverJobId,
-            localJobId,
-            targetDir,
-            authHeader: dispoMonteurFetchHeaders(technicianId, authHeader),
-            signal,
-            setProgress,
-            mergeCheckpoint,
-            readCheckpoint,
-          });
-        } catch (tedPullErr) {
-          console.warn('[dienstreise_pull] TED:', tedPullErr && tedPullErr.message ? tedPullErr.message : tedPullErr);
+        if (!skipTedOnPull) {
+          setProgress('ted', 0, 1, 'TED-Excel in Projektordner …');
+          try {
+            await pullTedExcelIntoReiseDir({
+              db,
+              dbLock,
+              dispoBaseUrl,
+              technicianId,
+              serverJobId,
+              localJobId,
+              targetDir,
+              authHeader: dispoMonteurFetchHeaders(technicianId, authHeader),
+              signal,
+              setProgress,
+              mergeCheckpoint,
+              readCheckpoint,
+            });
+          } catch (tedPullErr) {
+            console.warn('[dienstreise_pull] TED:', tedPullErr && tedPullErr.message ? tedPullErr.message : tedPullErr);
+          }
         }
 
         chk = readCheckpoint();
@@ -8502,6 +8545,9 @@ ORDER BY
   bgJobs = createBackgroundJobService(db, save, { executeJob: executeBackgroundJob });
   monteurRuntime.bgJobs = bgJobs;
   bgJobs.markStaleRunningAsInterrupted();
+  if (typeof bgJobs.purgeUnassignedDienstreisePullJobs === 'function') {
+    bgJobs.purgeUnassignedDienstreisePullJobs();
+  }
   bgJobs.kick();
 
   function defaultAbrechnungSyncPeriods(extraYm) {
@@ -9509,14 +9555,39 @@ ORDER BY
         if (pruned > 0) save();
       }
       const technicians = db.prepare('SELECT technician_id AS id, name, color FROM calendar_cache_technicians ORDER BY technician_id').all();
-      const jobs = db.prepare(`
+      const calTechId = technicianId || null;
+      const jobs = calTechId
+        ? db
+            .prepare(
+              `
+        SELECT
+          c.server_job_id AS id, c.technician_id, c.customer_name, c.job_number, c.city, c.country, c.status,
+          c.start_datetime, c.end_datetime, c.technician_name, c.technician_color,
+          c.montage_verrechnet, c.billing_travel_complete, c.date_not_fixed,
+          (
+            SELECT j.id FROM jobs j
+            INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+            WHERE CAST(j.server_id AS TEXT) = CAST(c.server_job_id AS TEXT)
+            LIMIT 1
+          ) AS local_job_id
+        FROM calendar_cache_jobs c
+        WHERE c.end_datetime >= ? AND c.start_datetime <= ?
+      `,
+            )
+            .all(calTechId, start + ' 00:00:00', end + ' 23:59:59')
+        : db
+            .prepare(
+              `
         SELECT
           server_job_id AS id, technician_id, customer_name, job_number, city, country, status,
           start_datetime, end_datetime, technician_name, technician_color,
-          montage_verrechnet, billing_travel_complete, date_not_fixed
+          montage_verrechnet, billing_travel_complete, date_not_fixed,
+          NULL AS local_job_id
         FROM calendar_cache_jobs
         WHERE end_datetime >= ? AND start_datetime <= ?
-      `).all(start + ' 00:00:00', end + ' 23:59:59');
+      `,
+            )
+            .all(start + ' 00:00:00', end + ' 23:59:59');
       const absencesRaw = db.prepare(`
         SELECT
           server_absence_id AS id, technician_id, type, comment, start_datetime, end_datetime,
@@ -10379,14 +10450,24 @@ function shouldPreserveLocalJobOnPull(db, localJobId) {
   const st = row ? String(row.status || '').trim().toLowerCase() : '';
   if (st === 'in_arbeit' || st === 'zugeteilt' || st === 'angelegt' || st === 'geplant') return true;
   if (jobHasPendingLocalChanges(db, localJobId)) return true;
-  const pull = db
+  const pulls = db
     .prepare(
-      `SELECT 1 FROM background_jobs
+      `SELECT payload_json FROM background_jobs
        WHERE type = 'dienstreise_pull' AND status IN ('queued', 'running', 'completed', 'done')
-         AND dedupe_key LIKE ? LIMIT 1`,
+         AND dedupe_key LIKE ?`,
     )
-    .get('dienstreise_pull:' + localJobId + ':%');
-  return !!pull;
+    .all('dienstreise_pull:' + localJobId + ':%');
+  for (const pr of pulls) {
+    let payload = {};
+    try {
+      payload = pr.payload_json ? JSON.parse(pr.payload_json) : {};
+    } catch (_) {}
+    const tid = parseInt(payload.technician_id, 10);
+    if (Number.isFinite(tid) && tid > 0 && isJobAssignedToTechnician(db, localJobId, tid)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function deleteLocalJobRowIfUnassigned(db, localJobId) {

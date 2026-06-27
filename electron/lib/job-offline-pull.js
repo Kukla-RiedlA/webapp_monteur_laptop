@@ -18,12 +18,30 @@ function ensureJobOfflinePullSchema(db) {
       local_job_id INTEGER NOT NULL,
       fab TEXT NOT NULL,
       rel_path TEXT NOT NULL,
+      entry_kind TEXT NOT NULL DEFAULT 'dir',
       PRIMARY KEY (local_job_id, fab, rel_path)
     )`,
   ).run();
+  try {
+    db.prepare('ALTER TABLE job_offline_pull_paths ADD COLUMN entry_kind TEXT NOT NULL DEFAULT \'dir\'').run();
+  } catch (_) {
+    /* Spalte existiert */
+  }
   db.prepare(
     'CREATE INDEX IF NOT EXISTS idx_job_offline_pull_paths_job ON job_offline_pull_paths(local_job_id)',
   ).run();
+}
+
+function normRelPath(p) {
+  return String(p || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+}
+
+function isTedInnerPath(inner) {
+  const rel = normRelPath(inner);
+  if (!rel) return false;
+  return /^TED(\/|$)/i.test(rel);
 }
 
 function getOfflinePullConfig(db, localJobId) {
@@ -52,23 +70,21 @@ function getOfflinePullConfig(db, localJobId) {
 
 function getOfflinePullPathsByFab(db, localJobId) {
   const rows = db
-    .prepare(`SELECT fab, rel_path FROM job_offline_pull_paths WHERE local_job_id = ?`)
+    .prepare(`SELECT fab, rel_path, entry_kind FROM job_offline_pull_paths WHERE local_job_id = ?`)
     .all(localJobId);
   const map = new Map();
   for (const r of rows) {
     const fab = String(r.fab || '').trim();
-    const rel = String(r.rel_path || '')
-      .replace(/\\/g, '/')
-      .replace(/^\/+|\/+$/g, '');
+    const rel = normRelPath(r.rel_path);
     if (!fab || !rel) continue;
-    if (!map.has(fab)) map.set(fab, new Set());
-    map.get(fab).add(rel);
+    if (!map.has(fab)) map.set(fab, new Map());
+    map.get(fab).set(rel, String(r.entry_kind || 'dir').toLowerCase() === 'file' ? 'file' : 'dir');
   }
   return map;
 }
 
 /**
- * @param {Map<string, Set<string>>} pathsByFab
+ * @param {Map<string, Map<string, 'dir'|'file'>>} pathsByFab
  * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabMap
  */
 function findFabForCanonicalFolder(pathsByFab, fabMap, canonicalFolder) {
@@ -98,9 +114,26 @@ function shouldSkipPullPrefix(relPath) {
 }
 
 /**
+ * @param {Map<string, Map<string, 'dir'|'file'>>} pathsByFab
+ */
+function pathMatchesSelection(inner, prefixesMap) {
+  if (!prefixesMap || prefixesMap.size === 0) return false;
+  for (const [prefix, kind] of prefixesMap) {
+    const p = normRelPath(prefix);
+    if (!p) continue;
+    if (kind === 'file') {
+      if (inner === p) return true;
+      continue;
+    }
+    if (inner === p || inner.startsWith(p + '/')) return true;
+  }
+  return false;
+}
+
+/**
  * @param {string} relPath
  * @param {'legacy'|'explicit'} pullMode
- * @param {Map<string, Set<string>>} pathsByFab
+ * @param {Map<string, Map<string, 'dir'|'file'>>} pathsByFab
  * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabMap
  */
 function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
@@ -115,16 +148,11 @@ function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
   const fnFolder = tail.slice(0, slash);
   const inner = tail.slice(slash + 1);
   if (inner.startsWith('Montage/')) return false;
+  if (isTedInnerPath(inner)) return false;
   const fab = findFabForCanonicalFolder(pathsByFab, fabMap, fnFolder);
   if (!fab) return false;
   const prefixes = pathsByFab.get(fab);
-  if (!prefixes || prefixes.size === 0) return false;
-  for (const prefix of prefixes) {
-    const p = String(prefix || '').replace(/^\/+|\/+$/g, '');
-    if (!p) continue;
-    if (inner === p || inner.startsWith(p + '/')) return true;
-  }
-  return false;
+  return pathMatchesSelection(inner, prefixes);
 }
 
 /**
@@ -136,25 +164,25 @@ function filterManifestForPull(files, pullMode, pathsByFab, fabMap) {
 }
 
 /**
- * @param {Array<{ fab: string|number, path: string }>|string[]} offlinePathsRaw
+ * @param {Array<{ fab: string|number, path: string, kind?: string }>|string[]} offlinePathsRaw
  */
 function normalizeOfflinePathsInput(offlinePathsRaw) {
   const out = [];
   for (const item of offlinePathsRaw || []) {
     if (item && typeof item === 'object' && item.fab != null && item.path != null) {
       const fab = String(item.fab).trim();
-      const rel = String(item.path)
-        .replace(/\\/g, '/')
-        .replace(/^\/+|\/+$/g, '');
-      if (fab && rel) out.push({ fab, path: rel });
+      const rel = normRelPath(item.path);
+      const kind =
+        String(item.kind || item.entry_kind || 'dir').toLowerCase() === 'file' ? 'file' : 'dir';
+      if (fab && rel) out.push({ fab, path: rel, kind });
       continue;
     }
     const s = String(item || '').trim();
     const colon = s.indexOf(':');
     if (colon > 0) {
       const fab = s.slice(0, colon).trim();
-      const rel = s.slice(colon + 1).replace(/^\/+|\/+$/g, '');
-      if (fab && rel) out.push({ fab, path: rel });
+      const rel = normRelPath(s.slice(colon + 1));
+      if (fab && rel) out.push({ fab, path: rel, kind: 'dir' });
     }
   }
   return out;
@@ -187,14 +215,15 @@ function ensureMontageFolderNameInConfig(db, localJobId, montageFolderName) {
 }
 
 function saveOfflinePullSelection(db, localJobId, pullMode, offlinePathsRaw, fabMap, montageFolderName) {
+  ensureJobOfflinePullSchema(db);
   const now = new Date().toISOString();
   const paths = normalizeOfflinePathsInput(offlinePathsRaw);
   db.prepare(`DELETE FROM job_offline_pull_paths WHERE local_job_id = ?`).run(localJobId);
   const ins = db.prepare(
-    `INSERT INTO job_offline_pull_paths (local_job_id, fab, rel_path) VALUES (?, ?, ?)`,
+    `INSERT INTO job_offline_pull_paths (local_job_id, fab, rel_path, entry_kind) VALUES (?, ?, ?, ?)`,
   );
   for (const p of paths) {
-    ins.run(localJobId, p.fab, p.path);
+    ins.run(localJobId, p.fab, p.path, p.kind || 'dir');
   }
   db.prepare(
     `INSERT INTO job_offline_pull_config (local_job_id, pull_mode, montage_folder_name, fab_map_json, updated_at)
@@ -206,7 +235,7 @@ function saveOfflinePullSelection(db, localJobId, pullMode, offlinePathsRaw, fab
        updated_at = excluded.updated_at`,
   ).run(
     localJobId,
-    pullMode,
+    pullMode || 'legacy',
     montageFolderName || null,
     JSON.stringify(fabMap || []),
     now,
@@ -217,11 +246,12 @@ module.exports = {
   ensureJobOfflinePullSchema,
   getOfflinePullConfig,
   getOfflinePullPathsByFab,
+  findFabForCanonicalFolder,
   shouldPullManifestFile,
   filterManifestForPull,
   normalizeOfflinePathsInput,
-  saveOfflinePullSelection,
   updateOfflinePullFabMap,
   ensureMontageFolderNameInConfig,
-  findFabForCanonicalFolder,
+  saveOfflinePullSelection,
+  isTedInnerPath,
 };

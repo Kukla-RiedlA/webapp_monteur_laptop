@@ -321,19 +321,37 @@ function resolveCanonicalProjekteNeuFolderName(dirNames, fab) {
   return digits || String(fab || '').trim() || null;
 }
 
+function normRelPath(p) {
+  return String(p || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+}
+
 function buildOfflinePreviewTree(tree) {
   const out = [];
   for (const node of tree || []) {
-    if (!node || node.type !== 'dir') continue;
-    const item = { name: node.name, rel: node.rel || node.name, children: [] };
-    if (Array.isArray(node.children)) {
-      for (const ch of node.children) {
-        if (ch && ch.type === 'dir') {
-          item.children.push({ name: ch.name, rel: ch.rel || `${item.rel}/${ch.name}` });
-        }
-      }
+    if (!node || typeof node !== 'object') continue;
+    const type = String(node.type || 'dir').toLowerCase();
+    const name = String(node.name || '').trim();
+    if (!name) continue;
+    const rel = normRelPath(node.rel || name);
+    if (type === 'file') {
+      out.push({
+        name,
+        rel,
+        type: 'file',
+        size: node.size != null ? Number(node.size) : null,
+        is_ted: /^TED(\/|$)/i.test(rel),
+      });
+      continue;
     }
-    out.push(item);
+    out.push({
+      name,
+      rel,
+      type: 'dir',
+      is_ted: /^TED(\/|$)/i.test(rel),
+      children: buildOfflinePreviewTree(node.children || []),
+    });
   }
   return out;
 }

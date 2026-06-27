@@ -1,6 +1,9 @@
 'use strict';
 
 const crypto = require('crypto');
+const {
+  isJobAssignedToTechnician,
+} = require('./job-technician-gate');
 
 const ALLOWED_TYPES = new Set([
   'dienstreise_pull',
@@ -500,10 +503,41 @@ function createBackgroundJobService(db, save, hooks) {
    * Wiederaufnehmbare dienstreise_pull-Jobs (Delta-Kopie), nicht „Auftrag annehmen“ beim Sync.
    * @param {{ skipAcceptJob?: boolean }} opts
    */
+  function purgeUnassignedDienstreisePullJobs() {
+    const rows = db
+      .prepare(
+        `SELECT id, payload_json, status FROM background_jobs
+         WHERE type = 'dienstreise_pull' AND status IN ('failed', 'interrupted', 'queued')`,
+      )
+      .all();
+    let n = 0;
+    for (const r of rows) {
+      const payload = parsePayloadJson(r.payload_json);
+      const lid = localJobIdFromPayload(payload);
+      const tid = parseInt(payload.technician_id, 10);
+      if (!lid || !Number.isFinite(tid) || tid <= 0) {
+        bump(r.id, { status: 'cancelled', error: 'Ungültiger Pull-Job (kein Auftrag/Monteur).', message: null });
+        n++;
+        continue;
+      }
+      if (!isJobAssignedToTechnician(db, lid, tid)) {
+        bump(r.id, {
+          status: 'cancelled',
+          error: 'Keine Monteur-Zuordnung — Pull verworfen.',
+          message: null,
+        });
+        n++;
+      }
+    }
+    if (n) save();
+    return n;
+  }
+
   function recoverPullJobs(opts) {
     opts = opts || {};
     const skipAcceptJob = opts.skipAcceptJob !== false;
     reapStuckJobs();
+    purgeUnassignedDienstreisePullJobs();
     const rows = db
       .prepare(
         `SELECT id, payload_json, checkpoint_json, status FROM background_jobs
@@ -514,6 +548,32 @@ function createBackgroundJobService(db, save, hooks) {
     for (const r of rows) {
       const payload = parsePayloadJson(r.payload_json);
       if (skipAcceptJob && payload.accept_job) continue;
+      const lid = localJobIdFromPayload(payload);
+      const tid = parseInt(payload.technician_id, 10);
+      if (!lid || !Number.isFinite(tid) || tid <= 0) {
+        bump(r.id, { status: 'cancelled', error: 'Ungültiger Pull-Job.', message: null });
+        continue;
+      }
+      if (!isJobAssignedToTechnician(db, lid, tid)) {
+        bump(r.id, {
+          status: 'cancelled',
+          error: 'Keine Monteur-Zuordnung — Wiederaufnahme abgebrochen.',
+          message: null,
+        });
+        continue;
+      }
+      const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(lid);
+      const st = statusRow ? String(statusRow.status || '').trim().toLowerCase() : '';
+      const periodicDelta = !!payload.periodic_delta;
+      const acceptJob = !!payload.accept_job;
+      if (periodicDelta && st !== 'in_arbeit') {
+        bump(r.id, { status: 'cancelled', error: 'Delta-Pull nur für in_arbeit.', message: null });
+        continue;
+      }
+      if (acceptJob && st !== 'angelegt' && st !== 'geplant' && st !== 'zugeteilt') {
+        bump(r.id, { status: 'cancelled', error: 'Accept-Wiederaufnahme: Status ungültig.', message: null });
+        continue;
+      }
       let chk = {};
       try {
         chk = r.checkpoint_json ? JSON.parse(r.checkpoint_json) : {};
@@ -539,6 +599,47 @@ function createBackgroundJobService(db, save, hooks) {
       pump().catch(() => {});
     });
     return { reopened: n };
+  }
+
+  /** Beim Accept: fremde/unzugewiesene Pulls stoppen; Delta anderer zugewiesener in_arbeit-Jobs behalten. */
+  function cancelUnsafeDienstreisePullsOnAccept(keepLocalJobId, technicianId) {
+    const keepId = parseInt(keepLocalJobId, 10);
+    const tid = parseInt(technicianId, 10);
+    if (!Number.isFinite(keepId) || keepId <= 0 || !Number.isFinite(tid) || tid <= 0) return 0;
+    const rows = db
+      .prepare(
+        `SELECT id, status, payload_json FROM background_jobs
+         WHERE type = 'dienstreise_pull' AND status IN ('queued', 'running')`,
+      )
+      .all();
+    let n = 0;
+    for (const r of rows) {
+      const payload = parsePayloadJson(r.payload_json);
+      const lid = localJobIdFromPayload(payload);
+      if (lid === keepId) continue;
+      const pullTech = parseInt(payload.technician_id, 10);
+      if (
+        payload.periodic_delta &&
+        pullTech === tid &&
+        lid &&
+        isJobAssignedToTechnician(db, lid, tid)
+      ) {
+        continue;
+      }
+      if (r.status === 'queued') {
+        bump(r.id, {
+          status: 'cancelled',
+          error: 'Abgebrochen — anderer Auftrag wird angenommen.',
+          message: null,
+        });
+        n++;
+        continue;
+      }
+      const x = cancelJob(r.id);
+      if (x.ok) n++;
+    }
+    if (n) save();
+    return n;
   }
 
   function cancelJob(jobId) {
@@ -635,6 +736,8 @@ function createBackgroundJobService(db, save, hooks) {
     cancelJob,
     cancelRunningOfType,
     cancelRunningDienstreiseForLocalJob,
+    cancelUnsafeDienstreisePullsOnAccept,
+    purgeUnassignedDienstreisePullJobs,
     listJobs,
     getJob,
     markStaleRunningAsInterrupted,
