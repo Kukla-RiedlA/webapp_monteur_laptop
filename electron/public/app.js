@@ -490,6 +490,133 @@
     return Math.min(1440, v);
   }
 
+  function formatServerHealthServiceLabel(key) {
+    var map = {
+      apache: 'Apache',
+      mariadb: 'MariaDB',
+      desktop: 'Desktop',
+      push: 'Push',
+      mounts: 'Mounts',
+    };
+    return map[key] || key;
+  }
+
+  function formatServerHealthLine(data) {
+    if (!data || !data.ok) {
+      return data && data.error ? String(data.error) : 'Health-Status nicht verfügbar.';
+    }
+    var services = data.services && typeof data.services === 'object' ? data.services : {};
+    var keys = ['apache', 'mariadb', 'desktop'];
+    var parts = [];
+    keys.forEach(function (key) {
+      if (!services[key]) return;
+      var svc = services[key];
+      var label = formatServerHealthServiceLabel(key);
+      if (svc.skipped) {
+        parts.push(label + ': —');
+      } else if (svc.ok) {
+        parts.push(label + ': OK');
+      } else {
+        parts.push(label + ': Fehler');
+      }
+    });
+    if (!parts.length && data.message) return String(data.message);
+    return parts.length ? parts.join(' · ') : 'Keine Service-Daten.';
+  }
+
+  function serverMaintenanceAuthHeaders() {
+    return dispoBasicAuthHeaders(getServerUsername, getServerPassword);
+  }
+
+  function syncServerRebootPolicy() {
+    return fetch(API_BASE + '/api/server/reboot_policy', {
+      headers: Object.assign({ 'X-Technician-Id': String(getTechId() || '') }, serverMaintenanceAuthHeaders()),
+    })
+      .then(function (r) {
+        return r.json().catch(function () {
+          return {};
+        });
+      })
+      .catch(function () {
+        return {};
+      });
+  }
+
+  function loadServerRebootAllowedState() {
+    return fetch(API_BASE + '/api/server/reboot_allowed', {
+      headers: Object.assign({ 'X-Technician-Id': String(getTechId() || '') }, serverMaintenanceAuthHeaders()),
+    })
+      .then(function (r) {
+        return r.json().catch(function () {
+          return {};
+        });
+      })
+      .catch(function () {
+        return {};
+      });
+  }
+
+  function loadServerMaintenanceHealth() {
+    var summaryEl = document.getElementById('serverMaintenanceHealthSummary');
+    if (summaryEl) summaryEl.textContent = 'Wird geladen…';
+    return fetch(API_BASE + '/api/server/health', {
+      headers: Object.assign({ 'X-Technician-Id': String(getTechId() || '') }, serverMaintenanceAuthHeaders()),
+    })
+      .then(function (r) {
+        return r.json().catch(function () {
+          return {};
+        });
+      })
+      .then(function (data) {
+        if (summaryEl) summaryEl.textContent = formatServerHealthLine(data);
+        return data;
+      })
+      .catch(function () {
+        if (summaryEl) summaryEl.textContent = 'Health-Status nicht verfügbar.';
+        return {};
+      });
+  }
+
+  function refreshServerMaintenanceZone() {
+    var zone = document.getElementById('serverMaintenanceZone');
+    var hintEl = document.getElementById('serverMaintenancePolicyHint');
+    var btnReboot = document.getElementById('btnServerReboot');
+    if (!zone) return Promise.resolve();
+    if (!getServerUsername() || !getServerPassword()) {
+      zone.hidden = true;
+      return Promise.resolve();
+    }
+    return Promise.all([syncServerRebootPolicy(), loadServerRebootAllowedState()])
+      .then(function (results) {
+        var policyData = results[0] || {};
+        var allowedData = results[1] || {};
+        var allowed = !!(allowedData.ok && allowedData.allowed);
+        zone.hidden = !allowed;
+        if (!allowed) return;
+        if (hintEl) {
+          var hintParts = [];
+          if (allowedData.stale) {
+            hintParts.push('Hinweis: Reboot-Policy aus lokalem Cache (veraltet oder Sync nicht möglich).');
+          } else if (policyData.from_cache) {
+            hintParts.push('Policy aus lokalem Cache (Server-Sync nicht erreichbar).');
+          } else {
+            hintParts.push('Geplanter Neustart in ca. 1 Minute. Alle Dienste sind kurz nicht erreichbar.');
+          }
+          if (allowedData.reboot_enabled === false) {
+            hintParts.push('Server-Reboot ist derzeit auf dem Server deaktiviert.');
+          }
+          hintEl.textContent = hintParts.join(' ');
+        }
+        if (btnReboot) {
+          btnReboot.disabled = allowedData.reboot_enabled === false;
+        }
+        return loadServerMaintenanceHealth();
+      })
+      .catch(function () {
+        zone.hidden = true;
+      });
+  }
+
   async function loadSettingsSyncStatus() {
     var summaryEl = document.getElementById('settings-sync-summary');
     var dbEl = document.getElementById('settings-db-size');
@@ -5984,6 +6111,9 @@
     })
     .then(function () {
       startPushEvents();
+      if (getServerUsername() && getServerPassword()) {
+        refreshServerMaintenanceZone().catch(function () {});
+      }
     })
     .catch(function () {
       startPushEvents();
@@ -6205,6 +6335,56 @@
   });
 
   var btnSelfUninstall = document.getElementById('btnSelfUninstall');
+  var btnServerReboot = document.getElementById('btnServerReboot');
+  if (btnServerReboot) {
+    btnServerReboot.addEventListener('click', function () {
+      var hint = document.getElementById('serverRebootHint');
+      if (!getServerUsername() || !getServerPassword()) {
+        if (hint) hint.textContent = 'Dispo-Zugangsdaten fehlen.';
+        return;
+      }
+      var firstOk = window.confirm(
+        'Der Kukla-Server wird in ca. 1 Minute neu gestartet. Alle Dienste sind danach kurz nicht erreichbar. Fortfahren?',
+      );
+      if (!firstOk) return;
+      var typed = window.prompt('Zur Bestätigung bitte NEUSTART eingeben.', '');
+      if (typed !== 'NEUSTART') {
+        if (hint) hint.textContent = 'Abgebrochen.';
+        return;
+      }
+      btnServerReboot.disabled = true;
+      if (hint) hint.textContent = 'Reboot wird angefordert …';
+      fetch(API_BASE + '/api/server/reboot', {
+        method: 'POST',
+        headers: Object.assign(
+          { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+          serverMaintenanceAuthHeaders(),
+        ),
+        body: JSON.stringify({}),
+      })
+        .then(function (r) {
+          return r.json().catch(function () {
+            return {};
+          }).then(function (data) {
+            if (!r.ok || !data.ok) {
+              throw new Error((data && data.error) || 'Reboot fehlgeschlagen.');
+            }
+            if (hint) hint.textContent = data.message || 'Server-Neustart geplant (+1 min).';
+            return loadServerMaintenanceHealth();
+          });
+        })
+        .catch(function (err) {
+          if (hint) hint.textContent = 'Fehler: ' + (err && err.message ? err.message : String(err));
+        })
+        .finally(function () {
+          loadServerRebootAllowedState().then(function (allowedData) {
+            if (btnServerReboot) {
+              btnServerReboot.disabled = !(allowedData && allowedData.ok && allowedData.allowed && allowedData.reboot_enabled !== false);
+            }
+          });
+        });
+    });
+  }
   if (btnSelfUninstall) {
     btnSelfUninstall.addEventListener('click', function () {
       var hint = document.getElementById('selfUninstallHint');
@@ -8763,6 +8943,7 @@
       updateTechnicianName();
       refreshMonteurProfileHintForSettings();
       loadSettingsSyncStatus().catch(function () {});
+      refreshServerMaintenanceZone().catch(function () {});
       return;
     }
     if (name === 'dienstreise') {

@@ -549,6 +549,56 @@ function writeUserAppConfig(patch) {
   fs.writeFileSync(getUserAppConfigPath(), JSON.stringify(cur, null, 2), 'utf8');
 }
 
+/** Cache-TTL fuer serverRebootPolicy in app_config.json (7 Tage). */
+const SERVER_REBOOT_POLICY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function readServerRebootPolicyCache() {
+  const cfg = readUserAppConfig();
+  const p = cfg && cfg.serverRebootPolicy;
+  return p && typeof p === 'object' ? p : null;
+}
+
+function writeServerRebootPolicyCache(payload) {
+  const cur = readServerRebootPolicyCache() || {};
+  const next = {
+    sync_version:
+      payload && payload.sync_version != null ? payload.sync_version : cur.sync_version,
+    reboot_enabled:
+      payload && payload.reboot_enabled != null ? !!payload.reboot_enabled : !!cur.reboot_enabled,
+    allowed_usernames:
+      payload && Array.isArray(payload.allowed_usernames)
+        ? payload.allowed_usernames
+        : Array.isArray(cur.allowed_usernames)
+          ? cur.allowed_usernames
+          : [],
+    is_allowed_for_current_user:
+      payload && payload.is_allowed_for_current_user != null
+        ? !!payload.is_allowed_for_current_user
+        : cur.is_allowed_for_current_user,
+    cached_at: new Date().toISOString(),
+  };
+  writeUserAppConfig({ serverRebootPolicy: next });
+  return next;
+}
+
+function isServerRebootPolicyCacheStale(policy) {
+  if (!policy || !policy.cached_at) return true;
+  const ts = Date.parse(String(policy.cached_at));
+  if (!Number.isFinite(ts)) return true;
+  return Date.now() - ts > SERVER_REBOOT_POLICY_CACHE_TTL_MS;
+}
+
+function isUserAllowedByRebootPolicy(policy, username) {
+  const u = String(username || '').trim().toLowerCase();
+  if (!u || !policy) return false;
+  if (policy.is_allowed_for_current_user === true) return true;
+  if (policy.is_allowed_for_current_user === false) return false;
+  const list = Array.isArray(policy.allowed_usernames) ? policy.allowed_usernames : [];
+  return list.some(function (name) {
+    return String(name || '').trim().toLowerCase() === u;
+  });
+}
+
 function isDispoInsecureTlsAllowed() {
   if (process.env.KUKLA_DISP_TLS_INSECURE === '1') return true;
   if (process.env.KUKLA_DISP_TLS_INSECURE === '0') return false;
@@ -9274,6 +9324,241 @@ ORDER BY
       }
     }
     return res.json({ ok: false, error: lastErr });
+  });
+
+  async function proxyDispoServerMaintenanceRequest(req, relativePath, opts) {
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const method = (o.method || 'GET').toUpperCase();
+    const creds = resolveDispoServerCreds(req.body || {});
+    const incomingAuth = authHeaderFromIncomingBasicOrQuery(req);
+    const serverUsername =
+      (creds.serverUsername || '').trim() ||
+      (incomingAuth && incomingAuth.Authorization
+        ? Buffer.from(String(incomingAuth.Authorization).replace(/^\s*Basic\s+/i, ''), 'base64')
+            .toString('utf8')
+            .split(':')[0]
+        : '');
+    const serverPassword =
+      creds.serverPassword ||
+      (incomingAuth && incomingAuth.Authorization
+        ? (function () {
+            const decoded = Buffer.from(
+              String(incomingAuth.Authorization).replace(/^\s*Basic\s+/i, ''),
+              'base64',
+            ).toString('utf8');
+            const colon = decoded.indexOf(':');
+            return colon >= 0 ? decoded.slice(colon + 1) : '';
+          })()
+        : '');
+    const authHeader = authHeaderFromCredentials(serverUsername, serverPassword);
+    if (!authHeader || !authHeader.Authorization) {
+      return { ok: false, status: 401, error: 'Dispo-Zugangsdaten fehlen.' };
+    }
+    const technicianId = getTechnicianId(req);
+    const resolved = await resolveDispoWorkingBase({
+      baseUrl: creds.baseUrl,
+      externalUrl: creds.externalUrl,
+      internalUrl: creds.internalUrl,
+      technicianId,
+      serverUsername,
+      serverPassword,
+    });
+    if (!resolved.base) {
+      return { ok: false, status: 502, error: resolved.error || 'Dispo nicht erreichbar.' };
+    }
+    const url = resolved.base.replace(/\/$/, '') + relativePath;
+    const headers = dispoMonteurFetchHeaders(technicianId, authHeader);
+    const fetchOpts = { method, headers };
+    if (o.body != null) {
+      headers['Content-Type'] = 'application/json';
+      fetchOpts.body = JSON.stringify(o.body);
+    }
+    const r = await fetch(url, fetchOpts);
+    const data = await r.json().catch(function () {
+      return {};
+    });
+    return {
+      ok: r.ok,
+      status: r.status,
+      data,
+      base: resolved.base,
+      serverUsername,
+      serverPassword,
+    };
+  }
+
+  async function resolveServerRebootAllowed(req, credsUsername) {
+    const cached = readServerRebootPolicyCache();
+    const username = String(credsUsername || '').trim();
+    if (cached && !isServerRebootPolicyCacheStale(cached) && isUserAllowedByRebootPolicy(cached, username)) {
+      return {
+        allowed: true,
+        reboot_enabled: cached.reboot_enabled !== false,
+        source: 'cache',
+        stale: false,
+        policy: cached,
+      };
+    }
+    const eligible = await proxyDispoServerMaintenanceRequest(req, '/api/server_reboot_eligible.php');
+    if (eligible.ok && eligible.data && eligible.data.ok && eligible.data.is_allowed) {
+      return {
+        allowed: true,
+        reboot_enabled: eligible.data.reboot_enabled !== false,
+        source: 'eligible',
+        stale: cached ? isServerRebootPolicyCacheStale(cached) : true,
+        policy: cached,
+      };
+    }
+    if (cached && isUserAllowedByRebootPolicy(cached, username)) {
+      return {
+        allowed: true,
+        reboot_enabled: cached.reboot_enabled !== false,
+        source: 'cache',
+        stale: isServerRebootPolicyCacheStale(cached),
+        policy: cached,
+      };
+    }
+    return {
+      allowed: false,
+      reboot_enabled: cached ? cached.reboot_enabled !== false : false,
+      source: cached ? 'cache' : 'none',
+      stale: cached ? isServerRebootPolicyCacheStale(cached) : true,
+      policy: cached,
+      error:
+        (eligible.data && eligible.data.error) ||
+        eligible.error ||
+        'Keine Berechtigung fuer Server-Reboot.',
+    };
+  }
+
+  app.get('/api/server/reboot_policy', async (req, res) => {
+    try {
+      const proxied = await proxyDispoServerMaintenanceRequest(req, '/api/server_reboot_policy.php');
+      if (!proxied.ok) {
+        const cached = readServerRebootPolicyCache();
+        if (cached) {
+          const creds = resolveDispoServerCreds({});
+          const incomingAuth = authHeaderFromIncomingBasicOrQuery(req);
+          let username = (creds.serverUsername || '').trim();
+          if (!username && incomingAuth && incomingAuth.Authorization) {
+            const decoded = Buffer.from(
+              String(incomingAuth.Authorization).replace(/^\s*Basic\s+/i, ''),
+              'base64',
+            ).toString('utf8');
+            const colon = decoded.indexOf(':');
+            username = colon >= 0 ? decoded.slice(0, colon) : decoded;
+          }
+          return res.json({
+            ok: true,
+            from_cache: true,
+            stale: isServerRebootPolicyCacheStale(cached),
+            sync_version: cached.sync_version,
+            reboot_enabled: cached.reboot_enabled,
+            allowed_usernames: cached.allowed_usernames || [],
+            is_allowed_for_current_user: isUserAllowedByRebootPolicy(cached, username),
+            cached_at: cached.cached_at,
+            proxy_error: proxied.data && proxied.data.error ? proxied.data.error : proxied.error,
+          });
+        }
+        return res.status(proxied.status || 502).json({
+          ok: false,
+          error: (proxied.data && proxied.data.error) || proxied.error || 'Policy-Sync fehlgeschlagen.',
+        });
+      }
+      const data = proxied.data && typeof proxied.data === 'object' ? proxied.data : {};
+      if (data.ok) {
+        writeServerRebootPolicyCache(data);
+      }
+      return res.json(data);
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get('/api/server/reboot_allowed', async (req, res) => {
+    try {
+      const creds = resolveDispoServerCreds({});
+      const incomingAuth = authHeaderFromIncomingBasicOrQuery(req);
+      let username = (creds.serverUsername || '').trim();
+      if (!username && incomingAuth && incomingAuth.Authorization) {
+        const decoded = Buffer.from(
+          String(incomingAuth.Authorization).replace(/^\s*Basic\s+/i, ''),
+          'base64',
+        ).toString('utf8');
+        const colon = decoded.indexOf(':');
+        username = colon >= 0 ? decoded.slice(0, colon) : decoded;
+      }
+      const verdict = await resolveServerRebootAllowed(req, username);
+      return res.json({
+        ok: true,
+        allowed: !!verdict.allowed && verdict.reboot_enabled !== false,
+        reboot_enabled: verdict.reboot_enabled !== false,
+        source: verdict.source,
+        stale: !!verdict.stale,
+        cached_at: verdict.policy && verdict.policy.cached_at ? verdict.policy.cached_at : null,
+        error: verdict.allowed ? null : verdict.error || null,
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get('/api/server/health', async (req, res) => {
+    try {
+      const proxied = await proxyDispoServerMaintenanceRequest(req, '/api/server_health_ping.php');
+      if (!proxied.ok) {
+        return res.status(proxied.status || 502).json({
+          ok: false,
+          error: (proxied.data && proxied.data.error) || proxied.error || 'Health-Check fehlgeschlagen.',
+        });
+      }
+      return res.json(proxied.data || { ok: false, error: 'Leere Antwort.' });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/server/reboot', express.json(), async (req, res) => {
+    try {
+      const creds = resolveDispoServerCreds(req.body || {});
+      const incomingAuth = authHeaderFromIncomingBasicOrQuery(req);
+      let username = (creds.serverUsername || '').trim();
+      if (!username && incomingAuth && incomingAuth.Authorization) {
+        const decoded = Buffer.from(
+          String(incomingAuth.Authorization).replace(/^\s*Basic\s+/i, ''),
+          'base64',
+        ).toString('utf8');
+        const colon = decoded.indexOf(':');
+        username = colon >= 0 ? decoded.slice(0, colon) : decoded;
+      }
+      const verdict = await resolveServerRebootAllowed(req, username);
+      if (!verdict.allowed) {
+        return res.status(403).json({
+          ok: false,
+          error: verdict.error || 'Keine Berechtigung fuer Server-Reboot.',
+        });
+      }
+      if (verdict.reboot_enabled === false) {
+        return res.status(403).json({
+          ok: false,
+          error: 'Server-Reboot ist auf dem Server deaktiviert.',
+        });
+      }
+      const proxied = await proxyDispoServerMaintenanceRequest(req, '/api/server_reboot.php', {
+        method: 'POST',
+        body: req.body && typeof req.body === 'object' ? req.body : {},
+      });
+      if (!proxied.ok) {
+        return res.status(proxied.status || 502).json({
+          ok: false,
+          error: (proxied.data && proxied.data.error) || proxied.error || 'Reboot fehlgeschlagen.',
+          details: proxied.data || null,
+        });
+      }
+      return res.json(proxied.data || { ok: true });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
   });
 
   function formatBytesHuman(bytes) {

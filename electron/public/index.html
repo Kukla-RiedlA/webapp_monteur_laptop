@@ -1530,6 +1530,15 @@
         <button type="button" class="btn btn-primary" id="btnSaveSettings">Speichern</button>
         <span id="settingsSavedHint" class="settings-saved-hint" aria-live="polite"></span>
       </div>
+      <div class="settings-danger-zone" id="serverMaintenanceZone" hidden>
+        <h3>Server-Wartung</h3>
+        <p id="serverMaintenancePolicyHint" class="muted" style="margin:0 0 0.65rem;font-size:0.9rem;line-height:1.4;"></p>
+        <p id="serverMaintenanceHealthSummary" class="settings-sync-hint muted">Wird geladen…</p>
+        <div class="settings-row">
+          <button type="button" class="btn btn-danger" id="btnServerReboot" disabled>Server neu starten (+1 min)</button>
+          <span id="serverRebootHint" class="settings-saved-hint" aria-live="polite"></span>
+        </div>
+      </div>
       <div class="settings-danger-zone">
         <h3>App deinstallieren</h3>
         <p>Entfernt die Monteur-WebApp und löscht die lokale App-Datenbank samt lokalen Einstellungen auf diesem PC. Dieser Vorgang kann nicht rückgängig gemacht werden.</p>
