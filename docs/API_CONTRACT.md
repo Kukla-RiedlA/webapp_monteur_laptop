@@ -137,6 +137,20 @@ Gleiche Basis-URL wie die Dispo. Authentifizierung wie bisher: Monteur mit `tech
 | `dispo/api/job_status_dispo_set_in_arbeit.php` | POST form | Dispo/Admin, CSRF-Scope `job_status_dispo_in_arbeit`: `job_id` – **`angelegt`/`zugeteilt` → `in_arbeit`** (mind. eine `job_technicians`-Zeile). |
 | `dispo/api/job_status_admin_revert_erledigt.php` | POST form | Nur Admin, CSRF-Scope `job_status_admin_revert`: `job_id` – **`abgerechnet` → `erledigt`**. |
 
+### 5.1b Serviceprotokoll (Dispo `dispo_api/`, Monteur `technician_id`)
+
+Authentifizierung wie Kontrollwiegung: Query/Header `technician_id`, Dispo-Basic oder Monteur-Session je nach Client.
+
+| Endpunkt | Methode | Kurzbeschreibung |
+|----------|---------|------------------|
+| `dispo_api/api/serviceprotokoll_defaults.php` | GET | `fabrikationsnummer`, `technician_id` → `{ ok, source: "fn"\|"global", arbeitsschritte: [{ bezeichnung }], kopf?: { kopf_pos_nr, kopf_qmax, kopf_type, kopf_dwc } }` aus Anlagenstamm |
+| `dispo_api/api/serviceprotokoll_save.php` | POST JSON | `technician_id`, `job_id`, `fabrikationsnummer`, `durchfuehrungsdatum`, `arbeitsschritte[]` (`sort_order`, `bezeichnung`, `status` ok\|nok\|na, `bemerkung`), `messwerte` (`waegezelle_type`, `tara`, `pruefgewicht`, `dms_entlastet`, `kg`, `mv`, `ma`, `g_prozent`, `taraspeicher`), optional `bemerkungen`, `kopf_*` → speichert Protokoll, aktualisiert FN-Vorlage, erzeugt PDF unter `Dokumente_Monteur/{FN}/Serviceprotokolle/` → `{ ok, protokoll_id, pdf_path?, warning? }` |
+| `dispo_api/api/serviceprotokoll_pdf.php` | GET | `id`, `technician_id` → PDF-Binary (aus Projektordner oder Regenerierung) |
+
+**Monteur-Laptop (Electron-Gateway):** `POST /api/serviceprotokoll_save` (Proxy + lokale PDF-Kopie unter Dienstreise `Dokumente_Monteur/{FN}/Serviceprotokolle/`), `GET /api/serviceprotokoll_pdf` (Proxy, Query `id`, `base_url`, Auth wie Kontrollwiegung).
+
+**FN-Vorlage:** Beim Save werden Bezeichnung + Reihenfolge der Arbeitsschritte pro `fabrikationsnummer` persistiert; Status/Bemerkungen starten beim nächsten Formular leer.
+
 ### 5.1 Dispo-Web Admin (nur eingeloggte Dispo-Session, `perm_admin`)
 
 Nur für die **interne** PHP/JS-Oberfläche; keine Monteur-Apps. Antworten nutzen **`ok`** (boolean) wie in Abschnitt 3.

@@ -9397,6 +9397,9 @@
       if (name === 'protokolle-kontrollwiegungen' && typeof window.openProtokolleKontrollwiegungen === 'function') {
         window.openProtokolleKontrollwiegungen();
       }
+      if (name === 'protokolle-service' && typeof window.openProtokolleService === 'function') {
+        window.openProtokolleService();
+      }
       return;
     }
     if (name === 'textbausteine') {
@@ -12013,6 +12016,342 @@
         }
         lastProtokollId = null;
         if (pdfBtn) pdfBtn.style.display = 'none';
+      });
+    };
+  })();
+
+  (function initProtokolleService() {
+    var jobSelect = document.getElementById('serviceprotokollJob');
+    var kopfdatenEl = document.getElementById('serviceprotokollKopfdaten');
+    var fabSelect = document.getElementById('serviceprotokollFab');
+    var datumEl = document.getElementById('serviceprotokollDatum');
+    var stepsContainer = document.getElementById('serviceprotokollArbeitsschritte');
+    var addStepBtn = document.getElementById('serviceprotokollAddStep');
+    var form = document.getElementById('serviceprotokollForm');
+    var pdfBtn = document.getElementById('serviceprotokollPdf');
+    var abbrechenBtn = document.getElementById('serviceprotokollAbbrechen');
+
+    var serviceJobData = null;
+    var arbeitsschritte = [];
+    var lastProtokollId = null;
+    var defaultsSource = 'global';
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+    function formatDateRange(start, end) {
+      if (!start && !end) return '';
+      var s = (start || '').toString().slice(0, 10);
+      var e = (end || '').toString().slice(0, 10);
+      if (s && e && s !== e) return s + ' – ' + e;
+      return s || e;
+    }
+
+    function renderKopfdatenService(job) {
+      if (!kopfdatenEl) return;
+      var techName = '';
+      try {
+        var techEl = document.getElementById('technicianName');
+        if (techEl) techName = techEl.textContent || '';
+      } catch (e) {}
+      var datum = formatDateRange(job.start_datetime, job.end_datetime);
+      var fabList = parseJobFabrikationsnummernOrdered(job);
+      kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(job.customer_name || '') + '</div>' +
+        '<div><strong>Projekt:</strong> ' + escapeHtml(job.job_number || job.description || '') + '</div>' +
+        '<div><strong>FN:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
+        '<div><strong>Zeitraum:</strong> ' + escapeHtml(datum) + '</div>' +
+        '<div><strong>Servicetechniker:</strong> ' + escapeHtml(techName) + '</div>';
+    }
+
+    function fillFabSelect(job) {
+      if (!fabSelect) return;
+      var opts = ['<option value="">– aus Auftrag –</option>'];
+      parseJobFabrikationsnummernOrdered(job).forEach(function (fn) {
+        opts.push('<option value="' + escapeHtml(fn) + '">' + escapeHtml(fn) + '</option>');
+      });
+      fabSelect.innerHTML = opts.join('');
+    }
+
+    function applyKopfFields(kopf) {
+      kopf = kopf || {};
+      var pos = document.getElementById('serviceprotokollPos');
+      var qmax = document.getElementById('serviceprotokollQmax');
+      var type = document.getElementById('serviceprotokollType');
+      var dwc = document.getElementById('serviceprotokollDwc');
+      if (pos && kopf.kopf_pos_nr) pos.value = kopf.kopf_pos_nr;
+      if (qmax && kopf.kopf_qmax) qmax.value = kopf.kopf_qmax;
+      if (type && kopf.kopf_type) type.value = kopf.kopf_type;
+      if (dwc && kopf.kopf_dwc) dwc.value = kopf.kopf_dwc;
+    }
+
+    async function loadDefaultsForFab(fab) {
+      var baseUrl = getDispoBaseUrl();
+      if (!baseUrl || !fab) {
+        arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
+        renderSteps();
+        return;
+      }
+      try {
+        var url = baseUrl + '/dispo_api/api/serviceprotokoll_defaults.php?fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(getTechId());
+        var r = await fetch(url, { headers: Object.assign({ 'X-Technician-Id': String(getTechId()) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword)) });
+        var data = await r.json().catch(function () { return {}; });
+        if (r.ok && data.ok && Array.isArray(data.arbeitsschritte)) {
+          defaultsSource = data.source || 'global';
+          arbeitsschritte = data.arbeitsschritte.map(function (row) {
+            return { bezeichnung: row.bezeichnung || '', status: 'na', bemerkung: '' };
+          });
+          if (arbeitsschritte.length === 0) {
+            arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
+          }
+          applyKopfFields(data.kopf);
+        } else {
+          arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
+        }
+      } catch (e) {
+        arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
+      }
+      renderSteps();
+    }
+
+    function buildStepRowHtml(idx) {
+      var s = arbeitsschritte[idx] || { bezeichnung: '', status: 'na', bemerkung: '' };
+      var style = 'margin-bottom:0.5rem;padding:0.75rem;background:var(--bg);border:1px solid var(--accent);border-radius:4px';
+      var status = s.status || 'na';
+      return '<div class="serviceprotokoll-step" data-idx="' + idx + '" style="' + style + '">' +
+        '<div style="display:flex;gap:0.5rem;align-items:flex-start;flex-wrap:wrap;margin-bottom:0.5rem">' +
+        '<span class="sp-step-num" style="font-weight:700;min-width:1.5rem">' + (idx + 1) + '.</span>' +
+        '<input type="text" class="sp-bezeichnung" value="' + escapeHtml(s.bezeichnung || '') + '" placeholder="Arbeitsschritt" style="flex:1;min-width:180px;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)">' +
+        '<div style="display:flex;gap:0.25rem;flex-wrap:wrap">' +
+        '<button type="button" class="btn btn-ghost sp-status" data-status="ok" style="' + (status === 'ok' ? 'font-weight:700' : '') + '">OK</button>' +
+        '<button type="button" class="btn btn-ghost sp-status" data-status="nok" style="' + (status === 'nok' ? 'font-weight:700' : '') + '">n.i.O.</button>' +
+        '<button type="button" class="btn btn-ghost sp-status" data-status="na" style="' + (status === 'na' ? 'font-weight:700' : '') + '">n.a.</button>' +
+        '<button type="button" class="btn btn-ghost sp-up" title="Nach oben">↑</button>' +
+        '<button type="button" class="btn btn-ghost sp-down" title="Nach unten">↓</button>' +
+        '<button type="button" class="btn btn-ghost sp-remove" title="Entfernen">✕</button>' +
+        '</div></div>' +
+        '<input type="text" class="sp-bemerkung" value="' + escapeHtml(s.bemerkung || '') + '" placeholder="Bemerkung (optional)" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)">' +
+        '</div>';
+    }
+
+    function syncStepsFromDom() {
+      if (!stepsContainer) return;
+      var rows = stepsContainer.querySelectorAll('.serviceprotokoll-step');
+      var next = [];
+      rows.forEach(function (rowEl, i) {
+        next.push({
+          bezeichnung: (rowEl.querySelector('.sp-bezeichnung') || {}).value || '',
+          status: rowEl.getAttribute('data-status') || 'na',
+          bemerkung: (rowEl.querySelector('.sp-bemerkung') || {}).value || '',
+          sort_order: i + 1
+        });
+      });
+      arbeitsschritte = next.length ? next : [{ bezeichnung: '', status: 'na', bemerkung: '' }];
+    }
+
+    function renderSteps() {
+      if (!stepsContainer) return;
+      stepsContainer.innerHTML = arbeitsschritte.map(function (_, i) { return buildStepRowHtml(i); }).join('');
+      stepsContainer.querySelectorAll('.serviceprotokoll-step').forEach(function (rowEl) {
+        var idx = parseInt(rowEl.getAttribute('data-idx'), 10);
+        rowEl.setAttribute('data-status', (arbeitsschritte[idx] && arbeitsschritte[idx].status) || 'na');
+        rowEl.querySelectorAll('.sp-status').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            syncStepsFromDom();
+            arbeitsschritte[idx].status = btn.getAttribute('data-status') || 'na';
+            renderSteps();
+          });
+        });
+        var up = rowEl.querySelector('.sp-up');
+        var down = rowEl.querySelector('.sp-down');
+        var rem = rowEl.querySelector('.sp-remove');
+        if (up) up.addEventListener('click', function () {
+          syncStepsFromDom();
+          if (idx <= 0) return;
+          var tmp = arbeitsschritte[idx - 1];
+          arbeitsschritte[idx - 1] = arbeitsschritte[idx];
+          arbeitsschritte[idx] = tmp;
+          renderSteps();
+        });
+        if (down) down.addEventListener('click', function () {
+          syncStepsFromDom();
+          if (idx >= arbeitsschritte.length - 1) return;
+          var tmp = arbeitsschritte[idx + 1];
+          arbeitsschritte[idx + 1] = arbeitsschritte[idx];
+          arbeitsschritte[idx] = tmp;
+          renderSteps();
+        });
+        if (rem) rem.addEventListener('click', function () {
+          syncStepsFromDom();
+          arbeitsschritte.splice(idx, 1);
+          if (arbeitsschritte.length === 0) arbeitsschritte.push({ bezeichnung: '', status: 'na', bemerkung: '' });
+          renderSteps();
+        });
+      });
+    }
+
+    function collectMesswerte() {
+      return {
+        waegezelle_type: (document.getElementById('spMessType') || {}).value || '',
+        tara: (document.getElementById('spMessTara') || {}).value || '',
+        pruefgewicht: (document.getElementById('spMessPruefgew') || {}).value || '',
+        dms_entlastet: (document.getElementById('spMessDms') || {}).value || '',
+        kg: (document.getElementById('spMessKg') || {}).value || '',
+        mv: (document.getElementById('spMessMv') || {}).value || '',
+        ma: (document.getElementById('spMessMa') || {}).value || '',
+        g_prozent: (document.getElementById('spMessG') || {}).value || '',
+        taraspeicher: (document.getElementById('spMessTaraspeicher') || {}).value || ''
+      };
+    }
+
+    async function loadServiceJobs() {
+      return fetchMyAssignedJobs();
+    }
+
+    if (addStepBtn) {
+      addStepBtn.addEventListener('click', function () {
+        syncStepsFromDom();
+        arbeitsschritte.push({ bezeichnung: '', status: 'na', bemerkung: '' });
+        renderSteps();
+      });
+    }
+
+    if (jobSelect) {
+      jobSelect.addEventListener('change', async function () {
+        var id = jobSelect.value;
+        serviceJobData = null;
+        if (!id) {
+          if (kopfdatenEl) kopfdatenEl.innerHTML = '';
+          if (fabSelect) fabSelect.innerHTML = '<option value="">– aus Auftrag –</option>';
+          return;
+        }
+        try {
+          var jobs = await loadServiceJobs();
+          serviceJobData = jobs.find(function (j) { return String(j.id) === String(id); }) || null;
+          if (serviceJobData) {
+            renderKopfdatenService(serviceJobData);
+            fillFabSelect(serviceJobData);
+          }
+        } catch (e) {}
+      });
+    }
+
+    if (fabSelect) {
+      fabSelect.addEventListener('change', function () {
+        var fab = fabSelect.value ? fabSelect.value.trim() : '';
+        if (fab) loadDefaultsForFab(fab);
+      });
+    }
+
+    if (form) {
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        if (!serviceJobData) { alert('Bitte Auftrag wählen.'); return; }
+        var fab = (fabSelect && fabSelect.value) ? fabSelect.value.trim() : '';
+        if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
+        var datum = (datumEl && datumEl.value) ? datumEl.value.trim() : '';
+        if (!datum) { alert('Bitte Datum angeben.'); return; }
+        syncStepsFromDom();
+        var stepsPayload = arbeitsschritte.filter(function (s) { return (s.bezeichnung || '').trim() !== ''; }).map(function (s, i) {
+          return {
+            sort_order: i + 1,
+            bezeichnung: s.bezeichnung.trim(),
+            status: s.status || 'na',
+            bemerkung: s.bemerkung || ''
+          };
+        });
+        if (stepsPayload.length === 0) { alert('Mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.'); return; }
+        var body = {
+          technician_id: getTechId(),
+          job_id: parseInt(jobSelect.value, 10),
+          fabrikationsnummer: fab,
+          durchfuehrungsdatum: datum,
+          arbeitsschritte: stepsPayload,
+          messwerte: collectMesswerte(),
+          bemerkungen: (document.getElementById('serviceprotokollBemerkungen') || {}).value || '',
+          kopf_pos_nr: (document.getElementById('serviceprotokollPos') || {}).value || '',
+          kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
+          kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
+          kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
+          base_url: getDispoBaseUrl(),
+          serverUsername: getDispoUsername(),
+          serverPassword: getDispoPassword()
+        };
+        try {
+          var r = await fetch(API_BASE + '/api/serviceprotokoll_save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+            body: JSON.stringify(body)
+          });
+          var data = await r.json().catch(function () { return {}; });
+          if (!r.ok || !data.ok) {
+            alert('Fehler: ' + (data.error || r.status));
+            return;
+          }
+          if (data.warning) alert(data.warning);
+          else if (typeof showToast === 'function') showToast('Serviceprotokoll gespeichert.');
+          lastProtokollId = data.protokoll_id != null ? data.protokoll_id : null;
+          if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+          if (lastProtokollId && pdfBtn) pdfBtn.click();
+        } catch (err) {
+          alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+        }
+      });
+    }
+
+    if (pdfBtn) {
+      pdfBtn.addEventListener('click', async function () {
+        if (!lastProtokollId) return;
+        var url = API_BASE + '/api/serviceprotokoll_pdf?id=' + encodeURIComponent(lastProtokollId) +
+          '&base_url=' + encodeURIComponent(getDispoBaseUrl()) +
+          '&serverUsername=' + encodeURIComponent(getDispoUsername() || '') +
+          '&serverPassword=' + encodeURIComponent(getDispoPassword() || '');
+        try {
+          var r = await fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } });
+          if (!r.ok) { alert('PDF konnte nicht geladen werden.'); return; }
+          var blob = await r.blob();
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'Serviceprotokoll.pdf';
+          a.click();
+          URL.revokeObjectURL(a.href);
+        } catch (e) { alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt')); }
+      });
+    }
+
+    if (abbrechenBtn) {
+      abbrechenBtn.addEventListener('click', function () {
+        if (typeof window.openProtokolleService === 'function') window.openProtokolleService();
+      });
+    }
+
+    window.openProtokolleService = function () {
+      loadServiceJobs().then(function (jobs) {
+        if (jobSelect) {
+          jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
+            jobs.map(function (j) {
+              return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
+            }).join('');
+        }
+        serviceJobData = null;
+        arbeitsschritte = [];
+        if (kopfdatenEl) kopfdatenEl.innerHTML = '';
+        if (fabSelect) fabSelect.innerHTML = '<option value="">– aus Auftrag –</option>';
+        ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollBemerkungen',
+          'spMessType', 'spMessTara', 'spMessPruefgew', 'spMessDms', 'spMessKg', 'spMessMv', 'spMessMa', 'spMessG', 'spMessTaraspeicher'
+        ].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) el.value = '';
+        });
+        if (datumEl && !datumEl.value) {
+          var today = new Date();
+          datumEl.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+        }
+        lastProtokollId = null;
+        if (pdfBtn) pdfBtn.style.display = 'none';
+        if (stepsContainer) stepsContainer.innerHTML = '<p class="empty">FN wählen, um Arbeitsschritte zu laden.</p>';
       });
     };
   })();

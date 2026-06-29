@@ -1360,8 +1360,65 @@
   </main>
   <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">
     <div class="card">
-      <h2>Service</h2>
-      <p class="empty">Bereich Service – Inhalt wird in Kürze bereitgestellt.</p>
+      <h2>Serviceprotokoll</h2>
+      <form id="serviceprotokollForm" class="montagebericht-form-wrap">
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="serviceprotokollJob">Auftrag</label>
+          <select id="serviceprotokollJob" class="dienstreise-select" required>
+            <option value="">– Bitte wählen –</option>
+          </select>
+        </div>
+        <div id="serviceprotokollKopfdaten" class="montagebericht-kopfdaten" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border-radius:4px;font-size:0.9rem"></div>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="serviceprotokollFab">Fabrikationsnummer</label>
+          <select id="serviceprotokollFab" class="dienstreise-select" style="width:100%" required>
+            <option value="">– aus Auftrag –</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="serviceprotokollDatum">Datum der Durchführung</label>
+          <input type="date" id="serviceprotokollDatum" required style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+        </div>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label>Kopfdaten Anlage (optional)</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+            <input type="text" id="serviceprotokollPos" placeholder="Pos.Nr." style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="serviceprotokollQmax" placeholder="Qmax" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="serviceprotokollType" placeholder="Type" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="serviceprotokollDwc" placeholder="DWC / DMS" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+          </div>
+        </div>
+        <div style="margin-bottom:1rem">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem">
+            <strong>Arbeitsschritte</strong>
+            <button type="button" class="btn btn-ghost" id="serviceprotokollAddStep">+ Arbeitsschritt</button>
+          </div>
+          <div id="serviceprotokollArbeitsschritte"></div>
+        </div>
+        <div class="form-group" style="margin-bottom:1rem">
+          <label>Messwerte Wägezelle</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+            <input type="text" id="spMessType" placeholder="Type" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessTara" placeholder="Tara" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessPruefgew" placeholder="Prüfgewicht" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessDms" placeholder="DMS entlastet" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessKg" placeholder="kg" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessMv" placeholder="mV" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessMa" placeholder="mA" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessG" placeholder="g %" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessTaraspeicher" placeholder="Taraspeicher" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text);grid-column:1/-1">
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:1rem">
+          <label for="serviceprotokollBemerkungen">Allgemeine Bemerkungen</label>
+          <textarea id="serviceprotokollBemerkungen" rows="3" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)"></textarea>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button type="submit" class="btn btn-primary">Speichern &amp; PDF</button>
+          <button type="button" class="btn btn-ghost" id="serviceprotokollPdf" style="display:none">PDF erneut laden</button>
+          <button type="button" class="btn btn-ghost" id="serviceprotokollAbbrechen">Abbrechen</button>
+        </div>
+      </form>
     </div>
   </main>
   <main id="viewTextbausteine" class="view-textbausteine" aria-label="Textbausteine">

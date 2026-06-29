@@ -6986,6 +6986,98 @@ ORDER BY
     }
   });
 
+  app.post('/api/serviceprotokoll_save', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!technicianId || !dispoBaseUrl) {
+        return res.status(400).json({ ok: false, error: 'base_url und technician_id erforderlich.' });
+      }
+      const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
+      const url = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_save.php';
+      const payload = {
+        technician_id: body.technician_id != null ? body.technician_id : technicianId,
+        job_id: body.job_id,
+        fabrikationsnummer: body.fabrikationsnummer,
+        durchfuehrungsdatum: body.durchfuehrungsdatum,
+        arbeitsschritte: Array.isArray(body.arbeitsschritte) ? body.arbeitsschritte : [],
+        messwerte: body.messwerte && typeof body.messwerte === 'object' ? body.messwerte : {},
+        bemerkungen: body.bemerkungen,
+        kopf_pos_nr: body.kopf_pos_nr,
+        kopf_qmax: body.kopf_qmax,
+        kopf_type: body.kopf_type,
+        kopf_dwc: body.kopf_dwc,
+      };
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      }
+      let localWarning = null;
+      if (data.ok && data.protokoll_id) {
+        try {
+          const resolved = resolveLocalJobIdForTechnician(db, technicianId, body.job_id, { mode: 'auto' });
+          const localJobId = resolved && resolved.localJobId ? resolved.localJobId : null;
+          if (localJobId) {
+            const pdfUrl = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_pdf.php?id=' + encodeURIComponent(data.protokoll_id) + '&technician_id=' + encodeURIComponent(technicianId);
+            const pdfRes = await fetch(pdfUrl, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+            if (pdfRes.ok) {
+              const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+              const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+              const fn = String(body.fabrikationsnummer || 'FN').replace(/[^\w.-]+/g, '_');
+              const datum = String(body.durchfuehrungsdatum || '').replace(/-/g, '');
+              const pdfName = 'Serviceprotokoll_' + fn + '_' + datum + '.pdf';
+              const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
+              const fnFolder = fn;
+              const targetDir = path.join(docMonteurBase, fnFolder, 'Serviceprotokolle');
+              if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+              writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
+            } else {
+              localWarning = 'PDF lokal konnte nicht vom Server geladen werden.';
+            }
+          }
+        } catch (localErr) {
+          localWarning = 'Lokale PDF-Kopie fehlgeschlagen: ' + localErr.message;
+        }
+      }
+      if (localWarning) {
+        data.warning = data.warning ? data.warning + '\n' + localWarning : localWarning;
+      }
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.get('/api/serviceprotokoll_pdf', async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const protokollId = parseInt(req.query.id, 10);
+      const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!technicianId || !protokollId || !baseUrl) {
+        return res.status(400).json({ ok: false, error: 'id, base_url und technician_id erforderlich.' });
+      }
+      const url = baseUrl + '/dispo_api/api/serviceprotokoll_pdf.php?id=' + encodeURIComponent(protokollId) + '&technician_id=' + encodeURIComponent(technicianId);
+      const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
+      const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: r.statusText });
+      }
+      const buf = Buffer.from(await r.arrayBuffer());
+      res.set('Content-Type', 'application/pdf');
+      res.set('Content-Disposition', 'attachment; filename="Serviceprotokoll.pdf"');
+      res.send(buf);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
   /** Fabrikationsnummer aus Dateiname extrahieren (z. B. FN11952_PA7_… → 11952). */
   function extractFnFromFilename(filename) {
     if (!filename || typeof filename !== 'string') return null;
