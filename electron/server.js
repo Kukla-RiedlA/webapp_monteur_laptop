@@ -6436,6 +6436,18 @@ ORDER BY
         console.warn('Protokoll-Vorlage ' + filename + ' Sync fehlgeschlagen:', e.message);
       }
     }
+    try {
+      const spUrl = base + '/dispo_api/api/protokoll_template_download.php?id=serviceprotokoll';
+      const spRes = await fetch(spUrl);
+      if (spRes.ok) {
+        const spBuf = Buffer.from(await spRes.arrayBuffer());
+        if (spBuf.length > 0) {
+          fs.writeFileSync(path.join(cacheDir, 'serviceprotokoll_defaults.json'), spBuf);
+        }
+      }
+    } catch (e) {
+      console.warn('Serviceprotokoll-Defaults Sync fehlgeschlagen:', e.message);
+    }
   }
 
   /** Liest Montagebericht-Vorlage nur aus lokalem Cache oder gebündelten Fallbacks (kein Download zur Laufzeit). */
@@ -6459,6 +6471,77 @@ ORDER BY
     }
     return null;
   }
+
+  function readServiceprotokollDefaultsLocal() {
+    const filename = 'serviceprotokoll_defaults.json';
+    const cacheDir = path.join(DB_DIR, 'protokoll_templates');
+    const bundledPath = path.join(__dirname, 'templates', filename);
+    const dispoPath = path.join(__dirname, '..', '..', 'dispo', 'assets', 'templates', 'protokoll', filename);
+    for (const p of [path.join(cacheDir, filename), dispoPath, bundledPath]) {
+      if (fs.existsSync(p)) {
+        try {
+          return fs.readFileSync(p);
+        } catch (e) {
+          console.warn('Serviceprotokoll-Defaults lesen fehlgeschlagen:', p, e.message);
+        }
+      }
+    }
+    return null;
+  }
+
+  function parseServiceprotokollDefaultsBuffer(buf) {
+    if (!buf || !buf.length) return null;
+    try {
+      const data = JSON.parse(buf.toString('utf8'));
+      if (!data || !Array.isArray(data.arbeitsschritte)) return null;
+      const arbeitsschritte = data.arbeitsschritte
+        .map((row) => ({ bezeichnung: String((row && row.bezeichnung) || '').trim() }))
+        .filter((row) => row.bezeichnung !== '');
+      if (!arbeitsschritte.length) return null;
+      return { ok: true, source: 'global', arbeitsschritte, kopf: {} };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  app.get('/api/serviceprotokoll_defaults', async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const fab = (req.query.fabrikationsnummer || '').toString().trim();
+      const dispoBaseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      }
+      const localPayload = () => parseServiceprotokollDefaultsBuffer(readServiceprotokollDefaultsLocal());
+      if (!dispoBaseUrl) {
+        const local = localPayload();
+        if (local) return res.json(local);
+        return res.status(400).json({ ok: false, error: 'base_url erforderlich (kein lokaler Defaults-Cache).' });
+      }
+      const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
+      const url = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_defaults.php?fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(technicianId);
+      try {
+        const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.ok && Array.isArray(data.arbeitsschritte) && data.arbeitsschritte.length > 0) {
+          return res.json(data);
+        }
+        const local = localPayload();
+        if (local) {
+          if (r.ok && data.ok && data.kopf) local.kopf = data.kopf;
+          return res.json(local);
+        }
+        if (r.ok) return res.json(data);
+        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      } catch (e) {
+        const local = localPayload();
+        if (local) return res.json(local);
+        return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      }
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
 
   app.get('/api/protokolle/montagebericht', (req, res) => {
     try {
@@ -6986,6 +7069,373 @@ ORDER BY
     }
   });
 
+  function serviceprotokollJsonPath(reiseDir) {
+    return path.join(reiseDir, 'serviceprotokoll.json');
+  }
+
+  function readServiceprotokollStore(reiseDir) {
+    const p = serviceprotokollJsonPath(reiseDir);
+    if (!fs.existsSync(p)) return { byFab: {} };
+    try {
+      const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (data && typeof data === 'object' && data.byFab && typeof data.byFab === 'object') {
+        return data;
+      }
+    } catch (_) { /* ignore */ }
+    return { byFab: {} };
+  }
+
+  function writeServiceprotokollDraft(reiseDir, fab, draft) {
+    const fn = String(fab || '').trim();
+    if (!fn) throw new Error('Fabrikationsnummer fehlt');
+    const store = readServiceprotokollStore(reiseDir);
+    store.byFab[fn] = Object.assign({}, draft, {
+      fabrikationsnummer: fn,
+      updatedAt: new Date().toISOString(),
+    });
+    writeFileWithRetry(serviceprotokollJsonPath(reiseDir), JSON.stringify(store, null, 2));
+    return store.byFab[fn];
+  }
+
+  function resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab) {
+    const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
+    const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
+    const offlineCfg = getOfflinePullConfig(db, localJobId);
+    let folderName = null;
+    const fromMap = (offlineCfg.fab_map || []).find((e) => String(e.fab) === String(fab));
+    if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
+    if (!folderName) {
+      const fnNum = parseInt(String(fab).trim(), 10);
+      folderName =
+        (Number.isFinite(fnNum) ? findMonteurFolderForFab(docMonteurBase, fnNum) : null) ||
+        (Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null) ||
+        sanitizeDienstreiseFolderPart(fab);
+    }
+    const targetDir = path.join(docMonteurBase, folderName, 'Serviceprotokolle');
+    const relDir = 'Dokumente_Monteur/' + folderName + '/Serviceprotokolle';
+    return { targetDir, relDir, folderName };
+  }
+
+  app.get('/api/protokolle/serviceprotokoll', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
+      const fab = (req.query.fabrikationsnummer || req.query.fab || '').toString().trim();
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      const jobRow = db.prepare(`
+        SELECT j.id FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      if (!jobRow) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      const store = readServiceprotokollStore(getOrCreateDienstreiseFolderForJob(localJobId));
+      if (fab && store.byFab[fab]) {
+        return res.json({ ok: true, data: store.byFab[fab], store });
+      }
+      res.json({ ok: true, data: fab ? null : store, store });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
+    }
+  });
+
+  app.post('/api/protokolle/serviceprotokoll', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const dispoBaseUrl = (body.dispoBaseUrl || body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+      const fab = String(body.fabrikationsnummer || '').trim();
+      const jsonOnly = body.jsonOnly === true || body.saveJsonOnly === true;
+
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      if (!fab) {
+        return res.status(400).json({ ok: false, error: 'Fabrikationsnummer erforderlich.' });
+      }
+
+      const jobRow = db.prepare(`
+        SELECT j.id, j.server_id, j.status FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      if (!jobRow) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      const blocked = localJobWriteBlocked(jobRow.status);
+      if (blocked) {
+        return res.status(blocked.status).json({ ok: false, error: blocked.error });
+      }
+
+      const projekt = String(body.projekt || '').trim();
+      if (!projekt) {
+        return res.status(400).json({ ok: false, error: 'Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm / manuell).' });
+      }
+
+      const draftPayload = {
+        fabrikationsnummer: fab,
+        durchfuehrungsdatum: String(body.durchfuehrungsdatum || '').trim(),
+        projekt,
+        arbeitsschritte: Array.isArray(body.arbeitsschritte) ? body.arbeitsschritte : [],
+        messwerte: body.messwerte && typeof body.messwerte === 'object' ? body.messwerte : {},
+        bemerkungen: String(body.bemerkungen || ''),
+        kopf_pos_nr: String(body.kopf_pos_nr || ''),
+        kopf_qmax: String(body.kopf_qmax || ''),
+        kopf_type: String(body.kopf_type || ''),
+        kopf_dwc: String(body.kopf_dwc || ''),
+      };
+
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      writeServiceprotokollDraft(reiseDir, fab, draftPayload);
+
+      let syncWarning = null;
+      const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
+      const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
+      if (dispoBaseUrl && hasServerJobId) {
+        const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.serverPassword ?? body.serverPassword);
+        const syncHeaders = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authSync || {}) };
+        try {
+          const syncUrl = dispoBaseUrl + '/dispo_api/api/anlagenstamm_projekt_job_save.php';
+          const syncRes = await fetch(syncUrl, {
+            method: 'POST',
+            headers: syncHeaders,
+            body: JSON.stringify({ technician_id: technicianId, job_id: parsedServerJobId, projekt }),
+          });
+          const syncData = await syncRes.json().catch(() => ({}));
+          if (!syncRes.ok || !syncData.ok) {
+            syncWarning = 'Projekt: Anlagenstamm auf dem Server konnte nicht angepasst werden: ' + (syncData.error || syncRes.statusText || syncRes.status);
+          }
+        } catch (_) {
+          syncWarning = 'Projekt: Dispo für Anlagenstamm-Update nicht erreichbar.';
+        }
+      }
+
+      if (jsonOnly) {
+        return res.json({ ok: true, jsonOnly: true, warning: syncWarning || undefined });
+      }
+
+      if (!draftPayload.durchfuehrungsdatum) {
+        return res.status(400).json({ ok: false, error: 'Bitte Datum der Durchführung angeben.' });
+      }
+      const steps = (draftPayload.arbeitsschritte || []).filter((s) => {
+        if (!s) return false;
+        const de = String(s.bezeichnung_de != null ? s.bezeichnung_de : s.bezeichnung || '').trim();
+        const en = String(s.bezeichnung_en || '').trim();
+        return de !== '' || en !== '';
+      });
+      if (!steps.length) {
+        return res.status(400).json({ ok: false, error: 'Mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.' });
+      }
+      if (!dispoBaseUrl) {
+        return res.status(400).json({ ok: false, error: 'Dispo-Server-URL erforderlich für PDF-Erstellung.' });
+      }
+      if (!hasServerJobId) {
+        return res.status(400).json({ ok: false, error: 'Auftrag ist nicht mit dem Server verknüpft (server_id fehlt).' });
+      }
+
+      const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
+      const saveUrl = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_save.php';
+      const savePayload = {
+        technician_id: body.technician_id != null ? body.technician_id : technicianId,
+        job_id: parsedServerJobId,
+        fabrikationsnummer: fab,
+        durchfuehrungsdatum: draftPayload.durchfuehrungsdatum,
+        arbeitsschritte: steps,
+        messwerte: draftPayload.messwerte,
+        projekt,
+        bemerkungen: draftPayload.bemerkungen,
+        kopf_pos_nr: draftPayload.kopf_pos_nr,
+        kopf_qmax: draftPayload.kopf_qmax,
+        kopf_type: draftPayload.kopf_type,
+        kopf_dwc: draftPayload.kopf_dwc,
+        pdf_languages: Array.isArray(body.pdf_languages) && body.pdf_languages.length
+          ? body.pdf_languages.map((l) => String(l).toLowerCase()).filter((l) => l === 'de' || l === 'en')
+          : ['de'],
+      };
+      const saveRes = await fetch(saveUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+        body: JSON.stringify(savePayload),
+      });
+      const saveData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok || !saveData.ok) {
+        return res.status(saveRes.status).json(saveData.ok === false ? saveData : { ok: false, error: saveData.error || saveRes.statusText });
+      }
+
+      let savedRel = [];
+      let localWarning = null;
+      if (saveData.protokoll_id) {
+        const pdfLangs = savePayload.pdf_languages && savePayload.pdf_languages.length ? savePayload.pdf_languages : ['de'];
+        const multiLang = pdfLangs.length > 1;
+        const datum = String(draftPayload.durchfuehrungsdatum).replace(/-/g, '');
+        const safeFn = fab.replace(/[^\w.-]+/g, '_');
+        const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab);
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+        for (const lang of pdfLangs) {
+          try {
+            const pdfUrl = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_pdf.php?id=' + encodeURIComponent(saveData.protokoll_id) + '&technician_id=' + encodeURIComponent(technicianId) + '&lang=' + encodeURIComponent(lang);
+            const pdfRes = await fetch(pdfUrl, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+            if (!pdfRes.ok) {
+              localWarning = (localWarning ? localWarning + ' ' : '') + 'PDF ' + lang.toUpperCase() + ' lokal nicht geladen.';
+              continue;
+            }
+            const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+            const suffix = multiLang ? '_' + lang.toUpperCase() : (lang === 'en' ? '_EN' : '');
+            const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
+            writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
+            savedRel.push(relDir + '/' + pdfName);
+          } catch (localErr) {
+            localWarning = (localWarning ? localWarning + ' ' : '') + 'PDF ' + lang.toUpperCase() + ': ' + localErr.message;
+          }
+        }
+        if (!savedRel.length) {
+          localWarning = (localWarning ? localWarning + ' ' : '') + 'Keine lokale PDF-Kopie erstellt.';
+        }
+      }
+
+      const warning = [syncWarning, saveData.warning, localWarning].filter(Boolean).join('\n') || undefined;
+      res.json({
+        ok: true,
+        jsonOnly: false,
+        protokoll_id: saveData.protokoll_id,
+        pdf_path: saveData.pdf_path || null,
+        pdf_paths: saveData.pdf_paths || [],
+        saved: savedRel,
+        warning,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Serviceprotokoll konnte nicht gespeichert werden.' });
+    }
+  });
+
+  app.post('/api/protokolle/serviceprotokoll/all-pdf', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const dispoBaseUrl = (body.dispoBaseUrl || body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+      const protokolle = Array.isArray(body.protokolle) ? body.protokolle : [];
+      const durchfuehrungsdatum = String(body.durchfuehrungsdatum || '').trim();
+
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      if (!protokolle.length) {
+        return res.status(400).json({ ok: false, error: 'protokolle[] erforderlich.' });
+      }
+      if (!durchfuehrungsdatum) {
+        return res.status(400).json({ ok: false, error: 'Bitte Datum der Durchführung angeben.' });
+      }
+
+      const jobRow = db.prepare(`
+        SELECT j.id, j.server_id, j.status FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      if (!jobRow) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      const blocked = localJobWriteBlocked(jobRow.status);
+      if (blocked) {
+        return res.status(blocked.status).json({ ok: false, error: blocked.error });
+      }
+      if (!dispoBaseUrl) {
+        return res.status(400).json({ ok: false, error: 'Dispo-Server-URL erforderlich für PDF-Erstellung.' });
+      }
+      const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
+      if (!Number.isFinite(parsedServerJobId) || parsedServerJobId <= 0) {
+        return res.status(400).json({ ok: false, error: 'Auftrag ist nicht mit dem Server verknüpft (server_id fehlt).' });
+      }
+
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      for (const p of protokolle) {
+        if (!p || typeof p !== 'object') continue;
+        const fab = String(p.fabrikationsnummer || '').trim();
+        if (!fab) continue;
+        writeServiceprotokollDraft(reiseDir, fab, {
+          fabrikationsnummer: fab,
+          durchfuehrungsdatum,
+          projekt: String(p.projekt || '').trim(),
+          arbeitsschritte: Array.isArray(p.arbeitsschritte) ? p.arbeitsschritte : [],
+          messwerte: p.messwerte && typeof p.messwerte === 'object' ? p.messwerte : {},
+          bemerkungen: String(p.bemerkungen || ''),
+          kopf_pos_nr: String(p.kopf_pos_nr || ''),
+          kopf_qmax: String(p.kopf_qmax || ''),
+          kopf_type: String(p.kopf_type || ''),
+          kopf_dwc: String(p.kopf_dwc || ''),
+        });
+      }
+
+      const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
+      const saveAllUrl = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_save_all.php';
+      const savePayload = {
+        technician_id: body.technician_id != null ? body.technician_id : technicianId,
+        job_id: parsedServerJobId,
+        durchfuehrungsdatum,
+        protokolle,
+        pdf_languages: Array.isArray(body.pdf_languages) && body.pdf_languages.length
+          ? body.pdf_languages.map((l) => String(l).toLowerCase()).filter((l) => l === 'de' || l === 'en')
+          : ['de'],
+      };
+      const saveRes = await fetch(saveAllUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+        body: JSON.stringify(savePayload),
+      });
+      const saveData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok || !saveData.ok) {
+        return res.status(saveRes.status).json(saveData.ok === false ? saveData : { ok: false, error: saveData.error || saveRes.statusText });
+      }
+
+      const pdfLangs = savePayload.pdf_languages.length ? savePayload.pdf_languages : ['de'];
+      const multiLang = pdfLangs.length > 1;
+      const combinedPaths = Array.isArray(saveData.combined_pdf_paths) ? saveData.combined_pdf_paths : [];
+      const firstFab = protokolle[0] && protokolle[0].fabrikationsnummer ? String(protokolle[0].fabrikationsnummer).trim() : '';
+      const { targetDir, relDir } = firstFab
+        ? resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, firstFab)
+        : { targetDir: null, relDir: '' };
+      let savedRel = [];
+      let localWarning = null;
+      if (targetDir && combinedPaths.length) {
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+        for (let i = 0; i < combinedPaths.length; i++) {
+          const relPath = combinedPaths[i];
+          const lang = pdfLangs[i] || pdfLangs[0] || 'de';
+          try {
+            const dlUrl = dispoBaseUrl + '/api/job_project_file_download.php?technician_id=' + encodeURIComponent(technicianId) +
+              '&job_id=' + encodeURIComponent(parsedServerJobId) + '&path=' + encodeURIComponent(relPath);
+            const pdfRes = await fetch(dlUrl, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+            if (!pdfRes.ok) {
+              localWarning = (localWarning ? localWarning + ' ' : '') + 'Sammel-PDF ' + lang.toUpperCase() + ' lokal nicht geladen.';
+              continue;
+            }
+            const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+            const pdfName = path.basename(relPath.replace(/\\/g, '/'));
+            writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
+            savedRel.push(relDir + '/' + pdfName);
+          } catch (localErr) {
+            localWarning = (localWarning ? localWarning + ' ' : '') + 'Sammel-PDF ' + lang.toUpperCase() + ': ' + localErr.message;
+          }
+        }
+      }
+
+      const warning = [saveData.warning, localWarning].filter(Boolean).join('\n') || undefined;
+      res.json({
+        ok: true,
+        protokoll_ids: saveData.protokoll_ids || [],
+        combined_pdf_paths: combinedPaths,
+        saved: savedRel,
+        warning,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Sammel-PDF konnte nicht erstellt werden.' });
+    }
+  });
+
   app.post('/api/serviceprotokoll_save', express.json(), async (req, res) => {
     try {
       const body = req.body || {};
@@ -6996,9 +7446,15 @@ ORDER BY
       }
       const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
       const url = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_save.php';
+      let serverJobId;
+      try {
+        serverJobId = getServerJobId(body.job_id);
+      } catch (e) {
+        return res.status(404).json({ ok: false, error: e.message || 'Auftrag nicht gefunden.' });
+      }
       const payload = {
         technician_id: body.technician_id != null ? body.technician_id : technicianId,
-        job_id: body.job_id,
+        job_id: serverJobId,
         fabrikationsnummer: body.fabrikationsnummer,
         durchfuehrungsdatum: body.durchfuehrungsdatum,
         arbeitsschritte: Array.isArray(body.arbeitsschritte) ? body.arbeitsschritte : [],
@@ -7009,6 +7465,9 @@ ORDER BY
         kopf_qmax: body.kopf_qmax,
         kopf_type: body.kopf_type,
         kopf_dwc: body.kopf_dwc,
+        pdf_languages: Array.isArray(body.pdf_languages) && body.pdf_languages.length
+          ? body.pdf_languages.map((l) => String(l).toLowerCase()).filter((l) => l === 'de' || l === 'en')
+          : ['de'],
       };
       const r = await fetch(url, {
         method: 'POST',

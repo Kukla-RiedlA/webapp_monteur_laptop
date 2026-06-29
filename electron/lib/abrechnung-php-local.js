@@ -75,17 +75,61 @@ function monteurCanWriteJob(db, dispoJobId, technicianId) {
   return true;
 }
 
-function buildPageConfig(technicianId, query = {}) {
+function buildPageConfig(db, technicianId, query = {}) {
   const today = new Date();
-  const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-  let defaultYear = prev.getFullYear();
-  let defaultMonthNum = prev.getMonth() + 1;
+  let defaultYear = today.getFullYear();
+  let defaultMonthNum = today.getMonth() + 1;
   if (query.jahr) defaultYear = Number(query.jahr) || defaultYear;
   if (query.monat_num) defaultMonthNum = Number(query.monat_num) || defaultMonthNum;
-  const filterMonth = `${defaultYear}-${String(defaultMonthNum).padStart(2, '0')}`;
-  const prefillId = Number(query.job_id || query.id || 0);
   const tidFromQuery = Number(query.technician_id || query.techniker || 0);
   const effectiveTechnician = technicianId || (Number.isFinite(tidFromQuery) && tidFromQuery > 0 ? tidFromQuery : 0);
+  let prefillJob = null;
+  const prefillId = Number(query.job_id || query.id || 0);
+  if (prefillId > 0) {
+    prefillJob = { id: prefillId };
+    if (db && !query.jahr && !query.monat_num) {
+      try {
+        const row = db
+          .prepare(
+            `SELECT j.id, j.server_id, j.status, j.start_datetime, j.job_number, c.name AS customer_name
+             FROM jobs j
+             LEFT JOIN customers c ON c.id = j.customer_id
+             WHERE j.server_id = ? OR j.id = ?
+             LIMIT 1`,
+          )
+          .get(prefillId, prefillId);
+        if (row) {
+          const sd = parseJobDatetime(row.start_datetime);
+          if (sd) {
+            defaultYear = sd.getFullYear();
+            defaultMonthNum = sd.getMonth() + 1;
+          }
+          const sid = row.server_id != null && row.server_id !== '' ? Number(row.server_id) : Number(row.id);
+          prefillJob = {
+            id: sid,
+            label: buildJobLabel(row, sid),
+            status: String(row.status || ''),
+            can_write: monteurCanWriteJob(db, sid, effectiveTechnician),
+          };
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  } else if (db && effectiveTechnician > 0) {
+    const picked = pickDefaultAbrechnungJob(db, effectiveTechnician);
+    if (picked) {
+      defaultYear = picked.year;
+      defaultMonthNum = picked.monthNum;
+      prefillJob = {
+        id: picked.serverJobId,
+        label: picked.label,
+        status: picked.status,
+        can_write: picked.can_write,
+      };
+    }
+  }
+  const filterMonth = `${defaultYear}-${String(defaultMonthNum).padStart(2, '0')}`;
   return {
     laptopMonthOnly: true,
     fromLaptopEmbed: true,
@@ -95,7 +139,7 @@ function buildPageConfig(technicianId, query = {}) {
     year: defaultYear,
     monthNum: defaultMonthNum,
     technician: effectiveTechnician || 0,
-    prefillJob: prefillId > 0 ? { id: prefillId } : null,
+    prefillJob,
     csrfUpload: 'laptop-local',
     csrfNote: 'laptop-local',
     csrfBilling: 'laptop-local',
@@ -109,6 +153,53 @@ function buildPageConfig(technicianId, query = {}) {
     current_user_id: Number(effectiveTechnician || 0),
     techniciansForFilter: [],
   };
+}
+
+/** Laufender Auftrag (in_arbeit), sonst nächster offener Auftrag (nach Einsatzdatum). */
+function pickDefaultAbrechnungJob(db, technicianId) {
+  if (!db || !technicianId || technicianId <= 0) return null;
+  const mapRow = (r) => {
+    const sid = r.server_id != null && r.server_id !== '' ? Number(r.server_id) : Number(r.id);
+    const sd = parseJobDatetime(r.start_datetime);
+    const ref = sd || new Date();
+    return {
+      serverJobId: sid,
+      label: buildJobLabel(r, sid),
+      status: String(r.status || ''),
+      year: ref.getFullYear(),
+      monthNum: ref.getMonth() + 1,
+      can_write: monteurCanWriteJob(db, sid, technicianId),
+    };
+  };
+  try {
+    let row = db
+      .prepare(
+        `SELECT j.id, j.server_id, j.status, j.start_datetime, j.end_datetime, j.job_number, c.name AS customer_name
+         FROM jobs j
+         INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+         LEFT JOIN customers c ON c.id = j.customer_id
+         WHERE LOWER(TRIM(j.status)) = 'in_arbeit'
+         ORDER BY j.start_datetime ASC, j.id ASC
+         LIMIT 1`,
+      )
+      .get(technicianId);
+    if (row) return mapRow(row);
+    row = db
+      .prepare(
+        `SELECT j.id, j.server_id, j.status, j.start_datetime, j.end_datetime, j.job_number, c.name AS customer_name
+         FROM jobs j
+         INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+         LEFT JOIN customers c ON c.id = j.customer_id
+         WHERE LOWER(TRIM(j.status)) NOT IN ('erledigt', 'abgerechnet')
+         ORDER BY j.start_datetime ASC, j.id ASC
+         LIMIT 1`,
+      )
+      .get(technicianId);
+    if (row) return mapRow(row);
+  } catch (_) {
+    /* ignore */
+  }
+  return null;
 }
 
 function buildBillingFallback(db, dispoJobId, technicianId) {
@@ -339,6 +430,7 @@ function deleteCommentInCache(db, save, readCommentsFromRow, writeCommentsCache,
 
 module.exports = {
   buildPageConfig,
+  pickDefaultAbrechnungJob,
   buildBillingFallback,
   saveBillingCache,
   readBillingCache,

@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "source": "Serviceprotokoll.pdf (Kukla Vorlage, Zeilenreihenfolge wie Vorlage)",
+  "arbeitsschritte": [
+    { "bezeichnung": "Kontrolle der Wägebrücke / check of weighing bridge" },
+    { "bezeichnung": "Kontrolle des Fördergurtes / check of conveyor belt" },
+    { "bezeichnung": "Reinigen der Waage / cleaning of the scale" },
+    { "bezeichnung": "Kontr. der Rollen & Rollenflucht / check of rollers & roller aligment" },
+    { "bezeichnung": "Zustand der Bandabstreifer / condition of belt scrapers" },
+    { "bezeichnung": "Trommelkratzer / drum scraper" },
+    { "bezeichnung": "Abstreifpflug / scraper plough" },
+    { "bezeichnung": "Bandspannung / belt tensioning" },
+    { "bezeichnung": "Bandlenkung / belt steering device" },
+    { "bezeichnung": "Schmierstellen / lubrication points" },
+    { "bezeichnung": "Kraftaufnehmer / load cell" },
+    { "bezeichnung": "Tacho / tacho" },
+    { "bezeichnung": "Schieflaufschalter / belt misalignment switch" },
+    { "bezeichnung": "Kettentriebe / chain drives" },
+    { "bezeichnung": "Überlastschutz / overload protection" },
+    { "bezeichnung": "Wiegeelektronik / weighing electronics" },
+    { "bezeichnung": "Tara / tare" },
+    { "bezeichnung": "PGW-Test / test with test weight" },
+    { "bezeichnung": "Regelung & Dosierung / control & dosing" },
+    { "bezeichnung": "Kontrollwiegungen / check weighing procedures" },
+    { "bezeichnung": "Kontrolle der Zellenradschleuse / check of rotary vane feeder" }
+  ]
+}

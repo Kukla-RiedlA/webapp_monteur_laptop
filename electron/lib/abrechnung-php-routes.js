@@ -95,7 +95,7 @@ async function fetchBillingState(ctx, req, dispoJobId) {
 function registerAbrechnungPhpRoutes(app, ctx) {
   app.get('/api/abrechnung/page-config', (req, res) => {
     const tid = technicianId(ctx, req);
-    res.json({ ok: true, config: phpLocal.buildPageConfig(tid, req.query || {}) });
+    res.json({ ok: true, config: phpLocal.buildPageConfig(ctx.db, tid, req.query || {}) });
   });
 
   /** Lokale Jobliste (ohne .php — umgeht Dispo-Proxy, liest SQLite + Snapshot). */

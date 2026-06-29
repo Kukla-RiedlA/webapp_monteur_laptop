@@ -139,6 +139,23 @@
     return 'monat=' + encodeURIComponent(m) + '&techniker=' + encodeURIComponent(String(t));
   }
 
+  function pickAbrechnungDefaultJobId(jobs) {
+    if (!jobs || !jobs.length) return 0;
+    var i;
+    for (i = 0; i < jobs.length; i++) {
+      if (String(jobs[i].status || '').trim().toLowerCase() === 'in_arbeit') {
+        return parseInt(jobs[i].id, 10) || 0;
+      }
+    }
+    for (i = 0; i < jobs.length; i++) {
+      var st = String(jobs[i].status || '').trim().toLowerCase();
+      if (st !== 'erledigt' && st !== 'abgerechnet') {
+        return parseInt(jobs[i].id, 10) || 0;
+      }
+    }
+    return 0;
+  }
+
   function fetchJobList(cb) {
     var errEl = document.getElementById('abFilterError');
     var m = currentYm();
@@ -870,17 +887,24 @@
   function onPeriodChange() {
     function refreshPeriodUi() {
       fetchJobList(function (data) {
-        fillJobDropdown(data.ok ? data.jobs : [], 0);
-        if (hintChoose) hintChoose.style.display = '';
-        if (mainBlocks) {
-          mainBlocks.style.opacity = '0.5';
-          mainBlocks.style.pointerEvents = 'none';
+        var jobs = data.ok ? data.jobs : [];
+        var pickId = pickAbrechnungDefaultJobId(jobs);
+        fillJobDropdown(jobs, pickId);
+        if (pickId && currentJobId()) {
+          if (hintChoose) hintChoose.style.display = 'none';
+          loadAllForJob();
+        } else {
+          if (hintChoose) hintChoose.style.display = '';
+          if (mainBlocks) {
+            mainBlocks.style.opacity = '0.5';
+            mainBlocks.style.pointerEvents = 'none';
+          }
+          document.querySelectorAll('[data-file-list]').forEach(function (ul) { ul.innerHTML = ''; });
+          document.querySelectorAll('[data-comments-list]').forEach(function (r) { r.innerHTML = ''; });
+          if (chMv) chMv.checked = false;
+          if (elTravel) elTravel.innerHTML = '';
+          resetCommentEdit();
         }
-        document.querySelectorAll('[data-file-list]').forEach(function (ul) { ul.innerHTML = ''; });
-        document.querySelectorAll('[data-comments-list]').forEach(function (r) { r.innerHTML = ''; });
-        if (chMv) chMv.checked = false;
-        if (elTravel) elTravel.innerHTML = '';
-        resetCommentEdit();
       });
     }
     if (cfg.fromLaptopEmbed === true && typeof window.kuklaAbrechnungOnPeriodChange === 'function') {
@@ -938,6 +962,8 @@
         preId = cfg.prefillJob.id;
       } else if (jobSelect && jobSelect.value) {
         preId = parseInt(jobSelect.value, 10) || 0;
+      } else {
+        preId = pickAbrechnungDefaultJobId(jobs);
       }
       fillJobDropdown(jobs, preId);
       if (currentJobId()) {

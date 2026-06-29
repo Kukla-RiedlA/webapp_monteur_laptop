@@ -12023,18 +12023,316 @@
   (function initProtokolleService() {
     var jobSelect = document.getElementById('serviceprotokollJob');
     var kopfdatenEl = document.getElementById('serviceprotokollKopfdaten');
-    var fabSelect = document.getElementById('serviceprotokollFab');
+    var fabHidden = document.getElementById('serviceprotokollFab');
+    var fabButtonsEl = document.getElementById('serviceprotokollFabButtons');
+    var fabGroupEl = document.getElementById('serviceprotokollFabGroup');
     var datumEl = document.getElementById('serviceprotokollDatum');
     var stepsContainer = document.getElementById('serviceprotokollArbeitsschritte');
     var addStepBtn = document.getElementById('serviceprotokollAddStep');
     var form = document.getElementById('serviceprotokollForm');
-    var pdfBtn = document.getElementById('serviceprotokollPdf');
     var abbrechenBtn = document.getElementById('serviceprotokollAbbrechen');
 
     var serviceJobData = null;
     var arbeitsschritte = [];
     var lastProtokollId = null;
     var defaultsSource = 'global';
+    var serviceprotokollDraftStore = { byFab: {} };
+    var activeFab = '';
+    var SP_LAST_JOB_KEY = 'kukla_sp_last_job_id';
+    var serviceprotokollJobLoadToken = 0;
+
+    function rememberServiceprotokollJobId(jobId) {
+      if (!jobId) return;
+      try { localStorage.setItem(SP_LAST_JOB_KEY, String(jobId)); } catch (e) {}
+    }
+
+    function jobIdInServiceJobList(jobs, id) {
+      if (id == null || id === '' || !Array.isArray(jobs)) return '';
+      for (var i = 0; i < jobs.length; i++) {
+        var j = jobs[i];
+        if (!j) continue;
+        if (j.id == id) return String(j.id);
+        if (j.server_id != null && j.server_id == id) return String(j.id);
+      }
+      return '';
+    }
+
+    function resolveDefaultServiceprotokollJobId(jobs) {
+      if (!Array.isArray(jobs) || !jobs.length) return '';
+      var preferred = '';
+      if (typeof getDienstreiseExplorerJobId === 'function') {
+        preferred = jobIdInServiceJobList(jobs, getDienstreiseExplorerJobId());
+      }
+      if (!preferred && typeof startPageActiveJobId !== 'undefined' && startPageActiveJobId) {
+        preferred = jobIdInServiceJobList(jobs, startPageActiveJobId);
+      }
+      if (!preferred) {
+        try {
+          preferred = jobIdInServiceJobList(jobs, new URLSearchParams(window.location.search).get('job_id'));
+        } catch (e) {}
+      }
+      if (!preferred) {
+        try { preferred = jobIdInServiceJobList(jobs, localStorage.getItem(SP_LAST_JOB_KEY)); } catch (e2) {}
+      }
+      if (!preferred) {
+        var today = new Date().toISOString().slice(0, 10);
+        var todayJobs = jobs.filter(function (j) {
+          var s = (j.start_datetime || '').toString().slice(0, 10);
+          var e = (j.end_datetime || '').toString().slice(0, 10);
+          if (s && e) return today >= s && today <= e;
+          if (s) return today === s;
+          if (e) return today === e;
+          return false;
+        });
+        if (todayJobs.length >= 1) preferred = String(todayJobs[0].id);
+      }
+      if (!preferred && jobs.length === 1) preferred = String(jobs[0].id);
+      return preferred;
+    }
+
+    function jobHasFabrikationsnummern(job) {
+      return parseJobFabrikationsnummernOrdered(job || {}).length > 0;
+    }
+
+    function setServiceprotokollJobLoading(loading) {
+      if (jobSelect) jobSelect.disabled = !!loading;
+      if (kopfdatenEl && loading && !serviceJobData) {
+        kopfdatenEl.innerHTML = '<div class="muted">Lade Auftragsdaten…</div>';
+      }
+    }
+
+    function getActiveFab() {
+      if (activeFab) return activeFab;
+      return fabHidden && fabHidden.value ? fabHidden.value.trim() : '';
+    }
+
+    function setActiveFabValue(fab) {
+      activeFab = fab ? String(fab).trim() : '';
+      if (fabHidden) fabHidden.value = activeFab;
+    }
+
+    function collectArbeitsschrittePayload() {
+      syncStepsFromDom();
+      return arbeitsschritte.map(function (s, i) {
+        var de = (s.bezeichnung_de || '').trim();
+        var en = (s.bezeichnung_en || '').trim();
+        return {
+          sort_order: i + 1,
+          bezeichnung_de: de,
+          bezeichnung_en: en,
+          bezeichnung: combineBilingualLabel(de, en),
+          status: s.status || 'na',
+          bemerkung: s.bemerkung || ''
+        };
+      });
+    }
+
+    function collectDraftPayloadForFab(fab) {
+      var projektVal = (document.getElementById('serviceprotokollProjekt') || {}).value || '';
+      projektVal = String(projektVal).trim();
+      if (!projektVal && serviceJobData) {
+        projektVal = resolveServiceprotokollProjekt(serviceJobData, fab);
+      }
+      return {
+        fabrikationsnummer: fab,
+        durchfuehrungsdatum: datumEl ? datumEl.value.trim() : '',
+        projekt: projektVal,
+        arbeitsschritte: collectArbeitsschrittePayload(),
+        messwerte: collectMesswerte(),
+        bemerkungen: (document.getElementById('serviceprotokollBemerkungen') || {}).value || '',
+        kopf_pos_nr: (document.getElementById('serviceprotokollPos') || {}).value || '',
+        kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
+        kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
+        kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || ''
+      };
+    }
+
+    function stashDraftInMemory(fab) {
+      if (!fab) return;
+      var payload = collectDraftPayloadForFab(fab);
+      if (!serviceprotokollDraftStore.byFab) serviceprotokollDraftStore.byFab = {};
+      serviceprotokollDraftStore.byFab[fab] = Object.assign({}, payload, { updatedAt: new Date().toISOString() });
+    }
+
+    async function persistDraftJsonForFab(fab) {
+      if (!fab || !jobSelect || !jobSelect.value || !serviceJobData) return;
+      stashDraftInMemory(fab);
+      var payload = collectDraftPayloadForFab(fab);
+      if (!payload.projekt) return;
+      var body = {
+        technician_id: getTechId(),
+        job_id: parseInt(jobSelect.value, 10),
+        fabrikationsnummer: fab,
+        durchfuehrungsdatum: payload.durchfuehrungsdatum,
+        arbeitsschritte: payload.arbeitsschritte,
+        messwerte: payload.messwerte,
+        projekt: payload.projekt,
+        bemerkungen: payload.bemerkungen,
+        kopf_pos_nr: payload.kopf_pos_nr,
+        kopf_qmax: payload.kopf_qmax,
+        kopf_type: payload.kopf_type,
+        kopf_dwc: payload.kopf_dwc,
+        jsonOnly: true,
+        base_url: getDispoBaseUrl(),
+        dispoBaseUrl: getDispoBaseUrl(),
+        serverUsername: getDispoUsername(),
+        serverPassword: getDispoPassword()
+      };
+      try {
+        await fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+          body: JSON.stringify(body)
+        });
+      } catch (e) { /* optional bei FN-Wechsel */ }
+    }
+
+    function renderFabButtonsActive() {
+      if (!fabButtonsEl) return;
+      var cur = getActiveFab();
+      fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
+        btn.classList.toggle('is-active', btn.getAttribute('data-fab') === cur);
+      });
+    }
+
+    async function buildAllProtokollPayloads() {
+      var cur = getActiveFab();
+      if (cur) await persistDraftJsonForFab(cur);
+      var fns = parseJobFabrikationsnummernOrdered(serviceJobData || {});
+      if (!fns.length) return { error: 'Keine Fabrikationsnummern im Auftrag.' };
+      var missing = [];
+      var protokolle = [];
+      fns.forEach(function (fn) {
+        var draft = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fn];
+        var steps = Array.isArray(draft && draft.arbeitsschritte) ? draft.arbeitsschritte : [];
+        var hasStep = steps.some(function (s) {
+          var de = (s.bezeichnung_de != null ? s.bezeichnung_de : (s.bezeichnung || '')).trim();
+          var en = (s.bezeichnung_en || '').trim();
+          return de !== '' || en !== '';
+        });
+        if (!hasStep) {
+          missing.push(fn);
+          return;
+        }
+        var proj = String((draft && draft.projekt) || '').trim() || resolveServiceprotokollProjekt(serviceJobData, fn);
+        if (!proj) {
+          missing.push(fn + ' (Projekt)');
+          return;
+        }
+        protokolle.push({
+          fabrikationsnummer: fn,
+          projekt: proj,
+          arbeitsschritte: steps,
+          messwerte: (draft && draft.messwerte) || {},
+          bemerkungen: (draft && draft.bemerkungen) || '',
+          kopf_pos_nr: (draft && draft.kopf_pos_nr) || '',
+          kopf_qmax: (draft && draft.kopf_qmax) || '',
+          kopf_type: (draft && draft.kopf_type) || '',
+          kopf_dwc: (draft && draft.kopf_dwc) || ''
+        });
+      });
+      if (missing.length) {
+        return { error: 'Bitte alle Fabrikationsnummern ausfüllen: ' + missing.join(', ') };
+      }
+      return { protokolle: protokolle };
+    }
+
+    function updateAllPdfButtonVisibility(job) {
+      var allPdfBtn = document.getElementById('btnServiceprotokollSaveAllPdf');
+      if (!allPdfBtn) return;
+      var fns = job ? parseJobFabrikationsnummernOrdered(job) : [];
+      allPdfBtn.style.display = fns.length >= 2 ? 'inline-block' : 'none';
+    }
+
+    function renderFabButtons(job) {
+      if (!fabButtonsEl) return;
+      var fns = job ? parseJobFabrikationsnummernOrdered(job) : [];
+      if (fabGroupEl) fabGroupEl.style.display = fns.length ? 'block' : 'none';
+      updateAllPdfButtonVisibility(job);
+      fabButtonsEl.innerHTML = '';
+      if (!fns.length) {
+        setActiveFabValue('');
+        return;
+      }
+      fns.forEach(function (fn) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost sp-fab-btn' + (fn === getActiveFab() ? ' is-active' : '');
+        btn.setAttribute('data-fab', fn);
+        btn.textContent = fn;
+        btn.addEventListener('click', function () {
+          switchServiceprotokollFab(fn);
+        });
+        fabButtonsEl.appendChild(btn);
+      });
+    }
+
+    async function switchServiceprotokollFab(newFab) {
+      newFab = newFab ? String(newFab).trim() : '';
+      if (!newFab) return;
+      var cur = getActiveFab();
+      if (cur === newFab) return;
+      if (cur) await persistDraftJsonForFab(cur);
+      setActiveFabValue(newFab);
+      renderFabButtonsActive();
+      await loadDefaultsForFab(newFab);
+    }
+
+    function applyServiceprotokollDraft(fab) {
+      if (!fab || !serviceprotokollDraftStore.byFab) return false;
+      var draft = serviceprotokollDraftStore.byFab[fab];
+      if (!draft) return false;
+      if (draft.durchfuehrungsdatum && datumEl) datumEl.value = draft.durchfuehrungsdatum;
+      if (draft.projekt) {
+        var projEl = document.getElementById('serviceprotokollProjekt');
+        if (projEl) projEl.value = draft.projekt;
+      }
+      applyKopfFields({
+        kopf_pos_nr: draft.kopf_pos_nr || '',
+        kopf_qmax: draft.kopf_qmax || '',
+        kopf_type: draft.kopf_type || '',
+        kopf_dwc: draft.kopf_dwc || ''
+      });
+      var bemEl = document.getElementById('serviceprotokollBemerkungen');
+      if (bemEl && draft.bemerkungen != null) bemEl.value = draft.bemerkungen;
+      var mess = draft.messwerte || {};
+      var messMap = [
+        ['spMessType', mess.waegezelle_type],
+        ['spMessTara', mess.tara],
+        ['spMessPruefgew', mess.pruefgewicht],
+        ['spMessDms', mess.dms_entlastet],
+        ['spMessKg', mess.kg],
+        ['spMessMv', mess.mv],
+        ['spMessMa', mess.ma],
+        ['spMessG', mess.g_prozent],
+        ['spMessTaraspeicher', mess.taraspeicher]
+      ];
+      messMap.forEach(function (pair) {
+        var el = document.getElementById(pair[0]);
+        if (el && pair[1] != null) el.value = pair[1];
+      });
+      if (Array.isArray(draft.arbeitsschritte) && draft.arbeitsschritte.length > 0) {
+        arbeitsschritte = draft.arbeitsschritte.map(function (row) {
+          return stepFromRaw(row);
+        });
+        renderSteps();
+      }
+      return true;
+    }
+
+    async function loadServiceprotokollDraftsForJob(jobId) {
+      serviceprotokollDraftStore = { byFab: {} };
+      if (!jobId) return;
+      try {
+        var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll?job_id=' + encodeURIComponent(jobId), {
+          headers: { 'X-Technician-Id': String(getTechId()) }
+        });
+        var data = await r.json().catch(function () { return {}; });
+        if (r.ok && data.ok && data.store && data.store.byFab) {
+          serviceprotokollDraftStore = data.store;
+        }
+      } catch (e) { /* optional */ }
+    }
 
     function escapeHtml(s) {
       if (s == null) return '';
@@ -12110,77 +12408,171 @@
       projEl.value = resolveServiceprotokollProjekt(job, fab);
     }
 
-    function fillFabSelect(job) {
-      if (!fabSelect) return;
-      var opts = ['<option value="">– aus Auftrag –</option>'];
-      parseJobFabrikationsnummernOrdered(job).forEach(function (fn) {
-        opts.push('<option value="' + escapeHtml(fn) + '">' + escapeHtml(fn) + '</option>');
-      });
-      fabSelect.innerHTML = opts.join('');
-    }
-
     function applyKopfFields(kopf) {
       kopf = kopf || {};
       var pos = document.getElementById('serviceprotokollPos');
       var qmax = document.getElementById('serviceprotokollQmax');
       var type = document.getElementById('serviceprotokollType');
       var dwc = document.getElementById('serviceprotokollDwc');
-      if (pos && kopf.kopf_pos_nr) pos.value = kopf.kopf_pos_nr;
-      if (qmax && kopf.kopf_qmax) qmax.value = kopf.kopf_qmax;
-      if (type && kopf.kopf_type) type.value = kopf.kopf_type;
-      if (dwc && kopf.kopf_dwc) dwc.value = kopf.kopf_dwc;
+      if (pos) pos.value = kopf.kopf_pos_nr || '';
+      if (qmax) qmax.value = kopf.kopf_qmax || '';
+      if (type) type.value = kopf.kopf_type || '';
+      if (dwc) dwc.value = kopf.kopf_dwc || '';
     }
 
-    async function loadDefaultsForFab(fab) {
-      var baseUrl = getDispoBaseUrl();
-      if (!baseUrl || !fab) {
-        arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
-        renderSteps();
-        return;
-      }
+    function clearKopfFields() {
+      applyKopfFields({});
+    }
+
+    function clearMesswerteFields() {
+      ['spMessType', 'spMessTara', 'spMessPruefgew', 'spMessDms', 'spMessKg', 'spMessMv', 'spMessMa', 'spMessG', 'spMessTaraspeicher'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+    }
+
+    function messTypeFromStamm(apiKopf, jobKopf) {
+      var v = (apiKopf && apiKopf.mess_waegezelle_type != null) ? String(apiKopf.mess_waegezelle_type).trim() : '';
+      if (!v && jobKopf && jobKopf.kraftaufnehmer) v = String(jobKopf.kraftaufnehmer).trim();
+      return v;
+    }
+
+    function applyMessTypeFromStamm(apiKopf, jobKopf) {
+      var el = document.getElementById('spMessType');
+      if (!el || (el.value || '').trim()) return;
+      el.value = messTypeFromStamm(apiKopf, jobKopf);
+    }
+
+    function kopfFromJobFabRow(job, fab) {
+      if (!job || !job.fabrikationsnummern || !fab) return {};
       try {
-        var url = baseUrl + '/dispo_api/api/serviceprotokoll_defaults.php?fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(getTechId());
-        var r = await fetch(url, { headers: Object.assign({ 'X-Technician-Id': String(getTechId()) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword)) });
-        var data = await r.json().catch(function () { return {}; });
-        if (r.ok && data.ok && Array.isArray(data.arbeitsschritte)) {
-          defaultsSource = data.source || 'global';
-          arbeitsschritte = data.arbeitsschritte.map(function (row) {
-            return { bezeichnung: row.bezeichnung || '', status: 'na', bemerkung: '' };
-          });
-          if (arbeitsschritte.length === 0) {
-            arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
-          }
-          applyKopfFields(data.kopf);
-          applyServiceprotokollProjekt(serviceJobData, fab, data.kopf && data.kopf.projekt);
-        } else {
-          arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
-          applyServiceprotokollProjekt(serviceJobData, fab, null);
+        var parsed = JSON.parse(job.fabrikationsnummern);
+        if (!Array.isArray(parsed)) return {};
+        for (var i = 0; i < parsed.length; i++) {
+          var row = parsed[i];
+          var rowFn = (row && row.fabrikationsnummer) ? String(row.fabrikationsnummer).trim() : '';
+          if (rowFn !== fab) continue;
+          return {
+            kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
+            kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
+            kopf_type: row.type != null ? String(row.type).trim() : '',
+            kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
+            kraftaufnehmer: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
+            projekt: readProjektFromFabRow(row)
+          };
         }
-      } catch (e) {
-        arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
-        applyServiceprotokollProjekt(serviceJobData, fab, null);
+      } catch (e) {}
+      return {};
+    }
+
+    function builtinServiceprotokollSteps() {
+      return [
+        'Kontrolle der Wägebrücke / check of weighing bridge',
+        'Kontrolle des Fördergurtes / check of conveyor belt',
+        'Reinigen der Waage / cleaning of the scale',
+        'Kontr. der Rollen & Rollenflucht / check of rollers & roller aligment',
+        'Zustand der Bandabstreifer / condition of belt scrapers',
+        'Trommelkratzer / drum scraper',
+        'Abstreifpflug / scraper plough',
+        'Bandspannung / belt tensioning',
+        'Bandlenkung / belt steering device',
+        'Schmierstellen / lubrication points',
+        'Kraftaufnehmer / load cell',
+        'Tacho / tacho',
+        'Schieflaufschalter / belt misalignment switch',
+        'Kettentriebe / chain drives',
+        'Überlastschutz / overload protection',
+        'Wiegeelektronik / weighing electronics',
+        'Tara / tare',
+        'PGW-Test / test with test weight',
+        'Regelung & Dosierung / control & dosing',
+        'Kontrollwiegungen / check weighing procedures',
+        'Kontrolle der Zellenradschleuse / check of rotary vane feeder'
+      ].map(function (bez) {
+        var parts = splitBilingualLabel(bez);
+        return { bezeichnung_de: parts.de, bezeichnung_en: parts.en, status: 'na', bemerkung: '' };
+      });
+    }
+
+    function splitBilingualLabel(bez) {
+      var s = String(bez || '').trim();
+      var m = s.match(/^(.+?)\s\/\s+(.+)$/);
+      if (m) return { de: m[1].trim(), en: m[2].trim() };
+      m = s.match(/^(.+?)\/\s+(.+)$/);
+      if (m) return { de: m[1].trim(), en: m[2].trim() };
+      return { de: s, en: '' };
+    }
+
+    function combineBilingualLabel(de, en) {
+      de = String(de || '').trim();
+      en = String(en || '').trim();
+      if (!de) return en;
+      if (!en) return de;
+      return de + ' / ' + en;
+    }
+
+    function stepFromRaw(row) {
+      row = row || {};
+      var de = row.bezeichnung_de != null ? String(row.bezeichnung_de).trim() : '';
+      var en = row.bezeichnung_en != null ? String(row.bezeichnung_en).trim() : '';
+      if (!de && !en && row.bezeichnung) {
+        var parts = splitBilingualLabel(row.bezeichnung);
+        de = parts.de;
+        en = parts.en;
       }
-      renderSteps();
+      return {
+        bezeichnung_de: de,
+        bezeichnung_en: en,
+        status: row.status || 'na',
+        bemerkung: row.bemerkung || ''
+      };
+    }
+
+    function collectPdfLanguages() {
+      var deEl = document.getElementById('spPdfDe');
+      var enEl = document.getElementById('spPdfEn');
+      var langs = [];
+      if (!deEl || deEl.checked) langs.push('de');
+      if (enEl && enEl.checked) langs.push('en');
+      return langs.length ? langs : ['de'];
+    }
+
+    function mergeServiceprotokollKopf(apiKopf, jobKopf) {
+      var kopf = {};
+      ['kopf_pos_nr', 'kopf_qmax', 'kopf_type', 'kopf_dwc', 'projekt'].forEach(function (k) {
+        var v = (apiKopf && apiKopf[k] != null) ? String(apiKopf[k]).trim() : '';
+        if (!v && jobKopf && jobKopf[k]) v = String(jobKopf[k]).trim();
+        if (v) kopf[k] = v;
+      });
+      return kopf;
+    }
+
+    function mapDefaultsToSteps(rows) {
+      return rows.map(function (row) {
+        return stepFromRaw({ bezeichnung: row.bezeichnung || '', status: 'na', bemerkung: '' });
+      });
     }
 
     function buildStepRowHtml(idx) {
-      var s = arbeitsschritte[idx] || { bezeichnung: '', status: 'na', bemerkung: '' };
-      var style = 'margin-bottom:0.5rem;padding:0.75rem;background:var(--bg);border:1px solid var(--accent);border-radius:4px';
+      var s = arbeitsschritte[idx] || { bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' };
       var status = s.status || 'na';
-      return '<div class="serviceprotokoll-step" data-idx="' + idx + '" style="' + style + '">' +
-        '<div style="display:flex;gap:0.5rem;align-items:flex-start;flex-wrap:wrap;margin-bottom:0.5rem">' +
-        '<span class="sp-step-num" style="font-weight:700;min-width:1.5rem">' + (idx + 1) + '.</span>' +
-        '<input type="text" class="sp-bezeichnung" value="' + escapeHtml(s.bezeichnung || '') + '" placeholder="Arbeitsschritt" style="flex:1;min-width:180px;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)">' +
-        '<div style="display:flex;gap:0.25rem;flex-wrap:wrap">' +
-        '<button type="button" class="btn btn-ghost sp-status" data-status="ok" style="' + (status === 'ok' ? 'font-weight:700' : '') + '">OK</button>' +
-        '<button type="button" class="btn btn-ghost sp-status" data-status="nok" style="' + (status === 'nok' ? 'font-weight:700' : '') + '">n.i.O.</button>' +
-        '<button type="button" class="btn btn-ghost sp-status" data-status="na" style="' + (status === 'na' ? 'font-weight:700' : '') + '">n.a.</button>' +
+      var rowClass = 'serviceprotokoll-step sp-step-row sp-step-' + status;
+      var textCell = '<input type="text" class="sp-bezeichnung-de sp-step-label-input" value="' + escapeHtml(s.bezeichnung_de || '') + '" placeholder="Arbeitsschritt">' +
+        '<input type="hidden" class="sp-bezeichnung-en" value="' + escapeHtml(s.bezeichnung_en || '') + '">';
+      return '<tr class="' + rowClass + '" data-idx="' + idx + '" data-status="' + escapeHtml(status) + '">' +
+        '<td class="sp-col-nr">' + (idx + 1) + '</td>' +
+        '<td class="sp-col-status"><div class="sp-status-group" role="group" aria-label="Ergebnis Schritt ' + (idx + 1) + '">' +
+        '<button type="button" class="btn btn-ghost sp-status' + (status === 'ok' ? ' is-active' : '') + '" data-status="ok">OK</button>' +
+        '<button type="button" class="btn btn-ghost sp-status' + (status === 'nok' ? ' is-active' : '') + '" data-status="nok">n.i.O.</button>' +
+        '<button type="button" class="btn btn-ghost sp-status' + (status === 'na' ? ' is-active' : '') + '" data-status="na">n.a.</button>' +
+        '</div></td>' +
+        '<td class="sp-col-text">' + textCell + '</td>' +
+        '<td class="sp-col-bem"><input type="text" class="sp-bemerkung" value="' + escapeHtml(s.bemerkung || '') + '" placeholder="optional"></td>' +
+        '<td class="sp-col-act"><div class="sp-step-actions">' +
         '<button type="button" class="btn btn-ghost sp-up" title="Nach oben">↑</button>' +
         '<button type="button" class="btn btn-ghost sp-down" title="Nach unten">↓</button>' +
         '<button type="button" class="btn btn-ghost sp-remove" title="Entfernen">✕</button>' +
-        '</div></div>' +
-        '<input type="text" class="sp-bemerkung" value="' + escapeHtml(s.bemerkung || '') + '" placeholder="Bemerkung (optional)" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)">' +
-        '</div>';
+        '</div></td></tr>';
     }
 
     function syncStepsFromDom() {
@@ -12188,22 +12580,31 @@
       var rows = stepsContainer.querySelectorAll('.serviceprotokoll-step');
       var next = [];
       rows.forEach(function (rowEl, i) {
+        var deEl = rowEl.querySelector('.sp-bezeichnung-de');
+        var enEl = rowEl.querySelector('.sp-bezeichnung-en');
+        var prev = arbeitsschritte[i] || {};
+        var de = deEl ? (deEl.value || '').trim() : '';
+        var en = enEl ? (enEl.value || '').trim() : (prev.bezeichnung_en || '');
         next.push({
-          bezeichnung: (rowEl.querySelector('.sp-bezeichnung') || {}).value || '',
+          bezeichnung_de: de,
+          bezeichnung_en: en,
           status: rowEl.getAttribute('data-status') || 'na',
           bemerkung: (rowEl.querySelector('.sp-bemerkung') || {}).value || '',
           sort_order: i + 1
         });
       });
-      arbeitsschritte = next.length ? next : [{ bezeichnung: '', status: 'na', bemerkung: '' }];
+      arbeitsschritte = next.length ? next : [{ bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' }];
     }
 
     function renderSteps() {
       if (!stepsContainer) return;
+      if (!arbeitsschritte.length) {
+        stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">FN wählen, um Arbeitsschritte zu laden.</td></tr>';
+        return;
+      }
       stepsContainer.innerHTML = arbeitsschritte.map(function (_, i) { return buildStepRowHtml(i); }).join('');
       stepsContainer.querySelectorAll('.serviceprotokoll-step').forEach(function (rowEl) {
         var idx = parseInt(rowEl.getAttribute('data-idx'), 10);
-        rowEl.setAttribute('data-status', (arbeitsschritte[idx] && arbeitsschritte[idx].status) || 'na');
         rowEl.querySelectorAll('.sp-status').forEach(function (btn) {
           btn.addEventListener('click', function () {
             syncStepsFromDom();
@@ -12233,10 +12634,67 @@
         if (rem) rem.addEventListener('click', function () {
           syncStepsFromDom();
           arbeitsschritte.splice(idx, 1);
-          if (arbeitsschritte.length === 0) arbeitsschritte.push({ bezeichnung: '', status: 'na', bemerkung: '' });
+          if (arbeitsschritte.length === 0) arbeitsschritte.push({ bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' });
           renderSteps();
         });
       });
+    }
+
+    async function loadDefaultsForFab(fab) {
+      if (!fab) {
+        arbeitsschritte = builtinServiceprotokollSteps();
+        renderSteps();
+        return;
+      }
+      clearKopfFields();
+      clearMesswerteFields();
+      var jobKopf = kopfFromJobFabRow(serviceJobData, fab);
+      var draftApplied = applyServiceprotokollDraft(fab);
+      if (!draftApplied) {
+        arbeitsschritte = builtinServiceprotokollSteps();
+        var quickKopf = mergeServiceprotokollKopf(null, jobKopf);
+        applyKopfFields(quickKopf);
+        applyServiceprotokollProjekt(serviceJobData, fab, quickKopf.projekt);
+        applyMessTypeFromStamm(null, jobKopf);
+      }
+      renderSteps();
+
+      var baseUrl = getDispoBaseUrl();
+      var techId = getTechId();
+      var q = 'fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(techId);
+      if (baseUrl) q += '&base_url=' + encodeURIComponent(baseUrl);
+      var un = getDispoUsername();
+      var pw = getDispoPassword();
+      if (un) q += '&serverUsername=' + encodeURIComponent(un);
+      if (pw) q += '&serverPassword=' + encodeURIComponent(pw);
+      try {
+        var r = await fetch(API_BASE + '/api/serviceprotokoll_defaults?' + q, {
+          headers: { 'X-Technician-Id': String(techId) }
+        });
+        var data = await r.json().catch(function () { return {}; });
+        var apiKopfRaw = data && data.ok ? data.kopf : null;
+        if (r.ok && data.ok) {
+          if (!draftApplied) {
+            if (Array.isArray(data.arbeitsschritte) && data.arbeitsschritte.length > 0) {
+              defaultsSource = data.source || 'global';
+              arbeitsschritte = mapDefaultsToSteps(data.arbeitsschritte);
+            } else {
+              defaultsSource = 'builtin';
+            }
+            var mergedKopf = mergeServiceprotokollKopf(apiKopfRaw, jobKopf);
+            applyKopfFields(mergedKopf);
+            applyServiceprotokollProjekt(serviceJobData, fab, mergedKopf.projekt);
+            applyMessTypeFromStamm(apiKopfRaw, jobKopf);
+          } else {
+            applyMessTypeFromStamm(apiKopfRaw, jobKopf);
+          }
+        } else if (!draftApplied) {
+          defaultsSource = 'builtin';
+        }
+      } catch (e) {
+        if (!draftApplied) defaultsSource = 'builtin';
+      }
+      renderSteps();
     }
 
     function collectMesswerte() {
@@ -12256,6 +12714,16 @@
     async function loadServiceJobWithAnlagenstamm(jobId) {
       var baseUrl = getDispoBaseUrl();
       var techId = getTechId();
+      var headers = Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword));
+      var localUrl = API_BASE + '/api/job?id=' + encodeURIComponent(jobId) + '&technician_id=' + encodeURIComponent(techId) +
+        '&enrich_anlagenstamm=1&enrich_local_only=1&base_url=' + encodeURIComponent(baseUrl || '');
+      try {
+        var localRes = await fetch(localUrl, { headers: headers });
+        var localData = await localRes.json().catch(function () { return {}; });
+        if (localRes.ok && localData.ok && localData.job && jobHasFabrikationsnummern(localData.job)) {
+          return localData.job;
+        }
+      } catch (e) { /* Dispo-Fallback */ }
       if (baseUrl) {
         var liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
           method: 'POST',
@@ -12273,11 +12741,50 @@
         }
       }
       var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl || '');
-      var r = await fetch(url, {
-        headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword))
-      });
+      var r = await fetch(url, { headers: headers });
       var data = await r.json();
       return data.job;
+    }
+
+    async function applyServiceprotokollJobSelection(id) {
+      var loadToken = ++serviceprotokollJobLoadToken;
+      serviceJobData = null;
+      setActiveFabValue('');
+      if (!id) {
+        if (kopfdatenEl) kopfdatenEl.innerHTML = '';
+        renderFabButtons(null);
+        updateAllPdfButtonVisibility(null);
+        var projClear = document.getElementById('serviceprotokollProjekt');
+        if (projClear) projClear.value = '';
+        arbeitsschritte = [];
+        if (stepsContainer) stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">Auftrag wählen, um Arbeitsschritte zu laden.</td></tr>';
+        return;
+      }
+      setServiceprotokollJobLoading(true);
+      try {
+        var jobPromise = loadServiceJobWithAnlagenstamm(id);
+        var draftsPromise = loadServiceprotokollDraftsForJob(id);
+        var job = await jobPromise;
+        await draftsPromise;
+        if (loadToken !== serviceprotokollJobLoadToken) return;
+        serviceJobData = job;
+        rememberServiceprotokollJobId(id);
+        if (serviceJobData) renderKopfdatenService(serviceJobData);
+        renderFabButtons(serviceJobData);
+        var fns = parseJobFabrikationsnummernOrdered(serviceJobData || {});
+        var firstFab = fns.length ? fns[0] : '';
+        if (firstFab) {
+          setActiveFabValue(firstFab);
+          renderFabButtonsActive();
+          await loadDefaultsForFab(firstFab);
+        }
+      } catch (e) {
+        if (loadToken === serviceprotokollJobLoadToken && kopfdatenEl) {
+          kopfdatenEl.innerHTML = '<div class="muted">Auftrag konnte nicht geladen werden.</div>';
+        }
+      } finally {
+        if (loadToken === serviceprotokollJobLoadToken) setServiceprotokollJobLoading(false);
+      }
     }
 
     async function loadServiceJobs() {
@@ -12287,60 +12794,37 @@
     if (addStepBtn) {
       addStepBtn.addEventListener('click', function () {
         syncStepsFromDom();
-        arbeitsschritte.push({ bezeichnung: '', status: 'na', bemerkung: '' });
+        arbeitsschritte.push({ bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' });
         renderSteps();
       });
     }
 
     if (jobSelect) {
-      jobSelect.addEventListener('change', async function () {
-        var id = jobSelect.value;
-        serviceJobData = null;
-        if (!id) {
-          if (kopfdatenEl) kopfdatenEl.innerHTML = '';
-          if (fabSelect) fabSelect.innerHTML = '<option value="">– aus Auftrag –</option>';
-          var projClear = document.getElementById('serviceprotokollProjekt');
-          if (projClear) projClear.value = '';
-          return;
-        }
-        try {
-          serviceJobData = await loadServiceJobWithAnlagenstamm(id);
-          if (serviceJobData) {
-            renderKopfdatenService(serviceJobData);
-            fillFabSelect(serviceJobData);
-            applyServiceprotokollProjekt(serviceJobData, '', null);
-          }
-        } catch (e) {}
-      });
-    }
-
-    if (fabSelect) {
-      fabSelect.addEventListener('change', function () {
-        var fab = fabSelect.value ? fabSelect.value.trim() : '';
-        if (fab) loadDefaultsForFab(fab);
+      jobSelect.addEventListener('change', function () {
+        applyServiceprotokollJobSelection(jobSelect.value || '');
       });
     }
 
     if (form) {
       form.addEventListener('submit', async function (e) {
         e.preventDefault();
+        var submitBtn = e.submitter;
+        var jsonOnly = !!(submitBtn && submitBtn.id === 'btnServiceprotokollSaveJson');
+        if (!submitBtn || (submitBtn.id !== 'btnServiceprotokollSaveJson' && submitBtn.id !== 'btnServiceprotokollSavePdf')) {
+          return;
+        }
         if (!serviceJobData) { alert('Bitte Auftrag wählen.'); return; }
-        var fab = (fabSelect && fabSelect.value) ? fabSelect.value.trim() : '';
+        var fab = getActiveFab();
         if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
         var datum = (datumEl && datumEl.value) ? datumEl.value.trim() : '';
-        if (!datum) { alert('Bitte Datum angeben.'); return; }
+        if (!jsonOnly && !datum) { alert('Bitte Datum angeben.'); return; }
         var projektVal = (document.getElementById('serviceprotokollProjekt') && document.getElementById('serviceprotokollProjekt').value) ? document.getElementById('serviceprotokollProjekt').value.trim() : '';
         if (!projektVal) { alert('Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm / manuell).'); return; }
         syncStepsFromDom();
-        var stepsPayload = arbeitsschritte.filter(function (s) { return (s.bezeichnung || '').trim() !== ''; }).map(function (s, i) {
-          return {
-            sort_order: i + 1,
-            bezeichnung: s.bezeichnung.trim(),
-            status: s.status || 'na',
-            bemerkung: s.bemerkung || ''
-          };
-        });
-        if (stepsPayload.length === 0) { alert('Mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.'); return; }
+        var stepsPayload = collectArbeitsschrittePayload().filter(function (s) { return s.bezeichnung_de !== '' || s.bezeichnung_en !== ''; });
+        if (!jsonOnly && stepsPayload.length === 0) { alert('Mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.'); return; }
+        var pdfLangs = jsonOnly ? [] : collectPdfLanguages();
+        if (!jsonOnly && !pdfLangs.length) { alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).'); return; }
         var body = {
           technician_id: getTechId(),
           job_id: parseInt(jobSelect.value, 10),
@@ -12354,12 +12838,17 @@
           kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
           kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
           kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
+          jsonOnly: jsonOnly,
           base_url: getDispoBaseUrl(),
+          dispoBaseUrl: getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
         };
+        if (!jsonOnly) body.pdf_languages = pdfLangs;
+        var submitButtons = form.querySelectorAll('button[type="submit"]');
+        submitButtons.forEach(function (b) { b.disabled = true; });
         try {
-          var r = await fetch(API_BASE + '/api/serviceprotokoll_save', {
+          var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
             body: JSON.stringify(body)
@@ -12369,34 +12858,74 @@
             alert('Fehler: ' + (data.error || r.status));
             return;
           }
-          if (data.warning) alert(data.warning);
-          else if (typeof showToast === 'function') showToast('Serviceprotokoll gespeichert.');
-          lastProtokollId = data.protokoll_id != null ? data.protokoll_id : null;
-          if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
-          if (lastProtokollId && pdfBtn) pdfBtn.click();
+          if (data.warning) console.warn('[Serviceprotokoll]', data.warning);
+          await loadServiceprotokollDraftsForJob(body.job_id);
+          if (data.jsonOnly) {
+            if (typeof showToast === 'function') showToast('Zwischenstand gespeichert (serviceprotokoll.json).');
+          } else {
+            lastProtokollId = data.protokoll_id != null ? data.protokoll_id : null;
+            if (typeof showToast === 'function') {
+              var msg = 'PDF erstellt – Sie können das Formular weiter bearbeiten und erneut „PDF erstellen“ wählen.';
+              if (data.saved && data.saved.length) msg += ' (' + data.saved.join(', ') + ')';
+              showToast(msg);
+            }
+          }
         } catch (err) {
           alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+        } finally {
+          submitButtons.forEach(function (b) { b.disabled = false; });
         }
       });
     }
 
-    if (pdfBtn) {
-      pdfBtn.addEventListener('click', async function () {
-        if (!lastProtokollId) return;
-        var url = API_BASE + '/api/serviceprotokoll_pdf?id=' + encodeURIComponent(lastProtokollId) +
-          '&base_url=' + encodeURIComponent(getDispoBaseUrl()) +
-          '&serverUsername=' + encodeURIComponent(getDispoUsername() || '') +
-          '&serverPassword=' + encodeURIComponent(getDispoPassword() || '');
+    var allPdfBtn = document.getElementById('btnServiceprotokollSaveAllPdf');
+    if (allPdfBtn) {
+      allPdfBtn.addEventListener('click', async function () {
+        if (!serviceJobData || !jobSelect || !jobSelect.value) {
+          alert('Bitte Auftrag wählen.');
+          return;
+        }
+        var datum = (datumEl && datumEl.value) ? datumEl.value.trim() : '';
+        if (!datum) { alert('Bitte Datum angeben.'); return; }
+        var pdfLangs = collectPdfLanguages();
+        if (!pdfLangs.length) { alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).'); return; }
+        var built = await buildAllProtokollPayloads();
+        if (built.error) { alert(built.error); return; }
+        var body = {
+          technician_id: getTechId(),
+          job_id: parseInt(jobSelect.value, 10),
+          durchfuehrungsdatum: datum,
+          protokolle: built.protokolle,
+          pdf_languages: pdfLangs,
+          base_url: getDispoBaseUrl(),
+          dispoBaseUrl: getDispoBaseUrl(),
+          serverUsername: getDispoUsername(),
+          serverPassword: getDispoPassword()
+        };
+        allPdfBtn.disabled = true;
         try {
-          var r = await fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } });
-          if (!r.ok) { alert('PDF konnte nicht geladen werden.'); return; }
-          var blob = await r.blob();
-          var a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = 'Serviceprotokoll.pdf';
-          a.click();
-          URL.revokeObjectURL(a.href);
-        } catch (e) { alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt')); }
+          var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll/all-pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+            body: JSON.stringify(body)
+          });
+          var data = await r.json().catch(function () { return {}; });
+          if (!r.ok || !data.ok) {
+            alert('Fehler: ' + (data.error || r.status));
+            return;
+          }
+          if (data.warning) console.warn('[Serviceprotokoll]', data.warning);
+          await loadServiceprotokollDraftsForJob(body.job_id);
+          if (typeof showToast === 'function') {
+            var toastMsg = 'Sammel-PDF erstellt (' + (built.protokolle.length) + ' Protokolle).';
+            if (data.saved && data.saved.length) toastMsg += ' ' + data.saved.join(', ');
+            showToast(toastMsg);
+          }
+        } catch (err) {
+          alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+        } finally {
+          allPdfBtn.disabled = false;
+        }
       });
     }
 
@@ -12415,9 +12944,12 @@
             }).join('');
         }
         serviceJobData = null;
+        serviceprotokollDraftStore = { byFab: {} };
         arbeitsschritte = [];
+        setActiveFabValue('');
+        renderFabButtons(null);
+        updateAllPdfButtonVisibility(null);
         if (kopfdatenEl) kopfdatenEl.innerHTML = '';
-        if (fabSelect) fabSelect.innerHTML = '<option value="">– aus Auftrag –</option>';
         ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollProjekt', 'serviceprotokollBemerkungen',
           'spMessType', 'spMessTara', 'spMessPruefgew', 'spMessDms', 'spMessKg', 'spMessMv', 'spMessMa', 'spMessG', 'spMessTaraspeicher'
         ].forEach(function (id) {
@@ -12429,8 +12961,12 @@
           datumEl.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
         }
         lastProtokollId = null;
-        if (pdfBtn) pdfBtn.style.display = 'none';
-        if (stepsContainer) stepsContainer.innerHTML = '<p class="empty">FN wählen, um Arbeitsschritte zu laden.</p>';
+        if (stepsContainer) stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">Auftrag wählen, um Arbeitsschritte zu laden.</td></tr>';
+        var defaultJobId = resolveDefaultServiceprotokollJobId(jobs);
+        if (defaultJobId && jobSelect) {
+          jobSelect.value = defaultJobId;
+          applyServiceprotokollJobSelection(defaultJobId);
+        }
       });
     };
   })();

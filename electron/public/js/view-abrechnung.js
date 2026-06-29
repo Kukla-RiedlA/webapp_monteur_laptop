@@ -30,12 +30,11 @@
 
   function defaultConfig() {
     const today = new Date();
-    const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
     const tid = resolveTechId();
     return {
-      year: prev.getFullYear(),
-      monthNum: prev.getMonth() + 1,
-      month: prev.getFullYear() + '-' + String(prev.getMonth() + 1).padStart(2, '0'),
+      year: today.getFullYear(),
+      monthNum: today.getMonth() + 1,
+      month: today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0'),
       technician: tid,
       hideTechnicianFilter: true,
       billingFlagsEditable: false,
@@ -190,7 +189,7 @@
     await global.kuklaWebPage.mount(host, {
       html: renderShell(cfg),
       scripts: [
-        '/assets/js/dispo/job_subfolder_docs.js?v=20260616g',
+        '/assets/js/dispo/job_subfolder_docs.js?v=20260629a',
       ],
       reloadHandler: reload,
     });
