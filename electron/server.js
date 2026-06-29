@@ -7097,6 +7097,68 @@ ORDER BY
     return store.byFab[fn];
   }
 
+  function mergeServiceprotokollDraftStores(base, incoming) {
+    const out = { byFab: {} };
+    [base, incoming].forEach((store) => {
+      const byFab = store && store.byFab && typeof store.byFab === 'object' ? store.byFab : {};
+      Object.keys(byFab).forEach((fab) => {
+        const draft = byFab[fab];
+        if (!draft || typeof draft !== 'object') return;
+        const key = String(fab).trim();
+        if (!key) return;
+        const prev = out.byFab[key];
+        if (!prev) {
+          out.byFab[key] = draft;
+          return;
+        }
+        const tNew = Date.parse(draft.updatedAt || '') || 0;
+        const tOld = Date.parse(prev.updatedAt || '') || 0;
+        if (tNew >= tOld) out.byFab[key] = draft;
+      });
+    });
+    return out;
+  }
+
+  async function fetchServiceprotokollDraftFromDispo(dispoBaseUrl, serverJobId, technicianId, authHeader) {
+    const base = String(dispoBaseUrl || '').trim().replace(/\/$/, '');
+    if (!base || !serverJobId || !technicianId) return { byFab: {} };
+    const url = base + '/dispo_api/api/serviceprotokoll_draft.php?job_id=' + encodeURIComponent(serverJobId) +
+      '&technician_id=' + encodeURIComponent(technicianId);
+    try {
+      const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...(authHeader || {}) } });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok && data.ok && data.store && data.store.byFab) return data.store;
+    } catch (_) { /* optional */ }
+    return { byFab: {} };
+  }
+
+  async function syncServiceprotokollStoreWithDispo(reiseDir, technicianId, serverJobId, dispoBaseUrl, authHeader) {
+    const base = String(dispoBaseUrl || '').trim().replace(/\/$/, '');
+    if (!base || !serverJobId || !technicianId) {
+      return readServiceprotokollStore(reiseDir);
+    }
+    const local = readServiceprotokollStore(reiseDir);
+    const remote = await fetchServiceprotokollDraftFromDispo(base, serverJobId, technicianId, authHeader);
+    const merged = mergeServiceprotokollDraftStores(local, remote);
+    const localJson = JSON.stringify(local);
+    const remoteJson = JSON.stringify(remote);
+    const mergedJson = JSON.stringify(merged);
+    if (mergedJson !== localJson) {
+      writeFileWithRetry(serviceprotokollJsonPath(reiseDir), JSON.stringify(merged, null, 2));
+    }
+    if (mergedJson !== remoteJson) {
+      try {
+        const postUrl = base + '/dispo_api/api/serviceprotokoll_draft.php';
+        await fetch(postUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authHeader || {}) },
+          body: JSON.stringify({ technician_id: technicianId, job_id: serverJobId, store: merged }),
+        });
+      } catch (_) { /* optional */ }
+    }
+    return merged;
+  }
+
   function resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab) {
     const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
     const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
@@ -7116,7 +7178,7 @@ ORDER BY
     return { targetDir, relDir, folderName };
   }
 
-  app.get('/api/protokolle/serviceprotokoll', (req, res) => {
+  app.get('/api/protokolle/serviceprotokoll', async (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
       const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
@@ -7125,14 +7187,22 @@ ORDER BY
         return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
       }
       const jobRow = db.prepare(`
-        SELECT j.id FROM jobs j
+        SELECT j.id, j.server_id FROM jobs j
         WHERE j.id = ?
           AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
-      const store = readServiceprotokollStore(getOrCreateDienstreiseFolderForJob(localJobId));
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const creds = resolveDispoServerCreds(req.query || {});
+      const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
+      const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
+      let store = readServiceprotokollStore(reiseDir);
+      if (creds.baseUrl && hasServerJobId) {
+        const auth = authHeaderFromCredentials(creds.username, creds.password);
+        store = await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, creds.baseUrl, auth);
+      }
       if (fab && store.byFab[fab]) {
         return res.json({ ok: true, data: store.byFab[fab], store });
       }
@@ -7195,6 +7265,15 @@ ORDER BY
       let syncWarning = null;
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
+      if (dispoBaseUrl && hasServerJobId) {
+        const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.serverPassword ?? body.serverPassword);
+        try {
+          await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, dispoBaseUrl, authSync);
+        } catch (_) {
+          syncWarning = 'Zwischenstand: Dispo-Sync fehlgeschlagen.';
+        }
+      }
+
       if (dispoBaseUrl && hasServerJobId) {
         const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.serverPassword ?? body.serverPassword);
         const syncHeaders = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authSync || {}) };

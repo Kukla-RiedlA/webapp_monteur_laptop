@@ -146,10 +146,11 @@ Authentifizierung wie Kontrollwiegung: Query/Header `technician_id`, Dispo-Basic
 | `dispo_api/api/serviceprotokoll_defaults.php` | GET | `fabrikationsnummer`, `technician_id` → `{ ok, source: "fn"\|"global", arbeitsschritte: [{ bezeichnung }], kopf?: { projekt, kopf_pos_nr, kopf_qmax, kopf_type, kopf_dwc } }` — `kopf_dwc` = `anlagenstamm.elektronik` (DWC) |
 | `dispo_api/api/serviceprotokoll_save.php` | POST JSON | `technician_id`, `job_id`, `fabrikationsnummer`, `durchfuehrungsdatum`, `projekt` (Anlagenstamm wie Montagebericht), `arbeitsschritte[]` (`sort_order`, `bezeichnung`, `status` ok\|nok\|na, `bemerkung`), `messwerte` (`waegezelle_type`, `tara`, `pruefgewicht`, `dms_entlastet`, `kg`, `mv`, `ma`, `g_prozent`, `taraspeicher`), optional `bemerkungen`, `kopf_*` → speichert Protokoll, aktualisiert FN-Vorlage, erzeugt PDF unter `Dokumente_Monteur/{FN}/Serviceprotokolle/` → `{ ok, protokoll_id, pdf_path?, warning? }` |
 | `dispo_api/api/serviceprotokoll_pdf.php` | GET | `id`, `technician_id` → PDF-Binary (aus Projektordner oder Regenerierung) |
+| `dispo_api/api/serviceprotokoll_draft.php` | GET / POST | Zwischenstand `serviceprotokoll.json` im Projektordner: GET `job_id`, `technician_id` → `{ ok, store: { byFab } }`; POST JSON `technician_id`, `job_id`, `store` → merge nach `updatedAt`, `{ ok, store }` (Laptop ↔ PWA) |
 
 **Monteur-Laptop (Electron-Gateway, wie Montagebericht):**
-- `GET /api/protokolle/serviceprotokoll?job_id=` → lädt `serviceprotokoll.json` aus dem Dienstreise-Ordner (`{ ok, store: { byFab: { [fn]: draft } } }`).
-- `POST /api/protokolle/serviceprotokoll` JSON: wie Save-Body; `jsonOnly: true` → nur `serviceprotokoll.json` (+ optional Projekt-Sync Dispo); `jsonOnly: false` → JSON + `serviceprotokoll_save` Dispo + PDF lokal unter `Dokumente_Monteur/{FN}/Serviceprotokolle/` → `{ ok, jsonOnly?, protokoll_id?, saved?: [relPath], warning? }`.
+- `GET /api/protokolle/serviceprotokoll?job_id=` → lädt `serviceprotokoll.json` (lokal + Merge mit Dispo `serviceprotokoll_draft.php` wenn `server_id` und Dispo-Creds) → `{ ok, store: { byFab: { [fn]: draft } } }`.
+- `POST /api/protokolle/serviceprotokoll` JSON: wie Save-Body; `jsonOnly: true` → nur `serviceprotokoll.json` (+ Sync Dispo-Draft + optional Projekt-Sync); `jsonOnly: false` → JSON + `serviceprotokoll_save` Dispo + PDF lokal unter `Dokumente_Monteur/{FN}/Serviceprotokolle/` → `{ ok, jsonOnly?, protokoll_id?, saved?: [relPath], warning? }`.
 - `GET /api/serviceprotokoll_defaults` (Proxy + lokaler Fallback), `GET /api/serviceprotokoll_pdf` (Proxy).
 
 **FN-Vorlage:** Beim Save werden Bezeichnung + Reihenfolge der Arbeitsschritte pro `fabrikationsnummer` persistiert; Status/Bemerkungen starten beim nächsten Formular leer.
