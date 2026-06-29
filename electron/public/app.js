@@ -12059,11 +12059,55 @@
       } catch (e) {}
       var datum = formatDateRange(job.start_datetime, job.end_datetime);
       var fabList = parseJobFabrikationsnummernOrdered(job);
+      var auftragsnr = (job.job_number != null && String(job.job_number).trim()) ? String(job.job_number).trim() : '';
       kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(job.customer_name || '') + '</div>' +
-        '<div><strong>Projekt:</strong> ' + escapeHtml(job.job_number || job.description || '') + '</div>' +
-        '<div><strong>FN:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
+        (auftragsnr ? '<div class="kopfdaten-secondary"><strong>Auftragsnr.:</strong> ' + escapeHtml(auftragsnr) + '</div>' : '') +
+        '<div class="kopfdaten-fn"><strong>FN:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
         '<div><strong>Zeitraum:</strong> ' + escapeHtml(datum) + '</div>' +
         '<div><strong>Servicetechniker:</strong> ' + escapeHtml(techName) + '</div>';
+    }
+
+    function readProjektFromFabRow(r) {
+      if (r == null) return '';
+      if (typeof r === 'object') {
+        var v = r.projekt != null ? r.projekt : (r.Projekt != null ? r.Projekt : (r.project != null ? r.project : ''));
+        return String(v).replace(/\s+/g, ' ').trim();
+      }
+      return '';
+    }
+
+    function resolveServiceprotokollProjekt(job, fab) {
+      if (!job || !job.fabrikationsnummern) return '';
+      try {
+        var parsed = JSON.parse(job.fabrikationsnummern);
+        if (!Array.isArray(parsed) || parsed.length === 0) return '';
+        if (fab) {
+          for (var i = 0; i < parsed.length; i++) {
+            var rowFn = (parsed[i] && parsed[i].fabrikationsnummer) ? String(parsed[i].fabrikationsnummer).trim() : '';
+            if (rowFn === fab) return readProjektFromFabRow(parsed[i]);
+          }
+        }
+        var projs = parsed.map(readProjektFromFabRow).filter(function (p) { return p !== ''; });
+        if (!projs.length) return '';
+        var first = projs[0];
+        for (var j = 1; j < projs.length; j++) {
+          if (projs[j] !== first) return '';
+        }
+        return first;
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function applyServiceprotokollProjekt(job, fab, kopfProjekt) {
+      var projEl = document.getElementById('serviceprotokollProjekt');
+      if (!projEl) return;
+      var fromKopf = kopfProjekt != null ? String(kopfProjekt).trim() : '';
+      if (fromKopf) {
+        projEl.value = fromKopf;
+        return;
+      }
+      projEl.value = resolveServiceprotokollProjekt(job, fab);
     }
 
     function fillFabSelect(job) {
@@ -12107,11 +12151,14 @@
             arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
           }
           applyKopfFields(data.kopf);
+          applyServiceprotokollProjekt(serviceJobData, fab, data.kopf && data.kopf.projekt);
         } else {
           arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
+          applyServiceprotokollProjekt(serviceJobData, fab, null);
         }
       } catch (e) {
         arbeitsschritte = [{ bezeichnung: '', status: 'na', bemerkung: '' }];
+        applyServiceprotokollProjekt(serviceJobData, fab, null);
       }
       renderSteps();
     }
@@ -12206,6 +12253,33 @@
       };
     }
 
+    async function loadServiceJobWithAnlagenstamm(jobId) {
+      var baseUrl = getDispoBaseUrl();
+      var techId = getTechId();
+      if (baseUrl) {
+        var liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+          body: JSON.stringify(Object.assign({
+            baseUrl: baseUrl,
+            jobId: jobId,
+            serverUsername: getDispoUsername(),
+            serverPassword: getDispoPassword()
+          }, dispoBasePayloadExtra()))
+        });
+        var liveData = await liveResp.json().catch(function () { return {}; });
+        if (liveResp.ok && liveData && liveData.ok && liveData.job) {
+          return liveData.job;
+        }
+      }
+      var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl || '');
+      var r = await fetch(url, {
+        headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword))
+      });
+      var data = await r.json();
+      return data.job;
+    }
+
     async function loadServiceJobs() {
       return fetchMyAssignedJobs();
     }
@@ -12225,14 +12299,16 @@
         if (!id) {
           if (kopfdatenEl) kopfdatenEl.innerHTML = '';
           if (fabSelect) fabSelect.innerHTML = '<option value="">– aus Auftrag –</option>';
+          var projClear = document.getElementById('serviceprotokollProjekt');
+          if (projClear) projClear.value = '';
           return;
         }
         try {
-          var jobs = await loadServiceJobs();
-          serviceJobData = jobs.find(function (j) { return String(j.id) === String(id); }) || null;
+          serviceJobData = await loadServiceJobWithAnlagenstamm(id);
           if (serviceJobData) {
             renderKopfdatenService(serviceJobData);
             fillFabSelect(serviceJobData);
+            applyServiceprotokollProjekt(serviceJobData, '', null);
           }
         } catch (e) {}
       });
@@ -12253,6 +12329,8 @@
         if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
         var datum = (datumEl && datumEl.value) ? datumEl.value.trim() : '';
         if (!datum) { alert('Bitte Datum angeben.'); return; }
+        var projektVal = (document.getElementById('serviceprotokollProjekt') && document.getElementById('serviceprotokollProjekt').value) ? document.getElementById('serviceprotokollProjekt').value.trim() : '';
+        if (!projektVal) { alert('Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm / manuell).'); return; }
         syncStepsFromDom();
         var stepsPayload = arbeitsschritte.filter(function (s) { return (s.bezeichnung || '').trim() !== ''; }).map(function (s, i) {
           return {
@@ -12270,6 +12348,7 @@
           durchfuehrungsdatum: datum,
           arbeitsschritte: stepsPayload,
           messwerte: collectMesswerte(),
+          projekt: projektVal,
           bemerkungen: (document.getElementById('serviceprotokollBemerkungen') || {}).value || '',
           kopf_pos_nr: (document.getElementById('serviceprotokollPos') || {}).value || '',
           kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
@@ -12339,7 +12418,7 @@
         arbeitsschritte = [];
         if (kopfdatenEl) kopfdatenEl.innerHTML = '';
         if (fabSelect) fabSelect.innerHTML = '<option value="">– aus Auftrag –</option>';
-        ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollBemerkungen',
+        ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollProjekt', 'serviceprotokollBemerkungen',
           'spMessType', 'spMessTara', 'spMessPruefgew', 'spMessDms', 'spMessKg', 'spMessMv', 'spMessMa', 'spMessG', 'spMessTaraspeicher'
         ].forEach(function (id) {
           var el = document.getElementById(id);

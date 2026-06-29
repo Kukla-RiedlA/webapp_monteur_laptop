@@ -7003,6 +7003,7 @@ ORDER BY
         durchfuehrungsdatum: body.durchfuehrungsdatum,
         arbeitsschritte: Array.isArray(body.arbeitsschritte) ? body.arbeitsschritte : [],
         messwerte: body.messwerte && typeof body.messwerte === 'object' ? body.messwerte : {},
+        projekt: body.projekt,
         bemerkungen: body.bemerkungen,
         kopf_pos_nr: body.kopf_pos_nr,
         kopf_qmax: body.kopf_qmax,

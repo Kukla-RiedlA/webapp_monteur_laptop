@@ -1370,6 +1370,10 @@
         </div>
         <div id="serviceprotokollKopfdaten" class="montagebericht-kopfdaten" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border-radius:4px;font-size:0.9rem"></div>
         <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="serviceprotokollProjekt">Projekt <span class="muted" style="font-weight:normal">(Anlagenstamm, Pflichtfeld)</span></label>
+          <input type="text" id="serviceprotokollProjekt" required placeholder="Wird aus Anlagenstamm der gewählten FN übernommen; sonst manuell ausfüllen" autocomplete="off" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)">
+        </div>
+        <div class="form-group" style="margin-bottom:0.75rem">
           <label for="serviceprotokollFab">Fabrikationsnummer</label>
           <select id="serviceprotokollFab" class="dienstreise-select" style="width:100%" required>
             <option value="">– aus Auftrag –</option>
@@ -1400,8 +1404,8 @@
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
             <input type="text" id="spMessType" placeholder="Type" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
             <input type="text" id="spMessTara" placeholder="Tara" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
-            <input type="text" id="spMessPruefgew" placeholder="Prüfgewicht" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
-            <input type="text" id="spMessDms" placeholder="DMS entlastet" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessPruefgew" placeholder="Prüfgew./Testload" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
+            <input type="text" id="spMessDms" placeholder="DMS entl/released" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
             <input type="text" id="spMessKg" placeholder="kg" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
             <input type="text" id="spMessMv" placeholder="mV" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
             <input type="text" id="spMessMa" placeholder="mA" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
