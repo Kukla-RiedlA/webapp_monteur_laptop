@@ -234,6 +234,23 @@ function normJobFabKey(rowOrFn) {
   return String(rowOrFn.fabrikationsnummer ?? rowOrFn.Fabrikationsnummer ?? '').trim();
 }
 
+/** Fabrikationsnummern aufsteigend (numerisch wenn möglich). */
+function compareFabrikationsnummerKeys(a, b) {
+  const sa = normJobFabKey(a);
+  const sb = normJobFabKey(b);
+  if (!sa && !sb) return 0;
+  if (!sa) return 1;
+  if (!sb) return -1;
+  const na = /^\d+$/.test(sa) ? parseInt(sa, 10) : NaN;
+  const nb = /^\d+$/.test(sb) ? parseInt(sb, 10) : NaN;
+  if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+  return sa.localeCompare(sb, 'de', { numeric: true, sensitivity: 'base' });
+}
+
+function sortJobFabRows(rows) {
+  return [...(rows || [])].sort((a, b) => compareFabrikationsnummerKeys(a, b));
+}
+
 /** Leere DB-/JSON-Werte (inkl. Literal-String "null") nicht in Leistungszeilen übernehmen. */
 function stammFieldTrim(val) {
   if (val == null) return '';
@@ -246,28 +263,31 @@ function parseJobFabrikationsnummernRows(raw) {
   if (raw == null || raw === '') return [];
   const s = String(raw).trim();
   if (!s) return [];
+  let rows = [];
   try {
     const parsed = JSON.parse(s);
     if (Array.isArray(parsed)) {
-      return parsed
+      rows = parsed
         .map((r) => {
           if (r && typeof r === 'object') return r;
           const fn = normJobFabKey(r);
           return fn ? { fabrikationsnummer: fn } : null;
         })
         .filter(Boolean);
-    }
-    if (parsed && typeof parsed === 'object') {
-      return [parsed];
+    } else if (parsed && typeof parsed === 'object') {
+      rows = [parsed];
     }
   } catch (_) {
     /* Semikolon-/Komma-Liste */
   }
-  return s
-    .split(/[\s;,]+/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((fn) => ({ fabrikationsnummer: fn }));
+  if (!rows.length) {
+    rows = s
+      .split(/[\s;,]+/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((fn) => ({ fabrikationsnummer: fn }));
+  }
+  return sortJobFabRows(rows);
 }
 
 function mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty) {
@@ -2953,7 +2973,8 @@ function createApp(db) {
     if (!ctxBase || !fs.existsSync(ctxBase)) return;
     const dm = path.join(ctxBase, 'Dokumente_Anlage');
     const fabs = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern);
-    for (const fabNum of fabs) {
+    const fabNums = [...fabs].sort((a, b) => compareFabrikationsnummerKeys(a, b));
+    for (const fabNum of fabNums) {
       const fab = String(fabNum);
       const cached = readAnlagenstammTreeCache(db, fab);
       if (cached && Array.isArray(cached.tree) && cached.tree.length > 0) {
@@ -2964,7 +2985,12 @@ function createApp(db) {
       if (!ctx) continue;
       const scanned = scanProjekteNeuTree(ctx.resolved.root, {});
       if (scanned.tree.length > 0) {
-        upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
+        upsertAnlagenstammTreeCache(
+          db,
+          fab,
+          { enabled: true, tree: scanned.tree, folder_name: ctx.resolved.folderName },
+          { root_folder_name: ctx.resolved.folderName },
+        );
       }
       ingestProjekteNeuParameterTree(localJobId, fab, scanned.tree);
     }
@@ -3031,6 +3057,10 @@ function createApp(db) {
       if (!rescan) {
         const cached = readAnlagenstammTreeCache(db, fab);
         if (cached && cached.tree.length > 0) {
+          const folderFromCache =
+            (cached.root_folder_name && String(cached.root_folder_name).trim()) ||
+            readAnlagenstammRootFolderName(db, fab) ||
+            '';
           return res.json({
             ok: true,
             local: true,
@@ -3039,6 +3069,7 @@ function createApp(db) {
             from_cache: true,
             synced_at: cached.synced_at,
             job_id: jobId,
+            folder: folderFromCache,
           });
         }
       }
@@ -3047,7 +3078,12 @@ function createApp(db) {
         return res.json({ ok: true, local: false, enabled: false, tree: [], message: 'Kein lokaler PROJEKTE-NEU-Ordner für diese FN.' });
       }
       const scanned = scanProjekteNeuTree(ctx.resolved.root, {});
-      upsertAnlagenstammTreeCache(db, fab, { enabled: true, tree: scanned.tree });
+      upsertAnlagenstammTreeCache(
+        db,
+        fab,
+        { enabled: true, tree: scanned.tree, folder_name: ctx.resolved.folderName },
+        { root_folder_name: ctx.resolved.folderName },
+      );
       ingestProjekteNeuParameterTree(jobId, fab, scanned.tree);
       save();
       return res.json({
@@ -3391,7 +3427,10 @@ function createApp(db) {
     if (!jobDetail) throw new Error('Auftrag nicht gefunden.');
     const montageFolderName = buildMonteurMontageFolderName(jobDetail, getTechnicianDisplayName(technicianId));
     const fabsOut = [];
-    for (const fabNum of fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)) {
+    const fabNumsPreview = [...fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)].sort((a, b) =>
+      compareFabrikationsnummerKeys(a, b),
+    );
+    for (const fabNum of fabNumsPreview) {
       const fab = String(fabNum);
       let folder_name_canonical = fab;
       const cachedRoot = readAnlagenstammRootFolderName(db, fab);
@@ -3560,7 +3599,9 @@ function createApp(db) {
     } catch (listErr) {
       console.warn('[accept_offline_preview] Monteur-Listing:', listErr && listErr.message ? listErr.message : listErr);
     }
-    const fabNums = [...fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)];
+    const fabNums = [...fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)].sort((a, b) =>
+      compareFabrikationsnummerKeys(a, b),
+    );
     const creds = resolveDispoServerCreds(urlOpts || {});
     const hdr =
       authHeader && authHeader.Authorization
@@ -5535,8 +5576,12 @@ ORDER BY
     try {
       const cached = readAnlagenstammTreeCache(db, fab);
       if (!cached || !cached.tree.length) {
-        return res.json({ ok: true, found: false, fab: fab, projects_enabled: false, tree: [] });
+        return res.json({ ok: true, found: false, fab: fab, projects_enabled: false, tree: [], folder: '' });
       }
+      const folder =
+        (cached.root_folder_name && String(cached.root_folder_name).trim()) ||
+        readAnlagenstammRootFolderName(db, fab) ||
+        '';
       return res.json({
         ok: true,
         found: true,
@@ -5544,6 +5589,7 @@ ORDER BY
         projects_enabled: cached.projects_enabled,
         tree: cached.tree,
         synced_at: cached.synced_at,
+        folder,
       });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
@@ -6586,10 +6632,11 @@ ORDER BY
           return { fabrikationsnummer: fn, type: t, position: p };
         }).filter((r) => r.fabrikationsnummer);
       }
-      let fabs = dbFabRows.map((r) => r.fabrikationsnummer).filter(Boolean);
-      if (fabs.length === 0) {
+      if (dbFabRows.length === 0) {
         return res.status(400).json({ ok: false, error: 'Mindestens eine Fabrikationsnummer erforderlich.' });
       }
+      dbFabRows = sortJobFabRows(dbFabRows);
+      const fabs = dbFabRows.map((r) => r.fabrikationsnummer).filter(Boolean);
 
       const jsonOnly = body.jsonOnly === true || body.saveJsonOnly === true;
 
@@ -7361,11 +7408,15 @@ ORDER BY
     if (!technicianId || !job_id) {
       return res.status(400).json({ ok: false, error: 'technician_id und job_id erforderlich.' });
     }
+    const hotelKeys = ['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_address_extra_1', 'hotel_address_extra_2', 'hotel_phone', 'hotel_email', 'hotel_website', 'hotel_comment', 'hotel_rating_stars'];
+    const jobSiteKeys = ['endkunde', 'street', 'house_number', 'zip', 'city', 'country', 'address_extra_1', 'address_extra_2'];
     const fabOnlyPatch = fabrikationsnummern !== undefined
       && status === undefined
       && description === undefined
       && !hotel_selection
-      && !['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_address_extra_1', 'hotel_address_extra_2', 'hotel_phone', 'hotel_email', 'hotel_website', 'hotel_comment', 'hotel_rating_stars'].some((k) => Object.prototype.hasOwnProperty.call(body, k));
+      && !Array.isArray(body.job_contacts)
+      && !hotelKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k))
+      && !jobSiteKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k));
     const gate = fabOnlyPatch
       ? getLocalJobMetaForFabrikationsnummernPatch(db, technicianId, job_id)
       : getWritableLocalJobMetaForPatch(db, technicianId, job_id);
@@ -7374,7 +7425,6 @@ ORDER BY
     }
     const effectiveJobId = gate.localId;
     const allowed = ['angelegt', 'zugeteilt', 'in_arbeit', 'erledigt', 'abgerechnet', 'geplant'];
-    const hotelKeys = ['hotel_endkunde', 'hotel_street', 'hotel_house_number', 'hotel_zip', 'hotel_city', 'hotel_country', 'hotel_address_extra_1', 'hotel_address_extra_2', 'hotel_phone', 'hotel_email', 'hotel_website', 'hotel_comment', 'hotel_rating_stars'];
     const hasHotelPayload = hotelKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k));
     try {
       if (hasHotelPayload) {
@@ -7400,6 +7450,57 @@ ORDER BY
         db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'hotel_address', JSON.stringify(hotelPayload));
         save();
         return res.json({ ok: true, updated: 'hotel_address' });
+      }
+      const hasJobSitePayload = jobSiteKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k));
+      if (hasJobSitePayload) {
+        const sitePayload = {};
+        jobSiteKeys.forEach((k) => { sitePayload[k] = body[k] != null ? String(body[k]) : ''; });
+        insertOrUpdateJobAddress(db, effectiveJobId, {
+          endkunde: sitePayload.endkunde || null,
+          street: sitePayload.street || '',
+          house_number: sitePayload.house_number || '',
+          zip: sitePayload.zip || '',
+          city: sitePayload.city || '',
+          country: sitePayload.country || 'DE',
+          address_extra_1: sitePayload.address_extra_1 || null,
+          address_extra_2: sitePayload.address_extra_2 || null,
+        });
+        db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
+          'job',
+          effectiveJobId,
+          'job_address',
+          JSON.stringify(sitePayload),
+        );
+        save();
+        return res.json({ ok: true, updated: 'job_address' });
+      }
+      if (Array.isArray(body.job_contacts)) {
+        const contacts = body.job_contacts
+          .filter((c) => c && typeof c === 'object')
+          .map((c) => ({
+            contact_name: c.contact_name != null ? String(c.contact_name).trim() : '',
+            contact_phone: c.contact_phone != null ? String(c.contact_phone).trim() : '',
+            contact_email: c.contact_email != null ? String(c.contact_email).trim() : '',
+          }))
+          .filter((c) => c.contact_name || c.contact_phone || c.contact_email);
+        try {
+          db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(effectiveJobId);
+          contacts.forEach((c, i) => {
+            db.prepare(
+              'INSERT INTO job_contacts (job_id, contact_name, contact_phone, contact_email, sort_order) VALUES (?, ?, ?, ?, ?)',
+            ).run(effectiveJobId, c.contact_name || null, c.contact_phone || null, c.contact_email || null, i);
+          });
+        } catch (e) {
+          return res.status(500).json({ ok: false, error: e.message || 'Kontakte konnten nicht gespeichert werden.' });
+        }
+        db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
+          'job',
+          effectiveJobId,
+          'job_contacts',
+          JSON.stringify({ job_contacts: contacts }),
+        );
+        save();
+        return res.json({ ok: true, updated: 'job_contacts' });
       }
       if (hotel_selection && typeof hotel_selection === 'object') {
         const hotelId = Number(hotel_selection.hotel_id || 0);
@@ -7453,7 +7554,12 @@ ORDER BY
       }
       if (fabrikationsnummern !== undefined) {
         let val = typeof fabrikationsnummern === 'string' ? fabrikationsnummern : (fabrikationsnummern != null ? JSON.stringify(fabrikationsnummern) : null);
-        if (val != null) val = clampFabrikationsnummernJson(val);
+        if (val != null) {
+          val = clampFabrikationsnummernJson(val);
+          try {
+            val = JSON.stringify(sortJobFabRows(JSON.parse(val)));
+          } catch (_) { /* unverändert */ }
+        }
         const jobFabBefore = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(effectiveJobId);
         const oldFabJson = jobFabBefore && jobFabBefore.fabrikationsnummern;
         const addedFns = computeAddedJobFabNums(oldFabJson, val);
@@ -11668,7 +11774,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
     ...(authHeader || {}),
   });
   for (const p of pending) {
-    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address' || p.action === 'hotel_selection')) {
+    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address' || p.action === 'hotel_selection' || p.action === 'job_address' || p.action === 'job_contacts')) {
       let job = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(p.entity_id);
       if (!job) job = db.prepare('SELECT id, server_id FROM jobs WHERE server_id = ?').get(p.entity_id);
       const hasServerId = job && job.server_id != null && String(job.server_id).trim() !== '';

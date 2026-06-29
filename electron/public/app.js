@@ -2713,9 +2713,34 @@
     return numbers;
   }
 
+  /** Fabrikationsnummern aufsteigend (numerisch wenn möglich, sonst localeCompare). */
+  function compareFabrikationsnummer(a, b) {
+    var sa = String(a == null ? '' : a).trim();
+    var sb = String(b == null ? '' : b).trim();
+    if (!sa && !sb) return 0;
+    if (!sa) return 1;
+    if (!sb) return -1;
+    var na = /^\d+$/.test(sa) ? parseInt(sa, 10) : NaN;
+    var nb = /^\d+$/.test(sb) ? parseInt(sb, 10) : NaN;
+    if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+    return sa.localeCompare(sb, 'de', { numeric: true, sensitivity: 'base' });
+  }
+
+  function sortLeistungRowsByFab(rows) {
+    return (rows || []).slice().sort(function (a, b) {
+      return compareFabrikationsnummer(a && a.fabrikationsnummer, b && b.fabrikationsnummer);
+    });
+  }
+
+  function sortFabrikationsnummerStrings(list) {
+    return (list || []).slice().sort(compareFabrikationsnummer);
+  }
+
   function formatFabrikationsnummernInputValue(rows) {
     if (!rows || !rows.length) return '';
-    return rows.map(function (r) { return String(r && r.fabrikationsnummer != null ? r.fabrikationsnummer : '').trim(); }).filter(Boolean).join('; ');
+    return sortFabrikationsnummerStrings(
+      rows.map(function (r) { return String(r && r.fabrikationsnummer != null ? r.fabrikationsnummer : '').trim(); }).filter(Boolean),
+    ).join('; ');
   }
 
   function findLeistungRowByFab(rows, fn) {
@@ -2792,7 +2817,7 @@
         out.push(emptyLeistungRowTemplate(fn));
       }
     }
-    return out;
+    return sortLeistungRowsByFab(out);
   }
 
   /** Zeile in der FN-Tabelle anzeigen (FN reicht; leere Platzhalterzeile ohne FN ausblenden). */
@@ -2895,12 +2920,12 @@
     if (leistungRows.length === 0) {
       leistungRows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '', geliefert_ueber: '', projekt: '', bemerkungen: '' });
     }
-    return leistungRows;
+    return sortLeistungRowsByFab(leistungRows);
   }
 
   function leistungRowsForJobPatch(rows) {
     var arr = (rows || []).filter(leistungRowHasVisibleData);
-    return arr.length > 0 ? arr : (rows || []).slice();
+    return sortLeistungRowsByFab(arr.length > 0 ? arr : (rows || []).slice());
   }
 
   function refreshProjektdatenLeistungTableFromRows() {
@@ -3050,7 +3075,7 @@
   function saveProjektdatenFabrikationsnummernFromRows(rows, hintEl) {
     var jobId = jobDetailsJobId;
     if (!jobId) return Promise.reject(new Error('Kein Auftrag'));
-    var arr = (rows || []).filter(leistungRowHasVisibleData);
+    var arr = sortLeistungRowsByFab((rows || []).filter(leistungRowHasVisibleData));
     projektdatenFabSaveBusy = true;
     return api('/api/job', {
       method: 'PATCH',
@@ -3237,13 +3262,14 @@
       html += '<div class="projektdaten-meta-details-body">';
       html += '<div class="modal-detail-section modal-detail-section-address-row">';
       html += '<div class="modal-address-contact-row">';
-      html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
+      html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address job-site-address-display' + (readOnlyAngelegt ? ' job-site-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + addressLine + '</p>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
       html += '<div class="modal-detail-section modal-hotel-display-wrap"><h4>Hotel Adresse</h4><p class="modal-address hotel-address-display' + (readOnlyAngelegt ? ' hotel-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + hotelAddressLine + '</p>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
-      html += '<div class="modal-detail-section"><h4>Kontakt (Baustellen-Ansprechpartner)</h4><dl class="modal-detail-dl">';
+      html += '<div class="modal-detail-section"><h4>Kontakt (Baustellen-Ansprechpartner)</h4>';
+      html += '<dl class="modal-detail-dl job-site-contact-display' + (readOnlyAngelegt ? ' job-site-contact-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>';
       html += '<dt>Ansprechpartner</dt><dd>' + v(name) + '</dd>';
       html += '<dt>Telefon</dt><dd>' + v(phone) + '</dd>';
       html += '<dt>E-Mail</dt><dd>' + v(email) + '</dd>';
-      html += '</dl></div>';
+      html += '</dl>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
       html += '</div></div>';
       html += '</div></details>';
     })();
@@ -3353,21 +3379,32 @@
     return html;
   }
 
-  /** @returns {string[]} Fabrikationsnummern in Auftragsreihenfolge (wie Modal-Tabelle). */
+  /** @returns {string[]} Fabrikationsnummern aufsteigend nach FN. */
   function parseJobFabrikationsnummernOrdered(job) {
     var raw = job && job.fabrikationsnummern;
     if (raw == null || raw === '') return [];
+    var out = [];
     try {
       var parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.map(function (r) {
+        out = parsed.map(function (r) {
           if (r && typeof r === 'object') return String(r.fabrikationsnummer || r.Fabrikationsnummer || '').trim();
           if (r != null) return String(r).trim();
           return '';
         }).filter(Boolean);
       }
     } catch (e) { /* legacy Semikolon/Komma */ }
-    return String(raw).split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
+    if (!out.length) {
+      out = String(raw).split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
+    }
+    return sortFabrikationsnummerStrings(out);
+  }
+
+  /** Anzeigename des PROJEKTE-NEU-Fabrikationsordners (Sidebar Projektdaten). */
+  function projekteNeuFolderLabel(fab, folderName) {
+    var folder = String(folderName || '').trim();
+    if (folder) return folder;
+    return String(fab || '').trim();
   }
 
   /** Kurzname oder Index-Relativpfad zu PROJEKTE NEU (Schlüssel inkl. numerischer FN-Normalisierung). */
@@ -3555,7 +3592,7 @@
           seenFab[f] = true;
           orderedFabs.push(f);
         });
-        keysFromApi.forEach(function (f) {
+        keysFromApi.slice().sort(compareFabrikationsnummer).forEach(function (f) {
           if (!seenFab[f]) {
             seenFab[f] = true;
             orderedFabs.push(f);
@@ -4242,6 +4279,7 @@
       });
     });
     bindHotelAddressDblclick();
+    bindJobSiteAddressContactDblclick();
     var treeHostInit = document.getElementById('projektdatenProjekteNeuTree');
     var msgElInit = document.getElementById('projektdatenProjekteNeuMsg');
     if (treeHostInit && msgElInit) {
@@ -4275,6 +4313,244 @@
         var job = window.currentProjektdatenJob;
         if (job) openHotelAddressModal(job);
       });
+    });
+  }
+
+  function refreshProjektdatenJobContent(updatedJob) {
+    var viewProjektdaten = document.getElementById('viewProjektdaten');
+    var viewStart = document.getElementById('viewStart');
+    var viewEinstellungen = document.getElementById('viewEinstellungen');
+    if (viewStart) viewStart.classList.add('hidden');
+    if (viewEinstellungen) viewEinstellungen.classList.remove('active');
+    if (viewProjektdaten) viewProjektdaten.classList.add('active');
+    var content = document.getElementById('viewProjektdatenContent');
+    if (content) {
+      window.currentProjektdatenJob = updatedJob;
+      content.innerHTML = renderJobDetailsContent(updatedJob);
+      bindLeistungActions();
+      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+    }
+  }
+
+  function runProjektdatenDispoSyncPush() {
+    var auth = typeof buildDispoSyncAuthPayload === 'function' ? buildDispoSyncAuthPayload() : null;
+    if (!isValidDispoSyncAuth(auth)) return;
+    fetch(API_BASE + '/api/sync_push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(auth)
+    })
+      .then(function (res) {
+        return res.json().then(function (d) {
+          return { d: d };
+        });
+      })
+      .then(function (x) {
+        var d = x.d;
+        if (!d || !d.ok) {
+          if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (d && d.error ? d.error : 'Unbekannt'));
+          return;
+        }
+        if (d.job_id) {
+          return pollBackgroundJobUntilTerminal(d.job_id, null, {}).then(function (j) {
+            if (j.status === 'completed' && typeof showToast === 'function') {
+              showToast('Änderungen wurden in die Dispo übertragen.');
+            } else if (j.status !== 'completed' && typeof showToast === 'function') {
+              showToast('Sync fehlgeschlagen: ' + (j.error || j.message || j.status));
+            }
+          });
+        }
+        if (typeof showToast === 'function') showToast('Änderungen wurden in die Dispo übertragen.');
+      })
+      .catch(function (e) {
+        console.error('[Sync Push] Fehler:', e.message, e);
+        if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (e.message || 'Verbindung zur Dispo prüfen'));
+      });
+  }
+
+  function bindJobSiteAddressContactDblclick() {
+    var content = document.getElementById('viewProjektdatenContent');
+    if (!content) return;
+    content.querySelectorAll('.job-site-address-display').forEach(function (el) {
+      el.addEventListener('dblclick', function () {
+        var job = window.currentProjektdatenJob;
+        if (job) openJobSiteAddressModal(job);
+      });
+    });
+    content.querySelectorAll('.job-site-contact-display').forEach(function (el) {
+      el.addEventListener('dblclick', function () {
+        var job = window.currentProjektdatenJob;
+        if (job) openJobSiteContactModal(job);
+      });
+    });
+  }
+
+  function openJobSiteAddressModal(job) {
+    if (isJobAngelegtReadOnly(job || window.currentProjektdatenJob)) {
+      alert('Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.');
+      return;
+    }
+    var jobId = job && (job.id != null) ? job.id : jobDetailsJobId;
+    if (!jobId) return;
+    var attr = function (v) { return escapeHtml(String(v == null ? '' : v)).replace(/"/g, '&quot;'); };
+    var modalHtml = '<div id="jobSiteAddressModalOverlay" class="hotel-modal-overlay">';
+    modalHtml += '<div class="hotel-modal-card address-card">';
+    modalHtml += '<h3>Auftragsadresse (Baustelle)</h3>';
+    modalHtml += '<div class="hotel-paste-wrap"><label>Adresse einfügen</label><textarea id="job_site_paste_address" class="hotel-paste-textarea" rows="4" placeholder="Komplette Adresse hier einfügen"></textarea><button type="button" class="btn btn-ghost hotel-paste-btn" id="jobSitePasteApply">In Felder übernehmen</button></div>';
+    modalHtml += '<div class="row row-full-width"><div><label>Endkunde / Firma</label><input type="text" id="job_site_edit_endkunde" value="' + attr(job.endkunde) + '" placeholder="Name oder Firma"></div></div>';
+    modalHtml += '<div class="row"><div><label>Straße</label><input type="text" id="job_site_edit_street" value="' + attr(job.street) + '"></div><div style="max-width:80px"><label>Hausnr.</label><input type="text" id="job_site_edit_house_number" value="' + attr(job.house_number) + '" maxlength="32"></div></div>';
+    modalHtml += '<div class="row row-city-to-edge"><div style="max-width:70px"><label>PLZ</label><input type="text" id="job_site_edit_zip" value="' + attr(job.zip) + '" maxlength="7"></div><div><label>Ort</label><input type="text" id="job_site_edit_city" value="' + attr(job.city) + '"></div></div>';
+    var currentCountry = (job.country || '').trim();
+    modalHtml += '<label>Land</label><div class="hotel-country-select-wrap">';
+    modalHtml += '<span id="job_site_edit_country_flag" class="hotel-country-flag" aria-hidden="true"></span>';
+    modalHtml += '<select id="job_site_edit_country" autocomplete="off">';
+    modalHtml += '<option value="">Bitte wählen</option>';
+    var countriesList = (typeof window.HOTEL_COUNTRIES !== 'undefined' && Array.isArray(window.HOTEL_COUNTRIES)) ? window.HOTEL_COUNTRIES : [];
+    countriesList.forEach(function (c) {
+      var code = (c.code || '').toUpperCase();
+      var sel = (currentCountry.toUpperCase() === code || currentCountry === (c.name || '')) ? ' selected' : '';
+      var label = (c.name || '') + ' ' + (c.flag || '') + ' (' + (c.code || '') + ')';
+      modalHtml += '<option value="' + attr(c.code) + '"' + sel + '>' + escapeHtml(label) + '</option>';
+    });
+    modalHtml += '</select></div>';
+    modalHtml += '<label>Adresszusatz 1</label><input type="text" id="job_site_edit_extra_1" value="' + attr(job.address_extra_1) + '">';
+    modalHtml += '<label>Adresszusatz 2</label><input type="text" id="job_site_edit_extra_2" value="' + attr(job.address_extra_2) + '">';
+    modalHtml += '<div class="hotel-modal-actions"><button type="button" class="btn btn-primary" id="jobSiteModalSave">Speichern</button> <button type="button" class="btn btn-ghost" id="jobSiteModalCancel">Abbrechen</button></div>';
+    modalHtml += '</div></div>';
+    var existing = document.getElementById('jobSiteAddressModalOverlay');
+    if (existing) existing.remove();
+    var div = document.createElement('div');
+    div.innerHTML = modalHtml;
+    while (div.firstChild) document.body.appendChild(div.firstChild);
+    var overlay = document.getElementById('jobSiteAddressModalOverlay');
+    if (!overlay) return;
+    function closeModal() {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) closeModal();
+    });
+    function collectPayload() {
+      return {
+        job_id: parseInt(jobId, 10),
+        endkunde: (document.getElementById('job_site_edit_endkunde') && document.getElementById('job_site_edit_endkunde').value) || '',
+        street: (document.getElementById('job_site_edit_street') && document.getElementById('job_site_edit_street').value) || '',
+        house_number: (document.getElementById('job_site_edit_house_number') && document.getElementById('job_site_edit_house_number').value) || '',
+        zip: (document.getElementById('job_site_edit_zip') && document.getElementById('job_site_edit_zip').value) || '',
+        city: (document.getElementById('job_site_edit_city') && document.getElementById('job_site_edit_city').value) || '',
+        country: (document.getElementById('job_site_edit_country') && document.getElementById('job_site_edit_country').value) || '',
+        address_extra_1: (document.getElementById('job_site_edit_extra_1') && document.getElementById('job_site_edit_extra_1').value) || '',
+        address_extra_2: (document.getElementById('job_site_edit_extra_2') && document.getElementById('job_site_edit_extra_2').value) || ''
+      };
+    }
+    function applyPayloadToJob(payload) {
+      var updatedJob = Object.assign({}, job, {
+        endkunde: payload.endkunde,
+        street: payload.street,
+        house_number: payload.house_number,
+        zip: payload.zip,
+        city: payload.city,
+        country: payload.country,
+        address_extra_1: payload.address_extra_1,
+        address_extra_2: payload.address_extra_2
+      });
+      Object.assign(job, updatedJob);
+      window.currentProjektdatenJob = updatedJob;
+      return updatedJob;
+    }
+    function updateCountryFlag() {
+      var sel = document.getElementById('job_site_edit_country');
+      var flagEl = document.getElementById('job_site_edit_country_flag');
+      if (!sel || !flagEl) return;
+      var code = (sel.value || '').trim().toUpperCase().slice(0, 2);
+      flagEl.innerHTML = code ? countryFlagImg(code) : '';
+    }
+    updateCountryFlag();
+    document.getElementById('job_site_edit_country').addEventListener('change', updateCountryFlag);
+    document.getElementById('jobSitePasteApply').addEventListener('click', function () {
+      var ta = document.getElementById('job_site_paste_address');
+      var parsed = parseHotelAddressPaste(ta ? ta.value : '', countriesList);
+      if (parsed.endkunde) document.getElementById('job_site_edit_endkunde').value = parsed.endkunde;
+      if (parsed.street) document.getElementById('job_site_edit_street').value = parsed.street;
+      if (parsed.house_number) document.getElementById('job_site_edit_house_number').value = parsed.house_number;
+      if (parsed.zip) document.getElementById('job_site_edit_zip').value = parsed.zip;
+      if (parsed.city) document.getElementById('job_site_edit_city').value = parsed.city;
+      if (parsed.country) document.getElementById('job_site_edit_country').value = parsed.country;
+      if (parsed.address_extra_1) document.getElementById('job_site_edit_extra_1').value = parsed.address_extra_1;
+      if (parsed.address_extra_2) document.getElementById('job_site_edit_extra_2').value = parsed.address_extra_2;
+      updateCountryFlag();
+    });
+    document.getElementById('jobSiteModalCancel').addEventListener('click', closeModal);
+    document.getElementById('jobSiteModalSave').addEventListener('click', function () {
+      var payload = collectPayload();
+      api('/api/job', { method: 'PATCH', body: JSON.stringify(payload) })
+        .then(function () {
+          var updatedJob = applyPayloadToJob(payload);
+          closeModal();
+          refreshProjektdatenJobContent(updatedJob);
+          runProjektdatenDispoSyncPush();
+          if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync({ blockingSync: false }); } catch (e) {} }
+        })
+        .catch(function (e) {
+          alert('Speichern fehlgeschlagen: ' + e.message);
+        });
+    });
+  }
+
+  function openJobSiteContactModal(job) {
+    if (isJobAngelegtReadOnly(job || window.currentProjektdatenJob)) {
+      alert('Auftrag ist angelegt – Bearbeitung in der App nicht erlaubt.');
+      return;
+    }
+    var jobId = job && (job.id != null) ? job.id : jobDetailsJobId;
+    if (!jobId) return;
+    var c = (job.job_contacts && Array.isArray(job.job_contacts) && job.job_contacts[0]) ? job.job_contacts[0] : null;
+    var name = (c && (c.contact_name || c.contactName)) ? (c.contact_name || c.contactName) : (job.contact_person || job.contact_name || '');
+    var phone = (c && (c.contact_phone || c.contactPhone)) ? (c.contact_phone || c.contactPhone) : (job.contact_phone || '');
+    var email = (c && (c.contact_email || c.contactEmail)) ? (c.contact_email || c.contactEmail) : (job.contact_email || '');
+    var attr = function (v) { return escapeHtml(String(v == null ? '' : v)).replace(/"/g, '&quot;'); };
+    var modalHtml = '<div id="jobSiteContactModalOverlay" class="hotel-modal-overlay">';
+    modalHtml += '<div class="hotel-modal-card address-card">';
+    modalHtml += '<h3>Baustellen-Ansprechpartner</h3>';
+    modalHtml += '<label>Ansprechpartner</label><input type="text" id="job_site_contact_name" value="' + attr(name) + '">';
+    modalHtml += '<label>Telefon</label><input type="tel" id="job_site_contact_phone" value="' + attr(phone) + '">';
+    modalHtml += '<label>E-Mail</label><input type="email" id="job_site_contact_email" value="' + attr(email) + '">';
+    modalHtml += '<div class="hotel-modal-actions"><button type="button" class="btn btn-primary" id="jobSiteContactSave">Speichern</button> <button type="button" class="btn btn-ghost" id="jobSiteContactCancel">Abbrechen</button></div>';
+    modalHtml += '</div></div>';
+    var existing = document.getElementById('jobSiteContactModalOverlay');
+    if (existing) existing.remove();
+    var div = document.createElement('div');
+    div.innerHTML = modalHtml;
+    while (div.firstChild) document.body.appendChild(div.firstChild);
+    var overlay = document.getElementById('jobSiteContactModalOverlay');
+    if (!overlay) return;
+    function closeModal() {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) closeModal();
+    });
+    document.getElementById('jobSiteContactCancel').addEventListener('click', closeModal);
+    document.getElementById('jobSiteContactSave').addEventListener('click', function () {
+      var contact = {
+        contact_name: (document.getElementById('job_site_contact_name') && document.getElementById('job_site_contact_name').value) || '',
+        contact_phone: (document.getElementById('job_site_contact_phone') && document.getElementById('job_site_contact_phone').value) || '',
+        contact_email: (document.getElementById('job_site_contact_email') && document.getElementById('job_site_contact_email').value) || ''
+      };
+      var payload = { job_id: parseInt(jobId, 10), job_contacts: [contact] };
+      api('/api/job', { method: 'PATCH', body: JSON.stringify(payload) })
+        .then(function () {
+          var updatedJob = Object.assign({}, job, { job_contacts: [contact] });
+          Object.assign(job, updatedJob);
+          window.currentProjektdatenJob = updatedJob;
+          closeModal();
+          refreshProjektdatenJobContent(updatedJob);
+          runProjektdatenDispoSyncPush();
+          if (typeof checkConnectionAndSync === 'function') { try { checkConnectionAndSync({ blockingSync: false }); } catch (e) {} }
+        })
+        .catch(function (e) {
+          alert('Speichern fehlgeschlagen: ' + e.message);
+        });
     });
   }
 
@@ -4532,54 +4808,10 @@
       return updatedJob;
     }
     function refreshHotelProjektdatenContent(updatedJob) {
-      var viewProjektdaten = document.getElementById('viewProjektdaten');
-      var viewStart = document.getElementById('viewStart');
-      var viewEinstellungen = document.getElementById('viewEinstellungen');
-      if (viewStart) viewStart.classList.add('hidden');
-      if (viewEinstellungen) viewEinstellungen.classList.remove('active');
-      if (viewProjektdaten) viewProjektdaten.classList.add('active');
-      var content = document.getElementById('viewProjektdatenContent');
-      if (content) {
-        window.currentProjektdatenJob = updatedJob;
-        content.innerHTML = renderJobDetailsContent(updatedJob);
-        bindLeistungActions();
-        if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-      }
+      refreshProjektdatenJobContent(updatedJob);
     }
     function runHotelDispoSyncPush() {
-      var auth = typeof buildDispoSyncAuthPayload === 'function' ? buildDispoSyncAuthPayload() : null;
-      if (!isValidDispoSyncAuth(auth)) return;
-      fetch(API_BASE + '/api/sync_push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(auth)
-      })
-        .then(function (res) {
-          return res.json().then(function (d) {
-            return { d: d };
-          });
-        })
-        .then(function (x) {
-          var d = x.d;
-          if (!d || !d.ok) {
-            if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (d && d.error ? d.error : 'Unbekannt'));
-            return;
-          }
-          if (d.job_id) {
-            return pollBackgroundJobUntilTerminal(d.job_id, null, {}).then(function (j) {
-              if (j.status === 'completed' && typeof showToast === 'function') {
-                showToast('Hotel-Adresse wurde in die Dispo übertragen.');
-              } else if (j.status !== 'completed' && typeof showToast === 'function') {
-                showToast('Sync fehlgeschlagen: ' + (j.error || j.message || j.status));
-              }
-            });
-          }
-          if (typeof showToast === 'function') showToast('Hotel-Adresse wurde in die Dispo übertragen.');
-        })
-        .catch(function (e) {
-          console.error('[Sync Push] Fehler:', e.message, e);
-          if (typeof showToast === 'function') showToast('Sync fehlgeschlagen: ' + (e.message || 'Verbindung zur Dispo prüfen'));
-        });
+      runProjektdatenDispoSyncPush();
     }
     var hotelSaveBusy = false;
     var hotelSaveNeedsRetry = false;
@@ -7004,7 +7236,7 @@
         bemerkungen: ''
       });
     }
-    return rows;
+    return sortLeistungRowsByFab(rows);
   }
 
   function renderArchivFolderTree(jobId, containerEl) {
@@ -8812,15 +9044,27 @@
       treeHost.innerHTML = '';
       return;
     }
-    if (msg) msg.textContent = 'Lade Struktur…';
+    if (msg) {
+      msg.textContent = 'Lade Struktur…';
+      msg.classList.remove('projektdaten-projekte-neu-folder');
+    }
     if (!opts.keepTreeWhileLoading) treeHost.innerHTML = '';
-    function renderTree(tree, statusText) {
+    function renderTree(tree, statusText, folderName) {
       treeHost.innerHTML = '';
       if (tree && tree.length) {
         treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, tree, 0, msg));
-        if (msg) msg.textContent = statusText || 'Lokale Projektdateien (nach Auftragsübernahme).';
+        if (msg) {
+          if (statusText) {
+            msg.textContent = statusText;
+            msg.classList.remove('projektdaten-projekte-neu-folder');
+          } else {
+            msg.textContent = projekteNeuFolderLabel(fab, folderName);
+            msg.classList.add('projektdaten-projekte-neu-folder');
+          }
+        }
       } else if (msg) {
         msg.textContent = statusText || 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
+        msg.classList.remove('projektdaten-projekte-neu-folder');
       }
       if (toggleEl) toggleEl.setAttribute('data-loaded', '1');
     }
@@ -8844,7 +9088,7 @@
       if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
       var cachedTreeEarly = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
       if (cachedTreeEarly.length) {
-        renderTree(cachedTreeEarly);
+        renderTree(cachedTreeEarly, '', cached && cached.folder);
         return;
       }
       if (jobId) {
@@ -8860,7 +9104,7 @@
         );
         if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
         if (localTree && localTree.ok && localTree.enabled && Array.isArray(localTree.tree) && localTree.tree.length) {
-          return renderTree(localTree.tree);
+          return renderTree(localTree.tree, '', localTree.folder);
         }
       }
       if (!allowOnline || (!getDispoExternalUrl() && !getDispoInternalUrl())) {
@@ -8886,7 +9130,11 @@
         if (msg) msg.textContent = 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
         return;
       }
-      renderTree(tree, 'Noch keine lokale Kopie – Struktur vom Server (nach „Auftrag annehmen“ offline nutzbar).');
+      renderTree(
+        tree,
+        'Noch keine lokale Kopie – Struktur vom Server (nach „Auftrag annehmen“ offline nutzbar).',
+        pnRaw.folder_name,
+      );
     } catch (e) {
       if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
       var errText = (e && e.message) ? e.message : String(e);
@@ -10720,39 +10968,21 @@
         servicetechniker: techName,
         ansprechperson: resolveMontageberichtAnsprechperson(job)
       };
-      var fabList = [];
-      var parsed = null;
-      if (job.fabrikationsnummern) {
-        try {
-          parsed = JSON.parse(job.fabrikationsnummern);
-          if (Array.isArray(parsed)) {
-            fabList = parsed.map(function (r) {
-              if (r && typeof r === 'object' && (r.fabrikationsnummer || r.Fabrikationsnummer)) return String(r.fabrikationsnummer || r.Fabrikationsnummer).trim();
-              if (r != null && (typeof r === 'string' || typeof r === 'number')) return String(r).trim();
-              return '';
-            }).filter(Boolean);
-          }
-        } catch (e) {
-          fabList = (job.fabrikationsnummern || '').split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
-        }
-      }
+      var leistungRows = sortLeistungRowsByFab(buildLeistungRowsFromJob(job).filter(leistungRowShowInTable));
       var geliefertUeber = '';
-      k.fabrikationsnummern = fabList.map(function (f, i) {
-        var type = '';
-        var position = '';
-        var gu = '';
-        var fn = (f != null && f !== '') ? String(f).trim() : '';
-        if (parsed && Array.isArray(parsed) && parsed[i]) {
-          var r = parsed[i];
-          type = (r.type || r.Type || '').toString().trim();
-          position = (r.position || r.Position || '').toString().trim();
-          gu = (r.geliefert_ueber || r.geliefertUeber || '').toString().trim();
-          if (gu && !geliefertUeber) geliefertUeber = gu;
-          if (!fn && (r.fabrikationsnummer || r.Fabrikationsnummer)) fn = String(r.fabrikationsnummer || r.Fabrikationsnummer).trim();
-        }
-        return { fabrikationsnummer: fn, type: type, position: position, geliefert_ueber: gu, bemerkungen: '' };
+      k.fabrikationsnummern = leistungRows.map(function (row) {
+        var gu = sanitizeLeistungField(row.geliefert_ueber);
+        if (gu && !geliefertUeber) geliefertUeber = gu;
+        return {
+          fabrikationsnummer: sanitizeLeistungField(row.fabrikationsnummer),
+          type: sanitizeLeistungField(row.type),
+          position: sanitizeLeistungField(row.position),
+          geliefert_ueber: gu,
+          bemerkungen: ''
+        };
       });
       k.geliefertUeber = geliefertUeber || (k.fabrikationsnummern[0] && k.fabrikationsnummern[0].geliefert_ueber) || '';
+      var fabList = k.fabrikationsnummern.map(function (r) { return r.fabrikationsnummer; }).filter(Boolean);
       var auftragsnr = (job.job_number != null && String(job.job_number).trim()) ? String(job.job_number).trim() : '';
       kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(k.kunde) + '</div>' +
         (auftragsnr ? '<div class="kopfdaten-secondary"><strong>Auftragsnr.:</strong> ' + escapeHtml(auftragsnr) + '</div>' : '') +
@@ -11402,21 +11632,7 @@
         if (techEl) techName = techEl.textContent || '';
       } catch (e) {}
       var datum = formatDateRange(job.start_datetime, job.end_datetime);
-      var fabList = [];
-      if (job.fabrikationsnummern) {
-        try {
-          var parsed = JSON.parse(job.fabrikationsnummern);
-          if (Array.isArray(parsed)) {
-            fabList = parsed.map(function (r) {
-              if (r && typeof r === 'object' && (r.fabrikationsnummer || r.Fabrikationsnummer)) return String(r.fabrikationsnummer || r.Fabrikationsnummer).trim();
-              if (r != null && (typeof r === 'string' || typeof r === 'number')) return String(r).trim();
-              return '';
-            }).filter(Boolean);
-          }
-        } catch (e) {
-          fabList = (job.fabrikationsnummern || '').split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
-        }
-      }
+      var fabList = parseJobFabrikationsnummernOrdered(job);
       kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(job.customer_name || '') + '</div>' +
         '<div><strong>Projekt:</strong> ' + escapeHtml(job.job_number || job.description || '') + '</div>' +
         '<div><strong>FN:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
@@ -11426,20 +11642,7 @@
 
     function fillFabSelect(job) {
       var opts = ['<option value="">– aus Auftrag –</option>'];
-      var fabList = [];
-      if (job && job.fabrikationsnummern) {
-        try {
-          var parsed = JSON.parse(job.fabrikationsnummern);
-          if (Array.isArray(parsed)) {
-            parsed.forEach(function (r) {
-              var fn = (r && (r.fabrikationsnummer || r.Fabrikationsnummer)) != null ? String(r.fabrikationsnummer || r.Fabrikationsnummer).trim() : '';
-              if (fn) fabList.push(fn);
-            });
-          }
-        } catch (e) {
-          fabList = (job.fabrikationsnummern || '').split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
-        }
-      }
+      var fabList = parseJobFabrikationsnummernOrdered(job);
       fabList.forEach(function (fn) { opts.push('<option value="' + escapeHtml(fn) + '">' + escapeHtml(fn) + '</option>'); });
       fabSelect.innerHTML = opts.join('');
     }
