@@ -7486,6 +7486,9 @@ ORDER BY
         } catch (e) {
           return res.status(500).json({ ok: false, error: e.message || 'Kontakte konnten nicht gespeichert werden.' });
         }
+        db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'job_contacts'`).run(
+          effectiveJobId,
+        );
         db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
           'job',
           effectiveJobId,
@@ -11850,10 +11853,11 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
   const pending = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
   pending.sort((a, b) => {
     const score = (p) => {
+      if (p.entity_type === 'job') return 0;
       if (p.entity_type !== 'anlagenstamm') return 10;
-      if (p.action === 'delete') return 0;
-      if (p.action === 'save') return 1;
-      return 2;
+      if (p.action === 'save') return 5;
+      if (p.action === 'delete') return 8;
+      return 6;
     };
     const sa = score(a);
     const sb = score(b);
@@ -12097,12 +12101,18 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
+        const errMsg = e && e.message ? e.message : String(e);
         logSyncPushError({
           reason: 'anlagenstamm_delete',
-          error: e && e.message ? e.message : String(e),
+          error: errMsg,
           entity_id: p.entity_id,
         });
-        throw e;
+        const dropPending =
+          /404|nicht gefunden|not found|Anlage nicht gefunden|Monteur-API-Datei wurde.*nicht gefunden/i.test(errMsg);
+        if (dropPending) {
+          db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        }
+        continue;
       }
     }
   }
