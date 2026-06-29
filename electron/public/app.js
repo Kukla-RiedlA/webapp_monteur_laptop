@@ -2003,17 +2003,44 @@
   }
 
   /** Nur Baustellen-Ansprechpartner (job_contacts / baustellen_ansprechpartner), nicht Kundenkontakt. */
+  function normalizeJobContactRow(c) {
+    c = c || {};
+    return {
+      first_name: (c.first_name != null ? String(c.first_name) : '').trim(),
+      last_name: (c.last_name != null ? String(c.last_name) : '').trim(),
+      title: (c.title != null ? String(c.title) : '').trim(),
+      department: (c.department != null ? String(c.department) : '').trim(),
+      phone: (c.phone != null ? String(c.phone) : (c.contact_phone != null ? String(c.contact_phone) : '')).trim(),
+      mobile: (c.mobile != null ? String(c.mobile) : '').trim(),
+      email: (c.email != null ? String(c.email) : (c.contact_email != null ? String(c.contact_email) : '')).trim(),
+      contact_name: (c.contact_name != null ? String(c.contact_name) : (c.contactName != null ? String(c.contactName) : '')).trim()
+    };
+  }
+
+  function formatJobContactDisplayName(c) {
+    var row = normalizeJobContactRow(c);
+    if (row.contact_name) return row.contact_name;
+    return (row.first_name + ' ' + row.last_name).trim();
+  }
+
+  function getJobContactAnzeigenameField(c) {
+    var row = normalizeJobContactRow(c);
+    var combined = (row.first_name + ' ' + row.last_name).trim();
+    if (row.contact_name && row.contact_name !== combined) return row.contact_name;
+    return '';
+  }
+
+  function jobContactRowHasAny(row) {
+    return !!(row.first_name || row.last_name || row.title || row.department || row.phone || row.mobile || row.email || row.contact_name);
+  }
+
   function getBaustellenContactsForJob(job) {
     if (!job || typeof job !== 'object') return [];
     var out = [];
     if (Array.isArray(job.job_contacts)) {
       job.job_contacts.forEach(function (c) {
-        var name = (c && (c.contact_name || c.contactName)) ? String(c.contact_name || c.contactName).trim() : '';
-        var phone = (c && (c.contact_phone || c.contactPhone)) ? String(c.contact_phone || c.contactPhone).trim() : '';
-        var email = (c && (c.contact_email || c.contactEmail)) ? String(c.contact_email || c.contactEmail).trim() : '';
-        if (name || phone || email) {
-          out.push({ contact_name: name, contact_phone: phone, contact_email: email });
-        }
+        var row = normalizeJobContactRow(c);
+        if (jobContactRowHasAny(row)) out.push(row);
       });
     }
     if (out.length) return out;
@@ -2031,24 +2058,81 @@
           ? String(job.baustelle_email).trim()
           : '';
     if (bName || bPhone || bEmail) {
-      out.push({ contact_name: bName, contact_phone: bPhone, contact_email: bEmail });
+      out.push(normalizeJobContactRow({ contact_name: bName, contact_phone: bPhone, contact_email: bEmail }));
     }
     return out;
+  }
+
+  function renderJobContactDisplayLines(c) {
+    var row = normalizeJobContactRow(c);
+    var lines = [];
+    var name = formatJobContactDisplayName(row);
+    if (name) lines.push('<strong>' + escapeHtml(name) + '</strong>');
+    if (row.title) lines.push(escapeHtml(row.title));
+    if (row.department) lines.push(escapeHtml(row.department));
+    var phones = [];
+    if (row.phone) phones.push('Tel. ' + escapeHtml(row.phone));
+    if (row.mobile) phones.push('Mobil ' + escapeHtml(row.mobile));
+    if (phones.length) lines.push(phones.join(' · '));
+    if (row.email) lines.push(escapeHtml(row.email));
+    return lines;
+  }
+
+  function renderJobSiteContactsProjektdatenHtml(job) {
+    var contacts = getBaustellenContactsForJob(job);
+    if (!contacts.length) {
+      return '<dl class="modal-detail-dl">'
+        + '<dt>Ansprechpartner</dt><dd>–</dd>'
+        + '<dt>Telefon</dt><dd>–</dd>'
+        + '<dt>E-Mail</dt><dd>–</dd>'
+        + '</dl>';
+    }
+    if (contacts.length === 1) {
+      var row = contacts[0];
+      var name = formatJobContactDisplayName(row) || '–';
+      var phone = row.phone || row.mobile || '–';
+      var email = row.email || '–';
+      return '<dl class="modal-detail-dl">'
+        + '<dt>Ansprechpartner</dt><dd>' + escapeHtml(name) + (row.title ? '<br><span class="muted">' + escapeHtml(row.title) + '</span>' : '') + (row.department ? '<br><span class="muted">' + escapeHtml(row.department) + '</span>' : '') + '</dd>'
+        + '<dt>Telefon</dt><dd>' + escapeHtml(phone) + (row.phone && row.mobile ? '<br><span class="muted">Mobil ' + escapeHtml(row.mobile) + '</span>' : '') + '</dd>'
+        + '<dt>E-Mail</dt><dd>' + escapeHtml(email) + '</dd>'
+        + '</dl>';
+    }
+    var blocks = contacts.map(function (c, idx) {
+      var lines = renderJobContactDisplayLines(c);
+      return '<div class="job-site-contact-block">'
+        + '<div class="job-site-contact-block-title">Ansprechpartner ' + (idx + 1) + '</div>'
+        + '<div class="job-site-contact-block-body">' + (lines.length ? lines.join('<br>') : '–') + '</div></div>';
+    }).join('');
+    return '<div class="job-site-contacts-list">' + blocks + '</div>';
+  }
+
+  function renderArchivJobContactsHtml(job, v) {
+    var contacts = getBaustellenContactsForJob(job);
+    if (!contacts.length) {
+      return '<dt>Ansprechpartner</dt><dd>' + v('') + '</dd>'
+        + '<dt>Telefon</dt><dd>' + v('') + '</dd>'
+        + '<dt>E-Mail</dt><dd>' + v('') + '</dd>';
+    }
+    if (contacts.length === 1) {
+      var row = contacts[0];
+      return '<dt>Ansprechpartner</dt><dd>' + v(formatJobContactDisplayName(row)) + (row.title ? '<br>' + v(row.title) : '') + '</dd>'
+        + '<dt>Telefon</dt><dd>' + v(row.phone || row.mobile) + '</dd>'
+        + '<dt>E-Mail</dt><dd>' + v(row.email) + '</dd>';
+    }
+    return contacts.map(function (c, idx) {
+      return '<dt>Ansprechpartner ' + (idx + 1) + '</dt><dd>' + v(formatJobContactDisplayName(c)) + '</dd>'
+        + '<dt>Telefon</dt><dd>' + v(c.phone || c.mobile) + '</dd>'
+        + '<dt>E-Mail</dt><dd>' + v(c.email) + '</dd>';
+    }).join('');
   }
 
   function renderStartJobContactsHtml(job) {
     var lines = [];
     getBaustellenContactsForJob(job).forEach(function (c) {
-      var name = (c.contact_name || '').trim();
-      var phone = (c.contact_phone || '').trim();
-      var email = (c.contact_email || '').trim();
-      if (!name && !phone && !email) return;
-      var parts = [];
-      if (name) parts.push(escapeHtml(name));
-      if (phone) parts.push(escapeHtml(phone));
-      var line = parts.join(' · ');
-      if (email) line += ' <span class="muted">(' + escapeHtml(email) + ')</span>';
-      lines.push('<span class="start-contact-line">' + line + '</span>');
+      var contactLines = renderJobContactDisplayLines(c);
+      if (!contactLines.length) return;
+      lines.push('<span class="start-contact-line">' + contactLines.join('<br>') + '</span>');
     });
     return lines.length ? lines.join('') : '<span class="muted">Kein Baustellen-Ansprechpartner hinterlegt.</span>';
   }
@@ -3253,10 +3337,6 @@
       var hotelWebsite = (job.hotel_website || '').trim();
       if (hotelWebsite) hotelLines.push(escapeHtml(hotelWebsite));
       var hotelAddressLine = hotelLines.length ? hotelLines.join('<br>') : '–';
-      var c = (job.job_contacts && Array.isArray(job.job_contacts) && job.job_contacts[0]) ? job.job_contacts[0] : null;
-      var name = (c && (c.contact_name || c.contactName)) ? (c.contact_name || c.contactName) : (job.contact_person || job.contact_name || '');
-      var phone = (c && (c.contact_phone || c.contactPhone)) ? (c.contact_phone || c.contactPhone) : (job.contact_phone || '');
-      var email = (c && (c.contact_email || c.contactEmail)) ? (c.contact_email || c.contactEmail) : (job.contact_email || '');
       html += '<details class="projektdaten-meta-details">';
       html += '<summary>Adressen &amp; Kontakt</summary>';
       html += '<div class="projektdaten-meta-details-body">';
@@ -3265,11 +3345,9 @@
       html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address job-site-address-display' + (readOnlyAngelegt ? ' job-site-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + addressLine + '</p>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
       html += '<div class="modal-detail-section modal-hotel-display-wrap"><h4>Hotel Adresse</h4><p class="modal-address hotel-address-display' + (readOnlyAngelegt ? ' hotel-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + hotelAddressLine + '</p>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
       html += '<div class="modal-detail-section"><h4>Kontakt (Baustellen-Ansprechpartner)</h4>';
-      html += '<dl class="modal-detail-dl job-site-contact-display' + (readOnlyAngelegt ? ' job-site-contact-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>';
-      html += '<dt>Ansprechpartner</dt><dd>' + v(name) + '</dd>';
-      html += '<dt>Telefon</dt><dd>' + v(phone) + '</dd>';
-      html += '<dt>E-Mail</dt><dd>' + v(email) + '</dd>';
-      html += '</dl>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
+      html += '<div class="job-site-contact-display' + (readOnlyAngelegt ? ' job-site-contact-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>';
+      html += renderJobSiteContactsProjektdatenHtml(job);
+      html += '</div>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
       html += '</div></div>';
       html += '</div></details>';
     })();
@@ -4504,17 +4582,17 @@
     }
     var jobId = job && (job.id != null) ? job.id : jobDetailsJobId;
     if (!jobId) return;
-    var c = (job.job_contacts && Array.isArray(job.job_contacts) && job.job_contacts[0]) ? job.job_contacts[0] : null;
-    var name = (c && (c.contact_name || c.contactName)) ? (c.contact_name || c.contactName) : (job.contact_person || job.contact_name || '');
-    var phone = (c && (c.contact_phone || c.contactPhone)) ? (c.contact_phone || c.contactPhone) : (job.contact_phone || '');
-    var email = (c && (c.contact_email || c.contactEmail)) ? (c.contact_email || c.contactEmail) : (job.contact_email || '');
+    var initialContacts = getBaustellenContactsForJob(job);
+    if (!initialContacts.length) {
+      initialContacts = [normalizeJobContactRow({})];
+    }
     var attr = function (v) { return escapeHtml(String(v == null ? '' : v)).replace(/"/g, '&quot;'); };
     var modalHtml = '<div id="jobSiteContactModalOverlay" class="hotel-modal-overlay">';
-    modalHtml += '<div class="hotel-modal-card address-card">';
+    modalHtml += '<div class="hotel-modal-card address-card job-site-contacts-modal">';
     modalHtml += '<h3>Baustellen-Ansprechpartner</h3>';
-    modalHtml += '<label>Ansprechpartner</label><input type="text" id="job_site_contact_name" value="' + attr(name) + '">';
-    modalHtml += '<label>Telefon</label><input type="tel" id="job_site_contact_phone" value="' + attr(phone) + '">';
-    modalHtml += '<label>E-Mail</label><input type="email" id="job_site_contact_email" value="' + attr(email) + '">';
+    modalHtml += '<p class="job-site-contact-form-hint muted">Alle Felder optional. Es wird nur ein Eintrag gespeichert, wenn mindestens ein Feld ausgefüllt ist.</p>';
+    modalHtml += '<div id="jobSiteContactsEditor" class="job-site-contacts-editor"></div>';
+    modalHtml += '<button type="button" class="btn btn-ghost job-site-contact-add-btn" id="jobSiteContactAdd">+ ANSPRECHPARTNER</button>';
     modalHtml += '<div class="hotel-modal-actions"><button type="button" class="btn btn-primary" id="jobSiteContactSave">Speichern</button> <button type="button" class="btn btn-ghost" id="jobSiteContactCancel">Abbrechen</button></div>';
     modalHtml += '</div></div>';
     var existing = document.getElementById('jobSiteContactModalOverlay');
@@ -4524,23 +4602,122 @@
     while (div.firstChild) document.body.appendChild(div.firstChild);
     var overlay = document.getElementById('jobSiteContactModalOverlay');
     if (!overlay) return;
+    var editor = document.getElementById('jobSiteContactsEditor');
     function closeModal() {
       if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
     }
     overlay.addEventListener('click', function (e) {
       if (e.target === overlay) closeModal();
     });
+    function bindRemoveButton(btn) {
+      btn.addEventListener('click', function () {
+        var row = btn.closest('.job-site-contact-edit-row');
+        if (!row || !row.parentNode) return;
+        row.parentNode.removeChild(row);
+        if (!editor.querySelector('.job-site-contact-edit-row')) {
+          var emptyWrap = document.createElement('div');
+          emptyWrap.innerHTML = buildContactRowHtml(normalizeJobContactRow({}), 0, false);
+          if (emptyWrap.firstChild) editor.appendChild(emptyWrap.firstChild);
+        }
+        refreshRemoveButtons();
+      });
+    }
+    function buildContactRowHtml(c, index, showRemove) {
+      var row = normalizeJobContactRow(c);
+      var anzeigename = getJobContactAnzeigenameField(c);
+      var rowHtml = '<div class="job-site-contact-edit-row" data-index="' + index + '">';
+      rowHtml += '<div class="row job-site-contact-name-row">';
+      rowHtml += '<div><label>Vorname</label><input type="text" class="job-site-contact-first-name" value="' + attr(row.first_name) + '"></div>';
+      rowHtml += '<div><label>Nachname</label><input type="text" class="job-site-contact-last-name" value="' + attr(row.last_name) + '"></div>';
+      rowHtml += '<div class="job-site-contact-title-col"><label>Titel</label><input type="text" class="job-site-contact-title" value="' + attr(row.title) + '"></div>';
+      rowHtml += '</div>';
+      rowHtml += '<label>Abteilung / Funktion</label><input type="text" class="job-site-contact-department" value="' + attr(row.department) + '">';
+      rowHtml += '<div class="row job-site-contact-comm-row">';
+      rowHtml += '<div><label>Telefon</label><input type="tel" class="job-site-contact-phone" value="' + attr(row.phone) + '"></div>';
+      rowHtml += '<div><label>Mobil</label><input type="tel" class="job-site-contact-mobile" value="' + attr(row.mobile) + '"></div>';
+      rowHtml += '<div><label>E-Mail</label><input type="email" class="job-site-contact-email" value="' + attr(row.email) + '"></div>';
+      if (showRemove) {
+        rowHtml += '<div class="job-site-contact-remove-col"><label aria-hidden="true">&nbsp;</label><button type="button" class="btn btn-ghost job-site-contact-remove" title="Entfernen" aria-label="Ansprechpartner entfernen">−</button></div>';
+      }
+      rowHtml += '</div>';
+      rowHtml += '<label>Anzeigename <span class="muted">(optional, falls abweichend von Vor- und Nachname)</span></label>';
+      rowHtml += '<input type="text" class="job-site-contact-display-name" value="' + attr(anzeigename) + '">';
+      rowHtml += '</div>';
+      return rowHtml;
+    }
+    function refreshRemoveButtons() {
+      if (!editor) return;
+      var rows = editor.querySelectorAll('.job-site-contact-edit-row');
+      rows.forEach(function (row, i) {
+        row.setAttribute('data-index', String(i));
+        var commRow = row.querySelector('.job-site-contact-comm-row');
+        var removeCol = row.querySelector('.job-site-contact-remove-col');
+        var removeBtn = row.querySelector('.job-site-contact-remove');
+        if (rows.length > 1) {
+          if (!removeCol && commRow) {
+            var col = document.createElement('div');
+            col.className = 'job-site-contact-remove-col';
+            col.innerHTML = '<label aria-hidden="true">&nbsp;</label><button type="button" class="btn btn-ghost job-site-contact-remove" title="Entfernen" aria-label="Ansprechpartner entfernen">−</button>';
+            commRow.appendChild(col);
+            bindRemoveButton(col.querySelector('.job-site-contact-remove'));
+          }
+        } else if (removeCol) {
+          removeCol.remove();
+        } else if (removeBtn) {
+          removeBtn.remove();
+        }
+      });
+    }
+    function renderEditorRows(contacts) {
+      if (!editor) return;
+      editor.innerHTML = contacts.map(function (c, i) {
+        return buildContactRowHtml(c, i, contacts.length > 1);
+      }).join('');
+      editor.querySelectorAll('.job-site-contact-remove').forEach(bindRemoveButton);
+    }
+    function readRowContact(row) {
+      function val(sel) {
+        var el = row.querySelector(sel);
+        return el ? String(el.value || '').trim() : '';
+      }
+      return normalizeJobContactRow({
+        first_name: val('.job-site-contact-first-name'),
+        last_name: val('.job-site-contact-last-name'),
+        title: val('.job-site-contact-title'),
+        department: val('.job-site-contact-department'),
+        phone: val('.job-site-contact-phone'),
+        mobile: val('.job-site-contact-mobile'),
+        email: val('.job-site-contact-email'),
+        contact_name: val('.job-site-contact-display-name')
+      });
+    }
+    function collectContactsFromEditor() {
+      if (!editor) return [];
+      var contacts = [];
+      editor.querySelectorAll('.job-site-contact-edit-row').forEach(function (row) {
+        var contact = readRowContact(row);
+        if (jobContactRowHasAny(contact)) contacts.push(contact);
+      });
+      return contacts;
+    }
+    renderEditorRows(initialContacts);
+    document.getElementById('jobSiteContactAdd').addEventListener('click', function () {
+      if (!editor) return;
+      var count = editor.querySelectorAll('.job-site-contact-edit-row').length;
+      var wrapper = document.createElement('div');
+      wrapper.innerHTML = buildContactRowHtml(normalizeJobContactRow({}), count, true);
+      var row = wrapper.firstChild;
+      if (!row) return;
+      editor.appendChild(row);
+      refreshRemoveButtons();
+    });
     document.getElementById('jobSiteContactCancel').addEventListener('click', closeModal);
     document.getElementById('jobSiteContactSave').addEventListener('click', function () {
-      var contact = {
-        contact_name: (document.getElementById('job_site_contact_name') && document.getElementById('job_site_contact_name').value) || '',
-        contact_phone: (document.getElementById('job_site_contact_phone') && document.getElementById('job_site_contact_phone').value) || '',
-        contact_email: (document.getElementById('job_site_contact_email') && document.getElementById('job_site_contact_email').value) || ''
-      };
-      var payload = { job_id: parseInt(jobId, 10), job_contacts: [contact] };
+      var contacts = collectContactsFromEditor();
+      var payload = { job_id: parseInt(jobId, 10), job_contacts: contacts };
       api('/api/job', { method: 'PATCH', body: JSON.stringify(payload) })
         .then(function () {
-          var updatedJob = Object.assign({}, job, { job_contacts: [contact] });
+          var updatedJob = Object.assign({}, job, { job_contacts: contacts });
           Object.assign(job, updatedJob);
           window.currentProjektdatenJob = updatedJob;
           closeModal();
@@ -7121,15 +7298,7 @@
     html += '</dl></div>';
     html += '<div class="archiv-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
     html += '<div class="archiv-detail-section"><h4>Kontakt</h4><dl class="modal-detail-dl">';
-    (function () {
-      var c = (job.job_contacts && job.job_contacts[0]) ? job.job_contacts[0] : null;
-      var name = c ? (c.contact_name || '') : (job.contact_person || '');
-      var phone = c ? (c.contact_phone || '') : (job.contact_phone || '');
-      var email = c ? (c.contact_email || '') : (job.contact_email || '');
-      html += '<dt>Ansprechpartner</dt><dd>' + v(name) + '</dd>';
-      html += '<dt>Telefon</dt><dd>' + v(phone) + '</dd>';
-      html += '<dt>E-Mail</dt><dd>' + v(email) + '</dd>';
-    })();
+    html += renderArchivJobContactsHtml(job, v);
     html += '</dl></div>';
     html += '<div class="archiv-detail-section"><h4>ERP / Bestellung</h4><dl class="modal-detail-dl">';
     html += '<dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
@@ -10930,17 +11099,9 @@
 
     function resolveMontageberichtAnsprechperson(job) {
       if (!job || typeof job !== 'object') return '';
-      if (Array.isArray(job.job_contacts)) {
-        for (var i = 0; i < job.job_contacts.length; i++) {
-          var c = job.job_contacts[i] || {};
-          var name = (
-            c.contact_name != null ? String(c.contact_name) :
-            (c.name != null ? String(c.name) :
-            (c.contactPerson != null ? String(c.contactPerson) :
-            (c.ansprechpartner != null ? String(c.ansprechpartner) : '')))
-          ).trim();
-          if (name) return name;
-        }
+      var contacts = getBaustellenContactsForJob(job);
+      if (contacts.length) {
+        return contacts.map(function (c) { return formatJobContactDisplayName(c); }).filter(Boolean).join(', ');
       }
       var direct = [
         job.baustellen_ansprechpartner,

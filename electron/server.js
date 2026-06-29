@@ -4833,7 +4833,7 @@ ORDER BY
     let job = { ...row };
     job.job_contacts = job.job_contacts || [];
     try {
-      const contacts = db.prepare('SELECT contact_name, contact_phone, contact_email FROM job_contacts WHERE job_id = ? ORDER BY sort_order, id').all(localJobPk);
+      const contacts = db.prepare(`${JOB_CONTACTS_SELECT_SQL} WHERE job_id = ? ORDER BY sort_order, id`).all(localJobPk);
       if (contacts && contacts.length > 0) {
         job.job_contacts = contacts;
       }
@@ -4924,13 +4924,9 @@ ORDER BY
           try {
             db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(localDbId);
             for (let i = 0; i < contacts.length; i++) {
-              const c = contacts[i];
-              const name = (c.contact_name != null ? String(c.contact_name) : '').trim();
-              const phone = (c.contact_phone != null ? String(c.contact_phone) : '').trim();
-              const email = (c.contact_email != null ? String(c.contact_email) : '').trim();
-              if (name || phone || email) {
-                db.prepare('INSERT INTO job_contacts (job_id, contact_name, contact_phone, contact_email, sort_order) VALUES (?, ?, ?, ?, ?)').run(localDbId, name || null, phone || null, email || null, i);
-              }
+              const n = normalizeJobContactPayload(contacts[i]);
+              if (!jobContactHasAny(n)) continue;
+              insertJobContactRow(db, localDbId, n, i);
             }
           } catch (e) { /* Tabelle fehlt oder Fehler – ignorieren */ }
         }
@@ -6798,14 +6794,17 @@ ORDER BY
 
       const kopfdatenForDocx = { ...kopfdaten };
       try {
-        const contacts = db.prepare('SELECT contact_name, contact_phone, contact_email FROM job_contacts WHERE job_id = ? ORDER BY sort_order, id LIMIT 1').all(localJobId);
-        const c = contacts[0];
-        if (c && (c.contact_name || c.contact_phone || c.contact_email)) {
-          const parts = [c.contact_name, c.contact_phone, c.contact_email].filter((x) => x != null && String(x).trim() !== '');
-          kopfdatenForDocx.ansprechperson = parts.join(', ');
-        } else {
-          kopfdatenForDocx.ansprechperson = '';
-        }
+        const contacts = db.prepare(`${JOB_CONTACTS_SELECT_SQL} WHERE job_id = ? ORDER BY sort_order, id`).all(localJobId);
+        const parts = [];
+        contacts.forEach((c) => {
+          const n = normalizeJobContactPayload(c);
+          if (!jobContactHasAny(n)) return;
+          const line = [n.contact_name, n.title, n.department, n.phone, n.mobile, n.email]
+            .filter((x) => x != null && String(x).trim() !== '')
+            .join(', ');
+          if (line) parts.push(line);
+        });
+        kopfdatenForDocx.ansprechperson = parts.join(' | ');
       } catch (_) {
         kopfdatenForDocx.ansprechperson = '';
       }
@@ -7477,18 +7476,12 @@ ORDER BY
       if (Array.isArray(body.job_contacts)) {
         const contacts = body.job_contacts
           .filter((c) => c && typeof c === 'object')
-          .map((c) => ({
-            contact_name: c.contact_name != null ? String(c.contact_name).trim() : '',
-            contact_phone: c.contact_phone != null ? String(c.contact_phone).trim() : '',
-            contact_email: c.contact_email != null ? String(c.contact_email).trim() : '',
-          }))
-          .filter((c) => c.contact_name || c.contact_phone || c.contact_email);
+          .map((c) => jobContactToApiRow(normalizeJobContactPayload(c)))
+          .filter((c) => jobContactHasAny(c));
         try {
           db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(effectiveJobId);
           contacts.forEach((c, i) => {
-            db.prepare(
-              'INSERT INTO job_contacts (job_id, contact_name, contact_phone, contact_email, sort_order) VALUES (?, ?, ?, ?, ?)',
-            ).run(effectiveJobId, c.contact_name || null, c.contact_phone || null, c.contact_email || null, i);
+            insertJobContactRow(db, effectiveJobId, normalizeJobContactPayload(c), i);
           });
         } catch (e) {
           return res.status(500).json({ ok: false, error: e.message || 'Kontakte konnten nicht gespeichert werden.' });
@@ -11470,6 +11463,112 @@ function mergeFabForJobPull(db, localJobId, serverFab) {
 }
 
 /** Baustellen-Ansprechpartner aus Dispo-Payload (nicht Kunden-contact_person). */
+const JOB_CONTACTS_SELECT_SQL = `SELECT contact_name, contact_phone, contact_email, first_name, last_name, title, department, phone, mobile, email FROM job_contacts`;
+const JOB_CONTACTS_SELECT_WITH_JOB_SQL = `SELECT job_id, contact_name, contact_phone, contact_email, first_name, last_name, title, department, phone, mobile, email FROM job_contacts`;
+
+function normalizeJobContactPayload(input) {
+  const raw = input && typeof input === 'object' ? input : {};
+  let fn = raw.first_name != null ? String(raw.first_name).trim() : '';
+  let ln = raw.last_name != null ? String(raw.last_name).trim() : '';
+  const title = raw.title != null ? String(raw.title).trim() : '';
+  const dept = raw.department != null ? String(raw.department).trim() : '';
+  let phone = raw.phone != null ? String(raw.phone).trim() : '';
+  let mobile = raw.mobile != null ? String(raw.mobile).trim() : '';
+  let email = raw.email != null ? String(raw.email).trim() : '';
+  let legacyName = raw.contact_name != null ? String(raw.contact_name).trim() : '';
+  const legacyPhone = raw.contact_phone != null ? String(raw.contact_phone).trim() : '';
+  const legacyEmail = raw.contact_email != null ? String(raw.contact_email).trim() : '';
+  if (!phone && legacyPhone) phone = legacyPhone;
+  if (!email && legacyEmail) email = legacyEmail;
+  if (!fn && !ln && legacyName) {
+    const parts = legacyName.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      fn = parts.shift();
+      ln = parts.join(' ');
+    } else {
+      ln = legacyName;
+    }
+  }
+  const combined = `${fn} ${ln}`.trim();
+  const displayName = legacyName || combined;
+  const legacyPhoneSingle = phone || mobile;
+  return {
+    first_name: fn || null,
+    last_name: ln || null,
+    title: title || null,
+    department: dept || null,
+    phone: phone || null,
+    mobile: mobile || null,
+    email: email || null,
+    contact_name: displayName || null,
+    contact_phone: legacyPhoneSingle || null,
+    contact_email: email || null,
+  };
+}
+
+function jobContactHasAny(n) {
+  return !!(
+    (n.contact_name && String(n.contact_name).trim())
+    || (n.phone && String(n.phone).trim())
+    || (n.mobile && String(n.mobile).trim())
+    || (n.email && String(n.email).trim())
+    || (n.first_name && String(n.first_name).trim())
+    || (n.last_name && String(n.last_name).trim())
+    || (n.title && String(n.title).trim())
+    || (n.department && String(n.department).trim())
+  );
+}
+
+function jobContactToApiRow(n) {
+  return {
+    contact_name: n.contact_name || '',
+    contact_phone: n.contact_phone || '',
+    contact_email: n.contact_email || '',
+    first_name: n.first_name || '',
+    last_name: n.last_name || '',
+    title: n.title || '',
+    department: n.department || '',
+    phone: n.phone || '',
+    mobile: n.mobile || '',
+    email: n.email || '',
+  };
+}
+
+function insertJobContactRow(dbConn, jobId, n, sortOrder) {
+  dbConn.prepare(
+    `INSERT INTO job_contacts (job_id, contact_name, contact_phone, contact_email, first_name, last_name, title, department, phone, mobile, email, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    jobId,
+    n.contact_name || null,
+    n.contact_phone || null,
+    n.contact_email || null,
+    n.first_name || null,
+    n.last_name || null,
+    n.title || null,
+    n.department || null,
+    n.phone || null,
+    n.mobile || null,
+    n.email || null,
+    sortOrder,
+  );
+}
+
+function mapJobContactDbRow(r) {
+  return {
+    contact_name: r.contact_name,
+    contact_phone: r.contact_phone,
+    contact_email: r.contact_email,
+    first_name: r.first_name,
+    last_name: r.last_name,
+    title: r.title,
+    department: r.department,
+    phone: r.phone,
+    mobile: r.mobile,
+    email: r.email,
+  };
+}
+
 function normalizeJobContactsFromPayload(job) {
   if (!job || typeof job !== 'object') return [];
   const candidates = []
@@ -11478,12 +11577,9 @@ function normalizeJobContactsFromPayload(job) {
     .concat(Array.isArray(job.contacts) ? job.contacts : []);
   const out = [];
   for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i] || {};
-    const name = (c.contact_name != null ? String(c.contact_name) : (c.name != null ? String(c.name) : (c.contactPerson != null ? String(c.contactPerson) : ''))).trim();
-    const phone = (c.contact_phone != null ? String(c.contact_phone) : (c.phone != null ? String(c.phone) : '')).trim();
-    const email = (c.contact_email != null ? String(c.contact_email) : (c.email != null ? String(c.email) : '')).trim();
-    if (name || phone || email) {
-      out.push({ contact_name: name, contact_phone: phone, contact_email: email });
+    const n = normalizeJobContactPayload(candidates[i] || {});
+    if (jobContactHasAny(n)) {
+      out.push(jobContactToApiRow(n));
     }
   }
   if (out.length > 0) return out;
@@ -11491,7 +11587,11 @@ function normalizeJobContactsFromPayload(job) {
   const directPhone = (job.job_contact_phone != null ? String(job.job_contact_phone) : (job.baustelle_phone != null ? String(job.baustelle_phone) : '')).trim();
   const directEmail = (job.job_contact_email != null ? String(job.job_contact_email) : (job.baustelle_email != null ? String(job.baustelle_email) : '')).trim();
   if (directName || directPhone || directEmail) {
-    return [{ contact_name: directName, contact_phone: directPhone, contact_email: directEmail }];
+    return [jobContactToApiRow(normalizeJobContactPayload({
+      contact_name: directName,
+      contact_phone: directPhone,
+      contact_email: directEmail,
+    }))];
   }
   return [];
 }
@@ -11502,13 +11602,9 @@ function upsertJobContactsForLocalJob(db, localJobId, j) {
   try {
     db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(localJobId);
     for (let i = 0; i < contacts.length; i++) {
-      const c = contacts[i];
-      const name = (c.contact_name != null ? String(c.contact_name) : '').trim();
-      const phone = (c.contact_phone != null ? String(c.contact_phone) : '').trim();
-      const email = (c.contact_email != null ? String(c.contact_email) : '').trim();
-      db.prepare('INSERT INTO job_contacts (job_id, contact_name, contact_phone, contact_email, sort_order) VALUES (?, ?, ?, ?, ?)').run(
-        localJobId, name || null, phone || null, email || null, i,
-      );
+      const n = normalizeJobContactPayload(contacts[i]);
+      if (!jobContactHasAny(n)) continue;
+      insertJobContactRow(db, localJobId, n, i);
     }
   } catch (e) { /* Tabelle fehlt */ }
 }
@@ -11521,7 +11617,7 @@ function attachJobContactsToJobs(db, jobs) {
   let rows = [];
   try {
     rows = db.prepare(
-      `SELECT job_id, contact_name, contact_phone, contact_email FROM job_contacts WHERE job_id IN (${placeholders}) ORDER BY sort_order, id`,
+      `${JOB_CONTACTS_SELECT_WITH_JOB_SQL} WHERE job_id IN (${placeholders}) ORDER BY sort_order, id`,
     ).all(...ids);
   } catch (e) {
     return;
@@ -11529,11 +11625,7 @@ function attachJobContactsToJobs(db, jobs) {
   const byJob = {};
   for (const r of rows) {
     if (!byJob[r.job_id]) byJob[r.job_id] = [];
-    byJob[r.job_id].push({
-      contact_name: r.contact_name,
-      contact_phone: r.contact_phone,
-      contact_email: r.contact_email,
-    });
+    byJob[r.job_id].push(mapJobContactDbRow(r));
   }
   for (const job of jobs) {
     job.job_contacts = byJob[job.id] || [];

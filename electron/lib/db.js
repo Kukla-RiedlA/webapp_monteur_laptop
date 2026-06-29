@@ -54,9 +54,23 @@ function applyRuntimeMigrations(db) {
       contact_name TEXT,
       contact_phone TEXT,
       contact_email TEXT,
+      first_name TEXT,
+      last_name TEXT,
+      title TEXT,
+      department TEXT,
+      phone TEXT,
+      mobile TEXT,
+      email TEXT,
       sort_order INTEGER DEFAULT 0,
       FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
     )`);
+  tryExec(db, 'ALTER TABLE job_contacts ADD COLUMN first_name TEXT');
+  tryExec(db, 'ALTER TABLE job_contacts ADD COLUMN last_name TEXT');
+  tryExec(db, 'ALTER TABLE job_contacts ADD COLUMN title TEXT');
+  tryExec(db, 'ALTER TABLE job_contacts ADD COLUMN department TEXT');
+  tryExec(db, 'ALTER TABLE job_contacts ADD COLUMN phone TEXT');
+  tryExec(db, 'ALTER TABLE job_contacts ADD COLUMN mobile TEXT');
+  tryExec(db, 'ALTER TABLE job_contacts ADD COLUMN email TEXT');
   tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_job_contacts_job ON job_contacts(job_id)');
   tryExec(db, `CREATE TABLE IF NOT EXISTS job_hotel_addresses (
       job_id INTEGER PRIMARY KEY,
