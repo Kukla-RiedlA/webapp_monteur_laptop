@@ -9,6 +9,7 @@
   var yearSelect = document.getElementById('abYearSelect');
   var monthNumSelect = document.getElementById('abMonthNumSelect');
   var techSelect = document.getElementById('abTechSelect');
+  var showAbgerechnetCb = document.getElementById('abShowAbgerechnet');
   var mainBlocks = document.getElementById('abMainBlocks');
   var hintChoose = document.getElementById('abHintChoose');
   var banner = document.getElementById('abReadonlyBanner');
@@ -136,7 +137,18 @@
     } else if (cfg.technician) {
       t = typeof cfg.technician === 'number' ? cfg.technician : parseInt(String(cfg.technician || 0), 10) || 0;
     }
-    return 'monat=' + encodeURIComponent(m) + '&techniker=' + encodeURIComponent(String(t));
+    var q = 'monat=' + encodeURIComponent(m) + '&techniker=' + encodeURIComponent(String(t));
+    if (showAbgerechnetChecked()) {
+      q += '&mit_abgerechnet=1';
+    }
+    return q;
+  }
+
+  function showAbgerechnetChecked() {
+    if (showAbgerechnetCb) {
+      return !!showAbgerechnetCb.checked;
+    }
+    return cfg.showAbgerechnet === true;
   }
 
   function pickAbrechnungDefaultJobId(jobs) {
@@ -163,6 +175,9 @@
     if (cfg.laptopMonthOnly === true || cfg.fromLaptopEmbed === true) {
       var tid = cfg.technician || cfg.current_user_id || 0;
       url = '/api/abrechnung/jobs?period=' + encodeURIComponent(m) + '&technician_id=' + encodeURIComponent(String(tid));
+      if (showAbgerechnetChecked()) {
+        url += '&mit_abgerechnet=1';
+      }
     } else {
       url = '/api/abrechnung_job_list.php?' + jobListQuery();
     }
@@ -214,7 +229,11 @@
     (jobs || []).forEach(function (j) {
       var o = document.createElement('option');
       o.value = String(j.id);
-      o.textContent = j.label || ('#' + j.id);
+      var lbl = j.label || ('#' + j.id);
+      if (j.status === 'abgerechnet') {
+        lbl += ' (abgerechnet)';
+      }
+      o.textContent = lbl;
       o.dataset.status = j.status || '';
       o.dataset.canWrite = j.can_write ? '1' : '0';
       jobSelect.appendChild(o);
@@ -923,6 +942,9 @@
     techSelect.addEventListener('change', function () {
       onPeriodChange();
     });
+  }
+  if (showAbgerechnetCb) {
+    showAbgerechnetCb.addEventListener('change', onPeriodChange);
   }
 
   function applyAbrechnungFilter() {

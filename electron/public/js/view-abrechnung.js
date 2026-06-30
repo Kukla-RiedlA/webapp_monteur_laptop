@@ -102,6 +102,10 @@
         <option value="">— Monat wählen / laden …</option>
       </select>
     </label>
+    <label class="ab-filter-checkbox" style="flex-direction:row;align-items:center;gap:6px;padding-bottom:2px;cursor:pointer;white-space:nowrap">
+      <input type="checkbox" name="mit_abgerechnet" id="abShowAbgerechnet" value="1"${cfg.showAbgerechnet ? ' checked' : ''}>
+      <span>Auch abgerechnete</span>
+    </label>
   </form>
 
   <p class="ab-muted" id="abSyncHint" style="display:none;margin:0 0 12px 0;width:100%"></p>
@@ -161,7 +165,7 @@
     const q = new URLSearchParams();
     const tid = resolveTechId();
     if (tid > 0) q.set('technician_id', String(tid));
-    for (const k of ['job_id', 'id', 'jahr', 'monat_num', 'techniker']) {
+    for (const k of ['job_id', 'id', 'jahr', 'monat_num', 'techniker', 'mit_abgerechnet']) {
       const v = u.searchParams.get(k);
       if (v) q.set(k, v);
     }
@@ -189,7 +193,7 @@
     await global.kuklaWebPage.mount(host, {
       html: renderShell(cfg),
       scripts: [
-        '/assets/js/dispo/job_subfolder_docs.js?v=20260629a',
+        '/assets/js/dispo/job_subfolder_docs.js?v=20260630a',
       ],
       reloadHandler: reload,
     });

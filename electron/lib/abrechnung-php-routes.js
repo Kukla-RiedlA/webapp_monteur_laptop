@@ -110,7 +110,8 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       if (Number.isFinite(fromQuery) && fromQuery > 0) tid = fromQuery;
     }
     if (!tid) return jsonRes(res, { ok: false, error: 'technician_id fehlt.' }, 400);
-    jsonRes(res, phpLocal.listAbrechnungJobsPhp(ctx.db, period, tid));
+    const includeAbgerechnet = phpLocal.parseMitAbgerechnet(req.query || {});
+    jsonRes(res, phpLocal.listAbrechnungJobsPhp(ctx.db, period, tid, includeAbgerechnet));
   });
 
   app.get('/api/abrechnung_job_list.php', (req, res) => {
@@ -124,7 +125,8 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       if (Number.isFinite(fromQuery) && fromQuery > 0) tid = fromQuery;
     }
     if (!tid) return jsonRes(res, { ok: false, error: 'technician_id fehlt.' }, 400);
-    jsonRes(res, phpLocal.listAbrechnungJobsPhp(ctx.db, monat, tid));
+    const includeAbgerechnet = phpLocal.parseMitAbgerechnet(req.query || {});
+    jsonRes(res, phpLocal.listAbrechnungJobsPhp(ctx.db, monat, tid, includeAbgerechnet));
   });
 
   app.get('/api/abrechnung_job_billing_state.php', async (req, res) => {

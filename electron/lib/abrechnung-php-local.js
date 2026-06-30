@@ -31,6 +31,13 @@ function jobOverlapsMonthFromRow(row, ym) {
   return false;
 }
 
+function parseMitAbgerechnet(query) {
+  const v = query && query.mit_abgerechnet;
+  if (v === undefined || v === null) return false;
+  const s = String(v).toLowerCase().trim();
+  return s === '1' || s === 'true' || s === 'yes';
+}
+
 function buildJobLabel(row, id) {
   const num = String(row.job_number || '').trim();
   const cust = String(row.customer_name || '').trim();
@@ -152,6 +159,7 @@ function buildPageConfig(db, technicianId, query = {}) {
     is_dispo: false,
     current_user_id: Number(effectiveTechnician || 0),
     techniciansForFilter: [],
+    showAbgerechnet: parseMitAbgerechnet(query),
   };
 }
 
@@ -372,13 +380,16 @@ function mergeJobsUnique(primary, secondary) {
   return out;
 }
 
-function listAbrechnungJobsPhp(db, monat, technicianId) {
+function listAbrechnungJobsPhp(db, monat, technicianId, includeAbgerechnet = false) {
   let jobs = listJobsFromSnapshot(db, technicianId, monat);
   const sqliteJobs = listJobsFromSqlite(db, technicianId, monat);
   if (!jobs.length) {
     jobs = sqliteJobs;
   } else {
     jobs = mergeJobsUnique(jobs, sqliteJobs);
+  }
+  if (!includeAbgerechnet) {
+    jobs = jobs.filter((j) => String(j.status || '') !== 'abgerechnet');
   }
   jobs = jobs.map((j) => {
     const id = Number(j.id);
@@ -430,6 +441,7 @@ function deleteCommentInCache(db, save, readCommentsFromRow, writeCommentsCache,
 
 module.exports = {
   buildPageConfig,
+  parseMitAbgerechnet,
   pickDefaultAbrechnungJob,
   buildBillingFallback,
   saveBillingCache,
