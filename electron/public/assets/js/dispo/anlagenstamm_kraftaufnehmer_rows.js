@@ -1,5 +1,5 @@
 /**
- * Zusätzliche Kraftaufnehmer-Zeilen im Anlagenstamm-Bearbeiten-Formular.
+ * Kraftaufnehmer-Zeilen mit DMS Nr. und DMS Position (primär + Zusatz).
  */
 (function (global) {
   'use strict';
@@ -9,6 +9,8 @@
   var state = {
     containerId: 'kraftaufnehmerRows',
     primaryInputId: 'formKraftaufnehmer',
+    primaryDmsInputId: 'formDmsNr',
+    primaryDmsPosInputId: 'formDmsPosition',
     hiddenInputId: 'formKraftaufnehmerExtra',
     addButtonId: 'btnAddKraftaufnehmer',
     readOnly: false,
@@ -18,14 +20,36 @@
     return v == null ? '' : String(v).trim();
   }
 
+  function clampField(v) {
+    var s = trimVal(v);
+    if (s.length > FIELD_MAX) return s.slice(0, FIELD_MAX);
+    return s;
+  }
+
+  function emptyRow() {
+    return { kraftaufnehmer: '', dms_nr: '', dms_position: '' };
+  }
+
+  function normalizeRow(item) {
+    if (!item || typeof item !== 'object') {
+      var s = clampField(item);
+      if (!s) return null;
+      return { kraftaufnehmer: s, dms_nr: '', dms_position: '' };
+    }
+    var ka = clampField(item.kraftaufnehmer != null ? item.kraftaufnehmer : item.type);
+    var dms = clampField(item.dms_nr);
+    var pos = clampField(item.dms_position);
+    if (!ka && !dms && !pos) return null;
+    return { kraftaufnehmer: ka, dms_nr: dms, dms_position: pos };
+  }
+
   function normalizeExtras(items) {
     var out = [];
     if (!Array.isArray(items)) return out;
     for (var i = 0; i < items.length; i++) {
-      var s = trimVal(items[i]);
-      if (!s) continue;
-      if (s.length > FIELD_MAX) s = s.slice(0, FIELD_MAX);
-      out.push(s);
+      var row = normalizeRow(items[i]);
+      if (!row) continue;
+      out.push(row);
       if (out.length >= MAX_EXTRA) break;
     }
     return out;
@@ -50,38 +74,40 @@
     return document.getElementById(state.containerId);
   }
 
+  function readRowFields(rowEl) {
+    if (!rowEl) return emptyRow();
+    return {
+      kraftaufnehmer: clampField(rowEl.querySelector('.kraftaufnehmer-field-ka') && rowEl.querySelector('.kraftaufnehmer-field-ka').value),
+      dms_nr: clampField(rowEl.querySelector('.kraftaufnehmer-field-dms') && rowEl.querySelector('.kraftaufnehmer-field-dms').value),
+      dms_position: clampField(rowEl.querySelector('.kraftaufnehmer-field-dmspos') && rowEl.querySelector('.kraftaufnehmer-field-dmspos').value),
+    };
+  }
+
+  function rowHasContent(rowData) {
+    return !!(rowData.kraftaufnehmer || rowData.dms_nr || rowData.dms_position);
+  }
+
   function syncHidden() {
     var hidden = document.getElementById(state.hiddenInputId);
     var container = getContainer();
     var extras = [];
     if (container) {
-      var inputs = container.querySelectorAll('input.kraftaufnehmer-extra-input');
-      for (var i = 0; i < inputs.length; i++) {
-        var val = trimVal(inputs[i].value);
-        if (val) extras.push(val.length > FIELD_MAX ? val.slice(0, FIELD_MAX) : val);
+      var extraRows = container.querySelectorAll('.kraftaufnehmer-row-extra');
+      for (var i = 0; i < extraRows.length; i++) {
+        var data = readRowFields(extraRows[i]);
+        if (rowHasContent(data)) extras.push(data);
       }
     }
     if (hidden) hidden.value = extras.length ? JSON.stringify(extras) : '';
     return extras;
   }
 
-  function addExtraRow(value) {
-    var container = getContainer();
-    if (!container) return;
-    var extraCount = container.querySelectorAll('input.kraftaufnehmer-extra-input').length;
-    if (extraCount >= MAX_EXTRA) return;
-
-    var row = document.createElement('div');
-    row.className = 'kraftaufnehmer-row kraftaufnehmer-row-extra';
-
-    var label = document.createElement('label');
-    label.className = 'kraftaufnehmer-sr-only';
-    label.textContent = 'Kraftaufnehmer (Zusatz)';
-
+  function makeFieldInput(className, value, placeholder) {
     var input = document.createElement('input');
     input.type = 'text';
-    input.className = 'kraftaufnehmer-extra-input';
-    input.value = trimVal(value).slice(0, FIELD_MAX);
+    input.className = className;
+    input.value = clampField(value);
+    input.placeholder = placeholder || '';
     input.autocomplete = 'off';
     if (state.readOnly) {
       input.readOnly = true;
@@ -89,9 +115,43 @@
     } else {
       input.addEventListener('input', syncHidden);
     }
+    return input;
+  }
 
-    row.appendChild(label);
-    row.appendChild(input);
+  function buildFieldsRow(rowData, isPrimary) {
+    var fields = document.createElement('div');
+    fields.className = 'kraftaufnehmer-row-fields';
+
+    var kaInput = makeFieldInput('kraftaufnehmer-field-ka', rowData.kraftaufnehmer, 'Kraftaufnehmer');
+    var dmsInput = makeFieldInput('kraftaufnehmer-field-dms', rowData.dms_nr, 'DMS Nr.');
+    var posInput = makeFieldInput('kraftaufnehmer-field-dmspos', rowData.dms_position, 'DMS Position');
+
+    if (isPrimary) {
+      kaInput.name = 'kraftaufnehmer';
+      kaInput.id = state.primaryInputId;
+      dmsInput.name = 'dms_nr';
+      dmsInput.id = state.primaryDmsInputId;
+      posInput.name = 'dms_position';
+      posInput.id = state.primaryDmsPosInputId;
+    }
+
+    fields.appendChild(kaInput);
+    fields.appendChild(dmsInput);
+    fields.appendChild(posInput);
+    return fields;
+  }
+
+  function addExtraRow(rowData) {
+    var container = getContainer();
+    if (!container) return;
+    var extraCount = container.querySelectorAll('.kraftaufnehmer-row-extra').length;
+    if (extraCount >= MAX_EXTRA) return;
+
+    rowData = normalizeRow(rowData || emptyRow()) || emptyRow();
+
+    var row = document.createElement('div');
+    row.className = 'kraftaufnehmer-row kraftaufnehmer-row-extra';
+    row.appendChild(buildFieldsRow(rowData, false));
 
     if (!state.readOnly) {
       var rm = document.createElement('button');
@@ -109,10 +169,23 @@
     container.appendChild(row);
   }
 
+  function renderHead() {
+    var head = document.createElement('div');
+    head.className = 'kraftaufnehmer-row kraftaufnehmer-row-head';
+    head.innerHTML =
+      '<span class="kraftaufnehmer-col-label">Kraftaufnehmer</span>' +
+      '<span class="kraftaufnehmer-col-label">DMS Nr.</span>' +
+      '<span class="kraftaufnehmer-col-label">DMS Position</span>' +
+      '<span class="kraftaufnehmer-col-label kraftaufnehmer-col-actions" aria-hidden="true"></span>';
+    return head;
+  }
+
   function init(opts) {
     opts = opts || {};
     state.containerId = opts.containerId || 'kraftaufnehmerRows';
     state.primaryInputId = opts.primaryInputId || 'formKraftaufnehmer';
+    state.primaryDmsInputId = opts.primaryDmsInputId || 'formDmsNr';
+    state.primaryDmsPosInputId = opts.primaryDmsPosInputId || 'formDmsPosition';
     state.hiddenInputId = opts.hiddenInputId || 'formKraftaufnehmerExtra';
     state.addButtonId = opts.addButtonId || 'btnAddKraftaufnehmer';
     state.readOnly = !!opts.readOnly;
@@ -122,27 +195,15 @@
 
     var addBtn = document.getElementById(state.addButtonId);
     container.innerHTML = '';
+    container.appendChild(renderHead());
 
     var primaryRow = document.createElement('div');
     primaryRow.className = 'kraftaufnehmer-row kraftaufnehmer-row-primary';
-
-    var primaryLabel = document.createElement('label');
-    primaryLabel.setAttribute('for', state.primaryInputId);
-    primaryLabel.textContent = 'Kraftaufnehmer';
-
-    var primaryInput = document.createElement('input');
-    primaryInput.type = 'text';
-    primaryInput.name = opts.primaryName || 'kraftaufnehmer';
-    primaryInput.id = state.primaryInputId;
-    primaryInput.value = trimVal(opts.primaryValue).slice(0, FIELD_MAX);
-    primaryInput.autocomplete = 'off';
-    if (state.readOnly) {
-      primaryInput.readOnly = true;
-      primaryInput.tabIndex = -1;
-    }
-
-    primaryRow.appendChild(primaryLabel);
-    primaryRow.appendChild(primaryInput);
+    primaryRow.appendChild(buildFieldsRow({
+      kraftaufnehmer: opts.primaryValue || '',
+      dms_nr: opts.primaryDmsNr || '',
+      dms_position: opts.primaryDmsPosition || '',
+    }, true));
     container.appendChild(primaryRow);
 
     var extras = normalizeExtras(opts.extras);
@@ -159,9 +220,12 @@
         if (addBtn) {
           addBtn._kaBound = true;
           addBtn.addEventListener('click', function () {
-            addExtraRow('');
-            var inputs = container.querySelectorAll('input.kraftaufnehmer-extra-input');
-            if (inputs.length) inputs[inputs.length - 1].focus();
+            addExtraRow(emptyRow());
+            var rows = container.querySelectorAll('.kraftaufnehmer-row-extra');
+            if (rows.length) {
+              var first = rows[rows.length - 1].querySelector('.kraftaufnehmer-field-ka');
+              if (first) first.focus();
+            }
             syncHidden();
           });
         }

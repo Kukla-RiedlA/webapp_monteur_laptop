@@ -7700,7 +7700,6 @@
       '<div class="anlagenstamm-form-section"><h4>Elektronik</h4><div class="anlagenstamm-form-grid">' +
       '<div><label for="as-form-tacho">Tacho</label><input type="text" id="as-form-tacho" value="' + v('tacho') + '"></div>' +
       '<div><label for="as-form-elektronik">Elektronik</label><input type="text" id="as-form-elektronik" value="' + v('elektronik') + '"></div>' +
-      '<div><label for="as-form-dms">DMS-Nr.</label><input type="text" id="as-form-dms" value="' + v('dms_nr') + '"></div>' +
       '</div></div>' +
       '<div class="anlagenstamm-form-section"><h4>Vertrieb / Projekt</h4><div class="anlagenstamm-form-grid">' +
       '<div class="form-full"><label for="as-form-geliefert">Geliefert über</label><input type="text" id="as-form-geliefert" value="' + v('geliefert_ueber') + '" placeholder="z. B. Kunde, Händler"></div>' +
@@ -7976,6 +7975,7 @@
       tacho: ((document.getElementById('as-form-tacho') || {}).value || ''),
       elektronik: ((document.getElementById('as-form-elektronik') || {}).value || ''),
       dms_nr: ((document.getElementById('as-form-dms') || {}).value || ''),
+      dms_position: ((document.getElementById('as-form-dms-position') || {}).value || ''),
       position: ((document.getElementById('as-form-position') || {}).value || ''),
       geliefert_ueber: ((document.getElementById('as-form-geliefert') || {}).value || ''),
       projekt: ((document.getElementById('as-form-projekt') || {}).value || ''),
@@ -7993,9 +7993,12 @@
         : [];
       window.kuklaInitKraftaufnehmerRows({
         primaryInputId: 'as-form-kraftaufnehmer',
+        primaryDmsInputId: 'as-form-dms',
+        primaryDmsPosInputId: 'as-form-dms-position',
         hiddenInputId: 'as-form-kraftaufnehmer-extra',
-        primaryName: 'kraftaufnehmer',
         primaryValue: (a && a.kraftaufnehmer) ? String(a.kraftaufnehmer) : '',
+        primaryDmsNr: (a && a.dms_nr) ? String(a.dms_nr) : '',
+        primaryDmsPosition: (a && a.dms_position) ? String(a.dms_position) : '',
         extras: extras,
         readOnly: false
       });
@@ -8030,6 +8033,7 @@
         tacho: payload.tacho,
         elektronik: payload.elektronik,
         dms_nr: payload.dms_nr,
+        dms_position: payload.dms_position,
         position: payload.position,
         geliefert_ueber: payload.geliefert_ueber,
         projekt: payload.projekt,

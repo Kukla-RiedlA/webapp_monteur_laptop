@@ -93,7 +93,7 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_fab ON anlagenstamm_local(fabrikationsnummer)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_type ON anlagenstamm_local(type)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_kunde ON anlagenstamm_local(aktueller_kunde)');
-  for (const col of ['pn_root_name TEXT', 'ted_mechanik TEXT', 'kraftaufnehmer_extra TEXT']) {
+  for (const col of ['pn_root_name TEXT', 'ted_mechanik TEXT', 'kraftaufnehmer_extra TEXT', 'dms_position TEXT']) {
     try {
       run(`ALTER TABLE anlagenstamm_local ADD COLUMN ${col}`);
     } catch (err) {
@@ -210,24 +210,52 @@ function rowCount(db) {
 }
 
 const ANLAGENSTAMM_LOCAL_SELECT = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-              material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
+              material, tacho, elektronik, dms_nr, dms_position, position, aktueller_kunde, letzter_besuch,
               geliefert_ueber, projekt, bemerkungen, customer_country,
               pn_root_name, ted_mechanik, dirty, synced_at
        FROM anlagenstamm_local`;
 
+const KA_EXTRA_FIELD_MAX = 100;
+const KA_EXTRA_MAX_ITEMS = 20;
+
+function clampKaExtraField(value) {
+  if (value == null) return '';
+  const s = String(value).trim();
+  if (!s) return '';
+  return s.length > KA_EXTRA_FIELD_MAX ? s.slice(0, KA_EXTRA_FIELD_MAX) : s;
+}
+
+function normalizeKaExtraOne(item) {
+  if (item && typeof item === 'object' && !Array.isArray(item)) {
+    const ka = clampKaExtraField(item.kraftaufnehmer != null ? item.kraftaufnehmer : item.type);
+    const dms = clampKaExtraField(item.dms_nr);
+    const pos = clampKaExtraField(item.dms_position);
+    if (!ka && !dms && !pos) return null;
+    return { kraftaufnehmer: ka, dms_nr: dms, dms_position: pos };
+  }
+  const s = clampKaExtraField(item);
+  if (!s) return null;
+  return { kraftaufnehmer: s, dms_nr: '', dms_position: '' };
+}
+
+function normalizeKaExtraItems(items) {
+  if (!Array.isArray(items)) return [];
+  const out = [];
+  for (const item of items) {
+    const row = normalizeKaExtraOne(item);
+    if (!row) continue;
+    out.push(row);
+    if (out.length >= KA_EXTRA_MAX_ITEMS) break;
+  }
+  return out;
+}
+
 function parseKraftaufnehmerExtra(raw) {
   if (raw == null || raw === '') return [];
-  if (Array.isArray(raw)) {
-    return raw
-      .map((item) => (item == null ? '' : String(item).trim()))
-      .filter(Boolean)
-      .slice(0, 20);
-  }
+  if (Array.isArray(raw)) return normalizeKaExtraItems(raw);
   try {
     const parsed = JSON.parse(String(raw));
-    return Array.isArray(parsed)
-      ? parsed.map((item) => String(item).trim()).filter(Boolean).slice(0, 20)
-      : [];
+    return Array.isArray(parsed) ? normalizeKaExtraItems(parsed) : [];
   } catch (_) {
     return [];
   }
@@ -268,6 +296,7 @@ function mapRowToListApi(row) {
     tacho: row.tacho || '',
     elektronik: row.elektronik || '',
     dms_nr: row.dms_nr || '',
+    dms_position: row.dms_position || '',
     position: row.position || '',
     aktueller_kunde: row.aktueller_kunde || '',
     letzter_besuch: row.letzter_besuch || '',
@@ -318,7 +347,7 @@ function listAnlagenstammForApi(db, limit, offset) {
   const rows = db
     .prepare(
       `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
-              material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
+              material, tacho, elektronik, dms_nr, dms_position, position, aktueller_kunde, letzter_besuch,
               geliefert_ueber, projekt, bemerkungen, customer_country
        FROM anlagenstamm_local
        ORDER BY TRIM(fabrikationsnummer) ASC
@@ -336,6 +365,7 @@ function listAnlagenstammForApi(db, limit, offset) {
     tacho: r.tacho || '',
     elektronik: r.elektronik || '',
     dms_nr: r.dms_nr || '',
+    dms_position: r.dms_position || '',
     position: r.position || '',
     aktueller_kunde: r.aktueller_kunde || '',
     letzter_besuch: r.letzter_besuch || '',
@@ -357,6 +387,7 @@ const DISPO_ANLAGENSTAMM_MAX = {
   tacho: 100,
   elektronik: 100,
   dms_nr: 100,
+  dms_position: 100,
   position: 100,
   aktueller_kunde: 255,
   geliefert_ueber: 255,
@@ -413,6 +444,7 @@ const ANLAGENSTAMM_MERGE_KEYS = [
   'nenngeschwindigkeit',
   'kraftaufnehmer',
   'dms_nr',
+  'dms_position',
   'tacho',
   'elektronik',
   'material',
@@ -496,11 +528,11 @@ function clampFabrikationsnummernJson(jsonStr) {
 const UPSERT_ANLAGENSTAMM_SQL = `
     INSERT INTO anlagenstamm_local (
       id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-      material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
+      material, tacho, elektronik, dms_nr, dms_position, position, aktueller_kunde, letzter_besuch,
       geliefert_ueber, projekt, bemerkungen, customer_country, pn_root_name, ted_mechanik,
       synced_at, dirty
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
     )
     ON CONFLICT(id) DO UPDATE SET
       fabrikationsnummer = excluded.fabrikationsnummer,
@@ -513,6 +545,7 @@ const UPSERT_ANLAGENSTAMM_SQL = `
       tacho = excluded.tacho,
       elektronik = excluded.elektronik,
       dms_nr = excluded.dms_nr,
+      dms_position = excluded.dms_position,
       position = excluded.position,
       aktueller_kunde = excluded.aktueller_kunde,
       letzter_besuch = excluded.letzter_besuch,
@@ -657,7 +690,7 @@ function clearEmptyDirtyAnlagenstammStubs(db) {
   const rows = db
     .prepare(
       `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
-              material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
+              material, tacho, elektronik, dms_nr, dms_position, position, aktueller_kunde, letzter_besuch,
               geliefert_ueber, projekt, bemerkungen, customer_country
        FROM anlagenstamm_local WHERE dirty = 1`,
     )
@@ -728,6 +761,7 @@ function upsertAnlagenstammRows(db, rows) {
       row.tacho != null ? String(row.tacho) : '',
       row.elektronik != null ? String(row.elektronik) : '',
       row.dms_nr != null ? String(row.dms_nr) : '',
+      row.dms_position != null ? String(row.dms_position) : '',
       row.position != null ? String(row.position) : '',
       row.aktueller_kunde != null ? String(row.aktueller_kunde) : '',
       row.letzter_besuch != null ? String(row.letzter_besuch) : '',
@@ -776,7 +810,7 @@ function searchLocal(db, filters) {
   const rows = db
     .prepare(
       `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
-        material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
+        material, tacho, elektronik, dms_nr, dms_position, position, aktueller_kunde, letzter_besuch,
         geliefert_ueber, projekt, bemerkungen
        FROM anlagenstamm_local${whereSql}
        ORDER BY TRIM(fabrikationsnummer) ASC
@@ -811,7 +845,7 @@ function fabLookupKeys(fab) {
 
 function lookupByFab(db, fab) {
   const sql = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-          material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
+          material, tacho, elektronik, dms_nr, dms_position, position, aktueller_kunde, letzter_besuch,
           geliefert_ueber, projekt, bemerkungen, dirty
          FROM anlagenstamm_local
          WHERE TRIM(fabrikationsnummer) = TRIM(?)
@@ -878,6 +912,7 @@ function saveLocal(db, payload) {
     tacho: merged.tacho != null ? String(merged.tacho) : '',
     elektronik: merged.elektronik != null ? String(merged.elektronik) : '',
     dms_nr: merged.dms_nr != null ? String(merged.dms_nr) : '',
+    dms_position: merged.dms_position != null ? String(merged.dms_position) : '',
     position: merged.position != null ? String(merged.position) : '',
     geliefert_ueber: merged.geliefert_ueber != null ? String(merged.geliefert_ueber) : '',
     projekt: merged.projekt != null ? String(merged.projekt) : '',
@@ -895,6 +930,7 @@ function saveLocal(db, payload) {
     fields.tacho,
     fields.elektronik,
     fields.dms_nr,
+    fields.dms_position,
     fields.position,
     fields.geliefert_ueber,
     fields.projekt,
@@ -905,7 +941,7 @@ function saveLocal(db, payload) {
     db.prepare(
       `UPDATE anlagenstamm_local SET
         fabrikationsnummer = ?, type = ?, leistung = ?, kraftaufnehmer = ?, kraftaufnehmer_extra = ?, nenngeschwindigkeit = ?,
-        material = ?, tacho = ?, elektronik = ?, dms_nr = ?, position = ?,
+        material = ?, tacho = ?, elektronik = ?, dms_nr = ?, dms_position = ?, position = ?,
         geliefert_ueber = ?, projekt = ?, bemerkungen = ?, dirty = 1, synced_at = ?
        WHERE id = ?`,
     ).run(...fieldArgs, existing.id);
@@ -914,15 +950,15 @@ function saveLocal(db, payload) {
     db.prepare(
       `INSERT INTO anlagenstamm_local (
         id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-        material, tacho, elektronik, dms_nr, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
+        material, tacho, elektronik, dms_nr, dms_position, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     ).run(id, ...fieldArgs);
   } else {
     const ins = db.prepare(
       `INSERT INTO anlagenstamm_local (
         fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-        material, tacho, elektronik, dms_nr, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        material, tacho, elektronik, dms_nr, dms_position, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     );
     const r = ins.run(...fieldArgs);
     id = Number(r.lastInsertRowid);

@@ -1134,7 +1134,6 @@ function fillFormFromRow(row) {
   set('formMaterial', row.material || '');
   set('formTacho', row.tacho || '');
   set('formElektronik', row.elektronik || '');
-  set('formDmsNr', row.dms_nr || '');
   set('formPosition', row.position || '');
   set('formGeliefertUeber', row.geliefert_ueber || '');
   set('formProjekt', row.projekt || '');
@@ -1143,6 +1142,8 @@ function fillFormFromRow(row) {
     window.kuklaInitKraftaufnehmerRows({
       readOnly: anlagenReadOnly,
       primaryValue: row.kraftaufnehmer || '',
+      primaryDmsNr: row.dms_nr || '',
+      primaryDmsPosition: row.dms_position || '',
       row: row
     });
   } else {
