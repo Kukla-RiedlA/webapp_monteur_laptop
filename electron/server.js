@@ -7097,6 +7097,29 @@ ORDER BY
     return store.byFab[fn];
   }
 
+  async function syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, messwerte, kopfDwc) {
+    const mess = messwerte && typeof messwerte === 'object' ? messwerte : {};
+    const typeVal = String(mess.waegezelle_type || '').trim();
+    const snVal = String(mess.waegezelle_seriennummer || '').trim();
+    const dwcVal = String(kopfDwc || '').trim();
+    const fabKey = String(fab || '').trim();
+    if (!fabKey || (!typeVal && !snVal && !dwcVal)) return null;
+    const technicianId = body.technician_id != null ? parseInt(String(body.technician_id), 10) : null;
+    const partial = {
+      fabrikationsnummer: fabKey,
+      baseUrl: body.dispoBaseUrl || body.base_url || body.baseUrl,
+      externalUrl: body.externalUrl,
+      internalUrl: body.internalUrl,
+      serverUsername: body.serverUsername || body.dispoUsername,
+      serverPassword: body.serverPassword ?? body.dispoPassword,
+      technician_id: technicianId,
+    };
+    if (typeVal) partial.kraftaufnehmer = typeVal;
+    if (snVal) partial.dms_nr = snVal;
+    if (dwcVal) partial.elektronik = dwcVal;
+    return performAnlagenstammSave(partial, technicianId);
+  }
+
   function mergeServiceprotokollDraftStores(base, incoming) {
     const out = { byFab: {} };
     [base, incoming].forEach((store) => {
@@ -7259,10 +7282,20 @@ ORDER BY
         kopf_dwc: String(body.kopf_dwc || ''),
       };
 
+      let messSyncWarning = null;
+      try {
+        const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, draftPayload.messwerte, draftPayload.kopf_dwc);
+        if (messSync && messSync.ok === false) {
+          messSyncWarning = 'Anlagenstamm (Kraftaufnehmer/DMS/DWC): ' + (messSync.error || 'lokal nicht gespeichert');
+        }
+      } catch (messErr) {
+        messSyncWarning = 'Anlagenstamm (Kraftaufnehmer/DMS/DWC): ' + (messErr.message || 'Speichern fehlgeschlagen');
+      }
+
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       writeServiceprotokollDraft(reiseDir, fab, draftPayload);
 
-      let syncWarning = null;
+      let syncWarning = messSyncWarning;
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
       if (dispoBaseUrl && hasServerJobId) {
@@ -7270,7 +7303,7 @@ ORDER BY
         try {
           await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, dispoBaseUrl, authSync);
         } catch (_) {
-          syncWarning = 'Zwischenstand: Dispo-Sync fehlgeschlagen.';
+          syncWarning = [syncWarning, 'Zwischenstand: Dispo-Sync fehlgeschlagen.'].filter(Boolean).join('\n');
         }
       }
 
@@ -7286,10 +7319,10 @@ ORDER BY
           });
           const syncData = await syncRes.json().catch(() => ({}));
           if (!syncRes.ok || !syncData.ok) {
-            syncWarning = 'Projekt: Anlagenstamm auf dem Server konnte nicht angepasst werden: ' + (syncData.error || syncRes.statusText || syncRes.status);
+            syncWarning = [syncWarning, 'Projekt: Anlagenstamm auf dem Server konnte nicht angepasst werden: ' + (syncData.error || syncRes.statusText || syncRes.status)].filter(Boolean).join('\n');
           }
         } catch (_) {
-          syncWarning = 'Projekt: Dispo für Anlagenstamm-Update nicht erreichbar.';
+          syncWarning = [syncWarning, 'Projekt: Dispo für Anlagenstamm-Update nicht erreichbar.'].filter(Boolean).join('\n');
         }
       }
 
@@ -7431,10 +7464,19 @@ ORDER BY
       }
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      let messSyncWarning = null;
       for (const p of protokolle) {
         if (!p || typeof p !== 'object') continue;
         const fab = String(p.fabrikationsnummer || '').trim();
         if (!fab) continue;
+        try {
+          const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, p.messwerte, p.kopf_dwc);
+          if (messSync && messSync.ok === false) {
+            messSyncWarning = [messSyncWarning, 'FN ' + fab + ': Anlagenstamm (Kraftaufnehmer/DMS/DWC) lokal nicht gespeichert'].filter(Boolean).join('\n');
+          }
+        } catch (messErr) {
+          messSyncWarning = [messSyncWarning, 'FN ' + fab + ': ' + (messErr.message || 'Anlagenstamm-Sync fehlgeschlagen')].filter(Boolean).join('\n');
+        }
         writeServiceprotokollDraft(reiseDir, fab, {
           fabrikationsnummer: fab,
           durchfuehrungsdatum,
@@ -7502,7 +7544,7 @@ ORDER BY
         }
       }
 
-      const warning = [saveData.warning, localWarning].filter(Boolean).join('\n') || undefined;
+      const warning = [messSyncWarning, saveData.warning, localWarning].filter(Boolean).join('\n') || undefined;
       res.json({
         ok: true,
         protokoll_ids: saveData.protokoll_ids || [],

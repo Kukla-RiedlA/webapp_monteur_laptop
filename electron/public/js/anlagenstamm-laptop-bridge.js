@@ -214,15 +214,8 @@
     return parent ? parent + '/' + name : name;
   }
 
-  function seedPnExpandedRoots(tree) {
-    const expanded = {};
-    if (!Array.isArray(tree)) return expanded;
-    tree.forEach((node) => {
-      if (pnNodeType(node) !== 'dir') return;
-      const rel = pnNodeRelWithParent(node, '');
-      if (rel) expanded[rel] = true;
-    });
-    return expanded;
+  function seedPnExpandedRoots(_tree) {
+    return {};
   }
 
   function pnNodeChildren(n) {
@@ -296,8 +289,8 @@
     pnExplorerState.fab = fab;
     pnExplorerState.tree = tree;
     pnExplorerState.source = (data && data.source) || '';
-    if (!pnExplorerState.expanded || !Object.keys(pnExplorerState.expanded).length) {
-      pnExplorerState.expanded = seedPnExpandedRoots(tree);
+    if (!pnExplorerState.expanded || typeof pnExplorerState.expanded !== 'object') {
+      pnExplorerState.expanded = {};
     }
     if (title) title.textContent = 'PROJEKTE NEU · ' + fab;
     if (hint) {
@@ -639,7 +632,10 @@
     target.querySelectorAll('[data-pn-thumb]').forEach((img) => {
       const row = img.closest('.dienstreise-explorer-row');
       const rel = row && row.getAttribute('data-relative-path');
-      if (rel) loadPnThumb(img, fab, rel);
+      if (rel && !img.getAttribute('data-pn-thumb-loaded')) {
+        img.setAttribute('data-pn-thumb-loaded', '1');
+        loadPnThumb(img, fab, rel);
+      }
       img.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
@@ -783,7 +779,7 @@
     if (Array.isArray(nodes) && nodes.length) {
       pnExplorerState.fab = fab;
       pnExplorerState.tree = nodes;
-      pnExplorerState.expanded = seedPnExpandedRoots(nodes);
+      pnExplorerState.expanded = {};
       resolveLocalJobForFab(fab).then((jobId) => {
         pnExplorerState.jobId = jobId;
         renderPnExplorerTree(target, fab);

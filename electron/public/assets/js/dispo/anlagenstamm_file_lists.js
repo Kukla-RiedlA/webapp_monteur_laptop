@@ -204,6 +204,54 @@
     el.style.display = 'flex';
   }
 
+  function pnIsThumbInOpenDetails(timg) {
+    var el = timg;
+    while (el && el !== document.body) {
+      if (el.tagName === 'DETAILS' && !el.open) return false;
+      el = el.parentElement;
+    }
+    return true;
+  }
+
+  function pnLoadPendingThumbsIn(container) {
+    if (!container) return;
+    container.querySelectorAll('img.anlagen-pn-thumb-pending').forEach(function (thumb) {
+      if (!pnIsThumbInOpenDetails(thumb)) return;
+      var hrefBase = thumb.getAttribute('data-pn-href-base');
+      var label = thumb.getAttribute('data-pn-label') || '';
+      var galleryJson = thumb.getAttribute('data-pn-gallery');
+      if (!hrefBase) return;
+      thumb.classList.remove('anlagen-pn-thumb-pending');
+      thumb.loading = 'lazy';
+      thumb.src = hrefBase + '&thumb=1&thumb_max=256';
+      thumb.addEventListener('click', function () {
+        var fullUrl = hrefBase + '&inline=1';
+        var galleryImages = [];
+        try {
+          galleryImages = galleryJson ? JSON.parse(galleryJson) : [];
+        } catch (e) { /* ignore */ }
+        var idx = 0;
+        for (var gi = 0; gi < galleryImages.length; gi++) {
+          if (galleryImages[gi].url === fullUrl || String(galleryImages[gi].label) === label) {
+            idx = gi;
+            break;
+          }
+        }
+        pnOpenProjekteNeuImageLightboxLists(fullUrl, label, galleryImages, idx);
+      });
+    });
+  }
+
+  function pnBindLazyThumbs(root) {
+    if (!root || root.getAttribute('data-pn-lazy-thumbs') === '1') return;
+    root.setAttribute('data-pn-lazy-thumbs', '1');
+    root.addEventListener('toggle', function (ev) {
+      var det = ev.target;
+      if (!det || det.tagName !== 'DETAILS' || !det.open) return;
+      pnLoadPendingThumbsIn(det);
+    }, true);
+  }
+
   function walkTreeUl(fab, nodes, depth, galleryImages) {
     depth = depth || 0;
     if (depth === 0 && !galleryImages) {
@@ -216,13 +264,17 @@
       if (!n || !n.type) return;
       var li = document.createElement('li');
       if (n.type === 'dir') {
-        var strong = document.createElement('strong');
-        strong.className = 'anlagen-pn-dir';
-        strong.textContent = n.name || '(Ordner)';
-        li.appendChild(strong);
+        var details = document.createElement('details');
+        details.className = 'anlagenstamm-pn-details';
+        details.open = false;
+        var summary = document.createElement('summary');
+        summary.className = 'anlagen-pn-dir';
+        summary.textContent = n.name || '(Ordner)';
+        details.appendChild(summary);
         if (n.children && n.children.length) {
-          li.appendChild(walkTreeUl(fab, n.children, depth + 1, galleryImages));
+          details.appendChild(walkTreeUl(fab, n.children, depth + 1, galleryImages));
         }
+        li.appendChild(details);
       } else if (n.type === 'file') {
         var rel = n.rel || '';
         var label = n.name || rel || '(Datei)';
@@ -231,21 +283,13 @@
         wrap.className = 'anlagen-pn-file-row';
         if (pnRasterImageByNameForLists(label)) {
           var thumb = document.createElement('img');
-          thumb.className = 'anlagen-pn-thumb';
-          thumb.loading = 'lazy';
+          thumb.className = 'anlagen-pn-thumb anlagen-pn-thumb-pending';
           thumb.alt = label;
-          thumb.src = hrefBase + '&thumb=1&thumb_max=256';
-          thumb.addEventListener('click', function () {
-            var fullUrl = hrefBase + '&inline=1';
-            var idx = 0;
-            for (var gi = 0; gi < galleryImages.length; gi++) {
-              if (galleryImages[gi].url === fullUrl || String(galleryImages[gi].label) === label) {
-                idx = gi;
-                break;
-              }
-            }
-            pnOpenProjekteNeuImageLightboxLists(fullUrl, label, galleryImages, idx);
-          });
+          thumb.setAttribute('data-pn-href-base', hrefBase);
+          thumb.setAttribute('data-pn-label', label);
+          try {
+            thumb.setAttribute('data-pn-gallery', JSON.stringify(galleryImages || []));
+          } catch (e) { /* ignore */ }
           wrap.appendChild(thumb);
         } else {
           var ic = document.createElement('span');
@@ -287,11 +331,15 @@
       if (htxt) {
         var block = document.createElement('div');
         block.className = 'anlagen-pn-tree-block';
-        var head = document.createElement('div');
-        head.className = 'anlagen-pn-parent-heading';
-        head.textContent = htxt;
-        block.appendChild(head);
-        block.appendChild(ul);
+        var detRoot = document.createElement('details');
+        detRoot.className = 'anlagenstamm-pn-details';
+        detRoot.open = false;
+        var sumRoot = document.createElement('summary');
+        sumRoot.className = 'anlagen-pn-parent-heading';
+        sumRoot.textContent = htxt;
+        detRoot.appendChild(sumRoot);
+        detRoot.appendChild(ul);
+        block.appendChild(detRoot);
         return block;
       }
     }
@@ -317,6 +365,8 @@
       return;
     }
     treeEl.appendChild(walkTreeUl(fab, nodes));
+    pnBindLazyThumbs(treeEl);
+    pnLoadPendingThumbsIn(treeEl);
   }
 
   /**
