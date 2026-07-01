@@ -93,7 +93,7 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_fab ON anlagenstamm_local(fabrikationsnummer)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_type ON anlagenstamm_local(type)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_kunde ON anlagenstamm_local(aktueller_kunde)');
-  for (const col of ['pn_root_name TEXT', 'ted_mechanik TEXT']) {
+  for (const col of ['pn_root_name TEXT', 'ted_mechanik TEXT', 'kraftaufnehmer_extra TEXT']) {
     try {
       run(`ALTER TABLE anlagenstamm_local ADD COLUMN ${col}`);
     } catch (err) {
@@ -209,11 +209,39 @@ function rowCount(db) {
   return r && r.c != null ? Number(r.c) : 0;
 }
 
-const ANLAGENSTAMM_LOCAL_SELECT = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+const ANLAGENSTAMM_LOCAL_SELECT = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
               material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
               geliefert_ueber, projekt, bemerkungen, customer_country,
               pn_root_name, ted_mechanik, dirty, synced_at
        FROM anlagenstamm_local`;
+
+function parseKraftaufnehmerExtra(raw) {
+  if (raw == null || raw === '') return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => (item == null ? '' : String(item).trim()))
+      .filter(Boolean)
+      .slice(0, 20);
+  }
+  try {
+    const parsed = JSON.parse(String(raw));
+    return Array.isArray(parsed)
+      ? parsed.map((item) => String(item).trim()).filter(Boolean).slice(0, 20)
+      : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function encodeKraftaufnehmerExtraForDb(raw) {
+  const items = parseKraftaufnehmerExtra(raw);
+  if (!items.length) return '';
+  try {
+    return JSON.stringify(items);
+  } catch (_) {
+    return '';
+  }
+}
 
 function parseTedMechanik(raw) {
   if (raw == null || raw === '') return [];
@@ -234,6 +262,7 @@ function mapRowToListApi(row) {
     type: row.type || '',
     leistung: row.leistung || '',
     kraftaufnehmer: row.kraftaufnehmer || '',
+    kraftaufnehmer_extra: parseKraftaufnehmerExtra(row.kraftaufnehmer_extra),
     nenngeschwindigkeit: row.nenngeschwindigkeit || '',
     material: row.material || '',
     tacho: row.tacho || '',
@@ -415,6 +444,13 @@ function mergeAnlagenstammPayload(existing, incoming) {
     else if (exVal !== '') out[k] = exVal;
     else out[k] = '';
   }
+  if (Object.prototype.hasOwnProperty.call(inc, 'kraftaufnehmer_extra')) {
+    out.kraftaufnehmer_extra = encodeKraftaufnehmerExtraForDb(inc.kraftaufnehmer_extra);
+  } else if (ex.kraftaufnehmer_extra != null && String(ex.kraftaufnehmer_extra) !== '') {
+    out.kraftaufnehmer_extra = String(ex.kraftaufnehmer_extra);
+  } else {
+    out.kraftaufnehmer_extra = '';
+  }
   return out;
 }
 
@@ -436,6 +472,9 @@ function stripEmptyStammFieldsForDispoPush(payload, existing) {
     const v = stammFieldTrim(merged[k]);
     if (v !== '') out[k] = v;
   }
+  if (Object.prototype.hasOwnProperty.call(payload, 'kraftaufnehmer_extra')) {
+    out.kraftaufnehmer_extra = merged.kraftaufnehmer_extra || '';
+  }
   return clampForDispoAnlagenstamm(out);
 }
 
@@ -456,18 +495,19 @@ function clampFabrikationsnummernJson(jsonStr) {
 
 const UPSERT_ANLAGENSTAMM_SQL = `
     INSERT INTO anlagenstamm_local (
-      id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+      id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
       material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
       geliefert_ueber, projekt, bemerkungen, customer_country, pn_root_name, ted_mechanik,
       synced_at, dirty
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
     )
     ON CONFLICT(id) DO UPDATE SET
       fabrikationsnummer = excluded.fabrikationsnummer,
       type = excluded.type,
       leistung = excluded.leistung,
       kraftaufnehmer = excluded.kraftaufnehmer,
+      kraftaufnehmer_extra = excluded.kraftaufnehmer_extra,
       nenngeschwindigkeit = excluded.nenngeschwindigkeit,
       material = excluded.material,
       tacho = excluded.tacho,
@@ -660,6 +700,7 @@ function upsertAnlagenstammRows(db, rows) {
     removeEmptyDirtyStub(byId);
     let pnRoot = row.pn_root_name != null ? String(row.pn_root_name).trim() : '';
     let tedJson = serializeTedMechanikForDb(row.ted_mechanik);
+    let kaExtraJson = encodeKraftaufnehmerExtraForDb(row.kraftaufnehmer_extra);
     const preserveFrom = byId || (fab ? lookupByFab(db, fab) : null);
     if (preserveFrom && Number(preserveFrom.dirty) !== 1) {
       if (!pnRoot) {
@@ -670,6 +711,10 @@ function upsertAnlagenstammRows(db, rows) {
         const existingTedJson = serializeTedMechanikForDb(parseTedMechanik(preserveFrom.ted_mechanik));
         if (existingTedJson) tedJson = existingTedJson;
       }
+      if (!kaExtraJson) {
+        const existingKa = encodeKraftaufnehmerExtraForDb(preserveFrom.kraftaufnehmer_extra);
+        if (existingKa) kaExtraJson = existingKa;
+      }
     }
     upsertStmt.run(
       id,
@@ -677,6 +722,7 @@ function upsertAnlagenstammRows(db, rows) {
       row.type != null ? String(row.type) : '',
       row.leistung != null ? String(row.leistung) : '',
       row.kraftaufnehmer != null ? String(row.kraftaufnehmer) : '',
+      kaExtraJson,
       row.nenngeschwindigkeit != null ? String(row.nenngeschwindigkeit) : '',
       row.material != null ? String(row.material) : '',
       row.tacho != null ? String(row.tacho) : '',
@@ -764,7 +810,7 @@ function fabLookupKeys(fab) {
 }
 
 function lookupByFab(db, fab) {
-  const sql = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+  const sql = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
           material, tacho, elektronik, dms_nr, position, aktueller_kunde, letzter_besuch,
           geliefert_ueber, projekt, bemerkungen, dirty
          FROM anlagenstamm_local
@@ -826,6 +872,7 @@ function saveLocal(db, payload) {
     type: merged.type != null ? String(merged.type) : '',
     leistung: merged.leistung != null ? String(merged.leistung) : '',
     kraftaufnehmer: merged.kraftaufnehmer != null ? String(merged.kraftaufnehmer) : '',
+    kraftaufnehmer_extra: encodeKraftaufnehmerExtraForDb(merged.kraftaufnehmer_extra),
     nenngeschwindigkeit: merged.nenngeschwindigkeit != null ? String(merged.nenngeschwindigkeit) : '',
     material: merged.material != null ? String(merged.material) : '',
     tacho: merged.tacho != null ? String(merged.tacho) : '',
@@ -842,6 +889,7 @@ function saveLocal(db, payload) {
     fields.type,
     fields.leistung,
     fields.kraftaufnehmer,
+    fields.kraftaufnehmer_extra,
     fields.nenngeschwindigkeit,
     fields.material,
     fields.tacho,
@@ -856,7 +904,7 @@ function saveLocal(db, payload) {
   if (existing && existing.id) {
     db.prepare(
       `UPDATE anlagenstamm_local SET
-        fabrikationsnummer = ?, type = ?, leistung = ?, kraftaufnehmer = ?, nenngeschwindigkeit = ?,
+        fabrikationsnummer = ?, type = ?, leistung = ?, kraftaufnehmer = ?, kraftaufnehmer_extra = ?, nenngeschwindigkeit = ?,
         material = ?, tacho = ?, elektronik = ?, dms_nr = ?, position = ?,
         geliefert_ueber = ?, projekt = ?, bemerkungen = ?, dirty = 1, synced_at = ?
        WHERE id = ?`,
@@ -865,16 +913,16 @@ function saveLocal(db, payload) {
   } else if (id > 0) {
     db.prepare(
       `INSERT INTO anlagenstamm_local (
-        id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+        id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
         material, tacho, elektronik, dms_nr, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     ).run(id, ...fieldArgs);
   } else {
     const ins = db.prepare(
       `INSERT INTO anlagenstamm_local (
-        fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+        fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
         material, tacho, elektronik, dms_nr, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     );
     const r = ins.run(...fieldArgs);
     id = Number(r.lastInsertRowid);

@@ -101,7 +101,11 @@
         <div class="form-group"><label>Type</label><input type="text" name="type" id="formType"></div>
         <div class="form-group"><label>Leistung</label><input type="text" name="leistung" id="formLeistung"></div>
         <div class="form-group"><label>Nenngeschwindigkeit</label><input type="text" name="nenngeschwindigkeit" id="formNenngeschwindigkeit"></div>
-        <div class="form-group"><label>Kraftaufnehmer</label><input type="text" name="kraftaufnehmer" id="formKraftaufnehmer"></div>
+        <div class="form-group form-group-full kraftaufnehmer-block" id="kraftaufnehmerBlock">
+          <div id="kraftaufnehmerRows"></div>
+          <button type="button" class="btn btn-secondary btn-kraftaufnehmer-add" id="btnAddKraftaufnehmer">+ Kraftaufnehmer</button>
+          <input type="hidden" name="kraftaufnehmer_extra" id="formKraftaufnehmerExtra" value="">
+        </div>
         <div class="form-group"><label>Material</label><input type="text" name="material" id="formMaterial"></div>
         <div class="form-group"><label>Tacho</label><input type="text" name="tacho" id="formTacho"></div>
         <div class="form-group"><label>Elektronik</label><input type="text" name="elektronik" id="formElektronik"></div>
@@ -113,7 +117,11 @@
       </div>
       <div class="upload-section">
         <div id="anlagenDocsRoot" data-active-tab="docs"></div>
-        <div id="modalPnTreeForm" class="anlagen-pn-tree"></div>
+        <details id="modalPnTreeToggle" class="anlagenstamm-pn-details anlagenstamm-pn-root" style="margin-top:12px">
+          <summary><strong>PROJEKTE NEU</strong></summary>
+          <p id="modalPnHintForm" class="muted" style="font-size:12px;margin:0.35rem 0"></p>
+          <div id="modalPnTreeForm" class="anlagen-pn-tree"></div>
+        </details>
       </div>
       <div class="form-actions" style="margin-top:20px">
         <span id="modalDeleteWrap" style="display:none;margin-right:auto"><button type="button" class="btn btn-delete" id="modalBtnDelete">Löschen</button></span>

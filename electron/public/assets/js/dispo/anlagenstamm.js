@@ -947,21 +947,10 @@ function renderPnModalTree(fab, nodes, target) {
         wrap.className = 'anlagen-pn-file-row';
         if (pnRasterImageByName(label)) {
           const thumb = document.createElement('img');
-          thumb.className = 'anlagen-pn-thumb';
-          thumb.loading = 'lazy';
+          thumb.className = 'anlagen-pn-thumb anlagen-pn-thumb-pending';
           thumb.alt = label;
-          thumb.src = hrefBase + '&thumb=1&thumb_max=256';
-          thumb.addEventListener('click', () => {
-            const fullUrl = hrefBase + '&inline=1';
-            let idx = 0;
-            for (let i = 0; i < galleryImages.length; i++) {
-              if (galleryImages[i].url === fullUrl || String(galleryImages[i].label) === label) {
-                idx = i;
-                break;
-              }
-            }
-            pnOpenProjekteNeuImageLightbox(fullUrl, label, galleryImages, idx);
-          });
+          thumb.setAttribute('data-pn-href-base', hrefBase);
+          thumb.setAttribute('data-pn-label', label);
           wrap.appendChild(thumb);
         } else {
           const ic = document.createElement('span');
@@ -997,6 +986,32 @@ function renderPnModalTree(fab, nodes, target) {
     return ul;
   };
   target.appendChild(buildList(nodes));
+  if (!target.getAttribute('data-pn-lazy-thumbs')) {
+    target.setAttribute('data-pn-lazy-thumbs', '1');
+    target.addEventListener('toggle', function (ev) {
+      const det = ev.target;
+      if (!det || det.tagName !== 'DETAILS' || !det.open) return;
+      det.querySelectorAll('img.anlagen-pn-thumb-pending').forEach(function (thumb) {
+        const hrefBase = thumb.getAttribute('data-pn-href-base');
+        const label = thumb.getAttribute('data-pn-label') || '';
+        if (!hrefBase) return;
+        thumb.classList.remove('anlagen-pn-thumb-pending');
+        thumb.loading = 'lazy';
+        thumb.src = hrefBase + '&thumb=1&thumb_max=256';
+        thumb.addEventListener('click', function () {
+          const fullUrl = hrefBase + '&inline=1';
+          let idx = 0;
+          for (let i = 0; i < galleryImages.length; i++) {
+            if (galleryImages[i].url === fullUrl || String(galleryImages[i].label) === label) {
+              idx = i;
+              break;
+            }
+          }
+          pnOpenProjekteNeuImageLightbox(fullUrl, label, galleryImages, idx);
+        });
+      });
+    }, true);
+  }
 }
 
 function fetchPnTreeByFab(fab) {
@@ -1067,16 +1082,42 @@ function setupPnTreeModal() {
 }
 
 function loadModalFilesForFab(fab) {
-  if (typeof window.anlagenstammFetchFilesPanels === 'function') {
-    window.anlagenstammFetchFilesPanels(fab, {
-      listUl: null,
-      pnTree: document.getElementById('modalPnTreeForm'),
-      pnHint: document.getElementById('modalPnHintForm')
-    });
-  }
   if (typeof window.anlagenstammDocumentsRefresh === 'function') {
     window.anlagenstammDocumentsRefresh();
   }
+  var pnToggle = document.getElementById('modalPnTreeToggle');
+  var pnTree = document.getElementById('modalPnTreeForm');
+  var pnHint = document.getElementById('modalPnHintForm');
+  function fetchPnPanels() {
+    var pendingFab = (pnToggle && pnToggle._pnPendingFab) || fab;
+    if (typeof window.anlagenstammFetchFilesPanels !== 'function') return;
+    window.anlagenstammFetchFilesPanels(pendingFab, {
+      listUl: null,
+      pnTree: pnTree,
+      pnHint: pnHint
+    });
+  }
+  if (pnToggle && pnTree) {
+    pnToggle.open = false;
+    pnToggle.removeAttribute('data-pn-loaded');
+    pnTree.innerHTML = '';
+    if (pnHint) {
+      pnHint.textContent = 'Aufklappen für Ordner – Vorschaubilder laden beim Öffnen eines Ordners.';
+    }
+    pnToggle._pnPendingFab = fab;
+    if (!pnToggle._pnBound) {
+      pnToggle._pnBound = true;
+      pnToggle.addEventListener('toggle', function () {
+        if (!pnToggle.open || pnToggle.getAttribute('data-pn-loaded') === '1') return;
+        var pendingFab = pnToggle._pnPendingFab;
+        if (!pendingFab) return;
+        fetchPnPanels();
+        pnToggle.setAttribute('data-pn-loaded', '1');
+      });
+    }
+    return;
+  }
+  fetchPnPanels();
 }
 
 function fillFormFromRow(row) {
@@ -1090,7 +1131,6 @@ function fillFormFromRow(row) {
   set('formType', row.type || '');
   set('formLeistung', row.leistung || '');
   set('formNenngeschwindigkeit', row.nenngeschwindigkeit || '');
-  set('formKraftaufnehmer', row.kraftaufnehmer || '');
   set('formMaterial', row.material || '');
   set('formTacho', row.tacho || '');
   set('formElektronik', row.elektronik || '');
@@ -1099,6 +1139,15 @@ function fillFormFromRow(row) {
   set('formGeliefertUeber', row.geliefert_ueber || '');
   set('formProjekt', row.projekt || '');
   set('formBemerkungen', row.bemerkungen || '');
+  if (typeof window.kuklaInitKraftaufnehmerRows === 'function') {
+    window.kuklaInitKraftaufnehmerRows({
+      readOnly: anlagenReadOnly,
+      primaryValue: row.kraftaufnehmer || '',
+      row: row
+    });
+  } else {
+    set('formKraftaufnehmer', row.kraftaufnehmer || '');
+  }
 }
 
 function openFormModal() {
@@ -1174,6 +1223,7 @@ function deleteRow(id, fab) {
 if (anlagenForm && !anlagenReadOnly) {
   anlagenForm.addEventListener('submit', function(e) {
   e.preventDefault();
+  if (typeof window.kuklaCollectKraftaufnehmerExtra === 'function') window.kuklaCollectKraftaufnehmerExtra();
   const fd = new FormData(this);
   fetch(anlagenstammApiUrl('api/anlagenstamm_save.php'), { method: 'POST', body: fd, headers: anlagenstammApiHeaders() })
     .then(r => r.json())
@@ -1467,4 +1517,12 @@ if (typeof window !== 'undefined') {
     var bc = new BroadcastChannel('anlagenstamm-refresh');
     bc.onmessage = function () { refreshFromPopup(); };
   } catch (err) { /* BroadcastChannel nicht unterstützt */ }
+}
+
+if (document.getElementById('kraftaufnehmerRows') && typeof window.kuklaInitKraftaufnehmerRows === 'function') {
+  window.kuklaInitKraftaufnehmerRows({
+    readOnly: anlagenReadOnly,
+    primaryValue: '',
+    extras: []
+  });
 }

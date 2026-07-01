@@ -4040,7 +4040,7 @@
     modalHtml += '</dl></div></div>';
     modalHtml += '<details class="anlage-detail-projekte-neu" id="anlageDetailProjekteNeuToggle">';
     modalHtml += '<summary><strong>PROJEKTE NEU</strong></summary>';
-    modalHtml += '<div id="anlageDetailProjekteNeuMessage" class="muted" style="margin:0.5rem 0">Lade Struktur…</div>';
+    modalHtml += '<div id="anlageDetailProjekteNeuMessage" class="muted" style="margin:0.5rem 0">Aufklappen für Ordnerstruktur und Dateien.</div>';
     modalHtml += '<div id="anlageDetailProjekteNeuTree" style="margin-top:0.35rem"></div>';
     modalHtml += '</details>';
     modalHtml += '<div class="anlage-detail-actions">';
@@ -4071,6 +4071,11 @@
       pnToggle.addEventListener('toggle', function () {
         if (!pnToggle.open || pnToggle.getAttribute('data-loaded') === '1') return;
         loadAnlagePnTree();
+      });
+      pnToggle.addEventListener('toggle', function () {
+        if (!pnToggle.open) return;
+        var treeHostPn = document.getElementById('anlageDetailProjekteNeuTree');
+        if (treeHostPn) loadPendingProjekteNeuThumbsIn(treeHostPn);
       });
     }
     function syncModalInputsFromBuiltRow(row) {
@@ -7680,7 +7685,15 @@
       '<div><label for="as-form-type">Type</label><input type="text" id="as-form-type" value="' + v('type') + '"></div>' +
       '<div><label for="as-form-leistung">Leistung</label><input type="text" id="as-form-leistung" value="' + v('leistung') + '"></div>' +
       '<div><label for="as-form-nenngeschwindigkeit">Nenngeschwindigkeit</label><input type="text" id="as-form-nenngeschwindigkeit" value="' + v('nenngeschwindigkeit') + '"></div>' +
-      '<div><label for="as-form-kraftaufnehmer">Kraftaufnehmer</label><input type="text" id="as-form-kraftaufnehmer" value="' + v('kraftaufnehmer') + '"></div>' +
+      '</div></div>' +
+      '<div class="anlagenstamm-form-section"><h4>Kraftaufnehmer</h4><div class="anlagenstamm-form-grid">' +
+      '<div class="form-full kraftaufnehmer-block" id="kraftaufnehmerBlock">' +
+      '<div id="kraftaufnehmerRows"></div>' +
+      '<button type="button" class="btn btn-secondary btn-kraftaufnehmer-add" id="btnAddKraftaufnehmer">+ Kraftaufnehmer</button>' +
+      '<input type="hidden" id="as-form-kraftaufnehmer-extra" name="kraftaufnehmer_extra" value="">' +
+      '</div>' +
+      '</div></div>' +
+      '<div class="anlagenstamm-form-section"><h4>Technik (Forts.)</h4><div class="anlagenstamm-form-grid">' +
       '<div><label for="as-form-material">Material</label><input type="text" id="as-form-material" value="' + v('material') + '"></div>' +
       '<div><label for="as-form-position">Position</label><input type="text" id="as-form-position" value="' + v('position') + '"></div>' +
       '</div></div>' +
@@ -7946,6 +7959,8 @@
   function readAnlagenstammFormPayload() {
     var fabEl = document.getElementById('as-form-fab');
     if (!fabEl) return null;
+    if (typeof window.kuklaCollectKraftaufnehmerExtra === 'function') window.kuklaCollectKraftaufnehmerExtra();
+    var extraEl = document.getElementById('as-form-kraftaufnehmer-extra');
     return Object.assign({
       baseUrl: getDispoBaseUrl(),
       serverUsername: getServerUsername(),
@@ -7956,6 +7971,7 @@
       leistung: ((document.getElementById('as-form-leistung') || {}).value || ''),
       nenngeschwindigkeit: ((document.getElementById('as-form-nenngeschwindigkeit') || {}).value || ''),
       kraftaufnehmer: ((document.getElementById('as-form-kraftaufnehmer') || {}).value || ''),
+      kraftaufnehmer_extra: extraEl ? (extraEl.value || '') : '',
       material: ((document.getElementById('as-form-material') || {}).value || ''),
       tacho: ((document.getElementById('as-form-tacho') || {}).value || ''),
       elektronik: ((document.getElementById('as-form-elektronik') || {}).value || ''),
@@ -7971,6 +7987,19 @@
     var cardEl = document.getElementById('anlagenstammCard');
     if (!cardEl) return;
     cardEl.innerHTML = buildAnlagenstammFormHtml(a, fab);
+    if (typeof window.kuklaInitKraftaufnehmerRows === 'function') {
+      var extras = (typeof window.kuklaParseKraftaufnehmerExtraFromRow === 'function')
+        ? window.kuklaParseKraftaufnehmerExtraFromRow(a || {})
+        : [];
+      window.kuklaInitKraftaufnehmerRows({
+        primaryInputId: 'as-form-kraftaufnehmer',
+        hiddenInputId: 'as-form-kraftaufnehmer-extra',
+        primaryName: 'kraftaufnehmer',
+        primaryValue: (a && a.kraftaufnehmer) ? String(a.kraftaufnehmer) : '',
+        extras: extras,
+        readOnly: false
+      });
+    }
     var saveBtn = document.getElementById('btnAnlagenstammSave');
     if (saveBtn) saveBtn.addEventListener('click', function () { saveAnlagenstammFromForm(); });
   }
@@ -7996,6 +8025,7 @@
         leistung: payload.leistung,
         nenngeschwindigkeit: payload.nenngeschwindigkeit,
         kraftaufnehmer: payload.kraftaufnehmer,
+        kraftaufnehmer_extra: payload.kraftaufnehmer_extra,
         material: payload.material,
         tacho: payload.tacho,
         elektronik: payload.elektronik,
@@ -8329,9 +8359,15 @@
     var pnSecL = document.getElementById('anlagenstammPnSection');
     var pnTreeL = document.getElementById('anlagenstammPnTree');
     var pnHintL = document.getElementById('anlagenstammPnHint');
+    var pnToggleL = document.getElementById('anlagenstammPnToggle');
     if (pnSecL) pnSecL.style.display = 'none';
     if (pnTreeL) pnTreeL.innerHTML = '';
     if (pnHintL) pnHintL.textContent = '';
+    if (pnToggleL) {
+      pnToggleL.open = false;
+      pnToggleL.removeAttribute('data-pn-rendered');
+      pnToggleL._pnPending = null;
+    }
     try {
       var payload = {
         baseUrl: getDispoBaseUrl(),
@@ -8367,9 +8403,14 @@
       var pnSection = document.getElementById('anlagenstammPnSection');
       var pnTreeEl = document.getElementById('anlagenstammPnTree');
       var pnHintEl = document.getElementById('anlagenstammPnHint');
+      var pnToggle = document.getElementById('anlagenstammPnToggle');
       if (pnSection && pnTreeEl && pnHintEl) {
         pnSection.style.display = 'block';
         pnTreeEl.innerHTML = '';
+        if (pnToggle) {
+          pnToggle.open = false;
+          pnToggle.removeAttribute('data-pn-rendered');
+        }
         var pnRaw = files && files.projekte_neu ? files.projekte_neu : {};
         var cached = await fetch(API_BASE + '/api/anlagenstamm_tree_cached?fab=' + encodeURIComponent(fab), {
           headers: { 'X-Technician-Id': String(getTechId() || '') }
@@ -8377,18 +8418,14 @@
         var cachedTree = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
         var usedCache = cached && cached.found && (cached.projects_enabled === true || cached.projects_enabled === 1);
         if (pnRaw && pnRaw.enabled) {
-          pnHintEl.textContent = 'Ordner zum Aufklappen – Datei per Klick öffnen.';
           var tr = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
-          if (!tr.length) {
-            pnTreeEl.innerHTML = '<div class="empty" style="padding:0.35rem 0">Keine Einträge in diesem Fabrikationsordner.</div>';
-          } else {
-            appendProjekteNeuTreeForAnlagenstamm(pnTreeEl, fab, tr, msgEl);
-          }
+          scheduleAnlagenstammPnTreeRender(pnTreeEl, fab, tr, msgEl, pnHintEl, pnToggle);
         } else if (usedCache && cachedTree.length) {
-          pnHintEl.textContent = 'PROJEKTE NEU (lokaler Cache). Verbindung prüfen für Aktualisierung.';
-          appendProjekteNeuTreeForAnlagenstamm(pnTreeEl, fab, cachedTree, msgEl);
+          pnHintEl.textContent = 'PROJEKTE NEU (lokaler Cache). Aufklappen für Ordner – Verbindung prüfen für Aktualisierung.';
+          scheduleAnlagenstammPnTreeRender(pnTreeEl, fab, cachedTree, msgEl, pnHintEl, pnToggle);
         } else {
           pnHintEl.textContent = 'PROJEKTE NEU ist nicht verfügbar oder der Fabrikationsordner wurde auf dem Mount nicht gefunden.';
+          if (pnToggle) pnToggle._pnPending = null;
         }
       }
       if (msgEl) msgEl.textContent = '';
@@ -8397,9 +8434,15 @@
       var pnSecE = document.getElementById('anlagenstammPnSection');
       var pnTreeE = document.getElementById('anlagenstammPnTree');
       var pnHintE = document.getElementById('anlagenstammPnHint');
+      var pnToggleE = document.getElementById('anlagenstammPnToggle');
       if (pnSecE) pnSecE.style.display = 'none';
       if (pnTreeE) pnTreeE.innerHTML = '';
       if (pnHintE) pnHintE.textContent = '';
+      if (pnToggleE) {
+        pnToggleE.open = false;
+        pnToggleE.removeAttribute('data-pn-rendered');
+        pnToggleE._pnPending = null;
+      }
     }
   }
 
@@ -8751,6 +8794,41 @@
       timg.onerror = null;
       enqueueProjekteNeuThumbnailLoad(timg, fab, rel, opts);
     };
+  }
+
+  function isProjekteNeuThumbInOpenDetails(timg) {
+    var el = timg;
+    while (el && el !== document.body) {
+      if (el.tagName === 'DETAILS' && !el.open) return false;
+      el = el.parentElement;
+    }
+    return true;
+  }
+
+  function loadPendingProjekteNeuThumbsIn(container) {
+    if (!container) return;
+    container.querySelectorAll('img.projekte-neu-thumb-pending').forEach(function (timg) {
+      if (!isProjekteNeuThumbInOpenDetails(timg)) return;
+      var fab = timg.getAttribute('data-pn-fab');
+      var rel = timg.getAttribute('data-pn-rel');
+      if (!fab || !rel) return;
+      timg.classList.remove('projekte-neu-thumb-pending');
+      var jobId = timg.getAttribute('data-pn-job-id');
+      loadProjekteNeuThumbnailImg(timg, fab, rel, {
+        jobId: jobId || undefined,
+        thumbMax: parseInt(timg.getAttribute('data-pn-thumb-max') || '256', 10) || 256,
+      });
+    });
+  }
+
+  function bindProjekteNeuLazyThumbnails(root) {
+    if (!root || root.getAttribute('data-pn-lazy-thumbs') === '1') return;
+    root.setAttribute('data-pn-lazy-thumbs', '1');
+    root.addEventListener('toggle', function (ev) {
+      var det = ev.target;
+      if (!det || det.tagName !== 'DETAILS' || !det.open) return;
+      loadPendingProjekteNeuThumbsIn(det);
+    }, true);
   }
 
   function resolveProjekteNeuJobId(opts) {
@@ -9177,6 +9255,7 @@
       li.style.margin = '0.15rem 0';
       if (n.type === 'dir') {
         var details = document.createElement('details');
+        details.open = false;
         var summary = document.createElement('summary');
         summary.style.cursor = 'pointer';
         summary.textContent = String(n.name || 'Ordner');
@@ -9198,11 +9277,13 @@
         fileRow.className = 'projekte-neu-file-row';
         if (isProjekteNeuRasterImage(label)) {
           var timg = document.createElement('img');
-          timg.className = 'projekte-neu-thumb';
+          timg.className = 'projekte-neu-thumb projekte-neu-thumb-pending';
           timg.alt = label;
-          timg.loading = 'lazy';
+          timg.setAttribute('data-pn-fab', fab);
+          timg.setAttribute('data-pn-rel', rel);
+          timg.setAttribute('data-pn-thumb-max', '256');
+          if (jobDetailsJobId) timg.setAttribute('data-pn-job-id', String(jobDetailsJobId));
           fileRow.appendChild(timg);
-          loadProjekteNeuThumbnailImg(timg, fab, rel, { jobId: jobDetailsJobId, thumbMax: 256 });
           timg.addEventListener('click', function (ev) {
             ev.preventDefault();
             ev.stopPropagation();
@@ -9259,17 +9340,53 @@
     return wrap;
   }
 
+  /** PROJEKTE NEU im Anlagenstamm: Baum erst beim Aufklappen rendern. */
+  function scheduleAnlagenstammPnTreeRender(pnTreeEl, fab, nodes, msgEl, pnHintEl, pnToggle) {
+    if (!pnTreeEl) return;
+    var tree = Array.isArray(nodes) ? nodes : [];
+    if (pnHintEl && !pnHintEl.textContent) {
+      pnHintEl.textContent = tree.length
+        ? 'Aufklappen für Ordner – Vorschaubilder laden beim Öffnen eines Ordners.'
+        : 'Aufklappen – keine Einträge in diesem Fabrikationsordner.';
+    }
+    if (!pnToggle) {
+      if (!tree.length) {
+        pnTreeEl.innerHTML = '<div class="empty" style="padding:0.35rem 0">Keine Einträge in diesem Fabrikationsordner.</div>';
+        return;
+      }
+      appendProjekteNeuTreeForAnlagenstamm(pnTreeEl, fab, tree, msgEl);
+      return;
+    }
+    pnToggle._pnPending = { fab: fab, tree: tree, msgEl: msgEl };
+    if (pnToggle.getAttribute('data-pn-toggle-bound') !== '1') {
+      pnToggle.setAttribute('data-pn-toggle-bound', '1');
+      pnToggle.addEventListener('toggle', function () {
+        if (!pnToggle.open || pnToggle.getAttribute('data-pn-rendered') === '1') return;
+        var pending = pnToggle._pnPending;
+        pnTreeEl.innerHTML = '';
+        if (!pending || !pending.tree || !pending.tree.length) {
+          pnTreeEl.innerHTML = '<div class="empty" style="padding:0.35rem 0">Keine Einträge in diesem Fabrikationsordner.</div>';
+        } else {
+          appendProjekteNeuTreeForAnlagenstamm(pnTreeEl, pending.fab, pending.tree, pending.msgEl);
+        }
+        pnToggle.setAttribute('data-pn-rendered', '1');
+      });
+    }
+  }
+
   /** Wie Projektdaten: Vorschaubilder + Lightbox; optional gleicher Parent-Heading wie früher im reinen UL-Renderer. */
   function appendProjekteNeuTreeForAnlagenstamm(pnTreeEl, fab, nodes, msgEl) {
     if (!pnTreeEl || !nodes || !nodes.length) return;
     bindProjekteNeuLightboxOnce();
     var treeRoot = buildAnlageDetailProjekteNeuTree(fab, nodes, 0, msgEl);
+    bindProjekteNeuLazyThumbnails(treeRoot);
     var htxt = pnParentHeadingForSiblings(nodes);
     if (htxt) {
       var block = document.createElement('div');
       block.className = 'anlagenstamm-pn-tree-block';
       var det = document.createElement('details');
       det.className = 'anlagenstamm-pn-details';
+      det.open = false;
       var sum = document.createElement('summary');
       sum.className = 'anlagenstamm-pn-parent-heading';
       sum.textContent = htxt;
@@ -9277,9 +9394,11 @@
       det.appendChild(treeRoot);
       block.appendChild(det);
       pnTreeEl.appendChild(block);
+      bindProjekteNeuLazyThumbnails(block);
     } else {
       pnTreeEl.appendChild(treeRoot);
     }
+    loadPendingProjekteNeuThumbsIn(pnTreeEl);
   }
 
   function fetchJsonLocal(path, hdrs, timeoutMs) {
@@ -9334,7 +9453,12 @@
     function renderTree(tree, statusText, folderName) {
       treeHost.innerHTML = '';
       if (tree && tree.length) {
-        treeHost.appendChild(buildAnlageDetailProjekteNeuTree(fab, tree, 0, msg));
+        var treeRoot = buildAnlageDetailProjekteNeuTree(fab, tree, 0, msg);
+        treeHost.appendChild(treeRoot);
+        bindProjekteNeuLazyThumbnails(treeHost);
+        if (!toggleEl || toggleEl.open) {
+          loadPendingProjekteNeuThumbsIn(treeHost);
+        }
         if (msg) {
           if (statusText) {
             msg.textContent = statusText;
@@ -12364,6 +12488,9 @@
 
     async function persistDraftJsonForFab(fab) {
       if (!fab || !jobSelect || !jobSelect.value || !serviceJobData) return;
+      try {
+        await persistServiceprotokollMesswerteToAnlagenstamm(fab);
+      } catch (e) { /* optional bei FN-Wechsel */ }
       stashDraftInMemory(fab);
       var payload = collectDraftPayloadForFab(fab);
       if (!payload.projekt) return;
@@ -12506,19 +12633,15 @@
       var mess = draft.messwerte || {};
       var messMap = [
         ['spMessType', mess.waegezelle_type],
-        ['spMessTara', mess.tara],
-        ['spMessPruefgew', mess.pruefgewicht],
-        ['spMessDms', mess.dms_entlastet],
-        ['spMessKg', mess.kg],
-        ['spMessMv', mess.mv],
-        ['spMessMa', mess.ma],
-        ['spMessG', mess.g_prozent],
+        ['spMessSeriennummer', mess.waegezelle_seriennummer],
+        ['spMessVersSpannung', mess.vers_spannung],
         ['spMessTaraspeicher', mess.taraspeicher]
       ];
       messMap.forEach(function (pair) {
         var el = document.getElementById(pair[0]);
         if (el && pair[1] != null) el.value = pair[1];
       });
+      applyMessMatrixToForm(normalizeMessMatrix(mess));
       if (Array.isArray(draft.arbeitsschritte) && draft.arbeitsschritte.length > 0) {
         arbeitsschritte = draft.arbeitsschritte.map(function (row) {
           return stepFromRaw(row);
@@ -12632,11 +12755,108 @@
       applyKopfFields({});
     }
 
+    var SP_MESS_FIELD_IDS = [
+      'spMessType', 'spMessSeriennummer', 'spMessVersSpannung',
+      'spMessDmsKg', 'spMessDmsMv', 'spMessDmsMa', 'spMessDmsG',
+      'spMessTaraKg', 'spMessTaraMv', 'spMessTaraMa', 'spMessTaraG',
+      'spMessPgKg', 'spMessPgMv', 'spMessPgMa', 'spMessPgG',
+      'spMessTaraspeicher'
+    ];
+    var SP_MESS_ROW_FORM = [
+      { key: 'dms', prefix: 'spMessDms' },
+      { key: 'tara', prefix: 'spMessTara' },
+      { key: 'pruefgewicht', prefix: 'spMessPg' }
+    ];
+
+    function emptyMessRow() {
+      return { kg: '', mv: '', ma: '', g_prozent: '' };
+    }
+
+    function normalizeMessMatrix(mess) {
+      mess = mess || {};
+      if (mess.mess_matrix && typeof mess.mess_matrix === 'object') {
+        var mm = mess.mess_matrix;
+        return {
+          dms: Object.assign(emptyMessRow(), mm.dms || {}),
+          tara: Object.assign(emptyMessRow(), mm.tara || {}),
+          pruefgewicht: Object.assign(emptyMessRow(), mm.pruefgewicht || {})
+        };
+      }
+      var gPct = mess.g_prozent != null ? String(mess.g_prozent) : '';
+      return {
+        dms: {
+          kg: '',
+          mv: mess.dms_entlastet != null ? String(mess.dms_entlastet) : '',
+          ma: mess.ma != null ? String(mess.ma) : '',
+          g_prozent: ''
+        },
+        tara: {
+          kg: '',
+          mv: mess.tara != null ? String(mess.tara) : '',
+          ma: '',
+          g_prozent: gPct
+        },
+        pruefgewicht: {
+          kg: mess.kg != null ? String(mess.kg) : '',
+          mv: mess.pruefgewicht != null ? String(mess.pruefgewicht) : (mess.mv != null ? String(mess.mv) : ''),
+          ma: '',
+          g_prozent: gPct
+        }
+      };
+    }
+
+    function applyMessMatrixToForm(matrix) {
+      SP_MESS_ROW_FORM.forEach(function (cfg) {
+        var row = (matrix && matrix[cfg.key]) || emptyMessRow();
+        var fields = ['kg', 'mv', 'ma', 'g_prozent'];
+        var suffixes = ['Kg', 'Mv', 'Ma', 'G'];
+        for (var i = 0; i < fields.length; i++) {
+          var el = document.getElementById(cfg.prefix + suffixes[i]);
+          if (el) el.value = row[fields[i]] != null ? row[fields[i]] : '';
+        }
+      });
+    }
+
+    function collectMessMatrixFromForm() {
+      var matrix = {};
+      SP_MESS_ROW_FORM.forEach(function (cfg) {
+        matrix[cfg.key] = {
+          kg: (document.getElementById(cfg.prefix + 'Kg') || {}).value || '',
+          mv: (document.getElementById(cfg.prefix + 'Mv') || {}).value || '',
+          ma: (document.getElementById(cfg.prefix + 'Ma') || {}).value || '',
+          g_prozent: (document.getElementById(cfg.prefix + 'G') || {}).value || ''
+        };
+      });
+      return matrix;
+    }
+
+    function messwerteLegacyFromMatrix(matrix) {
+      var d = matrix.dms || emptyMessRow();
+      var t = matrix.tara || emptyMessRow();
+      var p = matrix.pruefgewicht || emptyMessRow();
+      return {
+        dms_entlastet: d.mv || '',
+        tara: t.mv || '',
+        pruefgewicht: p.mv || '',
+        kg: p.kg || '',
+        mv: p.mv || d.mv || '',
+        ma: d.ma || p.ma || '',
+        g_prozent: p.g_prozent || t.g_prozent || ''
+      };
+    }
+
     function clearMesswerteFields() {
-      ['spMessType', 'spMessTara', 'spMessPruefgew', 'spMessDms', 'spMessKg', 'spMessMv', 'spMessMa', 'spMessG', 'spMessTaraspeicher'].forEach(function (id) {
+      SP_MESS_FIELD_IDS.forEach(function (id) {
         var el = document.getElementById(id);
         if (el) el.value = '';
       });
+    }
+
+    function messSeriennummerFromStamm(apiKopf, jobKopf) {
+      var sn = (apiKopf && apiKopf.mess_waegezelle_seriennummer != null) ? String(apiKopf.mess_waegezelle_seriennummer).trim() : '';
+      if (!sn && apiKopf && apiKopf.dms_nr != null) sn = String(apiKopf.dms_nr).trim();
+      if (!sn && jobKopf && jobKopf.dms_nr != null) sn = String(jobKopf.dms_nr).trim();
+      return sn;
     }
 
     function messTypeFromStamm(apiKopf, jobKopf) {
@@ -12646,9 +12866,95 @@
     }
 
     function applyMessTypeFromStamm(apiKopf, jobKopf) {
-      var el = document.getElementById('spMessType');
-      if (!el || (el.value || '').trim()) return;
-      el.value = messTypeFromStamm(apiKopf, jobKopf);
+      var typeEl = document.getElementById('spMessType');
+      if (typeEl && !(typeEl.value || '').trim()) {
+        typeEl.value = messTypeFromStamm(apiKopf, jobKopf);
+      }
+      var snEl = document.getElementById('spMessSeriennummer');
+      if (snEl && !(snEl.value || '').trim()) {
+        snEl.value = messSeriennummerFromStamm(apiKopf, jobKopf);
+      }
+    }
+
+    function lookupAnlagenstammRowForFab(fab) {
+      fab = String(fab || '').trim();
+      if (!fab) return Promise.resolve(null);
+      return fetch(API_BASE + '/api/anlagenstamm_lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({ fab: fab })
+      })
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (data) {
+          if (data && data.ok && data.row) return data.row;
+          return null;
+        })
+        .catch(function () { return null; });
+    }
+
+    function patchServiceJobFabStammFields(fab, fields) {
+      if (!serviceJobData || !serviceJobData.fabrikationsnummern || !fields) return;
+      try {
+        var parsed = JSON.parse(serviceJobData.fabrikationsnummern);
+        if (!Array.isArray(parsed)) return;
+        var fabKey = String(fab || '').trim();
+        var touched = false;
+        for (var i = 0; i < parsed.length; i++) {
+          if (String(parsed[i].fabrikationsnummer || '').trim() !== fabKey) continue;
+          if (fields.kraftaufnehmer) parsed[i].kraftaufnehmer = fields.kraftaufnehmer;
+          if (fields.dms_nr) parsed[i].dms_nr = fields.dms_nr;
+          if (fields.elektronik) parsed[i].elektronik = fields.elektronik;
+          touched = true;
+        }
+        if (touched) {
+          serviceJobData = Object.assign({}, serviceJobData, { fabrikationsnummern: JSON.stringify(parsed) });
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    async function persistServiceprotokollMesswerteToAnlagenstamm(fab) {
+      fab = String(fab || '').trim();
+      if (!fab) return;
+      var typeVal = sanitizeLeistungField((document.getElementById('spMessType') || {}).value);
+      var snVal = sanitizeLeistungField((document.getElementById('spMessSeriennummer') || {}).value);
+      var dwcVal = sanitizeLeistungField((document.getElementById('serviceprotokollDwc') || {}).value);
+      if (!typeVal && !snVal && !dwcVal) return;
+      var existing = await lookupAnlagenstammRowForFab(fab);
+      var payload = Object.assign({
+        baseUrl: getDispoBaseUrl(),
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword(),
+        id: existing && existing.id ? parseInt(existing.id, 10) : 0,
+        fabrikationsnummer: fab
+      }, dispoBasePayloadExtra());
+      if (typeVal) payload.kraftaufnehmer = typeVal;
+      if (snVal) payload.dms_nr = snVal;
+      if (dwcVal) payload.elektronik = dwcVal;
+      await anlagenstammSaveDispo(payload);
+      patchServiceJobFabStammFields(fab, {
+        kraftaufnehmer: typeVal || (existing && existing.kraftaufnehmer) || '',
+        dms_nr: snVal || (existing && existing.dms_nr) || '',
+        elektronik: dwcVal || (existing && existing.elektronik) || ''
+      });
+      mergeAnlagenstammFieldsIntoOpenJob(fab, {
+        kraftaufnehmer: payload.kraftaufnehmer || '',
+        dms_nr: payload.dms_nr || '',
+        elektronik: payload.elektronik || ''
+      });
+    }
+
+    async function applyAnlagenstammFelderFromLocalStamm(fab) {
+      var row = await lookupAnlagenstammRowForFab(fab);
+      if (!row) return;
+      applyMessTypeFromStamm(
+        { mess_waegezelle_type: row.kraftaufnehmer, mess_waegezelle_seriennummer: row.dms_nr },
+        { kraftaufnehmer: row.kraftaufnehmer, dms_nr: row.dms_nr }
+      );
+      var dwcEl = document.getElementById('serviceprotokollDwc');
+      if (dwcEl && !(dwcEl.value || '').trim()) {
+        var dwc = sanitizeLeistungField(row.elektronik);
+        if (dwc) dwcEl.value = dwc;
+      }
     }
 
     function kopfFromJobFabRow(job, fab) {
@@ -12666,6 +12972,7 @@
             kopf_type: row.type != null ? String(row.type).trim() : '',
             kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
             kraftaufnehmer: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
+            dms_nr: row.dms_nr != null ? String(row.dms_nr).trim() : '',
             projekt: readProjektFromFabRow(row)
           };
         }
@@ -12902,21 +13209,20 @@
       } catch (e) {
         if (!draftApplied) defaultsSource = 'builtin';
       }
+      await applyAnlagenstammFelderFromLocalStamm(fab);
       renderSteps();
     }
 
     function collectMesswerte() {
-      return {
+      var matrix = collectMessMatrixFromForm();
+      var legacy = messwerteLegacyFromMatrix(matrix);
+      return Object.assign({
         waegezelle_type: (document.getElementById('spMessType') || {}).value || '',
-        tara: (document.getElementById('spMessTara') || {}).value || '',
-        pruefgewicht: (document.getElementById('spMessPruefgew') || {}).value || '',
-        dms_entlastet: (document.getElementById('spMessDms') || {}).value || '',
-        kg: (document.getElementById('spMessKg') || {}).value || '',
-        mv: (document.getElementById('spMessMv') || {}).value || '',
-        ma: (document.getElementById('spMessMa') || {}).value || '',
-        g_prozent: (document.getElementById('spMessG') || {}).value || '',
-        taraspeicher: (document.getElementById('spMessTaraspeicher') || {}).value || ''
-      };
+        waegezelle_seriennummer: (document.getElementById('spMessSeriennummer') || {}).value || '',
+        vers_spannung: (document.getElementById('spMessVersSpannung') || {}).value || '',
+        taraspeicher: (document.getElementById('spMessTaraspeicher') || {}).value || '',
+        mess_matrix: matrix
+      }, legacy);
     }
 
     async function loadServiceJobWithAnlagenstamm(jobId) {
@@ -13068,6 +13374,11 @@
         var submitButtons = form.querySelectorAll('button[type="submit"]');
         submitButtons.forEach(function (b) { b.disabled = true; });
         try {
+          try {
+            await persistServiceprotokollMesswerteToAnlagenstamm(fab);
+          } catch (persistErr) {
+            console.warn('[Serviceprotokoll] Anlagenstamm Kraftaufnehmer/DMS/DWC:', persistErr);
+          }
           var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -13124,6 +13435,14 @@
         };
         allPdfBtn.disabled = true;
         try {
+          var curFab = getActiveFab();
+          if (curFab) {
+            try {
+              await persistServiceprotokollMesswerteToAnlagenstamm(curFab);
+            } catch (persistErr) {
+              console.warn('[Serviceprotokoll] Anlagenstamm Kraftaufnehmer/DMS/DWC:', persistErr);
+            }
+          }
           var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll/all-pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -13170,9 +13489,8 @@
         renderFabButtons(null);
         updateAllPdfButtonVisibility(null);
         if (kopfdatenEl) kopfdatenEl.innerHTML = '';
-        ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollProjekt', 'serviceprotokollBemerkungen',
-          'spMessType', 'spMessTara', 'spMessPruefgew', 'spMessDms', 'spMessKg', 'spMessMv', 'spMessMa', 'spMessG', 'spMessTaraspeicher'
-        ].forEach(function (id) {
+        ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollProjekt', 'serviceprotokollBemerkungen'
+        ].concat(SP_MESS_FIELD_IDS).forEach(function (id) {
           var el = document.getElementById(id);
           if (el) el.value = '';
         });
