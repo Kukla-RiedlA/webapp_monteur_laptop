@@ -5812,9 +5812,43 @@
 
   /** idle | checking | local | offline | online | online_syncing | degraded */
   var connectionUiState = 'idle';
+  var lastDispoReachable = false;
+  var lastDispoReachableAt = 0;
+  var lastDispoOfflineReason = '';
+  var DISPO_REACHABLE_MAX_AGE_MS = 90000;
+  var CONNECTION_PROBE_INTERVAL_MS = 60000;
+  var connectionProbeIntervalId = null;
+
+  function isOsNetworkOffline() {
+    return typeof navigator !== 'undefined' && navigator.onLine === false;
+  }
+
+  function markDispoReachable() {
+    lastDispoReachable = true;
+    lastDispoReachableAt = Date.now();
+    lastDispoOfflineReason = '';
+  }
+
+  function markDispoUnreachable(reason) {
+    lastDispoReachable = false;
+    lastDispoReachableAt = Date.now();
+    lastDispoOfflineReason = (reason && String(reason).trim()) || 'Dispo nicht erreichbar';
+  }
+
+  function isDispoReachableForBadge() {
+    if (isOsNetworkOffline()) return false;
+    if (!lastDispoReachable) return false;
+    return Date.now() - lastDispoReachableAt <= DISPO_REACHABLE_MAX_AGE_MS;
+  }
+
+  function isLikelyDispoNetworkError(msg) {
+    var s = String(msg || '').toLowerCase();
+    return /timeout|nicht erreichbar|dispo-probe|failed to fetch|network|econnrefused|enotfound|abort|zeitüberschreitung/i.test(s);
+  }
 
   function preferLocalProjekteNeuOnly() {
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+    if (isOsNetworkOffline()) return true;
+    if (!isDispoReachableForBadge()) return true;
     return connectionUiState === 'offline' || connectionUiState === 'local';
   }
 
@@ -5828,9 +5862,17 @@
       badge.textContent = 'Prüfe…';
       badge.className = 'offline-badge';
       badge.setAttribute('title', reason && String(reason).trim() ? String(reason).trim() : 'Verbindung wird geprüft…');
-    } else if (state === 'online' || state === 'online_syncing' || state === 'degraded') {
+    } else if (state === 'degraded') {
+      badge.textContent = 'Sync-Probleme';
+      badge.className = 'offline-badge';
+      if (reason && String(reason).trim()) {
+        badge.setAttribute('title', String(reason).trim());
+      } else {
+        badge.setAttribute('title', 'Klicken zum erneuten Synchronisieren');
+      }
+    } else if (state === 'online' || state === 'online_syncing') {
       badge.textContent = 'Online';
-      badge.className = state === 'degraded' ? 'offline-badge' : 'online-badge';
+      badge.className = 'online-badge';
       if (reason && String(reason).trim()) {
         badge.setAttribute('title', String(reason).trim());
       } else if (state === 'online_syncing') {
@@ -5901,7 +5943,22 @@
   var pendingBackgroundDispoSync = null;
 
   async function applySyncBadgeAfterRun(syncProblems) {
+    if (isOsNetworkOffline() || !isDispoReachableForBadge()) {
+      setConnectionBadge(
+        'offline',
+        (lastDispoOfflineReason || 'Dispo nicht erreichbar') + ' — lokale Daten verfügbar',
+      );
+      return;
+    }
     if (syncProblems && syncProblems.length) {
+      var allNetwork = syncProblems.every(function (p) {
+        return isLikelyDispoNetworkError(p);
+      });
+      if (allNetwork) {
+        markDispoUnreachable(syncProblems[0]);
+        setConnectionBadge('offline', lastDispoOfflineReason + ' — lokale Daten verfügbar');
+        return;
+      }
       setConnectionBadge('degraded', syncProblems.join(' · ') + ' — Klicken zum erneuten Synchronisieren');
       return;
     }
@@ -5909,7 +5966,10 @@
       var stRes = await fetch(API_BASE + '/api/sync_status');
       var st = await stRes.json().catch(function () { return {}; });
       if (!st.ok) {
-        setConnectionBadge('online');
+        setConnectionBadge(
+          connectionUiState === 'offline' || connectionUiState === 'local' ? connectionUiState : 'degraded',
+          'Sync-Status nicht abrufbar — lokale Daten verfügbar',
+        );
         return;
       }
       if (st.last_sync_pull && st.last_sync_pull.status === 'failed') {
@@ -5927,7 +5987,10 @@
       }
       setConnectionBadge('online');
     } catch (_) {
-      setConnectionBadge('online');
+      setConnectionBadge(
+        connectionUiState === 'offline' || connectionUiState === 'local' ? connectionUiState : 'degraded',
+        'Sync-Status nicht abrufbar — lokale Daten verfügbar',
+      );
     }
     if (isStartViewVisible() && typeof loadStartActiveJob === 'function') {
       loadStartActiveJob();
@@ -6167,7 +6230,13 @@
       })
       .catch(function (e) {
         console.error('[Sync] Hintergrund:', e && e.message ? e.message : e);
-        setConnectionBadge('degraded', (e && e.message ? e.message : 'Sync-Fehler') + ' — Klicken zum erneuten Synchronisieren');
+        var syncErr = e && e.message ? e.message : 'Sync-Fehler';
+        if (isLikelyDispoNetworkError(syncErr)) {
+          markDispoUnreachable(syncErr);
+          setConnectionBadge('offline', lastDispoOfflineReason + ' — lokale Daten verfügbar');
+        } else {
+          setConnectionBadge('degraded', syncErr + ' — Klicken zum erneuten Synchronisieren');
+        }
       })
       .finally(function () {
         backgroundDispoSyncInFlight = null;
@@ -6194,9 +6263,17 @@
   async function checkConnectionAndSyncBody(opts) {
     opts = opts || {};
     var blockingSync = opts.blockingSync === true;
+    var probeOnly = opts.probeOnly === true;
     var techId = getTechId();
     var hasLogin = !!(getServerUsername() && getServerPassword());
+    if (isOsNetworkOffline()) {
+      markDispoUnreachable('Keine Netzwerkverbindung');
+      setConnectionBadge('offline', 'Keine Netzwerkverbindung — lokale Daten verfügbar');
+      if (!probeOnly) return bootstrapLocalData(!blockingSync);
+      return;
+    }
     if (!techId && !hasLogin) {
+      markDispoUnreachable('Nicht angemeldet');
       setConnectionBadge('offline');
       return bootstrapLocalData(true);
     }
@@ -6205,10 +6282,12 @@
     if (!ext && !intUrl) {
       return bootstrapLocalData(true);
     }
-    if (!blockingSync) {
+    if (!blockingSync && !probeOnly) {
       bootstrapLocalData(false);
     }
-    setConnectionBadge('checking', 'Prüfe Verbindung…');
+    if (!probeOnly || connectionUiState === 'online' || connectionUiState === 'online_syncing' || connectionUiState === 'idle') {
+      setConnectionBadge('checking', 'Prüfe Verbindung…');
+    }
     try {
       if (hasLogin && !getTechId()) {
         await resolveMonteurProfileFromDispo();
@@ -6223,10 +6302,15 @@
           serverUsername: getServerUsername(),
           serverPassword: getServerPassword(),
         },
-        28000,
+        probeOnly ? 15000 : 28000,
       );
       applyMonteurProfileFromConnection(check);
       if (check && check.ok === true) {
+        markDispoReachable();
+        if (probeOnly) {
+          setConnectionBadge('online');
+          return;
+        }
         var connectedBase = (check.used_base_url || '').toString().trim().replace(/\/+$/, '');
         if (connectedBase) {
           var extNorm = (getDispoExternalUrl() || '').trim().replace(/\/+$/, '');
@@ -6284,15 +6368,34 @@
         }
       } else {
         var offMsg = (check && check.error) ? check.error : 'Verbindung fehlgeschlagen';
+        markDispoUnreachable(offMsg);
         setConnectionBadge('offline', offMsg);
       }
     } catch (e) {
-      setConnectionBadge('offline', e && e.message ? e.message : 'Verbindung fehlgeschlagen');
+      var failMsg = e && e.message ? e.message : 'Verbindung fehlgeschlagen';
+      markDispoUnreachable(failMsg);
+      setConnectionBadge('offline', failMsg);
     }
-    setNextSyncTime();
+    if (!probeOnly) {
+      setNextSyncTime();
+    }
     if (blockingSync) {
       return bootstrapLocalData(true);
     }
+  }
+
+  function probeConnectionOnly() {
+    if (checkConnectionAndSyncInFlight) {
+      return checkConnectionAndSyncInFlight;
+    }
+    return checkConnectionAndSync({ blockingSync: false, probeOnly: true });
+  }
+
+  function startConnectionProbeInterval() {
+    if (connectionProbeIntervalId) clearInterval(connectionProbeIntervalId);
+    connectionProbeIntervalId = setInterval(function () {
+      probeConnectionOnly();
+    }, CONNECTION_PROBE_INTERVAL_MS);
   }
 
   function absenceEndDateYmd(item) {
@@ -6528,12 +6631,22 @@
       startPushEvents();
     });
   startSyncInterval();
+  startConnectionProbeInterval();
   startBackgroundJobsPollingUi();
   window.addEventListener('online', function () {
     if (typeof checkConnectionAndSync === 'function') {
       try { checkConnectionAndSync({ blockingSync: false }); } catch (e) { /* ignore */ }
     }
     scheduleAutoAppUpdateCheck();
+  });
+  window.addEventListener('offline', function () {
+    markDispoUnreachable('Keine Netzwerkverbindung');
+    setConnectionBadge('offline', 'Keine Netzwerkverbindung — lokale Daten verfügbar');
+  });
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') {
+      probeConnectionOnly();
+    }
   });
   // Startansicht und Kalender erst nach Layout-Aufbau, damit das Grid sofort sichtbar ist
   function initStartView() {
@@ -10638,10 +10751,15 @@
         loadDienstreiseExplorer(localJobId, uiKey === 'start' ? startExplorerSubpath : dienstreiseExplorerSubpath, uiKey, {
           skipAutoPull: true,
         });
-        setConnectionBadge('online');
+        applySyncBadgeAfterRun([]);
       })
       .catch(function (err) {
         console.warn('[dienstreise_auto_pull]', err && err.message ? err.message : err);
+        var pullErr = err && err.message ? err.message : 'Projektordner-Pull fehlgeschlagen';
+        if (isLikelyDispoNetworkError(pullErr)) {
+          markDispoUnreachable(pullErr);
+          setConnectionBadge('offline', lastDispoOfflineReason + ' — lokale Daten verfügbar');
+        }
       })
       .finally(function () {
         delete projectFolderAutoPullInFlightByJob[localJobId];
@@ -11022,28 +11140,79 @@
     async function loadJobWithAnlagenstamm(jobId) {
       const baseUrl = getDispoBaseUrl();
       const techId = getTechId();
-      if (baseUrl) {
-        const liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
-          body: JSON.stringify(Object.assign({
-            baseUrl: baseUrl,
-            jobId: jobId,
-            serverUsername: getDispoUsername(),
-            serverPassword: getDispoPassword()
-          }, dispoBasePayloadExtra()))
+      const headers = Object.assign(
+        { 'X-Technician-Id': String(techId) },
+        dispoBasicAuthHeaders(getDispoUsername, getDispoPassword),
+      );
+      const localUrl =
+        API_BASE +
+        '/api/job?id=' +
+        encodeURIComponent(jobId) +
+        '&technician_id=' +
+        encodeURIComponent(techId) +
+        '&enrich_anlagenstamm=1&enrich_local_only=1&base_url=' +
+        encodeURIComponent(baseUrl || '');
+      let localJob = null;
+      try {
+        const localRes = await fetch(localUrl, { headers: headers });
+        const localData = await localRes.json().catch(function () {
+          return {};
         });
-        const liveData = await liveResp.json().catch(function () { return {}; });
-        if (liveResp.ok && liveData && liveData.ok && liveData.job) {
-          return liveData.job;
+        if (localRes.ok && localData.ok && localData.job) {
+          localJob = localData.job;
+          if (preferLocalProjekteNeuOnly() || connectionUiState === 'offline' || connectionUiState === 'local') {
+            return localJob;
+          }
+          if (parseJobFabrikationsnummernOrdered(localJob).length > 0) {
+            return localJob;
+          }
         }
-        throw new Error((liveData && liveData.error) || ('Live-Auftragsdaten konnten nicht geladen werden (HTTP ' + liveResp.status + ').'));
+      } catch (e) {
+        /* Dispo-Fallback */
       }
-      const url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl);
-      const r = await fetch(url, {
-        headers: Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword))
-      });
+      if (baseUrl && !preferLocalProjekteNeuOnly()) {
+        try {
+          const liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+            body: JSON.stringify(
+              Object.assign(
+                {
+                  baseUrl: baseUrl,
+                  jobId: jobId,
+                  serverUsername: getDispoUsername(),
+                  serverPassword: getDispoPassword(),
+                },
+                dispoBasePayloadExtra(),
+              ),
+            ),
+          });
+          const liveData = await liveResp.json().catch(function () {
+            return {};
+          });
+          if (liveResp.ok && liveData && liveData.ok && liveData.job) {
+            return liveData.job;
+          }
+        } catch (e) {
+          /* lokaler Stand */
+        }
+      }
+      if (localJob) {
+        return localJob;
+      }
+      const url =
+        API_BASE +
+        '/api/job?id=' +
+        jobId +
+        '&technician_id=' +
+        techId +
+        '&enrich_anlagenstamm=1&base_url=' +
+        encodeURIComponent(baseUrl || '');
+      const r = await fetch(url, { headers: headers });
       const data = await r.json();
+      if (!data || !data.job) {
+        throw new Error((data && data.error) || 'Auftragsdaten konnten nicht geladen werden.');
+      }
       return data.job;
     }
 
@@ -11387,8 +11556,18 @@
       var listEl = document.getElementById('montageberichtTbList');
       var categorySelect = document.getElementById('montageberichtTbCategory');
       if (!listEl) return;
+      if (preferLocalProjekteNeuOnly()) {
+        montageberichtTbCategories = [];
+        if (categorySelect) categorySelect.innerHTML = '<option value="">– Kategorie –</option>';
+        listEl.innerHTML =
+          '<span class="muted" style="font-size:0.8rem">Offline — Textbausteine nach Sync verfügbar</span>';
+        return;
+      }
       var baseUrl = getDispoBaseUrl();
-      if (!baseUrl) { listEl.innerHTML = '<span class="muted" style="font-size:0.8rem">Dispo-URL in Einstellungen eintragen</span>'; return; }
+      if (!baseUrl) {
+        listEl.innerHTML = '<span class="muted" style="font-size:0.8rem">Dispo-URL in Einstellungen eintragen</span>';
+        return;
+      }
       try {
         var r = await fetch(API_BASE + '/api/textbausteine_list?base_url=' + encodeURIComponent(baseUrl) + '&technician_id=' + getTechId(), { headers: { 'X-Technician-Id': String(getTechId()) } });
         var data = await r.json();
@@ -11904,10 +12083,39 @@
 
     async function loadJobWithAnlagenstammKw(jobId) {
       var baseUrl = getDispoBaseUrl();
-      var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + getTechId() + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl);
-      var r = await fetch(url, {
-        headers: Object.assign({ 'X-Technician-Id': String(getTechId()) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword))
-      });
+      var techId = getTechId();
+      var headers = Object.assign(
+        { 'X-Technician-Id': String(techId) },
+        dispoBasicAuthHeaders(getDispoUsername, getDispoPassword),
+      );
+      var localUrl =
+        API_BASE +
+        '/api/job?id=' +
+        encodeURIComponent(jobId) +
+        '&technician_id=' +
+        encodeURIComponent(techId) +
+        '&enrich_anlagenstamm=1&enrich_local_only=1&base_url=' +
+        encodeURIComponent(baseUrl || '');
+      try {
+        var localRes = await fetch(localUrl, { headers: headers });
+        var localData = await localRes.json().catch(function () {
+          return {};
+        });
+        if (localRes.ok && localData.ok && localData.job) {
+          return localData.job;
+        }
+      } catch (e) {
+        /* Fallback */
+      }
+      var url =
+        API_BASE +
+        '/api/job?id=' +
+        jobId +
+        '&technician_id=' +
+        techId +
+        '&enrich_anlagenstamm=1&base_url=' +
+        encodeURIComponent(baseUrl || '');
+      var r = await fetch(url, { headers: headers });
       var data = await r.json();
       return data.job;
     }
@@ -12717,28 +12925,40 @@
       var headers = Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword));
       var localUrl = API_BASE + '/api/job?id=' + encodeURIComponent(jobId) + '&technician_id=' + encodeURIComponent(techId) +
         '&enrich_anlagenstamm=1&enrich_local_only=1&base_url=' + encodeURIComponent(baseUrl || '');
+      var localJob = null;
       try {
         var localRes = await fetch(localUrl, { headers: headers });
         var localData = await localRes.json().catch(function () { return {}; });
-        if (localRes.ok && localData.ok && localData.job && jobHasFabrikationsnummern(localData.job)) {
-          return localData.job;
+        if (localRes.ok && localData.ok && localData.job) {
+          localJob = localData.job;
+          if (preferLocalProjekteNeuOnly() || connectionUiState === 'offline' || connectionUiState === 'local') {
+            return localJob;
+          }
+          if (jobHasFabrikationsnummern(localJob)) {
+            return localJob;
+          }
         }
       } catch (e) { /* Dispo-Fallback */ }
-      if (baseUrl) {
-        var liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
-          body: JSON.stringify(Object.assign({
-            baseUrl: baseUrl,
-            jobId: jobId,
-            serverUsername: getDispoUsername(),
-            serverPassword: getDispoPassword()
-          }, dispoBasePayloadExtra()))
-        });
-        var liveData = await liveResp.json().catch(function () { return {}; });
-        if (liveResp.ok && liveData && liveData.ok && liveData.job) {
-          return liveData.job;
-        }
+      if (baseUrl && !preferLocalProjekteNeuOnly()) {
+        try {
+          var liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
+            body: JSON.stringify(Object.assign({
+              baseUrl: baseUrl,
+              jobId: jobId,
+              serverUsername: getDispoUsername(),
+              serverPassword: getDispoPassword()
+            }, dispoBasePayloadExtra()))
+          });
+          var liveData = await liveResp.json().catch(function () { return {}; });
+          if (liveResp.ok && liveData && liveData.ok && liveData.job) {
+            return liveData.job;
+          }
+        } catch (e) { /* lokaler Stand */ }
+      }
+      if (localJob) {
+        return localJob;
       }
       var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl || '');
       var r = await fetch(url, { headers: headers });

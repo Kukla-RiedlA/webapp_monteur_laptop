@@ -58,8 +58,9 @@ Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Di
 
 - **Start:** Listen/Kalender/Abwesenheiten sofort aus SQLite (`bootstrapLocalData`); Badge zunächst „Lokale Daten — Sync im Hintergrund“.
 - **Lokal:** keine Dispo-URL konfiguriert (reines Offline-Arbeiten mit SQLite).
-- **Offline:** URLs gesetzt, Dispo nicht erreichbar (`check_connection` mit 10 s Timeout).
-- **Online / Syncing / Degraded:** `GET /api/sync_status` nach Hintergrund-Push/Pull; letzter fehlgeschlagener Pull oder ausstehende `pending_changes` → Badge „degraded“.
+- **Offline:** URLs gesetzt, Dispo nicht erreichbar (`check_connection` mit 10 s Timeout); Browser-`offline`-Event setzt Badge sofort; zusätzlich **leichte Dispo-Probe alle 60 s** (nur Badge, kein Voll-Sync).
+- **Online / Syncing:** nach erfolgreicher Probe; Hintergrund-Push/Pull blockiert UI nicht.
+- **Sync-Probleme** (früher „degraded“): letzter fehlgeschlagener Pull, ausstehende `pending_changes` oder Sync-Status nicht abrufbar — Badge-Text **„Sync-Probleme“**, nicht „Online“.
 - **Offene Aufträge / Kalender:** nur **`jobs_open_local`** bzw. **`calendar_cached`** (kein Live-`jobs_open` / Live-`calendar` im Standard-Render-Pfad).
 - **Queue-Priorität:** `dienstreise_pull` → `dienstreise_push` → `sync_push` → `sync_pull`; Intervall-`sync_pull` wird bei laufender Kopie mit `deferred` zurückgestellt.
 - **TED:** nach „Auftrag annehmen“ unter `{Projektordner}/TED/`; Metadaten in `job_ted_index`.
@@ -73,6 +74,8 @@ Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Di
 3. **Auftrag annehmen** bei langsamer Leitung: UI nicht blockiert; Hintergrund-Job; nach Abschluss Dateien unter Projektordner, **TED/** mit XLSX.
 4. Während `dienstreise_pull`: Intervall-`sync_pull` loggt „zurückgestellt“ (409/deferred), kein Fehler-Toast.
 5. `GET /api/sync_status` und `GET /api/offline_manifest?job_id=` liefern sinnvolle Werte nach Pull.
+6. **Flugmodus** (ohne App-Neustart): Badge wechselt auf **Offline**; **Protokolle → Montagebericht → Auftrag wählen** lädt Formular aus SQLite (kein „Dispo-Probe“-Timeout).
+7. Montagebericht offline: **„Speichern (nur Daten)“** schreibt `montagebericht.json` im Dienstreise-Ordner.
 
 **Regression (bestehend):**
 

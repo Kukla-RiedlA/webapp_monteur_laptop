@@ -32,6 +32,28 @@ Legende:
 
 ---
 
+## Protokolle (Dienstreise-Ordner + Gateway)
+
+Speicherort Zwischenstände: `{DienstreiseOrdner}/` pro angenommenem Auftrag (`in_arbeit`). Upload beim Abschluss / `dienstreise_push`.
+
+| Protokoll | Lokale Datei | Sync In | Sync Out | Offline lesen (Formular) | Offline schreiben |
+|-----------|--------------|---------|----------|---------------------------|-------------------|
+| **Montagebericht** | `montagebericht.json` (+ optional PDF/DOCX lokal) | optional über Dispo-API | optional sofort; Dateien bei Push | Ja (`/api/job` + `enrich_local_only`, kein Live-`job_from_dispo` offline) | Ja: „Speichern (nur Daten)“; PDF/DOCX lokal (Word); Signatur nur online |
+| **Serviceprotokoll** | `serviceprotokoll.json` (`byFab`) | Draft-Merge optional | PDF nur über Dispo | Ja (local-first wie Montagebericht) | Ja: „nur Daten“; PDF nur online |
+| **Parameterlisten** | CSV + PDF im Dienstreise-Ordner | — | optional Ingest | Ja | Ja (lokal); Dispo-Ingest optional |
+| **Kontrollwiegungen** | — (nur Dispo) | Live-Proxy | Live-Proxy | Teilweise (Auftrag aus SQLite) | Nein (Dispo-Pflicht) |
+| **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein |
+
+**Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“).
+
+### Geplant (noch nicht umgesetzt)
+
+- Textbausteine-Montagebericht-Sidebar: lokaler SQLite-Cache statt nur Live-`textbausteine_list`
+- Kontrollwiegungen: lokaler Entwurf + Push-Queue
+- Serviceprotokoll-PDF offline (Queue oder lokale PDF-Engine)
+
+---
+
 ## Hinweise
 
 - **Aktive Dispo-Basis:** Nach Start bzw. nach `checkConnectionAndSync` wird die erreichbare URL gewählt (`POST /api/dispo_pick_base`), in LocalStorage als aktive Basis gespeichert und für Sync/Push/EventSource verwendet.

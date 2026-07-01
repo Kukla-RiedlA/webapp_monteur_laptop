@@ -12,7 +12,7 @@ function setDispoPingResult(result) {
 }
 
 function isDispoOnline(maxAgeMs = 45000) {
-  if (!lastPing.at) return true;
+  if (!lastPing.at) return false;
   if (Date.now() - lastPing.at > maxAgeMs) return lastPing.online;
   return lastPing.online;
 }
