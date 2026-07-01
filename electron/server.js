@@ -7182,10 +7182,13 @@ ORDER BY
     return merged;
   }
 
-  function resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab) {
+  function resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId) {
     const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
     const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
     const offlineCfg = getOfflinePullConfig(db, localJobId);
+    const montageFolderName =
+      offlineCfg.montage_folder_name ||
+      buildMonteurMontageFolderName(lookupDienstreiseJobRow(localJobId) || {}, getTechnicianDisplayName(technicianId));
     let folderName = null;
     const fromMap = (offlineCfg.fab_map || []).find((e) => String(e.fab) === String(fab));
     if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
@@ -7196,9 +7199,33 @@ ORDER BY
         (Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null) ||
         sanitizeDienstreiseFolderPart(fab);
     }
-    const targetDir = path.join(docMonteurBase, folderName, 'Serviceprotokolle');
-    const relDir = 'Dokumente_Monteur/' + folderName + '/Serviceprotokolle';
-    return { targetDir, relDir, folderName };
+    const targetDir = buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderName, 'Serviceprotokolle');
+    const relDir = buildMonteurWorkRelPath(folderName, montageFolderName, 'Serviceprotokolle');
+    return { targetDir, relDir, folderName, montageFolderName };
+  }
+
+  /** Dispo liefert protokolle[] (neu) oder nur protokoll_ids + fabrikationsnummern (Legacy-Sammel-PDF). */
+  function resolveServiceprotokollAllPdfSavedItems(saveData, requestProtokolle) {
+    const fromServer = Array.isArray(saveData && saveData.protokolle) ? saveData.protokolle : [];
+    const withIds = fromServer.filter(
+      (item) => item && item.protokoll_id != null && String(item.fabrikationsnummer || '').trim() !== '',
+    );
+    if (withIds.length) return withIds;
+
+    const ids = Array.isArray(saveData && saveData.protokoll_ids) ? saveData.protokoll_ids : [];
+    if (!ids.length) return [];
+
+    const req = Array.isArray(requestProtokolle) ? requestProtokolle : [];
+    const serverFabs = Array.isArray(saveData && saveData.fabrikationsnummern) ? saveData.fabrikationsnummern : [];
+    return ids
+      .map((id, idx) => {
+        const fabFromServer = serverFabs[idx] != null ? String(serverFabs[idx]).trim() : '';
+        const fabFromReq =
+          req[idx] && req[idx].fabrikationsnummer != null ? String(req[idx].fabrikationsnummer).trim() : '';
+        const fab = fabFromServer || fabFromReq;
+        return fab ? { protokoll_id: id, fabrikationsnummer: fab } : null;
+      })
+      .filter(Boolean);
   }
 
   app.get('/api/protokolle/serviceprotokoll', async (req, res) => {
@@ -7280,6 +7307,7 @@ ORDER BY
         kopf_qmax: String(body.kopf_qmax || ''),
         kopf_type: String(body.kopf_type || ''),
         kopf_dwc: String(body.kopf_dwc || ''),
+        abschluss: body.abschluss && typeof body.abschluss === 'object' ? body.abschluss : {},
       };
 
       let messSyncWarning = null;
@@ -7385,7 +7413,7 @@ ORDER BY
         const multiLang = pdfLangs.length > 1;
         const datum = String(draftPayload.durchfuehrungsdatum).replace(/-/g, '');
         const safeFn = fab.replace(/[^\w.-]+/g, '_');
-        const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab);
+        const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
         for (const lang of pdfLangs) {
           try {
@@ -7514,32 +7542,39 @@ ORDER BY
 
       const pdfLangs = savePayload.pdf_languages.length ? savePayload.pdf_languages : ['de'];
       const multiLang = pdfLangs.length > 1;
-      const combinedPaths = Array.isArray(saveData.combined_pdf_paths) ? saveData.combined_pdf_paths : [];
-      const firstFab = protokolle[0] && protokolle[0].fabrikationsnummer ? String(protokolle[0].fabrikationsnummer).trim() : '';
-      const { targetDir, relDir } = firstFab
-        ? resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, firstFab)
-        : { targetDir: null, relDir: '' };
+      const savedItems = resolveServiceprotokollAllPdfSavedItems(saveData, protokolle);
+      const datum = String(durchfuehrungsdatum).replace(/-/g, '');
       let savedRel = [];
       let localWarning = null;
-      if (targetDir && combinedPaths.length) {
+
+      if (!savedItems.length) {
+        localWarning = 'Keine Protokoll-IDs vom Server – lokale PDF-Kopien konnten nicht erstellt werden.';
+      }
+
+      for (const item of savedItems) {
+        const fab = item && item.fabrikationsnummer != null ? String(item.fabrikationsnummer).trim() : '';
+        const protokollId = item && item.protokoll_id != null ? item.protokoll_id : null;
+        if (!fab || !protokollId) continue;
+        const safeFn = fab.replace(/[^\w.-]+/g, '_');
+        const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
+        if (!targetDir) continue;
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-        for (let i = 0; i < combinedPaths.length; i++) {
-          const relPath = combinedPaths[i];
-          const lang = pdfLangs[i] || pdfLangs[0] || 'de';
+        for (const lang of pdfLangs) {
           try {
-            const dlUrl = dispoBaseUrl + '/api/job_project_file_download.php?technician_id=' + encodeURIComponent(technicianId) +
-              '&job_id=' + encodeURIComponent(parsedServerJobId) + '&path=' + encodeURIComponent(relPath);
-            const pdfRes = await fetch(dlUrl, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+            const pdfUrl = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_pdf.php?id=' + encodeURIComponent(protokollId) +
+              '&technician_id=' + encodeURIComponent(technicianId) + '&lang=' + encodeURIComponent(lang);
+            const pdfRes = await fetch(pdfUrl, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
             if (!pdfRes.ok) {
-              localWarning = (localWarning ? localWarning + ' ' : '') + 'Sammel-PDF ' + lang.toUpperCase() + ' lokal nicht geladen.';
+              localWarning = (localWarning ? localWarning + ' ' : '') + 'FN ' + fab + ' PDF ' + lang.toUpperCase() + ' lokal nicht geladen.';
               continue;
             }
             const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
-            const pdfName = path.basename(relPath.replace(/\\/g, '/'));
+            const suffix = multiLang ? '_' + lang.toUpperCase() : (lang === 'en' ? '_EN' : '');
+            const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
             writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
             savedRel.push(relDir + '/' + pdfName);
           } catch (localErr) {
-            localWarning = (localWarning ? localWarning + ' ' : '') + 'Sammel-PDF ' + lang.toUpperCase() + ': ' + localErr.message;
+            localWarning = (localWarning ? localWarning + ' ' : '') + 'FN ' + fab + ' PDF ' + lang.toUpperCase() + ': ' + localErr.message;
           }
         }
       }
@@ -7548,12 +7583,12 @@ ORDER BY
       res.json({
         ok: true,
         protokoll_ids: saveData.protokoll_ids || [],
-        combined_pdf_paths: combinedPaths,
+        protokolle: savedItems,
         saved: savedRel,
         warning,
       });
     } catch (e) {
-      res.status(500).json({ ok: false, error: e.message || 'Sammel-PDF konnte nicht erstellt werden.' });
+      res.status(500).json({ ok: false, error: e.message || 'PDFs konnten nicht erstellt werden.' });
     }
   });
 
@@ -7610,12 +7645,11 @@ ORDER BY
             if (pdfRes.ok) {
               const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
               const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-              const fn = String(body.fabrikationsnummer || 'FN').replace(/[^\w.-]+/g, '_');
+              const fabRaw = String(body.fabrikationsnummer || '').trim();
               const datum = String(body.durchfuehrungsdatum || '').replace(/-/g, '');
-              const pdfName = 'Serviceprotokoll_' + fn + '_' + datum + '.pdf';
-              const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
-              const fnFolder = fn;
-              const targetDir = path.join(docMonteurBase, fnFolder, 'Serviceprotokolle');
+              const safeFn = fabRaw.replace(/[^\w.-]+/g, '_');
+              const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + '.pdf';
+              const { targetDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fabRaw, technicianId);
               if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
               writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
             } else {

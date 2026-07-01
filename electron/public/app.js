@@ -12376,6 +12376,193 @@
     var activeFab = '';
     var SP_LAST_JOB_KEY = 'kukla_sp_last_job_id';
     var serviceprotokollJobLoadToken = 0;
+    var spSignaturePads = {};
+
+    function initSpSignaturePad(canvasId) {
+      var canvas = document.getElementById(canvasId);
+      if (!canvas || spSignaturePads[canvasId]) return;
+      var ctx = canvas.getContext('2d');
+      var dpr = typeof window.devicePixelRatio === 'number' ? window.devicePixelRatio : 1;
+      function resizeCanvas() {
+        var cw = canvas.clientWidth || 400;
+        var ch = canvas.clientHeight || 100;
+        canvas.width = Math.floor(cw * dpr);
+        canvas.height = Math.floor(ch * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#111';
+      }
+      resizeCanvas();
+      var drawing = false;
+      var pad = {
+        canvas: canvas,
+        ctx: ctx,
+        resize: resizeCanvas,
+        clear: function () {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        },
+        isEmpty: function () {
+          var w = canvas.width;
+          var h = canvas.height;
+          if (!w || !h) return true;
+          var data = ctx.getImageData(0, 0, w, h).data;
+          for (var i = 3; i < data.length; i += 4) {
+            if (data[i] !== 0) return false;
+          }
+          return true;
+        },
+        toDataUrl: function () {
+          return pad.isEmpty() ? '' : canvas.toDataURL('image/png');
+        },
+        fromDataUrl: function (url) {
+          pad.clear();
+          if (!url) return;
+          var img = new Image();
+          img.onload = function () {
+            var cw = canvas.clientWidth || 400;
+            var ch = canvas.clientHeight || 100;
+            ctx.drawImage(img, 0, 0, cw, ch);
+          };
+          img.src = url;
+        }
+      };
+      function posFromEvent(ev) {
+        var rect = canvas.getBoundingClientRect();
+        var clientX = ev.clientX != null ? ev.clientX : (ev.touches && ev.touches[0] ? ev.touches[0].clientX : 0);
+        var clientY = ev.clientY != null ? ev.clientY : (ev.touches && ev.touches[0] ? ev.touches[0].clientY : 0);
+        return { x: clientX - rect.left, y: clientY - rect.top };
+      }
+      function startDraw(ev) {
+        drawing = true;
+        var p = posFromEvent(ev);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        if (ev.preventDefault) ev.preventDefault();
+      }
+      function moveDraw(ev) {
+        if (!drawing) return;
+        var p = posFromEvent(ev);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        if (ev.preventDefault) ev.preventDefault();
+      }
+      function endDraw() { drawing = false; }
+      canvas.addEventListener('mousedown', startDraw);
+      canvas.addEventListener('mousemove', moveDraw);
+      canvas.addEventListener('mouseup', endDraw);
+      canvas.addEventListener('mouseleave', endDraw);
+      canvas.addEventListener('touchstart', startDraw, { passive: false });
+      canvas.addEventListener('touchmove', moveDraw, { passive: false });
+      canvas.addEventListener('touchend', endDraw);
+      spSignaturePads[canvasId] = pad;
+    }
+
+    function clearSpSignaturePad(canvasId) {
+      var pad = spSignaturePads[canvasId];
+      if (pad) pad.clear();
+    }
+
+    function collectAbschlussPayload() {
+      var statusEl = document.querySelector('input[name="serviceprotokollStatus"]:checked');
+      var monteurEl = document.getElementById('serviceprotokollMonteur');
+      return {
+        status: statusEl ? String(statusEl.value || '') : '',
+        bemerkungen: (document.getElementById('serviceprotokollAbschlussBemerkungen') || {}).value || '',
+        monteur_id: monteurEl ? String(monteurEl.value || '') : '',
+        monteur_name: monteurEl && monteurEl.selectedOptions && monteurEl.selectedOptions[0]
+          ? String(monteurEl.selectedOptions[0].textContent || '').trim() : '',
+        signature_monteur: (spSignaturePads.spSignatureMonteurCanvas || {}).toDataUrl
+          ? spSignaturePads.spSignatureMonteurCanvas.toDataUrl() : '',
+        signature_kunde: (spSignaturePads.spSignatureKundeCanvas || {}).toDataUrl
+          ? spSignaturePads.spSignatureKundeCanvas.toDataUrl() : ''
+      };
+    }
+
+    function applyAbschlussPayload(abschluss) {
+      abschluss = abschluss || {};
+      var status = String(abschluss.status || 'geprueft');
+      document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
+        el.checked = el.value === status;
+      });
+      var bemEl = document.getElementById('serviceprotokollAbschlussBemerkungen');
+      if (bemEl) bemEl.value = abschluss.bemerkungen != null ? String(abschluss.bemerkungen) : '';
+      var monteurEl = document.getElementById('serviceprotokollMonteur');
+      if (monteurEl && abschluss.monteur_id) monteurEl.value = String(abschluss.monteur_id);
+      if (spSignaturePads.spSignatureMonteurCanvas) {
+        spSignaturePads.spSignatureMonteurCanvas.fromDataUrl(abschluss.signature_monteur || '');
+      }
+      if (spSignaturePads.spSignatureKundeCanvas) {
+        spSignaturePads.spSignatureKundeCanvas.fromDataUrl(abschluss.signature_kunde || '');
+      }
+    }
+
+    function clearAbschlussFields() {
+      applyAbschlussPayload({ status: 'geprueft', bemerkungen: '', signature_monteur: '', signature_kunde: '' });
+      populateServiceprotokollMonteurSelect();
+    }
+
+    function populateServiceprotokollMonteurSelect() {
+      var sel = document.getElementById('serviceprotokollMonteur');
+      if (!sel) return;
+      var techId = getTechId();
+      var techName = '';
+      try {
+        var tel = document.getElementById('technicianName');
+        if (tel) techName = (tel.textContent || '').trim();
+      } catch (e) {}
+      sel.innerHTML = '';
+      var opt = document.createElement('option');
+      opt.value = String(techId || '');
+      opt.textContent = techName || ('Monteur ' + (techId || ''));
+      sel.appendChild(opt);
+    }
+
+    function updateVersSpannungHint() {
+      var hint = document.getElementById('spVersSpannungHint');
+      var inp = document.getElementById('spMessVersSpannung');
+      if (!hint || !inp) return;
+      var raw = String(inp.value || '').trim().replace(',', '.');
+      if (raw === '') {
+        hint.textContent = 'Sollbereich: 5,0 – 10,0 V';
+        hint.className = 'sp-v2-hint is-warn';
+        return;
+      }
+      var v = parseFloat(raw);
+      if (!isFinite(v)) {
+        hint.textContent = 'Sollbereich: 5,0 – 10,0 V';
+        hint.className = 'sp-v2-hint is-warn';
+        return;
+      }
+      if (v >= 5 && v <= 10) {
+        hint.textContent = '✓ Sollbereich: 5,0 – 10,0 V';
+        hint.className = 'sp-v2-hint is-ok';
+      } else {
+        hint.textContent = 'Außerhalb Sollbereich (5,0 – 10,0 V)';
+        hint.className = 'sp-v2-hint is-warn';
+      }
+    }
+
+    initSpSignaturePad('spSignatureMonteurCanvas');
+    initSpSignaturePad('spSignatureKundeCanvas');
+    populateServiceprotokollMonteurSelect();
+    document.querySelectorAll('[data-sp-sig-clear]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        clearSpSignaturePad(btn.getAttribute('data-sp-sig-clear') || '');
+      });
+    });
+    var versSpEl = document.getElementById('spMessVersSpannung');
+    if (versSpEl) {
+      versSpEl.addEventListener('input', updateVersSpannungHint);
+      versSpEl.addEventListener('change', updateVersSpannungHint);
+    }
+    var stickySaveBtn = document.getElementById('btnServiceprotokollStickySave');
+    if (stickySaveBtn) {
+      stickySaveBtn.addEventListener('click', function () {
+        var btn = document.getElementById('btnServiceprotokollSaveJson');
+        if (btn) btn.click();
+      });
+    }
 
     function rememberServiceprotokollJobId(jobId) {
       if (!jobId) return;
@@ -12432,9 +12619,6 @@
 
     function setServiceprotokollJobLoading(loading) {
       if (jobSelect) jobSelect.disabled = !!loading;
-      if (kopfdatenEl && loading && !serviceJobData) {
-        kopfdatenEl.innerHTML = '<div class="muted">Lade Auftragsdaten…</div>';
-      }
     }
 
     function getActiveFab() {
@@ -12479,7 +12663,8 @@
         kopf_pos_nr: (document.getElementById('serviceprotokollPos') || {}).value || '',
         kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
         kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
-        kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || ''
+        kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
+        abschluss: collectAbschlussPayload()
       };
     }
 
@@ -12536,7 +12721,10 @@
 
     async function buildAllProtokollPayloads() {
       var cur = getActiveFab();
-      if (cur) await persistDraftJsonForFab(cur);
+      if (cur) {
+        stashDraftInMemory(cur);
+        await persistDraftJsonForFab(cur);
+      }
       var fns = parseJobFabrikationsnummernOrdered(serviceJobData || {});
       if (!fns.length) return { error: 'Keine Fabrikationsnummern im Auftrag.' };
       var missing = [];
@@ -12638,14 +12826,16 @@
       var messMap = [
         ['spMessType', mess.waegezelle_type],
         ['spMessSeriennummer', mess.waegezelle_seriennummer],
-        ['spMessVersSpannung', mess.vers_spannung],
-        ['spMessTaraspeicher', mess.taraspeicher]
+        ['spMessVersSpannung', mess.vers_spannung]
       ];
       messMap.forEach(function (pair) {
         var el = document.getElementById(pair[0]);
         if (el && pair[1] != null) el.value = pair[1];
       });
+      applyPgTestToForm(normalizePgTestCells(mess));
       applyMessMatrixToForm(normalizeMessMatrix(mess));
+      updateVersSpannungHint();
+      if (draft.abschluss) applyAbschlussPayload(draft.abschluss);
       if (Array.isArray(draft.arbeitsschritte) && draft.arbeitsschritte.length > 0) {
         arbeitsschritte = draft.arbeitsschritte.map(function (row) {
           return stepFromRaw(row);
@@ -12684,20 +12874,8 @@
     }
 
     function renderKopfdatenService(job) {
-      if (!kopfdatenEl) return;
-      var techName = '';
-      try {
-        var techEl = document.getElementById('technicianName');
-        if (techEl) techName = techEl.textContent || '';
-      } catch (e) {}
-      var datum = formatDateRange(job.start_datetime, job.end_datetime);
-      var fabList = parseJobFabrikationsnummernOrdered(job);
-      var auftragsnr = (job.job_number != null && String(job.job_number).trim()) ? String(job.job_number).trim() : '';
-      kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(job.customer_name || '') + '</div>' +
-        (auftragsnr ? '<div class="kopfdaten-secondary"><strong>Auftragsnr.:</strong> ' + escapeHtml(auftragsnr) + '</div>' : '') +
-        '<div class="kopfdaten-fn"><strong>FN:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
-        '<div><strong>Zeitraum:</strong> ' + escapeHtml(datum) + '</div>' +
-        '<div><strong>Servicetechniker:</strong> ' + escapeHtml(techName) + '</div>';
+      /* Kopfdaten (Kunde, FN, Zeitraum, Monteur) nur im PDF – nicht im Formular anzeigen. */
+      void job;
     }
 
     function readProjektFromFabRow(r) {
@@ -12759,18 +12937,46 @@
       applyKopfFields({});
     }
 
+    var SP_MESS_PGTEST_IDS = [
+      'spMessPgTest1', 'spMessPgTest2', 'spMessPgTest3', 'spMessPgTest4'
+    ];
     var SP_MESS_FIELD_IDS = [
       'spMessType', 'spMessSeriennummer', 'spMessVersSpannung',
       'spMessDmsKg', 'spMessDmsMv', 'spMessDmsMa', 'spMessDmsG',
       'spMessTaraKg', 'spMessTaraMv', 'spMessTaraMa', 'spMessTaraG',
-      'spMessPgKg', 'spMessPgMv', 'spMessPgMa', 'spMessPgG',
-      'spMessTaraspeicher'
-    ];
+      'spMessPgKg', 'spMessPgMv', 'spMessPgMa', 'spMessPgG'
+    ].concat(SP_MESS_PGTEST_IDS);
     var SP_MESS_ROW_FORM = [
       { key: 'dms', prefix: 'spMessDms' },
       { key: 'tara', prefix: 'spMessTara' },
       { key: 'pruefgewicht', prefix: 'spMessPg' }
     ];
+
+    function normalizePgTestCells(mess) {
+      mess = mess || {};
+      var raw = mess.pruefgewichtstest;
+      if (Array.isArray(raw)) {
+        return SP_MESS_PGTEST_IDS.map(function (_, i) {
+          return raw[i] != null ? String(raw[i]) : '';
+        });
+      }
+      var legacy = mess.taraspeicher != null ? String(mess.taraspeicher) : '';
+      return [legacy, '', '', ''];
+    }
+
+    function applyPgTestToForm(cells) {
+      SP_MESS_PGTEST_IDS.forEach(function (id, i) {
+        var el = document.getElementById(id);
+        if (el) el.value = (cells && cells[i] != null) ? String(cells[i]) : '';
+      });
+    }
+
+    function collectPgTestFromForm() {
+      return SP_MESS_PGTEST_IDS.map(function (id) {
+        var el = document.getElementById(id);
+        return el ? String(el.value || '').trim() : '';
+      });
+    }
 
     function emptyMessRow() {
       return { kg: '', mv: '', ma: '', g_prozent: '' };
@@ -13087,11 +13293,7 @@
         '</div></td>' +
         '<td class="sp-col-text">' + textCell + '</td>' +
         '<td class="sp-col-bem"><input type="text" class="sp-bemerkung" value="' + escapeHtml(s.bemerkung || '') + '" placeholder="optional"></td>' +
-        '<td class="sp-col-act"><div class="sp-step-actions">' +
-        '<button type="button" class="btn btn-ghost sp-up" title="Nach oben">↑</button>' +
-        '<button type="button" class="btn btn-ghost sp-down" title="Nach unten">↓</button>' +
-        '<button type="button" class="btn btn-ghost sp-remove" title="Entfernen">✕</button>' +
-        '</div></td></tr>';
+        '<td class="sp-col-act"><button type="button" class="btn btn-ghost sp-remove" title="Zeile löschen" aria-label="Zeile löschen"><img class="sp-v2-icon" src="icons/x-delete-green.svg" alt="" aria-hidden="true"></button></td></tr>';
     }
 
     function syncStepsFromDom() {
@@ -13215,6 +13417,7 @@
       }
       await applyAnlagenstammFelderFromLocalStamm(fab);
       renderSteps();
+      notifyReactBridge();
     }
 
     function collectMesswerte() {
@@ -13224,7 +13427,7 @@
         waegezelle_type: (document.getElementById('spMessType') || {}).value || '',
         waegezelle_seriennummer: (document.getElementById('spMessSeriennummer') || {}).value || '',
         vers_spannung: (document.getElementById('spMessVersSpannung') || {}).value || '',
-        taraspeicher: (document.getElementById('spMessTaraspeicher') || {}).value || '',
+        pruefgewichtstest: collectPgTestFromForm(),
         mess_matrix: matrix
       }, legacy);
     }
@@ -13309,11 +13512,12 @@
           await loadDefaultsForFab(firstFab);
         }
       } catch (e) {
-        if (loadToken === serviceprotokollJobLoadToken && kopfdatenEl) {
-          kopfdatenEl.innerHTML = '<div class="muted">Auftrag konnte nicht geladen werden.</div>';
+        if (loadToken === serviceprotokollJobLoadToken) {
+          alert('Auftrag konnte nicht geladen werden.');
         }
       } finally {
         if (loadToken === serviceprotokollJobLoadToken) setServiceprotokollJobLoading(false);
+        if (loadToken === serviceprotokollJobLoadToken) notifyReactBridge();
       }
     }
 
@@ -13368,6 +13572,7 @@
           kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
           kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
           kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
+          abschluss: collectAbschlussPayload(),
           jsonOnly: jsonOnly,
           base_url: getDispoBaseUrl(),
           dispoBaseUrl: getDispoBaseUrl(),
@@ -13460,7 +13665,12 @@
           if (data.warning) console.warn('[Serviceprotokoll]', data.warning);
           await loadServiceprotokollDraftsForJob(body.job_id);
           if (typeof showToast === 'function') {
-            var toastMsg = 'Sammel-PDF erstellt (' + (built.protokolle.length) + ' Protokolle).';
+            var savedCount = data.saved && data.saved.length ? data.saved.length : 0;
+            var expectedCount = built.protokolle.length * (pdfLangs.length || 1);
+            var toastMsg = savedCount + ' PDF-Datei(en) lokal gespeichert (je FN im zugehörigen Ordner).';
+            if (savedCount < expectedCount) {
+              toastMsg += ' Erwartet: ' + expectedCount + '.';
+            }
             if (data.saved && data.saved.length) toastMsg += ' ' + data.saved.join(', ');
             showToast(toastMsg);
           }
@@ -13471,6 +13681,193 @@
         }
       });
     }
+
+    function spIsoToDisplay(iso) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || '').trim());
+      if (!m) return String(iso || '');
+      return m[3] + '.' + m[2] + '.' + m[1];
+    }
+
+    function spDisplayToIso(display) {
+      var m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(String(display || '').trim());
+      if (!m) return String(display || '');
+      return m[3] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0');
+    }
+
+    function spCollectJobOptions() {
+      if (!jobSelect) return [];
+      var out = [];
+      for (var i = 0; i < jobSelect.options.length; i++) {
+        var opt = jobSelect.options[i];
+        if (!opt || !opt.value) continue;
+        out.push({ id: String(opt.value), label: String(opt.textContent || '').trim() });
+      }
+      return out;
+    }
+
+    function spPullPayloadForReact() {
+      syncStepsFromDom();
+      var matrix = collectMessMatrixFromForm();
+      var pgTest = collectPgTestFromForm();
+      var statusEl = document.querySelector('input[name="serviceprotokollStatus"]:checked');
+      var monteurEl = document.getElementById('serviceprotokollMonteur');
+      var jobOpt = jobSelect && jobSelect.selectedOptions && jobSelect.selectedOptions[0];
+      var monteurLabel = '';
+      if (monteurEl && monteurEl.selectedOptions && monteurEl.selectedOptions[0]) {
+        monteurLabel = String(monteurEl.selectedOptions[0].textContent || '').trim();
+      }
+      return {
+        jobId: jobSelect ? String(jobSelect.value || '') : '',
+        jobs: spCollectJobOptions(),
+        fabNumbers: parseJobFabrikationsnummernOrdered(serviceJobData || {}),
+        form: {
+          order: jobOpt ? String(jobOpt.textContent || '').trim() : '',
+          project: (document.getElementById('serviceprotokollProjekt') || {}).value || '',
+          date: spIsoToDisplay(datumEl ? datumEl.value : ''),
+          activeFab: getActiveFab(),
+          plantType: (document.getElementById('serviceprotokollType') || {}).value || '',
+          qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
+          qmaxUnit: 't/h',
+          position: (document.getElementById('serviceprotokollPos') || {}).value || '',
+          dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
+          loadcellType: (document.getElementById('spMessType') || {}).value || '',
+          serialNumber: (document.getElementById('spMessSeriennummer') || {}).value || '',
+          supplyVoltage: (document.getElementById('spMessVersSpannung') || {}).value || '',
+          generalRemarks: (document.getElementById('serviceprotokollBemerkungen') || {}).value || '',
+          status: statusEl ? String(statusEl.value || 'geprueft') : 'geprueft',
+          monteur: monteurLabel,
+          closingRemarks: (document.getElementById('serviceprotokollAbschlussBemerkungen') || {}).value || '',
+          pdfDe: !!(document.getElementById('spPdfDe') && document.getElementById('spPdfDe').checked),
+          pdfEn: !!(document.getElementById('spPdfEn') && document.getElementById('spPdfEn').checked)
+        },
+        measurements: [
+          { id: 'dms', label: 'DMS entlastet / released', kg: matrix.dms.kg, mv: matrix.dms.mv, ma: matrix.dms.ma, g: matrix.dms.g_prozent },
+          { id: 'tara', label: 'Tara / tare', kg: matrix.tara.kg, mv: matrix.tara.mv, ma: matrix.tara.ma, g: matrix.tara.g_prozent },
+          { id: 'pg', label: 'Prüfgewicht / test load', kg: matrix.pruefgewicht.kg, mv: matrix.pruefgewicht.mv, ma: matrix.pruefgewicht.ma, g: matrix.pruefgewicht.g_prozent }
+        ],
+        testLoad: {
+          weight: pgTest[0] || '',
+          display: pgTest[1] || '',
+          deviation: pgTest[2] || '',
+          value4: pgTest[3] || ''
+        },
+        workSteps: arbeitsschritte.map(function (s, i) {
+          return {
+            id: String(i + 1),
+            label: String(s.bezeichnung_de || s.bezeichnung || '').trim(),
+            result: (s.status === 'ok' || s.status === 'nok' || s.status === 'na') ? s.status : 'na',
+            remark: String(s.bemerkung || '')
+          };
+        })
+      };
+    }
+
+    function spApplyPayloadFromReact(payload) {
+      if (!payload || !payload.form) return;
+      var f = payload.form;
+      var setVal = function (id, val) {
+        var el = document.getElementById(id);
+        if (el && val != null) el.value = String(val);
+      };
+      setVal('serviceprotokollProjekt', f.project);
+      if (datumEl) datumEl.value = spDisplayToIso(f.date);
+      setVal('serviceprotokollType', f.plantType);
+      setVal('serviceprotokollQmax', f.qmax);
+      setVal('serviceprotokollPos', f.position);
+      setVal('serviceprotokollDwc', f.dwc);
+      setVal('spMessType', f.loadcellType);
+      setVal('spMessSeriennummer', f.serialNumber);
+      setVal('spMessVersSpannung', f.supplyVoltage);
+      setVal('serviceprotokollBemerkungen', f.generalRemarks);
+      setVal('serviceprotokollAbschlussBemerkungen', f.closingRemarks);
+      var pdfDe = document.getElementById('spPdfDe');
+      var pdfEn = document.getElementById('spPdfEn');
+      if (pdfDe) pdfDe.checked = !!f.pdfDe;
+      if (pdfEn) pdfEn.checked = !!f.pdfEn;
+      document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
+        el.checked = el.value === (f.status || 'geprueft');
+      });
+      if (Array.isArray(payload.measurements) && payload.measurements.length) {
+        var mm = {
+          dms: { kg: payload.measurements[0].kg || '', mv: payload.measurements[0].mv || '', ma: payload.measurements[0].ma || '', g_prozent: payload.measurements[0].g || '' },
+          tara: { kg: payload.measurements[1].kg || '', mv: payload.measurements[1].mv || '', ma: payload.measurements[1].ma || '', g_prozent: payload.measurements[1].g || '' },
+          pruefgewicht: { kg: payload.measurements[2].kg || '', mv: payload.measurements[2].mv || '', ma: payload.measurements[2].ma || '', g_prozent: payload.measurements[2].g || '' }
+        };
+        applyMessMatrixToForm(mm);
+      }
+      if (payload.testLoad) {
+        var tl = payload.testLoad;
+        applyPgTestToForm([tl.weight || '', tl.display || '', tl.deviation || '', tl.value4 || '']);
+      }
+      if (Array.isArray(payload.workSteps)) {
+        arbeitsschritte = payload.workSteps.map(function (s) {
+          return {
+            bezeichnung_de: String(s.label || ''),
+            bezeichnung_en: '',
+            status: s.result || 'na',
+            bemerkung: String(s.remark || '')
+          };
+        });
+        if (!arbeitsschritte.length) {
+          arbeitsschritte = [{ bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' }];
+        }
+        renderSteps();
+      }
+      if (f.activeFab && f.activeFab !== getActiveFab()) {
+        setActiveFabValue(f.activeFab);
+        renderFabButtonsActive();
+      }
+      updateVersSpannungHint();
+    }
+
+    function notifyReactBridge() {
+      if (typeof window.serviceprotokollReactBridge !== 'undefined' &&
+          window.serviceprotokollReactBridge &&
+          typeof window.serviceprotokollReactBridge.syncToReact === 'function') {
+        window.serviceprotokollReactBridge.syncToReact();
+      }
+    }
+
+    window.serviceprotokollBridge = {
+      pullPayload: spPullPayloadForReact,
+      applyPayload: spApplyPayloadFromReact,
+      selectJob: function (jobId) {
+        if (!jobSelect || !jobId) return;
+        jobSelect.value = jobId;
+        applyServiceprotokollJobSelection(jobId).then(function () {
+          notifyReactBridge();
+        });
+      },
+      selectFab: function (fab) {
+        switchServiceprotokollFab(fab).then(function () {
+          notifyReactBridge();
+        });
+      },
+      triggerAction: function (action) {
+        if (action === 'cancel') {
+          if (abbrechenBtn) abbrechenBtn.click();
+          return;
+        }
+        if (action === 'stickySave' && stickySaveBtn) {
+          stickySaveBtn.click();
+          return;
+        }
+        if (action === 'saveJson') {
+          var jsonBtn = document.getElementById('btnServiceprotokollSaveJson');
+          if (jsonBtn) jsonBtn.click();
+          return;
+        }
+        if (action === 'pdf') {
+          var pdfBtn = document.getElementById('btnServiceprotokollSavePdf');
+          if (pdfBtn) pdfBtn.click();
+          return;
+        }
+        if (action === 'pdfAll') {
+          var allBtn = document.getElementById('btnServiceprotokollSaveAllPdf');
+          if (allBtn) allBtn.click();
+        }
+      }
+    };
 
     if (abbrechenBtn) {
       abbrechenBtn.addEventListener('click', function () {
@@ -13493,11 +13890,13 @@
         renderFabButtons(null);
         updateAllPdfButtonVisibility(null);
         if (kopfdatenEl) kopfdatenEl.innerHTML = '';
-        ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollProjekt', 'serviceprotokollBemerkungen'
+        ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollProjekt', 'serviceprotokollBemerkungen', 'serviceprotokollAbschlussBemerkungen'
         ].concat(SP_MESS_FIELD_IDS).forEach(function (id) {
           var el = document.getElementById(id);
           if (el) el.value = '';
         });
+        clearAbschlussFields();
+        updateVersSpannungHint();
         if (datumEl && !datumEl.value) {
           var today = new Date();
           datumEl.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');

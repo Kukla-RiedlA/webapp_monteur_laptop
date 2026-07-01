@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+  }
+
+  input,
+  select,
+  textarea {
+    @apply outline-none;
+  }
+
+  input:focus,
+  select:focus,
+  textarea:focus {
+    @apply ring-2 ring-kukla-green/25 border-kukla-green;
+  }
+}
+
+@layer components {
+  .sp-input {
+    @apply h-[38px] w-full rounded-lg border border-kukla-border bg-white px-3 text-sm text-[#111827];
+  }
+
+  .sp-textarea {
+    @apply w-full rounded-lg border border-kukla-border bg-white px-3 py-2 text-sm text-[#111827];
+  }
+
+  .sp-btn-primary {
+    @apply inline-flex h-[38px] items-center justify-center gap-2 rounded-lg bg-kukla-green px-4 text-sm font-semibold text-white shadow-card transition hover:bg-[#006841];
+  }
+
+  .sp-btn-outline {
+    @apply inline-flex h-[38px] items-center justify-center gap-2 rounded-lg border border-kukla-green bg-white px-4 text-sm font-semibold text-kukla-green transition hover:bg-kukla-mint;
+  }
+
+  .sp-table-head {
+    @apply bg-kukla-mint text-left text-xs font-semibold text-[#4b5563];
+  }
+
+  .sp-table-cell {
+    @apply border border-kukla-border px-2 py-1.5 align-middle text-sm;
+  }
+}

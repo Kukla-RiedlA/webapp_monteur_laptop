@@ -21,7 +21,7 @@
   <link rel="stylesheet" href="css/kukla-brand.css">
   <link rel="stylesheet" href="css/modules-web-parity.css">
   <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
-  <link rel="stylesheet" href="css/abrechnung-web-parity.css?v=20260616f">
+  <link rel="stylesheet" href="css/serviceprotokoll-v2.css">
   <style>
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -89,7 +89,6 @@
       white-space: nowrap;
     }
     .sp-mess-meta-grid .sp-mess-field-col input,
-    .sp-mess-taraspeicher-row input,
     .sp-mess-table input {
       width: 100%;
       max-width: 21ch;
@@ -137,23 +136,7 @@
     .sp-mess-table .sp-mess-label-col { width: 8.5rem; }
     .sp-mess-table .sp-mess-data-col { width: 21ch; }
     .sp-mess-table-wrap { overflow-x: auto; max-width: 100%; }
-    .sp-mess-taraspeicher-row {
-      display: grid;
-      grid-template-columns: 8.5rem 21ch;
-      gap: 0.45rem 0.5rem;
-      align-items: center;
-      margin-top: 0.55rem;
-      width: calc(8.5rem + 4 * 21ch);
-      max-width: 100%;
-      box-sizing: border-box;
-    }
-    .sp-mess-taraspeicher-row label {
-      font-size: 0.82rem;
-      color: var(--muted);
-      font-weight: 600;
-      white-space: nowrap;
-      text-align: right;
-    }
+    .sp-mess-pgtest-table { margin-top: 0.55rem; }
     .btn-danger { background: #b3261e; color: #fff; }
     .btn-danger:hover { background: #8c1d18; }
     main { padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
@@ -1078,6 +1061,84 @@
     .sp-steps-wrap { overflow-x: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); }
     .sp-steps-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; table-layout: fixed; }
     .sp-steps-table thead th { text-align: left; padding: 0.5rem 0.6rem; background: var(--bg); border-bottom: 1px solid var(--accent); font-size: 0.8rem; color: var(--muted); font-weight: 600; white-space: nowrap; }
+    .sp-job-context-panel {
+      margin-bottom: 1.25rem;
+      padding: 0.85rem 1rem 1rem;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: var(--bg);
+    }
+    .sp-job-context-panel .sp-job-context-title {
+      margin: 0 0 0.75rem;
+      font-size: 1.25rem;
+      color: var(--text-strong, var(--text));
+    }
+    .sp-job-context-panel .form-group:last-child {
+      margin-bottom: 0;
+    }
+    .sp-protokoll-body {
+      padding-top: 0.15rem;
+    }
+    .sp-form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      min-width: 0;
+    }
+    .sp-form-field label {
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--text);
+    }
+    .sp-form-field input[type="text"],
+    .sp-form-field input[type="date"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.45rem 0.5rem;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.9rem;
+    }
+    .sp-proj-datum-row .sp-form-field input[type="text"],
+    .sp-proj-datum-row .sp-form-field input[type="date"] {
+      height: 2.125rem;
+      min-height: 2.125rem;
+      padding-top: 0;
+      padding-bottom: 0;
+      line-height: 1.25;
+    }
+    .sp-proj-datum-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 0.75rem 1rem;
+      margin-bottom: 0.75rem;
+    }
+    .sp-proj-datum-row .sp-field-projekt {
+      flex: 0 1 26rem;
+      width: 26rem;
+      max-width: 100%;
+    }
+    .sp-proj-datum-row .sp-field-datum {
+      flex: 0 0 11rem;
+      width: 11rem;
+      max-width: 100%;
+    }
+    .sp-kopf-anlage-block { margin-bottom: 0.75rem; }
+    .sp-kopf-anlage-block .sp-section-title { display: block; margin-bottom: 0.5rem; }
+    .sp-kopf-anlage-fields {
+      display: grid;
+      grid-template-columns: minmax(0, 22rem) 9rem minmax(0, 14rem) 9rem;
+      gap: 0.65rem 0.75rem;
+      align-items: end;
+    }
+    @media (max-width: 900px) {
+      .sp-kopf-anlage-fields {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
     .sp-steps-table tbody tr { border-bottom: 1px solid var(--accent); }
     .sp-steps-table tbody tr:last-child { border-bottom: none; }
     .sp-steps-table tbody tr.sp-step-ok { background: rgba(46, 125, 50, 0.06); }
@@ -1496,144 +1557,248 @@
     </div>
   </main>
   <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">
-    <div class="card">
-      <h2>Serviceprotokoll</h2>
-      <form id="serviceprotokollForm" class="montagebericht-form-wrap">
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label for="serviceprotokollJob">Auftrag</label>
-          <select id="serviceprotokollJob" class="dienstreise-select" required>
-            <option value="">– Bitte wählen –</option>
-          </select>
+    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html" title="Serviceprotokoll"></iframe>
+    <div id="serviceprotokollLegacyHost" class="sp-v2-legacy-host" hidden aria-hidden="true">
+    <div class="card sp-v2-card">
+      <div class="sp-v2-topbar">
+        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Serviceprotokoll</h2>
+        <div class="sp-v2-topbar-actions">
+        <button type="button" class="btn btn-primary" id="btnServiceprotokollStickySave" title="Zwischenstand speichern (serviceprotokoll.json)">Speichern</button>
+        <button type="button" class="sp-v2-menu-btn" aria-label="Menü"><img src="icons/dots-vertical-green.svg" alt="" aria-hidden="true"></button>
         </div>
-        <div class="form-group" id="serviceprotokollFabGroup" style="display:none;margin-bottom:0.75rem">
-          <label>Fabrikationsnummer</label>
-          <input type="hidden" id="serviceprotokollFab" name="serviceprotokollFab" value="">
-          <div id="serviceprotokollFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
-        </div>
-        <div id="serviceprotokollKopfdaten" class="montagebericht-kopfdaten" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border-radius:4px;font-size:0.9rem"></div>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label for="serviceprotokollProjekt">Projekt <span class="muted" style="font-weight:normal">(Anlagenstamm, Pflichtfeld)</span></label>
-          <input type="text" id="serviceprotokollProjekt" required placeholder="Wird aus Anlagenstamm der gewählten FN übernommen; sonst manuell ausfüllen" autocomplete="off" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)">
-        </div>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label for="serviceprotokollDatum">Datum der Durchführung</label>
-          <input type="date" id="serviceprotokollDatum" required style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
-        </div>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label>Kopfdaten Anlage <span class="muted" style="font-weight:normal">(aus Anlagenstamm; DWC = Elektronik; leere Felder werden beim Speichern übernommen)</span></label>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
-            <input type="text" id="serviceprotokollPos" placeholder="Pos.Nr." style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
-            <input type="text" id="serviceprotokollQmax" placeholder="Qmax" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
-            <input type="text" id="serviceprotokollType" placeholder="Type" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
-            <input type="text" id="serviceprotokollDwc" placeholder="DWC (Elektronik)" style="padding:0.45rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
-          </div>
-        </div>
-        <div class="form-group" style="margin-bottom:1rem">
-          <span class="sp-mess-section-title">Messwerte Wägezelle</span>
-          <div class="sp-mess-block">
-          <div class="sp-mess-meta-grid" aria-label="Wägezelle Stammdaten">
-            <div class="sp-mess-meta-spacer" aria-hidden="true"></div>
-            <div class="sp-mess-field-col">
-              <label for="spMessType">Type</label>
-              <input type="text" id="spMessType" autocomplete="off">
+      </div>
+      <form id="serviceprotokollForm" class="sp-v2-form">
+        <div id="serviceprotokollKopfdaten" class="montagebericht-kopfdaten" hidden aria-hidden="true"></div>
+
+        <section class="sp-v2-section" aria-labelledby="spV2Sec1Title">
+          <header class="sp-v2-section-head" id="spV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="serviceprotokollJob">Auftrag</label>
+                <select id="serviceprotokollJob" class="dienstreise-select" required>
+                  <option value="">– Bitte wählen –</option>
+                </select>
+              </div>
+              <div class="sp-v2-field">
+                <label for="serviceprotokollProjekt">Projekt</label>
+                <input type="text" id="serviceprotokollProjekt" required placeholder="Aus Anlagenstamm oder manuell" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="serviceprotokollDatum">Datum</label>
+                <input type="date" id="serviceprotokollDatum" required>
+              </div>
             </div>
-            <div class="sp-mess-field-col">
-              <label for="spMessSeriennummer">Seriennummer</label>
-              <input type="text" id="spMessSeriennummer" autocomplete="off">
+            <div class="sp-v2-fab-block" id="serviceprotokollFabGroup" style="display:none">
+              <label>Fabrikationsnummer</label>
+              <input type="hidden" id="serviceprotokollFab" name="serviceprotokollFab" value="">
+              <div id="serviceprotokollFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
             </div>
-            <div class="sp-mess-field-col">
-              <label for="spMessVersSpannung">Vers.Spannung</label>
-              <input type="text" id="spMessVersSpannung" autocomplete="off">
+          </div>
+        </section>
+
+        <div class="sp-v2-blocks-234">
+        <div class="sp-v2-row-2col">
+        <section class="sp-v2-section" aria-labelledby="spV2Sec2Title">
+          <header class="sp-v2-section-head" id="spV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Anlagendaten</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-stack">
+              <div class="sp-v2-field">
+                <label for="serviceprotokollType">Type</label>
+                <input type="text" id="serviceprotokollType" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="serviceprotokollQmax">Qmax</label>
+                <input type="text" id="serviceprotokollQmax" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="serviceprotokollPos">Pos.Nr.</label>
+                <input type="text" id="serviceprotokollPos" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="serviceprotokollDwc">DWC</label>
+                <input type="text" id="serviceprotokollDwc" autocomplete="off">
+              </div>
             </div>
-            <div class="sp-mess-meta-spacer" aria-hidden="true"></div>
           </div>
-          <div class="sp-mess-table-wrap">
-            <table class="sp-mess-table" aria-label="Messwerte Wägezelle">
-              <colgroup>
-                <col class="sp-mess-label-col">
-                <col span="4" class="sp-mess-data-col">
-              </colgroup>
-              <thead>
-                <tr>
-                  <th class="sp-mess-label-col" scope="col"></th>
-                  <th scope="col">kg</th>
-                  <th scope="col">mV</th>
-                  <th scope="col">mA</th>
-                  <th scope="col">g %</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <th scope="row">DMS entl./released</th>
-                  <td><input type="text" id="spMessDmsKg" autocomplete="off" aria-label="DMS entlastet kg"></td>
-                  <td><input type="text" id="spMessDmsMv" autocomplete="off" aria-label="DMS entlastet mV"></td>
-                  <td><input type="text" id="spMessDmsMa" autocomplete="off" aria-label="DMS entlastet mA"></td>
-                  <td><input type="text" id="spMessDmsG" autocomplete="off" aria-label="DMS entlastet g Prozent"></td>
-                </tr>
-                <tr>
-                  <th scope="row">Tara/tare</th>
-                  <td><input type="text" id="spMessTaraKg" autocomplete="off" aria-label="Tara kg"></td>
-                  <td><input type="text" id="spMessTaraMv" autocomplete="off" aria-label="Tara mV"></td>
-                  <td><input type="text" id="spMessTaraMa" autocomplete="off" aria-label="Tara mA"></td>
-                  <td><input type="text" id="spMessTaraG" autocomplete="off" aria-label="Tara g Prozent"></td>
-                </tr>
-                <tr>
-                  <th scope="row">Prüfgew./Testload</th>
-                  <td><input type="text" id="spMessPgKg" autocomplete="off" aria-label="Prüfgewicht kg"></td>
-                  <td><input type="text" id="spMessPgMv" autocomplete="off" aria-label="Prüfgewicht mV"></td>
-                  <td><input type="text" id="spMessPgMa" autocomplete="off" aria-label="Prüfgewicht mA"></td>
-                  <td><input type="text" id="spMessPgG" autocomplete="off" aria-label="Prüfgewicht g Prozent"></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="sp-mess-taraspeicher-row">
-            <label for="spMessTaraspeicher">Taraspeicher</label>
-            <input type="text" id="spMessTaraspeicher" autocomplete="off">
-          </div>
-          </div>
-        </div>
-        <div style="margin-bottom:1rem">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem">
-            <div>
-              <strong>Arbeitsschritte</strong>
-              <span class="muted" style="font-weight:normal;font-size:0.85rem;display:block;margin-top:0.15rem">Prüfpunkte abhaken – Bemerkung bei Bedarf (z. B. n.i.O.)</span>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="spV2Sec3Title">
+          <header class="sp-v2-section-head" id="spV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Wägezelle</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-stack">
+              <div class="sp-v2-field">
+                <label for="spMessType">Type</label>
+                <input type="text" id="spMessType" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="spMessSeriennummer">Seriennummer</label>
+                <input type="text" id="spMessSeriennummer" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="spMessVersSpannung">Versorgungsspannung</label>
+                <div class="sp-v2-field-with-unit">
+                  <input type="text" id="spMessVersSpannung" autocomplete="off" inputmode="decimal">
+                  <span class="sp-v2-unit">V</span>
+                </div>
+              </div>
             </div>
-            <button type="button" class="btn btn-ghost" id="serviceprotokollAddStep">+ Schritt</button>
           </div>
-          <div class="sp-steps-wrap">
-            <table class="sp-steps-table" aria-label="Arbeitsschritte">
-              <thead>
-                <tr>
-                  <th class="sp-col-nr">Nr</th>
-                  <th class="sp-col-status">Ergebnis</th>
-                  <th class="sp-col-text">Arbeitsschritt</th>
-                  <th class="sp-col-bem">Bemerkung</th>
-                  <th class="sp-col-act" aria-label="Reihenfolge"></th>
-                </tr>
-              </thead>
-              <tbody id="serviceprotokollArbeitsschritte"></tbody>
-            </table>
+        </section>
+        </div>
+
+        <section class="sp-v2-section" aria-labelledby="spV2Sec4Title">
+          <header class="sp-v2-section-head" id="spV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/chart-up-green.svg" alt="" aria-hidden="true"> Messwerte Wägezelle</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-mess-block">
+              <div class="sp-mess-table-wrap">
+                <table class="sp-mess-table" aria-label="Messwerte Wägezelle">
+                  <colgroup>
+                    <col class="sp-mess-label-col">
+                    <col span="4" class="sp-mess-data-col">
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th class="sp-mess-label-col" scope="col">Messpunkt</th>
+                      <th scope="col">kg</th>
+                      <th scope="col">mV</th>
+                      <th scope="col">mA</th>
+                      <th scope="col">g %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <th scope="row">DMS entlastet / released</th>
+                      <td><input type="text" id="spMessDmsKg" autocomplete="off" aria-label="DMS entlastet kg"></td>
+                      <td><input type="text" id="spMessDmsMv" autocomplete="off" aria-label="DMS entlastet mV"></td>
+                      <td><input type="text" id="spMessDmsMa" autocomplete="off" aria-label="DMS entlastet mA"></td>
+                      <td><input type="text" id="spMessDmsG" autocomplete="off" aria-label="DMS entlastet g Prozent"></td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Tara / tare</th>
+                      <td><input type="text" id="spMessTaraKg" autocomplete="off" aria-label="Tara kg"></td>
+                      <td><input type="text" id="spMessTaraMv" autocomplete="off" aria-label="Tara mV"></td>
+                      <td><input type="text" id="spMessTaraMa" autocomplete="off" aria-label="Tara mA"></td>
+                      <td><input type="text" id="spMessTaraG" autocomplete="off" aria-label="Tara g Prozent"></td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Prüfgewicht / test load</th>
+                      <td><input type="text" id="spMessPgKg" autocomplete="off" aria-label="Prüfgewicht kg"></td>
+                      <td><input type="text" id="spMessPgMv" autocomplete="off" aria-label="Prüfgewicht mV"></td>
+                      <td><input type="text" id="spMessPgMa" autocomplete="off" aria-label="Prüfgewicht mA"></td>
+                      <td><input type="text" id="spMessPgG" autocomplete="off" aria-label="Prüfgewicht g Prozent"></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
+        </section>
         </div>
-        <div class="form-group" style="margin-bottom:1rem">
-          <label for="serviceprotokollBemerkungen">Allgemeine Bemerkungen</label>
-          <textarea id="serviceprotokollBemerkungen" rows="3" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)"></textarea>
-        </div>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <span class="muted" style="font-size:0.85rem">PDF-Sprache(n) für „PDF erstellen“:</span>
-          <div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:0.35rem">
-            <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem"><input type="checkbox" id="spPdfDe" checked> Deutsch (DE)</label>
-            <label style="font-weight:normal;display:inline-flex;align-items:center;gap:0.35rem"><input type="checkbox" id="spPdfEn"> Englisch (EN)</label>
+
+        <section class="sp-v2-section" aria-labelledby="spV2Sec5Title">
+          <header class="sp-v2-section-head" id="spV2Sec5Title"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/chart-up-green.svg" alt="" aria-hidden="true"> Prüfgewichtstest</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-pgtest-card">
+              <div class="sp-v2-pgtest-head">Prüfgewichtstest / test with test load</div>
+              <div class="sp-v2-pgtest-row">
+                <input type="text" id="spMessPgTest1" autocomplete="off" inputmode="decimal" aria-label="Prüfgewicht (kg)">
+                <input type="text" id="spMessPgTest2" autocomplete="off" inputmode="decimal" aria-label="Anzeige (mV)">
+                <input type="text" id="spMessPgTest3" autocomplete="off" inputmode="decimal" aria-label="Abweichung (%)">
+                <input type="text" id="spMessPgTest4" autocomplete="off" inputmode="decimal" aria-label="Prüfgewichtstest Feld 4">
+              </div>
+            </div>
           </div>
-        </div>
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-          <button type="submit" class="btn btn-primary" id="btnServiceprotokollSaveJson" title="Speichert serviceprotokoll.json – ohne PDF">Speichern (nur Daten)</button>
-          <button type="submit" class="btn btn-primary" id="btnServiceprotokollSavePdf" title="Zwischenstand plus PDF im Projektordner (Dokumente_Monteur)">PDF erstellen</button>
-          <button type="button" class="btn btn-primary" id="btnServiceprotokollSaveAllPdf" style="display:none" title="Speichert alle FNs und erzeugt eine mehrseitige Sammel-PDF">Alle PDF erstellen</button>
-          <button type="button" class="btn btn-ghost" id="serviceprotokollAbbrechen">Abbrechen</button>
-        </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="spV2Sec6Title">
+          <header class="sp-v2-section-head" id="spV2Sec6Title"><span class="sp-v2-num">6</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-steps-head">
+              <div>
+                <strong>Prüfpunkte</strong>
+                <span class="muted" style="font-weight:normal;font-size:0.85rem;display:block;margin-top:0.15rem">OK / n.i.O. / n.a. – Bemerkung bei Bedarf</span>
+              </div>
+            </div>
+            <div class="sp-steps-wrap">
+              <table class="sp-steps-table" aria-label="Arbeitsschritte">
+                <thead>
+                  <tr>
+                    <th class="sp-col-nr">Nr</th>
+                    <th class="sp-col-status">Ergebnis</th>
+                    <th class="sp-col-text">Arbeitsschritt</th>
+                    <th class="sp-col-bem">Bemerkung</th>
+                    <th class="sp-col-act" aria-label="Reihenfolge"></th>
+                  </tr>
+                </thead>
+                <tbody id="serviceprotokollArbeitsschritte"></tbody>
+              </table>
+            </div>
+            <div class="sp-v2-field" style="margin-top:0.85rem">
+              <label for="serviceprotokollBemerkungen">Allgemeine Bemerkungen</label>
+              <textarea id="serviceprotokollBemerkungen" rows="3"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="spV2Sec7Title">
+          <header class="sp-v2-section-head" id="spV2Sec7Title"><span class="sp-v2-num">7</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Abschluss</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-abschluss-grid">
+              <div class="sp-v2-abschluss-main">
+                <fieldset class="sp-v2-status-group" style="border:none;padding:0;margin:0">
+                  <legend style="font-weight:600;font-size:0.9rem;margin-bottom:0.35rem;padding:0">Status</legend>
+                  <label><input type="radio" name="serviceprotokollStatus" value="geprueft" checked> Geprüft</label>
+                  <label><input type="radio" name="serviceprotokollStatus" value="justiert"> Justiert</label>
+                  <label><input type="radio" name="serviceprotokollStatus" value="mangel"> Mangel festgestellt</label>
+                </fieldset>
+                <div class="sp-v2-field">
+                  <label for="serviceprotokollAbschlussBemerkungen">Bemerkungen</label>
+                  <textarea id="serviceprotokollAbschlussBemerkungen" rows="3"></textarea>
+                </div>
+                <div class="sp-v2-field" style="margin-top:0.65rem">
+                  <label for="serviceprotokollMonteur">Monteur</label>
+                  <select id="serviceprotokollMonteur"></select>
+                </div>
+                <div class="sp-v2-sig-grid">
+                  <div class="sp-v2-sig-box">
+                    <label for="spSignatureMonteurCanvas">Unterschrift Monteur</label>
+                    <div class="sp-v2-sig-pad">
+                      <canvas id="spSignatureMonteurCanvas" width="400" height="100" aria-label="Unterschrift Monteur"></canvas>
+                    </div>
+                    <div class="sp-v2-sig-actions">
+                      <button type="button" class="btn btn-ghost" data-sp-sig-clear="spSignatureMonteurCanvas">Löschen</button>
+                    </div>
+                  </div>
+                  <div class="sp-v2-sig-box">
+                    <label for="spSignatureKundeCanvas">Unterschrift Kunde</label>
+                    <div class="sp-v2-sig-pad">
+                      <canvas id="spSignatureKundeCanvas" width="400" height="100" aria-label="Unterschrift Kunde"></canvas>
+                    </div>
+                    <div class="sp-v2-sig-actions">
+                      <button type="button" class="btn btn-ghost" data-sp-sig-clear="spSignatureKundeCanvas">Löschen</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="sp-v2-abschluss-actions">
+                <div class="sp-v2-pdf-lang">
+                  <span>PDF-Sprache(n)</span>
+                  <label><input type="checkbox" id="spPdfDe" checked> Deutsch (DE)</label>
+                  <label><input type="checkbox" id="spPdfEn"> Englisch (EN)</label>
+                </div>
+                <div class="sp-v2-actions-stack">
+                  <button type="submit" class="btn btn-primary" id="btnServiceprotokollSavePdf" title="Zwischenstand plus PDF im Projektordner">PDF erstellen</button>
+                  <button type="button" class="btn btn-primary" id="btnServiceprotokollSaveAllPdf" style="display:none" title="Alle FNs – je FN ein PDF im FN-Ordner">Alle PDF erstellen</button>
+                  <button type="submit" class="btn btn-primary" id="btnServiceprotokollSaveJson" title="Speichert serviceprotokoll.json – ohne PDF">Speichern (nur Daten)</button>
+                  <button type="button" class="btn btn-ghost" id="serviceprotokollAbbrechen">Abbrechen</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </form>
+    </div>
     </div>
   </main>
   <main id="viewTextbausteine" class="view-textbausteine" aria-label="Textbausteine">
@@ -1882,6 +2047,7 @@
   <script src="js/view-abrechnung.js?v=20260616f"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js"></script>
+  <script src="js/serviceprotokoll-react-bridge.js"></script>
   <script src="js/abrechnung-laptop-bridge.js?v=20260616f"></script>
   <script src="rams_wizard.js"></script>
 </body>

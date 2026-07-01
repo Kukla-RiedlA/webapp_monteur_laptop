@@ -1,0 +1,607 @@
+/* Serviceprotokoll v2 – Mockup-Stil (Karten, grüne Akzente, Icons) */
+
+:root {
+  --sp-green: #007a4d;
+  --sp-green-hover: #006841;
+  --sp-mint: #eefaf5;
+  --sp-border: #d8e3df;
+  --sp-page: #f7f8f8;
+  --sp-text: #111827;
+  --sp-muted: #4b5563;
+  --sp-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+#viewProtokolleService {
+  background: var(--sp-page);
+  padding: 0;
+  min-height: calc(100vh - 120px);
+}
+
+.sp-react-frame {
+  display: block;
+  width: 100%;
+  min-height: calc(100vh - 120px);
+  border: none;
+  background: var(--sp-page);
+}
+
+.sp-v2-legacy-host {
+  display: none !important;
+}
+
+.sp-v2-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+.sp-v2-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.sp-v2-page-title {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--sp-text);
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.sp-v2-page-title .sp-v2-icon {
+  width: 2rem;
+  height: 2rem;
+}
+
+.sp-v2-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.sp-v2-section {
+  background: #fff;
+  border: 1px solid var(--sp-border);
+  border-radius: 12px;
+  box-shadow: var(--sp-shadow);
+  overflow: hidden;
+}
+
+.sp-v2-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: var(--sp-mint);
+  border-bottom: 1px solid var(--sp-border);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--sp-text);
+}
+
+.sp-v2-section-head .sp-v2-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+}
+
+.sp-v2-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: var(--sp-green);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.sp-v2-section-body {
+  padding: 1rem;
+}
+
+.sp-v2-grid-stack {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+.sp-v2-blocks-234 {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.sp-v2-row-2col {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 768px) {
+  .sp-v2-row-2col {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.sp-v2-grid-3 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+@media (min-width: 900px) {
+  .sp-v2-grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.sp-v2-grid-4 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.85rem;
+}
+
+@media (min-width: 768px) {
+  .sp-v2-grid-4 {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.sp-v2-grid-3-wz {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+@media (min-width: 640px) {
+  .sp-v2-grid-3-wz {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.sp-v2-field label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--sp-text);
+  margin-bottom: 0.25rem;
+}
+
+.sp-v2-field input,
+.sp-v2-field select,
+.sp-v2-field textarea {
+  width: 100%;
+  height: 38px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--sp-border);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  color: var(--sp-text);
+  background: #fff;
+}
+
+.sp-v2-field textarea {
+  height: auto;
+  min-height: 80px;
+  padding: 0.5rem 0.75rem;
+  resize: vertical;
+}
+
+.sp-v2-field input:focus,
+.sp-v2-field select:focus,
+.sp-v2-field textarea:focus {
+  outline: none;
+  border-color: var(--sp-green);
+  box-shadow: 0 0 0 2px rgba(0, 122, 77, 0.2);
+}
+
+.sp-v2-field-with-unit {
+  display: flex;
+  gap: 0.35rem;
+  align-items: stretch;
+}
+
+.sp-v2-field-with-unit input {
+  flex: 1;
+}
+
+.sp-v2-unit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--sp-border);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.875rem;
+  color: var(--sp-muted);
+}
+
+.sp-v2-fab-block label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.sp-fab-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.sp-fab-btn {
+  min-width: 4.5rem;
+  height: 38px;
+  padding: 0 0.75rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border: 1px solid var(--sp-border);
+  background: #fff;
+  color: var(--sp-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.sp-fab-btn.is-active {
+  background: var(--sp-green);
+  border-color: var(--sp-green);
+  color: #fff;
+  box-shadow: var(--sp-shadow);
+}
+
+.sp-fab-btn.is-active::before {
+  content: '';
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  background: url('../icons/check-green.svg') center / contain no-repeat;
+  filter: brightness(0) invert(1);
+}
+
+.sp-v2-hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.875rem;
+  color: var(--sp-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.sp-v2-hint.is-ok {
+  color: #2e7d32;
+}
+
+.sp-v2-hint.is-warn {
+  color: var(--sp-muted);
+}
+
+.sp-v2-hint.is-ok::before,
+.sp-v2-hint.is-warn::before {
+  content: '';
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  background: url('../icons/circle-check-green.svg') center / contain no-repeat;
+}
+
+/* Messwerte-Tabelle */
+.sp-mess-table-wrap {
+  overflow-x: auto;
+}
+
+.sp-mess-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.sp-mess-table th,
+.sp-mess-table td {
+  border: 1px solid var(--sp-border);
+  padding: 0.35rem 0.5rem;
+  vertical-align: middle;
+}
+
+.sp-mess-table thead th {
+  background: var(--sp-mint);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--sp-muted);
+  text-align: left;
+}
+
+.sp-mess-table tbody th {
+  font-weight: 500;
+  color: var(--sp-text);
+  text-align: left;
+  font-size: 0.8rem;
+}
+
+.sp-mess-table input {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--sp-border);
+  border-radius: 6px;
+  padding: 0 0.5rem;
+  font-size: 0.875rem;
+}
+
+/* Prüfgewichtstest */
+.sp-v2-pgtest-card {
+  border: 1px solid var(--sp-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sp-v2-pgtest-head {
+  background: var(--sp-mint);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--sp-text);
+  border-bottom: 1px solid var(--sp-border);
+}
+
+.sp-v2-pgtest-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.35rem;
+  padding: 0.5rem;
+}
+
+.sp-v2-pgtest-row input,
+.sp-v2-pgtest-row select {
+  height: 38px;
+  border: 1px solid var(--sp-border);
+  border-radius: 8px;
+  padding: 0 0.5rem;
+  font-size: 0.875rem;
+}
+
+@media (max-width: 640px) {
+  .sp-v2-pgtest-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Arbeitsschritte */
+.sp-v2-steps-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.sp-steps-wrap {
+  overflow-x: auto;
+}
+
+.sp-steps-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.sp-steps-table th,
+.sp-steps-table td {
+  border: 1px solid var(--sp-border);
+  padding: 0.35rem 0.5rem;
+  vertical-align: middle;
+}
+
+.sp-steps-table thead th {
+  background: var(--sp-mint);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--sp-muted);
+  text-align: left;
+}
+
+.sp-col-nr { width: 2.5rem; text-align: center; }
+.sp-col-status { width: 9.5rem; }
+.sp-col-text { width: 22%; }
+.sp-col-bem { width: auto; }
+.sp-col-act { width: 3rem; text-align: center; }
+
+.sp-status-group {
+  display: inline-flex;
+  border: 1px solid var(--sp-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.sp-status-group .sp-status {
+  border: none;
+  border-radius: 0;
+  border-left: 1px solid var(--sp-border);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  min-height: auto;
+  height: auto;
+}
+
+.sp-status-group .sp-status:first-child {
+  border-left: none;
+}
+
+.sp-status-group .sp-status.is-active[data-status="ok"] {
+  background: var(--sp-green);
+  color: #fff;
+}
+
+.sp-status-group .sp-status.is-active:not([data-status="ok"]) {
+  background: var(--sp-mint);
+  color: var(--sp-text);
+}
+
+.sp-step-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.sp-remove {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--sp-border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.sp-remove .sp-v2-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Abschluss */
+.sp-v2-abschluss-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 900px) {
+  .sp-v2-abschluss-grid {
+    grid-template-columns: 1fr min(280px, 36%);
+  }
+}
+
+.sp-v2-status-group label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  margin-bottom: 0.25rem;
+}
+
+.sp-v2-sig-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.sp-v2-sig-box label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.sp-v2-sig-pad {
+  border: 2px dashed var(--sp-border);
+  border-radius: 8px;
+  min-height: 100px;
+  background: #fff;
+  position: relative;
+}
+
+.sp-v2-sig-pad::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 1.5rem;
+  height: 1.5rem;
+  background: url('../icons/pen-signature-green.svg') center / contain no-repeat;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.sp-v2-sig-pad canvas {
+  display: block;
+  width: 100%;
+  height: 100px;
+  position: relative;
+  z-index: 1;
+}
+
+.sp-v2-pdf-lang {
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.sp-v2-pdf-lang label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.sp-v2-actions-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sp-v2-actions-stack .btn-primary {
+  background: var(--sp-green);
+  border-color: var(--sp-green);
+}
+
+.sp-v2-actions-stack .btn-primary:hover {
+  background: var(--sp-green-hover);
+}
+
+/* Topbar-Icons (Legacy, falls sichtbar) */
+#btnServiceprotokollStickySave {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+#btnServiceprotokollStickySave::before {
+  content: '';
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  background: url('../icons/save-green.svg') center / contain no-repeat;
+  filter: brightness(0) invert(1);
+}
+
+.sp-v2-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sp-v2-menu-btn {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--sp-border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--sp-shadow);
+  cursor: pointer;
+}
+
+.sp-v2-menu-btn img {
+  width: 1.25rem;
+  height: 1.25rem;
+}
