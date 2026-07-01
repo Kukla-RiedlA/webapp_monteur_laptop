@@ -12755,7 +12755,8 @@
           kopf_pos_nr: (draft && draft.kopf_pos_nr) || '',
           kopf_qmax: (draft && draft.kopf_qmax) || '',
           kopf_type: (draft && draft.kopf_type) || '',
-          kopf_dwc: (draft && draft.kopf_dwc) || ''
+          kopf_dwc: (draft && draft.kopf_dwc) || '',
+          abschluss: (draft && draft.abschluss) || (fn === cur ? collectAbschlussPayload() : { status: 'geprueft' })
         });
       });
       if (missing.length) {
