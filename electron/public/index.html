@@ -22,6 +22,7 @@
   <link rel="stylesheet" href="css/modules-web-parity.css">
   <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
   <link rel="stylesheet" href="css/serviceprotokoll-v2.css">
+  <link rel="stylesheet" href="css/montagebericht-v2.css">
   <link rel="stylesheet" href="css/abrechnung-web-parity.css">
   <style>
     * { box-sizing: border-box; }
@@ -1039,26 +1040,18 @@
     .modal-job-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; flex-shrink: 0; }
     .view-textbausteine { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-textbausteine.active { display: block; }
+    .view-arbeitsschritte { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-arbeitsschritte.active { display: block; }
+    .as-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    .as-tabs button { padding: 0.45rem 0.9rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); color: var(--text); cursor: pointer; }
+    .as-tabs button.active { background: var(--btn-primary); border-color: var(--btn-primary); color: #fff; }
+    .as-step-row { display: flex; gap: 0.5rem; align-items: flex-start; padding: 0.55rem 0.65rem; border: 1px solid var(--accent); border-radius: 8px; margin-bottom: 0.5rem; background: var(--card); }
+    .as-step-main { flex: 1; min-width: 0; }
+    .as-preset-row { padding: 0.65rem; border: 1px solid var(--accent); border-radius: 8px; margin-bottom: 0.5rem; background: var(--card); }
+    .as-check-list { max-height: 280px; overflow: auto; border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem; background: var(--bg); }
+    .as-check-list label { display: block; padding: 0.25rem 0; font-size: 0.9rem; cursor: pointer; }
     .textbausteine-layout { display: grid; grid-template-columns: 280px 1fr; gap: 1rem; min-height: 400px; }
     @media (max-width: 800px) { .textbausteine-layout { grid-template-columns: 1fr; } }
-    .montagebericht-layout { display: grid; grid-template-columns: 260px 1fr; gap: 1.25rem; align-items: start; }
-    @media (max-width: 800px) { .montagebericht-layout { grid-template-columns: 1fr; } }
-    .montagebericht-tb-sidebar { position: sticky; top: 1rem; padding: 0.75rem; background: var(--bg); border: 1px solid var(--accent); border-radius: 6px; }
-    .montagebericht-tb-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.25rem; }
-    .montagebericht-tb-list { display: flex; flex-direction: column; gap: 0.4rem; max-height: 320px; overflow-y: auto; }
-    .montagebericht-tb-chip { padding: 0.4rem 0.6rem; background: var(--card); border: 1px solid var(--accent); border-radius: 4px; font-size: 0.85rem; cursor: grab; user-select: none; }
-    .montagebericht-tb-chip:hover { background: var(--accent); }
-    .montagebericht-tb-chip:active { cursor: grabbing; }
-    .montagebericht-tb-chip.dragging { opacity: 0.6; }
-    .montagebericht-fab-felder input[data-fab], .montagebericht-fab-felder [data-fab-rich] { min-height: 2.5rem; }
-    .montagebericht-fab-felder input[data-fab].drop-target, .montagebericht-fab-felder [data-fab-rich].drop-target { outline: 2px solid var(--focus-ring-color); outline-offset: 2px; }
-    .montagebericht-kopfdaten .kopfdaten-fn { font-size: 1.25rem; font-weight: 600; color: var(--text); margin-bottom: 0.35rem; }
-    .montagebericht-kopfdaten .kopfdaten-secondary { font-size: 0.9rem; color: var(--muted); }
-    .montagebericht-toolbar { display:flex; flex-wrap:wrap; gap:0.45rem; align-items:center; margin-bottom:0.6rem; padding:0.55rem; border:1px solid var(--accent); border-radius:6px; background:var(--bg); }
-    .montagebericht-toolbar .toolbar-group { display:inline-flex; gap:0.35rem; align-items:center; }
-    .montagebericht-toolbar select { padding:0.32rem 0.45rem; border:1px solid var(--accent); border-radius:4px; background:var(--card); color:var(--text); }
-    .montagebericht-toolbar .btn { padding:0.28rem 0.55rem; font-size:0.82rem; min-width:2rem; }
-    .montagebericht-toolbar .btn.active { background:var(--accent); }
     .sp-steps-wrap { overflow-x: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); }
     .sp-steps-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; table-layout: fixed; }
     .sp-steps-table thead th { text-align: left; padding: 0.5rem 0.6rem; background: var(--bg); border-bottom: 1px solid var(--accent); font-size: 0.8rem; color: var(--muted); font-weight: 600; white-space: nowrap; }
@@ -1171,10 +1164,6 @@
       .sp-col-text::before { content: 'Arbeitsschritt'; display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem; }
       .sp-col-bem::before { content: 'Bemerkung'; display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem; }
     }
-    .mb-rich-editor { width:100%; min-height:3.2rem; padding:0.5rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); resize:vertical; overflow:auto; }
-    .mb-rich-editor[contenteditable="true"]:focus { outline:2px solid var(--focus-ring-color); outline-offset:1px; }
-    .mb-rich-editor p { margin:0; }
-    .mb-rich-editor ul, .mb-rich-editor ol { margin:0.1rem 0 0.1rem 1.2rem; padding:0; }
     .textbausteine-sidebar { display: flex; flex-direction: column; gap: 0.5rem; }
     .textbausteine-category { padding: 0.5rem 0.75rem; border-radius: 6px; cursor: pointer; border: 1px solid var(--accent); background: var(--card); }
     .textbausteine-category:hover { background: var(--accent); }
@@ -1209,13 +1198,19 @@
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-service">Service</button>
       </div>
     </div>
-    <button class="btn btn-ghost" id="btnViewTextbausteine">Textbausteine</button>
     <button class="btn btn-ghost" id="btnViewArchiv">Archiv</button>
     <button class="btn btn-ghost" id="btnViewAnlagenstamm">Anlagenstamm</button>
     <div class="toolbar-dropdown-wrap">
       <button type="button" class="btn btn-ghost" id="btnViewAbwesenheiten" aria-haspopup="true" aria-expanded="false">Abwesenheiten ▾</button>
       <div id="abwesenheitenDropdown" class="toolbar-dropdown" role="menu" aria-label="Abwesenheiten">
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="abwesenheiten">Abwesenheiten</button>
+      </div>
+    </div>
+    <div class="toolbar-dropdown-wrap">
+      <button type="button" class="btn btn-ghost" id="btnViewBausteine" aria-haspopup="true" aria-expanded="false">Bausteine ▾</button>
+      <div class="toolbar-dropdown" id="bausteineDropdown" role="menu" aria-label="Bausteine Untermenü">
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="textbausteine">Textbausteine</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="arbeitsschritte">Arbeitsschritte</button>
       </div>
     </div>
     <span class="toolbar-right">
@@ -1419,80 +1414,112 @@
     </div>
   </main>
   <main id="viewProtokolleMontagebericht" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Montagebericht">
-    <div class="card">
-      <h2>Montagebericht</h2>
+    <div class="mb-v2-page">
+      <header class="sp-v2-topbar mb-v2-topbar">
+        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Montagebericht</h2>
+      </header>
       <div id="protokolleMontagebericht" class="protokolle-montagebericht">
-        <div class="montagebericht-layout">
-          <div class="montagebericht-tb-sidebar">
-            <div class="montagebericht-tb-title">Textbausteine</div>
-            <select id="montageberichtTbCategory" class="dienstreise-select" style="width:100%;margin-bottom:0.5rem">
-              <option value="">– Kategorie –</option>
-            </select>
-            <div id="montageberichtTbList" class="montagebericht-tb-list"></div>
-          </div>
-          <form id="montageberichtForm" class="montagebericht-form-wrap">
-          <div class="form-group" style="margin-bottom:0.75rem">
-            <label>Auftrag</label>
-            <select id="montageberichtJob" class="dienstreise-select" required></select>
-          </div>
-          <div class="form-group" style="margin-bottom:0.75rem">
-            <label>Sprache</label>
-            <select id="montageberichtLang">
-              <option value="de">Deutsch</option>
-              <option value="en">Englisch</option>
-            </select>
-          </div>
-          <div id="montageberichtKopfdaten" class="montagebericht-kopfdaten" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border-radius:4px;font-size:0.9rem"></div>
-          <div class="form-group" style="margin-bottom:0.75rem">
-            <label for="montageberichtProjekt">Projekt <span class="muted" style="font-weight:normal">(Anlagenstamm, Pflichtfeld)</span></label>
-            <input type="text" id="montageberichtProjekt" required placeholder="Wird aus Anlagenstamm übernommen, wenn alle FN gleich; sonst manuell ausfüllen" autocomplete="off" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)">
-            <p class="muted" style="font-size:0.8rem;margin:0.35rem 0 0">Beim Speichern wird dieser Wert für alle Fabrikationsnummern des Auftrags in der Dispo im Anlagenstamm gesetzt.</p>
-          </div>
-          <div class="montagebericht-toolbar" id="montageberichtToolbar">
-            <div class="toolbar-group">
-              <select id="mbToolbarFont" title="Schriftart">
-                <option value="Calibri">Calibri</option>
-                <option value="Arial">Arial</option>
-                <option value="Times New Roman">Times New Roman</option>
-                <option value="Verdana">Verdana</option>
+        <div class="mb-v2-layout">
+          <aside class="mb-v2-tb-sidebar" aria-label="Textbausteine">
+            <div class="mb-v2-tb-sidebar-head">
+              <img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true">
+              Textbausteine
+            </div>
+            <div class="mb-v2-tb-sidebar-body">
+              <select id="montageberichtTbCategory" class="dienstreise-select" aria-label="Textbaustein-Kategorie">
+                <option value="">– Kategorie –</option>
               </select>
-              <select id="mbToolbarSize" title="Schriftgröße">
-                <option value="2">10</option>
-                <option value="3" selected>12</option>
-                <option value="4">14</option>
-                <option value="5">18</option>
-              </select>
+              <div id="montageberichtTbList" class="montagebericht-tb-list"></div>
             </div>
-            <div class="toolbar-group">
-              <button type="button" class="btn btn-ghost" data-mb-cmd="bold" title="Fett"><strong>B</strong></button>
-              <button type="button" class="btn btn-ghost" data-mb-cmd="italic" title="Kursiv"><em>I</em></button>
-              <button type="button" class="btn btn-ghost" data-mb-cmd="underline" title="Unterstrichen"><u>U</u></button>
-              <button type="button" class="btn btn-ghost" data-mb-cmd="insertUnorderedList" title="Aufzählung">• Liste</button>
-            </div>
-            <div class="toolbar-group">
-              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyLeft" title="Linksbündig">Links</button>
-              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyCenter" title="Zentriert">Zentriert</button>
-              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyRight" title="Rechtsbündig">Rechts</button>
-            </div>
-          </div>
-          <div class="form-group" style="margin-bottom:0.75rem">
-            <label>Grund des Einsatzes</label>
-            <div id="montageberichtGrund" class="mb-rich-editor" data-mb-editor="grund" contenteditable="true" spellcheck="true"></div>
-          </div>
-          <div class="form-group" style="margin-bottom:0.75rem">
-            <label>Bemerkungen</label>
-            <div id="montageberichtBemerkungen" class="mb-rich-editor" data-mb-editor="bemerkungen" contenteditable="true" spellcheck="true"></div>
-          </div>
-          <p class="muted" style="font-size:0.8rem;margin:0 0 0.4rem">Pro Fabrikationsnummer: Kopfzeile wie im Bericht (<strong>FN.</strong>, <strong>Type</strong>, <strong>Pos.Nr.</strong>) – Werte aus dem Anlagenstamm, änderbar; beim Speichern werden Type und Pos.Nr. in der Dispo im Anlagenstamm aktualisiert.</p>
-          <div id="montageberichtFabBemerkungen" class="montagebericht-fab-felder" style="margin-bottom:1rem"></div>
-          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-            <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Speichert montagebericht.json und synchronisiert das Projekt – ohne PDF/DOCX">Speichern (nur Daten)</button>
-            <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Wie „nur Daten“ plus PDF und Word-Dokument in Dokumente_Anlage">PDF &amp; DOCX erstellen</button>
-            <button type="button" class="btn btn-ghost" id="btnMontageberichtSign" title="Erfordert zuvor erzeugtes PDF; signiert auf dem Dispo-Server">Bericht unterschreiben</button>
-            <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
-          </div>
-          <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0">„Nur Daten“ legt nur die JSON-Datei an bzw. aktualisiert sie. „PDF &amp; DOCX“ speichert dieselben Daten und erzeugt zusätzlich die Berichtsdateien (Word/PDF).</p>
-        </form>
+          </aside>
+          <form id="montageberichtForm" class="sp-v2-form mb-v2-form">
+            <section class="sp-v2-section" aria-labelledby="mbV2Sec1Title">
+              <header class="sp-v2-section-head" id="mbV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
+              <div class="sp-v2-section-body">
+                <div class="sp-v2-grid-3">
+                  <div class="sp-v2-field">
+                    <label for="montageberichtJob">Auftrag</label>
+                    <select id="montageberichtJob" class="dienstreise-select" required></select>
+                  </div>
+                  <div class="sp-v2-field">
+                    <label for="montageberichtProjekt">Projekt <span class="muted" style="font-weight:normal">(Pflichtfeld)</span></label>
+                    <input type="text" id="montageberichtProjekt" required placeholder="Aus Anlagenstamm oder manuell" autocomplete="off">
+                  </div>
+                  <div class="sp-v2-field">
+                    <label for="montageberichtLang">Sprache</label>
+                    <select id="montageberichtLang">
+                      <option value="de">Deutsch</option>
+                      <option value="en">Englisch</option>
+                    </select>
+                  </div>
+                </div>
+                <p class="mb-v2-hint-block">Beim Speichern wird das Projekt für alle Fabrikationsnummern des Auftrags in der Dispo im Anlagenstamm gesetzt.</p>
+                <div id="montageberichtKopfdaten" class="mb-v2-kopfdaten" hidden aria-hidden="true"></div>
+              </div>
+            </section>
+
+            <section class="sp-v2-section" aria-labelledby="mbV2Sec2Title">
+              <header class="sp-v2-section-head" id="mbV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Berichtsinhalt</header>
+              <div class="sp-v2-section-body">
+                <div class="montagebericht-toolbar" id="montageberichtToolbar">
+                  <div class="toolbar-group">
+                    <select id="mbToolbarFont" title="Schriftart">
+                      <option value="Calibri">Calibri</option>
+                      <option value="Arial">Arial</option>
+                      <option value="Times New Roman">Times New Roman</option>
+                      <option value="Verdana">Verdana</option>
+                    </select>
+                    <select id="mbToolbarSize" title="Schriftgröße">
+                      <option value="2">10</option>
+                      <option value="3" selected>12</option>
+                      <option value="4">14</option>
+                      <option value="5">18</option>
+                    </select>
+                  </div>
+                  <div class="toolbar-group">
+                    <button type="button" class="btn btn-ghost" data-mb-cmd="bold" title="Fett"><strong>B</strong></button>
+                    <button type="button" class="btn btn-ghost" data-mb-cmd="italic" title="Kursiv"><em>I</em></button>
+                    <button type="button" class="btn btn-ghost" data-mb-cmd="underline" title="Unterstrichen"><u>U</u></button>
+                    <button type="button" class="btn btn-ghost" data-mb-cmd="insertUnorderedList" title="Aufzählung">• Liste</button>
+                  </div>
+                  <div class="toolbar-group">
+                    <button type="button" class="btn btn-ghost" data-mb-cmd="justifyLeft" title="Linksbündig">Links</button>
+                    <button type="button" class="btn btn-ghost" data-mb-cmd="justifyCenter" title="Zentriert">Zentriert</button>
+                    <button type="button" class="btn btn-ghost" data-mb-cmd="justifyRight" title="Rechtsbündig">Rechts</button>
+                  </div>
+                </div>
+                <div class="sp-v2-field" style="margin-bottom:0.85rem">
+                  <label for="montageberichtGrund">Grund des Einsatzes</label>
+                  <div id="montageberichtGrund" class="mb-rich-editor" data-mb-editor="grund" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></div>
+                </div>
+                <div class="sp-v2-field">
+                  <label for="montageberichtBemerkungen">Bemerkungen</label>
+                  <div id="montageberichtBemerkungen" class="mb-rich-editor" data-mb-editor="bemerkungen" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="sp-v2-section" aria-labelledby="mbV2Sec3Title">
+              <header class="sp-v2-section-head" id="mbV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Fabrikationsnummern</header>
+              <div class="sp-v2-section-body">
+                <p class="mb-v2-hint-block" style="margin-top:0;margin-bottom:0.75rem">Pro Fabrikationsnummer: Kopfzeile wie im Bericht (<strong>FN.</strong>, <strong>Type</strong>, <strong>Pos.Nr.</strong>) – Werte aus dem Anlagenstamm, änderbar; beim Speichern werden Type und Pos.Nr. in der Dispo im Anlagenstamm aktualisiert.</p>
+                <div id="montageberichtFabBemerkungen" class="montagebericht-fab-felder"></div>
+              </div>
+            </section>
+
+            <section class="sp-v2-section" aria-labelledby="mbV2Sec4Title">
+              <header class="sp-v2-section-head" id="mbV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
+              <div class="sp-v2-section-body">
+                <div class="mb-v2-actions-row">
+                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Speichert montagebericht.json und synchronisiert das Projekt – ohne PDF/DOCX">Speichern (nur Daten)</button>
+                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Wie „nur Daten“ plus PDF und Word-Dokument in Dokumente_Anlage">PDF &amp; DOCX erstellen</button>
+                  <button type="button" class="btn btn-ghost" id="btnMontageberichtSign" title="Erfordert zuvor erzeugtes PDF; signiert auf dem Dispo-Server">Bericht unterschreiben</button>
+                  <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
+                </div>
+                <p class="mb-v2-hint-block">„Nur Daten“ legt nur die JSON-Datei an bzw. aktualisiert sie. „PDF &amp; DOCX“ speichert dieselben Daten und erzeugt zusätzlich die Berichtsdateien (Word/PDF).</p>
+              </div>
+            </section>
+          </form>
         </div>
       </div>
     </div>
@@ -1739,6 +1766,9 @@
                 <tbody id="serviceprotokollArbeitsschritte"></tbody>
               </table>
             </div>
+            <div style="margin-top:0.65rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+              <button type="button" class="btn btn-ghost" id="btnSpAddFromCatalog">Aus Katalog hinzufügen</button>
+            </div>
             <div class="sp-v2-field" style="margin-top:0.85rem">
               <label for="serviceprotokollBemerkungen">Allgemeine Bemerkungen</label>
               <textarea id="serviceprotokollBemerkungen" rows="3"></textarea>
@@ -1864,6 +1894,68 @@
         <div style="display:flex;gap:0.5rem">
           <button type="button" class="btn btn-primary" id="btnTbCategorySave">Speichern</button>
           <button type="button" class="btn btn-ghost" id="btnTbCategoryCancel">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+  </main>
+  <main id="viewArbeitsschritte" class="view-arbeitsschritte" aria-label="Arbeitsschritte">
+    <div class="sp-v2-page sp-v2-legacy-host" style="padding:1rem;max-width:1100px;margin:0 auto">
+      <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte</h2>
+      <p class="muted" style="margin:0 0 1rem">Masterliste und Typ-Presets für Serviceprotokolle (global + privat).</p>
+      <div class="as-tabs" role="tablist">
+        <button type="button" class="active" id="asTabSteps" data-as-tab="steps">Arbeitsschritte</button>
+        <button type="button" id="asTabPresets" data-as-tab="presets">Presets</button>
+      </div>
+      <section class="sp-v2-section" id="asPanelSteps">
+        <div class="sp-v2-section-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+            <strong>Schritte</strong>
+            <button type="button" class="btn btn-primary" id="btnAsNewStep">+ Schritt</button>
+          </div>
+          <div id="asStepList"></div>
+        </div>
+      </section>
+      <section class="sp-v2-section" id="asPanelPresets" style="display:none">
+        <div class="sp-v2-section-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+            <strong>Typ-Presets</strong>
+            <button type="button" class="btn btn-primary" id="btnAsNewPreset">Preset erstellen</button>
+          </div>
+          <div id="asPresetList"></div>
+        </div>
+      </section>
+    </div>
+    <div id="modalAsStep" class="modal-overlay" aria-hidden="true">
+      <div class="modal-box" style="max-width:520px">
+        <h3 id="modalAsStepTitle">Arbeitsschritt</h3>
+        <div class="form-group"><label>Bezeichnung DE</label><input type="text" id="asStepDe" style="width:100%"></div>
+        <div class="form-group"><label>Bezeichnung EN</label><input type="text" id="asStepEn" style="width:100%"></div>
+        <div class="form-group"><label>Reihenfolge</label><input type="number" id="asStepSort" value="0" style="width:100%"></div>
+        <div style="display:flex;gap:0.5rem;margin-top:1rem">
+          <button type="button" class="btn btn-primary" id="btnAsStepSave">Speichern</button>
+          <button type="button" class="btn btn-ghost" id="btnAsStepCancel">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+    <div id="modalAsPreset" class="modal-overlay" aria-hidden="true">
+      <div class="modal-box" style="max-width:560px">
+        <h3 id="modalAsPresetTitle">Preset</h3>
+        <div class="form-group"><label>Name</label><input type="text" id="asPresetName" style="width:100%"></div>
+        <div class="form-group"><label>Typencode (max. 6 Zeichen)</label><input type="text" id="asPresetType" maxlength="6" style="width:100%"></div>
+        <div class="form-group"><label>Arbeitsschritte</label><div class="as-check-list" id="asPresetChecks"></div></div>
+        <div style="display:flex;gap:0.5rem;margin-top:1rem">
+          <button type="button" class="btn btn-primary" id="btnAsPresetSave">Speichern</button>
+          <button type="button" class="btn btn-ghost" id="btnAsPresetCancel">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+    <div id="modalSpCatalog" class="modal-overlay" aria-hidden="true">
+      <div class="modal-box" style="max-width:560px">
+        <h3>Arbeitsschritt aus Katalog</h3>
+        <div class="as-check-list" id="spCatalogList"></div>
+        <div style="display:flex;gap:0.5rem;margin-top:1rem">
+          <button type="button" class="btn btn-primary" id="btnSpCatalogAdd">Hinzufügen</button>
+          <button type="button" class="btn btn-ghost" id="btnSpCatalogCancel">Abbrechen</button>
         </div>
       </div>
     </div>

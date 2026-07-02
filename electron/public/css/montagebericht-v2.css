@@ -1,0 +1,331 @@
+/* Montagebericht v2 – gleiches Design wie Serviceprotokoll (Karten, grüne Akzente) */
+
+#viewProtokolleMontagebericht.view-protokolle {
+  background: var(--sp-page, #f7f8f8);
+  padding: 0;
+  min-height: calc(100vh - 120px);
+}
+
+.mb-v2-page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 1rem 1rem 1.5rem;
+  box-sizing: border-box;
+}
+
+@media (min-width: 768px) {
+  .mb-v2-page {
+    padding: 1rem 1.5rem 2rem;
+  }
+}
+
+.mb-v2-topbar {
+  margin-bottom: 1rem;
+}
+
+.mb-v2-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .mb-v2-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mb-v2-tb-sidebar {
+  position: sticky;
+  top: 1rem;
+  background: #fff;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 12px;
+  box-shadow: var(--sp-shadow, 0 1px 3px rgba(0, 0, 0, 0.06));
+  overflow: hidden;
+}
+
+.mb-v2-tb-sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: var(--sp-mint, #eefaf5);
+  border-bottom: 1px solid var(--sp-border, #d8e3df);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--sp-text, #111827);
+}
+
+.mb-v2-tb-sidebar-body {
+  padding: 0.75rem;
+}
+
+.mb-v2-tb-sidebar-body .dienstreise-select {
+  width: 100%;
+  height: 38px;
+  margin-bottom: 0.5rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  background: #fff;
+  color: var(--sp-text, #111827);
+}
+
+.montagebericht-tb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: min(420px, 50vh);
+  overflow-y: auto;
+}
+
+.montagebericht-tb-chip {
+  padding: 0.45rem 0.65rem;
+  background: #fff;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: grab;
+  user-select: none;
+  color: var(--sp-text, #111827);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.montagebericht-tb-chip:hover {
+  background: var(--sp-mint, #eefaf5);
+  border-color: var(--sp-green, #007a4d);
+}
+
+.montagebericht-tb-chip:active {
+  cursor: grabbing;
+}
+
+.montagebericht-tb-chip.dragging {
+  opacity: 0.6;
+}
+
+.mb-v2-form {
+  min-width: 0;
+}
+
+.mb-v2-kopfdaten {
+  margin-top: 0.85rem;
+  padding: 0.75rem 1rem;
+  background: var(--sp-mint, #eefaf5);
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  color: var(--sp-text, #111827);
+  display: grid;
+  gap: 0.35rem;
+}
+
+.mb-v2-kopfdaten .kopfdaten-fn {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--sp-text, #111827);
+}
+
+.mb-v2-kopfdaten .kopfdaten-secondary {
+  font-size: 0.85rem;
+  color: var(--sp-muted, #4b5563);
+}
+
+.mb-v2-kopfdaten-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+}
+
+.mb-v2-kopfdaten-row strong {
+  font-weight: 600;
+}
+
+.montagebericht-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  background: var(--sp-mint, #eefaf5);
+}
+
+.montagebericht-toolbar .toolbar-group {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.montagebericht-toolbar select {
+  height: 32px;
+  padding: 0 0.45rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--sp-text, #111827);
+  font-size: 0.82rem;
+}
+
+.montagebericht-toolbar .btn {
+  padding: 0.28rem 0.55rem;
+  font-size: 0.82rem;
+  min-width: 2rem;
+  height: 32px;
+  border-radius: 6px;
+}
+
+.montagebericht-toolbar .btn.active {
+  background: var(--sp-green, #007a4d);
+  border-color: var(--sp-green, #007a4d);
+  color: #fff;
+}
+
+.mb-rich-editor {
+  width: 100%;
+  min-height: 3.2rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--sp-text, #111827);
+  resize: vertical;
+  overflow: auto;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.mb-rich-editor[contenteditable="true"]:focus {
+  outline: none;
+  border-color: var(--sp-green, #007a4d);
+  box-shadow: 0 0 0 2px rgba(0, 122, 77, 0.2);
+}
+
+.mb-rich-editor p {
+  margin: 0;
+}
+
+.mb-rich-editor ul,
+.mb-rich-editor ol {
+  margin: 0.1rem 0 0.1rem 1.2rem;
+  padding: 0;
+}
+
+.montagebericht-fab-felder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.montagebericht-fab-block {
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.montagebericht-fab-kopf {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.montagebericht-fab-kopf td {
+  border: 1px solid var(--sp-border, #d8e3df);
+  padding: 0.5rem 0.65rem;
+  vertical-align: middle;
+  background: var(--sp-mint, #eefaf5);
+}
+
+.montagebericht-fab-kopf strong {
+  font-weight: 600;
+  color: var(--sp-text, #111827);
+  white-space: nowrap;
+  margin-right: 0.35rem;
+}
+
+.montagebericht-fab-row-flex {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: nowrap;
+  width: 100%;
+}
+
+.montagebericht-fab-kopf input[data-mb-type],
+.montagebericht-fab-kopf input[data-mb-position] {
+  flex: 1 1 8rem;
+  min-width: 6rem;
+  box-sizing: border-box;
+  height: 38px;
+  padding: 0 0.65rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--sp-text, #111827);
+  font-size: 0.875rem;
+}
+
+.montagebericht-fab-kopf input:focus {
+  outline: none;
+  border-color: var(--sp-green, #007a4d);
+  box-shadow: 0 0 0 2px rgba(0, 122, 77, 0.2);
+}
+
+.montagebericht-fab-body {
+  padding: 0.65rem 0.75rem 0.75rem;
+}
+
+.montagebericht-fab-body label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--sp-muted, #4b5563);
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.montagebericht-fab-felder input[data-fab],
+.montagebericht-fab-felder [data-fab-rich] {
+  min-height: 2.5rem;
+}
+
+.montagebericht-fab-felder input[data-fab].drop-target,
+.montagebericht-fab-felder [data-fab-rich].drop-target {
+  outline: 2px solid var(--sp-green, #007a4d);
+  outline-offset: 2px;
+}
+
+.mb-v2-hint-block {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: var(--sp-muted, #4b5563);
+  line-height: 1.4;
+}
+
+.mb-v2-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.mb-v2-actions-row .btn-primary {
+  background: var(--sp-green, #007a4d);
+  border-color: var(--sp-green, #007a4d);
+}
+
+.mb-v2-actions-row .btn-primary:hover {
+  background: var(--sp-green-hover, #006841);
+  border-color: var(--sp-green-hover, #006841);
+}
+
+#viewProtokolleMontagebericht .sp-v2-field select,
+#viewProtokolleMontagebericht .sp-v2-field input {
+  background: #fff;
+}

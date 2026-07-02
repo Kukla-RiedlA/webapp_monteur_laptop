@@ -174,6 +174,7 @@ const {
   DISPO_FETCH_TIMEOUT_MS,
 } = require('./lib/local_first');
 const textbausteineLocal = require('./lib/textbausteine-local');
+const arbeitsschritteLocal = require('./lib/arbeitsschritte-local');
 const protocolPdf = require('./lib/protocol_pdf');
 const kontrollwiegungLocal = require('./lib/kontrollwiegung-local');
 const {
@@ -6859,27 +6860,46 @@ function createApp(db) {
     }
   }
 
-  function buildServiceprotokollDefaultsFromLocal(fab) {
-    const parsed = parseServiceprotokollDefaultsBuffer(readServiceprotokollDefaultsLocal());
-    if (!parsed) return null;
+  function buildServiceprotokollDefaultsFromLocal(fab, technicianId) {
     const fn = String(fab || '').trim();
-    if (!fn) return parsed;
+    let anlagenType = '';
+    let kopf = {};
     try {
       ensureAnlagenstammLocalSchema(db);
-      const row = anlagenstammLookupByFab(db, fn);
-      if (row) {
-        parsed.kopf = Object.assign({}, parsed.kopf || {}, {
-          kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
-          kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
-          kopf_type: row.type != null ? String(row.type).trim() : '',
-          kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
-          mess_waegezelle_type: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
-          mess_waegezelle_seriennummer: row.dms_nr != null ? String(row.dms_nr).trim() : '',
-          projekt: row.projekt != null ? String(row.projekt).trim() : '',
-        });
-        parsed.source = 'local_cache';
+      if (fn) {
+        const row = anlagenstammLookupByFab(db, fn);
+        if (row) {
+          anlagenType = row.type != null ? String(row.type).trim() : '';
+          kopf = {
+            kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
+            kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
+            kopf_type: anlagenType,
+            kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
+            mess_waegezelle_type: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
+            mess_waegezelle_seriennummer: row.dms_nr != null ? String(row.dms_nr).trim() : '',
+            projekt: row.projekt != null ? String(row.projekt).trim() : '',
+          };
+        }
       }
     } catch (_) { /* optional */ }
+    try {
+      arbeitsschritteLocal.ensureArbeitsschritteSchema(db);
+      const resolved = arbeitsschritteLocal.resolveDefaultsLocal(db, technicianId, anlagenType);
+      if (resolved && Array.isArray(resolved.arbeitsschritte) && resolved.arbeitsschritte.length) {
+        return Object.assign({ ok: true, kopf }, resolved);
+      }
+    } catch (_) { /* fallback */ }
+    const parsed = parseServiceprotokollDefaultsBuffer(readServiceprotokollDefaultsLocal());
+    if (!parsed) {
+      return {
+        ok: true,
+        source: 'builtin',
+        arbeitsschritte: arbeitsschritteLocal.builtinDefaults(),
+        kopf,
+      };
+    }
+    parsed.kopf = Object.assign({}, parsed.kopf || {}, kopf);
+    if (fn) parsed.source = 'local_cache';
     return parsed;
   }
 
@@ -6892,7 +6912,7 @@ function createApp(db) {
       if (!technicianId) {
         return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
       }
-      const local = buildServiceprotokollDefaultsFromLocal(fab);
+      const local = buildServiceprotokollDefaultsFromLocal(fab, technicianId);
       if (localOnly || !dispoBaseUrl) {
         if (local) return res.json(local);
         return res.status(400).json({ ok: false, error: 'Kein lokaler Defaults-Cache – bitte einmal online synchronisieren.' });
@@ -8790,6 +8810,257 @@ function createApp(db) {
     }
   });
 
+  app.get('/api/arbeitsschritte_list', async (req, res) => {
+    const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req);
+    const localOnly = wantsLocalOnlyRequest(req.query);
+    try {
+      arbeitsschritteLocal.ensureArbeitsschritteSchema(db);
+      let local = arbeitsschritteLocal.listArbeitsschritteLocal(db, technicianId);
+      if (localOnly || !baseUrl || !technicianId) {
+        local.data_source = 'local';
+        return res.json(local);
+      }
+      try {
+        const url =
+          baseUrl + '/dispo_api/api/arbeitsschritte_list.php?technician_id=' + encodeURIComponent(technicianId);
+        const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId) } });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.ok) {
+          arbeitsschritteLocal.mergeArbeitsschritteFromRemote(db, technicianId, data);
+          save();
+          local = arbeitsschritteLocal.listArbeitsschritteLocal(db, technicianId);
+          local.data_source = 'dispo';
+          return res.json(local);
+        }
+        local.data_source = local.steps && local.steps.length ? 'local_cache' : 'local_empty';
+        local.warning = (data && data.error) || 'Dispo-Abruf fehlgeschlagen – lokaler Cache.';
+        return res.json(local);
+      } catch (fetchErr) {
+        local.data_source = local.steps && local.steps.length ? 'local_cache' : 'local_empty';
+        if (!local.steps || !local.steps.length) {
+          return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + fetchErr.message });
+        }
+        local.warning = 'Dispo nicht erreichbar – lokaler Cache.';
+        return res.json(local);
+      }
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/arbeitsschritte_save', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    try {
+      const result = arbeitsschritteLocal.saveStepLocal(db, technicianId, body);
+      arbeitsschritteLocal.queueArbeitsschrittePending(db, result.id, 'step_save', {
+        technician_id: technicianId,
+        baseUrl,
+        ...body,
+        id: result.id,
+      });
+      save();
+      if (baseUrl && technicianId) {
+        try {
+          const formBody = new URLSearchParams();
+          formBody.append('technician_id', String(technicianId));
+          if (body.id && parseInt(body.id, 10) > 0) formBody.append('id', body.id);
+          formBody.append('bezeichnung_de', body.bezeichnung_de || '');
+          formBody.append('bezeichnung_en', body.bezeichnung_en || '');
+          formBody.append('sort_order', body.sort_order || 0);
+          const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_save.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Technician-Id': String(technicianId),
+            },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok && data.id) {
+            db.prepare(`UPDATE arbeitsschritte_user SET server_id = ? WHERE id = ? AND technician_id = ?`).run(
+              data.id,
+              result.id,
+              technicianId,
+            );
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'arbeitsschritte' AND entity_id = ? AND action = 'step_save'`,
+            ).run(String(result.id));
+            save();
+            return res.json(Object.assign({}, data, { local_id: result.id }));
+          }
+        } catch (_) {}
+      }
+      res.json(Object.assign({}, result, { deferred: true }));
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/arbeitsschritte_delete', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    if (!body.id) return res.status(400).json({ ok: false, error: 'id erforderlich.' });
+    try {
+      arbeitsschritteLocal.deleteStepLocal(db, technicianId, body.id);
+      arbeitsschritteLocal.queueArbeitsschrittePending(db, body.id, 'step_delete', {
+        technician_id: technicianId,
+        baseUrl,
+        id: body.id,
+      });
+      save();
+      if (baseUrl && technicianId) {
+        try {
+          const formBody = new URLSearchParams();
+          formBody.append('id', body.id);
+          formBody.append('technician_id', String(technicianId));
+          const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_delete.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Technician-Id': String(technicianId),
+            },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) {
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'arbeitsschritte' AND entity_id = ? AND action = 'step_delete'`,
+            ).run(String(body.id));
+            save();
+            return res.json(data);
+          }
+        } catch (_) {}
+      }
+      res.json({ ok: true, deferred: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/arbeitsschritte_publish_global', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    if (!baseUrl || body.id == null) {
+      return res.status(400).json({ ok: false, error: 'baseUrl und id erforderlich (nur online).' });
+    }
+    try {
+      const formBody = new URLSearchParams();
+      formBody.append('technician_id', String(technicianId || 0));
+      formBody.append('id', String(body.id));
+      const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_publish_global.php', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Technician-Id': String(technicianId || 0),
+        },
+        body: formBody.toString(),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
+      res.json(data);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+    }
+  });
+
+  app.post('/api/arbeitsschritte_preset_save', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    try {
+      const result = arbeitsschritteLocal.savePresetLocal(db, technicianId, body);
+      arbeitsschritteLocal.queueArbeitsschrittePending(db, result.id, 'preset_save', {
+        technician_id: technicianId,
+        baseUrl,
+        ...body,
+        id: result.id,
+      });
+      save();
+      if (baseUrl && technicianId) {
+        try {
+          const formBody = new URLSearchParams();
+          formBody.append('technician_id', String(technicianId));
+          if (body.id && parseInt(body.id, 10) > 0) formBody.append('id', body.id);
+          formBody.append('name', body.name || '');
+          formBody.append('type_code', body.type_code || '');
+          formBody.append('sort_order', body.sort_order || 0);
+          formBody.append('step_refs', JSON.stringify(body.step_refs || []));
+          const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_preset_save.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Technician-Id': String(technicianId),
+            },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok && data.id) {
+            db.prepare(`UPDATE arbeitsschritte_preset_user SET server_id = ? WHERE id = ? AND technician_id = ?`).run(
+              data.id,
+              result.id,
+              technicianId,
+            );
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'arbeitsschritte' AND entity_id = ? AND action = 'preset_save'`,
+            ).run(String(result.id));
+            save();
+            return res.json(Object.assign({}, data, { local_id: result.id }));
+          }
+        } catch (_) {}
+      }
+      res.json(Object.assign({}, result, { deferred: true }));
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/arbeitsschritte_preset_delete', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    if (!body.id) return res.status(400).json({ ok: false, error: 'id erforderlich.' });
+    try {
+      arbeitsschritteLocal.deletePresetLocal(db, technicianId, body.id);
+      arbeitsschritteLocal.queueArbeitsschrittePending(db, body.id, 'preset_delete', {
+        technician_id: technicianId,
+        baseUrl,
+        id: body.id,
+      });
+      save();
+      if (baseUrl && technicianId) {
+        try {
+          const formBody = new URLSearchParams();
+          formBody.append('id', body.id);
+          formBody.append('technician_id', String(technicianId));
+          const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_preset_delete.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Technician-Id': String(technicianId),
+            },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) {
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'arbeitsschritte' AND entity_id = ? AND action = 'preset_delete'`,
+            ).run(String(body.id));
+            save();
+            return res.json(data);
+          }
+        } catch (_) {}
+      }
+      res.json({ ok: true, deferred: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
   /** Fabrikationsnummern dürfen auch bei „angelegt/geplant/zugeteilt“ gesetzt werden (vor „Auftrag annehmen“). */
   function getLocalJobMetaForFabrikationsnummernPatch(dbConn, technicianId, rawJobId) {
     const n = parseInt(rawJobId, 10);
@@ -9996,6 +10267,14 @@ function createApp(db) {
           });
         } catch (tbErr) {
           console.warn('[sync_pull] textbausteine:', tbErr && tbErr.message ? tbErr.message : tbErr);
+        }
+        try {
+          await dbLock.runWithDbLock(async () => {
+            await pullArbeitsschritteFromDispo(base, technicianId, db, auth);
+            save();
+          });
+        } catch (asErr) {
+          console.warn('[sync_pull] arbeitsschritte:', asErr && asErr.message ? asErr.message : asErr);
         }
         await dbLock.runWithDbLock(async () => {
           setProgress('sync_pull', 6, 8, 'Projektordner (Änderungen) …');
@@ -12312,6 +12591,22 @@ async function pullTextbausteineFromDispo(baseUrl, technicianId, dbConn, authHea
   return { ok: true, categories: (data.categories || []).length };
 }
 
+async function pullArbeitsschritteFromDispo(baseUrl, technicianId, dbConn, authHeader) {
+  const base = String(baseUrl || '').trim().replace(/\/$/, '');
+  const tid = parseInt(technicianId, 10);
+  if (!base || !tid) return { ok: false, skipped: true };
+  const url = base + '/dispo_api/api/arbeitsschritte_list.php?technician_id=' + encodeURIComponent(tid);
+  const r = await fetch(url, {
+    headers: Object.assign({ 'X-Technician-Id': String(tid) }, authHeader || {}),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.ok) {
+    throw new Error((data && data.error) || r.statusText || 'arbeitsschritte_list fehlgeschlagen');
+  }
+  arbeitsschritteLocal.mergeArbeitsschritteFromRemote(dbConn, tid, data);
+  return { ok: true, steps: (data.steps || []).length, presets: (data.presets || []).length };
+}
+
 function queueDispoProxyPending(dbConn, entityType, entityId, action, payload) {
   dbConn
     .prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
@@ -13774,6 +14069,96 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       } catch (e) {
         logSyncPushError({
           reason: 'textbausteine_push',
+          action: p.action,
+          error: e && e.message ? e.message : String(e),
+          pending_id: p.id,
+        });
+        if (!isLikelyOfflineSyncError(e)) throw e;
+      }
+    }
+    if (p.entity_type === 'arbeitsschritte') {
+      handled = true;
+      const payloadRaw = JSON.parse(p.payload || '{}');
+      const techId =
+        parseInt(String(payloadRaw.technician_id ?? payloadRaw.technicianId ?? technicianId), 10) || technicianId;
+      const asBase = String(payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      if (!asBase || !techId) {
+        logSyncPushError({ reason: 'arbeitsschritte_push_skip', pending_id: p.id });
+        continue;
+      }
+      try {
+        if (p.action === 'step_save') {
+          const formBody = new URLSearchParams();
+          formBody.append('technician_id', String(techId));
+          if (payloadRaw.id && parseInt(payloadRaw.id, 10) > 0) formBody.append('id', payloadRaw.id);
+          formBody.append('bezeichnung_de', payloadRaw.bezeichnung_de || '');
+          formBody.append('bezeichnung_en', payloadRaw.bezeichnung_en || '');
+          formBody.append('sort_order', payloadRaw.sort_order || 0);
+          const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_save.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+          if (data.id && parseInt(p.entity_id, 10) < 0) {
+            db.prepare(`UPDATE arbeitsschritte_user SET server_id = ? WHERE id = ? AND technician_id = ?`).run(
+              data.id,
+              parseInt(p.entity_id, 10),
+              techId,
+            );
+          }
+        } else if (p.action === 'step_delete') {
+          const formBody = new URLSearchParams();
+          formBody.append('id', payloadRaw.id);
+          formBody.append('technician_id', String(techId));
+          const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_delete.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+        } else if (p.action === 'preset_save') {
+          const formBody = new URLSearchParams();
+          formBody.append('technician_id', String(techId));
+          if (payloadRaw.id && parseInt(payloadRaw.id, 10) > 0) formBody.append('id', payloadRaw.id);
+          formBody.append('name', payloadRaw.name || '');
+          formBody.append('type_code', payloadRaw.type_code || '');
+          formBody.append('sort_order', payloadRaw.sort_order || 0);
+          formBody.append('step_refs', JSON.stringify(payloadRaw.step_refs || []));
+          const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_preset_save.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+          if (data.id && parseInt(p.entity_id, 10) < 0) {
+            db.prepare(`UPDATE arbeitsschritte_preset_user SET server_id = ? WHERE id = ? AND technician_id = ?`).run(
+              data.id,
+              parseInt(p.entity_id, 10),
+              techId,
+            );
+          }
+        } else if (p.action === 'preset_delete') {
+          const formBody = new URLSearchParams();
+          formBody.append('id', payloadRaw.id);
+          formBody.append('technician_id', String(techId));
+          const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_preset_delete.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+        } else {
+          continue;
+        }
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        logSyncPushError({
+          reason: 'arbeitsschritte_push',
           action: p.action,
           error: e && e.message ? e.message : String(e),
           pending_id: p.id,

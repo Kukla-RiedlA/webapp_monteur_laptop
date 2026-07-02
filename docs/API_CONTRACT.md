@@ -145,7 +145,7 @@ Authentifizierung wie Kontrollwiegung: Query/Header `technician_id`, Dispo-Basic
 
 | Endpunkt | Methode | Kurzbeschreibung |
 |----------|---------|------------------|
-| `dispo_api/api/serviceprotokoll_defaults.php` | GET | `fabrikationsnummer`, `technician_id` → `{ ok, source: "fn"\|"global", arbeitsschritte: [{ bezeichnung }], kopf?: { projekt, kopf_pos_nr, kopf_qmax, kopf_type, kopf_dwc } }` — `kopf_dwc` = `anlagenstamm.elektronik` (DWC) |
+| `dispo_api/api/serviceprotokoll_defaults.php` | GET | `fabrikationsnummer`, `technician_id` → `{ ok, source: "fn"\|"preset"\|"global"\|"builtin", arbeitsschritte: [{ bezeichnung }], kopf?: { projekt, kopf_pos_nr, kopf_qmax, kopf_type, kopf_dwc }, preset_name?, preset_type_code? }` — Lade-Priorität: FN-Vorlage → Typ-Preset (Substring in `anlagenstamm.type`) → globaler Grundstock → Builtin |
 | `dispo_api/api/serviceprotokoll_save.php` | POST JSON | … → erzeugt PDF unter `Dokumente_Monteur/{FN}/Montage/{Auftragsordner}/Serviceprotokolle/` → `{ ok, protokoll_id, pdf_path?, warning? }` |
 | `dispo_api/api/serviceprotokoll_pdf.php` | GET | `id`, `technician_id` → PDF-Binary (aus Projektordner oder Regenerierung) |
 | `dispo_api/api/serviceprotokoll_draft.php` | GET / POST | Zwischenstand `serviceprotokoll.json` im Projektordner: GET `job_id`, `technician_id` → `{ ok, store: { byFab } }`; POST JSON `technician_id`, `job_id`, `store` → merge nach `updatedAt`, `{ ok, store }` (Laptop ↔ PWA) |
@@ -156,6 +156,28 @@ Authentifizierung wie Kontrollwiegung: Query/Header `technician_id`, Dispo-Basic
 - `GET /api/serviceprotokoll_defaults` (Proxy + lokaler Fallback), `GET /api/serviceprotokoll_pdf` (Proxy).
 
 **FN-Vorlage:** Beim Save werden Bezeichnung + Reihenfolge der Arbeitsschritte pro `fabrikationsnummer` persistiert; Status/Bemerkungen starten beim nächsten Formular leer.
+
+### 5.1c Arbeitsschritte-Bausteine (Dispo `dispo_api/`, Monteur `technician_id`)
+
+Masterliste + Typ-Presets (global + privat pro Techniker). Scope analog Textbausteine; keine Kategorien — Gruppierung über Presets (`type_code`, max. 6 Zeichen, Substring-Match in `anlagenstamm.type`).
+
+| Endpunkt | Methode | Kurzbeschreibung |
+|----------|---------|------------------|
+| `dispo_api/api/arbeitsschritte_list.php` | GET | `technician_id` → `{ ok, steps: [{ id, scope, bezeichnung_de, bezeichnung_en, bezeichnung, sort_order }], presets: [{ id, scope, name, type_code, step_refs[] }] }` |
+| `dispo_api/api/arbeitsschritte_save.php` | POST | User-Schritt anlegen/ändern (`technician_id`, `id?`, `bezeichnung_de`, `bezeichnung_en`, `sort_order`) |
+| `dispo_api/api/arbeitsschritte_delete.php` | POST | User-Schritt löschen (`technician_id`, `id`) |
+| `dispo_api/api/arbeitsschritte_publish_global.php` | POST | User-Schritt → global freigeben |
+| `dispo_api/api/arbeitsschritte_preset_save.php` | POST | User-Preset inkl. `step_refs` (Checkbox-Liste) |
+| `dispo_api/api/arbeitsschritte_preset_delete.php` | POST | User-Preset löschen |
+
+**Dispo-Admin** (nur `perm_admin`, Seite `arbeitsschritte_admin.php`): `arbeitsschritte_global_save.php`, `arbeitsschritte_global_delete.php`, `arbeitsschritte_preset_global_save.php`, `arbeitsschritte_preset_global_delete.php`.
+
+**Monteur-Laptop (Electron-Gateway):**
+- `GET /api/arbeitsschritte_list` — lokaler SQLite-Cache + optional Merge vom Server (`base_url`, `technician_id`)
+- `POST /api/arbeitsschritte_save`, `_delete`, `_publish_global`, `_preset_save`, `_preset_delete`
+- `sync_pull` / `sync_push` mit `entity_type='arbeitsschritte'` in `pending_changes`
+
+**PWA:** Katalog im Serviceprotokoll ruft `arbeitsschritte_list.php` direkt auf; keine Offline-Verwaltung.
 
 ### 5.1 Dispo-Web Admin (nur eingeloggte Dispo-Session, `perm_admin`)
 

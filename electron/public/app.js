@@ -9683,6 +9683,8 @@
     });
     const viewTextbausteine = document.getElementById('viewTextbausteine');
     if (viewTextbausteine) viewTextbausteine.classList.remove('active');
+    const viewArbeitsschritte = document.getElementById('viewArbeitsschritte');
+    if (viewArbeitsschritte) viewArbeitsschritte.classList.remove('active');
     if (viewArchiv) viewArchiv.classList.remove('active');
     if (viewAbwesenheiten) viewAbwesenheiten.classList.remove('active');
     if (viewAnlagenstamm) viewAnlagenstamm.classList.remove('active');
@@ -9739,6 +9741,14 @@
       if (viewTextbausteine) {
         viewTextbausteine.classList.add('active');
         if (typeof loadTbCategories === 'function') loadTbCategories();
+      }
+      return;
+    }
+    if (name === 'arbeitsschritte') {
+      viewStart.classList.add('hidden');
+      if (viewArbeitsschritte) {
+        viewArbeitsschritte.classList.add('active');
+        if (typeof loadArbeitsschritteView === 'function') loadArbeitsschritteView();
       }
       return;
     }
@@ -11288,7 +11298,30 @@
       }
     });
   })();
-  document.getElementById('btnViewTextbausteine').addEventListener('click', () => showView('textbausteine'));
+  (function initBausteineDropdown() {
+    const btn = document.getElementById('btnViewBausteine');
+    const dropdown = document.getElementById('bausteineDropdown');
+    if (!btn || !dropdown) return;
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      dropdown.classList.toggle('open');
+      btn.setAttribute('aria-expanded', dropdown.classList.contains('open'));
+    });
+    dropdown.querySelectorAll('.toolbar-dropdown-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        const view = item.getAttribute('data-view');
+        if (view) showView(view);
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+    });
+    document.addEventListener('click', function (e) {
+      if (dropdown.classList.contains('open') && !dropdown.contains(e.target) && !btn.contains(e.target)) {
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
   document.getElementById('btnViewArchiv').addEventListener('click', () => showView('archiv'));
   document.getElementById('btnViewAnlagenstamm').addEventListener('click', () => showView('anlagenstamm'));
   document.getElementById('btnAnlagenstammSearch').addEventListener('click', () => searchAnlagenstammList());
@@ -11536,13 +11569,16 @@
       k.geliefertUeber = geliefertUeber || (k.fabrikationsnummern[0] && k.fabrikationsnummern[0].geliefert_ueber) || '';
       var fabList = k.fabrikationsnummern.map(function (r) { return r.fabrikationsnummer; }).filter(Boolean);
       var auftragsnr = (job.job_number != null && String(job.job_number).trim()) ? String(job.job_number).trim() : '';
-      kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(k.kunde) + '</div>' +
-        (auftragsnr ? '<div class="kopfdaten-secondary"><strong>Auftragsnr.:</strong> ' + escapeHtml(auftragsnr) + '</div>' : '') +
+      kopfdatenEl.innerHTML =
+        '<div class="mb-v2-kopfdaten-row"><strong>Kunde:</strong> ' + escapeHtml(k.kunde) + '</div>' +
+        (auftragsnr ? '<div class="mb-v2-kopfdaten-row kopfdaten-secondary"><strong>Auftragsnr.:</strong> ' + escapeHtml(auftragsnr) + '</div>' : '') +
         '<div class="kopfdaten-fn"><strong>FN.:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
-        '<div class="kopfdaten-secondary">' + escapeHtml(k.geliefertUeber) + '</div>' +
-        '<div><strong>Datum:</strong> ' + escapeHtml(k.datum) + '</div>' +
-        '<div><strong>Servicetechniker:</strong> ' + escapeHtml(k.servicetechniker) + '</div>' +
-        '<div><strong>Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson) + '</div>';
+        (k.geliefertUeber ? '<div class="kopfdaten-secondary">' + escapeHtml(k.geliefertUeber) + '</div>' : '') +
+        '<div class="mb-v2-kopfdaten-row"><strong>Datum:</strong> ' + escapeHtml(k.datum) + '</div>' +
+        '<div class="mb-v2-kopfdaten-row"><strong>Servicetechniker:</strong> ' + escapeHtml(k.servicetechniker) + '</div>' +
+        '<div class="mb-v2-kopfdaten-row"><strong>Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson) + '</div>';
+      kopfdatenEl.hidden = false;
+      kopfdatenEl.removeAttribute('aria-hidden');
       return k;
     }
 
@@ -11553,19 +11589,17 @@
         if (fn === 'undefined') fn = '';
         var t = (f && (f.type ?? f.Type)) != null ? String(f.type ?? f.Type).trim() : '';
         var p = (f && (f.position ?? f.Position)) != null ? String(f.position ?? f.Position).trim() : '';
-        var rowInpStyle = 'flex:1 1 8rem;min-width:6rem;box-sizing:border-box;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.9rem';
-        var rowFlex = 'display:flex;align-items:center;gap:0.4rem;flex-wrap:nowrap;width:100%';
-        html += '<div class="montagebericht-fab-block" data-fab="' + escapeHtml(fn) + '" style="margin-bottom:1rem;border:1px solid var(--accent);border-radius:6px;overflow:hidden;background:var(--card)">';
-        html += '<table style="width:100%;border-collapse:collapse;font-size:0.9rem" class="montagebericht-fab-kopf">';
+        html += '<div class="montagebericht-fab-block" data-fab="' + escapeHtml(fn) + '">';
+        html += '<table class="montagebericht-fab-kopf">';
         html += '<tr>';
-        html += '<td style="border:1px solid var(--accent);padding:0.45rem 0.55rem;vertical-align:middle;width:22%;background:var(--bg)"><strong>FN.:</strong> ' + escapeHtml(fn || '–') + '</td>';
-        html += '<td style="border:1px solid var(--accent);padding:0.45rem 0.55rem;width:39%;vertical-align:middle;background:var(--bg)"><div style="' + rowFlex + '"><strong>Type:</strong>' +
-          '<input type="text" data-mb-type="" autocomplete="off" value="' + escapeHtml(t) + '" placeholder="aus Anlagenstamm" style="' + rowInpStyle + '"></div></td>';
-        html += '<td style="border:1px solid var(--accent);padding:0.45rem 0.55rem;width:39%;vertical-align:middle;background:var(--bg)"><div style="' + rowFlex + '"><strong>Pos.Nr.:</strong>' +
-          '<input type="text" data-mb-position="" autocomplete="off" value="' + escapeHtml(p) + '" placeholder="aus Anlagenstamm" style="' + rowInpStyle + '"></div></td>';
+        html += '<td style="width:22%"><strong>FN.:</strong> ' + escapeHtml(fn || '–') + '</td>';
+        html += '<td style="width:39%"><div class="montagebericht-fab-row-flex"><strong>Type:</strong>' +
+          '<input type="text" data-mb-type="" autocomplete="off" value="' + escapeHtml(t) + '" placeholder="aus Anlagenstamm"></div></td>';
+        html += '<td style="width:39%"><div class="montagebericht-fab-row-flex"><strong>Pos.Nr.:</strong>' +
+          '<input type="text" data-mb-position="" autocomplete="off" value="' + escapeHtml(p) + '" placeholder="aus Anlagenstamm"></div></td>';
         html += '</tr></table>';
-        html += '<div style="padding:0.5rem 0.55rem 0.6rem">';
-        html += '<label class="muted" style="font-size:0.8rem;display:block;margin-bottom:0.25rem">Bemerkungen / Textbausteine</label>';
+        html += '<div class="montagebericht-fab-body">';
+        html += '<label>Bemerkungen / Textbausteine</label>';
         html += '<div data-fab-rich="' + escapeHtml(fn) + '" data-mb-editor="fab" class="mb-rich-editor" contenteditable="true" spellcheck="true" style="min-height:3rem" title="Textbaustein hierher ziehen"></div>';
         html += '</div></div>';
       });
@@ -11820,7 +11854,11 @@
       if (langEl) langEl.value = 'de';
       var projEl = document.getElementById('montageberichtProjekt');
       if (projEl) projEl.value = '';
-      if (kopfdatenEl) kopfdatenEl.innerHTML = '';
+      if (kopfdatenEl) {
+        kopfdatenEl.innerHTML = '';
+        kopfdatenEl.hidden = true;
+        kopfdatenEl.setAttribute('aria-hidden', 'true');
+      }
       if (fabContainer) fabContainer.innerHTML = '';
       bindMontageberichtToolbar();
       loadMontageberichtJobs().then(function (jobs) {
@@ -11838,7 +11876,12 @@
       jobSelect.addEventListener('change', async function () {
         var id = parseInt(this.value, 10);
         if (!id) {
-          kopfdatenEl.innerHTML = ''; fabContainer.innerHTML = ''; montageberichtJobData = null;
+          if (kopfdatenEl) {
+            kopfdatenEl.innerHTML = '';
+            kopfdatenEl.hidden = true;
+            kopfdatenEl.setAttribute('aria-hidden', 'true');
+          }
+          fabContainer.innerHTML = ''; montageberichtJobData = null;
           if (grundInput) setRichEditorHtml(grundInput, '');
           var bemerkEl = document.getElementById('montageberichtBemerkungen'); if (bemerkEl) setRichEditorHtml(bemerkEl, '');
           var langEl = document.getElementById('montageberichtLang'); if (langEl) langEl.value = 'de';
@@ -11885,6 +11928,8 @@
           } catch (loadErr) { /* gespeicherte Daten optional */ }
         } catch (e) {
           kopfdatenEl.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
+          kopfdatenEl.hidden = false;
+          kopfdatenEl.removeAttribute('aria-hidden');
         }
       });
     }
@@ -13767,7 +13812,11 @@
       serviceJobData = null;
       setActiveFabValue('');
       if (!id) {
-        if (kopfdatenEl) kopfdatenEl.innerHTML = '';
+        if (kopfdatenEl) {
+        kopfdatenEl.innerHTML = '';
+        kopfdatenEl.hidden = true;
+        kopfdatenEl.setAttribute('aria-hidden', 'true');
+      }
         renderFabButtons(null);
         updateAllPdfButtonVisibility(null);
         var projClear = document.getElementById('serviceprotokollProjekt');
@@ -14166,6 +14215,85 @@
       }
     };
 
+    var spCatalogCache = [];
+
+    function stepLabelInList(step) {
+      return (step.bezeichnung_de || '') + (step.bezeichnung_en ? ' / ' + step.bezeichnung_en : '');
+    }
+
+    function currentStepLabels() {
+      syncStepsFromDom();
+      return arbeitsschritte.map(function (s) {
+        return combineBilingualLabel(s.bezeichnung_de, s.bezeichnung_en).toLowerCase();
+      });
+    }
+
+    async function loadSpCatalog() {
+      var listUrl = API_BASE + '/api/arbeitsschritte_list?technician_id=' + getTechId();
+      var baseUrl = (getDispoBaseUrl() || '').trim();
+      if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) {
+        listUrl += '&local_only=1';
+      } else if (baseUrl) {
+        listUrl += '&base_url=' + encodeURIComponent(baseUrl);
+      }
+      var r = await fetch(listUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
+      var data = await r.json().catch(function () { return {}; });
+      if (!data.ok || !Array.isArray(data.steps)) return [];
+      return data.steps;
+    }
+
+    var btnSpCatalog = document.getElementById('btnSpAddFromCatalog');
+    if (btnSpCatalog) {
+      btnSpCatalog.addEventListener('click', async function () {
+        try {
+          spCatalogCache = await loadSpCatalog();
+          var existing = currentStepLabels();
+          var listEl = document.getElementById('spCatalogList');
+          if (!listEl) return;
+          if (!spCatalogCache.length) {
+            listEl.innerHTML = '<span class="muted">Keine Schritte im Katalog.</span>';
+          } else {
+            listEl.innerHTML = spCatalogCache.map(function (s, idx) {
+              var label = s.bezeichnung || stepLabelInList(s);
+              var used = existing.indexOf(String(label).toLowerCase()) >= 0;
+              return '<label><input type="checkbox" data-cat-idx="' + idx + '"' + (used ? ' disabled' : '') + '> '
+                + escapeHtml(label) + (s.scope === 'global' ? ' <span class="muted">(global)</span>' : '') + '</label>';
+            }).join('');
+          }
+          document.getElementById('modalSpCatalog').classList.add('active');
+        } catch (e) {
+          alert('Katalog konnte nicht geladen werden: ' + (e && e.message ? e.message : e));
+        }
+      });
+    }
+    var btnSpCatalogAdd = document.getElementById('btnSpCatalogAdd');
+    if (btnSpCatalogAdd) {
+      btnSpCatalogAdd.addEventListener('click', function () {
+        var listEl = document.getElementById('spCatalogList');
+        if (!listEl) return;
+        listEl.querySelectorAll('input[type=checkbox]:checked').forEach(function (cb) {
+          var idx = parseInt(cb.getAttribute('data-cat-idx'), 10);
+          var s = spCatalogCache[idx];
+          if (!s) return;
+          arbeitsschritte.push({
+            bezeichnung_de: s.bezeichnung_de || splitBilingualLabel(s.bezeichnung || '').de,
+            bezeichnung_en: s.bezeichnung_en || splitBilingualLabel(s.bezeichnung || '').en,
+            status: 'na',
+            bemerkung: ''
+          });
+        });
+        renderSteps();
+        notifyReactBridge();
+        document.getElementById('modalSpCatalog').classList.remove('active');
+      });
+    }
+    var btnSpCatalogCancel = document.getElementById('btnSpCatalogCancel');
+    if (btnSpCatalogCancel) {
+      btnSpCatalogCancel.addEventListener('click', function () {
+        document.getElementById('modalSpCatalog').classList.remove('active');
+      });
+    }
+
     if (abbrechenBtn) {
       abbrechenBtn.addEventListener('click', function () {
         if (typeof window.openProtokolleService === 'function') window.openProtokolleService();
@@ -14187,7 +14315,11 @@
         setActiveFabValue('');
         renderFabButtons(null);
         updateAllPdfButtonVisibility(null);
-        if (kopfdatenEl) kopfdatenEl.innerHTML = '';
+        if (kopfdatenEl) {
+        kopfdatenEl.innerHTML = '';
+        kopfdatenEl.hidden = true;
+        kopfdatenEl.setAttribute('aria-hidden', 'true');
+      }
         ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollProjekt', 'serviceprotokollBemerkungen', 'serviceprotokollAbschlussBemerkungen'
         ].concat(SP_MESS_FIELD_IDS).forEach(function (id) {
           var el = document.getElementById(id);
@@ -14613,6 +14745,218 @@
     document.getElementById('btnTbCategoryCancel').addEventListener('click', function () {
       document.getElementById('modalTbCategory').classList.remove('active');
     });
+  })();
+
+  (function initArbeitsschritteView() {
+    var asSteps = [];
+    var asPresets = [];
+    var editingStepId = 0;
+    var editingStepScope = 'user';
+    var editingPresetId = 0;
+    var editingPresetScope = 'user';
+
+    function esc(s) {
+      if (s == null) return '';
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function listUrl() {
+      var url = API_BASE + '/api/arbeitsschritte_list?technician_id=' + getTechId();
+      var baseUrl = (getDispoBaseUrl() || '').trim();
+      if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) {
+        url += '&local_only=1';
+      } else if (baseUrl) {
+        url += '&base_url=' + encodeURIComponent(baseUrl);
+      }
+      return url;
+    }
+
+    window.loadArbeitsschritteView = async function () {
+      var stepList = document.getElementById('asStepList');
+      var presetList = document.getElementById('asPresetList');
+      try {
+        var r = await fetch(listUrl(), { headers: { 'X-Technician-Id': String(getTechId()) } });
+        var data = await r.json();
+        if (!data.ok) throw new Error(data.error || 'Laden fehlgeschlagen');
+        asSteps = data.steps || [];
+        asPresets = data.presets || [];
+        if (stepList) {
+          stepList.innerHTML = asSteps.length ? asSteps.map(function (s) {
+            var global = s.scope === 'global';
+            return '<div class="as-step-row"><div class="as-step-main"><strong>' + esc(s.bezeichnung_de)
+              + '</strong>' + (s.bezeichnung_en ? ' <span class="muted">/ ' + esc(s.bezeichnung_en) + '</span>' : '')
+              + (global ? ' <span class="muted">(global)</span>' : '') + '</div>'
+              + (global ? '' : '<button type="button" class="btn btn-ghost btn-as-edit-step" data-id="' + s.id + '">Bearbeiten</button>'
+                + '<button type="button" class="btn btn-ghost btn-as-pub-step" data-id="' + s.id + '">Für alle</button>'
+                + '<button type="button" class="btn btn-ghost btn-as-del-step" data-id="' + s.id + '">Löschen</button>')
+              + '</div>';
+          }).join('') : '<p class="muted">Keine Schritte.</p>';
+          stepList.querySelectorAll('.btn-as-edit-step').forEach(function (btn) {
+            btn.addEventListener('click', function () { openStep(parseInt(btn.getAttribute('data-id'), 10)); });
+          });
+          stepList.querySelectorAll('.btn-as-pub-step').forEach(function (btn) {
+            btn.addEventListener('click', function () { publishStep(parseInt(btn.getAttribute('data-id'), 10)); });
+          });
+          stepList.querySelectorAll('.btn-as-del-step').forEach(function (btn) {
+            btn.addEventListener('click', function () { deleteStep(parseInt(btn.getAttribute('data-id'), 10)); });
+          });
+        }
+        if (presetList) {
+          presetList.innerHTML = asPresets.length ? asPresets.map(function (p) {
+            var cnt = (p.step_refs || []).length;
+            var global = p.scope === 'global';
+            return '<div class="as-preset-row"><strong>' + esc(p.name) + '</strong> '
+              + '<span class="muted">[' + esc(p.type_code) + '] – ' + cnt + ' Schritte</span>'
+              + (global ? ' <span class="muted">(global)</span>' : '')
+              + '<div style="margin-top:0.35rem;display:flex;gap:0.35rem">'
+              + (global ? '' : '<button type="button" class="btn btn-ghost btn-as-edit-preset" data-id="' + p.id + '">Bearbeiten</button>'
+                + '<button type="button" class="btn btn-ghost btn-as-del-preset" data-id="' + p.id + '">Löschen</button>')
+              + '</div></div>';
+          }).join('') : '<p class="muted">Keine Presets.</p>';
+          presetList.querySelectorAll('.btn-as-edit-preset').forEach(function (btn) {
+            btn.addEventListener('click', function () { openPreset(parseInt(btn.getAttribute('data-id'), 10)); });
+          });
+          presetList.querySelectorAll('.btn-as-del-preset').forEach(function (btn) {
+            btn.addEventListener('click', function () { deletePreset(parseInt(btn.getAttribute('data-id'), 10)); });
+          });
+        }
+      } catch (e) {
+        if (stepList) stepList.innerHTML = '<span class="empty">Fehler: ' + esc(e.message) + '</span>';
+      }
+    };
+
+    function openStep(id) {
+      editingStepId = id || 0;
+      var s = asSteps.find(function (x) { return x.id === id; }) || {};
+      document.getElementById('modalAsStepTitle').textContent = id ? 'Schritt bearbeiten' : 'Neuer Schritt';
+      document.getElementById('asStepDe').value = s.bezeichnung_de || '';
+      document.getElementById('asStepEn').value = s.bezeichnung_en || '';
+      document.getElementById('asStepSort').value = s.sort_order || 0;
+      document.getElementById('modalAsStep').classList.add('active');
+    }
+
+    function openPreset(id) {
+      editingPresetId = id || 0;
+      var p = asPresets.find(function (x) { return x.id === id; }) || {};
+      var refs = {};
+      (p.step_refs || []).forEach(function (r) { refs[r.step_scope + ':' + r.step_id] = true; });
+      document.getElementById('modalAsPresetTitle').textContent = id ? 'Preset bearbeiten' : 'Preset erstellen';
+      document.getElementById('asPresetName').value = p.name || '';
+      document.getElementById('asPresetType').value = p.type_code || '';
+      document.getElementById('asPresetChecks').innerHTML = asSteps.map(function (s) {
+        var key = (s.scope || 'global') + ':' + s.id;
+        return '<label><input type="checkbox" data-step-scope="' + esc(s.scope || 'global') + '" data-step-id="' + s.id + '"'
+          + (refs[key] ? ' checked' : '') + '> ' + esc(s.bezeichnung_de)
+          + (s.scope === 'global' ? ' <span class="muted">(global)</span>' : '') + '</label>';
+      }).join('');
+      document.getElementById('modalAsPreset').classList.add('active');
+    }
+
+    async function saveStep() {
+      var baseUrl = getDispoBaseUrl();
+      var body = {
+        base_url: baseUrl,
+        technician_id: getTechId(),
+        id: editingStepId || undefined,
+        bezeichnung_de: document.getElementById('asStepDe').value,
+        bezeichnung_en: document.getElementById('asStepEn').value,
+        sort_order: parseInt(document.getElementById('asStepSort').value, 10) || 0
+      };
+      var r = await fetch(API_BASE + '/api/arbeitsschritte_save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Speichern fehlgeschlagen');
+      document.getElementById('modalAsStep').classList.remove('active');
+      await window.loadArbeitsschritteView();
+    }
+
+    async function deleteStep(id) {
+      if (!confirm('Schritt löschen?')) return;
+      var r = await fetch(API_BASE + '/api/arbeitsschritte_delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({ base_url: getDispoBaseUrl(), technician_id: getTechId(), id: id })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Löschen fehlgeschlagen');
+      await window.loadArbeitsschritteView();
+    }
+
+    async function publishStep(id) {
+      var baseUrl = getDispoBaseUrl();
+      if (!baseUrl) { alert('Dispo-URL in Einstellungen eintragen.'); return; }
+      var r = await fetch(API_BASE + '/api/arbeitsschritte_publish_global', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({ base_url: baseUrl, technician_id: getTechId(), id: id })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Freigabe fehlgeschlagen');
+      await window.loadArbeitsschritteView();
+    }
+
+    async function savePreset() {
+      var refs = [];
+      document.querySelectorAll('#asPresetChecks input[type=checkbox]:checked').forEach(function (cb, i) {
+        refs.push({
+          step_scope: cb.getAttribute('data-step-scope') || 'global',
+          step_id: parseInt(cb.getAttribute('data-step-id'), 10),
+          sort_order: i + 1
+        });
+      });
+      var body = {
+        base_url: getDispoBaseUrl(),
+        technician_id: getTechId(),
+        id: editingPresetId || undefined,
+        name: document.getElementById('asPresetName').value,
+        type_code: document.getElementById('asPresetType').value,
+        step_refs: refs
+      };
+      var r = await fetch(API_BASE + '/api/arbeitsschritte_preset_save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Speichern fehlgeschlagen');
+      document.getElementById('modalAsPreset').classList.remove('active');
+      await window.loadArbeitsschritteView();
+    }
+
+    async function deletePreset(id) {
+      if (!confirm('Preset löschen?')) return;
+      var r = await fetch(API_BASE + '/api/arbeitsschritte_preset_delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({ base_url: getDispoBaseUrl(), technician_id: getTechId(), id: id })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Löschen fehlgeschlagen');
+      await window.loadArbeitsschritteView();
+    }
+
+    document.querySelectorAll('[data-as-tab]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        document.querySelectorAll('[data-as-tab]').forEach(function (b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        var tab = btn.getAttribute('data-as-tab');
+        document.getElementById('asPanelSteps').style.display = tab === 'steps' ? '' : 'none';
+        document.getElementById('asPanelPresets').style.display = tab === 'presets' ? '' : 'none';
+      });
+    });
+    var btnNewStep = document.getElementById('btnAsNewStep');
+    if (btnNewStep) btnNewStep.addEventListener('click', function () { openStep(0); });
+    var btnNewPreset = document.getElementById('btnAsNewPreset');
+    if (btnNewPreset) btnNewPreset.addEventListener('click', function () { openPreset(0); });
+    document.getElementById('btnAsStepSave').addEventListener('click', function () { saveStep().catch(function (e) { alert(e.message); }); });
+    document.getElementById('btnAsStepCancel').addEventListener('click', function () { document.getElementById('modalAsStep').classList.remove('active'); });
+    document.getElementById('btnAsPresetSave').addEventListener('click', function () { savePreset().catch(function (e) { alert(e.message); }); });
+    document.getElementById('btnAsPresetCancel').addEventListener('click', function () { document.getElementById('modalAsPreset').classList.remove('active'); });
   })();
 
   const btnArchivApply = document.getElementById('btnArchivFilterApply');
