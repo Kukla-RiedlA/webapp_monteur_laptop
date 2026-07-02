@@ -169,12 +169,15 @@ Masterliste + Typ-Presets (global + privat pro Techniker). Scope analog Textbaus
 | `dispo_api/api/arbeitsschritte_publish_global.php` | POST | User-Schritt → global freigeben |
 | `dispo_api/api/arbeitsschritte_preset_save.php` | POST | User-Preset inkl. `step_refs` (Checkbox-Liste) |
 | `dispo_api/api/arbeitsschritte_preset_delete.php` | POST | User-Preset löschen |
+| `dispo_api/api/arbeitsschritte_reorder.php` | POST | User-Schritte umsortieren: `technician_id`, `orders` (Array `[{ id, sort_order }, …]` oder JSON-String) |
+| `dispo_api/api/arbeitsschritte_global_reorder.php` | POST | Globale Masterliste umsortieren (Admin): `orders` wie oben |
 
-**Dispo-Admin** (nur `perm_admin`, Seite `arbeitsschritte_admin.php`): `arbeitsschritte_global_save.php`, `arbeitsschritte_global_delete.php`, `arbeitsschritte_preset_global_save.php`, `arbeitsschritte_preset_global_delete.php`.
+**Dispo-Admin** (nur `perm_admin`, Seite `arbeitsschritte_admin.php`): `arbeitsschritte_global_save.php`, `arbeitsschritte_global_delete.php`, `arbeitsschritte_global_reorder.php`, `arbeitsschritte_preset_global_save.php`, `arbeitsschritte_preset_global_delete.php`.
 
 **Monteur-Laptop (Electron-Gateway):**
 - `GET /api/arbeitsschritte_list` — lokaler SQLite-Cache + optional Merge vom Server (`base_url`, `technician_id`)
-- `POST /api/arbeitsschritte_save`, `_delete`, `_publish_global`, `_preset_save`, `_preset_delete`
+- `POST /api/arbeitsschritte_save`, `_delete`, `_publish_global`, `_preset_save`, `_preset_delete`, `_reorder`
+- `_reorder`: nur **user**-Schritte lokal (`sort_order`); optional Proxy zu `arbeitsschritte_reorder.php` bei Online (`base_url`, `technician_id`, `orders`)
 - `sync_pull` / `sync_push` mit `entity_type='arbeitsschritte'` in `pending_changes`
 
 **PWA:** Katalog im Serviceprotokoll ruft `arbeitsschritte_list.php` direkt auf; keine Offline-Verwaltung.

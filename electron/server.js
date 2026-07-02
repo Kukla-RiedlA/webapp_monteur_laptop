@@ -9061,6 +9061,39 @@ function createApp(db) {
     }
   });
 
+  app.post('/api/arbeitsschritte_reorder', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    let orders = body.orders;
+    if (!Array.isArray(orders)) orders = [];
+    try {
+      arbeitsschritteLocal.ensureArbeitsschritteSchema(db);
+      arbeitsschritteLocal.reorderUserStepsLocal(db, technicianId, orders);
+      save();
+      if (baseUrl && technicianId) {
+        try {
+          const formBody = new URLSearchParams();
+          formBody.append('technician_id', String(technicianId));
+          formBody.append('orders', JSON.stringify(orders));
+          const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_reorder.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Technician-Id': String(technicianId),
+            },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) return res.json(data);
+        } catch (_) {}
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
   /** Fabrikationsnummern dürfen auch bei „angelegt/geplant/zugeteilt“ gesetzt werden (vor „Auftrag annehmen“). */
   function getLocalJobMetaForFabrikationsnummernPatch(dbConn, technicianId, rawJobId) {
     const n = parseInt(rawJobId, 10);

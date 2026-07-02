@@ -14751,15 +14751,20 @@
     var asSteps = [];
     var asPresets = [];
     var editingStepId = 0;
-    var editingStepScope = 'user';
-    var editingPresetId = 0;
-    var editingPresetScope = 'user';
+    var selectedPresetId = 0;
+    var selectedPresetScope = '';
+    var checkedKeys = {};
+    var dragFromIndex = -1;
 
     function esc(s) {
       if (s == null) return '';
       var d = document.createElement('div');
       d.textContent = s;
       return d.innerHTML;
+    }
+
+    function stepKey(scope, id) {
+      return String(scope || 'global') + ':' + id;
     }
 
     function listUrl() {
@@ -14773,55 +14778,227 @@
       return url;
     }
 
+    function sortStepsDefault() {
+      asSteps.sort(function (a, b) {
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+        if (a.scope !== b.scope) return a.scope === 'global' ? -1 : 1;
+        return a.id - b.id;
+      });
+    }
+
+    function sortStepsForPreset(refs) {
+      var refOrder = {};
+      (refs || []).forEach(function (r, idx) {
+        refOrder[stepKey(r.step_scope || 'global', r.step_id)] = idx;
+      });
+      asSteps.sort(function (a, b) {
+        var ka = stepKey(a.scope, a.id);
+        var kb = stepKey(b.scope, b.id);
+        var aIn = Object.prototype.hasOwnProperty.call(refOrder, ka);
+        var bIn = Object.prototype.hasOwnProperty.call(refOrder, kb);
+        if (aIn && bIn) return refOrder[ka] - refOrder[kb];
+        if (aIn) return -1;
+        if (bIn) return 1;
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+        return a.id - b.id;
+      });
+      checkedKeys = {};
+      (refs || []).forEach(function (r) {
+        checkedKeys[stepKey(r.step_scope || 'global', r.step_id)] = true;
+      });
+    }
+
+    function updatePresetToolbarState() {
+      var canSaveUser = selectedPresetId > 0 && selectedPresetScope === 'user';
+      var btnSave = document.getElementById('btnAsPresetSave');
+      var btnDel = document.getElementById('btnAsPresetDelete');
+      if (btnSave) btnSave.disabled = !canSaveUser;
+      if (btnDel) btnDel.disabled = !canSaveUser;
+      var nameEl = document.getElementById('asPresetName');
+      var typeEl = document.getElementById('asPresetType');
+      if (nameEl) nameEl.readOnly = selectedPresetScope === 'global';
+      if (typeEl) typeEl.readOnly = selectedPresetScope === 'global';
+    }
+
+    function renderPresetSelect() {
+      var sel = document.getElementById('asPresetSelect');
+      if (!sel) return;
+      var html = '<option value="">— Preset wählen —</option>';
+      asPresets.forEach(function (p) {
+        var label = p.name + ' [' + p.type_code + ']' + (p.scope === 'global' ? ' (global)' : '');
+        var val = (p.scope || 'user') + ':' + p.id;
+        var selected = p.id === selectedPresetId && (p.scope || 'user') === selectedPresetScope;
+        html += '<option value="' + esc(val) + '"' + (selected ? ' selected' : '') + '>' + esc(label) + '</option>';
+      });
+      sel.innerHTML = html;
+    }
+
+    function applyPresetByValue(val) {
+      if (!val) {
+        selectedPresetId = 0;
+        selectedPresetScope = '';
+        var nameEl = document.getElementById('asPresetName');
+        var typeEl = document.getElementById('asPresetType');
+        if (nameEl) nameEl.value = '';
+        if (typeEl) typeEl.value = '';
+        checkedKeys = {};
+        sortStepsDefault();
+        renderPresetSelect();
+        renderSteps();
+        updatePresetToolbarState();
+        return;
+      }
+      var parts = String(val).split(':');
+      var scope = parts[0] || 'user';
+      var pid = parseInt(parts[1], 10) || 0;
+      var p = asPresets.find(function (x) { return x.id === pid && (x.scope || 'user') === scope; });
+      if (!p) return;
+      selectedPresetId = pid;
+      selectedPresetScope = scope;
+      var nameEl = document.getElementById('asPresetName');
+      var typeEl = document.getElementById('asPresetType');
+      if (nameEl) nameEl.value = p.name || '';
+      if (typeEl) typeEl.value = p.type_code || '';
+      sortStepsForPreset(p.step_refs || []);
+      renderPresetSelect();
+      renderSteps();
+      updatePresetToolbarState();
+    }
+
+    function collectStepRefsFromDom() {
+      var refs = [];
+      var order = 1;
+      document.querySelectorAll('#asStepList .as-row').forEach(function (row) {
+        var cb = row.querySelector('input.as-row-check');
+        if (!cb || !cb.checked) return;
+        refs.push({
+          step_scope: row.getAttribute('data-scope') || 'global',
+          step_id: parseInt(row.getAttribute('data-id'), 10),
+          sort_order: order++
+        });
+      });
+      return refs;
+    }
+
+    async function persistUserOrder() {
+      var orders = [];
+      document.querySelectorAll('#asStepList .as-row').forEach(function (row, idx) {
+        if ((row.getAttribute('data-scope') || '') !== 'user') return;
+        orders.push({ id: parseInt(row.getAttribute('data-id'), 10), sort_order: idx + 1 });
+      });
+      if (!orders.length) return;
+      var r = await fetch(API_BASE + '/api/arbeitsschritte_reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({
+          base_url: getDispoBaseUrl(),
+          technician_id: getTechId(),
+          orders: orders
+        })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Reihenfolge speichern fehlgeschlagen');
+    }
+
+    function bindRowDragDrop() {
+      var list = document.getElementById('asStepList');
+      if (!list) return;
+      list.querySelectorAll('.as-row').forEach(function (row) {
+        row.addEventListener('dragstart', function (e) {
+          dragFromIndex = parseInt(row.getAttribute('data-index'), 10);
+          row.classList.add('as-row--dragging');
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', String(dragFromIndex));
+        });
+        row.addEventListener('dragend', function () {
+          row.classList.remove('as-row--dragging');
+          list.querySelectorAll('.as-row').forEach(function (r) { r.classList.remove('as-row--dragover'); });
+          dragFromIndex = -1;
+        });
+        row.addEventListener('dragover', function (e) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          row.classList.add('as-row--dragover');
+        });
+        row.addEventListener('dragleave', function () {
+          row.classList.remove('as-row--dragover');
+        });
+        row.addEventListener('drop', function (e) {
+          e.preventDefault();
+          row.classList.remove('as-row--dragover');
+          var from = dragFromIndex;
+          var to = parseInt(row.getAttribute('data-index'), 10);
+          if (from < 0 || to < 0 || from === to) return;
+          var moved = asSteps.splice(from, 1)[0];
+          asSteps.splice(to, 0, moved);
+          renderSteps();
+          persistUserOrder().catch(function (err) { alert(err.message || err); });
+        });
+      });
+    }
+
+    function renderSteps() {
+      var stepList = document.getElementById('asStepList');
+      if (!stepList) return;
+      if (!asSteps.length) {
+        stepList.innerHTML = '<p class="muted">Keine Schritte.</p>';
+        return;
+      }
+      stepList.innerHTML = asSteps.map(function (s, idx) {
+        var global = s.scope === 'global';
+        var k = stepKey(s.scope, s.id);
+        var checked = checkedKeys[k] ? ' checked' : '';
+        return '<div class="as-row" draggable="true" data-id="' + s.id + '" data-scope="' + esc(s.scope || 'global') + '" data-index="' + idx + '">'
+          + '<span class="as-drag" title="Ziehen zum Sortieren">≡</span>'
+          + '<input type="checkbox" class="as-row-check"' + checked + ' data-key="' + esc(k) + '">'
+          + '<div class="as-row-main"><strong>' + esc(s.bezeichnung_de) + '</strong>'
+          + (s.bezeichnung_en ? ' <span class="muted">/ ' + esc(s.bezeichnung_en) + '</span>' : '')
+          + (global ? ' <span class="muted">(global)</span>' : '') + '</div>'
+          + '<div class="as-row-actions">'
+          + (global ? '' : '<button type="button" class="btn btn-ghost btn-as-edit-step" data-id="' + s.id + '">Bearbeiten</button>'
+            + '<button type="button" class="btn btn-ghost btn-as-pub-step" data-id="' + s.id + '">Für alle</button>'
+            + '<button type="button" class="btn btn-ghost btn-as-del-step" data-id="' + s.id + '">Löschen</button>')
+          + '</div></div>';
+      }).join('');
+      stepList.querySelectorAll('.as-row-check').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var key = cb.getAttribute('data-key');
+          if (cb.checked) checkedKeys[key] = true;
+          else delete checkedKeys[key];
+        });
+      });
+      stepList.querySelectorAll('.btn-as-edit-step').forEach(function (btn) {
+        btn.addEventListener('click', function () { openStep(parseInt(btn.getAttribute('data-id'), 10)); });
+      });
+      stepList.querySelectorAll('.btn-as-pub-step').forEach(function (btn) {
+        btn.addEventListener('click', function () { publishStep(parseInt(btn.getAttribute('data-id'), 10)); });
+      });
+      stepList.querySelectorAll('.btn-as-del-step').forEach(function (btn) {
+        btn.addEventListener('click', function () { deleteStep(parseInt(btn.getAttribute('data-id'), 10)); });
+      });
+      bindRowDragDrop();
+    }
+
     window.loadArbeitsschritteView = async function () {
       var stepList = document.getElementById('asStepList');
-      var presetList = document.getElementById('asPresetList');
       try {
         var r = await fetch(listUrl(), { headers: { 'X-Technician-Id': String(getTechId()) } });
         var data = await r.json();
         if (!data.ok) throw new Error(data.error || 'Laden fehlgeschlagen');
         asSteps = data.steps || [];
         asPresets = data.presets || [];
-        if (stepList) {
-          stepList.innerHTML = asSteps.length ? asSteps.map(function (s) {
-            var global = s.scope === 'global';
-            return '<div class="as-step-row"><div class="as-step-main"><strong>' + esc(s.bezeichnung_de)
-              + '</strong>' + (s.bezeichnung_en ? ' <span class="muted">/ ' + esc(s.bezeichnung_en) + '</span>' : '')
-              + (global ? ' <span class="muted">(global)</span>' : '') + '</div>'
-              + (global ? '' : '<button type="button" class="btn btn-ghost btn-as-edit-step" data-id="' + s.id + '">Bearbeiten</button>'
-                + '<button type="button" class="btn btn-ghost btn-as-pub-step" data-id="' + s.id + '">Für alle</button>'
-                + '<button type="button" class="btn btn-ghost btn-as-del-step" data-id="' + s.id + '">Löschen</button>')
-              + '</div>';
-          }).join('') : '<p class="muted">Keine Schritte.</p>';
-          stepList.querySelectorAll('.btn-as-edit-step').forEach(function (btn) {
-            btn.addEventListener('click', function () { openStep(parseInt(btn.getAttribute('data-id'), 10)); });
+        if (!selectedPresetId) {
+          sortStepsDefault();
+        } else {
+          var p = asPresets.find(function (x) {
+            return x.id === selectedPresetId && (x.scope || 'user') === selectedPresetScope;
           });
-          stepList.querySelectorAll('.btn-as-pub-step').forEach(function (btn) {
-            btn.addEventListener('click', function () { publishStep(parseInt(btn.getAttribute('data-id'), 10)); });
-          });
-          stepList.querySelectorAll('.btn-as-del-step').forEach(function (btn) {
-            btn.addEventListener('click', function () { deleteStep(parseInt(btn.getAttribute('data-id'), 10)); });
-          });
+          if (p) sortStepsForPreset(p.step_refs || []);
+          else sortStepsDefault();
         }
-        if (presetList) {
-          presetList.innerHTML = asPresets.length ? asPresets.map(function (p) {
-            var cnt = (p.step_refs || []).length;
-            var global = p.scope === 'global';
-            return '<div class="as-preset-row"><strong>' + esc(p.name) + '</strong> '
-              + '<span class="muted">[' + esc(p.type_code) + '] – ' + cnt + ' Schritte</span>'
-              + (global ? ' <span class="muted">(global)</span>' : '')
-              + '<div style="margin-top:0.35rem;display:flex;gap:0.35rem">'
-              + (global ? '' : '<button type="button" class="btn btn-ghost btn-as-edit-preset" data-id="' + p.id + '">Bearbeiten</button>'
-                + '<button type="button" class="btn btn-ghost btn-as-del-preset" data-id="' + p.id + '">Löschen</button>')
-              + '</div></div>';
-          }).join('') : '<p class="muted">Keine Presets.</p>';
-          presetList.querySelectorAll('.btn-as-edit-preset').forEach(function (btn) {
-            btn.addEventListener('click', function () { openPreset(parseInt(btn.getAttribute('data-id'), 10)); });
-          });
-          presetList.querySelectorAll('.btn-as-del-preset').forEach(function (btn) {
-            btn.addEventListener('click', function () { deletePreset(parseInt(btn.getAttribute('data-id'), 10)); });
-          });
-        }
+        renderPresetSelect();
+        renderSteps();
+        updatePresetToolbarState();
       } catch (e) {
         if (stepList) stepList.innerHTML = '<span class="empty">Fehler: ' + esc(e.message) + '</span>';
       }
@@ -14829,40 +15006,22 @@
 
     function openStep(id) {
       editingStepId = id || 0;
-      var s = asSteps.find(function (x) { return x.id === id; }) || {};
+      var s = asSteps.find(function (x) { return x.id === id && x.scope === 'user'; }) || {};
       document.getElementById('modalAsStepTitle').textContent = id ? 'Schritt bearbeiten' : 'Neuer Schritt';
       document.getElementById('asStepDe').value = s.bezeichnung_de || '';
       document.getElementById('asStepEn').value = s.bezeichnung_en || '';
-      document.getElementById('asStepSort').value = s.sort_order || 0;
       document.getElementById('modalAsStep').classList.add('active');
     }
 
-    function openPreset(id) {
-      editingPresetId = id || 0;
-      var p = asPresets.find(function (x) { return x.id === id; }) || {};
-      var refs = {};
-      (p.step_refs || []).forEach(function (r) { refs[r.step_scope + ':' + r.step_id] = true; });
-      document.getElementById('modalAsPresetTitle').textContent = id ? 'Preset bearbeiten' : 'Preset erstellen';
-      document.getElementById('asPresetName').value = p.name || '';
-      document.getElementById('asPresetType').value = p.type_code || '';
-      document.getElementById('asPresetChecks').innerHTML = asSteps.map(function (s) {
-        var key = (s.scope || 'global') + ':' + s.id;
-        return '<label><input type="checkbox" data-step-scope="' + esc(s.scope || 'global') + '" data-step-id="' + s.id + '"'
-          + (refs[key] ? ' checked' : '') + '> ' + esc(s.bezeichnung_de)
-          + (s.scope === 'global' ? ' <span class="muted">(global)</span>' : '') + '</label>';
-      }).join('');
-      document.getElementById('modalAsPreset').classList.add('active');
-    }
-
     async function saveStep() {
-      var baseUrl = getDispoBaseUrl();
+      var maxSort = asSteps.reduce(function (m, s) { return Math.max(m, s.sort_order || 0); }, 0);
       var body = {
-        base_url: baseUrl,
+        base_url: getDispoBaseUrl(),
         technician_id: getTechId(),
         id: editingStepId || undefined,
         bezeichnung_de: document.getElementById('asStepDe').value,
         bezeichnung_en: document.getElementById('asStepEn').value,
-        sort_order: parseInt(document.getElementById('asStepSort').value, 10) || 0
+        sort_order: editingStepId ? undefined : maxSort + 1
       };
       var r = await fetch(API_BASE + '/api/arbeitsschritte_save', {
         method: 'POST',
@@ -14900,23 +15059,16 @@
       await window.loadArbeitsschritteView();
     }
 
-    async function savePreset() {
-      var refs = [];
-      document.querySelectorAll('#asPresetChecks input[type=checkbox]:checked').forEach(function (cb, i) {
-        refs.push({
-          step_scope: cb.getAttribute('data-step-scope') || 'global',
-          step_id: parseInt(cb.getAttribute('data-step-id'), 10),
-          sort_order: i + 1
-        });
-      });
+    async function savePreset(id) {
+      var refs = collectStepRefsFromDom();
       var body = {
         base_url: getDispoBaseUrl(),
         technician_id: getTechId(),
-        id: editingPresetId || undefined,
         name: document.getElementById('asPresetName').value,
         type_code: document.getElementById('asPresetType').value,
         step_refs: refs
       };
+      if (id) body.id = id;
       var r = await fetch(API_BASE + '/api/arbeitsschritte_preset_save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -14924,39 +15076,68 @@
       });
       var data = await r.json().catch(function () { return {}; });
       if (!r.ok || !data.ok) throw new Error(data.error || 'Speichern fehlgeschlagen');
-      document.getElementById('modalAsPreset').classList.remove('active');
-      await window.loadArbeitsschritteView();
+      return data;
     }
 
-    async function deletePreset(id) {
+    async function deletePreset() {
+      if (!selectedPresetId || selectedPresetScope !== 'user') return;
       if (!confirm('Preset löschen?')) return;
       var r = await fetch(API_BASE + '/api/arbeitsschritte_preset_delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-        body: JSON.stringify({ base_url: getDispoBaseUrl(), technician_id: getTechId(), id: id })
+        body: JSON.stringify({
+          base_url: getDispoBaseUrl(),
+          technician_id: getTechId(),
+          id: selectedPresetId
+        })
       });
       var data = await r.json().catch(function () { return {}; });
       if (!r.ok || !data.ok) throw new Error(data.error || 'Löschen fehlgeschlagen');
+      selectedPresetId = 0;
+      selectedPresetScope = '';
+      checkedKeys = {};
       await window.loadArbeitsschritteView();
     }
 
-    document.querySelectorAll('[data-as-tab]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        document.querySelectorAll('[data-as-tab]').forEach(function (b) { b.classList.remove('active'); });
-        btn.classList.add('active');
-        var tab = btn.getAttribute('data-as-tab');
-        document.getElementById('asPanelSteps').style.display = tab === 'steps' ? '' : 'none';
-        document.getElementById('asPanelPresets').style.display = tab === 'presets' ? '' : 'none';
+    var presetSelect = document.getElementById('asPresetSelect');
+    if (presetSelect) {
+      presetSelect.addEventListener('change', function () {
+        applyPresetByValue(this.value);
       });
-    });
+    }
+    var btnPresetSave = document.getElementById('btnAsPresetSave');
+    if (btnPresetSave) {
+      btnPresetSave.addEventListener('click', function () {
+        if (!selectedPresetId || selectedPresetScope !== 'user') return;
+        savePreset(selectedPresetId).then(function () {
+          return window.loadArbeitsschritteView();
+        }).catch(function (e) { alert(e.message); });
+      });
+    }
+    var btnPresetCreate = document.getElementById('btnAsPresetCreate');
+    if (btnPresetCreate) {
+      btnPresetCreate.addEventListener('click', function () {
+        savePreset(0).then(function (data) {
+          selectedPresetId = data && data.id ? data.id : 0;
+          selectedPresetScope = 'user';
+          return window.loadArbeitsschritteView();
+        }).then(function () {
+          if (selectedPresetId) applyPresetByValue('user:' + selectedPresetId);
+        }).catch(function (e) { alert(e.message); });
+      });
+    }
+    var btnPresetDelete = document.getElementById('btnAsPresetDelete');
+    if (btnPresetDelete) {
+      btnPresetDelete.addEventListener('click', function () {
+        deletePreset().catch(function (e) { alert(e.message); });
+      });
+    }
     var btnNewStep = document.getElementById('btnAsNewStep');
     if (btnNewStep) btnNewStep.addEventListener('click', function () { openStep(0); });
-    var btnNewPreset = document.getElementById('btnAsNewPreset');
-    if (btnNewPreset) btnNewPreset.addEventListener('click', function () { openPreset(0); });
-    document.getElementById('btnAsStepSave').addEventListener('click', function () { saveStep().catch(function (e) { alert(e.message); }); });
-    document.getElementById('btnAsStepCancel').addEventListener('click', function () { document.getElementById('modalAsStep').classList.remove('active'); });
-    document.getElementById('btnAsPresetSave').addEventListener('click', function () { savePreset().catch(function (e) { alert(e.message); }); });
-    document.getElementById('btnAsPresetCancel').addEventListener('click', function () { document.getElementById('modalAsPreset').classList.remove('active'); });
+    var btnAsStepSave = document.getElementById('btnAsStepSave');
+    if (btnAsStepSave) btnAsStepSave.addEventListener('click', function () { saveStep().catch(function (e) { alert(e.message); }); });
+    var btnAsStepCancel = document.getElementById('btnAsStepCancel');
+    if (btnAsStepCancel) btnAsStepCancel.addEventListener('click', function () { document.getElementById('modalAsStep').classList.remove('active'); });
   })();
 
   const btnArchivApply = document.getElementById('btnArchivFilterApply');

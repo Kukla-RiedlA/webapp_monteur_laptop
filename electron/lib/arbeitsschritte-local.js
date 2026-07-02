@@ -492,6 +492,22 @@ function resolveDefaultsLocal(db, technicianId, anlagenType) {
   return { source: 'builtin', arbeitsschritte: builtinDefaults() };
 }
 
+function reorderUserStepsLocal(db, technicianId, orders) {
+  const tid = parseInt(technicianId, 10);
+  if (!tid) throw new Error('technician_id erforderlich.');
+  if (!Array.isArray(orders) || !orders.length) return { ok: true };
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const stmt = db.prepare(
+    `UPDATE arbeitsschritte_user SET sort_order = ?, updated_at = ? WHERE id = ? AND technician_id = ?`,
+  );
+  orders.forEach(function (row) {
+    const id = parseInt(row.id, 10);
+    const sort = parseInt(row.sort_order, 10) || 0;
+    if (id > 0) stmt.run(sort, now, id, tid);
+  });
+  return { ok: true };
+}
+
 module.exports = {
   ensureArbeitsschritteSchema,
   listArbeitsschritteLocal,
@@ -502,6 +518,7 @@ module.exports = {
   deletePresetLocal,
   queueArbeitsschrittePending,
   resolveDefaultsLocal,
+  reorderUserStepsLocal,
   builtinDefaults,
   combineBezeichnung,
 };

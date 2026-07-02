@@ -8,6 +8,9 @@ const { getDb, persistDb, getLastPersistError } = require('./db');
 function createDbCompat() {
   const db = getDb();
   return {
+    exec(sql) {
+      db.exec(sql);
+    },
     run(sql) {
       db.exec(sql);
     },

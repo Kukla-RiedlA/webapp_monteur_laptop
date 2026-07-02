@@ -1042,14 +1042,23 @@
     .view-textbausteine.active { display: block; }
     .view-arbeitsschritte { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-arbeitsschritte.active { display: block; }
-    .as-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-    .as-tabs button { padding: 0.45rem 0.9rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); color: var(--text); cursor: pointer; }
-    .as-tabs button.active { background: var(--btn-primary); border-color: var(--btn-primary); color: #fff; }
-    .as-step-row { display: flex; gap: 0.5rem; align-items: flex-start; padding: 0.55rem 0.65rem; border: 1px solid var(--accent); border-radius: 8px; margin-bottom: 0.5rem; background: var(--card); }
-    .as-step-main { flex: 1; min-width: 0; }
-    .as-preset-row { padding: 0.65rem; border: 1px solid var(--accent); border-radius: 8px; margin-bottom: 0.5rem; background: var(--card); }
+    .as-preset-toolbar { display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: flex-end; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--accent); }
+    .as-preset-toolbar .as-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 120px; }
+    .as-preset-toolbar .as-field label { font-size: 0.75rem; color: var(--muted); font-weight: 600; }
+    .as-preset-toolbar input, .as-preset-toolbar select { padding: 0.4rem 0.5rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 0.9rem; box-sizing: border-box; }
+    .as-preset-toolbar .as-field-grow { flex: 1; min-width: 140px; }
+    .as-preset-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+    .as-list-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.65rem; }
+    .as-row { display: flex; gap: 0.5rem; align-items: center; padding: 0.55rem 0.35rem; border-bottom: 1px solid var(--accent); background: var(--card); }
+    .as-row:last-child { border-bottom: none; }
+    .as-row.as-row--dragging { opacity: 0.45; }
+    .as-row.as-row--dragover { background: rgba(0, 122, 77, 0.08); }
+    .as-drag { cursor: grab; color: var(--muted); font-size: 1.1rem; line-height: 1; user-select: none; padding: 0 0.25rem; flex-shrink: 0; }
+    .as-drag:active { cursor: grabbing; }
+    .as-row-check { flex-shrink: 0; margin: 0; width: auto; }
+    .as-row-main { flex: 1; min-width: 0; }
+    .as-row-actions { display: flex; gap: 0.35rem; flex-shrink: 0; flex-wrap: wrap; }
     .as-check-list { max-height: 280px; overflow: auto; border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem; background: var(--bg); }
-    .as-check-list label { display: block; padding: 0.25rem 0; font-size: 0.9rem; cursor: pointer; }
     .textbausteine-layout { display: grid; grid-template-columns: 280px 1fr; gap: 1rem; min-height: 400px; }
     @media (max-width: 800px) { .textbausteine-layout { grid-template-columns: 1fr; } }
     .sp-steps-wrap { overflow-x: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); }
@@ -1899,29 +1908,35 @@
     </div>
   </main>
   <main id="viewArbeitsschritte" class="view-arbeitsschritte" aria-label="Arbeitsschritte">
-    <div class="sp-v2-page sp-v2-legacy-host" style="padding:1rem;max-width:1100px;margin:0 auto">
+    <div class="sp-v2-page" style="padding:1rem;max-width:1100px;margin:0 auto">
       <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte</h2>
       <p class="muted" style="margin:0 0 1rem">Masterliste und Typ-Presets für Serviceprotokolle (global + privat).</p>
-      <div class="as-tabs" role="tablist">
-        <button type="button" class="active" id="asTabSteps" data-as-tab="steps">Arbeitsschritte</button>
-        <button type="button" id="asTabPresets" data-as-tab="presets">Presets</button>
-      </div>
-      <section class="sp-v2-section" id="asPanelSteps">
+      <section class="sp-v2-section">
         <div class="sp-v2-section-body">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+          <div class="as-preset-toolbar">
+            <div class="as-field as-field-grow">
+              <label for="asPresetSelect">Preset laden</label>
+              <select id="asPresetSelect"><option value="">— Preset wählen —</option></select>
+            </div>
+            <div class="as-field as-field-grow">
+              <label for="asPresetName">Name</label>
+              <input type="text" id="asPresetName" placeholder="z. B. Bandwaage DBW">
+            </div>
+            <div class="as-field" style="max-width:110px">
+              <label for="asPresetType">Typ</label>
+              <input type="text" id="asPresetType" maxlength="6" placeholder="DBW">
+            </div>
+            <div class="as-preset-actions">
+              <button type="button" class="btn btn-primary" id="btnAsPresetSave" disabled>Preset speichern</button>
+              <button type="button" class="btn btn-primary" id="btnAsPresetCreate">Preset erstellen</button>
+              <button type="button" class="btn btn-ghost" id="btnAsPresetDelete" disabled title="Eigenes Preset löschen">Löschen</button>
+            </div>
+          </div>
+          <div class="as-list-header">
             <strong>Schritte</strong>
             <button type="button" class="btn btn-primary" id="btnAsNewStep">+ Schritt</button>
           </div>
           <div id="asStepList"></div>
-        </div>
-      </section>
-      <section class="sp-v2-section" id="asPanelPresets" style="display:none">
-        <div class="sp-v2-section-body">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
-            <strong>Typ-Presets</strong>
-            <button type="button" class="btn btn-primary" id="btnAsNewPreset">Preset erstellen</button>
-          </div>
-          <div id="asPresetList"></div>
         </div>
       </section>
     </div>
@@ -1930,36 +1945,23 @@
         <h3 id="modalAsStepTitle">Arbeitsschritt</h3>
         <div class="form-group"><label>Bezeichnung DE</label><input type="text" id="asStepDe" style="width:100%"></div>
         <div class="form-group"><label>Bezeichnung EN</label><input type="text" id="asStepEn" style="width:100%"></div>
-        <div class="form-group"><label>Reihenfolge</label><input type="number" id="asStepSort" value="0" style="width:100%"></div>
         <div style="display:flex;gap:0.5rem;margin-top:1rem">
           <button type="button" class="btn btn-primary" id="btnAsStepSave">Speichern</button>
           <button type="button" class="btn btn-ghost" id="btnAsStepCancel">Abbrechen</button>
         </div>
       </div>
     </div>
-    <div id="modalAsPreset" class="modal-overlay" aria-hidden="true">
-      <div class="modal-box" style="max-width:560px">
-        <h3 id="modalAsPresetTitle">Preset</h3>
-        <div class="form-group"><label>Name</label><input type="text" id="asPresetName" style="width:100%"></div>
-        <div class="form-group"><label>Typencode (max. 6 Zeichen)</label><input type="text" id="asPresetType" maxlength="6" style="width:100%"></div>
-        <div class="form-group"><label>Arbeitsschritte</label><div class="as-check-list" id="asPresetChecks"></div></div>
-        <div style="display:flex;gap:0.5rem;margin-top:1rem">
-          <button type="button" class="btn btn-primary" id="btnAsPresetSave">Speichern</button>
-          <button type="button" class="btn btn-ghost" id="btnAsPresetCancel">Abbrechen</button>
-        </div>
-      </div>
-    </div>
-    <div id="modalSpCatalog" class="modal-overlay" aria-hidden="true">
-      <div class="modal-box" style="max-width:560px">
-        <h3>Arbeitsschritt aus Katalog</h3>
-        <div class="as-check-list" id="spCatalogList"></div>
-        <div style="display:flex;gap:0.5rem;margin-top:1rem">
-          <button type="button" class="btn btn-primary" id="btnSpCatalogAdd">Hinzufügen</button>
-          <button type="button" class="btn btn-ghost" id="btnSpCatalogCancel">Abbrechen</button>
-        </div>
-      </div>
-    </div>
   </main>
+  <div id="modalSpCatalog" class="modal-overlay" aria-hidden="true">
+    <div class="modal-box" style="max-width:560px">
+      <h3>Arbeitsschritt aus Katalog</h3>
+      <div class="as-check-list" id="spCatalogList"></div>
+      <div style="display:flex;gap:0.5rem;margin-top:1rem">
+        <button type="button" class="btn btn-primary" id="btnSpCatalogAdd">Hinzufügen</button>
+        <button type="button" class="btn btn-ghost" id="btnSpCatalogCancel">Abbrechen</button>
+      </div>
+    </div>
+  </div>
   <main id="viewArchiv" class="view-archiv" aria-label="Archiv">
     <div class="card">
       <h2>Archiv</h2>
