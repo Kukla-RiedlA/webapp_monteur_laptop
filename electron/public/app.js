@@ -13703,6 +13703,35 @@
       });
     }
 
+    async function resetArbeitsschritteToDefaults() {
+      var fab = getActiveFab();
+      if (!fab) {
+        alert('Bitte Fabrikationsnummer wählen.');
+        return;
+      }
+      var techId = getTechId();
+      var q = 'fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(techId) + '&local_only=1';
+      try {
+        var r = await fetch(API_BASE + '/api/serviceprotokoll_defaults?' + q, {
+          headers: { 'X-Technician-Id': String(techId) }
+        });
+        var data = await r.json().catch(function () { return {}; });
+        if (!r.ok || !data.ok) throw new Error(data.error || 'Defaults konnten nicht geladen werden.');
+        if (Array.isArray(data.arbeitsschritte) && data.arbeitsschritte.length > 0) {
+          defaultsSource = data.source || 'global';
+          arbeitsschritte = mapDefaultsToSteps(data.arbeitsschritte);
+        } else {
+          defaultsSource = 'builtin';
+          arbeitsschritte = builtinServiceprotokollSteps();
+        }
+        renderSteps();
+        if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
+        notifyReactBridge(true);
+      } catch (e) {
+        alert((e && e.message) ? e.message : 'Liste konnte nicht zurückgesetzt werden.');
+      }
+    }
+
     async function loadDefaultsForFab(fab, loadToken) {
       fab = fab ? String(fab).trim() : '';
       if (loadToken == null) loadToken = ++serviceprotokollFabLoadToken;
@@ -13860,9 +13889,7 @@
 
     if (addStepBtn) {
       addStepBtn.addEventListener('click', function () {
-        syncStepsFromDom();
-        arbeitsschritte.push({ bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' });
-        renderSteps();
+        openSpStepPickerModal();
       });
     }
 
@@ -14211,15 +14238,198 @@
         if (action === 'pdfAll') {
           var allBtn = document.getElementById('btnServiceprotokollSaveAllPdf');
           if (allBtn) allBtn.click();
+          return;
+        }
+        if (action === 'openStepPicker') {
+          openSpStepPickerModal();
+          return;
+        }
+        if (action === 'resetWorkSteps') {
+          resetArbeitsschritteToDefaults();
         }
       }
     };
 
     var spCatalogCache = [];
+    var spCatalogPresetsCache = [];
+    var spCatalogPickKeys = {};
+    var spActivePresetStepKeys = {};
 
-    function stepLabelInList(step) {
-      return (step.bezeichnung_de || '') + (step.bezeichnung_en ? ' / ' + step.bezeichnung_en : '');
+    function spCatalogStepKey(scope, id) {
+      return String(scope || 'global') + ':' + id;
     }
+
+    function labelOfCatalogStep(s) {
+      return s.bezeichnung || combineBilingualLabel(s.bezeichnung_de, s.bezeichnung_en);
+    }
+
+    function findMatchingPresetForSp(presets, anlagenType) {
+      var haystack = (anlagenType || '').trim();
+      if (!haystack) return null;
+      var hayLower = haystack.toLowerCase();
+      var candidates = [];
+      (presets || []).forEach(function (p) {
+        var code = (p.type_code || '').trim();
+        if (!code || hayLower.indexOf(code.toLowerCase()) < 0) return;
+        candidates.push({
+          preset: p,
+          codeLen: code.length,
+          priority: (p.scope || 'user') === 'global' ? 1 : 0,
+          sortOrder: p.sort_order || 0,
+          id: p.id || 0
+        });
+      });
+      if (!candidates.length) return null;
+      candidates.sort(function (a, b) {
+        if (b.codeLen !== a.codeLen) return b.codeLen - a.codeLen;
+        if (b.priority !== a.priority) return b.priority - a.priority;
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        return a.id - b.id;
+      });
+      return candidates[0].preset;
+    }
+
+    function buildPresetStepKeySet(preset) {
+      var keys = {};
+      ((preset && preset.step_refs) || []).forEach(function (r) {
+        keys[spCatalogStepKey(r.step_scope || 'global', r.step_id)] = true;
+      });
+      return keys;
+    }
+
+    function resolveSpActivePresetStepKeys() {
+      var typeEl = document.getElementById('serviceprotokollType');
+      var anlagenType = typeEl ? typeEl.value : '';
+      var preset = findMatchingPresetForSp(spCatalogPresetsCache, anlagenType);
+      return buildPresetStepKeySet(preset);
+    }
+
+    function isCatalogStepInProtocol(s) {
+      var label = String(labelOfCatalogStep(s)).toLowerCase();
+      return currentStepLabels().indexOf(label) >= 0;
+    }
+
+    function isCatalogStepInActivePreset(s) {
+      return !!spActivePresetStepKeys[spCatalogStepKey(s.scope, s.id)];
+    }
+
+    function filterAvailableSpCatalogSteps(steps) {
+      return (steps || []).filter(function (s) {
+        return !isCatalogStepInProtocol(s) && !isCatalogStepInActivePreset(s);
+      });
+    }
+
+    function hideSpCatalogNewStepPanel() {
+      var panel = document.getElementById('spCatalogNewStepPanel');
+      if (panel) panel.style.display = 'none';
+      var de = document.getElementById('spCatalogStepDe');
+      var en = document.getElementById('spCatalogStepEn');
+      if (de) de.value = '';
+      if (en) en.value = '';
+    }
+
+    function renderSpCatalogList() {
+      var listEl = document.getElementById('spCatalogList');
+      if (!listEl) return;
+      var available = filterAvailableSpCatalogSteps(spCatalogCache);
+      if (!available.length) {
+        listEl.innerHTML = '<p class="muted" style="padding:0.75rem">Keine weiteren Schritte verfügbar (bereits im Protokoll oder im Typ-Preset enthalten).</p>';
+        return;
+      }
+      listEl.innerHTML = available.map(function (s) {
+        var k = spCatalogStepKey(s.scope, s.id);
+        var checked = spCatalogPickKeys[k] ? ' checked' : '';
+        var global = s.scope === 'global';
+        return '<div class="as-row" data-cat-key="' + escapeHtml(k) + '">'
+          + '<span class="as-drag" aria-hidden="true" style="visibility:hidden">≡</span>'
+          + '<input type="checkbox" class="as-row-check sp-catalog-check"' + checked + ' data-cat-key="' + escapeHtml(k) + '">'
+          + '<div class="as-row-main"><strong>' + escapeHtml(s.bezeichnung_de || splitBilingualLabel(s.bezeichnung || '').de) + '</strong>'
+          + ((s.bezeichnung_en || splitBilingualLabel(s.bezeichnung || '').en) ? ' <span class="muted">/ ' + escapeHtml(s.bezeichnung_en || splitBilingualLabel(s.bezeichnung || '').en) + '</span>' : '')
+          + (global ? ' <span class="muted">(global)</span>' : '') + '</div></div>';
+      }).join('');
+      listEl.querySelectorAll('.sp-catalog-check').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var key = cb.getAttribute('data-cat-key');
+          if (cb.checked) spCatalogPickKeys[key] = true;
+          else delete spCatalogPickKeys[key];
+        });
+      });
+    }
+
+    function closeSpStepPickerModal() {
+      var modal = document.getElementById('modalSpCatalog');
+      if (modal) modal.classList.remove('active');
+      hideSpCatalogNewStepPanel();
+      spCatalogPickKeys = {};
+    }
+
+    async function openSpStepPickerModal() {
+      try {
+        syncStepsFromDom();
+        spCatalogPickKeys = {};
+        hideSpCatalogNewStepPanel();
+        await loadSpCatalogData();
+        spActivePresetStepKeys = resolveSpActivePresetStepKeys();
+        renderSpCatalogList();
+        var modal = document.getElementById('modalSpCatalog');
+        if (modal) modal.classList.add('active');
+      } catch (e) {
+        alert('Katalog konnte nicht geladen werden: ' + (e && e.message ? e.message : e));
+      }
+    }
+
+    function applySpStepPickerSelection() {
+      syncStepsFromDom();
+      Object.keys(spCatalogPickKeys).forEach(function (key) {
+        if (!spCatalogPickKeys[key]) return;
+        var s = spCatalogCache.find(function (x) { return spCatalogStepKey(x.scope, x.id) === key; });
+        if (!s) return;
+        arbeitsschritte.push({
+          bezeichnung_de: s.bezeichnung_de || splitBilingualLabel(s.bezeichnung || '').de,
+          bezeichnung_en: s.bezeichnung_en || splitBilingualLabel(s.bezeichnung || '').en,
+          status: 'na',
+          bemerkung: ''
+        });
+      });
+      renderSteps();
+      var fab = getActiveFab();
+      if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
+      notifyReactBridge(true);
+      closeSpStepPickerModal();
+    }
+
+    async function createSpCatalogNewStep() {
+      var de = (document.getElementById('spCatalogStepDe') || {}).value || '';
+      var en = (document.getElementById('spCatalogStepEn') || {}).value || '';
+      de = de.trim();
+      en = en.trim();
+      if (!de && !en) {
+        alert('Bitte mindestens eine Bezeichnung (DE oder EN) eingeben.');
+        return;
+      }
+      var maxSort = spCatalogCache.reduce(function (m, s) { return Math.max(m, s.sort_order || 0); }, 0);
+      var body = {
+        base_url: getDispoBaseUrl(),
+        technician_id: getTechId(),
+        bezeichnung_de: de,
+        bezeichnung_en: en,
+        sort_order: maxSort + 1
+      };
+      var r = await fetch(API_BASE + '/api/arbeitsschritte_save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Speichern fehlgeschlagen');
+      hideSpCatalogNewStepPanel();
+      await loadSpCatalogData();
+      spActivePresetStepKeys = resolveSpActivePresetStepKeys();
+      var newId = data.id != null ? parseInt(data.id, 10) : 0;
+      if (newId > 0) spCatalogPickKeys[spCatalogStepKey('user', newId)] = true;
+      renderSpCatalogList();
+    }
+
 
     function currentStepLabels() {
       syncStepsFromDom();
@@ -14228,7 +14438,7 @@
       });
     }
 
-    async function loadSpCatalog() {
+    async function loadSpCatalogData() {
       var listUrl = API_BASE + '/api/arbeitsschritte_list?technician_id=' + getTechId();
       var baseUrl = (getDispoBaseUrl() || '').trim();
       if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) {
@@ -14238,60 +14448,52 @@
       }
       var r = await fetch(listUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
       var data = await r.json().catch(function () { return {}; });
-      if (!data.ok || !Array.isArray(data.steps)) return [];
-      return data.steps;
+      if (!r.ok || !data.ok || !Array.isArray(data.steps)) {
+        spCatalogCache = [];
+        spCatalogPresetsCache = [];
+        return spCatalogCache;
+      }
+      spCatalogCache = data.steps;
+      spCatalogPresetsCache = data.presets || [];
+      return spCatalogCache;
     }
 
     var btnSpCatalog = document.getElementById('btnSpAddFromCatalog');
     if (btnSpCatalog) {
-      btnSpCatalog.addEventListener('click', async function () {
-        try {
-          spCatalogCache = await loadSpCatalog();
-          var existing = currentStepLabels();
-          var listEl = document.getElementById('spCatalogList');
-          if (!listEl) return;
-          if (!spCatalogCache.length) {
-            listEl.innerHTML = '<span class="muted">Keine Schritte im Katalog.</span>';
-          } else {
-            listEl.innerHTML = spCatalogCache.map(function (s, idx) {
-              var label = s.bezeichnung || stepLabelInList(s);
-              var used = existing.indexOf(String(label).toLowerCase()) >= 0;
-              return '<label><input type="checkbox" data-cat-idx="' + idx + '"' + (used ? ' disabled' : '') + '> '
-                + escapeHtml(label) + (s.scope === 'global' ? ' <span class="muted">(global)</span>' : '') + '</label>';
-            }).join('');
-          }
-          document.getElementById('modalSpCatalog').classList.add('active');
-        } catch (e) {
-          alert('Katalog konnte nicht geladen werden: ' + (e && e.message ? e.message : e));
-        }
+      btnSpCatalog.addEventListener('click', function () {
+        openSpStepPickerModal();
       });
+    }
+    var btnSpResetSteps = document.getElementById('btnSpResetSteps');
+    if (btnSpResetSteps) {
+      btnSpResetSteps.addEventListener('click', function () {
+        resetArbeitsschritteToDefaults();
+      });
+    }
+    var btnSpCatalogNew = document.getElementById('btnSpCatalogNewStep');
+    if (btnSpCatalogNew) {
+      btnSpCatalogNew.addEventListener('click', function () {
+        var panel = document.getElementById('spCatalogNewStepPanel');
+        if (panel) panel.style.display = panel.style.display === 'none' ? '' : 'none';
+      });
+    }
+    var btnSpCatalogStepCreate = document.getElementById('btnSpCatalogStepCreate');
+    if (btnSpCatalogStepCreate) {
+      btnSpCatalogStepCreate.addEventListener('click', function () {
+        createSpCatalogNewStep().catch(function (e) { alert(e.message || e); });
+      });
+    }
+    var btnSpCatalogStepCancelNew = document.getElementById('btnSpCatalogStepCancelNew');
+    if (btnSpCatalogStepCancelNew) {
+      btnSpCatalogStepCancelNew.addEventListener('click', hideSpCatalogNewStepPanel);
     }
     var btnSpCatalogAdd = document.getElementById('btnSpCatalogAdd');
     if (btnSpCatalogAdd) {
-      btnSpCatalogAdd.addEventListener('click', function () {
-        var listEl = document.getElementById('spCatalogList');
-        if (!listEl) return;
-        listEl.querySelectorAll('input[type=checkbox]:checked').forEach(function (cb) {
-          var idx = parseInt(cb.getAttribute('data-cat-idx'), 10);
-          var s = spCatalogCache[idx];
-          if (!s) return;
-          arbeitsschritte.push({
-            bezeichnung_de: s.bezeichnung_de || splitBilingualLabel(s.bezeichnung || '').de,
-            bezeichnung_en: s.bezeichnung_en || splitBilingualLabel(s.bezeichnung || '').en,
-            status: 'na',
-            bemerkung: ''
-          });
-        });
-        renderSteps();
-        notifyReactBridge();
-        document.getElementById('modalSpCatalog').classList.remove('active');
-      });
+      btnSpCatalogAdd.addEventListener('click', applySpStepPickerSelection);
     }
     var btnSpCatalogCancel = document.getElementById('btnSpCatalogCancel');
     if (btnSpCatalogCancel) {
-      btnSpCatalogCancel.addEventListener('click', function () {
-        document.getElementById('modalSpCatalog').classList.remove('active');
-      });
+      btnSpCatalogCancel.addEventListener('click', closeSpStepPickerModal);
     }
 
     if (abbrechenBtn) {
@@ -14814,10 +15016,6 @@
       var btnDel = document.getElementById('btnAsPresetDelete');
       if (btnSave) btnSave.disabled = !canSaveUser;
       if (btnDel) btnDel.disabled = !canSaveUser;
-      var nameEl = document.getElementById('asPresetName');
-      var typeEl = document.getElementById('asPresetType');
-      if (nameEl) nameEl.readOnly = selectedPresetScope === 'global';
-      if (typeEl) typeEl.readOnly = selectedPresetScope === 'global';
     }
 
     function renderPresetSelect() {

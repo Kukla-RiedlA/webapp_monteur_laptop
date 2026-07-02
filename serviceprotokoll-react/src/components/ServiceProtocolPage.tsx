@@ -14,10 +14,6 @@ import { WorkStepsTable } from './WorkStepsTable';
 import type { ServiceProtocolFormState, StepResult } from '../types';
 import { FAB_NUMBERS } from '../types';
 
-function newId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 export function ServiceProtocolPage() {
   const embedded = useEmbeddedMode();
   const [bridgeState, setBridgeState] = useState<SpBridgePayload>(defaultBridgePayload);
@@ -228,12 +224,8 @@ export function ServiceProtocolPage() {
                   workSteps: prev.workSteps.filter((s) => s.id !== id),
                 }))
               }
-              onAdd={() =>
-                setBridgeState((prev) => ({
-                  ...prev,
-                  workSteps: [...prev.workSteps, { id: newId(), label: '', result: 'ok', remark: '' }],
-                }))
-              }
+              onAdd={() => sendAction('openStepPicker')}
+              onReset={() => sendAction('resetWorkSteps')}
             />
             <label className="mt-4 flex flex-col gap-1">
               <span className="text-sm font-semibold text-[#111827]">Allgemeine Bemerkungen</span>

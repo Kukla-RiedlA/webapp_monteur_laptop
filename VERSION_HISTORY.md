@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.000.000
+- **Major Release:** Plattformweite Versionsausrichtung auf V 2.000.000.
+- **Serviceprotokoll:** Arbeitsschritte per Katalog-Modal; Zuruecksetzen auf Fabrikationsnummer-Defaults; React-Embed und Legacy-Formular synchronisiert.
+
 ## V 1.004.058
 - **Sync FN:** Leeres Fabrikationsnummern-Pending wird nicht mehr an Dispo gepusht (verhindert Löschen der Admin-FN nach Pull/Annehmen).
 - **Sync Pull:** Veraltetes leeres FN-Pending wird verworfen, wenn der Server Leistungszeilen liefert.

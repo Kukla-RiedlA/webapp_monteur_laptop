@@ -7,6 +7,7 @@ interface WorkStepsTableProps {
   onRemarkChange: (id: string, remark: string) => void;
   onDelete: (id: string) => void;
   onAdd: () => void;
+  onReset: () => void;
 }
 
 const RESULTS: { key: StepResult; label: string }[] = [
@@ -15,7 +16,7 @@ const RESULTS: { key: StepResult; label: string }[] = [
   { key: 'na', label: 'n.a.' },
 ];
 
-export function WorkStepsTable({ steps, onResultChange, onRemarkChange, onDelete, onAdd }: WorkStepsTableProps) {
+export function WorkStepsTable({ steps, onResultChange, onRemarkChange, onDelete, onAdd, onReset }: WorkStepsTableProps) {
   return (
     <div>
       <div className="overflow-x-auto">
@@ -77,10 +78,23 @@ export function WorkStepsTable({ steps, onResultChange, onRemarkChange, onDelete
           </tbody>
         </table>
       </div>
-      <button type="button" onClick={onAdd} className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-kukla-green hover:underline">
-        <SpIcon name="Plus" className="h-4 w-4" />
-        weiteren Arbeitsschritt hinzufügen
-      </button>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onAdd}
+          className="inline-flex items-center gap-1.5 rounded-md border border-kukla-border bg-white px-3 py-1.5 text-sm font-semibold text-kukla-green hover:bg-kukla-mint/50"
+        >
+          <SpIcon name="Plus" className="h-4 w-4" />
+          weiteren Arbeitsschritt hinzufügen
+        </button>
+        <button
+          type="button"
+          onClick={onReset}
+          className="inline-flex items-center gap-1.5 rounded-md border border-kukla-border bg-white px-3 py-1.5 text-sm font-semibold text-[#4b5563] hover:bg-kukla-mint/50"
+        >
+          Liste zurücksetzen
+        </button>
+      </div>
     </div>
   );
 }

@@ -1058,7 +1058,12 @@
     .as-row-check { flex-shrink: 0; margin: 0; width: auto; }
     .as-row-main { flex: 1; min-width: 0; }
     .as-row-actions { display: flex; gap: 0.35rem; flex-shrink: 0; flex-wrap: wrap; }
-    .as-check-list { max-height: 280px; overflow: auto; border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem; background: var(--bg); }
+    .sp-catalog-list { max-height: 360px; overflow: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); }
+    .sp-catalog-list .as-row { cursor: default; }
+    .sp-catalog-new-panel { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); }
+    .sp-catalog-new-panel .form-group { margin-bottom: 0.5rem; }
+    .sp-catalog-new-panel .form-group label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.2rem; }
+    .sp-catalog-new-panel .form-group input { width: 100%; box-sizing: border-box; padding: 0.4rem 0.5rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--text); }
     .textbausteine-layout { display: grid; grid-template-columns: 280px 1fr; gap: 1rem; min-height: 400px; }
     @media (max-width: 800px) { .textbausteine-layout { grid-template-columns: 1fr; } }
     .sp-steps-wrap { overflow-x: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); }
@@ -1776,7 +1781,8 @@
               </table>
             </div>
             <div style="margin-top:0.65rem;display:flex;gap:0.5rem;flex-wrap:wrap">
-              <button type="button" class="btn btn-ghost" id="btnSpAddFromCatalog">Aus Katalog hinzufügen</button>
+              <button type="button" class="btn btn-primary" id="btnSpAddFromCatalog">+ Schritt</button>
+              <button type="button" class="btn btn-ghost" id="btnSpResetSteps">Liste zurücksetzen</button>
             </div>
             <div class="sp-v2-field" style="margin-top:0.85rem">
               <label for="serviceprotokollBemerkungen">Allgemeine Bemerkungen</label>
@@ -1953,11 +1959,24 @@
     </div>
   </main>
   <div id="modalSpCatalog" class="modal-overlay" aria-hidden="true">
-    <div class="modal-box" style="max-width:560px">
-      <h3>Arbeitsschritt aus Katalog</h3>
-      <div class="as-check-list" id="spCatalogList"></div>
+    <div class="modal-box" style="max-width:1280px;width:min(96vw,1280px)">
+      <h3>Arbeitsschritte hinzufügen</h3>
+      <p class="muted" style="margin:0 0 0.75rem">Schritte aus dem Katalog wählen oder einen neuen privaten Schritt anlegen.</p>
+      <div class="as-list-header">
+        <strong>Verfügbare Schritte</strong>
+        <button type="button" class="btn btn-primary" id="btnSpCatalogNewStep">+ Schritt</button>
+      </div>
+      <div id="spCatalogList" class="sp-catalog-list"></div>
+      <div id="spCatalogNewStepPanel" class="sp-catalog-new-panel" style="display:none">
+        <div class="form-group"><label for="spCatalogStepDe">Bezeichnung DE</label><input type="text" id="spCatalogStepDe"></div>
+        <div class="form-group"><label for="spCatalogStepEn">Bezeichnung EN</label><input type="text" id="spCatalogStepEn"></div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button type="button" class="btn btn-primary" id="btnSpCatalogStepCreate">Anlegen</button>
+          <button type="button" class="btn btn-ghost" id="btnSpCatalogStepCancelNew">Abbrechen</button>
+        </div>
+      </div>
       <div style="display:flex;gap:0.5rem;margin-top:1rem">
-        <button type="button" class="btn btn-primary" id="btnSpCatalogAdd">Hinzufügen</button>
+        <button type="button" class="btn btn-primary" id="btnSpCatalogAdd">Übernehmen</button>
         <button type="button" class="btn btn-ghost" id="btnSpCatalogCancel">Abbrechen</button>
       </div>
     </div>
