@@ -2,6 +2,14 @@
 
 Überblick: Welche Daten wo liegen, wie sie synchronisiert werden und ob sie ohne Dispo-Verbindung nutzbar sind.
 
+## Verbindlicher Grundsatz (Offline-First)
+
+Fuer alle bestehenden und neuen Funktionen gilt:
+
+- Die Funktion muss offline benutzbar sein (lesen + schreiben).
+- Online dient nur dem Synchronisieren mit Dispo.
+- Fehlende Offline-Faehigkeit ist ein Defekt und als Umbaupunkt zu priorisieren.
+
 **Gateway:** Der Renderer spricht nur mit dem lokalen Express (`API_BASE`). Alle Dispo-Zugriffe laufen über `electron/server.js` und die gewählte Basis-URL (extern oder intern). Siehe `.cursor/rules/laptop-dispo-gateway.mdc` und `docs/API_CONTRACT.md` (Abschnitt Gateway).
 
 Legende:
@@ -46,11 +54,11 @@ Speicherort Zwischenstände: `{DienstreiseOrdner}/` pro angenommenem Auftrag (`i
 
 **Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“).
 
-### Geplant (noch nicht umgesetzt)
+### Priorisierte Luecken (gegen Offline-First)
 
 - Textbausteine-Montagebericht-Sidebar: lokaler SQLite-Cache statt nur Live-`textbausteine_list`
-- Kontrollwiegungen: lokaler Entwurf + Push-Queue
-- Serviceprotokoll-PDF offline (Queue oder lokale PDF-Engine)
+- Kontrollwiegungen: lokaler Entwurf + Push-Queue statt Dispo-Pflicht
+- Serviceprotokoll-PDF offline (lokale Erzeugung oder lokale Queue mit spaeterem Sync)
 
 ---
 
