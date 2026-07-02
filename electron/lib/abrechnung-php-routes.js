@@ -176,7 +176,8 @@ function registerAbrechnungPhpRoutes(app, ctx) {
     const metaRows = getCore().dedupeAbrechnungFileRows(
       ctx.db
         .prepare(
-          `SELECT bucket, file_name, size_bytes, synced_at FROM abrechnung_files_meta
+          `SELECT bucket, file_name, size_bytes, synced_at, uploaded_at, uploaded_by_name
+           FROM abrechnung_files_meta
            WHERE (job_server_id = ? OR job_server_id = ?) AND bucket = ?
            ORDER BY file_name`,
         )
@@ -187,6 +188,8 @@ function registerAbrechnungPhpRoutes(app, ctx) {
     const files = rows.map((r) => ({
       name: r.file_name,
       size_bytes: r.size_bytes != null ? r.size_bytes : null,
+      uploaded_at: r.uploaded_at != null ? r.uploaded_at : (r.synced_at != null ? r.synced_at : null),
+      uploaded_by_name: r.uploaded_by_name != null ? r.uploaded_by_name : null,
     }));
     jsonRes(res, { ok: true, files, source: rows.length ? 'local' : 'empty' });
   });
@@ -259,37 +262,51 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       if (!phpLocal.monteurCanWriteJob(ctx.db, dispoJobId, tid)) {
         return { ok: false, status: 403, error: 'Keine Berechtigung.' };
       }
-      const safeName = path.basename(file.filename || 'datei').replace(/[\/\\:*?"<>|]/g, '_') || 'datei';
-      const localPath = getCore().filePathLocal(
+      const origName = path.basename(file.filename || 'datei');
+      const belegPrefixIn = String(fields.beleg_prefix || '').trim();
+      const belegPrefix = phpLocal.belegPrefixAllowed(belegPrefixIn) ? belegPrefixIn : null;
+      const probePath = getCore().filePathLocal(
         ctx.dbDir,
         dispoJobId,
         bucket,
-        safeName,
+        'probe.tmp',
         getCore().abrechnungFileCtxFrom(ctx),
       );
-      getCore().mkdirpSync(path.dirname(localPath));
+      const targetDir = path.dirname(probePath);
+      getCore().mkdirpSync(targetDir);
+      const safeName = phpLocal.resolveUniqueStoredName(origName, belegPrefix, targetDir);
+      const localPath = path.join(targetDir, path.basename(safeName));
       fs.writeFileSync(localPath, file.buffer);
+      const uploaderName = phpLocal.resolveTechnicianDisplayName(ctx.db, tid);
+      const uploadedAt = new Date().toISOString();
       ctx.db
         .prepare(
-          `INSERT INTO abrechnung_files_meta (job_server_id, bucket, file_name, size_bytes, synced_at)
-           VALUES (?, ?, ?, ?, datetime('now'))
+          `INSERT INTO abrechnung_files_meta (
+             job_server_id, bucket, file_name, size_bytes, synced_at, uploaded_at, uploaded_by_name, uploaded_by_user_id
+           ) VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?)
            ON CONFLICT(job_server_id, bucket, file_name) DO UPDATE SET
-             size_bytes = excluded.size_bytes, synced_at = excluded.synced_at`,
+             size_bytes = excluded.size_bytes,
+             synced_at = excluded.synced_at,
+             uploaded_at = excluded.uploaded_at,
+             uploaded_by_name = excluded.uploaded_by_name,
+             uploaded_by_user_id = excluded.uploaded_by_user_id`,
         )
-        .run(dispoJobId, bucket, safeName, file.buffer.length);
+        .run(dispoJobId, bucket, safeName, file.buffer.length, uploadedAt, uploaderName || null, tid || null);
       ctx.save();
       const d = dispoCtx(ctx, req);
+      const uploadFields = { job_id: String(dispoJobId), bucket };
+      if (belegPrefix) uploadFields.beleg_prefix = belegPrefix;
       if (d.baseUrl && d.authHeader && d.authHeader.Authorization) {
         try {
           await getCore().dispoUploadMultipart(
             d.baseUrl,
-            { job_id: String(dispoJobId), bucket },
+            uploadFields,
             file.buffer,
-            safeName,
+            origName,
             d.authHeader,
             d.technicianId,
           );
-          return { ok: true, source: 'dispo' };
+          return { ok: true, name: safeName, source: 'dispo' };
         } catch (e) {
           ctx.db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
             'upload',
@@ -298,18 +315,27 @@ function registerAbrechnungPhpRoutes(app, ctx) {
               bucket,
               filename: safeName,
               local_path: localPath,
+              beleg_prefix: belegPrefix || '',
+              orig_filename: origName,
             }),
           );
           ctx.save();
-          return { ok: true, source: 'local', queued: true, error: e.message };
+          return { ok: true, name: safeName, source: 'local', queued: true, error: e.message };
         }
       }
       ctx.db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
         'upload',
-        JSON.stringify({ job_id: dispoJobId, bucket, filename: safeName, local_path: localPath }),
+        JSON.stringify({
+          job_id: dispoJobId,
+          bucket,
+          filename: safeName,
+          local_path: localPath,
+          beleg_prefix: belegPrefix || '',
+          orig_filename: origName,
+        }),
       );
       ctx.save();
-      return { ok: true, source: 'local', queued: true };
+      return { ok: true, name: safeName, source: 'local', queued: true };
     });
   });
 

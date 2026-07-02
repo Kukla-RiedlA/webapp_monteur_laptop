@@ -69,44 +69,12 @@
   }
 
   function renderShell(cfg) {
-    return `<style id="abrechnung-inline-parity">
-#abrechnung-host .page-abrechnung{padding:20px;width:100%;max-width:none;margin:0;box-sizing:border-box;display:flex;flex-direction:column;align-items:center}
-#abrechnung-host .abrechnung-col{display:flex;flex-direction:column;align-items:stretch;width:fit-content;max-width:100%}
-#abrechnung-host .abrechnung-col>h1{margin:0 0 16px 0;font-size:1.25rem;align-self:flex-start;width:100%}
-#abrechnung-host .abrechnung-filters{display:flex;flex-wrap:nowrap;gap:12px;align-items:flex-end;margin-bottom:20px;width:100%;overflow-x:auto}
-#abrechnung-host .abrechnung-filters label{display:flex;flex-direction:column;font-size:12px;gap:4px;margin:0;flex:0 0 auto;white-space:nowrap}
-#abrechnung-host .abrechnung-filters label.ab-filter-job{flex:1 1 0;min-width:280px}
-#abrechnung-host .abrechnung-filters select{min-width:200px;padding:6px 8px;width:auto;max-width:none;display:block;border:1px solid #ccc;border-radius:4px;font-size:13px;background:#fff;color:#1a1a1a;box-sizing:border-box}
-#abrechnung-host #abJobSelect{width:100%;min-width:0}
-#abrechnung-host .ab-grid{display:grid;grid-template-columns:1fr;gap:16px;width:100%;max-width:none;margin:0}
-#abrechnung-host .ab-banner,#abrechnung-host .ab-status-actions{width:100%;box-sizing:border-box}
-#abrechnung-host .ab-card{background:#fff;border:1px solid #ddd;border-radius:6px;padding:14px;width:100%;box-sizing:border-box}
-#abrechnung-host .ab-card h2{margin:0;font-size:1rem;font-weight:700;color:#1a1a1a}
-#abrechnung-host .ab-note{width:100%;min-height:90px;font-size:13px;padding:8px;box-sizing:border-box}
-</style>
-<div class="page-abrechnung">
-  <div class="abrechnung-col">
-  <h1>Abrechnung</h1>
-  <form method="get" class="abrechnung-filters" id="abrechnungFilterForm" action="javascript:void(0)">
-    <label>
-      Jahr
-      <select name="jahr" id="abYearSelect">${yearOptions(cfg)}</select>
-    </label>
-    <label>
-      Monat
-      <select name="monat_num" id="abMonthNumSelect">${monthOptions(cfg)}</select>
-    </label>
-    <label class="ab-filter-job">
-      Auftrag
-      <select name="id" id="abJobSelect">
-        <option value="">— Monat wählen / laden …</option>
-      </select>
-    </label>
-    <label class="ab-filter-checkbox" style="flex-direction:row;align-items:center;gap:6px;padding-bottom:2px;cursor:pointer;white-space:nowrap">
-      <input type="checkbox" name="mit_abgerechnet" id="abShowAbgerechnet" value="1"${cfg.showAbgerechnet ? ' checked' : ''}>
-      <span>Auch abgerechnete</span>
-    </label>
-  </form>
+    return `<link rel="stylesheet" href="css/abrechnung-web-parity.css">
+<div class="page-abrechnung ab-sp-page">
+  <div class="abrechnung-col ab-sp-col">
+  <div class="sp-v2-topbar ab-sp-topbar">
+    <h1 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-service-green.svg" alt="" aria-hidden="true"> Abrechnung</h1>
+  </div>
 
   <p class="ab-muted" id="abSyncHint" style="display:none;margin:0 0 12px 0;width:100%"></p>
   <div id="abFilterError" class="ab-banner" style="display:none"></div>
@@ -117,42 +85,88 @@
     <button type="button" id="abDispoInArbeitBtn" class="btn btn-primary" style="display:none;">Dispo: In Arbeit setzen</button>
   </div>
 
-  <div class="ab-grid" id="abMainBlocks" style="opacity:0.5;pointer-events:none">
+  <section class="sp-v2-section" aria-labelledby="abSecFilterTitle">
+    <header class="sp-v2-section-head" id="abSecFilterTitle"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Zeitraum</header>
+    <div class="sp-v2-section-body">
+      <form method="get" class="abrechnung-filters ab-sp-filters" id="abrechnungFilterForm" action="javascript:void(0)">
+        <div class="sp-v2-grid-3">
+          <label class="sp-v2-field">
+            <span>Jahr</span>
+            <select name="jahr" id="abYearSelect">${yearOptions(cfg)}</select>
+          </label>
+          <label class="sp-v2-field">
+            <span>Monat</span>
+            <select name="monat_num" id="abMonthNumSelect">${monthOptions(cfg)}</select>
+          </label>
+          <label class="sp-v2-field ab-filter-job">
+            <span>Auftrag</span>
+            <select name="id" id="abJobSelect">
+              <option value="">— Monat wählen / laden …</option>
+            </select>
+          </label>
+        </div>
+        <label class="ab-filter-checkbox ab-sp-checkbox">
+          <input type="checkbox" name="mit_abgerechnet" id="abShowAbgerechnet" value="1"${cfg.showAbgerechnet ? ' checked' : ''}>
+          <span>Auch abgerechnete</span>
+        </label>
+      </form>
+    </div>
+  </section>
+
+  <div class="sp-v2-form ab-sp-form" id="abMainBlocks" style="opacity:0.5;pointer-events:none">
     <div class="ab-card" data-bucket="dispo">
-      <div class="ab-card-header">
-        <h2>Abrechnung</h2>
-      </div>
-      <div class="ab-billing-fields">
-        <div class="ab-montage-billing-box" style="border-top:none;padding-top:0">
-          <div class="ab-montage-mv-block">
-            <label class="ab-montage-mv-label" for="abBillingMontageVerrechnet">
-              <input type="checkbox" id="abBillingMontageVerrechnet" value="1" disabled>
-              <span>Fakturierung Montage</span>
-            </label>
-            <div class="ab-montage-meta-line" id="abMvMeta" style="display:none"></div>
+      <section class="sp-v2-section" aria-labelledby="abSecBillingTitle">
+        <header class="sp-v2-section-head" id="abSecBillingTitle"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/circle-check-green.svg" alt="" aria-hidden="true"> Fakturierung</header>
+        <div class="sp-v2-section-body ab-billing-fields">
+          <div class="ab-montage-billing-box">
+            <div class="ab-montage-mv-block">
+              <label class="ab-montage-mv-label" for="abBillingMontageVerrechnet">
+                <input type="checkbox" id="abBillingMontageVerrechnet" value="1" disabled>
+                <span>Fakturierung Montage</span>
+              </label>
+              <div class="ab-montage-meta-line" id="abMvMeta" style="display:none"></div>
+            </div>
+            <div class="ab-et-row" id="abEtRow">
+              <label class="ab-montage-et-label" for="abBillingEt">
+                <input type="checkbox" id="abBillingEt" value="1" disabled>
+                <span>Fakturierung ET</span>
+              </label>
+              <div class="ab-montage-meta-line" id="abEtMeta" style="display:none"></div>
+            </div>
           </div>
-          <div class="ab-et-row" id="abEtRow">
-            <label class="ab-montage-et-label" for="abBillingEt">
-              <input type="checkbox" id="abBillingEt" value="1" disabled>
-              <span>Fakturierung ET</span>
-            </label>
-            <div class="ab-montage-meta-line" id="abEtMeta" style="display:none"></div>
+          <div class="ab-travel-box" id="abTravelMount"></div>
+        </div>
+      </section>
+
+      <section class="sp-v2-section" aria-labelledby="abSecUploadTitle">
+        <header class="sp-v2-section-head" id="abSecUploadTitle"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/plus-green.svg" alt="" aria-hidden="true"> Belege hochladen</header>
+        <div class="sp-v2-section-body">
+          <div class="ab-beleg-upload" data-beleg-upload="dispo">
+            <div class="ab-beleg-grid" data-beleg-grid="dispo"></div>
+            <p class="ab-beleg-hint muted">Datei auf Icon ziehen oder Icon anklicken …</p>
+          </div>
+          <input type="file" class="ab-file-input hidden" data-bucket="dispo" multiple style="display:none">
+        </div>
+      </section>
+
+      <section class="sp-v2-section" aria-labelledby="abSecFilesTitle">
+        <header class="sp-v2-section-head" id="abSecFilesTitle"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Dateien</header>
+        <div class="sp-v2-section-body">
+          <ul class="ab-files" data-file-list="dispo"></ul>
+        </div>
+      </section>
+
+      <section class="sp-v2-section" aria-labelledby="abSecCommentsTitle">
+        <header class="sp-v2-section-head" id="abSecCommentsTitle"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/pen-signature-green.svg" alt="" aria-hidden="true"> Kommentare</header>
+        <div class="sp-v2-section-body ab-comments-block">
+          <div class="ab-comment-list" data-comments-list="dispo"></div>
+          <textarea class="ab-note" data-note="dispo" placeholder="Neuen Kommentar eingeben …"></textarea>
+          <div class="ab-note-actions">
+            <button type="button" class="btn btn-primary ab-save-note" data-note-save="dispo" data-default-label="Kommentar hinzufügen">Kommentar hinzufügen</button>
+            <button type="button" class="btn btn-ghost ab-cancel-note-edit" data-note-cancel="dispo" style="display:none">Abbrechen</button>
           </div>
         </div>
-        <div class="ab-travel-box" id="abTravelMount"></div>
-      </div>
-      <div class="ab-dropzone" data-dropzone="dispo">Dateien hierher ziehen oder klicken …</div>
-      <input type="file" class="ab-file-input hidden" data-bucket="dispo" multiple style="display:none">
-      <ul class="ab-files" data-file-list="dispo"></ul>
-      <div class="ab-comments-block">
-      <label class="muted ab-comments-label">Kommentare</label>
-      <div class="ab-comment-list" data-comments-list="dispo"></div>
-      <textarea class="ab-note" data-note="dispo" placeholder="Neuen Kommentar eingeben …"></textarea>
-      <div class="ab-note-actions">
-        <button type="button" class="btn btn-primary ab-save-note" data-note-save="dispo" data-default-label="Kommentar hinzufügen">Kommentar hinzufügen</button>
-        <button type="button" class="btn btn-ghost ab-cancel-note-edit" data-note-cancel="dispo" style="display:none">Abbrechen</button>
-      </div>
-      </div>
+      </section>
     </div>
   </div>
   <p class="ab-muted" id="abHintChoose">Bitte einen Auftrag wählen.</p>
@@ -193,7 +207,7 @@
     await global.kuklaWebPage.mount(host, {
       html: renderShell(cfg),
       scripts: [
-        '/assets/js/dispo/job_subfolder_docs.js?v=20260630a',
+        '/assets/js/dispo/job_subfolder_docs.js?v=20260702f',
       ],
       reloadHandler: reload,
     });

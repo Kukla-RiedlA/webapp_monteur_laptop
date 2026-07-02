@@ -51,6 +51,8 @@ Erfolg / Fehler einheitlich über **`ok`** (boolean):
 
 ### 5.0 Monteur-Laptop – lokaler Electron-Gateway (`electron/server.js`)
 
+**Offline-First Audit:** Vollständiges Inventar aller Gateway-Routen, UI-Gates und Testfälle in [`webapp_monteur_laptop/docs/OFFLINE_GAP_AUDIT.md`](../webapp_monteur_laptop/docs/OFFLINE_GAP_AUDIT.md). Kurzmatrix: [`OFFLINE_DATA_MATRIX.md`](../webapp_monteur_laptop/docs/OFFLINE_DATA_MATRIX.md).
+
 **Hinweis:** `GET /api/version` kann `capabilities` (z. B. `anlagenstamm_search`, `anlagenstamm_save`) liefern. **Anlagenstamm Suche/Speichern:** In Electron nutzt der Renderer zuerst **`monteurApp.ipcInvoke('anlagenstamm:search'|'save', payload)`** (falls im Preload vorhanden), sonst **`monteurApp.anlagenstammSearch`** / **`anlagenstammSave`** – IPC → Main → `electron/lib/anlagenstamm-dispo-proxy.js`, **ohne** Pflicht zu `POST /api/anlagenstamm_*` auf `127.0.0.1`. Nur ohne Electron/IPC: **`POST /api/anlagenstamm_*`** auf dem lokalen Gateway.
 
 Der **Renderer** (`electron/public/app.js`) spricht **`API_BASE`** (lokaler Express). Dispo wird vom Renderer nicht direkt per `fetch` angesprochen; die gewählte Basis-URL nutzt der Main-Prozess für Proxys, Sync und (IPC) Anlagenstamm.

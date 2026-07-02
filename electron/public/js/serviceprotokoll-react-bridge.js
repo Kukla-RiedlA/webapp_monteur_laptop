@@ -6,6 +6,8 @@
 
   var frame = null;
   var applying = false;
+  var pendingFabSwitch = 0;
+  var fabSwitchPending = false;
 
   function getFrame() {
     if (!frame) frame = document.getElementById('serviceprotokollReactFrame');
@@ -26,8 +28,8 @@
     return window.serviceprotokollBridge || null;
   }
 
-  function syncToReact() {
-    if (applying) return;
+  function syncToReact(force) {
+    if (!force && applying) return;
     var api = bridgeApi();
     if (!api || typeof api.pullPayload !== 'function') return;
     postToReact({ type: 'SP_SYNC_STATE', payload: api.pullPayload() });
@@ -59,17 +61,30 @@
     }
 
     if (data.type === 'SP_STATE_CHANGE' && data.payload) {
+      if (applying || fabSwitchPending) return;
       applyFromReact(data.payload);
       return;
     }
 
     if (data.type === 'SP_JOB_CHANGE' && data.jobId != null && api && typeof api.selectJob === 'function') {
-      api.selectJob(String(data.jobId));
+      applying = true;
+      Promise.resolve(api.selectJob(String(data.jobId))).finally(function () {
+        applying = false;
+        syncToReact();
+      });
       return;
     }
 
     if (data.type === 'SP_FAB_CHANGE' && data.fab != null && api && typeof api.selectFab === 'function') {
-      api.selectFab(String(data.fab));
+      var switchId = ++pendingFabSwitch;
+      applying = true;
+      fabSwitchPending = true;
+      Promise.resolve(api.selectFab(String(data.fab))).finally(function () {
+        if (switchId !== pendingFabSwitch) return;
+        applying = false;
+        syncToReact(true);
+        fabSwitchPending = false;
+      });
       return;
     }
 

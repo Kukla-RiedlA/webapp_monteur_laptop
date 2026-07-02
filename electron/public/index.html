@@ -22,6 +22,7 @@
   <link rel="stylesheet" href="css/modules-web-parity.css">
   <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
   <link rel="stylesheet" href="css/serviceprotokoll-v2.css">
+  <link rel="stylesheet" href="css/abrechnung-web-parity.css">
   <style>
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -1563,6 +1564,10 @@
       <div class="sp-v2-topbar">
         <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Serviceprotokoll</h2>
         <div class="sp-v2-topbar-actions">
+        <label class="sp-v2-apply-stamm" for="serviceprotokollApplyToAnlagenstamm" title="Nur bei aktivierter Option werden Protokoll-Änderungen in den Anlagenstamm geschrieben">
+          <input type="checkbox" id="serviceprotokollApplyToAnlagenstamm" value="1">
+          In Anlagenstamm übernehmen
+        </label>
         <button type="button" class="btn btn-primary" id="btnServiceprotokollStickySave" title="Zwischenstand speichern (serviceprotokoll.json)">Speichern</button>
         <button type="button" class="sp-v2-menu-btn" aria-label="Menü"><img src="icons/dots-vertical-green.svg" alt="" aria-hidden="true"></button>
         </div>
@@ -2044,7 +2049,7 @@
   <script src="js/web-page-host.js"></script>
   <script src="js/view-anlagenstamm.js"></script>
   <script src="assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260701"></script>
-  <script src="js/view-abrechnung.js?v=20260616f"></script>
+  <script src="js/view-abrechnung.js?v=20260702c"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js"></script>
   <script src="js/serviceprotokoll-react-bridge.js"></script>

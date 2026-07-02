@@ -2,6 +2,8 @@
 
 Überblick: Welche Daten wo liegen, wie sie synchronisiert werden und ob sie ohne Dispo-Verbindung nutzbar sind.
 
+**Vollständiges Gap-Audit (Phase 0):** [`OFFLINE_GAP_AUDIT.md`](OFFLINE_GAP_AUDIT.md) — alle Routen, UI-Views, Testfall-IDs, P0–P3-Backlog.
+
 ## Verbindlicher Grundsatz (Offline-First)
 
 Fuer alle bestehenden und neuen Funktionen gilt:
@@ -28,15 +30,21 @@ Legende:
 
 | Bereich | SQLite (Auszug) | Sync In | Sync Out | Offline lesen | Offline schreiben |
 |---------|-------------------|---------|----------|---------------|-------------------|
-| Aufträge / Stammdaten | `jobs`, `customers`, `job_addresses`, `job_technicians`, `job_contacts`, `job_hotel_addresses` | `sync_pull` u. a. | Status, Beschreibung, Hotel, FNs → teils `pending_changes` / Push | Ja (letzter Stand) | Ja; Push wenn online |
-| Lokale Dateien zu Jobs | `job_files` | Download über Gateway-Routen | Uploads über Gateway bei Verbindung | Ja (bereits geladene Dateien) | Teilweise (Queue bis Upload) |
-| Abwesenheiten | `absences` | Pull mit Sync | Create/Delete zu Dispo | Ja | Abhängig vom Flow (Server muss bestätigen) |
-| Abwesenheits**anfragen** | `absence_requests` | Pull | Status-Updates / neue Anfragen | Ja | Anfragen ggf. queued |
-| Dienstreisen | `dienstreisen` | über Sync mit Dispo-Basis | wie implementiert | Ja | lokal + Sync |
-| Kalender-Ansicht (Dispo-Spiegel) | `calendar_cache_technicians`, `calendar_cache_jobs`, `calendar_cache_absences` | nach Pull / Fetch vom Server | — | Ja (Cache-Stand) | — |
-| Anlagenstamm-Baum (Cache) | `anlagenstamm_tree_cache` | Lazy/Fetch über Gateway | — | Ja nach Sync | — |
-| **Anlagenstamm (Liste/Edit)** | `anlagenstamm_local`, `pending_changes` | `sync_pull` (Vollsync) | `sync_push` / `anlagenstamm_save` | Ja (offline-first UI) | Ja (lokal + Push) |
-| Benutzer-Textbausteine | `textbausteine_user_categories`, `textbausteine_user` | Sync mit Dispo | Sync | Ja | Ja (lokal; Sync später) |
+| Aufträge / Stammdaten | `jobs`, `customers`, `job_addresses`, `job_technicians`, `job_contacts`, `job_hotel_addresses` | `sync_pull` u. a. | Status, Beschreibung, Hotel, FNs → `pending_changes` / Push | Ja (letzter Stand) | Ja (`PATCH /api/job`); Push wenn online |
+| **Auftrag annehmen** | `jobs`, Dienstreise-Ordner | optional Pull | Status `in_arbeit` | Teilweise | **Ja** (`POST /api/dienstreise/accept_offline`) |
+| **Auftrag abschließen** | Dienstreise-Ordner | `dienstreise_push` | Finish-Sync | Ja | **Ja** (defer bei Offline) |
+| **Auftrag freigeben** | `jobs` | — | `pending_changes` | Ja | **Ja** (lokal + Queue) |
+| Lokale Dateien zu Jobs | `job_files` | Download über Gateway | Upload bei Verbindung | Ja (geladene Dateien) | Teilweise (Queue) |
+| Abwesenheiten | `absences` | Pull mit Sync | `pending_changes` | Ja | Ja (Queue); update/delete still bei Fehler |
+| Abwesenheits**anfragen** | `absence_requests` | Pull; SSE live | Push / Anfragen | Ja | Ja (Queue); Entscheidung per SSE oder Pull |
+| Dienstreisen | `dienstreisen` | Sync | `dienstreise_*` Jobs | Ja | Upload lokal; Push online |
+| Kalender-Ansicht | `calendar_cache_*` | `sync_pull` / live `/api/calendar` | — | Ja (`calendar_cached`) | — |
+| Anlagenstamm-Baum | `anlagenstamm_tree_cache` | Lazy/Fetch | — | Ja nach Sync | — |
+| **Anlagenstamm (Liste/Edit)** | `anlagenstamm_local`, `pending_changes` | `sync_pull` | `sync_push` / save | Ja | Ja |
+| **Textbausteine** | `textbausteine_user_*` (**Schema vorhanden, Routen nutzen es nicht**) | **fehlt in sync_pull** | Live-Proxy | **Nein** | **Nein** — GAP-007 |
+| **Abrechnung** | `abrechnung_*_cache`, `abrechnung_outbox` | `abrechnung_refresh` | Outbox-Flush | Ja (Cache) | Ja (Outbox) |
+| **RAMS** | — | Live | Live | Nein | Nein — GAP-009 |
+| TED-Metadaten | `job_ted_index` | `sync_pull` / `dienstreise_pull` | — | Ja (Index); Datei wenn im Ordner | Pull online |
 
 ---
 
@@ -46,24 +54,45 @@ Speicherort Zwischenstände: `{DienstreiseOrdner}/` pro angenommenem Auftrag (`i
 
 | Protokoll | Lokale Datei | Sync In | Sync Out | Offline lesen (Formular) | Offline schreiben |
 |-----------|--------------|---------|----------|---------------------------|-------------------|
-| **Montagebericht** | `montagebericht.json` (+ optional PDF/DOCX lokal) | optional über Dispo-API | optional sofort; Dateien bei Push | Ja (`/api/job` + `enrich_local_only`, kein Live-`job_from_dispo` offline) | Ja: „Speichern (nur Daten)“; PDF/DOCX lokal (Word); Signatur nur online |
-| **Serviceprotokoll** | `serviceprotokoll.json` (`byFab`) | Draft-Merge optional | PDF nur über Dispo | Ja (local-first wie Montagebericht) | Ja: „nur Daten“; PDF nur online |
-| **Parameterlisten** | CSV + PDF im Dienstreise-Ordner | — | optional Ingest | Ja | Ja (lokal); Dispo-Ingest optional |
-| **Kontrollwiegungen** | — (nur Dispo) | Live-Proxy | Live-Proxy | Teilweise (Auftrag aus SQLite) | Nein (Dispo-Pflicht) |
-| **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein |
+| **Montagebericht** | `montagebericht.json` (+ PDF/DOCX lokal) | optional Dispo-Anreicherung | optional; Push bei Finish | Ja | Ja: „nur Daten“; PDF lokal (**Word/LibreOffice**); Signatur nur online |
+| **Serviceprotokoll** | `serviceprotokoll.json` (`byFab`) | Defaults optional live | PDF nur Dispo | Ja | Ja: „nur Daten“; **PDF nur online** — GAP-005 |
+| **Parameterlisten** | CSV + PDF im Ordner | — | Ingest optional (kein Outbox) | Ja | Ja lokal; Ingest queued fehlt — GAP-015 |
+| **Kontrollwiegungen** | — (nur Dispo) | Live-Proxy | Live-Proxy | Teilweise | **Nein** — GAP-006 |
+| **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein (nicht implementiert) |
 
 **Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“).
 
-### Priorisierte Luecken (gegen Offline-First)
+### Priorisierte Lücken (P0–P1, siehe Audit)
 
-- Textbausteine-Montagebericht-Sidebar: lokaler SQLite-Cache statt nur Live-`textbausteine_list`
-- Kontrollwiegungen: lokaler Entwurf + Push-Queue statt Dispo-Pflicht
-- Serviceprotokoll-PDF offline (lokale Erzeugung oder lokale Queue mit spaeterem Sync)
+| ID | Thema |
+|----|-------|
+| GAP-001 | Offline-Accept | P0 | 4a | **teilweise umgesetzt** (`accept_offline`) |
+| GAP-002 | Finish mit geänderten Dateien | P0 | 4a | **teilweise** (defer + push) |
+| GAP-003 | Release nur nach Dispo | P0 | 4a | **teilweise** (lokal + Queue) |
+| GAP-004 | `sync_push` bricht bei fehlender `server_id` ab | P0 | Infra | **erledigt** |
+| GAP-005 | Serviceprotokoll-PDF |
+| GAP-006 | Kontrollwiegungen |
+| GAP-007 | Textbausteine (Routen + globaler Cache + sync_pull) |
+| GAP-008–009 | Signatur, RAMS |
+
+---
+
+## Queue-Übersicht
+
+| Mechanismus | Tabelle / Job | Offline-Schreiben |
+|-------------|---------------|-------------------|
+| `pending_changes` | SQLite | job, absence, anlagenstamm |
+| `abrechnung_outbox` | SQLite | note, upload, delete |
+| `background_jobs` | SQLite | dienstreise_*, sync_*, abrechnung_refresh |
+
+Unbekannte `pending_changes`-Typen werden **nicht** verarbeitet (bleiben in Queue).
 
 ---
 
 ## Hinweise
 
-- **Aktive Dispo-Basis:** Nach Start bzw. nach `checkConnectionAndSync` wird die erreichbare URL gewählt (`POST /api/dispo_pick_base`), in LocalStorage als aktive Basis gespeichert und für Sync/Push/EventSource verwendet.
-- **Reconnect:** Bei Browser-`online` wird die Verbindung erneut geprüft (`checkConnectionAndSync`), damit nach Netzwechsel nicht eine veraltete Basis „kleben“ bleibt.
-- Detail-Endpunkte und JSON-Konventionen: `docs/API_CONTRACT.md` (Plattform), Dispo-Pfade unter `dispo/dispo_api/` und `dispo/api/`.
+- **Aktive Dispo-Basis:** `POST /api/dispo_pick_base` → LocalStorage; für Sync/Push/SSE.
+- **Basic-Auth:** Accept, Pull, Finish und viele Proxys brauchen **Benutzername + Passwort** (nicht nur URL).
+- **Reconnect:** `checkConnectionAndSync` bei Browser-`online`.
+- **Implizite Deps:** Word/LibreOffice (Montagebericht-PDF), OneDrive-Dateisperren (`EBUSY`).
+- Detail-Routen: [`OFFLINE_GAP_AUDIT.md`](OFFLINE_GAP_AUDIT.md); API: `docs/API_CONTRACT.md`.

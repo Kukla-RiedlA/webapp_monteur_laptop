@@ -25,6 +25,65 @@
   var btnAdminRevert = document.getElementById('abAdminRevertBtn');
   var btnDispoInArbeit = document.getElementById('abDispoInArbeitBtn');
 
+  var DEFAULT_BELEG_CATEGORIES = [
+    { id: 'transport', label: 'Flug / Bahn / Transport', prefix: 'Transport', icon: 'flug_bahn_transport.png' },
+    { id: 'hotel', label: 'Hotel', prefix: 'Hotel', icon: 'hotel.png' },
+    { id: 'leihwagen', label: 'Leihauto', prefix: 'Leihwagen', icon: 'leihauto.png' },
+    { id: 'firmenauto', label: 'Firmenauto', prefix: 'Firmenauto', icon: 'firmenauto.png' },
+    { id: 'kfz', label: 'Maut / Parken', prefix: 'KFZ', icon: 'maut_parken.png' },
+    { id: 'email', label: 'E-Mail', prefix: 'Email', icon: 'email.png' },
+    { id: 'angebot', label: 'Angebot', prefix: 'Angebot', icon: 'angebot.png' },
+    { id: 'bestellung', label: 'Bestellung', prefix: 'Bestellung', icon: 'bestellung.png' },
+    { id: 'kommunikation', label: 'Kommunikation', prefix: 'Kommunikation', icon: 'kommunikation.png' },
+    { id: 'gebuehren', label: 'Visa / Gebühren', prefix: 'Gebuehren', icon: 'visa_gebuehren.png' },
+    { id: 'bewirtung', label: 'Kundenbewirtung', prefix: 'Bewirtung', icon: 'kundenbewirtung.png' },
+    { id: 'sonstige', label: 'Sonstige Auslagen', prefix: 'Sonstige', icon: 'sonstige_auslagen.png' },
+  ];
+
+  function belegCategories() {
+    return Array.isArray(cfg.belegCategories) && cfg.belegCategories.length
+      ? cfg.belegCategories
+      : DEFAULT_BELEG_CATEGORIES;
+  }
+
+  function staticAssetUrl(relPath) {
+    var p = String(relPath || '').replace(/^\//, '');
+    if (!p) return '';
+    try {
+      if (window.location && window.location.protocol !== 'file:') {
+        return new URL(p, window.location.origin + '/').pathname;
+      }
+    } catch (e) { /* ignore */ }
+    return p;
+  }
+
+  function belegIconUrl(icon) {
+    var base = cfg.belegIconBase || 'icons/beleg/';
+    base = String(base).replace(/^\//, '');
+    if (base.charAt(base.length - 1) !== '/') base += '/';
+    return staticAssetUrl(base + icon);
+  }
+
+  function belegCategoryForFilename(name) {
+    var base = String(name || '');
+    var cats = belegCategories();
+    for (var i = 0; i < cats.length; i++) {
+      var prefix = String(cats[i].prefix || '');
+      if (prefix && base.indexOf(prefix + '_') === 0) return cats[i];
+    }
+    return null;
+  }
+
+  function abUiIconImg(iconFile, alt, className) {
+    var img = document.createElement('img');
+    img.src = staticAssetUrl(iconFile);
+    img.alt = alt || '';
+    if (!alt) img.setAttribute('aria-hidden', 'true');
+    img.className = className || 'ab-ui-icon';
+    img.loading = 'lazy';
+    return img;
+  }
+
   function parseUid() {
     return parseInt(String(cfg.current_user_id != null ? cfg.current_user_id : 0), 10) || 0;
   }
@@ -134,8 +193,6 @@
       t = parseInt(techSelect.value, 10) || 0;
     } else if (!hideTech) {
       t = typeof cfg.technician === 'number' ? cfg.technician : parseInt(String(cfg.technician || 0), 10) || 0;
-    } else if (cfg.technician) {
-      t = typeof cfg.technician === 'number' ? cfg.technician : parseInt(String(cfg.technician || 0), 10) || 0;
     }
     var q = 'monat=' + encodeURIComponent(m) + '&techniker=' + encodeURIComponent(String(t));
     if (showAbgerechnetChecked()) {
@@ -151,71 +208,11 @@
     return cfg.showAbgerechnet === true;
   }
 
-  function pickAbrechnungDefaultJobId(jobs) {
-    if (!jobs || !jobs.length) return 0;
-    var i;
-    for (i = 0; i < jobs.length; i++) {
-      if (String(jobs[i].status || '').trim().toLowerCase() === 'in_arbeit') {
-        return parseInt(jobs[i].id, 10) || 0;
-      }
-    }
-    for (i = 0; i < jobs.length; i++) {
-      var st = String(jobs[i].status || '').trim().toLowerCase();
-      if (st !== 'erledigt' && st !== 'abgerechnet') {
-        return parseInt(jobs[i].id, 10) || 0;
-      }
-    }
-    return 0;
-  }
-
   function fetchJobList(cb) {
-    var errEl = document.getElementById('abFilterError');
-    var m = currentYm();
-    var url;
-    if (cfg.laptopMonthOnly === true || cfg.fromLaptopEmbed === true) {
-      var tid = cfg.technician || cfg.current_user_id || 0;
-      url = '/api/abrechnung/jobs?period=' + encodeURIComponent(m) + '&technician_id=' + encodeURIComponent(String(tid));
-      if (showAbgerechnetChecked()) {
-        url += '&mit_abgerechnet=1';
-      }
-    } else {
-      url = '/api/abrechnung_job_list.php?' + jobListQuery();
-    }
-    fetch(url, { credentials: 'same-origin' })
-      .then(function (r) {
-        return r.text().then(function (text) {
-          var data;
-          try {
-            data = text ? JSON.parse(text) : {};
-          } catch (parseErr) {
-            var hint = (text && text.length < 200) ? text.trim() : ('HTTP ' + r.status);
-            throw new Error(hint || parseErr.message || 'Ungültige Server-Antwort');
-          }
-          if (!r.ok && data.ok !== false) {
-            data = { ok: false, error: data.error || ('HTTP ' + r.status) };
-          }
-          return data;
-        });
-      })
-      .then(function (data) {
-        if (errEl) {
-          if (!data || data.ok === false) {
-            errEl.textContent = (data && data.error) ? data.error : 'Auftragsliste konnte nicht geladen werden.';
-            errEl.style.display = '';
-          } else {
-            errEl.textContent = '';
-            errEl.style.display = 'none';
-          }
-        }
-        cb(data && data.ok !== false ? data : { ok: false, jobs: [] });
-      })
-      .catch(function (err) {
-        if (errEl) {
-          errEl.textContent = (err && err.message) ? err.message : 'Auftragsliste konnte nicht geladen werden.';
-          errEl.style.display = '';
-        }
-        cb({ ok: false, jobs: [] });
-      });
+    fetch('/api/abrechnung_job_list.php?' + jobListQuery(), { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(cb)
+      .catch(function () { cb({ ok: false, jobs: [] }); });
   }
 
   function fillJobDropdown(jobs, selectedId) {
@@ -263,6 +260,139 @@
     return s;
   }
 
+  function formatDeDtTime(value) {
+    if (value == null || value === '') return '';
+    var d;
+    if (typeof value === 'number' && isFinite(value)) {
+      d = value > 1e12 ? new Date(value) : new Date(value * 1000);
+    } else {
+      d = new Date(String(value));
+    }
+    if (isNaN(d.getTime())) return '';
+    var dd = String(d.getDate()).padStart(2, '0');
+    var mm = String(d.getMonth() + 1).padStart(2, '0');
+    var yy = d.getFullYear();
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mi = String(d.getMinutes()).padStart(2, '0');
+    return dd + '.' + mm + '.' + yy + ' ' + hh + ':' + mi;
+  }
+
+  function fileUploadedAtLabel(file) {
+    if (file && file.uploaded_at) return formatDeDtTime(file.uploaded_at);
+    if (file && file.mtime) return formatDeDtTime(file.mtime);
+    if (file && file.synced_at) return formatDeDtTime(file.synced_at);
+    return '';
+  }
+
+  function buildFileMetaText(file) {
+    var parts = [];
+    var when = fileUploadedAtLabel(file);
+    if (when) parts.push(when);
+    if (file && file.uploaded_by_name) parts.push(String(file.uploaded_by_name));
+    var size = typeof file.size_bytes === 'number' ? file.size_bytes : 0;
+    if (size > 0) parts.push(Math.round(size / 1024) + ' KB');
+    return parts.length ? (' · ' + parts.join(' · ')) : '';
+  }
+
+  function billingUiReadOnly() {
+    return cfg.billingFlagsEditable !== true;
+  }
+
+  function billingStatusMeta(at, byName) {
+    var parts = [];
+    if (at) parts.push(formatDeDt(String(at)));
+    if (byName) parts.push(String(byName));
+    return parts.join(' · ');
+  }
+
+  function ensureBillingStatusReadonlyEl() {
+    var fields = document.querySelector('.ab-billing-fields');
+    if (!fields) return null;
+    var el = document.getElementById('abBillingStatusReadonly');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'abBillingStatusReadonly';
+      el.className = 'ab-billing-status-readonly';
+      el.setAttribute('aria-live', 'polite');
+      fields.insertBefore(el, fields.firstChild);
+    }
+    return el;
+  }
+
+  function makeBillingStatusChip(title, done, metaText) {
+    var chip = document.createElement('div');
+    chip.className = 'ab-billing-status-chip' + (done ? ' is-done' : ' is-open');
+    var t = document.createElement('span');
+    t.className = 'ab-billing-status-chip-title';
+    t.textContent = done ? title : (title + ' · offen');
+    chip.appendChild(t);
+    if (done && metaText) {
+      var m = document.createElement('span');
+      m.className = 'ab-billing-status-chip-meta';
+      m.textContent = metaText;
+      chip.appendChild(m);
+    } else if (done) {
+      t.textContent = title + ' · erledigt';
+    }
+    return chip;
+  }
+
+  function renderBillingUiMode(b) {
+    var montageBox = document.querySelector('.ab-montage-billing-box');
+    var readonlyEl = ensureBillingStatusReadonlyEl();
+    var ro = billingUiReadOnly();
+
+    if (montageBox) montageBox.style.display = ro ? 'none' : '';
+    if (elTravel) elTravel.style.display = ro ? 'none' : '';
+
+    if (!ro) {
+      if (readonlyEl) {
+        readonlyEl.innerHTML = '';
+        readonlyEl.style.display = 'none';
+      }
+      return;
+    }
+
+    if (!readonlyEl) return;
+    if (!b) {
+      readonlyEl.innerHTML = '';
+      readonlyEl.style.display = 'none';
+      return;
+    }
+    readonlyEl.style.display = 'flex';
+    readonlyEl.innerHTML = '';
+
+    readonlyEl.appendChild(makeBillingStatusChip(
+      'Fakturierung Montage',
+      !!b.montage_verrechnet,
+      b.montage_verrechnet ? billingStatusMeta(b.montage_verrechnet_at, b.montage_verrechnet_by_name) : ''
+    ));
+
+    if (b.show_fakturierung_et) {
+      readonlyEl.appendChild(makeBillingStatusChip(
+        'Fakturierung ET',
+        !!b.fakturierung_et,
+        b.fakturierung_et ? billingStatusMeta(b.fakturierung_et_at, b.fakturierung_et_by_name) : ''
+      ));
+    }
+
+    if (b.no_technicians_fallback) {
+      readonlyEl.appendChild(makeBillingStatusChip(
+        'Reisekosten abgerechnet',
+        !!b.montage_abgerechnet_job_fallback,
+        ''
+      ));
+    } else {
+      (b.technicians || []).forEach(function (t) {
+        readonlyEl.appendChild(makeBillingStatusChip(
+          'Reisekosten abgerechnet — ' + (t.technician_name || ''),
+          !!t.reise_abgerechnet,
+          t.reise_abgerechnet ? billingStatusMeta(t.reise_abgerechnet_at, t.reise_abgerechnet_by_name) : ''
+        ));
+      });
+    }
+  }
+
   function applyMvEtMeta(b) {
     if (!b) return;
     if (elMvMeta) {
@@ -299,7 +429,7 @@
   }
 
   function renderTravelCheckboxes(b) {
-    if (!elTravel) return;
+    if (!elTravel || billingUiReadOnly()) return;
     elTravel.innerHTML = '';
     if (!b) return;
     var st = String(b.job_status || '');
@@ -338,6 +468,7 @@
       if (t.reise_abgerechnet && (t.reise_abgerechnet_at || t.reise_abgerechnet_by_name)) {
         var meta = document.createElement('div');
         meta.className = 'ab-billing-meta';
+        meta.style.textAlign = 'left';
         var pr = [];
         if (t.reise_abgerechnet_at) pr.push(formatDeDt(String(t.reise_abgerechnet_at)));
         if (t.reise_abgerechnet_by_name) pr.push(String(t.reise_abgerechnet_by_name));
@@ -407,8 +538,13 @@
             chEt.disabled = !billingEtCheckboxEnabled(billingCache);
           }
           applyMvEtMeta(billingCache);
-          renderTravelCheckboxes(billingCache);
-          bindTravelHandlers();
+          if (billingUiReadOnly()) {
+            renderBillingUiMode(billingCache);
+          } else {
+            renderBillingUiMode(null);
+            renderTravelCheckboxes(billingCache);
+            bindTravelHandlers();
+          }
           updateStatusActionButtons();
         }
         if (cb) cb();
@@ -445,8 +581,13 @@
           chEt.disabled = !billingEtCheckboxEnabled(billingCache);
         }
         applyMvEtMeta(billingCache);
-        renderTravelCheckboxes(billingCache);
-        bindTravelHandlers();
+        if (billingUiReadOnly()) {
+          renderBillingUiMode(billingCache);
+        } else {
+          renderBillingUiMode(null);
+          renderTravelCheckboxes(billingCache);
+          bindTravelHandlers();
+        }
         updateStatusActionButtons();
       })
       .catch(function () {
@@ -457,11 +598,11 @@
 
   function applyReadonlyUi(canWrite, status) {
     var ro = !canWrite;
-    showBanner(ro ? 'Nur Lesen, Auftrag bereits abgerechnet' : '');
+    showBanner(ro ? 'Nur Lesen: keine Uploads und keine Kommentar-Änderungen für diesen Auftrag / Ihre Rolle.' : '');
     if (!canWrite) {
       resetCommentEdit();
     }
-    document.querySelectorAll('.ab-dropzone').forEach(function (z) {
+    document.querySelectorAll('.ab-beleg-upload').forEach(function (z) {
       z.classList.toggle('hidden', ro);
     });
     document.querySelectorAll('.ab-file-input').forEach(function (inp) {
@@ -497,6 +638,7 @@
       if (chMv) chMv.checked = false;
       if (chEt) chEt.checked = false;
       applyMvEtMeta({});
+      renderBillingUiMode(null);
       if (elTravel) elTravel.innerHTML = '';
       resetCommentEdit();
       updateStatusActionButtons();
@@ -566,6 +708,26 @@
   var trashSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
   var editSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
 
+  function abCommentIconBtn(kind, title) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ab-comment-icon-btn';
+    btn.title = title;
+    btn.setAttribute('aria-label', title);
+    btn.innerHTML = kind === 'edit' ? editSvg : trashSvg;
+    return btn;
+  }
+
+  function abFileDeleteBtn(title) {
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'ab-file-delete-btn btn-delete-ab-file';
+    delBtn.title = title;
+    delBtn.setAttribute('aria-label', title);
+    delBtn.innerHTML = trashSvg;
+    return delBtn;
+  }
+
   function mergedCommentsFromStore() {
     var c = window.__abComments || {};
     var list = [];
@@ -613,24 +775,14 @@
         var act = document.createElement('span');
         act.className = 'ab-comment-actions';
         if (c.can_edit) {
-          var be = document.createElement('button');
-          be.type = 'button';
-          be.className = 'ab-comment-icon-btn';
-          be.title = 'Bearbeiten';
-          be.setAttribute('aria-label', 'Kommentar bearbeiten');
-          be.innerHTML = editSvg;
+          var be = abCommentIconBtn('edit', 'Bearbeiten');
           be.addEventListener('click', function () {
             startCommentEdit(c.id, c.body || '');
           });
           act.appendChild(be);
         }
         if (c.can_delete) {
-          var bd = document.createElement('button');
-          bd.type = 'button';
-          bd.className = 'ab-comment-icon-btn';
-          bd.title = 'Löschen';
-          bd.setAttribute('aria-label', 'Kommentar löschen');
-          bd.innerHTML = trashSvg;
+          var bd = abCommentIconBtn('delete', 'Löschen');
           bd.addEventListener('click', function () {
             if (!confirm('Kommentar löschen?')) return;
             if (editingCommentId === c.id) {
@@ -638,7 +790,6 @@
             }
             var fd2 = new FormData();
             fd2.append('csrf_token', cfg.csrfComment || '');
-            fd2.append('job_id', String(currentJobId()));
             fd2.append('comment_id', String(c.id));
             fetch('/api/abrechnung_comment_delete.php', { method: 'POST', body: fd2, credentials: 'same-origin' })
               .then(function (r) { return r.json(); })
@@ -693,13 +844,18 @@
       li.draggable = true;
       var url = '/api/abrechnung_file_download.php?job_id=' + encodeURIComponent(String(id)) +
         '&bucket=' + encodeURIComponent(bucket) + '&name=' + encodeURIComponent(f.name);
+      var cat = belegCategoryForFilename(f.name);
+      if (cat && cat.icon) {
+        var fileIcon = document.createElement('img');
+        fileIcon.src = belegIconUrl(cat.icon);
+        fileIcon.alt = cat.label || '';
+        fileIcon.className = 'ab-file-beleg-icon';
+        fileIcon.setAttribute('aria-hidden', 'true');
+        fileIcon.loading = 'lazy';
+        li.appendChild(fileIcon);
+      }
       if (canDel) {
-        var delBtn = document.createElement('button');
-        delBtn.type = 'button';
-        delBtn.className = 'ab-file-delete-btn btn-delete-ab-file';
-        delBtn.title = 'Datei löschen';
-        delBtn.setAttribute('aria-label', 'Datei löschen');
-        delBtn.innerHTML = trashSvg;
+        var delBtn = abFileDeleteBtn('Datei löschen');
         delBtn.addEventListener('click', function (e) {
           e.preventDefault();
           e.stopPropagation();
@@ -726,11 +882,9 @@
       a.href = url;
       a.textContent = f.name;
       a.draggable = true;
-      var size = typeof f.size_bytes === 'number' ? f.size_bytes : 0;
       var meta = document.createElement('span');
-      meta.className = 'muted';
-      meta.style.fontSize = '11px';
-      meta.textContent = size ? (' · ' + Math.round(size / 1024) + ' KB') : '';
+      meta.className = 'ab-file-meta muted';
+      meta.textContent = buildFileMetaText(f);
       li.appendChild(a);
       li.appendChild(meta);
       li.addEventListener('dragstart', function (e) {
@@ -739,15 +893,6 @@
         } catch (err) { /* ignore */ }
       });
       ul.appendChild(li);
-      if (window.dispoDesktopFiles && window.dispoDesktopFiles.bindAbrechnungFileLi) {
-        window.dispoDesktopFiles.bindAbrechnungFileLi(li, {
-          kind: 'abrechnung_file',
-          jobId: id,
-          bucket: bucket,
-          filename: f.name,
-          fileName: f.name,
-        });
-      }
     });
   }
 
@@ -764,11 +909,12 @@
     refreshReadonlyState();
   }
 
-  function uploadFiles(fileList) {
+  function uploadFiles(fileList, belegPrefix) {
     var id = currentJobId();
     if (!id || !fileList || !fileList.length) return;
     setUiBusy(true);
     var i = 0;
+    var prefix = belegPrefix ? String(belegPrefix) : '';
     function next() {
       if (i >= fileList.length) {
         setUiBusy(false);
@@ -779,6 +925,9 @@
       fd.append('csrf_token', cfg.csrfUpload || '');
       fd.append('job_id', String(id));
       fd.append('bucket', COMMENT_BUCKET);
+      if (prefix) {
+        fd.append('beleg_prefix', prefix);
+      }
       fd.append('file', fileList[i]);
       fetch('/api/abrechnung_file_upload.php', { method: 'POST', body: fd, credentials: 'same-origin' })
         .then(function (r) { return r.json(); })
@@ -797,33 +946,73 @@
     next();
   }
 
-  function wireDropzone(card) {
+  function renderBelegGrid(card) {
+    var bucket = card.getAttribute('data-bucket');
+    var grid = card.querySelector('[data-beleg-grid="' + bucket + '"]');
+    if (!grid || grid.dataset.rendered === '1') return;
+    grid.innerHTML = '';
+    belegCategories().forEach(function (cat) {
+      var tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'ab-beleg-tile';
+      tile.dataset.belegPrefix = cat.prefix || '';
+      tile.title = cat.label || cat.prefix || '';
+      var img = document.createElement('img');
+      img.src = belegIconUrl(cat.icon || '');
+      img.alt = cat.label || '';
+      img.className = 'ab-beleg-tile-icon';
+      img.loading = 'lazy';
+      var lbl = document.createElement('span');
+      lbl.className = 'ab-beleg-tile-label';
+      lbl.textContent = cat.label || '';
+      tile.appendChild(img);
+      tile.appendChild(lbl);
+      grid.appendChild(tile);
+    });
+    grid.dataset.rendered = '1';
+  }
+
+  function wireBelegUpload(card) {
     var bucket = card.getAttribute('data-bucket');
     if (!bucket) return;
-    var dz = card.querySelector('[data-dropzone="' + bucket + '"]');
+    renderBelegGrid(card);
+    var uploadWrap = card.querySelector('[data-beleg-upload="' + bucket + '"]');
     var finp = card.querySelector('.ab-file-input[data-bucket="' + bucket + '"]');
-    if (!dz || !finp) return;
-    dz.addEventListener('click', function () { if (!finp.disabled) finp.click(); });
-    finp.addEventListener('change', function () {
-      uploadFiles(finp.files);
-      finp.value = '';
-    });
-    ['dragenter', 'dragover'].forEach(function (ev) {
-      dz.addEventListener(ev, function (e) {
+    var grid = card.querySelector('[data-beleg-grid="' + bucket + '"]');
+    if (!uploadWrap || !finp || !grid) return;
+    var pendingPrefix = '';
+    grid.querySelectorAll('.ab-beleg-tile').forEach(function (tile) {
+      var prefix = tile.dataset.belegPrefix || '';
+      tile.addEventListener('click', function () {
+        if (finp.disabled) return;
+        pendingPrefix = prefix;
+        finp.click();
+      });
+      ['dragenter', 'dragover'].forEach(function (ev) {
+        tile.addEventListener(ev, function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!finp.disabled) tile.classList.add('dragover');
+        });
+      });
+      tile.addEventListener('dragleave', function (e) {
+        e.preventDefault();
+        tile.classList.remove('dragover');
+      });
+      tile.addEventListener('drop', function (e) {
         e.preventDefault();
         e.stopPropagation();
-        dz.classList.add('dragover');
+        tile.classList.remove('dragover');
+        if (finp.disabled) return;
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+          uploadFiles(e.dataTransfer.files, prefix);
+        }
       });
     });
-    dz.addEventListener('dragleave', function (e) {
-      e.preventDefault();
-      dz.classList.remove('dragover');
-    });
-    dz.addEventListener('drop', function (e) {
-      e.preventDefault();
-      dz.classList.remove('dragover');
-      if (finp.disabled) return;
-      uploadFiles(e.dataTransfer.files);
+    finp.addEventListener('change', function () {
+      uploadFiles(finp.files, pendingPrefix);
+      pendingPrefix = '';
+      finp.value = '';
     });
   }
 
@@ -842,7 +1031,6 @@
       if (editId > 0) {
         var fdEdit = new FormData();
         fdEdit.append('csrf_token', cfg.csrfComment || '');
-        fdEdit.append('job_id', String(jid));
         fdEdit.append('comment_id', String(editId));
         fdEdit.append('body', body);
         fetch('/api/abrechnung_comment_edit.php', { method: 'POST', body: fdEdit, credentials: 'same-origin' })
@@ -878,12 +1066,14 @@
   }
 
   document.querySelectorAll('.ab-card[data-bucket]').forEach(function (card) {
-    wireDropzone(card);
+    wireBelegUpload(card);
     wireNotes(card);
   });
 
   if (chMv) chMv.addEventListener('change', saveBillingFlags);
   if (chEt) chEt.addEventListener('change', saveBillingFlags);
+
+  renderBillingUiMode(null);
 
   if (jobSelect) {
     jobSelect.addEventListener('change', function () {
@@ -892,45 +1082,24 @@
       if (cfg.prefillJob && cfg.prefillJob.id !== id) {
         cfg.prefillJob = null;
       }
-      function afterPick() {
-        loadAllForJob();
-      }
-      if (cfg.fromLaptopEmbed === true && typeof window.kuklaAbrechnungOnJobChange === 'function') {
-        window.kuklaAbrechnungOnJobChange(afterPick);
-      } else {
-        afterPick();
-      }
+      loadAllForJob();
     });
   }
 
   function onPeriodChange() {
-    function refreshPeriodUi() {
-      fetchJobList(function (data) {
-        var jobs = data.ok ? data.jobs : [];
-        var pickId = pickAbrechnungDefaultJobId(jobs);
-        fillJobDropdown(jobs, pickId);
-        if (pickId && currentJobId()) {
-          if (hintChoose) hintChoose.style.display = 'none';
-          loadAllForJob();
-        } else {
-          if (hintChoose) hintChoose.style.display = '';
-          if (mainBlocks) {
-            mainBlocks.style.opacity = '0.5';
-            mainBlocks.style.pointerEvents = 'none';
-          }
-          document.querySelectorAll('[data-file-list]').forEach(function (ul) { ul.innerHTML = ''; });
-          document.querySelectorAll('[data-comments-list]').forEach(function (r) { r.innerHTML = ''; });
-          if (chMv) chMv.checked = false;
-          if (elTravel) elTravel.innerHTML = '';
-          resetCommentEdit();
-        }
-      });
-    }
-    if (cfg.fromLaptopEmbed === true && typeof window.kuklaAbrechnungOnPeriodChange === 'function') {
-      window.kuklaAbrechnungOnPeriodChange(refreshPeriodUi);
-    } else {
-      refreshPeriodUi();
-    }
+    fetchJobList(function (data) {
+      fillJobDropdown(data.ok ? data.jobs : [], 0);
+      if (hintChoose) hintChoose.style.display = '';
+      if (mainBlocks) {
+        mainBlocks.style.opacity = '0.5';
+        mainBlocks.style.pointerEvents = 'none';
+      }
+      document.querySelectorAll('[data-file-list]').forEach(function (ul) { ul.innerHTML = ''; });
+      document.querySelectorAll('[data-comments-list]').forEach(function (r) { r.innerHTML = ''; });
+      if (chMv) chMv.checked = false;
+      if (elTravel) elTravel.innerHTML = '';
+      resetCommentEdit();
+    });
   }
   if (yearSelect) {
     yearSelect.addEventListener('change', onPeriodChange);
@@ -947,64 +1116,21 @@
     showAbgerechnetCb.addEventListener('change', onPeriodChange);
   }
 
-  function applyAbrechnungFilter() {
-    var selId = currentJobId();
-    fetchJobList(function (data) {
-      fillJobDropdown(data.ok ? data.jobs : [], selId);
-      if (selId) {
-        loadAllForJob();
-      } else {
-        if (hintChoose) hintChoose.style.display = '';
-        if (mainBlocks) {
-          mainBlocks.style.opacity = '0.5';
-          mainBlocks.style.pointerEvents = 'none';
-        }
-        document.querySelectorAll('[data-file-list]').forEach(function (ul) { ul.innerHTML = ''; });
-        document.querySelectorAll('[data-comments-list]').forEach(function (r) { r.innerHTML = ''; });
-        if (chMv) chMv.checked = false;
-        if (elTravel) elTravel.innerHTML = '';
-        resetCommentEdit();
-        refreshReadonlyState();
-      }
-    });
-  }
-
-  if (filterForm) {
-    filterForm.addEventListener('submit', function (e) {
-      e.preventDefault();
-      applyAbrechnungFilter();
-    });
-  }
-
-  function runInitialJobListLoad() {
-    fetchJobList(function (data) {
-      var jobs = data.ok ? data.jobs : [];
-      var preId = 0;
-      if (cfg.prefillJob && cfg.prefillJob.id) {
-        preId = cfg.prefillJob.id;
-      } else if (jobSelect && jobSelect.value) {
-        preId = parseInt(jobSelect.value, 10) || 0;
-      } else {
-        preId = pickAbrechnungDefaultJobId(jobs);
-      }
-      fillJobDropdown(jobs, preId);
-      if (currentJobId()) {
-        loadAllForJob();
-      } else {
-        refreshReadonlyState();
-      }
-    });
-  }
-
-  if (cfg.fromLaptopEmbed === true && window.__kuklaAbrechnungDeferInitialJobList === true) {
-    window.kuklaAbrechnungRunInitialJobList = runInitialJobListLoad;
-  } else {
-    runInitialJobListLoad();
-  }
-
-  window.kuklaAbrechnungReloadCurrentJob = function () {
-    loadAllForJob();
-  };
+  fetchJobList(function (data) {
+    var jobs = data.ok ? data.jobs : [];
+    var preId = 0;
+    if (cfg.prefillJob && cfg.prefillJob.id) {
+      preId = cfg.prefillJob.id;
+    } else if (jobSelect && jobSelect.value) {
+      preId = parseInt(jobSelect.value, 10) || 0;
+    }
+    fillJobDropdown(jobs, preId);
+    if (currentJobId()) {
+      loadAllForJob();
+    } else {
+      refreshReadonlyState();
+    }
+  });
 
   function postJobStatusAction(url, csrfToken, jobId, onOk) {
     var fd = new FormData();
@@ -1049,23 +1175,4 @@
       });
     });
   }
-
-  window.kuklaAbrechnungReapply = function (newCfg) {
-    if (newCfg) {
-      cfg = newCfg;
-      window.KUKLA_ABRECHNUNG = newCfg;
-    }
-    var ySel = document.getElementById('abYearSelect');
-    var mSel = document.getElementById('abMonthNumSelect');
-    var tSel = document.getElementById('abTechSelect');
-    if (ySel && cfg.year) ySel.value = String(cfg.year);
-    if (mSel && cfg.monthNum) mSel.value = String(cfg.monthNum);
-    if (tSel) tSel.value = String(cfg.technician || 0);
-    fetchJobList(function (data) {
-      var preId = (cfg.prefillJob && cfg.prefillJob.id) ? cfg.prefillJob.id : (currentJobId() || 0);
-      fillJobDropdown(data.ok ? data.jobs : [], preId);
-      if (preId > 0) loadAllForJob();
-      else refreshReadonlyState();
-    });
-  };
 })();

@@ -1,5 +1,8 @@
 'use strict';
 
+const path = require('path');
+const fs = require('fs');
+
 /**
  * Abrechnung — lokale Hilfen für PHP-kompatible Routen (Parität Dispo-Web / Desktop).
  */
@@ -36,6 +39,74 @@ function parseMitAbgerechnet(query) {
   if (v === undefined || v === null) return false;
   const s = String(v).toLowerCase().trim();
   return s === '1' || s === 'true' || s === 'yes';
+}
+
+const BELEG_CATEGORIES = [
+  { id: 'transport', label: 'Flug / Bahn / Transport', prefix: 'Transport', icon: 'flug_bahn_transport.png' },
+  { id: 'hotel', label: 'Hotel', prefix: 'Hotel', icon: 'hotel.png' },
+  { id: 'leihwagen', label: 'Leihauto', prefix: 'Leihwagen', icon: 'leihauto.png' },
+  { id: 'firmenauto', label: 'Firmenauto', prefix: 'Firmenauto', icon: 'firmenauto.png' },
+  { id: 'kfz', label: 'Maut / Parken', prefix: 'KFZ', icon: 'maut_parken.png' },
+  { id: 'email', label: 'E-Mail', prefix: 'Email', icon: 'email.png' },
+  { id: 'angebot', label: 'Angebot', prefix: 'Angebot', icon: 'angebot.png' },
+  { id: 'bestellung', label: 'Bestellung', prefix: 'Bestellung', icon: 'bestellung.png' },
+  { id: 'kommunikation', label: 'Kommunikation', prefix: 'Kommunikation', icon: 'kommunikation.png' },
+  { id: 'gebuehren', label: 'Visa / Gebühren', prefix: 'Gebuehren', icon: 'visa_gebuehren.png' },
+  { id: 'bewirtung', label: 'Kundenbewirtung', prefix: 'Bewirtung', icon: 'kundenbewirtung.png' },
+  { id: 'sonstige', label: 'Sonstige Auslagen', prefix: 'Sonstige', icon: 'sonstige_auslagen.png' },
+];
+
+function belegPrefixes() {
+  return BELEG_CATEGORIES.map((c) => c.prefix).filter(Boolean);
+}
+
+function belegPrefixAllowed(prefix) {
+  const p = String(prefix || '').trim();
+  return p !== '' && belegPrefixes().includes(p);
+}
+
+function sanitizeUploadBasename(name) {
+  let n = path.basename(String(name || 'datei')).replace(/[\/\\:*?"<>|]/g, '_');
+  n = n.replace(/^[\s._-]+|[\s._-]+$/g, '');
+  return n || 'datei';
+}
+
+function stripKnownBelegPrefix(baseName) {
+  const base = String(baseName || '');
+  for (const prefix of belegPrefixes()) {
+    const needle = `${prefix}_`;
+    if (base.startsWith(needle)) {
+      const rest = base.slice(needle.length);
+      return rest || base;
+    }
+  }
+  return base;
+}
+
+function applyBelegPrefix(origName, prefix) {
+  const orig = path.basename(String(origName || 'datei'));
+  const ext = path.extname(orig);
+  let baseName = ext ? path.basename(orig, ext) : orig;
+  baseName = sanitizeUploadBasename(baseName);
+  const p = String(prefix || '').trim();
+  if (!belegPrefixAllowed(p)) {
+    return `${baseName}${ext}`;
+  }
+  baseName = stripKnownBelegPrefix(baseName);
+  baseName = sanitizeUploadBasename(baseName);
+  return `${p}_${baseName}${ext}`;
+}
+
+function resolveUniqueStoredName(origName, prefix, targetDir) {
+  let stored = applyBelegPrefix(origName, prefix);
+  const ext = path.extname(stored);
+  let baseName = ext ? path.basename(stored, ext) : stored;
+  let counter = 1;
+  while (targetDir && fs.existsSync(path.join(targetDir, stored))) {
+    stored = `${baseName}-${counter}${ext}`;
+    counter += 1;
+  }
+  return stored;
 }
 
 function buildJobLabel(row, id) {
@@ -160,6 +231,8 @@ function buildPageConfig(db, technicianId, query = {}) {
     current_user_id: Number(effectiveTechnician || 0),
     techniciansForFilter: [],
     showAbgerechnet: parseMitAbgerechnet(query),
+    belegCategories: BELEG_CATEGORIES,
+    belegIconBase: 'icons/beleg/',
   };
 }
 
@@ -439,7 +512,28 @@ function deleteCommentInCache(db, save, readCommentsFromRow, writeCommentsCache,
   return { ok: true, source: 'local' };
 }
 
+function resolveTechnicianDisplayName(db, technicianId) {
+  const tid = Number(technicianId || 0);
+  if (!db || tid <= 0) return '';
+  try {
+    const row = db.prepare('SELECT full_name, username FROM users WHERE id = ? LIMIT 1').get(tid);
+    if (row) {
+      const full = String(row.full_name || '').trim();
+      if (full) return full;
+      const user = String(row.username || '').trim();
+      if (user) return user;
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return '';
+}
+
 module.exports = {
+  BELEG_CATEGORIES,
+  belegPrefixAllowed,
+  applyBelegPrefix,
+  resolveUniqueStoredName,
   buildPageConfig,
   parseMitAbgerechnet,
   pickDefaultAbrechnungJob,
@@ -450,4 +544,5 @@ module.exports = {
   monteurCanWriteJob,
   updateCommentInCache,
   deleteCommentInCache,
+  resolveTechnicianDisplayName,
 };

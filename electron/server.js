@@ -166,6 +166,17 @@ const {
 } = require('./lib/ted-excel-local');
 const { applyKuklaAuditHeaders } = require('./lib/audit-client-headers');
 const {
+  isLikelyOfflineSyncError,
+  shouldDeferDispoSync,
+  normalizeBaseUrl,
+  wantsLocalOnlyRequest,
+  fetchWithTimeout,
+  DISPO_FETCH_TIMEOUT_MS,
+} = require('./lib/local_first');
+const textbausteineLocal = require('./lib/textbausteine-local');
+const protocolPdf = require('./lib/protocol_pdf');
+const kontrollwiegungLocal = require('./lib/kontrollwiegung-local');
+const {
   ensureAnlagenstammLocalSchema,
   rowCount: anlagenstammLocalRowCount,
   searchLocal: anlagenstammSearchLocal,
@@ -1632,6 +1643,113 @@ function createApp(db) {
       );
       save();
     }
+  }
+
+  /**
+   * Auftrag offline annehmen: Ordnerstruktur + Status in_arbeit, ohne Dispo-Pull.
+   * Projektdateien können später per dienstreise_pull nachgezogen werden.
+   */
+  function performAcceptJobOffline(body) {
+    const rawJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+    const technicianId = parseInt(
+      body.technicianId != null ? body.technicianId : body.technician_id != null ? body.technician_id : 0,
+      10,
+    );
+    if (!rawJobId || !technicianId) {
+      throw Object.assign(new Error('job_id (lokal) und technician_id erforderlich.'), { httpStatus: 400 });
+    }
+    const mapped = getJobRowByLocalOrServerId(rawJobId);
+    if (!mapped) {
+      throw Object.assign(new Error('Auftrag nicht gefunden.'), { httpStatus: 404 });
+    }
+    const localJobId = mapped.id;
+    const assignGate = requireJobAssignedToTechnician(db, localJobId, technicianId);
+    if (assignGate) {
+      throw Object.assign(new Error(assignGate.error), { httpStatus: assignGate.status || 403 });
+    }
+    const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(localJobId);
+    if (!jobStatusAllowsAcceptJob(statusRow && statusRow.status)) {
+      throw Object.assign(
+        new Error('Auftrag kann nur im Status Angelegt, Geplant oder Zugeteilt angenommen werden.'),
+        { httpStatus: 409 },
+      );
+    }
+    const targetDir = getOrCreateDienstreiseFolderForJob(localJobId, {
+      skipAssignmentCheck: true,
+      technicianId,
+    });
+    if (!targetDir || !fs.existsSync(targetDir)) {
+      throw Object.assign(new Error('Zielordner konnte nicht erstellt werden.'), { httpStatus: 400 });
+    }
+    const jobDetail = lookupDienstreiseJobRow(localJobId);
+    let fabMap = Array.isArray(body.fab_map) ? body.fab_map : [];
+    if (!fabMap.length && jobDetail) {
+      for (const fn of fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)) {
+        fabMap.push({ fab: String(fn), folder_name_canonical: String(fn) });
+      }
+    }
+    const montageName =
+      (body.montage_folder_name && String(body.montage_folder_name).trim()) ||
+      buildMonteurMontageFolderName(jobDetail || {}, getTechnicianDisplayName(technicianId));
+    const offlinePaths = Object.prototype.hasOwnProperty.call(body, 'offline_paths')
+      ? body.offline_paths
+      : {};
+    saveOfflinePullSelection(db, localJobId, 'explicit', offlinePaths, fabMap, montageName);
+    save();
+    const layout = ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
+    applyJobStatusInArbeitAfterAccept(localJobId, technicianId);
+    return {
+      ok: true,
+      offline: true,
+      synced: false,
+      local_job_id: localJobId,
+      reise_dir: targetDir,
+      fab_map: layout.fabMap || fabMap,
+      montage_folder_name: layout.montageFolderName || montageName,
+      hint: 'Lokal angenommen. Projektdateien und Dispo-Status werden bei Verbindung synchronisiert.',
+    };
+  }
+
+  function queueJobStatusPending(localJobId, status) {
+    const lid = parseInt(localJobId, 10);
+    if (!Number.isFinite(lid) || lid <= 0) return;
+    const st = String(status || '').trim().toLowerCase();
+    if (!st) return;
+    db.prepare(
+      `DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`,
+    ).run(lid);
+    db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
+      'job',
+      lid,
+      'status',
+      JSON.stringify({ status: st }),
+    );
+    save();
+  }
+
+  function enqueueDeferredDienstreisePush(localJobId, pushBody) {
+    if (!bgJobs) return null;
+    const lid = parseInt(localJobId, 10);
+    const body = pushBody || {};
+    const dedupeKey = 'dienstreise_push:' + lid + ':defer';
+    const { job_id } = bgJobs.enqueue(
+      'dienstreise_push',
+      {
+        job_id: lid,
+        dispo_base_url: normalizeBaseUrl(body.dispoBaseUrl || body.dispo_base_url || ''),
+        dispo_username: String(body.dispoUsername || body.dispo_username || ''),
+        dispo_password:
+          body.dispoPassword != null
+            ? String(body.dispoPassword)
+            : body.dispo_password != null
+              ? String(body.dispo_password)
+              : '',
+        technician_id: parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10) || 0,
+      },
+      dedupeKey,
+    );
+    bgJobs.kick();
+    return job_id;
   }
 
   /** Freigeben: nur aus in_arbeit — lokale Daten löschen, Status zugeteilt (Dispo + lokal, ohne Datei-Sync). */
@@ -3672,6 +3790,16 @@ function createApp(db) {
     };
   }
 
+  app.post('/api/dienstreise/accept_offline', express.json(), (req, res) => {
+    try {
+      const result = performAcceptJobOffline(req.body || {});
+      return res.json(result);
+    } catch (e) {
+      const status = e && e.httpStatus ? e.httpStatus : 500;
+      return res.status(status).json({ ok: false, error: e.message || 'Offline-Annahme fehlgeschlagen.' });
+    }
+  });
+
   app.get('/api/dienstreise/accept_offline_preview', async (req, res) => {
     try {
       const rawJobId = parseInt(req.query.job_id, 10);
@@ -3693,7 +3821,13 @@ function createApp(db) {
           ? { Authorization: 'Basic ' + Buffer.from(creds.serverUsername + ':' + creds.serverPassword).toString('base64') }
           : {};
       if (!authHeader.Authorization) {
-        return res.status(400).json({ ok: false, error: 'Dispo-Zugangsdaten fehlen.' });
+        return res.json(
+          buildLocalAcceptOfflinePreview(
+            localJobId,
+            technicianId,
+            'Dispo-Zugangsdaten fehlen – nur lokale Struktur/Status.',
+          ),
+        );
       }
       const resolved = await resolveDispoBaseForPreview(creds, technicianId);
       if (!resolved) {
@@ -4312,19 +4446,66 @@ function createApp(db) {
 
       // Nur geänderte Dateien (mtime/Größe vs. letzter Pull/Push), nicht den gesamten Ordner.
       let effectiveDispoBase = dispoBaseUrl;
+      let syncDeferred = false;
+      let deferredPushJobId = null;
+      const forceOfflineFinish = body.offline_finish === true || body.force_offline === true;
       if (technicianId && changedCount > 0) {
-        try {
-          effectiveDispoBase =           await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, dispoUsername, dispoPassword, {
-            onlyChanged: true,
-            folders: FINISH_SYNC_FOLDERS,
-            relPathPredicate: monteurWorkOnly,
-            externalUrl: body.dispoExternalUrl || body.externalUrl,
-            internalUrl: body.dispoInternalUrl || body.internalUrl,
-          });
-        } catch (syncErr) {
-          throw new Error(
-            'Sync zum Dispo-Server vor Abschluss fehlgeschlagen: ' +
-              (syncErr && syncErr.message ? syncErr.message : String(syncErr)),
+        const mayTrySync = !forceOfflineFinish && !!(dispoBaseUrl || dispoUsername || dispoPassword);
+        if (mayTrySync) {
+          try {
+            if (!effectiveDispoBase) {
+              const resolved = await resolveDispoWorkingBase({
+                baseUrl: dispoBaseUrl,
+                externalUrl: body.dispoExternalUrl || body.externalUrl,
+                internalUrl: body.dispoInternalUrl || body.internalUrl,
+                technicianId,
+                serverUsername: dispoUsername,
+                serverPassword: dispoPassword,
+              });
+              effectiveDispoBase = resolved.base || '';
+            }
+            if (!effectiveDispoBase) {
+              syncDeferred = true;
+            } else {
+              effectiveDispoBase = await syncDienstreiseFoldersToDispo(
+                localJobId,
+                effectiveDispoBase,
+                technicianId,
+                dispoUsername,
+                dispoPassword,
+                {
+                  onlyChanged: true,
+                  folders: FINISH_SYNC_FOLDERS,
+                  relPathPredicate: monteurWorkOnly,
+                  externalUrl: body.dispoExternalUrl || body.externalUrl,
+                  internalUrl: body.dispoInternalUrl || body.internalUrl,
+                },
+              );
+            }
+          } catch (syncErr) {
+            if (forceOfflineFinish || body.defer_dispo_sync === true || isLikelyOfflineSyncError(syncErr)) {
+              syncDeferred = true;
+              console.warn(
+                '[finish_and_cleanup] Sync verschoben:',
+                syncErr && syncErr.message ? syncErr.message : syncErr,
+              );
+            } else {
+              throw new Error(
+                'Sync zum Dispo-Server vor Abschluss fehlgeschlagen: ' +
+                  (syncErr && syncErr.message ? syncErr.message : String(syncErr)),
+              );
+            }
+          }
+        } else {
+          syncDeferred = true;
+        }
+        if (syncDeferred) {
+          deferredPushJobId = enqueueDeferredDienstreisePush(localJobId, body);
+          bumpProgress(
+            'finish_sync',
+            step,
+            totalSteps,
+            changedCount + ' geänderte Datei(en) – Upload bei Verbindung ausstehend.',
           );
         }
       }
@@ -4333,7 +4514,11 @@ function createApp(db) {
         'finish_verify',
         step,
         totalSteps,
-        verifyPlan.length ? 'Abgleich geänderter Dateien mit Dispo …' : 'Keine geänderten Dateien – Abgleich übersprungen.',
+        syncDeferred
+          ? 'Abgleich mit Dispo übersprungen (offline).'
+          : verifyPlan.length
+            ? 'Abgleich geänderter Dateien mit Dispo …'
+            : 'Keine geänderten Dateien – Abgleich übersprungen.',
       );
 
       async function collectRemoteFilesForFolder(folderName, localRelPaths) {
@@ -4354,6 +4539,7 @@ function createApp(db) {
           ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') }
           : {};
 
+      if (!syncDeferred) {
       for (const { folder, paths: localFiles } of verifyPlan) {
         if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
         bumpProgress('finish_verify', step, totalSteps, 'Prüfe ' + folder + ' (' + localFiles.length + ') …');
@@ -4401,13 +4587,20 @@ function createApp(db) {
         }
         step += 1;
       }
+      } else {
+        step += verifyPlan.length;
+      }
 
       bumpProgress(
         'finish_cleanup',
         step,
         totalSteps,
         FINISH_CLEANUP_HINT +
-          (changedCount === 0 ? ' …' : ' (nach Upload) …'),
+          (syncDeferred
+            ? ' (Upload ausstehend) …'
+            : changedCount === 0
+              ? ' …'
+              : ' (nach Upload) …'),
       );
 
       cleanupDienstreiseReiseDir(reiseDir, protectedPaths, {
@@ -4518,7 +4711,7 @@ function createApp(db) {
       }
       const gate = getWritableLocalJobMetaForPatch(db, technicianId, localJobId);
       if (gate.error) return res.status(gate.status).json({ ok: false, error: gate.error });
-      await performReleaseDienstreiseJobWithDispo(gate.localId, technicianId, {
+      const dispoOpts = {
         dispoBaseUrl: (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, ''),
         externalUrl: body.dispoExternalUrl || body.externalUrl,
         internalUrl: body.dispoInternalUrl || body.internalUrl,
@@ -4529,8 +4722,74 @@ function createApp(db) {
             : body.dispo_password != null
               ? String(body.dispo_password)
               : '',
+      };
+      const forceOffline = body.force_offline === true || body.offline_only === true;
+      const releaseLocalWithQueue = () => {
+        const jobRow = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(gate.localId);
+        performReleaseDienstreiseJob(gate.localId, technicianId);
+        let queued = false;
+        if (jobRow && jobRow.server_id != null && String(jobRow.server_id).trim() !== '') {
+          queueJobStatusPending(gate.localId, 'zugeteilt');
+          queued = true;
+        }
+        return { synced: false, queued };
+      };
+      if (forceOffline) {
+        const localResult = releaseLocalWithQueue();
+        return res.json({
+          ok: true,
+          status: 'zugeteilt',
+          offline: true,
+          synced: localResult.synced,
+          queued: localResult.queued,
+        });
+      }
+      if (dispoOpts.dispoUsername) {
+        try {
+          const resolvedBase = await resolveDispoWorkingBase({
+            baseUrl: dispoOpts.dispoBaseUrl,
+            externalUrl: dispoOpts.externalUrl,
+            internalUrl: dispoOpts.internalUrl,
+            technicianId,
+            serverUsername: dispoOpts.dispoUsername,
+            serverPassword: dispoOpts.dispoPassword,
+          });
+          if (resolvedBase.base) {
+            try {
+              await performReleaseDienstreiseJobWithDispo(gate.localId, technicianId, {
+                ...dispoOpts,
+                dispoBaseUrl: resolvedBase.base,
+              });
+              return res.json({ ok: true, status: 'zugeteilt', synced: true });
+            } catch (dispoErr) {
+              if (body.offline_fallback === false) throw dispoErr;
+              console.warn(
+                '[release_job] Dispo-Freigabe fehlgeschlagen, lokal fortgesetzt:',
+                dispoErr && dispoErr.message ? dispoErr.message : dispoErr,
+              );
+              const localResult = releaseLocalWithQueue();
+              return res.json({
+                ok: true,
+                status: 'zugeteilt',
+                synced: false,
+                queued: localResult.queued,
+                warning: dispoErr && dispoErr.message ? String(dispoErr.message) : 'Dispo-Sync ausstehend.',
+              });
+            }
+          }
+        } catch (resolveErr) {
+          if (body.offline_fallback === false) throw resolveErr;
+        }
+      }
+      const localResult = releaseLocalWithQueue();
+      return res.json({
+        ok: true,
+        status: 'zugeteilt',
+        offline: true,
+        synced: false,
+        queued: localResult.queued,
+        hint: 'Lokal freigegeben. Dispo-Status wird bei Verbindung synchronisiert.',
       });
-      return res.json({ ok: true, status: 'zugeteilt' });
     } catch (e) {
       const status = e && e.httpStatus ? e.httpStatus : 500;
       res.status(status).json({ ok: false, error: e.message || 'Freigabe fehlgeschlagen.' });
@@ -4674,8 +4933,16 @@ function createApp(db) {
   app.get('/api/jobs_open', async (req, res) => {
     const technicianId = getTechnicianId(req);
     const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
-    if (!baseUrl || !technicianId) {
-      return res.status(400).json({ error: 'base_url und technician_id erforderlich.' });
+    if (!technicianId) {
+      return res.status(400).json({ error: 'technician_id erforderlich.' });
+    }
+    if (!baseUrl) {
+      try {
+        const rows = queryJobsOpenLocalRows(db, technicianId, req.query || {});
+        return res.json(rows);
+      } catch (e) {
+        return res.status(500).json({ error: e.message || String(e) });
+      }
     }
     const auth = authHeaderFromIncomingBasicOrQuery(req);
     const includeErledigt = (req.query.include_erledigt || '').toString() === '1';
@@ -4714,6 +4981,14 @@ function createApp(db) {
     } catch (e) {
       const msg = e.message || String(e);
       console.error('[jobs_open]', msg);
+      if (isLikelyOfflineSyncError(e) || /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network/i.test(msg)) {
+        try {
+          const rows = queryJobsOpenLocalRows(db, technicianId, req.query || {});
+          return res.json(rows);
+        } catch (localErr) {
+          console.warn('[jobs_open] local fallback:', localErr && localErr.message ? localErr.message : localErr);
+        }
+      }
       let hint = '';
       if (/CERT|TLS|SSL|self-signed|self signed|unable to verify|UNABLE_TO_VERIFY|wrong version number|EPROTO/i.test(msg)) {
         hint =
@@ -4732,67 +5007,8 @@ function createApp(db) {
     if (!technicianId) {
       return res.status(400).json({ error: 'technician_id fehlt.' });
     }
-    const includeErledigt = (req.query.include_erledigt || '').toString() === '1';
-    const filterNoDate = (req.query.filter_no_date || '').toString() === '1';
-    const filterNoTechnician = (req.query.filter_no_technician || '').toString() === '1';
-    const whereParts = [];
-    if (!includeErledigt) {
-      whereParts.push("j.status NOT IN ('erledigt','abgerechnet')");
-    }
-    if (filterNoDate) {
-      whereParts.push(
-        "((j.start_datetime IS NULL AND j.end_datetime IS NULL) OR (date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01'))",
-      );
-    }
-    if (filterNoTechnician) {
-      whereParts.push('NOT EXISTS (SELECT 1 FROM job_technicians jt3 WHERE jt3.job_id = j.id)');
-    }
-    const whereSql = whereParts.length ? whereParts.join(' AND ') : '1=1';
-    const sql = `
-SELECT
-  j.id,
-  j.server_id,
-  j.job_number,
-  j.status,
-  c.name AS customer_name,
-  ja.endkunde,
-  ja.street,
-  ja.house_number,
-  ja.zip,
-  ja.city,
-  ja.country,
-  ja.address_extra_1,
-  ja.address_extra_2,
-  j.start_datetime AS start_datetime_raw,
-  j.end_datetime AS end_datetime_raw,
-  CASE
-    WHEN date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01' THEN NULL
-    ELSE substr(j.start_datetime, 1, 10)
-  END AS start_datetime,
-  CASE
-    WHEN date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01' THEN NULL
-    ELSE substr(j.end_datetime, 1, 10)
-  END AS end_datetime,
-  j.required_technicians,
-  (
-    SELECT COUNT(DISTINCT jt2.technician_id)
-    FROM job_technicians jt2
-    WHERE jt2.job_id = j.id
-  ) AS assigned_count
-FROM jobs j
-JOIN customers c ON c.id = j.customer_id
-LEFT JOIN job_addresses ja ON ja.job_id = j.id
-WHERE (${whereSql})
-  AND (
-    EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-    OR NOT EXISTS (SELECT 1 FROM job_technicians jt0 WHERE jt0.job_id = j.id)
-  )
-ORDER BY
-  (CASE WHEN ((j.start_datetime IS NULL AND j.end_datetime IS NULL) OR (date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01')) THEN 1 ELSE 0 END) ASC,
-  COALESCE(j.start_datetime, j.end_datetime) ASC,
-  j.id ASC`;
     try {
-      const rows = db.prepare(sql).all(technicianId);
+      const rows = queryJobsOpenLocalRows(db, technicianId, req.query || {});
       res.json(Array.isArray(rows) ? rows : []);
     } catch (e) {
       res.status(500).json({ error: e.message || String(e) });
@@ -4986,8 +5202,16 @@ ORDER BY
       const technicianId = getTechnicianId(req);
       const { baseUrl, serverUsername, serverPassword, payload } = req.body || {};
       const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
-      if (!technicianId || !base) {
-        return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      }
+      if (!base) {
+        return res.json({
+          ok: true,
+          offline: true,
+          session_id: 'local-offline-' + Date.now(),
+          session_token: 'local-offline-' + Date.now(),
+        });
       }
       const auth = authHeaderFromCredentials(serverUsername, serverPassword);
       const url = `${base}/dispo_api/api/signature_session_open.php?technician_id=${encodeURIComponent(technicianId)}`;
@@ -4999,6 +5223,14 @@ ORDER BY
       const raw = await r.text();
       res.status(r.status).type('application/json').send(raw);
     } catch (e) {
+      if (isLikelyOfflineSyncError(e)) {
+        return res.json({
+          ok: true,
+          offline: true,
+          session_id: 'local-offline-' + Date.now(),
+          session_token: 'local-offline-' + Date.now(),
+        });
+      }
       res.status(500).json({ ok: false, error: e.message || 'signature_session_open' });
     }
   });
@@ -5006,21 +5238,56 @@ ORDER BY
   app.post('/api/dispo_signature_submit', express.json(), async (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
-      const { baseUrl, serverUsername, serverPassword, payload } = req.body || {};
+      const { baseUrl, serverUsername, serverPassword, payload, localJobId } = req.body || {};
       const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
-      if (!technicianId || !base) {
-        return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      }
+      const pl = payload && typeof payload === 'object' ? payload : {};
+      if (!base) {
+        queueDispoProxyPending(db, 'signature', localJobId || technicianId, 'submit', {
+          baseUrl: base,
+          technician_id: technicianId,
+          serverUsername,
+          serverPassword,
+          payload: pl,
+        });
+        save();
+        return res.json({ ok: true, deferred: true, offline: true });
       }
       const auth = authHeaderFromCredentials(serverUsername, serverPassword);
       const url = `${base}/dispo_api/api/signature_submit.php?technician_id=${encodeURIComponent(technicianId)}`;
       const r = await fetch(url, {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json' }, auth || {}),
-        body: JSON.stringify(payload && typeof payload === 'object' ? payload : {}),
+        body: JSON.stringify(pl),
       });
       const raw = await r.text();
+      if (!r.ok && isLikelyOfflineSyncError(new Error(raw || r.statusText))) {
+        queueDispoProxyPending(db, 'signature', localJobId || technicianId, 'submit', {
+          baseUrl: base,
+          technician_id: technicianId,
+          serverUsername,
+          serverPassword,
+          payload: pl,
+        });
+        save();
+        return res.json({ ok: true, deferred: true, offline: true });
+      }
       res.status(r.status).type('application/json').send(raw);
     } catch (e) {
+      if (isLikelyOfflineSyncError(e)) {
+        const body = req.body || {};
+        queueDispoProxyPending(db, 'signature', body.localJobId || getTechnicianId(req), 'submit', {
+          baseUrl: body.baseUrl,
+          technician_id: getTechnicianId(req),
+          serverUsername: body.serverUsername,
+          serverPassword: body.serverPassword,
+          payload: body.payload || {},
+        });
+        save();
+        return res.json({ ok: true, deferred: true, offline: true });
+      }
       res.status(500).json({ ok: false, error: e.message || 'signature_submit' });
     }
   });
@@ -5062,18 +5329,29 @@ ORDER BY
    * Mobile-Endpoint wie in der PWA genutzt werden kann.
    */
   app.all('/api/laptop_rams_proxy', express.json({ limit: '50mb' }), async (req, res) => {
+    const body = (req.body && typeof req.body === 'object') ? req.body : {};
+    const baseUrl = (body.baseUrl || body.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const action = (body.action || req.query.action || '').toString().trim();
+    const method = (body.method || (body.payload ? 'POST' : 'GET')).toString().toUpperCase();
+    const queryParams = (body.queryParams && typeof body.queryParams === 'object') ? body.queryParams : {};
+    const payload = body.payload;
     try {
-      const body = (req.body && typeof req.body === 'object') ? req.body : {};
-      const baseUrl = (body.baseUrl || body.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
-      const action = (body.action || req.query.action || '').toString().trim();
-      const method = (body.method || (body.payload ? 'POST' : 'GET')).toString().toUpperCase();
-      const queryParams = (body.queryParams && typeof body.queryParams === 'object') ? body.queryParams : {};
-      const payload = body.payload;
-      if (!baseUrl) {
-        return res.status(400).json({ ok: false, error: 'baseUrl erforderlich.' });
-      }
       if (!action) {
         return res.status(400).json({ ok: false, error: 'action erforderlich.' });
+      }
+      if (!baseUrl) {
+        if (method !== 'GET' && method !== 'HEAD') {
+          queueDispoProxyPending(db, 'rams', action, method.toLowerCase(), {
+            action,
+            method,
+            queryParams,
+            payload,
+            baseUrl: '',
+          });
+          save();
+          return res.json({ ok: true, deferred: true, offline: true, action });
+        }
+        return res.status(400).json({ ok: false, error: 'baseUrl erforderlich.' });
       }
       const auth = authHeaderFromIncomingBasicOrQuery(req);
       if (!auth) {
@@ -5099,6 +5377,17 @@ ORDER BY
       const raw = await r.text();
       res.status(r.status).type('application/json').send(raw);
     } catch (e) {
+      if (isLikelyOfflineSyncError(e) && method !== 'GET' && method !== 'HEAD') {
+        queueDispoProxyPending(db, 'rams', action, method.toLowerCase(), {
+          action,
+          method,
+          queryParams,
+          payload,
+          baseUrl,
+        });
+        save();
+        return res.json({ ok: true, deferred: true, offline: true, action });
+      }
       res.status(500).json({ ok: false, error: e.message || 'rams_proxy' });
     }
   });
@@ -5114,8 +5403,12 @@ ORDER BY
       const body = (req.body && typeof req.body === 'object') ? req.body : {};
       const baseUrl = (body.baseUrl || body.base_url || '').toString().trim().replace(/\/$/, '');
       const technicianId = body.technicianId || body.technician_id || getTechnicianId(req);
-      if (!baseUrl || !technicianId) {
-        return res.status(400).json({ ok: false, error: 'baseUrl und technicianId erforderlich.' });
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technicianId erforderlich.' });
+      }
+      if (!baseUrl) {
+        const rows = queryJobsOpenLocalRows(db, technicianId, {});
+        return res.json({ ok: true, jobs: rows, data_source: 'local' });
       }
       const auth = authHeaderFromIncomingBasicOrQuery(req);
       const url = `${baseUrl}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(technicianId)}`;
@@ -5129,6 +5422,14 @@ ORDER BY
       const jobs = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.jobs) ? parsed.jobs : []);
       res.json({ ok: true, jobs: jobs });
     } catch (e) {
+      try {
+        const body = (req.body && typeof req.body === 'object') ? req.body : {};
+        const technicianId = body.technicianId || body.technician_id || getTechnicianId(req);
+        if (technicianId) {
+          const rows = queryJobsOpenLocalRows(db, technicianId, {});
+          return res.json({ ok: true, jobs: rows, data_source: 'local_fallback' });
+        }
+      } catch (_) {}
       res.status(500).json({ ok: false, error: e.message || 'jobs_proxy' });
     }
   });
@@ -5258,13 +5559,28 @@ ORDER BY
   });
 
   app.post('/api/anlagenstamm_lookup', express.json(), async (req, res) => {
-    const { baseUrl, fab, serverUsername, serverPassword, force_online: forceOnline } = req.body || {};
+    const body = req.body || {};
+    const { baseUrl, fab, serverUsername, serverPassword } = body;
     const fabValue = (fab || '').toString().trim();
     if (!fabValue) {
       return res.status(400).json({ ok: false, error: 'fab erforderlich.' });
     }
     ensureAnlagenstammLocalSchema(db);
-    if (!forceOnline && anlagenstammLocalRowCount(db) > 0) {
+    const syncDispo =
+      body.sync_dispo === '1' ||
+      body.sync_dispo === 1 ||
+      body.sync_dispo === true;
+    const localOnly = wantsLocalOnlyRequest(body) || !syncDispo;
+    if (localOnly) {
+      const row = anlagenstammLookupByFab(db, fabValue);
+      return res.json({
+        ok: true,
+        row: row || null,
+        anlage: row || null,
+        _source: row ? 'local' : 'local_miss',
+      });
+    }
+    if (anlagenstammLocalRowCount(db) > 0) {
       const row = anlagenstammLookupByFab(db, fabValue);
       if (row) {
         return res.json({ ok: true, row, anlage: row, _source: 'local' });
@@ -5348,8 +5664,30 @@ ORDER BY
     const { baseUrl, fab, serverUsername, serverPassword } = req.body || {};
     const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
     const fabValue = (fab || '').toString().trim();
-    if (!technicianId || !base || !fabValue) {
-      return res.status(400).json({ ok: false, error: 'baseUrl, fab und technician_id erforderlich.' });
+    if (!technicianId || !fabValue) {
+      return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+    }
+    if (!base) {
+      try {
+        const cached = readAnlagenstammTreeCache(db, fabValue);
+        if (cached && cached.tree && cached.tree.length) {
+          const folder =
+            (cached.root_folder_name && String(cached.root_folder_name).trim()) ||
+            readAnlagenstammRootFolderName(db, fabValue) ||
+            '';
+          return res.json({
+            ok: true,
+            fab: fabValue,
+            projekte_neu: { enabled: !!cached.projects_enabled, tree: cached.tree },
+            data_source: 'cache',
+            folder,
+            cache_notice: 'Cache – offline oder keine Dispo-URL.',
+          });
+        }
+        return res.status(503).json({ ok: false, error: 'Kein Anlagenstamm-Dateibaum im lokalen Cache.' });
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message || String(e) });
+      }
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     const url = `${base}/dispo_api/api/anlagenstamm_files_list.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}`;
@@ -5364,6 +5702,23 @@ ORDER BY
       } catch (_) { /* cache ist best-effort */ }
       res.json(data);
     } catch (e) {
+      try {
+        const cached = readAnlagenstammTreeCache(db, fabValue);
+        if (cached && cached.tree && cached.tree.length) {
+          const folder =
+            (cached.root_folder_name && String(cached.root_folder_name).trim()) ||
+            readAnlagenstammRootFolderName(db, fabValue) ||
+            '';
+          return res.json({
+            ok: true,
+            fab: fabValue,
+            projekte_neu: { enabled: !!cached.projects_enabled, tree: cached.tree },
+            data_source: 'cache',
+            folder,
+            cache_notice: 'Cache – Dispo nicht erreichbar.',
+          });
+        }
+      } catch (_) {}
       res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
     }
   });
@@ -6504,37 +6859,64 @@ ORDER BY
     }
   }
 
+  function buildServiceprotokollDefaultsFromLocal(fab) {
+    const parsed = parseServiceprotokollDefaultsBuffer(readServiceprotokollDefaultsLocal());
+    if (!parsed) return null;
+    const fn = String(fab || '').trim();
+    if (!fn) return parsed;
+    try {
+      ensureAnlagenstammLocalSchema(db);
+      const row = anlagenstammLookupByFab(db, fn);
+      if (row) {
+        parsed.kopf = Object.assign({}, parsed.kopf || {}, {
+          kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
+          kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
+          kopf_type: row.type != null ? String(row.type).trim() : '',
+          kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
+          mess_waegezelle_type: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
+          mess_waegezelle_seriennummer: row.dms_nr != null ? String(row.dms_nr).trim() : '',
+          projekt: row.projekt != null ? String(row.projekt).trim() : '',
+        });
+        parsed.source = 'local_cache';
+      }
+    } catch (_) { /* optional */ }
+    return parsed;
+  }
+
   app.get('/api/serviceprotokoll_defaults', async (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
       const fab = (req.query.fabrikationsnummer || '').toString().trim();
       const dispoBaseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+      const localOnly = wantsLocalOnlyRequest(req.query);
       if (!technicianId) {
         return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
       }
-      const localPayload = () => parseServiceprotokollDefaultsBuffer(readServiceprotokollDefaultsLocal());
-      if (!dispoBaseUrl) {
-        const local = localPayload();
+      const local = buildServiceprotokollDefaultsFromLocal(fab);
+      if (localOnly || !dispoBaseUrl) {
         if (local) return res.json(local);
-        return res.status(400).json({ ok: false, error: 'base_url erforderlich (kein lokaler Defaults-Cache).' });
+        return res.status(400).json({ ok: false, error: 'Kein lokaler Defaults-Cache – bitte einmal online synchronisieren.' });
       }
       const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
-      const url = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_defaults.php?fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(technicianId);
+      const url =
+        dispoBaseUrl +
+        '/dispo_api/api/serviceprotokoll_defaults.php?fabrikationsnummer=' +
+        encodeURIComponent(fab) +
+        '&technician_id=' +
+        encodeURIComponent(technicianId);
       try {
-        const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+        const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
         const data = await r.json().catch(() => ({}));
         if (r.ok && data.ok && Array.isArray(data.arbeitsschritte) && data.arbeitsschritte.length > 0) {
           return res.json(data);
         }
-        const local = localPayload();
         if (local) {
-          if (r.ok && data.ok && data.kopf) local.kopf = data.kopf;
+          if (r.ok && data.ok && data.kopf) local.kopf = Object.assign({}, local.kopf || {}, data.kopf);
           return res.json(local);
         }
         if (r.ok) return res.json(data);
         return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
       } catch (e) {
-        const local = localPayload();
         if (local) return res.json(local);
         return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
       }
@@ -7018,42 +7400,136 @@ ORDER BY
       const body = req.body || {};
       const technicianId = getTechnicianId(req);
       const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
-      if (!technicianId || !dispoBaseUrl) {
-        return res.status(400).json({ ok: false, error: 'base_url und technician_id erforderlich.' });
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.local_job_id, 10);
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
       }
-      const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
-      const url = dispoBaseUrl + '/dispo_api/api/kontrollwiegungsprotokoll_save.php';
       const payload = {
         technician_id: body.technician_id != null ? body.technician_id : technicianId,
         job_id: body.job_id,
+        local_job_id: localJobId,
         fabrikationsnummer: body.fabrikationsnummer,
         durchfuehrungsdatum: body.durchfuehrungsdatum,
         wiegungen: Array.isArray(body.wiegungen) ? body.wiegungen : [],
+        dispoBaseUrl,
+        serverUsername: body.serverUsername || body.dispoUsername,
+        serverPassword: body.serverPassword ?? body.dispoPassword,
       };
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
-        body: JSON.stringify(payload),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
+      let reiseDir = null;
+      if (Number.isFinite(localJobId) && localJobId > 0) {
+        reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       }
-      res.json(data);
+      let record = null;
+      let savedPdf = null;
+      if (reiseDir) {
+        record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, payload.fabrikationsnummer, payload);
+        const pdfPaths = kontrollwiegungLocal.localPdfPathForKontrollwiegung(
+          reiseDir,
+          payload.fabrikationsnummer,
+          payload.durchfuehrungsdatum,
+        );
+        const pdfDir = path.dirname(pdfPaths.full);
+        if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+        const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(payload);
+        writeFileWithRetry(pdfPaths.full, pdfBuf);
+        savedPdf = pdfPaths.rel;
+      }
+      let protokollId = record ? record.protokoll_id : 'local:' + Date.now();
+      let deferred = false;
+      if (dispoBaseUrl) {
+        try {
+          const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
+          const url = dispoBaseUrl + '/dispo_api/api/kontrollwiegungsprotokoll_save.php';
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+            body: JSON.stringify(payload),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) {
+            protokollId = data.protokoll_id || data.id || protokollId;
+            if (localJobId) {
+              db.prepare(
+                `DELETE FROM pending_changes WHERE entity_type = 'kontrollwiegung' AND entity_id = ? AND action = 'save'`,
+              ).run(String(localJobId) + ':' + String(payload.fabrikationsnummer || ''));
+              save();
+            }
+            return res.json(Object.assign({}, data, { saved_pdf: savedPdf, local_protokoll_id: record && record.protokoll_id }));
+          }
+          deferred = true;
+        } catch (_) {
+          deferred = true;
+        }
+      } else {
+        deferred = true;
+      }
+      if (deferred && localJobId) {
+        queueDispoProxyPending(
+          db,
+          'kontrollwiegung',
+          localJobId + ':' + String(payload.fabrikationsnummer || ''),
+          'save',
+          payload,
+        );
+        save();
+      }
+      res.json({
+        ok: true,
+        protokoll_id: protokollId,
+        saved_pdf: savedPdf,
+        deferred,
+        local_protokoll_id: record && record.protokoll_id,
+      });
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      res.status(500).json({ ok: false, error: e.message || 'Kontrollwiegung konnte nicht gespeichert werden.' });
     }
   });
 
   app.get('/api/kontrollwiegungsprotokoll_pdf', async (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
-      const protokollId = parseInt(req.query.id, 10);
+      const protokollIdRaw = String(req.query.id || '');
+      const protokollId = parseInt(protokollIdRaw.replace(/^local:/, ''), 10);
       const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
-      if (!technicianId || !protokollId || !baseUrl) {
-        return res.status(400).json({ ok: false, error: 'id, base_url und technician_id erforderlich.' });
+      const localJobId = parseInt(req.query.local_job_id || req.query.job_id, 10);
+      const fab = String(req.query.fabrikationsnummer || req.query.fab || '').trim();
+      if (!technicianId || !protokollIdRaw) {
+        return res.status(400).json({ ok: false, error: 'id und technician_id erforderlich.' });
       }
-      const url = baseUrl + '/dispo_api/api/kontrollwiegungsprotokoll_pdf.php?id=' + encodeURIComponent(protokollId) + '&technician_id=' + encodeURIComponent(technicianId);
+      if (protokollIdRaw.startsWith('local:') || (!baseUrl && Number.isFinite(localJobId))) {
+        const reiseDir = Number.isFinite(localJobId) ? getOrCreateDienstreiseFolderForJob(localJobId) : null;
+        if (!reiseDir) {
+          return res.status(404).json({ ok: false, error: 'Lokales Protokoll nicht gefunden (job_id fehlt).' });
+        }
+        const rec = kontrollwiegungLocal.getKontrollwiegungLocal(reiseDir, fab, protokollIdRaw);
+        if (!rec) {
+          return res.status(404).json({ ok: false, error: 'Lokales Protokoll nicht gefunden.' });
+        }
+        const pdfPaths = kontrollwiegungLocal.localPdfPathForKontrollwiegung(
+          reiseDir,
+          rec.fabrikationsnummer,
+          rec.durchfuehrungsdatum,
+        );
+        if (fs.existsSync(pdfPaths.full)) {
+          const buf = fs.readFileSync(pdfPaths.full);
+          res.set('Content-Type', 'application/pdf');
+          res.set('Content-Disposition', 'attachment; filename="' + pdfPaths.name + '"');
+          return res.send(buf);
+        }
+        const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(rec);
+        res.set('Content-Type', 'application/pdf');
+        res.set('Content-Disposition', 'attachment; filename="' + pdfPaths.name + '"');
+        return res.send(pdfBuf);
+      }
+      if (!baseUrl) {
+        return res.status(400).json({ ok: false, error: 'base_url erforderlich.' });
+      }
+      const url =
+        baseUrl +
+        '/dispo_api/api/kontrollwiegungsprotokoll_pdf.php?id=' +
+        encodeURIComponent(protokollIdRaw) +
+        '&technician_id=' +
+        encodeURIComponent(technicianId);
       const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
       const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
       if (!r.ok) {
@@ -7065,7 +7541,7 @@ ORDER BY
       res.set('Content-Disposition', 'attachment; filename="Kontrollwiegungsprotokoll.pdf"');
       res.send(buf);
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      res.status(502).json({ ok: false, error: 'PDF nicht verfügbar: ' + e.message });
     }
   });
 
@@ -7097,7 +7573,15 @@ ORDER BY
     return store.byFab[fn];
   }
 
+  function shouldApplyServiceprotokollToAnlagenstamm(body) {
+    const b = body || {};
+    if (b.apply_to_anlagenstamm === true || b.apply_to_anlagenstamm === 1 || b.apply_to_anlagenstamm === '1') return true;
+    if (b.applyToAnlagenstamm === true || b.applyToAnlagenstamm === 1 || b.applyToAnlagenstamm === '1') return true;
+    return false;
+  }
+
   async function syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, messwerte, kopfDwc) {
+    if (!shouldApplyServiceprotokollToAnlagenstamm(body)) return null;
     const mess = messwerte && typeof messwerte === 'object' ? messwerte : {};
     const typeVal = String(mess.waegezelle_type || '').trim();
     const snVal = String(mess.waegezelle_seriennummer || '').trim();
@@ -7148,7 +7632,7 @@ ORDER BY
     const url = base + '/dispo_api/api/serviceprotokoll_draft.php?job_id=' + encodeURIComponent(serverJobId) +
       '&technician_id=' + encodeURIComponent(technicianId);
     try {
-      const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...(authHeader || {}) } });
+      const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId), ...(authHeader || {}) } });
       const data = await r.json().catch(() => ({}));
       if (r.ok && data.ok && data.store && data.store.byFab) return data.store;
     } catch (_) { /* optional */ }
@@ -7172,7 +7656,7 @@ ORDER BY
     if (mergedJson !== remoteJson) {
       try {
         const postUrl = base + '/dispo_api/api/serviceprotokoll_draft.php';
-        await fetch(postUrl, {
+        await fetchWithTimeout(postUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authHeader || {}) },
           body: JSON.stringify({ technician_id: technicianId, job_id: serverJobId, store: merged }),
@@ -7228,6 +7712,78 @@ ORDER BY
       .filter(Boolean);
   }
 
+  async function writeServiceprotokollPdfsLocally(reiseDir, localJobId, fab, technicianId, draftPayload, pdfLangs) {
+    const langs = pdfLangs && pdfLangs.length ? pdfLangs : ['de'];
+    const multiLang = langs.length > 1;
+    const datum = String(draftPayload.durchfuehrungsdatum || '').replace(/-/g, '');
+    const safeFn = String(fab).replace(/[^\w.-]+/g, '_');
+    const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+    const savedRel = [];
+    let localWarning = null;
+    for (const lang of langs) {
+      try {
+        const pdfBuf = await protocolPdf.generateServiceprotokollPdfBuffer(draftPayload, { lang });
+        const suffix = multiLang ? '_' + lang.toUpperCase() : lang === 'en' ? '_EN' : '';
+        const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
+        writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
+        savedRel.push(relDir + '/' + pdfName);
+      } catch (localErr) {
+        localWarning =
+          (localWarning ? localWarning + ' ' : '') + 'PDF ' + lang.toUpperCase() + ': ' + localErr.message;
+      }
+    }
+    return { savedRel, localWarning };
+  }
+
+  async function downloadServiceprotokollPdfsFromDispo(
+    dispoBaseUrl,
+    protokollId,
+    technicianId,
+    auth,
+    reiseDir,
+    localJobId,
+    fab,
+    pdfLangs,
+    durchfuehrungsdatum,
+  ) {
+    const langs = pdfLangs && pdfLangs.length ? pdfLangs : ['de'];
+    const multiLang = langs.length > 1;
+    const datum = String(durchfuehrungsdatum || '').replace(/-/g, '');
+    const safeFn = String(fab).replace(/[^\w.-]+/g, '_');
+    const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+    const savedRel = [];
+    let localWarning = null;
+    for (const lang of langs) {
+      try {
+        const pdfUrl =
+          dispoBaseUrl +
+          '/dispo_api/api/serviceprotokoll_pdf.php?id=' +
+          encodeURIComponent(protokollId) +
+          '&technician_id=' +
+          encodeURIComponent(technicianId) +
+          '&lang=' +
+          encodeURIComponent(lang);
+        const pdfRes = await fetchWithTimeout(pdfUrl, {
+          headers: { 'X-Technician-Id': String(technicianId), ...(auth || {}) },
+        }, 15000);
+        if (!pdfRes.ok) {
+          localWarning = (localWarning ? localWarning + ' ' : '') + 'Dispo-PDF ' + lang.toUpperCase() + ' nicht geladen.';
+          continue;
+        }
+        const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+        const suffix = multiLang ? '_' + lang.toUpperCase() : lang === 'en' ? '_EN' : '';
+        const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
+        writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
+        savedRel.push(relDir + '/' + pdfName);
+      } catch (localErr) {
+        localWarning = (localWarning ? localWarning + ' ' : '') + 'Dispo-PDF ' + lang.toUpperCase() + ': ' + localErr.message;
+      }
+    }
+    return { savedRel, localWarning };
+  }
+
   app.get('/api/protokolle/serviceprotokoll', async (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
@@ -7245,13 +7801,18 @@ ORDER BY
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const localOnly = wantsLocalOnlyRequest(req.query) || String(req.query.sync_dispo || '') !== '1';
       const creds = resolveDispoServerCreds(req.query || {});
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
       let store = readServiceprotokollStore(reiseDir);
-      if (creds.baseUrl && hasServerJobId) {
+      if (!localOnly && creds.baseUrl && hasServerJobId) {
         const auth = authHeaderFromCredentials(creds.username, creds.password);
-        store = await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, creds.baseUrl, auth);
+        try {
+          store = await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, creds.baseUrl, auth);
+        } catch (_) {
+          /* lokaler Store bleibt */
+        }
       }
       if (fab && store.byFab[fab]) {
         return res.json({ ok: true, data: store.byFab[fab], store });
@@ -7311,13 +7872,16 @@ ORDER BY
       };
 
       let messSyncWarning = null;
-      try {
-        const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, draftPayload.messwerte, draftPayload.kopf_dwc);
-        if (messSync && messSync.ok === false) {
-          messSyncWarning = 'Anlagenstamm (Kraftaufnehmer/DMS/DWC): ' + (messSync.error || 'lokal nicht gespeichert');
+      const applyToAnlagenstamm = shouldApplyServiceprotokollToAnlagenstamm(body);
+      if (applyToAnlagenstamm) {
+        try {
+          const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, draftPayload.messwerte, draftPayload.kopf_dwc);
+          if (messSync && messSync.ok === false) {
+            messSyncWarning = 'Anlagenstamm (Kraftaufnehmer/DMS/DWC): ' + (messSync.error || 'lokal nicht gespeichert');
+          }
+        } catch (messErr) {
+          messSyncWarning = 'Anlagenstamm (Kraftaufnehmer/DMS/DWC): ' + (messErr.message || 'Speichern fehlgeschlagen');
         }
-      } catch (messErr) {
-        messSyncWarning = 'Anlagenstamm (Kraftaufnehmer/DMS/DWC): ' + (messErr.message || 'Speichern fehlgeschlagen');
       }
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
@@ -7326,7 +7890,8 @@ ORDER BY
       let syncWarning = messSyncWarning;
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
-      if (dispoBaseUrl && hasServerJobId) {
+      const skipDispoSync = wantsLocalOnlyRequest(body) || shouldDeferDispoSync({ hasBaseUrl: !!dispoBaseUrl, localOnly: body.local_only });
+      if (!skipDispoSync && dispoBaseUrl && hasServerJobId) {
         const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.serverPassword ?? body.serverPassword);
         try {
           await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, dispoBaseUrl, authSync);
@@ -7335,12 +7900,12 @@ ORDER BY
         }
       }
 
-      if (dispoBaseUrl && hasServerJobId) {
+      if (!skipDispoSync && dispoBaseUrl && hasServerJobId && applyToAnlagenstamm) {
         const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.serverPassword ?? body.serverPassword);
         const syncHeaders = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authSync || {}) };
         try {
           const syncUrl = dispoBaseUrl + '/dispo_api/api/anlagenstamm_projekt_job_save.php';
-          const syncRes = await fetch(syncUrl, {
+          const syncRes = await fetchWithTimeout(syncUrl, {
             method: 'POST',
             headers: syncHeaders,
             body: JSON.stringify({ technician_id: technicianId, job_id: parsedServerJobId, projekt }),
@@ -7370,18 +7935,15 @@ ORDER BY
       if (!steps.length) {
         return res.status(400).json({ ok: false, error: 'Mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.' });
       }
-      if (!dispoBaseUrl) {
-        return res.status(400).json({ ok: false, error: 'Dispo-Server-URL erforderlich für PDF-Erstellung.' });
-      }
-      if (!hasServerJobId) {
-        return res.status(400).json({ ok: false, error: 'Auftrag ist nicht mit dem Server verknüpft (server_id fehlt).' });
-      }
 
-      const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
-      const saveUrl = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_save.php';
+      const pdfLangs =
+        Array.isArray(body.pdf_languages) && body.pdf_languages.length
+          ? body.pdf_languages.map((l) => String(l).toLowerCase()).filter((l) => l === 'de' || l === 'en')
+          : ['de'];
       const savePayload = {
         technician_id: body.technician_id != null ? body.technician_id : technicianId,
-        job_id: parsedServerJobId,
+        job_id: hasServerJobId ? parsedServerJobId : localJobId,
+        local_job_id: localJobId,
         fabrikationsnummer: fab,
         durchfuehrungsdatum: draftPayload.durchfuehrungsdatum,
         arbeitsschritte: steps,
@@ -7392,59 +7954,86 @@ ORDER BY
         kopf_qmax: draftPayload.kopf_qmax,
         kopf_type: draftPayload.kopf_type,
         kopf_dwc: draftPayload.kopf_dwc,
-        pdf_languages: Array.isArray(body.pdf_languages) && body.pdf_languages.length
-          ? body.pdf_languages.map((l) => String(l).toLowerCase()).filter((l) => l === 'de' || l === 'en')
-          : ['de'],
+        pdf_languages: pdfLangs,
+        dispoBaseUrl,
+        serverUsername: body.serverUsername || body.dispoUsername,
+        serverPassword: body.serverPassword ?? body.dispoPassword,
       };
-      const saveRes = await fetch(saveUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
-        body: JSON.stringify(savePayload),
-      });
-      const saveData = await saveRes.json().catch(() => ({}));
-      if (!saveRes.ok || !saveData.ok) {
-        return res.status(saveRes.status).json(saveData.ok === false ? saveData : { ok: false, error: saveData.error || saveRes.statusText });
-      }
 
-      let savedRel = [];
-      let localWarning = null;
-      if (saveData.protokoll_id) {
-        const pdfLangs = savePayload.pdf_languages && savePayload.pdf_languages.length ? savePayload.pdf_languages : ['de'];
-        const multiLang = pdfLangs.length > 1;
-        const datum = String(draftPayload.durchfuehrungsdatum).replace(/-/g, '');
-        const safeFn = fab.replace(/[^\w.-]+/g, '_');
-        const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
-        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-        for (const lang of pdfLangs) {
-          try {
-            const pdfUrl = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_pdf.php?id=' + encodeURIComponent(saveData.protokoll_id) + '&technician_id=' + encodeURIComponent(technicianId) + '&lang=' + encodeURIComponent(lang);
-            const pdfRes = await fetch(pdfUrl, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
-            if (!pdfRes.ok) {
-              localWarning = (localWarning ? localWarning + ' ' : '') + 'PDF ' + lang.toUpperCase() + ' lokal nicht geladen.';
-              continue;
+      const localPdf = await writeServiceprotokollPdfsLocally(
+        reiseDir,
+        localJobId,
+        fab,
+        technicianId,
+        Object.assign({}, draftPayload, { arbeitsschritte: steps }),
+        pdfLangs,
+      );
+      let savedRel = localPdf.savedRel || [];
+      let localWarning = localPdf.localWarning;
+      let protokollId = 'local:' + Date.now();
+      let deferred = false;
+      let saveData = {};
+
+      const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
+      if (!skipDispoSync && dispoBaseUrl && hasServerJobId) {
+        try {
+          const saveRes = await fetchWithTimeout(
+            dispoBaseUrl + '/dispo_api/api/serviceprotokoll_save.php',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+              body: JSON.stringify(savePayload),
+            },
+            10000,
+          );
+          saveData = await saveRes.json().catch(() => ({}));
+          if (saveRes.ok && saveData.ok && saveData.protokoll_id) {
+            protokollId = saveData.protokoll_id;
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'serviceprotokoll' AND entity_id = ? AND action = 'save'`,
+            ).run(String(localJobId) + ':' + fab);
+            const dispoPdf = await downloadServiceprotokollPdfsFromDispo(
+              dispoBaseUrl,
+              saveData.protokoll_id,
+              technicianId,
+              auth,
+              reiseDir,
+              localJobId,
+              fab,
+              pdfLangs,
+              draftPayload.durchfuehrungsdatum,
+            );
+            if (dispoPdf.savedRel && dispoPdf.savedRel.length) {
+              savedRel = dispoPdf.savedRel;
+              localWarning = dispoPdf.localWarning;
             }
-            const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
-            const suffix = multiLang ? '_' + lang.toUpperCase() : (lang === 'en' ? '_EN' : '');
-            const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
-            writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
-            savedRel.push(relDir + '/' + pdfName);
-          } catch (localErr) {
-            localWarning = (localWarning ? localWarning + ' ' : '') + 'PDF ' + lang.toUpperCase() + ': ' + localErr.message;
+          } else {
+            deferred = true;
+            queueDispoProxyPending(db, 'serviceprotokoll', localJobId + ':' + fab, 'save', savePayload);
+            save();
+            syncWarning = [syncWarning, saveData.error || 'Dispo-Speichern fehlgeschlagen – Sync-Queue.'].filter(Boolean).join('\n');
           }
+        } catch (dispoErr) {
+          deferred = true;
+          queueDispoProxyPending(db, 'serviceprotokoll', localJobId + ':' + fab, 'save', savePayload);
+          save();
+          syncWarning = [syncWarning, 'Dispo nicht erreichbar – Sync-Queue.'].filter(Boolean).join('\n');
         }
-        if (!savedRel.length) {
-          localWarning = (localWarning ? localWarning + ' ' : '') + 'Keine lokale PDF-Kopie erstellt.';
-        }
+      } else {
+        deferred = true;
+        queueDispoProxyPending(db, 'serviceprotokoll', localJobId + ':' + fab, 'save', savePayload);
+        save();
       }
 
       const warning = [syncWarning, saveData.warning, localWarning].filter(Boolean).join('\n') || undefined;
       res.json({
         ok: true,
         jsonOnly: false,
-        protokoll_id: saveData.protokoll_id,
+        protokoll_id: protokollId,
         pdf_path: saveData.pdf_path || null,
         pdf_paths: saveData.pdf_paths || [],
         saved: savedRel,
+        deferred,
         warning,
       });
     } catch (e) {
@@ -7493,17 +8082,20 @@ ORDER BY
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       let messSyncWarning = null;
+      const applyToAnlagenstamm = shouldApplyServiceprotokollToAnlagenstamm(body);
       for (const p of protokolle) {
         if (!p || typeof p !== 'object') continue;
         const fab = String(p.fabrikationsnummer || '').trim();
         if (!fab) continue;
-        try {
-          const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, p.messwerte, p.kopf_dwc);
-          if (messSync && messSync.ok === false) {
-            messSyncWarning = [messSyncWarning, 'FN ' + fab + ': Anlagenstamm (Kraftaufnehmer/DMS/DWC) lokal nicht gespeichert'].filter(Boolean).join('\n');
+        if (applyToAnlagenstamm) {
+          try {
+            const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, p.messwerte, p.kopf_dwc);
+            if (messSync && messSync.ok === false) {
+              messSyncWarning = [messSyncWarning, 'FN ' + fab + ': Anlagenstamm (Kraftaufnehmer/DMS/DWC) lokal nicht gespeichert'].filter(Boolean).join('\n');
+            }
+          } catch (messErr) {
+            messSyncWarning = [messSyncWarning, 'FN ' + fab + ': ' + (messErr.message || 'Anlagenstamm-Sync fehlgeschlagen')].filter(Boolean).join('\n');
           }
-        } catch (messErr) {
-          messSyncWarning = [messSyncWarning, 'FN ' + fab + ': ' + (messErr.message || 'Anlagenstamm-Sync fehlgeschlagen')].filter(Boolean).join('\n');
         }
         writeServiceprotokollDraft(reiseDir, fab, {
           fabrikationsnummer: fab,
@@ -7955,15 +8547,39 @@ ORDER BY
   app.get('/api/textbausteine_list', async (req, res) => {
     const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req);
-    if (!baseUrl) return res.status(400).json({ ok: false, error: 'baseUrl erforderlich.' });
+    const localOnly = wantsLocalOnlyRequest(req.query);
     try {
-      const url = baseUrl + '/dispo_api/api/textbausteine_list.php?technician_id=' + encodeURIComponent(technicianId || 0);
-      const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId || 0) } });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
-      res.json(data);
+      textbausteineLocal.ensureTextbausteineSchema(db);
+      let local = textbausteineLocal.listTextbausteineLocal(db, technicianId);
+      if (localOnly || !baseUrl || !technicianId) {
+        local.data_source = 'local';
+        return res.json(local);
+      }
+      try {
+        const url =
+          baseUrl + '/dispo_api/api/textbausteine_list.php?technician_id=' + encodeURIComponent(technicianId);
+        const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId) } });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.ok && Array.isArray(data.categories)) {
+          textbausteineLocal.mergeTextbausteineFromRemote(db, technicianId, data);
+          save();
+          local = textbausteineLocal.listTextbausteineLocal(db, technicianId);
+          local.data_source = 'dispo';
+          return res.json(local);
+        }
+        local.data_source = local.categories && local.categories.length ? 'local_cache' : 'local_empty';
+        local.warning = (data && data.error) || 'Dispo-Abruf fehlgeschlagen – lokaler Cache.';
+        return res.json(local);
+      } catch (fetchErr) {
+        local.data_source = local.categories && local.categories.length ? 'local_cache' : 'local_empty';
+        if (!local.categories || !local.categories.length) {
+          return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + fetchErr.message });
+        }
+        local.warning = 'Dispo nicht erreichbar – lokaler Cache.';
+        return res.json(local);
+      }
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      res.status(500).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -7971,31 +8587,46 @@ ORDER BY
     const body = req.body || {};
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req) || body.technician_id;
-    if (!baseUrl) return res.status(400).json({ ok: false, error: 'baseUrl erforderlich.' });
     try {
-      const formBody = new URLSearchParams();
-      formBody.append('technician_id', String(technicianId || 0));
-      if (body.id) formBody.append('id', body.id);
-      formBody.append('name', body.name || '');
-      formBody.append('sort_order', body.sort_order || 0);
-      const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_save.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(technicianId || 0) },
-        body: formBody.toString(),
+      const result = textbausteineLocal.saveCategoryLocal(db, technicianId, body);
+      textbausteineLocal.queueTextbausteinePending(db, result.id, 'category_save', {
+        technician_id: technicianId,
+        baseUrl,
+        ...body,
+        id: result.id,
       });
-      const raw = await r.text();
-      let data = {};
-      try { data = JSON.parse(raw); } catch (_) { /* keine JSON-Antwort */ }
-      if (!r.ok) {
-        const err = data.ok === false && data.error ? data.error
-          : r.status === 404 ? 'Dispo-API nicht gefunden (404). Prüfen Sie die Dispo-URL in den Einstellungen.'
-          : r.status >= 500 ? 'Dispo-Serverfehler (HTTP ' + r.status + ').'
-          : 'HTTP ' + r.status + (raw && raw.length < 200 ? ': ' + raw.replace(/\s+/g, ' ').slice(0, 100) : '');
-        return res.status(r.status).json({ ok: false, error: err });
+      save();
+      if (baseUrl && technicianId) {
+        try {
+          const formBody = new URLSearchParams();
+          formBody.append('technician_id', String(technicianId));
+          if (body.id && parseInt(body.id, 10) > 0) formBody.append('id', body.id);
+          formBody.append('name', body.name || '');
+          formBody.append('sort_order', body.sort_order || 0);
+          const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_save.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Technician-Id': String(technicianId),
+            },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok && data.id) {
+            db.prepare(
+              `UPDATE textbausteine_user_categories SET server_id = ? WHERE id = ? AND technician_id = ?`,
+            ).run(data.id, result.id, technicianId);
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'textbausteine' AND entity_id = ? AND action = 'category_save'`,
+            ).run(String(result.id));
+            save();
+            return res.json(Object.assign({}, data, { local_id: result.id }));
+          }
+        } catch (_) { /* offline – pending bleibt */ }
       }
-      res.json(data);
+      res.json(Object.assign({}, result, { deferred: true }));
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      res.status(400).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -8003,21 +8634,41 @@ ORDER BY
     const body = req.body || {};
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req) || body.technician_id;
-    if (!baseUrl || !body.id) return res.status(400).json({ ok: false, error: 'baseUrl und id erforderlich.' });
+    if (!body.id) return res.status(400).json({ ok: false, error: 'id erforderlich.' });
     try {
-      const formBody = new URLSearchParams();
-      formBody.append('id', body.id);
-      formBody.append('technician_id', String(technicianId || 0));
-      const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_delete.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(technicianId || 0) },
-        body: formBody.toString(),
+      textbausteineLocal.deleteCategoryLocal(db, technicianId, body.id);
+      textbausteineLocal.queueTextbausteinePending(db, body.id, 'category_delete', {
+        technician_id: technicianId,
+        baseUrl,
+        id: body.id,
       });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
-      res.json(data);
+      save();
+      if (baseUrl && technicianId) {
+        try {
+          const formBody = new URLSearchParams();
+          formBody.append('id', body.id);
+          formBody.append('technician_id', String(technicianId));
+          const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_delete.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Technician-Id': String(technicianId),
+            },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) {
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'textbausteine' AND entity_id = ? AND action = 'category_delete'`,
+            ).run(String(body.id));
+            save();
+            return res.json(data);
+          }
+        } catch (_) {}
+      }
+      res.json({ ok: true, deferred: true });
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      res.status(400).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -8025,14 +8676,19 @@ ORDER BY
     const body = req.body || {};
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req) || body.technician_id;
-    if (!baseUrl || body.item_id == null) return res.status(400).json({ ok: false, error: 'baseUrl und item_id erforderlich.' });
+    if (!baseUrl || body.item_id == null) {
+      return res.status(400).json({ ok: false, error: 'baseUrl und item_id erforderlich (nur online).' });
+    }
     try {
       const formBody = new URLSearchParams();
       formBody.append('technician_id', String(technicianId || 0));
       formBody.append('item_id', String(body.item_id));
       const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_publish_global.php', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(technicianId || 0) },
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Technician-Id': String(technicianId || 0),
+        },
         body: formBody.toString(),
       });
       const data = await r.json().catch(() => ({}));
@@ -8047,44 +8703,90 @@ ORDER BY
     const body = req.body || {};
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req) || body.technician_id;
-    if (!baseUrl || !body.category_id || body.text === undefined) return res.status(400).json({ ok: false, error: 'baseUrl, category_id und text erforderlich.' });
+    if (!body.category_id || body.text === undefined) {
+      return res.status(400).json({ ok: false, error: 'category_id und text erforderlich.' });
+    }
     try {
-      const formBody = new URLSearchParams();
-      formBody.append('technician_id', String(technicianId || 0));
-      if (body.id) formBody.append('id', body.id);
-      formBody.append('category_id', body.category_id);
-      formBody.append('text', body.text);
-      formBody.append('sort_order', body.sort_order || 0);
-      const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_save.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(technicianId || 0) },
-        body: formBody.toString(),
+      const result = textbausteineLocal.saveItemLocal(db, technicianId, body);
+      textbausteineLocal.queueTextbausteinePending(db, result.id, 'item_save', {
+        technician_id: technicianId,
+        baseUrl,
+        ...body,
+        id: result.id,
       });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
-      res.json(data);
+      save();
+      if (baseUrl && technicianId) {
+        try {
+          const formBody = new URLSearchParams();
+          formBody.append('technician_id', String(technicianId));
+          if (body.id && parseInt(body.id, 10) > 0) formBody.append('id', body.id);
+          formBody.append('category_id', body.category_id);
+          formBody.append('text', body.text);
+          formBody.append('sort_order', body.sort_order || 0);
+          const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_save.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Technician-Id': String(technicianId),
+            },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok && data.id) {
+            db.prepare(`UPDATE textbausteine_user SET server_id = ? WHERE id = ? AND technician_id = ?`).run(
+              data.id,
+              result.id,
+              technicianId,
+            );
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'textbausteine' AND entity_id = ? AND action = 'item_save'`,
+            ).run(String(result.id));
+            save();
+            return res.json(Object.assign({}, data, { local_id: result.id }));
+          }
+        } catch (_) {}
+      }
+      res.json(Object.assign({}, result, { deferred: true }));
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      res.status(400).json({ ok: false, error: e.message || String(e) });
     }
   });
 
   app.post('/api/textbausteine_delete', express.json(), async (req, res) => {
     const body = req.body || {};
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
-    if (!baseUrl || !body.id) return res.status(400).json({ ok: false, error: 'baseUrl und id erforderlich.' });
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    if (!body.id) return res.status(400).json({ ok: false, error: 'id erforderlich.' });
     try {
-      const formBody = new URLSearchParams();
-      formBody.append('id', body.id);
-      const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_delete.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formBody.toString(),
+      textbausteineLocal.deleteItemLocal(db, technicianId, body.id);
+      textbausteineLocal.queueTextbausteinePending(db, body.id, 'item_delete', {
+        technician_id: technicianId,
+        baseUrl,
+        id: body.id,
       });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
-      res.json(data);
+      save();
+      if (baseUrl) {
+        try {
+          const formBody = new URLSearchParams();
+          formBody.append('id', body.id);
+          const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_delete.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) {
+            db.prepare(
+              `DELETE FROM pending_changes WHERE entity_type = 'textbausteine' AND entity_id = ? AND action = 'item_delete'`,
+            ).run(String(body.id));
+            save();
+            return res.json(data);
+          }
+        } catch (_) {}
+      }
+      res.json({ ok: true, deferred: true });
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      res.status(400).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -9286,6 +9988,14 @@ ORDER BY
           await syncProtokollTemplates(base);
         } catch (tplErr) {
           console.warn('Protokoll-Vorlagen Sync fehlgeschlagen:', tplErr.message);
+        }
+        try {
+          await dbLock.runWithDbLock(async () => {
+            await pullTextbausteineFromDispo(base, technicianId, db, auth);
+            save();
+          });
+        } catch (tbErr) {
+          console.warn('[sync_pull] textbausteine:', tbErr && tbErr.message ? tbErr.message : tbErr);
         }
         await dbLock.runWithDbLock(async () => {
           setProgress('sync_pull', 6, 8, 'Projektordner (Änderungen) …');
@@ -10744,8 +11454,11 @@ ORDER BY
     const baseUrl = (req.query.baseUrl || req.query.base_url || '').toString().trim().replace(/\/$/, '');
     const start = (req.query.start || '').toString().trim();
     const end = (req.query.end || '').toString().trim();
-    if (!baseUrl || !start || !end) {
-      return res.status(400).json({ ok: false, error: 'baseUrl, start und end erforderlich.' });
+    if (!start || !end) {
+      return res.status(400).json({ ok: false, error: 'start und end erforderlich.' });
+    }
+    if (!baseUrl) {
+      return res.redirect(307, `/api/calendar_cached?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
     }
     try {
       const r = await fetch(`${baseUrl}/api/calendar.php?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
@@ -10753,6 +11466,9 @@ ORDER BY
       const data = await r.json();
       res.json(data);
     } catch (e) {
+      if (isLikelyOfflineSyncError(e)) {
+        return res.redirect(307, `/api/calendar_cached?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+      }
       res.status(500).json({ ok: false, error: e.message });
     }
   });
@@ -10761,8 +11477,16 @@ ORDER BY
     const baseUrl = (rawUrl || '').toString().trim().replace(/\/$/, '');
     const s = (start || '').toString().trim();
     const e = (end || '').toString().trim();
-    if (!baseUrl || !s || !e) {
-      return res.status(400).json({ ok: false, error: 'baseUrl, start und end erforderlich.' });
+    if (!s || !e) {
+      return res.status(400).json({ ok: false, error: 'start und end erforderlich.' });
+    }
+    if (!baseUrl) {
+      try {
+        const payload = readCalendarCachePayload(db, s, e, getTechnicianId(req));
+        return res.json(Object.assign({ ok: true, data_source: 'cache' }, payload));
+      } catch (cacheErr) {
+        return res.status(503).json({ ok: false, error: cacheErr.message || 'Kein Kalender-Cache' });
+      }
     }
     try {
       const auth = authHeaderFromCredentials(serverUsername, serverPassword);
@@ -10800,6 +11524,12 @@ ORDER BY
 
       res.json(data);
     } catch (err) {
+      if (isLikelyOfflineSyncError(err)) {
+        try {
+          const payload = readCalendarCachePayload(db, s, e, getTechnicianId(req));
+          return res.json(Object.assign({ ok: true, data_source: 'cache' }, payload));
+        } catch (_) {}
+      }
       res.status(500).json({ ok: false, error: err.message });
     }
   });
@@ -10815,49 +11545,8 @@ ORDER BY
         const pruned = reconcileCalendarCacheAbsencesForTechnician(db, technicianId);
         if (pruned > 0) save();
       }
-      const technicians = db.prepare('SELECT technician_id AS id, name, color FROM calendar_cache_technicians ORDER BY technician_id').all();
-      const calTechId = technicianId || null;
-      const jobs = calTechId
-        ? db
-            .prepare(
-              `
-        SELECT
-          c.server_job_id AS id, c.technician_id, c.customer_name, c.job_number, c.city, c.country, c.status,
-          c.start_datetime, c.end_datetime, c.technician_name, c.technician_color,
-          c.montage_verrechnet, c.billing_travel_complete, c.date_not_fixed,
-          (
-            SELECT j.id FROM jobs j
-            INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
-            WHERE CAST(j.server_id AS TEXT) = CAST(c.server_job_id AS TEXT)
-            LIMIT 1
-          ) AS local_job_id
-        FROM calendar_cache_jobs c
-        WHERE c.end_datetime >= ? AND c.start_datetime <= ?
-      `,
-            )
-            .all(calTechId, start + ' 00:00:00', end + ' 23:59:59')
-        : db
-            .prepare(
-              `
-        SELECT
-          server_job_id AS id, technician_id, customer_name, job_number, city, country, status,
-          start_datetime, end_datetime, technician_name, technician_color,
-          montage_verrechnet, billing_travel_complete, date_not_fixed,
-          NULL AS local_job_id
-        FROM calendar_cache_jobs
-        WHERE end_datetime >= ? AND start_datetime <= ?
-      `,
-            )
-            .all(start + ' 00:00:00', end + ' 23:59:59');
-      const absencesRaw = db.prepare(`
-        SELECT
-          server_absence_id AS id, technician_id, type, comment, start_datetime, end_datetime,
-          technician_name, technician_color
-        FROM calendar_cache_absences
-        WHERE end_datetime >= ? AND start_datetime <= ?
-      `).all(start + ' 00:00:00', end + ' 23:59:59');
-      const absences = absencesRaw.filter((a) => !isAbsenceExpiredByEnd(a.end_datetime));
-      return res.json({ ok: true, technicians, jobs, absences });
+      const payload = readCalendarCachePayload(db, start, end, technicianId);
+      return res.json(Object.assign({ ok: true }, payload));
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
@@ -11541,6 +12230,148 @@ function fabCacheLookupKeys(fab) {
 
 function readAnlagenstammTreeCache(db, fab) {
   return readAnlagenstammTreeCacheRow(db, fab);
+}
+
+function queryJobsOpenLocalRows(dbConn, technicianId, query) {
+  const q = query && typeof query === 'object' ? query : {};
+  const includeErledigt = (q.include_erledigt || '').toString() === '1';
+  const filterNoDate = (q.filter_no_date || '').toString() === '1';
+  const filterNoTechnician = (q.filter_no_technician || '').toString() === '1';
+  const whereParts = [];
+  if (!includeErledigt) {
+    whereParts.push("j.status NOT IN ('erledigt','abgerechnet')");
+  }
+  if (filterNoDate) {
+    whereParts.push(
+      "((j.start_datetime IS NULL AND j.end_datetime IS NULL) OR (date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01'))",
+    );
+  }
+  if (filterNoTechnician) {
+    whereParts.push('NOT EXISTS (SELECT 1 FROM job_technicians jt3 WHERE jt3.job_id = j.id)');
+  }
+  const whereSql = whereParts.length ? whereParts.join(' AND ') : '1=1';
+  const sql = `
+SELECT
+  j.id,
+  j.server_id,
+  j.job_number,
+  j.status,
+  c.name AS customer_name,
+  ja.endkunde,
+  ja.street,
+  ja.house_number,
+  ja.zip,
+  ja.city,
+  ja.country,
+  ja.address_extra_1,
+  ja.address_extra_2,
+  j.start_datetime AS start_datetime_raw,
+  j.end_datetime AS end_datetime_raw,
+  CASE
+    WHEN date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01' THEN NULL
+    ELSE substr(j.start_datetime, 1, 10)
+  END AS start_datetime,
+  CASE
+    WHEN date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01' THEN NULL
+    ELSE substr(j.end_datetime, 1, 10)
+  END AS end_datetime,
+  j.required_technicians,
+  (
+    SELECT COUNT(DISTINCT jt2.technician_id)
+    FROM job_technicians jt2
+    WHERE jt2.job_id = j.id
+  ) AS assigned_count
+FROM jobs j
+JOIN customers c ON c.id = j.customer_id
+LEFT JOIN job_addresses ja ON ja.job_id = j.id
+WHERE (${whereSql})
+  AND (
+    EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+    OR NOT EXISTS (SELECT 1 FROM job_technicians jt0 WHERE jt0.job_id = j.id)
+  )
+ORDER BY
+  (CASE WHEN ((j.start_datetime IS NULL AND j.end_datetime IS NULL) OR (date(j.start_datetime) = '1000-01-01' AND date(j.end_datetime) = '1000-01-01')) THEN 1 ELSE 0 END) ASC,
+  COALESCE(j.start_datetime, j.end_datetime) ASC,
+  j.id ASC`;
+  return dbConn.prepare(sql).all(technicianId);
+}
+
+async function pullTextbausteineFromDispo(baseUrl, technicianId, dbConn, authHeader) {
+  const base = String(baseUrl || '').trim().replace(/\/$/, '');
+  const tid = parseInt(technicianId, 10);
+  if (!base || !tid) return { ok: false, skipped: true };
+  const url = base + '/dispo_api/api/textbausteine_list.php?technician_id=' + encodeURIComponent(tid);
+  const r = await fetch(url, {
+    headers: Object.assign({ 'X-Technician-Id': String(tid) }, authHeader || {}),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.ok) {
+    throw new Error((data && data.error) || r.statusText || 'textbausteine_list fehlgeschlagen');
+  }
+  textbausteineLocal.mergeTextbausteineFromRemote(dbConn, tid, data);
+  return { ok: true, categories: (data.categories || []).length };
+}
+
+function queueDispoProxyPending(dbConn, entityType, entityId, action, payload) {
+  dbConn
+    .prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
+    .run(entityType, String(entityId), action, JSON.stringify(payload));
+}
+
+function readCalendarCachePayload(dbConn, start, end, technicianId) {
+  const s = String(start || '').trim();
+  const e = String(end || '').trim();
+  if (!s || !e) throw new Error('start und end erforderlich.');
+  const calTechId = technicianId || null;
+  if (calTechId) reconcileCalendarCacheAbsencesForTechnician(dbConn, calTechId);
+  const technicians = dbConn
+    .prepare('SELECT technician_id AS id, name, color FROM calendar_cache_technicians ORDER BY technician_id')
+    .all();
+  const jobs = calTechId
+    ? dbConn
+        .prepare(
+          `
+        SELECT
+          c.server_job_id AS id, c.technician_id, c.customer_name, c.job_number, c.city, c.country, c.status,
+          c.start_datetime, c.end_datetime, c.technician_name, c.technician_color,
+          c.montage_verrechnet, c.billing_travel_complete, c.date_not_fixed,
+          (
+            SELECT j.id FROM jobs j
+            INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+            WHERE CAST(j.server_id AS TEXT) = CAST(c.server_job_id AS TEXT)
+            LIMIT 1
+          ) AS local_job_id
+        FROM calendar_cache_jobs c
+        WHERE c.end_datetime >= ? AND c.start_datetime <= ?
+      `,
+        )
+        .all(calTechId, s + ' 00:00:00', e + ' 23:59:59')
+    : dbConn
+        .prepare(
+          `
+        SELECT
+          server_job_id AS id, technician_id, customer_name, job_number, city, country, status,
+          start_datetime, end_datetime, technician_name, technician_color,
+          montage_verrechnet, billing_travel_complete, date_not_fixed,
+          NULL AS local_job_id
+        FROM calendar_cache_jobs
+        WHERE end_datetime >= ? AND start_datetime <= ?
+      `,
+        )
+        .all(s + ' 00:00:00', e + ' 23:59:59');
+  const absencesRaw = dbConn
+    .prepare(
+      `
+        SELECT
+          server_absence_id AS id, technician_id, type, comment, start_datetime, end_datetime,
+          technician_name, technician_color
+        FROM calendar_cache_absences
+        WHERE end_datetime >= ? AND start_datetime <= ?
+      `,
+    )
+    .all(s + ' 00:00:00', e + ' 23:59:59');
+  const absences = absencesRaw.filter((a) => !isAbsenceExpiredByEnd(a.end_datetime));
+  return { technicians, jobs, absences };
 }
 
 function readAnlagenstammRootFolderName(db, fab) {
@@ -12577,7 +13408,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
     ...(authHeader || {}),
   });
   for (const p of pending) {
+    let handled = false;
     if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address' || p.action === 'hotel_selection' || p.action === 'job_address' || p.action === 'job_contacts')) {
+      handled = true;
       let job = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(p.entity_id);
       if (!job) job = db.prepare('SELECT id, server_id FROM jobs WHERE server_id = ?').get(p.entity_id);
       const hasServerId = job && job.server_id != null && String(job.server_id).trim() !== '';
@@ -12601,9 +13434,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           job_gefunden: true,
           job_id_lokal: job.id,
           job_server_id: job.server_id,
-          hinweis: 'Lokaler Auftrag hat keine Dispo-Verknüpfung (server_id). Nach Pull prüfen: gleiche Auftragsnummer/Kunde+Datum wie in der Dispo?'
+          hinweis:
+            'Lokaler Auftrag hat keine Dispo-Verknüpfung (server_id). Eintrag bleibt in der Queue bis nach Sync-Pull.',
         });
-        throw new Error('Auftrag (lokal) ist noch nicht mit der Dispo verknüpft. Bitte zuerst „Von Dispo laden“ (Sync-Pull) ausführen, dann erneut Sync pushen.');
+        continue;
       }
       // Techniker-ID aus job_technicians verwenden (Auftrag ist diesem Techniker zugeordnet), nicht aus Einstellungen – sonst meldet Dispo „nicht zugeordnet“
       const techRow = job && job.id != null ? db.prepare('SELECT technician_id FROM job_technicians WHERE job_id = ? LIMIT 1').get(job.id) : null;
@@ -12683,6 +13517,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       }
     }
     if (p.entity_type === 'absence') {
+      handled = true;
       if (p.action === 'create') {
         const payload = JSON.parse(p.payload || '{}');
         const r = await fetch(`${base}/api/absence.php?technician_id=${technicianId}`, { method: 'POST', headers: header, body: JSON.stringify({ ...payload, technician_id: technicianId }) });
@@ -12690,19 +13525,55 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           const result = await r.json();
           if (result.id) db.prepare('UPDATE absences SET server_id = ? WHERE id = ?').run(result.id, p.entity_id);
           db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        } else {
+          let errBody = null;
+          try {
+            errBody = await r.json();
+          } catch (_) {}
+          logSyncPushError({
+            reason: 'absence_create',
+            status: r.status,
+            body: errBody,
+            pending_id: p.id,
+            entity_id: p.entity_id,
+          });
         }
       } else if (p.action === 'update') {
         const row = db.prepare('SELECT server_id FROM absences WHERE id = ?').get(p.entity_id);
         const serverAbsenceId = (row && row.server_id) ? row.server_id : p.entity_id;
         const payload = JSON.parse(p.payload || '{}');
         const r = await fetch(`${base}/api/absence.php?technician_id=${technicianId}`, { method: 'PATCH', headers: header, body: JSON.stringify({ id: serverAbsenceId, ...payload }) });
-        if (r.ok) db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        if (r.ok) {
+          db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        } else {
+          let errBody = null;
+          try {
+            errBody = await r.json();
+          } catch (_) {}
+          logSyncPushError({
+            reason: 'absence_update',
+            status: r.status,
+            body: errBody,
+            pending_id: p.id,
+            entity_id: p.entity_id,
+          });
+        }
       } else if (p.action === 'delete') {
         const r = await fetch(`${base}/api/absence.php?id=${p.entity_id}&technician_id=${technicianId}`, { method: 'DELETE' });
-        if (r.ok) db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        if (r.ok) {
+          db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        } else {
+          logSyncPushError({
+            reason: 'absence_delete',
+            status: r.status,
+            pending_id: p.id,
+            entity_id: p.entity_id,
+          });
+        }
       }
     }
     if (p.entity_type === 'anlagenstamm' && p.action === 'save') {
+      handled = true;
       const payloadRaw = JSON.parse(p.payload || '{}');
       const techId =
         parseInt(String(payloadRaw.technician_id ?? payloadRaw.technicianId ?? technicianId), 10) ||
@@ -12772,6 +13643,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       }
     }
     if (p.entity_type === 'anlagenstamm' && p.action === 'delete') {
+      handled = true;
       const payloadRaw = JSON.parse(p.payload || '{}');
       const techId =
         parseInt(String(payloadRaw.technician_id ?? payloadRaw.technicianId ?? technicianId), 10) ||
@@ -12821,6 +13693,206 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         continue;
       }
+    }
+    if (p.entity_type === 'textbausteine') {
+      handled = true;
+      const payloadRaw = JSON.parse(p.payload || '{}');
+      const techId =
+        parseInt(String(payloadRaw.technician_id ?? payloadRaw.technicianId ?? technicianId), 10) || technicianId;
+      const tbBase = String(payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      if (!tbBase || !techId) {
+        logSyncPushError({ reason: 'textbausteine_push_skip', pending_id: p.id, error: 'baseUrl/technician fehlt' });
+        continue;
+      }
+      try {
+        if (p.action === 'category_save') {
+          const formBody = new URLSearchParams();
+          formBody.append('technician_id', String(techId));
+          if (payloadRaw.id && parseInt(payloadRaw.id, 10) > 0) formBody.append('id', payloadRaw.id);
+          formBody.append('name', payloadRaw.name || '');
+          formBody.append('sort_order', payloadRaw.sort_order || 0);
+          const r = await fetch(tbBase + '/dispo_api/api/textbausteine_category_save.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+          if (data.id && parseInt(p.entity_id, 10) < 0) {
+            db.prepare(`UPDATE textbausteine_user_categories SET server_id = ? WHERE id = ? AND technician_id = ?`).run(
+              data.id,
+              parseInt(p.entity_id, 10),
+              techId,
+            );
+          }
+        } else if (p.action === 'category_delete') {
+          const formBody = new URLSearchParams();
+          formBody.append('id', payloadRaw.id);
+          formBody.append('technician_id', String(techId));
+          const r = await fetch(tbBase + '/dispo_api/api/textbausteine_category_delete.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+        } else if (p.action === 'item_save') {
+          const formBody = new URLSearchParams();
+          formBody.append('technician_id', String(techId));
+          if (payloadRaw.id && parseInt(payloadRaw.id, 10) > 0) formBody.append('id', payloadRaw.id);
+          formBody.append('category_id', payloadRaw.category_id);
+          formBody.append('text', payloadRaw.text);
+          formBody.append('sort_order', payloadRaw.sort_order || 0);
+          const r = await fetch(tbBase + '/dispo_api/api/textbausteine_save.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+          if (data.id && parseInt(p.entity_id, 10) < 0) {
+            db.prepare(`UPDATE textbausteine_user SET server_id = ? WHERE id = ? AND technician_id = ?`).run(
+              data.id,
+              parseInt(p.entity_id, 10),
+              techId,
+            );
+          }
+        } else if (p.action === 'item_delete') {
+          const formBody = new URLSearchParams();
+          formBody.append('id', payloadRaw.id);
+          const r = await fetch(tbBase + '/dispo_api/api/textbausteine_delete.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...header },
+            body: formBody.toString(),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+        } else {
+          continue;
+        }
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        logSyncPushError({
+          reason: 'textbausteine_push',
+          action: p.action,
+          error: e && e.message ? e.message : String(e),
+          pending_id: p.id,
+        });
+        if (!isLikelyOfflineSyncError(e)) throw e;
+      }
+    }
+    if (p.entity_type === 'serviceprotokoll' && p.action === 'save') {
+      handled = true;
+      const payloadRaw = JSON.parse(p.payload || '{}');
+      const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      const techId =
+        parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
+      if (!tbBase || !techId) {
+        logSyncPushError({ reason: 'serviceprotokoll_push_skip', pending_id: p.id });
+        continue;
+      }
+      try {
+        const jobId = parseInt(payloadRaw.job_id, 10);
+        if (!Number.isFinite(jobId) || jobId <= 0) continue;
+        const r = await fetch(tbBase + '/dispo_api/api/serviceprotokoll_save.php', {
+          method: 'POST',
+          headers: header,
+          body: JSON.stringify(payloadRaw),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        logSyncPushError({ reason: 'serviceprotokoll_push', error: e.message, pending_id: p.id });
+        if (!isLikelyOfflineSyncError(e)) throw e;
+      }
+    }
+    if (p.entity_type === 'kontrollwiegung' && p.action === 'save') {
+      handled = true;
+      const payloadRaw = JSON.parse(p.payload || '{}');
+      const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      const techId =
+        parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
+      if (!tbBase || !techId) {
+        logSyncPushError({ reason: 'kontrollwiegung_push_skip', pending_id: p.id });
+        continue;
+      }
+      try {
+        const r = await fetch(tbBase + '/dispo_api/api/kontrollwiegungsprotokoll_save.php', {
+          method: 'POST',
+          headers: header,
+          body: JSON.stringify(payloadRaw),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        logSyncPushError({ reason: 'kontrollwiegung_push', error: e.message, pending_id: p.id });
+        if (!isLikelyOfflineSyncError(e)) throw e;
+      }
+    }
+    if (p.entity_type === 'signature' && p.action === 'submit') {
+      handled = true;
+      const payloadRaw = JSON.parse(p.payload || '{}');
+      const tbBase = String(payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      const techId =
+        parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
+      if (!tbBase || !techId) continue;
+      try {
+        const authSig = authHeaderFromCredentials(payloadRaw.serverUsername, payloadRaw.serverPassword);
+        const r = await fetch(tbBase + '/dispo_api/api/signature_submit.php?technician_id=' + encodeURIComponent(techId), {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json' }, authSig || {}, header),
+          body: JSON.stringify(payloadRaw.payload || {}),
+        });
+        if (!r.ok) {
+          const errText = await r.text();
+          throw new Error(errText || r.statusText);
+        }
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        logSyncPushError({ reason: 'signature_push', error: e.message, pending_id: p.id });
+        if (!isLikelyOfflineSyncError(e)) throw e;
+      }
+    }
+    if (p.entity_type === 'rams') {
+      handled = true;
+      const payloadRaw = JSON.parse(p.payload || '{}');
+      const tbBase = String(payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      if (!tbBase || !payloadRaw.action) continue;
+      try {
+        const qs = new URLSearchParams();
+        qs.set('action', String(payloadRaw.action));
+        const qp = payloadRaw.queryParams && typeof payloadRaw.queryParams === 'object' ? payloadRaw.queryParams : {};
+        Object.keys(qp).forEach((k) => {
+          if (qp[k] !== undefined && qp[k] !== null) qs.set(k, String(qp[k]));
+        });
+        const method = String(payloadRaw.method || 'POST').toUpperCase();
+        const url = `${tbBase}/api/mobile/rams.php?${qs.toString()}`;
+        const opts = { method, headers: header };
+        if (method !== 'GET' && method !== 'HEAD') {
+          opts.body = JSON.stringify(payloadRaw.payload && typeof payloadRaw.payload === 'object' ? payloadRaw.payload : {});
+        }
+        const r = await fetch(url, opts);
+        if (!r.ok) {
+          const errText = await r.text();
+          throw new Error(errText || r.statusText);
+        }
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        logSyncPushError({ reason: 'rams_push', error: e.message, pending_id: p.id, action: payloadRaw.action });
+        if (!isLikelyOfflineSyncError(e)) throw e;
+      }
+    }
+    if (!handled) {
+      logSyncPushError({
+        reason: 'pending_unbekannt',
+        entity_type: p.entity_type,
+        action: p.action,
+        pending_id: p.id,
+        entity_id: p.entity_id,
+        hinweis: 'Kein pushToServer-Handler — Eintrag bleibt in der Queue.',
+      });
     }
   }
   const pendingRequests = db.prepare('SELECT id, start_datetime, end_datetime, type, comment FROM absence_requests WHERE technician_id = ? AND status = ? AND (server_id IS NULL OR server_id = \'\')').all(technicianId, 'pending');

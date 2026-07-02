@@ -60,10 +60,14 @@ export function ServiceProtocolPage() {
   };
 
   const handleFabChange = (fab: string) => {
-    patchForm({ activeFab: fab });
     if (embedded) {
+      setBridgeState((prev) =>
+        mergeBridgePayload(prev, { form: { ...prev.form, activeFab: fab } }),
+      );
       window.parent.postMessage({ type: 'SP_FAB_CHANGE', fab }, '*');
+      return;
     }
+    patchForm({ activeFab: fab });
   };
 
   return (
@@ -76,7 +80,16 @@ export function ServiceProtocolPage() {
             <SpIcon name="ClipboardList" className="h-8 w-8 shrink-0" />
             <h1 className="text-2xl font-bold text-[#111827] md:text-[1.75rem]">Serviceprotokoll</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-kukla-border bg-white px-3 py-2 text-sm text-[#111827] shadow-card">
+              <input
+                type="checkbox"
+                className="h-4 w-4 shrink-0 accent-[var(--accent,#2d6a4f)]"
+                checked={!!form.applyToAnlagenstamm}
+                onChange={(e) => patchForm({ applyToAnlagenstamm: e.target.checked })}
+              />
+              <span>In Anlagenstamm übernehmen</span>
+            </label>
             <button type="button" className="sp-btn-primary" onClick={() => sendAction('stickySave')}>
               <SpIcon name="Save" className="h-4 w-4" />
               Speichern

@@ -1233,16 +1233,98 @@
     }
   }
 
-  function validateAcceptJobPrerequisites(localJobId) {
+  function validateAcceptJobPrerequisites(localJobId, opts) {
+    opts = opts || {};
     if (!localJobId) return 'Bitte einen Auftrag wählen.';
     if (!getTechId()) return 'Bitte Monteur-ID in Einstellungen eintragen.';
-    if (!(getDispoBaseUrl() || '').trim()) return 'Bitte Dispo-URL in Einstellungen eintragen.';
-    if (!getDispoUsername() || !getDispoPassword()) {
-      return 'Dispo-Zugangsdaten fehlen: Benutzername und Passwort in den Einstellungen eintragen.';
+    if (!opts.allowOffline) {
+      if (!(getDispoBaseUrl() || '').trim()) return 'Bitte Dispo-URL in Einstellungen eintragen.';
+      if (!getDispoUsername() || !getDispoPassword()) {
+        return 'Dispo-Zugangsdaten fehlen: Benutzername und Passwort in den Einstellungen eintragen.';
+      }
     }
     var snap = getDienstreiseJobSnapshotByLocalId(localJobId);
     if (!jobCanAcceptJob(snap)) return 'Auftrag kann nur im Status Angelegt oder Zugeteilt angenommen werden.';
     return null;
+  }
+
+  function shouldPreferOfflineAccept() {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+    if (typeof connectionUiState === 'string' && (connectionUiState === 'offline' || connectionUiState === 'local')) {
+      return true;
+    }
+    if (!(getDispoBaseUrl() || '').trim()) return true;
+    if (!getDispoUsername() || !getDispoPassword()) return true;
+    return false;
+  }
+
+  function handleAcceptJobOfflineFinished(localJobId, data, hint) {
+    if (data && data.ok) {
+      var doneMsg = 'Auftrag lokal angenommen.';
+      if (data.hint) doneMsg += ' ' + String(data.hint);
+      if (hint) hint.textContent = doneMsg;
+      if (typeof showToast === 'function') showToast(doneMsg);
+      if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
+      if (typeof loadDienstreiseExplorer === 'function') {
+        if (getDienstreiseExplorerJobId('start') == localJobId) {
+          loadDienstreiseExplorer(localJobId, startExplorerSubpath, 'start');
+        }
+        if (getDienstreiseExplorerJobId('modal') == localJobId) {
+          loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath, 'modal');
+        }
+      }
+      if (jobDetailsJobId == localJobId && typeof openJobDetailsModal === 'function') {
+        openJobDetailsModal(localJobId);
+      }
+      setTimeout(function () {
+        var x = document.getElementById('acceptJobHint');
+        if (x) x.textContent = '';
+      }, 6000);
+    } else {
+      if (hint) hint.textContent = (data && data.error) || 'Offline-Annahme fehlgeschlagen.';
+    }
+  }
+
+  function runAcceptJobOffline(localJobId, triggerButton, acceptOpts) {
+    if (acceptJobStreamBusy) return;
+    var errMsg = validateAcceptJobPrerequisites(localJobId, { allowOffline: true });
+    var hint = document.getElementById('acceptJobHint');
+    if (errMsg) {
+      if (hint) hint.textContent = errMsg;
+      return;
+    }
+    acceptJobStreamBusy = true;
+    acceptJobActiveLocalJobId = localJobId;
+    acceptJobActiveButton = triggerButton && triggerButton.nodeType === 1 ? triggerButton : null;
+    if (hint) hint.textContent = 'Nehme Auftrag offline an …';
+    applyAcceptJobStreamBusyUi();
+    var body = {
+      job_id: localJobId,
+      technician_id: getTechId(),
+      offline_paths: acceptOpts && Object.prototype.hasOwnProperty.call(acceptOpts, 'offline_paths') ? acceptOpts.offline_paths : {},
+      fab_map: acceptOpts && acceptOpts.fab_map ? acceptOpts.fab_map : undefined,
+      montage_folder_name: acceptOpts && acceptOpts.montage_folder_name ? acceptOpts.montage_folder_name : undefined
+    };
+    fetch(API_BASE + '/api/dienstreise/accept_offline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+      body: JSON.stringify(body)
+    })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok || !data.ok) throw new Error((data && data.error) || 'Fehler ' + r.status);
+          return data;
+        });
+      })
+      .then(function (data) {
+        handleAcceptJobOfflineFinished(localJobId, data, hint);
+      })
+      .catch(function (err) {
+        if (hint) hint.textContent = err && err.message ? err.message : 'Offline-Annahme fehlgeschlagen.';
+      })
+      .finally(function () {
+        finishAcceptJobStreamUi();
+      });
   }
 
   var ACCEPT_OFFLINE_LS_KEY = 'kukla_accept_offline_paths_v1';
@@ -1692,16 +1774,20 @@
   }
 
   function openAcceptOfflineModal(localJobId, triggerButton) {
-    var errMsg = validateAcceptJobPrerequisites(localJobId);
+    var errMsg = validateAcceptJobPrerequisites(localJobId, { allowOffline: true });
     var hint = document.getElementById('acceptJobHint');
     if (errMsg) {
       if (hint) hint.textContent = errMsg;
       return;
     }
+    if (shouldPreferOfflineAccept()) {
+      runAcceptJobOffline(localJobId, triggerButton, { offline_paths: {} });
+      return;
+    }
     var modal = document.getElementById('modalAcceptOffline');
     var bodyEl = document.getElementById('acceptOfflineBody');
     if (!modal || !bodyEl) {
-      runAcceptJobStream(localJobId, triggerButton, { offline_paths: [] });
+      runAcceptJobOffline(localJobId, triggerButton, { offline_paths: {} });
       return;
     }
     clearAcceptOfflinePreviewFetch();
@@ -7119,11 +7205,16 @@
       saveRememberedOfflinePaths(paths);
       var pending = acceptOfflinePending;
       closeAcceptOfflineModal();
-      runAcceptJobStream(pending.localJobId, pending.triggerButton, {
+      var acceptOpts = {
         offline_paths: paths,
         fab_map: pending.fab_map,
-        montage_folder_name: pending.montage_folder_name,
-      });
+        montage_folder_name: pending.montage_folder_name
+      };
+      if (shouldPreferOfflineAccept() || pending.previewFailed) {
+        runAcceptJobOffline(pending.localJobId, pending.triggerButton, acceptOpts);
+      } else {
+        runAcceptJobStream(pending.localJobId, pending.triggerButton, acceptOpts);
+      }
     });
   }
   var modalAcceptOffline = document.getElementById('modalAcceptOffline');
@@ -11684,25 +11775,20 @@
       var listEl = document.getElementById('montageberichtTbList');
       var categorySelect = document.getElementById('montageberichtTbCategory');
       if (!listEl) return;
-      if (preferLocalProjekteNeuOnly()) {
-        montageberichtTbCategories = [];
-        if (categorySelect) categorySelect.innerHTML = '<option value="">– Kategorie –</option>';
-        listEl.innerHTML =
-          '<span class="muted" style="font-size:0.8rem">Offline — Textbausteine nach Sync verfügbar</span>';
-        return;
-      }
-      var baseUrl = getDispoBaseUrl();
-      if (!baseUrl) {
-        listEl.innerHTML = '<span class="muted" style="font-size:0.8rem">Dispo-URL in Einstellungen eintragen</span>';
-        return;
-      }
+      var baseUrl = (getDispoBaseUrl() || '').trim();
       try {
-        var r = await fetch(API_BASE + '/api/textbausteine_list?base_url=' + encodeURIComponent(baseUrl) + '&technician_id=' + getTechId(), { headers: { 'X-Technician-Id': String(getTechId()) } });
+        var listUrl = API_BASE + '/api/textbausteine_list?technician_id=' + getTechId();
+        if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) {
+          listUrl += '&local_only=1';
+        } else if (baseUrl) {
+          listUrl += '&base_url=' + encodeURIComponent(baseUrl);
+        }
+        var r = await fetch(listUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
         var data = await r.json();
         if (!data.ok || !data.categories) {
           montageberichtTbCategories = [];
           if (categorySelect) categorySelect.innerHTML = '<option value="">– Kategorie –</option>';
-          listEl.innerHTML = '<span class="muted" style="font-size:0.8rem">Keine Textbausteine</span>';
+          listEl.innerHTML = '<span class="muted" style="font-size:0.8rem">Keine Textbausteine (lokal leer – nach Sync verfügbar)</span>';
           return;
         }
         montageberichtTbCategories = data.categories;
@@ -12376,6 +12462,9 @@
     var activeFab = '';
     var SP_LAST_JOB_KEY = 'kukla_sp_last_job_id';
     var serviceprotokollJobLoadToken = 0;
+    var serviceprotokollFabLoadToken = 0;
+    var serviceprotokollFormReadyFab = '';
+    var serviceprotokollFabSwitching = false;
     var spSignaturePads = {};
 
     function initSpSignaturePad(canvasId) {
@@ -12621,6 +12710,77 @@
       if (jobSelect) jobSelect.disabled = !!loading;
     }
 
+    function isServiceprotokollFormReadyForFab(fab) {
+      fab = String(fab || '').trim();
+      return fab !== '' && getActiveFab() === fab && serviceprotokollFormReadyFab === fab;
+    }
+
+    function isServiceprotokollApplyToAnlagenstammEnabled() {
+      var el = document.getElementById('serviceprotokollApplyToAnlagenstamm');
+      return !!(el && el.checked);
+    }
+
+    function setServiceprotokollApplyToAnlagenstamm(enabled) {
+      var el = document.getElementById('serviceprotokollApplyToAnlagenstamm');
+      if (el) el.checked = !!enabled;
+    }
+
+    function mergeSavedDraftIntoMemory(fab, body) {
+      fab = String(fab || '').trim();
+      if (!fab || !body) return;
+      if (!serviceprotokollDraftStore.byFab) serviceprotokollDraftStore.byFab = {};
+      var prev = serviceprotokollDraftStore.byFab[fab] || {};
+      serviceprotokollDraftStore.byFab[fab] = Object.assign({}, prev, {
+        fabrikationsnummer: fab,
+        durchfuehrungsdatum: body.durchfuehrungsdatum || prev.durchfuehrungsdatum || '',
+        projekt: body.projekt || prev.projekt || '',
+        arbeitsschritte: Array.isArray(body.arbeitsschritte) ? body.arbeitsschritte : (prev.arbeitsschritte || []),
+        messwerte: body.messwerte && typeof body.messwerte === 'object' ? body.messwerte : (prev.messwerte || {}),
+        bemerkungen: body.bemerkungen != null ? body.bemerkungen : (prev.bemerkungen || ''),
+        kopf_pos_nr: body.kopf_pos_nr != null ? body.kopf_pos_nr : (prev.kopf_pos_nr || ''),
+        kopf_qmax: body.kopf_qmax != null ? body.kopf_qmax : (prev.kopf_qmax || ''),
+        kopf_type: body.kopf_type != null ? body.kopf_type : (prev.kopf_type || ''),
+        kopf_dwc: body.kopf_dwc != null ? body.kopf_dwc : (prev.kopf_dwc || ''),
+        abschluss: body.abschluss && typeof body.abschluss === 'object' ? body.abschluss : (prev.abschluss || {}),
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    function isServiceprotokollFabLoadCurrent(loadToken, fab) {
+      return loadToken === serviceprotokollFabLoadToken && getActiveFab() === String(fab || '').trim();
+    }
+
+    function clearServiceprotokollFabFormShell() {
+      clearKopfFields();
+      clearMesswerteFields();
+      var projEl = document.getElementById('serviceprotokollProjekt');
+      if (projEl) projEl.value = '';
+      var bemEl = document.getElementById('serviceprotokollBemerkungen');
+      if (bemEl) bemEl.value = '';
+      clearAbschlussFields();
+      arbeitsschritte = [];
+      if (stepsContainer) {
+        stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">Fabrikationsnummer wird geladen …</td></tr>';
+      }
+    }
+
+    function anlagenstammRowToKopfAndMess(row) {
+      if (!row) return { kopf: {}, mess: null };
+      return {
+        kopf: {
+          kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
+          kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
+          kopf_type: row.type != null ? String(row.type).trim() : '',
+          kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
+          projekt: row.projekt != null ? String(row.projekt).trim() : '',
+        },
+        mess: {
+          mess_waegezelle_type: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
+          mess_waegezelle_seriennummer: row.dms_nr != null ? String(row.dms_nr).trim() : '',
+        },
+      };
+    }
+
     function getActiveFab() {
       if (activeFab) return activeFab;
       return fabHidden && fabHidden.value ? fabHidden.value.trim() : '';
@@ -12647,7 +12807,42 @@
       });
     }
 
+    function draftPayloadFromCache(fab, cached) {
+      return {
+        fabrikationsnummer: fab,
+        durchfuehrungsdatum: cached.durchfuehrungsdatum || '',
+        projekt: String(cached.projekt || '').trim() || (serviceJobData ? resolveServiceprotokollProjekt(serviceJobData, fab) : ''),
+        arbeitsschritte: Array.isArray(cached.arbeitsschritte) ? cached.arbeitsschritte : [],
+        messwerte: cached.messwerte || {},
+        bemerkungen: cached.bemerkungen || '',
+        kopf_pos_nr: cached.kopf_pos_nr || '',
+        kopf_qmax: cached.kopf_qmax || '',
+        kopf_type: cached.kopf_type || '',
+        kopf_dwc: cached.kopf_dwc || '',
+        abschluss: cached.abschluss || { status: 'geprueft' }
+      };
+    }
+
     function collectDraftPayloadForFab(fab) {
+      fab = String(fab || '').trim();
+      var cached = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fab];
+      if (!isServiceprotokollFormReadyForFab(fab) || getActiveFab() !== fab) {
+        if (cached) return draftPayloadFromCache(fab, cached);
+        var jobKopf = kopfFromJobFabRow(serviceJobData, fab);
+        return {
+          fabrikationsnummer: fab,
+          durchfuehrungsdatum: datumEl ? datumEl.value.trim() : '',
+          projekt: serviceJobData ? resolveServiceprotokollProjekt(serviceJobData, fab) : (jobKopf.projekt || ''),
+          arbeitsschritte: [],
+          messwerte: {},
+          bemerkungen: '',
+          kopf_pos_nr: jobKopf.kopf_pos_nr || '',
+          kopf_qmax: jobKopf.kopf_qmax || '',
+          kopf_type: jobKopf.kopf_type || '',
+          kopf_dwc: jobKopf.kopf_dwc || '',
+          abschluss: { status: 'geprueft' }
+        };
+      }
       var projektVal = (document.getElementById('serviceprotokollProjekt') || {}).value || '';
       projektVal = String(projektVal).trim();
       if (!projektVal && serviceJobData) {
@@ -12668,20 +12863,32 @@
       };
     }
 
-    function stashDraftInMemory(fab) {
+    function stashDraftInMemory(fab, opts) {
+      opts = opts || {};
       if (!fab) return;
+      fab = String(fab).trim();
+      if (!opts.force && !isServiceprotokollFormReadyForFab(fab)) return;
+      if (getActiveFab() !== fab) return;
       var payload = collectDraftPayloadForFab(fab);
       if (!serviceprotokollDraftStore.byFab) serviceprotokollDraftStore.byFab = {};
       serviceprotokollDraftStore.byFab[fab] = Object.assign({}, payload, { updatedAt: new Date().toISOString() });
     }
 
-    async function persistDraftJsonForFab(fab) {
+    async function persistDraftJsonForFab(fab, opts) {
+      opts = opts || {};
       if (!fab || !jobSelect || !jobSelect.value || !serviceJobData) return;
-      try {
-        await persistServiceprotokollMesswerteToAnlagenstamm(fab);
-      } catch (e) { /* optional bei FN-Wechsel */ }
-      stashDraftInMemory(fab);
-      var payload = collectDraftPayloadForFab(fab);
+      fab = String(fab).trim();
+      if (!opts.skipStash && isServiceprotokollFormReadyForFab(fab)) {
+        stashDraftInMemory(fab);
+      }
+      if (!opts.skipAnlagenstamm && isServiceprotokollApplyToAnlagenstammEnabled() && isServiceprotokollFormReadyForFab(fab)) {
+        try {
+          await persistServiceprotokollMesswerteToAnlagenstamm(fab);
+        } catch (e) { /* optional bei FN-Wechsel */ }
+      }
+      var cached = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fab];
+      if (!opts.payloadSnapshot && !isServiceprotokollFormReadyForFab(fab) && !cached) return;
+      var payload = opts.payloadSnapshot || collectDraftPayloadForFab(fab);
       if (!payload.projekt) return;
       var body = {
         technician_id: getTechId(),
@@ -12696,19 +12903,21 @@
         kopf_qmax: payload.kopf_qmax,
         kopf_type: payload.kopf_type,
         kopf_dwc: payload.kopf_dwc,
+        apply_to_anlagenstamm: isServiceprotokollApplyToAnlagenstammEnabled() || undefined,
         jsonOnly: true,
-        base_url: getDispoBaseUrl(),
-        dispoBaseUrl: getDispoBaseUrl(),
+        skip_dispo_sync: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
+        base_url: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
+        dispoBaseUrl: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
         serverUsername: getDispoUsername(),
         serverPassword: getDispoPassword()
       };
-      try {
-        await fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-          body: JSON.stringify(body)
-        });
-      } catch (e) { /* optional bei FN-Wechsel */ }
+      var persistPromise = fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify(body)
+      }).catch(function () { /* optional bei FN-Wechsel */ });
+      if (opts.background) return;
+      await persistPromise;
     }
 
     function renderFabButtonsActive() {
@@ -12800,16 +13009,45 @@
       if (!newFab) return;
       var cur = getActiveFab();
       if (cur === newFab) return;
-      if (cur) await persistDraftJsonForFab(cur);
+      var loadToken = ++serviceprotokollFabLoadToken;
+      serviceprotokollFabSwitching = true;
+      var persistSnapshot = null;
+      if (cur) {
+        if (isServiceprotokollFormReadyForFab(cur)) {
+          stashDraftInMemory(cur);
+          if (serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[cur]) {
+            var snapCandidate = serviceprotokollDraftStore.byFab[cur];
+            if (isMeaningfulServiceprotokollDraft(snapCandidate)) {
+              persistSnapshot = Object.assign({}, snapCandidate);
+            }
+          }
+        }
+        if (persistSnapshot) {
+          persistDraftJsonForFab(cur, {
+            skipAnlagenstamm: true,
+            background: true,
+            payloadSnapshot: persistSnapshot
+          });
+        }
+      }
+      serviceprotokollFormReadyFab = '';
       setActiveFabValue(newFab);
       renderFabButtonsActive();
-      await loadDefaultsForFab(newFab);
+      clearServiceprotokollFabFormShell();
+      try {
+        await loadDefaultsForFab(newFab, loadToken);
+      } finally {
+        if (loadToken === serviceprotokollFabLoadToken) {
+          serviceprotokollFabSwitching = false;
+          notifyReactBridge(true);
+        }
+      }
     }
 
     function applyServiceprotokollDraft(fab) {
       if (!fab || !serviceprotokollDraftStore.byFab) return false;
       var draft = serviceprotokollDraftStore.byFab[fab];
-      if (!draft) return false;
+      if (!draft || !isMeaningfulServiceprotokollDraft(draft)) return false;
       if (draft.durchfuehrungsdatum && datumEl) datumEl.value = draft.durchfuehrungsdatum;
       if (draft.projekt) {
         var projEl = document.getElementById('serviceprotokollProjekt');
@@ -12932,6 +13170,51 @@
       if (qmax) qmax.value = kopf.kopf_qmax || '';
       if (type) type.value = kopf.kopf_type || '';
       if (dwc) dwc.value = kopf.kopf_dwc || '';
+    }
+
+    function readKopfFieldsFromForm() {
+      var projEl = document.getElementById('serviceprotokollProjekt');
+      return {
+        kopf_pos_nr: (document.getElementById('serviceprotokollPos') || {}).value || '',
+        kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
+        kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
+        kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
+        projekt: projEl ? (projEl.value || '') : ''
+      };
+    }
+
+    function mergeKopfFillGaps(currentKopf, fillKopf) {
+      currentKopf = currentKopf || {};
+      fillKopf = fillKopf || {};
+      var out = {};
+      ['kopf_pos_nr', 'kopf_qmax', 'kopf_type', 'kopf_dwc', 'projekt'].forEach(function (k) {
+        var cur = currentKopf[k] != null ? String(currentKopf[k]).trim() : '';
+        var fill = fillKopf[k] != null ? String(fillKopf[k]).trim() : '';
+        out[k] = cur || fill || '';
+      });
+      return out;
+    }
+
+    function isMeaningfulServiceprotokollDraft(draft) {
+      if (!draft || typeof draft !== 'object') return false;
+      var kopfKeys = ['kopf_pos_nr', 'kopf_qmax', 'kopf_type', 'kopf_dwc'];
+      for (var i = 0; i < kopfKeys.length; i++) {
+        if (String(draft[kopfKeys[i]] || '').trim()) return true;
+      }
+      if (String(draft.bemerkungen || '').trim()) return true;
+      var steps = Array.isArray(draft.arbeitsschritte) ? draft.arbeitsschritte : [];
+      for (var j = 0; j < steps.length; j++) {
+        var s = steps[j] || {};
+        if (s.status && s.status !== 'na') return true;
+        if (String(s.bemerkung || '').trim()) return true;
+      }
+      var mess = draft.messwerte;
+      if (mess && typeof mess === 'object') {
+        if (String(mess.waegezelle_type || '').trim()) return true;
+        if (String(mess.waegezelle_seriennummer || '').trim()) return true;
+        if (String(mess.vers_spannung || '').trim()) return true;
+      }
+      return false;
     }
 
     function clearKopfFields() {
@@ -13093,7 +13376,7 @@
       return fetch(API_BASE + '/api/anlagenstamm_lookup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-        body: JSON.stringify({ fab: fab })
+        body: JSON.stringify({ fab: fab, local_only: 1 })
       })
         .then(function (r) { return r.json().catch(function () { return {}; }); })
         .then(function (data) {
@@ -13125,7 +13408,7 @@
 
     async function persistServiceprotokollMesswerteToAnlagenstamm(fab) {
       fab = String(fab || '').trim();
-      if (!fab) return;
+      if (!fab || !isServiceprotokollApplyToAnlagenstammEnabled()) return;
       var typeVal = sanitizeLeistungField((document.getElementById('spMessType') || {}).value);
       var snVal = sanitizeLeistungField((document.getElementById('spMessSeriennummer') || {}).value);
       var dwcVal = sanitizeLeistungField((document.getElementById('serviceprotokollDwc') || {}).value);
@@ -13154,17 +13437,30 @@
       });
     }
 
-    async function applyAnlagenstammFelderFromLocalStamm(fab) {
+    async function applyAnlagenstammFelderFromLocalStamm(fab, opts) {
+      opts = opts || {};
+      var loadToken = opts.loadToken;
       var row = await lookupAnlagenstammRowForFab(fab);
+      if (loadToken != null && !isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
       if (!row) return;
-      applyMessTypeFromStamm(
-        { mess_waegezelle_type: row.kraftaufnehmer, mess_waegezelle_seriennummer: row.dms_nr },
-        { kraftaufnehmer: row.kraftaufnehmer, dms_nr: row.dms_nr }
-      );
-      var dwcEl = document.getElementById('serviceprotokollDwc');
-      if (dwcEl && !(dwcEl.value || '').trim()) {
-        var dwc = sanitizeLeistungField(row.elektronik);
-        if (dwc) dwcEl.value = dwc;
+      var mapped = anlagenstammRowToKopfAndMess(row);
+      var jobKopf = kopfFromJobFabRow(serviceJobData, fab);
+      var fromStamm = mergeServiceprotokollKopf(mapped.kopf, jobKopf);
+      var merged = opts.preferStamm
+        ? mergeKopfFillGaps(fromStamm, readKopfFieldsFromForm())
+        : mergeKopfFillGaps(readKopfFieldsFromForm(), fromStamm);
+      applyKopfFields(merged);
+      applyServiceprotokollProjekt(serviceJobData, fab, merged.projekt);
+      if (opts.preferStamm) {
+        var typeEl = document.getElementById('spMessType');
+        var snEl = document.getElementById('spMessSeriennummer');
+        var typeVal = messTypeFromStamm(mapped.mess, jobKopf);
+        var snVal = messSeriennummerFromStamm(mapped.mess, jobKopf);
+        if (typeEl) typeEl.value = typeVal;
+        if (snEl) snEl.value = snVal;
+        updateVersSpannungHint();
+      } else {
+        applyMessTypeFromStamm(mapped.mess, jobKopf);
       }
     }
 
@@ -13362,37 +13658,45 @@
       });
     }
 
-    async function loadDefaultsForFab(fab) {
+    async function loadDefaultsForFab(fab, loadToken) {
+      fab = fab ? String(fab).trim() : '';
+      if (loadToken == null) loadToken = ++serviceprotokollFabLoadToken;
+      serviceprotokollFormReadyFab = '';
       if (!fab) {
+        if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
         arbeitsschritte = builtinServiceprotokollSteps();
         renderSteps();
         return;
       }
       clearKopfFields();
       clearMesswerteFields();
+      if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
       var jobKopf = kopfFromJobFabRow(serviceJobData, fab);
       var draftApplied = applyServiceprotokollDraft(fab);
       if (!draftApplied) {
         arbeitsschritte = builtinServiceprotokollSteps();
-        var quickKopf = mergeServiceprotokollKopf(null, jobKopf);
-        applyKopfFields(quickKopf);
-        applyServiceprotokollProjekt(serviceJobData, fab, quickKopf.projekt);
+      }
+      var mergedJobKopf = mergeKopfFillGaps(readKopfFieldsFromForm(), mergeServiceprotokollKopf(null, jobKopf));
+      applyKopfFields(mergedJobKopf);
+      applyServiceprotokollProjekt(serviceJobData, fab, mergedJobKopf.projekt);
+      if (!draftApplied) {
         applyMessTypeFromStamm(null, jobKopf);
       }
       renderSteps();
 
-      var baseUrl = getDispoBaseUrl();
+      await applyAnlagenstammFelderFromLocalStamm(fab, {
+        loadToken: loadToken,
+        preferStamm: !draftApplied
+      });
+      if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
+
       var techId = getTechId();
-      var q = 'fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(techId);
-      if (baseUrl) q += '&base_url=' + encodeURIComponent(baseUrl);
-      var un = getDispoUsername();
-      var pw = getDispoPassword();
-      if (un) q += '&serverUsername=' + encodeURIComponent(un);
-      if (pw) q += '&serverPassword=' + encodeURIComponent(pw);
+      var q = 'fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(techId) + '&local_only=1';
       try {
         var r = await fetch(API_BASE + '/api/serviceprotokoll_defaults?' + q, {
           headers: { 'X-Technician-Id': String(techId) }
         });
+        if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
         var data = await r.json().catch(function () { return {}; });
         var apiKopfRaw = data && data.ok ? data.kopf : null;
         if (r.ok && data.ok) {
@@ -13403,22 +13707,28 @@
             } else {
               defaultsSource = 'builtin';
             }
-            var mergedKopf = mergeServiceprotokollKopf(apiKopfRaw, jobKopf);
-            applyKopfFields(mergedKopf);
-            applyServiceprotokollProjekt(serviceJobData, fab, mergedKopf.projekt);
-            applyMessTypeFromStamm(apiKopfRaw, jobKopf);
-          } else {
-            applyMessTypeFromStamm(apiKopfRaw, jobKopf);
           }
+          var mergedKopf = mergeKopfFillGaps(
+            readKopfFieldsFromForm(),
+            mergeServiceprotokollKopf(apiKopfRaw, jobKopf)
+          );
+          applyKopfFields(mergedKopf);
+          applyServiceprotokollProjekt(serviceJobData, fab, mergedKopf.projekt);
+          applyMessTypeFromStamm(apiKopfRaw, jobKopf);
         } else if (!draftApplied) {
           defaultsSource = 'builtin';
         }
       } catch (e) {
         if (!draftApplied) defaultsSource = 'builtin';
       }
-      await applyAnlagenstammFelderFromLocalStamm(fab);
+      if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
       renderSteps();
-      notifyReactBridge();
+      if (isServiceprotokollFabLoadCurrent(loadToken, fab)) {
+        serviceprotokollFormReadyFab = fab;
+      }
+      if (!serviceprotokollFabSwitching) {
+        notifyReactBridge();
+      }
     }
 
     function collectMesswerte() {
@@ -13434,47 +13744,18 @@
     }
 
     async function loadServiceJobWithAnlagenstamm(jobId) {
-      var baseUrl = getDispoBaseUrl();
       var techId = getTechId();
       var headers = Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword));
-      var localUrl = API_BASE + '/api/job?id=' + encodeURIComponent(jobId) + '&technician_id=' + encodeURIComponent(techId) +
-        '&enrich_anlagenstamm=1&enrich_local_only=1&base_url=' + encodeURIComponent(baseUrl || '');
-      var localJob = null;
+      var jobUrl = API_BASE + '/api/job?id=' + encodeURIComponent(jobId) + '&technician_id=' + encodeURIComponent(techId) +
+        '&enrich_anlagenstamm=1&enrich_local_only=1';
       try {
-        var localRes = await fetch(localUrl, { headers: headers });
+        var localRes = await fetch(jobUrl, { headers: headers });
         var localData = await localRes.json().catch(function () { return {}; });
         if (localRes.ok && localData.ok && localData.job) {
-          localJob = localData.job;
-          if (preferLocalProjekteNeuOnly() || connectionUiState === 'offline' || connectionUiState === 'local') {
-            return localJob;
-          }
-          if (jobHasFabrikationsnummern(localJob)) {
-            return localJob;
-          }
+          return localData.job;
         }
-      } catch (e) { /* Dispo-Fallback */ }
-      if (baseUrl && !preferLocalProjekteNeuOnly()) {
-        try {
-          var liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
-            body: JSON.stringify(Object.assign({
-              baseUrl: baseUrl,
-              jobId: jobId,
-              serverUsername: getDispoUsername(),
-              serverPassword: getDispoPassword()
-            }, dispoBasePayloadExtra()))
-          });
-          var liveData = await liveResp.json().catch(function () { return {}; });
-          if (liveResp.ok && liveData && liveData.ok && liveData.job) {
-            return liveData.job;
-          }
-        } catch (e) { /* lokaler Stand */ }
-      }
-      if (localJob) {
-        return localJob;
-      }
-      var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId + '&enrich_anlagenstamm=1&base_url=' + encodeURIComponent(baseUrl || '');
+      } catch (e) { /* Fallback */ }
+      var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId;
       var r = await fetch(url, { headers: headers });
       var data = await r.json();
       return data.job;
@@ -13482,6 +13763,7 @@
 
     async function applyServiceprotokollJobSelection(id) {
       var loadToken = ++serviceprotokollJobLoadToken;
+      serviceprotokollFormReadyFab = '';
       serviceJobData = null;
       setActiveFabValue('');
       if (!id) {
@@ -13508,9 +13790,10 @@
         var fns = parseJobFabrikationsnummernOrdered(serviceJobData || {});
         var firstFab = fns.length ? fns[0] : '';
         if (firstFab) {
+          var fabLoadToken = ++serviceprotokollFabLoadToken;
           setActiveFabValue(firstFab);
           renderFabButtonsActive();
-          await loadDefaultsForFab(firstFab);
+          await loadDefaultsForFab(firstFab, fabLoadToken);
         }
       } catch (e) {
         if (loadToken === serviceprotokollJobLoadToken) {
@@ -13541,6 +13824,14 @@
     }
 
     if (form) {
+      form.addEventListener('input', function () {
+        var fab = getActiveFab();
+        if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
+      });
+      form.addEventListener('change', function () {
+        var fab = getActiveFab();
+        if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
+      });
       form.addEventListener('submit', async function (e) {
         e.preventDefault();
         var submitBtn = e.submitter;
@@ -13574,9 +13865,12 @@
           kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
           kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
           abschluss: collectAbschlussPayload(),
+          apply_to_anlagenstamm: isServiceprotokollApplyToAnlagenstammEnabled() || undefined,
           jsonOnly: jsonOnly,
-          base_url: getDispoBaseUrl(),
-          dispoBaseUrl: getDispoBaseUrl(),
+          local_only: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
+          skip_dispo_sync: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
+          base_url: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
+          dispoBaseUrl: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
         };
@@ -13584,11 +13878,7 @@
         var submitButtons = form.querySelectorAll('button[type="submit"]');
         submitButtons.forEach(function (b) { b.disabled = true; });
         try {
-          try {
-            await persistServiceprotokollMesswerteToAnlagenstamm(fab);
-          } catch (persistErr) {
-            console.warn('[Serviceprotokoll] Anlagenstamm Kraftaufnehmer/DMS/DWC:', persistErr);
-          }
+          stashDraftInMemory(fab);
           var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -13600,7 +13890,11 @@
             return;
           }
           if (data.warning) console.warn('[Serviceprotokoll]', data.warning);
-          await loadServiceprotokollDraftsForJob(body.job_id);
+          mergeSavedDraftIntoMemory(fab, body);
+          loadServiceprotokollDraftsForJob(body.job_id).catch(function () { /* Hintergrund-Sync */ });
+          if (getActiveFab() === fab) {
+            serviceprotokollFormReadyFab = fab;
+          }
           if (data.jsonOnly) {
             if (typeof showToast === 'function') showToast('Zwischenstand gespeichert (serviceprotokoll.json).');
           } else {
@@ -13638,6 +13932,7 @@
           durchfuehrungsdatum: datum,
           protokolle: built.protokolle,
           pdf_languages: pdfLangs,
+          apply_to_anlagenstamm: isServiceprotokollApplyToAnlagenstammEnabled() || undefined,
           base_url: getDispoBaseUrl(),
           dispoBaseUrl: getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
@@ -13739,7 +14034,8 @@
           monteur: monteurLabel,
           closingRemarks: (document.getElementById('serviceprotokollAbschlussBemerkungen') || {}).value || '',
           pdfDe: !!(document.getElementById('spPdfDe') && document.getElementById('spPdfDe').checked),
-          pdfEn: !!(document.getElementById('spPdfEn') && document.getElementById('spPdfEn').checked)
+          pdfEn: !!(document.getElementById('spPdfEn') && document.getElementById('spPdfEn').checked),
+          applyToAnlagenstamm: isServiceprotokollApplyToAnlagenstammEnabled()
         },
         measurements: [
           { id: 'dms', label: 'DMS entlastet / released', kg: matrix.dms.kg, mv: matrix.dms.mv, ma: matrix.dms.ma, g: matrix.dms.g_prozent },
@@ -13764,6 +14060,7 @@
     }
 
     function spApplyPayloadFromReact(payload) {
+      if (serviceprotokollFabSwitching) return;
       if (!payload || !payload.form) return;
       var f = payload.form;
       var setVal = function (id, val) {
@@ -13785,6 +14082,7 @@
       var pdfEn = document.getElementById('spPdfEn');
       if (pdfDe) pdfDe.checked = !!f.pdfDe;
       if (pdfEn) pdfEn.checked = !!f.pdfEn;
+      setServiceprotokollApplyToAnlagenstamm(!!f.applyToAnlagenstamm);
       document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
         el.checked = el.value === (f.status || 'geprueft');
       });
@@ -13821,11 +14119,11 @@
       updateVersSpannungHint();
     }
 
-    function notifyReactBridge() {
+    function notifyReactBridge(forceSync) {
       if (typeof window.serviceprotokollReactBridge !== 'undefined' &&
           window.serviceprotokollReactBridge &&
           typeof window.serviceprotokollReactBridge.syncToReact === 'function') {
-        window.serviceprotokollReactBridge.syncToReact();
+        window.serviceprotokollReactBridge.syncToReact(!!forceSync);
       }
     }
 
@@ -13840,9 +14138,7 @@
         });
       },
       selectFab: function (fab) {
-        switchServiceprotokollFab(fab).then(function () {
-          notifyReactBridge();
-        });
+        return switchServiceprotokollFab(fab);
       },
       triggerAction: function (action) {
         if (action === 'cancel') {
@@ -13886,6 +14182,7 @@
         }
         serviceJobData = null;
         serviceprotokollDraftStore = { byFab: {} };
+        serviceprotokollFormReadyFab = '';
         arbeitsschritte = [];
         setActiveFabValue('');
         renderFabButtons(null);
@@ -13897,6 +14194,7 @@
           if (el) el.value = '';
         });
         clearAbschlussFields();
+        setServiceprotokollApplyToAnlagenstamm(false);
         updateVersSpannungHint();
         if (datumEl && !datumEl.value) {
           var today = new Date();
@@ -14079,13 +14377,15 @@
 
     window.loadTbCategories = async function () {
       var listEl = document.getElementById('tbCategoryList');
-      var baseUrl = getDispoBaseUrl();
-      if (!baseUrl) {
-        if (listEl) listEl.innerHTML = '<span class="empty">Dispo-URL in Einstellungen eintragen.</span>';
-        return;
-      }
+      var baseUrl = (getDispoBaseUrl() || '').trim();
       try {
-        var r = await fetch(API_BASE + '/api/textbausteine_list?base_url=' + encodeURIComponent(baseUrl) + '&technician_id=' + getTechId(), { headers: { 'X-Technician-Id': String(getTechId()) } });
+        var listUrl = API_BASE + '/api/textbausteine_list?technician_id=' + getTechId();
+        if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) {
+          listUrl += '&local_only=1';
+        } else if (baseUrl) {
+          listUrl += '&base_url=' + encodeURIComponent(baseUrl);
+        }
+        var r = await fetch(listUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
         var data = await r.json();
         if (!data.ok || !data.categories) {
           tbCategories = [];

@@ -42,6 +42,7 @@ export interface ServiceProtocolFormState {
   closingRemarks: string;
   pdfDe: boolean;
   pdfEn: boolean;
+  applyToAnlagenstamm: boolean;
 }
 
 export const FAB_NUMBERS = ['7118', '7119', '7120', '7123', '10612', '10616', '12435'];
@@ -88,4 +89,5 @@ export const DEFAULT_FORM: ServiceProtocolFormState = {
   closingRemarks: '',
   pdfDe: true,
   pdfEn: false,
+  applyToAnlagenstamm: false,
 };

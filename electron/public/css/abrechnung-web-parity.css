@@ -1,3 +1,125 @@
+/* Abrechnung — Parität Dispo Desktop/Web + Serviceprotokoll-v2 Layout */
+
+#view-abrechnung {
+  background: var(--sp-page, #f7f8f8);
+}
+
+.page-abrechnung.ab-sp-page {
+  padding: 20px;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.ab-sp-col {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.ab-card[data-bucket] {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  background: transparent;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+}
+
+.ab-sp-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin: 0;
+  width: 100%;
+  overflow: visible;
+}
+
+.ab-sp-filters .sp-v2-field select {
+  min-width: 0;
+}
+
+.ab-sp-checkbox {
+  display: flex;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ab-file-beleg-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.ab-beleg-tile-icon {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.ab-billing-status-readonly {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: stretch;
+  width: 100%;
+}
+
+.ab-billing-status-chip {
+  flex: 1 1 180px;
+  max-width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  font-size: 12px;
+  line-height: 1.35;
+  box-sizing: border-box;
+}
+
+.ab-billing-status-chip.is-done {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.ab-billing-status-chip.is-open {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.ab-billing-status-chip-title {
+  display: block;
+  font-weight: 600;
+  color: #374151;
+}
+
+.ab-billing-status-chip.is-done .ab-billing-status-chip-title {
+  color: #b91c1c;
+}
+
+.ab-billing-status-chip.is-open .ab-billing-status-chip-title {
+  color: #166534;
+}
+
+.ab-billing-status-chip-meta {
+  display: block;
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
 /* Abrechnung — Parität Dispo Desktop/Web: Karte = gleiche Breite wie Filterzeile */
 
 .page-abrechnung {
@@ -230,6 +352,75 @@
   text-align: left;
 }
 
+.ab-beleg-upload {
+  margin-bottom: 12px;
+}
+
+.ab-beleg-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .ab-beleg-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.ab-beleg-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 10px 6px;
+  border: 2px dashed #cfe8d1;
+  border-radius: 8px;
+  background: #fafafa;
+  cursor: pointer;
+  text-align: center;
+  min-height: 110px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ab-beleg-tile:hover,
+.ab-beleg-tile:focus-visible {
+  border-color: #0e7b5a;
+  background: #f0fdf7;
+  outline: none;
+}
+
+.ab-beleg-tile.dragover {
+  border-color: #0e7b5a;
+  background: #ecfdf5;
+  box-shadow: 0 0 0 2px rgba(14, 123, 90, 0.15);
+}
+
+.ab-beleg-tile img {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.ab-beleg-tile-label {
+  font-size: 11px;
+  line-height: 1.25;
+  color: #374151;
+  pointer-events: none;
+}
+
+.ab-beleg-hint {
+  font-size: 12px;
+  margin: 8px 0 0;
+  text-align: center;
+}
+
+.ab-beleg-upload.hidden {
+  display: none;
+}
+
 .ab-dropzone {
   border: 2px dashed #9ca3af;
   border-radius: 8px;
@@ -292,6 +483,15 @@
   color: #1d4ed8;
   flex: 1;
   min-width: 0;
+}
+
+.ab-files li .ab-file-meta {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #6b7280;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .ab-note {

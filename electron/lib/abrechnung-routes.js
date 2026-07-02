@@ -5,6 +5,7 @@ const fs = require('fs');
 const { Readable } = require('stream');
 const FormData = require('form-data');
 const express = require('express');
+const phpLocal = require('./abrechnung-php-local');
 
 function mkdirpSync(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -65,9 +66,11 @@ function walkFilesRecursive(rootDir, relBase) {
       if (ent.isDirectory()) {
         out.push(...walkFilesRecursive(fp, rel));
       } else if (ent.isFile()) {
+        const st = fs.statSync(fp);
         out.push({
           file_name: rel.replace(/\\/g, '/'),
-          size_bytes: fs.statSync(fp).size,
+          size_bytes: st.size,
+          uploaded_at: st.mtime ? new Date(st.mtime).toISOString() : null,
         });
       }
     } catch (_) {
@@ -100,6 +103,8 @@ function scanLocalAbrechnungFilesFromDisk(fileCtx, db, jobServerIdFromQuery, buc
       file_name: fn,
       size_bytes: row.size_bytes != null ? row.size_bytes : null,
       synced_at: null,
+      uploaded_at: row.uploaded_at != null ? row.uploaded_at : null,
+      uploaded_by_name: row.uploaded_by_name != null ? row.uploaded_by_name : null,
     });
   }
   for (const id of ids) {
@@ -145,8 +150,26 @@ function ensureSchema(db) {
     file_name TEXT NOT NULL,
     size_bytes INTEGER,
     synced_at TEXT,
+    uploaded_at TEXT,
+    uploaded_by_name TEXT,
+    uploaded_by_user_id INTEGER,
     PRIMARY KEY (job_server_id, bucket, file_name)
   )`).run();
+  try {
+    db.prepare('ALTER TABLE abrechnung_files_meta ADD COLUMN uploaded_at TEXT').run();
+  } catch (_) {
+    /* exists */
+  }
+  try {
+    db.prepare('ALTER TABLE abrechnung_files_meta ADD COLUMN uploaded_by_name TEXT').run();
+  } catch (_) {
+    /* exists */
+  }
+  try {
+    db.prepare('ALTER TABLE abrechnung_files_meta ADD COLUMN uploaded_by_user_id INTEGER').run();
+  } catch (_) {
+    /* exists */
+  }
   db.prepare(`CREATE TABLE IF NOT EXISTS abrechnung_outbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     op TEXT NOT NULL,
@@ -284,15 +307,29 @@ function dedupeAbrechnungFileRows(rows) {
       row.file_name != null ? String(row.file_name) : row.name != null ? String(row.name) : '';
     if (!b || !fn) continue;
     const k = `${b}\0${fn}`;
+    const next = {
+      bucket: b,
+      file_name: fn,
+      size_bytes: row.size_bytes != null ? row.size_bytes : null,
+      synced_at: row.synced_at != null ? row.synced_at : null,
+      uploaded_at: row.uploaded_at != null ? row.uploaded_at : null,
+      uploaded_by_name: row.uploaded_by_name != null ? row.uploaded_by_name : null,
+      remote_only: row.remote_only === true,
+    };
     if (!m.has(k)) {
-      m.set(k, {
-        bucket: b,
-        file_name: fn,
-        size_bytes: row.size_bytes != null ? row.size_bytes : null,
-        synced_at: row.synced_at != null ? row.synced_at : null,
-        remote_only: row.remote_only === true,
-      });
+      m.set(k, next);
+      continue;
     }
+    const prev = m.get(k);
+    m.set(k, {
+      bucket: b,
+      file_name: fn,
+      size_bytes: next.size_bytes != null ? next.size_bytes : prev.size_bytes,
+      synced_at: next.synced_at || prev.synced_at,
+      uploaded_at: next.uploaded_at || prev.uploaded_at,
+      uploaded_by_name: next.uploaded_by_name || prev.uploaded_by_name,
+      remote_only: prev.remote_only && next.remote_only,
+    });
   }
   return Array.from(m.values());
 }
@@ -729,13 +766,16 @@ async function syncJobFromDispo(ctx, baseUrl, technicianId, authHeader, jobServe
           await dispoDownloadFile(baseUrl, jobServerId, bucket, fn, localPath, authHeader, technicianId);
         }
         db.prepare(`
-          INSERT INTO abrechnung_files_meta (job_server_id, bucket, file_name, size_bytes, synced_at)
-          VALUES (?, ?, ?, ?, datetime('now'))
+          INSERT INTO abrechnung_files_meta (
+            job_server_id, bucket, file_name, size_bytes, synced_at, uploaded_at, uploaded_by_name
+          ) VALUES (?, ?, ?, ?, datetime('now'), ?, ?)
         `).run(
           jobServerId,
           bucket,
           fn,
           f.size_bytes != null ? f.size_bytes : fs.statSync(localPath).size,
+          f.uploaded_at != null ? String(f.uploaded_at) : null,
+          f.uploaded_by_name != null ? String(f.uploaded_by_name) : null,
         );
       } catch (e) {
         console.warn('[abrechnung] download skip', fn, e.message);
@@ -798,11 +838,19 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
         const fp = payload.local_path;
         if (!fp || !fs.existsSync(fp)) throw new Error('Lokale Datei fehlt');
         const buf = fs.readFileSync(fp);
+        const uploadFields = {
+          job_id: String(payload.job_id),
+          bucket: String(payload.bucket),
+        };
+        if (payload.beleg_prefix && phpLocal.belegPrefixAllowed(payload.beleg_prefix)) {
+          uploadFields.beleg_prefix = payload.beleg_prefix;
+        }
+        const uploadName = payload.orig_filename || payload.filename || 'datei';
         await dispoUploadMultipart(
           baseUrl,
-          { job_id: String(payload.job_id), bucket: String(payload.bucket) },
+          uploadFields,
           buf,
-          payload.filename || 'datei',
+          uploadName,
           authHeader,
           technicianId,
         );
@@ -1022,7 +1070,7 @@ function registerAbrechnungRoutesInner(app, ctx) {
       let files = dedupeAbrechnungFileRows(
         db
           .prepare(
-            `SELECT bucket, file_name, size_bytes, synced_at FROM abrechnung_files_meta
+            `SELECT bucket, file_name, size_bytes, synced_at, uploaded_at, uploaded_by_name FROM abrechnung_files_meta
              WHERE job_server_id = ? OR job_server_id = ?
              ORDER BY bucket, file_name`,
           )
@@ -1058,6 +1106,8 @@ function registerAbrechnungRoutesInner(app, ctx) {
                 file_name: fn,
                 size_bytes: rf.size_bytes != null ? rf.size_bytes : null,
                 synced_at: null,
+                uploaded_at: rf.uploaded_at != null ? rf.uploaded_at : null,
+                uploaded_by_name: rf.uploaded_by_name != null ? rf.uploaded_by_name : null,
                 remote_only: true,
               });
             }
@@ -1204,7 +1254,7 @@ function registerAbrechnungRoutesInner(app, ctx) {
   });
 
   app.post('/api/abrechnung/upload', express.json({ limit: '80mb' }), async (req, res) => {
-    const { baseUrl, technicianId, serverUsername, serverPassword, job_server_id, bucket, filename, content_base64 } = req.body || {};
+    const { baseUrl, technicianId, serverUsername, serverPassword, job_server_id, bucket, filename, content_base64, beleg_prefix } = req.body || {};
     const tid = parseInt(technicianId, 10);
     const jid = parseInt(job_server_id, 10);
     const b = (bucket || '').trim();
@@ -1217,9 +1267,14 @@ function registerAbrechnungRoutesInner(app, ctx) {
     } catch (_) {
       return res.status(400).json({ ok: false, error: 'content_base64 ungültig.' });
     }
-    const safeName = path.basename((filename || 'datei').toString()).replace(/[\/\\:*?"<>|]/g, '_') || 'datei';
-    const localPath = filePathLocal(dbDir, jid, b, safeName, fileCtx);
-    mkdirpSync(path.dirname(localPath));
+    const origName = path.basename((filename || 'datei').toString());
+    const belegPrefixIn = String(beleg_prefix || '').trim();
+    const belegPrefix = phpLocal.belegPrefixAllowed(belegPrefixIn) ? belegPrefixIn : null;
+    const probePath = filePathLocal(dbDir, jid, b, 'probe.tmp', fileCtx);
+    const targetDir = path.dirname(probePath);
+    mkdirpSync(targetDir);
+    const safeName = phpLocal.resolveUniqueStoredName(origName, belegPrefix, targetDir);
+    const localPath = path.join(targetDir, path.basename(safeName));
     fs.writeFileSync(localPath, buf);
     db.prepare(`
       INSERT INTO abrechnung_files_meta (job_server_id, bucket, file_name, size_bytes, synced_at)
@@ -1231,15 +1286,24 @@ function registerAbrechnungRoutesInner(app, ctx) {
     save();
 
     const base = dispoBase(baseUrl);
+    const uploadFields = { job_id: String(jid), bucket: b };
+    if (belegPrefix) uploadFields.beleg_prefix = belegPrefix;
     if (base) {
       try {
         const authHeader = authHeaderFromCredentials(serverUsername, serverPassword);
-        await dispoUploadMultipart(base, { job_id: String(jid), bucket: b }, buf, safeName, authHeader, tid);
+        await dispoUploadMultipart(base, uploadFields, buf, origName, authHeader, tid);
         return res.json({ ok: true, name: safeName, synced: true });
       } catch (e) {
         db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
           'upload',
-          JSON.stringify({ job_id: jid, bucket: b, filename: safeName, local_path: localPath })
+          JSON.stringify({
+            job_id: jid,
+            bucket: b,
+            filename: safeName,
+            local_path: localPath,
+            beleg_prefix: belegPrefix || '',
+            orig_filename: origName,
+          })
         );
         save();
         return res.json({ ok: true, name: safeName, synced: false, queued: true, error: e.message });
@@ -1247,7 +1311,14 @@ function registerAbrechnungRoutesInner(app, ctx) {
     }
     db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
       'upload',
-      JSON.stringify({ job_id: jid, bucket: b, filename: safeName, local_path: localPath })
+      JSON.stringify({
+        job_id: jid,
+        bucket: b,
+        filename: safeName,
+        local_path: localPath,
+        beleg_prefix: belegPrefix || '',
+        orig_filename: origName,
+      })
     );
     save();
     return res.json({ ok: true, name: safeName, synced: false, queued: true });
