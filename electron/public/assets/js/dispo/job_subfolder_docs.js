@@ -29,7 +29,7 @@
     { id: 'transport', label: 'Flug / Bahn / Transport', prefix: 'Transport', icon: 'flug_bahn_transport.png' },
     { id: 'hotel', label: 'Hotel', prefix: 'Hotel', icon: 'hotel.png' },
     { id: 'leihwagen', label: 'Leihauto', prefix: 'Leihwagen', icon: 'leihauto.png' },
-    { id: 'firmenauto', label: 'Firmenauto', prefix: 'Firmenauto', icon: 'firmenauto.png' },
+    { id: 'arbeitsnachweis', label: 'Arbeitsnachweis', prefix: 'Arbeitsnachweis', icon: 'arbeitsnachweis.png' },
     { id: 'kfz', label: 'Maut / Parken', prefix: 'KFZ', icon: 'maut_parken.png' },
     { id: 'email', label: 'E-Mail', prefix: 'Email', icon: 'email.png' },
     { id: 'angebot', label: 'Angebot', prefix: 'Angebot', icon: 'angebot.png' },
@@ -66,6 +66,12 @@
 
   function belegCategoryForFilename(name) {
     var base = String(name || '');
+    if (base.indexOf('Firmenauto_') === 0) {
+      var catsLegacy = belegCategories();
+      for (var j = 0; j < catsLegacy.length; j++) {
+        if (catsLegacy[j].id === 'arbeitsnachweis') return catsLegacy[j];
+      }
+    }
     var cats = belegCategories();
     for (var i = 0; i < cats.length; i++) {
       var prefix = String(cats[i].prefix || '');
@@ -960,8 +966,6 @@
       var img = document.createElement('img');
       img.src = belegIconUrl(cat.icon || '');
       img.alt = cat.label || '';
-      img.className = 'ab-beleg-tile-icon';
-      img.loading = 'lazy';
       var lbl = document.createElement('span');
       lbl.className = 'ab-beleg-tile-label';
       lbl.textContent = cat.label || '';

@@ -45,7 +45,7 @@ const BELEG_CATEGORIES = [
   { id: 'transport', label: 'Flug / Bahn / Transport', prefix: 'Transport', icon: 'flug_bahn_transport.png' },
   { id: 'hotel', label: 'Hotel', prefix: 'Hotel', icon: 'hotel.png' },
   { id: 'leihwagen', label: 'Leihauto', prefix: 'Leihwagen', icon: 'leihauto.png' },
-  { id: 'firmenauto', label: 'Firmenauto', prefix: 'Firmenauto', icon: 'firmenauto.png' },
+  { id: 'arbeitsnachweis', label: 'Arbeitsnachweis', prefix: 'Arbeitsnachweis', icon: 'arbeitsnachweis.png' },
   { id: 'kfz', label: 'Maut / Parken', prefix: 'KFZ', icon: 'maut_parken.png' },
   { id: 'email', label: 'E-Mail', prefix: 'Email', icon: 'email.png' },
   { id: 'angebot', label: 'Angebot', prefix: 'Angebot', icon: 'angebot.png' },
@@ -71,9 +71,14 @@ function sanitizeUploadBasename(name) {
   return n || 'datei';
 }
 
+function belegLegacyPrefixes() {
+  return ['Firmenauto'];
+}
+
 function stripKnownBelegPrefix(baseName) {
   const base = String(baseName || '');
-  for (const prefix of belegPrefixes()) {
+  const prefixes = [...belegPrefixes(), ...belegLegacyPrefixes()];
+  for (const prefix of prefixes) {
     const needle = `${prefix}_`;
     if (base.startsWith(needle)) {
       const rest = base.slice(needle.length);
