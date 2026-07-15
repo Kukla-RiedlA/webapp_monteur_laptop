@@ -11,6 +11,7 @@ const https = require('https');
 const WebSocket = require('ws');
 const FormData = require('form-data');
 const csvToPdfPath = path.join(__dirname, 'lib', 'csv-to-pdf.js');
+const { postalCodeNormalize } = require(path.join(__dirname, 'lib', 'postal_code_util.js'));
 
 function getCsvToPdfBuffer() {
   try {
@@ -9146,7 +9147,7 @@ function createApp(db) {
         const endkunde = hotelPayload.hotel_endkunde || null;
         const street = hotelPayload.hotel_street || '';
         const house_number = hotelPayload.hotel_house_number || '';
-        const zip = hotelPayload.hotel_zip || '';
+        const zip = postalCodeNormalize(hotelPayload.hotel_zip || '', hotelPayload.hotel_country || '');
         const city = hotelPayload.hotel_city || '';
         const country = hotelPayload.hotel_country || null;
         const address_extra_1 = hotelPayload.hotel_address_extra_1 || null;
@@ -9171,7 +9172,7 @@ function createApp(db) {
           endkunde: sitePayload.endkunde || null,
           street: sitePayload.street || '',
           house_number: sitePayload.house_number || '',
-          zip: sitePayload.zip || '',
+          zip: postalCodeNormalize(sitePayload.zip || '', sitePayload.country || ''),
           city: sitePayload.city || '',
           country: sitePayload.country || 'DE',
           address_extra_1: sitePayload.address_extra_1 || null,
@@ -13632,7 +13633,7 @@ function insertOrUpdateJobHotel(db, jobId, j) {
   const endkunde = (j.hotel_endkunde != null ? String(j.hotel_endkunde) : '').trim() || null;
   const street = (j.hotel_street != null ? String(j.hotel_street) : '').trim() || '';
   const house_number = (j.hotel_house_number != null ? String(j.hotel_house_number) : '').trim() || '';
-  const zip = (j.hotel_zip != null ? String(j.hotel_zip) : '').trim() || '';
+  const zip = postalCodeNormalize((j.hotel_zip != null ? String(j.hotel_zip) : '').trim() || '', (j.hotel_country != null ? String(j.hotel_country) : '').trim() || '');
   const city = (j.hotel_city != null ? String(j.hotel_city) : '').trim() || '';
   const country = (j.hotel_country != null ? String(j.hotel_country) : '').trim() || null;
   const address_extra_1 = (j.hotel_address_extra_1 != null ? String(j.hotel_address_extra_1) : '').trim() || null;
@@ -13668,7 +13669,11 @@ function insertOrUpdateJobHotel(db, jobId, j) {
 
 function insertOrUpdateJobAddress(db, jobId, j) {
   const endkunde = j.endkunde || null;
-  const street = j.street || ''; const house = j.house_number || ''; const zip = j.zip || ''; const city = j.city || ''; const country = j.country || 'DE';
+  const street = j.street || '';
+  const house = j.house_number || '';
+  const country = j.country || 'DE';
+  const zip = postalCodeNormalize(j.zip || '', country);
+  const city = j.city || '';
   db.prepare('INSERT OR REPLACE INTO job_addresses (job_id, endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
     jobId, endkunde, street, house, zip, city, country, j.address_extra_1 || null, j.address_extra_2 || null
   );

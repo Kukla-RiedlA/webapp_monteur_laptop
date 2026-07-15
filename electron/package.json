@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Monteur WebApp – Offline-fähige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -13,7 +13,9 @@
     "dist": "node ./node_modules/electron-builder/cli.js --win",
     "postinstall": "electron-builder install-app-deps",
     "test:parameter-pdf": "node scripts/test-parameter-pdf.js",
-    "test:parameter-pdf:open": "node scripts/test-parameter-pdf.js --open"
+    "test:parameter-pdf:open": "node scripts/test-parameter-pdf.js --open",
+    "test:serviceprotokoll-pdf": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js",
+    "test:serviceprotokoll-pdf:open": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js --open"
   },
   "devDependencies": {
     "electron": "^41.2.0",

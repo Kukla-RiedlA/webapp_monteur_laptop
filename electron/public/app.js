@@ -4568,7 +4568,7 @@
     modalHtml += '<div class="hotel-paste-wrap"><label>Adresse einfügen</label><textarea id="job_site_paste_address" class="hotel-paste-textarea" rows="4" placeholder="Komplette Adresse hier einfügen"></textarea><button type="button" class="btn btn-ghost hotel-paste-btn" id="jobSitePasteApply">In Felder übernehmen</button></div>';
     modalHtml += '<div class="row row-full-width"><div><label>Endkunde / Firma</label><input type="text" id="job_site_edit_endkunde" value="' + attr(job.endkunde) + '" placeholder="Name oder Firma"></div></div>';
     modalHtml += '<div class="row"><div><label>Straße</label><input type="text" id="job_site_edit_street" value="' + attr(job.street) + '"></div><div style="max-width:80px"><label>Hausnr.</label><input type="text" id="job_site_edit_house_number" value="' + attr(job.house_number) + '" maxlength="32"></div></div>';
-    modalHtml += '<div class="row row-city-to-edge"><div style="max-width:70px"><label>PLZ</label><input type="text" id="job_site_edit_zip" value="' + attr(job.zip) + '" maxlength="7"></div><div><label>Ort</label><input type="text" id="job_site_edit_city" value="' + attr(job.city) + '"></div></div>';
+    modalHtml += '<div class="row row-city-to-edge"><div style="max-width:110px"><label>PLZ</label><input type="text" id="job_site_edit_zip" value="' + attr(job.zip) + '" maxlength="32" autocomplete="postal-code"></div><div><label>Ort</label><input type="text" id="job_site_edit_city" value="' + attr(job.city) + '"></div></div>';
     var currentCountry = (job.country || '').trim();
     modalHtml += '<label>Land</label><div class="hotel-country-select-wrap">';
     modalHtml += '<span id="job_site_edit_country_flag" class="hotel-country-flag" aria-hidden="true"></span>';
@@ -4889,7 +4889,11 @@
     var zip4 = /\b(\d{4})\b/;
     var zip5plus4 = /\b(\d{5}-\d{4})\b/;
     var zip6 = /\b(\d{6})\b/;
-    var ukPostcode = /\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i;
+    var ukPostcode = /\b([A-Z]{1,2}\d[A-Z\d]?\s+\d[A-Z]{2})\b/i;
+    var caPostcode = /\b([A-Z]\d[A-Z]\s?\d[A-Z]\d)\b/i;
+    var nlPostcode = /\b(\d{4}\s+[A-Z]{2})\b/i;
+    var iePostcode = /\b([A-Z]\d{2}\s+[A-Z0-9]{4})\b/i;
+    var provCaPostcode = /,\s*([A-Z]{2})\s+([A-Z]\d[A-Z]\s?\d[A-Z]\d)\s*$/i;
     var countryLineIdx = -1;
     var countryCode = '';
     for (var k = remainder.length - 1; k >= 0; k--) {
@@ -4913,17 +4917,40 @@
       var m6 = ln.match(zip6);
       var m4 = ln.match(zip4);
       var mUK = ln.match(ukPostcode);
-      function setZipAndCity(matchVal) {
+      var mCA = ln.match(caPostcode);
+      var mNL = ln.match(nlPostcode);
+      var mIE = ln.match(iePostcode);
+      var mProvCA = ln.match(provCaPostcode);
+      function setZipAndCity(matchVal, cityOverride) {
         zipVal = matchVal;
         zipLineIdx = z;
         var idx = ln.indexOf(matchVal);
         var before = ln.substring(0, idx).trim().replace(/\s*[•·]\s*$/, '').trim();
         var after = ln.substring(idx + matchVal.length).replace(/\s+/g, ' ').trim();
-        cityVal = after;
+        cityVal = cityOverride != null ? cityOverride : after;
         if (before && /[a-zA-Z]/.test(before)) zipLineBeforePart = before;
       }
+      if (mProvCA) {
+        var caZipRaw = mProvCA[2].replace(/\s/g, '').toUpperCase();
+        var cityFromProv = ln.replace(/,\s*[A-Z]{2}\s+[A-Z]\d[A-Z]\s?\d[A-Z]\d\s*$/i, '').trim();
+        if (cityFromProv.indexOf(',') >= 0) {
+          var cp = cityFromProv.split(',').map(function (p) { return p.trim(); });
+          cityFromProv = cp[cp.length - 1];
+        }
+        setZipAndCity(caZipRaw.slice(0, 3) + ' ' + caZipRaw.slice(3), cityFromProv);
+        if (!out.country) out.country = 'CA';
+        break;
+      }
       if (m54) { setZipAndCity(m54[1]); break; }
-      if (mUK) { setZipAndCity(mUK[1].replace(/\s+/g, ' ')); break; }
+      if (mUK) { setZipAndCity(mUK[1].replace(/\s+/g, ' ').toUpperCase()); break; }
+      if (mCA) {
+        var caNorm = mCA[1].replace(/\s/g, '').toUpperCase();
+        setZipAndCity(caNorm.slice(0, 3) + ' ' + caNorm.slice(3));
+        if (!out.country) out.country = 'CA';
+        break;
+      }
+      if (mNL) { setZipAndCity(mNL[1].replace(/\s+/g, ' ').toUpperCase()); break; }
+      if (mIE) { setZipAndCity(mIE[1].replace(/\s+/g, ' ').toUpperCase()); break; }
       if (m6) { setZipAndCity(m6[1]); break; }
       if (m5) { setZipAndCity(m5[1]); break; }
       var isAddressLine = ln.indexOf(',') >= 0 || /^a\s*-\s*/i.test(ln);
@@ -4992,7 +5019,7 @@
     modalHtml += '<div class="hotel-paste-wrap"><label>Adresse einfügen</label><textarea id="hotel_paste_address" class="hotel-paste-textarea" rows="4" placeholder="Komplette Adresse hier einfügen (z. B. aus E-Mail oder Webseite)"></textarea><button type="button" class="btn btn-ghost hotel-paste-btn" id="hotelPasteApply">In Felder übernehmen</button></div>';
     modalHtml += '<div class="row row-full-width"><div><label>Hotel</label><input type="text" id="hotel_edit_endkunde" value="' + attr(job.hotel_endkunde) + '" placeholder="Name oder Firma"></div></div>';
     modalHtml += '<div class="row"><div><label>Straße</label><input type="text" id="hotel_edit_street" value="' + attr(job.hotel_street) + '"></div><div style="max-width:80px"><label>Hausnr.</label><input type="text" id="hotel_edit_house_number" value="' + attr(job.hotel_house_number) + '" maxlength="32"></div></div>';
-    modalHtml += '<div class="row row-city-to-edge"><div style="max-width:70px"><label>PLZ</label><input type="text" id="hotel_edit_zip" value="' + attr(job.hotel_zip) + '" maxlength="7"></div><div><label>Ort</label><input type="text" id="hotel_edit_city" value="' + attr(job.hotel_city) + '"></div></div>';
+    modalHtml += '<div class="row row-city-to-edge"><div style="max-width:110px"><label>PLZ</label><input type="text" id="hotel_edit_zip" value="' + attr(job.hotel_zip) + '" maxlength="32" autocomplete="postal-code"></div><div><label>Ort</label><input type="text" id="hotel_edit_city" value="' + attr(job.hotel_city) + '"></div></div>';
     var currentCountry = (job.hotel_country || '').trim();
     modalHtml += '<label>Land</label><div class="hotel-country-select-wrap">';
     modalHtml += '<span id="hotel_edit_country_flag" class="hotel-country-flag" aria-hidden="true"></span>';
