@@ -2120,6 +2120,111 @@
     return !!(row.first_name || row.last_name || row.title || row.department || row.phone || row.mobile || row.email || row.contact_name);
   }
 
+  function normalizeDialCountryCode(cc) {
+    var s = String(cc == null ? '' : cc).trim().replace(/\s+/g, '');
+    if (!s || s === '+') return '';
+    if (s.charAt(0) !== '+') s = '+' + s.replace(/^\++/, '');
+    return s;
+  }
+
+  function composeMobilePhone(cc, area, number) {
+    var dial = normalizeDialCountryCode(cc);
+    var areaPart = String(area == null ? '' : area).trim();
+    var num = String(number == null ? '' : number).trim().replace(/\s+/g, ' ');
+    var parts = [];
+    if (dial) parts.push(dial);
+    if (areaPart) parts.push(areaPart);
+    if (num) parts.push(num);
+    return parts.join(' ');
+  }
+
+  function composeLandlinePhone(cc, area, number, ext) {
+    var dial = normalizeDialCountryCode(cc);
+    var areaPart = String(area == null ? '' : area).trim();
+    var num = String(number == null ? '' : number).trim();
+    var extension = String(ext == null ? '' : ext).trim();
+    var parts = [];
+    if (dial) parts.push(dial);
+    if (areaPart) parts.push(areaPart);
+    if (num) parts.push(num);
+    if (!parts.length && !extension) return '';
+    var base = parts.join(' ');
+    if (extension) return base ? (base + ' - ' + extension) : extension;
+    return base;
+  }
+
+  function isLikelyOnlyCountryCode(value) {
+    return /^\+\d{1,4}$/.test(String(value == null ? '' : value).trim().replace(/\s+/g, ''));
+  }
+
+  function parseMobilePhone(str) {
+    var raw = String(str == null ? '' : str).trim();
+    if (!raw) return { cc: '+', area: '', number: '' };
+    var dial = '+';
+    var rest = raw;
+    var compact = raw.replace(/\s+/g, '');
+    if (/^\+\d{1,4}$/.test(compact)) {
+      return { cc: compact, area: '', number: '' };
+    }
+    var m = raw.match(/^(\+\d{1,4})\s+(.*)$/);
+    if (m) {
+      dial = m[1];
+      rest = String(m[2] || '').trim();
+    } else if (/^(\+\d{1,4})(.*)$/.test(raw)) {
+      var m2 = raw.match(/^(\+\d{1,4})\s*(.*)$/);
+      if (m2) {
+        dial = m2[1];
+        rest = String(m2[2] || '').trim();
+      }
+    }
+    var tokens = rest.split(/\s+/).filter(Boolean);
+    if (!tokens.length) return { cc: dial, area: '', number: '' };
+    if (tokens.length === 1) return { cc: dial, area: '', number: tokens[0] };
+    return { cc: dial, area: tokens[0], number: tokens.slice(1).join(' ') };
+  }
+
+  function parseLandlinePhone(str) {
+    var raw = String(str == null ? '' : str).trim();
+    if (!raw) return { cc: '+', area: '', number: '', ext: '' };
+    var extension = '';
+    var extMatch = raw.match(/\s+-\s+(\S+)\s*$/);
+    if (extMatch) {
+      extension = extMatch[1];
+      raw = raw.slice(0, extMatch.index).trim();
+    }
+    var dial = '+';
+    var rest = raw;
+    var compact = raw.replace(/\s+/g, '');
+    if (/^\+\d{1,4}$/.test(compact)) {
+      return { cc: compact, area: '', number: '', ext: extension };
+    }
+    var m = raw.match(/^(\+\d{1,4})\s+(.*)$/);
+    if (m) {
+      dial = m[1];
+      rest = String(m[2] || '').trim();
+    }
+    var tokens = rest.split(/\s+/).filter(Boolean);
+    if (!tokens.length) return { cc: dial, area: '', number: '', ext: extension };
+    if (tokens.length === 1) return { cc: dial, area: '', number: tokens[0], ext: extension };
+    return { cc: dial, area: tokens[0], number: tokens.slice(1).join(' '), ext: extension };
+  }
+
+  /** Prefill für Edit-UI; Legacy phone=+CC + mobile=Nummer → Mobil. */
+  function splitJobContactPhonesForEdit(row) {
+    var phone = (row && row.phone) ? String(row.phone).trim() : '';
+    var mobile = (row && row.mobile) ? String(row.mobile).trim() : '';
+    if (isLikelyOnlyCountryCode(phone) && mobile && mobile.charAt(0) !== '+') {
+      return {
+        mobile: parseMobilePhone(composeMobilePhone(phone, '', mobile)),
+        landline: { cc: '+', area: '', number: '', ext: '' }
+      };
+    }
+    return {
+      mobile: parseMobilePhone(mobile),
+      landline: parseLandlinePhone(phone)
+    };
+  }
+
   function getBaustellenContactsForJob(job) {
     if (!job || typeof job !== 'object') return [];
     var out = [];
@@ -2156,12 +2261,26 @@
     if (name) lines.push('<strong>' + escapeHtml(name) + '</strong>');
     if (row.title) lines.push(escapeHtml(row.title));
     if (row.department) lines.push(escapeHtml(row.department));
-    var phones = [];
-    if (row.phone) phones.push('Tel. ' + escapeHtml(row.phone));
-    if (row.mobile) phones.push('Mobil ' + escapeHtml(row.mobile));
-    if (phones.length) lines.push(phones.join(' · '));
+    if (row.mobile) lines.push('Telefon Mobil: ' + escapeHtml(row.mobile));
+    if (row.phone) lines.push('Telefon Fest: ' + escapeHtml(row.phone));
     if (row.email) lines.push(escapeHtml(row.email));
     return lines;
+  }
+
+  function renderJobContactPhoneDlHtml(row, emptyDash) {
+    var html = '';
+    if (row.mobile) html += '<dt>Telefon Mobil</dt><dd>' + escapeHtml(row.mobile) + '</dd>';
+    if (row.phone) html += '<dt>Telefon Fest</dt><dd>' + escapeHtml(row.phone) + '</dd>';
+    if (!html) html = '<dt>Telefon</dt><dd>' + (emptyDash ? '–' : '') + '</dd>';
+    return html;
+  }
+
+  function renderJobContactPhoneArchivHtml(row, v) {
+    var html = '';
+    if (row.mobile) html += '<dt>Telefon Mobil</dt><dd>' + v(row.mobile) + '</dd>';
+    if (row.phone) html += '<dt>Telefon Fest</dt><dd>' + v(row.phone) + '</dd>';
+    if (!html) html = '<dt>Telefon</dt><dd>' + v('') + '</dd>';
+    return html;
   }
 
   function renderJobSiteContactsProjektdatenHtml(job) {
@@ -2176,11 +2295,10 @@
     if (contacts.length === 1) {
       var row = contacts[0];
       var name = formatJobContactDisplayName(row) || '–';
-      var phone = row.phone || row.mobile || '–';
       var email = row.email || '–';
       return '<dl class="modal-detail-dl">'
         + '<dt>Ansprechpartner</dt><dd>' + escapeHtml(name) + (row.title ? '<br><span class="muted">' + escapeHtml(row.title) + '</span>' : '') + (row.department ? '<br><span class="muted">' + escapeHtml(row.department) + '</span>' : '') + '</dd>'
-        + '<dt>Telefon</dt><dd>' + escapeHtml(phone) + (row.phone && row.mobile ? '<br><span class="muted">Mobil ' + escapeHtml(row.mobile) + '</span>' : '') + '</dd>'
+        + renderJobContactPhoneDlHtml(row, true)
         + '<dt>E-Mail</dt><dd>' + escapeHtml(email) + '</dd>'
         + '</dl>';
     }
@@ -2203,12 +2321,12 @@
     if (contacts.length === 1) {
       var row = contacts[0];
       return '<dt>Ansprechpartner</dt><dd>' + v(formatJobContactDisplayName(row)) + (row.title ? '<br>' + v(row.title) : '') + '</dd>'
-        + '<dt>Telefon</dt><dd>' + v(row.phone || row.mobile) + '</dd>'
+        + renderJobContactPhoneArchivHtml(row, v)
         + '<dt>E-Mail</dt><dd>' + v(row.email) + '</dd>';
     }
     return contacts.map(function (c, idx) {
       return '<dt>Ansprechpartner ' + (idx + 1) + '</dt><dd>' + v(formatJobContactDisplayName(c)) + '</dd>'
-        + '<dt>Telefon</dt><dd>' + v(c.phone || c.mobile) + '</dd>'
+        + renderJobContactPhoneArchivHtml(normalizeJobContactRow(c), v)
         + '<dt>E-Mail</dt><dd>' + v(c.email) + '</dd>';
     }).join('');
   }
@@ -4715,6 +4833,7 @@
     }
     function buildContactRowHtml(c, index, showRemove) {
       var row = normalizeJobContactRow(c);
+      var phones = splitJobContactPhonesForEdit(row);
       var anzeigename = getJobContactAnzeigenameField(c);
       var rowHtml = '<div class="job-site-contact-edit-row" data-index="' + index + '">';
       rowHtml += '<div class="row job-site-contact-name-row">';
@@ -4723,14 +4842,27 @@
       rowHtml += '<div class="job-site-contact-title-col"><label>Titel</label><input type="text" class="job-site-contact-title" value="' + attr(row.title) + '"></div>';
       rowHtml += '</div>';
       rowHtml += '<label>Abteilung / Funktion</label><input type="text" class="job-site-contact-department" value="' + attr(row.department) + '">';
-      rowHtml += '<div class="row job-site-contact-comm-row">';
-      rowHtml += '<div><label>Telefon</label><input type="tel" class="job-site-contact-phone" value="' + attr(row.phone) + '"></div>';
-      rowHtml += '<div><label>Mobil</label><input type="tel" class="job-site-contact-mobile" value="' + attr(row.mobile) + '"></div>';
-      rowHtml += '<div><label>E-Mail</label><input type="email" class="job-site-contact-email" value="' + attr(row.email) + '"></div>';
+      rowHtml += '<div class="row job-site-contact-phone-mobile-row job-site-contact-comm-row">';
+      rowHtml += '<div class="job-site-contact-phone-parts">';
+      rowHtml += '<label>Telefon Mobil</label>';
+      rowHtml += '<div class="job-site-contact-phone-inputs">';
+      rowHtml += '<input type="tel" class="job-site-contact-mobile-cc" value="' + attr(phones.mobile.cc) + '" placeholder="+49" title="Ländervorwahl" aria-label="Ländervorwahl Mobil">';
+      rowHtml += '<input type="tel" class="job-site-contact-mobile-area" value="' + attr(phones.mobile.area) + '" placeholder="Vorwahl" aria-label="Vorwahl Mobil">';
+      rowHtml += '<input type="tel" class="job-site-contact-mobile-num" value="' + attr(phones.mobile.number) + '" placeholder="Nummer" aria-label="Mobilnummer">';
+      rowHtml += '</div></div>';
       if (showRemove) {
         rowHtml += '<div class="job-site-contact-remove-col"><label aria-hidden="true">&nbsp;</label><button type="button" class="btn btn-ghost job-site-contact-remove" title="Entfernen" aria-label="Ansprechpartner entfernen">−</button></div>';
       }
       rowHtml += '</div>';
+      rowHtml += '<div class="job-site-contact-phone-parts job-site-contact-phone-landline">';
+      rowHtml += '<label>Telefon Fest</label>';
+      rowHtml += '<div class="job-site-contact-phone-inputs job-site-contact-phone-landline-inputs">';
+      rowHtml += '<input type="tel" class="job-site-contact-phone-cc" value="' + attr(phones.landline.cc) + '" placeholder="+49" title="Ländervorwahl" aria-label="Ländervorwahl Festnetz">';
+      rowHtml += '<input type="tel" class="job-site-contact-phone-area" value="' + attr(phones.landline.area) + '" placeholder="Vorwahl" aria-label="Ortsvorwahl">';
+      rowHtml += '<input type="tel" class="job-site-contact-phone-num" value="' + attr(phones.landline.number) + '" placeholder="Nummer" aria-label="Festnetznummer">';
+      rowHtml += '<input type="tel" class="job-site-contact-phone-ext" value="' + attr(phones.landline.ext) + '" placeholder="Durchwahl" aria-label="Durchwahl">';
+      rowHtml += '</div></div>';
+      rowHtml += '<label>E-Mail</label><input type="email" class="job-site-contact-email" value="' + attr(row.email) + '">';
       rowHtml += '<label>Anzeigename <span class="muted">(optional, falls abweichend von Vor- und Nachname)</span></label>';
       rowHtml += '<input type="text" class="job-site-contact-display-name" value="' + attr(anzeigename) + '">';
       rowHtml += '</div>';
@@ -4776,8 +4908,17 @@
         last_name: val('.job-site-contact-last-name'),
         title: val('.job-site-contact-title'),
         department: val('.job-site-contact-department'),
-        phone: val('.job-site-contact-phone'),
-        mobile: val('.job-site-contact-mobile'),
+        phone: composeLandlinePhone(
+          val('.job-site-contact-phone-cc'),
+          val('.job-site-contact-phone-area'),
+          val('.job-site-contact-phone-num'),
+          val('.job-site-contact-phone-ext')
+        ),
+        mobile: composeMobilePhone(
+          val('.job-site-contact-mobile-cc'),
+          val('.job-site-contact-mobile-area'),
+          val('.job-site-contact-mobile-num')
+        ),
         email: val('.job-site-contact-email'),
         contact_name: val('.job-site-contact-display-name')
       });
