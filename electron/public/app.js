@@ -2091,13 +2091,19 @@
   /** Nur Baustellen-Ansprechpartner (job_contacts / baustellen_ansprechpartner), nicht Kundenkontakt. */
   function normalizeJobContactRow(c) {
     c = c || {};
+    var phone = (c.phone != null ? String(c.phone) : '').trim();
+    var mobile = (c.mobile != null ? String(c.mobile) : '').trim();
+    var legacyPhone = (c.contact_phone != null ? String(c.contact_phone) : '').trim();
+    // contact_phone ist Legacy-Spiegel (phone||mobile) – nicht als Festnetz übernehmen, wenn es die Mobilnummer ist.
+    if (!phone && legacyPhone && legacyPhone !== mobile) phone = legacyPhone;
+    if (phone && mobile && phone === mobile) phone = '';
     return {
       first_name: (c.first_name != null ? String(c.first_name) : '').trim(),
       last_name: (c.last_name != null ? String(c.last_name) : '').trim(),
       title: (c.title != null ? String(c.title) : '').trim(),
       department: (c.department != null ? String(c.department) : '').trim(),
-      phone: (c.phone != null ? String(c.phone) : (c.contact_phone != null ? String(c.contact_phone) : '')).trim(),
-      mobile: (c.mobile != null ? String(c.mobile) : '').trim(),
+      phone: phone,
+      mobile: mobile,
       email: (c.email != null ? String(c.email) : (c.contact_email != null ? String(c.contact_email) : '')).trim(),
       contact_name: (c.contact_name != null ? String(c.contact_name) : (c.contactName != null ? String(c.contactName) : '')).trim()
     };
@@ -2213,6 +2219,10 @@
   function splitJobContactPhonesForEdit(row) {
     var phone = (row && row.phone) ? String(row.phone).trim() : '';
     var mobile = (row && row.mobile) ? String(row.mobile).trim() : '';
+    // Gleicher String in phone und mobile (Legacy-Spiegel) → nur Mobil anzeigen
+    if (phone && mobile && phone === mobile) {
+      phone = '';
+    }
     if (isLikelyOnlyCountryCode(phone) && mobile && mobile.charAt(0) !== '+') {
       return {
         mobile: parseMobilePhone(composeMobilePhone(phone, '', mobile)),

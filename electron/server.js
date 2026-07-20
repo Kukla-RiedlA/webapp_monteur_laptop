@@ -13348,7 +13348,9 @@ function normalizeJobContactPayload(input) {
   let legacyName = raw.contact_name != null ? String(raw.contact_name).trim() : '';
   const legacyPhone = raw.contact_phone != null ? String(raw.contact_phone).trim() : '';
   const legacyEmail = raw.contact_email != null ? String(raw.contact_email).trim() : '';
-  if (!phone && legacyPhone) phone = legacyPhone;
+  // contact_phone spiegelt oft phone||mobile – nicht als Festnetz setzen, wenn es die Mobilnummer ist.
+  if (!phone && legacyPhone && legacyPhone !== mobile) phone = legacyPhone;
+  if (phone && mobile && phone === mobile) phone = '';
   if (!email && legacyEmail) email = legacyEmail;
   if (!fn && !ln && legacyName) {
     const parts = legacyName.split(/\s+/).filter(Boolean);
