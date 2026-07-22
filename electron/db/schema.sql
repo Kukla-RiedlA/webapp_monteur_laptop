@@ -197,3 +197,62 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_job_technicians_tech ON job_technicians(technician_id);
 CREATE INDEX IF NOT EXISTS idx_absences_tech ON absences(technician_id);
 CREATE INDEX IF NOT EXISTS idx_absences_start ON absences(start_datetime);
+
+-- Zeitschreibung (Monatsblatt)
+CREATE TABLE IF NOT EXISTS timesheets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  technician_id INTEGER NOT NULL,
+  year INTEGER NOT NULL,
+  month INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  sum_anw REAL NOT NULL DEFAULT 0,
+  sum_montage REAL NOT NULL DEFAULT 0,
+  sum_ue50 REAL NOT NULL DEFAULT 0,
+  sum_ue100 REAL NOT NULL DEFAULT 0,
+  sum_weg REAL NOT NULL DEFAULT 0,
+  sum_urlaub REAL NOT NULL DEFAULT 0,
+  sum_za_plus REAL NOT NULL DEFAULT 0,
+  sum_za_minus REAL NOT NULL DEFAULT 0,
+  sum_krank REAL NOT NULL DEFAULT 0,
+  sum_day REAL NOT NULL DEFAULT 0,
+  gesamt REAL NOT NULL DEFAULT 0,
+  pdf_path TEXT,
+  xlsx_path TEXT,
+  server_id INTEGER,
+  synced_at TEXT,
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(technician_id, year, month)
+);
+CREATE TABLE IF NOT EXISTS timesheet_days (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timesheet_id INTEGER NOT NULL,
+  day_date TEXT NOT NULL,
+  weekday TEXT NOT NULL DEFAULT '',
+  holiday_label TEXT NOT NULL DEFAULT '',
+  anw REAL NOT NULL DEFAULT 0,
+  montage REAL NOT NULL DEFAULT 0,
+  ue50 REAL NOT NULL DEFAULT 0,
+  ue100 REAL NOT NULL DEFAULT 0,
+  weg REAL NOT NULL DEFAULT 0,
+  urlaub REAL NOT NULL DEFAULT 0,
+  za_plus REAL NOT NULL DEFAULT 0,
+  za_minus REAL NOT NULL DEFAULT 0,
+  krank REAL NOT NULL DEFAULT 0,
+  day_sum REAL NOT NULL DEFAULT 0,
+  bemerkung TEXT NOT NULL DEFAULT '',
+  UNIQUE(timesheet_id, day_date),
+  FOREIGN KEY (timesheet_id) REFERENCES timesheets(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS zeitschreibung_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timesheet_id INTEGER NOT NULL,
+  op TEXT NOT NULL DEFAULT 'submit',
+  payload_json TEXT,
+  local_pdf_path TEXT,
+  local_xlsx_path TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+

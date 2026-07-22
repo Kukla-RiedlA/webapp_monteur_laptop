@@ -1,0 +1,486 @@
+'use strict';
+
+const path = require('path');
+const fs = require('fs');
+const express = require('express');
+const calc = require('./zeitschreibung-calc');
+const { generateZeitschreibungPdfBuffer } = require('./zeitschreibung-pdf');
+const { generateZeitschreibungXlsxBuffer } = require('./zeitschreibung-xlsx');
+
+function cfgPath(dbDir) {
+  return path.join(dbDir, 'zeitschreibung_config.json');
+}
+
+function readConfig(dbDir) {
+  const p = cfgPath(dbDir);
+  try {
+    if (fs.existsSync(p)) {
+      const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+      return { basePath: String(j.basePath || '').trim() };
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return { basePath: '' };
+}
+
+function writeConfig(dbDir, cfg) {
+  fs.writeFileSync(cfgPath(dbDir), JSON.stringify({ basePath: String(cfg.basePath || '').trim() }, null, 2), 'utf8');
+}
+
+function ensureTables(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS timesheets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      technician_id INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      sum_anw REAL NOT NULL DEFAULT 0,
+      sum_montage REAL NOT NULL DEFAULT 0,
+      sum_ue50 REAL NOT NULL DEFAULT 0,
+      sum_ue100 REAL NOT NULL DEFAULT 0,
+      sum_weg REAL NOT NULL DEFAULT 0,
+      sum_urlaub REAL NOT NULL DEFAULT 0,
+      sum_za_plus REAL NOT NULL DEFAULT 0,
+      sum_za_minus REAL NOT NULL DEFAULT 0,
+      sum_krank REAL NOT NULL DEFAULT 0,
+      sum_day REAL NOT NULL DEFAULT 0,
+      gesamt REAL NOT NULL DEFAULT 0,
+      pdf_path TEXT,
+      xlsx_path TEXT,
+      server_id INTEGER,
+      synced_at TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(technician_id, year, month)
+    );
+    CREATE TABLE IF NOT EXISTS timesheet_days (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timesheet_id INTEGER NOT NULL,
+      day_date TEXT NOT NULL,
+      weekday TEXT NOT NULL DEFAULT '',
+      holiday_label TEXT NOT NULL DEFAULT '',
+      anw REAL NOT NULL DEFAULT 0,
+      montage REAL NOT NULL DEFAULT 0,
+      ue50 REAL NOT NULL DEFAULT 0,
+      ue100 REAL NOT NULL DEFAULT 0,
+      weg REAL NOT NULL DEFAULT 0,
+      urlaub REAL NOT NULL DEFAULT 0,
+      za_plus REAL NOT NULL DEFAULT 0,
+      za_minus REAL NOT NULL DEFAULT 0,
+      krank REAL NOT NULL DEFAULT 0,
+      day_sum REAL NOT NULL DEFAULT 0,
+      bemerkung TEXT NOT NULL DEFAULT '',
+      UNIQUE(timesheet_id, day_date),
+      FOREIGN KEY (timesheet_id) REFERENCES timesheets(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS zeitschreibung_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timesheet_id INTEGER NOT NULL,
+      op TEXT NOT NULL DEFAULT 'submit',
+      payload_json TEXT,
+      local_pdf_path TEXT,
+      local_xlsx_path TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+function getTechnicianName(db, technicianId) {
+  try {
+    const row = db.prepare('SELECT full_name, username FROM users WHERE id = ?').get(technicianId);
+    if (row && row.full_name) return String(row.full_name);
+    if (row && row.username) return String(row.username);
+  } catch (_) {
+    /* ignore */
+  }
+  return 'Monteur';
+}
+
+function loadTimesheet(db, technicianId, year, month) {
+  const head = db
+    .prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+    .get(technicianId, year, month);
+  if (!head) {
+    const days = calc.buildMonthDays(year, month);
+    const sums = calc.columnSums(days);
+    return {
+      id: null,
+      technician_id: technicianId,
+      year,
+      month,
+      status: 'draft',
+      days,
+      sums,
+      gesamt: calc.gesamtSum(sums),
+      pdf_path: null,
+      xlsx_path: null,
+      server_id: null,
+      synced_at: null,
+    };
+  }
+  const dayRows = db
+    .prepare('SELECT * FROM timesheet_days WHERE timesheet_id = ? ORDER BY day_date')
+    .all(head.id);
+  const byDate = {};
+  for (const r of dayRows) byDate[r.day_date] = r;
+  const days = calc.buildMonthDays(year, month, byDate);
+  const sums = {
+    anw: head.sum_anw,
+    montage: head.sum_montage,
+    ue50: head.sum_ue50,
+    ue100: head.sum_ue100,
+    weg: head.sum_weg,
+    urlaub: head.sum_urlaub,
+    za_plus: head.sum_za_plus,
+    za_minus: head.sum_za_minus,
+    krank: head.sum_krank,
+    day_sum: head.sum_day,
+  };
+  return {
+    id: head.id,
+    technician_id: head.technician_id,
+    year: head.year,
+    month: head.month,
+    status: head.status,
+    days,
+    sums,
+    gesamt: head.gesamt,
+    pdf_path: head.pdf_path,
+    xlsx_path: head.xlsx_path,
+    server_id: head.server_id,
+    synced_at: head.synced_at,
+  };
+}
+
+function persistTimesheet(db, technicianId, year, month, daysIn, status) {
+  const byDate = {};
+  for (const d of daysIn || []) {
+    if (d && d.day_date) byDate[d.day_date] = d;
+  }
+  const days = calc.buildMonthDays(year, month, byDate);
+  for (const d of days) d.day_sum = calc.daySum(d);
+  const sums = calc.columnSums(days);
+  const gesamt = calc.gesamtSum(sums);
+
+  const existing = db
+    .prepare('SELECT id FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+    .get(technicianId, year, month);
+
+  let id;
+  if (existing) {
+    id = existing.id;
+    db.prepare(
+      `UPDATE timesheets SET status = ?, sum_anw=?, sum_montage=?, sum_ue50=?, sum_ue100=?, sum_weg=?,
+       sum_urlaub=?, sum_za_plus=?, sum_za_minus=?, sum_krank=?, sum_day=?, gesamt=?, updated_at=datetime('now')
+       WHERE id = ?`,
+    ).run(
+      status,
+      sums.anw,
+      sums.montage,
+      sums.ue50,
+      sums.ue100,
+      sums.weg,
+      sums.urlaub,
+      sums.za_plus,
+      sums.za_minus,
+      sums.krank,
+      sums.day_sum,
+      gesamt,
+      id,
+    );
+    db.prepare('DELETE FROM timesheet_days WHERE timesheet_id = ?').run(id);
+  } else {
+    const info = db
+      .prepare(
+        `INSERT INTO timesheets (
+          technician_id, year, month, status, sum_anw, sum_montage, sum_ue50, sum_ue100, sum_weg,
+          sum_urlaub, sum_za_plus, sum_za_minus, sum_krank, sum_day, gesamt, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
+      )
+      .run(
+        technicianId,
+        year,
+        month,
+        status,
+        sums.anw,
+        sums.montage,
+        sums.ue50,
+        sums.ue100,
+        sums.weg,
+        sums.urlaub,
+        sums.za_plus,
+        sums.za_minus,
+        sums.krank,
+        sums.day_sum,
+        gesamt,
+      );
+    id = Number(info.lastInsertRowid);
+  }
+
+  const ins = db.prepare(
+    `INSERT INTO timesheet_days (
+      timesheet_id, day_date, weekday, holiday_label, anw, montage, ue50, ue100, weg,
+      urlaub, za_plus, za_minus, krank, day_sum, bemerkung
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  );
+  const tx = db.transaction((rows) => {
+    for (const d of rows) {
+      ins.run(
+        id,
+        d.day_date,
+        d.weekday,
+        d.holiday_label || '',
+        calc.num(d.anw),
+        calc.num(d.montage),
+        calc.num(d.ue50),
+        calc.num(d.ue100),
+        calc.num(d.weg),
+        calc.num(d.urlaub),
+        calc.num(d.za_plus),
+        calc.num(d.za_minus),
+        calc.num(d.krank),
+        calc.num(d.day_sum),
+        d.bemerkung || '',
+      );
+    }
+  });
+  tx(days);
+
+  return { id, days, sums, gesamt, status };
+}
+
+function mkdirp(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+async function writeExportFiles(dbDir, db, writeFileWithRetry, technicianId, year, month, days, sums, gesamt) {
+  const cfg = readConfig(dbDir);
+  if (!cfg.basePath) {
+    const err = new Error('Zeitaufzeichnungen-Ordner nicht konfiguriert. Bitte Basispfad wählen.');
+    err.code = 'NO_BASE_PATH';
+    throw err;
+  }
+  const techName = getTechnicianName(db, technicianId);
+  const relFolder = calc.folderRel(year, month).replace(/\//g, path.sep);
+  const dir = path.join(cfg.basePath, relFolder);
+  mkdirp(dir);
+  const stem = calc.fileStem(year, month, techName);
+  const pdfPath = path.join(dir, `${stem}.pdf`);
+  const xlsxPath = path.join(dir, `${stem}.xlsx`);
+  const payload = { year, month, technicianName: techName, days, sums, gesamt };
+  const pdfBuf = await generateZeitschreibungPdfBuffer(payload);
+  const xlsxBuf = await generateZeitschreibungXlsxBuffer(payload);
+  if (typeof writeFileWithRetry === 'function') {
+    await writeFileWithRetry(pdfPath, pdfBuf);
+    await writeFileWithRetry(xlsxPath, xlsxBuf);
+  } else {
+    fs.writeFileSync(pdfPath, pdfBuf);
+    fs.writeFileSync(xlsxPath, xlsxBuf);
+  }
+  return { pdfPath, xlsxPath, techName };
+}
+
+function enqueueOutbox(db, timesheetId, pdfPath, xlsxPath, payload) {
+  db.prepare('DELETE FROM zeitschreibung_outbox WHERE timesheet_id = ? AND op = ?').run(timesheetId, 'submit');
+  db.prepare(
+    `INSERT INTO zeitschreibung_outbox (timesheet_id, op, payload_json, local_pdf_path, local_xlsx_path)
+     VALUES (?, 'submit', ?, ?, ?)`,
+  ).run(timesheetId, JSON.stringify(payload || {}), pdfPath || null, xlsxPath || null);
+}
+
+/**
+ * Push pending timesheet submits to Dispo.
+ */
+async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, fetchFn) {
+  const rows = db.prepare('SELECT * FROM zeitschreibung_outbox ORDER BY id ASC LIMIT 20').all();
+  if (!rows.length) return { flushed: 0, errors: [] };
+  const fetchImpl = fetchFn || fetch;
+  const errors = [];
+  let flushed = 0;
+  for (const row of rows) {
+    try {
+      const ts = db.prepare('SELECT * FROM timesheets WHERE id = ?').get(row.timesheet_id);
+      if (!ts) {
+        db.prepare('DELETE FROM zeitschreibung_outbox WHERE id = ?').run(row.id);
+        continue;
+      }
+      const days = db
+        .prepare('SELECT * FROM timesheet_days WHERE timesheet_id = ? ORDER BY day_date')
+        .all(row.timesheet_id);
+      const body = {
+        technician_id: ts.technician_id || technicianId,
+        year: ts.year,
+        month: ts.month,
+        status: 'submitted',
+        sums: {
+          anw: ts.sum_anw,
+          montage: ts.sum_montage,
+          ue50: ts.sum_ue50,
+          ue100: ts.sum_ue100,
+          weg: ts.sum_weg,
+          urlaub: ts.sum_urlaub,
+          za_plus: ts.sum_za_plus,
+          za_minus: ts.sum_za_minus,
+          krank: ts.sum_krank,
+          day_sum: ts.sum_day,
+        },
+        gesamt: ts.gesamt,
+        days: days.map((d) => ({
+          day_date: d.day_date,
+          weekday: d.weekday,
+          holiday_label: d.holiday_label,
+          anw: d.anw,
+          montage: d.montage,
+          ue50: d.ue50,
+          ue100: d.ue100,
+          weg: d.weg,
+          urlaub: d.urlaub,
+          za_plus: d.za_plus,
+          za_minus: d.za_minus,
+          krank: d.krank,
+          day_sum: d.day_sum,
+          bemerkung: d.bemerkung,
+        })),
+      };
+      const url = String(baseUrl || '').replace(/\/$/, '') + '/api/monteur_timesheet_submit.php';
+      const headers = { 'Content-Type': 'application/json', 'X-Technician-Id': String(body.technician_id) };
+      if (authHeader) headers.Authorization = authHeader;
+      const res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const serverId = data.id != null ? Number(data.id) : null;
+      db.prepare(
+        `UPDATE timesheets SET server_id = COALESCE(?, server_id), synced_at = datetime('now') WHERE id = ?`,
+      ).run(serverId, row.timesheet_id);
+      db.prepare('DELETE FROM zeitschreibung_outbox WHERE id = ?').run(row.id);
+      flushed += 1;
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      errors.push(msg);
+      db.prepare(
+        `UPDATE zeitschreibung_outbox SET attempts = attempts + 1, last_error = ?, updated_at = datetime('now') WHERE id = ?`,
+      ).run(msg, row.id);
+    }
+  }
+  return { flushed, errors };
+}
+
+function registerZeitschreibungRoutes(app, ctx) {
+  const { getDb, dbDir, writeFileWithRetry } = ctx;
+  ensureTables(getDb());
+
+  app.get('/api/zeitschreibung/config', (req, res) => {
+    try {
+      res.json({ ok: true, ...readConfig(dbDir) });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/zeitschreibung/config', express.json(), (req, res) => {
+    try {
+      const basePath = String((req.body && req.body.basePath) || '').trim();
+      writeConfig(dbDir, { basePath });
+      res.json({ ok: true, basePath });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get('/api/zeitschreibung', (req, res) => {
+    try {
+      const db = getDb();
+      ensureTables(db);
+      const technicianId = parseInt(String(req.query.technician_id || ''), 10);
+      const year = parseInt(String(req.query.year || ''), 10);
+      const month = parseInt(String(req.query.month || ''), 10);
+      if (!technicianId || !year || !month || month < 1 || month > 12) {
+        return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
+      }
+      const data = loadTimesheet(db, technicianId, year, month);
+      data.technician_name = getTechnicianName(db, technicianId);
+      data.config = readConfig(dbDir);
+      res.json({ ok: true, ...data });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/zeitschreibung/save', express.json({ limit: '2mb' }), (req, res) => {
+    try {
+      const db = getDb();
+      ensureTables(db);
+      const body = req.body || {};
+      const technicianId = parseInt(String(body.technician_id || ''), 10);
+      const year = parseInt(String(body.year || ''), 10);
+      const month = parseInt(String(body.month || ''), 10);
+      if (!technicianId || !year || !month) {
+        return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
+      }
+      const saved = persistTimesheet(db, technicianId, year, month, body.days || [], 'draft');
+      res.json({ ok: true, id: saved.id, sums: saved.sums, gesamt: saved.gesamt, status: 'draft' });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/zeitschreibung/submit', express.json({ limit: '2mb' }), async (req, res) => {
+    try {
+      const db = getDb();
+      ensureTables(db);
+      const body = req.body || {};
+      const technicianId = parseInt(String(body.technician_id || ''), 10);
+      const year = parseInt(String(body.year || ''), 10);
+      const month = parseInt(String(body.month || ''), 10);
+      if (!technicianId || !year || !month) {
+        return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
+      }
+      const saved = persistTimesheet(db, technicianId, year, month, body.days || [], 'submitted');
+      const files = await writeExportFiles(
+        dbDir,
+        db,
+        writeFileWithRetry,
+        technicianId,
+        year,
+        month,
+        saved.days,
+        saved.sums,
+        saved.gesamt,
+      );
+      db.prepare(
+        `UPDATE timesheets SET pdf_path = ?, xlsx_path = ?, status = 'submitted', updated_at = datetime('now') WHERE id = ?`,
+      ).run(files.pdfPath, files.xlsxPath, saved.id);
+      enqueueOutbox(db, saved.id, files.pdfPath, files.xlsxPath, {
+        technician_id: technicianId,
+        year,
+        month,
+      });
+      res.json({
+        ok: true,
+        id: saved.id,
+        status: 'submitted',
+        sums: saved.sums,
+        gesamt: saved.gesamt,
+        pdf_path: files.pdfPath,
+        xlsx_path: files.xlsxPath,
+      });
+    } catch (e) {
+      const code = e && e.code === 'NO_BASE_PATH' ? 400 : 500;
+      res.status(code).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+}
+
+module.exports = {
+  registerZeitschreibungRoutes,
+  flushZeitschreibungOutbox,
+  ensureTables,
+  loadTimesheet,
+  readConfig,
+};

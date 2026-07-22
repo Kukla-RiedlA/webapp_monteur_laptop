@@ -90,6 +90,7 @@ function configurePersistentDbDir() {
   }
 }
 const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore } = require('./lib/abrechnung-routes');
+const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, ensureTables: ensureZeitschreibungTables } = require('./lib/zeitschreibung-routes');
 const { createBackgroundJobService } = require('./lib/background_jobs');
 const {
   isJobAssignedToTechnician,
@@ -9835,6 +9836,17 @@ function createApp(db) {
     getDienstreiseBasePath: () => getDienstreiseBasePath(),
   });
 
+  registerZeitschreibungRoutes(app, {
+    getDb: () => db,
+    dbDir: DB_DIR,
+    writeFileWithRetry,
+  });
+  try {
+    ensureZeitschreibungTables(db);
+  } catch (e) {
+    console.warn('[zeitschreibung] ensureTables:', e && e.message ? e.message : e);
+  }
+
   const abrechnungRefreshCtx = {
     db,
     save,
@@ -10753,6 +10765,11 @@ function createApp(db) {
           );
         } catch (e) {
           console.warn('[abrechnung] flush after sync_push:', e && e.message ? e.message : e);
+        }
+        try {
+          await flushZeitschreibungOutbox(db, baseUrl, auth, technicianId);
+        } catch (e) {
+          console.warn('[zeitschreibung] flush after sync_push:', e && e.message ? e.message : e);
         }
         save();
         break;

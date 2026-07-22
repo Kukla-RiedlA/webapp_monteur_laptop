@@ -460,6 +460,20 @@
     .view-abrechnung.active { display: flex; flex-direction: column; width: 100%; max-width: none; }
     #view-abrechnung #abrechnung-host { flex: 1; min-height: 0; overflow: auto; width: 100%; }
     #view-abrechnung .page-abrechnung .btn { font-family: inherit; }
+    .view-zeitschreibung { display: none; padding: 0; width: 100%; max-width: none; margin: 0; box-sizing: border-box; flex: 1; min-height: 0; }
+    .view-zeitschreibung.active { display: flex; flex-direction: column; width: 100%; max-width: none; }
+    #view-zeitschreibung #zeitschreibung-host { flex: 1; min-height: 0; overflow: auto; width: 100%; padding: 12px 16px 24px; box-sizing: border-box; }
+    .page-zeitschreibung .zs-toolbar, .page-zeitschreibung .zs-path-row, .page-zeitschreibung .zs-actions { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 0 0 12px; }
+    .page-zeitschreibung .zs-tech-name { font-weight: 600; color: #0c6a4d; }
+    .page-zeitschreibung .zs-path-input { min-width: 280px; max-width: 520px; width: 40vw; }
+    .page-zeitschreibung .zs-table-wrap { overflow: auto; max-width: 100%; border: 1px solid #cfe8d1; border-radius: 8px; }
+    .page-zeitschreibung .zs-table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12px; }
+    .page-zeitschreibung .zs-table th, .page-zeitschreibung .zs-table td { border: 1px solid #d7e8da; padding: 3px 4px; white-space: nowrap; }
+    .page-zeitschreibung .zs-table thead th, .page-zeitschreibung .zs-table tfoot th { background: #eef7f0; color: #0c6a4d; }
+    .page-zeitschreibung .zs-input { width: 4.2rem; padding: 2px 4px; box-sizing: border-box; }
+    .page-zeitschreibung .zs-bemerkung { width: 10rem; }
+    .page-zeitschreibung .zs-holiday { color: #8a4b00; max-width: 7rem; overflow: hidden; text-overflow: ellipsis; }
+    .page-zeitschreibung .zs-msg { font-size: 0.9rem; }
     .anlagenstamm-search-row { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem; }
     .anlagenstamm-search-row input { flex:1; min-width:220px; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
     .anlagenstamm-search-filters { display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:0.5rem; width:100%; margin-bottom:0.5rem; }
@@ -1214,6 +1228,7 @@
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
     <button class="btn btn-ghost" id="btnViewDienstreise" title="Auftragsliste, RAMS Abrufen und Erstellen">Aufträge</button>
     <button type="button" class="btn btn-ghost" id="btnViewAbrechnung" title="Abrechnung">Abrechnung</button>
+    <button type="button" class="btn btn-ghost" id="btnViewZeitschreibung" title="Zeitschreibung">Zeitschreibung</button>
     <div class="toolbar-dropdown-wrap">
       <button type="button" class="btn btn-ghost" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">Protokolle ▾</button>
       <div class="toolbar-dropdown" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
@@ -1384,6 +1399,9 @@
   </main>
   <main id="view-abrechnung" class="view-abrechnung view-host-panel" aria-label="Abrechnung">
     <div id="abrechnung-host"></div>
+  </main>
+  <main id="view-zeitschreibung" class="view-zeitschreibung view-host-panel" aria-label="Zeitschreibung">
+    <div id="zeitschreibung-host"></div>
   </main>
   <main id="viewDienstreise" class="view-dienstreise view-auftraege" aria-label="Aufträge">
     <div class="card">
@@ -2175,6 +2193,7 @@
   <script src="js/view-anlagenstamm.js"></script>
   <script src="assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260701"></script>
   <script src="js/view-abrechnung.js?v=20260702c"></script>
+  <script src="js/view-zeitschreibung.js?v=20260723a"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js"></script>
   <script src="js/serviceprotokoll-react-bridge.js"></script>

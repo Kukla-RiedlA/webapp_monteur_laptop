@@ -213,6 +213,12 @@ function applyRuntimeMigrations(db) {
   ensureImageThumbCacheSchema(db);
   const { ensureJobProtectedPathsSchema } = require('./job-protected-paths');
   ensureJobProtectedPathsSchema(db);
+  try {
+    const { ensureTables } = require('./zeitschreibung-routes');
+    ensureTables(db);
+  } catch (_) {
+    /* optional during early boot */
+  }
 }
 
 /**

@@ -9846,6 +9846,7 @@
     const viewProjektdaten = document.getElementById('viewProjektdaten');
     const viewDienstreise = document.getElementById('viewDienstreise');
     const viewAbrechnung = document.getElementById('view-abrechnung');
+    const viewZeitschreibung = document.getElementById('view-zeitschreibung');
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
     const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
@@ -9855,6 +9856,7 @@
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
     if (viewDienstreise) viewDienstreise.classList.remove('active');
     if (viewAbrechnung) viewAbrechnung.classList.remove('active');
+    if (viewZeitschreibung) viewZeitschreibung.classList.remove('active');
     protokolleViewIds.forEach(function (id) {
       const el = document.getElementById(id);
       if (el) el.classList.remove('active');
@@ -9887,6 +9889,17 @@
       loadAbrechnungViewDesktopStyle().catch(function (e) {
         window.alert((e && e.message) ? e.message : String(e));
       });
+      return;
+    }
+    if (name === 'zeitschreibung') {
+      viewStart.classList.add('hidden');
+      if (viewZeitschreibung) viewZeitschreibung.classList.add('active');
+      const host = document.getElementById('zeitschreibung-host');
+      if (host && window.monteurZeitschreibung && typeof window.monteurZeitschreibung.load === 'function') {
+        window.monteurZeitschreibung.load(host).catch(function (e) {
+          window.alert((e && e.message) ? e.message : String(e));
+        });
+      }
       return;
     }
     if (name && name.startsWith('protokolle-')) {
@@ -11560,6 +11573,18 @@
           return;
         }
         showView('abrechnung');
+      });
+    }
+  })();
+  (function initZeitschreibungView() {
+    var btn = document.getElementById('btnViewZeitschreibung');
+    if (btn) {
+      btn.addEventListener('click', function () {
+        if (!getTechId()) {
+          window.alert('Bitte unter Einstellungen die Monteur-ID eintragen.');
+          return;
+        }
+        showView('zeitschreibung');
       });
     }
   })();
