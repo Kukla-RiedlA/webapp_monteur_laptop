@@ -208,23 +208,19 @@
 
   async function choosePath(host) {
     try {
-      if (global.electronAPI && typeof global.electronAPI.chooseDienstreiseBasePath === 'function') {
-        const p = await global.electronAPI.chooseDienstreiseBasePath();
-        if (!p) return;
-        await jfetch('/api/zeitschreibung/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ basePath: p }),
-        });
-        state.basePath = p;
-        const inp = host.querySelector('#zsBasePath');
-        if (inp) inp.value = p;
-        setMsg(host, 'Ordner gespeichert.', false);
+      const picker =
+        (global.monteurApp && typeof global.monteurApp.chooseDienstreiseBasePath === 'function'
+          ? global.monteurApp.chooseDienstreiseBasePath
+          : null) ||
+        (global.electronAPI && typeof global.electronAPI.chooseDienstreiseBasePath === 'function'
+          ? global.electronAPI.chooseDienstreiseBasePath
+          : null);
+      if (!picker) {
+        setMsg(host, 'Ordnerdialog nicht verfügbar. Bitte App neu starten.', true);
         return;
       }
-      // Fallback: prompt
-      const p = window.prompt('Pfad zum Ordner „Zeitaufzeichnungen“:', state.basePath || '');
-      if (p == null) return;
+      const p = await picker();
+      if (!p) return;
       await jfetch('/api/zeitschreibung/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

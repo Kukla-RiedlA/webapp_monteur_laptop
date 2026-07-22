@@ -167,7 +167,7 @@ ipcMain.handle('anlagenstamm:save', async (event, payload) => {
 ipcMain.handle('dienstreise:choose-folder', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Speicherort für Dienstreisen wählen',
+    title: 'Ordner wählen',
     properties: ['openDirectory'],
   });
   if (result.canceled || !result.filePaths || !result.filePaths[0]) {
