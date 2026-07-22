@@ -227,8 +227,9 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
       urlaub, za_plus, za_minus, krank, day_sum, bemerkung
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
-  const tx = db.transaction((rows) => {
-    for (const d of rows) {
+  const dayList = Array.isArray(days) ? days : [];
+  const tx = db.transaction(() => {
+    for (const d of dayList) {
       ins.run(
         id,
         d.day_date,
@@ -248,9 +249,9 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
       );
     }
   });
-  tx(days);
+  tx();
 
-  return { id, days, sums, gesamt, status };
+  return { id, days: dayList, sums, gesamt, status };
 }
 
 function mkdirp(dir) {

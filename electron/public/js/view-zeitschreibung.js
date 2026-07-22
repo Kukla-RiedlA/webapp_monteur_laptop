@@ -245,6 +245,10 @@
   async function save(host, submit) {
     try {
       state.days = readDaysFromDom(host);
+      if (!Array.isArray(state.days) || !state.days.length) {
+        setMsg(host, 'Keine Tageszeilen zum Speichern.', true);
+        return;
+      }
       const body = {
         technician_id: state.technicianId,
         year: state.year,
