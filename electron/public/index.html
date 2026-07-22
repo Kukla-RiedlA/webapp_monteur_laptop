@@ -1472,11 +1472,11 @@
                     <input type="text" id="montageberichtProjekt" required placeholder="Aus Anlagenstamm oder manuell" autocomplete="off">
                   </div>
                   <div class="sp-v2-field">
-                    <label for="montageberichtLang">Sprache</label>
-                    <select id="montageberichtLang">
-                      <option value="de">Deutsch</option>
-                      <option value="en">Englisch</option>
-                    </select>
+                    <span id="montageberichtLangLabel">Sprache</span>
+                    <div class="mb-lang-checks" role="group" aria-labelledby="montageberichtLangLabel">
+                      <label class="mb-lang-check"><input type="checkbox" id="montageberichtLangDe" value="de" checked> Deutsch</label>
+                      <label class="mb-lang-check"><input type="checkbox" id="montageberichtLangEn" value="en"> Englisch</label>
+                    </div>
                   </div>
                 </div>
                 <p class="mb-v2-hint-block">Beim Speichern wird das Projekt für alle Fabrikationsnummern des Auftrags in der Dispo im Anlagenstamm gesetzt.</p>

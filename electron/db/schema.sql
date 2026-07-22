@@ -142,6 +142,18 @@ CREATE TABLE IF NOT EXISTS job_files (
 );
 CREATE INDEX IF NOT EXISTS idx_job_files_job ON job_files(job_id);
 
+-- Explorer „Nicht löschen“: relative Pfade im Reiseordner (z. B. Dokumente_Monteur/…)
+CREATE TABLE IF NOT EXISTS job_protected_paths (
+  local_job_id INTEGER NOT NULL,
+  relative_path TEXT NOT NULL,
+  PRIMARY KEY (local_job_id, relative_path)
+);
+CREATE INDEX IF NOT EXISTS idx_job_protected_paths_job ON job_protected_paths(local_job_id);
+CREATE TABLE IF NOT EXISTS job_protected_paths_meta (
+  local_job_id INTEGER PRIMARY KEY,
+  initialized INTEGER NOT NULL DEFAULT 0
+);
+
 -- Benutzer-Textbausteine (lokal + server_id nach Sync mit Dispo)
 CREATE TABLE IF NOT EXISTS textbausteine_user_categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

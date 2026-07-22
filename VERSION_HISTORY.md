@@ -4,6 +4,14 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.000.005
+- **Montagebericht Sprachen:** Deutsch/Englisch als Checkboxen; bei beiden Auswahl werden zwei DOCX/PDF erzeugt.
+- **Montagebericht Dateinamen:** ohne führende Indexnummer; DE → `…_Montage_DE`, EN → `…_report_GB`.
+- **Montagebericht Layout:** schmalere Label-Spalte, mehr Zelleneinzug; Ansprechperson nur Name; HTML-Entities (`&nbsp;`) im Einsatzgrund bereinigt.
+- **DOCX→PDF:** Eigenes Word-COM-Skript (funktioniert in der gepackten EXE trotz `app.asar`); PDF danach Acrobat-freundlich normalisiert.
+- **PDF öffnen:** Temp-Kopie bei langen Pfaden / Sonderzeichen (Acrobat vs. PDF24).
+- **Nicht löschen:** Geschützte Pfade unter `Dokumente_Monteur` persistent (API, UI, Finish-Cleanup Exact-Match).
+
 ## V 2.000.000
 - **Major Release:** Plattformweite Versionsausrichtung auf V 2.000.000.
 - **Serviceprotokoll:** Arbeitsschritte per Katalog-Modal; Zuruecksetzen auf Fabrikationsnummer-Defaults; React-Embed und Legacy-Formular synchronisiert.

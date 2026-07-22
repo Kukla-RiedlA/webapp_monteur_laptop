@@ -196,11 +196,23 @@ function applyRuntimeMigrations(db) {
       PRIMARY KEY (cache_kind, scope_id, rel_path, thumb_max)
     )`);
   tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_image_thumb_cache_scope ON image_thumb_cache(cache_kind, scope_id)');
+  tryExec(db, `CREATE TABLE IF NOT EXISTS job_protected_paths (
+      local_job_id INTEGER NOT NULL,
+      relative_path TEXT NOT NULL,
+      PRIMARY KEY (local_job_id, relative_path)
+    )`);
+  tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_job_protected_paths_job ON job_protected_paths(local_job_id)');
+  tryExec(db, `CREATE TABLE IF NOT EXISTS job_protected_paths_meta (
+      local_job_id INTEGER PRIMARY KEY,
+      initialized INTEGER NOT NULL DEFAULT 0
+    )`);
   db.prepare("UPDATE jobs SET status = 'angelegt' WHERE LOWER(COALESCE(status, '')) = 'geplant'").run();
   ensureBackgroundJobsSchema(db);
   ensureAnlagenstammLocalSchema(db);
   const { ensureImageThumbCacheSchema } = require('./image-thumb-cache');
   ensureImageThumbCacheSchema(db);
+  const { ensureJobProtectedPathsSchema } = require('./job-protected-paths');
+  ensureJobProtectedPathsSchema(db);
 }
 
 /**

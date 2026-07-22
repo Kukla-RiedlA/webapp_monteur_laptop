@@ -4,10 +4,35 @@ const fs = require('fs');
 const path = require('path');
 const { findMonteurFolderForFab, resolveCanonicalFolderFromDirList, isIgnorableDirEntry } = require('./projekte-neu-local');
 
-function sanitizeDienstreiseFolderPart(str) {
+function sanitizeDienstreiseFolderPart(str, maxLen) {
   if (typeof str !== 'string') return '';
-  const s = str.replace(/[\/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').trim();
+  const limit = Number.isFinite(maxLen) && maxLen > 8 ? Math.floor(maxLen) : 48;
+  // Acrobat/Explorer scheitern oft still an Bullet/Sonderzeichen im Pfad (z. B. U+2022 „•“).
+  // Zusätzlich Segmente kürzen: OneDrive-Pfade mit Firma+Ort+FN überschreiten sonst leicht MAX_PATH (~260).
+  let s = str
+    .replace(/[\/\\:*?"<>|]/g, '_')
+    .replace(/[\u2022\u2023\u2043\u2219\u25E6\u25AA\u25CF\u00B7\u2024\u2027\u2218•▪◦●∙·]/g, '-')
+    .replace(/[\u0000-\u001F\u007F\u00A0\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[^\w\-.,()ÄÖÜäöüß+&]/gi, '_')
+    .replace(/_+/g, '_')
+    .replace(/^[_.\-]+|[_.\-]+$/g, '')
+    .replace(/\s+/g, '_')
+    .trim();
+  if (s.length > limit) {
+    s = s.slice(0, limit).replace(/[_.\-]+$/g, '');
+  }
   return s || 'x';
+}
+
+/**
+ * Dateiname für PDF/DOCX: gleiche Regeln, zusätzlich Endung schützen.
+ * Kurzer Base-Name, damit Montage-PDFs unter langen Reiseordnern Acrobat öffnen können.
+ */
+function sanitizeExportFileBase(str) {
+  const base = String(str || '')
+    .replace(/\.pdf$/i, '')
+    .replace(/\.docx$/i, '');
+  return sanitizeDienstreiseFolderPart(base, 72) || 'Dokument';
 }
 
 /**
@@ -367,6 +392,7 @@ function buildOfflinePreviewTree(tree, parentRel) {
 
 module.exports = {
   sanitizeDienstreiseFolderPart,
+  sanitizeExportFileBase,
   buildMonteurMontageFolderName,
   buildMonteurWorkRelPath,
   buildMonteurWorkAbsDir,

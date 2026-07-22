@@ -143,6 +143,8 @@ const {
   buildOfflinePreviewTree,
   migrateBareFabAnlageDirs,
   resolveFabMapLocal,
+  sanitizeDienstreiseFolderPart,
+  sanitizeExportFileBase,
 } = require('./lib/monteur-montage-paths');
 const {
   ensureJobOfflinePullSchema,
@@ -154,6 +156,17 @@ const {
   updateOfflinePullFabMap,
   ensureMontageFolderNameInConfig,
 } = require('./lib/job-offline-pull');
+const {
+  DOKUMENTE_MONTEUR,
+  listProtectedPaths,
+  seedDokumenteMonteurProtectedPaths,
+  setProtectedPathState,
+  protectPathIfUnderDokumenteMonteur,
+  buildExactProtectedMatcher,
+  canRmSyncTopLevelEntryExact,
+  normalizeRelPath: normalizeProtectedRelPath,
+  isProtectedPathsInitialized,
+} = require('./lib/job-protected-paths');
 const {
   isAnlageDbExplorerSubpath,
   buildAnlageExplorerEntries,
@@ -1543,12 +1556,6 @@ function createApp(db) {
     return { ok: true };
   }
 
-  function sanitizeDienstreiseFolderPart(str) {
-    if (typeof str !== 'string') return '';
-    const s = str.replace(/[\/\\:*?"<>|]/g, '_').replace(/\s+/g, '_').trim();
-    return s || 'x';
-  }
-
   function getNextRunningNumber(basePath, year) {
     const yearDir = path.join(basePath, String(year));
     if (!fs.existsSync(yearDir)) return 1;
@@ -2405,6 +2412,47 @@ function createApp(db) {
   }
 
   /**
+   * Acrobat öffnet unter Windows oft still keine PDFs, wenn der Pfad Bullet-Zeichen (•) enthält.
+   * Bestehende Reiseordner einmalig umbenennen und Binding aktualisieren.
+   */
+  function repairAcrobatHostileReiseDir(localJobId, reiseDir) {
+    if (!reiseDir || !fs.existsSync(reiseDir)) return reiseDir;
+    const parent = path.dirname(reiseDir);
+    const baseName = path.basename(reiseDir);
+    const fixedName = baseName
+      .replace(/[\u2022\u2023\u2043\u2219\u25E6\u25AA\u25CF\u00B7\u2024\u2027\u2218•▪◦●∙·]/g, '-')
+      .replace(/_+/g, '_')
+      .replace(/-+/g, '-')
+      .replace(/_-|-\_/g, '-')
+      .replace(/^[-_]+|[-_]+$/g, '');
+    if (!fixedName || fixedName === baseName) return reiseDir;
+    const target = path.join(parent, fixedName);
+    if (fs.existsSync(target)) {
+      console.warn('[dienstreise] Acrobat-Rename übersprungen (Ziel existiert):', target);
+      return reiseDir;
+    }
+    try {
+      fs.renameSync(reiseDir, target);
+      const lid = parseInt(localJobId, 10);
+      if (Number.isFinite(lid) && lid > 0) bindReiseFolderForJob(lid, target);
+      try {
+        db.prepare('UPDATE dienstreisen SET folder_name = ? WHERE folder_name = ?').run(fixedName, baseName);
+      } catch (_) {
+        /* optional */
+      }
+      save();
+      console.log('[dienstreise] Ordner für Acrobat umbenannt:', baseName, '->', fixedName);
+      return target;
+    } catch (e) {
+      console.warn(
+        '[dienstreise] Acrobat-Rename fehlgeschlagen:',
+        e && e.message ? e.message : e,
+      );
+      return reiseDir;
+    }
+  }
+
+  /**
    * Dienstreise-Ordner zu einem Auftrag (lokal oder server_id).
    * @param {number|string} jobIdRef
    * @param {{ createIfMissing?: boolean }} [opts] – nur bei true anlegen (Schreibpfade); PROJEKTE NEU nur lesen.
@@ -2423,7 +2471,7 @@ function createApp(db) {
       if (dienstreiseProjectFolderBlocked(statusRow ? statusRow.status : null)) return null;
     }
     const bound = getBoundReiseDirForJob(row.id);
-    if (bound) return bound;
+    if (bound) return repairAcrobatHostileReiseDir(row.id, bound);
     const startStr = (row.start_datetime || '').trim().slice(0, 10);
     const hasValidStart = /^\d{4}-\d{2}-\d{2}$/.test(startStr);
     if (hasValidStart) {
@@ -2437,13 +2485,14 @@ function createApp(db) {
       const lk = sanitizeDienstreiseFolderPart(countryCode);
       const existing = findExistingReiseDir(base, year, startStr, firm, ort, lk);
       if (existing) {
-        bindReiseFolderForJob(row.id, existing);
-        return existing;
+        const repaired = repairAcrobatHostileReiseDir(row.id, existing);
+        bindReiseFolderForJob(row.id, repaired);
+        return repaired;
       }
     }
     if (!createIfMissing) {
       const scanned = findReiseDirByMonteurFabScan(base, row);
-      if (scanned) return scanned;
+      if (scanned) return repairAcrobatHostileReiseDir(row.id, scanned);
       return null;
     }
     if (!hasValidStart) return null;
@@ -2658,6 +2707,19 @@ function createApp(db) {
     if (montageFolderName && fabMap.length) {
       ensureMonteurMontageDirs(reiseDir, fabMap, montageFolderName);
       if (ensureMontageFolderNameInConfig(db, localJobId, montageFolderName)) save();
+      // Nur nachziehen, wenn Monteur-Default aktiv (sonst User-Abwahl der Wurzel nicht überschreiben)
+      const monteurStillProtected = listProtectedPaths(db, localJobId).includes(DOKUMENTE_MONTEUR);
+      if (monteurStillProtected) {
+        for (const entry of fabMap) {
+          const fnFolder = entry && (entry.folder_name_canonical || entry.folderName);
+          if (!fnFolder) continue;
+          protectPathIfUnderDokumenteMonteur(
+            db,
+            localJobId,
+            buildMonteurWorkRelPath(fnFolder, montageFolderName),
+          );
+        }
+      }
     }
     return { fabMap, montageFolderName };
   }
@@ -2743,7 +2805,7 @@ function createApp(db) {
           // Diese Wurzelordner sichtbar lassen, sonst wirkt der Projektordner nicht angelegt.
           if (subpath && isEffectivelyEmptyDir(fullPath)) continue;
         }
-        const relativePath = subpath ? subpath + path.sep + name : name;
+        const relativePath = subpath ? (subpath.replace(/\\/g, '/') + '/' + name) : name;
         entries.push({
           name,
           relativePath,
@@ -3868,6 +3930,102 @@ function createApp(db) {
   });
 
   /** Nach allen festen /api/dienstreise/…-Pfaden — :id würde sonst z. B. accept_offline_preview abfangen. */
+  function resolveLocalJobIdForProtectedPaths(reqJobId, technicianId) {
+    const jobId = parseInt(reqJobId, 10);
+    if (!jobId) return { error: 'job_id erforderlich.', status: 400 };
+    if (technicianId && Number.isFinite(technicianId) && technicianId > 0) {
+      const resolved = resolveLocalJobIdForTechnician(db, technicianId, jobId, { mode: 'auto' });
+      if (!resolved.ok) {
+        return { error: resolved.error || 'Auftrag nicht gefunden.', status: resolved.status || 404 };
+      }
+      return { localJobId: resolved.localId };
+    }
+    const mapped = getJobRowByLocalOrServerId(jobId);
+    if (!mapped) return { error: 'Auftrag nicht gefunden.', status: 404 };
+    return { localJobId: mapped.id };
+  }
+
+  // Muss VOR /api/dienstreise/:id stehen, sonst matcht :id = "protected_paths".
+  app.get('/api/dienstreise/protected_paths', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveLocalJobIdForProtectedPaths(req.query.job_id, technicianId);
+      if (resolved.error) {
+        return res.status(resolved.status || 400).json({ ok: false, error: resolved.error });
+      }
+      const localJobId = resolved.localJobId;
+      const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      if (reiseDir && fs.existsSync(reiseDir)) {
+        ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+      }
+      const paths = seedDokumenteMonteurProtectedPaths(
+        db,
+        localJobId,
+        reiseDir && fs.existsSync(reiseDir) ? reiseDir : null,
+        isIgnorableDirEntry,
+      );
+      save();
+      res.json({ ok: true, job_id: localJobId, paths });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Laden fehlgeschlagen.' });
+    }
+  });
+
+  app.post('/api/dienstreise/protected_paths', express.json(), (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveLocalJobIdForProtectedPaths(
+        body.job_id != null ? body.job_id : body.jobId,
+        technicianId,
+      );
+      if (resolved.error) {
+        return res.status(resolved.status || 400).json({ ok: false, error: resolved.error });
+      }
+      const localJobId = resolved.localJobId;
+      const relativePath = normalizeProtectedRelPath(
+        body.relative_path != null ? body.relative_path : body.relativePath,
+      );
+      if (!relativePath) {
+        return res.status(400).json({ ok: false, error: 'relative_path erforderlich.' });
+      }
+      const protectedFlag =
+        body.protected === true ||
+        body.protected === 1 ||
+        body.protected === '1' ||
+        body.protected === 'true';
+      const cascade =
+        body.cascade === true ||
+        body.cascade === 1 ||
+        body.cascade === '1' ||
+        body.cascade === 'true';
+      const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      if (!isProtectedPathsInitialized(db, localJobId)) {
+        seedDokumenteMonteurProtectedPaths(
+          db,
+          localJobId,
+          reiseDir && fs.existsSync(reiseDir) ? reiseDir : null,
+          isIgnorableDirEntry,
+        );
+      }
+      const result = setProtectedPathState(db, localJobId, relativePath, protectedFlag, {
+        cascade,
+        reiseDir: reiseDir && fs.existsSync(reiseDir) ? reiseDir : null,
+        isIgnorable: isIgnorableDirEntry,
+      });
+      save();
+      res.json({
+        ok: true,
+        job_id: localJobId,
+        paths: result.paths,
+        added: result.added,
+        removed: result.removed,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Speichern fehlgeschlagen.' });
+    }
+  });
+
   app.get('/api/dienstreise/:id', (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ ok: false, error: 'id fehlt.' });
@@ -4093,6 +4251,8 @@ function createApp(db) {
       if (!buf || buf.length === 0) return res.status(400).json({ ok: false, error: 'Dateiinhalt (content, base64) fehlt.' });
       fs.writeFileSync(targetPath, buf);
       invalidateDienstreisePushCache(db, localJobId, relParts.join('/'));
+      protectPathIfUnderDokumenteMonteur(db, localJobId, relParts.join('/'));
+      save();
       res.json({
         ok: true,
         path: targetPath,
@@ -4131,6 +4291,8 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'Ordner existiert bereits.' });
       }
       fs.mkdirSync(targetPath, { recursive: false });
+      protectPathIfUnderDokumenteMonteur(db, localJobId, parts.join('/'));
+      save();
       res.json({ ok: true, relative_path: parts.join('/'), path: targetPath });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Ordner konnte nicht angelegt werden.' });
@@ -4211,25 +4373,13 @@ function createApp(db) {
     'Lokale Downloads werden entfernt (auf OneDrive/Netzlaufwerk kann das etwas dauern)';
 
   function buildDienstreiseProtectedMatcher(protectedPaths) {
-    const protectedSet = new Set(
-      (protectedPaths || []).map((p) => String(p || '').replace(/\\/g, '/')).filter(Boolean),
-    );
-    return function isProtected(rel) {
-      const norm = String(rel || '').replace(/\\/g, '/');
-      for (const p of protectedSet) {
-        if (norm === p || norm.startsWith(p + '/')) return true;
-      }
-      return false;
-    };
+    // Exact-Match: abgewählte Kinder unter einem geschützten Ordner bleiben löschbar.
+    return buildExactProtectedMatcher(protectedPaths);
   }
 
   /** True wenn ein Top-Level-Eintrag unter reiseDir per rmSync komplett gelöscht werden darf. */
   function canRmSyncTopLevelEntry(relName, protectedPathsNorm) {
-    const norm = String(relName || '').replace(/\\/g, '/');
-    for (const p of protectedPathsNorm) {
-      if (p === norm || p.startsWith(norm + '/') || norm.startsWith(p + '/')) return false;
-    }
-    return true;
+    return canRmSyncTopLevelEntryExact(relName, protectedPathsNorm);
   }
 
   function collectDeletableFilesUnder(reiseDir, isProtected, out) {
@@ -4249,9 +4399,12 @@ function createApp(db) {
         }
         const full = path.join(dir, e.name);
         const rel = relBase ? relBase + '/' + e.name : e.name;
-        if (isProtected(rel)) continue;
-        if (e.isDirectory()) walk(full, rel);
-        else if (e.isFile()) out.push({ full, rel });
+        if (e.isDirectory()) {
+          // Immer hineingehen — Ordner-Schutz blockiert nicht das Walken der Kinder.
+          walk(full, rel);
+        } else if (e.isFile()) {
+          if (!isProtected(rel)) out.push({ full, rel });
+        }
       }
     }
     walk(reiseDir, '');
@@ -4394,9 +4547,20 @@ function createApp(db) {
       throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
     }
     const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
-    const protectedPaths = Array.isArray(body.protectedPaths)
-      ? body.protectedPaths.map((p) => String(p || '').replace(/^[\/\\]+|[\/\\]+$/g, '')).filter(Boolean)
-      : [];
+    let protectedPaths;
+    if (Array.isArray(body.protectedPaths)) {
+      protectedPaths = body.protectedPaths
+        .map((p) => String(p || '').replace(/^[\/\\]+|[\/\\]+$/g, ''))
+        .filter(Boolean);
+    } else if (localJobId) {
+      try {
+        protectedPaths = listProtectedPaths(db, localJobId);
+      } catch (_) {
+        protectedPaths = [];
+      }
+    } else {
+      protectedPaths = [];
+    }
     const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
     const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
     const dispoUsername = (body.dispoUsername || body.dispo_username || '').trim();
@@ -6980,7 +7144,19 @@ function createApp(db) {
       const technicianId = getTechnicianId(req);
       const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
       const dispoBaseUrl = (body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
-      const language = (body.language || 'de').toLowerCase().slice(0, 2);
+      const languagesRaw = Array.isArray(body.languages) ? body.languages : null;
+      const languages = [];
+      const pushLang = (v) => {
+        const l = String(v || '').toLowerCase().slice(0, 2);
+        if ((l === 'de' || l === 'en') && !languages.includes(l)) languages.push(l);
+      };
+      if (languagesRaw && languagesRaw.length) {
+        languagesRaw.forEach(pushLang);
+      } else {
+        pushLang(body.language || 'de');
+      }
+      if (languages.length === 0) languages.push('de');
+      const language = languages[0];
       const kopfdaten = body.kopfdaten || {};
       const fabBemerkungen = Array.isArray(body.fabBemerkungen) ? body.fabBemerkungen : [];
       const grundDesEinsatzes = (body.grundDesEinsatzes || '').trim();
@@ -7123,7 +7299,6 @@ function createApp(db) {
       const jsonOnly = body.jsonOnly === true || body.saveJsonOnly === true;
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      const ordnerName = path.basename(reiseDir);
       const montageberichtDataPath = path.join(reiseDir, 'montagebericht.json');
       const kopfdatenBemerkungen = (kopfdaten && kopfdaten.bemerkungen != null) ? String(kopfdaten.bemerkungen).trim() : '';
       const kopfdatenBemerkungenHtml = (kopfdaten && kopfdaten.bemerkungen_html != null) ? String(kopfdaten.bemerkungen_html).trim() : '';
@@ -7132,6 +7307,7 @@ function createApp(db) {
         grundDesEinsatzes_html: grundDesEinsatzesHtml,
         fabBemerkungen,
         language,
+        languages,
         bemerkungen: kopfdatenBemerkungen,
         bemerkungen_html: kopfdatenBemerkungenHtml,
         projekt: projektPflicht,
@@ -7202,7 +7378,10 @@ function createApp(db) {
         });
       }
 
-      const pdfFilename = ordnerName + '_Montage.pdf';
+      // Dateiname ohne führende Auftrags-Indexnummer; DE → …_Montage_DE, EN → …_report_GB
+      const fileBase = sanitizeExportFileBase(String(path.basename(reiseDir) || '').replace(/^\d+_/, ''));
+      const fileStemForLang = (lang) =>
+        lang === 'en' ? `${fileBase}_report_GB` : `${fileBase}_Montage_DE`;
 
       const toTextbausteine = (bem) => (bem || '').toString().split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((t) => ({ text: t, html: t }));
       const toTextbausteineFromRich = (html, plain) => {
@@ -7285,74 +7464,14 @@ function createApp(db) {
         contacts.forEach((c) => {
           const n = normalizeJobContactPayload(c);
           if (!jobContactHasAny(n)) return;
-          const line = [n.contact_name, n.title, n.department, n.phone, n.mobile, n.email]
-            .filter((x) => x != null && String(x).trim() !== '')
-            .join(', ');
-          if (line) parts.push(line);
+          // Montagebericht: nur Name, keine Titel/Telefon/E-Mail-Details.
+          const name = (n.contact_name && String(n.contact_name).trim())
+            || `${n.first_name || ''} ${n.last_name || ''}`.trim();
+          if (name) parts.push(name);
         });
-        kopfdatenForDocx.ansprechperson = parts.join(' | ');
+        kopfdatenForDocx.ansprechperson = parts.join(', ');
       } catch (_) {
         kopfdatenForDocx.ansprechperson = '';
-      }
-
-      let docxBytes = null;
-      try {
-        const { buildMontageberichtDocx } = require('./montagebericht_docx');
-        docxBytes = await buildMontageberichtDocx({
-          kopfdaten: kopfdatenForDocx,
-          tableRows,
-          language,
-          jobRow,
-          grundDesEinsatzes,
-          grundDesEinsatzes_html: grundDesEinsatzesHtml,
-          freitext,
-        });
-        if (process.env.MONTAGEBERICHT_DEBUG) {
-          const debugPath = path.join(reiseDir, 'Montagebericht_DEBUG.docx');
-          fs.writeFileSync(debugPath, docxBytes);
-          console.log('[Montagebericht-Debug] DOCX gespeichert unter:', debugPath);
-        }
-      } catch (docxErr) {
-        console.warn('DOCX-Generierung fehlgeschlagen:', docxErr.message);
-        if (docxErr.stack) console.warn('Stack:', docxErr.stack);
-      }
-
-      let pdfBytes = null;
-      if (docxBytes) {
-        const os = require('os');
-        const tmpDir = os.tmpdir();
-        const uid = Date.now().toString(36) + Math.random().toString(36).slice(2);
-        const tempDocx = path.join(tmpDir, `montage_${uid}.docx`);
-        const tempPdf = path.join(tmpDir, `montage_${uid}.pdf`);
-        try {
-          fs.writeFileSync(tempDocx, docxBytes);
-          const { convert } = require('docx2pdf-converter');
-          convert(tempDocx, tempPdf);
-          if (fs.existsSync(tempPdf)) {
-            pdfBytes = fs.readFileSync(tempPdf);
-          }
-        } catch (convErr) {
-          console.warn('DOCX→PDF-Konvertierung fehlgeschlagen:', convErr && convErr.message ? convErr.message : String(convErr));
-          if (convErr && convErr.stack) console.warn('Stack:', convErr.stack);
-        } finally {
-          try { if (fs.existsSync(tempDocx)) fs.unlinkSync(tempDocx); } catch (_) { /* ignore */ }
-          try { if (fs.existsSync(tempPdf)) fs.unlinkSync(tempPdf); } catch (_) { /* ignore */ }
-        }
-      }
-
-      if (!docxBytes) {
-        return res.status(500).json({ ok: false, error: 'DOCX konnte nicht erstellt werden.' });
-      }
-      if (!pdfBytes) {
-        const hint = process.platform === 'win32'
-          ? 'Bitte Microsoft Word installieren. Unter Windows wird Word für die PDF-Konvertierung verwendet.'
-          : process.platform === 'darwin'
-            ? 'Bitte Microsoft Word installieren (macOS).'
-            : 'Bitte LibreOffice oder unoconv installieren (Linux).';
-        return res.status(500).json({
-          ok: false,
-          error: `PDF konnte nicht aus dem DOCX erzeugt werden. ${hint}`,
-        });
       }
 
       const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
@@ -7361,7 +7480,6 @@ function createApp(db) {
       const montageFolderNameMb =
         offlineCfgMb.montage_folder_name ||
         buildMonteurMontageFolderName(lookupDienstreiseJobRow(localJobId) || {}, getTechnicianDisplayName(technicianId));
-      const docxFilename = ordnerName + '_Montage.docx';
 
       const targetFolderNames = new Set();
       for (const fab of fabs) {
@@ -7377,39 +7495,119 @@ function createApp(db) {
         }
         targetFolderNames.add(folderName);
       }
-      for (const folderName of targetFolderNames) {
-        const montageDir = buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderNameMb);
-        if (!fs.existsSync(montageDir)) fs.mkdirSync(montageDir, { recursive: true });
-        writeFileWithRetry(path.join(montageDir, pdfFilename), pdfBytes);
-        if (docxBytes) {
+
+      const resolveFnFolder = (f) => {
+        const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(f));
+        return (
+          (fromMap && fromMap.folder_name_canonical) ||
+          findMonteurFolderForFab(docMonteurBase, f) ||
+          findParameterlistenFolder(docAnlageBase, f) ||
+          sanitizeDienstreiseFolderPart(f)
+        );
+      };
+
+      const { buildMontageberichtDocx } = require('./montagebericht_docx');
+      const { convertDocxToPdf } = require('./lib/docx-to-pdf');
+      const os = require('os');
+      const saved = [];
+      const savedDocx = [];
+      let pdfConvertError = '';
+
+      for (const lang of languages) {
+        let docxBytes = null;
+        try {
+          docxBytes = await buildMontageberichtDocx({
+            kopfdaten: kopfdatenForDocx,
+            tableRows,
+            language: lang,
+            jobRow,
+            grundDesEinsatzes,
+            grundDesEinsatzes_html: grundDesEinsatzesHtml,
+            freitext,
+          });
+          if (process.env.MONTAGEBERICHT_DEBUG) {
+            const debugPath = path.join(reiseDir, `Montagebericht_DEBUG_${lang}.docx`);
+            fs.writeFileSync(debugPath, docxBytes);
+            console.log('[Montagebericht-Debug] DOCX gespeichert unter:', debugPath);
+          }
+        } catch (docxErr) {
+          console.warn('DOCX-Generierung fehlgeschlagen (' + lang + '):', docxErr.message);
+          if (docxErr.stack) console.warn('Stack:', docxErr.stack);
+        }
+        if (!docxBytes) {
+          return res.status(500).json({
+            ok: false,
+            error: `DOCX konnte nicht erstellt werden (${lang === 'en' ? 'Englisch' : 'Deutsch'}).`,
+          });
+        }
+
+        let pdfBytes = null;
+        const tmpDir = os.tmpdir();
+        const uid = Date.now().toString(36) + Math.random().toString(36).slice(2) + '_' + lang;
+        const tempDocx = path.join(tmpDir, `montage_${uid}.docx`);
+        const tempPdf = path.join(tmpDir, `montage_${uid}.pdf`);
+        try {
+          fs.writeFileSync(tempDocx, docxBytes);
+          await convertDocxToPdf(tempDocx, tempPdf);
+          if (fs.existsSync(tempPdf)) {
+            pdfBytes = fs.readFileSync(tempPdf);
+          }
+        } catch (convErr) {
+          pdfConvertError = convErr && convErr.message ? String(convErr.message).trim() : String(convErr);
+          console.warn('DOCX→PDF-Konvertierung fehlgeschlagen (' + lang + '):', pdfConvertError);
+          if (convErr && convErr.stack) console.warn('Stack:', convErr.stack);
+        } finally {
+          try { if (fs.existsSync(tempDocx)) fs.unlinkSync(tempDocx); } catch (_) { /* ignore */ }
+          try { if (fs.existsSync(tempPdf)) fs.unlinkSync(tempPdf); } catch (_) { /* ignore */ }
+        }
+        if (!pdfBytes) {
+          const hint = process.platform === 'win32'
+            ? 'Microsoft Word muss installiert und aktiviert sein (COM-Export).'
+            : process.platform === 'darwin'
+              ? 'Bitte Microsoft Word installieren (macOS).'
+              : 'Bitte LibreOffice oder unoconv installieren (Linux).';
+          const detail = pdfConvertError ? ` Details: ${pdfConvertError}` : '';
+          return res.status(500).json({
+            ok: false,
+            error: `PDF konnte nicht aus dem DOCX erzeugt werden (${lang === 'en' ? 'Englisch' : 'Deutsch'}). ${hint}${detail}`,
+          });
+        }
+
+        const stem = fileStemForLang(lang);
+        const pdfFilename = `${stem}.pdf`;
+        const docxFilename = `${stem}.docx`;
+        for (const folderName of targetFolderNames) {
+          const montageDir = buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderNameMb);
+          if (!fs.existsSync(montageDir)) fs.mkdirSync(montageDir, { recursive: true });
+          writeFileWithRetry(path.join(montageDir, pdfFilename), pdfBytes);
+          protectPathIfUnderDokumenteMonteur(
+            db,
+            localJobId,
+            buildMonteurWorkRelPath(folderName, montageFolderNameMb, pdfFilename),
+          );
           writeFileWithRetry(path.join(montageDir, docxFilename), docxBytes);
+          protectPathIfUnderDokumenteMonteur(
+            db,
+            localJobId,
+            buildMonteurWorkRelPath(folderName, montageFolderNameMb, docxFilename),
+          );
+        }
+        for (const f of fabs) {
+          const fnFolder = resolveFnFolder(f);
+          saved.push(buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, pdfFilename));
+          savedDocx.push(buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, docxFilename));
         }
       }
+
+      save();
 
       res.json({
         ok: true,
         jsonOnly: false,
         warning: syncWarning || undefined,
-        saved: fabs.map((f) => {
-          const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(f));
-          const fnFolder =
-            (fromMap && fromMap.folder_name_canonical) ||
-            findMonteurFolderForFab(docMonteurBase, f) ||
-            findParameterlistenFolder(docAnlageBase, f) ||
-            sanitizeDienstreiseFolderPart(f);
-          return buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, pdfFilename);
-        }),
-        savedDocx: docxBytes
-          ? fabs.map((f) => {
-            const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(f));
-            const fnFolder =
-              (fromMap && fromMap.folder_name_canonical) ||
-              findMonteurFolderForFab(docMonteurBase, f) ||
-              findParameterlistenFolder(docAnlageBase, f) ||
-              sanitizeDienstreiseFolderPart(f);
-            return buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, docxFilename);
-          })
-          : null,
+        languages,
+        saved,
+        savedDocx,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Montagebericht konnte nicht erstellt werden.' });
@@ -7454,6 +7652,8 @@ function createApp(db) {
         const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(payload);
         writeFileWithRetry(pdfPaths.full, pdfBuf);
         savedPdf = pdfPaths.rel;
+        protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+        save();
       }
       let protokollId = record ? record.protokoll_id : 'local:' + Date.now();
       let deferred = false;
@@ -7749,6 +7949,7 @@ function createApp(db) {
         const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
         writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
         savedRel.push(relDir + '/' + pdfName);
+        protectPathIfUnderDokumenteMonteur(db, localJobId, relDir + '/' + pdfName);
       } catch (localErr) {
         localWarning =
           (localWarning ? localWarning + ' ' : '') + 'PDF ' + lang.toUpperCase() + ': ' + localErr.message;
@@ -7798,6 +7999,7 @@ function createApp(db) {
         const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
         writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
         savedRel.push(relDir + '/' + pdfName);
+        protectPathIfUnderDokumenteMonteur(db, localJobId, relDir + '/' + pdfName);
       } catch (localErr) {
         localWarning = (localWarning ? localWarning + ' ' : '') + 'Dispo-PDF ' + lang.toUpperCase() + ': ' + localErr.message;
       }
@@ -8488,6 +8690,9 @@ function createApp(db) {
 
       const savedCsv = buildMonteurWorkRelPath(folderName, montageFolderNamePl, path.join('Parameter', filename));
       const savedPdf = buildMonteurWorkRelPath(folderName, montageFolderNamePl, path.join('Parameter', pdfBasename));
+      protectPathIfUnderDokumenteMonteur(db, localJobId, savedCsv);
+      protectPathIfUnderDokumenteMonteur(db, localJobId, savedPdf);
+      save();
       const technicianName = getTechnicianDisplayName(technicianId);
       let serverFileId = null;
       let dispoIngestError = null;

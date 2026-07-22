@@ -5627,7 +5627,7 @@
     }
     applyFinishJobStreamBusyUi();
 
-    var protectedSet = dienstreiseProtectedPathsByJob[localJobId] || new Set();
+    var protectedSet = getDienstreiseProtectedSet(localJobId);
     var body = {
       job_id: localJobId,
       protectedPaths: Array.from(protectedSet),
@@ -10828,6 +10828,58 @@
   var projectFolderAutoPullLastStartedAt = {};
   var PROJECT_FOLDER_AUTO_PULL_MIN_INTERVAL_MS = 5 * 60 * 1000;
 
+  function applyDienstreiseProtectedPaths(jobId, paths) {
+    var key = String(jobId);
+    dienstreiseProtectedPathsByJob[key] = new Set(
+      (paths || [])
+        .map(function (p) {
+          return String(p || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        })
+        .filter(Boolean)
+    );
+    return dienstreiseProtectedPathsByJob[key];
+  }
+
+  function normalizeExplorerRelPath(rel) {
+    return String(rel || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  }
+
+  function getDienstreiseProtectedSet(jobId) {
+    var key = String(jobId);
+    if (!dienstreiseProtectedPathsByJob[key]) dienstreiseProtectedPathsByJob[key] = new Set();
+    return dienstreiseProtectedPathsByJob[key];
+  }
+
+  function isExplorerPathProtected(protectedSet, relPath) {
+    return !!(relPath && protectedSet.has(normalizeExplorerRelPath(relPath)));
+  }
+
+  function loadDienstreiseProtectedPaths(jobId) {
+    var techId = getTechId();
+    var q =
+      'job_id=' +
+      encodeURIComponent(jobId) +
+      (techId ? '&technician_id=' + encodeURIComponent(techId) : '');
+    return fetch(API_BASE + '/api/dienstreise/protected_paths?' + q, {
+      headers: techId ? { 'X-Technician-Id': String(techId) } : {},
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (data && data.ok && Array.isArray(data.paths)) {
+          applyDienstreiseProtectedPaths(jobId, data.paths);
+        } else if (data && data.error) {
+          console.warn('[protected_paths]', data.error);
+        }
+        return data;
+      })
+      .catch(function (err) {
+        console.warn('[protected_paths]', err && err.message ? err.message : err);
+        return null;
+      });
+  }
+
   function formatFileSize(bytes) {
     if (bytes == null || bytes === '') return '';
     var n = parseInt(bytes, 10);
@@ -10874,8 +10926,7 @@
     var listEl = ui.getListEl();
     var jobId = getDienstreiseExplorerJobId(ui.key);
     if (!listEl || !jobId) return;
-    if (!dienstreiseProtectedPathsByJob[jobId]) dienstreiseProtectedPathsByJob[jobId] = new Set();
-    var protectedSet = dienstreiseProtectedPathsByJob[jobId];
+    var protectedSet = getDienstreiseProtectedSet(jobId);
     var drSnap = getDienstreiseJobSnapshotByLocalId(jobId);
     var drReadonlyGeplant = isJobAngelegtReadOnly(drSnap);
     var rows = [];
@@ -10902,8 +10953,8 @@
       var sizeStr = e.isDirectory ? '' : formatFileSize(e.size);
       var mtimeStr = formatFileDate(e.mtime);
       var toggle = e.isDirectory ? ('<span class="explorer-toggle" data-explorer-toggle aria-label="' + (expanded[e.relativePath] ? 'Einklappen' : 'Ausklappen') + '">' + (expanded[e.relativePath] ? '▼' : '▶') + '</span>') : '<span class="explorer-toggle empty"></span>';
-      var relPath = e.relativePath || '';
-      var isProtected = relPath && protectedSet.has(relPath);
+      var relPath = normalizeExplorerRelPath(e.relativePath || '');
+      var isProtected = isExplorerPathProtected(protectedSet, relPath);
       var isAnlageDb = isDienstreiseAnlageDbEntry(e);
       var isOfflineAnlage = !!(e.isOffline || e.is_offline);
       var protectControl = drReadonlyGeplant ? '' : ('<label style="display:inline-flex;align-items:center;gap:0.25rem;"><input type="checkbox" data-explorer-protect ' + (isProtected ? 'checked' : '') + '>Nicht löschen</label>');
@@ -11054,13 +11105,66 @@
       });
     });
     listEl.querySelectorAll('[data-explorer-protect]').forEach(function (cb) {
+      cb.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+      });
       cb.addEventListener('change', function (ev) {
+        ev.stopPropagation();
         var row = cb.closest('.dienstreise-explorer-row');
         if (!row) return;
-        var rel = row.getAttribute('data-relative-path') || '';
+        var rel = normalizeExplorerRelPath(row.getAttribute('data-relative-path') || '');
         if (!rel) return;
-        if (cb.checked) protectedSet.add(rel);
-        else protectedSet.delete(rel);
+        var isDir = row.getAttribute('data-is-dir') === '1';
+        var checked = !!cb.checked;
+        if (checked) {
+          protectedSet.add(rel);
+          if (isDir) {
+            // sichtbare Nachkommen sofort mitnehmen (Server kaskadiert zusätzlich per FS-Walk)
+            listEl.querySelectorAll('.dienstreise-explorer-row').forEach(function (r) {
+              var childRel = normalizeExplorerRelPath(r.getAttribute('data-relative-path') || '');
+              if (childRel && childRel.indexOf(rel + '/') === 0) protectedSet.add(childRel);
+            });
+          }
+        } else if (isDir) {
+          Array.from(protectedSet).forEach(function (p) {
+            if (p === rel || p.indexOf(rel + '/') === 0) protectedSet.delete(p);
+          });
+        } else {
+          protectedSet.delete(rel);
+        }
+        cb.disabled = true;
+        fetch(API_BASE + '/api/dienstreise/protected_paths', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Technician-Id': String(getTechId() || ''),
+          },
+          body: JSON.stringify({
+            job_id: jobId,
+            technician_id: getTechId() || undefined,
+            relative_path: rel,
+            protected: checked,
+            cascade: isDir
+          })
+        })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            if (data && data.ok && Array.isArray(data.paths)) {
+              applyDienstreiseProtectedPaths(jobId, data.paths);
+            } else if (data && !data.ok) {
+              showToast(data.error || '„Nicht löschen“ konnte nicht gespeichert werden.');
+              return loadDienstreiseProtectedPaths(jobId);
+            }
+          })
+          .catch(function () {
+            showToast('„Nicht löschen“ konnte nicht gespeichert werden.');
+            return loadDienstreiseProtectedPaths(jobId);
+          })
+          .then(function () {
+            renderDienstreiseExplorerTree(ui.key);
+          });
       });
     });
     listEl.querySelectorAll('.dienstreise-explorer-row[data-is-dir="0"]').forEach(function (row) {
@@ -11196,34 +11300,41 @@
     if (breadcrumbEl) {
       breadcrumbEl.textContent = ui.getSubpath() ? 'Projektordner / ' + ui.getSubpath() : 'Projektordner';
     }
-    fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId)).then(function (r) { return r.json(); }).then(function (data) {
-      if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId(ui.key))) return;
-      if (!data.ok) {
-        listEl.innerHTML = '<span class="empty">' + escapeHtml(data.error || 'Laden fehlgeschlagen.') + '</span>';
+    var filesP = fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId)).then(function (r) {
+      return r.json();
+    });
+    var protectP = loadDienstreiseProtectedPaths(jobId);
+    Promise.all([filesP, protectP])
+      .then(function (results) {
+        var data = results[0];
+        if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId(ui.key))) return;
+        if (!data.ok) {
+          listEl.innerHTML = '<span class="empty">' + escapeHtml(data.error || 'Laden fehlgeschlagen.') + '</span>';
+          if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+          return;
+        }
+        if (data.folder_missing) {
+          listEl.innerHTML =
+            '<span class="empty">' + escapeHtml(data.hint || 'Noch kein Projektordner — bitte Auftrag annehmen.') + '</span>';
+          if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+          return;
+        }
+        if (!Array.isArray(data.entries)) {
+          listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
+          if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+          return;
+        }
+        ui.setRootEntries(data.entries);
+        ui.clearExpanded();
+        renderDienstreiseExplorerTree(ui.key);
         if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-        return;
-      }
-      if (data.folder_missing) {
-        listEl.innerHTML =
-          '<span class="empty">' + escapeHtml(data.hint || 'Noch kein Projektordner — bitte Auftrag annehmen.') + '</span>';
-        if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-        return;
-      }
-      if (!Array.isArray(data.entries)) {
+        if (!opts.skipAutoPull) maybeAutoPullDienstreiseProjectFolder(jobId, ui.key);
+      })
+      .catch(function () {
+        if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId(ui.key))) return;
         listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
         if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-        return;
-      }
-      ui.setRootEntries(data.entries);
-      ui.clearExpanded();
-      renderDienstreiseExplorerTree(ui.key);
-      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-      if (!opts.skipAutoPull) maybeAutoPullDienstreiseProjectFolder(jobId, ui.key);
-    }).catch(function () {
-      if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId(ui.key))) return;
-      listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
-      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-    });
+      });
   }
 
   function loadDienstreiseList() {
@@ -12020,6 +12131,31 @@
       }
     }
 
+    function getMontageberichtLanguages() {
+      var langs = [];
+      var deEl = document.getElementById('montageberichtLangDe');
+      var enEl = document.getElementById('montageberichtLangEn');
+      if (deEl && deEl.checked) langs.push('de');
+      if (enEl && enEl.checked) langs.push('en');
+      return langs;
+    }
+
+    function setMontageberichtLanguages(langsOrSingle) {
+      var set = {};
+      var list = Array.isArray(langsOrSingle)
+        ? langsOrSingle
+        : (langsOrSingle != null && String(langsOrSingle).trim() !== '' ? [langsOrSingle] : []);
+      list.forEach(function (l) {
+        var code = String(l || '').toLowerCase().slice(0, 2);
+        if (code === 'de' || code === 'en') set[code] = true;
+      });
+      var deEl = document.getElementById('montageberichtLangDe');
+      var enEl = document.getElementById('montageberichtLangEn');
+      if (!set.de && !set.en) set.de = true;
+      if (deEl) deEl.checked = !!set.de;
+      if (enEl) enEl.checked = !!set.en;
+    }
+
     function openAndResetMontageberichtForm() {
       if (divMontage) divMontage.style.display = 'block';
       try { delete window._kuklaMontageberichtSign; } catch (e) { window._kuklaMontageberichtSign = null; }
@@ -12028,8 +12164,7 @@
       if (grundInput) setRichEditorHtml(grundInput, '');
       var bemerkEl = document.getElementById('montageberichtBemerkungen');
       if (bemerkEl) setRichEditorHtml(bemerkEl, '');
-      var langEl = document.getElementById('montageberichtLang');
-      if (langEl) langEl.value = 'de';
+      setMontageberichtLanguages(['de']);
       var projEl = document.getElementById('montageberichtProjekt');
       if (projEl) projEl.value = '';
       if (kopfdatenEl) {
@@ -12062,7 +12197,7 @@
           fabContainer.innerHTML = ''; montageberichtJobData = null;
           if (grundInput) setRichEditorHtml(grundInput, '');
           var bemerkEl = document.getElementById('montageberichtBemerkungen'); if (bemerkEl) setRichEditorHtml(bemerkEl, '');
-          var langEl = document.getElementById('montageberichtLang'); if (langEl) langEl.value = 'de';
+          var langEl = document.getElementById('montageberichtLangDe'); if (langEl) setMontageberichtLanguages(['de']);
           var projElClear = document.getElementById('montageberichtProjekt'); if (projElClear) projElClear.value = '';
           return;
         }
@@ -12080,7 +12215,11 @@
               if (grundInput) setRichEditorHtml(grundInput, d.grundDesEinsatzes_html || d.grundDesEinsatzes || '');
               var bemerkEl = document.getElementById('montageberichtBemerkungen');
               if (bemerkEl) setRichEditorHtml(bemerkEl, d.bemerkungen_html || ((d.bemerkungen != null && d.bemerkungen !== '') ? d.bemerkungen : ''));
-              var langEl = document.getElementById('montageberichtLang'); if (langEl && d.language) langEl.value = d.language;
+              var langEl = document.getElementById('montageberichtLangDe');
+              if (langEl || document.getElementById('montageberichtLangEn')) {
+                if (Array.isArray(d.languages) && d.languages.length) setMontageberichtLanguages(d.languages);
+                else if (d.language) setMontageberichtLanguages([d.language]);
+              }
               if (projEl && d.projekt != null && String(d.projekt).trim()) projEl.value = String(d.projekt).trim();
               if (Array.isArray(d.fabBemerkungen) && d.fabBemerkungen.length) {
                 fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
@@ -12319,9 +12458,15 @@
           bemerkungen: bemerkungenVal,
           bemerkungen_html: bemerkungenValHtml
         };
+        var languages = getMontageberichtLanguages();
+        if (!languages.length) {
+          alert('Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).');
+          return;
+        }
         var body = {
           job_id: parseInt(jobSelect.value, 10),
-          language: document.getElementById('montageberichtLang').value || 'de',
+          language: languages[0],
+          languages: languages,
           kopfdaten: kopfdaten,
           fabBemerkungen: fabBemerkungen,
           grundDesEinsatzes: grundVal,
@@ -12356,7 +12501,12 @@
           }
           if (typeof showToast === 'function') {
             if (data.jsonOnly) showToast('Zwischenstand gespeichert (nur Daten, kein PDF/DOCX).');
-            else showToast('Montagebericht gespeichert (inkl. PDF & DOCX).');
+            else {
+              var langNote = Array.isArray(data.languages) && data.languages.length > 1
+                ? ' (DE + GB)'
+                : (Array.isArray(data.languages) && data.languages[0] === 'en' ? ' (GB)' : ' (DE)');
+              showToast('Montagebericht gespeichert (inkl. PDF & DOCX)' + langNote + '.');
+            }
           }
           if (!data.jsonOnly && typeof showView === 'function') showView('start');
         } catch (err) {

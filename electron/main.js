@@ -191,6 +191,39 @@ async function openDienstreisePath(filePath) {
     const ext = String(path.extname(targetPath || '')).toLowerCase();
     return ext === '.xls' || ext === '.xlsx' || ext === '.xlsm' || ext === '.xlsb' || ext === '.csv';
   }
+  function pathNeedsAcrobatSafeCopy(targetPath) {
+    const p = String(targetPath || '');
+    if (!p) return false;
+    // Acrobat/ShellExecute: Bullet & Co., sehr lange Pfade (MAX_PATH ~260),
+    // und tief verschachtelte OneDrive-Pfade mit Nicht-ASCII – PDF24 ist oft toleranter.
+    if (p.length >= 240) return true;
+    if (/[\u2022\u2023\u2043\u2219\u25E6\u25AA\u25CF\u00B7\u2024\u2027\u2218•▪◦●∙·]/.test(p)) {
+      return true;
+    }
+    // Steuerzeichen / Zero-Width / NBSP etc.
+    if (/[\u0000-\u001F\u007F\u00A0\u200B-\u200D\uFEFF]/.test(p)) return true;
+    return false;
+  }
+  function openPdfViaTempAsciiCopy(targetPath) {
+    const ext = String(path.extname(targetPath || '')).toLowerCase();
+    if (ext !== '.pdf') return null;
+    if (!pathNeedsAcrobatSafeCopy(targetPath)) return null;
+    try {
+      const tmpDir = app.getPath('temp');
+      const safeBase =
+        String(path.basename(targetPath, ext))
+          .replace(/[^\w.\-()+]/gi, '_')
+          .replace(/_+/g, '_')
+          .slice(0, 60) || 'dokument';
+      const tmpPath = path.join(tmpDir, `kukla_${Date.now()}_${safeBase}${ext}`);
+      fs.copyFileSync(targetPath, tmpPath);
+      trace('pdf.tempCopy', `len=${String(targetPath).length}->${tmpPath.length} ${tmpPath}`);
+      return tmpPath;
+    } catch (e) {
+      trace('pdf.tempCopy.fail', e && e.message ? e.message : String(e));
+      return null;
+    }
+  }
   function tryLaunchExcelDirect(targetPath) {
     if (!win || !isExcelFile(targetPath)) return false;
     trace('tryLaunchExcelDirect', targetPath);
@@ -305,7 +338,8 @@ async function openDienstreisePath(filePath) {
       trace('excel-first.ok');
       return { ok: true, via: 'excel' };
     }
-    const openResult = await shell.openPath(normalized);
+    const openTarget = openPdfViaTempAsciiCopy(normalized) || normalized;
+    const openResult = await shell.openPath(openTarget);
     trace('shell.openPath.result', String(openResult || 'ok'));
     if (typeof openResult === 'string' && openResult.trim()) {
       if (isExcelFile(normalized) && tryOpenExcelFirst(normalized)) {
@@ -313,19 +347,19 @@ async function openDienstreisePath(filePath) {
       }
       if (!isExcelFile(normalized)) {
         try {
-          await shell.openExternal(pathToFileURL(normalized).toString());
+          await shell.openExternal(pathToFileURL(openTarget).toString());
           trace('shell.openExternal.fileurl.ok');
           return { ok: true, fallback: true, warning: openResult.trim() };
         } catch (_) { /* weiter unten */ }
       }
-      if (win && (tryWindowsStartProcess(normalized) || tryWindowsCmdStart(normalized))) {
+      if (win && (tryWindowsStartProcess(openTarget) || tryWindowsCmdStart(openTarget))) {
         return { ok: true, fallback: true, warning: openResult.trim() };
       }
       trace('all-fallbacks-failed', openResult.trim());
       return { ok: false, error: openResult.trim() };
     }
     trace('shell.openPath.ok');
-    return { ok: true };
+    return { ok: true, via: openTarget !== normalized ? 'pdf-temp-copy' : 'shell' };
   } catch (e) {
     trace('exception', e && e.message ? e.message : String(e));
     if (tryOpenExcelFirst(normalized)) {

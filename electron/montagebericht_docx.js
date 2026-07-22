@@ -44,9 +44,70 @@ const {
 
 const sanitize = (v) => {
   if (v == null || v === undefined) return '';
-  const s = String(v).trim();
+  const s = decodeHtmlEntities(String(v).trim());
   return (s === 'undefined' || s === 'null') ? '' : s;
 };
+
+/** HTML-Entities aus Rich-Text (&nbsp; usw.) für sichtbaren DOCX/PDF-Text auflösen. */
+function decodeHtmlEntities(str) {
+  return String(str || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&ensp;/gi, ' ')
+    .replace(/&emsp;/gi, ' ')
+    .replace(/&thinsp;/gi, ' ')
+    .replace(/&#160;/g, ' ')
+    .replace(/&#x0*a0;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, n) => {
+      const code = parseInt(n, 10);
+      return Number.isFinite(code) ? String.fromCharCode(code) : '';
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => {
+      const code = parseInt(h, 16);
+      return Number.isFinite(code) ? String.fromCharCode(code) : '';
+    })
+    .replace(/\u00a0/g, ' ');
+}
+
+/** Gesamttabelle ~17,7 cm (10060 DXA). Label-Spalte schmaler → Trennlinie weiter links. */
+const TABLE_W = 10060;
+/** Label-Spalte: eng an „Grund des Einsatzes:“ / „purpose of visit:“, aber spürbar schmaler als 1/3. */
+const COL_LABEL = 2480;
+const COL_MID = 4300;
+const COL_RIGHT = TABLE_W - COL_LABEL - COL_MID;
+const HEADER_COL_WIDTHS = [COL_LABEL, COL_MID, COL_RIGHT];
+
+/** Mehr Abstand Text ↔ Zellrand (DXA / Twips). */
+const CELL_MARGINS = { top: 60, bottom: 60, left: 120, right: 120 };
+const CELL_BORDERS = {
+  top: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+  bottom: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+  left: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+  right: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
+};
+
+function mbCell(children, opts = {}) {
+  const {
+    columnSpan,
+    verticalAlign,
+    margins = CELL_MARGINS,
+    borders = CELL_BORDERS,
+    width,
+  } = opts;
+  return new TableCell({
+    children,
+    ...(columnSpan ? { columnSpan } : {}),
+    ...(verticalAlign ? { verticalAlign } : {}),
+    margins,
+    borders,
+    ...(width ? { width: { size: width, type: WidthType.DXA } } : {}),
+  });
+}
 
 function sizeFromCssPx(px) {
   const n = parseFloat((px || '').toString().replace(',', '.'));
@@ -117,7 +178,7 @@ function htmlToParagraphs(html, defaultSizeHalfPt = 24) {
     current = { runs: [], bullet: false, align: null };
   };
   const addText = (text) => {
-    const cleaned = (text || '').replace(/\s+/g, ' ');
+    const cleaned = decodeHtmlEntities(text || '').replace(/\s+/g, ' ');
     if (!cleaned.trim()) return;
     const st = styleStack[styleStack.length - 1];
     current.runs.push({
@@ -206,49 +267,46 @@ function createFnTable(fn, L) {
       })
     : [new Paragraph({ children: [new TextRun({ text: '', font: 'Calibri' })] })];
 
-  // 3 Spalten: FN. | Type | Pos.Nr. (Bemerkungen-Spalte entfernt), gleichmäßig aufgeteilt
-  const colW = Math.floor(10060 / 3);
-  const colWidths = [colW, colW, 10060 - colW * 2];
+  // 3 Spalten: FN. | Type | Pos.Nr. – mit Einzug wie Kopfbereich
+  const fnCol = Math.floor(TABLE_W / 3);
+  const colWidths = [fnCol, fnCol, TABLE_W - fnCol * 2];
 
   return new Table({
-    width: { size: 10060, type: WidthType.DXA },
+    width: { size: TABLE_W, type: WidthType.DXA },
     columnWidths: colWidths,
     layout: TableLayoutType.FIXED,
     rows: [
       new TableRow({
         children: [
-          new TableCell({
-            children: [new Paragraph({
+          mbCell([
+            new Paragraph({
               children: [
                 new TextRun({ text: `${L.fn} `, font: 'Calibri', bold: true }),
                 new TextRun({ text: sanitize(fn.fabrikationsnummer), font: 'Calibri', bold: false }),
               ],
-            })],
-          }),
-          new TableCell({
-            children: [new Paragraph({
+            }),
+          ], { width: colWidths[0] }),
+          mbCell([
+            new Paragraph({
               children: [
                 new TextRun({ text: `${L.type} `, font: 'Calibri', bold: true }),
                 new TextRun({ text: sanitize(fn.type), font: 'Calibri', bold: false }),
               ],
-            })],
-          }),
-          new TableCell({
-            children: [new Paragraph({
+            }),
+          ], { width: colWidths[1] }),
+          mbCell([
+            new Paragraph({
               children: [
                 new TextRun({ text: `${L.posNr} `, font: 'Calibri', bold: true }),
                 new TextRun({ text: sanitize(fn.position), font: 'Calibri', bold: false }),
               ],
-            })],
-          }),
+            }),
+          ], { width: colWidths[2] }),
         ],
       }),
       new TableRow({
         children: [
-          new TableCell({
-            columnSpan: 3,
-            children: textbausteinParagraphs,
-          }),
+          mbCell(textbausteinParagraphs, { columnSpan: 3, width: TABLE_W }),
         ],
       }),
     ],
@@ -359,48 +417,47 @@ async function buildMontageberichtDocx(options) {
   const logoCellContent = await getLogoCellContent(__dirname);
 
   const headerTable = new Table({
-    width: { size: 10060, type: WidthType.DXA },
-    columnWidths: [3353, 3354, 3353],
+    width: { size: TABLE_W, type: WidthType.DXA },
+    columnWidths: HEADER_COL_WIDTHS,
     layout: TableLayoutType.FIXED,
     rows: [
       new TableRow({
         height: { value: 1390, rule: HeightRule.EXACT }, // max 2,45 cm (Logo ~2,43 cm), in 1/20 pt (2,45 cm ≈ 69,5 pt)
         children: [
-          new TableCell({
-            children: logoCellContent,
+          mbCell(logoCellContent, {
             verticalAlign: VerticalAlign.CENTER,
             margins: { top: 0, bottom: 0, left: 0, right: 0 },
-            borders: {
-              top: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
-              bottom: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
-              left: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
-              right: { style: BorderStyle.SINGLE, size: 4, color: '000000' },
-            },
+            width: COL_LABEL,
           }),
-          new TableCell({
-            columnSpan: 2,
-            children: [
+          mbCell(
+            [
               new Paragraph({
                 children: [
                   new TextRun({ text: L.title, font: 'Calibri', bold: true, size: 50 }),
                 ],
               }),
             ],
-            verticalAlign: VerticalAlign.CENTER,
-          }),
+            {
+              columnSpan: 2,
+              verticalAlign: VerticalAlign.CENTER,
+              margins: CELL_MARGINS,
+              width: COL_MID + COL_RIGHT,
+            }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: L.kunde, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
-            verticalAlign: VerticalAlign.CENTER,
-          }),
-          new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: kunde, font: 'Calibri', size: 24 })] })],
-          }),
-          new TableCell({
-            children: [
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: L.kunde, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
+            { verticalAlign: VerticalAlign.CENTER, width: COL_LABEL }
+          ),
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: kunde, font: 'Calibri', size: 24 })] })],
+            { width: COL_MID }
+          ),
+          mbCell(
+            [
               new Paragraph({
                 children: [
                   new TextRun({ text: L.geliefertUeber + ' ', font: 'Calibri', bold: true, size: 24 }),
@@ -408,20 +465,22 @@ async function buildMontageberichtDocx(options) {
                 ],
               }),
             ],
-          }),
+            { width: COL_RIGHT }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: L.projekt, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
-            verticalAlign: VerticalAlign.CENTER,
-          }),
-          new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: projekt, font: 'Calibri', size: 24 })] })],
-          }),
-          new TableCell({
-            children: [
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: L.projekt, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
+            { verticalAlign: VerticalAlign.CENTER, width: COL_LABEL }
+          ),
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: projekt, font: 'Calibri', size: 24 })] })],
+            { width: COL_MID }
+          ),
+          mbCell(
+            [
               new Paragraph({
                 children: [
                   new TextRun({ text: L.datum + ' ', font: 'Calibri', bold: true, size: 24 }),
@@ -429,55 +488,58 @@ async function buildMontageberichtDocx(options) {
                 ],
               }),
             ],
-          }),
+            { width: COL_RIGHT }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: L.fn + ':', font: 'Calibri', bold: true, italics: true, size: 24 })] })],
-            verticalAlign: VerticalAlign.CENTER,
-          }),
-          new TableCell({
-            columnSpan: 2,
-            children: [new Paragraph({ children: [new TextRun({ text: fnList, font: 'Calibri', size: 24 })] })],
-          }),
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: L.fn + ':', font: 'Calibri', bold: true, italics: true, size: 24 })] })],
+            { verticalAlign: VerticalAlign.CENTER, width: COL_LABEL }
+          ),
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: fnList, font: 'Calibri', size: 24 })] })],
+            { columnSpan: 2, width: COL_MID + COL_RIGHT }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: L.servicetechniker, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
-            verticalAlign: VerticalAlign.CENTER,
-          }),
-          new TableCell({
-            columnSpan: 2,
-            children: [new Paragraph({ children: [new TextRun({ text: servicetechniker, font: 'Calibri', size: 24 })] })],
-          }),
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: L.servicetechniker, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
+            { verticalAlign: VerticalAlign.CENTER, width: COL_LABEL }
+          ),
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: servicetechniker, font: 'Calibri', size: 24 })] })],
+            { columnSpan: 2, width: COL_MID + COL_RIGHT }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: L.ansprechperson, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
-            verticalAlign: VerticalAlign.CENTER,
-          }),
-          new TableCell({
-            columnSpan: 2,
-            children: [new Paragraph({ children: [new TextRun({ text: ansprechperson, font: 'Calibri', size: 24 })] })],
-          }),
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: L.ansprechperson, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
+            { verticalAlign: VerticalAlign.CENTER, width: COL_LABEL }
+          ),
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: ansprechperson, font: 'Calibri', size: 24 })] })],
+            { columnSpan: 2, width: COL_MID + COL_RIGHT }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          new TableCell({
-            children: [new Paragraph({ children: [new TextRun({ text: L.grundDesEinsatzes, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
-            verticalAlign: VerticalAlign.CENTER,
-          }),
-          new TableCell({
-            columnSpan: 2,
-            children: grundParagraphs.length > 0 ? grundParagraphs : [new Paragraph({ children: [new TextRun({ text: grundVal, font: 'Calibri', size: 24 })] })],
-          }),
+          mbCell(
+            [new Paragraph({ children: [new TextRun({ text: L.grundDesEinsatzes, font: 'Calibri', bold: true, italics: true, size: 24 })] })],
+            { verticalAlign: VerticalAlign.CENTER, width: COL_LABEL }
+          ),
+          mbCell(
+            grundParagraphs.length > 0
+              ? grundParagraphs
+              : [new Paragraph({ children: [new TextRun({ text: grundVal, font: 'Calibri', size: 24 })] })],
+            { columnSpan: 2, width: COL_MID + COL_RIGHT }
+          ),
         ],
       }),
     ],
