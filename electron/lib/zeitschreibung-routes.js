@@ -228,7 +228,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
   const dayList = Array.isArray(days) ? days : [];
-  const tx = db.transaction(() => {
+  db.transaction(() => {
     for (const d of dayList) {
       ins.run(
         id,
@@ -249,7 +249,6 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
       );
     }
   });
-  tx();
 
   return { id, days: dayList, sums, gesamt, status };
 }
