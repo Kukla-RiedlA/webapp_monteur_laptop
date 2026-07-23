@@ -57,7 +57,28 @@
 
   function korrLabel(d, field) {
     const k = d && d.korrekturen && d.korrekturen[field];
-    return k && k.label ? String(k.label) : '';
+    if (k && k.label) return String(k.label);
+    // Fallback ohne Server-Label: Original → Override
+    if (field === 'bemerkung') {
+      if (d.lohn_bemerkung == null) return '';
+      const from = String(d.bemerkung || '') || '–';
+      const to = String(d.lohn_bemerkung) || '–';
+      return from + ' → ' + to + ' (Lohn)';
+    }
+    const lk = 'lohn_' + field;
+    if (d[lk] == null || d[lk] === '') return '';
+    const from = num(d[field]);
+    const to = num(d[lk]);
+    const fmtN = function (n) {
+      if (Math.abs(n - Math.round(n)) < 0.0001) return String(Math.round(n));
+      return String(Math.round(n * 1000) / 1000).replace('.', ',');
+    };
+    return fmtN(from) + ' → ' + fmtN(to) + ' (Lohn)';
+  }
+
+  function hasLohnOverride(d, field) {
+    if (field === 'bemerkung') return d.lohn_bemerkung != null;
+    return d['lohn_' + field] != null && d['lohn_' + field] !== '';
   }
 
   function bemerkungEff(d) {
@@ -125,14 +146,16 @@
       };
       HOUR_FIELDS.forEach(function (f) {
         const inp = tr.querySelector('input[data-field="' + f + '"]');
-        if (locked && inp && inp.getAttribute('data-monteur') != null) {
+        const hasKorr = inp && inp.getAttribute('data-has-korr') === '1';
+        if ((locked || hasKorr) && inp && inp.getAttribute('data-monteur') != null) {
           day[f] = num(inp.getAttribute('data-monteur'));
         } else {
           day[f] = inp ? num(inp.value) : 0;
         }
       });
       const bem = tr.querySelector('input[data-field="bemerkung"]');
-      if (locked && bem && bem.getAttribute('data-monteur') != null) {
+      const bemKorr = bem && bem.disabled && bem.getAttribute('data-monteur') != null;
+      if ((locked || bemKorr) && bem && bem.getAttribute('data-monteur') != null) {
         day.bemerkung = String(bem.getAttribute('data-monteur') || '');
       } else {
         day.bemerkung = bem ? String(bem.value || '') : '';
@@ -214,13 +237,13 @@
       if (locked) rowClass += ' zs-row-locked';
       var sumVal = daySumEff(d);
       var sumCls = summeAlertClass(sumVal);
-      var dis = locked ? ' disabled' : '';
       var statusCell = locked
         ? '<td class="zs-col-status" title="Von Lohnbuchhaltung gesperrt"><img class="zs-lock-check-icon" src="icons/circle-check-green.svg" alt="Gesperrt" width="16" height="16"></td>'
         : '<td class="zs-col-status zs-dash">–</td>';
       var bemOrig = String(d.bemerkung || '');
-      var bemShow = locked ? bemerkungEff(d) : bemOrig;
+      var bemShow = hasLohnOverride(d, 'bemerkung') || locked ? bemerkungEff(d) : bemOrig;
       var bemLabel = korrLabel(d, 'bemerkung');
+      var bemFrozen = locked || hasLohnOverride(d, 'bemerkung');
       body += `<tr class="${rowClass.trim()}" data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}" data-lohn-gesperrt="${locked ? '1' : '0'}">
         <td>${escapeHtml(dateDe(d.day_date))}</td>
         <td>${escapeHtml(d.weekday)}</td>
@@ -229,20 +252,22 @@
           var monteurVal = num(d[f]);
           var eff = hourEff(d, f);
           var label = korrLabel(d, f);
-          var hasKorr = !!label;
-          var showVal = locked ? eff : monteurVal;
+          var hasKorr = hasLohnOverride(d, f) || !!label;
+          var frozen = locked || hasKorr;
+          // Immer Effektivwert zeigen, wenn Lohn korrigiert hat
+          var showVal = hasKorr || locked ? eff : monteurVal;
           var display = showVal ? escapeHtml(String(showVal)) : '';
           var labelHtml = label
             ? `<div class="zs-korrektur-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>`
             : '';
           return `<td class="zs-col-hour${hasKorr ? ' zs-corrected' : ''}"><div class="zs-hour-cell">
-            <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}"${dis}>
+            <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}"${frozen ? ' disabled' : ''}>
             ${labelHtml}
           </div></td>`;
         }).join('')}
         <td class="zs-sum${sumCls}" data-day-sum>${escapeHtml(fmt(sumVal))}</td>
         <td class="zs-col-bemerkung${bemLabel ? ' zs-corrected' : ''}"><div class="zs-bem-cell">
-          <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}"${dis}>
+          <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}"${bemFrozen ? ' disabled' : ''}>
           ${bemLabel ? `<div class="zs-korrektur-label" title="${escapeHtml(bemLabel)}">${escapeHtml(bemLabel)}</div>` : ''}
         </div></td>
         ${statusCell}

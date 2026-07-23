@@ -133,21 +133,42 @@ function copyLohnOverrides(from, to) {
   }
   dst.lohn_bemerkung = src.lohn_bemerkung != null ? String(src.lohn_bemerkung) : null;
   dst.lohn_korrektur_meta = src.lohn_korrektur_meta != null ? String(src.lohn_korrektur_meta) : null;
-  if (src.korrekturen && typeof src.korrekturen === 'object') {
-    dst.korrekturen = src.korrekturen;
-    dst.korrekturen_json = JSON.stringify(src.korrekturen);
+  let korr = null;
+  if (src.korrekturen && typeof src.korrekturen === 'object' && !Array.isArray(src.korrekturen)) {
+    korr = src.korrekturen;
   } else if (src.korrekturen_json) {
-    dst.korrekturen_json = String(src.korrekturen_json);
     try {
-      dst.korrekturen = JSON.parse(dst.korrekturen_json);
+      const parsed = JSON.parse(String(src.korrekturen_json));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) korr = parsed;
     } catch (_) {
-      dst.korrekturen = {};
+      korr = null;
     }
-  } else {
-    dst.korrekturen = {};
-    dst.korrekturen_json = null;
   }
+  dst.korrekturen = korr || {};
+  dst.korrekturen_json = Object.keys(dst.korrekturen).length
+    ? JSON.stringify(dst.korrekturen)
+    : null;
   return dst;
+}
+
+function lohnFingerprint(day) {
+  const d = day || {};
+  return JSON.stringify({
+    lock: Number(d.lohn_gesperrt) ? 1 : 0,
+    lohn_anw: d.lohn_anw != null && d.lohn_anw !== '' ? calc.num(d.lohn_anw) : null,
+    lohn_montage: d.lohn_montage != null && d.lohn_montage !== '' ? calc.num(d.lohn_montage) : null,
+    lohn_ue50: d.lohn_ue50 != null && d.lohn_ue50 !== '' ? calc.num(d.lohn_ue50) : null,
+    lohn_ue100: d.lohn_ue100 != null && d.lohn_ue100 !== '' ? calc.num(d.lohn_ue100) : null,
+    lohn_weg: d.lohn_weg != null && d.lohn_weg !== '' ? calc.num(d.lohn_weg) : null,
+    lohn_urlaub: d.lohn_urlaub != null && d.lohn_urlaub !== '' ? calc.num(d.lohn_urlaub) : null,
+    lohn_za_plus: d.lohn_za_plus != null && d.lohn_za_plus !== '' ? calc.num(d.lohn_za_plus) : null,
+    lohn_za_minus: d.lohn_za_minus != null && d.lohn_za_minus !== '' ? calc.num(d.lohn_za_minus) : null,
+    lohn_krank: d.lohn_krank != null && d.lohn_krank !== '' ? calc.num(d.lohn_krank) : null,
+    lohn_bemerkung: d.lohn_bemerkung != null ? String(d.lohn_bemerkung) : null,
+    korrekturen: d.korrekturen && typeof d.korrekturen === 'object' && !Array.isArray(d.korrekturen)
+      ? d.korrekturen
+      : {},
+  });
 }
 
 function getTechnicianName(db, technicianId) {
@@ -558,19 +579,25 @@ async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, 
 }
 
 async function pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds) {
-  if (typeof resolveDispoPushCreds !== 'function') return false;
+  if (typeof resolveDispoPushCreds !== 'function') {
+    return { ok: false, changed: false, days: null };
+  }
   let creds = null;
   try {
     creds = await Promise.resolve(resolveDispoPushCreds(technicianId));
   } catch (_) {
-    return false;
+    return { ok: false, changed: false, days: null };
   }
-  if (!creds || !creds.baseUrl) return false;
+  if (!creds || !creds.baseUrl) {
+    return { ok: false, changed: false, days: null };
+  }
   return pullLohnLocksWithCreds(db, technicianId, year, month, creds.baseUrl, creds.authHeader || null);
 }
 
 async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, authHeader) {
-  if (!baseUrl || !technicianId || !year || !month) return false;
+  if (!baseUrl || !technicianId || !year || !month) {
+    return { ok: false, changed: false, days: null };
+  }
   const url =
     String(baseUrl || '').replace(/\/$/, '') +
     '/api/monteur_timesheet_get.php?technician_id=' +
@@ -583,21 +610,24 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
   if (authHeader) headers.Authorization = authHeader;
   const r = await fetch(url, { headers });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok || !data || !data.ok || !Array.isArray(data.days)) return false;
+  if (!r.ok || !data || !data.ok || !Array.isArray(data.days)) {
+    return { ok: false, changed: false, days: null, error: (data && data.error) || ('HTTP ' + r.status) };
+  }
 
   const local = loadTimesheet(db, technicianId, year, month);
   const byDate = {};
   for (const d of local.days || []) {
     byDate[d.day_date] = Object.assign({}, d);
+    copyLohnOverrides(d, byDate[d.day_date]);
   }
   let changed = false;
   for (const sd of data.days) {
     if (!sd || !sd.day_date) continue;
     const lock = Number(sd.lohn_gesperrt) ? 1 : 0;
     const cur = byDate[sd.day_date] || { day_date: sd.day_date };
-    const prevLock = Number(cur.lohn_gesperrt) ? 1 : 0;
     const next = Object.assign({}, cur);
     copyLohnOverrides(sd, next);
+    next.lohn_gesperrt = lock;
     if (lock) {
       Object.assign(next, {
         anw: sd.anw,
@@ -613,28 +643,33 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
         holiday_label: sd.holiday_label || cur.holiday_label || '',
         lohn_gesperrt: 1,
       });
-      changed = true;
-    } else if (prevLock) {
-      next.lohn_gesperrt = 0;
-      changed = true;
-    } else if (
-      sd.korrekturen &&
-      Object.keys(sd.korrekturen).length > 0
-    ) {
-      changed = true;
-    } else if (
-      ['lohn_anw', 'lohn_montage', 'lohn_ue50', 'lohn_ue100', 'lohn_weg', 'lohn_urlaub', 'lohn_za_plus', 'lohn_za_minus', 'lohn_krank', 'lohn_bemerkung'].some(
-        (k) => sd[k] != null || cur[k] != null,
-      )
-    ) {
+    }
+    // Markiere Pull-Overrides als „incoming“, damit persist sie nicht verwirft
+    next.korrekturen = next.korrekturen || {};
+    if (lohnFingerprint(next) !== lohnFingerprint(cur)) {
       changed = true;
     }
     byDate[sd.day_date] = next;
   }
-  if (!changed) return false;
-  const mergedDays = Object.keys(byDate).map((k) => byDate[k]);
-  persistTimesheet(db, technicianId, year, month, mergedDays, local.status || 'draft');
-  return true;
+
+  const mergedDays = calc.buildMonthDays(year, month, byDate);
+  for (const d of mergedDays) {
+    d.day_sum = calc.daySum(d);
+  }
+
+  if (changed) {
+    // Explizit korrekturen setzen, damit persist hasIncomingOverrides erkennt
+    const toPersist = mergedDays.map((d) => {
+      const row = Object.assign({}, d);
+      copyLohnOverrides(d, row);
+      // hasOwnProperty-Marker für persist
+      row.korrekturen = row.korrekturen || {};
+      return row;
+    });
+    persistTimesheet(db, technicianId, year, month, toPersist, local.status || 'draft');
+  }
+
+  return { ok: true, changed, days: mergedDays };
 }
 
 /**
@@ -668,8 +703,8 @@ async function pullRecentLohnLocks(db, technicianId, baseUrl, authHeader) {
   let pulled = 0;
   for (const { year, month } of pairs.values()) {
     try {
-      const ok = await pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, authHeader);
-      if (ok) pulled += 1;
+      const res = await pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, authHeader);
+      if (res && res.ok && res.changed) pulled += 1;
     } catch (_) {
       /* ignore month */
     }
@@ -709,12 +744,24 @@ function registerZeitschreibungRoutes(app, ctx) {
       if (!technicianId || !year || !month || month < 1 || month > 12) {
         return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
       }
+      let pull = { ok: false, days: null };
       try {
-        await pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds);
+        pull = await pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds);
       } catch (_) {
         /* offline / kein Dispo — lokale Locks behalten */
       }
       const data = loadTimesheet(db, technicianId, year, month);
+      // Frisch von Dispo gemergte Tage bevorzugt (auch wenn Persist unverändert war)
+      if (pull && pull.ok && Array.isArray(pull.days) && pull.days.length) {
+        data.days = pull.days;
+        data.sums = calc.columnSumsEffective(pull.days);
+        data.gesamt = calc.gesamtSum(data.sums);
+        data.lohn_pulled = true;
+      } else {
+        data.sums = calc.columnSumsEffective(data.days || []);
+        data.gesamt = calc.gesamtSum(data.sums);
+        data.lohn_pulled = false;
+      }
       data.technician_name = getTechnicianName(db, technicianId);
       data.config = readConfig(dbDir);
       res.json({ ok: true, ...data });

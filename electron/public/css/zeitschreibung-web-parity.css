@@ -190,13 +190,16 @@
 }
 
 .page-zeitschreibung .zs-korrektur-label {
-  font-size: 9px;
-  line-height: 1.2;
+  font-size: 10px;
+  line-height: 1.25;
   color: #9a3412;
-  font-weight: 600;
+  font-weight: 700;
   white-space: normal;
-  max-width: 8rem;
+  max-width: 9rem;
   text-align: center;
+  background: #ffedd5;
+  border-radius: 3px;
+  padding: 1px 3px;
 }
 
 .page-zeitschreibung .zs-bem-cell .zs-korrektur-label {
