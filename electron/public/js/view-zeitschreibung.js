@@ -4,7 +4,24 @@
 (function (global) {
   const api = (global.monteurApp && global.monteurApp.apiBase) || 'http://127.0.0.1:39678';
   const MONTH_NAMES = ['', 'Jänner', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+  const WEEKDAY_LONG = {
+    Mo: 'Montag', Di: 'Dienstag', Mi: 'Mittwoch', Do: 'Donnerstag',
+    Fr: 'Freitag', Sa: 'Samstag', So: 'Sonntag',
+  };
   const HOUR_FIELDS = ['anw', 'montage', 'ue50', 'ue100', 'weg', 'urlaub', 'za_plus', 'za_minus', 'krank'];
+  const FIELD_META = {
+    anw: { short: 'Anw. (h)', title: 'Anwesenheit in Stunden', spoken: 'Anwesenheit' },
+    montage: { short: 'Montage (h)', title: 'Montagezeit in Stunden', spoken: 'Montagezeit' },
+    ue50: { short: 'Ü 50 % (h)', title: 'Überstunden mit 50 % Zuschlag', spoken: 'Überstunden 50 %' },
+    ue100: { short: 'Ü 100 % (h)', title: 'Überstunden mit 100 % Zuschlag', spoken: 'Überstunden 100 %' },
+    weg: { short: 'Weg (h)', title: 'Wegzeit in Stunden', spoken: 'Wegzeit' },
+    urlaub: { short: 'Urlaub (h)', title: 'Urlaub in Stunden', spoken: 'Urlaub' },
+    za_plus: { short: 'ZA + (h)', title: 'Aufbau Zeitguthaben', spoken: 'Zeitguthaben' },
+    za_minus: { short: 'ZA − (h)', title: 'Verbrauch Zeitguthaben', spoken: 'Zeitausgleich' },
+    krank: { short: 'Krank / Arzt (h)', title: 'Krank / Arzt in Stunden', spoken: 'Krank / Arzt' },
+    bemerkung: { short: 'Bemerkung', title: 'Bemerkung', spoken: 'Bemerkung' },
+  };
+  const ACTIVE_IDLE = 'Klicken Sie in ein Feld, um Stunden einzutragen.';
 
   let state = {
     year: new Date().getFullYear(),
@@ -108,6 +125,24 @@
     const k = String(iso || '');
     if (k.length < 10) return k;
     return k.slice(8, 10) + '.' + k.slice(5, 7) + '.' + k.slice(0, 4);
+  }
+
+  function dateLongDe(iso, weekdayCode) {
+    const k = String(iso || '');
+    if (k.length < 10) return k;
+    const day = parseInt(k.slice(8, 10), 10);
+    const month = parseInt(k.slice(5, 7), 10);
+    const wd = WEEKDAY_LONG[weekdayCode] || weekdayCode || '';
+    const monthName = MONTH_NAMES[month] || String(month);
+    return (wd ? wd + ', ' : '') + day + '. ' + monthName;
+  }
+
+  function fieldSpoken(field) {
+    return (FIELD_META[field] && FIELD_META[field].spoken) || field;
+  }
+
+  function ariaLabelFor(field, weekdayCode, iso) {
+    return fieldSpoken(field) + ' am ' + dateLongDe(iso, weekdayCode);
   }
 
   async function jfetch(path, opts) {
@@ -237,55 +272,75 @@
       var sumVal = daySumEff(d);
       var sumCls = summeAlertClass(sumVal);
       var statusCell = locked
-        ? '<td class="zs-col-status" title="Von Lohnbuchhaltung gesperrt"><img class="zs-lock-check-icon" src="icons/circle-check-green.svg" alt="Gesperrt" width="16" height="16"></td>'
-        : '<td class="zs-col-status zs-dash">–</td>';
+        ? '<td class="zs-col-status" data-col="status" title="Von Lohnbuchhaltung gesperrt"><img class="zs-lock-check-icon" src="icons/circle-check-green.svg" alt="Gesperrt" width="16" height="16"></td>'
+        : '<td class="zs-col-status zs-dash" data-col="status">–</td>';
       var bemOrig = String(d.bemerkung || '');
-      // Nach Entsperren: Monteur bearbeitet wieder das Original; Korrektur nur als Tooltip
       var bemShow = locked ? bemerkungEff(d) : bemOrig;
       var bemLabel = korrLabel(d, 'bemerkung');
+      var bemAria = ariaLabelFor('bemerkung', d.weekday, d.day_date);
       body += `<tr class="${rowClass.trim()}" data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}" data-lohn-gesperrt="${locked ? '1' : '0'}">
-        <td>${escapeHtml(dateDe(d.day_date))}</td>
-        <td>${escapeHtml(d.weekday)}</td>
-        <td class="zs-holiday">${escapeHtml(d.holiday_label || '')}</td>
+        <td class="zs-sticky-tag" data-col="tag">${escapeHtml(dateDe(d.day_date))}</td>
+        <td class="zs-sticky-wt" data-col="wt">${escapeHtml(d.weekday)}</td>
+        <td class="zs-holiday zs-sticky-holiday zs-sep-after" data-col="feiertag">${escapeHtml(d.holiday_label || '')}</td>
         ${HOUR_FIELDS.map(function (f) {
           var monteurVal = num(d[f]);
           var eff = hourEff(d, f);
           var label = korrLabel(d, f);
           var hasKorr = hasLohnOverride(d, f) || !!label;
-          // Nur echte Sperre blockiert Eingabe — nicht die Korrektur allein
           var showVal = locked ? eff : monteurVal;
           var display = showVal ? escapeHtml(String(showVal)) : '';
           var tip = label ? ` title="${escapeHtml(label)}"` : '';
-          return `<td class="zs-col-hour${hasKorr ? ' zs-corrected' : ''}"><div class="zs-hour-cell">
-            <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}"${tip}${locked ? ' disabled' : ''}>
+          var sep = (f === 'weg' || f === 'krank') ? ' zs-sep-after' : '';
+          var aria = escapeHtml(ariaLabelFor(f, d.weekday, d.day_date));
+          return `<td class="zs-col-hour${hasKorr ? ' zs-corrected' : ''}${sep}" data-col="${f}"><div class="zs-hour-cell">
+            <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-col="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}" aria-label="${aria}"${tip}${locked ? ' disabled' : ''}>
           </div></td>`;
         }).join('')}
-        <td class="zs-sum${sumCls}" data-day-sum>${escapeHtml(fmt(sumVal))}</td>
-        <td class="zs-col-bemerkung${bemLabel ? ' zs-corrected' : ''}"><div class="zs-bem-cell">
-          <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}"${bemLabel ? ` title="${escapeHtml(bemLabel)}"` : ''}${locked ? ' disabled' : ''}>
+        <td class="zs-sum zs-sep-after${sumCls}" data-col="summe" data-day-sum>${escapeHtml(fmt(sumVal))}</td>
+        <td class="zs-col-bemerkung${bemLabel ? ' zs-corrected' : ''}" data-col="bemerkung"><div class="zs-bem-cell">
+          <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-col="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}" aria-label="${escapeHtml(bemAria)}"${bemLabel ? ` title="${escapeHtml(bemLabel)}"` : ''}${locked ? ' disabled' : ''}>
         </div></td>
         ${statusCell}
       </tr>`;
     });
-    return `<div class="zs-table-wrap"><table class="zs-table">
-      <thead><tr>
-        <th>Datum</th><th>Tag</th><th class="zs-col-holiday">Feiert.</th>
-        <th class="zs-col-hour" title="Anwesenheit">Anw.</th>
-        <th class="zs-col-hour" title="Montage">Mont.</th>
-        <th class="zs-col-hour" title="Überstunden 50%">Ü50</th>
-        <th class="zs-col-hour" title="Überstunden 100%">Ü100</th>
-        <th class="zs-col-hour" title="Weg">Weg</th>
-        <th class="zs-col-hour" title="Urlaub">Url.</th>
-        <th class="zs-col-hour" title="Zeitausgleich plus">ZA+</th>
-        <th class="zs-col-hour" title="Zeitausgleich minus">ZA−</th>
-        <th class="zs-col-hour" title="Krank/Arzt">Kr.</th>
-        <th class="zs-col-sum">Sum.</th><th>Bemerkung</th><th class="zs-col-status">Status</th>
-      </tr></thead>
+    return `<div class="zs-active-bar is-idle" id="zsActiveBar" aria-live="polite">
+      <span class="zs-active-bar-label">Aktive Eingabe:</span>
+      <span class="zs-active-bar-text" id="zsActiveField">${escapeHtml(ACTIVE_IDLE)}</span>
+    </div>
+    <div class="zs-table-wrap"><table class="zs-table">
+      <thead>
+        <tr class="zs-head-groups">
+          <th class="zs-sticky-tag" colspan="3" scope="colgroup">Datum</th>
+          <th colspan="5" scope="colgroup">Arbeits- und Reisezeit</th>
+          <th colspan="4" scope="colgroup">Abwesenheit und Zeitkonto</th>
+          <th colspan="1" scope="colgroup">Ergebnis</th>
+          <th colspan="2" scope="colgroup">Informationen</th>
+        </tr>
+        <tr class="zs-head-cols">
+          <th class="zs-sticky-tag" data-col="tag" title="Kalendertag">Tag</th>
+          <th class="zs-sticky-wt" data-col="wt" title="Wochentag">WT</th>
+          <th class="zs-sticky-holiday zs-sep-after" data-col="feiertag" title="Feiertag">Feiertag</th>
+          ${HOUR_FIELDS.map(function (f) {
+            var m = FIELD_META[f];
+            var sep = (f === 'weg' || f === 'krank') ? ' zs-sep-after' : '';
+            return `<th class="zs-col-hour${sep}" data-col="${f}" title="${escapeHtml(m.title)}">${escapeHtml(m.short)}</th>`;
+          }).join('')}
+          <th class="zs-col-sum zs-sep-after" data-col="summe" title="Tagessumme in Stunden">Summe (h)</th>
+          <th data-col="bemerkung" title="Bemerkung">Bemerkung</th>
+          <th class="zs-col-status" data-col="status" title="Sperrstatus">Status</th>
+        </tr>
+      </thead>
       <tbody>${body}</tbody>
       <tfoot><tr>
-        <th>Gesamt</th><th data-sum="gesamt">${escapeHtml(fmtAlways(g))}</th><th></th>
-        ${HOUR_FIELDS.map(function (f) { return `<th class="zs-col-hour" data-sum="${f}">${escapeHtml(fmtAlways(sums[f]))}</th>`; }).join('')}
-        <th class="zs-col-sum" data-sum="day_sum">${escapeHtml(fmtAlways(sums.day_sum))}</th><th></th><th></th>
+        <th class="zs-sticky-tag" scope="row">Gesamt</th>
+        <th class="zs-sticky-wt" data-sum="gesamt">${escapeHtml(fmtAlways(g))}</th>
+        <th class="zs-sticky-holiday zs-sep-after"></th>
+        ${HOUR_FIELDS.map(function (f) {
+          var sep = (f === 'weg' || f === 'krank') ? ' zs-sep-after' : '';
+          return `<th class="zs-col-hour${sep}" data-sum="${f}">${escapeHtml(fmtAlways(sums[f]))}</th>`;
+        }).join('')}
+        <th class="zs-col-sum zs-sep-after" data-sum="day_sum">${escapeHtml(fmtAlways(sums.day_sum))}</th>
+        <th></th><th class="zs-col-status"></th>
       </tr></tfoot>
     </table></div>`;
   }
@@ -356,6 +411,42 @@
     </div>`;
   }
 
+  function setActiveFieldInfo(host, inp) {
+    const bar = host.querySelector('#zsActiveBar');
+    const text = host.querySelector('#zsActiveField');
+    if (!bar || !text) return;
+    if (!inp) {
+      bar.classList.add('is-idle');
+      text.textContent = ACTIVE_IDLE;
+      return;
+    }
+    const tr = inp.closest('tr[data-day-date]');
+    if (!tr) {
+      bar.classList.add('is-idle');
+      text.textContent = ACTIVE_IDLE;
+      return;
+    }
+    const field = inp.getAttribute('data-field') || inp.getAttribute('data-col') || '';
+    const spoken = fieldSpoken(field);
+    const line = dateLongDe(tr.getAttribute('data-day-date'), tr.getAttribute('data-weekday')) + ' – ' + spoken;
+    bar.classList.remove('is-idle');
+    text.textContent = line;
+  }
+
+  function clearColActive(host) {
+    host.querySelectorAll('.zs-col-active').forEach(function (el) {
+      el.classList.remove('zs-col-active');
+    });
+  }
+
+  function setColActive(host, col) {
+    clearColActive(host);
+    if (!col) return;
+    host.querySelectorAll('[data-col="' + col + '"]').forEach(function (el) {
+      el.classList.add('zs-col-active');
+    });
+  }
+
   function bind(host) {
     host.querySelector('#zsYear').addEventListener('change', async function (e) {
       state.year = parseInt(e.target.value, 10);
@@ -371,6 +462,20 @@
       inp.addEventListener('input', function () {
         state.dirty = true;
         recomputeDom(host);
+      });
+      inp.addEventListener('focusin', function () {
+        setActiveFieldInfo(host, inp);
+        setColActive(host, inp.getAttribute('data-col') || inp.getAttribute('data-field'));
+      });
+      inp.addEventListener('focusout', function () {
+        // delay: Tab zu nächstem Feld innerhalb derselben Tabelle
+        setTimeout(function () {
+          const active = document.activeElement;
+          if (!active || !host.contains(active) || !active.classList.contains('zs-input')) {
+            setActiveFieldInfo(host, null);
+            clearColActive(host);
+          }
+        }, 0);
       });
     });
   }

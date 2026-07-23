@@ -1,6 +1,24 @@
-/* Zeitschreibung — Layout wie Abrechnung (sp-v2 / serviceprotokoll-v2) */
+/* Zeitschreibung — Sticky-UX, Gruppenkopf, Fokus-Hilfen */
 
 #view-zeitschreibung {
+  --zs-head-bg: #eefaf5;
+  --zs-head-group-bg: #e3f5ed;
+  --zs-head-fg: #007a4d;
+  --zs-sa: #fff8d6;
+  --zs-so: #fde9df;
+  --zs-holiday: #ffb3b3;
+  --zs-focus-ring: #2563eb;
+  --zs-row-active: rgba(37, 99, 235, 0.08);
+  --zs-col-active: rgba(37, 99, 235, 0.06);
+  --zs-border: #d8e3df;
+  --zs-border-strong: #94a3b8;
+  --zs-input-border: #cbd5e1;
+  --zs-sum-bg: #f1f5f9;
+  --zs-sticky-w-tag: 6.5rem;
+  --zs-sticky-w-wt: 2.2rem;
+  --zs-sticky-w-holiday: 9rem;
+  --zs-head-group-h: 1.55rem;
+  --zs-head-cols-h: 1.85rem;
   background: var(--sp-page, #f7f8f8);
 }
 
@@ -21,6 +39,7 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  min-height: 100%;
 }
 
 .zs-sp-col {
@@ -30,6 +49,8 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-height: 0;
+  flex: 1;
 }
 
 .page-zeitschreibung .zs-sp-topbar {
@@ -68,31 +89,107 @@
   color: var(--sp-muted, #4b5563);
 }
 
+/* Infoleiste aktive Eingabe */
+.page-zeitschreibung .zs-active-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.55rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--zs-border);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 0.8125rem;
+  color: #334155;
+  line-height: 1.3;
+}
+
+.page-zeitschreibung .zs-active-bar-label {
+  font-weight: 600;
+  color: var(--zs-head-fg);
+  white-space: nowrap;
+}
+
+.page-zeitschreibung .zs-active-bar-text {
+  min-width: 0;
+}
+
+.page-zeitschreibung .zs-active-bar.is-idle .zs-active-bar-text {
+  color: var(--sp-muted, #4b5563);
+  font-weight: 400;
+}
+
+/* Scroll nur im Tabellen-Container (Muster B) */
 .page-zeitschreibung .zs-table-wrap {
   overflow: auto;
   max-width: 100%;
-  border: 1px solid var(--sp-border, #d8e3df);
+  max-height: calc(100vh - 280px);
+  border: 1px solid var(--zs-border);
   border-radius: 8px;
   background: #fff;
+  position: relative;
 }
 
 .page-zeitschreibung .zs-table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   width: max-content;
+  min-width: 100%;
   font-size: 12px;
 }
 
 .page-zeitschreibung .zs-table th,
 .page-zeitschreibung .zs-table td {
-  border: 1px solid var(--sp-border, #d8e3df);
-  padding: 2px 3px;
+  border-right: 1px solid var(--zs-border);
+  border-bottom: 1px solid var(--zs-border);
+  padding: 3px 4px;
   white-space: nowrap;
+  background-clip: padding-box;
 }
 
-.page-zeitschreibung .zs-table thead th,
+.page-zeitschreibung .zs-table th:first-child,
+.page-zeitschreibung .zs-table td:first-child {
+  border-left: 1px solid var(--zs-border);
+}
+
+.page-zeitschreibung .zs-table thead th {
+  color: var(--zs-head-fg);
+  font-weight: 600;
+}
+
+/* Gruppen-Kopf */
+.page-zeitschreibung .zs-table thead tr.zs-head-groups th {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--zs-head-group-bg);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-align: center;
+  padding: 3px 6px;
+  height: var(--zs-head-group-h);
+  line-height: 1.2;
+  border-bottom: 1px solid var(--zs-border-strong);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+/* Spalten-Kopf */
+.page-zeitschreibung .zs-table thead tr.zs-head-cols th {
+  position: sticky;
+  top: var(--zs-head-group-h);
+  z-index: 39;
+  background: var(--zs-head-bg);
+  font-size: 11px;
+  letter-spacing: -0.02em;
+  padding: 4px 3px;
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.06);
+}
+
 .page-zeitschreibung .zs-table tfoot th {
-  background: var(--sp-mint, #eefaf5);
-  color: var(--sp-green, #007a4d);
+  background: var(--zs-head-bg);
+  color: var(--zs-head-fg);
+  font-weight: 700;
 }
 
 .page-zeitschreibung .zs-table th.zs-col-hour,
@@ -100,30 +197,143 @@
 .page-zeitschreibung .zs-table th.zs-col-sum,
 .page-zeitschreibung .zs-table td.zs-sum {
   width: 1%;
-  padding: 1px 2px;
+  padding: 2px 3px;
   text-align: center;
 }
 
-.page-zeitschreibung .zs-table th.zs-col-hour,
-.page-zeitschreibung .zs-table th.zs-col-sum {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.page-zeitschreibung .zs-input {
-  box-sizing: border-box;
-  font: inherit;
-  border: 1px solid var(--sp-border, #d8e3df);
-  border-radius: 4px;
+/* Sticky linke Spalten */
+.page-zeitschreibung .zs-table .zs-sticky-tag {
+  position: sticky;
+  left: 0;
+  width: var(--zs-sticky-w-tag);
+  min-width: var(--zs-sticky-w-tag);
+  max-width: var(--zs-sticky-w-tag);
+  z-index: 20;
   background: #fff;
 }
 
+.page-zeitschreibung .zs-table .zs-sticky-wt {
+  position: sticky;
+  left: var(--zs-sticky-w-tag);
+  width: var(--zs-sticky-w-wt);
+  min-width: var(--zs-sticky-w-wt);
+  max-width: var(--zs-sticky-w-wt);
+  text-align: center;
+  z-index: 20;
+  background: #fff;
+}
+
+.page-zeitschreibung .zs-table .zs-sticky-holiday {
+  position: sticky;
+  left: calc(var(--zs-sticky-w-tag) + var(--zs-sticky-w-wt));
+  width: var(--zs-sticky-w-holiday);
+  min-width: var(--zs-sticky-w-holiday);
+  max-width: var(--zs-sticky-w-holiday);
+  z-index: 20;
+  background: #fff;
+  box-shadow: 4px 0 6px -4px rgba(15, 23, 42, 0.28);
+}
+
+.page-zeitschreibung .zs-table thead .zs-sticky-tag,
+.page-zeitschreibung .zs-table thead .zs-sticky-wt,
+.page-zeitschreibung .zs-table thead .zs-sticky-holiday {
+  z-index: 50;
+  background: var(--zs-head-bg);
+}
+
+.page-zeitschreibung .zs-table thead tr.zs-head-groups th.zs-sticky-tag {
+  left: 0;
+  width: calc(var(--zs-sticky-w-tag) + var(--zs-sticky-w-wt) + var(--zs-sticky-w-holiday));
+  min-width: calc(var(--zs-sticky-w-tag) + var(--zs-sticky-w-wt) + var(--zs-sticky-w-holiday));
+  max-width: calc(var(--zs-sticky-w-tag) + var(--zs-sticky-w-wt) + var(--zs-sticky-w-holiday));
+  z-index: 55;
+  background: var(--zs-head-group-bg);
+  box-shadow: 4px 0 6px -4px rgba(15, 23, 42, 0.28);
+}
+
+.page-zeitschreibung .zs-holiday {
+  color: #8a4b00;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Gruppen-Trenner */
+.page-zeitschreibung .zs-table .zs-sep-after {
+  border-right: 2px solid var(--zs-border-strong) !important;
+}
+
+/* Wochenende / Feiertag dezent */
+.page-zeitschreibung .zs-table tbody tr.zs-row-sa > td {
+  background-color: var(--zs-sa);
+}
+
+.page-zeitschreibung .zs-table tbody tr.zs-row-so > td {
+  background-color: var(--zs-so);
+}
+
+.page-zeitschreibung .zs-table tbody tr.zs-row-holiday > td {
+  background-color: var(--zs-holiday);
+}
+
+.page-zeitschreibung .zs-table tbody tr.zs-row-sa > td.zs-sticky-tag,
+.page-zeitschreibung .zs-table tbody tr.zs-row-sa > td.zs-sticky-wt,
+.page-zeitschreibung .zs-table tbody tr.zs-row-sa > td.zs-sticky-holiday {
+  background-color: var(--zs-sa);
+}
+
+.page-zeitschreibung .zs-table tbody tr.zs-row-so > td.zs-sticky-tag,
+.page-zeitschreibung .zs-table tbody tr.zs-row-so > td.zs-sticky-wt,
+.page-zeitschreibung .zs-table tbody tr.zs-row-so > td.zs-sticky-holiday {
+  background-color: var(--zs-so);
+}
+
+.page-zeitschreibung .zs-table tbody tr.zs-row-holiday > td.zs-sticky-tag,
+.page-zeitschreibung .zs-table tbody tr.zs-row-holiday > td.zs-sticky-wt,
+.page-zeitschreibung .zs-table tbody tr.zs-row-holiday > td.zs-sticky-holiday {
+  background-color: var(--zs-holiday);
+}
+
+/* Aktive Zeile */
+.page-zeitschreibung .zs-table tbody tr:focus-within > td {
+  box-shadow: inset 0 0 0 999px var(--zs-row-active);
+}
+
+/* Aktive Spalte */
+.page-zeitschreibung .zs-table td.zs-col-active,
+.page-zeitschreibung .zs-table thead tr.zs-head-cols th.zs-col-active {
+  box-shadow: inset 0 0 0 999px var(--zs-col-active);
+}
+
+.page-zeitschreibung .zs-table thead tr.zs-head-cols th.zs-col-active {
+  color: #1d4ed8;
+}
+
+/* Eingaben */
+.page-zeitschreibung .zs-input {
+  box-sizing: border-box;
+  font: inherit;
+  border: 1px solid var(--zs-input-border);
+  border-radius: 4px;
+  background: #fff;
+  height: 1.7rem;
+  transition: box-shadow 0.1s ease, outline-color 0.1s ease;
+}
+
+.page-zeitschreibung .zs-input:focus,
+.page-zeitschreibung .zs-input:focus-visible {
+  outline: 2px solid var(--zs-focus-ring);
+  outline-offset: 0;
+  box-shadow: 0 0 0 1px #fff;
+  border-color: var(--zs-focus-ring);
+  z-index: 1;
+  position: relative;
+}
+
 .page-zeitschreibung .zs-input.zs-hour {
-  width: 2.6rem;
-  min-width: 2.6rem;
-  max-width: 2.6rem;
-  padding: 1px 2px;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  max-width: 2.75rem;
+  padding: 2px 3px;
   text-align: center;
   font-size: 12px;
   -moz-appearance: textfield;
@@ -136,38 +346,24 @@
 }
 
 .page-zeitschreibung .zs-bemerkung {
-  width: 20rem;
-  min-width: 20rem;
+  width: 18rem;
+  min-width: 14rem;
   max-width: none;
   text-align: left;
   padding: 2px 6px;
 }
 
-.page-zeitschreibung .zs-table th.zs-col-holiday,
-.page-zeitschreibung .zs-table td.zs-holiday {
-  min-width: 10.5rem;
-  width: 10.5rem;
-  max-width: none;
-  white-space: nowrap;
+.page-zeitschreibung .zs-table td.zs-sum {
+  background: var(--zs-sum-bg);
+  font-weight: 600;
+  min-width: 3rem;
 }
-
-.page-zeitschreibung .zs-holiday {
-  color: #8a4b00;
-  overflow: visible;
-  text-overflow: clip;
-}
-
-/* Excel-Bedingte Formatierung: Sa gelb, So orange, Feiertag rot */
-.page-zeitschreibung .zs-table tbody tr.zs-row-sa td { background: #ffff00; }
-.page-zeitschreibung .zs-table tbody tr.zs-row-so td { background: #ff6600; }
-.page-zeitschreibung .zs-table tbody tr.zs-row-holiday td { background: #ff5050; }
-.page-zeitschreibung .zs-table tbody tr.zs-row-sa .zs-input,
-.page-zeitschreibung .zs-table tbody tr.zs-row-so .zs-input,
-.page-zeitschreibung .zs-table tbody tr.zs-row-holiday .zs-input { background: transparent; }
 
 .page-zeitschreibung .zs-col-status {
   text-align: center;
-  width: 2.5rem;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  max-width: 2.75rem;
 }
 
 .page-zeitschreibung .zs-lock-check-icon {
@@ -186,7 +382,7 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 2px;
+  gap: 0;
 }
 
 .page-zeitschreibung .zs-input.is-corrected {
@@ -199,15 +395,29 @@
   background: #ffedd5;
 }
 
-/* Excel CF Summe: >10 orange, >12.01 rot */
 .page-zeitschreibung .zs-table tbody td.zs-sum.zs-sum-warn {
   background: #ffc000 !important;
   font-weight: 600;
 }
+
 .page-zeitschreibung .zs-table tbody td.zs-sum.zs-sum-high {
   background: #ff0000 !important;
   color: #fff;
   font-weight: 600;
+}
+
+.page-zeitschreibung section[aria-labelledby="zsSecTabelleTitle"] {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-zeitschreibung section[aria-labelledby="zsSecTabelleTitle"] .sp-v2-section-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 #view-zeitschreibung .page-zeitschreibung .btn {
