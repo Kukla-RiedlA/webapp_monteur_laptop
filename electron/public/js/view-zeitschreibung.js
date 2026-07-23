@@ -339,9 +339,6 @@
               <button type="button" class="btn btn-primary" id="zsSubmit">Freigeben (PDF)</button>
               <span class="zs-msg" id="zsMsg" aria-live="polite"></span>
             </div>
-            <p class="muted" style="margin:0.65rem 0 0;font-size:0.85rem">
-              Speicherort für PDF/Excel: Einstellungen → Speicherort Zeitaufzeichnungen-Ordner
-            </p>
           </div>
         </section>
 
