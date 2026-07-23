@@ -265,8 +265,10 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
 
   for (const d of daysIn || []) {
     if (!d || !d.day_date) continue;
-    const prev = prevByDate[d.day_date] || lockedByDate[d.day_date] || null;
-    const locked = Number(d.lohn_gesperrt) || (prev && Number(prev.lohn_gesperrt)) ? 1 : 0;
+    const prev = prevByDate[d.day_date] || null;
+    // Nur die eingehende Sperre zählt — sonst kann Dispo-Entsperren lokal nie greifen
+    // und Speichern setzt Stunden wieder auf den alten gesperrten Stand zurück.
+    const locked = Number(d.lohn_gesperrt) ? 1 : 0;
     let row = Object.assign({}, d, { lohn_gesperrt: locked });
     if (locked && prev) {
       row = Object.assign({}, row, {
@@ -296,6 +298,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
   }
 
   // Gesperrte Tage, die nicht im Payload waren, trotzdem behalten
+  // (nur wenn sie in diesem Lauf nicht explizit entsperrt wurden)
   for (const dk of Object.keys(lockedByDate)) {
     if (byDate[dk]) continue;
     const r = lockedByDate[dk];

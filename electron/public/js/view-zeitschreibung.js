@@ -146,16 +146,15 @@
       };
       HOUR_FIELDS.forEach(function (f) {
         const inp = tr.querySelector('input[data-field="' + f + '"]');
-        const hasKorr = inp && inp.getAttribute('data-has-korr') === '1';
-        if ((locked || hasKorr) && inp && inp.getAttribute('data-monteur') != null) {
+        // Nur bei aktiver Sperre Original aus data-monteur (Effektivwert steht im Input)
+        if (locked && inp && inp.getAttribute('data-monteur') != null) {
           day[f] = num(inp.getAttribute('data-monteur'));
         } else {
           day[f] = inp ? num(inp.value) : 0;
         }
       });
       const bem = tr.querySelector('input[data-field="bemerkung"]');
-      const bemKorr = bem && bem.disabled && bem.getAttribute('data-monteur') != null;
-      if ((locked || bemKorr) && bem && bem.getAttribute('data-monteur') != null) {
+      if (locked && bem && bem.getAttribute('data-monteur') != null) {
         day.bemerkung = String(bem.getAttribute('data-monteur') || '');
       } else {
         day.bemerkung = bem ? String(bem.value || '') : '';
@@ -241,9 +240,9 @@
         ? '<td class="zs-col-status" title="Von Lohnbuchhaltung gesperrt"><img class="zs-lock-check-icon" src="icons/circle-check-green.svg" alt="Gesperrt" width="16" height="16"></td>'
         : '<td class="zs-col-status zs-dash">–</td>';
       var bemOrig = String(d.bemerkung || '');
-      var bemShow = hasLohnOverride(d, 'bemerkung') || locked ? bemerkungEff(d) : bemOrig;
+      // Nach Entsperren: Monteur bearbeitet wieder das Original; Korrektur nur als Tooltip
+      var bemShow = locked ? bemerkungEff(d) : bemOrig;
       var bemLabel = korrLabel(d, 'bemerkung');
-      var bemFrozen = locked || hasLohnOverride(d, 'bemerkung');
       body += `<tr class="${rowClass.trim()}" data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}" data-lohn-gesperrt="${locked ? '1' : '0'}">
         <td>${escapeHtml(dateDe(d.day_date))}</td>
         <td>${escapeHtml(d.weekday)}</td>
@@ -253,17 +252,17 @@
           var eff = hourEff(d, f);
           var label = korrLabel(d, f);
           var hasKorr = hasLohnOverride(d, f) || !!label;
-          var frozen = locked || hasKorr;
-          var showVal = hasKorr || locked ? eff : monteurVal;
+          // Nur echte Sperre blockiert Eingabe — nicht die Korrektur allein
+          var showVal = locked ? eff : monteurVal;
           var display = showVal ? escapeHtml(String(showVal)) : '';
           var tip = label ? ` title="${escapeHtml(label)}"` : '';
           return `<td class="zs-col-hour${hasKorr ? ' zs-corrected' : ''}"><div class="zs-hour-cell">
-            <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}"${tip}${frozen ? ' disabled' : ''}>
+            <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}"${tip}${locked ? ' disabled' : ''}>
           </div></td>`;
         }).join('')}
         <td class="zs-sum${sumCls}" data-day-sum>${escapeHtml(fmt(sumVal))}</td>
         <td class="zs-col-bemerkung${bemLabel ? ' zs-corrected' : ''}"><div class="zs-bem-cell">
-          <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}"${bemLabel ? ` title="${escapeHtml(bemLabel)}"` : ''}${bemFrozen ? ' disabled' : ''}>
+          <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}"${bemLabel ? ` title="${escapeHtml(bemLabel)}"` : ''}${locked ? ' disabled' : ''}>
         </div></td>
         ${statusCell}
       </tr>`;
