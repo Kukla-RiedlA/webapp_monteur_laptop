@@ -254,21 +254,16 @@
           var label = korrLabel(d, f);
           var hasKorr = hasLohnOverride(d, f) || !!label;
           var frozen = locked || hasKorr;
-          // Immer Effektivwert zeigen, wenn Lohn korrigiert hat
           var showVal = hasKorr || locked ? eff : monteurVal;
           var display = showVal ? escapeHtml(String(showVal)) : '';
-          var labelHtml = label
-            ? `<div class="zs-korrektur-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>`
-            : '';
+          var tip = label ? ` title="${escapeHtml(label)}"` : '';
           return `<td class="zs-col-hour${hasKorr ? ' zs-corrected' : ''}"><div class="zs-hour-cell">
-            <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}"${frozen ? ' disabled' : ''}>
-            ${labelHtml}
+            <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}"${tip}${frozen ? ' disabled' : ''}>
           </div></td>`;
         }).join('')}
         <td class="zs-sum${sumCls}" data-day-sum>${escapeHtml(fmt(sumVal))}</td>
         <td class="zs-col-bemerkung${bemLabel ? ' zs-corrected' : ''}"><div class="zs-bem-cell">
-          <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}"${bemFrozen ? ' disabled' : ''}>
-          ${bemLabel ? `<div class="zs-korrektur-label" title="${escapeHtml(bemLabel)}">${escapeHtml(bemLabel)}</div>` : ''}
+          <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}"${bemLabel ? ` title="${escapeHtml(bemLabel)}"` : ''}${bemFrozen ? ' disabled' : ''}>
         </div></td>
         ${statusCell}
       </tr>`;
