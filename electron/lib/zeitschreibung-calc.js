@@ -111,6 +111,15 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function hourEff(row, field) {
+  const lk = 'lohn_' + field;
+  const r = row || {};
+  if (Object.prototype.hasOwnProperty.call(r, lk) && r[lk] != null && r[lk] !== '') {
+    return num(r[lk]);
+  }
+  return num(r[field]);
+}
+
 /** Tageszeile: SUM(Anw..Urlaub) + ZA- + Krank — ZA+ zählt nicht. */
 function daySum(row) {
   const r = row || {};
@@ -123,6 +132,19 @@ function daySum(row) {
     num(r.urlaub) +
     num(r.za_minus) +
     num(r.krank)
+  );
+}
+
+function daySumEffective(row) {
+  return (
+    hourEff(row, 'anw') +
+    hourEff(row, 'montage') +
+    hourEff(row, 'ue50') +
+    hourEff(row, 'ue100') +
+    hourEff(row, 'weg') +
+    hourEff(row, 'urlaub') +
+    hourEff(row, 'za_minus') +
+    hourEff(row, 'krank')
   );
 }
 
@@ -144,6 +166,38 @@ function columnSums(rows) {
     sums.day_sum += daySum(row);
   }
   return sums;
+}
+
+function columnSumsEffective(rows) {
+  const sums = {
+    anw: 0,
+    montage: 0,
+    ue50: 0,
+    ue100: 0,
+    weg: 0,
+    urlaub: 0,
+    za_plus: 0,
+    za_minus: 0,
+    krank: 0,
+    day_sum: 0,
+  };
+  for (const row of rows || []) {
+    for (const f of HOUR_FIELDS) sums[f] += hourEff(row, f);
+    sums.day_sum += daySumEffective(row);
+  }
+  return sums;
+}
+
+/** Tage für Export/PDF mit effektiven Stunden (Lohn-Overrides). */
+function daysForExport(days) {
+  return (days || []).map((d) => {
+    const out = Object.assign({}, d);
+    for (const f of HOUR_FIELDS) out[f] = hourEff(d, f);
+    out.bemerkung =
+      d.lohn_bemerkung != null ? String(d.lohn_bemerkung) : String(d.bemerkung || '');
+    out.day_sum = daySumEffective(d);
+    return out;
+  });
 }
 
 /** Monat Gesamt: Anw+Montage+Ü50+Ü100+Weg − Urlaub + ZA+ − ZA− − Krank */
@@ -196,7 +250,28 @@ function buildMonthDays(year, month, existingByDate) {
       krank: num(prev.krank),
       bemerkung: prev.bemerkung != null ? String(prev.bemerkung) : '',
       lohn_gesperrt: prev.lohn_gesperrt ? 1 : 0,
+      lohn_anw: prev.lohn_anw != null && prev.lohn_anw !== '' ? num(prev.lohn_anw) : null,
+      lohn_montage: prev.lohn_montage != null && prev.lohn_montage !== '' ? num(prev.lohn_montage) : null,
+      lohn_ue50: prev.lohn_ue50 != null && prev.lohn_ue50 !== '' ? num(prev.lohn_ue50) : null,
+      lohn_ue100: prev.lohn_ue100 != null && prev.lohn_ue100 !== '' ? num(prev.lohn_ue100) : null,
+      lohn_weg: prev.lohn_weg != null && prev.lohn_weg !== '' ? num(prev.lohn_weg) : null,
+      lohn_urlaub: prev.lohn_urlaub != null && prev.lohn_urlaub !== '' ? num(prev.lohn_urlaub) : null,
+      lohn_za_plus: prev.lohn_za_plus != null && prev.lohn_za_plus !== '' ? num(prev.lohn_za_plus) : null,
+      lohn_za_minus: prev.lohn_za_minus != null && prev.lohn_za_minus !== '' ? num(prev.lohn_za_minus) : null,
+      lohn_krank: prev.lohn_krank != null && prev.lohn_krank !== '' ? num(prev.lohn_krank) : null,
+      lohn_bemerkung: prev.lohn_bemerkung != null ? String(prev.lohn_bemerkung) : null,
+      lohn_korrektur_meta: prev.lohn_korrektur_meta != null ? String(prev.lohn_korrektur_meta) : null,
+      korrekturen: prev.korrekturen && typeof prev.korrekturen === 'object' ? prev.korrekturen : null,
+      korrekturen_json: prev.korrekturen_json != null ? String(prev.korrekturen_json) : null,
     };
+    if (!row.korrekturen && row.korrekturen_json) {
+      try {
+        row.korrekturen = JSON.parse(row.korrekturen_json);
+      } catch (_) {
+        row.korrekturen = {};
+      }
+    }
+    if (!row.korrekturen) row.korrekturen = {};
     row.day_sum = daySum(row);
     out.push(row);
   }
@@ -294,8 +369,12 @@ module.exports = {
   easterSunday,
   austrianHolidays,
   num,
+  hourEff,
   daySum,
+  daySumEffective,
   columnSums,
+  columnSumsEffective,
+  daysForExport,
   gesamtSum,
   daysInMonth,
   buildMonthDays,

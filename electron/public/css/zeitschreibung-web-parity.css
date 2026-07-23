@@ -181,6 +181,38 @@
   background: #f3f4f6;
 }
 
+.page-zeitschreibung .zs-hour-cell,
+.page-zeitschreibung .zs-bem-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.page-zeitschreibung .zs-korrektur-label {
+  font-size: 9px;
+  line-height: 1.2;
+  color: #9a3412;
+  font-weight: 600;
+  white-space: normal;
+  max-width: 8rem;
+  text-align: center;
+}
+
+.page-zeitschreibung .zs-bem-cell .zs-korrektur-label {
+  max-width: 14rem;
+  text-align: left;
+}
+
+.page-zeitschreibung .zs-input.is-corrected {
+  border-color: #c2410c;
+  background: #fff7ed;
+}
+
+.page-zeitschreibung .zs-row-locked .zs-input.is-corrected:disabled {
+  background: #ffedd5;
+}
+
 /* Excel CF Summe: >10 orange, >12.01 rot */
 .page-zeitschreibung .zs-table tbody td.zs-sum.zs-sum-warn {
   background: #ffc000 !important;

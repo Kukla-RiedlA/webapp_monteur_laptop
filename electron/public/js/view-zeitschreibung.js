@@ -32,17 +32,37 @@
     return Number.isFinite(n) ? n : 0;
   }
 
+  function hourEff(row, f) {
+    const lk = 'lohn_' + f;
+    if (row[lk] != null && row[lk] !== '') return num(row[lk]);
+    return num(row[f]);
+  }
+
   function daySum(row) {
     return num(row.anw) + num(row.montage) + num(row.ue50) + num(row.ue100) + num(row.weg) + num(row.urlaub) + num(row.za_minus) + num(row.krank);
+  }
+
+  function daySumEff(row) {
+    return hourEff(row, 'anw') + hourEff(row, 'montage') + hourEff(row, 'ue50') + hourEff(row, 'ue100') + hourEff(row, 'weg') + hourEff(row, 'urlaub') + hourEff(row, 'za_minus') + hourEff(row, 'krank');
   }
 
   function columnSums(days) {
     const s = { anw: 0, montage: 0, ue50: 0, ue100: 0, weg: 0, urlaub: 0, za_plus: 0, za_minus: 0, krank: 0, day_sum: 0 };
     for (const d of days) {
-      for (const f of HOUR_FIELDS) s[f] += num(d[f]);
-      s.day_sum += daySum(d);
+      for (const f of HOUR_FIELDS) s[f] += hourEff(d, f);
+      s.day_sum += daySumEff(d);
     }
     return s;
+  }
+
+  function korrLabel(d, field) {
+    const k = d && d.korrekturen && d.korrekturen[field];
+    return k && k.label ? String(k.label) : '';
+  }
+
+  function bemerkungEff(d) {
+    if (d.lohn_bemerkung != null) return String(d.lohn_bemerkung);
+    return String(d.bemerkung || '');
   }
 
   function gesamtSum(s) {
@@ -96,18 +116,27 @@
   function readDaysFromDom(host) {
     const rows = [];
     host.querySelectorAll('tr[data-day-date]').forEach(function (tr) {
+      const locked = tr.getAttribute('data-lohn-gesperrt') === '1';
       const day = {
         day_date: tr.getAttribute('data-day-date'),
         weekday: tr.getAttribute('data-weekday') || '',
         holiday_label: tr.getAttribute('data-holiday') || '',
-        lohn_gesperrt: tr.getAttribute('data-lohn-gesperrt') === '1' ? 1 : 0,
+        lohn_gesperrt: locked ? 1 : 0,
       };
       HOUR_FIELDS.forEach(function (f) {
         const inp = tr.querySelector('input[data-field="' + f + '"]');
-        day[f] = inp ? num(inp.value) : 0;
+        if (locked && inp && inp.getAttribute('data-monteur') != null) {
+          day[f] = num(inp.getAttribute('data-monteur'));
+        } else {
+          day[f] = inp ? num(inp.value) : 0;
+        }
       });
       const bem = tr.querySelector('input[data-field="bemerkung"]');
-      day.bemerkung = bem ? String(bem.value || '') : '';
+      if (locked && bem && bem.getAttribute('data-monteur') != null) {
+        day.bemerkung = String(bem.getAttribute('data-monteur') || '');
+      } else {
+        day.bemerkung = bem ? String(bem.value || '') : '';
+      }
       day.day_sum = daySum(day);
       rows.push(day);
     });
@@ -123,12 +152,18 @@
 
   function recomputeDom(host) {
     host.querySelectorAll('tr[data-day-date]').forEach(function (tr) {
+      const locked = tr.getAttribute('data-lohn-gesperrt') === '1';
       const row = {};
       HOUR_FIELDS.forEach(function (f) {
         const inp = tr.querySelector('input[data-field="' + f + '"]');
-        row[f] = inp ? num(inp.value) : 0;
+        if (locked && inp && inp.getAttribute('data-lohn-eff') != null) {
+          row['lohn_' + f] = num(inp.getAttribute('data-lohn-eff'));
+          row[f] = num(inp.getAttribute('data-monteur'));
+        } else {
+          row[f] = inp ? num(inp.value) : 0;
+        }
       });
-      const sumVal = daySum(row);
+      const sumVal = daySumEff(row);
       const cell = tr.querySelector('[data-day-sum]');
       if (cell) {
         cell.textContent = fmt(sumVal);
@@ -138,7 +173,24 @@
       }
     });
     const days = readDaysFromDom(host);
-    const sums = columnSums(days);
+    // Für Fußzeile: sichtbare Effektivwerte aus Inputs (bei Lock inkl. Override-Attr)
+    const visible = [];
+    host.querySelectorAll('tr[data-day-date]').forEach(function (tr) {
+      const locked = tr.getAttribute('data-lohn-gesperrt') === '1';
+      const row = { day_date: tr.getAttribute('data-day-date') };
+      HOUR_FIELDS.forEach(function (f) {
+        const inp = tr.querySelector('input[data-field="' + f + '"]');
+        if (locked && inp && inp.getAttribute('data-lohn-eff') != null) {
+          row[f] = num(inp.getAttribute('data-lohn-eff'));
+        } else if (inp && inp.getAttribute('data-lohn-eff') != null && inp.getAttribute('data-has-korr') === '1') {
+          row[f] = num(inp.getAttribute('data-lohn-eff'));
+        } else {
+          row[f] = inp ? num(inp.value) : 0;
+        }
+      });
+      visible.push(row);
+    });
+    const sums = columnSums(visible.length ? visible : days);
     const g = gesamtSum(sums);
     const set = function (key, val) {
       const el = host.querySelector('[data-sum="' + key + '"]');
@@ -160,21 +212,39 @@
       else if (d.weekday === 'So') rowClass = ' zs-row-so';
       else if (d.weekday === 'Sa') rowClass = ' zs-row-sa';
       if (locked) rowClass += ' zs-row-locked';
-      var sumVal = daySum(d);
+      var sumVal = daySumEff(d);
       var sumCls = summeAlertClass(sumVal);
       var dis = locked ? ' disabled' : '';
       var statusCell = locked
         ? '<td class="zs-col-status" title="Von Lohnbuchhaltung gesperrt"><img class="zs-lock-check-icon" src="icons/circle-check-green.svg" alt="Gesperrt" width="16" height="16"></td>'
         : '<td class="zs-col-status zs-dash">–</td>';
+      var bemOrig = String(d.bemerkung || '');
+      var bemShow = locked ? bemerkungEff(d) : bemOrig;
+      var bemLabel = korrLabel(d, 'bemerkung');
       body += `<tr class="${rowClass.trim()}" data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}" data-lohn-gesperrt="${locked ? '1' : '0'}">
         <td>${escapeHtml(dateDe(d.day_date))}</td>
         <td>${escapeHtml(d.weekday)}</td>
         <td class="zs-holiday">${escapeHtml(d.holiday_label || '')}</td>
         ${HOUR_FIELDS.map(function (f) {
-          return `<td class="zs-col-hour"><input type="number" step="0.25" min="0" class="zs-input zs-hour" data-field="${f}" value="${d[f] ? escapeHtml(String(d[f])) : ''}"${dis}></td>`;
+          var monteurVal = num(d[f]);
+          var eff = hourEff(d, f);
+          var label = korrLabel(d, f);
+          var hasKorr = !!label;
+          var showVal = locked ? eff : monteurVal;
+          var display = showVal ? escapeHtml(String(showVal)) : '';
+          var labelHtml = label
+            ? `<div class="zs-korrektur-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>`
+            : '';
+          return `<td class="zs-col-hour${hasKorr ? ' zs-corrected' : ''}"><div class="zs-hour-cell">
+            <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}"${dis}>
+            ${labelHtml}
+          </div></td>`;
         }).join('')}
         <td class="zs-sum${sumCls}" data-day-sum>${escapeHtml(fmt(sumVal))}</td>
-        <td><input type="text" class="zs-input zs-bemerkung" data-field="bemerkung" value="${escapeHtml(d.bemerkung || '')}"${dis}></td>
+        <td class="zs-col-bemerkung${bemLabel ? ' zs-corrected' : ''}"><div class="zs-bem-cell">
+          <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}"${dis}>
+          ${bemLabel ? `<div class="zs-korrektur-label" title="${escapeHtml(bemLabel)}">${escapeHtml(bemLabel)}</div>` : ''}
+        </div></td>
         ${statusCell}
       </tr>`;
     });

@@ -93,6 +93,61 @@ function ensureTables(db) {
   } catch (_) {
     /* Spalte existiert bereits */
   }
+  const lohnOverrideCols = [
+    'lohn_anw', 'lohn_montage', 'lohn_ue50', 'lohn_ue100', 'lohn_weg',
+    'lohn_urlaub', 'lohn_za_plus', 'lohn_za_minus', 'lohn_krank',
+  ];
+  for (const col of lohnOverrideCols) {
+    try {
+      db.exec('ALTER TABLE timesheet_days ADD COLUMN ' + col + ' REAL');
+    } catch (_) {
+      /* exists */
+    }
+  }
+  try {
+    db.exec('ALTER TABLE timesheet_days ADD COLUMN lohn_bemerkung TEXT');
+  } catch (_) {
+    /* exists */
+  }
+  try {
+    db.exec('ALTER TABLE timesheet_days ADD COLUMN lohn_korrektur_meta TEXT');
+  } catch (_) {
+    /* exists */
+  }
+  try {
+    db.exec('ALTER TABLE timesheet_days ADD COLUMN korrekturen_json TEXT');
+  } catch (_) {
+    /* exists */
+  }
+}
+
+function copyLohnOverrides(from, to) {
+  const src = from || {};
+  const dst = to || {};
+  const fields = [
+    'lohn_anw', 'lohn_montage', 'lohn_ue50', 'lohn_ue100', 'lohn_weg',
+    'lohn_urlaub', 'lohn_za_plus', 'lohn_za_minus', 'lohn_krank',
+  ];
+  for (const f of fields) {
+    dst[f] = src[f] != null && src[f] !== '' ? calc.num(src[f]) : null;
+  }
+  dst.lohn_bemerkung = src.lohn_bemerkung != null ? String(src.lohn_bemerkung) : null;
+  dst.lohn_korrektur_meta = src.lohn_korrektur_meta != null ? String(src.lohn_korrektur_meta) : null;
+  if (src.korrekturen && typeof src.korrekturen === 'object') {
+    dst.korrekturen = src.korrekturen;
+    dst.korrekturen_json = JSON.stringify(src.korrekturen);
+  } else if (src.korrekturen_json) {
+    dst.korrekturen_json = String(src.korrekturen_json);
+    try {
+      dst.korrekturen = JSON.parse(dst.korrekturen_json);
+    } catch (_) {
+      dst.korrekturen = {};
+    }
+  } else {
+    dst.korrekturen = {};
+    dst.korrekturen_json = null;
+  }
+  return dst;
 }
 
 function getTechnicianName(db, technicianId) {
@@ -172,27 +227,28 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     .prepare('SELECT id, status FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
     .get(technicianId, year, month);
 
-  // Gesperrte Tage aus lokaler DB behalten (Stunden/Bemerkung/Lock).
+  // Gesperrte Tage + Lohn-Overrides aus lokaler DB behalten.
   const lockedByDate = {};
+  const prevByDate = {};
   if (existing) {
     try {
-      const lockedRows = db
-        .prepare('SELECT * FROM timesheet_days WHERE timesheet_id = ? AND lohn_gesperrt = 1')
-        .all(existing.id);
-      for (const r of lockedRows) {
-        lockedByDate[r.day_date] = r;
-        byDate[r.day_date] = Object.assign({}, byDate[r.day_date] || {}, r, { lohn_gesperrt: 1 });
+      const allPrev = db.prepare('SELECT * FROM timesheet_days WHERE timesheet_id = ?').all(existing.id);
+      for (const r of allPrev) {
+        prevByDate[r.day_date] = r;
+        if (Number(r.lohn_gesperrt)) lockedByDate[r.day_date] = r;
       }
     } catch (_) {
       /* Spalte ggf. noch nicht da */
     }
   }
 
-  // Auch vom Client mitgeschickte Locks respektieren.
   for (const d of daysIn || []) {
-    if (d && d.day_date && Number(d.lohn_gesperrt)) {
-      const prev = lockedByDate[d.day_date] || byDate[d.day_date] || d;
-      byDate[d.day_date] = Object.assign({}, d, {
+    if (!d || !d.day_date) continue;
+    const prev = prevByDate[d.day_date] || lockedByDate[d.day_date] || null;
+    const locked = Number(d.lohn_gesperrt) || (prev && Number(prev.lohn_gesperrt)) ? 1 : 0;
+    let row = Object.assign({}, d, { lohn_gesperrt: locked });
+    if (locked && prev) {
+      row = Object.assign({}, row, {
         anw: prev.anw,
         montage: prev.montage,
         ue50: prev.ue50,
@@ -202,15 +258,39 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         za_plus: prev.za_plus,
         za_minus: prev.za_minus,
         krank: prev.krank,
-        bemerkung: prev.bemerkung != null ? prev.bemerkung : d.bemerkung,
+        bemerkung: prev.bemerkung != null ? prev.bemerkung : row.bemerkung,
         lohn_gesperrt: 1,
       });
     }
+    // Client (Pull) liefert Overrides; sonst lokale Overrides behalten
+    const hasIncomingOverrides =
+      Object.prototype.hasOwnProperty.call(d, 'korrekturen') ||
+      Object.prototype.hasOwnProperty.call(d, 'korrekturen_json') ||
+      Object.prototype.hasOwnProperty.call(d, 'lohn_anw') ||
+      Object.prototype.hasOwnProperty.call(d, 'lohn_bemerkung') ||
+      Object.prototype.hasOwnProperty.call(d, 'lohn_korrektur_meta');
+    if (hasIncomingOverrides) copyLohnOverrides(d, row);
+    else if (prev) copyLohnOverrides(prev, row);
+    byDate[d.day_date] = row;
+  }
+
+  // Gesperrte Tage, die nicht im Payload waren, trotzdem behalten
+  for (const dk of Object.keys(lockedByDate)) {
+    if (byDate[dk]) continue;
+    const r = lockedByDate[dk];
+    byDate[dk] = Object.assign({}, r, { lohn_gesperrt: 1 });
+    copyLohnOverrides(r, byDate[dk]);
   }
 
   const days = calc.buildMonthDays(year, month, byDate);
-  for (const d of days) d.day_sum = calc.daySum(d);
-  const sums = calc.columnSums(days);
+  for (const d of days) {
+    // Monteur-day_sum bleibt Original; UI/Export nutzen effektiv
+    d.day_sum = calc.daySum(d);
+  }
+  // Header-Summen effektiv (mit Lohn-Overrides)
+  const sums = calc.columnSumsEffective
+    ? calc.columnSumsEffective(days)
+    : calc.columnSums(days);
   const gesamt = calc.gesamtSum(sums);
 
   // Nach Freigabe nicht durch erneutes Speichern auf draft zurücksetzen.
@@ -273,12 +353,15 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
   const ins = db.prepare(
     `INSERT INTO timesheet_days (
       timesheet_id, day_date, weekday, holiday_label, anw, montage, ue50, ue100, weg,
-      urlaub, za_plus, za_minus, krank, day_sum, bemerkung, lohn_gesperrt
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      urlaub, za_plus, za_minus, krank, day_sum, bemerkung, lohn_gesperrt,
+      lohn_anw, lohn_montage, lohn_ue50, lohn_ue100, lohn_weg, lohn_urlaub,
+      lohn_za_plus, lohn_za_minus, lohn_krank, lohn_bemerkung, lohn_korrektur_meta, korrekturen_json
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
   const dayList = Array.isArray(days) ? days : [];
   db.transaction(() => {
     for (const d of dayList) {
+      const ov = copyLohnOverrides(d, {});
       ins.run(
         id,
         d.day_date,
@@ -296,6 +379,18 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         calc.num(d.day_sum),
         d.bemerkung || '',
         Number(d.lohn_gesperrt) ? 1 : 0,
+        ov.lohn_anw,
+        ov.lohn_montage,
+        ov.lohn_ue50,
+        ov.lohn_ue100,
+        ov.lohn_weg,
+        ov.lohn_urlaub,
+        ov.lohn_za_plus,
+        ov.lohn_za_minus,
+        ov.lohn_krank,
+        ov.lohn_bemerkung,
+        ov.lohn_korrektur_meta,
+        ov.korrekturen_json,
       );
     }
   });
@@ -321,7 +416,17 @@ async function writeExportFiles(dbDir, db, writeFileWithRetry, technicianId, yea
   const stem = calc.fileStem(year, month, techName);
   const pdfPath = path.join(dir, `${stem}.pdf`);
   const xlsxPath = path.join(dir, `${stem}.xlsx`);
-  const payload = { year, month, technicianName: techName, days, sums, gesamt };
+  const exportDays = calc.daysForExport(days);
+  const exportSums = calc.columnSumsEffective(days);
+  const exportGesamt = calc.gesamtSum(exportSums);
+  const payload = {
+    year,
+    month,
+    technicianName: techName,
+    days: exportDays,
+    sums: exportSums,
+    gesamt: exportGesamt,
+  };
   const pdfBuf = await generateZeitschreibungPdfBuffer(payload);
   const xlsxBuf = await generateZeitschreibungXlsxBuffer(payload);
   if (typeof writeFileWithRetry === 'function') {
@@ -491,8 +596,10 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     const lock = Number(sd.lohn_gesperrt) ? 1 : 0;
     const cur = byDate[sd.day_date] || { day_date: sd.day_date };
     const prevLock = Number(cur.lohn_gesperrt) ? 1 : 0;
+    const next = Object.assign({}, cur);
+    copyLohnOverrides(sd, next);
     if (lock) {
-      byDate[sd.day_date] = Object.assign({}, cur, {
+      Object.assign(next, {
         anw: sd.anw,
         montage: sd.montage,
         ue50: sd.ue50,
@@ -508,9 +615,21 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
       });
       changed = true;
     } else if (prevLock) {
-      byDate[sd.day_date] = Object.assign({}, cur, { lohn_gesperrt: 0 });
+      next.lohn_gesperrt = 0;
+      changed = true;
+    } else if (
+      sd.korrekturen &&
+      Object.keys(sd.korrekturen).length > 0
+    ) {
+      changed = true;
+    } else if (
+      ['lohn_anw', 'lohn_montage', 'lohn_ue50', 'lohn_ue100', 'lohn_weg', 'lohn_urlaub', 'lohn_za_plus', 'lohn_za_minus', 'lohn_krank', 'lohn_bemerkung'].some(
+        (k) => sd[k] != null || cur[k] != null,
+      )
+    ) {
       changed = true;
     }
+    byDate[sd.day_date] = next;
   }
   if (!changed) return false;
   const mergedDays = Object.keys(byDate).map((k) => byDate[k]);
