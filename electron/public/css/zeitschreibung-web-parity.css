@@ -165,6 +165,22 @@
 .page-zeitschreibung .zs-table tbody tr.zs-row-so .zs-input,
 .page-zeitschreibung .zs-table tbody tr.zs-row-holiday .zs-input { background: transparent; }
 
+.page-zeitschreibung .zs-col-status {
+  text-align: center;
+  width: 2.5rem;
+}
+
+.page-zeitschreibung .zs-lock-check-icon {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.page-zeitschreibung .zs-row-locked .zs-input:disabled {
+  opacity: 0.9;
+  cursor: not-allowed;
+  background: #f3f4f6;
+}
+
 /* Excel CF Summe: >10 orange, >12.01 rot */
 .page-zeitschreibung .zs-table tbody td.zs-sum.zs-sum-warn {
   background: #ffc000 !important;

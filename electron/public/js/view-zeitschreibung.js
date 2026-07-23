@@ -96,7 +96,12 @@
   function readDaysFromDom(host) {
     const rows = [];
     host.querySelectorAll('tr[data-day-date]').forEach(function (tr) {
-      const day = { day_date: tr.getAttribute('data-day-date'), weekday: tr.getAttribute('data-weekday') || '', holiday_label: tr.getAttribute('data-holiday') || '' };
+      const day = {
+        day_date: tr.getAttribute('data-day-date'),
+        weekday: tr.getAttribute('data-weekday') || '',
+        holiday_label: tr.getAttribute('data-holiday') || '',
+        lohn_gesperrt: tr.getAttribute('data-lohn-gesperrt') === '1' ? 1 : 0,
+      };
       HOUR_FIELDS.forEach(function (f) {
         const inp = tr.querySelector('input[data-field="' + f + '"]');
         day[f] = inp ? num(inp.value) : 0;
@@ -149,21 +154,28 @@
     const g = gesamtSum(sums);
     let body = '';
     state.days.forEach(function (d) {
+      var locked = !!Number(d.lohn_gesperrt);
       var rowClass = '';
       if (String(d.holiday_label || '').trim()) rowClass = ' zs-row-holiday';
       else if (d.weekday === 'So') rowClass = ' zs-row-so';
       else if (d.weekday === 'Sa') rowClass = ' zs-row-sa';
+      if (locked) rowClass += ' zs-row-locked';
       var sumVal = daySum(d);
       var sumCls = summeAlertClass(sumVal);
-      body += `<tr class="${rowClass.trim()}" data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}">
+      var dis = locked ? ' disabled' : '';
+      var statusCell = locked
+        ? '<td class="zs-col-status" title="Von Lohnbuchhaltung gesperrt"><img class="zs-lock-check-icon" src="icons/circle-check-green.svg" alt="Gesperrt" width="16" height="16"></td>'
+        : '<td class="zs-col-status zs-dash">–</td>';
+      body += `<tr class="${rowClass.trim()}" data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}" data-lohn-gesperrt="${locked ? '1' : '0'}">
         <td>${escapeHtml(dateDe(d.day_date))}</td>
         <td>${escapeHtml(d.weekday)}</td>
         <td class="zs-holiday">${escapeHtml(d.holiday_label || '')}</td>
         ${HOUR_FIELDS.map(function (f) {
-          return `<td class="zs-col-hour"><input type="number" step="0.25" min="0" class="zs-input zs-hour" data-field="${f}" value="${d[f] ? escapeHtml(String(d[f])) : ''}"></td>`;
+          return `<td class="zs-col-hour"><input type="number" step="0.25" min="0" class="zs-input zs-hour" data-field="${f}" value="${d[f] ? escapeHtml(String(d[f])) : ''}"${dis}></td>`;
         }).join('')}
         <td class="zs-sum${sumCls}" data-day-sum>${escapeHtml(fmt(sumVal))}</td>
-        <td><input type="text" class="zs-input zs-bemerkung" data-field="bemerkung" value="${escapeHtml(d.bemerkung || '')}"></td>
+        <td><input type="text" class="zs-input zs-bemerkung" data-field="bemerkung" value="${escapeHtml(d.bemerkung || '')}"${dis}></td>
+        ${statusCell}
       </tr>`;
     });
     return `<div class="zs-table-wrap"><table class="zs-table">
@@ -178,13 +190,13 @@
         <th class="zs-col-hour" title="Zeitausgleich plus">ZA+</th>
         <th class="zs-col-hour" title="Zeitausgleich minus">ZA−</th>
         <th class="zs-col-hour" title="Krank/Arzt">Kr.</th>
-        <th class="zs-col-sum">Sum.</th><th>Bemerkung</th>
+        <th class="zs-col-sum">Sum.</th><th>Bemerkung</th><th class="zs-col-status">Status</th>
       </tr></thead>
       <tbody>${body}</tbody>
       <tfoot><tr>
         <th>Gesamt</th><th data-sum="gesamt">${escapeHtml(fmtAlways(g))}</th><th></th>
         ${HOUR_FIELDS.map(function (f) { return `<th class="zs-col-hour" data-sum="${f}">${escapeHtml(fmtAlways(sums[f]))}</th>`; }).join('')}
-        <th class="zs-col-sum" data-sum="day_sum">${escapeHtml(fmtAlways(sums.day_sum))}</th><th></th>
+        <th class="zs-col-sum" data-sum="day_sum">${escapeHtml(fmtAlways(sums.day_sum))}</th><th></th><th></th>
       </tr></tfoot>
     </table></div>`;
   }

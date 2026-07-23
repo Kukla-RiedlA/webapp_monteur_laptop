@@ -195,6 +195,7 @@ function buildMonthDays(year, month, existingByDate) {
       za_minus: num(prev.za_minus),
       krank: num(prev.krank),
       bemerkung: prev.bemerkung != null ? String(prev.bemerkung) : '',
+      lohn_gesperrt: prev.lohn_gesperrt ? 1 : 0,
     };
     row.day_sum = daySum(row);
     out.push(row);

@@ -71,6 +71,7 @@ function ensureTables(db) {
       krank REAL NOT NULL DEFAULT 0,
       day_sum REAL NOT NULL DEFAULT 0,
       bemerkung TEXT NOT NULL DEFAULT '',
+      lohn_gesperrt INTEGER NOT NULL DEFAULT 0,
       UNIQUE(timesheet_id, day_date),
       FOREIGN KEY (timesheet_id) REFERENCES timesheets(id) ON DELETE CASCADE
     );
@@ -87,6 +88,11 @@ function ensureTables(db) {
       updated_at TEXT DEFAULT (datetime('now'))
     );
   `);
+  try {
+    db.exec('ALTER TABLE timesheet_days ADD COLUMN lohn_gesperrt INTEGER NOT NULL DEFAULT 0');
+  } catch (_) {
+    /* Spalte existiert bereits */
+  }
 }
 
 function getTechnicianName(db, technicianId) {
@@ -161,14 +167,51 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
   for (const d of daysIn || []) {
     if (d && d.day_date) byDate[d.day_date] = d;
   }
-  const days = calc.buildMonthDays(year, month, byDate);
-  for (const d of days) d.day_sum = calc.daySum(d);
-  const sums = calc.columnSums(days);
-  const gesamt = calc.gesamtSum(sums);
 
   const existing = db
     .prepare('SELECT id, status FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
     .get(technicianId, year, month);
+
+  // Gesperrte Tage aus lokaler DB behalten (Stunden/Bemerkung/Lock).
+  const lockedByDate = {};
+  if (existing) {
+    try {
+      const lockedRows = db
+        .prepare('SELECT * FROM timesheet_days WHERE timesheet_id = ? AND lohn_gesperrt = 1')
+        .all(existing.id);
+      for (const r of lockedRows) {
+        lockedByDate[r.day_date] = r;
+        byDate[r.day_date] = Object.assign({}, byDate[r.day_date] || {}, r, { lohn_gesperrt: 1 });
+      }
+    } catch (_) {
+      /* Spalte ggf. noch nicht da */
+    }
+  }
+
+  // Auch vom Client mitgeschickte Locks respektieren.
+  for (const d of daysIn || []) {
+    if (d && d.day_date && Number(d.lohn_gesperrt)) {
+      const prev = lockedByDate[d.day_date] || byDate[d.day_date] || d;
+      byDate[d.day_date] = Object.assign({}, d, {
+        anw: prev.anw,
+        montage: prev.montage,
+        ue50: prev.ue50,
+        ue100: prev.ue100,
+        weg: prev.weg,
+        urlaub: prev.urlaub,
+        za_plus: prev.za_plus,
+        za_minus: prev.za_minus,
+        krank: prev.krank,
+        bemerkung: prev.bemerkung != null ? prev.bemerkung : d.bemerkung,
+        lohn_gesperrt: 1,
+      });
+    }
+  }
+
+  const days = calc.buildMonthDays(year, month, byDate);
+  for (const d of days) d.day_sum = calc.daySum(d);
+  const sums = calc.columnSums(days);
+  const gesamt = calc.gesamtSum(sums);
 
   // Nach Freigabe nicht durch erneutes Speichern auf draft zurücksetzen.
   let nextStatus = status === 'submitted' ? 'submitted' : 'draft';
@@ -230,8 +273,8 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
   const ins = db.prepare(
     `INSERT INTO timesheet_days (
       timesheet_id, day_date, weekday, holiday_label, anw, montage, ue50, ue100, weg,
-      urlaub, za_plus, za_minus, krank, day_sum, bemerkung
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      urlaub, za_plus, za_minus, krank, day_sum, bemerkung, lohn_gesperrt
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
   const dayList = Array.isArray(days) ? days : [];
   db.transaction(() => {
@@ -252,6 +295,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         calc.num(d.krank),
         calc.num(d.day_sum),
         d.bemerkung || '',
+        Number(d.lohn_gesperrt) ? 1 : 0,
       );
     }
   });
@@ -408,6 +452,67 @@ async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, 
   return { flushed, errors };
 }
 
+async function pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds) {
+  if (typeof resolveDispoPushCreds !== 'function') return false;
+  let creds = null;
+  try {
+    creds = await Promise.resolve(resolveDispoPushCreds(technicianId));
+  } catch (_) {
+    return false;
+  }
+  if (!creds || !creds.baseUrl) return false;
+  const url =
+    String(creds.baseUrl || '').replace(/\/$/, '') +
+    '/api/monteur_timesheet_get.php?technician_id=' +
+    encodeURIComponent(technicianId) +
+    '&year=' +
+    encodeURIComponent(year) +
+    '&month=' +
+    encodeURIComponent(month);
+  const headers = { Accept: 'application/json' };
+  if (creds.authHeader) headers.Authorization = creds.authHeader;
+  const r = await fetch(url, { headers });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data || !data.ok || !Array.isArray(data.days)) return false;
+
+  const local = loadTimesheet(db, technicianId, year, month);
+  const byDate = {};
+  for (const d of local.days || []) {
+    byDate[d.day_date] = Object.assign({}, d);
+  }
+  let changed = false;
+  for (const sd of data.days) {
+    if (!sd || !sd.day_date) continue;
+    const lock = Number(sd.lohn_gesperrt) ? 1 : 0;
+    const cur = byDate[sd.day_date] || { day_date: sd.day_date };
+    const prevLock = Number(cur.lohn_gesperrt) ? 1 : 0;
+    if (lock) {
+      byDate[sd.day_date] = Object.assign({}, cur, {
+        anw: sd.anw,
+        montage: sd.montage,
+        ue50: sd.ue50,
+        ue100: sd.ue100,
+        weg: sd.weg,
+        urlaub: sd.urlaub,
+        za_plus: sd.za_plus,
+        za_minus: sd.za_minus,
+        krank: sd.krank,
+        bemerkung: sd.bemerkung != null ? sd.bemerkung : cur.bemerkung,
+        holiday_label: sd.holiday_label || cur.holiday_label || '',
+        lohn_gesperrt: 1,
+      });
+      changed = true;
+    } else if (prevLock) {
+      byDate[sd.day_date] = Object.assign({}, cur, { lohn_gesperrt: 0 });
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+  const mergedDays = Object.keys(byDate).map((k) => byDate[k]);
+  persistTimesheet(db, technicianId, year, month, mergedDays, local.status || 'draft');
+  return true;
+}
+
 function registerZeitschreibungRoutes(app, ctx) {
   const { getDb, dbDir, writeFileWithRetry, resolveDispoPushCreds } = ctx;
   ensureTables(getDb());
@@ -430,7 +535,7 @@ function registerZeitschreibungRoutes(app, ctx) {
     }
   });
 
-  app.get('/api/zeitschreibung', (req, res) => {
+  app.get('/api/zeitschreibung', async (req, res) => {
     try {
       const db = getDb();
       ensureTables(db);
@@ -439,6 +544,11 @@ function registerZeitschreibungRoutes(app, ctx) {
       const month = parseInt(String(req.query.month || ''), 10);
       if (!technicianId || !year || !month || month < 1 || month > 12) {
         return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
+      }
+      try {
+        await pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds);
+      } catch (_) {
+        /* offline / kein Dispo — lokale Locks behalten */
       }
       const data = loadTimesheet(db, technicianId, year, month);
       data.technician_name = getTechnicianName(db, technicianId);
