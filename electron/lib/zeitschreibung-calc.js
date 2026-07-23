@@ -226,6 +226,29 @@ function round2(n) {
   return Math.round(num(n) * 1000) / 1000;
 }
 
+/**
+ * Zeilenfarben wie Excel-Bedingte Formatierung (Hauptregel A8:N…):
+ * Feiertag (Spalte C gefüllt) → #FF5050
+ * Sonntag → #FF6600
+ * Samstag → #FFFF00
+ * Feiertag hat Vorrang vor Wochenende.
+ * @returns {'holiday'|'so'|'sa'|null}
+ */
+function rowColorKind(day) {
+  const d = day || {};
+  if (String(d.holiday_label || '').trim()) return 'holiday';
+  const wd = String(d.weekday || '').trim();
+  if (wd === 'So') return 'so';
+  if (wd === 'Sa') return 'sa';
+  return null;
+}
+
+const ROW_COLORS = {
+  holiday: { hex: '#FF5050', rgb: [1, 80 / 255, 80 / 255], cssClass: 'zs-row-holiday' },
+  so: { hex: '#FF6600', rgb: [1, 102 / 255, 0], cssClass: 'zs-row-so' },
+  sa: { hex: '#FFFF00', rgb: [1, 1, 0], cssClass: 'zs-row-sa' },
+};
+
 module.exports = {
   MONTH_NAMES,
   WEEKDAYS,
@@ -244,4 +267,6 @@ module.exports = {
   fileStem,
   folderRel,
   round2,
+  rowColorKind,
+  ROW_COLORS,
 };

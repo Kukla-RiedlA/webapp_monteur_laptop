@@ -79,9 +79,10 @@ async function generateZeitschreibungPdfBuffer(payload) {
   const headerH = 16;
   const fontSize = 7.5;
 
-  function drawRow(cells, yy, bold) {
+  function drawRow(cells, yy, bold, fillRgb) {
     let x = tableLeft;
     const f = bold ? fontBold : font;
+    const bg = fillRgb || (bold ? rgb(0.93, 0.96, 0.94) : rgb(1, 1, 1));
     for (let i = 0; i < headers.length; i++) {
       const w = colW[i];
       page.drawRectangle({
@@ -91,7 +92,7 @@ async function generateZeitschreibungPdfBuffer(payload) {
         height: rowH,
         borderColor: rgb(0.75, 0.8, 0.78),
         borderWidth: 0.4,
-        color: bold ? rgb(0.93, 0.96, 0.94) : rgb(1, 1, 1),
+        color: bg,
       });
       const text = String(cells[i] ?? '');
       const maxW = w - 4;
@@ -104,13 +105,17 @@ async function generateZeitschreibungPdfBuffer(payload) {
     }
   }
 
-  drawRow(headers, y, true);
+  drawRow(headers, y, true, null);
   y -= headerH;
 
   for (const d of days) {
     if (y < margin + 40) break;
     const dk = String(d.day_date || '');
     const dateDe = dk.length >= 10 ? `${dk.slice(8, 10)}.${dk.slice(5, 7)}.${dk.slice(0, 4)}` : dk;
+    const kind = calc.rowColorKind(d);
+    const fill = kind && calc.ROW_COLORS[kind]
+      ? rgb(calc.ROW_COLORS[kind].rgb[0], calc.ROW_COLORS[kind].rgb[1], calc.ROW_COLORS[kind].rgb[2])
+      : null;
     drawRow(
       [
         dateDe,
@@ -130,6 +135,7 @@ async function generateZeitschreibungPdfBuffer(payload) {
       ],
       y,
       false,
+      fill,
     );
     y -= rowH;
   }
@@ -154,6 +160,7 @@ async function generateZeitschreibungPdfBuffer(payload) {
     ],
     y,
     true,
+    null,
   );
 
   const bytes = await doc.save();

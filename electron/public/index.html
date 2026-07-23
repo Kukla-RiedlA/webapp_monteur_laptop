@@ -474,6 +474,13 @@
     .page-zeitschreibung .zs-bemerkung { width: 10rem; }
     .page-zeitschreibung .zs-holiday { color: #8a4b00; max-width: 7rem; overflow: hidden; text-overflow: ellipsis; }
     .page-zeitschreibung .zs-msg { font-size: 0.9rem; }
+    /* Excel-Bedingte Formatierung: Sa gelb, So orange, Feiertag rot */
+    .page-zeitschreibung .zs-table tbody tr.zs-row-sa td { background: #ffff00; }
+    .page-zeitschreibung .zs-table tbody tr.zs-row-so td { background: #ff6600; }
+    .page-zeitschreibung .zs-table tbody tr.zs-row-holiday td { background: #ff5050; }
+    .page-zeitschreibung .zs-table tbody tr.zs-row-sa .zs-input,
+    .page-zeitschreibung .zs-table tbody tr.zs-row-so .zs-input,
+    .page-zeitschreibung .zs-table tbody tr.zs-row-holiday .zs-input { background: transparent; }
     .anlagenstamm-search-row { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem; }
     .anlagenstamm-search-row input { flex:1; min-width:220px; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
     .anlagenstamm-search-filters { display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:0.5rem; width:100%; margin-bottom:0.5rem; }
@@ -2193,7 +2200,7 @@
   <script src="js/view-anlagenstamm.js"></script>
   <script src="assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260701"></script>
   <script src="js/view-abrechnung.js?v=20260702c"></script>
-  <script src="js/view-zeitschreibung.js?v=20260723c"></script>
+  <script src="js/view-zeitschreibung.js?v=20260723d"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js"></script>
   <script src="js/serviceprotokoll-react-bridge.js"></script>

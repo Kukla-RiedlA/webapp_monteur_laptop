@@ -137,7 +137,11 @@
     const g = gesamtSum(sums);
     let body = '';
     state.days.forEach(function (d) {
-      body += `<tr data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}">
+      var rowClass = '';
+      if (String(d.holiday_label || '').trim()) rowClass = ' zs-row-holiday';
+      else if (d.weekday === 'So') rowClass = ' zs-row-so';
+      else if (d.weekday === 'Sa') rowClass = ' zs-row-sa';
+      body += `<tr class="${rowClass.trim()}" data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}">
         <td>${escapeHtml(dateDe(d.day_date))}</td>
         <td>${escapeHtml(d.weekday)}</td>
         <td class="zs-holiday">${escapeHtml(d.holiday_label || '')}</td>
