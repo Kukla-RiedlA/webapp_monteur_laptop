@@ -90,7 +90,7 @@ function configurePersistentDbDir() {
   }
 }
 const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore } = require('./lib/abrechnung-routes');
-const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, ensureTables: ensureZeitschreibungTables } = require('./lib/zeitschreibung-routes');
+const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, pullRecentLohnLocks, ensureTables: ensureZeitschreibungTables } = require('./lib/zeitschreibung-routes');
 const { createBackgroundJobService } = require('./lib/background_jobs');
 const {
   isJobAssignedToTechnician,
@@ -10786,6 +10786,11 @@ function createApp(db) {
           await flushZeitschreibungOutbox(db, baseUrl, auth, technicianId);
         } catch (e) {
           console.warn('[zeitschreibung] flush after sync_push:', e && e.message ? e.message : e);
+        }
+        try {
+          await pullRecentLohnLocks(db, technicianId, baseUrl, auth);
+        } catch (e) {
+          console.warn('[zeitschreibung] pull Lohn-Locks after sync_push:', e && e.message ? e.message : e);
         }
         save();
         break;

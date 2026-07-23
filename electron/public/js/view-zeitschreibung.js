@@ -318,8 +318,12 @@
       });
       state.status = data.status || (submit ? 'submitted' : 'draft');
       state.dirty = false;
-      const st = host.querySelector('#zsStatus');
-      if (st) st.textContent = 'Status: ' + state.status;
+      try {
+        await reload(host);
+      } catch (_) {
+        const st = host.querySelector('#zsStatus');
+        if (st) st.textContent = 'Status: ' + state.status;
+      }
       if (submit) {
         let msg = 'Freigegeben. PDF: ' + (data.pdf_path || '');
         if (data.synced) msg += ' · an Dispo übertragen';

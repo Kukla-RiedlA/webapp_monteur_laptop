@@ -461,8 +461,13 @@ async function pullLohnLocksFromDispo(db, technicianId, year, month, resolveDisp
     return false;
   }
   if (!creds || !creds.baseUrl) return false;
+  return pullLohnLocksWithCreds(db, technicianId, year, month, creds.baseUrl, creds.authHeader || null);
+}
+
+async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, authHeader) {
+  if (!baseUrl || !technicianId || !year || !month) return false;
   const url =
-    String(creds.baseUrl || '').replace(/\/$/, '') +
+    String(baseUrl || '').replace(/\/$/, '') +
     '/api/monteur_timesheet_get.php?technician_id=' +
     encodeURIComponent(technicianId) +
     '&year=' +
@@ -470,7 +475,7 @@ async function pullLohnLocksFromDispo(db, technicianId, year, month, resolveDisp
     '&month=' +
     encodeURIComponent(month);
   const headers = { Accept: 'application/json' };
-  if (creds.authHeader) headers.Authorization = creds.authHeader;
+  if (authHeader) headers.Authorization = authHeader;
   const r = await fetch(url, { headers });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data || !data.ok || !Array.isArray(data.days)) return false;
@@ -511,6 +516,46 @@ async function pullLohnLocksFromDispo(db, technicianId, year, month, resolveDisp
   const mergedDays = Object.keys(byDate).map((k) => byDate[k]);
   persistTimesheet(db, technicianId, year, month, mergedDays, local.status || 'draft');
   return true;
+}
+
+/**
+ * Holt Lohn-Sperren für aktuelle/nahe Monate und lokal vorhandene Monatsblätter.
+ * Aufruf z. B. nach sync_push und vor Speichern.
+ */
+async function pullRecentLohnLocks(db, technicianId, baseUrl, authHeader) {
+  if (!db || !technicianId || !baseUrl) return { pulled: 0 };
+  ensureTables(db);
+  const now = new Date();
+  const pairs = new Map();
+  const add = (y, m) => {
+    if (!y || m < 1 || m > 12) return;
+    pairs.set(y + '-' + m, { year: y, month: m });
+  };
+  const cy = now.getFullYear();
+  const cm = now.getMonth() + 1;
+  add(cy, cm);
+  if (cm === 1) add(cy - 1, 12);
+  else add(cy, cm - 1);
+  if (cm === 12) add(cy + 1, 1);
+  else add(cy, cm + 1);
+  try {
+    const rows = db
+      .prepare('SELECT year, month FROM timesheets WHERE technician_id = ? ORDER BY year DESC, month DESC LIMIT 12')
+      .all(technicianId);
+    for (const r of rows || []) add(Number(r.year), Number(r.month));
+  } catch (_) {
+    /* ignore */
+  }
+  let pulled = 0;
+  for (const { year, month } of pairs.values()) {
+    try {
+      const ok = await pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, authHeader);
+      if (ok) pulled += 1;
+    } catch (_) {
+      /* ignore month */
+    }
+  }
+  return { pulled };
 }
 
 function registerZeitschreibungRoutes(app, ctx) {
@@ -570,6 +615,11 @@ function registerZeitschreibungRoutes(app, ctx) {
       if (!technicianId || !year || !month) {
         return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
       }
+      try {
+        await pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds);
+      } catch (_) {
+        /* offline */
+      }
       const saved = persistTimesheet(db, technicianId, year, month, body.days || [], 'draft');
       enqueueOutbox(db, saved.id, null, null, {
         technician_id: technicianId,
@@ -603,6 +653,11 @@ function registerZeitschreibungRoutes(app, ctx) {
       const month = parseInt(String(body.month || ''), 10);
       if (!technicianId || !year || !month) {
         return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
+      }
+      try {
+        await pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds);
+      } catch (_) {
+        /* offline */
       }
       const saved = persistTimesheet(db, technicianId, year, month, body.days || [], 'submitted');
       const files = await writeExportFiles(
@@ -648,6 +703,7 @@ function registerZeitschreibungRoutes(app, ctx) {
 module.exports = {
   registerZeitschreibungRoutes,
   flushZeitschreibungOutbox,
+  pullRecentLohnLocks,
   ensureTables,
   loadTimesheet,
   readConfig,
