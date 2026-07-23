@@ -447,6 +447,129 @@
     });
   }
 
+  /** Editierbare Spalten in Tabellen-Reihenfolge (Pfeilnavigation). */
+  const NAV_FIELDS = HOUR_FIELDS.concat(['bemerkung']);
+
+  function focusNavInput(inp) {
+    if (!inp || inp.disabled) return false;
+    inp.focus();
+    try {
+      if (typeof inp.select === 'function') inp.select();
+    } catch (_) {
+      /* ignore */
+    }
+    return true;
+  }
+
+  function findNavInput(host, dayDate, field) {
+    const tr = host.querySelector('tr[data-day-date="' + dayDate + '"]');
+    if (!tr) return null;
+    return tr.querySelector('input.zs-input[data-field="' + field + '"]');
+  }
+
+  function navigateCell(host, fromInp, key) {
+    const tr = fromInp.closest('tr[data-day-date]');
+    if (!tr) return false;
+    const field = fromInp.getAttribute('data-field');
+    const dayDate = tr.getAttribute('data-day-date');
+    if (!field || !dayDate) return false;
+
+    const fieldIdx = NAV_FIELDS.indexOf(field);
+    if (fieldIdx < 0) return false;
+
+    const rows = Array.prototype.slice.call(host.querySelectorAll('tr[data-day-date]'));
+    const rowIdx = rows.indexOf(tr);
+    if (rowIdx < 0) return false;
+
+    let nextRow = rowIdx;
+    let nextField = fieldIdx;
+
+    if (key === 'ArrowUp') nextRow -= 1;
+    else if (key === 'ArrowDown') nextRow += 1;
+    else if (key === 'ArrowLeft') nextField -= 1;
+    else if (key === 'ArrowRight') nextField += 1;
+    else return false;
+
+    // Horizontal: Zeilenwechsel am Rand
+    if (nextField < 0) {
+      nextField = NAV_FIELDS.length - 1;
+      nextRow -= 1;
+    } else if (nextField >= NAV_FIELDS.length) {
+      nextField = 0;
+      nextRow += 1;
+    }
+
+    if (nextRow < 0 || nextRow >= rows.length) return false;
+
+    const targetField = NAV_FIELDS[nextField];
+    const targetDate = rows[nextRow].getAttribute('data-day-date');
+    let target = findNavInput(host, targetDate, targetField);
+
+    // Gesperrte/disabled Zellen überspringen (gleiche Richtung weiter)
+    let guard = 0;
+    while (target && target.disabled && guard < rows.length * NAV_FIELDS.length) {
+      guard += 1;
+      if (key === 'ArrowUp') nextRow -= 1;
+      else if (key === 'ArrowDown') nextRow += 1;
+      else if (key === 'ArrowLeft') {
+        nextField -= 1;
+        if (nextField < 0) {
+          nextField = NAV_FIELDS.length - 1;
+          nextRow -= 1;
+        }
+      } else if (key === 'ArrowRight') {
+        nextField += 1;
+        if (nextField >= NAV_FIELDS.length) {
+          nextField = 0;
+          nextRow += 1;
+        }
+      }
+      if (nextRow < 0 || nextRow >= rows.length) return false;
+      target = findNavInput(host, rows[nextRow].getAttribute('data-day-date'), NAV_FIELDS[nextField]);
+    }
+
+    if (!target || target.disabled) return false;
+    return focusNavInput(target);
+  }
+
+  function shouldNavigateHorizontal(inp, key) {
+    // Zahlenfelder: immer zwischen Zellen springen (kein Cursor in type=number)
+    if (inp.classList.contains('zs-hour') || inp.type === 'number') return true;
+    // Text: nur am Rand der Auswahl/Cursorposition
+    try {
+      const start = inp.selectionStart;
+      const end = inp.selectionEnd;
+      const len = String(inp.value || '').length;
+      if (start == null || end == null) return true;
+      if (start !== end) return false;
+      if (key === 'ArrowLeft') return start === 0;
+      if (key === 'ArrowRight') return end === len;
+    } catch (_) {
+      return true;
+    }
+    return false;
+  }
+
+  function onInputKeydown(host, e) {
+    const key = e.key;
+    if (key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'ArrowLeft' && key !== 'ArrowRight') {
+      return;
+    }
+    const inp = e.target;
+    if (!inp || !inp.classList.contains('zs-input')) return;
+
+    // Hoch/Runter: nie Wert zählen, immer Zelle wechseln
+    if (key === 'ArrowUp' || key === 'ArrowDown') {
+      e.preventDefault();
+      navigateCell(host, inp, key);
+      return;
+    }
+
+    if (!shouldNavigateHorizontal(inp, key)) return;
+    e.preventDefault();
+    navigateCell(host, inp, key);
+  }
+
   function bind(host) {
     host.querySelector('#zsYear').addEventListener('change', async function (e) {
       state.year = parseInt(e.target.value, 10);
@@ -462,6 +585,9 @@
       inp.addEventListener('input', function () {
         state.dirty = true;
         recomputeDom(host);
+      });
+      inp.addEventListener('keydown', function (e) {
+        onInputKeydown(host, e);
       });
       inp.addEventListener('focusin', function () {
         setActiveFieldInfo(host, inp);
