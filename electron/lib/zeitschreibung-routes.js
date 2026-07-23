@@ -167,8 +167,14 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
   const gesamt = calc.gesamtSum(sums);
 
   const existing = db
-    .prepare('SELECT id FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+    .prepare('SELECT id, status FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
     .get(technicianId, year, month);
+
+  // Nach Freigabe nicht durch erneutes Speichern auf draft zurücksetzen.
+  let nextStatus = status === 'submitted' ? 'submitted' : 'draft';
+  if (existing && existing.status === 'submitted' && nextStatus === 'draft') {
+    nextStatus = 'submitted';
+  }
 
   let id;
   if (existing) {
@@ -178,7 +184,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
        sum_urlaub=?, sum_za_plus=?, sum_za_minus=?, sum_krank=?, sum_day=?, gesamt=?, updated_at=datetime('now')
        WHERE id = ?`,
     ).run(
-      status,
+      nextStatus,
       sums.anw,
       sums.montage,
       sums.ue50,
@@ -205,7 +211,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         technicianId,
         year,
         month,
-        status,
+        nextStatus,
         sums.anw,
         sums.montage,
         sums.ue50,
@@ -250,7 +256,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     }
   });
 
-  return { id, days: dayList, sums, gesamt, status };
+  return { id, days: dayList, sums, gesamt, status: nextStatus };
 }
 
 function mkdirp(dir) {
@@ -292,8 +298,38 @@ function enqueueOutbox(db, timesheetId, pdfPath, xlsxPath, payload) {
   ).run(timesheetId, JSON.stringify(payload || {}), pdfPath || null, xlsxPath || null);
 }
 
+async function tryFlushZeitschreibungNow(db, technicianId, resolveDispoPushCreds) {
+  if (typeof resolveDispoPushCreds !== 'function') {
+    return { flushed: 0, errors: [], attempted: false };
+  }
+  let creds = null;
+  try {
+    creds = await Promise.resolve(resolveDispoPushCreds(technicianId));
+  } catch (_) {
+    return { flushed: 0, errors: [], attempted: false };
+  }
+  if (!creds || !creds.baseUrl) {
+    return { flushed: 0, errors: [], attempted: false };
+  }
+  try {
+    const result = await flushZeitschreibungOutbox(
+      db,
+      creds.baseUrl,
+      creds.authHeader || null,
+      technicianId,
+    );
+    return { flushed: result.flushed || 0, errors: result.errors || [], attempted: true };
+  } catch (e) {
+    return {
+      flushed: 0,
+      errors: [e && e.message ? e.message : String(e)],
+      attempted: true,
+    };
+  }
+}
+
 /**
- * Push pending timesheet submits to Dispo.
+ * Push pending timesheet saves/submits to Dispo.
  */
 async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, fetchFn) {
   const rows = db.prepare('SELECT * FROM zeitschreibung_outbox ORDER BY id ASC LIMIT 20').all();
@@ -311,11 +347,12 @@ async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, 
       const days = db
         .prepare('SELECT * FROM timesheet_days WHERE timesheet_id = ? ORDER BY day_date')
         .all(row.timesheet_id);
+      const status = ts.status === 'submitted' ? 'submitted' : 'draft';
       const body = {
         technician_id: ts.technician_id || technicianId,
         year: ts.year,
         month: ts.month,
-        status: 'submitted',
+        status,
         sums: {
           anw: ts.sum_anw,
           montage: ts.sum_montage,
@@ -372,7 +409,7 @@ async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, 
 }
 
 function registerZeitschreibungRoutes(app, ctx) {
-  const { getDb, dbDir, writeFileWithRetry } = ctx;
+  const { getDb, dbDir, writeFileWithRetry, resolveDispoPushCreds } = ctx;
   ensureTables(getDb());
 
   app.get('/api/zeitschreibung/config', (req, res) => {
@@ -412,7 +449,7 @@ function registerZeitschreibungRoutes(app, ctx) {
     }
   });
 
-  app.post('/api/zeitschreibung/save', express.json({ limit: '2mb' }), (req, res) => {
+  app.post('/api/zeitschreibung/save', express.json({ limit: '2mb' }), async (req, res) => {
     try {
       const db = getDb();
       ensureTables(db);
@@ -424,7 +461,23 @@ function registerZeitschreibungRoutes(app, ctx) {
         return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
       }
       const saved = persistTimesheet(db, technicianId, year, month, body.days || [], 'draft');
-      res.json({ ok: true, id: saved.id, sums: saved.sums, gesamt: saved.gesamt, status: 'draft' });
+      enqueueOutbox(db, saved.id, null, null, {
+        technician_id: technicianId,
+        year,
+        month,
+        status: saved.status,
+      });
+      const flush = await tryFlushZeitschreibungNow(db, technicianId, resolveDispoPushCreds);
+      res.json({
+        ok: true,
+        id: saved.id,
+        sums: saved.sums,
+        gesamt: saved.gesamt,
+        status: saved.status,
+        synced: flush.flushed > 0,
+        sync_pending: flush.flushed === 0,
+        sync_errors: flush.errors || [],
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || String(e) });
     }
@@ -460,7 +513,9 @@ function registerZeitschreibungRoutes(app, ctx) {
         technician_id: technicianId,
         year,
         month,
+        status: 'submitted',
       });
+      const flush = await tryFlushZeitschreibungNow(db, technicianId, resolveDispoPushCreds);
       res.json({
         ok: true,
         id: saved.id,
@@ -469,6 +524,9 @@ function registerZeitschreibungRoutes(app, ctx) {
         gesamt: saved.gesamt,
         pdf_path: files.pdfPath,
         xlsx_path: files.xlsxPath,
+        synced: flush.flushed > 0,
+        sync_pending: flush.flushed === 0,
+        sync_errors: flush.errors || [],
       });
     } catch (e) {
       const code = e && e.code === 'NO_BASE_PATH' ? 400 : 500;

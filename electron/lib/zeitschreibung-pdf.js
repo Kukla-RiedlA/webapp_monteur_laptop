@@ -15,16 +15,29 @@ function fmtHoursAlways(n) {
   return String(v);
 }
 
+function fillRgbForDay(d) {
+  const kind = calc.rowColorKind(d);
+  if (!kind || !calc.ROW_COLORS[kind]) return null;
+  const c = calc.ROW_COLORS[kind].rgb;
+  return rgb(c[0], c[1], c[2]);
+}
+
+function fillRgbForSumme(daySumValue) {
+  const kind = calc.summeAlertKind(daySumValue);
+  if (!kind || !calc.SUMME_ALERT_COLORS[kind]) return null;
+  const c = calc.SUMME_ALERT_COLORS[kind].rgb;
+  return rgb(c[0], c[1], c[2]);
+}
+
 /**
  * Excel-ähnliches Querformat-PDF der Monatszeitschreibung.
- * @param {{ year:number, month:number, technicianName:string, days:object[], sums?:object, gesamt?:number }} payload
  * @returns {Promise<Buffer>}
  */
 async function generateZeitschreibungPdfBuffer(payload) {
   const year = Number(payload.year);
   const month = Number(payload.month);
   const name = String(payload.technicianName || '');
-  const days = Array.isArray(payload.days) ? payload.days : [];
+  const days = (Array.isArray(payload.days) ? payload.days : []).map(calc.enrichDay);
   const sums = payload.sums || calc.columnSums(days);
   const gesamt = payload.gesamt != null ? calc.num(payload.gesamt) : calc.gesamtSum(sums);
 
@@ -32,7 +45,6 @@ async function generateZeitschreibungPdfBuffer(payload) {
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
 
-  // A4 landscape
   const pageW = 841.89;
   const pageH = 595.28;
   const margin = 28;
@@ -79,20 +91,28 @@ async function generateZeitschreibungPdfBuffer(payload) {
   const headerH = 16;
   const fontSize = 7.5;
 
-  function drawRow(cells, yy, bold, fillRgb) {
+  function drawRow(cells, yy, bold, fillColor, cellFills) {
     let x = tableLeft;
     const f = bold ? fontBold : font;
-    const bg = fillRgb || (bold ? rgb(0.93, 0.96, 0.94) : rgb(1, 1, 1));
+    const defaultBg = fillColor || (bold ? rgb(0.93, 0.96, 0.94) : rgb(1, 1, 1));
     for (let i = 0; i < headers.length; i++) {
       const w = colW[i];
+      const bg = (cellFills && cellFills[i]) || defaultBg;
       page.drawRectangle({
         x,
         y: yy - rowH + 2,
         width: w,
         height: rowH,
-        borderColor: rgb(0.75, 0.8, 0.78),
-        borderWidth: 0.4,
         color: bg,
+        borderWidth: 0,
+      });
+      page.drawRectangle({
+        x,
+        y: yy - rowH + 2,
+        width: w,
+        height: rowH,
+        borderColor: rgb(0.55, 0.55, 0.55),
+        borderWidth: 0.4,
       });
       const text = String(cells[i] ?? '');
       const maxW = w - 4;
@@ -100,22 +120,30 @@ async function generateZeitschreibungPdfBuffer(payload) {
       while (draw.length > 1 && f.widthOfTextAtSize(draw, fontSize) > maxW) {
         draw = draw.slice(0, -1);
       }
-      page.drawText(draw, { x: x + 2, y: yy - rowH + 5, size: fontSize, font: f, color: rgb(0.1, 0.1, 0.1) });
+      if (draw) {
+        page.drawText(draw, {
+          x: x + 2,
+          y: yy - rowH + 5,
+          size: fontSize,
+          font: f,
+          color: rgb(0.05, 0.05, 0.05),
+        });
+      }
       x += w;
     }
   }
 
-  drawRow(headers, y, true, null);
+  drawRow(headers, y, true, rgb(0.93, 0.96, 0.94));
   y -= headerH;
 
+  const SUMME_COL = 12;
   for (const d of days) {
     if (y < margin + 40) break;
     const dk = String(d.day_date || '');
     const dateDe = dk.length >= 10 ? `${dk.slice(8, 10)}.${dk.slice(5, 7)}.${dk.slice(0, 4)}` : dk;
-    const kind = calc.rowColorKind(d);
-    const fill = kind && calc.ROW_COLORS[kind]
-      ? rgb(calc.ROW_COLORS[kind].rgb[0], calc.ROW_COLORS[kind].rgb[1], calc.ROW_COLORS[kind].rgb[2])
-      : null;
+    const daySumVal = d.day_sum != null ? d.day_sum : calc.daySum(d);
+    const summeFill = fillRgbForSumme(daySumVal);
+    const cellFills = summeFill ? { [SUMME_COL]: summeFill } : null;
     drawRow(
       [
         dateDe,
@@ -130,12 +158,13 @@ async function generateZeitschreibungPdfBuffer(payload) {
         fmtHours(d.za_plus),
         fmtHours(d.za_minus),
         fmtHours(d.krank),
-        fmtHours(d.day_sum != null ? d.day_sum : calc.daySum(d)),
+        fmtHours(daySumVal),
         d.bemerkung || '',
       ],
       y,
       false,
-      fill,
+      fillRgbForDay(d),
+      cellFills,
     );
     y -= rowH;
   }
@@ -160,7 +189,7 @@ async function generateZeitschreibungPdfBuffer(payload) {
     ],
     y,
     true,
-    null,
+    rgb(0.91, 0.91, 0.91),
   );
 
   const bytes = await doc.save();

@@ -24,6 +24,7 @@
   <link rel="stylesheet" href="css/serviceprotokoll-v2.css">
   <link rel="stylesheet" href="css/montagebericht-v2.css">
   <link rel="stylesheet" href="css/abrechnung-web-parity.css">
+  <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260723j">
   <style>
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -462,25 +463,6 @@
     #view-abrechnung .page-abrechnung .btn { font-family: inherit; }
     .view-zeitschreibung { display: none; padding: 0; width: 100%; max-width: none; margin: 0; box-sizing: border-box; flex: 1; min-height: 0; }
     .view-zeitschreibung.active { display: flex; flex-direction: column; width: 100%; max-width: none; }
-    #view-zeitschreibung #zeitschreibung-host { flex: 1; min-height: 0; overflow: auto; width: 100%; padding: 12px 16px 24px; box-sizing: border-box; }
-    .page-zeitschreibung .zs-toolbar, .page-zeitschreibung .zs-path-row, .page-zeitschreibung .zs-actions { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 0 0 12px; }
-    .page-zeitschreibung .zs-tech-name { font-weight: 600; color: #0c6a4d; }
-    .page-zeitschreibung .zs-path-input { min-width: 280px; max-width: 520px; width: 40vw; }
-    .page-zeitschreibung .zs-table-wrap { overflow: auto; max-width: 100%; border: 1px solid #cfe8d1; border-radius: 8px; }
-    .page-zeitschreibung .zs-table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12px; }
-    .page-zeitschreibung .zs-table th, .page-zeitschreibung .zs-table td { border: 1px solid #d7e8da; padding: 3px 4px; white-space: nowrap; }
-    .page-zeitschreibung .zs-table thead th, .page-zeitschreibung .zs-table tfoot th { background: #eef7f0; color: #0c6a4d; }
-    .page-zeitschreibung .zs-input { width: 4.2rem; padding: 2px 4px; box-sizing: border-box; }
-    .page-zeitschreibung .zs-bemerkung { width: 10rem; }
-    .page-zeitschreibung .zs-holiday { color: #8a4b00; max-width: 7rem; overflow: hidden; text-overflow: ellipsis; }
-    .page-zeitschreibung .zs-msg { font-size: 0.9rem; }
-    /* Excel-Bedingte Formatierung: Sa gelb, So orange, Feiertag rot */
-    .page-zeitschreibung .zs-table tbody tr.zs-row-sa td { background: #ffff00; }
-    .page-zeitschreibung .zs-table tbody tr.zs-row-so td { background: #ff6600; }
-    .page-zeitschreibung .zs-table tbody tr.zs-row-holiday td { background: #ff5050; }
-    .page-zeitschreibung .zs-table tbody tr.zs-row-sa .zs-input,
-    .page-zeitschreibung .zs-table tbody tr.zs-row-so .zs-input,
-    .page-zeitschreibung .zs-table tbody tr.zs-row-holiday .zs-input { background: transparent; }
     .anlagenstamm-search-row { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem; }
     .anlagenstamm-search-row input { flex:1; min-width:220px; padding:0.45rem 0.6rem; border:1px solid var(--accent); border-radius:4px; background:var(--bg); color:var(--text); }
     .anlagenstamm-search-filters { display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:0.5rem; width:100%; margin-bottom:0.5rem; }
@@ -2128,6 +2110,13 @@
           <button type="button" class="btn btn-ghost" id="btnDienstreiseBaseBrowse">Durchsuchen…</button>
         </div>
       </div>
+      <div class="settings-row">
+        <label for="zeitschreibungBasePath">Speicherort Zeitaufzeichnungen-Ordner</label>
+        <div class="dienstreise-basepath-row">
+          <input type="text" id="zeitschreibungBasePath" placeholder="z.B. …\Zeitaufzeichnungen" title="Basisordner für PDF/Excel der Zeitschreibung (Jahr/Monat-Unterordner)." />
+          <button type="button" class="btn btn-ghost" id="btnZeitschreibungBaseBrowse">Durchsuchen…</button>
+        </div>
+      </div>
       <div class="settings-sync-section">
         <h3>Synchronisation</h3>
         <p id="settings-sync-summary" class="settings-sync-hint muted">Wird geladen…</p>
@@ -2200,7 +2189,7 @@
   <script src="js/view-anlagenstamm.js"></script>
   <script src="assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260701"></script>
   <script src="js/view-abrechnung.js?v=20260702c"></script>
-  <script src="js/view-zeitschreibung.js?v=20260723d"></script>
+  <script src="js/view-zeitschreibung.js?v=20260723j"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js"></script>
   <script src="js/serviceprotokoll-react-bridge.js"></script>

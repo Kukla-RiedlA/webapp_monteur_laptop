@@ -9840,6 +9840,22 @@ function createApp(db) {
     getDb: () => db,
     dbDir: DB_DIR,
     writeFileWithRetry,
+    resolveDispoPushCreds: () => {
+      try {
+        const c = resolveDispoServerCreds({});
+        const baseUrl = String((c && c.baseUrl) || '').trim();
+        if (!baseUrl) return null;
+        return {
+          baseUrl,
+          authHeader: authHeaderFromCredentials(
+            (c && c.serverUsername) || '',
+            (c && c.serverPassword) || '',
+          ),
+        };
+      } catch (_) {
+        return null;
+      }
+    },
   });
   try {
     ensureZeitschreibungTables(db);

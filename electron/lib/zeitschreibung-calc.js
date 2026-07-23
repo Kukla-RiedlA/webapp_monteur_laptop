@@ -244,10 +244,44 @@ function rowColorKind(day) {
 }
 
 const ROW_COLORS = {
-  holiday: { hex: '#FF5050', rgb: [1, 80 / 255, 80 / 255], cssClass: 'zs-row-holiday' },
-  so: { hex: '#FF6600', rgb: [1, 102 / 255, 0], cssClass: 'zs-row-so' },
-  sa: { hex: '#FFFF00', rgb: [1, 1, 0], cssClass: 'zs-row-sa' },
+  holiday: { hex: '#FF5050', rgb: [1, 80 / 255, 80 / 255], cssClass: 'zs-row-holiday', argb: 'FFFF5050' },
+  so: { hex: '#FF6600', rgb: [1, 102 / 255, 0], cssClass: 'zs-row-so', argb: 'FFFF6600' },
+  sa: { hex: '#FFFF00', rgb: [1, 1, 0], cssClass: 'zs-row-sa', argb: 'FFFFFF00' },
 };
+
+/**
+ * Excel CF auf Summe (M8:M38):
+ * > 12.01 → rot #FF0000
+ * > 10 → orange #FFC000
+ * Rot hat Vorrang.
+ * @returns {'sum_high'|'sum_warn'|null}
+ */
+function summeAlertKind(daySumValue) {
+  const v = num(daySumValue);
+  if (v > 12.01) return 'sum_high';
+  if (v > 10) return 'sum_warn';
+  return null;
+}
+
+const SUMME_ALERT_COLORS = {
+  sum_high: { hex: '#FF0000', rgb: [1, 0, 0], cssClass: 'zs-sum-high', argb: 'FFFF0000' },
+  sum_warn: { hex: '#FFC000', rgb: [1, 192 / 255, 0], cssClass: 'zs-sum-warn', argb: 'FFFFC000' },
+};
+
+/** weekday/holiday aus Datum nachziehen, falls fehlend. */
+function enrichDay(d) {
+  const row = d && typeof d === 'object' ? Object.assign({}, d) : {};
+  const parsed = parseDateKey(row.day_date);
+  if (!parsed) return row;
+  const built = buildMonthDays(parsed.year, parsed.month, { [row.day_date]: row });
+  const one = built.find((x) => x.day_date === row.day_date);
+  if (!one) return row;
+  return Object.assign({}, row, {
+    weekday: one.weekday,
+    holiday_label: one.holiday_label || row.holiday_label || '',
+    day_sum: row.day_sum != null ? row.day_sum : one.day_sum,
+  });
+}
 
 module.exports = {
   MONTH_NAMES,
@@ -269,4 +303,7 @@ module.exports = {
   round2,
   rowColorKind,
   ROW_COLORS,
+  summeAlertKind,
+  SUMME_ALERT_COLORS,
+  enrichDay,
 };

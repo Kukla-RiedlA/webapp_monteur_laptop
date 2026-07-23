@@ -13,7 +13,6 @@
     technicianName: '',
     days: [],
     status: 'draft',
-    basePath: '',
     dirty: false,
   };
 
@@ -110,6 +109,13 @@
     return rows;
   }
 
+  function summeAlertClass(daySumValue) {
+    const v = num(daySumValue);
+    if (v > 12.01) return ' zs-sum-high';
+    if (v > 10) return ' zs-sum-warn';
+    return '';
+  }
+
   function recomputeDom(host) {
     host.querySelectorAll('tr[data-day-date]').forEach(function (tr) {
       const row = {};
@@ -117,8 +123,14 @@
         const inp = tr.querySelector('input[data-field="' + f + '"]');
         row[f] = inp ? num(inp.value) : 0;
       });
+      const sumVal = daySum(row);
       const cell = tr.querySelector('[data-day-sum]');
-      if (cell) cell.textContent = fmt(daySum(row));
+      if (cell) {
+        cell.textContent = fmt(sumVal);
+        cell.classList.remove('zs-sum-high', 'zs-sum-warn');
+        const alertCls = summeAlertClass(sumVal).trim();
+        if (alertCls) cell.classList.add(alertCls);
+      }
     });
     const days = readDaysFromDom(host);
     const sums = columnSums(days);
@@ -141,52 +153,108 @@
       if (String(d.holiday_label || '').trim()) rowClass = ' zs-row-holiday';
       else if (d.weekday === 'So') rowClass = ' zs-row-so';
       else if (d.weekday === 'Sa') rowClass = ' zs-row-sa';
+      var sumVal = daySum(d);
+      var sumCls = summeAlertClass(sumVal);
       body += `<tr class="${rowClass.trim()}" data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}">
         <td>${escapeHtml(dateDe(d.day_date))}</td>
         <td>${escapeHtml(d.weekday)}</td>
         <td class="zs-holiday">${escapeHtml(d.holiday_label || '')}</td>
         ${HOUR_FIELDS.map(function (f) {
-          return `<td><input type="number" step="0.25" min="0" class="zs-input" data-field="${f}" value="${d[f] ? escapeHtml(String(d[f])) : ''}"></td>`;
+          return `<td class="zs-col-hour"><input type="number" step="0.25" min="0" class="zs-input zs-hour" data-field="${f}" value="${d[f] ? escapeHtml(String(d[f])) : ''}"></td>`;
         }).join('')}
-        <td class="zs-sum" data-day-sum>${escapeHtml(fmt(daySum(d)))}</td>
+        <td class="zs-sum${sumCls}" data-day-sum>${escapeHtml(fmt(sumVal))}</td>
         <td><input type="text" class="zs-input zs-bemerkung" data-field="bemerkung" value="${escapeHtml(d.bemerkung || '')}"></td>
       </tr>`;
     });
     return `<div class="zs-table-wrap"><table class="zs-table">
       <thead><tr>
-        <th>Datum</th><th>Tag</th><th>Feiert.</th><th>Anw.</th><th>Montage</th><th>Ü/50%</th><th>Ü/100%</th>
-        <th>Weg</th><th>Urlaub</th><th>ZA+</th><th>ZA−</th><th>Krank</th><th>Summe</th><th>Bemerkung</th>
+        <th>Datum</th><th>Tag</th><th class="zs-col-holiday">Feiert.</th>
+        <th class="zs-col-hour" title="Anwesenheit">Anw.</th>
+        <th class="zs-col-hour" title="Montage">Mont.</th>
+        <th class="zs-col-hour" title="Überstunden 50%">Ü50</th>
+        <th class="zs-col-hour" title="Überstunden 100%">Ü100</th>
+        <th class="zs-col-hour" title="Weg">Weg</th>
+        <th class="zs-col-hour" title="Urlaub">Url.</th>
+        <th class="zs-col-hour" title="Zeitausgleich plus">ZA+</th>
+        <th class="zs-col-hour" title="Zeitausgleich minus">ZA−</th>
+        <th class="zs-col-hour" title="Krank/Arzt">Kr.</th>
+        <th class="zs-col-sum">Sum.</th><th>Bemerkung</th>
       </tr></thead>
       <tbody>${body}</tbody>
       <tfoot><tr>
         <th>Gesamt</th><th data-sum="gesamt">${escapeHtml(fmtAlways(g))}</th><th></th>
-        ${HOUR_FIELDS.map(function (f) { return `<th data-sum="${f}">${escapeHtml(fmtAlways(sums[f]))}</th>`; }).join('')}
-        <th data-sum="day_sum">${escapeHtml(fmtAlways(sums.day_sum))}</th><th></th>
+        ${HOUR_FIELDS.map(function (f) { return `<th class="zs-col-hour" data-sum="${f}">${escapeHtml(fmtAlways(sums[f]))}</th>`; }).join('')}
+        <th class="zs-col-sum" data-sum="day_sum">${escapeHtml(fmtAlways(sums.day_sum))}</th><th></th>
       </tr></tfoot>
     </table></div>`;
   }
 
   function renderShell() {
-    return `<div class="page-zeitschreibung">
-      <div class="sp-v2-topbar"><h1 class="sp-v2-page-title">Zeitschreibung</h1></div>
-      <div class="zs-toolbar">
-        <label>Jahr <select id="zsYear">${yearOptions()}</select></label>
-        <label>Monat <select id="zsMonth">${monthOptions()}</select></label>
-        <span class="zs-tech-name" id="zsTechName">${escapeHtml(state.technicianName)}</span>
-        <span class="zs-status" id="zsStatus">Status: ${escapeHtml(state.status)}</span>
+    return `<div class="page-zeitschreibung zs-sp-page">
+      <div class="zs-sp-col">
+        <div class="sp-v2-topbar zs-sp-topbar">
+          <h1 class="sp-v2-page-title">
+            <img class="sp-v2-icon" src="icons/calendar-green.svg" alt="" aria-hidden="true">
+            Zeitschreibung
+          </h1>
+        </div>
+
+        <section class="sp-v2-section" aria-labelledby="zsSecZeitraumTitle">
+          <header class="sp-v2-section-head" id="zsSecZeitraumTitle">
+            <span class="sp-v2-num">1</span>
+            <img class="sp-v2-icon" src="icons/calendar-green.svg" alt="" aria-hidden="true">
+            Zeitraum
+          </header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <label class="sp-v2-field">
+                <span>Jahr</span>
+                <select id="zsYear">${yearOptions()}</select>
+              </label>
+              <label class="sp-v2-field">
+                <span>Monat</span>
+                <select id="zsMonth">${monthOptions()}</select>
+              </label>
+              <div class="sp-v2-field">
+                <span>Monteur / Status</span>
+                <div class="zs-meta-line" style="margin-top:0.35rem">
+                  <span class="zs-tech-name" id="zsTechName">${escapeHtml(state.technicianName)}</span>
+                  <span class="zs-status" id="zsStatus">Status: ${escapeHtml(state.status)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="zsSecExportTitle">
+          <header class="sp-v2-section-head" id="zsSecExportTitle">
+            <span class="sp-v2-num">2</span>
+            <img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true">
+            Speichern &amp; Freigabe
+          </header>
+          <div class="sp-v2-section-body">
+            <div class="zs-actions" style="margin-top:0">
+              <button type="button" class="btn" id="zsSave">Speichern</button>
+              <button type="button" class="btn btn-primary" id="zsSubmit">Freigeben (PDF)</button>
+              <span class="zs-msg" id="zsMsg" aria-live="polite"></span>
+            </div>
+            <p class="muted" style="margin:0.65rem 0 0;font-size:0.85rem">
+              Speicherort für PDF/Excel: Einstellungen → Speicherort Zeitaufzeichnungen-Ordner
+            </p>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="zsSecTabelleTitle">
+          <header class="sp-v2-section-head" id="zsSecTabelleTitle">
+            <span class="sp-v2-num">3</span>
+            <img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true">
+            Monatstabelle
+          </header>
+          <div class="sp-v2-section-body">
+            ${renderTable()}
+          </div>
+        </section>
       </div>
-      <div class="zs-path-row">
-        <label class="zs-path-label">Zeitaufzeichnungen-Ordner
-          <input type="text" id="zsBasePath" class="zs-path-input" value="${escapeHtml(state.basePath)}" placeholder="z. B. …\\Zeitaufzeichnungen" readonly>
-        </label>
-        <button type="button" class="btn btn-ghost" id="zsChoosePath">Ordner wählen</button>
-      </div>
-      <div class="zs-actions">
-        <button type="button" class="btn" id="zsSave">Speichern</button>
-        <button type="button" class="btn btn-primary" id="zsSubmit">Freigeben (PDF)</button>
-        <span class="zs-msg" id="zsMsg" aria-live="polite"></span>
-      </div>
-      ${renderTable()}
     </div>`;
   }
 
@@ -201,42 +269,12 @@
     });
     host.querySelector('#zsSave').addEventListener('click', function () { save(host, false); });
     host.querySelector('#zsSubmit').addEventListener('click', function () { save(host, true); });
-    host.querySelector('#zsChoosePath').addEventListener('click', function () { choosePath(host); });
     host.querySelectorAll('.zs-input').forEach(function (inp) {
       inp.addEventListener('input', function () {
         state.dirty = true;
         recomputeDom(host);
       });
     });
-  }
-
-  async function choosePath(host) {
-    try {
-      const picker =
-        (global.monteurApp && typeof global.monteurApp.chooseDienstreiseBasePath === 'function'
-          ? global.monteurApp.chooseDienstreiseBasePath
-          : null) ||
-        (global.electronAPI && typeof global.electronAPI.chooseDienstreiseBasePath === 'function'
-          ? global.electronAPI.chooseDienstreiseBasePath
-          : null);
-      if (!picker) {
-        setMsg(host, 'Ordnerdialog nicht verfügbar. Bitte App neu starten.', true);
-        return;
-      }
-      const p = await picker();
-      if (!p) return;
-      await jfetch('/api/zeitschreibung/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ basePath: p }),
-      });
-      state.basePath = p;
-      const inp = host.querySelector('#zsBasePath');
-      if (inp) inp.value = p;
-      setMsg(host, 'Ordner gespeichert.', false);
-    } catch (e) {
-      setMsg(host, e.message || String(e), true);
-    }
   }
 
   function setMsg(host, text, isErr) {
@@ -270,9 +308,24 @@
       state.dirty = false;
       const st = host.querySelector('#zsStatus');
       if (st) st.textContent = 'Status: ' + state.status;
-      setMsg(host, submit ? ('Freigegeben. PDF: ' + (data.pdf_path || '')) : 'Gespeichert.', false);
+      if (submit) {
+        let msg = 'Freigegeben. PDF: ' + (data.pdf_path || '');
+        if (data.synced) msg += ' · an Dispo übertragen';
+        else if (data.sync_pending) msg += ' · Sync ausstehend (beim nächsten sync_push)';
+        setMsg(host, msg, false);
+      } else {
+        let msg = 'Gespeichert';
+        if (data.synced) msg += ' und an Dispo übertragen.';
+        else if (data.sync_pending) msg += '. Sync ausstehend (offline oder beim nächsten sync_push).';
+        else msg += '.';
+        setMsg(host, msg, false);
+      }
     } catch (e) {
-      setMsg(host, e.message || String(e), true);
+      var msg = e.message || String(e);
+      if (/Zeitaufzeichnungen-Ordner|Basispfad|NO_BASE_PATH/i.test(msg)) {
+        msg = 'Bitte unter Einstellungen den Speicherort Zeitaufzeichnungen-Ordner festlegen.';
+      }
+      setMsg(host, msg, true);
     }
   }
 
@@ -285,7 +338,6 @@
     state.days = data.days || [];
     state.status = data.status || 'draft';
     state.technicianName = data.technician_name || state.technicianName;
-    state.basePath = (data.config && data.config.basePath) || state.basePath || '';
     host.innerHTML = renderShell();
     bind(host);
   }

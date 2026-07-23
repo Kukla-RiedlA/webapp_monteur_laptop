@@ -1,0 +1,181 @@
+/* Zeitschreibung — Layout wie Abrechnung (sp-v2 / serviceprotokoll-v2) */
+
+#view-zeitschreibung {
+  background: var(--sp-page, #f7f8f8);
+}
+
+#view-zeitschreibung #zeitschreibung-host {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.page-zeitschreibung.zs-sp-page {
+  padding: 20px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.zs-sp-col {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.page-zeitschreibung .zs-sp-topbar {
+  margin-bottom: 0;
+}
+
+.page-zeitschreibung .zs-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--sp-muted, #4b5563);
+}
+
+.page-zeitschreibung .zs-tech-name {
+  font-weight: 600;
+  color: var(--sp-green, #007a4d);
+}
+
+.page-zeitschreibung .zs-status {
+  color: var(--sp-muted, #4b5563);
+}
+
+.page-zeitschreibung .zs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  margin-top: 0.85rem;
+}
+
+.page-zeitschreibung .zs-msg {
+  font-size: 0.875rem;
+  color: var(--sp-muted, #4b5563);
+}
+
+.page-zeitschreibung .zs-table-wrap {
+  overflow: auto;
+  max-width: 100%;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.page-zeitschreibung .zs-table {
+  border-collapse: collapse;
+  width: max-content;
+  font-size: 12px;
+}
+
+.page-zeitschreibung .zs-table th,
+.page-zeitschreibung .zs-table td {
+  border: 1px solid var(--sp-border, #d8e3df);
+  padding: 2px 3px;
+  white-space: nowrap;
+}
+
+.page-zeitschreibung .zs-table thead th,
+.page-zeitschreibung .zs-table tfoot th {
+  background: var(--sp-mint, #eefaf5);
+  color: var(--sp-green, #007a4d);
+}
+
+.page-zeitschreibung .zs-table th.zs-col-hour,
+.page-zeitschreibung .zs-table td.zs-col-hour,
+.page-zeitschreibung .zs-table th.zs-col-sum,
+.page-zeitschreibung .zs-table td.zs-sum {
+  width: 1%;
+  padding: 1px 2px;
+  text-align: center;
+}
+
+.page-zeitschreibung .zs-table th.zs-col-hour,
+.page-zeitschreibung .zs-table th.zs-col-sum {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.page-zeitschreibung .zs-input {
+  box-sizing: border-box;
+  font: inherit;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 4px;
+  background: #fff;
+}
+
+.page-zeitschreibung .zs-input.zs-hour {
+  width: 2.6rem;
+  min-width: 2.6rem;
+  max-width: 2.6rem;
+  padding: 1px 2px;
+  text-align: center;
+  font-size: 12px;
+  -moz-appearance: textfield;
+}
+
+.page-zeitschreibung .zs-input.zs-hour::-webkit-outer-spin-button,
+.page-zeitschreibung .zs-input.zs-hour::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.page-zeitschreibung .zs-bemerkung {
+  width: 20rem;
+  min-width: 20rem;
+  max-width: none;
+  text-align: left;
+  padding: 2px 6px;
+}
+
+.page-zeitschreibung .zs-table th.zs-col-holiday,
+.page-zeitschreibung .zs-table td.zs-holiday {
+  min-width: 10.5rem;
+  width: 10.5rem;
+  max-width: none;
+  white-space: nowrap;
+}
+
+.page-zeitschreibung .zs-holiday {
+  color: #8a4b00;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* Excel-Bedingte Formatierung: Sa gelb, So orange, Feiertag rot */
+.page-zeitschreibung .zs-table tbody tr.zs-row-sa td { background: #ffff00; }
+.page-zeitschreibung .zs-table tbody tr.zs-row-so td { background: #ff6600; }
+.page-zeitschreibung .zs-table tbody tr.zs-row-holiday td { background: #ff5050; }
+.page-zeitschreibung .zs-table tbody tr.zs-row-sa .zs-input,
+.page-zeitschreibung .zs-table tbody tr.zs-row-so .zs-input,
+.page-zeitschreibung .zs-table tbody tr.zs-row-holiday .zs-input { background: transparent; }
+
+/* Excel CF Summe: >10 orange, >12.01 rot */
+.page-zeitschreibung .zs-table tbody td.zs-sum.zs-sum-warn {
+  background: #ffc000 !important;
+  font-weight: 600;
+}
+.page-zeitschreibung .zs-table tbody td.zs-sum.zs-sum-high {
+  background: #ff0000 !important;
+  color: #fff;
+  font-weight: 600;
+}
+
+#view-zeitschreibung .page-zeitschreibung .btn {
+  font-family: inherit;
+}
