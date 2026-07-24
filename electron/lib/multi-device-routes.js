@@ -259,9 +259,10 @@ function registerMultiDeviceRoutes(deps) {
       return db
         .prepare(
           `SELECT c.local_job_id, c.server_job_id, c.reason, c.status_on_server, c.created_at,
-                  j.customer_name, j.status AS local_status
+                  cust.name AS customer_name, j.status AS local_status
            FROM jobs_pending_local_cleanup c
            LEFT JOIN jobs j ON j.id = c.local_job_id
+           LEFT JOIN customers cust ON cust.id = j.customer_id
            ORDER BY datetime(c.created_at) DESC`,
         )
         .all();
@@ -423,9 +424,10 @@ function registerMultiDeviceRoutes(deps) {
       const auth = authHeaderFromCreds(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
       const jobs = db
         .prepare(
-          `SELECT j.id AS local_job_id, j.server_id, j.status, j.customer_name
+          `SELECT j.id AS local_job_id, j.server_id, j.status, c.name AS customer_name
            FROM jobs j
            INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+           LEFT JOIN customers c ON c.id = j.customer_id
            WHERE LOWER(TRIM(COALESCE(j.status,''))) = 'in_arbeit'
              AND j.server_id IS NOT NULL AND TRIM(CAST(j.server_id AS TEXT)) != ''`,
         )
