@@ -8,7 +8,7 @@
     Mo: 'Montag', Di: 'Dienstag', Mi: 'Mittwoch', Do: 'Donnerstag',
     Fr: 'Freitag', Sa: 'Samstag', So: 'Sonntag',
   };
-  const HOUR_FIELDS = ['anw', 'montage', 'ue50', 'ue100', 'weg', 'urlaub', 'za_plus', 'za_minus', 'krank'];
+  const HOUR_FIELDS = ['anw', 'montage', 'ue50', 'ue100', 'weg', 'urlaub', 'za_plus', 'za_minus', 'krank', 'arzt'];
   const FIELD_META = {
     anw: { short: 'Anw. (h)', title: 'Anwesenheit in Stunden', spoken: 'Anwesenheit' },
     montage: { short: 'Montage (h)', title: 'Montagezeit in Stunden', spoken: 'Montagezeit' },
@@ -18,7 +18,8 @@
     urlaub: { short: 'Urlaub (h)', title: 'Urlaub in Stunden', spoken: 'Urlaub' },
     za_plus: { short: 'ZA + (h)', title: 'Aufbau Zeitguthaben', spoken: 'Zeitguthaben' },
     za_minus: { short: 'ZA − (h)', title: 'Verbrauch Zeitguthaben', spoken: 'Zeitausgleich' },
-    krank: { short: 'Krank / Arzt (h)', title: 'Krank / Arzt in Stunden', spoken: 'Krank / Arzt' },
+    krank: { short: 'Krank (h)', title: 'Krank in Stunden', spoken: 'Krank' },
+    arzt: { short: 'Arzt (h)', title: 'Arzt in Stunden', spoken: 'Arzt' },
     bemerkung: { short: 'Bemerkung', title: 'Bemerkung', spoken: 'Bemerkung' },
   };
   const ACTIVE_IDLE = 'Klicken Sie in ein Feld, um Stunden einzutragen.';
@@ -56,15 +57,15 @@
   }
 
   function daySum(row) {
-    return num(row.anw) + num(row.montage) + num(row.ue50) + num(row.ue100) + num(row.weg) + num(row.urlaub) + num(row.za_minus) + num(row.krank);
+    return num(row.anw) + num(row.montage) + num(row.ue50) + num(row.ue100) + num(row.weg) + num(row.urlaub) + num(row.za_minus) + num(row.krank) + num(row.arzt);
   }
 
   function daySumEff(row) {
-    return hourEff(row, 'anw') + hourEff(row, 'montage') + hourEff(row, 'ue50') + hourEff(row, 'ue100') + hourEff(row, 'weg') + hourEff(row, 'urlaub') + hourEff(row, 'za_minus') + hourEff(row, 'krank');
+    return hourEff(row, 'anw') + hourEff(row, 'montage') + hourEff(row, 'ue50') + hourEff(row, 'ue100') + hourEff(row, 'weg') + hourEff(row, 'urlaub') + hourEff(row, 'za_minus') + hourEff(row, 'krank') + hourEff(row, 'arzt');
   }
 
   function columnSums(days) {
-    const s = { anw: 0, montage: 0, ue50: 0, ue100: 0, weg: 0, urlaub: 0, za_plus: 0, za_minus: 0, krank: 0, day_sum: 0 };
+    const s = { anw: 0, montage: 0, ue50: 0, ue100: 0, weg: 0, urlaub: 0, za_plus: 0, za_minus: 0, krank: 0, arzt: 0, day_sum: 0 };
     for (const d of days) {
       for (const f of HOUR_FIELDS) s[f] += hourEff(d, f);
       s.day_sum += daySumEff(d);
@@ -104,7 +105,7 @@
   }
 
   function gesamtSum(s) {
-    return num(s.anw) + num(s.montage) + num(s.ue50) + num(s.ue100) + num(s.weg) - num(s.urlaub) + num(s.za_plus) - num(s.za_minus) - num(s.krank);
+    return num(s.anw) + num(s.montage) + num(s.ue50) + num(s.ue100) + num(s.weg) - num(s.urlaub) + num(s.za_plus) - num(s.za_minus) - num(s.krank) - num(s.arzt);
   }
 
   function fmt(n) {
@@ -290,7 +291,7 @@
           var showVal = locked ? eff : monteurVal;
           var display = showVal ? escapeHtml(String(showVal)) : '';
           var tip = label ? ` title="${escapeHtml(label)}"` : '';
-          var sep = (f === 'weg' || f === 'krank') ? ' zs-sep-after' : '';
+          var sep = (f === 'weg' || f === 'arzt') ? ' zs-sep-after' : '';
           var aria = escapeHtml(ariaLabelFor(f, d.weekday, d.day_date));
           return `<td class="zs-col-hour${hasKorr ? ' zs-corrected' : ''}${sep}" data-col="${f}"><div class="zs-hour-cell">
             <input type="number" step="0.25" min="0" class="zs-input zs-hour${hasKorr ? ' is-corrected' : ''}" data-field="${f}" data-col="${f}" data-monteur="${escapeHtml(String(monteurVal))}" data-lohn-eff="${escapeHtml(String(eff))}" data-has-korr="${hasKorr ? '1' : '0'}" value="${display}" aria-label="${aria}"${tip}${locked ? ' disabled' : ''}>
@@ -312,7 +313,7 @@
         <tr class="zs-head-groups">
           <th class="zs-sticky-tag" colspan="3" scope="colgroup">Datum</th>
           <th colspan="5" scope="colgroup">Arbeits- und Reisezeit</th>
-          <th colspan="4" scope="colgroup">Abwesenheit und Zeitkonto</th>
+          <th colspan="5" scope="colgroup">Abwesenheit und Zeitkonto</th>
           <th colspan="1" scope="colgroup">Ergebnis</th>
           <th colspan="2" scope="colgroup">Informationen</th>
         </tr>
@@ -322,7 +323,7 @@
           <th class="zs-sticky-holiday zs-sep-after" data-col="feiertag" title="Feiertag">Feiertag</th>
           ${HOUR_FIELDS.map(function (f) {
             var m = FIELD_META[f];
-            var sep = (f === 'weg' || f === 'krank') ? ' zs-sep-after' : '';
+            var sep = (f === 'weg' || f === 'arzt') ? ' zs-sep-after' : '';
             return `<th class="zs-col-hour${sep}" data-col="${f}" title="${escapeHtml(m.title)}">${escapeHtml(m.short)}</th>`;
           }).join('')}
           <th class="zs-col-sum zs-sep-after" data-col="summe" title="Tagessumme in Stunden">Summe (h)</th>
@@ -336,7 +337,7 @@
         <th class="zs-sticky-wt" data-sum="gesamt">${escapeHtml(fmtAlways(g))}</th>
         <th class="zs-sticky-holiday zs-sep-after"></th>
         ${HOUR_FIELDS.map(function (f) {
-          var sep = (f === 'weg' || f === 'krank') ? ' zs-sep-after' : '';
+          var sep = (f === 'weg' || f === 'arzt') ? ' zs-sep-after' : '';
           return `<th class="zs-col-hour${sep}" data-sum="${f}">${escapeHtml(fmtAlways(sums[f]))}</th>`;
         }).join('')}
         <th class="zs-col-sum zs-sep-after" data-sum="day_sum">${escapeHtml(fmtAlways(sums.day_sum))}</th>

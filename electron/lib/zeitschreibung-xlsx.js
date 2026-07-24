@@ -14,6 +14,9 @@ const HOUR_COLS = [
   { col: 'J', field: 'za_plus' },
   { col: 'K', field: 'za_minus' },
   { col: 'L', field: 'krank' },
+  // Arzt bewusst NICHT in M: Vorlage hat dort die Tagessummen-Formel.
+  // Arzt-Stunden → Spalte O (rechts neben Bemerkung N).
+  { col: 'O', field: 'arzt' },
 ];
 
 /** Row 8 = Tag 1 … Row 38 = Tag 31 (wie Excel-Vorlage). */
@@ -46,10 +49,16 @@ function colIndex(letters) {
   return n;
 }
 
-/** Eine Zelle matchen: Self-Closing ohne Slash in Attributen, sonst Open/Close. */
+/**
+ * Eine Zelle matchen: Self-Closing (keine Kind-Elemente), sonst Open/Close.
+ * Attribute dürfen kein "<"/">" enthalten — so wird eine Zelle mit
+ * Kind-Element (z. B. <c ...><f .../><v>0</v></c>) nicht fälschlich als
+ * self-closing an dessen innerem "/>" erkannt (sonst bleibt ein XML-Rest
+ * wie "<v>0</v></c>" stehen → korrupte Datei).
+ */
 function findCellMatch(sheetXml, ref) {
   const re = new RegExp(
-    `<c r="${ref}"[^/]*/>|<c r="${ref}"[^>]*>[\\s\\S]*?</c>`,
+    `<c r="${ref}"[^<>]*/>|<c r="${ref}"[^<>]*>[\\s\\S]*?</c>`,
   );
   return re.exec(sheetXml);
 }
@@ -191,6 +200,9 @@ async function generateZeitschreibungXlsxBuffer(payload) {
   sheetXml = setInlineStrCell(sheetXml, 'F4', monLabel);
   sheetXml = setNumberCell(sheetXml, 'I4', year);
   sheetXml = setInlineStrCell(sheetXml, 'K4', name);
+  // Kopfzeile: Krank getrennt, Arzt neu in Spalte O (M bleibt Summe-Formel der Vorlage).
+  sheetXml = setInlineStrCell(sheetXml, 'L7', 'Krank');
+  sheetXml = setInlineStrCell(sheetXml, 'O7', 'Arzt');
 
   const dim = calc.daysInMonth(year, month);
   for (let day = 1; day <= 31; day++) {

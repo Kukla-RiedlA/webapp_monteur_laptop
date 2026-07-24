@@ -45,6 +45,7 @@ function ensureTables(db) {
       sum_za_plus REAL NOT NULL DEFAULT 0,
       sum_za_minus REAL NOT NULL DEFAULT 0,
       sum_krank REAL NOT NULL DEFAULT 0,
+      sum_arzt REAL NOT NULL DEFAULT 0,
       sum_day REAL NOT NULL DEFAULT 0,
       gesamt REAL NOT NULL DEFAULT 0,
       pdf_path TEXT,
@@ -69,6 +70,7 @@ function ensureTables(db) {
       za_plus REAL NOT NULL DEFAULT 0,
       za_minus REAL NOT NULL DEFAULT 0,
       krank REAL NOT NULL DEFAULT 0,
+      arzt REAL NOT NULL DEFAULT 0,
       day_sum REAL NOT NULL DEFAULT 0,
       bemerkung TEXT NOT NULL DEFAULT '',
       lohn_gesperrt INTEGER NOT NULL DEFAULT 0,
@@ -93,9 +95,19 @@ function ensureTables(db) {
   } catch (_) {
     /* Spalte existiert bereits */
   }
+  try {
+    db.exec('ALTER TABLE timesheet_days ADD COLUMN arzt REAL NOT NULL DEFAULT 0');
+  } catch (_) {
+    /* Spalte existiert bereits */
+  }
+  try {
+    db.exec('ALTER TABLE timesheets ADD COLUMN sum_arzt REAL NOT NULL DEFAULT 0');
+  } catch (_) {
+    /* Spalte existiert bereits */
+  }
   const lohnOverrideCols = [
     'lohn_anw', 'lohn_montage', 'lohn_ue50', 'lohn_ue100', 'lohn_weg',
-    'lohn_urlaub', 'lohn_za_plus', 'lohn_za_minus', 'lohn_krank',
+    'lohn_urlaub', 'lohn_za_plus', 'lohn_za_minus', 'lohn_krank', 'lohn_arzt',
   ];
   for (const col of lohnOverrideCols) {
     try {
@@ -126,7 +138,7 @@ function copyLohnOverrides(from, to) {
   const dst = to || {};
   const fields = [
     'lohn_anw', 'lohn_montage', 'lohn_ue50', 'lohn_ue100', 'lohn_weg',
-    'lohn_urlaub', 'lohn_za_plus', 'lohn_za_minus', 'lohn_krank',
+    'lohn_urlaub', 'lohn_za_plus', 'lohn_za_minus', 'lohn_krank', 'lohn_arzt',
   ];
   for (const f of fields) {
     dst[f] = src[f] != null && src[f] !== '' ? calc.num(src[f]) : null;
@@ -164,6 +176,7 @@ function lohnFingerprint(day) {
     lohn_za_plus: d.lohn_za_plus != null && d.lohn_za_plus !== '' ? calc.num(d.lohn_za_plus) : null,
     lohn_za_minus: d.lohn_za_minus != null && d.lohn_za_minus !== '' ? calc.num(d.lohn_za_minus) : null,
     lohn_krank: d.lohn_krank != null && d.lohn_krank !== '' ? calc.num(d.lohn_krank) : null,
+    lohn_arzt: d.lohn_arzt != null && d.lohn_arzt !== '' ? calc.num(d.lohn_arzt) : null,
     lohn_bemerkung: d.lohn_bemerkung != null ? String(d.lohn_bemerkung) : null,
     korrekturen: d.korrekturen && typeof d.korrekturen === 'object' && !Array.isArray(d.korrekturen)
       ? d.korrekturen
@@ -220,6 +233,7 @@ function loadTimesheet(db, technicianId, year, month) {
     za_plus: head.sum_za_plus,
     za_minus: head.sum_za_minus,
     krank: head.sum_krank,
+    arzt: head.sum_arzt,
     day_sum: head.sum_day,
   };
   return {
@@ -281,6 +295,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         za_plus: prev.za_plus,
         za_minus: prev.za_minus,
         krank: prev.krank,
+        arzt: prev.arzt,
         bemerkung: prev.bemerkung != null ? prev.bemerkung : row.bemerkung,
         lohn_gesperrt: 1,
       });
@@ -328,7 +343,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     id = existing.id;
     db.prepare(
       `UPDATE timesheets SET status = ?, sum_anw=?, sum_montage=?, sum_ue50=?, sum_ue100=?, sum_weg=?,
-       sum_urlaub=?, sum_za_plus=?, sum_za_minus=?, sum_krank=?, sum_day=?, gesamt=?, updated_at=datetime('now')
+       sum_urlaub=?, sum_za_plus=?, sum_za_minus=?, sum_krank=?, sum_arzt=?, sum_day=?, gesamt=?, updated_at=datetime('now')
        WHERE id = ?`,
     ).run(
       nextStatus,
@@ -341,6 +356,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
       sums.za_plus,
       sums.za_minus,
       sums.krank,
+      sums.arzt,
       sums.day_sum,
       gesamt,
       id,
@@ -351,8 +367,8 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
       .prepare(
         `INSERT INTO timesheets (
           technician_id, year, month, status, sum_anw, sum_montage, sum_ue50, sum_ue100, sum_weg,
-          sum_urlaub, sum_za_plus, sum_za_minus, sum_krank, sum_day, gesamt, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
+          sum_urlaub, sum_za_plus, sum_za_minus, sum_krank, sum_arzt, sum_day, gesamt, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
       )
       .run(
         technicianId,
@@ -368,6 +384,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         sums.za_plus,
         sums.za_minus,
         sums.krank,
+        sums.arzt,
         sums.day_sum,
         gesamt,
       );
@@ -377,10 +394,10 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
   const ins = db.prepare(
     `INSERT INTO timesheet_days (
       timesheet_id, day_date, weekday, holiday_label, anw, montage, ue50, ue100, weg,
-      urlaub, za_plus, za_minus, krank, day_sum, bemerkung, lohn_gesperrt,
+      urlaub, za_plus, za_minus, krank, arzt, day_sum, bemerkung, lohn_gesperrt,
       lohn_anw, lohn_montage, lohn_ue50, lohn_ue100, lohn_weg, lohn_urlaub,
-      lohn_za_plus, lohn_za_minus, lohn_krank, lohn_bemerkung, lohn_korrektur_meta, korrekturen_json
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?)`,
+      lohn_za_plus, lohn_za_minus, lohn_krank, lohn_arzt, lohn_bemerkung, lohn_korrektur_meta, korrekturen_json
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
   const dayList = Array.isArray(days) ? days : [];
   db.transaction(() => {
@@ -400,6 +417,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         calc.num(d.za_plus),
         calc.num(d.za_minus),
         calc.num(d.krank),
+        calc.num(d.arzt),
         calc.num(d.day_sum),
         d.bemerkung || '',
         Number(d.lohn_gesperrt) ? 1 : 0,
@@ -412,6 +430,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         ov.lohn_za_plus,
         ov.lohn_za_minus,
         ov.lohn_krank,
+        ov.lohn_arzt,
         ov.lohn_bemerkung,
         ov.lohn_korrektur_meta,
         ov.korrekturen_json,
@@ -536,6 +555,7 @@ async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, 
           za_plus: ts.sum_za_plus,
           za_minus: ts.sum_za_minus,
           krank: ts.sum_krank,
+          arzt: ts.sum_arzt,
           day_sum: ts.sum_day,
         },
         gesamt: ts.gesamt,
@@ -552,6 +572,7 @@ async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, 
           za_plus: d.za_plus,
           za_minus: d.za_minus,
           krank: d.krank,
+          arzt: d.arzt,
           day_sum: d.day_sum,
           bemerkung: d.bemerkung,
         })),
@@ -642,6 +663,7 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
         za_plus: sd.za_plus,
         za_minus: sd.za_minus,
         krank: sd.krank,
+        arzt: sd.arzt,
         bemerkung: sd.bemerkung != null ? sd.bemerkung : cur.bemerkung,
         holiday_label: sd.holiday_label || cur.holiday_label || '',
         lohn_gesperrt: 1,

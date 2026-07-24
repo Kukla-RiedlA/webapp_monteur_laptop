@@ -82,10 +82,11 @@ async function generateZeitschreibungPdfBuffer(payload) {
     'ZA+',
     'ZA-',
     'Krank',
+    'Arzt',
     'Summe',
     'Bemerkung',
   ];
-  const colW = [58, 28, 62, 40, 48, 42, 46, 36, 42, 36, 36, 42, 42, 150];
+  const colW = [58, 28, 62, 40, 48, 42, 46, 36, 42, 36, 36, 42, 42, 42, 150];
   const tableLeft = margin;
   const rowH = 14;
   const headerH = 16;
@@ -136,7 +137,7 @@ async function generateZeitschreibungPdfBuffer(payload) {
   drawRow(headers, y, true, rgb(0.93, 0.96, 0.94));
   y -= headerH;
 
-  const SUMME_COL = 12;
+  const SUMME_COL = 13;
   for (const d of days) {
     if (y < margin + 40) break;
     const dk = String(d.day_date || '');
@@ -158,6 +159,7 @@ async function generateZeitschreibungPdfBuffer(payload) {
         fmtHours(d.za_plus),
         fmtHours(d.za_minus),
         fmtHours(d.krank),
+        fmtHours(d.arzt),
         fmtHours(daySumVal),
         d.bemerkung || '',
       ],
@@ -184,6 +186,7 @@ async function generateZeitschreibungPdfBuffer(payload) {
       fmtHoursAlways(sums.za_plus),
       fmtHoursAlways(sums.za_minus),
       fmtHoursAlways(sums.krank),
+      fmtHoursAlways(sums.arzt),
       fmtHoursAlways(sums.day_sum),
       '',
     ],

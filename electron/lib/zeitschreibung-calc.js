@@ -29,6 +29,7 @@ const HOUR_FIELDS = [
   'za_plus',
   'za_minus',
   'krank',
+  'arzt',
 ];
 
 function pad2(n) {
@@ -120,7 +121,7 @@ function hourEff(row, field) {
   return num(r[field]);
 }
 
-/** Tageszeile: SUM(Anw..Urlaub) + ZA- + Krank — ZA+ zählt nicht. */
+/** Tageszeile: SUM(Anw..Urlaub) + ZA- + Krank + Arzt — ZA+ zählt nicht. */
 function daySum(row) {
   const r = row || {};
   return (
@@ -131,7 +132,8 @@ function daySum(row) {
     num(r.weg) +
     num(r.urlaub) +
     num(r.za_minus) +
-    num(r.krank)
+    num(r.krank) +
+    num(r.arzt)
   );
 }
 
@@ -144,7 +146,8 @@ function daySumEffective(row) {
     hourEff(row, 'weg') +
     hourEff(row, 'urlaub') +
     hourEff(row, 'za_minus') +
-    hourEff(row, 'krank')
+    hourEff(row, 'krank') +
+    hourEff(row, 'arzt')
   );
 }
 
@@ -159,6 +162,7 @@ function columnSums(rows) {
     za_plus: 0,
     za_minus: 0,
     krank: 0,
+    arzt: 0,
     day_sum: 0,
   };
   for (const row of rows || []) {
@@ -179,6 +183,7 @@ function columnSumsEffective(rows) {
     za_plus: 0,
     za_minus: 0,
     krank: 0,
+    arzt: 0,
     day_sum: 0,
   };
   for (const row of rows || []) {
@@ -200,7 +205,7 @@ function daysForExport(days) {
   });
 }
 
-/** Monat Gesamt: Anw+Montage+Ü50+Ü100+Weg − Urlaub + ZA+ − ZA− − Krank */
+/** Monat Gesamt: Anw+Montage+Ü50+Ü100+Weg − Urlaub + ZA+ − ZA− − Krank − Arzt */
 function gesamtSum(sums) {
   const s = sums || {};
   return (
@@ -212,7 +217,8 @@ function gesamtSum(sums) {
     num(s.urlaub) +
     num(s.za_plus) -
     num(s.za_minus) -
-    num(s.krank)
+    num(s.krank) -
+    num(s.arzt)
   );
 }
 
@@ -248,6 +254,7 @@ function buildMonthDays(year, month, existingByDate) {
       za_plus: num(prev.za_plus),
       za_minus: num(prev.za_minus),
       krank: num(prev.krank),
+      arzt: num(prev.arzt),
       bemerkung: prev.bemerkung != null ? String(prev.bemerkung) : '',
       lohn_gesperrt: prev.lohn_gesperrt ? 1 : 0,
       lohn_anw: prev.lohn_anw != null && prev.lohn_anw !== '' ? num(prev.lohn_anw) : null,
@@ -259,6 +266,7 @@ function buildMonthDays(year, month, existingByDate) {
       lohn_za_plus: prev.lohn_za_plus != null && prev.lohn_za_plus !== '' ? num(prev.lohn_za_plus) : null,
       lohn_za_minus: prev.lohn_za_minus != null && prev.lohn_za_minus !== '' ? num(prev.lohn_za_minus) : null,
       lohn_krank: prev.lohn_krank != null && prev.lohn_krank !== '' ? num(prev.lohn_krank) : null,
+      lohn_arzt: prev.lohn_arzt != null && prev.lohn_arzt !== '' ? num(prev.lohn_arzt) : null,
       lohn_bemerkung: prev.lohn_bemerkung != null ? String(prev.lohn_bemerkung) : null,
       lohn_korrektur_meta: prev.lohn_korrektur_meta != null ? String(prev.lohn_korrektur_meta) : null,
       korrekturen: prev.korrekturen && typeof prev.korrekturen === 'object' ? prev.korrekturen : null,
