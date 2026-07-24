@@ -130,22 +130,38 @@ function shouldTrustCertificate(hostname) {
 }
 
 function installCertificateVerifyProc() {
-  if (certificateVerifyProcInstalled || !session || !session.defaultSession) return;
-  certificateVerifyProcInstalled = true;
-  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+  if (!session) return;
+
+  const verifyProc = (request, callback) => {
     const host = (request && request.hostname) || '';
-    // Whitelist-Hosts oder (bei leerem Hostname) insecure-TLS: akzeptieren.
-    // Electron liefert hostname manchmal leer — dann trotzdem insecure erlauben.
-    if (shouldTrustCertificate(host) || (allowInsecureTls && !host)) {
-      callback(0);
-      return;
-    }
-    if (allowInsecureTls) {
+    // Whitelist, leerer Hostname oder insecure-TLS (Kukla-Standard): akzeptieren.
+    if (shouldTrustCertificate(host) || allowInsecureTls || !host) {
       callback(0);
       return;
     }
     callback(-3);
-  });
+  };
+
+  // Normale App-/Renderer-Requests
+  if (!certificateVerifyProcInstalled && session.defaultSession) {
+    certificateVerifyProcInstalled = true;
+    session.defaultSession.setCertificateVerifyProc(verifyProc);
+  }
+
+  // electron-updater nutzt eine eigene Partition ("electron-updater"), nicht defaultSession.
+  try {
+    const updaterSession =
+      (autoUpdater && typeof autoUpdater.netSession !== 'undefined' && autoUpdater.netSession)
+      || session.fromPartition('electron-updater', { cache: false });
+    if (updaterSession && typeof updaterSession.setCertificateVerifyProc === 'function') {
+      updaterSession.setCertificateVerifyProc(verifyProc);
+    }
+  } catch (e) {
+    console.warn(
+      '[laptop-updater] netSession TLS:',
+      e && e.message ? e.message : e,
+    );
+  }
 }
 
 function isInsecureTlsAllowed() {

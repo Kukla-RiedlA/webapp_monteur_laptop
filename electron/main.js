@@ -3,6 +3,13 @@ const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
+
+// Vor app.ready: electron-updater (Partition) + selbstsigniertes Dispo-HTTPS.
+// Ohne diesen Switch greift setCertificateVerifyProc auf der Updater-Session oft nicht.
+if (app.isPackaged) {
+  app.commandLine.appendSwitch('ignore-certificate-errors');
+}
+
 const { createApp, getDb, getMonteurDb, PORT, performAnlagenstammSave, flushMonteurDb } = require('./server');
 const { createImageGalleryWindowManager } = require('./lib/image-gallery-window');
 const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
