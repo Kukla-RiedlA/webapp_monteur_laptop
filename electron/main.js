@@ -17,6 +17,7 @@ const {
   startDownload,
   installUpdateNow,
   trustCertificateForUrl,
+  isInsecureTlsAllowed,
 } = require('./lib/laptop-updater');
 
 let mainWindow;
@@ -505,10 +506,12 @@ ipcMain.handle('laptop:update-install-now', async () => {
 ipcMain.handle('app:self-uninstall-remove-data', async () => scheduleSelfUninstallAndDataRemoval());
 
 app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
-  if (trustCertificateForUrl(url)) {
+  if (trustCertificateForUrl(url) || isInsecureTlsAllowed()) {
     event.preventDefault();
     callback(true);
+    return;
   }
+  callback(false);
 });
 
 app.whenReady().then(() => {

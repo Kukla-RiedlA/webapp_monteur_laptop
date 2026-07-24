@@ -184,6 +184,45 @@ function lohnFingerprint(day) {
   });
 }
 
+/** Lokal keine Monteur-Stunden (und keine Bemerkung) → Server darf hydratisieren. */
+function localDayHasMonteurHours(day) {
+  const d = day || {};
+  for (const f of calc.HOUR_FIELDS) {
+    if (calc.num(d[f]) > 0) return true;
+  }
+  if (String(d.bemerkung || '').trim()) return true;
+  return false;
+}
+
+function serverDayHasMonteurHours(day) {
+  return localDayHasMonteurHours(day);
+}
+
+function monteurHoursFingerprint(day) {
+  const d = day || {};
+  const parts = {};
+  for (const f of calc.HOUR_FIELDS) parts[f] = calc.num(d[f]);
+  parts.bemerkung = String(d.bemerkung || '');
+  return JSON.stringify(parts);
+}
+
+function copyMonteurHoursFromServer(sd, next) {
+  Object.assign(next, {
+    anw: calc.num(sd.anw),
+    montage: calc.num(sd.montage),
+    ue50: calc.num(sd.ue50),
+    ue100: calc.num(sd.ue100),
+    weg: calc.num(sd.weg),
+    urlaub: calc.num(sd.urlaub),
+    za_plus: calc.num(sd.za_plus),
+    za_minus: calc.num(sd.za_minus),
+    krank: calc.num(sd.krank),
+    arzt: calc.num(sd.arzt),
+    bemerkung: sd.bemerkung != null ? String(sd.bemerkung) : '',
+  });
+  if (sd.holiday_label) next.holiday_label = sd.holiday_label;
+}
+
 function getTechnicianName(db, technicianId) {
   try {
     const row = db.prepare('SELECT full_name, username FROM users WHERE id = ?').get(technicianId);
@@ -653,25 +692,21 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     copyLohnOverrides(sd, next);
     next.lohn_gesperrt = lock;
     if (lock) {
-      Object.assign(next, {
-        anw: sd.anw,
-        montage: sd.montage,
-        ue50: sd.ue50,
-        ue100: sd.ue100,
-        weg: sd.weg,
-        urlaub: sd.urlaub,
-        za_plus: sd.za_plus,
-        za_minus: sd.za_minus,
-        krank: sd.krank,
-        arzt: sd.arzt,
-        bemerkung: sd.bemerkung != null ? sd.bemerkung : cur.bemerkung,
-        holiday_label: sd.holiday_label || cur.holiday_label || '',
-        lohn_gesperrt: 1,
-      });
+      copyMonteurHoursFromServer(sd, next);
+      next.bemerkung = sd.bemerkung != null ? sd.bemerkung : cur.bemerkung;
+      next.holiday_label = sd.holiday_label || cur.holiday_label || '';
+      next.lohn_gesperrt = 1;
+    } else if (!localDayHasMonteurHours(cur) && serverDayHasMonteurHours(sd)) {
+      // Leere lokale Tage mit Server-/PWA-Stunden füllen (frische EXE-Installation).
+      // Bestehende lokale Entwürfe nicht überschreiben.
+      copyMonteurHoursFromServer(sd, next);
     }
     // Markiere Pull-Overrides als „incoming“, damit persist sie nicht verwirft
     next.korrekturen = next.korrekturen || {};
-    if (lohnFingerprint(next) !== lohnFingerprint(cur)) {
+    if (
+      lohnFingerprint(next) !== lohnFingerprint(cur)
+      || monteurHoursFingerprint(next) !== monteurHoursFingerprint(cur)
+    ) {
       changed = true;
     }
     byDate[sd.day_date] = next;

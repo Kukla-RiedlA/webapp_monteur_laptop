@@ -134,16 +134,22 @@ function installCertificateVerifyProc() {
   certificateVerifyProcInstalled = true;
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
     const host = (request && request.hostname) || '';
-    if (shouldTrustCertificate(host)) {
+    // Whitelist-Hosts oder (bei leerem Hostname) insecure-TLS: akzeptieren.
+    // Electron liefert hostname manchmal leer — dann trotzdem insecure erlauben.
+    if (shouldTrustCertificate(host) || (allowInsecureTls && !host)) {
       callback(0);
       return;
     }
-    if (!allowInsecureTls) {
-      callback(-3);
+    if (allowInsecureTls) {
+      callback(0);
       return;
     }
     callback(-3);
   });
+}
+
+function isInsecureTlsAllowed() {
+  return !!allowInsecureTls;
 }
 
 /** Selbstsigniertes Dispo-HTTPS (Kukla-Standard) — vor jedem Update-Check. */
@@ -447,4 +453,5 @@ module.exports = {
   readAppVersionLabel,
   formatUpdateVersionLabel,
   trustCertificateForUrl,
+  isInsecureTlsAllowed,
 };
