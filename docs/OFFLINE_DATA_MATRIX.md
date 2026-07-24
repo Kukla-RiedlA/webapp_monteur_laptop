@@ -23,28 +23,32 @@ Legende:
 | **Sync Out** | Lokale Änderungen werden bei Verbindung zu Dispo übermittelt (Push / dedizierte APIs). |
 | **Offline lesen** | UI kann aus lokaler DB / Cache bedient werden. |
 | **Offline schreiben** | Eingaben möglich; werden gequeued oder erst nach Reconnect wirksam serverseitig. |
+| **Multi-Device** | Liegt die kanonische Zwischenlage auf Dispo (sichtbar für alle Geräte des Technikers)? |
+
+**Multi-Device:** siehe [`docs/MULTI_DEVICE_LAPTOP_SYNC.md`](../../docs/MULTI_DEVICE_LAPTOP_SYNC.md) und API_CONTRACT Abschnitt 5.1b2. Parallelbetrieb erfordert für Konsistenz Netz; Offline-Schreiben bleibt erlaubt, erscheint auf Gerät B erst nach Push.
 
 ---
 
 ## Kernbereiche
 
-| Bereich | SQLite (Auszug) | Sync In | Sync Out | Offline lesen | Offline schreiben |
-|---------|-------------------|---------|----------|---------------|-------------------|
-| Aufträge / Stammdaten | `jobs`, `customers`, `job_addresses`, `job_technicians`, `job_contacts`, `job_hotel_addresses` | `sync_pull` u. a. | Status, Beschreibung, Hotel, FNs → `pending_changes` / Push | Ja (letzter Stand) | Ja (`PATCH /api/job`); Push wenn online |
-| **Auftrag annehmen** | `jobs`, Dienstreise-Ordner | optional Pull | Status `in_arbeit` | Teilweise | **Ja** (`POST /api/dienstreise/accept_offline`) |
-| **Auftrag abschließen** | Dienstreise-Ordner | `dienstreise_push` | Finish-Sync | Ja | **Ja** (defer bei Offline) |
-| **Auftrag freigeben** | `jobs` | — | `pending_changes` | Ja | **Ja** (lokal + Queue) |
-| Lokale Dateien zu Jobs | `job_files` | Download über Gateway | Upload bei Verbindung | Ja (geladene Dateien) | Teilweise (Queue) |
-| Abwesenheiten | `absences` | Pull mit Sync | `pending_changes` | Ja | Ja (Queue); update/delete still bei Fehler |
-| Abwesenheits**anfragen** | `absence_requests` | Pull; SSE live | Push / Anfragen | Ja | Ja (Queue); Entscheidung per SSE oder Pull |
-| Dienstreisen | `dienstreisen` | Sync | `dienstreise_*` Jobs | Ja | Upload lokal; Push online |
-| Kalender-Ansicht | `calendar_cache_*` | `sync_pull` / live `/api/calendar` | — | Ja (`calendar_cached`) | — |
-| Anlagenstamm-Baum | `anlagenstamm_tree_cache` | Lazy/Fetch | — | Ja nach Sync | — |
-| **Anlagenstamm (Liste/Edit)** | `anlagenstamm_local`, `pending_changes` | `sync_pull` | `sync_push` / save | Ja | Ja |
-| **Textbausteine** | `textbausteine_user_*` (**Schema vorhanden, Routen nutzen es nicht**) | **fehlt in sync_pull** | Live-Proxy | **Nein** | **Nein** — GAP-007 |
-| **Abrechnung** | `abrechnung_*_cache`, `abrechnung_outbox` | `abrechnung_refresh` | Outbox-Flush | Ja (Cache) | Ja (Outbox) |
-| **RAMS** | — | Live | Live | Nein | Nein — GAP-009 |
-| TED-Metadaten | `job_ted_index` | `sync_pull` / `dienstreise_pull` | — | Ja (Index); Datei wenn im Ordner | Pull online |
+| Bereich | SQLite (Auszug) | Sync In | Sync Out | Offline lesen | Offline schreiben | Multi-Device |
+|---------|-------------------|---------|----------|---------------|-------------------|--------------|
+| Aufträge / Stammdaten | `jobs`, `customers`, `job_addresses`, `job_technicians`, `job_contacts`, `job_hotel_addresses` | `sync_pull` u. a. | Status, Beschreibung, Hotel, FNs → `pending_changes` / Push | Ja (letzter Stand) | Ja (`PATCH /api/job`); Push wenn online | Ja (Dispo-Status global; `job_closed`-Gate) |
+| **Auftrag annehmen** | `jobs`, Dienstreise-Ordner | optional Pull | Status `in_arbeit` | Teilweise | **Ja** (`POST /api/dienstreise/accept_offline`) | Ja (idempotent über `server_id`) |
+| **Auftrag abschließen** | Dienstreise-Ordner | `dienstreise_push` | Finish-Sync | Ja | Online-Statuswechsel; lokal defer | Ja (andere Geräte read-only + „Lokale Kopie löschen“) |
+| **Auftrag freigeben** | `jobs` | — | Push dann Status `zugeteilt` | Ja | Ja (Queue); Multi-Device: Push Pflicht | Ja (Warnung bei Peer-Presence) |
+| Lokale Dateien zu Jobs | `job_files` | Download / Manifest | Kontinuierlicher Upload | Ja (geladene Dateien) | Queue + Conflict-Copy | Ja (Manifest + Hash) |
+| Abwesenheiten | `absences` | Pull mit Sync | `pending_changes` | Ja | Ja (Queue); update/delete still bei Fehler | Ja |
+| Abwesenheits**anfragen** | `absence_requests` | Pull; SSE live | Push / Anfragen | Ja | Ja (Queue); Entscheidung per SSE oder Pull | Ja |
+| Dienstreisen | `dienstreisen` | Sync | `dienstreise_*` Jobs | Ja | Upload lokal; Push online | Ja (kontinuierlich) |
+| Kalender-Ansicht | `calendar_cache_*` | `sync_pull` / live `/api/calendar` | — | Ja (`calendar_cached`) | — | Ja (Cache) |
+| Anlagenstamm-Baum | `anlagenstamm_tree_cache` | Lazy/Fetch | — | Ja nach Sync | — | Ja (Server) |
+| **Anlagenstamm (Liste/Edit)** | `anlagenstamm_local`, `pending_changes` | `sync_pull` | `sync_push` / save | Ja | Ja | Ja (dirty bleibt) |
+| **Textbausteine** | `textbausteine_user_*` (**Schema vorhanden, Routen nutzen es nicht**) | **fehlt in sync_pull** | Live-Proxy | **Nein** | **Nein** — GAP-007 | Teilweise |
+| **Abrechnung** | `abrechnung_*_cache`, `abrechnung_outbox` | `abrechnung_refresh` | Outbox-Flush | Ja (Cache) | Ja (Outbox) | Ja |
+| **RAMS** | — | Live | Live | Nein | Nein — GAP-009 | Live-only |
+| TED-Metadaten | `job_ted_index` | `sync_pull` / `dienstreise_pull` | — | Ja (Index); Datei wenn im Ordner | Pull online | Ja |
+| **Geräte / Multi-Device** | `device_id` in userData | register/heartbeat | — | — | — | Ja (`monteur_devices`) |
 
 ---
 
@@ -52,13 +56,13 @@ Legende:
 
 Speicherort Zwischenstände: `{DienstreiseOrdner}/` pro angenommenem Auftrag (`in_arbeit`). Upload beim Abschluss / `dienstreise_push`.
 
-| Protokoll | Lokale Datei | Sync In | Sync Out | Offline lesen (Formular) | Offline schreiben |
-|-----------|--------------|---------|----------|---------------------------|-------------------|
-| **Montagebericht** | `montagebericht.json` (+ PDF/DOCX lokal) | optional Dispo-Anreicherung | optional; Push bei Finish | Ja | Ja: „nur Daten“; PDF lokal (**Word/LibreOffice**); Signatur nur online |
-| **Serviceprotokoll** | `serviceprotokoll.json` (`byFab`) | Defaults optional live | PDF nur Dispo | Ja | Ja: „nur Daten“; **PDF nur online** — GAP-005 |
-| **Parameterlisten** | CSV + PDF im Ordner | — | Ingest optional (kein Outbox) | Ja | Ja lokal; Ingest queued fehlt — GAP-015 |
-| **Kontrollwiegungen** | — (nur Dispo) | Live-Proxy | Live-Proxy | Teilweise | **Nein** — GAP-006 |
-| **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein (nicht implementiert) |
+| Protokoll | Lokale Datei | Sync In | Sync Out | Offline lesen (Formular) | Offline schreiben | Multi-Device |
+|-----------|--------------|---------|----------|---------------------------|-------------------|--------------|
+| **Montagebericht** | `montagebericht.json` (+ PDF/DOCX lokal) | Draft-GET + optional Anreicherung | Draft-POST bei Save (Server-Revision) | Ja | Ja: „nur Daten“; PDF lokal; Signatur nur online | Ja (`montagebericht_draft`) |
+| **Serviceprotokoll** | `serviceprotokoll.json` (`byFab`) | Draft-GET | Draft-POST bei Save (Server-Revision) | Ja | Ja: „nur Daten“; **PDF nur online** — GAP-005 | Ja (`serviceprotokoll_draft`) |
+| **Parameterlisten** | CSV + PDF im Ordner | — | Ingest optional (kein Outbox) | Ja | Ja lokal; Ingest queued fehlt — GAP-015 | Teilweise (Datei-Manifest) |
+| **Kontrollwiegungen** | `kontrollwiegungsprotokoll.json` | Draft-GET | Draft-POST bei Save | Ja | Ja lokal + Sync | Ja (`kontrollwiegungsprotokoll_draft`) |
+| **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein (nicht implementiert) | — |
 
 **Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“).
 

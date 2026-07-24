@@ -656,6 +656,9 @@
           ', lokal';
         dbEl.title = data.db_path ? 'Pfad: ' + data.db_path : '';
       }
+      if (typeof updateMultiDeviceUiFromSyncStatus === 'function') {
+        updateMultiDeviceUiFromSyncStatus(data);
+      }
     } catch (e) {
       if (summaryEl) summaryEl.textContent = 'Sync-Status konnte nicht geladen werden.';
     }
@@ -976,7 +979,7 @@
     return String(job.status || '').trim().toLowerCase() === 'in_arbeit';
   }
 
-  /** Button „Freigeben“: lokale Daten löschen, Status zurück auf zugeteilt (Dispo + lokal, ohne Datei-Sync). */
+  /** Button „Freigeben“: Push nach Dispo, Status zugeteilt, lokaler Ordner löschen; Multi-Device-Warnung bei Peers. */
   function jobStatusAllowsReleaseJob(job) {
     if (!job || typeof job !== 'object') return false;
     return String(job.status || '').trim().toLowerCase() === 'in_arbeit';
@@ -5744,56 +5747,101 @@
 
   function releaseDienstreiseJob(jobId, triggerButton) {
     if (!jobId) return;
-    if (
-      !confirm(
-        'Auftrag freigeben?\n\nAlle lokal geladenen Dateien und der gesamte Projektordner am Laptop werden gelöscht (ohne Datei-Upload). Der Status wird in Dispo und lokal wieder auf „Zugeteilt“ gesetzt.',
-      )
-    ) {
-      return;
-    }
     var techId = getTechId();
     if (!techId) {
       alert('Monteur-ID in Einstellungen eintragen.');
       return;
     }
-    var btn = triggerButton;
-    if (btn) btn.disabled = true;
-    fetch(API_BASE + '/api/dienstreise/release_job', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Technician-Id': String(techId),
-      },
-      body: JSON.stringify({
-        job_id: jobId,
-        technician_id: techId,
-        dispoBaseUrl: getDispoBaseUrl(),
-        dispoExternalUrl: getDispoExternalUrl(),
-        dispoInternalUrl: getDispoInternalUrl(),
-        dispoUsername: getDispoUsername(),
-        dispoPassword: getDispoPassword(),
-      }),
-    })
-      .then(function (r) {
-        return r.json().then(function (data) {
-          return { ok: r.ok, data: data };
+    var proceed = function (peerWarning) {
+      var msg =
+        'Auftrag freigeben?\n\nLokale Dateien werden zuerst nach Dispo synchronisiert, danach Status „Zugeteilt“. Auf diesem Gerät wird der Projektordner gelöscht.' +
+        (peerWarning ? '\n\n' + peerWarning : '');
+      if (!confirm(msg)) return;
+      var btn = triggerButton;
+      if (btn) btn.disabled = true;
+      fetch(API_BASE + '/api/dienstreise/release_job', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Technician-Id': String(techId),
+        },
+        body: JSON.stringify({
+          job_id: jobId,
+          technician_id: techId,
+          dispoBaseUrl: getDispoBaseUrl(),
+          dispoExternalUrl: getDispoExternalUrl(),
+          dispoInternalUrl: getDispoInternalUrl(),
+          dispoUsername: getDispoUsername(),
+          dispoPassword: getDispoPassword(),
+          confirm_peers: true,
+        }),
+      })
+        .then(function (r) {
+          return r.json().then(function (data) {
+            return { ok: r.ok, data: data };
+          });
+        })
+        .then(function (res) {
+          if (!res.ok || !res.data || !res.data.ok) {
+            throw new Error((res.data && res.data.error) || 'Freigabe fehlgeschlagen.');
+          }
+          if (jobIdsEqual(selectedJobIdOnDienstreisePage, jobId)) {
+            selectedJobIdOnDienstreisePage = null;
+            if (typeof loadDienstreiseExplorer === 'function') {
+              loadDienstreiseExplorer(jobId, '', 'modal', { skipAutoPull: true });
+              loadDienstreiseExplorer(jobId, '', 'start', { skipAutoPull: true });
+            }
+          }
+          if (typeof loadJobsAndAbsences === 'function') loadJobsAndAbsences();
+          if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
+          alert(res.data.warning ? 'Freigegeben.\n\n' + res.data.warning : 'Auftrag freigegeben.');
+        })
+        .catch(function (e) {
+          alert(e.message || 'Freigabe fehlgeschlagen.');
+        })
+        .finally(function () {
+          if (btn) btn.disabled = false;
         });
+    };
+    try {
+      // Optional: Presence-Warnung
+      fetch(API_BASE + '/api/device_heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          technician_id: techId,
+          dispoBaseUrl: getDispoBaseUrl(),
+          dispoUsername: getDispoUsername(),
+          dispoPassword: getDispoPassword(),
+          job_id: jobId,
+        }),
       })
-      .then(function (res) {
-        if (!res.ok || !res.data || !res.data.ok) {
-          throw new Error((res.data && res.data.error) || 'Freigabe fehlgeschlagen.');
-        }
-        if (jobIdsEqual(selectedJobIdOnDienstreisePage, jobId)) {
-          loadDienstreiseExplorer(jobId, '', 'modal', { skipAutoPull: true });
-          loadDienstreiseExplorer(jobId, '', 'start', { skipAutoPull: true });
-        }
-        if (typeof loadJobsAndAbsences === 'function') loadJobsAndAbsences();
-        loadDienstreiseList();
-      })
-      .catch(function (err) {
-        if (btn) btn.disabled = false;
-        alert(err && err.message ? err.message : 'Freigabe fehlgeschlagen.');
-      });
+        .then(function (r) {
+          return r.json().catch(function () {
+            return {};
+          });
+        })
+        .then(function (hb) {
+          var peers = (hb && hb.peers_on_job) || [];
+          var warn = '';
+          if (peers.length) {
+            warn =
+              'Achtung: Auftrag ist auf anderem Gerät noch geöffnet (' +
+              peers
+                .map(function (p) {
+                  return p.display_name || p.device_id;
+                })
+                .join(', ') +
+              '). Freigeben setzt den Status global zurück.';
+          }
+          proceed(warn);
+        })
+        .catch(function () {
+          proceed('');
+        });
+    } catch (_) {
+      proceed('');
+    }
   }
 
   async function loadOpenJobs() {
@@ -6297,9 +6345,11 @@
       }
       if (st.pending_changes > 0) {
         setConnectionBadge('online', 'Online — ' + st.pending_changes + ' Änderung(en) ausstehend');
+        updateMultiDeviceUiFromSyncStatus(st);
         return;
       }
       setConnectionBadge('online');
+      updateMultiDeviceUiFromSyncStatus(st);
     } catch (_) {
       setConnectionBadge(
         connectionUiState === 'offline' || connectionUiState === 'local' ? connectionUiState : 'degraded',
@@ -6308,6 +6358,279 @@
     }
     if (isStartViewVisible() && typeof loadStartActiveJob === 'function') {
       loadStartActiveJob();
+    }
+  }
+
+  var multiDeviceBannerDismissedKey = '';
+  var multiDevicePendingCleanupJobId = null;
+
+  function updateMultiDeviceUiFromSyncStatus(st) {
+    if (!st || typeof st !== 'object') return;
+    var banner = document.getElementById('multiDeviceBanner');
+    var textEl = document.getElementById('multiDeviceBannerText');
+    var btnDel = document.getElementById('btnMultiDeviceDeleteLocal');
+    if (!banner || !textEl) return;
+    var cleanup = Array.isArray(st.jobs_pending_local_cleanup) ? st.jobs_pending_local_cleanup : [];
+    var conflicts = Array.isArray(st.conflicts) ? st.conflicts : [];
+    var peerHint =
+      st.peer_count != null && Number(st.peer_count) > 0
+        ? 'Weitere Geräte online: ' + st.peer_count + '. '
+        : '';
+    if (cleanup.length) {
+      var item = cleanup[0];
+      multiDevicePendingCleanupJobId = item.local_job_id;
+      var key = 'cleanup:' + item.local_job_id + ':' + (item.status_on_server || '');
+      if (multiDeviceBannerDismissedKey === key) {
+        banner.hidden = true;
+        return;
+      }
+      var reasonLabel =
+        item.reason === 'released_remote'
+          ? 'auf einem anderen Gerät freigegeben (zugeteilt)'
+          : 'auf einem anderen Gerät abgeschlossen';
+      var name = item.customer_name ? String(item.customer_name) : 'Auftrag #' + item.local_job_id;
+      textEl.textContent =
+        peerHint +
+        name +
+        ' wurde ' +
+        reasonLabel +
+        '. Schreiben ist gesperrt. Lokale Kopie bei Bedarf manuell löschen.';
+      if (btnDel) btnDel.hidden = false;
+      banner.hidden = false;
+      return;
+    }
+    if (conflicts.length) {
+      var ckey = 'conflict:' + conflicts[0].id;
+      if (multiDeviceBannerDismissedKey === ckey) {
+        banner.hidden = true;
+        return;
+      }
+      multiDevicePendingCleanupJobId = null;
+      textEl.textContent =
+        peerHint +
+        'Sync-Konflikt: ' +
+        (conflicts[0].rel_path || 'Datei') +
+        ' — lokale Kopie als .conflict-* gesichert, Server-Stand übernommen.';
+      if (btnDel) btnDel.hidden = true;
+      banner.hidden = false;
+      return;
+    }
+    multiDevicePendingCleanupJobId = null;
+    if (peerHint) {
+      textEl.textContent = peerHint.trim();
+      if (btnDel) btnDel.hidden = true;
+      banner.hidden = false;
+      return;
+    }
+    banner.hidden = true;
+  }
+
+  async function deletePendingLocalCopy() {
+    if (!multiDevicePendingCleanupJobId) return;
+    var jobId = multiDevicePendingCleanupJobId;
+    if (!confirm('Lokale Dienstreise-Kopie für Auftrag ' + jobId + ' wirklich löschen?')) return;
+    try {
+      var r = await fetch(API_BASE + '/api/dienstreise/delete_local_copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId }),
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        alert(data.error || 'Löschen fehlgeschlagen.');
+        return;
+      }
+      multiDevicePendingCleanupJobId = null;
+      var banner = document.getElementById('multiDeviceBanner');
+      if (banner) banner.hidden = true;
+      if (typeof loadJobsAndAbsences === 'function') loadJobsAndAbsences();
+    } catch (e) {
+      alert(e.message || 'Löschen fehlgeschlagen.');
+    }
+  }
+
+  async function registerAndHeartbeatDevice() {
+    var auth = buildDispoSyncAuthPayload();
+    if (!isValidDispoSyncAuth(auth)) return;
+    try {
+      await fetch(API_BASE + '/api/device_register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          technician_id: auth.technicianId,
+          dispoBaseUrl: auth.baseUrl,
+          dispoUsername: auth.serverUsername,
+          dispoPassword: auth.serverPassword,
+        }),
+      });
+      var hb = await fetch(API_BASE + '/api/device_heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          technician_id: auth.technicianId,
+          dispoBaseUrl: auth.baseUrl,
+          dispoUsername: auth.serverUsername,
+          dispoPassword: auth.serverPassword,
+        }),
+      });
+      var hbData = await hb.json().catch(function () { return {}; });
+      if (hbData && hbData.peer_count != null) {
+        updateMultiDeviceUiFromSyncStatus({ peer_count: hbData.peer_count, jobs_pending_local_cleanup: [], conflicts: [] });
+      }
+    } catch (_) {}
+  }
+
+  async function refreshMonteurDevicesList() {
+    var list = document.getElementById('monteurDevicesList');
+    var selfHint = document.getElementById('selfDeviceIdHint');
+    var auth = buildDispoSyncAuthPayload();
+    if (!list) return;
+    if (!isValidDispoSyncAuth(auth)) {
+      list.innerHTML = '<span class="empty">Dispo-Login nötig.</span>';
+      return;
+    }
+    list.innerHTML = '<span class="empty">Lade…</span>';
+    try {
+      var q =
+        '?technician_id=' +
+        encodeURIComponent(auth.technicianId) +
+        '&base_url=' +
+        encodeURIComponent(auth.baseUrl) +
+        '&dispoUsername=' +
+        encodeURIComponent(auth.serverUsername || '') +
+        '&dispoPassword=' +
+        encodeURIComponent(auth.serverPassword || '');
+      var r = await fetch(API_BASE + '/api/devices' + q);
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        list.innerHTML = '<span class="empty">' + (data.error || 'Geräteliste fehlgeschlagen') + '</span>';
+        return;
+      }
+      if (selfHint) selfHint.textContent = 'Dieses Gerät: ' + (data.self_device_id || '—');
+      var devices = data.devices || [];
+      if (!devices.length) {
+        list.innerHTML = '<span class="empty">Keine Geräte registriert.</span>';
+        return;
+      }
+      list.innerHTML = devices
+        .map(function (d) {
+          var isSelf = d.device_id === data.self_device_id;
+          var revoked = !!d.revoked_at;
+          var label =
+            (d.display_name || d.device_id) +
+            (isSelf ? ' (dieses Gerät)' : '') +
+            (revoked ? ' — widerrufen' : '') +
+            (d.last_seen_at ? ' · zuletzt ' + d.last_seen_at : '');
+          var btn =
+            !isSelf && !revoked
+              ? '<button type="button" class="btn btn-ghost btn-revoke-device" data-device-id="' +
+                String(d.device_id).replace(/"/g, '') +
+                '">Widerrufen</button>'
+              : '';
+          return (
+            '<div class="monteur-device-row' +
+            (isSelf ? ' self' : '') +
+            '"><span>' +
+            label +
+            '</span>' +
+            btn +
+            '</div>'
+          );
+        })
+        .join('');
+      list.querySelectorAll('.btn-revoke-device').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          var did = btn.getAttribute('data-device-id');
+          if (!did || !confirm('Gerät wirklich widerrufen? Es kann danach nicht mehr syncen.')) return;
+          var rr = await fetch(API_BASE + '/api/device_revoke', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              technician_id: auth.technicianId,
+              device_id: did,
+              dispoBaseUrl: auth.baseUrl,
+              dispoUsername: auth.serverUsername,
+              dispoPassword: auth.serverPassword,
+            }),
+          });
+          var rd = await rr.json().catch(function () { return {}; });
+          if (!rr.ok || !rd.ok) alert(rd.error || 'Widerruf fehlgeschlagen.');
+          refreshMonteurDevicesList();
+        });
+      });
+    } catch (e) {
+      list.innerHTML = '<span class="empty">' + (e.message || 'Fehler') + '</span>';
+    }
+  }
+
+  async function runDeviceBootstrap() {
+    var hint = document.getElementById('deviceBootstrapHint');
+    var est = document.getElementById('deviceBootstrapEstimate');
+    var auth = buildDispoSyncAuthPayload();
+    if (!isValidDispoSyncAuth(auth)) {
+      if (hint) hint.textContent = 'Dispo-Login nötig.';
+      return;
+    }
+    if (hint) hint.textContent = 'Schätze Speicher…';
+    try {
+      var er = await fetch(API_BASE + '/api/device_bootstrap/estimate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          technician_id: auth.technicianId,
+          dispoBaseUrl: auth.baseUrl,
+          dispoUsername: auth.serverUsername,
+          dispoPassword: auth.serverPassword,
+        }),
+      });
+      var ed = await er.json().catch(function () { return {}; });
+      if (est && ed.ok) {
+        est.textContent =
+          'Geschätzt: ' +
+          (ed.total_human || '0 B') +
+          ' für ' +
+          (ed.jobs ? ed.jobs.length : 0) +
+          ' Auftrag/Aufträge (nur physischer Tree, Union lazy).';
+      }
+      if (!ed.ok) {
+        if (hint) hint.textContent = ed.error || 'Schätzung fehlgeschlagen';
+        return;
+      }
+      if (
+        !confirm(
+          'Bootstrap starten?\nGeschätzte Download-Menge: ' +
+            (ed.total_human || '?') +
+            '\n(Nur physische Projektordner.)',
+        )
+      ) {
+        if (hint) hint.textContent = 'Abgebrochen.';
+        return;
+      }
+      if (hint) hint.textContent = 'Bootstrap läuft…';
+      var br = await fetch(API_BASE + '/api/device_bootstrap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          technician_id: auth.technicianId,
+          dispoBaseUrl: auth.baseUrl,
+          dispoUsername: auth.serverUsername,
+          dispoPassword: auth.serverPassword,
+          baseUrl: auth.baseUrl,
+          serverUsername: auth.serverUsername,
+          serverPassword: auth.serverPassword,
+        }),
+      });
+      var bd = await br.json().catch(function () { return {}; });
+      if (!br.ok || !bd.ok) {
+        if (hint) hint.textContent = bd.error || 'Bootstrap fehlgeschlagen';
+        return;
+      }
+      if (hint) {
+        hint.textContent =
+          'Gestartet: ' + ((bd.enqueued && bd.enqueued.length) || 0) + ' Pull-Job(s). Fortschritt in der Sync-Anzeige.';
+      }
+    } catch (e) {
+      if (hint) hint.textContent = e.message || 'Fehler';
     }
   }
 
@@ -6648,6 +6971,9 @@
         var syncBase = auth.baseUrl;
         if (blockingSync) {
           setConnectionBadge('online_syncing', 'Synchronisiere mit Dispo…');
+          try {
+            await registerAndHeartbeatDevice();
+          } catch (_) {}
           var syncProblems = await runDispoPushPull(auth, range, {
             connectedBaseFallback: connectedBase,
             forceAnlagenstammFull: opts.forceAnlagenstammFull === true,
@@ -7309,6 +7635,34 @@
     });
   }
 
+  var btnDeviceBootstrap = document.getElementById('btnDeviceBootstrap');
+  if (btnDeviceBootstrap) {
+    btnDeviceBootstrap.addEventListener('click', function () {
+      runDeviceBootstrap();
+    });
+  }
+  var btnRefreshDevices = document.getElementById('btnRefreshDevices');
+  if (btnRefreshDevices) {
+    btnRefreshDevices.addEventListener('click', function () {
+      refreshMonteurDevicesList();
+    });
+  }
+  var btnMultiDeviceDeleteLocal = document.getElementById('btnMultiDeviceDeleteLocal');
+  if (btnMultiDeviceDeleteLocal) {
+    btnMultiDeviceDeleteLocal.addEventListener('click', function () {
+      deletePendingLocalCopy();
+    });
+  }
+  var btnMultiDeviceDismiss = document.getElementById('btnMultiDeviceDismiss');
+  if (btnMultiDeviceDismiss) {
+    btnMultiDeviceDismiss.addEventListener('click', function () {
+      var banner = document.getElementById('multiDeviceBanner');
+      if (banner) banner.hidden = true;
+      multiDeviceBannerDismissedKey =
+        'dismiss:' + Date.now() + ':' + (multiDevicePendingCleanupJobId || '');
+    });
+  }
+
   document.getElementById('btnSyncNow').addEventListener('click', function () {
     var hint = document.getElementById('syncNowHint');
     var techId = getTechId();
@@ -7343,6 +7697,7 @@
         startSyncInterval();
         hint.textContent = 'Fertig.';
         loadSettingsSyncStatus().catch(function () {});
+        refreshMonteurDevicesList().catch(function () {});
         clearTimeout(hint._syncHide);
         hint._syncHide = setTimeout(function () {
           hint.textContent = '';
@@ -9959,6 +10314,7 @@
       refreshMonteurProfileHintForSettings();
       loadSettingsSyncStatus().catch(function () {});
       refreshServerMaintenanceZone().catch(function () {});
+      refreshMonteurDevicesList().catch(function () {});
       return;
     }
     if (name === 'dienstreise') {

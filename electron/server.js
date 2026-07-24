@@ -1140,6 +1140,8 @@ function createApp(db) {
   const { registerAnlagenstammPhpRoutes } = require('./lib/anlagenstamm-php-routes');
   const { registerAbrechnungPhpRoutes } = require('./lib/abrechnung-php-routes');
   const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession } = require('./lib/monteur-dispo-web-routes');
+  const { registerMultiDeviceRoutes } = require('./lib/multi-device-routes');
+  let multiDeviceApi = null;
   registerAnlagenstammPhpRoutes(app, {
     db,
     getTechnicianId,
@@ -1191,6 +1193,28 @@ function createApp(db) {
   registerMonteurDispoWebRoutes(app, { db, dbDir: DB_DIR });
   app.use(express.json({ limit: '50mb' }));
 
+  multiDeviceApi = registerMultiDeviceRoutes({
+    app,
+    db,
+    DB_DIR,
+    save: () => save(),
+    fetchWithTimeout,
+    getTechnicianId,
+    resolveDienstreiseReiseDirForJob,
+    cleanupDienstreiseReiseDir: (...args) => cleanupDienstreiseReiseDir(...args),
+    listProtectedPaths,
+    bgJobs: null, // gesetzt nach createBackgroundJobService
+    getBgJobs: () => bgJobs,
+    getAppVersion: () => {
+      try {
+        const v = require('./version.json');
+        return (v && (v.version || v.label)) || '';
+      } catch (_) {
+        return '';
+      }
+    },
+  });
+
   /** Schreibzugriff blockiert für „angelegt“ (inkl. Legacy „geplant“) und „abgerechnet“. */
   function localJobWriteBlocked(status) {
     const s = String(status || '').toLowerCase();
@@ -1199,6 +1223,13 @@ function createApp(db) {
     }
     if (s === 'abgerechnet') {
       return { error: 'Auftrag ist abgerechnet – Bearbeitung in der App nicht erlaubt.', status: 403 };
+    }
+    if (s === 'erledigt') {
+      return {
+        error: 'Auftrag ist erledigt – nur noch Lesen. Lokale Kopie ggf. über „Lokale Kopie löschen“ entfernen.',
+        status: 409,
+        code: 'job_closed',
+      };
     }
     return null;
   }
@@ -1845,6 +1876,39 @@ function createApp(db) {
         new Error(resolvedBase.error || 'Keine erreichbare Dispo-URL für Freigeben.'),
         { httpStatus: 502 },
       );
+    }
+
+    // Multi-Device: vor Status-Reset Dateien/Drafts pushen (kein silent fastNoUpload).
+    try {
+      await syncDienstreiseFoldersToDispo(
+        lid,
+        dispoBaseUrl,
+        technicianId,
+        dispoUsername,
+        dispoPassword,
+        { externalUrl: dispoOpts && dispoOpts.externalUrl, internalUrl: dispoOpts && dispoOpts.internalUrl },
+      );
+    } catch (pushErr) {
+      throw Object.assign(
+        new Error(
+          (pushErr && pushErr.message) ||
+            'Datei-Sync vor Freigeben fehlgeschlagen. Freigabe abgebrochen.',
+        ),
+        { httpStatus: 502 },
+      );
+    }
+
+    // Presence-Heartbeat für Peer-Warnungen auf anderen Geräten.
+    if (multiDeviceApi && multiDeviceApi.heartbeatOnDispo) {
+      try {
+        await multiDeviceApi.heartbeatOnDispo({
+          dispoBaseUrl,
+          technicianId,
+          username: dispoUsername,
+          password: dispoPassword,
+          serverJobId: row.server_id,
+        });
+      } catch (_) {}
     }
 
     const srvId = row.server_id != null ? row.server_id : lid;
@@ -7314,6 +7378,39 @@ function createApp(db) {
         projekt: projektPflicht,
       }, null, 2));
 
+      if (dispoBaseUrl && hasServerJobId && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
+        try {
+          await multiDeviceApi.pushJsonDraft({
+            dispoBaseUrl,
+            endpoint: '/dispo_api/api/montagebericht_draft.php',
+            technicianId,
+            serverJobId,
+            localJobId,
+            filePath: montageberichtDataPath,
+            username: body.dispoUsername || body.serverUsername,
+            password: body.dispoPassword ?? body.serverPassword,
+          });
+          if (bgJobs) {
+            const dedupeKey = 'dienstreise_push:' + localJobId + ':draft';
+            bgJobs.enqueue(
+              'dienstreise_push',
+              {
+                job_id: localJobId,
+                technicianId,
+                technician_id: technicianId,
+                dispoBaseUrl,
+                dispoUsername: body.dispoUsername || body.serverUsername,
+                dispoPassword: body.dispoPassword ?? body.serverPassword,
+              },
+              dedupeKey,
+            );
+            bgJobs.kick();
+          }
+        } catch (draftErr) {
+          console.warn('[montagebericht] draft push:', draftErr && draftErr.message ? draftErr.message : draftErr);
+        }
+      }
+
       let syncWarning = null;
       const appendSyncWarning = (msg) => {
         syncWarning = syncWarning ? `${syncWarning}\n\n${msg}` : msg;
@@ -7655,6 +7752,23 @@ function createApp(db) {
         savedPdf = pdfPaths.rel;
         protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
         save();
+        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
+          const jobRow = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+          const serverJobId = jobRow && jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
+          if (serverJobId > 0) {
+            const kwPath = path.join(reiseDir, 'kontrollwiegungsprotokoll.json');
+            await multiDeviceApi.pushJsonDraft({
+              dispoBaseUrl,
+              endpoint: '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
+              technicianId,
+              serverJobId,
+              localJobId,
+              filePath: kwPath,
+              username: body.serverUsername || body.dispoUsername,
+              password: body.serverPassword ?? body.dispoPassword,
+            });
+          }
+        }
       }
       let protokollId = record ? record.protokoll_id : 'local:' + Date.now();
       let deferred = false;
@@ -7850,15 +7964,21 @@ function createApp(db) {
 
   async function fetchServiceprotokollDraftFromDispo(dispoBaseUrl, serverJobId, technicianId, authHeader) {
     const base = String(dispoBaseUrl || '').trim().replace(/\/$/, '');
-    if (!base || !serverJobId || !technicianId) return { byFab: {} };
+    if (!base || !serverJobId || !technicianId) return { store: { byFab: {} }, revision: 0 };
     const url = base + '/dispo_api/api/serviceprotokoll_draft.php?job_id=' + encodeURIComponent(serverJobId) +
       '&technician_id=' + encodeURIComponent(technicianId);
     try {
       const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId), ...(authHeader || {}) } });
       const data = await r.json().catch(() => ({}));
-      if (r.ok && data.ok && data.store && data.store.byFab) return data.store;
+      if (r.ok && data.ok && data.store && data.store.byFab) {
+        return {
+          store: data.store,
+          revision: parseInt(data.revision, 10) || 0,
+          server_updated_at: data.server_updated_at || null,
+        };
+      }
     } catch (_) { /* optional */ }
-    return { byFab: {} };
+    return { store: { byFab: {} }, revision: 0 };
   }
 
   async function syncServiceprotokollStoreWithDispo(reiseDir, technicianId, serverJobId, dispoBaseUrl, authHeader) {
@@ -7866,23 +7986,94 @@ function createApp(db) {
     if (!base || !serverJobId || !technicianId) {
       return readServiceprotokollStore(reiseDir);
     }
+    const localPath = serviceprotokollJsonPath(reiseDir);
+    let localRevision = 0;
+    try {
+      if (fs.existsSync(localPath)) {
+        const raw = JSON.parse(fs.readFileSync(localPath, 'utf8'));
+        localRevision = parseInt(raw && raw.revision, 10) || 0;
+      }
+    } catch (_) {}
     const local = readServiceprotokollStore(reiseDir);
-    const remote = await fetchServiceprotokollDraftFromDispo(base, serverJobId, technicianId, authHeader);
+    const remoteMeta = await fetchServiceprotokollDraftFromDispo(base, serverJobId, technicianId, authHeader);
+    const remote = remoteMeta.store || { byFab: {} };
     const merged = mergeServiceprotokollDraftStores(local, remote);
     const localJson = JSON.stringify(local);
     const remoteJson = JSON.stringify(remote);
     const mergedJson = JSON.stringify(merged);
     if (mergedJson !== localJson) {
-      writeFileWithRetry(serviceprotokollJsonPath(reiseDir), JSON.stringify(merged, null, 2));
+      writeFileWithRetry(
+        localPath,
+        JSON.stringify(
+          Object.assign({}, merged, {
+            schema_version: 1,
+            revision: remoteMeta.revision || localRevision,
+            server_updated_at: remoteMeta.server_updated_at || new Date().toISOString(),
+          }),
+          null,
+          2,
+        ),
+      );
     }
     if (mergedJson !== remoteJson) {
       try {
         const postUrl = base + '/dispo_api/api/serviceprotokoll_draft.php';
-        await fetchWithTimeout(postUrl, {
+        const deviceId =
+          multiDeviceApi && multiDeviceApi.deviceId ? multiDeviceApi.deviceId() : undefined;
+        const postRes = await fetchWithTimeout(postUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authHeader || {}) },
-          body: JSON.stringify({ technician_id: technicianId, job_id: serverJobId, store: merged }),
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Technician-Id': String(technicianId),
+            ...(deviceId ? { 'X-Device-Id': deviceId } : {}),
+            ...(authHeader || {}),
+          },
+          body: JSON.stringify({
+            technician_id: technicianId,
+            job_id: serverJobId,
+            store: merged,
+            base_revision: remoteMeta.revision || localRevision,
+            device_id: deviceId,
+          }),
         });
+        const postData = await postRes.json().catch(() => ({}));
+        if (postRes.status === 409 && postData.code === 'job_closed') {
+          return merged;
+        }
+        if (postRes.status === 409 && postData.code === 'conflict' && multiDeviceApi) {
+          try {
+            const { writeConflictCopy } = require('./lib/multi-device-sync');
+            writeConflictCopy(localPath, deviceId);
+          } catch (_) {}
+          if (postData.store) {
+            writeFileWithRetry(
+              localPath,
+              JSON.stringify(
+                Object.assign({}, postData.store, {
+                  schema_version: 1,
+                  revision: postData.revision || 0,
+                  server_updated_at: postData.server_updated_at || null,
+                }),
+                null,
+                2,
+              ),
+            );
+            return postData.store;
+          }
+        } else if (postRes.ok && postData.ok && postData.revision != null) {
+          writeFileWithRetry(
+            localPath,
+            JSON.stringify(
+              Object.assign({}, postData.store || merged, {
+                schema_version: 1,
+                revision: postData.revision,
+                server_updated_at: postData.server_updated_at || null,
+              }),
+              null,
+              2,
+            ),
+          );
+        }
       } catch (_) { /* optional */ }
     }
     return merged;
@@ -11732,9 +11923,20 @@ function createApp(db) {
       const dbStats = getLocalDbStats();
       const dienstreiseStats = getDienstreiseFilesStats();
       const lastJobsSync = lastPull && lastPull.updated_at ? lastPull.updated_at : null;
+      const deviceId =
+        multiDeviceApi && multiDeviceApi.deviceId ? multiDeviceApi.deviceId() : null;
+      const conflicts =
+        multiDeviceApi && multiDeviceApi.listRecentConflicts
+          ? multiDeviceApi.listRecentConflicts(20)
+          : [];
+      const pendingCleanup =
+        multiDeviceApi && multiDeviceApi.listPendingLocalCleanup
+          ? multiDeviceApi.listPendingLocalCleanup()
+          : [];
       return res.json({
         ok: true,
         technician_id: technicianId,
+        device_id: deviceId,
         last_sync_pull: lastPull || null,
         last_jobs_sync: lastJobsSync,
         active_jobs: running || [],
@@ -11752,6 +11954,9 @@ function createApp(db) {
         dienstreise_files_cache_human: dienstreiseStats.human,
         dienstreise_files_configured: dienstreiseStats.configured,
         dienstreise_base_path: dienstreiseStats.base_path || null,
+        conflicts,
+        jobs_pending_local_cleanup: pendingCleanup,
+        peer_count: null,
       });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
@@ -13806,11 +14011,45 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const status = KNOWN.has(rawSt) ? rawSt : 'angelegt';
   const dateNotFixed = Number(j.date_not_fixed) === 1 ? 1 : 0;
   if (existing) {
+    const prevRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(existing.id);
+    const prevSt = String((prevRow && prevRow.status) || '').trim().toLowerCase();
     const fabForLocal = mergeFabForJobPull(db, existing.id, j.fabrikationsnummern);
     db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, date_not_fixed = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
       j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, fabForLocal, j.eap_nummer || null, j.bestellnummer || null, existing.id
     );
     clearSupersededPendingJobStatusOnPull(db, existing.id, status);
+    if (
+      prevSt === 'in_arbeit' &&
+      (status === 'erledigt' || status === 'zugeteilt' || status === 'abgerechnet')
+    ) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS jobs_pending_local_cleanup (
+            local_job_id INTEGER PRIMARY KEY,
+            server_job_id INTEGER,
+            reason TEXT NOT NULL,
+            status_on_server TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+          );
+        `);
+        db.prepare(
+          `INSERT INTO jobs_pending_local_cleanup (local_job_id, server_job_id, reason, status_on_server, created_at)
+           VALUES (?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(local_job_id) DO UPDATE SET
+             server_job_id = excluded.server_job_id,
+             reason = excluded.reason,
+             status_on_server = excluded.status_on_server,
+             created_at = datetime('now')`,
+        ).run(
+          existing.id,
+          id,
+          status === 'zugeteilt' ? 'released_remote' : 'closed_remote',
+          status,
+        );
+      } catch (_) {
+        /* ignore */
+      }
+    }
     if (j.street != null) insertOrUpdateJobAddress(db, existing.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, existing.id, j);
     const dispCountUpd = Number(j.dispo_jt_count);
