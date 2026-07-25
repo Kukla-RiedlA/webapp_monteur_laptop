@@ -1547,7 +1547,7 @@
       var nodeId = acceptOfflineNodeId(fab, rel);
       if (nodeMeta) nodeMeta[nodeId] = { fab: fab, rel: rel, kind: kind, key: key };
       var pad = 0.35 + Math.min(level, 8) * 0.85;
-      var icon = isDir ? '📁' : '📄';
+      var icon = windowsStyleFsIconHtml(node.name || rel, isDir);
       if (isTed) {
         html +=
           '<div class="accept-offline-row muted" style="margin-left:' +
@@ -2459,7 +2459,9 @@
       });
   }
 
-  async function loadStartActiveJob() {
+  async function loadStartActiveJob(opts) {
+    opts = opts || {};
+    var soft = opts.soft === true;
     var titleEl = document.getElementById('startActiveJobTitle');
     if (!titleEl) return;
     var techId = getTechId();
@@ -2468,7 +2470,10 @@
       titleEl.innerHTML = '<span class="empty">Monteur-ID in Einstellungen eintragen.</span>';
       return;
     }
-    titleEl.innerHTML = '<span class="empty">Wird geladen…</span>';
+    // Soft (z. B. nach Sync): bestehenden Auftrag stehen lassen — kein „Wird geladen“-Flackern.
+    if (!soft || !startPageActiveJobSnapshot) {
+      if (!soft) titleEl.innerHTML = '<span class="empty">Wird geladen…</span>';
+    }
     var range = getSyncDateRange();
     try {
       var res = await fetch(
@@ -2491,7 +2496,9 @@
       });
       renderStartActiveJob(pickStartActiveJob(jobs));
     } catch (e) {
-      titleEl.innerHTML = '<span class="empty">Aufträge nicht lesbar: ' + escapeHtml(e.message) + '</span>';
+      if (!soft || !startPageActiveJobSnapshot) {
+        titleEl.innerHTML = '<span class="empty">Aufträge nicht lesbar: ' + escapeHtml(e.message) + '</span>';
+      }
     }
   }
 
@@ -2945,19 +2952,15 @@
         var tableNeedsRebuild =
           prevRows.length !== nextRows.length ||
           prevFns !== nextFns;
-        if (
-          jobIdsEqual(jobDetailsJobId, jobId) &&
-          tableNeedsRebuild
-        ) {
+        window.currentProjektdatenJob = job;
+        if (!jobIdsEqual(jobDetailsJobId, jobId)) return true;
+        window.currentProjektdatenLeistungRows = nextRows;
+        if (tableNeedsRebuild) {
           showProjektdatenJob(job, { skipExplorerReload: true, skipDeferredLoads: true });
           return true;
         }
-        window.currentProjektdatenJob = job;
-        if (jobIdsEqual(jobDetailsJobId, jobId)) {
-          window.currentProjektdatenLeistungRows = nextRows;
-          refreshProjektdatenLeistungTableFromRows();
-          updateProjektdatenHeadingMeta(job);
-        }
+        refreshProjektdatenLeistungTableFromRows();
+        updateProjektdatenHeadingMeta(job);
         return true;
       }
       showJob(job);
@@ -3368,13 +3371,14 @@
     'tacho', 'elektronik', 'material', 'position', 'geliefert_ueber', 'projekt', 'bemerkungen'
   ];
 
-  function mergeLeistungRowWithAnlagenstamm(row, st) {
+  function mergeLeistungRowWithAnlagenstamm(row, st, opts) {
     if (!row || !st) return row;
+    var stammWins = !!(opts && opts.stammWins);
     var out = Object.assign({}, row);
     ANLAGE_DETAIL_STAMM_KEYS.forEach(function (key) {
       var stVal = sanitizeLeistungField(st[key]);
       if (!stVal) return;
-      if (!sanitizeLeistungField(out[key])) out[key] = stVal;
+      if (stammWins || !sanitizeLeistungField(out[key])) out[key] = stVal;
     });
     return out;
   }
@@ -6286,11 +6290,13 @@
     }
     setConnectionBadge('local', 'Lokale Daten — Sync im Hintergrund');
     localListsRefreshAt = Date.now();
+    // force = Nach-Sync: Soft-Refresh (nur geänderte Daten, kein Leer-Flackern).
+    var soft = force === true;
     return Promise.all([
       loadJobsAndAbsences(),
-      loadStartActiveJob(),
-      loadCalendarMonth().catch(function () {}),
-      typeof loadDienstreiseList === 'function' ? Promise.resolve(loadDienstreiseList()) : Promise.resolve(),
+      loadStartActiveJob({ soft: soft }),
+      loadCalendarMonth({ soft: soft }).catch(function () {}),
+      typeof loadDienstreiseList === 'function' ? Promise.resolve(loadDienstreiseList({ soft: true })) : Promise.resolve(),
     ]).then(function () {
       if (force) localListsRefreshAt = 0;
     });
@@ -6301,9 +6307,9 @@
     if (!force && now - localListsRefreshAt < LOCAL_LISTS_REFRESH_MS) return;
     localListsRefreshAt = now;
     loadJobsAndAbsences();
-    if (isStartViewVisible()) loadStartActiveJob();
-    loadCalendarMonth().catch(function () {});
-    if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
+    if (isStartViewVisible()) loadStartActiveJob({ soft: true });
+    loadCalendarMonth({ soft: true }).catch(function () {});
+    if (typeof loadDienstreiseList === 'function') loadDienstreiseList({ soft: true });
   }
 
   var backgroundDispoSyncInFlight = null;
@@ -6362,7 +6368,7 @@
       );
     }
     if (isStartViewVisible() && typeof loadStartActiveJob === 'function') {
-      loadStartActiveJob();
+      loadStartActiveJob({ soft: true });
     }
   }
 
@@ -8261,14 +8267,14 @@
     rows.forEach(function (r) {
       var e = r.entry;
       var levelClass = r.level > 0 ? ' level-' + Math.min(r.level, 6) : '';
-      var icon = e.isDirectory ? '📁' : '📄';
+      var icon = windowsStyleFsIconHtml(e.name, !!e.isDirectory);
       var sizeStr = e.isDirectory ? '' : formatFileSize(e.size);
       var mtimeStr = formatFileDate(e.mtime);
       var isOpen = e.isDirectory && expanded[e.relativePath];
       var toggle = e.isDirectory ? ('<span class="archiv-folder-toggle" data-rel="' + escapeHtml(e.relativePath || '') + '">' + (isOpen ? '▼' : '▶') + '</span>') : '<span class="archiv-folder-toggle empty"></span>';
       var openBtn = e.isDirectory ? '' : '<button type="button" class="btn btn-ghost archiv-folder-open" title="Datei öffnen">Öffnen</button>';
       html += '<div class="archiv-folder-row' + levelClass + '" data-is-dir="' + (e.isDirectory ? '1' : '0') + '" data-relative-path="' + escapeHtml(e.relativePath || '') + '" data-full-path="' + escapeHtml(e.fullPath || '') + '">' +
-        '<div class="archiv-folder-name">' + toggle + '<span class="icon">' + icon + '</span> ' + escapeHtml(e.name) + '</div>' +
+        '<div class="archiv-folder-name">' + toggle + icon + ' ' + escapeHtml(e.name) + '</div>' +
         '<div class="archiv-folder-meta">' + escapeHtml(sizeStr) + ' ' + escapeHtml(mtimeStr) + '</div>' +
         (openBtn ? '<div class="archiv-folder-actions">' + openBtn + '</div>' : '') + '</div>';
     });
@@ -8373,6 +8379,40 @@
       return '';
     }
   }
+
+  /** Dateiendung → Windows-ähnliche Icon-Klasse (Word/Excel/PDF/…). */
+  function windowsStyleFsIconKind(fileName, isDirectory) {
+    if (isDirectory) return 'folder';
+    var base = String(fileName || '').trim();
+    var dot = base.lastIndexOf('.');
+    var ext = dot >= 0 ? base.slice(dot + 1).toLowerCase() : '';
+    if (['doc', 'docx', 'docm', 'rtf', 'odt'].indexOf(ext) >= 0) return 'word';
+    if (['xls', 'xlsx', 'xlsm', 'xlsb', 'csv', 'ods'].indexOf(ext) >= 0) return 'excel';
+    if (['ppt', 'pptx', 'pps', 'ppsx', 'odp'].indexOf(ext) >= 0) return 'powerpoint';
+    if (ext === 'pdf') return 'pdf';
+    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tif', 'tiff', 'heic'].indexOf(ext) >= 0) return 'image';
+    if (['zip', 'rar', '7z', 'tar', 'gz', 'tgz'].indexOf(ext) >= 0) return 'archive';
+    if (['txt', 'log', 'md', 'ini', 'cfg'].indexOf(ext) >= 0) return 'text';
+    if (['dwg', 'dxf'].indexOf(ext) >= 0) return 'cad';
+    return 'generic';
+  }
+
+  function windowsStyleFsIconHtml(fileName, isDirectory) {
+    var kind = windowsStyleFsIconKind(fileName, isDirectory);
+    return '<span class="fs-icon fs-icon-' + kind + '" aria-hidden="true"></span>';
+  }
+
+  function createWindowsStyleFsIconEl(fileName, isDirectory) {
+    var span = document.createElement('span');
+    span.className = 'fs-icon fs-icon-' + windowsStyleFsIconKind(fileName, isDirectory);
+    span.setAttribute('aria-hidden', 'true');
+    return span;
+  }
+
+  try {
+    window.windowsStyleFsIconHtml = windowsStyleFsIconHtml;
+    window.createWindowsStyleFsIconEl = createWindowsStyleFsIconEl;
+  } catch (_) { /* ignore */ }
 
   function pnParentHeadingForSiblings(nodes) {
     if (!nodes || !nodes.length) return '';
@@ -9459,10 +9499,12 @@
   function showProjekteNeuThumbFileIcon(timg) {
     if (!timg || !timg.parentNode) return;
     var fileRow = timg.parentNode;
-    var ic = document.createElement('span');
-    ic.className = 'projekte-neu-file-icon';
-    ic.setAttribute('aria-hidden', 'true');
-    ic.textContent = '\uD83D\uDCC4';
+    var nameHint =
+      (timg.getAttribute('alt') || '') ||
+      (timg.getAttribute('data-pn-rel') || '').split(/[/\\]/).pop() ||
+      'file';
+    var ic = createWindowsStyleFsIconEl(nameHint, false);
+    ic.classList.add('projekte-neu-file-icon');
     fileRow.replaceChild(ic, timg);
   }
 
@@ -9470,10 +9512,15 @@
     if (!img || !img.parentNode) return;
     var nameCell = img.closest('.dienstreise-explorer-name');
     if (!nameCell) return;
-    var ic = document.createElement('span');
-    ic.className = 'icon';
-    ic.setAttribute('aria-hidden', 'true');
-    ic.textContent = '\uD83D\uDCC4';
+    var row = img.closest('.dienstreise-explorer-row');
+    var nameEl = nameCell.querySelector('.dienstreise-explorer-filename');
+    var nameHint =
+      (nameEl && nameEl.textContent) ||
+      (row && row.getAttribute('data-relative-path')
+        ? String(row.getAttribute('data-relative-path')).split(/[/\\]/).pop()
+        : '') ||
+      'file';
+    var ic = createWindowsStyleFsIconEl(nameHint, false);
     nameCell.replaceChild(ic, img);
   }
 
@@ -9962,44 +10009,66 @@
       var msgNode = msgEl || document.getElementById('anlageDetailProjekteNeuMessage');
       if (msgNode) msgNode.textContent = 'Fehler: ' + msg;
     }
-    var wrap = document.createElement('ul');
-    wrap.style.margin = depth === 0 ? '0.35rem 0 0.2rem 0' : '0.2rem 0 0.2rem 1rem';
-    wrap.style.paddingLeft = depth === 0 ? '0.3rem' : '0.85rem';
+    var wrap = document.createElement('div');
+    wrap.className = depth === 0 ? 'dienstreise-explorer-list projekte-neu-explorer-list' : 'projekte-neu-dir-children';
     (nodes || []).forEach(function (n) {
       if (!n || !n.type) return;
-      var li = document.createElement('li');
-      li.style.margin = '0.15rem 0';
       if (n.type === 'dir') {
         var details = document.createElement('details');
+        details.className = 'projekte-neu-dir';
         details.open = false;
         var summary = document.createElement('summary');
-        summary.style.cursor = 'pointer';
-        summary.textContent = String(n.name || 'Ordner');
+        summary.className = 'dienstreise-explorer-row';
+        var nameCol = document.createElement('div');
+        nameCol.className = 'dienstreise-explorer-name';
+        var toggle = document.createElement('span');
+        toggle.className = 'explorer-toggle';
+        toggle.setAttribute('aria-hidden', 'true');
+        nameCol.appendChild(toggle);
+        nameCol.appendChild(createWindowsStyleFsIconEl(n.name || 'Ordner', true));
+        var fname = document.createElement('span');
+        fname.className = 'dienstreise-explorer-filename';
+        fname.textContent = String(n.name || 'Ordner');
+        nameCol.appendChild(fname);
+        summary.appendChild(nameCol);
+        var sizeEmpty = document.createElement('div');
+        sizeEmpty.className = 'dienstreise-explorer-size';
+        summary.appendChild(sizeEmpty);
+        var dateEl = document.createElement('div');
+        dateEl.className = 'dienstreise-explorer-size';
+        dateEl.textContent = n.mtime != null ? formatAnlagenstammMtime(n.mtime) : '';
+        summary.appendChild(dateEl);
         details.appendChild(summary);
         if (Array.isArray(n.children) && n.children.length) {
           details.appendChild(buildAnlageDetailProjekteNeuTree(fab, n.children, depth + 1, msgEl, galleryImages));
         } else {
           var em = document.createElement('div');
           em.className = 'muted';
+          em.style.padding = '0.25rem 0.6rem 0.35rem ' + (1.2 + depth * 1.1) + 'rem';
           em.textContent = 'Keine Untereinträge.';
-          em.style.margin = '0.25rem 0 0.2rem 0.8rem';
           details.appendChild(em);
         }
-        li.appendChild(details);
+        wrap.appendChild(details);
       } else if (n.type === 'file') {
         var rel = String(n.rel || '').trim();
         var label = String(n.name || rel || 'Datei');
         var fileRow = document.createElement('div');
-        fileRow.className = 'projekte-neu-file-row';
+        fileRow.className = 'dienstreise-explorer-row';
+        fileRow.setAttribute('data-is-dir', '0');
+        var fileNameCol = document.createElement('div');
+        fileNameCol.className = 'dienstreise-explorer-name';
+        var fileToggle = document.createElement('span');
+        fileToggle.className = 'explorer-toggle empty';
+        fileNameCol.appendChild(fileToggle);
         if (isProjekteNeuRasterImage(label)) {
           var timg = document.createElement('img');
-          timg.className = 'projekte-neu-thumb projekte-neu-thumb-pending';
+          timg.className = 'projekte-neu-thumb projekte-neu-thumb-pending dienstreise-explorer-thumb';
           timg.alt = label;
           timg.setAttribute('data-pn-fab', fab);
           timg.setAttribute('data-pn-rel', rel);
           timg.setAttribute('data-pn-thumb-max', '256');
           if (jobDetailsJobId) timg.setAttribute('data-pn-job-id', String(jobDetailsJobId));
-          fileRow.appendChild(timg);
+          fileNameCol.appendChild(timg);
           timg.addEventListener('click', function (ev) {
             ev.preventDefault();
             ev.stopPropagation();
@@ -10011,21 +10080,14 @@
             });
           });
         } else {
-          var ic0 = document.createElement('span');
-          ic0.className = 'projekte-neu-file-icon';
-          ic0.setAttribute('aria-hidden', 'true');
-          ic0.textContent = '\uD83D\uDCC4';
-          fileRow.appendChild(ic0);
+          fileNameCol.appendChild(createWindowsStyleFsIconEl(label, false));
         }
-        var actions = document.createElement('div');
-        actions.className = 'projekte-neu-file-actions';
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-ghost';
-        btn.style.padding = '0.15rem 0.25rem';
-        btn.style.textAlign = 'left';
-        btn.textContent = label;
-        btn.addEventListener('click', function () {
+        var openBtn = document.createElement('button');
+        openBtn.type = 'button';
+        openBtn.className = 'dienstreise-explorer-filename projekte-neu-open-link';
+        openBtn.textContent = label;
+        openBtn.title = 'Öffnen';
+        openBtn.addEventListener('click', function () {
           if (isProjekteNeuRasterImage(label)) {
             openProjekteNeuImageInLightbox(fab, rel, {
               jobId: jobDetailsJobId,
@@ -10041,17 +10103,18 @@
             showToast(hint.indexOf('offline') >= 0 || hint.indexOf('lokal') >= 0 ? hint : 'Dokument konnte nicht geöffnet werden.');
           });
         });
-        actions.appendChild(btn);
-        fileRow.appendChild(actions);
-        li.appendChild(fileRow);
-        if (n.size != null || n.mtime != null) {
-          var meta = document.createElement('span');
-          meta.className = 'muted';
-          meta.textContent = ' ' + formatAnlagenstammSize(n.size || 0) + (n.mtime ? (' · ' + formatAnlagenstammMtime(n.mtime)) : '');
-          li.appendChild(meta);
-        }
+        fileNameCol.appendChild(openBtn);
+        fileRow.appendChild(fileNameCol);
+        var sizeCell = document.createElement('div');
+        sizeCell.className = 'dienstreise-explorer-size';
+        sizeCell.textContent = n.size != null ? formatAnlagenstammSize(n.size) : '';
+        fileRow.appendChild(sizeCell);
+        var mtimeCell = document.createElement('div');
+        mtimeCell.className = 'dienstreise-explorer-size';
+        mtimeCell.textContent = n.mtime != null ? formatAnlagenstammMtime(n.mtime) : '';
+        fileRow.appendChild(mtimeCell);
+        wrap.appendChild(fileRow);
       }
-      wrap.appendChild(li);
     });
     return wrap;
   }
@@ -10416,8 +10479,8 @@
       var nowStart = Date.now();
       if (nowStart - startViewDataLoadedAt >= START_VIEW_DATA_MS) {
         startViewDataLoadedAt = nowStart;
-        loadStartActiveJob();
-        loadCalendarMonth();
+        loadStartActiveJob({ soft: !!startPageActiveJobSnapshot });
+        loadCalendarMonth({ soft: true });
       } else if (startPageActiveJobId) {
         loadDienstreiseExplorer(startPageActiveJobId, startExplorerSubpath, 'start');
       }
@@ -10631,21 +10694,80 @@
     return { jobs: jobs, absences: absences };
   }
 
-  async function loadCalendarMonth() {
+  var lastCalendarRenderSig = '';
+  var lastCalendarMonthKey = '';
+
+  function calendarRenderSignature(gridStart, gridEnd, jobs, absences, techniciansFromApi) {
+    var showAll = !!(document.getElementById('calShowAllTech') && document.getElementById('calShowAllTech').checked);
+    function itemSig(it, kind) {
+      return [
+        kind,
+        it.server_id != null ? it.server_id : '',
+        it.id != null ? it.id : '',
+        it.start_datetime || '',
+        it.end_datetime || '',
+        it.technician_id != null ? it.technician_id : '',
+        it.technician_color || '',
+        it.technician_name || '',
+        it.status || '',
+        it.customer_name || it.customerName || '',
+        it.city || '',
+        Number(it.date_not_fixed) === 1 ? 1 : 0,
+        Number(it.montage_verrechnet) === 1 ? 1 : 0,
+        Number(it.billing_travel_complete) === 1 ? 1 : 0,
+        it.type || it.absence_type || it.reason || '',
+      ].join('\t');
+    }
+    var parts = [
+      toYmd(gridStart),
+      toYmd(gridEnd),
+      showAll ? '1' : '0',
+      String(getTechId() || ''),
+    ];
+    (jobs || []).forEach(function (j) {
+      parts.push(itemSig(j, 'j'));
+    });
+    (absences || []).forEach(function (a) {
+      parts.push(itemSig(a, 'a'));
+    });
+    if (Array.isArray(techniciansFromApi)) {
+      techniciansFromApi.forEach(function (t) {
+        parts.push(
+          't\t' +
+            (t.id != null ? t.id : t.technician_id) +
+            '\t' +
+            (t.color || t.farbe || '') +
+            '\t' +
+            (t.name || t.full_name || t.technician_name || ''),
+        );
+      });
+    }
+    return parts.join('\n');
+  }
+
+  async function loadCalendarMonth(opts) {
+    opts = opts || {};
+    var soft = opts.soft === true;
     const first = new Date(calCurrentMonth.getFullYear(), calCurrentMonth.getMonth(), 1, 12, 0, 0, 0);
     const gridStart = mondayOf(first);
     const gridEnd = new Date(gridStart);
     gridEnd.setDate(gridEnd.getDate() + 41);
     const start = toYmd(gridStart);
     const end = toYmd(gridEnd);
+    const monthKey = calCurrentMonth.getFullYear() + '-' + calCurrentMonth.getMonth();
 
     let jobs = [];
     let absences = [];
     let calendarApiData = null;
     const showAll = document.getElementById('calShowAllTech').checked;
 
-    // Sofort leeres Grid rendern, damit Zeilen/Spalten immer sichtbar sind
-    renderCalendarGrid(gridStart, gridEnd, [], [], null);
+    var calGridEl = document.getElementById('calGrid');
+    var hasExistingGrid = !!(calGridEl && calGridEl.querySelector('.cal-grid-wrapper'));
+    var monthChanged = monthKey !== lastCalendarMonthKey;
+    // Soft/Sync: bestehendes Grid stehen lassen. Leeres Skelett nur beim Erstaufbau oder Monatswechsel ohne Soft.
+    if (!soft && (!hasExistingGrid || monthChanged)) {
+      renderCalendarGrid(gridStart, gridEnd, [], [], null);
+    }
 
     if (showAll) {
       const myTechId = getTechId();
@@ -10666,7 +10788,9 @@
         var hasCached = (data.jobs || []).length > 0 || (data.absences || []).length > 0;
         if (!hasCached) {
           setCalendarError('Kalender noch nicht synchronisiert — Badge klicken (Sync mit Dispo).');
-          renderCalendarGrid(gridStart, gridEnd, [], [], null);
+          if (!soft || !hasExistingGrid) {
+            renderCalendarGrid(gridStart, gridEnd, [], [], null);
+          }
           return;
         }
         calendarApiData = data;
@@ -10748,7 +10872,9 @@
           }
         });
       } catch (e) {
-        renderCalendarGrid(gridStart, gridEnd, [], [], null);
+        if (!soft || !hasExistingGrid) {
+          renderCalendarGrid(gridStart, gridEnd, [], [], null);
+        }
         setCalendarError('Kalender (Cache): ' + e.message);
         return;
       }
@@ -10770,7 +10896,9 @@
           }
         } catch (_) { /* Billing aus Cache optional */ }
       } catch (e) {
-        renderCalendarGrid(gridStart, gridEnd, [], [], null);
+        if (!soft || !hasExistingGrid) {
+          renderCalendarGrid(gridStart, gridEnd, [], [], null);
+        }
         setCalendarError('Fehler: ' + e.message);
         return;
       }
@@ -11105,6 +11233,17 @@
     const monthEl = document.getElementById('calMonthLabel');
     if (monthEl) monthEl.textContent = monthLabel.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
 
+    const calGrid = document.getElementById('calGrid');
+    if (!calGrid) return;
+
+    var nextSig = calendarRenderSignature(gridStart, gridEnd, jobs, absences, techniciansFromApi);
+    if (nextSig === lastCalendarRenderSig && calGrid.querySelector('.cal-grid-wrapper')) {
+      lastCalendarMonthKey = calCurrentMonth.getFullYear() + '-' + calCurrentMonth.getMonth();
+      return;
+    }
+    lastCalendarRenderSig = nextSig;
+    lastCalendarMonthKey = calCurrentMonth.getFullYear() + '-' + calCurrentMonth.getMonth();
+
     const weekDays = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
     const currentMonth = calCurrentMonth.getMonth();
     const todayYmd = toYmd(new Date());
@@ -11113,8 +11252,6 @@
     const overlayTop = 22;
     const overlayBottom = 4;
 
-    const calGrid = document.getElementById('calGrid');
-    if (!calGrid) return;
     const wrapper = document.createElement('div');
     wrapper.className = 'cal-grid-wrapper';
 
@@ -11600,7 +11737,7 @@
     rows.forEach(function (r) {
       var e = r.entry;
       var levelClass = r.level > 0 ? ' level-' + Math.min(r.level, 6) : '';
-      var icon = e.isDirectory ? '📁' : '📄';
+      var icon = windowsStyleFsIconHtml(e.name, !!e.isDirectory);
       var sizeStr = e.isDirectory ? '' : formatFileSize(e.size);
       var mtimeStr = formatFileDate(e.mtime);
       var toggle = e.isDirectory ? ('<span class="explorer-toggle" data-explorer-toggle aria-label="' + (expanded[e.relativePath] ? 'Einklappen' : 'Ausklappen') + '">' + (expanded[e.relativePath] ? '▼' : '▶') + '</span>') : '<span class="explorer-toggle empty"></span>';
@@ -11619,7 +11756,7 @@
         : '';
       var nameVisual = isRasterImage
         ? '<img class="dienstreise-explorer-thumb" data-explorer-thumb alt="" />'
-        : ('<span class="icon" aria-hidden="true">' + icon + '</span>');
+        : icon;
       var anlageAttrs =
         isAnlageDb
           ? ' data-anlage-db="1" data-fab="' +
@@ -12056,11 +12193,13 @@
       });
   }
 
-  function loadDienstreiseList() {
+  function loadDienstreiseList(opts) {
+    opts = opts || {};
+    var soft = opts.soft === true;
     var techId = getTechId();
     if (!techId) {
-      var listEl = document.getElementById('dienstreiseList');
-      if (listEl) listEl.innerHTML = '<span class="empty">Bitte Monteur-ID in Einstellungen eintragen.</span>';
+      var listElMissing = document.getElementById('dienstreiseList');
+      if (listElMissing) listElMissing.innerHTML = '<span class="empty">Bitte Monteur-ID in Einstellungen eintragen.</span>';
       return;
     }
     var range = getSyncDateRange();
@@ -12076,7 +12215,7 @@
       jobs = jobs.filter(function (j) { return !isJobAbgerechnet(j); });
       dienstreisePageJobs = jobs;
       if (jobs.length === 0) {
-        listEl.innerHTML = '<span class="empty">Keine Aufträge.</span>';
+        setElementHtmlIfChanged(listEl, '<span class="empty">Keine Aufträge.</span>');
         selectedJobIdOnDienstreisePage = null;
         if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
         return;
@@ -12121,7 +12260,10 @@
             : '') +
           '</div></div>';
       }).join('');
-      listEl.innerHTML = html;
+      if (!setElementHtmlIfChanged(listEl, html)) {
+        if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+        return;
+      }
       if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
       listEl.querySelectorAll('.job-actions [data-action="accept-job"]').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
@@ -16421,18 +16563,18 @@
 
   document.getElementById('calPrev').addEventListener('click', () => {
     calCurrentMonth.setMonth(calCurrentMonth.getMonth() - 1);
-    loadCalendarMonth();
+    loadCalendarMonth({ soft: true });
   });
   document.getElementById('calNext').addEventListener('click', () => {
     calCurrentMonth.setMonth(calCurrentMonth.getMonth() + 1);
-    loadCalendarMonth();
+    loadCalendarMonth({ soft: true });
   });
   document.getElementById('calToday').addEventListener('click', () => {
     const now = new Date();
     calCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    loadCalendarMonth();
+    loadCalendarMonth({ soft: true });
   });
-  document.getElementById('calShowAllTech').addEventListener('change', () => loadCalendarMonth());
+  document.getElementById('calShowAllTech').addEventListener('change', () => loadCalendarMonth({ soft: true }));
 
   (function initStartPageControls() {
     var dropZone = document.getElementById('startDropZone');

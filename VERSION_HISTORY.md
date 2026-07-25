@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.000.028
+- **Leistungsdaten Type:** Anlagenstamm überschreibt Job-Types beim Enrich (heilt vertauschte Types aus dem Dispo-Index-Bug); Job spiegelt Type nicht mehr in den Stamm zurück.
+- **Sync-UI:** Soft-Refresh — Kalender/Startseite flackern nicht mehr (kein Leer-Grid / „Wird geladen…“ ohne Datenänderung).
+- **PROJEKTE NEU:** Card ~halbe Breite; Ordnerzeilen wie Projektordner lokal; Windows-Stil-Icons (Word/Excel/PDF/…) auch im lokalen Explorer.
+- **Auftrag erledigt:** „Nicht löschen“ am Ordner schützt den gesamten Inhalt (Prefix-Match); geschützte Pfade aus DB statt unvollständiger UI-Liste.
+
 ## V 2.000.027
 - **Kalender-Sync:** Sichtbarer Zeitraum wird online von Dispo in den Cache geschrieben; umgebuchte Aufträge/Abwesenheiten (z. B. Georgia-Pacific, Köprinner-Urlaub) bleiben nicht mehr als Geistertermine.
 - **Kalender-Cache:** Unassigned-Jobs (`technician_id = 0`) werden gecacht; Datumsnormalisierung DATE vs. DATETIME (Randtage fehlen nicht mehr).

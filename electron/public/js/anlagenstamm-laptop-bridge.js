@@ -596,7 +596,9 @@
       const isImg = !r.isDir && isRasterImage(r.name);
       const nameVisual = isImg
         ? '<img class="dienstreise-explorer-thumb" data-pn-thumb alt="" />'
-        : '<span class="icon" aria-hidden="true">' + (r.isDir ? '\uD83D\uDCC1' : '\uD83D\uDCC4') + '</span>';
+        : typeof window.windowsStyleFsIconHtml === 'function'
+          ? window.windowsStyleFsIconHtml(r.name, !!r.isDir)
+          : '<span class="fs-icon fs-icon-' + (r.isDir ? 'folder' : 'generic') + '" aria-hidden="true"></span>';
       html +=
         '<div class="dienstreise-explorer-row' +
         levelClass +

@@ -299,6 +299,27 @@ function buildExactProtectedMatcher(protectedPaths) {
 }
 
 /**
+ * Prefix-Schutz: Eintrag ist geschützt, wenn er selbst oder ein Vorfahren-Pfad
+ * in der Liste steht. Damit bleibt bei „Nicht löschen“ am Ordner auch der Inhalt.
+ */
+function buildPrefixProtectedMatcher(protectedPaths) {
+  const norms = (protectedPaths || []).map((p) => normalizeRelPath(p)).filter(Boolean);
+  const protectedSet = new Set(norms);
+  // Längste zuerst für etwas schnellere Ancestor-Suche ist optional; Set-Lookup reicht.
+  return function isProtectedPrefix(rel) {
+    let n = normalizeRelPath(rel);
+    if (!n) return false;
+    if (protectedSet.has(n)) return true;
+    let idx = n.lastIndexOf('/');
+    while (idx > 0) {
+      if (protectedSet.has(n.slice(0, idx))) return true;
+      idx = n.lastIndexOf('/', idx - 1);
+    }
+    return false;
+  };
+}
+
+/**
  * Top-Level darf per rmSync nur weg, wenn kein geschützter Pfad darunter/gleich liegt.
  */
 function canRmSyncTopLevelEntryExact(relName, protectedPathsNorm) {
@@ -327,5 +348,6 @@ module.exports = {
   seedDokumenteMonteurProtectedPaths,
   setProtectedPathState,
   buildExactProtectedMatcher,
+  buildPrefixProtectedMatcher,
   canRmSyncTopLevelEntryExact,
 };

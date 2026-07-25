@@ -165,7 +165,7 @@ const {
   seedDokumenteMonteurProtectedPaths,
   setProtectedPathState,
   protectPathIfUnderDokumenteMonteur,
-  buildExactProtectedMatcher,
+  buildPrefixProtectedMatcher,
   canRmSyncTopLevelEntryExact,
   normalizeRelPath: normalizeProtectedRelPath,
   isProtectedPathsInitialized,
@@ -320,7 +320,13 @@ function parseJobFabrikationsnummernRows(raw) {
   return sortJobFabRows(rows);
 }
 
-function mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty) {
+/**
+ * Stammdaten (Type/Leistung/…) in eine Job-FN-Zeile mergen.
+ * Default: Anlagenstamm (local, dann api) vor Job – korrigiert vertauschte Types aus dem Dispo-Index-Bug.
+ * opts.preferJob=true: Job-Wert behalten wenn gesetzt (nur Pull lokal↔Server ohne Stamm).
+ */
+function mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty, opts) {
+  const preferJob = !!(opts && opts.preferJob);
   const fn = normJobFabKey(jobRow);
   const merged = jobRow && typeof jobRow === 'object' ? Object.assign({}, jobRow) : { fabrikationsnummer: fn };
   const api = apiRow && typeof apiRow === 'object' ? apiRow : {};
@@ -329,12 +335,22 @@ function mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty) {
     const jobVal = stammFieldTrim(merged[k]);
     const localVal = stammFieldTrim(local[k]);
     const apiVal = stammFieldTrim(api[k]);
-    if (jobVal !== '') {
-      merged[k] = jobVal;
-      continue;
-    }
     if (localDirty && localVal !== '') {
       merged[k] = localVal;
+      continue;
+    }
+    if (preferJob) {
+      if (jobVal !== '') {
+        merged[k] = jobVal;
+        continue;
+      }
+      if (localVal !== '') {
+        merged[k] = localVal;
+      } else if (apiVal !== '') {
+        merged[k] = apiVal;
+      } else {
+        merged[k] = '';
+      }
       continue;
     }
     if (localVal !== '') {
@@ -342,7 +358,7 @@ function mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty) {
     } else if (apiVal !== '') {
       merged[k] = apiVal;
     } else {
-      merged[k] = '';
+      merged[k] = jobVal;
     }
   }
   if (fn) merged.fabrikationsnummer = fn;
@@ -379,7 +395,7 @@ function mergeFabRowsPreferLocal(localRows, serverRows) {
   const mergedRows = order.map((fn) => {
     const localR = localList.find((r) => normJobFabKey(r) === fn) || { fabrikationsnummer: fn };
     const serverR = serverByFn[fn] || {};
-    return mergeStammIntoJobRow(localR, serverR, null, false);
+    return mergeStammIntoJobRow(localR, serverR, null, false, { preferJob: true });
   });
   return JSON.stringify(mergedRows);
 }
@@ -467,7 +483,8 @@ function jobFabRowFilterByOnlyFns(rows, onlyFns) {
 }
 
 /**
- * Projektdaten/Anlagendetails: Leistungszeilen aus jobs.fabrikationsnummern in anlagenstamm_local spiegeln (dirty).
+ * Projektdaten: nur leere Stammfelder aus Job-Leistungszeilen füllen.
+ * Bestehende Type/Leistung etc. nie aus dem Job überschreiben (Job kann Index-Bug haben).
  * opts.onlyFns: nur diese FN (z. B. beim PATCH fabrikationsnummern).
  */
 function syncJobFabRowsToAnlagenstammLocal(db, fabJson, opts) {
@@ -479,17 +496,18 @@ function syncJobFabRowsToAnlagenstammLocal(db, fabJson, opts) {
     const fn = normJobFabKey(r);
     if (!fn) continue;
     const existing = anlagenstammLookupByFab(db, fn);
-    const incoming = clampForDispoAnlagenstamm(
-      Object.assign(
-        {
-          id: existing && existing.id ? existing.id : 0,
-          fabrikationsnummer: fn,
-        },
-        r,
-      ),
-    );
-    if (!hasNonemptyStammField(incoming)) continue;
-    const payload = mergeAnlagenstammPayload(existing || {}, incoming);
+    const incoming = {
+      id: existing && existing.id ? existing.id : 0,
+      fabrikationsnummer: fn,
+    };
+    for (const k of JOB_FAB_STAMM_KEYS) {
+      const jobVal = stammFieldTrim(r[k]);
+      const exVal = existing ? stammFieldTrim(existing[k]) : '';
+      if (jobVal && !exVal) incoming[k] = jobVal;
+    }
+    const clamped = clampForDispoAnlagenstamm(incoming);
+    if (!hasNonemptyStammField(clamped)) continue;
+    const payload = mergeAnlagenstammPayload(existing || {}, clamped);
     const saved = anlagenstammSaveLocal(db, payload);
     if (saved.ok) n++;
   }
@@ -4512,8 +4530,8 @@ function createApp(db) {
     'Lokale Downloads werden entfernt (auf OneDrive/Netzlaufwerk kann das etwas dauern)';
 
   function buildDienstreiseProtectedMatcher(protectedPaths) {
-    // Exact-Match: abgewählte Kinder unter einem geschützten Ordner bleiben löschbar.
-    return buildExactProtectedMatcher(protectedPaths);
+    // Prefix: „Nicht löschen“ am Ordner schützt auch alle Dateien/Unterordner darunter.
+    return buildPrefixProtectedMatcher(protectedPaths);
   }
 
   /** True wenn ein Top-Level-Eintrag unter reiseDir per rmSync komplett gelöscht werden darf. */
@@ -4539,7 +4557,8 @@ function createApp(db) {
         const full = path.join(dir, e.name);
         const rel = relBase ? relBase + '/' + e.name : e.name;
         if (e.isDirectory()) {
-          // Immer hineingehen — Ordner-Schutz blockiert nicht das Walken der Kinder.
+          // Geschützter Ordner (Prefix): Inhalt nicht anfassen — nicht hineinlaufen.
+          if (isProtected(rel)) continue;
           walk(full, rel);
         } else if (e.isFile()) {
           if (!isProtected(rel)) out.push({ full, rel });
@@ -4686,19 +4705,26 @@ function createApp(db) {
       throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
     }
     const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
-    let protectedPaths;
-    if (Array.isArray(body.protectedPaths)) {
-      protectedPaths = body.protectedPaths
-        .map((p) => String(p || '').replace(/^[\/\\]+|[\/\\]+$/g, ''))
-        .filter(Boolean);
-    } else if (localJobId) {
+    // DB ist Quelle der Wahrheit; UI-Liste nur ergänzend (kann unvollständig sein).
+    let protectedPaths = [];
+    if (localJobId) {
       try {
-        protectedPaths = listProtectedPaths(db, localJobId);
+        protectedPaths = listProtectedPaths(db, localJobId) || [];
       } catch (_) {
         protectedPaths = [];
       }
-    } else {
-      protectedPaths = [];
+    }
+    if (Array.isArray(body.protectedPaths) && body.protectedPaths.length) {
+      const merged = new Set(
+        protectedPaths.map((p) => normalizeProtectedRelPath(p)).filter(Boolean),
+      );
+      for (const raw of body.protectedPaths) {
+        const n = normalizeProtectedRelPath(
+          String(raw || '').replace(/^[\/\\]+|[\/\\]+$/g, ''),
+        );
+        if (n) merged.add(n);
+      }
+      protectedPaths = Array.from(merged);
     }
     const dispoBaseUrl = (body.dispoBaseUrl || body.dispo_base_url || '').trim().replace(/\/$/, '');
     const technicianId = parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10);
@@ -11198,7 +11224,7 @@ function createApp(db) {
     if (typeof job.fabrikationsnummern !== 'string') return job;
     const fab = job.fabrikationsnummern.trim();
     if (!fab) return job;
-    /** Nur leere Felder aus Anlagenstamm auffüllen – gespeicherte Auftrags-Leistungszeilen nie überschreiben. */
+    /** Anlagenstamm überschreibt Job-Stammdaten (Type/Leistung/…) – heilt vertauschte Types. */
     const jobRows = parseJobFabrikationsnummernRows(fab);
     const parts = jobRows.map((r) => normJobFabKey(r)).filter(Boolean);
     if (parts.length === 0) return job;
@@ -11253,6 +11279,17 @@ function createApp(db) {
         }),
       );
       debugInfo.ok = true;
+      const localPk = job.id != null ? parseInt(job.id, 10) : NaN;
+      if (Number.isFinite(localPk) && newFabJson !== fab) {
+        try {
+          db.prepare(`UPDATE jobs SET fabrikationsnummern = ?, updated_at = datetime('now') WHERE id = ?`).run(
+            newFabJson,
+            localPk,
+          );
+        } catch (_) {
+          /* Anzeige-Enrich trotzdem liefern */
+        }
+      }
       return { ...job, fabrikationsnummern: newFabJson, _anlagenstamm_debug: debugInfo };
     } catch (e) {
       debugInfo.error = e && e.message ? e.message : String(e);
