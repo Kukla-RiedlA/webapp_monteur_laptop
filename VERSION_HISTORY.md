@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.000.027
+- **Kalender-Sync:** Sichtbarer Zeitraum wird online von Dispo in den Cache geschrieben; umgebuchte Aufträge/Abwesenheiten (z. B. Georgia-Pacific, Köprinner-Urlaub) bleiben nicht mehr als Geistertermine.
+- **Kalender-Cache:** Unassigned-Jobs (`technician_id = 0`) werden gecacht; Datumsnormalisierung DATE vs. DATETIME (Randtage fehlen nicht mehr).
+- **Sync:** `shouldPreserveLocalJobOnPull` schützt nur noch `in_arbeit`/Pending — zugeteilt/angelegt folgen Dispo-Umbuchungen.
+- **Leistungszeilen:** `dms_position` im Stamm↔Job-Sync ergänzt.
+
 ## V 2.000.026
 - **Montage-Auftragsordner:** Bei Änderung von Ort/Kunde/Techniker wird der bestehende Ordner unter `Dokumente_Monteur/<FN>/Montage/` umbenannt bzw. gemerged statt neu angelegt (Multi-Laptop).
 - **Sticky-Name:** Folgt nach Align dem Desired-Namen; Accept/Pull/Push alignen vor dem Schreiben.

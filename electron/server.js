@@ -248,6 +248,7 @@ const JOB_FAB_STAMM_KEYS = [
   'nenngeschwindigkeit',
   'kraftaufnehmer',
   'dms_nr',
+  'dms_position',
   'tacho',
   'elektronik',
   'material',
@@ -10730,15 +10731,19 @@ function createApp(db) {
         const range = defaultFutureRange();
         const cacheStart = p.date_from && String(p.date_from).trim() ? String(p.date_from).trim() : range.start;
         const cacheEnd = p.date_to && String(p.date_to).trim() ? String(p.date_to).trim() : range.end;
+        let calendarCacheOk = false;
+        let calendarCacheError = '';
         try {
           const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, auth);
           await dbLock.runWithDbLock(async () => {
-            upsertCalendarCache(db, calData);
+            upsertCalendarCache(db, calData, { replaceAll: true });
             reconcileLocalJobsFromCalendarCache(db, technicianId, calData);
             save();
           });
+          calendarCacheOk = true;
         } catch (calErr) {
-          console.warn('[sync_pull] kalender:', calErr && calErr.message ? calErr.message : calErr);
+          calendarCacheError = calErr && calErr.message ? String(calErr.message) : String(calErr || 'unbekannt');
+          console.warn('[sync_pull] kalender:', calendarCacheError);
           try {
             await dbLock.runWithDbLock(async () => {
               const pruned = reconcileCalendarCacheAbsencesForTechnician(db, technicianId);
@@ -10750,6 +10755,12 @@ function createApp(db) {
           } catch (reconcileErr) {
             console.warn('[sync_pull] kalender-cache reconcile:', reconcileErr && reconcileErr.message ? reconcileErr.message : reconcileErr);
           }
+        }
+        if (typeof mergeCheckpoint === 'function') {
+          mergeCheckpoint({
+            calendar_cache_ok: calendarCacheOk,
+            calendar_cache_error: calendarCacheOk ? '' : calendarCacheError,
+          });
         }
         setProgress('sync_pull', 3, 8, 'TED-Index …');
         try {
@@ -12299,7 +12310,7 @@ function createApp(db) {
     }
   });
   app.post('/api/calendar', express.json(), async (req, res) => {
-    const { baseUrl: rawUrl, start, end, serverUsername, serverPassword } = req.body || {};
+    const { baseUrl: rawUrl, start, end, serverUsername, serverPassword, skipJobEnrich } = req.body || {};
     const baseUrl = (rawUrl || '').toString().trim().replace(/\/$/, '');
     const s = (start || '').toString().trim();
     const e = (end || '').toString().trim();
@@ -12323,29 +12334,32 @@ function createApp(db) {
 
       // Jobs anreichern: Firma, Ort, Länderkürzel (wie bei Einzeltechniker), damit Balken/Tooltip gleich angezeigt werden
       const jobs = data.jobs || [];
-      await Promise.all(jobs.map(async (job) => {
-        const jobId = job.id ?? job.server_id;
-        const techId = job.technician_id;
-        if (jobId == null || techId == null) return;
-        try {
-          const jr = await fetch(`${baseUrl}/dispo_api/api/job.php?id=${encodeURIComponent(jobId)}&technician_id=${encodeURIComponent(techId)}`, opts);
-          if (!jr.ok) return;
-          const jData = await jr.json();
-          const full = jData.job;
-          if (full) {
-            if (full.customer_name != null) job.customer_name = full.customer_name;
-            if (full.city != null) job.city = full.city;
-            if (full.country != null) job.country = full.country;
-          }
-        } catch (_) { /* Einzelauftrag nicht geladen, Balken behält Nummer */ }
-      }));
+      if (!skipJobEnrich && jobs.length) {
+        await Promise.all(jobs.map(async (job) => {
+          const jobId = job.id ?? job.server_id;
+          const techId = job.technician_id;
+          if (jobId == null || techId == null) return;
+          try {
+            const jr = await fetch(`${baseUrl}/dispo_api/api/job.php?id=${encodeURIComponent(jobId)}&technician_id=${encodeURIComponent(techId)}`, opts);
+            if (!jr.ok) return;
+            const jData = await jr.json();
+            const full = jData.job;
+            if (full) {
+              if (full.customer_name != null) job.customer_name = full.customer_name;
+              if (full.city != null) job.city = full.city;
+              if (full.country != null) job.country = full.country;
+            }
+          } catch (_) { /* Einzelauftrag nicht geladen, Balken behält Nummer */ }
+        }));
+      }
 
       try {
-        upsertCalendarCache(db, data);
+        upsertCalendarCache(db, data, { rangeStart: s, rangeEnd: e, replaceAll: false });
         const calTechId = getTechnicianId(req);
         if (calTechId) {
           reconcileLocalJobsFromCalendarCache(db, calTechId, data);
         }
+        save();
       } catch (_) { /* Cache optional */ }
 
       res.json(data);
@@ -13242,21 +13256,67 @@ function upsertAnlagenstammTreeCache(db, fab, pnRaw, meta) {
   upsertAnlagenstammTreeCacheRow(db, fab, pnRaw, meta);
 }
 
-function upsertCalendarCache(db, calendarData) {
+/**
+ * Dispo calendar.php liefert oft nur YYYY-MM-DD (DATE_FORMAT), plus *_raw mit voller Zeit.
+ * SQLite-Stringvergleiche mit „YYYY-MM-DD 00:00:00“ schließen date-only Enddaten am Range-Rand aus.
+ * Unassigned-Lane nutzt technician_id = 0.
+ */
+function normalizeCalendarCacheDateTime(value, isEnd) {
+  let s = String(value || '')
+    .trim()
+    .replace('T', ' ');
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return s + (isEnd ? ' 23:59:59' : ' 00:00:00');
+  }
+  if (s.length > 19) s = s.slice(0, 19);
+  return s;
+}
+
+function pickCalendarEventDateTime(row, isEnd) {
+  if (!row || typeof row !== 'object') return '';
+  const rawKey = isEnd ? 'end_datetime_raw' : 'start_datetime_raw';
+  const key = isEnd ? 'end_datetime' : 'start_datetime';
+  const raw = row[rawKey];
+  if (raw != null && String(raw).trim() !== '') {
+    return normalizeCalendarCacheDateTime(raw, isEnd);
+  }
+  return normalizeCalendarCacheDateTime(row[key], isEnd);
+}
+
+function upsertCalendarCache(db, calendarData, opts) {
+  const options = opts && typeof opts === 'object' ? opts : {};
+  const replaceAll = options.replaceAll !== false && !options.rangeStart;
+  const rangeStart = options.rangeStart ? normalizeCalendarCacheDateTime(options.rangeStart, false) : '';
+  const rangeEnd = options.rangeEnd ? normalizeCalendarCacheDateTime(options.rangeEnd, true) : '';
   const technicians = Array.isArray(calendarData.technicians) ? calendarData.technicians : [];
   const jobs = Array.isArray(calendarData.jobs) ? calendarData.jobs : [];
   const absences = Array.isArray(calendarData.absences) ? calendarData.absences : [];
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
   db.transaction(() => {
-    db.prepare('DELETE FROM calendar_cache_technicians').run();
-    db.prepare('DELETE FROM calendar_cache_jobs').run();
-    db.prepare('DELETE FROM calendar_cache_absences').run();
+    if (replaceAll || !rangeStart || !rangeEnd) {
+      db.prepare('DELETE FROM calendar_cache_technicians').run();
+      db.prepare('DELETE FROM calendar_cache_jobs').run();
+      db.prepare('DELETE FROM calendar_cache_absences').run();
+    } else {
+      // Sichtbarer Zeitraum: alte Termine/Abwesenheiten in diesem Fenster entfernen (Umbuchungen),
+      // andere Monate im Cache behalten.
+      db.prepare(
+        `DELETE FROM calendar_cache_jobs WHERE end_datetime >= ? AND start_datetime <= ?`,
+      ).run(rangeStart, rangeEnd);
+      db.prepare(
+        `DELETE FROM calendar_cache_absences WHERE end_datetime >= ? AND start_datetime <= ?`,
+      ).run(rangeStart, rangeEnd);
+    }
 
     for (const t of technicians) {
       const tid = Number(t.id != null ? t.id : t.technician_id);
-      if (!Number.isFinite(tid) || tid <= 0) continue;
-      const name = String(t.name || t.full_name || t.technician_name || '').trim() || ('Techniker ' + tid);
-      const color = String(t.color || t.farbe || '').trim() || '#4a90e2';
+      // 0 = Lane „Nicht zugewiesen“ (Dispo calendar.php)
+      if (!Number.isFinite(tid) || tid < 0) continue;
+      const name =
+        String(t.name || t.full_name || t.technician_name || '').trim() ||
+        (tid === 0 ? 'Nicht zugewiesen' : 'Techniker ' + tid);
+      const color = String(t.color || t.farbe || '').trim() || (tid === 0 ? '#94a3b8' : '#4a90e2');
       db.prepare('INSERT OR REPLACE INTO calendar_cache_technicians (technician_id, name, color, synced_at) VALUES (?, ?, ?, ?)')
         .run(tid, name, color, syncedAt);
     }
@@ -13264,9 +13324,9 @@ function upsertCalendarCache(db, calendarData) {
     for (const j of jobs) {
       const sid = Number(j.id != null ? j.id : j.server_id);
       const tid = Number(j.technician_id != null ? j.technician_id : j.technicianId);
-      const start = String(j.start_datetime || '').replace('T', ' ').slice(0, 19);
-      const end = String(j.end_datetime || '').replace('T', ' ').slice(0, 19);
-      if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(tid) || tid <= 0 || !start || !end) continue;
+      const start = pickCalendarEventDateTime(j, false);
+      const end = pickCalendarEventDateTime(j, true);
+      if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(tid) || tid < 0 || !start || !end) continue;
       const cacheKey = String(sid) + ':' + String(tid);
       db.prepare(`INSERT OR REPLACE INTO calendar_cache_jobs
         (cache_key, server_job_id, technician_id, customer_name, job_number, city, country, status, start_datetime, end_datetime, technician_name, technician_color, montage_verrechnet, billing_travel_complete, date_not_fixed, synced_at)
@@ -13286,8 +13346,8 @@ function upsertCalendarCache(db, calendarData) {
     for (const a of absences) {
       const sidRaw = a.id != null ? String(a.id) : '';
       const tid = Number(a.technician_id != null ? a.technician_id : a.technicianId);
-      const start = String(a.start_datetime || '').replace('T', ' ').slice(0, 19);
-      const end = String(a.end_datetime || '').replace('T', ' ').slice(0, 19);
+      const start = pickCalendarEventDateTime(a, false);
+      const end = pickCalendarEventDateTime(a, true);
       const type = String(a.type || '');
       if (!Number.isFinite(tid) || tid <= 0 || !start || !end) continue;
       const cacheKey = [sidRaw || 'x', tid, start, end, type].join(':');
@@ -13311,7 +13371,7 @@ function reconcileLocalJobsFromCalendarCache(db, technicianId, calendarData) {
   const tid = Number(technicianId);
   if (!Number.isFinite(tid) || tid <= 0) return;
   const jobs = Array.isArray(calendarData && calendarData.jobs) ? calendarData.jobs : [];
-  if (!jobs.length) return;
+  // Auch bei leerer Job-Liste Zuordnungen bereinigen (alles umgebucht / nur Abwesenheiten).
 
   const serverIdsForTech = new Set();
   const calendarByServerId = new Map();
@@ -13332,8 +13392,8 @@ function reconcileLocalJobsFromCalendarCache(db, technicianId, calendarData) {
       const entry =
         entries.find((e) => Number(e.technician_id != null ? e.technician_id : e.technicianId) === tid) ||
         entries[0];
-      const start = String(entry.start_datetime || '').replace('T', ' ').slice(0, 19);
-      const end = String(entry.end_datetime || '').replace('T', ' ').slice(0, 19);
+      const start = pickCalendarEventDateTime(entry, false);
+      const end = pickCalendarEventDateTime(entry, true);
       if (!start || !end) continue;
       const dateNotFixed = Number(entry.date_not_fixed) === 1 ? 1 : 0;
       db.prepare(
@@ -13356,6 +13416,23 @@ function reconcileLocalJobsFromCalendarCache(db, technicianId, calendarData) {
     for (const row of assignedLocal) {
       const sid = Number(row.server_id);
       if (serverIdsForTech.has(sid)) continue;
+      // Nur entfernen, wenn der Auftrag im Kalender-Payload vorkommt (andere Techniker / unzugewiesen)
+      // oder wenn der Sync-Range den Auftrag abdeckt. Sonst: Listenlücke außerhalb des sichtbaren Fensters.
+      const inCalendar = calendarByServerId.has(sid);
+      if (!inCalendar && jobs.length > 0) {
+        // Sichtbarer Monat: Auftrag nicht im Kalender → Termin woanders / weg; Zuordnung prüfen über Start/Ende lokal
+        const localJob = db.prepare('SELECT start_datetime, end_datetime FROM jobs WHERE id = ?').get(row.id);
+        const calStart = calendarData && calendarData.start ? String(calendarData.start).slice(0, 10) : '';
+        const calEnd = calendarData && calendarData.end ? String(calendarData.end).slice(0, 10) : '';
+        if (calStart && calEnd && localJob) {
+          const ls = String(localJob.start_datetime || '').slice(0, 10);
+          const le = String(localJob.end_datetime || '').slice(0, 10);
+          const overlaps = ls && le && le >= calStart && ls <= calEnd;
+          if (!overlaps) continue;
+        } else if (calStart && calEnd) {
+          continue;
+        }
+      }
       db.prepare('DELETE FROM job_technicians WHERE job_id = ? AND technician_id = ?').run(row.id, tid);
       if (shouldPreserveLocalJobOnPull(db, row.id)) continue;
       deleteLocalJobRowIfUnassigned(db, row.id);
@@ -13378,14 +13455,16 @@ function jobHasPendingLocalChanges(db, localJobId) {
   return false;
 }
 
-/** Laufende / lokale Arbeit nie durch Pull-Listenlücke löschen (z. B. Enddatum in der Vergangenheit). */
+/** Laufende lokale Arbeit / Pending nie durch Pull-Listenlücke löschen. */
 function shouldPreserveLocalJobOnPull(db, localJobId) {
   const assigned = db.prepare('SELECT 1 FROM job_technicians WHERE job_id = ? LIMIT 1').get(localJobId);
   if (!assigned) return false;
+  if (jobHasPendingLocalChanges(db, localJobId)) return true;
   const row = db.prepare('SELECT status FROM jobs WHERE id = ?').get(localJobId);
   const st = row ? String(row.status || '').trim().toLowerCase() : '';
-  if (st === 'in_arbeit' || st === 'zugeteilt' || st === 'angelegt' || st === 'geplant') return true;
-  if (jobHasPendingLocalChanges(db, localJobId)) return true;
+  // Nur echte laufende Montage schützen — zugeteilt/angelegt/geplant müssen Dispo-Umbuchungen folgen
+  // (sonst bleiben alte Termine/Zuweisungen in Lokal + „Alle Techniker“-Kalender hängen).
+  if (st === 'in_arbeit') return true;
   const pulls = db
     .prepare(
       `SELECT payload_json FROM background_jobs

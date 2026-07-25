@@ -3112,6 +3112,7 @@
       nenngeschwindigkeit: '',
       kraftaufnehmer: '',
       dms_nr: '',
+      dms_position: '',
       tacho: '',
       elektronik: '',
       material: '',
@@ -3216,6 +3217,7 @@
               nenngeschwindigkeit: '',
               kraftaufnehmer: '',
               dms_nr: '',
+              dms_position: '',
               tacho: '',
               elektronik: '',
               material: '',
@@ -3253,6 +3255,7 @@
           nenngeschwindigkeit: get(r, ['nenngeschwindigkeit', 'Nenngeschwindigkeit']),
           kraftaufnehmer: get(r, ['kraftaufnehmer', 'Kraftaufnehmer']),
           dms_nr: get(r, ['dms_nr', 'DMS Nr.', 'dms_nr']),
+          dms_position: get(r, ['dms_position', 'DMS Position', 'dmsPosition']),
           tacho: get(r, ['tacho', 'Tacho']),
           elektronik: get(r, ['elektronik', 'Elektronik']),
           material: get(r, ['material', 'Material']),
@@ -3264,7 +3267,7 @@
       });
     }
     if (leistungRows.length === 0) {
-      leistungRows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', tacho: '', elektronik: '', material: '', position: '', geliefert_ueber: '', projekt: '', bemerkungen: '' });
+      leistungRows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', dms_position: '', tacho: '', elektronik: '', material: '', position: '', geliefert_ueber: '', projekt: '', bemerkungen: '' });
     }
     return sortLeistungRowsByFab(leistungRows);
   }
@@ -3329,6 +3332,7 @@
       nenngeschwindigkeit: sanitizeLeistungField(fields.nenngeschwindigkeit),
       kraftaufnehmer: sanitizeLeistungField(fields.kraftaufnehmer),
       dms_nr: sanitizeLeistungField(fields.dms_nr),
+      dms_position: sanitizeLeistungField(fields.dms_position),
       tacho: sanitizeLeistungField(fields.tacho),
       elektronik: sanitizeLeistungField(fields.elektronik),
       material: sanitizeLeistungField(fields.material),
@@ -3360,7 +3364,7 @@
   var anlageDetailOpenToken = 0;
 
   var ANLAGE_DETAIL_STAMM_KEYS = [
-    'type', 'leistung', 'nenngeschwindigkeit', 'kraftaufnehmer', 'dms_nr',
+    'type', 'leistung', 'nenngeschwindigkeit', 'kraftaufnehmer', 'dms_nr', 'dms_position',
     'tacho', 'elektronik', 'material', 'position', 'geliefert_ueber', 'projekt', 'bemerkungen'
   ];
 
@@ -4549,6 +4553,7 @@
           nenngeschwindigkeit: '',
           kraftaufnehmer: '',
           dms_nr: '',
+          dms_position: '',
           tacho: '',
           elektronik: '',
           material: '',
@@ -8160,6 +8165,7 @@
               nenngeschwindigkeit: '',
               kraftaufnehmer: '',
               dms_nr: '',
+              dms_position: '',
               tacho: '',
               elektronik: '',
               material: '',
@@ -8200,6 +8206,7 @@
           nenngeschwindigkeit: get(r, ['nenngeschwindigkeit', 'Nenngeschwindigkeit']),
           kraftaufnehmer: get(r, ['kraftaufnehmer', 'Kraftaufnehmer']),
           dms_nr: get(r, ['dms_nr', 'DMS Nr.', 'dms_nr']),
+          dms_position: get(r, ['dms_position', 'DMS Position', 'dmsPosition']),
           tacho: get(r, ['tacho', 'Tacho']),
           elektronik: get(r, ['elektronik', 'Elektronik']),
           material: get(r, ['material', 'Material']),
@@ -8218,6 +8225,7 @@
         nenngeschwindigkeit: '',
         kraftaufnehmer: '',
         dms_nr: '',
+        dms_position: '',
         tacho: '',
         elektronik: '',
         material: '',
@@ -10548,6 +10556,40 @@
     }).then(function (r) { return r.json().catch(function () { return {}; }); });
   }
 
+  /** Sichtbaren Monat online von Dispo in den lokalen Kalender-Cache schreiben (Umbuchungen). */
+  async function refreshCalendarCacheFromDispo(start, end, techId) {
+    var baseUrl = (typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '') || '';
+    baseUrl = String(baseUrl).trim().replace(/\/+$/, '');
+    if (!baseUrl) return { ok: false, skipped: true };
+    var user = typeof getDispoUsername === 'function' ? getDispoUsername() : '';
+    var pass = typeof getDispoPassword === 'function' ? getDispoPassword() : '';
+    if (!user || !pass) return { ok: false, skipped: true };
+    try {
+      var r = await fetch(API_BASE + '/api/calendar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Technician-Id': String(techId || 0)
+        },
+        body: JSON.stringify({
+          baseUrl: baseUrl,
+          start: start,
+          end: end,
+          serverUsername: user,
+          serverPassword: pass,
+          skipJobEnrich: true
+        })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data || data.ok === false) {
+        return { ok: false, error: (data && data.error) || ('HTTP ' + r.status) };
+      }
+      return { ok: true, data: data };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  }
+
   /** Ohne „Alle Techniker“: keine Lane „Nicht zugewiesen“ / keine unzugewiesenen Aufträge. */
   function filterCalendarJobsForView(jobs, showAll) {
     if (showAll) return Array.isArray(jobs) ? jobs : [];
@@ -10612,6 +10654,11 @@
         return;
       }
       try {
+        // Dispo ist Quelle: sichtbaren Zeitraum zuerst in den Cache ziehen, sonst bleiben Umbuchungen hängen.
+        var refresh = await refreshCalendarCacheFromDispo(start, end, myTechId);
+        if (refresh && refresh.ok === false && !refresh.skipped) {
+          console.warn('[Kalender] Cache-Refresh:', refresh.error || 'fehlgeschlagen');
+        }
         var data = await fetchCalendarCachedMonth(start, end, myTechId);
         if (!data || data.ok !== true) {
           throw new Error((data && data.error) || 'Kalender-Cache nicht lesbar.');
@@ -10657,8 +10704,12 @@
           var techDisplay = calendarJobTechFields(j, techById, myTechId);
           if (localJob) {
             var cacheFlags = calendarBillingFlagsFrom(j);
-            var mergedJob = Object.assign({}, localJob, cacheFlags, techDisplay);
-            mergedJob.local_job_id = localJob.id;
+            // Termin/Zuweisung kommen aus dem Cache (Dispo); lokal nur ID/Billing anreichern.
+            var mergedJob = Object.assign({}, j, cacheFlags, techDisplay, {
+              local_job_id: localJob.id,
+              id: localJob.id,
+              server_id: localJob.server_id != null ? localJob.server_id : j.id
+            });
             mergedJob.date_not_fixed = mergeDateNotFixedFlag(localJob.date_not_fixed, j.date_not_fixed);
             return mergedJob;
           }
@@ -10666,16 +10717,8 @@
             local_job_id: j.local_job_id != null ? j.local_job_id : null,
           });
         });
-        var serverJobIds = {};
-        jobs.forEach(function (j) {
-          serverJobIds[j.id] = true;
-          if (j.server_id != null) serverJobIds[j.server_id] = true;
-        });
-        (local[0].jobs || []).forEach(function (j) {
-          if (!serverJobIds[j.id] && !serverJobIds[j.server_id]) {
-            jobs.push(Object.assign({}, j, calendarJobTechFields(j, techById, myTechId)));
-          }
-        });
+        // Keine lokalen Aufträge mehr anhängen, die im Dispo-Cache fehlen — sonst bleiben
+        // umgebuchte Termine (z. B. Georgia-Pacific / alte Köprinner-Zuweisung) sichtbar.
         var seenJobKey = {};
         jobs = jobs.filter(function (j) {
           var key = j.server_id != null ? String(j.server_id) : (j.id != null ? String(j.id) : null);
