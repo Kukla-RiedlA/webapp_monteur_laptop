@@ -259,7 +259,7 @@
 
 /* Gruppen-Trenner */
 .page-zeitschreibung .zs-table .zs-sep-after {
-  border-right: 2px solid var(--zs-border-strong) !important;
+  border-right: 3px solid #475569 !important;
 }
 
 /* Wochenende / Feiertag dezent */
@@ -404,6 +404,37 @@
   background: #ff0000 !important;
   color: #fff;
   font-weight: 600;
+}
+
+.page-zeitschreibung .zs-overview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.page-zeitschreibung .zs-overview-actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.65rem;
+  flex-shrink: 0;
+}
+
+.page-zeitschreibung .zs-print-btn {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--sp-green, #007a4d);
+  color: var(--sp-green, #007a4d);
+  background: #fff;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.page-zeitschreibung .zs-print-btn:hover {
+  background: var(--sp-mint, #eefaf5);
 }
 
 .page-zeitschreibung section[aria-labelledby="zsSecTabelleTitle"] {

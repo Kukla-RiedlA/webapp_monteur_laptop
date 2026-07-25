@@ -399,10 +399,13 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="zsSecTabelleTitle">
-          <header class="sp-v2-section-head" id="zsSecTabelleTitle">
+          <header class="sp-v2-section-head zs-overview-head" id="zsSecTabelleTitle">
             <span class="sp-v2-num">3</span>
             <img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true">
-            Monatstabelle
+            <span id="zsOverviewTitle">Monatsübersicht – ${escapeHtml(MONTH_NAMES[state.month] || '')} ${state.year} – ${escapeHtml(state.technicianName || '')}</span>
+            <div class="zs-overview-actions no-print">
+              <button type="button" class="btn zs-print-btn" id="zsPrintBtn" title="Monatsübersicht in eigenem Fenster drucken (A4 Querformat, Farbe)">Drucken…</button>
+            </div>
           </header>
           <div class="sp-v2-section-body">
             ${renderTable()}
@@ -571,6 +574,158 @@
     navigateCell(host, inp, key);
   }
 
+  function openPrintWindow(host) {
+    const table = host.querySelector('.zs-table');
+    if (!table) {
+      window.alert('Keine Tabelle zum Drucken.');
+      return;
+    }
+
+    const titleEl = host.querySelector('#zsOverviewTitle');
+    const titleText = titleEl
+      ? String(titleEl.textContent || '').trim()
+      : ('Monatsübersicht – ' + (MONTH_NAMES[state.month] || '') + ' ' + state.year + ' – ' + (state.technicianName || ''));
+
+    const clone = table.cloneNode(true);
+
+    // Inputs → Text
+    clone.querySelectorAll('input').forEach(function (inp) {
+      if (inp.type === 'checkbox') return;
+      const span = document.createElement('span');
+      span.textContent = inp.value || '';
+      if (inp.parentNode) inp.parentNode.replaceChild(span, inp);
+    });
+
+    // Status-Icons → Druckzeichen
+    clone.querySelectorAll('.zs-col-status').forEach(function (td) {
+      if (td.querySelector('.zs-lock-check-icon') || /gesperrt/i.test(td.getAttribute('title') || '')) {
+        td.textContent = '✓';
+        td.classList.add('zs-print-status');
+      } else if (!String(td.textContent || '').trim() || td.textContent.trim() === '–') {
+        td.textContent = '–';
+        td.classList.add('zs-print-status');
+      }
+    });
+
+    // Tag = nur Tagesnummer (wie Dispo-Druck)
+    clone.querySelectorAll('tbody tr[data-day-date] td[data-col="tag"]').forEach(function (td) {
+      const d = td.parentElement && td.parentElement.getAttribute('data-day-date');
+      if (d && d.length >= 10) td.textContent = String(parseInt(d.slice(8, 10), 10));
+    });
+
+    // Kopfzeilen ohne (h), Status → STA
+    clone.querySelectorAll('thead tr.zs-head-cols th').forEach(function (th) {
+      let t = String(th.textContent || '').replace(/\s*\(h\)\s*/g, '').trim();
+      if (t === 'Status') t = 'STA';
+      th.textContent = t;
+    });
+
+    // Footer wie Dispo: Monatssumme über Tag/WT/Feiertag
+    const ft = clone.querySelector('tfoot tr');
+    if (ft && ft.children.length >= 3) {
+      const c0 = ft.children[0];
+      const c1 = ft.children[1];
+      const c2 = ft.children[2];
+      const label = document.createElement('td');
+      label.colSpan = 3;
+      label.textContent = 'Monatssumme';
+      ft.insertBefore(label, c0);
+      ft.removeChild(c0);
+      ft.removeChild(c1);
+      ft.removeChild(c2);
+    }
+
+    clone.removeAttribute('style');
+    clone.querySelectorAll('[style]').forEach(function (el) { el.removeAttribute('style'); });
+    clone.querySelectorAll('.zs-sticky-tag, .zs-sticky-wt, .zs-sticky-holiday').forEach(function (el) {
+      el.classList.remove('zs-sticky-tag', 'zs-sticky-wt', 'zs-sticky-holiday');
+    });
+
+    // colgroup: feste mm, Rest an Bemerkung (kein Lohn)
+    const fixedLeft = 8 + 8 + 24;
+    const hourCols = HOUR_FIELDS.length + 1;
+    const fixedHours = hourCols * 11;
+    const fixedSta = 8;
+    const usable = 291;
+    let rest = usable - fixedLeft - fixedHours - fixedSta;
+    if (rest < 60) rest = 60;
+    const colWidths = [8, 8, 24];
+    for (let i = 0; i < hourCols; i++) colWidths.push(11);
+    colWidths.push(rest); // Bemerkung
+    colWidths.push(8); // STA
+
+    const cg = document.createElement('colgroup');
+    colWidths.forEach(function (mm) {
+      const col = document.createElement('col');
+      col.style.width = mm + 'mm';
+      cg.appendChild(col);
+    });
+    if (clone.firstChild) clone.insertBefore(cg, clone.firstChild);
+    else clone.appendChild(cg);
+
+    const tableHtml = clone.outerHTML;
+    const win = window.open('', 'zs_print_monteur', 'width=1400,height=900,scrollbars=yes,resizable=yes');
+    if (!win) {
+      window.alert('Popup blockiert. Bitte Popups erlauben und erneut drucken.');
+      return;
+    }
+
+    const esc = function (s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    };
+
+    const doc = win.document;
+    doc.open();
+    doc.write(
+      '<!doctype html><html lang="de"><head><meta charset="utf-8">' +
+      '<title>' + esc(titleText) + '</title>' +
+      '<style>' +
+      '@page{size:A4 landscape;margin:14mm 3mm 3mm 3mm;}' +
+      'html,body{margin:0;padding:0;background:#fff;}' +
+      'body{padding:0;font-family:Segoe UI,system-ui,sans-serif;color:#111;}' +
+      '*,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important;}' +
+      'h1{margin:0 0 2mm;font-size:12pt;font-weight:700;}' +
+      'table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.5pt;line-height:1.2;}' +
+      'th,td{border:1px solid #94a3b8;padding:1px 2px;vertical-align:middle;white-space:nowrap;box-sizing:border-box;overflow:visible;}' +
+      'thead tr.zs-head-groups th{background:#e3f5ed!important;color:#007a4d!important;font-size:7.5pt;text-align:center;}' +
+      'thead tr.zs-head-cols th{background:#eefaf5!important;color:#007a4d!important;font-weight:600;font-size:7.5pt;}' +
+      'tfoot th,tfoot td{background:#eefaf5!important;color:#007a4d!important;font-weight:700;}' +
+      'tfoot td[colspan]{text-align:left;overflow:visible;padding-left:3px;}' +
+      'tbody tr.zs-row-sa td{background:#fff8d6!important;}' +
+      'tbody tr.zs-row-so td{background:#fde9df!important;}' +
+      'tbody tr.zs-row-holiday td{background:#ffb3b3!important;}' +
+      'tbody tr.zs-row-locked:not(.zs-row-sa):not(.zs-row-so):not(.zs-row-holiday) td{background:#eefaf5!important;}' +
+      'td.zs-sum,th.zs-col-sum,.zs-col-hour{text-align:center;}' +
+      'th[data-col="tag"],td[data-col="tag"],th[data-col="wt"],td[data-col="wt"]{text-align:center;}' +
+      '.zs-col-bemerkung{white-space:normal!important;overflow:hidden;text-overflow:ellipsis;}' +
+      '.zs-col-status{text-align:center;}' +
+      '.zs-sep-after{border-right:3px solid #334155!important;}' +
+      '.zs-lock-check-icon,.no-print{display:none!important;}' +
+      '.zs-print-status{display:inline!important;font-weight:700;color:#007a4d!important;}' +
+      '@media print{body{padding:0;}}' +
+      '</style></head><body>' +
+      '<h1>' + esc(titleText) + '</h1>' +
+      tableHtml +
+      '</body></html>'
+    );
+    doc.close();
+
+    function triggerPrint() {
+      try {
+        win.focus();
+        win.print();
+      } catch (e) { /* ignore */ }
+    }
+    win.addEventListener('afterprint', function () {
+      try { win.close(); } catch (e2) { /* ignore */ }
+    });
+    setTimeout(triggerPrint, 100);
+  }
+
   function bind(host) {
     host.querySelector('#zsYear').addEventListener('change', async function (e) {
       state.year = parseInt(e.target.value, 10);
@@ -582,6 +737,10 @@
     });
     host.querySelector('#zsSave').addEventListener('click', function () { save(host, false); });
     host.querySelector('#zsSubmit').addEventListener('click', function () { save(host, true); });
+    const printBtn = host.querySelector('#zsPrintBtn');
+    if (printBtn) {
+      printBtn.addEventListener('click', function () { openPrintWindow(host); });
+    }
     host.querySelectorAll('.zs-input').forEach(function (inp) {
       inp.addEventListener('input', function () {
         state.dirty = true;
