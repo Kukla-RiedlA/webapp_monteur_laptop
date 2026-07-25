@@ -4,6 +4,13 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.000.030
+- **Zeitschreibung UI:** Speichern und Freigeben (PDF) in der Monatsübersicht-Kopfzeile vor Drucken; Sektion „Speichern & Freigabe“ entfernt.
+- **Zeitschreibung Druck:** Gruppen-Trennerlinien dicker (wie Dispo).
+
+## V 2.000.029
+- **Zeitschreibung Druck:** Button „Drucken…“ mit Dispo-Druckvorlage (A4 Querformat, Farbe, feste mm-Spalten).
+
 ## V 2.000.028
 - **Leistungsdaten Type:** Anlagenstamm überschreibt Job-Types beim Enrich (heilt vertauschte Types aus dem Dispo-Index-Bug); Job spiegelt Type nicht mehr in den Stamm zurück.
 - **Sync-UI:** Soft-Refresh — Kalender/Startseite flackern nicht mehr (kein Leer-Grid / „Wird geladen…“ ohne Datenänderung).

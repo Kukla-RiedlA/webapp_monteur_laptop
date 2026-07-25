@@ -383,28 +383,16 @@
           </div>
         </section>
 
-        <section class="sp-v2-section" aria-labelledby="zsSecExportTitle">
-          <header class="sp-v2-section-head" id="zsSecExportTitle">
-            <span class="sp-v2-num">2</span>
-            <img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true">
-            Speichern &amp; Freigabe
-          </header>
-          <div class="sp-v2-section-body">
-            <div class="zs-actions" style="margin-top:0">
-              <button type="button" class="btn" id="zsSave">Speichern</button>
-              <button type="button" class="btn btn-primary" id="zsSubmit">Freigeben (PDF)</button>
-              <span class="zs-msg" id="zsMsg" aria-live="polite"></span>
-            </div>
-          </div>
-        </section>
-
         <section class="sp-v2-section" aria-labelledby="zsSecTabelleTitle">
           <header class="sp-v2-section-head zs-overview-head" id="zsSecTabelleTitle">
-            <span class="sp-v2-num">3</span>
+            <span class="sp-v2-num">2</span>
             <img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true">
             <span id="zsOverviewTitle">Monatsübersicht – ${escapeHtml(MONTH_NAMES[state.month] || '')} ${state.year} – ${escapeHtml(state.technicianName || '')}</span>
             <div class="zs-overview-actions no-print">
+              <button type="button" class="btn zs-print-btn" id="zsSave">Speichern</button>
+              <button type="button" class="btn zs-print-btn zs-print-btn-primary" id="zsSubmit">Freigeben (PDF)</button>
               <button type="button" class="btn zs-print-btn" id="zsPrintBtn" title="Monatsübersicht in eigenem Fenster drucken (A4 Querformat, Farbe)">Drucken…</button>
+              <span class="zs-msg" id="zsMsg" aria-live="polite"></span>
             </div>
           </header>
           <div class="sp-v2-section-body">

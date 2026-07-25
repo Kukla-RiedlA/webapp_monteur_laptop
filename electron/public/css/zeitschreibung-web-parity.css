@@ -437,6 +437,23 @@
   background: var(--sp-mint, #eefaf5);
 }
 
+.page-zeitschreibung .zs-print-btn-primary {
+  background: var(--sp-green, #007a4d);
+  color: #fff;
+  border-color: var(--sp-green, #007a4d);
+}
+
+.page-zeitschreibung .zs-print-btn-primary:hover {
+  background: #006640;
+  color: #fff;
+}
+
+.page-zeitschreibung .zs-overview-actions .zs-msg {
+  font-size: 0.85rem;
+  color: var(--sp-muted, #4b5563);
+  max-width: 16rem;
+}
+
 .page-zeitschreibung section[aria-labelledby="zsSecTabelleTitle"] {
   flex: 1;
   min-height: 0;
