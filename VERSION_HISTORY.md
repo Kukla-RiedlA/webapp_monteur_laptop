@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.000.026
+- **Montage-Auftragsordner:** Bei Änderung von Ort/Kunde/Techniker wird der bestehende Ordner unter `Dokumente_Monteur/<FN>/Montage/` umbenannt bzw. gemerged statt neu angelegt (Multi-Laptop).
+- **Sticky-Name:** Folgt nach Align dem Desired-Namen; Accept/Pull/Push alignen vor dem Schreiben.
+
 ## V 2.000.005
 - **Montagebericht Sprachen:** Deutsch/Englisch als Checkboxen; bei beiden Auswahl werden zwei DOCX/PDF erzeugt.
 - **Montagebericht Dateinamen:** ohne führende Indexnummer; DE → `…_Montage_DE`, EN → `…_report_GB`.

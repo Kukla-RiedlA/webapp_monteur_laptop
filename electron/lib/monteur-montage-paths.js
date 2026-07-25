@@ -290,17 +290,118 @@ function ensureAnlageFnDirs(reiseDir, fabFolderEntries) {
 
 /**
  * Dokumente_Monteur/<Fileserver-FN>/Montage/<Auftragsordner>/ für Monteur-Dokumente.
+ * Vor mkdir: Geschwister derselben Identität (Datum+Monteur) bzw. previousName → Desired umbenennen/mergen.
+ *
+ * @param {string} reiseDir
+ * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabFolderEntries
+ * @param {string} auftragsordner Desired-Name
+ * @param {{ technicianDisplayName?: string, previousName?: string|null }} [opts]
  */
-function ensureMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner) {
+function ensureMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner, opts) {
+  alignMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner, opts);
+}
+
+/**
+ * @param {string} name
+ * @param {string} desired
+ * @param {string} datePrefix e.g. 2026-07-22_
+ * @param {string} monteurSuffix e.g. _Riedl_Alois
+ */
+function isMonteurMontageIdentitySibling(name, desired, datePrefix, monteurSuffix) {
+  const n = String(name || '').trim();
+  const d = String(desired || '').trim();
+  if (!n || n === d) return false;
+  if (datePrefix && !n.startsWith(datePrefix)) return false;
+  if (monteurSuffix && !n.endsWith(monteurSuffix)) return false;
+  return true;
+}
+
+/**
+ * Bestehende Auftragsordner umbenennen/mergen statt neu anzulegen.
+ * @returns {string} Desired-Name
+ */
+function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) {
+  const desired = String(desiredName || '').trim();
   const monteurBase = path.join(reiseDir, 'Dokumente_Monteur');
   if (!fs.existsSync(monteurBase)) fs.mkdirSync(monteurBase, { recursive: true });
-  if (!auftragsordner) return;
+  if (!desired) return desired;
+
+  const techName = opts && opts.technicianDisplayName != null ? String(opts.technicianDisplayName) : '';
+  const previousName = opts && opts.previousName != null ? String(opts.previousName).trim() : '';
+  const monteurPart = sanitizeDienstreiseFolderPart(techName || 'Monteur') || 'Monteur';
+  const monteurSuffix = '_' + monteurPart;
+  const dateMatch = desired.match(/^(\d{4}-\d{2}-\d{2})_/);
+  const datePrefix = dateMatch ? dateMatch[1] + '_' : '';
+
+  const fnFolders = new Set();
   for (const entry of fabFolderEntries || []) {
     const fnFolder = String(entry.folder_name_canonical || '').trim();
-    if (!fnFolder) continue;
-    const target = path.join(monteurBase, fnFolder, 'Montage', auftragsordner);
-    if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+    if (fnFolder) fnFolders.add(fnFolder);
   }
+  // Auch bestehende FN-Ordner ohne fab_map scannen (Align alter Geschwister).
+  for (const name of listSubdirNames(monteurBase)) {
+    fnFolders.add(name);
+  }
+
+  for (const fnFolder of fnFolders) {
+    const montageDir = path.join(monteurBase, fnFolder, 'Montage');
+    if (!fs.existsSync(montageDir)) {
+      fs.mkdirSync(montageDir, { recursive: true });
+    }
+    let children = [];
+    try {
+      children = fs
+        .readdirSync(montageDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name))
+        .map((e) => e.name);
+    } catch (_) {
+      children = [];
+    }
+    const candidates = [];
+    for (const child of children) {
+      if (child === desired) continue;
+      if (previousName && child === previousName) {
+        candidates.push(child);
+        continue;
+      }
+      if (isMonteurMontageIdentitySibling(child, desired, datePrefix, monteurSuffix)) {
+        candidates.push(child);
+      }
+    }
+    const desiredPath = path.join(montageDir, desired);
+    for (const oldName of candidates) {
+      const oldPath = path.join(montageDir, oldName);
+      if (!fs.existsSync(oldPath)) continue;
+      try {
+        if (!fs.existsSync(desiredPath)) {
+          fs.renameSync(oldPath, desiredPath);
+        } else {
+          mergeDirContentsInto(oldPath, desiredPath);
+          fs.rmSync(oldPath, { recursive: true, force: true });
+        }
+      } catch (err) {
+        console.warn(
+          '[monteur-paths] Auftragsordner-Align',
+          oldName,
+          '->',
+          desired,
+          err && err.message ? err.message : err,
+        );
+      }
+    }
+    if (!fs.existsSync(desiredPath)) {
+      try {
+        fs.mkdirSync(desiredPath, { recursive: true });
+      } catch (err) {
+        console.warn(
+          '[monteur-paths] mkdir Auftragsordner',
+          desiredPath,
+          err && err.message ? err.message : err,
+        );
+      }
+    }
+  }
+  return desired;
 }
 
 /**
@@ -400,6 +501,8 @@ module.exports = {
   isBareFabFolderName,
   ensureAnlageFnDirs,
   ensureMonteurMontageDirs,
+  alignMonteurMontageDirs,
+  isMonteurMontageIdentitySibling,
   removeLegacyMonteurAuftragsordnerTopLevel,
   removeStaleBareFabMonteurDirs,
   migrateBareFabAnlageDirs,

@@ -134,6 +134,7 @@ const {
   isMonteurWorkRelPath,
   ensureAnlageFnDirs,
   ensureMonteurMontageDirs,
+  alignMonteurMontageDirs,
   removeLegacyMonteurAuftragsordnerTopLevel,
   removeStaleBareFabMonteurDirs,
   isBareFabFolderName,
@@ -156,6 +157,7 @@ const {
   saveOfflinePullSelection,
   updateOfflinePullFabMap,
   ensureMontageFolderNameInConfig,
+  updateMontageFolderNameInConfig,
 } = require('./lib/job-offline-pull');
 const {
   DOKUMENTE_MONTEUR,
@@ -1729,15 +1731,22 @@ function createApp(db) {
         fabMap.push({ fab: String(fn), folder_name_canonical: String(fn) });
       }
     }
-    const montageName =
-      (body.montage_folder_name && String(body.montage_folder_name).trim()) ||
-      buildMonteurMontageFolderName(jobDetail || {}, getTechnicianDisplayName(technicianId));
     const offlinePaths = Object.prototype.hasOwnProperty.call(body, 'offline_paths')
       ? body.offline_paths
       : {};
-    saveOfflinePullSelection(db, localJobId, 'explicit', offlinePaths, fabMap, montageName);
-    save();
+    // Zuerst Align (Sticky = alter Name), danach Selection mit Desired speichern.
     const layout = ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
+    const montageName = layout.montageFolderName
+      || buildMonteurMontageFolderName(jobDetail || {}, getTechnicianDisplayName(technicianId));
+    saveOfflinePullSelection(
+      db,
+      localJobId,
+      'explicit',
+      offlinePaths,
+      layout.fabMap && layout.fabMap.length ? layout.fabMap : fabMap,
+      montageName,
+    );
+    save();
     applyJobStatusInArbeitAfterAccept(localJobId, technicianId);
     return {
       ok: true,
@@ -1746,7 +1755,7 @@ function createApp(db) {
       local_job_id: localJobId,
       reise_dir: targetDir,
       fab_map: layout.fabMap || fabMap,
-      montage_folder_name: layout.montageFolderName || montageName,
+      montage_folder_name: montageName,
       hint: 'Lokal angenommen. Projektdateien und Dispo-Status werden bei Verbindung synchronisiert.',
     };
   }
@@ -2081,12 +2090,48 @@ function createApp(db) {
   }
 
   function resolveMonteurAuftragsordnerName(localJobId, technicianId) {
-    const offlineCfg = getOfflinePullConfig(db, localJobId);
-    const fromCfg = offlineCfg && offlineCfg.montage_folder_name ? String(offlineCfg.montage_folder_name).trim() : '';
-    if (fromCfg) return fromCfg;
     const jobRow = lookupDienstreiseJobRow(localJobId);
     if (!jobRow) return '';
-    return buildMonteurMontageFolderName(jobRow, getTechnicianDisplayName(technicianId));
+    return buildMonteurMontageFolderName(jobRow, getTechnicianDisplayName(technicianId) || 'Monteur');
+  }
+
+  /** Sticky nur für Align (previousName); Schreibziel ist immer Desired live. */
+  function getStickyMontageFolderName(localJobId) {
+    const offlineCfg = getOfflinePullConfig(db, localJobId);
+    return offlineCfg && offlineCfg.montage_folder_name
+      ? String(offlineCfg.montage_folder_name).trim()
+      : '';
+  }
+
+  function rewriteDienstreisePushCacheMontageFolder(localJobId, oldName, desiredName) {
+    const oldN = String(oldName || '').trim();
+    const newN = String(desiredName || '').trim();
+    if (!oldN || !newN || oldN === newN) return;
+    try {
+      const rows = db
+        .prepare('SELECT rel_path FROM dienstreise_push_cache WHERE local_job_id = ?')
+        .all(localJobId);
+      const upd = db.prepare(
+        'UPDATE dienstreise_push_cache SET rel_path = ? WHERE local_job_id = ? AND rel_path = ?',
+      );
+      const needle = '/Montage/' + oldN;
+      const repl = '/Montage/' + newN;
+      const re = new RegExp('/Montage/' + oldN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(/|$)');
+      for (const row of rows) {
+        const rel = String(row.rel_path || '').replace(/\\/g, '/');
+        if (!re.test(rel)) continue;
+        const next = rel.split(needle).join(repl);
+        if (next !== rel) {
+          try {
+            upd.run(next, localJobId, rel);
+          } catch (_) {
+            /* unique conflict */
+          }
+        }
+      }
+    } catch (_) {
+      /* optional */
+    }
   }
 
   function uploadJobProjectFileToDispo(base, serverJobId, technicianId, authHeader, relPathFromRoot, fullPath) {
@@ -2227,6 +2272,15 @@ function createApp(db) {
     const jobId = getServerJobId(localJobId);
     const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
     if (!reiseDir || !fs.existsSync(reiseDir)) throw new Error('Dienstreise-Ordner existiert nicht.');
+    // Vor Push: Auftragsordner auf Desired alignen (Rename statt Parallelordner).
+    try {
+      ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+    } catch (alignErr) {
+      console.warn(
+        '[dienstreise_push] Montage-Align:',
+        alignErr && alignErr.message ? alignErr.message : alignErr,
+      );
+    }
 
     const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
 
@@ -2755,23 +2809,29 @@ function createApp(db) {
   }
 
   /**
-   * Dokumente_Monteur/<FN>/Montage/<Auftragsordner>/ für alle FNs des Auftrags anlegen.
+   * Dokumente_Monteur/<FN>/Montage/<Auftragsordner>/ für alle FNs des Auftrags anlegen/alignen.
    */
   function ensureJobReiseFolderLayout(localJobId, reiseDir, technicianIdOpt) {
     if (!reiseDir || !fs.existsSync(reiseDir)) return { fabMap: [], montageFolderName: '' };
     const fabMap = ensureFabMapCanonicalForJob(localJobId, reiseDir);
     const techId = resolveTechnicianIdForLocalJob(localJobId, technicianIdOpt);
+    const techDisplay = getTechnicianDisplayName(techId) || 'Monteur';
+    const previousName = getStickyMontageFolderName(localJobId);
     let montageFolderName = resolveMonteurAuftragsordnerName(localJobId, techId);
     if (!montageFolderName) {
       const jobRow = lookupDienstreiseJobRow(localJobId);
-      montageFolderName = buildMonteurMontageFolderName(
-        jobRow || {},
-        getTechnicianDisplayName(techId) || 'Monteur',
-      );
+      montageFolderName = buildMonteurMontageFolderName(jobRow || {}, techDisplay);
     }
-    if (montageFolderName && fabMap.length) {
-      ensureMonteurMontageDirs(reiseDir, fabMap, montageFolderName);
-      if (ensureMontageFolderNameInConfig(db, localJobId, montageFolderName)) save();
+    if (montageFolderName && (fabMap.length || previousName)) {
+      ensureMonteurMontageDirs(reiseDir, fabMap, montageFolderName, {
+        technicianDisplayName: techDisplay,
+        previousName: previousName || null,
+      });
+      if (previousName && previousName !== montageFolderName) {
+        rewriteDienstreisePushCacheMontageFolder(localJobId, previousName, montageFolderName);
+      }
+      if (updateMontageFolderNameInConfig(db, localJobId, montageFolderName)) save();
+      else if (ensureMontageFolderNameInConfig(db, localJobId, montageFolderName)) save();
       // Nur nachziehen, wenn Monteur-Default aktiv (sonst User-Abwahl der Wurzel nicht überschreiben)
       const monteurStillProtected = listProtectedPaths(db, localJobId).includes(DOKUMENTE_MONTEUR);
       if (monteurStillProtected) {
@@ -4214,23 +4274,36 @@ function createApp(db) {
             fabMap.push({ fab: String(fn), folder_name_canonical: String(fn) });
           }
         }
-        const montageName =
-          (body.montage_folder_name && String(body.montage_folder_name).trim()) ||
-          buildMonteurMontageFolderName(jobDetail || {}, getTechnicianDisplayName(technicianId));
-        saveOfflinePullSelection(db, localJobId, 'explicit', body.offline_paths, fabMap, montageName);
-        offlinePullMode = 'explicit';
-        save();
         try {
           const targetDir = getOrCreateDienstreiseFolderForJob(localJobId, {
-          skipAssignmentCheck: true,
-          technicianId,
-        });
-          ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
+            skipAssignmentCheck: true,
+            technicianId,
+          });
+          const layout = ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
+          const montageName =
+            (layout && layout.montageFolderName) ||
+            buildMonteurMontageFolderName(jobDetail || {}, getTechnicianDisplayName(technicianId));
+          saveOfflinePullSelection(
+            db,
+            localJobId,
+            'explicit',
+            body.offline_paths,
+            (layout && layout.fabMap && layout.fabMap.length ? layout.fabMap : fabMap),
+            montageName,
+          );
+          offlinePullMode = 'explicit';
+          save();
         } catch (layoutErr) {
           console.warn(
             '[accept] Montage-Ordner:',
             layoutErr && layoutErr.message ? layoutErr.message : layoutErr,
           );
+          const montageName =
+            (body.montage_folder_name && String(body.montage_folder_name).trim()) ||
+            buildMonteurMontageFolderName(jobDetail || {}, getTechnicianDisplayName(technicianId));
+          saveOfflinePullSelection(db, localJobId, 'explicit', body.offline_paths, fabMap, montageName);
+          offlinePullMode = 'explicit';
+          save();
         }
       }
 
@@ -7575,9 +7648,8 @@ function createApp(db) {
       const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
       const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
       const offlineCfgMb = getOfflinePullConfig(db, localJobId);
-      const montageFolderNameMb =
-        offlineCfgMb.montage_folder_name ||
-        buildMonteurMontageFolderName(lookupDienstreiseJobRow(localJobId) || {}, getTechnicianDisplayName(technicianId));
+      ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+      const montageFolderNameMb = resolveMonteurAuftragsordnerName(localJobId, technicianId);
 
       const targetFolderNames = new Set();
       for (const fab of fabs) {
@@ -8083,9 +8155,8 @@ function createApp(db) {
     const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
     const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
     const offlineCfg = getOfflinePullConfig(db, localJobId);
-    const montageFolderName =
-      offlineCfg.montage_folder_name ||
-      buildMonteurMontageFolderName(lookupDienstreiseJobRow(localJobId) || {}, getTechnicianDisplayName(technicianId));
+    ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+    const montageFolderName = resolveMonteurAuftragsordnerName(localJobId, technicianId);
     let folderName = null;
     const fromMap = (offlineCfg.fab_map || []).find((e) => String(e.fab) === String(fab));
     if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
@@ -8811,12 +8882,8 @@ function createApp(db) {
       const docMonteurPath = path.join(reiseDir, 'Dokumente_Monteur');
       const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
       const offlineCfgPl = getOfflinePullConfig(db, localJobId);
-      const montageFolderNamePl =
-        offlineCfgPl.montage_folder_name ||
-        buildMonteurMontageFolderName(
-          db.prepare('SELECT j.start_datetime, c.name AS customer_name, ja.city, ja.country FROM jobs j LEFT JOIN customers c ON c.id = j.customer_id LEFT JOIN job_addresses ja ON ja.job_id = j.id WHERE j.id = ?').get(localJobId) || {},
-          getTechnicianDisplayName(technicianId),
-        );
+      ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+      const montageFolderNamePl = resolveMonteurAuftragsordnerName(localJobId, technicianId);
       let csvBuffer;
       try {
         csvBuffer = Buffer.from(contentBase64, 'base64');
@@ -10145,9 +10212,6 @@ function createApp(db) {
         const pullMode = p.offline_pull_mode || offlineCfg.pull_mode || 'legacy';
         const skipTedOnPull = acceptJob || pullMode === 'explicit';
         const pathsByFab = getOfflinePullPathsByFab(db, localJobId);
-        let montageFolderName =
-          offlineCfg.montage_folder_name ||
-          buildMonteurMontageFolderName(jobRowFull, getTechnicianDisplayName(technicianId));
         let fabMap = offlineCfg.fab_map || [];
         if (!fabMap.length) {
           fabMap = [];
@@ -10170,12 +10234,13 @@ function createApp(db) {
             save();
           });
         }
-        if (montageFolderName && fabMap.length) {
-          ensureAnlageFnDirs(targetDir, fabMap);
-          migrateBareFabAnlageDirs(targetDir, fabMap);
+        ensureAnlageFnDirs(targetDir, fabMap);
+        migrateBareFabAnlageDirs(targetDir, fabMap);
+        removeStaleBareFabMonteurDirs(targetDir, fabMap);
+        const layoutPull = ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
+        const montageFolderName = layoutPull.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
+        if (montageFolderName) {
           removeLegacyMonteurAuftragsordnerTopLevel(targetDir, montageFolderName, fabMap);
-          removeStaleBareFabMonteurDirs(targetDir, fabMap);
-          ensureMonteurMontageDirs(targetDir, fabMap, montageFolderName);
         }
         let fp = fingerprintDispoBase(dispoBaseUrl);
         let chk = readCheckpoint();

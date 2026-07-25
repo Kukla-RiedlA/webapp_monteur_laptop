@@ -226,6 +226,25 @@ function ensureMontageFolderNameInConfig(db, localJobId, montageFolderName) {
   return true;
 }
 
+/** Sticky-Auftragsordner immer auf Desired setzen (nach Align/Rename). */
+function updateMontageFolderNameInConfig(db, localJobId, montageFolderName) {
+  ensureJobOfflinePullSchema(db);
+  const name = String(montageFolderName || '').trim();
+  if (!name) return false;
+  const row = db.prepare('SELECT montage_folder_name FROM job_offline_pull_config WHERE local_job_id = ?').get(localJobId);
+  const prev = row ? String(row.montage_folder_name || '').trim() : '';
+  if (prev === name) return false;
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO job_offline_pull_config (local_job_id, pull_mode, montage_folder_name, fab_map_json, updated_at)
+     VALUES (?, 'legacy', ?, '[]', ?)
+     ON CONFLICT(local_job_id) DO UPDATE SET
+       montage_folder_name = excluded.montage_folder_name,
+       updated_at = excluded.updated_at`,
+  ).run(localJobId, name, now);
+  return true;
+}
+
 function saveOfflinePullSelection(db, localJobId, pullMode, offlinePathsRaw, fabMap, montageFolderName) {
   ensureJobOfflinePullSchema(db);
   const now = new Date().toISOString();
@@ -265,6 +284,7 @@ module.exports = {
   normalizeOfflinePathsInput,
   updateOfflinePullFabMap,
   ensureMontageFolderNameInConfig,
+  updateMontageFolderNameInConfig,
   saveOfflinePullSelection,
   isTedInnerPath,
 };
