@@ -4,6 +4,13 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.001.000
+- **Release:** Plattformweite Release-Stufe 2.001; Patch-Zaehler zurueck auf 000.
+- **Zeitschreibung:** Speichern/Freigeben in Kopfzeile; Druck mit Dispo-Vorlage (A4 quer); Krank/Arzt getrennt; Sticky-Kopf/-Spalten; Lohn-Korrektur als Tooltip; Entsperren lokal.
+- **Sync / Kalender:** Multi-Device (device_id, Draft-Push, Bootstrap); sichtbarer Zeitraum online in Cache; Unassigned-Jobs gecacht.
+- **Leistungsdaten / PROJEKTE NEU:** Type aus Anlagenstamm heilt Index-Bug; Soft-Refresh ohne Flackern; Windows-Stil-Icons; „Nicht loeschen“ schuetzt Ordnerinhalt.
+- **Auto-Update:** TLS-Fix fuer electron-updater bei selbstsigniertem Dispo-HTTPS.
+
 ## V 2.000.030
 - **Zeitschreibung UI:** Speichern und Freigeben (PDF) in der Monatsübersicht-Kopfzeile vor Drucken; Sektion „Speichern & Freigabe“ entfernt.
 - **Zeitschreibung Druck:** Gruppen-Trennerlinien dicker (wie Dispo).
