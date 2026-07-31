@@ -2087,6 +2087,9 @@
 
   var startPageActiveJobId = null;
   var startPageActiveJobSnapshot = null;
+  var startPageActiveJobsForDay = [];
+  /** Kalendertag für „Aktiver Auftrag“ (YYYY-MM-DD); Standard: heute. */
+  var startSelectedDayYmd = null;
 
   function isStartViewVisible() {
     var el = document.getElementById('viewStart');
@@ -2098,13 +2101,368 @@
     return !!(el && el.classList.contains('active'));
   }
 
-  function pickStartActiveJob(jobs) {
-    var arr = Array.isArray(jobs) ? jobs : [];
-    var inArbeit = arr.filter(function (j) {
-      return j && String(j.status || '').trim().toLowerCase() === 'in_arbeit';
+  function getStartSelectedDayYmd() {
+    if (startSelectedDayYmd && /^\d{4}-\d{2}-\d{2}$/.test(startSelectedDayYmd)) {
+      return startSelectedDayYmd;
+    }
+    return toYmd(new Date());
+  }
+
+  function setStartSelectedDayYmd(ymd, opts) {
+    opts = opts || {};
+    var next = String(ymd || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) next = toYmd(new Date());
+    var changed = startSelectedDayYmd !== next;
+    startSelectedDayYmd = next;
+    if (changed || opts.forceHighlight) {
+      highlightCalendarSelectedDay(next);
+    }
+    if (opts.reload !== false && typeof loadStartActiveJob === 'function') {
+      loadStartActiveJob({ soft: opts.soft === true, preserveSelection: !!opts.preserveSelection });
+    }
+    return next;
+  }
+
+  function highlightCalendarSelectedDay(ymd) {
+    var day = String(ymd || getStartSelectedDayYmd()).slice(0, 10);
+    document.querySelectorAll('#calGrid .cal-cell.cal-day-selected').forEach(function (el) {
+      el.classList.remove('cal-day-selected');
     });
-    if (!inArbeit.length) return null;
-    return sortOpenJobsByEinsatzdatumAsc(inArbeit)[0];
+    document.querySelectorAll('#calGrid .cal-cell[data-ymd]').forEach(function (el) {
+      if (el.getAttribute('data-ymd') === day) el.classList.add('cal-day-selected');
+    });
+    var hint = document.getElementById('startActiveJobDayHint');
+    if (hint) {
+      try {
+        var d = new Date(day + 'T12:00:00');
+        hint.textContent = 'Tag: ' + d.toLocaleDateString('de-DE', {
+          weekday: 'short',
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        });
+      } catch (_) {
+        hint.textContent = 'Tag: ' + day;
+      }
+    }
+  }
+
+  function jobCoversYmd(job, ymd) {
+    if (!job || !ymd) return false;
+    var s = String(job.start_datetime || '').slice(0, 10);
+    var e = String(job.end_datetime || job.start_datetime || '').slice(0, 10);
+    if (!s) return false;
+    if (!e) e = s;
+    return s <= ymd && ymd <= e;
+  }
+
+  /** Aufträge am gewählten Kalendertag (eigene Liste, ohne abgerechnet). */
+  function pickStartActiveJobsForDay(jobs, ymd) {
+    var day = ymd || getStartSelectedDayYmd();
+    var arr = (Array.isArray(jobs) ? jobs : []).filter(function (j) {
+      return j && !isJobAbgerechnet(j) && jobCoversYmd(j, day);
+    });
+    return sortOpenJobsByEinsatzdatumAsc(arr);
+  }
+
+  /** @deprecated Einzeltreffer — nutze pickStartActiveJobsForDay. */
+  function pickStartActiveJob(jobs) {
+    var list = pickStartActiveJobsForDay(jobs, getStartSelectedDayYmd());
+    return list.length ? list[0] : null;
+  }
+
+  function clearStartActiveJobHtmlSig(el) {
+    if (el && el.removeAttribute) el.removeAttribute('data-html-sig');
+  }
+
+  function formatStartActiveJobTitleHtml(job) {
+    var firma = (job.customer_name || job.customerName || '').trim();
+    var ort = (job.city || '').trim();
+    var land = normalizeCountryToCode(job.country) || (job.country || '').trim().toUpperCase().slice(0, 2);
+    var flagHtml = countryFlagImg(land);
+    var parts = [];
+    if (flagHtml) parts.push(flagHtml);
+    if (firma) parts.push(escapeHtml(firma));
+    if (ort) parts.push(escapeHtml(ort));
+    return parts.join(' ') || '<span class="empty">Auftrag</span>';
+  }
+
+  function formatStartActiveJobMetaHtml(job) {
+    var dateStr = formatDateRange(job.start_datetime, job.end_datetime);
+    var stClass = jobStatusBadgeClass(job.status);
+    var stLabel = jobStatusDisplayLabel(job.status);
+    return (
+      escapeHtml(dateStr) +
+      ' · <span class="status-badge status-' +
+      stClass +
+      '">' +
+      escapeHtml(stLabel) +
+      '</span>'
+    );
+  }
+
+  function setStartActiveJobChromeVisible(hasJob) {
+    var label = document.getElementById('startActiveJobContactsLabel');
+    var subEl = document.getElementById('startActiveJobSubtitle');
+    var metaEl = document.getElementById('startActiveJobMeta');
+    var titleEl = document.getElementById('startActiveJobTitle');
+    if (label) label.hidden = !hasJob;
+    if (subEl) subEl.hidden = !hasJob;
+    if (metaEl) metaEl.hidden = !hasJob;
+    if (titleEl) titleEl.hidden = !hasJob;
+  }
+
+  function renderStartActiveJobDetails(job, opts) {
+    opts = opts || {};
+    var titleEl = document.getElementById('startActiveJobTitle');
+    var subEl = document.getElementById('startActiveJobSubtitle');
+    var metaEl = document.getElementById('startActiveJobMeta');
+    if (!titleEl || !job) return;
+    setStartActiveJobChromeVisible(true);
+    clearStartActiveJobHtmlSig(titleEl);
+    clearStartActiveJobHtmlSig(subEl);
+    clearStartActiveJobHtmlSig(metaEl);
+    setElementHtmlIfChanged(titleEl, formatStartActiveJobTitleHtml(job));
+    if (subEl) setElementHtmlIfChanged(subEl, renderStartJobContactsHtml(job));
+    if (metaEl) setElementHtmlIfChanged(metaEl, formatStartActiveJobMetaHtml(job));
+    var prevActiveJobId = startPageActiveJobId;
+    startPageActiveJobId = job.id;
+    startPageActiveJobSnapshot = job;
+    var sameJob = jobIdsEqual(prevActiveJobId, job.id);
+    loadDienstreiseExplorer(job.id, sameJob ? startExplorerSubpath : '', 'start', {
+      soft: sameJob && opts.soft !== false,
+    });
+    if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+  }
+
+  function renderStartActiveJobs(jobs, opts) {
+    opts = opts || {};
+    var list = Array.isArray(jobs) ? jobs : [];
+    startPageActiveJobsForDay = list;
+    var titleEl = document.getElementById('startActiveJobTitle');
+    var subEl = document.getElementById('startActiveJobSubtitle');
+    var metaEl = document.getElementById('startActiveJobMeta');
+    var listEl = document.getElementById('startActiveJobList');
+    if (!titleEl) return;
+
+    if (!list.length) {
+      startPageActiveJobId = null;
+      startPageActiveJobSnapshot = null;
+      if (listEl) {
+        listEl.hidden = true;
+        listEl.innerHTML = '';
+      }
+      clearStartActiveJobHtmlSig(titleEl);
+      titleEl.hidden = false;
+      titleEl.innerHTML = '';
+      titleEl.className = 'start-active-job-empty';
+      setStartActiveJobChromeVisible(false);
+      if (subEl) {
+        clearStartActiveJobHtmlSig(subEl);
+        subEl.innerHTML = '';
+      }
+      if (metaEl) {
+        clearStartActiveJobHtmlSig(metaEl);
+        metaEl.innerHTML = '';
+      }
+      loadDienstreiseExplorer(null, '', 'start');
+      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+      return;
+    }
+
+    titleEl.className = 'start-active-job-title';
+    var preferredId = opts.preferredJobId != null ? opts.preferredJobId : startPageActiveJobId;
+    var selected = null;
+    if (preferredId != null) {
+      for (var i = 0; i < list.length; i++) {
+        if (jobIdsEqual(list[i].id, preferredId)) {
+          selected = list[i];
+          break;
+        }
+      }
+    }
+    if (!selected) selected = list[0];
+
+    if (list.length === 1) {
+      if (listEl) {
+        listEl.hidden = true;
+        listEl.innerHTML = '';
+      }
+      renderStartActiveJobDetails(selected, { soft: opts.soft });
+      return;
+    }
+
+    // Mehrere Aufträge am Tag: Liste + Detail/Explorer für Auswahl
+    if (listEl) {
+      listEl.hidden = false;
+      listEl.innerHTML = list
+        .map(function (j) {
+          var sel = jobIdsEqual(j.id, selected.id) ? ' is-selected' : '';
+          return (
+            '<div class="start-active-job-item' +
+            sel +
+            '" data-job-id="' +
+            escapeHtml(String(j.id)) +
+            '" role="button" tabindex="0">' +
+            '<div class="start-active-job-title">' +
+            formatStartActiveJobTitleHtml(j) +
+            '</div>' +
+            '<div class="start-active-job-meta">' +
+            formatStartActiveJobMetaHtml(j) +
+            '</div></div>'
+          );
+        })
+        .join('');
+      listEl.querySelectorAll('.start-active-job-item').forEach(function (item) {
+        function activate() {
+          var jid = parseInt(item.getAttribute('data-job-id'), 10);
+          var job = null;
+          for (var k = 0; k < startPageActiveJobsForDay.length; k++) {
+            if (jobIdsEqual(startPageActiveJobsForDay[k].id, jid)) {
+              job = startPageActiveJobsForDay[k];
+              break;
+            }
+          }
+          if (!job) return;
+          listEl.querySelectorAll('.start-active-job-item').forEach(function (el) {
+            el.classList.toggle('is-selected', jobIdsEqual(el.getAttribute('data-job-id'), job.id));
+          });
+          renderStartActiveJobDetails(job, { soft: false });
+        }
+        item.addEventListener('click', activate);
+        item.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            activate();
+          }
+        });
+      });
+    }
+    // Einzel-Titel ausblenden (Liste zeigt Titel), Kontakte/Meta für Auswahl
+    titleEl.hidden = true;
+    titleEl.innerHTML = '';
+    renderStartActiveJobDetails(selected, { soft: opts.soft });
+  }
+
+  function renderStartActiveJob(job) {
+    if (!job) {
+      renderStartActiveJobs([], {});
+      return;
+    }
+    renderStartActiveJobs([job], { preferredJobId: job.id });
+  }
+
+  function loadStartActiveJobById(localJobId, jobSnapshot) {
+    var techId = getTechId();
+    if (!techId || !localJobId) {
+      renderStartActiveJobs([], {});
+      return Promise.resolve(null);
+    }
+    if (jobSnapshot && jobSnapshot.start_datetime) {
+      setStartSelectedDayYmd(String(jobSnapshot.start_datetime).slice(0, 10), {
+        reload: false,
+        forceHighlight: true,
+      });
+    }
+    var range = getSyncDateRange();
+    return fetch(
+      API_BASE +
+        '/api/my_jobs?' +
+        qs({
+          technician_id: techId,
+          date_from: range.date_from,
+          date_to: range.date_to,
+          assigned_only: '1',
+        }),
+      { headers: { 'X-Technician-Id': String(techId) } },
+    )
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        var jobs = data && data.jobs ? data.jobs : [];
+        jobs = jobs.filter(function (j) {
+          return j && !isJobAbgerechnet(j);
+        });
+        var dayJobs = pickStartActiveJobsForDay(jobs, getStartSelectedDayYmd());
+        var found = null;
+        for (var i = 0; i < jobs.length; i++) {
+          if (jobs[i] && (jobs[i].id === localJobId || jobs[i].id == localJobId)) {
+            found = jobs[i];
+            break;
+          }
+        }
+        if (found && !dayJobs.some(function (j) { return jobIdsEqual(j.id, found.id); })) {
+          dayJobs = sortOpenJobsByEinsatzdatumAsc(dayJobs.concat([found]));
+        }
+        renderStartActiveJobs(dayJobs, { preferredJobId: localJobId, soft: false });
+        return found;
+      })
+      .catch(function () {
+        renderStartActiveJobs([], {});
+        return null;
+      });
+  }
+
+  async function loadStartActiveJob(opts) {
+    opts = opts || {};
+    var soft = opts.soft === true;
+    var titleEl = document.getElementById('startActiveJobTitle');
+    if (!titleEl) return;
+    var techId = getTechId();
+    if (!techId) {
+      renderStartActiveJobs([], {});
+      titleEl.className = 'start-active-job-title';
+      titleEl.hidden = false;
+      clearStartActiveJobHtmlSig(titleEl);
+      titleEl.innerHTML = '<span class="empty">Monteur-ID in Einstellungen eintragen.</span>';
+      return;
+    }
+    if (!startSelectedDayYmd) startSelectedDayYmd = toYmd(new Date());
+    highlightCalendarSelectedDay(getStartSelectedDayYmd());
+    // Soft: bestehenden Inhalt stehen lassen — kein „Wird geladen“-Flackern.
+    if (!soft) {
+      clearStartActiveJobHtmlSig(titleEl);
+      if (!startPageActiveJobSnapshot && !(startPageActiveJobsForDay && startPageActiveJobsForDay.length)) {
+        titleEl.className = 'start-active-job-title';
+        titleEl.hidden = false;
+        titleEl.innerHTML = '<span class="empty">Wird geladen…</span>';
+      }
+    }
+    var range = getSyncDateRange();
+    try {
+      var res = await fetch(
+        API_BASE +
+          '/api/my_jobs?' +
+          qs({
+            technician_id: techId,
+            date_from: range.date_from,
+            date_to: range.date_to,
+            assigned_only: '1',
+          }),
+        { headers: { 'X-Technician-Id': String(techId) } },
+      );
+      var data = await res.json().catch(function () {
+        return {};
+      });
+      var jobs = data && data.jobs ? data.jobs : [];
+      jobs = jobs.filter(function (j) {
+        return j && !isJobAbgerechnet(j);
+      });
+      var dayJobs = pickStartActiveJobsForDay(jobs, getStartSelectedDayYmd());
+      renderStartActiveJobs(dayJobs, {
+        soft: soft,
+        preferredJobId: opts.preserveSelection ? startPageActiveJobId : undefined,
+      });
+    } catch (e) {
+      if (!soft || !startPageActiveJobSnapshot) {
+        clearStartActiveJobHtmlSig(titleEl);
+        titleEl.className = 'start-active-job-title';
+        titleEl.hidden = false;
+        titleEl.innerHTML = '<span class="empty">Aufträge nicht lesbar: ' + escapeHtml(e.message) + '</span>';
+        setStartActiveJobChromeVisible(false);
+      }
+    }
   }
 
   /** Nur Baustellen-Ansprechpartner (job_contacts / baustellen_ansprechpartner), nicht Kundenkontakt. */
@@ -2368,138 +2726,6 @@
       lines.push('<span class="start-contact-line">' + contactLines.join('<br>') + '</span>');
     });
     return lines.length ? lines.join('') : '<span class="muted">Kein Baustellen-Ansprechpartner hinterlegt.</span>';
-  }
-
-  function renderStartActiveJob(job) {
-    var titleEl = document.getElementById('startActiveJobTitle');
-    var subEl = document.getElementById('startActiveJobSubtitle');
-    var metaEl = document.getElementById('startActiveJobMeta');
-    if (!titleEl) return;
-    if (!job) {
-      startPageActiveJobId = null;
-      startPageActiveJobSnapshot = null;
-      titleEl.innerHTML = '<span class="empty">Kein aktiver Auftrag.</span>';
-      if (subEl) subEl.innerHTML = '';
-      if (metaEl) metaEl.innerHTML = '';
-      loadDienstreiseExplorer(null, '', 'start');
-      if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-      return;
-    }
-    var prevActiveJobId = startPageActiveJobId;
-    startPageActiveJobId = job.id;
-    startPageActiveJobSnapshot = job;
-    var sameJob = jobIdsEqual(prevActiveJobId, job.id);
-    var firma = (job.customer_name || job.customerName || '').trim();
-    var ort = (job.city || '').trim();
-    var land = normalizeCountryToCode(job.country) || (job.country || '').trim().toUpperCase().slice(0, 2);
-    var flagHtml = countryFlagImg(land);
-    var parts = [];
-    if (flagHtml) parts.push(flagHtml);
-    if (firma) parts.push(escapeHtml(firma));
-    if (ort) parts.push(escapeHtml(ort));
-    setElementHtmlIfChanged(titleEl, parts.join(' ') || '<span class="empty">Auftrag</span>');
-    if (subEl) setElementHtmlIfChanged(subEl, renderStartJobContactsHtml(job));
-    if (metaEl) {
-      var dateStr = formatDateRange(job.start_datetime, job.end_datetime);
-      var stClass = jobStatusBadgeClass(job.status);
-      var stLabel = jobStatusDisplayLabel(job.status);
-      setElementHtmlIfChanged(
-        metaEl,
-        escapeHtml(dateStr) +
-          ' · <span class="status-badge status-' +
-          stClass +
-          '">' +
-          escapeHtml(stLabel) +
-          '</span>'
-      );
-    }
-    // Gleicher Auftrag (z. B. nach Sync): Soft-Refresh — Ordner offen lassen, kein Flackern.
-    loadDienstreiseExplorer(job.id, sameJob ? startExplorerSubpath : '', 'start', {
-      soft: sameJob,
-    });
-    if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
-  }
-
-  function loadStartActiveJobById(localJobId, jobSnapshot) {
-    var techId = getTechId();
-    if (!techId || !localJobId) {
-      renderStartActiveJob(null);
-      return Promise.resolve(null);
-    }
-    var range = getSyncDateRange();
-    return fetch(
-      API_BASE +
-        '/api/my_jobs?' +
-        qs({
-          technician_id: techId,
-          date_from: range.date_from,
-          date_to: range.date_to,
-          assigned_only: '1',
-        }),
-      { headers: { 'X-Technician-Id': String(techId) } },
-    )
-      .then(function (r) {
-        return r.json();
-      })
-      .then(function (data) {
-        var jobs = data && data.jobs ? data.jobs : [];
-        var found = null;
-        for (var i = 0; i < jobs.length; i++) {
-          if (jobs[i] && (jobs[i].id === localJobId || jobs[i].id == localJobId)) {
-            found = jobs[i];
-            break;
-          }
-        }
-        renderStartActiveJob(found || null);
-        return found;
-      })
-      .catch(function () {
-        renderStartActiveJob(null);
-        return null;
-      });
-  }
-
-  async function loadStartActiveJob(opts) {
-    opts = opts || {};
-    var soft = opts.soft === true;
-    var titleEl = document.getElementById('startActiveJobTitle');
-    if (!titleEl) return;
-    var techId = getTechId();
-    if (!techId) {
-      renderStartActiveJob(null);
-      titleEl.innerHTML = '<span class="empty">Monteur-ID in Einstellungen eintragen.</span>';
-      return;
-    }
-    // Soft (z. B. nach Sync): bestehenden Auftrag stehen lassen — kein „Wird geladen“-Flackern.
-    if (!soft || !startPageActiveJobSnapshot) {
-      if (!soft) titleEl.innerHTML = '<span class="empty">Wird geladen…</span>';
-    }
-    var range = getSyncDateRange();
-    try {
-      var res = await fetch(
-        API_BASE +
-          '/api/my_jobs?' +
-          qs({
-            technician_id: techId,
-            date_from: range.date_from,
-            date_to: range.date_to,
-            assigned_only: '1',
-          }),
-        { headers: { 'X-Technician-Id': String(techId) } },
-      );
-      var data = await res.json().catch(function () {
-        return {};
-      });
-      var jobs = data && data.jobs ? data.jobs : [];
-      jobs = jobs.filter(function (j) {
-        return j && !isJobAbgerechnet(j);
-      });
-      renderStartActiveJob(pickStartActiveJob(jobs));
-    } catch (e) {
-      if (!soft || !startPageActiveJobSnapshot) {
-        titleEl.innerHTML = '<span class="empty">Aufträge nicht lesbar: ' + escapeHtml(e.message) + '</span>';
-      }
-    }
   }
 
   function getStartUploadRelativeDir() {
@@ -6294,7 +6520,7 @@
     var soft = force === true;
     return Promise.all([
       loadJobsAndAbsences(),
-      loadStartActiveJob({ soft: soft }),
+      loadStartActiveJob({ soft: soft, preserveSelection: soft }),
       loadCalendarMonth({ soft: soft }).catch(function () {}),
       typeof loadDienstreiseList === 'function' ? Promise.resolve(loadDienstreiseList({ soft: true })) : Promise.resolve(),
     ]).then(function () {
@@ -6307,7 +6533,7 @@
     if (!force && now - localListsRefreshAt < LOCAL_LISTS_REFRESH_MS) return;
     localListsRefreshAt = now;
     loadJobsAndAbsences();
-    if (isStartViewVisible()) loadStartActiveJob({ soft: true });
+    if (isStartViewVisible()) loadStartActiveJob({ soft: true, preserveSelection: true });
     loadCalendarMonth({ soft: true }).catch(function () {});
     if (typeof loadDienstreiseList === 'function') loadDienstreiseList({ soft: true });
   }
@@ -6368,7 +6594,7 @@
       );
     }
     if (isStartViewVisible() && typeof loadStartActiveJob === 'function') {
-      loadStartActiveJob({ soft: true });
+      loadStartActiveJob({ soft: true, preserveSelection: true });
     }
   }
 
@@ -10479,7 +10705,7 @@
       var nowStart = Date.now();
       if (nowStart - startViewDataLoadedAt >= START_VIEW_DATA_MS) {
         startViewDataLoadedAt = nowStart;
-        loadStartActiveJob({ soft: !!startPageActiveJobSnapshot });
+        loadStartActiveJob({ soft: !!startPageActiveJobSnapshot, preserveSelection: true });
         loadCalendarMonth({ soft: true });
       } else if (startPageActiveJobId) {
         loadDienstreiseExplorer(startPageActiveJobId, startExplorerSubpath, 'start');
@@ -11323,12 +11549,36 @@
         const ymd = toYmd(cellDate);
         const otherMonth = cellDate.getMonth() !== currentMonth;
         const isToday = ymd === todayYmd;
+        const isSelectedDay = ymd === getStartSelectedDayYmd();
         const hname = getHolidayName(cellDate);
         const holidayCls = hname ? ' day-holiday' : '';
+        const selectedCls = isSelectedDay ? ' cal-day-selected' : '';
         const holidayHtml = hname ? '<div class="holiday-name">' + escapeHtml(hname) + '</div>' : '';
-        cellsHtml += '<div class="cal-cell' + (otherMonth ? ' other-month' : '') + (isToday ? ' today' : '') + holidayCls + '" style="min-height:' + neededHeight + 'px"><div class="cal-daynum">' + cellDate.getDate() + '</div>' + holidayHtml + '</div>';
+        cellsHtml +=
+          '<div class="cal-cell' +
+          (otherMonth ? ' other-month' : '') +
+          (isToday ? ' today' : '') +
+          holidayCls +
+          selectedCls +
+          '" data-ymd="' +
+          escapeHtml(ymd) +
+          '" style="min-height:' +
+          neededHeight +
+          'px"><div class="cal-daynum">' +
+          cellDate.getDate() +
+          '</div>' +
+          holidayHtml +
+          '</div>';
       }
       weekGrid.innerHTML = cellsHtml;
+      weekGrid.querySelectorAll('.cal-cell[data-ymd]').forEach(function (cell) {
+        cell.addEventListener('click', function (ev) {
+          if (ev.target.closest('.month2-band')) return;
+          var day = cell.getAttribute('data-ymd');
+          if (!day) return;
+          setStartSelectedDayYmd(day, { soft: false, preserveSelection: false, forceHighlight: true });
+        });
+      });
       weekRow.appendChild(weekGrid);
 
       const bands = document.createElement('div');
@@ -11374,6 +11624,17 @@
           if (canActOnJob) {
             band.addEventListener('click', function (ev) {
               if (ev.detail > 1) return;
+              ev.stopPropagation();
+              var clickYmd = getStartSelectedDayYmd();
+              try {
+                var cell = document.elementFromPoint(ev.clientX, ev.clientY);
+                var calCell = cell && cell.closest ? cell.closest('.cal-cell[data-ymd]') : null;
+                if (calCell) clickYmd = calCell.getAttribute('data-ymd') || clickYmd;
+              } catch (_) { /* ignore */ }
+              if (!jobCoversYmd(j, clickYmd)) {
+                clickYmd = String(j.start_datetime || '').slice(0, 10) || clickYmd;
+              }
+              setStartSelectedDayYmd(clickYmd, { reload: false, forceHighlight: true });
               if (typeof loadStartActiveJobById === 'function') loadStartActiveJobById(actionJobId, j);
             });
             band.addEventListener('dblclick', function () {

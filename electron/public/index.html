@@ -151,6 +151,24 @@
     .start-active-job-subtitle { margin: 0 0 0.5rem; font-size: 0.9rem; color: var(--text); line-height: 1.45; }
     .start-active-job-subtitle .start-contact-line { display: block; }
     .start-active-job-meta { margin: 0 0 0.75rem; font-size: 0.82rem; color: var(--muted); }
+    .start-active-job-list { display: flex; flex-direction: column; gap: 0.55rem; margin: 0 0 0.75rem; }
+    .start-active-job-item {
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 0.45rem 0.55rem;
+      cursor: pointer;
+      background: var(--card);
+    }
+    .start-active-job-item:hover { background: rgba(255,255,255,0.04); }
+    .start-active-job-item.is-selected {
+      outline: 2px solid var(--accent, #0e7b5a);
+      outline-offset: -1px;
+      background: rgba(14, 123, 90, 0.1);
+    }
+    .start-active-job-item .start-active-job-title { font-size: 1.05rem; margin-bottom: 0.25rem; }
+    .start-active-job-item .start-active-job-meta { margin-bottom: 0; }
+    .start-active-job-empty { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.95rem; }
+    .cal-cell { cursor: pointer; }
     .start-card-nested { margin-top: 0.5rem; margin-bottom: 0.75rem; padding: 0.75rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); }
     .start-card-nested h3 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--muted); font-weight: 600; }
     .start-drop-zone {
@@ -918,6 +936,8 @@
     .cal-daynum { font-weight: bold; margin-bottom: 4px; }
     /* inset statt outline: Outline liegt sonst oft über den Wochen-Balken (Geschwister-Overlay) */
     .cal-cell.today { box-shadow: inset 0 0 0 2px var(--today-ring-color); }
+    .cal-cell.cal-day-selected,
+    .cal-cell.today.cal-day-selected { box-shadow: inset 0 0 0 2px var(--accent, #0e7b5a); }
     .cal-cell.day-holiday { background: rgba(180, 80, 80, 0.25); }
     .cal-cell.other-month.day-holiday { background: rgba(180, 80, 80, 0.2); }
     .cal-cell .holiday-name { font-size: 0.7em; color: #e07c7c; margin-top: 2px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1404,8 +1424,10 @@
       <main id="viewStartActiveJob" class="view-start-active-job" aria-label="Aktiver Auftrag">
         <div class="card start-active-job" id="startActiveJobCard">
           <h2 class="muted" style="margin:0 0 0.5rem;font-size:1rem;">Aktiver Auftrag</h2>
-          <div id="startActiveJobTitle" class="start-active-job-title"><span class="empty">Wird geladen…</span></div>
-          <div class="start-active-job-contacts-label muted">Baustellen-Ansprechpartner</div>
+          <div id="startActiveJobDayHint" class="muted" style="font-size:0.8rem;margin:0 0 0.35rem;"></div>
+          <div id="startActiveJobList" class="start-active-job-list" hidden></div>
+          <div id="startActiveJobTitle" class="start-active-job-title"></div>
+          <div class="start-active-job-contacts-label muted" id="startActiveJobContactsLabel">Baustellen-Ansprechpartner</div>
           <div id="startActiveJobSubtitle" class="start-active-job-subtitle"></div>
           <div id="startActiveJobMeta" class="start-active-job-meta"></div>
           <div class="start-card-nested" id="startExplorerCard">
