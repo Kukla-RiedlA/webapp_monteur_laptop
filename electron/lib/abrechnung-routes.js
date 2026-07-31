@@ -237,15 +237,17 @@ function enrichAbrechnungFilesWithSyncState(db, jobServerId, files) {
     const bucket = String(f.bucket || 'dispo').trim();
     const name = normalizeAbrechnungRelativeName(f.name || f.file_name || '');
     const key = bucket + '\0' + name;
+    const synced = f.synced_at != null && String(f.synced_at).trim() !== '';
     let sync_state = 'idle';
     if (pendingDel.has(key)) sync_state = 'pending_delete';
-    else if (pendingUp.has(key)) sync_state = 'pending_upload';
+    else if (pendingUp.has(key) && !synced) sync_state = 'pending_upload';
+    // Stale Outbox nach Live-Upload: synced_at gesetzt → nicht weiter drehen.
     const server_present =
       sync_state === 'pending_upload'
         ? false
         : sync_state === 'pending_delete'
           ? true
-          : f.synced_at != null && String(f.synced_at).trim() !== '';
+          : synced;
     return Object.assign({}, f, {
       name: name || f.name || f.file_name,
       sync_state,
@@ -773,6 +775,16 @@ function dispoUploadMultipartOnce(urlStr, fields, fileBuf, fileName, authHeader,
             reject(new Error((data && data.error) || body || ('HTTP ' + code)));
           }
         } catch (e) {
+          const code = res.statusCode || 0;
+          // 2xx ohne JSON: Datei oft schon geschrieben — als Erfolg werten (kein Outbox-Retry → keine Duplikate).
+          if (code >= 200 && code < 300) {
+            resolve({
+              ok: true,
+              name: path.basename(fileName || 'datei'),
+              nonJson: true,
+            });
+            return;
+          }
           reject(Object.assign(new Error(body ? body.slice(0, 240) : e.message), { nonJson: true }));
         }
       });
@@ -788,12 +800,37 @@ async function dispoUploadMultipart(baseUrl, fields, fileBuf, fileName, authHead
       return await dispoUploadMultipartOnce(urls[i], fields, fileBuf, fileName, authHeader, technicianId);
     } catch (e) {
       lastErr = e;
-      const tryAlt = i < urls.length - 1 && e && (e.code404 || e.nonJson);
+      // Nur bei echtem 404 die Alternativ-URL versuchen.
+      // Bei nonJson NICHT retryen: die erste URL kann die Datei schon geschrieben haben
+      // (sonst entsteht Sonstige_….pdf + Sonstige_…-1.pdf).
+      const tryAlt = i < urls.length - 1 && e && e.code404;
       if (tryAlt) continue;
       throw e;
     }
   }
   throw lastErr || new Error('Upload fehlgeschlagen');
+}
+
+/** Entfernt doppelte Upload-Outbox-Einträge für dieselbe Datei. */
+function clearAbrechnungOutboxUploadsForFile(db, jobServerId, bucket, fileName) {
+  const jidWant = Number(resolveDispoJobIdForAbrechnung(db, jobServerId));
+  const wantBucket = String(bucket || '').trim();
+  const wantName = normalizeAbrechnungRelativeName(fileName);
+  if (!jidWant || !wantBucket || !wantName) return;
+  const rows = db.prepare(`SELECT id, payload FROM abrechnung_outbox WHERE op = 'upload'`).all();
+  for (const row of rows) {
+    try {
+      const p = JSON.parse(row.payload || '{}');
+      const jid = Number(resolveDispoJobIdForAbrechnung(db, p.job_id));
+      const b = String(p.bucket || '').trim();
+      const n = normalizeAbrechnungRelativeName(p.filename || p.name || p.orig_filename || '');
+      if (jid === jidWant && b === wantBucket && n === wantName) {
+        db.prepare('DELETE FROM abrechnung_outbox WHERE id = ?').run(row.id);
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
 }
 
 async function syncJobFromDispo(ctx, baseUrl, technicianId, authHeader, jobServerId) {
@@ -864,32 +901,78 @@ async function syncJobFromDispo(ctx, baseUrl, technicianId, authHeader, jobServe
       }
     }
     const diskOnly = scanLocalAbrechnungFilesFromDisk(fileCtx, db, jobServerId, bucket, dbDir);
+    const serverNames = new Set(
+      (files || [])
+        .map((f) => normalizeAbrechnungRelativeName(f && (f.name || f.file_name)))
+        .filter(Boolean),
+    );
     for (const row of diskOnly) {
       const fn = row.file_name;
       const key = bucket + '\0' + fn;
-      if (pendingDeletes.has(key)) continue;
-      const exists = db
-        .prepare(
-          'SELECT 1 FROM abrechnung_files_meta WHERE job_server_id = ? AND bucket = ? AND file_name = ?',
-        )
-        .get(jobServerId, bucket, fn);
-      if (exists) continue;
-      const prev = prevByName.get(fn);
-      const syncedAt = pendingUploads.has(key) ? null : null;
-      db.prepare(`
-        INSERT INTO abrechnung_files_meta (
-          job_server_id, bucket, file_name, size_bytes, synced_at, uploaded_at, uploaded_by_name, uploaded_by_user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        jobServerId,
-        bucket,
-        fn,
-        row.size_bytes,
-        syncedAt,
-        prev && prev.uploaded_at ? String(prev.uploaded_at) : null,
-        prev && prev.uploaded_by_name ? String(prev.uploaded_by_name) : null,
-        prev && prev.uploaded_by_user_id != null ? Number(prev.uploaded_by_user_id) : null,
-      );
+      if (pendingDeletes.has(key) || pendingUploads.has(key)) {
+        if (pendingDeletes.has(key)) {
+          try {
+            const lp = findLocalAbrechnungFilePath(dbDir, db, jobServerId, bucket, fn, fileCtx);
+            if (lp && fs.existsSync(lp)) fs.unlinkSync(lp);
+          } catch (_) {
+            /* ignore */
+          }
+          continue;
+        }
+        // pending_upload: in Meta behalten
+        const exists = db
+          .prepare(
+            'SELECT 1 FROM abrechnung_files_meta WHERE job_server_id = ? AND bucket = ? AND file_name = ?',
+          )
+          .get(jobServerId, bucket, fn);
+        if (exists) continue;
+        const prev = prevByName.get(fn);
+        db.prepare(`
+          INSERT INTO abrechnung_files_meta (
+            job_server_id, bucket, file_name, size_bytes, synced_at, uploaded_at, uploaded_by_name, uploaded_by_user_id
+          ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
+        `).run(
+          jobServerId,
+          bucket,
+          fn,
+          row.size_bytes,
+          prev && prev.uploaded_at ? String(prev.uploaded_at) : null,
+          prev && prev.uploaded_by_name ? String(prev.uploaded_by_name) : null,
+          prev && prev.uploaded_by_user_id != null ? Number(prev.uploaded_by_user_id) : null,
+        );
+        continue;
+      }
+
+      if (serverNames.has(fn)) continue;
+
+      // Auf Server gelöscht → alle lokalen Kopien (Dienstreise + Legacy-Cache) entfernen.
+      try {
+        const paths = [];
+        const primary = findLocalAbrechnungFilePath(dbDir, db, jobServerId, bucket, fn, fileCtx);
+        if (primary) paths.push(primary);
+        const legacy = path.join(jobDir(dbDir, jobServerId), bucket, ...String(fn).split('/'));
+        paths.push(legacy);
+        const resolved = resolveDispoJobIdForAbrechnung(db, jobServerId);
+        if (resolved !== jobServerId) {
+          paths.push(path.join(jobDir(dbDir, resolved), bucket, ...String(fn).split('/')));
+        }
+        let removed = false;
+        for (const lp of paths) {
+          try {
+            if (lp && fs.existsSync(lp) && fs.statSync(lp).isFile()) {
+              fs.unlinkSync(lp);
+              removed = true;
+            }
+          } catch (_) {
+            /* ignore */
+          }
+        }
+        if (removed) {
+          console.log('[abrechnung] lokale Rest-Datei entfernt (fehlt auf Server):', bucket, fn);
+        }
+      } catch (e) {
+        console.warn('[abrechnung] Rest-Datei löschen fehlgeschlagen', fn, e && e.message);
+      }
     }
   }
   save();
@@ -939,14 +1022,12 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
           job_id: String(outboxJobId),
           bucket: String(payload.bucket),
         };
-        if (payload.beleg_prefix && phpLocal.belegPrefixAllowed(payload.beleg_prefix)) {
-          uploadFields.beleg_prefix = payload.beleg_prefix;
-        }
+        // Dateiname in Outbox ist bereits final — kein zweites beleg_prefix.
         if (payload.uploader_name) {
           uploadFields.uploader_name = String(payload.uploader_name);
         }
         const uploadName = payload.orig_filename || payload.filename || 'datei';
-        await dispoUploadMultipart(
+        const upRes = await dispoUploadMultipart(
           baseUrl,
           uploadFields,
           buf,
@@ -954,27 +1035,47 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
           authHeader,
           technicianId,
         );
-        const fn = normalizeAbrechnungRelativeName(payload.filename || uploadName);
+        const fn = normalizeAbrechnungRelativeName(
+          (upRes && (upRes.name || upRes.file_name)) || payload.filename || uploadName,
+        );
         if (fn) {
           db.prepare(
-            `UPDATE abrechnung_files_meta SET synced_at = datetime('now')
-             WHERE job_server_id = ? AND bucket = ? AND file_name = ?`,
-          ).run(outboxJobId, String(payload.bucket || ''), fn);
+            `UPDATE abrechnung_files_meta SET synced_at = datetime('now'), file_name = COALESCE(?, file_name)
+             WHERE job_server_id = ? AND bucket = ? AND (file_name = ? OR file_name = ?)`,
+          ).run(
+            fn,
+            outboxJobId,
+            String(payload.bucket || ''),
+            normalizeAbrechnungRelativeName(payload.filename || ''),
+            fn,
+          );
+          clearAbrechnungOutboxUploadsForFile(db, outboxJobId, payload.bucket, fn);
+          clearAbrechnungOutboxUploadsForFile(db, outboxJobId, payload.bucket, payload.filename);
         }
       } else if (row.op === 'delete') {
         const outboxJobId = resolveDispoJobIdForAbrechnung(db, payload.job_id);
-        await dispoAbrechnungPostJson(
-          baseUrl,
-          'abrechnung_file_delete.php',
-          {
-            technician_id: technicianId,
-            job_id: outboxJobId,
-            bucket: payload.bucket,
-            name: payload.name,
-          },
-          authHeader,
-          technicianId,
-        );
+        try {
+          await dispoAbrechnungPostJson(
+            baseUrl,
+            'abrechnung_file_delete.php',
+            {
+              technician_id: technicianId,
+              job_id: outboxJobId,
+              bucket: payload.bucket,
+              name: payload.name,
+            },
+            authHeader,
+            technicianId,
+          );
+        } catch (delErr) {
+          const msg = delErr && delErr.message ? String(delErr.message) : String(delErr);
+          // Bereits weg auf dem Server → Outbox-Eintrag erledigt, nicht endlos retryen.
+          if (/nicht gefunden|not found|404/i.test(msg)) {
+            db.prepare('DELETE FROM abrechnung_outbox WHERE id = ?').run(row.id);
+            continue;
+          }
+          throw delErr;
+        }
       }
       db.prepare('DELETE FROM abrechnung_outbox WHERE id = ?').run(row.id);
     } catch (e) {
@@ -1400,19 +1501,21 @@ function registerAbrechnungRoutesInner(app, ctx) {
 
     const base = dispoBase(baseUrl);
     const uploadFields = { job_id: String(jid), bucket: b };
-    if (belegPrefix) uploadFields.beleg_prefix = belegPrefix;
     if (uploaderName) uploadFields.uploader_name = uploaderName;
     const remoteName = safeName || origName;
     if (base) {
       try {
         const authHeader = authHeaderFromCredentials(serverUsername, serverPassword);
-        await dispoUploadMultipart(base, uploadFields, buf, remoteName, authHeader, tid);
+        const upRes = await dispoUploadMultipart(base, uploadFields, buf, remoteName, authHeader, tid);
+        const serverName = normalizeAbrechnungRelativeName((upRes && (upRes.name || upRes.file_name)) || safeName);
         db.prepare(
-          `UPDATE abrechnung_files_meta SET synced_at = datetime('now')
+          `UPDATE abrechnung_files_meta SET synced_at = datetime('now'), file_name = ?
            WHERE job_server_id = ? AND bucket = ? AND file_name = ?`,
-        ).run(jid, b, safeName);
+        ).run(serverName || safeName, jid, b, safeName);
+        clearAbrechnungOutboxUploadsForFile(db, jid, b, safeName);
+        if (serverName) clearAbrechnungOutboxUploadsForFile(db, jid, b, serverName);
         save();
-        return res.json({ ok: true, name: safeName, synced: true });
+        return res.json({ ok: true, name: serverName || safeName, synced: true });
       } catch (e) {
         db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
           'upload',
@@ -1421,7 +1524,7 @@ function registerAbrechnungRoutesInner(app, ctx) {
             bucket: b,
             filename: safeName,
             local_path: localPath,
-            beleg_prefix: belegPrefix || '',
+            beleg_prefix: '',
             orig_filename: remoteName,
             uploader_name: uploaderName || '',
           })
@@ -1437,7 +1540,7 @@ function registerAbrechnungRoutesInner(app, ctx) {
         bucket: b,
         filename: safeName,
         local_path: localPath,
-        beleg_prefix: belegPrefix || '',
+        beleg_prefix: '',
         orig_filename: remoteName,
         uploader_name: uploaderName || '',
       })
@@ -1532,5 +1635,7 @@ module.exports = {
   mkdirpSync,
   dedupeAbrechnungFileRows,
   enrichAbrechnungFilesWithSyncState,
+  pendingAbrechnungOutboxKeys,
+  clearAbrechnungOutboxUploadsForFile,
   dispoDownloadFile,
 };

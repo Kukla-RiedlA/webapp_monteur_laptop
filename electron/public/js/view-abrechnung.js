@@ -207,7 +207,7 @@
     await global.kuklaWebPage.mount(host, {
       html: renderShell(cfg),
       scripts: [
-        '/assets/js/dispo/job_subfolder_docs.js?v=20260731a',
+        '/assets/js/dispo/job_subfolder_docs.js?v=20260731b',
       ],
       reloadHandler: reload,
     });

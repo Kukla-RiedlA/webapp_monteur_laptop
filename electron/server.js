@@ -1208,6 +1208,7 @@ function createApp(db) {
     dbDir: DB_DIR,
     getTechnicianId,
     loadDispoCreds: loadDispoWebSessionCreds,
+    authHeaderFromCredentials,
     resolveDienstreiseReiseDirForJob: (jobIdRef, opts) => resolveDienstreiseReiseDirForJob(jobIdRef, opts),
     getDienstreiseBasePath: () => getDienstreiseBasePath(),
   });

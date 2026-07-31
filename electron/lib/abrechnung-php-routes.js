@@ -43,6 +43,35 @@ function dispoCtx(ctx, req) {
   };
 }
 
+/** Sofortiger Outbox-Flush (Upload/Delete), damit Sync-Icon nicht bis Seitenwechsel hängt. */
+async function flushOutboxFromCtx(ctx, d, tid) {
+  if (!d || !d.baseUrl || !d.authHeader || !d.authHeader.Authorization) return false;
+  const tech = tid || d.technicianId;
+  if (!tech) return false;
+  const flushCtx =
+    typeof ctx.authHeaderFromCredentials === 'function'
+      ? ctx
+      : Object.assign({}, ctx, {
+          authHeaderFromCredentials: function () {
+            return d.authHeader;
+          },
+        });
+  await getCore().flushAbrechnungOutbox(
+    flushCtx,
+    d.baseUrl,
+    tech,
+    d.serverUsername,
+    d.serverPassword,
+  );
+  return true;
+}
+
+function fileStillPendingUpload(db, dispoJobId, bucket, fileName) {
+  const keys = getCore().pendingAbrechnungOutboxKeys(db, dispoJobId, 'upload');
+  const n = getCore().normalizeAbrechnungRelativeName(fileName);
+  return keys.has(String(bucket || '').trim() + '\0' + n);
+}
+
 async function handleMultipartPost(req, res, handler) {
   try {
     const { fields, files } = await parseMultipart(req);
@@ -184,7 +213,20 @@ function registerAbrechnungPhpRoutes(app, ctx) {
         .all(dispoJobId, jobId, bucket),
     );
     const diskRows = getCore().scanLocalAbrechnungFilesFromDisk(fileCtx, ctx.db, jobId, bucket, ctx.dbDir);
-    const rows = getCore().dedupeAbrechnungFileRows(metaRows.concat(diskRows));
+    const pendingUpKeys = getCore().pendingAbrechnungOutboxKeys
+      ? getCore().pendingAbrechnungOutboxKeys(ctx.db, dispoJobId, 'upload')
+      : new Set();
+    const diskKeep = diskRows.filter((r) => {
+      const fn = String(r.file_name || '');
+      return pendingUpKeys.has(bucket + '\0' + fn);
+    });
+    // Meta ohne Server-Bestätigung und ohne Pending-Upload ausblenden (Geister nach Server-Löschung).
+    const metaKeep = metaRows.filter((r) => {
+      const fn = String(r.file_name || '');
+      if (pendingUpKeys.has(bucket + '\0' + fn)) return true;
+      return r.synced_at != null && String(r.synced_at).trim() !== '';
+    });
+    const rows = getCore().dedupeAbrechnungFileRows(metaKeep.concat(diskKeep));
     const enriched = getCore().enrichAbrechnungFilesWithSyncState(
       ctx.db,
       dispoJobId,
@@ -208,7 +250,7 @@ function registerAbrechnungPhpRoutes(app, ctx) {
         server_present: f.server_present === true,
         sync_state: f.sync_state || 'idle',
       }));
-    jsonRes(res, { ok: true, files, source: rows.length ? 'local' : 'empty' });
+    jsonRes(res, { ok: true, files, source: files.length ? 'local' : 'empty' });
   });
 
   app.get('/api/abrechnung_file_download.php', async (req, res) => {
@@ -311,13 +353,14 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       ctx.save();
       const d = dispoCtx(ctx, req);
       const uploadFields = { job_id: String(dispoJobId), bucket };
-      if (belegPrefix) uploadFields.beleg_prefix = belegPrefix;
+      // safeName ist bereits final inkl. Präfix — kein zweites beleg_prefix an Dispo,
+      // sonst doppelte Unique-Logik Laptop+Server bei Retry.
       if (uploaderName) uploadFields.uploader_name = uploaderName;
       // Bereits lokal berechneter Name (inkl. Beleg-Präfix), damit Dispo denselben Basename speichert.
       const remoteName = safeName || origName;
       if (d.baseUrl && d.authHeader && d.authHeader.Authorization) {
         try {
-          await getCore().dispoUploadMultipart(
+          const upRes = await getCore().dispoUploadMultipart(
             d.baseUrl,
             uploadFields,
             file.buffer,
@@ -325,14 +368,38 @@ function registerAbrechnungPhpRoutes(app, ctx) {
             d.authHeader,
             tid || d.technicianId,
           );
-          ctx.db
-            .prepare(
-              `UPDATE abrechnung_files_meta SET synced_at = datetime('now')
-               WHERE job_server_id = ? AND bucket = ? AND file_name = ?`,
-            )
-            .run(dispoJobId, bucket, safeName);
+          const serverName = getCore().normalizeAbrechnungRelativeName(
+            (upRes && (upRes.name || upRes.file_name)) || safeName,
+          );
+          if (serverName && serverName !== safeName) {
+            try {
+              const altPath = path.join(targetDir, path.basename(serverName));
+              if (fs.existsSync(localPath) && !fs.existsSync(altPath)) {
+                fs.renameSync(localPath, altPath);
+              }
+            } catch (_) {
+              /* ignore */
+            }
+            ctx.db
+              .prepare(
+                `UPDATE abrechnung_files_meta SET file_name = ?, synced_at = datetime('now')
+                 WHERE job_server_id = ? AND bucket = ? AND file_name = ?`,
+              )
+              .run(serverName, dispoJobId, bucket, safeName);
+          } else {
+            ctx.db
+              .prepare(
+                `UPDATE abrechnung_files_meta SET synced_at = datetime('now')
+                 WHERE job_server_id = ? AND bucket = ? AND file_name = ?`,
+              )
+              .run(dispoJobId, bucket, safeName);
+          }
+          getCore().clearAbrechnungOutboxUploadsForFile(ctx.db, dispoJobId, bucket, safeName);
+          if (serverName && serverName !== safeName) {
+            getCore().clearAbrechnungOutboxUploadsForFile(ctx.db, dispoJobId, bucket, serverName);
+          }
           ctx.save();
-          return { ok: true, name: safeName, source: 'dispo' };
+          return { ok: true, name: serverName || safeName, source: 'dispo' };
         } catch (e) {
           ctx.db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
             'upload',
@@ -341,12 +408,23 @@ function registerAbrechnungPhpRoutes(app, ctx) {
               bucket,
               filename: safeName,
               local_path: localPath,
-              beleg_prefix: belegPrefix || '',
+              beleg_prefix: '',
               orig_filename: remoteName,
               uploader_name: uploaderName || '',
             }),
           );
           ctx.save();
+          try {
+            await flushOutboxFromCtx(ctx, d, tid || d.technicianId);
+          } catch (flushErr) {
+            console.warn(
+              '[abrechnung upload] outbox flush:',
+              flushErr && flushErr.message ? flushErr.message : flushErr,
+            );
+          }
+          if (!fileStillPendingUpload(ctx.db, dispoJobId, bucket, safeName)) {
+            return { ok: true, name: safeName, source: 'dispo', queued: false };
+          }
           return { ok: true, name: safeName, source: 'local', queued: true, error: e.message };
         }
       }
@@ -357,7 +435,7 @@ function registerAbrechnungPhpRoutes(app, ctx) {
           bucket,
           filename: safeName,
           local_path: localPath,
-          beleg_prefix: belegPrefix || '',
+          beleg_prefix: '',
           orig_filename: remoteName,
           uploader_name: uploaderName || '',
         }),
@@ -365,6 +443,20 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       ctx.save();
       return { ok: true, name: safeName, source: 'local', queued: true };
     });
+  });
+
+  app.post('/api/abrechnung_outbox_flush.php', async (req, res) => {
+    try {
+      const d = dispoCtx(ctx, req);
+      const tid = technicianId(ctx, req) || d.technicianId;
+      if (!d.baseUrl || !d.authHeader || !d.authHeader.Authorization || !tid) {
+        return jsonRes(res, { ok: true, flushed: false, reason: 'offline' });
+      }
+      await flushOutboxFromCtx(ctx, d, tid);
+      jsonRes(res, { ok: true, flushed: true });
+    } catch (e) {
+      jsonRes(res, { ok: false, error: e.message || String(e) }, 500);
+    }
   });
 
   app.post('/api/abrechnung_file_delete.php', (req, res) => {

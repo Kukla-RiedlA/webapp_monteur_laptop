@@ -858,11 +858,39 @@
 
   function loadBucketList() {
     var id = currentJobId();
-    if (!id) return;
-    fetch('/api/abrechnung_bucket_list.php?job_id=' + encodeURIComponent(String(id)) + '&bucket=' + encodeURIComponent(COMMENT_BUCKET), { credentials: 'same-origin' })
+    if (!id) return Promise.resolve([]);
+    return fetch('/api/abrechnung_bucket_list.php?job_id=' + encodeURIComponent(String(id)) + '&bucket=' + encodeURIComponent(COMMENT_BUCKET), { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.ok) renderFiles(COMMENT_BUCKET, data.files);
+        return data.ok ? (data.files || []) : [];
+      })
+      .catch(function () { return []; });
+  }
+
+  function flushAbrechnungOutbox() {
+    if (!cfg || cfg.fromLaptopEmbed !== true) return Promise.resolve();
+    return fetch('/api/abrechnung_outbox_flush.php', { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .catch(function () { return {}; });
+  }
+
+  /** Sync-Pfeile bleiben sonst bis Seitenwechsel (Outbox-Flush nur bei Refresh). */
+  function refreshFilesUntilIdle(attemptsLeft) {
+    if (!cfg || cfg.fromLaptopEmbed !== true) {
+      loadBucketList();
+      return;
+    }
+    var left = typeof attemptsLeft === 'number' ? attemptsLeft : 6;
+    flushAbrechnungOutbox()
+      .then(function () { return loadBucketList(); })
+      .then(function (files) {
+        var pending = (files || []).some(function (f) {
+          var st = String((f && f.sync_state) || '');
+          return st === 'pending_upload' || st === 'pending_delete' || st === 'syncing';
+        });
+        if (!pending || left <= 0) return;
+        setTimeout(function () { refreshFilesUntilIdle(left - 1); }, 700);
       });
   }
 
@@ -906,6 +934,7 @@
                 return;
               }
               li.remove();
+              refreshFilesUntilIdle(4);
             })
             .catch(function () { alert('Fehler beim Löschen.'); });
         });
@@ -953,7 +982,7 @@
     function next() {
       if (i >= fileList.length) {
         setUiBusy(false);
-        loadBucketList();
+        refreshFilesUntilIdle(6);
         return;
       }
       var fd = new FormData();
