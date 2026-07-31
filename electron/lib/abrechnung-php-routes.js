@@ -296,15 +296,18 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       const d = dispoCtx(ctx, req);
       const uploadFields = { job_id: String(dispoJobId), bucket };
       if (belegPrefix) uploadFields.beleg_prefix = belegPrefix;
+      if (uploaderName) uploadFields.uploader_name = uploaderName;
+      // Bereits lokal berechneter Name (inkl. Beleg-Präfix), damit Dispo denselben Basename speichert.
+      const remoteName = safeName || origName;
       if (d.baseUrl && d.authHeader && d.authHeader.Authorization) {
         try {
           await getCore().dispoUploadMultipart(
             d.baseUrl,
             uploadFields,
             file.buffer,
-            origName,
+            remoteName,
             d.authHeader,
-            d.technicianId,
+            tid || d.technicianId,
           );
           return { ok: true, name: safeName, source: 'dispo' };
         } catch (e) {
@@ -316,7 +319,8 @@ function registerAbrechnungPhpRoutes(app, ctx) {
               filename: safeName,
               local_path: localPath,
               beleg_prefix: belegPrefix || '',
-              orig_filename: origName,
+              orig_filename: remoteName,
+              uploader_name: uploaderName || '',
             }),
           );
           ctx.save();
@@ -331,7 +335,8 @@ function registerAbrechnungPhpRoutes(app, ctx) {
           filename: safeName,
           local_path: localPath,
           beleg_prefix: belegPrefix || '',
-          orig_filename: origName,
+          orig_filename: remoteName,
+          uploader_name: uploaderName || '',
         }),
       );
       ctx.save();

@@ -845,6 +845,9 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
         if (payload.beleg_prefix && phpLocal.belegPrefixAllowed(payload.beleg_prefix)) {
           uploadFields.beleg_prefix = payload.beleg_prefix;
         }
+        if (payload.uploader_name) {
+          uploadFields.uploader_name = String(payload.uploader_name);
+        }
         const uploadName = payload.orig_filename || payload.filename || 'datei';
         await dispoUploadMultipart(
           baseUrl,
@@ -1276,22 +1279,30 @@ function registerAbrechnungRoutesInner(app, ctx) {
     const safeName = phpLocal.resolveUniqueStoredName(origName, belegPrefix, targetDir);
     const localPath = path.join(targetDir, path.basename(safeName));
     fs.writeFileSync(localPath, buf);
+    const uploaderName = phpLocal.resolveTechnicianDisplayName(db, tid);
+    const uploadedAt = new Date().toISOString();
     db.prepare(`
-      INSERT INTO abrechnung_files_meta (job_server_id, bucket, file_name, size_bytes, synced_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
+      INSERT INTO abrechnung_files_meta (
+        job_server_id, bucket, file_name, size_bytes, synced_at, uploaded_at, uploaded_by_name, uploaded_by_user_id
+      ) VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?)
       ON CONFLICT(job_server_id, bucket, file_name) DO UPDATE SET
         size_bytes = excluded.size_bytes,
-        synced_at = excluded.synced_at
-    `).run(jid, b, safeName, buf.length);
+        synced_at = excluded.synced_at,
+        uploaded_at = excluded.uploaded_at,
+        uploaded_by_name = excluded.uploaded_by_name,
+        uploaded_by_user_id = excluded.uploaded_by_user_id
+    `).run(jid, b, safeName, buf.length, uploadedAt, uploaderName || null, tid || null);
     save();
 
     const base = dispoBase(baseUrl);
     const uploadFields = { job_id: String(jid), bucket: b };
     if (belegPrefix) uploadFields.beleg_prefix = belegPrefix;
+    if (uploaderName) uploadFields.uploader_name = uploaderName;
+    const remoteName = safeName || origName;
     if (base) {
       try {
         const authHeader = authHeaderFromCredentials(serverUsername, serverPassword);
-        await dispoUploadMultipart(base, uploadFields, buf, origName, authHeader, tid);
+        await dispoUploadMultipart(base, uploadFields, buf, remoteName, authHeader, tid);
         return res.json({ ok: true, name: safeName, synced: true });
       } catch (e) {
         db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
@@ -1302,7 +1313,8 @@ function registerAbrechnungRoutesInner(app, ctx) {
             filename: safeName,
             local_path: localPath,
             beleg_prefix: belegPrefix || '',
-            orig_filename: origName,
+            orig_filename: remoteName,
+            uploader_name: uploaderName || '',
           })
         );
         save();
@@ -1317,7 +1329,8 @@ function registerAbrechnungRoutesInner(app, ctx) {
         filename: safeName,
         local_path: localPath,
         beleg_prefix: belegPrefix || '',
-        orig_filename: origName,
+        orig_filename: remoteName,
+        uploader_name: uploaderName || '',
       })
     );
     save();
