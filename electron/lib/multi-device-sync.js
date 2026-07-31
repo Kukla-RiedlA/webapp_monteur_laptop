@@ -18,17 +18,41 @@ function stripDraftMeta(obj) {
   return out;
 }
 
+/** Stabile JSON-Serialisierung für Payload-Vergleich (Reihenfolge egal). */
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return '[' + value.map((v) => stableStringify(v)).join(',') + ']';
+  }
+  const keys = Object.keys(value).sort();
+  return (
+    '{' +
+    keys
+      .map((k) => JSON.stringify(k) + ':' + stableStringify(value[k]))
+      .join(',') +
+    '}'
+  );
+}
+
+function draftPayloadsEqual(a, b) {
+  return stableStringify(stripDraftMeta(a || {})) === stableStringify(stripDraftMeta(b || {}));
+}
+
 function readLocalDraftFile(filePath) {
   if (!filePath || !fs.existsSync(filePath)) {
-    return { payload: {}, revision: 0 };
+    return { payload: {}, revision: 0, server_updated_at: null };
   }
   try {
     const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (!data || typeof data !== 'object') return { payload: {}, revision: 0 };
+    if (!data || typeof data !== 'object') return { payload: {}, revision: 0, server_updated_at: null };
     const revision = parseInt(data.revision, 10) || 0;
-    return { payload: stripDraftMeta(data), revision };
+    const serverUpdated =
+      data.server_updated_at != null && String(data.server_updated_at).trim()
+        ? String(data.server_updated_at)
+        : null;
+    return { payload: stripDraftMeta(data), revision, server_updated_at: serverUpdated };
   } catch (_) {
-    return { payload: {}, revision: 0 };
+    return { payload: {}, revision: 0, server_updated_at: null };
   }
 }
 
@@ -119,6 +143,8 @@ function formatBytes(n) {
 
 module.exports = {
   stripDraftMeta,
+  stableStringify,
+  draftPayloadsEqual,
   readLocalDraftFile,
   writeLocalDraftFile,
   writeConflictCopy,

@@ -12,6 +12,7 @@ const {
   readLocalDraftFile,
   writeLocalDraftFile,
   stripDraftMeta,
+  draftPayloadsEqual,
   reconcileLocalTreeWithManifest,
   formatBytes,
   writeConflictCopy,
@@ -68,9 +69,37 @@ function registerMultiDeviceRoutes(deps) {
   const resolveBgJobs = () => (typeof getBgJobs === 'function' ? getBgJobs() : bgJobs);
 
   ensureMultiDeviceTables(db);
+  try {
+    // Pseudo-Konflikt-Banner aus Revisions-Bug leeren (alte Einträge sonst ewig sichtbar)
+    db.prepare('DELETE FROM multi_device_conflicts').run();
+    save();
+  } catch (_) {
+    /* ignore */
+  }
 
   function deviceId() {
     return getOrCreateDeviceId(DB_DIR);
+  }
+
+  function clearConflictsForFile(localJobId, serverJobId, relPath) {
+    const base = path.basename(String(relPath || '').replace(/\\/g, '/'));
+    if (!base) return;
+    try {
+      if (localJobId != null && Number(localJobId) > 0) {
+        db.prepare(
+          'DELETE FROM multi_device_conflicts WHERE rel_path = ? AND local_job_id = ?',
+        ).run(base, Number(localJobId));
+      } else if (serverJobId != null && Number(serverJobId) > 0) {
+        db.prepare(
+          'DELETE FROM multi_device_conflicts WHERE rel_path = ? AND server_job_id = ?',
+        ).run(base, Number(serverJobId));
+      } else {
+        db.prepare('DELETE FROM multi_device_conflicts WHERE rel_path = ?').run(base);
+      }
+      save();
+    } catch (_) {
+      /* ignore */
+    }
   }
 
   async function registerDeviceOnDispo(opts) {
@@ -144,35 +173,140 @@ function registerMultiDeviceRoutes(deps) {
     }
     const local = readLocalDraftFile(filePath);
     const auth = authHeaderFromCreds(opts.username, opts.password);
-    const body = {
-      technician_id: technicianId,
-      job_id: serverJobId,
-      store: local.payload,
-      base_revision: local.revision,
-      device_id: deviceId(),
+    const postHeaders = {
+      'Content-Type': 'application/json',
+      'X-Technician-Id': String(technicianId),
+      'X-Device-Id': deviceId(),
+      ...auth,
     };
+
+    // Immer Server-Revision als base holen. Lokal kann hinterherhinken (erster Speichern
+    // nach leerem Ordner, fehlendes Meta, paralleler Push) → sonst sofort 409 + .conflict-*.
+    let baseRevision = local.revision;
     try {
+      const getUrl =
+        base +
+        endpoint +
+        '?job_id=' +
+        encodeURIComponent(serverJobId) +
+        '&technician_id=' +
+        encodeURIComponent(technicianId);
+      const gr = await fetchWithTimeout(getUrl, {
+        headers: { 'X-Technician-Id': String(technicianId), ...auth },
+      });
+      const gd = await gr.json().catch(() => ({}));
+      if (gr.ok && gd && gd.ok) {
+        const remoteRev = parseInt(gd.revision, 10) || 0;
+        if (remoteRev !== baseRevision) {
+          console.warn(
+            '[draft_push] align base_revision',
+            path.basename(filePath),
+            'local=',
+            baseRevision,
+            'server=',
+            remoteRev,
+          );
+        }
+        baseRevision = remoteRev;
+      }
+    } catch (_) {
+      /* Preflight optional – Push versucht es trotzdem */
+    }
+
+    async function postWithBase(rev) {
       const r = await fetchWithTimeout(base + endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Technician-Id': String(technicianId),
-          'X-Device-Id': deviceId(),
-          ...auth,
-        },
-        body: JSON.stringify(body),
+        headers: postHeaders,
+        body: JSON.stringify({
+          technician_id: technicianId,
+          job_id: serverJobId,
+          store: local.payload,
+          base_revision: rev,
+          device_id: deviceId(),
+        }),
       });
       const data = await r.json().catch(() => ({}));
+      return { r, data };
+    }
+
+    try {
+      let { r, data } = await postWithBase(baseRevision);
       if (r.status === 409 && data.code === 'job_closed') {
+        console.warn(
+          '[draft_push] job_closed',
+          path.basename(filePath),
+          'job=',
+          serverJobId,
+        );
         return { ok: false, code: 'job_closed', error: data.error };
       }
       if (r.status === 409 && data.code === 'conflict') {
-        writeConflictCopy(filePath, deviceId());
         const remotePayload = data.store || data.data || {};
+        const remoteRev = parseInt(data.revision, 10) || 0;
+        // Gleicher Fachinhalt, nur Revisions-Drift → Meta übernehmen
+        if (draftPayloadsEqual(local.payload, remotePayload)) {
+          writeLocalDraftFile(
+            filePath,
+            stripDraftMeta(remotePayload),
+            remoteRev,
+            data.server_updated_at || null,
+          );
+          clearConflictsForFile(opts.localJobId, serverJobId, path.basename(filePath));
+          console.warn(
+            '[draft_push] soft-resolve (equal payload)',
+            path.basename(filePath),
+            'rev',
+            remoteRev,
+          );
+          return {
+            ok: true,
+            revision: remoteRev,
+            code: null,
+            soft_resolved: true,
+          };
+        }
+        // Bewusstes Speichern auf diesem Gerät: einmal mit Server-Revision erneut pushen (Lokal gewinnt)
+        if (remoteRev !== baseRevision) {
+          console.warn(
+            '[draft_push] retry with remote base_revision',
+            path.basename(filePath),
+            'localBase=',
+            baseRevision,
+            'remote=',
+            remoteRev,
+          );
+          const retry = await postWithBase(remoteRev);
+          r = retry.r;
+          data = retry.data;
+          if (r.ok && data && data.ok) {
+            writeLocalDraftFile(
+              filePath,
+              stripDraftMeta(data.store || data.data || local.payload),
+              data.revision != null ? data.revision : remoteRev + 1,
+              data.server_updated_at || null,
+            );
+            clearConflictsForFile(opts.localJobId, serverJobId, path.basename(filePath));
+            return { ok: true, revision: data.revision, code: null, retried: true };
+          }
+          if (r.status === 409 && data.code === 'job_closed') {
+            return { ok: false, code: 'job_closed', error: data.error };
+          }
+        }
+        console.warn(
+          '[draft_push] hard conflict',
+          path.basename(filePath),
+          'job=',
+          serverJobId,
+          'base=',
+          baseRevision,
+          'remote=',
+          remoteRev,
+        );
+        writeConflictCopy(filePath, deviceId());
         writeLocalDraftFile(
           filePath,
-          stripDraftMeta(remotePayload),
-          data.revision || 0,
+          stripDraftMeta(data.store || data.data || remotePayload),
+          parseInt(data.revision, 10) || remoteRev,
           data.server_updated_at || null,
         );
         try {
@@ -183,13 +317,28 @@ function registerMultiDeviceRoutes(deps) {
             opts.localJobId || null,
             serverJobId,
             path.basename(filePath),
-            JSON.stringify({ code: 'conflict', revision: data.revision }),
+            JSON.stringify({
+              code: 'conflict',
+              revision: data.revision,
+              local_base: baseRevision,
+            }),
           );
           save();
         } catch (_) {}
-        return { ok: false, code: 'conflict', revision: data.revision, store: remotePayload };
+        return {
+          ok: false,
+          code: 'conflict',
+          revision: data.revision,
+          store: data.store || data.data || remotePayload,
+        };
       }
       if (!r.ok || !data.ok) {
+        console.warn(
+          '[draft_push] failed',
+          path.basename(filePath),
+          r.status,
+          data.error || data.code || r.statusText,
+        );
         return { ok: false, error: data.error || r.statusText, code: data.code };
       }
       writeLocalDraftFile(
@@ -198,8 +347,10 @@ function registerMultiDeviceRoutes(deps) {
         data.revision != null ? data.revision : local.revision + 1,
         data.server_updated_at || null,
       );
+      clearConflictsForFile(opts.localJobId, serverJobId, path.basename(filePath));
       return { ok: true, revision: data.revision, code: null };
     } catch (e) {
+      console.warn('[draft_push] exception', path.basename(filePath), e && e.message ? e.message : e);
       return { ok: false, error: e.message || 'draft_push_failed' };
     }
   }
@@ -273,6 +424,9 @@ function registerMultiDeviceRoutes(deps) {
 
   function listRecentConflicts(limit) {
     try {
+      db.prepare(
+        `DELETE FROM multi_device_conflicts WHERE datetime(created_at) < datetime('now', '-30 minutes')`,
+      ).run();
       return db
         .prepare(
           `SELECT id, local_job_id, server_job_id, rel_path, detail_json, created_at
@@ -284,6 +438,22 @@ function registerMultiDeviceRoutes(deps) {
       return [];
     }
   }
+
+  app.post('/api/multi_device/conflicts/ack', express.json(), (req, res) => {
+    try {
+      const id = parseInt(String((req.body && req.body.id) || req.query.id || ''), 10);
+      if (id > 0) {
+        db.prepare('DELETE FROM multi_device_conflicts WHERE id = ?').run(id);
+        save();
+      } else {
+        db.prepare('DELETE FROM multi_device_conflicts').run();
+        save();
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
 
   app.get('/api/device_id', (req, res) => {
     res.json({ ok: true, device_id: deviceId(), display_name: defaultDisplayName() });

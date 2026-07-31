@@ -6,6 +6,7 @@ const express = require('express');
 const calc = require('./zeitschreibung-calc');
 const { generateZeitschreibungPdfBuffer } = require('./zeitschreibung-pdf');
 const { generateZeitschreibungXlsxBuffer } = require('./zeitschreibung-xlsx');
+const { buildPrintDocumentHtml } = require('./zeitschreibung-print-html');
 
 function cfgPath(dbDir) {
   return path.join(dbDir, 'zeitschreibung_config.json');
@@ -122,6 +123,11 @@ function ensureTables(db) {
     /* exists */
   }
   try {
+    db.exec('ALTER TABLE timesheet_days ADD COLUMN lohn_kommentar TEXT NOT NULL DEFAULT \'\'');
+  } catch (_) {
+    /* exists */
+  }
+  try {
     db.exec('ALTER TABLE timesheet_days ADD COLUMN lohn_korrektur_meta TEXT');
   } catch (_) {
     /* exists */
@@ -144,6 +150,9 @@ function copyLohnOverrides(from, to) {
     dst[f] = src[f] != null && src[f] !== '' ? calc.num(src[f]) : null;
   }
   dst.lohn_bemerkung = src.lohn_bemerkung != null ? String(src.lohn_bemerkung) : null;
+  if (Object.prototype.hasOwnProperty.call(src, 'lohn_kommentar')) {
+    dst.lohn_kommentar = src.lohn_kommentar != null ? String(src.lohn_kommentar) : '';
+  }
   dst.lohn_korrektur_meta = src.lohn_korrektur_meta != null ? String(src.lohn_korrektur_meta) : null;
   let korr = null;
   if (src.korrekturen && typeof src.korrekturen === 'object' && !Array.isArray(src.korrekturen)) {
@@ -178,6 +187,7 @@ function lohnFingerprint(day) {
     lohn_krank: d.lohn_krank != null && d.lohn_krank !== '' ? calc.num(d.lohn_krank) : null,
     lohn_arzt: d.lohn_arzt != null && d.lohn_arzt !== '' ? calc.num(d.lohn_arzt) : null,
     lohn_bemerkung: d.lohn_bemerkung != null ? String(d.lohn_bemerkung) : null,
+    lohn_kommentar: d.lohn_kommentar != null ? String(d.lohn_kommentar) : '',
     korrekturen: d.korrekturen && typeof d.korrekturen === 'object' && !Array.isArray(d.korrekturen)
       ? d.korrekturen
       : {},
@@ -348,6 +358,14 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
       Object.prototype.hasOwnProperty.call(d, 'lohn_korrektur_meta');
     if (hasIncomingOverrides) copyLohnOverrides(d, row);
     else if (prev) copyLohnOverrides(prev, row);
+    // Kommentar Buchhaltung: vom Pull übernehmen, sonst lokal behalten
+    if (Object.prototype.hasOwnProperty.call(d, 'lohn_kommentar')) {
+      row.lohn_kommentar = d.lohn_kommentar != null ? String(d.lohn_kommentar) : '';
+    } else if (prev && prev.lohn_kommentar != null) {
+      row.lohn_kommentar = String(prev.lohn_kommentar);
+    } else if (row.lohn_kommentar == null) {
+      row.lohn_kommentar = '';
+    }
     byDate[d.day_date] = row;
   }
 
@@ -435,8 +453,9 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
       timesheet_id, day_date, weekday, holiday_label, anw, montage, ue50, ue100, weg,
       urlaub, za_plus, za_minus, krank, arzt, day_sum, bemerkung, lohn_gesperrt,
       lohn_anw, lohn_montage, lohn_ue50, lohn_ue100, lohn_weg, lohn_urlaub,
-      lohn_za_plus, lohn_za_minus, lohn_krank, lohn_arzt, lohn_bemerkung, lohn_korrektur_meta, korrekturen_json
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      lohn_za_plus, lohn_za_minus, lohn_krank, lohn_arzt, lohn_bemerkung, lohn_kommentar,
+      lohn_korrektur_meta, korrekturen_json
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
   const dayList = Array.isArray(days) ? days : [];
   db.transaction(() => {
@@ -471,6 +490,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         ov.lohn_krank,
         ov.lohn_arzt,
         ov.lohn_bemerkung,
+        d.lohn_kommentar != null ? String(d.lohn_kommentar) : (ov.lohn_kommentar != null ? String(ov.lohn_kommentar) : ''),
         ov.lohn_korrektur_meta,
         ov.korrekturen_json,
       );
@@ -501,10 +521,12 @@ async function writeExportFiles(dbDir, db, writeFileWithRetry, technicianId, yea
   const exportDays = calc.daysForExport(days);
   const exportSums = calc.columnSumsEffective(days);
   const exportGesamt = calc.gesamtSum(exportSums);
+  const monLabel = calc.MONTH_NAMES[month] || String(month);
   const payload = {
     year,
     month,
     technicianName: techName,
+    title: 'Monatsübersicht – ' + monLabel + ' ' + year + ' – ' + techName,
     days: exportDays,
     sums: exportSums,
     gesamt: exportGesamt,
@@ -669,8 +691,15 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     encodeURIComponent(year) +
     '&month=' +
     encodeURIComponent(month);
-  const headers = { Accept: 'application/json' };
-  if (authHeader) headers.Authorization = authHeader;
+  const headers = {
+    Accept: 'application/json',
+    'X-Technician-Id': String(technicianId),
+  };
+  if (authHeader && typeof authHeader === 'object' && authHeader.Authorization) {
+    headers.Authorization = authHeader.Authorization;
+  } else if (typeof authHeader === 'string' && authHeader) {
+    headers.Authorization = authHeader;
+  }
   const r = await fetch(url, { headers });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data || !data.ok || !Array.isArray(data.days)) {
@@ -682,6 +711,7 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
   for (const d of local.days || []) {
     byDate[d.day_date] = Object.assign({}, d);
     copyLohnOverrides(d, byDate[d.day_date]);
+    if (d.lohn_kommentar != null) byDate[d.day_date].lohn_kommentar = String(d.lohn_kommentar);
   }
   let changed = false;
   for (const sd of data.days) {
@@ -691,6 +721,8 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     const next = Object.assign({}, cur);
     copyLohnOverrides(sd, next);
     next.lohn_gesperrt = lock;
+    // Immer vom Server übernehmen (auch wenn leer → lokale Reste löschen)
+    next.lohn_kommentar = sd.lohn_kommentar != null ? String(sd.lohn_kommentar) : '';
     if (lock) {
       copyMonteurHoursFromServer(sd, next);
       next.bemerkung = sd.bemerkung != null ? sd.bemerkung : cur.bemerkung;
@@ -706,6 +738,7 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     if (
       lohnFingerprint(next) !== lohnFingerprint(cur)
       || monteurHoursFingerprint(next) !== monteurHoursFingerprint(cur)
+      || String(next.lohn_kommentar || '') !== String(cur.lohn_kommentar || '')
     ) {
       changed = true;
     }
@@ -715,6 +748,12 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
   const mergedDays = calc.buildMonthDays(year, month, byDate);
   for (const d of mergedDays) {
     d.day_sum = calc.daySum(d);
+    // Garantiert gesetzt, auch wenn ältere buildMonthDays-Caches fehlen
+    if (byDate[d.day_date] && byDate[d.day_date].lohn_kommentar != null) {
+      d.lohn_kommentar = String(byDate[d.day_date].lohn_kommentar);
+    } else if (d.lohn_kommentar == null) {
+      d.lohn_kommentar = '';
+    }
   }
 
   if (changed) {
@@ -722,6 +761,7 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     const toPersist = mergedDays.map((d) => {
       const row = Object.assign({}, d);
       copyLohnOverrides(d, row);
+      row.lohn_kommentar = d.lohn_kommentar != null ? String(d.lohn_kommentar) : '';
       // hasOwnProperty-Marker für persist
       row.korrekturen = row.korrekturen || {};
       return row;
@@ -864,6 +904,50 @@ function registerZeitschreibungRoutes(app, ctx) {
         sync_pending: flush.flushed === 0,
         sync_errors: flush.errors || [],
       });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  /** HTML-Dokument wie Browser-Druck — Quelle für Druckfenster und Freigabe-PDF. */
+  app.post('/api/zeitschreibung/print-html', express.json({ limit: '2mb' }), (req, res) => {
+    try {
+      const body = req.body || {};
+      const year = parseInt(String(body.year || ''), 10);
+      const month = parseInt(String(body.month || ''), 10);
+      const daysIn = Array.isArray(body.days) ? body.days : [];
+      if (!year || !month || month < 1 || month > 12) {
+        return res.status(400).json({ ok: false, error: 'year, month erforderlich' });
+      }
+      const techName =
+        String(body.technician_name || body.technicianName || '').trim() ||
+        (body.technician_id ? getTechnicianName(getDb(), parseInt(String(body.technician_id), 10)) : '');
+      const days = calc.buildMonthDays(
+        year,
+        month,
+        daysIn.reduce((acc, d) => {
+          if (d && d.day_date) acc[d.day_date] = d;
+          return acc;
+        }, {}),
+      );
+      for (const d of days) {
+        if (d.day_sum == null) d.day_sum = calc.daySumEffective(d);
+      }
+      const sums = calc.columnSumsEffective(days);
+      const monLabel = calc.MONTH_NAMES[month] || String(month);
+      const title =
+        String(body.title || '').trim() ||
+        ('Monatsübersicht – ' + monLabel + ' ' + year + ' – ' + techName);
+      const html = buildPrintDocumentHtml({
+        year,
+        month,
+        technicianName: techName,
+        title,
+        days,
+        sums,
+        gesamt: calc.gesamtSum(sums),
+      });
+      res.type('html').send(html);
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || String(e) });
     }

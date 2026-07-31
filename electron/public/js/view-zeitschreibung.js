@@ -21,6 +21,7 @@
     krank: { short: 'Krank (h)', title: 'Krank in Stunden', spoken: 'Krank' },
     arzt: { short: 'Arzt (h)', title: 'Arzt in Stunden', spoken: 'Arzt' },
     bemerkung: { short: 'Bemerkung', title: 'Bemerkung', spoken: 'Bemerkung' },
+    lohn_kommentar: { short: 'Kommentar Buchhaltung', title: 'Kommentar der Lohnbuchhaltung', spoken: 'Kommentar Buchhaltung' },
   };
   const ACTIVE_IDLE = 'Klicken Sie in ein Feld, um Stunden einzutragen.';
 
@@ -195,6 +196,10 @@
       } else {
         day.bemerkung = bem ? String(bem.value || '') : '';
       }
+      const lohnEl = tr.querySelector('[data-lohn-kommentar]');
+      day.lohn_kommentar = lohnEl
+        ? String(lohnEl.getAttribute('data-lohn-kommentar') || lohnEl.textContent || '')
+        : '';
       day.day_sum = daySum(day);
       rows.push(day);
     });
@@ -279,6 +284,8 @@
       var bemShow = locked ? bemerkungEff(d) : bemOrig;
       var bemLabel = korrLabel(d, 'bemerkung');
       var bemAria = ariaLabelFor('bemerkung', d.weekday, d.day_date);
+      var lohnKom = String(d.lohn_kommentar || '');
+      var lohnKomAria = ariaLabelFor('lohn_kommentar', d.weekday, d.day_date);
       body += `<tr class="${rowClass.trim()}" data-day-date="${escapeHtml(d.day_date)}" data-weekday="${escapeHtml(d.weekday)}" data-holiday="${escapeHtml(d.holiday_label || '')}" data-lohn-gesperrt="${locked ? '1' : '0'}">
         <td class="zs-sticky-tag" data-col="tag">${escapeHtml(dateDe(d.day_date))}</td>
         <td class="zs-sticky-wt" data-col="wt">${escapeHtml(d.weekday)}</td>
@@ -301,6 +308,9 @@
         <td class="zs-col-bemerkung${bemLabel ? ' zs-corrected' : ''}" data-col="bemerkung"><div class="zs-bem-cell">
           <input type="text" class="zs-input zs-bemerkung${bemLabel ? ' is-corrected' : ''}" data-field="bemerkung" data-col="bemerkung" data-monteur="${escapeHtml(bemOrig)}" value="${escapeHtml(bemShow)}" aria-label="${escapeHtml(bemAria)}"${bemLabel ? ` title="${escapeHtml(bemLabel)}"` : ''}${locked ? ' disabled' : ''}>
         </div></td>
+        <td class="zs-col-lohn" data-col="lohn_kommentar" title="${escapeHtml(lohnKom)}"><div class="zs-lohn-cell">
+          <span class="zs-lohn-kommentar" data-lohn-kommentar="${escapeHtml(lohnKom)}" aria-label="${escapeHtml(lohnKomAria)}">${escapeHtml(lohnKom)}</span>
+        </div></td>
         ${statusCell}
       </tr>`;
     });
@@ -315,7 +325,7 @@
           <th colspan="5" scope="colgroup">Arbeits- und Reisezeit</th>
           <th colspan="5" scope="colgroup">Abwesenheit und Zeitkonto</th>
           <th colspan="1" scope="colgroup">Ergebnis</th>
-          <th colspan="2" scope="colgroup">Informationen</th>
+          <th colspan="3" scope="colgroup">Informationen</th>
         </tr>
         <tr class="zs-head-cols">
           <th class="zs-sticky-tag" data-col="tag" title="Kalendertag">Tag</th>
@@ -328,6 +338,7 @@
           }).join('')}
           <th class="zs-col-sum zs-sep-after" data-col="summe" title="Tagessumme in Stunden">Summe (h)</th>
           <th data-col="bemerkung" title="Bemerkung">Bemerkung</th>
+          <th class="zs-col-lohn" data-col="lohn_kommentar" title="Kommentar der Lohnbuchhaltung">Kommentar Buchhaltung</th>
           <th class="zs-col-status" data-col="status" title="Sperrstatus">Status</th>
         </tr>
       </thead>
@@ -341,7 +352,7 @@
           return `<th class="zs-col-hour${sep}" data-sum="${f}">${escapeHtml(fmtAlways(sums[f]))}</th>`;
         }).join('')}
         <th class="zs-col-sum zs-sep-after" data-sum="day_sum">${escapeHtml(fmtAlways(sums.day_sum))}</th>
-        <th></th><th class="zs-col-status"></th>
+        <th></th><th class="zs-col-lohn"></th><th class="zs-col-status"></th>
       </tr></tfoot>
     </table></div>`;
   }
@@ -562,156 +573,94 @@
     navigateCell(host, inp, key);
   }
 
-  function openPrintWindow(host) {
-    const table = host.querySelector('.zs-table');
-    if (!table) {
-      window.alert('Keine Tabelle zum Drucken.');
-      return;
-    }
+  function readDisplayedDaysForPrint(host) {
+    const rows = [];
+    host.querySelectorAll('tr[data-day-date]').forEach(function (tr) {
+      const locked = tr.getAttribute('data-lohn-gesperrt') === '1';
+      const day = {
+        day_date: tr.getAttribute('data-day-date'),
+        weekday: tr.getAttribute('data-weekday') || '',
+        holiday_label: tr.getAttribute('data-holiday') || '',
+        lohn_gesperrt: locked ? 1 : 0,
+      };
+      HOUR_FIELDS.forEach(function (f) {
+        const inp = tr.querySelector('input[data-field="' + f + '"]');
+        day[f] = inp ? num(inp.value) : 0;
+      });
+      const bem = tr.querySelector('input[data-field="bemerkung"]');
+      day.bemerkung = bem ? String(bem.value || '') : '';
+      const lohnEl = tr.querySelector('[data-lohn-kommentar]');
+      day.lohn_kommentar = lohnEl
+        ? String(lohnEl.getAttribute('data-lohn-kommentar') || lohnEl.textContent || '')
+        : '';
+      day.day_sum = daySum(day);
+      rows.push(day);
+    });
+    return rows;
+  }
 
+  async function openPrintWindow(host) {
     const titleEl = host.querySelector('#zsOverviewTitle');
     const titleText = titleEl
       ? String(titleEl.textContent || '').trim()
       : ('Monatsübersicht – ' + (MONTH_NAMES[state.month] || '') + ' ' + state.year + ' – ' + (state.technicianName || ''));
 
-    const clone = table.cloneNode(true);
-
-    // Inputs → Text
-    clone.querySelectorAll('input').forEach(function (inp) {
-      if (inp.type === 'checkbox') return;
-      const span = document.createElement('span');
-      span.textContent = inp.value || '';
-      if (inp.parentNode) inp.parentNode.replaceChild(span, inp);
-    });
-
-    // Status-Icons → Druckzeichen
-    clone.querySelectorAll('.zs-col-status').forEach(function (td) {
-      if (td.querySelector('.zs-lock-check-icon') || /gesperrt/i.test(td.getAttribute('title') || '')) {
-        td.textContent = '✓';
-        td.classList.add('zs-print-status');
-      } else if (!String(td.textContent || '').trim() || td.textContent.trim() === '–') {
-        td.textContent = '–';
-        td.classList.add('zs-print-status');
-      }
-    });
-
-    // Tag = nur Tagesnummer (wie Dispo-Druck)
-    clone.querySelectorAll('tbody tr[data-day-date] td[data-col="tag"]').forEach(function (td) {
-      const d = td.parentElement && td.parentElement.getAttribute('data-day-date');
-      if (d && d.length >= 10) td.textContent = String(parseInt(d.slice(8, 10), 10));
-    });
-
-    // Kopfzeilen ohne (h), Status → STA
-    clone.querySelectorAll('thead tr.zs-head-cols th').forEach(function (th) {
-      let t = String(th.textContent || '').replace(/\s*\(h\)\s*/g, '').trim();
-      if (t === 'Status') t = 'STA';
-      th.textContent = t;
-    });
-
-    // Footer wie Dispo: Monatssumme über Tag/WT/Feiertag
-    const ft = clone.querySelector('tfoot tr');
-    if (ft && ft.children.length >= 3) {
-      const c0 = ft.children[0];
-      const c1 = ft.children[1];
-      const c2 = ft.children[2];
-      const label = document.createElement('td');
-      label.colSpan = 3;
-      label.textContent = 'Monatssumme';
-      ft.insertBefore(label, c0);
-      ft.removeChild(c0);
-      ft.removeChild(c1);
-      ft.removeChild(c2);
-    }
-
-    clone.removeAttribute('style');
-    clone.querySelectorAll('[style]').forEach(function (el) { el.removeAttribute('style'); });
-    clone.querySelectorAll('.zs-sticky-tag, .zs-sticky-wt, .zs-sticky-holiday').forEach(function (el) {
-      el.classList.remove('zs-sticky-tag', 'zs-sticky-wt', 'zs-sticky-holiday');
-    });
-
-    // colgroup: feste mm, Rest an Bemerkung (kein Lohn)
-    const fixedLeft = 8 + 8 + 24;
-    const hourCols = HOUR_FIELDS.length + 1;
-    const fixedHours = hourCols * 11;
-    const fixedSta = 8;
-    const usable = 291;
-    let rest = usable - fixedLeft - fixedHours - fixedSta;
-    if (rest < 60) rest = 60;
-    const colWidths = [8, 8, 24];
-    for (let i = 0; i < hourCols; i++) colWidths.push(11);
-    colWidths.push(rest); // Bemerkung
-    colWidths.push(8); // STA
-
-    const cg = document.createElement('colgroup');
-    colWidths.forEach(function (mm) {
-      const col = document.createElement('col');
-      col.style.width = mm + 'mm';
-      cg.appendChild(col);
-    });
-    if (clone.firstChild) clone.insertBefore(cg, clone.firstChild);
-    else clone.appendChild(cg);
-
-    const tableHtml = clone.outerHTML;
     const win = window.open('', 'zs_print_monteur', 'width=1400,height=900,scrollbars=yes,resizable=yes');
     if (!win) {
       window.alert('Popup blockiert. Bitte Popups erlauben und erneut drucken.');
       return;
     }
+    win.document.open();
+    win.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' +
+      String(titleText).replace(/</g, '') +
+      '</title></head><body><p style="font-family:sans-serif;padding:1rem">Druckvorschau wird geladen …</p></body></html>');
+    win.document.close();
 
-    const esc = function (s) {
-      return String(s || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    };
-
-    const doc = win.document;
-    doc.open();
-    doc.write(
-      '<!doctype html><html lang="de"><head><meta charset="utf-8">' +
-      '<title>' + esc(titleText) + '</title>' +
-      '<style>' +
-      '@page{size:A4 landscape;margin:14mm 3mm 3mm 3mm;}' +
-      'html,body{margin:0;padding:0;background:#fff;}' +
-      'body{padding:0;font-family:Segoe UI,system-ui,sans-serif;color:#111;}' +
-      '*,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important;}' +
-      'h1{margin:0 0 2mm;font-size:12pt;font-weight:700;}' +
-      'table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.5pt;line-height:1.2;}' +
-      'th,td{border:1px solid #94a3b8;padding:1px 2px;vertical-align:middle;white-space:nowrap;box-sizing:border-box;overflow:visible;}' +
-      'thead tr.zs-head-groups th{background:#e3f5ed!important;color:#007a4d!important;font-size:7.5pt;text-align:center;}' +
-      'thead tr.zs-head-cols th{background:#eefaf5!important;color:#007a4d!important;font-weight:600;font-size:7.5pt;}' +
-      'tfoot th,tfoot td{background:#eefaf5!important;color:#007a4d!important;font-weight:700;}' +
-      'tfoot td[colspan]{text-align:left;overflow:visible;padding-left:3px;}' +
-      'tbody tr.zs-row-sa td{background:#fff8d6!important;}' +
-      'tbody tr.zs-row-so td{background:#fde9df!important;}' +
-      'tbody tr.zs-row-holiday td{background:#ffb3b3!important;}' +
-      'tbody tr.zs-row-locked:not(.zs-row-sa):not(.zs-row-so):not(.zs-row-holiday) td{background:#eefaf5!important;}' +
-      'td.zs-sum,th.zs-col-sum,.zs-col-hour{text-align:center;}' +
-      'th[data-col="tag"],td[data-col="tag"],th[data-col="wt"],td[data-col="wt"]{text-align:center;}' +
-      '.zs-col-bemerkung{white-space:normal!important;overflow:hidden;text-overflow:ellipsis;}' +
-      '.zs-col-status{text-align:center;}' +
-      '.zs-sep-after{border-right:3px solid #334155!important;}' +
-      '.zs-lock-check-icon,.no-print{display:none!important;}' +
-      '.zs-print-status{display:inline!important;font-weight:700;color:#007a4d!important;}' +
-      '@media print{body{padding:0;}}' +
-      '</style></head><body>' +
-      '<h1>' + esc(titleText) + '</h1>' +
-      tableHtml +
-      '</body></html>'
-    );
-    doc.close();
-
-    function triggerPrint() {
+    try {
+      const r = await fetch(api + '/api/zeitschreibung/print-html', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          technician_id: state.technicianId,
+          technician_name: state.technicianName,
+          year: state.year,
+          month: state.month,
+          title: titleText,
+          days: readDisplayedDaysForPrint(host),
+        }),
+      });
+      const html = await r.text();
+      if (!r.ok) {
+        let err = 'Druckvorschau fehlgeschlagen.';
+        try {
+          const j = JSON.parse(html);
+          if (j && j.error) err = j.error;
+        } catch (_) { /* ignore */ }
+        throw new Error(err);
+      }
+      win.document.open();
+      win.document.write(html);
+      win.document.close();
+      function triggerPrint() {
+        try {
+          win.focus();
+          win.print();
+        } catch (e) { /* ignore */ }
+      }
+      win.addEventListener('afterprint', function () {
+        try { win.close(); } catch (e2) { /* ignore */ }
+      });
+      setTimeout(triggerPrint, 120);
+    } catch (e) {
       try {
-        win.focus();
-        win.print();
-      } catch (e) { /* ignore */ }
+        win.document.body.innerHTML =
+          '<p style="font-family:sans-serif;padding:1rem;color:#b00020">' +
+          String((e && e.message) || e) +
+          '</p>';
+      } catch (_) { /* ignore */ }
+      window.alert(e.message || String(e));
     }
-    win.addEventListener('afterprint', function () {
-      try { win.close(); } catch (e2) { /* ignore */ }
-    });
-    setTimeout(triggerPrint, 100);
   }
 
   function bind(host) {

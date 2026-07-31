@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.001.005
+- **Montagebericht Sync:** Pseudo-Konflikte (`.conflict-*`) behoben — Revision-Meta bleibt beim Speichern erhalten; Draft-Push richtet `base_revision` am Server aus und retry’t bei 409 (lokales Speichern gewinnt).
+- **Zeitschreibung:** Spalte „Kommentar Buchhaltung“ (`lohn_kommentar`); breitere Card; Freigabe-PDF 1:1 wie Druckvorlage.
+
 ## V 2.001.000
 - **Release:** Plattformweite Release-Stufe 2.001; Patch-Zaehler zurueck auf 000.
 - **Zeitschreibung:** Speichern/Freigeben in Kopfzeile; Druck mit Dispo-Vorlage (A4 quer); Krank/Arzt getrennt; Sticky-Kopf/-Spalten; Lohn-Korrektur als Tooltip; Entsperren lokal.

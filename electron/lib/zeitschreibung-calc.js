@@ -200,6 +200,8 @@ function daysForExport(days) {
     for (const f of HOUR_FIELDS) out[f] = hourEff(d, f);
     out.bemerkung =
       d.lohn_bemerkung != null ? String(d.lohn_bemerkung) : String(d.bemerkung || '');
+    out.lohn_kommentar = d.lohn_kommentar != null ? String(d.lohn_kommentar) : '';
+    out.lohn_gesperrt = Number(d.lohn_gesperrt) ? 1 : 0;
     out.day_sum = daySumEffective(d);
     return out;
   });
@@ -256,6 +258,7 @@ function buildMonthDays(year, month, existingByDate) {
       krank: num(prev.krank),
       arzt: num(prev.arzt),
       bemerkung: prev.bemerkung != null ? String(prev.bemerkung) : '',
+      lohn_kommentar: prev.lohn_kommentar != null ? String(prev.lohn_kommentar) : '',
       lohn_gesperrt: prev.lohn_gesperrt ? 1 : 0,
       lohn_anw: prev.lohn_anw != null && prev.lohn_anw !== '' ? num(prev.lohn_anw) : null,
       lohn_montage: prev.lohn_montage != null && prev.lohn_montage !== '' ? num(prev.lohn_montage) : null,

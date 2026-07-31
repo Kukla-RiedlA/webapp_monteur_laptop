@@ -7468,16 +7468,24 @@ function createApp(db) {
       const montageberichtDataPath = path.join(reiseDir, 'montagebericht.json');
       const kopfdatenBemerkungen = (kopfdaten && kopfdaten.bemerkungen != null) ? String(kopfdaten.bemerkungen).trim() : '';
       const kopfdatenBemerkungenHtml = (kopfdaten && kopfdaten.bemerkungen_html != null) ? String(kopfdaten.bemerkungen_html).trim() : '';
-      writeFileWithRetry(montageberichtDataPath, JSON.stringify({
-        grundDesEinsatzes,
-        grundDesEinsatzes_html: grundDesEinsatzesHtml,
-        fabBemerkungen,
-        language,
-        languages,
-        bemerkungen: kopfdatenBemerkungen,
-        bemerkungen_html: kopfdatenBemerkungenHtml,
-        projekt: projektPflicht,
-      }, null, 2));
+      // Revision/Meta erhalten — sonst base_revision=0 beim Push → Pseudo-Konflikt trotz nur einem Gerät
+      const { readLocalDraftFile, writeLocalDraftFile } = require('./lib/multi-device-sync');
+      const prevDraft = readLocalDraftFile(montageberichtDataPath);
+      writeLocalDraftFile(
+        montageberichtDataPath,
+        {
+          grundDesEinsatzes,
+          grundDesEinsatzes_html: grundDesEinsatzesHtml,
+          fabBemerkungen,
+          language,
+          languages,
+          bemerkungen: kopfdatenBemerkungen,
+          bemerkungen_html: kopfdatenBemerkungenHtml,
+          projekt: projektPflicht,
+        },
+        prevDraft.revision,
+        prevDraft.server_updated_at,
+      );
 
       if (dispoBaseUrl && hasServerJobId && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
         try {

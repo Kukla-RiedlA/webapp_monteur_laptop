@@ -7897,6 +7897,12 @@
       if (banner) banner.hidden = true;
       multiDeviceBannerDismissedKey =
         'dismiss:' + Date.now() + ':' + (multiDevicePendingCleanupJobId || '');
+      // Persistierten Konflikt-Banner aus DB entfernen
+      fetch(API_BASE + '/api/multi_device/conflicts/ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }).catch(function () {});
     });
   }
 
