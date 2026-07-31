@@ -274,9 +274,21 @@ function mergeArbeitsschritteFromRemote(db, technicianId, remoteData) {
 
   db.prepare(`DELETE FROM arbeitsschritte_preset_step WHERE preset_scope = 'global'`).run();
   db.prepare(`DELETE FROM arbeitsschritte_preset_global`).run();
+
+  const remoteUserPresetServerIds = new Set();
+  const pendingPresetEntityIds = new Set();
   if (tid > 0) {
-    db.prepare(`DELETE FROM arbeitsschritte_preset_step WHERE preset_scope = 'user'`).run();
-    db.prepare(`DELETE FROM arbeitsschritte_preset_user WHERE technician_id = ?`).run(tid);
+    try {
+      const pend = db
+        .prepare(
+          `SELECT entity_id FROM pending_changes
+           WHERE entity_type = 'arbeitsschritte' AND action IN ('preset_save','preset_delete')`,
+        )
+        .all();
+      for (const p of pend) pendingPresetEntityIds.add(String(p.entity_id));
+    } catch (_) {
+      /* ignore */
+    }
   }
 
   (remoteData.presets || []).forEach(function (preset) {
@@ -299,10 +311,14 @@ function mergeArbeitsschritteFromRemote(db, technicianId, remoteData) {
       );
       replacePresetStepsLocal(db, 'global', sid, preset.step_refs || []);
     } else if (tid > 0) {
+      remoteUserPresetServerIds.add(sid);
       const existing = db
         .prepare(`SELECT id FROM arbeitsschritte_preset_user WHERE technician_id = ? AND server_id = ?`)
         .get(tid, sid);
       let localId = existing ? existing.id : null;
+      if (localId && pendingPresetEntityIds.has(String(localId))) {
+        return; // Pending-Save behalten
+      }
       if (localId) {
         db.prepare(
           `UPDATE arbeitsschritte_preset_user SET name = ?, type_code = ?, sort_order = ?, updated_at = ? WHERE id = ?`,
@@ -332,6 +348,22 @@ function mergeArbeitsschritteFromRemote(db, technicianId, remoteData) {
       replacePresetStepsLocal(db, 'user', localId, preset.step_refs || []);
     }
   });
+
+  // Nur User-Presets mit server_id entfernen, die nicht mehr auf Dispo sind und kein Pending haben.
+  // Lokale Negativ-IDs / Presets ohne server_id bleiben.
+  if (tid > 0) {
+    const localUserPresets = db
+      .prepare(`SELECT id, server_id FROM arbeitsschritte_preset_user WHERE technician_id = ?`)
+      .all(tid);
+    for (const row of localUserPresets) {
+      if (pendingPresetEntityIds.has(String(row.id))) continue;
+      if (row.server_id == null || row.server_id === '') continue;
+      const sid = parseInt(row.server_id, 10);
+      if (!sid || remoteUserPresetServerIds.has(sid)) continue;
+      db.prepare(`DELETE FROM arbeitsschritte_preset_step WHERE preset_scope = 'user' AND preset_id = ?`).run(row.id);
+      db.prepare(`DELETE FROM arbeitsschritte_preset_user WHERE id = ? AND technician_id = ?`).run(row.id, tid);
+    }
+  }
 }
 
 function nextLocalStepId(db) {

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   eap_nummer TEXT,
   bestellnummer TEXT,
   updated_at TEXT,
+  server_updated_at TEXT,
   synced_at TEXT,
   FOREIGN KEY (customer_id) REFERENCES customers(id)
 );

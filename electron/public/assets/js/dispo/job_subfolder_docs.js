@@ -713,6 +713,33 @@
 
   var trashSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
   var editSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+  var syncSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>';
+  var checkSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
+  var warnSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+
+  function abFileSyncStatusEl(file) {
+    if (!cfg || cfg.fromLaptopEmbed !== true) return null;
+    var state = String((file && file.sync_state) || 'idle');
+    var present = file && file.server_present === true;
+    var el = document.createElement('span');
+    el.className = 'ab-file-sync-status';
+    el.setAttribute('aria-hidden', 'false');
+    if (state === 'pending_upload' || state === 'pending_delete' || state === 'syncing') {
+      el.className += ' is-syncing';
+      el.innerHTML = syncSvg;
+      el.title = state === 'pending_delete' ? 'Löschen wird synchronisiert …' : 'Wird synchronisiert …';
+    } else if (present) {
+      el.className += ' is-online';
+      el.innerHTML = checkSvg;
+      el.title = 'Auf Server vorhanden';
+    } else {
+      el.className += ' is-offline';
+      el.innerHTML = warnSvg;
+      el.title = 'Noch nicht auf dem Server';
+    }
+    el.setAttribute('aria-label', el.title);
+    return el;
+  }
 
   function abCommentIconBtn(kind, title) {
     var btn = document.createElement('button');
@@ -884,6 +911,8 @@
         });
         li.appendChild(delBtn);
       }
+      var syncStatus = abFileSyncStatusEl(f);
+      if (syncStatus) li.appendChild(syncStatus);
       var a = document.createElement('a');
       a.href = url;
       a.textContent = f.name;

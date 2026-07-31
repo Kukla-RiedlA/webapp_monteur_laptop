@@ -151,9 +151,23 @@ function mergeTextbausteineFromRemote(db, technicianId, remoteData) {
           if (ex) localItemId = ex.id;
         }
         if (localItemId) {
-          db.prepare(
-            `UPDATE textbausteine_user SET text = ?, sort_order = ?, category_id = ?, updated_at = ? WHERE id = ?`,
-          ).run(String(item.text || ''), parseInt(item.sort_order, 10) || 0, localCatId, now, localItemId);
+          let hasPending = false;
+          try {
+            hasPending = !!db
+              .prepare(
+                `SELECT 1 FROM pending_changes
+                 WHERE entity_type = 'textbausteine' AND entity_id = ? AND action IN ('item_save','item_delete')
+                 LIMIT 1`,
+              )
+              .get(String(localItemId));
+          } catch (_) {
+            hasPending = false;
+          }
+          if (!hasPending) {
+            db.prepare(
+              `UPDATE textbausteine_user SET text = ?, sort_order = ?, category_id = ?, updated_at = ? WHERE id = ?`,
+            ).run(String(item.text || ''), parseInt(item.sort_order, 10) || 0, localCatId, now, localItemId);
+          }
         } else {
           db.prepare(
             `INSERT INTO textbausteine_user (technician_id, category_id, text, sort_order, server_id, updated_at)

@@ -479,6 +479,43 @@
   height: 18px;
 }
 
+.ab-files li .ab-file-sync-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  color: #6b7280;
+}
+
+.ab-files li .ab-file-sync-status svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.ab-files li .ab-file-sync-status.is-online {
+  color: #15803d;
+}
+
+.ab-files li .ab-file-sync-status.is-offline {
+  color: #b45309;
+}
+
+.ab-files li .ab-file-sync-status.is-syncing {
+  color: #1d4ed8;
+}
+
+.ab-files li .ab-file-sync-status.is-syncing svg {
+  animation: ab-file-sync-spin 1s linear infinite;
+}
+
+@keyframes ab-file-sync-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .ab-files a {
   color: #1d4ed8;
   flex: 1;

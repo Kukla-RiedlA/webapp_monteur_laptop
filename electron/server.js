@@ -9397,17 +9397,30 @@ function createApp(db) {
     const technicianId = getTechnicianId(req) || body.technician_id;
     if (!body.id) return res.status(400).json({ ok: false, error: 'id erforderlich.' });
     try {
+      // server_id vor lokalem Delete lesen — Delete entfernt die Zeile.
+      let serverStepId = null;
+      try {
+        const before = db
+          .prepare(`SELECT id, server_id FROM arbeitsschritte_user WHERE id = ? AND technician_id = ?`)
+          .get(parseInt(body.id, 10), parseInt(technicianId, 10));
+        if (before && before.server_id != null) serverStepId = parseInt(before.server_id, 10);
+      } catch (_) {
+        /* ignore */
+      }
+      if (!(serverStepId > 0) && parseInt(body.id, 10) > 0) serverStepId = parseInt(body.id, 10);
       arbeitsschritteLocal.deleteStepLocal(db, technicianId, body.id);
       arbeitsschritteLocal.queueArbeitsschrittePending(db, body.id, 'step_delete', {
         technician_id: technicianId,
         baseUrl,
-        id: body.id,
+        id: serverStepId > 0 ? serverStepId : body.id,
+        server_id: serverStepId > 0 ? serverStepId : null,
       });
       save();
       if (baseUrl && technicianId) {
         try {
+          const delId = serverStepId > 0 ? serverStepId : body.id;
           const formBody = new URLSearchParams();
-          formBody.append('id', body.id);
+          formBody.append('id', String(delId));
           formBody.append('technician_id', String(technicianId));
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_delete.php', {
             method: 'POST',
@@ -10455,9 +10468,9 @@ function createApp(db) {
           }
           if (expectedMtimeMs != null && Number.isFinite(expectedMtimeMs) && expectedMtimeMs > 0) {
             if (localMtimeMs == null || !Number.isFinite(localMtimeMs)) return false;
-            if (localMtimeMs + FS_MTIME_TOLERANCE_MS < expectedMtimeMs) return false;
-            if (expectedSize != null && Number.isFinite(expectedSize) && localSize !== expectedSize) return false;
-            return true;
+            // Lokal neuer oder gleich (Toleranz) → nie überschreiben, auch bei Größenabweichung.
+            if (localMtimeMs + FS_MTIME_TOLERANCE_MS >= expectedMtimeMs) return true;
+            return false; // Dispo neuer → Download
           }
           if (expectedSize == null || !Number.isFinite(expectedSize)) {
             return !!(completedArr && completedArr.includes(relPath));
@@ -10737,12 +10750,24 @@ function createApp(db) {
           }
         }
         await dbLock.runWithDbLock(async () => {
-          setProgress('sync_pull', 0, 8, 'Ziehe Aufträge von Dispo …');
+          setProgress('sync_pull', 0, 8, 'Sende Status/Pending vor Pull …');
+          try {
+            await pushToServer(base, technicianId, db, auth);
+            save();
+          } catch (prePushErr) {
+            console.warn(
+              '[sync_pull] pre-pull-push:',
+              prePushErr && prePushErr.message ? prePushErr.message : prePushErr,
+            );
+          }
+        });
+        await dbLock.runWithDbLock(async () => {
+          setProgress('sync_pull', 1, 8, 'Ziehe Aufträge von Dispo …');
           await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
           save();
         });
         await dbLock.runWithDbLock(async () => {
-          setProgress('sync_pull', 1, 8, 'Sende ausstehende Änderungen …');
+          setProgress('sync_pull', 2, 8, 'Sende ausstehende Änderungen …');
           try {
             await pushToServer(base, technicianId, db, auth);
             save();
@@ -10753,7 +10778,7 @@ function createApp(db) {
             );
           }
         });
-        setProgress('sync_pull', 2, 8, 'Kalender-Cache …');
+        setProgress('sync_pull', 3, 8, 'Kalender-Cache …');
         const range = defaultFutureRange();
         const cacheStart = p.date_from && String(p.date_from).trim() ? String(p.date_from).trim() : range.start;
         const cacheEnd = p.date_to && String(p.date_to).trim() ? String(p.date_to).trim() : range.end;
@@ -10964,6 +10989,23 @@ function createApp(db) {
           }
         } catch (abErr) {
           console.warn('[sync_pull] abrechnung_refresh:', abErr && abErr.message ? abErr.message : abErr);
+        }
+        try {
+          await dbLock.runWithDbLock(async () => {
+            await flushAbrechnungOutbox(
+              { db, save, dbDir: DB_DIR, authHeaderFromCredentials },
+              base,
+              technicianId,
+              p.serverUsername,
+              p.serverPassword,
+            );
+            save();
+          });
+        } catch (flushErr) {
+          console.warn(
+            '[sync_pull] abrechnung_outbox_flush:',
+            flushErr && flushErr.message ? flushErr.message : flushErr,
+          );
         }
         break;
       }
@@ -13594,8 +13636,25 @@ function removeLocalJobsNotInDispo(db, technicianId, receivedJobServerIds) {
 function removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerIds) {
   const rows = db.prepare('SELECT id, server_id FROM absences WHERE technician_id = ?').all(technicianId);
   for (const row of rows) {
-    const serverId = row.server_id != null && row.server_id !== '' ? row.server_id : row.id;
+    // Offline-Creates ohne server_id behalten (Pending pushen).
+    if (row.server_id == null || row.server_id === '') {
+      const pendingCreate = db
+        .prepare(
+          `SELECT 1 FROM pending_changes WHERE entity_type = 'absence' AND entity_id = ? AND action IN ('create','update') LIMIT 1`,
+        )
+        .get(String(row.id));
+      if (pendingCreate) continue;
+      // Auch ohne Pending: lokal ohne server_id nicht löschen (Orphan bis Mapping).
+      continue;
+    }
+    const serverId = row.server_id;
     if (receivedAbsenceServerIds.has(Number(serverId)) || receivedAbsenceServerIds.has(String(serverId))) continue;
+    const pendingKeep = db
+      .prepare(
+        `SELECT 1 FROM pending_changes WHERE entity_type = 'absence' AND (entity_id = ? OR entity_id = ?) LIMIT 1`,
+      )
+      .get(String(row.id), String(serverId));
+    if (pendingKeep) continue;
     db.prepare('DELETE FROM absences WHERE id = ?').run(row.id);
   }
 }
@@ -14147,7 +14206,73 @@ function jobStatusRank(status) {
   return JOB_STATUS_RANK[s] != null ? JOB_STATUS_RANK[s] : 0;
 }
 
-/** Verwirft ausstehende Status-Pushes, wenn Dispo (nach Pull) älteren Stand hat (z. B. Admin: zurück auf zugeteilt). */
+function parseDispoTimestampMs(v) {
+  if (v == null || v === '') return 0;
+  const s = String(v).trim().replace(' ', 'T');
+  const ms = Date.parse(s.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(s) ? s : s + 'Z');
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function ensureJobsServerUpdatedAtColumn(db) {
+  try {
+    db.prepare('ALTER TABLE jobs ADD COLUMN server_updated_at TEXT').run();
+  } catch (_) {
+    /* exists */
+  }
+}
+
+function getPendingJobActionPayload(db, localJobId, action) {
+  const lid = parseInt(localJobId, 10);
+  if (!Number.isFinite(lid) || lid <= 0) return undefined;
+  const entityIds = [lid];
+  const mapped = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(lid);
+  if (mapped && mapped.server_id != null && String(mapped.server_id).trim() !== '') {
+    entityIds.push(mapped.server_id);
+  }
+  for (const eid of entityIds) {
+    const row = db
+      .prepare(
+        `SELECT payload FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(eid, action);
+    if (!row) continue;
+    try {
+      return JSON.parse(row.payload || '{}');
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  return undefined;
+}
+
+function getPendingJobStatusPayload(db, localJobId) {
+  const lid = parseInt(localJobId, 10);
+  if (!Number.isFinite(lid) || lid <= 0) return null;
+  const entityIds = [lid];
+  const mapped = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(lid);
+  if (mapped && mapped.server_id != null && String(mapped.server_id).trim() !== '') {
+    entityIds.push(mapped.server_id);
+  }
+  for (const eid of entityIds) {
+    const rows = db
+      .prepare(
+        `SELECT payload FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status' ORDER BY id DESC LIMIT 1`,
+      )
+      .all(eid);
+    for (const p of rows) {
+      try {
+        const pl = JSON.parse(p.payload || '{}');
+        const st = String(pl.status || '').trim().toLowerCase();
+        if (st) return st;
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+  return null;
+}
+
+/** Verwirft ausstehende Status-Pushes nur bei Admin-Downgrade unter in_arbeit. */
 function clearSupersededPendingJobStatusOnPull(db, localJobId, serverStatus) {
   const st = String(serverStatus || '').trim().toLowerCase();
   if (st === 'erledigt' || st === 'abgerechnet') return;
@@ -14159,6 +14284,7 @@ function clearSupersededPendingJobStatusOnPull(db, localJobId, serverStatus) {
     entityIds.push(mapped.server_id);
   }
   const serverRank = jobStatusRank(st);
+  const inArbeitRank = jobStatusRank('in_arbeit');
   for (const eid of entityIds) {
     const pending = db
       .prepare(
@@ -14170,9 +14296,12 @@ function clearSupersededPendingJobStatusOnPull(db, localJobId, serverStatus) {
         const pl = JSON.parse(p.payload || '{}');
         const plSt = String(pl.status || '').trim().toLowerCase();
         const pendingRank = jobStatusRank(plSt);
-        const dropErledigtPending = plSt === 'erledigt';
-        const dropAheadOfServer = pendingRank > 0 && serverRank > 0 && pendingRank > serverRank;
-        if (dropErledigtPending || dropAheadOfServer) {
+        // Nur Admin-Rückgabe unter in_arbeit (zugeteilt/angelegt/…) verwirft Pending.
+        // Pending erledigt bei Server in_arbeit behalten.
+        const adminDowngrade = serverRank > 0 && serverRank < inArbeitRank;
+        const dropAheadOnDowngrade =
+          adminDowngrade && pendingRank > 0 && pendingRank > serverRank;
+        if (dropAheadOnDowngrade) {
           db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
         }
       } catch (_) {
@@ -14183,6 +14312,7 @@ function clearSupersededPendingJobStatusOnPull(db, localJobId, serverStatus) {
 }
 
 function insertOrUpdateJob(db, j, customerId, technicianId) {
+  ensureJobsServerUpdatedAtColumn(db);
   const id = j.id;
   const existing = db.prepare('SELECT id FROM jobs WHERE server_id = ?').get(id);
   const start = (j.start_datetime || '').replace('T', ' ').substring(0, 19);
@@ -14191,14 +14321,58 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   const KNOWN = new Set(['angelegt', 'zugeteilt', 'in_arbeit', 'erledigt', 'abgerechnet', 'geplant']);
   const status = KNOWN.has(rawSt) ? rawSt : 'angelegt';
   const dateNotFixed = Number(j.date_not_fixed) === 1 ? 1 : 0;
+  const remoteUpdatedAt = j.updated_at != null ? String(j.updated_at) : j.server_updated_at != null ? String(j.server_updated_at) : null;
+  const remoteTs = parseDispoTimestampMs(remoteUpdatedAt);
   if (existing) {
-    const prevRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(existing.id);
+    const prevRow = db
+      .prepare('SELECT status, description, start_datetime, end_datetime, date_not_fixed, server_updated_at FROM jobs WHERE id = ?')
+      .get(existing.id);
     const prevSt = String((prevRow && prevRow.status) || '').trim().toLowerCase();
+    const localTs = parseDispoTimestampMs(prevRow && prevRow.server_updated_at);
+    const serverIsFresher = !localTs || !remoteTs || remoteTs > localTs;
     const fabForLocal = mergeFabForJobPull(db, existing.id, j.fabrikationsnummern);
-    db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, date_not_fixed = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
-      j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, fabForLocal, j.eap_nummer || null, j.bestellnummer || null, existing.id
+
+    let nextStatus = status;
+    let nextDesc = j.description != null ? j.description : null;
+    let nextStart = start;
+    let nextEnd = end;
+    let nextDateNotFixed = dateNotFixed;
+
+    const pendingStatus = getPendingJobStatusPayload(db, existing.id);
+    const pendingDesc = getPendingJobActionPayload(db, existing.id, 'description');
+
+    if (pendingStatus) {
+      nextStatus = pendingStatus;
+    } else if (!serverIsFresher && prevRow && prevRow.status) {
+      nextStatus = String(prevRow.status);
+    }
+
+    if (pendingDesc && pendingDesc.description !== undefined) {
+      nextDesc = pendingDesc.description;
+    } else if (!serverIsFresher && prevRow) {
+      nextDesc = prevRow.description;
+    }
+
+    if (!serverIsFresher && !pendingStatus && prevRow) {
+      if (prevRow.start_datetime) nextStart = String(prevRow.start_datetime).replace('T', ' ').substring(0, 19);
+      if (prevRow.end_datetime) nextEnd = String(prevRow.end_datetime).replace('T', ' ').substring(0, 19);
+      if (prevRow.date_not_fixed != null) nextDateNotFixed = Number(prevRow.date_not_fixed) === 1 ? 1 : 0;
+    }
+
+    db.prepare('UPDATE jobs SET job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, date_not_fixed = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\'), server_updated_at = COALESCE(?, server_updated_at) WHERE id = ?').run(
+      j.job_number || null, customerId, j.job_type || 'Service', nextStart, nextEnd, nextStatus, nextDateNotFixed, nextDesc, fabForLocal, j.eap_nummer || null, j.bestellnummer || null,
+      serverIsFresher && remoteUpdatedAt ? remoteUpdatedAt : null,
+      existing.id
     );
     clearSupersededPendingJobStatusOnPull(db, existing.id, status);
+    try {
+      const keptPending = getPendingJobStatusPayload(db, existing.id);
+      if (keptPending) {
+        db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run(keptPending, existing.id);
+      }
+    } catch (_) {
+      /* ignore */
+    }
     if (
       prevSt === 'in_arbeit' &&
       (status === 'erledigt' || status === 'zugeteilt' || status === 'abgerechnet')
@@ -14265,8 +14439,8 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
   }
   if (orphan) {
     const fabOrphan = mergeFabForJobPull(db, orphan.id, j.fabrikationsnummern);
-    db.prepare('UPDATE jobs SET server_id = ?, job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, date_not_fixed = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
-      id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, fabOrphan, j.eap_nummer || null, j.bestellnummer || null, orphan.id
+    db.prepare('UPDATE jobs SET server_id = ?, job_number = ?, customer_id = ?, job_type = ?, start_datetime = ?, end_datetime = ?, status = ?, date_not_fixed = ?, description = ?, fabrikationsnummern = ?, eap_nummer = ?, bestellnummer = ?, synced_at = datetime(\'now\'), server_updated_at = ? WHERE id = ?').run(
+      id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, fabOrphan, j.eap_nummer || null, j.bestellnummer || null, remoteUpdatedAt, orphan.id
     );
     clearSupersededPendingJobStatusOnPull(db, orphan.id, status);
     if (j.street != null) insertOrUpdateJobAddress(db, orphan.id, j);
@@ -14274,8 +14448,8 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     upsertJobContactsForLocalJob(db, orphan.id, j);
     return orphan.id;
   }
-  const r2 = db.prepare('INSERT INTO jobs (server_id, job_number, customer_id, job_type, start_datetime, end_datetime, status, date_not_fixed, description, fabrikationsnummern, eap_nummer, bestellnummer, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))').run(
-    id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null
+  const r2 = db.prepare('INSERT INTO jobs (server_id, job_number, customer_id, job_type, start_datetime, end_datetime, status, date_not_fixed, description, fabrikationsnummern, eap_nummer, bestellnummer, synced_at, server_updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'), ?)').run(
+    id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null, remoteUpdatedAt
   );
   const newId = r2.lastInsertRowid;
   const dispCountNew = Number(j.dispo_jt_count);
@@ -14493,7 +14667,8 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           gesendet_technician_id: techIdForPush,
           action: p.action
         });
-        throw new Error(errMsg);
+        // Head-of-Line vermeiden: ein Job-Fehler darf Rest-Queue nicht abbrechen.
+        continue;
       }
       db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       if (p.action === 'fabrikationsnummern' && payload.fabrikationsnummern !== undefined && job && job.id != null) {
@@ -14776,7 +14951,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           error: e && e.message ? e.message : String(e),
           pending_id: p.id,
         });
-        if (!isLikelyOfflineSyncError(e)) throw e;
+        if (!isLikelyOfflineSyncError(e)) {
+          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
+          continue;
+        }
       }
     }
     if (p.entity_type === 'arbeitsschritte') {
@@ -14812,8 +14990,19 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
             );
           }
         } else if (p.action === 'step_delete') {
+          const delIdRaw = payloadRaw.server_id != null ? payloadRaw.server_id : payloadRaw.id;
+          const delId = parseInt(delIdRaw, 10);
+          if (!Number.isFinite(delId) || delId <= 0) {
+            console.warn('[sync_push] step_delete ohne gültige id — Pending verworfen', {
+              pending_id: p.id,
+              payload_id: payloadRaw.id,
+              server_id: payloadRaw.server_id,
+            });
+            db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+            continue;
+          }
           const formBody = new URLSearchParams();
-          formBody.append('id', payloadRaw.id);
+          formBody.append('id', String(delId));
           formBody.append('technician_id', String(techId));
           const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_delete.php', {
             method: 'POST',
@@ -14821,7 +15010,15 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
-          if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+          if (!r.ok || !data.ok) {
+            const errMsg = data.error || r.statusText || 'step_delete fehlgeschlagen';
+            if (/id erforderlich|nicht gefunden|not found|404/i.test(String(errMsg))) {
+              console.warn('[sync_push] step_delete Giftpille verworfen', { pending_id: p.id, errMsg });
+              db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+              continue;
+            }
+            throw new Error(errMsg);
+          }
         } else if (p.action === 'preset_save') {
           const formBody = new URLSearchParams();
           formBody.append('technician_id', String(techId));
@@ -14866,7 +15063,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           error: e && e.message ? e.message : String(e),
           pending_id: p.id,
         });
-        if (!isLikelyOfflineSyncError(e)) throw e;
+        if (!isLikelyOfflineSyncError(e)) {
+          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
+          continue;
+        }
       }
     }
     if (p.entity_type === 'serviceprotokoll' && p.action === 'save') {
@@ -14892,7 +15092,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
         logSyncPushError({ reason: 'serviceprotokoll_push', error: e.message, pending_id: p.id });
-        if (!isLikelyOfflineSyncError(e)) throw e;
+        if (!isLikelyOfflineSyncError(e)) {
+          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
+          continue;
+        }
       }
     }
     if (p.entity_type === 'kontrollwiegung' && p.action === 'save') {
@@ -14916,7 +15119,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
         logSyncPushError({ reason: 'kontrollwiegung_push', error: e.message, pending_id: p.id });
-        if (!isLikelyOfflineSyncError(e)) throw e;
+        if (!isLikelyOfflineSyncError(e)) {
+          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
+          continue;
+        }
       }
     }
     if (p.entity_type === 'signature' && p.action === 'submit') {
@@ -14940,7 +15146,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
         logSyncPushError({ reason: 'signature_push', error: e.message, pending_id: p.id });
-        if (!isLikelyOfflineSyncError(e)) throw e;
+        if (!isLikelyOfflineSyncError(e)) {
+          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
+          continue;
+        }
       }
     }
     if (p.entity_type === 'rams') {
@@ -14969,7 +15178,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
         logSyncPushError({ reason: 'rams_push', error: e.message, pending_id: p.id, action: payloadRaw.action });
-        if (!isLikelyOfflineSyncError(e)) throw e;
+        if (!isLikelyOfflineSyncError(e)) {
+          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
+          continue;
+        }
       }
     }
     if (!handled) {

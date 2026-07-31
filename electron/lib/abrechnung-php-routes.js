@@ -185,12 +185,29 @@ function registerAbrechnungPhpRoutes(app, ctx) {
     );
     const diskRows = getCore().scanLocalAbrechnungFilesFromDisk(fileCtx, ctx.db, jobId, bucket, ctx.dbDir);
     const rows = getCore().dedupeAbrechnungFileRows(metaRows.concat(diskRows));
-    const files = rows.map((r) => ({
-      name: r.file_name,
-      size_bytes: r.size_bytes != null ? r.size_bytes : null,
-      uploaded_at: r.uploaded_at != null ? r.uploaded_at : (r.synced_at != null ? r.synced_at : null),
-      uploaded_by_name: r.uploaded_by_name != null ? r.uploaded_by_name : null,
-    }));
+    const enriched = getCore().enrichAbrechnungFilesWithSyncState(
+      ctx.db,
+      dispoJobId,
+      rows.map((r) => ({
+        bucket: r.bucket || bucket,
+        file_name: r.file_name,
+        name: r.file_name,
+        size_bytes: r.size_bytes != null ? r.size_bytes : null,
+        synced_at: r.synced_at != null ? r.synced_at : null,
+        uploaded_at: r.uploaded_at != null ? r.uploaded_at : r.synced_at != null ? r.synced_at : null,
+        uploaded_by_name: r.uploaded_by_name != null ? r.uploaded_by_name : null,
+      })),
+    );
+    const files = enriched
+      .filter((f) => f.sync_state !== 'pending_delete')
+      .map((f) => ({
+        name: f.name || f.file_name,
+        size_bytes: f.size_bytes != null ? f.size_bytes : null,
+        uploaded_at: f.uploaded_at != null ? f.uploaded_at : null,
+        uploaded_by_name: f.uploaded_by_name != null ? f.uploaded_by_name : null,
+        server_present: f.server_present === true,
+        sync_state: f.sync_state || 'idle',
+      }));
     jsonRes(res, { ok: true, files, source: rows.length ? 'local' : 'empty' });
   });
 
@@ -283,10 +300,9 @@ function registerAbrechnungPhpRoutes(app, ctx) {
         .prepare(
           `INSERT INTO abrechnung_files_meta (
              job_server_id, bucket, file_name, size_bytes, synced_at, uploaded_at, uploaded_by_name, uploaded_by_user_id
-           ) VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
            ON CONFLICT(job_server_id, bucket, file_name) DO UPDATE SET
              size_bytes = excluded.size_bytes,
-             synced_at = excluded.synced_at,
              uploaded_at = excluded.uploaded_at,
              uploaded_by_name = excluded.uploaded_by_name,
              uploaded_by_user_id = excluded.uploaded_by_user_id`,
@@ -309,6 +325,13 @@ function registerAbrechnungPhpRoutes(app, ctx) {
             d.authHeader,
             tid || d.technicianId,
           );
+          ctx.db
+            .prepare(
+              `UPDATE abrechnung_files_meta SET synced_at = datetime('now')
+               WHERE job_server_id = ? AND bucket = ? AND file_name = ?`,
+            )
+            .run(dispoJobId, bucket, safeName);
+          ctx.save();
           return { ok: true, name: safeName, source: 'dispo' };
         } catch (e) {
           ctx.db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
@@ -369,9 +392,9 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       }
       ctx.db
         .prepare(
-          'DELETE FROM abrechnung_files_meta WHERE job_server_id = ? AND bucket = ? AND file_name = ?',
+          'DELETE FROM abrechnung_files_meta WHERE (job_server_id = ? OR job_server_id = ?) AND bucket = ? AND file_name = ?',
         )
-        .run(dispoJobId, bucket, filename);
+        .run(dispoJobId, jobId, bucket, filename);
       ctx.save();
       const d = dispoCtx(ctx, req);
       if (d.baseUrl && d.authHeader && d.authHeader.Authorization) {
@@ -393,7 +416,12 @@ function registerAbrechnungPhpRoutes(app, ctx) {
           return { ok: true, source: 'local', queued: true, error: e.message };
         }
       }
-      return { ok: true, source: 'local' };
+      ctx.db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
+        'delete',
+        JSON.stringify({ job_id: dispoJobId, bucket, name: filename }),
+      );
+      ctx.save();
+      return { ok: true, source: 'local', queued: true };
     });
   });
 
