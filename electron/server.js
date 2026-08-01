@@ -7,6 +7,7 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const https = require('https');
 const WebSocket = require('ws');
 const FormData = require('form-data');
@@ -6231,11 +6232,12 @@ function createApp(db) {
     }
   });
 
-  app.post('/api/anlagenstamm_parameter_download', express.json(), async (req, res) => {
+  app.post('/api/anlagenstamm_parameter_download', express.json({ limit: '40mb' }), async (req, res) => {
     const technicianId = getTechnicianId(req);
     const body = req.body || {};
     const fabValue = String(body.fab || '').trim();
     const fileId = parseInt(body.file_id, 10);
+    const openLocal = body.open_local === true || body.open_local === 1 || body.open_local === '1';
     if (!technicianId || !fabValue || !Number.isFinite(fileId) || fileId <= 0) {
       return res.status(400).json({ ok: false, error: 'fab, file_id und technician_id erforderlich.' });
     }
@@ -6254,6 +6256,28 @@ function createApp(db) {
         if (remote && remote.ok && remote.buffer) {
           const disp = remote.contentDisposition || '';
           const xName = remote.xDownloadFilename || '';
+          let fileName = xName || 'parameterliste';
+          if (xName) {
+            try { fileName = decodeURIComponent(xName); } catch (_) { fileName = xName; }
+          } else {
+            const m = String(disp).match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)/i);
+            if (m && m[1]) {
+              try { fileName = decodeURIComponent(m[1]); } catch (_) { fileName = m[1]; }
+            }
+          }
+          if (openLocal) {
+            const safe = String(fileName).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 120) || 'parameterliste';
+            const tmpPath = path.join(os.tmpdir(), 'kukla-param-' + fileId + '-' + Date.now() + '-' + safe);
+            try {
+              fs.writeFileSync(tmpPath, remote.buffer);
+              return res.json({ ok: true, path: tmpPath, file_name: fileName });
+            } catch (writeErr) {
+              return res.status(500).json({
+                ok: false,
+                error: writeErr && writeErr.message ? writeErr.message : 'Temp-Datei fehlgeschlagen.',
+              });
+            }
+          }
           if (disp) res.setHeader('Content-Disposition', disp);
           if (xName) res.setHeader('X-Download-Filename', xName);
           res.setHeader('Content-Type', remote.contentType || 'application/octet-stream');

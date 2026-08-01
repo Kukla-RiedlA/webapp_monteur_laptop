@@ -12,6 +12,7 @@ if (app.isPackaged) {
 
 const { createApp, getDb, getMonteurDb, PORT, performAnlagenstammSave, flushMonteurDb } = require('./server');
 const { createImageGalleryWindowManager } = require('./lib/image-gallery-window');
+const { attachEditContextMenu } = require('./lib/edit-context-menu');
 const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
 const {
   searchLocal: anlagenstammSearchLocal,
@@ -138,6 +139,7 @@ function createWindow() {
     }
   });
   mainWindow.on('closed', () => { mainWindow = null; });
+  attachEditContextMenu(mainWindow.webContents);
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
       mainWindow.webContents.toggleDevTools();

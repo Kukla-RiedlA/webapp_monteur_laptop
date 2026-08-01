@@ -115,6 +115,59 @@ function sizeFromCssPx(px) {
   return Math.max(16, Math.min(96, Math.round((n * 72 / 96) * 2)));
 }
 
+/**
+ * Data-URL &lt;img&gt; → ImageRun für DOCX (Base64 aus dem Richtext-Editor).
+ * @returns {InstanceType<typeof ImageRun>|null}
+ */
+function imageRunFromDataUrl(src, styleText) {
+  const rawSrc = decodeHtmlEntities(String(src || '').trim());
+  const m = rawSrc.match(/^data:image\/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!m) return null;
+  let type = m[1].toLowerCase();
+  if (type === 'jpeg') type = 'jpg';
+  if (type === 'webp') type = 'png';
+  let data;
+  try {
+    data = Buffer.from(m[2].replace(/\s+/g, ''), 'base64');
+  } catch (_) {
+    return null;
+  }
+  if (!data || data.length < 32) return null;
+
+  const style = parseStyle(styleText || '');
+  let widthPx = 420;
+  if (style.width) {
+    const w = String(style.width).trim();
+    if (/%/.test(w)) {
+      const pct = parseFloat(w) || 100;
+      widthPx = Math.round(520 * Math.min(100, Math.max(10, pct)) / 100);
+    } else {
+      const px = parseFloat(w);
+      if (Number.isFinite(px) && px > 0) widthPx = Math.min(520, Math.max(40, Math.round(px)));
+    }
+  }
+  let heightPx = Math.round(widthPx * 0.75);
+
+  try {
+    // docx erwartet jpg|png|gif|bmp
+    if (type !== 'jpg' && type !== 'png' && type !== 'gif' && type !== 'bmp') {
+      type = 'jpg';
+    }
+    return new ImageRun({
+      type,
+      data,
+      transformation: { width: widthPx, height: heightPx },
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+function parseImgSrcFromToken(token) {
+  const srcMatch = String(token || '').match(/\ssrc\s*=\s*["']([^"']+)["']/i);
+  return srcMatch ? srcMatch[1] : '';
+}
+
 function parseStyle(styleText) {
   const out = {};
   (styleText || '').split(';').forEach((part) => {
@@ -219,11 +272,22 @@ function htmlToParagraphs(html, defaultSizeHalfPt = 24) {
       const st = styleStack[styleStack.length - 1];
       current.runs.push(new TextRun({ break: 1, font: st.font || 'Calibri', size: st.size || defaultSizeHalfPt }));
     }
+    if (tag === 'img') {
+      const src = parseImgSrcFromToken(token);
+      const styleAttr = styleAttrMatch ? styleAttrMatch[1] : '';
+      const imgRun = imageRunFromDataUrl(src, styleAttr);
+      if (imgRun) {
+        if (current.runs.length > 0) pushParagraph();
+        current.runs.push(imgRun);
+        pushParagraph();
+      }
+      if (styleStack.length > 1) styleStack.pop();
+    }
   });
   pushParagraph();
   return paragraphs.map((p) => {
     const runs = p.runs.map((r) => {
-      if (r instanceof TextRun) return r;
+      if (r instanceof TextRun || r instanceof ImageRun) return r;
       const runObj = { ...r };
       if (p.bullet && typeof runObj.text === 'string') {
         runObj.text = runObj.text.replace(/^\s*([•\-]\s*)+/, '');

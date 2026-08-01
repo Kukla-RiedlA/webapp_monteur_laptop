@@ -36,6 +36,10 @@ function createImageGalleryWindowManager(getMainWindow, getPort) {
     });
     windows.add(win);
     win.on('closed', () => windows.delete(win));
+    try {
+      const { attachEditContextMenu } = require('./edit-context-menu');
+      attachEditContextMenu(win.webContents);
+    } catch (_) { /* optional */ }
 
     const url =
       'http://127.0.0.1:' +

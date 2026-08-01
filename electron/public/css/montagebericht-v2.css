@@ -216,6 +216,18 @@
   padding: 0;
 }
 
+.mb-rich-editor img {
+  max-width: 100%;
+  height: auto;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.mb-rich-editor img.mb-img-selected {
+  outline: 2px solid var(--sp-green, #007a4d);
+  outline-offset: 2px;
+}
+
 .montagebericht-fab-felder {
   display: flex;
   flex-direction: column;

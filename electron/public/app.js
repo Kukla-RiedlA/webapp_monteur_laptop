@@ -9533,6 +9533,27 @@
   async function downloadAnlagenstammParameterFile(fab, fileId, fileName) {
     if (!fab || !fileId) return;
     const technicianId = getTechId();
+    const openBody = anlagenstammDispoBody({ fab: fab, file_id: fileId, open_local: true });
+    if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
+      try {
+        const openResp = await fetch(API_BASE + '/api/anlagenstamm_parameter_download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
+          body: JSON.stringify(openBody)
+        });
+        const openData = await openResp.json().catch(function () { return {}; });
+        if (openResp.ok && openData && openData.ok === true && openData.path) {
+          const openResult = await monteurApp.openPath(String(openData.path));
+          if (!openResult || openResult.ok !== false) {
+            showToast('Datei wird mit dem Standardprogramm geöffnet.');
+            return;
+          }
+          if (openResult && openResult.error) {
+            showToast('Öffnen fehlgeschlagen: ' + openResult.error + ' – Download wird verwendet.');
+          }
+        }
+      } catch (_) { /* Fallback Download */ }
+    }
     const resp = await fetch(API_BASE + '/api/anlagenstamm_parameter_download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId || '') },
@@ -12895,6 +12916,219 @@
   })();
   document.getElementById('btnViewEinstellungen').addEventListener('click', () => showView('einstellungen'));
 
+  /** Gemeinsame Bild-Hilfen für Montagebericht- und Textbausteine-Editor (Base64). */
+  (function initKuklaEditorImages() {
+    var MAX_EDGE = 1400;
+    var JPEG_Q = 0.72;
+
+    function canvasToJpegDataUrl(canvas, quality) {
+      try {
+        return canvas.toDataURL('image/jpeg', quality == null ? JPEG_Q : quality);
+      } catch (e) {
+        return canvas.toDataURL('image/png');
+      }
+    }
+
+    function compressImageElement(img, maxEdge, quality) {
+      var w = img.naturalWidth || img.width || 0;
+      var h = img.naturalHeight || img.height || 0;
+      if (!w || !h) return '';
+      var edge = maxEdge || MAX_EDGE;
+      var scale = Math.min(1, edge / Math.max(w, h));
+      var tw = Math.max(1, Math.round(w * scale));
+      var th = Math.max(1, Math.round(h * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = tw;
+      canvas.height = th;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return '';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, tw, th);
+      ctx.drawImage(img, 0, 0, tw, th);
+      return canvasToJpegDataUrl(canvas, quality);
+    }
+
+    function loadImageFromBlob(blob) {
+      return new Promise(function (resolve, reject) {
+        if (!blob || !/^image\//i.test(blob.type || '')) {
+          reject(new Error('no_image'));
+          return;
+        }
+        var url = URL.createObjectURL(blob);
+        var img = new Image();
+        img.onload = function () {
+          URL.revokeObjectURL(url);
+          resolve(img);
+        };
+        img.onerror = function () {
+          URL.revokeObjectURL(url);
+          reject(new Error('load_failed'));
+        };
+        img.src = url;
+      });
+    }
+
+    function compressBlobToDataUrl(blob) {
+      return loadImageFromBlob(blob).then(function (img) {
+        return compressImageElement(img, MAX_EDGE, JPEG_Q);
+      });
+    }
+
+    function rotateDataUrl90(dataUrl) {
+      return new Promise(function (resolve, reject) {
+        if (!dataUrl) {
+          reject(new Error('empty'));
+          return;
+        }
+        var img = new Image();
+        img.onload = function () {
+          var canvas = document.createElement('canvas');
+          canvas.width = img.naturalHeight || img.height;
+          canvas.height = img.naturalWidth || img.width;
+          var ctx = canvas.getContext('2d');
+          if (!ctx) {
+            reject(new Error('canvas'));
+            return;
+          }
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.translate(canvas.width, 0);
+          ctx.rotate(Math.PI / 2);
+          ctx.drawImage(img, 0, 0);
+          resolve(canvasToJpegDataUrl(canvas, JPEG_Q));
+        };
+        img.onerror = function () { reject(new Error('load_failed')); };
+        img.src = dataUrl;
+      });
+    }
+
+    function getClipboardImageBlob(clipboardData) {
+      if (!clipboardData) return null;
+      var items = clipboardData.items;
+      if (items && items.length) {
+        for (var i = 0; i < items.length; i++) {
+          var it = items[i];
+          if (it && it.kind === 'file' && it.type && /^image\//i.test(it.type)) {
+            var f = it.getAsFile();
+            if (f) return f;
+          }
+        }
+      }
+      var files = clipboardData.files;
+      if (files && files.length) {
+        for (var j = 0; j < files.length; j++) {
+          if (files[j] && /^image\//i.test(files[j].type || '')) return files[j];
+        }
+      }
+      return null;
+    }
+
+    function setImgWidthPercent(img, pct) {
+      if (!img) return;
+      img.style.width = pct + '%';
+      img.style.height = 'auto';
+      img.style.maxWidth = '100%';
+      img.removeAttribute('width');
+      img.removeAttribute('height');
+    }
+
+    function insertImgHtml(el, dataUrl) {
+      if (!el || !dataUrl) return;
+      el.focus();
+      var html = '<img src="' + dataUrl + '" alt="" style="max-width:100%;height:auto;" />';
+      try {
+        document.execCommand('insertHTML', false, html);
+      } catch (e) {
+        el.innerHTML += html;
+      }
+    }
+
+    function pickAndInsert(el) {
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      input.addEventListener('change', function () {
+        var file = input.files && input.files[0];
+        document.body.removeChild(input);
+        if (!file) return;
+        compressBlobToDataUrl(file).then(function (dataUrl) {
+          if (dataUrl) insertImgHtml(el, dataUrl);
+        }).catch(function () { /* ignore */ });
+      });
+      input.click();
+    }
+
+    function getSelectedImg(editorEl) {
+      if (!editorEl) return null;
+      var selected = editorEl.querySelector('img.mb-img-selected');
+      if (selected) return selected;
+      var sel = window.getSelection ? window.getSelection() : null;
+      if (!sel || sel.rangeCount === 0) return null;
+      var node = sel.anchorNode;
+      if (!node) return null;
+      if (node.nodeType === 1 && node.tagName === 'IMG' && editorEl.contains(node)) return node;
+      var el = node.nodeType === 3 ? node.parentElement : node;
+      if (el && el.tagName === 'IMG' && editorEl.contains(el)) return el;
+      var all = editorEl.querySelectorAll('img');
+      return all.length ? all[all.length - 1] : null;
+    }
+
+    function handleAction(el, action) {
+      if (!el || !action) return;
+      if (action === 'insert') {
+        pickAndInsert(el);
+        return;
+      }
+      var img = getSelectedImg(el);
+      if (!img) return;
+      if (action === '25' || action === '50' || action === '100') {
+        setImgWidthPercent(img, parseInt(action, 10));
+        return;
+      }
+      if (action === 'remove') {
+        if (img.parentNode) img.parentNode.removeChild(img);
+        return;
+      }
+      if (action === 'rotate') {
+        rotateDataUrl90(img.getAttribute('src') || img.src).then(function (dataUrl) {
+          img.setAttribute('src', dataUrl);
+        }).catch(function () { /* ignore */ });
+      }
+    }
+
+    function bindPaste(el) {
+      if (!el || el.dataset.kuklaImgPaste) return;
+      el.dataset.kuklaImgPaste = '1';
+      el.addEventListener('paste', function (e) {
+        var blob = getClipboardImageBlob(e.clipboardData);
+        if (!blob) return;
+        e.preventDefault();
+        compressBlobToDataUrl(blob).then(function (dataUrl) {
+          if (dataUrl) insertImgHtml(el, dataUrl);
+        }).catch(function () { /* ignore */ });
+      });
+      el.addEventListener('click', function (ev) {
+        el.querySelectorAll('img.mb-img-selected').forEach(function (n) {
+          n.classList.remove('mb-img-selected');
+        });
+        if (ev.target && ev.target.tagName === 'IMG') {
+          ev.target.classList.add('mb-img-selected');
+        }
+      });
+    }
+
+    window.KuklaEditorImages = {
+      compressBlobToDataUrl: compressBlobToDataUrl,
+      rotateDataUrl90: rotateDataUrl90,
+      getClipboardImageBlob: getClipboardImageBlob,
+      handleAction: handleAction,
+      bindPaste: bindPaste,
+      insertImgHtml: insertImgHtml,
+    };
+  })();
+
   (function initProtokolleMontagebericht() {
     const btnAbbrechen = document.getElementById('btnMontageberichtAbbrechen');
     const form = document.getElementById('montageberichtForm');
@@ -13139,6 +13373,235 @@
       return (d.textContent || d.innerText || '').trim();
     }
 
+    var MB_IMG_MAX_EDGE = 1400;
+    var MB_IMG_JPEG_QUALITY = 0.72;
+
+    function isSafeImageSrc(src) {
+      if (!src || typeof src !== 'string') return false;
+      var s = src.trim();
+      if (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(s)) return true;
+      if (/^https?:\/\//i.test(s)) return true;
+      if (/^\/[^\s]*$/i.test(s)) return true;
+      return false;
+    }
+
+    function canvasToJpegDataUrl(canvas, quality) {
+      try {
+        return canvas.toDataURL('image/jpeg', quality == null ? MB_IMG_JPEG_QUALITY : quality);
+      } catch (e) {
+        return canvas.toDataURL('image/png');
+      }
+    }
+
+    function compressImageElement(img, maxEdge, quality) {
+      var w = img.naturalWidth || img.width || 0;
+      var h = img.naturalHeight || img.height || 0;
+      if (!w || !h) return '';
+      var edge = maxEdge || MB_IMG_MAX_EDGE;
+      var scale = Math.min(1, edge / Math.max(w, h));
+      var tw = Math.max(1, Math.round(w * scale));
+      var th = Math.max(1, Math.round(h * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = tw;
+      canvas.height = th;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return '';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, tw, th);
+      ctx.drawImage(img, 0, 0, tw, th);
+      return canvasToJpegDataUrl(canvas, quality);
+    }
+
+    function loadImageFromBlob(blob) {
+      return new Promise(function (resolve, reject) {
+        if (!blob || !/^image\//i.test(blob.type || '')) {
+          reject(new Error('no_image'));
+          return;
+        }
+        var url = URL.createObjectURL(blob);
+        var img = new Image();
+        img.onload = function () {
+          URL.revokeObjectURL(url);
+          resolve(img);
+        };
+        img.onerror = function () {
+          URL.revokeObjectURL(url);
+          reject(new Error('load_failed'));
+        };
+        img.src = url;
+      });
+    }
+
+    function compressBlobToDataUrl(blob) {
+      return loadImageFromBlob(blob).then(function (img) {
+        return compressImageElement(img, MB_IMG_MAX_EDGE, MB_IMG_JPEG_QUALITY);
+      });
+    }
+
+    function rotateDataUrl90(dataUrl) {
+      return new Promise(function (resolve, reject) {
+        if (!dataUrl) {
+          reject(new Error('empty'));
+          return;
+        }
+        var img = new Image();
+        img.onload = function () {
+          var canvas = document.createElement('canvas');
+          canvas.width = img.naturalHeight || img.height;
+          canvas.height = img.naturalWidth || img.width;
+          var ctx = canvas.getContext('2d');
+          if (!ctx) {
+            reject(new Error('canvas'));
+            return;
+          }
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.translate(canvas.width, 0);
+          ctx.rotate(Math.PI / 2);
+          ctx.drawImage(img, 0, 0);
+          resolve(canvasToJpegDataUrl(canvas, MB_IMG_JPEG_QUALITY));
+        };
+        img.onerror = function () { reject(new Error('load_failed')); };
+        img.src = dataUrl;
+      });
+    }
+
+    function getClipboardImageBlob(clipboardData) {
+      if (!clipboardData) return null;
+      var items = clipboardData.items;
+      if (items && items.length) {
+        for (var i = 0; i < items.length; i++) {
+          var it = items[i];
+          if (it && it.kind === 'file' && it.type && /^image\//i.test(it.type)) {
+            var f = it.getAsFile();
+            if (f) return f;
+          }
+        }
+      }
+      var files = clipboardData.files;
+      if (files && files.length) {
+        for (var j = 0; j < files.length; j++) {
+          if (files[j] && /^image\//i.test(files[j].type || '')) return files[j];
+        }
+      }
+      return null;
+    }
+
+    function getSelectedImgInEditor(editorEl) {
+      if (!editorEl) return null;
+      var sel = window.getSelection ? window.getSelection() : null;
+      if (!sel || sel.rangeCount === 0) return null;
+      var node = sel.anchorNode;
+      if (!node) return null;
+      if (node.nodeType === 1 && node.tagName === 'IMG' && editorEl.contains(node)) return node;
+      var el = node.nodeType === 3 ? node.parentElement : node;
+      if (!el || !editorEl.contains(el)) return null;
+      if (el.tagName === 'IMG') return el;
+      var img = el.closest ? el.closest('img') : null;
+      if (img && editorEl.contains(img)) return img;
+      /* Oft ist das Bild selbst selektiert als Element */
+      try {
+        var range = sel.getRangeAt(0);
+        if (range && range.startContainer === range.endContainer) {
+          var kids = range.startContainer.childNodes;
+          if (kids && kids[range.startOffset] && kids[range.startOffset].tagName === 'IMG') {
+            return kids[range.startOffset];
+          }
+        }
+      } catch (e) { /* ignore */ }
+      return editorEl.querySelector('img.mb-img-selected') || null;
+    }
+
+    function setImgWidthPercent(img, pct) {
+      if (!img) return;
+      img.style.width = pct + '%';
+      img.style.height = 'auto';
+      img.style.maxWidth = '100%';
+      img.removeAttribute('width');
+      img.removeAttribute('height');
+    }
+
+    function insertImageHtmlIntoEditor(el, dataUrl) {
+      if (!ensureEditorFocus(el) || !dataUrl) return;
+      var html = '<img src="' + dataUrl + '" alt="" style="max-width:100%;height:auto;" />';
+      try {
+        document.execCommand('insertHTML', false, html);
+      } catch (e) {
+        el.innerHTML += html;
+      }
+      autoResizeFabTextarea(el);
+    }
+
+    function pickImageFileForEditor(el) {
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      input.addEventListener('change', function () {
+        var file = input.files && input.files[0];
+        document.body.removeChild(input);
+        if (!file) return;
+        compressBlobToDataUrl(file).then(function (dataUrl) {
+          if (dataUrl) insertImageHtmlIntoEditor(el, dataUrl);
+        }).catch(function () { /* ignore */ });
+      });
+      input.click();
+    }
+
+    function handleEditorImageAction(el, action) {
+      if (!el || !action) return;
+      if (action === 'insert') {
+        pickImageFileForEditor(el);
+        return;
+      }
+      var img = getSelectedImgInEditor(el);
+      if (!img && (action === '25' || action === '50' || action === '100' || action === 'rotate' || action === 'remove')) {
+        /* Fallback: letztes Bild im Editor */
+        var all = el.querySelectorAll('img');
+        img = all.length ? all[all.length - 1] : null;
+      }
+      if (!img) return;
+      if (action === '25' || action === '50' || action === '100') {
+        setImgWidthPercent(img, parseInt(action, 10));
+        autoResizeFabTextarea(el);
+        return;
+      }
+      if (action === 'remove') {
+        if (img.parentNode) img.parentNode.removeChild(img);
+        autoResizeFabTextarea(el);
+        return;
+      }
+      if (action === 'rotate') {
+        rotateDataUrl90(img.getAttribute('src') || img.src).then(function (dataUrl) {
+          img.setAttribute('src', dataUrl);
+          autoResizeFabTextarea(el);
+        }).catch(function () { /* ignore */ });
+      }
+    }
+
+    function bindEditorImagePaste(el) {
+      if (!el || el.dataset.mbImgPaste) return;
+      el.dataset.mbImgPaste = '1';
+      el.addEventListener('paste', function (e) {
+        var cb = e.clipboardData;
+        var blob = getClipboardImageBlob(cb);
+        if (!blob) return;
+        e.preventDefault();
+        compressBlobToDataUrl(blob).then(function (dataUrl) {
+          if (dataUrl) insertImageHtmlIntoEditor(el, dataUrl);
+        }).catch(function () { /* ignore */ });
+      });
+      el.addEventListener('click', function (ev) {
+        el.querySelectorAll('img.mb-img-selected').forEach(function (n) {
+          n.classList.remove('mb-img-selected');
+        });
+        if (ev.target && ev.target.tagName === 'IMG') {
+          ev.target.classList.add('mb-img-selected');
+        }
+      });
+    }
+
     function normalizeMontageberichtHtml(html) {
       var raw = (html == null) ? '' : String(html);
       var d = document.createElement('div');
@@ -13146,13 +13609,29 @@
       d.querySelectorAll('script,style').forEach(function (n) { n.remove(); });
       d.querySelectorAll('*').forEach(function (node) {
         var tag = (node.tagName || '').toLowerCase();
+        if (tag === 'img') {
+          var src = node.getAttribute('src') || '';
+          if (!isSafeImageSrc(src)) {
+            node.remove();
+            return;
+          }
+          var keep = ['src', 'alt', 'width', 'height', 'style'];
+          var attrs = Array.prototype.slice.call(node.attributes || []);
+          attrs.forEach(function (a) {
+            if (keep.indexOf(a.name) === -1) node.removeAttribute(a.name);
+          });
+          if (!node.getAttribute('style')) {
+            node.setAttribute('style', 'max-width:100%;height:auto;');
+          }
+          return;
+        }
         if (['b', 'strong', 'i', 'em', 'u', 'span', 'div', 'p', 'ul', 'ol', 'li', 'br'].indexOf(tag) === -1) {
           var txt = document.createTextNode(node.textContent || '');
           node.parentNode.replaceChild(txt, node);
           return;
         }
-        var attrs = Array.prototype.slice.call(node.attributes || []);
-        attrs.forEach(function (a) {
+        var attrs2 = Array.prototype.slice.call(node.attributes || []);
+        attrs2.forEach(function (a) {
           if (a.name !== 'style') node.removeAttribute(a.name);
         });
       });
@@ -13244,6 +13723,19 @@
           autoResizeFabTextarea(montageberichtActiveEditor);
         });
       });
+      toolbarEl.querySelectorAll('[data-mb-img]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var action = btn.getAttribute('data-mb-img');
+          if (!action) return;
+          if (!ensureEditorFocus(montageberichtActiveEditor)) return;
+          if (window.KuklaEditorImages) {
+            window.KuklaEditorImages.handleAction(montageberichtActiveEditor, action);
+          } else {
+            handleEditorImageAction(montageberichtActiveEditor, action);
+          }
+          autoResizeFabTextarea(montageberichtActiveEditor);
+        });
+      });
       if (toolbarFont) {
         toolbarFont.addEventListener('change', function () {
           if (!ensureEditorFocus(montageberichtActiveEditor)) return;
@@ -13265,6 +13757,10 @@
         montageberichtActiveEditor = editor;
         updateMontageberichtToolbarState();
       });
+      form.querySelectorAll('.mb-rich-editor, [data-mb-editor]').forEach(function (el) {
+        if (window.KuklaEditorImages) window.KuklaEditorImages.bindPaste(el);
+        else bindEditorImagePaste(el);
+      });
     }
 
     function initFabBemerkungenDropTargets() {
@@ -13272,8 +13768,10 @@
         el.style.overflow = 'hidden';
         el.addEventListener('input', function () { autoResizeFabTextarea(el); });
         autoResizeFabTextarea(el);
+        if (window.KuklaEditorImages) window.KuklaEditorImages.bindPaste(el);
+        else bindEditorImagePaste(el);
         el.addEventListener('dragover', function (e) {
-          if (e.dataTransfer.types.indexOf('text/plain') >= 0 || e.dataTransfer.types.indexOf('text/html') >= 0) {
+          if (e.dataTransfer.types.indexOf('text/plain') >= 0 || e.dataTransfer.types.indexOf('text/html') >= 0 || e.dataTransfer.types.indexOf('Files') >= 0) {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'copy';
             el.classList.add('drop-target');
@@ -13283,6 +13781,22 @@
         el.addEventListener('drop', function (e) {
           el.classList.remove('drop-target');
           e.preventDefault();
+          var files = e.dataTransfer && e.dataTransfer.files;
+          if (files && files.length) {
+            var imgFile = null;
+            for (var fi = 0; fi < files.length; fi++) {
+              if (files[fi] && /^image\//i.test(files[fi].type || '')) {
+                imgFile = files[fi];
+                break;
+              }
+            }
+            if (imgFile) {
+              compressBlobToDataUrl(imgFile).then(function (dataUrl) {
+                if (dataUrl) insertImageHtmlIntoEditor(el, dataUrl);
+              }).catch(function () { /* ignore */ });
+              return;
+            }
+          }
           var html = (e.dataTransfer.getData('text/html') || '').trim();
           var text = (e.dataTransfer.getData('text/plain') || stripHtmlForPlain(html) || '').trim();
           if (!html && text) {
@@ -16385,11 +16899,27 @@
     document.querySelectorAll('.richtext-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var cmd = btn.dataset.cmd;
+        var imgAction = btn.getAttribute('data-rt-img');
+        var editor = document.getElementById('richtextEditor');
+        if (imgAction) {
+          if (editor && window.KuklaEditorImages) {
+            window.KuklaEditorImages.handleAction(editor, imgAction);
+          }
+          if (editor) editor.focus();
+          return;
+        }
         if (!cmd) return;
         document.execCommand(cmd, false, null);
-        document.getElementById('richtextEditor').focus();
+        if (editor) editor.focus();
       });
     });
+
+    (function bindTbEditorImagePaste() {
+      var editor = document.getElementById('richtextEditor');
+      if (editor && window.KuklaEditorImages) {
+        window.KuklaEditorImages.bindPaste(editor);
+      }
+    })();
 
     document.getElementById('btnTbEditorSave').addEventListener('click', async function () {
       var editor = document.getElementById('richtextEditor');
