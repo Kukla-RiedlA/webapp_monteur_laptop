@@ -12918,8 +12918,9 @@
 
   /** Gemeinsame Bild-Hilfen für Montagebericht- und Textbausteine-Editor (Base64). */
   (function initKuklaEditorImages() {
-    var MAX_EDGE = 1400;
-    var JPEG_Q = 0.72;
+    var MAX_EDGE = 1600;
+    var JPEG_Q = 0.92;
+    var PNG_MAX_EDGE = 1200;
 
     function canvasToJpegDataUrl(canvas, quality) {
       try {
@@ -12933,7 +12934,8 @@
       var w = img.naturalWidth || img.width || 0;
       var h = img.naturalHeight || img.height || 0;
       if (!w || !h) return '';
-      var edge = maxEdge || MAX_EDGE;
+      var asLogo = Math.max(w, h) <= PNG_MAX_EDGE;
+      var edge = asLogo ? PNG_MAX_EDGE : (maxEdge || MAX_EDGE);
       var scale = Math.min(1, edge / Math.max(w, h));
       var tw = Math.max(1, Math.round(w * scale));
       var th = Math.max(1, Math.round(h * scale));
@@ -12942,6 +12944,11 @@
       canvas.height = th;
       var ctx = canvas.getContext('2d');
       if (!ctx) return '';
+      if (asLogo) {
+        ctx.clearRect(0, 0, tw, th);
+        ctx.drawImage(img, 0, 0, tw, th);
+        try { return canvas.toDataURL('image/png'); } catch (e1) { return canvasToJpegDataUrl(canvas, quality); }
+      }
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, tw, th);
       ctx.drawImage(img, 0, 0, tw, th);
@@ -13002,25 +13009,520 @@
       });
     }
 
-    function getClipboardImageBlob(clipboardData) {
-      if (!clipboardData) return null;
+    function collectClipboardImageBlobs(clipboardData) {
+      var blobs = [];
+      if (!clipboardData) return blobs;
       var items = clipboardData.items;
       if (items && items.length) {
         for (var i = 0; i < items.length; i++) {
           var it = items[i];
-          if (it && it.kind === 'file' && it.type && /^image\//i.test(it.type)) {
-            var f = it.getAsFile();
-            if (f) return f;
+          if (!it || !it.type || !/^image\//i.test(it.type)) continue;
+          try {
+            var f = typeof it.getAsFile === 'function' ? it.getAsFile() : null;
+            if (f) blobs.push(f);
+          } catch (e) { /* ignore */ }
+        }
+      }
+      if (!blobs.length) {
+        var files = clipboardData.files;
+        if (files && files.length) {
+          for (var j = 0; j < files.length; j++) {
+            if (files[j] && /^image\//i.test(files[j].type || '')) blobs.push(files[j]);
           }
         }
       }
-      var files = clipboardData.files;
-      if (files && files.length) {
-        for (var j = 0; j < files.length; j++) {
-          if (files[j] && /^image\//i.test(files[j].type || '')) return files[j];
-        }
+      return blobs;
+    }
+
+    function getClipboardImageBlob(clipboardData) {
+      var blobs = collectClipboardImageBlobs(clipboardData);
+      return blobs.length ? blobs[0] : null;
+    }
+
+    function isOutlookStyleHtml(html) {
+      if (!html) return false;
+      var h = String(html);
+      if (/mso-|WordSection|MsoNormal|<!--\[if|<\/?o:p|urn:schemas-microsoft-com:office|class="[^"]*Mso/i.test(h)) {
+        return true;
       }
-      return null;
+      return (h.match(/<div\b/gi) || []).length >= 4;
+    }
+
+    function isPlaceholderImageSrc(src) {
+      if (src == null) return true;
+      var s = String(src).trim();
+      if (!s) return true;
+      if (/^cid:/i.test(s)) return true;
+      if (/^file:/i.test(s)) return true;
+      if (/^blob:/i.test(s)) return true;
+      if (/^about:/i.test(s)) return true;
+      return false;
+    }
+
+    function stripClipboardHtmlNoise(html) {
+      var raw = String(html || '');
+      var start = raw.search(/<!--StartFragment-->/i);
+      var end = raw.search(/<!--EndFragment-->/i);
+      if (start >= 0 && end > start) raw = raw.slice(start + 16, end);
+      /* Outlook: !mso-Inhalt behalten; keine Reste wie „t-->“; Logos nicht per Kommentar-Regex fressen */
+      raw = raw.replace(/<!--\[if\s*!mso\]>\s*<!-->([\s\S]*?)<!--\s*<!\[endif\]-->/gi, '$1');
+      raw = raw.replace(/<!--\[if(?!\s*!mso)[^\]]*\]>([\s\S]*?)<!\[endif\]-->/gi, function (_m, inner) {
+        if (/<img\b/i.test(inner) || /v:imagedata|o:href/i.test(inner) || /src\s*=\s*["'](?:https?:|cid:|data:image)/i.test(inner)) {
+          return inner;
+        }
+        return '';
+      });
+      return raw
+        .replace(/<!--\[if[\s\S]*?\]>\s*<!-->/gi, '')
+        .replace(/<!--\s*<!\[endif\]-->/gi, '')
+        .replace(/<!--\[if[\s\S]*?\]>/gi, '')
+        .replace(/<!\[endif\]-->/gi, '')
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<\/?o:p[^>]*>/gi, '')
+        .replace(/^\s*t-->/gi, '')
+        .replace(/\bt-->/gi, '');
+    }
+
+    /** Auch VML / background-url Bilder aus Roh-HTML einsammeln. */
+    function extractExtraImageSrcsFromHtml(html) {
+      var out = [];
+      var seen = {};
+      function looksImage(u) {
+        return /\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(u) ||
+          /\/image\//i.test(u) ||
+          /cid:/i.test(u) ||
+          /^data:image\//i.test(u) ||
+          /Content\.Outlook/i.test(u) ||
+          /\/logo/i.test(u) ||
+          /media\.|cdn\.|static\./i.test(u);
+      }
+      function add(u, force) {
+        var s = String(u || '').trim().replace(/^['"]|['"]$/g, '');
+        if (!s || seen[s]) return;
+        if (!/^(https?:|file:|cid:|data:image\/|\/\/)/i.test(s) && !/^[A-Za-z]:[\\/]/.test(s)) return;
+        if (!force && !looksImage(s) && !/^file:/i.test(s) && !/^cid:/i.test(s)) return;
+        seen[s] = 1;
+        out.push(s);
+      }
+      var raw = String(html || '');
+      var reImg = /\b(?:src|o:href)\s*=\s*["']([^"']+)["']/gi;
+      var m;
+      while ((m = reImg.exec(raw)) !== null) add(m[1], true);
+      var reBg = /(?:background(?:-image)?\s*:[^;]*url|url)\(\s*['"]?([^)'"]+)['"]?\s*\)/gi;
+      while ((m = reBg.exec(raw)) !== null) add(m[1], false);
+      return out;
+    }
+
+    function needsRichEmailPaste(html, plain, blobs) {
+      if (!html || !/<[a-z]/i.test(html)) return false;
+      var hasImg = /<img\b/i.test(html);
+      if (isOutlookStyleHtml(html)) return true;
+      if (hasImg && (blobs.length > 0 || (plain || '').trim().length >= 20 || /src\s*=\s*["']data:image\//i.test(html))) return true;
+      /* Nur Logo/Bild aus Mail: HTML mit https-/file-/cid-img */
+      if (hasImg && /src\s*=\s*["']https?:\/\//i.test(html)) return true;
+      if (hasImg && /src\s*=\s*["']\/\//i.test(html)) return true;
+      if (hasImg && /src\s*=\s*["']cid:/i.test(html)) return true;
+      if (hasImg && /src\s*=\s*["']file:/i.test(html)) return true;
+      return false;
+    }
+
+    function countDataImagesInHtml(html) {
+      return ((String(html || '').match(/src\s*=\s*["']data:image\//gi) || []).length);
+    }
+
+    function countImgTagsInHtml(html) {
+      return ((String(html || '').match(/<img\b/gi) || []).length);
+    }
+
+    /** Gleicher Inhalt / gleiche URL → Doppel-Logos aus Outlook/Clipboard entfernen. */
+    function emailImageDedupeKey(src) {
+      var s = String(src || '').trim();
+      if (!s) return '';
+      if (/^data:image\//i.test(s)) {
+        var comma = s.indexOf(',');
+        var payload = (comma >= 0 ? s.slice(comma + 1) : s).replace(/\s+/g, '');
+        return 'data:' + payload.length + ':' + payload.slice(0, 48) + ':' + payload.slice(-24);
+      }
+      return s.replace(/^https?:/i, 'https:').split('#')[0].toLowerCase();
+    }
+
+    function dedupeDuplicateEmailImages(root) {
+      if (!root || !root.querySelectorAll) return;
+      var seen = Object.create(null);
+      Array.prototype.slice.call(root.querySelectorAll('img')).forEach(function (img) {
+        var src = img.getAttribute('src') || '';
+        var key = emailImageDedupeKey(src);
+        if (!key || seen[key]) {
+          if (img.parentNode) img.parentNode.removeChild(img);
+          return;
+        }
+        seen[key] = 1;
+      });
+    }
+
+    function isScreenshotOnlyPaste(html, plain, blobs) {
+      if (!blobs || blobs.length < 1) return false;
+      if ((plain || '').trim().length > 15) return false;
+      if (html && isOutlookStyleHtml(html) && (plain || '').trim().length > 15) return false;
+      if (html && /<img\b/i.test(html) && (plain || '').trim().length > 15) return false;
+      return true;
+    }
+
+    function compressDataUrl(dataUrl) {
+      return new Promise(function (resolve) {
+        if (!dataUrl || !/^data:image\//i.test(dataUrl)) {
+          resolve('');
+          return;
+        }
+        if (/^data:image\/png/i.test(dataUrl) && dataUrl.length < 900000) {
+          resolve(dataUrl);
+          return;
+        }
+        var img = new Image();
+        img.onload = function () {
+          resolve(compressImageElement(img, MAX_EDGE, JPEG_Q) || dataUrl);
+        };
+        img.onerror = function () { resolve(dataUrl); };
+        img.src = dataUrl;
+      });
+    }
+
+    /** https-Bilder aus E-Mail (Austrian CDN etc.) via Electron-IPC laden → Base64. */
+    function fetchRemoteImageDataUrl(url) {
+      var src = String(url || '').trim();
+      if (/^\/\//.test(src)) src = 'https:' + src;
+      if (!/^https?:\/\//i.test(src)) return Promise.resolve('');
+      if (typeof monteurApp !== 'undefined' && typeof monteurApp.fetchImageDataUrl === 'function') {
+        return monteurApp.fetchImageDataUrl(src).then(function (res) {
+          if (res && res.ok && res.dataUrl) return compressDataUrl(res.dataUrl);
+          return '';
+        }).catch(function () { return ''; });
+      }
+      return fetch(src, { mode: 'cors', credentials: 'omit' })
+        .then(function (r) { return r.ok ? r.blob() : Promise.reject(); })
+        .then(function (blob) { return compressBlobToDataUrl(blob); })
+        .catch(function () { return ''; });
+    }
+
+    function readNativeClipboardImageDataUrl() {
+      if (typeof monteurApp === 'undefined' || typeof monteurApp.readClipboardImage !== 'function') {
+        return Promise.resolve('');
+      }
+      return monteurApp.readClipboardImage().then(function (res) {
+        if (res && res.ok && res.dataUrl) return compressDataUrl(res.dataUrl);
+        return '';
+      }).catch(function () { return ''; });
+    }
+
+    function readLocalFileImageDataUrl(fileUrl) {
+      if (typeof monteurApp === 'undefined' || typeof monteurApp.readLocalImageFile !== 'function') {
+        return Promise.resolve('');
+      }
+      return monteurApp.readLocalImageFile(fileUrl).then(function (res) {
+        if (res && res.ok && res.dataUrl) return compressDataUrl(res.dataUrl);
+        return '';
+      }).catch(function () { return ''; });
+    }
+
+    /** Outlook legt eingebettete Bilder oft als Hex in text/rtf ab (pngblip/jpegblip). */
+    function extractImagesFromRtf(rtf) {
+      var out = [];
+      if (!rtf || typeof rtf !== 'string') return out;
+      var re = /\\pict[\s\S]*?\\(pngblip|jpegblip|jpgblip)[\s\S]*?((?:[0-9a-fA-F]{2}\s*){32,})/g;
+      var m;
+      while ((m = re.exec(rtf)) !== null) {
+        var kind = String(m[1] || '').toLowerCase();
+        var hex = String(m[2] || '').replace(/[^0-9a-fA-F]/g, '');
+        if (hex.length < 64 || hex.length % 2) continue;
+        try {
+          var bytes = new Uint8Array(hex.length / 2);
+          for (var i = 0; i < bytes.length; i++) {
+            bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+          }
+          var mime = kind.indexOf('png') >= 0 ? 'image/png' : 'image/jpeg';
+          var bin = '';
+          var chunk = 0x8000;
+          for (var j = 0; j < bytes.length; j += chunk) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(j, j + chunk));
+          }
+          out.push('data:' + mime + ';base64,' + btoa(bin));
+        } catch (e) { /* ignore one pict */ }
+      }
+      return out;
+    }
+
+    function dataUrlToBlob(dataUrl) {
+      try {
+        var parts = String(dataUrl).split(',');
+        var meta = parts[0] || '';
+        var b64 = parts[1] || '';
+        var mime = (meta.match(/data:([^;]+)/) || [])[1] || 'image/png';
+        var bin = atob(b64);
+        var arr = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        return new Blob([arr], { type: mime });
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function serializeAllowedEmailHtml(root) {
+      var ALLOW = {
+        P: 1, DIV: 1, BR: 1, B: 1, STRONG: 1, I: 1, EM: 1, U: 1,
+        UL: 1, OL: 1, LI: 1, IMG: 1, A: 1, SPAN: 1, H1: 1, H2: 1, H3: 1,
+        TABLE: 1, TBODY: 1, THEAD: 1, TR: 1, TD: 1, TH: 1, BLOCKQUOTE: 1
+      };
+      function cleanStyle(style) {
+        if (!style) return '';
+        var keep = [];
+        String(style).split(';').forEach(function (part) {
+          var idx = part.indexOf(':');
+          if (idx <= 0) return;
+          var k = part.slice(0, idx).trim().toLowerCase();
+          var v = part.slice(idx + 1).trim();
+          if (!v) return;
+          if (k === 'font-weight' || k === 'font-style' || k === 'text-decoration' ||
+              k === 'color' || k === 'background-color' || k === 'text-align' ||
+              k === 'max-width' || k === 'width' || k === 'height') {
+            keep.push(k + ':' + v);
+          }
+        });
+        return keep.join(';');
+      }
+      function walk(node) {
+        if (!node) return '';
+        if (node.nodeType === 3) return String(node.nodeValue || '').replace(/\u00a0/g, ' ');
+        if (node.nodeType !== 1) return '';
+        var tag = node.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'META' || tag === 'LINK') return '';
+        if (tag === 'BR') return '<br>';
+        if (tag === 'IMG') {
+          var src = node.getAttribute('src') || '';
+          /* data: und https: (Web-Parität); file:/cid: ohne Konvertierung verwerfen */
+          if (!/^data:image\//i.test(src) && !/^https?:\/\//i.test(src)) return '';
+          var st = cleanStyle(node.getAttribute('style') || '') || 'max-width:100%;height:auto';
+          return '<img src="' + src.replace(/"/g, '') + '" alt="" style="' + st + '">';
+        }
+        var inner = '';
+        for (var i = 0; i < node.childNodes.length; i++) inner += walk(node.childNodes[i]);
+        if (!ALLOW[tag]) return inner;
+        if (tag === 'A') {
+          var href = node.getAttribute('href') || '';
+          if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) return inner;
+          return '<a href="' + href.replace(/"/g, '') + '">' + inner + '</a>';
+        }
+        var style = cleanStyle(node.getAttribute('style') || '');
+        var open = '<' + tag.toLowerCase() + (style ? ' style="' + style + '"' : '') + '>';
+        return open + inner + '</' + tag.toLowerCase() + '>';
+      }
+      var out = '';
+      for (var c = 0; c < root.childNodes.length; c++) out += walk(root.childNodes[c]);
+      return out.replace(/(<br\s*\/?>\s*){4,}/gi, '<br><br><br>').trim();
+    }
+
+    function buildRichEmailHtml(html, imageBlobs) {
+      var blobs = Array.isArray(imageBlobs) ? imageBlobs : [];
+      var chain = Promise.resolve();
+      var dataUrls = [];
+      blobs.forEach(function (blob) {
+        chain = chain.then(function () {
+          return compressBlobToDataUrl(blob).then(function (url) {
+            dataUrls.push(url || '');
+          }).catch(function () { dataUrls.push(''); });
+        });
+      });
+      return chain.then(function () {
+        var raw = stripClipboardHtmlNoise(html);
+        var extraSrcs = extractExtraImageSrcsFromHtml(html);
+        var doc = new DOMParser().parseFromString('<div id="kukla-email-root">' + raw + '</div>', 'text/html');
+        var root = doc.getElementById('kukla-email-root');
+        if (!root) return { html: '', expectedImgs: 0, resolvedImgs: 0 };
+        var imgs = root.querySelectorAll('img');
+        /* Fehlende Outlook/VML-Bilder nur wenn gar kein <img> – sonst Doppel-Logos */
+        if (imgs.length === 0 && extraSrcs.length) {
+          extraSrcs.forEach(function (src) {
+            if (/^cid:/i.test(src)) return;
+            var im = doc.createElement('img');
+            im.setAttribute('src', src);
+            root.insertBefore(im, root.firstChild);
+          });
+          imgs = root.querySelectorAll('img');
+        }
+        var expectedImgs = imgs.length;
+        var blobIdx = 0;
+        var jobs = [];
+        Array.prototype.forEach.call(imgs, function (img) {
+          jobs.push((function (el) {
+            var src = el.getAttribute('src') || '';
+            if (/^data:image\//i.test(src)) {
+              return compressDataUrl(src).then(function (compressed) {
+                if (compressed) {
+                  el.setAttribute('src', compressed);
+                  el.setAttribute('style', 'max-width:100%;height:auto;');
+                }
+              });
+            }
+            if (/^https?:\/\//i.test(src) || /^\/\//.test(src)) {
+              var abs = /^\/\//.test(src) ? ('https:' + src) : src;
+              return fetchRemoteImageDataUrl(abs).then(function (dataUrl) {
+                if (dataUrl) {
+                  el.setAttribute('src', dataUrl);
+                  el.setAttribute('style', 'max-width:100%;height:auto;');
+                } else {
+                  /* Wie Dispo-Web/Browser: Hotlink behalten, sonst verschwindet das Logo */
+                  el.setAttribute('src', abs);
+                  el.setAttribute('style', 'max-width:100%;height:auto;');
+                  try { console.warn('[KuklaPaste] https-Bild nicht inline, behalte URL:', abs.slice(0, 120)); } catch (e0) {}
+                }
+              });
+            }
+            /* Outlook-Cache: file://…/Content.Outlook/… */
+            if (/^file:/i.test(src) || /^[A-Za-z]:[\\/]/.test(src)) {
+              return readLocalFileImageDataUrl(src).then(function (dataUrl) {
+                if (dataUrl) {
+                  el.setAttribute('src', dataUrl);
+                  el.setAttribute('style', 'max-width:100%;height:auto;');
+                  return;
+                }
+                var nextLocal = dataUrls[blobIdx++];
+                if (nextLocal) {
+                  el.setAttribute('src', nextLocal);
+                  el.setAttribute('style', 'max-width:100%;height:auto;');
+                } else {
+                  el.remove();
+                }
+              });
+            }
+            if (isPlaceholderImageSrc(src)) {
+              var next = dataUrls[blobIdx++];
+              if (next) {
+                el.setAttribute('src', next);
+                el.setAttribute('style', 'max-width:100%;height:auto;');
+              } else {
+                el.remove();
+              }
+              return Promise.resolve();
+            }
+            el.remove();
+            return Promise.resolve();
+          })(img));
+        });
+        return Promise.all(jobs).then(function () {
+          dedupeDuplicateEmailImages(root);
+          /* Clipboard-Dateien nicht anhängen, wenn HTML-Bilder schon da sind (sonst Logo 2×) */
+          var haveImgs = root.querySelectorAll('img').length;
+          if (haveImgs === 0 && dataUrls.length) {
+            for (var bi = 0; bi < dataUrls.length; bi++) {
+              if (!dataUrls[bi]) continue;
+              var im = doc.createElement('img');
+              im.setAttribute('src', dataUrls[bi]);
+              im.setAttribute('style', 'max-width:100%;height:auto;');
+              root.appendChild(doc.createElement('br'));
+              root.appendChild(im);
+            }
+            dedupeDuplicateEmailImages(root);
+          }
+          var outHtml = serializeAllowedEmailHtml(root);
+          var dataCount = countDataImagesInHtml(outHtml);
+          var httpsCount = ((outHtml.match(/src\s*=\s*["']https?:\/\//gi) || []).length);
+          return {
+            html: outHtml,
+            expectedImgs: expectedImgs,
+            resolvedImgs: dataCount + httpsCount,
+          };
+        });
+      });
+    }
+
+    /** Fehlende Mail-Bilder aus RTF + nativer Zwischenablage nachziehen. */
+    function collectFallbackImageDataUrls(rtf, preferNative) {
+      var urls = [];
+      var rtfUrls = extractImagesFromRtf(rtf);
+      for (var i = 0; i < rtfUrls.length; i++) {
+        if (rtfUrls[i]) urls.push(rtfUrls[i]);
+      }
+      var nativeStep = preferNative || urls.length === 0
+        ? readNativeClipboardImageDataUrl()
+        : Promise.resolve('');
+      return nativeStep.then(function (nativeUrl) {
+        if (nativeUrl) urls.push(nativeUrl);
+        var chain = Promise.resolve([]);
+        urls.forEach(function (u) {
+          chain = chain.then(function (acc) {
+            return compressDataUrl(u).then(function (c) {
+              if (c) acc.push(c);
+              return acc;
+            }).catch(function () { return acc; });
+          });
+        });
+        return chain;
+      });
+    }
+
+    /** Clipboard-Files müssen synchron geklont werden – nach dem Paste-Event sind sie oft leer. */
+    function snapshotClipboardImageBlobs(clipboardData) {
+      return collectClipboardImageBlobs(clipboardData).map(function (blob) {
+        try {
+          return blob.slice(0, blob.size, blob.type || 'image/png');
+        } catch (e) {
+          return blob;
+        }
+      });
+    }
+
+    function captureSelectionRange(el) {
+      try {
+        var sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return null;
+        var range = sel.getRangeAt(0);
+        if (!el.contains(range.commonAncestorContainer) && range.commonAncestorContainer !== el) return null;
+        return range.cloneRange();
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function insertHtmlChunk(el, html, savedRange) {
+      if (!el || !html) return;
+      el.focus();
+      var sel = window.getSelection();
+      try {
+        if (savedRange && sel) {
+          sel.removeAllRanges();
+          sel.addRange(savedRange);
+        }
+      } catch (e) { /* ignore */ }
+
+      var ok = false;
+      try {
+        ok = document.execCommand('insertHTML', false, html);
+      } catch (e) {
+        ok = false;
+      }
+      if (ok) return;
+
+      try {
+        var range = (sel && sel.rangeCount) ? sel.getRangeAt(0) : null;
+        if (range && (el.contains(range.commonAncestorContainer) || range.commonAncestorContainer === el)) {
+          range.deleteContents();
+          var temp = document.createElement('div');
+          temp.innerHTML = html;
+          var frag = document.createDocumentFragment();
+          var node;
+          while ((node = temp.firstChild)) frag.appendChild(node);
+          range.insertNode(frag);
+          range.collapse(false);
+          if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+          return;
+        }
+      } catch (e2) { /* ignore */ }
+
+      el.innerHTML = (el.innerHTML || '') + html;
     }
 
     function setImgWidthPercent(img, pct) {
@@ -13032,15 +13534,9 @@
       img.removeAttribute('height');
     }
 
-    function insertImgHtml(el, dataUrl) {
+    function insertImgHtml(el, dataUrl, savedRange) {
       if (!el || !dataUrl) return;
-      el.focus();
-      var html = '<img src="' + dataUrl + '" alt="" style="max-width:100%;height:auto;" />';
-      try {
-        document.execCommand('insertHTML', false, html);
-      } catch (e) {
-        el.innerHTML += html;
-      }
+      insertHtmlChunk(el, '<img src="' + dataUrl + '" alt="" style="max-width:100%;height:auto;" />', savedRange);
     }
 
     function pickAndInsert(el) {
@@ -13054,7 +13550,7 @@
         document.body.removeChild(input);
         if (!file) return;
         compressBlobToDataUrl(file).then(function (dataUrl) {
-          if (dataUrl) insertImgHtml(el, dataUrl);
+          if (dataUrl) insertImgHtml(el, dataUrl, null);
         }).catch(function () { /* ignore */ });
       });
       input.click();
@@ -13098,16 +13594,151 @@
       }
     }
 
+    function appendDataUrlImages(el, dataUrls, savedRange) {
+      if (!el || !dataUrls || !dataUrls.length) return;
+      var html = dataUrls.map(function (u) {
+        return '<br><img src="' + u + '" alt="" style="max-width:100%;height:auto;" />';
+      }).join('');
+      insertHtmlChunk(el, html, savedRange);
+    }
+
     function bindPaste(el) {
       if (!el || el.dataset.kuklaImgPaste) return;
       el.dataset.kuklaImgPaste = '1';
       el.addEventListener('paste', function (e) {
-        var blob = getClipboardImageBlob(e.clipboardData);
-        if (!blob) return;
-        e.preventDefault();
-        compressBlobToDataUrl(blob).then(function (dataUrl) {
-          if (dataUrl) insertImgHtml(el, dataUrl);
-        }).catch(function () { /* ignore */ });
+        var cb = e.clipboardData;
+        if (!cb) return;
+        var html = cb.getData('text/html') || '';
+        var plain = cb.getData('text/plain') || '';
+        var rtf = '';
+        try { rtf = cb.getData('text/rtf') || ''; } catch (errRtf) { rtf = ''; }
+        var blobs = snapshotClipboardImageBlobs(cb);
+        var savedRange = captureSelectionRange(el);
+        var htmlImgCount = countImgTagsInHtml(html);
+        try {
+          console.warn('[KuklaPaste]', {
+            htmlLen: html.length,
+            plainLen: (plain || '').length,
+            rtfLen: (rtf || '').length,
+            blobs: blobs.length,
+            imgsInHtml: htmlImgCount,
+            hasHttpsImg: /src\s*=\s*["']https?:\/\//i.test(html),
+            hasCid: /src\s*=\s*["']cid:/i.test(html),
+            hasFile: /src\s*=\s*["']file:/i.test(html),
+            monteurApp: typeof monteurApp !== 'undefined',
+            fetchApi: typeof monteurApp !== 'undefined' && typeof monteurApp.fetchImageDataUrl === 'function',
+          });
+        } catch (eLog) { /* ignore */ }
+
+        var wantRich = needsRichEmailPaste(html, plain, blobs);
+        var wantShot = !wantRich && blobs.length >= 1 && (
+          isScreenshotOnlyPaste(html, plain, blobs) ||
+          (!html.trim() && !(plain || '').trim()) ||
+          (blobs.length >= 1 && !(plain || '').trim() && !/<[a-z][^>]{20,}/i.test(html))
+        );
+        /* Logo allein: oft kein clipboard.files, nur Bitmap/RTF/HTML-img */
+        var wantNativeImage = !wantRich && !wantShot && blobs.length === 0 && (
+          (!(plain || '').trim() && !(html || '').trim()) ||
+          (htmlImgCount >= 1 && (plain || '').trim().length < 40) ||
+          (!!(rtf && /\\pict/i.test(rtf)) && (plain || '').trim().length < 40)
+        );
+
+        if (wantRich) {
+          e.preventDefault();
+          e.stopPropagation();
+          buildRichEmailHtml(html, blobs).then(function (result) {
+            var clean = result && typeof result === 'object' ? (result.html || '') : String(result || '');
+            var resolved = result && typeof result === 'object' ? (result.resolvedImgs || 0) : countDataImagesInHtml(clean);
+
+            function insertWithOptionalFallback(baseHtml) {
+              var insertBase = function () {
+                if (baseHtml && baseHtml.replace(/<br\s*\/?>/gi, '').trim()) {
+                  insertHtmlChunk(el, baseHtml, savedRange);
+                }
+              };
+              /* Nur nachziehen wenn GAR kein Bild im Ergebnis – sonst Doppel-Logos */
+              if (resolved > 0) {
+                insertBase();
+                return Promise.resolve();
+              }
+              return collectFallbackImageDataUrls(rtf, true).then(function (extra) {
+                if (baseHtml && baseHtml.replace(/<br\s*\/?>/gi, '').trim()) {
+                  insertHtmlChunk(el, baseHtml, savedRange);
+                  if (extra && extra.length) appendDataUrlImages(el, extra, null);
+                } else {
+                  var parts = [];
+                  if (plain.trim()) {
+                    parts.push(plain.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>'));
+                  }
+                  (extra || []).forEach(function (u) {
+                    parts.push('<br><img src="' + u + '" alt="" style="max-width:100%;height:auto;" />');
+                  });
+                  if (!parts.length && blobs.length) {
+                    var imgChain = Promise.resolve();
+                    blobs.forEach(function (blob) {
+                      imgChain = imgChain.then(function () {
+                        return compressBlobToDataUrl(blob).then(function (dataUrl) {
+                          if (dataUrl) parts.push('<br><img src="' + dataUrl + '" alt="" style="max-width:100%;height:auto;" />');
+                        }).catch(function () {});
+                      });
+                    });
+                    return imgChain.then(function () {
+                      if (parts.length) insertHtmlChunk(el, parts.join(''), savedRange);
+                    });
+                  }
+                  if (parts.length) insertHtmlChunk(el, parts.join(''), savedRange);
+                }
+              });
+            }
+
+            if (clean && clean.replace(/<br\s*\/?>/gi, '').trim()) {
+              return insertWithOptionalFallback(clean);
+            }
+            return insertWithOptionalFallback('');
+          }).catch(function () {
+            if (plain.trim()) {
+              insertHtmlChunk(el, plain.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>'), savedRange);
+            }
+            return collectFallbackImageDataUrls(rtf, true).then(function (extra) {
+              if (extra && extra.length) appendDataUrlImages(el, extra, null);
+            });
+          });
+          return;
+        }
+
+        if (wantShot || (blobs.length >= 1 && !html.trim() && !(plain || '').trim())) {
+          e.preventDefault();
+          e.stopPropagation();
+          var shotChain = Promise.resolve();
+          blobs.forEach(function (blob) {
+            shotChain = shotChain.then(function () {
+              return compressBlobToDataUrl(blob).then(function (dataUrl) {
+                if (dataUrl) insertImgHtml(el, dataUrl, savedRange);
+              }).catch(function () {});
+            });
+          });
+          return;
+        }
+
+        if (wantNativeImage) {
+          e.preventDefault();
+          e.stopPropagation();
+          collectFallbackImageDataUrls(rtf, true).then(function (extra) {
+            if (extra && extra.length) {
+              appendDataUrlImages(el, extra, savedRange);
+              return;
+            }
+            /* HTML mit https-Logo ohne Text: Remote-Fetch versuchen */
+            if (html && htmlImgCount >= 1) {
+              return buildRichEmailHtml(html, []).then(function (result) {
+                var clean = result && result.html ? result.html : '';
+                if (clean && countDataImagesInHtml(clean) > 0) {
+                  insertHtmlChunk(el, clean, savedRange);
+                }
+              });
+            }
+          }).catch(function () { /* ignore */ });
+        }
       });
       el.addEventListener('click', function (ev) {
         el.querySelectorAll('img.mb-img-selected').forEach(function (n) {
@@ -13126,6 +13757,12 @@
       handleAction: handleAction,
       bindPaste: bindPaste,
       insertImgHtml: insertImgHtml,
+      bindAll: function (root) {
+        var scope = root || document;
+        scope.querySelectorAll('.mb-rich-editor, [data-mb-editor], #richtextEditor, .richtext-editor').forEach(function (node) {
+          bindPaste(node);
+        });
+      },
     };
   })();
 
@@ -13625,15 +14262,24 @@
           }
           return;
         }
-        if (['b', 'strong', 'i', 'em', 'u', 'span', 'div', 'p', 'ul', 'ol', 'li', 'br'].indexOf(tag) === -1) {
-          var txt = document.createTextNode(node.textContent || '');
-          node.parentNode.replaceChild(txt, node);
+        if (['b', 'strong', 'i', 'em', 'u', 'span', 'div', 'p', 'ul', 'ol', 'li', 'br',
+             'a', 'h1', 'h2', 'h3', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'blockquote'].indexOf(tag) === -1) {
+          /* Unwrap statt textContent – sonst gehen verschachtelte Bilder verloren */
+          var parent = node.parentNode;
+          if (!parent) return;
+          while (node.firstChild) parent.insertBefore(node.firstChild, node);
+          parent.removeChild(node);
           return;
         }
         var attrs2 = Array.prototype.slice.call(node.attributes || []);
         attrs2.forEach(function (a) {
+          if (tag === 'a' && a.name === 'href') return;
           if (a.name !== 'style') node.removeAttribute(a.name);
         });
+        if (tag === 'a') {
+          var href = node.getAttribute('href') || '';
+          if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) node.removeAttribute('href');
+        }
       });
       return d.innerHTML;
     }
@@ -13681,6 +14327,15 @@
       var rawHtml = normalizeMontageberichtHtml(html || '');
       var div = document.createElement('div');
       div.innerHTML = rawHtml;
+      /* E-Mail/Richtext mit Bildern oder Tabellen: ein Block behalten (sonst PDF ohne Logos + Bullet-Chaos) */
+      var hasImg = !!div.querySelector('img');
+      var hasTable = !!div.querySelector('table');
+      var hasBlocks = div.querySelectorAll('p, div, br, h1, h2, h3').length >= 2;
+      if (hasImg || hasTable || (hasBlocks && rawHtml.length > 80)) {
+        var plainRich = stripHtmlForPlain(rawHtml).trim();
+        if (!plainRich && !hasImg) return [];
+        return [{ text: plainRich || ' ', html: rawHtml }];
+      }
       var out = [];
       div.querySelectorAll('li').forEach(function (li) {
         var liHtml = normalizeMontageberichtHtml(li.innerHTML || '');
@@ -13691,7 +14346,7 @@
       var plain = (plainFallback || stripHtmlForPlain(rawHtml) || '').trim();
       if (!plain) return [];
       return plain.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean).map(function (t) {
-        return { text: t, html: escapeHtml(t) };
+        return { text: t, html: '<p>' + escapeHtml(t) + '</p>' };
       });
     }
 
@@ -13756,11 +14411,16 @@
         if (!editor) return;
         montageberichtActiveEditor = editor;
         updateMontageberichtToolbarState();
+        if (window.KuklaEditorImages) window.KuklaEditorImages.bindPaste(editor);
       });
-      form.querySelectorAll('.mb-rich-editor, [data-mb-editor]').forEach(function (el) {
-        if (window.KuklaEditorImages) window.KuklaEditorImages.bindPaste(el);
-        else bindEditorImagePaste(el);
-      });
+      if (window.KuklaEditorImages && window.KuklaEditorImages.bindAll) {
+        window.KuklaEditorImages.bindAll(form);
+      } else {
+        form.querySelectorAll('.mb-rich-editor, [data-mb-editor]').forEach(function (el) {
+          if (window.KuklaEditorImages) window.KuklaEditorImages.bindPaste(el);
+          else bindEditorImagePaste(el);
+        });
+      }
     }
 
     function initFabBemerkungenDropTargets() {
@@ -13924,6 +14584,9 @@
       }
       if (fabContainer) fabContainer.innerHTML = '';
       bindMontageberichtToolbar();
+      if (window.KuklaEditorImages && window.KuklaEditorImages.bindAll) {
+        window.KuklaEditorImages.bindAll(form || document);
+      }
       loadMontageberichtJobs().then(function (jobs) {
         if (jobSelect) {
           jobSelect.innerHTML = '<option value="">-- Auftrag wählen --</option>' +
@@ -14266,6 +14929,11 @@
         }
       });
     }
+
+    if (window.KuklaEditorImages && window.KuklaEditorImages.bindAll) {
+      window.KuklaEditorImages.bindAll(form || document);
+    }
+    bindMontageberichtToolbar();
 
   })();
 

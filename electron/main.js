@@ -481,6 +481,137 @@ ipcMain.handle('dienstreise:copy-path', async (event, filePath) => {
   clipboard.writeText(filePath.trim());
 });
 
+/**
+ * Remote-Bilder aus E-Mail-HTML (https://…) ohne Renderer-CORS laden.
+ * Rückgabe: { ok, dataUrl } – dataUrl ist raw data:…; Kompression im Renderer.
+ */
+ipcMain.handle('dienstreise:fetch-image-data-url', async (_event, rawUrl) => {
+  const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (!/^https?:\/\//i.test(url)) return { ok: false, error: 'invalid_url' };
+  try {
+    const { net } = require('electron');
+    let referer = '';
+    try {
+      referer = new URL(url).origin + '/';
+    } catch (_) {
+      referer = '';
+    }
+    const ua =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    const headerVariants = [
+      { Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8', 'User-Agent': ua },
+      {
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        'User-Agent': ua,
+        ...(referer ? { Referer: referer } : {}),
+      },
+      {
+        Accept: 'image/*,*/*;q=0.8',
+        'User-Agent': ua,
+        Referer: 'https://outlook.office.com/',
+      },
+    ];
+    let lastErr = 'fetch_failed';
+    for (const headers of headerVariants) {
+      try {
+        const response = await net.fetch(url, { method: 'GET', headers });
+        if (!response.ok) {
+          lastErr = 'http_' + response.status;
+          continue;
+        }
+        const contentType = String(response.headers.get('content-type') || '')
+          .split(';')[0]
+          .trim()
+          .toLowerCase();
+        const ab = await response.arrayBuffer();
+        const buf = Buffer.from(ab);
+        if (!buf.length || buf.length > 12 * 1024 * 1024) {
+          lastErr = 'size';
+          continue;
+        }
+        const looksLikeImage =
+          (buf[0] === 0xff && buf[1] === 0xd8) ||
+          (buf[0] === 0x89 && buf[1] === 0x50) ||
+          (buf[0] === 0x47 && buf[1] === 0x49) ||
+          (buf[0] === 0x52 && buf[1] === 0x49);
+        if (
+          contentType &&
+          !/^image\//i.test(contentType) &&
+          contentType !== 'application/octet-stream' &&
+          !looksLikeImage
+        ) {
+          lastErr = 'not_image:' + contentType;
+          continue;
+        }
+        let mime = contentType && /^image\//i.test(contentType) ? contentType : 'image/png';
+        if (mime === 'application/octet-stream' || !/^image\//i.test(mime)) {
+          if (buf[0] === 0xff && buf[1] === 0xd8) mime = 'image/jpeg';
+          else if (buf[0] === 0x89 && buf[1] === 0x50) mime = 'image/png';
+          else if (buf[0] === 0x47 && buf[1] === 0x49) mime = 'image/gif';
+          else if (buf[0] === 0x52 && buf[1] === 0x49) mime = 'image/webp';
+          else mime = 'image/png';
+        }
+        return { ok: true, dataUrl: 'data:' + mime + ';base64,' + buf.toString('base64') };
+      } catch (inner) {
+        lastErr = inner && inner.message ? inner.message : String(inner);
+      }
+    }
+    console.warn('[fetch-image]', url.slice(0, 100), '→', lastErr);
+    return { ok: false, error: lastErr };
+  } catch (e) {
+    console.warn('[fetch-image] exception', e && e.message ? e.message : e);
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+});
+
+/** Outlook/Windows: Bild direkt aus der nativen Zwischenablage. */
+ipcMain.handle('dienstreise:clipboard-read-image', async () => {
+  try {
+    const img = clipboard.readImage();
+    if (!img || typeof img.isEmpty !== 'function' || img.isEmpty()) {
+      return { ok: false, error: 'empty' };
+    }
+    const size = img.getSize ? img.getSize() : { width: 0, height: 0 };
+    if (!size.width || !size.height) return { ok: false, error: 'empty_size' };
+    const dataUrl = img.toDataURL();
+    if (!dataUrl || !/^data:image\//i.test(dataUrl)) return { ok: false, error: 'no_data' };
+    return { ok: true, dataUrl: dataUrl, width: size.width, height: size.height };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+});
+
+/** file://-Pfade aus Outlook-HTML (lokaler Bild-Cache). */
+ipcMain.handle('dienstreise:read-local-image', async (_event, fileUrlOrPath) => {
+  try {
+    let p = typeof fileUrlOrPath === 'string' ? fileUrlOrPath.trim() : '';
+    if (!p) return { ok: false, error: 'empty' };
+    if (/^file:/i.test(p)) {
+      try {
+        p = decodeURIComponent(p.replace(/^file:\/\/\/?/i, '').replace(/^localhost\//i, '').replace(/^\/([A-Za-z]:)/, '$1'));
+      } catch (_) {
+        p = p.replace(/^file:\/\/\/?/i, '').replace(/^localhost\//i, '').replace(/^\/([A-Za-z]:)/, '$1');
+      }
+    }
+    p = path.normalize(p);
+    if (!path.isAbsolute(p) || !fs.existsSync(p) || !fs.statSync(p).isFile()) {
+      return { ok: false, error: 'not_found' };
+    }
+    const buf = fs.readFileSync(p);
+    if (!buf.length || buf.length > 12 * 1024 * 1024) return { ok: false, error: 'size' };
+    const ext = path.extname(p).toLowerCase();
+    let mime = 'image/png';
+    if (ext === '.jpg' || ext === '.jpeg') mime = 'image/jpeg';
+    else if (ext === '.gif') mime = 'image/gif';
+    else if (ext === '.webp') mime = 'image/webp';
+    else if (ext === '.bmp') mime = 'image/bmp';
+    else if (buf[0] === 0xff && buf[1] === 0xd8) mime = 'image/jpeg';
+    return { ok: true, dataUrl: 'data:' + mime + ';base64,' + buf.toString('base64') };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+});
+
 ipcMain.handle('open-external', async (event, url) => {
   if (typeof url !== 'string' || !url.trim()) return;
   await shell.openExternal(url.trim());

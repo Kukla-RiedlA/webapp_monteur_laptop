@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('monteurApp', {
   showFileContextMenu: (spec) => ipcRenderer.invoke('dienstreise:file-context-menu', spec),
   showItemInFolder: (filePath) => ipcRenderer.invoke('dienstreise:show-in-folder', filePath),
   copyPathToClipboard: (filePath) => ipcRenderer.invoke('dienstreise:copy-path', filePath),
+  /** Native Zwischenablage-Bild (Outlook „Bild kopieren“) → Data-URL. */
+  readClipboardImage: () => ipcRenderer.invoke('dienstreise:clipboard-read-image'),
+  /** Lokale file://-Bilder aus Outlook-HTML lesen. */
+  readLocalImageFile: (fileUrlOrPath) => ipcRenderer.invoke('dienstreise:read-local-image', fileUrlOrPath),
+  /** Remote-Bild (z. B. aus E-Mail-HTML) ohne CORS laden → Data-URL. */
+  fetchImageDataUrl: (url) => ipcRenderer.invoke('dienstreise:fetch-image-data-url', url),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   openImageGallery: (payload) => ipcRenderer.invoke('image-gallery:open', payload),
   anlagenstammSearch: (payload) => ipcRenderer.invoke('anlagenstamm:search', payload),

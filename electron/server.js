@@ -7637,9 +7637,28 @@ function createApp(db) {
         lang === 'en' ? `${fileBase}_report_GB` : `${fileBase}_Montage_DE`;
 
       const toTextbausteine = (bem) => (bem || '').toString().split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((t) => ({ text: t, html: t }));
+      const isRichFabHtml = (html) => {
+        const h = (html || '').toString();
+        if (!h.trim()) return false;
+        if (/<img\b/i.test(h) || /<table\b/i.test(h)) return true;
+        return h.length > 80 && /<(p|div|br|h[1-6]|ul|ol)\b/i.test(h);
+      };
       const toTextbausteineFromRich = (html, plain) => {
         const rawHtml = (html || '').toString();
         if (rawHtml.trim()) {
+          /* E-Mail/Richtext mit Bildern/Tabellen: ein Block, nicht zeilenweise zerlegen */
+          if (isRichFabHtml(rawHtml)) {
+            const text = rawHtml
+              .replace(/<br\s*\/?>/gi, '\n')
+              .replace(/<\/(div|p|li|tr|h[1-6])>/gi, '\n')
+              .replace(/<[^>]*>/g, ' ')
+              .replace(/&nbsp;/gi, ' ')
+              .replace(/[ \t]+\n/g, '\n')
+              .replace(/\n[ \t]+/g, '\n')
+              .replace(/[ \t]{2,}/g, ' ')
+              .trim();
+            return [{ text: text || ' ', html: rawHtml.trim() }];
+          }
           const liMatches = rawHtml.match(/<li[\s\S]*?>[\s\S]*?<\/li>/gi) || [];
           if (liMatches.length > 0) {
             return liMatches
@@ -7648,22 +7667,17 @@ function createApp(db) {
                 const text = inner.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
                 return { text, html: inner };
               })
-              .filter((x) => x.text);
+              .filter((x) => x.text || x.html);
           }
           const textFallback = rawHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(div|p|li)>/gi, '\n').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+\n/g, '\n').replace(/\n\s+/g, '\n').trim();
           if (textFallback) {
-            const splitBullets = textFallback
-              .replace(/\u2022/g, '\n• ')
-              .split(/\r?\n|(?=\s*[•▪◦●]\s+)/)
-              .map((s) => s.replace(/^\s*[•▪◦●\-]\s*/, '').trim())
-              .filter(Boolean);
-            if (splitBullets.length > 1) return splitBullets.map((t) => ({ text: t, html: t }));
             return [{ text: textFallback.replace(/^\s*[•▪◦●\-]\s*/, '').trim(), html: rawHtml.trim() }];
           }
         }
         return toTextbausteine(plain || '');
       };
       const bemerkungenByFn = {};
+      const bemerkungenHtmlByFn = {};
       const typePosByFn = {};
       for (const fb of fabBemerkungen || []) {
         const fn = toFab(fb);
@@ -7672,17 +7686,23 @@ function createApp(db) {
             type: (fb && fb.type != null) ? String(fb.type).trim() : '',
             position: (fb && fb.position != null) ? String(fb.position).trim() : '',
           };
+          const fbHtml = (fb && fb.bemerkungen_html != null) ? String(fb.bemerkungen_html) : '';
+          if (fbHtml.trim()) bemerkungenHtmlByFn[fn] = fbHtml;
           const explicitTb = Array.isArray(fb.textbausteine) && fb.textbausteine.length > 0
             ? fb.textbausteine
               .map((t) => ({
                 text: String(t && t.text != null ? t.text : '').trim(),
                 html: String(t && t.html != null ? t.html : (t && t.text != null ? t.text : '')).trim(),
               }))
-              .filter((t) => t.text)
+              .filter((t) => t.text || t.html)
             : null;
-          const tb = explicitTb && explicitTb.length > 0
-            ? explicitTb
-            : toTextbausteineFromRich(fb && fb.bemerkungen_html, fb && fb.bemerkungen);
+          /* Rich-HTML (Bilder) hat Vorrang vor zerlegten Textbausteinen ohne img */
+          const explicitHasImg = !!(explicitTb && explicitTb.some((t) => /<img\b/i.test(t.html || '')));
+          const tb = (isRichFabHtml(fbHtml) && (!explicitTb || !explicitHasImg))
+            ? toTextbausteineFromRich(fbHtml, fb && fb.bemerkungen)
+            : (explicitTb && explicitTb.length > 0
+              ? explicitTb
+              : toTextbausteineFromRich(fbHtml, fb && fb.bemerkungen));
           bemerkungenByFn[fn] = tb;
         }
       }
@@ -7704,10 +7724,20 @@ function createApp(db) {
                 text: String(t && t.text != null ? t.text : '').trim(),
                 html: String(t && t.html != null ? t.html : (t && t.text != null ? t.text : '')).trim(),
               }))
-              .filter((t) => t.text)
+              .filter((t) => t.text || t.html)
             : []);
         const bemerk = tb.map((x) => x.text).join('\n');
-        return { fabrikationsnummer: fn, type, position, textbausteine: tb, bemerkungen: bemerk };
+        const bemerkHtml = bemerkungenHtmlByFn[fn]
+          || (tb.length === 1 && tb[0].html ? tb[0].html : '')
+          || '';
+        return {
+          fabrikationsnummer: fn,
+          type,
+          position,
+          textbausteine: tb,
+          bemerkungen: bemerk,
+          bemerkungen_html: bemerkHtml,
+        };
       });
 
       const kopfdatenForDocx = { ...kopfdaten };

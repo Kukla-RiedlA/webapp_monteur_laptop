@@ -115,6 +115,41 @@ function sizeFromCssPx(px) {
   return Math.max(16, Math.min(96, Math.round((n * 72 / 96) * 2)));
 }
 
+function readImageSizeFromBuffer(buf, typeHint) {
+  try {
+    if (!buf || buf.length < 24) return null;
+    const t = String(typeHint || '').toLowerCase();
+    if (t === 'png' || (buf[0] === 0x89 && buf[1] === 0x50)) {
+      if (buf.length < 24) return null;
+      const width = buf.readUInt32BE(16);
+      const height = buf.readUInt32BE(20);
+      if (width > 0 && height > 0) return { width, height };
+    }
+    if (t === 'jpg' || t === 'jpeg' || (buf[0] === 0xff && buf[1] === 0xd8)) {
+      let i = 2;
+      while (i + 9 < buf.length) {
+        if (buf[i] !== 0xff) break;
+        const marker = buf[i + 1];
+        const len = buf.readUInt16BE(i + 2);
+        if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+          const height = buf.readUInt16BE(i + 5);
+          const width = buf.readUInt16BE(i + 7);
+          if (width > 0 && height > 0) return { width, height };
+          break;
+        }
+        if (len < 2) break;
+        i += 2 + len;
+      }
+    }
+    if (t === 'gif' || (buf[0] === 0x47 && buf[1] === 0x49)) {
+      const width = buf.readUInt16LE(6);
+      const height = buf.readUInt16LE(8);
+      if (width > 0 && height > 0) return { width, height };
+    }
+  } catch (_) { /* ignore */ }
+  return null;
+}
+
 /**
  * Data-URL &lt;img&gt; → ImageRun für DOCX (Base64 aus dem Richtext-Editor).
  * @returns {InstanceType<typeof ImageRun>|null}
@@ -135,6 +170,7 @@ function imageRunFromDataUrl(src, styleText) {
   if (!data || data.length < 32) return null;
 
   const style = parseStyle(styleText || '');
+  const natural = readImageSizeFromBuffer(data, type) || { width: 420, height: 315 };
   let widthPx = 420;
   if (style.width) {
     const w = String(style.width).trim();
@@ -145,11 +181,13 @@ function imageRunFromDataUrl(src, styleText) {
       const px = parseFloat(w);
       if (Number.isFinite(px) && px > 0) widthPx = Math.min(520, Math.max(40, Math.round(px)));
     }
+  } else if (natural.width > 0 && natural.width < 420) {
+    widthPx = Math.max(40, Math.min(420, natural.width));
   }
-  let heightPx = Math.round(widthPx * 0.75);
+  const ratio = natural.height > 0 && natural.width > 0 ? (natural.height / natural.width) : 0.75;
+  let heightPx = Math.max(16, Math.round(widthPx * ratio));
 
   try {
-    // docx erwartet jpg|png|gif|bmp
     if (type !== 'jpg' && type !== 'png' && type !== 'gif' && type !== 'bmp') {
       type = 'jpg';
     }
@@ -215,8 +253,35 @@ function styleFromTag(tag, styleAttr) {
 }
 
 function htmlToParagraphs(html, defaultSizeHalfPt = 24) {
-  const raw = (html || '').toString();
+  let raw = (html || '').toString();
   if (!raw.trim()) return [];
+  /* Layout-Tabellen der E-Mail → flacher Fließtext (PDF/DOCX ohne Raster) */
+  raw = raw
+    .replace(/<\/?(table|thead|tbody|tfoot|tr|td|th)\b[^>]*>/gi, (m) => {
+      if (/^<\s*\//i.test(m)) {
+        if (/\/\s*tr\b/i.test(m) || /\/\s*table\b/i.test(m)) return '<br>';
+        return '';
+      }
+      return '';
+    });
+  /* Doppelte gleiche Bilder entfernen (Outlook/Clipboard-Artefakt, auch nicht benachbart) */
+  {
+    const seenImg = new Set();
+    raw = raw.replace(/<img\b[^>]*>/gi, (tag) => {
+      const srcMatch = tag.match(/\ssrc\s*=\s*["']([^"']+)["']/i);
+      if (!srcMatch) return tag;
+      let key = srcMatch[1];
+      if (/^data:image\//i.test(key)) {
+        const payload = key.replace(/^data:image\/[^;]+;base64,/i, '').replace(/\s+/g, '');
+        key = `d:${payload.length}:${payload.slice(0, 40)}:${payload.slice(-20)}`;
+      } else {
+        key = key.replace(/^https?:/i, 'https:').split('#')[0].toLowerCase();
+      }
+      if (seenImg.has(key)) return '';
+      seenImg.add(key);
+      return tag;
+    });
+  }
   const tokens = raw
     .replace(/\r\n?/g, '\n')
     .split(/(<[^>]+>)/g)
@@ -303,33 +368,47 @@ function htmlToParagraphs(html, defaultSizeHalfPt = 24) {
 }
 
 function createFnTable(fn, L) {
+  /* Volles Rich-HTML der FN-Bemerkungen bevorzugen (Bilder/E-Mail), sonst Textbausteine */
+  const fabHtml = sanitize(fn && fn.bemerkungen_html != null ? fn.bemerkungen_html : '');
   const textbausteine = Array.isArray(fn.textbausteine)
     ? fn.textbausteine.map((tb) => ({
         text: sanitize(tb && tb.text != null ? tb.text : ''),
         html: sanitize(tb && tb.html != null ? tb.html : ''),
       })).filter((t) => t.text || t.html)
     : [];
-  const textbausteinParagraphs = textbausteine.length > 0
-    ? textbausteine.flatMap((tb) => {
-        const rawHtml = (tb.html || '').toString();
-        const hasHtmlMarkup = /<\s*\/?\s*[a-z][^>]*>/i.test(rawHtml);
-        const richParagraphs = hasHtmlMarkup ? htmlToParagraphs(rawHtml, 22) : [];
-        if (hasHtmlMarkup && richParagraphs.length > 0) {
-          return richParagraphs;
-        }
-        const parts = (tb.text || '')
-          .toString()
-          .replace(/\u2022/g, '\n• ')
-          .split(/\r?\n|(?=\s*[•▪◦●]\s+)/)
-          .map((s) => s.replace(/^\s*([•▪◦●\-]\s*)+/, '').trim())
-          .filter(Boolean);
-        if (parts.length > 1) {
-          return parts.map((text) => new Paragraph({ children: [new TextRun({ text, font: 'Calibri', size: 22 })], bullet: { level: 0 } }));
-        }
-        const text = ((parts[0] || tb.text || '').toString()).trim().replace(/^\s*([•▪◦●\-]\s*)+/, '');
-        return [new Paragraph({ children: [new TextRun({ text, font: 'Calibri', size: 22 })], bullet: { level: 0 } })];
-      })
-    : [new Paragraph({ children: [new TextRun({ text: '', font: 'Calibri' })] })];
+
+  function paragraphsFromPlainLines(text) {
+    const parts = (text || '')
+      .toString()
+      .replace(/\u2022/g, '\n')
+      .split(/\r?\n/)
+      .map((s) => s.replace(/^\s*([•▪◦●\-]\s*)+/, '').trim())
+      .filter(Boolean);
+    if (!parts.length) {
+      return [new Paragraph({ children: [new TextRun({ text: '', font: 'Calibri', size: 22 })] })];
+    }
+    return parts.map((line) => new Paragraph({
+      children: [new TextRun({ text: line, font: 'Calibri', size: 22 })],
+    }));
+  }
+
+  let textbausteinParagraphs;
+  if (fabHtml && /<\s*\/?\s*[a-z][^>]*>/i.test(fabHtml)) {
+    const rich = htmlToParagraphs(fabHtml, 22);
+    textbausteinParagraphs = rich.length > 0 ? rich : paragraphsFromPlainLines(sanitize(fn.bemerkungen || ''));
+  } else if (textbausteine.length > 0) {
+    textbausteinParagraphs = textbausteine.flatMap((tb) => {
+      const rawHtml = (tb.html || '').toString();
+      const hasHtmlMarkup = /<\s*\/?\s*[a-z][^>]*>/i.test(rawHtml);
+      const richParagraphs = hasHtmlMarkup ? htmlToParagraphs(rawHtml, 22) : [];
+      if (hasHtmlMarkup && richParagraphs.length > 0) {
+        return richParagraphs;
+      }
+      return paragraphsFromPlainLines(tb.text || '');
+    });
+  } else {
+    textbausteinParagraphs = paragraphsFromPlainLines(sanitize(fn.bemerkungen || ''));
+  }
 
   // 3 Spalten: FN. | Type | Pos.Nr. – mit Einzug wie Kopfbereich
   const fnCol = Math.floor(TABLE_W / 3);
