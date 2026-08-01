@@ -1312,7 +1312,25 @@ function createApp(db) {
     if (!wsUrl || pushWsByTechnician.has(technicianId)) return;
     try {
       const ws = new WebSocket(wsUrl);
-      ws.on('open', () => { ws.send(JSON.stringify({ type: 'auth', technician_id: technicianId })); });
+      ws.on('open', () => {
+        let username = '';
+        let permAdmin = false;
+        try {
+          const row = db.prepare('SELECT username, COALESCE(perm_admin, 0) AS perm_admin, role FROM users WHERE id = ? LIMIT 1').get(technicianId);
+          if (row) {
+            username = String(row.username || '');
+            permAdmin = Number(row.perm_admin) === 1 || String(row.role || '') === 'admin';
+          }
+        } catch (e) {}
+        ws.send(JSON.stringify({
+          type: 'auth',
+          technician_id: technicianId,
+          user_id: technicianId,
+          username,
+          perm_admin: permAdmin || undefined,
+          role: permAdmin ? 'admin' : 'monteur',
+        }));
+      });
       ws.on('message', (data) => {
         try {
           const msg = JSON.parse(data.toString());
@@ -1325,6 +1343,9 @@ function createApp(db) {
                 save();
               } catch (e) {}
             }
+            const set = sseClients.get(technicianId);
+            if (set) set.forEach((res) => { res.write('data: ' + JSON.stringify(msg) + '\n\n'); });
+          } else if (msg.channel === 'server_status' || msg.channel === 'auth_security') {
             const set = sseClients.get(technicianId);
             if (set) set.forEach((res) => { res.write('data: ' + JSON.stringify(msg) + '\n\n'); });
           }
@@ -11460,6 +11481,8 @@ function createApp(db) {
             technician_id: Number(data.technician_id),
             full_name: data.full_name != null ? String(data.full_name).trim() : '',
             username: data.username != null ? String(data.username).trim() : user,
+            perm_admin: data.perm_admin === true || data.perm_admin === 1,
+            alert_recipient: data.alert_recipient === true || data.alert_recipient === 1,
           };
         }
         if (r.status === 404) continue;
@@ -11480,18 +11503,43 @@ function createApp(db) {
     if (!Number.isFinite(id) || id <= 0) return;
     const fullName = (profile.full_name || '').toString().trim() || 'Monteur';
     const username = (profile.username || '').toString().trim() || 'tech_' + id;
+    const permAdmin = profile.perm_admin === true || profile.perm_admin === 1 ? 1 : 0;
     const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
     if (existing) {
-      db.prepare('UPDATE users SET full_name = ?, username = ? WHERE id = ?').run(fullName, username, id);
+      try {
+        db.prepare('UPDATE users SET full_name = ?, username = ?, perm_admin = ? WHERE id = ?').run(fullName, username, permAdmin, id);
+      } catch (e) {
+        db.prepare('UPDATE users SET full_name = ?, username = ? WHERE id = ?').run(fullName, username, id);
+      }
     } else {
-      db.prepare('INSERT INTO users (id, username, full_name, role, active) VALUES (?, ?, ?, ?, ?)').run(
-        id,
-        username,
-        fullName,
-        'monteur',
-        1,
-      );
+      try {
+        db.prepare('INSERT INTO users (id, username, full_name, role, active, perm_admin) VALUES (?, ?, ?, ?, ?, ?)').run(
+          id,
+          username,
+          fullName,
+          'monteur',
+          1,
+          permAdmin,
+        );
+      } catch (e) {
+        db.prepare('INSERT INTO users (id, username, full_name, role, active) VALUES (?, ?, ?, ?, ?)').run(
+          id,
+          username,
+          fullName,
+          'monteur',
+          1,
+        );
+      }
     }
+    try {
+      if (profile.alert_recipient != null) {
+        // lokal nur als Flag in settings speichern (keine extra Spalte nötig)
+        db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(
+          'alert_recipient_' + id,
+          profile.alert_recipient ? '1' : '0',
+        );
+      }
+    } catch (e) {}
     save();
   }
 
@@ -11598,6 +11646,8 @@ function createApp(db) {
         payload.technician_id = profile.technician_id;
         payload.full_name = profile.full_name;
         payload.username = profile.username;
+        payload.perm_admin = !!profile.perm_admin;
+        payload.alert_recipient = !!profile.alert_recipient || !!profile.perm_admin;
       }
       return res.json(payload);
     }
@@ -11628,6 +11678,8 @@ function createApp(db) {
         failPayload.technician_id = lastProfile.technician_id;
         failPayload.full_name = lastProfile.full_name;
         failPayload.username = lastProfile.username;
+        failPayload.perm_admin = !!lastProfile.perm_admin;
+        failPayload.alert_recipient = !!lastProfile.alert_recipient || !!lastProfile.perm_admin;
       }
       return res.json(failPayload);
     }
@@ -11654,6 +11706,8 @@ function createApp(db) {
       failPayload.technician_id = lastProfile.technician_id;
       failPayload.full_name = lastProfile.full_name;
       failPayload.username = lastProfile.username;
+      failPayload.perm_admin = !!lastProfile.perm_admin;
+      failPayload.alert_recipient = !!lastProfile.alert_recipient || !!lastProfile.perm_admin;
     }
     return res.json(failPayload);
   });

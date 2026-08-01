@@ -6175,6 +6175,13 @@
         changed = true;
       }
     }
+    try {
+      if (check.alert_recipient === true || check.alert_recipient === 1 || check.perm_admin === true || check.perm_admin === 1) {
+        localStorage.setItem('kukla_alert_recipient', '1');
+      } else if (check.alert_recipient === false || check.alert_recipient === 0) {
+        localStorage.setItem('kukla_alert_recipient', '0');
+      }
+    } catch (e) {}
     if (changed) {
       saveSettingsToStorage();
     }
@@ -7360,6 +7367,58 @@
   }
 
   var eventSourceRef = null;
+  var serverAlertPollId = null;
+
+  function ensureServerAlertBanner() {
+    var el = document.getElementById('serverAlertBanner');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'serverAlertBanner';
+    el.setAttribute('role', 'alert');
+    el.style.cssText = 'display:none;padding:10px 14px;background:#fff8e6;border-bottom:2px solid #e0a800;color:#1a1a1a;font-size:0.9rem;';
+    el.innerHTML = '<strong id="serverAlertBannerTitle"></strong> <span id="serverAlertBannerText"></span>' +
+      ' <button type="button" id="serverAlertBannerDismiss" style="float:right;border:none;background:transparent;font-size:1.2rem;cursor:pointer;">&times;</button>';
+    var header = document.querySelector('.app-header');
+    if (header && header.parentNode) {
+      header.parentNode.insertBefore(el, header.nextSibling);
+    } else {
+      document.body.insertBefore(el, document.body.firstChild);
+    }
+    var dismiss = document.getElementById('serverAlertBannerDismiss');
+    if (dismiss) {
+      dismiss.addEventListener('click', function () {
+        el.style.display = 'none';
+      });
+    }
+    return el;
+  }
+
+  function showServerAlertBanner(title, text, severity) {
+    var el = ensureServerAlertBanner();
+    var t = document.getElementById('serverAlertBannerTitle');
+    var b = document.getElementById('serverAlertBannerText');
+    if (t) t.textContent = title || 'Meldung';
+    if (b) b.textContent = text || '';
+    el.style.background = (severity === 'critical' || severity === 'crit') ? '#fde8e8' : '#fff8e6';
+    el.style.borderBottomColor = (severity === 'critical' || severity === 'crit') ? '#b91c1c' : '#e0a800';
+    el.style.display = 'block';
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
+        new Notification(title || 'Kukla', { body: text || '' });
+      } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    } catch (e) {}
+  }
+
+  function isAlertRecipientUser() {
+    try {
+      return localStorage.getItem('kukla_alert_recipient') === '1';
+    } catch (e) {
+      return false;
+    }
+  }
+
   function startPushEvents() {
     var techId = getTechId();
     var baseUrl = getDispoBaseUrl();
@@ -7376,10 +7435,47 @@
             if (status === 'approved') showToast('Ihre Abwesenheit wurde bestätigt.');
             else if (status === 'rejected') showToast('Ihre Abwesenheit wurde abgelehnt.');
             loadJobsAndAbsences();
+          } else if ((msg.channel === 'server_status' || msg.channel === 'auth_security') && isAlertRecipientUser()) {
+            var p = msg.payload || {};
+            var title = p.title || (msg.channel === 'auth_security' ? 'Login-Sicherheit' : 'Server-Status');
+            var text = p.message || '';
+            showServerAlertBanner(title, text, String(p.severity || '').toLowerCase());
+            if (typeof showToast === 'function') showToast(title + ': ' + text);
           }
         } catch (e) {}
       };
     } catch (e) {}
+
+    if (isAlertRecipientUser() && !serverAlertPollId) {
+      var pollHealth = function () {
+        fetch(API_BASE + '/api/server/health', {
+          headers: Object.assign({ 'X-Technician-Id': String(getTechId() || '') }, serverMaintenanceAuthHeaders()),
+        })
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function (data) {
+            if (!data || data.ok === false) return;
+            var targets = data.targets || data.checks || {};
+            var bad = [];
+            if (targets && typeof targets === 'object') {
+              Object.keys(targets).forEach(function (k) {
+                var t = targets[k];
+                var st = typeof t === 'string' ? t : (t && (t.status || t.state));
+                if (st && String(st).toLowerCase() !== 'ok' && String(st).toLowerCase() !== 'healthy') {
+                  bad.push(k + '=' + st);
+                }
+              });
+            }
+            if (data.overall && String(data.overall).toLowerCase() !== 'ok' && String(data.overall).toLowerCase() !== 'healthy') {
+              showServerAlertBanner('Server-Status', formatServerHealthLine(data) || bad.join(', '), 'warn');
+            } else if (bad.length) {
+              showServerAlertBanner('Server-Status', bad.join(', '), 'warn');
+            }
+          })
+          .catch(function () {});
+      };
+      pollHealth();
+      serverAlertPollId = setInterval(pollHealth, 60000);
+    }
   }
 
   let syncIntervalId = null;
