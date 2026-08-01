@@ -7,6 +7,7 @@ const calc = require('./zeitschreibung-calc');
 const { generateZeitschreibungPdfBuffer } = require('./zeitschreibung-pdf');
 const { generateZeitschreibungXlsxBuffer } = require('./zeitschreibung-xlsx');
 const { buildPrintDocumentHtml } = require('./zeitschreibung-print-html');
+const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 
 function cfgPath(dbDir) {
   return path.join(dbDir, 'zeitschreibung_config.json');
@@ -639,8 +640,14 @@ async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, 
         })),
       };
       const url = String(baseUrl || '').replace(/\/$/, '') + '/api/monteur_timesheet_submit.php';
-      const headers = { 'Content-Type': 'application/json', 'X-Technician-Id': String(body.technician_id) };
-      if (authHeader) headers.Authorization = authHeader;
+      const headers = applyKuklaAuditHeaders({
+        'Content-Type': 'application/json',
+        'X-Technician-Id': String(body.technician_id),
+      });
+      if (authHeader) {
+        headers.Authorization = authHeader;
+        headers['X-Kukla-Authorization'] = authHeader;
+      }
       const res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.ok === false) {

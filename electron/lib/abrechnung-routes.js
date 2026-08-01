@@ -6,6 +6,7 @@ const { Readable } = require('stream');
 const FormData = require('form-data');
 const express = require('express');
 const phpLocal = require('./abrechnung-php-local');
+const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 
 function mkdirpSync(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -509,7 +510,9 @@ function appendTriedUrls(errMsg, urls) {
 
 /** Apache übergibt Authorization oft nicht an PHP — gleicher Basic-Wert zusätzlich für require_login.php. */
 function dispoMonteurFetchHeaders(authHeader, technicianId) {
-  const h = Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {});
+  const h = applyKuklaAuditHeaders(
+    Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {}),
+  );
   const a = authHeader && authHeader.Authorization;
   if (a) {
     h['X-Kukla-Authorization'] = a;
