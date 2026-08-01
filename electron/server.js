@@ -1305,7 +1305,8 @@ function createApp(db) {
     const u = baseUrl.trim().replace(/\/$/, '');
     try {
       const url = new URL(u);
-      return (url.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + url.hostname + ':39679/ws';
+      // Apache Proxy /push-ws → Node :39679/ws (nicht Port direkt)
+      return (url.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + url.host + '/push-ws';
     } catch (e) { return null; }
   }
   function connectPushForTechnician(technicianId, baseUrl) {
