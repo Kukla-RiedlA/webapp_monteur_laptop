@@ -1,8 +1,13 @@
-# Versionshistorie – Monteur WebApp
+﻿# Versionshistorie – Monteur WebApp
 
 Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer wie in der Dispo: **V &lt;Hauptversion&gt;.&lt;Build&gt;** (z. B. V 1.001).
 
 ---
+
+## V 2.002.000
+- **Release:** Plattformweite Release-Stufe 2.002; Patch-Zaehler auf 000.
+- **Montagebericht:** E-Mail-HTML mit Bildern im PDF/DOCX; keine Bullet-Zerlegung; doppelte Logos entfernt.
+- **Editor:** Outlook-Paste (HTTPS/file/RTF) mit Deduplizierung der Zwischenablage-Bilder.
 
 ## V 2.001.005
 - **Montagebericht Sync:** Pseudo-Konflikte (`.conflict-*`) behoben — Revision-Meta bleibt beim Speichern erhalten; Draft-Push richtet `base_revision` am Server aus und retry’t bei 409 (lokales Speichern gewinnt).
@@ -214,3 +219,4 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
   - **Einstellungen:** Server-Adresse (Dispo), Monteur-ID, Benutzername/Passwort (Dispo-Login); Speichern in localStorage; bei Speichern und bei Online automatisch Pull/Push.
   - **Sync:** Beim Start und alle 5 Minuten Verbindungsprüfung; bei Online automatisch Pull (Aufträge/Abwesenheiten + Techniker-Name aus Dispo) und Push (lokale Änderungen). Techniker-Name aus der Dispo-Antwort von `my_jobs.php` (`technician_full_name` / `technician_username`).
   - **Versionsverwaltung:** Zentrale Version in `config/version.php` (PHP) und `electron/version.json` (Electron), Format wie Dispo (V 1.xxx); Anzeige in der Toolbar.
+
