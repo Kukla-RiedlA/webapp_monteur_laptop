@@ -1,7 +1,7 @@
-ï»¿{
+{
   "name": "monteur-webapp",
   "version": "2.2.0",
-  "description": "Monteur WebApp â€“ Offline-fÃ¤hige Windows-App (Electron) mit lokaler SQLite-DB",
+  "description": "Monteur WebApp – Offline-fähige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
   "license": "MIT",
