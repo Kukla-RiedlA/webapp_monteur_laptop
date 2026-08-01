@@ -4,7 +4,23 @@ const DM_PREFIX = 'Dokumente_Monteur/';
 /** Im Modus explicit: PROJEKTE NEU / Anlage nur über Baumauswahl, nicht pauschal aus Manifest. */
 const SKIP_PULL_PREFIXES = ['Dokumente_Anlage'];
 /** Im Modus explicit: immer vollständig laden (ohne Häkchen in der Offline-Auswahl). */
-const ALWAYS_PULL_PREFIXES = ['Dokumente_Dispo', 'Dokumente_Buchhaltung'];
+const ALWAYS_PULL_PREFIXES = [
+  'Dokumente_Dispo',
+  'Dokumente_Buchhaltung',
+  /** Legacy-PWA-Fotos — kein FN-Ordner, sonst filtert shouldPullManifestFile sie weg. */
+  'Dokumente_Monteur/Bilder',
+];
+
+/** Neu: …/Montage/<Auftrag>/Bilder/… sowie flache Dateien direkt unter Dokumente_Monteur/. */
+function isMonteurPhotoManifestPath(relPath) {
+  const norm = normManifestPath(relPath);
+  if (!norm) return false;
+  if (norm === 'Dokumente_Monteur/Bilder' || norm.startsWith('Dokumente_Monteur/Bilder/')) return true;
+  if (/^Dokumente_Monteur\/[^/]+\/Montage\/[^/]+\/Bilder(\/|$)/i.test(norm)) return true;
+  // ohne FN: Dateien direkt unter Dokumente_Monteur/ (kein Unterordner)
+  if (/^Dokumente_Monteur\/[^/]+\.(jpe?g|png|webp)$/i.test(norm)) return true;
+  return false;
+}
 
 function ensureJobOfflinePullSchema(db) {
   db.prepare(
@@ -152,6 +168,7 @@ function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
   if (!norm) return false;
   if (pullMode === 'legacy') return true;
   if (shouldAlwaysPullPrefix(norm)) return true;
+  if (isMonteurPhotoManifestPath(norm)) return true;
   if (shouldSkipPullPrefix(norm)) return false;
   if (!norm.startsWith(DM_PREFIX)) return false;
   const tail = norm.slice(DM_PREFIX.length);
@@ -159,7 +176,8 @@ function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
   if (slash < 0) return false;
   const fnFolder = tail.slice(0, slash);
   const inner = tail.slice(slash + 1);
-  if (inner.startsWith('Montage/')) return false;
+  // Montage-Arbeitsdateien lokal — außer PWA-Fotos unter …/Montage/…/Bilder/
+  if (inner.startsWith('Montage/') && !/^Montage\/[^/]+\/Bilder(\/|$)/i.test(inner)) return false;
   if (isTedInnerPath(inner)) return false;
   const fab = findFabForCanonicalFolder(pathsByFab, fabMap, fnFolder);
   if (!fab) return false;
@@ -280,6 +298,7 @@ module.exports = {
   findFabForCanonicalFolder,
   shouldPullManifestFile,
   shouldAlwaysPullPrefix,
+  isMonteurPhotoManifestPath,
   filterManifestForPull,
   normalizeOfflinePathsInput,
   updateOfflinePullFabMap,

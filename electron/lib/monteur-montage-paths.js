@@ -400,17 +400,48 @@ function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) 
         );
       }
     }
+    const bilderPath = path.join(desiredPath, 'Bilder');
+    if (!fs.existsSync(bilderPath)) {
+      try {
+        fs.mkdirSync(bilderPath, { recursive: true });
+      } catch (err) {
+        console.warn(
+          '[monteur-paths] mkdir Bilder',
+          bilderPath,
+          err && err.message ? err.message : err,
+        );
+      }
+    }
   }
   return desired;
 }
 
 /**
+ * PWA-/Monteur-Fotos und Montage-Arbeitsordner bleiben unter Dokumente_Monteur
+ * (nicht nach Dokumente_Anlage spiegeln).
+ */
+function isDokumenteMonteurKeepLocalRel(normPath) {
+  const norm = String(normPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const prefix = 'Dokumente_Monteur/';
+  if (!norm.startsWith(prefix)) return false;
+  const tail = norm.slice(prefix.length);
+  if (tail === 'Bilder' || tail.startsWith('Bilder/')) return true;
+  // …/<FN|Parent>/Montage/<Auftrag>/… (inkl. …/Bilder/)
+  if (/^[^/]+\/Montage(\/|$)/i.test(tail)) return true;
+  // ohne FN: Bilddatei direkt unter Dokumente_Monteur/
+  if (/^[^/]+\.(jpe?g|png|webp)$/i.test(tail)) return true;
+  return false;
+}
+
+/**
  * Server-Manifest: Dokumente_Monteur/<FN>/… → lokales Spiegel-Layout unter Dokumente_Anlage.
+ * Ausnahme: Fotos/Montage bleiben unter Dokumente_Monteur.
  */
 function mapServerManifestPathToLocalAnlageRel(serverRelPath) {
   const norm = String(serverRelPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   const prefix = 'Dokumente_Monteur/';
   if (!norm.startsWith(prefix)) return norm;
+  if (isDokumenteMonteurKeepLocalRel(norm)) return norm;
   return 'Dokumente_Anlage/' + norm.slice(prefix.length);
 }
 
@@ -509,6 +540,7 @@ module.exports = {
   collectReiseFnDirNames,
   pickNonBareCanonicalDirName,
   resolveFabMapLocal,
+  isDokumenteMonteurKeepLocalRel,
   mapServerManifestPathToLocalAnlageRel,
   mapServerManifestPathToLocalRel,
   getMonteurWorkRoot,

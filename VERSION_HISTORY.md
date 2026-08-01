@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.002.001
+- **PWA-Bilder Sync:** Fotos unter `Dokumente_Monteur/Bilder/` und `…/Montage/…/Bilder/` bleiben lokal unter Monteur (kein Remap nach Anlage) und werden im Offline-Modus `explicit` immer gezogen.
+
+## V 2.002.001
+- **Montage-Pfade:** `ensureMonteurMontageDirs` legt Unterordner `Bilder` unter dem Auftragsordner an; Pull-Hints erkennen `…/Montage/…/Bilder/`.
+
 ## V 2.002.000
 - **Release:** Plattformweite Release-Stufe 2.002; Patch-Zaehler auf 000.
 - **Montagebericht:** E-Mail-HTML mit Bildern im PDF/DOCX; keine Bullet-Zerlegung; doppelte Logos entfernt.

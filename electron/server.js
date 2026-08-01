@@ -3115,7 +3115,7 @@ function createApp(db) {
     };
   }
 
-  /** FN aus Pfad (z. B. Bilder/11521/…) und alle FNs des Auftrags – für Multi-FN-Jobs. */
+  /** FN aus Pfad (Legacy Bilder/11521/…, neu …/Montage/<AO>/Bilder/) und alle FNs des Auftrags. */
   function collectProjekteNeuFabHints(localJobId, fab, relPathRaw) {
     const hints = [];
     const push = (v) => {
@@ -3126,6 +3126,9 @@ function createApp(db) {
     const rel = String(relPathRaw || '').replace(/\\/g, '/');
     const m = rel.match(/(?:^|\/)Bilder\/(\d+)\//i);
     if (m) push(m[1]);
+    // Neu: Dokumente_Monteur/<FN|Parent>/Montage/<Auftragsordner>/Bilder/…
+    const mMontage = rel.match(/(?:^|\/)(\d+)(?:\s*[-_][^/]*)?\/Montage\/[^/]+\/Bilder(?:\/|$)/i);
+    if (mMontage) push(mMontage[1]);
     try {
       const jobRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
       if (jobRow) {
