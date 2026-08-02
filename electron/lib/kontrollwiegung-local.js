@@ -2,10 +2,10 @@
 
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
+const { resolveMonteurDraftJsonPath } = require('./multi-device-sync');
 
 function kontrollwiegungJsonPath(reiseDir) {
-  return path.join(reiseDir, 'kontrollwiegungsprotokoll.json');
+  return resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true);
 }
 
 function readKontrollwiegungStore(reiseDir) {
@@ -24,6 +24,7 @@ function readKontrollwiegungStore(reiseDir) {
 
 function writeKontrollwiegungStore(reiseDir, store) {
   const p = kontrollwiegungJsonPath(reiseDir);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(store, null, 2), 'utf8');
 }
 

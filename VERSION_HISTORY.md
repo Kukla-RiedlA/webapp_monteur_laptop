@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.003.000
+- **Protokoll-Draft-JSON:** Ablage nur unter `Dokumente_Monteur/` (Serviceprotokoll, Montagebericht, Kontrollwiegung); Legacy Root/Dispo → Monteur-Migration.
+- **Sync:** Draft-JSONs werden nicht als generischer Dienstreise-Datei-Sync hochgeladen (nur `*_draft.php`).
+
 ## V 2.002.002
 - **PWA-Bilder Sync:** Fotos unter Dokumente_Monteur/Bilder und unter Montage/.../Bilder bleiben lokal unter Monteur (kein Remap nach Anlage) und werden im Offline-Modus explicit immer gezogen.
 - **Montage-Pfade:** ensureMonteurMontageDirs legt Unterordner Bilder unter dem Auftragsordner an; Pull-Hints erkennen Montage/.../Bilder.

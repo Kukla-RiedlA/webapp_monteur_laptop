@@ -2,11 +2,103 @@
 
 /**
  * Multi-Device: Draft-Push, Conflict-Dateien, Bootstrap-Schätzung.
+ * Protokoll-Draft-JSONs liegen unter Dokumente_Monteur/ (nicht Reise-Root / nicht Dokumente_Dispo).
  */
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+
+const MONTEUR_DRAFT_BASENAMES = [
+  'serviceprotokoll.json',
+  'montagebericht.json',
+  'kontrollwiegungsprotokoll.json',
+];
+
+function isMonteurDraftJsonBasename(name) {
+  const base = path.basename(String(name || '').replace(/\\/g, '/'));
+  if (!base) return false;
+  for (const known of MONTEUR_DRAFT_BASENAMES) {
+    if (base.toLowerCase() === known.toLowerCase()) return true;
+  }
+  if (/\.json\.conflict-/i.test(base)) {
+    const stem = base.replace(/\.conflict-.*$/i, '');
+    return isMonteurDraftJsonBasename(stem);
+  }
+  return false;
+}
+
+/** Kanonischer Schreibpfad: Dokumente_Monteur/{basename}. */
+function monteurDraftJsonPath(reiseDir, basename) {
+  const base = path.basename(String(basename || '').replace(/\\/g, '/'));
+  return path.join(reiseDir, 'Dokumente_Monteur', base);
+}
+
+/**
+ * Legacy Root/Dispo → Dokumente_Monteur migrieren.
+ * @returns {string} Zielpfad unter Dokumente_Monteur (auch wenn Datei noch fehlt)
+ */
+function resolveMonteurDraftJsonPath(reiseDir, basename, migrate) {
+  const doMigrate = migrate !== false;
+  const base = path.basename(String(basename || '').replace(/\\/g, '/'));
+  const target = monteurDraftJsonPath(reiseDir, base);
+  const legacy = [path.join(reiseDir, base), path.join(reiseDir, 'Dokumente_Dispo', base)];
+  try {
+    if (fs.existsSync(target) && fs.statSync(target).isFile()) {
+      if (doMigrate) {
+        for (const cand of legacy) {
+          try {
+            if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+              if (fs.realpathSync(target) !== fs.realpathSync(cand)) fs.unlinkSync(cand);
+            }
+          } catch (_) {
+            /* ignore */
+          }
+        }
+      }
+      return target;
+    }
+  } catch (_) {
+    /* fall through */
+  }
+  let found = null;
+  for (const cand of legacy) {
+    try {
+      if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+        found = cand;
+        break;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  if (!found || !doMigrate) return found || target;
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    try {
+      fs.renameSync(found, target);
+    } catch (_) {
+      fs.copyFileSync(found, target);
+      try {
+        fs.unlinkSync(found);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    for (const cand of legacy) {
+      try {
+        if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+          if (fs.realpathSync(target) !== fs.realpathSync(cand)) fs.unlinkSync(cand);
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  } catch (_) {
+    return found;
+  }
+  return target;
+}
 
 function stripDraftMeta(obj) {
   if (!obj || typeof obj !== 'object') return {};
@@ -142,6 +234,10 @@ function formatBytes(n) {
 }
 
 module.exports = {
+  MONTEUR_DRAFT_BASENAMES,
+  isMonteurDraftJsonBasename,
+  monteurDraftJsonPath,
+  resolveMonteurDraftJsonPath,
   stripDraftMeta,
   stableStringify,
   draftPayloadsEqual,

@@ -58,10 +58,10 @@ Speicherort Zwischenstände: `{DienstreiseOrdner}/` pro angenommenem Auftrag (`i
 
 | Protokoll | Lokale Datei | Sync In | Sync Out | Offline lesen (Formular) | Offline schreiben | Multi-Device |
 |-----------|--------------|---------|----------|---------------------------|-------------------|--------------|
-| **Montagebericht** | `montagebericht.json` (+ PDF/DOCX lokal) | Draft-GET + optional Anreicherung | Draft-POST bei Save (Server-Revision) | Ja | Ja: „nur Daten“; PDF lokal; Signatur nur online | Ja (`montagebericht_draft`) |
-| **Serviceprotokoll** | `serviceprotokoll.json` (`byFab`) | Draft-GET | Draft-POST bei Save (Server-Revision) | Ja | Ja: „nur Daten“; **PDF nur online** — GAP-005 | Ja (`serviceprotokoll_draft`) |
+| **Montagebericht** | `Dokumente_Monteur/montagebericht.json` (+ PDF/DOCX lokal) | Draft-GET + optional Anreicherung | Draft-POST bei Save (Server-Revision) | Ja | Ja: „nur Daten“; PDF lokal; Signatur nur online | Ja (`montagebericht_draft`) |
+| **Serviceprotokoll** | `Dokumente_Monteur/serviceprotokoll.json` (`byFab`) | Draft-GET | Draft-POST bei Save (Server-Revision) | Ja | Ja: „nur Daten“; **PDF nur online** — GAP-005 | Ja (`serviceprotokoll_draft`) |
 | **Parameterlisten** | CSV + PDF im Ordner | — | Ingest optional (kein Outbox) | Ja | Ja lokal; Ingest queued fehlt — GAP-015 | Teilweise (Datei-Manifest) |
-| **Kontrollwiegungen** | `kontrollwiegungsprotokoll.json` | Draft-GET | Draft-POST bei Save | Ja | Ja lokal + Sync | Ja (`kontrollwiegungsprotokoll_draft`) |
+| **Kontrollwiegungen** | `Dokumente_Monteur/kontrollwiegungsprotokoll.json` | Draft-GET | Draft-POST bei Save | Ja | Ja lokal + Sync | Ja (`kontrollwiegungsprotokoll_draft`) |
 | **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein (nicht implementiert) | — |
 
 **Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“).

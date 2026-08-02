@@ -151,7 +151,7 @@ Authentifizierung wie Kontrollwiegung: Query/Header `technician_id`, Dispo-Basic
 | `dispo_api/api/serviceprotokoll_defaults.php` | GET | `fabrikationsnummer`, `technician_id` → `{ ok, source: "fn"\|"preset"\|"global"\|"builtin", arbeitsschritte: [{ bezeichnung }], kopf?: { projekt, kopf_pos_nr, kopf_qmax, kopf_type, kopf_dwc }, preset_name?, preset_type_code? }` — Lade-Priorität: FN-Vorlage → Typ-Preset (Substring in `anlagenstamm.type`) → globaler Grundstock → Builtin |
 | `dispo_api/api/serviceprotokoll_save.php` | POST JSON | … → erzeugt PDF unter `Dokumente_Monteur/{FN}/Montage/{Auftragsordner}/Serviceprotokolle/` → `{ ok, protokoll_id, pdf_path?, warning? }` |
 | `dispo_api/api/serviceprotokoll_pdf.php` | GET | `id`, `technician_id` → PDF-Binary (aus Projektordner oder Regenerierung) |
-| `dispo_api/api/serviceprotokoll_draft.php` | GET / POST | Zwischenstand `serviceprotokoll.json`: GET → `{ ok, store, revision, server_updated_at, schema_version }`; POST `store` + optional `base_revision`, `device_id` → bei `base_revision`-Mismatch **409** `{ ok:false, code:"conflict", revision, store }`; Job nicht `in_arbeit` → **409** `job_closed` / `job_not_writable`. Server-Revision (nicht Client-`updatedAt`) ist maßgeblich. |
+| `dispo_api/api/serviceprotokoll_draft.php` | GET / POST | Zwischenstand `Dokumente_Monteur/serviceprotokoll.json`: GET → `{ ok, store, revision, server_updated_at, schema_version }`; POST `store` + optional `base_revision`, `device_id` → bei `base_revision`-Mismatch **409** `{ ok:false, code:"conflict", revision, store }`; Job nicht `in_arbeit` → **409** `job_closed` / `job_not_writable`. Server-Revision (nicht Client-`updatedAt`) ist maßgeblich. |
 
 ### 5.1b2 Multi-Device Sync (Monteur-Laptop ↔ Dispo)
 
@@ -164,8 +164,8 @@ Plattform-Übersicht: [`docs/MULTI_DEVICE_LAPTOP_SYNC.md`](../../docs/MULTI_DEVI
 | `dispo_api/api/monteur_device_list.php` | GET | `technician_id` → `{ ok, devices: [{ device_id, display_name, last_seen_at, app_version, revoked_at }] }` |
 | `dispo_api/api/monteur_device_revoke.php` | POST JSON | `technician_id`, `device_id` → setzt `revoked_at`, `{ ok }` |
 | `dispo_api/api/job_files_manifest.php` | GET | `technician_id`, `job_id`, optional `physical_only=1` → `{ ok, files: [{ rel_path, size_bytes, sha256, mtime_utc, source, revision }], total_bytes }` — physischer Tree; Union nur wenn `physical_only` nicht gesetzt |
-| `dispo_api/api/montagebericht_draft.php` | GET / POST | Analog SP: `montagebericht.json` im Job-Ordner; Revision + `job_closed`-Gate |
-| `dispo_api/api/kontrollwiegungsprotokoll_draft.php` | GET / POST | Analog: `kontrollwiegungsprotokoll.json`; Revision + Gate |
+| `dispo_api/api/montagebericht_draft.php` | GET / POST | Analog SP: `Dokumente_Monteur/montagebericht.json`; Revision + `job_closed`-Gate |
+| `dispo_api/api/kontrollwiegungsprotokoll_draft.php` | GET / POST | Analog: `Dokumente_Monteur/kontrollwiegungsprotokoll.json`; Revision + Gate |
 
 **Upload:** `job_project_file_upload.php` prüft Job-Status (`in_arbeit`); sonst **409** `code: job_closed`. Antwort ergänzt `sha256`, `size_bytes`, `rel_path`, `revision`.
 

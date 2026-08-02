@@ -75,7 +75,7 @@ Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Di
 4. Während `dienstreise_pull`: Intervall-`sync_pull` loggt „zurückgestellt“ (409/deferred), kein Fehler-Toast.
 5. `GET /api/sync_status` und `GET /api/offline_manifest?job_id=` liefern sinnvolle Werte nach Pull.
 6. **Flugmodus** (ohne App-Neustart): Badge wechselt auf **Offline**; **Protokolle → Montagebericht → Auftrag wählen** lädt Formular aus SQLite (kein „Dispo-Probe“-Timeout).
-7. Montagebericht offline: **„Speichern (nur Daten)“** schreibt `montagebericht.json` im Dienstreise-Ordner.
+7. Montagebericht offline: **„Speichern (nur Daten)“** schreibt `Dokumente_Monteur/montagebericht.json` im Dienstreise-Ordner.
 
 **Regression (bestehend):**
 

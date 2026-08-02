@@ -196,6 +196,10 @@ const arbeitsschritteLocal = require('./lib/arbeitsschritte-local');
 const protocolPdf = require('./lib/protocol_pdf');
 const kontrollwiegungLocal = require('./lib/kontrollwiegung-local');
 const {
+  resolveMonteurDraftJsonPath,
+  isMonteurDraftJsonBasename,
+} = require('./lib/multi-device-sync');
+const {
   ensureAnlagenstammLocalSchema,
   rowCount: anlagenstammLocalRowCount,
   searchLocal: anlagenstammSearchLocal,
@@ -2104,6 +2108,8 @@ function createApp(db) {
         if (e.isDirectory()) {
           walk(full, rel);
         } else if (e.isFile()) {
+          // Protokoll-Drafts nur über *_draft.php, nicht als generischer Datei-Sync.
+          if (isMonteurDraftJsonBasename(e.name)) continue;
           result.push({
             relPathFromRoot: subfolder + (rel ? '/' + rel : ''),
             fullPath: full,
@@ -7341,7 +7347,7 @@ function createApp(db) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      const dataPath = path.join(reiseDir, 'montagebericht.json');
+      const dataPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', true);
       if (!fs.existsSync(dataPath)) {
         return res.json({ ok: true, data: null });
       }
@@ -7514,7 +7520,7 @@ function createApp(db) {
       const jsonOnly = body.jsonOnly === true || body.saveJsonOnly === true;
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      const montageberichtDataPath = path.join(reiseDir, 'montagebericht.json');
+      const montageberichtDataPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', true);
       const kopfdatenBemerkungen = (kopfdaten && kopfdaten.bemerkungen != null) ? String(kopfdaten.bemerkungen).trim() : '';
       const kopfdatenBemerkungenHtml = (kopfdaten && kopfdaten.bemerkungen_html != null) ? String(kopfdaten.bemerkungen_html).trim() : '';
       // Revision/Meta erhalten — sonst base_revision=0 beim Push → Pseudo-Konflikt trotz nur einem Gerät
@@ -7943,7 +7949,7 @@ function createApp(db) {
           const jobRow = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
           const serverJobId = jobRow && jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
           if (serverJobId > 0) {
-            const kwPath = path.join(reiseDir, 'kontrollwiegungsprotokoll.json');
+            const kwPath = resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true);
             await multiDeviceApi.pushJsonDraft({
               dispoBaseUrl,
               endpoint: '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
@@ -8069,7 +8075,7 @@ function createApp(db) {
   });
 
   function serviceprotokollJsonPath(reiseDir) {
-    return path.join(reiseDir, 'serviceprotokoll.json');
+    return resolveMonteurDraftJsonPath(reiseDir, 'serviceprotokoll.json', true);
   }
 
   function readServiceprotokollStore(reiseDir) {
@@ -8092,7 +8098,9 @@ function createApp(db) {
       fabrikationsnummer: fn,
       updatedAt: new Date().toISOString(),
     });
-    writeFileWithRetry(serviceprotokollJsonPath(reiseDir), JSON.stringify(store, null, 2));
+    const outPath = serviceprotokollJsonPath(reiseDir);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    writeFileWithRetry(outPath, JSON.stringify(store, null, 2));
     return store.byFab[fn];
   }
 
@@ -8189,6 +8197,7 @@ function createApp(db) {
     const remoteJson = JSON.stringify(remote);
     const mergedJson = JSON.stringify(merged);
     if (mergedJson !== localJson) {
+      fs.mkdirSync(path.dirname(localPath), { recursive: true });
       writeFileWithRetry(
         localPath,
         JSON.stringify(
