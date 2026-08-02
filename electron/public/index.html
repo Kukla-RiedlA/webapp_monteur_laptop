@@ -1113,6 +1113,20 @@
     .modal-leistung-fab-row label { display: block; margin-bottom: 0.25rem; color: var(--muted); font-size: 0.9rem; }
     .modal-leistung-fab-input { width: 100%; max-width: none; padding: 0.5rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); font-size: 0.9rem; box-sizing: border-box; }
     .modal-leistung-fab-display { font-size: 0.9rem; margin: 0 0 0.5rem 0; }
+    .projektdaten-anlagen-toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin: 0.35rem 0 0.5rem; }
+    .projektdaten-anlagen-toolbar .settings-saved-hint { font-size: 0.85rem; }
+    .modal-leistung-table th.modal-leistung-col-action,
+    .modal-leistung-table td.modal-leistung-col-action { width: 2.5rem; text-align: center; white-space: nowrap; }
+    .btn-fab-remove {
+      padding: 0.15rem 0.45rem;
+      font-size: 0.85rem;
+      line-height: 1.2;
+      min-width: 1.75rem;
+      color: #b00020;
+      border-color: #c07070;
+      background: transparent;
+    }
+    .btn-fab-remove:hover { background: rgba(176, 0, 32, 0.12); border-color: #b00020; }
     .modal-leistung-row-clickable { cursor: pointer; }
     .modal-leistung-row-clickable:hover { background: var(--subtle-row-hover); }
     .modal-leistung-cell-clickable { cursor: pointer; }
@@ -1499,7 +1513,7 @@
   </div>
   <div id="modalAcceptOffline" class="modal-overlay accept-offline-overlay" aria-hidden="true">
     <div class="modal-box modal-box--wide" role="dialog" style="max-width:42rem;max-height:85vh;display:flex;flex-direction:column;">
-      <h3>Offline-Ordner für PROJEKTE NEU</h3>
+      <h3 id="acceptOfflineTitle">Offline-Ordner für PROJEKTE NEU</h3>
       <p class="muted" style="margin-bottom:0.5rem;font-size:0.9rem;">Dokumente_Dispo und Dokumente_Buchhaltung werden immer mitgeladen. Nicht ausgewählte PROJEKTE-NEU-Ordner bleiben online (beim Öffnen laden). TED-Excel wird immer mitgeladen.</p>
       <div id="acceptOfflineBody" style="flex:1;overflow:auto;min-height:8rem;margin-bottom:0.75rem;"></div>
       <p id="acceptOfflineHint" class="muted" style="font-size:0.85rem;margin-bottom:0.5rem;" aria-live="polite"></p>
@@ -1508,6 +1522,19 @@
         <button type="button" class="btn btn-ghost" id="acceptOfflineBtnNone">Keine</button>
         <button type="button" class="btn btn-ghost" id="acceptOfflineBtnCancel">Abbrechen</button>
         <button type="button" class="btn btn-primary" id="acceptOfflineBtnConfirm">Annehmen &amp; laden</button>
+      </div>
+    </div>
+  </div>
+  <div id="modalAddAnlagen" class="modal-overlay accept-offline-overlay" aria-hidden="true">
+    <div class="modal-box" role="dialog" aria-labelledby="modalAddAnlagenTitle" style="max-width:28rem;margin:auto;align-self:center;">
+      <h3 id="modalAddAnlagenTitle">Anlage(n) hinzufügen</h3>
+      <p class="muted" style="margin-bottom:0.5rem;font-size:0.9rem;">Mehrere Fabrikationsnummern wie bisher: Komma oder Semikolon. Bereich 100-103 oder Kurzform 11030-32.</p>
+      <label for="addAnlagenFabInput" class="muted" style="display:block;margin-bottom:0.25rem;font-size:0.9rem;">Fabrikationsnummern</label>
+      <input type="text" id="addAnlagenFabInput" class="modal-leistung-fab-input" autocomplete="off" placeholder="z.B. 11030-32; 5060, 4603" />
+      <p id="addAnlagenMsg" class="muted" style="margin:0.5rem 0;font-size:0.85rem;" aria-live="polite"></p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end;margin-top:0.75rem;">
+        <button type="button" class="btn btn-ghost" id="addAnlagenBtnCancel">Abbrechen</button>
+        <button type="button" class="btn btn-primary" id="addAnlagenBtnConfirm">Hinzufügen</button>
       </div>
     </div>
   </div>

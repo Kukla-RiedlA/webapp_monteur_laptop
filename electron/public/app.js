@@ -1665,6 +1665,18 @@
     });
   }
 
+  function applyAcceptOfflineModalLabels(mode) {
+    var title = document.getElementById('acceptOfflineTitle');
+    var confirmBtn = document.getElementById('acceptOfflineBtnConfirm');
+    if (mode === 'add_fabs') {
+      if (title) title.textContent = 'Offline-Ordner für neue Anlagen';
+      if (confirmBtn) confirmBtn.textContent = 'Laden';
+    } else {
+      if (title) title.textContent = 'Offline-Ordner für PROJEKTE NEU';
+      if (confirmBtn) confirmBtn.textContent = 'Annehmen & laden';
+    }
+  }
+
   function closeAcceptOfflineModal() {
     clearAcceptOfflinePreviewFetch();
     var modal = document.getElementById('modalAcceptOffline');
@@ -1677,6 +1689,7 @@
     if (hintEl) hintEl.textContent = '';
     var confirmBtn = document.getElementById('acceptOfflineBtnConfirm');
     if (confirmBtn) confirmBtn.disabled = false;
+    applyAcceptOfflineModalLabels('accept');
     acceptOfflinePending = null;
     var jobHint = document.getElementById('acceptJobHint');
     if (jobHint && jobHint.textContent && jobHint.textContent.indexOf('Ordnerauswahl') !== -1) {
@@ -1787,27 +1800,46 @@
     if (confirmBtn) confirmBtn.disabled = false;
   }
 
-  function openAcceptOfflineModal(localJobId, triggerButton) {
-    var errMsg = validateAcceptJobPrerequisites(localJobId, { allowOffline: true });
+  /**
+   * Offline-Ordner-Dialog öffnen.
+   * @param {number} localJobId
+   * @param {HTMLElement|null} triggerButton
+   * @param {{ mode?: 'accept'|'add_fabs', onlyFabs?: string[] }} [opts]
+   */
+  function openAcceptOfflineModal(localJobId, triggerButton, opts) {
+    opts = opts || {};
+    var mode = opts.mode === 'add_fabs' ? 'add_fabs' : 'accept';
+    var onlyFabs = Array.isArray(opts.onlyFabs)
+      ? opts.onlyFabs.map(function (f) { return String(f || '').trim(); }).filter(Boolean)
+      : [];
+    var errMsg = mode === 'accept' ? validateAcceptJobPrerequisites(localJobId, { allowOffline: true }) : null;
     var hint = document.getElementById('acceptJobHint');
+    var projektdatenHint = document.getElementById('projektdatenFabHint');
     if (errMsg) {
       if (hint) hint.textContent = errMsg;
       return;
     }
-    if (shouldPreferOfflineAccept()) {
+    if (mode === 'accept' && shouldPreferOfflineAccept()) {
       runAcceptJobOffline(localJobId, triggerButton, { offline_paths: {} });
       return;
     }
     var modal = document.getElementById('modalAcceptOffline');
     var bodyEl = document.getElementById('acceptOfflineBody');
     if (!modal || !bodyEl) {
-      runAcceptJobOffline(localJobId, triggerButton, { offline_paths: {} });
+      if (mode === 'accept') {
+        runAcceptJobOffline(localJobId, triggerButton, { offline_paths: {} });
+      } else if (typeof showToast === 'function') {
+        showToast('Offline-Dialog nicht verfügbar – bitte Projektordner später aktualisieren.');
+      }
       return;
     }
     clearAcceptOfflinePreviewFetch();
+    applyAcceptOfflineModalLabels(mode);
     acceptOfflinePending = {
       localJobId: localJobId,
       triggerButton: triggerButton,
+      mode: mode,
+      onlyFabs: onlyFabs,
       fab_map: [],
       montage_folder_name: null,
       selectedKeys: null,
@@ -1816,7 +1848,8 @@
     };
     acceptOfflinePreviewTriggerBtn = triggerButton && triggerButton.nodeType === 1 ? triggerButton : null;
     setAcceptOfflinePreviewTriggerBusy(true);
-    if (hint) hint.textContent = 'Verbinde mit Dispo – Ordnerauswahl wird geladen …';
+    if (mode === 'accept' && hint) hint.textContent = 'Verbinde mit Dispo – Ordnerauswahl wird geladen …';
+    if (mode === 'add_fabs' && projektdatenHint) projektdatenHint.textContent = 'Ordnerauswahl wird geladen …';
     if (typeof showToast === 'function') showToast('Ordnerauswahl wird geladen …');
     bodyEl.innerHTML = acceptOfflineLoadingHtml('Verbinde mit Dispo …');
     var confirmBtn = document.getElementById('acceptOfflineBtnConfirm');
@@ -1857,6 +1890,7 @@
     if (extra.internalUrl) q += '&internalUrl=' + encodeURIComponent(extra.internalUrl);
     if (getDispoUsername()) q += '&dispo_username=' + encodeURIComponent(getDispoUsername());
     if (getDispoPassword()) q += '&dispo_password=' + encodeURIComponent(getDispoPassword());
+    if (onlyFabs.length) q += '&only_fabs=' + encodeURIComponent(onlyFabs.join(','));
     var fetchOpts = {};
     if (acceptOfflinePreviewAbort) fetchOpts.signal = acceptOfflinePreviewAbort.signal;
     fetch(API_BASE + '/api/dienstreise/accept_offline_preview?' + q, fetchOpts)
@@ -1868,7 +1902,8 @@
         acceptOfflinePending.montage_folder_name = data.montage_folder_name || null;
         renderAcceptOfflinePreview(data);
         if (confirmBtn) confirmBtn.disabled = false;
-        if (hint) hint.textContent = '';
+        if (mode === 'accept' && hint) hint.textContent = '';
+        if (mode === 'add_fabs' && projektdatenHint) projektdatenHint.textContent = '';
       })
       .catch(function (err) {
         if (!acceptOfflinePending || acceptOfflinePending.localJobId !== localJobId) return;
@@ -1885,13 +1920,17 @@
           '</p>';
         if (hintEl) {
           hintEl.textContent = aborted
-            ? '„Keine“ wählen → nur Status/Struktur offline. Oder erneut versuchen.'
-            : 'Sie können „Keine“ wählen und ohne Projektdateien annehmen.';
+            ? (mode === 'add_fabs'
+              ? '„Keine“ wählen → nur Ordnerstruktur. Oder erneut versuchen.'
+              : '„Keine“ wählen → nur Status/Struktur offline. Oder erneut versuchen.')
+            : (mode === 'add_fabs'
+              ? 'Sie können „Keine“ wählen und ohne zusätzliche Projektdateien fortfahren.'
+              : 'Sie können „Keine“ wählen und ohne Projektdateien annehmen.');
         }
         acceptOfflinePending.previewFailed = true;
         acceptOfflinePending.fab_map = [];
         if (confirmBtn) confirmBtn.disabled = false;
-        if (hint && !aborted) hint.textContent = hintEl ? hintEl.textContent : '';
+        if (mode === 'accept' && hint && !aborted) hint.textContent = hintEl ? hintEl.textContent : '';
       })
       .finally(function () {
         clearTimeout(previewTimeoutId);
@@ -1901,6 +1940,104 @@
         }
         acceptOfflinePreviewAbort = null;
         setAcceptOfflinePreviewTriggerBusy(false);
+      });
+  }
+
+  function openAddFabsOfflineModal(localJobId, addedFabs) {
+    var id = parseInt(localJobId, 10);
+    if (!id || !addedFabs || !addedFabs.length) return;
+    if (shouldPreferOfflineAccept()) {
+      var hint = document.getElementById('projektdatenFabHint');
+      if (hint) {
+        hint.textContent = 'Gespeichert. Projektordner offline später nachziehen.';
+        setTimeout(function () {
+          var h = document.getElementById('projektdatenFabHint');
+          if (h) h.textContent = '';
+        }, 4000);
+      }
+      if (typeof showToast === 'function') {
+        showToast('Anlagen gespeichert. Projektordner offline später nachziehen.');
+      }
+      loadDienstreiseExplorer(id, null, 'modal', { skipAutoPull: true, soft: true });
+      return;
+    }
+    openAcceptOfflineModal(id, null, { mode: 'add_fabs', onlyFabs: addedFabs });
+  }
+
+  function runCopyProjectWithOfflineSelection(localJobId, triggerButton, pullOpts) {
+    var hint = document.getElementById('projektdatenFabHint');
+    var dispoBaseUrl = (getDispoBaseUrl() || '').trim();
+    var technicianId = getTechId();
+    if (!dispoBaseUrl || !technicianId || !getDispoUsername() || !getDispoPassword()) {
+      if (hint) hint.textContent = 'Dispo-Zugangsdaten fehlen – Anlagen gespeichert, Ordner später laden.';
+      if (typeof showToast === 'function') showToast('Anlagen gespeichert. Projektordner später aktualisieren.');
+      return;
+    }
+    if (hint) hint.textContent = 'Projektordner werden geladen …';
+    if (typeof showToast === 'function') showToast('Projektordner werden geladen …');
+    var body = Object.assign({
+      job_id: parseInt(localJobId, 10),
+      dispoBaseUrl: dispoBaseUrl,
+      technicianId: technicianId,
+      dispoUsername: getDispoUsername(),
+      dispoPassword: getDispoPassword(),
+      include_bilder: false,
+    }, dispoBasePayloadExtra());
+    if (pullOpts && Object.prototype.hasOwnProperty.call(pullOpts, 'offline_paths')) {
+      body.offline_paths = pullOpts.offline_paths;
+      if (pullOpts.fab_map) body.fab_map = pullOpts.fab_map;
+      if (pullOpts.montage_folder_name) body.montage_folder_name = pullOpts.montage_folder_name;
+    }
+    fetch(API_BASE + '/api/dienstreise/copy_project_stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+          if (!response.ok || data.ok === false) {
+            throw new Error((data && data.error) || 'Projektordner-Pull konnte nicht gestartet werden.');
+          }
+          if (!data.job_id) return null;
+          return pollBackgroundJobUntilTerminal(data.job_id, null, { maxMs: 25 * 60 * 1000 });
+        });
+      })
+      .then(function (jobRow) {
+        if (jobRow && (jobRow.status === 'failed' || jobRow.status === 'interrupted')) {
+          throw new Error(jobRow.error || 'Projektordner-Pull fehlgeschlagen.');
+        }
+        if (hint) {
+          hint.textContent = 'Projektordner aktualisiert.';
+          setTimeout(function () {
+            var h = document.getElementById('projektdatenFabHint');
+            if (h) h.textContent = '';
+          }, 3000);
+        }
+        if (typeof showToast === 'function') showToast('Projektordner aktualisiert.');
+        if (jobIdsEqual(localJobId, jobDetailsJobId)) {
+          loadDienstreiseExplorer(localJobId, null, 'modal', { skipAutoPull: true, soft: true });
+          var content = document.getElementById('viewProjektdatenContent');
+          var sel = content && content.querySelector('.projektdaten-fn-row-selected [data-fab]');
+          var fabVal = sel ? String(sel.getAttribute('data-fab') || '').trim() : '';
+          var treeHost = document.getElementById('projektdatenProjekteNeuTree');
+          var msgEl = document.getElementById('projektdatenProjekteNeuMsg');
+          if (fabVal && treeHost && msgEl) {
+            loadProjekteNeuTreeIntoHost(fabVal, {
+              msgEl: msgEl,
+              treeHost: treeHost,
+              jobId: jobDetailsJobId,
+              allowOnline: false,
+              keepTreeWhileLoading: true,
+            });
+          }
+        }
+        if (typeof applySyncBadgeAfterRun === 'function') applySyncBadgeAfterRun([]);
+      })
+      .catch(function (err) {
+        var pullErr = err && err.message ? err.message : 'Projektordner-Pull fehlgeschlagen';
+        if (hint) hint.textContent = pullErr;
+        if (typeof showToast === 'function') showToast(pullErr);
+        console.warn('[add_fabs_pull]', pullErr);
       });
   }
 
@@ -3396,6 +3533,30 @@
     return sortLeistungRowsByFab(out);
   }
 
+  /** Bestehende Zeilen behalten, neue FNs anhängen. @returns {{ rows: object[], added: string[] }} */
+  function appendFabListToLeistungRows(numbers, existingRows) {
+    var existing = Array.isArray(existingRows) ? existingRows.slice() : [];
+    var seen = {};
+    for (var i = 0; i < existing.length; i++) {
+      var ef = String((existing[i] && existing[i].fabrikationsnummer) || '').trim();
+      if (ef) seen[ef] = true;
+    }
+    var added = [];
+    for (var j = 0; j < numbers.length; j++) {
+      var fn = String(numbers[j] || '').trim();
+      if (!fn || seen[fn]) continue;
+      seen[fn] = true;
+      existing.push(emptyLeistungRowTemplate(fn));
+      added.push(fn);
+    }
+    return { rows: sortLeistungRowsByFab(existing), added: added };
+  }
+
+  function jobStatusIsInArbeit(job) {
+    if (!job || typeof job !== 'object') return false;
+    return String(job.status || '').trim().toLowerCase() === 'in_arbeit';
+  }
+
   /** Zeile in der FN-Tabelle anzeigen (FN reicht; leere Platzhalterzeile ohne FN ausblenden). */
   function leistungRowShowInTable(r) {
     if (!r) return false;
@@ -3519,6 +3680,11 @@
       cells[1].textContent = formatLeistungCellDisplay(row.type);
       cells[2].textContent = formatLeistungCellDisplay(row.leistung);
       cells[3].textContent = formatLeistungCellDisplay(row.position);
+      var rmBtn = tr.querySelector('[data-action="remove-fab"]');
+      if (rmBtn) {
+        rmBtn.setAttribute('data-fab', fabDisp);
+        rmBtn.setAttribute('title', fabDisp ? 'FN ' + fabDisp + ' entfernen' : 'Entfernen');
+      }
     }
     content.querySelectorAll('.projektdaten-leistung-row[data-row-index]').forEach(function (tr) {
       var i = parseInt(tr.getAttribute('data-row-index'), 10);
@@ -3669,29 +3835,100 @@
     });
   }
 
-  function applyProjektdatenFabInput() {
+  function closeAddAnlagenModal() {
+    var modal = document.getElementById('modalAddAnlagen');
+    if (modal) {
+      modal.classList.remove('active');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+    var msg = document.getElementById('addAnlagenMsg');
+    if (msg) msg.textContent = '';
+    var input = document.getElementById('addAnlagenFabInput');
+    if (input) input.value = '';
+  }
+
+  function openAddAnlagenModal() {
+    if (!canEditProjektdatenFabrikationsnummern(window.currentProjektdatenJob)) return;
+    var modal = document.getElementById('modalAddAnlagen');
+    if (!modal) return;
+    var msg = document.getElementById('addAnlagenMsg');
+    if (msg) msg.textContent = '';
+    var input = document.getElementById('addAnlagenFabInput');
+    if (input) input.value = '';
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    if (input) setTimeout(function () { input.focus(); }, 0);
+  }
+
+  function confirmAddAnlagenFromModal() {
     if (projektdatenFabSaveBusy) return;
     if (!canEditProjektdatenFabrikationsnummern(window.currentProjektdatenJob)) return;
-    var input = document.getElementById('projektdatenFabrikationsnummern');
-    var hint = document.getElementById('projektdatenFabHint');
-    if (!input) return;
-    var raw = (input.value || '').trim();
+    var input = document.getElementById('addAnlagenFabInput');
+    var msg = document.getElementById('addAnlagenMsg');
+    var raw = input ? String(input.value || '').trim() : '';
     if (!raw) {
-      return saveProjektdatenFabrikationsnummernFromRows([], hint).catch(function (e) {
-        if (hint) hint.textContent = 'Speichern fehlgeschlagen.';
-        alert('Speichern fehlgeschlagen: ' + (e && e.message ? e.message : String(e)));
-      });
-    }
-    var numbers = parseFabInputSemicolonList(raw);
-    if (numbers.length === 0) {
-      if (hint) hint.textContent = 'Keine gültige Fabrikationsnummer erkannt.';
+      if (msg) msg.textContent = 'Bitte mindestens eine Fabrikationsnummer eingeben.';
       return;
     }
-    var merged = mergeFabListIntoLeistungRows(numbers, window.currentProjektdatenLeistungRows || []);
-    return saveProjektdatenFabrikationsnummernFromRows(merged, hint).catch(function (e) {
-      if (hint) hint.textContent = 'Speichern fehlgeschlagen.';
-      alert('Speichern fehlgeschlagen: ' + (e && e.message ? e.message : String(e)));
+    var numbers = parseFabInputSemicolonList(raw);
+    if (!numbers.length) {
+      if (msg) msg.textContent = 'Keine gültige Fabrikationsnummer erkannt.';
+      return;
+    }
+    var result = appendFabListToLeistungRows(numbers, window.currentProjektdatenLeistungRows || []);
+    if (!result.added.length) {
+      if (msg) msg.textContent = 'Alle eingegebenen FNs sind bereits im Auftrag.';
+      return;
+    }
+    var jobId = jobDetailsJobId;
+    return saveProjektdatenFabrikationsnummernFromRows(result.rows, null)
+      .then(function () {
+        closeAddAnlagenModal();
+        if (typeof showToast === 'function') {
+          showToast(
+            result.added.length === 1
+              ? 'FN ' + result.added[0] + ' hinzugefügt.'
+              : result.added.length + ' Anlagen hinzugefügt.',
+          );
+        }
+        if (jobStatusIsInArbeit(window.currentProjektdatenJob)) {
+          openAddFabsOfflineModal(jobId, result.added);
+        } else {
+          var h = document.getElementById('projektdatenFabHint');
+          if (h) {
+            h.textContent = 'Gespeichert. Projektordner werden beim Annehmen geladen.';
+            setTimeout(function () {
+              var h2 = document.getElementById('projektdatenFabHint');
+              if (h2) h2.textContent = '';
+            }, 4000);
+          }
+        }
+      })
+      .catch(function (e) {
+        var err = e && e.message ? e.message : String(e);
+        var msgEl = document.getElementById('addAnlagenMsg');
+        if (msgEl) msgEl.textContent = 'Speichern fehlgeschlagen.';
+        else if (msg) msg.textContent = 'Speichern fehlgeschlagen.';
+        alert('Speichern fehlgeschlagen: ' + err);
+      });
+  }
+
+  function removeProjektdatenFab(fab) {
+    fab = String(fab || '').trim();
+    if (!fab || projektdatenFabSaveBusy) return;
+    if (!canEditProjektdatenFabrikationsnummern(window.currentProjektdatenJob)) return;
+    if (!window.confirm('FN ' + fab + ' aus dem Auftrag entfernen?')) return;
+    var rows = (window.currentProjektdatenLeistungRows || []).filter(function (r) {
+      return String((r && r.fabrikationsnummer) || '').trim() !== fab;
     });
+    var hint = document.getElementById('projektdatenFabHint');
+    return saveProjektdatenFabrikationsnummernFromRows(rows, hint)
+      .then(function () {
+        if (typeof showToast === 'function') showToast('FN ' + fab + ' entfernt.');
+      })
+      .catch(function (e) {
+        alert('Entfernen fehlgeschlagen: ' + (e && e.message ? e.message : String(e)));
+      });
   }
 
   function renderJobDetailsContent(job) {
@@ -3860,10 +4097,8 @@
     if (!fabEditAllowed) {
       html += '<p class="modal-leistung-fab-display"><strong>Fabrikationsnummern:</strong> ' + (fabInputValue ? escapeHtml(fabInputValue) : '–') + '</p>';
     } else {
-      html += '<div class="modal-leistung-fab-row">';
-      html += '<label for="projektdatenFabrikationsnummern">Fabrikationsnummern</label>';
-      html += '<input type="text" id="projektdatenFabrikationsnummern" class="modal-leistung-fab-input" autocomplete="off" placeholder="z.B. 11030-32; 5060, 4603" value="' + escapeHtml(fabInputValue) + '" />';
-      html += '<span class="modal-leistung-hint muted" style="margin-top:0.25rem;display:block">Trennzeichen: Komma oder Semikolon. Bereich 100-103 oder Kurzform 11030-32.</span>';
+      html += '<div class="projektdaten-anlagen-toolbar">';
+      html += '<button type="button" class="btn btn-primary" id="btnProjektdatenAddAnlagen">Anlage(n) hinzufügen</button>';
       html += '<span id="projektdatenFabHint" class="settings-saved-hint" aria-live="polite"></span>';
       html += '</div>';
     }
@@ -3876,9 +4111,25 @@
     var vCellFab = function (x) { return escapeHtml(sanitizeLeistungField(x)); };
     var vCellStamm = function (x) { return escapeHtml(formatLeistungCellDisplay(x)); };
     var leistungCellClass = readOnlyAngelegt ? 'modal-leistung-cell-readonly' : 'modal-leistung-cell-clickable';
+    function renderAnlagenActionCell(row) {
+      if (!fabEditAllowed) return '';
+      var fab = String((row && row.fabrikationsnummer) || '');
+      return (
+        '<td class="modal-leistung-col-action">' +
+        '<button type="button" class="btn btn-ghost btn-fab-remove" data-action="remove-fab" data-fab="' +
+        escapeHtml(fab) +
+        '" title="FN ' +
+        escapeHtml(fab) +
+        ' entfernen" aria-label="FN ' +
+        escapeHtml(fab) +
+        ' entfernen">×</button>' +
+        '</td>'
+      );
+    }
     function renderAnlagenTable(indices) {
       var out = '<div class="modal-leistung-wrap"><table class="modal-leistung-table modal-leistung-table-compact"><thead><tr>';
       out += '<th>FN</th><th>Type</th><th>Leistung</th><th>Position</th>';
+      if (fabEditAllowed) out += '<th class="modal-leistung-col-action"></th>';
       out += '</tr></thead><tbody>';
       for (var k = 0; k < indices.length; k++) {
         var i = indices[k];
@@ -3888,6 +4139,7 @@
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.type) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.leistung) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.position) + '</td>';
+        out += renderAnlagenActionCell(row);
         out += '</tr>';
       }
       out += '</tbody></table></div>';
@@ -3904,6 +4156,7 @@
     } else {
       html += '<div class="modal-leistung-wrap"><table class="modal-leistung-table modal-leistung-table-compact"><thead><tr>';
       html += '<th>FN</th><th>Type</th><th>Leistung</th><th>Position</th>';
+      if (fabEditAllowed) html += '<th class="modal-leistung-col-action"></th>';
       html += '</tr></thead><tbody id="modalLeistungTbody">';
       for (var i = 0; i < leistungRows.length; i++) {
         var row = leistungRows[i];
@@ -3913,6 +4166,7 @@
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.type) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.leistung) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.position) + '</td>';
+        html += renderAnlagenActionCell(row);
         html += '</tr>';
       }
       html += '</tbody></table></div>';
@@ -4806,22 +5060,6 @@
     });
   }
 
-  function bindProjektdatenFabInput() {
-    var input = document.getElementById('projektdatenFabrikationsnummern');
-    if (!input || input.getAttribute('data-fab-bound') === '1') return;
-    input.setAttribute('data-fab-bound', '1');
-    input.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        input.blur();
-      }
-    });
-    input.addEventListener('blur', function () {
-      if (projektdatenFabSaveBusy) return;
-      applyProjektdatenFabInput();
-    });
-  }
-
   function bindLeistungActions() {
     var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
@@ -4829,6 +5067,18 @@
       content.setAttribute('data-leistung-delegate-bound', '1');
       content.addEventListener('click', function (ev) {
         if (ev.button !== 0) return;
+        var removeBtn = ev.target.closest && ev.target.closest('[data-action="remove-fab"]');
+        if (removeBtn && content.contains(removeBtn)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          removeProjektdatenFab(removeBtn.getAttribute('data-fab'));
+          return;
+        }
+        if (ev.target.closest && ev.target.closest('#btnProjektdatenAddAnlagen')) {
+          ev.preventDefault();
+          openAddAnlagenModal();
+          return;
+        }
         if (ev.target.closest && (ev.target.closest('.fn-hotel-picker-btn') || ev.target.closest('button') || ev.target.closest('a'))) return;
         var tr = ev.target.closest('.projektdaten-leistung-row');
         if (!tr || !content.contains(tr)) return;
@@ -4850,10 +5100,10 @@
         });
       });
     }
-    bindProjektdatenFabInput();
     content.querySelectorAll('.modal-leistung-cell-clickable').forEach(function (td) {
       td.addEventListener('dblclick', function (e) {
         if (e.target && e.target.closest && e.target.closest('.fn-hotel-picker-btn')) return;
+        if (e.target && e.target.closest && e.target.closest('[data-action="remove-fab"]')) return;
         var idx = td.getAttribute('data-row-index');
         if (idx !== null && idx !== '') openAnlageDetailModal(parseInt(idx, 10));
       });
@@ -8156,16 +8406,21 @@
       var paths = collectCheckedOfflinePaths();
       saveRememberedOfflinePaths(paths);
       var pending = acceptOfflinePending;
+      var mode = pending.mode === 'add_fabs' ? 'add_fabs' : 'accept';
       closeAcceptOfflineModal();
-      var acceptOpts = {
+      var pullOpts = {
         offline_paths: paths,
         fab_map: pending.fab_map,
         montage_folder_name: pending.montage_folder_name
       };
+      if (mode === 'add_fabs') {
+        runCopyProjectWithOfflineSelection(pending.localJobId, pending.triggerButton, pullOpts);
+        return;
+      }
       if (shouldPreferOfflineAccept() || pending.previewFailed) {
-        runAcceptJobOffline(pending.localJobId, pending.triggerButton, acceptOpts);
+        runAcceptJobOffline(pending.localJobId, pending.triggerButton, pullOpts);
       } else {
-        runAcceptJobStream(pending.localJobId, pending.triggerButton, acceptOpts);
+        runAcceptJobStream(pending.localJobId, pending.triggerButton, pullOpts);
       }
     });
   }
@@ -8173,6 +8428,25 @@
   if (modalAcceptOffline) {
     modalAcceptOffline.addEventListener('click', function (e) {
       if (e.target.id === 'modalAcceptOffline') closeAcceptOfflineModal();
+    });
+  }
+  var addAnlagenBtnCancel = document.getElementById('addAnlagenBtnCancel');
+  if (addAnlagenBtnCancel) addAnlagenBtnCancel.addEventListener('click', closeAddAnlagenModal);
+  var addAnlagenBtnConfirm = document.getElementById('addAnlagenBtnConfirm');
+  if (addAnlagenBtnConfirm) addAnlagenBtnConfirm.addEventListener('click', confirmAddAnlagenFromModal);
+  var addAnlagenFabInput = document.getElementById('addAnlagenFabInput');
+  if (addAnlagenFabInput) {
+    addAnlagenFabInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        confirmAddAnlagenFromModal();
+      }
+    });
+  }
+  var modalAddAnlagen = document.getElementById('modalAddAnlagen');
+  if (modalAddAnlagen) {
+    modalAddAnlagen.addEventListener('click', function (e) {
+      if (e.target.id === 'modalAddAnlagen') closeAddAnlagenModal();
     });
   }
   var modalAbsenceOverlay = document.getElementById('modalAbsenceRequest');

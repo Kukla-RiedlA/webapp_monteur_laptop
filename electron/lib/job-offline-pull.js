@@ -198,7 +198,12 @@ function filterManifestForPull(files, pullMode, pathsByFab, fabMap) {
  */
 function normalizeOfflinePathsInput(offlinePathsRaw) {
   const out = [];
-  for (const item of offlinePathsRaw || []) {
+  const list = Array.isArray(offlinePathsRaw)
+    ? offlinePathsRaw
+    : offlinePathsRaw && typeof offlinePathsRaw === 'object'
+      ? Object.values(offlinePathsRaw)
+      : [];
+  for (const item of list) {
     if (item && typeof item === 'object' && item.fab != null && item.path != null) {
       const fab = String(item.fab).trim();
       const rel = normRelPath(item.path);
@@ -291,6 +296,56 @@ function saveOfflinePullSelection(db, localJobId, pullMode, offlinePathsRaw, fab
   );
 }
 
+/**
+ * Neue Offline-Pfade für betroffene FNs mergen: bestehende Pfade anderer FNs bleiben.
+ * Für FNs in newPathsRaw werden deren Pfade ersetzt. fab_map wird per fab gemerged.
+ */
+function mergeOfflinePullSelection(db, localJobId, newPathsRaw, fabMapDelta, montageFolderName) {
+  ensureJobOfflinePullSchema(db);
+  const cfg = getOfflinePullConfig(db, localJobId);
+  const existingByFab = getOfflinePullPathsByFab(db, localJobId);
+  const newPaths = normalizeOfflinePathsInput(newPathsRaw);
+  const fabsToReplace = new Set(newPaths.map((p) => String(p.fab)));
+  const merged = [];
+  for (const [fab, pathMap] of existingByFab) {
+    if (fabsToReplace.has(String(fab))) continue;
+    for (const [rel, kind] of pathMap) {
+      merged.push({ fab: String(fab), path: rel, kind: kind === 'file' ? 'file' : 'dir' });
+    }
+  }
+  for (const p of newPaths) {
+    merged.push(p);
+  }
+  const fabMapByFab = new Map();
+  for (const e of cfg.fab_map || []) {
+    const fab = String((e && e.fab) || '').trim();
+    if (fab) fabMapByFab.set(fab, e);
+  }
+  for (const e of fabMapDelta || []) {
+    const fab = String((e && e.fab) || '').trim();
+    if (fab) fabMapByFab.set(fab, e);
+  }
+  const montage =
+    (montageFolderName && String(montageFolderName).trim()) || cfg.montage_folder_name || null;
+  saveOfflinePullSelection(db, localJobId, 'explicit', merged, [...fabMapByFab.values()], montage);
+}
+
+/** FN aus Offline-Pfadauswahl und fab_map entfernen (lokale Ordner bleiben). */
+function removeOfflinePullFab(db, localJobId, fab) {
+  ensureJobOfflinePullSchema(db);
+  const fabKey = String(fab || '').trim();
+  if (!fabKey) return false;
+  const del = db
+    .prepare(`DELETE FROM job_offline_pull_paths WHERE local_job_id = ? AND fab = ?`)
+    .run(localJobId, fabKey);
+  const cfg = getOfflinePullConfig(db, localJobId);
+  const fabMap = (cfg.fab_map || []).filter((e) => String((e && e.fab) || '').trim() !== fabKey);
+  if (fabMap.length !== (cfg.fab_map || []).length) {
+    updateOfflinePullFabMap(db, localJobId, fabMap);
+  }
+  return del.changes > 0 || fabMap.length !== (cfg.fab_map || []).length;
+}
+
 module.exports = {
   ensureJobOfflinePullSchema,
   getOfflinePullConfig,
@@ -305,5 +360,7 @@ module.exports = {
   ensureMontageFolderNameInConfig,
   updateMontageFolderNameInConfig,
   saveOfflinePullSelection,
+  mergeOfflinePullSelection,
+  removeOfflinePullFab,
   isTedInnerPath,
 };

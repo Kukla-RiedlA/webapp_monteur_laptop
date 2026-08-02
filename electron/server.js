@@ -156,6 +156,8 @@ const {
   filterManifestForPull,
   normalizeOfflinePathsInput,
   saveOfflinePullSelection,
+  mergeOfflinePullSelection,
+  removeOfflinePullFab,
   updateOfflinePullFabMap,
   ensureMontageFolderNameInConfig,
   updateMontageFolderNameInConfig,
@@ -478,6 +480,40 @@ function computeAddedJobFabNums(oldFabJson, newFabJson) {
     added.push(fn);
   }
   return added;
+}
+
+function computeRemovedJobFabNums(oldFabJson, newFabJson) {
+  const newSet = new Set(
+    parseJobFabrikationsnummernRows(newFabJson)
+      .map((r) => normJobFabKey(r))
+      .filter(Boolean),
+  );
+  const removed = [];
+  const seen = new Set();
+  for (const r of parseJobFabrikationsnummernRows(oldFabJson)) {
+    const fn = normJobFabKey(r);
+    if (!fn || newSet.has(fn) || seen.has(fn)) continue;
+    seen.add(fn);
+    removed.push(fn);
+  }
+  return removed;
+}
+
+function parseOnlyFabsFilter(raw) {
+  if (raw == null || raw === '') return null;
+  const set = new Set();
+  String(raw)
+    .split(/[,;\s]+/)
+    .forEach((p) => {
+      const t = String(p || '').trim();
+      if (t) set.add(t);
+    });
+  return set.size ? set : null;
+}
+
+function filterFabNumsByOnlyFabs(fabNums, onlyFabs) {
+  if (!onlyFabs || !onlyFabs.size) return fabNums;
+  return fabNums.filter((fn) => onlyFabs.has(String(fn)));
 }
 
 function jobFabRowFilterByOnlyFns(rows, onlyFns) {
@@ -3781,13 +3817,16 @@ function createApp(db) {
     return ac.signal;
   }
 
-  function buildLocalAcceptOfflinePreview(localJobId, technicianId, degradedHint) {
+  function buildLocalAcceptOfflinePreview(localJobId, technicianId, degradedHint, onlyFabs) {
     const jobDetail = lookupDienstreiseJobRow(localJobId);
     if (!jobDetail) throw new Error('Auftrag nicht gefunden.');
     const montageFolderName = buildMonteurMontageFolderName(jobDetail, getTechnicianDisplayName(technicianId));
     const fabsOut = [];
-    const fabNumsPreview = [...fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)].sort((a, b) =>
-      compareFabrikationsnummerKeys(a, b),
+    const fabNumsPreview = filterFabNumsByOnlyFabs(
+      [...fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)].sort((a, b) =>
+        compareFabrikationsnummerKeys(a, b),
+      ),
+      onlyFabs,
     );
     for (const fabNum of fabNumsPreview) {
       const fab = String(fabNum);
@@ -3958,8 +3997,12 @@ function createApp(db) {
     } catch (listErr) {
       console.warn('[accept_offline_preview] Monteur-Listing:', listErr && listErr.message ? listErr.message : listErr);
     }
-    const fabNums = [...fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)].sort((a, b) =>
-      compareFabrikationsnummerKeys(a, b),
+    const onlyFabs = urlOpts && urlOpts.onlyFabs ? urlOpts.onlyFabs : null;
+    const fabNums = filterFabNumsByOnlyFabs(
+      [...fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)].sort((a, b) =>
+        compareFabrikationsnummerKeys(a, b),
+      ),
+      onlyFabs,
     );
     const creds = resolveDispoServerCreds(urlOpts || {});
     const hdr =
@@ -4050,6 +4093,7 @@ function createApp(db) {
       }
       const mapped = getJobRowByLocalOrServerId(rawJobId);
       const localJobId = mapped ? mapped.id : rawJobId;
+      const onlyFabs = parseOnlyFabsFilter(req.query.only_fabs || req.query.onlyFabs);
       const creds = resolveDispoServerCreds({
         baseUrl: req.query.dispoBaseUrl || req.query.dispo_base_url,
         externalUrl: req.query.externalUrl,
@@ -4067,6 +4111,7 @@ function createApp(db) {
             localJobId,
             technicianId,
             'Dispo-Zugangsdaten fehlen – nur lokale Struktur/Status.',
+            onlyFabs,
           ),
         );
       }
@@ -4077,11 +4122,15 @@ function createApp(db) {
             localJobId,
             technicianId,
             'Dispo nicht erreichbar – „Keine“ für nur Status offline.',
+            onlyFabs,
           ),
         );
       }
       try {
-        const preview = await buildAcceptOfflinePreview(localJobId, technicianId, resolved, authHeader, creds);
+        const preview = await buildAcceptOfflinePreview(localJobId, technicianId, resolved, authHeader, {
+          ...creds,
+          onlyFabs,
+        });
         return res.json(preview);
       } catch (buildErr) {
         console.warn('[accept_offline_preview] build:', buildErr && buildErr.message ? buildErr.message : buildErr);
@@ -4090,6 +4139,7 @@ function createApp(db) {
             localJobId,
             technicianId,
             buildErr && buildErr.message ? String(buildErr.message) : 'Vorschau eingeschränkt.',
+            onlyFabs,
           ),
         );
       }
@@ -4098,8 +4148,9 @@ function createApp(db) {
       try {
         const mapped = getJobRowByLocalOrServerId(parseInt(req.query.job_id, 10));
         const technicianId = getTechnicianId(req) || parseInt(req.query.technician_id, 10);
+        const onlyFabs = parseOnlyFabsFilter(req.query.only_fabs || req.query.onlyFabs);
         if (mapped && technicianId) {
-          return res.json(buildLocalAcceptOfflinePreview(mapped.id, technicianId, msg));
+          return res.json(buildLocalAcceptOfflinePreview(mapped.id, technicianId, msg, onlyFabs));
         }
       } catch (_) {}
       return res.status(500).json({ ok: false, error: msg });
@@ -4318,7 +4369,7 @@ function createApp(db) {
       }
 
       let offlinePullMode = null;
-      if (acceptJob && Object.prototype.hasOwnProperty.call(body, 'offline_paths')) {
+      if (Object.prototype.hasOwnProperty.call(body, 'offline_paths')) {
         const jobDetail = lookupDienstreiseJobRow(localJobId);
         let fabMap = Array.isArray(body.fab_map) ? body.fab_map : [];
         if (!fabMap.length && jobDetail) {
@@ -4327,22 +4378,34 @@ function createApp(db) {
           }
         }
         try {
-          const targetDir = getOrCreateDienstreiseFolderForJob(localJobId, {
+          const layoutDir = getOrCreateDienstreiseFolderForJob(localJobId, {
             skipAssignmentCheck: true,
             technicianId,
           });
-          const layout = ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
+          const layout = ensureJobReiseFolderLayout(localJobId, layoutDir, technicianId);
           const montageName =
             (layout && layout.montageFolderName) ||
             buildMonteurMontageFolderName(jobDetail || {}, getTechnicianDisplayName(technicianId));
-          saveOfflinePullSelection(
-            db,
-            localJobId,
-            'explicit',
-            body.offline_paths,
-            (layout && layout.fabMap && layout.fabMap.length ? layout.fabMap : fabMap),
-            montageName,
-          );
+          const fabMapResolved =
+            layout && layout.fabMap && layout.fabMap.length ? layout.fabMap : fabMap;
+          if (acceptJob) {
+            saveOfflinePullSelection(
+              db,
+              localJobId,
+              'explicit',
+              body.offline_paths,
+              fabMapResolved,
+              montageName,
+            );
+          } else {
+            mergeOfflinePullSelection(
+              db,
+              localJobId,
+              body.offline_paths,
+              fabMapResolved,
+              montageName,
+            );
+          }
           offlinePullMode = 'explicit';
           save();
         } catch (layoutErr) {
@@ -4353,7 +4416,11 @@ function createApp(db) {
           const montageName =
             (body.montage_folder_name && String(body.montage_folder_name).trim()) ||
             buildMonteurMontageFolderName(jobDetail || {}, getTechnicianDisplayName(technicianId));
-          saveOfflinePullSelection(db, localJobId, 'explicit', body.offline_paths, fabMap, montageName);
+          if (acceptJob) {
+            saveOfflinePullSelection(db, localJobId, 'explicit', body.offline_paths, fabMap, montageName);
+          } else {
+            mergeOfflinePullSelection(db, localJobId, body.offline_paths, fabMap, montageName);
+          }
           offlinePullMode = 'explicit';
           save();
         }
@@ -9874,6 +9941,7 @@ function createApp(db) {
         const jobFabBefore = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(effectiveJobId);
         const oldFabJson = jobFabBefore && jobFabBefore.fabrikationsnummern;
         const addedFns = computeAddedJobFabNums(oldFabJson, val);
+        const removedFns = computeRemovedJobFabNums(oldFabJson, val);
         const r = db.prepare(`
           UPDATE jobs SET fabrikationsnummern = ?, updated_at = datetime('now')
           WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
@@ -9881,6 +9949,17 @@ function createApp(db) {
         if (r.changes) {
           syncJobFabRowsToAnlagenstammLocal(db, val, { onlyFns: addedFns });
           enqueueAnlagenstammPendingFromFabJson(db, val, { onlyFns: addedFns });
+          for (const fn of removedFns) {
+            try {
+              removeOfflinePullFab(db, effectiveJobId, fn);
+            } catch (rmOffErr) {
+              console.warn(
+                '[job PATCH] removeOfflinePullFab',
+                fn,
+                rmOffErr && rmOffErr.message ? rmOffErr.message : rmOffErr,
+              );
+            }
+          }
           db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'fabrikationsnummern'`).run(
             effectiveJobId,
           );
@@ -9891,7 +9970,13 @@ function createApp(db) {
               error: 'Fabrikationsnummern lokal gespeichert, aber ' + monteurDbSaveErrorMessage(),
             });
           }
-          return res.json({ ok: true, updated: 'fabrikationsnummern', pending_sync: true });
+          return res.json({
+            ok: true,
+            updated: 'fabrikationsnummern',
+            pending_sync: true,
+            added_fns: addedFns,
+            removed_fns: removedFns,
+          });
         }
         if (fabOnlyPatch) {
           return res.status(403).json({
