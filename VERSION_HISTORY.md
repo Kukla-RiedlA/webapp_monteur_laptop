@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.003.002
+- **Abrechnung Dateien:** Löschen-UI lädt Liste bei Fehler neu; Server-Löschen nutzt gehärtete Dispo-API (`job_files` + Mirror-Event).
+
 ## V 2.003.001
 - **Projektdaten Anlagen:** Button „Anlage(n) hinzufügen“ (Mehrfach-FN) und Entfernen pro Zeile; Freitext-Ersetzen-Feld entfernt.
 - **Offline-Pull:** Nach Hinzufügen bei Auftrag in Arbeit Offline-Ordnerdialog (nur neue FNs) und `copy_project_stream` mit Merge der bestehenden Offline-Auswahl.

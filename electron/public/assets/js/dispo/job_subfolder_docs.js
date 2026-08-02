@@ -931,9 +931,13 @@
             .then(function (res) {
               if (!res.ok) {
                 alert(res.error || 'Löschen fehlgeschlagen');
+                refreshFilesUntilIdle(2);
                 return;
               }
               li.remove();
+              if (res.warning) {
+                try { console.warn('[abrechnung] delete:', res.warning); } catch (e) { /* ignore */ }
+              }
               refreshFilesUntilIdle(4);
             })
             .catch(function () { alert('Fehler beim Löschen.'); });
