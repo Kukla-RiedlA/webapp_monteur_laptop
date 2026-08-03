@@ -4859,7 +4859,7 @@
     modalHtml += '<dt>Position</dt><dd><input type="text" id="anlageDetailPosition" value="' + attr(row.position) + '"></dd>';
     modalHtml += '<dt>Geliefert über</dt><dd><input type="text" id="anlageDetailGeliefertUeber" value="' + attr(row.geliefert_ueber) + '"></dd>';
     modalHtml += '<dt>Projekt</dt><dd><input type="text" id="anlageDetailProjekt" value="' + attr(row.projekt) + '"></dd>';
-    modalHtml += '<dt>Bemerkungen</dt><dd><textarea id="anlageDetailBemerkungen" rows="3">' + attr(row.bemerkungen) + '</textarea></dd>';
+    modalHtml += '<dt>Bemerkungen</dt><dd><textarea id="anlageDetailBemerkungen" rows="3" spellcheck="true" lang="de">' + attr(row.bemerkungen) + '</textarea></dd>';
     modalHtml += '</dl></div></div>';
     modalHtml += '<details class="anlage-detail-projekte-neu" id="anlageDetailProjekteNeuToggle">';
     modalHtml += '<summary><strong>PROJEKTE NEU</strong></summary>';
@@ -5299,7 +5299,7 @@
     var modalHtml = '<div id="jobSiteAddressModalOverlay" class="hotel-modal-overlay">';
     modalHtml += '<div class="hotel-modal-card address-card">';
     modalHtml += '<h3>Auftragsadresse (Baustelle)</h3>';
-    modalHtml += '<div class="hotel-paste-wrap"><label>Adresse einfügen</label><textarea id="job_site_paste_address" class="hotel-paste-textarea" rows="4" placeholder="Komplette Adresse hier einfügen"></textarea><button type="button" class="btn btn-ghost hotel-paste-btn" id="jobSitePasteApply">In Felder übernehmen</button></div>';
+    modalHtml += '<div class="hotel-paste-wrap"><label>Adresse einfügen</label><textarea id="job_site_paste_address" class="hotel-paste-textarea" rows="4" spellcheck="true" lang="de" placeholder="Komplette Adresse hier einfügen"></textarea><button type="button" class="btn btn-ghost hotel-paste-btn" id="jobSitePasteApply">In Felder übernehmen</button></div>';
     modalHtml += '<div class="row row-full-width"><div><label>Endkunde / Firma</label><input type="text" id="job_site_edit_endkunde" value="' + attr(job.endkunde) + '" placeholder="Name oder Firma"></div></div>';
     modalHtml += '<div class="row"><div><label>Straße</label><input type="text" id="job_site_edit_street" value="' + attr(job.street) + '"></div><div style="max-width:80px"><label>Hausnr.</label><input type="text" id="job_site_edit_house_number" value="' + attr(job.house_number) + '" maxlength="32"></div></div>';
     modalHtml += '<div class="row row-city-to-edge"><div style="max-width:110px"><label>PLZ</label><input type="text" id="job_site_edit_zip" value="' + attr(job.zip) + '" maxlength="32" autocomplete="postal-code"></div><div><label>Ort</label><input type="text" id="job_site_edit_city" value="' + attr(job.city) + '"></div></div>';
@@ -5773,7 +5773,7 @@
     var modalHtml = '<div id="hotelAddressModalOverlay" class="hotel-modal-overlay">';
     modalHtml += '<div class="hotel-modal-card address-card">';
     modalHtml += '<h3>Hotel Adresse</h3>';
-    modalHtml += '<div class="hotel-paste-wrap"><label>Adresse einfügen</label><textarea id="hotel_paste_address" class="hotel-paste-textarea" rows="4" placeholder="Komplette Adresse hier einfügen (z. B. aus E-Mail oder Webseite)"></textarea><button type="button" class="btn btn-ghost hotel-paste-btn" id="hotelPasteApply">In Felder übernehmen</button></div>';
+    modalHtml += '<div class="hotel-paste-wrap"><label>Adresse einfügen</label><textarea id="hotel_paste_address" class="hotel-paste-textarea" rows="4" spellcheck="true" lang="de" placeholder="Komplette Adresse hier einfügen (z. B. aus E-Mail oder Webseite)"></textarea><button type="button" class="btn btn-ghost hotel-paste-btn" id="hotelPasteApply">In Felder übernehmen</button></div>';
     modalHtml += '<div class="row row-full-width"><div><label>Hotel</label><input type="text" id="hotel_edit_endkunde" value="' + attr(job.hotel_endkunde) + '" placeholder="Name oder Firma"></div></div>';
     modalHtml += '<div class="row"><div><label>Straße</label><input type="text" id="hotel_edit_street" value="' + attr(job.hotel_street) + '"></div><div style="max-width:80px"><label>Hausnr.</label><input type="text" id="hotel_edit_house_number" value="' + attr(job.hotel_house_number) + '" maxlength="32"></div></div>';
     modalHtml += '<div class="row row-city-to-edge"><div style="max-width:110px"><label>PLZ</label><input type="text" id="hotel_edit_zip" value="' + attr(job.hotel_zip) + '" maxlength="32" autocomplete="postal-code"></div><div><label>Ort</label><input type="text" id="hotel_edit_city" value="' + attr(job.hotel_city) + '"></div></div>';
@@ -5794,7 +5794,7 @@
     modalHtml += '<label>Telefon</label><input type="tel" id="hotel_edit_phone" value="' + attr(job.hotel_phone) + '" placeholder="+43 ...">';
     modalHtml += '<label>E-Mail</label><input type="email" id="hotel_edit_email" value="' + attr(job.hotel_email) + '">';
     modalHtml += '<label>Webseite</label><input type="url" id="hotel_edit_website" value="' + attr(job.hotel_website) + '" placeholder="https://">';
-    modalHtml += '<label>Kommentar zum Hotel</label><textarea id="hotel_edit_comment" rows="2" placeholder="Interner Kommentar">' + attr(job.hotel_comment || '') + '</textarea>';
+    modalHtml += '<label>Kommentar zum Hotel</label><textarea id="hotel_edit_comment" rows="2" spellcheck="true" lang="de" placeholder="Interner Kommentar">' + attr(job.hotel_comment || '') + '</textarea>';
     var rParsed = parseInt(String(job.hotel_rating_stars || ''), 10);
     var rInit = isFinite(rParsed) && rParsed >= 1 && rParsed <= 5 ? String(rParsed) : '';
     modalHtml += '<label>Bewertung</label>';
@@ -9137,7 +9137,7 @@
       '<div><label>Letzter Besuch</label><input type="text" readonly value="' + (a && a.letzter_besuch != null ? escapeHtml(String(a.letzter_besuch)) : '') + '"></div>' +
       '</div><p class="muted" style="font-size:0.78rem;margin:0.35rem 0 0 0">Wird durch Auftragsabschluss in der Dispo gepflegt, nicht hier.</p></div>' +
       '<div class="anlagenstamm-form-section"><h4>Bemerkungen</h4><div class="anlagenstamm-form-grid">' +
-      '<div class="form-full"><label for="as-form-bemerkungen">Bemerkungen</label><textarea id="as-form-bemerkungen" rows="3">' + v('bemerkungen') + '</textarea></div>' +
+      '<div class="form-full"><label for="as-form-bemerkungen">Bemerkungen</label><textarea id="as-form-bemerkungen" rows="3" spellcheck="true" lang="de">' + v('bemerkungen') + '</textarea></div>' +
       '</div></div>' +
       '<div class="anlagenstamm-form-actions">' +
       '<button type="button" class="btn btn-primary" id="btnAnlagenstammSave">In Dispo speichern</button>' +

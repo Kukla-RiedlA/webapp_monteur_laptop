@@ -13,6 +13,7 @@ if (app.isPackaged) {
 const { createApp, getDb, getMonteurDb, PORT, performAnlagenstammSave, flushMonteurDb } = require('./server');
 const { createImageGalleryWindowManager } = require('./lib/image-gallery-window');
 const { attachEditContextMenu } = require('./lib/edit-context-menu');
+const { configureSpellCheckerSession } = require('./lib/spellcheck-session');
 const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
 const {
   searchLocal: anlagenstammSearchLocal,
@@ -126,6 +127,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      spellcheck: true,
     },
     icon: path.join(__dirname, 'public', 'icon.png'),
   });
@@ -655,6 +657,7 @@ app.on('certificate-error', (event, _webContents, url, _error, _certificate, cal
 });
 
 app.whenReady().then(() => {
+  configureSpellCheckerSession();
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
   initLaptopUpdater({ getMainWindow: () => mainWindow });
   getDb().then((db) => {

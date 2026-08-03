@@ -1376,7 +1376,7 @@ function renderImportPreview(rows) {
       <td><input type="text" name="geliefert_ueber" value="${escapeAttr(r.geliefert_ueber || '')}"></td>
       <td><input type="text" name="projekt" value="${escapeAttr(r.projekt || '')}"></td>
       <td><input type="text" name="type" value="${escapeAttr(r.type || '')}"></td>
-      <td><textarea name="bemerkungen" rows="2">${escapeHtml(r.bemerkungen || '')}</textarea></td>
+      <td><textarea name="bemerkungen" rows="2" spellcheck="true" lang="de">${escapeHtml(r.bemerkungen || '')}</textarea></td>
       <td><button type="button" class="btn btn-delete btn-import-remove" title="Zeile entfernen">×</button></td>
     </tr>
   `).join('');

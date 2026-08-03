@@ -474,7 +474,7 @@
       html += '<div><label style="font-size:11px">Datum</label><input type="date" id="anlagenEventDate" style="width:100%;padding:6px;font-size:12px"></div>';
       html += '</div>';
       html += '<div style="margin-bottom:8px"><label style="font-size:11px">Titel</label><input type="text" id="anlagenEventTitle" style="width:100%;padding:6px;font-size:12px" placeholder="Kurzbeschreibung"></div>';
-      html += '<div style="margin-bottom:8px"><label style="font-size:11px">Notiz</label><textarea id="anlagenEventNotes" rows="2" style="width:100%;padding:6px;font-size:12px"></textarea></div>';
+      html += '<div style="margin-bottom:8px"><label style="font-size:11px">Notiz</label><textarea id="anlagenEventNotes" rows="2" spellcheck="true" lang="de" style="width:100%;padding:6px;font-size:12px"></textarea></div>';
       html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
       html += '<input type="number" id="anlagenEventJob" placeholder="Job-ID (optional)" style="width:120px;padding:6px;font-size:12px">';
       html += '<button type="button" class="btn btn-primary" id="anlagenEventSaveBtn">Ereignis speichern</button>';

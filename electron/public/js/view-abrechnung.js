@@ -160,7 +160,7 @@
         <header class="sp-v2-section-head" id="abSecCommentsTitle"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/pen-signature-green.svg" alt="" aria-hidden="true"> Kommentare</header>
         <div class="sp-v2-section-body ab-comments-block">
           <div class="ab-comment-list" data-comments-list="dispo"></div>
-          <textarea class="ab-note" data-note="dispo" placeholder="Neuen Kommentar eingeben …"></textarea>
+          <textarea class="ab-note" data-note="dispo" spellcheck="true" lang="de" placeholder="Neuen Kommentar eingeben …"></textarea>
           <div class="ab-note-actions">
             <button type="button" class="btn btn-primary ab-save-note" data-note-save="dispo" data-default-label="Kommentar hinzufügen">Kommentar hinzufügen</button>
             <button type="button" class="btn btn-ghost ab-cancel-note-edit" data-note-cancel="dispo" style="display:none">Abbrechen</button>
