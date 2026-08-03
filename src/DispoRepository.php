@@ -69,6 +69,44 @@ final class DispoRepository
             }
             $fabByJob[$jid][] = $fr;
         }
+        $contactsByJob = [];
+        try {
+            $cSql = "SELECT job_id, contact_name, contact_phone, contact_email, first_name, last_name, title, department, phone, mobile, email, sort_order
+                     FROM job_contacts WHERE job_id IN ($placeholders) ORDER BY job_id, sort_order, id";
+            $cStmt = $this->fsm->prepare($cSql);
+            $cStmt->execute($jobIds);
+            while (($cr = $cStmt->fetch(PDO::FETCH_ASSOC)) !== false) {
+                $cid = (int) ($cr['job_id'] ?? 0);
+                unset($cr['job_id']);
+                if ($cid <= 0) {
+                    continue;
+                }
+                if (!isset($contactsByJob[$cid])) {
+                    $contactsByJob[$cid] = [];
+                }
+                $contactsByJob[$cid][] = $cr;
+            }
+        } catch (\Throwable $e) {
+            try {
+                $cSqlLegacy = "SELECT job_id, contact_name, contact_phone, contact_email
+                               FROM job_contacts WHERE job_id IN ($placeholders) ORDER BY job_id, sort_order, id";
+                $cStmtLegacy = $this->fsm->prepare($cSqlLegacy);
+                $cStmtLegacy->execute($jobIds);
+                while (($cr = $cStmtLegacy->fetch(PDO::FETCH_ASSOC)) !== false) {
+                    $cid = (int) ($cr['job_id'] ?? 0);
+                    unset($cr['job_id']);
+                    if ($cid <= 0) {
+                        continue;
+                    }
+                    if (!isset($contactsByJob[$cid])) {
+                        $contactsByJob[$cid] = [];
+                    }
+                    $contactsByJob[$cid][] = $cr;
+                }
+            } catch (\Throwable $e2) {
+                // Tabelle fehlt
+            }
+        }
         foreach ($rows as &$job) {
             $jid = (int) $job['id'];
             if (isset($fabByJob[$jid]) && $fabByJob[$jid] !== []) {
@@ -79,6 +117,7 @@ final class DispoRepository
                     $job['fabrikationsnummern'] = json_encode($this->enrichFabFromAnlagenstamm($fabFromJob), JSON_UNESCAPED_UNICODE);
                 }
             }
+            $job['job_contacts'] = $contactsByJob[$jid] ?? [];
         }
         unset($job);
         return $rows;

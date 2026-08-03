@@ -5355,6 +5355,7 @@ function createApp(db) {
 
     try {
       const rows = db.prepare(sql).all(...params);
+      attachJobContactsToJobs(db, rows);
       res.json({ ok: true, technician_id: technicianId, year, jobs: rows });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
@@ -14379,9 +14380,17 @@ function normalizeJobContactsFromPayload(job) {
 }
 
 function upsertJobContactsForLocalJob(db, localJobId, j) {
+  if (!j || typeof j !== 'object') return;
+  const keyPresent =
+    Object.prototype.hasOwnProperty.call(j, 'job_contacts')
+    || Object.prototype.hasOwnProperty.call(j, 'jobContacts')
+    || Object.prototype.hasOwnProperty.call(j, 'contacts');
   const contacts = normalizeJobContactsFromPayload(j);
-  if (!contacts.length) return;
+  // Ohne Kontakt-Felder im Payload nichts anfassen (Altserver ohne job_contacts).
+  if (!keyPresent && !contacts.length) return;
   try {
+    // Ungepushte lokale Edits nicht mit Server-Stand überschreiben.
+    if (getPendingJobActionPayload(db, localJobId, 'job_contacts')) return;
     db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(localJobId);
     for (let i = 0; i < contacts.length; i++) {
       const n = normalizeJobContactPayload(contacts[i]);
