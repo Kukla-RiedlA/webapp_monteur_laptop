@@ -657,6 +657,7 @@ app.on('certificate-error', (event, _webContents, url, _error, _certificate, cal
 });
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   configureSpellCheckerSession();
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
   initLaptopUpdater({ getMainWindow: () => mainWindow });
