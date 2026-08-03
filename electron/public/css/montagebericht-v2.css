@@ -189,13 +189,16 @@
 .mb-rich-editor {
   width: 100%;
   min-height: 3.2rem;
+  height: auto;
+  max-height: none;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--sp-border, #d8e3df);
   border-radius: 8px;
   background: #fff;
   color: var(--sp-text, #111827);
-  resize: vertical;
-  overflow: auto;
+  resize: none;
+  overflow: hidden;
+  box-sizing: border-box;
   font-size: 0.875rem;
   line-height: 1.45;
 }
@@ -226,6 +229,70 @@
 .mb-rich-editor img.mb-img-selected {
   outline: 2px solid var(--sp-green, #007a4d);
   outline-offset: 2px;
+  cursor: default;
+}
+
+.mb-img-drag-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  background: var(--sp-green, #007a4d);
+  border: 2px solid #fff;
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  cursor: nwse-resize;
+  z-index: 10050;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.mb-project-photos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.65rem;
+  align-content: start;
+}
+
+.mb-project-photo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.35rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.mb-project-photo-card:hover,
+.mb-project-photo-card:focus {
+  border-color: var(--sp-green, #007a4d);
+  box-shadow: 0 0 0 2px rgba(0, 122, 77, 0.2);
+  outline: none;
+}
+
+.mb-project-photo-card img {
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--sp-mint, #eefaf5);
+}
+
+.mb-project-photo-card .mb-project-photo-name {
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: var(--sp-muted, #4b5563);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .montagebericht-fab-felder {
@@ -237,7 +304,7 @@
 .montagebericht-fab-block {
   border: 1px solid var(--sp-border, #d8e3df);
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
   background: #fff;
 }
 
@@ -303,7 +370,9 @@
 
 .montagebericht-fab-felder input[data-fab],
 .montagebericht-fab-felder [data-fab-rich] {
-  min-height: 2.5rem;
+  min-height: 3.2rem;
+  max-height: none;
+  height: auto;
 }
 
 .montagebericht-fab-felder input[data-fab].drop-target,

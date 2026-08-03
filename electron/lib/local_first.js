@@ -12,6 +12,9 @@ function normalizeBaseUrl(url) {
     .replace(/\/+$/, '');
 }
 
+/** Max. Retries für nicht-permanente Serverfehler (z. B. 500), danach Dead-Letter. */
+const SYNC_PUSH_MAX_ATTEMPTS = 5;
+
 /** Netzwerk-/Erreichbarkeitsfehler (Finish/Release-Fallback). */
 function isLikelyOfflineSyncError(err) {
   const msg = err && err.message ? String(err.message) : String(err || '');
@@ -19,6 +22,36 @@ function isLikelyOfflineSyncError(err) {
     return true;
   }
   if (err && (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'ETIMEDOUT')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Fehler, die durch erneutes Pushen derselben Pending-Zeile nicht heilbar sind
+ * (Parse-/Syntaxfehler, Auth, Validierung, 4xx). Sofort Dead-Letter statt Endlos-Retry.
+ */
+function isPermanentSyncPushError(err) {
+  const msg = err && err.message ? String(err.message) : String(err || '');
+  if (!msg) return false;
+  if (isLikelyOfflineSyncError(err)) return false;
+  if (
+    /syntax error|parse error|unexpected identifier|unexpected token|ParseError|CompileError/i.test(
+      msg,
+    )
+  ) {
+    return true;
+  }
+  if (/\b(401|403|404|405|409|410|422)\b/.test(msg)) return true;
+  if (/^Dispo:\s*(401|403|404|405|409|410|422)\b/i.test(msg)) return true;
+  if (
+    /nicht erlaubt|Method not allowed|unautorisiert|unauthorized|forbidden|nicht gefunden|not found|erforderlich|ungültig|ungueltig|JSON-Body|Validierung|validation/i.test(
+      msg,
+    )
+  ) {
+    return true;
+  }
+  if (err && Number.isFinite(err.status) && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
     return true;
   }
   return false;
@@ -70,8 +103,10 @@ async function fetchWithTimeout(url, options, timeoutMs) {
 
 module.exports = {
   DISPO_FETCH_TIMEOUT_MS,
+  SYNC_PUSH_MAX_ATTEMPTS,
   normalizeBaseUrl,
   isLikelyOfflineSyncError,
+  isPermanentSyncPushError,
   shouldDeferDispoSync,
   wantsLocalOnlyRequest,
   fetchWithTimeout,

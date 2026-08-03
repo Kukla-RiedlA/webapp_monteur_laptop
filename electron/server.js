@@ -187,6 +187,8 @@ const {
 const { applyKuklaAuditHeaders } = require('./lib/audit-client-headers');
 const {
   isLikelyOfflineSyncError,
+  isPermanentSyncPushError,
+  SYNC_PUSH_MAX_ATTEMPTS,
   shouldDeferDispoSync,
   normalizeBaseUrl,
   wantsLocalOnlyRequest,
@@ -197,6 +199,7 @@ const textbausteineLocal = require('./lib/textbausteine-local');
 const arbeitsschritteLocal = require('./lib/arbeitsschritte-local');
 const protocolPdf = require('./lib/protocol_pdf');
 const kontrollwiegungLocal = require('./lib/kontrollwiegung-local');
+const schleppkettenLocal = require('./lib/schleppketten-local');
 const {
   resolveMonteurDraftJsonPath,
   isMonteurDraftJsonBasename,
@@ -764,6 +767,85 @@ function logSyncPushError(info) {
   } catch (e) {
     // Logging-Fehler ignorieren
   }
+}
+
+/**
+ * Permanenter/ausgeschöpfter Push-Fehler → Dead-Letter, Queue freimachen.
+ * @returns {'offline'|'retry'|'dead'}
+ */
+function resolveSyncPushFailure(db, pendingRow, err, reason) {
+  const msg = err && err.message ? String(err.message) : String(err || '');
+  const status = err && Number.isFinite(err.status) ? err.status : undefined;
+  logSyncPushError({
+    reason,
+    error: msg,
+    status,
+    pending_id: pendingRow && pendingRow.id,
+    entity_type: pendingRow && pendingRow.entity_type,
+    action: pendingRow && pendingRow.action,
+  });
+  if (!pendingRow || pendingRow.id == null) return 'dead';
+  if (isLikelyOfflineSyncError(err)) {
+    return 'offline';
+  }
+  const prevAttempts = Number(pendingRow.attempts) || 0;
+  const attempts = prevAttempts + 1;
+  const permanent = isPermanentSyncPushError(err);
+  if (permanent || attempts >= SYNC_PUSH_MAX_ATTEMPTS) {
+    try {
+      db.prepare(
+        `INSERT INTO pending_changes_failed (
+          original_pending_id, entity_type, entity_id, action, payload,
+          attempts, last_error, fail_reason, created_at, failed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      ).run(
+        pendingRow.id,
+        String(pendingRow.entity_type || ''),
+        String(pendingRow.entity_id != null ? pendingRow.entity_id : ''),
+        String(pendingRow.action || ''),
+        pendingRow.payload != null ? String(pendingRow.payload) : null,
+        attempts,
+        msg.slice(0, 4000),
+        permanent
+          ? 'permanent:' + reason
+          : 'max_attempts:' + reason,
+        pendingRow.created_at != null ? String(pendingRow.created_at) : null,
+      );
+    } catch (insErr) {
+      console.warn(
+        '[sync_push] dead-letter insert failed:',
+        insErr && insErr.message ? insErr.message : insErr,
+      );
+    }
+    try {
+      db.prepare('DELETE FROM pending_changes WHERE id = ?').run(pendingRow.id);
+    } catch (_) {
+      /* ignore */
+    }
+    console.warn('[sync_push] dead-letter (queue cleared):', {
+      pending_id: pendingRow.id,
+      reason,
+      attempts,
+      permanent,
+      error: msg.slice(0, 200),
+    });
+    return 'dead';
+  }
+  try {
+    db.prepare(
+      `UPDATE pending_changes SET attempts = ?, last_error = ?, last_attempt_at = datetime('now') WHERE id = ?`,
+    ).run(attempts, msg.slice(0, 4000), pendingRow.id);
+  } catch (_) {
+    /* Spalten fehlen vor Migration – Eintrag bleibt, nächster Start migriert */
+  }
+  pendingRow.attempts = attempts;
+  console.warn('[sync_push] transient error, keep for retry:', {
+    pending_id: pendingRow.id,
+    attempt: attempts,
+    max: SYNC_PUSH_MAX_ATTEMPTS,
+    error: msg.slice(0, 200),
+  });
+  return 'retry';
 }
 
 /** Laufzeit-Kontext für IPC / Flush (gesetzt in getDb und createApp). */
@@ -2276,6 +2358,70 @@ function createApp(db) {
     });
   }
 
+  /** Alte Montagebericht-Word-Exporte (vor PDF-only). */
+  function isLegacyMontageberichtDocxName(name) {
+    const n = String(name || '');
+    if (!/\.docx$/i.test(n)) return false;
+    return /_(?:Montage|report)_(?:DE|EN|GB)\.docx$/i.test(n);
+  }
+
+  /** Entfernt Legacy-DOCX lokal im Protokolle-Ordner. Liefert gelöschte Dateinamen. */
+  function cleanupLegacyMontageberichtDocxLocal(protokolleDir) {
+    const removed = [];
+    if (!protokolleDir || !fs.existsSync(protokolleDir)) return removed;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(protokolleDir);
+    } catch (_) {
+      return removed;
+    }
+    for (const name of entries) {
+      if (!isLegacyMontageberichtDocxName(name)) continue;
+      const abs = path.join(protokolleDir, name);
+      try {
+        if (!fs.statSync(abs).isFile()) continue;
+        fs.unlinkSync(abs);
+        removed.push(name);
+      } catch (e) {
+        console.warn(
+          '[montagebericht] local docx cleanup:',
+          name,
+          e && e.message ? e.message : e,
+        );
+      }
+    }
+    return removed;
+  }
+
+  async function deleteJobProjectFileOnDispo(base, serverJobId, technicianId, authHeader, relPath) {
+    const rel = normProjectRelPath(relPath);
+    if (!rel) return;
+    const formBody = new URLSearchParams();
+    formBody.append('technician_id', String(technicianId));
+    formBody.append('job_id', String(serverJobId));
+    formBody.append('path', rel);
+    const r = await fetch(String(base || '').replace(/\/$/, '') + '/api/job_project_file_delete.php', {
+      method: 'POST',
+      headers: Object.assign(
+        { 'Content-Type': 'application/x-www-form-urlencoded' },
+        dispoMonteurFetchHeaders(technicianId, authHeader),
+      ),
+      body: formBody.toString(),
+    });
+    if (r.ok) return;
+    const errText = await r.text().catch(() => '');
+    let errMsg = errText || r.statusText || String(r.status);
+    try {
+      const data = errText ? JSON.parse(errText) : {};
+      if (data && data.error) errMsg = String(data.error);
+    } catch (_) {
+      /* raw */
+    }
+    const err = new Error(errMsg);
+    err.status = r.status;
+    throw err;
+  }
+
   /**
    * Remote-Dateiliste nur für relevante Unterordner (kein Rekursions-Walk durch ELEKTRO/Anlagen-Mount).
    * Verhindert hunderte API-Aufrufe und „fetch failed“ beim Abschluss-Sync.
@@ -3032,6 +3178,92 @@ function createApp(db) {
       res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Dateiliste konnte nicht gelesen werden.' });
+    }
+  });
+
+  /** PWA-/Projekt-Fotos unter Dokumente_Monteur (Bilder-Ordner + flache Legacy-Fotos). */
+  app.get('/api/dienstreise/project_photos', (req, res) => {
+    try {
+      const jobId = parseInt(req.query.job_id, 10);
+      if (!jobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const technicianId = getTechnicianId(req);
+      const resolved =
+        technicianId && Number.isFinite(technicianId) && technicianId > 0
+          ? resolveLocalJobIdForTechnician(db, technicianId, jobId, { mode: 'auto' })
+          : null;
+      let localJobId = jobId;
+      if (resolved) {
+        if (!resolved.ok) {
+          return res.status(resolved.status || 404).json({ ok: false, error: resolved.error });
+        }
+        localJobId = resolved.localId;
+      } else {
+        const mapped = getJobRowByLocalOrServerId(jobId);
+        if (!mapped) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+        localJobId = mapped.id;
+      }
+      const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      if (!reiseDir || !fs.existsSync(reiseDir)) {
+        return res.json({
+          ok: true,
+          photos: [],
+          folder_missing: true,
+          hint: 'Noch kein Projektordner — bitte Auftrag annehmen.',
+        });
+      }
+      const docMonteur = path.join(reiseDir, 'Dokumente_Monteur');
+      if (!fs.existsSync(docMonteur) || !fs.statSync(docMonteur).isDirectory()) {
+        return res.json({ ok: true, photos: [], folder_missing: false, hint: 'Keine Dokumente_Monteur vorhanden.' });
+      }
+      const imgRe = /\.(jpe?g|png|gif|webp|bmp)$/i;
+      const photos = [];
+      const maxFiles = 400;
+      const maxDepth = 8;
+      function walk(dir, relBase, depth) {
+        if (photos.length >= maxFiles || depth > maxDepth) return;
+        let names = [];
+        try {
+          names = fs.readdirSync(dir);
+        } catch (_) {
+          return;
+        }
+        for (const name of names) {
+          if (photos.length >= maxFiles) break;
+          if (isIgnorableDirEntry(name)) continue;
+          const full = path.join(dir, name);
+          let st;
+          try {
+            st = fs.statSync(full);
+          } catch (_) {
+            continue;
+          }
+          const rel = (relBase ? relBase + '/' : '') + name;
+          if (st.isDirectory()) {
+            walk(full, rel, depth + 1);
+            continue;
+          }
+          if (!st.isFile() || !imgRe.test(name)) continue;
+          const norm = rel.replace(/\\/g, '/');
+          photos.push({
+            name,
+            relativePath: 'Dokumente_Monteur/' + norm,
+            size: st.size,
+            mtime: st.mtime ? st.mtime.toISOString() : null,
+            in_bilder: /\/Bilder\//i.test('/' + norm + '/') || /^Bilder\//i.test(norm),
+          });
+        }
+      }
+      walk(docMonteur, '', 0);
+      photos.sort((a, b) => {
+        if (a.in_bilder !== b.in_bilder) return a.in_bilder ? -1 : 1;
+        const ta = a.mtime || '';
+        const tb = b.mtime || '';
+        if (ta !== tb) return ta < tb ? 1 : -1;
+        return String(a.name || '').localeCompare(String(b.name || ''), 'de', { sensitivity: 'base' });
+      });
+      res.json({ ok: true, photos, folder_missing: false });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Fotoliste konnte nicht gelesen werden.' });
     }
   });
 
@@ -7610,44 +7842,46 @@ function createApp(db) {
         prevDraft.server_updated_at,
       );
 
-      if (dispoBaseUrl && hasServerJobId && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
-        try {
-          await multiDeviceApi.pushJsonDraft({
-            dispoBaseUrl,
-            endpoint: '/dispo_api/api/montagebericht_draft.php',
-            technicianId,
-            serverJobId,
-            localJobId,
-            filePath: montageberichtDataPath,
-            username: body.dispoUsername || body.serverUsername,
-            password: body.dispoPassword ?? body.serverPassword,
-          });
-          if (bgJobs) {
-            const dedupeKey = 'dienstreise_push:' + localJobId + ':draft';
-            bgJobs.enqueue(
-              'dienstreise_push',
-              {
-                job_id: localJobId,
-                technicianId,
-                technician_id: technicianId,
-                dispoBaseUrl,
-                dispoUsername: body.dispoUsername || body.serverUsername,
-                dispoPassword: body.dispoPassword ?? body.serverPassword,
-              },
-              dedupeKey,
-            );
-            bgJobs.kick();
-          }
-        } catch (draftErr) {
-          console.warn('[montagebericht] draft push:', draftErr && draftErr.message ? draftErr.message : draftErr);
-        }
-      }
-
+      // Dispo-Sync (Netz) erst NACH lokalem PDF – sonst wirkt Speichern „wie Word“ langsam.
       let syncWarning = null;
       const appendSyncWarning = (msg) => {
         syncWarning = syncWarning ? `${syncWarning}\n\n${msg}` : msg;
       };
-      if (dispoBaseUrl && hasServerJobId) {
+
+      const runMontageberichtDispoSync = async () => {
+        if (!(dispoBaseUrl && hasServerJobId)) return;
+        if (multiDeviceApi && multiDeviceApi.pushJsonDraft) {
+          try {
+            await multiDeviceApi.pushJsonDraft({
+              dispoBaseUrl,
+              endpoint: '/dispo_api/api/montagebericht_draft.php',
+              technicianId,
+              serverJobId,
+              localJobId,
+              filePath: montageberichtDataPath,
+              username: body.dispoUsername || body.serverUsername,
+              password: body.dispoPassword ?? body.serverPassword,
+            });
+            if (bgJobs) {
+              const dedupeKey = 'dienstreise_push:' + localJobId + ':draft';
+              bgJobs.enqueue(
+                'dienstreise_push',
+                {
+                  job_id: localJobId,
+                  technicianId,
+                  technician_id: technicianId,
+                  dispoBaseUrl,
+                  dispoUsername: body.dispoUsername || body.serverUsername,
+                  dispoPassword: body.dispoPassword ?? body.serverPassword,
+                },
+                dedupeKey,
+              );
+              bgJobs.kick();
+            }
+          } catch (draftErr) {
+            console.warn('[montagebericht] draft push:', draftErr && draftErr.message ? draftErr.message : draftErr);
+          }
+        }
         const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
         const syncHeaders = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authSync || {}) };
         try {
@@ -7698,9 +7932,10 @@ function createApp(db) {
             console.warn('Type/Pos.Nr.: Dispo für Anlagenstamm-Update nicht erreichbar.');
           }
         }
-      }
+      };
 
       if (jsonOnly) {
+        await runMontageberichtDispoSync();
         return res.json({
           ok: true,
           jsonOnly: true,
@@ -7865,111 +8100,352 @@ function createApp(db) {
         );
       };
 
-      const { buildMontageberichtDocx } = require('./montagebericht_docx');
-      const { convertDocxToPdf } = require('./lib/docx-to-pdf');
-      const os = require('os');
       const saved = [];
-      const savedDocx = [];
-      let pdfConvertError = '';
+      let firstAbsPdf = '';
 
       for (const lang of languages) {
-        let docxBytes = null;
-        try {
-          docxBytes = await buildMontageberichtDocx({
-            kopfdaten: kopfdatenForDocx,
-            tableRows,
-            language: lang,
-            jobRow,
-            grundDesEinsatzes,
-            grundDesEinsatzes_html: grundDesEinsatzesHtml,
-            freitext,
-          });
-          if (process.env.MONTAGEBERICHT_DEBUG) {
-            const debugPath = path.join(reiseDir, `Montagebericht_DEBUG_${lang}.docx`);
-            fs.writeFileSync(debugPath, docxBytes);
-            console.log('[Montagebericht-Debug] DOCX gespeichert unter:', debugPath);
-          }
-        } catch (docxErr) {
-          console.warn('DOCX-Generierung fehlgeschlagen (' + lang + '):', docxErr.message);
-          if (docxErr.stack) console.warn('Stack:', docxErr.stack);
-        }
-        if (!docxBytes) {
-          return res.status(500).json({
-            ok: false,
-            error: `DOCX konnte nicht erstellt werden (${lang === 'en' ? 'Englisch' : 'Deutsch'}).`,
-          });
-        }
-
         let pdfBytes = null;
-        const tmpDir = os.tmpdir();
-        const uid = Date.now().toString(36) + Math.random().toString(36).slice(2) + '_' + lang;
-        const tempDocx = path.join(tmpDir, `montage_${uid}.docx`);
-        const tempPdf = path.join(tmpDir, `montage_${uid}.pdf`);
         try {
-          fs.writeFileSync(tempDocx, docxBytes);
-          await convertDocxToPdf(tempDocx, tempPdf);
-          if (fs.existsSync(tempPdf)) {
-            pdfBytes = fs.readFileSync(tempPdf);
-          }
-        } catch (convErr) {
-          pdfConvertError = convErr && convErr.message ? String(convErr.message).trim() : String(convErr);
-          console.warn('DOCX→PDF-Konvertierung fehlgeschlagen (' + lang + '):', pdfConvertError);
-          if (convErr && convErr.stack) console.warn('Stack:', convErr.stack);
-        } finally {
-          try { if (fs.existsSync(tempDocx)) fs.unlinkSync(tempDocx); } catch (_) { /* ignore */ }
-          try { if (fs.existsSync(tempPdf)) fs.unlinkSync(tempPdf); } catch (_) { /* ignore */ }
-        }
-        if (!pdfBytes) {
-          const hint = process.platform === 'win32'
-            ? 'Microsoft Word muss installiert und aktiviert sein (COM-Export).'
-            : process.platform === 'darwin'
-              ? 'Bitte Microsoft Word installieren (macOS).'
-              : 'Bitte LibreOffice oder unoconv installieren (Linux).';
-          const detail = pdfConvertError ? ` Details: ${pdfConvertError}` : '';
+          pdfBytes = await protocolPdf.generateMontageberichtPdfBuffer(
+            {
+              kopfdaten: kopfdatenForDocx,
+              tableRows,
+              grundDesEinsatzes,
+              grundDesEinsatzes_html: grundDesEinsatzesHtml,
+              freitext,
+            },
+            { lang },
+          );
+        } catch (pdfErr) {
+          console.warn(
+            'Montagebericht-PDF fehlgeschlagen (' + lang + '):',
+            pdfErr && pdfErr.message ? pdfErr.message : pdfErr,
+          );
+          if (pdfErr && pdfErr.stack) console.warn('Stack:', pdfErr.stack);
           return res.status(500).json({
             ok: false,
-            error: `PDF konnte nicht aus dem DOCX erzeugt werden (${lang === 'en' ? 'Englisch' : 'Deutsch'}). ${hint}${detail}`,
+            error:
+              `PDF konnte nicht erzeugt werden (${lang === 'en' ? 'Englisch' : 'Deutsch'}): ` +
+              (pdfErr && pdfErr.message ? pdfErr.message : 'Unbekannter Fehler'),
+          });
+        }
+        if (!pdfBytes || !pdfBytes.length) {
+          return res.status(500).json({
+            ok: false,
+            error: `PDF konnte nicht erzeugt werden (${lang === 'en' ? 'Englisch' : 'Deutsch'}).`,
           });
         }
 
         const stem = fileStemForLang(lang);
         const pdfFilename = `${stem}.pdf`;
-        const docxFilename = `${stem}.docx`;
         for (const folderName of targetFolderNames) {
-          const montageDir = buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderNameMb);
-          if (!fs.existsSync(montageDir)) fs.mkdirSync(montageDir, { recursive: true });
-          writeFileWithRetry(path.join(montageDir, pdfFilename), pdfBytes);
-          protectPathIfUnderDokumenteMonteur(
-            db,
-            localJobId,
-            buildMonteurWorkRelPath(folderName, montageFolderNameMb, pdfFilename),
+          const protokolleDir = buildMonteurWorkAbsDir(
+            docMonteurBase,
+            folderName,
+            montageFolderNameMb,
+            'Protokolle',
           );
-          writeFileWithRetry(path.join(montageDir, docxFilename), docxBytes);
+          if (!fs.existsSync(protokolleDir)) fs.mkdirSync(protokolleDir, { recursive: true });
+          const absPdf = path.join(protokolleDir, pdfFilename);
+          writeFileWithRetry(absPdf, pdfBytes);
+          if (!firstAbsPdf) firstAbsPdf = absPdf;
           protectPathIfUnderDokumenteMonteur(
             db,
             localJobId,
-            buildMonteurWorkRelPath(folderName, montageFolderNameMb, docxFilename),
+            buildMonteurWorkRelPath(folderName, montageFolderNameMb, 'Protokolle/' + pdfFilename),
           );
         }
         for (const f of fabs) {
           const fnFolder = resolveFnFolder(f);
-          saved.push(buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, pdfFilename));
-          savedDocx.push(buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, docxFilename));
+          saved.push(buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, 'Protokolle/' + pdfFilename));
         }
       }
 
+      // Legacy-DOCX lokal entfernen + Dispo-Löschliste (auch wenn nur remote noch existiert)
+      const docxRelsToRemoveOnDispo = new Set();
+      for (const folderName of targetFolderNames) {
+        const protokolleDir = buildMonteurWorkAbsDir(
+          docMonteurBase,
+          folderName,
+          montageFolderNameMb,
+          'Protokolle',
+        );
+        const removedLocal = cleanupLegacyMontageberichtDocxLocal(protokolleDir);
+        for (const name of removedLocal) {
+          docxRelsToRemoveOnDispo.add(
+            buildMonteurWorkRelPath(folderName, montageFolderNameMb, 'Protokolle/' + name),
+          );
+        }
+        for (const lang of ['de', 'en']) {
+          docxRelsToRemoveOnDispo.add(
+            buildMonteurWorkRelPath(
+              folderName,
+              montageFolderNameMb,
+              'Protokolle/' + fileStemForLang(lang) + '.docx',
+            ),
+          );
+        }
+      }
+
+      const cleanupLegacyMontageberichtDocxOnDispo = async () => {
+        if (!(dispoBaseUrl && hasServerJobId) || !docxRelsToRemoveOnDispo.size) return;
+        const authDel = authHeaderFromCredentials(
+          body.dispoUsername || body.serverUsername,
+          body.dispoPassword ?? body.serverPassword,
+        );
+        for (const rel of docxRelsToRemoveOnDispo) {
+          try {
+            await deleteJobProjectFileOnDispo(
+              dispoBaseUrl,
+              serverJobId,
+              technicianId,
+              authDel,
+              rel,
+            );
+            try {
+              invalidateDienstreisePushCache(db, localJobId, rel);
+            } catch (_) {
+              /* optional */
+            }
+          } catch (delErr) {
+            const st = delErr && delErr.status;
+            if (st === 404) continue;
+            console.warn(
+              '[montagebericht] docx dispo cleanup:',
+              rel,
+              delErr && delErr.message ? delErr.message : delErr,
+            );
+          }
+        }
+      };
+
       save();
 
+      let absPath = firstAbsPdf || '';
+      if (!absPath && saved.length && reiseDir) {
+        absPath = path.join(reiseDir, saved[0].replace(/\//g, path.sep));
+      }
+      if (saved.length) {
+        try {
+          const prevAfter = readLocalDraftFile(montageberichtDataPath);
+          writeLocalDraftFile(
+            montageberichtDataPath,
+            Object.assign({}, prevAfter.payload || {}, {
+              grundDesEinsatzes,
+              grundDesEinsatzes_html: grundDesEinsatzesHtml,
+              fabBemerkungen,
+              language,
+              languages,
+              bemerkungen: kopfdatenBemerkungen,
+              bemerkungen_html: kopfdatenBemerkungenHtml,
+              projekt: projektPflicht,
+              last_pdf_rel: saved[0],
+              last_pdf_paths: saved,
+              last_pdf_abs: absPath || undefined,
+            }),
+            prevAfter.revision,
+            prevAfter.server_updated_at,
+          );
+        } catch (_) { /* Meta optional */ }
+      }
+
+      // Antwort sofort; Dispo-Sync im Hintergrund (Netz darf Speichern nicht blockieren)
       res.json({
         ok: true,
         jsonOnly: false,
-        warning: syncWarning || undefined,
         languages,
         saved,
-        savedDocx,
+        path: absPath || undefined,
+        rel: saved[0] || undefined,
       });
+      setImmediate(() => {
+        cleanupLegacyMontageberichtDocxOnDispo()
+          .catch((e) => {
+            console.warn('[montagebericht] docx cleanup:', e && e.message ? e.message : e);
+          })
+          .finally(() => {
+            runMontageberichtDispoSync().catch((e) => {
+              console.warn('[montagebericht] background sync:', e && e.message ? e.message : e);
+            });
+          });
+      });
+      return;
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Montagebericht konnte nicht erstellt werden.' });
+    }
+  });
+
+  app.get('/api/montagebericht_pdf', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(req.query.local_job_id || req.query.job_id, 10);
+      const openLocal = String(req.query.open_local || '') === '1';
+      if (!technicianId || !Number.isFinite(localJobId) || localJobId <= 0) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      const jobRow = db.prepare(`
+        SELECT j.id FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const { readLocalDraftFile, resolveMonteurDraftJsonPath } = require('./lib/multi-device-sync');
+      let rel = String(req.query.rel || '').trim().replace(/\\/g, '/');
+      let absHint = '';
+      if (!rel) {
+        try {
+          const draftPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', false);
+          if (draftPath && fs.existsSync(draftPath)) {
+            const draft = readLocalDraftFile(draftPath);
+            const p = draft && draft.payload ? draft.payload : {};
+            if (p.last_pdf_rel) rel = String(p.last_pdf_rel).trim().replace(/\\/g, '/');
+            if (p.last_pdf_abs) absHint = String(p.last_pdf_abs).trim();
+          }
+        } catch (_) { /* optional */ }
+      } else {
+        try {
+          const draftPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', false);
+          if (draftPath && fs.existsSync(draftPath)) {
+            const draft = readLocalDraftFile(draftPath);
+            const p = draft && draft.payload ? draft.payload : {};
+            if (p.last_pdf_abs) absHint = String(p.last_pdf_abs).trim();
+          }
+        } catch (_) { /* optional */ }
+      }
+      let full = '';
+      if (absHint && fs.existsSync(absHint)) {
+        full = absHint;
+        if (!rel) rel = path.relative(reiseDir, absHint).replace(/\\/g, '/');
+      }
+      if (!full && rel) {
+        full = path.join(reiseDir, rel.replace(/\//g, path.sep));
+      }
+      if (!full || !fs.existsSync(full)) {
+        // Fallback: Dateiname unter Dokumente_Monteur suchen
+        const wantName = rel ? path.basename(rel) : '';
+        if (wantName) {
+          const docBase = path.join(reiseDir, 'Dokumente_Monteur');
+          const stack = [docBase];
+          while (stack.length && (!full || !fs.existsSync(full))) {
+            const dir = stack.pop();
+            let entries = [];
+            try {
+              entries = fs.readdirSync(dir, { withFileTypes: true });
+            } catch (_) {
+              continue;
+            }
+            for (const ent of entries) {
+              const p = path.join(dir, ent.name);
+              if (ent.isDirectory()) stack.push(p);
+              else if (ent.isFile() && ent.name === wantName) {
+                full = p;
+                rel = path.relative(reiseDir, p).replace(/\\/g, '/');
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (!full || !fs.existsSync(full)) {
+        return res.status(404).json({
+          ok: false,
+          error: rel
+            ? 'PDF-Datei nicht gefunden: ' + rel
+            : 'Kein gespeichertes PDF – bitte zuerst speichern.',
+        });
+      }
+      if (openLocal) {
+        return res.json({ ok: true, path: full, rel: rel || path.basename(full), name: path.basename(full) });
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename="' + path.basename(full) + '"');
+      return res.send(fs.readFileSync(full));
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'PDF konnte nicht geladen werden.' });
+    }
+  });
+
+  app.get('/api/protokolle/kontrollwiegung', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      const jobRow = db.prepare(`
+        SELECT j.id FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      if (!jobRow) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const store = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir);
+      res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 }, data: store });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
+    }
+  });
+
+  /** Nur JSON-Draft unter Dokumente_Monteur (ohne PDF) – z. B. beim FN-Wechsel. */
+  app.post('/api/protokolle/kontrollwiegung', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.local_job_id, 10);
+      const fab = String(body.fabrikationsnummer || body.fab || '').trim();
+      if (!technicianId || !localJobId || !fab) {
+        return res.status(400).json({ ok: false, error: 'job_id, fabrikationsnummer und technician_id erforderlich.' });
+      }
+      const jobRow = db.prepare(`
+        SELECT j.id, j.server_id FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      if (!jobRow) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const entry = {
+        technician_id: technicianId,
+        job_id: localJobId,
+        local_job_id: localJobId,
+        fabrikationsnummer: fab,
+        durchfuehrungsdatum: body.durchfuehrungsdatum != null ? String(body.durchfuehrungsdatum).trim() : '',
+        projekt: body.projekt != null ? String(body.projekt).trim() : '',
+        type: body.type != null ? String(body.type).trim() : '',
+        leistung: body.leistung != null ? String(body.leistung).trim() : '',
+        elektronik: body.elektronik != null ? String(body.elektronik).trim() : '',
+        teilung_kontrollwaage: body.teilung_kontrollwaage != null ? String(body.teilung_kontrollwaage).trim() : '',
+        bereich_max: body.bereich_max != null ? String(body.bereich_max).trim() : '',
+        letzte_eichung: body.letzte_eichung != null ? String(body.letzte_eichung).trim() : '',
+        wiegungen: Array.isArray(body.wiegungen) ? body.wiegungen : [],
+      };
+      const record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, fab, entry);
+      const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
+        const serverJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
+        if (serverJobId > 0) {
+          const kwPath = resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true);
+          try {
+            await multiDeviceApi.pushJsonDraft({
+              dispoBaseUrl,
+              endpoint: '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
+              technicianId,
+              serverJobId,
+              localJobId,
+              filePath: kwPath,
+              username: body.serverUsername || body.dispoUsername,
+              password: body.serverPassword ?? body.dispoPassword,
+            });
+          } catch (_) { /* optional */ }
+        }
+      }
+      res.json({ ok: true, protokoll_id: record.protokoll_id, local_protokoll_id: record.protokoll_id, store: kontrollwiegungLocal.readKontrollwiegungStore(reiseDir) });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Draft konnte nicht gespeichert werden.' });
     }
   });
 
@@ -7988,11 +8464,19 @@ function createApp(db) {
         local_job_id: localJobId,
         fabrikationsnummer: body.fabrikationsnummer,
         durchfuehrungsdatum: body.durchfuehrungsdatum,
+        projekt: body.projekt != null ? String(body.projekt).trim() : '',
+        type: body.type != null ? String(body.type).trim() : '',
+        leistung: body.leistung != null ? String(body.leistung).trim() : '',
+        elektronik: body.elektronik != null ? String(body.elektronik).trim() : '',
+        teilung_kontrollwaage: body.teilung_kontrollwaage != null ? String(body.teilung_kontrollwaage).trim() : '',
+        bereich_max: body.bereich_max != null ? String(body.bereich_max).trim() : '',
+        letzte_eichung: body.letzte_eichung != null ? String(body.letzte_eichung).trim() : '',
         wiegungen: Array.isArray(body.wiegungen) ? body.wiegungen : [],
         dispoBaseUrl,
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
       };
+      enrichKontrollwiegungPdfPayload(payload, localJobId, technicianId);
       let reiseDir = null;
       if (Number.isFinite(localJobId) && localJobId > 0) {
         reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
@@ -8001,9 +8485,15 @@ function createApp(db) {
       let savedPdf = null;
       if (reiseDir) {
         record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, payload.fabrikationsnummer, payload);
-        const pdfPaths = kontrollwiegungLocal.localPdfPathForKontrollwiegung(
+        if (record) {
+          payload.gespeichert_am = record.gespeichert_am || record.updated_at || '';
+          payload.updated_at = record.updated_at || payload.gespeichert_am;
+        }
+        const pdfPaths = resolveKontrollwiegungLocalPdfPaths(
           reiseDir,
+          localJobId,
           payload.fabrikationsnummer,
+          technicianId,
           payload.durchfuehrungsdatum,
         );
         const pdfDir = path.dirname(pdfPaths.full);
@@ -8011,6 +8501,14 @@ function createApp(db) {
         const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(payload);
         writeFileWithRetry(pdfPaths.full, pdfBuf);
         savedPdf = pdfPaths.rel;
+        if (record) {
+          record.pdf_rel = savedPdf;
+          const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir);
+          if (storeKw.byFab[payload.fabrikationsnummer]) {
+            storeKw.byFab[payload.fabrikationsnummer].pdf_rel = savedPdf;
+            kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw);
+          }
+        }
         protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
         save();
         if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
@@ -8093,7 +8591,14 @@ function createApp(db) {
       if (!technicianId || !protokollIdRaw) {
         return res.status(400).json({ ok: false, error: 'id und technician_id erforderlich.' });
       }
-      if (protokollIdRaw.startsWith('local:') || (!baseUrl && Number.isFinite(localJobId))) {
+      const openLocal =
+        String(req.query.open_local || req.query.resolve_path || '').trim() === '1' ||
+        String(req.query.open_local || '').toLowerCase() === 'true';
+      if (
+        protokollIdRaw.startsWith('local:') ||
+        (openLocal && Number.isFinite(localJobId) && localJobId > 0) ||
+        (!baseUrl && Number.isFinite(localJobId))
+      ) {
         const reiseDir = Number.isFinite(localJobId) ? getOrCreateDienstreiseFolderForJob(localJobId) : null;
         if (!reiseDir) {
           return res.status(404).json({ ok: false, error: 'Lokales Protokoll nicht gefunden (job_id fehlt).' });
@@ -8102,20 +8607,78 @@ function createApp(db) {
         if (!rec) {
           return res.status(404).json({ ok: false, error: 'Lokales Protokoll nicht gefunden.' });
         }
-        const pdfPaths = kontrollwiegungLocal.localPdfPathForKontrollwiegung(
+        const pdfPaths = resolveKontrollwiegungLocalPdfPaths(
           reiseDir,
+          localJobId,
           rec.fabrikationsnummer,
+          technicianId,
           rec.durchfuehrungsdatum,
         );
-        if (fs.existsSync(pdfPaths.full)) {
-          const buf = fs.readFileSync(pdfPaths.full);
+        const candidates = [];
+        if (rec.pdf_rel) {
+          candidates.push({
+            full: path.join(reiseDir, String(rec.pdf_rel).replace(/\//g, path.sep)),
+            rel: String(rec.pdf_rel).replace(/\\/g, '/'),
+          });
+        }
+        candidates.push({ full: pdfPaths.full, rel: pdfPaths.rel });
+        candidates.push({
+          full: path.join(reiseDir, 'Dokumente_Monteur', pdfPaths.name),
+          rel: 'Dokumente_Monteur/' + pdfPaths.name,
+        });
+        let existing = null;
+        for (const c of candidates) {
+          if (c.full && fs.existsSync(c.full)) {
+            existing = c;
+            break;
+          }
+        }
+        if (openLocal) {
+          const pdfPayload = enrichKontrollwiegungPdfPayload(
+            Object.assign({}, rec),
+            localJobId,
+            technicianId,
+          );
+          const pdfDir = path.dirname(pdfPaths.full);
+          if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+          const pdfBufGen = await protocolPdf.generateKontrollwiegungPdfBuffer(pdfPayload);
+          writeFileWithRetry(pdfPaths.full, pdfBufGen);
+          existing = { full: pdfPaths.full, rel: pdfPaths.rel };
+          try {
+            const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir);
+            const fnKey = String(rec.fabrikationsnummer || fab || '').trim();
+            if (fnKey && storeKw.byFab[fnKey]) {
+              storeKw.byFab[fnKey].pdf_rel = pdfPaths.rel;
+              if (!storeKw.byFab[fnKey].monteur_name && pdfPayload.monteur_name) {
+                storeKw.byFab[fnKey].monteur_name = pdfPayload.monteur_name;
+              }
+              if (!storeKw.byFab[fnKey].kunde && pdfPayload.kunde) {
+                storeKw.byFab[fnKey].kunde = pdfPayload.kunde;
+                storeKw.byFab[fnKey].customer_name = pdfPayload.kunde;
+              }
+              kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw);
+            }
+          } catch (_) { /* optional */ }
+          if (Number.isFinite(localJobId) && localJobId > 0) {
+            protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+            save();
+          }
+          return res.json({
+            ok: true,
+            path: existing.full,
+            rel: existing.rel,
+            name: pdfPaths.name,
+          });
+        }
+        if (existing) {
+          const buf = fs.readFileSync(existing.full);
           res.set('Content-Type', 'application/pdf');
-          res.set('Content-Disposition', 'attachment; filename="' + pdfPaths.name + '"');
+          res.set('Content-Disposition', 'inline; filename="' + pdfPaths.name + '"');
           return res.send(buf);
         }
         const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(rec);
         res.set('Content-Type', 'application/pdf');
-        res.set('Content-Disposition', 'attachment; filename="' + pdfPaths.name + '"');
+        res.set('Content-Disposition', 'inline; filename="' + pdfPaths.name + '"');
         return res.send(pdfBuf);
       }
       if (!baseUrl) {
@@ -8137,6 +8700,236 @@ function createApp(db) {
       res.set('Content-Type', 'application/pdf');
       res.set('Content-Disposition', 'attachment; filename="Kontrollwiegungsprotokoll.pdf"');
       res.send(buf);
+    } catch (e) {
+      res.status(502).json({ ok: false, error: 'PDF nicht verfügbar: ' + e.message });
+    }
+  });
+
+  function resolveSchleppkettenLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum) {
+    const safeFn = String(fab || '').replace(/[^\w.-]+/g, '_');
+    const d = String(datum || '').replace(/-/g, '');
+    const name = 'Schleppketten_Test_' + safeFn + '_' + d + '.pdf';
+    if (Number.isFinite(localJobId) && localJobId > 0 && fab) {
+      try {
+        const { targetDir, relDir } = resolveMonteurProtokollePdfTarget(
+          reiseDir,
+          localJobId,
+          fab,
+          technicianId,
+        );
+        return {
+          full: path.join(targetDir, name),
+          rel: relDir + '/' + name,
+          name,
+          targetDir,
+          relDir,
+        };
+      } catch (_) { /* Fallback */ }
+    }
+    return {
+      full: path.join(reiseDir, 'Dokumente_Monteur', name),
+      rel: 'Dokumente_Monteur/' + name,
+      name,
+      targetDir: path.join(reiseDir, 'Dokumente_Monteur'),
+      relDir: 'Dokumente_Monteur',
+    };
+  }
+
+  app.get('/api/protokolle/schleppketten', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      const jobRow = db.prepare(`
+        SELECT j.id FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const store = schleppkettenLocal.readSchleppkettenStore(reiseDir);
+      res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 } });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
+    }
+  });
+
+  app.post('/api/protokolle/schleppketten', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.local_job_id, 10);
+      const fab = String(body.fabrikationsnummer || body.fab || '').trim();
+      if (!technicianId || !localJobId || !fab) {
+        return res.status(400).json({ ok: false, error: 'job_id, fabrikationsnummer und technician_id erforderlich.' });
+      }
+      const jobRow = db.prepare(`
+        SELECT j.id FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const entry = Object.assign({}, body, {
+        technician_id: technicianId,
+        job_id: localJobId,
+        fabrikationsnummer: fab,
+        messungen: Array.isArray(body.messungen) ? body.messungen : [],
+      });
+      const record = schleppkettenLocal.saveSchleppkettenLocal(reiseDir, fab, entry);
+      res.json({
+        ok: true,
+        protokoll_id: record.protokoll_id,
+        local_protokoll_id: record.protokoll_id,
+        store: schleppkettenLocal.readSchleppkettenStore(reiseDir),
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Draft konnte nicht gespeichert werden.' });
+    }
+  });
+
+  app.post('/api/schleppkettenprotokoll_save', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.local_job_id, 10);
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      }
+      const leistungVal = String(
+        body.leistung != null && String(body.leistung).trim() !== ''
+          ? body.leistung
+          : (body.nennleistung != null ? body.nennleistung : '')
+      ).trim();
+      const elektronikVal = String(
+        body.elektronik != null && String(body.elektronik).trim() !== ''
+          ? body.elektronik
+          : (body.dwc != null ? body.dwc : '')
+      ).trim();
+      const payload = {
+        technician_id: body.technician_id != null ? body.technician_id : technicianId,
+        job_id: body.job_id,
+        local_job_id: localJobId,
+        fabrikationsnummer: body.fabrikationsnummer,
+        durchfuehrungsdatum: body.durchfuehrungsdatum,
+        projekt: body.projekt != null ? String(body.projekt).trim() : '',
+        waagenart: body.waagenart != null ? String(body.waagenart).trim() : 'Bandwaage',
+        type: body.type != null ? String(body.type).trim() : '',
+        leistung: leistungVal,
+        elektronik: elektronikVal,
+        nennleistung: leistungVal,
+        gn: body.gn != null ? String(body.gn).trim() : '',
+        dwc: elektronikVal,
+        pos_nr: body.pos_nr != null ? String(body.pos_nr).trim() : '',
+        monteur_name: body.monteur_name != null ? String(body.monteur_name).trim() : '',
+        ketten: Array.isArray(body.ketten) ? body.ketten : [],
+        ketten_type: body.ketten_type != null ? String(body.ketten_type).trim() : '',
+        ketten_laenge: body.ketten_laenge != null ? String(body.ketten_laenge).trim() : '',
+        ketten_anzahl: body.ketten_anzahl != null ? String(body.ketten_anzahl).trim() : '',
+        gewicht_pro_kette: body.gewicht_pro_kette != null ? String(body.gewicht_pro_kette).trim() : '',
+        gewicht_pro_meter: body.gewicht_pro_meter != null ? String(body.gewicht_pro_meter).trim() : '',
+        kunde: body.kunde != null ? String(body.kunde).trim() : '',
+        messungen: Array.isArray(body.messungen) ? body.messungen : [],
+      };
+      enrichKontrollwiegungPdfPayload(payload, localJobId, technicianId);
+      if (payload.kunde) payload.customer_name = payload.kunde;
+      let reiseDir = null;
+      if (Number.isFinite(localJobId) && localJobId > 0) {
+        reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      }
+      let record = null;
+      let savedPdf = null;
+      if (reiseDir) {
+        record = schleppkettenLocal.saveSchleppkettenLocal(reiseDir, payload.fabrikationsnummer, payload);
+        if (record) {
+          payload.gespeichert_am = record.gespeichert_am || record.updated_at || '';
+          payload.updated_at = record.updated_at || payload.gespeichert_am;
+          payload.messungen = record.messungen;
+        }
+        const pdfPaths = resolveSchleppkettenLocalPdfPaths(
+          reiseDir,
+          localJobId,
+          payload.fabrikationsnummer,
+          technicianId,
+          payload.durchfuehrungsdatum,
+        );
+        const pdfDir = path.dirname(pdfPaths.full);
+        if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+        const pdfBuf = await protocolPdf.generateSchleppkettenPdfBuffer(payload);
+        writeFileWithRetry(pdfPaths.full, pdfBuf);
+        savedPdf = pdfPaths.rel;
+        if (record) {
+          record.pdf_rel = savedPdf;
+          const storeSk = schleppkettenLocal.readSchleppkettenStore(reiseDir);
+          if (storeSk.byFab[payload.fabrikationsnummer]) {
+            storeSk.byFab[payload.fabrikationsnummer].pdf_rel = savedPdf;
+            schleppkettenLocal.writeSchleppkettenStore(reiseDir, storeSk);
+          }
+        }
+        protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+        save();
+      }
+      res.json({
+        ok: true,
+        protokoll_id: record ? record.protokoll_id : 'local:' + Date.now(),
+        local_protokoll_id: record && record.protokoll_id,
+        saved_pdf: savedPdf,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Schleppketten-Test konnte nicht gespeichert werden.' });
+    }
+  });
+
+  app.get('/api/schleppkettenprotokoll_pdf', async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const protokollIdRaw = String(req.query.id || '');
+      const localJobId = parseInt(req.query.local_job_id || req.query.job_id, 10);
+      const fab = String(req.query.fabrikationsnummer || req.query.fab || '').trim();
+      const openLocal =
+        String(req.query.open_local || req.query.resolve_path || '').trim() === '1' ||
+        String(req.query.open_local || '').toLowerCase() === 'true';
+      if (!technicianId || !protokollIdRaw) {
+        return res.status(400).json({ ok: false, error: 'id und technician_id erforderlich.' });
+      }
+      if (!Number.isFinite(localJobId) || localJobId <= 0) {
+        return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      }
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const rec = schleppkettenLocal.getSchleppkettenLocal(reiseDir, fab, protokollIdRaw);
+      if (!rec) {
+        return res.status(404).json({ ok: false, error: 'Lokales Protokoll nicht gefunden.' });
+      }
+      const pdfPayload = enrichKontrollwiegungPdfPayload(Object.assign({}, rec), localJobId, technicianId);
+      pdfPayload.messungen = schleppkettenLocal.enrichMessungen(pdfPayload.messungen);
+      const pdfPaths = resolveSchleppkettenLocalPdfPaths(
+        reiseDir,
+        localJobId,
+        rec.fabrikationsnummer,
+        technicianId,
+        rec.durchfuehrungsdatum,
+      );
+      if (openLocal) {
+        const pdfDir = path.dirname(pdfPaths.full);
+        if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+        const pdfBufGen = await protocolPdf.generateSchleppkettenPdfBuffer(pdfPayload);
+        writeFileWithRetry(pdfPaths.full, pdfBufGen);
+        protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+        save();
+        return res.json({ ok: true, path: pdfPaths.full, rel: pdfPaths.rel, name: pdfPaths.name });
+      }
+      if (fs.existsSync(pdfPaths.full)) {
+        const buf = fs.readFileSync(pdfPaths.full);
+        res.set('Content-Type', 'application/pdf');
+        res.set('Content-Disposition', 'inline; filename="' + pdfPaths.name + '"');
+        return res.send(buf);
+      }
+      const pdfBuf = await protocolPdf.generateSchleppkettenPdfBuffer(pdfPayload);
+      res.set('Content-Type', 'application/pdf');
+      res.set('Content-Disposition', 'inline; filename="' + pdfPaths.name + '"');
+      return res.send(pdfBuf);
     } catch (e) {
       res.status(502).json({ ok: false, error: 'PDF nicht verfügbar: ' + e.message });
     }
@@ -8343,7 +9136,7 @@ function createApp(db) {
     return merged;
   }
 
-  function resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId) {
+  function resolveMonteurProtokollePdfTarget(reiseDir, localJobId, fab, technicianId) {
     const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
     const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
     const offlineCfg = getOfflinePullConfig(db, localJobId);
@@ -8359,9 +9152,78 @@ function createApp(db) {
         (Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null) ||
         sanitizeDienstreiseFolderPart(fab);
     }
-    const targetDir = buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderName, 'Serviceprotokolle');
-    const relDir = buildMonteurWorkRelPath(folderName, montageFolderName, 'Serviceprotokolle');
+    const targetDir = buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderName, 'Protokolle');
+    const relDir = buildMonteurWorkRelPath(folderName, montageFolderName, 'Protokolle');
     return { targetDir, relDir, folderName, montageFolderName };
+  }
+
+  /** @deprecated Alias – Service-PDFs liegen unter …/Protokolle/ */
+  function resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId) {
+    return resolveMonteurProtokollePdfTarget(reiseDir, localJobId, fab, technicianId);
+  }
+
+  function enrichKontrollwiegungPdfPayload(payload, localJobId, technicianId) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    if (Number.isFinite(localJobId) && localJobId > 0) {
+      try {
+        const jobMeta = db
+          .prepare(
+            `SELECT c.name AS customer_name, j.job_number
+             FROM jobs j
+             LEFT JOIN customers c ON c.id = j.customer_id
+             WHERE j.id = ?`,
+          )
+          .get(localJobId);
+        if (jobMeta) {
+          const kunde = String(jobMeta.customer_name || '').trim();
+          if (kunde) {
+            p.kunde = kunde;
+            p.customer_name = kunde;
+          }
+          if (jobMeta.job_number != null && String(jobMeta.job_number).trim() !== '') {
+            p.job_number = String(jobMeta.job_number);
+          }
+        }
+      } catch (_) { /* optional */ }
+    }
+    const techName = getTechnicianDisplayName(technicianId);
+    if (techName) {
+      p.monteur_name = techName;
+      p.technician_name = techName;
+    }
+    if (!p.gespeichert_am && p.updated_at) p.gespeichert_am = p.updated_at;
+    if (!p.gespeichert_am) p.gespeichert_am = new Date().toISOString();
+    return p;
+  }
+
+  function resolveKontrollwiegungLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum) {
+    const safeFn = String(fab || '').replace(/[^\w.-]+/g, '_');
+    const d = String(datum || '').replace(/-/g, '');
+    const name = 'Kontrollwiegungsprotokoll_' + safeFn + '_' + d + '.pdf';
+    if (Number.isFinite(localJobId) && localJobId > 0 && fab) {
+      try {
+        const { targetDir, relDir } = resolveMonteurProtokollePdfTarget(
+          reiseDir,
+          localJobId,
+          fab,
+          technicianId,
+        );
+        return {
+          full: path.join(targetDir, name),
+          rel: relDir + '/' + name,
+          name,
+          targetDir,
+          relDir,
+        };
+      } catch (_) { /* Fallback flach */ }
+    }
+    return {
+      full: path.join(reiseDir, 'Dokumente_Monteur', name),
+      rel: 'Dokumente_Monteur/' + name,
+      name,
+      targetDir: path.join(reiseDir, 'Dokumente_Monteur'),
+      relDir: 'Dokumente_Monteur',
+    };
   }
 
   /** Dispo liefert protokolle[] (neu) oder nur protokoll_ids + fabrikationsnummern (Legacy-Sammel-PDF). */
@@ -8395,11 +9257,18 @@ function createApp(db) {
     const safeFn = String(fab).replace(/[^\w.-]+/g, '_');
     const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+    const enriched = Object.assign({}, draftPayload, {
+      fabrikationsnummer: draftPayload.fabrikationsnummer || fab,
+    });
+    enrichKontrollwiegungPdfPayload(enriched, localJobId, technicianId);
+    if (enriched.abschluss && enriched.abschluss.monteur_name) {
+      enriched.monteur_name = enriched.abschluss.monteur_name;
+    }
     const savedRel = [];
     let localWarning = null;
     for (const lang of langs) {
       try {
-        const pdfBuf = await protocolPdf.generateServiceprotokollPdfBuffer(draftPayload, { lang });
+        const pdfBuf = await protocolPdf.generateServiceprotokollPdfBuffer(enriched, { lang });
         const suffix = multiLang ? '_' + lang.toUpperCase() : lang === 'en' ? '_EN' : '';
         const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
         writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
@@ -8681,9 +9550,12 @@ function createApp(db) {
               pdfLangs,
               draftPayload.durchfuehrungsdatum,
             );
-            if (dispoPdf.savedRel && dispoPdf.savedRel.length) {
+            // Lokales Corporate-PDF behalten; Dispo-PDF nur falls lokal fehlgeschlagen
+            if ((!savedRel || !savedRel.length) && dispoPdf.savedRel && dispoPdf.savedRel.length) {
               savedRel = dispoPdf.savedRel;
               localWarning = dispoPdf.localWarning;
+            } else if (dispoPdf.localWarning) {
+              localWarning = [localWarning, dispoPdf.localWarning].filter(Boolean).join(' ');
             }
           } else {
             deferred = true;
@@ -10271,7 +11143,17 @@ function createApp(db) {
 
   app.get('/api/pending_changes', (req, res) => {
     const rows = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
-    res.json({ ok: true, pending: rows });
+    let failed = [];
+    try {
+      failed = db
+        .prepare(
+          'SELECT id, original_pending_id, entity_type, entity_id, action, attempts, last_error, fail_reason, failed_at FROM pending_changes_failed ORDER BY id DESC LIMIT 100',
+        )
+        .all();
+    } catch (_) {
+      failed = [];
+    }
+    res.json({ ok: true, pending: rows, failed });
   });
 
   function authHeaderFromCredentials(username, password) {
@@ -14912,7 +15794,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           gesendet_technician_id: techIdForPush,
           action: p.action
         });
-        // Head-of-Line vermeiden: ein Job-Fehler darf Rest-Queue nicht abbrechen.
+        const pushErr = new Error(errMsg);
+        pushErr.status = r.status;
+        resolveSyncPushFailure(db, p, pushErr, 'job_' + p.action);
         continue;
       }
       db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
@@ -15119,7 +16003,12 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         parseInt(String(payloadRaw.technician_id ?? payloadRaw.technicianId ?? technicianId), 10) || technicianId;
       const tbBase = String(payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
       if (!tbBase || !techId) {
-        logSyncPushError({ reason: 'textbausteine_push_skip', pending_id: p.id, error: 'baseUrl/technician fehlt' });
+        resolveSyncPushFailure(
+          db,
+          p,
+          new Error('Dispo-URL oder Monteur-ID fehlt'),
+          'textbausteine_push_skip',
+        );
         continue;
       }
       try {
@@ -15190,16 +16079,8 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        logSyncPushError({
-          reason: 'textbausteine_push',
-          action: p.action,
-          error: e && e.message ? e.message : String(e),
-          pending_id: p.id,
-        });
-        if (!isLikelyOfflineSyncError(e)) {
-          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
-          continue;
-        }
+        resolveSyncPushFailure(db, p, e, 'textbausteine_push');
+        continue;
       }
     }
     if (p.entity_type === 'arbeitsschritte') {
@@ -15302,16 +16183,8 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        logSyncPushError({
-          reason: 'arbeitsschritte_push',
-          action: p.action,
-          error: e && e.message ? e.message : String(e),
-          pending_id: p.id,
-        });
-        if (!isLikelyOfflineSyncError(e)) {
-          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
-          continue;
-        }
+        resolveSyncPushFailure(db, p, e, 'arbeitsschritte_push');
+        continue;
       }
     }
     if (p.entity_type === 'serviceprotokoll' && p.action === 'save') {
@@ -15321,26 +16194,35 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       const techId =
         parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
       if (!tbBase || !techId) {
-        logSyncPushError({ reason: 'serviceprotokoll_push_skip', pending_id: p.id });
+        resolveSyncPushFailure(
+          db,
+          p,
+          new Error('Dispo-URL oder Monteur-ID fehlt'),
+          'serviceprotokoll_push_skip',
+        );
         continue;
       }
       try {
         const jobId = parseInt(payloadRaw.job_id, 10);
-        if (!Number.isFinite(jobId) || jobId <= 0) continue;
+        if (!Number.isFinite(jobId) || jobId <= 0) {
+          resolveSyncPushFailure(db, p, new Error('job_id ungültig'), 'serviceprotokoll_push');
+          continue;
+        }
         const r = await fetch(tbBase + '/dispo_api/api/serviceprotokoll_save.php', {
           method: 'POST',
           headers: header,
           body: JSON.stringify(payloadRaw),
         });
         const data = await r.json().catch(() => ({}));
-        if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+        if (!r.ok || !data.ok) {
+          const pushErr = new Error(data.error || r.statusText);
+          pushErr.status = r.status;
+          throw pushErr;
+        }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        logSyncPushError({ reason: 'serviceprotokoll_push', error: e.message, pending_id: p.id });
-        if (!isLikelyOfflineSyncError(e)) {
-          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
-          continue;
-        }
+        resolveSyncPushFailure(db, p, e, 'serviceprotokoll_push');
+        continue;
       }
     }
     if (p.entity_type === 'kontrollwiegung' && p.action === 'save') {
@@ -15350,7 +16232,12 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       const techId =
         parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
       if (!tbBase || !techId) {
-        logSyncPushError({ reason: 'kontrollwiegung_push_skip', pending_id: p.id });
+        resolveSyncPushFailure(
+          db,
+          p,
+          new Error('Dispo-URL oder Monteur-ID fehlt'),
+          'kontrollwiegung_push_skip',
+        );
         continue;
       }
       try {
@@ -15360,14 +16247,15 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           body: JSON.stringify(payloadRaw),
         });
         const data = await r.json().catch(() => ({}));
-        if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+        if (!r.ok || !data.ok) {
+          const pushErr = new Error(data.error || r.statusText);
+          pushErr.status = r.status;
+          throw pushErr;
+        }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        logSyncPushError({ reason: 'kontrollwiegung_push', error: e.message, pending_id: p.id });
-        if (!isLikelyOfflineSyncError(e)) {
-          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
-          continue;
-        }
+        resolveSyncPushFailure(db, p, e, 'kontrollwiegung_push');
+        continue;
       }
     }
     if (p.entity_type === 'signature' && p.action === 'submit') {
@@ -15386,15 +16274,14 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         });
         if (!r.ok) {
           const errText = await r.text();
-          throw new Error(errText || r.statusText);
+          const pushErr = new Error(errText || r.statusText);
+          pushErr.status = r.status;
+          throw pushErr;
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        logSyncPushError({ reason: 'signature_push', error: e.message, pending_id: p.id });
-        if (!isLikelyOfflineSyncError(e)) {
-          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
-          continue;
-        }
+        resolveSyncPushFailure(db, p, e, 'signature_push');
+        continue;
       }
     }
     if (p.entity_type === 'rams') {
@@ -15418,26 +16305,23 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         const r = await fetch(url, opts);
         if (!r.ok) {
           const errText = await r.text();
-          throw new Error(errText || r.statusText);
+          const pushErr = new Error(errText || r.statusText);
+          pushErr.status = r.status;
+          throw pushErr;
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        logSyncPushError({ reason: 'rams_push', error: e.message, pending_id: p.id, action: payloadRaw.action });
-        if (!isLikelyOfflineSyncError(e)) {
-          console.warn('[sync_push] non-offline error, continue queue:', e && e.message ? e.message : e);
-          continue;
-        }
+        resolveSyncPushFailure(db, p, e, 'rams_push');
+        continue;
       }
     }
     if (!handled) {
-      logSyncPushError({
-        reason: 'pending_unbekannt',
-        entity_type: p.entity_type,
-        action: p.action,
-        pending_id: p.id,
-        entity_id: p.entity_id,
-        hinweis: 'Kein pushToServer-Handler — Eintrag bleibt in der Queue.',
-      });
+      resolveSyncPushFailure(
+        db,
+        p,
+        new Error('Kein pushToServer-Handler für entity_type=' + String(p.entity_type)),
+        'pending_unbekannt',
+      );
     }
   }
   const pendingRequests = db.prepare('SELECT id, start_datetime, end_datetime, type, comment FROM absence_requests WHERE technician_id = ? AND status = ? AND (server_id IS NULL OR server_id = \'\')').all(technicianId, 'pending');

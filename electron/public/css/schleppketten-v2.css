@@ -1,0 +1,160 @@
+/* Schleppketten-Test v2 – gleiches Design wie Kontrollwiegung */
+
+#viewProtokolleSchleppketten.view-protokolle {
+  background: var(--sp-page, #f7f8f8);
+  padding: 0;
+  min-height: calc(100vh - 120px);
+}
+
+.sk-v2-page {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 1rem 1rem 1.5rem;
+  box-sizing: border-box;
+}
+
+@media (min-width: 768px) {
+  .sk-v2-page {
+    padding: 1rem 1.5rem 2rem;
+  }
+}
+
+.sk-mess-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 10px;
+  background: #fff;
+}
+
+body.has-sticky-header .sk-mess-table-wrap thead th {
+  position: static;
+}
+
+.sk-mess-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1100px;
+  font-size: 0.8rem;
+  table-layout: fixed;
+}
+
+.sk-mess-table thead th {
+  background: var(--sp-mint, #eefaf5);
+  color: var(--sp-text, #111827);
+  font-weight: 700;
+  text-align: left;
+  padding: 0.55rem 0.35rem;
+  border-bottom: 1px solid var(--sp-border, #d8e3df);
+  white-space: normal;
+  line-height: 1.2;
+  font-size: 0.72rem;
+}
+
+.sk-mess-table tbody td,
+.sk-mess-table tfoot td {
+  padding: 0.3rem 0.25rem;
+  border-bottom: 1px solid var(--sp-border, #d8e3df);
+  vertical-align: middle;
+}
+
+.sk-mess-table input[type="number"],
+.sk-mess-table input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 0.3rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--sp-text, #111827);
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.sk-mess-table input.sk-calc-field {
+  background: #f8fbf9;
+}
+
+.sk-mess-table .sk-col-nr {
+  width: 2rem;
+  text-align: center;
+}
+
+.sk-mess-table .sk-col-num {
+  width: 5.5rem;
+}
+
+.sk-mess-table .sk-col-bem {
+  width: 9rem;
+}
+
+.sk-mess-table .sk-col-act {
+  width: 4.2rem;
+  text-align: center;
+}
+
+.sk-mess-table .sk-num {
+  font-weight: 700;
+  color: var(--sp-primary, #0e7b5a);
+}
+
+.sk-act-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+}
+
+.sk-mess-table .sk-in-summe {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--sp-green, #007a4d);
+  cursor: pointer;
+}
+
+.sk-mess-table .sk-remove,
+.sk-mess-table .sk-kette-remove {
+  padding: 0.2rem 0.35rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.sk-summe-row td {
+  background: #f3faf6;
+  font-weight: 600;
+}
+
+.sk-ketten-table-wrap {
+  overflow-x: hidden;
+}
+
+.sk-ketten-table {
+  min-width: 0;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.sk-ketten-table .sk-col-nr {
+  width: 2.25rem;
+}
+
+.sk-ketten-table .sk-col-ketten-tag {
+  width: 18%;
+}
+
+.sk-ketten-table .sk-col-ketten-type {
+  width: 5.5rem;
+}
+
+.sk-ketten-table .sk-col-num {
+  width: 16%;
+}
+
+.sk-ketten-table .sk-col-act {
+  width: 3.75rem;
+}
+
+body.has-sticky-header .sk-ketten-table-wrap thead th {
+  position: static;
+}

@@ -1,0 +1,184 @@
+/* Kontrollwiegung v2 – gleiches Design wie Serviceprotokoll */
+
+#viewProtokolleKontrollwiegungen.view-protokolle {
+  background: var(--sp-page, #f7f8f8);
+  padding: 0;
+  min-height: calc(100vh - 120px);
+}
+
+.kw-v2-page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 1rem 1rem 1.5rem;
+  box-sizing: border-box;
+}
+
+@media (min-width: 768px) {
+  .kw-v2-page {
+    padding: 1rem 1.5rem 2rem;
+  }
+}
+
+/* Datum nur so breit wie nötig (nicht volle Grid-Spalte strecken) */
+.sp-v2-field-date {
+  max-width: 11.5rem;
+}
+
+.sp-v2-field-date input[type="date"] {
+  width: auto;
+  min-width: 10.5rem;
+  max-width: 100%;
+}
+
+.kontrollwiegung-row {
+  margin-bottom: 0.75rem;
+  padding: 0.85rem;
+  background: var(--sp-mint, #eefaf5);
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 10px;
+}
+
+.kontrollwiegung-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.kontrollwiegung-row-calc {
+  margin-top: 0.55rem;
+  font-size: 0.9rem;
+  color: var(--sp-muted, #4b5563);
+}
+
+.kw-wiegung-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 10px;
+  background: #fff;
+}
+
+/* Sticky-Header der Dispo-App nicht auf innere Tabellenkopfzeile anwenden */
+body.has-sticky-header .kw-wiegung-table-wrap thead th {
+  position: static;
+}
+
+.kw-wiegung-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 900px;
+  font-size: 0.8rem;
+  table-layout: fixed;
+}
+
+.kw-wiegung-table thead th {
+  background: var(--sp-mint, #eefaf5);
+  color: var(--sp-text, #111827);
+  font-weight: 700;
+  text-align: left;
+  padding: 0.55rem 0.35rem;
+  border-bottom: 1px solid var(--sp-border, #d8e3df);
+  white-space: normal;
+  line-height: 1.2;
+  font-size: 0.72rem;
+}
+
+.kw-wiegung-table tbody td {
+  padding: 0.3rem 0.25rem;
+  border-bottom: 1px solid var(--sp-border, #d8e3df);
+  vertical-align: middle;
+}
+
+.kw-wiegung-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.kw-wiegung-table input[type="number"],
+.kw-wiegung-table input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 0.3rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--sp-text, #111827);
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.kw-wiegung-table input.kw-calc-field {
+  background: #f8fbf9;
+}
+
+.kw-wiegung-table .kw-col-nr {
+  width: 2rem;
+  text-align: center;
+}
+
+.kw-wiegung-table .kw-col-num {
+  width: 5.5rem;
+}
+
+.kw-wiegung-table .kw-col-bem {
+  width: auto;
+}
+
+.kw-wiegung-table .kw-col-act {
+  width: 4.2rem;
+  text-align: center;
+}
+
+.kw-wiegung-table .kw-num {
+  font-weight: 700;
+  display: inline-block;
+  min-width: 1.2rem;
+  text-align: center;
+}
+
+.kw-wiegung-table .kw-act-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+}
+
+.kw-wiegung-table .kw-in-summe {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--sp-green, #007a4d);
+  cursor: pointer;
+}
+
+.kw-wiegung-table .kw-remove {
+  padding: 0.2rem 0.35rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+#viewProtokolleKontrollwiegungen .sp-fab-btn.is-saved::after {
+  content: '';
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-left: 0.35rem;
+  border-radius: 50%;
+  background: var(--sp-green, #007a4d);
+  vertical-align: middle;
+}
+
+.kw-wiegung-table .kw-summe-row td {
+  background: var(--sp-mint, #eefaf5);
+  font-weight: 700;
+  border-top: 2px solid var(--sp-border, #d8e3df);
+  padding: 0.45rem 0.25rem;
+}
+
+.kw-wiegung-table .kw-summe-row [data-kw-sum-label] {
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: var(--sp-muted, #4b5563);
+}

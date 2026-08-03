@@ -98,7 +98,24 @@ CREATE TABLE IF NOT EXISTS pending_changes (
   entity_id INTEGER NOT NULL,
   action TEXT NOT NULL,
   payload TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  last_attempt_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS pending_changes_failed (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  original_pending_id INTEGER,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  payload TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  fail_reason TEXT,
+  created_at TEXT,
+  failed_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS absence_requests (

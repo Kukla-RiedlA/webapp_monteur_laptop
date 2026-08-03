@@ -412,6 +412,20 @@ function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) 
         );
       }
     }
+    for (const sub of ['Parameter', 'Protokolle']) {
+      const subPath = path.join(desiredPath, sub);
+      if (!fs.existsSync(subPath)) {
+        try {
+          fs.mkdirSync(subPath, { recursive: true });
+        } catch (err) {
+          console.warn(
+            '[monteur-paths] mkdir ' + sub,
+            subPath,
+            err && err.message ? err.message : err,
+          );
+        }
+      }
+    }
   }
   return desired;
 }

@@ -11052,7 +11052,7 @@
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
     const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
-    const protokolleViewIds = ['viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleInbetriebnahme', 'viewProtokolleService'];
+    const protokolleViewIds = ['viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokolleInbetriebnahme', 'viewProtokolleService'];
     viewStart.classList.remove('only-left', 'only-right', 'hidden');
     viewEinstellungen.classList.remove('active');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
@@ -11115,6 +11115,7 @@
         'protokolle-montagebericht': 'viewProtokolleMontagebericht',
         'protokolle-parameterlisten': 'viewProtokolleParameterlisten',
         'protokolle-kontrollwiegungen': 'viewProtokolleKontrollwiegungen',
+        'protokolle-schleppketten': 'viewProtokolleSchleppketten',
         'protokolle-inbetriebnahme': 'viewProtokolleInbetriebnahme',
         'protokolle-service': 'viewProtokolleService'
       };
@@ -11126,8 +11127,14 @@
       if (name === 'protokolle-montagebericht' && typeof window.openAndResetMontageberichtForm === 'function') {
         window.openAndResetMontageberichtForm();
       }
+      if (name === 'protokolle-parameterlisten' && typeof window.openProtokolleParameterlisten === 'function') {
+        window.openProtokolleParameterlisten();
+      }
       if (name === 'protokolle-kontrollwiegungen' && typeof window.openProtokolleKontrollwiegungen === 'function') {
         window.openProtokolleKontrollwiegungen();
+      }
+      if (name === 'protokolle-schleppketten' && typeof window.openProtokolleSchleppketten === 'function') {
+        window.openProtokolleSchleppketten();
       }
       if (name === 'protokolle-service' && typeof window.openProtokolleService === 'function') {
         window.openProtokolleService();
@@ -13874,11 +13881,82 @@
 
     function setImgWidthPercent(img, pct) {
       if (!img) return;
-      img.style.width = pct + '%';
+      var p = Math.max(10, Math.min(100, parseInt(pct, 10) || 100));
+      img.style.width = p + '%';
       img.style.height = 'auto';
       img.style.maxWidth = '100%';
       img.removeAttribute('width');
       img.removeAttribute('height');
+      img.setAttribute('data-mb-width', String(p));
+      var ed = img.closest('.mb-rich-editor, [data-mb-editor], [data-fab-rich], .richtext-editor');
+      if (ed) {
+        try { ed.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) { /* ignore */ }
+      }
+    }
+
+    var mbImgResizeUi = { handle: null, img: null, editor: null, moveBound: false };
+
+    function hideMbImgResizeHandle() {
+      if (mbImgResizeUi.handle && mbImgResizeUi.handle.parentNode) {
+        mbImgResizeUi.handle.parentNode.removeChild(mbImgResizeUi.handle);
+      }
+      mbImgResizeUi.handle = null;
+      mbImgResizeUi.img = null;
+      mbImgResizeUi.editor = null;
+    }
+
+    function positionMbImgResizeHandle() {
+      if (!mbImgResizeUi.handle || !mbImgResizeUi.img) return;
+      var r = mbImgResizeUi.img.getBoundingClientRect();
+      if (!r.width || !r.height) {
+        hideMbImgResizeHandle();
+        return;
+      }
+      var size = 14;
+      mbImgResizeUi.handle.style.left = (r.right - size / 2 + window.pageXOffset) + 'px';
+      mbImgResizeUi.handle.style.top = (r.bottom - size / 2 + window.pageYOffset) + 'px';
+    }
+
+    function showMbImgResizeHandle(img, editor) {
+      hideMbImgResizeHandle();
+      if (!img || !editor) return;
+      var handle = document.createElement('div');
+      handle.className = 'mb-img-drag-handle';
+      handle.title = 'Ziehen zum Vergrößern/Verkleinern';
+      handle.setAttribute('contenteditable', 'false');
+      document.body.appendChild(handle);
+      mbImgResizeUi.handle = handle;
+      mbImgResizeUi.img = img;
+      mbImgResizeUi.editor = editor;
+      positionMbImgResizeHandle();
+
+      handle.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var startX = e.clientX;
+        var startW = img.getBoundingClientRect().width;
+        var editorW = Math.max(1, editor.clientWidth - 8);
+        function onMove(ev) {
+          var dx = ev.clientX - startX;
+          var newW = Math.max(48, startW + dx);
+          var pct = Math.round(Math.min(100, Math.max(10, (newW / editorW) * 100)));
+          setImgWidthPercent(img, pct);
+          positionMbImgResizeHandle();
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          positionMbImgResizeHandle();
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+
+      if (!mbImgResizeUi.moveBound) {
+        mbImgResizeUi.moveBound = true;
+        window.addEventListener('scroll', positionMbImgResizeHandle, true);
+        window.addEventListener('resize', positionMbImgResizeHandle);
+      }
     }
 
     function insertImgHtml(el, dataUrl, savedRange) {
@@ -13928,15 +14006,20 @@
       if (!img) return;
       if (action === '25' || action === '50' || action === '100') {
         setImgWidthPercent(img, parseInt(action, 10));
+        showMbImgResizeHandle(img, el);
         return;
       }
       if (action === 'remove') {
+        hideMbImgResizeHandle();
         if (img.parentNode) img.parentNode.removeChild(img);
+        try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (eR) { /* ignore */ }
         return;
       }
       if (action === 'rotate') {
         rotateDataUrl90(img.getAttribute('src') || img.src).then(function (dataUrl) {
           img.setAttribute('src', dataUrl);
+          showMbImgResizeHandle(img, el);
+          try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (eRo) { /* ignore */ }
         }).catch(function () { /* ignore */ });
       }
     }
@@ -14093,9 +14176,23 @@
         });
         if (ev.target && ev.target.tagName === 'IMG') {
           ev.target.classList.add('mb-img-selected');
+          showMbImgResizeHandle(ev.target, el);
+        } else {
+          hideMbImgResizeHandle();
         }
       });
     }
+
+    document.addEventListener('mousedown', function (ev) {
+      if (!mbImgResizeUi.handle) return;
+      if (ev.target === mbImgResizeUi.handle) return;
+      if (ev.target && ev.target.tagName === 'IMG' && ev.target.classList.contains('mb-img-selected')) return;
+      if (mbImgResizeUi.editor && mbImgResizeUi.editor.contains(ev.target) && ev.target.tagName === 'IMG') return;
+      hideMbImgResizeHandle();
+      document.querySelectorAll('img.mb-img-selected').forEach(function (n) {
+        n.classList.remove('mb-img-selected');
+      });
+    });
 
     window.KuklaEditorImages = {
       compressBlobToDataUrl: compressBlobToDataUrl,
@@ -14104,6 +14201,9 @@
       handleAction: handleAction,
       bindPaste: bindPaste,
       insertImgHtml: insertImgHtml,
+      setImgWidthPercent: setImgWidthPercent,
+      hideResizeHandle: hideMbImgResizeHandle,
+      showResizeHandle: showMbImgResizeHandle,
       bindAll: function (root) {
         var scope = root || document;
         scope.querySelectorAll('.mb-rich-editor, [data-mb-editor], #richtextEditor, .richtext-editor').forEach(function (node) {
@@ -14112,6 +14212,21 @@
       },
     };
   })();
+
+  /** Auftrag, dessen Start–Ende den heutigen Kalendertag abdeckt (erster Treffer). */
+  function resolveTodayProtokollJobId(jobs) {
+    if (!Array.isArray(jobs) || !jobs.length) return '';
+    var today = new Date().toISOString().slice(0, 10);
+    var todayJobs = jobs.filter(function (j) {
+      var s = (j.start_datetime || '').toString().slice(0, 10);
+      var e = (j.end_datetime || '').toString().slice(0, 10);
+      if (s && e) return today >= s && today <= e;
+      if (s) return today === s;
+      if (e) return today === e;
+      return false;
+    });
+    return todayJobs.length >= 1 ? String(todayJobs[0].id) : '';
+  }
 
   (function initProtokolleMontagebericht() {
     const btnAbbrechen = document.getElementById('btnMontageberichtAbbrechen');
@@ -14503,6 +14618,11 @@
       img.style.maxWidth = '100%';
       img.removeAttribute('width');
       img.removeAttribute('height');
+      var ed = img.closest('.mb-rich-editor, [data-mb-editor], [data-fab-rich]');
+      if (ed) {
+        autoResizeFabTextarea(ed);
+        setTimeout(function () { autoResizeFabTextarea(ed); }, 50);
+      }
     }
 
     function insertImageHtmlIntoEditor(el, dataUrl) {
@@ -14514,6 +14634,8 @@
         el.innerHTML += html;
       }
       autoResizeFabTextarea(el);
+      setTimeout(function () { autoResizeFabTextarea(el); }, 50);
+      setTimeout(function () { autoResizeFabTextarea(el); }, 250);
     }
 
     function pickImageFileForEditor(el) {
@@ -14582,6 +14704,11 @@
         });
         if (ev.target && ev.target.tagName === 'IMG') {
           ev.target.classList.add('mb-img-selected');
+          if (window.KuklaEditorImages && window.KuklaEditorImages.showResizeHandle) {
+            window.KuklaEditorImages.showResizeHandle(ev.target, el);
+          }
+        } else if (window.KuklaEditorImages && window.KuklaEditorImages.hideResizeHandle) {
+          window.KuklaEditorImages.hideResizeHandle();
         }
       });
     }
@@ -14648,8 +14775,181 @@
 
     function autoResizeFabTextarea(el) {
       if (!el) return;
+      // Höhe an Inhalt anpassen (Text + Bilder), nichts abschneiden
+      el.style.overflow = 'hidden';
       el.style.height = 'auto';
-      el.style.height = Math.max(el.scrollHeight, 52) + 'px';
+      var next = Math.max(el.scrollHeight, 52);
+      el.style.height = next + 'px';
+      el.querySelectorAll('img').forEach(function (img) {
+        if (img.complete && img.naturalHeight) return;
+        if (img.getAttribute('data-mb-resize-bound') === '1') return;
+        img.setAttribute('data-mb-resize-bound', '1');
+        var onDone = function () {
+          img.removeEventListener('load', onDone);
+          img.removeEventListener('error', onDone);
+          autoResizeFabTextarea(el);
+        };
+        img.addEventListener('load', onDone);
+        img.addEventListener('error', onDone);
+      });
+      // Nach Layout/Bild-Decode noch einmal nachmessen
+      requestAnimationFrame(function () {
+        el.style.height = 'auto';
+        el.style.height = Math.max(el.scrollHeight, 52) + 'px';
+      });
+    }
+
+    function bindMontageberichtAutoGrow(el) {
+      if (!el || el.getAttribute('data-mb-autogrow') === '1') return;
+      el.setAttribute('data-mb-autogrow', '1');
+      el.addEventListener('input', function () { autoResizeFabTextarea(el); });
+      el.addEventListener('paste', function () {
+        setTimeout(function () { autoResizeFabTextarea(el); }, 0);
+        setTimeout(function () { autoResizeFabTextarea(el); }, 120);
+      });
+      autoResizeFabTextarea(el);
+    }
+
+    function closeMontageberichtProjectPhotoPicker() {
+      var modal = document.getElementById('modalMbProjectPhotos');
+      if (!modal) return;
+      modal.classList.remove('active');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+
+    function insertMontageberichtProjectPhoto(relPath) {
+      var el = montageberichtActiveEditor;
+      if (!el) {
+        alert('Bitte zuerst in ein Textfeld klicken.');
+        return;
+      }
+      var jobId = jobSelect ? parseInt(jobSelect.value, 10) : 0;
+      if (!Number.isFinite(jobId) || jobId <= 0 || !relPath) return;
+      var hint = document.getElementById('mbProjectPhotosHint');
+      if (hint) hint.textContent = 'Bild wird eingefügt…';
+      var url =
+        API_BASE +
+        '/api/dienstreise/project_file?job_id=' +
+        encodeURIComponent(jobId) +
+        '&path=' +
+        encodeURIComponent(relPath) +
+        '&inline=1&technician_id=' +
+        encodeURIComponent(getTechId());
+      var compressFn =
+        (window.KuklaEditorImages && window.KuklaEditorImages.compressBlobToDataUrl) ||
+        compressBlobToDataUrl;
+      fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } })
+        .then(function (r) {
+          if (!r.ok) throw new Error('Bild konnte nicht geladen werden (HTTP ' + r.status + ').');
+          return r.blob();
+        })
+        .then(function (blob) {
+          return compressFn(blob);
+        })
+        .then(function (dataUrl) {
+          if (!dataUrl) throw new Error('Bild konnte nicht verarbeitet werden.');
+          ensureEditorFocus(el);
+          insertImageHtmlIntoEditor(el, dataUrl);
+          closeMontageberichtProjectPhotoPicker();
+          if (typeof showToast === 'function') showToast('Projekt-Foto eingefügt');
+        })
+        .catch(function (err) {
+          if (hint) hint.textContent = err && err.message ? err.message : 'Einfügen fehlgeschlagen.';
+          else alert(err && err.message ? err.message : 'Einfügen fehlgeschlagen.');
+        });
+    }
+
+    function openMontageberichtProjectPhotoPicker() {
+      var jobId = jobSelect ? parseInt(jobSelect.value, 10) : 0;
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        alert('Bitte zuerst einen Auftrag wählen.');
+        return;
+      }
+      if (!montageberichtActiveEditor) {
+        var fabFirst = fabContainer && fabContainer.querySelector('[data-fab-rich]');
+        montageberichtActiveEditor =
+          fabFirst ||
+          document.getElementById('montageberichtBemerkungen') ||
+          document.getElementById('montageberichtGrund');
+      }
+      if (!montageberichtActiveEditor) {
+        alert('Kein Textfeld verfügbar.');
+        return;
+      }
+      var modal = document.getElementById('modalMbProjectPhotos');
+      var body = document.getElementById('mbProjectPhotosBody');
+      var hint = document.getElementById('mbProjectPhotosHint');
+      if (!modal || !body) return;
+      body.innerHTML = '<p class="muted">Lade Fotos…</p>';
+      if (hint) hint.textContent = '';
+      modal.classList.add('active');
+      modal.setAttribute('aria-hidden', 'false');
+      fetch(
+        API_BASE +
+          '/api/dienstreise/project_photos?job_id=' +
+          encodeURIComponent(jobId) +
+          '&technician_id=' +
+          encodeURIComponent(getTechId()),
+        { headers: { 'X-Technician-Id': String(getTechId()) } },
+      )
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (data) {
+          if (!data || !data.ok) {
+            body.innerHTML = '';
+            if (hint) hint.textContent = (data && data.error) ? data.error : 'Fotoliste fehlgeschlagen.';
+            return;
+          }
+          var photos = Array.isArray(data.photos) ? data.photos : [];
+          if (!photos.length) {
+            body.innerHTML = '';
+            if (hint) {
+              hint.textContent = data.folder_missing
+                ? (data.hint || 'Kein Projektordner – Auftrag zuerst annehmen.')
+                : (data.hint || 'Keine Fotos im Projekt gefunden (Dokumente_Monteur / Bilder).');
+            }
+            return;
+          }
+          if (hint) {
+            hint.textContent =
+              photos.length +
+              ' Foto(s)' +
+              (photos.some(function (p) { return p.in_bilder; }) ? ' – PWA-Uploads bevorzugt oben.' : '');
+          }
+          body.innerHTML = '';
+          photos.forEach(function (ph) {
+            var rel = String(ph.relativePath || '').trim();
+            if (!rel) return;
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'mb-project-photo-card';
+            btn.title = rel;
+            var thumb =
+              API_BASE +
+              '/api/dienstreise/project_file?job_id=' +
+              encodeURIComponent(jobId) +
+              '&path=' +
+              encodeURIComponent(rel) +
+              '&thumb=1&thumbMax=256&technician_id=' +
+              encodeURIComponent(getTechId());
+            var img = document.createElement('img');
+            img.alt = '';
+            img.loading = 'lazy';
+            img.src = thumb;
+            var name = document.createElement('span');
+            name.className = 'mb-project-photo-name';
+            name.textContent = ph.name || rel;
+            btn.appendChild(img);
+            btn.appendChild(name);
+            btn.addEventListener('click', function () {
+              insertMontageberichtProjectPhoto(rel);
+            });
+            body.appendChild(btn);
+          });
+        })
+        .catch(function (err) {
+          body.innerHTML = '';
+          if (hint) hint.textContent = err && err.message ? err.message : 'Netzwerkfehler.';
+        });
     }
 
     function ensureEditorFocus(el) {
@@ -14701,7 +15001,7 @@
       if (!toolbarEl || !montageberichtActiveEditor) return;
       var sel = window.getSelection ? window.getSelection() : null;
       if (!sel || sel.rangeCount === 0 || !montageberichtActiveEditor.contains(sel.anchorNode)) return;
-      ['bold', 'italic', 'underline', 'insertUnorderedList', 'justifyLeft', 'justifyCenter', 'justifyRight'].forEach(function (cmd) {
+      ['bold', 'italic', 'underline', 'insertUnorderedList', 'insertOrderedList', 'justifyLeft', 'justifyCenter', 'justifyRight'].forEach(function (cmd) {
         var btn = toolbarEl.querySelector('[data-mb-cmd="' + cmd + '"]');
         if (!btn) return;
         var active = false;
@@ -14729,6 +15029,10 @@
         btn.addEventListener('click', function () {
           var action = btn.getAttribute('data-mb-img');
           if (!action) return;
+          if (action === 'from-project') {
+            openMontageberichtProjectPhotoPicker();
+            return;
+          }
           if (!ensureEditorFocus(montageberichtActiveEditor)) return;
           if (window.KuklaEditorImages) {
             window.KuklaEditorImages.handleAction(montageberichtActiveEditor, action);
@@ -14772,9 +15076,7 @@
 
     function initFabBemerkungenDropTargets() {
       fabContainer.querySelectorAll('[data-fab-rich]').forEach(function (el) {
-        el.style.overflow = 'hidden';
-        el.addEventListener('input', function () { autoResizeFabTextarea(el); });
-        autoResizeFabTextarea(el);
+        bindMontageberichtAutoGrow(el);
         if (window.KuklaEditorImages) window.KuklaEditorImages.bindPaste(el);
         else bindEditorImagePaste(el);
         el.addEventListener('dragover', function (e) {
@@ -14917,6 +15219,8 @@
       if (divMontage) divMontage.style.display = 'block';
       try { delete window._kuklaMontageberichtSign; } catch (e) { window._kuklaMontageberichtSign = null; }
       montageberichtJobData = null;
+      var pdfBtnMb = document.getElementById('btnMontageberichtPdf');
+      if (pdfBtnMb) pdfBtnMb.style.display = 'none';
       if (jobSelect) jobSelect.innerHTML = '<option value="">Lade…</option>';
       if (grundInput) setRichEditorHtml(grundInput, '');
       var bemerkEl = document.getElementById('montageberichtBemerkungen');
@@ -14938,6 +15242,11 @@
         if (jobSelect) {
           jobSelect.innerHTML = '<option value="">-- Auftrag wählen --</option>' +
             jobs.map(function (j) { return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>'; }).join('');
+          var defaultJobId = resolveTodayProtokollJobId(jobs);
+          if (defaultJobId) {
+            jobSelect.value = defaultJobId;
+            jobSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          }
         }
       });
       loadMontageberichtTextbausteine();
@@ -15001,6 +15310,19 @@
                   }
                 });
               }
+              var pdfRelLoaded = d.last_pdf_rel ? String(d.last_pdf_rel).trim() : '';
+              if (pdfRelLoaded) {
+                window._kuklaMontageberichtSign = {
+                  localJobId: id,
+                  pdfRel: pdfRelLoaded
+                };
+              }
+              var pdfBtnLoaded = document.getElementById('btnMontageberichtPdf');
+              if (pdfBtnLoaded) pdfBtnLoaded.style.display = pdfRelLoaded ? 'inline-block' : 'none';
+            } else {
+              try { delete window._kuklaMontageberichtSign; } catch (eClr) { window._kuklaMontageberichtSign = null; }
+              var pdfBtnClear = document.getElementById('btnMontageberichtPdf');
+              if (pdfBtnClear) pdfBtnClear.style.display = 'none';
             }
           } catch (loadErr) { /* gespeicherte Daten optional */ }
         } catch (e) {
@@ -15015,7 +15337,7 @@
       btnSignMb.addEventListener('click', function () {
         var st = window._kuklaMontageberichtSign;
         if (!st || !st.pdfRel || !st.localJobId) {
-          alert('Zuerst „PDF & DOCX erstellen“ ausführen – danach ist der Montagebericht-PDF für die Signatur verfügbar.');
+          alert('Zuerst speichern – danach ist das Montagebericht-PDF für die Signatur verfügbar.');
           return;
         }
         if (typeof window.SignatureWidget === 'undefined' || typeof window.SignatureWidget.open !== 'function') {
@@ -15142,8 +15464,7 @@
       form.addEventListener('submit', async function (e) {
         e.preventDefault();
         var submitBtn = e.submitter;
-        var jsonOnly = !!(submitBtn && submitBtn.id === 'btnMontageberichtSaveJson');
-        if (!submitBtn || (submitBtn.id !== 'btnMontageberichtSaveJson' && submitBtn.id !== 'btnMontageberichtSavePdf')) {
+        if (submitBtn && submitBtn.id && submitBtn.id !== 'btnMontageberichtSavePdf' && submitBtn.id !== 'btnMontageberichtStickySave') {
           return;
         }
         if (!montageberichtJobData) { alert('Bitte Auftrag wählen.'); return; }
@@ -15172,7 +15493,7 @@
           try {
             var p = JSON.parse(montageberichtJobData.fabrikationsnummern);
             return Array.isArray(p) ? p : [];
-          } catch (e) { return []; }
+          } catch (errP) { return []; }
         }()) : [];
         var fabWithDetails = parsedFab.map(function (r) {
           return {
@@ -15232,14 +15553,18 @@
           grundDesEinsatzes: grundVal,
           grundDesEinsatzes_html: grundValHtml,
           freitext: '',
-          jsonOnly: jsonOnly,
+          jsonOnly: false,
           dispoBaseUrl: getDispoBaseUrl(),
           technicianId: getTechId(),
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
         };
+        var stickyBtn = document.getElementById('btnMontageberichtStickySave');
+        var savePdfBtn = document.getElementById('btnMontageberichtSavePdf');
         try {
           if (submitBtn) submitBtn.disabled = true;
+          if (stickyBtn) stickyBtn.disabled = true;
+          if (savePdfBtn && savePdfBtn !== submitBtn) savePdfBtn.disabled = true;
           var r = await fetch(API_BASE + '/api/protokolle/montagebericht', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -15250,29 +15575,76 @@
             alert('Fehler: ' + (data.error || r.status));
             return;
           }
-          if (!data.jsonOnly && data.saved && data.saved.length) {
+          var pdfRel = (data.rel || (data.saved && data.saved[0])) || '';
+          if (pdfRel) {
             window._kuklaMontageberichtSign = {
               localJobId: parseInt(jobSelect.value, 10),
-              pdfRel: data.saved[0]
+              pdfRel: pdfRel,
+              pdfPath: data.path || ''
             };
           }
+          var pdfBtnMb = document.getElementById('btnMontageberichtPdf');
+          if (pdfBtnMb) pdfBtnMb.style.display = pdfRel ? 'inline-block' : 'none';
           if (data.warning) {
             console.warn('[Montagebericht] Warnung vom Server:', data.warning);
           }
           if (typeof showToast === 'function') {
-            if (data.jsonOnly) showToast('Zwischenstand gespeichert (nur Daten, kein PDF/DOCX).');
-            else {
-              var langNote = Array.isArray(data.languages) && data.languages.length > 1
-                ? ' (DE + GB)'
-                : (Array.isArray(data.languages) && data.languages[0] === 'en' ? ' (GB)' : ' (DE)');
-              showToast('Montagebericht gespeichert (inkl. PDF & DOCX)' + langNote + '.');
-            }
+            var langNote = Array.isArray(data.languages) && data.languages.length > 1
+              ? ' (DE + GB)'
+              : (Array.isArray(data.languages) && data.languages[0] === 'en' ? ' (GB)' : ' (DE)');
+            showToast('Montagebericht gespeichert' + langNote + (data.rel ? (': ' + data.rel) : ''));
           }
-          if (!data.jsonOnly && typeof showView === 'function') showView('start');
         } catch (err) {
           alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
         } finally {
           if (submitBtn) submitBtn.disabled = false;
+          if (stickyBtn) stickyBtn.disabled = false;
+          if (savePdfBtn) savePdfBtn.disabled = false;
+        }
+      });
+    }
+
+    var btnPdfMb = document.getElementById('btnMontageberichtPdf');
+    if (btnPdfMb) {
+      btnPdfMb.addEventListener('click', async function () {
+        var st = window._kuklaMontageberichtSign;
+        var jobId = jobSelect ? parseInt(jobSelect.value, 10) : 0;
+        if ((!st || (!st.pdfRel && !st.pdfPath)) && !(Number.isFinite(jobId) && jobId > 0)) {
+          alert('Kein gespeichertes PDF – bitte zuerst speichern.');
+          return;
+        }
+        try {
+          if (st && st.pdfPath && typeof monteurApp !== 'undefined' && monteurApp.openPath) {
+            var direct = await monteurApp.openPath(String(st.pdfPath));
+            if (!direct || direct.ok !== false) {
+              if (typeof showToast === 'function') showToast('PDF geöffnet' + (st.pdfRel ? (': ' + st.pdfRel) : ''));
+              return;
+            }
+          }
+          var url = API_BASE + '/api/montagebericht_pdf?open_local=1&technician_id=' + encodeURIComponent(getTechId());
+          if (Number.isFinite(jobId) && jobId > 0) {
+            url += '&job_id=' + encodeURIComponent(jobId) + '&local_job_id=' + encodeURIComponent(jobId);
+          }
+          if (st && st.pdfRel) url += '&rel=' + encodeURIComponent(st.pdfRel);
+          var r = await fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } });
+          var data = await r.json().catch(function () { return {}; });
+          if (!r.ok || !data.ok || !data.path) {
+            alert((data && data.error) ? data.error : 'PDF konnte nicht geöffnet werden.');
+            return;
+          }
+          if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
+            var openResult = await monteurApp.openPath(String(data.path));
+            if (openResult && openResult.ok === false) {
+              alert('PDF-Datei liegt unter:\n' + (data.rel || data.path) +
+                (openResult.error ? ('\n\nÖffnen fehlgeschlagen: ' + openResult.error) : ''));
+              return;
+            }
+            if (typeof showToast === 'function') showToast('PDF geöffnet' + (data.rel ? (': ' + data.rel) : ''));
+            return;
+          }
+          if (typeof showToast === 'function') showToast('PDF gespeichert' + (data.rel ? (': ' + data.rel) : ''));
+        } catch (e) {
+          alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt'));
         }
       });
     }
@@ -15281,23 +15653,1021 @@
       window.KuklaEditorImages.bindAll(form || document);
     }
     bindMontageberichtToolbar();
+    if (form) {
+      form.querySelectorAll('.mb-rich-editor, [data-mb-editor]').forEach(function (el) {
+        bindMontageberichtAutoGrow(el);
+      });
+    }
+    var btnMbPhotosClose = document.getElementById('mbProjectPhotosClose');
+    if (btnMbPhotosClose) {
+      btnMbPhotosClose.addEventListener('click', closeMontageberichtProjectPhotoPicker);
+    }
+    var modalMbPhotos = document.getElementById('modalMbProjectPhotos');
+    if (modalMbPhotos) {
+      modalMbPhotos.addEventListener('click', function (ev) {
+        if (ev.target === modalMbPhotos) closeMontageberichtProjectPhotoPicker();
+      });
+    }
 
   })();
 
-  (function initProtokolleKontrollwiegungen() {
-    var jobSelect = document.getElementById('kontrollwiegungJob');
-    var kopfdatenEl = document.getElementById('kontrollwiegungKopfdaten');
-    var fabSelect = document.getElementById('kontrollwiegungFab');
-    var datumEl = document.getElementById('kontrollwiegungDatum');
-    var zeilenContainer = document.getElementById('kontrollwiegungZeilen');
-    var addRowBtn = document.getElementById('kontrollwiegungAddRow');
-    var form = document.getElementById('kontrollwiegungForm');
-    var pdfBtn = document.getElementById('kontrollwiegungPdf');
-    var abbrechenBtn = document.getElementById('kontrollwiegungAbbrechen');
+    (function initProtokolleKontrollwiegungen() {
+      var jobSelect = document.getElementById('kontrollwiegungJob');
+      var fabHidden = document.getElementById('kontrollwiegungFab');
+      var fabButtonsEl = document.getElementById('kontrollwiegungFabButtons');
+      var fabGroupEl = document.getElementById('kontrollwiegungFabGroup');
+      var datumEl = document.getElementById('kontrollwiegungDatum');
+      var projektEl = document.getElementById('kontrollwiegungProjekt');
+      var kundeHintEl = document.getElementById('kontrollwiegungKundeHint');
+      var typeEl = document.getElementById('kontrollwiegungType');
+      var leistungEl = document.getElementById('kontrollwiegungLeistung');
+      var elektronikEl = document.getElementById('kontrollwiegungElektronik');
+      var teilungEl = document.getElementById('kontrollwiegungTeilung');
+      var bereichMaxEl = document.getElementById('kontrollwiegungBereichMax');
+      var letzteEichungEl = document.getElementById('kontrollwiegungLetzteEichung');
+      var speicherMetaEl = document.getElementById('kontrollwiegungSpeicherMeta');
+      var zeilenContainer = document.getElementById('kontrollwiegungZeilen');
+      var addRowBtn = document.getElementById('kontrollwiegungAddRow');
+      var form = document.getElementById('kontrollwiegungForm');
+      var pdfBtn = document.getElementById('kontrollwiegungPdf');
+      var abbrechenBtn = document.getElementById('kontrollwiegungAbbrechen');
+  
+      var kontrollwiegungJobData = null;
+      var wiegungen = [];
+      var lastProtokollId = null;
+      var kwDraftByFab = {};
+      var activeFab = '';
+      var kwFabSwitching = false;
+  
+      function escapeHtml(s) {
+        if (s == null) return '';
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+      }
+  
+      function todayIsoLocal() {
+        var today = new Date();
+        return today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+      }
 
-    var kontrollwiegungJobData = null;
-    var wiegungen = [];
+      function formatGespeichertAmDisplay(iso) {
+        var s = String(iso || '').trim();
+        if (!s) return '';
+        var d = new Date(s);
+        if (isNaN(d.getTime())) return s;
+        return d.toLocaleString('de-DE', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      }
+
+      function updateSpeicherMeta(fab, draft) {
+        if (!speicherMetaEl) return;
+        fab = String(fab || '').trim();
+        var am = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
+        if (!fab) {
+          speicherMetaEl.hidden = true;
+          speicherMetaEl.textContent = '';
+          return;
+        }
+        if (am) {
+          speicherMetaEl.hidden = false;
+          speicherMetaEl.textContent = 'FN ' + fab + ' · Gespeichert: ' + formatGespeichertAmDisplay(am);
+        } else {
+          speicherMetaEl.hidden = false;
+          speicherMetaEl.textContent = 'FN ' + fab + ' · Noch nicht gespeichert';
+        }
+      }
+  
+      function getActiveFab() {
+        return activeFab || (fabHidden && fabHidden.value ? String(fabHidden.value).trim() : '');
+      }
+  
+      function setActiveFabValue(fab) {
+        activeFab = fab ? String(fab).trim() : '';
+        if (fabHidden) fabHidden.value = activeFab;
+      }
+  
+      function readProjektFromFabRowKw(r) {
+        if (r == null) return '';
+        if (typeof r === 'object') {
+          var v = r.projekt != null ? r.projekt : (r.Projekt != null ? r.Projekt : (r.project != null ? r.project : ''));
+          return String(v).replace(/\s+/g, ' ').trim();
+        }
+        return '';
+      }
+  
+      function readFabField(r, keys) {
+        if (!r || typeof r !== 'object') return '';
+        for (var i = 0; i < keys.length; i++) {
+          if (r[keys[i]] != null && String(r[keys[i]]).trim() !== '') {
+            return String(r[keys[i]]).replace(/\s+/g, ' ').trim();
+          }
+        }
+        return '';
+      }
+  
+      function findFabRow(job, fab) {
+        if (!job || !job.fabrikationsnummern) return null;
+        try {
+          var parsed = JSON.parse(job.fabrikationsnummern);
+          if (!Array.isArray(parsed)) return null;
+          var fabNorm = String(fab || '').trim();
+          for (var i = 0; i < parsed.length; i++) {
+            var rowFn = parsed[i] && parsed[i].fabrikationsnummer != null
+              ? String(parsed[i].fabrikationsnummer).trim()
+              : '';
+            if (rowFn === fabNorm) return parsed[i];
+          }
+        } catch (e) { /* ignore */ }
+        return null;
+      }
+  
+      function resolveKontrollwiegungProjekt(job, fab) {
+        var row = findFabRow(job, fab);
+        if (row) {
+          var p = readProjektFromFabRowKw(row);
+          if (p) return p;
+        }
+        if (!job || !job.fabrikationsnummern) return '';
+        try {
+          var parsed = JSON.parse(job.fabrikationsnummern);
+          if (!Array.isArray(parsed) || !parsed.length) return '';
+          var projs = parsed.map(readProjektFromFabRowKw).filter(function (x) { return x !== ''; });
+          if (!projs.length) return '';
+          var first = projs[0];
+          for (var j = 1; j < projs.length; j++) {
+            if (projs[j] !== first) return '';
+          }
+          return first;
+        } catch (e2) {
+          return '';
+        }
+      }
+  
+      function stammFieldsForFab(job, fab) {
+        var row = findFabRow(job, fab) || {};
+        return {
+          type: readFabField(row, ['type', 'Type']),
+          leistung: readFabField(row, ['leistung', 'Leistung', 'qmax', 'Qmax']),
+          elektronik: readFabField(row, ['elektronik', 'Elektronik', 'dwc', 'DWC']),
+          projekt: readProjektFromFabRowKw(row) || resolveKontrollwiegungProjekt(job, fab)
+        };
+      }
+  
+      function emptyWiegung() {
+        return {
+          bandwaage_kg: '',
+          kontrollwaage_kg: '',
+          fehler_kg: '',
+          fehler_prozent: '',
+          leistung_th: '',
+          tara_kg: '',
+          brutto_kg: '',
+          bemerkung: '',
+          in_summe: true
+        };
+      }
+
+      function collectFormDraft() {
+        syncWiegungenFromDom();
+        var prev = kwDraftByFab[getActiveFab()] || {};
+        return {
+          durchfuehrungsdatum: datumEl ? String(datumEl.value || '').trim() : '',
+          projekt: projektEl ? String(projektEl.value || '').trim() : '',
+          type: typeEl ? String(typeEl.value || '').trim() : '',
+          leistung: leistungEl ? String(leistungEl.value || '').trim() : '',
+          elektronik: elektronikEl ? String(elektronikEl.value || '').trim() : '',
+          teilung_kontrollwaage: teilungEl ? String(teilungEl.value || '').trim() : '',
+          bereich_max: bereichMaxEl ? String(bereichMaxEl.value || '').trim() : '',
+          letzte_eichung: letzteEichungEl ? String(letzteEichungEl.value || '').trim() : '',
+          wiegungen: wiegungen.slice(),
+          gespeichert_am: prev.gespeichert_am || '',
+          updated_at: prev.updated_at || '',
+          protokoll_id: prev.protokoll_id != null ? prev.protokoll_id : null
+        };
+      }
+
+      function stashDraftInMemory(fab) {
+        fab = String(fab || '').trim();
+        if (!fab) return;
+        kwDraftByFab[fab] = collectFormDraft();
+      }
+
+      function applyDraftToForm(draft, stammFallback) {
+        draft = draft || {};
+        stammFallback = stammFallback || {};
+        if (datumEl) datumEl.value = draft.durchfuehrungsdatum || todayIsoLocal();
+        if (projektEl) projektEl.value = draft.projekt != null && String(draft.projekt).trim() !== ''
+          ? String(draft.projekt).trim()
+          : (stammFallback.projekt || '');
+        if (typeEl) typeEl.value = draft.type != null && String(draft.type).trim() !== ''
+          ? String(draft.type).trim()
+          : (stammFallback.type || '');
+        if (leistungEl) leistungEl.value = draft.leistung != null && String(draft.leistung).trim() !== ''
+          ? String(draft.leistung).trim()
+          : (stammFallback.leistung || '');
+        if (elektronikEl) elektronikEl.value = draft.elektronik != null && String(draft.elektronik).trim() !== ''
+          ? String(draft.elektronik).trim()
+          : (stammFallback.elektronik || '');
+        if (teilungEl) {
+          teilungEl.value = draft.teilung_kontrollwaage != null ? String(draft.teilung_kontrollwaage) : '';
+        }
+        if (bereichMaxEl) {
+          bereichMaxEl.value = draft.bereich_max != null ? String(draft.bereich_max) : '';
+        }
+        if (letzteEichungEl) {
+          letzteEichungEl.value = draft.letzte_eichung != null ? String(draft.letzte_eichung) : '';
+        }
+        wiegungen = Array.isArray(draft.wiegungen) && draft.wiegungen.length
+          ? draft.wiegungen.map(function (w) {
+              return {
+                bandwaage_kg: w.bandwaage_kg != null ? w.bandwaage_kg : '',
+                kontrollwaage_kg: w.kontrollwaage_kg != null ? w.kontrollwaage_kg : '',
+                fehler_kg: w.fehler_kg != null ? w.fehler_kg : '',
+                fehler_prozent: w.fehler_prozent != null ? w.fehler_prozent : '',
+                leistung_th: w.leistung_th != null ? w.leistung_th : '',
+                tara_kg: w.tara_kg != null ? w.tara_kg : '',
+                brutto_kg: w.brutto_kg != null ? w.brutto_kg : '',
+                bemerkung: w.bemerkung != null ? w.bemerkung : '',
+                in_summe: w.in_summe === false || w.in_summe === 0 || w.in_summe === '0' ? false : true
+              };
+            })
+          : [emptyWiegung()];
+        renderZeilen();
+      }
+
+      function updateKundeHint(job) {
+        if (!kundeHintEl) return;
+        var name = job && job.customer_name ? String(job.customer_name).trim() : '';
+        if (!name) {
+          kundeHintEl.hidden = true;
+          kundeHintEl.textContent = '';
+          return;
+        }
+        kundeHintEl.hidden = false;
+        kundeHintEl.textContent = 'Kunde: ' + name;
+      }
+
+      function parseNumInput(raw) {
+        var s = String(raw == null ? '' : raw).trim().replace(',', '.');
+        if (s === '') return null;
+        var n = parseFloat(s);
+        return isFinite(n) ? n : null;
+      }
+
+      function calcFehler(bandwaage, kontrollwaage) {
+        var band = parseNumInput(bandwaage);
+        var kontr = parseNumInput(kontrollwaage);
+        if (band == null || kontr == null) {
+          return { fehlerKg: null, fehlerProzent: null };
+        }
+        var fehlerKg = band - kontr;
+        var fehlerProzent = kontr !== 0 ? (fehlerKg / kontr) * 100 : null;
+        return { fehlerKg: fehlerKg, fehlerProzent: fehlerProzent };
+      }
+
+      function getRowData(rowEl) {
+        var sumCb = rowEl.querySelector('input[name="in_summe"]');
+        return {
+          bandwaage_kg: (rowEl.querySelector('input[name="bandwaage_kg"]') || {}).value,
+          kontrollwaage_kg: (rowEl.querySelector('input[name="kontrollwaage_kg"]') || {}).value,
+          fehler_kg: (rowEl.querySelector('input[name="fehler_kg"]') || {}).value,
+          fehler_prozent: (rowEl.querySelector('input[name="fehler_prozent"]') || {}).value,
+          leistung_th: (rowEl.querySelector('input[name="leistung_th"]') || {}).value,
+          tara_kg: (rowEl.querySelector('input[name="tara_kg"]') || {}).value,
+          brutto_kg: (rowEl.querySelector('input[name="brutto_kg"]') || {}).value,
+          bemerkung: (rowEl.querySelector('input[name="bemerkung"]') || {}).value || '',
+          in_summe: sumCb ? !!sumCb.checked : true
+        };
+      }
+
+      function syncWiegungenFromDom() {
+        if (!zeilenContainer) return;
+        var rows = zeilenContainer.querySelectorAll('.kontrollwiegung-row');
+        var next = [];
+        rows.forEach(function (rowEl) {
+          next.push(getRowData(rowEl));
+        });
+        if (next.length) wiegungen = next;
+      }
+
+      function formatSumme(n, digits) {
+        if (n == null || !isFinite(n)) return '–';
+        return Number(n).toFixed(digits != null ? digits : 2);
+      }
+
+      function updateSummeRow() {
+        var sumRow = document.getElementById('kontrollwiegungSummeRow');
+        if (!sumRow || !zeilenContainer) return;
+        var keys = ['bandwaage_kg', 'kontrollwaage_kg', 'fehler_kg', 'leistung_th', 'tara_kg', 'brutto_kg'];
+        var totals = {};
+        var counts = {};
+        keys.forEach(function (k) {
+          totals[k] = 0;
+          counts[k] = 0;
+        });
+        var hasAny = false;
+        var sumBand = 0;
+        var sumKontr = 0;
+        var hasBandKontr = false;
+        zeilenContainer.querySelectorAll('.kontrollwiegung-row').forEach(function (rowEl) {
+          var cb = rowEl.querySelector('input[name="in_summe"]');
+          if (cb && !cb.checked) return;
+          hasAny = true;
+          keys.forEach(function (k) {
+            var n = parseNumInput((rowEl.querySelector('input[name="' + k + '"]') || {}).value);
+            if (n != null) {
+              totals[k] += n;
+              counts[k] += 1;
+            }
+          });
+          var band = parseNumInput((rowEl.querySelector('input[name="bandwaage_kg"]') || {}).value);
+          var kontr = parseNumInput((rowEl.querySelector('input[name="kontrollwaage_kg"]') || {}).value);
+          if (band != null && kontr != null) {
+            sumBand += band;
+            sumKontr += kontr;
+            hasBandKontr = true;
+          }
+        });
+        keys.forEach(function (k) {
+          var el = sumRow.querySelector('[data-kw-sum="' + k + '"]');
+          if (!el) return;
+          if (!hasAny || counts[k] === 0) {
+            el.textContent = '–';
+            return;
+          }
+          if (k === 'leistung_th') {
+            el.textContent = formatSumme(totals[k] / counts[k]);
+          } else {
+            el.textContent = formatSumme(totals[k]);
+          }
+        });
+        var pctEl = sumRow.querySelector('[data-kw-sum="fehler_prozent"]');
+        if (pctEl) {
+          if (hasAny && hasBandKontr && sumKontr !== 0) {
+            pctEl.textContent = formatSumme(((sumBand - sumKontr) / sumKontr) * 100);
+          } else {
+            pctEl.textContent = '–';
+          }
+        }
+      }
+
+      function clearFehlerFields(rowEl) {
+        var fkEl = rowEl.querySelector('input[name="fehler_kg"]');
+        var fpEl = rowEl.querySelector('input[name="fehler_prozent"]');
+        if (fkEl) fkEl.value = '';
+        if (fpEl) fpEl.value = '';
+      }
+
+      /** Kontrollwaage nur wenn Tara und Brutto beide gesetzt: Brutto − Tara. */
+      function updateKontrollwaageFromTaraBrutto(rowEl) {
+        var tara = parseNumInput((rowEl.querySelector('input[name="tara_kg"]') || {}).value);
+        var brutto = parseNumInput((rowEl.querySelector('input[name="brutto_kg"]') || {}).value);
+        var kwEl = rowEl.querySelector('input[name="kontrollwaage_kg"]');
+        if (!kwEl) return;
+        if (tara == null || brutto == null) return;
+        kwEl.value = (brutto - tara).toFixed(2);
+      }
+
+      /** Abweichung = Bandwaage − Kontrollwaage; % bezogen auf Kontrollwaage. */
+      function updateFehlerFromKontrollwaage(rowEl) {
+        var bandRaw = (rowEl.querySelector('input[name="bandwaage_kg"]') || {}).value;
+        var kwRaw = (rowEl.querySelector('input[name="kontrollwaage_kg"]') || {}).value;
+        var band = parseNumInput(bandRaw);
+        var kontr = parseNumInput(kwRaw);
+        var fkEl = rowEl.querySelector('input[name="fehler_kg"]');
+        var fpEl = rowEl.querySelector('input[name="fehler_prozent"]');
+        if (band == null || kontr == null) {
+          clearFehlerFields(rowEl);
+          updateSummeRow();
+          return;
+        }
+        var c = calcFehler(band, kontr);
+        if (fkEl) fkEl.value = c.fehlerKg != null ? c.fehlerKg.toFixed(2) : '';
+        if (fpEl) fpEl.value = c.fehlerProzent != null ? c.fehlerProzent.toFixed(2) : '';
+        updateSummeRow();
+      }
+
+      function updateRowCalculations(rowEl, opts) {
+        opts = opts || {};
+        if (opts.fromTaraBrutto) {
+          updateKontrollwaageFromTaraBrutto(rowEl);
+        }
+        updateFehlerFromKontrollwaage(rowEl);
+      }
+
+      function buildRowHtml(idx) {
+        var n = idx + 1;
+        var w = wiegungen[idx] || {};
+        function val(key) {
+          return escapeHtml(w[key] != null ? w[key] : '');
+        }
+        var inSumme = w.in_summe === false || w.in_summe === 0 || w.in_summe === '0' ? false : true;
+        return '<tr class="kontrollwiegung-row" data-idx="' + idx + '">' +
+          '<td class="kw-col-nr"><span class="kw-num">' + n + '</span></td>' +
+          '<td class="kw-col-num"><input type="number" step="any" name="bandwaage_kg" data-kw-calc="fehler" value="' + val('bandwaage_kg') + '" inputmode="decimal"></td>' +
+          '<td class="kw-col-num"><input type="number" step="any" name="kontrollwaage_kg" class="kw-calc-field" data-kw-calc="fehler" value="' + val('kontrollwaage_kg') + '" inputmode="decimal"></td>' +
+          '<td class="kw-col-num"><input type="number" step="any" name="fehler_kg" class="kw-calc-field" value="' + val('fehler_kg') + '" inputmode="decimal"></td>' +
+          '<td class="kw-col-num"><input type="number" step="any" name="fehler_prozent" class="kw-calc-field" value="' + val('fehler_prozent') + '" inputmode="decimal"></td>' +
+          '<td class="kw-col-num"><input type="number" step="any" name="leistung_th" value="' + val('leistung_th') + '" inputmode="decimal"></td>' +
+          '<td class="kw-col-num"><input type="number" step="any" name="tara_kg" data-kw-calc="tara-brutto" value="' + val('tara_kg') + '" inputmode="decimal"></td>' +
+          '<td class="kw-col-num"><input type="number" step="any" name="brutto_kg" data-kw-calc="tara-brutto" value="' + val('brutto_kg') + '" inputmode="decimal"></td>' +
+          '<td class="kw-col-bem"><input type="text" name="bemerkung" value="' + val('bemerkung') + '"></td>' +
+          '<td class="kw-col-act"><div class="kw-act-wrap">' +
+          '<input type="checkbox" class="kw-in-summe" name="in_summe" title="In Summe einbeziehen" aria-label="In Summe einbeziehen"' + (inSumme ? ' checked' : '') + '>' +
+          '<button type="button" class="btn btn-ghost kw-remove" title="Wiegung entfernen" aria-label="Wiegung entfernen">×</button>' +
+          '</div></td>' +
+          '</tr>';
+      }
+
+      function bindRowInputListeners(rowEl) {
+        rowEl.querySelectorAll('input[data-kw-calc="tara-brutto"]').forEach(function (inp) {
+          inp.addEventListener('input', function () {
+            updateRowCalculations(rowEl, { fromTaraBrutto: true });
+          });
+        });
+        rowEl.querySelectorAll('input[data-kw-calc="fehler"]').forEach(function (inp) {
+          inp.addEventListener('input', function () {
+            updateRowCalculations(rowEl, { fromTaraBrutto: false });
+          });
+        });
+        rowEl.querySelectorAll('input[name="leistung_th"], input[name="fehler_kg"], input[name="fehler_prozent"]').forEach(function (inp) {
+          inp.addEventListener('input', updateSummeRow);
+        });
+        var sumCb = rowEl.querySelector('input[name="in_summe"]');
+        if (sumCb) sumCb.addEventListener('change', updateSummeRow);
+      }
+
+      function renderZeilen() {
+        if (!zeilenContainer) return;
+        zeilenContainer.innerHTML = '';
+        wiegungen.forEach(function (_w, idx) {
+          var tbody = document.createElement('tbody');
+          tbody.innerHTML = buildRowHtml(idx);
+          var rowEl = tbody.firstElementChild;
+          zeilenContainer.appendChild(rowEl);
+          bindRowInputListeners(rowEl);
+          var kwVal = String((rowEl.querySelector('input[name="kontrollwaage_kg"]') || {}).value || '').trim();
+          var fkVal = String((rowEl.querySelector('input[name="fehler_kg"]') || {}).value || '').trim();
+          var fpVal = String((rowEl.querySelector('input[name="fehler_prozent"]') || {}).value || '').trim();
+          if (!kwVal && !fkVal && !fpVal) {
+            updateRowCalculations(rowEl, { fromTaraBrutto: true });
+          } else if (!fkVal && !fpVal) {
+            updateFehlerFromKontrollwaage(rowEl);
+          }
+          rowEl.querySelector('.kw-remove').addEventListener('click', function () {
+            syncWiegungenFromDom();
+            if (wiegungen.length <= 1) {
+              wiegungen = [emptyWiegung()];
+            } else {
+              wiegungen.splice(idx, 1);
+            }
+            renderZeilen();
+          });
+        });
+        updateSummeRow();
+      }
+
+      function addRow() {
+        syncWiegungenFromDom();
+        wiegungen.push(emptyWiegung());
+        renderZeilen();
+      }
+  
+      function renderFabButtonsActive() {
+        if (!fabButtonsEl) return;
+        var cur = getActiveFab();
+        fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
+          btn.classList.toggle('is-active', btn.getAttribute('data-fab') === cur);
+        });
+      }
+  
+      function renderFabButtons(job) {
+        if (!fabButtonsEl) return;
+        var fns = job ? parseJobFabrikationsnummernOrdered(job) : [];
+        if (fabGroupEl) fabGroupEl.style.display = fns.length ? 'block' : 'none';
+        fabButtonsEl.innerHTML = '';
+        if (!fns.length) {
+          setActiveFabValue('');
+          return;
+        }
+        fns.forEach(function (fn) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          var draft = kwDraftByFab[fn];
+          var savedAt = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
+          btn.className = 'btn btn-ghost sp-fab-btn' + (fn === getActiveFab() ? ' is-active' : '') + (savedAt ? ' is-saved' : '');
+          btn.setAttribute('data-fab', fn);
+          btn.textContent = fn;
+          btn.title = savedAt
+            ? ('FN ' + fn + ' · Gespeichert: ' + formatGespeichertAmDisplay(savedAt))
+            : ('FN ' + fn + ' · Noch nicht gespeichert');
+          btn.addEventListener('click', function () {
+            switchKontrollwiegungFab(fn);
+          });
+          fabButtonsEl.appendChild(btn);
+        });
+      }
+  
+      function loadFabIntoForm(fab) {
+        fab = String(fab || '').trim();
+        setActiveFabValue(fab);
+        renderFabButtonsActive();
+        var stamm = stammFieldsForFab(kontrollwiegungJobData, fab);
+      var draft = kwDraftByFab[fab];
+      if (draft) {
+        // Legacy: Teilung/Bereich/Eichnung lagen früher in der ersten Wiegungszeile
+        if ((!draft.teilung_kontrollwaage || !draft.bereich_max || !draft.letzte_eichung) &&
+            Array.isArray(draft.wiegungen) && draft.wiegungen[0]) {
+          var w0 = draft.wiegungen[0];
+          if (!draft.teilung_kontrollwaage && w0.teilung_kontrollwaage) draft.teilung_kontrollwaage = w0.teilung_kontrollwaage;
+          if (!draft.bereich_max && w0.bereich_max) draft.bereich_max = w0.bereich_max;
+          if (!draft.letzte_eichung && w0.letzte_eichung) draft.letzte_eichung = w0.letzte_eichung;
+        }
+        applyDraftToForm(draft, stamm);
+        updateSpeicherMeta(fab, draft);
+      } else {
+          applyDraftToForm({
+            durchfuehrungsdatum: todayIsoLocal(),
+            projekt: stamm.projekt,
+            type: stamm.type,
+            leistung: stamm.leistung,
+            elektronik: stamm.elektronik,
+            teilung_kontrollwaage: '',
+            bereich_max: '',
+            letzte_eichung: '',
+            wiegungen: [emptyWiegung()]
+          }, stamm);
+          updateSpeicherMeta(fab, null);
+        }
+        lastProtokollId = draft && draft.protokoll_id != null ? draft.protokoll_id : null;
+        if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+      }
+  
+      async function persistDraftJsonForFab(fab) {
+        fab = String(fab || '').trim();
+        if (!fab || !jobSelect || !jobSelect.value) return null;
+        stashDraftInMemory(fab);
+        var draft = kwDraftByFab[fab] || collectFormDraft();
+        var body = {
+          technician_id: getTechId(),
+          job_id: parseInt(jobSelect.value, 10),
+          fabrikationsnummer: fab,
+          durchfuehrungsdatum: draft.durchfuehrungsdatum || '',
+          projekt: draft.projekt || '',
+          type: draft.type || '',
+          leistung: draft.leistung || '',
+          elektronik: draft.elektronik || '',
+          teilung_kontrollwaage: draft.teilung_kontrollwaage || '',
+          bereich_max: draft.bereich_max || '',
+          letzte_eichung: draft.letzte_eichung || '',
+          wiegungen: Array.isArray(draft.wiegungen) ? draft.wiegungen : [],
+          base_url: getDispoBaseUrl(),
+          serverUsername: getDispoUsername(),
+          serverPassword: getDispoPassword()
+        };
+        var r = await fetch(API_BASE + '/api/protokolle/kontrollwiegung', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+          body: JSON.stringify(body)
+        });
+        var data = await r.json().catch(function () { return {}; });
+        if (!r.ok || !data.ok) {
+          throw new Error((data && data.error) || 'Draft speichern fehlgeschlagen');
+        }
+        if (data.protokoll_id != null && kwDraftByFab[fab]) {
+          kwDraftByFab[fab].protokoll_id = data.protokoll_id;
+        }
+        return data;
+      }
+
+      function switchKontrollwiegungFab(newFab) {
+        newFab = newFab ? String(newFab).trim() : '';
+        if (!newFab || kwFabSwitching) return;
+        var cur = getActiveFab();
+        if (cur === newFab) return;
+        kwFabSwitching = true;
+        var persistPrev = Promise.resolve();
+        if (cur) {
+          stashDraftInMemory(cur);
+          persistPrev = persistDraftJsonForFab(cur).catch(function () { /* best-effort */ });
+        }
+        persistPrev.finally(function () {
+          try {
+            loadFabIntoForm(newFab);
+          } finally {
+            kwFabSwitching = false;
+          }
+        });
+      }
+  
+      function patchJobFabStammFields(fab, fields) {
+        if (!kontrollwiegungJobData || !kontrollwiegungJobData.fabrikationsnummern || !fields) return;
+        try {
+          var parsed = JSON.parse(kontrollwiegungJobData.fabrikationsnummern);
+          if (!Array.isArray(parsed)) return;
+          var fabKey = String(fab || '').trim();
+          var touched = false;
+          for (var i = 0; i < parsed.length; i++) {
+            if (String(parsed[i].fabrikationsnummer || '').trim() !== fabKey) continue;
+            if (fields.type != null) parsed[i].type = fields.type;
+            if (fields.leistung != null) parsed[i].leistung = fields.leistung;
+            if (fields.elektronik != null) parsed[i].elektronik = fields.elektronik;
+            if (fields.projekt != null) parsed[i].projekt = fields.projekt;
+            touched = true;
+          }
+          if (touched) {
+            kontrollwiegungJobData = Object.assign({}, kontrollwiegungJobData, {
+              fabrikationsnummern: JSON.stringify(parsed)
+            });
+          }
+        } catch (e) { /* ignore */ }
+      }
+  
+      async function persistKopfToAnlagenstamm(fab) {
+        fab = String(fab || '').trim();
+        if (!fab) return;
+        var typeVal = typeof sanitizeLeistungField === 'function'
+          ? sanitizeLeistungField((typeEl || {}).value)
+          : String((typeEl || {}).value || '').trim();
+        var leistungVal = typeof sanitizeLeistungField === 'function'
+          ? sanitizeLeistungField((leistungEl || {}).value)
+          : String((leistungEl || {}).value || '').trim();
+        var elektronikVal = typeof sanitizeLeistungField === 'function'
+          ? sanitizeLeistungField((elektronikEl || {}).value)
+          : String((elektronikEl || {}).value || '').trim();
+        var projektVal = typeof sanitizeLeistungField === 'function'
+          ? sanitizeLeistungField((projektEl || {}).value)
+          : String((projektEl || {}).value || '').trim();
+        if (!typeVal && !leistungVal && !elektronikVal && !projektVal) return;
+        var existing = null;
+        try {
+          var lookupRes = await fetch(API_BASE + '/api/anlagenstamm_lookup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+            body: JSON.stringify({ fab: fab, local_only: 1 })
+          });
+          var lookupData = await lookupRes.json().catch(function () { return {}; });
+          if (lookupData && lookupData.ok && lookupData.row) existing = lookupData.row;
+        } catch (e) { /* optional */ }
+        var payload = Object.assign({
+          baseUrl: getDispoBaseUrl(),
+          serverUsername: typeof getDispoUsername === 'function' ? getDispoUsername() : (typeof getServerUsername === 'function' ? getServerUsername() : ''),
+          serverPassword: typeof getDispoPassword === 'function' ? getDispoPassword() : (typeof getServerPassword === 'function' ? getServerPassword() : ''),
+          id: existing && existing.id ? parseInt(existing.id, 10) : 0,
+          fabrikationsnummer: fab
+        }, typeof dispoBasePayloadExtra === 'function' ? dispoBasePayloadExtra() : {});
+        if (typeVal) payload.type = typeVal;
+        if (leistungVal) payload.leistung = leistungVal;
+        if (elektronikVal) payload.elektronik = elektronikVal;
+        if (projektVal) payload.projekt = projektVal;
+        await anlagenstammSaveDispo(payload);
+        patchJobFabStammFields(fab, {
+          type: typeVal || (existing && existing.type) || '',
+          leistung: leistungVal || (existing && existing.leistung) || '',
+          elektronik: elektronikVal || (existing && existing.elektronik) || '',
+          projekt: projektVal || (existing && existing.projekt) || ''
+        });
+        if (typeof mergeAnlagenstammFieldsIntoOpenJob === 'function') {
+          mergeAnlagenstammFieldsIntoOpenJob(fab, {
+            type: payload.type || '',
+            leistung: payload.leistung || '',
+            elektronik: payload.elektronik || '',
+            projekt: payload.projekt || ''
+          });
+        }
+      }
+  
+      async function loadJobWithAnlagenstammKw(jobId) {
+        var baseUrl = getDispoBaseUrl();
+        var techId = getTechId();
+        var headers = Object.assign(
+          { 'X-Technician-Id': String(techId) },
+          dispoBasicAuthHeaders(getDispoUsername, getDispoPassword),
+        );
+        var localUrl =
+          API_BASE +
+          '/api/job?id=' +
+          encodeURIComponent(jobId) +
+          '&technician_id=' +
+          encodeURIComponent(techId) +
+          '&enrich_anlagenstamm=1&enrich_local_only=1&base_url=' +
+          encodeURIComponent(baseUrl || '');
+        try {
+          var localRes = await fetch(localUrl, { headers: headers });
+          var localData = await localRes.json().catch(function () {
+            return {};
+          });
+          if (localRes.ok && localData.ok && localData.job) {
+            return localData.job;
+          }
+        } catch (e) {
+          /* Fallback */
+        }
+        var url =
+          API_BASE +
+          '/api/job?id=' +
+          jobId +
+          '&technician_id=' +
+          techId +
+          '&enrich_anlagenstamm=1&base_url=' +
+          encodeURIComponent(baseUrl || '');
+        var r = await fetch(url, { headers: headers });
+        var data = await r.json();
+        return data.job;
+      }
+  
+      async function loadKontrollwiegungJobs() {
+        return fetchMyAssignedJobs();
+      }
+
+      function mapStoredRecordToDraft(rec) {
+        if (!rec || typeof rec !== 'object') return null;
+        return {
+          durchfuehrungsdatum: rec.durchfuehrungsdatum || '',
+          projekt: rec.projekt != null ? String(rec.projekt) : '',
+          type: rec.type != null ? String(rec.type) : '',
+          leistung: rec.leistung != null ? String(rec.leistung) : '',
+          elektronik: rec.elektronik != null ? String(rec.elektronik) : '',
+          teilung_kontrollwaage: rec.teilung_kontrollwaage != null ? String(rec.teilung_kontrollwaage) : '',
+          bereich_max: rec.bereich_max != null ? String(rec.bereich_max) : '',
+          letzte_eichung: rec.letzte_eichung != null ? String(rec.letzte_eichung) : '',
+          wiegungen: Array.isArray(rec.wiegungen) ? rec.wiegungen : [emptyWiegung()],
+          protokoll_id: rec.protokoll_id != null ? rec.protokoll_id : (rec.local_id != null ? 'local:' + rec.local_id : null),
+          gespeichert_am: rec.gespeichert_am || rec.updated_at || '',
+          updated_at: rec.updated_at || rec.gespeichert_am || '',
+          fabrikationsnummer: rec.fabrikationsnummer != null ? String(rec.fabrikationsnummer) : ''
+        };
+      }
+
+      async function loadKontrollwiegungDraftsForJob(jobId) {
+        kwDraftByFab = {};
+        if (!jobId) return;
+        try {
+          var r = await fetch(
+            API_BASE + '/api/protokolle/kontrollwiegung?job_id=' + encodeURIComponent(jobId),
+            { headers: { 'X-Technician-Id': String(getTechId()) } }
+          );
+          var data = await r.json().catch(function () { return {}; });
+          if (!r.ok || !data.ok) return;
+          var byFab = (data.store && data.store.byFab) || (data.data && data.data.byFab) || {};
+          Object.keys(byFab).forEach(function (fab) {
+            var draft = mapStoredRecordToDraft(byFab[fab]);
+            if (draft) kwDraftByFab[String(fab).trim()] = draft;
+          });
+        } catch (e) { /* gespeicherte Daten optional */ }
+      }
+
+      async function applyJobSelection(jobId) {
+        kwDraftByFab = {};
+        setActiveFabValue('');
+        lastProtokollId = null;
+        if (pdfBtn) pdfBtn.style.display = 'none';
+        if (!jobId) {
+          kontrollwiegungJobData = null;
+          updateKundeHint(null);
+          renderFabButtons(null);
+          updateSpeicherMeta('', null);
+          if (projektEl) projektEl.value = '';
+          if (typeEl) typeEl.value = '';
+          if (leistungEl) leistungEl.value = '';
+          if (elektronikEl) elektronikEl.value = '';
+          if (teilungEl) teilungEl.value = '';
+          if (bereichMaxEl) bereichMaxEl.value = '';
+          if (letzteEichungEl) letzteEichungEl.value = '';
+          wiegungen = [emptyWiegung()];
+          renderZeilen();
+          return;
+        }
+        kontrollwiegungJobData = await loadJobWithAnlagenstammKw(jobId);
+        updateKundeHint(kontrollwiegungJobData);
+        await loadKontrollwiegungDraftsForJob(jobId);
+        renderFabButtons(kontrollwiegungJobData);
+        var fns = parseJobFabrikationsnummernOrdered(kontrollwiegungJobData || {});
+        var preferredFab = '';
+        if (fns.length) {
+          for (var i = 0; i < fns.length; i++) {
+            if (kwDraftByFab[fns[i]]) {
+              preferredFab = fns[i];
+              break;
+            }
+          }
+          loadFabIntoForm(preferredFab || fns[0]);
+        } else {
+          applyDraftToForm({
+            durchfuehrungsdatum: todayIsoLocal(),
+            wiegungen: [emptyWiegung()]
+          }, {});
+        }
+      }
+  
+      if (addRowBtn) addRowBtn.addEventListener('click', addRow);
+      if (abbrechenBtn) abbrechenBtn.addEventListener('click', function () {
+        if (typeof showView === 'function') showView('start');
+      });
+  
+      if (jobSelect) {
+        jobSelect.addEventListener('change', async function () {
+          var id = parseInt(this.value, 10);
+          try {
+            await applyJobSelection(id || 0);
+          } catch (e) {
+            if (kundeHintEl) {
+              kundeHintEl.hidden = false;
+              kundeHintEl.textContent = 'Fehler: ' + (e && e.message ? e.message : 'Unbekannt');
+            }
+          }
+        });
+      }
+  
+      if (form) {
+        form.addEventListener('submit', async function (e) {
+          e.preventDefault();
+          if (!kontrollwiegungJobData) { alert('Bitte Auftrag wählen.'); return; }
+          var fab = getActiveFab();
+          if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
+          var datum = (datumEl && datumEl.value) ? datumEl.value.trim() : '';
+          if (!datum) { alert('Bitte Datum der Durchführung angeben.'); return; }
+          syncWiegungenFromDom();
+          if (!wiegungen.length) { alert('Mindestens eine Wiegung erforderlich.'); return; }
+          var draft = collectFormDraft();
+          kwDraftByFab[fab] = draft;
+          var body = {
+            technician_id: getTechId(),
+            job_id: parseInt(jobSelect.value, 10),
+            fabrikationsnummer: fab,
+            durchfuehrungsdatum: datum,
+            projekt: draft.projekt,
+            type: draft.type,
+            leistung: draft.leistung,
+            elektronik: draft.elektronik,
+            teilung_kontrollwaage: draft.teilung_kontrollwaage,
+            bereich_max: draft.bereich_max,
+            letzte_eichung: draft.letzte_eichung,
+            wiegungen: wiegungen,
+            base_url: getDispoBaseUrl(),
+            serverUsername: getDispoUsername(),
+            serverPassword: getDispoPassword()
+          };
+          try {
+            await persistKopfToAnlagenstamm(fab);
+            var r = await fetch(API_BASE + '/api/kontrollwiegungsprotokoll_save', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+              body: JSON.stringify(body)
+            });
+            var data = await r.json().catch(function () { return {}; });
+            if (!r.ok || !data.ok) {
+              alert('Fehler: ' + (data.error || r.status));
+              return;
+            }
+            if (data.warning) alert(data.warning);
+            else if (typeof showToast === 'function') {
+              var saveMsg = 'Kontrollwiegungsprotokoll gespeichert.';
+              if (data.saved_pdf) saveMsg += ' PDF: ' + data.saved_pdf;
+              showToast(saveMsg);
+            }
+            lastProtokollId = data.local_protokoll_id || data.protokoll_id || null;
+            if (kwDraftByFab[fab]) kwDraftByFab[fab].protokoll_id = lastProtokollId;
+            // Nach Speichern erneut aus Dokumente_Monteur laden (inkl. Teilung/Bereich/Eichnung + Speicherdatum)
+            try {
+              await loadKontrollwiegungDraftsForJob(parseInt(jobSelect.value, 10));
+              renderFabButtons(kontrollwiegungJobData);
+              if (kwDraftByFab[fab]) {
+                applyDraftToForm(kwDraftByFab[fab], stammFieldsForFab(kontrollwiegungJobData, fab));
+                updateSpeicherMeta(fab, kwDraftByFab[fab]);
+              } else {
+                updateSpeicherMeta(fab, null);
+              }
+            } catch (_) { /* optional */ }
+            if (pdfBtn) {
+              pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+            }
+          } catch (err) {
+            alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+          }
+        });
+      }
+  
+      if (pdfBtn) {
+        pdfBtn.addEventListener('click', async function () {
+          var fab = getActiveFab();
+          var jobId = jobSelect ? parseInt(jobSelect.value, 10) : 0;
+          var protokollId = lastProtokollId;
+          if (!protokollId && fab && kwDraftByFab[fab] && kwDraftByFab[fab].protokoll_id) {
+            protokollId = kwDraftByFab[fab].protokoll_id;
+          }
+          if (!protokollId) {
+            alert('Kein gespeichertes Protokoll – bitte zuerst speichern.');
+            return;
+          }
+          var url =
+            API_BASE +
+            '/api/kontrollwiegungsprotokoll_pdf?id=' +
+            encodeURIComponent(protokollId) +
+            '&technician_id=' +
+            encodeURIComponent(getTechId()) +
+            '&open_local=1' +
+            '&base_url=' +
+            encodeURIComponent(getDispoBaseUrl() || '');
+          if (Number.isFinite(jobId) && jobId > 0) {
+            url += '&job_id=' + encodeURIComponent(jobId) + '&local_job_id=' + encodeURIComponent(jobId);
+          }
+          if (fab) url += '&fabrikationsnummer=' + encodeURIComponent(fab);
+          try {
+            var r = await fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } });
+            var data = await r.json().catch(function () { return {}; });
+            if (!r.ok || !data.ok || !data.path) {
+              alert((data && data.error) ? data.error : 'PDF konnte nicht geöffnet werden.');
+              return;
+            }
+            if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
+              var openResult = await monteurApp.openPath(String(data.path));
+              if (openResult && openResult.ok === false) {
+                alert('PDF-Datei liegt unter:\n' + (data.rel || data.path) +
+                  (openResult.error ? ('\n\nÖffnen fehlgeschlagen: ' + openResult.error) : ''));
+                return;
+              }
+              if (typeof showToast === 'function') {
+                showToast('PDF geöffnet' + (data.rel ? (': ' + data.rel) : ''));
+              }
+              return;
+            }
+            if (typeof showToast === 'function') {
+              showToast('PDF gespeichert' + (data.rel ? (': ' + data.rel) : ''));
+            } else {
+              alert('PDF gespeichert unter:\n' + (data.rel || data.path));
+            }
+          } catch (e) { alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt')); }
+        });
+      }
+  
+      window.openProtokolleKontrollwiegungen = function () {
+        loadKontrollwiegungJobs().then(function (jobs) {
+          if (jobSelect) {
+            jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
+              jobs.map(function (j) {
+                return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
+              }).join('');
+            var defaultJobId = resolveTodayProtokollJobId(jobs);
+            if (defaultJobId) {
+              jobSelect.value = defaultJobId;
+              jobSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            } else {
+              applyJobSelection(0);
+              if (datumEl && !datumEl.value) datumEl.value = todayIsoLocal();
+            }
+          }
+          lastProtokollId = null;
+          if (pdfBtn) pdfBtn.style.display = 'none';
+        });
+      };
+    })();
+
+  (function initProtokolleSchleppketten() {
+    var jobSelect = document.getElementById('schleppkettenJob');
+    var fabHidden = document.getElementById('schleppkettenFab');
+    var fabButtonsEl = document.getElementById('schleppkettenFabButtons');
+    var fabGroupEl = document.getElementById('schleppkettenFabGroup');
+    var datumEl = document.getElementById('schleppkettenDatum');
+    var projektEl = document.getElementById('schleppkettenProjekt');
+    var kundeHintEl = document.getElementById('schleppkettenKundeHint');
+    var waagenartEl = document.getElementById('schleppkettenWaagenart');
+    var typeEl = document.getElementById('schleppkettenType');
+    var leistungEl = document.getElementById('schleppkettenLeistung');
+    var elektronikEl = document.getElementById('schleppkettenElektronik');
+    var posNrEl = document.getElementById('schleppkettenPosNr');
+    var gnEl = document.getElementById('schleppkettenGn');
+    var monteurEl = document.getElementById('schleppkettenMonteur');
+    var speicherMetaEl = document.getElementById('schleppkettenSpeicherMeta');
+    var kettenContainer = document.getElementById('schleppkettenKettenZeilen');
+    var addKetteBtn = document.getElementById('schleppkettenAddKette');
+    var zeilenContainer = document.getElementById('schleppkettenZeilen');
+    var addRowBtn = document.getElementById('schleppkettenAddRow');
+    var form = document.getElementById('schleppkettenForm');
+    var pdfBtn = document.getElementById('schleppkettenPdf');
+    var abbrechenBtn = document.getElementById('schleppkettenAbbrechen');
+    if (!form || !jobSelect) return;
+
+    var skJobData = null;
+    var messungen = [];
+    var ketten = [];
     var lastProtokollId = null;
+    var skDraftByFab = {};
+    var activeFab = '';
+    var skFabSwitching = false;
+    var MAX_ROWS = 15;
+    var MAX_KETTEN = 15;
+
+    function defaultMonteurName() {
+      var tel = document.getElementById('technicianName');
+      return tel && tel.textContent ? String(tel.textContent).trim() : '';
+    }
 
     function escapeHtml(s) {
       if (s == null) return '';
@@ -15305,140 +16675,802 @@
       d.textContent = s;
       return d.innerHTML;
     }
-    function formatDateRange(start, end) {
-      if (!start && !end) return '';
-      var s = (start || '').toString().slice(0, 10);
-      var e = (end || '').toString().slice(0, 10);
-      if (s && e && s !== e) return s + ' – ' + e;
-      return s || e;
+    function todayIsoLocal() {
+      var today = new Date();
+      return today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
     }
-
-    function calcRow(bandwaage, tara, brutto) {
-      var kontrollwaage = (parseFloat(brutto) || 0) - (parseFloat(tara) || 0);
-      var fehlerKg = (parseFloat(bandwaage) || 0) - kontrollwaage;
-      var fehlerProzent = kontrollwaage !== 0 ? (fehlerKg / kontrollwaage) * 100 : null;
-      return { kontrollwaage: kontrollwaage, fehlerKg: fehlerKg, fehlerProzent: fehlerProzent };
+    function formatGespeichertAmDisplay(iso) {
+      var s = String(iso || '').trim();
+      if (!s) return '';
+      var d = new Date(s);
+      if (isNaN(d.getTime())) return s;
+      return d.toLocaleString('de-DE', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
     }
-
-    function renderKopfdatenKontrollwiegung(job) {
-      var techName = '';
+    function parseNumInput(v) {
+      if (v == null || String(v).trim() === '') return null;
+      var n = Number(String(v).trim().replace(/\s/g, '').replace(',', '.'));
+      return Number.isFinite(n) ? n : null;
+    }
+    function formatNum(n, digits) {
+      if (n == null || !isFinite(n)) return '';
+      return Number(n).toFixed(digits != null ? digits : 3);
+    }
+    function formatPct(n) {
+      if (n == null || !isFinite(n)) return '';
+      var sign = n > 0 ? '+' : '';
+      return sign + Number(n).toFixed(2);
+    }
+    function getActiveFab() {
+      return activeFab || (fabHidden && fabHidden.value ? String(fabHidden.value).trim() : '');
+    }
+    function setActiveFabValue(fab) {
+      activeFab = fab ? String(fab).trim() : '';
+      if (fabHidden) fabHidden.value = activeFab;
+    }
+    function updateSpeicherMeta(fab, draft) {
+      if (!speicherMetaEl) return;
+      fab = String(fab || '').trim();
+      var am = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
+      if (!fab) { speicherMetaEl.hidden = true; speicherMetaEl.textContent = ''; return; }
+      speicherMetaEl.hidden = false;
+      speicherMetaEl.textContent = am
+        ? ('FN ' + fab + ' · Gespeichert: ' + formatGespeichertAmDisplay(am))
+        : ('FN ' + fab + ' · Noch nicht gespeichert');
+    }
+    function findFabRow(job, fab) {
+      if (!job || !job.fabrikationsnummern) return null;
       try {
-        var techEl = document.getElementById('technicianName');
-        if (techEl) techName = techEl.textContent || '';
-      } catch (e) {}
-      var datum = formatDateRange(job.start_datetime, job.end_datetime);
-      var fabList = parseJobFabrikationsnummernOrdered(job);
-      kopfdatenEl.innerHTML = '<div><strong>Kunde:</strong> ' + escapeHtml(job.customer_name || '') + '</div>' +
-        '<div><strong>Projekt:</strong> ' + escapeHtml(job.job_number || job.description || '') + '</div>' +
-        '<div><strong>FN:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
-        '<div><strong>Datum:</strong> ' + escapeHtml(datum) + '</div>' +
-        '<div><strong>Servicetechniker:</strong> ' + escapeHtml(techName) + '</div>';
+        var parsed = JSON.parse(job.fabrikationsnummern);
+        if (!Array.isArray(parsed)) return null;
+        var fabNorm = String(fab || '').trim();
+        for (var i = 0; i < parsed.length; i++) {
+          var rowFn = parsed[i] && parsed[i].fabrikationsnummer != null ? String(parsed[i].fabrikationsnummer).trim() : '';
+          if (rowFn === fabNorm) return parsed[i];
+        }
+      } catch (e) { /* ignore */ }
+      return null;
     }
-
-    function fillFabSelect(job) {
-      var opts = ['<option value="">– aus Auftrag –</option>'];
-      var fabList = parseJobFabrikationsnummernOrdered(job);
-      fabList.forEach(function (fn) { opts.push('<option value="' + escapeHtml(fn) + '">' + escapeHtml(fn) + '</option>'); });
-      fabSelect.innerHTML = opts.join('');
+    function readFabField(r, keys) {
+      if (!r || typeof r !== 'object') return '';
+      for (var i = 0; i < keys.length; i++) {
+        if (r[keys[i]] != null && String(r[keys[i]]).trim() !== '') return String(r[keys[i]]).replace(/\s+/g, ' ').trim();
+      }
+      return '';
     }
-
-    function getRowData(rowEl) {
-      var num = (rowEl.querySelector('.kw-num') || {}).textContent || '';
-      var bandwaage = (rowEl.querySelector('input[name="bandwaage_kg"]') || {}).value;
-      var tara = (rowEl.querySelector('input[name="tara_kg"]') || {}).value;
-      var brutto = (rowEl.querySelector('input[name="brutto_kg"]') || {}).value;
-      var leistung = (rowEl.querySelector('input[name="leistung_th"]') || {}).value;
-      var bemerkung = (rowEl.querySelector('input[name="bemerkung"], textarea[name="bemerkung"]') || {}).value;
-      var teilung = (rowEl.querySelector('input[name="teilung_kontrollwaage"]') || {}).value;
-      var bereichMax = (rowEl.querySelector('input[name="bereich_max"]') || {}).value;
-      var letzteEichung = (rowEl.querySelector('input[name="letzte_eichung"]') || {}).value;
+    function readProjektFromFabRowSk(r) {
+      return readFabField(r, ['projekt', 'Projekt', 'project']);
+    }
+    function resolveSchleppkettenProjekt(job, fab) {
+      var row = findFabRow(job, fab);
+      if (row) {
+        var p = readProjektFromFabRowSk(row);
+        if (p) return p;
+      }
+      if (!job || !job.fabrikationsnummern) return '';
+      try {
+        var parsed = JSON.parse(job.fabrikationsnummern);
+        if (!Array.isArray(parsed) || !parsed.length) return '';
+        var projs = parsed.map(readProjektFromFabRowSk).filter(function (x) { return x !== ''; });
+        if (!projs.length) return '';
+        var first = projs[0];
+        for (var j = 1; j < projs.length; j++) {
+          if (projs[j] !== first) return '';
+        }
+        return first;
+      } catch (e2) {
+        return '';
+      }
+    }
+    function stammFieldsForFab(job, fab) {
+      var row = findFabRow(job, fab) || {};
       return {
-        bandwaage_kg: bandwaage,
-        tara_kg: tara,
-        brutto_kg: brutto,
-        leistung_th: leistung,
-        bemerkung: bemerkung || '',
-        teilung_kontrollwaage: teilung || '',
-        bereich_max: bereichMax || '',
-        letzte_eichung: letzteEichung || ''
+        type: readFabField(row, ['type', 'Type']),
+        leistung: readFabField(row, ['leistung', 'Leistung', 'qmax', 'Qmax']),
+        elektronik: readFabField(row, ['elektronik', 'Elektronik', 'dwc', 'DWC']),
+        pos_nr: readFabField(row, ['position', 'Position', 'pos_nr', 'Pos']),
+        projekt: readProjektFromFabRowSk(row) || resolveSchleppkettenProjekt(job, fab)
       };
     }
-
-    function updateRowCalculations(rowEl) {
-      var bandwaage = parseFloat((rowEl.querySelector('input[name="bandwaage_kg"]') || {}).value) || 0;
-      var tara = parseFloat((rowEl.querySelector('input[name="tara_kg"]') || {}).value) || 0;
-      var brutto = parseFloat((rowEl.querySelector('input[name="brutto_kg"]') || {}).value) || 0;
-      var c = calcRow(bandwaage, tara, brutto);
-      var kwEl = rowEl.querySelector('.kw-kontrollwaage');
-      var fkEl = rowEl.querySelector('.kw-fehler-kg');
-      var fpEl = rowEl.querySelector('.kw-fehler-prozent');
-      if (kwEl) kwEl.textContent = c.kontrollwaage.toFixed(2);
-      if (fkEl) fkEl.textContent = c.fehlerKg.toFixed(2);
-      if (fpEl) fpEl.textContent = c.fehlerProzent != null ? c.fehlerProzent.toFixed(2) + ' %' : '–';
+    function updateKundeHint(job) {
+      if (!kundeHintEl) return;
+      var name = job && job.customer_name ? String(job.customer_name).trim() : '';
+      if (!name) {
+        kundeHintEl.hidden = true;
+        kundeHintEl.textContent = '';
+        return;
+      }
+      kundeHintEl.hidden = false;
+      kundeHintEl.textContent = 'Kunde: ' + name;
     }
-
-    function buildRowHtml(idx) {
-      var n = idx + 1;
-      var w = wiegungen[idx] || {};
-      var style = 'margin-bottom:0.5rem;padding:0.75rem;background:var(--bg);border:1px solid var(--accent);border-radius:4px';
-      var row = '<div class="kontrollwiegung-row" data-idx="' + idx + '" style="' + style + '">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem">' +
-        '<span class="kw-num" style="font-weight:bold">' + n + '.</span>' +
-        '<button type="button" class="btn btn-ghost kw-remove" style="font-size:0.85rem">Wiegung entfernen</button></div>' +
-        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(10rem,1fr));gap:0.5rem">' +
-        '<div class="form-group"><label>Bandwaage [kg]</label><input type="number" step="any" name="bandwaage_kg" value="' + escapeHtml((w.bandwaage_kg != null ? w.bandwaage_kg : '')) + '" placeholder="kg" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
-        '<div class="form-group"><label>Tara [kg]</label><input type="number" step="any" name="tara_kg" value="' + escapeHtml((w.tara_kg != null ? w.tara_kg : '')) + '" placeholder="kg" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
-        '<div class="form-group"><label>Brutto [kg]</label><input type="number" step="any" name="brutto_kg" value="' + escapeHtml((w.brutto_kg != null ? w.brutto_kg : '')) + '" placeholder="kg" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
-        '<div class="form-group"><label>Leistung [t/h]</label><input type="number" step="any" name="leistung_th" value="' + escapeHtml((w.leistung_th != null ? w.leistung_th : '')) + '" placeholder="t/h" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
-        '<div class="form-group"><label>Teilung Kontrollwaage</label><input type="text" name="teilung_kontrollwaage" value="' + escapeHtml((w.teilung_kontrollwaage != null ? w.teilung_kontrollwaage : '')) + '" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
-        '<div class="form-group"><label>Bereich max</label><input type="text" name="bereich_max" value="' + escapeHtml((w.bereich_max != null ? w.bereich_max : '')) + '" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
-        '<div class="form-group"><label>Letzte Eichung</label><input type="text" name="letzte_eichung" value="' + escapeHtml((w.letzte_eichung != null ? w.letzte_eichung : '')) + '" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
-        '<div class="form-group" style="grid-column:1/-1"><label>Bemerkung</label><input type="text" name="bemerkung" value="' + escapeHtml((w.bemerkung != null ? w.bemerkung : '')) + '" style="width:100%;padding:0.4rem;border:1px solid var(--accent);border-radius:4px;background:var(--card);color:var(--text)"></div>' +
-        '</div>' +
-        '<div style="margin-top:0.5rem;font-size:0.9rem;color:var(--text-muted)">' +
-        'Kontrollwaage [kg]: <span class="kw-kontrollwaage">–</span> &nbsp; Fehler [kg]: <span class="kw-fehler-kg">–</span> &nbsp; Fehler [%]: <span class="kw-fehler-prozent">–</span>' +
-        '</div></div>';
+    function pickDraftField(draft, primary, legacy) {
+      if (!draft) return '';
+      if (draft[primary] != null && String(draft[primary]).trim() !== '') return String(draft[primary]).trim();
+      if (legacy && draft[legacy] != null && String(draft[legacy]).trim() !== '') return String(draft[legacy]).trim();
+      return '';
+    }
+    function computeRow(row) {
+      var band = parseNumInput(row.bandwaage_t);
+      var kgm = parseNumInput(row.kg_pro_m);
+      var geschw = parseNumInput(row.geschwindigkeit_ms);
+      var messzeit = parseNumInput(row.messzeit_s);
+      row.pruefkette_t = '';
+      row.fehler_prozent = '';
+      row.leistung_th = '';
+      if (messzeit != null && messzeit >= 1 && kgm != null && geschw != null) {
+        var pk = (kgm * geschw * messzeit) / 1000;
+        row.pruefkette_t = formatNum(pk, 4);
+        if (band != null && pk !== 0) row.fehler_prozent = formatPct(((band - pk) / pk) * 100);
+        row.leistung_th = formatNum((pk / messzeit) * 3600, 1);
+      }
       return row;
     }
-
-    function renderZeilen() {
-      zeilenContainer.innerHTML = '';
-      wiegungen.forEach(function (w, idx) {
-        var div = document.createElement('div');
-        div.innerHTML = buildRowHtml(idx);
-        var rowEl = div.firstElementChild;
-        zeilenContainer.appendChild(rowEl);
-        rowEl.querySelectorAll('input').forEach(function (inp) {
-          inp.addEventListener('input', function () { updateRowCalculations(rowEl); });
-        });
-        updateRowCalculations(rowEl);
-        rowEl.querySelector('.kw-remove').addEventListener('click', function () {
-          wiegungen.splice(idx, 1);
-          renderZeilen();
-        });
-      });
-    }
-
-    function addRow() {
-      wiegungen.push({
-        bandwaage_kg: '',
-        tara_kg: '',
-        brutto_kg: '',
-        leistung_th: '',
+    function emptyMessung() {
+      return {
+        bandwaage_t: '',
+        kg_pro_m: '',
+        geschwindigkeit_ms: '',
+        messzeit_s: '',
         bemerkung: '',
-        teilung_kontrollwaage: '',
-        bereich_max: '',
-        letzte_eichung: ''
-      });
-      renderZeilen();
+        in_summe: true,
+        pruefkette_t: '',
+        fehler_prozent: '',
+        leistung_th: ''
+      };
     }
-
-    async function loadJobWithAnlagenstammKw(jobId) {
+    function emptyKette() {
+      return {
+        tag: '',
+        ketten_type: '',
+        laenge: '',
+        gewicht_pro_kette: '',
+        gewicht_pro_meter: '',
+        in_summe: true
+      };
+    }
+    function computeKetteRow(row, opts) {
+      opts = opts || {};
+      row = Object.assign(emptyKette(), row || {});
+      if (opts.recalcMeter) {
+        var laenge = parseNumInput(row.laenge);
+        var gewicht = parseNumInput(row.gewicht_pro_kette);
+        row.gewicht_pro_meter = '';
+        if (laenge != null && laenge !== 0 && gewicht != null) {
+          row.gewicht_pro_meter = formatNum(gewicht / laenge, 4);
+        }
+      } else if (row.gewicht_pro_meter == null) {
+        row.gewicht_pro_meter = '';
+      }
+      return row;
+    }
+    function normalizeKettenList(list, legacyDraft) {
+      if (Array.isArray(list) && list.length) {
+        return list.map(function (k) {
+          return {
+            tag: k && k.tag != null ? String(k.tag) : '',
+            ketten_type: k && k.ketten_type != null ? String(k.ketten_type) : '',
+            laenge: k && k.laenge != null ? String(k.laenge) : '',
+            gewicht_pro_kette: k && k.gewicht_pro_kette != null ? String(k.gewicht_pro_kette) : '',
+            gewicht_pro_meter: k && k.gewicht_pro_meter != null ? String(k.gewicht_pro_meter) : '',
+            in_summe: k && (k.in_summe === false || k.in_summe === 0 || k.in_summe === '0') ? false : true
+          };
+        });
+      }
+      legacyDraft = legacyDraft || {};
+      var hasLegacy =
+        (legacyDraft.ketten_type != null && String(legacyDraft.ketten_type).trim() !== '') ||
+        (legacyDraft.ketten_laenge != null && String(legacyDraft.ketten_laenge).trim() !== '') ||
+        (legacyDraft.gewicht_pro_kette != null && String(legacyDraft.gewicht_pro_kette).trim() !== '') ||
+        (legacyDraft.gewicht_pro_meter != null && String(legacyDraft.gewicht_pro_meter).trim() !== '');
+      if (hasLegacy) {
+        return [{
+          tag: '',
+          ketten_type: legacyDraft.ketten_type != null ? String(legacyDraft.ketten_type) : '',
+          laenge: legacyDraft.ketten_laenge != null ? String(legacyDraft.ketten_laenge) : '',
+          gewicht_pro_kette: legacyDraft.gewicht_pro_kette != null ? String(legacyDraft.gewicht_pro_kette) : '',
+          gewicht_pro_meter: legacyDraft.gewicht_pro_meter != null ? String(legacyDraft.gewicht_pro_meter) : '',
+          in_summe: true
+        }];
+      }
+      return [emptyKette()];
+    }
+    function kettenSummaryFields(list) {
+      var marked = (list || []).filter(function (k) {
+        return !(k.in_summe === false || k.in_summe === 0 || k.in_summe === '0');
+      });
+      var types = [];
+      var sumLaenge = 0;
+      var sumGewicht = 0;
+      var sumMeter = 0;
+      var nLaenge = 0;
+      var nGewicht = 0;
+      var nMeter = 0;
+      marked.forEach(function (k) {
+        var t = k.ketten_type != null ? String(k.ketten_type).trim() : '';
+        if (t && types.indexOf(t) === -1) types.push(t);
+        var laenge = parseNumInput(k.laenge);
+        var gewicht = parseNumInput(k.gewicht_pro_kette);
+        var meter = parseNumInput(k.gewicht_pro_meter);
+        if (laenge != null) { sumLaenge += laenge; nLaenge += 1; }
+        if (gewicht != null) { sumGewicht += gewicht; nGewicht += 1; }
+        if (meter != null) { sumMeter += meter; nMeter += 1; }
+      });
+      return {
+        ketten_type: types.join(', '),
+        ketten_laenge: nLaenge ? formatNum(sumLaenge, 3) : '',
+        ketten_anzahl: String(marked.length),
+        gewicht_pro_kette: nGewicht ? formatNum(sumGewicht, 3) : '',
+        gewicht_pro_meter: (nLaenge && nGewicht && sumLaenge !== 0)
+          ? formatNum(sumGewicht / sumLaenge, 4)
+          : (nMeter ? formatNum(sumMeter, 4) : '')
+      };
+    }
+    function collectFormDraft() {
+      syncKettenFromDom();
+      syncMessungenFromDom();
+      var prev = skDraftByFab[getActiveFab()] || {};
+      var leistung = leistungEl ? String(leistungEl.value || '').trim() : '';
+      var elektronik = elektronikEl ? String(elektronikEl.value || '').trim() : '';
+      var kettenSum = kettenSummaryFields(ketten);
+      return {
+        durchfuehrungsdatum: datumEl ? String(datumEl.value || '').trim() : '',
+        projekt: projektEl ? String(projektEl.value || '').trim() : '',
+        waagenart: waagenartEl ? String(waagenartEl.value || '').trim() : 'Bandwaage',
+        type: typeEl ? String(typeEl.value || '').trim() : '',
+        leistung: leistung,
+        elektronik: elektronik,
+        nennleistung: leistung,
+        dwc: elektronik,
+        pos_nr: posNrEl ? String(posNrEl.value || '').trim() : '',
+        gn: gnEl ? String(gnEl.value || '').trim() : '',
+        monteur_name: monteurEl ? String(monteurEl.value || '').trim() : '',
+        ketten: ketten.slice(),
+        ketten_type: kettenSum.ketten_type,
+        ketten_laenge: kettenSum.ketten_laenge,
+        ketten_anzahl: kettenSum.ketten_anzahl,
+        gewicht_pro_kette: kettenSum.gewicht_pro_kette,
+        gewicht_pro_meter: kettenSum.gewicht_pro_meter,
+        messungen: messungen.slice(),
+        gespeichert_am: prev.gespeichert_am || '',
+        updated_at: prev.updated_at || '',
+        protokoll_id: prev.protokoll_id != null ? prev.protokoll_id : null
+      };
+    }
+    function stashDraftInMemory(fab) {
+      fab = String(fab || '').trim();
+      if (!fab) return;
+      skDraftByFab[fab] = collectFormDraft();
+    }
+    function applyDraftToForm(draft, stamm) {
+      draft = draft || {};
+      stamm = stamm || {};
+      if (datumEl) datumEl.value = draft.durchfuehrungsdatum || todayIsoLocal();
+      if (projektEl) projektEl.value = (draft.projekt != null && String(draft.projekt).trim() !== '') ? String(draft.projekt).trim() : (stamm.projekt || '');
+      if (waagenartEl) waagenartEl.value = draft.waagenart != null && String(draft.waagenart).trim() !== '' ? String(draft.waagenart).trim() : 'Bandwaage';
+      if (typeEl) typeEl.value = (draft.type != null && String(draft.type).trim() !== '') ? String(draft.type).trim() : (stamm.type || '');
+      if (leistungEl) {
+        var leistungVal = pickDraftField(draft, 'leistung', 'nennleistung');
+        leistungEl.value = leistungVal !== '' ? leistungVal : (stamm.leistung || '');
+      }
+      if (elektronikEl) {
+        var elektronikVal = pickDraftField(draft, 'elektronik', 'dwc');
+        elektronikEl.value = elektronikVal !== '' ? elektronikVal : (stamm.elektronik || '');
+      }
+      if (posNrEl) posNrEl.value = (draft.pos_nr != null && String(draft.pos_nr).trim() !== '') ? String(draft.pos_nr).trim() : (stamm.pos_nr || '');
+      if (gnEl) gnEl.value = draft.gn != null ? String(draft.gn) : '';
+      if (monteurEl) {
+        var monteurDraft = draft.monteur_name != null ? String(draft.monteur_name).trim() : '';
+        monteurEl.value = monteurDraft || defaultMonteurName();
+      }
+      ketten = normalizeKettenList(draft.ketten, draft);
+      renderKettenRows();
+      messungen = Array.isArray(draft.messungen) && draft.messungen.length
+        ? draft.messungen.map(function (m) {
+            return computeRow({
+              bandwaage_t: m.bandwaage_t != null ? m.bandwaage_t : '',
+              kg_pro_m: m.kg_pro_m != null ? m.kg_pro_m : '',
+              geschwindigkeit_ms: m.geschwindigkeit_ms != null ? m.geschwindigkeit_ms : '',
+              messzeit_s: m.messzeit_s != null ? m.messzeit_s : '',
+              bemerkung: m.bemerkung != null ? m.bemerkung : '',
+              in_summe: m.in_summe === false || m.in_summe === 0 || m.in_summe === '0' ? false : true
+            });
+          })
+        : [emptyMessung()];
+      renderRows();
+      applyKettenSumToMessungenKgProM({ onlyIfEmpty: true });
+      lastProtokollId = draft.protokoll_id || null;
+      if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+      updateSpeicherMeta(getActiveFab(), draft);
+    }
+    function getRowData(rowEl) {
+      var sumCb = rowEl.querySelector('input[name="in_summe"]');
+      return computeRow({
+        bandwaage_t: (rowEl.querySelector('input[name="bandwaage_t"]') || {}).value,
+        kg_pro_m: (rowEl.querySelector('input[name="kg_pro_m"]') || {}).value,
+        geschwindigkeit_ms: (rowEl.querySelector('input[name="geschwindigkeit_ms"]') || {}).value,
+        messzeit_s: (rowEl.querySelector('input[name="messzeit_s"]') || {}).value,
+        bemerkung: (rowEl.querySelector('input[name="bemerkung"]') || {}).value,
+        in_summe: sumCb ? !!sumCb.checked : true
+      });
+    }
+    function syncMessungenFromDom() {
+      if (!zeilenContainer) return;
+      var next = [];
+      zeilenContainer.querySelectorAll('.schleppketten-row').forEach(function (rowEl) {
+        next.push(getRowData(rowEl));
+      });
+      if (next.length) messungen = next;
+    }
+    function getKetteRowData(rowEl, opts) {
+      var sumCb = rowEl.querySelector('input[name="kette_in_summe"]');
+      return computeKetteRow({
+        tag: (rowEl.querySelector('input[name="kette_tag"]') || {}).value,
+        ketten_type: (rowEl.querySelector('input[name="ketten_type"]') || {}).value,
+        laenge: (rowEl.querySelector('input[name="laenge"]') || {}).value,
+        gewicht_pro_kette: (rowEl.querySelector('input[name="gewicht_pro_kette"]') || {}).value,
+        gewicht_pro_meter: (rowEl.querySelector('input[name="gewicht_pro_meter"]') || {}).value,
+        in_summe: sumCb ? !!sumCb.checked : true
+      }, opts);
+    }
+    function syncKettenFromDom() {
+      if (!kettenContainer) return;
+      var next = [];
+      kettenContainer.querySelectorAll('.schleppketten-kette-row').forEach(function (rowEl) {
+        next.push(getKetteRowData(rowEl));
+      });
+      if (next.length) ketten = next;
+    }
+    function getKettenGewichtProMeterSumme() {
+      if (!kettenContainer) {
+        syncKettenFromDom();
+        var sum = kettenSummaryFields(ketten);
+        return sum.gewicht_pro_meter ? sum.gewicht_pro_meter : null;
+      }
+      var sumLaenge = 0;
+      var sumGewicht = 0;
+      var sumMeter = 0;
+      var nLaenge = 0;
+      var nGewicht = 0;
+      var nMeter = 0;
+      var any = false;
+      kettenContainer.querySelectorAll('.schleppketten-kette-row').forEach(function (rowEl) {
+        var cb = rowEl.querySelector('input[name="kette_in_summe"]');
+        if (cb && !cb.checked) return;
+        any = true;
+        var laenge = parseNumInput((rowEl.querySelector('input[name="laenge"]') || {}).value);
+        var gewicht = parseNumInput((rowEl.querySelector('input[name="gewicht_pro_kette"]') || {}).value);
+        var meter = parseNumInput((rowEl.querySelector('input[name="gewicht_pro_meter"]') || {}).value);
+        if (laenge != null) { sumLaenge += laenge; nLaenge += 1; }
+        if (gewicht != null) { sumGewicht += gewicht; nGewicht += 1; }
+        if (meter != null) { sumMeter += meter; nMeter += 1; }
+      });
+      if (!any) return null;
+      if (nMeter) return formatNum(sumMeter, 4);
+      if (nLaenge && nGewicht && sumLaenge !== 0) return formatNum(sumGewicht / sumLaenge, 4);
+      return null;
+    }
+    function applyKettenSumToMessungenKgProM(opts) {
+      opts = opts || {};
+      var val = getKettenGewichtProMeterSumme();
+      if (val == null) return;
+      if (zeilenContainer) {
+        zeilenContainer.querySelectorAll('.schleppketten-row').forEach(function (rowEl) {
+          var kgEl = rowEl.querySelector('input[name="kg_pro_m"]');
+          if (!kgEl) return;
+          if (opts.onlyIfEmpty && String(kgEl.value || '').trim() !== '') return;
+          kgEl.value = val;
+          updateRowCalc(rowEl);
+        });
+        syncMessungenFromDom();
+        return;
+      }
+      messungen = (messungen.length ? messungen : [emptyMessung()]).map(function (m) {
+        if (opts.onlyIfEmpty && m.kg_pro_m != null && String(m.kg_pro_m).trim() !== '') return m;
+        return computeRow(Object.assign({}, m, { kg_pro_m: val }));
+      });
+    }
+    function updateKettenSummeRow() {
+      var sumRow = document.getElementById('schleppkettenKettenSummeRow');
+      if (!sumRow || !kettenContainer) return;
+      var sumLaenge = 0;
+      var sumGewicht = 0;
+      var sumMeter = 0;
+      var nLaenge = 0;
+      var nGewicht = 0;
+      var nMeter = 0;
+      var any = false;
+      kettenContainer.querySelectorAll('.schleppketten-kette-row').forEach(function (rowEl) {
+        var cb = rowEl.querySelector('input[name="kette_in_summe"]');
+        if (cb && !cb.checked) return;
+        any = true;
+        var laenge = parseNumInput((rowEl.querySelector('input[name="laenge"]') || {}).value);
+        var gewicht = parseNumInput((rowEl.querySelector('input[name="gewicht_pro_kette"]') || {}).value);
+        var meter = parseNumInput((rowEl.querySelector('input[name="gewicht_pro_meter"]') || {}).value);
+        if (laenge != null) { sumLaenge += laenge; nLaenge += 1; }
+        if (gewicht != null) { sumGewicht += gewicht; nGewicht += 1; }
+        if (meter != null) { sumMeter += meter; nMeter += 1; }
+      });
+      function setSum(key, text) {
+        var el = sumRow.querySelector('[data-sk-kette-sum="' + key + '"]');
+        if (el) el.textContent = any ? text : '–';
+      }
+      setSum('laenge', nLaenge ? formatNum(sumLaenge, 3) : '–');
+      setSum('gewicht_pro_kette', nGewicht ? formatNum(sumGewicht, 3) : '–');
+      var meterSumText = null;
+      if (nMeter) meterSumText = formatNum(sumMeter, 4);
+      else if (nLaenge && nGewicht && sumLaenge !== 0) meterSumText = formatNum(sumGewicht / sumLaenge, 4);
+      setSum('gewicht_pro_meter', meterSumText || '–');
+      applyKettenSumToMessungenKgProM();
+    }
+    function updateKetteRowCalc(rowEl) {
+      var data = getKetteRowData(rowEl, { recalcMeter: true });
+      var meterEl = rowEl.querySelector('input[name="gewicht_pro_meter"]');
+      if (meterEl) meterEl.value = data.gewicht_pro_meter;
+      updateKettenSummeRow();
+    }
+    function buildKetteRowHtml(idx) {
+      var k = ketten[idx] || emptyKette();
+      function val(key) { return escapeHtml(k[key] != null ? k[key] : ''); }
+      var inSumme = k.in_summe === false || k.in_summe === 0 || k.in_summe === '0' ? false : true;
+      return '<tr class="schleppketten-kette-row" data-idx="' + idx + '">' +
+        '<td class="sk-col-nr"><span class="sk-num">' + (idx + 1) + '</span></td>' +
+        '<td class="sk-col-ketten-tag"><input type="text" name="kette_tag" value="' + val('tag') + '" autocomplete="off" placeholder="Name"></td>' +
+        '<td class="sk-col-ketten-type"><input type="text" name="ketten_type" value="' + val('ketten_type') + '" autocomplete="off"></td>' +
+        '<td class="sk-col-num"><input type="number" step="any" name="laenge" data-sk-kette-calc value="' + val('laenge') + '" inputmode="decimal"></td>' +
+        '<td class="sk-col-num"><input type="number" step="any" name="gewicht_pro_kette" data-sk-kette-calc value="' + val('gewicht_pro_kette') + '" inputmode="decimal"></td>' +
+        '<td class="sk-col-num"><input type="number" step="any" name="gewicht_pro_meter" value="' + val('gewicht_pro_meter') + '" inputmode="decimal" title="Wird aus Gewicht/Länge berechnet, ist aber editierbar"></td>' +
+        '<td class="sk-col-act"><div class="sk-act-wrap">' +
+        '<input type="checkbox" class="sk-in-summe" name="kette_in_summe" title="Kette verwenden / in Summe"' + (inSumme ? ' checked' : '') + '>' +
+        '<button type="button" class="btn btn-ghost sk-kette-remove" title="Kette entfernen">×</button>' +
+        '</div></td></tr>';
+    }
+    function bindKetteRow(rowEl) {
+      rowEl.querySelectorAll('input[data-sk-kette-calc]').forEach(function (inp) {
+        inp.addEventListener('input', function () { updateKetteRowCalc(rowEl); });
+      });
+      var meterEl = rowEl.querySelector('input[name="gewicht_pro_meter"]');
+      if (meterEl) meterEl.addEventListener('input', updateKettenSummeRow);
+      var sumCb = rowEl.querySelector('input[name="kette_in_summe"]');
+      if (sumCb) sumCb.addEventListener('change', updateKettenSummeRow);
+      var rm = rowEl.querySelector('.sk-kette-remove');
+      if (rm) rm.addEventListener('click', function () {
+        syncKettenFromDom();
+        var idx = parseInt(rowEl.getAttribute('data-idx'), 10);
+        if (!Number.isFinite(idx)) return;
+        if (ketten.length <= 1) ketten = [emptyKette()];
+        else ketten.splice(idx, 1);
+        renderKettenRows();
+      });
+    }
+    function renderKettenRows() {
+      if (!kettenContainer) return;
+      if (!ketten.length) ketten = [emptyKette()];
+      ketten = ketten.map(function (k) {
+        var row = Object.assign(emptyKette(), k || {});
+        if (String(row.gewicht_pro_meter || '').trim() === '') {
+          row = computeKetteRow(row, { recalcMeter: true });
+        }
+        return row;
+      });
+      kettenContainer.innerHTML = ketten.map(function (_, i) { return buildKetteRowHtml(i); }).join('');
+      kettenContainer.querySelectorAll('.schleppketten-kette-row').forEach(bindKetteRow);
+      updateKettenSummeRow();
+    }
+    function updateSummeRow() {
+      var sumRow = document.getElementById('schleppkettenSummeRow');
+      if (!sumRow || !zeilenContainer) return;
+      var sumBand = 0, sumPk = 0, sumKgm = 0, sumZeit = 0, sumLeist = 0, nLeist = 0, any = false;
+      zeilenContainer.querySelectorAll('.schleppketten-row').forEach(function (rowEl) {
+        var cb = rowEl.querySelector('input[name="in_summe"]');
+        if (cb && !cb.checked) return;
+        any = true;
+        var band = parseNumInput((rowEl.querySelector('input[name="bandwaage_t"]') || {}).value);
+        var pk = parseNumInput((rowEl.querySelector('input[name="pruefkette_t"]') || {}).value);
+        var kgm = parseNumInput((rowEl.querySelector('input[name="kg_pro_m"]') || {}).value);
+        var zeit = parseNumInput((rowEl.querySelector('input[name="messzeit_s"]') || {}).value);
+        var leist = parseNumInput((rowEl.querySelector('input[name="leistung_th"]') || {}).value);
+        if (band != null) sumBand += band;
+        if (pk != null) sumPk += pk;
+        if (kgm != null) sumKgm += kgm;
+        if (zeit != null) sumZeit += zeit;
+        if (leist != null) { sumLeist += leist; nLeist += 1; }
+      });
+      function setSum(key, text) {
+        var el = sumRow.querySelector('[data-sk-sum="' + key + '"]');
+        if (el) el.textContent = any ? text : '–';
+      }
+      setSum('bandwaage_t', formatNum(sumBand, 3));
+      setSum('pruefkette_t', formatNum(sumPk, 3));
+      setSum('kg_pro_m', formatNum(sumKgm, 4));
+      setSum('messzeit_s', formatNum(sumZeit, 0));
+      setSum('leistung_th', nLeist ? formatNum(sumLeist / nLeist, 1) : '–');
+      if (any && sumPk !== 0) setSum('fehler_prozent', formatPct(((sumBand - sumPk) / sumPk) * 100));
+      else setSum('fehler_prozent', '–');
+    }
+    function updateRowCalc(rowEl) {
+      var data = getRowData(rowEl);
+      var pkEl = rowEl.querySelector('input[name="pruefkette_t"]');
+      var feEl = rowEl.querySelector('input[name="fehler_prozent"]');
+      var leEl = rowEl.querySelector('input[name="leistung_th"]');
+      if (pkEl) pkEl.value = data.pruefkette_t;
+      if (feEl) feEl.value = data.fehler_prozent;
+      if (leEl) leEl.value = data.leistung_th;
+      updateSummeRow();
+    }
+    function buildRowHtml(idx) {
+      var m = messungen[idx] || emptyMessung(idx);
+      function val(k) { return escapeHtml(m[k] != null ? m[k] : ''); }
+      var inSumme = m.in_summe === false || m.in_summe === 0 || m.in_summe === '0' ? false : true;
+      return '<tr class="schleppketten-row" data-idx="' + idx + '">' +
+        '<td class="sk-col-nr"><span class="sk-num">' + (idx + 1) + '</span></td>' +
+        '<td class="sk-col-num"><input type="number" step="any" name="bandwaage_t" data-sk-calc value="' + val('bandwaage_t') + '" inputmode="decimal"></td>' +
+        '<td class="sk-col-num"><input type="number" step="any" name="pruefkette_t" class="sk-calc-field" value="' + val('pruefkette_t') + '" readonly tabindex="-1"></td>' +
+        '<td class="sk-col-num"><input type="number" step="any" name="kg_pro_m" data-sk-calc value="' + val('kg_pro_m') + '" inputmode="decimal" title="Übernahme aus Summe Gewicht/Meter der Ketten, editierbar"></td>' +
+        '<td class="sk-col-num"><input type="number" step="any" name="geschwindigkeit_ms" data-sk-calc value="' + val('geschwindigkeit_ms') + '" inputmode="decimal"></td>' +
+        '<td class="sk-col-num"><input type="number" step="any" name="messzeit_s" data-sk-calc value="' + val('messzeit_s') + '" inputmode="decimal"></td>' +
+        '<td class="sk-col-num"><input type="text" name="fehler_prozent" class="sk-calc-field" value="' + val('fehler_prozent') + '" readonly tabindex="-1"></td>' +
+        '<td class="sk-col-num"><input type="number" step="any" name="leistung_th" class="sk-calc-field" value="' + val('leistung_th') + '" readonly tabindex="-1"></td>' +
+        '<td class="sk-col-bem"><input type="text" name="bemerkung" value="' + val('bemerkung') + '"></td>' +
+        '<td class="sk-col-act"><div class="sk-act-wrap">' +
+        '<input type="checkbox" class="sk-in-summe" name="in_summe" title="In Summe"' + (inSumme ? ' checked' : '') + '>' +
+        '<button type="button" class="btn btn-ghost sk-remove" title="Entfernen">×</button>' +
+        '</div></td></tr>';
+    }
+    function bindRow(rowEl) {
+      rowEl.querySelectorAll('input[data-sk-calc]').forEach(function (inp) {
+        inp.addEventListener('input', function () { updateRowCalc(rowEl); });
+      });
+      var sumCb = rowEl.querySelector('input[name="in_summe"]');
+      if (sumCb) sumCb.addEventListener('change', updateSummeRow);
+      var rm = rowEl.querySelector('.sk-remove');
+      if (rm) rm.addEventListener('click', function () {
+        syncMessungenFromDom();
+        var idx = parseInt(rowEl.getAttribute('data-idx'), 10);
+        if (!Number.isFinite(idx)) return;
+        if (messungen.length <= 1) { messungen = [emptyMessung(0)]; }
+        else messungen.splice(idx, 1);
+        renderRows();
+      });
+    }
+    function renderRows() {
+      if (!zeilenContainer) return;
+      if (!messungen.length) messungen = [emptyMessung(0)];
+      zeilenContainer.innerHTML = messungen.map(function (_, i) { return buildRowHtml(i); }).join('');
+      zeilenContainer.querySelectorAll('.schleppketten-row').forEach(bindRow);
+      updateSummeRow();
+    }
+    function renderFabButtonsActive() {
+      if (!fabButtonsEl) return;
+      var cur = getActiveFab();
+      fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
+        btn.classList.toggle('is-active', btn.getAttribute('data-fab') === cur);
+      });
+    }
+    function renderFabButtons(job) {
+      if (!fabButtonsEl) return;
+      var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(job || {}) : [];
+      if (fabGroupEl) fabGroupEl.style.display = fns.length ? 'block' : 'none';
+      fabButtonsEl.innerHTML = '';
+      if (!fns.length) {
+        setActiveFabValue('');
+        return;
+      }
+      fns.forEach(function (fn) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        var draft = skDraftByFab[fn];
+        var savedAt = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
+        btn.className = 'btn btn-ghost sp-fab-btn' + (fn === getActiveFab() ? ' is-active' : '') + (savedAt ? ' is-saved' : '');
+        btn.setAttribute('data-fab', fn);
+        btn.textContent = fn;
+        btn.title = savedAt
+          ? ('FN ' + fn + ' · Gespeichert: ' + formatGespeichertAmDisplay(savedAt))
+          : ('FN ' + fn + ' · Noch nicht gespeichert');
+        btn.addEventListener('click', function () {
+          switchSchleppkettenFab(fn);
+        });
+        fabButtonsEl.appendChild(btn);
+      });
+    }
+    function loadFabIntoForm(fab) {
+      fab = String(fab || '').trim();
+      setActiveFabValue(fab);
+      renderFabButtonsActive();
+      var stamm = stammFieldsForFab(skJobData, fab);
+      var draft = skDraftByFab[fab];
+      if (draft) {
+        applyDraftToForm(draft, stamm);
+        updateSpeicherMeta(fab, draft);
+      } else {
+        applyDraftToForm({
+          durchfuehrungsdatum: todayIsoLocal(),
+          projekt: stamm.projekt,
+          type: stamm.type,
+          leistung: stamm.leistung,
+          elektronik: stamm.elektronik,
+          pos_nr: stamm.pos_nr,
+          waagenart: 'Bandwaage',
+          monteur_name: defaultMonteurName(),
+          messungen: [emptyMessung()]
+        }, stamm);
+        updateSpeicherMeta(fab, null);
+      }
+      lastProtokollId = draft && draft.protokoll_id != null ? draft.protokoll_id : null;
+      if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+    }
+    async function persistDraftJsonForFab(fab) {
+      fab = String(fab || '').trim();
+      if (!fab || !jobSelect || !jobSelect.value) return null;
+      stashDraftInMemory(fab);
+      var draft = skDraftByFab[fab] || collectFormDraft();
+      var body = Object.assign({}, draft, {
+        technician_id: getTechId(),
+        job_id: parseInt(jobSelect.value, 10),
+        fabrikationsnummer: fab,
+        base_url: getDispoBaseUrl(),
+        serverUsername: getDispoUsername(),
+        serverPassword: getDispoPassword()
+      });
+      var r = await fetch(API_BASE + '/api/protokolle/schleppketten', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        throw new Error((data && data.error) || 'Draft speichern fehlgeschlagen');
+      }
+      if (data.protokoll_id != null && skDraftByFab[fab]) {
+        skDraftByFab[fab].protokoll_id = data.protokoll_id;
+      }
+      return data;
+    }
+    function switchSchleppkettenFab(newFab) {
+      newFab = newFab ? String(newFab).trim() : '';
+      if (!newFab || skFabSwitching) return;
+      var cur = getActiveFab();
+      if (cur === newFab) return;
+      skFabSwitching = true;
+      var persistPrev = Promise.resolve();
+      if (cur) {
+        stashDraftInMemory(cur);
+        persistPrev = persistDraftJsonForFab(cur).catch(function () { /* best-effort */ });
+      }
+      persistPrev.finally(function () {
+        try {
+          loadFabIntoForm(newFab);
+        } finally {
+          skFabSwitching = false;
+        }
+      });
+    }
+    function patchJobFabStammFields(fab, fields) {
+      if (!skJobData || !skJobData.fabrikationsnummern || !fields) return;
+      try {
+        var parsed = JSON.parse(skJobData.fabrikationsnummern);
+        if (!Array.isArray(parsed)) return;
+        var fabKey = String(fab || '').trim();
+        var touched = false;
+        for (var i = 0; i < parsed.length; i++) {
+          if (String(parsed[i].fabrikationsnummer || '').trim() !== fabKey) continue;
+          if (fields.type != null) parsed[i].type = fields.type;
+          if (fields.leistung != null) parsed[i].leistung = fields.leistung;
+          if (fields.elektronik != null) parsed[i].elektronik = fields.elektronik;
+          if (fields.projekt != null) parsed[i].projekt = fields.projekt;
+          if (fields.position != null) parsed[i].position = fields.position;
+          touched = true;
+        }
+        if (touched) {
+          skJobData = Object.assign({}, skJobData, {
+            fabrikationsnummern: JSON.stringify(parsed)
+          });
+        }
+      } catch (e) { /* ignore */ }
+    }
+    async function persistKopfToAnlagenstamm(fab) {
+      fab = String(fab || '').trim();
+      if (!fab) return;
+      var typeVal = typeof sanitizeLeistungField === 'function'
+        ? sanitizeLeistungField((typeEl || {}).value)
+        : String((typeEl || {}).value || '').trim();
+      var leistungVal = typeof sanitizeLeistungField === 'function'
+        ? sanitizeLeistungField((leistungEl || {}).value)
+        : String((leistungEl || {}).value || '').trim();
+      var elektronikVal = typeof sanitizeLeistungField === 'function'
+        ? sanitizeLeistungField((elektronikEl || {}).value)
+        : String((elektronikEl || {}).value || '').trim();
+      var projektVal = typeof sanitizeLeistungField === 'function'
+        ? sanitizeLeistungField((projektEl || {}).value)
+        : String((projektEl || {}).value || '').trim();
+      var posVal = typeof sanitizeLeistungField === 'function'
+        ? sanitizeLeistungField((posNrEl || {}).value)
+        : String((posNrEl || {}).value || '').trim();
+      if (!typeVal && !leistungVal && !elektronikVal && !projektVal && !posVal) return;
+      var existing = null;
+      try {
+        var lookupRes = await fetch(API_BASE + '/api/anlagenstamm_lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+          body: JSON.stringify({ fab: fab, local_only: 1 })
+        });
+        var lookupData = await lookupRes.json().catch(function () { return {}; });
+        if (lookupData && lookupData.ok && lookupData.row) existing = lookupData.row;
+      } catch (e) { /* optional */ }
+      var payload = Object.assign({
+        baseUrl: getDispoBaseUrl(),
+        serverUsername: typeof getDispoUsername === 'function' ? getDispoUsername() : (typeof getServerUsername === 'function' ? getServerUsername() : ''),
+        serverPassword: typeof getDispoPassword === 'function' ? getDispoPassword() : (typeof getServerPassword === 'function' ? getServerPassword() : ''),
+        id: existing && existing.id ? parseInt(existing.id, 10) : 0,
+        fabrikationsnummer: fab
+      }, typeof dispoBasePayloadExtra === 'function' ? dispoBasePayloadExtra() : {});
+      if (typeVal) payload.type = typeVal;
+      if (leistungVal) payload.leistung = leistungVal;
+      if (elektronikVal) payload.elektronik = elektronikVal;
+      if (projektVal) payload.projekt = projektVal;
+      if (posVal) payload.position = posVal;
+      await anlagenstammSaveDispo(payload);
+      patchJobFabStammFields(fab, {
+        type: typeVal || (existing && existing.type) || '',
+        leistung: leistungVal || (existing && existing.leistung) || '',
+        elektronik: elektronikVal || (existing && existing.elektronik) || '',
+        projekt: projektVal || (existing && existing.projekt) || '',
+        position: posVal || (existing && existing.position) || ''
+      });
+      if (typeof mergeAnlagenstammFieldsIntoOpenJob === 'function') {
+        mergeAnlagenstammFieldsIntoOpenJob(fab, {
+          type: payload.type || '',
+          leistung: payload.leistung || '',
+          elektronik: payload.elektronik || '',
+          projekt: payload.projekt || '',
+          position: payload.position || ''
+        });
+      }
+    }
+    function mapStoredRecordToDraft(rec) {
+      if (!rec || typeof rec !== 'object') return null;
+      var leistung = pickDraftField(rec, 'leistung', 'nennleistung');
+      var elektronik = pickDraftField(rec, 'elektronik', 'dwc');
+      return {
+        durchfuehrungsdatum: rec.durchfuehrungsdatum || '',
+        projekt: rec.projekt != null ? String(rec.projekt) : '',
+        waagenart: rec.waagenart != null ? String(rec.waagenart) : 'Bandwaage',
+        type: rec.type != null ? String(rec.type) : '',
+        leistung: leistung,
+        elektronik: elektronik,
+        nennleistung: leistung,
+        dwc: elektronik,
+        pos_nr: rec.pos_nr != null ? String(rec.pos_nr) : '',
+        gn: rec.gn != null ? String(rec.gn) : '',
+        monteur_name: rec.monteur_name != null ? String(rec.monteur_name) : '',
+        ketten: normalizeKettenList(rec.ketten, rec),
+        messungen: Array.isArray(rec.messungen) ? rec.messungen : [emptyMessung()],
+        protokoll_id: rec.protokoll_id != null ? rec.protokoll_id : (rec.local_id != null ? 'local:' + rec.local_id : null),
+        gespeichert_am: rec.gespeichert_am || rec.updated_at || '',
+        updated_at: rec.updated_at || rec.gespeichert_am || '',
+        fabrikationsnummer: rec.fabrikationsnummer != null ? String(rec.fabrikationsnummer) : ''
+      };
+    }
+    async function loadDraftsForJob(jobId) {
+      skDraftByFab = {};
+      if (!jobId) return;
+      try {
+        var r = await fetch(API_BASE + '/api/protokolle/schleppketten?job_id=' + encodeURIComponent(jobId), {
+          headers: { 'X-Technician-Id': String(getTechId()) }
+        });
+        var data = await r.json().catch(function () { return {}; });
+        if (!r.ok || !data.ok) return;
+        var byFab = (data.store && data.store.byFab) || (data.data && data.data.byFab) || {};
+        Object.keys(byFab).forEach(function (fn) {
+          var draft = mapStoredRecordToDraft(byFab[fn]);
+          if (draft) skDraftByFab[String(fn).trim()] = draft;
+        });
+      } catch (_) { /* optional */ }
+    }
+    async function loadJobWithAnlagenstammSk(jobId) {
       var baseUrl = getDispoBaseUrl();
       var techId = getTechId();
       var headers = Object.assign(
         { 'X-Technician-Id': String(techId) },
-        dispoBasicAuthHeaders(getDispoUsername, getDispoPassword),
+        typeof dispoBasicAuthHeaders === 'function' ? dispoBasicAuthHeaders(getDispoUsername, getDispoPassword) : {}
       );
       var localUrl =
         API_BASE +
@@ -15450,15 +17482,11 @@
         encodeURIComponent(baseUrl || '');
       try {
         var localRes = await fetch(localUrl, { headers: headers });
-        var localData = await localRes.json().catch(function () {
-          return {};
-        });
+        var localData = await localRes.json().catch(function () { return {}; });
         if (localRes.ok && localData.ok && localData.job) {
           return localData.job;
         }
-      } catch (e) {
-        /* Fallback */
-      }
+      } catch (e) { /* Fallback */ }
       var url =
         API_BASE +
         '/api/job?id=' +
@@ -15471,108 +17499,183 @@
       var data = await r.json();
       return data.job;
     }
-
-    async function loadKontrollwiegungJobs() {
-      return fetchMyAssignedJobs();
+    async function loadJobs() {
+      return typeof fetchMyAssignedJobs === 'function' ? fetchMyAssignedJobs() : [];
+    }
+    async function applyJobSelection(jobId) {
+      skDraftByFab = {};
+      setActiveFabValue('');
+      lastProtokollId = null;
+      if (pdfBtn) pdfBtn.style.display = 'none';
+      if (!jobId) {
+        skJobData = null;
+        updateKundeHint(null);
+        renderFabButtons(null);
+        updateSpeicherMeta('', null);
+        if (projektEl) projektEl.value = '';
+        if (typeEl) typeEl.value = '';
+        if (leistungEl) leistungEl.value = '';
+        if (elektronikEl) elektronikEl.value = '';
+        if (posNrEl) posNrEl.value = '';
+        if (gnEl) gnEl.value = '';
+        if (waagenartEl) waagenartEl.value = 'Bandwaage';
+        if (monteurEl) monteurEl.value = defaultMonteurName();
+        ketten = [emptyKette()];
+        messungen = [emptyMessung()];
+        renderKettenRows();
+        renderRows();
+        return;
+      }
+      skJobData = await loadJobWithAnlagenstammSk(jobId);
+      updateKundeHint(skJobData);
+      await loadDraftsForJob(jobId);
+      renderFabButtons(skJobData);
+      var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(skJobData || {}) : [];
+      var preferredFab = '';
+      if (fns.length) {
+        for (var i = 0; i < fns.length; i++) {
+          if (skDraftByFab[fns[i]]) {
+            preferredFab = fns[i];
+            break;
+          }
+        }
+        loadFabIntoForm(preferredFab || fns[0]);
+      } else {
+        applyDraftToForm({
+          durchfuehrungsdatum: todayIsoLocal(),
+          monteur_name: defaultMonteurName(),
+          messungen: [emptyMessung()]
+        }, {});
+      }
     }
 
-    if (addRowBtn) addRowBtn.addEventListener('click', addRow);
-    if (abbrechenBtn) abbrechenBtn.addEventListener('click', function () { if (typeof showView === 'function') showView('start'); });
-
-    if (jobSelect) {
-      jobSelect.addEventListener('change', async function () {
-        var id = parseInt(this.value, 10);
-        if (!id) {
-          kopfdatenEl.innerHTML = '';
-          fabSelect.innerHTML = '<option value="">– aus Auftrag –</option>';
-          kontrollwiegungJobData = null;
-          return;
+    jobSelect.addEventListener('change', async function () {
+      var id = parseInt(this.value, 10);
+      try {
+        await applyJobSelection(id || 0);
+      } catch (e) {
+        if (kundeHintEl) {
+          kundeHintEl.hidden = false;
+          kundeHintEl.textContent = 'Fehler: ' + (e && e.message ? e.message : 'Unbekannt');
         }
-        try {
-          kontrollwiegungJobData = await loadJobWithAnlagenstammKw(id);
-          renderKopfdatenKontrollwiegung(kontrollwiegungJobData);
-          fillFabSelect(kontrollwiegungJobData);
-        } catch (e) {
-          kopfdatenEl.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
-        }
+      }
+    });
+    if (addKetteBtn) {
+      addKetteBtn.addEventListener('click', function () {
+        syncKettenFromDom();
+        if (ketten.length >= MAX_KETTEN) { alert('Maximal ' + MAX_KETTEN + ' Ketten.'); return; }
+        ketten.push(emptyKette());
+        renderKettenRows();
       });
     }
-
-    if (form) {
-      form.addEventListener('submit', async function (e) {
-        e.preventDefault();
-        if (!kontrollwiegungJobData) { alert('Bitte Auftrag wählen.'); return; }
-        var fab = (fabSelect && fabSelect.value) ? fabSelect.value.trim() : '';
-        if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
-        var datum = (datumEl && datumEl.value) ? datumEl.value.trim() : '';
-        if (!datum) { alert('Bitte Datum der Durchführung angeben.'); return; }
-        var rows = zeilenContainer.querySelectorAll('.kontrollwiegung-row');
-        var wiegungenPayload = [];
-        rows.forEach(function (rowEl) {
-          wiegungenPayload.push(getRowData(rowEl));
+    if (addRowBtn) {
+      addRowBtn.addEventListener('click', function () {
+        syncMessungenFromDom();
+        if (messungen.length >= MAX_ROWS) { alert('Maximal ' + MAX_ROWS + ' Messungen.'); return; }
+        var neu = emptyMessung();
+        var kgSum = getKettenGewichtProMeterSumme();
+        if (kgSum != null) neu.kg_pro_m = kgSum;
+        messungen.push(neu);
+        renderRows();
+      });
+    }
+    if (abbrechenBtn) {
+      abbrechenBtn.addEventListener('click', function () {
+        if (typeof showView === 'function') showView('start');
+      });
+    }
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      if (!skJobData) { alert('Bitte Auftrag wählen.'); return; }
+      var fab = getActiveFab();
+      if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
+      var datum = datumEl ? String(datumEl.value || '').trim() : '';
+      if (!datum) { alert('Bitte Datum angeben.'); return; }
+      syncMessungenFromDom();
+      var draft = collectFormDraft();
+      skDraftByFab[fab] = draft;
+      var body = Object.assign({}, draft, {
+        technician_id: getTechId(),
+        job_id: parseInt(jobSelect.value, 10),
+        fabrikationsnummer: fab,
+        kunde: skJobData && skJobData.customer_name ? String(skJobData.customer_name) : '',
+        base_url: getDispoBaseUrl(),
+        serverUsername: getDispoUsername(),
+        serverPassword: getDispoPassword()
+      });
+      try {
+        await persistKopfToAnlagenstamm(fab);
+        var r = await fetch(API_BASE + '/api/schleppkettenprotokoll_save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+          body: JSON.stringify(body)
         });
-        if (wiegungenPayload.length === 0) { alert('Mindestens eine Wiegung erforderlich.'); return; }
-        var body = {
-          technician_id: getTechId(),
-          job_id: parseInt(jobSelect.value, 10),
-          fabrikationsnummer: fab,
-          durchfuehrungsdatum: datum,
-          wiegungen: wiegungenPayload,
-          base_url: getDispoBaseUrl(),
-          serverUsername: getDispoUsername(),
-          serverPassword: getDispoPassword()
-        };
-        try {
-          var r = await fetch(API_BASE + '/api/kontrollwiegungsprotokoll_save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-            body: JSON.stringify(body)
-          });
-          var data = await r.json().catch(function () { return {}; });
-          if (!r.ok || !data.ok) {
-            alert('Fehler: ' + (data.error || r.status));
-            return;
-          }
-          if (data.warning) alert(data.warning);
-          else if (typeof showToast === 'function') showToast('Kontrollwiegungsprotokoll gespeichert.');
-          lastProtokollId = data.protokoll_id != null ? data.protokoll_id : null;
-          if (pdfBtn) {
-            pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
-          }
-        } catch (err) {
-          alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+        var data = await r.json().catch(function () { return {}; });
+        if (!r.ok || !data.ok) { alert('Fehler: ' + (data.error || r.status)); return; }
+        if (typeof showToast === 'function') {
+          var msg = 'Schleppketten-Test gespeichert.';
+          if (data.saved_pdf) msg += ' PDF: ' + data.saved_pdf;
+          showToast(msg);
         }
-      });
-    }
-
+        lastProtokollId = data.local_protokoll_id || data.protokoll_id || null;
+        await loadDraftsForJob(parseInt(jobSelect.value, 10));
+        renderFabButtons(skJobData);
+        if (skDraftByFab[fab]) {
+          applyDraftToForm(skDraftByFab[fab], stammFieldsForFab(skJobData, fab));
+        }
+        if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+      } catch (err) {
+        alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+      }
+    });
     if (pdfBtn) {
       pdfBtn.addEventListener('click', async function () {
-        if (!lastProtokollId) return;
-        var url = API_BASE + '/api/kontrollwiegungsprotokoll_pdf?id=' + encodeURIComponent(lastProtokollId) + '&base_url=' + encodeURIComponent(getDispoBaseUrl());
+        var fab = getActiveFab();
+        var jobId = jobSelect ? parseInt(jobSelect.value, 10) : 0;
+        var protokollId = lastProtokollId;
+        if (!protokollId && fab && skDraftByFab[fab] && skDraftByFab[fab].protokoll_id) {
+          protokollId = skDraftByFab[fab].protokoll_id;
+        }
+        if (!protokollId) { alert('Kein gespeichertes Protokoll – bitte zuerst speichern.'); return; }
+        var url = API_BASE + '/api/schleppkettenprotokoll_pdf?id=' + encodeURIComponent(protokollId) +
+          '&technician_id=' + encodeURIComponent(getTechId()) + '&open_local=1';
+        if (Number.isFinite(jobId) && jobId > 0) url += '&job_id=' + encodeURIComponent(jobId) + '&local_job_id=' + encodeURIComponent(jobId);
+        if (fab) url += '&fabrikationsnummer=' + encodeURIComponent(fab);
         try {
           var r = await fetch(url, { headers: { 'X-Technician-Id': String(getTechId()) } });
-          if (!r.ok) { alert('PDF konnte nicht geladen werden.'); return; }
-          var blob = await r.blob();
-          var a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = 'Kontrollwiegungsprotokoll.pdf';
-          a.click();
-          URL.revokeObjectURL(a.href);
+          var data = await r.json().catch(function () { return {}; });
+          if (!r.ok || !data.ok || !data.path) {
+            alert((data && data.error) ? data.error : 'PDF konnte nicht geöffnet werden.');
+            return;
+          }
+          if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
+            var openResult = await monteurApp.openPath(String(data.path));
+            if (openResult && openResult.ok === false) {
+              alert('PDF-Datei liegt unter:\n' + (data.rel || data.path));
+              return;
+            }
+            if (typeof showToast === 'function') showToast('PDF geöffnet' + (data.rel ? (': ' + data.rel) : ''));
+            return;
+          }
+          if (typeof showToast === 'function') showToast('PDF gespeichert' + (data.rel ? (': ' + data.rel) : ''));
         } catch (e) { alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt')); }
       });
     }
 
-    window.openProtokolleKontrollwiegungen = function () {
-      loadKontrollwiegungJobs().then(function (jobs) {
-        if (jobSelect) {
-          jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
-            jobs.map(function (j) { return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>'; }).join('');
-        }
-        if (wiegungen.length === 0) addRow();
-        else renderZeilen();
-        if (datumEl && !datumEl.value) {
-          var today = new Date();
-          datumEl.value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+    window.openProtokolleSchleppketten = function () {
+      loadJobs().then(function (jobs) {
+        jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
+          jobs.map(function (j) {
+            return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
+          }).join('');
+        var defaultJobId = typeof resolveTodayProtokollJobId === 'function' ? resolveTodayProtokollJobId(jobs) : 0;
+        if (defaultJobId) {
+          jobSelect.value = defaultJobId;
+          jobSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          applyJobSelection(0);
+          if (datumEl && !datumEl.value) datumEl.value = todayIsoLocal();
+          if (monteurEl && !monteurEl.value) monteurEl.value = defaultMonteurName();
         }
         lastProtokollId = null;
         if (pdfBtn) pdfBtn.style.display = 'none';
@@ -15825,16 +17928,7 @@
         try { preferred = jobIdInServiceJobList(jobs, localStorage.getItem(SP_LAST_JOB_KEY)); } catch (e2) {}
       }
       if (!preferred) {
-        var today = new Date().toISOString().slice(0, 10);
-        var todayJobs = jobs.filter(function (j) {
-          var s = (j.start_datetime || '').toString().slice(0, 10);
-          var e = (j.end_datetime || '').toString().slice(0, 10);
-          if (s && e) return today >= s && today <= e;
-          if (s) return today === s;
-          if (e) return today === e;
-          return false;
-        });
-        if (todayJobs.length >= 1) preferred = String(todayJobs[0].id);
+        preferred = resolveTodayProtokollJobId(jobs);
       }
       if (!preferred && jobs.length === 1) preferred = String(jobs[0].id);
       return preferred;
@@ -17674,8 +19768,17 @@
         opt.textContent = (job.job_number || job.id) + (job.customer_name ? ' – ' + job.customer_name : '');
         jobSelect.appendChild(opt);
       });
-      if (currentVal) jobSelect.value = currentVal;
+      if (currentVal && Array.prototype.some.call(jobSelect.options, function (o) { return o.value === currentVal; })) {
+        jobSelect.value = currentVal;
+      } else {
+        var defaultJobId = resolveTodayProtokollJobId(jobs);
+        if (defaultJobId) jobSelect.value = defaultJobId;
+      }
     }
+
+    window.openProtokolleParameterlisten = function () {
+      loadParameterlistenJobs();
+    };
 
     function escapeHtml(s) {
       if (s == null) return '';

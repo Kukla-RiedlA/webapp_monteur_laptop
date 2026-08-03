@@ -23,6 +23,8 @@
   <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
   <link rel="stylesheet" href="css/serviceprotokoll-v2.css">
   <link rel="stylesheet" href="css/montagebericht-v2.css">
+  <link rel="stylesheet" href="css/kontrollwiegung-v2.css">
+  <link rel="stylesheet" href="css/schleppketten-v2.css">
   <link rel="stylesheet" href="css/abrechnung-web-parity.css">
   <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260726b">
   <style>
@@ -1364,6 +1366,7 @@
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-montagebericht">Montagebericht</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-parameterlisten">Parameterlisten</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-kontrollwiegungen">Kontrollwiegungen</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-schleppketten">Schleppketten-Test</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-service">Service</button>
       </div>
@@ -1539,6 +1542,17 @@
     </div>
   </div>
   <div id="toastContainer" aria-live="polite" style="position:fixed;bottom:1rem;right:1rem;z-index:1000;max-width:320px;pointer-events:none"></div>
+  <div id="modalMbProjectPhotos" class="modal-overlay accept-offline-overlay" aria-hidden="true">
+    <div class="modal-box modal-box--wide mb-project-photos-modal" role="dialog" aria-labelledby="mbProjectPhotosTitle" style="max-width:44rem;max-height:85vh;display:flex;flex-direction:column;margin:auto;">
+      <h3 id="mbProjectPhotosTitle" style="margin-top:0">Fotos aus dem Projekt</h3>
+      <p class="muted" style="margin:0 0 0.75rem;font-size:0.9rem">Bilder aus <strong>Dokumente_Monteur</strong> (u. a. Handy-PWA-Uploads). Antippen zum Einfügen.</p>
+      <div id="mbProjectPhotosBody" class="mb-project-photos-grid" style="flex:1;overflow:auto;min-height:10rem;margin-bottom:0.75rem;"></div>
+      <p id="mbProjectPhotosHint" class="muted" style="font-size:0.85rem;margin:0 0 0.5rem;" aria-live="polite"></p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end;">
+        <button type="button" class="btn btn-ghost" id="mbProjectPhotosClose">Schließen</button>
+      </div>
+    </div>
+  </div>
   <main id="viewProjektdaten" class="view-projektdaten" aria-label="Projektdaten">
     <div class="card">
       <div class="projektdaten-heading-row">
@@ -1609,10 +1623,13 @@
     </div>
   </main>
   <main id="viewProtokolleMontagebericht" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Montagebericht">
-    <div class="mb-v2-page">
-      <header class="sp-v2-topbar mb-v2-topbar">
+    <div class="card sp-v2-card mb-v2-page">
+      <div class="sp-v2-topbar mb-v2-topbar">
         <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Montagebericht</h2>
-      </header>
+        <div class="sp-v2-topbar-actions">
+          <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickySave" title="Bericht speichern und PDF erzeugen">Speichern</button>
+        </div>
+      </div>
       <div id="protokolleMontagebericht" class="protokolle-montagebericht">
         <div class="mb-v2-layout">
           <aside class="mb-v2-tb-sidebar" aria-label="Textbausteine">
@@ -1656,6 +1673,20 @@
             <section class="sp-v2-section" aria-labelledby="mbV2Sec2Title">
               <header class="sp-v2-section-head" id="mbV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Berichtsinhalt</header>
               <div class="sp-v2-section-body">
+                <div class="sp-v2-field" style="margin-bottom:0.85rem">
+                  <label for="montageberichtGrund">Grund des Einsatzes</label>
+                  <div id="montageberichtGrund" class="mb-rich-editor" data-mb-editor="grund" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></div>
+                </div>
+                <div class="sp-v2-field">
+                  <label for="montageberichtBemerkungen">Bemerkungen</label>
+                  <div id="montageberichtBemerkungen" class="mb-rich-editor" data-mb-editor="bemerkungen" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="sp-v2-section" aria-labelledby="mbV2Sec3Title">
+              <header class="sp-v2-section-head" id="mbV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Fabrikationsnummern</header>
+              <div class="sp-v2-section-body">
                 <div class="montagebericht-toolbar" id="montageberichtToolbar">
                   <div class="toolbar-group">
                     <select id="mbToolbarFont" title="Schriftart">
@@ -1676,6 +1707,7 @@
                     <button type="button" class="btn btn-ghost" data-mb-cmd="italic" title="Kursiv"><em>I</em></button>
                     <button type="button" class="btn btn-ghost" data-mb-cmd="underline" title="Unterstrichen"><u>U</u></button>
                     <button type="button" class="btn btn-ghost" data-mb-cmd="insertUnorderedList" title="Aufzählung">• Liste</button>
+                    <button type="button" class="btn btn-ghost" data-mb-cmd="insertOrderedList" title="Nummerierung">1. Liste</button>
                   </div>
                   <div class="toolbar-group">
                     <button type="button" class="btn btn-ghost" data-mb-cmd="justifyLeft" title="Linksbündig">Links</button>
@@ -1683,7 +1715,8 @@
                     <button type="button" class="btn btn-ghost" data-mb-cmd="justifyRight" title="Rechtsbündig">Rechts</button>
                   </div>
                   <div class="toolbar-group">
-                    <button type="button" class="btn btn-ghost" data-mb-img="insert" title="Bild einfügen">Bild</button>
+                    <button type="button" class="btn btn-ghost" data-mb-img="insert" title="Bild vom Gerät einfügen">Bild</button>
+                    <button type="button" class="btn btn-ghost" data-mb-img="from-project" title="Fotos aus dem Projektordner (Handy-PWA)">Projekt-Foto</button>
                     <button type="button" class="btn btn-ghost" data-mb-img="25" title="Bildbreite 25 %">25%</button>
                     <button type="button" class="btn btn-ghost" data-mb-img="50" title="Bildbreite 50 %">50%</button>
                     <button type="button" class="btn btn-ghost" data-mb-img="100" title="Bildbreite 100 %">100%</button>
@@ -1691,35 +1724,19 @@
                     <button type="button" class="btn btn-ghost" data-mb-img="remove" title="Bild entfernen">Entfernen</button>
                   </div>
                 </div>
-                <div class="sp-v2-field" style="margin-bottom:0.85rem">
-                  <label for="montageberichtGrund">Grund des Einsatzes</label>
-                  <div id="montageberichtGrund" class="mb-rich-editor" data-mb-editor="grund" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></div>
-                </div>
-                <div class="sp-v2-field">
-                  <label for="montageberichtBemerkungen">Bemerkungen</label>
-                  <div id="montageberichtBemerkungen" class="mb-rich-editor" data-mb-editor="bemerkungen" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></div>
-                </div>
-              </div>
-            </section>
-
-            <section class="sp-v2-section" aria-labelledby="mbV2Sec3Title">
-              <header class="sp-v2-section-head" id="mbV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Fabrikationsnummern</header>
-              <div class="sp-v2-section-body">
-                <p class="mb-v2-hint-block" style="margin-top:0;margin-bottom:0.75rem">Pro Fabrikationsnummer: Kopfzeile wie im Bericht (<strong>FN.</strong>, <strong>Type</strong>, <strong>Pos.Nr.</strong>) – Werte aus dem Anlagenstamm, änderbar; beim Speichern werden Type und Pos.Nr. in der Dispo im Anlagenstamm aktualisiert.</p>
                 <div id="montageberichtFabBemerkungen" class="montagebericht-fab-felder"></div>
               </div>
             </section>
 
             <section class="sp-v2-section" aria-labelledby="mbV2Sec4Title">
-              <header class="sp-v2-section-head" id="mbV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
+              <header class="sp-v2-section-head" id="mbV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern</header>
               <div class="sp-v2-section-body">
                 <div class="mb-v2-actions-row">
-                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Speichert montagebericht.json und synchronisiert das Projekt – ohne PDF/DOCX">Speichern (nur Daten)</button>
-                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Wie „nur Daten“ plus PDF und Word-Dokument in Dokumente_Anlage">PDF &amp; DOCX erstellen</button>
+                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Speichert Daten und erzeugt das PDF">Speichern</button>
+                  <button type="button" class="btn btn-ghost" id="btnMontageberichtPdf" style="display:none" title="PDF im Ordner Protokolle öffnen">PDF öffnen</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtSign" title="Erfordert zuvor erzeugtes PDF; signiert auf dem Dispo-Server">Bericht unterschreiben</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
                 </div>
-                <p class="mb-v2-hint-block">„Nur Daten“ legt nur die JSON-Datei an bzw. aktualisiert sie. „PDF &amp; DOCX“ speichert dieselben Daten und erzeugt zusätzlich die Berichtsdateien (Word/PDF).</p>
               </div>
             </section>
           </form>
@@ -1746,38 +1763,293 @@
     </div>
   </main>
   <main id="viewProtokolleKontrollwiegungen" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Kontrollwiegungen">
-    <div class="card">
-      <h2>Kontrollwiegungsprotokoll</h2>
-      <form id="kontrollwiegungForm" class="montagebericht-form-wrap">
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label>Auftrag</label>
-          <select id="kontrollwiegungJob" class="dienstreise-select" required>
-            <option value="">– Bitte wählen –</option>
-          </select>
+    <div class="card sp-v2-card kw-v2-page">
+      <div class="sp-v2-topbar">
+        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Kontrollwiegungsprotokoll</h2>
+        <div class="sp-v2-topbar-actions">
+          <button type="submit" form="kontrollwiegungForm" class="btn btn-primary" id="btnKontrollwiegungStickySave" title="Protokoll speichern">Speichern</button>
         </div>
-        <div id="kontrollwiegungKopfdaten" class="montagebericht-kopfdaten" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border-radius:4px;font-size:0.9rem"></div>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label for="kontrollwiegungFab">Fabrikationsnummer</label>
-          <select id="kontrollwiegungFab" class="dienstreise-select" style="width:100%">
-            <option value="">– aus Auftrag –</option>
-          </select>
-        </div>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label for="kontrollwiegungDatum">Datum der Durchführung</label>
-          <input type="date" id="kontrollwiegungDatum" required style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
-        </div>
-        <div class="kontrollwiegung-zeilen-wrap" style="margin-bottom:1rem">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem">
-            <strong>Wiegungen</strong>
-            <button type="button" class="btn btn-ghost" id="kontrollwiegungAddRow">+ Wiegung hinzufügen</button>
+      </div>
+      <form id="kontrollwiegungForm" class="sp-v2-form">
+        <section class="sp-v2-section" aria-labelledby="kwV2Sec1Title">
+          <header class="sp-v2-section-head" id="kwV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="kontrollwiegungJob">Auftrag</label>
+                <select id="kontrollwiegungJob" class="dienstreise-select" required>
+                  <option value="">– Bitte wählen –</option>
+                </select>
+              </div>
+              <div class="sp-v2-field">
+                <label for="kontrollwiegungProjekt">Projekt</label>
+                <input type="text" id="kontrollwiegungProjekt" placeholder="Aus Anlagenstamm oder manuell" autocomplete="off">
+              </div>
+              <div class="sp-v2-field sp-v2-field-date">
+                <label for="kontrollwiegungDatum">Datum</label>
+                <input type="date" id="kontrollwiegungDatum" required>
+              </div>
+            </div>
+            <p id="kontrollwiegungKundeHint" class="mb-v2-hint-block" hidden></p>
+            <div class="sp-v2-fab-block" id="kontrollwiegungFabGroup" style="display:none">
+              <label>Fabrikationsnummer</label>
+              <input type="hidden" id="kontrollwiegungFab" name="kontrollwiegungFab" value="">
+              <div id="kontrollwiegungFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
+              <p id="kontrollwiegungSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
+            </div>
           </div>
-          <div id="kontrollwiegungZeilen"></div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="kwV2Sec2Title">
+          <header class="sp-v2-section-head" id="kwV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Kopfdaten</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="kontrollwiegungType">Type</label>
+                <input type="text" id="kontrollwiegungType" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="kontrollwiegungLeistung">Leistung</label>
+                <input type="text" id="kontrollwiegungLeistung" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="kontrollwiegungElektronik">Elektronik</label>
+                <input type="text" id="kontrollwiegungElektronik" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="kontrollwiegungTeilung">Teilung Kontrollwaage</label>
+                <input type="text" id="kontrollwiegungTeilung" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="kontrollwiegungBereichMax">Bereich max</label>
+                <input type="text" id="kontrollwiegungBereichMax" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="kontrollwiegungLetzteEichung">Letzte Eichung</label>
+                <input type="text" id="kontrollwiegungLetzteEichung" autocomplete="off">
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="kwV2Sec3Title">
+          <header class="sp-v2-section-head" id="kwV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Wiegungen</header>
+          <div class="sp-v2-section-body">
+            <div class="kontrollwiegung-zeilen-wrap">
+              <div class="mb-v2-actions-row" style="margin-bottom:0.75rem">
+                <button type="button" class="btn btn-ghost" id="kontrollwiegungAddRow">+ Wiegung hinzufügen</button>
+              </div>
+              <div class="kw-wiegung-table-wrap">
+                <table class="kw-wiegung-table" aria-label="Wiegungen">
+                  <thead>
+                    <tr>
+                      <th class="kw-col-nr">#</th>
+                      <th class="kw-col-num">Bandwaage [kg]</th>
+                      <th class="kw-col-num">Kontrollwaage [kg]</th>
+                      <th class="kw-col-num">Fehler [kg]</th>
+                      <th class="kw-col-num">Fehler [%]</th>
+                      <th class="kw-col-num">Leistung [t/h]</th>
+                      <th class="kw-col-num">Tara [kg]</th>
+                      <th class="kw-col-num">Brutto [kg]</th>
+                      <th class="kw-col-bem">Bemerkung</th>
+                      <th class="kw-col-act" title="In Summe / Löschen">Σ / ×</th>
+                    </tr>
+                  </thead>
+                  <tbody id="kontrollwiegungZeilen"></tbody>
+                  <tfoot>
+                    <tr id="kontrollwiegungSummeRow" class="kw-summe-row">
+                      <td class="kw-col-nr"><strong>Σ</strong></td>
+                      <td class="kw-col-num" data-kw-sum="bandwaage_kg">–</td>
+                      <td class="kw-col-num" data-kw-sum="kontrollwaage_kg">–</td>
+                      <td class="kw-col-num" data-kw-sum="fehler_kg">–</td>
+                      <td class="kw-col-num" data-kw-sum="fehler_prozent">–</td>
+                      <td class="kw-col-num" data-kw-sum="leistung_th">–</td>
+                      <td class="kw-col-num" data-kw-sum="tara_kg">–</td>
+                      <td class="kw-col-num" data-kw-sum="brutto_kg">–</td>
+                      <td class="kw-col-bem" data-kw-sum-label>Summe der markierten Wiegungen</td>
+                      <td class="kw-col-act"></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="kwV2Sec4Title">
+          <header class="sp-v2-section-head" id="kwV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
+          <div class="sp-v2-section-body">
+            <div class="mb-v2-actions-row">
+              <button type="submit" class="btn btn-primary">Speichern</button>
+              <button type="button" class="btn btn-ghost" id="kontrollwiegungPdf" style="display:none" title="PDF im Ordner Protokolle öffnen">PDF öffnen</button>
+              <button type="button" class="btn btn-ghost" id="kontrollwiegungAbbrechen">Abbrechen</button>
+            </div>
+          </div>
+        </section>
+      </form>
+    </div>
+  </main>
+  <main id="viewProtokolleSchleppketten" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Schleppketten-Test">
+    <div class="card sp-v2-card sk-v2-page">
+      <div class="sp-v2-topbar">
+        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Schleppketten-Test <span class="muted" style="font-weight:normal;font-size:0.85rem">/ chain calibration</span></h2>
+        <div class="sp-v2-topbar-actions">
+          <button type="submit" form="schleppkettenForm" class="btn btn-primary" id="btnSchleppkettenStickySave" title="Protokoll speichern">Speichern</button>
         </div>
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-          <button type="submit" class="btn btn-primary">Speichern</button>
-          <button type="button" class="btn btn-ghost" id="kontrollwiegungPdf" style="display:none">PDF erzeugen</button>
-          <button type="button" class="btn btn-ghost" id="kontrollwiegungAbbrechen">Abbrechen</button>
-        </div>
+      </div>
+      <form id="schleppkettenForm" class="sp-v2-form">
+        <section class="sp-v2-section" aria-labelledby="skV2Sec1Title">
+          <header class="sp-v2-section-head" id="skV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="schleppkettenJob">Auftrag</label>
+                <select id="schleppkettenJob" class="dienstreise-select" required>
+                  <option value="">– Bitte wählen –</option>
+                </select>
+              </div>
+              <div class="sp-v2-field">
+                <label for="schleppkettenProjekt">Projekt</label>
+                <input type="text" id="schleppkettenProjekt" placeholder="Aus Anlagenstamm oder manuell" autocomplete="off">
+              </div>
+              <div class="sp-v2-field sp-v2-field-date">
+                <label for="schleppkettenDatum">Datum</label>
+                <input type="date" id="schleppkettenDatum" required>
+              </div>
+            </div>
+            <p id="schleppkettenKundeHint" class="mb-v2-hint-block" hidden></p>
+            <div class="sp-v2-fab-block" id="schleppkettenFabGroup" style="display:none">
+              <label>Fabrikationsnummer</label>
+              <input type="hidden" id="schleppkettenFab" name="schleppkettenFab" value="">
+              <div id="schleppkettenFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
+              <p id="schleppkettenSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="skV2Sec2Title">
+          <header class="sp-v2-section-head" id="skV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Kopfdaten</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="schleppkettenType">Type</label>
+                <input type="text" id="schleppkettenType" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="schleppkettenLeistung">Leistung</label>
+                <input type="text" id="schleppkettenLeistung" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="schleppkettenElektronik">Elektronik</label>
+                <input type="text" id="schleppkettenElektronik" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="schleppkettenWaagenart">Waagenart</label>
+                <input type="text" id="schleppkettenWaagenart" value="Bandwaage" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="schleppkettenPosNr">Pos.Nr.</label>
+                <input type="text" id="schleppkettenPosNr" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="schleppkettenGn">GN</label>
+                <input type="text" id="schleppkettenGn" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="schleppkettenMonteur">Servicetechniker</label>
+                <input type="text" id="schleppkettenMonteur" autocomplete="off">
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="skV2Sec3Title">
+          <header class="sp-v2-section-head" id="skV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Ketten Daten</header>
+          <div class="sp-v2-section-body">
+            <div class="mb-v2-actions-row" style="margin-bottom:0.75rem">
+              <button type="button" class="btn btn-ghost" id="schleppkettenAddKette">+ Kette hinzufügen</button>
+            </div>
+            <div class="sk-mess-table-wrap sk-ketten-table-wrap">
+              <table class="sk-mess-table sk-ketten-table" aria-label="Ketten Daten">
+                <thead>
+                  <tr>
+                    <th class="sk-col-nr">#</th>
+                    <th class="sk-col-ketten-tag">Tag (Name)</th>
+                    <th class="sk-col-ketten-type">Ketten Type</th>
+                    <th class="sk-col-num">Länge</th>
+                    <th class="sk-col-num">Gewicht / Kette</th>
+                    <th class="sk-col-num">Gewicht / Meter</th>
+                    <th class="sk-col-act" title="Verwendet / Summe / Löschen">Σ / ×</th>
+                  </tr>
+                </thead>
+                <tbody id="schleppkettenKettenZeilen"></tbody>
+                <tfoot>
+                  <tr id="schleppkettenKettenSummeRow" class="sk-summe-row">
+                    <td class="sk-col-nr"><strong>Σ</strong></td>
+                    <td class="sk-col-ketten-tag" colspan="2">Summe der markierten Ketten</td>
+                    <td class="sk-col-num" data-sk-kette-sum="laenge">–</td>
+                    <td class="sk-col-num" data-sk-kette-sum="gewicht_pro_kette">–</td>
+                    <td class="sk-col-num" data-sk-kette-sum="gewicht_pro_meter">–</td>
+                    <td class="sk-col-act"></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="skV2Sec4Title">
+          <header class="sp-v2-section-head" id="skV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Messungen</header>
+          <div class="sp-v2-section-body">
+            <div class="mb-v2-actions-row" style="margin-bottom:0.75rem">
+              <button type="button" class="btn btn-ghost" id="schleppkettenAddRow">+ Messung hinzufügen</button>
+            </div>
+            <div class="sk-mess-table-wrap">
+              <table class="sk-mess-table" aria-label="Schleppketten-Messungen">
+                <thead>
+                  <tr>
+                    <th class="sk-col-nr">#</th>
+                    <th class="sk-col-num">Bandwaage [t]</th>
+                    <th class="sk-col-num">Prüfkette [t]</th>
+                    <th class="sk-col-num">kg/m</th>
+                    <th class="sk-col-num">Geschw. [m/s]</th>
+                    <th class="sk-col-num">Messzeit [s]</th>
+                    <th class="sk-col-num">Fehler [%]</th>
+                    <th class="sk-col-num">Leistung [t/h]</th>
+                    <th class="sk-col-bem">Bemerkung</th>
+                    <th class="sk-col-act" title="In Summe / Löschen">Σ / ×</th>
+                  </tr>
+                </thead>
+                <tbody id="schleppkettenZeilen"></tbody>
+                <tfoot>
+                  <tr id="schleppkettenSummeRow" class="sk-summe-row">
+                    <td class="sk-col-nr"><strong>Σ</strong></td>
+                    <td class="sk-col-num" data-sk-sum="bandwaage_t">–</td>
+                    <td class="sk-col-num" data-sk-sum="pruefkette_t">–</td>
+                    <td class="sk-col-num" data-sk-sum="kg_pro_m">–</td>
+                    <td class="sk-col-num">–</td>
+                    <td class="sk-col-num" data-sk-sum="messzeit_s">–</td>
+                    <td class="sk-col-num" data-sk-sum="fehler_prozent">–</td>
+                    <td class="sk-col-num" data-sk-sum="leistung_th">–</td>
+                    <td class="sk-col-bem">Summe der markierten Messungen</td>
+                    <td class="sk-col-act"></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="skV2Sec5Title">
+          <header class="sp-v2-section-head" id="skV2Sec5Title"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
+          <div class="sp-v2-section-body">
+            <div class="mb-v2-actions-row">
+              <button type="submit" class="btn btn-primary">Speichern</button>
+              <button type="button" class="btn btn-ghost" id="schleppkettenPdf" style="display:none" title="PDF im Ordner Protokolle öffnen">PDF öffnen</button>
+              <button type="button" class="btn btn-ghost" id="schleppkettenAbbrechen">Abbrechen</button>
+            </div>
+          </div>
+        </section>
       </form>
     </div>
   </main>

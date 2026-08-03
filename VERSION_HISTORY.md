@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.004.000
+- **Montagebericht:** Corporate-PDF (pdf-lib), Speichern + PDF öffnen, Richtext/Bilder/Projektfotos; Legacy-DOCX in Protokolle lokal und auf Dispo bereinigen.
+- **Sync-Push:** permanente Fehler (Parse/4xx) Dead-Letter statt Endlos-Retry; `pending_changes_failed`.
+- **Protokolle:** Service-/Kontrollwiegung-/Schleppketten-PDF und UI-Anpassungen.
+
 ## V 2.003.003
 - **Projektdaten FN hinzufügen:** Leistungsdaten (Type/Leistung/…) werden beim Speichern aus dem lokalen Anlagenstamm befüllt und in der UI nachgeladen.
 

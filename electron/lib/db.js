@@ -206,6 +206,23 @@ function applyRuntimeMigrations(db) {
       local_job_id INTEGER PRIMARY KEY,
       initialized INTEGER NOT NULL DEFAULT 0
     )`);
+  tryExec(db, 'ALTER TABLE pending_changes ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
+  tryExec(db, 'ALTER TABLE pending_changes ADD COLUMN last_error TEXT');
+  tryExec(db, 'ALTER TABLE pending_changes ADD COLUMN last_attempt_at TEXT');
+  tryExec(db, `CREATE TABLE IF NOT EXISTS pending_changes_failed (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      original_pending_id INTEGER,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      payload TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      fail_reason TEXT,
+      created_at TEXT,
+      failed_at TEXT DEFAULT (datetime('now'))
+    )`);
+  tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_pending_changes_failed_type ON pending_changes_failed(entity_type, action)');
   db.prepare("UPDATE jobs SET status = 'angelegt' WHERE LOWER(COALESCE(status, '')) = 'geplant'").run();
   ensureBackgroundJobsSchema(db);
   ensureAnlagenstammLocalSchema(db);
