@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.003.003
+- **Projektdaten FN hinzufügen:** Leistungsdaten (Type/Leistung/…) werden beim Speichern aus dem lokalen Anlagenstamm befüllt und in der UI nachgeladen.
+
 ## V 2.003.002
 - **Abrechnung Dateien:** Löschen-UI lädt Liste bei Fehler neu; Server-Löschen nutzt gehärtete Dispo-API (`job_files` + Mirror-Event).
 

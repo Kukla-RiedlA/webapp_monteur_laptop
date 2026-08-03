@@ -9937,6 +9937,12 @@ function createApp(db) {
           try {
             val = JSON.stringify(sortJobFabRows(JSON.parse(val)));
           } catch (_) { /* unverändert */ }
+          // Leere Leistungsfelder (z. B. neu hinzugefügte FN) aus lokalem Anlagenstamm füllen
+          try {
+            const enriched = enrichFabJsonWithLocalAnlagenstamm(db, val);
+            if (enriched != null && String(enriched).trim() !== '') val = enriched;
+            val = JSON.stringify(sortJobFabRows(JSON.parse(val)));
+          } catch (_) { /* Enrich optional */ }
         }
         const jobFabBefore = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(effectiveJobId);
         const oldFabJson = jobFabBefore && jobFabBefore.fabrikationsnummern;
@@ -9976,6 +9982,7 @@ function createApp(db) {
             pending_sync: true,
             added_fns: addedFns,
             removed_fns: removedFns,
+            fabrikationsnummern: val,
           });
         }
         if (fabOnlyPatch) {

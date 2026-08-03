@@ -3826,13 +3826,70 @@
     return api('/api/job', {
       method: 'PATCH',
       body: JSON.stringify({ job_id: parseInt(jobId, 10), fabrikationsnummern: JSON.stringify(arr) })
-    }).then(function () {
+    }).then(function (data) {
       var job = Object.assign({}, window.currentProjektdatenJob || {});
-      job.fabrikationsnummern = JSON.stringify(arr);
+      if (data && data.fabrikationsnummern != null && String(data.fabrikationsnummern).trim() !== '') {
+        job.fabrikationsnummern = data.fabrikationsnummern;
+      } else {
+        job.fabrikationsnummern = JSON.stringify(arr);
+      }
       refreshProjektdatenAfterFabSave(job, hintEl);
+      // Falls lokale Stamm-Daten erst beim Lesen mit Enrich greifen: einmal nachziehen
+      return enrichProjektdatenLeistungFromAnlagenstammAfterFabSave(jobId).catch(function () {});
     }).finally(function () {
       projektdatenFabSaveBusy = false;
     });
+  }
+
+  /** Nach FN-Save: Job mit Anlagenstamm-Enrich neu laden (Type/Leistung/Position). */
+  function enrichProjektdatenLeistungFromAnlagenstammAfterFabSave(jobId) {
+    var id = parseInt(jobId, 10);
+    if (!id || !jobIdsEqual(jobDetailsJobId, id)) return Promise.resolve();
+    var techId = getTechId();
+    var url =
+      API_BASE +
+      '/api/job?id=' +
+      encodeURIComponent(id) +
+      '&enrich_anlagenstamm=1&enrich_local_only=1';
+    if (techId) url += '&technician_id=' + encodeURIComponent(techId);
+    return fetch(url, {
+      headers: Object.assign(
+        { 'X-Technician-Id': String(techId || '') },
+        typeof dispoBasicAuthHeaders === 'function'
+          ? dispoBasicAuthHeaders(getDispoUsername, getDispoPassword)
+          : {},
+      ),
+    })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) {
+        if (!jobIdsEqual(jobDetailsJobId, id)) return;
+        var job = data && (data.job || data);
+        if (!job || !job.fabrikationsnummern) return;
+        var nextRows = buildLeistungRowsFromJob(job);
+        var prev = window.currentProjektdatenLeistungRows || [];
+        var changed = nextRows.length !== prev.length;
+        if (!changed) {
+          for (var i = 0; i < nextRows.length; i++) {
+            var a = nextRows[i] || {};
+            var b = prev[i] || {};
+            if (
+              String(a.fabrikationsnummer || '') !== String(b.fabrikationsnummer || '') ||
+              sanitizeLeistungField(a.type) !== sanitizeLeistungField(b.type) ||
+              sanitizeLeistungField(a.leistung) !== sanitizeLeistungField(b.leistung) ||
+              sanitizeLeistungField(a.position) !== sanitizeLeistungField(b.position)
+            ) {
+              changed = true;
+              break;
+            }
+          }
+        }
+        if (!changed) return;
+        window.currentProjektdatenJob = Object.assign({}, window.currentProjektdatenJob || {}, {
+          fabrikationsnummern: job.fabrikationsnummern,
+        });
+        window.currentProjektdatenLeistungRows = nextRows;
+        refreshProjektdatenLeistungTableFromRows();
+      });
   }
 
   function closeAddAnlagenModal() {
