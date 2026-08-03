@@ -706,6 +706,34 @@ function clearEmptyDirtyAnlagenstammStubs(db) {
   return removed;
 }
 
+/** Nach lokalem Save: Sync-Pull darf frische Zeilen nicht mit altem List-Stand überschreiben (Race dirty=0). */
+const ANLAGENSTAMM_RECENT_LOCAL_GRACE_MS = 120000;
+
+function parseAnlagenstammSyncedAtMs(syncedAt) {
+  if (syncedAt == null || syncedAt === '') return NaN;
+  const s = String(syncedAt).trim();
+  if (!s) return NaN;
+  // saveLocal schreibt toISOString() ohne Z → als UTC parsen, sonst Grace in UTC+x sofort kaputt.
+  let iso = s.includes('T') ? s : s.replace(' ', 'T');
+  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso)) iso += 'Z';
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+/** true wenn lokaler Save kürzlich war und Stammfelder vom Server-Row abweichen. */
+function isRecentLocalAnlagenstammGuard(local, serverRow) {
+  if (!local || !serverRow) return false;
+  const localTs = parseAnlagenstammSyncedAtMs(local.synced_at);
+  if (!Number.isFinite(localTs)) return false;
+  if (Date.now() - localTs > ANLAGENSTAMM_RECENT_LOCAL_GRACE_MS) return false;
+  for (const k of ANLAGENSTAMM_MERGE_KEYS) {
+    const locVal = stammFieldTrim(local[k]);
+    const srvVal = stammFieldTrim(serverRow[k]);
+    if (locVal !== '' && locVal !== srvVal) return true;
+  }
+  return false;
+}
+
 function upsertAnlagenstammRows(db, rows) {
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
   const getByIdStmt = db.prepare('SELECT * FROM anlagenstamm_local WHERE id = ?');
@@ -725,9 +753,11 @@ function upsertAnlagenstammRows(db, rows) {
     const fab = clampDispoField(row.fabrikationsnummer, DISPO_ANLAGENSTAMM_MAX.fabrikationsnummer).trim();
     const byId = getByIdStmt.get(id);
     if (byId && Number(byId.dirty) === 1 && hasNonemptyStammField(byId)) continue;
+    if (byId && isRecentLocalAnlagenstammGuard(byId, row)) continue;
     if (fab) {
       const byFab = lookupByFab(db, fab);
       if (byFab && Number(byFab.dirty) === 1 && hasNonemptyStammField(byFab)) continue;
+      if (byFab && isRecentLocalAnlagenstammGuard(byFab, row)) continue;
       if (byFab && byFab.id !== id) removeEmptyDirtyStub(byFab);
     }
     removeEmptyDirtyStub(byId);
@@ -1848,6 +1878,8 @@ module.exports = {
   persistAnlagenstammExtras,
   lookupFabInExtrasMap,
   clearEmptyDirtyAnlagenstammStubs,
+  ANLAGENSTAMM_RECENT_LOCAL_GRACE_MS,
+  isRecentLocalAnlagenstammGuard,
   clampForDispoAnlagenstamm,
   clampForDispoJobFabrikation,
   clampFabrikationsnummernJson,

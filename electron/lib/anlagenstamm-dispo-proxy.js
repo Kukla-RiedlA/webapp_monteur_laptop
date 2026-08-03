@@ -7,7 +7,6 @@ const {
 } = require('./dispo-base-fallback');
 const {
   clampForDispoAnlagenstamm,
-  stripEmptyStammFieldsForDispoPush,
 } = require('./anlagenstamm-local');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 
@@ -94,7 +93,9 @@ async function proxyAnlagenstammSaveOnce(payload, base) {
   const authHeader = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const relativePhp = '/dispo_api/api/anlagenstamm_monteur_save.php';
   const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
-  const savePayload = stripEmptyStammFieldsForDispoPush(clampForDispoAnlagenstamm(Object.assign({}, payload)), null);
+  // Aufrufer (performAnlagenstammSave / pushToServer) haben bereits gemerged + stripEmpty.
+  // Kein zweites stripEmpty(..., null) — das würde bestehende Felder ohne existing verlieren.
+  const savePayload = clampForDispoAnlagenstamm(Object.assign({}, payload));
   delete savePayload.baseUrl;
   delete savePayload.externalUrl;
   delete savePayload.internalUrl;
