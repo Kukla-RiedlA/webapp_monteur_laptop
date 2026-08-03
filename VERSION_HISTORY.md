@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.004.001
+- **Auftragsordner-Sanitize:** ASCII-Whitelist explizit (`ņ`/`ū` → `_`), Parität zu Dispo — verhindert Doppelordner Transfer/Montage.
+
 ## V 2.004.000
 - **Montagebericht:** Corporate-PDF (pdf-lib), Speichern + PDF öffnen, Richtext/Bilder/Projektfotos; Legacy-DOCX in Protokolle lokal und auf Dispo bereinigen.
 - **Sync-Push:** permanente Fehler (Parse/4xx) Dead-Letter statt Endlos-Retry; `pending_changes_failed`.

@@ -9,11 +9,13 @@ function sanitizeDienstreiseFolderPart(str, maxLen) {
   const limit = Number.isFinite(maxLen) && maxLen > 8 ? Math.floor(maxLen) : 48;
   // Acrobat/Explorer scheitern oft still an Bullet/Sonderzeichen im Pfad (z. B. U+2022 „•“).
   // Zusätzlich Segmente kürzen: OneDrive-Pfade mit Firma+Ort+FN überschreiten sonst leicht MAX_PATH (~260).
+  // Erlaubt: ASCII [A-Za-z0-9_] + DE-Umlaute — bewusst kein \w/\u (ņ/ū würden sonst bleiben
+  // und vom Dispo-PHP divergieren → Doppelordner Transfer/Montage). Parität: job_project_sanitize_monteur_folder_part.
   let s = str
     .replace(/[\/\\:*?"<>|]/g, '_')
     .replace(/[\u2022\u2023\u2043\u2219\u25E6\u25AA\u25CF\u00B7\u2024\u2027\u2218•▪◦●∙·]/g, '-')
     .replace(/[\u0000-\u001F\u007F\u00A0\u200B-\u200D\uFEFF]/g, '')
-    .replace(/[^\w\-.,()ÄÖÜäöüß+&]/gi, '_')
+    .replace(/[^A-Za-z0-9_\-.,()ÄÖÜäöüß+&]/gi, '_')
     .replace(/_+/g, '_')
     .replace(/^[_.\-]+|[_.\-]+$/g, '')
     .replace(/\s+/g, '_')
