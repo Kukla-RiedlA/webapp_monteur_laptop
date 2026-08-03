@@ -14354,16 +14354,30 @@ function mapJobContactDbRow(r) {
 
 function normalizeJobContactsFromPayload(job) {
   if (!job || typeof job !== 'object') return [];
-  const candidates = []
-    .concat(Array.isArray(job.job_contacts) ? job.job_contacts : [])
-    .concat(Array.isArray(job.jobContacts) ? job.jobContacts : [])
-    .concat(Array.isArray(job.contacts) ? job.contacts : []);
+  // Nur eine Quelle – sonst verdoppeln sich Kontakte, wenn mehrere Keys gesetzt sind.
+  let rawList = [];
+  if (Array.isArray(job.job_contacts)) rawList = job.job_contacts;
+  else if (Array.isArray(job.jobContacts)) rawList = job.jobContacts;
+  else if (Array.isArray(job.contacts)) rawList = job.contacts;
   const out = [];
-  for (let i = 0; i < candidates.length; i++) {
-    const n = normalizeJobContactPayload(candidates[i] || {});
-    if (jobContactHasAny(n)) {
-      out.push(jobContactToApiRow(n));
-    }
+  const seen = new Set();
+  for (let i = 0; i < rawList.length; i++) {
+    const n = normalizeJobContactPayload(rawList[i] || {});
+    if (!jobContactHasAny(n)) continue;
+    const row = jobContactToApiRow(n);
+    const key = [
+      String(row.first_name || '').trim().toLowerCase(),
+      String(row.last_name || '').trim().toLowerCase(),
+      String(row.contact_name || '').trim().toLowerCase(),
+      String(row.title || '').trim().toLowerCase(),
+      String(row.department || '').trim().toLowerCase(),
+      String(row.phone || '').trim(),
+      String(row.mobile || '').trim(),
+      String(row.email || '').trim().toLowerCase(),
+    ].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
   }
   if (out.length > 0) return out;
   const directName = (job.baustellen_ansprechpartner != null ? String(job.baustellen_ansprechpartner) : '').trim();

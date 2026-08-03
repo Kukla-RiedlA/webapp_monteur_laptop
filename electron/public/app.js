@@ -2752,10 +2752,26 @@
   function getBaustellenContactsForJob(job) {
     if (!job || typeof job !== 'object') return [];
     var out = [];
+    var seen = {};
+    function pushUnique(row) {
+      if (!jobContactRowHasAny(row)) return;
+      var key = [
+        row.first_name || '',
+        row.last_name || '',
+        row.contact_name || '',
+        row.title || '',
+        row.department || '',
+        row.phone || '',
+        row.mobile || '',
+        row.email || ''
+      ].join('|').toLowerCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push(row);
+    }
     if (Array.isArray(job.job_contacts)) {
       job.job_contacts.forEach(function (c) {
-        var row = normalizeJobContactRow(c);
-        if (jobContactRowHasAny(row)) out.push(row);
+        pushUnique(normalizeJobContactRow(c));
       });
     }
     if (out.length) return out;
@@ -2773,7 +2789,7 @@
           ? String(job.baustelle_email).trim()
           : '';
     if (bName || bPhone || bEmail) {
-      out.push(normalizeJobContactRow({ contact_name: bName, contact_phone: bPhone, contact_email: bEmail }));
+      pushUnique(normalizeJobContactRow({ contact_name: bName, contact_phone: bPhone, contact_email: bEmail }));
     }
     return out;
   }
