@@ -1,5 +1,5 @@
-<?php
+﻿<?php
 // Zentrale Versionsnummer der Anwendung (wie in der Dispo).
 // Format: V <major>.<release>.<patch>, z. B. V 1.100.000
 
-$APP_VERSION = 'V 2.004.002';
+$APP_VERSION = 'V 2.005.000';

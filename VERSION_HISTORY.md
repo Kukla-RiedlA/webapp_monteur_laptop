@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.000
+- **Rechtschreibung:** DE + en-GB (Chromium); Kontextmenü mit Vorschlägen und „Zum Wörterbuch hinzufügen“; Freitext/contenteditable mit spellcheck.
+- **Release:** Plattformweite Ausrichtung auf V 2.005.000.
+
 ## V 2.004.001
 - **Auftragsordner-Sanitize:** ASCII-Whitelist explizit (`ņ`/`ū` → `_`), Parität zu Dispo — verhindert Doppelordner Transfer/Montage.
 
