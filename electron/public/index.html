@@ -582,6 +582,15 @@
       background: rgba(14, 123, 90, 0.22);
     }
     .anlagenstamm-form-wrap { margin-top:0.65rem; }
+    .kraftaufnehmer-block .kraftaufnehmer-row{display:block;border:1px solid var(--accent,#cfd8dc);border-radius:8px;background:rgba(0,0,0,0.02);padding:10px 12px;margin-bottom:10px;position:relative}
+    .kraftaufnehmer-block .kraftaufnehmer-row-fields{display:flex;flex-direction:column;gap:8px}
+    .kraftaufnehmer-block .kraftaufnehmer-row-line{display:grid;gap:8px;align-items:end}
+    .kraftaufnehmer-block .kraftaufnehmer-row-line-main{grid-template-columns:1fr 1fr 1fr}
+    .kraftaufnehmer-block .kraftaufnehmer-row-line-meas{grid-template-columns:1fr 1fr}
+    .kraftaufnehmer-block .kraftaufnehmer-field label{display:block;font-size:0.76rem;font-weight:600;margin-bottom:0.12rem;color:var(--muted,#888)}
+    .kraftaufnehmer-block .kraftaufnehmer-row input[type="text"]{width:100%;min-width:0;box-sizing:border-box}
+    .kraftaufnehmer-block .kraftaufnehmer-row-actions{position:absolute;top:8px;right:8px}
+    .kraftaufnehmer-block .btn-kraftaufnehmer-add{margin-top:4px}
     .anlagenstamm-form-section { margin-top:0.55rem; padding:0.55rem 0.65rem; border:1px solid var(--accent); border-radius:6px; }
     .anlagenstamm-form-section h4 { margin:0 0 0.45rem 0; font-size:0.92rem; }
     .anlagenstamm-form-grid { display:grid; grid-template-columns: 1fr 1fr; gap:0.4rem 0.65rem; }
@@ -2066,10 +2075,6 @@
       <div class="sp-v2-topbar">
         <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Serviceprotokoll</h2>
         <div class="sp-v2-topbar-actions">
-        <label class="sp-v2-apply-stamm" for="serviceprotokollApplyToAnlagenstamm" title="Nur bei aktivierter Option werden Protokoll-Änderungen in den Anlagenstamm geschrieben">
-          <input type="checkbox" id="serviceprotokollApplyToAnlagenstamm" value="1">
-          In Anlagenstamm übernehmen
-        </label>
         <button type="button" class="btn btn-primary" id="btnServiceprotokollStickySave" title="Zwischenstand speichern (serviceprotokoll.json)">Speichern</button>
         <button type="button" class="sp-v2-menu-btn" aria-label="Menü"><img src="icons/dots-vertical-green.svg" alt="" aria-hidden="true"></button>
         </div>
@@ -2114,9 +2119,15 @@
                 <label for="serviceprotokollType">Type</label>
                 <input type="text" id="serviceprotokollType" autocomplete="off">
               </div>
-              <div class="sp-v2-field">
-                <label for="serviceprotokollQmax">Qmax</label>
-                <input type="text" id="serviceprotokollQmax" autocomplete="off">
+              <div class="sp-v2-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;align-items:end">
+                <div class="sp-v2-field">
+                  <label for="serviceprotokollQmax">Qmax</label>
+                  <input type="text" id="serviceprotokollQmax" autocomplete="off" inputmode="decimal" maxlength="6">
+                </div>
+                <div class="sp-v2-field">
+                  <label for="serviceprotokollVmax">v max</label>
+                  <input type="text" id="serviceprotokollVmax" autocomplete="off" placeholder="aus Anlagenstamm">
+                </div>
               </div>
               <div class="sp-v2-field">
                 <label for="serviceprotokollPos">Pos.Nr.</label>
@@ -2134,19 +2145,28 @@
           <header class="sp-v2-section-head" id="spV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Wägezelle</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-stack">
-              <div class="sp-v2-field">
+              <div id="spMessLoadCellsHost"></div>
+              <input type="hidden" id="spMessWaegezellenExtra" value="[]">
+              <div class="sp-v2-field" style="display:none" aria-hidden="true">
                 <label for="spMessType">Type</label>
                 <input type="text" id="spMessType" autocomplete="off">
               </div>
-              <div class="sp-v2-field">
+              <div class="sp-v2-field" style="display:none" aria-hidden="true">
                 <label for="spMessSeriennummer">Seriennummer</label>
                 <input type="text" id="spMessSeriennummer" autocomplete="off">
               </div>
-              <div class="sp-v2-field">
-                <label for="spMessVersSpannung">Versorgungsspannung</label>
-                <div class="sp-v2-field-with-unit">
+              <div class="sp-v2-field" style="display:none" aria-hidden="true">
+                <label for="spMessDmsPos">Pos.</label>
+                <input type="text" id="spMessDmsPos" autocomplete="off">
+              </div>
+              <div class="sp-v2-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;align-items:end">
+                <div class="sp-v2-field">
+                  <label for="spMessVersSpannung">Versorgungsspannung V</label>
                   <input type="text" id="spMessVersSpannung" autocomplete="off" inputmode="decimal">
-                  <span class="sp-v2-unit">V</span>
+                </div>
+                <div class="sp-v2-field">
+                  <label for="spMessSensitivitaet">Sensitivität mV/V</label>
+                  <input type="text" id="spMessSensitivitaet" autocomplete="off" inputmode="decimal">
                 </div>
               </div>
             </div>

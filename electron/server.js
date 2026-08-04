@@ -962,35 +962,10 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
     internalUrl: body.internalUrl,
     technician_id: technicianId,
   });
-  let pendingSync = true;
-  let pushError = null;
+  // Lokal speichern ist Source of Truth; Dispo nur asynchron über pending_changes + sync_push.
+  const pendingSync = true;
   const hasDispoBase = baseCandidates.length > 0;
-  if (hasDispoBase) {
-    try {
-      const remote = await proxyAnlagenstammSave(pushPayload);
-      if (remote && remote.ok !== false) {
-        pendingSync = false;
-        if (fabKey) {
-          if (remote.id) {
-            db.prepare(
-              'UPDATE anlagenstamm_local SET id = ?, dirty = 0 WHERE TRIM(fabrikationsnummer) = TRIM(?)',
-            ).run(parseInt(remote.id, 10), fabKey);
-          } else {
-            db.prepare('UPDATE anlagenstamm_local SET dirty = 0 WHERE TRIM(fabrikationsnummer) = TRIM(?)').run(fabKey);
-          }
-          dedupeAnlagenstammLocalByFab(db, fabKey);
-          db.prepare(
-            `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`,
-          ).run(fabKey);
-        }
-      } else {
-        pushError = (remote && remote.error) || 'Dispo hat Speichern abgelehnt.';
-      }
-    } catch (e) {
-      pushError = e && e.message ? e.message : String(e);
-    }
-  }
-  if (pendingSync && fabKey) {
+  if (fabKey) {
     db.prepare(
       `DELETE FROM pending_changes WHERE entity_type = 'anlagenstamm' AND entity_id = ? AND action = 'save'`,
     ).run(fabKey);
@@ -1010,7 +985,7 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
         ' Bitte App mit Schreibrechten auf den Benutzerordner starten.',
     };
   }
-  if (pendingSync && bgJobs && hasDispoBase) {
+  if (bgJobs && hasDispoBase) {
     const baseForPush = (pushPayload.baseUrl || defaultBase || '').toString().trim().replace(/\/$/, '');
     if (baseForPush) {
       try {
@@ -1026,6 +1001,7 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
           },
           'sync_push:' + technicianId + ':' + fingerprintDispoBaseForRuntime(baseForPush),
         );
+        if (typeof bgJobs.kick === 'function') bgJobs.kick();
       } catch (enqueueErr) {
         console.warn(
           '[anlagenstamm_save] sync_push enqueue:',
@@ -1040,7 +1016,7 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
     id: kept && kept.id ? kept.id : localResult.id,
     fabrikationsnummer: localResult.fabrikationsnummer,
     pending_sync: pendingSync,
-    push_error: pushError,
+    push_error: null,
     _source: 'local',
   };
 }
@@ -8972,14 +8948,77 @@ function createApp(db) {
     return false;
   }
 
-  async function syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, messwerte, kopfDwc) {
+  function encodeKaExtraFromMess(m) {
+    const extras = m && Array.isArray(m.waegezellen_extra) ? m.waegezellen_extra : [];
+    const normalized = extras
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const row = {
+          kraftaufnehmer: String(item.kraftaufnehmer || item.type || '').trim(),
+          dms_nr: String(item.dms_nr || item.serialNumber || '').trim(),
+          dms_position: String(item.dms_position || item.position || '').trim(),
+          vers_spannung: String(item.vers_spannung || item.supplyVoltage || '').trim(),
+          sensitivitaet: String(item.sensitivitaet || item.sensitivity || '').trim(),
+        };
+        if (!row.kraftaufnehmer && !row.dms_nr && !row.dms_position && !row.vers_spannung && !row.sensitivitaet) {
+          return null;
+        }
+        return row;
+      })
+      .filter(Boolean);
+    if (!normalized.length) return '';
+    try {
+      return JSON.stringify(normalized);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  async function syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, messwerte, kopfDwc, kopfExtra) {
     if (!shouldApplyServiceprotokollToAnlagenstamm(body)) return null;
     const mess = messwerte && typeof messwerte === 'object' ? messwerte : {};
+    const kopf = kopfExtra && typeof kopfExtra === 'object' ? kopfExtra : {};
     const typeVal = String(mess.waegezelle_type || '').trim();
     const snVal = String(mess.waegezelle_seriennummer || '').trim();
-    const dwcVal = String(kopfDwc || '').trim();
+    const dwcVal = String(kopfDwc || kopf.kopf_dwc || '').trim();
+    const posVal = String(kopf.kopf_pos_nr || '').trim();
+    const qmaxVal = String(kopf.kopf_qmax || '').trim();
+    const vmaxVal = String(kopf.kopf_vmax || '').trim();
+    const plantTypeVal = String(kopf.kopf_type || '').trim();
+    const projektVal = String(kopf.projekt || body.projekt || '').trim();
+    const dmsPosEarly = String(
+      kopf.dms_position || mess.waegezelle_position || body.dms_position || '',
+    ).trim();
+    const versEarly = String(
+      kopf.vers_spannung || mess.vers_spannung || body.vers_spannung || '',
+    ).trim();
+    const sensEarly = String(
+      kopf.sensitivitaet || mess.sensitivitaet || body.sensitivitaet || '',
+    ).trim();
+    const kaExtraEarly =
+      kopf.kraftaufnehmer_extra != null && kopf.kraftaufnehmer_extra !== ''
+        ? String(kopf.kraftaufnehmer_extra)
+        : body.kraftaufnehmer_extra != null && body.kraftaufnehmer_extra !== ''
+          ? String(body.kraftaufnehmer_extra)
+          : encodeKaExtraFromMess(mess);
     const fabKey = String(fab || '').trim();
-    if (!fabKey || (!typeVal && !snVal && !dwcVal)) return null;
+    if (
+      !fabKey ||
+      (!typeVal &&
+        !snVal &&
+        !dwcVal &&
+        !posVal &&
+        !qmaxVal &&
+        !vmaxVal &&
+        !plantTypeVal &&
+        !projektVal &&
+        !dmsPosEarly &&
+        !versEarly &&
+        !sensEarly &&
+        !kaExtraEarly)
+    ) {
+      return null;
+    }
     const technicianId = body.technician_id != null ? parseInt(String(body.technician_id), 10) : null;
     const partial = {
       fabrikationsnummer: fabKey,
@@ -8993,6 +9032,30 @@ function createApp(db) {
     if (typeVal) partial.kraftaufnehmer = typeVal;
     if (snVal) partial.dms_nr = snVal;
     if (dwcVal) partial.elektronik = dwcVal;
+    if (posVal) partial.position = posVal;
+    if (qmaxVal) partial.leistung = qmaxVal;
+    if (vmaxVal) partial.nenngeschwindigkeit = vmaxVal;
+    if (plantTypeVal) partial.type = plantTypeVal;
+    if (projektVal) partial.projekt = projektVal;
+    const dmsPosVal = String(
+      kopf.dms_position || mess.waegezelle_position || body.dms_position || '',
+    ).trim();
+    const versVal = String(
+      kopf.vers_spannung || mess.vers_spannung || body.vers_spannung || '',
+    ).trim();
+    const sensVal = String(
+      kopf.sensitivitaet || mess.sensitivitaet || body.sensitivitaet || '',
+    ).trim();
+    const kaExtraVal =
+      kopf.kraftaufnehmer_extra != null && kopf.kraftaufnehmer_extra !== ''
+        ? kopf.kraftaufnehmer_extra
+        : body.kraftaufnehmer_extra != null && body.kraftaufnehmer_extra !== ''
+          ? body.kraftaufnehmer_extra
+          : encodeKaExtraFromMess(mess);
+    if (dmsPosVal) partial.dms_position = dmsPosVal;
+    if (versVal) partial.vers_spannung = versVal;
+    if (sensVal) partial.sensitivitaet = sensVal;
+    if (kaExtraVal !== '' && kaExtraVal != null) partial.kraftaufnehmer_extra = kaExtraVal;
     return performAnlagenstammSave(partial, technicianId);
   }
 
@@ -9413,6 +9476,7 @@ function createApp(db) {
         bemerkungen: String(body.bemerkungen || ''),
         kopf_pos_nr: String(body.kopf_pos_nr || ''),
         kopf_qmax: String(body.kopf_qmax || ''),
+        kopf_vmax: String(body.kopf_vmax || ''),
         kopf_type: String(body.kopf_type || ''),
         kopf_dwc: String(body.kopf_dwc || ''),
         abschluss: body.abschluss && typeof body.abschluss === 'object' ? body.abschluss : {},
@@ -9422,12 +9486,23 @@ function createApp(db) {
       const applyToAnlagenstamm = shouldApplyServiceprotokollToAnlagenstamm(body);
       if (applyToAnlagenstamm) {
         try {
-          const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, draftPayload.messwerte, draftPayload.kopf_dwc);
+          const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, draftPayload.messwerte, draftPayload.kopf_dwc, {
+            kopf_pos_nr: draftPayload.kopf_pos_nr,
+            kopf_qmax: draftPayload.kopf_qmax,
+            kopf_vmax: draftPayload.kopf_vmax,
+            kopf_type: draftPayload.kopf_type,
+            kopf_dwc: draftPayload.kopf_dwc,
+            projekt: draftPayload.projekt,
+            dms_position: (draftPayload.messwerte && draftPayload.messwerte.waegezelle_position) || '',
+            vers_spannung: (draftPayload.messwerte && draftPayload.messwerte.vers_spannung) || '',
+            sensitivitaet: (draftPayload.messwerte && draftPayload.messwerte.sensitivitaet) || '',
+            kraftaufnehmer_extra: encodeKaExtraFromMess(draftPayload.messwerte),
+          });
           if (messSync && messSync.ok === false) {
-            messSyncWarning = 'Anlagenstamm (Kraftaufnehmer/DMS/DWC): ' + (messSync.error || 'lokal nicht gespeichert');
+            messSyncWarning = 'Anlagenstamm (technische Daten): ' + (messSync.error || 'lokal nicht gespeichert');
           }
         } catch (messErr) {
-          messSyncWarning = 'Anlagenstamm (Kraftaufnehmer/DMS/DWC): ' + (messErr.message || 'Speichern fehlgeschlagen');
+          messSyncWarning = 'Anlagenstamm (technische Daten): ' + (messErr.message || 'Speichern fehlgeschlagen');
         }
       }
 
@@ -9444,25 +9519,6 @@ function createApp(db) {
           await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, dispoBaseUrl, authSync);
         } catch (_) {
           syncWarning = [syncWarning, 'Zwischenstand: Dispo-Sync fehlgeschlagen.'].filter(Boolean).join('\n');
-        }
-      }
-
-      if (!skipDispoSync && dispoBaseUrl && hasServerJobId && applyToAnlagenstamm) {
-        const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.serverPassword ?? body.serverPassword);
-        const syncHeaders = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authSync || {}) };
-        try {
-          const syncUrl = dispoBaseUrl + '/dispo_api/api/anlagenstamm_projekt_job_save.php';
-          const syncRes = await fetchWithTimeout(syncUrl, {
-            method: 'POST',
-            headers: syncHeaders,
-            body: JSON.stringify({ technician_id: technicianId, job_id: parsedServerJobId, projekt }),
-          });
-          const syncData = await syncRes.json().catch(() => ({}));
-          if (!syncRes.ok || !syncData.ok) {
-            syncWarning = [syncWarning, 'Projekt: Anlagenstamm auf dem Server konnte nicht angepasst werden: ' + (syncData.error || syncRes.statusText || syncRes.status)].filter(Boolean).join('\n');
-          }
-        } catch (_) {
-          syncWarning = [syncWarning, 'Projekt: Dispo für Anlagenstamm-Update nicht erreichbar.'].filter(Boolean).join('\n');
         }
       }
 
@@ -9639,9 +9695,16 @@ function createApp(db) {
         if (!fab) continue;
         if (applyToAnlagenstamm) {
           try {
-            const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, p.messwerte, p.kopf_dwc);
+            const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, p.messwerte, p.kopf_dwc, {
+              kopf_pos_nr: p.kopf_pos_nr,
+              kopf_qmax: p.kopf_qmax,
+              kopf_vmax: p.kopf_vmax,
+              kopf_type: p.kopf_type,
+              kopf_dwc: p.kopf_dwc,
+              projekt: p.projekt,
+            });
             if (messSync && messSync.ok === false) {
-              messSyncWarning = [messSyncWarning, 'FN ' + fab + ': Anlagenstamm (Kraftaufnehmer/DMS/DWC) lokal nicht gespeichert'].filter(Boolean).join('\n');
+              messSyncWarning = [messSyncWarning, 'FN ' + fab + ': Anlagenstamm (technische Daten) lokal nicht gespeichert'].filter(Boolean).join('\n');
             }
           } catch (messErr) {
             messSyncWarning = [messSyncWarning, 'FN ' + fab + ': ' + (messErr.message || 'Anlagenstamm-Sync fehlgeschlagen')].filter(Boolean).join('\n');
@@ -9656,6 +9719,7 @@ function createApp(db) {
           bemerkungen: String(p.bemerkungen || ''),
           kopf_pos_nr: String(p.kopf_pos_nr || ''),
           kopf_qmax: String(p.kopf_qmax || ''),
+          kopf_vmax: String(p.kopf_vmax || ''),
           kopf_type: String(p.kopf_type || ''),
           kopf_dwc: String(p.kopf_dwc || ''),
         });

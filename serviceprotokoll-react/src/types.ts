@@ -23,6 +23,15 @@ export interface MeasurementRow {
   g: string;
 }
 
+export interface LoadCellRow {
+  id: string;
+  type: string;
+  serialNumber: string;
+  position: string;
+  supplyVoltage: string;
+  sensitivity: string;
+}
+
 export interface ServiceProtocolFormState {
   order: string;
   project: string;
@@ -31,18 +40,22 @@ export interface ServiceProtocolFormState {
   plantType: string;
   qmax: string;
   qmaxUnit: string;
+  vmax: string;
   position: string;
   dwc: string;
+  /** @deprecated use loadCells[0] — kept for Bridge-Kompatibilität */
   loadcellType: string;
+  /** @deprecated use loadCells[0] */
   serialNumber: string;
+  loadCells: LoadCellRow[];
   supplyVoltage: string;
+  sensitivity: string;
   generalRemarks: string;
   status: 'geprueft' | 'justiert' | 'mangel';
   monteur: string;
   closingRemarks: string;
   pdfDe: boolean;
   pdfEn: boolean;
-  applyToAnlagenstamm: boolean;
 }
 
 export const FAB_NUMBERS = ['7118', '7119', '7120', '7123', '10612', '10616', '12435'];
@@ -70,6 +83,10 @@ export const DEFAULT_TEST_LOAD: TestLoadValues = {
   value4: '',
 };
 
+export const DEFAULT_LOAD_CELLS: LoadCellRow[] = [
+  { id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' },
+];
+
 export const DEFAULT_FORM: ServiceProtocolFormState = {
   order: 'Etex Building Performance GmbH, Siniat-Werk Lippendorf',
   project: 'Etex Lippendorf Vorbereitungsstation',
@@ -77,17 +94,19 @@ export const DEFAULT_FORM: ServiceProtocolFormState = {
   activeFab: '7118',
   plantType: 'E-DBW-H-I-800/2600D-ZS-320/390',
   qmax: '25',
-  qmaxUnit: 't/h',
+  qmaxUnit: 'kg/h',
+  vmax: '',
   position: 'Stuckgips',
   dwc: 'DWC-7C',
-  loadcellType: 'Z6FD1/100kg',
-  serialNumber: '30132191',
-  supplyVoltage: '5,5',
+  loadcellType: '',
+  serialNumber: '',
+  loadCells: DEFAULT_LOAD_CELLS.map((r) => ({ ...r })),
+  supplyVoltage: '',
+  sensitivity: '',
   generalRemarks: '',
   status: 'geprueft',
   monteur: '',
   closingRemarks: '',
   pdfDe: true,
   pdfEn: false,
-  applyToAnlagenstamm: false,
 };

@@ -116,7 +116,23 @@ function formatMesswerteLines(mess, lang) {
   const de = lang !== 'en';
   if (m.waegezelle_type) lines.push([(de ? 'Wägezelle Typ' : 'Load cell type'), m.waegezelle_type]);
   if (m.waegezelle_seriennummer) lines.push([(de ? 'Seriennummer' : 'Serial no.'), m.waegezelle_seriennummer]);
-  if (m.vers_spannung) lines.push([(de ? 'Versorgungsspannung' : 'Supply voltage'), m.vers_spannung]);
+  if (m.waegezelle_position) lines.push([(de ? 'Pos.' : 'Pos.'), m.waegezelle_position]);
+  if (Array.isArray(m.waegezellen_extra)) {
+    m.waegezellen_extra.forEach((ex, i) => {
+      if (!ex) return;
+      const label = de ? ('Wägezelle ' + (i + 2)) : ('Load cell ' + (i + 2));
+      const parts = [
+        ex.kraftaufnehmer,
+        ex.dms_nr,
+        ex.dms_position,
+        ex.vers_spannung ? String(ex.vers_spannung) + ' V' : '',
+        ex.sensitivitaet ? String(ex.sensitivitaet) + ' mV/V' : '',
+      ].filter((x) => x && String(x).trim());
+      if (parts.length) lines.push([label, parts.join(' / ')]);
+    });
+  }
+  if (m.vers_spannung) lines.push([(de ? 'Versorgungsspannung V' : 'Supply voltage V'), m.vers_spannung]);
+  if (m.sensitivitaet) lines.push([(de ? 'Sensitivität mV/V' : 'Sensitivity mV/V'), m.sensitivitaet]);
   const pg = m.pruefgewichtstest;
   if (pg && typeof pg === 'object') {
     Object.keys(pg).forEach((k) => {
@@ -390,7 +406,8 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       [
         [de ? 'Waegezelle Type' : 'Load cell type', mess.waegezelle_type || ''],
         [de ? 'Seriennummer' : 'Serial no.', mess.waegezelle_seriennummer || ''],
-        [de ? 'Versorgung (V)' : 'Supply (V)', mess.vers_spannung || ''],
+        [de ? 'Versorgungsspannung V' : 'Supply voltage V', mess.vers_spannung || ''],
+        [de ? 'Sensitivität mV/V' : 'Sensitivity mV/V', mess.sensitivitaet || ''],
         [de ? 'Servicetechniker' : 'Service engineer', monteurName],
       ],
     ];

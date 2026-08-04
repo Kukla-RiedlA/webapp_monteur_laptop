@@ -856,7 +856,7 @@
   }
 
   /**
-   * Anlagenstamm: lokal-first (SQLite + pending_changes), Dispo-IPC nur als Fallback.
+   * Anlagenstamm: lokal-first (SQLite + pending_changes). Dispo-Sync nur im Hintergrund.
    */
   async function anlagenstammSearchDispo(payload) {
     var body = Object.assign({}, payload, { technician_id: getTechId() });
@@ -9116,7 +9116,7 @@
       '<div class="anlagenstamm-form-section"><h4>Kraftaufnehmer</h4><div class="anlagenstamm-form-grid">' +
       '<div class="form-full kraftaufnehmer-block" id="kraftaufnehmerBlock">' +
       '<div id="kraftaufnehmerRows"></div>' +
-      '<button type="button" class="btn btn-secondary btn-kraftaufnehmer-add" id="btnAddKraftaufnehmer">+ Kraftaufnehmer</button>' +
+      '<button type="button" class="btn btn-secondary btn-kraftaufnehmer-add" id="btnAddKraftaufnehmer">+ Wägezelle</button>' +
       '<input type="hidden" id="as-form-kraftaufnehmer-extra" name="kraftaufnehmer_extra" value="">' +
       '</div>' +
       '</div></div>' +
@@ -9403,6 +9403,8 @@
       elektronik: ((document.getElementById('as-form-elektronik') || {}).value || ''),
       dms_nr: ((document.getElementById('as-form-dms') || {}).value || ''),
       dms_position: ((document.getElementById('as-form-dms-position') || {}).value || ''),
+      vers_spannung: ((document.getElementById('as-form-vers-spannung') || {}).value || ''),
+      sensitivitaet: ((document.getElementById('as-form-sensitivitaet') || {}).value || ''),
       position: ((document.getElementById('as-form-position') || {}).value || ''),
       geliefert_ueber: ((document.getElementById('as-form-geliefert') || {}).value || ''),
       projekt: ((document.getElementById('as-form-projekt') || {}).value || ''),
@@ -9422,10 +9424,14 @@
         primaryInputId: 'as-form-kraftaufnehmer',
         primaryDmsInputId: 'as-form-dms',
         primaryDmsPosInputId: 'as-form-dms-position',
+        primaryVersInputId: 'as-form-vers-spannung',
+        primarySensInputId: 'as-form-sensitivitaet',
         hiddenInputId: 'as-form-kraftaufnehmer-extra',
         primaryValue: (a && a.kraftaufnehmer) ? String(a.kraftaufnehmer) : '',
         primaryDmsNr: (a && a.dms_nr) ? String(a.dms_nr) : '',
         primaryDmsPosition: (a && a.dms_position) ? String(a.dms_position) : '',
+        primaryVersSpannung: (a && a.vers_spannung) ? String(a.vers_spannung) : '',
+        primarySensitivitaet: (a && a.sensitivitaet) ? String(a.sensitivitaet) : '',
         extras: extras,
         readOnly: false
       });
@@ -14213,19 +14219,81 @@
     };
   })();
 
-  /** Auftrag, dessen Start–Ende den heutigen Kalendertag abdeckt (erster Treffer). */
+  /** Lokales heutiges YYYY-MM-DD (nicht UTC). */
+  function getProtokollTodayYmd() {
+    if (typeof toYmd === 'function') return toYmd(new Date());
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function jobStartYmd(job) {
+    return String((job && job.start_datetime) || '').slice(0, 10);
+  }
+
+  /** Auftrag, dessen Start–Ende den heutigen Kalendertag abdeckt.
+   *  Bei mehreren Treffern: jüngster Start (aktuellster laufender Auftrag). */
   function resolveTodayProtokollJobId(jobs) {
     if (!Array.isArray(jobs) || !jobs.length) return '';
-    var today = new Date().toISOString().slice(0, 10);
+    var today = getProtokollTodayYmd();
     var todayJobs = jobs.filter(function (j) {
-      var s = (j.start_datetime || '').toString().slice(0, 10);
-      var e = (j.end_datetime || '').toString().slice(0, 10);
+      if (!j) return false;
+      if (typeof jobCoversYmd === 'function') return jobCoversYmd(j, today);
+      var s = jobStartYmd(j);
+      var e = String(j.end_datetime || j.start_datetime || '').slice(0, 10);
       if (s && e) return today >= s && today <= e;
       if (s) return today === s;
-      if (e) return today === e;
       return false;
     });
-    return todayJobs.length >= 1 ? String(todayJobs[0].id) : '';
+    if (!todayJobs.length) return '';
+    todayJobs.sort(function (a, b) {
+      var sa = jobStartYmd(a);
+      var sb = jobStartYmd(b);
+      if (sa !== sb) return sa < sb ? 1 : -1;
+      return (Number(b.id) || 0) - (Number(a.id) || 0);
+    });
+    return String(todayJobs[0].id);
+  }
+
+  /** Nächster Auftrag mit Start nach heute (aufsteigend nach Einsatzdatum). */
+  function resolveUpcomingProtokollJobId(jobs) {
+    if (!Array.isArray(jobs) || !jobs.length) return '';
+    var today = getProtokollTodayYmd();
+    var upcoming = jobs.filter(function (j) {
+      var s = jobStartYmd(j);
+      return s && s > today;
+    });
+    if (!upcoming.length) return '';
+    if (typeof sortOpenJobsByEinsatzdatumAsc === 'function') {
+      upcoming = sortOpenJobsByEinsatzdatumAsc(upcoming);
+    } else {
+      upcoming.sort(function (a, b) {
+        var sa = jobStartYmd(a);
+        var sb = jobStartYmd(b);
+        if (sa !== sb) return sa < sb ? -1 : 1;
+        return (Number(a.id) || 0) - (Number(b.id) || 0);
+      });
+    }
+    return String(upcoming[0].id);
+  }
+
+  function findJobInListById(jobs, id) {
+    if (id == null || id === '' || !Array.isArray(jobs)) return null;
+    for (var i = 0; i < jobs.length; i++) {
+      var j = jobs[i];
+      if (!j) continue;
+      if (j.id == id) return j;
+      if (j.server_id != null && j.server_id == id) return j;
+    }
+    return null;
+  }
+
+  /** true, wenn Auftrag heute läuft oder in der Zukunft startet. */
+  function isProtokollJobCurrentOrUpcoming(job) {
+    if (!job) return false;
+    var today = getProtokollTodayYmd();
+    if (typeof jobCoversYmd === 'function' && jobCoversYmd(job, today)) return true;
+    var s = jobStartYmd(job);
+    return !!(s && s >= today);
   }
 
   (function initProtokolleMontagebericht() {
@@ -17913,22 +17981,36 @@
     function resolveDefaultServiceprotokollJobId(jobs) {
       if (!Array.isArray(jobs) || !jobs.length) return '';
       var preferred = '';
-      if (typeof getDienstreiseExplorerJobId === 'function') {
-        preferred = jobIdInServiceJobList(jobs, getDienstreiseExplorerJobId());
-      }
+      // 1) Expliziter Deep-Link
+      try {
+        preferred = jobIdInServiceJobList(jobs, new URLSearchParams(window.location.search).get('job_id'));
+      } catch (e) {}
+      // 2) Start-/Explorer-Kontext nur, wenn Auftrag aktuell oder kommend
       if (!preferred && typeof startPageActiveJobId !== 'undefined' && startPageActiveJobId) {
-        preferred = jobIdInServiceJobList(jobs, startPageActiveJobId);
+        var startJob = findJobInListById(jobs, startPageActiveJobId);
+        if (startJob && isProtokollJobCurrentOrUpcoming(startJob)) {
+          preferred = String(startJob.id);
+        }
       }
+      if (!preferred && typeof getDienstreiseExplorerJobId === 'function') {
+        var ctxId = getDienstreiseExplorerJobId();
+        var ctxJob = findJobInListById(jobs, ctxId);
+        if (ctxJob && isProtokollJobCurrentOrUpcoming(ctxJob)) {
+          preferred = String(ctxJob.id);
+        }
+      }
+      // 3) Heutiger Auftrag, sonst nächster kommender
+      if (!preferred) preferred = resolveTodayProtokollJobId(jobs);
+      if (!preferred) preferred = resolveUpcomingProtokollJobId(jobs);
+      // 4) Zuletzt verwendeter nur, wenn noch aktuell/kommend (kein sticky Alter Auftrag)
       if (!preferred) {
         try {
-          preferred = jobIdInServiceJobList(jobs, new URLSearchParams(window.location.search).get('job_id'));
-        } catch (e) {}
-      }
-      if (!preferred) {
-        try { preferred = jobIdInServiceJobList(jobs, localStorage.getItem(SP_LAST_JOB_KEY)); } catch (e2) {}
-      }
-      if (!preferred) {
-        preferred = resolveTodayProtokollJobId(jobs);
+          var lastId = localStorage.getItem(SP_LAST_JOB_KEY);
+          var lastJob = findJobInListById(jobs, lastId);
+          if (lastJob && isProtokollJobCurrentOrUpcoming(lastJob)) {
+            preferred = String(lastJob.id);
+          }
+        } catch (e2) {}
       }
       if (!preferred && jobs.length === 1) preferred = String(jobs[0].id);
       return preferred;
@@ -17947,14 +18029,231 @@
       return fab !== '' && getActiveFab() === fab && serviceprotokollFormReadyFab === fab;
     }
 
-    function isServiceprotokollApplyToAnlagenstammEnabled() {
-      var el = document.getElementById('serviceprotokollApplyToAnlagenstamm');
-      return !!(el && el.checked);
+    function collectServiceprotokollTechnikFromForm() {
+      var san = typeof sanitizeLeistungField === 'function' ? sanitizeLeistungField : function (v) {
+        return v == null ? '' : String(v).trim();
+      };
+      return {
+        position: san((document.getElementById('serviceprotokollPos') || {}).value),
+        leistung: san((document.getElementById('serviceprotokollQmax') || {}).value),
+        nenngeschwindigkeit: san((document.getElementById('serviceprotokollVmax') || {}).value),
+        type: san((document.getElementById('serviceprotokollType') || {}).value),
+        elektronik: san((document.getElementById('serviceprotokollDwc') || {}).value),
+        kraftaufnehmer: san((document.getElementById('spMessType') || {}).value),
+        dms_nr: san((document.getElementById('spMessSeriennummer') || {}).value),
+        dms_position: san((document.getElementById('spMessDmsPos') || {}).value),
+        vers_spannung: san((document.getElementById('spMessVersSpannung') || {}).value),
+        sensitivitaet: san((document.getElementById('spMessSensitivitaet') || {}).value),
+        kraftaufnehmer_extra: (function () {
+          var cells = collectSpLoadCellsFromForm();
+          return encodeSpKraftaufnehmerExtra(cells.slice(1)) || '';
+        })(),
+        projekt: san((document.getElementById('serviceprotokollProjekt') || {}).value)
+      };
     }
 
-    function setServiceprotokollApplyToAnlagenstamm(enabled) {
-      var el = document.getElementById('serviceprotokollApplyToAnlagenstamm');
-      if (el) el.checked = !!enabled;
+    var SP_TECHNIK_FIELD_LABELS = {
+      position: 'Pos.-Nr.',
+      leistung: 'Qmax',
+      nenngeschwindigkeit: 'v max',
+      type: 'Type',
+      elektronik: 'DWC',
+      kraftaufnehmer: 'Wägezelle Type',
+      dms_nr: 'Wägezelle Seriennummer',
+      dms_position: 'Wägezelle Pos.',
+      vers_spannung: 'Versorgungsspannung V',
+      sensitivitaet: 'Sensitivität mV/V',
+      kraftaufnehmer_extra: 'Weitere Wägezellen',
+      projekt: 'Projekt'
+    };
+
+    function diffServiceprotokollTechnikVsStamm(formVals, stammRow) {
+      var san = typeof sanitizeLeistungField === 'function' ? sanitizeLeistungField : function (v) {
+        return v == null ? '' : String(v).trim();
+      };
+      var diffs = [];
+      Object.keys(SP_TECHNIK_FIELD_LABELS).forEach(function (key) {
+        var neu = san(formVals && formVals[key]);
+        var alt = san(stammRow && stammRow[key]);
+        if (key === 'kraftaufnehmer_extra') {
+          neu = encodeSpKraftaufnehmerExtra(parseSpKraftaufnehmerExtra(neu || (formVals && formVals[key]))) || '';
+          alt = encodeSpKraftaufnehmerExtra(parseSpKraftaufnehmerExtra(alt || (stammRow && stammRow[key]))) || '';
+          if (!neu && !alt) return;
+          if (neu === alt) return;
+          diffs.push({
+            key: key,
+            label: SP_TECHNIK_FIELD_LABELS[key],
+            from: alt ? 'vorhanden' : '–',
+            to: neu ? 'geändert/ergänzt' : '–'
+          });
+          return;
+        }
+        if (!neu) return;
+        if (neu === alt) return;
+        diffs.push({
+          key: key,
+          label: SP_TECHNIK_FIELD_LABELS[key],
+          from: alt,
+          to: neu
+        });
+      });
+      return diffs;
+    }
+
+    function formatServiceprotokollTechnikDiffConfirm(diffs, fab) {
+      var lines = ['Technische Daten weichen vom Anlagenstamm ab (FN ' + fab + '):\n'];
+      (diffs || []).forEach(function (d) {
+        lines.push('• ' + d.label + ': „' + (d.from || '–') + '“ → „' + d.to + '“');
+      });
+      lines.push('\nÄnderungen in den Anlagenstamm übernehmen?');
+      return lines.join('\n');
+    }
+
+    /** Eigenes HTML-Modal statt window.confirm – sonst blockiert Electron danach oft alle Eingabefelder. */
+    function showServiceprotokollConfirmDialog(message) {
+      return new Promise(function (resolve) {
+        var overlay = document.createElement('div');
+        overlay.className = 'modal-overlay anlage-detail-modal';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.style.zIndex = '10050';
+        var box = document.createElement('div');
+        box.className = 'modal-box';
+        box.style.maxWidth = '32rem';
+        var title = document.createElement('h3');
+        title.textContent = 'Anlagenstamm';
+        var body = document.createElement('pre');
+        body.style.whiteSpace = 'pre-wrap';
+        body.style.fontFamily = 'inherit';
+        body.style.fontSize = '0.9rem';
+        body.style.margin = '0.75rem 0 1rem';
+        body.style.lineHeight = '1.45';
+        body.textContent = String(message || '');
+        var actions = document.createElement('div');
+        actions.className = 'modal-actions';
+        var btnNo = document.createElement('button');
+        btnNo.type = 'button';
+        btnNo.className = 'btn btn-ghost';
+        btnNo.textContent = 'Nein';
+        var btnYes = document.createElement('button');
+        btnYes.type = 'button';
+        btnYes.className = 'btn btn-primary';
+        btnYes.textContent = 'Ja, übernehmen';
+        actions.appendChild(btnNo);
+        actions.appendChild(btnYes);
+        box.appendChild(title);
+        box.appendChild(body);
+        box.appendChild(actions);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        function finish(ok) {
+          if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+          try {
+            var frame = document.getElementById('serviceprotokollReactFrame');
+            if (frame && frame.contentWindow) frame.contentWindow.focus();
+            else window.focus();
+          } catch (e) { /* ignore */ }
+          resolve(!!ok);
+        }
+
+        btnNo.addEventListener('click', function () { finish(false); });
+        btnYes.addEventListener('click', function () { finish(true); });
+        overlay.addEventListener('click', function (e) {
+          if (e.target === overlay) finish(false);
+        });
+        overlay.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            finish(false);
+          }
+        });
+        setTimeout(function () {
+          try { btnYes.focus(); } catch (e2) { /* ignore */ }
+        }, 0);
+      });
+    }
+
+    function lookupAnlagenstammRowForFab(fab) {
+      fab = String(fab || '').trim();
+      if (!fab) return Promise.resolve(null);
+      return fetch(API_BASE + '/api/anlagenstamm_lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({ fab: fab, local_only: 1 })
+      })
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (data) {
+          if (data && data.ok && data.row) return data.row;
+          return null;
+        })
+        .catch(function () { return null; });
+    }
+
+    function patchServiceJobFabStammFields(fab, fields) {
+      if (!serviceJobData || !serviceJobData.fabrikationsnummern || !fields) return;
+      try {
+        var parsed = JSON.parse(serviceJobData.fabrikationsnummern);
+        if (!Array.isArray(parsed)) return;
+        var fabKey = String(fab || '').trim();
+        var touched = false;
+        for (var i = 0; i < parsed.length; i++) {
+          if (String(parsed[i].fabrikationsnummer || '').trim() !== fabKey) continue;
+          ['kraftaufnehmer', 'dms_nr', 'dms_position', 'vers_spannung', 'sensitivitaet', 'kraftaufnehmer_extra', 'elektronik', 'type', 'leistung', 'nenngeschwindigkeit', 'position', 'projekt'].forEach(function (k) {
+            if (fields[k] != null && fields[k] !== '') parsed[i][k] = fields[k];
+          });
+          touched = true;
+        }
+        if (touched) {
+          serviceJobData = Object.assign({}, serviceJobData, { fabrikationsnummern: JSON.stringify(parsed) });
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    async function persistServiceprotokollTechnikToAnlagenstamm(fab, formVals, existing, diffs) {
+      fab = String(fab || '').trim();
+      if (!fab) return;
+      var vals = formVals || collectServiceprotokollTechnikFromForm();
+      var keys = (diffs && diffs.length)
+        ? diffs.map(function (d) { return d.key; })
+        : Object.keys(SP_TECHNIK_FIELD_LABELS).filter(function (k) { return vals[k]; });
+      if (!keys.length) return;
+      var row = existing;
+      if (row === undefined) row = await lookupAnlagenstammRowForFab(fab);
+      var payload = Object.assign({
+        baseUrl: getDispoBaseUrl(),
+        serverUsername: getServerUsername(),
+        serverPassword: getServerPassword(),
+        id: row && row.id ? parseInt(row.id, 10) : 0,
+        fabrikationsnummer: fab
+      }, dispoBasePayloadExtra());
+      keys.forEach(function (k) {
+        if (vals[k]) payload[k] = vals[k];
+      });
+      await anlagenstammSaveDispo(payload);
+      var mergedFields = {};
+      keys.forEach(function (k) {
+        mergedFields[k] = vals[k] || (row && row[k]) || '';
+      });
+      patchServiceJobFabStammFields(fab, mergedFields);
+      mergeAnlagenstammFieldsIntoOpenJob(fab, mergedFields);
+    }
+
+    /**
+     * Beim Speichern: abweichende technische Daten anzeigen und optional in den Anlagenstamm schreiben.
+     * @returns {Promise<boolean>} true wenn übernommen
+     */
+    async function maybeConfirmAndApplyServiceprotokollTechnikToAnlagenstamm(fab) {
+      fab = String(fab || '').trim();
+      if (!fab) return false;
+      var formVals = collectServiceprotokollTechnikFromForm();
+      var existing = await lookupAnlagenstammRowForFab(fab);
+      var diffs = diffServiceprotokollTechnikVsStamm(formVals, existing);
+      if (!diffs.length) return false;
+      var confirmed = await showServiceprotokollConfirmDialog(formatServiceprotokollTechnikDiffConfirm(diffs, fab));
+      if (!confirmed) return false;
+      await persistServiceprotokollTechnikToAnlagenstamm(fab, formVals, existing, diffs);
+      return true;
     }
 
     function mergeSavedDraftIntoMemory(fab, body) {
@@ -17971,6 +18270,7 @@
         bemerkungen: body.bemerkungen != null ? body.bemerkungen : (prev.bemerkungen || ''),
         kopf_pos_nr: body.kopf_pos_nr != null ? body.kopf_pos_nr : (prev.kopf_pos_nr || ''),
         kopf_qmax: body.kopf_qmax != null ? body.kopf_qmax : (prev.kopf_qmax || ''),
+        kopf_vmax: body.kopf_vmax != null ? body.kopf_vmax : (prev.kopf_vmax || ''),
         kopf_type: body.kopf_type != null ? body.kopf_type : (prev.kopf_type || ''),
         kopf_dwc: body.kopf_dwc != null ? body.kopf_dwc : (prev.kopf_dwc || ''),
         abschluss: body.abschluss && typeof body.abschluss === 'object' ? body.abschluss : (prev.abschluss || {}),
@@ -18002,6 +18302,7 @@
         kopf: {
           kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
           kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
+          kopf_vmax: row.nenngeschwindigkeit != null ? String(row.nenngeschwindigkeit).trim() : '',
           kopf_type: row.type != null ? String(row.type).trim() : '',
           kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
           projekt: row.projekt != null ? String(row.projekt).trim() : '',
@@ -18009,8 +18310,158 @@
         mess: {
           mess_waegezelle_type: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
           mess_waegezelle_seriennummer: row.dms_nr != null ? String(row.dms_nr).trim() : '',
+          mess_waegezelle_position: row.dms_position != null ? String(row.dms_position).trim() : '',
+          mess_vers_spannung: row.vers_spannung != null ? String(row.vers_spannung).trim() : '',
+          mess_sensitivitaet: row.sensitivitaet != null ? String(row.sensitivitaet).trim() : '',
+          mess_waegezellen_extra: parseSpKraftaufnehmerExtra(row.kraftaufnehmer_extra)
         },
       };
+    }
+
+    function parseSpKraftaufnehmerExtra(raw) {
+      if (raw == null || raw === '') return [];
+      if (Array.isArray(raw)) {
+        return raw.map(function (item, i) {
+          if (!item || typeof item !== 'object') {
+            var s = String(item || '').trim();
+            return s ? { kraftaufnehmer: s, dms_nr: '', dms_position: '', vers_spannung: '', sensitivitaet: '' } : null;
+          }
+          return {
+            kraftaufnehmer: String(item.kraftaufnehmer != null ? item.kraftaufnehmer : (item.type || '')).trim(),
+            dms_nr: String(item.dms_nr || '').trim(),
+            dms_position: String(item.dms_position || '').trim(),
+            vers_spannung: String(item.vers_spannung != null ? item.vers_spannung : (item.supplyVoltage || '')).trim(),
+            sensitivitaet: String(item.sensitivitaet != null ? item.sensitivitaet : (item.sensitivity || '')).trim()
+          };
+        }).filter(function (r) {
+          return r && (r.kraftaufnehmer || r.dms_nr || r.dms_position || r.vers_spannung || r.sensitivitaet);
+        });
+      }
+      try {
+        return parseSpKraftaufnehmerExtra(JSON.parse(String(raw)));
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function encodeSpKraftaufnehmerExtra(items) {
+      var list = Array.isArray(items) ? items : [];
+      var normalized = list.map(function (item) {
+        if (!item) return null;
+        var row = {
+          kraftaufnehmer: String(item.kraftaufnehmer != null ? item.kraftaufnehmer : (item.type || '')).trim(),
+          dms_nr: String(item.dms_nr != null ? item.dms_nr : (item.serialNumber || '')).trim(),
+          dms_position: String(item.dms_position != null ? item.dms_position : (item.position || '')).trim(),
+          vers_spannung: String(item.vers_spannung != null ? item.vers_spannung : (item.supplyVoltage || '')).trim(),
+          sensitivitaet: String(item.sensitivitaet != null ? item.sensitivitaet : (item.sensitivity || '')).trim()
+        };
+        if (!row.kraftaufnehmer && !row.dms_nr && !row.dms_position && !row.vers_spannung && !row.sensitivitaet) return null;
+        return row;
+      }).filter(Boolean);
+      if (!normalized.length) return '';
+      try { return JSON.stringify(normalized); } catch (e) { return ''; }
+    }
+
+    function collectSpLoadCellsFromForm() {
+      var first = {
+        type: String((document.getElementById('spMessType') || {}).value || '').trim(),
+        serialNumber: String((document.getElementById('spMessSeriennummer') || {}).value || '').trim(),
+        position: String((document.getElementById('spMessDmsPos') || {}).value || '').trim(),
+        supplyVoltage: String((document.getElementById('spMessVersSpannung') || {}).value || '').trim(),
+        sensitivity: String((document.getElementById('spMessSensitivitaet') || {}).value || '').trim()
+      };
+      var extras = [];
+      try {
+        var raw = (document.getElementById('spMessWaegezellenExtra') || {}).value || '[]';
+        extras = parseSpKraftaufnehmerExtra(raw);
+      } catch (e) { extras = []; }
+      var cells = [{
+        id: '1',
+        type: first.type,
+        serialNumber: first.serialNumber,
+        position: first.position,
+        supplyVoltage: first.supplyVoltage,
+        sensitivity: first.sensitivity
+      }];
+      extras.forEach(function (ex, i) {
+        cells.push({
+          id: String(i + 2),
+          type: ex.kraftaufnehmer || '',
+          serialNumber: ex.dms_nr || '',
+          position: ex.dms_position || '',
+          supplyVoltage: ex.vers_spannung || '',
+          sensitivity: ex.sensitivitaet || ''
+        });
+      });
+      return cells;
+    }
+
+    function applySpLoadCellsToForm(cells) {
+      var list = Array.isArray(cells) && cells.length
+        ? cells
+        : [{ id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' }];
+      var first = list[0] || {};
+      var typeEl = document.getElementById('spMessType');
+      var snEl = document.getElementById('spMessSeriennummer');
+      var posEl = document.getElementById('spMessDmsPos');
+      var versEl = document.getElementById('spMessVersSpannung');
+      var sensEl = document.getElementById('spMessSensitivitaet');
+      var extraEl = document.getElementById('spMessWaegezellenExtra');
+      if (typeEl) typeEl.value = first.type || '';
+      if (snEl) snEl.value = first.serialNumber || '';
+      if (posEl) posEl.value = first.position || '';
+      if (versEl) versEl.value = first.supplyVoltage || '';
+      if (sensEl) sensEl.value = first.sensitivity || '';
+      var extras = list.slice(1).map(function (c) {
+        return {
+          kraftaufnehmer: c.type || '',
+          dms_nr: c.serialNumber || '',
+          dms_position: c.position || '',
+          vers_spannung: c.supplyVoltage || '',
+          sensitivitaet: c.sensitivity || ''
+        };
+      });
+      if (extraEl) extraEl.value = encodeSpKraftaufnehmerExtra(extras) || '[]';
+    }
+
+    function loadCellsFromStammMess(apiMess, jobKopf) {
+      var type = messTypeFromStamm(apiMess, jobKopf);
+      var sn = messSeriennummerFromStamm(apiMess, jobKopf);
+      var pos = '';
+      if (apiMess && apiMess.mess_waegezelle_position != null) {
+        pos = String(apiMess.mess_waegezelle_position).trim();
+      } else if (jobKopf && jobKopf.dms_position) {
+        pos = String(jobKopf.dms_position).trim();
+      }
+      var vers = '';
+      var sens = '';
+      if (apiMess && apiMess.mess_vers_spannung != null) vers = String(apiMess.mess_vers_spannung).trim();
+      else if (jobKopf && jobKopf.vers_spannung) vers = String(jobKopf.vers_spannung).trim();
+      if (apiMess && apiMess.mess_sensitivitaet != null) sens = String(apiMess.mess_sensitivitaet).trim();
+      else if (jobKopf && jobKopf.sensitivitaet) sens = String(jobKopf.sensitivitaet).trim();
+      var cells = [{
+        id: '1',
+        type: type,
+        serialNumber: sn,
+        position: pos,
+        supplyVoltage: vers,
+        sensitivity: sens
+      }];
+      var extras = (apiMess && Array.isArray(apiMess.mess_waegezellen_extra))
+        ? apiMess.mess_waegezellen_extra
+        : [];
+      extras.forEach(function (ex, i) {
+        if (!ex) return;
+        cells.push({
+          id: String(i + 2),
+          type: String(ex.kraftaufnehmer || '').trim(),
+          serialNumber: String(ex.dms_nr || '').trim(),
+          position: String(ex.dms_position || '').trim(),
+          supplyVoltage: String(ex.vers_spannung || '').trim(),
+          sensitivity: String(ex.sensitivitaet || '').trim()
+        });
+      });
+      return cells;
     }
 
     function getActiveFab() {
@@ -18049,6 +18500,7 @@
         bemerkungen: cached.bemerkungen || '',
         kopf_pos_nr: cached.kopf_pos_nr || '',
         kopf_qmax: cached.kopf_qmax || '',
+        kopf_vmax: cached.kopf_vmax || '',
         kopf_type: cached.kopf_type || '',
         kopf_dwc: cached.kopf_dwc || '',
         abschluss: cached.abschluss || { status: 'geprueft' }
@@ -18070,6 +18522,7 @@
           bemerkungen: '',
           kopf_pos_nr: jobKopf.kopf_pos_nr || '',
           kopf_qmax: jobKopf.kopf_qmax || '',
+          kopf_vmax: jobKopf.kopf_vmax || '',
           kopf_type: jobKopf.kopf_type || '',
           kopf_dwc: jobKopf.kopf_dwc || '',
           abschluss: { status: 'geprueft' }
@@ -18088,7 +18541,8 @@
         messwerte: collectMesswerte(),
         bemerkungen: (document.getElementById('serviceprotokollBemerkungen') || {}).value || '',
         kopf_pos_nr: (document.getElementById('serviceprotokollPos') || {}).value || '',
-        kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
+        kopf_qmax: clampServiceprotokollQmax((document.getElementById('serviceprotokollQmax') || {}).value || ''),
+        kopf_vmax: (document.getElementById('serviceprotokollVmax') || {}).value || '',
         kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
         kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
         abschluss: collectAbschlussPayload()
@@ -18113,11 +18567,6 @@
       if (!opts.skipStash && isServiceprotokollFormReadyForFab(fab)) {
         stashDraftInMemory(fab);
       }
-      if (!opts.skipAnlagenstamm && isServiceprotokollApplyToAnlagenstammEnabled() && isServiceprotokollFormReadyForFab(fab)) {
-        try {
-          await persistServiceprotokollMesswerteToAnlagenstamm(fab);
-        } catch (e) { /* optional bei FN-Wechsel */ }
-      }
       var cached = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fab];
       if (!opts.payloadSnapshot && !isServiceprotokollFormReadyForFab(fab) && !cached) return;
       var payload = opts.payloadSnapshot || collectDraftPayloadForFab(fab);
@@ -18133,9 +18582,9 @@
         bemerkungen: payload.bemerkungen,
         kopf_pos_nr: payload.kopf_pos_nr,
         kopf_qmax: payload.kopf_qmax,
+        kopf_vmax: payload.kopf_vmax,
         kopf_type: payload.kopf_type,
         kopf_dwc: payload.kopf_dwc,
-        apply_to_anlagenstamm: isServiceprotokollApplyToAnlagenstammEnabled() || undefined,
         jsonOnly: true,
         skip_dispo_sync: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
         base_url: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
@@ -18195,6 +18644,7 @@
           bemerkungen: (draft && draft.bemerkungen) || '',
           kopf_pos_nr: (draft && draft.kopf_pos_nr) || '',
           kopf_qmax: (draft && draft.kopf_qmax) || '',
+          kopf_vmax: (draft && draft.kopf_vmax) || '',
           kopf_type: (draft && draft.kopf_type) || '',
           kopf_dwc: (draft && draft.kopf_dwc) || '',
           abschluss: (draft && draft.abschluss) || (fn === cur ? collectAbschlussPayload() : { status: 'geprueft' })
@@ -18288,6 +18738,7 @@
       applyKopfFields({
         kopf_pos_nr: draft.kopf_pos_nr || '',
         kopf_qmax: draft.kopf_qmax || '',
+        kopf_vmax: draft.kopf_vmax || '',
         kopf_type: draft.kopf_type || '',
         kopf_dwc: draft.kopf_dwc || ''
       });
@@ -18297,12 +18748,34 @@
       var messMap = [
         ['spMessType', mess.waegezelle_type],
         ['spMessSeriennummer', mess.waegezelle_seriennummer],
-        ['spMessVersSpannung', mess.vers_spannung]
+        ['spMessDmsPos', mess.waegezelle_position],
+        ['spMessVersSpannung', mess.vers_spannung],
+        ['spMessSensitivitaet', mess.sensitivitaet]
       ];
       messMap.forEach(function (pair) {
         var el = document.getElementById(pair[0]);
         if (el && pair[1] != null) el.value = pair[1];
       });
+      var draftCells = [{
+        id: '1',
+        type: String(mess.waegezelle_type || '').trim(),
+        serialNumber: String(mess.waegezelle_seriennummer || '').trim(),
+        position: String(mess.waegezelle_position || '').trim(),
+        supplyVoltage: String(mess.vers_spannung || '').trim(),
+        sensitivity: String(mess.sensitivitaet || '').trim()
+      }];
+      var draftExtras = Array.isArray(mess.waegezellen_extra) ? mess.waegezellen_extra : parseSpKraftaufnehmerExtra(mess.waegezellen_extra);
+      draftExtras.forEach(function (ex, i) {
+        draftCells.push({
+          id: String(i + 2),
+          type: String((ex && ex.kraftaufnehmer) || '').trim(),
+          serialNumber: String((ex && ex.dms_nr) || '').trim(),
+          position: String((ex && ex.dms_position) || '').trim(),
+          supplyVoltage: String((ex && ex.vers_spannung) || '').trim(),
+          sensitivity: String((ex && ex.sensitivitaet) || '').trim()
+        });
+      });
+      applySpLoadCellsToForm(draftCells);
       applyPgTestToForm(normalizePgTestCells(mess));
       applyMessMatrixToForm(normalizeMessMatrix(mess));
       updateVersSpannungHint();
@@ -18396,19 +18869,32 @@
       kopf = kopf || {};
       var pos = document.getElementById('serviceprotokollPos');
       var qmax = document.getElementById('serviceprotokollQmax');
+      var vmax = document.getElementById('serviceprotokollVmax');
       var type = document.getElementById('serviceprotokollType');
       var dwc = document.getElementById('serviceprotokollDwc');
       if (pos) pos.value = kopf.kopf_pos_nr || '';
-      if (qmax) qmax.value = kopf.kopf_qmax || '';
+      if (qmax) qmax.value = clampServiceprotokollQmax(kopf.kopf_qmax || '');
+      if (vmax) vmax.value = kopf.kopf_vmax || '';
       if (type) type.value = kopf.kopf_type || '';
       if (dwc) dwc.value = kopf.kopf_dwc || '';
+    }
+
+    function clampServiceprotokollQmax(val) {
+      var s = String(val == null ? '' : val).trim();
+      if (!s) return '';
+      var n = Number(String(s).replace(',', '.').replace(/[^\d.-]/g, ''));
+      if (!Number.isFinite(n)) return s;
+      if (n > 100000) return '100000';
+      if (n < 0) return '0';
+      return s;
     }
 
     function readKopfFieldsFromForm() {
       var projEl = document.getElementById('serviceprotokollProjekt');
       return {
         kopf_pos_nr: (document.getElementById('serviceprotokollPos') || {}).value || '',
-        kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
+        kopf_qmax: clampServiceprotokollQmax((document.getElementById('serviceprotokollQmax') || {}).value || ''),
+        kopf_vmax: (document.getElementById('serviceprotokollVmax') || {}).value || '',
         kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
         kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
         projekt: projEl ? (projEl.value || '') : ''
@@ -18419,7 +18905,7 @@
       currentKopf = currentKopf || {};
       fillKopf = fillKopf || {};
       var out = {};
-      ['kopf_pos_nr', 'kopf_qmax', 'kopf_type', 'kopf_dwc', 'projekt'].forEach(function (k) {
+      ['kopf_pos_nr', 'kopf_qmax', 'kopf_vmax', 'kopf_type', 'kopf_dwc', 'projekt'].forEach(function (k) {
         var cur = currentKopf[k] != null ? String(currentKopf[k]).trim() : '';
         var fill = fillKopf[k] != null ? String(fillKopf[k]).trim() : '';
         out[k] = cur || fill || '';
@@ -18429,7 +18915,7 @@
 
     function isMeaningfulServiceprotokollDraft(draft) {
       if (!draft || typeof draft !== 'object') return false;
-      var kopfKeys = ['kopf_pos_nr', 'kopf_qmax', 'kopf_type', 'kopf_dwc'];
+      var kopfKeys = ['kopf_pos_nr', 'kopf_qmax', 'kopf_vmax', 'kopf_type', 'kopf_dwc'];
       for (var i = 0; i < kopfKeys.length; i++) {
         if (String(draft[kopfKeys[i]] || '').trim()) return true;
       }
@@ -18445,6 +18931,7 @@
         if (String(mess.waegezelle_type || '').trim()) return true;
         if (String(mess.waegezelle_seriennummer || '').trim()) return true;
         if (String(mess.vers_spannung || '').trim()) return true;
+        if (String(mess.sensitivitaet || '').trim()) return true;
       }
       return false;
     }
@@ -18457,7 +18944,7 @@
       'spMessPgTest1', 'spMessPgTest2', 'spMessPgTest3', 'spMessPgTest4'
     ];
     var SP_MESS_FIELD_IDS = [
-      'spMessType', 'spMessSeriennummer', 'spMessVersSpannung',
+      'spMessType', 'spMessSeriennummer', 'spMessDmsPos', 'spMessVersSpannung', 'spMessSensitivitaet',
       'spMessDmsKg', 'spMessDmsMv', 'spMessDmsMa', 'spMessDmsG',
       'spMessTaraKg', 'spMessTaraMv', 'spMessTaraMa', 'spMessTaraG',
       'spMessPgKg', 'spMessPgMv', 'spMessPgMa', 'spMessPgG'
@@ -18576,6 +19063,7 @@
         var el = document.getElementById(id);
         if (el) el.value = '';
       });
+      applySpLoadCellsToForm([{ id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' }]);
     }
 
     function messSeriennummerFromStamm(apiKopf, jobKopf) {
@@ -18592,81 +19080,22 @@
     }
 
     function applyMessTypeFromStamm(apiKopf, jobKopf) {
-      var typeEl = document.getElementById('spMessType');
-      if (typeEl && !(typeEl.value || '').trim()) {
-        typeEl.value = messTypeFromStamm(apiKopf, jobKopf);
-      }
-      var snEl = document.getElementById('spMessSeriennummer');
-      if (snEl && !(snEl.value || '').trim()) {
-        snEl.value = messSeriennummerFromStamm(apiKopf, jobKopf);
-      }
-    }
-
-    function lookupAnlagenstammRowForFab(fab) {
-      fab = String(fab || '').trim();
-      if (!fab) return Promise.resolve(null);
-      return fetch(API_BASE + '/api/anlagenstamm_lookup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-        body: JSON.stringify({ fab: fab, local_only: 1 })
-      })
-        .then(function (r) { return r.json().catch(function () { return {}; }); })
-        .then(function (data) {
-          if (data && data.ok && data.row) return data.row;
-          return null;
-        })
-        .catch(function () { return null; });
-    }
-
-    function patchServiceJobFabStammFields(fab, fields) {
-      if (!serviceJobData || !serviceJobData.fabrikationsnummern || !fields) return;
-      try {
-        var parsed = JSON.parse(serviceJobData.fabrikationsnummern);
-        if (!Array.isArray(parsed)) return;
-        var fabKey = String(fab || '').trim();
-        var touched = false;
-        for (var i = 0; i < parsed.length; i++) {
-          if (String(parsed[i].fabrikationsnummer || '').trim() !== fabKey) continue;
-          if (fields.kraftaufnehmer) parsed[i].kraftaufnehmer = fields.kraftaufnehmer;
-          if (fields.dms_nr) parsed[i].dms_nr = fields.dms_nr;
-          if (fields.elektronik) parsed[i].elektronik = fields.elektronik;
-          touched = true;
+      var cells = collectSpLoadCellsFromForm();
+      var firstEmpty = !cells[0] || (!cells[0].type && !cells[0].serialNumber && !cells[0].position && !cells[0].supplyVoltage && !cells[0].sensitivity);
+      if (!firstEmpty && cells.length > 1) return;
+      var fromStamm = loadCellsFromStammMess(apiKopf, jobKopf);
+      if (firstEmpty || cells.length === 1) {
+        if (!cells[0]) cells[0] = { id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' };
+        if (!(cells[0].type || '').trim()) cells[0].type = fromStamm[0].type;
+        if (!(cells[0].serialNumber || '').trim()) cells[0].serialNumber = fromStamm[0].serialNumber;
+        if (!(cells[0].position || '').trim()) cells[0].position = fromStamm[0].position;
+        if (!(cells[0].supplyVoltage || '').trim()) cells[0].supplyVoltage = fromStamm[0].supplyVoltage;
+        if (!(cells[0].sensitivity || '').trim()) cells[0].sensitivity = fromStamm[0].sensitivity;
+        if (cells.length === 1 && fromStamm.length > 1) {
+          cells = cells.concat(fromStamm.slice(1));
         }
-        if (touched) {
-          serviceJobData = Object.assign({}, serviceJobData, { fabrikationsnummern: JSON.stringify(parsed) });
-        }
-      } catch (e) { /* ignore */ }
-    }
-
-    async function persistServiceprotokollMesswerteToAnlagenstamm(fab) {
-      fab = String(fab || '').trim();
-      if (!fab || !isServiceprotokollApplyToAnlagenstammEnabled()) return;
-      var typeVal = sanitizeLeistungField((document.getElementById('spMessType') || {}).value);
-      var snVal = sanitizeLeistungField((document.getElementById('spMessSeriennummer') || {}).value);
-      var dwcVal = sanitizeLeistungField((document.getElementById('serviceprotokollDwc') || {}).value);
-      if (!typeVal && !snVal && !dwcVal) return;
-      var existing = await lookupAnlagenstammRowForFab(fab);
-      var payload = Object.assign({
-        baseUrl: getDispoBaseUrl(),
-        serverUsername: getServerUsername(),
-        serverPassword: getServerPassword(),
-        id: existing && existing.id ? parseInt(existing.id, 10) : 0,
-        fabrikationsnummer: fab
-      }, dispoBasePayloadExtra());
-      if (typeVal) payload.kraftaufnehmer = typeVal;
-      if (snVal) payload.dms_nr = snVal;
-      if (dwcVal) payload.elektronik = dwcVal;
-      await anlagenstammSaveDispo(payload);
-      patchServiceJobFabStammFields(fab, {
-        kraftaufnehmer: typeVal || (existing && existing.kraftaufnehmer) || '',
-        dms_nr: snVal || (existing && existing.dms_nr) || '',
-        elektronik: dwcVal || (existing && existing.elektronik) || ''
-      });
-      mergeAnlagenstammFieldsIntoOpenJob(fab, {
-        kraftaufnehmer: payload.kraftaufnehmer || '',
-        dms_nr: payload.dms_nr || '',
-        elektronik: payload.elektronik || ''
-      });
+        applySpLoadCellsToForm(cells);
+      }
     }
 
     async function applyAnlagenstammFelderFromLocalStamm(fab, opts) {
@@ -18684,12 +19113,7 @@
       applyKopfFields(merged);
       applyServiceprotokollProjekt(serviceJobData, fab, merged.projekt);
       if (opts.preferStamm) {
-        var typeEl = document.getElementById('spMessType');
-        var snEl = document.getElementById('spMessSeriennummer');
-        var typeVal = messTypeFromStamm(mapped.mess, jobKopf);
-        var snVal = messSeriennummerFromStamm(mapped.mess, jobKopf);
-        if (typeEl) typeEl.value = typeVal;
-        if (snEl) snEl.value = snVal;
+        applySpLoadCellsToForm(loadCellsFromStammMess(mapped.mess, jobKopf));
         updateVersSpannungHint();
       } else {
         applyMessTypeFromStamm(mapped.mess, jobKopf);
@@ -18708,10 +19132,12 @@
           return {
             kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
             kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
+            kopf_vmax: row.nenngeschwindigkeit != null ? String(row.nenngeschwindigkeit).trim() : '',
             kopf_type: row.type != null ? String(row.type).trim() : '',
             kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
             kraftaufnehmer: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
             dms_nr: row.dms_nr != null ? String(row.dms_nr).trim() : '',
+            dms_position: row.dms_position != null ? String(row.dms_position).trim() : '',
             projekt: readProjektFromFabRow(row)
           };
         }
@@ -18793,7 +19219,7 @@
 
     function mergeServiceprotokollKopf(apiKopf, jobKopf) {
       var kopf = {};
-      ['kopf_pos_nr', 'kopf_qmax', 'kopf_type', 'kopf_dwc', 'projekt'].forEach(function (k) {
+      ['kopf_pos_nr', 'kopf_qmax', 'kopf_vmax', 'kopf_type', 'kopf_dwc', 'projekt'].forEach(function (k) {
         var v = (apiKopf && apiKopf[k] != null) ? String(apiKopf[k]).trim() : '';
         if (!v && jobKopf && jobKopf[k]) v = String(jobKopf[k]).trim();
         if (v) kopf[k] = v;
@@ -18995,10 +19421,26 @@
     function collectMesswerte() {
       var matrix = collectMessMatrixFromForm();
       var legacy = messwerteLegacyFromMatrix(matrix);
+      var cells = collectSpLoadCellsFromForm();
+      var first = cells[0] || { type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' };
+      var extras = cells.slice(1).map(function (c) {
+        return {
+          kraftaufnehmer: c.type || '',
+          dms_nr: c.serialNumber || '',
+          dms_position: c.position || '',
+          vers_spannung: c.supplyVoltage || '',
+          sensitivitaet: c.sensitivity || ''
+        };
+      }).filter(function (r) {
+        return r.kraftaufnehmer || r.dms_nr || r.dms_position || r.vers_spannung || r.sensitivitaet;
+      });
       return Object.assign({
-        waegezelle_type: (document.getElementById('spMessType') || {}).value || '',
-        waegezelle_seriennummer: (document.getElementById('spMessSeriennummer') || {}).value || '',
-        vers_spannung: (document.getElementById('spMessVersSpannung') || {}).value || '',
+        waegezelle_type: first.type || '',
+        waegezelle_seriennummer: first.serialNumber || '',
+        waegezelle_position: first.position || '',
+        waegezellen_extra: extras,
+        vers_spannung: first.supplyVoltage || (document.getElementById('spMessVersSpannung') || {}).value || '',
+        sensitivitaet: first.sensitivity || (document.getElementById('spMessSensitivitaet') || {}).value || '',
         pruefgewichtstest: collectPgTestFromForm(),
         mess_matrix: matrix
       }, legacy);
@@ -19114,6 +19556,15 @@
         if (!jsonOnly && stepsPayload.length === 0) { alert('Mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.'); return; }
         var pdfLangs = jsonOnly ? [] : collectPdfLanguages();
         if (!jsonOnly && !pdfLangs.length) { alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).'); return; }
+        var applyStamm = false;
+        try {
+          applyStamm = await maybeConfirmAndApplyServiceprotokollTechnikToAnlagenstamm(fab);
+        } catch (stammErr) {
+          console.warn('[Serviceprotokoll] Anlagenstamm-Abgleich:', stammErr);
+          if (typeof showToast === 'function') {
+            showToast('Anlagenstamm-Abgleich fehlgeschlagen – Protokoll wird trotzdem gespeichert.');
+          }
+        }
         var body = {
           technician_id: getTechId(),
           job_id: parseInt(jobSelect.value, 10),
@@ -19124,11 +19575,12 @@
           projekt: projektVal,
           bemerkungen: (document.getElementById('serviceprotokollBemerkungen') || {}).value || '',
           kopf_pos_nr: (document.getElementById('serviceprotokollPos') || {}).value || '',
-          kopf_qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
+          kopf_qmax: clampServiceprotokollQmax((document.getElementById('serviceprotokollQmax') || {}).value || ''),
+          kopf_vmax: (document.getElementById('serviceprotokollVmax') || {}).value || '',
           kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
           kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
           abschluss: collectAbschlussPayload(),
-          apply_to_anlagenstamm: isServiceprotokollApplyToAnlagenstammEnabled() || undefined,
+          apply_to_anlagenstamm: applyStamm || undefined,
           jsonOnly: jsonOnly,
           local_only: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
           skip_dispo_sync: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
@@ -19189,13 +19641,25 @@
         if (!pdfLangs.length) { alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).'); return; }
         var built = await buildAllProtokollPayloads();
         if (built.error) { alert(built.error); return; }
+        var applyStamm = false;
+        try {
+          var curFabForStamm = getActiveFab();
+          if (curFabForStamm) {
+            applyStamm = await maybeConfirmAndApplyServiceprotokollTechnikToAnlagenstamm(curFabForStamm);
+          }
+        } catch (stammErr) {
+          console.warn('[Serviceprotokoll] Anlagenstamm-Abgleich:', stammErr);
+          if (typeof showToast === 'function') {
+            showToast('Anlagenstamm-Abgleich fehlgeschlagen – PDFs werden trotzdem erstellt.');
+          }
+        }
         var body = {
           technician_id: getTechId(),
           job_id: parseInt(jobSelect.value, 10),
           durchfuehrungsdatum: datum,
           protokolle: built.protokolle,
           pdf_languages: pdfLangs,
-          apply_to_anlagenstamm: isServiceprotokollApplyToAnlagenstammEnabled() || undefined,
+          apply_to_anlagenstamm: applyStamm || undefined,
           base_url: getDispoBaseUrl(),
           dispoBaseUrl: getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
@@ -19203,14 +19667,6 @@
         };
         allPdfBtn.disabled = true;
         try {
-          var curFab = getActiveFab();
-          if (curFab) {
-            try {
-              await persistServiceprotokollMesswerteToAnlagenstamm(curFab);
-            } catch (persistErr) {
-              console.warn('[Serviceprotokoll] Anlagenstamm Kraftaufnehmer/DMS/DWC:', persistErr);
-            }
-          }
           var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll/all-pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -19285,20 +19741,31 @@
           date: spIsoToDisplay(datumEl ? datumEl.value : ''),
           activeFab: getActiveFab(),
           plantType: (document.getElementById('serviceprotokollType') || {}).value || '',
-          qmax: (document.getElementById('serviceprotokollQmax') || {}).value || '',
-          qmaxUnit: 't/h',
+          qmax: clampServiceprotokollQmax((document.getElementById('serviceprotokollQmax') || {}).value || ''),
+          qmaxUnit: 'kg/h',
+          vmax: (document.getElementById('serviceprotokollVmax') || {}).value || '',
           position: (document.getElementById('serviceprotokollPos') || {}).value || '',
           dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
           loadcellType: (document.getElementById('spMessType') || {}).value || '',
           serialNumber: (document.getElementById('spMessSeriennummer') || {}).value || '',
-          supplyVoltage: (document.getElementById('spMessVersSpannung') || {}).value || '',
+          loadCells: (function () {
+            var cells = collectSpLoadCellsFromForm();
+            return cells;
+          })(),
+          supplyVoltage: (function () {
+            var cells = collectSpLoadCellsFromForm();
+            return (cells[0] && cells[0].supplyVoltage) || '';
+          })(),
+          sensitivity: (function () {
+            var cells = collectSpLoadCellsFromForm();
+            return (cells[0] && cells[0].sensitivity) || '';
+          })(),
           generalRemarks: (document.getElementById('serviceprotokollBemerkungen') || {}).value || '',
           status: statusEl ? String(statusEl.value || 'geprueft') : 'geprueft',
           monteur: monteurLabel,
           closingRemarks: (document.getElementById('serviceprotokollAbschlussBemerkungen') || {}).value || '',
           pdfDe: !!(document.getElementById('spPdfDe') && document.getElementById('spPdfDe').checked),
-          pdfEn: !!(document.getElementById('spPdfEn') && document.getElementById('spPdfEn').checked),
-          applyToAnlagenstamm: isServiceprotokollApplyToAnlagenstammEnabled()
+          pdfEn: !!(document.getElementById('spPdfEn') && document.getElementById('spPdfEn').checked)
         },
         measurements: [
           { id: 'dms', label: 'DMS entlastet / released', kg: matrix.dms.kg, mv: matrix.dms.mv, ma: matrix.dms.ma, g: matrix.dms.g_prozent },
@@ -19333,19 +19800,24 @@
       setVal('serviceprotokollProjekt', f.project);
       if (datumEl) datumEl.value = spDisplayToIso(f.date);
       setVal('serviceprotokollType', f.plantType);
-      setVal('serviceprotokollQmax', f.qmax);
+      setVal('serviceprotokollQmax', clampServiceprotokollQmax(f.qmax));
+      setVal('serviceprotokollVmax', f.vmax);
       setVal('serviceprotokollPos', f.position);
       setVal('serviceprotokollDwc', f.dwc);
-      setVal('spMessType', f.loadcellType);
-      setVal('spMessSeriennummer', f.serialNumber);
-      setVal('spMessVersSpannung', f.supplyVoltage);
+      if (Array.isArray(f.loadCells) && f.loadCells.length) {
+        applySpLoadCellsToForm(f.loadCells);
+      } else {
+        setVal('spMessType', f.loadcellType);
+        setVal('spMessSeriennummer', f.serialNumber);
+        setVal('spMessVersSpannung', f.supplyVoltage);
+        setVal('spMessSensitivitaet', f.sensitivity);
+      }
       setVal('serviceprotokollBemerkungen', f.generalRemarks);
       setVal('serviceprotokollAbschlussBemerkungen', f.closingRemarks);
       var pdfDe = document.getElementById('spPdfDe');
       var pdfEn = document.getElementById('spPdfEn');
       if (pdfDe) pdfDe.checked = !!f.pdfDe;
       if (pdfEn) pdfEn.checked = !!f.pdfEn;
-      setServiceprotokollApplyToAnlagenstamm(!!f.applyToAnlagenstamm);
       document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
         el.checked = el.value === (f.status || 'geprueft');
       });
@@ -19709,13 +20181,12 @@
         kopfdatenEl.hidden = true;
         kopfdatenEl.setAttribute('aria-hidden', 'true');
       }
-        ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollProjekt', 'serviceprotokollBemerkungen', 'serviceprotokollAbschlussBemerkungen'
+        ['serviceprotokollPos', 'serviceprotokollQmax', 'serviceprotokollVmax', 'serviceprotokollType', 'serviceprotokollDwc', 'serviceprotokollProjekt', 'serviceprotokollBemerkungen', 'serviceprotokollAbschlussBemerkungen'
         ].concat(SP_MESS_FIELD_IDS).forEach(function (id) {
           var el = document.getElementById(id);
           if (el) el.value = '';
         });
         clearAbschlussFields();
-        setServiceprotokollApplyToAnlagenstamm(false);
         updateVersSpannungHint();
         if (datumEl && !datumEl.value) {
           var today = new Date();

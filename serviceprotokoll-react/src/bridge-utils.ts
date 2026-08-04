@@ -41,10 +41,38 @@ export function mapStepStatus(raw: string): StepResult {
 }
 
 export function mergeBridgePayload(base: SpBridgePayload, patch: Partial<SpBridgePayload>): SpBridgePayload {
+  const form = patch.form ? { ...base.form, ...patch.form } : base.form;
+  if (patch.form && Array.isArray(patch.form.loadCells)) {
+    form.loadCells = patch.form.loadCells.map((c) => ({
+      id: c.id || '1',
+      type: c.type || '',
+      serialNumber: c.serialNumber || '',
+      position: c.position || '',
+      supplyVoltage: c.supplyVoltage || '',
+      sensitivity: c.sensitivity || '',
+    }));
+    if (form.loadCells[0]) {
+      form.supplyVoltage = form.loadCells[0].supplyVoltage || form.supplyVoltage || '';
+      form.sensitivity = form.loadCells[0].sensitivity || form.sensitivity || '';
+      form.loadcellType = form.loadCells[0].type || form.loadcellType || '';
+      form.serialNumber = form.loadCells[0].serialNumber || form.serialNumber || '';
+    }
+  } else if (!Array.isArray(form.loadCells) || !form.loadCells.length) {
+    form.loadCells = [
+      {
+        id: '1',
+        type: form.loadcellType || '',
+        serialNumber: form.serialNumber || '',
+        position: '',
+        supplyVoltage: form.supplyVoltage || '',
+        sensitivity: form.sensitivity || '',
+      },
+    ];
+  }
   return {
     ...base,
     ...patch,
-    form: patch.form ? { ...base.form, ...patch.form } : base.form,
+    form,
     measurements: patch.measurements ?? base.measurements,
     testLoad: patch.testLoad ? { ...base.testLoad, ...patch.testLoad } : base.testLoad,
     workSteps: patch.workSteps ?? base.workSteps,

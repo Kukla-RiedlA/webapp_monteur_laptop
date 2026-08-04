@@ -11,19 +11,116 @@ import { SpIcon } from './SpIcon';
 import { SelectInput, TextInput } from './TextInput';
 import { TestLoadFields } from './TestLoadFields';
 import { WorkStepsTable } from './WorkStepsTable';
-import type { ServiceProtocolFormState, StepResult } from '../types';
+import type { LoadCellRow, ServiceProtocolFormState, StepResult } from '../types';
 import { FAB_NUMBERS } from '../types';
+
+function ensureLoadCells(form: ServiceProtocolFormState): LoadCellRow[] {
+  if (Array.isArray(form.loadCells) && form.loadCells.length) {
+    return form.loadCells.map((c, i) => ({
+      id: c.id || String(i + 1),
+      type: c.type || '',
+      serialNumber: c.serialNumber || '',
+      position: c.position || '',
+      supplyVoltage: c.supplyVoltage ?? (i === 0 ? form.supplyVoltage || '' : ''),
+      sensitivity: c.sensitivity ?? (i === 0 ? form.sensitivity || '' : ''),
+    }));
+  }
+  return [
+    {
+      id: '1',
+      type: form.loadcellType || '',
+      serialNumber: form.serialNumber || '',
+      position: '',
+      supplyVoltage: form.supplyVoltage || '',
+      sensitivity: form.sensitivity || '',
+    },
+  ];
+}
 
 export function ServiceProtocolPage() {
   const embedded = useEmbeddedMode();
   const [bridgeState, setBridgeState] = useState<SpBridgePayload>(defaultBridgePayload);
 
   const { form, measurements, testLoad, workSteps, jobs, jobId, fabNumbers } = bridgeState;
+  const loadCells = ensureLoadCells(form);
 
   const fabChips = fabNumbers.length ? fabNumbers : embedded ? [] : FAB_NUMBERS;
 
   const patchForm = useCallback((patch: Partial<ServiceProtocolFormState>) => {
-    setBridgeState((prev) => mergeBridgePayload(prev, { form: { ...prev.form, ...patch } }));
+    setBridgeState((prev) => {
+      const nextForm = { ...prev.form, ...patch };
+      if (Array.isArray(patch.loadCells) && patch.loadCells.length) {
+        nextForm.loadcellType = patch.loadCells[0].type || '';
+        nextForm.serialNumber = patch.loadCells[0].serialNumber || '';
+        nextForm.supplyVoltage = patch.loadCells[0].supplyVoltage || '';
+        nextForm.sensitivity = patch.loadCells[0].sensitivity || '';
+      }
+      return mergeBridgePayload(prev, { form: nextForm });
+    });
+  }, []);
+
+  const patchLoadCell = useCallback(
+    (id: string, patch: Partial<LoadCellRow>) => {
+      setBridgeState((prev) => {
+        const cells = ensureLoadCells(prev.form).map((c) => (c.id === id ? { ...c, ...patch } : c));
+        return mergeBridgePayload(prev, {
+          form: {
+            ...prev.form,
+            loadCells: cells,
+            loadcellType: cells[0]?.type || '',
+            serialNumber: cells[0]?.serialNumber || '',
+            supplyVoltage: cells[0]?.supplyVoltage || '',
+            sensitivity: cells[0]?.sensitivity || '',
+          },
+        });
+      });
+    },
+    [],
+  );
+
+  const addLoadCell = useCallback(() => {
+    setBridgeState((prev) => {
+      const cells = ensureLoadCells(prev.form);
+      const next = [
+        ...cells,
+        {
+          id: String(Date.now()),
+          type: '',
+          serialNumber: '',
+          position: '',
+          supplyVoltage: '',
+          sensitivity: '',
+        },
+      ];
+      return mergeBridgePayload(prev, {
+        form: {
+          ...prev.form,
+          loadCells: next,
+          loadcellType: next[0]?.type || '',
+          serialNumber: next[0]?.serialNumber || '',
+          supplyVoltage: next[0]?.supplyVoltage || '',
+          sensitivity: next[0]?.sensitivity || '',
+        },
+      });
+    });
+  }, []);
+
+  const removeLoadCell = useCallback((id: string) => {
+    setBridgeState((prev) => {
+      const cells = ensureLoadCells(prev.form);
+      if (cells.length <= 1) return prev;
+      const next = cells.filter((c) => c.id !== id);
+      return mergeBridgePayload(prev, {
+        form: {
+          ...prev.form,
+          loadCells: next,
+          loadcellType: next[0]?.type || '',
+          serialNumber: next[0]?.serialNumber || '',
+          supplyVoltage: next[0]?.supplyVoltage || '',
+          sensitivity: next[0]?.sensitivity || '',
+        },
+      });
+    });
   }, []);
 
   const logPayload = useCallback(
@@ -77,15 +174,6 @@ export function ServiceProtocolPage() {
             <h1 className="text-2xl font-bold text-[#111827] md:text-[1.75rem]">Serviceprotokoll</h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-kukla-border bg-white px-3 py-2 text-sm text-[#111827] shadow-card">
-              <input
-                type="checkbox"
-                className="h-4 w-4 shrink-0 accent-[var(--accent,#2d6a4f)]"
-                checked={!!form.applyToAnlagenstamm}
-                onChange={(e) => patchForm({ applyToAnlagenstamm: e.target.checked })}
-              />
-              <span>In Anlagenstamm übernehmen</span>
-            </label>
             <button type="button" className="sp-btn-primary" onClick={() => sendAction('stickySave')}>
               <SpIcon name="Save" className="h-4 w-4" />
               Speichern
@@ -105,7 +193,7 @@ export function ServiceProtocolPage() {
             <div className="grid gap-4">
               <SelectInput
                 label="Auftrag"
-                value={jobId || jobOptions[0]?.value || ''}
+                value={jobId || ''}
                 onChange={(e) => handleJobChange(e.target.value)}
                 options={jobOptions.length ? jobOptions : [{ value: '', label: '– Bitte wählen –' }]}
               />
@@ -141,20 +229,29 @@ export function ServiceProtocolPage() {
               <SectionCard number={2} title="Anlagendaten" icon="Factory">
                 <div className="grid gap-3">
                   <TextInput label="Type" value={form.plantType} onChange={(e) => patchForm({ plantType: e.target.value })} />
-                  <TextInput
-                    label="Qmax"
-                    value={form.qmax}
-                    onChange={(e) => patchForm({ qmax: e.target.value })}
-                    suffix={
-                      <select
-                        className="sp-input w-20 shrink-0 px-2"
-                        value={form.qmaxUnit}
-                        onChange={(e) => patchForm({ qmaxUnit: e.target.value })}
-                      >
-                        <option value="t/h">t/h</option>
-                      </select>
-                    }
-                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <TextInput
+                      label="Qmax"
+                      value={form.qmax}
+                      inputMode="decimal"
+                      className="tabular-nums"
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(/[^\d.,]/g, '');
+                        const n = Number(String(raw).replace(',', '.'));
+                        if (Number.isFinite(n) && n > 100000) {
+                          patchForm({ qmax: '100000' });
+                          return;
+                        }
+                        patchForm({ qmax: raw });
+                      }}
+                    />
+                    <TextInput
+                      label="v max"
+                      value={form.vmax || ''}
+                      onChange={(e) => patchForm({ vmax: e.target.value })}
+                      placeholder="aus Anlagenstamm"
+                    />
+                  </div>
                   <TextInput label="Pos.-Nr." value={form.position} onChange={(e) => patchForm({ position: e.target.value })} />
                   <TextInput label="DWC" value={form.dwc} onChange={(e) => patchForm({ dwc: e.target.value })} />
                 </div>
@@ -162,18 +259,68 @@ export function ServiceProtocolPage() {
 
               <SectionCard number={3} title="Wägezelle" icon="Scale">
                 <div className="grid gap-3">
-                  <TextInput label="Type" value={form.loadcellType} onChange={(e) => patchForm({ loadcellType: e.target.value })} />
-                  <TextInput
-                    label="Seriennummer"
-                    value={form.serialNumber}
-                    onChange={(e) => patchForm({ serialNumber: e.target.value })}
-                  />
-                  <TextInput
-                    label="Versorgungsspannung"
-                    value={form.supplyVoltage}
-                    onChange={(e) => patchForm({ supplyVoltage: e.target.value })}
-                    suffix={<span className="sp-input inline-flex w-12 shrink-0 items-center justify-center px-0">V</span>}
-                  />
+                  {loadCells.map((cell, idx) => (
+                    <div
+                      key={cell.id}
+                      className="relative rounded-xl border border-kukla-border bg-white p-3 shadow-card"
+                    >
+                      <div className="absolute right-2 top-2 flex items-center gap-1">
+                        {idx === loadCells.length - 1 ? (
+                          <button
+                            type="button"
+                            className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
+                            aria-label="Wägezelle hinzufügen"
+                            title="Weitere Wägezelle hinzufügen"
+                            onClick={addLoadCell}
+                          >
+                            <SpIcon name="Plus" className="h-4 w-4" />
+                          </button>
+                        ) : null}
+                        {loadCells.length > 1 ? (
+                          <button
+                            type="button"
+                            className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
+                            aria-label="Wägezelle entfernen"
+                            title="Wägezelle entfernen"
+                            onClick={() => removeLoadCell(cell.id)}
+                          >
+                            <SpIcon name="X" className="h-4 w-4" />
+                          </button>
+                        ) : null}
+                      </div>
+                      <div className="grid grid-cols-3 gap-3 pr-20">
+                        <TextInput
+                          label="Type"
+                          value={cell.type}
+                          onChange={(e) => patchLoadCell(cell.id, { type: e.target.value })}
+                        />
+                        <TextInput
+                          label="Seriennummer"
+                          value={cell.serialNumber}
+                          onChange={(e) => patchLoadCell(cell.id, { serialNumber: e.target.value })}
+                        />
+                        <TextInput
+                          label="Pos."
+                          value={cell.position}
+                          onChange={(e) => patchLoadCell(cell.id, { position: e.target.value })}
+                        />
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-3">
+                        <TextInput
+                          label="Versorgungsspannung V"
+                          value={cell.supplyVoltage || ''}
+                          inputMode="decimal"
+                          onChange={(e) => patchLoadCell(cell.id, { supplyVoltage: e.target.value })}
+                        />
+                        <TextInput
+                          label="Sensitivität mV/V"
+                          value={cell.sensitivity || ''}
+                          inputMode="decimal"
+                          onChange={(e) => patchLoadCell(cell.id, { sensitivity: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </SectionCard>
             </div>
