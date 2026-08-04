@@ -1146,7 +1146,23 @@ function getAnlagenstammSyncResumeState(db) {
   };
 }
 
-/** Sync-Phasen zurücksetzen (nur manueller Vollabgleich / Einstellungen „Jetzt holen“). */
+/** Nach TTL erneut Vollabgleich (neue/gelöschte FNs + Feld-Updates), dazwischen Cache nutzbar. */
+const ANLAGENSTAMM_FULL_RESYNC_TTL_MS = 30 * 60 * 1000;
+
+function isAnlagenstammFullSyncTtlExpired(lastFullSyncAt) {
+  if (lastFullSyncAt == null || String(lastFullSyncAt).trim() === '') return true;
+  let iso = String(lastFullSyncAt).trim();
+  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso)) {
+    iso = iso.includes('T') ? iso + 'Z' : iso.replace(' ', 'T') + 'Z';
+  } else if (!iso.includes('T')) {
+    iso = iso.replace(' ', 'T');
+  }
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return true;
+  return Date.now() - ms >= ANLAGENSTAMM_FULL_RESYNC_TTL_MS;
+}
+
+/** Sync-Phasen zurücksetzen (manueller Vollabgleich oder TTL-Ablauf). */
 function resetAnlagenstammSyncPhases(db) {
   ensureAnlagenstammLocalSchema(db);
   db.prepare(
@@ -1162,15 +1178,53 @@ function resetAnlagenstammSyncPhases(db) {
 }
 
 /**
- * Vor Anlagenstamm-Sync: unterbrochene Läufe fortsetzen; Routine-Sync lässt abgeschlossene Phasen stehen
- * (lokaler Cache bleibt sofort nutzbar). Nur bei options.forceFull Phasen neu starten.
+ * Vor Anlagenstamm-Sync: unterbrochene Läufe fortsetzen; abgeschlossene Phasen bleiben bis TTL
+ * oder options.forceFull stehen (lokaler Cache sofort nutzbar).
  */
 function prepareAnlagenstammSyncRun(db, options) {
   ensureAnlagenstammLocalSchema(db);
   if (options && options.forceFull) {
     return resetAnlagenstammSyncPhases(db);
   }
-  return getAnlagenstammSyncResumeState(db);
+  const state = getAnlagenstammSyncResumeState(db);
+  if (state.resume_pending) {
+    return state;
+  }
+  if (
+    state.stamm_phase_completed &&
+    state.pn_tree_phase_completed &&
+    isAnlagenstammFullSyncTtlExpired(state.last_full_sync_at)
+  ) {
+    return resetAnlagenstammSyncPhases(db);
+  }
+  return state;
+}
+
+/**
+ * Nach Vollsync (ab Seite 1): lokale Zeilen entfernen, die auf dem Server nicht mehr existieren.
+ * dirty=1 bleibt erhalten.
+ */
+function purgeAnlagenstammLocalOrphans(db, seenIds) {
+  const seen = seenIds instanceof Set ? seenIds : new Set(seenIds || []);
+  const localRows = db.prepare('SELECT id FROM anlagenstamm_local WHERE dirty = 0').all();
+  const toDelete = [];
+  for (const row of localRows) {
+    const id = Number(row.id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    if (!seen.has(id)) toDelete.push(id);
+  }
+  if (!toDelete.length) return 0;
+  const del = db.prepare('DELETE FROM anlagenstamm_local WHERE id = ? AND dirty = 0');
+  const runTx =
+    typeof db.transaction === 'function'
+      ? db.transaction((ids) => {
+          for (let i = 0; i < ids.length; i++) del.run(ids[i]);
+        })
+      : (ids) => {
+          for (let i = 0; i < ids.length; i++) del.run(ids[i]);
+        };
+  runTx(toDelete);
+  return toDelete.length;
 }
 
 function updateStammResumeProgress(db, completedPage, totalPages, totalCount) {
@@ -1271,6 +1325,7 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
       resumed: false,
       total_count: resumeBefore.stamm_total_pages || resumeBefore.total_count || 0,
       row_count: rowCount(db),
+      purged: 0,
     };
   }
 
@@ -1278,8 +1333,10 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
   const pageSize = 500;
   let page = Math.max(1, resumeBefore.stamm_next_page || 1);
   const resuming = page > 1;
+  const startedFromPageOne = page === 1;
   let totalPages = resumeBefore.stamm_total_pages || 1;
   let totalCount = resumeBefore.total_count || 0;
+  const seenIds = new Set();
 
   const runOnBase = async (base) => {
     do {
@@ -1304,6 +1361,10 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
       if (rows.length) {
         rows = await mergeExtrasIntoRows(base, auth, rows);
       }
+      for (let i = 0; i < rows.length; i++) {
+        const id = parseInt(rows[i] && rows[i].id, 10);
+        if (Number.isFinite(id) && id > 0) seenIds.add(id);
+      }
       await withDbLock(async () => {
         if (rows.length) upsertAnlagenstammRows(db, rows);
         updateStammResumeProgress(db, page, totalPages, totalCount);
@@ -1312,11 +1373,21 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
       if (onProgress) onProgress({ page, totalPages, totalCount, resuming: resuming || page > 1 });
       page += 1;
     } while (page <= totalPages);
+    let purged = 0;
     await withDbLock(async () => {
+      if (startedFromPageOne) {
+        purged = purgeAnlagenstammLocalOrphans(db, seenIds);
+      }
       markStammPhaseCompleted(db, totalPages, totalCount);
       if (typeof saveFn === 'function') saveFn();
     });
-    return { ok: true, total_count: totalCount, row_count: rowCount(db), resumed: resuming };
+    return {
+      ok: true,
+      total_count: totalCount,
+      row_count: rowCount(db),
+      resumed: resuming,
+      purged,
+    };
   };
 
   try {
@@ -1928,6 +1999,9 @@ module.exports = {
   resetAnlagenstammSyncPhases,
   prepareAnlagenstammSyncRun,
   finalizeAnlagenstammSyncRun,
+  purgeAnlagenstammLocalOrphans,
+  ANLAGENSTAMM_FULL_RESYNC_TTL_MS,
+  isAnlagenstammFullSyncTtlExpired,
   ensureAnlagenstammTreeCacheSchema,
   readAnlagenstammTreeCacheRow,
   upsertAnlagenstammTreeCacheRow,

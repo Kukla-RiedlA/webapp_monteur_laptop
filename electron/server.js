@@ -258,8 +258,11 @@ const JOB_FAB_STAMM_KEYS = [
   'leistung',
   'nenngeschwindigkeit',
   'kraftaufnehmer',
+  'kraftaufnehmer_extra',
   'dms_nr',
   'dms_position',
+  'vers_spannung',
+  'sensitivitaet',
   'tacho',
   'elektronik',
   'material',
@@ -12381,9 +12384,16 @@ function createApp(db) {
             console.warn('[sync_pull] anlagenstamm_db_sync:', syncResult.error || 'fehlgeschlagen');
           } else if (syncResult.row_count != null || syncResult.skipped) {
             if (syncResult.skipped) {
-              console.log('[sync_pull] anlagenstamm_db_sync: Stammdaten bereits vollständig, übersprungen');
+              console.log(
+                '[sync_pull] anlagenstamm_db_sync: Stammdaten übersprungen (TTL noch gültig)',
+              );
             } else {
-              console.log('[sync_pull] anlagenstamm_db_sync ok, Zeilen lokal:', syncResult.row_count);
+              console.log(
+                '[sync_pull] anlagenstamm_db_sync ok, Zeilen lokal:',
+                syncResult.row_count,
+                ', orphans entfernt:',
+                syncResult.purged != null ? syncResult.purged : 0,
+              );
             }
             flushDb();
             try {
@@ -12501,6 +12511,16 @@ function createApp(db) {
           { dbLock, save },
         );
         if (!syncResult.ok) throw new Error(syncResult.error || 'Anlagenstamm-Sync fehlgeschlagen.');
+        if (syncResult.skipped) {
+          console.log('[anlagenstamm_db_sync] Stammdaten übersprungen (TTL noch gültig)');
+        } else {
+          console.log(
+            '[anlagenstamm_db_sync] ok, Zeilen lokal:',
+            syncResult.row_count,
+            ', orphans entfernt:',
+            syncResult.purged != null ? syncResult.purged : 0,
+          );
+        }
         const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
         const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
         try {
