@@ -2437,9 +2437,440 @@ async function generateMontageberichtPdfBuffer(payload, options) {
   return Buffer.from(await pdfDoc.save());
 }
 
+/**
+ * Hersteller-Prüfzertifikat A4 Hochkant, bilingual (options.lang = 'de'|'en').
+ */
+async function generatePruefzertifikatPdfBuffer(payload, options) {
+  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+  const lang = (options && options.lang) === 'en' ? 'en' : 'de';
+  const de = lang !== 'en';
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  const PAGE_W = 595.28;
+  const PAGE_H = 841.89;
+  const marginX = 36;
+  const marginTop = 28;
+  const marginBottom = 42;
+  const green = rgb(14 / 255, 123 / 255, 90 / 255);
+  const greenDark = rgb(12 / 255, 106 / 255, 77 / 255);
+  const greenSoft = rgb(207 / 255, 232 / 255, 209 / 255);
+  const greenHeader = rgb(232 / 255, 244 / 255, 236 / 255);
+  const grayText = rgb(0.22, 0.22, 0.22);
+  const grayMuted = rgb(0.45, 0.45, 0.45);
+  const white = rgb(1, 1, 1);
+  const tableInnerW = PAGE_W - marginX * 2;
+
+  const logo = await embedLogo(pdfDoc);
+  const t = (a, b) => (de ? a : b);
+  const str = (v) => (v == null ? '' : String(v).trim());
+  const fmtPct = (v) => {
+    if (v == null || v === '') return '–';
+    const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'));
+    if (!Number.isFinite(n)) return str(v);
+    return (Math.round(n * 1000) / 1000).toLocaleString(de ? 'de-DE' : 'en-GB', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 3,
+    });
+  };
+
+  const ergebnisse =
+    payload.ergebnisse && typeof payload.ergebnisse === 'object'
+      ? payload.ergebnisse
+      : (() => {
+          try {
+            return JSON.parse(payload.ergebnisse_json || '{}') || {};
+          } catch (_) {
+            return {};
+          }
+        })();
+  const verfahren =
+    payload.verfahren && typeof payload.verfahren === 'object'
+      ? payload.verfahren
+      : (() => {
+          try {
+            return JSON.parse(payload.verfahren_json || '{}') || {};
+          } catch (_) {
+            return {};
+          }
+        })();
+
+  let statusBestanden = payload.status_bestanden;
+  if (statusBestanden === '1' || statusBestanden === 1 || statusBestanden === true) statusBestanden = true;
+  else if (statusBestanden === '0' || statusBestanden === 0 || statusBestanden === false) statusBestanden = false;
+  else statusBestanden = null;
+
+  const statusLabel =
+    statusBestanden === true
+      ? t('BESTANDEN', 'PASSED')
+      : statusBestanden === false
+        ? t('NICHT BESTANDEN', 'FAILED')
+        : t('k. A.', 'n/a');
+
+  const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+  let y = PAGE_H - marginTop;
+
+  // Outer frame
+  page.drawRectangle({
+    x: 18,
+    y: 18,
+    width: PAGE_W - 36,
+    height: PAGE_H - 36,
+    borderColor: green,
+    borderWidth: 2,
+  });
+  page.drawRectangle({
+    x: 22,
+    y: 22,
+    width: PAGE_W - 44,
+    height: PAGE_H - 44,
+    borderColor: greenSoft,
+    borderWidth: 1,
+  });
+
+  // Header bar
+  page.drawRectangle({
+    x: marginX,
+    y: y - 52,
+    width: tableInnerW,
+    height: 52,
+    color: greenHeader,
+  });
+  if (logo) {
+    const lh = 36;
+    const lw = (logo.width / logo.height) * lh;
+    page.drawImage(logo, { x: marginX + 8, y: y - 44, width: lw, height: lh });
+  }
+  const title = t(
+    'Hersteller-Pruefzertifikat',
+    'Manufacturer Inspection Certificate',
+  );
+  const subtitle = t('Wiederkehrende Ueberpruefung', 'Recurring Verification');
+  page.drawText(title, {
+    x: marginX + 110,
+    y: y - 22,
+    size: 14,
+    font: fontBold,
+    color: greenDark,
+  });
+  page.drawText(subtitle, {
+    x: marginX + 110,
+    y: y - 38,
+    size: 10,
+    font,
+    color: grayMuted,
+  });
+  y -= 68;
+
+  const certNr = str(payload.zertifikat_nr) || '–';
+  page.drawText(t('Zertifikatsnr.', 'Certificate no.') + ': ' + certNr, {
+    x: marginX,
+    y,
+    size: 9,
+    font: fontBold,
+    color: grayText,
+  });
+  page.drawText(t('Bezug', 'Reference') + ': EU 2018/2066 Art. 60 (MRR)', {
+    x: marginX + 260,
+    y,
+    size: 8,
+    font,
+    color: grayMuted,
+  });
+  y -= 18;
+
+  function drawMetaRow(label, value, x, yy, w) {
+    page.drawText(label, { x, y: yy, size: 7.5, font, color: grayMuted });
+    const val = str(value) || '–';
+    page.drawText(val.length > 42 ? val.slice(0, 41) + '…' : val, {
+      x,
+      y: yy - 12,
+      size: 10,
+      font: fontBold,
+      color: grayText,
+    });
+  }
+
+  page.drawRectangle({
+    x: marginX,
+    y: y - 78,
+    width: tableInnerW,
+    height: 82,
+    color: rgb(0.97, 0.99, 0.97),
+    borderColor: greenSoft,
+    borderWidth: 1,
+  });
+  drawMetaRow(t('Fabrikationsnummer', 'Serial / FN'), payload.fabrikationsnummer, marginX + 10, y - 8, 200);
+  drawMetaRow(t('Pruefdatum', 'Inspection date'), payload.pruefdatum || payload.durchfuehrungsdatum, marginX + 280, y - 8, 200);
+  drawMetaRow(t('Kunde', 'Customer'), payload.kunde || payload.customer_name, marginX + 10, y - 42, 200);
+  drawMetaRow(t('Naechste Pruefung', 'Next inspection'), payload.naechste_pruefung, marginX + 280, y - 42, 200);
+  y -= 100;
+
+  // Plant data
+  page.drawText(t('Anlagendaten', 'Equipment data'), {
+    x: marginX,
+    y,
+    size: 11,
+    font: fontBold,
+    color: greenDark,
+  });
+  y -= 6;
+  page.drawRectangle({ x: marginX, y: y - 1, width: 120, height: 2, color: green });
+  y -= 16;
+
+  const plantRows = [
+    [t('Type', 'Type'), payload.type],
+    [t('Pos.-Nr.', 'Pos. no.'), payload.pos_nr],
+    [t('Elektronik / DWC', 'Electronics / DWC'), payload.elektronik || payload.dwc],
+    [t('Nennleistung', 'Rated capacity'), payload.nennleistung || payload.leistung],
+    [t('Waagenart', 'Scale type'), payload.waagenart || 'Bandwaage'],
+    [t('Projekt / Auftrag', 'Project / Job'), payload.projekt || payload.job_number],
+    [t('Standort', 'Site'), payload.standort],
+  ];
+  plantRows.forEach((row, idx) => {
+    const bg = idx % 2 === 0 ? greenHeader : white;
+    page.drawRectangle({ x: marginX, y: y - 14, width: tableInnerW, height: 16, color: bg });
+    page.drawText(str(row[0]), { x: marginX + 6, y: y - 10, size: 8, font, color: grayMuted });
+    page.drawText(str(row[1]) || '–', { x: marginX + 200, y: y - 10, size: 9, font: fontBold, color: grayText });
+    y -= 16;
+  });
+  y -= 12;
+
+  // Methods
+  page.drawText(t('Pruefverfahren', 'Inspection methods'), {
+    x: marginX,
+    y,
+    size: 11,
+    font: fontBold,
+    color: greenDark,
+  });
+  y -= 16;
+  const methods = [];
+  if (verfahren.kontrollwiegung) methods.push(t('Kontrollwiegung', 'Control weighing'));
+  if (verfahren.schleppketten) methods.push(t('Schleppketten-Test', 'Chain calibration test'));
+  if (verfahren.service) methods.push(t('Serviceprotokoll', 'Service protocol'));
+  page.drawText(methods.length ? methods.join('  ·  ') : '–', {
+    x: marginX,
+    y,
+    size: 9,
+    font,
+    color: grayText,
+  });
+  y -= 20;
+
+  // Results table
+  page.drawText(t('Ergebnisse', 'Results'), {
+    x: marginX,
+    y,
+    size: 11,
+    font: fontBold,
+    color: greenDark,
+  });
+  y -= 6;
+  page.drawRectangle({ x: marginX, y: y - 1, width: 80, height: 2, color: green });
+  y -= 18;
+
+  const resultHeaderH = 20;
+  page.drawRectangle({
+    x: marginX,
+    y: y - resultHeaderH + 4,
+    width: tableInnerW,
+    height: resultHeaderH,
+    color: green,
+  });
+  const colW = [tableInnerW * 0.4, tableInnerW * 0.2, tableInnerW * 0.2, tableInnerW * 0.2];
+  const headers = [
+    t('Verfahren', 'Method'),
+    t('Anzahl', 'Count'),
+    t('Fehler %', 'Error %'),
+    t('Datum', 'Date'),
+  ];
+  let cx = marginX;
+  headers.forEach((h, i) => {
+    page.drawText(h, { x: cx + 4, y: y - 8, size: 8, font: fontBold, color: white });
+    cx += colW[i];
+  });
+  y -= resultHeaderH;
+
+  const resultRows = [];
+  if (ergebnisse.kontrollwiegung) {
+    resultRows.push([
+      t('Kontrollwiegung', 'Control weighing'),
+      String(ergebnisse.kontrollwiegung.anzahl != null ? ergebnisse.kontrollwiegung.anzahl : '–'),
+      fmtPct(ergebnisse.kontrollwiegung.fehler_prozent),
+      str(ergebnisse.kontrollwiegung.datum) || '–',
+    ]);
+  }
+  if (ergebnisse.schleppketten) {
+    resultRows.push([
+      t('Schleppketten-Test', 'Chain test'),
+      String(ergebnisse.schleppketten.anzahl != null ? ergebnisse.schleppketten.anzahl : '–'),
+      fmtPct(ergebnisse.schleppketten.fehler_prozent),
+      str(ergebnisse.schleppketten.datum) || '–',
+    ]);
+  }
+  if (!resultRows.length) {
+    resultRows.push(['–', '–', '–', '–']);
+  }
+  resultRows.forEach((r, idx) => {
+    const bg = idx % 2 === 0 ? white : greenHeader;
+    page.drawRectangle({ x: marginX, y: y - 14, width: tableInnerW, height: 16, color: bg, borderColor: greenSoft, borderWidth: 0.5 });
+    let x = marginX;
+    r.forEach((cell, i) => {
+      page.drawText(String(cell), { x: x + 4, y: y - 10, size: 9, font, color: grayText });
+      x += colW[i];
+    });
+    y -= 16;
+  });
+  y -= 10;
+
+  page.drawText(
+    t('Zulaessige Abweichung', 'Max. permissible error') + ': ± ' + fmtPct(payload.zulaessige_abweichung_pct) + ' %',
+    { x: marginX, y, size: 9, font: fontBold, color: grayText },
+  );
+  y -= 22;
+
+  // Seal
+  const sealW = 220;
+  const sealH = 40;
+  const sealX = marginX + (tableInnerW - sealW) / 2;
+  page.drawRectangle({
+    x: sealX,
+    y: y - sealH,
+    width: sealW,
+    height: sealH,
+    borderColor: green,
+    borderWidth: 2.5,
+    color: white,
+  });
+  const sealSize = 14;
+  const sealTw = fontBold.widthOfTextAtSize(statusLabel, sealSize);
+  page.drawText(statusLabel, {
+    x: sealX + (sealW - sealTw) / 2,
+    y: y - sealH / 2 - 5,
+    size: sealSize,
+    font: fontBold,
+    color: greenDark,
+  });
+  y -= sealH + 18;
+
+  // Traceability
+  page.drawText(t('Rueckfuehrbarkeit / Pruefmittel', 'Traceability / test means'), {
+    x: marginX,
+    y,
+    size: 10,
+    font: fontBold,
+    color: greenDark,
+  });
+  y -= 14;
+  const pruefmittel = str(payload.pruefmittel) || '–';
+  page.drawText(pruefmittel.length > 90 ? pruefmittel.slice(0, 89) + '…' : pruefmittel, {
+    x: marginX,
+    y,
+    size: 9,
+    font,
+    color: grayText,
+  });
+  y -= 14;
+  if (str(payload.letzte_eichung_kontrollwaage)) {
+    page.drawText(
+      t('Letzte Eichung Kontrollwaage', 'Last verification of control scale') +
+        ': ' +
+        str(payload.letzte_eichung_kontrollwaage),
+      { x: marginX, y, size: 8, font, color: grayMuted },
+    );
+    y -= 12;
+  }
+  y -= 6;
+
+  // Conformity
+  const konform =
+    str(payload.konformitaet_text) ||
+    (de
+      ? 'Die Anlage wurde nach dem Herstellerverfahren der KUKLA Waagenfabrik GmbH & Co KG einer wiederkehrenden Ueberpruefung unterzogen. Dieses Hersteller-Pruefzertifikat dient als Nachweis der Qualitaetssicherung der Messeinrichtung im Sinne von Art. 60 der Verordnung (EU) 2018/2066 (MRR). Es handelt sich nicht um eine akkreditierte Kalibrierung nach EN ISO/IEC 17025 und nicht um eine behoerdliche Eichung.'
+      : 'The equipment was subjected to a recurring inspection according to the manufacturer procedure of KUKLA Waagenfabrik GmbH & Co KG. This Manufacturer Inspection Certificate serves as evidence of measuring equipment quality assurance pursuant to Art. 60 of Regulation (EU) 2018/2066 (MRR). It is not an accredited calibration under EN ISO/IEC 17025 and not an official legal metrology verification.');
+
+  page.drawText(t('Konformitaetsaussage', 'Statement of conformity'), {
+    x: marginX,
+    y,
+    size: 10,
+    font: fontBold,
+    color: greenDark,
+  });
+  y -= 14;
+
+  const words = konform.split(/\s+/).filter(Boolean);
+  let line = '';
+  const maxW = tableInnerW;
+  const flushLine = () => {
+    if (!line) return;
+    page.drawText(line, { x: marginX, y, size: 8, font, color: grayText });
+    y -= 11;
+    line = '';
+  };
+  words.forEach((word) => {
+    const test = line ? line + ' ' + word : word;
+    if (font.widthOfTextAtSize(test, 8) > maxW && line) {
+      flushLine();
+      line = word;
+    } else {
+      line = test;
+    }
+  });
+  flushLine();
+  y -= 16;
+
+  // Signatures
+  page.drawText(t('Monteur / Technician', 'Technician') + ': ' + (str(payload.monteur_name) || '____________________'), {
+    x: marginX,
+    y,
+    size: 9,
+    font,
+    color: grayText,
+  });
+  y -= 16;
+  page.drawText(t('Datum', 'Date') + ': ' + (str(payload.pruefdatum) || '__________'), {
+    x: marginX,
+    y,
+    size: 9,
+    font,
+    color: grayText,
+  });
+  if (str(payload.kunde_unterschrift)) {
+    y -= 16;
+    page.drawText(t('Kunde', 'Customer') + ': ' + str(payload.kunde_unterschrift), {
+      x: marginX,
+      y,
+      size: 9,
+      font,
+      color: grayText,
+    });
+  }
+
+  // Footer
+  page.drawText('KUKLA Waagenfabrik GmbH & Co KG  ·  ' + certNr + '  ·  ' + (de ? 'DE' : 'EN'), {
+    x: marginX,
+    y: marginBottom - 8,
+    size: 7,
+    font,
+    color: grayMuted,
+  });
+  page.drawText(t('Seite 1/1', 'Page 1/1'), {
+    x: PAGE_W - marginX - 40,
+    y: marginBottom - 8,
+    size: 7,
+    font,
+    color: grayMuted,
+  });
+
+  return Buffer.from(await pdfDoc.save());
+}
+
 module.exports = {
   generateServiceprotokollPdfBuffer,
   generateKontrollwiegungPdfBuffer,
   generateSchleppkettenPdfBuffer,
   generateMontageberichtPdfBuffer,
+  generatePruefzertifikatPdfBuffer,
 };

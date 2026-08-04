@@ -200,6 +200,7 @@ const arbeitsschritteLocal = require('./lib/arbeitsschritte-local');
 const protocolPdf = require('./lib/protocol_pdf');
 const kontrollwiegungLocal = require('./lib/kontrollwiegung-local');
 const schleppkettenLocal = require('./lib/schleppketten-local');
+const pruefzertifikatLocal = require('./lib/pruefzertifikat-local');
 const {
   resolveMonteurDraftJsonPath,
   isMonteurDraftJsonBasename,
@@ -8770,6 +8771,7 @@ function createApp(db) {
     try {
       const body = req.body || {};
       const technicianId = getTechnicianId(req);
+      const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
       const localJobId = parseInt(body.job_id != null ? body.job_id : body.local_job_id, 10);
       if (!technicianId) {
         return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
@@ -8784,9 +8786,16 @@ function createApp(db) {
           ? body.elektronik
           : (body.dwc != null ? body.dwc : '')
       ).trim();
+      let serverJobId = parseInt(body.job_id, 10);
+      if (Number.isFinite(localJobId) && localJobId > 0) {
+        const jobRowSk = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+        if (jobRowSk && jobRowSk.server_id != null && String(jobRowSk.server_id).trim() !== '') {
+          serverJobId = parseInt(jobRowSk.server_id, 10);
+        }
+      }
       const payload = {
         technician_id: body.technician_id != null ? body.technician_id : technicianId,
-        job_id: body.job_id,
+        job_id: Number.isFinite(serverJobId) && serverJobId > 0 ? serverJobId : body.job_id,
         local_job_id: localJobId,
         fabrikationsnummer: body.fabrikationsnummer,
         durchfuehrungsdatum: body.durchfuehrungsdatum,
@@ -8808,6 +8817,9 @@ function createApp(db) {
         gewicht_pro_meter: body.gewicht_pro_meter != null ? String(body.gewicht_pro_meter).trim() : '',
         kunde: body.kunde != null ? String(body.kunde).trim() : '',
         messungen: Array.isArray(body.messungen) ? body.messungen : [],
+        dispoBaseUrl,
+        serverUsername: body.serverUsername || body.dispoUsername,
+        serverPassword: body.serverPassword ?? body.dispoPassword,
       };
       enrichKontrollwiegungPdfPayload(payload, localJobId, technicianId);
       if (payload.kunde) payload.customer_name = payload.kunde;
@@ -8846,10 +8858,67 @@ function createApp(db) {
         }
         protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
         save();
+        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
+          const jobRow = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+          const srvJobId = jobRow && jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
+          if (srvJobId > 0) {
+            const skPath = resolveMonteurDraftJsonPath(reiseDir, 'schleppkettenprotokoll.json', true);
+            await multiDeviceApi.pushJsonDraft({
+              dispoBaseUrl,
+              endpoint: '/dispo_api/api/schleppkettenprotokoll_draft.php',
+              technicianId,
+              serverJobId: srvJobId,
+              localJobId,
+              filePath: skPath,
+              username: body.serverUsername || body.dispoUsername,
+              password: body.serverPassword ?? body.dispoPassword,
+            });
+          }
+        }
+      }
+      let protokollId = record ? record.protokoll_id : 'local:' + Date.now();
+      let deferred = false;
+      if (dispoBaseUrl) {
+        try {
+          const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
+          const url = dispoBaseUrl + '/dispo_api/api/schleppkettenprotokoll_save.php';
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+            body: JSON.stringify(payload),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) {
+            protokollId = data.protokoll_id || data.id || protokollId;
+            if (localJobId) {
+              db.prepare(
+                `DELETE FROM pending_changes WHERE entity_type = 'schleppketten' AND entity_id = ? AND action = 'save'`,
+              ).run(String(localJobId) + ':' + String(payload.fabrikationsnummer || ''));
+              save();
+            }
+            return res.json(Object.assign({}, data, { saved_pdf: savedPdf, local_protokoll_id: record && record.protokoll_id }));
+          }
+          deferred = true;
+        } catch (_) {
+          deferred = true;
+        }
+      } else {
+        deferred = true;
+      }
+      if (deferred && localJobId) {
+        queueDispoProxyPending(
+          db,
+          'schleppketten',
+          localJobId + ':' + String(payload.fabrikationsnummer || ''),
+          'save',
+          payload,
+        );
+        save();
       }
       res.json({
         ok: true,
-        protokoll_id: record ? record.protokoll_id : 'local:' + Date.now(),
+        deferred: !!deferred,
+        protokoll_id: protokollId,
         local_protokoll_id: record && record.protokoll_id,
         saved_pdf: savedPdf,
       });
@@ -8908,6 +8977,265 @@ function createApp(db) {
       return res.send(pdfBuf);
     } catch (e) {
       res.status(502).json({ ok: false, error: 'PDF nicht verfügbar: ' + e.message });
+    }
+  });
+
+  function resolvePruefzertifikatLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum, lang) {
+    const safeFn = String(fab || '').replace(/[^\w.-]+/g, '_');
+    const d = String(datum || '').replace(/-/g, '');
+    const suffix = lang === 'en' ? '_EN' : '';
+    const name = 'Pruefzertifikat_' + safeFn + '_' + d + suffix + '.pdf';
+    if (Number.isFinite(localJobId) && localJobId > 0 && fab) {
+      try {
+        const { targetDir, relDir } = resolveMonteurProtokollePdfTarget(
+          reiseDir,
+          localJobId,
+          fab,
+          technicianId,
+        );
+        return {
+          full: path.join(targetDir, name),
+          rel: relDir + '/' + name,
+          name,
+          targetDir,
+          relDir,
+        };
+      } catch (_) { /* Fallback */ }
+    }
+    return {
+      full: path.join(reiseDir, 'Dokumente_Monteur', name),
+      rel: 'Dokumente_Monteur/' + name,
+      name,
+      targetDir: path.join(reiseDir, 'Dokumente_Monteur'),
+      relDir: 'Dokumente_Monteur',
+    };
+  }
+
+  app.get('/api/protokolle/pruefzertifikat', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const store = pruefzertifikatLocal.readPruefzertifikatStore(reiseDir);
+      res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 } });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
+    }
+  });
+
+  app.get('/api/pruefzertifikat_prefill', async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(req.query.job_id || req.query.local_job_id, 10);
+      const fab = String(req.query.fabrikationsnummer || req.query.fab || '').trim();
+      const dispoBaseUrl = String(req.query.base_url || req.query.dispoBaseUrl || '').trim().replace(/\/$/, '');
+      if (!technicianId || !localJobId || !fab) {
+        return res.status(400).json({ ok: false, error: 'job_id, fabrikationsnummer und technician_id erforderlich.' });
+      }
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      let serverJobId = localJobId;
+      const jobRow = db.prepare('SELECT server_id, job_number FROM jobs WHERE id = ?').get(localJobId);
+      if (jobRow && jobRow.server_id != null && String(jobRow.server_id).trim() !== '') {
+        serverJobId = parseInt(jobRow.server_id, 10);
+      }
+      if (dispoBaseUrl) {
+        try {
+          const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
+          const url =
+            dispoBaseUrl +
+            '/dispo_api/api/pruefzertifikat_prefill.php?technician_id=' +
+            encodeURIComponent(technicianId) +
+            '&job_id=' +
+            encodeURIComponent(serverJobId) +
+            '&fabrikationsnummer=' +
+            encodeURIComponent(fab);
+          const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok && data.prefill) {
+            return res.json(data);
+          }
+        } catch (_) { /* local fallback */ }
+      }
+      const tech = (() => {
+        try {
+          return db.prepare('SELECT full_name FROM technicians WHERE id = ?').get(technicianId);
+        } catch (_) {
+          try {
+            return db.prepare('SELECT full_name FROM users WHERE id = ?').get(technicianId);
+          } catch (_2) {
+            return null;
+          }
+        }
+      })();
+      const prefill = pruefzertifikatLocal.prefillFromLocalDrafts(reiseDir, fab, {
+        job_number: jobRow && jobRow.job_number,
+        technician_name: tech && tech.full_name,
+      });
+      res.json({ ok: true, prefill, source: 'local' });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Prefill fehlgeschlagen.' });
+    }
+  });
+
+  app.post('/api/pruefzertifikat_save', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.local_job_id, 10);
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      }
+      let serverJobId = parseInt(body.job_id, 10);
+      if (Number.isFinite(localJobId) && localJobId > 0) {
+        const jobRowPz = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+        if (jobRowPz && jobRowPz.server_id != null && String(jobRowPz.server_id).trim() !== '') {
+          serverJobId = parseInt(jobRowPz.server_id, 10);
+        }
+      }
+      const pdfLanguages = Array.isArray(body.pdf_languages)
+        ? body.pdf_languages.map((l) => String(l).toLowerCase()).filter((l) => l === 'de' || l === 'en')
+        : [];
+      const wantPdf = !!body.create_pdf || pdfLanguages.length > 0;
+      const langs = wantPdf ? (pdfLanguages.length ? pdfLanguages : ['de']) : [];
+      const payload = {
+        technician_id: body.technician_id != null ? body.technician_id : technicianId,
+        job_id: Number.isFinite(serverJobId) && serverJobId > 0 ? serverJobId : body.job_id,
+        local_job_id: localJobId,
+        fabrikationsnummer: body.fabrikationsnummer,
+        pruefdatum: body.pruefdatum || body.durchfuehrungsdatum,
+        durchfuehrungsdatum: body.pruefdatum || body.durchfuehrungsdatum,
+        naechste_pruefung: body.naechste_pruefung || '',
+        zertifikat_nr: body.zertifikat_nr || '',
+        projekt: body.projekt != null ? String(body.projekt).trim() : '',
+        kunde: body.kunde != null ? String(body.kunde).trim() : '',
+        standort: body.standort != null ? String(body.standort).trim() : '',
+        type: body.type != null ? String(body.type).trim() : '',
+        pos_nr: body.pos_nr != null ? String(body.pos_nr).trim() : '',
+        elektronik: body.elektronik != null ? String(body.elektronik).trim() : '',
+        nennleistung: body.nennleistung != null ? String(body.nennleistung).trim() : (body.leistung || ''),
+        waagenart: body.waagenart != null ? String(body.waagenart).trim() : '',
+        verfahren: body.verfahren && typeof body.verfahren === 'object' ? body.verfahren : {},
+        ergebnisse: body.ergebnisse && typeof body.ergebnisse === 'object' ? body.ergebnisse : {},
+        zulaessige_abweichung_pct: body.zulaessige_abweichung_pct,
+        status_bestanden: body.status_bestanden,
+        pruefmittel: body.pruefmittel != null ? String(body.pruefmittel).trim() : '',
+        letzte_eichung_kontrollwaage: body.letzte_eichung_kontrollwaage != null ? String(body.letzte_eichung_kontrollwaage).trim() : '',
+        bemerkungen: body.bemerkungen != null ? String(body.bemerkungen).trim() : '',
+        konformitaet_text: body.konformitaet_text != null ? String(body.konformitaet_text).trim() : '',
+        monteur_name: body.monteur_name != null ? String(body.monteur_name).trim() : '',
+        kunde_unterschrift: body.kunde_unterschrift != null ? String(body.kunde_unterschrift).trim() : '',
+        kontrollwiegungsprotokoll_id: body.kontrollwiegungsprotokoll_id || null,
+        schleppkettenprotokoll_id: body.schleppkettenprotokoll_id || null,
+        serviceprotokoll_id: body.serviceprotokoll_id || null,
+        dispoBaseUrl,
+        serverUsername: body.serverUsername || body.dispoUsername,
+        serverPassword: body.serverPassword ?? body.dispoPassword,
+      };
+      enrichKontrollwiegungPdfPayload(payload, localJobId, technicianId);
+      let reiseDir = null;
+      if (Number.isFinite(localJobId) && localJobId > 0) {
+        reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      }
+      let record = null;
+      const savedPdfs = [];
+      if (reiseDir) {
+        record = pruefzertifikatLocal.savePruefzertifikatLocal(reiseDir, payload.fabrikationsnummer, payload);
+        for (const lang of langs) {
+          const pdfPaths = resolvePruefzertifikatLocalPdfPaths(
+            reiseDir,
+            localJobId,
+            payload.fabrikationsnummer,
+            technicianId,
+            payload.pruefdatum,
+            lang,
+          );
+          const pdfDir = path.dirname(pdfPaths.full);
+          if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+          const pdfBuf = await protocolPdf.generatePruefzertifikatPdfBuffer(payload, { lang });
+          writeFileWithRetry(pdfPaths.full, pdfBuf);
+          savedPdfs.push({ lang, rel: pdfPaths.rel, name: pdfPaths.name });
+          protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+        }
+        if (record && savedPdfs.length) {
+          record.pdf_rel = savedPdfs[0].rel;
+          const storePz = pruefzertifikatLocal.readPruefzertifikatStore(reiseDir);
+          if (storePz.byFab[payload.fabrikationsnummer]) {
+            storePz.byFab[payload.fabrikationsnummer].pdf_rel = savedPdfs[0].rel;
+            storePz.byFab[payload.fabrikationsnummer].pdfs = savedPdfs;
+            pruefzertifikatLocal.writePruefzertifikatStore(reiseDir, storePz);
+          }
+        }
+        save();
+        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
+          const jobRow = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+          const srvJobId = jobRow && jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
+          if (srvJobId > 0) {
+            const pzPath = resolveMonteurDraftJsonPath(reiseDir, 'pruefzertifikat.json', true);
+            await multiDeviceApi.pushJsonDraft({
+              dispoBaseUrl,
+              endpoint: '/dispo_api/api/pruefzertifikat_draft.php',
+              technicianId,
+              serverJobId: srvJobId,
+              localJobId,
+              filePath: pzPath,
+              username: body.serverUsername || body.dispoUsername,
+              password: body.serverPassword ?? body.dispoPassword,
+            });
+          }
+        }
+      }
+      let protokollId = record ? record.protokoll_id : 'local:' + Date.now();
+      let deferred = false;
+      if (dispoBaseUrl) {
+        try {
+          const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
+          const url = dispoBaseUrl + '/dispo_api/api/pruefzertifikat_save.php';
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+            body: JSON.stringify(payload),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data.ok) {
+            protokollId = data.zertifikat_id || data.protokoll_id || data.id || protokollId;
+            return res.json(Object.assign({}, data, {
+              saved_pdfs: savedPdfs,
+              saved_pdf: savedPdfs[0] && savedPdfs[0].rel,
+              local_protokoll_id: record && record.protokoll_id,
+            }));
+          }
+          deferred = true;
+        } catch (_) {
+          deferred = true;
+        }
+      } else {
+        deferred = true;
+      }
+      if (deferred && localJobId) {
+        queueDispoProxyPending(
+          db,
+          'pruefzertifikat',
+          localJobId + ':' + String(payload.fabrikationsnummer || ''),
+          'save',
+          payload,
+        );
+        save();
+      }
+      res.json({
+        ok: true,
+        deferred: !!deferred,
+        protokoll_id: protokollId,
+        zertifikat_id: protokollId,
+        local_protokoll_id: record && record.protokoll_id,
+        saved_pdfs: savedPdfs,
+        saved_pdf: savedPdfs[0] && savedPdfs[0].rel,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Prüfzertifikat konnte nicht gespeichert werden.' });
     }
   });
 

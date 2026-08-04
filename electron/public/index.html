@@ -1376,6 +1376,7 @@
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-parameterlisten">Parameterlisten</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-kontrollwiegungen">Kontrollwiegungen</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-schleppketten">Schleppketten-Test</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-pruefzertifikat">Prüfzertifikat</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-service">Service</button>
       </div>
@@ -2057,6 +2058,184 @@
               <button type="button" class="btn btn-ghost" id="schleppkettenPdf" style="display:none" title="PDF im Ordner Protokolle öffnen">PDF öffnen</button>
               <button type="button" class="btn btn-ghost" id="schleppkettenAbbrechen">Abbrechen</button>
             </div>
+          </div>
+        </section>
+      </form>
+    </div>
+  </main>
+  <main id="viewProtokollePruefzertifikat" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Prüfzertifikat">
+    <div class="card sp-v2-card pz-v2-page">
+      <div class="sp-v2-topbar">
+        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Prüfzertifikat <span class="muted" style="font-weight:normal;font-size:0.85rem">/ Manufacturer Inspection</span></h2>
+        <div class="sp-v2-topbar-actions">
+          <button type="button" class="btn btn-ghost" id="btnPruefzertifikatPrefill" title="Daten aus Kontrollwiegung / Schleppketten / Service übernehmen">Aus Protokollen übernehmen</button>
+          <button type="submit" form="pruefzertifikatForm" class="btn btn-primary" id="btnPruefzertifikatStickySave" title="Speichern">Speichern</button>
+        </div>
+      </div>
+      <form id="pruefzertifikatForm" class="sp-v2-form">
+        <section class="sp-v2-section" aria-labelledby="pzV2Sec1Title">
+          <header class="sp-v2-section-head" id="pzV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Zertifikat</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatJob">Auftrag</label>
+                <select id="pruefzertifikatJob" class="dienstreise-select" required>
+                  <option value="">– Bitte wählen –</option>
+                </select>
+              </div>
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatNr">Zertifikatsnr.</label>
+                <input type="text" id="pruefzertifikatNr" autocomplete="off">
+              </div>
+              <div class="sp-v2-field sp-v2-field-date">
+                <label for="pruefzertifikatDatum">Prüfdatum</label>
+                <input type="date" id="pruefzertifikatDatum" required>
+              </div>
+            </div>
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field sp-v2-field-date">
+                <label for="pruefzertifikatNaechste">Nächste Prüfung</label>
+                <input type="date" id="pruefzertifikatNaechste">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatProjekt">Projekt</label>
+                <input type="text" id="pruefzertifikatProjekt" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatKunde">Kunde</label>
+                <input type="text" id="pruefzertifikatKunde" autocomplete="off">
+              </div>
+            </div>
+            <div class="sp-v2-field">
+              <label for="pruefzertifikatStandort">Standort</label>
+              <input type="text" id="pruefzertifikatStandort" autocomplete="off">
+            </div>
+            <p id="pruefzertifikatKundeHint" class="mb-v2-hint-block" hidden></p>
+            <div class="sp-v2-fab-block" id="pruefzertifikatFabGroup" style="display:none">
+              <label>Fabrikationsnummer</label>
+              <input type="hidden" id="pruefzertifikatFab" name="pruefzertifikatFab" value="">
+              <div id="pruefzertifikatFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
+              <p id="pruefzertifikatSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="pzV2Sec2Title">
+          <header class="sp-v2-section-head" id="pzV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Anlagendaten</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatType">Type</label>
+                <input type="text" id="pruefzertifikatType" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatPosNr">Pos.-Nr.</label>
+                <input type="text" id="pruefzertifikatPosNr" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatElektronik">Elektronik / DWC</label>
+                <input type="text" id="pruefzertifikatElektronik" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatLeistung">Nennleistung</label>
+                <input type="text" id="pruefzertifikatLeistung" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatWaagenart">Waagenart</label>
+                <input type="text" id="pruefzertifikatWaagenart" value="Bandwaage" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatMonteur">Monteur</label>
+                <input type="text" id="pruefzertifikatMonteur" autocomplete="off">
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="pzV2Sec3Title">
+          <header class="sp-v2-section-head" id="pzV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Prüfverfahren &amp; Ergebnisse</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-pdf-lang" style="margin-bottom:0.75rem" role="group" aria-label="Prüfverfahren">
+              <span>Verfahren</span>
+              <label><input type="checkbox" id="pzVerfahrenKw"> Kontrollwiegung</label>
+              <label><input type="checkbox" id="pzVerfahrenSk"> Schleppketten-Test</label>
+              <label><input type="checkbox" id="pzVerfahrenSp"> Serviceprotokoll</label>
+            </div>
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="pzKwFehler">Kontrollwiegung Fehler [%]</label>
+                <input type="text" id="pzKwFehler" inputmode="decimal" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pzKwAnzahl">KW Anzahl</label>
+                <input type="text" id="pzKwAnzahl" inputmode="numeric" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pzKwDatum">KW Datum</label>
+                <input type="date" id="pzKwDatum">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pzSkFehler">Schleppketten Fehler [%]</label>
+                <input type="text" id="pzSkFehler" inputmode="decimal" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pzSkAnzahl">SK Anzahl</label>
+                <input type="text" id="pzSkAnzahl" inputmode="numeric" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pzSkDatum">SK Datum</label>
+                <input type="date" id="pzSkDatum">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pzToleranz">Zulässige Abweichung [%]</label>
+                <input type="text" id="pzToleranz" value="0,5" inputmode="decimal" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <label for="pzStatus">Ergebnis</label>
+                <select id="pzStatus">
+                  <option value="">– k. A. –</option>
+                  <option value="1">Bestanden</option>
+                  <option value="0">Nicht bestanden</option>
+                </select>
+              </div>
+            </div>
+            <div class="sp-v2-field">
+              <label for="pzPruefmittel">Prüfmittel / Rückführbarkeit</label>
+              <input type="text" id="pzPruefmittel" autocomplete="off" placeholder="Kontrollwaage / Schleppkette …">
+            </div>
+            <div class="sp-v2-field">
+              <label for="pzLetzteEichung">Letzte Eichung Kontrollwaage</label>
+              <input type="text" id="pzLetzteEichung" autocomplete="off">
+            </div>
+            <div class="sp-v2-field">
+              <label for="pzBemerkungen">Bemerkungen</label>
+              <textarea id="pzBemerkungen" rows="2" spellcheck="true" lang="de"></textarea>
+            </div>
+            <div class="sp-v2-field">
+              <label for="pzKonformitaet">Konformitätstext</label>
+              <textarea id="pzKonformitaet" rows="4" spellcheck="true" lang="de"></textarea>
+            </div>
+            <div class="sp-v2-field">
+              <label for="pzKundeUnterschrift">Kunde (optional)</label>
+              <input type="text" id="pzKundeUnterschrift" autocomplete="off">
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="pzV2Sec4Title">
+          <header class="sp-v2-section-head" id="pzV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Speichern &amp; PDF</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-pdf-lang">
+              <span>PDF-Sprache(n)</span>
+              <label><input type="checkbox" id="pzPdfDe" checked> Deutsch (DE)</label>
+              <label><input type="checkbox" id="pzPdfEn"> Englisch (EN)</label>
+            </div>
+            <div class="mb-v2-actions-row" style="margin-top:0.75rem">
+              <button type="submit" class="btn btn-primary" id="btnPruefzertifikatSaveData" data-mode="data">Speichern (nur Daten)</button>
+              <button type="submit" class="btn btn-primary" id="btnPruefzertifikatSavePdf" data-mode="pdf">PDF erstellen</button>
+              <button type="button" class="btn btn-ghost" id="pruefzertifikatAbbrechen">Abbrechen</button>
+            </div>
+            <p id="pruefzertifikatStatusMsg" class="mb-v2-hint-block" hidden></p>
           </div>
         </section>
       </form>

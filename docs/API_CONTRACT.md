@@ -166,6 +166,19 @@ Plattform-Übersicht: [`docs/MULTI_DEVICE_LAPTOP_SYNC.md`](../../docs/MULTI_DEVI
 | `dispo_api/api/job_files_manifest.php` | GET | `technician_id`, `job_id`, optional `physical_only=1` → `{ ok, files: [{ rel_path, size_bytes, sha256, mtime_utc, source, revision }], total_bytes }` — physischer Tree; Union nur wenn `physical_only` nicht gesetzt |
 | `dispo_api/api/montagebericht_draft.php` | GET / POST | Analog SP: `Dokumente_Monteur/montagebericht.json`; Revision + `job_closed`-Gate |
 | `dispo_api/api/kontrollwiegungsprotokoll_draft.php` | GET / POST | Analog: `Dokumente_Monteur/kontrollwiegungsprotokoll.json`; Revision + Gate |
+| `dispo_api/api/schleppkettenprotokoll_save.php` | POST JSON | `technician_id`, `job_id`, `fabrikationsnummer`, `durchfuehrungsdatum`, Kopfdaten, `ketten[]`, `messungen[]` → Upsert DB; Berechnung Prüfkette/Fehler%/Leistung → `{ ok, protokoll_id }` |
+| `dispo_api/api/schleppkettenprotokoll_draft.php` | GET / POST | Zwischenstand `Dokumente_Monteur/schleppkettenprotokoll.json`; Revision + Gate |
+| `dispo_api/api/schleppkettenprotokoll_pdf.php` | GET | `id`, `technician_id` → PDF-Binary (dompdf Querformat) |
+| `dispo_api/api/pruefzertifikat_save.php` | POST JSON | Hersteller-Prüfzertifikat Snapshot (Meta, `verfahren`, `ergebnisse`, Toleranz, Status) → `{ ok, zertifikat_id, zertifikat_nr }` |
+| `dispo_api/api/pruefzertifikat_prefill.php` | GET | `technician_id`, `job_id`, `fabrikationsnummer` → Prefill aus KW/SK/Service → `{ ok, prefill }` |
+| `dispo_api/api/pruefzertifikat_draft.php` | GET / POST | Zwischenstand `Dokumente_Monteur/pruefzertifikat.json`; Revision + Gate |
+| `dispo_api/api/pruefzertifikat_pdf.php` | GET | `id`, `technician_id`, optional `lang=de\|en` → PDF-Binary |
+
+**Laptop-Gateway (Schleppketten / Prüfzertifikat):**
+- `POST /api/schleppkettenprotokoll_save` — lokal JSON + PDF, optional Dispo-Save + Draft-Push
+- `GET/POST /api/protokolle/schleppketten` — lokaler Draft-Store
+- `GET /api/pruefzertifikat_prefill` — Dispo-Prefill mit lokalem Fallback
+- `POST /api/pruefzertifikat_save` — lokal + Dispo; `pdf_languages: ['de','en']` erzeugt je Sprache ein PDF
 
 **Upload:** `job_project_file_upload.php` prüft Job-Status (`in_arbeit`); sonst **409** `code: job_closed`. Antwort ergänzt `sha256`, `size_bytes`, `rel_path`, `revision`.
 
