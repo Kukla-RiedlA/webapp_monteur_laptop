@@ -38,11 +38,13 @@ export function useElectronBridge(
       const data = ev.data as BridgeMessage | undefined;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'SP_SYNC_STATE' && data.payload) {
+        // Länger unterdrücken als der Push-Debounce (120ms), sonst überschreibt
+        // ein alter leerer React-State die gerade aus dem Anlagenstamm gefüllten Felder.
         suppressPush.current = true;
         setState(data.payload);
-        queueMicrotask(() => {
+        window.setTimeout(() => {
           suppressPush.current = false;
-        });
+        }, 250);
       }
       if (data.type === 'SP_TOAST' && data.message) {
         console.info('[Serviceprotokoll]', data.message);

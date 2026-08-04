@@ -338,7 +338,7 @@ export function ServiceProtocolPage() {
             </SectionCard>
           </div>
 
-          <SectionCard number={5} title="Prüfgewichtstest / test with test load" icon="LineChart">
+          <SectionCard number={5} title="Prüfgewichtstest — Abweichung (%)" icon="LineChart">
             <TestLoadFields
               values={testLoad}
               onChange={(field, value) =>

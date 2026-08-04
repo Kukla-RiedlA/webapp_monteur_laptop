@@ -2112,7 +2112,7 @@
             </div>
             <p id="pruefzertifikatKundeHint" class="mb-v2-hint-block" hidden></p>
             <div class="sp-v2-fab-block" id="pruefzertifikatFabGroup" style="display:none">
-              <label>Fabrikationsnummer</label>
+              <label>Fabrikationsnummer <span class="muted" style="font-weight:normal">(Zertifikat für FN wählen)</span></label>
               <input type="hidden" id="pruefzertifikatFab" name="pruefzertifikatFab" value="">
               <div id="pruefzertifikatFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
               <p id="pruefzertifikatSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
@@ -2155,37 +2155,106 @@
         <section class="sp-v2-section" aria-labelledby="pzV2Sec3Title">
           <header class="sp-v2-section-head" id="pzV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Prüfverfahren &amp; Ergebnisse</header>
           <div class="sp-v2-section-body">
-            <div class="sp-v2-pdf-lang" style="margin-bottom:0.75rem" role="group" aria-label="Prüfverfahren">
+            <div class="sp-v2-pdf-lang pz-verfahren-toggles" style="margin-bottom:0.75rem" role="group" aria-label="Prüfverfahren">
               <span>Verfahren</span>
               <label><input type="checkbox" id="pzVerfahrenKw"> Kontrollwiegung</label>
               <label><input type="checkbox" id="pzVerfahrenSk"> Schleppketten-Test</label>
               <label><input type="checkbox" id="pzVerfahrenSp"> Serviceprotokoll</label>
             </div>
-            <div class="sp-v2-grid-3">
-              <div class="sp-v2-field">
-                <label for="pzKwFehler">Kontrollwiegung Fehler [%]</label>
-                <input type="text" id="pzKwFehler" inputmode="decimal" autocomplete="off">
+
+            <div class="pz-verfahren-blocks">
+              <div class="pz-verfahren-block" id="pzBlockKw" data-verfahren="kontrollwiegung" hidden>
+                <h3 class="pz-verfahren-block-title">Kontrollwiegung</h3>
+                <div class="sp-v2-grid-3">
+                  <div class="sp-v2-field">
+                    <label for="pzKwFehler">Fehler [%]</label>
+                    <input type="text" id="pzKwFehler" inputmode="decimal" autocomplete="off">
+                  </div>
+                  <div class="sp-v2-field">
+                    <label for="pzKwAnzahl">Anzahl</label>
+                    <input type="text" id="pzKwAnzahl" inputmode="numeric" autocomplete="off">
+                  </div>
+                  <div class="sp-v2-field">
+                    <label for="pzKwDatum">Datum</label>
+                    <input type="date" id="pzKwDatum">
+                  </div>
+                </div>
+                <div class="sp-v2-field" style="margin-top:0.65rem">
+                  <label for="pzLetzteEichung">Letzte Eichung Kontrollwaage</label>
+                  <input type="text" id="pzLetzteEichung" autocomplete="off">
+                </div>
               </div>
-              <div class="sp-v2-field">
-                <label for="pzKwAnzahl">KW Anzahl</label>
-                <input type="text" id="pzKwAnzahl" inputmode="numeric" autocomplete="off">
+
+              <div class="pz-verfahren-block" id="pzBlockSk" data-verfahren="schleppketten" hidden>
+                <h3 class="pz-verfahren-block-title">Schleppketten-Test</h3>
+                <div class="sp-v2-grid-3">
+                  <div class="sp-v2-field">
+                    <label for="pzSkFehler">Fehler [%]</label>
+                    <input type="text" id="pzSkFehler" inputmode="decimal" autocomplete="off">
+                  </div>
+                  <div class="sp-v2-field">
+                    <label for="pzSkAnzahl">Anzahl</label>
+                    <input type="text" id="pzSkAnzahl" inputmode="numeric" autocomplete="off">
+                  </div>
+                  <div class="sp-v2-field">
+                    <label for="pzSkDatum">Datum</label>
+                    <input type="date" id="pzSkDatum">
+                  </div>
+                </div>
               </div>
-              <div class="sp-v2-field">
-                <label for="pzKwDatum">KW Datum</label>
-                <input type="date" id="pzKwDatum">
+
+              <div class="pz-verfahren-block" id="pzBlockSp" data-verfahren="service" hidden>
+                <h3 class="pz-verfahren-block-title">Serviceprotokoll</h3>
+                <p class="pz-verfahren-block-hint muted" style="margin-bottom:0.65rem">Messwerte Wägezelle und Prüfgewichtstest aus dem Serviceprotokoll (editierbar).</p>
+                <div class="sp-mess-table-wrap pz-sp-mess-wrap">
+                  <table class="sp-mess-table" aria-label="Messwerte Wägezelle">
+                    <thead>
+                      <tr>
+                        <th scope="col">Messpunkt</th>
+                        <th scope="col">kg</th>
+                        <th scope="col">mV</th>
+                        <th scope="col">mA</th>
+                        <th scope="col">g %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <th scope="row">DMS entlastet / released</th>
+                        <td><input type="text" id="pzSpDmsKg" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzSpDmsMv" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzSpDmsMa" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzSpDmsG" autocomplete="off" inputmode="decimal"></td>
+                      </tr>
+                      <tr>
+                        <th scope="row">Tara / tare</th>
+                        <td><input type="text" id="pzSpTaraKg" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzSpTaraMv" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzSpTaraMa" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzSpTaraG" autocomplete="off" inputmode="decimal"></td>
+                      </tr>
+                      <tr>
+                        <th scope="row">Prüfgewicht / test load</th>
+                        <td><input type="text" id="pzSpPgKg" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzSpPgMv" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzSpPgMa" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzSpPgG" autocomplete="off" inputmode="decimal"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="sp-v2-pgtest-block" style="margin-top:0.75rem">
+                  <div class="sp-v2-pgtest-head">Prüfgewichtstest / test with test load — Abweichung (%)</div>
+                  <div class="sp-v2-pgtest-grid">
+                    <label class="sp-v2-pgtest-cell"><span>1 (%)</span><input type="text" id="pzSpPgTest1" autocomplete="off" inputmode="decimal" aria-label="Abweichung 1 (%)"></label>
+                    <label class="sp-v2-pgtest-cell"><span>2 (%)</span><input type="text" id="pzSpPgTest2" autocomplete="off" inputmode="decimal" aria-label="Abweichung 2 (%)"></label>
+                    <label class="sp-v2-pgtest-cell"><span>3 (%)</span><input type="text" id="pzSpPgTest3" autocomplete="off" inputmode="decimal" aria-label="Abweichung 3 (%)"></label>
+                    <label class="sp-v2-pgtest-cell"><span>4 (%)</span><input type="text" id="pzSpPgTest4" autocomplete="off" inputmode="decimal" aria-label="Abweichung 4 (%)"></label>
+                  </div>
+                </div>
               </div>
-              <div class="sp-v2-field">
-                <label for="pzSkFehler">Schleppketten Fehler [%]</label>
-                <input type="text" id="pzSkFehler" inputmode="decimal" autocomplete="off">
-              </div>
-              <div class="sp-v2-field">
-                <label for="pzSkAnzahl">SK Anzahl</label>
-                <input type="text" id="pzSkAnzahl" inputmode="numeric" autocomplete="off">
-              </div>
-              <div class="sp-v2-field">
-                <label for="pzSkDatum">SK Datum</label>
-                <input type="date" id="pzSkDatum">
-              </div>
+            </div>
+
+            <div class="sp-v2-grid-3" style="margin-top:0.85rem">
               <div class="sp-v2-field">
                 <label for="pzToleranz">Zulässige Abweichung [%]</label>
                 <input type="text" id="pzToleranz" value="0,5" inputmode="decimal" autocomplete="off">
@@ -2202,10 +2271,6 @@
             <div class="sp-v2-field">
               <label for="pzPruefmittel">Prüfmittel / Rückführbarkeit</label>
               <input type="text" id="pzPruefmittel" autocomplete="off" placeholder="Kontrollwaage / Schleppkette …">
-            </div>
-            <div class="sp-v2-field">
-              <label for="pzLetzteEichung">Letzte Eichung Kontrollwaage</label>
-              <input type="text" id="pzLetzteEichung" autocomplete="off">
             </div>
             <div class="sp-v2-field">
               <label for="pzBemerkungen">Bemerkungen</label>
@@ -2233,6 +2298,7 @@
             <div class="mb-v2-actions-row" style="margin-top:0.75rem">
               <button type="submit" class="btn btn-primary" id="btnPruefzertifikatSaveData" data-mode="data">Speichern (nur Daten)</button>
               <button type="submit" class="btn btn-primary" id="btnPruefzertifikatSavePdf" data-mode="pdf">PDF erstellen</button>
+              <button type="button" class="btn btn-primary" id="btnPruefzertifikatSaveAllPdf" style="display:none" title="Alle FNs – je FN PDF(s) im FN-Ordner">Alle PDF erstellen</button>
               <button type="button" class="btn btn-ghost" id="pruefzertifikatAbbrechen">Abbrechen</button>
             </div>
             <p id="pruefzertifikatStatusMsg" class="mb-v2-hint-block" hidden></p>
@@ -2406,12 +2472,12 @@
           <header class="sp-v2-section-head" id="spV2Sec5Title"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/chart-up-green.svg" alt="" aria-hidden="true"> Prüfgewichtstest</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-pgtest-card">
-              <div class="sp-v2-pgtest-head">Prüfgewichtstest / test with test load</div>
+              <div class="sp-v2-pgtest-head">Prüfgewichtstest / test with test load — Abweichung (%)</div>
               <div class="sp-v2-pgtest-row">
-                <input type="text" id="spMessPgTest1" autocomplete="off" inputmode="decimal" aria-label="Prüfgewicht (kg)">
-                <input type="text" id="spMessPgTest2" autocomplete="off" inputmode="decimal" aria-label="Anzeige (mV)">
-                <input type="text" id="spMessPgTest3" autocomplete="off" inputmode="decimal" aria-label="Abweichung (%)">
-                <input type="text" id="spMessPgTest4" autocomplete="off" inputmode="decimal" aria-label="Prüfgewichtstest Feld 4">
+                <label class="sp-v2-pgtest-cell"><span>1 (%)</span><input type="text" id="spMessPgTest1" autocomplete="off" inputmode="decimal" aria-label="Abweichung 1 (%)"></label>
+                <label class="sp-v2-pgtest-cell"><span>2 (%)</span><input type="text" id="spMessPgTest2" autocomplete="off" inputmode="decimal" aria-label="Abweichung 2 (%)"></label>
+                <label class="sp-v2-pgtest-cell"><span>3 (%)</span><input type="text" id="spMessPgTest3" autocomplete="off" inputmode="decimal" aria-label="Abweichung 3 (%)"></label>
+                <label class="sp-v2-pgtest-cell"><span>4 (%)</span><input type="text" id="spMessPgTest4" autocomplete="off" inputmode="decimal" aria-label="Abweichung 4 (%)"></label>
               </div>
             </div>
           </div>

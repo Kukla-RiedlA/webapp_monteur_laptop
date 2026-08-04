@@ -17824,6 +17824,60 @@
         ? ('FN ' + fab + ' · Gespeichert: ' + am)
         : ('FN ' + fab + ' · Noch nicht gespeichert');
     }
+    function readProjektFromFabRowPz(r) {
+      if (r == null) return '';
+      if (typeof r === 'object') {
+        var v = r.projekt != null ? r.projekt : (r.Projekt != null ? r.Projekt : (r.project != null ? r.project : ''));
+        return String(v).replace(/\s+/g, ' ').trim();
+      }
+      return '';
+    }
+    function resolvePruefzertifikatProjekt(job, fab) {
+      if (!job || !job.fabrikationsnummern) return '';
+      try {
+        var parsed = JSON.parse(job.fabrikationsnummern);
+        if (!Array.isArray(parsed) || !parsed.length) return '';
+        var fabKey = String(fab || '').trim();
+        if (fabKey) {
+          for (var i = 0; i < parsed.length; i++) {
+            var rowFn = (parsed[i] && parsed[i].fabrikationsnummer) ? String(parsed[i].fabrikationsnummer).trim() : '';
+            if (rowFn === fabKey) return readProjektFromFabRowPz(parsed[i]);
+          }
+        }
+        var projs = parsed.map(readProjektFromFabRowPz).filter(function (p) { return p !== ''; });
+        if (!projs.length) return '';
+        var first = projs[0];
+        for (var j = 1; j < projs.length; j++) {
+          if (projs[j] !== first) return '';
+        }
+        return first;
+      } catch (e) {
+        return '';
+      }
+    }
+    async function fillProjektFromAnlagenstamm(fab) {
+      var projEl = el('pruefzertifikatProjekt');
+      if (!projEl) return;
+      var fromJob = resolvePruefzertifikatProjekt(pzJobData, fab);
+      var fromLookup = '';
+      fab = String(fab || '').trim();
+      if (fab) {
+        try {
+          var r = await fetch(API_BASE + '/api/anlagenstamm_lookup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+            body: JSON.stringify({ fab: fab, local_only: 1 })
+          });
+          var data = await r.json().catch(function () { return {}; });
+          var row = data && data.ok ? (data.row || data.anlage) : null;
+          if (row && row.projekt != null && String(row.projekt).trim()) {
+            fromLookup = String(row.projekt).trim();
+          }
+        } catch (_) { /* optional */ }
+      }
+      var best = fromLookup || fromJob;
+      if (best) projEl.value = best;
+    }
     function collectPdfLanguages() {
       var langs = [];
       if (el('pzPdfDe') && el('pzPdfDe').checked) langs.push('de');
@@ -17834,16 +17888,82 @@
       var tol = parseNum(el('pzToleranz') && el('pzToleranz').value);
       if (tol == null) tol = 0.5;
       var errs = [];
-      var kw = parseNum(el('pzKwFehler') && el('pzKwFehler').value);
-      var sk = parseNum(el('pzSkFehler') && el('pzSkFehler').value);
-      if (kw != null) errs.push(Math.abs(kw));
-      if (sk != null) errs.push(Math.abs(sk));
+      if (el('pzVerfahrenKw') && el('pzVerfahrenKw').checked) {
+        var kw = parseNum(el('pzKwFehler') && el('pzKwFehler').value);
+        if (kw != null) errs.push(Math.abs(kw));
+      }
+      if (el('pzVerfahrenSk') && el('pzVerfahrenSk').checked) {
+        var sk = parseNum(el('pzSkFehler') && el('pzSkFehler').value);
+        if (sk != null) errs.push(Math.abs(sk));
+      }
       if (!errs.length) {
         if (el('pzStatus')) el('pzStatus').value = '';
         return;
       }
       var ok = Math.max.apply(null, errs) <= tol;
       if (el('pzStatus')) el('pzStatus').value = ok ? '1' : '0';
+    }
+    function syncVerfahrenBlocksVisibility() {
+      var kwOn = !!(el('pzVerfahrenKw') && el('pzVerfahrenKw').checked);
+      var skOn = !!(el('pzVerfahrenSk') && el('pzVerfahrenSk').checked);
+      var spOn = !!(el('pzVerfahrenSp') && el('pzVerfahrenSp').checked);
+      var blockKw = el('pzBlockKw');
+      var blockSk = el('pzBlockSk');
+      var blockSp = el('pzBlockSp');
+      if (blockKw) blockKw.hidden = !kwOn;
+      if (blockSk) blockSk.hidden = !skOn;
+      if (blockSp) blockSp.hidden = !spOn;
+      recomputeStatus();
+    }
+    function collectServiceMessFromForm() {
+      function cell(kgId, mvId, maId, gId) {
+        return {
+          kg: el(kgId) ? String(el(kgId).value || '').trim() : '',
+          mv: el(mvId) ? String(el(mvId).value || '').trim() : '',
+          ma: el(maId) ? String(el(maId).value || '').trim() : '',
+          g_prozent: el(gId) ? String(el(gId).value || '').trim() : ''
+        };
+      }
+      var matrix = {
+        dms: cell('pzSpDmsKg', 'pzSpDmsMv', 'pzSpDmsMa', 'pzSpDmsG'),
+        tara: cell('pzSpTaraKg', 'pzSpTaraMv', 'pzSpTaraMa', 'pzSpTaraG'),
+        pruefgewicht: cell('pzSpPgKg', 'pzSpPgMv', 'pzSpPgMa', 'pzSpPgG')
+      };
+      var pg = [
+        el('pzSpPgTest1') ? String(el('pzSpPgTest1').value || '').trim() : '',
+        el('pzSpPgTest2') ? String(el('pzSpPgTest2').value || '').trim() : '',
+        el('pzSpPgTest3') ? String(el('pzSpPgTest3').value || '').trim() : '',
+        el('pzSpPgTest4') ? String(el('pzSpPgTest4').value || '').trim() : ''
+      ];
+      var hasMatrix = ['dms', 'tara', 'pruefgewicht'].some(function (k) {
+        var r = matrix[k];
+        return r && (r.kg || r.mv || r.ma || r.g_prozent);
+      });
+      var hasPg = pg.some(function (v) { return !!v; });
+      if (!hasMatrix && !hasPg) return undefined;
+      return { mess_matrix: matrix, pruefgewichtstest: pg };
+    }
+    function applyServiceMessToForm(service) {
+      service = service || {};
+      var empty = { kg: '', mv: '', ma: '', g_prozent: '' };
+      var mm = service.mess_matrix && typeof service.mess_matrix === 'object' ? service.mess_matrix : {};
+      var dms = Object.assign({}, empty, mm.dms || {});
+      var tara = Object.assign({}, empty, mm.tara || {});
+      var pgRow = Object.assign({}, empty, mm.pruefgewicht || {});
+      function setCell(prefix, row) {
+        if (el(prefix + 'Kg')) el(prefix + 'Kg').value = row.kg || '';
+        if (el(prefix + 'Mv')) el(prefix + 'Mv').value = row.mv || '';
+        if (el(prefix + 'Ma')) el(prefix + 'Ma').value = row.ma || '';
+        if (el(prefix + 'G')) el(prefix + 'G').value = row.g_prozent || '';
+      }
+      setCell('pzSpDms', dms);
+      setCell('pzSpTara', tara);
+      setCell('pzSpPg', pgRow);
+      var pg = Array.isArray(service.pruefgewichtstest) ? service.pruefgewichtstest : ['', '', '', ''];
+      if (el('pzSpPgTest1')) el('pzSpPgTest1').value = pg[0] != null ? String(pg[0]) : '';
+      if (el('pzSpPgTest2')) el('pzSpPgTest2').value = pg[1] != null ? String(pg[1]) : '';
+      if (el('pzSpPgTest3')) el('pzSpPgTest3').value = pg[2] != null ? String(pg[2]) : '';
+      if (el('pzSpPgTest4')) el('pzSpPgTest4').value = pg[3] != null ? String(pg[3]) : '';
     }
     function collectPayload() {
       var statusVal = el('pzStatus') ? el('pzStatus').value : '';
@@ -17876,12 +17996,15 @@
             fehler_prozent: parseNum(el('pzSkFehler') && el('pzSkFehler').value),
             anzahl: parseNum(el('pzSkAnzahl') && el('pzSkAnzahl').value),
             datum: el('pzSkDatum') ? el('pzSkDatum').value : ''
-          } : undefined
+          } : undefined,
+          service: (el('pzVerfahrenSp') && el('pzVerfahrenSp').checked) ? collectServiceMessFromForm() : undefined
         },
         zulaessige_abweichung_pct: parseNum(el('pzToleranz') && el('pzToleranz').value),
         status_bestanden: statusBestanden,
         pruefmittel: el('pzPruefmittel') ? el('pzPruefmittel').value.trim() : '',
-        letzte_eichung_kontrollwaage: el('pzLetzteEichung') ? el('pzLetzteEichung').value.trim() : '',
+        letzte_eichung_kontrollwaage: (el('pzVerfahrenKw') && el('pzVerfahrenKw').checked && el('pzLetzteEichung'))
+          ? el('pzLetzteEichung').value.trim()
+          : '',
         bemerkungen: el('pzBemerkungen') ? el('pzBemerkungen').value.trim() : '',
         konformitaet_text: el('pzKonformitaet') ? el('pzKonformitaet').value.trim() : '',
         kunde_unterschrift: el('pzKundeUnterschrift') ? el('pzKundeUnterschrift').value.trim() : '',
@@ -17920,6 +18043,7 @@
       if (el('pzSkFehler')) el('pzSkFehler').value = formatPctDisplay(sk.fehler_prozent);
       if (el('pzSkAnzahl')) el('pzSkAnzahl').value = sk.anzahl != null ? String(sk.anzahl) : '';
       if (el('pzSkDatum')) el('pzSkDatum').value = sk.datum || '';
+      applyServiceMessToForm((p.ergebnisse && p.ergebnisse.service) || {});
       if (el('pzToleranz')) el('pzToleranz').value = formatPctDisplay(p.zulaessige_abweichung_pct != null ? p.zulaessige_abweichung_pct : 0.5);
       if (el('pzStatus')) {
         if (p.status_bestanden === true || p.status_bestanden === 1) el('pzStatus').value = '1';
@@ -17931,46 +18055,79 @@
       if (el('pzBemerkungen')) el('pzBemerkungen').value = p.bemerkungen || '';
       if (el('pzKonformitaet')) el('pzKonformitaet').value = p.konformitaet_text || '';
       if (el('pzKundeUnterschrift')) el('pzKundeUnterschrift').value = p.kunde_unterschrift || '';
-      recomputeStatus();
+      syncVerfahrenBlocksVisibility();
+    }
+    function renderFabButtonsActive() {
+      if (!fabButtonsEl) return;
+      fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
+        var fn = btn.getAttribute('data-fab') || '';
+        btn.classList.toggle('is-active', fn === getActiveFab());
+      });
+    }
+    function updateAllPdfButtonVisibility(job) {
+      var allPdfBtn = el('btnPruefzertifikatSaveAllPdf');
+      if (!allPdfBtn) return;
+      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+        ? parseJobFabrikationsnummernOrdered(job || {})
+        : [];
+      allPdfBtn.style.display = fns.length >= 2 ? 'inline-block' : 'none';
     }
     function renderFabButtons(job) {
-      if (!fabButtonsEl || !fabGroupEl) return;
+      if (!fabButtonsEl) return;
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(job || {}) : [];
+      if (fabGroupEl) fabGroupEl.style.display = fns.length ? 'block' : 'none';
+      updateAllPdfButtonVisibility(job);
+      fabButtonsEl.innerHTML = '';
       if (!fns.length) {
-        fabGroupEl.style.display = 'none';
         setActiveFabValue('');
         return;
       }
-      fabGroupEl.style.display = '';
-      fabButtonsEl.innerHTML = fns.map(function (fn) {
-        var active = fn === getActiveFab() ? ' is-active' : '';
-        return '<button type="button" class="sp-fab-btn' + active + '" data-fab="' + escapeHtml(fn) + '">' + escapeHtml(fn) + '</button>';
-      }).join('');
-      fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
+      fns.forEach(function (fn) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        var draft = pzDraftByFab[fn];
+        var savedAt = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
+        btn.className = 'btn btn-ghost sp-fab-btn' + (fn === getActiveFab() ? ' is-active' : '') + (savedAt ? ' is-saved' : '');
+        btn.setAttribute('data-fab', fn);
+        btn.textContent = fn;
+        btn.title = savedAt
+          ? ('FN ' + fn + ' · Gespeichert')
+          : ('FN ' + fn + ' · Zertifikat für diese Fabrikationsnummer');
         btn.addEventListener('click', function () {
-          var fab = btn.getAttribute('data-fab') || '';
-          if (fab === getActiveFab()) return;
-          pzDraftByFab[getActiveFab()] = collectPayload();
-          setActiveFabValue(fab);
-          renderFabButtons(pzJobData);
-          loadFab(fab);
+          switchPruefzertifikatFab(fn);
         });
+        fabButtonsEl.appendChild(btn);
       });
+    }
+    async function switchPruefzertifikatFab(newFab) {
+      newFab = newFab ? String(newFab).trim() : '';
+      if (!newFab) return;
+      var cur = getActiveFab();
+      if (cur === newFab) return;
+      if (cur) pzDraftByFab[cur] = Object.assign({}, collectPayload(), { fabrikationsnummer: cur });
+      setActiveFabValue(newFab);
+      renderFabButtonsActive();
+      await loadFab(newFab);
     }
     async function loadFab(fab) {
       fab = String(fab || '').trim();
       setActiveFabValue(fab);
+      renderFabButtonsActive();
       if (!fab || !pzJobData) return;
-      if (pzDraftByFab[fab]) {
+      if (pzDraftByFab[fab] && (pzDraftByFab[fab].zertifikat_nr || pzDraftByFab[fab].pruefdatum || pzDraftByFab[fab].ergebnisse)) {
         applyPrefill(Object.assign({}, pzDraftByFab[fab], { fabrikationsnummer: fab }));
+        await fillProjektFromAnlagenstamm(fab);
         updateSpeicherMeta(fab, pzDraftByFab[fab]);
         return;
       }
-      await runPrefill(fab);
+      await runPrefill(fab, true);
     }
-    async function runPrefill(fab) {
+    async function runPrefill(fab, silent) {
       fab = fab || getActiveFab();
-      if (!fab || !pzJobData) { alert('Bitte Auftrag und FN wählen.'); return; }
+      if (!fab || !pzJobData) {
+        if (!silent) alert('Bitte Auftrag und FN wählen.');
+        return;
+      }
       var qs =
         'job_id=' + encodeURIComponent(pzJobData.id) +
         '&fabrikationsnummer=' + encodeURIComponent(fab) +
@@ -17984,39 +18141,98 @@
         var data = await r.json().catch(function () { return {}; });
         if (r.ok && data.ok && data.prefill) {
           applyPrefill(data.prefill);
-          pzDraftByFab[fab] = collectPayload();
+          await fillProjektFromAnlagenstamm(fab);
+          pzDraftByFab[fab] = Object.assign({}, collectPayload(), { fabrikationsnummer: fab });
           updateSpeicherMeta(fab, pzDraftByFab[fab]);
           setStatusMsg('Daten aus Protokollen übernommen.', true);
           return;
         }
-        setStatusMsg((data && data.error) || 'Prefill ohne Ergebnis.', true);
+        // Mindest-Vorbelegung wenn Prefill leer
+        if (!el('pruefzertifikatDatum') || !el('pruefzertifikatDatum').value) {
+          if (el('pruefzertifikatDatum')) el('pruefzertifikatDatum').value = todayIsoLocal();
+          if (el('pruefzertifikatNaechste')) el('pruefzertifikatNaechste').value = plusMonthsIso(todayIsoLocal(), 12);
+        }
+        if (el('pruefzertifikatNr') && !el('pruefzertifikatNr').value) {
+          el('pruefzertifikatNr').value = 'PZ-' + fab + '-' + String(el('pruefzertifikatDatum').value || '').replace(/-/g, '');
+        }
+        if (el('pruefzertifikatMonteur') && !el('pruefzertifikatMonteur').value) {
+          el('pruefzertifikatMonteur').value = defaultMonteurName();
+        }
+        if (el('pruefzertifikatKunde') && !el('pruefzertifikatKunde').value && pzJobData.customer_name) {
+          el('pruefzertifikatKunde').value = pzJobData.customer_name;
+        }
+        await fillProjektFromAnlagenstamm(fab);
+        updateSpeicherMeta(fab, null);
+        if (!silent) setStatusMsg((data && data.error) || 'Prefill ohne Protokolldaten – Formular manuell prüfen.', true);
       } catch (e) {
-        setStatusMsg('Prefill-Fehler: ' + (e && e.message ? e.message : 'Unbekannt'), true);
+        if (!silent) setStatusMsg('Prefill-Fehler: ' + (e && e.message ? e.message : 'Unbekannt'), true);
       }
     }
+    async function loadJobs() {
+      return typeof fetchMyAssignedJobs === 'function' ? fetchMyAssignedJobs() : [];
+    }
+    async function loadJobWithAnlagenstammPz(jobId) {
+      var baseUrl = getDispoBaseUrl();
+      var techId = getTechId();
+      var headers = Object.assign(
+        { 'X-Technician-Id': String(techId) },
+        typeof dispoBasicAuthHeaders === 'function' ? dispoBasicAuthHeaders(getDispoUsername, getDispoPassword) : {}
+      );
+      var localUrl =
+        API_BASE +
+        '/api/job?id=' +
+        encodeURIComponent(jobId) +
+        '&technician_id=' +
+        encodeURIComponent(techId) +
+        '&enrich_anlagenstamm=1&enrich_local_only=1&base_url=' +
+        encodeURIComponent(baseUrl || '');
+      try {
+        var localRes = await fetch(localUrl, { headers: headers });
+        var localData = await localRes.json().catch(function () { return {}; });
+        if (localRes.ok && localData.ok && localData.job) {
+          return localData.job;
+        }
+      } catch (e) { /* Fallback */ }
+      var url =
+        API_BASE +
+        '/api/job?id=' +
+        encodeURIComponent(jobId) +
+        '&technician_id=' +
+        encodeURIComponent(techId) +
+        '&enrich_anlagenstamm=1&base_url=' +
+        encodeURIComponent(baseUrl || '');
+      var r = await fetch(url, { headers: headers });
+      var data = await r.json();
+      return data.job;
+    }
     async function applyJobSelection(jobId) {
-      pzJobData = null;
       pzDraftByFab = {};
       linkedIds = {};
       setActiveFabValue('');
+      setStatusMsg('', false);
       if (!jobId) {
+        pzJobData = null;
         if (fabGroupEl) fabGroupEl.style.display = 'none';
+        if (fabButtonsEl) fabButtonsEl.innerHTML = '';
+        updateAllPdfButtonVisibility(null);
         if (hintEl) hintEl.hidden = true;
+        updateSpeicherMeta('', null);
         return;
       }
-      var jobs = await loadJobs();
-      pzJobData = (jobs || []).find(function (j) { return Number(j.id) === Number(jobId); }) || null;
-      if (!pzJobData) return;
+      pzJobData = await loadJobWithAnlagenstammPz(jobId);
+      if (!pzJobData) {
+        if (hintEl) {
+          hintEl.hidden = false;
+          hintEl.textContent = 'Auftrag konnte nicht geladen werden.';
+        }
+        return;
+      }
       if (hintEl) {
         hintEl.hidden = false;
         hintEl.textContent = (pzJobData.customer_name || '') + (pzJobData.job_number ? (' · ' + pzJobData.job_number) : '');
       }
-      if (el('pruefzertifikatKunde') && !el('pruefzertifikatKunde').value) {
-        el('pruefzertifikatKunde').value = pzJobData.customer_name || '';
-      }
-      if (el('pruefzertifikatProjekt') && !el('pruefzertifikatProjekt').value) {
-        el('pruefzertifikatProjekt').value = pzJobData.job_number || '';
-      }
+      if (el('pruefzertifikatKunde')) el('pruefzertifikatKunde').value = pzJobData.customer_name || '';
+      if (el('pruefzertifikatProjekt')) el('pruefzertifikatProjekt').value = '';
       try {
         var storeRes = await fetch(API_BASE + '/api/protokolle/pruefzertifikat?job_id=' + encodeURIComponent(jobId), {
           headers: { 'X-Technician-Id': String(getTechId()) }
@@ -18034,10 +18250,12 @@
           if (pzDraftByFab[fns[i]]) { preferred = fns[i]; break; }
         }
         await loadFab(preferred || fns[0]);
-      } else if (el('pruefzertifikatDatum') && !el('pruefzertifikatDatum').value) {
-        el('pruefzertifikatDatum').value = todayIsoLocal();
-        if (el('pruefzertifikatNaechste')) el('pruefzertifikatNaechste').value = plusMonthsIso(todayIsoLocal(), 12);
-        if (el('pruefzertifikatMonteur')) el('pruefzertifikatMonteur').value = defaultMonteurName();
+      } else {
+        if (el('pruefzertifikatDatum') && !el('pruefzertifikatDatum').value) el('pruefzertifikatDatum').value = todayIsoLocal();
+        if (el('pruefzertifikatNaechste') && !el('pruefzertifikatNaechste').value) el('pruefzertifikatNaechste').value = plusMonthsIso(todayIsoLocal(), 12);
+        if (el('pruefzertifikatMonteur') && !el('pruefzertifikatMonteur').value) el('pruefzertifikatMonteur').value = defaultMonteurName();
+        updateSpeicherMeta('', null);
+        setStatusMsg('Keine Fabrikationsnummer am Auftrag hinterlegt.', true);
       }
     }
 
@@ -18054,12 +18272,138 @@
       if (node) node.addEventListener('change', recomputeStatus);
       if (node) node.addEventListener('input', recomputeStatus);
     });
+    ['pzVerfahrenKw', 'pzVerfahrenSk', 'pzVerfahrenSp'].forEach(function (id) {
+      var node = el(id);
+      if (node) node.addEventListener('change', syncVerfahrenBlocksVisibility);
+    });
+    syncVerfahrenBlocksVisibility();
+    async function savePruefzertifikatFab(fab, opts) {
+      opts = opts || {};
+      var withPdf = !!opts.withPdf;
+      var silent = !!opts.silent;
+      fab = String(fab || '').trim();
+      if (!pzJobData || !fab) {
+        return { ok: false, error: 'Auftrag und FN erforderlich.' };
+      }
+      var datum = el('pruefzertifikatDatum') ? el('pruefzertifikatDatum').value : '';
+      if (!datum) {
+        return { ok: false, error: 'Bitte Prüfdatum angeben (FN ' + fab + ').' };
+      }
+      recomputeStatus();
+      var pdfLangs = withPdf ? collectPdfLanguages() : [];
+      if (withPdf && !pdfLangs.length) {
+        return { ok: false, error: 'Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).' };
+      }
+      var draft = collectPayload();
+      pzDraftByFab[fab] = Object.assign({}, draft, {
+        fabrikationsnummer: fab,
+        gespeichert_am: new Date().toISOString()
+      });
+      var body = Object.assign({}, draft, {
+        technician_id: getTechId(),
+        job_id: parseInt(jobSelect.value, 10),
+        fabrikationsnummer: fab,
+        create_pdf: withPdf,
+        pdf_languages: pdfLangs,
+        base_url: getDispoBaseUrl(),
+        serverUsername: getDispoUsername(),
+        serverPassword: getDispoPassword()
+      });
+      var r = await fetch(API_BASE + '/api/pruefzertifikat_save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        return { ok: false, error: (data && data.error) || ('Speichern fehlgeschlagen (FN ' + fab + ').') };
+      }
+      if (data.zertifikat_nr && el('pruefzertifikatNr') && getActiveFab() === fab) {
+        el('pruefzertifikatNr').value = data.zertifikat_nr;
+      }
+      updateSpeicherMeta(fab, pzDraftByFab[fab]);
+      if (!silent) {
+        var msg = withPdf
+          ? ('PDF erstellt' + (data.saved_pdfs && data.saved_pdfs.length
+            ? (': ' + data.saved_pdfs.map(function (p) { return p.name || p.rel; }).join(', '))
+            : ''))
+          : 'Prüfzertifikat gespeichert.';
+        setStatusMsg(msg, true);
+        if (typeof showToast === 'function') showToast(msg);
+      }
+      return { ok: true, data: data, fab: fab };
+    }
+
     var btnPrefill = el('btnPruefzertifikatPrefill');
-    if (btnPrefill) btnPrefill.addEventListener('click', function () { runPrefill(); });
+    if (btnPrefill) btnPrefill.addEventListener('click', function () { runPrefill(getActiveFab(), false); });
     var btnPdf = el('btnPruefzertifikatSavePdf');
     var btnData = el('btnPruefzertifikatSaveData');
     if (btnPdf) btnPdf.addEventListener('click', function () { saveMode = 'pdf'; });
     if (btnData) btnData.addEventListener('click', function () { saveMode = 'data'; });
+    var btnAllPdf = el('btnPruefzertifikatSaveAllPdf');
+    if (btnAllPdf) {
+      btnAllPdf.addEventListener('click', async function () {
+        if (!pzJobData || !jobSelect.value) {
+          alert('Bitte Auftrag wählen.');
+          return;
+        }
+        var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+          ? parseJobFabrikationsnummernOrdered(pzJobData)
+          : [];
+        if (fns.length < 2) {
+          alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
+          return;
+        }
+        var pdfLangs = collectPdfLanguages();
+        if (!pdfLangs.length) {
+          alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).');
+          return;
+        }
+        var cur = getActiveFab();
+        if (cur) {
+          pzDraftByFab[cur] = Object.assign({}, collectPayload(), { fabrikationsnummer: cur });
+        }
+        btnAllPdf.disabled = true;
+        var okCount = 0;
+        var savedNames = [];
+        var errors = [];
+        try {
+          for (var i = 0; i < fns.length; i++) {
+            var fn = fns[i];
+            setStatusMsg('PDF für FN ' + fn + ' (' + (i + 1) + '/' + fns.length + ') …', true);
+            await loadFab(fn);
+            if (!(el('pruefzertifikatDatum') && el('pruefzertifikatDatum').value)) {
+              errors.push(fn + ': kein Prüfdatum');
+              continue;
+            }
+            var res = await savePruefzertifikatFab(fn, { withPdf: true, silent: true });
+            if (!res.ok) {
+              errors.push(fn + ': ' + (res.error || 'Fehler'));
+              continue;
+            }
+            okCount += 1;
+            if (res.data && Array.isArray(res.data.saved_pdfs)) {
+              res.data.saved_pdfs.forEach(function (p) {
+                if (p && (p.name || p.rel)) savedNames.push(p.name || p.rel);
+              });
+            }
+          }
+          if (cur) await loadFab(cur);
+          else if (fns[0]) await loadFab(fns[0]);
+          renderFabButtons(pzJobData);
+          var msg = okCount + ' von ' + fns.length + ' FN mit PDF gespeichert.';
+          if (savedNames.length) msg += ' ' + savedNames.join(', ');
+          if (errors.length) msg += ' Fehler: ' + errors.join('; ');
+          setStatusMsg(msg, true);
+          if (typeof showToast === 'function') showToast(msg);
+          if (errors.length && okCount === 0) alert(msg);
+        } catch (err) {
+          alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+        } finally {
+          btnAllPdf.disabled = false;
+        }
+      });
+    }
     var abbrechen = el('pruefzertifikatAbbrechen');
     if (abbrechen) {
       abbrechen.addEventListener('click', function () {
@@ -18071,44 +18415,13 @@
       if (!pzJobData) { alert('Bitte Auftrag wählen.'); return; }
       var fab = getActiveFab();
       if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
-      var datum = el('pruefzertifikatDatum') ? el('pruefzertifikatDatum').value : '';
-      if (!datum) { alert('Bitte Prüfdatum angeben.'); return; }
-      recomputeStatus();
-      var pdfLangs = saveMode === 'pdf' ? collectPdfLanguages() : [];
-      if (saveMode === 'pdf' && !pdfLangs.length) {
-        alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).');
-        return;
-      }
-      var draft = collectPayload();
-      pzDraftByFab[fab] = draft;
-      var body = Object.assign({}, draft, {
-        technician_id: getTechId(),
-        job_id: parseInt(jobSelect.value, 10),
-        fabrikationsnummer: fab,
-        create_pdf: saveMode === 'pdf',
-        pdf_languages: pdfLangs,
-        base_url: getDispoBaseUrl(),
-        serverUsername: getDispoUsername(),
-        serverPassword: getDispoPassword()
-      });
       try {
-        var r = await fetch(API_BASE + '/api/pruefzertifikat_save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-          body: JSON.stringify(body)
-        });
-        var data = await r.json().catch(function () { return {}; });
-        if (!r.ok || !data.ok) {
-          alert((data && data.error) || 'Speichern fehlgeschlagen.');
+        var res = await savePruefzertifikatFab(fab, { withPdf: saveMode === 'pdf', silent: false });
+        if (!res.ok) {
+          alert(res.error || 'Speichern fehlgeschlagen.');
           return;
         }
-        if (data.zertifikat_nr && el('pruefzertifikatNr')) el('pruefzertifikatNr').value = data.zertifikat_nr;
-        updateSpeicherMeta(fab, Object.assign({}, draft, { gespeichert_am: new Date().toISOString() }));
-        var msg = saveMode === 'pdf'
-          ? ('PDF erstellt' + (data.saved_pdfs && data.saved_pdfs.length ? (': ' + data.saved_pdfs.map(function (p) { return p.name || p.rel; }).join(', ')) : ''))
-          : 'Prüfzertifikat gespeichert.';
-        setStatusMsg(msg, true);
-        if (typeof showToast === 'function') showToast(msg);
+        renderFabButtons(pzJobData);
       } catch (err) {
         alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
       } finally {
@@ -18119,20 +18432,20 @@
     window.openProtokollePruefzertifikat = function () {
       loadJobs().then(function (jobs) {
         jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
-          jobs.map(function (j) {
+          (jobs || []).map(function (j) {
             return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
           }).join('');
-        var defaultJobId = typeof resolveTodayProtokollJobId === 'function' ? resolveTodayProtokollJobId(jobs) : 0;
+        var defaultJobId = typeof resolveTodayProtokollJobId === 'function' ? resolveTodayProtokollJobId(jobs || []) : 0;
         if (defaultJobId) {
-          jobSelect.value = defaultJobId;
-          jobSelect.dispatchEvent(new Event('change', { bubbles: true }));
-        } else {
-          applyJobSelection(0);
-          if (el('pruefzertifikatDatum') && !el('pruefzertifikatDatum').value) el('pruefzertifikatDatum').value = todayIsoLocal();
-          if (el('pruefzertifikatNaechste') && !el('pruefzertifikatNaechste').value) el('pruefzertifikatNaechste').value = plusMonthsIso(todayIsoLocal(), 12);
-          if (el('pruefzertifikatMonteur') && !el('pruefzertifikatMonteur').value) el('pruefzertifikatMonteur').value = defaultMonteurName();
+          jobSelect.value = String(defaultJobId);
+          return applyJobSelection(defaultJobId);
         }
-        setStatusMsg('', false);
+        return applyJobSelection(0);
+      }).catch(function (e) {
+        if (hintEl) {
+          hintEl.hidden = false;
+          hintEl.textContent = 'Aufträge laden fehlgeschlagen: ' + (e && e.message ? e.message : 'Unbekannt');
+        }
       });
     };
   })();
@@ -18821,10 +19134,17 @@
       }
       var vers = '';
       var sens = '';
-      if (apiMess && apiMess.mess_vers_spannung != null) vers = String(apiMess.mess_vers_spannung).trim();
-      else if (jobKopf && jobKopf.vers_spannung) vers = String(jobKopf.vers_spannung).trim();
-      if (apiMess && apiMess.mess_sensitivitaet != null) sens = String(apiMess.mess_sensitivitaet).trim();
-      else if (jobKopf && jobKopf.sensitivitaet) sens = String(jobKopf.sensitivitaet).trim();
+      // Leere Strings nicht als „gesetzt“ werten — sonst greifen Job-/Stamm-Fallbacks nie.
+      if (apiMess && apiMess.mess_vers_spannung != null && String(apiMess.mess_vers_spannung).trim() !== '') {
+        vers = String(apiMess.mess_vers_spannung).trim();
+      } else if (jobKopf && jobKopf.vers_spannung) {
+        vers = String(jobKopf.vers_spannung).trim();
+      }
+      if (apiMess && apiMess.mess_sensitivitaet != null && String(apiMess.mess_sensitivitaet).trim() !== '') {
+        sens = String(apiMess.mess_sensitivitaet).trim();
+      } else if (jobKopf && jobKopf.sensitivitaet) {
+        sens = String(jobKopf.sensitivitaet).trim();
+      }
       var cells = [{
         id: '1',
         type: type,
@@ -19140,7 +19460,8 @@
       ];
       messMap.forEach(function (pair) {
         var el = document.getElementById(pair[0]);
-        if (el && pair[1] != null) el.value = pair[1];
+        // Leere Draft-Werte nicht schreiben — sonst bleiben Vers/Sens leer trotz Anlagenstamm.
+        if (el && pair[1] != null && String(pair[1]).trim() !== '') el.value = pair[1];
       });
       var draftCells = [{
         id: '1',
@@ -19161,7 +19482,12 @@
           sensitivity: String((ex && ex.sensitivitaet) || '').trim()
         });
       });
-      applySpLoadCellsToForm(draftCells);
+      // Nur Zellen mit Inhalt anwenden — leere Vers/Sens nicht als „gesetzt“ speichern.
+      if (draftCells.some(function (c) {
+        return c.type || c.serialNumber || c.position || c.supplyVoltage || c.sensitivity;
+      })) {
+        applySpLoadCellsToForm(draftCells);
+      }
       applyPgTestToForm(normalizePgTestCells(mess));
       applyMessMatrixToForm(normalizeMessMatrix(mess));
       updateVersSpannungHint();
@@ -19467,21 +19793,20 @@
 
     function applyMessTypeFromStamm(apiKopf, jobKopf) {
       var cells = collectSpLoadCellsFromForm();
-      var firstEmpty = !cells[0] || (!cells[0].type && !cells[0].serialNumber && !cells[0].position && !cells[0].supplyVoltage && !cells[0].sensitivity);
-      if (!firstEmpty && cells.length > 1) return;
       var fromStamm = loadCellsFromStammMess(apiKopf, jobKopf);
-      if (firstEmpty || cells.length === 1) {
-        if (!cells[0]) cells[0] = { id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' };
-        if (!(cells[0].type || '').trim()) cells[0].type = fromStamm[0].type;
-        if (!(cells[0].serialNumber || '').trim()) cells[0].serialNumber = fromStamm[0].serialNumber;
-        if (!(cells[0].position || '').trim()) cells[0].position = fromStamm[0].position;
-        if (!(cells[0].supplyVoltage || '').trim()) cells[0].supplyVoltage = fromStamm[0].supplyVoltage;
-        if (!(cells[0].sensitivity || '').trim()) cells[0].sensitivity = fromStamm[0].sensitivity;
-        if (cells.length === 1 && fromStamm.length > 1) {
-          cells = cells.concat(fromStamm.slice(1));
-        }
-        applySpLoadCellsToForm(cells);
+      if (!fromStamm || !fromStamm.length) return;
+      if (!cells[0]) cells[0] = { id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' };
+      // Leere Felder der primären Wägezelle immer aus Stamm nachziehen (auch bei weiteren Zellen).
+      if (!(cells[0].type || '').trim()) cells[0].type = fromStamm[0].type;
+      if (!(cells[0].serialNumber || '').trim()) cells[0].serialNumber = fromStamm[0].serialNumber;
+      if (!(cells[0].position || '').trim()) cells[0].position = fromStamm[0].position;
+      if (!(cells[0].supplyVoltage || '').trim()) cells[0].supplyVoltage = fromStamm[0].supplyVoltage;
+      if (!(cells[0].sensitivity || '').trim()) cells[0].sensitivity = fromStamm[0].sensitivity;
+      if (cells.length === 1 && fromStamm.length > 1) {
+        cells = cells.concat(fromStamm.slice(1));
       }
+      applySpLoadCellsToForm(cells);
+      updateVersSpannungHint();
     }
 
     async function applyAnlagenstammFelderFromLocalStamm(fab, opts) {
@@ -19524,6 +19849,8 @@
             kraftaufnehmer: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
             dms_nr: row.dms_nr != null ? String(row.dms_nr).trim() : '',
             dms_position: row.dms_position != null ? String(row.dms_position).trim() : '',
+            vers_spannung: row.vers_spannung != null ? String(row.vers_spannung).trim() : '',
+            sensitivitaet: row.sensitivitaet != null ? String(row.sensitivitaet).trim() : '',
             projekt: readProjektFromFabRow(row)
           };
         }
@@ -19795,12 +20122,18 @@
         if (!draftApplied) defaultsSource = 'builtin';
       }
       if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
+      // Nochmal lokal: Vers/Sens aus Anlagenstamm, falls Defaults/Draft sie leer gelassen haben.
+      await applyAnlagenstammFelderFromLocalStamm(fab, {
+        loadToken: loadToken,
+        preferStamm: false
+      });
+      if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
       renderSteps();
       if (isServiceprotokollFabLoadCurrent(loadToken, fab)) {
         serviceprotokollFormReadyFab = fab;
       }
       if (!serviceprotokollFabSwitching) {
-        notifyReactBridge();
+        notifyReactBridge(true);
       }
     }
 
@@ -20191,12 +20524,29 @@
       setVal('serviceprotokollPos', f.position);
       setVal('serviceprotokollDwc', f.dwc);
       if (Array.isArray(f.loadCells) && f.loadCells.length) {
-        applySpLoadCellsToForm(f.loadCells);
+        // Leere Vers/Sens aus React dürfen Stamm-Werte im Hidden-DOM nicht überschreiben.
+        var curCells = collectSpLoadCellsFromForm();
+        var mergedCells = f.loadCells.map(function (c, i) {
+          var prev = curCells[i] || {};
+          return {
+            id: c.id || String(i + 1),
+            type: c.type || '',
+            serialNumber: c.serialNumber || '',
+            position: c.position || '',
+            supplyVoltage: String(c.supplyVoltage || '').trim() || prev.supplyVoltage || '',
+            sensitivity: String(c.sensitivity || '').trim() || prev.sensitivity || ''
+          };
+        });
+        applySpLoadCellsToForm(mergedCells);
       } else {
         setVal('spMessType', f.loadcellType);
         setVal('spMessSeriennummer', f.serialNumber);
-        setVal('spMessVersSpannung', f.supplyVoltage);
-        setVal('spMessSensitivitaet', f.sensitivity);
+        if (f.supplyVoltage != null && String(f.supplyVoltage).trim() !== '') {
+          setVal('spMessVersSpannung', f.supplyVoltage);
+        }
+        if (f.sensitivity != null && String(f.sensitivity).trim() !== '') {
+          setVal('spMessSensitivitaet', f.sensitivity);
+        }
       }
       setVal('serviceprotokollBemerkungen', f.generalRemarks);
       setVal('serviceprotokollAbschlussBemerkungen', f.closingRemarks);

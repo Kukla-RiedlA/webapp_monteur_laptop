@@ -4,14 +4,14 @@ const path = require('path');
 const fs = require('fs');
 
 async function embedLogo(pdfDoc) {
-  const { rgb } = require('pdf-lib');
   const baseDir = path.join(__dirname, '..');
+  // PNG mit Transparenz zuerst (kein schwarzer/weißer Kasten im PDF)
   const logoPaths = [
+    path.join(baseDir, 'public', 'assets', 'img', 'kukla_logo_claim_green.png'),
+    path.join(baseDir, '..', '..', 'dispo', 'assets', 'img', 'kukla_logo_claim_green.png'),
+    path.join(baseDir, '..', '..', 'dispo', 'assets', 'img', 'kukla_logo.png'),
     path.join(baseDir, 'public', 'assets', 'img', 'kukla_logo.jpg'),
     path.join(baseDir, '..', '..', 'dispo', 'assets', 'img', 'kukla_logo.jpg'),
-    path.join(baseDir, '..', '..', 'dispo', 'assets', 'img', 'kukla_logo_claim_green.png'),
-    path.join(baseDir, '..', 'dispo', 'assets', 'img', 'kukla_logo_claim_green.png'),
-    path.join(baseDir, '..', '..', 'dispo', 'assets', 'img', 'kukla_logo.png'),
   ];
   for (const logoPath of logoPaths) {
     try {
@@ -133,14 +133,161 @@ function formatMesswerteLines(mess, lang) {
   }
   if (m.vers_spannung) lines.push([(de ? 'Versorgungsspannung V' : 'Supply voltage V'), m.vers_spannung]);
   if (m.sensitivitaet) lines.push([(de ? 'Sensitivität mV/V' : 'Sensitivity mV/V'), m.sensitivitaet]);
-  const pg = m.pruefgewichtstest;
-  if (pg && typeof pg === 'object') {
-    Object.keys(pg).forEach((k) => {
-      const v = pg[k];
-      if (v != null && String(v).trim() !== '') lines.push([k, v]);
-    });
-  }
+  const pgVals = normalizePruefgewichtstestVals(m.pruefgewichtstest);
+  pgVals.forEach((v, i) => {
+    if (!v) return;
+    const label = de
+      ? 'Abweichung ' + (i + 1) + ' (%)'
+      : 'Deviation ' + (i + 1) + ' (%)';
+    lines.push([label, v]);
+  });
   return lines;
+}
+
+/** Bis zu 4 %-Abweichungen aus Array oder Legacy-Objekt. */
+function normalizePruefgewichtstestVals(raw) {
+  const out = ['', '', '', ''];
+  if (Array.isArray(raw)) {
+    for (let i = 0; i < 4; i++) {
+      if (raw[i] != null && String(raw[i]).trim() !== '') out[i] = String(raw[i]).trim();
+    }
+    return out;
+  }
+  if (raw && typeof raw === 'object') {
+    for (let i = 0; i < 4; i++) {
+      const v =
+        raw[i] != null
+          ? raw[i]
+          : raw['v' + (i + 1)] != null
+            ? raw['v' + (i + 1)]
+            : raw['m' + (i + 1)];
+      if (v != null && String(v).trim() !== '') out[i] = String(v).trim();
+    }
+    if (!out.some(Boolean)) {
+      const legacy = [
+        raw.kg,
+        raw.anzeige != null ? raw.anzeige : raw.display,
+        raw.abweichung != null ? raw.abweichung : raw.deviation,
+        raw.value4 != null ? raw.value4 : raw.wert4,
+      ];
+      for (let i = 0; i < 4; i++) {
+        if (legacy[i] != null && String(legacy[i]).trim() !== '') out[i] = String(legacy[i]).trim();
+      }
+    }
+    return out;
+  }
+  if (raw != null && String(raw).trim() !== '') out[0] = String(raw).trim();
+  return out;
+}
+
+/**
+ * Zeichnet Prüfgewichtstest als Tabelle wie „Messwerte Wägezelle“:
+ * Kopfzeile (dunkelgrün) + Messwertzeile, gleiche Höhen/Spaltenanteile.
+ * Returns neue Y-Position (unter dem Block).
+ */
+function drawPruefgewichtstestRow(page, y, opts) {
+  const {
+    vals,
+    de,
+    marginX,
+    tableInnerW,
+    font,
+    fontBold,
+    green,
+    greenDark,
+    greenSoft,
+    grayText,
+    white,
+    S,
+    title,
+  } = opts;
+  const cells = ['', '', '', ''];
+  let any = false;
+  (vals || []).forEach((v, i) => {
+    if (i > 3) return;
+    const s = v != null ? String(v).trim() : '';
+    if (s) {
+      cells[i] = s;
+      any = true;
+    }
+  });
+  if (!any) return y;
+
+  const sanitize = typeof S === 'function' ? S : (t) => String(t == null ? '' : t);
+  const head = title || (de ? 'Prüfgewichtstest' : 'Test with test load');
+  page.drawText(sanitize(head), {
+    x: marginX,
+    y,
+    size: 10,
+    font: fontBold,
+    color: greenDark,
+  });
+  y -= 14;
+
+  // Gleiche Aufteilung wie Messpunkt-Tabelle (0.36 + 4×0.16)
+  const colW = [
+    tableInnerW * 0.36,
+    tableInnerW * 0.16,
+    tableInnerW * 0.16,
+    tableInnerW * 0.16,
+    tableInnerW * 0.16,
+  ];
+  const headers = [
+    de ? 'Messpunkt' : 'Point',
+    de ? 'Abw. 1 (%)' : 'Dev. 1 (%)',
+    de ? 'Abw. 2 (%)' : 'Dev. 2 (%)',
+    de ? 'Abw. 3 (%)' : 'Dev. 3 (%)',
+    de ? 'Abw. 4 (%)' : 'Dev. 4 (%)',
+  ];
+  page.drawRectangle({
+    x: marginX,
+    y: y - 16,
+    width: tableInnerW,
+    height: 18,
+    color: green,
+  });
+  let hx = marginX;
+  headers.forEach((h, i) => {
+    page.drawText(sanitize(h), {
+      x: hx + 4,
+      y: y - 10,
+      size: 7.5,
+      font: fontBold,
+      color: white,
+    });
+    hx += colW[i];
+  });
+  y -= 18;
+
+  const rowLabel = de ? 'Prüfgewichtstest' : 'Test with test load';
+  const rowCells = [
+    rowLabel,
+    cells[0] || '–',
+    cells[1] || '–',
+    cells[2] || '–',
+    cells[3] || '–',
+  ];
+  page.drawRectangle({
+    x: marginX,
+    y: y - 14,
+    width: tableInnerW,
+    height: 16,
+    color: white,
+    borderColor: greenSoft,
+    borderWidth: 0.5,
+  });
+  let cx = marginX;
+  rowCells.forEach((cell, i) => {
+    page.drawText(sanitize(String(cell)), {
+      x: cx + 4,
+      y: y - 10,
+      size: 8,
+      font: i === 0 ? font : fontBold,
+      color: grayText,
+    });
+    cx += colW[i];
+  });
+  return y - 16 - 10;
 }
 
 /**
@@ -255,49 +402,10 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     if (!anyMess) messRows.length = 0;
   }
 
-  const pgLabels = de
-    ? ['Pruefgewicht (kg)', 'Anzeige (mV)', 'Abweichung (%)', 'Wert 4']
-    : ['Test load (kg)', 'Display (mV)', 'Deviation (%)', 'Value 4'];
-  const pgTest = mess.pruefgewichtstest;
-  const pgVals = [];
-  if (Array.isArray(pgTest)) {
-    pgTest.forEach((v, i) => {
-      if (v != null && String(v).trim() !== '') {
-        pgVals.push([pgLabels[i] || String(i + 1), String(v).trim()]);
-      }
-    });
-  } else if (pgTest && typeof pgTest === 'object') {
-    // Objekt-Form (z. B. { kg, anzeige, abweichung } oder nummerierte Keys)
-    const preferred = [
-      ['kg', pgLabels[0]],
-      ['anzeige', pgLabels[1]],
-      ['display', pgLabels[1]],
-      ['abweichung', pgLabels[2]],
-      ['deviation', pgLabels[2]],
-      ['value4', pgLabels[3]],
-      ['wert4', pgLabels[3]],
-    ];
-    const used = new Set();
-    preferred.forEach(([k, label]) => {
-      if (pgTest[k] == null || String(pgTest[k]).trim() === '') return;
-      if (used.has(k)) return;
-      used.add(k);
-      pgVals.push([label, String(pgTest[k]).trim()]);
-    });
-    Object.keys(pgTest).forEach((k) => {
-      if (used.has(k)) return;
-      const v = pgTest[k];
-      if (v == null || String(v).trim() === '') return;
-      const idx = Number(k);
-      const label = Number.isFinite(idx) && pgLabels[idx] ? pgLabels[idx] : String(k);
-      pgVals.push([label, String(v).trim()]);
-    });
-  } else if (pgTest != null && String(pgTest).trim() !== '') {
-    pgVals.push([pgLabels[0], String(pgTest).trim()]);
-  }
+  const pgVals = normalizePruefgewichtstestVals(mess.pruefgewichtstest);
   // Legacy-Feld taraspeicher
-  if (!pgVals.length && mess.taraspeicher != null && String(mess.taraspeicher).trim() !== '') {
-    pgVals.push([pgLabels[0], String(mess.taraspeicher).trim()]);
+  if (!pgVals.some(Boolean) && mess.taraspeicher != null && String(mess.taraspeicher).trim() !== '') {
+    pgVals[0] = String(mess.taraspeicher).trim();
   }
 
   const abschluss = payload.abschluss && typeof payload.abschluss === 'object' ? payload.abschluss : {};
@@ -609,7 +717,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     if (messRows.length) {
       blocks.push({ type: 'mess' });
     }
-    if (pgVals.length) {
+    if (pgVals.some(Boolean)) {
       blocks.push({ type: 'pg' });
     }
     const bemerk = stripHtml(payload.bemerkungen || '');
@@ -665,7 +773,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     const block = trailQueue[0];
     let need = 40;
     if (block.type === 'mess') need = 20 + 18 + messRows.length * 16 + 14;
-    else if (block.type === 'pg') need = 20 + pgVals.length * 14 + 14;
+    else if (block.type === 'pg') need = 20 + 14 + 18 + 16 + 10;
     else if (block.type === 'bemerk') need = 40;
     else if (block.type === 'abschluss') need = 80;
     if (lastUsed + need > usableH && pagesPlan[targetIdx].trailing.length) {
@@ -736,13 +844,21 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         ];
         y = drawKeyValueTable(page, y, messRows, cols);
       } else if (block.type === 'pg') {
-        y = drawSectionTitle(page, y, de ? 'Pruefgewichtstest' : 'Test with test load');
-        const pgRows = pgVals.map(([label, val]) => ({ label, value: val }));
-        const pgCols = [
-          { key: 'label', label: de ? 'Feld' : 'Field', w: tableInnerW * 0.45 },
-          { key: 'value', label: de ? 'Wert' : 'Value', w: tableInnerW * 0.55 },
-        ];
-        y = drawKeyValueTable(page, y, pgRows, pgCols);
+        y = drawPruefgewichtstestRow(page, y, {
+          vals: pgVals,
+          de,
+          marginX,
+          tableInnerW,
+          font,
+          fontBold,
+          green,
+          greenDark,
+          greenSoft,
+          grayText,
+          white,
+          S: (t) => String(t == null ? '' : t),
+          title: de ? 'Pruefgewichtstest' : 'Test with test load',
+        });
       } else if (block.type === 'bemerk') {
         y = drawSectionTitle(page, y, de ? 'Allgemeine Bemerkungen' : 'General remarks');
         y = drawWrappedText(page, font, block.text, marginX, y, tableInnerW, 8, 11);
@@ -2441,12 +2557,15 @@ async function generateMontageberichtPdfBuffer(payload, options) {
  * Hersteller-Prüfzertifikat A4 Hochkant, bilingual (options.lang = 'de'|'en').
  */
 async function generatePruefzertifikatPdfBuffer(payload, options) {
-  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+  const { PDFDocument, rgb } = require('pdf-lib');
   const lang = (options && options.lang) === 'en' ? 'en' : 'de';
   const de = lang !== 'en';
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const fonts = await embedProtocolFonts(pdfDoc);
+  const font = fonts.font;
+  const fontBold = fonts.fontBold;
+  const unicodeOk = !!fonts.unicode;
+  const S = (v) => sanitizePdfText(v, unicodeOk);
 
   const PAGE_W = 595.28;
   const PAGE_H = 841.89;
@@ -2543,18 +2662,18 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     page.drawImage(logo, { x: marginX + 8, y: y - 44, width: lw, height: lh });
   }
   const title = t(
-    'Hersteller-Pruefzertifikat',
+    'Hersteller-Prüfzertifikat',
     'Manufacturer Inspection Certificate',
   );
-  const subtitle = t('Wiederkehrende Ueberpruefung', 'Recurring Verification');
-  page.drawText(title, {
+  const subtitle = t('Wiederkehrende Überprüfung', 'Recurring Verification');
+  page.drawText(S(title), {
     x: marginX + 110,
     y: y - 22,
     size: 14,
     font: fontBold,
     color: greenDark,
   });
-  page.drawText(subtitle, {
+  page.drawText(S(subtitle), {
     x: marginX + 110,
     y: y - 38,
     size: 10,
@@ -2564,14 +2683,14 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   y -= 68;
 
   const certNr = str(payload.zertifikat_nr) || '–';
-  page.drawText(t('Zertifikatsnr.', 'Certificate no.') + ': ' + certNr, {
+  page.drawText(S(t('Zertifikatsnr.', 'Certificate no.') + ': ' + certNr), {
     x: marginX,
     y,
     size: 9,
     font: fontBold,
     color: grayText,
   });
-  page.drawText(t('Bezug', 'Reference') + ': EU 2018/2066 Art. 60 (MRR)', {
+  page.drawText(S(t('Bezug', 'Reference') + ': EU 2018/2066 Art. 60 (MRR)'), {
     x: marginX + 260,
     y,
     size: 8,
@@ -2581,9 +2700,10 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   y -= 18;
 
   function drawMetaRow(label, value, x, yy, w) {
-    page.drawText(label, { x, y: yy, size: 7.5, font, color: grayMuted });
+    page.drawText(S(label), { x, y: yy, size: 7.5, font, color: grayMuted });
     const val = str(value) || '–';
-    page.drawText(val.length > 42 ? val.slice(0, 41) + '…' : val, {
+    const shown = val.length > 42 ? val.slice(0, 41) + '…' : val;
+    page.drawText(S(shown), {
       x,
       y: yy - 12,
       size: 10,
@@ -2594,21 +2714,21 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
 
   page.drawRectangle({
     x: marginX,
-    y: y - 78,
+    y: y - 48,
     width: tableInnerW,
-    height: 82,
+    height: 52,
     color: rgb(0.97, 0.99, 0.97),
     borderColor: greenSoft,
     borderWidth: 1,
   });
-  drawMetaRow(t('Fabrikationsnummer', 'Serial / FN'), payload.fabrikationsnummer, marginX + 10, y - 8, 200);
-  drawMetaRow(t('Pruefdatum', 'Inspection date'), payload.pruefdatum || payload.durchfuehrungsdatum, marginX + 280, y - 8, 200);
-  drawMetaRow(t('Kunde', 'Customer'), payload.kunde || payload.customer_name, marginX + 10, y - 42, 200);
-  drawMetaRow(t('Naechste Pruefung', 'Next inspection'), payload.naechste_pruefung, marginX + 280, y - 42, 200);
-  y -= 100;
+  drawMetaRow(t('Fabrikationsnummer', 'Serial / FN'), payload.fabrikationsnummer, marginX + 10, y - 6, 200);
+  drawMetaRow(t('Prüfdatum', 'Inspection date'), payload.pruefdatum || payload.durchfuehrungsdatum, marginX + 280, y - 6, 200);
+  drawMetaRow(t('Kunde', 'Customer'), payload.kunde || payload.customer_name, marginX + 10, y - 30, 200);
+  drawMetaRow(t('Nächste Prüfung', 'Next inspection'), payload.naechste_pruefung, marginX + 280, y - 30, 200);
+  y -= 60;
 
   // Plant data
-  page.drawText(t('Anlagendaten', 'Equipment data'), {
+  page.drawText(S(t('Anlagendaten', 'Equipment data')), {
     x: marginX,
     y,
     size: 11,
@@ -2631,14 +2751,14 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   plantRows.forEach((row, idx) => {
     const bg = idx % 2 === 0 ? greenHeader : white;
     page.drawRectangle({ x: marginX, y: y - 14, width: tableInnerW, height: 16, color: bg });
-    page.drawText(str(row[0]), { x: marginX + 6, y: y - 10, size: 8, font, color: grayMuted });
-    page.drawText(str(row[1]) || '–', { x: marginX + 200, y: y - 10, size: 9, font: fontBold, color: grayText });
+    page.drawText(S(str(row[0])), { x: marginX + 6, y: y - 10, size: 8, font, color: grayMuted });
+    page.drawText(S(str(row[1]) || '–'), { x: marginX + 200, y: y - 10, size: 9, font: fontBold, color: grayText });
     y -= 16;
   });
   y -= 12;
 
   // Methods
-  page.drawText(t('Pruefverfahren', 'Inspection methods'), {
+  page.drawText(S(t('Prüfverfahren', 'Inspection methods')), {
     x: marginX,
     y,
     size: 11,
@@ -2650,7 +2770,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   if (verfahren.kontrollwiegung) methods.push(t('Kontrollwiegung', 'Control weighing'));
   if (verfahren.schleppketten) methods.push(t('Schleppketten-Test', 'Chain calibration test'));
   if (verfahren.service) methods.push(t('Serviceprotokoll', 'Service protocol'));
-  page.drawText(methods.length ? methods.join('  ·  ') : '–', {
+  page.drawText(S(methods.length ? methods.join('  ·  ') : '–'), {
     x: marginX,
     y,
     size: 9,
@@ -2659,8 +2779,34 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   });
   y -= 20;
 
-  // Results table
-  page.drawText(t('Ergebnisse', 'Results'), {
+  // Results table – nur aktive Verfahren
+  const resultRows = [];
+  if (verfahren.kontrollwiegung && ergebnisse.kontrollwiegung) {
+    resultRows.push([
+      t('Kontrollwiegung', 'Control weighing'),
+      String(ergebnisse.kontrollwiegung.anzahl != null ? ergebnisse.kontrollwiegung.anzahl : '–'),
+      fmtPct(ergebnisse.kontrollwiegung.fehler_prozent),
+      str(ergebnisse.kontrollwiegung.datum) || '–',
+    ]);
+  }
+  if (verfahren.schleppketten && ergebnisse.schleppketten) {
+    resultRows.push([
+      t('Schleppketten-Test', 'Chain test'),
+      String(ergebnisse.schleppketten.anzahl != null ? ergebnisse.schleppketten.anzahl : '–'),
+      fmtPct(ergebnisse.schleppketten.fehler_prozent),
+      str(ergebnisse.schleppketten.datum) || '–',
+    ]);
+  }
+  if (verfahren.service) {
+    resultRows.push([
+      t('Serviceprotokoll', 'Service protocol'),
+      '–',
+      '–',
+      '–',
+    ]);
+  }
+
+  page.drawText(S(t('Ergebnisse', 'Results')), {
     x: marginX,
     y,
     size: 11,
@@ -2671,65 +2817,157 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   page.drawRectangle({ x: marginX, y: y - 1, width: 80, height: 2, color: green });
   y -= 18;
 
-  const resultHeaderH = 20;
-  page.drawRectangle({
-    x: marginX,
-    y: y - resultHeaderH + 4,
-    width: tableInnerW,
-    height: resultHeaderH,
-    color: green,
-  });
-  const colW = [tableInnerW * 0.4, tableInnerW * 0.2, tableInnerW * 0.2, tableInnerW * 0.2];
-  const headers = [
-    t('Verfahren', 'Method'),
-    t('Anzahl', 'Count'),
-    t('Fehler %', 'Error %'),
-    t('Datum', 'Date'),
-  ];
-  let cx = marginX;
-  headers.forEach((h, i) => {
-    page.drawText(h, { x: cx + 4, y: y - 8, size: 8, font: fontBold, color: white });
-    cx += colW[i];
-  });
-  y -= resultHeaderH;
+  if (resultRows.length) {
+    const resultHeaderH = 20;
+    page.drawRectangle({
+      x: marginX,
+      y: y - resultHeaderH + 4,
+      width: tableInnerW,
+      height: resultHeaderH,
+      color: green,
+    });
+    const colW = [tableInnerW * 0.4, tableInnerW * 0.2, tableInnerW * 0.2, tableInnerW * 0.2];
+    const headers = [
+      t('Verfahren', 'Method'),
+      t('Anzahl', 'Count'),
+      t('Fehler %', 'Error %'),
+      t('Datum', 'Date'),
+    ];
+    let cx = marginX;
+    headers.forEach((h, i) => {
+      page.drawText(S(h), { x: cx + 4, y: y - 8, size: 8, font: fontBold, color: white });
+      cx += colW[i];
+    });
+    y -= resultHeaderH;
 
-  const resultRows = [];
-  if (ergebnisse.kontrollwiegung) {
-    resultRows.push([
-      t('Kontrollwiegung', 'Control weighing'),
-      String(ergebnisse.kontrollwiegung.anzahl != null ? ergebnisse.kontrollwiegung.anzahl : '–'),
-      fmtPct(ergebnisse.kontrollwiegung.fehler_prozent),
-      str(ergebnisse.kontrollwiegung.datum) || '–',
-    ]);
-  }
-  if (ergebnisse.schleppketten) {
-    resultRows.push([
-      t('Schleppketten-Test', 'Chain test'),
-      String(ergebnisse.schleppketten.anzahl != null ? ergebnisse.schleppketten.anzahl : '–'),
-      fmtPct(ergebnisse.schleppketten.fehler_prozent),
-      str(ergebnisse.schleppketten.datum) || '–',
-    ]);
-  }
-  if (!resultRows.length) {
-    resultRows.push(['–', '–', '–', '–']);
-  }
-  resultRows.forEach((r, idx) => {
-    const bg = idx % 2 === 0 ? white : greenHeader;
-    page.drawRectangle({ x: marginX, y: y - 14, width: tableInnerW, height: 16, color: bg, borderColor: greenSoft, borderWidth: 0.5 });
-    let x = marginX;
-    r.forEach((cell, i) => {
-      page.drawText(String(cell), { x: x + 4, y: y - 10, size: 9, font, color: grayText });
-      x += colW[i];
+    resultRows.forEach((r, idx) => {
+      const bg = idx % 2 === 0 ? white : greenHeader;
+      page.drawRectangle({ x: marginX, y: y - 14, width: tableInnerW, height: 16, color: bg, borderColor: greenSoft, borderWidth: 0.5 });
+      let x = marginX;
+      r.forEach((cell, i) => {
+        page.drawText(S(String(cell)), { x: x + 4, y: y - 10, size: 9, font, color: grayText });
+        x += colW[i];
+      });
+      y -= 16;
+    });
+    y -= 10;
+  } else {
+    page.drawText(S(t('Kein Prüfverfahren ausgewählt.', 'No inspection method selected.')), {
+      x: marginX,
+      y,
+      size: 9,
+      font,
+      color: grayMuted,
     });
     y -= 16;
-  });
-  y -= 10;
+  }
 
   page.drawText(
-    t('Zulaessige Abweichung', 'Max. permissible error') + ': ± ' + fmtPct(payload.zulaessige_abweichung_pct) + ' %',
+    S(t('Zulässige Abweichung', 'Max. permissible error') + ': ± ' + fmtPct(payload.zulaessige_abweichung_pct) + ' %'),
     { x: marginX, y, size: 9, font: fontBold, color: grayText },
   );
-  y -= 22;
+  y -= 18;
+
+  // Service: Messwerte Wägezelle + Prüfgewichtstest
+  const serviceMess =
+    verfahren.service && ergebnisse.service && typeof ergebnisse.service === 'object'
+      ? ergebnisse.service
+      : null;
+  if (serviceMess) {
+    const emptyCell = { kg: '', mv: '', ma: '', g_prozent: '' };
+    const mm =
+      serviceMess.mess_matrix && typeof serviceMess.mess_matrix === 'object'
+        ? serviceMess.mess_matrix
+        : {};
+    const messDefs = [
+      { key: 'dms', de: 'DMS entlastet', en: 'Load cell released' },
+      { key: 'tara', de: 'Tara', en: 'Tare' },
+      { key: 'pruefgewicht', de: 'Prüfgewicht', en: 'Test load' },
+    ];
+    const messRows = [];
+    messDefs.forEach((d) => {
+      const r = Object.assign({}, emptyCell, mm[d.key] || {});
+      const has = ['kg', 'mv', 'ma', 'g_prozent'].some((k) => String(r[k] || '').trim() !== '');
+      if (!has) return;
+      messRows.push({
+        label: t(d.de, d.en),
+        kg: String(r.kg || '').trim(),
+        mv: String(r.mv || '').trim(),
+        ma: String(r.ma || '').trim(),
+        g: String(r.g_prozent || '').trim(),
+      });
+    });
+    if (messRows.length) {
+      page.drawText(S(t('Messwerte Wägezelle', 'Load cell measurements')), {
+        x: marginX,
+        y,
+        size: 10,
+        font: fontBold,
+        color: greenDark,
+      });
+      y -= 14;
+      const mColW = [tableInnerW * 0.36, tableInnerW * 0.16, tableInnerW * 0.16, tableInnerW * 0.16, tableInnerW * 0.16];
+      const mHeaders = [t('Messpunkt', 'Point'), 'kg', 'mV', 'mA', 'g %'];
+      page.drawRectangle({
+        x: marginX,
+        y: y - 16,
+        width: tableInnerW,
+        height: 18,
+        color: green,
+      });
+      let mx = marginX;
+      mHeaders.forEach((h, i) => {
+        page.drawText(S(h), { x: mx + 4, y: y - 10, size: 7.5, font: fontBold, color: white });
+        mx += mColW[i];
+      });
+      y -= 18;
+      messRows.forEach((row, idx) => {
+        const bg = idx % 2 === 0 ? white : greenHeader;
+        page.drawRectangle({
+          x: marginX,
+          y: y - 14,
+          width: tableInnerW,
+          height: 16,
+          color: bg,
+          borderColor: greenSoft,
+          borderWidth: 0.5,
+        });
+        const cells = [row.label, row.kg || '–', row.mv || '–', row.ma || '–', row.g || '–'];
+        let cx2 = marginX;
+        cells.forEach((cell, i) => {
+          page.drawText(S(String(cell)), {
+            x: cx2 + 4,
+            y: y - 10,
+            size: 8,
+            font: i === 0 ? font : fontBold,
+            color: grayText,
+          });
+          cx2 += mColW[i];
+        });
+        y -= 16;
+      });
+      y -= 10;
+    }
+
+    const pgVals = normalizePruefgewichtstestVals(serviceMess.pruefgewichtstest);
+    y = drawPruefgewichtstestRow(page, y, {
+      vals: pgVals,
+      de,
+      marginX,
+      tableInnerW,
+      font,
+      fontBold,
+      green,
+      greenDark,
+      greenSoft,
+      grayText,
+      white,
+      S,
+      title: t('Prüfgewichtstest', 'Test with test load'),
+    });
+  }
+
+  y -= 4;
 
   // Seal
   const sealW = 220;
@@ -2745,8 +2983,9 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     color: white,
   });
   const sealSize = 14;
-  const sealTw = fontBold.widthOfTextAtSize(statusLabel, sealSize);
-  page.drawText(statusLabel, {
+  const sealLabel = S(statusLabel);
+  const sealTw = fontBold.widthOfTextAtSize(sealLabel, sealSize);
+  page.drawText(sealLabel, {
     x: sealX + (sealW - sealTw) / 2,
     y: y - sealH / 2 - 5,
     size: sealSize,
@@ -2756,7 +2995,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   y -= sealH + 18;
 
   // Traceability
-  page.drawText(t('Rueckfuehrbarkeit / Pruefmittel', 'Traceability / test means'), {
+  page.drawText(S(t('Rückführbarkeit / Prüfmittel', 'Traceability / test means')), {
     x: marginX,
     y,
     size: 10,
@@ -2765,7 +3004,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   });
   y -= 14;
   const pruefmittel = str(payload.pruefmittel) || '–';
-  page.drawText(pruefmittel.length > 90 ? pruefmittel.slice(0, 89) + '…' : pruefmittel, {
+  page.drawText(S(pruefmittel.length > 90 ? pruefmittel.slice(0, 89) + '…' : pruefmittel), {
     x: marginX,
     y,
     size: 9,
@@ -2773,25 +3012,29 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     color: grayText,
   });
   y -= 14;
-  if (str(payload.letzte_eichung_kontrollwaage)) {
+  if (verfahren.kontrollwiegung && str(payload.letzte_eichung_kontrollwaage)) {
     page.drawText(
-      t('Letzte Eichung Kontrollwaage', 'Last verification of control scale') +
-        ': ' +
-        str(payload.letzte_eichung_kontrollwaage),
+      S(
+        t('Letzte Eichung Kontrollwaage', 'Last verification of control scale') +
+          ': ' +
+          str(payload.letzte_eichung_kontrollwaage),
+      ),
       { x: marginX, y, size: 8, font, color: grayMuted },
     );
     y -= 12;
   }
   y -= 6;
 
-  // Conformity
-  const konform =
-    str(payload.konformitaet_text) ||
-    (de
-      ? 'Die Anlage wurde nach dem Herstellerverfahren der KUKLA Waagenfabrik GmbH & Co KG einer wiederkehrenden Ueberpruefung unterzogen. Dieses Hersteller-Pruefzertifikat dient als Nachweis der Qualitaetssicherung der Messeinrichtung im Sinne von Art. 60 der Verordnung (EU) 2018/2066 (MRR). Es handelt sich nicht um eine akkreditierte Kalibrierung nach EN ISO/IEC 17025 und nicht um eine behoerdliche Eichung.'
-      : 'The equipment was subjected to a recurring inspection according to the manufacturer procedure of KUKLA Waagenfabrik GmbH & Co KG. This Manufacturer Inspection Certificate serves as evidence of measuring equipment quality assurance pursuant to Art. 60 of Regulation (EU) 2018/2066 (MRR). It is not an accredited calibration under EN ISO/IEC 17025 and not an official legal metrology verification.');
+  // Conformity — EN-PDF immer englischen Standardtext (nicht DE-Formulartext)
+  const KONFORM_DE =
+    'Die Anlage wurde nach dem Herstellerverfahren der KUKLA Waagenfabrik GmbH & Co KG einer wiederkehrenden Überprüfung unterzogen. Dieses Hersteller-Prüfzertifikat (Manufacturer Inspection Certificate) dient als Nachweis der Qualitätssicherung der Messeinrichtung im Sinne von Art. 60 der Verordnung (EU) 2018/2066 (MRR). Es handelt sich nicht um eine akkreditierte Kalibrierung nach EN ISO/IEC 17025 und nicht um eine behördliche Eichung.';
+  const KONFORM_EN =
+    'The equipment was subjected to a recurring inspection according to the manufacturer procedure of KUKLA Waagenfabrik GmbH & Co KG. This Manufacturer Inspection Certificate serves as evidence of measuring equipment quality assurance pursuant to Art. 60 of Regulation (EU) 2018/2066 (MRR). It is not an accredited calibration under EN ISO/IEC 17025 and not an official legal metrology verification.';
+  const konform = de
+    ? str(payload.konformitaet_text) || KONFORM_DE
+    : str(payload.konformitaet_text_en) || KONFORM_EN;
 
-  page.drawText(t('Konformitaetsaussage', 'Statement of conformity'), {
+  page.drawText(S(t('Konformitätsaussage', 'Statement of conformity')), {
     x: marginX,
     y,
     size: 10,
@@ -2800,7 +3043,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   });
   y -= 14;
 
-  const words = konform.split(/\s+/).filter(Boolean);
+  const words = S(konform).split(/\s+/).filter(Boolean);
   let line = '';
   const maxW = tableInnerW;
   const flushLine = () => {
@@ -2822,7 +3065,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   y -= 16;
 
   // Signatures
-  page.drawText(t('Monteur / Technician', 'Technician') + ': ' + (str(payload.monteur_name) || '____________________'), {
+  page.drawText(S(t('Monteur / Technician', 'Technician') + ': ' + (str(payload.monteur_name) || '____________________')), {
     x: marginX,
     y,
     size: 9,
@@ -2830,7 +3073,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     color: grayText,
   });
   y -= 16;
-  page.drawText(t('Datum', 'Date') + ': ' + (str(payload.pruefdatum) || '__________'), {
+  page.drawText(S(t('Datum', 'Date') + ': ' + (str(payload.pruefdatum) || '__________')), {
     x: marginX,
     y,
     size: 9,
@@ -2839,7 +3082,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   });
   if (str(payload.kunde_unterschrift)) {
     y -= 16;
-    page.drawText(t('Kunde', 'Customer') + ': ' + str(payload.kunde_unterschrift), {
+    page.drawText(S(t('Kunde', 'Customer') + ': ' + str(payload.kunde_unterschrift)), {
       x: marginX,
       y,
       size: 9,
@@ -2849,14 +3092,14 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   }
 
   // Footer
-  page.drawText('KUKLA Waagenfabrik GmbH & Co KG  ·  ' + certNr + '  ·  ' + (de ? 'DE' : 'EN'), {
+  page.drawText(S('KUKLA Waagenfabrik GmbH & Co KG  ·  ' + certNr + '  ·  ' + (de ? 'DE' : 'EN')), {
     x: marginX,
     y: marginBottom - 8,
     size: 7,
     font,
     color: grayMuted,
   });
-  page.drawText(t('Seite 1/1', 'Page 1/1'), {
+  page.drawText(S(t('Seite 1/1', 'Page 1/1')), {
     x: PAGE_W - marginX - 40,
     y: marginBottom - 8,
     size: 7,

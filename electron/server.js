@@ -9063,7 +9063,27 @@ function createApp(db) {
           const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
           const data = await r.json().catch(() => ({}));
           if (r.ok && data.ok && data.prefill) {
-            return res.json(data);
+            const prefill = data.prefill;
+            try {
+              ensureAnlagenstammLocalSchema(db);
+              const stammRow = anlagenstammLookupByFab(db, fab);
+              if (stammRow && stammRow.projekt && String(stammRow.projekt).trim()) {
+                // Anlagenstamm hat Vorrang vor Auftragsnummer im Prefill.
+                prefill.projekt = String(stammRow.projekt).trim();
+              }
+            } catch (_) { /* optional */ }
+            try {
+              if (!(prefill.ergebnisse && prefill.ergebnisse.service)) {
+                const localSp = pruefzertifikatLocal.prefillFromLocalDrafts(reiseDir, fab, {});
+                if (localSp && localSp.ergebnisse && localSp.ergebnisse.service) {
+                  prefill.ergebnisse = prefill.ergebnisse || {};
+                  prefill.ergebnisse.service = localSp.ergebnisse.service;
+                  if (!prefill.verfahren) prefill.verfahren = {};
+                  prefill.verfahren.service = true;
+                }
+              }
+            } catch (_) { /* optional */ }
+            return res.json({ ok: true, prefill, source: data.source || 'dispo' });
           }
         } catch (_) { /* local fallback */ }
       }
@@ -9078,9 +9098,24 @@ function createApp(db) {
           }
         }
       })();
+      let stammMeta = {};
+      try {
+        ensureAnlagenstammLocalSchema(db);
+        const stammRow = anlagenstammLookupByFab(db, fab);
+        if (stammRow) {
+          stammMeta = {
+            projekt: stammRow.projekt != null ? String(stammRow.projekt).trim() : '',
+            type: stammRow.type != null ? String(stammRow.type).trim() : '',
+            elektronik: stammRow.elektronik != null ? String(stammRow.elektronik).trim() : '',
+            position: stammRow.position != null ? String(stammRow.position).trim() : '',
+            leistung: stammRow.leistung != null ? String(stammRow.leistung).trim() : '',
+          };
+        }
+      } catch (_) { /* optional */ }
       const prefill = pruefzertifikatLocal.prefillFromLocalDrafts(reiseDir, fab, {
         job_number: jobRow && jobRow.job_number,
         technician_name: tech && tech.full_name,
+        ...stammMeta,
       });
       res.json({ ok: true, prefill, source: 'local' });
     } catch (e) {

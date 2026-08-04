@@ -60,18 +60,72 @@ function getPruefzertifikatLocal(reiseDir, fab, localId) {
   return null;
 }
 
+function emptyMessCell() {
+  return { kg: '', mv: '', ma: '', g_prozent: '' };
+}
+
+/** Messwerte Wägezelle + Prüfgewichtstest aus Serviceprotokoll-Messwerten. */
+function extractServiceMessFromMesswerte(messwerte) {
+  const m = messwerte && typeof messwerte === 'object' ? messwerte : {};
+  const empty = emptyMessCell();
+  let matrix = { dms: { ...empty }, tara: { ...empty }, pruefgewicht: { ...empty } };
+  if (m.mess_matrix && typeof m.mess_matrix === 'object') {
+    const mm = m.mess_matrix;
+    matrix = {
+      dms: Object.assign({}, empty, mm.dms || mm.dms_entlastet || {}),
+      tara: Object.assign({}, empty, mm.tara || {}),
+      pruefgewicht: Object.assign({}, empty, mm.pruefgewicht || {}),
+    };
+  } else {
+    matrix = {
+      dms: { kg: '', mv: m.dms_entlastet != null ? String(m.dms_entlastet) : '', ma: m.ma != null ? String(m.ma) : '', g_prozent: '' },
+      tara: { kg: '', mv: m.tara != null ? String(m.tara) : '', ma: '', g_prozent: m.g_prozent != null ? String(m.g_prozent) : '' },
+      pruefgewicht: {
+        kg: m.kg != null ? String(m.kg) : '',
+        mv: m.pruefgewicht != null ? String(m.pruefgewicht) : (m.mv != null ? String(m.mv) : ''),
+        ma: '',
+        g_prozent: m.g_prozent != null ? String(m.g_prozent) : '',
+      },
+    };
+  }
+  let pg = ['', '', '', ''];
+  const raw = m.pruefgewichtstest;
+  if (Array.isArray(raw)) {
+    pg = [0, 1, 2, 3].map((i) => (raw[i] != null ? String(raw[i]) : ''));
+  } else if (raw && typeof raw === 'object') {
+    pg = [
+      raw[0] != null ? String(raw[0]) : (raw.kg != null ? String(raw.kg) : ''),
+      raw[1] != null ? String(raw[1]) : (raw.anzeige != null ? String(raw.anzeige) : (raw.display != null ? String(raw.display) : '')),
+      raw[2] != null ? String(raw[2]) : (raw.abweichung != null ? String(raw.abweichung) : (raw.deviation != null ? String(raw.deviation) : '')),
+      raw[3] != null ? String(raw[3]) : (raw.value4 != null ? String(raw.value4) : (raw.wert4 != null ? String(raw.wert4) : '')),
+    ];
+  }
+  const hasMatrix = ['dms', 'tara', 'pruefgewicht'].some((k) =>
+    ['kg', 'mv', 'ma', 'g_prozent'].some((f) => String((matrix[k] && matrix[k][f]) || '').trim() !== ''),
+  );
+  const hasPg = pg.some((v) => String(v || '').trim() !== '');
+  if (!hasMatrix && !hasPg) return null;
+  return { mess_matrix: matrix, pruefgewichtstest: pg };
+}
+
 /** Prefill from local KW / SK / Service drafts when Dispo prefill unavailable. */
 function prefillFromLocalDrafts(reiseDir, fab, jobMeta) {
   const fn = String(fab || '').trim();
+  const stammProjekt =
+    (jobMeta && jobMeta.projekt != null ? String(jobMeta.projekt).trim() : '') || '';
   const out = {
     fabrikationsnummer: fn,
     pruefdatum: new Date().toISOString().slice(0, 10),
     zulaessige_abweichung_pct: 0.5,
     verfahren: { kontrollwiegung: false, schleppketten: false, service: false },
     ergebnisse: {},
-    projekt: (jobMeta && jobMeta.job_number) || '',
+    projekt: stammProjekt,
     kunde: (jobMeta && (jobMeta.endkunde || jobMeta.customer_name)) || '',
     monteur_name: (jobMeta && jobMeta.technician_name) || '',
+    type: (jobMeta && jobMeta.type) || '',
+    elektronik: (jobMeta && jobMeta.elektronik) || '',
+    pos_nr: (jobMeta && (jobMeta.pos_nr || jobMeta.position)) || '',
+    nennleistung: (jobMeta && (jobMeta.nennleistung || jobMeta.leistung)) || '',
   };
   const n = new Date(out.pruefdatum);
   n.setMonth(n.getMonth() + 12);
@@ -162,6 +216,10 @@ function prefillFromLocalDrafts(reiseDir, fab, jobMeta) {
         if (sp.durchfuehrungsdatum && !out.verfahren.kontrollwiegung && !out.verfahren.schleppketten) {
           out.pruefdatum = sp.durchfuehrungsdatum;
         }
+        const serviceMess = extractServiceMessFromMesswerte(sp.messwerte);
+        if (serviceMess) {
+          out.ergebnisse.service = serviceMess;
+        }
       }
     }
   } catch (_) {}
@@ -190,4 +248,5 @@ module.exports = {
   savePruefzertifikatLocal,
   getPruefzertifikatLocal,
   prefillFromLocalDrafts,
+  extractServiceMessFromMesswerte,
 };

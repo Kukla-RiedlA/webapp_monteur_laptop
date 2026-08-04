@@ -1,8 +1,13 @@
-﻿# Versionshistorie – Monteur WebApp
+# Versionshistorie – Monteur WebApp
 
 Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer wie in der Dispo: **V &lt;Hauptversion&gt;.&lt;Build&gt;** (z. B. V 1.001).
 
 ---
+
+## V 2.005.006
+- **Prüfzertifikat:** Service-Messwerte und Prüfgewichtstest (bis 4 %-Abweichungen) aus Serviceprotokoll; PDF-Tabelle wie Messpunkt; EN-Konformitätstext; Meta-Box kompakter.
+- **Logo:** Kukla Claim-PNG mit transparentem Hintergrund in Protokoll-PDFs.
+- **UI:** Prüfgewichtstest-Felder als Abweichung (%) nebeneinander.
 
 ## V 2.005.000
 - **Rechtschreibung:** DE + en-GB (Chromium); Kontextmenü mit Vorschlägen und „Zum Wörterbuch hinzufügen“; Freitext/contenteditable mit spellcheck.
@@ -211,6 +216,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.006
+- **Prüfzertifikat:** Service-Messwerte und Prüfgewichtstest (bis 4 %-Abweichungen) aus Serviceprotokoll; PDF-Tabelle wie Messpunkt; EN-Konformitätstext; Meta-Box kompakter.
+- **Logo:** Kukla Claim-PNG mit transparentem Hintergrund in Protokoll-PDFs.
+- **UI:** Prüfgewichtstest-Felder als Abweichung (%) nebeneinander.
 ## V 1.019
 - **Dienstreise-Upload:** JSON-Body-Limit auf 50 MB erhöht (Upload großer Dateien); Frontend zeigt bei HTML-Antwort des Servers verständliche Meldung statt JSON-Parse-Fehler.
 - **Cursor Rule:** Release-Workflow in `.cursor/rules/release-and-push.mdc` festgelegt.
