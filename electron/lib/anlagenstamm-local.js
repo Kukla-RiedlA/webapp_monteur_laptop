@@ -362,34 +362,12 @@ function listAnlagenstammForApi(db, limit, offset) {
   ensureAnlagenstammLocalSchema(db);
   const rows = db
     .prepare(
-      `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
-              material, tacho, elektronik, dms_nr, dms_position, position, aktueller_kunde, letzter_besuch,
-              geliefert_ueber, projekt, bemerkungen, customer_country
-       FROM anlagenstamm_local
+      `${ANLAGENSTAMM_LOCAL_SELECT}
        ORDER BY TRIM(fabrikationsnummer) ASC
        LIMIT ? OFFSET ?`,
     )
     .all(limit, offset);
-  return rows.map((r) => ({
-    id: r.id,
-    fabrikationsnummer: r.fabrikationsnummer,
-    type: r.type || '',
-    leistung: r.leistung || '',
-    kraftaufnehmer: r.kraftaufnehmer || '',
-    nenngeschwindigkeit: r.nenngeschwindigkeit || '',
-    material: r.material || '',
-    tacho: r.tacho || '',
-    elektronik: r.elektronik || '',
-    dms_nr: r.dms_nr || '',
-    dms_position: r.dms_position || '',
-    position: r.position || '',
-    aktueller_kunde: r.aktueller_kunde || '',
-    letzter_besuch: r.letzter_besuch || '',
-    geliefert_ueber: r.geliefert_ueber || '',
-    projekt: r.projekt || '',
-    bemerkungen: r.bemerkungen || '',
-    customer_country: r.customer_country || '',
-  }));
+  return rows.map(mapRowToListApi);
 }
 
 /** Dispo `anlagenstamm` – Spaltenlängen (fsm_init.sql). */
@@ -861,20 +839,17 @@ function searchLocal(db, filters) {
   }
   const whereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
   const totalCount = db.prepare('SELECT COUNT(*) AS c FROM anlagenstamm_local' + whereSql).get(...params).c;
+  const totalPages = pageSize > 0 ? Math.ceil(totalCount / pageSize) : 1;
   const rows = db
     .prepare(
-      `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
-        material, tacho, elektronik, dms_nr, dms_position, position, aktueller_kunde, letzter_besuch,
-        geliefert_ueber, projekt, bemerkungen
-       FROM anlagenstamm_local${whereSql}
+      `${ANLAGENSTAMM_LOCAL_SELECT}${whereSql}
        ORDER BY TRIM(fabrikationsnummer) ASC
        LIMIT ${pageSize} OFFSET ${offset}`,
     )
     .all(...params);
-  const totalPages = pageSize > 0 ? Math.ceil(totalCount / pageSize) : 1;
   return {
     ok: true,
-    rows,
+    rows: rows.map(mapRowToListApi),
     page,
     page_size: pageSize,
     total_count: totalCount,
@@ -898,10 +873,7 @@ function fabLookupKeys(fab) {
 }
 
 function lookupByFab(db, fab) {
-  const sql = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-          material, tacho, elektronik, dms_nr, dms_position, position, aktueller_kunde, letzter_besuch,
-          geliefert_ueber, projekt, bemerkungen, dirty
-         FROM anlagenstamm_local
+  const sql = `${ANLAGENSTAMM_LOCAL_SELECT}
          WHERE TRIM(fabrikationsnummer) = TRIM(?)
          ORDER BY dirty DESC, synced_at DESC, id DESC
          LIMIT 1`;
@@ -1318,12 +1290,21 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
   }
 
   const resumeBefore = getAnlagenstammSyncResumeState(db);
-  if (resumeBefore.stamm_phase_completed) {
+  // Abgebrochener Lauf hinter letzter Seite → neu von Seite 1 (sonst kein Orphan-Purge)
+  if (
+    !resumeBefore.stamm_phase_completed &&
+    resumeBefore.stamm_total_pages > 0 &&
+    resumeBefore.stamm_next_page > resumeBefore.stamm_total_pages
+  ) {
+    resetAnlagenstammSyncPhases(db);
+  }
+  const resumeFresh = getAnlagenstammSyncResumeState(db);
+  if (resumeFresh.stamm_phase_completed) {
     return {
       ok: true,
       skipped: true,
       resumed: false,
-      total_count: resumeBefore.stamm_total_pages || resumeBefore.total_count || 0,
+      total_count: resumeFresh.stamm_total_pages || resumeFresh.total_count || 0,
       row_count: rowCount(db),
       purged: 0,
     };
@@ -1331,11 +1312,11 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
 
   const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const pageSize = 500;
-  let page = Math.max(1, resumeBefore.stamm_next_page || 1);
+  let page = Math.max(1, resumeFresh.stamm_next_page || 1);
   const resuming = page > 1;
   const startedFromPageOne = page === 1;
-  let totalPages = resumeBefore.stamm_total_pages || 1;
-  let totalCount = resumeBefore.total_count || 0;
+  let totalPages = resumeFresh.stamm_total_pages || 1;
+  let totalCount = resumeFresh.total_count || 0;
   const seenIds = new Set();
 
   const runOnBase = async (base) => {
@@ -1971,6 +1952,7 @@ module.exports = {
   deleteLocal,
   mapRowToListApi,
   parseTedMechanik,
+  parseKraftaufnehmerExtra,
   listAnlagenstammForApi,
   upsertAnlagenstammRows,
   mergeExtrasIntoRows,

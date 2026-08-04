@@ -231,6 +231,7 @@ const {
   ensureAnlagenstammTreeCacheSchema,
   readAnlagenstammTreeCacheRow,
   upsertAnlagenstammTreeCacheRow,
+  parseKraftaufnehmerExtra,
   getAnlagenstammSyncResumeState,
   prepareAnlagenstammSyncRun,
   finalizeAnlagenstammSyncRun,
@@ -7543,6 +7544,10 @@ function createApp(db) {
             kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
             mess_waegezelle_type: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
             mess_waegezelle_seriennummer: row.dms_nr != null ? String(row.dms_nr).trim() : '',
+            mess_waegezelle_position: row.dms_position != null ? String(row.dms_position).trim() : '',
+            mess_vers_spannung: row.vers_spannung != null ? String(row.vers_spannung).trim() : '',
+            mess_sensitivitaet: row.sensitivitaet != null ? String(row.sensitivitaet).trim() : '',
+            mess_waegezellen_extra: parseKraftaufnehmerExtra(row.kraftaufnehmer_extra),
             projekt: row.projekt != null ? String(row.projekt).trim() : '',
           };
         }
