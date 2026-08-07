@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.007
+- **Auftrag erledigt:** Status wird beim Finish sofort an Dispo gepusht (wie Handy-PWA); bei `angelegt`/`geplant` Zwischenstufe `in_arbeit`. Pending `erledigt` wird bei abgelehntem Sync-Push nicht mehr verworfen — verhindert, dass der Auftrag nach Sync wieder als offen erscheint.
+
 ## V 2.005.006
 - **Prüfzertifikat:** Service-Messwerte und Prüfgewichtstest (bis 4 %-Abweichungen) aus Serviceprotokoll; PDF-Tabelle wie Messpunkt; EN-Konformitätstext; Meta-Box kompakter.
 - **Logo:** Kukla Claim-PNG mit transparentem Hintergrund in Protokoll-PDFs.

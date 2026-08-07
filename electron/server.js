@@ -2104,8 +2104,38 @@ function createApp(db) {
     return { ok: true };
   }
 
+  /**
+   * Erledigt an Dispo wie Handy-PWA. Dispo erlaubt erledigt nur von zugeteilt/in_arbeit —
+   * bei angelegt/geplant zuerst in_arbeit, dann erledigt.
+   */
+  async function pushJobStatusErledigtToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader) {
+    const first = await pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt');
+    if (first.ok) return first;
+    const mid = await pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'in_arbeit');
+    if (!mid.ok) return first;
+    return pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt');
+  }
+
   async function pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader) {
     return pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'in_arbeit');
+  }
+
+  function clearPendingJobStatus(dbConn, localJobId) {
+    const lid = parseInt(localJobId, 10);
+    if (!Number.isFinite(lid) || lid <= 0) return;
+    try {
+      dbConn
+        .prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`)
+        .run(lid);
+      const mapped = dbConn.prepare('SELECT server_id FROM jobs WHERE id = ?').get(lid);
+      if (mapped && mapped.server_id != null && String(mapped.server_id).trim() !== '') {
+        dbConn
+          .prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'status'`)
+          .run(mapped.server_id);
+      }
+    } catch (_) {
+      /* ignore */
+    }
   }
 
   function getServerJobId(localJobIdOrServerId) {
@@ -5258,26 +5288,82 @@ function createApp(db) {
       step += 1;
       bumpProgress('finish_status', step, totalSteps, 'Auftrag wird als erledigt markiert …');
 
-      // Job lokal als "erledigt" markieren UND eine Pending-Änderung anlegen,
-      // damit der Status beim nächsten Sync auch im Dispo gesetzt wird
+      // Job lokal als "erledigt" markieren UND Pending anlegen (Fallback falls Sofort-Push scheitert).
       try {
         if (technicianId) {
           const r = db.prepare(`
             UPDATE jobs SET status = ?, updated_at = datetime('now')
             WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
           `).run('erledigt', localJobId, technicianId);
-          if (r.changes) {
-            db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
-              .run('job', localJobId, 'status', JSON.stringify({ status: 'erledigt' }));
-          } else {
+          if (!r.changes) {
             db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
           }
+          clearPendingJobStatus(db, localJobId);
+          db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
+            .run('job', localJobId, 'status', JSON.stringify({ status: 'erledigt' }));
         } else {
           db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
         }
       } catch (statusErr) {
         // Wenn das Status-Update/Pending-Flag scheitert, soll der Abschluss
         // trotzdem nicht komplett fehlschlagen.
+      }
+
+      // Sofort an Dispo (wie Handy-PWA), damit der nächste Sync den Auftrag nicht als offen zurückholt.
+      if (technicianId && !forceOfflineFinish) {
+        try {
+          let statusPushBase = (effectiveDispoBase || dispoBaseUrl || '').trim().replace(/\/$/, '');
+          if (!statusPushBase) {
+            const resolved = await resolveDispoWorkingBase({
+              baseUrl: dispoBaseUrl,
+              externalUrl: body.dispoExternalUrl || body.externalUrl,
+              internalUrl: body.dispoInternalUrl || body.internalUrl,
+              technicianId,
+              serverUsername: dispoUsername,
+              serverPassword: dispoPassword,
+            });
+            statusPushBase = (resolved && resolved.base) || '';
+          }
+          const jobRow = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
+          const serverJobId =
+            jobRow && jobRow.server_id != null && String(jobRow.server_id).trim() !== ''
+              ? jobRow.server_id
+              : null;
+          const techRow = db
+            .prepare('SELECT technician_id FROM job_technicians WHERE job_id = ? LIMIT 1')
+            .get(localJobId);
+          const techIdForPush =
+            techRow && techRow.technician_id != null ? techRow.technician_id : technicianId;
+          if (statusPushBase && serverJobId) {
+            bumpProgress('finish_status', step, totalSteps, 'Status „erledigt“ wird an Dispo gesendet …');
+            const authHeaderStatus =
+              dispoUsername || dispoPassword
+                ? {
+                    Authorization:
+                      'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64'),
+                  }
+                : {};
+            const pushRes = await pushJobStatusErledigtToDispo(
+              statusPushBase,
+              techIdForPush,
+              serverJobId,
+              authHeaderStatus,
+            );
+            if (pushRes.ok) {
+              clearPendingJobStatus(db, localJobId);
+            } else {
+              console.warn(
+                '[finish_and_cleanup] Status-Push an Dispo fehlgeschlagen, bleibt pending:',
+                pushRes.error || 'unbekannt',
+              );
+            }
+          }
+        } catch (statusPushErr) {
+          console.warn(
+            '[finish_and_cleanup] Status-Push verschoben:',
+            statusPushErr && statusPushErr.message ? statusPushErr.message : statusPushErr,
+          );
+        }
       }
   }
 
@@ -16215,7 +16301,31 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
       }
       const body = { job_id: serverJobId, ...payload };
-      const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, { method: 'PATCH', headers: headerForJob, body: JSON.stringify(body) });
+      let r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, { method: 'PATCH', headers: headerForJob, body: JSON.stringify(body) });
+      if (
+        !r.ok &&
+        p.action === 'status' &&
+        String(payload.status || '').trim().toLowerCase() === 'erledigt' &&
+        r.status === 400
+      ) {
+        // Dispo: erledigt nur von zugeteilt/in_arbeit — Zwischenstufe versuchen (wie Finish-Sofort-Push).
+        try {
+          const mid = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, {
+            method: 'PATCH',
+            headers: headerForJob,
+            body: JSON.stringify({ job_id: serverJobId, status: 'in_arbeit' }),
+          });
+          if (mid.ok) {
+            r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, {
+              method: 'PATCH',
+              headers: headerForJob,
+              body: JSON.stringify({ job_id: serverJobId, status: 'erledigt' }),
+            });
+          }
+        } catch (_) {
+          /* Originalfehler unten behandeln */
+        }
+      }
       if (!r.ok) {
         let errMsg = 'Dispo: ' + r.status;
         let errData = null;
@@ -16228,13 +16338,17 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           && r.status === 400
           && /Status-Update fehlgeschlagen/i.test(errMsg);
         if (statusPushRejected) {
+          const wantedSt = String(payload.status || '').trim().toLowerCase();
           console.warn('[sync_push] Status nicht übernommen (Dispo-Übergang):', {
             job_id: serverJobId,
             technician_id: techIdForPush,
             payload_status: payload.status,
             error: errMsg,
           });
-          db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+          // erledigt niemals verwerfen — sonst holt der Pull den Auftrag als offen zurück.
+          if (wantedSt !== 'erledigt') {
+            db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+          }
           continue;
         }
         logSyncPushError({
