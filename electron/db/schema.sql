@@ -274,3 +274,12 @@ CREATE TABLE IF NOT EXISTS zeitschreibung_outbox (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Profil-Unterschrift (Cache von Dispo technician_signatures)
+CREATE TABLE IF NOT EXISTS technician_signature (
+  technician_id INTEGER PRIMARY KEY,
+  png_base64 TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'draw',
+  updated_at TEXT,
+  dirty INTEGER NOT NULL DEFAULT 0
+);
+

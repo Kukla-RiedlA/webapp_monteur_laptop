@@ -408,9 +408,11 @@ export function ServiceProtocolPage() {
                       {form.monteur ? <option value={form.monteur}>{form.monteur}</option> : null}
                     </select>
                   </label>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <SignatureBox label="Unterschrift Monteur" />
-                    <SignatureBox label="Unterschrift Kunde" />
+                  <div className="mt-4">
+                    <SignatureBox label="Profil-Unterschrift (Einstellungen)" />
+                    <p className="mt-1 text-xs text-[#6b7280]">
+                      Unterschrift unter Einstellungen hinterlegen. Finales PDF nur mit Profil-Unterschrift.
+                    </p>
                   </div>
                 </div>
                 <label className="flex flex-col gap-1">

@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.013
+- **Profil-Unterschrift:** zeichnen/hochladen in Einstellungen; Cache + Sync von Dispo; Einbettung in Service-/KW-/Schleppketten-/Prüfzertifikat-/Montagebericht-PDFs; finales PDF nur mit Signatur; Kunden-Unterschrift entfernt.
+
 ## V 2.005.012
 - **Protokolle für Kunden:** Montagebericht nur einmal in der Liste (gilt für alle FN), auch wenn die PDF unter mehreren FN-Ordnern liegt.
 

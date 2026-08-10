@@ -200,6 +200,7 @@ const {
 const textbausteineLocal = require('./lib/textbausteine-local');
 const arbeitsschritteLocal = require('./lib/arbeitsschritte-local');
 const protocolPdf = require('./lib/protocol_pdf');
+const technicianSignature = require('./lib/technician-signature');
 const kontrollwiegungLocal = require('./lib/kontrollwiegung-local');
 const schleppkettenLocal = require('./lib/schleppketten-local');
 const pruefzertifikatLocal = require('./lib/pruefzertifikat-local');
@@ -1696,6 +1697,123 @@ function createApp(db) {
       allowInsecureTls: true,
       fixed: true,
     });
+  });
+
+  /** Profil-Unterschrift: lokal + Dispo-Sync */
+  app.get('/api/technician/signature', async (req, res) => {
+    try {
+      technicianSignature.ensureSchema(db);
+      const technicianId = getTechnicianId(req);
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      }
+      const body = {
+        baseUrl: (req.query.base_url || req.query.dispoBaseUrl || '').toString(),
+        serverUsername: (req.query.username || '').toString(),
+        serverPassword: req.query.password != null ? String(req.query.password) : '',
+      };
+      const creds = resolveDispoServerCreds(body);
+      const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+      const dispoBase =
+        String(creds.baseUrl || creds.externalUrl || '').replace(/\/$/, '') ||
+        String(req.query.base_url || '').replace(/\/$/, '');
+      if (dispoBase && auth) {
+        try {
+          await technicianSignature.syncWithDispo(db, technicianId, dispoBase, auth);
+          save();
+        } catch (_) {
+          /* offline: Cache */
+        }
+      }
+      const local = technicianSignature.getLocal(db, technicianId);
+      if (!local) {
+        return res.json({ ok: true, has_signature: false, technician_id: technicianId });
+      }
+      res.json({
+        ok: true,
+        has_signature: true,
+        technician_id: technicianId,
+        png_base64: local.png_base64,
+        source: local.source || 'draw',
+        updated_at: local.updated_at || '',
+        dirty: !!local.dirty,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Signatur konnte nicht geladen werden.' });
+    }
+  });
+
+  app.post('/api/technician/signature', express.json({ limit: '3mb' }), async (req, res) => {
+    try {
+      technicianSignature.ensureSchema(db);
+      const technicianId = getTechnicianId(req);
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      }
+      const body = req.body || {};
+      const png = technicianSignature.normalizePngBase64(body.png_base64);
+      if (!png) {
+        return res.status(400).json({ ok: false, error: 'Ungültige Unterschrift (PNG/JPEG Base64).' });
+      }
+      const source = body.source === 'upload' ? 'upload' : 'draw';
+      const creds = resolveDispoServerCreds(body);
+      const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+      const dispoBase = String(creds.baseUrl || body.dispoBaseUrl || body.base_url || '')
+        .trim()
+        .replace(/\/$/, '');
+      let updatedAt = '';
+      let dirty = true;
+      if (dispoBase && auth) {
+        try {
+          const pushed = await technicianSignature.pushDispoSignature(dispoBase, auth, png, source);
+          if (pushed && pushed.ok) {
+            updatedAt = pushed.updated_at || '';
+            dirty = false;
+          }
+        } catch (_) {
+          dirty = true;
+        }
+      }
+      const local = technicianSignature.setLocal(db, technicianId, png, source, updatedAt, dirty);
+      save();
+      res.json({
+        ok: true,
+        has_signature: true,
+        technician_id: technicianId,
+        source: local.source,
+        updated_at: local.updated_at,
+        dirty: !!local.dirty,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Signatur konnte nicht gespeichert werden.' });
+    }
+  });
+
+  app.delete('/api/technician/signature', express.json({ limit: '100kb' }), async (req, res) => {
+    try {
+      technicianSignature.ensureSchema(db);
+      const technicianId = getTechnicianId(req);
+      if (!technicianId) {
+        return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      }
+      const creds = resolveDispoServerCreds(req.body || req.query || {});
+      const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+      const dispoBase = String(creds.baseUrl || req.query.base_url || '')
+        .trim()
+        .replace(/\/$/, '');
+      if (dispoBase && auth) {
+        try {
+          await technicianSignature.deleteDispoSignature(dispoBase, auth);
+        } catch (_) {
+          /* lokal trotzdem löschen */
+        }
+      }
+      technicianSignature.deleteLocal(db, technicianId);
+      save();
+      res.json({ ok: true, has_signature: false, technician_id: technicianId });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Signatur konnte nicht gelöscht werden.' });
+    }
   });
 
   const DIENSTREISE_SUBFOLDERS = ['Dokumente_Dispo', 'Dokumente_Monteur', 'Dokumente_Anlage', 'Dokumente_Buchhaltung'];
@@ -8269,6 +8387,8 @@ function createApp(db) {
       for (const lang of languages) {
         let pdfBytes = null;
         try {
+          const sigPng = await resolveTechnicianSignaturePng(technicianId, body);
+          if (!sigPng) return failMissingSignature(res);
           pdfBytes = await protocolPdf.generateMontageberichtPdfBuffer(
             {
               kopfdaten: kopfdatenForDocx,
@@ -8276,6 +8396,7 @@ function createApp(db) {
               grundDesEinsatzes,
               grundDesEinsatzes_html: grundDesEinsatzesHtml,
               freitext,
+              technician_signature_png: sigPng,
             },
             { lang },
           );
@@ -8661,6 +8782,9 @@ function createApp(db) {
         );
         const pdfDir = path.dirname(pdfPaths.full);
         if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+        const sigPngKw = await resolveTechnicianSignaturePng(technicianId, body);
+        if (!sigPngKw) return failMissingSignature(res);
+        payload.technician_signature_png = sigPngKw;
         const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(payload);
         writeFileWithRetry(pdfPaths.full, pdfBuf);
         savedPdf = pdfPaths.rel;
@@ -8802,6 +8926,8 @@ function createApp(db) {
             localJobId,
             technicianId,
           );
+          const sigKwOpen = await resolveTechnicianSignaturePng(technicianId, rec);
+          if (sigKwOpen) pdfPayload.technician_signature_png = sigKwOpen;
           const pdfDir = path.dirname(pdfPaths.full);
           if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
           const pdfBufGen = await protocolPdf.generateKontrollwiegungPdfBuffer(pdfPayload);
@@ -9031,6 +9157,9 @@ function createApp(db) {
         );
         const pdfDir = path.dirname(pdfPaths.full);
         if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+        const sigPngSk = await resolveTechnicianSignaturePng(technicianId, body);
+        if (!sigPngSk) return failMissingSignature(res);
+        payload.technician_signature_png = sigPngSk;
         const pdfBuf = await protocolPdf.generateSchleppkettenPdfBuffer(payload);
         writeFileWithRetry(pdfPaths.full, pdfBuf);
         savedPdf = pdfPaths.rel;
@@ -9135,6 +9264,8 @@ function createApp(db) {
       }
       const pdfPayload = enrichKontrollwiegungPdfPayload(Object.assign({}, rec), localJobId, technicianId);
       pdfPayload.messungen = schleppkettenLocal.enrichMessungen(pdfPayload.messungen);
+      const sigSk = await resolveTechnicianSignaturePng(technicianId, rec);
+      if (sigSk) pdfPayload.technician_signature_png = sigSk;
       const pdfPaths = resolveSchleppkettenLocalPdfPaths(
         reiseDir,
         localJobId,
@@ -9364,6 +9495,9 @@ function createApp(db) {
       let record = null;
       const savedPdfs = [];
       if (reiseDir) {
+        const sigPngPz = await resolveTechnicianSignaturePng(technicianId, body);
+        if (!sigPngPz) return failMissingSignature(res);
+        payload.technician_signature_png = sigPngPz;
         record = pruefzertifikatLocal.savePruefzertifikatLocal(reiseDir, payload.fabrikationsnummer, payload);
         for (const lang of langs) {
           const pdfPaths = resolvePruefzertifikatLocalPdfPaths(
@@ -9876,6 +10010,15 @@ function createApp(db) {
     if (enriched.abschluss && enriched.abschluss.monteur_name) {
       enriched.monteur_name = enriched.abschluss.monteur_name;
     }
+    const sigPng = await resolveTechnicianSignaturePng(technicianId, draftPayload);
+    if (!sigPng) {
+      const err = new Error(
+        'Keine Profil-Unterschrift. Bitte unter Einstellungen hinterlegen oder für dieses Protokoll neu zeichnen.',
+      );
+      err.code = 'missing_technician_signature';
+      throw err;
+    }
+    enriched.technician_signature_png = sigPng;
     const savedRel = [];
     let localWarning = null;
     for (const lang of langs) {
@@ -10117,7 +10260,14 @@ function createApp(db) {
         localJobId,
         fab,
         technicianId,
-        Object.assign({}, draftPayload, { arbeitsschritte: steps }),
+        Object.assign({}, draftPayload, {
+          arbeitsschritte: steps,
+          dispoBaseUrl,
+          base_url: dispoBaseUrl,
+          serverUsername: body.serverUsername || body.dispoUsername,
+          serverPassword: body.serverPassword ?? body.dispoPassword,
+          signature_override_png: body.signature_override_png || '',
+        }),
         pdfLangs,
       );
       let savedRel = localPdf.savedRel || [];
@@ -10192,6 +10342,9 @@ function createApp(db) {
         warning,
       });
     } catch (e) {
+      if (e && e.code === 'missing_technician_signature') {
+        return failMissingSignature(res);
+      }
       res.status(500).json({ ok: false, error: e.message || 'Serviceprotokoll konnte nicht gespeichert werden.' });
     }
   });
@@ -12077,6 +12230,45 @@ function createApp(db) {
     if (!u) return undefined;
     const p = (password || '').toString();
     return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
+  }
+
+  /**
+   * Profil-Unterschrift für finales PDF: Override aus Body, sonst Cache (+ Sync).
+   */
+  async function resolveTechnicianSignaturePng(technicianId, body) {
+    const b = body && typeof body === 'object' ? body : {};
+    const overrideRaw =
+      b.signature_override_png ||
+      b.technician_signature_png ||
+      (b.abschluss && (b.abschluss.signature_override_png || b.abschluss.signature_monteur)) ||
+      '';
+    const override = technicianSignature.normalizePngBase64(overrideRaw);
+    if (override) return override;
+    const creds = resolveDispoServerCreds(b);
+    const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+    const dispoBase = String(creds.baseUrl || b.dispoBaseUrl || b.base_url || b.baseUrl || '')
+      .trim()
+      .replace(/\/$/, '');
+    if (dispoBase && auth) {
+      try {
+        await technicianSignature.syncWithDispo(db, technicianId, dispoBase, auth);
+        save();
+      } catch (_) {
+        /* offline */
+      }
+    }
+    const local = technicianSignature.getLocal(db, technicianId);
+    return local && local.png_base64 ? local.png_base64 : null;
+  }
+
+  function failMissingSignature(res) {
+    res.status(400).json({
+      ok: false,
+      error:
+        'Keine Profil-Unterschrift. Bitte unter Einstellungen hinterlegen oder für dieses Protokoll neu zeichnen.',
+      code: 'missing_technician_signature',
+    });
+    return false;
   }
 
   /** Apache/FPM liefert Authorization oft nicht an PHP — Dispo require_login.php liest X-Kukla-Authorization. */

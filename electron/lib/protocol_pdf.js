@@ -27,6 +27,69 @@ async function embedLogo(pdfDoc) {
 }
 
 /**
+ * PNG/JPEG Base64 (roh oder data-URL) für pdf-lib einbetten.
+ */
+async function embedSignatureImage(pdfDoc, pngBase64) {
+  const raw = String(pngBase64 || '').trim();
+  if (!raw) return null;
+  let b64 = raw.replace(/^data:image\/(png|jpe?g);base64,/i, '').replace(/\s+/g, '');
+  if (!b64) return null;
+  let bytes;
+  try {
+    bytes = Buffer.from(b64, 'base64');
+  } catch (_) {
+    return null;
+  }
+  if (!bytes || bytes.length < 32) return null;
+  const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  const isJpg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  try {
+    if (isPng) return await pdfDoc.embedPng(bytes);
+    if (isJpg) return await pdfDoc.embedJpg(bytes);
+  } catch (_) {
+    /* sharp fallback */
+  }
+  try {
+    const sharp = require('sharp');
+    const png = await sharp(bytes).rotate().png().toBuffer();
+    return await pdfDoc.embedPng(png);
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Zeichnet Unterschrift + optionales Label. y = Oberkante; Rückgabe = y darunter.
+ */
+async function drawTechnicianSignatureAt(pdfDoc, page, opts) {
+  const pngBase64 = opts && opts.pngBase64;
+  const img = await embedSignatureImage(pdfDoc, pngBase64);
+  if (!img) return opts && opts.y != null ? opts.y : 0;
+  const maxW = opts.maxW != null ? opts.maxW : 160;
+  const maxH = opts.maxH != null ? opts.maxH : 48;
+  const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+  const iw = img.width * scale;
+  const ih = img.height * scale;
+  let y = opts.y;
+  const x = opts.x != null ? opts.x : 36;
+  const font = opts.font;
+  const color = opts.color;
+  const S = typeof opts.S === 'function' ? opts.S : (t) => String(t == null ? '' : t);
+  if (opts.label && font) {
+    page.drawText(S(opts.label), {
+      x,
+      y: y - 10,
+      size: opts.labelSize != null ? opts.labelSize : 7,
+      font,
+      color: opts.mutedColor || color,
+    });
+    y -= 14;
+  }
+  page.drawImage(img, { x, y: y - ih, width: iw, height: ih });
+  return y - ih - 4;
+}
+
+/**
  * Unicode-fähige Schriften (Windows Arial/Calibri), sonst Helvetica.
  * Benötigt @pdf-lib/fontkit für TTF.
  */
@@ -317,6 +380,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   const tableInnerW = PAGE_W - marginX * 2;
 
   const logo = await embedLogo(pdfDoc);
+  const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
   const stepsRaw = Array.isArray(payload.arbeitsschritte) ? payload.arbeitsschritte : [];
   const steps = stepsRaw
     .map((s) => {
@@ -724,13 +788,14 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     if (bemerk) blocks.push({ type: 'bemerk', text: bemerk });
     const absStatus = abschlussStatusLabel(abschluss, lang);
     const absBem = stripHtml(abschluss.bemerkungen || '');
-    if (absStatus || abschluss.monteur_name || abschluss.datum || absBem) {
+    if (absStatus || abschluss.monteur_name || abschluss.datum || absBem || sigImg) {
       blocks.push({
         type: 'abschluss',
         status: absStatus,
         monteur: String(abschluss.monteur_name || monteurName || '').trim(),
         datum: formatDateDe(abschluss.datum) || String(abschluss.datum || '').trim(),
         bemerkung: absBem,
+        hasSig: !!sigImg,
       });
     }
     return blocks;
@@ -775,7 +840,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     if (block.type === 'mess') need = 20 + 18 + messRows.length * 16 + 14;
     else if (block.type === 'pg') need = 20 + 14 + 18 + 16 + 10;
     else if (block.type === 'bemerk') need = 40;
-    else if (block.type === 'abschluss') need = 80;
+    else if (block.type === 'abschluss') need = 80 + (block.hasSig ? 56 : 0);
     if (lastUsed + need > usableH && pagesPlan[targetIdx].trailing.length) {
       pagesPlan.push({ steps: [], startIndex: 0, trailing: [] });
       targetIdx = pagesPlan.length - 1;
@@ -865,7 +930,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         y -= 8;
       } else if (block.type === 'abschluss') {
         y = drawSectionTitle(page, y, de ? 'Abschluss' : 'Completion');
-        const absBoxH = 56;
+        const absBoxH = 56 + (sigImg ? 52 : 0);
         page.drawRectangle({
           x: marginX,
           y: y - absBoxH,
@@ -899,6 +964,21 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
             font,
             color: grayText,
           });
+        }
+        if (sigImg) {
+          const maxW = 150;
+          const maxH = 42;
+          const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
+          const iw = sigImg.width * scale;
+          const ih = sigImg.height * scale;
+          page.drawText(de ? 'Unterschrift' : 'Signature', {
+            x: marginX + 10,
+            y: y - 58,
+            size: 6.5,
+            font,
+            color: grayMuted,
+          });
+          page.drawImage(sigImg, { x: marginX + 10, y: y - absBoxH + 4, width: iw, height: ih });
         }
         y -= absBoxH + 10;
       }
@@ -1012,6 +1092,7 @@ async function generateKontrollwiegungPdfBuffer(payload) {
   const sumBg = rgb(0.93, 0.96, 0.94);
 
   const logo = await embedLogo(pdfDoc);
+  const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
   const rowsAll = Array.isArray(payload.wiegungen) ? payload.wiegungen : [];
   // PDF: nur Zeilen, die für die Summe markiert sind (in_summe)
   const dataRows = rowsAll.filter(rowInSumme);
@@ -1389,6 +1470,21 @@ async function generateKontrollwiegungPdfBuffer(payload) {
       borderColor: green,
       borderWidth: 0.9,
     });
+    if (sigImg && pageIndex === pagesPlan.length - 1) {
+      const maxW = 140;
+      const maxH = 36;
+      const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
+      const iw = sigImg.width * scale;
+      const ih = sigImg.height * scale;
+      page.drawText('Unterschrift / Signature', {
+        x: marginX,
+        y: marginBottom + 18,
+        size: 7,
+        font,
+        color: grayMuted,
+      });
+      page.drawImage(sigImg, { x: marginX + 130, y: marginBottom + 6, width: iw, height: ih });
+    }
     drawFooter(page, pageIndex, pagesPlan.length, pageIndex === pagesPlan.length - 1);
   });
 
@@ -1421,6 +1517,7 @@ async function generateSchleppkettenPdfBuffer(payload) {
   const sumBg = rgb(0.93, 0.96, 0.94);
 
   const logo = await embedLogo(pdfDoc);
+  const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
   const rowsAll = skLocal.enrichMessungen(Array.isArray(payload.messungen) ? payload.messungen : []);
   const dataRows = rowsAll.filter(rowInSumme);
 
@@ -1923,6 +2020,21 @@ async function generateSchleppkettenPdfBuffer(payload) {
       borderColor: green,
       borderWidth: 0.9,
     });
+    if (sigImg && pageIndex === pagesPlan.length - 1) {
+      const maxW = 140;
+      const maxH = 36;
+      const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
+      const iw = sigImg.width * scale;
+      const ih = sigImg.height * scale;
+      page.drawText('Unterschrift / Signature', {
+        x: marginX,
+        y: marginBottom + 18,
+        size: 7,
+        font,
+        color: grayMuted,
+      });
+      page.drawImage(sigImg, { x: marginX + 130, y: marginBottom + 6, width: iw, height: ih });
+    }
     drawFooter(page, pageIndex, pagesPlan.length, pageIndex === pagesPlan.length - 1);
   });
 
@@ -2163,6 +2275,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
   const bemerkHtml = String(kopf.bemerkungen_html || '').trim();
 
   const logo = await embedLogo(pdfDoc);
+  const sigImg = await embedSignatureImage(pdfDoc, payload && payload.technician_signature_png);
 
   async function resolveBlocks(html, plain) {
     const rawBlocks = htmlToMbContentBlocks(html, plain, unicodeOk);
@@ -2546,6 +2659,34 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     }
   });
 
+  if (sigImg) {
+    const maxW = 160;
+    const maxH = 48;
+    const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
+    const iw = sigImg.width * scale;
+    const ih = sigImg.height * scale;
+    needSpace(ih + 28);
+    page.drawText(S(de ? 'Unterschrift Servicetechniker' : 'Technician signature'), {
+      x: marginX,
+      y: y - 10,
+      size: 8,
+      font: fontBold,
+      color: greenDark,
+    });
+    y -= 16;
+    page.drawImage(sigImg, { x: marginX, y: y - ih, width: iw, height: ih });
+    y -= ih + 8;
+    if (servicetechniker) {
+      page.drawText(S(servicetechniker), {
+        x: marginX,
+        y: y - 10,
+        size: 8,
+        font,
+        color: grayText,
+      });
+    }
+  }
+
   pages.forEach((p, i) => {
     drawFooter(p, i, pages.length);
   });
@@ -2582,6 +2723,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   const tableInnerW = PAGE_W - marginX * 2;
 
   const logo = await embedLogo(pdfDoc);
+  const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
   const t = (a, b) => (de ? a : b);
   const str = (v) => (v == null ? '' : String(v).trim());
   const fmtPct = (v) => {
@@ -3080,15 +3222,23 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     font,
     color: grayText,
   });
-  if (str(payload.kunde_unterschrift)) {
-    y -= 16;
-    page.drawText(S(t('Kunde', 'Customer') + ': ' + str(payload.kunde_unterschrift)), {
+  if (sigImg) {
+    y -= 14;
+    page.drawText(S(t('Unterschrift', 'Signature')), {
       x: marginX,
       y,
-      size: 9,
+      size: 8,
       font,
-      color: grayText,
+      color: grayMuted,
     });
+    y -= 6;
+    const maxW = 160;
+    const maxH = 48;
+    const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
+    const iw = sigImg.width * scale;
+    const ih = sigImg.height * scale;
+    page.drawImage(sigImg, { x: marginX, y: y - ih, width: iw, height: ih });
+    y -= ih + 4;
   }
 
   // Footer

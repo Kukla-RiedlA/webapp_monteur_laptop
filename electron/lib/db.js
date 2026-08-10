@@ -236,6 +236,12 @@ function applyRuntimeMigrations(db) {
   } catch (_) {
     /* optional during early boot */
   }
+  try {
+    const technicianSignature = require('./technician-signature');
+    technicianSignature.ensureSchema(db);
+  } catch (_) {
+    /* optional during early boot */
+  }
 }
 
 /**

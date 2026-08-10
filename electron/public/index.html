@@ -1746,7 +1746,7 @@
                 <div class="mb-v2-actions-row">
                   <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Speichert Daten und erzeugt das PDF">Speichern</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtPdf" style="display:none" title="PDF im Ordner Protokolle öffnen">PDF öffnen</button>
-                  <button type="button" class="btn btn-ghost" id="btnMontageberichtSign" title="Erfordert zuvor erzeugtes PDF; signiert auf dem Dispo-Server">Bericht unterschreiben</button>
+                  <button type="button" class="btn btn-ghost" id="btnMontageberichtSign" hidden title="Veraltet – Signatur kommt aus dem Profil" style="display:none;">Bericht unterschreiben</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
                 </div>
               </div>
@@ -2283,8 +2283,23 @@
               <textarea id="pzKonformitaet" rows="4" spellcheck="true" lang="de"></textarea>
             </div>
             <div class="sp-v2-field">
-              <label for="pzKundeUnterschrift">Kunde (optional)</label>
-              <input type="text" id="pzKundeUnterschrift" autocomplete="off">
+              <label for="pzKundeUnterschrift" hidden>Kunde (optional)</label>
+              <input type="hidden" id="pzKundeUnterschrift" value="">
+              <div class="pz-field" style="margin-top:0.5rem;">
+                <label>Profil-Unterschrift</label>
+                <div id="pzProfileSigPreview" style="height:70px;border:1px dashed var(--accent);border-radius:4px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                  <img id="pzProfileSigImg" alt="" style="max-height:100%;max-width:100%;display:none;" />
+                  <span id="pzProfileSigEmpty" class="muted" style="font-size:0.85rem;">Keine Profil-Unterschrift</span>
+                </div>
+                <label style="display:flex;align-items:center;gap:0.4rem;margin-top:0.35rem;font-weight:normal;">
+                  <input type="checkbox" id="pzSigOverrideToggle" />
+                  Für dieses Zertifikat neu zeichnen
+                </label>
+                <div id="pzSigOverrideWrap" style="display:none;margin-top:0.35rem;">
+                  <canvas id="pzSignatureOverrideCanvas" width="400" height="100" style="border:1px solid var(--accent);background:#fff;max-width:100%;"></canvas>
+                  <button type="button" class="btn btn-ghost" id="btnPzSigOverrideClear">Löschen</button>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -2649,21 +2664,20 @@
                 </div>
                 <div class="sp-v2-sig-grid">
                   <div class="sp-v2-sig-box">
-                    <label for="spSignatureMonteurCanvas">Unterschrift Monteur</label>
-                    <div class="sp-v2-sig-pad">
-                      <canvas id="spSignatureMonteurCanvas" width="400" height="100" aria-label="Unterschrift Monteur"></canvas>
+                    <label>Profil-Unterschrift</label>
+                    <div id="spProfileSigPreview" class="sp-v2-sig-pad" style="display:flex;align-items:center;justify-content:center;background:#fff;">
+                      <img id="spProfileSigImg" alt="" style="max-width:100%;max-height:100%;display:none;" />
+                      <span id="spProfileSigEmpty" class="muted" style="font-size:0.85rem;">Keine Profil-Unterschrift – bitte unter Einstellungen hinterlegen</span>
                     </div>
-                    <div class="sp-v2-sig-actions">
-                      <button type="button" class="btn btn-ghost" data-sp-sig-clear="spSignatureMonteurCanvas">Löschen</button>
-                    </div>
-                  </div>
-                  <div class="sp-v2-sig-box">
-                    <label for="spSignatureKundeCanvas">Unterschrift Kunde</label>
-                    <div class="sp-v2-sig-pad">
-                      <canvas id="spSignatureKundeCanvas" width="400" height="100" aria-label="Unterschrift Kunde"></canvas>
-                    </div>
-                    <div class="sp-v2-sig-actions">
-                      <button type="button" class="btn btn-ghost" data-sp-sig-clear="spSignatureKundeCanvas">Löschen</button>
+                    <label style="display:flex;align-items:center;gap:0.4rem;margin-top:0.35rem;font-weight:normal;">
+                      <input type="checkbox" id="spSigOverrideToggle" />
+                      Für dieses Protokoll neu zeichnen
+                    </label>
+                    <div id="spSigOverrideWrap" style="display:none;margin-top:0.35rem;">
+                      <canvas id="spSignatureOverrideCanvas" width="400" height="100" aria-label="Unterschrift Override"></canvas>
+                      <div class="sp-v2-sig-actions">
+                        <button type="button" class="btn btn-ghost" data-sp-sig-clear="spSignatureOverrideCanvas">Löschen</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2916,6 +2930,39 @@
       <div class="settings-row">
         <label for="monteurFullName">Name (vollständig)</label>
         <input type="text" id="monteurFullName" readonly placeholder="Nach Login aus Dispo" title="Aus Dispo übernommen nach erfolgreichem Login." />
+      </div>
+      <div class="settings-sync-section" id="settingsSignatureSection">
+        <h3>Meine Unterschrift</h3>
+        <p class="muted" style="font-size:0.88rem;margin:0 0 0.65rem;line-height:1.4;">
+          Wird in allen Protokoll-PDFs eingebettet. Zeichnen oder Bild hochladen (PNG/JPEG). Speichern synchronisiert mit dem Dispo-Server, wenn online.
+        </p>
+        <div class="settings-row">
+          <div style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start;">
+            <div>
+              <label for="techSigCanvas">Zeichnen</label>
+              <canvas id="techSigCanvas" width="400" height="120" style="display:block;width:400px;max-width:100%;height:120px;border:1px solid var(--accent);border-radius:4px;background:#fff;touch-action:none;cursor:crosshair;" aria-label="Unterschrift zeichnen"></canvas>
+              <div style="margin-top:0.4rem;display:flex;flex-wrap:wrap;gap:0.4rem;">
+                <button type="button" class="btn btn-ghost" id="btnTechSigClear">Zeichnung löschen</button>
+                <button type="button" class="btn btn-primary" id="btnTechSigSaveDraw">Unterschrift speichern</button>
+              </div>
+            </div>
+            <div>
+              <label>Vorschau (gespeichert)</label>
+              <div id="techSigPreviewWrap" style="width:220px;height:80px;border:1px dashed var(--accent);border-radius:4px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                <img id="techSigPreview" alt="" style="max-width:100%;max-height:100%;display:none;" />
+                <span id="techSigPreviewEmpty" class="muted" style="font-size:0.85rem;">Keine Unterschrift</span>
+              </div>
+              <div style="margin-top:0.4rem;display:flex;flex-wrap:wrap;gap:0.4rem;">
+                <label class="btn btn-ghost" style="cursor:pointer;margin:0;">
+                  Bild hochladen…
+                  <input type="file" id="techSigUpload" accept="image/png,image/jpeg" hidden />
+                </label>
+                <button type="button" class="btn btn-ghost" id="btnTechSigDelete" disabled>Gespeicherte löschen</button>
+              </div>
+            </div>
+          </div>
+          <span id="techSigHint" class="settings-saved-hint" style="display:block;margin-top:0.5rem;" aria-live="polite"></span>
+        </div>
       </div>
       <div class="settings-row">
         <label for="serverUsername">Benutzername (Dispo-Login)</label>
