@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.009
+- **Serviceprotokoll Qmax (React-UI):** Freitext inkl. Einheiten (z. B. `t/h`, `kg/h`); Zahlenfilter in der sichtbaren Anlagendaten-Eingabe entfernt.
+
 ## V 2.005.008
 - **Serviceprotokoll Qmax:** freie Eingabe (Buchstaben/Sonderzeichen), kein Zahlen-Cap mehr.
 - **Protokolle:** Kontrollwiegung- und Schleppketten-Messfelder ohne Hoch/Runter-Spinner (`type=text`).

@@ -233,17 +233,11 @@ export function ServiceProtocolPage() {
                     <TextInput
                       label="Qmax"
                       value={form.qmax}
-                      inputMode="decimal"
-                      className="tabular-nums"
-                      onChange={(e) => {
-                        const raw = e.target.value.replace(/[^\d.,]/g, '');
-                        const n = Number(String(raw).replace(',', '.'));
-                        if (Number.isFinite(n) && n > 100000) {
-                          patchForm({ qmax: '100000' });
-                          return;
-                        }
-                        patchForm({ qmax: raw });
-                      }}
+                      inputMode="text"
+                      maxLength={100}
+                      autoComplete="off"
+                      placeholder="z.B. 30 t/h"
+                      onChange={(e) => patchForm({ qmax: e.target.value })}
                     />
                     <TextInput
                       label="v max"
