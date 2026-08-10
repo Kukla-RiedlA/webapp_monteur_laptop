@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.010
+- **FN-Ordner offline:** Neue Anlagen ohne PROJEKTE-NEU-Treffer heißen `FN_Kundenname_Ort_LK` (Parität Dispo); Bare-FN-Ordner werden migriert.
+
 ## V 2.005.009
 - **Serviceprotokoll Qmax (React-UI):** Freitext inkl. Einheiten (z. B. `t/h`, `kg/h`); Zahlenfilter in der sichtbaren Anlagendaten-Eingabe entfernt.
 

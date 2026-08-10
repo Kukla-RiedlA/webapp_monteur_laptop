@@ -1498,6 +1498,12 @@ function upsertAnlagenstammTreeCacheRow(db, fab, pnRaw, meta) {
   if (!rootFolderName && pnRaw && pnRaw.folder_name) {
     rootFolderName = String(pnRaw.folder_name).trim();
   }
+  if (!rootFolderName && pnRaw && pnRaw.root_name) {
+    rootFolderName = String(pnRaw.root_name).trim();
+  }
+  if (!rootFolderName && pnRaw && pnRaw.suggested_folder_name) {
+    rootFolderName = String(pnRaw.suggested_folder_name).trim();
+  }
   const existing = readAnlagenstammTreeCacheRow(db, fabNorm);
   if (!rootFolderName && existing && existing.root_folder_name) {
     rootFolderName = String(existing.root_folder_name).trim();

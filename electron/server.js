@@ -130,6 +130,7 @@ const {
 } = require('./lib/projekte-neu-local');
 const {
   buildMonteurMontageFolderName,
+  buildFnProjectFolderName,
   buildMonteurWorkRelPath,
   buildMonteurWorkAbsDir,
   isMonteurWorkRelPath,
@@ -1874,7 +1875,10 @@ function createApp(db) {
     let fabMap = Array.isArray(body.fab_map) ? body.fab_map : [];
     if (!fabMap.length && jobDetail) {
       for (const fn of fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)) {
-        fabMap.push({ fab: String(fn), folder_name_canonical: String(fn) });
+        fabMap.push({
+          fab: String(fn),
+          folder_name_canonical: buildCanonicalFabFolderName(fn, jobDetail),
+        });
       }
     }
     const offlinePaths = Object.prototype.hasOwnProperty.call(body, 'offline_paths')
@@ -3023,14 +3027,62 @@ function createApp(db) {
     }
   });
 
+  function jobMetaForFnFolder(jobDetail) {
+    if (!jobDetail) return null;
+    return {
+      customer_name: jobDetail.customer_name,
+      city: jobDetail.city,
+      country: jobDetail.country,
+    };
+  }
+
+  function buildCanonicalFabFolderName(fab, jobDetail) {
+    const built = buildFnProjectFolderName({
+      fab,
+      customer_name: jobDetail && jobDetail.customer_name,
+      city: jobDetail && jobDetail.city,
+      country: jobDetail && jobDetail.country,
+    });
+    return built || String(fab);
+  }
+
+  /** Speichert vorgeschlagenen Langnamen im lokalen Anlagenstamm-Cache. */
+  function rememberSuggestedFnFolder(fab, folderName) {
+    const f = String(fab || '').trim();
+    const name = String(folderName || '').trim();
+    if (!f || !name || isBareFabFolderName(name)) return;
+    try {
+      upsertAnlagenstammTreeCache(db, f, { enabled: false, tree: [] }, { root_folder_name: name });
+    } catch (_) {}
+    try {
+      db.prepare(
+        `UPDATE anlagenstamm_local SET pn_root_name = ?
+         WHERE TRIM(fabrikationsnummer) = TRIM(?)
+           AND (
+             pn_root_name IS NULL OR TRIM(pn_root_name) = ''
+             OR TRIM(pn_root_name) = TRIM(?)
+           )`,
+      ).run(name, f, f);
+    } catch (_) {}
+  }
+
   /** Kanonische Fileserver-FN-Namen für Explorer/Pfade (Cache + Platte, fab_map persistieren). */
   function ensureFabMapCanonicalForJob(localJobId, reiseDir) {
-    const jobRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
+    const jobRow = lookupDienstreiseJobRow(localJobId);
     const jobFabs = jobRow ? fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern) : [];
     const offlineCfg = getOfflinePullConfig(db, localJobId);
-    const fabMap = resolveFabMapLocal(reiseDir, offlineCfg.fab_map || [], jobFabs, (fab) =>
-      readAnlagenstammRootFolderName(db, fab),
+    const fabMap = resolveFabMapLocal(
+      reiseDir,
+      offlineCfg.fab_map || [],
+      jobFabs,
+      (fab) => readAnlagenstammRootFolderName(db, fab),
+      jobMetaForFnFolder(jobRow),
     );
+    for (const entry of fabMap) {
+      if (entry && entry.folder_name_canonical) {
+        rememberSuggestedFnFolder(entry.fab, entry.folder_name_canonical);
+      }
+    }
     if (!fabMapJsonEqual(offlineCfg.fab_map, fabMap)) {
       updateOfflinePullFabMap(db, localJobId, fabMap);
       save();
@@ -4073,9 +4125,13 @@ function createApp(db) {
     );
     for (const fabNum of fabNumsPreview) {
       const fab = String(fabNum);
-      let folder_name_canonical = fab;
+      let folder_name_canonical = '';
       const cachedRoot = readAnlagenstammRootFolderName(db, fab);
       if (cachedRoot && !isBareFabFolderName(cachedRoot)) folder_name_canonical = cachedRoot;
+      if (!folder_name_canonical || isBareFabFolderName(folder_name_canonical)) {
+        folder_name_canonical = buildCanonicalFabFolderName(fab, jobDetail);
+      }
+      rememberSuggestedFnFolder(fab, folder_name_canonical);
       fabsOut.push({ fab, folder_name_canonical, tree: [] });
     }
     return {
@@ -4144,6 +4200,7 @@ function createApp(db) {
     fabMapIn,
     jobFabNums,
     signal,
+    jobDetail,
   ) {
     let monteurDirNames = [];
     try {
@@ -4176,6 +4233,10 @@ function createApp(db) {
         : [...byFab.keys()];
     if (!fabNums.length) return [];
 
+    const jobIdQ =
+      serverJobId != null && String(serverJobId).trim() !== ''
+        ? '&job_id=' + encodeURIComponent(String(serverJobId))
+        : '';
     const out = [];
     for (const fab of fabNums) {
       const existing = byFab.get(fab);
@@ -4198,21 +4259,32 @@ function createApp(db) {
             '/dispo_api/api/anlagenstamm_files_list.php?technician_id=' +
             encodeURIComponent(technicianId) +
             '&fab=' +
-            encodeURIComponent(fab);
+            encodeURIComponent(fab) +
+            jobIdQ;
           const r = await fetch(anlUrl, {
             headers: dispoMonteurFetchHeaders(technicianId, authHeader),
             signal,
           });
           const data = await r.json().catch(() => ({}));
-          if (r.ok && data && data.projekte_neu && data.projekte_neu.folder_name) {
-            folder_name_canonical = String(data.projekte_neu.folder_name).trim();
+          if (r.ok && data && data.projekte_neu) {
+            const pn = data.projekte_neu;
+            const fromApi =
+              (pn.folder_name && String(pn.folder_name).trim()) ||
+              (pn.root_name && String(pn.root_name).trim()) ||
+              (pn.suggested_folder_name && String(pn.suggested_folder_name).trim()) ||
+              '';
+            if (fromApi) folder_name_canonical = fromApi;
           }
         } catch (_) {
           /* optional */
         }
       }
 
+      if (!folder_name_canonical || folder_name_canonical === fab || isBareFabFolderName(folder_name_canonical)) {
+        folder_name_canonical = buildCanonicalFabFolderName(fab, jobDetail);
+      }
       if (!folder_name_canonical) folder_name_canonical = fab;
+      rememberSuggestedFnFolder(fab, folder_name_canonical);
       out.push({ fab, folder_name_canonical });
     }
     return out;
@@ -4258,30 +4330,46 @@ function createApp(db) {
       let folder_name_canonical =
         resolveCanonicalProjekteNeuFolderName(monteurDirNames, fab) ||
         resolveCanonicalFolderFromDirList(monteurDirNames, fab);
-      if (!folder_name_canonical) folder_name_canonical = fab;
+      if (!folder_name_canonical || isBareFabFolderName(folder_name_canonical)) {
+        folder_name_canonical = '';
+      }
       let tree = [];
       const anlUrl =
         dispoBaseUrl +
         '/dispo_api/api/anlagenstamm_files_list.php?technician_id=' +
         encodeURIComponent(technicianId) +
         '&fab=' +
-        encodeURIComponent(fab);
+        encodeURIComponent(fab) +
+        '&job_id=' +
+        encodeURIComponent(String(serverJobId));
       try {
         const r = await fetch(anlUrl, {
           headers: dispoMonteurFetchHeaders(technicianId, hdr),
           signal: previewFetchSignal(PREVIEW_DISPO_TIMEOUT_MS),
         });
         const data = await r.json().catch(() => ({}));
-        if (r.ok && data && data.projekte_neu && Array.isArray(data.projekte_neu.tree)) {
+        if (r.ok && data && data.projekte_neu) {
           try {
             upsertAnlagenstammTreeCache(db, fab, data.projekte_neu);
           } catch (_) {}
-          tree = buildOfflinePreviewTree(data.projekte_neu.tree);
-          if (data.projekte_neu.folder_name) folder_name_canonical = String(data.projekte_neu.folder_name);
+          if (Array.isArray(data.projekte_neu.tree)) {
+            tree = buildOfflinePreviewTree(data.projekte_neu.tree);
+          }
+          const pn = data.projekte_neu;
+          const fromApi =
+            (pn.folder_name && String(pn.folder_name).trim()) ||
+            (pn.root_name && String(pn.root_name).trim()) ||
+            (pn.suggested_folder_name && String(pn.suggested_folder_name).trim()) ||
+            '';
+          if (fromApi) folder_name_canonical = fromApi;
         }
       } catch (anlErr) {
         console.warn('[accept_offline_preview] anlagenstamm', fab, anlErr && anlErr.message ? anlErr.message : anlErr);
       }
+      if (!folder_name_canonical || isBareFabFolderName(folder_name_canonical)) {
+        folder_name_canonical = buildCanonicalFabFolderName(fab, jobDetail);
+      }
+      rememberSuggestedFnFolder(fab, folder_name_canonical);
       if (!tree.length && folder_name_canonical) {
         try {
           const subPath = 'Dokumente_Monteur/' + folder_name_canonical;
@@ -4617,7 +4705,10 @@ function createApp(db) {
         let fabMap = Array.isArray(body.fab_map) ? body.fab_map : [];
         if (!fabMap.length && jobDetail) {
           for (const fn of fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)) {
-            fabMap.push({ fab: String(fn), folder_name_canonical: String(fn) });
+            fabMap.push({
+              fab: String(fn),
+              folder_name_canonical: buildCanonicalFabFolderName(fn, jobDetail),
+            });
           }
         }
         try {
@@ -11849,7 +11940,10 @@ function createApp(db) {
         if (!fabMap.length) {
           fabMap = [];
           for (const fn of fabNumbersFromJobFabrikationsnummern(jobRowFull.fabrikationsnummern)) {
-            fabMap.push({ fab: String(fn), folder_name_canonical: String(fn) });
+            fabMap.push({
+              fab: String(fn),
+              folder_name_canonical: buildCanonicalFabFolderName(fn, jobRowFull),
+            });
           }
         }
         fabMap = await resolveFabMapCanonicalFolderNames(
@@ -11860,6 +11954,7 @@ function createApp(db) {
           fabMap,
           [...fabNumbersFromJobFabrikationsnummern(jobRowFull.fabrikationsnummern)],
           signal,
+          jobRowFull,
         );
         if (fabMap.length) {
           await dbLock.runWithDbLock(async () => {
@@ -14655,10 +14750,32 @@ async function pullTedExcelIntoReiseDir(opts) {
   let jobFabKeys = [];
   await withDbLock(async () => {
     jobFabKeys = jobFabKeysFromLocalJob(db, localJobId);
+    let jobMetaTed = null;
+    try {
+      jobMetaTed = db
+        .prepare(
+          `SELECT c.name AS customer_name, ja.city, ja.country
+           FROM jobs j
+           LEFT JOIN customers c ON c.id = j.customer_id
+           LEFT JOIN job_addresses ja ON ja.job_id = j.id
+           WHERE j.id = ? LIMIT 1`,
+        )
+        .get(localJobId);
+    } catch (_) {
+      jobMetaTed = null;
+    }
     const cfg = getOfflinePullConfig(db, localJobId);
     const fabEntries = (cfg.fab_map || []).length
       ? cfg.fab_map
-      : jobFabKeys.map((fab) => ({ fab: String(fab), folder_name_canonical: String(fab) }));
+      : jobFabKeys.map((fab) => {
+          const built = buildFnProjectFolderName({
+            fab,
+            customer_name: jobMetaTed && jobMetaTed.customer_name,
+            city: jobMetaTed && jobMetaTed.city,
+            country: jobMetaTed && jobMetaTed.country,
+          });
+          return { fab: String(fab), folder_name_canonical: built || String(fab) };
+        });
     if (fabEntries.length) ensureAnlageFnDirs(targetDir, fabEntries);
   });
   let entries = [];

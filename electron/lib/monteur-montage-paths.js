@@ -27,6 +27,45 @@ function sanitizeDienstreiseFolderPart(str, maxLen) {
 }
 
 /**
+ * Sanitize für PROJEKTE-NEU-Fallback: Leerzeichen und & bleiben.
+ * Nur Windows-ungültige Zeichen / Steuerzeichen entfernen.
+ */
+function sanitizeFnProjekteFolderPart(str, maxLen) {
+  if (typeof str !== 'string') return '';
+  const limit = Number.isFinite(maxLen) && maxLen > 8 ? Math.floor(maxLen) : 80;
+  let s = str
+    .replace(/[\/\\:*?"<>|]/g, '_')
+    .replace(/[\u2022\u2023\u2043\u2219\u25E6\u25AA\u25CF\u00B7\u2024\u2027\u2218•▪◦●∙·]/g, '-')
+    .replace(/[\u0000-\u001F\u007F\u00A0\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[ \t._-]+|[ \t._-]+$/g, '')
+    .trim();
+  if (s.length > limit) {
+    s = s.slice(0, limit).replace(/[ \t._-]+$/g, '');
+  }
+  return s;
+}
+
+/**
+ * Fallback-Ordnername wenn FN noch nicht unter PROJEKTE NEU:
+ * FN_Kundenname_Ort_Länderkürzel (Parität Dispo job_project_build_fn_projekte_folder_name).
+ * @param {{ fab?: string|number, customer_name?: string, city?: string, country?: string }} meta
+ */
+function buildFnProjectFolderName(meta) {
+  const fn = String(meta && meta.fab != null ? meta.fab : '').trim();
+  if (!fn) return '';
+  const parts = [fn];
+  const firm = sanitizeFnProjekteFolderPart(meta && meta.customer_name ? meta.customer_name : '');
+  if (firm) parts.push(firm);
+  const ort = sanitizeFnProjekteFolderPart(meta && meta.city ? meta.city : '', 48);
+  if (ort) parts.push(ort);
+  const lkRaw = String(meta && meta.country != null ? meta.country : '').trim();
+  const lk = sanitizeFnProjekteFolderPart(lkRaw ? lkRaw.slice(0, 2).toUpperCase() : '', 8);
+  if (lk) parts.push(lk);
+  return parts.join('_');
+}
+
+/**
  * Dateiname für PDF/DOCX: gleiche Regeln, zusätzlich Endung schützen.
  * Kurzer Base-Name, damit Montage-PDFs unter langen Reiseordnern Acrobat öffnen können.
  */
@@ -175,8 +214,9 @@ function pickNonBareCanonicalDirName(dirNames, fab) {
 /**
  * fab_map mit kanonischen Ordnernamen anreichern (Cache, Platte, bestehende fab_map).
  * @param {(fab: string) => string|null|undefined} readRootFolderName
+ * @param {{ customer_name?: string, city?: string, country?: string }|null} [jobMeta]
  */
-function resolveFabMapLocal(reiseDir, fabMapIn, jobFabNums, readRootFolderName) {
+function resolveFabMapLocal(reiseDir, fabMapIn, jobFabNums, readRootFolderName, jobMeta) {
   const dirNames = collectReiseFnDirNames(reiseDir);
   const byFab = new Map();
   for (const e of fabMapIn || []) {
@@ -187,6 +227,7 @@ function resolveFabMapLocal(reiseDir, fabMapIn, jobFabNums, readRootFolderName) 
       ? jobFabNums.map((f) => String(f).trim()).filter(Boolean)
       : [...byFab.keys()];
   const out = [];
+  const meta = jobMeta && typeof jobMeta === 'object' ? jobMeta : null;
   for (const fab of fabNums) {
     const existing = byFab.get(fab);
     let folder_name_canonical =
@@ -209,6 +250,16 @@ function resolveFabMapLocal(reiseDir, fabMapIn, jobFabNums, readRootFolderName) 
         pickNonBareCanonicalDirName(dirNames, fab) ||
         resolveCanonicalProjekteNeuFolderName(dirNames, fab);
       if (fromDirs && !isBareFabFolderName(fromDirs)) folder_name_canonical = fromDirs;
+    }
+
+    if (!folder_name_canonical || folder_name_canonical === fab || isBareFabFolderName(folder_name_canonical)) {
+      const built = buildFnProjectFolderName({
+        fab,
+        customer_name: meta && meta.customer_name,
+        city: meta && meta.city,
+        country: meta && meta.country,
+      });
+      if (built && !isBareFabFolderName(built)) folder_name_canonical = built;
     }
 
     if (!folder_name_canonical) folder_name_canonical = fab;
@@ -540,7 +591,9 @@ function buildOfflinePreviewTree(tree, parentRel) {
 
 module.exports = {
   sanitizeDienstreiseFolderPart,
+  sanitizeFnProjekteFolderPart,
   sanitizeExportFileBase,
+  buildFnProjectFolderName,
   buildMonteurMontageFolderName,
   buildMonteurWorkRelPath,
   buildMonteurWorkAbsDir,
