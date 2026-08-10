@@ -72,16 +72,46 @@ function listDirFiles(dir, exts) {
   return out;
 }
 
+function isMontageberichtName(name) {
+  const n = String(name || '');
+  return /_Montage_DE\.pdf$/i.test(n) || /_report_GB\.pdf$/i.test(n);
+}
+
 function classifyDocumentType(name) {
   const n = String(name || '');
   if (/^Serviceprotokoll_/i.test(n)) return 'Serviceprotokoll';
   if (/^Kontrollwiegungsprotokoll_/i.test(n)) return 'Kontrollwiegung';
   if (/^Schleppketten_Test_/i.test(n)) return 'Schleppketten-Test';
   if (/^Pruefzertifikat_/i.test(n)) return 'Prüfzertifikat';
-  if (/_Montage_DE\.pdf$/i.test(n) || /_report_GB\.pdf$/i.test(n)) return 'Montagebericht';
+  if (isMontageberichtName(n)) return 'Montagebericht';
   if (/\.csv$/i.test(n)) return 'Parameter CSV';
   if (/\.pdf$/i.test(n)) return 'Parameter / Protokoll PDF';
   return 'Dokument';
+}
+
+/**
+ * Montagebericht gilt für den ganzen Auftrag (alle FN) – nur einmal listen, auch wenn
+ * die Datei unter mehreren FN-Ordnern liegt.
+ */
+function dedupeMontageberichtDocuments(documents) {
+  const list = Array.isArray(documents) ? documents : [];
+  const seenNames = new Set();
+  const out = [];
+  for (const doc of list) {
+    const type = doc && doc.type ? String(doc.type) : classifyDocumentType(doc && doc.name);
+    if (type === 'Montagebericht' || isMontageberichtName(doc && doc.name)) {
+      const key = String(doc.name || '')
+        .trim()
+        .toLowerCase();
+      if (!key) continue;
+      if (seenNames.has(key)) continue;
+      seenNames.add(key);
+      out.push(Object.assign({}, doc, { type: 'Montagebericht', fab: '' }));
+      continue;
+    }
+    out.push(doc);
+  }
+  return out;
 }
 
 /**
@@ -169,10 +199,11 @@ function scanKundenDokumentation(opts) {
     });
   }
 
-  documents.sort((a, b) => String(b.mtime || '').localeCompare(String(a.mtime || '')) || a.name.localeCompare(b.name, 'de'));
+  const documentsDeduped = dedupeMontageberichtDocuments(documents);
+  documentsDeduped.sort((a, b) => String(b.mtime || '').localeCompare(String(a.mtime || '')) || a.name.localeCompare(b.name, 'de'));
   photos.sort((a, b) => String(b.mtime || '').localeCompare(String(a.mtime || '')) || a.name.localeCompare(b.name, 'de'));
 
-  return { documents, photos, targetRel: 'Dokumente_Monteur/' + KUNDEN_DOC_FOLDER };
+  return { documents: documentsDeduped, photos, targetRel: 'Dokumente_Monteur/' + KUNDEN_DOC_FOLDER };
 }
 
 function ensureKundenDocDir(reiseDir) {
