@@ -25,6 +25,7 @@
   <link rel="stylesheet" href="css/montagebericht-v2.css">
   <link rel="stylesheet" href="css/kontrollwiegung-v2.css">
   <link rel="stylesheet" href="css/schleppketten-v2.css">
+  <link rel="stylesheet" href="css/kunden-dokumentation.css">
   <link rel="stylesheet" href="css/abrechnung-web-parity.css">
   <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260726b">
   <style>
@@ -1379,6 +1380,7 @@
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-pruefzertifikat">Prüfzertifikat</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-service">Service</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-kunden">Protokolle für Kunden</button>
       </div>
     </div>
     <button class="btn btn-ghost" id="btnViewArchiv">Archiv</button>
@@ -2311,6 +2313,115 @@
     <div class="card">
       <h2>Inbetriebnahme</h2>
       <p class="empty">Bereich Inbetriebnahme – Inhalt wird in Kürze bereitgestellt.</p>
+    </div>
+  </main>
+  <main id="viewProtokolleKunden" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Protokolle für Kunden">
+    <div class="card sp-v2-card kd-v2-page">
+      <div class="sp-v2-topbar">
+        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Protokolle für Kunden</h2>
+        <div class="sp-v2-topbar-actions">
+          <button type="button" class="btn btn-primary" id="btnKundenDocCopy" title="Auswahl nach Kunden Dokumentation kopieren">Auswahl kopieren</button>
+        </div>
+      </div>
+
+      <section class="sp-v2-section" aria-labelledby="kdV2Sec1Title">
+        <header class="sp-v2-section-head" id="kdV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
+        <div class="sp-v2-section-body">
+          <div class="sp-v2-grid-3">
+            <div class="sp-v2-field">
+              <label for="kundenDocJob">Auftrag</label>
+              <select id="kundenDocJob" class="dienstreise-select" required>
+                <option value="">– Bitte wählen –</option>
+              </select>
+            </div>
+            <div class="sp-v2-field">
+              <label>Zielordner</label>
+              <input type="text" id="kundenDocTargetHint" readonly value="Dokumente_Monteur/Kunden Dokumentation" autocomplete="off">
+            </div>
+            <div class="sp-v2-field">
+              <label>Empfänger (Baustelle)</label>
+              <input type="text" id="kundenDocRecipientsHint" readonly value="–" autocomplete="off" title="E-Mails der Baustellen-Ansprechpartner">
+            </div>
+          </div>
+          <p id="kundenDocStatusHint" class="mb-v2-hint-block" hidden></p>
+        </div>
+      </section>
+
+      <section class="sp-v2-section" aria-labelledby="kdV2Sec2Title">
+        <header class="sp-v2-section-head" id="kdV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Dokumente</header>
+        <div class="sp-v2-section-body">
+          <div class="kd-doc-toolbar">
+            <button type="button" class="btn btn-ghost" id="btnKundenDocSelectAll">Alle</button>
+            <button type="button" class="btn btn-ghost" id="btnKundenDocSelectNone">Keine</button>
+            <span id="kundenDocCount" class="kd-count muted">0 Dokumente</span>
+          </div>
+          <div class="kd-table-wrap">
+            <table class="kd-doc-table" aria-label="Dokumente für Kunden">
+              <thead>
+                <tr>
+                  <th class="kd-col-check"></th>
+                  <th>Typ</th>
+                  <th>Dateiname</th>
+                  <th>FN</th>
+                  <th>Datum</th>
+                  <th>Größe</th>
+                </tr>
+              </thead>
+              <tbody id="kundenDocTableBody">
+                <tr><td colspan="6" class="empty">Bitte Auftrag wählen.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="sp-v2-section" aria-labelledby="kdV2Sec3Title">
+        <header class="sp-v2-section-head" id="kdV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Bilder</header>
+        <div class="sp-v2-section-body">
+          <div class="kd-photo-row">
+            <button type="button" class="btn btn-ghost" id="btnKundenDocOpenGallery">Bilder auswählen…</button>
+            <span id="kundenDocPhotoBadge" class="kd-badge">0 ausgewählt</span>
+            <span id="kundenDocPhotoTotal" class="muted">0 verfügbar</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="sp-v2-section" aria-labelledby="kdV2Sec4Title">
+        <header class="sp-v2-section-head" id="kdV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Export</header>
+        <div class="sp-v2-section-body">
+          <div class="kd-export-row">
+            <button type="button" class="btn btn-primary" id="btnKundenDocCopyBottom">Auswahl kopieren</button>
+            <fieldset class="kd-email-mode">
+              <legend>E-Mail vorbereiten</legend>
+              <label class="kd-radio"><input type="radio" name="kundenDocEmailMode" value="files" checked> Einzeldateien</label>
+              <label class="kd-radio"><input type="radio" name="kundenDocEmailMode" value="zip"> ZIP</label>
+            </fieldset>
+            <button type="button" class="btn btn-primary" id="btnKundenDocEmail">Für E-Mail vorbereiten</button>
+          </div>
+          <p id="kundenDocExportHint" class="mb-v2-hint-block" hidden></p>
+        </div>
+      </section>
+    </div>
+
+    <div id="kundenDocGalleryModal" class="kd-modal" hidden>
+      <div class="kd-modal-backdrop" data-kd-close="1"></div>
+      <div class="kd-modal-panel" role="dialog" aria-modal="true" aria-labelledby="kundenDocGalleryTitle">
+        <header class="kd-modal-head">
+          <h3 id="kundenDocGalleryTitle">Bilder dieses Auftrags</h3>
+          <div class="kd-modal-actions">
+            <button type="button" class="btn btn-ghost" id="btnKundenDocGalleryAll">Alle</button>
+            <button type="button" class="btn btn-ghost" id="btnKundenDocGalleryNone">Keine</button>
+            <button type="button" class="btn btn-ghost" data-kd-close="1">Abbrechen</button>
+            <button type="button" class="btn btn-primary" id="btnKundenDocGalleryApply">Übernehmen</button>
+          </div>
+        </header>
+        <p id="kundenDocGalleryMeta" class="kd-modal-meta muted"></p>
+        <div id="kundenDocGalleryGrid" class="kd-gallery-grid"></div>
+      </div>
+    </div>
+    <div id="kundenDocLightbox" class="kd-lightbox" hidden>
+      <button type="button" class="kd-lightbox-close" data-kd-lightbox-close="1" aria-label="Schließen">×</button>
+      <img id="kundenDocLightboxImg" alt="Vorschau">
     </div>
   </main>
   <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">

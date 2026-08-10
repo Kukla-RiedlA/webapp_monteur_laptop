@@ -11058,7 +11058,7 @@
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
     const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
-    const protokolleViewIds = ['viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleService'];
+    const protokolleViewIds = ['viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleKunden', 'viewProtokolleService'];
     viewStart.classList.remove('only-left', 'only-right', 'hidden');
     viewEinstellungen.classList.remove('active');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
@@ -11124,6 +11124,7 @@
         'protokolle-schleppketten': 'viewProtokolleSchleppketten',
         'protokolle-pruefzertifikat': 'viewProtokollePruefzertifikat',
         'protokolle-inbetriebnahme': 'viewProtokolleInbetriebnahme',
+        'protokolle-kunden': 'viewProtokolleKunden',
         'protokolle-service': 'viewProtokolleService'
       };
       const viewId = map[name];
@@ -11145,6 +11146,9 @@
       }
       if (name === 'protokolle-pruefzertifikat' && typeof window.openProtokollePruefzertifikat === 'function') {
         window.openProtokollePruefzertifikat();
+      }
+      if (name === 'protokolle-kunden' && typeof window.openProtokolleKunden === 'function') {
+        window.openProtokolleKunden();
       }
       if (name === 'protokolle-service' && typeof window.openProtokolleService === 'function') {
         window.openProtokolleService();
@@ -21084,6 +21088,416 @@
         loadParameterlistenJobs();
       });
     }
+  })();
+
+  (function initProtokolleKunden() {
+    var jobSelect = document.getElementById('kundenDocJob');
+    var tableBody = document.getElementById('kundenDocTableBody');
+    var countEl = document.getElementById('kundenDocCount');
+    var photoBadge = document.getElementById('kundenDocPhotoBadge');
+    var photoTotal = document.getElementById('kundenDocPhotoTotal');
+    var recipientsHint = document.getElementById('kundenDocRecipientsHint');
+    var targetHint = document.getElementById('kundenDocTargetHint');
+    var statusHint = document.getElementById('kundenDocStatusHint');
+    var exportHint = document.getElementById('kundenDocExportHint');
+    var galleryModal = document.getElementById('kundenDocGalleryModal');
+    var galleryGrid = document.getElementById('kundenDocGalleryGrid');
+    var galleryMeta = document.getElementById('kundenDocGalleryMeta');
+    var lightbox = document.getElementById('kundenDocLightbox');
+    var lightboxImg = document.getElementById('kundenDocLightboxImg');
+
+    var state = {
+      jobId: '',
+      documents: [],
+      photos: [],
+      recipients: [],
+      selectedDocs: {},
+      selectedPhotos: {},
+      galleryDraft: {},
+    };
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function formatSize(n) {
+      var b = Number(n) || 0;
+      if (b < 1024) return b + ' B';
+      if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+      return (b / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function formatMtime(iso) {
+      if (!iso) return '–';
+      try {
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return String(iso);
+        var pad = function (x) { return String(x).padStart(2, '0'); };
+        return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear();
+      } catch (_) {
+        return String(iso);
+      }
+    }
+
+    function setHint(el, text, show) {
+      if (!el) return;
+      if (!show || !text) {
+        el.hidden = true;
+        el.textContent = '';
+        return;
+      }
+      el.hidden = false;
+      el.textContent = text;
+    }
+
+    function selectedPaths() {
+      var paths = [];
+      state.documents.forEach(function (d) {
+        if (state.selectedDocs[d.id]) paths.push(d.absPath);
+      });
+      state.photos.forEach(function (p) {
+        if (state.selectedPhotos[p.id]) paths.push(p.absPath);
+      });
+      return paths;
+    }
+
+    function selectedCount() {
+      return selectedPaths().length;
+    }
+
+    function updatePhotoBadge() {
+      var n = 0;
+      Object.keys(state.selectedPhotos).forEach(function (k) {
+        if (state.selectedPhotos[k]) n += 1;
+      });
+      if (photoBadge) photoBadge.textContent = n + ' ausgewählt';
+      if (photoTotal) photoTotal.textContent = state.photos.length + ' verfügbar';
+    }
+
+    function renderDocs() {
+      if (!tableBody) return;
+      if (!state.documents.length) {
+        tableBody.innerHTML = '<tr><td colspan="6" class="empty">' +
+          (state.jobId ? 'Keine Dokumente für diesen Auftrag gefunden.' : 'Bitte Auftrag wählen.') +
+          '</td></tr>';
+        if (countEl) countEl.textContent = '0 Dokumente';
+        return;
+      }
+      var html = '';
+      state.documents.forEach(function (d) {
+        var checked = state.selectedDocs[d.id] ? ' checked' : '';
+        html += '<tr data-id="' + escapeHtml(d.id) + '">' +
+          '<td class="kd-col-check"><input type="checkbox" class="kd-doc-check" data-id="' + escapeHtml(d.id) + '"' + checked + '></td>' +
+          '<td>' + escapeHtml(d.type || 'Dokument') + '</td>' +
+          '<td>' + escapeHtml(d.name || '') + '</td>' +
+          '<td>' + escapeHtml(d.fab || '–') + '</td>' +
+          '<td>' + escapeHtml(formatMtime(d.mtime)) + '</td>' +
+          '<td>' + escapeHtml(formatSize(d.size)) + '</td>' +
+          '</tr>';
+      });
+      tableBody.innerHTML = html;
+      if (countEl) countEl.textContent = state.documents.length + ' Dokumente';
+    }
+
+    function previewSrc(photo) {
+      var u = photo && photo.previewUrl ? String(photo.previewUrl) : '';
+      if (!u) return '';
+      if (u.indexOf('http') === 0) return u;
+      return API_BASE + u + (u.indexOf('?') >= 0 ? '&' : '?') + 'technician_id=' + encodeURIComponent(String(getTechId() || ''));
+    }
+
+    function fullPreviewSrc(photo) {
+      var rel = photo && photo.relPath ? String(photo.relPath) : '';
+      if (!rel || !state.jobId) return previewSrc(photo);
+      return API_BASE +
+        '/api/dienstreise/project_file?job_id=' + encodeURIComponent(state.jobId) +
+        '&path=' + encodeURIComponent(rel) +
+        '&inline=1&technician_id=' + encodeURIComponent(String(getTechId() || ''));
+    }
+
+    function renderGallery() {
+      if (!galleryGrid) return;
+      if (!state.photos.length) {
+        galleryGrid.innerHTML = '<p class="empty">Keine Bilder für diesen Auftrag.</p>';
+        if (galleryMeta) galleryMeta.textContent = '';
+        return;
+      }
+      var sel = 0;
+      var html = '';
+      state.photos.forEach(function (p) {
+        var on = !!state.galleryDraft[p.id];
+        if (on) sel += 1;
+        html += '<button type="button" class="kd-gallery-item' + (on ? ' selected' : '') + '" data-id="' + escapeHtml(p.id) + '">' +
+          '<input type="checkbox" class="kd-gallery-check" tabindex="-1"' + (on ? ' checked' : '') + '>' +
+          '<img src="' + escapeHtml(previewSrc(p)) + '" alt="" loading="lazy">' +
+          '<span class="kd-gallery-caption">' + escapeHtml((p.fab ? p.fab + ' · ' : '') + p.name) + '</span>' +
+          '</button>';
+      });
+      galleryGrid.innerHTML = html;
+      if (galleryMeta) galleryMeta.textContent = sel + ' / ' + state.photos.length + ' ausgewählt';
+    }
+
+    async function loadKundenJobs() {
+      if (!jobSelect) return;
+      var currentVal = jobSelect.value;
+      var jobs = [];
+      try {
+        jobs = await fetchMyAssignedJobs();
+      } catch (_) {
+        jobs = [];
+      }
+      jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>';
+      (jobs || []).forEach(function (j) {
+        var opt = document.createElement('option');
+        opt.value = String(j.id);
+        opt.textContent = (j.job_number || j.id) + (j.customer_name ? ' – ' + j.customer_name : '');
+        jobSelect.appendChild(opt);
+      });
+      if (currentVal && Array.prototype.some.call(jobSelect.options, function (o) { return o.value === currentVal; })) {
+        jobSelect.value = currentVal;
+      } else {
+        var defaultJobId = resolveTodayProtokollJobId(jobs);
+        if (defaultJobId) jobSelect.value = defaultJobId;
+      }
+    }
+
+    async function loadCatalog() {
+      state.documents = [];
+      state.photos = [];
+      state.recipients = [];
+      state.selectedDocs = {};
+      state.selectedPhotos = {};
+      setHint(statusHint, '', false);
+      setHint(exportHint, '', false);
+      var jobId = jobSelect && jobSelect.value ? String(jobSelect.value) : '';
+      state.jobId = jobId;
+      if (!jobId) {
+        renderDocs();
+        updatePhotoBadge();
+        if (recipientsHint) recipientsHint.value = '–';
+        return;
+      }
+      try {
+        var r = await fetch(
+          API_BASE + '/api/protokolle/kunden-dokumentation?job_id=' + encodeURIComponent(jobId) +
+            '&technician_id=' + encodeURIComponent(String(getTechId() || '')),
+          { headers: { 'X-Technician-Id': String(getTechId() || '') } },
+        );
+        var data = await r.json().catch(function () { return {}; });
+        if (!r.ok || !data.ok) {
+          setHint(statusHint, data.error || 'Laden fehlgeschlagen.', true);
+          renderDocs();
+          updatePhotoBadge();
+          return;
+        }
+        state.documents = Array.isArray(data.documents) ? data.documents : [];
+        state.photos = Array.isArray(data.photos) ? data.photos : [];
+        state.recipients = Array.isArray(data.recipients) ? data.recipients : [];
+        state.documents.forEach(function (d) { state.selectedDocs[d.id] = true; });
+        if (targetHint && data.targetRel) targetHint.value = data.targetRel;
+        if (recipientsHint) {
+          recipientsHint.value = state.recipients.length ? state.recipients.join('; ') : 'keine E-Mail hinterlegt';
+        }
+        if (data.folder_missing || data.hint) setHint(statusHint, data.hint || 'Kein Reiseordner.', true);
+        renderDocs();
+        updatePhotoBadge();
+      } catch (e) {
+        setHint(statusHint, e && e.message ? e.message : String(e), true);
+        renderDocs();
+        updatePhotoBadge();
+      }
+    }
+
+    async function postSelection(url, extra) {
+      var paths = selectedPaths();
+      if (!state.jobId) {
+        alert('Bitte einen Auftrag wählen.');
+        return null;
+      }
+      if (!paths.length) {
+        alert('Bitte mindestens eine Datei oder ein Bild auswählen.');
+        return null;
+      }
+      var body = Object.assign({ job_id: parseInt(state.jobId, 10), paths: paths }, extra || {});
+      var r = await fetch(API_BASE + url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Technician-Id': String(getTechId() || ''),
+        },
+        body: JSON.stringify(body),
+      });
+      var data = await r.json().catch(function () { return {}; });
+      return { r: r, data: data };
+    }
+
+    window.openProtokolleKunden = async function () {
+      await loadKundenJobs();
+      await loadCatalog();
+    };
+
+    if (jobSelect) {
+      jobSelect.addEventListener('change', function () {
+        loadCatalog();
+      });
+    }
+
+    if (tableBody) {
+      tableBody.addEventListener('change', function (ev) {
+        var t = ev.target;
+        if (!t || !t.classList || !t.classList.contains('kd-doc-check')) return;
+        var id = t.getAttribute('data-id');
+        if (!id) return;
+        state.selectedDocs[id] = !!t.checked;
+      });
+    }
+
+    var btnAll = document.getElementById('btnKundenDocSelectAll');
+    var btnNone = document.getElementById('btnKundenDocSelectNone');
+    if (btnAll) {
+      btnAll.addEventListener('click', function () {
+        state.documents.forEach(function (d) { state.selectedDocs[d.id] = true; });
+        renderDocs();
+      });
+    }
+    if (btnNone) {
+      btnNone.addEventListener('click', function () {
+        state.documents.forEach(function (d) { state.selectedDocs[d.id] = false; });
+        renderDocs();
+      });
+    }
+
+    function openGallery() {
+      state.galleryDraft = {};
+      state.photos.forEach(function (p) {
+        state.galleryDraft[p.id] = !!state.selectedPhotos[p.id];
+      });
+      renderGallery();
+      if (galleryModal) galleryModal.hidden = false;
+    }
+
+    function closeGallery() {
+      if (galleryModal) galleryModal.hidden = true;
+    }
+
+    var btnOpenGal = document.getElementById('btnKundenDocOpenGallery');
+    if (btnOpenGal) btnOpenGal.addEventListener('click', openGallery);
+
+    if (galleryModal) {
+      galleryModal.addEventListener('click', function (ev) {
+        var t = ev.target;
+        if (t && t.getAttribute && t.getAttribute('data-kd-close') === '1') closeGallery();
+      });
+    }
+
+    if (galleryGrid) {
+      galleryGrid.addEventListener('click', function (ev) {
+        var btn = ev.target && ev.target.closest ? ev.target.closest('.kd-gallery-item') : null;
+        if (!btn) return;
+        var id = btn.getAttribute('data-id');
+        if (!id) return;
+        if (ev.detail === 2) {
+          var photo = state.photos.filter(function (p) { return p.id === id; })[0];
+          if (photo && lightbox && lightboxImg) {
+            lightboxImg.src = fullPreviewSrc(photo);
+            lightbox.hidden = false;
+          }
+          return;
+        }
+        state.galleryDraft[id] = !state.galleryDraft[id];
+        renderGallery();
+      });
+    }
+
+    var btnGalAll = document.getElementById('btnKundenDocGalleryAll');
+    var btnGalNone = document.getElementById('btnKundenDocGalleryNone');
+    var btnGalApply = document.getElementById('btnKundenDocGalleryApply');
+    if (btnGalAll) {
+      btnGalAll.addEventListener('click', function () {
+        state.photos.forEach(function (p) { state.galleryDraft[p.id] = true; });
+        renderGallery();
+      });
+    }
+    if (btnGalNone) {
+      btnGalNone.addEventListener('click', function () {
+        state.photos.forEach(function (p) { state.galleryDraft[p.id] = false; });
+        renderGallery();
+      });
+    }
+    if (btnGalApply) {
+      btnGalApply.addEventListener('click', function () {
+        state.selectedPhotos = Object.assign({}, state.galleryDraft);
+        updatePhotoBadge();
+        closeGallery();
+      });
+    }
+
+    if (lightbox) {
+      lightbox.addEventListener('click', function (ev) {
+        if (ev.target && ev.target.getAttribute && ev.target.getAttribute('data-kd-lightbox-close') === '1') {
+          lightbox.hidden = true;
+          return;
+        }
+        if (ev.target === lightbox) lightbox.hidden = true;
+      });
+    }
+
+    async function doCopy() {
+      setHint(exportHint, 'Kopiere…', true);
+      try {
+        var res = await postSelection('/api/protokolle/kunden-dokumentation/copy');
+        if (!res) return;
+        if (!res.r.ok || !res.data.ok) {
+          setHint(exportHint, res.data.error || 'Kopieren fehlgeschlagen.', true);
+          alert(res.data.error || 'Kopieren fehlgeschlagen.');
+          return;
+        }
+        var msg = (res.data.count || 0) + ' Datei(en) nach Kunden Dokumentation kopiert.';
+        setHint(exportHint, msg, true);
+        if (typeof showToast === 'function') showToast(msg);
+      } catch (e) {
+        setHint(exportHint, e && e.message ? e.message : String(e), true);
+      }
+    }
+
+    async function doEmail() {
+      var modeEl = document.querySelector('input[name="kundenDocEmailMode"]:checked');
+      var mode = modeEl && modeEl.value === 'zip' ? 'zip' : 'files';
+      if (selectedCount() > 40 && mode === 'files') {
+        if (!confirm('Viele Einzelanhänge (' + selectedCount() + '). Trotzdem fortfahren? ZIP ist oft zuverlässiger.')) return;
+      }
+      setHint(exportHint, 'Bereite E-Mail vor…', true);
+      try {
+        var res = await postSelection('/api/protokolle/kunden-dokumentation/prepare-email', { mode: mode });
+        if (!res) return;
+        if (res.data.large_attachment_hint && typeof showToast === 'function') {
+          showToast('Anhänge sind sehr groß – Mailserver-Limit beachten.');
+        }
+        if (!res.r.ok || !res.data.ok) {
+          var err = res.data.outlook_error || res.data.error || 'E-Mail-Vorbereitung fehlgeschlagen.';
+          setHint(exportHint, err + (res.data.copied && res.data.copied.length ? ' (Dateien wurden trotzdem kopiert.)' : ''), true);
+          alert(err);
+          return;
+        }
+        var okMsg = 'Outlook-Entwurf geöffnet' +
+          (res.data.recipients && res.data.recipients.length ? ' an ' + res.data.recipients.join('; ') : ' (Empfänger manuell ergänzen)') +
+          (mode === 'zip' && res.data.zipName ? ', ZIP: ' + res.data.zipName : '') + '.';
+        setHint(exportHint, okMsg, true);
+        if (typeof showToast === 'function') showToast('Outlook geöffnet');
+      } catch (e) {
+        setHint(exportHint, e && e.message ? e.message : String(e), true);
+      }
+    }
+
+    var btnCopy = document.getElementById('btnKundenDocCopy');
+    var btnCopyBottom = document.getElementById('btnKundenDocCopyBottom');
+    var btnEmail = document.getElementById('btnKundenDocEmail');
+    if (btnCopy) btnCopy.addEventListener('click', doCopy);
+    if (btnCopyBottom) btnCopyBottom.addEventListener('click', doCopy);
+    if (btnEmail) btnEmail.addEventListener('click', doEmail);
   })();
 
   (function initTextbausteineView() {

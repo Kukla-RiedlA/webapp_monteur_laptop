@@ -1,0 +1,245 @@
+/* Protokolle für Kunden – sp-v2 Ergänzungen */
+
+#viewProtokolleKunden.view-protokolle {
+  background: var(--sp-page, #f7f8f8);
+  padding: 1rem 1rem 1.5rem;
+}
+
+.kd-v2-page {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.kd-doc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.kd-count {
+  margin-left: auto;
+  font-size: 0.9rem;
+}
+
+.kd-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.kd-doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.kd-doc-table thead th {
+  background: var(--sp-mint, #eefaf5);
+  text-align: left;
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--sp-border, #d8e3df);
+  font-weight: 700;
+}
+
+.kd-doc-table td {
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--sp-border, #d8e3df);
+  vertical-align: middle;
+}
+
+.kd-doc-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.kd-col-check {
+  width: 2.2rem;
+  text-align: center;
+}
+
+.kd-photo-row,
+.kd-export-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.kd-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.7rem;
+  padding: 0.15rem 0.65rem;
+  border-radius: 999px;
+  background: var(--sp-mint, #eefaf5);
+  border: 1px solid var(--sp-border, #d8e3df);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--sp-text, #111827);
+}
+
+.kd-email-mode {
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 10px;
+  padding: 0.45rem 0.75rem 0.55rem;
+  margin: 0;
+  background: #fff;
+}
+
+.kd-email-mode legend {
+  padding: 0 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--sp-muted, #4b5563);
+}
+
+.kd-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 0.85rem;
+  font-size: 0.9rem;
+}
+
+.kd-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.kd-modal[hidden] {
+  display: none !important;
+}
+
+.kd-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.45);
+}
+
+.kd-modal-panel {
+  position: relative;
+  z-index: 1;
+  width: min(960px, 100%);
+  max-height: min(88vh, 900px);
+  overflow: auto;
+  background: #fff;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  padding: 1rem 1.1rem 1.2rem;
+}
+
+.kd-modal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.kd-modal-head h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.kd-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.kd-modal-meta {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.kd-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.kd-gallery-item {
+  position: relative;
+  border: 2px solid var(--sp-border, #d8e3df);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--sp-mint, #eefaf5);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.kd-gallery-item.selected {
+  border-color: var(--sp-green, #007a4d);
+  box-shadow: 0 0 0 2px rgba(0, 122, 77, 0.2);
+}
+
+.kd-gallery-item img {
+  display: block;
+  width: 100%;
+  height: 110px;
+  object-fit: cover;
+  background: #fff;
+}
+
+.kd-gallery-item .kd-gallery-caption {
+  display: block;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: var(--sp-muted, #4b5563);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kd-gallery-item .kd-gallery-check {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.35rem;
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.kd-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.kd-lightbox[hidden] {
+  display: none !important;
+}
+
+.kd-lightbox img {
+  max-width: min(96vw, 1200px);
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.kd-lightbox-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.9rem;
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 2rem;
+  line-height: 1;
+  cursor: pointer;
+}

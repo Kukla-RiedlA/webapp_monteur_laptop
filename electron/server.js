@@ -150,6 +150,7 @@ const {
   sanitizeDienstreiseFolderPart,
   sanitizeExportFileBase,
 } = require('./lib/monteur-montage-paths');
+const kundenDokumentation = require('./lib/kunden-dokumentation');
 const {
   ensureJobOfflinePullSchema,
   getOfflinePullConfig,
@@ -10525,6 +10526,309 @@ function createApp(db) {
     }
     return null;
   }
+
+  function resolveKundenDokumentationLocalJob(req, jobIdRaw) {
+    const jobId = parseInt(jobIdRaw, 10);
+    if (!jobId) return { ok: false, status: 400, error: 'job_id erforderlich.' };
+    const technicianId = getTechnicianId(req);
+    const resolved =
+      technicianId && Number.isFinite(technicianId) && technicianId > 0
+        ? resolveLocalJobIdForTechnician(db, technicianId, jobId, { mode: 'auto' })
+        : null;
+    let localJobId = jobId;
+    if (resolved) {
+      if (!resolved.ok) {
+        return { ok: false, status: resolved.status || 404, error: resolved.error || 'Auftrag nicht gefunden.' };
+      }
+      localJobId = resolved.localId;
+    } else {
+      const mapped = getJobRowByLocalOrServerId(jobId);
+      if (!mapped) return { ok: false, status: 404, error: 'Auftrag nicht gefunden.' };
+      localJobId = mapped.id;
+    }
+    return { ok: true, localJobId, technicianId };
+  }
+
+  function loadKundenDokumentationJobMeta(localJobId) {
+    return db
+      .prepare(
+        `SELECT j.id, j.job_number, j.fabrikationsnummern, j.server_id,
+                c.name AS customer_name
+         FROM jobs j
+         LEFT JOIN customers c ON c.id = j.customer_id
+         WHERE j.id = ?`,
+      )
+      .get(localJobId);
+  }
+
+  function collectKundenDokumentationRecipients(localJobId, jobRow) {
+    let contacts = [];
+    try {
+      contacts = db
+        .prepare(`${JOB_CONTACTS_SELECT_SQL} WHERE job_id = ? ORDER BY sort_order, id`)
+        .all(localJobId);
+    } catch (_) {
+      contacts = [];
+    }
+    return kundenDokumentation.collectRecipientEmails(contacts);
+  }
+
+  function resolveKundenDokumentationItemsFromPaths(reiseDir, localJobId, technicianId, paths, catalog) {
+    const wanted = new Set(
+      (Array.isArray(paths) ? paths : [])
+        .map((p) => String(p || '').trim())
+        .filter(Boolean)
+        .map((p) => path.resolve(p)),
+    );
+    const all = []
+      .concat(catalog.documents || [])
+      .concat(catalog.photos || []);
+    if (wanted.size === 0) return [];
+    return all.filter((item) => wanted.has(path.resolve(item.absPath)));
+  }
+
+  function buildKundenDokumentationCatalog(localJobId, technicianId, jobRow) {
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+    if (!reiseDir || !fs.existsSync(reiseDir)) {
+      return {
+        reiseDir: null,
+        documents: [],
+        photos: [],
+        recipients: collectKundenDokumentationRecipients(localJobId, jobRow),
+        targetRel: 'Dokumente_Monteur/' + kundenDokumentation.KUNDEN_DOC_FOLDER,
+        folder_missing: true,
+        hint: 'Noch kein Projektordner — bitte Auftrag annehmen.',
+        job_number: jobRow && jobRow.job_number ? String(jobRow.job_number) : '',
+        customer_name: jobRow && jobRow.customer_name ? String(jobRow.customer_name) : '',
+      };
+    }
+
+    const fabs = parseJobFabrikationsnummernRows(jobRow && jobRow.fabrikationsnummern)
+      .map((r) => String((r && (r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer)) || '').trim())
+      .filter(Boolean);
+
+    const scanned = kundenDokumentation.scanKundenDokumentation({
+      reiseDir,
+      fabs,
+      resolveFabDirs: (fab) => {
+        const { targetDir, folderName, montageFolderName } = resolveMonteurProtokollePdfTarget(
+          reiseDir,
+          localJobId,
+          fab,
+          technicianId,
+        );
+        const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
+        return {
+          folderName,
+          montageFolderName,
+          protokolleDir: targetDir,
+          parameterDir: buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderName, 'Parameter'),
+          bilderDir: buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderName, 'Bilder'),
+          relBase: buildMonteurWorkRelPath(folderName, montageFolderName),
+        };
+      },
+      previewUrlForRel: (rel) =>
+        '/api/dienstreise/project_file?job_id=' +
+        encodeURIComponent(String(localJobId)) +
+        '&path=' +
+        encodeURIComponent(rel) +
+        '&thumb=1&inline=1',
+    });
+
+    return {
+      reiseDir,
+      documents: scanned.documents,
+      photos: scanned.photos,
+      recipients: collectKundenDokumentationRecipients(localJobId, jobRow),
+      targetRel: scanned.targetRel,
+      folder_missing: false,
+      hint: null,
+      job_number: jobRow && jobRow.job_number ? String(jobRow.job_number) : '',
+      customer_name: jobRow && jobRow.customer_name ? String(jobRow.customer_name) : '',
+    };
+  }
+
+  app.get('/api/protokolle/kunden-dokumentation', (req, res) => {
+    try {
+      const resolved = resolveKundenDokumentationLocalJob(req, req.query.job_id);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadKundenDokumentationJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const catalog = buildKundenDokumentationCatalog(resolved.localJobId, resolved.technicianId, jobRow);
+      return res.json({
+        ok: true,
+        documents: catalog.documents.map((d) => ({
+          id: d.id,
+          kind: d.kind,
+          type: d.type,
+          name: d.name,
+          fab: d.fab,
+          absPath: d.absPath,
+          relPath: d.relPath,
+          size: d.size,
+          mtime: d.mtime,
+        })),
+        photos: catalog.photos.map((p) => ({
+          id: p.id,
+          kind: p.kind,
+          type: p.type,
+          name: p.name,
+          fab: p.fab,
+          absPath: p.absPath,
+          relPath: p.relPath,
+          size: p.size,
+          mtime: p.mtime,
+          previewUrl: p.previewUrl,
+        })),
+        recipients: catalog.recipients,
+        targetRel: catalog.targetRel,
+        folder_missing: catalog.folder_missing,
+        hint: catalog.hint,
+        job_number: catalog.job_number,
+        customer_name: catalog.customer_name,
+      });
+    } catch (e) {
+      console.warn('[kunden-dokumentation] list', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/kunden-dokumentation/copy', express.json({ limit: '2mb' }), (req, res) => {
+    try {
+      const body = req.body || {};
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadKundenDokumentationJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const catalog = buildKundenDokumentationCatalog(resolved.localJobId, resolved.technicianId, jobRow);
+      if (!catalog.reiseDir) {
+        return res.status(400).json({ ok: false, error: catalog.hint || 'Kein Reiseordner.' });
+      }
+      const items = resolveKundenDokumentationItemsFromPaths(
+        catalog.reiseDir,
+        resolved.localJobId,
+        resolved.technicianId,
+        body.paths,
+        catalog,
+      );
+      if (!items.length) {
+        return res.status(400).json({ ok: false, error: 'Keine gültigen Dateien ausgewählt.' });
+      }
+      const result = kundenDokumentation.copyKundenDokumentationItems({
+        reiseDir: catalog.reiseDir,
+        items,
+      });
+      return res.json({
+        ok: result.ok,
+        copied: result.copied,
+        errors: result.errors,
+        targetDir: result.targetDir,
+        targetRel: result.targetRel,
+        count: result.copied.length,
+      });
+    } catch (e) {
+      console.warn('[kunden-dokumentation] copy', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/kunden-dokumentation/prepare-email', express.json({ limit: '2mb' }), (req, res) => {
+    try {
+      const body = req.body || {};
+      const mode = String(body.mode || 'files').toLowerCase() === 'zip' ? 'zip' : 'files';
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadKundenDokumentationJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const catalog = buildKundenDokumentationCatalog(resolved.localJobId, resolved.technicianId, jobRow);
+      if (!catalog.reiseDir) {
+        return res.status(400).json({ ok: false, error: catalog.hint || 'Kein Reiseordner.' });
+      }
+      const items = resolveKundenDokumentationItemsFromPaths(
+        catalog.reiseDir,
+        resolved.localJobId,
+        resolved.technicianId,
+        body.paths,
+        catalog,
+      );
+      if (!items.length) {
+        return res.status(400).json({ ok: false, error: 'Keine gültigen Dateien ausgewählt.' });
+      }
+      const copyResult = kundenDokumentation.copyKundenDokumentationItems({
+        reiseDir: catalog.reiseDir,
+        items,
+      });
+      if (!copyResult.copied.length) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Kopieren fehlgeschlagen.',
+          errors: copyResult.errors,
+        });
+      }
+
+      let attachments = copyResult.copied.map((c) => c.to);
+      let zipName = null;
+      if (mode === 'zip') {
+        const zip = kundenDokumentation.createZipFromCopied(
+          copyResult.targetDir,
+          copyResult.copied,
+          catalog.job_number,
+        );
+        attachments = [zip.zipPath];
+        zipName = zip.zipName;
+      }
+
+      const subjectParts = ['Kundendokumentation'];
+      if (catalog.job_number) subjectParts.push(catalog.job_number);
+      if (catalog.customer_name) subjectParts.push(catalog.customer_name);
+      const subject = subjectParts.join(' – ');
+      const bodyText =
+        'Im Anhang finden Sie die ausgewählte Kundendokumentation' +
+        (catalog.job_number ? ' zu Auftrag ' + catalog.job_number : '') +
+        '.';
+
+      let outlook = null;
+      let outlookError = null;
+      try {
+        outlook = kundenDokumentation.openOutlookDraft({
+          recipients: catalog.recipients,
+          attachments,
+          subject,
+          body: bodyText,
+        });
+      } catch (err) {
+        outlookError = err && err.message ? err.message : String(err);
+      }
+
+      const totalBytes = attachments.reduce((sum, p) => {
+        try {
+          return sum + (fs.statSync(p).size || 0);
+        } catch (_) {
+          return sum;
+        }
+      }, 0);
+
+      return res.json({
+        ok: !outlookError,
+        mode,
+        copied: copyResult.copied,
+        errors: copyResult.errors,
+        targetDir: copyResult.targetDir,
+        targetRel: copyResult.targetRel,
+        zipName,
+        recipients: catalog.recipients,
+        attachmentCount: attachments.length,
+        attachmentBytes: totalBytes,
+        large_attachment_hint: totalBytes > 20 * 1024 * 1024,
+        outlook,
+        outlook_error: outlookError,
+        error: outlookError || undefined,
+      });
+    } catch (e) {
+      console.warn('[kunden-dokumentation] prepare-email', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
 
   app.post('/api/protokolle/parameterlisten', express.json(), async (req, res) => {
     try {

@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.011
+- **Protokolle für Kunden:** neuer Menüpunkt – Auftrags-PDFs/CSVs und Bilder auswählen, nach `Dokumente_Monteur/Kunden Dokumentation` kopieren; optional Outlook-Entwurf (Einzeldateien oder ZIP) mit Baustellen-Ansprechpartner-Empfängern; Bilder mit FN-Prefix, Kollisionen nummeriert.
+
 ## V 2.005.010
 - **FN-Ordner offline:** Neue Anlagen ohne PROJEKTE-NEU-Treffer heißen `FN_Kundenname_Ort_LK` (Parität Dispo); Bare-FN-Ordner werden migriert.
 
