@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.008
+- **Serviceprotokoll Qmax:** freie Eingabe (Buchstaben/Sonderzeichen), kein Zahlen-Cap mehr.
+- **Protokolle:** Kontrollwiegung- und Schleppketten-Messfelder ohne Hoch/Runter-Spinner (`type=text`).
+
 ## V 2.005.007
 - **Auftrag erledigt:** Status wird beim Finish sofort an Dispo gepusht (wie Handy-PWA); bei `angelegt`/`geplant` Zwischenstufe `in_arbeit`. Pending `erledigt` wird bei abgelehntem Sync-Push nicht mehr verworfen — verhindert, dass der Auftrag nach Sync wieder als offen erscheint.
 

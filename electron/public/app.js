@@ -16142,13 +16142,13 @@
         var inSumme = w.in_summe === false || w.in_summe === 0 || w.in_summe === '0' ? false : true;
         return '<tr class="kontrollwiegung-row" data-idx="' + idx + '">' +
           '<td class="kw-col-nr"><span class="kw-num">' + n + '</span></td>' +
-          '<td class="kw-col-num"><input type="number" step="any" name="bandwaage_kg" data-kw-calc="fehler" value="' + val('bandwaage_kg') + '" inputmode="decimal"></td>' +
-          '<td class="kw-col-num"><input type="number" step="any" name="kontrollwaage_kg" class="kw-calc-field" data-kw-calc="fehler" value="' + val('kontrollwaage_kg') + '" inputmode="decimal"></td>' +
-          '<td class="kw-col-num"><input type="number" step="any" name="fehler_kg" class="kw-calc-field" value="' + val('fehler_kg') + '" inputmode="decimal"></td>' +
-          '<td class="kw-col-num"><input type="number" step="any" name="fehler_prozent" class="kw-calc-field" value="' + val('fehler_prozent') + '" inputmode="decimal"></td>' +
-          '<td class="kw-col-num"><input type="number" step="any" name="leistung_th" value="' + val('leistung_th') + '" inputmode="decimal"></td>' +
-          '<td class="kw-col-num"><input type="number" step="any" name="tara_kg" data-kw-calc="tara-brutto" value="' + val('tara_kg') + '" inputmode="decimal"></td>' +
-          '<td class="kw-col-num"><input type="number" step="any" name="brutto_kg" data-kw-calc="tara-brutto" value="' + val('brutto_kg') + '" inputmode="decimal"></td>' +
+          '<td class="kw-col-num"><input type="text" name="bandwaage_kg" data-kw-calc="fehler" value="' + val('bandwaage_kg') + '" inputmode="decimal" autocomplete="off"></td>' +
+          '<td class="kw-col-num"><input type="text" name="kontrollwaage_kg" class="kw-calc-field" data-kw-calc="fehler" value="' + val('kontrollwaage_kg') + '" inputmode="decimal" autocomplete="off"></td>' +
+          '<td class="kw-col-num"><input type="text" name="fehler_kg" class="kw-calc-field" value="' + val('fehler_kg') + '" inputmode="decimal" autocomplete="off"></td>' +
+          '<td class="kw-col-num"><input type="text" name="fehler_prozent" class="kw-calc-field" value="' + val('fehler_prozent') + '" inputmode="decimal" autocomplete="off"></td>' +
+          '<td class="kw-col-num"><input type="text" name="leistung_th" value="' + val('leistung_th') + '" inputmode="decimal" autocomplete="off"></td>' +
+          '<td class="kw-col-num"><input type="text" name="tara_kg" data-kw-calc="tara-brutto" value="' + val('tara_kg') + '" inputmode="decimal" autocomplete="off"></td>' +
+          '<td class="kw-col-num"><input type="text" name="brutto_kg" data-kw-calc="tara-brutto" value="' + val('brutto_kg') + '" inputmode="decimal" autocomplete="off"></td>' +
           '<td class="kw-col-bem"><input type="text" name="bemerkung" value="' + val('bemerkung') + '"></td>' +
           '<td class="kw-col-act"><div class="kw-act-wrap">' +
           '<input type="checkbox" class="kw-in-summe" name="in_summe" title="In Summe einbeziehen" aria-label="In Summe einbeziehen"' + (inSumme ? ' checked' : '') + '>' +
@@ -17187,9 +17187,9 @@
         '<td class="sk-col-nr"><span class="sk-num">' + (idx + 1) + '</span></td>' +
         '<td class="sk-col-ketten-tag"><input type="text" name="kette_tag" value="' + val('tag') + '" autocomplete="off" placeholder="Name"></td>' +
         '<td class="sk-col-ketten-type"><input type="text" name="ketten_type" value="' + val('ketten_type') + '" autocomplete="off"></td>' +
-        '<td class="sk-col-num"><input type="number" step="any" name="laenge" data-sk-kette-calc value="' + val('laenge') + '" inputmode="decimal"></td>' +
-        '<td class="sk-col-num"><input type="number" step="any" name="gewicht_pro_kette" data-sk-kette-calc value="' + val('gewicht_pro_kette') + '" inputmode="decimal"></td>' +
-        '<td class="sk-col-num"><input type="number" step="any" name="gewicht_pro_meter" value="' + val('gewicht_pro_meter') + '" inputmode="decimal" title="Wird aus Gewicht/Länge berechnet, ist aber editierbar"></td>' +
+        '<td class="sk-col-num"><input type="text" name="laenge" data-sk-kette-calc value="' + val('laenge') + '" inputmode="decimal" autocomplete="off"></td>' +
+        '<td class="sk-col-num"><input type="text" name="gewicht_pro_kette" data-sk-kette-calc value="' + val('gewicht_pro_kette') + '" inputmode="decimal" autocomplete="off"></td>' +
+        '<td class="sk-col-num"><input type="text" name="gewicht_pro_meter" value="' + val('gewicht_pro_meter') + '" inputmode="decimal" autocomplete="off" title="Wird aus Gewicht/Länge berechnet, ist aber editierbar"></td>' +
         '<td class="sk-col-act"><div class="sk-act-wrap">' +
         '<input type="checkbox" class="sk-in-summe" name="kette_in_summe" title="Kette verwenden / in Summe"' + (inSumme ? ' checked' : '') + '>' +
         '<button type="button" class="btn btn-ghost sk-kette-remove" title="Kette entfernen">×</button>' +
@@ -17274,13 +17274,13 @@
       var inSumme = m.in_summe === false || m.in_summe === 0 || m.in_summe === '0' ? false : true;
       return '<tr class="schleppketten-row" data-idx="' + idx + '">' +
         '<td class="sk-col-nr"><span class="sk-num">' + (idx + 1) + '</span></td>' +
-        '<td class="sk-col-num"><input type="number" step="any" name="bandwaage_t" data-sk-calc value="' + val('bandwaage_t') + '" inputmode="decimal"></td>' +
-        '<td class="sk-col-num"><input type="number" step="any" name="pruefkette_t" class="sk-calc-field" value="' + val('pruefkette_t') + '" readonly tabindex="-1"></td>' +
-        '<td class="sk-col-num"><input type="number" step="any" name="kg_pro_m" data-sk-calc value="' + val('kg_pro_m') + '" inputmode="decimal" title="Übernahme aus Summe Gewicht/Meter der Ketten, editierbar"></td>' +
-        '<td class="sk-col-num"><input type="number" step="any" name="geschwindigkeit_ms" data-sk-calc value="' + val('geschwindigkeit_ms') + '" inputmode="decimal"></td>' +
-        '<td class="sk-col-num"><input type="number" step="any" name="messzeit_s" data-sk-calc value="' + val('messzeit_s') + '" inputmode="decimal"></td>' +
+        '<td class="sk-col-num"><input type="text" name="bandwaage_t" data-sk-calc value="' + val('bandwaage_t') + '" inputmode="decimal" autocomplete="off"></td>' +
+        '<td class="sk-col-num"><input type="text" name="pruefkette_t" class="sk-calc-field" value="' + val('pruefkette_t') + '" readonly tabindex="-1" autocomplete="off"></td>' +
+        '<td class="sk-col-num"><input type="text" name="kg_pro_m" data-sk-calc value="' + val('kg_pro_m') + '" inputmode="decimal" autocomplete="off" title="Übernahme aus Summe Gewicht/Meter der Ketten, editierbar"></td>' +
+        '<td class="sk-col-num"><input type="text" name="geschwindigkeit_ms" data-sk-calc value="' + val('geschwindigkeit_ms') + '" inputmode="decimal" autocomplete="off"></td>' +
+        '<td class="sk-col-num"><input type="text" name="messzeit_s" data-sk-calc value="' + val('messzeit_s') + '" inputmode="decimal" autocomplete="off"></td>' +
         '<td class="sk-col-num"><input type="text" name="fehler_prozent" class="sk-calc-field" value="' + val('fehler_prozent') + '" readonly tabindex="-1"></td>' +
-        '<td class="sk-col-num"><input type="number" step="any" name="leistung_th" class="sk-calc-field" value="' + val('leistung_th') + '" readonly tabindex="-1"></td>' +
+        '<td class="sk-col-num"><input type="text" name="leistung_th" class="sk-calc-field" value="' + val('leistung_th') + '" readonly tabindex="-1" autocomplete="off"></td>' +
         '<td class="sk-col-bem"><input type="text" name="bemerkung" value="' + val('bemerkung') + '"></td>' +
         '<td class="sk-col-act"><div class="sk-act-wrap">' +
         '<input type="checkbox" class="sk-in-summe" name="in_summe" title="In Summe"' + (inSumme ? ' checked' : '') + '>' +
@@ -19592,13 +19592,7 @@
     }
 
     function clampServiceprotokollQmax(val) {
-      var s = String(val == null ? '' : val).trim();
-      if (!s) return '';
-      var n = Number(String(s).replace(',', '.').replace(/[^\d.-]/g, ''));
-      if (!Number.isFinite(n)) return s;
-      if (n > 100000) return '100000';
-      if (n < 0) return '0';
-      return s;
+      return String(val == null ? '' : val).trim();
     }
 
     function readKopfFieldsFromForm() {
