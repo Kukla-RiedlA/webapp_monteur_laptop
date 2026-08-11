@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.018
+- **Serviceprotokoll-PDF Header:** Wägezellen-Felder (Type/SN/Vers/Sens) aus dem Kopf entfernt; Meta in 3 Zeilen: Kunde/Projekt/FN · Type/Qmax/Pos.Nr./DWC · Datum/Techniker.
+
 ## V 2.005.017
 - **Prüfzertifikat-PDF:** Label „Unterschrift“ entfernt; Signatur rechts neben Monteur-Name und Datum (kein Abschneiden am Seitenende).
 - **Serviceprotokoll Alle-PDF:** PDFs lokal zuerst erzeugen (wie Einzel-PDF); Dispo-Sync optional ohne Abbruch bei Server-PDF-Fehler.

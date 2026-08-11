@@ -572,7 +572,8 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   });
 
   const headerBandH = 52;
-  const metaBlockH = 118;
+  const metaRowH = 26;
+  const metaBlockH = 12 + metaRowH * 3;
   const stepHeaderH = 22;
   const stepRowH = 18;
 
@@ -639,14 +640,12 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       borderColor: greenSoft,
       borderWidth: 0.8,
     });
-    const colW = tableInnerW / 3;
     const pad = 10;
-    const fields = [
+    const rows = [
       [
         [de ? 'Kunde / customer' : 'Customer', payload.kunde || payload.customer_name || ''],
-        ['FN', payload.fabrikationsnummer || ''],
         [de ? 'Projekt / project' : 'Project', payload.projekt || ''],
-        [de ? 'Datum / date' : 'Date', formatDateDe(payload.durchfuehrungsdatum) || '–'],
+        ['FN', payload.fabrikationsnummer || ''],
       ],
       [
         ['Type / type', payload.kopf_type || payload.type || ''],
@@ -655,17 +654,15 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         ['DWC', payload.kopf_dwc || ''],
       ],
       [
-        [de ? 'Waegezelle Type' : 'Load cell type', mess.waegezelle_type || ''],
-        [de ? 'Seriennummer' : 'Serial no.', mess.waegezelle_seriennummer || ''],
-        [de ? 'Versorgungsspannung V' : 'Supply voltage V', mess.vers_spannung || ''],
-        [de ? 'Sensitivität mV/V' : 'Sensitivity mV/V', mess.sensitivitaet || ''],
+        [de ? 'Datum / date' : 'Date', formatDateDe(payload.durchfuehrungsdatum) || '–'],
         [de ? 'Servicetechniker' : 'Service engineer', monteurName],
       ],
     ];
-    fields.forEach((group, gi) => {
-      const gx = marginX + gi * colW + pad;
-      let gy = yStart - 12;
-      group.forEach(([label, val]) => {
+    rows.forEach((row, ri) => {
+      const colW = tableInnerW / row.length;
+      const gy = yStart - 12 - ri * metaRowH;
+      row.forEach(([label, val], ci) => {
+        const gx = marginX + ci * colW + pad;
         page.drawText(clipText(font, label, 6.5, colW - pad * 2), {
           x: gx,
           y: gy,
@@ -680,7 +677,6 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
           font: fontBold,
           color: grayText,
         });
-        gy -= 26;
       });
     });
     return boxY - 12;
