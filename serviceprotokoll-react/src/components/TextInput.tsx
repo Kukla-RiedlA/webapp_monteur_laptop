@@ -6,13 +6,13 @@ interface TextInputProps extends InputHTMLAttributes<HTMLInputElement> {
   icon?: ReactNode;
 }
 
-export function TextInput({ label, suffix, icon, className = '', ...props }: TextInputProps) {
+export function TextInput({ label, suffix, icon, className = '', title, ...props }: TextInputProps) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-sm font-semibold text-[#111827]">{label}</span>
-      <div className="flex items-stretch gap-2">
+    <label className="flex min-w-0 flex-col gap-0.5" title={title || label}>
+      <span className="truncate text-xs font-semibold text-[#111827]">{label}</span>
+      <div className="flex min-w-0 items-stretch gap-2">
         <div className="relative min-w-0 flex-1">
-          <input className={`sp-input ${icon ? 'pr-9' : ''} ${className}`} {...props} />
+          <input className={`sp-input ${icon ? 'pr-9' : ''} ${className}`} title={title} {...props} />
           {icon ? <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2">{icon}</span> : null}
         </div>
         {suffix}

@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.015
+- **Serviceprotokoll Wägezelle:** Stammdaten (Type, Seriennummer, Pos., Vers. V, Sens. mV/V) in einer kompakten Zeile; Vers/Sens schmal, Pos. breiter; keine Platzhalter in Vers/Sens.
+
+## V 2.005.014
+- **Serviceprotokoll:** Abschnitte Wägezelle + Messwerte zusammengeführt; Block pro Wägezelle inkl. eigener Messwert-Tabelle; `messwerte.waegezellen[]` inkl. Legacy-Kompatibilität; Anlagenstamm-Prefill für Primär + Extra-Zellen; PDF blockweise.
+
 ## V 2.005.013
 - **Profil-Unterschrift:** zeichnen/hochladen in Einstellungen; Cache + Sync von Dispo; Einbettung in Service-/KW-/Schleppketten-/Prüfzertifikat-/Montagebericht-PDFs; finales PDF nur mit Signatur; Kunden-Unterschrift entfernt.
 

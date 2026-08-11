@@ -315,32 +315,37 @@ export function ServiceProtocolPage() {
                         </button>
                       ) : null}
                     </div>
-                    <div className="grid grid-cols-3 gap-2 pr-20">
+                    <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.05fr)_minmax(0,1.15fr)_minmax(3.25rem,0.48fr)_minmax(3.25rem,0.48fr)] gap-2 pr-20">
                       <TextInput
                         label="Type"
+                        className="h-8 text-sm"
                         value={cell.type}
                         onChange={(e) => patchLoadCell(cell.id, { type: e.target.value })}
                       />
                       <TextInput
                         label="Seriennummer"
+                        className="h-8 text-sm"
                         value={cell.serialNumber}
                         onChange={(e) => patchLoadCell(cell.id, { serialNumber: e.target.value })}
                       />
                       <TextInput
                         label="Pos."
+                        className="h-8 text-sm"
                         value={cell.position}
                         onChange={(e) => patchLoadCell(cell.id, { position: e.target.value })}
                       />
-                    </div>
-                    <div className="mt-2 grid w-full grid-cols-2 gap-2">
                       <TextInput
-                        label="Versorgungsspannung V"
+                        label="Vers. V"
+                        title="Versorgungsspannung V"
+                        className="h-8 text-sm"
                         value={cell.supplyVoltage || ''}
                         inputMode="decimal"
                         onChange={(e) => patchLoadCell(cell.id, { supplyVoltage: e.target.value })}
                       />
                       <TextInput
-                        label="Sensitivität mV/V"
+                        label="Sens. mV/V"
+                        title="Sensitivität mV/V"
+                        className="h-8 text-sm"
                         value={cell.sensitivity || ''}
                         inputMode="decimal"
                         onChange={(e) => patchLoadCell(cell.id, { sensitivity: e.target.value })}
