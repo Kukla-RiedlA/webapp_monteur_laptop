@@ -9632,7 +9632,10 @@ function createApp(db) {
   }
 
   function encodeKaExtraFromMess(m) {
-    const extras = m && Array.isArray(m.waegezellen_extra) ? m.waegezellen_extra : [];
+    let extras = m && Array.isArray(m.waegezellen_extra) ? m.waegezellen_extra : [];
+    if ((!extras || !extras.length) && m && Array.isArray(m.waegezellen) && m.waegezellen.length > 1) {
+      extras = m.waegezellen.slice(1);
+    }
     const normalized = extras
       .map((item) => {
         if (!item || typeof item !== 'object') return null;

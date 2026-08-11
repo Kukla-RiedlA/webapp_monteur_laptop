@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { defaultBridgePayload, mergeBridgePayload } from '../bridge-utils';
+import { cloneMeasurements, defaultBridgePayload, mergeBridgePayload } from '../bridge-utils';
 import type { SpBridgePayload } from '../hooks/useElectronBridge';
 import { useElectronBridge, useEmbeddedMode } from '../hooks/useElectronBridge';
 import { ActionPanel } from './ActionPanel';
@@ -11,10 +11,11 @@ import { SpIcon } from './SpIcon';
 import { SelectInput, TextInput } from './TextInput';
 import { TestLoadFields } from './TestLoadFields';
 import { WorkStepsTable } from './WorkStepsTable';
-import type { LoadCellRow, ServiceProtocolFormState, StepResult } from '../types';
-import { FAB_NUMBERS } from '../types';
+import type { LoadCellRow, MeasurementRow, ServiceProtocolFormState, StepResult } from '../types';
+import { EMPTY_MEASUREMENTS, FAB_NUMBERS } from '../types';
 
-function ensureLoadCells(form: ServiceProtocolFormState): LoadCellRow[] {
+function ensureLoadCells(form: ServiceProtocolFormState, fallbackMeasurements?: MeasurementRow[]): LoadCellRow[] {
+  const fallback = cloneMeasurements(fallbackMeasurements);
   if (Array.isArray(form.loadCells) && form.loadCells.length) {
     return form.loadCells.map((c, i) => ({
       id: c.id || String(i + 1),
@@ -23,6 +24,9 @@ function ensureLoadCells(form: ServiceProtocolFormState): LoadCellRow[] {
       position: c.position || '',
       supplyVoltage: c.supplyVoltage ?? (i === 0 ? form.supplyVoltage || '' : ''),
       sensitivity: c.sensitivity ?? (i === 0 ? form.sensitivity || '' : ''),
+      measurements: cloneMeasurements(
+        c.measurements && c.measurements.length ? c.measurements : i === 0 ? fallback : EMPTY_MEASUREMENTS,
+      ),
     }));
   }
   return [
@@ -33,6 +37,7 @@ function ensureLoadCells(form: ServiceProtocolFormState): LoadCellRow[] {
       position: '',
       supplyVoltage: form.supplyVoltage || '',
       sensitivity: form.sensitivity || '',
+      measurements: fallback,
     },
   ];
 }
@@ -41,8 +46,8 @@ export function ServiceProtocolPage() {
   const embedded = useEmbeddedMode();
   const [bridgeState, setBridgeState] = useState<SpBridgePayload>(defaultBridgePayload);
 
-  const { form, measurements, testLoad, workSteps, jobs, jobId, fabNumbers } = bridgeState;
-  const loadCells = ensureLoadCells(form);
+  const { form, testLoad, workSteps, jobs, jobId, fabNumbers } = bridgeState;
+  const loadCells = ensureLoadCells(form, bridgeState.measurements);
 
   const fabChips = fabNumbers.length ? fabNumbers : embedded ? [] : FAB_NUMBERS;
 
@@ -59,10 +64,35 @@ export function ServiceProtocolPage() {
     });
   }, []);
 
-  const patchLoadCell = useCallback(
-    (id: string, patch: Partial<LoadCellRow>) => {
+  const patchLoadCell = useCallback((id: string, patch: Partial<LoadCellRow>) => {
+    setBridgeState((prev) => {
+      const cells = ensureLoadCells(prev.form, prev.measurements).map((c) =>
+        c.id === id ? { ...c, ...patch, measurements: patch.measurements ? cloneMeasurements(patch.measurements) : c.measurements } : c,
+      );
+      return mergeBridgePayload(prev, {
+        form: {
+          ...prev.form,
+          loadCells: cells,
+          loadcellType: cells[0]?.type || '',
+          serialNumber: cells[0]?.serialNumber || '',
+          supplyVoltage: cells[0]?.supplyVoltage || '',
+          sensitivity: cells[0]?.sensitivity || '',
+        },
+        measurements: cloneMeasurements(cells[0]?.measurements),
+      });
+    });
+  }, []);
+
+  const patchLoadCellMeasurement = useCallback(
+    (cellId: string, rowId: string, field: keyof Omit<MeasurementRow, 'id' | 'label'>, value: string) => {
       setBridgeState((prev) => {
-        const cells = ensureLoadCells(prev.form).map((c) => (c.id === id ? { ...c, ...patch } : c));
+        const cells = ensureLoadCells(prev.form, prev.measurements).map((c) => {
+          if (c.id !== cellId) return c;
+          const measurements = cloneMeasurements(c.measurements).map((r) =>
+            r.id === rowId ? { ...r, [field]: value } : r,
+          );
+          return { ...c, measurements };
+        });
         return mergeBridgePayload(prev, {
           form: {
             ...prev.form,
@@ -72,6 +102,7 @@ export function ServiceProtocolPage() {
             supplyVoltage: cells[0]?.supplyVoltage || '',
             sensitivity: cells[0]?.sensitivity || '',
           },
+          measurements: cloneMeasurements(cells[0]?.measurements),
         });
       });
     },
@@ -80,7 +111,7 @@ export function ServiceProtocolPage() {
 
   const addLoadCell = useCallback(() => {
     setBridgeState((prev) => {
-      const cells = ensureLoadCells(prev.form);
+      const cells = ensureLoadCells(prev.form, prev.measurements);
       const next = [
         ...cells,
         {
@@ -90,6 +121,7 @@ export function ServiceProtocolPage() {
           position: '',
           supplyVoltage: '',
           sensitivity: '',
+          measurements: cloneMeasurements(EMPTY_MEASUREMENTS),
         },
       ];
       return mergeBridgePayload(prev, {
@@ -101,13 +133,14 @@ export function ServiceProtocolPage() {
           supplyVoltage: next[0]?.supplyVoltage || '',
           sensitivity: next[0]?.sensitivity || '',
         },
+        measurements: cloneMeasurements(next[0]?.measurements),
       });
     });
   }, []);
 
   const removeLoadCell = useCallback((id: string) => {
     setBridgeState((prev) => {
-      const cells = ensureLoadCells(prev.form);
+      const cells = ensureLoadCells(prev.form, prev.measurements);
       if (cells.length <= 1) return prev;
       const next = cells.filter((c) => c.id !== id);
       return mergeBridgePayload(prev, {
@@ -119,6 +152,7 @@ export function ServiceProtocolPage() {
           supplyVoltage: next[0]?.supplyVoltage || '',
           sensitivity: next[0]?.sensitivity || '',
         },
+        measurements: cloneMeasurements(next[0]?.measurements),
       });
     });
   }, []);
@@ -225,114 +259,108 @@ export function ServiceProtocolPage() {
           </SectionCard>
 
           <div className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <SectionCard number={2} title="Anlagendaten" icon="Factory">
-                <div className="grid gap-3">
-                  <TextInput label="Type" value={form.plantType} onChange={(e) => patchForm({ plantType: e.target.value })} />
-                  <div className="grid grid-cols-2 gap-3">
-                    <TextInput
-                      label="Qmax"
-                      value={form.qmax}
-                      inputMode="text"
-                      maxLength={100}
-                      autoComplete="off"
-                      placeholder="z.B. 30 t/h"
-                      onChange={(e) => patchForm({ qmax: e.target.value })}
-                    />
-                    <TextInput
-                      label="v max"
-                      value={form.vmax || ''}
-                      onChange={(e) => patchForm({ vmax: e.target.value })}
-                      placeholder="aus Anlagenstamm"
-                    />
-                  </div>
-                  <TextInput label="Pos.-Nr." value={form.position} onChange={(e) => patchForm({ position: e.target.value })} />
-                  <TextInput label="DWC" value={form.dwc} onChange={(e) => patchForm({ dwc: e.target.value })} />
+            <SectionCard number={2} title="Anlagendaten" icon="Factory">
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput label="Type" value={form.plantType} onChange={(e) => patchForm({ plantType: e.target.value })} />
+                <div className="grid grid-cols-2 gap-3">
+                  <TextInput
+                    label="Qmax"
+                    value={form.qmax}
+                    inputMode="text"
+                    maxLength={100}
+                    autoComplete="off"
+                    placeholder="z.B. 30 t/h"
+                    onChange={(e) => patchForm({ qmax: e.target.value })}
+                  />
+                  <TextInput
+                    label="v max"
+                    value={form.vmax || ''}
+                    onChange={(e) => patchForm({ vmax: e.target.value })}
+                    placeholder="aus Anlagenstamm"
+                  />
                 </div>
-              </SectionCard>
+                <TextInput label="Pos.-Nr." value={form.position} onChange={(e) => patchForm({ position: e.target.value })} />
+                <TextInput label="DWC" value={form.dwc} onChange={(e) => patchForm({ dwc: e.target.value })} />
+              </div>
+            </SectionCard>
 
-              <SectionCard number={3} title="Wägezelle" icon="Scale">
-                <div className="grid gap-3">
-                  {loadCells.map((cell, idx) => (
-                    <div
-                      key={cell.id}
-                      className="relative rounded-xl border border-kukla-border bg-white p-3 shadow-card"
-                    >
-                      <div className="absolute right-2 top-2 flex items-center gap-1">
-                        {idx === loadCells.length - 1 ? (
-                          <button
-                            type="button"
-                            className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
-                            aria-label="Wägezelle hinzufügen"
-                            title="Weitere Wägezelle hinzufügen"
-                            onClick={addLoadCell}
-                          >
-                            <SpIcon name="Plus" className="h-4 w-4" />
-                          </button>
-                        ) : null}
-                        {loadCells.length > 1 ? (
-                          <button
-                            type="button"
-                            className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
-                            aria-label="Wägezelle entfernen"
-                            title="Wägezelle entfernen"
-                            onClick={() => removeLoadCell(cell.id)}
-                          >
-                            <SpIcon name="X" className="h-4 w-4" />
-                          </button>
-                        ) : null}
-                      </div>
-                      <div className="grid grid-cols-3 gap-3 pr-20">
-                        <TextInput
-                          label="Type"
-                          value={cell.type}
-                          onChange={(e) => patchLoadCell(cell.id, { type: e.target.value })}
-                        />
-                        <TextInput
-                          label="Seriennummer"
-                          value={cell.serialNumber}
-                          onChange={(e) => patchLoadCell(cell.id, { serialNumber: e.target.value })}
-                        />
-                        <TextInput
-                          label="Pos."
-                          value={cell.position}
-                          onChange={(e) => patchLoadCell(cell.id, { position: e.target.value })}
-                        />
-                      </div>
-                      <div className="mt-3 grid grid-cols-2 gap-3">
-                        <TextInput
-                          label="Versorgungsspannung V"
-                          value={cell.supplyVoltage || ''}
-                          inputMode="decimal"
-                          onChange={(e) => patchLoadCell(cell.id, { supplyVoltage: e.target.value })}
-                        />
-                        <TextInput
-                          label="Sensitivität mV/V"
-                          value={cell.sensitivity || ''}
-                          inputMode="decimal"
-                          onChange={(e) => patchLoadCell(cell.id, { sensitivity: e.target.value })}
-                        />
-                      </div>
+            <SectionCard number={3} title="Wägezelle & Messwerte" icon="Scale">
+              <div className="grid gap-3">
+                {loadCells.map((cell, idx) => (
+                  <div
+                    key={cell.id}
+                    className="relative rounded-xl border border-kukla-border bg-white p-3 shadow-card"
+                  >
+                    <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+                      {idx === loadCells.length - 1 ? (
+                        <button
+                          type="button"
+                          className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
+                          aria-label="Wägezelle hinzufügen"
+                          title="Weitere Wägezelle hinzufügen"
+                          onClick={addLoadCell}
+                        >
+                          <SpIcon name="Plus" className="h-4 w-4" />
+                        </button>
+                      ) : null}
+                      {loadCells.length > 1 ? (
+                        <button
+                          type="button"
+                          className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
+                          aria-label="Wägezelle entfernen"
+                          title="Wägezelle entfernen"
+                          onClick={() => removeLoadCell(cell.id)}
+                        >
+                          <SpIcon name="X" className="h-4 w-4" />
+                        </button>
+                      ) : null}
                     </div>
-                  ))}
-                </div>
-              </SectionCard>
-            </div>
-
-            <SectionCard number={4} title="Messwerte Wägezelle" icon="LineChart">
-              <MeasurementTable
-                rows={measurements}
-                onChange={(id, field, value) =>
-                  setBridgeState((prev) => ({
-                    ...prev,
-                    measurements: prev.measurements.map((r) => (r.id === id ? { ...r, [field]: value } : r)),
-                  }))
-                }
-              />
+                    <div className="grid grid-cols-3 gap-2 pr-20">
+                      <TextInput
+                        label="Type"
+                        value={cell.type}
+                        onChange={(e) => patchLoadCell(cell.id, { type: e.target.value })}
+                      />
+                      <TextInput
+                        label="Seriennummer"
+                        value={cell.serialNumber}
+                        onChange={(e) => patchLoadCell(cell.id, { serialNumber: e.target.value })}
+                      />
+                      <TextInput
+                        label="Pos."
+                        value={cell.position}
+                        onChange={(e) => patchLoadCell(cell.id, { position: e.target.value })}
+                      />
+                    </div>
+                    <div className="mt-2 grid w-full grid-cols-2 gap-2">
+                      <TextInput
+                        label="Versorgungsspannung V"
+                        value={cell.supplyVoltage || ''}
+                        inputMode="decimal"
+                        onChange={(e) => patchLoadCell(cell.id, { supplyVoltage: e.target.value })}
+                      />
+                      <TextInput
+                        label="Sensitivität mV/V"
+                        value={cell.sensitivity || ''}
+                        inputMode="decimal"
+                        onChange={(e) => patchLoadCell(cell.id, { sensitivity: e.target.value })}
+                      />
+                    </div>
+                    <div className="mt-3 w-full">
+                      <MeasurementTable
+                        rows={cell.measurements || EMPTY_MEASUREMENTS}
+                        onChange={(rowId, field, value) =>
+                          patchLoadCellMeasurement(cell.id, rowId, field, value)
+                        }
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
             </SectionCard>
           </div>
 
-          <SectionCard number={5} title="Prüfgewichtstest — Abweichung (%)" icon="LineChart">
+          <SectionCard number={4} title="Prüfgewichtstest — Abweichung (%)" icon="LineChart">
             <TestLoadFields
               values={testLoad}
               onChange={(field, value) =>
@@ -344,7 +372,7 @@ export function ServiceProtocolPage() {
             />
           </SectionCard>
 
-          <SectionCard number={6} title="Arbeitsschritte" icon="ClipboardCheck">
+          <SectionCard number={5} title="Arbeitsschritte" icon="ClipboardCheck">
             <WorkStepsTable
               steps={workSteps}
               onResultChange={(id, result: StepResult) =>
@@ -380,7 +408,7 @@ export function ServiceProtocolPage() {
           </SectionCard>
 
           <div className="grid gap-4 lg:grid-cols-[1fr_min(280px,36%)]">
-            <SectionCard number={7} title="Abschluss" icon="ClipboardCheck">
+            <SectionCard number={6} title="Abschluss" icon="ClipboardCheck">
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <fieldset className="space-y-2 border-0 p-0">

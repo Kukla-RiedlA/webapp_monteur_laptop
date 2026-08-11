@@ -19434,6 +19434,101 @@
       try { return JSON.stringify(normalized); } catch (e) { return ''; }
     }
 
+    function emptyMessRow() {
+      return { kg: '', mv: '', ma: '', g_prozent: '' };
+    }
+
+    function emptyMessMatrix() {
+      return {
+        dms: emptyMessRow(),
+        tara: emptyMessRow(),
+        pruefgewicht: emptyMessRow()
+      };
+    }
+
+    function cloneMessMatrix(matrix) {
+      var src = matrix && typeof matrix === 'object' ? matrix : {};
+      return {
+        dms: Object.assign(emptyMessRow(), src.dms || {}),
+        tara: Object.assign(emptyMessRow(), src.tara || {}),
+        pruefgewicht: Object.assign(emptyMessRow(), src.pruefgewicht || {})
+      };
+    }
+
+    function measurementsRowsToMatrix(rows) {
+      var list = Array.isArray(rows) ? rows : [];
+      var byId = {};
+      list.forEach(function (r) {
+        if (r && r.id) byId[r.id] = r;
+      });
+      var pick = function (id, legacyIdx) {
+        var r = byId[id] || list[legacyIdx] || {};
+        return {
+          kg: r.kg != null ? String(r.kg) : '',
+          mv: r.mv != null ? String(r.mv) : '',
+          ma: r.ma != null ? String(r.ma) : '',
+          g_prozent: r.g != null ? String(r.g) : (r.g_prozent != null ? String(r.g_prozent) : '')
+        };
+      };
+      return {
+        dms: pick('dms', 0),
+        tara: pick('tara', 1),
+        pruefgewicht: pick('pg', 2)
+      };
+    }
+
+    function matrixToMeasurementsRows(matrix) {
+      var mm = cloneMessMatrix(matrix);
+      return [
+        { id: 'dms', label: 'DMS entlastet / released', kg: mm.dms.kg, mv: mm.dms.mv, ma: mm.dms.ma, g: mm.dms.g_prozent },
+        { id: 'tara', label: 'Tara / tare', kg: mm.tara.kg, mv: mm.tara.mv, ma: mm.tara.ma, g: mm.tara.g_prozent },
+        { id: 'pg', label: 'Prüfgewicht / test load', kg: mm.pruefgewicht.kg, mv: mm.pruefgewicht.mv, ma: mm.pruefgewicht.ma, g: mm.pruefgewicht.g_prozent }
+      ];
+    }
+
+    function cellMessMatrixFromCell(cell) {
+      if (!cell || typeof cell !== 'object') return emptyMessMatrix();
+      if (cell.mess_matrix && typeof cell.mess_matrix === 'object') return cloneMessMatrix(cell.mess_matrix);
+      if (Array.isArray(cell.measurements) && cell.measurements.length) {
+        return measurementsRowsToMatrix(cell.measurements);
+      }
+      return emptyMessMatrix();
+    }
+
+    function readWaegezellenPayloadRaw() {
+      var el = document.getElementById('spMessWaegezellenPayload');
+      if (!el || !el.value) return [];
+      try {
+        var parsed = JSON.parse(String(el.value));
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function writeWaegezellenPayload(cells) {
+      var el = document.getElementById('spMessWaegezellenPayload');
+      if (!el) return;
+      var list = Array.isArray(cells) ? cells : [];
+      var out = list.map(function (c, i) {
+        var mm = cellMessMatrixFromCell(c);
+        return {
+          id: String((c && c.id) || (i + 1)),
+          type: String((c && c.type) || '').trim(),
+          serialNumber: String((c && c.serialNumber) || '').trim(),
+          position: String((c && c.position) || '').trim(),
+          supplyVoltage: String((c && c.supplyVoltage) || '').trim(),
+          sensitivity: String((c && c.sensitivity) || '').trim(),
+          mess_matrix: mm
+        };
+      });
+      try {
+        el.value = JSON.stringify(out);
+      } catch (e) {
+        el.value = '[]';
+      }
+    }
+
     function collectSpLoadCellsFromForm() {
       var first = {
         type: String((document.getElementById('spMessType') || {}).value || '').trim(),
@@ -19447,31 +19542,60 @@
         var raw = (document.getElementById('spMessWaegezellenExtra') || {}).value || '[]';
         extras = parseSpKraftaufnehmerExtra(raw);
       } catch (e) { extras = []; }
+      var payload = readWaegezellenPayloadRaw();
+      var firstMatrix = collectMessMatrixFromForm();
+      if (payload[0] && payload[0].mess_matrix && typeof payload[0].mess_matrix === 'object') {
+        // DOM der Primärzelle hat Vorrang (Bridge schreibt dorthin).
+        firstMatrix = cloneMessMatrix(firstMatrix);
+      }
       var cells = [{
         id: '1',
         type: first.type,
         serialNumber: first.serialNumber,
         position: first.position,
         supplyVoltage: first.supplyVoltage,
-        sensitivity: first.sensitivity
+        sensitivity: first.sensitivity,
+        mess_matrix: firstMatrix,
+        measurements: matrixToMeasurementsRows(firstMatrix)
       }];
       extras.forEach(function (ex, i) {
+        var prev = payload[i + 1] || {};
+        var mm = cellMessMatrixFromCell(prev);
         cells.push({
           id: String(i + 2),
           type: ex.kraftaufnehmer || '',
           serialNumber: ex.dms_nr || '',
           position: ex.dms_position || '',
           supplyVoltage: ex.vers_spannung || '',
-          sensitivity: ex.sensitivitaet || ''
+          sensitivity: ex.sensitivitaet || '',
+          mess_matrix: mm,
+          measurements: matrixToMeasurementsRows(mm)
         });
       });
+      // Payload kann mehr Zellen haben als Extra-Stammdaten (nur Messwerte).
+      if (payload.length > cells.length) {
+        for (var pi = cells.length; pi < payload.length; pi++) {
+          var pc = payload[pi] || {};
+          var pmm = cellMessMatrixFromCell(pc);
+          cells.push({
+            id: String(pi + 1),
+            type: String(pc.type || '').trim(),
+            serialNumber: String(pc.serialNumber || '').trim(),
+            position: String(pc.position || '').trim(),
+            supplyVoltage: String(pc.supplyVoltage || '').trim(),
+            sensitivity: String(pc.sensitivity || '').trim(),
+            mess_matrix: pmm,
+            measurements: matrixToMeasurementsRows(pmm)
+          });
+        }
+      }
       return cells;
     }
 
     function applySpLoadCellsToForm(cells) {
       var list = Array.isArray(cells) && cells.length
         ? cells
-        : [{ id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' }];
+        : [{ id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '', mess_matrix: emptyMessMatrix() }];
       var first = list[0] || {};
       var typeEl = document.getElementById('spMessType');
       var snEl = document.getElementById('spMessSeriennummer');
@@ -19494,6 +19618,8 @@
         };
       });
       if (extraEl) extraEl.value = encodeSpKraftaufnehmerExtra(extras) || '[]';
+      writeWaegezellenPayload(list);
+      applyMessMatrixToForm(cellMessMatrixFromCell(first));
     }
 
     function loadCellsFromStammMess(apiMess, jobKopf) {
@@ -19524,20 +19650,25 @@
         serialNumber: sn,
         position: pos,
         supplyVoltage: vers,
-        sensitivity: sens
+        sensitivity: sens,
+        mess_matrix: emptyMessMatrix(),
+        measurements: matrixToMeasurementsRows(emptyMessMatrix())
       }];
       var extras = (apiMess && Array.isArray(apiMess.mess_waegezellen_extra))
         ? apiMess.mess_waegezellen_extra
         : [];
       extras.forEach(function (ex, i) {
         if (!ex) return;
+        var mm = emptyMessMatrix();
         cells.push({
           id: String(i + 2),
           type: String(ex.kraftaufnehmer || '').trim(),
           serialNumber: String(ex.dms_nr || '').trim(),
           position: String(ex.dms_position || '').trim(),
           supplyVoltage: String(ex.vers_spannung || '').trim(),
-          sensitivity: String(ex.sensitivitaet || '').trim()
+          sensitivity: String(ex.sensitivitaet || '').trim(),
+          mess_matrix: mm,
+          measurements: matrixToMeasurementsRows(mm)
         });
       });
       return cells;
@@ -19836,33 +19967,65 @@
         // Leere Draft-Werte nicht schreiben — sonst bleiben Vers/Sens leer trotz Anlagenstamm.
         if (el && pair[1] != null && String(pair[1]).trim() !== '') el.value = pair[1];
       });
-      var draftCells = [{
-        id: '1',
-        type: String(mess.waegezelle_type || '').trim(),
-        serialNumber: String(mess.waegezelle_seriennummer || '').trim(),
-        position: String(mess.waegezelle_position || '').trim(),
-        supplyVoltage: String(mess.vers_spannung || '').trim(),
-        sensitivity: String(mess.sensitivitaet || '').trim()
-      }];
-      var draftExtras = Array.isArray(mess.waegezellen_extra) ? mess.waegezellen_extra : parseSpKraftaufnehmerExtra(mess.waegezellen_extra);
-      draftExtras.forEach(function (ex, i) {
-        draftCells.push({
-          id: String(i + 2),
-          type: String((ex && ex.kraftaufnehmer) || '').trim(),
-          serialNumber: String((ex && ex.dms_nr) || '').trim(),
-          position: String((ex && ex.dms_position) || '').trim(),
-          supplyVoltage: String((ex && ex.vers_spannung) || '').trim(),
-          sensitivity: String((ex && ex.sensitivitaet) || '').trim()
+      var draftCells = [];
+      if (Array.isArray(mess.waegezellen) && mess.waegezellen.length) {
+        mess.waegezellen.forEach(function (wz, i) {
+          if (!wz || typeof wz !== 'object') return;
+          var mm = cellMessMatrixFromCell(wz);
+          if (i === 0 && (!wz.mess_matrix || typeof wz.mess_matrix !== 'object') && mess.mess_matrix) {
+            mm = normalizeMessMatrix(mess);
+          }
+          draftCells.push({
+            id: String(wz.id || (i + 1)),
+            type: String(wz.type != null ? wz.type : (wz.kraftaufnehmer || '')).trim(),
+            serialNumber: String(wz.serialNumber != null ? wz.serialNumber : (wz.dms_nr || '')).trim(),
+            position: String(wz.position != null ? wz.position : (wz.dms_position || '')).trim(),
+            supplyVoltage: String(wz.supplyVoltage != null ? wz.supplyVoltage : (wz.vers_spannung || '')).trim(),
+            sensitivity: String(wz.sensitivity != null ? wz.sensitivity : (wz.sensitivitaet || '')).trim(),
+            mess_matrix: mm,
+            measurements: matrixToMeasurementsRows(mm)
+          });
         });
-      });
+      } else {
+        var legacyMm = normalizeMessMatrix(mess);
+        draftCells.push({
+          id: '1',
+          type: String(mess.waegezelle_type || '').trim(),
+          serialNumber: String(mess.waegezelle_seriennummer || '').trim(),
+          position: String(mess.waegezelle_position || '').trim(),
+          supplyVoltage: String(mess.vers_spannung || '').trim(),
+          sensitivity: String(mess.sensitivitaet || '').trim(),
+          mess_matrix: legacyMm,
+          measurements: matrixToMeasurementsRows(legacyMm)
+        });
+        var draftExtras = Array.isArray(mess.waegezellen_extra) ? mess.waegezellen_extra : parseSpKraftaufnehmerExtra(mess.waegezellen_extra);
+        draftExtras.forEach(function (ex, i) {
+          var mm = emptyMessMatrix();
+          draftCells.push({
+            id: String(i + 2),
+            type: String((ex && ex.kraftaufnehmer) || '').trim(),
+            serialNumber: String((ex && ex.dms_nr) || '').trim(),
+            position: String((ex && ex.dms_position) || '').trim(),
+            supplyVoltage: String((ex && ex.vers_spannung) || '').trim(),
+            sensitivity: String((ex && ex.sensitivitaet) || '').trim(),
+            mess_matrix: mm,
+            measurements: matrixToMeasurementsRows(mm)
+          });
+        });
+      }
       // Nur Zellen mit Inhalt anwenden — leere Vers/Sens nicht als „gesetzt“ speichern.
       if (draftCells.some(function (c) {
-        return c.type || c.serialNumber || c.position || c.supplyVoltage || c.sensitivity;
+        return c.type || c.serialNumber || c.position || c.supplyVoltage || c.sensitivity ||
+          ['dms', 'tara', 'pruefgewicht'].some(function (k) {
+            var r = (c.mess_matrix && c.mess_matrix[k]) || {};
+            return r.kg || r.mv || r.ma || r.g_prozent;
+          });
       })) {
         applySpLoadCellsToForm(draftCells);
+      } else {
+        applyMessMatrixToForm(normalizeMessMatrix(mess));
       }
       applyPgTestToForm(normalizePgTestCells(mess));
-      applyMessMatrixToForm(normalizeMessMatrix(mess));
       updateVersSpannungHint();
       if (draft.abschluss) applyAbschlussPayload(draft.abschluss);
       if (Array.isArray(draft.arbeitsschritte) && draft.arbeitsschritte.length > 0) {
@@ -20060,10 +20223,6 @@
       });
     }
 
-    function emptyMessRow() {
-      return { kg: '', mv: '', ma: '', g_prozent: '' };
-    }
-
     function normalizeMessMatrix(mess) {
       mess = mess || {};
       if (mess.mess_matrix && typeof mess.mess_matrix === 'object') {
@@ -20142,7 +20301,16 @@
         var el = document.getElementById(id);
         if (el) el.value = '';
       });
-      applySpLoadCellsToForm([{ id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' }]);
+      applySpLoadCellsToForm([{
+        id: '1',
+        type: '',
+        serialNumber: '',
+        position: '',
+        supplyVoltage: '',
+        sensitivity: '',
+        mess_matrix: emptyMessMatrix(),
+        measurements: matrixToMeasurementsRows(emptyMessMatrix())
+      }]);
     }
 
     function messSeriennummerFromStamm(apiKopf, jobKopf) {
@@ -20162,15 +20330,48 @@
       var cells = collectSpLoadCellsFromForm();
       var fromStamm = loadCellsFromStammMess(apiKopf, jobKopf);
       if (!fromStamm || !fromStamm.length) return;
-      if (!cells[0]) cells[0] = { id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' };
+      if (!cells[0]) {
+        cells[0] = {
+          id: '1',
+          type: '',
+          serialNumber: '',
+          position: '',
+          supplyVoltage: '',
+          sensitivity: '',
+          mess_matrix: emptyMessMatrix(),
+          measurements: matrixToMeasurementsRows(emptyMessMatrix())
+        };
+      }
+      function fillEmptyStammFields(target, src) {
+        if (!target || !src) return;
+        if (!(target.type || '').trim()) target.type = src.type || '';
+        if (!(target.serialNumber || '').trim()) target.serialNumber = src.serialNumber || '';
+        if (!(target.position || '').trim()) target.position = src.position || '';
+        if (!(target.supplyVoltage || '').trim()) target.supplyVoltage = src.supplyVoltage || '';
+        if (!(target.sensitivity || '').trim()) target.sensitivity = src.sensitivity || '';
+        if (!target.mess_matrix) {
+          target.mess_matrix = emptyMessMatrix();
+          target.measurements = matrixToMeasurementsRows(target.mess_matrix);
+        }
+      }
       // Leere Felder der primären Wägezelle immer aus Stamm nachziehen (auch bei weiteren Zellen).
-      if (!(cells[0].type || '').trim()) cells[0].type = fromStamm[0].type;
-      if (!(cells[0].serialNumber || '').trim()) cells[0].serialNumber = fromStamm[0].serialNumber;
-      if (!(cells[0].position || '').trim()) cells[0].position = fromStamm[0].position;
-      if (!(cells[0].supplyVoltage || '').trim()) cells[0].supplyVoltage = fromStamm[0].supplyVoltage;
-      if (!(cells[0].sensitivity || '').trim()) cells[0].sensitivity = fromStamm[0].sensitivity;
-      if (cells.length === 1 && fromStamm.length > 1) {
-        cells = cells.concat(fromStamm.slice(1));
+      fillEmptyStammFields(cells[0], fromStamm[0]);
+      // Extra-Zellen: vorhandene per Index gap-fillen; fehlende aus Stamm anhängen.
+      for (var i = 1; i < fromStamm.length; i++) {
+        if (!cells[i]) {
+          cells.push({
+            id: String(i + 1),
+            type: fromStamm[i].type || '',
+            serialNumber: fromStamm[i].serialNumber || '',
+            position: fromStamm[i].position || '',
+            supplyVoltage: fromStamm[i].supplyVoltage || '',
+            sensitivity: fromStamm[i].sensitivity || '',
+            mess_matrix: emptyMessMatrix(),
+            measurements: matrixToMeasurementsRows(emptyMessMatrix())
+          });
+        } else {
+          fillEmptyStammFields(cells[i], fromStamm[i]);
+        }
       }
       applySpLoadCellsToForm(cells);
       updateVersSpannungHint();
@@ -20505,10 +20706,17 @@
     }
 
     function collectMesswerte() {
-      var matrix = collectMessMatrixFromForm();
-      var legacy = messwerteLegacyFromMatrix(matrix);
       var cells = collectSpLoadCellsFromForm();
-      var first = cells[0] || { type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' };
+      var first = cells[0] || {
+        type: '',
+        serialNumber: '',
+        position: '',
+        supplyVoltage: '',
+        sensitivity: '',
+        mess_matrix: emptyMessMatrix()
+      };
+      var matrix = cellMessMatrixFromCell(first);
+      var legacy = messwerteLegacyFromMatrix(matrix);
       var extras = cells.slice(1).map(function (c) {
         return {
           kraftaufnehmer: c.type || '',
@@ -20520,11 +20728,23 @@
       }).filter(function (r) {
         return r.kraftaufnehmer || r.dms_nr || r.dms_position || r.vers_spannung || r.sensitivitaet;
       });
+      var waegezellen = cells.map(function (c, i) {
+        return {
+          id: String(c.id || (i + 1)),
+          type: c.type || '',
+          serialNumber: c.serialNumber || '',
+          position: c.position || '',
+          supplyVoltage: c.supplyVoltage || '',
+          sensitivity: c.sensitivity || '',
+          mess_matrix: cellMessMatrixFromCell(c)
+        };
+      });
       return Object.assign({
         waegezelle_type: first.type || '',
         waegezelle_seriennummer: first.serialNumber || '',
         waegezelle_position: first.position || '',
         waegezellen_extra: extras,
+        waegezellen: waegezellen,
         vers_spannung: first.supplyVoltage || (document.getElementById('spMessVersSpannung') || {}).value || '',
         sensitivitaet: first.sensitivity || (document.getElementById('spMessSensitivitaet') || {}).value || '',
         pruefgewichtstest: collectPgTestFromForm(),
@@ -20808,7 +21028,8 @@
 
     function spPullPayloadForReact() {
       syncStepsFromDom();
-      var matrix = collectMessMatrixFromForm();
+      var cells = collectSpLoadCellsFromForm();
+      var firstMm = cellMessMatrixFromCell(cells[0]);
       var pgTest = collectPgTestFromForm();
       var statusEl = document.querySelector('input[name="serviceprotokollStatus"]:checked');
       var monteurEl = document.getElementById('serviceprotokollMonteur');
@@ -20832,20 +21053,21 @@
           vmax: (document.getElementById('serviceprotokollVmax') || {}).value || '',
           position: (document.getElementById('serviceprotokollPos') || {}).value || '',
           dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
-          loadcellType: (document.getElementById('spMessType') || {}).value || '',
-          serialNumber: (document.getElementById('spMessSeriennummer') || {}).value || '',
-          loadCells: (function () {
-            var cells = collectSpLoadCellsFromForm();
-            return cells;
-          })(),
-          supplyVoltage: (function () {
-            var cells = collectSpLoadCellsFromForm();
-            return (cells[0] && cells[0].supplyVoltage) || '';
-          })(),
-          sensitivity: (function () {
-            var cells = collectSpLoadCellsFromForm();
-            return (cells[0] && cells[0].sensitivity) || '';
-          })(),
+          loadcellType: (cells[0] && cells[0].type) || '',
+          serialNumber: (cells[0] && cells[0].serialNumber) || '',
+          loadCells: cells.map(function (c, i) {
+            return {
+              id: String(c.id || (i + 1)),
+              type: c.type || '',
+              serialNumber: c.serialNumber || '',
+              position: c.position || '',
+              supplyVoltage: c.supplyVoltage || '',
+              sensitivity: c.sensitivity || '',
+              measurements: matrixToMeasurementsRows(cellMessMatrixFromCell(c))
+            };
+          }),
+          supplyVoltage: (cells[0] && cells[0].supplyVoltage) || '',
+          sensitivity: (cells[0] && cells[0].sensitivity) || '',
           generalRemarks: (document.getElementById('serviceprotokollBemerkungen') || {}).value || '',
           status: statusEl ? String(statusEl.value || 'geprueft') : 'geprueft',
           monteur: monteurLabel,
@@ -20853,11 +21075,7 @@
           pdfDe: !!(document.getElementById('spPdfDe') && document.getElementById('spPdfDe').checked),
           pdfEn: !!(document.getElementById('spPdfEn') && document.getElementById('spPdfEn').checked)
         },
-        measurements: [
-          { id: 'dms', label: 'DMS entlastet / released', kg: matrix.dms.kg, mv: matrix.dms.mv, ma: matrix.dms.ma, g: matrix.dms.g_prozent },
-          { id: 'tara', label: 'Tara / tare', kg: matrix.tara.kg, mv: matrix.tara.mv, ma: matrix.tara.ma, g: matrix.tara.g_prozent },
-          { id: 'pg', label: 'Prüfgewicht / test load', kg: matrix.pruefgewicht.kg, mv: matrix.pruefgewicht.mv, ma: matrix.pruefgewicht.ma, g: matrix.pruefgewicht.g_prozent }
-        ],
+        measurements: matrixToMeasurementsRows(firstMm),
         testLoad: {
           weight: pgTest[0] || '',
           display: pgTest[1] || '',
@@ -20895,13 +21113,25 @@
         var curCells = collectSpLoadCellsFromForm();
         var mergedCells = f.loadCells.map(function (c, i) {
           var prev = curCells[i] || {};
+          var mm;
+          if (Array.isArray(c.measurements) && c.measurements.length) {
+            mm = measurementsRowsToMatrix(c.measurements);
+          } else if (c.mess_matrix) {
+            mm = cloneMessMatrix(c.mess_matrix);
+          } else if (i === 0 && Array.isArray(payload.measurements) && payload.measurements.length) {
+            mm = measurementsRowsToMatrix(payload.measurements);
+          } else {
+            mm = cellMessMatrixFromCell(prev);
+          }
           return {
             id: c.id || String(i + 1),
             type: c.type || '',
             serialNumber: c.serialNumber || '',
             position: c.position || '',
             supplyVoltage: String(c.supplyVoltage || '').trim() || prev.supplyVoltage || '',
-            sensitivity: String(c.sensitivity || '').trim() || prev.sensitivity || ''
+            sensitivity: String(c.sensitivity || '').trim() || prev.sensitivity || '',
+            mess_matrix: mm,
+            measurements: matrixToMeasurementsRows(mm)
           };
         });
         applySpLoadCellsToForm(mergedCells);
@@ -20914,6 +21144,9 @@
         if (f.sensitivity != null && String(f.sensitivity).trim() !== '') {
           setVal('spMessSensitivitaet', f.sensitivity);
         }
+        if (Array.isArray(payload.measurements) && payload.measurements.length) {
+          applyMessMatrixToForm(measurementsRowsToMatrix(payload.measurements));
+        }
       }
       setVal('serviceprotokollBemerkungen', f.generalRemarks);
       setVal('serviceprotokollAbschlussBemerkungen', f.closingRemarks);
@@ -20924,14 +21157,6 @@
       document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
         el.checked = el.value === (f.status || 'geprueft');
       });
-      if (Array.isArray(payload.measurements) && payload.measurements.length) {
-        var mm = {
-          dms: { kg: payload.measurements[0].kg || '', mv: payload.measurements[0].mv || '', ma: payload.measurements[0].ma || '', g_prozent: payload.measurements[0].g || '' },
-          tara: { kg: payload.measurements[1].kg || '', mv: payload.measurements[1].mv || '', ma: payload.measurements[1].ma || '', g_prozent: payload.measurements[1].g || '' },
-          pruefgewicht: { kg: payload.measurements[2].kg || '', mv: payload.measurements[2].mv || '', ma: payload.measurements[2].ma || '', g_prozent: payload.measurements[2].g || '' }
-        };
-        applyMessMatrixToForm(mm);
-      }
       if (payload.testLoad) {
         var tl = payload.testLoad;
         applyPgTestToForm([tl.weight || '', tl.display || '', tl.deviation || '', tl.value4 || '']);

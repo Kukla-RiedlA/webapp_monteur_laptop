@@ -30,6 +30,8 @@ export interface LoadCellRow {
   position: string;
   supplyVoltage: string;
   sensitivity: string;
+  /** Messwerte (DMS/Tara/Prüfgewicht) zu dieser Wägezelle */
+  measurements?: MeasurementRow[];
 }
 
 export interface ServiceProtocolFormState {
@@ -70,11 +72,14 @@ export const DEFAULT_WORK_STEPS: WorkStep[] = [
   { id: '7', label: 'Bandspannung', result: 'ok', remark: '' },
 ];
 
-export const DEFAULT_MEASUREMENTS: MeasurementRow[] = [
-  { id: 'dms', label: 'DMS entlastet / released', kg: '', mv: '0,100', ma: '', g: '' },
-  { id: 'tara', label: 'Tara / tare', kg: '', mv: '1,469', ma: '', g: '0,0' },
-  { id: 'pg', label: 'Prüfgewicht / test load', kg: '', mv: '2,818', ma: '', g: '46,73' },
+/** Leere Messwert-Zeilen für neue Wägezellen-Blöcke */
+export const EMPTY_MEASUREMENTS: MeasurementRow[] = [
+  { id: 'dms', label: 'DMS entlastet / released', kg: '', mv: '', ma: '', g: '' },
+  { id: 'tara', label: 'Tara / tare', kg: '', mv: '', ma: '', g: '' },
+  { id: 'pg', label: 'Prüfgewicht / test load', kg: '', mv: '', ma: '', g: '' },
 ];
+
+export const DEFAULT_MEASUREMENTS: MeasurementRow[] = EMPTY_MEASUREMENTS.map((r) => ({ ...r }));
 
 export const DEFAULT_TEST_LOAD: TestLoadValues = {
   weight: '',
@@ -84,7 +89,15 @@ export const DEFAULT_TEST_LOAD: TestLoadValues = {
 };
 
 export const DEFAULT_LOAD_CELLS: LoadCellRow[] = [
-  { id: '1', type: '', serialNumber: '', position: '', supplyVoltage: '', sensitivity: '' },
+  {
+    id: '1',
+    type: '',
+    serialNumber: '',
+    position: '',
+    supplyVoltage: '',
+    sensitivity: '',
+    measurements: EMPTY_MEASUREMENTS.map((r) => ({ ...r })),
+  },
 ];
 
 export const DEFAULT_FORM: ServiceProtocolFormState = {
@@ -100,7 +113,10 @@ export const DEFAULT_FORM: ServiceProtocolFormState = {
   dwc: 'DWC-7C',
   loadcellType: '',
   serialNumber: '',
-  loadCells: DEFAULT_LOAD_CELLS.map((r) => ({ ...r })),
+  loadCells: DEFAULT_LOAD_CELLS.map((r) => ({
+    ...r,
+    measurements: (r.measurements || EMPTY_MEASUREMENTS).map((m) => ({ ...m })),
+  })),
   supplyVoltage: '',
   sensitivity: '',
   generalRemarks: '',

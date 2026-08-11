@@ -177,25 +177,43 @@ function formatMesswerteLines(mess, lang) {
   const m = mess && typeof mess === 'object' ? mess : {};
   const lines = [];
   const de = lang !== 'en';
-  if (m.waegezelle_type) lines.push([(de ? 'Wägezelle Typ' : 'Load cell type'), m.waegezelle_type]);
-  if (m.waegezelle_seriennummer) lines.push([(de ? 'Seriennummer' : 'Serial no.'), m.waegezelle_seriennummer]);
-  if (m.waegezelle_position) lines.push([(de ? 'Pos.' : 'Pos.'), m.waegezelle_position]);
-  if (Array.isArray(m.waegezellen_extra)) {
-    m.waegezellen_extra.forEach((ex, i) => {
-      if (!ex) return;
-      const label = de ? ('Wägezelle ' + (i + 2)) : ('Load cell ' + (i + 2));
+  const cells = Array.isArray(m.waegezellen) && m.waegezellen.length
+    ? m.waegezellen
+    : null;
+  if (cells) {
+    cells.forEach((wz, i) => {
+      if (!wz) return;
+      const label = de ? ('Wägezelle ' + (i + 1)) : ('Load cell ' + (i + 1));
       const parts = [
-        ex.kraftaufnehmer,
-        ex.dms_nr,
-        ex.dms_position,
-        ex.vers_spannung ? String(ex.vers_spannung) + ' V' : '',
-        ex.sensitivitaet ? String(ex.sensitivitaet) + ' mV/V' : '',
+        wz.type || wz.kraftaufnehmer,
+        wz.serialNumber || wz.dms_nr,
+        wz.position || wz.dms_position,
+        (wz.supplyVoltage || wz.vers_spannung) ? String(wz.supplyVoltage || wz.vers_spannung) + ' V' : '',
+        (wz.sensitivity || wz.sensitivitaet) ? String(wz.sensitivity || wz.sensitivitaet) + ' mV/V' : '',
       ].filter((x) => x && String(x).trim());
       if (parts.length) lines.push([label, parts.join(' / ')]);
     });
+  } else {
+    if (m.waegezelle_type) lines.push([(de ? 'Wägezelle Typ' : 'Load cell type'), m.waegezelle_type]);
+    if (m.waegezelle_seriennummer) lines.push([(de ? 'Seriennummer' : 'Serial no.'), m.waegezelle_seriennummer]);
+    if (m.waegezelle_position) lines.push([(de ? 'Pos.' : 'Pos.'), m.waegezelle_position]);
+    if (Array.isArray(m.waegezellen_extra)) {
+      m.waegezellen_extra.forEach((ex, i) => {
+        if (!ex) return;
+        const label = de ? ('Wägezelle ' + (i + 2)) : ('Load cell ' + (i + 2));
+        const parts = [
+          ex.kraftaufnehmer,
+          ex.dms_nr,
+          ex.dms_position,
+          ex.vers_spannung ? String(ex.vers_spannung) + ' V' : '',
+          ex.sensitivitaet ? String(ex.sensitivitaet) + ' mV/V' : '',
+        ].filter((x) => x && String(x).trim());
+        if (parts.length) lines.push([label, parts.join(' / ')]);
+      });
+    }
+    if (m.vers_spannung) lines.push([(de ? 'Versorgungsspannung V' : 'Supply voltage V'), m.vers_spannung]);
+    if (m.sensitivitaet) lines.push([(de ? 'Sensitivität mV/V' : 'Sensitivity mV/V'), m.sensitivitaet]);
   }
-  if (m.vers_spannung) lines.push([(de ? 'Versorgungsspannung V' : 'Supply voltage V'), m.vers_spannung]);
-  if (m.sensitivitaet) lines.push([(de ? 'Sensitivität mV/V' : 'Sensitivity mV/V'), m.sensitivitaet]);
   const pgVals = normalizePruefgewichtstestVals(m.pruefgewichtstest);
   pgVals.forEach((v, i) => {
     if (!v) return;
@@ -437,24 +455,14 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     { key: 'tara', de: 'Tara', en: 'Tare' },
     { key: 'pruefgewicht', de: 'Pruefgewicht', en: 'Test load' },
   ];
-  const messRows = [];
-  messDefs.forEach((d) => {
-    const r = matrix[d.key] || emptyMessCellRow();
-    const has = ['kg', 'mv', 'ma', 'g_prozent'].some((k) => String(r[k] || '').trim() !== '');
-    if (!has) return;
-    messRows.push({
-      label: de ? d.de : d.en,
-      kg: String(r.kg || '').trim(),
-      mv: String(r.mv || '').trim(),
-      ma: String(r.ma || '').trim(),
-      g: String(r.g_prozent || '').trim(),
-    });
-  });
-  // Falls nur Legacy-Felder: trotzdem Zeilen anzeigen, wenn messRows leer aber type/sn gesetzt und flache Werte
-  if (!messRows.length) {
+
+  function matrixToMessRows(mm, forceEmptyRows) {
+    const rows = [];
     messDefs.forEach((d) => {
-      const r = matrix[d.key] || emptyMessCellRow();
-      messRows.push({
+      const r = (mm && mm[d.key]) || emptyMessCellRow();
+      const has = ['kg', 'mv', 'ma', 'g_prozent'].some((k) => String(r[k] || '').trim() !== '');
+      if (!has && !forceEmptyRows) return;
+      rows.push({
         label: de ? d.de : d.en,
         kg: String(r.kg || '').trim(),
         mv: String(r.mv || '').trim(),
@@ -462,9 +470,80 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         g: String(r.g_prozent || '').trim(),
       });
     });
-    const anyMess = messRows.some((r) => r.kg || r.mv || r.ma || r.g);
-    if (!anyMess) messRows.length = 0;
+    if (forceEmptyRows && !rows.some((r) => r.kg || r.mv || r.ma || r.g)) {
+      return [];
+    }
+    return rows;
   }
+
+  function normalizeWaegezelleCell(raw, idx) {
+    const c = raw && typeof raw === 'object' ? raw : {};
+    const type = String(c.type != null ? c.type : c.kraftaufnehmer || '').trim();
+    const serialNumber = String(c.serialNumber != null ? c.serialNumber : c.dms_nr || '').trim();
+    const position = String(c.position != null ? c.position : c.dms_position || '').trim();
+    const supplyVoltage = String(c.supplyVoltage != null ? c.supplyVoltage : c.vers_spannung || '').trim();
+    const sensitivity = String(c.sensitivity != null ? c.sensitivity : c.sensitivitaet || '').trim();
+    let mm = null;
+    if (c.mess_matrix && typeof c.mess_matrix === 'object') {
+      mm = {
+        dms: Object.assign(emptyMessCellRow(), c.mess_matrix.dms || {}),
+        tara: Object.assign(emptyMessCellRow(), c.mess_matrix.tara || {}),
+        pruefgewicht: Object.assign(emptyMessCellRow(), c.mess_matrix.pruefgewicht || {}),
+      };
+    } else if (idx === 0) {
+      mm = resolveMessMatrix(mess);
+    } else {
+      mm = {
+        dms: emptyMessCellRow(),
+        tara: emptyMessCellRow(),
+        pruefgewicht: emptyMessCellRow(),
+      };
+    }
+    return { type, serialNumber, position, supplyVoltage, sensitivity, matrix: mm };
+  }
+
+  /** Pro Wägezelle: Stammdaten + Messwertzeilen (Legacy = eine Zelle). */
+  const waegezellenBlocks = [];
+  if (Array.isArray(mess.waegezellen) && mess.waegezellen.length) {
+    mess.waegezellen.forEach((wz, i) => {
+      const cell = normalizeWaegezelleCell(wz, i);
+      const rows = matrixToMessRows(cell.matrix, false);
+      const hasMeta = !!(cell.type || cell.serialNumber || cell.position || cell.supplyVoltage || cell.sensitivity);
+      if (!hasMeta && !rows.length) return;
+      waegezellenBlocks.push({ cell, rows, index: i });
+    });
+  }
+  if (!waegezellenBlocks.length) {
+    const first = normalizeWaegezelleCell(
+      {
+        type: mess.waegezelle_type,
+        serialNumber: mess.waegezelle_seriennummer,
+        position: mess.waegezelle_position,
+        supplyVoltage: mess.vers_spannung,
+        sensitivity: mess.sensitivitaet,
+        mess_matrix: mess.mess_matrix,
+      },
+      0,
+    );
+    let rows = matrixToMessRows(first.matrix, false);
+    if (!rows.length) {
+      rows = matrixToMessRows(first.matrix, true);
+    }
+    const extras = Array.isArray(mess.waegezellen_extra) ? mess.waegezellen_extra : [];
+    const hasMeta = !!(first.type || first.serialNumber || first.position || first.supplyVoltage || first.sensitivity);
+    if (hasMeta || rows.length) {
+      waegezellenBlocks.push({ cell: first, rows, index: 0 });
+    }
+    extras.forEach((ex, i) => {
+      const cell = normalizeWaegezelleCell(ex, i + 1);
+      const rowsEx = matrixToMessRows(cell.matrix, false);
+      const has = !!(cell.type || cell.serialNumber || cell.position || cell.supplyVoltage || cell.sensitivity || rowsEx.length);
+      if (!has) return;
+      waegezellenBlocks.push({ cell, rows: rowsEx, index: i + 1 });
+    });
+  }
+  // Legacy-Alias für Höhenplanung / Einzelpfad
+  const messRows = waegezellenBlocks.length ? waegezellenBlocks[0].rows : [];
 
   const pgVals = normalizePruefgewichtstestVals(mess.pruefgewichtstest);
   // Legacy-Feld taraspeicher
@@ -756,7 +835,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         font,
         color: grayMuted,
       });
-      page.drawText('Datum: ______________', {
+      page.drawText('Datum: ' + pdfFooterCreatedDateDe(payload), {
         x: marginX + 220,
         y: marginBottom,
         size: 8,
@@ -778,9 +857,9 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   // Content blocks after steps (only on last page with remaining room / overflow pages)
   function buildTrailingBlocks() {
     const blocks = [];
-    if (messRows.length) {
-      blocks.push({ type: 'mess' });
-    }
+    waegezellenBlocks.forEach((wz) => {
+      blocks.push({ type: 'wz', wz });
+    });
     if (pgVals.some(Boolean)) {
       blocks.push({ type: 'pg' });
     }
@@ -837,7 +916,10 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   while (trailQueue.length) {
     const block = trailQueue[0];
     let need = 40;
-    if (block.type === 'mess') need = 20 + 18 + messRows.length * 16 + 14;
+    if (block.type === 'wz') {
+      const rowsN = (block.wz && block.wz.rows && block.wz.rows.length) || 0;
+      need = 20 + 28 + (rowsN ? 18 + rowsN * 16 + 14 : 8) + 10;
+    } else if (block.type === 'mess') need = 20 + 18 + messRows.length * 16 + 14;
     else if (block.type === 'pg') need = 20 + 14 + 18 + 16 + 10;
     else if (block.type === 'bemerk') need = 40;
     else if (block.type === 'abschluss') need = 80 + (block.hasSig ? 56 : 0);
@@ -898,16 +980,61 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
 
     const trail = plan.trailing || [];
     trail.forEach((block) => {
-      if (block.type === 'mess') {
-        y = drawSectionTitle(page, y, de ? 'Messwerte Waegezelle' : 'Load cell measurements');
-        const cols = [
-          { key: 'label', label: de ? 'Messpunkt' : 'Point', w: tableInnerW * 0.36 },
-          { key: 'kg', label: 'kg', w: tableInnerW * 0.16 },
-          { key: 'mv', label: 'mV', w: tableInnerW * 0.16 },
-          { key: 'ma', label: 'mA', w: tableInnerW * 0.16 },
-          { key: 'g', label: 'g %', w: tableInnerW * 0.16 },
-        ];
-        y = drawKeyValueTable(page, y, messRows, cols);
+      if (block.type === 'wz' || block.type === 'mess') {
+        const wz = block.type === 'wz' ? block.wz : { cell: null, rows: messRows, index: 0 };
+        const cell = (wz && wz.cell) || {};
+        const rows = (wz && wz.rows) || [];
+        const idx = wz && wz.index != null ? wz.index : 0;
+        const title =
+          waegezellenBlocks.length > 1
+            ? de
+              ? 'Waegezelle & Messwerte ' + (idx + 1)
+              : 'Load cell & measurements ' + (idx + 1)
+            : de
+              ? 'Waegezelle & Messwerte'
+              : 'Load cell & measurements';
+        y = drawSectionTitle(page, y, title);
+        const metaBits = [
+          [de ? 'Type' : 'Type', cell.type || ''],
+          [de ? 'Seriennr.' : 'Serial', cell.serialNumber || ''],
+          [de ? 'Pos.' : 'Pos.', cell.position || ''],
+          [de ? 'Vers. V' : 'Supply V', cell.supplyVoltage || ''],
+          [de ? 'Sens. mV/V' : 'Sens. mV/V', cell.sensitivity || ''],
+        ].filter((p) => String(p[1] || '').trim());
+        if (metaBits.length) {
+          const metaH = 22;
+          page.drawRectangle({
+            x: marginX,
+            y: y - metaH,
+            width: tableInnerW,
+            height: metaH,
+            color: greenHeader,
+            borderColor: greenSoft,
+            borderWidth: 0.5,
+          });
+          let mx = marginX + 6;
+          metaBits.forEach((pair) => {
+            const label = pair[0] + ': ';
+            const val = clipText(fontBold, String(pair[1]), 8, 90);
+            page.drawText(label, { x: mx, y: y - 14, size: 6.5, font, color: grayMuted });
+            const lw = font.widthOfTextAtSize(label, 6.5);
+            page.drawText(val, { x: mx + lw, y: y - 14, size: 8, font: fontBold, color: grayText });
+            mx += Math.max(100, lw + fontBold.widthOfTextAtSize(val, 8) + 14);
+          });
+          y -= metaH + 4;
+        }
+        if (rows.length) {
+          const cols = [
+            { key: 'label', label: de ? 'Messpunkt' : 'Point', w: tableInnerW * 0.36 },
+            { key: 'kg', label: 'kg', w: tableInnerW * 0.16 },
+            { key: 'mv', label: 'mV', w: tableInnerW * 0.16 },
+            { key: 'ma', label: 'mA', w: tableInnerW * 0.16 },
+            { key: 'g', label: 'g %', w: tableInnerW * 0.16 },
+          ];
+          y = drawKeyValueTable(page, y, rows, cols);
+        } else {
+          y -= 6;
+        }
       } else if (block.type === 'pg') {
         y = drawPruefgewichtstestRow(page, y, {
           vals: pgVals,
@@ -1026,6 +1153,15 @@ function formatDateDe(isoOrDate) {
   if (isNaN(d.getTime())) return s;
   const pad = (n) => String(n).padStart(2, '0');
   return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear();
+}
+
+/** Fußzeilen-Datum = PDF-Erstellung (gespeichert_am / sonst jetzt). */
+function pdfFooterCreatedDateDe(payload) {
+  const fromPayload = formatDateDe(
+    (payload && (payload.gespeichert_am || payload.updated_at || payload.pdf_created_at)) || '',
+  );
+  if (fromPayload) return fromPayload;
+  return formatDateDe(new Date().toISOString());
 }
 
 function formatDateTimeDe(isoOrDate) {
@@ -1391,7 +1527,7 @@ async function generateKontrollwiegungPdfBuffer(payload) {
         font,
         color: grayMuted,
       });
-      page.drawText('Datum: ______________', {
+      page.drawText('Datum: ' + pdfFooterCreatedDateDe(payload), {
         x: marginX + 260,
         y: marginBottom,
         size: 8,
@@ -1941,7 +2077,7 @@ async function generateSchleppkettenPdfBuffer(payload) {
         font,
         color: grayMuted,
       });
-      page.drawText('Datum: ______________', {
+      page.drawText('Datum: ' + pdfFooterCreatedDateDe(payload), {
         x: marginX + 260,
         y: marginBottom,
         size: 8,

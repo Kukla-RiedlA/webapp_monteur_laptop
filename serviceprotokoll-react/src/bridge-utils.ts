@@ -4,6 +4,7 @@ import {
   DEFAULT_MEASUREMENTS,
   DEFAULT_TEST_LOAD,
   DEFAULT_WORK_STEPS,
+  EMPTY_MEASUREMENTS,
   type MeasurementRow,
   type ServiceProtocolFormState,
   type StepResult,
@@ -23,12 +24,33 @@ export function displayToIsoDate(display: string): string {
   return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
 }
 
+function cloneMeasurements(rows?: MeasurementRow[] | null): MeasurementRow[] {
+  const src = Array.isArray(rows) && rows.length ? rows : EMPTY_MEASUREMENTS;
+  return EMPTY_MEASUREMENTS.map((def, i) => {
+    const r = src[i] || src.find((x) => x.id === def.id) || def;
+    return {
+      id: def.id,
+      label: def.label,
+      kg: r.kg || '',
+      mv: r.mv || '',
+      ma: r.ma || '',
+      g: r.g || '',
+    };
+  });
+}
+
 export function defaultBridgePayload(): SpBridgePayload {
   return {
     jobId: '',
     jobs: [],
     fabNumbers: [],
-    form: { ...DEFAULT_FORM },
+    form: {
+      ...DEFAULT_FORM,
+      loadCells: DEFAULT_FORM.loadCells.map((c) => ({
+        ...c,
+        measurements: cloneMeasurements(c.measurements),
+      })),
+    },
     measurements: DEFAULT_MEASUREMENTS.map((r) => ({ ...r })),
     testLoad: { ...DEFAULT_TEST_LOAD },
     workSteps: DEFAULT_WORK_STEPS.map((r) => ({ ...r })),
@@ -43,13 +65,14 @@ export function mapStepStatus(raw: string): StepResult {
 export function mergeBridgePayload(base: SpBridgePayload, patch: Partial<SpBridgePayload>): SpBridgePayload {
   const form = patch.form ? { ...base.form, ...patch.form } : base.form;
   if (patch.form && Array.isArray(patch.form.loadCells)) {
-    form.loadCells = patch.form.loadCells.map((c) => ({
-      id: c.id || '1',
+    form.loadCells = patch.form.loadCells.map((c, i) => ({
+      id: c.id || String(i + 1),
       type: c.type || '',
       serialNumber: c.serialNumber || '',
       position: c.position || '',
       supplyVoltage: c.supplyVoltage || '',
       sensitivity: c.sensitivity || '',
+      measurements: cloneMeasurements(c.measurements),
     }));
     if (form.loadCells[0]) {
       form.supplyVoltage = form.loadCells[0].supplyVoltage || form.supplyVoltage || '';
@@ -66,14 +89,19 @@ export function mergeBridgePayload(base: SpBridgePayload, patch: Partial<SpBridg
         position: '',
         supplyVoltage: form.supplyVoltage || '',
         sensitivity: form.sensitivity || '',
+        measurements: cloneMeasurements(patch.measurements ?? base.measurements),
       },
     ];
   }
+  const measurements =
+    form.loadCells[0]?.measurements?.length
+      ? cloneMeasurements(form.loadCells[0].measurements)
+      : patch.measurements ?? base.measurements;
   return {
     ...base,
     ...patch,
     form,
-    measurements: patch.measurements ?? base.measurements,
+    measurements,
     testLoad: patch.testLoad ? { ...base.testLoad, ...patch.testLoad } : base.testLoad,
     workSteps: patch.workSteps ?? base.workSteps,
     jobs: patch.jobs ?? base.jobs,
@@ -81,4 +109,5 @@ export function mergeBridgePayload(base: SpBridgePayload, patch: Partial<SpBridg
   };
 }
 
+export { cloneMeasurements, EMPTY_MEASUREMENTS };
 export type { ServiceProtocolFormState, MeasurementRow, TestLoadValues, WorkStep };

@@ -2513,11 +2513,12 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="spV2Sec3Title">
-          <header class="sp-v2-section-head" id="spV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Wägezelle</header>
+          <header class="sp-v2-section-head" id="spV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Wägezelle &amp; Messwerte</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-stack">
               <div id="spMessLoadCellsHost"></div>
               <input type="hidden" id="spMessWaegezellenExtra" value="[]">
+              <input type="hidden" id="spMessWaegezellenPayload" value="[]">
               <div class="sp-v2-field" style="display:none" aria-hidden="true">
                 <label for="spMessType">Type</label>
                 <input type="text" id="spMessType" autocomplete="off">
@@ -2530,7 +2531,7 @@
                 <label for="spMessDmsPos">Pos.</label>
                 <input type="text" id="spMessDmsPos" autocomplete="off">
               </div>
-              <div class="sp-v2-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;align-items:end">
+              <div class="sp-v2-field-row" style="display:none" aria-hidden="true">
                 <div class="sp-v2-field">
                   <label for="spMessVersSpannung">Versorgungsspannung V</label>
                   <input type="text" id="spMessVersSpannung" autocomplete="off" inputmode="decimal">
@@ -2540,62 +2541,43 @@
                   <input type="text" id="spMessSensitivitaet" autocomplete="off" inputmode="decimal">
                 </div>
               </div>
-            </div>
-          </div>
-        </section>
-        </div>
-
-        <section class="sp-v2-section" aria-labelledby="spV2Sec4Title">
-          <header class="sp-v2-section-head" id="spV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/chart-up-green.svg" alt="" aria-hidden="true"> Messwerte Wägezelle</header>
-          <div class="sp-v2-section-body">
-            <div class="sp-mess-block">
-              <div class="sp-mess-table-wrap">
-                <table class="sp-mess-table" aria-label="Messwerte Wägezelle">
-                  <colgroup>
-                    <col class="sp-mess-label-col">
-                    <col span="4" class="sp-mess-data-col">
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <th class="sp-mess-label-col" scope="col">Messpunkt</th>
-                      <th scope="col">kg</th>
-                      <th scope="col">mV</th>
-                      <th scope="col">mA</th>
-                      <th scope="col">g %</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <th scope="row">DMS entlastet / released</th>
-                      <td><input type="text" id="spMessDmsKg" autocomplete="off" aria-label="DMS entlastet kg"></td>
-                      <td><input type="text" id="spMessDmsMv" autocomplete="off" aria-label="DMS entlastet mV"></td>
-                      <td><input type="text" id="spMessDmsMa" autocomplete="off" aria-label="DMS entlastet mA"></td>
-                      <td><input type="text" id="spMessDmsG" autocomplete="off" aria-label="DMS entlastet g Prozent"></td>
-                    </tr>
-                    <tr>
-                      <th scope="row">Tara / tare</th>
-                      <td><input type="text" id="spMessTaraKg" autocomplete="off" aria-label="Tara kg"></td>
-                      <td><input type="text" id="spMessTaraMv" autocomplete="off" aria-label="Tara mV"></td>
-                      <td><input type="text" id="spMessTaraMa" autocomplete="off" aria-label="Tara mA"></td>
-                      <td><input type="text" id="spMessTaraG" autocomplete="off" aria-label="Tara g Prozent"></td>
-                    </tr>
-                    <tr>
-                      <th scope="row">Prüfgewicht / test load</th>
-                      <td><input type="text" id="spMessPgKg" autocomplete="off" aria-label="Prüfgewicht kg"></td>
-                      <td><input type="text" id="spMessPgMv" autocomplete="off" aria-label="Prüfgewicht mV"></td>
-                      <td><input type="text" id="spMessPgMa" autocomplete="off" aria-label="Prüfgewicht mA"></td>
-                      <td><input type="text" id="spMessPgG" autocomplete="off" aria-label="Prüfgewicht g Prozent"></td>
-                    </tr>
-                  </tbody>
-                </table>
+              <!-- Primärzelle-Messmatrix (Bridge/Speicher); UI in React pro Block -->
+              <div class="sp-mess-block" style="display:none" aria-hidden="true">
+                <div class="sp-mess-table-wrap">
+                  <table class="sp-mess-table" aria-label="Messwerte Wägezelle Primär">
+                    <tbody>
+                      <tr>
+                        <th scope="row">DMS entlastet / released</th>
+                        <td><input type="text" id="spMessDmsKg" autocomplete="off" aria-label="DMS entlastet kg"></td>
+                        <td><input type="text" id="spMessDmsMv" autocomplete="off" aria-label="DMS entlastet mV"></td>
+                        <td><input type="text" id="spMessDmsMa" autocomplete="off" aria-label="DMS entlastet mA"></td>
+                        <td><input type="text" id="spMessDmsG" autocomplete="off" aria-label="DMS entlastet g Prozent"></td>
+                      </tr>
+                      <tr>
+                        <th scope="row">Tara / tare</th>
+                        <td><input type="text" id="spMessTaraKg" autocomplete="off" aria-label="Tara kg"></td>
+                        <td><input type="text" id="spMessTaraMv" autocomplete="off" aria-label="Tara mV"></td>
+                        <td><input type="text" id="spMessTaraMa" autocomplete="off" aria-label="Tara mA"></td>
+                        <td><input type="text" id="spMessTaraG" autocomplete="off" aria-label="Tara g Prozent"></td>
+                      </tr>
+                      <tr>
+                        <th scope="row">Prüfgewicht / test load</th>
+                        <td><input type="text" id="spMessPgKg" autocomplete="off" aria-label="Prüfgewicht kg"></td>
+                        <td><input type="text" id="spMessPgMv" autocomplete="off" aria-label="Prüfgewicht mV"></td>
+                        <td><input type="text" id="spMessPgMa" autocomplete="off" aria-label="Prüfgewicht mA"></td>
+                        <td><input type="text" id="spMessPgG" autocomplete="off" aria-label="Prüfgewicht g Prozent"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
         </section>
         </div>
 
-        <section class="sp-v2-section" aria-labelledby="spV2Sec5Title">
-          <header class="sp-v2-section-head" id="spV2Sec5Title"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/chart-up-green.svg" alt="" aria-hidden="true"> Prüfgewichtstest</header>
+        <section class="sp-v2-section" aria-labelledby="spV2Sec4Title">
+          <header class="sp-v2-section-head" id="spV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/chart-up-green.svg" alt="" aria-hidden="true"> Prüfgewichtstest</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-pgtest-card">
               <div class="sp-v2-pgtest-head">Prüfgewichtstest / test with test load — Abweichung (%)</div>
@@ -2609,8 +2591,8 @@
           </div>
         </section>
 
-        <section class="sp-v2-section" aria-labelledby="spV2Sec6Title">
-          <header class="sp-v2-section-head" id="spV2Sec6Title"><span class="sp-v2-num">6</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte</header>
+        <section class="sp-v2-section" aria-labelledby="spV2Sec5Title">
+          <header class="sp-v2-section-head" id="spV2Sec5Title"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-steps-head">
               <div>
@@ -2643,8 +2625,8 @@
           </div>
         </section>
 
-        <section class="sp-v2-section" aria-labelledby="spV2Sec7Title">
-          <header class="sp-v2-section-head" id="spV2Sec7Title"><span class="sp-v2-num">7</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Abschluss</header>
+        <section class="sp-v2-section" aria-labelledby="spV2Sec6Title">
+          <header class="sp-v2-section-head" id="spV2Sec6Title"><span class="sp-v2-num">6</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Abschluss</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-abschluss-grid">
               <div class="sp-v2-abschluss-main">
