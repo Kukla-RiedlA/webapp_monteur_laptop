@@ -17022,6 +17022,8 @@
     var addRowBtn = document.getElementById('schleppkettenAddRow');
     var form = document.getElementById('schleppkettenForm');
     var pdfBtn = document.getElementById('schleppkettenPdf');
+    var allPdfBtn = document.getElementById('btnSchleppkettenSaveAllPdf');
+    var allPdfBtnFooter = document.getElementById('btnSchleppkettenSaveAllPdfFooter');
     var abbrechenBtn = document.getElementById('schleppkettenAbbrechen');
     if (!form || !jobSelect) return;
 
@@ -17616,10 +17618,20 @@
         btn.classList.toggle('is-active', btn.getAttribute('data-fab') === cur);
       });
     }
+    function updateAllPdfButtonVisibility(job) {
+      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+        ? parseJobFabrikationsnummernOrdered(job || {})
+        : [];
+      var show = fns.length >= 2 ? 'inline-block' : 'none';
+      if (allPdfBtn) allPdfBtn.style.display = show;
+      if (allPdfBtnFooter) allPdfBtnFooter.style.display = show;
+    }
+
     function renderFabButtons(job) {
       if (!fabButtonsEl) return;
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(job || {}) : [];
       if (fabGroupEl) fabGroupEl.style.display = fns.length ? 'block' : 'none';
+      updateAllPdfButtonVisibility(job);
       fabButtonsEl.innerHTML = '';
       if (!fns.length) {
         setActiveFabValue('');
@@ -17878,6 +17890,7 @@
       setActiveFabValue('');
       lastProtokollId = null;
       if (pdfBtn) pdfBtn.style.display = 'none';
+      updateAllPdfButtonVisibility(null);
       if (!jobId) {
         skJobData = null;
         updateKundeHint(null);
@@ -17955,14 +17968,17 @@
         if (typeof showView === 'function') showView('start');
       });
     }
-    form.addEventListener('submit', async function (e) {
-      e.preventDefault();
-      if (!skJobData) { alert('Bitte Auftrag wählen.'); return; }
-      var fab = getActiveFab();
-      if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
+    async function saveSchleppkettenFab(fab, opts) {
+      opts = opts || {};
+      fab = String(fab || '').trim();
+      if (!skJobData || !jobSelect || !jobSelect.value) {
+        return { ok: false, error: 'Bitte Auftrag wählen.' };
+      }
+      if (!fab) return { ok: false, error: 'Bitte Fabrikationsnummer wählen.' };
       var datum = datumEl ? String(datumEl.value || '').trim() : '';
-      if (!datum) { alert('Bitte Datum angeben.'); return; }
+      if (!datum) return { ok: false, error: 'Bitte Datum angeben.' };
       syncMessungenFromDom();
+      syncKettenFromDom();
       var draft = collectFormDraft();
       skDraftByFab[fab] = draft;
       var body = Object.assign({}, draft, {
@@ -17982,21 +17998,102 @@
           body: JSON.stringify(body)
         });
         var data = await r.json().catch(function () { return {}; });
-        if (!r.ok || !data.ok) { alert('Fehler: ' + (data.error || r.status)); return; }
-        if (typeof showToast === 'function') {
+        if (!r.ok || !data.ok) {
+          return { ok: false, error: data.error || String(r.status), data: data };
+        }
+        lastProtokollId = data.local_protokoll_id || data.protokoll_id || null;
+        if (skDraftByFab[fab]) {
+          if (lastProtokollId != null) skDraftByFab[fab].protokoll_id = lastProtokollId;
+          if (data.saved_pdf) skDraftByFab[fab].pdf_rel = data.saved_pdf;
+          skDraftByFab[fab].gespeichert_am = new Date().toISOString();
+        }
+        if (!opts.silent && typeof showToast === 'function') {
           var msg = 'Schleppketten-Test gespeichert.';
           if (data.saved_pdf) msg += ' PDF: ' + data.saved_pdf;
           showToast(msg);
         }
-        lastProtokollId = data.local_protokoll_id || data.protokoll_id || null;
-        await loadDraftsForJob(parseInt(jobSelect.value, 10));
-        renderFabButtons(skJobData);
-        if (skDraftByFab[fab]) {
-          applyDraftToForm(skDraftByFab[fab], stammFieldsForFab(skJobData, fab));
-        }
         if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+        return { ok: true, data: data };
+      } catch (err) {
+        return { ok: false, error: err && err.message ? err.message : 'Unbekannt' };
+      }
+    }
+
+    function setAllPdfButtonsDisabled(disabled) {
+      if (allPdfBtn) allPdfBtn.disabled = !!disabled;
+      if (allPdfBtnFooter) allPdfBtnFooter.disabled = !!disabled;
+    }
+
+    async function runSaveAllPdf() {
+      if (!skJobData || !jobSelect || !jobSelect.value) {
+        alert('Bitte Auftrag wählen.');
+        return;
+      }
+      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+        ? parseJobFabrikationsnummernOrdered(skJobData)
+        : [];
+      if (fns.length < 2) {
+        alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
+        return;
+      }
+      var cur = getActiveFab();
+      if (cur) stashDraftInMemory(cur);
+      setAllPdfButtonsDisabled(true);
+      var okCount = 0;
+      var savedNames = [];
+      var errors = [];
+      try {
+        for (var i = 0; i < fns.length; i++) {
+          var fn = fns[i];
+          if (typeof showToast === 'function') {
+            showToast('PDF für FN ' + fn + ' (' + (i + 1) + '/' + fns.length + ') …');
+          }
+          loadFabIntoForm(fn);
+          var datum = datumEl ? String(datumEl.value || '').trim() : '';
+          if (!datum) {
+            errors.push(fn + ': kein Datum');
+            continue;
+          }
+          var res = await saveSchleppkettenFab(fn, { silent: true });
+          if (!res.ok) {
+            errors.push(fn + ': ' + (res.error || 'Fehler'));
+            continue;
+          }
+          okCount += 1;
+          if (res.data && res.data.saved_pdf) savedNames.push(res.data.saved_pdf);
+        }
+        await loadDraftsForJob(parseInt(jobSelect.value, 10));
+        if (cur) loadFabIntoForm(cur);
+        else if (fns[0]) loadFabIntoForm(fns[0]);
+        renderFabButtons(skJobData);
+        var msg = okCount + ' von ' + fns.length + ' FN mit PDF gespeichert.';
+        if (savedNames.length) msg += ' ' + savedNames.join(', ');
+        if (errors.length) msg += ' Fehler: ' + errors.join('; ');
+        if (typeof showToast === 'function') showToast(msg);
+        if (errors.length && okCount === 0) alert(msg);
       } catch (err) {
         alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+      } finally {
+        setAllPdfButtonsDisabled(false);
+      }
+    }
+
+    if (allPdfBtn) allPdfBtn.addEventListener('click', function () { runSaveAllPdf(); });
+    if (allPdfBtnFooter) allPdfBtnFooter.addEventListener('click', function () { runSaveAllPdf(); });
+
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var fab = getActiveFab();
+      var res = await saveSchleppkettenFab(fab, { silent: false });
+      if (!res.ok) {
+        alert(res.error || 'Speichern fehlgeschlagen.');
+        return;
+      }
+      await loadDraftsForJob(parseInt(jobSelect.value, 10));
+      renderFabButtons(skJobData);
+      if (skDraftByFab[fab]) {
+        applyDraftToForm(skDraftByFab[fab], stammFieldsForFab(skJobData, fab));
+        updateSpeicherMeta(fab, skDraftByFab[fab]);
       }
     });
     if (pdfBtn) {
@@ -18050,6 +18147,7 @@
         }
         lastProtokollId = null;
         if (pdfBtn) pdfBtn.style.display = 'none';
+        updateAllPdfButtonVisibility(null);
       });
     };
   })();

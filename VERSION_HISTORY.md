@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.017
+- **Prüfzertifikat-PDF:** Label „Unterschrift“ entfernt; Signatur rechts neben Monteur-Name und Datum (kein Abschneiden am Seitenende).
+- **Serviceprotokoll Alle-PDF:** PDFs lokal zuerst erzeugen (wie Einzel-PDF); Dispo-Sync optional ohne Abbruch bei Server-PDF-Fehler.
+- **Schleppketten:** Button „Alle PDF erstellen“ für alle FNs.
+
 ## V 2.005.015
 - **Serviceprotokoll Wägezelle:** Stammdaten (Type, Seriennummer, Pos., Vers. V, Sens. mV/V) in einer kompakten Zeile; Vers/Sens schmal, Pos. breiter; keine Platzhalter in Vers/Sens.
 

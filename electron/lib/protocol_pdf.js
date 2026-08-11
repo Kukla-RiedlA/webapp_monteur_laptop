@@ -1520,13 +1520,16 @@ async function generateKontrollwiegungPdfBuffer(payload) {
       color: greenSoft,
     });
     if (isLast) {
-      page.drawText('Pruefer / tester: ____________________________', {
-        x: marginX,
-        y: marginBottom,
-        size: 8,
-        font,
-        color: grayMuted,
-      });
+      // Mit Profil-Unterschrift keinen leeren Prüfer-Strich zeichnen.
+      if (!sigImg) {
+        page.drawText('Pruefer / tester: ____________________________', {
+          x: marginX,
+          y: marginBottom,
+          size: 8,
+          font,
+          color: grayMuted,
+        });
+      }
       page.drawText('Datum: ' + pdfFooterCreatedDateDe(payload), {
         x: marginX + 260,
         y: marginBottom,
@@ -1612,14 +1615,7 @@ async function generateKontrollwiegungPdfBuffer(payload) {
       const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
       const iw = sigImg.width * scale;
       const ih = sigImg.height * scale;
-      page.drawText('Unterschrift / Signature', {
-        x: marginX,
-        y: marginBottom + 18,
-        size: 7,
-        font,
-        color: grayMuted,
-      });
-      page.drawImage(sigImg, { x: marginX + 130, y: marginBottom + 6, width: iw, height: ih });
+      page.drawImage(sigImg, { x: marginX, y: marginBottom + 4, width: iw, height: ih });
     }
     drawFooter(page, pageIndex, pagesPlan.length, pageIndex === pagesPlan.length - 1);
   });
@@ -2070,13 +2066,16 @@ async function generateSchleppkettenPdfBuffer(payload) {
       color: greenSoft,
     });
     if (isLast) {
-      page.drawText('Pruefer / tester: ____________________________', {
-        x: marginX,
-        y: marginBottom,
-        size: 8,
-        font,
-        color: grayMuted,
-      });
+      // Mit Profil-Unterschrift keinen leeren Prüfer-Strich zeichnen.
+      if (!sigImg) {
+        page.drawText('Pruefer / tester: ____________________________', {
+          x: marginX,
+          y: marginBottom,
+          size: 8,
+          font,
+          color: grayMuted,
+        });
+      }
       page.drawText('Datum: ' + pdfFooterCreatedDateDe(payload), {
         x: marginX + 260,
         y: marginBottom,
@@ -2162,14 +2161,7 @@ async function generateSchleppkettenPdfBuffer(payload) {
       const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
       const iw = sigImg.width * scale;
       const ih = sigImg.height * scale;
-      page.drawText('Unterschrift / Signature', {
-        x: marginX,
-        y: marginBottom + 18,
-        size: 7,
-        font,
-        color: grayMuted,
-      });
-      page.drawImage(sigImg, { x: marginX + 130, y: marginBottom + 6, width: iw, height: ih });
+      page.drawImage(sigImg, { x: marginX, y: marginBottom + 4, width: iw, height: ih });
     }
     drawFooter(page, pageIndex, pagesPlan.length, pageIndex === pagesPlan.length - 1);
   });
@@ -3342,7 +3334,8 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   flushLine();
   y -= 16;
 
-  // Signatures
+  // Signatur rechts neben Name/Datum (ohne Label „Unterschrift“)
+  const sigBlockTop = y;
   page.drawText(S(t('Monteur / Technician', 'Technician') + ': ' + (str(payload.monteur_name) || '____________________')), {
     x: marginX,
     y,
@@ -3359,22 +3352,17 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     color: grayText,
   });
   if (sigImg) {
-    y -= 14;
-    page.drawText(S(t('Unterschrift', 'Signature')), {
-      x: marginX,
-      y,
-      size: 8,
-      font,
-      color: grayMuted,
-    });
-    y -= 6;
-    const maxW = 160;
-    const maxH = 48;
-    const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
+    const maxSigW = 140;
+    const maxSigH = 42;
+    const scale = Math.min(maxSigW / sigImg.width, maxSigH / sigImg.height, 1);
     const iw = sigImg.width * scale;
     const ih = sigImg.height * scale;
-    page.drawImage(sigImg, { x: marginX, y: y - ih, width: iw, height: ih });
-    y -= ih + 4;
+    const sigX = PAGE_W - marginX - iw;
+    // Oberkante auf Höhe der Namen-Zeile; nicht in den Footer schieben
+    let sigY = sigBlockTop - ih + 4;
+    const minSigY = marginBottom + 4;
+    if (sigY < minSigY) sigY = minSigY;
+    page.drawImage(sigImg, { x: sigX, y: sigY, width: iw, height: ih });
   }
 
   // Footer
