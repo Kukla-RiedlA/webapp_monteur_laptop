@@ -99,9 +99,10 @@
     var st = String(b.job_status || '');
     if (st !== 'abgerechnet') return true;
     if (cfg.is_admin === true) return true;
+    // Fehlendes Flag darf nachgezogen werden; gesetztes nur vom Setzer zurücknehmen.
+    if (!b.montage_verrechnet) return true;
     var uid = parseUid();
-    if (b.montage_verrechnet && (b.montage_verrechnet_by === uid)) return true;
-    return false;
+    return b.montage_verrechnet_by === uid;
   }
 
   function billingEtCheckboxEnabled(b) {
@@ -109,18 +110,18 @@
     var st = String(b.job_status || '');
     if (st !== 'abgerechnet') return true;
     if (cfg.is_admin === true) return true;
+    if (!b.fakturierung_et) return true;
     var uid = parseUid();
-    if (b.fakturierung_et && (b.fakturierung_et_by === uid)) return true;
-    return false;
+    return b.fakturierung_et_by === uid;
   }
 
   function travelRowCheckboxEnabled(st, t) {
     if (cfg.billingFlagsEditable !== true) return false;
     if (String(st) !== 'abgerechnet') return true;
     if (cfg.is_admin === true) return true;
+    if (!t.reise_abgerechnet) return true;
     var uid = parseUid();
-    if (t.reise_abgerechnet && (t.reise_abgerechnet_by === uid)) return true;
-    return false;
+    return t.reise_abgerechnet_by === uid;
   }
 
   function updateStatusActionButtons() {
@@ -447,7 +448,12 @@
       inp.type = 'checkbox';
       inp.value = '1';
       inp.checked = !!b.montage_abgerechnet_job_fallback;
-      inp.disabled = !(editableBase && (st !== 'abgerechnet' || cfg.is_admin === true));
+      // Bei abgerechnet: fehlendes Flag setzen erlaubt; gesetztes nur Admin (kein Setzer-Tracking).
+      inp.disabled = !(editableBase && (
+        st !== 'abgerechnet'
+        || cfg.is_admin === true
+        || !b.montage_abgerechnet_job_fallback
+      ));
       inp.dataset.techId = '0';
       var span = document.createElement('span');
       span.textContent = 'Reisekosten abgerechnet';
