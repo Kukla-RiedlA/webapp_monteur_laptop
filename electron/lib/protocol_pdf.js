@@ -133,8 +133,8 @@ function stripHtml(text) {
     .trim();
 }
 
-function drawWrappedText(page, font, text, x, y, maxWidth, size, lineHeight) {
-  const raw = String(text || '').replace(/\r/g, '');
+function drawWrappedText(page, font, text, x, y, maxWidth, size, lineHeight, unicodeCapable) {
+  const raw = sanitizePdfText(String(text || '').replace(/\r/g, ''), !!unicodeCapable);
   const chunks = raw.split('\n');
   let cy = y;
   for (const chunk of chunks) {
@@ -167,10 +167,18 @@ function stepStatusLabel(status, lang) {
 }
 
 function abschlussStatusLabel(abschluss, lang) {
-  const st = String((abschluss && abschluss.status) || '').toLowerCase();
-  if (st === 'geprueft' || st === 'geprüft') return lang === 'en' ? 'Checked' : 'Geprüft';
-  if (st === 'nicht_geprueft') return lang === 'en' ? 'Not checked' : 'Nicht geprüft';
-  return st || '';
+  const st = String((abschluss && abschluss.status) || '').toLowerCase().trim();
+  if (st === 'justiert' || st === 'adjusted') return lang === 'en' ? 'Adjusted' : 'Justiert';
+  if (st === 'mangel' || st === 'defect' || st === 'defect found') {
+    return lang === 'en' ? 'Defect found' : 'Mangel festgestellt';
+  }
+  if (st === 'nicht_geprueft' || st === 'nicht geprüft') {
+    return lang === 'en' ? 'Not checked' : 'Nicht geprüft';
+  }
+  if (st === 'geprueft' || st === 'geprüft' || st === 'checked' || st === 'inspected' || !st) {
+    return lang === 'en' ? 'Checked' : 'Geprüft';
+  }
+  return lang === 'en' ? 'Checked' : 'Geprüft';
 }
 
 function formatMesswerteLines(mess, lang) {
@@ -296,14 +304,27 @@ function drawPruefgewichtstestRow(page, y, opts) {
 
   const sanitize = typeof S === 'function' ? S : (t) => String(t == null ? '' : t);
   const head = title || (de ? 'Prüfgewichtstest' : 'Test with test load');
+  const gapBlock = opts.gapBlock != null ? opts.gapBlock : 12;
+  const gapTitle = opts.gapTitle != null ? opts.gapTitle : 10;
+  const gapAfter = opts.gapAfter != null ? opts.gapAfter : 6;
+
+  y -= gapBlock;
   page.drawText(sanitize(head), {
     x: marginX,
     y,
-    size: 10,
+    size: 9,
     font: fontBold,
     color: greenDark,
   });
-  y -= 14;
+  const tw = fontBold.widthOfTextAtSize(sanitize(head), 9);
+  page.drawRectangle({
+    x: marginX,
+    y: y - 5,
+    width: Math.min(tw + 4, 180),
+    height: 1.5,
+    color: green,
+  });
+  y -= 5 + 1.5 + gapTitle;
 
   // Gleiche Aufteilung wie Messpunkt-Tabelle (0.36 + 4×0.16)
   const colW = [
@@ -320,25 +341,28 @@ function drawPruefgewichtstestRow(page, y, opts) {
     de ? 'Abw. 3 (%)' : 'Dev. 3 (%)',
     de ? 'Abw. 4 (%)' : 'Dev. 4 (%)',
   ];
+  const rowH = 15;
+  const headTop = y;
   page.drawRectangle({
     x: marginX,
-    y: y - 16,
+    y: headTop - rowH,
     width: tableInnerW,
-    height: 18,
+    height: rowH,
     color: green,
   });
   let hx = marginX;
+  const headTextY = headTop - rowH / 2 - 2.5;
   headers.forEach((h, i) => {
     page.drawText(sanitize(h), {
       x: hx + 4,
-      y: y - 10,
+      y: headTextY,
       size: 7.5,
       font: fontBold,
       color: white,
     });
     hx += colW[i];
   });
-  y -= 18;
+  y = headTop - rowH;
 
   const rowLabel = de ? 'Prüfgewichtstest' : 'Test with test load';
   const rowCells = [
@@ -348,39 +372,43 @@ function drawPruefgewichtstestRow(page, y, opts) {
     cells[2] || '–',
     cells[3] || '–',
   ];
+  const rowTop = y;
   page.drawRectangle({
     x: marginX,
-    y: y - 14,
+    y: rowTop - rowH,
     width: tableInnerW,
-    height: 16,
+    height: rowH,
     color: white,
-    borderColor: greenSoft,
-    borderWidth: 0.5,
   });
   let cx = marginX;
+  const rowTextY = rowTop - rowH / 2 - 2.5;
   rowCells.forEach((cell, i) => {
     page.drawText(sanitize(String(cell)), {
       x: cx + 4,
-      y: y - 10,
+      y: rowTextY,
       size: 8,
       font: i === 0 ? font : fontBold,
       color: grayText,
     });
     cx += colW[i];
   });
-  return y - 16 - 10;
+  return rowTop - rowH - gapAfter;
 }
 
 /**
  * Offline-Serviceprotokoll-PDF – A4 Hochkant, Corporate-Design wie Kontrollwiegung.
  */
 async function generateServiceprotokollPdfBuffer(payload, options) {
-  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+  const { PDFDocument, rgb } = require('pdf-lib');
   const lang = (options && options.lang) === 'en' ? 'en' : 'de';
   const de = lang !== 'en';
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const fonts = await embedProtocolFonts(pdfDoc);
+  const font = fonts.font;
+  const fontBold = fonts.fontBold;
+  const unicodeOk = !!fonts.unicode;
+  const S = (t) => sanitizePdfText(t, unicodeOk);
+  const clip = (f, t, sz, mw) => clipText(f, t, sz, mw, unicodeOk);
 
   const PAGE_W = 595.28;
   const PAGE_H = 841.89;
@@ -408,9 +436,9 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         : String(s.bezeichnung_en || s.bezeichnung || s.bezeichnung_de || '').trim();
       if (!label) return null;
       return {
-        label,
-        status: stepStatusLabel(s.status, lang),
-        bemerkung: stripHtml(s.bemerkung || ''),
+        label: S(label),
+        status: S(stepStatusLabel(s.status, lang)),
+        bemerkung: S(stripHtml(s.bemerkung || '')),
       };
     })
     .filter(Boolean);
@@ -453,7 +481,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   const messDefs = [
     { key: 'dms', de: 'DMS entlastet', en: 'Load cell released' },
     { key: 'tara', de: 'Tara', en: 'Tare' },
-    { key: 'pruefgewicht', de: 'Pruefgewicht', en: 'Test load' },
+    { key: 'pruefgewicht', de: 'Prüfgewicht', en: 'Test load' },
   ];
 
   function matrixToMessRows(mm, forceEmptyRows) {
@@ -572,8 +600,9 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   });
 
   const headerBandH = 52;
-  const metaRowH = 26;
-  const metaBlockH = 12 + metaRowH * 3;
+  const metaRowH = 28;
+  const metaCols = 4;
+  const metaBlockH = 14 + metaRowH * 3;
   const stepHeaderH = 22;
   const stepRowH = 18;
 
@@ -608,13 +637,13 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
 
     const addrLines = [
       'KUKLA Waagenfabrik GmbH & Co KG',
-      'Fadingerstr. 1-11 · 4840 Voecklabruck',
+      'Fadingerstr. 1-11 · 4840 Vöcklabruck',
       'Tel. +43 7672 26666-0 · www.kukla.co.at',
     ];
     let ay = y - 12;
     addrLines.forEach((line) => {
       const tw = font.widthOfTextAtSize(line, 7);
-      page.drawText(line, { x: PAGE_W - marginX - tw, y: ay, size: 7, font, color: grayMuted });
+      page.drawText(S(line), { x: PAGE_W - marginX - tw, y: ay, size: 7, font, color: grayMuted });
       ay -= 9;
     });
 
@@ -640,43 +669,118 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       borderColor: greenSoft,
       borderWidth: 0.8,
     });
-    const pad = 10;
-    const rows = [
-      [
-        [de ? 'Kunde / customer' : 'Customer', payload.kunde || payload.customer_name || ''],
-        [de ? 'Projekt / project' : 'Project', payload.projekt || ''],
-        ['FN', payload.fabrikationsnummer || ''],
-      ],
-      [
-        ['Type / type', payload.kopf_type || payload.type || ''],
-        ['Qmax', payload.kopf_qmax || ''],
-        [de ? 'Pos.Nr.' : 'Pos. no.', payload.kopf_pos_nr || ''],
-        ['DWC', payload.kopf_dwc || ''],
-      ],
-      [
-        [de ? 'Datum / date' : 'Date', formatDateDe(payload.durchfuehrungsdatum) || '–'],
-        [de ? 'Servicetechniker' : 'Service engineer', monteurName],
-      ],
+    const padX = 10;
+    const padY = 11;
+    const gap = 8;
+    const colW = (tableInnerW - padX * 2 - gap * (metaCols - 1)) / metaCols;
+    const colX = (ci) => marginX + padX + ci * (colW + gap);
+
+    // Festes 4-Spalten-Raster (alle Zeilen gleiche Spaltenachsen)
+    // Zeile 1: Kunde (2 Spalten) | Projekt | FN
+    // Zeile 2: Type | Qmax | Pos.Nr. | DWC
+    // Zeile 3: Datum | Servicetechniker (2 Spalten) | Status
+    const absStatusKopf = abschlussStatusLabel(abschluss, lang) || '–';
+    const cells = [
+      {
+        row: 0,
+        col: 0,
+        span: 2,
+        label: de ? 'Kunde / customer' : 'Customer',
+        value: payload.kunde || payload.customer_name || '',
+      },
+      {
+        row: 0,
+        col: 2,
+        span: 1,
+        label: de ? 'Projekt / project' : 'Project',
+        value: payload.projekt || '',
+      },
+      {
+        row: 0,
+        col: 3,
+        span: 1,
+        label: 'FN',
+        value: payload.fabrikationsnummer || '',
+      },
+      {
+        row: 1,
+        col: 0,
+        span: 1,
+        label: de ? 'Type / type' : 'Type',
+        value: payload.kopf_type || payload.type || '',
+      },
+      {
+        row: 1,
+        col: 1,
+        span: 1,
+        label: 'Qmax',
+        value: payload.kopf_qmax || '',
+      },
+      {
+        row: 1,
+        col: 2,
+        span: 1,
+        label: de ? 'Pos.Nr.' : 'Pos. no.',
+        value: payload.kopf_pos_nr || '',
+      },
+      {
+        row: 1,
+        col: 3,
+        span: 1,
+        label: 'DWC',
+        value: payload.kopf_dwc || '',
+      },
+      {
+        row: 2,
+        col: 0,
+        span: 1,
+        label: de ? 'Datum / date' : 'Date',
+        value: formatDateDe(payload.durchfuehrungsdatum) || '–',
+      },
+      {
+        row: 2,
+        col: 1,
+        span: 2,
+        label: de ? 'Servicetechniker' : 'Service engineer',
+        value: monteurName,
+      },
+      {
+        row: 2,
+        col: 3,
+        span: 1,
+        label: de ? 'Status' : 'Status',
+        value: absStatusKopf,
+      },
     ];
-    rows.forEach((row, ri) => {
-      const colW = tableInnerW / row.length;
-      const gy = yStart - 12 - ri * metaRowH;
-      row.forEach(([label, val], ci) => {
-        const gx = marginX + ci * colW + pad;
-        page.drawText(clipText(font, label, 6.5, colW - pad * 2), {
-          x: gx,
-          y: gy,
-          size: 6.5,
-          font,
-          color: grayMuted,
-        });
-        page.drawText(clipText(fontBold, String(val || '').trim() || '–', 9, colW - pad * 2), {
-          x: gx,
-          y: gy - 11,
-          size: 9,
-          font: fontBold,
-          color: grayText,
-        });
+
+    // Dezente Trennlinien zwischen den Zeilen
+    for (let r = 1; r < 3; r++) {
+      const ly = yStart - padY - r * metaRowH + 6;
+      page.drawLine({
+        start: { x: marginX + padX, y: ly },
+        end: { x: marginX + tableInnerW - padX, y: ly },
+        thickness: 0.4,
+        color: greenSoft,
+      });
+    }
+
+    cells.forEach((cell) => {
+      const w = colW * cell.span + gap * (cell.span - 1);
+      const x = colX(cell.col);
+      const gy = yStart - padY - cell.row * metaRowH;
+      page.drawText(clip(font, cell.label, 6.5, w), {
+        x,
+        y: gy,
+        size: 6.5,
+        font,
+        color: grayMuted,
+      });
+      page.drawText(clip(fontBold, String(cell.value || '').trim() || '–', 9, w), {
+        x,
+        y: gy - 12,
+        size: 9,
+        font: fontBold,
+        color: grayText,
       });
     });
     return boxY - 12;
@@ -693,7 +797,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     });
     let x = marginX;
     stepCols.forEach((col) => {
-      const label = clipText(fontBold, col.label, 8, col.w - 6);
+      const label = clip(fontBold, col.label, 8, col.w - 6);
       let lx = x + 4;
       if (col.align === 'center') lx = x + (col.w - fontBold.widthOfTextAtSize(label, 8)) / 2;
       else if (col.align === 'right') lx = x + col.w - 4 - fontBold.widthOfTextAtSize(label, 8);
@@ -768,7 +872,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   }
 
   function drawSectionTitle(page, y, title) {
-    page.drawText(title, { x: marginX, y, size: 10, font: fontBold, color: greenDark });
+    page.drawText(S(title), { x: marginX, y, size: 10, font: fontBold, color: greenDark });
     return y - 14;
   }
 
@@ -784,7 +888,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     });
     let x = marginX;
     colDefs.forEach((c) => {
-      page.drawText(c.label, { x: x + 4, y: y - 12, size: 7.5, font: fontBold, color: white });
+      page.drawText(S(c.label), { x: x + 4, y: y - 12, size: 7.5, font: fontBold, color: white });
       x += c.w;
     });
     y -= headerH;
@@ -799,7 +903,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       });
       let cx = marginX;
       colDefs.forEach((c) => {
-        const val = clipText(font, row[c.key] || '', 8, c.w - 6);
+        const val = clip(font, row[c.key] || '', 8, c.w - 6);
         page.drawText(val, { x: cx + 4, y: y + 4, size: 8, font, color: grayText });
         cx += c.w;
       });
@@ -816,37 +920,19 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   }
 
   function drawFooter(page, pageIndex, pageCount, isLast) {
-    const footerLineY = marginBottom + 22;
-    page.drawLine({
-      start: { x: marginX, y: footerLineY },
-      end: { x: PAGE_W - marginX, y: footerLineY },
-      thickness: 0.6,
-      color: greenSoft,
-    });
-    if (isLast) {
-      page.drawText('Pruefer / tester: ____________________________', {
-        x: marginX,
-        y: marginBottom,
-        size: 8,
-        font,
-        color: grayMuted,
-      });
-      page.drawText('Datum: ' + pdfFooterCreatedDateDe(payload), {
-        x: marginX + 220,
-        y: marginBottom,
-        size: 8,
-        font,
-        color: grayMuted,
-      });
-    }
-    const pageLabel = (de ? 'Seite ' : 'Page ') + (pageIndex + 1) + ' / ' + pageCount;
-    const tw = font.widthOfTextAtSize(pageLabel, 8);
-    page.drawText(pageLabel, {
-      x: PAGE_W - marginX - tw,
-      y: marginBottom,
-      size: 8,
+    drawFixedProtocolFooter(page, {
+      marginX,
+      marginBottom,
+      pageW: PAGE_W,
       font,
-      color: grayMuted,
+      grayMuted,
+      greenSoft,
+      de,
+      pageIndex,
+      pageCount,
+      isLast,
+      sigImg,
+      createdDate: pdfFooterCreatedDateDe(payload),
     });
   }
 
@@ -861,34 +947,31 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     }
     const bemerk = stripHtml(payload.bemerkungen || '');
     if (bemerk) blocks.push({ type: 'bemerk', text: bemerk });
-    const absStatus = abschlussStatusLabel(abschluss, lang);
+    // Status steht im Kopffeld; Abschluss-Box (Status/Monteur/Datum) entfällt.
+    // Abschluss-Bemerkungen weiterhin als eigener Block, falls vorhanden.
     const absBem = stripHtml(abschluss.bemerkungen || '');
-    if (absStatus || abschluss.monteur_name || abschluss.datum || absBem || sigImg) {
-      blocks.push({
-        type: 'abschluss',
-        status: absStatus,
-        monteur: String(abschluss.monteur_name || monteurName || '').trim(),
-        datum: formatDateDe(abschluss.datum) || String(abschluss.datum || '').trim(),
-        bemerkung: absBem,
-        hasSig: !!sigImg,
-      });
+    if (absBem) {
+      blocks.push({ type: 'abschluss_bemerk', text: absBem });
     }
     return blocks;
   }
 
   const trailing = buildTrailingBlocks();
-  const contentTopAfterMeta = PAGE_H - marginTop - headerBandH - 12 - metaBlockH - 12;
-  const usableH = contentTopAfterMeta - marginBottom - 28;
+  const chromeBottom = PAGE_H - marginTop - headerBandH - 12;
+  const contentBottom = marginBottom + PROTOCOL_FOOTER_RESERVED_H;
+  const usableHFirst = chromeBottom - 12 - metaBlockH - 12 - contentBottom;
+  const usableHNext = chromeBottom - contentBottom;
 
-  // Paginate steps first
+  // Paginate steps: erste Seite mit Meta (weniger Platz), Folgeseiten ohne Meta
   const stepPages = [];
   let stepIdx = 0;
   while (stepIdx < steps.length || stepPages.length === 0) {
     const pageSteps = [];
+    const limit = stepPages.length === 0 ? usableHFirst : usableHNext;
     let used = stepHeaderH;
     while (stepIdx < steps.length) {
       const h = measureStepRowHeight(steps[stepIdx]);
-      if (pageSteps.length && used + h > usableH) break;
+      if (pageSteps.length && used + h > limit) break;
       pageSteps.push(steps[stepIdx]);
       used += h;
       stepIdx += 1;
@@ -898,7 +981,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   }
 
   // Attach trailing content to last step page if room, else extra pages
-  const pagesPlan = stepPages.map((p, i) => ({
+  const pagesPlan = stepPages.map((p) => ({
     steps: p.steps,
     startIndex: p.startIndex,
     trailing: [],
@@ -918,8 +1001,9 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     } else if (block.type === 'mess') need = 20 + 18 + messRows.length * 16 + 14;
     else if (block.type === 'pg') need = 20 + 14 + 18 + 16 + 10;
     else if (block.type === 'bemerk') need = 40;
-    else if (block.type === 'abschluss') need = 80 + (block.hasSig ? 56 : 0);
-    if (lastUsed + need > usableH && pagesPlan[targetIdx].trailing.length) {
+    else if (block.type === 'abschluss_bemerk') need = 40;
+    const limit = targetIdx === 0 ? usableHFirst : usableHNext;
+    if (lastUsed + need > limit && pagesPlan[targetIdx].trailing.length) {
       pagesPlan.push({ steps: [], startIndex: 0, trailing: [] });
       targetIdx = pagesPlan.length - 1;
       lastUsed = 0;
@@ -931,7 +1015,9 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   pagesPlan.forEach((plan, pageIndex) => {
     const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
     let y = drawPageChrome(page);
-    y = drawMeta(page, y);
+    if (pageIndex === 0) {
+      y = drawMeta(page, y);
+    }
 
     if (plan.steps.length || (pageIndex === 0 && !steps.length)) {
       const tableTop = y;
@@ -984,10 +1070,10 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         const title =
           waegezellenBlocks.length > 1
             ? de
-              ? 'Waegezelle & Messwerte ' + (idx + 1)
+              ? 'Wägezelle & Messwerte ' + (idx + 1)
               : 'Load cell & measurements ' + (idx + 1)
             : de
-              ? 'Waegezelle & Messwerte'
+              ? 'Wägezelle & Messwerte'
               : 'Load cell & measurements';
         y = drawSectionTitle(page, y, title);
         const metaBits = [
@@ -1011,7 +1097,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
           let mx = marginX + 6;
           metaBits.forEach((pair) => {
             const label = pair[0] + ': ';
-            const val = clipText(fontBold, String(pair[1]), 8, 90);
+            const val = clip(fontBold, String(pair[1]), 8, 90);
             page.drawText(label, { x: mx, y: y - 14, size: 6.5, font, color: grayMuted });
             const lw = font.widthOfTextAtSize(label, 6.5);
             page.drawText(val, { x: mx + lw, y: y - 14, size: 8, font: fontBold, color: grayText });
@@ -1044,66 +1130,17 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
           greenSoft,
           grayText,
           white,
-          S: (t) => String(t == null ? '' : t),
-          title: de ? 'Pruefgewichtstest' : 'Test with test load',
+          S,
+          title: de ? 'Prüfgewichtstest' : 'Test with test load',
         });
       } else if (block.type === 'bemerk') {
         y = drawSectionTitle(page, y, de ? 'Allgemeine Bemerkungen' : 'General remarks');
-        y = drawWrappedText(page, font, block.text, marginX, y, tableInnerW, 8, 11);
+        y = drawWrappedText(page, font, block.text, marginX, y, tableInnerW, 8, 11, unicodeOk);
         y -= 8;
-      } else if (block.type === 'abschluss') {
-        y = drawSectionTitle(page, y, de ? 'Abschluss' : 'Completion');
-        const absBoxH = 56 + (sigImg ? 52 : 0);
-        page.drawRectangle({
-          x: marginX,
-          y: y - absBoxH,
-          width: tableInnerW,
-          height: absBoxH,
-          color: greenHeader,
-          borderColor: greenSoft,
-          borderWidth: 0.8,
-        });
-        const absFields = [
-          [de ? 'Status' : 'Status', block.status || '–'],
-          [de ? 'Monteur' : 'Technician', block.monteur || '–'],
-          [de ? 'Datum' : 'Date', block.datum || '–'],
-        ];
-        absFields.forEach((pair, i) => {
-          const ax = marginX + 10 + i * (tableInnerW / 3);
-          page.drawText(pair[0], { x: ax, y: y - 12, size: 6.5, font, color: grayMuted });
-          page.drawText(clipText(fontBold, pair[1], 9, tableInnerW / 3 - 20), {
-            x: ax,
-            y: y - 24,
-            size: 9,
-            font: fontBold,
-            color: grayText,
-          });
-        });
-        if (block.bemerkung) {
-          page.drawText(clipText(font, (de ? 'Bem.: ' : 'Note: ') + block.bemerkung, 8, tableInnerW - 20), {
-            x: marginX + 10,
-            y: y - 42,
-            size: 8,
-            font,
-            color: grayText,
-          });
-        }
-        if (sigImg) {
-          const maxW = 150;
-          const maxH = 42;
-          const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
-          const iw = sigImg.width * scale;
-          const ih = sigImg.height * scale;
-          page.drawText(de ? 'Unterschrift' : 'Signature', {
-            x: marginX + 10,
-            y: y - 58,
-            size: 6.5,
-            font,
-            color: grayMuted,
-          });
-          page.drawImage(sigImg, { x: marginX + 10, y: y - absBoxH + 4, width: iw, height: ih });
-        }
-        y -= absBoxH + 10;
+      } else if (block.type === 'abschluss_bemerk') {
+        y = drawSectionTitle(page, y, de ? 'Abschluss-Bemerkungen' : 'Completion remarks');
+        y = drawWrappedText(page, font, block.text, marginX, y, tableInnerW, 8, 11, unicodeOk);
+        y -= 8;
       }
     });
 
@@ -1160,6 +1197,71 @@ function pdfFooterCreatedDateDe(payload) {
   return formatDateDe(new Date().toISOString());
 }
 
+/**
+ * Reservierte Fußhöhe (Linie + Datum + Signatur auf letzter Seite).
+ * Inhalt endet immer darüber – auch auf Seiten ohne Signatur-Bild.
+ */
+const PROTOCOL_FOOTER_RESERVED_H = 48;
+
+/**
+ * Einheitlicher Protokoll-Fuß: Datum + Seitenzahl immer; Signatur nur letzte Seite.
+ * @param {import('pdf-lib').PDFPage} page
+ * @param {object} opts
+ */
+function drawFixedProtocolFooter(page, opts) {
+  const marginX = opts.marginX != null ? opts.marginX : 32;
+  const marginBottom = opts.marginBottom != null ? opts.marginBottom : 36;
+  const pageW = opts.pageW;
+  const font = opts.font;
+  const grayMuted = opts.grayMuted;
+  const greenSoft = opts.greenSoft;
+  const de = opts.de !== false;
+  const pageIndex = opts.pageIndex != null ? opts.pageIndex : 0;
+  const pageCount = opts.pageCount != null ? opts.pageCount : 1;
+  const isLast = !!opts.isLast;
+  const sigImg = opts.sigImg || null;
+  const createdDate = opts.createdDate != null ? String(opts.createdDate) : '';
+  const innerW = pageW - marginX * 2;
+
+  const footerLineY = marginBottom + PROTOCOL_FOOTER_RESERVED_H - 10;
+  page.drawLine({
+    start: { x: marginX, y: footerLineY },
+    end: { x: marginX + innerW, y: footerLineY },
+    thickness: 0.6,
+    color: greenSoft,
+  });
+
+  const dateLabel = (de ? 'Datum: ' : 'Date: ') + (createdDate || '–');
+  page.drawText(dateLabel, {
+    x: marginX,
+    y: marginBottom,
+    size: 8,
+    font,
+    color: grayMuted,
+  });
+
+  if (isLast && sigImg) {
+    const maxW = 120;
+    const maxH = 32;
+    const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
+    const iw = sigImg.width * scale;
+    const ih = sigImg.height * scale;
+    const dateW = font.widthOfTextAtSize(dateLabel, 8);
+    const sigX = Math.min(marginX + Math.max(dateW + 16, 130), pageW - marginX - iw);
+    page.drawImage(sigImg, { x: sigX, y: marginBottom + 2, width: iw, height: ih });
+  }
+
+  const pageLabel = (de ? 'Seite ' : 'Page ') + (pageIndex + 1) + ' / ' + pageCount;
+  const tw = font.widthOfTextAtSize(pageLabel, 8);
+  page.drawText(pageLabel, {
+    x: pageW - marginX - tw,
+    y: marginBottom,
+    size: 8,
+    font,
+    color: grayMuted,
+  });
+}
+
 function formatDateTimeDe(isoOrDate) {
   const s = String(isoOrDate || '').trim();
   if (!s) return '';
@@ -1179,13 +1281,10 @@ function formatDateTimeDe(isoOrDate) {
   );
 }
 
-function clipText(font, text, size, maxWidth) {
-  const raw = String(text || '')
-    .replace(/\u2211/g, 'Sum')
-    .replace(/\u2026/g, '...')
-    .replace(/[\u2013\u2014]/g, '-')
-    .replace(/[\uF0A7\uF0B7\uF0D8\uF0FC]/g, '\u2022')
-    .replace(/\u00a0/g, ' ');
+function clipText(font, text, size, maxWidth, unicodeCapable) {
+  // unicodeCapable gesetzt → sanitize; sonst Text vom Aufrufer (bereits S()) nur clippen
+  const raw =
+    unicodeCapable === undefined ? String(text == null ? '' : text) : sanitizePdfText(text, !!unicodeCapable);
   if (!raw) return '';
   if (font.widthOfTextAtSize(raw, size) <= maxWidth) return raw;
   let t = raw;
@@ -1203,10 +1302,14 @@ function rowInSumme(row) {
  * Kontrollwiegungsprotokoll – A4 Querformat, Tabellenlayout (Kukla-Corporate).
  */
 async function generateKontrollwiegungPdfBuffer(payload) {
-  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+  const { PDFDocument, rgb } = require('pdf-lib');
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const fonts = await embedProtocolFonts(pdfDoc);
+  const font = fonts.font;
+  const fontBold = fonts.fontBold;
+  const unicodeOk = !!fonts.unicode;
+  const S = (t) => sanitizePdfText(t, unicodeOk);
+  const clip = (f, t, sz, mw) => clipText(f, t, sz, mw, unicodeOk);
 
   const PAGE_W = 841.89;
   const PAGE_H = 595.28;
@@ -1359,8 +1462,9 @@ async function generateKontrollwiegungPdfBuffer(payload) {
     ];
     let ay = y - 12;
     addrLines.forEach((line) => {
-      const tw = font.widthOfTextAtSize(line, 7.5);
-      page.drawText(line, { x: PAGE_W - marginX - tw, y: ay, size: 7.5, font, color: grayMuted });
+      const safe = S(line);
+      const tw = font.widthOfTextAtSize(safe, 7.5);
+      page.drawText(safe, { x: PAGE_W - marginX - tw, y: ay, size: 7.5, font, color: grayMuted });
       ay -= 10;
     });
 
@@ -1420,9 +1524,9 @@ async function generateKontrollwiegungPdfBuffer(payload) {
       const gx = marginX + gi * colW + pad;
       let gy = yStart - 12;
       group.forEach(([label, val]) => {
-        page.drawText(label, { x: gx, y: gy, size: 6.5, font, color: grayMuted });
+        page.drawText(S(label), { x: gx, y: gy, size: 6.5, font, color: grayMuted });
         const display = String(val || '').trim() || '–';
-        page.drawText(clipText(fontBold, display, 9, colW - pad * 2), {
+        page.drawText(clip(fontBold, display, 9, colW - pad * 2), {
           x: gx,
           y: gy - 11,
           size: 9,
@@ -1446,8 +1550,8 @@ async function generateKontrollwiegungPdfBuffer(payload) {
     });
     let x = marginX;
     cols.forEach((col) => {
-      const label = clipText(fontBold, col.label, 7.5, col.w - 6);
-      const sub = clipText(font, col.sub, 6, col.w - 6);
+      const label = clip(fontBold, col.label, 7.5, col.w - 6);
+      const sub = clip(font, col.sub, 6, col.w - 6);
       const lx =
         col.align === 'right'
           ? x + col.w - 4 - fontBold.widthOfTextAtSize(label, 7.5)
@@ -1491,7 +1595,7 @@ async function generateKontrollwiegungPdfBuffer(payload) {
       const raw = isSum ? sumCellValue(col) : cellValue(row, col, idx);
       const size = isSum || col.key === 'nr' ? 8 : 8;
       const useFont = isSum || col.key === 'nr' ? fontBold : font;
-      const text = clipText(useFont, raw, size, col.w - 6);
+      const text = clip(useFont, raw, size, col.w - 6);
       let tx = x + 4;
       if (col.align === 'right') tx = x + col.w - 4 - useFont.widthOfTextAtSize(text, size);
       else if (col.align === 'center') tx = x + (col.w - useFont.widthOfTextAtSize(text, size)) / 2;
@@ -1508,48 +1612,34 @@ async function generateKontrollwiegungPdfBuffer(payload) {
   }
 
   function drawFooter(page, pageIndex, pageCount, isLast) {
-    const footerLineY = marginBottom + 22;
-    page.drawLine({
-      start: { x: marginX, y: footerLineY },
-      end: { x: PAGE_W - marginX, y: footerLineY },
-      thickness: 0.6,
-      color: greenSoft,
-    });
-    if (isLast) {
-      // Mit Profil-Unterschrift keinen leeren Prüfer-Strich zeichnen.
-      if (!sigImg) {
-        page.drawText('Pruefer / tester: ____________________________', {
-          x: marginX,
-          y: marginBottom,
-          size: 8,
-          font,
-          color: grayMuted,
-        });
-      }
-      page.drawText('Datum: ' + pdfFooterCreatedDateDe(payload), {
-        x: marginX + 260,
-        y: marginBottom,
-        size: 8,
-        font,
-        color: grayMuted,
-      });
-    }
-    const pageLabel = 'Seite ' + (pageIndex + 1) + ' / ' + pageCount;
-    const tw = font.widthOfTextAtSize(pageLabel, 8);
-    page.drawText(pageLabel, {
-      x: PAGE_W - marginX - tw,
-      y: marginBottom,
-      size: 8,
+    drawFixedProtocolFooter(page, {
+      marginX,
+      marginBottom,
+      pageW: PAGE_W,
       font,
-      color: grayMuted,
+      grayMuted,
+      greenSoft,
+      de: true,
+      pageIndex,
+      pageCount,
+      isLast,
+      sigImg,
+      createdDate: pdfFooterCreatedDateDe(payload),
     });
   }
 
-  // Jede Seite: Logo + Titel + Kopfblock; Summe nur auf der letzten Seite
-  const contentTop = PAGE_H - marginTop - 52 - 14 - metaBlockH - 12;
-  const rowsPerPage = Math.max(
+  // Seite 1: Meta; Folgeseiten: nur Chrome. Fuß immer reserviert.
+  const chromeH = 52 + 14;
+  const contentTopFirst = PAGE_H - marginTop - chromeH - metaBlockH - 12;
+  const contentTopNext = PAGE_H - marginTop - chromeH;
+  const footerReserve = PROTOCOL_FOOTER_RESERVED_H;
+  const rowsPerPageFirst = Math.max(
     1,
-    Math.floor((contentTop - marginBottom - 22 - headerH) / rowH),
+    Math.floor((contentTopFirst - marginBottom - footerReserve - headerH) / rowH),
+  );
+  const rowsPerPageNext = Math.max(
+    1,
+    Math.floor((contentTopNext - marginBottom - footerReserve - headerH) / rowH),
   );
 
   const pagesPlan = [];
@@ -1557,14 +1647,17 @@ async function generateKontrollwiegungPdfBuffer(payload) {
   if (!remaining.length) {
     pagesPlan.push({ rows: [], withSum: false });
   } else {
+    let pageNo = 0;
     while (remaining.length > 0) {
+      const capacity = pageNo === 0 ? rowsPerPageFirst : rowsPerPageNext;
       const left = remaining.length;
       const sumSlot = sums.any ? 1 : 0;
-      if (left + sumSlot <= rowsPerPage) {
+      if (left + sumSlot <= capacity) {
         pagesPlan.push({ rows: remaining.splice(0), withSum: !!sums.any });
       } else {
-        pagesPlan.push({ rows: remaining.splice(0, rowsPerPage), withSum: false });
+        pagesPlan.push({ rows: remaining.splice(0, capacity), withSum: false });
       }
+      pageNo += 1;
     }
     if (sums.any && pagesPlan.length && !pagesPlan[pagesPlan.length - 1].withSum) {
       pagesPlan.push({ rows: [], withSum: true });
@@ -1574,7 +1667,9 @@ async function generateKontrollwiegungPdfBuffer(payload) {
   pagesPlan.forEach((plan, pageIndex) => {
     const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
     let y = drawHeader(page);
-    y = drawMeta(page, y);
+    if (pageIndex === 0) {
+      y = drawMeta(page, y);
+    }
     const tableTop = y;
     y = drawTableHeader(page, y);
     plan.rows.forEach((row, i) => {
@@ -1605,14 +1700,6 @@ async function generateKontrollwiegungPdfBuffer(payload) {
       borderColor: green,
       borderWidth: 0.9,
     });
-    if (sigImg && pageIndex === pagesPlan.length - 1) {
-      const maxW = 140;
-      const maxH = 36;
-      const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
-      const iw = sigImg.width * scale;
-      const ih = sigImg.height * scale;
-      page.drawImage(sigImg, { x: marginX, y: marginBottom + 4, width: iw, height: ih });
-    }
     drawFooter(page, pageIndex, pagesPlan.length, pageIndex === pagesPlan.length - 1);
   });
 
@@ -1623,11 +1710,15 @@ async function generateKontrollwiegungPdfBuffer(payload) {
  * Schleppketten-Test / chain calibration – A4 Querformat, Corporate-Design.
  */
 async function generateSchleppkettenPdfBuffer(payload) {
-  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+  const { PDFDocument, rgb } = require('pdf-lib');
   const skLocal = require('./schleppketten-local');
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const fonts = await embedProtocolFonts(pdfDoc);
+  const font = fonts.font;
+  const fontBold = fonts.fontBold;
+  const unicodeOk = !!fonts.unicode;
+  const S = (t) => sanitizePdfText(t, unicodeOk);
+  const clip = (f, t, sz, mw) => clipText(f, t, sz, mw, unicodeOk);
 
   const PAGE_W = 841.89;
   const PAGE_H = 595.28;
@@ -1652,7 +1743,7 @@ async function generateSchleppkettenPdfBuffer(payload) {
   const cols = [
     { key: 'nr', label: 'Nr.', sub: 'No.', w: 26, align: 'center' },
     { key: 'bandwaage_t', label: 'Bandwaage [t]', sub: 'beltscale', w: 78, align: 'right', digits: 3 },
-    { key: 'pruefkette_t', label: 'Pruefkette [t]', sub: 'testchain', w: 78, align: 'right', digits: 3 },
+    { key: 'pruefkette_t', label: 'Prüfkette [t]', sub: 'testchain', w: 78, align: 'right', digits: 3 },
     { key: 'kg_pro_m', label: 'kg/m', sub: 'kg/m', w: 62, align: 'right', digits: 4 },
     { key: 'geschwindigkeit_ms', label: 'Geschw. [m/s]', sub: 'speed', w: 70, align: 'right', digits: 2 },
     { key: 'messzeit_s', label: 'Messzeit [s]', sub: 'measure time', w: 62, align: 'right', digits: 0 },
@@ -1753,13 +1844,14 @@ async function generateSchleppkettenPdfBuffer(payload) {
     });
     const addrLines = [
       'KUKLA Waagenfabrik GmbH & Co KG',
-      'Fadingerstr. 1-11 · 4840 Voecklabruck',
+      'Fadingerstr. 1-11 · 4840 Vöcklabruck',
       'Tel. +43 7672 26666-0 · www.kukla.co.at',
     ];
     let ay = y - 12;
     addrLines.forEach((line) => {
-      const tw = font.widthOfTextAtSize(line, 7.5);
-      page.drawText(line, { x: PAGE_W - marginX - tw, y: ay, size: 7.5, font, color: grayMuted });
+      const safe = S(line);
+      const tw = font.widthOfTextAtSize(safe, 7.5);
+      page.drawText(safe, { x: PAGE_W - marginX - tw, y: ay, size: 7.5, font, color: grayMuted });
       ay -= 10;
     });
     y -= 52;
@@ -1803,14 +1895,14 @@ async function generateSchleppkettenPdfBuffer(payload) {
       const gx = marginX + gi * colW + pad;
       let gy = yStart - 12;
       group.forEach(([label, val]) => {
-        page.drawText(clipText(font, label, 6.5, colW - pad * 2), {
+        page.drawText(clip(font, label, 6.5, colW - pad * 2), {
           x: gx,
           y: gy,
           size: 6.5,
           font,
           color: grayMuted,
         });
-        page.drawText(clipText(fontBold, String(val || '').trim() || '–', 9, colW - pad * 2), {
+        page.drawText(clip(fontBold, String(val || '').trim() || '–', 9, colW - pad * 2), {
           x: gx,
           y: gy - 11,
           size: 9,
@@ -1916,8 +2008,8 @@ async function generateSchleppkettenPdfBuffer(payload) {
     page.drawRectangle({ x: marginX, y, width: tableInnerW, height: headerH, color: green });
     let x = marginX;
     colsK.forEach((col) => {
-      const label = clipText(fontBold, col.label, 7, col.w - 4);
-      const sub = clipText(font, col.sub, 5.5, col.w - 4);
+      const label = clip(fontBold, col.label, 7, col.w - 4);
+      const sub = clip(font, col.sub, 5.5, col.w - 4);
       let lx = x + 3;
       if (col.align === 'right') lx = x + col.w - 3 - fontBold.widthOfTextAtSize(label, 7);
       else if (col.align === 'center') lx = x + (col.w - fontBold.widthOfTextAtSize(label, 7)) / 2;
@@ -1951,7 +2043,7 @@ async function generateSchleppkettenPdfBuffer(payload) {
       colsK.forEach((col) => {
         const raw = isSum ? ketteSumCellValue(col) : ketteCellValue(row, col, idx);
         const useFont = isSum || col.key === 'nr' ? fontBold : font;
-        const text = clipText(useFont, raw, 7.5, col.w - 5);
+        const text = clip(useFont, raw, 7.5, col.w - 5);
         let tx = cx + 3;
         if (col.align === 'right') tx = cx + col.w - 3 - useFont.widthOfTextAtSize(text, 7.5);
         else if (col.align === 'center') tx = cx + (col.w - useFont.widthOfTextAtSize(text, 7.5)) / 2;
@@ -2001,8 +2093,8 @@ async function generateSchleppkettenPdfBuffer(payload) {
     page.drawRectangle({ x: marginX, y, width: tableInnerW, height: headerH, color: green });
     let x = marginX;
     cols.forEach((col) => {
-      const label = clipText(fontBold, col.label, 7, col.w - 4);
-      const sub = clipText(font, col.sub, 5.5, col.w - 4);
+      const label = clip(fontBold, col.label, 7, col.w - 4);
+      const sub = clip(font, col.sub, 5.5, col.w - 4);
       let lx = x + 3;
       if (col.align === 'right') lx = x + col.w - 3 - fontBold.widthOfTextAtSize(label, 7);
       else if (col.align === 'center') lx = x + (col.w - fontBold.widthOfTextAtSize(label, 7)) / 2;
@@ -2037,7 +2129,7 @@ async function generateSchleppkettenPdfBuffer(payload) {
     cols.forEach((col) => {
       const raw = isSum ? sumCellValue(col) : cellValue(row, col, idx);
       const useFont = isSum || col.key === 'nr' ? fontBold : font;
-      const text = clipText(useFont, raw, 7.5, col.w - 5);
+      const text = clip(useFont, raw, 7.5, col.w - 5);
       let tx = x + 3;
       if (col.align === 'right') tx = x + col.w - 3 - useFont.widthOfTextAtSize(text, 7.5);
       else if (col.align === 'center') tx = x + (col.w - useFont.widthOfTextAtSize(text, 7.5)) / 2;
@@ -2054,40 +2146,19 @@ async function generateSchleppkettenPdfBuffer(payload) {
   }
 
   function drawFooter(page, pageIndex, pageCount, isLast) {
-    const footerLineY = marginBottom + 22;
-    page.drawLine({
-      start: { x: marginX, y: footerLineY },
-      end: { x: PAGE_W - marginX, y: footerLineY },
-      thickness: 0.6,
-      color: greenSoft,
-    });
-    if (isLast) {
-      // Mit Profil-Unterschrift keinen leeren Prüfer-Strich zeichnen.
-      if (!sigImg) {
-        page.drawText('Pruefer / tester: ____________________________', {
-          x: marginX,
-          y: marginBottom,
-          size: 8,
-          font,
-          color: grayMuted,
-        });
-      }
-      page.drawText('Datum: ' + pdfFooterCreatedDateDe(payload), {
-        x: marginX + 260,
-        y: marginBottom,
-        size: 8,
-        font,
-        color: grayMuted,
-      });
-    }
-    const pageLabel = 'Seite ' + (pageIndex + 1) + ' / ' + pageCount;
-    const tw = font.widthOfTextAtSize(pageLabel, 8);
-    page.drawText(pageLabel, {
-      x: PAGE_W - marginX - tw,
-      y: marginBottom,
-      size: 8,
+    drawFixedProtocolFooter(page, {
+      marginX,
+      marginBottom,
+      pageW: PAGE_W,
       font,
-      color: grayMuted,
+      grayMuted,
+      greenSoft,
+      de: true,
+      pageIndex,
+      pageCount,
+      isLast,
+      sigImg,
+      createdDate: pdfFooterCreatedDateDe(payload),
     });
   }
 
@@ -2096,21 +2167,36 @@ async function generateSchleppkettenPdfBuffer(payload) {
     : [{}];
   const kettenRowsForH = kettenListForH.length ? kettenListForH : [{}];
   const kettenBlockH = sectionTitleH + headerH + (kettenRowsForH.length + 1) * rowH + 10;
-  const contentTop = PAGE_H - marginTop - 52 - 14 - metaBlockH - 12 - kettenBlockH - sectionTitleH;
-  const rowsPerPage = Math.max(1, Math.floor((contentTop - marginBottom - 22 - headerH) / rowH));
+  const chromeH = 52 + 14;
+  const footerReserve = PROTOCOL_FOOTER_RESERVED_H;
+  // Seite 1: Meta + Kettenblock; Folgeseiten: nur Chrome + Messungen
+  const contentTopFirst =
+    PAGE_H - marginTop - chromeH - metaBlockH - 12 - kettenBlockH - sectionTitleH;
+  const contentTopNext = PAGE_H - marginTop - chromeH - sectionTitleH;
+  const rowsPerPageFirst = Math.max(
+    1,
+    Math.floor((contentTopFirst - marginBottom - footerReserve - headerH) / rowH),
+  );
+  const rowsPerPageNext = Math.max(
+    1,
+    Math.floor((contentTopNext - marginBottom - footerReserve - headerH) / rowH),
+  );
   const pagesPlan = [];
   let remaining = dataRows.slice();
   if (!remaining.length) {
     pagesPlan.push({ rows: [], withSum: false });
   } else {
+    let pageNo = 0;
     while (remaining.length > 0) {
+      const capacity = pageNo === 0 ? rowsPerPageFirst : rowsPerPageNext;
       const left = remaining.length;
       const sumSlot = sums.any ? 1 : 0;
-      if (left + sumSlot <= rowsPerPage) {
+      if (left + sumSlot <= capacity) {
         pagesPlan.push({ rows: remaining.splice(0), withSum: !!sums.any });
       } else {
-        pagesPlan.push({ rows: remaining.splice(0, rowsPerPage), withSum: false });
+        pagesPlan.push({ rows: remaining.splice(0, capacity), withSum: false });
       }
+      pageNo += 1;
     }
     if (sums.any && pagesPlan.length && !pagesPlan[pagesPlan.length - 1].withSum) {
       pagesPlan.push({ rows: [], withSum: true });
@@ -2120,8 +2206,10 @@ async function generateSchleppkettenPdfBuffer(payload) {
   pagesPlan.forEach((plan, pageIndex) => {
     const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
     let y = drawHeader(page);
-    y = drawMeta(page, y);
-    y = drawKettenDaten(page, y);
+    if (pageIndex === 0) {
+      y = drawMeta(page, y);
+      y = drawKettenDaten(page, y);
+    }
     y = drawSectionTitle(page, y, 'Messungen', 'measurements');
     const tableTop = y;
     y = drawTableHeader(page, y);
@@ -2151,14 +2239,6 @@ async function generateSchleppkettenPdfBuffer(payload) {
       borderColor: green,
       borderWidth: 0.9,
     });
-    if (sigImg && pageIndex === pagesPlan.length - 1) {
-      const maxW = 140;
-      const maxH = 36;
-      const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
-      const iw = sigImg.width * scale;
-      const ih = sigImg.height * scale;
-      page.drawImage(sigImg, { x: marginX, y: marginBottom + 4, width: iw, height: ih });
-    }
     drawFooter(page, pageIndex, pagesPlan.length, pageIndex === pagesPlan.length - 1);
   });
 
@@ -2358,14 +2438,13 @@ async function generateMontageberichtPdfBuffer(payload, options) {
   const white = rgb(1, 1, 1);
   const tableInnerW = PAGE_W - marginX * 2;
   const headerBandH = 52;
-  const metaBlockH = 118;
-  const contentBottom = marginBottom + 28;
+  const contentBottom = marginBottom + PROTOCOL_FOOTER_RESERVED_H;
 
   const L = {
     title: de ? 'Montagebericht' : 'Assembly report',
     titleSub: de ? 'assembly report' : 'Montagebericht',
     kunde: de ? 'Kunde / customer' : 'Customer',
-    geliefert: de ? 'geliefert ueber' : 'Delivered via',
+    geliefert: de ? 'geliefert über' : 'Delivered via',
     projekt: de ? 'Projekt / project' : 'Project',
     datum: de ? 'Datum / date' : 'Date',
     fn: 'FN',
@@ -2385,7 +2464,15 @@ async function generateMontageberichtPdfBuffer(payload, options) {
   const datumVal = S(kopf.datum || '').trim();
   const geliefertUeber = S(kopf.geliefertUeber || '').trim();
   const servicetechniker = S(kopf.servicetechniker || '').trim();
-  const ansprechperson = S(kopf.ansprechperson || '').trim();
+  const ansprechpersonRaw = String(kopf.ansprechperson || '').trim();
+  // Mehrere Ansprechpartner: Zeilenumbruch oder Legacy „A, B“
+  const ansprechLines = (ansprechpersonRaw.includes('\n')
+    ? ansprechpersonRaw.split(/\n+/)
+    : ansprechpersonRaw.split(/\s*,\s*/)
+  )
+    .map((s) => S(s).trim())
+    .filter(Boolean);
+  const metaBlockH = 118 + Math.max(0, ansprechLines.length - 1) * 12;
   const fnList = tableRows
     .map((r) => String((r && r.fabrikationsnummer) || '').trim())
     .filter(Boolean)
@@ -2475,13 +2562,14 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     });
     const addrLines = [
       'KUKLA Waagenfabrik GmbH & Co KG',
-      'Fadingerstr. 1-11 · 4840 Voecklabruck',
+      'Fadingerstr. 1-11 · 4840 Vöcklabruck',
       'Tel. +43 7672 26666-0 · www.kukla.co.at',
     ];
     let ay = y - 12;
     addrLines.forEach((line) => {
-      const tw = font.widthOfTextAtSize(line, 7);
-      page.drawText(line, { x: PAGE_W - marginX - tw, y: ay, size: 7, font, color: grayMuted });
+      const safe = S(line);
+      const tw = font.widthOfTextAtSize(safe, 7);
+      page.drawText(safe, { x: PAGE_W - marginX - tw, y: ay, size: 7, font, color: grayMuted });
       ay -= 9;
     });
     y -= headerBandH;
@@ -2507,6 +2595,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
       borderWidth: 0.8,
     });
     const pad = 10;
+    const colW = tableInnerW / 2 - pad * 2;
     const fields2 = [
       [
         [L.kunde, kunde],
@@ -2517,49 +2606,52 @@ async function generateMontageberichtPdfBuffer(payload, options) {
       [
         [L.geliefert, geliefertUeber],
         [L.tech, servicetechniker],
-        [L.contact, ansprechperson],
+        [L.contact, ansprechLines.length ? ansprechLines : ['–']],
       ],
     ];
     fields2.forEach((group, gi) => {
       const gx = marginX + gi * (tableInnerW / 2) + pad;
       let gy = yStart - 12;
       group.forEach(([label, val]) => {
-        page.drawText(clipText(font, label, 6.5, tableInnerW / 2 - pad * 2), {
+        const lines = Array.isArray(val)
+          ? val
+          : [String(val || '').trim() || '–'];
+        page.drawText(clipText(font, label, 6.5, colW), {
           x: gx,
           y: gy,
           size: 6.5,
           font,
           color: grayMuted,
         });
-        page.drawText(clipText(fontBold, String(val || '').trim() || '–', 9, tableInnerW / 2 - pad * 2), {
-          x: gx,
-          y: gy - 11,
-          size: 9,
-          font: fontBold,
-          color: grayText,
+        lines.forEach((line, li) => {
+          page.drawText(clipText(fontBold, String(line || '').trim() || '–', 9, colW), {
+            x: gx,
+            y: gy - 11 - li * 12,
+            size: 9,
+            font: fontBold,
+            color: grayText,
+          });
         });
-        gy -= 26;
+        gy -= 26 + Math.max(0, lines.length - 1) * 12;
       });
     });
     return boxY - 14;
   }
 
-  function drawFooter(page, pageIndex, pageCount) {
-    const footerLineY = marginBottom + 22;
-    page.drawLine({
-      start: { x: marginX, y: footerLineY },
-      end: { x: PAGE_W - marginX, y: footerLineY },
-      thickness: 0.6,
-      color: greenSoft,
-    });
-    const pageLabel = L.page + ' ' + (pageIndex + 1) + ' / ' + pageCount;
-    const tw = font.widthOfTextAtSize(pageLabel, 8);
-    page.drawText(pageLabel, {
-      x: PAGE_W - marginX - tw,
-      y: marginBottom,
-      size: 8,
+  function drawFooter(page, pageIndex, pageCount, isLast) {
+    drawFixedProtocolFooter(page, {
+      marginX,
+      marginBottom,
+      pageW: PAGE_W,
       font,
-      color: grayMuted,
+      grayMuted,
+      greenSoft,
+      de,
+      pageIndex,
+      pageCount,
+      isLast,
+      sigImg,
+      createdDate: pdfFooterCreatedDateDe(payload),
     });
   }
 
@@ -2639,7 +2731,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
 
   function estimateItemHeight(item) {
     if (item.type === 'section') return 18;
-    if (item.type === 'fn_header') return 28;
+    if (item.type === 'fn_header') return 38;
     if (item.type === 'fn_sep') return 14;
     if (item.type === 'text') return measureTextHeight(item.text, 9, 12, tableInnerW) + 6;
     if (item.type === 'image' && item.img) {
@@ -2653,7 +2745,14 @@ async function generateMontageberichtPdfBuffer(payload, options) {
   newPage();
   queue.forEach((item) => {
     const h = estimateItemHeight(item);
-    needSpace(Math.min(h, 120));
+    // Abschnitte / FN-Header möglichst als Block halten
+    if (item.type === 'section' || item.type === 'fn_header') {
+      needSpace(Math.min(Math.max(h, 40), 160));
+    } else if (item.type === 'image') {
+      needSpace(Math.min(h, Math.max(80, y - contentBottom)));
+    } else {
+      needSpace(Math.min(h, 120));
+    }
     if (item.type === 'section') {
       page.drawText(item.title, { x: marginX, y: y, size: 10, font: fontBold, color: greenDark });
       y -= 14;
@@ -2673,7 +2772,8 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     }
     if (item.type === 'fn_header') {
       const boxH = 22;
-      needSpace(boxH + 8);
+      const gapBelow = 14; // Abstand zur ersten Textzeile
+      needSpace(boxH + gapBelow);
       page.drawRectangle({
         x: marginX,
         y: y - boxH,
@@ -2721,7 +2821,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
         font: fontBold,
         color: white,
       });
-      y -= boxH + 8;
+      y -= boxH + gapBelow;
       return;
     }
     if (item.type === 'text') {
@@ -2783,36 +2883,8 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     }
   });
 
-  if (sigImg) {
-    const maxW = 160;
-    const maxH = 48;
-    const scale = Math.min(maxW / sigImg.width, maxH / sigImg.height, 1);
-    const iw = sigImg.width * scale;
-    const ih = sigImg.height * scale;
-    needSpace(ih + 28);
-    page.drawText(S(de ? 'Unterschrift Servicetechniker' : 'Technician signature'), {
-      x: marginX,
-      y: y - 10,
-      size: 8,
-      font: fontBold,
-      color: greenDark,
-    });
-    y -= 16;
-    page.drawImage(sigImg, { x: marginX, y: y - ih, width: iw, height: ih });
-    y -= ih + 8;
-    if (servicetechniker) {
-      page.drawText(S(servicetechniker), {
-        x: marginX,
-        y: y - 10,
-        size: 8,
-        font,
-        color: grayText,
-      });
-    }
-  }
-
   pages.forEach((p, i) => {
-    drawFooter(p, i, pages.length);
+    drawFooter(p, i, pages.length, i === pages.length - 1);
   });
 
   return Buffer.from(await pdfDoc.save());
@@ -2837,6 +2909,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   const marginX = 36;
   const marginTop = 28;
   const marginBottom = 42;
+  const contentBottom = marginBottom + PROTOCOL_FOOTER_RESERVED_H;
   const green = rgb(14 / 255, 123 / 255, 90 / 255);
   const greenDark = rgb(12 / 255, 106 / 255, 77 / 255);
   const greenSoft = rgb(207 / 255, 232 / 255, 209 / 255);
@@ -2893,166 +2966,228 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
         ? t('NICHT BESTANDEN', 'FAILED')
         : t('k. A.', 'n/a');
 
-  const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+  let page = pdfDoc.addPage([PAGE_W, PAGE_H]);
   let y = PAGE_H - marginTop;
 
-  // Outer frame
   page.drawRectangle({
-    x: 18,
-    y: 18,
-    width: PAGE_W - 36,
-    height: PAGE_H - 36,
+    x: 20,
+    y: 20,
+    width: PAGE_W - 40,
+    height: PAGE_H - 40,
     borderColor: green,
-    borderWidth: 2,
-  });
-  page.drawRectangle({
-    x: 22,
-    y: 22,
-    width: PAGE_W - 44,
-    height: PAGE_H - 44,
-    borderColor: greenSoft,
-    borderWidth: 1,
+    borderWidth: 1.5,
   });
 
-  // Header bar
+  const clipVal = (v, maxLen) => {
+    const s = str(v) || '–';
+    return s.length > maxLen ? s.slice(0, maxLen - 1) + '…' : s;
+  };
+  const fmtDate = (v) => formatDateDe(v) || str(v) || '–';
+
+  // Einheitliches Abstands-Raster (pt)
+  const GAP_BLOCK = 12; // zwischen Blöcken (vor Überschrift)
+  const GAP_TITLE = 10; // von Unterstreichung bis Inhalt
+  const GAP_LINE = 11; // Fließtext-Zeilenabstand
+  const GAP_AFTER_TABLE = 6; // unter Tabellen vor nächstem Element
+
+  /** Block-Überschrift mit klarem Abstand davor und danach. */
+  function drawSectionHead(label) {
+    y -= GAP_BLOCK;
+    page.drawText(S(label), { x: marginX, y, size: 9, font: fontBold, color: greenDark });
+    const tw = fontBold.widthOfTextAtSize(S(label), 9);
+    page.drawRectangle({
+      x: marginX,
+      y: y - 5,
+      width: Math.min(tw + 4, 180),
+      height: 1.5,
+      color: green,
+    });
+    y -= 5 + 1.5 + GAP_TITLE;
+  }
+
+  function drawStackedKv(label, value, x, cellTop, cellH, maxChars) {
+    const labelY = cellTop - 9;
+    const valueY = cellTop - cellH + 7;
+    page.drawText(S(label), { x, y: labelY, size: 6, font, color: grayMuted });
+    page.drawText(S(clipVal(value, maxChars || 40)), {
+      x,
+      y: valueY,
+      size: 8,
+      font: fontBold,
+      color: grayText,
+    });
+  }
+
+  function textYInRow(rowTop, rowH) {
+    return rowTop - rowH / 2 - 2.5;
+  }
+
+  // —— Header ——
+  const headerH = 38;
   page.drawRectangle({
     x: marginX,
-    y: y - 52,
+    y: y - headerH,
     width: tableInnerW,
-    height: 52,
+    height: headerH,
     color: greenHeader,
   });
   if (logo) {
-    const lh = 36;
+    const lh = 24;
     const lw = (logo.width / logo.height) * lh;
-    page.drawImage(logo, { x: marginX + 8, y: y - 44, width: lw, height: lh });
+    page.drawImage(logo, { x: marginX + 8, y: y - headerH + 7, width: lw, height: lh });
   }
-  const title = t(
-    'Hersteller-Prüfzertifikat',
-    'Manufacturer Inspection Certificate',
-  );
-  const subtitle = t('Wiederkehrende Überprüfung', 'Recurring Verification');
-  page.drawText(S(title), {
-    x: marginX + 110,
-    y: y - 22,
-    size: 14,
+  page.drawText(S(t('Hersteller-Prüfzertifikat', 'Manufacturer Inspection Certificate')), {
+    x: marginX + 100,
+    y: y - 14,
+    size: 12,
     font: fontBold,
     color: greenDark,
   });
-  page.drawText(S(subtitle), {
-    x: marginX + 110,
-    y: y - 38,
-    size: 10,
+  page.drawText(S(t('Wiederkehrende Überprüfung', 'Recurring Verification')), {
+    x: marginX + 100,
+    y: y - 27,
+    size: 8,
     font,
     color: grayMuted,
   });
-  y -= 68;
+  y -= headerH + 12;
 
+  // —— Zertifikatszeile ——
   const certNr = str(payload.zertifikat_nr) || '–';
   page.drawText(S(t('Zertifikatsnr.', 'Certificate no.') + ': ' + certNr), {
     x: marginX,
     y,
-    size: 9,
+    size: 8.5,
     font: fontBold,
     color: grayText,
   });
   page.drawText(S(t('Bezug', 'Reference') + ': EU 2018/2066 Art. 60 (MRR)'), {
     x: marginX + 260,
     y,
-    size: 8,
+    size: 7.5,
     font,
     color: grayMuted,
   });
-  y -= 18;
+  y -= 14;
 
-  function drawMetaRow(label, value, x, yy, w) {
-    page.drawText(S(label), { x, y: yy, size: 7.5, font, color: grayMuted });
-    const val = str(value) || '–';
-    const shown = val.length > 42 ? val.slice(0, 41) + '…' : val;
-    page.drawText(S(shown), {
-      x,
-      y: yy - 12,
-      size: 10,
+  // —— Meta-Box ——
+  const metaPadX = 10;
+  const metaPadY = 7;
+  const metaCols = 4;
+  const metaGap = 10;
+  const metaRowH = 28;
+  const metaH = metaPadY * 2 + metaRowH * 2;
+  const metaTop = y;
+  page.drawRectangle({
+    x: marginX,
+    y: metaTop - metaH,
+    width: tableInnerW,
+    height: metaH,
+    color: rgb(0.97, 0.99, 0.97),
+    borderColor: greenSoft,
+    borderWidth: 0.8,
+  });
+  page.drawLine({
+    start: { x: marginX + metaPadX, y: metaTop - metaPadY - metaRowH },
+    end: { x: marginX + tableInnerW - metaPadX, y: metaTop - metaPadY - metaRowH },
+    thickness: 0.4,
+    color: greenSoft,
+  });
+  const metaColW = (tableInnerW - metaPadX * 2 - metaGap * (metaCols - 1)) / metaCols;
+  const metaCells = [
+    { r: 0, c: 0, label: t('Fabrikationsnummer', 'Serial / FN'), value: payload.fabrikationsnummer },
+    {
+      r: 0,
+      c: 1,
+      label: t('Prüfdatum', 'Inspection date'),
+      value: fmtDate(payload.pruefdatum || payload.durchfuehrungsdatum),
+    },
+    { r: 0, c: 2, label: t('Nächste Prüfung', 'Next inspection'), value: fmtDate(payload.naechste_pruefung) },
+    { r: 0, c: 3, label: t('Monteur', 'Technician'), value: payload.monteur_name },
+    { r: 1, c: 0, span: 2, label: t('Kunde', 'Customer'), value: payload.kunde || payload.customer_name },
+    { r: 1, c: 2, label: t('Projekt', 'Project'), value: payload.projekt || payload.job_number },
+    { r: 1, c: 3, label: t('Standort', 'Site'), value: payload.standort },
+  ];
+  metaCells.forEach((cell) => {
+    const span = cell.span || 1;
+    const x = marginX + metaPadX + cell.c * (metaColW + metaGap);
+    const cellTop = metaTop - metaPadY - cell.r * metaRowH;
+    drawStackedKv(cell.label, cell.value, x, cellTop, metaRowH, span >= 2 ? 58 : 28);
+  });
+  y = metaTop - metaH;
+
+  // —— Anlagendaten ——
+  drawSectionHead(t('Anlagendaten', 'Equipment data'));
+  const plantRows = [
+    [t('Type', 'Type'), payload.type, t('Pos.-Nr.', 'Pos. no.'), payload.pos_nr],
+    [
+      t('Elektronik / DWC', 'Electronics / DWC'),
+      payload.elektronik || payload.dwc,
+      t('Nennleistung', 'Rated capacity'),
+      payload.nennleistung || payload.leistung,
+    ],
+    [
+      t('Waagenart', 'Scale type'),
+      payload.waagenart || 'Bandwaage',
+      t('Projekt / Auftrag', 'Project / Job'),
+      payload.projekt || payload.job_number,
+    ],
+  ];
+  const plantRowH = 15;
+  const plantHalf = tableInnerW / 2;
+  plantRows.forEach((row, idx) => {
+    const rowTop = y;
+    page.drawRectangle({
+      x: marginX,
+      y: rowTop - plantRowH,
+      width: tableInnerW,
+      height: plantRowH,
+      color: idx % 2 === 0 ? greenHeader : white,
+    });
+    const ty = textYInRow(rowTop, plantRowH);
+    page.drawText(S(str(row[0])), { x: marginX + 6, y: ty, size: 7, font, color: grayMuted });
+    page.drawText(S(clipVal(row[1], 28)), {
+      x: marginX + 118,
+      y: ty,
+      size: 8,
       font: fontBold,
       color: grayText,
     });
-  }
-
-  page.drawRectangle({
-    x: marginX,
-    y: y - 48,
-    width: tableInnerW,
-    height: 52,
-    color: rgb(0.97, 0.99, 0.97),
-    borderColor: greenSoft,
-    borderWidth: 1,
+    page.drawText(S(str(row[2])), { x: marginX + plantHalf + 6, y: ty, size: 7, font, color: grayMuted });
+    page.drawText(S(clipVal(row[3], 28)), {
+      x: marginX + plantHalf + 118,
+      y: ty,
+      size: 8,
+      font: fontBold,
+      color: grayText,
+    });
+    y = rowTop - plantRowH;
   });
-  drawMetaRow(t('Fabrikationsnummer', 'Serial / FN'), payload.fabrikationsnummer, marginX + 10, y - 6, 200);
-  drawMetaRow(t('Prüfdatum', 'Inspection date'), payload.pruefdatum || payload.durchfuehrungsdatum, marginX + 280, y - 6, 200);
-  drawMetaRow(t('Kunde', 'Customer'), payload.kunde || payload.customer_name, marginX + 10, y - 30, 200);
-  drawMetaRow(t('Nächste Prüfung', 'Next inspection'), payload.naechste_pruefung, marginX + 280, y - 30, 200);
-  y -= 60;
+  y -= GAP_AFTER_TABLE;
 
-  // Plant data
-  page.drawText(S(t('Anlagendaten', 'Equipment data')), {
-    x: marginX,
-    y,
-    size: 11,
-    font: fontBold,
-    color: greenDark,
-  });
-  y -= 6;
-  page.drawRectangle({ x: marginX, y: y - 1, width: 120, height: 2, color: green });
-  y -= 16;
-
-  const plantRows = [
-    [t('Type', 'Type'), payload.type],
-    [t('Pos.-Nr.', 'Pos. no.'), payload.pos_nr],
-    [t('Elektronik / DWC', 'Electronics / DWC'), payload.elektronik || payload.dwc],
-    [t('Nennleistung', 'Rated capacity'), payload.nennleistung || payload.leistung],
-    [t('Waagenart', 'Scale type'), payload.waagenart || 'Bandwaage'],
-    [t('Projekt / Auftrag', 'Project / Job'), payload.projekt || payload.job_number],
-    [t('Standort', 'Site'), payload.standort],
-  ];
-  plantRows.forEach((row, idx) => {
-    const bg = idx % 2 === 0 ? greenHeader : white;
-    page.drawRectangle({ x: marginX, y: y - 14, width: tableInnerW, height: 16, color: bg });
-    page.drawText(S(str(row[0])), { x: marginX + 6, y: y - 10, size: 8, font, color: grayMuted });
-    page.drawText(S(str(row[1]) || '–'), { x: marginX + 200, y: y - 10, size: 9, font: fontBold, color: grayText });
-    y -= 16;
-  });
-  y -= 12;
-
-  // Methods
-  page.drawText(S(t('Prüfverfahren', 'Inspection methods')), {
-    x: marginX,
-    y,
-    size: 11,
-    font: fontBold,
-    color: greenDark,
-  });
-  y -= 16;
+  // —— Verfahren ——
   const methods = [];
   if (verfahren.kontrollwiegung) methods.push(t('Kontrollwiegung', 'Control weighing'));
   if (verfahren.schleppketten) methods.push(t('Schleppketten-Test', 'Chain calibration test'));
   if (verfahren.service) methods.push(t('Serviceprotokoll', 'Service protocol'));
+  drawSectionHead(t('Prüfverfahren', 'Inspection methods'));
   page.drawText(S(methods.length ? methods.join('  ·  ') : '–'), {
     x: marginX,
     y,
-    size: 9,
+    size: 8,
     font,
     color: grayText,
   });
-  y -= 20;
+  y -= GAP_LINE;
 
-  // Results table – nur aktive Verfahren
+  // —— Ergebnisse ——
   const resultRows = [];
   if (verfahren.kontrollwiegung && ergebnisse.kontrollwiegung) {
     resultRows.push([
       t('Kontrollwiegung', 'Control weighing'),
       String(ergebnisse.kontrollwiegung.anzahl != null ? ergebnisse.kontrollwiegung.anzahl : '–'),
       fmtPct(ergebnisse.kontrollwiegung.fehler_prozent),
-      str(ergebnisse.kontrollwiegung.datum) || '–',
+      fmtDate(ergebnisse.kontrollwiegung.datum),
     ]);
   }
   if (verfahren.schleppketten && ergebnisse.schleppketten) {
@@ -3060,81 +3195,76 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
       t('Schleppketten-Test', 'Chain test'),
       String(ergebnisse.schleppketten.anzahl != null ? ergebnisse.schleppketten.anzahl : '–'),
       fmtPct(ergebnisse.schleppketten.fehler_prozent),
-      str(ergebnisse.schleppketten.datum) || '–',
+      fmtDate(ergebnisse.schleppketten.datum),
     ]);
   }
   if (verfahren.service) {
-    resultRows.push([
-      t('Serviceprotokoll', 'Service protocol'),
-      '–',
-      '–',
-      '–',
-    ]);
+    resultRows.push([t('Serviceprotokoll', 'Service protocol'), '–', '–', '–']);
   }
 
-  page.drawText(S(t('Ergebnisse', 'Results')), {
-    x: marginX,
-    y,
-    size: 11,
-    font: fontBold,
-    color: greenDark,
-  });
-  y -= 6;
-  page.drawRectangle({ x: marginX, y: y - 1, width: 80, height: 2, color: green });
-  y -= 18;
-
+  drawSectionHead(t('Ergebnisse', 'Results'));
+  const colW = [tableInnerW * 0.4, tableInnerW * 0.2, tableInnerW * 0.2, tableInnerW * 0.2];
+  const resultRowH = 15;
   if (resultRows.length) {
-    const resultHeaderH = 20;
+    const headTop = y;
     page.drawRectangle({
       x: marginX,
-      y: y - resultHeaderH + 4,
+      y: headTop - resultRowH,
       width: tableInnerW,
-      height: resultHeaderH,
+      height: resultRowH,
       color: green,
     });
-    const colW = [tableInnerW * 0.4, tableInnerW * 0.2, tableInnerW * 0.2, tableInnerW * 0.2];
-    const headers = [
-      t('Verfahren', 'Method'),
-      t('Anzahl', 'Count'),
-      t('Fehler %', 'Error %'),
-      t('Datum', 'Date'),
-    ];
     let cx = marginX;
-    headers.forEach((h, i) => {
-      page.drawText(S(h), { x: cx + 4, y: y - 8, size: 8, font: fontBold, color: white });
-      cx += colW[i];
-    });
-    y -= resultHeaderH;
+    const hty = textYInRow(headTop, resultRowH);
+    [t('Verfahren', 'Method'), t('Anzahl', 'Count'), t('Fehler %', 'Error %'), t('Datum', 'Date')].forEach(
+      (h, i) => {
+        page.drawText(S(h), { x: cx + 4, y: hty, size: 7, font: fontBold, color: white });
+        cx += colW[i];
+      },
+    );
+    y = headTop - resultRowH;
 
     resultRows.forEach((r, idx) => {
-      const bg = idx % 2 === 0 ? white : greenHeader;
-      page.drawRectangle({ x: marginX, y: y - 14, width: tableInnerW, height: 16, color: bg, borderColor: greenSoft, borderWidth: 0.5 });
+      const rowTop = y;
+      page.drawRectangle({
+        x: marginX,
+        y: rowTop - resultRowH,
+        width: tableInnerW,
+        height: resultRowH,
+        color: idx % 2 === 0 ? white : greenHeader,
+      });
       let x = marginX;
+      const ty = textYInRow(rowTop, resultRowH);
       r.forEach((cell, i) => {
-        page.drawText(S(String(cell)), { x: x + 4, y: y - 10, size: 9, font, color: grayText });
+        page.drawText(S(String(cell)), { x: x + 4, y: ty, size: 8, font, color: grayText });
         x += colW[i];
       });
-      y -= 16;
+      y = rowTop - resultRowH;
     });
-    y -= 10;
   } else {
     page.drawText(S(t('Kein Prüfverfahren ausgewählt.', 'No inspection method selected.')), {
       x: marginX,
       y,
-      size: 9,
+      size: 8,
       font,
       color: grayMuted,
     });
-    y -= 16;
+    y -= GAP_LINE;
   }
 
+  y -= 10;
   page.drawText(
-    S(t('Zulässige Abweichung', 'Max. permissible error') + ': ± ' + fmtPct(payload.zulaessige_abweichung_pct) + ' %'),
-    { x: marginX, y, size: 9, font: fontBold, color: grayText },
+    S(
+      t('Zulässige Abweichung', 'Max. permissible error') +
+        ': ± ' +
+        fmtPct(payload.zulaessige_abweichung_pct) +
+        ' %',
+    ),
+    { x: marginX, y, size: 8, font: fontBold, color: grayText },
   );
-  y -= 18;
+  y -= GAP_AFTER_TABLE;
 
-  // Service: Messwerte Wägezelle + Prüfgewichtstest
+  // —— Service-Messwerte ——
   const serviceMess =
     verfahren.service && ergebnisse.service && typeof ergebnisse.service === 'object'
       ? ergebnisse.service
@@ -3163,56 +3293,57 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
         g: String(r.g_prozent || '').trim(),
       });
     });
+    const messRowH = 15;
     if (messRows.length) {
-      page.drawText(S(t('Messwerte Wägezelle', 'Load cell measurements')), {
-        x: marginX,
-        y,
-        size: 10,
-        font: fontBold,
-        color: greenDark,
-      });
-      y -= 14;
-      const mColW = [tableInnerW * 0.36, tableInnerW * 0.16, tableInnerW * 0.16, tableInnerW * 0.16, tableInnerW * 0.16];
-      const mHeaders = [t('Messpunkt', 'Point'), 'kg', 'mV', 'mA', 'g %'];
+      drawSectionHead(t('Messwerte Wägezelle', 'Load cell measurements'));
+      const mColW = [
+        tableInnerW * 0.36,
+        tableInnerW * 0.16,
+        tableInnerW * 0.16,
+        tableInnerW * 0.16,
+        tableInnerW * 0.16,
+      ];
+      const headTop = y;
       page.drawRectangle({
         x: marginX,
-        y: y - 16,
+        y: headTop - messRowH,
         width: tableInnerW,
-        height: 18,
+        height: messRowH,
         color: green,
       });
       let mx = marginX;
-      mHeaders.forEach((h, i) => {
-        page.drawText(S(h), { x: mx + 4, y: y - 10, size: 7.5, font: fontBold, color: white });
+      const hty = textYInRow(headTop, messRowH);
+      [t('Messpunkt', 'Point'), 'kg', 'mV', 'mA', 'g %'].forEach((h, i) => {
+        page.drawText(S(h), { x: mx + 3, y: hty, size: 7, font: fontBold, color: white });
         mx += mColW[i];
       });
-      y -= 18;
+      y = headTop - messRowH;
+
       messRows.forEach((row, idx) => {
-        const bg = idx % 2 === 0 ? white : greenHeader;
+        const rowTop = y;
         page.drawRectangle({
           x: marginX,
-          y: y - 14,
+          y: rowTop - messRowH,
           width: tableInnerW,
-          height: 16,
-          color: bg,
-          borderColor: greenSoft,
-          borderWidth: 0.5,
+          height: messRowH,
+          color: idx % 2 === 0 ? white : greenHeader,
         });
         const cells = [row.label, row.kg || '–', row.mv || '–', row.ma || '–', row.g || '–'];
         let cx2 = marginX;
+        const ty = textYInRow(rowTop, messRowH);
         cells.forEach((cell, i) => {
           page.drawText(S(String(cell)), {
-            x: cx2 + 4,
-            y: y - 10,
-            size: 8,
+            x: cx2 + 3,
+            y: ty,
+            size: 7.5,
             font: i === 0 ? font : fontBold,
             color: grayText,
           });
           cx2 += mColW[i];
         });
-        y -= 16;
+        y = rowTop - messRowH;
       });
-      y -= 10;
+      y -= GAP_AFTER_TABLE;
     }
 
     const pgVals = normalizePruefgewichtstestVals(serviceMess.pruefgewichtstest);
@@ -3230,14 +3361,16 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
       white,
       S,
       title: t('Prüfgewichtstest', 'Test with test load'),
+      gapBlock: GAP_BLOCK,
+      gapTitle: GAP_TITLE,
+      gapAfter: GAP_AFTER_TABLE,
     });
   }
 
-  y -= 4;
-
-  // Seal
-  const sealW = 220;
-  const sealH = 40;
+  // —— Siegelbox ——
+  y -= GAP_BLOCK;
+  const sealW = 200;
+  const sealH = 28;
   const sealX = marginX + (tableInnerW - sealW) / 2;
   page.drawRectangle({
     x: sealX,
@@ -3245,53 +3378,45 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     width: sealW,
     height: sealH,
     borderColor: green,
-    borderWidth: 2.5,
+    borderWidth: 2,
     color: white,
   });
-  const sealSize = 14;
   const sealLabel = S(statusLabel);
+  const sealSize = 11;
   const sealTw = fontBold.widthOfTextAtSize(sealLabel, sealSize);
   page.drawText(sealLabel, {
     x: sealX + (sealW - sealTw) / 2,
-    y: y - sealH / 2 - 5,
+    y: y - sealH / 2 - 3.5,
     size: sealSize,
     font: fontBold,
     color: greenDark,
   });
-  y -= sealH + 18;
+  y -= sealH;
 
-  // Traceability
-  page.drawText(S(t('Rückführbarkeit / Prüfmittel', 'Traceability / test means')), {
-    x: marginX,
-    y,
-    size: 10,
-    font: fontBold,
-    color: greenDark,
-  });
-  y -= 14;
+  // —— Prüfmittel ——
+  drawSectionHead(t('Rückführbarkeit / Prüfmittel', 'Traceability / test means'));
   const pruefmittel = str(payload.pruefmittel) || '–';
-  page.drawText(S(pruefmittel.length > 90 ? pruefmittel.slice(0, 89) + '…' : pruefmittel), {
+  page.drawText(S(clipVal(pruefmittel, 110)), {
     x: marginX,
     y,
-    size: 9,
+    size: 8,
     font,
     color: grayText,
   });
-  y -= 14;
+  y -= GAP_LINE;
   if (verfahren.kontrollwiegung && str(payload.letzte_eichung_kontrollwaage)) {
     page.drawText(
       S(
         t('Letzte Eichung Kontrollwaage', 'Last verification of control scale') +
           ': ' +
-          str(payload.letzte_eichung_kontrollwaage),
+          fmtDate(payload.letzte_eichung_kontrollwaage),
       ),
-      { x: marginX, y, size: 8, font, color: grayMuted },
+      { x: marginX, y, size: 7.5, font, color: grayMuted },
     );
-    y -= 12;
+    y -= GAP_LINE;
   }
-  y -= 6;
 
-  // Conformity — EN-PDF immer englischen Standardtext (nicht DE-Formulartext)
+  // —— Konformität ——
   const KONFORM_DE =
     'Die Anlage wurde nach dem Herstellerverfahren der KUKLA Waagenfabrik GmbH & Co KG einer wiederkehrenden Überprüfung unterzogen. Dieses Hersteller-Prüfzertifikat (Manufacturer Inspection Certificate) dient als Nachweis der Qualitätssicherung der Messeinrichtung im Sinne von Art. 60 der Verordnung (EU) 2018/2066 (MRR). Es handelt sich nicht um eine akkreditierte Kalibrierung nach EN ISO/IEC 17025 und nicht um eine behördliche Eichung.';
   const KONFORM_EN =
@@ -3300,27 +3425,26 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     ? str(payload.konformitaet_text) || KONFORM_DE
     : str(payload.konformitaet_text_en) || KONFORM_EN;
 
-  page.drawText(S(t('Konformitätsaussage', 'Statement of conformity')), {
-    x: marginX,
-    y,
-    size: 10,
-    font: fontBold,
-    color: greenDark,
-  });
-  y -= 14;
-
+  drawSectionHead(t('Konformitätsaussage', 'Statement of conformity'));
   const words = S(konform).split(/\s+/).filter(Boolean);
   let line = '';
   const maxW = tableInnerW;
+  const lineH = GAP_LINE;
+  const minY = contentBottom + 2;
   const flushLine = () => {
     if (!line) return;
-    page.drawText(line, { x: marginX, y, size: 8, font, color: grayText });
-    y -= 11;
+    if (y < minY) {
+      line = '';
+      return;
+    }
+    page.drawText(line, { x: marginX, y, size: 7, font, color: grayText });
+    y -= lineH;
     line = '';
   };
   words.forEach((word) => {
+    if (y < minY) return;
     const test = line ? line + ' ' + word : word;
-    if (font.widthOfTextAtSize(test, 8) > maxW && line) {
+    if (font.widthOfTextAtSize(test, 7) > maxW && line) {
       flushLine();
       line = word;
     } else {
@@ -3328,53 +3452,20 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     }
   });
   flushLine();
-  y -= 16;
 
-  // Signatur rechts neben Name/Datum (ohne Label „Unterschrift“)
-  const sigBlockTop = y;
-  page.drawText(S(t('Monteur / Technician', 'Technician') + ': ' + (str(payload.monteur_name) || '____________________')), {
-    x: marginX,
-    y,
-    size: 9,
+  drawFixedProtocolFooter(page, {
+    marginX,
+    marginBottom,
+    pageW: PAGE_W,
     font,
-    color: grayText,
-  });
-  y -= 16;
-  page.drawText(S(t('Datum', 'Date') + ': ' + (str(payload.pruefdatum) || '__________')), {
-    x: marginX,
-    y,
-    size: 9,
-    font,
-    color: grayText,
-  });
-  if (sigImg) {
-    const maxSigW = 140;
-    const maxSigH = 42;
-    const scale = Math.min(maxSigW / sigImg.width, maxSigH / sigImg.height, 1);
-    const iw = sigImg.width * scale;
-    const ih = sigImg.height * scale;
-    const sigX = PAGE_W - marginX - iw;
-    // Oberkante auf Höhe der Namen-Zeile; nicht in den Footer schieben
-    let sigY = sigBlockTop - ih + 4;
-    const minSigY = marginBottom + 4;
-    if (sigY < minSigY) sigY = minSigY;
-    page.drawImage(sigImg, { x: sigX, y: sigY, width: iw, height: ih });
-  }
-
-  // Footer
-  page.drawText(S('KUKLA Waagenfabrik GmbH & Co KG  ·  ' + certNr + '  ·  ' + (de ? 'DE' : 'EN')), {
-    x: marginX,
-    y: marginBottom - 8,
-    size: 7,
-    font,
-    color: grayMuted,
-  });
-  page.drawText(S(t('Seite 1/1', 'Page 1/1')), {
-    x: PAGE_W - marginX - 40,
-    y: marginBottom - 8,
-    size: 7,
-    font,
-    color: grayMuted,
+    grayMuted,
+    greenSoft,
+    de,
+    pageIndex: 0,
+    pageCount: 1,
+    isLast: true,
+    sigImg,
+    createdDate: pdfFooterCreatedDateDe(payload),
   });
 
   return Buffer.from(await pdfDoc.save());

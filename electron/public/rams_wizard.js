@@ -134,7 +134,20 @@
     var B = getBridge();
     if (!B) return Promise.reject(new Error('MonteurRamsBridge fehlt'));
     var baseUrl = B.getDispoBaseUrl();
-    if (!baseUrl) return Promise.reject(new Error('Dispo-Basis-URL fehlt (Einstellungen).'));
+    if (!baseUrl) {
+      return Promise.reject(
+        new Error(
+          'RAMS benötigt einmalig Online-Sync mit Dispo (Bootstrap). Bitte Dispo-URL setzen und Sync ausführen — lokale Bearbeitung folgt in einer späteren Version.',
+        ),
+      );
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return Promise.reject(
+        new Error(
+          'RAMS ist aktuell nur online nutzbar (Bootstrap-Ausnahme). Bitte Verbindung herstellen und synchronisieren.',
+        ),
+      );
+    }
     return fetch(B.API_BASE + '/api/laptop_rams_proxy', {
       method: 'POST',
       headers: Object.assign(

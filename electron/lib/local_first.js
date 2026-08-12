@@ -83,6 +83,41 @@ function wantsLocalOnlyRequest(src) {
   );
 }
 
+/**
+ * Verdächtiger Jobs-Pull: Dispo liefert 0 oder stark weniger als lokal vorhanden.
+ * Dann kein Massen-Löschen lokaler Zuordnungen (Schutz gegen leere/fehlerhafte API-Antwort).
+ * @returns {{ skipRemoval: boolean, warning: string|null, localCount: number, receivedCount: number }}
+ */
+function evaluateJobPullRemovalGuard(localAssignedCount, receivedUniqueCount) {
+  const localCount = Number(localAssignedCount) || 0;
+  const receivedCount = Number(receivedUniqueCount) || 0;
+  if (localCount > 0 && receivedCount === 0) {
+    return {
+      skipRemoval: true,
+      warning:
+        'Dispo lieferte 0 Aufträge bei ' +
+        localCount +
+        ' lokal zugewiesenen — Löschen übersprungen (vermutlich unvollständiger Pull)',
+      localCount,
+      receivedCount,
+    };
+  }
+  if (localCount >= 3 && receivedCount < Math.ceil(localCount * 0.2)) {
+    return {
+      skipRemoval: true,
+      warning:
+        'Dispo lieferte nur ' +
+        receivedCount +
+        ' von ' +
+        localCount +
+        ' lokalen Aufträgen — Massen-Löschen übersprungen',
+      localCount,
+      receivedCount,
+    };
+  }
+  return { skipRemoval: false, warning: null, localCount, receivedCount };
+}
+
 async function fetchWithTimeout(url, options, timeoutMs) {
   const ms = Number.isFinite(timeoutMs) ? timeoutMs : DISPO_FETCH_TIMEOUT_MS;
   const controller = new AbortController();
@@ -109,5 +144,6 @@ module.exports = {
   isPermanentSyncPushError,
   shouldDeferDispoSync,
   wantsLocalOnlyRequest,
+  evaluateJobPullRemovalGuard,
   fetchWithTimeout,
 };

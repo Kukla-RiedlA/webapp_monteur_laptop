@@ -12,6 +12,7 @@ if (app.isPackaged) {
 
 const { createApp, getDb, getMonteurDb, PORT, performAnlagenstammSave, flushMonteurDb } = require('./server');
 const { createImageGalleryWindowManager } = require('./lib/image-gallery-window');
+const { createPdfViewerWindowManager } = require('./lib/pdf-viewer-window');
 const { attachEditContextMenu } = require('./lib/edit-context-menu');
 const { configureSpellCheckerSession } = require('./lib/spellcheck-session');
 const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
@@ -32,6 +33,7 @@ const {
 let mainWindow;
 let updateCheckScheduled = false;
 let imageGalleryWindows = null;
+let pdfViewerWindows = null;
 
 function findWindowsUninstaller() {
   if (process.platform !== 'win32') return null;
@@ -345,6 +347,15 @@ async function openDienstreisePath(filePath) {
       return { ok: false, error: 'Datei nicht gefunden: ' + normalized };
     }
     trace('exists', normalized);
+    // PDFs immer im Electron-Chromium-Viewer – Acrobat scheitert an langen OneDrive-Pfaden.
+    if (String(path.extname(normalized)).toLowerCase() === '.pdf') {
+      if (!pdfViewerWindows) {
+        pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
+      }
+      const pdfResult = await pdfViewerWindows.openPdf(normalized);
+      trace('pdf.electronViewer', pdfResult && pdfResult.ok ? 'ok' : (pdfResult && pdfResult.error) || 'fail');
+      return pdfResult;
+    }
     // TED/Excel: zuerst EXCEL.EXE bzw. COM – nicht Browser oder generische Standard-App.
     if (tryOpenExcelFirst(normalized)) {
       trace('excel-first.ok');
@@ -386,6 +397,13 @@ async function openDienstreisePath(filePath) {
 }
 
 ipcMain.handle('dienstreise:open-path', async (_event, filePath) => openDienstreisePath(filePath));
+
+ipcMain.handle('pdf:open-viewer', async (_event, filePath) => {
+  if (!pdfViewerWindows) {
+    pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
+  }
+  return pdfViewerWindows.openPdf(filePath);
+});
 
 function openWithDialogMonteur(filePath) {
   if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
@@ -660,6 +678,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   configureSpellCheckerSession();
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
+  pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
   initLaptopUpdater({ getMainWindow: () => mainWindow });
   getDb().then((db) => {
     const serverApp = createApp(db);

@@ -87,7 +87,24 @@ async function handleMultipartPost(req, res, handler) {
 
 async function fetchBillingState(ctx, req, dispoJobId) {
   const { db, save, technicianId, baseUrl, authHeader } = dispoCtx(ctx, req);
-  if (baseUrl && authHeader && authHeader.Authorization) {
+  const forceOnline =
+    req &&
+    req.query &&
+    (req.query.force_online === '1' ||
+      req.query.force_online === 'true' ||
+      req.query.refresh === '1');
+  // Offline-First: Cache zuerst; Dispo nur bei force_online / abrechnung_refresh
+  const cached = phpLocal.readBillingCache(db, dispoJobId);
+  if (cached && !forceOnline) {
+    return {
+      ok: true,
+      billing: Object.assign({}, cached, {
+        can_write: phpLocal.monteurCanWriteJob(db, dispoJobId, technicianId),
+      }),
+      source: 'cache',
+    };
+  }
+  if (forceOnline && baseUrl && authHeader && authHeader.Authorization) {
     try {
       const data = await getCore().dispoFetchJson(
         baseUrl,
@@ -107,7 +124,6 @@ async function fetchBillingState(ctx, req, dispoJobId) {
       console.warn('[abrechnung/billing_state] Dispo:', e.message);
     }
   }
-  const cached = phpLocal.readBillingCache(db, dispoJobId);
   if (cached) {
     return {
       ok: true,
@@ -171,8 +187,13 @@ function registerAbrechnungPhpRoutes(app, ctx) {
     const jobId = Number(req.query.job_id || 0);
     if (!jobId) return jsonRes(res, { ok: false, error: 'job_id fehlt.' }, 400);
     const dispoJobId = getCore().resolveDispoJobIdForAbrechnung(ctx.db, jobId);
+    const forceOnline =
+      req.query.force_online === '1' ||
+      req.query.force_online === 'true' ||
+      req.query.refresh === '1';
     const d = dispoCtx(ctx, req);
-    if (d.baseUrl && d.authHeader && d.authHeader.Authorization) {
+    // Offline-First: Notes aus Cache; Dispo-Sync nur bei force_online
+    if (forceOnline && d.baseUrl && d.authHeader && d.authHeader.Authorization) {
       try {
         await getCore().syncCommentsOnlyFromDispo(
           { db: ctx.db, save: ctx.save },

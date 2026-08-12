@@ -201,7 +201,7 @@ export function ServiceProtocolPage() {
     <div className={embedded ? 'bg-kukla-page pb-6' : 'min-h-screen bg-kukla-page pb-10'}>
       <div className="mx-auto max-w-[1280px] px-4 py-4 md:px-6">
         <header
-          className={`mb-5 flex flex-wrap items-center justify-between gap-3 ${embedded ? '' : 'sticky top-0 z-20 -mx-4 bg-kukla-page/95 px-4 py-2 backdrop-blur md:-mx-6 md:px-6'}`}
+          className={`mb-5 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20 -mx-4 bg-kukla-page/95 px-4 py-2 backdrop-blur md:-mx-6 md:px-6`}
         >
           <div className="flex items-center gap-3">
             <SpIcon name="ClipboardList" className="h-8 w-8 shrink-0" />
@@ -210,8 +210,16 @@ export function ServiceProtocolPage() {
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" className="sp-btn-primary" onClick={() => sendAction('stickySave')}>
               <SpIcon name="Save" className="h-4 w-4" />
-              Speichern
+              Speichern (JSON)
             </button>
+            <button type="button" className="sp-btn-primary" onClick={() => sendAction('pdf')}>
+              einzel PDF
+            </button>
+            {fabChips.length >= 2 ? (
+              <button type="button" className="sp-btn-primary" onClick={() => sendAction('pdfAll')}>
+                Alle PDF
+              </button>
+            ) : null}
             <button
               type="button"
               aria-label="Menü"

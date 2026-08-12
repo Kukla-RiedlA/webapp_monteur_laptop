@@ -56,6 +56,7 @@ export function useElectronBridge(
     return () => window.removeEventListener('message', onMessage);
   }, [setState]);
 
+  // Status sofort pushen (nicht nur debounce), sonst geht „Justiert“ beim schnellen Speichern verloren
   const pushState = useCallback(() => {
     if (!EMBEDDED || suppressPush.current) return;
     window.parent.postMessage({ type: 'SP_STATE_CHANGE', payload: stateRef.current }, '*');
@@ -70,6 +71,10 @@ export function useElectronBridge(
   const sendAction = useCallback(
     (action: string) => {
       if (EMBEDDED) {
+        // Vor Aktion aktuellen State inkl. Status sofort an den Host
+        if (!suppressPush.current) {
+          window.parent.postMessage({ type: 'SP_STATE_CHANGE', payload: stateRef.current }, '*');
+        }
         window.parent.postMessage(
           { type: 'SP_ACTION', action, payload: stateRef.current },
           '*',

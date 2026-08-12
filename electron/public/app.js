@@ -233,7 +233,117 @@
     dienstreiseBasePath: 'monteur_dienstreiseBasePath',
     zeitschreibungBasePath: 'monteur_zeitschreibungBasePath',
     uiTheme: 'monteur_uiTheme',
+    pdfAutoOpen: 'monteur_pdfAutoOpen',
   };
+
+  function isPdfAutoOpenEnabled() {
+    try {
+      return localStorage.getItem(SETTINGS_KEYS.pdfAutoOpen) === '1';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function maybeOpenGeneratedPdf(absPath) {
+    if (!absPath || !isPdfAutoOpenEnabled()) return;
+    if (typeof monteurApp === 'undefined') return;
+    try {
+      if (typeof monteurApp.openPdf === 'function') {
+        await monteurApp.openPdf(String(absPath));
+        return;
+      }
+      if (typeof monteurApp.openPath === 'function') {
+        await monteurApp.openPath(String(absPath));
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  /** Protokoll-PDF manuell öffnen: immer Electron-Viewer (kein Acrobat). */
+  async function openProtocolPdfInApp(absPath) {
+    if (!absPath || typeof monteurApp === 'undefined') {
+      return { ok: false, error: 'PDF-Pfad fehlt.' };
+    }
+    try {
+      if (typeof monteurApp.openPdf === 'function') {
+        return await monteurApp.openPdf(String(absPath));
+      }
+      if (typeof monteurApp.openPath === 'function') {
+        return await monteurApp.openPath(String(absPath));
+      }
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+    return { ok: false, error: 'PDF-Viewer nicht verfügbar.' };
+  }
+
+  function syncAppHeaderHeight() {
+    var header = document.querySelector('.app-header');
+    if (!header) return;
+    var h = Math.ceil(header.getBoundingClientRect().height);
+    if (h > 0) {
+      document.documentElement.style.setProperty('--header-height', h + 'px');
+    }
+  }
+
+  function initAppHeaderStickyMetrics() {
+    syncAppHeaderHeight();
+    var header = document.querySelector('.app-header');
+    if (header && typeof ResizeObserver !== 'undefined') {
+      var ro = new ResizeObserver(function () { syncAppHeaderHeight(); });
+      ro.observe(header);
+    }
+    window.addEventListener('resize', syncAppHeaderHeight);
+  }
+
+  async function withProtocolProgress(opts, runFn) {
+    opts = opts || {};
+    var overlay = document.getElementById('protocolProgressOverlay');
+    var labelEl = document.getElementById('protocolProgressLabel');
+    var barEl = document.getElementById('protocolProgressBar');
+    var countEl = document.getElementById('protocolProgressCount');
+    var trackEl = barEl && barEl.parentElement;
+    var total = opts.total != null ? Number(opts.total) : 0;
+    function setProgress(current, tot) {
+      var t = tot != null ? Number(tot) : total;
+      var c = Number(current) || 0;
+      if (labelEl && opts.title) labelEl.textContent = opts.title;
+      if (countEl) {
+        if (t > 0) {
+          countEl.hidden = false;
+          countEl.textContent = c + ' / ' + t;
+        } else {
+          countEl.hidden = true;
+        }
+      }
+      if (barEl) {
+        var pct = t > 0 ? Math.min(100, Math.round((c / t) * 100)) : (c > 0 ? 100 : 12);
+        barEl.style.width = pct + '%';
+        if (trackEl) trackEl.setAttribute('aria-valuenow', String(pct));
+      }
+    }
+    if (overlay) {
+      overlay.hidden = false;
+      overlay.setAttribute('aria-busy', 'true');
+    }
+    if (labelEl) labelEl.textContent = opts.title || 'Bitte warten…';
+    setProgress(0, total);
+    try {
+      return await runFn({
+        setProgress: setProgress,
+        setTitle: function (t) {
+          if (labelEl) labelEl.textContent = t || '';
+          opts.title = t;
+        }
+      });
+    } finally {
+      if (overlay) {
+        overlay.hidden = true;
+        overlay.setAttribute('aria-busy', 'false');
+      }
+      if (barEl) barEl.style.width = '0%';
+      if (countEl) countEl.hidden = true;
+    }
+  }
 
   function normalizeUiTheme(theme) {
     return theme === 'dark' ? 'dark' : 'kukla';
@@ -705,6 +815,10 @@
       }
       const uiTh = localStorage.getItem(SETTINGS_KEYS.uiTheme);
       applyUiTheme(uiTh);
+      var pdfAutoEl = document.getElementById('pdfAutoOpen');
+      if (pdfAutoEl) {
+        pdfAutoEl.checked = localStorage.getItem(SETTINGS_KEYS.pdfAutoOpen) === '1';
+      }
     } catch (e) { /* ignore */ }
   }
 
@@ -730,6 +844,8 @@
       const themeEl = document.getElementById('uiThemeDarkToggle');
       const th = themeEl && themeEl.checked ? 'dark' : 'kukla';
       localStorage.setItem(SETTINGS_KEYS.uiTheme, th);
+      var pdfAutoEl = document.getElementById('pdfAutoOpen');
+      localStorage.setItem(SETTINGS_KEYS.pdfAutoOpen, pdfAutoEl && pdfAutoEl.checked ? '1' : '0');
     } catch (e) { /* ignore */ }
   }
 
@@ -1263,13 +1379,8 @@
   }
 
   function shouldPreferOfflineAccept() {
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
-    if (typeof connectionUiState === 'string' && (connectionUiState === 'offline' || connectionUiState === 'local')) {
-      return true;
-    }
-    if (!(getDispoBaseUrl() || '').trim()) return true;
-    if (!getDispoUsername() || !getDispoPassword()) return true;
-    return false;
+    // Offline-First: Annahme immer lokal; Datei-Pull läuft später über Sync/Background
+    return true;
   }
 
   function handleAcceptJobOfflineFinished(localJobId, data, hint) {
@@ -1884,6 +1995,7 @@
     var q =
       'job_id=' + encodeURIComponent(localJobId) +
       '&technician_id=' + encodeURIComponent(getTechId()) +
+      '&local_first=1' +
       '&dispoBaseUrl=' + encodeURIComponent(getDispoBaseUrl() || '');
     var extra = dispoBasePayloadExtra();
     if (extra.externalUrl) q += '&externalUrl=' + encodeURIComponent(extra.externalUrl);
@@ -1893,6 +2005,8 @@
     if (onlyFabs.length) q += '&only_fabs=' + encodeURIComponent(onlyFabs.join(','));
     var fetchOpts = {};
     if (acceptOfflinePreviewAbort) fetchOpts.signal = acceptOfflinePreviewAbort.signal;
+    var msgElInit = document.getElementById('acceptOfflineLoadingMsg');
+    if (msgElInit) msgElInit.textContent = 'Lade lokale Vorschau …';
     fetch(API_BASE + '/api/dienstreise/accept_offline_preview?' + q, fetchOpts)
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -4551,71 +4665,9 @@
   var hotelChoicesLoadToken = 0;
 
   function loadHotelChoicesByFab(job) {
-    var content = document.getElementById('viewProjektdatenContent');
-    if (!content || !job) return;
-    var loadToken = ++hotelChoicesLoadToken;
-    var expectedJobId = job.id;
-    var baseUrl = getDispoBaseUrl();
-    var techId = getTechId();
-    if (!baseUrl || !techId) return;
-    var jobId = (job.server_id != null && job.server_id !== '') ? job.server_id : job.id;
-    if (jobId == null || jobId === '') return;
-    fetch(API_BASE + '/api/job_hotels_from_dispo', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
-      body: JSON.stringify({
-        baseUrl: baseUrl,
-        jobId: jobId,
-        serverUsername: getDispoUsername(),
-        serverPassword: getDispoPassword()
-      })
-    }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
-      .then(function (res) {
-        if (loadToken !== hotelChoicesLoadToken || !jobIdsEqual(expectedJobId, jobDetailsJobId)) return;
-        if (!res.ok || !res.data || !res.data.ok) return;
-        var byFab = res.data.by_fab || {};
-        function hotelListForFab(byFabMap, fabKey) {
-          var f = String(fabKey || '').trim();
-          if (!f) return null;
-          var list = byFabMap[f];
-          if (Array.isArray(list) && list.length > 0) return list;
-          if (/^\d+$/.test(f)) {
-            var num = parseInt(f, 10);
-            var k;
-            for (k in byFabMap) {
-              if (!Object.prototype.hasOwnProperty.call(byFabMap, k)) continue;
-              var ks = String(k).trim();
-              if (!/^\d+$/.test(ks)) continue;
-              if (parseInt(ks, 10) !== num) continue;
-              list = byFabMap[k];
-              if (Array.isArray(list) && list.length > 0) return list;
-            }
-          }
-          return null;
-        }
-        content.querySelectorAll('.hotel-fab-cell[data-fab]').forEach(function (cell) {
-          var fab = (cell.getAttribute('data-fab') || '').trim();
-          var hotels = hotelListForFab(byFab, fab);
-          if (!hotels) return;
-          var btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'btn btn-ghost fn-hotel-picker-btn';
-          btn.style.marginLeft = '8px';
-          btn.textContent = '🏨';
-          btn.title = 'Hotels zu dieser FN anzeigen';
-          btn.addEventListener('click', function (ev) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            openHotelSelectionByFabModal(job, hotels);
-          });
-          // Sonst feuert dblclick auf der übergeordneten Zelle → Anlagendetails (siehe bindLeistungActions).
-          btn.addEventListener('dblclick', function (ev) {
-            ev.preventDefault();
-            ev.stopPropagation();
-          });
-          cell.appendChild(btn);
-        });
-      }).catch(function () {});
+    // Offline-First: Hotel-Daten kommen aus lokalem Job / Sync — kein Live-Dispo beim View-Open.
+    // Auswahl-Modal bleibt verfügbar, sobald Hotels lokal am Job hängen.
+    void job;
   }
 
   function openHotelSelectionByFabModal(job, hotels) {
@@ -6798,14 +6850,14 @@
         badge.setAttribute('title', 'Klicken zum erneuten Synchronisieren');
       }
     } else if (state === 'online' || state === 'online_syncing') {
-      badge.textContent = 'Online';
+      badge.textContent = state === 'online_syncing' ? 'Sync…' : 'Online';
       badge.className = 'online-badge';
       if (reason && String(reason).trim()) {
         badge.setAttribute('title', String(reason).trim());
       } else if (state === 'online_syncing') {
-        badge.setAttribute('title', 'Synchronisiere…');
+        badge.setAttribute('title', 'Synchronisiere… — lokale Daten bleiben nutzbar');
       } else {
-        badge.setAttribute('title', 'Klicken zum sofortigen Synchronisieren');
+        badge.setAttribute('title', 'Verbunden — Klicken zum sofortigen Synchronisieren');
       }
     } else if (state === 'local') {
       badge.textContent = 'Lokal';
@@ -6904,6 +6956,17 @@
       if (st.last_sync_pull && st.last_sync_pull.status === 'failed') {
         var errMsg = st.last_sync_pull.error || 'Letzter Sync fehlgeschlagen';
         setConnectionBadge('degraded', errMsg + ' — Klicken zum erneuten Synchronisieren');
+        return;
+      }
+      if (
+        st.last_sync_pull &&
+        Array.isArray(st.last_sync_pull.pull_warnings) &&
+        st.last_sync_pull.pull_warnings.length
+      ) {
+        setConnectionBadge(
+          'degraded',
+          st.last_sync_pull.pull_warnings[0] + ' — lokale Aufträge behalten; Klicken zum erneuten Sync',
+        );
         return;
       }
       if (st.high_priority_jobs > 0) {
@@ -7341,6 +7404,19 @@
           try {
             document.dispatchEvent(new CustomEvent('anlagenstamm-data-synced'));
           } catch (_) { /* ignore */ }
+          try {
+            var stAfterPull = await fetch(API_BASE + '/api/sync_status').then(function (r) {
+              return r.json().catch(function () { return {}; });
+            });
+            if (
+              stAfterPull &&
+              stAfterPull.last_sync_pull &&
+              Array.isArray(stAfterPull.last_sync_pull.pull_warnings) &&
+              stAfterPull.last_sync_pull.pull_warnings.length
+            ) {
+              syncProblems.push('Pull: ' + stAfterPull.last_sync_pull.pull_warnings[0]);
+            }
+          } catch (_) { /* ignore */ }
           if (
             selectedJobIdOnDienstreisePage &&
             typeof loadDienstreiseExplorer === 'function'
@@ -7742,11 +7818,57 @@
     }
   }
 
+  var absenceDecisionPollId = null;
+  var lastAbsenceRequestStatusById = {};
+
+  function pollAbsenceRequestDecisions() {
+    var techId = getTechId();
+    if (!techId) return;
+    fetch(API_BASE + '/api/my_absence_requests?' + qs({ technician_id: techId }), {
+      headers: { 'X-Technician-Id': String(techId) },
+    })
+      .then(function (r) {
+        return r.json().catch(function () {
+          return {};
+        });
+      })
+      .then(function (data) {
+        var requests = (data && data.requests) || [];
+        var changed = false;
+        requests.forEach(function (req) {
+          var id = req.id != null ? String(req.id) : '';
+          if (!id) return;
+          var st = String(req.status || '').toLowerCase();
+          var prev = lastAbsenceRequestStatusById[id];
+          if (prev && prev !== st) {
+            if (st === 'approved' || st === 'bestaetigt' || st === 'confirmed') {
+              if (typeof showToast === 'function') showToast('Ihre Abwesenheit wurde bestätigt.');
+              changed = true;
+            } else if (st === 'rejected' || st === 'abgelehnt') {
+              if (typeof showToast === 'function') showToast('Ihre Abwesenheit wurde abgelehnt.');
+              changed = true;
+            }
+          }
+          lastAbsenceRequestStatusById[id] = st;
+        });
+        if (changed && typeof loadJobsAndAbsences === 'function') loadJobsAndAbsences();
+      })
+      .catch(function () {});
+  }
+
+  function startAbsenceDecisionPoll() {
+    if (absenceDecisionPollId) clearInterval(absenceDecisionPollId);
+    pollAbsenceRequestDecisions();
+    // SSE-Ersatz: Entscheidungen auch ohne Push-Events nachziehen
+    absenceDecisionPollId = setInterval(pollAbsenceRequestDecisions, 90000);
+  }
+
   function startPushEvents() {
     var techId = getTechId();
     var baseUrl = getDispoBaseUrl();
     if (eventSourceRef) { eventSourceRef.close(); eventSourceRef = null; }
     if (!techId) return;
+    startAbsenceDecisionPoll();
     var url = API_BASE + '/api/events?technician_id=' + encodeURIComponent(techId) + '&base_url=' + encodeURIComponent(baseUrl || '');
     try {
       eventSourceRef = new EventSource(url);
@@ -7758,6 +7880,7 @@
             if (status === 'approved') showToast('Ihre Abwesenheit wurde bestätigt.');
             else if (status === 'rejected') showToast('Ihre Abwesenheit wurde abgelehnt.');
             loadJobsAndAbsences();
+            pollAbsenceRequestDecisions();
           } else if ((msg.channel === 'server_status' || msg.channel === 'auth_security') && isAlertRecipientUser()) {
             var p = msg.payload || {};
             var title = p.title || (msg.channel === 'auth_security' ? 'Login-Sicherheit' : 'Server-Status');
@@ -7767,7 +7890,13 @@
           }
         } catch (e) {}
       };
-    } catch (e) {}
+      eventSourceRef.onerror = function () {
+        // Bei SSE-Ausfall reicht der Poll-Ersatz
+        pollAbsenceRequestDecisions();
+      };
+    } catch (e) {
+      pollAbsenceRequestDecisions();
+    }
 
     if (isAlertRecipientUser() && !serverAlertPollId) {
       var pollHealth = function () {
@@ -7863,6 +7992,7 @@
   });
 
   loadSettingsFromStorage();
+  initAppHeaderStickyMetrics();
   wireMonteurProfileAutoResolve();
   if (getTechId() > 0) {
     setMonteurProfileResolveHint('Monteur-ID ' + getTechId() + ' (gespeichert).', true);
@@ -11787,11 +11917,7 @@
         return;
       }
       try {
-        // Dispo ist Quelle: sichtbaren Zeitraum zuerst in den Cache ziehen, sonst bleiben Umbuchungen hängen.
-        var refresh = await refreshCalendarCacheFromDispo(start, end, myTechId);
-        if (refresh && refresh.ok === false && !refresh.skipped) {
-          console.warn('[Kalender] Cache-Refresh:', refresh.error || 'fehlgeschlagen');
-        }
+        // Offline-First: Cache zuerst anzeigen; Dispo-Refresh nur bei manuellem Sync (Badge), nicht beim Öffnen.
         var data = await fetchCalendarCachedMonth(start, end, myTechId);
         if (!data || data.ok !== true) {
           throw new Error((data && data.error) || 'Kalender-Cache nicht lesbar.');
@@ -13186,7 +13312,12 @@
         var data = results[0];
         if (!data.ok) {
           if (!soft) {
-            listEl.innerHTML = '<span class="empty">' + escapeHtml(data.error || 'Laden fehlgeschlagen.') + '</span>';
+            listEl.innerHTML =
+              '<span class="empty">' +
+              escapeHtml(data.error || 'Projektordner nicht lesbar (lokaler Server).') +
+              '</span>';
+          } else {
+            console.warn('[Explorer] Soft-Refresh:', data.error || 'ok=false');
           }
           if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
           return null;
@@ -13204,7 +13335,8 @@
         }
         if (!Array.isArray(data.entries)) {
           if (!soft) {
-            listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
+            listEl.innerHTML =
+              '<span class="empty">Projektordner-Antwort ungültig (kein Dateibaum).</span>';
           }
           if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
           return null;
@@ -13229,11 +13361,16 @@
           if (!opts.skipAutoPull) maybeAutoPullDienstreiseProjectFolder(jobId, ui.key);
         });
       })
-      .catch(function () {
+      .catch(function (err) {
         if (loadSeq !== explorerLoadSeqByUi[seqKey]) return;
         if (!jobIdsEqual(requestJobId, getDienstreiseExplorerJobId(ui.key))) return;
         if (!soft) {
-          listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
+          var msg =
+            (err && err.message) ||
+            'Lokaler Server nicht erreichbar — Projektordner konnte nicht geladen werden.';
+          listEl.innerHTML = '<span class="empty">' + escapeHtml(msg) + '</span>';
+        } else {
+          console.warn('[Explorer] Soft-Refresh Fehler (Baum belassen):', err && err.message ? err.message : err);
         }
         if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
       });
@@ -13249,14 +13386,38 @@
       return;
     }
     var range = getSyncDateRange();
+    var listElBefore = document.getElementById('dienstreiseList');
+    var hadJobs = !!(listElBefore && listElBefore.querySelector('.job'));
     fetch(API_BASE + '/api/my_jobs?' + qs({
       technician_id: techId,
       date_from: range.date_from,
       date_to: range.date_to,
       assigned_only: '1'
-    })).then(function (r) { return r.json(); }).then(function (data) {
+    })).then(function (r) {
+      if (!r.ok) {
+        var httpErr = new Error('Lokaler Server HTTP ' + r.status);
+        httpErr.status = r.status;
+        throw httpErr;
+      }
+      return r.json();
+    }).then(function (data) {
       var listEl = document.getElementById('dienstreiseList');
       if (!listEl) return;
+      if (!data || data.ok === false) {
+        var errMsg =
+          (data && data.error) ||
+          'Aufträge nicht lesbar (lokaler Server).';
+        if (!(soft && hadJobs)) {
+          setElementHtmlIfChanged(
+            listEl,
+            '<span class="empty">' + escapeHtml(errMsg) + '</span>',
+          );
+        } else {
+          console.warn('[Meine Aufträge] Soft-Refresh fehlgeschlagen:', errMsg);
+        }
+        if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+        return;
+      }
       var jobs = (data && data.jobs) ? data.jobs : [];
       jobs = jobs.filter(function (j) { return !isJobAbgerechnet(j); });
       dienstreisePageJobs = jobs;
@@ -13371,9 +13532,17 @@
       }
       restoreAcceptJobStreamFromBackgroundJobs();
       restoreFinishJobStreamFromBackgroundJobs();
-    }).catch(function () {
+    }).catch(function (err) {
       var listEl = document.getElementById('dienstreiseList');
-      if (listEl) listEl.innerHTML = '<span class="empty">Laden fehlgeschlagen.</span>';
+      if (!listEl) return;
+      var msg =
+        (err && err.message) ||
+        'Lokaler Server nicht erreichbar — Auftragsliste konnte nicht geladen werden.';
+      if (soft && hadJobs) {
+        console.warn('[Meine Aufträge] Soft-Refresh Fehler (Liste belassen):', msg);
+        return;
+      }
+      listEl.innerHTML = '<span class="empty">' + escapeHtml(msg) + '</span>';
     });
   }
 
@@ -14632,53 +14801,17 @@
         encodeURIComponent(techId) +
         '&enrich_anlagenstamm=1&enrich_local_only=1&base_url=' +
         encodeURIComponent(baseUrl || '');
-      let localJob = null;
       try {
         const localRes = await fetch(localUrl, { headers: headers });
         const localData = await localRes.json().catch(function () {
           return {};
         });
         if (localRes.ok && localData.ok && localData.job) {
-          localJob = localData.job;
-          if (preferLocalProjekteNeuOnly() || connectionUiState === 'offline' || connectionUiState === 'local') {
-            return localJob;
-          }
-          if (parseJobFabrikationsnummernOrdered(localJob).length > 0) {
-            return localJob;
-          }
+          // Offline-First: nie live job_from_dispo im View-Pfad
+          return localData.job;
         }
       } catch (e) {
-        /* Dispo-Fallback */
-      }
-      if (baseUrl && !preferLocalProjekteNeuOnly()) {
-        try {
-          const liveResp = await fetch(API_BASE + '/api/job_from_dispo', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
-            body: JSON.stringify(
-              Object.assign(
-                {
-                  baseUrl: baseUrl,
-                  jobId: jobId,
-                  serverUsername: getDispoUsername(),
-                  serverPassword: getDispoPassword(),
-                },
-                dispoBasePayloadExtra(),
-              ),
-            ),
-          });
-          const liveData = await liveResp.json().catch(function () {
-            return {};
-          });
-          if (liveResp.ok && liveData && liveData.ok && liveData.job) {
-            return liveData.job;
-          }
-        } catch (e) {
-          /* lokaler Stand */
-        }
-      }
-      if (localJob) {
-        return localJob;
+        /* lokal fehlgeschlagen */
       }
       const url =
         API_BASE +
@@ -14686,7 +14819,7 @@
         jobId +
         '&technician_id=' +
         techId +
-        '&enrich_anlagenstamm=1&base_url=' +
+        '&enrich_anlagenstamm=1&enrich_local_only=1&base_url=' +
         encodeURIComponent(baseUrl || '');
       const r = await fetch(url, { headers: headers });
       const data = await r.json();
@@ -14753,7 +14886,7 @@
       if (!job || typeof job !== 'object') return '';
       var contacts = getBaustellenContactsForJob(job);
       if (contacts.length) {
-        return contacts.map(function (c) { return formatJobContactDisplayName(c); }).filter(Boolean).join(', ');
+        return contacts.map(function (c) { return formatJobContactDisplayName(c); }).filter(Boolean).join('\n');
       }
       var direct = [
         job.baustellen_ansprechpartner,
@@ -14804,7 +14937,7 @@
         (k.geliefertUeber ? '<div class="kopfdaten-secondary">' + escapeHtml(k.geliefertUeber) + '</div>' : '') +
         '<div class="mb-v2-kopfdaten-row"><strong>Datum:</strong> ' + escapeHtml(k.datum) + '</div>' +
         '<div class="mb-v2-kopfdaten-row"><strong>Servicetechniker:</strong> ' + escapeHtml(k.servicetechniker) + '</div>' +
-        '<div class="mb-v2-kopfdaten-row"><strong>Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson) + '</div>';
+        '<div class="mb-v2-kopfdaten-row"><strong>Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson).replace(/\n/g, '<br>') + '</div>';
       kopfdatenEl.hidden = false;
       kopfdatenEl.removeAttribute('aria-hidden');
       return k;
@@ -15527,14 +15660,12 @@
       var listEl = document.getElementById('montageberichtTbList');
       var categorySelect = document.getElementById('montageberichtTbCategory');
       if (!listEl) return;
-      var baseUrl = (getDispoBaseUrl() || '').trim();
       try {
-        var listUrl = API_BASE + '/api/textbausteine_list?technician_id=' + getTechId();
-        if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) {
-          listUrl += '&local_only=1';
-        } else if (baseUrl) {
-          listUrl += '&base_url=' + encodeURIComponent(baseUrl);
-        }
+        var listUrl =
+          API_BASE +
+          '/api/textbausteine_list?technician_id=' +
+          getTechId() +
+          '&local_only=1';
         var r = await fetch(listUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
         var data = await r.json();
         if (!data.ok || !data.categories) {
@@ -15715,8 +15846,12 @@
           return;
         }
         var baseUrl = getDispoBaseUrl();
-        if (!baseUrl) {
-          alert('Dispo-Server-URL in den Einstellungen setzen.');
+        if (!baseUrl || (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly())) {
+          alert(
+            'Kunden-Signatur am Montagebericht benötigt kurzzeitig Dispo (Online-Sync). ' +
+              'Das PDF ist lokal gespeichert — bitte bei Verbindung erneut „Signieren“ wählen. ' +
+              'Profil-Unterschrift und Speichern funktionieren offline.',
+          );
           return;
         }
         var techId = getTechId();
@@ -15834,9 +15969,19 @@
       form.addEventListener('submit', async function (e) {
         e.preventDefault();
         var submitBtn = e.submitter;
-        if (submitBtn && submitBtn.id && submitBtn.id !== 'btnMontageberichtSavePdf' && submitBtn.id !== 'btnMontageberichtStickySave') {
+        var allowedIds = {
+          btnMontageberichtSavePdf: true,
+          btnMontageberichtSaveJson: true,
+          btnMontageberichtStickySave: true,
+          btnMontageberichtStickyPdf: true
+        };
+        if (submitBtn && submitBtn.id && !allowedIds[submitBtn.id]) {
           return;
         }
+        var jsonOnly = !!(submitBtn && (
+          submitBtn.id === 'btnMontageberichtStickySave' ||
+          submitBtn.id === 'btnMontageberichtSaveJson'
+        ));
         if (!montageberichtJobData) { alert('Bitte Auftrag wählen.'); return; }
         var fabBemerkungen = [];
         fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
@@ -15923,7 +16068,7 @@
           grundDesEinsatzes: grundVal,
           grundDesEinsatzes_html: grundValHtml,
           freitext: '',
-          jsonOnly: false,
+          jsonOnly: jsonOnly,
           dispoBaseUrl: getDispoBaseUrl(),
           technicianId: getTechId(),
           serverUsername: getDispoUsername(),
@@ -15931,46 +16076,59 @@
           signature_override_png: ''
         };
         var stickyBtn = document.getElementById('btnMontageberichtStickySave');
+        var stickyPdfBtn = document.getElementById('btnMontageberichtStickyPdf');
         var savePdfBtn = document.getElementById('btnMontageberichtSavePdf');
+        var saveJsonBtn = document.getElementById('btnMontageberichtSaveJson');
         try {
-          if (submitBtn) submitBtn.disabled = true;
-          if (stickyBtn) stickyBtn.disabled = true;
-          if (savePdfBtn && savePdfBtn !== submitBtn) savePdfBtn.disabled = true;
-          var r = await fetch(API_BASE + '/api/protokolle/montagebericht', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-            body: JSON.stringify(body)
+          await withProtocolProgress({ title: jsonOnly ? 'Speichern…' : 'PDF wird erstellt…', total: 1 }, async function (prog) {
+            if (submitBtn) submitBtn.disabled = true;
+            if (stickyBtn) stickyBtn.disabled = true;
+            if (stickyPdfBtn) stickyPdfBtn.disabled = true;
+            if (savePdfBtn && savePdfBtn !== submitBtn) savePdfBtn.disabled = true;
+            if (saveJsonBtn && saveJsonBtn !== submitBtn) saveJsonBtn.disabled = true;
+            prog.setProgress(0, 1);
+            var r = await fetch(API_BASE + '/api/protokolle/montagebericht', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+              body: JSON.stringify(body)
+            });
+            var data = await r.json().catch(function () { return {}; });
+            if (!r.ok || !data.ok) {
+              alert('Fehler: ' + (data.error || r.status));
+              return;
+            }
+            prog.setProgress(1, 1);
+            var pdfRel = (data.rel || (data.saved && data.saved[0])) || '';
+            if (pdfRel) {
+              window._kuklaMontageberichtSign = {
+                localJobId: parseInt(jobSelect.value, 10),
+                pdfRel: pdfRel,
+                pdfPath: data.path || ''
+              };
+            }
+            var pdfBtnMb = document.getElementById('btnMontageberichtPdf');
+            if (pdfBtnMb) pdfBtnMb.style.display = pdfRel ? 'inline-block' : 'none';
+            if (data.warning) {
+              console.warn('[Montagebericht] Warnung vom Server:', data.warning);
+            }
+            if (typeof showToast === 'function') {
+              var langNote = Array.isArray(data.languages) && data.languages.length > 1
+                ? ' (DE + GB)'
+                : (Array.isArray(data.languages) && data.languages[0] === 'en' ? ' (GB)' : ' (DE)');
+              showToast((jsonOnly ? 'Montagebericht gespeichert' : 'Montagebericht PDF erstellt') + langNote + (data.rel ? (': ' + data.rel) : ''));
+            }
+            if (!jsonOnly && data.path) {
+              await maybeOpenGeneratedPdf(data.path);
+            }
           });
-          var data = await r.json().catch(function () { return {}; });
-          if (!r.ok || !data.ok) {
-            alert('Fehler: ' + (data.error || r.status));
-            return;
-          }
-          var pdfRel = (data.rel || (data.saved && data.saved[0])) || '';
-          if (pdfRel) {
-            window._kuklaMontageberichtSign = {
-              localJobId: parseInt(jobSelect.value, 10),
-              pdfRel: pdfRel,
-              pdfPath: data.path || ''
-            };
-          }
-          var pdfBtnMb = document.getElementById('btnMontageberichtPdf');
-          if (pdfBtnMb) pdfBtnMb.style.display = pdfRel ? 'inline-block' : 'none';
-          if (data.warning) {
-            console.warn('[Montagebericht] Warnung vom Server:', data.warning);
-          }
-          if (typeof showToast === 'function') {
-            var langNote = Array.isArray(data.languages) && data.languages.length > 1
-              ? ' (DE + GB)'
-              : (Array.isArray(data.languages) && data.languages[0] === 'en' ? ' (GB)' : ' (DE)');
-            showToast('Montagebericht gespeichert' + langNote + (data.rel ? (': ' + data.rel) : ''));
-          }
         } catch (err) {
           alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
         } finally {
           if (submitBtn) submitBtn.disabled = false;
           if (stickyBtn) stickyBtn.disabled = false;
+          if (stickyPdfBtn) stickyPdfBtn.disabled = false;
           if (savePdfBtn) savePdfBtn.disabled = false;
+          if (saveJsonBtn) saveJsonBtn.disabled = false;
         }
       });
     }
@@ -15985,8 +16143,8 @@
           return;
         }
         try {
-          if (st && st.pdfPath && typeof monteurApp !== 'undefined' && monteurApp.openPath) {
-            var direct = await monteurApp.openPath(String(st.pdfPath));
+          if (st && st.pdfPath) {
+            var direct = await openProtocolPdfInApp(String(st.pdfPath));
             if (!direct || direct.ok !== false) {
               if (typeof showToast === 'function') showToast('PDF geöffnet' + (st.pdfRel ? (': ' + st.pdfRel) : ''));
               return;
@@ -16003,17 +16161,13 @@
             alert((data && data.error) ? data.error : 'PDF konnte nicht geöffnet werden.');
             return;
           }
-          if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
-            var openResult = await monteurApp.openPath(String(data.path));
-            if (openResult && openResult.ok === false) {
-              alert('PDF-Datei liegt unter:\n' + (data.rel || data.path) +
-                (openResult.error ? ('\n\nÖffnen fehlgeschlagen: ' + openResult.error) : ''));
-              return;
-            }
-            if (typeof showToast === 'function') showToast('PDF geöffnet' + (data.rel ? (': ' + data.rel) : ''));
+          var openResult = await openProtocolPdfInApp(String(data.path));
+          if (openResult && openResult.ok === false) {
+            alert('PDF-Datei liegt unter:\n' + (data.rel || data.path) +
+              (openResult.error ? ('\n\nÖffnen fehlgeschlagen: ' + openResult.error) : ''));
             return;
           }
-          if (typeof showToast === 'function') showToast('PDF gespeichert' + (data.rel ? (': ' + data.rel) : ''));
+          if (typeof showToast === 'function') showToast('PDF geöffnet' + (data.rel ? (': ' + data.rel) : ''));
         } catch (e) {
           alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt'));
         }
@@ -16859,6 +17013,11 @@
       if (form) {
         form.addEventListener('submit', async function (e) {
           e.preventDefault();
+          var submitBtn = e.submitter;
+          var withPdf = !!(submitBtn && (
+            submitBtn.id === 'btnKontrollwiegungStickyPdf' ||
+            submitBtn.id === 'btnKontrollwiegungSavePdf'
+          ));
           if (!kontrollwiegungJobData) { alert('Bitte Auftrag wählen.'); return; }
           var fab = getActiveFab();
           if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
@@ -16881,44 +17040,51 @@
             bereich_max: draft.bereich_max,
             letzte_eichung: draft.letzte_eichung,
             wiegungen: wiegungen,
+            create_pdf: withPdf,
             base_url: getDispoBaseUrl(),
             serverUsername: getDispoUsername(),
             serverPassword: getDispoPassword()
           };
           try {
-            await persistKopfToAnlagenstamm(fab);
-            var r = await fetch(API_BASE + '/api/kontrollwiegungsprotokoll_save', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-              body: JSON.stringify(body)
-            });
-            var data = await r.json().catch(function () { return {}; });
-            if (!r.ok || !data.ok) {
-              alert('Fehler: ' + (data.error || r.status));
-              return;
-            }
-            if (data.warning) alert(data.warning);
-            else if (typeof showToast === 'function') {
-              var saveMsg = 'Kontrollwiegungsprotokoll gespeichert.';
-              if (data.saved_pdf) saveMsg += ' PDF: ' + data.saved_pdf;
-              showToast(saveMsg);
-            }
-            lastProtokollId = data.local_protokoll_id || data.protokoll_id || null;
-            if (kwDraftByFab[fab]) kwDraftByFab[fab].protokoll_id = lastProtokollId;
-            // Nach Speichern erneut aus Dokumente_Monteur laden (inkl. Teilung/Bereich/Eichnung + Speicherdatum)
-            try {
-              await loadKontrollwiegungDraftsForJob(parseInt(jobSelect.value, 10));
-              renderFabButtons(kontrollwiegungJobData);
-              if (kwDraftByFab[fab]) {
-                applyDraftToForm(kwDraftByFab[fab], stammFieldsForFab(kontrollwiegungJobData, fab));
-                updateSpeicherMeta(fab, kwDraftByFab[fab]);
-              } else {
-                updateSpeicherMeta(fab, null);
+            await withProtocolProgress({ title: withPdf ? 'PDF wird erstellt…' : 'Speichern…', total: 1 }, async function (prog) {
+              await persistKopfToAnlagenstamm(fab);
+              prog.setProgress(0, 1);
+              var r = await fetch(API_BASE + '/api/kontrollwiegungsprotokoll_save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+                body: JSON.stringify(body)
+              });
+              var data = await r.json().catch(function () { return {}; });
+              if (!r.ok || !data.ok) {
+                alert('Fehler: ' + (data.error || r.status));
+                return;
               }
-            } catch (_) { /* optional */ }
-            if (pdfBtn) {
-              pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
-            }
+              prog.setProgress(1, 1);
+              if (data.warning) alert(data.warning);
+              else if (typeof showToast === 'function') {
+                var saveMsg = withPdf ? 'Kontrollwiegungsprotokoll PDF erstellt.' : 'Kontrollwiegungsprotokoll gespeichert.';
+                if (data.saved_pdf) saveMsg += ' PDF: ' + data.saved_pdf;
+                showToast(saveMsg);
+              }
+              lastProtokollId = data.local_protokoll_id || data.protokoll_id || null;
+              if (kwDraftByFab[fab]) kwDraftByFab[fab].protokoll_id = lastProtokollId;
+              try {
+                await loadKontrollwiegungDraftsForJob(parseInt(jobSelect.value, 10));
+                renderFabButtons(kontrollwiegungJobData);
+                if (kwDraftByFab[fab]) {
+                  applyDraftToForm(kwDraftByFab[fab], stammFieldsForFab(kontrollwiegungJobData, fab));
+                  updateSpeicherMeta(fab, kwDraftByFab[fab]);
+                } else {
+                  updateSpeicherMeta(fab, null);
+                }
+              } catch (_) { /* optional */ }
+              if (pdfBtn) {
+                pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+              }
+              if (withPdf && data.pdf_path) {
+                await maybeOpenGeneratedPdf(data.pdf_path);
+              }
+            });
           } catch (err) {
             alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
           }
@@ -16957,8 +17123,8 @@
               alert((data && data.error) ? data.error : 'PDF konnte nicht geöffnet werden.');
               return;
             }
-            if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
-              var openResult = await monteurApp.openPath(String(data.path));
+            if (typeof openProtocolPdfInApp === 'function') {
+              var openResult = await openProtocolPdfInApp(String(data.path));
               if (openResult && openResult.ok === false) {
                 alert('PDF-Datei liegt unter:\n' + (data.rel || data.path) +
                   (openResult.error ? ('\n\nÖffnen fehlgeschlagen: ' + openResult.error) : ''));
@@ -17971,6 +18137,7 @@
     async function saveSchleppkettenFab(fab, opts) {
       opts = opts || {};
       fab = String(fab || '').trim();
+      var withPdf = !!opts.withPdf;
       if (!skJobData || !jobSelect || !jobSelect.value) {
         return { ok: false, error: 'Bitte Auftrag wählen.' };
       }
@@ -17986,6 +18153,7 @@
         job_id: parseInt(jobSelect.value, 10),
         fabrikationsnummer: fab,
         kunde: skJobData && skJobData.customer_name ? String(skJobData.customer_name) : '',
+        create_pdf: withPdf,
         base_url: getDispoBaseUrl(),
         serverUsername: getDispoUsername(),
         serverPassword: getDispoPassword()
@@ -18008,11 +18176,14 @@
           skDraftByFab[fab].gespeichert_am = new Date().toISOString();
         }
         if (!opts.silent && typeof showToast === 'function') {
-          var msg = 'Schleppketten-Test gespeichert.';
+          var msg = withPdf ? 'Schleppketten-Test PDF erstellt.' : 'Schleppketten-Test gespeichert.';
           if (data.saved_pdf) msg += ' PDF: ' + data.saved_pdf;
           showToast(msg);
         }
         if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+        if (withPdf && data.pdf_path && !opts.skipAutoOpen) {
+          await maybeOpenGeneratedPdf(data.pdf_path);
+        }
         return { ok: true, data: data };
       } catch (err) {
         return { ok: false, error: err && err.message ? err.message : 'Unbekannt' };
@@ -18043,25 +18214,30 @@
       var savedNames = [];
       var errors = [];
       try {
-        for (var i = 0; i < fns.length; i++) {
-          var fn = fns[i];
-          if (typeof showToast === 'function') {
-            showToast('PDF für FN ' + fn + ' (' + (i + 1) + '/' + fns.length + ') …');
+        await withProtocolProgress({ title: 'Alle PDF…', total: fns.length }, async function (prog) {
+          for (var i = 0; i < fns.length; i++) {
+            var fn = fns[i];
+            prog.setTitle('Alle PDF… FN ' + fn);
+            prog.setProgress(i, fns.length);
+            loadFabIntoForm(fn);
+            var datum = datumEl ? String(datumEl.value || '').trim() : '';
+            if (!datum) {
+              errors.push(fn + ': kein Datum');
+              continue;
+            }
+            var res = await saveSchleppkettenFab(fn, { silent: true, withPdf: true, skipAutoOpen: true });
+            if (!res.ok) {
+              errors.push(fn + ': ' + (res.error || 'Fehler'));
+              continue;
+            }
+            okCount += 1;
+            if (res.data && res.data.saved_pdf) savedNames.push(res.data.saved_pdf);
+            if (res.data && res.data.pdf_path) {
+              await maybeOpenGeneratedPdf(res.data.pdf_path);
+            }
           }
-          loadFabIntoForm(fn);
-          var datum = datumEl ? String(datumEl.value || '').trim() : '';
-          if (!datum) {
-            errors.push(fn + ': kein Datum');
-            continue;
-          }
-          var res = await saveSchleppkettenFab(fn, { silent: true });
-          if (!res.ok) {
-            errors.push(fn + ': ' + (res.error || 'Fehler'));
-            continue;
-          }
-          okCount += 1;
-          if (res.data && res.data.saved_pdf) savedNames.push(res.data.saved_pdf);
-        }
+          prog.setProgress(fns.length, fns.length);
+        });
         await loadDraftsForJob(parseInt(jobSelect.value, 10));
         if (cur) loadFabIntoForm(cur);
         else if (fns[0]) loadFabIntoForm(fns[0]);
@@ -18083,18 +18259,27 @@
 
     form.addEventListener('submit', async function (e) {
       e.preventDefault();
+      var submitBtn = e.submitter;
+      var withPdf = !!(submitBtn && (
+        submitBtn.id === 'btnSchleppkettenStickyPdf' ||
+        submitBtn.id === 'btnSchleppkettenSavePdf'
+      ));
       var fab = getActiveFab();
-      var res = await saveSchleppkettenFab(fab, { silent: false });
-      if (!res.ok) {
-        alert(res.error || 'Speichern fehlgeschlagen.');
-        return;
-      }
-      await loadDraftsForJob(parseInt(jobSelect.value, 10));
-      renderFabButtons(skJobData);
-      if (skDraftByFab[fab]) {
-        applyDraftToForm(skDraftByFab[fab], stammFieldsForFab(skJobData, fab));
-        updateSpeicherMeta(fab, skDraftByFab[fab]);
-      }
+      await withProtocolProgress({ title: withPdf ? 'PDF wird erstellt…' : 'Speichern…', total: 1 }, async function (prog) {
+        prog.setProgress(0, 1);
+        var res = await saveSchleppkettenFab(fab, { silent: false, withPdf: withPdf });
+        prog.setProgress(1, 1);
+        if (!res.ok) {
+          alert(res.error || 'Speichern fehlgeschlagen.');
+          return;
+        }
+        await loadDraftsForJob(parseInt(jobSelect.value, 10));
+        renderFabButtons(skJobData);
+        if (skDraftByFab[fab]) {
+          applyDraftToForm(skDraftByFab[fab], stammFieldsForFab(skJobData, fab));
+          updateSpeicherMeta(fab, skDraftByFab[fab]);
+        }
+      });
     });
     if (pdfBtn) {
       pdfBtn.addEventListener('click', async function () {
@@ -18116,16 +18301,12 @@
             alert((data && data.error) ? data.error : 'PDF konnte nicht geöffnet werden.');
             return;
           }
-          if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
-            var openResult = await monteurApp.openPath(String(data.path));
-            if (openResult && openResult.ok === false) {
-              alert('PDF-Datei liegt unter:\n' + (data.rel || data.path));
-              return;
-            }
-            if (typeof showToast === 'function') showToast('PDF geöffnet' + (data.rel ? (': ' + data.rel) : ''));
+          var openResult = await openProtocolPdfInApp(String(data.path));
+          if (openResult && openResult.ok === false) {
+            alert('PDF-Datei liegt unter:\n' + (data.rel || data.path));
             return;
           }
-          if (typeof showToast === 'function') showToast('PDF gespeichert' + (data.rel ? (': ' + data.rel) : ''));
+          if (typeof showToast === 'function') showToast('PDF geöffnet' + (data.rel ? (': ' + data.rel) : ''));
         } catch (e) { alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt')); }
       });
     }
@@ -18463,11 +18644,13 @@
     }
     function updateAllPdfButtonVisibility(job) {
       var allPdfBtn = el('btnPruefzertifikatSaveAllPdf');
-      if (!allPdfBtn) return;
+      var allPdfBtnTop = el('btnPruefzertifikatSaveAllPdfTop');
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
         ? parseJobFabrikationsnummernOrdered(job || {})
         : [];
-      allPdfBtn.style.display = fns.length >= 2 ? 'inline-block' : 'none';
+      var show = fns.length >= 2 ? 'inline-block' : 'none';
+      if (allPdfBtn) allPdfBtn.style.display = show;
+      if (allPdfBtnTop) allPdfBtnTop.style.display = show;
     }
     function renderFabButtons(job) {
       if (!fabButtonsEl) return;
@@ -18733,6 +18916,13 @@
         setStatusMsg(msg, true);
         if (typeof showToast === 'function') showToast(msg);
       }
+      if (withPdf && !opts.skipAutoOpen && Array.isArray(data.saved_pdfs)) {
+        for (var pi = 0; pi < data.saved_pdfs.length; pi++) {
+          if (data.saved_pdfs[pi] && data.saved_pdfs[pi].path) {
+            await maybeOpenGeneratedPdf(data.saved_pdfs[pi].path);
+          }
+        }
+      }
       return { ok: true, data: data, fab: fab };
     }
 
@@ -18791,72 +18981,88 @@
     if (typeof window.loadProfileSignaturePreview === 'function') window.loadProfileSignaturePreview();
     var btnPdf = el('btnPruefzertifikatSavePdf');
     var btnData = el('btnPruefzertifikatSaveData');
+    var btnStickyPdf = el('btnPruefzertifikatStickyPdf');
+    var btnStickySave = el('btnPruefzertifikatStickySave');
     if (btnPdf) btnPdf.addEventListener('click', function () { saveMode = 'pdf'; });
     if (btnData) btnData.addEventListener('click', function () { saveMode = 'data'; });
-    var btnAllPdf = el('btnPruefzertifikatSaveAllPdf');
-    if (btnAllPdf) {
-      btnAllPdf.addEventListener('click', async function () {
-        if (!pzJobData || !jobSelect.value) {
-          alert('Bitte Auftrag wählen.');
-          return;
-        }
-        var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
-          ? parseJobFabrikationsnummernOrdered(pzJobData)
-          : [];
-        if (fns.length < 2) {
-          alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
-          return;
-        }
-        var pdfLangs = collectPdfLanguages();
-        if (!pdfLangs.length) {
-          alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).');
-          return;
-        }
-        var cur = getActiveFab();
-        if (cur) {
-          pzDraftByFab[cur] = Object.assign({}, collectPayload(), { fabrikationsnummer: cur });
-        }
-        btnAllPdf.disabled = true;
-        var okCount = 0;
-        var savedNames = [];
-        var errors = [];
-        try {
+    if (btnStickyPdf) btnStickyPdf.addEventListener('click', function () { saveMode = 'pdf'; });
+    if (btnStickySave) btnStickySave.addEventListener('click', function () { saveMode = 'data'; });
+    async function runPruefzertifikatAllPdf() {
+      if (!pzJobData || !jobSelect.value) {
+        alert('Bitte Auftrag wählen.');
+        return;
+      }
+      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+        ? parseJobFabrikationsnummernOrdered(pzJobData)
+        : [];
+      if (fns.length < 2) {
+        alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
+        return;
+      }
+      var pdfLangs = collectPdfLanguages();
+      if (!pdfLangs.length) {
+        alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).');
+        return;
+      }
+      var cur = getActiveFab();
+      if (cur) {
+        pzDraftByFab[cur] = Object.assign({}, collectPayload(), { fabrikationsnummer: cur });
+      }
+      var btnAllPdf = el('btnPruefzertifikatSaveAllPdf');
+      var btnAllPdfTop = el('btnPruefzertifikatSaveAllPdfTop');
+      if (btnAllPdf) btnAllPdf.disabled = true;
+      if (btnAllPdfTop) btnAllPdfTop.disabled = true;
+      var okCount = 0;
+      var savedNames = [];
+      var errors = [];
+      try {
+        await withProtocolProgress({ title: 'Alle PDF…', total: fns.length }, async function (prog) {
           for (var i = 0; i < fns.length; i++) {
             var fn = fns[i];
+            prog.setTitle('Alle PDF… FN ' + fn);
+            prog.setProgress(i, fns.length);
             setStatusMsg('PDF für FN ' + fn + ' (' + (i + 1) + '/' + fns.length + ') …', true);
             await loadFab(fn);
             if (!(el('pruefzertifikatDatum') && el('pruefzertifikatDatum').value)) {
               errors.push(fn + ': kein Prüfdatum');
               continue;
             }
-            var res = await savePruefzertifikatFab(fn, { withPdf: true, silent: true });
+            var res = await savePruefzertifikatFab(fn, { withPdf: true, silent: true, skipAutoOpen: true });
             if (!res.ok) {
               errors.push(fn + ': ' + (res.error || 'Fehler'));
               continue;
             }
             okCount += 1;
             if (res.data && Array.isArray(res.data.saved_pdfs)) {
-              res.data.saved_pdfs.forEach(function (p) {
+              for (var j = 0; j < res.data.saved_pdfs.length; j++) {
+                var p = res.data.saved_pdfs[j];
                 if (p && (p.name || p.rel)) savedNames.push(p.name || p.rel);
-              });
+                if (p && p.path) await maybeOpenGeneratedPdf(p.path);
+              }
             }
           }
-          if (cur) await loadFab(cur);
-          else if (fns[0]) await loadFab(fns[0]);
-          renderFabButtons(pzJobData);
-          var msg = okCount + ' von ' + fns.length + ' FN mit PDF gespeichert.';
-          if (savedNames.length) msg += ' ' + savedNames.join(', ');
-          if (errors.length) msg += ' Fehler: ' + errors.join('; ');
-          setStatusMsg(msg, true);
-          if (typeof showToast === 'function') showToast(msg);
-          if (errors.length && okCount === 0) alert(msg);
-        } catch (err) {
-          alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
-        } finally {
-          btnAllPdf.disabled = false;
-        }
-      });
+          prog.setProgress(fns.length, fns.length);
+        });
+        if (cur) await loadFab(cur);
+        else if (fns[0]) await loadFab(fns[0]);
+        renderFabButtons(pzJobData);
+        var msg = okCount + ' von ' + fns.length + ' FN mit PDF gespeichert.';
+        if (savedNames.length) msg += ' ' + savedNames.join(', ');
+        if (errors.length) msg += ' Fehler: ' + errors.join('; ');
+        setStatusMsg(msg, true);
+        if (typeof showToast === 'function') showToast(msg);
+        if (errors.length && okCount === 0) alert(msg);
+      } catch (err) {
+        alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+      } finally {
+        if (btnAllPdf) btnAllPdf.disabled = false;
+        if (btnAllPdfTop) btnAllPdfTop.disabled = false;
+      }
     }
+    var btnAllPdf = el('btnPruefzertifikatSaveAllPdf');
+    var btnAllPdfTop = el('btnPruefzertifikatSaveAllPdfTop');
+    if (btnAllPdf) btnAllPdf.addEventListener('click', function () { runPruefzertifikatAllPdf(); });
+    if (btnAllPdfTop) btnAllPdfTop.addEventListener('click', function () { runPruefzertifikatAllPdf(); });
     var abbrechen = el('pruefzertifikatAbbrechen');
     if (abbrechen) {
       abbrechen.addEventListener('click', function () {
@@ -18868,13 +19074,18 @@
       if (!pzJobData) { alert('Bitte Auftrag wählen.'); return; }
       var fab = getActiveFab();
       if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
+      var withPdf = saveMode === 'pdf';
       try {
-        var res = await savePruefzertifikatFab(fab, { withPdf: saveMode === 'pdf', silent: false });
-        if (!res.ok) {
-          alert(res.error || 'Speichern fehlgeschlagen.');
-          return;
-        }
-        renderFabButtons(pzJobData);
+        await withProtocolProgress({ title: withPdf ? 'PDF wird erstellt…' : 'Speichern…', total: 1 }, async function (prog) {
+          prog.setProgress(0, 1);
+          var res = await savePruefzertifikatFab(fab, { withPdf: withPdf, silent: false });
+          prog.setProgress(1, 1);
+          if (!res.ok) {
+            alert(res.error || 'Speichern fehlgeschlagen.');
+            return;
+          }
+          renderFabButtons(pzJobData);
+        });
       } catch (err) {
         alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
       } finally {
@@ -19013,7 +19224,63 @@
       if (pad) pad.clear();
     }
 
+    function normalizeSpAbschlussStatus(raw) {
+      var s = String(raw == null ? '' : raw).trim().toLowerCase();
+      if (s === 'justiert' || s === 'adjusted') return 'justiert';
+      if (s === 'mangel' || s === 'mangel festgestellt' || s === 'defect' || s === 'defect found') return 'mangel';
+      if (s === 'geprueft' || s === 'geprüft' || s === 'gepruft' || s === 'checked' || s === 'inspected') return 'geprueft';
+      return s || 'geprueft';
+    }
+
+    /** Plain-Object-Abschluss; Arrays (PHP {}→[]) gelten als leer. */
+    function normalizeSpAbschlussObject(raw) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return {
+          status: 'geprueft',
+          bemerkungen: '',
+          monteur_id: '',
+          monteur_name: '',
+          signature_override_png: '',
+          signature_monteur: '',
+          signature_kunde: ''
+        };
+      }
+      return {
+        status: normalizeSpAbschlussStatus(raw.status || 'geprueft'),
+        bemerkungen: raw.bemerkungen != null ? String(raw.bemerkungen) : '',
+        monteur_id: raw.monteur_id != null ? String(raw.monteur_id) : '',
+        monteur_name: raw.monteur_name != null ? String(raw.monteur_name) : '',
+        signature_override_png: raw.signature_override_png || raw.signature_monteur || '',
+        signature_monteur: raw.signature_monteur || raw.signature_override_png || '',
+        signature_kunde: raw.signature_kunde != null ? String(raw.signature_kunde) : ''
+      };
+    }
+
+    function flushServiceprotokollReactToHost() {
+      try {
+        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
+          window.serviceprotokollReactBridge.flushFromReact();
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    function enrichAbschlussFromReactPayload(abschluss) {
+      abschluss = normalizeSpAbschlussObject(abschluss);
+      try {
+        var last =
+          window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.getLastPayload === 'function'
+            ? window.serviceprotokollReactBridge.getLastPayload()
+            : null;
+        var form = last && last.form ? last.form : null;
+        if (!form) return abschluss;
+        if (form.status) abschluss.status = normalizeSpAbschlussStatus(form.status);
+        if (form.closingRemarks != null) abschluss.bemerkungen = String(form.closingRemarks);
+      } catch (e) { /* ignore */ }
+      return abschluss;
+    }
+
     function collectAbschlussPayload() {
+      flushServiceprotokollReactToHost();
       var statusEl = document.querySelector('input[name="serviceprotokollStatus"]:checked');
       var monteurEl = document.getElementById('serviceprotokollMonteur');
       var overrideOn = document.getElementById('spSigOverrideToggle') && document.getElementById('spSigOverrideToggle').checked;
@@ -19021,8 +19288,8 @@
         overrideOn && (spSignaturePads.spSignatureOverrideCanvas || {}).toDataUrl
           ? spSignaturePads.spSignatureOverrideCanvas.toDataUrl()
           : '';
-      return {
-        status: statusEl ? String(statusEl.value || '') : '',
+      var payload = normalizeSpAbschlussObject({
+        status: statusEl ? statusEl.value : 'geprueft',
         bemerkungen: (document.getElementById('serviceprotokollAbschlussBemerkungen') || {}).value || '',
         monteur_id: monteurEl ? String(monteurEl.value || '') : '',
         monteur_name: monteurEl && monteurEl.selectedOptions && monteurEl.selectedOptions[0]
@@ -19030,15 +19297,21 @@
         signature_override_png: overridePng,
         signature_monteur: overridePng,
         signature_kunde: ''
-      };
+      });
+      return enrichAbschlussFromReactPayload(payload);
     }
 
     function applyAbschlussPayload(abschluss) {
-      abschluss = abschluss || {};
-      var status = String(abschluss.status || 'geprueft');
+      abschluss = normalizeSpAbschlussObject(abschluss);
+      var status = abschluss.status || 'geprueft';
       document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
         el.checked = el.value === status;
       });
+      if (!document.querySelector('input[name="serviceprotokollStatus"]:checked')) {
+        document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
+          el.checked = el.value === 'geprueft';
+        });
+      }
       var bemEl = document.getElementById('serviceprotokollAbschlussBemerkungen');
       if (bemEl) bemEl.value = abschluss.bemerkungen != null ? String(abschluss.bemerkungen) : '';
       var monteurEl = document.getElementById('serviceprotokollMonteur');
@@ -19127,7 +19400,24 @@
     var stickySaveBtn = document.getElementById('btnServiceprotokollStickySave');
     if (stickySaveBtn) {
       stickySaveBtn.addEventListener('click', function () {
+        flushServiceprotokollReactToHost();
         var btn = document.getElementById('btnServiceprotokollSaveJson');
+        if (btn) btn.click();
+      });
+    }
+    var stickyPdfBtn = document.getElementById('btnServiceprotokollStickyPdf');
+    if (stickyPdfBtn) {
+      stickyPdfBtn.addEventListener('click', function () {
+        flushServiceprotokollReactToHost();
+        var btn = document.getElementById('btnServiceprotokollSavePdf');
+        if (btn) btn.click();
+      });
+    }
+    var stickyAllPdfBtn = document.getElementById('btnServiceprotokollSaveAllPdfTop');
+    if (stickyAllPdfBtn) {
+      stickyAllPdfBtn.addEventListener('click', function () {
+        flushServiceprotokollReactToHost();
+        var btn = document.getElementById('btnServiceprotokollSaveAllPdf');
         if (btn) btn.click();
       });
     }
@@ -19443,7 +19733,11 @@
         kopf_vmax: body.kopf_vmax != null ? body.kopf_vmax : (prev.kopf_vmax || ''),
         kopf_type: body.kopf_type != null ? body.kopf_type : (prev.kopf_type || ''),
         kopf_dwc: body.kopf_dwc != null ? body.kopf_dwc : (prev.kopf_dwc || ''),
-        abschluss: body.abschluss && typeof body.abschluss === 'object' ? body.abschluss : (prev.abschluss || {}),
+        abschluss: body.abschluss && typeof body.abschluss === 'object' && !Array.isArray(body.abschluss)
+          ? normalizeSpAbschlussObject(body.abschluss)
+          : (prev.abschluss && typeof prev.abschluss === 'object' && !Array.isArray(prev.abschluss)
+            ? normalizeSpAbschlussObject(prev.abschluss)
+            : { status: 'geprueft' }),
         updatedAt: new Date().toISOString()
       });
     }
@@ -19811,7 +20105,7 @@
         kopf_vmax: cached.kopf_vmax || '',
         kopf_type: cached.kopf_type || '',
         kopf_dwc: cached.kopf_dwc || '',
-        abschluss: cached.abschluss || { status: 'geprueft' }
+        abschluss: normalizeSpAbschlussObject(cached.abschluss)
       };
     }
 
@@ -19955,7 +20249,9 @@
           kopf_vmax: (draft && draft.kopf_vmax) || '',
           kopf_type: (draft && draft.kopf_type) || '',
           kopf_dwc: (draft && draft.kopf_dwc) || '',
-          abschluss: (draft && draft.abschluss) || (fn === cur ? collectAbschlussPayload() : { status: 'geprueft' })
+          abschluss: (draft && draft.abschluss != null && !Array.isArray(draft.abschluss) && typeof draft.abschluss === 'object')
+            ? normalizeSpAbschlussObject(draft.abschluss)
+            : (fn === cur ? collectAbschlussPayload() : { status: 'geprueft' })
         });
       });
       if (missing.length) {
@@ -19966,9 +20262,11 @@
 
     function updateAllPdfButtonVisibility(job) {
       var allPdfBtn = document.getElementById('btnServiceprotokollSaveAllPdf');
-      if (!allPdfBtn) return;
+      var allPdfBtnTop = document.getElementById('btnServiceprotokollSaveAllPdfTop');
       var fns = job ? parseJobFabrikationsnummernOrdered(job) : [];
-      allPdfBtn.style.display = fns.length >= 2 ? 'inline-block' : 'none';
+      var show = fns.length >= 2 ? 'inline-block' : 'none';
+      if (allPdfBtn) allPdfBtn.style.display = show;
+      if (allPdfBtnTop) allPdfBtnTop.style.display = show;
     }
 
     function renderFabButtons(job) {
@@ -20125,7 +20423,7 @@
       }
       applyPgTestToForm(normalizePgTestCells(mess));
       updateVersSpannungHint();
-      if (draft.abschluss) applyAbschlussPayload(draft.abschluss);
+      if (draft.abschluss != null) applyAbschlussPayload(normalizeSpAbschlussObject(draft.abschluss));
       if (Array.isArray(draft.arbeitsschritte) && draft.arbeitsschritte.length > 0) {
         arbeitsschritte = draft.arbeitsschritte.map(function (row) {
           return stepFromRaw(row);
@@ -20144,6 +20442,12 @@
         });
         var data = await r.json().catch(function () { return {}; });
         if (r.ok && data.ok && data.store && data.store.byFab) {
+          Object.keys(data.store.byFab).forEach(function (fn) {
+            var d = data.store.byFab[fn];
+            if (d && typeof d === 'object') {
+              d.abschluss = normalizeSpAbschlussObject(d.abschluss);
+            }
+          });
           serviceprotokollDraftStore = data.store;
         }
       } catch (e) { /* optional */ }
@@ -20260,6 +20564,12 @@
         if (String(draft[kopfKeys[i]] || '').trim()) return true;
       }
       if (String(draft.bemerkungen || '').trim()) return true;
+      var abs = draft.abschluss && typeof draft.abschluss === 'object' ? draft.abschluss : null;
+      if (abs) {
+        var st = normalizeSpAbschlussStatus(abs.status || '');
+        if (st && st !== 'geprueft') return true;
+        if (String(abs.bemerkungen || '').trim()) return true;
+      }
       var steps = Array.isArray(draft.arbeitsschritte) ? draft.arbeitsschritte : [];
       for (var j = 0; j < steps.length; j++) {
         var s = steps[j] || {};
@@ -20960,6 +21270,9 @@
         if (!jsonOnly && stepsPayload.length === 0) { alert('Mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.'); return; }
         var pdfLangs = jsonOnly ? [] : collectPdfLanguages();
         if (!jsonOnly && !pdfLangs.length) { alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).'); return; }
+        // Abschluss-Status (Justiert etc.) VOR async Anlagenstamm-Dialog aus React/DOM sichern
+        flushServiceprotokollReactToHost();
+        var abschlussPayload = collectAbschlussPayload();
         var applyStamm = false;
         try {
           applyStamm = await maybeConfirmAndApplyServiceprotokollTechnikToAnlagenstamm(fab);
@@ -20969,6 +21282,9 @@
             showToast('Anlagenstamm-Abgleich fehlgeschlagen – Protokoll wird trotzdem gespeichert.');
           }
         }
+        // Nochmal anwenden, falls der Dialog den DOM-Status verwischt hat
+        applyAbschlussPayload(abschlussPayload);
+        abschlussPayload = enrichAbschlussFromReactPayload(abschlussPayload);
         var body = {
           technician_id: getTechId(),
           job_id: parseInt(jobSelect.value, 10),
@@ -20983,7 +21299,8 @@
           kopf_vmax: (document.getElementById('serviceprotokollVmax') || {}).value || '',
           kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
           kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
-          abschluss: collectAbschlussPayload(),
+          abschluss: abschlussPayload,
+          signature_override_png: (abschlussPayload && abschlussPayload.signature_override_png) || '',
           apply_to_anlagenstamm: applyStamm || undefined,
           jsonOnly: jsonOnly,
           local_only: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
@@ -20995,39 +21312,66 @@
         };
         if (!jsonOnly) body.pdf_languages = pdfLangs;
         var submitButtons = form.querySelectorAll('button[type="submit"]');
+        var stickyBtns = [
+          document.getElementById('btnServiceprotokollStickySave'),
+          document.getElementById('btnServiceprotokollStickyPdf'),
+          document.getElementById('btnServiceprotokollSaveAllPdfTop'),
+          document.getElementById('btnServiceprotokollSaveAllPdf')
+        ];
         submitButtons.forEach(function (b) { b.disabled = true; });
+        stickyBtns.forEach(function (b) { if (b) b.disabled = true; });
         try {
-          stashDraftInMemory(fab);
-          var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-            body: JSON.stringify(body)
-          });
-          var data = await r.json().catch(function () { return {}; });
-          if (!r.ok || !data.ok) {
-            alert('Fehler: ' + (data.error || r.status));
-            return;
-          }
-          if (data.warning) console.warn('[Serviceprotokoll]', data.warning);
-          mergeSavedDraftIntoMemory(fab, body);
-          loadServiceprotokollDraftsForJob(body.job_id).catch(function () { /* Hintergrund-Sync */ });
-          if (getActiveFab() === fab) {
-            serviceprotokollFormReadyFab = fab;
-          }
-          if (data.jsonOnly) {
-            if (typeof showToast === 'function') showToast('Zwischenstand gespeichert (serviceprotokoll.json).');
-          } else {
-            lastProtokollId = data.protokoll_id != null ? data.protokoll_id : null;
-            if (typeof showToast === 'function') {
-              var msg = 'PDF erstellt – Sie können das Formular weiter bearbeiten und erneut „PDF erstellen“ wählen.';
-              if (data.saved && data.saved.length) msg += ' (' + data.saved.join(', ') + ')';
-              showToast(msg);
+          await withProtocolProgress({ title: jsonOnly ? 'Speichern…' : 'PDF wird erstellt…', total: 1 }, async function (prog) {
+            stashDraftInMemory(fab);
+            prog.setProgress(0, 1);
+            var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+              body: JSON.stringify(body)
+            });
+            var data = await r.json().catch(function () { return {}; });
+            if (!r.ok || !data.ok) {
+              alert('Fehler: ' + (data.error || r.status));
+              return;
             }
-          }
+            prog.setProgress(1, 1);
+            if (data.warning) console.warn('[Serviceprotokoll]', data.warning);
+            mergeSavedDraftIntoMemory(fab, body);
+            applyAbschlussPayload(body.abschluss);
+            notifyReactBridge(true);
+            loadServiceprotokollDraftsForJob(body.job_id).then(function () {
+              var cached = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fab];
+              if (cached && cached.abschluss) {
+                applyAbschlussPayload(cached.abschluss);
+                notifyReactBridge(true);
+              }
+            }).catch(function () { /* Hintergrund-Sync */ });
+            if (getActiveFab() === fab) {
+              serviceprotokollFormReadyFab = fab;
+            }
+            if (data.jsonOnly) {
+              if (typeof showToast === 'function') showToast('Zwischenstand gespeichert (serviceprotokoll.json).');
+            } else {
+              lastProtokollId = data.protokoll_id != null ? data.protokoll_id : null;
+              if (typeof showToast === 'function') {
+                var msg = 'PDF erstellt – Sie können das Formular weiter bearbeiten und erneut „einzel PDF“ wählen.';
+                if (data.saved && data.saved.length) msg += ' (' + data.saved.join(', ') + ')';
+                showToast(msg);
+              }
+              if (Array.isArray(data.pdf_paths)) {
+                for (var pi = 0; pi < data.pdf_paths.length; pi++) {
+                  await maybeOpenGeneratedPdf(data.pdf_paths[pi]);
+                }
+              } else if (data.pdf_path) {
+                await maybeOpenGeneratedPdf(data.pdf_path);
+              }
+            }
+          });
         } catch (err) {
           alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
         } finally {
           submitButtons.forEach(function (b) { b.disabled = false; });
+          stickyBtns.forEach(function (b) { if (b) b.disabled = false; });
         }
       });
     }
@@ -21043,6 +21387,8 @@
         if (!datum) { alert('Bitte Datum angeben.'); return; }
         var pdfLangs = collectPdfLanguages();
         if (!pdfLangs.length) { alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).'); return; }
+        flushServiceprotokollReactToHost();
+        var abschlussNow = collectAbschlussPayload();
         var built = await buildAllProtokollPayloads();
         if (built.error) { alert(built.error); return; }
         var applyStamm = false;
@@ -21057,46 +21403,69 @@
             showToast('Anlagenstamm-Abgleich fehlgeschlagen – PDFs werden trotzdem erstellt.');
           }
         }
+        applyAbschlussPayload(abschlussNow);
+        abschlussNow = enrichAbschlussFromReactPayload(abschlussNow);
+        if (Array.isArray(built.protokolle)) {
+          var curFabAbs = getActiveFab();
+          built.protokolle.forEach(function (p) {
+            if (p && String(p.fabrikationsnummer || '').trim() === String(curFabAbs || '').trim()) {
+              p.abschluss = abschlussNow;
+            }
+          });
+        }
         var body = {
           technician_id: getTechId(),
           job_id: parseInt(jobSelect.value, 10),
           durchfuehrungsdatum: datum,
           protokolle: built.protokolle,
           pdf_languages: pdfLangs,
+          signature_override_png: (abschlussNow && abschlussNow.signature_override_png) || '',
           apply_to_anlagenstamm: applyStamm || undefined,
           base_url: getDispoBaseUrl(),
           dispoBaseUrl: getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
         };
+        var allPdfBtnTop = document.getElementById('btnServiceprotokollSaveAllPdfTop');
         allPdfBtn.disabled = true;
+        if (allPdfBtnTop) allPdfBtnTop.disabled = true;
         try {
-          var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll/all-pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-            body: JSON.stringify(body)
-          });
-          var data = await r.json().catch(function () { return {}; });
-          if (!r.ok || !data.ok) {
-            alert('Fehler: ' + (data.error || r.status));
-            return;
-          }
-          if (data.warning) console.warn('[Serviceprotokoll]', data.warning);
-          await loadServiceprotokollDraftsForJob(body.job_id);
-          if (typeof showToast === 'function') {
-            var savedCount = data.saved && data.saved.length ? data.saved.length : 0;
-            var expectedCount = built.protokolle.length * (pdfLangs.length || 1);
-            var toastMsg = savedCount + ' PDF-Datei(en) lokal gespeichert (je FN im zugehörigen Ordner).';
-            if (savedCount < expectedCount) {
-              toastMsg += ' Erwartet: ' + expectedCount + '.';
+          await withProtocolProgress({ title: 'Alle PDF…', total: built.protokolle.length || 1 }, async function (prog) {
+            prog.setProgress(0, built.protokolle.length || 1);
+            var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll/all-pdf', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+              body: JSON.stringify(body)
+            });
+            var data = await r.json().catch(function () { return {}; });
+            if (!r.ok || !data.ok) {
+              alert('Fehler: ' + (data.error || r.status));
+              return;
             }
-            if (data.saved && data.saved.length) toastMsg += ' ' + data.saved.join(', ');
-            showToast(toastMsg);
-          }
+            prog.setProgress(built.protokolle.length || 1, built.protokolle.length || 1);
+            if (data.warning) console.warn('[Serviceprotokoll]', data.warning);
+            await loadServiceprotokollDraftsForJob(body.job_id);
+            if (typeof showToast === 'function') {
+              var savedCount = data.saved && data.saved.length ? data.saved.length : 0;
+              var expectedCount = built.protokolle.length * (pdfLangs.length || 1);
+              var toastMsg = savedCount + ' PDF-Datei(en) lokal gespeichert (je FN im zugehörigen Ordner).';
+              if (savedCount < expectedCount) {
+                toastMsg += ' Erwartet: ' + expectedCount + '.';
+              }
+              if (data.saved && data.saved.length) toastMsg += ' ' + data.saved.join(', ');
+              showToast(toastMsg);
+            }
+            if (Array.isArray(data.pdf_paths)) {
+              for (var oi = 0; oi < data.pdf_paths.length; oi++) {
+                await maybeOpenGeneratedPdf(data.pdf_paths[oi]);
+              }
+            }
+          });
         } catch (err) {
           alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
         } finally {
           allPdfBtn.disabled = false;
+          if (allPdfBtnTop) allPdfBtnTop.disabled = false;
         }
       });
     }
@@ -21167,7 +21536,7 @@
           supplyVoltage: (cells[0] && cells[0].supplyVoltage) || '',
           sensitivity: (cells[0] && cells[0].sensitivity) || '',
           generalRemarks: (document.getElementById('serviceprotokollBemerkungen') || {}).value || '',
-          status: statusEl ? String(statusEl.value || 'geprueft') : 'geprueft',
+          status: statusEl ? normalizeSpAbschlussStatus(statusEl.value || 'geprueft') : 'geprueft',
           monteur: monteurLabel,
           closingRemarks: (document.getElementById('serviceprotokollAbschlussBemerkungen') || {}).value || '',
           pdfDe: !!(document.getElementById('spPdfDe') && document.getElementById('spPdfDe').checked),
@@ -21253,7 +21622,7 @@
       if (pdfDe) pdfDe.checked = !!f.pdfDe;
       if (pdfEn) pdfEn.checked = !!f.pdfEn;
       document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
-        el.checked = el.value === (f.status || 'geprueft');
+        el.checked = el.value === normalizeSpAbschlussStatus(f.status || 'geprueft');
       });
       if (payload.testLoad) {
         var tl = payload.testLoad;
@@ -21524,13 +21893,8 @@
     }
 
     async function loadSpCatalogData() {
-      var listUrl = API_BASE + '/api/arbeitsschritte_list?technician_id=' + getTechId();
-      var baseUrl = (getDispoBaseUrl() || '').trim();
-      if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) {
-        listUrl += '&local_only=1';
-      } else if (baseUrl) {
-        listUrl += '&base_url=' + encodeURIComponent(baseUrl);
-      }
+      var listUrl =
+        API_BASE + '/api/arbeitsschritte_list?technician_id=' + getTechId() + '&local_only=1';
       var r = await fetch(listUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
       var data = await r.json().catch(function () { return {}; });
       if (!r.ok || !data.ok || !Array.isArray(data.steps)) {
@@ -22214,14 +22578,13 @@
 
     window.loadTbCategories = async function () {
       var listEl = document.getElementById('tbCategoryList');
-      var baseUrl = (getDispoBaseUrl() || '').trim();
       try {
-        var listUrl = API_BASE + '/api/textbausteine_list?technician_id=' + getTechId();
-        if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) {
-          listUrl += '&local_only=1';
-        } else if (baseUrl) {
-          listUrl += '&base_url=' + encodeURIComponent(baseUrl);
-        }
+        // Offline-First: immer lokal; Dispo-Merge nur über sync_pull
+        var listUrl =
+          API_BASE +
+          '/api/textbausteine_list?technician_id=' +
+          getTechId() +
+          '&local_only=1';
         var r = await fetch(listUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
         var data = await r.json();
         if (!data.ok || !data.categories) {
@@ -22489,14 +22852,13 @@
     }
 
     function listUrl() {
-      var url = API_BASE + '/api/arbeitsschritte_list?technician_id=' + getTechId();
-      var baseUrl = (getDispoBaseUrl() || '').trim();
-      if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) {
-        url += '&local_only=1';
-      } else if (baseUrl) {
-        url += '&base_url=' + encodeURIComponent(baseUrl);
-      }
-      return url;
+      // Offline-First: immer lokal; Dispo-Merge nur über sync_pull
+      return (
+        API_BASE +
+        '/api/arbeitsschritte_list?technician_id=' +
+        getTechId() +
+        '&local_only=1'
+      );
     }
 
     function sortStepsDefault() {

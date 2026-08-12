@@ -4,6 +4,13 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.019
+- **Serviceprotokoll-PDF:** Kopf als festes 4-Spalten-Raster; Status im Kopf (Zeile 3 Spalte 4); Abschluss-Box Status/Monteur/Datum entfernt.
+- **Serviceprotokoll Status:** Abschlussstatus (z. B. Justiert) bleibt erhalten; leere Arrays `abschluss: []` werden normalisiert.
+- **Montagebericht-PDF:** mehr Abstand unter FN-Balken; mehrere Ansprechpartner untereinander.
+- **Prüfzertifikat-PDF:** Layout auf eine A4-Seite; Siegelbox BESTANDEN; klare Block-/Zeilenabstände ohne Überlappungen.
+- **PDF-Viewer / Protokolle:** lokale PDF-Anzeige und zugehörige Bridge-/UI-Anpassungen.
+
 ## V 2.005.018
 - **Serviceprotokoll-PDF Header:** Wägezellen-Felder (Type/SN/Vers/Sens) aus dem Kopf entfernt; Meta in 3 Zeilen: Kunde/Projekt/FN · Type/Qmax/Pos.Nr./DWC · Datum/Techniker.
 

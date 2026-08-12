@@ -8,6 +8,8 @@
   var applying = false;
   var pendingFabSwitch = 0;
   var fabSwitchPending = false;
+  /** Letzter React-State (u. a. Abschluss-Status Justiert) – Quelle vor Speichern. */
+  var lastReactPayload = null;
 
   function getFrame() {
     if (!frame) frame = document.getElementById('serviceprotokollReactFrame');
@@ -46,8 +48,22 @@
     }
   }
 
+  function rememberReactPayload(payload) {
+    if (payload && typeof payload === 'object') lastReactPayload = payload;
+  }
+
+  function flushFromReact() {
+    if (!lastReactPayload) return false;
+    applyFromReact(lastReactPayload);
+    return true;
+  }
+
   window.serviceprotokollReactBridge = {
     syncToReact: syncToReact,
+    flushFromReact: flushFromReact,
+    getLastPayload: function () {
+      return lastReactPayload;
+    },
   };
 
   window.addEventListener('message', function (ev) {
@@ -61,6 +77,7 @@
     }
 
     if (data.type === 'SP_STATE_CHANGE' && data.payload) {
+      rememberReactPayload(data.payload);
       if (applying || fabSwitchPending) return;
       applyFromReact(data.payload);
       return;
@@ -89,7 +106,12 @@
     }
 
     if (data.type === 'SP_ACTION' && data.action && api && typeof api.triggerAction === 'function') {
-      if (data.payload) applyFromReact(data.payload);
+      if (data.payload) {
+        rememberReactPayload(data.payload);
+        applyFromReact(data.payload);
+      } else {
+        flushFromReact();
+      }
       api.triggerAction(String(data.action));
     }
   });

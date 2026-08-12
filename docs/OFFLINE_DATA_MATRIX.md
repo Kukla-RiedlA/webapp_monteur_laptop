@@ -2,7 +2,9 @@
 
 Überblick: Welche Daten wo liegen, wie sie synchronisiert werden und ob sie ohne Dispo-Verbindung nutzbar sind.
 
-**Vollständiges Gap-Audit (Phase 0):** [`OFFLINE_GAP_AUDIT.md`](OFFLINE_GAP_AUDIT.md) — alle Routen, UI-Views, Testfall-IDs, P0–P3-Backlog.
+**Vollständiges Gap-Audit (Phase 0 + Update 2026-08):** [`OFFLINE_GAP_AUDIT.md`](OFFLINE_GAP_AUDIT.md) — alle Routen, UI-Views, Testfall-IDs, P0–P3-Backlog.
+
+Smoke: `node scripts/offline-smoke.cjs` (Unit-Pull-Guard + lokale API ohne Dispo).
 
 ## Verbindlicher Grundsatz (Offline-First)
 
@@ -44,9 +46,10 @@ Legende:
 | Kalender-Ansicht | `calendar_cache_*` | `sync_pull` / live `/api/calendar` | — | Ja (`calendar_cached`) | — | Ja (Cache) |
 | Anlagenstamm-Baum | `anlagenstamm_tree_cache` | Lazy/Fetch | — | Ja nach Sync | — | Ja (Server) |
 | **Anlagenstamm (Liste/Edit)** | `anlagenstamm_local`, `pending_changes` | `sync_pull` | `sync_push` / save | Ja | Ja | Ja (dirty bleibt) |
-| **Textbausteine** | `textbausteine_user_*` (**Schema vorhanden, Routen nutzen es nicht**) | **fehlt in sync_pull** | Live-Proxy | **Nein** | **Nein** — GAP-007 | Teilweise |
-| **Abrechnung** | `abrechnung_*_cache`, `abrechnung_outbox` | `abrechnung_refresh` | Outbox-Flush | Ja (Cache) | Ja (Outbox) | Ja |
-| **RAMS** | — | Live | Live | Nein | Nein — GAP-009 | Live-only |
+| **Textbausteine** | `textbausteine_user_*` | `sync_pull` | `pending_changes` / Push | **Ja** (`local_only`) | **Ja** | Ja |
+| **Arbeitsschritte** | lokal + Presets | `sync_pull` | Queue / Push | **Ja** (`local_only`) | **Ja** | Ja |
+| **Abrechnung** | `abrechnung_*_cache`, `abrechnung_outbox` | `abrechnung_refresh` / Sync | Outbox-Flush | Ja (Cache first) | Ja (Outbox) | Ja |
+| **RAMS** | — | Live | Live / Queue bei Fehler | Nein — **Bootstrap-Ausnahme** GAP-009 | Nein | Live-only |
 | TED-Metadaten | `job_ted_index` | `sync_pull` / `dienstreise_pull` | — | Ja (Index); Datei wenn im Ordner | Pull online | Ja |
 | **Geräte / Multi-Device** | `device_id` in userData | register/heartbeat | — | — | — | Ja (`monteur_devices`) |
 
@@ -58,26 +61,29 @@ Speicherort Zwischenstände: `{DienstreiseOrdner}/` pro angenommenem Auftrag (`i
 
 | Protokoll | Lokale Datei | Sync In | Sync Out | Offline lesen (Formular) | Offline schreiben | Multi-Device |
 |-----------|--------------|---------|----------|---------------------------|-------------------|--------------|
-| **Montagebericht** | `Dokumente_Monteur/montagebericht.json` (+ PDF/DOCX lokal) | Draft-GET + optional Anreicherung | Draft-POST bei Save (Server-Revision) | Ja | Ja: „nur Daten“; PDF lokal; Signatur nur online | Ja (`montagebericht_draft`) |
-| **Serviceprotokoll** | `Dokumente_Monteur/serviceprotokoll.json` (`byFab`) | Draft-GET | Draft-POST bei Save (Server-Revision) | Ja | Ja: „nur Daten“; **PDF nur online** — GAP-005 | Ja (`serviceprotokoll_draft`) |
+| **Montagebericht** | `Dokumente_Monteur/montagebericht.json` (+ PDF/DOCX lokal) | Draft-GET + optional Anreicherung | Draft-POST bei Save (Server-Revision) | Ja | Ja: Daten + PDF lokal; **Kunden-Signatur online** (GAP-008) | Ja (`montagebericht_draft`) |
+| **Serviceprotokoll** | `Dokumente_Monteur/serviceprotokoll.json` (`byFab`) | Draft-GET | Draft-POST bei Save | Ja | Ja: Daten + **PDF lokal** (`protocol_pdf.js`) | Ja (`serviceprotokoll_draft`) |
 | **Parameterlisten** | CSV + PDF im Ordner | — | Ingest optional (kein Outbox) | Ja | Ja lokal; Ingest queued fehlt — GAP-015 | Teilweise (Datei-Manifest) |
-| **Kontrollwiegungen** | `Dokumente_Monteur/kontrollwiegungsprotokoll.json` | Draft-GET | Draft-POST bei Save | Ja | Ja lokal + Sync | Ja (`kontrollwiegungsprotokoll_draft`) |
+| **Kontrollwiegungen** | `Dokumente_Monteur/kontrollwiegungsprotokoll.json` | Draft-GET | Draft-POST / `pending_changes` | Ja | Ja lokal + PDF lokal | Ja (`kontrollwiegungsprotokoll_draft`) |
 | **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein (nicht implementiert) | — |
 
-**Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“).
+**Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“); während Sync Badge-Text **Sync…**. Verdächtiger leerer Jobs-Pull → `pull_warnings` + `degraded`, lokale Aufträge bleiben.
 
 ### Priorisierte Lücken (P0–P1, siehe Audit)
 
-| ID | Thema |
-|----|-------|
-| GAP-001 | Offline-Accept | P0 | 4a | **teilweise umgesetzt** (`accept_offline`) |
-| GAP-002 | Finish mit geänderten Dateien | P0 | 4a | **teilweise** (defer + push) |
-| GAP-003 | Release nur nach Dispo | P0 | 4a | **teilweise** (lokal + Queue) |
-| GAP-004 | `sync_push` bricht bei fehlender `server_id` ab | P0 | Infra | **erledigt** |
-| GAP-005 | Serviceprotokoll-PDF |
-| GAP-006 | Kontrollwiegungen |
-| GAP-007 | Textbausteine (Routen + globaler Cache + sync_pull) |
-| GAP-008–009 | Signatur, RAMS |
+| ID | Thema | Status (2026-08) |
+|----|-------|------------------|
+| GAP-001 | Offline-Accept | **Erledigt** (Accept immer lokal; Stream nur Legacy) |
+| GAP-002 | Finish mit geänderten Dateien | **Teilweise** (defer + push) |
+| GAP-003 | Release nur nach Dispo | **Teilweise** (lokal + Queue) |
+| GAP-004 | `sync_push` / `server_id` | **Erledigt** |
+| GAP-005 | Serviceprotokoll-PDF | **Erledigt** (lokal; Legacy-GET kann lokal liefern) |
+| GAP-006 | Kontrollwiegungen | **Erledigt** |
+| GAP-007 | Textbausteine | **Erledigt** (UI `local_only`, Merge nur Sync) |
+| GAP-008 | Montagebericht-Kunden-Signatur | **Offen** (online Staging; klarer Offline-Hinweis) |
+| GAP-009 | RAMS | **Bootstrap-Ausnahme** (klarer Offline-Hinweis) |
+| GAP-011 | SSE-Ersatz Abwesenheiten | **Erledigt** (Poll 90s) |
+| Pull-Guard | Leerer Dispo-Pull löscht nicht | **Erledigt** (`evaluateJobPullRemovalGuard`) |
 
 ---
 

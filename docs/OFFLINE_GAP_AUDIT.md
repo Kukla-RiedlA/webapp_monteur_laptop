@@ -1,10 +1,10 @@
 # Offline-Gap-Audit – Monteur-Laptop (Phase 0)
 
-**Stand:** 2026-07-02  
+**Stand:** 2026-08-12 (Offline-First Härtung)  
 **Scope:** `electron/server.js`, `electron/lib/*`, `electron/public/app.js`, `serviceprotokoll-react/`  
 **Regel:** [`.cursor/rules/webapps-offline-first.mdc`](../../.cursor/rules/webapps-offline-first.mdc)  
 **Ist-Matrix:** [`OFFLINE_DATA_MATRIX.md`](OFFLINE_DATA_MATRIX.md)  
-**Umsetzungsplan:** Cursor-Plan „Laptop Offline-First Audit“
+**Smoke:** `node scripts/offline-smoke.cjs`
 
 ---
 
@@ -322,26 +322,39 @@ Format `T-NNN` — in Phase 3 manuell/automatisiert abarbeiten. Szenarien: **S1*
 
 ## 4. Priorisierte Lücken (Umsetzungs-Backlog)
 
-| ID | Lücke | Prio | Welle (Plan) | Tests |
-|----|-------|------|--------------|-------|
-| GAP-001 | Kein echter Offline-Accept (`accept_job_stream` Dispo-Pflicht) | P0 | 4a | **Teilweise:** `accept_offline` + UI |
-| GAP-002 | Finish mit Dateiänderungen → 409 ohne Upload-Queue | P0 | 4a | **Teilweise:** defer + push-Job |
-| GAP-003 | Release nur nach Dispo-Push | P0 | 4a | **Teilweise:** lokal + Queue |
-| GAP-004 | `sync_push` Totalausfall bei `job_ohne_server_id` | P0 | Infra | **Erledigt** |
-| GAP-005 | Serviceprotokoll-PDF nur Dispo | P1 | 2 | T-094–T-096 |
-| GAP-006 | Kontrollwiegungen komplett live | P1 | 3 | T-097, T-098 |
-| GAP-007 | Textbausteine live-only + Schema global | P1 | 1 | T-100–T-105 |
-| GAP-008 | Montagebericht-Signatur live | P1 | 6 | T-110 |
-| GAP-009 | RAMS live | P1 | 6 | T-114–T-116 |
-| GAP-010 | `pending_changes` unbekannte Typen / stille Absence-Fehler | P1 | Infra | **Teilweise:** Logging |
-| GAP-011 | SSE ohne Offline-Ersatz | P2 | 8 | T-211 |
-| GAP-012 | `jobs_open` ohne Auto-Fallback local | P2 | 4 | T-013 |
-| GAP-013 | `anlagenstamm_files_list` ohne Cache | P2 | 5 | T-065 |
-| GAP-014 | TED/Hotel UI-Gates | P2 | 5 | T-080, T-085 |
-| GAP-015 | Parameterlisten Ingest ohne Outbox | P2 | Infra | T-099 |
-| GAP-016 | Kalender live ohne Cache-Fallback | P2 | 5 | T-041 |
-| GAP-017 | `serviceprotokoll_defaults` nicht gecacht | P2 | 2 | T-093 |
-| GAP-018 | React PDF ohne Connection-Feedback | P2 | 7 | T-206 |
+**Aktualisiert:** 2026-08-12 (Offline-First Härtung)
+
+| ID | Lücke | Prio | Status |
+|----|-------|------|--------|
+| GAP-001 | Offline-Accept | P0 | **Erledigt** — UI immer `accept_offline` |
+| GAP-002 | Finish mit Dateiänderungen | P0 | **Teilweise** — defer + push-Job |
+| GAP-003 | Release nur nach Dispo | P0 | **Teilweise** — lokal + Queue |
+| GAP-004 | `sync_push` / fehlende `server_id` | P0 | **Erledigt** |
+| GAP-005 | Serviceprotokoll-PDF | P1 | **Erledigt** — `protocol_pdf.js` + lokaler GET |
+| GAP-006 | Kontrollwiegungen | P1 | **Erledigt** — lokal + Queue + PDF |
+| GAP-007 | Textbausteine / Arbeitsschritte | P1 | **Erledigt** — View `local_only`, Merge nur Sync |
+| GAP-008 | Montagebericht-Kunden-Signatur | P1 | **Offen** — Online-Staging; Offline-Hinweis |
+| GAP-009 | RAMS | P1 | **Bootstrap-Ausnahme** — klarer Offline-Fehler |
+| GAP-010 | `pending_changes` unbekannte Typen | P1 | **Teilweise** — Logging |
+| GAP-011 | SSE ohne Offline-Ersatz | P2 | **Erledigt** — Poll `my_absence_requests` 90s |
+| GAP-012 | `jobs_open` Fallback | P2 | **Erledigt** (UI nutzt `_local`) |
+| GAP-013 | `anlagenstamm_files_list` Cache | P2 | **Erledigt** — Cache first |
+| GAP-014 | TED/Hotel UI-Gates | P2 | **Teilweise** — Hotel live-Fetch entfernt |
+| GAP-015 | Parameterlisten Ingest Outbox | P2 | Offen |
+| GAP-016 | Kalender live ohne Cache | P2 | **Erledigt** — Cache first, Refresh nur Sync |
+| GAP-017 | `serviceprotokoll_defaults` Cache | P2 | Offen |
+| GAP-018 | React PDF Connection-Feedback | P2 | Offen |
+| PULL-GUARD | Leerer/unvollständiger Jobs-Pull | P0 | **Erledigt** — `evaluateJobPullRemovalGuard` |
+
+### Repro-Checkliste (S1–S3 + Pull)
+
+| ID | Szenario | Erwartung |
+|----|----------|-----------|
+| S1 | Flugmodus | Listen/Formulare lokal; Badge Offline/Lokal; Accept offline |
+| S2 | Netz da, Dispo down | Badge Offline/degraded; keine View-Verzögerung durch Dispo |
+| S3 | Auth fehlt | Bootstrap lokal; Sync startet nicht hart |
+| P1 | Dispo liefert 0 Jobs bei lokalen Zuordnungen | Kein Massen-Löschen; `pull_warnings`; Badge Sync-Probleme |
+| P2 | Soft-Refresh `/api/my_jobs` fehlgeschlagen | Bestehende Liste bleibt; kein „Keine Aufträge.“-Flackern |
 
 ---
 
@@ -366,6 +379,7 @@ Format `T-NNN` — in Phase 3 manuell/automatisiert abarbeiten. Szenarien: **S1*
 - Server-Reboot / Health-Admin
 - App-Update-Check (optional)
 - Inbetriebnahme-Protokoll (nicht implementiert)
+- **RAMS** (GAP-009) — bis lokales Modell existiert: nur online / nach Sync
 
 ---
 

@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('monteurApp', {
   openPath: (filePath) => ipcRenderer.invoke('dienstreise:open-path', filePath),
   /** TED/Mechanik-Excel: gleicher IPC, dokumentiert als Excel-Öffnen (EXCEL.EXE zuerst unter Windows). */
   openExcel: (filePath) => ipcRenderer.invoke('dienstreise:open-path', filePath),
+  /** PDF im eigenen Electron-Fenster (Chromium-Viewer, ohne Acrobat). */
+  openPdf: (filePath) => ipcRenderer.invoke('pdf:open-viewer', filePath),
   openWithDialog: (filePath) => ipcRenderer.invoke('dienstreise:open-with-dialog', filePath),
   saveFileAs: (filePath, defaultName) => ipcRenderer.invoke('dienstreise:save-file-as', filePath, defaultName),
   showFileContextMenu: (spec) => ipcRenderer.invoke('dienstreise:file-context-menu', spec),
