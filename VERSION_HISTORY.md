@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.020
+- **Kalender (Alle Techniker):** Aufträge mit mehreren Monteuren erscheinen wieder als eigener Balken je Techniker (nicht nur einmal).
+- **Auftrag annehmen:** Dialog zur Auswahl der PROJEKTE-NEU-Ordner/Dateien kommt wieder; Liste wird von Dispo geladen.
+
 ## V 2.005.019
 - **Serviceprotokoll-PDF:** Kopf als festes 4-Spalten-Raster; Status im Kopf (Zeile 3 Spalte 4); Abschluss-Box Status/Monteur/Datum entfernt.
 - **Serviceprotokoll Status:** Abschlussstatus (z. B. Justiert) bleibt erhalten; leere Arrays `abschluss: []` werden normalisiert.

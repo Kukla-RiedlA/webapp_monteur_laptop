@@ -1379,8 +1379,10 @@
   }
 
   function shouldPreferOfflineAccept() {
-    // Offline-First: Annahme immer lokal; Datei-Pull läuft später über Sync/Background
-    return true;
+    var base = (typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '') || '';
+    if (!String(base).trim()) return true;
+    if (!getDispoUsername() || !getDispoPassword()) return true;
+    return false;
   }
 
   function handleAcceptJobOfflineFinished(localJobId, data, hint) {
@@ -1930,10 +1932,6 @@
       if (hint) hint.textContent = errMsg;
       return;
     }
-    if (mode === 'accept' && shouldPreferOfflineAccept()) {
-      runAcceptJobOffline(localJobId, triggerButton, { offline_paths: {} });
-      return;
-    }
     var modal = document.getElementById('modalAcceptOffline');
     var bodyEl = document.getElementById('acceptOfflineBody');
     if (!modal || !bodyEl) {
@@ -1995,7 +1993,6 @@
     var q =
       'job_id=' + encodeURIComponent(localJobId) +
       '&technician_id=' + encodeURIComponent(getTechId()) +
-      '&local_first=1' +
       '&dispoBaseUrl=' + encodeURIComponent(getDispoBaseUrl() || '');
     var extra = dispoBasePayloadExtra();
     if (extra.externalUrl) q += '&externalUrl=' + encodeURIComponent(extra.externalUrl);
@@ -2006,7 +2003,7 @@
     var fetchOpts = {};
     if (acceptOfflinePreviewAbort) fetchOpts.signal = acceptOfflinePreviewAbort.signal;
     var msgElInit = document.getElementById('acceptOfflineLoadingMsg');
-    if (msgElInit) msgElInit.textContent = 'Lade lokale Vorschau …';
+    if (msgElInit) msgElInit.textContent = 'Lade Ordnerliste von Dispo …';
     fetch(API_BASE + '/api/dienstreise/accept_offline_preview?' + q, fetchOpts)
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -11696,6 +11693,17 @@
     return null;
   }
 
+  /** Eine Kalenderzeile pro Auftrag+Techniker (Mehrfachzuweisung = mehrere Balken). */
+  function calendarJobAssignmentKey(job) {
+    if (!job) return null;
+    var sid = job.server_id != null && String(job.server_id).trim() !== ''
+      ? String(job.server_id)
+      : (job.id != null ? String(job.id) : null);
+    if (sid == null) return null;
+    var tid = job.technician_id != null ? job.technician_id : job.technicianId;
+    return sid + ':' + String(tid != null ? tid : '');
+  }
+
   function calendarJobTechFields(job, techById, viewerTechId) {
     if (isCalendarJobUnassigned(job)) {
       return calendarUnassignedLane(techById, job);
@@ -11980,9 +11988,11 @@
         });
         // Keine lokalen Aufträge mehr anhängen, die im Dispo-Cache fehlen — sonst bleiben
         // umgebuchte Termine (z. B. Georgia-Pacific / alte Köprinner-Zuweisung) sichtbar.
+        // Duplikate nur pro Auftrag+Techniker entfernen, damit Mehrfachzuweisungen
+        // (ein Auftrag, zwei Monteure) als zwei Balken bleiben.
         var seenJobKey = {};
         jobs = jobs.filter(function (j) {
-          var key = j.server_id != null ? String(j.server_id) : (j.id != null ? String(j.id) : null);
+          var key = calendarJobAssignmentKey(j);
           if (key == null) return true;
           if (seenJobKey[key]) return false;
           seenJobKey[key] = true;
@@ -12339,6 +12349,8 @@
     if (ort) titleParts.push(ort);
     if (land2) titleParts.push(land2);
     let title = titleParts.join(', ') || firma || 'Auftrag';
+    const techName = (job.technician_name || '').trim();
+    if (techName) title += ' – ' + techName;
     const dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
     if (dateRangeStr) title += '\nZeitraum: ' + dateRangeStr;
     var tzLabel = null;
