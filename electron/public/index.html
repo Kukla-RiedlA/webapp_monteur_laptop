@@ -1528,9 +1528,10 @@
   </div>
   <div id="modalAbsenceRequest" class="modal-overlay" aria-hidden="true">
     <div class="modal-box" role="dialog">
-      <h3>Abwesenheit beantragen</h3>
-      <p class="muted" style="margin-bottom:0.75rem">Die Anfrage wird an die Dispo gesendet und muss dort bestätigt werden.</p>
+      <h3 id="absenceRequestModalTitle">Abwesenheit beantragen</h3>
+      <p class="muted" style="margin-bottom:0.75rem">Die Anfrage wird an die Dispo gesendet und muss dort bestätigt werden. Änderungen sind nur vor der Genehmigung möglich.</p>
       <form id="absenceRequestForm">
+        <input type="hidden" id="absenceRequestEditId" value="">
         <div class="form-group" style="margin-bottom:0.75rem">
           <label for="absenceRequestType">Grund</label>
           <input type="text" id="absenceRequestType" placeholder="z. B. Urlaub, Krankheit" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
@@ -1549,7 +1550,7 @@
         </div>
         <div id="absenceRequestMsg" class="muted" style="margin-bottom:0.5rem;font-size:0.9rem"></div>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-          <button type="submit" class="btn btn-primary">Anfrage senden</button>
+          <button type="submit" class="btn btn-primary" id="absenceRequestSubmit">Anfrage senden</button>
           <button type="button" class="btn btn-ghost" id="absenceRequestCancel">Abbrechen</button>
         </div>
       </form>
@@ -2897,6 +2898,18 @@
   <main id="viewAbwesenheiten" class="view-abwesenheiten" aria-label="Abwesenheiten">
     <div class="card">
       <h2>Abwesenheiten</h2>
+      <div id="laptopAbsMonth" class="absence-month-card" style="margin:0.75rem 0 1rem;padding:0.75rem;border:1px solid var(--accent);border-radius:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+          <button type="button" class="btn btn-ghost" id="laptopAbsMonthPrev" aria-label="Vorheriger Monat">‹</button>
+          <strong id="laptopAbsMonthTitle"></strong>
+          <button type="button" class="btn btn-ghost" id="laptopAbsMonthNext" aria-label="Nächster Monat">›</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:0.7rem;text-align:center;margin-bottom:4px;opacity:0.75">
+          <span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span>
+        </div>
+        <div id="laptopAbsMonthGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px"></div>
+        <p class="muted" style="font-size:0.8rem;margin:8px 0 0">Grün: freigegeben · Gelb gestrichelt: Anfrage offen</p>
+      </div>
       <button type="button" class="btn btn-ghost" id="btnRequestAbsence">Abwesenheit beantragen</button>
       <button type="button" class="btn btn-ghost" id="btnCleanupErrorRequests" style="display:none;margin-left:0.25rem">Fehlerhafte Einträge entfernen</button>
       <div id="absencesList" style="margin-top:0.75rem"><span class="empty">Wird geladen…</span></div>

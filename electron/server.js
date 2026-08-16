@@ -12290,6 +12290,61 @@ function createApp(db) {
     }
   });
 
+  app.patch('/api/absence_request', (req, res) => {
+    const technicianId = getTechnicianId(req);
+    const body = req.body || {};
+    const id = parseInt(body.id, 10) || parseInt(req.query.id, 10) || 0;
+    const start = body.start_datetime || body.start || body.date_from || '';
+    const end = body.end_datetime || body.end || body.date_to || '';
+    const type = body.type || body.reason || null;
+    const hasComment = Object.prototype.hasOwnProperty.call(body, 'comment');
+    const comment = hasComment && body.comment != null && String(body.comment).trim() !== '' ? String(body.comment).trim() : (hasComment ? null : undefined);
+    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
+    if (!technicianId || !id || !start || !end) {
+      return res.status(400).json({ ok: false, error: 'technician_id, id, start_datetime und end_datetime erforderlich.' });
+    }
+    const row = db.prepare('SELECT id, status, server_id FROM absence_requests WHERE id = ? AND technician_id = ?').get(id, technicianId);
+    if (!row) {
+      return res.status(404).json({ ok: false, error: 'Anfrage nicht gefunden.' });
+    }
+    if (String(row.status) !== 'pending') {
+      return res.status(403).json({ ok: false, error: 'Nur offene Anfragen können geändert werden.' });
+    }
+    const normStart = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v).trim()) ? v.trim() + ' 00:00:00' : String(v).trim();
+    const normEnd = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v).trim()) ? v.trim() + ' 23:59:59' : String(v).trim();
+    const startNorm = normStart(start);
+    const endNorm = normEnd(end);
+    try {
+      if (hasComment) {
+        db.prepare('UPDATE absence_requests SET start_datetime = ?, end_datetime = ?, type = ?, comment = ? WHERE id = ? AND technician_id = ?').run(startNorm, endNorm, type || null, comment, id, technicianId);
+      } else {
+        db.prepare('UPDATE absence_requests SET start_datetime = ?, end_datetime = ?, type = ? WHERE id = ? AND technician_id = ?').run(startNorm, endNorm, type || null, id, technicianId);
+      }
+      save();
+      const remoteId = parseInt(row.server_id, 10) || 0;
+      if (baseUrl && remoteId) {
+        const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId) };
+        const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
+        if (auth) header.Authorization = auth.Authorization;
+        fetch(baseUrl + '/api/absence_request.php', {
+          method: 'PATCH',
+          headers: header,
+          body: JSON.stringify({
+            technician_id: technicianId,
+            id: remoteId,
+            start_datetime: startNorm,
+            end_datetime: endNorm,
+            type: type || null,
+            comment: hasComment ? comment : undefined,
+          }),
+        }).catch(() => {});
+      }
+      res.json({ ok: true, id });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   app.get('/api/events', (req, res) => {
     const technicianId = getTechnicianId(req);
     const baseUrl = req.query.base_url || req.query.baseUrl || '';
@@ -12317,95 +12372,27 @@ function createApp(db) {
   });
 
   app.post('/api/absence', (req, res) => {
-    const technicianId = getTechnicianId(req);
-    const body = req.body || {};
-    const start = body.start_datetime || body.start || body.date_from || '';
-    const end = body.end_datetime || body.end || body.date_to || '';
-    const type = body.type || null;
-    const comment = body.comment != null && String(body.comment).trim() !== '' ? String(body.comment).trim() : null;
-    if (!technicianId || !start || !end) {
-      return res.status(400).json({ ok: false, error: 'technician_id, start_datetime und end_datetime erforderlich.' });
-    }
-    const norm = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v).trim()) ? v.trim() + ' 00:00:00' : v.trim();
-    try {
-      const r = db.prepare('INSERT INTO absences (technician_id, start_datetime, end_datetime, type, comment) VALUES (?, ?, ?, ?, ?)').run(technicianId, norm(start), norm(end), type || '', comment);
-      const id = r.lastInsertRowid;
-      db.prepare('INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)').run('absence', id, 'create', JSON.stringify({ start_datetime: norm(start), end_datetime: norm(end), type, comment }));
-      save();
-      res.json({ ok: true, id });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
+    res.status(403).json({
+      ok: false,
+      error: 'Genehmigte Abwesenheiten können nur von Dispo, Buchhaltung, Lohnverrechnung oder Admin geändert werden.',
+      code: 'absence_locked_after_approval',
+    });
   });
 
   app.patch('/api/absence', (req, res) => {
-    const technicianId = getTechnicianId(req);
-    const body = req.body || {};
-    const id = body.id || parseInt(req.query.id, 10) || 0;
-    const start = body.start_datetime || body.start || body.date_from || '';
-    const end = body.end_datetime || body.end || body.date_to || '';
-    const type = body.type || null;
-    const hasComment = Object.prototype.hasOwnProperty.call(body, 'comment');
-    const comment = hasComment && body.comment != null && String(body.comment).trim() !== '' ? String(body.comment).trim() : (hasComment ? null : undefined);
-    if (!technicianId || !id || !start || !end) {
-      return res.status(400).json({ ok: false, error: 'technician_id, id, start_datetime und end_datetime erforderlich.' });
-    }
-    const norm = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v).trim()) ? v.trim() + ' 00:00:00' : v.trim();
-    try {
-      let r;
-      if (hasComment) {
-        r = db.prepare('UPDATE absences SET start_datetime = ?, end_datetime = ?, type = ?, comment = ? WHERE id = ? AND technician_id = ?').run(norm(start), norm(end), type || '', comment, id, technicianId);
-      } else {
-        r = db.prepare('UPDATE absences SET start_datetime = ?, end_datetime = ?, type = ? WHERE id = ? AND technician_id = ?').run(norm(start), norm(end), type || '', id, technicianId);
-      }
-      if (r.changes) {
-        const pl = { start_datetime: norm(start), end_datetime: norm(end), type: type || '' };
-        if (hasComment) pl.comment = comment;
-        db.prepare('INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)').run('absence', id, 'update', JSON.stringify(pl));
-        save();
-        return res.json({ ok: true });
-      }
-      res.status(404).json({ ok: false, error: 'Abwesenheit nicht gefunden.' });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
+    res.status(403).json({
+      ok: false,
+      error: 'Genehmigte Abwesenheiten können nur von Dispo, Buchhaltung, Lohnverrechnung oder Admin geändert werden.',
+      code: 'absence_locked_after_approval',
+    });
   });
 
-  app.delete('/api/absence', async (req, res) => {
-    const technicianId = getTechnicianId(req);
-    const body = req.body || {};
-    const id = parseInt(req.query.id, 10) || parseInt(body.id, 10) || 0;
-    const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
-    if (!technicianId || !id) {
-      return res.status(400).json({ ok: false, error: 'technician_id und id erforderlich.' });
-    }
-    try {
-      const row = db.prepare('SELECT server_id FROM absences WHERE id = ? AND technician_id = ?').get(id, technicianId);
-      if (!row) {
-        return res.status(404).json({ ok: false, error: 'Abwesenheit nicht gefunden.' });
-      }
-      const serverId = row.server_id != null && row.server_id !== '' ? row.server_id : null;
-      if (baseUrl && serverId != null) {
-        const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
-        const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(auth || {}) };
-        try {
-          const delRes = await fetch(`${baseUrl}/api/absence.php?id=${encodeURIComponent(serverId)}&technician_id=${encodeURIComponent(technicianId)}`, { method: 'DELETE', headers: header });
-          if (!delRes.ok) {
-            const errText = await delRes.text();
-            return res.status(502).json({ ok: false, error: 'Dispo-Löschen fehlgeschlagen: ' + (errText.slice(0, 80) || delRes.status) });
-          }
-        } catch (e) {
-          return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + (e.message || String(e)) });
-        }
-      } else if (serverId != null) {
-        db.prepare('INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)').run('absence', serverId, 'delete', '{}');
-      }
-      db.prepare('DELETE FROM absences WHERE id = ? AND technician_id = ?').run(id, technicianId);
-      save();
-      return res.json({ ok: true });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
+  app.delete('/api/absence', (req, res) => {
+    res.status(403).json({
+      ok: false,
+      error: 'Genehmigte Abwesenheiten können nur von Dispo, Buchhaltung, Lohnverrechnung oder Admin geändert werden.',
+      code: 'absence_locked_after_approval',
+    });
   });
 
   app.get('/api/pending_changes', (req, res) => {
@@ -17268,6 +17255,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
     }
     if (p.entity_type === 'absence') {
       handled = true;
+      const dropLocked = function (pendingId) {
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(pendingId);
+      };
       if (p.action === 'create') {
         const payload = JSON.parse(p.payload || '{}');
         const r = await fetch(`${base}/api/absence.php?technician_id=${technicianId}`, { method: 'POST', headers: header, body: JSON.stringify({ ...payload, technician_id: technicianId }) });
@@ -17275,6 +17265,8 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           const result = await r.json();
           if (result.id) db.prepare('UPDATE absences SET server_id = ? WHERE id = ?').run(result.id, p.entity_id);
           db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        } else if (r.status === 403) {
+          dropLocked(p.id);
         } else {
           let errBody = null;
           try {
@@ -17295,6 +17287,8 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         const r = await fetch(`${base}/api/absence.php?technician_id=${technicianId}`, { method: 'PATCH', headers: header, body: JSON.stringify({ id: serverAbsenceId, ...payload }) });
         if (r.ok) {
           db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        } else if (r.status === 403) {
+          dropLocked(p.id);
         } else {
           let errBody = null;
           try {
@@ -17310,7 +17304,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
       } else if (p.action === 'delete') {
         const r = await fetch(`${base}/api/absence.php?id=${p.entity_id}&technician_id=${technicianId}`, { method: 'DELETE' });
-        if (r.ok) {
+        if (r.ok || r.status === 403) {
           db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
         } else {
           logSyncPushError({

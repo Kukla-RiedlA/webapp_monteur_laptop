@@ -7714,24 +7714,75 @@
     });
   }
 
+  var laptopAbsCal = { y: 0, m: 0, absences: [], pending: [] };
+
+  function laptopAbsYmd(val) {
+    return String(val || '').replace('T', ' ').slice(0, 10);
+  }
+  function laptopAbsCovers(item, ymd) {
+    var a = laptopAbsYmd(item.start_datetime);
+    var b = laptopAbsYmd(item.end_datetime);
+    return a && b && ymd >= a && ymd <= b;
+  }
+  function renderLaptopAbsMonth() {
+    var title = document.getElementById('laptopAbsMonthTitle');
+    var grid = document.getElementById('laptopAbsMonthGrid');
+    if (!title || !grid) return;
+    if (!laptopAbsCal.y) {
+      var n = new Date();
+      laptopAbsCal.y = n.getFullYear();
+      laptopAbsCal.m = n.getMonth();
+    }
+    title.textContent = new Date(laptopAbsCal.y, laptopAbsCal.m, 1).toLocaleDateString('de-AT', { month: 'long', year: 'numeric' });
+    var first = new Date(laptopAbsCal.y, laptopAbsCal.m, 1);
+    var startOffset = (first.getDay() + 6) % 7;
+    var dim = new Date(laptopAbsCal.y, laptopAbsCal.m + 1, 0).getDate();
+    grid.innerHTML = '';
+    var i;
+    for (i = 0; i < startOffset; i++) {
+      var e = document.createElement('div');
+      e.style.cssText = 'min-height:32px;border-radius:6px;background:transparent';
+      grid.appendChild(e);
+    }
+    for (i = 1; i <= dim; i++) {
+      var ymd = laptopAbsCal.y + '-' + String(laptopAbsCal.m + 1).padStart(2, '0') + '-' + String(i).padStart(2, '0');
+      var cell = document.createElement('div');
+      cell.textContent = String(i);
+      cell.style.cssText = 'min-height:32px;border-radius:6px;display:flex;align-items:center;justify-content:center;background:var(--bg);font-size:0.85rem';
+      var absHit = (laptopAbsCal.absences || []).some(function (a) { return laptopAbsCovers(a, ymd); });
+      var pendHit = (laptopAbsCal.pending || []).some(function (a) { return laptopAbsCovers(a, ymd); });
+      if (absHit) {
+        cell.style.background = '#0e7b5a';
+        cell.style.color = '#fff';
+        cell.style.fontWeight = '700';
+      }
+      if (pendHit) {
+        cell.style.outline = '2px dashed #fac82d';
+        cell.style.outlineOffset = '-2px';
+      }
+      grid.appendChild(cell);
+    }
+  }
+
   function renderAbsences(data, requestsData) {
     const list = document.getElementById('absencesList');
     const absences = (data && data.absences) ? data.absences : [];
     const requests = (requestsData && requestsData.requests) ? requestsData.requests : [];
     const parts = [];
+    var visibleAbs = [];
     absences.forEach(function(a) {
       if (a.from_absence_request && a.status === 'pending') return;
       if (isAbsenceExpired(a)) return;
+      visibleAbs.push(a);
       const dateStr = formatDateRange(a.start_datetime, a.end_datetime);
-      const isRequest = a.from_absence_request === true;
-      const action = isRequest ? 'delete-absence-request' : 'delete-absence';
-      const title = isRequest ? 'Anfrage aus der Liste entfernen' : 'Abwesenheit löschen (lokal und in der Dispo)';
       var cmt = (a.comment && String(a.comment).trim()) ? (' · ' + escapeHtml(String(a.comment).trim())) : '';
-      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(a.type || 'Abwesenheit') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + cmt + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="' + action + '" data-id="' + escapeHtml(String(a.id)) + '" title="' + escapeHtml(title) + '" aria-label="Löschen">🗑</button></div>');
+      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(a.type || 'Abwesenheit') + '</strong><br><span class="job-meta">' + escapeHtml(dateStr) + cmt + '</span></div></div>');
     });
+    var visiblePending = [];
     requests.forEach(function(r) {
       if (r.status === 'approved') return;
       if (isAbsenceExpired(r)) return;
+      if (r.status === 'pending') visiblePending.push(r);
       const dateStr = formatDateRange(r.start_datetime, r.end_datetime);
       var statusText;
       if (r.status === 'pending') statusText = 'Offen (wird geprüft)';
@@ -7739,8 +7790,16 @@
       else if (r.status === 'error') statusText = 'Fehler bei Übertragung';
       else statusText = r.status || '';
       var cmt2 = (r.comment && String(r.comment).trim()) ? (' · ' + escapeHtml(String(r.comment).trim())) : '';
-      parts.push('<div class="job job-absence-row"><div class="job-info"><strong>' + escapeHtml(r.type || 'Abwesenheit') + '</strong> <span class="job-meta">' + escapeHtml(dateStr) + ' – ' + escapeHtml(statusText) + cmt2 + '</span></div><button type="button" class="btn-icon btn-delete-absence" data-action="delete-absence-request" data-id="' + escapeHtml(String(r.id)) + '" title="Anfrage aus der Liste entfernen" aria-label="Löschen">🗑</button></div>');
+      var actions = '<button type="button" class="btn-icon btn-delete-absence" data-action="delete-absence-request" data-id="' + escapeHtml(String(r.id)) + '" title="Anfrage aus der Liste entfernen" aria-label="Löschen">🗑</button>';
+      if (r.status === 'pending') {
+        actions = '<button type="button" class="btn-icon" data-action="edit-absence-request" data-id="' + escapeHtml(String(r.id)) + '" title="Anfrage ändern" aria-label="Ändern">✎</button>' + actions;
+      }
+      parts.push('<div class="job job-absence-row" data-request="' + escapeHtml(String(r.id)) + '"><div class="job-info"><strong>' + escapeHtml(r.type || 'Abwesenheit') + '</strong> <span class="job-meta">' + escapeHtml(dateStr) + ' – ' + escapeHtml(statusText) + cmt2 + '</span></div><span style="display:flex;gap:4px">' + actions + '</span></div>');
     });
+    laptopAbsCal.absences = visibleAbs;
+    laptopAbsCal.pending = visiblePending;
+    laptopAbsCal.requests = requests;
+    renderLaptopAbsMonth();
     var hasErrorRequests = requests.some(function(r) { return r.status === 'error' && !isAbsenceExpired(r); });
     var btnCleanup = document.getElementById('btnCleanupErrorRequests');
     if (btnCleanup) btnCleanup.style.display = hasErrorRequests ? 'inline-block' : 'none';
@@ -8804,15 +8863,35 @@
   });
 
 
-  function openAbsenceRequestModal() {
+  function openAbsenceRequestModal(editRow) {
     var modal = document.getElementById('modalAbsenceRequest');
     if (!modal) return;
     var start = document.getElementById('absenceRequestStart');
     var end = document.getElementById('absenceRequestEnd');
-    if (start && end) {
-      var t = new Date();
-      start.value = t.toISOString().slice(0, 10);
-      end.value = t.toISOString().slice(0, 10);
+    var typeEl = document.getElementById('absenceRequestType');
+    var commentEl = document.getElementById('absenceRequestComment');
+    var idEl = document.getElementById('absenceRequestEditId');
+    var titleEl = document.getElementById('absenceRequestModalTitle');
+    var submitEl = document.getElementById('absenceRequestSubmit');
+    if (editRow) {
+      if (idEl) idEl.value = String(editRow.id || '');
+      if (typeEl) typeEl.value = editRow.type || '';
+      if (commentEl) commentEl.value = editRow.comment ? String(editRow.comment) : '';
+      if (start) start.value = laptopAbsYmd(editRow.start_datetime);
+      if (end) end.value = laptopAbsYmd(editRow.end_datetime);
+      if (titleEl) titleEl.textContent = 'Anfrage ändern';
+      if (submitEl) submitEl.textContent = 'Änderung speichern';
+    } else {
+      if (idEl) idEl.value = '';
+      if (typeEl) typeEl.value = '';
+      if (commentEl) commentEl.value = '';
+      if (start && end) {
+        var t = new Date();
+        start.value = t.toISOString().slice(0, 10);
+        end.value = t.toISOString().slice(0, 10);
+      }
+      if (titleEl) titleEl.textContent = 'Abwesenheit beantragen';
+      if (submitEl) submitEl.textContent = 'Anfrage senden';
     }
     document.getElementById('absenceRequestMsg').textContent = '';
     modal.classList.add('active');
@@ -8825,12 +8904,35 @@
       modal.setAttribute('aria-hidden', 'true');
     }
   }
-  document.getElementById('btnRequestAbsence').addEventListener('click', openAbsenceRequestModal);
+  document.getElementById('btnRequestAbsence').addEventListener('click', function () {
+    openAbsenceRequestModal();
+  });
+  var lapPrev = document.getElementById('laptopAbsMonthPrev');
+  var lapNext = document.getElementById('laptopAbsMonthNext');
+  if (lapPrev) {
+    lapPrev.addEventListener('click', function () {
+      laptopAbsCal.m -= 1;
+      if (laptopAbsCal.m < 0) { laptopAbsCal.m = 11; laptopAbsCal.y -= 1; }
+      renderLaptopAbsMonth();
+    });
+  }
+  if (lapNext) {
+    lapNext.addEventListener('click', function () {
+      laptopAbsCal.m += 1;
+      if (laptopAbsCal.m > 11) { laptopAbsCal.m = 0; laptopAbsCal.y += 1; }
+      renderLaptopAbsMonth();
+    });
+  }
   document.getElementById('absencesList').addEventListener('click', function(e) {
-    var btn = e.target && e.target.closest && e.target.closest('[data-action="delete-absence"], [data-action="delete-absence-request"]');
+    var btn = e.target && e.target.closest && e.target.closest('[data-action="delete-absence-request"], [data-action="edit-absence-request"]');
     if (!btn) return;
     var id = btn.getAttribute('data-id');
     if (!id) return;
+    if (btn.getAttribute('data-action') === 'edit-absence-request') {
+      var row = (laptopAbsCal.requests || []).find(function (r) { return String(r.id) === String(id); });
+      if (row) openAbsenceRequestModal(row);
+      return;
+    }
     var isRequest = btn.getAttribute('data-action') === 'delete-absence-request';
     if (isRequest) {
       if (!confirm('Diese Anfrage (z. B. abgelehnt) aus der Liste entfernen?')) return;
@@ -8860,20 +8962,6 @@
       });
       return;
     }
-    if (!confirm('Abwesenheit wirklich löschen? (lokal und in der Dispo)')) return;
-    var body = { id: parseInt(id, 10), base_url: getDispoBaseUrl() || undefined, serverUsername: getDispoUsername() || undefined, serverPassword: getDispoPassword() || undefined };
-    fetch(API_BASE + '/api/absence?id=' + encodeURIComponent(id), {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-      body: JSON.stringify(body)
-    }).then(function(r) { return r.json(); }).then(function(data) {
-      if (data.ok) {
-        loadJobsAndAbsences();
-        showToast('Abwesenheit gelöscht.');
-      } else {
-        alert(data.error || 'Löschen fehlgeschlagen');
-      }
-    }).catch(function(err) { alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt')); });
   });
   document.getElementById('btnCleanupErrorRequests').addEventListener('click', function() {
     fetch(API_BASE + '/api/absence_requests_cleanup_errors', {
@@ -8958,6 +9046,7 @@
     var type = (typeEl && typeEl.value) ? typeEl.value.trim() : 'Abwesenheit';
     var commentEl = document.getElementById('absenceRequestComment');
     var cmtV = (commentEl && commentEl.value) ? commentEl.value.trim() : '';
+    var editId = parseInt((document.getElementById('absenceRequestEditId') || {}).value || '0', 10) || 0;
     if (!start || !end) {
       if (msgEl) msgEl.textContent = 'Bitte Start- und Enddatum angeben.';
       return;
@@ -8971,16 +9060,21 @@
       serverUsername: getDispoUsername() || undefined,
       serverPassword: getDispoPassword() || undefined
     };
-    msgEl.textContent = 'Wird gesendet…';
+    if (editId) body.id = editId;
+    msgEl.textContent = editId ? 'Wird gespeichert…' : 'Wird gesendet…';
     fetch(API_BASE + '/api/absence_request', {
-      method: 'POST',
+      method: editId ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
       body: JSON.stringify(body)
     }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!data || !data.ok) {
+        if (msgEl) msgEl.textContent = (data && data.error) ? data.error : 'Fehler';
+        return;
+      }
       closeAbsenceRequestModal();
       if (msgEl) msgEl.textContent = '';
       loadJobsAndAbsences();
-      showToast('Anfrage wurde gesendet und wird von der Dispo geprüft.');
+      showToast(editId ? 'Anfrage wurde aktualisiert.' : 'Anfrage wurde gesendet und wird von der Dispo geprüft.');
     }).catch(function (err) {
       if (msgEl) msgEl.textContent = 'Fehler: ' + (err && err.message ? err.message : 'Unbekannt');
     });
