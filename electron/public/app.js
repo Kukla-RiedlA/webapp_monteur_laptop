@@ -4115,55 +4115,50 @@
       });
   }
 
+  /** Beschreibung/Bemerkungen wie in der Dispo formatieren: HTML erlauben (nur sichere Tags), Zeilenumbrüche erhalten. */
+  function formatDescriptionForDisplay(str) {
+    if (str == null || str === '') return '';
+    var s = String(str).trim();
+    if (!s) return '';
+    if (s.indexOf('\n') !== -1) s = s.replace(/\n/g, '<br>');
+    var allowed = ['b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'p', 'br', 'span', 'h1', 'h2', 'h3', 'div'];
+    var div = document.createElement('div');
+    div.innerHTML = s;
+    function safeSpanStyle(el) {
+      var style = (el.getAttribute('style') || '').trim();
+      if (!style) return '';
+      var parts = [];
+      var cm = style.match(/(?:^|;\s*)color\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))/i);
+      if (cm) parts.push('color:' + cm[1].trim());
+      var bm = style.match(/(?:^|;\s*)background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))/i);
+      if (bm) parts.push('background-color:' + bm[1].trim());
+      return parts.length ? ' style="' + parts.join(';') + '"' : '';
+    }
+    function sanitize(node) {
+      if (node.nodeType === 3) return escapeHtml(node.textContent);
+      if (node.nodeType !== 1) return '';
+      var tag = node.tagName.toLowerCase();
+      if (allowed.indexOf(tag) === -1) {
+        var out = '';
+        for (var i = 0; i < node.childNodes.length; i++) out += sanitize(node.childNodes[i]);
+        return out;
+      }
+      var open = '<' + tag;
+      if (tag === 'span') open += safeSpanStyle(node);
+      open += '>';
+      var out = open;
+      for (var j = 0; j < node.childNodes.length; j++) out += sanitize(node.childNodes[j]);
+      if (tag !== 'br') out += '</' + tag + '>';
+      return out;
+    }
+    var result = '';
+    for (var k = 0; k < div.childNodes.length; k++) result += sanitize(div.childNodes[k]);
+    return result.trim();
+  }
+
   function renderJobDetailsContent(job) {
     var readOnlyAngelegt = isJobAngelegtReadOnly(job);
     var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
-    function decodeHtmlEntities(str) {
-      if (str == null || str === '') return '';
-      var d = document.createElement('div');
-      d.innerHTML = String(str);
-      return (d.textContent || d.innerText || '').trim();
-    }
-    /** Beschreibung/Bemerkungen wie in der Dispo formatieren: HTML erlauben (nur sichere Tags), Zeilenumbrüche erhalten. */
-    function formatDescriptionForDisplay(str) {
-      if (str == null || str === '') return '';
-      var s = String(str).trim();
-      if (!s) return '';
-      if (s.indexOf('\n') !== -1) s = s.replace(/\n/g, '<br>');
-      var allowed = ['b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'p', 'br', 'span', 'h1', 'h2', 'h3', 'div'];
-      var div = document.createElement('div');
-      div.innerHTML = s;
-      function safeSpanStyle(el) {
-        var style = (el.getAttribute('style') || '').trim();
-        if (!style) return '';
-        var parts = [];
-        var cm = style.match(/(?:^|;\s*)color\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))/i);
-        if (cm) parts.push('color:' + cm[1].trim());
-        var bm = style.match(/(?:^|;\s*)background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))/i);
-        if (bm) parts.push('background-color:' + bm[1].trim());
-        return parts.length ? ' style="' + parts.join(';') + '"' : '';
-      }
-      function sanitize(node) {
-        if (node.nodeType === 3) return escapeHtml(node.textContent);
-        if (node.nodeType !== 1) return '';
-        var tag = node.tagName.toLowerCase();
-        if (allowed.indexOf(tag) === -1) {
-          var out = '';
-          for (var i = 0; i < node.childNodes.length; i++) out += sanitize(node.childNodes[i]);
-          return out;
-        }
-        var open = '<' + tag;
-        if (tag === 'span') open += safeSpanStyle(node);
-        open += '>';
-        var out = open;
-        for (var j = 0; j < node.childNodes.length; j++) out += sanitize(node.childNodes[j]);
-        if (tag !== 'br') out += '</' + tag + '>';
-        return out;
-      }
-      var result = '';
-      for (var k = 0; k < div.childNodes.length; k++) result += sanitize(div.childNodes[k]);
-      return result.trim();
-    }
     var dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
     var countryRaw = (job.country || '').trim();
     var countryCode = normalizeCountryToCode(job.country);
@@ -9155,6 +9150,7 @@
   var archivFolderRoot = {};
   var archivFolderExpanded = {};
   var archivJobDetailsCache = {};
+  var archivFolderHint = {};
 
   function getArchivFilters() {
     const customerEl = document.getElementById('archivFilterCustomer');
@@ -9311,7 +9307,6 @@
     html += '<dt>Typ</dt><dd>' + v(job.job_type) + '</dd>';
     html += '<dt>Zeitraum</dt><dd>' + (dateRangeStr ? v(dateRangeStr) : v(formatDateOnly(job.start_datetime) || job.start_datetime)) + '</dd>';
     html += '<dt>Status</dt><dd>' + v(job.status) + '</dd>';
-    if (job.description) html += '<dt>Bemerkungen</dt><dd>' + (escapeHtml(String(job.description).trim()) || '–') + '</dd>';
     html += '</dl></div>';
     html += '<div class="archiv-detail-section"><h4>Kunde</h4><dl class="modal-detail-dl">';
     html += '<dt>Name</dt><dd>' + v(job.customer_name) + '</dd>';
@@ -9340,6 +9335,10 @@
       html += '</tr>';
     });
     html += '</tbody></table></div></div>';
+    if (job.description) {
+      html += '<div class="archiv-detail-section modal-detail-section-description"><h4>Bemerkungen</h4>';
+      html += '<div class="modal-description-wrap"><div class="modal-description-display">' + formatDescriptionForDisplay(job.description) + '</div></div></div>';
+    }
     return html;
   }
 
@@ -9450,7 +9449,8 @@
     }
     addEntries(root || [], 0);
     if (rows.length === 0) {
-      containerEl.innerHTML = '<p class="empty">Keine Ordner/Dateien gespeichert.</p>';
+      var emptyHint = archivFolderHint[jobId] || 'Keine lokalen Dateien verblieben.';
+      containerEl.innerHTML = '<p class="empty">' + escapeHtml(emptyHint) + '</p>';
       return;
     }
     var html = '<div class="archiv-folder-tree">';
@@ -9499,6 +9499,153 @@
     });
   }
 
+  function openArchivLocalPath(fullPath) {
+    if (!fullPath) return;
+    if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
+      Promise.resolve(monteurApp.openPath(String(fullPath))).then(function (r) {
+        if (r && r.ok === false && r.error) showToast('Öffnen fehlgeschlagen: ' + r.error);
+      }).catch(function (err) {
+        showToast('Öffnen fehlgeschlagen: ' + (err && err.message ? err.message : String(err)));
+      });
+    } else {
+      showToast('Datei kann hier nicht geöffnet werden.');
+    }
+  }
+
+  function formatArchivDocMeta(item) {
+    var parts = [];
+    if (item && item.type) parts.push(String(item.type));
+    if (item && item.fab) parts.push('FN ' + String(item.fab));
+    var sizeStr = item && item.size != null ? formatAnlagenstammSize(item.size) : '';
+    if (sizeStr) parts.push(sizeStr);
+    var mtimeStr = '';
+    if (item && item.mtime) {
+      if (typeof formatFileDate === 'function') mtimeStr = formatFileDate(item.mtime);
+      else mtimeStr = String(item.mtime).slice(0, 10);
+    }
+    if (mtimeStr) parts.push(mtimeStr);
+    return parts.filter(Boolean).join(' · ');
+  }
+
+  function renderArchivDocumentRows(items, emptyText) {
+    if (!items || !items.length) {
+      return '<p class="empty archiv-docs-empty">' + escapeHtml(emptyText) + '</p>';
+    }
+    var html = '<ul class="archiv-docs-list">';
+    items.forEach(function (item, idx) {
+      var name = item && item.name ? String(item.name) : 'Datei';
+      html += '<li class="archiv-docs-row">';
+      html += '<span class="archiv-docs-icon">' + windowsStyleFsIconHtml(name, false) + '</span>';
+      html += '<div class="archiv-docs-main">';
+      html += '<div class="archiv-docs-name">' + escapeHtml(name) + '</div>';
+      html += '<div class="archiv-docs-meta muted">' + escapeHtml(formatArchivDocMeta(item)) + '</div>';
+      html += '</div>';
+      html += '<button type="button" class="btn btn-ghost archiv-docs-open" data-archiv-doc-idx="' + idx + '">Öffnen</button>';
+      html += '</li>';
+    });
+    html += '</ul>';
+    return html;
+  }
+
+  function bindArchivDocumentList(containerEl, items) {
+    if (!containerEl) return;
+    containerEl.querySelectorAll('.archiv-docs-open').forEach(function (btn) {
+      btn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var idx = parseInt(btn.getAttribute('data-archiv-doc-idx'), 10);
+        var item = items && items[idx];
+        if (!item) return;
+        if (item.absPath) {
+          openArchivLocalPath(item.absPath);
+          return;
+        }
+        if (item.file_id && item.fab && typeof downloadAnlagenstammParameterFile === 'function') {
+          downloadAnlagenstammParameterFile(item.fab, item.file_id, item.name).catch(function (err) {
+            showToast('Öffnen fehlgeschlagen: ' + (err && err.message ? err.message : String(err)));
+          });
+          return;
+        }
+        showToast('Datei ist lokal nicht mehr vorhanden.');
+      });
+    });
+  }
+
+  function bindArchivProjekteNeu(expandEl, job, jobId) {
+    var host = expandEl.querySelector('[data-archiv-pn-host]');
+    if (!host) return;
+    var fabs = typeof parseJobFabrikationsnummernOrdered === 'function'
+      ? parseJobFabrikationsnummernOrdered(job)
+      : [];
+    if (!fabs.length) {
+      host.innerHTML = '<p class="empty">Keine Fabrikationsnummer – PROJEKTE NEU nicht verfügbar.</p>';
+      return;
+    }
+    host.innerHTML = '';
+    fabs.forEach(function (fab, i) {
+      var det = document.createElement('details');
+      det.className = 'archiv-pn-fab';
+      if (i === 0) det.open = true;
+      var sum = document.createElement('summary');
+      sum.textContent = 'FN ' + fab;
+      det.appendChild(sum);
+      var msg = document.createElement('div');
+      msg.className = 'archiv-pn-msg muted';
+      msg.textContent = 'Lade Struktur…';
+      det.appendChild(msg);
+      var tree = document.createElement('div');
+      tree.className = 'projektdaten-projekte-neu-tree archiv-pn-tree';
+      det.appendChild(tree);
+      host.appendChild(det);
+      function loadPn() {
+        loadProjekteNeuTreeIntoHost(fab, {
+          msgEl: msg,
+          treeHost: tree,
+          toggleEl: det,
+          jobId: jobId,
+          allowOnline: false,
+        });
+      }
+      if (det.open) loadPn();
+      det.addEventListener('toggle', function () {
+        if (!det.open) return;
+        if (det.getAttribute('data-loaded') === '1') {
+          loadPendingProjekteNeuThumbsIn(tree);
+          return;
+        }
+        loadPn();
+      });
+    });
+  }
+
+  function bindArchivJobDocuments(expandEl, jobId) {
+    var protoEl = expandEl.querySelector('[data-archiv-protokolle]');
+    var paramEl = expandEl.querySelector('[data-archiv-parameterlisten]');
+    if (!protoEl && !paramEl) return;
+    var headers = {};
+    var techId = getTechId();
+    if (techId) headers['X-Technician-Id'] = String(techId);
+    fetch(API_BASE + '/api/archiv/job_documents?job_id=' + encodeURIComponent(jobId), { headers: headers })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var protokolle = (data && data.ok && Array.isArray(data.protokolle)) ? data.protokolle : [];
+        var params = (data && data.ok && Array.isArray(data.parameterlisten)) ? data.parameterlisten : [];
+        if (protoEl) {
+          protoEl.innerHTML = renderArchivDocumentRows(protokolle, 'Keine lokalen Protokolle verblieben.');
+          bindArchivDocumentList(protoEl, protokolle);
+        }
+        if (paramEl) {
+          paramEl.innerHTML = renderArchivDocumentRows(params, 'Keine lokalen Parameterlisten verblieben.');
+          bindArchivDocumentList(paramEl, params);
+        }
+      })
+      .catch(function (e) {
+        var err = 'Fehler: ' + (e && e.message ? e.message : String(e));
+        if (protoEl) protoEl.innerHTML = '<p class="empty">' + escapeHtml(err) + '</p>';
+        if (paramEl) paramEl.innerHTML = '<p class="empty">' + escapeHtml(err) + '</p>';
+      });
+  }
+
   function loadArchivJobExpandContent(jobId, expandEl) {
     expandEl.innerHTML = '<p class="empty">Wird geladen…</p>';
     var headers = {};
@@ -9506,7 +9653,7 @@
     if (techId) headers['X-Technician-Id'] = String(techId);
     Promise.all([
       fetch(API_BASE + '/api/job?id=' + encodeURIComponent(jobId), { headers: headers }).then(function (r) { return r.json(); }),
-      fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId)).then(function (r) { return r.json(); })
+      fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId), { headers: headers }).then(function (r) { return r.json(); })
     ]).then(function (results) {
       var jobRes = results[0];
       var filesRes = results[1];
@@ -9519,10 +9666,31 @@
       var rootEntries = (filesRes && filesRes.ok && filesRes.entries) ? filesRes.entries : [];
       archivFolderRoot[jobId] = rootEntries;
       if (!archivFolderExpanded[jobId]) archivFolderExpanded[jobId] = {};
+      if (filesRes && filesRes.folder_missing) {
+        archivFolderHint[jobId] = filesRes.hint || 'Kein lokaler Projektordner mehr vorhanden.';
+      } else if (!rootEntries.length) {
+        archivFolderHint[jobId] = 'Keine lokalen Dateien verblieben (nach „erledigt“ gelöscht).';
+      } else {
+        archivFolderHint[jobId] = '';
+      }
       var detailHtml = buildArchivJobDetailHtml(job);
-      expandEl.innerHTML = detailHtml + '<div class="archiv-detail-section"><h4>Gespeicherte Ordner &amp; Dateien</h4><div class="archiv-folder-container" data-job-id="' + jobId + '"></div></div>';
+      var extra = '';
+      extra += '<div class="archiv-detail-section archiv-pn-section"><h4>PROJEKTE NEU</h4>';
+      extra += '<p class="muted archiv-section-hint">Lokaler Anlagenordner je Fabrikationsnummer (auch ohne Reiseordner).</p>';
+      extra += '<div class="archiv-pn-host" data-archiv-pn-host></div></div>';
+      extra += '<div class="archiv-detail-section archiv-docs-section"><h4>Parameterlisten und Protokolle</h4>';
+      extra += '<div class="archiv-docs-split">';
+      extra += '<div class="archiv-docs-col"><h5>Protokolle</h5><div data-archiv-protokolle><p class="empty">Wird geladen…</p></div></div>';
+      extra += '<div class="archiv-docs-col"><h5>Parameterlisten</h5><div data-archiv-parameterlisten><p class="empty">Wird geladen…</p></div></div>';
+      extra += '</div></div>';
+      extra += '<div class="archiv-detail-section"><h4>Lokal verbliebene Dateien</h4>';
+      extra += '<p class="muted archiv-section-hint">Reste nach „erledigt“ (mit „Nicht löschen“ geschützt).</p>';
+      extra += '<div class="archiv-folder-container" data-job-id="' + jobId + '"></div></div>';
+      expandEl.innerHTML = detailHtml + extra;
       var container = expandEl.querySelector('.archiv-folder-container');
       if (container) renderArchivFolderTree(jobId, container);
+      bindArchivProjekteNeu(expandEl, job, jobId);
+      bindArchivJobDocuments(expandEl, jobId);
     }).catch(function (e) {
       expandEl.innerHTML = '<p class="empty">Fehler: ' + escapeHtml(e.message || String(e)) + '</p>';
     });
@@ -11211,10 +11379,11 @@
       });
   }
 
-  function buildAnlageDetailProjekteNeuTree(fab, nodes, depth, msgEl, galleryImages) {
+  function buildAnlageDetailProjekteNeuTree(fab, nodes, depth, msgEl, galleryImages, jobIdOpt) {
     depth = depth || 0;
+    var pnJobId = jobIdOpt != null && jobIdOpt !== '' ? jobIdOpt : jobDetailsJobId;
     if (depth === 0 && !galleryImages) {
-      galleryImages = collectProjekteNeuGalleryImages(fab, nodes, jobDetailsJobId);
+      galleryImages = collectProjekteNeuGalleryImages(fab, nodes, pnJobId);
     }
     function notifyErr(err, optsNotify) {
       optsNotify = optsNotify || {};
@@ -11257,7 +11426,7 @@
         summary.appendChild(dateEl);
         details.appendChild(summary);
         if (Array.isArray(n.children) && n.children.length) {
-          details.appendChild(buildAnlageDetailProjekteNeuTree(fab, n.children, depth + 1, msgEl, galleryImages));
+          details.appendChild(buildAnlageDetailProjekteNeuTree(fab, n.children, depth + 1, msgEl, galleryImages, pnJobId));
         } else {
           var em = document.createElement('div');
           em.className = 'muted';
@@ -11284,13 +11453,13 @@
           timg.setAttribute('data-pn-fab', fab);
           timg.setAttribute('data-pn-rel', rel);
           timg.setAttribute('data-pn-thumb-max', '256');
-          if (jobDetailsJobId) timg.setAttribute('data-pn-job-id', String(jobDetailsJobId));
+          if (pnJobId) timg.setAttribute('data-pn-job-id', String(pnJobId));
           fileNameCol.appendChild(timg);
           timg.addEventListener('click', function (ev) {
             ev.preventDefault();
             ev.stopPropagation();
             openProjekteNeuImageInLightbox(fab, rel, {
-              jobId: jobDetailsJobId,
+              jobId: pnJobId,
               alt: label,
               galleryImages: galleryImages,
               onError: function (err) { notifyErr(err, { thumbOnly: false }); },
@@ -11307,14 +11476,14 @@
         openBtn.addEventListener('click', function () {
           if (isProjekteNeuRasterImage(label)) {
             openProjekteNeuImageInLightbox(fab, rel, {
-              jobId: jobDetailsJobId,
+              jobId: pnJobId,
               alt: label,
               galleryImages: galleryImages,
               onError: function (err) { notifyErr(err, { thumbOnly: false }); },
             });
             return;
           }
-          openAnlagenstammProjekteNeuLocal(fab, rel, String(n.name || ''), { jobId: jobDetailsJobId }).catch(function (err) {
+          openAnlagenstammProjekteNeuLocal(fab, rel, String(n.name || ''), { jobId: pnJobId }).catch(function (err) {
             notifyErr(err);
             var hint = (err && err.message) ? err.message : 'Dokument konnte nicht geöffnet werden.';
             showToast(hint.indexOf('offline') >= 0 || hint.indexOf('lokal') >= 0 ? hint : 'Dokument konnte nicht geöffnet werden.');
@@ -11449,7 +11618,7 @@
     function renderTree(tree, statusText, folderName) {
       treeHost.innerHTML = '';
       if (tree && tree.length) {
-        var treeRoot = buildAnlageDetailProjekteNeuTree(fab, tree, 0, msg);
+        var treeRoot = buildAnlageDetailProjekteNeuTree(fab, tree, 0, msg, null, jobId);
         treeHost.appendChild(treeRoot);
         bindProjekteNeuLazyThumbnails(treeHost);
         if (!toggleEl || toggleEl.open) {

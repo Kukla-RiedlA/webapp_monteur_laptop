@@ -3285,20 +3285,29 @@ function createApp(db) {
         localJobId = mapped.id;
       }
       const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(localJobId);
-      const folderGate = dienstreiseProjectFolderBlocked(statusRow ? statusRow.status : null);
+      const statusRaw = statusRow ? String(statusRow.status || '').trim().toLowerCase() : '';
+      const isClosedJob = statusRaw === 'erledigt' || statusRaw === 'abgerechnet';
       const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
-      if (folderGate || !reiseDir || !fs.existsSync(reiseDir)) {
+      const folderExists = !!(reiseDir && fs.existsSync(reiseDir));
+      if (!folderExists) {
+        const folderGate = dienstreiseProjectFolderBlocked(statusRow ? statusRow.status : null);
+        let hint = 'Noch kein Projektordner — bitte Auftrag annehmen.';
+        if (isClosedJob) {
+          hint = 'Kein lokaler Projektordner mehr vorhanden (nach „erledigt“ gelöscht oder nie angelegt).';
+        } else if (folderGate) {
+          hint = folderGate.error;
+        }
         return res.json({
           ok: true,
           folderPath: reiseDir || '',
           entries: [],
           folder_missing: true,
-          hint: folderGate
-            ? folderGate.error
-            : 'Noch kein Projektordner — bitte Auftrag annehmen.',
+          hint,
         });
       }
-      ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+      if (!isClosedJob) {
+        ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+      }
       let subpath = (req.query.subpath || '').trim().replace(/^[\/\\]+|[\/\\]+$/g, '');
       if (subpath && (subpath.includes('..') || path.isAbsolute(subpath))) return res.status(400).json({ ok: false, error: 'Ungültiger Unterpfad.' });
 
@@ -5885,6 +5894,114 @@ function createApp(db) {
       res.json({ ok: true, technician_id: technicianId, year, jobs: rows });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  function isArchivParameterDocument(type, name) {
+    const t = String(type || '');
+    const n = String(name || '');
+    if (/parameter/i.test(t)) return true;
+    if (/\.csv$/i.test(n)) return true;
+    return false;
+  }
+
+  app.get('/api/archiv/job_documents', (req, res) => {
+    try {
+      const jobId = parseInt(req.query.job_id, 10);
+      if (!jobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const technicianId = getTechnicianId(req);
+      const resolved =
+        technicianId && Number.isFinite(technicianId) && technicianId > 0
+          ? resolveLocalJobIdForTechnician(db, technicianId, jobId, { mode: 'auto' })
+          : null;
+      let localJobId = jobId;
+      if (resolved) {
+        if (!resolved.ok) {
+          return res.status(resolved.status || 404).json({ ok: false, error: resolved.error });
+        }
+        localJobId = resolved.localId;
+      } else {
+        const mapped = getJobRowByLocalOrServerId(jobId);
+        if (!mapped) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+        localJobId = mapped.id;
+      }
+      const jobRow = loadKundenDokumentationJobMeta(localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const catalog = buildKundenDokumentationCatalog(localJobId, technicianId, jobRow);
+      const mapDoc = (d, extra) =>
+        Object.assign(
+          {
+            id: d.id,
+            type: d.type || '',
+            name: d.name || '',
+            fab: d.fab || '',
+            absPath: d.absPath || null,
+            relPath: d.relPath || '',
+            size: d.size != null ? d.size : null,
+            mtime: d.mtime || null,
+            source: 'local_folder',
+          },
+          extra || {},
+        );
+      const protokolle = [];
+      const parameterlisten = [];
+      const seenParamKeys = new Set();
+      for (const d of catalog.documents || []) {
+        const item = mapDoc(d);
+        const key = String(item.fab || '') + '|' + String(item.name || '').toLowerCase();
+        if (isArchivParameterDocument(item.type, item.name)) {
+          seenParamKeys.add(key);
+          parameterlisten.push(item);
+        } else {
+          protokolle.push(item);
+        }
+      }
+      const fabs = parseJobFabrikationsnummernRows(jobRow.fabrikationsnummern)
+        .map((r) => String((r && (r.fabrikationsnummer != null ? r.fabrikationsnummer : r.Fabrikationsnummer)) || '').trim())
+        .filter(Boolean);
+      try {
+        ensureAnlagenstammLocalSchema(db);
+      } catch (_) {
+        /* Schema optional */
+      }
+      for (const fab of fabs) {
+        let files = [];
+        try {
+          files = listParameterFilesByFab(db, fab) || [];
+        } catch (_) {
+          files = [];
+        }
+        for (const f of files) {
+          const name = String(f.original_filename || '').trim();
+          const key = String(fab) + '|' + name.toLowerCase();
+          if (seenParamKeys.has(key)) continue;
+          seenParamKeys.add(key);
+          parameterlisten.push({
+            id: 'cache:' + String(f.id),
+            type: 'Parameterliste',
+            name: name || 'parameterliste',
+            fab,
+            absPath: f.source_path || null,
+            relPath: '',
+            file_id: f.server_file_id != null ? Number(f.server_file_id) : Number(f.id),
+            local_id: f.id,
+            size: f.size != null ? Number(f.size) : null,
+            mtime: f.uploaded_at || null,
+            source: f.source === 'projekte_neu' ? 'projekte_neu' : 'cache',
+            entry_count: f.entry_count != null ? Number(f.entry_count) : 0,
+          });
+        }
+      }
+      return res.json({
+        ok: true,
+        folder_missing: !!catalog.folder_missing,
+        hint: catalog.hint || null,
+        protokolle,
+        parameterlisten,
+      });
+    } catch (e) {
+      console.warn('[archiv/job_documents]', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
     }
   });
 

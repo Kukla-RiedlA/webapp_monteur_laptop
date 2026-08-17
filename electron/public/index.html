@@ -986,7 +986,7 @@
     .archiv-detail-section h4 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--muted); }
     .archiv-detail-section .modal-detail-dl { margin: 0; }
     .archiv-detail-section .modal-address { margin: 0; font-size: 0.9rem; }
-    .archiv-folder-container { margin-top: 0.5rem; max-height: 280px; overflow: auto; border: 1px solid var(--accent); border-radius: 4px; padding: 0.5rem; background: var(--card); }
+    .archiv-folder-container { margin-top: 0.5rem; max-height: 420px; overflow: auto; border: 1px solid var(--accent); border-radius: 4px; padding: 0.5rem; background: var(--card); }
     .archiv-folder-tree { font-family: ui-monospace, monospace; font-size: 0.8rem; }
     .archiv-folder-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0.4rem; border-radius: 3px; }
     .archiv-folder-row:hover { background: var(--accent); }
@@ -999,6 +999,26 @@
     .archiv-folder-meta { color: var(--muted); font-size: 0.75rem; white-space: nowrap; flex-shrink: 0; }
     .archiv-folder-actions { flex-shrink: 0; }
     .archiv-folder-actions .btn { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
+    .archiv-detail-section.modal-detail-section-description { grid-column: 1 / -1; }
+    .archiv-section-hint { margin: 0 0 0.5rem; font-size: 0.82rem; }
+    .archiv-pn-host { display: flex; flex-direction: column; gap: 0.5rem; }
+    .archiv-pn-fab { border: 1px solid var(--accent); border-radius: 4px; background: var(--card); }
+    .archiv-pn-fab > summary { cursor: pointer; padding: 0.45rem 0.65rem; font-weight: 600; }
+    .archiv-pn-fab > summary:hover { background: rgba(255,255,255,0.04); }
+    .archiv-pn-msg { padding: 0 0.65rem 0.35rem; font-size: 0.82rem; }
+    .archiv-pn-tree { padding: 0 0.5rem 0.5rem; max-height: 360px; overflow: auto; }
+    .archiv-docs-split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 800px) { .archiv-docs-split { grid-template-columns: 1fr; } }
+    .archiv-docs-col h5 { margin: 0 0 0.4rem; font-size: 0.85rem; color: var(--muted); }
+    .archiv-docs-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--accent); border-radius: 4px; background: var(--card); max-height: 280px; overflow: auto; }
+    .archiv-docs-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.55rem; border-bottom: 1px solid var(--accent); }
+    .archiv-docs-row:last-child { border-bottom: none; }
+    .archiv-docs-icon { flex-shrink: 0; }
+    .archiv-docs-main { min-width: 0; flex: 1; }
+    .archiv-docs-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .archiv-docs-meta { font-size: 0.75rem; }
+    .archiv-docs-open { flex-shrink: 0; padding: 0.2rem 0.5rem; font-size: 0.75rem; }
+    .archiv-docs-empty { margin: 0.25rem 0; }
     .archiv-fab-table-wrap { overflow-x: auto; margin-top: 0.5rem; border: 1px solid var(--accent); border-radius: 4px; }
     .archiv-fab-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
     .archiv-fab-table th, .archiv-fab-table td { padding: 0.35rem 0.5rem; text-align: left; border-bottom: 1px solid var(--accent); }
