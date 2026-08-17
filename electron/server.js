@@ -8308,6 +8308,35 @@ function createApp(db) {
         const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
         const syncHeaders = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authSync || {}) };
         try {
+          const idxUrl = dispoBaseUrl + '/dispo_api/api/montagebericht_akte_index.php';
+          const idxRes = await fetch(idxUrl, {
+            method: 'POST',
+            headers: syncHeaders,
+            body: JSON.stringify({
+              technician_id: technicianId,
+              job_id: serverJobId,
+              payload: {
+                grundDesEinsatzes,
+                grundDesEinsatzes_html: grundDesEinsatzesHtml,
+                fabBemerkungen,
+                language,
+                languages,
+                bemerkungen: kopfdatenBemerkungen,
+                bemerkungen_html: kopfdatenBemerkungenHtml,
+                projekt: projektPflicht,
+                kopfdaten,
+              },
+              fabs,
+            }),
+          });
+          const idxData = await idxRes.json().catch(() => ({}));
+          if (!idxRes.ok || !idxData.ok) {
+            console.warn('[montagebericht] akte index:', idxData.error || idxRes.statusText || idxRes.status);
+          }
+        } catch (idxErr) {
+          console.warn('[montagebericht] akte index:', idxErr && idxErr.message ? idxErr.message : idxErr);
+        }
+        try {
           const syncUrl = dispoBaseUrl + '/dispo_api/api/anlagenstamm_projekt_job_save.php';
           const syncRes = await fetch(syncUrl, {
             method: 'POST',

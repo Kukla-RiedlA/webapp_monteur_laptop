@@ -437,6 +437,8 @@
           if (d.protocol_table && d.protocol_id && typeof window.kuklaAkteOpenProtocolView === 'function') {
             html += '<button type="button" class="btn btn-secondary akte-doc-view" data-kind="protocol" data-table="' + esc(d.protocol_table) + '" data-id="' + esc(String(d.protocol_id)) + '" style="padding:4px 8px;font-size:11px">Anzeigen</button>';
             html += '<a class="btn btn-secondary" style="padding:4px 8px;font-size:11px" target="_blank" rel="noopener" href="' + esc((window.kuklaAktePdfUrl ? window.kuklaAktePdfUrl('protocol', { table: d.protocol_table, id: d.protocol_id }) : '#')) + '">PDF</a>';
+          } else if ((d.view_kind === 'form_json' || d.form_slug) && d.id && typeof window.kuklaAkteOpenProtocolView === 'function') {
+            html += '<button type="button" class="btn btn-secondary akte-doc-view" data-kind="form_json" data-document-id="' + esc(String(d.id)) + '" data-table="' + esc(d.form_slug || d.document_type || '') + '" style="padding:4px 8px;font-size:11px">Anzeigen</button>';
           }
           if (d.parameter_file_id && typeof window.kuklaAkteOpenParameterView === 'function') {
             html += '<button type="button" class="btn btn-secondary akte-doc-view-param" data-file-id="' + esc(String(d.parameter_file_id)) + '" style="padding:4px 8px;font-size:11px">Anzeigen</button>';
@@ -583,7 +585,9 @@
     root.querySelectorAll('.akte-doc-view').forEach(function (btn) {
       btn.addEventListener('click', function () {
         if (typeof window.kuklaAkteOpenProtocolView === 'function') {
-          window.kuklaAkteOpenProtocolView(btn.getAttribute('data-table') || '', btn.getAttribute('data-id') || '');
+          window.kuklaAkteOpenProtocolView(btn.getAttribute('data-table') || '', btn.getAttribute('data-id') || '', {
+            document_id: btn.getAttribute('data-document-id') || ''
+          });
         }
       });
     });

@@ -194,6 +194,16 @@
   word-break: break-all;
 }
 
+.akte-gallery-group {
+  margin-bottom: 18px;
+}
+.akte-gallery-group h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0c6b4f;
+}
+
 .akte-doc-card {
   border: 1px solid #d8e3df;
   border-radius: 12px;

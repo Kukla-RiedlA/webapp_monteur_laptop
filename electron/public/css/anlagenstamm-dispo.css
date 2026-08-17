@@ -52,7 +52,9 @@
   min-height: 0;
   width: 100%;
   max-width: none;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   font-family: var(--kukla-font, "Kanit", system-ui, sans-serif);
   color: var(--kukla-body-text, #1a1a1a);
   background: #fff;
@@ -65,6 +67,11 @@
   max-width: none;
   margin: 0;
   box-sizing: border-box;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
 }
 
 #anlagenstamm-host .muted {
@@ -75,12 +82,15 @@
 #anlagenstamm-host .anlagen-page-head {
   display: flex;
   flex-direction: column;
+  justify-content: flex-start;
   align-items: stretch;
   gap: 10px;
   margin-bottom: 8px;
   width: 100%;
   max-width: none;
   box-sizing: border-box;
+  flex: 0 0 auto;
+  min-height: 0;
 }
 
 #anlagenstamm-host .anlagen-page-head-left {
@@ -137,15 +147,16 @@
 
 #anlagenstamm-host .anlagen-table-scroll {
   overflow: auto;
-  height: calc(100vh - 300px);
-  min-height: 320px;
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 200px;
   margin-top: 8px;
   width: 100%;
   max-width: 100%;
   border: 1px solid #ddd;
   border-radius: 4px;
   background: #fff;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 #anlagenstamm-host .anlagen-table-scroll table {
@@ -228,6 +239,7 @@
   align-items: center;
   flex-wrap: wrap;
   margin: 8px 0;
+  flex: 0 0 auto;
 }
 
 #anlagenstamm-host .anlagen-pagination select {

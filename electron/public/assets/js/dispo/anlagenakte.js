@@ -99,12 +99,26 @@
           root.setAttribute('data-loaded', '1');
           return;
         }
-        var html = '<div class="akte-gallery-grid">';
+        var groups = [];
+        var byFolder = {};
         items.forEach(function (it, idx) {
-          html += '<figure class="akte-gallery-item" data-idx="' + idx + '"><img src="' + esc(it.thumb_url || it.full_url || '') +
-            '" alt=""><figcaption>' + esc(it.title || '') + '</figcaption></figure>';
+          it._idx = idx;
+          var folder = String(it.parent_folder || '').trim() || 'Bilder';
+          if (!byFolder[folder]) {
+            byFolder[folder] = [];
+            groups.push(folder);
+          }
+          byFolder[folder].push(it);
         });
-        html += '</div>';
+        var html = '';
+        groups.forEach(function (folder) {
+          html += '<div class="akte-gallery-group"><h3>' + esc(folder) + '</h3><div class="akte-gallery-grid">';
+          byFolder[folder].forEach(function (it) {
+            html += '<figure class="akte-gallery-item" data-idx="' + it._idx + '"><img src="' + esc(it.thumb_url || it.full_url || '') +
+              '" alt=""><figcaption>' + esc(it.title || '') + '</figcaption></figure>';
+          });
+          html += '</div></div>';
+        });
         root.innerHTML = html;
         root.setAttribute('data-loaded', '1');
         qsa('.akte-gallery-item', root).forEach(function (fig) {
@@ -128,15 +142,30 @@
       });
   }
 
-  window.kuklaAkteOpenProtocolView = function (table, id) {
-    var url = endpoint('anlagenstamm_protocol_view.php', 'table=' + encodeURIComponent(table) + '&id=' + encodeURIComponent(String(id)));
+  window.kuklaAkteOpenProtocolView = function (table, id, extra) {
+    extra = extra || {};
+    var q = [];
+    if (extra.document_id) q.push('document_id=' + encodeURIComponent(String(extra.document_id)));
+    if (table) q.push('table=' + encodeURIComponent(table));
+    if (id) q.push('id=' + encodeURIComponent(String(id)));
+    var url = endpoint('anlagenstamm_protocol_view.php', q.join('&'));
     jsonGet(url)
       .then(function (d) {
         if (!d || !d.ok) {
           alert((d && d.error) || 'Anzeige fehlgeschlagen');
           return;
         }
-        openViewer('Protokoll', '<pre>' + esc(JSON.stringify(d.payload || d, null, 2)) + '</pre>');
+        var slug = d.form_slug || d.table || table || '';
+        var title = (window.kuklaAkteFormViewer && window.kuklaAkteFormViewer.titleForSlug)
+          ? window.kuklaAkteFormViewer.titleForSlug(slug, d.table)
+          : 'Protokoll';
+        var html;
+        if (window.kuklaAkteFormViewer && typeof window.kuklaAkteFormViewer.render === 'function') {
+          html = window.kuklaAkteFormViewer.render(d.payload || d, slug, d.table);
+        } else {
+          html = '<pre>' + esc(JSON.stringify(d.payload || d, null, 2)) + '</pre>';
+        }
+        openViewer(title, html);
       })
       .catch(function (e) { alert(e.message || 'Fehler'); });
   };

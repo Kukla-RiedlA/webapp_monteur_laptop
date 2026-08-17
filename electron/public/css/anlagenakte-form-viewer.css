@@ -1,0 +1,87 @@
+.akte-form-readonly {
+  font-size: 13px;
+  color: #1a1a1a;
+}
+.akte-form-set {
+  border: 1px solid #d8e3df;
+  border-radius: 12px;
+  background: #eefaf5;
+  padding: 10px 14px 12px;
+  margin: 0 0 12px;
+  min-width: 0;
+}
+.akte-form-set legend {
+  font-weight: 600;
+  color: #0c6b4f;
+  font-size: 12px;
+  padding: 0 6px;
+}
+.akte-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px 14px;
+}
+.akte-form-field {
+  min-width: 0;
+}
+.akte-form-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #0c6b4f;
+  margin-bottom: 4px;
+}
+.akte-form-value {
+  background: #fff;
+  border: 1px solid #d8e3df;
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-height: 1.4em;
+  word-break: break-word;
+}
+.akte-form-empty { color: #888; }
+.akte-form-card {
+  border: 1px solid #d8e3df;
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.akte-form-card-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: #0c6b4f;
+  margin-bottom: 8px;
+}
+.akte-form-rich {
+  line-height: 1.45;
+}
+.akte-form-rich img {
+  max-width: 100%;
+  height: auto;
+}
+.akte-form-sign {
+  max-height: 72px;
+  max-width: 240px;
+  display: block;
+}
+.akte-form-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #5c5c5c;
+}
+.akte-form-pre {
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+.akte-viewer-box {
+  max-width: min(960px, 96vw);
+}
+.akte-gallery-group {
+  margin-bottom: 18px;
+}
+.akte-gallery-group h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0c6b4f;
+}
