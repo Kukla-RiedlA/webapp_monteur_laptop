@@ -15,8 +15,8 @@
       scripts: [
         '/js/monteur-image-gallery.js',
         '/assets/js/dispo/anlagenstamm_file_lists.js?v=20260701',
-        '/assets/js/dispo/anlagenstamm_documents.js?v=20260817a',
-        '/assets/js/dispo/anlagenakte.js?v=20260817a',
+        '/assets/js/dispo/anlagenstamm_documents.js?v=20260817b',
+        '/assets/js/dispo/anlagenakte.js?v=20260817b',
         '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260701',
         '/assets/js/dispo/anlagenstamm.js?v=20260701',
         '/js/anlagenstamm-laptop-bridge.js?v=20260701',

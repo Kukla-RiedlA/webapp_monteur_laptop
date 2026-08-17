@@ -259,3 +259,84 @@ body.akte-page {
 .anlagen-table-scroll thead th {
   position: static;
 }
+
+.anlagen-column-panel {
+  width: 100%;
+  max-width: 100%;
+  flex: none;
+  border: 1px solid #d8e3df;
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: #eefaf5;
+  font-size: 11px;
+  box-sizing: border-box;
+}
+
+.anlagen-column-panel-title {
+  font-weight: 600;
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #0c6b4f;
+}
+
+.anlagen-column-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 6px 14px;
+}
+
+.anlagen-column-panel .anlagen-col-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 400;
+  cursor: pointer;
+  width: auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.anlagen-column-panel .anlagen-col-label input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  margin: 0;
+  flex-shrink: 0;
+  padding: 0;
+  min-width: auto;
+}
+
+.anlagen-doc-cat {
+  margin: 0 0 10px;
+  border: 1px solid #d8e3df;
+  border-radius: 12px;
+  background: #fff;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.anlagen-doc-cat > summary {
+  cursor: pointer;
+  font-weight: 600;
+  background: #eefaf5;
+  color: #0c6b4f;
+  padding: 10px 14px;
+  list-style: none;
+}
+
+.anlagen-doc-cat > summary::-webkit-details-marker {
+  display: none;
+}
+
+.anlagen-doc-cat-body {
+  padding: 12px 14px;
+}
+
+.anlagen-docs-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}

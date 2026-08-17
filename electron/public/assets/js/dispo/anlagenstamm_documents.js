@@ -358,16 +358,37 @@
     }
   }
 
+  function dedupeProtocolDocs(docs) {
+    var best = {};
+    var rest = [];
+    (docs || []).forEach(function (d) {
+      if (!(d && d.protocol_table && d.protocol_id)) {
+        rest.push(d);
+        return;
+      }
+      var key = String(d.protocol_table) + '|' + String(d.document_date || '').slice(0, 10) + '|' + String(d.job_id || 0);
+      var id = parseInt(d.protocol_id, 10) || 0;
+      var prev = best[key];
+      if (!prev || id > (parseInt(prev.protocol_id, 10) || 0)) {
+        best[key] = d;
+      }
+    });
+    Object.keys(best).forEach(function (k) {
+      rest.push(best[k]);
+    });
+    return rest;
+  }
+
   function renderCategories(categories, fab, downloadFab) {
     var html = '';
     (categories || []).forEach(function (cat) {
       var slug = cat.slug || '';
       var label = cat.label || slug;
-      var docs = cat.documents || [];
+      var docs = dedupeProtocolDocs(cat.documents || []);
       var isImage = !!cat.is_image;
-      html += '<details class="anlagen-doc-cat" style="margin-bottom:10px;border:1px solid #b0b0b0;border-radius:6px;background:#e8e8e8;padding:8px 10px">';
-      html += '<summary style="cursor:pointer;font-weight:600">' + esc(label) + ' <span class="muted">(' + docs.length + ')</span></summary>';
-      html += '<div style="margin-top:10px">';
+      html += '<details class="anlagen-doc-cat">';
+      html += '<summary>' + esc(label) + ' <span class="muted">(' + docs.length + ')</span></summary>';
+      html += '<div class="anlagen-doc-cat-body">';
       if (!readOnly) {
         html += '<div class="anlagen-doc-upload-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:10px">';
         html += '<input type="file" class="anlagen-doc-file" data-slug="' + esc(slug) + '" style="max-width:220px;font-size:12px">';
@@ -521,7 +542,7 @@
     var downloadFab = paramDownloadFab(data, fab);
     var categories = data.categories || [];
     var tab = root.getAttribute('data-active-tab') || 'docs';
-    var nav = '<div class="anlagen-docs-tabs" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">';
+    var nav = '<div class="anlagen-docs-tabs">';
     nav += '<button type="button" class="btn anlagen-tab-btn' + (tab === 'docs' ? ' btn-primary' : '') + '" data-tab="docs">Dokumente</button>';
     nav += '<button type="button" class="btn anlagen-tab-btn' + (tab === 'events' ? ' btn-primary' : '') + '" data-tab="events">Ereignisse</button>';
     nav += '<button type="button" class="btn anlagen-tab-btn' + (tab === 'timeline' ? ' btn-primary' : '') + '" data-tab="timeline">Timeline</button>';
