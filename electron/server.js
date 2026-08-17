@@ -11380,20 +11380,18 @@ function createApp(db) {
         csvText = csvBuffer.toString('latin1');
       }
 
-      let pdfBytes;
+      let pdfBytes = null;
       try {
         const csvToPdfBuffer = getCsvToPdfBuffer();
         pdfBytes = await csvToPdfBuffer(csvText, { filename });
       } catch (pdfErr) {
-        const pdfMsg = pdfErr && pdfErr.message ? pdfErr.message : String(pdfErr);
-        return res.status(500).json({
-          ok: false,
-          error: 'PDF-Erzeugung fehlgeschlagen: ' + pdfMsg,
-        });
+        console.warn('Parameter-PDF on-demand (Akte):', pdfErr && pdfErr.message ? pdfErr.message : pdfErr);
       }
       const pdfBasename = filename.replace(/\.csv$/i, '') + '.pdf';
       const pdfPath = path.join(paramDir, pdfBasename);
-      writeFileWithRetry(pdfPath, pdfBytes);
+      if (pdfBytes) {
+        writeFileWithRetry(pdfPath, pdfBytes);
+      }
 
       const savedCsv = buildMonteurWorkRelPath(folderName, montageFolderNamePl, path.join('Parameter', filename));
       const savedPdf = buildMonteurWorkRelPath(folderName, montageFolderNamePl, path.join('Parameter', pdfBasename));

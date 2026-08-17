@@ -74,20 +74,7 @@
     if (lb) lb.remove();
   }
 
-  function openLightbox(url, title, galleryImages, galleryIndex) {
-    if (window.MonteurImageGallery && Array.isArray(galleryImages) && galleryImages.length) {
-      window.MonteurImageGallery.open(galleryImages, galleryIndex != null ? galleryIndex : 0, {
-        title: title,
-        fallback: function (item) {
-          openLightboxSingle((item && item.url) || url, title);
-        },
-      });
-      return;
-    }
-    openLightboxSingle(url, title);
-  }
-
-  function openLightboxSingle(url, title) {
+  function openLightbox(url, title) {
     closeLightbox();
     var wrap = document.createElement('div');
     wrap.id = 'anlagenLightbox';
@@ -426,6 +413,14 @@
           html += '<span class="muted">' + esc(fmtSize(d.size_bytes)) + ' · ' + esc(fmtDateIso(d.document_date)) + '</span>';
           if (d.uploaded_by_username) html += '<span class="muted">' + esc(d.uploaded_by_username) + '</span>';
           if (d.notes) html += '<span class="muted">' + esc(d.notes) + '</span>';
+          if (d.protocol_table && d.protocol_id && typeof window.kuklaAkteOpenProtocolView === 'function') {
+            html += '<button type="button" class="btn btn-secondary akte-doc-view" data-kind="protocol" data-table="' + esc(d.protocol_table) + '" data-id="' + esc(String(d.protocol_id)) + '" style="padding:4px 8px;font-size:11px">Anzeigen</button>';
+            html += '<a class="btn btn-secondary" style="padding:4px 8px;font-size:11px" target="_blank" rel="noopener" href="' + esc((window.kuklaAktePdfUrl ? window.kuklaAktePdfUrl('protocol', { table: d.protocol_table, id: d.protocol_id }) : '#')) + '">PDF</a>';
+          }
+          if (d.parameter_file_id && typeof window.kuklaAkteOpenParameterView === 'function') {
+            html += '<button type="button" class="btn btn-secondary akte-doc-view-param" data-file-id="' + esc(String(d.parameter_file_id)) + '" style="padding:4px 8px;font-size:11px">Anzeigen</button>';
+            html += '<a class="btn btn-secondary" style="padding:4px 8px;font-size:11px" target="_blank" rel="noopener" href="' + esc((window.kuklaAktePdfUrl ? window.kuklaAktePdfUrl('parameter', { fab: downloadFab || fab, file_id: d.parameter_file_id }) : href)) + '">PDF</a>';
+          }
           if (!readOnly && d.id && !d.legacy && !d.parameter_file_id) {
             html += '<button type="button" class="btn btn-delete anlagen-doc-del" data-id="' + esc(String(d.id)) + '" style="padding:4px 8px;font-size:11px">Löschen</button>';
           }
@@ -548,29 +543,10 @@
         uploadCategory(btn.getAttribute('data-slug') || '');
       });
     });
-    var docGallery = [];
-    root.querySelectorAll('.anlagen-doc-thumb').forEach(function (thumb) {
-      var full = thumb.getAttribute('data-full') || '';
-      if (!full) return;
-      docGallery.push({
-        url: full,
-        thumbUrl: thumb.getAttribute('src') || full,
-        label: thumb.getAttribute('data-title') || '',
-      });
-    });
     root.querySelectorAll('.anlagen-doc-thumb').forEach(function (img) {
       img.addEventListener('click', function (e) {
         e.preventDefault();
-        var full = img.getAttribute('data-full') || '';
-        var title = img.getAttribute('data-title') || '';
-        var idx = 0;
-        for (var i = 0; i < docGallery.length; i++) {
-          if (docGallery[i].url === full) {
-            idx = i;
-            break;
-          }
-        }
-        openLightbox(full, title, docGallery, idx);
+        openLightbox(img.getAttribute('data-full') || '', img.getAttribute('data-title') || '');
       });
     });
     root.querySelectorAll('.anlagen-doc-del').forEach(function (btn) {
@@ -581,6 +557,20 @@
     root.querySelectorAll('.anlagen-event-del').forEach(function (btn) {
       btn.addEventListener('click', function () {
         deleteEvent(parseInt(btn.getAttribute('data-id') || '0', 10));
+      });
+    });
+    root.querySelectorAll('.akte-doc-view').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (typeof window.kuklaAkteOpenProtocolView === 'function') {
+          window.kuklaAkteOpenProtocolView(btn.getAttribute('data-table') || '', btn.getAttribute('data-id') || '');
+        }
+      });
+    });
+    root.querySelectorAll('.akte-doc-view-param').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (typeof window.kuklaAkteOpenParameterView === 'function') {
+          window.kuklaAkteOpenParameterView(downloadFab || fab, btn.getAttribute('data-file-id') || '');
+        }
       });
     });
     var saveEv = document.getElementById('anlagenEventSaveBtn');
