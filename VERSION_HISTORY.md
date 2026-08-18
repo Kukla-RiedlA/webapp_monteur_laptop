@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.028
+- **Anlagenstamm Persistenz:** Leistung, Versorgung und Sensitivität halten beim Speichern/Öffnen.
+- **Technik-Card Elektronik:** Type, Geräte Nummer GN, Bussystem; Übersicht-Elektronik bleibt gespiegelt.
+- **Serviceprotokoll:** Qmax folgt der Stamm-Leistung; Protokoll-Übernahme schreibt Vers/Sens vollständig.
+
 ## V 2.005.027
 - **Protokoll-JSON Multi-Laptop:** Zwischenstände (Montagebericht, Serviceprotokoll, Kontrollwiegung, Schleppkette, Prüfzertifikat) werden vom Server auf den zweiten Laptop geholt; Ablage bleibt unter `Dokumente_Monteur/`.
 

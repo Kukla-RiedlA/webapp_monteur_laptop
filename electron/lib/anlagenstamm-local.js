@@ -93,7 +93,7 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_fab ON anlagenstamm_local(fabrikationsnummer)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_type ON anlagenstamm_local(type)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_kunde ON anlagenstamm_local(aktueller_kunde)');
-  for (const col of ['pn_root_name TEXT', 'ted_mechanik TEXT', 'kraftaufnehmer_extra TEXT', 'dms_position TEXT', 'vers_spannung TEXT', 'sensitivitaet TEXT']) {
+  for (const col of ['pn_root_name TEXT', 'ted_mechanik TEXT', 'kraftaufnehmer_extra TEXT', 'dms_position TEXT', 'vers_spannung TEXT', 'sensitivitaet TEXT', 'elektronik_type TEXT', 'geraete_nummer TEXT', 'bussystem TEXT']) {
     try {
       run(`ALTER TABLE anlagenstamm_local ADD COLUMN ${col}`);
     } catch (err) {
@@ -210,7 +210,7 @@ function rowCount(db) {
 }
 
 const ANLAGENSTAMM_LOCAL_SELECT = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-              material, tacho, elektronik, dms_nr, dms_position, vers_spannung, sensitivitaet, position, aktueller_kunde, letzter_besuch,
+              material, tacho, elektronik, elektronik_type, geraete_nummer, bussystem, dms_nr, dms_position, vers_spannung, sensitivitaet, position, aktueller_kunde, letzter_besuch,
               geliefert_ueber, projekt, bemerkungen, customer_country,
               pn_root_name, ted_mechanik, dirty, synced_at
        FROM anlagenstamm_local`;
@@ -309,6 +309,9 @@ function mapRowToListApi(row) {
     material: row.material || '',
     tacho: row.tacho || '',
     elektronik: row.elektronik || '',
+    elektronik_type: row.elektronik_type || '',
+    geraete_nummer: row.geraete_nummer || '',
+    bussystem: row.bussystem || '',
     dms_nr: row.dms_nr || '',
     dms_position: row.dms_position || '',
     vers_spannung: row.vers_spannung || '',
@@ -380,6 +383,9 @@ const DISPO_ANLAGENSTAMM_MAX = {
   material: 100,
   tacho: 100,
   elektronik: 100,
+  elektronik_type: 100,
+  geraete_nummer: 50,
+  bussystem: 100,
   dms_nr: 100,
   dms_position: 100,
   vers_spannung: 50,
@@ -445,6 +451,9 @@ const ANLAGENSTAMM_MERGE_KEYS = [
   'sensitivitaet',
   'tacho',
   'elektronik',
+  'elektronik_type',
+  'geraete_nummer',
+  'bussystem',
   'material',
   'position',
   'geliefert_ueber',
@@ -526,11 +535,11 @@ function clampFabrikationsnummernJson(jsonStr) {
 const UPSERT_ANLAGENSTAMM_SQL = `
     INSERT INTO anlagenstamm_local (
       id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-      material, tacho, elektronik, dms_nr, dms_position, vers_spannung, sensitivitaet, position, aktueller_kunde, letzter_besuch,
+      material, tacho, elektronik, elektronik_type, geraete_nummer, bussystem, dms_nr, dms_position, vers_spannung, sensitivitaet, position, aktueller_kunde, letzter_besuch,
       geliefert_ueber, projekt, bemerkungen, customer_country, pn_root_name, ted_mechanik,
       synced_at, dirty
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
     )
     ON CONFLICT(id) DO UPDATE SET
       fabrikationsnummer = excluded.fabrikationsnummer,
@@ -542,6 +551,9 @@ const UPSERT_ANLAGENSTAMM_SQL = `
       material = excluded.material,
       tacho = excluded.tacho,
       elektronik = excluded.elektronik,
+      elektronik_type = excluded.elektronik_type,
+      geraete_nummer = excluded.geraete_nummer,
+      bussystem = excluded.bussystem,
       dms_nr = excluded.dms_nr,
       dms_position = excluded.dms_position,
       vers_spannung = excluded.vers_spannung,
@@ -790,6 +802,9 @@ function upsertAnlagenstammRows(db, rows) {
       row.material != null ? String(row.material) : '',
       row.tacho != null ? String(row.tacho) : '',
       row.elektronik != null ? String(row.elektronik) : '',
+      row.elektronik_type != null ? String(row.elektronik_type) : '',
+      row.geraete_nummer != null ? String(row.geraete_nummer) : '',
+      row.bussystem != null ? String(row.bussystem) : '',
       row.dms_nr != null ? String(row.dms_nr) : '',
       row.dms_position != null ? String(row.dms_position) : '',
       row.vers_spannung != null ? String(row.vers_spannung) : '',
@@ -937,6 +952,9 @@ function saveLocal(db, payload) {
     material: merged.material != null ? String(merged.material) : '',
     tacho: merged.tacho != null ? String(merged.tacho) : '',
     elektronik: merged.elektronik != null ? String(merged.elektronik) : '',
+    elektronik_type: merged.elektronik_type != null ? String(merged.elektronik_type) : '',
+    geraete_nummer: merged.geraete_nummer != null ? String(merged.geraete_nummer) : '',
+    bussystem: merged.bussystem != null ? String(merged.bussystem) : '',
     dms_nr: merged.dms_nr != null ? String(merged.dms_nr) : '',
     dms_position: merged.dms_position != null ? String(merged.dms_position) : '',
     vers_spannung: merged.vers_spannung != null ? String(merged.vers_spannung) : '',
@@ -957,6 +975,9 @@ function saveLocal(db, payload) {
     fields.material,
     fields.tacho,
     fields.elektronik,
+    fields.elektronik_type,
+    fields.geraete_nummer,
+    fields.bussystem,
     fields.dms_nr,
     fields.dms_position,
     fields.vers_spannung,
@@ -971,7 +992,7 @@ function saveLocal(db, payload) {
     db.prepare(
       `UPDATE anlagenstamm_local SET
         fabrikationsnummer = ?, type = ?, leistung = ?, kraftaufnehmer = ?, kraftaufnehmer_extra = ?, nenngeschwindigkeit = ?,
-        material = ?, tacho = ?, elektronik = ?, dms_nr = ?, dms_position = ?, vers_spannung = ?, sensitivitaet = ?, position = ?,
+        material = ?, tacho = ?, elektronik = ?, elektronik_type = ?, geraete_nummer = ?, bussystem = ?, dms_nr = ?, dms_position = ?, vers_spannung = ?, sensitivitaet = ?, position = ?,
         geliefert_ueber = ?, projekt = ?, bemerkungen = ?, dirty = 1, synced_at = ?
        WHERE id = ?`,
     ).run(...fieldArgs, existing.id);
@@ -980,15 +1001,15 @@ function saveLocal(db, payload) {
     db.prepare(
       `INSERT INTO anlagenstamm_local (
         id, fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-        material, tacho, elektronik, dms_nr, dms_position, vers_spannung, sensitivitaet, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        material, tacho, elektronik, elektronik_type, geraete_nummer, bussystem, dms_nr, dms_position, vers_spannung, sensitivitaet, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     ).run(id, ...fieldArgs);
   } else {
     const ins = db.prepare(
       `INSERT INTO anlagenstamm_local (
         fabrikationsnummer, type, leistung, kraftaufnehmer, kraftaufnehmer_extra, nenngeschwindigkeit,
-        material, tacho, elektronik, dms_nr, dms_position, vers_spannung, sensitivitaet, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        material, tacho, elektronik, elektronik_type, geraete_nummer, bussystem, dms_nr, dms_position, vers_spannung, sensitivitaet, position, geliefert_ueber, projekt, bemerkungen, dirty, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     );
     const r = ins.run(...fieldArgs);
     id = Number(r.lastInsertRowid);

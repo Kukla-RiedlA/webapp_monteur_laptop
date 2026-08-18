@@ -3,11 +3,21 @@ import { SpIcon } from './SpIcon';
 
 interface WorkStepsTableProps {
   steps: WorkStep[];
+  displayLang: 'de' | 'en' | 'both';
   onResultChange: (id: string, result: StepResult) => void;
   onRemarkChange: (id: string, remark: string) => void;
   onDelete: (id: string) => void;
   onAdd: () => void;
   onReset: () => void;
+}
+
+function stepLabel(step: WorkStep, displayLang: 'de' | 'en' | 'both'): string {
+  const de = String(step.labelDe || '').trim();
+  const en = String(step.labelEn || '').trim();
+  if (displayLang === 'en') return en || de || step.label;
+  if (displayLang === 'de') return de || en || step.label;
+  if (de && en && de !== en) return de + ' / ' + en;
+  return de || en || step.label;
 }
 
 const RESULTS: { key: StepResult; label: string }[] = [
@@ -16,17 +26,17 @@ const RESULTS: { key: StepResult; label: string }[] = [
   { key: 'na', label: 'n.a.' },
 ];
 
-export function WorkStepsTable({ steps, onResultChange, onRemarkChange, onDelete, onAdd, onReset }: WorkStepsTableProps) {
+export function WorkStepsTable({ steps, displayLang, onResultChange, onRemarkChange, onDelete, onAdd, onReset }: WorkStepsTableProps) {
   return (
     <div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] border-collapse text-sm">
           <thead>
             <tr className="sp-table-head">
-              <th className="sp-table-cell w-10">Nr</th>
-              <th className="sp-table-cell w-[9.5rem]">Ergebnis</th>
-              <th className="sp-table-cell w-[22%]">Arbeitsschritt (kurz)</th>
-              <th className="sp-table-cell">Bemerkung</th>
+              <th className="sp-table-cell w-10">{displayLang === 'en' ? 'No.' : 'Nr'}</th>
+              <th className="sp-table-cell w-[9.5rem]">{displayLang === 'en' ? 'Result' : 'Ergebnis'}</th>
+              <th className="sp-table-cell w-[22%]">{displayLang === 'en' ? 'Work step' : 'Arbeitsschritt (kurz)'}</th>
+              <th className="sp-table-cell">{displayLang === 'en' ? 'Remark' : 'Bemerkung'}</th>
               <th className="sp-table-cell w-12 text-center"> </th>
             </tr>
           </thead>
@@ -54,7 +64,7 @@ export function WorkStepsTable({ steps, onResultChange, onRemarkChange, onDelete
                     ))}
                   </div>
                 </td>
-                <td className="sp-table-cell text-sm font-medium text-[#111827]">{step.label}</td>
+                <td className="sp-table-cell text-sm font-medium text-[#111827]">{stepLabel(step, displayLang)}</td>
                 <td className="sp-table-cell p-1">
                   <input
                     className="sp-input h-8 text-xs"

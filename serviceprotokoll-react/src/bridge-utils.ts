@@ -30,7 +30,9 @@ function cloneMeasurements(rows?: MeasurementRow[] | null): MeasurementRow[] {
     const r = src[i] || src.find((x) => x.id === def.id) || def;
     return {
       id: def.id,
-      label: def.label,
+      label: r.label || def.label,
+      labelDe: r.labelDe || def.labelDe,
+      labelEn: r.labelEn || def.labelEn,
       kg: r.kg || '',
       mv: r.mv || '',
       ma: r.ma || '',

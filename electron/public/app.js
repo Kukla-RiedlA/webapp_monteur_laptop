@@ -3915,6 +3915,17 @@
     return true;
   }
 
+  function kuklaOnAnlagenstammSaved(row) {
+    if (!row) return;
+    var fab = String(row.fabrikationsnummer || '').trim();
+    if (!fab) return;
+    mergeAnlagenstammFieldsIntoOpenJob(fab, row);
+    if (typeof window.kuklaSyncServiceprotokollFromAnlagenstamm === 'function') {
+      window.kuklaSyncServiceprotokollFromAnlagenstamm(fab, row);
+    }
+  }
+  window.kuklaOnAnlagenstammSaved = kuklaOnAnlagenstammSaved;
+
   var anlageDetailStammLoadToken = 0;
   var anlageDetailOpenToken = 0;
 
@@ -9843,6 +9854,9 @@
       '<div class="anlagenstamm-form-section"><h4>Elektronik</h4><div class="anlagenstamm-form-grid">' +
       '<div><label for="as-form-tacho">Tacho</label><input type="text" id="as-form-tacho" value="' + v('tacho') + '"></div>' +
       '<div><label for="as-form-elektronik">Elektronik</label><input type="text" id="as-form-elektronik" value="' + v('elektronik') + '"></div>' +
+      '<div><label for="as-form-elektronik-type">Type</label><input type="text" id="as-form-elektronik-type" value="' + v('elektronik_type') + '"></div>' +
+      '<div><label for="as-form-geraete-nummer">Geräte Nummer GN</label><input type="text" id="as-form-geraete-nummer" value="' + v('geraete_nummer') + '"></div>' +
+      '<div><label for="as-form-bussystem">Bussystem</label><input type="text" id="as-form-bussystem" value="' + v('bussystem') + '"></div>' +
       '</div></div>' +
       '<div class="anlagenstamm-form-section"><h4>Vertrieb / Projekt</h4><div class="anlagenstamm-form-grid">' +
       '<div class="form-full"><label for="as-form-geliefert">Geliefert über</label><input type="text" id="as-form-geliefert" value="' + v('geliefert_ueber') + '" placeholder="z. B. Kunde, Händler"></div>' +
@@ -10117,6 +10131,9 @@
       material: ((document.getElementById('as-form-material') || {}).value || ''),
       tacho: ((document.getElementById('as-form-tacho') || {}).value || ''),
       elektronik: ((document.getElementById('as-form-elektronik') || {}).value || ''),
+      elektronik_type: ((document.getElementById('as-form-elektronik-type') || {}).value || ''),
+      geraete_nummer: ((document.getElementById('as-form-geraete-nummer') || {}).value || ''),
+      bussystem: ((document.getElementById('as-form-bussystem') || {}).value || ''),
       dms_nr: ((document.getElementById('as-form-dms') || {}).value || ''),
       dms_position: ((document.getElementById('as-form-dms-position') || {}).value || ''),
       vers_spannung: ((document.getElementById('as-form-vers-spannung') || {}).value || ''),
@@ -10181,15 +10198,20 @@
         material: payload.material,
         tacho: payload.tacho,
         elektronik: payload.elektronik,
+        elektronik_type: payload.elektronik_type,
+        geraete_nummer: payload.geraete_nummer,
+        bussystem: payload.bussystem,
         dms_nr: payload.dms_nr,
         dms_position: payload.dms_position,
+        vers_spannung: payload.vers_spannung,
+        sensitivitaet: payload.sensitivitaet,
         position: payload.position,
         geliefert_ueber: payload.geliefert_ueber,
         projekt: payload.projekt,
         bemerkungen: payload.bemerkungen
       };
       applyAnlagenstammFormFromRow(row, payload.fabrikationsnummer);
-      mergeAnlagenstammFieldsIntoOpenJob(payload.fabrikationsnummer, row);
+      kuklaOnAnlagenstammSaved(row);
       if (jobDetailsJobId) {
         var arr = leistungRowsForJobPatch(window.currentProjektdatenLeistungRows || []);
         api('/api/job', {
@@ -17626,6 +17648,7 @@
         type: readFabField(row, ['type', 'Type']),
         leistung: readFabField(row, ['leistung', 'Leistung', 'qmax', 'Qmax']),
         elektronik: readFabField(row, ['elektronik', 'Elektronik', 'dwc', 'DWC']),
+        geraete_nummer: readFabField(row, ['geraete_nummer', 'gn', 'GN']),
         pos_nr: readFabField(row, ['position', 'Position', 'pos_nr', 'Pos']),
         projekt: readProjektFromFabRowSk(row) || resolveSchleppkettenProjekt(job, fab)
       };
@@ -17816,7 +17839,10 @@
         elektronikEl.value = elektronikVal !== '' ? elektronikVal : (stamm.elektronik || '');
       }
       if (posNrEl) posNrEl.value = (draft.pos_nr != null && String(draft.pos_nr).trim() !== '') ? String(draft.pos_nr).trim() : (stamm.pos_nr || '');
-      if (gnEl) gnEl.value = draft.gn != null ? String(draft.gn) : '';
+      if (gnEl) {
+        var gnDraft = draft.gn != null ? String(draft.gn).trim() : '';
+        gnEl.value = gnDraft !== '' ? gnDraft : (stamm.geraete_nummer || '');
+      }
       if (monteurEl) {
         var monteurDraft = draft.monteur_name != null ? String(draft.monteur_name).trim() : '';
         monteurEl.value = monteurDraft || defaultMonteurName();
@@ -18159,6 +18185,7 @@
           leistung: stamm.leistung,
           elektronik: stamm.elektronik,
           pos_nr: stamm.pos_nr,
+          gn: stamm.geraete_nummer || '',
           waagenart: 'Bandwaage',
           monteur_name: defaultMonteurName(),
           messungen: [emptyMessung()]
@@ -18255,7 +18282,8 @@
       var posVal = typeof sanitizeLeistungField === 'function'
         ? sanitizeLeistungField((posNrEl || {}).value)
         : String((posNrEl || {}).value || '').trim();
-      if (!typeVal && !leistungVal && !elektronikVal && !projektVal && !posVal) return;
+      var gnVal = gnEl ? String(gnEl.value || '').trim() : '';
+      if (!typeVal && !leistungVal && !elektronikVal && !projektVal && !posVal && !gnVal) return;
       var existing = null;
       try {
         var lookupRes = await fetch(API_BASE + '/api/anlagenstamm_lookup', {
@@ -18278,13 +18306,15 @@
       if (elektronikVal) payload.elektronik = elektronikVal;
       if (projektVal) payload.projekt = projektVal;
       if (posVal) payload.position = posVal;
+      if (gnVal) payload.geraete_nummer = gnVal;
       await anlagenstammSaveDispo(payload);
       patchJobFabStammFields(fab, {
         type: typeVal || (existing && existing.type) || '',
         leistung: leistungVal || (existing && existing.leistung) || '',
         elektronik: elektronikVal || (existing && existing.elektronik) || '',
         projekt: projektVal || (existing && existing.projekt) || '',
-        position: posVal || (existing && existing.position) || ''
+        position: posVal || (existing && existing.position) || '',
+        geraete_nummer: gnVal || (existing && existing.geraete_nummer) || ''
       });
       if (typeof mergeAnlagenstammFieldsIntoOpenJob === 'function') {
         mergeAnlagenstammFieldsIntoOpenJob(fab, {
@@ -19470,6 +19500,7 @@
     var serviceprotokollFabLoadToken = 0;
     var serviceprotokollFormReadyFab = '';
     var serviceprotokollFabSwitching = false;
+    var serviceprotokollHostHydrated = false;
     var spSignaturePads = {};
 
     function initSpSignaturePad(canvasId) {
@@ -20071,6 +20102,16 @@
           : (prev.abschluss && typeof prev.abschluss === 'object' && !Array.isArray(prev.abschluss)
             ? normalizeSpAbschlussObject(prev.abschluss)
             : { status: 'geprueft' }),
+        languages: Array.isArray(body.languages) && body.languages.length
+          ? body.languages
+          : (Array.isArray(body.pdf_languages) && body.pdf_languages.length
+            ? body.pdf_languages
+            : (prev.languages || prev.pdf_languages || ['de'])),
+        pdf_languages: Array.isArray(body.pdf_languages) && body.pdf_languages.length
+          ? body.pdf_languages
+          : (Array.isArray(body.languages) && body.languages.length
+            ? body.languages
+            : (prev.pdf_languages || prev.languages || ['de'])),
         updatedAt: new Date().toISOString()
       });
     }
@@ -20205,9 +20246,9 @@
     function matrixToMeasurementsRows(matrix) {
       var mm = cloneMessMatrix(matrix);
       return [
-        { id: 'dms', label: 'DMS entlastet / released', kg: mm.dms.kg, mv: mm.dms.mv, ma: mm.dms.ma, g: mm.dms.g_prozent },
-        { id: 'tara', label: 'Tara / tare', kg: mm.tara.kg, mv: mm.tara.mv, ma: mm.tara.ma, g: mm.tara.g_prozent },
-        { id: 'pg', label: 'Prüfgewicht / test load', kg: mm.pruefgewicht.kg, mv: mm.pruefgewicht.mv, ma: mm.pruefgewicht.ma, g: mm.pruefgewicht.g_prozent }
+        { id: 'dms', label: 'DMS entlastet / released', labelDe: 'DMS entlastet', labelEn: 'Load cell released', kg: mm.dms.kg, mv: mm.dms.mv, ma: mm.dms.ma, g: mm.dms.g_prozent },
+        { id: 'tara', label: 'Tara / tare', labelDe: 'Tara', labelEn: 'Tare', kg: mm.tara.kg, mv: mm.tara.mv, ma: mm.tara.ma, g: mm.tara.g_prozent },
+        { id: 'pg', label: 'Prüfgewicht / test load', labelDe: 'Prüfgewicht', labelEn: 'Test load', kg: mm.pruefgewicht.kg, mv: mm.pruefgewicht.mv, ma: mm.pruefgewicht.ma, g: mm.pruefgewicht.g_prozent }
       ];
     }
 
@@ -20414,6 +20455,15 @@
       return arbeitsschritte.map(function (s, i) {
         var de = (s.bezeichnung_de || '').trim();
         var en = (s.bezeichnung_en || '').trim();
+        if (de && !en) {
+          var builtin = builtinServiceprotokollSteps();
+          for (var j = 0; j < builtin.length; j++) {
+            if (builtin[j].bezeichnung_de === de) {
+              en = builtin[j].bezeichnung_en;
+              break;
+            }
+          }
+        }
         return {
           sort_order: i + 1,
           bezeichnung_de: de,
@@ -20438,7 +20488,9 @@
         kopf_vmax: cached.kopf_vmax || '',
         kopf_type: cached.kopf_type || '',
         kopf_dwc: cached.kopf_dwc || '',
-        abschluss: normalizeSpAbschlussObject(cached.abschluss)
+        abschluss: normalizeSpAbschlussObject(cached.abschluss),
+        languages: languagesFromDraft(cached),
+        pdf_languages: languagesFromDraft(cached)
       };
     }
 
@@ -20460,7 +20512,9 @@
           kopf_vmax: jobKopf.kopf_vmax || '',
           kopf_type: jobKopf.kopf_type || '',
           kopf_dwc: jobKopf.kopf_dwc || '',
-          abschluss: { status: 'geprueft' }
+          abschluss: { status: 'geprueft' },
+          languages: collectPdfLanguages(),
+          pdf_languages: collectPdfLanguages()
         };
       }
       var projektVal = (document.getElementById('serviceprotokollProjekt') || {}).value || '';
@@ -20480,7 +20534,9 @@
         kopf_vmax: (document.getElementById('serviceprotokollVmax') || {}).value || '',
         kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
         kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
-        abschluss: collectAbschlussPayload()
+        abschluss: collectAbschlussPayload(),
+        languages: collectPdfLanguages(),
+        pdf_languages: collectPdfLanguages()
       };
     }
 
@@ -20520,6 +20576,8 @@
         kopf_vmax: payload.kopf_vmax,
         kopf_type: payload.kopf_type,
         kopf_dwc: payload.kopf_dwc,
+        languages: payload.languages || collectPdfLanguages(),
+        pdf_languages: payload.pdf_languages || payload.languages || collectPdfLanguages(),
         jsonOnly: true,
         skip_dispo_sync: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
         base_url: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
@@ -20761,8 +20819,9 @@
         arbeitsschritte = draft.arbeitsschritte.map(function (row) {
           return stepFromRaw(row);
         });
-        renderSteps();
       }
+      setProtocolLanguagesOnChecks('spPdfDe', 'spPdfEn', languagesFromDraft(draft));
+      if (arbeitsschritte.length) renderSteps();
       return true;
     }
 
@@ -21127,9 +21186,8 @@
       var mapped = anlagenstammRowToKopfAndMess(row);
       var jobKopf = kopfFromJobFabRow(serviceJobData, fab);
       var fromStamm = mergeServiceprotokollKopf(mapped.kopf, jobKopf);
-      var merged = opts.preferStamm
-        ? mergeKopfFillGaps(fromStamm, readKopfFieldsFromForm())
-        : mergeKopfFillGaps(readKopfFieldsFromForm(), fromStamm);
+      // Qmax/Leistung und übrige Kopf-Stammdaten: Stamm gewinnt, sobald gesetzt.
+      var merged = mergeKopfFillGaps(fromStamm, readKopfFieldsFromForm());
       applyKopfFields(merged);
       applyServiceprotokollProjekt(serviceJobData, fab, merged.projekt);
       if (opts.preferStamm) {
@@ -21221,6 +21279,18 @@
         var parts = splitBilingualLabel(row.bezeichnung);
         de = parts.de;
         en = parts.en;
+      } else if (de && !en && row.bezeichnung) {
+        var fromCombined = splitBilingualLabel(row.bezeichnung);
+        if (fromCombined.en) en = fromCombined.en;
+      }
+      if (de && !en) {
+        var builtin = builtinServiceprotokollSteps();
+        for (var i = 0; i < builtin.length; i++) {
+          if (builtin[i].bezeichnung_de === de) {
+            en = builtin[i].bezeichnung_en;
+            break;
+          }
+        }
       }
       return {
         bezeichnung_de: de,
@@ -21231,12 +21301,19 @@
     }
 
     function collectPdfLanguages() {
-      var deEl = document.getElementById('spPdfDe');
-      var enEl = document.getElementById('spPdfEn');
-      var langs = [];
-      if (!deEl || deEl.checked) langs.push('de');
-      if (enEl && enEl.checked) langs.push('en');
+      var langs = getProtocolLanguagesFromChecks('spPdfDe', 'spPdfEn');
       return langs.length ? langs : ['de'];
+    }
+
+    function stepDisplayLabel(de, en, langs) {
+      de = String(de || '').trim();
+      en = String(en || '').trim();
+      var list = Array.isArray(langs) ? langs : collectPdfLanguages();
+      var hasDe = list.indexOf('de') >= 0;
+      var hasEn = list.indexOf('en') >= 0;
+      if (hasEn && !hasDe) return en || de;
+      if (hasDe && !hasEn) return de || en;
+      return combineBilingualLabel(de, en);
     }
 
     function mergeServiceprotokollKopf(apiKopf, jobKopf) {
@@ -21259,7 +21336,9 @@
       var s = arbeitsschritte[idx] || { bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' };
       var status = s.status || 'na';
       var rowClass = 'serviceprotokoll-step sp-step-row sp-step-' + status;
-      var textCell = '<input type="text" class="sp-bezeichnung-de sp-step-label-input" value="' + escapeHtml(s.bezeichnung_de || '') + '" placeholder="Arbeitsschritt">' +
+      var display = stepDisplayLabel(s.bezeichnung_de, s.bezeichnung_en);
+      var textCell = '<input type="text" class="sp-step-label-input" value="' + escapeHtml(display) + '" placeholder="Arbeitsschritt" readonly>' +
+        '<input type="hidden" class="sp-bezeichnung-de" value="' + escapeHtml(s.bezeichnung_de || '') + '">' +
         '<input type="hidden" class="sp-bezeichnung-en" value="' + escapeHtml(s.bezeichnung_en || '') + '">';
       return '<tr class="' + rowClass + '" data-idx="' + idx + '" data-status="' + escapeHtml(status) + '">' +
         '<td class="sp-col-nr">' + (idx + 1) + '</td>' +
@@ -21375,6 +21454,7 @@
         if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
         arbeitsschritte = builtinServiceprotokollSteps();
         renderSteps();
+        serviceprotokollHostHydrated = true;
         return;
       }
       clearKopfFields();
@@ -21440,6 +21520,7 @@
       renderSteps();
       if (isServiceprotokollFabLoadCurrent(loadToken, fab)) {
         serviceprotokollFormReadyFab = fab;
+        serviceprotokollHostHydrated = true;
       }
       if (!serviceprotokollFabSwitching) {
         notifyReactBridge(true);
@@ -21580,7 +21661,12 @@
         var fab = getActiveFab();
         if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
       });
-      form.addEventListener('change', function () {
+      form.addEventListener('change', function (e) {
+        var t = e && e.target;
+        if (t && (t.id === 'spPdfDe' || t.id === 'spPdfEn')) {
+          renderSteps();
+          notifyReactBridge(true);
+        }
         var fab = getActiveFab();
         if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
       });
@@ -21601,7 +21687,7 @@
         syncStepsFromDom();
         var stepsPayload = collectArbeitsschrittePayload().filter(function (s) { return s.bezeichnung_de !== '' || s.bezeichnung_en !== ''; });
         if (!jsonOnly && stepsPayload.length === 0) { alert('Mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.'); return; }
-        var pdfLangs = jsonOnly ? [] : collectPdfLanguages();
+        var pdfLangs = collectPdfLanguages();
         if (!jsonOnly && !pdfLangs.length) { alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).'); return; }
         // Abschluss-Status (Justiert etc.) VOR async Anlagenstamm-Dialog aus React/DOM sichern
         flushServiceprotokollReactToHost();
@@ -21641,9 +21727,10 @@
           base_url: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
           dispoBaseUrl: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
-          serverPassword: getDispoPassword()
+          serverPassword: getDispoPassword(),
+          languages: pdfLangs,
+          pdf_languages: pdfLangs
         };
-        if (!jsonOnly) body.pdf_languages = pdfLangs;
         var submitButtons = form.querySelectorAll('button[type="submit"]');
         var stickyBtns = [
           document.getElementById('btnServiceprotokollStickySave'),
@@ -21883,9 +21970,18 @@
           value4: pgTest[3] || ''
         },
         workSteps: arbeitsschritte.map(function (s, i) {
+          var de = String(s.bezeichnung_de || '').trim();
+          var en = String(s.bezeichnung_en || '').trim();
+          if (!de && !en && s.bezeichnung) {
+            var parts = splitBilingualLabel(s.bezeichnung);
+            de = parts.de;
+            en = parts.en;
+          }
           return {
             id: String(i + 1),
-            label: String(s.bezeichnung_de || s.bezeichnung || '').trim(),
+            label: stepDisplayLabel(de, en),
+            labelDe: de,
+            labelEn: en,
             result: (s.status === 'ok' || s.status === 'nok' || s.status === 'na') ? s.status : 'na',
             remark: String(s.bemerkung || '')
           };
@@ -21952,8 +22048,10 @@
       setVal('serviceprotokollAbschlussBemerkungen', f.closingRemarks);
       var pdfDe = document.getElementById('spPdfDe');
       var pdfEn = document.getElementById('spPdfEn');
-      if (pdfDe) pdfDe.checked = !!f.pdfDe;
-      if (pdfEn) pdfEn.checked = !!f.pdfEn;
+      if (serviceprotokollHostHydrated) {
+        if (pdfDe) pdfDe.checked = !!f.pdfDe;
+        if (pdfEn) pdfEn.checked = !!f.pdfEn;
+      }
       document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
         el.checked = el.value === normalizeSpAbschlussStatus(f.status || 'geprueft');
       });
@@ -21961,11 +22059,21 @@
         var tl = payload.testLoad;
         applyPgTestToForm([tl.weight || '', tl.display || '', tl.deviation || '', tl.value4 || '']);
       }
-      if (Array.isArray(payload.workSteps)) {
-        arbeitsschritte = payload.workSteps.map(function (s) {
+      if (serviceprotokollHostHydrated && Array.isArray(payload.workSteps)) {
+        arbeitsschritte = payload.workSteps.map(function (s, i) {
+          var prev = arbeitsschritte[i] || {};
+          var de = String(s.labelDe != null ? s.labelDe : '').trim();
+          var en = String(s.labelEn != null ? s.labelEn : '').trim();
+          if (!de && !en && s.label) {
+            var parts = splitBilingualLabel(s.label);
+            de = parts.de;
+            en = parts.en;
+          }
+          if (!de) de = String(prev.bezeichnung_de || '').trim();
+          if (!en) en = String(prev.bezeichnung_en || '').trim();
           return {
-            bezeichnung_de: String(s.label || ''),
-            bezeichnung_en: '',
+            bezeichnung_de: de,
+            bezeichnung_en: en,
             status: s.result || 'na',
             bemerkung: String(s.remark || '')
           };
@@ -21989,6 +22097,35 @@
         window.serviceprotokollReactBridge.syncToReact(!!forceSync);
       }
     }
+
+    function syncServiceprotokollKopfFromAnlagenstamm(fab, row) {
+      fab = String(fab || '').trim();
+      if (!fab || !row) return;
+      var mapped = anlagenstammRowToKopfAndMess(row);
+      var stammKopf = mapped.kopf || {};
+      if (serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fab]) {
+        var prev = serviceprotokollDraftStore.byFab[fab];
+        var mergedDraftKopf = mergeKopfFillGaps(stammKopf, {
+          kopf_pos_nr: prev.kopf_pos_nr,
+          kopf_qmax: prev.kopf_qmax,
+          kopf_vmax: prev.kopf_vmax,
+          kopf_type: prev.kopf_type,
+          kopf_dwc: prev.kopf_dwc,
+          projekt: prev.projekt
+        });
+        serviceprotokollDraftStore.byFab[fab] = Object.assign({}, prev, mergedDraftKopf, {
+          updatedAt: new Date().toISOString()
+        });
+      }
+      if (getActiveFab() !== fab) return;
+      if (!document.getElementById('serviceprotokollQmax') && !document.getElementById('serviceprotokollType')) return;
+      var merged = mergeKopfFillGaps(stammKopf, readKopfFieldsFromForm());
+      applyKopfFields(merged);
+      applyServiceprotokollProjekt(serviceJobData, fab, merged.projekt || stammKopf.projekt);
+      if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
+      notifyReactBridge(true);
+    }
+    window.kuklaSyncServiceprotokollFromAnlagenstamm = syncServiceprotokollKopfFromAnlagenstamm;
 
     window.serviceprotokollBridge = {
       pullPayload: spPullPayloadForReact,

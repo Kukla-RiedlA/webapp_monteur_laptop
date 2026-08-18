@@ -10367,6 +10367,15 @@ function createApp(db) {
     return languages;
   }
 
+  function parseProtocolLanguagesMaybe(body) {
+    const has =
+      (Array.isArray(body && body.languages) && body.languages.length) ||
+      (Array.isArray(body && body.pdf_languages) && body.pdf_languages.length) ||
+      (body && body.language != null && String(body.language).trim() !== '');
+    if (!has) return null;
+    return parseProtocolLanguages(body);
+  }
+
   function protocolPdfLangSuffix(lang, langs) {
     const list = Array.isArray(langs) && langs.length ? langs : [lang || 'de'];
     const multi = list.length > 1;
@@ -10609,6 +10618,11 @@ function createApp(db) {
         kopf_dwc: String(body.kopf_dwc || ''),
         abschluss: normalizeServiceprotokollAbschluss(body.abschluss),
       };
+      const langsMaybe = parseProtocolLanguagesMaybe(body);
+      if (langsMaybe && langsMaybe.length) {
+        draftPayload.languages = langsMaybe;
+        draftPayload.pdf_languages = langsMaybe;
+      }
 
       let messSyncWarning = null;
       const applyToAnlagenstamm = shouldApplyServiceprotokollToAnlagenstamm(body);
@@ -10868,6 +10882,8 @@ function createApp(db) {
           kopf_type: String(p.kopf_type || ''),
           kopf_dwc: String(p.kopf_dwc || ''),
           abschluss: normalizeServiceprotokollAbschluss(p.abschluss),
+          languages: pdfLangs,
+          pdf_languages: pdfLangs,
         };
         if (applyToAnlagenstamm) {
           try {

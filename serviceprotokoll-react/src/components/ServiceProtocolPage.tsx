@@ -50,6 +50,7 @@ export function ServiceProtocolPage() {
   const loadCells = ensureLoadCells(form, bridgeState.measurements);
 
   const fabChips = fabNumbers.length ? fabNumbers : embedded ? [] : FAB_NUMBERS;
+  const displayLang: 'de' | 'en' | 'both' = form.pdfEn && !form.pdfDe ? 'en' : form.pdfDe && form.pdfEn ? 'both' : 'de';
 
   const patchForm = useCallback((patch: Partial<ServiceProtocolFormState>) => {
     setBridgeState((prev) => {
@@ -84,7 +85,7 @@ export function ServiceProtocolPage() {
   }, []);
 
   const patchLoadCellMeasurement = useCallback(
-    (cellId: string, rowId: string, field: keyof Omit<MeasurementRow, 'id' | 'label'>, value: string) => {
+    (cellId: string, rowId: string, field: keyof Omit<MeasurementRow, 'id' | 'label' | 'labelDe' | 'labelEn'>, value: string) => {
       setBridgeState((prev) => {
         const cells = ensureLoadCells(prev.form, prev.measurements).map((c) => {
           if (c.id !== cellId) return c;
@@ -385,6 +386,7 @@ export function ServiceProtocolPage() {
                     <div className="mt-3 w-full">
                       <MeasurementTable
                         rows={cell.measurements || EMPTY_MEASUREMENTS}
+                        displayLang={displayLang}
                         onChange={(rowId, field, value) =>
                           patchLoadCellMeasurement(cell.id, rowId, field, value)
                         }
@@ -411,6 +413,7 @@ export function ServiceProtocolPage() {
           <SectionCard number={5} title="Arbeitsschritte" icon="ClipboardCheck">
             <WorkStepsTable
               steps={workSteps}
+              displayLang={displayLang}
               onResultChange={(id, result: StepResult) =>
                 setBridgeState((prev) => ({
                   ...prev,

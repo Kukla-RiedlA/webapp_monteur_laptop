@@ -206,9 +206,24 @@
     if (sub) sub.textContent = parts.join(' · ') || 'Stammdaten';
   }
 
+  function bindElektronikFieldMirror() {
+    var a = qs('#formElektronik');
+    var b = qs('#formElektronikTechnik');
+    if (!a || !b || a.getAttribute('data-el-mirror') === '1') return;
+    a.setAttribute('data-el-mirror', '1');
+    function copy(from, to) {
+      if (to.value !== from.value) to.value = from.value;
+    }
+    a.addEventListener('input', function () { copy(a, b); syncTitle(); });
+    b.addEventListener('input', function () { copy(b, a); syncTitle(); });
+    if (!b.value && a.value) b.value = a.value;
+    else if (!a.value && b.value) a.value = b.value;
+  }
+
   function initAkte() {
     if (document.body) document.body.classList.add('akte-page');
     bindTabs();
+    bindElektronikFieldMirror();
     syncTitle();
     var fab = qs('#formFab');
     if (fab) fab.addEventListener('input', syncTitle);

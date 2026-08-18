@@ -166,6 +166,69 @@ function stepStatusLabel(status, lang) {
   return lang === 'en' ? 'n.a.' : 'n.a.';
 }
 
+function splitBilingualLabel(bez) {
+  const s = String(bez || '').trim();
+  if (!s) return { de: '', en: '' };
+  let m = s.match(/^(.+?)\s\/\s+(.+)$/);
+  if (m) return { de: m[1].trim(), en: m[2].trim() };
+  m = s.match(/^(.+?)\/\s+(.+)$/);
+  if (m) return { de: m[1].trim(), en: m[2].trim() };
+  return { de: s, en: '' };
+}
+
+const BUILTIN_ARBEITSSCHRITT_EN = {
+  'Kontrolle der Wägebrücke': 'check of weighing bridge',
+  'Kontrolle des Fördergurtes': 'check of conveyor belt',
+  'Reinigen der Waage': 'cleaning of the scale',
+  'Kontr. der Rollen & Rollenflucht': 'check of rollers & roller aligment',
+  'Zustand der Bandabstreifer': 'condition of belt scrapers',
+  'Trommelkratzer': 'drum scraper',
+  'Abstreifpflug': 'scraper plough',
+  'Bandspannung': 'belt tensioning',
+  'Bandlenkung': 'belt steering device',
+  'Schmierstellen': 'lubrication points',
+  'Kraftaufnehmer': 'load cell',
+  'Tacho': 'tacho',
+  'Schieflaufschalter': 'belt misalignment switch',
+  'Kettentriebe': 'chain drives',
+  'Überlastschutz': 'overload protection',
+  'Wiegeelektronik': 'weighing electronics',
+  'Tara': 'tare',
+  'PGW-Test': 'test with test weight',
+  'Regelung & Dosierung': 'control & dosing',
+  'Kontrollwiegungen': 'check weighing procedures',
+  'Kontrolle der Zellenradschleuse': 'check of rotary vane feeder',
+  'Kontrolle Wägebrücke': 'check of weighing bridge',
+  'Kontrolle Fördergut': 'check of conveyor belt',
+  'Reinigen Waage': 'cleaning of the scale',
+  'Rollen & Rollenflucht': 'check of rollers & roller aligment',
+  'Zustand Bandabstreifer': 'condition of belt scrapers',
+};
+
+/** Feste Arbeitsschritt-Bezeichnung je PDF-Sprache (DE oder EN, nicht gemischt). */
+function arbeitsschrittLabelForLang(step, lang) {
+  if (!step || typeof step !== 'object') return '';
+  let de = String(step.bezeichnung_de != null ? step.bezeichnung_de : '').trim();
+  let en = String(step.bezeichnung_en != null ? step.bezeichnung_en : '').trim();
+  const combined = String(step.bezeichnung || step.label || '').trim();
+  if ((!de || !en) && combined) {
+    const parts = splitBilingualLabel(combined);
+    if (!de) de = parts.de;
+    if (!en) en = parts.en;
+  }
+  if (!en && de && BUILTIN_ARBEITSSCHRITT_EN[de]) en = BUILTIN_ARBEITSSCHRITT_EN[de];
+  if (lang === 'en') return en || de;
+  return de || en;
+}
+
+function scaleTypeLabelForLang(raw, de) {
+  const s = String(raw || '').trim();
+  if (!s || /^bandwaage$/i.test(s) || /^belt\s*scale$/i.test(s)) {
+    return de ? 'Bandwaage' : 'Belt scale';
+  }
+  return s;
+}
+
 function abschlussStatusLabel(abschluss, lang) {
   const st = String((abschluss && abschluss.status) || '').toLowerCase().trim();
   if (st === 'justiert' || st === 'adjusted') return lang === 'en' ? 'Adjusted' : 'Justiert';
@@ -431,9 +494,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   const steps = stepsRaw
     .map((s) => {
       if (!s) return null;
-      const label = de
-        ? String(s.bezeichnung_de != null ? s.bezeichnung_de : s.bezeichnung || '').trim()
-        : String(s.bezeichnung_en || s.bezeichnung || s.bezeichnung_de || '').trim();
+      const label = arbeitsschrittLabelForLang(s, lang);
       if (!label) return null;
       return {
         label: S(label),
@@ -1930,7 +1991,7 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
             ['Datum / date', formatDateDe(payload.durchfuehrungsdatum) || '–'],
           ],
           [
-            ['Waagenart / scale type', payload.waagenart || 'Bandwaage'],
+            ['Waagenart / scale type', scaleTypeLabelForLang(payload.waagenart, true)],
             ['Type / type', payload.type || ''],
             ['Leistung / value', payload.nennleistung || payload.leistung || ''],
             ['Elektronik / DWC', payload.elektronik || payload.dwc || ''],
@@ -1949,7 +2010,7 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
             ['Date / Datum', formatDateDe(payload.durchfuehrungsdatum) || '–'],
           ],
           [
-            ['Scale type / Waagenart', payload.waagenart || 'Belt scale'],
+            ['Scale type / Waagenart', scaleTypeLabelForLang(payload.waagenart, false)],
             ['Type / type', payload.type || ''],
             ['Rate / Leistung', payload.nennleistung || payload.leistung || ''],
             ['Electronics / DWC', payload.elektronik || payload.dwc || ''],
@@ -3208,7 +3269,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     ],
     [
       t('Waagenart', 'Scale type'),
-      payload.waagenart || 'Bandwaage',
+      scaleTypeLabelForLang(payload.waagenart, de),
       t('Projekt / Auftrag', 'Project / Job'),
       payload.projekt || payload.job_number,
     ],

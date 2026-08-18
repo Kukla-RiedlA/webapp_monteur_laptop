@@ -2,16 +2,25 @@ import type { MeasurementRow } from '../types';
 
 interface MeasurementTableProps {
   rows: MeasurementRow[];
-  onChange: (id: string, field: keyof Omit<MeasurementRow, 'id' | 'label'>, value: string) => void;
+  displayLang?: 'de' | 'en' | 'both';
+  onChange: (id: string, field: keyof Omit<MeasurementRow, 'id' | 'label' | 'labelDe' | 'labelEn'>, value: string) => void;
 }
 
-export function MeasurementTable({ rows, onChange }: MeasurementTableProps) {
+function measurementLabel(row: MeasurementRow, displayLang: 'de' | 'en' | 'both'): string {
+  const de = String(row.labelDe || '').trim();
+  const en = String(row.labelEn || '').trim();
+  if (displayLang === 'en') return en || de || row.label;
+  if (displayLang === 'de') return de || en || row.label;
+  return row.label || (de && en && de !== en ? de + ' / ' + en : de || en);
+}
+
+export function MeasurementTable({ rows, displayLang = 'both', onChange }: MeasurementTableProps) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr className="sp-table-head">
-            <th className="sp-table-cell w-[36%] text-left">Messpunkt</th>
+            <th className="sp-table-cell w-[36%] text-left">{displayLang === 'en' ? 'Point' : 'Messpunkt'}</th>
             <th className="sp-table-cell text-center">kg</th>
             <th className="sp-table-cell text-center">mV</th>
             <th className="sp-table-cell text-center">mA</th>
@@ -22,7 +31,7 @@ export function MeasurementTable({ rows, onChange }: MeasurementTableProps) {
           {rows.map((row) => (
             <tr key={row.id}>
               <th scope="row" className="sp-table-cell bg-kukla-mint/40 text-left text-xs font-semibold text-[#4b5563]">
-                {row.label}
+                {measurementLabel(row, displayLang)}
               </th>
               {(['kg', 'mv', 'ma', 'g'] as const).map((field) => (
                 <td key={field} className="sp-table-cell p-1">

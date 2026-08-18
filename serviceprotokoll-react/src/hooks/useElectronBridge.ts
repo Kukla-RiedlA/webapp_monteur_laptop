@@ -30,6 +30,7 @@ export function useElectronBridge(
   const stateRef = useRef(state);
   stateRef.current = state;
   const suppressPush = useRef(false);
+  const hostReady = useRef(false);
 
   useEffect(() => {
     if (!EMBEDDED) return;
@@ -38,6 +39,7 @@ export function useElectronBridge(
       const data = ev.data as BridgeMessage | undefined;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'SP_SYNC_STATE' && data.payload) {
+        hostReady.current = true;
         // Länger unterdrücken als der Push-Debounce (120ms), sonst überschreibt
         // ein alter leerer React-State die gerade aus dem Anlagenstamm gefüllten Felder.
         suppressPush.current = true;
@@ -58,7 +60,7 @@ export function useElectronBridge(
 
   // Status sofort pushen (nicht nur debounce), sonst geht „Justiert“ beim schnellen Speichern verloren
   const pushState = useCallback(() => {
-    if (!EMBEDDED || suppressPush.current) return;
+    if (!EMBEDDED || suppressPush.current || !hostReady.current) return;
     window.parent.postMessage({ type: 'SP_STATE_CHANGE', payload: stateRef.current }, '*');
   }, []);
 
@@ -72,7 +74,7 @@ export function useElectronBridge(
     (action: string) => {
       if (EMBEDDED) {
         // Vor Aktion aktuellen State inkl. Status sofort an den Host
-        if (!suppressPush.current) {
+        if (!suppressPush.current && hostReady.current) {
           window.parent.postMessage({ type: 'SP_STATE_CHANGE', payload: stateRef.current }, '*');
         }
         window.parent.postMessage(

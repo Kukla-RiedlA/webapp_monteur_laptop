@@ -1134,6 +1134,10 @@ function fillFormFromRow(row) {
   set('formMaterial', row.material || '');
   set('formTacho', row.tacho || '');
   set('formElektronik', row.elektronik || '');
+  set('formElektronikTechnik', row.elektronik || '');
+  set('formElektronikType', row.elektronik_type || '');
+  set('formGeraeteNummer', row.geraete_nummer || '');
+  set('formBussystem', row.bussystem || '');
   set('formPosition', row.position || '');
   set('formGeliefertUeber', row.geliefert_ueber || '');
   set('formProjekt', row.projekt || '');
@@ -1144,6 +1148,8 @@ function fillFormFromRow(row) {
       primaryValue: row.kraftaufnehmer || '',
       primaryDmsNr: row.dms_nr || '',
       primaryDmsPosition: row.dms_position || '',
+      primaryVersSpannung: row.vers_spannung || '',
+      primarySensitivitaet: row.sensitivitaet || '',
       row: row
     });
   } else {
@@ -1225,11 +1231,33 @@ if (anlagenForm && !anlagenReadOnly) {
   anlagenForm.addEventListener('submit', function(e) {
   e.preventDefault();
   if (typeof window.kuklaCollectKraftaufnehmerExtra === 'function') window.kuklaCollectKraftaufnehmerExtra();
+  var elMain = document.getElementById('formElektronik');
+  var elTech = document.getElementById('formElektronikTechnik');
+  if (elMain && elTech && elTech.value && !elMain.value) elMain.value = elTech.value;
   const fd = new FormData(this);
   fetch(anlagenstammApiUrl('api/anlagenstamm_save.php'), { method: 'POST', body: fd, headers: anlagenstammApiHeaders() })
     .then(r => r.json())
     .then(data => {
       if (data.success) {
+        if (typeof window.kuklaOnAnlagenstammSaved === 'function') {
+          var g = function (name) { return String(fd.get(name) || '').trim(); };
+          window.kuklaOnAnlagenstammSaved({
+            fabrikationsnummer: g('fabrikationsnummer'),
+            type: g('type'),
+            leistung: g('leistung'),
+            nenngeschwindigkeit: g('nenngeschwindigkeit'),
+            elektronik: g('elektronik'),
+            position: g('position'),
+            projekt: g('projekt'),
+            kraftaufnehmer: g('kraftaufnehmer'),
+            dms_nr: g('dms_nr'),
+            dms_position: g('dms_position'),
+            tacho: g('tacho'),
+            material: g('material'),
+            geliefert_ueber: g('geliefert_ueber'),
+            bemerkungen: g('bemerkungen')
+          });
+        }
         loadList();
         closeModal();
       } else {
@@ -1521,9 +1549,12 @@ if (typeof window !== 'undefined') {
 }
 
 if (document.getElementById('kraftaufnehmerRows') && typeof window.kuklaInitKraftaufnehmerRows === 'function') {
-  window.kuklaInitKraftaufnehmerRows({
-    readOnly: anlagenReadOnly,
-    primaryValue: '',
-    extras: []
-  });
+  var kaBox = document.getElementById('kraftaufnehmerRows');
+  if (!kaBox || !kaBox.querySelector('.kraftaufnehmer-row')) {
+    window.kuklaInitKraftaufnehmerRows({
+      readOnly: anlagenReadOnly,
+      primaryValue: '',
+      extras: []
+    });
+  }
 }
