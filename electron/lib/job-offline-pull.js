@@ -1,5 +1,7 @@
 'use strict';
 
+const { isMonteurDraftJsonBasename } = require('./multi-device-sync');
+
 const DM_PREFIX = 'Dokumente_Monteur/';
 /** Im Modus explicit: PROJEKTE NEU / Anlage nur über Baumauswahl, nicht pauschal aus Manifest. */
 const SKIP_PULL_PREFIXES = ['Dokumente_Anlage'];
@@ -11,7 +13,15 @@ const ALWAYS_PULL_PREFIXES = [
   'Dokumente_Monteur/Bilder',
 ];
 
-/** Neu: …/Montage/<Auftrag>/Bilder/… sowie flache Dateien direkt unter Dokumente_Monteur/. */
+/** Flache Protokoll-JSONs unter Dokumente_Monteur/{name}.json — immer ziehen. */
+function isMonteurDraftJsonManifestPath(relPath) {
+  const norm = normManifestPath(relPath);
+  if (!norm.startsWith(DM_PREFIX)) return false;
+  const tail = norm.slice(DM_PREFIX.length);
+  if (!tail || tail.indexOf('/') >= 0) return false;
+  return isMonteurDraftJsonBasename(tail);
+}
+
 function isMonteurPhotoManifestPath(relPath) {
   const norm = normManifestPath(relPath);
   if (!norm) return false;
@@ -169,6 +179,7 @@ function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
   if (pullMode === 'legacy') return true;
   if (shouldAlwaysPullPrefix(norm)) return true;
   if (isMonteurPhotoManifestPath(norm)) return true;
+  if (isMonteurDraftJsonManifestPath(norm)) return true;
   if (shouldSkipPullPrefix(norm)) return false;
   if (!norm.startsWith(DM_PREFIX)) return false;
   const tail = norm.slice(DM_PREFIX.length);
@@ -354,6 +365,7 @@ module.exports = {
   shouldPullManifestFile,
   shouldAlwaysPullPrefix,
   isMonteurPhotoManifestPath,
+  isMonteurDraftJsonManifestPath,
   filterManifestForPull,
   normalizeOfflinePathsInput,
   updateOfflinePullFabMap,

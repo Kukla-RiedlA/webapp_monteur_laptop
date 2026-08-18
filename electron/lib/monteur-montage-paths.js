@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { findMonteurFolderForFab, resolveCanonicalFolderFromDirList, isIgnorableDirEntry } = require('./projekte-neu-local');
+const { isMonteurDraftJsonBasename } = require('./multi-device-sync');
 
 function sanitizeDienstreiseFolderPart(str, maxLen) {
   if (typeof str !== 'string') return '';
@@ -497,6 +498,8 @@ function isDokumenteMonteurKeepLocalRel(normPath) {
   if (/^[^/]+\/Montage(\/|$)/i.test(tail)) return true;
   // ohne FN: Bilddatei direkt unter Dokumente_Monteur/
   if (/^[^/]+\.(jpe?g|png|webp)$/i.test(tail)) return true;
+  // Protokoll-Zwischenstände: flach unter Dokumente_Monteur/{name}.json — nicht nach Anlage spiegeln.
+  if (tail.indexOf('/') < 0 && isMonteurDraftJsonBasename(tail)) return true;
   return false;
 }
 

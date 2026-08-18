@@ -13,7 +13,18 @@ const MONTEUR_DRAFT_BASENAMES = [
   'serviceprotokoll.json',
   'montagebericht.json',
   'kontrollwiegungsprotokoll.json',
+  'schleppkettenprotokoll.json',
+  'pruefzertifikat.json',
 ];
+
+/** Dispo-Draft-APIs zu den kanonischen Dateinamen unter Dokumente_Monteur/. */
+const DRAFT_JSON_ENDPOINTS = {
+  'serviceprotokoll.json': '/dispo_api/api/serviceprotokoll_draft.php',
+  'montagebericht.json': '/dispo_api/api/montagebericht_draft.php',
+  'kontrollwiegungsprotokoll.json': '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
+  'schleppkettenprotokoll.json': '/dispo_api/api/schleppkettenprotokoll_draft.php',
+  'pruefzertifikat.json': '/dispo_api/api/pruefzertifikat_draft.php',
+};
 
 function isMonteurDraftJsonBasename(name) {
   const base = path.basename(String(name || '').replace(/\\/g, '/'));
@@ -42,7 +53,12 @@ function resolveMonteurDraftJsonPath(reiseDir, basename, migrate) {
   const doMigrate = migrate !== false;
   const base = path.basename(String(basename || '').replace(/\\/g, '/'));
   const target = monteurDraftJsonPath(reiseDir, base);
-  const legacy = [path.join(reiseDir, base), path.join(reiseDir, 'Dokumente_Dispo', base)];
+  const legacy = [
+    path.join(reiseDir, base),
+    path.join(reiseDir, 'Dokumente_Dispo', base),
+    // Ältere Pulls haben Drafts fälschlich nach Dokumente_Anlage gespiegelt.
+    path.join(reiseDir, 'Dokumente_Anlage', base),
+  ];
   try {
     if (fs.existsSync(target) && fs.statSync(target).isFile()) {
       if (doMigrate) {
@@ -235,6 +251,7 @@ function formatBytes(n) {
 
 module.exports = {
   MONTEUR_DRAFT_BASENAMES,
+  DRAFT_JSON_ENDPOINTS,
   isMonteurDraftJsonBasename,
   monteurDraftJsonPath,
   resolveMonteurDraftJsonPath,

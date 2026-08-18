@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.005.027
+- **Protokoll-JSON Multi-Laptop:** Zwischenstände (Montagebericht, Serviceprotokoll, Kontrollwiegung, Schleppkette, Prüfzertifikat) werden vom Server auf den zweiten Laptop geholt; Ablage bleibt unter `Dokumente_Monteur/`.
+
 ## V 2.005.020
 - **Kalender (Alle Techniker):** Aufträge mit mehreren Monteuren erscheinen wieder als eigener Balken je Techniker (nicht nur einmal).
 - **Auftrag annehmen:** Dialog zur Auswahl der PROJEKTE-NEU-Ordner/Dateien kommt wieder; Liste wird von Dispo geladen.

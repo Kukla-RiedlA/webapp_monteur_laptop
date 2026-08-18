@@ -16,6 +16,9 @@ const {
   reconcileLocalTreeWithManifest,
   formatBytes,
   writeConflictCopy,
+  resolveMonteurDraftJsonPath,
+  MONTEUR_DRAFT_BASENAMES,
+  DRAFT_JSON_ENDPOINTS,
 } = require('./multi-device-sync');
 
 function ensureMultiDeviceTables(db) {
@@ -377,17 +380,53 @@ function registerMultiDeviceRoutes(deps) {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) return { ok: false, error: data.error };
-      const payload = data.store || data.data || {};
+      const payload = stripDraftMeta(data.store || data.data || {});
+      const remoteRev = parseInt(data.revision, 10) || 0;
+      const remoteEmpty = draftPayloadsEqual(payload, {});
+      if (remoteRev <= 0 && remoteEmpty) {
+        return { ok: true, skipped: true, empty: true };
+      }
+      const local = readLocalDraftFile(opts.filePath);
+      if (
+        local.revision > 0 &&
+        local.revision >= remoteRev &&
+        draftPayloadsEqual(local.payload, payload)
+      ) {
+        return { ok: true, skipped: true, revision: local.revision };
+      }
       writeLocalDraftFile(
         opts.filePath,
-        stripDraftMeta(payload),
-        data.revision || 0,
+        payload,
+        remoteRev,
         data.server_updated_at || null,
       );
-      return { ok: true, revision: data.revision || 0, store: payload };
+      return { ok: true, revision: remoteRev, store: payload };
     } catch (e) {
       return { ok: false, error: e.message };
     }
+  }
+
+  async function pullAllJsonDrafts(opts) {
+    const reiseDir = opts.reiseDir;
+    if (!reiseDir) return { ok: false, pulled: [] };
+    const pulled = [];
+    for (const basename of MONTEUR_DRAFT_BASENAMES) {
+      const endpoint = DRAFT_JSON_ENDPOINTS[basename];
+      if (!endpoint) continue;
+      const filePath = resolveMonteurDraftJsonPath(reiseDir, basename, true);
+      const result = await pullJsonDraft({
+        dispoBaseUrl: opts.dispoBaseUrl,
+        endpoint,
+        technicianId: opts.technicianId,
+        serverJobId: opts.serverJobId,
+        localJobId: opts.localJobId,
+        filePath,
+        username: opts.username,
+        password: opts.password,
+      });
+      pulled.push({ basename, ok: !!(result && result.ok), skipped: !!(result && result.skipped) });
+    }
+    return { ok: true, pulled };
   }
 
   function markJobPendingLocalCleanup(localJobId, serverJobId, reason, statusOnServer) {
@@ -709,6 +748,7 @@ function registerMultiDeviceRoutes(deps) {
     heartbeatOnDispo,
     pushJsonDraft,
     pullJsonDraft,
+    pullAllJsonDrafts,
     markJobPendingLocalCleanup,
     listPendingLocalCleanup,
     listRecentConflicts,

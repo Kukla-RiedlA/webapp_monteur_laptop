@@ -208,6 +208,7 @@ const pruefzertifikatLocal = require('./lib/pruefzertifikat-local');
 const {
   resolveMonteurDraftJsonPath,
   isMonteurDraftJsonBasename,
+  DRAFT_JSON_ENDPOINTS,
 } = require('./lib/multi-device-sync');
 const {
   ensureAnlagenstammLocalSchema,
@@ -1344,6 +1345,36 @@ function createApp(db) {
       }
     },
   });
+
+  /**
+   * Protokoll-JSON vom Dispo-Draft-API nach Dokumente_Monteur holen (zweiter Laptop).
+   * Ohne Session/Creds oder bei local_only: no-op.
+   */
+  async function pullOneJsonDraftForJob(reiseDir, localJobId, serverJobId, technicianId, basename, reqSrc) {
+    if (!multiDeviceApi || !multiDeviceApi.pullJsonDraft) return;
+    if (wantsLocalOnlyRequest(reqSrc || {})) return;
+    const parsedServer = parseInt(serverJobId, 10);
+    if (!Number.isFinite(parsedServer) || parsedServer <= 0 || !technicianId || !reiseDir) return;
+    const creds = resolveDispoServerCreds(reqSrc || {});
+    if (!creds.baseUrl) return;
+    const endpoint = DRAFT_JSON_ENDPOINTS[basename];
+    if (!endpoint) return;
+    const filePath = resolveMonteurDraftJsonPath(reiseDir, basename, true);
+    try {
+      await multiDeviceApi.pullJsonDraft({
+        dispoBaseUrl: creds.baseUrl,
+        endpoint,
+        technicianId,
+        serverJobId: parsedServer,
+        localJobId,
+        filePath,
+        username: creds.serverUsername,
+        password: creds.serverPassword,
+      });
+    } catch (e) {
+      console.warn('[draft_pull]', basename, e && e.message ? e.message : e);
+    }
+  }
 
   /** Schreibzugriff blockiert für „angelegt“ (inkl. Legacy „geplant“) und „abgerechnet“. */
   function localJobWriteBlocked(status) {
@@ -8054,7 +8085,7 @@ function createApp(db) {
     }
   });
 
-  app.get('/api/protokolle/montagebericht', (req, res) => {
+  app.get('/api/protokolle/montagebericht', async (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
       const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
@@ -8062,7 +8093,7 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
       }
       const jobRow = db.prepare(`
-        SELECT j.id FROM jobs j
+        SELECT j.id, j.server_id FROM jobs j
         WHERE j.id = ?
           AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
@@ -8070,6 +8101,14 @@ function createApp(db) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      await pullOneJsonDraftForJob(
+        reiseDir,
+        localJobId,
+        jobRow.server_id,
+        technicianId,
+        'montagebericht.json',
+        req.query,
+      );
       const dataPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', true);
       if (!fs.existsSync(dataPath)) {
         return res.json({ ok: true, data: null });
@@ -8821,7 +8860,7 @@ function createApp(db) {
     }
   });
 
-  app.get('/api/protokolle/kontrollwiegung', (req, res) => {
+  app.get('/api/protokolle/kontrollwiegung', async (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
       const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
@@ -8829,7 +8868,7 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
       }
       const jobRow = db.prepare(`
-        SELECT j.id FROM jobs j
+        SELECT j.id, j.server_id FROM jobs j
         WHERE j.id = ?
           AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
@@ -8837,6 +8876,14 @@ function createApp(db) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      await pullOneJsonDraftForJob(
+        reiseDir,
+        localJobId,
+        jobRow.server_id,
+        technicianId,
+        'kontrollwiegungsprotokoll.json',
+        req.query,
+      );
       const store = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 }, data: store });
     } catch (e) {
@@ -9233,7 +9280,7 @@ function createApp(db) {
     };
   }
 
-  app.get('/api/protokolle/schleppketten', (req, res) => {
+  app.get('/api/protokolle/schleppketten', async (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
       const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
@@ -9241,12 +9288,20 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
       }
       const jobRow = db.prepare(`
-        SELECT j.id FROM jobs j
+        SELECT j.id, j.server_id FROM jobs j
         WHERE j.id = ?
           AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      await pullOneJsonDraftForJob(
+        reiseDir,
+        localJobId,
+        jobRow.server_id,
+        technicianId,
+        'schleppkettenprotokoll.json',
+        req.query,
+      );
       const store = schleppkettenLocal.readSchleppkettenStore(reiseDir);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 } });
     } catch (e) {
@@ -9572,14 +9627,30 @@ function createApp(db) {
     };
   }
 
-  app.get('/api/protokolle/pruefzertifikat', (req, res) => {
+  app.get('/api/protokolle/pruefzertifikat', async (req, res) => {
     try {
       const technicianId = getTechnicianId(req);
       const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
       if (!localJobId || !technicianId) {
         return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
       }
+      const jobRow = db.prepare(`
+        SELECT j.id, j.server_id FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      if (!jobRow) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      await pullOneJsonDraftForJob(
+        reiseDir,
+        localJobId,
+        jobRow.server_id,
+        technicianId,
+        'pruefzertifikat.json',
+        req.query,
+      );
       const store = pruefzertifikatLocal.readPruefzertifikatStore(reiseDir);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 } });
     } catch (e) {
@@ -10468,13 +10539,13 @@ function createApp(db) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      const localOnly = wantsLocalOnlyRequest(req.query) || String(req.query.sync_dispo || '') !== '1';
+      const localOnly = wantsLocalOnlyRequest(req.query);
       const creds = resolveDispoServerCreds(req.query || {});
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
       let store = readServiceprotokollStore(reiseDir);
       if (!localOnly && creds.baseUrl && hasServerJobId) {
-        const auth = authHeaderFromCredentials(creds.username, creds.password);
+        const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
         try {
           store = await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, creds.baseUrl, auth);
         } catch (_) {
@@ -13106,7 +13177,31 @@ function createApp(db) {
           if (shouldSkip(f.path, f.size, f.mtime_ms, completed)) skippedStart++;
         }
         setProgress('download', skippedStart, total, total ? '' : 'Keine Dateien.');
+
+        async function pullProtocolJsonDrafts() {
+          if (!multiDeviceApi || !multiDeviceApi.pullAllJsonDrafts) return;
+          setProgress('drafts', 0, 1, 'Protokoll-Zwischenstände …');
+          try {
+            await multiDeviceApi.pullAllJsonDrafts({
+              reiseDir: targetDir,
+              dispoBaseUrl,
+              technicianId,
+              serverJobId,
+              localJobId,
+              username: dispoUsername,
+              password: dispoPassword,
+            });
+          } catch (draftPullErr) {
+            console.warn(
+              '[dienstreise_pull] json drafts:',
+              draftPullErr && draftPullErr.message ? draftPullErr.message : draftPullErr,
+            );
+          }
+          setProgress('drafts', 1, 1, 'Protokoll-Zwischenstände.');
+        }
+
         if (total === 0) {
+          await pullProtocolJsonDrafts();
           if (!skipTedOnPull) {
             setProgress('ted', 0, 1, 'TED-Excel in Projektordner …');
             try {
@@ -13239,6 +13334,8 @@ function createApp(db) {
           mergeCheckpoint({ completed });
           setProgress('file', i + 1, total, relPath);
         }
+
+        await pullProtocolJsonDrafts();
 
         if (!skipTedOnPull) {
           setProgress('ted', 0, 1, 'TED-Excel in Projektordner …');
