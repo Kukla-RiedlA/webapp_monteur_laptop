@@ -4,9 +4,24 @@
 const fs = require('fs');
 const path = require('path');
 
+const PINNED_DISPO_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  '10.0.0.180',
+  'fsm.kukla.co.at',
+  'kukla-montageplattform.local',
+]);
+
+function isPinnedDispoHost(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/\.$/, '');
+  return PINNED_DISPO_HOSTS.has(h);
+}
+
 function applyDispoTlsPreference(userDataDir, allowInsecure) {
   const flag = path.join(userDataDir, 'dispo_tls_insecure');
-  if (allowInsecure !== false) {
+  const on = allowInsecure === true || process.env.KUKLA_DISP_TLS_INSECURE === '1';
+  if (on) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     try {
       fs.writeFileSync(flag, '1', 'utf8');
@@ -39,4 +54,4 @@ function formatFetchError(err, baseUrl) {
   return `${msg} (${baseUrl})`;
 }
 
-module.exports = { applyDispoTlsPreference, formatFetchError };
+module.exports = { applyDispoTlsPreference, formatFetchError, isPinnedDispoHost, PINNED_DISPO_HOSTS };

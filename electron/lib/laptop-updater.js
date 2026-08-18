@@ -13,7 +13,7 @@ let lastCheckWasManual = false;
 let pendingInstallOnQuit = false;
 let latestVersionLabel = '';
 let feedBaseUrl = '';
-let allowInsecureTls = true;
+let allowInsecureTls = false;
 let certificateVerifyProcInstalled = false;
 const trustedInsecureHosts = new Set();
 let feedCheckDebounce = null;
@@ -121,12 +121,11 @@ function rememberInsecureHostsFromUrl(url) {
 }
 
 function shouldTrustCertificate(hostname) {
+  const { isPinnedDispoHost } = require('./dispo-tls');
   const h = (hostname || '').toLowerCase();
   if (!h) return false;
-  if (trustedInsecureHosts.has(h)) return true;
-  if (isPrivateLanHost(h)) return true;
-  if (/\.kukla\.co\.at$/i.test(h) || h === 'kukla.co.at') return true;
-  return false;
+  if (trustedInsecureHosts.has(h) && isPinnedDispoHost(h)) return true;
+  return isPinnedDispoHost(h);
 }
 
 function installCertificateVerifyProc() {
@@ -134,12 +133,12 @@ function installCertificateVerifyProc() {
 
   const verifyProc = (request, callback) => {
     const host = (request && request.hostname) || '';
-    // Whitelist, leerer Hostname oder insecure-TLS (Kukla-Standard): akzeptieren.
-    if (shouldTrustCertificate(host) || allowInsecureTls || !host) {
+    if (shouldTrustCertificate(host)) {
       callback(0);
       return;
     }
-    callback(-3);
+    const vr = request && typeof request.verificationResult === 'number' ? request.verificationResult : -2;
+    callback(vr);
   };
 
   // Normale App-/Renderer-Requests
@@ -170,10 +169,10 @@ function isInsecureTlsAllowed() {
 
 /** Selbstsigniertes Dispo-HTTPS (Kukla-Standard) — vor jedem Update-Check. */
 function ensureUpdaterTlsReady(feedUrl) {
-  allowInsecureTls = true;
+  allowInsecureTls = process.env.KUKLA_DISP_TLS_INSECURE === '1';
   if (feedUrl) rememberInsecureHostsFromUrl(feedUrl);
   if (feedBaseUrl) rememberInsecureHostsFromUrl(feedBaseUrl);
-  applyInsecureTlsToProcess(true);
+  applyInsecureTlsToProcess(allowInsecureTls);
   installCertificateVerifyProc();
 }
 

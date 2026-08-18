@@ -12804,11 +12804,10 @@ function createApp(db) {
         const p = colon >= 0 ? decoded.slice(colon + 1) : '';
         return authHeaderFromCredentials(u, p);
       } catch (_) {
-        /* Query-Fallback */
+        return authHeaderFromCredentials('', '');
       }
     }
-    const q = req.query || {};
-    return authHeaderFromCredentials(q.serverUsername || q.server_username, q.serverPassword ?? q.server_password);
+    return authHeaderFromCredentials('', '');
   }
 
   registerAbrechnungRoutes(app, {
