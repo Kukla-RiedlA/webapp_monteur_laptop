@@ -167,23 +167,25 @@ function isInsecureTlsAllowed() {
   return !!allowInsecureTls;
 }
 
-/** Selbstsigniertes Dispo-HTTPS (Kukla-Standard) — vor jedem Update-Check. */
+/**
+ * Chromium-Host-Pin vor Update-Check.
+ * Node-Fetch zu Dispo bleibt bei server.js (selbstsigniertes Zertifikat) —
+ * hier NODE_TLS nicht löschen, sonst wird die App nach dem Update-Check „Offline“.
+ */
 function ensureUpdaterTlsReady(feedUrl) {
-  allowInsecureTls = process.env.KUKLA_DISP_TLS_INSECURE === '1';
   if (feedUrl) rememberInsecureHostsFromUrl(feedUrl);
   if (feedBaseUrl) rememberInsecureHostsFromUrl(feedBaseUrl);
-  applyInsecureTlsToProcess(allowInsecureTls);
+  if (process.env.KUKLA_DISP_TLS_INSECURE === '1') {
+    applyInsecureTlsToProcess(true);
+  }
   installCertificateVerifyProc();
 }
 
 function applyInsecureTlsToProcess(on) {
-  allowInsecureTls = !!on;
-  if (on) {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-    installCertificateVerifyProc();
-  } else if (process.env.KUKLA_DISP_TLS_INSECURE !== '1') {
-    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-  }
+  if (!on) return;
+  allowInsecureTls = true;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  installCertificateVerifyProc();
 }
 
 function downloadProgressPayload(progress) {
