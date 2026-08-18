@@ -16666,7 +16666,7 @@ async function fetchMyJobsForPull(base, technicianId, authHeader, dateFrom, date
   const q = new URLSearchParams({ technician_id: String(technicianId) });
   if (dateFrom) q.set('date_from', String(dateFrom));
   if (dateTo) q.set('date_to', String(dateTo));
-  const fetchOpts = authHeader ? { headers: authHeader } : {};
+  const fetchOpts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
   const candidates = [
     `${base}/dispo_api/api/my_jobs.php?${q}`,
     `${base}/api/my_jobs.php?${q}`,
@@ -16689,7 +16689,7 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
   let absencesUrl = `${base}/api/my_absences.php?technician_id=${technicianId}`;
   if (dateFrom) absencesUrl += '&date_from=' + encodeURIComponent(dateFrom);
   if (dateTo) absencesUrl += '&date_to=' + encodeURIComponent(dateTo);
-  const fetchOpts = authHeader ? { headers: authHeader } : {};
+  const fetchOpts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
   let jobsRes;
   let absencesRes;
   let jobsPullUrl = '';
