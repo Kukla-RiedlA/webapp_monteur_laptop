@@ -1,0 +1,10 @@
+---
+description: Sicherheitskonzept — Passwoerter nie Klartext (Stub, kanonisch im Parent)
+alwaysApply: true
+---
+
+# Sicherheitskonzept
+
+Passwoerter und Secrets **nie im Klartext** (Git, JSON, localStorage, URL, Logs, API-Responses). Login nur 1x HTTPS; Persistenz Electron `safeStorage`. Kein `serverPassword` in Fach-JSON oder Query-Strings.
+
+Kanonisch: Plattform `.cursor/rules/security-konzept.mdc`.

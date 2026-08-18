@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const { createDispoProxy, loadSession, saveSession } = require('./dispo-proxy');
 const { performDispoLogin } = require('./dispo-login');
+const { takePasswordFromRecord, attachSealedPassword } = require('./credential-vault');
 const { applyDispoTlsPreference } = require('./dispo-tls');
 const { registerDispoApiPhpProxyRoutes, createDispoHtmlProxyHandler } = require('./dispo-html-proxy');
 const { setDispoPingResult } = require('./connection-state');
@@ -24,7 +25,14 @@ function loadWebSession(dbDir) {
   const p = sessionPath(dbDir);
   if (!fs.existsSync(p)) return null;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const taken = takePasswordFromRecord(raw);
+    if (taken.migrated || (raw && (raw.dispo_password != null || raw.serverPassword != null))) {
+      try {
+        fs.writeFileSync(p, JSON.stringify(taken.record, null, 2), 'utf8');
+      } catch (_) { /* ignore rewrite */ }
+    }
+    return { ...taken.record, dispo_password: taken.password };
   } catch (_) {
     return null;
   }
@@ -33,7 +41,9 @@ function loadWebSession(dbDir) {
 function saveWebSession(dbDir, data) {
   const p = sessionPath(dbDir);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+  const password = data && data.dispo_password != null ? data.dispo_password : '';
+  const sealed = attachSealedPassword(data || {}, password);
+  fs.writeFileSync(p, JSON.stringify(sealed.record, null, 2), 'utf8');
 }
 
 function getOrCreateProxy() {
@@ -145,6 +155,17 @@ function registerMonteurDispoWebRoutes(app, ctx) {
     res.json({ ok: true, prefix: '/dispo-remote' });
   });
 
+  app.get('/api/dispo/auth-status', (_req, res) => {
+    const stored = loadWebSession(dbDir) || {};
+    const username = String(stored.dispo_username || '').trim();
+    const hasPass = stored.dispo_password != null && String(stored.dispo_password) !== '';
+    res.json({
+      ok: true,
+      has_credentials: !!(username && hasPass),
+      username,
+    });
+  });
+
   app.get('/api/dispo/ping', async (_req, res) => {
     try {
       const auth = await ensureProxyAuthenticated(dbDir, null);
@@ -207,4 +228,5 @@ module.exports = {
   tryProxyFetchDispoBinary,
   getOrCreateProxy,
   saveWebSession,
+  loadWebSession,
 };

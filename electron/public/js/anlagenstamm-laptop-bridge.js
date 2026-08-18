@@ -25,16 +25,12 @@
   }
 
   function getDispoCreds() {
-    const out = { baseUrl: '', serverUsername: '', serverPassword: '' };
+    const out = { baseUrl: '', serverUsername: '' };
     try {
       if (typeof global.getDispoBaseUrl === 'function') out.baseUrl = global.getDispoBaseUrl() || '';
       if (typeof global.getDispoUsername === 'function') out.serverUsername = global.getDispoUsername() || '';
-      if (typeof global.getDispoPassword === 'function') out.serverPassword = global.getDispoPassword() || '';
       if (!out.serverUsername && typeof global.getServerUsername === 'function') {
         out.serverUsername = global.getServerUsername() || '';
-      }
-      if (!out.serverPassword && typeof global.getServerPassword === 'function') {
-        out.serverPassword = global.getServerPassword() || '';
       }
     } catch (_) { /* ignore */ }
     if (!out.baseUrl) {
@@ -42,9 +38,6 @@
     }
     if (!out.serverUsername) {
       try { out.serverUsername = (localStorage.getItem('monteur_serverUsername') || '').trim(); } catch (_) { /* ignore */ }
-    }
-    if (!out.serverPassword) {
-      try { out.serverPassword = localStorage.getItem('monteur_serverPassword') || ''; } catch (_) { /* ignore */ }
     }
     return out;
   }
@@ -334,7 +327,6 @@
             baseUrl: creds.baseUrl,
             fab: fabNorm,
             serverUsername: creds.serverUsername,
-            serverPassword: creds.serverPassword,
           }),
           cache: 'no-store',
         })
@@ -519,7 +511,6 @@
         job_id: pnExplorerState.jobId || undefined,
         fallbackName: relPath.split('/').pop() || 'download',
         serverUsername: creds.serverUsername,
-        serverPassword: creds.serverPassword,
       }),
     });
     const d = await r.json().catch(() => ({}));
@@ -813,7 +804,6 @@
         fab: fab,
         file_name: fileName,
         serverUsername: creds.serverUsername,
-        serverPassword: creds.serverPassword,
       }),
     });
     const d = await r.json().catch(() => ({}));

@@ -251,6 +251,40 @@
   window.getDispoInternalUrl = getDispoInternalUrl;
   const getServerUsername = () => (document.getElementById('serverUsername') && document.getElementById('serverUsername').value || '').trim();
   const getServerPassword = () => (document.getElementById('serverPassword') && document.getElementById('serverPassword').value || '');
+  let vaultHasDispoPassword = false;
+  let pendingLegacyPassword = '';
+  function hasDispoAuth() {
+    return !!(getServerUsername() && (getServerPassword() || pendingLegacyPassword || vaultHasDispoPassword));
+  }
+  function passwordForSessionBootstrap() {
+    return (getServerPassword() || pendingLegacyPassword || '').toString();
+  }
+  function clearPasswordFieldAfterPersist() {
+    pendingLegacyPassword = '';
+    var el = document.getElementById('serverPassword');
+    if (el) el.value = '';
+    updateDispoPasswordFieldUi();
+  }
+  function updateDispoPasswordFieldUi() {
+    var el = document.getElementById('serverPassword');
+    if (!el) return;
+    if ((vaultHasDispoPassword || pendingLegacyPassword) && !(el.value || '')) {
+      el.placeholder = 'gespeichert — leer lassen oder neues Passwort';
+    } else {
+      el.placeholder = '••••••••';
+    }
+  }
+  function refreshVaultAuthFlag() {
+    return fetch(API_BASE + '/api/dispo/auth-status')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        vaultHasDispoPassword = !!(d && d.has_credentials);
+        updateDispoPasswordFieldUi();
+        return vaultHasDispoPassword;
+      })
+      .catch(function () { return vaultHasDispoPassword; });
+  }
+  window.hasDispoAuth = hasDispoAuth;
 
   /** Standard bei Neuinstallation (ohne gespeicherte Einstellungen); weiterhin editierbar. */
   const DEFAULT_DISPO_SERVER_URL = 'https://fsm.kukla.co.at:4433';
@@ -622,9 +656,7 @@
     try { return (localStorage.getItem(SETTINGS_KEYS.serverUsername) || '').trim(); } catch (e) { return ''; }
   }
   function getDispoPassword() {
-    var p = getServerPassword();
-    if (p) return p;
-    try { return localStorage.getItem(SETTINGS_KEYS.serverPassword) || ''; } catch (e) { return ''; }
+    return getServerPassword() || '';
   }
 
   function getSyncIntervalMinutes() {
@@ -726,7 +758,7 @@
     var hintEl = document.getElementById('serverMaintenancePolicyHint');
     var btnReboot = document.getElementById('btnServerReboot');
     if (!zone) return Promise.resolve();
-    if (!getServerUsername() || !getServerPassword()) {
+    if (!hasDispoAuth()) {
       zone.hidden = true;
       return Promise.resolve();
     }
@@ -829,8 +861,15 @@
       if (elFullName && fullNameStored != null) elFullName.value = fullNameStored;
       const username = localStorage.getItem(SETTINGS_KEYS.serverUsername);
       if (username != null) document.getElementById('serverUsername').value = username;
-      const password = localStorage.getItem(SETTINGS_KEYS.serverPassword);
-      if (password != null) document.getElementById('serverPassword').value = password;
+      try {
+        pendingLegacyPassword = localStorage.getItem(SETTINGS_KEYS.serverPassword) || '';
+        localStorage.removeItem(SETTINGS_KEYS.serverPassword);
+      } catch (ePw) {
+        pendingLegacyPassword = '';
+      }
+      var pwEl = document.getElementById('serverPassword');
+      if (pwEl) pwEl.value = '';
+      updateDispoPasswordFieldUi();
       const interval = localStorage.getItem(SETTINGS_KEYS.syncIntervalMinutes);
       if (interval != null) {
         const el = document.getElementById('syncIntervalMinutes');
@@ -853,6 +892,7 @@
         pdfAutoEl.checked = localStorage.getItem(SETTINGS_KEYS.pdfAutoOpen) === '1';
       }
     } catch (e) { /* ignore */ }
+    refreshVaultAuthFlag();
   }
 
   function saveSettingsToStorage() {
@@ -865,7 +905,7 @@
       var elFn = document.getElementById('monteurFullName');
       localStorage.setItem(SETTINGS_KEYS.monteurFullName, elFn ? (elFn.value || '').trim() : '');
       localStorage.setItem(SETTINGS_KEYS.serverUsername, (document.getElementById('serverUsername') && document.getElementById('serverUsername').value) || '');
-      localStorage.setItem(SETTINGS_KEYS.serverPassword, (document.getElementById('serverPassword') && document.getElementById('serverPassword').value) || '');
+      try { localStorage.removeItem(SETTINGS_KEYS.serverPassword); } catch (e2) { /* ignore */ }
       localStorage.setItem(SETTINGS_KEYS.syncIntervalMinutes, String(getSyncIntervalMinutes()));
       const pathEl = document.getElementById('dienstreiseBasePath');
       localStorage.setItem(SETTINGS_KEYS.dienstreiseBasePath, (pathEl && pathEl.value ? pathEl.value.trim() : '') || '');
@@ -927,8 +967,7 @@
       baseUrl: getDispoBaseUrl(),
       externalUrl: getDispoExternalUrl(),
       internalUrl: getDispoInternalUrl(),
-      serverUsername: getDispoUsername(),
-      serverPassword: getDispoPassword()
+      serverUsername: getDispoUsername()
     }, extra || {});
   }
 
@@ -1402,7 +1441,7 @@
     if (!getTechId()) return 'Bitte Monteur-ID in Einstellungen eintragen.';
     if (!opts.allowOffline) {
       if (!(getDispoBaseUrl() || '').trim()) return 'Bitte Dispo-URL in Einstellungen eintragen.';
-      if (!getDispoUsername() || !getDispoPassword()) {
+      if (!hasDispoAuth()) {
         return 'Dispo-Zugangsdaten fehlen: Benutzername und Passwort in den Einstellungen eintragen.';
       }
     }
@@ -1414,7 +1453,7 @@
   function shouldPreferOfflineAccept() {
     var base = (typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '') || '';
     if (!String(base).trim()) return true;
-    if (!getDispoUsername() || !getDispoPassword()) return true;
+    if (!hasDispoAuth()) return true;
     return false;
   }
 
@@ -2031,7 +2070,6 @@
     if (extra.externalUrl) q += '&externalUrl=' + encodeURIComponent(extra.externalUrl);
     if (extra.internalUrl) q += '&internalUrl=' + encodeURIComponent(extra.internalUrl);
     if (getDispoUsername()) q += '&dispo_username=' + encodeURIComponent(getDispoUsername());
-    if (getDispoPassword()) q += '&dispo_password=' + encodeURIComponent(getDispoPassword());
     if (onlyFabs.length) q += '&only_fabs=' + encodeURIComponent(onlyFabs.join(','));
     var fetchOpts = {};
     if (acceptOfflinePreviewAbort) fetchOpts.signal = acceptOfflinePreviewAbort.signal;
@@ -2112,7 +2150,7 @@
     var hint = document.getElementById('projektdatenFabHint');
     var dispoBaseUrl = (getDispoBaseUrl() || '').trim();
     var technicianId = getTechId();
-    if (!dispoBaseUrl || !technicianId || !getDispoUsername() || !getDispoPassword()) {
+    if (!dispoBaseUrl || !technicianId || !hasDispoAuth()) {
       if (hint) hint.textContent = 'Dispo-Zugangsdaten fehlen – Anlagen gespeichert, Ordner später laden.';
       if (typeof showToast === 'function') showToast('Anlagen gespeichert. Projektordner später aktualisieren.');
       return;
@@ -4517,7 +4555,7 @@
     if (isJobAngelegtReadOnly(job) || isJobAbgerechnet(job) || !jobStatusAllowsTedFilePull(job)) return;
     var baseUrl = (getDispoBaseUrl() || '').trim();
     var techId = getTechId();
-    if (!baseUrl || !techId || !getDispoUsername() || !getDispoPassword()) return;
+    if (!baseUrl || !techId || !hasDispoAuth()) return;
     if (mechanikTedPullInFlightByJob[localJobId]) return;
     var last = mechanikTedPullLastStartedAt[localJobId] || 0;
     var forcePull = !!pullOpts.forceRetry || mechanikTedPulledForJobId !== localJobId;
@@ -6655,12 +6693,12 @@
     var tid = getTechId();
     if (tid > 0) {
       setMonteurProfileResolveHint('Monteur-ID ' + tid + ' (gespeichert).', true);
-      if (getServerUsername() && getServerPassword() && (getDispoExternalUrl() || getDispoInternalUrl())) {
+      if (hasDispoAuth() && (getDispoExternalUrl() || getDispoInternalUrl())) {
         verifyMonteurProfileInBackground();
       }
       return;
     }
-    if (getServerUsername() && getServerPassword()) {
+    if (hasDispoAuth()) {
       resolveMonteurProfileFromDispo();
     }
   }
@@ -6693,8 +6731,8 @@
       setMonteurProfileResolveHint('Bitte Dispo-Benutzername eintragen.');
       return Promise.resolve(false);
     }
-    if (!getServerPassword()) {
-      setMonteurProfileResolveHint('Bitte Dispo-Passwort eintragen (danach Speichern oder Feld verlassen).');
+    if (!hasDispoAuth()) {
+      setMonteurProfileResolveHint('Bitte Dispo-Zugangsdaten eintragen (Benutzername; Passwort nur beim ersten Login).');
       return Promise.resolve(false);
     }
     var ext = getDispoExternalUrl();
@@ -6920,7 +6958,7 @@
   function bootstrapLocalData(force) {
     var techId = getTechId();
     if (!techId) {
-      if (getServerUsername() && getServerPassword() && (getDispoExternalUrl() || getDispoInternalUrl())) {
+      if (hasDispoAuth() && (getDispoExternalUrl() || getDispoInternalUrl())) {
         return resolveMonteurProfileFromDispo().then(function () {
           if (!getTechId()) {
             setConnectionBadge('offline');
@@ -7163,9 +7201,7 @@
         '&base_url=' +
         encodeURIComponent(auth.baseUrl) +
         '&dispoUsername=' +
-        encodeURIComponent(auth.serverUsername || '') +
-        '&dispoPassword=' +
-        encodeURIComponent(auth.serverPassword || '');
+        encodeURIComponent(auth.serverUsername || '');
       var r = await fetch(API_BASE + '/api/devices' + q);
       var data = await r.json().catch(function () { return {}; });
       if (!r.ok || !data.ok) {
@@ -7312,7 +7348,6 @@
       baseUrl: syncBase,
       technicianId: techId,
       serverUsername: getServerUsername(),
-      serverPassword: getServerPassword(),
     };
   }
 
@@ -7342,7 +7377,6 @@
       internalUrl: intUrl,
       technicianId: typeof getTechId === 'function' ? getTechId() : 0,
       serverUsername: typeof getServerUsername === 'function' ? getServerUsername() : '',
-      serverPassword: typeof getServerPassword === 'function' ? getServerPassword() : '',
     };
   }
 
@@ -7357,7 +7391,7 @@
     opts = opts || {};
     var syncProblems = [];
     var fallbackBase = opts && opts.connectedBaseFallback;
-    if (!isValidDispoSyncAuth(auth) && getServerUsername() && getServerPassword()) {
+    if (!isValidDispoSyncAuth(auth) && hasDispoAuth()) {
       await resolveMonteurProfileFromDispo();
     }
     var syncPayload = buildDispoSyncAuthPayload(fallbackBase);
@@ -7582,7 +7616,7 @@
     var blockingSync = opts.blockingSync === true;
     var probeOnly = opts.probeOnly === true;
     var techId = getTechId();
-    var hasLogin = !!(getServerUsername() && getServerPassword());
+    var hasLogin = hasDispoAuth();
     if (isOsNetworkOffline()) {
       markDispoUnreachable('Keine Netzwerkverbindung');
       setConnectionBadge('offline', 'Keine Netzwerkverbindung — lokale Daten verfügbar');
@@ -7610,15 +7644,17 @@
         await resolveMonteurProfileFromDispo();
         techId = getTechId();
       }
-      var check = await fetchApiPostJson(
-        '/api/check_connection',
-        {
+      var checkBody = {
           externalUrl: ext,
           internalUrl: intUrl,
           technicianId: techId,
           serverUsername: getServerUsername(),
-          serverPassword: getServerPassword(),
-        },
+      };
+      var checkPw = passwordForSessionBootstrap();
+      if (checkPw) checkBody.serverPassword = checkPw;
+      var check = await fetchApiPostJson(
+        '/api/check_connection',
+        checkBody,
         probeOnly ? 15000 : 28000,
       );
       applyMonteurProfileFromConnection(check);
@@ -8147,6 +8183,9 @@
       return applyFixedDispoTlsOnServer();
     })
     .then(function () {
+      return refreshVaultAuthFlag();
+    })
+    .then(function () {
       return ensureDispoWebSession();
     })
     .then(function () {
@@ -8155,7 +8194,7 @@
     })
     .then(function () {
       startPushEvents();
-      if (getServerUsername() && getServerPassword()) {
+      if (hasDispoAuth()) {
         refreshServerMaintenanceZone().catch(function () {});
       }
     })
@@ -8391,11 +8430,14 @@
     }).catch(function () {});
     applyFixedDispoTlsOnServer()
       .then(function () {
+        return ensureDispoWebSession();
+      })
+      .then(function () {
         startSyncInterval();
         startPushEvents();
         updateTechnicianName();
         var techIdAfterSave = getTechId();
-        var hasLoginAfterSave = !!(getServerUsername() && getServerPassword());
+        var hasLoginAfterSave = hasDispoAuth();
         if ((getDispoExternalUrl() || getDispoInternalUrl()) && (techIdAfterSave || hasLoginAfterSave)) {
           var prepSave = hasLoginAfterSave && !techIdAfterSave ? resolveMonteurProfileFromDispo() : Promise.resolve();
           return prepSave.then(function () {
@@ -8521,9 +8563,7 @@
       '?base_url=' +
       encodeURIComponent(getDispoExternalUrl() || getDispoInternalUrl() || '') +
       '&username=' +
-      encodeURIComponent(getServerUsername() || '') +
-      '&password=' +
-      encodeURIComponent(getServerPassword() || '');
+      encodeURIComponent(getServerUsername() || '');
     return fetch(API_BASE + '/api/technician/signature' + q, {
       headers: { 'X-Technician-Id': String(tid) },
     })
@@ -8580,9 +8620,7 @@
       '?base_url=' +
       encodeURIComponent(getDispoExternalUrl() || getDispoInternalUrl() || '') +
       '&username=' +
-      encodeURIComponent(getServerUsername() || '') +
-      '&password=' +
-      encodeURIComponent(getServerPassword() || '');
+      encodeURIComponent(getServerUsername() || '');
     return fetch(API_BASE + '/api/technician/signature' + q, {
       headers: { 'X-Technician-Id': String(tid) },
     })
@@ -8711,7 +8749,7 @@
   if (btnServerReboot) {
     btnServerReboot.addEventListener('click', function () {
       var hint = document.getElementById('serverRebootHint');
-      if (!getServerUsername() || !getServerPassword()) {
+      if (!hasDispoAuth()) {
         if (hint) hint.textContent = 'Dispo-Zugangsdaten fehlen.';
         return;
       }
@@ -8847,7 +8885,7 @@
   document.getElementById('btnSyncNow').addEventListener('click', function () {
     var hint = document.getElementById('syncNowHint');
     var techId = getTechId();
-    var hasLogin = !!(getServerUsername() && getServerPassword());
+    var hasLogin = hasDispoAuth();
     if (!techId && !hasLogin) {
       hint.textContent = 'Bitte Dispo-Benutzername und Passwort eintragen.';
       return;
@@ -9939,22 +9977,28 @@
 
   async function ensureDispoWebSession() {
     var base = getDispoBaseUrl();
-    if (!base || !getDispoUsername() || !getServerPassword()) return false;
+    if (!base || !hasDispoAuth()) return false;
     try {
+      var body = {
+        baseUrl: base,
+        externalUrl: getDispoExternalUrl(),
+        internalUrl: getDispoInternalUrl(),
+        serverUsername: getDispoUsername(),
+      };
+      var bootPw = passwordForSessionBootstrap();
+      if (bootPw) body.serverPassword = bootPw;
       var r = await fetch(API_BASE + '/api/dispo/ensure-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          baseUrl: base,
-          externalUrl: getDispoExternalUrl(),
-          internalUrl: getDispoInternalUrl(),
-          serverUsername: getDispoUsername(),
-          serverPassword: getServerPassword(),
-        }),
+        body: JSON.stringify(body),
       });
       var d = await r.json().catch(function () {
         return {};
       });
+      if (d && d.ok) {
+        clearPasswordFieldAfterPersist();
+        await refreshVaultAuthFlag();
+      }
       return !!d.ok;
     } catch (e) {
       return false;
@@ -12092,8 +12136,7 @@
     baseUrl = String(baseUrl).trim().replace(/\/+$/, '');
     if (!baseUrl) return { ok: false, skipped: true };
     var user = typeof getDispoUsername === 'function' ? getDispoUsername() : '';
-    var pass = typeof getDispoPassword === 'function' ? getDispoPassword() : '';
-    if (!user || !pass) return { ok: false, skipped: true };
+    if (!hasDispoAuth()) return { ok: false, skipped: true };
     try {
       var r = await fetch(API_BASE + '/api/calendar', {
         method: 'POST',
@@ -12106,7 +12149,6 @@
           start: start,
           end: end,
           serverUsername: user,
-          serverPassword: pass,
           skipJobEnrich: true
         })
       });
@@ -13518,7 +13560,7 @@
     if (Date.now() - lastStarted < PROJECT_FOLDER_AUTO_PULL_MIN_INTERVAL_MS) return;
     var dispoBaseUrl = (getDispoBaseUrl() || '').trim();
     var technicianId = getTechId();
-    if (!dispoBaseUrl || !technicianId || !getDispoUsername() || !getDispoPassword()) return;
+    if (!dispoBaseUrl || !technicianId || !hasDispoAuth()) return;
     var snap = getDienstreiseJobSnapshotByLocalId(localJobId);
     if (snap && (isJobAngelegtReadOnly(snap) || isJobAbgerechnet(snap))) return;
     if (!snap || String(snap.status || '').trim().toLowerCase() !== 'in_arbeit') return;
@@ -19074,8 +19116,7 @@
         'job_id=' + encodeURIComponent(pzJobData.id) +
         '&fabrikationsnummer=' + encodeURIComponent(fab) +
         '&base_url=' + encodeURIComponent(getDispoBaseUrl() || '') +
-        '&serverUsername=' + encodeURIComponent(getDispoUsername() || '') +
-        '&serverPassword=' + encodeURIComponent(getDispoPassword() || '');
+        '&serverUsername=' + encodeURIComponent(getDispoUsername() || '');
       try {
         var r = await fetch(API_BASE + '/api/pruefzertifikat_prefill?' + qs, {
           headers: { 'X-Technician-Id': String(getTechId()) }

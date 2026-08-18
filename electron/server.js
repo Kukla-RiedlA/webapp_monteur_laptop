@@ -1232,9 +1232,7 @@ function createApp(db) {
 
   function loadDispoWebSessionCreds() {
     try {
-      const p = path.join(DB_DIR, 'dispo_web_session.json');
-      if (!fs.existsSync(p)) return {};
-      const s = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const s = loadWebSession(DB_DIR) || {};
       return {
         serverUsername: s.dispo_username || '',
         serverPassword: s.dispo_password || '',
@@ -1247,14 +1245,17 @@ function createApp(db) {
     }
   }
 
-  /** Dispo-Zugangsdaten: Request-Body nur wenn nicht leer, sonst gespeicherte Session. */
+  /**
+   * Zugangsdaten: Vault zuerst. Body-Passwort nur als Erst-Login / Alt-Client,
+   * wenn die Session noch leer ist oder der Nutzer ein neues Passwort sendet.
+   */
   function resolveDispoServerCreds(body) {
     const session = loadDispoWebSessionCreds();
     const b = body && typeof body === 'object' ? body : {};
-    const bodyUser = String(b.serverUsername || b.dispo_username || '').trim();
-    const bodyPass = b.serverPassword != null ? String(b.serverPassword) : b.dispo_password != null ? String(b.dispo_password) : '';
+    const bodyUser = String(b.serverUsername || b.dispo_username || b.dispoUsername || '').trim();
     const user = bodyUser || String(session.serverUsername || '').trim();
-    const pass = bodyPass || String(session.serverPassword || '');
+    const bodyPass = String(b.serverPassword || b.dispoPassword || b.dispo_password || '');
+    const pass = bodyPass !== '' ? bodyPass : String(session.serverPassword || '');
     const baseUrl = String(b.baseUrl || session.baseUrl || session.externalUrl || '')
       .trim()
       .replace(/\/$/, '');
@@ -1269,7 +1270,7 @@ function createApp(db) {
 
   const { registerAnlagenstammPhpRoutes } = require('./lib/anlagenstamm-php-routes');
   const { registerAbrechnungPhpRoutes } = require('./lib/abrechnung-php-routes');
-  const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession } = require('./lib/monteur-dispo-web-routes');
+  const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession, loadWebSession } = require('./lib/monteur-dispo-web-routes');
   const { registerMultiDeviceRoutes } = require('./lib/multi-device-routes');
   let multiDeviceApi = null;
   registerAnlagenstammPhpRoutes(app, {
@@ -2679,7 +2680,7 @@ function createApp(db) {
       );
     }
 
-    const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+    const authHeader = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
 
     function collectLocalFiles(rootDir, subfolder) {
       const result = [];
@@ -4104,7 +4105,7 @@ function createApp(db) {
       const targetDir = getOrCreateDienstreiseFolderForJob(jobRow.id);
       if (!targetDir || !fs.existsSync(targetDir)) return res.status(400).json({ ok: false, error: 'Zielordner konnte nicht erstellt werden.' });
 
-      const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+      const authHeader = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
 
       async function listEntries(relPath) {
         const pathQ = relPath ? '&path=' + encodeURIComponent(relPath) : '';
@@ -5100,7 +5101,7 @@ function createApp(db) {
 
       if (dispoBaseUrl && technicianId) {
         const jobId = getServerJobId(localJobId);
-        const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+        const authHeader = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
         const formBody = new URLSearchParams();
         formBody.append('technician_id', String(technicianId));
         formBody.append('job_id', String(jobId));
@@ -5464,7 +5465,7 @@ function createApp(db) {
 
       async function collectRemoteFilesForFolder(folderName, localRelPaths) {
         if (!effectiveDispoBase || !technicianId) return new Set();
-        const authHeader = (dispoUsername || dispoPassword) ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') } : {};
+        const authHeader = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
         return listRemoteProjectFilesOnDispo(
           effectiveDispoBase,
           jobId,
@@ -12732,9 +12733,11 @@ function createApp(db) {
   });
 
   function authHeaderFromCredentials(username, password) {
-    const u = (username || '').toString().trim();
+    const session = loadDispoWebSessionCreds();
+    const u = (username || session.serverUsername || '').toString().trim();
     if (!u) return undefined;
-    const p = (password || '').toString();
+    const explicit = password != null ? String(password) : '';
+    const p = explicit !== '' ? explicit : String(session.serverPassword || '');
     return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
   }
 
@@ -14334,7 +14337,10 @@ function createApp(db) {
   }
 
   app.post('/api/check_connection', express.json(), async (req, res) => {
-    const { baseUrl, externalUrl, internalUrl, technicianId, serverUsername, serverPassword } = req.body || {};
+    const creds = resolveDispoServerCreds(req.body || {});
+    const { baseUrl, externalUrl, internalUrl, technicianId } = req.body || {};
+    const serverUsername = creds.serverUsername;
+    const serverPassword = creds.serverPassword;
     const pair = normalizeDispoBasePair(externalUrl, internalUrl);
     const ext = pair.external;
     const int = pair.internal;
@@ -14434,7 +14440,10 @@ function createApp(db) {
 
   /** Monteur-ID/Name nur aus Dispo-Login (ohne jobs_open/my_jobs-Probe). */
   app.post('/api/monteur_profile', express.json(), async (req, res) => {
-    const { baseUrl, externalUrl, internalUrl, serverUsername, serverPassword } = req.body || {};
+    const creds = resolveDispoServerCreds(req.body || {});
+    const { baseUrl, externalUrl, internalUrl } = req.body || {};
+    const serverUsername = creds.serverUsername;
+    const serverPassword = creds.serverPassword;
     const pair = normalizeDispoBasePair(externalUrl, internalUrl);
     const candidates = buildDispoBaseCandidates({
       baseUrl,

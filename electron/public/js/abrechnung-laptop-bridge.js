@@ -43,9 +43,8 @@
     if (tid) h['X-Technician-Id'] = String(tid);
     try {
       const u = (localStorage.getItem('monteur_serverUsername') || '').trim();
-      const p = localStorage.getItem('monteur_serverPassword') || '';
-      if (u || p) {
-        h.Authorization = 'Basic ' + btoa(u + ':' + p);
+      if (u) {
+        h.Authorization = 'Basic ' + btoa(u + ':');
       }
     } catch (_) { /* ignore */ }
     return h;
@@ -119,10 +118,8 @@
       return Promise.resolve({ ok: false, skipped: true });
     }
     let serverUsername = '';
-    let serverPassword = '';
     try {
       serverUsername = (localStorage.getItem('monteur_serverUsername') || '').trim();
-      serverPassword = localStorage.getItem('monteur_serverPassword') || '';
     } catch (_) { /* ignore */ }
     if (showStatus) {
       setSyncHint('Hintergrund-Abgleich mit Dispo läuft — Anzeige aus lokalem Speicher (Dienstreise-Ordner).', false);
@@ -134,7 +131,6 @@
         baseUrl: baseUrl,
         technicianId: tid,
         serverUsername: serverUsername,
-        serverPassword: serverPassword,
         period_ym: period,
         job_server_id: jobServerId > 0 ? jobServerId : 0,
       }),
