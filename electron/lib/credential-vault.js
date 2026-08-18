@@ -108,7 +108,54 @@ function stripPasswordFields(obj) {
   delete out.serverPassword;
   delete out.dispo_password_enc;
   delete out.password;
+  delete out.cookies;
+  delete out.cookies_enc;
   return out;
+}
+
+function takeCookiesFromRecord(record) {
+  const rec = record && typeof record === 'object' ? { ...record } : {};
+  let cookies = null;
+  let migrated = false;
+  if (rec.cookies_enc) {
+    const json = unsealPassword(rec.cookies_enc);
+    if (json) {
+      try {
+        cookies = JSON.parse(json);
+      } catch (_) {
+        cookies = null;
+      }
+    }
+  }
+  if (rec.cookies != null) {
+    if (!cookies) cookies = rec.cookies;
+    migrated = true;
+  }
+  delete rec.cookies;
+  if (cookies != null) {
+    const enc = sealPassword(JSON.stringify(cookies));
+    if (enc) rec.cookies_enc = enc;
+    else delete rec.cookies_enc;
+  } else {
+    delete rec.cookies_enc;
+  }
+  return { cookies, record: rec, migrated };
+}
+
+function attachSealedCookies(record, cookies) {
+  const rec = record && typeof record === 'object' ? { ...record } : {};
+  delete rec.cookies;
+  if (cookies == null) {
+    delete rec.cookies_enc;
+    return { record: rec, persistFailed: false };
+  }
+  const enc = sealPassword(JSON.stringify(cookies));
+  if (!enc) {
+    delete rec.cookies_enc;
+    return { record: rec, persistFailed: true };
+  }
+  rec.cookies_enc = enc;
+  return { record: rec, persistFailed: false };
 }
 
 module.exports = {
@@ -117,5 +164,7 @@ module.exports = {
   unsealPassword,
   takePasswordFromRecord,
   attachSealedPassword,
+  takeCookiesFromRecord,
+  attachSealedCookies,
   stripPasswordFields,
 };
