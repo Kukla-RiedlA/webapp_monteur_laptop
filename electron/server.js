@@ -187,6 +187,19 @@ const {
   safeTedLocalFileName,
 } = require('./lib/ted-excel-local');
 const { applyKuklaAuditHeaders } = require('./lib/audit-client-headers');
+
+/** Apache/FPM liefert Authorization oft nicht an PHP — Dispo liest X-Kukla-Authorization. */
+function dispoMonteurFetchHeaders(technicianId, authHeader) {
+  const h = applyKuklaAuditHeaders(
+    Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {}),
+  );
+  const a = authHeader && authHeader.Authorization;
+  if (a) {
+    h['X-Kukla-Authorization'] = a;
+  }
+  return h;
+}
+
 const {
   isLikelyOfflineSyncError,
   isPermanentSyncPushError,
@@ -12778,18 +12791,6 @@ function createApp(db) {
       code: 'missing_technician_signature',
     });
     return false;
-  }
-
-  /** Apache/FPM liefert Authorization oft nicht an PHP — Dispo require_login.php liest X-Kukla-Authorization. */
-  function dispoMonteurFetchHeaders(technicianId, authHeader) {
-    const h = applyKuklaAuditHeaders(
-      Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {}),
-    );
-    const a = authHeader && authHeader.Authorization;
-    if (a) {
-      h['X-Kukla-Authorization'] = a;
-    }
-    return h;
   }
 
   /** Basic vom Browser an 127.0.0.1 (kein Passwort in der Query); Fallback Query für Alt-Clients. */
