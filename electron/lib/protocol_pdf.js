@@ -1301,8 +1301,10 @@ function rowInSumme(row) {
 /**
  * Kontrollwiegungsprotokoll – A4 Querformat, Tabellenlayout (Kukla-Corporate).
  */
-async function generateKontrollwiegungPdfBuffer(payload) {
+async function generateKontrollwiegungPdfBuffer(payload, options) {
   const { PDFDocument, rgb } = require('pdf-lib');
+  const lang = (options && options.lang) === 'en' ? 'en' : 'de';
+  const de = lang !== 'en';
   const pdfDoc = await PDFDocument.create();
   const fonts = await embedProtocolFonts(pdfDoc);
   const font = fonts.font;
@@ -1332,17 +1334,29 @@ async function generateKontrollwiegungPdfBuffer(payload) {
   // PDF: nur Zeilen, die für die Summe markiert sind (in_summe)
   const dataRows = rowsAll.filter(rowInSumme);
 
-  const cols = [
-    { key: 'nr', label: 'Nr.', sub: 'No.', w: 28, align: 'center' },
-    { key: 'bandwaage_kg', label: 'Bandwaage [kg]', sub: 'beltscale', w: 88, align: 'right', digits: 3 },
-    { key: 'kontrollwaage_kg', label: 'Kontrollwaage [kg]', sub: 'controlscale', w: 98, align: 'right', digits: 3 },
-    { key: 'fehler_kg', label: 'Fehler [kg]', sub: 'difference', w: 72, align: 'right', digits: 3 },
-    { key: 'fehler_prozent', label: 'Fehler [%]', sub: 'difference', w: 68, align: 'right', kind: 'pct' },
-    { key: 'leistung_th', label: 'Leistung [t/h]', sub: 'value', w: 72, align: 'right', digits: 0 },
-    { key: 'tara_kg', label: 'Tara [kg]', sub: 'truck tare', w: 68, align: 'right', digits: 0 },
-    { key: 'brutto_kg', label: 'Brutto [kg]', sub: 'gross', w: 72, align: 'right', digits: 0 },
-    { key: 'bemerkung', label: 'Bemerkungen', sub: 'remarks', w: 0, align: 'left' },
-  ];
+  const cols = de
+    ? [
+        { key: 'nr', label: 'Nr.', sub: 'No.', w: 28, align: 'center' },
+        { key: 'bandwaage_kg', label: 'Bandwaage [kg]', sub: 'belt scale', w: 88, align: 'right', digits: 3 },
+        { key: 'kontrollwaage_kg', label: 'Kontrollwaage [kg]', sub: 'control scale', w: 98, align: 'right', digits: 3 },
+        { key: 'fehler_kg', label: 'Fehler [kg]', sub: 'difference', w: 72, align: 'right', digits: 3 },
+        { key: 'fehler_prozent', label: 'Fehler [%]', sub: 'difference', w: 68, align: 'right', kind: 'pct' },
+        { key: 'leistung_th', label: 'Leistung [t/h]', sub: 'rate', w: 72, align: 'right', digits: 0 },
+        { key: 'tara_kg', label: 'Tara [kg]', sub: 'tare', w: 68, align: 'right', digits: 0 },
+        { key: 'brutto_kg', label: 'Brutto [kg]', sub: 'gross', w: 72, align: 'right', digits: 0 },
+        { key: 'bemerkung', label: 'Bemerkungen', sub: 'remarks', w: 0, align: 'left' },
+      ]
+    : [
+        { key: 'nr', label: 'No.', sub: 'Nr.', w: 28, align: 'center' },
+        { key: 'bandwaage_kg', label: 'Belt scale [kg]', sub: 'Bandwaage', w: 88, align: 'right', digits: 3 },
+        { key: 'kontrollwaage_kg', label: 'Control scale [kg]', sub: 'Kontrollwaage', w: 98, align: 'right', digits: 3 },
+        { key: 'fehler_kg', label: 'Difference [kg]', sub: 'Fehler', w: 72, align: 'right', digits: 3 },
+        { key: 'fehler_prozent', label: 'Difference [%]', sub: 'Fehler', w: 68, align: 'right', kind: 'pct' },
+        { key: 'leistung_th', label: 'Rate [t/h]', sub: 'Leistung', w: 72, align: 'right', digits: 0 },
+        { key: 'tara_kg', label: 'Tare [kg]', sub: 'Tara', w: 68, align: 'right', digits: 0 },
+        { key: 'brutto_kg', label: 'Gross [kg]', sub: 'Brutto', w: 72, align: 'right', digits: 0 },
+        { key: 'bemerkung', label: 'Remarks', sub: 'Bemerkungen', w: 0, align: 'left' },
+      ];
   const tableInnerW = PAGE_W - marginX * 2;
   const fixedW = cols.reduce((s, c) => s + (c.key === 'bemerkung' ? 0 : c.w), 0);
   cols.forEach((c) => {
@@ -1407,7 +1421,7 @@ async function generateKontrollwiegungPdfBuffer(payload) {
 
   function sumCellValue(col) {
     if (col.key === 'nr') return 'Sum';
-    if (col.key === 'bemerkung') return 'Summe';
+    if (col.key === 'bemerkung') return de ? 'Summe' : 'Total';
     if (col.key === 'leistung_th') {
       return sums.any && sums.leistung_avg != null ? formatDeNumber(sums.leistung_avg, 0) : '';
     }
@@ -1440,14 +1454,14 @@ async function generateKontrollwiegungPdfBuffer(payload) {
     }
 
     const titleX = marginX + 140;
-    page.drawText('Kontrollwiegungsprotokoll', {
+    page.drawText(de ? 'Kontrollwiegungsprotokoll' : 'Calibration protocol', {
       x: titleX,
       y: y - 16,
       size: 18,
       font: fontBold,
       color: greenDark,
     });
-    page.drawText('calibration protocol', {
+    page.drawText(de ? 'calibration protocol' : 'Kontrollwiegungsprotokoll', {
       x: titleX,
       y: y - 32,
       size: 9,
@@ -1499,26 +1513,47 @@ async function generateKontrollwiegungPdfBuffer(payload) {
       String(payload.monteur_name || payload.technician_name || '').trim() || '–';
     const gespeichertVal =
       formatDateTimeDe(payload.gespeichert_am || payload.updated_at) || '–';
-    const fields = [
-      [
-        ['Kunde / customer', payload.kunde || payload.customer_name || ''],
-        ['FN', payload.fabrikationsnummer || ''],
-        ['Projekt / project', payload.projekt || ''],
-        ['Datum / date', datumVal],
-      ],
-      [
-        ['Type / type', payload.type || ''],
-        ['Leistung / value', payload.leistung || ''],
-        ['Elektronik', payload.elektronik || ''],
-        ['Servicetechniker', monteurVal],
-      ],
-      [
-        ['Teilung Kontrollwaage', payload.teilung_kontrollwaage || ''],
-        ['Bereich max', payload.bereich_max || ''],
-        ['Letzte Eichung', formatDateDe(payload.letzte_eichung) || String(payload.letzte_eichung || '')],
-        ['Gespeichert', gespeichertVal],
-      ],
-    ];
+    const fields = de
+      ? [
+          [
+            ['Kunde / customer', payload.kunde || payload.customer_name || ''],
+            ['FN', payload.fabrikationsnummer || ''],
+            ['Projekt / project', payload.projekt || ''],
+            ['Datum / date', datumVal],
+          ],
+          [
+            ['Type / type', payload.type || ''],
+            ['Leistung / value', payload.leistung || ''],
+            ['Elektronik', payload.elektronik || ''],
+            ['Servicetechniker', monteurVal],
+          ],
+          [
+            ['Teilung Kontrollwaage', payload.teilung_kontrollwaage || ''],
+            ['Bereich max', payload.bereich_max || ''],
+            ['Letzte Eichung', formatDateDe(payload.letzte_eichung) || String(payload.letzte_eichung || '')],
+            ['Gespeichert', gespeichertVal],
+          ],
+        ]
+      : [
+          [
+            ['Customer / Kunde', payload.kunde || payload.customer_name || ''],
+            ['SN', payload.fabrikationsnummer || ''],
+            ['Project / Projekt', payload.projekt || ''],
+            ['Date / Datum', datumVal],
+          ],
+          [
+            ['Type / type', payload.type || ''],
+            ['Rate / Leistung', payload.leistung || ''],
+            ['Electronics', payload.elektronik || ''],
+            ['Service engineer', monteurVal],
+          ],
+          [
+            ['Control scale division', payload.teilung_kontrollwaage || ''],
+            ['Max range', payload.bereich_max || ''],
+            ['Last verification', formatDateDe(payload.letzte_eichung) || String(payload.letzte_eichung || '')],
+            ['Saved', gespeichertVal],
+          ],
+        ];
 
     fields.forEach((group, gi) => {
       const gx = marginX + gi * colW + pad;
@@ -1619,7 +1654,7 @@ async function generateKontrollwiegungPdfBuffer(payload) {
       font,
       grayMuted,
       greenSoft,
-      de: true,
+      de,
       pageIndex,
       pageCount,
       isLast,
@@ -1709,9 +1744,11 @@ async function generateKontrollwiegungPdfBuffer(payload) {
 /**
  * Schleppketten-Test / chain calibration – A4 Querformat, Corporate-Design.
  */
-async function generateSchleppkettenPdfBuffer(payload) {
+async function generateSchleppkettenPdfBuffer(payload, options) {
   const { PDFDocument, rgb } = require('pdf-lib');
   const skLocal = require('./schleppketten-local');
+  const lang = (options && options.lang) === 'en' ? 'en' : 'de';
+  const de = lang !== 'en';
   const pdfDoc = await PDFDocument.create();
   const fonts = await embedProtocolFonts(pdfDoc);
   const font = fonts.font;
@@ -1740,17 +1777,29 @@ async function generateSchleppkettenPdfBuffer(payload) {
   const rowsAll = skLocal.enrichMessungen(Array.isArray(payload.messungen) ? payload.messungen : []);
   const dataRows = rowsAll.filter(rowInSumme);
 
-  const cols = [
-    { key: 'nr', label: 'Nr.', sub: 'No.', w: 26, align: 'center' },
-    { key: 'bandwaage_t', label: 'Bandwaage [t]', sub: 'beltscale', w: 78, align: 'right', digits: 3 },
-    { key: 'pruefkette_t', label: 'Prüfkette [t]', sub: 'testchain', w: 78, align: 'right', digits: 3 },
-    { key: 'kg_pro_m', label: 'kg/m', sub: 'kg/m', w: 62, align: 'right', digits: 4 },
-    { key: 'geschwindigkeit_ms', label: 'Geschw. [m/s]', sub: 'speed', w: 70, align: 'right', digits: 2 },
-    { key: 'messzeit_s', label: 'Messzeit [s]', sub: 'measure time', w: 62, align: 'right', digits: 0 },
-    { key: 'fehler_prozent', label: 'Fehler [%]', sub: 'difference', w: 62, align: 'right', kind: 'pct' },
-    { key: 'leistung_th', label: 'Leistung [t/h]', sub: 'value', w: 70, align: 'right', digits: 1 },
-    { key: 'bemerkung', label: 'Bemerkungen', sub: 'remarks', w: 0, align: 'left' },
-  ];
+  const cols = de
+    ? [
+        { key: 'nr', label: 'Nr.', sub: 'No.', w: 26, align: 'center' },
+        { key: 'bandwaage_t', label: 'Bandwaage [t]', sub: 'belt scale', w: 78, align: 'right', digits: 3 },
+        { key: 'pruefkette_t', label: 'Prüfkette [t]', sub: 'test chain', w: 78, align: 'right', digits: 3 },
+        { key: 'kg_pro_m', label: 'kg/m', sub: 'kg/m', w: 62, align: 'right', digits: 4 },
+        { key: 'geschwindigkeit_ms', label: 'Geschw. [m/s]', sub: 'speed', w: 70, align: 'right', digits: 2 },
+        { key: 'messzeit_s', label: 'Messzeit [s]', sub: 'measure time', w: 62, align: 'right', digits: 0 },
+        { key: 'fehler_prozent', label: 'Fehler [%]', sub: 'difference', w: 62, align: 'right', kind: 'pct' },
+        { key: 'leistung_th', label: 'Leistung [t/h]', sub: 'rate', w: 70, align: 'right', digits: 1 },
+        { key: 'bemerkung', label: 'Bemerkungen', sub: 'remarks', w: 0, align: 'left' },
+      ]
+    : [
+        { key: 'nr', label: 'No.', sub: 'Nr.', w: 26, align: 'center' },
+        { key: 'bandwaage_t', label: 'Belt scale [t]', sub: 'Bandwaage', w: 78, align: 'right', digits: 3 },
+        { key: 'pruefkette_t', label: 'Test chain [t]', sub: 'Prüfkette', w: 78, align: 'right', digits: 3 },
+        { key: 'kg_pro_m', label: 'kg/m', sub: 'kg/m', w: 62, align: 'right', digits: 4 },
+        { key: 'geschwindigkeit_ms', label: 'Speed [m/s]', sub: 'Geschw.', w: 70, align: 'right', digits: 2 },
+        { key: 'messzeit_s', label: 'Measure time [s]', sub: 'Messzeit', w: 62, align: 'right', digits: 0 },
+        { key: 'fehler_prozent', label: 'Difference [%]', sub: 'Fehler', w: 62, align: 'right', kind: 'pct' },
+        { key: 'leistung_th', label: 'Rate [t/h]', sub: 'Leistung', w: 70, align: 'right', digits: 1 },
+        { key: 'bemerkung', label: 'Remarks', sub: 'Bemerkungen', w: 0, align: 'left' },
+      ];
   const tableInnerW = PAGE_W - marginX * 2;
   const fixedW = cols.reduce((s, c) => s + (c.key === 'bemerkung' ? 0 : c.w), 0);
   cols.forEach((c) => {
@@ -1801,7 +1850,7 @@ async function generateSchleppkettenPdfBuffer(payload) {
 
   function sumCellValue(col) {
     if (col.key === 'nr') return 'Sum';
-    if (col.key === 'bemerkung') return 'Summe';
+    if (col.key === 'bemerkung') return de ? 'Summe' : 'Total';
     if (col.key === 'geschwindigkeit_ms') return '';
     if (col.key === 'leistung_th') {
       return sums.any && sums.leistung_avg != null ? formatDeNumber(sums.leistung_avg, 1) : '';
@@ -1828,14 +1877,14 @@ async function generateSchleppkettenPdfBuffer(payload) {
     } else {
       page.drawText('KUKLA', { x: marginX, y: y - 18, size: 16, font: fontBold, color: green });
     }
-    page.drawText('Schleppketten-Test', {
+    page.drawText(de ? 'Schleppketten-Test' : 'Chain calibration', {
       x: marginX + 140,
       y: y - 16,
       size: 18,
       font: fontBold,
       color: greenDark,
     });
-    page.drawText('chain calibration', {
+    page.drawText(de ? 'chain calibration' : 'Schleppketten-Test', {
       x: marginX + 140,
       y: y - 32,
       size: 9,
@@ -1872,25 +1921,45 @@ async function generateSchleppkettenPdfBuffer(payload) {
     });
     const colW = tableInnerW / 3;
     const pad = 10;
-    const fields = [
-      [
-        ['Kunde / customer', payload.kunde || payload.customer_name || ''],
-        ['FN', payload.fabrikationsnummer || ''],
-        ['Projekt / project', payload.projekt || ''],
-        ['Datum / date', formatDateDe(payload.durchfuehrungsdatum) || '–'],
-      ],
-      [
-        ['Waagenart / scale type', payload.waagenart || 'Bandwaage'],
-        ['Type / type', payload.type || ''],
-        ['Leistung / value', payload.nennleistung || payload.leistung || ''],
-        ['Elektronik / DWC', payload.elektronik || payload.dwc || ''],
-      ],
-      [
-        ['Pos.Nr.', payload.pos_nr || ''],
-        ['GN', payload.gn || ''],
-        ['Servicetechniker', payload.monteur_name || payload.technician_name || '–'],
-      ],
-    ];
+    const fields = de
+      ? [
+          [
+            ['Kunde / customer', payload.kunde || payload.customer_name || ''],
+            ['FN', payload.fabrikationsnummer || ''],
+            ['Projekt / project', payload.projekt || ''],
+            ['Datum / date', formatDateDe(payload.durchfuehrungsdatum) || '–'],
+          ],
+          [
+            ['Waagenart / scale type', payload.waagenart || 'Bandwaage'],
+            ['Type / type', payload.type || ''],
+            ['Leistung / value', payload.nennleistung || payload.leistung || ''],
+            ['Elektronik / DWC', payload.elektronik || payload.dwc || ''],
+          ],
+          [
+            ['Pos.Nr.', payload.pos_nr || ''],
+            ['GN', payload.gn || ''],
+            ['Servicetechniker', payload.monteur_name || payload.technician_name || '–'],
+          ],
+        ]
+      : [
+          [
+            ['Customer / Kunde', payload.kunde || payload.customer_name || ''],
+            ['SN', payload.fabrikationsnummer || ''],
+            ['Project / Projekt', payload.projekt || ''],
+            ['Date / Datum', formatDateDe(payload.durchfuehrungsdatum) || '–'],
+          ],
+          [
+            ['Scale type / Waagenart', payload.waagenart || 'Belt scale'],
+            ['Type / type', payload.type || ''],
+            ['Rate / Leistung', payload.nennleistung || payload.leistung || ''],
+            ['Electronics / DWC', payload.elektronik || payload.dwc || ''],
+          ],
+          [
+            ['Pos. no.', payload.pos_nr || ''],
+            ['GN', payload.gn || ''],
+            ['Service engineer', payload.monteur_name || payload.technician_name || '–'],
+          ],
+        ];
     fields.forEach((group, gi) => {
       const gx = marginX + gi * colW + pad;
       let gy = yStart - 12;
@@ -1918,16 +1987,18 @@ async function generateSchleppkettenPdfBuffer(payload) {
   const sectionTitleH = 16;
 
   function drawSectionTitle(page, yStart, titleDe, titleEn) {
-    page.drawText(titleDe, {
+    const primary = de ? titleDe : titleEn;
+    const secondary = de ? titleEn : titleDe;
+    page.drawText(primary, {
       x: marginX,
       y: yStart - 12,
       size: 10,
       font: fontBold,
       color: greenDark,
     });
-    if (titleEn) {
-      const tw = fontBold.widthOfTextAtSize(titleDe, 10);
-      page.drawText(' / ' + titleEn, {
+    if (secondary) {
+      const tw = fontBold.widthOfTextAtSize(primary, 10);
+      page.drawText(' / ' + secondary, {
         x: marginX + tw,
         y: yStart - 12,
         size: 8,
@@ -1954,14 +2025,23 @@ async function generateSchleppkettenPdfBuffer(payload) {
     const marked = list.filter((k) => !(k && (k.in_summe === false || k.in_summe === 0 || k.in_summe === '0')));
     const rows = marked.length ? marked : list;
 
-    const colsK = [
-      { key: 'nr', label: 'Nr.', sub: 'No.', w: 28, align: 'center' },
-      { key: 'tag', label: 'Tag (Name)', sub: 'tag', w: 140, align: 'left' },
-      { key: 'ketten_type', label: 'Ketten Type', sub: 'chain type', w: 90, align: 'left' },
-      { key: 'laenge', label: 'Laenge', sub: 'length', w: 90, align: 'right', digits: 3 },
-      { key: 'gewicht_pro_kette', label: 'Gewicht / Kette', sub: 'weight / chain', w: 110, align: 'right', digits: 3 },
-      { key: 'gewicht_pro_meter', label: 'Gewicht / Meter', sub: 'weight / m', w: 0, align: 'right', digits: 4 },
-    ];
+    const colsK = de
+      ? [
+          { key: 'nr', label: 'Nr.', sub: 'No.', w: 28, align: 'center' },
+          { key: 'tag', label: 'Tag (Name)', sub: 'tag', w: 140, align: 'left' },
+          { key: 'ketten_type', label: 'Ketten Type', sub: 'chain type', w: 90, align: 'left' },
+          { key: 'laenge', label: 'Laenge', sub: 'length', w: 90, align: 'right', digits: 3 },
+          { key: 'gewicht_pro_kette', label: 'Gewicht / Kette', sub: 'weight / chain', w: 110, align: 'right', digits: 3 },
+          { key: 'gewicht_pro_meter', label: 'Gewicht / Meter', sub: 'weight / m', w: 0, align: 'right', digits: 4 },
+        ]
+      : [
+          { key: 'nr', label: 'No.', sub: 'Nr.', w: 28, align: 'center' },
+          { key: 'tag', label: 'Tag (name)', sub: 'Tag', w: 140, align: 'left' },
+          { key: 'ketten_type', label: 'Chain type', sub: 'Ketten Type', w: 90, align: 'left' },
+          { key: 'laenge', label: 'Length', sub: 'Laenge', w: 90, align: 'right', digits: 3 },
+          { key: 'gewicht_pro_kette', label: 'Weight / chain', sub: 'Gewicht / Kette', w: 110, align: 'right', digits: 3 },
+          { key: 'gewicht_pro_meter', label: 'Weight / m', sub: 'Gewicht / Meter', w: 0, align: 'right', digits: 4 },
+        ];
     const fixedK = colsK.reduce((s, c) => s + (c.key === 'gewicht_pro_meter' ? 0 : c.w), 0);
     colsK.forEach((c) => {
       if (c.key === 'gewicht_pro_meter') c.w = Math.max(100, tableInnerW - fixedK);
@@ -1994,7 +2074,7 @@ async function generateSchleppkettenPdfBuffer(payload) {
     }
     function ketteSumCellValue(col) {
       if (col.key === 'nr') return 'Sum';
-      if (col.key === 'tag') return 'Summe';
+      if (col.key === 'tag') return de ? 'Summe' : 'Total';
       if (col.key === 'ketten_type') return '';
       if (col.key === 'laenge') return nLaenge ? formatDeNumber(sumLaenge, 3) : '';
       if (col.key === 'gewicht_pro_kette') return nGewicht ? formatDeNumber(sumGewicht, 3) : '';
@@ -2153,7 +2233,7 @@ async function generateSchleppkettenPdfBuffer(payload) {
       font,
       grayMuted,
       greenSoft,
-      de: true,
+      de,
       pageIndex,
       pageCount,
       isLast,

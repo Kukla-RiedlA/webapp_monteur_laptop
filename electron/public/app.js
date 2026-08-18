@@ -30,6 +30,39 @@
       });
   }
 
+  function getProtocolLanguagesFromChecks(deId, enId) {
+    var langs = [];
+    var deEl = document.getElementById(deId);
+    var enEl = document.getElementById(enId);
+    if (deEl && deEl.checked) langs.push('de');
+    if (enEl && enEl.checked) langs.push('en');
+    return langs;
+  }
+
+  function setProtocolLanguagesOnChecks(deId, enId, langsOrSingle) {
+    var set = {};
+    var list = Array.isArray(langsOrSingle)
+      ? langsOrSingle
+      : (langsOrSingle != null && String(langsOrSingle).trim() !== '' ? [langsOrSingle] : []);
+    list.forEach(function (l) {
+      var code = String(l || '').toLowerCase().slice(0, 2);
+      if (code === 'de' || code === 'en') set[code] = true;
+    });
+    if (!set.de && !set.en) set.de = true;
+    var deEl = document.getElementById(deId);
+    var enEl = document.getElementById(enId);
+    if (deEl) deEl.checked = !!set.de;
+    if (enEl) enEl.checked = !!set.en;
+  }
+
+  function languagesFromDraft(draft) {
+    if (!draft || typeof draft !== 'object') return ['de'];
+    if (Array.isArray(draft.languages) && draft.languages.length) return draft.languages;
+    if (Array.isArray(draft.pdf_languages) && draft.pdf_languages.length) return draft.pdf_languages;
+    if (draft.language) return [draft.language];
+    return ['de'];
+  }
+
   /** @param {string} jobId */
   function pollBackgroundJobUntilTerminal(jobId, onProgress, opts) {
     opts = opts || {};
@@ -16646,6 +16679,7 @@
           bereich_max: bereichMaxEl ? String(bereichMaxEl.value || '').trim() : '',
           letzte_eichung: letzteEichungEl ? String(letzteEichungEl.value || '').trim() : '',
           wiegungen: wiegungen.slice(),
+          languages: getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'),
           gespeichert_am: prev.gespeichert_am || '',
           updated_at: prev.updated_at || '',
           protokoll_id: prev.protokoll_id != null ? prev.protokoll_id : null
@@ -16683,6 +16717,7 @@
         if (letzteEichungEl) {
           letzteEichungEl.value = draft.letzte_eichung != null ? String(draft.letzte_eichung) : '';
         }
+        setProtocolLanguagesOnChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn', languagesFromDraft(draft));
         wiegungen = Array.isArray(draft.wiegungen) && draft.wiegungen.length
           ? draft.wiegungen.map(function (w) {
               return {
@@ -17027,6 +17062,8 @@
           bereich_max: draft.bereich_max || '',
           letzte_eichung: draft.letzte_eichung || '',
           wiegungen: Array.isArray(draft.wiegungen) ? draft.wiegungen : [],
+          languages: draft.languages || getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'),
+          pdf_languages: draft.languages || getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'),
           base_url: getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
@@ -17201,7 +17238,8 @@
           protokoll_id: rec.protokoll_id != null ? rec.protokoll_id : (rec.local_id != null ? 'local:' + rec.local_id : null),
           gespeichert_am: rec.gespeichert_am || rec.updated_at || '',
           updated_at: rec.updated_at || rec.gespeichert_am || '',
-          fabrikationsnummer: rec.fabrikationsnummer != null ? String(rec.fabrikationsnummer) : ''
+          fabrikationsnummer: rec.fabrikationsnummer != null ? String(rec.fabrikationsnummer) : '',
+          languages: languagesFromDraft(rec)
         };
       }
 
@@ -17300,6 +17338,11 @@
           if (!datum) { alert('Bitte Datum der Durchführung angeben.'); return; }
           syncWiegungenFromDom();
           if (!wiegungen.length) { alert('Mindestens eine Wiegung erforderlich.'); return; }
+          var langsKw = getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn');
+          if (withPdf && !langsKw.length) {
+            alert('Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).');
+            return;
+          }
           var draft = collectFormDraft();
           kwDraftByFab[fab] = draft;
           var body = {
@@ -17315,6 +17358,8 @@
             bereich_max: draft.bereich_max,
             letzte_eichung: draft.letzte_eichung,
             wiegungen: wiegungen,
+            languages: langsKw.length ? langsKw : (draft.languages || ['de']),
+            pdf_languages: langsKw.length ? langsKw : (draft.languages || ['de']),
             create_pdf: withPdf,
             base_url: getDispoBaseUrl(),
             serverUsername: getDispoUsername(),
@@ -17744,6 +17789,7 @@
         gewicht_pro_kette: kettenSum.gewicht_pro_kette,
         gewicht_pro_meter: kettenSum.gewicht_pro_meter,
         messungen: messungen.slice(),
+        languages: getProtocolLanguagesFromChecks('schleppkettenLangDe', 'schleppkettenLangEn'),
         gespeichert_am: prev.gespeichert_am || '',
         updated_at: prev.updated_at || '',
         protokoll_id: prev.protokoll_id != null ? prev.protokoll_id : null
@@ -17791,6 +17837,7 @@
         : [emptyMessung()];
       renderRows();
       applyKettenSumToMessungenKgProM({ onlyIfEmpty: true });
+      setProtocolLanguagesOnChecks('schleppkettenLangDe', 'schleppkettenLangEn', languagesFromDraft(draft));
       lastProtokollId = draft.protokoll_id || null;
       if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
       updateSpeicherMeta(getActiveFab(), draft);
@@ -18270,7 +18317,8 @@
         protokoll_id: rec.protokoll_id != null ? rec.protokoll_id : (rec.local_id != null ? 'local:' + rec.local_id : null),
         gespeichert_am: rec.gespeichert_am || rec.updated_at || '',
         updated_at: rec.updated_at || rec.gespeichert_am || '',
-        fabrikationsnummer: rec.fabrikationsnummer != null ? String(rec.fabrikationsnummer) : ''
+        fabrikationsnummer: rec.fabrikationsnummer != null ? String(rec.fabrikationsnummer) : '',
+        languages: languagesFromDraft(rec)
       };
     }
     async function loadDraftsForJob(jobId) {
@@ -18419,6 +18467,10 @@
       if (!fab) return { ok: false, error: 'Bitte Fabrikationsnummer wählen.' };
       var datum = datumEl ? String(datumEl.value || '').trim() : '';
       if (!datum) return { ok: false, error: 'Bitte Datum angeben.' };
+      var langsSk = getProtocolLanguagesFromChecks('schleppkettenLangDe', 'schleppkettenLangEn');
+      if (withPdf && !langsSk.length) {
+        return { ok: false, error: 'Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).' };
+      }
       syncMessungenFromDom();
       syncKettenFromDom();
       var draft = collectFormDraft();
@@ -18428,6 +18480,8 @@
         job_id: parseInt(jobSelect.value, 10),
         fabrikationsnummer: fab,
         kunde: skJobData && skJobData.customer_name ? String(skJobData.customer_name) : '',
+        languages: langsSk.length ? langsSk : (draft.languages || ['de']),
+        pdf_languages: langsSk.length ? langsSk : (draft.languages || ['de']),
         create_pdf: withPdf,
         base_url: getDispoBaseUrl(),
         serverUsername: getDispoUsername(),
@@ -18863,7 +18917,9 @@
         kunde_unterschrift: el('pzKundeUnterschrift') ? el('pzKundeUnterschrift').value.trim() : '',
         kontrollwiegungsprotokoll_id: linkedIds.kontrollwiegungsprotokoll_id || null,
         schleppkettenprotokoll_id: linkedIds.schleppkettenprotokoll_id || null,
-        serviceprotokoll_id: linkedIds.serviceprotokoll_id || null
+        serviceprotokoll_id: linkedIds.serviceprotokoll_id || null,
+        languages: collectPdfLanguages(),
+        pdf_languages: collectPdfLanguages()
       };
     }
     function applyPrefill(p) {
@@ -18908,6 +18964,7 @@
       if (el('pzBemerkungen')) el('pzBemerkungen').value = p.bemerkungen || '';
       if (el('pzKonformitaet')) el('pzKonformitaet').value = p.konformitaet_text || '';
       if (el('pzKundeUnterschrift')) el('pzKundeUnterschrift').value = p.kunde_unterschrift || '';
+      setProtocolLanguagesOnChecks('pzPdfDe', 'pzPdfEn', languagesFromDraft(p));
       syncVerfahrenBlocksVisibility();
     }
     function renderFabButtonsActive() {
@@ -19145,9 +19202,9 @@
         return { ok: false, error: 'Bitte Prüfdatum angeben (FN ' + fab + ').' };
       }
       recomputeStatus();
-      var pdfLangs = withPdf ? collectPdfLanguages() : [];
+      var pdfLangs = collectPdfLanguages();
       if (withPdf && !pdfLangs.length) {
-        return { ok: false, error: 'Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).' };
+        return { ok: false, error: 'Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).' };
       }
       var draft = collectPayload();
       pzDraftByFab[fab] = Object.assign({}, draft, {
@@ -19160,6 +19217,7 @@
         fabrikationsnummer: fab,
         create_pdf: withPdf,
         pdf_languages: pdfLangs,
+        languages: pdfLangs,
         base_url: getDispoBaseUrl(),
         serverUsername: getDispoUsername(),
         serverPassword: getDispoPassword(),

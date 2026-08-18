@@ -248,6 +248,29 @@ export function ServiceProtocolPage() {
                   icon={<SpIcon name="Calendar" className="h-4 w-4" />}
                 />
               </div>
+              <div>
+                <span className="text-sm font-semibold text-[#111827]">Sprache</span>
+                <div className="mt-1 flex min-h-9 flex-wrap items-center gap-x-4 gap-y-2" role="group" aria-label="Sprache">
+                  <label className="inline-flex items-center gap-2 text-sm font-normal text-[#111827]">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-[#007a4d]"
+                      checked={form.pdfDe}
+                      onChange={(e) => patchForm({ pdfDe: e.target.checked })}
+                    />
+                    Deutsch
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-sm font-normal text-[#111827]">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-[#007a4d]"
+                      checked={form.pdfEn}
+                      onChange={(e) => patchForm({ pdfEn: e.target.checked })}
+                    />
+                    Englisch
+                  </label>
+                </div>
+              </div>
             </div>
             {(fabChips.length ? fabChips : []).length > 0 ? (
               <div className="mt-4">
@@ -469,10 +492,6 @@ export function ServiceProtocolPage() {
             </SectionCard>
 
             <ActionPanel
-              pdfDe={form.pdfDe}
-              pdfEn={form.pdfEn}
-              onPdfDeChange={(v) => patchForm({ pdfDe: v })}
-              onPdfEnChange={(v) => patchForm({ pdfEn: v })}
               onPdfCreate={() => sendAction('pdf')}
               onPdfCreateAll={() => sendAction('pdfAll')}
               onSaveData={() => sendAction('saveJson')}

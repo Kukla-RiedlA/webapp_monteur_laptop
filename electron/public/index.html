@@ -1856,6 +1856,13 @@
                 <label for="kontrollwiegungDatum">Datum</label>
                 <input type="date" id="kontrollwiegungDatum" required>
               </div>
+              <div class="sp-v2-field">
+                <span id="kontrollwiegungLangLabel">Sprache</span>
+                <div class="mb-lang-checks" role="group" aria-labelledby="kontrollwiegungLangLabel">
+                  <label class="mb-lang-check"><input type="checkbox" id="kontrollwiegungLangDe" value="de" checked> Deutsch</label>
+                  <label class="mb-lang-check"><input type="checkbox" id="kontrollwiegungLangEn" value="en"> Englisch</label>
+                </div>
+              </div>
             </div>
             <p id="kontrollwiegungKundeHint" class="mb-v2-hint-block" hidden></p>
             <div class="sp-v2-fab-block" id="kontrollwiegungFabGroup" style="display:none">
@@ -1985,6 +1992,13 @@
               <div class="sp-v2-field sp-v2-field-date">
                 <label for="schleppkettenDatum">Datum</label>
                 <input type="date" id="schleppkettenDatum" required>
+              </div>
+              <div class="sp-v2-field">
+                <span id="schleppkettenLangLabel">Sprache</span>
+                <div class="mb-lang-checks" role="group" aria-labelledby="schleppkettenLangLabel">
+                  <label class="mb-lang-check"><input type="checkbox" id="schleppkettenLangDe" value="de" checked> Deutsch</label>
+                  <label class="mb-lang-check"><input type="checkbox" id="schleppkettenLangEn" value="en"> Englisch</label>
+                </div>
               </div>
             </div>
             <p id="schleppkettenKundeHint" class="mb-v2-hint-block" hidden></p>
@@ -2170,9 +2184,18 @@
                 <input type="text" id="pruefzertifikatKunde" autocomplete="off">
               </div>
             </div>
-            <div class="sp-v2-field">
-              <label for="pruefzertifikatStandort">Standort</label>
-              <input type="text" id="pruefzertifikatStandort" autocomplete="off">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="pruefzertifikatStandort">Standort</label>
+                <input type="text" id="pruefzertifikatStandort" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <span id="pruefzertifikatLangLabel">Sprache</span>
+                <div class="mb-lang-checks" role="group" aria-labelledby="pruefzertifikatLangLabel">
+                  <label class="mb-lang-check"><input type="checkbox" id="pzPdfDe" value="de" checked> Deutsch</label>
+                  <label class="mb-lang-check"><input type="checkbox" id="pzPdfEn" value="en"> Englisch</label>
+                </div>
+              </div>
             </div>
             <p id="pruefzertifikatKundeHint" class="mb-v2-hint-block" hidden></p>
             <div class="sp-v2-fab-block" id="pruefzertifikatFabGroup" style="display:none">
@@ -2369,11 +2392,6 @@
         <section class="sp-v2-section" aria-labelledby="pzV2Sec4Title">
           <header class="sp-v2-section-head" id="pzV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Speichern &amp; PDF</header>
           <div class="sp-v2-section-body">
-            <div class="sp-v2-pdf-lang">
-              <span>PDF-Sprache(n)</span>
-              <label><input type="checkbox" id="pzPdfDe" checked> Deutsch (DE)</label>
-              <label><input type="checkbox" id="pzPdfEn"> Englisch (EN)</label>
-            </div>
             <div class="mb-v2-actions-row" style="margin-top:0.75rem">
               <button type="submit" class="btn btn-primary" id="btnPruefzertifikatSaveData" data-mode="data">Speichern (JSON)</button>
               <button type="submit" class="btn btn-primary" id="btnPruefzertifikatSavePdf" data-mode="pdf">einzel PDF</button>
@@ -2534,6 +2552,13 @@
               <div class="sp-v2-field">
                 <label for="serviceprotokollDatum">Datum</label>
                 <input type="date" id="serviceprotokollDatum" required>
+              </div>
+              <div class="sp-v2-field">
+                <span id="serviceprotokollLangLabel">Sprache</span>
+                <div class="mb-lang-checks" role="group" aria-labelledby="serviceprotokollLangLabel">
+                  <label class="mb-lang-check"><input type="checkbox" id="spPdfDe" value="de" checked> Deutsch</label>
+                  <label class="mb-lang-check"><input type="checkbox" id="spPdfEn" value="en"> Englisch</label>
+                </div>
               </div>
             </div>
             <div class="sp-v2-fab-block" id="serviceprotokollFabGroup" style="display:none">
@@ -2729,11 +2754,6 @@
                 </div>
               </div>
               <div class="sp-v2-abschluss-actions">
-                <div class="sp-v2-pdf-lang">
-                  <span>PDF-Sprache(n)</span>
-                  <label><input type="checkbox" id="spPdfDe" checked> Deutsch (DE)</label>
-                  <label><input type="checkbox" id="spPdfEn"> Englisch (EN)</label>
-                </div>
                 <div class="sp-v2-actions-stack">
                   <button type="submit" class="btn btn-primary" id="btnServiceprotokollSavePdf" title="Zwischenstand plus PDF im Projektordner">einzel PDF</button>
                   <button type="button" class="btn btn-primary" id="btnServiceprotokollSaveAllPdf" style="display:none" title="Alle FNs – je FN ein PDF im FN-Ordner">Alle PDF</button>

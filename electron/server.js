@@ -8877,6 +8877,8 @@ function createApp(db) {
         bereich_max: body.bereich_max != null ? String(body.bereich_max).trim() : '',
         letzte_eichung: body.letzte_eichung != null ? String(body.letzte_eichung).trim() : '',
         wiegungen: Array.isArray(body.wiegungen) ? body.wiegungen : [],
+        languages: parseProtocolLanguages(body),
+        pdf_languages: parseProtocolLanguages(body),
       };
       const record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, fab, entry);
       const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
@@ -8931,6 +8933,9 @@ function createApp(db) {
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
       };
+      const pdfLangs = parseProtocolLanguages(body);
+      payload.languages = pdfLangs;
+      payload.pdf_languages = pdfLangs;
       enrichKontrollwiegungPdfPayload(payload, localJobId, technicianId);
       let reiseDir = null;
       if (Number.isFinite(localJobId) && localJobId > 0) {
@@ -8947,31 +8952,41 @@ function createApp(db) {
           payload.updated_at = record.updated_at || payload.gespeichert_am;
         }
         if (createPdf) {
-        const pdfPaths = resolveKontrollwiegungLocalPdfPaths(
-          reiseDir,
-          localJobId,
-          payload.fabrikationsnummer,
-          technicianId,
-          payload.durchfuehrungsdatum,
-        );
-        const pdfDir = path.dirname(pdfPaths.full);
-        if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
         const sigPngKw = await resolveTechnicianSignaturePng(technicianId, body);
         if (!sigPngKw) return failMissingSignature(res);
         payload.technician_signature_png = sigPngKw;
-        const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(payload);
-        writeFileWithRetry(pdfPaths.full, pdfBuf);
-        savedPdf = pdfPaths.rel;
-        savedPdfPath = pdfPaths.full;
+        const savedPdfs = [];
+        for (const lang of pdfLangs) {
+          const pdfPaths = resolveKontrollwiegungLocalPdfPaths(
+            reiseDir,
+            localJobId,
+            payload.fabrikationsnummer,
+            technicianId,
+            payload.durchfuehrungsdatum,
+            lang,
+            pdfLangs,
+          );
+          const pdfDir = path.dirname(pdfPaths.full);
+          if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+          const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(payload, { lang });
+          writeFileWithRetry(pdfPaths.full, pdfBuf);
+          savedPdfs.push({ rel: pdfPaths.rel, path: pdfPaths.full, name: pdfPaths.name, lang });
+          protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+        }
+        savedPdf = savedPdfs[0] ? savedPdfs[0].rel : null;
+        savedPdfPath = savedPdfs[0] ? savedPdfs[0].path : null;
         if (record) {
           record.pdf_rel = savedPdf;
+          record.pdf_rels = savedPdfs.map((p) => p.rel);
+          record.languages = pdfLangs;
           const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir);
           if (storeKw.byFab[payload.fabrikationsnummer]) {
             storeKw.byFab[payload.fabrikationsnummer].pdf_rel = savedPdf;
+            storeKw.byFab[payload.fabrikationsnummer].pdf_rels = record.pdf_rels;
+            storeKw.byFab[payload.fabrikationsnummer].languages = pdfLangs;
             kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw);
           }
         }
-        protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
         save();
         }
         if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
@@ -9071,12 +9086,15 @@ function createApp(db) {
         if (!rec) {
           return res.status(404).json({ ok: false, error: 'Lokales Protokoll nicht gefunden.' });
         }
+        const recLangs = parseProtocolLanguages(rec);
         const pdfPaths = resolveKontrollwiegungLocalPdfPaths(
           reiseDir,
           localJobId,
           rec.fabrikationsnummer,
           technicianId,
           rec.durchfuehrungsdatum,
+          recLangs[0],
+          recLangs,
         );
         const candidates = [];
         if (rec.pdf_rel) {
@@ -9105,16 +9123,32 @@ function createApp(db) {
           );
           const sigKwOpen = await resolveTechnicianSignaturePng(technicianId, rec);
           if (sigKwOpen) pdfPayload.technician_signature_png = sigKwOpen;
-          const pdfDir = path.dirname(pdfPaths.full);
-          if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
-          const pdfBufGen = await protocolPdf.generateKontrollwiegungPdfBuffer(pdfPayload);
-          writeFileWithRetry(pdfPaths.full, pdfBufGen);
-          existing = { full: pdfPaths.full, rel: pdfPaths.rel };
+          let firstPaths = pdfPaths;
+          for (const lang of recLangs) {
+            const langPaths = resolveKontrollwiegungLocalPdfPaths(
+              reiseDir,
+              localJobId,
+              rec.fabrikationsnummer,
+              technicianId,
+              rec.durchfuehrungsdatum,
+              lang,
+              recLangs,
+            );
+            const pdfDir = path.dirname(langPaths.full);
+            if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+            const pdfBufGen = await protocolPdf.generateKontrollwiegungPdfBuffer(pdfPayload, { lang });
+            writeFileWithRetry(langPaths.full, pdfBufGen);
+            if (lang === recLangs[0]) firstPaths = langPaths;
+            if (Number.isFinite(localJobId) && localJobId > 0) {
+              protectPathIfUnderDokumenteMonteur(db, localJobId, langPaths.rel);
+            }
+          }
+          existing = { full: firstPaths.full, rel: firstPaths.rel };
           try {
             const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir);
             const fnKey = String(rec.fabrikationsnummer || fab || '').trim();
             if (fnKey && storeKw.byFab[fnKey]) {
-              storeKw.byFab[fnKey].pdf_rel = pdfPaths.rel;
+              storeKw.byFab[fnKey].pdf_rel = firstPaths.rel;
               if (!storeKw.byFab[fnKey].monteur_name && pdfPayload.monteur_name) {
                 storeKw.byFab[fnKey].monteur_name = pdfPayload.monteur_name;
               }
@@ -9125,15 +9159,12 @@ function createApp(db) {
               kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw);
             }
           } catch (_) { /* optional */ }
-          if (Number.isFinite(localJobId) && localJobId > 0) {
-            protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
-            save();
-          }
+          if (Number.isFinite(localJobId) && localJobId > 0) save();
           return res.json({
             ok: true,
             path: existing.full,
             rel: existing.rel,
-            name: pdfPaths.name,
+            name: firstPaths.name,
           });
         }
         if (existing) {
@@ -9142,7 +9173,7 @@ function createApp(db) {
           res.set('Content-Disposition', 'inline; filename="' + pdfPaths.name + '"');
           return res.send(buf);
         }
-        const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(rec);
+        const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(rec, { lang: recLangs[0] });
         res.set('Content-Type', 'application/pdf');
         res.set('Content-Disposition', 'inline; filename="' + pdfPaths.name + '"');
         return res.send(pdfBuf);
@@ -9171,10 +9202,11 @@ function createApp(db) {
     }
   });
 
-  function resolveSchleppkettenLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum) {
+  function resolveSchleppkettenLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum, lang, langs) {
     const safeFn = String(fab || '').replace(/[^\w.-]+/g, '_');
     const d = String(datum || '').replace(/-/g, '');
-    const name = 'Schleppketten_Test_' + safeFn + '_' + d + '.pdf';
+    const suffix = protocolPdfLangSuffix(lang || 'de', langs);
+    const name = 'Schleppketten_Test_' + safeFn + '_' + d + suffix + '.pdf';
     if (Number.isFinite(localJobId) && localJobId > 0 && fab) {
       try {
         const { targetDir, relDir } = resolveMonteurProtokollePdfTarget(
@@ -9310,6 +9342,9 @@ function createApp(db) {
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
       };
+      const pdfLangsSk = parseProtocolLanguages(body);
+      payload.languages = pdfLangsSk;
+      payload.pdf_languages = pdfLangsSk;
       enrichKontrollwiegungPdfPayload(payload, localJobId, technicianId);
       if (payload.kunde) payload.customer_name = payload.kunde;
       let reiseDir = null;
@@ -9328,31 +9363,41 @@ function createApp(db) {
           payload.messungen = record.messungen;
         }
         if (createPdf) {
-        const pdfPaths = resolveSchleppkettenLocalPdfPaths(
-          reiseDir,
-          localJobId,
-          payload.fabrikationsnummer,
-          technicianId,
-          payload.durchfuehrungsdatum,
-        );
-        const pdfDir = path.dirname(pdfPaths.full);
-        if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
         const sigPngSk = await resolveTechnicianSignaturePng(technicianId, body);
         if (!sigPngSk) return failMissingSignature(res);
         payload.technician_signature_png = sigPngSk;
-        const pdfBuf = await protocolPdf.generateSchleppkettenPdfBuffer(payload);
-        writeFileWithRetry(pdfPaths.full, pdfBuf);
-        savedPdf = pdfPaths.rel;
-        savedPdfPath = pdfPaths.full;
+        const savedPdfs = [];
+        for (const lang of pdfLangsSk) {
+          const pdfPaths = resolveSchleppkettenLocalPdfPaths(
+            reiseDir,
+            localJobId,
+            payload.fabrikationsnummer,
+            technicianId,
+            payload.durchfuehrungsdatum,
+            lang,
+            pdfLangsSk,
+          );
+          const pdfDir = path.dirname(pdfPaths.full);
+          if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+          const pdfBuf = await protocolPdf.generateSchleppkettenPdfBuffer(payload, { lang });
+          writeFileWithRetry(pdfPaths.full, pdfBuf);
+          savedPdfs.push({ rel: pdfPaths.rel, path: pdfPaths.full, name: pdfPaths.name, lang });
+          protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+        }
+        savedPdf = savedPdfs[0] ? savedPdfs[0].rel : null;
+        savedPdfPath = savedPdfs[0] ? savedPdfs[0].path : null;
         if (record) {
           record.pdf_rel = savedPdf;
+          record.pdf_rels = savedPdfs.map((p) => p.rel);
+          record.languages = pdfLangsSk;
           const storeSk = schleppkettenLocal.readSchleppkettenStore(reiseDir);
           if (storeSk.byFab[payload.fabrikationsnummer]) {
             storeSk.byFab[payload.fabrikationsnummer].pdf_rel = savedPdf;
+            storeSk.byFab[payload.fabrikationsnummer].pdf_rels = record.pdf_rels;
+            storeSk.byFab[payload.fabrikationsnummer].languages = pdfLangsSk;
             schleppkettenLocal.writeSchleppkettenStore(reiseDir, storeSk);
           }
         }
-        protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
         save();
         }
         if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
@@ -9449,21 +9494,37 @@ function createApp(db) {
       pdfPayload.messungen = schleppkettenLocal.enrichMessungen(pdfPayload.messungen);
       const sigSk = await resolveTechnicianSignaturePng(technicianId, rec);
       if (sigSk) pdfPayload.technician_signature_png = sigSk;
+      const recLangsSk = parseProtocolLanguages(rec);
       const pdfPaths = resolveSchleppkettenLocalPdfPaths(
         reiseDir,
         localJobId,
         rec.fabrikationsnummer,
         technicianId,
         rec.durchfuehrungsdatum,
+        recLangsSk[0],
+        recLangsSk,
       );
       if (openLocal) {
-        const pdfDir = path.dirname(pdfPaths.full);
-        if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
-        const pdfBufGen = await protocolPdf.generateSchleppkettenPdfBuffer(pdfPayload);
-        writeFileWithRetry(pdfPaths.full, pdfBufGen);
-        protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+        let firstPaths = pdfPaths;
+        for (const lang of recLangsSk) {
+          const langPaths = resolveSchleppkettenLocalPdfPaths(
+            reiseDir,
+            localJobId,
+            rec.fabrikationsnummer,
+            technicianId,
+            rec.durchfuehrungsdatum,
+            lang,
+            recLangsSk,
+          );
+          const pdfDir = path.dirname(langPaths.full);
+          if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+          const pdfBufGen = await protocolPdf.generateSchleppkettenPdfBuffer(pdfPayload, { lang });
+          writeFileWithRetry(langPaths.full, pdfBufGen);
+          protectPathIfUnderDokumenteMonteur(db, localJobId, langPaths.rel);
+          if (lang === recLangsSk[0]) firstPaths = langPaths;
+        }
         save();
-        return res.json({ ok: true, path: pdfPaths.full, rel: pdfPaths.rel, name: pdfPaths.name });
+        return res.json({ ok: true, path: firstPaths.full, rel: firstPaths.rel, name: firstPaths.name });
       }
       if (fs.existsSync(pdfPaths.full)) {
         const buf = fs.readFileSync(pdfPaths.full);
@@ -9471,7 +9532,7 @@ function createApp(db) {
         res.set('Content-Disposition', 'inline; filename="' + pdfPaths.name + '"');
         return res.send(buf);
       }
-      const pdfBuf = await protocolPdf.generateSchleppkettenPdfBuffer(pdfPayload);
+      const pdfBuf = await protocolPdf.generateSchleppkettenPdfBuffer(pdfPayload, { lang: recLangsSk[0] });
       res.set('Content-Type', 'application/pdf');
       res.set('Content-Disposition', 'inline; filename="' + pdfPaths.name + '"');
       return res.send(pdfBuf);
@@ -9631,11 +9692,15 @@ function createApp(db) {
           serverJobId = parseInt(jobRowPz.server_id, 10);
         }
       }
-      const pdfLanguages = Array.isArray(body.pdf_languages)
-        ? body.pdf_languages.map((l) => String(l).toLowerCase()).filter((l) => l === 'de' || l === 'en')
-        : [];
-      const wantPdf = !!body.create_pdf || pdfLanguages.length > 0;
+      const pdfLanguagesRaw = Array.isArray(body.pdf_languages) && body.pdf_languages.length
+        ? body.pdf_languages
+        : (Array.isArray(body.languages) ? body.languages : []);
+      const pdfLanguages = pdfLanguagesRaw
+        .map((l) => String(l).toLowerCase())
+        .filter((l) => l === 'de' || l === 'en');
+      const wantPdf = !!body.create_pdf || !!body.createPdf;
       const langs = wantPdf ? (pdfLanguages.length ? pdfLanguages : ['de']) : [];
+      const storedLangs = pdfLanguages.length ? pdfLanguages : ['de'];
       const payload = {
         technician_id: body.technician_id != null ? body.technician_id : technicianId,
         job_id: Number.isFinite(serverJobId) && serverJobId > 0 ? serverJobId : body.job_id,
@@ -9666,6 +9731,8 @@ function createApp(db) {
         kontrollwiegungsprotokoll_id: body.kontrollwiegungsprotokoll_id || null,
         schleppkettenprotokoll_id: body.schleppkettenprotokoll_id || null,
         serviceprotokoll_id: body.serviceprotokoll_id || null,
+        languages: storedLangs,
+        pdf_languages: storedLangs,
         dispoBaseUrl,
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
@@ -10214,10 +10281,33 @@ function createApp(db) {
     return p;
   }
 
-  function resolveKontrollwiegungLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum) {
+  function parseProtocolLanguages(body) {
+    const languages = [];
+    const pushLang = (v) => {
+      const l = String(v || '').toLowerCase().slice(0, 2);
+      if ((l === 'de' || l === 'en') && !languages.includes(l)) languages.push(l);
+    };
+    const raw = Array.isArray(body && body.languages) && body.languages.length
+      ? body.languages
+      : (Array.isArray(body && body.pdf_languages) ? body.pdf_languages : null);
+    if (raw && raw.length) raw.forEach(pushLang);
+    else if (body && body.language) pushLang(body.language);
+    if (!languages.length) languages.push('de');
+    return languages;
+  }
+
+  function protocolPdfLangSuffix(lang, langs) {
+    const list = Array.isArray(langs) && langs.length ? langs : [lang || 'de'];
+    const multi = list.length > 1;
+    if (multi) return '_' + String(lang || 'de').toUpperCase();
+    return String(lang || '').toLowerCase() === 'en' ? '_EN' : '';
+  }
+
+  function resolveKontrollwiegungLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum, lang, langs) {
     const safeFn = String(fab || '').replace(/[^\w.-]+/g, '_');
     const d = String(datum || '').replace(/-/g, '');
-    const name = 'Kontrollwiegungsprotokoll_' + safeFn + '_' + d + '.pdf';
+    const suffix = protocolPdfLangSuffix(lang || 'de', langs);
+    const name = 'Kontrollwiegungsprotokoll_' + safeFn + '_' + d + suffix + '.pdf';
     if (Number.isFinite(localJobId) && localJobId > 0 && fab) {
       try {
         const { targetDir, relDir } = resolveMonteurProtokollePdfTarget(
