@@ -1230,6 +1230,7 @@ function fingerprintDispoBaseForRuntime(urlRaw) {
 
 function createApp(db) {
   const app = express();
+  app.use(require('./lib/local-gateway-auth').localGatewayExpressMiddleware);
 
   const getTechnicianId = (req) => {
     const raw = req.query.technician_id || req.headers['x-technician-id'];
@@ -15319,6 +15320,8 @@ function createApp(db) {
       }
       const internalUrl = `http://127.0.0.1:${PORT}${parsed.pathname}?${parsed.searchParams.toString()}`;
       const headers = {};
+      const gw = require('./lib/local-gateway-auth');
+      headers[gw.HEADER] = gw.getLocalGatewayToken();
       if (techId) headers['X-Technician-Id'] = String(techId);
       const r = await fetch(internalUrl, { headers });
       if (!r.ok) {

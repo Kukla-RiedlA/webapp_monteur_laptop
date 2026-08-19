@@ -23,6 +23,7 @@ const {
   trustCertificateForUrl,
   isInsecureTlsAllowed,
 } = require('./lib/laptop-updater');
+const { installLocalGatewayWebRequest } = require('./lib/local-gateway-auth');
 
 let mainWindow;
 let updateCheckScheduled = false;
@@ -670,6 +671,7 @@ app.on('certificate-error', (event, _webContents, url, _error, _certificate, cal
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
+  installLocalGatewayWebRequest(PORT);
   configureSpellCheckerSession();
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
   pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
