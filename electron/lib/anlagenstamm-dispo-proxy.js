@@ -14,6 +14,7 @@ function authHeaderFromCredentials(username, password) {
   const u = (username || '').toString().trim();
   if (!u) return undefined;
   const p = (password || '').toString();
+  if (!p) return undefined;
   return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
 }
 

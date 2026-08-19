@@ -4623,10 +4623,7 @@ function createApp(db) {
         dispo_username: req.query.dispo_username,
         dispo_password: req.query.dispo_password,
       });
-      const authHeader =
-        creds.serverUsername || creds.serverPassword
-          ? { Authorization: 'Basic ' + Buffer.from(creds.serverUsername + ':' + creds.serverPassword).toString('base64') }
-          : {};
+      const authHeader = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword) || {};
       if (!authHeader.Authorization) {
         return res.json(
           buildLocalAcceptOfflinePreview(
@@ -4808,10 +4805,7 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'job_id (lokal) und technicianId erforderlich.' });
       }
 
-      const authHeader =
-        dispoUsername || dispoPassword
-          ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') }
-          : {};
+      const authHeader = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
 
       const resolvedBase = await resolveDispoWorkingBase({
         baseUrl: dispoBaseUrl,
@@ -5490,10 +5484,7 @@ function createApp(db) {
         );
       }
 
-      const authHeaderFinish =
-        dispoUsername || dispoPassword
-          ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') }
-          : {};
+      const authHeaderFinish = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
 
       if (!syncDeferred) {
       for (const { folder, paths: localFiles } of verifyPlan) {
@@ -5618,13 +5609,7 @@ function createApp(db) {
             techRow && techRow.technician_id != null ? techRow.technician_id : technicianId;
           if (statusPushBase && serverJobId) {
             bumpProgress('finish_status', step, totalSteps, 'Status „erledigt“ wird an Dispo gesendet …');
-            const authHeaderStatus =
-              dispoUsername || dispoPassword
-                ? {
-                    Authorization:
-                      'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64'),
-                  }
-                : {};
+            const authHeaderStatus = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
             const pushRes = await pushJobStatusErledigtToDispo(
               statusPushBase,
               techIdForPush,
@@ -12895,10 +12880,7 @@ function createApp(db) {
         const dispoUsername = (p.dispo_username || '').trim();
         const dispoPassword = p.dispo_password != null ? String(p.dispo_password) : '';
         if (!rawJobId || !technicianId) throw new Error('dienstreise_pull: job_id und technician_id erforderlich.');
-        const authHeader =
-          dispoUsername || dispoPassword
-            ? { Authorization: 'Basic ' + Buffer.from(dispoUsername + ':' + dispoPassword).toString('base64') }
-            : {};
+        const authHeader = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
         if (!authHeader.Authorization) throw new Error('Dispo-Zugangsdaten fehlen.');
         const resolvedPull = await resolveDispoWorkingBase({
           baseUrl: dispoBaseUrl,
@@ -14146,6 +14128,10 @@ function createApp(db) {
     try {
       const rMy = await fetch(urlMyJobs, opts);
       if (rMy.ok) return { ok: true };
+      if (rMy.status === 401 || rMy.status === 429) {
+        const errMyJobs = await errorTextFromDispoResponse(rMy);
+        return { ok: false, error: 'my_jobs: ' + errMyJobs };
+      }
 
       const errMyJobs = await errorTextFromDispoResponse(rMy);
 
@@ -14187,10 +14173,11 @@ function createApp(db) {
   async function resolveMonteurFromDispoAuth(baseUrlRaw, serverUsername, serverPassword, signal) {
     const base = (baseUrlRaw || '').toString().trim().replace(/\/$/, '');
     const user = (serverUsername || '').toString().trim();
-    if (!base || !user) {
-      return { ok: false, error: 'Benutzername fehlt.' };
+    const pass = serverPassword != null ? String(serverPassword) : '';
+    if (!base || !user || !pass) {
+      return { ok: false, error: 'Benutzername und Passwort erforderlich.' };
     }
-    const auth = authHeaderFromCredentials(user, serverPassword);
+    const auth = authHeaderFromCredentials(user, pass);
     const headers = Object.assign({ 'X-Technician-Id': '0' }, auth || {});
     if (auth && auth.Authorization) {
       headers['X-Kukla-Authorization'] = auth.Authorization;
@@ -14211,6 +14198,9 @@ function createApp(db) {
           };
         }
         if (r.status === 404) continue;
+        if (r.status === 401 || r.status === 429) {
+          return { ok: false, error: data && data.error ? String(data.error) : (r.status === 429 ? 'Konto gesperrt' : 'Anmeldung fehlgeschlagen') };
+        }
         if (data && data.error) {
           return { ok: false, error: String(data.error) };
         }
@@ -14307,7 +14297,10 @@ function createApp(db) {
   }
 
   async function probeDispoBaseWithOptionalAuth(base, technicianId, serverUsername, serverPassword) {
-    const hasCreds = (serverUsername || '').toString().trim() !== '';
+    const hasCreds =
+      (serverUsername || '').toString().trim() !== '' &&
+      serverPassword != null &&
+      String(serverPassword) !== '';
     const ac = new AbortController();
     const probeMs = isPrivateLanHostname(safeHostname(base)) ? DISPO_PROBE_LAN_MS : DISPO_PROBE_TIMEOUT_MS;
     const timer = setTimeout(() => ac.abort(), probeMs);
@@ -16682,11 +16675,11 @@ async function fetchDispoMonteurList(base, technicianId, authHeader, dateFrom, d
       const r = await fetch(url, fetchOpts);
       if (r.ok) return { res: r, url };
       lastErr = new Error(label + ': ' + r.status + ' ' + r.statusText + ' (' + url + ')');
-      if (r.status === 429) throw lastErr;
+      if (r.status === 401 || r.status === 429) throw lastErr;
     } catch (e) {
       lastErr = e;
       const msg = e && e.message ? String(e.message) : '';
-      if (/\b429\b/.test(msg)) throw e;
+      if (/\b(401|429)\b/.test(msg)) throw e;
     }
   }
   throw lastErr || new Error(label + ' nicht erreichbar.');

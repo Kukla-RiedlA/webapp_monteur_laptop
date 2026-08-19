@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.003
+- **Sync/Login:** Kein Basic-Auth ohne Passwort in Proxy, Probe und Anlagenstamm; 401/429 nicht auf Zweit-URL wiederholen.
+
 ## V 2.006.002
 - **Sync intern:** Abwesenheiten-Pull über `dispo_api` wie Aufträge; kein Basic-Auth ohne Passwort (verhindert 429-Sperre).
 - **Anlagenstamm:** Umschalten hängt nicht mehr — Tabelle scrollt im Fenster, lädt nicht den ganzen Stamm in den DOM.

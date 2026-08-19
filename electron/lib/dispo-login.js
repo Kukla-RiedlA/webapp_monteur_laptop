@@ -4,7 +4,10 @@
 const { normalizeDispoBase } = require('./dispo-base-fallback');
 
 function basicAuthHeader(username, password) {
-  return 'Basic ' + Buffer.from(`${username || ''}:${password || ''}`).toString('base64');
+  const u = String(username || '').trim();
+  const p = password != null ? String(password) : '';
+  if (!u || !p) return '';
+  return 'Basic ' + Buffer.from(`${u}:${p}`, 'utf8').toString('base64');
 }
 
 function isLoginRedirectSuccess(status, location) {
@@ -81,6 +84,9 @@ async function loginViaFormAction(proxy, username, password) {
 
 async function loginViaBasicAuth(proxy, username, password) {
   const auth = basicAuthHeader(username, password);
+  if (!auth) {
+    throw new Error('Benutzername und Passwort erforderlich');
+  }
   let res;
   try {
     ({ res } = await proxy.fetchDispo('/api/jobs_open.php', {
@@ -94,8 +100,8 @@ async function loginViaBasicAuth(proxy, username, password) {
   if (!res || typeof res.status !== 'number') {
     throw new Error('Login-Prüfung: keine Antwort von der Dispo.');
   }
-  if (res.status === 401) {
-    throw new Error('Benutzername oder Passwort falsch');
+  if (res.status === 401 || res.status === 429) {
+    throw new Error(res.status === 429 ? 'Konto vorübergehend gesperrt' : 'Benutzername oder Passwort falsch');
   }
   if (!res.ok) {
     throw new Error('Login-Prüfung fehlgeschlagen (HTTP ' + res.status + ')');
@@ -124,6 +130,12 @@ async function fetchSessionAfterFormLogin(proxy) {
 }
 
 async function performDispoLogin(proxy, { username, password, dispo_base }) {
+  const u = String(username || '').trim();
+  const p = password != null ? String(password) : '';
+  if (!u || !p) {
+    throw new Error('Benutzername und Passwort erforderlich');
+  }
+
   const resolvedBase = await resolveDispoBaseUrl(proxy, dispo_base);
   if (resolvedBase) {
     proxy.setConfig({ baseUrl: resolvedBase });
@@ -133,22 +145,27 @@ async function performDispoLogin(proxy, { username, password, dispo_base }) {
   let base = resolvedBase || dispo_base || '';
 
   try {
-    sessionData = await loginViaDesktopApi(proxy, username, password);
+    sessionData = await loginViaDesktopApi(proxy, u, p);
     base = proxy.config.baseUrl || base;
   } catch (desktopErr) {
     if (desktopErr.status && desktopErr.status !== 404 && desktopErr.status !== 405) {
       if (desktopErr.status === 401) throw new Error('Benutzername oder Passwort falsch');
+      if (desktopErr.status === 429) throw new Error('Konto vorübergehend gesperrt');
       throw desktopErr;
     }
     try {
-      const form = await loginViaFormAction(proxy, username, password);
+      const form = await loginViaFormAction(proxy, u, p);
       base = form.base || base;
       sessionData = await fetchSessionAfterFormLogin(proxy);
       if (!sessionData || sessionData.ok === false) {
-        sessionData = await loginViaBasicAuth(proxy, username, password);
+        sessionData = await loginViaBasicAuth(proxy, u, p);
       }
     } catch (formErr) {
-      sessionData = await loginViaBasicAuth(proxy, username, password);
+      const msg = formErr && formErr.message ? String(formErr.message) : '';
+      if (/Passwort falsch|Benutzername oder Passwort|gesperrt/i.test(msg)) {
+        throw formErr;
+      }
+      sessionData = await loginViaBasicAuth(proxy, u, p);
       if (!sessionData) throw formErr;
       base = proxy.config.baseUrl || base;
     }

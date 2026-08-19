@@ -32,7 +32,7 @@ function isRetryableExportChunkFailure(data, err) {
   if (!data || data.ok !== false) return false;
   const status = Number(data._httpStatus) || 0;
   if (status === 401 || status === 403) return false;
-  if (status >= 500 || status === 408 || status === 429 || status === 0) return true;
+  if (status >= 500 || status === 408 || status === 0) return true;
   const msg = String(data.error || '').toLowerCase();
   return (
     msg.includes('fetch failed') ||

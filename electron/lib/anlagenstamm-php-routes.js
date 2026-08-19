@@ -22,7 +22,7 @@ function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
   ).trim();
   const p = creds.serverPassword != null ? String(creds.serverPassword) : ctx.getDispoPassword ? String(ctx.getDispoPassword() || '') : '';
   const h = applyKuklaAuditHeaders({ 'X-Technician-Id': String(technicianId || '') });
-  if (u) {
+  if (u && p) {
     const auth = 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64');
     h.Authorization = auth;
     h['X-Kukla-Authorization'] = auth;

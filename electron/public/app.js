@@ -977,7 +977,7 @@
     u = String(u).trim();
     var p = getPassFn && typeof getPassFn === 'function' ? getPassFn() : '';
     p = p != null ? String(p) : '';
-    if (!u) return {};
+    if (!u || !p) return {};
     try {
       return { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(u + ':' + p))) };
     } catch (e) {
@@ -8463,7 +8463,7 @@
       (function () {
         var u = getServerUsername();
         var p = getServerPassword();
-        if (!u) return {};
+        if (!u || !p) return {};
         try {
           return { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(u + ':' + p))) };
         } catch (e) {

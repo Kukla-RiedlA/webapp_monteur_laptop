@@ -78,9 +78,9 @@ function createDispoProxy(options = {}) {
       const headers = applyKuklaAuditHeaders({ ...(init.headers || {}) });
       const cookie = jar.headerFor(base);
       if (cookie) headers.Cookie = cookie;
-      if (!headers.Authorization && config.dispoUsername) {
+      if (!headers.Authorization && config.dispoUsername && config.dispoPassword) {
         headers.Authorization =
-          'Basic ' + Buffer.from(`${config.dispoUsername}:${config.dispoPassword || ''}`).toString('base64');
+          'Basic ' + Buffer.from(`${config.dispoUsername}:${config.dispoPassword}`, 'utf8').toString('base64');
       }
       let res;
       try {
