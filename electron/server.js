@@ -12752,6 +12752,7 @@ function createApp(db) {
     if (!u) return undefined;
     const explicit = password != null ? String(password) : '';
     const p = explicit !== '' ? explicit : String(session.serverPassword || '');
+    if (!p) return undefined;
     return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
   }
 
@@ -16666,34 +16667,41 @@ function reconcileAbsenceRequestsWithServerStatus(db, technicianId, serverReques
   return deleted;
 }
 
-async function fetchMyJobsForPull(base, technicianId, authHeader, dateFrom, dateTo) {
+async function fetchDispoMonteurList(base, technicianId, authHeader, dateFrom, dateTo, fileName, label) {
   const q = new URLSearchParams({ technician_id: String(technicianId) });
   if (dateFrom) q.set('date_from', String(dateFrom));
   if (dateTo) q.set('date_to', String(dateTo));
   const fetchOpts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
   const candidates = [
-    `${base}/dispo_api/api/my_jobs.php?${q}`,
-    `${base}/api/my_jobs.php?${q}`,
+    `${base}/dispo_api/api/${fileName}?${q}`,
+    `${base}/api/${fileName}?${q}`,
   ];
   let lastErr = null;
   for (const url of candidates) {
     try {
       const r = await fetch(url, fetchOpts);
       if (r.ok) return { res: r, url };
-      lastErr = new Error('Aufträge: ' + r.status + ' ' + r.statusText + ' (' + url + ')');
+      lastErr = new Error(label + ': ' + r.status + ' ' + r.statusText + ' (' + url + ')');
+      if (r.status === 429) throw lastErr;
     } catch (e) {
       lastErr = e;
+      const msg = e && e.message ? String(e.message) : '';
+      if (/\b429\b/.test(msg)) throw e;
     }
   }
-  throw lastErr || new Error('Auftragsliste nicht erreichbar.');
+  throw lastErr || new Error(label + ' nicht erreichbar.');
+}
+
+async function fetchMyJobsForPull(base, technicianId, authHeader, dateFrom, dateTo) {
+  return fetchDispoMonteurList(base, technicianId, authHeader, dateFrom, dateTo, 'my_jobs.php', 'Aufträge');
+}
+
+async function fetchMyAbsencesForPull(base, technicianId, authHeader, dateFrom, dateTo) {
+  return fetchDispoMonteurList(base, technicianId, authHeader, dateFrom, dateTo, 'my_absences.php', 'Abwesenheiten');
 }
 
 async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, dateTo) {
   const base = baseUrl.replace(/\/$/, '');
-  let absencesUrl = `${base}/api/my_absences.php?technician_id=${technicianId}`;
-  if (dateFrom) absencesUrl += '&date_from=' + encodeURIComponent(dateFrom);
-  if (dateTo) absencesUrl += '&date_to=' + encodeURIComponent(dateTo);
-  const fetchOpts = { headers: dispoMonteurFetchHeaders(technicianId, authHeader) };
   let jobsRes;
   let absencesRes;
   let jobsPullUrl = '';
@@ -16701,7 +16709,8 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
     const jobsFetch = await fetchMyJobsForPull(base, technicianId, authHeader, dateFrom, dateTo);
     jobsRes = jobsFetch.res;
     jobsPullUrl = jobsFetch.url;
-    absencesRes = await fetch(absencesUrl, fetchOpts);
+    const absencesFetch = await fetchMyAbsencesForPull(base, technicianId, authHeader, dateFrom, dateTo);
+    absencesRes = absencesFetch.res;
   } catch (e) {
     throw new Error('Dispo-Server nicht erreichbar: ' + e.message + '. Prüfen Sie die Adresse (z. B. http://localhost/) und ob der Server läuft.');
   }

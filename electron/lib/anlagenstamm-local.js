@@ -51,6 +51,7 @@ function authHeaderFromCredentials(username, password) {
   const u = (username || '').toString().trim();
   if (!u) return undefined;
   const p = (password || '').toString();
+  if (!p) return undefined;
   return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
 }
 
@@ -304,15 +305,16 @@ function parseTedMechanik(raw) {
   }
 }
 
-function mapRowToListApi(row) {
+function mapRowToListApi(row, opts) {
   if (!row) return null;
+  const light = !!(opts && opts.light);
   return {
     id: row.id,
     fabrikationsnummer: row.fabrikationsnummer || '',
     type: row.type || '',
     leistung: row.leistung || '',
     kraftaufnehmer: row.kraftaufnehmer || '',
-    kraftaufnehmer_extra: parseKraftaufnehmerExtra(row.kraftaufnehmer_extra),
+    kraftaufnehmer_extra: light ? [] : parseKraftaufnehmerExtra(row.kraftaufnehmer_extra),
     nenngeschwindigkeit: row.nenngeschwindigkeit || '',
     material: row.material || '',
     tacho: row.tacho || '',
@@ -332,16 +334,17 @@ function mapRowToListApi(row) {
     bemerkungen: row.bemerkungen || '',
     customer_country: row.customer_country || '',
     pn_root_name: row.pn_root_name || '',
-    ted_mechanik: parseTedMechanik(row.ted_mechanik),
+    ted_mechanik: light ? (row.ted_mechanik || '') : parseTedMechanik(row.ted_mechanik),
   };
 }
 
-function listAllAnlagenstammLocal(db) {
+function listAllAnlagenstammLocal(db, opts) {
   ensureAnlagenstammLocalSchema(db);
   const rows = db
     .prepare(`${ANLAGENSTAMM_LOCAL_SELECT} ORDER BY TRIM(fabrikationsnummer) ASC, id ASC`)
     .all();
-  return rows.map(mapRowToListApi);
+  const mapOpts = opts && opts.light ? { light: true } : undefined;
+  return rows.map((row) => mapRowToListApi(row, mapOpts));
 }
 
 function lookupById(db, id) {

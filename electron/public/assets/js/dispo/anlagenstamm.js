@@ -723,10 +723,21 @@ function maybePrefetchNextPage() {
   }
 }
 
-function scheduleFillViewport(token) {
+function scheduleFillViewport(token, retry) {
   if (token !== listState.requestToken) return;
   const el = getAnlagenTableScrollEl();
   if (!el || listState.isLoading || !listState.hasMore) return;
+  if (el.clientHeight < 80) {
+    const n = Number(retry || 0);
+    if (n >= 12) return;
+    window.requestAnimationFrame(function () {
+      scheduleFillViewport(token, n + 1);
+    });
+    return;
+  }
+  const pageSize = Number(pageState.pageSize || 300);
+  const loadedPages = pageSize > 0 ? Math.ceil((listState.loadedCount || 0) / pageSize) : 1;
+  if (loadedPages >= 2) return;
   if (anlagenScrollDistanceToBottom(el) > INFINITE_SCROLL_PREFETCH_PX) return;
   loadNextListPage()
     .then(function () {

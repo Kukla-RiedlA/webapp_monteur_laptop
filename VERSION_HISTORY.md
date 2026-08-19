@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.002
+- **Sync intern:** Abwesenheiten-Pull über `dispo_api` wie Aufträge; kein Basic-Auth ohne Passwort (verhindert 429-Sperre).
+- **Anlagenstamm:** Umschalten hängt nicht mehr — Tabelle scrollt im Fenster, lädt nicht den ganzen Stamm in den DOM.
+
 ## V 2.006.001
 - **Anlagenstamm:** Liste und TED/PN-Extras wieder offline-first — sofort aus SQLite, kein Warten auf Dispo beim Öffnen (App hing sonst komplett).
 

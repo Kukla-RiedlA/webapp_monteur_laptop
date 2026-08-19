@@ -52,7 +52,7 @@ function getCachedListRows(db) {
   ) {
     return listRowsCache.rows;
   }
-  const rows = listAllAnlagenstammLocal(db);
+  const rows = listAllAnlagenstammLocal(db, { light: true });
   listRowsCache = { db, count, at: now, rows };
   return rows;
 }
@@ -112,17 +112,20 @@ function lookupAnlagenExtrasForFab(db, fab) {
   if (!f) return { pn: '', ted: [] };
   const byFab = db
     .prepare(
-      'SELECT pn_root_name, ted_mechanik FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1',
+      'SELECT pn_root_name, ted_mechanik FROM anlagenstamm_local WHERE fabrikationsnummer = ? LIMIT 1',
     )
-    .get(f);
+    .get(f)
+    || db
+      .prepare(
+        'SELECT pn_root_name, ted_mechanik FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1',
+      )
+      .get(f);
   let pn = '';
   let ted = [];
   if (byFab) {
     pn = String(byFab.pn_root_name || '').trim();
     ted = parseTedMechanik(byFab.ted_mechanik);
   }
-  if (!pn) pn = readTreeCachePn(db, f);
-  if (!ted.length) ted = readTedFromJobIndex(db, f);
   return { pn, ted };
 }
 
@@ -134,8 +137,27 @@ function getAnlagenstammExtrasResponse(db, body = {}) {
   const pn_by_fab = {};
   const ted_by_fab = {};
   let source = 'local_empty';
+  if (!fabs.length) return { success: true, pn_by_fab, ted_by_fab, source };
+  const placeholders = fabs.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT fabrikationsnummer, pn_root_name, ted_mechanik
+       FROM anlagenstamm_local
+       WHERE fabrikationsnummer IN (${placeholders})`,
+    )
+    .all(...fabs);
+  const byFab = new Map();
+  for (const row of rows) {
+    byFab.set(String(row.fabrikationsnummer || '').trim(), row);
+  }
   for (const fab of fabs) {
-    const extra = lookupAnlagenExtrasForFab(db, fab);
+    const row = byFab.get(fab);
+    const extra = row
+      ? {
+        pn: String(row.pn_root_name || '').trim(),
+        ted: parseTedMechanik(row.ted_mechanik),
+      }
+      : lookupAnlagenExtrasForFab(db, fab);
     pn_by_fab[fab] = extra.pn;
     ted_by_fab[fab] = extra.ted;
     if (extra.pn || extra.ted.length) source = 'local_cache';

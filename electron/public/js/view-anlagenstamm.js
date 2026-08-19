@@ -19,7 +19,7 @@
         '/assets/js/dispo/anlagenakte-form-viewer.js?v=20260817c',
         '/assets/js/dispo/anlagenakte.js?v=20260817c',
         '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260701',
-        '/assets/js/dispo/anlagenstamm.js?v=20260701',
+        '/assets/js/dispo/anlagenstamm.js?v=20260819b',
         '/js/anlagenstamm-laptop-bridge.js?v=20260701',
       ],
       reloadHandler: reload,

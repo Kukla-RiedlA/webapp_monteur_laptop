@@ -147,9 +147,8 @@
 
 #anlagenstamm-host .anlagen-table-scroll {
   overflow: auto;
-  flex: 1 1 auto;
-  height: auto;
-  min-height: 200px;
+  flex: 1 1 0;
+  min-height: 0;
   margin-top: 8px;
   width: 100%;
   max-width: 100%;

@@ -44,7 +44,7 @@
     try {
       const u = (localStorage.getItem('monteur_serverUsername') || '').trim();
       if (u) {
-        h.Authorization = 'Basic ' + btoa(u + ':');
+        h['X-Kukla-Username'] = u;
       }
     } catch (_) { /* ignore */ }
     return h;
