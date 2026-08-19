@@ -60,6 +60,41 @@ async function fetchDispoApiFilesList(ctx, technicianId, fab, credsOpt) {
   }
 }
 
+/** TD-Prefill (pdftotext auf dem Dispo-Server). Länger timeout, PDF/Word-Parse. */
+async function fetchDispoApiTdPdfPrefill(ctx, technicianId, fab, pathRel, debug, credsOpt) {
+  const creds =
+    credsOpt && typeof credsOpt === 'object'
+      ? credsOpt
+      : ctx.resolveDispoServerCreds
+        ? ctx.resolveDispoServerCreds({})
+        : {};
+  const base = String(creds.baseUrl || (ctx.getDispoBaseUrl ? ctx.getDispoBaseUrl() : '') || '')
+    .trim()
+    .replace(/\/$/, '');
+  const fabNorm = String(fab || '').trim();
+  if (!base || !technicianId || !fabNorm) return null;
+  const u = String(creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : '') || '').trim();
+  if (!u) return null;
+  const qs = new URLSearchParams({
+    technician_id: String(technicianId),
+    fab: fabNorm,
+  });
+  if (pathRel) qs.set('path', String(pathRel));
+  if (debug) qs.set('debug', '1');
+  const url = `${base}/dispo_api/api/anlagenstamm_td_pdf_prefill.php?${qs.toString()}`;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30000);
+    const r = await fetch(url, { headers: dispoMonteurHeaders(ctx, technicianId, creds), signal: ac.signal });
+    clearTimeout(timer);
+    const data = await r.json().catch(() => ({}));
+    if (!data || typeof data !== 'object') return null;
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
 function registerAnlagenstammPhpRoutes(app, ctx) {
   const db = () => ctx.db;
 
@@ -244,6 +279,37 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     } catch (e) {
       return res.status(502).json({ success: false, error: e.message || String(e) });
     }
+  });
+
+  app.get('/api/anlagenstamm_td_pdf_prefill.php', async (req, res) => {
+    const fab = String(req.query.fab || req.query.fabrikationsnummer || '').trim();
+    if (!fab) return res.status(400).json({ ok: false, error: 'fab fehlt.' });
+    const pathRel = String(req.query.path || '').trim();
+    const debug = String(req.query.debug || '') === '1';
+    const technicianId = ctx.getTechnicianId(req);
+
+    const apiData = await fetchDispoApiTdPdfPrefill(ctx, technicianId, fab, pathRel, debug);
+    if (apiData && (apiData.ok === true || apiData.ok === false)) {
+      return res.json(Object.assign({ source: 'dispo_api' }, apiData));
+    }
+
+    const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds({}) : null;
+    const auth = await ctx.ensureProxyAuthenticated(creds);
+    if (auth && auth.ok && auth.authenticated) {
+      try {
+        const qs = new URLSearchParams({ fab });
+        if (pathRel) qs.set('path', pathRel);
+        if (debug) qs.set('debug', '1');
+        const data = await auth.proxy.getJson(`/api/anlagenstamm_td_pdf_prefill.php?${qs.toString()}`);
+        return res.json(Object.assign({ source: 'dispo_online' }, data || {}));
+      } catch (e) {
+        return res.status(502).json({ ok: false, error: e.message || String(e) });
+      }
+    }
+    return res.status(503).json({
+      ok: false,
+      error: 'TD-Daten nur online (Dispo-Server). Bitte Verbindung prüfen.',
+    });
   });
 
   /** Kompatibilität: alte List-Route delegiert. */

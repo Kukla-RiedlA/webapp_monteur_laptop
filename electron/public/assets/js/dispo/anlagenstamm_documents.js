@@ -52,10 +52,51 @@
   function fmtDateIso(iso) {
     if (!iso) return '';
     try {
-      var p = String(iso).split('-');
+      var p = String(iso).split(/[ T]/)[0].split('-');
       if (p.length === 3) return p[2] + '.' + p[1] + '.' + p[0];
     } catch (e) {}
     return String(iso);
+  }
+
+  /** z. B. FN10203_PA7_DE_20250825_1023 → 2025-08-25 10:23:00 */
+  function parseFilenameDatetime(name) {
+    var s = String(name || '');
+    var m = s.match(/_(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])_([01]\d|2[0-3])([0-5]\d)(?:([0-5]\d))?/);
+    if (!m) return '';
+    return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + (m[6] || '00');
+  }
+
+  function fmtDateTimeLocal(iso) {
+    if (!iso) return '';
+    var s = String(iso).trim();
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (m) {
+      var out = m[3] + '.' + m[2] + '.' + m[1];
+      if (m[4]) out += ' ' + m[4] + ':' + m[5];
+      return out;
+    }
+    return s;
+  }
+
+  function resolveDocStamp(d) {
+    if (!d) return '';
+    var parsed = parseFilenameDatetime(d.display_name || d.original_name || d.title || '');
+    if (parsed) return parsed;
+    if (d.display_datetime) return String(d.display_datetime);
+    if (d.source_mtime) return String(d.source_mtime);
+    var created = String(d.created_at || '');
+    if (created && /[ T]\d{2}:\d{2}/.test(created) && created.indexOf('uploaded') < 0) {
+      /* created_at kommt nach PHP-Parser bereits als Anzeige-Stempel, nie uploaded_at */
+      return created;
+    }
+    return String(d.document_date || d.date || created || '');
+  }
+
+  function fmtDocStamp(d) {
+    var stamp = typeof d === 'string' ? d : resolveDocStamp(d);
+    if (!stamp) return '';
+    if (/[ T]\d{2}:\d{2}/.test(String(stamp))) return fmtDateTimeLocal(stamp);
+    return fmtDateIso(stamp);
   }
 
   function fmtSize(n) {
@@ -208,19 +249,6 @@
       });
   }
 
-  function fmtDateTimeLocal(iso) {
-    if (!iso) return '';
-    var s = String(iso).replace(' ', 'T');
-    try {
-      var d = new Date(s);
-      if (!isNaN(d.getTime())) {
-        var pad = function (n) { return n < 10 ? '0' + n : String(n); };
-        return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-      }
-    } catch (e) {}
-    return String(iso);
-  }
-
   function renderAspTrendChangesTable(changes, showUnchanged) {
     var rows = Array.isArray(changes) ? changes : [];
     if (!showUnchanged) {
@@ -305,8 +333,8 @@
   function wireParameterTrend(paramDocs, downloadFab) {
     ensureParamTrendStyles();
     var chron = (paramDocs || []).slice().sort(function (a, b) {
-      var ta = Date.parse(String(a.created_at || a.document_date || '').replace(' ', 'T'));
-      var tb = Date.parse(String(b.created_at || b.document_date || '').replace(' ', 'T'));
+      var ta = Date.parse(String(resolveDocStamp(a) || '').replace(' ', 'T'));
+      var tb = Date.parse(String(resolveDocStamp(b) || '').replace(' ', 'T'));
       if (isNaN(ta)) ta = 0;
       if (isNaN(tb)) tb = 0;
       return ta - tb;
@@ -315,7 +343,7 @@
     var selTo = document.getElementById('anlagenAspTo');
     if (!selFrom || !selTo) return;
     function optLabel(d) {
-      return (d.display_name || d.original_name || 'Liste') + ' (' + fmtDateTimeLocal(d.created_at || d.document_date) + ')';
+      return (d.display_name || d.original_name || 'Liste') + ' (' + fmtDocStamp(d) + ')';
     }
     selFrom.innerHTML = chron.map(function (d) {
       return '<option value="' + esc(String(d.parameter_file_id)) + '">' + esc(optLabel(d)) + '</option>';
@@ -431,7 +459,7 @@
           }
           html += '<li style="margin:6px 0;display:flex;flex-wrap:wrap;align-items:center;gap:8px">';
           html += '<a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(d.display_name || 'Datei') + '</a>';
-          html += '<span class="muted">' + esc(fmtSize(d.size_bytes)) + ' · ' + esc(fmtDateIso(d.document_date)) + '</span>';
+          html += '<span class="muted">' + esc(fmtSize(d.size_bytes)) + ' · ' + esc(fmtDocStamp(d)) + '</span>';
           if (d.uploaded_by_username) html += '<span class="muted">' + esc(d.uploaded_by_username) + '</span>';
           if (d.notes) html += '<span class="muted">' + esc(d.notes) + '</span>';
           if (d.protocol_table && d.protocol_id && typeof window.kuklaAkteOpenProtocolView === 'function') {
@@ -518,8 +546,17 @@
     return html;
   }
 
+  function stampSortTs(d) {
+    var s = resolveDocStamp(d);
+    var m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (!m) return 0;
+    return Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+  }
+
   function renderTimeline(data) {
-    var items = data.timeline || [];
+    var items = (data.timeline || []).slice().sort(function (a, b) {
+      return stampSortTs(b) - stampSortTs(a);
+    });
     if (!items.length) {
       return '<p class="muted">Keine Einträge.</p>';
     }
@@ -529,7 +566,7 @@
       if (it.kind === 'event') {
         line = '<strong>' + esc(it.title || '') + '</strong> <span class="muted">Ereignis · ' + esc(fmtDateIso(it.date)) + '</span>';
       } else {
-        line = '<strong>' + esc(it.title || '') + '</strong> <span class="muted">' + esc(it.subtitle || '') + ' · ' + esc(fmtDateIso(it.date)) + '</span>';
+        line = '<strong>' + esc(it.title || '') + '</strong> <span class="muted">' + esc(it.subtitle || '') + ' · ' + esc(fmtDocStamp(it)) + '</span>';
         if (it.legacy) line += ' <span class="muted">(Bestandsdatei)</span>';
       }
       html += '<li style="margin:6px 0">' + line + '</li>';
@@ -635,6 +672,8 @@
   }
 
   window.anlagenstammDocumentsRefresh = refresh;
+  window.kuklaParseAnlagenFilenameDatetime = parseFilenameDatetime;
+  window.kuklaFmtAkteDateTime = fmtDateTimeLocal;
   formFab.addEventListener('blur', refresh);
   formFab.addEventListener('change', refresh);
   refresh();

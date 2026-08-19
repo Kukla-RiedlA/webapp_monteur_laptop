@@ -289,42 +289,15 @@
 }
 
 #anlagenstamm-host .form-modal.active .form-modal-content {
-  width: min(960px, 96vw);
+  width: min(1100px, 96vw);
   max-height: calc(100vh - 48px);
   margin: 24px 0;
+  box-sizing: border-box;
 }
 
 #anlagenstamm-host .kraftaufnehmer-block,
 .anlagenstamm-form-wrap .kraftaufnehmer-block {
   margin-bottom: 0;
-}
-
-#anlagenstamm-host .kraftaufnehmer-block .kraftaufnehmer-row,
-.anlagenstamm-form-wrap .kraftaufnehmer-block .kraftaufnehmer-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr auto;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 6px;
-}
-
-#anlagenstamm-host .kraftaufnehmer-block .kraftaufnehmer-row-fields,
-.anlagenstamm-form-wrap .kraftaufnehmer-block .kraftaufnehmer-row-fields {
-  display: contents;
-}
-
-#anlagenstamm-host .kraftaufnehmer-block .kraftaufnehmer-col-label,
-.anlagenstamm-form-wrap .kraftaufnehmer-block .kraftaufnehmer-col-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: #444;
-}
-
-#anlagenstamm-host .kraftaufnehmer-block .kraftaufnehmer-row input[type="text"],
-.anlagenstamm-form-wrap .kraftaufnehmer-block .kraftaufnehmer-row input[type="text"] {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
 }
 
 #anlagenstamm-host .kraftaufnehmer-block .btn-kraftaufnehmer-remove,

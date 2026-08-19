@@ -8,6 +8,7 @@
   var applying = false;
   var pendingFabSwitch = 0;
   var fabSwitchPending = false;
+  var jobSwitchPending = false;
   /** Letzter React-State (u. a. Abschluss-Status Justiert) – Quelle vor Speichern. */
   var lastReactPayload = null;
 
@@ -64,6 +65,13 @@
     getLastPayload: function () {
       return lastReactPayload;
     },
+    beginJobSwitch: function () {
+      jobSwitchPending = true;
+      lastReactPayload = null;
+    },
+    endJobSwitch: function () {
+      jobSwitchPending = false;
+    },
   };
 
   window.addEventListener('message', function (ev) {
@@ -78,15 +86,18 @@
 
     if (data.type === 'SP_STATE_CHANGE' && data.payload) {
       rememberReactPayload(data.payload);
-      if (applying || fabSwitchPending) return;
+      if (applying || fabSwitchPending || jobSwitchPending) return;
       applyFromReact(data.payload);
       return;
     }
 
     if (data.type === 'SP_JOB_CHANGE' && data.jobId != null && api && typeof api.selectJob === 'function') {
+      jobSwitchPending = true;
+      lastReactPayload = null;
       applying = true;
       Promise.resolve(api.selectJob(String(data.jobId))).finally(function () {
         applying = false;
+        jobSwitchPending = false;
         syncToReact();
       });
       return;

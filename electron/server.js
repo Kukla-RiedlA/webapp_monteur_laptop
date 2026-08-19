@@ -120,6 +120,7 @@ const {
   isPrivateLanHostname,
   safeHostname,
 } = require('./lib/dispo-base-fallback');
+const { formatFetchError } = require('./lib/dispo-tls');
 const {
   resolveProjekteNeuRoot,
   resolveCanonicalFolderFromDirList,
@@ -4819,6 +4820,29 @@ function createApp(db) {
         dispoBaseUrl = resolvedBase.base;
       }
       if (!dispoBaseUrl) {
+        if (acceptJob) {
+          try {
+            const result = performAcceptJobOffline({
+              job_id: rawJobId,
+              technician_id: technicianId,
+              offline_paths: body.offline_paths,
+              fab_map: body.fab_map,
+              montage_folder_name: body.montage_folder_name,
+            });
+            result.hint =
+              (result.hint || 'Lokal angenommen.') +
+              ' Dateien später nachziehen. (' +
+              (resolvedBase.error || 'Dispo nicht erreichbar.') +
+              ')';
+            return res.json(result);
+          } catch (offlineErr) {
+            const status = offlineErr && offlineErr.httpStatus ? offlineErr.httpStatus : 500;
+            return res.status(status).json({
+              ok: false,
+              error: offlineErr.message || 'Offline-Annahme fehlgeschlagen.',
+            });
+          }
+        }
         return res.status(502).json({
           ok: false,
           error: resolvedBase.error || 'Keine erreichbare Dispo-URL für Projektordner.',
@@ -4964,7 +4988,30 @@ function createApp(db) {
       );
       return res.status(202).json({ ok: true, job_id, async: true });
     } catch (e) {
-      return res.status(500).json({ ok: false, error: e.message || 'Job konnte nicht gestartet werden.' });
+      if (acceptJob && isFetchNetworkError(e)) {
+        try {
+          const b = req.body || {};
+          const result = performAcceptJobOffline({
+            job_id: b.job_id != null ? b.job_id : b.jobId,
+            technician_id: b.technicianId != null ? b.technicianId : b.technician_id,
+            offline_paths: b.offline_paths,
+            fab_map: b.fab_map,
+            montage_folder_name: b.montage_folder_name,
+          });
+          result.hint =
+            (result.hint || 'Lokal angenommen.') +
+            ' Dateien später nachziehen. (' +
+            formatFetchError(e, b.dispoBaseUrl || b.dispo_base_url || '') +
+            ')';
+          return res.json(result);
+        } catch (_) {
+          /* fall through */
+        }
+      }
+      const msg = isFetchNetworkError(e)
+        ? formatFetchError(e, (req.body && (req.body.dispoBaseUrl || req.body.dispo_base_url)) || '')
+        : (e.message || 'Job konnte nicht gestartet werden.');
+      return res.status(500).json({ ok: false, error: msg });
     }
   }
 
@@ -12891,9 +12938,6 @@ function createApp(db) {
           serverPassword: dispoPassword,
         });
         if (resolvedPull.base) dispoBaseUrl = resolvedPull.base;
-        if (!dispoBaseUrl) {
-          throw new Error(resolvedPull.error || 'Keine erreichbare Dispo-URL für Projektordner.');
-        }
         const resolvedJob = resolveLocalJobIdForTechnician(db, technicianId, rawJobId, { mode: 'auto' });
         if (!resolvedJob.ok) throw new Error(resolvedJob.error);
         const assignGate = requireJobAssignedToTechnician(db, resolvedJob.localId, technicianId);
@@ -12913,6 +12957,19 @@ function createApp(db) {
           technicianId,
         });
         if (!targetDir || !fs.existsSync(targetDir)) throw new Error('Zielordner konnte nicht erstellt werden.');
+        if (!dispoBaseUrl) {
+          if (acceptJob) {
+            applyJobStatusInArbeitAfterAccept(localJobId, technicianId);
+            mergeCheckpoint({
+              finalize_done: true,
+              status_sync_warning: resolvedPull.error || 'Keine Verbindung zur Dispo.',
+              empty_copy: true,
+            });
+            setProgress('done', 1, 1, 'Auftrag lokal angenommen (ohne Dateikopie).');
+            break;
+          }
+          throw new Error(resolvedPull.error || 'Keine erreichbare Dispo-URL für Projektordner.');
+        }
         console.log('[dienstreise_pull] start', {
           local_job_id: localJobId,
           server_job_id: serverJobId,
@@ -12994,6 +13051,8 @@ function createApp(db) {
         }
         const refreshAge = chk.refresh_done_at ? Date.now() - new Date(chk.refresh_done_at).getTime() : Infinity;
         const skipRefresh = !periodicDelta && !!(chk.refresh_done_at && refreshAge < 15 * 60 * 1000 && chk.dispo_base_fingerprint === fp);
+        let copyWarning = null;
+        let skipCopyDueToNetwork = false;
         setProgress('refresh', 0, 1, skipRefresh ? 'Dispo-Refresh (Checkpoint, TTL).' : 'Dispo wird aktualisiert …');
         if (!skipRefresh) {
           const pullPair = normalizeDispoBasePair(p.externalUrl, p.internalUrl);
@@ -13037,16 +13096,27 @@ function createApp(db) {
             }
           }
           if (!refreshBase) {
-            throw lastRefreshErr || new Error('Dispo-Aktualisierung auf keiner Basis-URL möglich.');
+            const refreshFail = lastRefreshErr || new Error('Dispo-Aktualisierung auf keiner Basis-URL möglich.');
+            if (acceptJob) {
+              copyWarning = formatFetchError(refreshFail, dispoBaseUrl);
+              skipCopyDueToNetwork = true;
+              console.warn(
+                '[dienstreise_pull] accept: Dispo-Refresh fehlgeschlagen, lokale Annahme trotzdem.',
+                copyWarning,
+              );
+            } else {
+              throw refreshFail;
+            }
+          } else {
+            dispoBaseUrl = refreshBase;
+            fp = fingerprintDispoBase(dispoBaseUrl);
+            mergeCheckpoint({
+              refresh_done_at: new Date().toISOString(),
+              dispo_base_fingerprint: fp,
+              server_job_id: serverJobId,
+              local_job_id: localJobId,
+            });
           }
-          dispoBaseUrl = refreshBase;
-          fp = fingerprintDispoBase(dispoBaseUrl);
-          mergeCheckpoint({
-            refresh_done_at: new Date().toISOString(),
-            dispo_base_fingerprint: fp,
-            server_job_id: serverJobId,
-            local_job_id: localJobId,
-          });
         } else {
           mergeCheckpoint({
             dispo_base_fingerprint: fp,
@@ -13103,13 +13173,25 @@ function createApp(db) {
         }
 
         let files = null;
-        if (!periodicDelta && Array.isArray(chk.files) && chk.files.length) {
+        if (skipCopyDueToNetwork) {
+          files = [];
+        } else if (!periodicDelta && Array.isArray(chk.files) && chk.files.length) {
           files = filterManifestForPull(chk.files, pullMode, pathsByFab, fabMap);
         } else {
           files = [];
-          await collectManifest('', files);
-          files = filterManifestForPull(files, pullMode, pathsByFab, fabMap);
-          mergeCheckpoint({ files, completed: [] });
+          try {
+            await collectManifest('', files);
+            files = filterManifestForPull(files, pullMode, pathsByFab, fabMap);
+            mergeCheckpoint({ files, completed: [] });
+          } catch (listErr) {
+            if (acceptJob) {
+              copyWarning = formatFetchError(listErr, dispoBaseUrl);
+              console.warn('[dienstreise_pull] accept: Dateiliste fehlgeschlagen.', copyWarning);
+              files = [];
+            } else {
+              throw listErr;
+            }
+          }
         }
         mergeCheckpoint({
           pull_audit: {
@@ -13244,7 +13326,7 @@ function createApp(db) {
             }
             mergeCheckpoint({
               finalize_done: true,
-              status_sync_warning: statusSyncWarning,
+              status_sync_warning: [statusSyncWarning, copyWarning].filter(Boolean).join(' ') || null,
               empty_copy: true,
             });
           } else {
@@ -13260,6 +13342,7 @@ function createApp(db) {
           break;
         }
 
+        try {
         for (let i = 0; i < files.length; i++) {
           const relPath = files[i].path;
           const expectedSize = files[i].size;
@@ -13337,6 +13420,14 @@ function createApp(db) {
           mergeCheckpoint({ completed });
           setProgress('file', i + 1, total, relPath);
         }
+        } catch (dlErr) {
+          if (acceptJob) {
+            copyWarning = [copyWarning, formatFetchError(dlErr, dispoBaseUrl)].filter(Boolean).join(' ');
+            console.warn('[dienstreise_pull] accept: Download unterbrochen.', copyWarning);
+          } else {
+            throw dlErr;
+          }
+        }
 
         await pullProtocolJsonDrafts();
 
@@ -13380,7 +13471,10 @@ function createApp(db) {
                 statusSyncWarning = pushRes.error || 'Status konnte nicht sofort zur Dispo gesendet werden.';
               }
             }
-            mergeCheckpoint({ finalize_done: true, status_sync_warning: statusSyncWarning });
+            mergeCheckpoint({
+              finalize_done: true,
+              status_sync_warning: [statusSyncWarning, copyWarning].filter(Boolean).join(' ') || null,
+            });
           } else {
             mergeCheckpoint({ finalize_done: true });
           }
@@ -14165,7 +14259,7 @@ function createApp(db) {
       if (e && e.name === 'AbortError') {
         return { ok: false, error: 'Timeout nach ' + DISPO_PROBE_TIMEOUT_MS / 1000 + ' s (Dispo-Probe)' };
       }
-      return { ok: false, error: 'Dispo nicht erreichbar: ' + (e.message || String(e)) };
+      return { ok: false, error: formatFetchError(e, base) };
     }
   }
 

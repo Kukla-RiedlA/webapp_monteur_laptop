@@ -1251,7 +1251,12 @@
           failMsg ||
           'Kopie unterbrochen (automatisch beendet). Bitte Verbindung prüfen und „Auftrag annehmen“ erneut versuchen.';
       }
-      if (hint) hint.textContent = failMsg || 'Auftrag annehmen fehlgeschlagen.';
+      if (isLikelyDispoNetworkError(failMsg) || /fetch failed/i.test(String(failMsg || ''))) {
+        if (hint) hint.textContent = 'Dispo-Dateien nicht erreichbar – nehme Auftrag lokal an …';
+        runAcceptJobOffline(localJobId, null, {});
+        return;
+      }
+      if (hint) hint.textContent = userFacingNetworkErrorMessage(failMsg, 'Auftrag annehmen fehlgeschlagen.');
       if (typeof loadDienstreiseList === 'function') loadDienstreiseList();
     }
   }
@@ -1342,7 +1347,10 @@
               acceptJobUiTimeoutId = null;
             }
             finishAcceptJobStreamUi();
-            if (hint) hint.textContent = err && err.message ? err.message : 'Fehler beim Annehmen.';
+            if (hint) hint.textContent = userFacingNetworkErrorMessage(
+              err && err.message ? err.message : '',
+              'Fehler beim Annehmen.',
+            );
           });
       })
       .catch(function () {})
@@ -2090,15 +2098,15 @@
       .catch(function (err) {
         if (!acceptOfflinePending || acceptOfflinePending.localJobId !== localJobId) return;
         var aborted = err && err.name === 'AbortError';
+        var rawMsg = aborted
+          ? 'Zeitüberschreitung bei der Dispo-Verbindung.'
+          : err && err.message
+            ? err.message
+            : 'Vorschau fehlgeschlagen.';
+        var shown = userFacingNetworkErrorMessage(rawMsg, 'Vorschau fehlgeschlagen.');
         bodyEl.innerHTML =
           '<p class="muted">' +
-          escapeHtml(
-            aborted
-              ? 'Zeitüberschreitung bei der Dispo-Verbindung.'
-              : err && err.message
-                ? err.message
-                : 'Vorschau fehlgeschlagen.',
-          ) +
+          escapeHtml(shown) +
           '</p>';
         if (hintEl) {
           hintEl.textContent = aborted
@@ -2112,7 +2120,7 @@
         acceptOfflinePending.previewFailed = true;
         acceptOfflinePending.fab_map = [];
         if (confirmBtn) confirmBtn.disabled = false;
-        if (mode === 'accept' && hint && !aborted) hint.textContent = hintEl ? hintEl.textContent : '';
+        if (mode === 'accept' && hint && !aborted) hint.textContent = shown;
       })
       .finally(function () {
         clearTimeout(previewTimeoutId);
@@ -2270,36 +2278,34 @@
       body: JSON.stringify(body)
     })
       .then(function (response) {
-        if (!response.ok) {
-          if (acceptJobUiTimeoutId) {
-            clearTimeout(acceptJobUiTimeoutId);
-            acceptJobUiTimeoutId = null;
-          }
-          return response.json().then(function (data) {
+        return response.json().then(function (data) {
+          if (!response.ok || (data && data.ok === false)) {
             throw new Error((data && data.error) || 'Fehler ' + response.status);
+          }
+          if (data && data.offline) {
+            if (acceptJobUiTimeoutId) {
+              clearTimeout(acceptJobUiTimeoutId);
+              acceptJobUiTimeoutId = null;
+            }
+            finishAcceptJobStreamUi();
+            handleAcceptJobOfflineFinished(localJobId, data, hint);
+            return;
+          }
+          var jobId = data && data.job_id;
+          if (!jobId) throw new Error('Keine job_id vom Server.');
+          return pollBackgroundJobUntilTerminal(jobId, function (j) {
+            updateAcceptJobButtonProgress(j);
+          }).then(function (j) {
+            if (acceptJobUiTimeoutId) {
+              clearTimeout(acceptJobUiTimeoutId);
+              acceptJobUiTimeoutId = null;
+            }
+            finishAcceptJobStreamUi();
+            handleAcceptJobPollFinished(localJobId, j, hint);
           });
-        }
-        if (response.status === 202) {
-          return response.json().then(function (data) {
-            var jobId = data && data.job_id;
-            if (!jobId) throw new Error('Keine job_id vom Server.');
-            return pollBackgroundJobUntilTerminal(jobId, function (j) {
-              updateAcceptJobButtonProgress(j);
-            }).then(function (j) {
-              if (acceptJobUiTimeoutId) {
-                clearTimeout(acceptJobUiTimeoutId);
-                acceptJobUiTimeoutId = null;
-              }
-              finishAcceptJobStreamUi();
-              handleAcceptJobPollFinished(localJobId, j, hint);
-            });
-          });
-        }
-        if (acceptJobUiTimeoutId) {
-          clearTimeout(acceptJobUiTimeoutId);
-          acceptJobUiTimeoutId = null;
-        }
-        throw new Error('Unerwartete Server-Antwort (Status ' + response.status + ').');
+        }, function () {
+          throw new Error('Fehler ' + response.status);
+        });
       })
       .catch(function (err) {
         if (acceptJobUiTimeoutId) {
@@ -2307,7 +2313,13 @@
           acceptJobUiTimeoutId = null;
         }
         finishAcceptJobStreamUi();
-        if (hint) hint.textContent = err && err.message ? err.message : 'Fehler beim Annehmen.';
+        var msg = err && err.message ? err.message : '';
+        if (isLikelyDispoNetworkError(msg) || /fetch failed/i.test(msg)) {
+          if (hint) hint.textContent = 'Dispo nicht erreichbar – nehme Auftrag lokal an …';
+          runAcceptJobOffline(localJobId, triggerButton, acceptOpts);
+          return;
+        }
+        if (hint) hint.textContent = userFacingNetworkErrorMessage(msg, 'Fehler beim Annehmen.');
       });
   }
 
@@ -6896,7 +6908,16 @@
 
   function isLikelyDispoNetworkError(msg) {
     var s = String(msg || '').toLowerCase();
-    return /timeout|nicht erreichbar|dispo-probe|failed to fetch|network|econnrefused|enotfound|abort|zeitüberschreitung/i.test(s);
+    return /timeout|nicht erreichbar|dispo-probe|failed to fetch|fetch failed|network|econnrefused|enotfound|abort|zeitüberschreitung|keine verbindung zur dispo/i.test(s);
+  }
+
+  function userFacingNetworkErrorMessage(msg, fallback) {
+    var s = String(msg || '').trim();
+    if (!s) return fallback || 'Verbindungsfehler.';
+    if (/^fetch failed$/i.test(s) || /^failed to fetch$/i.test(s) || /fetch failed/i.test(s) && s.length < 40) {
+      return 'Keine Verbindung zur Dispo — Netzwerk, VPN oder Firewall prüfen.';
+    }
+    return s;
   }
 
   function preferLocalProjekteNeuOnly() {
@@ -16088,13 +16109,12 @@
       if (enEl) enEl.checked = !!set.en;
     }
 
-    function openAndResetMontageberichtForm() {
-      if (divMontage) divMontage.style.display = 'block';
+    var montageberichtJobLoadToken = 0;
+
+    function resetMontageberichtEnteredFields() {
       try { delete window._kuklaMontageberichtSign; } catch (e) { window._kuklaMontageberichtSign = null; }
-      montageberichtJobData = null;
       var pdfBtnMb = document.getElementById('btnMontageberichtPdf');
       if (pdfBtnMb) pdfBtnMb.style.display = 'none';
-      if (jobSelect) jobSelect.innerHTML = '<option value="">Lade…</option>';
       if (grundInput) setRichEditorHtml(grundInput, '');
       var bemerkEl = document.getElementById('montageberichtBemerkungen');
       if (bemerkEl) setRichEditorHtml(bemerkEl, '');
@@ -16107,6 +16127,14 @@
         kopfdatenEl.setAttribute('aria-hidden', 'true');
       }
       if (fabContainer) fabContainer.innerHTML = '';
+    }
+
+    function openAndResetMontageberichtForm() {
+      if (divMontage) divMontage.style.display = 'block';
+      montageberichtJobData = null;
+      montageberichtJobLoadToken += 1;
+      resetMontageberichtEnteredFields();
+      if (jobSelect) jobSelect.innerHTML = '<option value="">Lade…</option>';
       bindMontageberichtToolbar();
       if (window.KuklaEditorImages && window.KuklaEditorImages.bindAll) {
         window.KuklaEditorImages.bindAll(form || document);
@@ -16130,21 +16158,14 @@
     if (jobSelect) {
       jobSelect.addEventListener('change', async function () {
         var id = parseInt(this.value, 10);
-        if (!id) {
-          if (kopfdatenEl) {
-            kopfdatenEl.innerHTML = '';
-            kopfdatenEl.hidden = true;
-            kopfdatenEl.setAttribute('aria-hidden', 'true');
-          }
-          fabContainer.innerHTML = ''; montageberichtJobData = null;
-          if (grundInput) setRichEditorHtml(grundInput, '');
-          var bemerkEl = document.getElementById('montageberichtBemerkungen'); if (bemerkEl) setRichEditorHtml(bemerkEl, '');
-          var langEl = document.getElementById('montageberichtLangDe'); if (langEl) setMontageberichtLanguages(['de']);
-          var projElClear = document.getElementById('montageberichtProjekt'); if (projElClear) projElClear.value = '';
-          return;
-        }
+        var loadToken = ++montageberichtJobLoadToken;
+        resetMontageberichtEnteredFields();
+        montageberichtJobData = null;
+        if (!id) return;
         try {
-          montageberichtJobData = await loadJobWithAnlagenstamm(id);
+          var loadedJob = await loadJobWithAnlagenstamm(id);
+          if (loadToken !== montageberichtJobLoadToken) return;
+          montageberichtJobData = loadedJob;
           var k = renderKopfdaten(montageberichtJobData);
           renderFabBemerkungen(k.fabrikationsnummern || []);
           var projEl = document.getElementById('montageberichtProjekt');
@@ -16152,16 +16173,17 @@
           try {
             var loadR = await fetch(API_BASE + '/api/protokolle/montagebericht?job_id=' + id, { headers: { 'X-Technician-Id': String(getTechId()) } });
             var loadData = await loadR.json();
+            if (loadToken !== montageberichtJobLoadToken) return;
             if (loadData.ok && loadData.data) {
               var d = loadData.data;
               if (grundInput) setRichEditorHtml(grundInput, d.grundDesEinsatzes_html || d.grundDesEinsatzes || '');
               var bemerkEl = document.getElementById('montageberichtBemerkungen');
               if (bemerkEl) setRichEditorHtml(bemerkEl, d.bemerkungen_html || ((d.bemerkungen != null && d.bemerkungen !== '') ? d.bemerkungen : ''));
-              var langEl = document.getElementById('montageberichtLangDe');
-              if (langEl || document.getElementById('montageberichtLangEn')) {
-                if (Array.isArray(d.languages) && d.languages.length) setMontageberichtLanguages(d.languages);
-                else if (d.language) setMontageberichtLanguages([d.language]);
-              }
+              setMontageberichtLanguages(
+                (Array.isArray(d.languages) && d.languages.length)
+                  ? d.languages
+                  : (d.language ? [d.language] : ['de'])
+              );
               if (projEl && d.projekt != null && String(d.projekt).trim()) projEl.value = String(d.projekt).trim();
               if (Array.isArray(d.fabBemerkungen) && d.fabBemerkungen.length) {
                 fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
@@ -16199,6 +16221,7 @@
             }
           } catch (loadErr) { /* gespeicherte Daten optional */ }
         } catch (e) {
+          if (loadToken !== montageberichtJobLoadToken) return;
           kopfdatenEl.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
           kopfdatenEl.hidden = false;
           kopfdatenEl.removeAttribute('aria-hidden');
@@ -17330,6 +17353,11 @@
         setActiveFabValue('');
         lastProtokollId = null;
         if (pdfBtn) pdfBtn.style.display = 'none';
+        applyDraftToForm({
+          durchfuehrungsdatum: todayIsoLocal(),
+          wiegungen: [emptyWiegung()]
+        }, {});
+        updateSpeicherMeta('', null);
         if (!jobId) {
           kontrollwiegungJobData = null;
           updateKundeHint(null);
@@ -18230,6 +18258,7 @@
           gn: stamm.geraete_nummer || '',
           waagenart: 'Bandwaage',
           monteur_name: defaultMonteurName(),
+          ketten: [emptyKette()],
           messungen: [emptyMessung()]
         }, stamm);
         updateSpeicherMeta(fab, null);
@@ -18452,6 +18481,13 @@
       lastProtokollId = null;
       if (pdfBtn) pdfBtn.style.display = 'none';
       updateAllPdfButtonVisibility(null);
+      applyDraftToForm({
+        durchfuehrungsdatum: todayIsoLocal(),
+        monteur_name: defaultMonteurName(),
+        ketten: [emptyKette()],
+        messungen: [emptyMessung()]
+      }, {});
+      updateSpeicherMeta('', null);
       if (!jobId) {
         skJobData = null;
         updateKundeHint(null);
@@ -18489,6 +18525,7 @@
         applyDraftToForm({
           durchfuehrungsdatum: todayIsoLocal(),
           monteur_name: defaultMonteurName(),
+          ketten: [emptyKette()],
           messungen: [emptyMessung()]
         }, {});
       }
@@ -19039,6 +19076,21 @@
       setProtocolLanguagesOnChecks('pzPdfDe', 'pzPdfEn', languagesFromDraft(p));
       syncVerfahrenBlocksVisibility();
     }
+    function clearPruefzertifikatSignature() {
+      var toggle = el('pzSigOverrideToggle');
+      var wrap = el('pzSigOverrideWrap');
+      if (toggle) toggle.checked = false;
+      if (wrap) wrap.style.display = 'none';
+      var canvas = el('pzSignatureOverrideCanvas');
+      if (canvas) {
+        var ctx = canvas.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+    function clearPruefzertifikatForm() {
+      applyPrefill({});
+      clearPruefzertifikatSignature();
+    }
     function renderFabButtonsActive() {
       if (!fabButtonsEl) return;
       fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
@@ -19193,6 +19245,7 @@
       linkedIds = {};
       setActiveFabValue('');
       setStatusMsg('', false);
+      clearPruefzertifikatForm();
       if (!jobId) {
         pzJobData = null;
         if (fabGroupEl) fabGroupEl.style.display = 'none';
@@ -20168,10 +20221,25 @@
       if (projEl) projEl.value = '';
       var bemEl = document.getElementById('serviceprotokollBemerkungen');
       if (bemEl) bemEl.value = '';
+      if (datumEl) datumEl.value = (typeof getProtokollTodayYmd === 'function') ? getProtokollTodayYmd() : '';
+      setProtocolLanguagesOnChecks('spPdfDe', 'spPdfEn', ['de']);
       clearAbschlussFields();
       arbeitsschritte = [];
       if (stepsContainer) {
         stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">Fabrikationsnummer wird geladen …</td></tr>';
+      }
+      updateVersSpannungHint();
+    }
+
+    function beginServiceprotokollJobSwitchGuard() {
+      if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.beginJobSwitch === 'function') {
+        window.serviceprotokollReactBridge.beginJobSwitch();
+      }
+    }
+
+    function endServiceprotokollJobSwitchGuard() {
+      if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.endJobSwitch === 'function') {
+        window.serviceprotokollReactBridge.endJobSwitch();
       }
     }
 
@@ -21498,8 +21566,7 @@
         serviceprotokollHostHydrated = true;
         return;
       }
-      clearKopfFields();
-      clearMesswerteFields();
+      clearServiceprotokollFabFormShell();
       if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
       var jobKopf = kopfFromJobFabRow(serviceJobData, fab);
       var draftApplied = applyServiceprotokollDraft(fab);
@@ -21635,9 +21702,14 @@
 
     async function applyServiceprotokollJobSelection(id) {
       var loadToken = ++serviceprotokollJobLoadToken;
+      beginServiceprotokollJobSwitchGuard();
       serviceprotokollFormReadyFab = '';
       serviceJobData = null;
+      serviceprotokollDraftStore = { byFab: {} };
+      lastProtokollId = null;
       setActiveFabValue('');
+      clearServiceprotokollFabFormShell();
+      notifyReactBridge(true);
       if (!id) {
         if (kopfdatenEl) {
         kopfdatenEl.innerHTML = '';
@@ -21646,10 +21718,9 @@
       }
         renderFabButtons(null);
         updateAllPdfButtonVisibility(null);
-        var projClear = document.getElementById('serviceprotokollProjekt');
-        if (projClear) projClear.value = '';
-        arbeitsschritte = [];
         if (stepsContainer) stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">Auftrag wählen, um Arbeitsschritte zu laden.</td></tr>';
+        notifyReactBridge(true);
+        if (loadToken === serviceprotokollJobLoadToken) endServiceprotokollJobSwitchGuard();
         return;
       }
       setServiceprotokollJobLoading(true);
@@ -21677,7 +21748,10 @@
         }
       } finally {
         if (loadToken === serviceprotokollJobLoadToken) setServiceprotokollJobLoading(false);
-        if (loadToken === serviceprotokollJobLoadToken) notifyReactBridge();
+        if (loadToken === serviceprotokollJobLoadToken) {
+          endServiceprotokollJobSwitchGuard();
+          notifyReactBridge(true);
+        }
       }
     }
 

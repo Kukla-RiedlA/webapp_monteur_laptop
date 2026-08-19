@@ -1,0 +1,92 @@
+<div class="popup-form-window akte-shell akte-page">
+  <form id="anlagenForm">
+    <input type="hidden" name="id" id="formId" value="">
+    <div class="akte-topbar">
+      <div>
+        <h2 class="akte-topbar-title" id="modalTitle"><span id="akteTopbarFn">Anlage</span></h2>
+        <p class="akte-topbar-sub" id="akteTopbarSub">Stammdaten</p>
+      </div>
+      <div class="akte-topbar-actions">
+        <span id="modalDeleteWrap" style="display:none"><button type="button" class="btn btn-delete" id="modalBtnDelete">Löschen</button></span>
+        <button type="button" class="btn btn-secondary" id="btnFormCancel">Abbrechen</button>
+        <button type="submit" class="btn btn-primary">Speichern</button>
+      </div>
+    </div>
+    <nav class="akte-tabs" aria-label="Aktenbereiche">
+      <button type="button" class="akte-tab is-active" data-akte-tab="overview">Übersicht</button>
+      <button type="button" class="akte-tab" data-akte-tab="technik">Technik</button>
+      <button type="button" class="akte-tab" data-akte-tab="galerie">Galerie</button>
+      <button type="button" class="akte-tab" data-akte-tab="docs">Dokumente</button>
+      <button type="button" class="akte-tab" data-akte-tab="files">Dateien</button>
+      <button type="button" class="akte-tab" data-akte-tab="hist">Historie</button>
+    </nav>
+    <div class="akte-panel is-active" data-akte-panel="overview">
+      <div class="akte-section"><div class="akte-section-head">Identität</div>
+      <div class="akte-section-body akte-grid">
+        <div class="form-group"><label>Fabrikationsnummer *</label><input type="text" name="fabrikationsnummer" id="formFab" required></div>
+        <div class="form-group"><label>Type</label><input type="text" name="type" id="formType"></div>
+        <div class="form-group"><label>Leistung</label><input type="text" name="leistung" id="formLeistung"></div>
+        <div class="form-group"><label>Elektronik</label><input type="text" name="elektronik" id="formElektronik"></div>
+      </div></div>
+      <div class="akte-section"><div class="akte-section-head">Standort / Kontext</div>
+      <div class="akte-section-body akte-grid">
+        <div class="form-group"><label>Position</label><input type="text" name="position" id="formPosition"></div>
+        <div class="form-group"><label>Geliefert über</label><input type="text" name="geliefert_ueber" id="formGeliefertUeber"></div>
+        <div class="form-group"><label>Projekt</label><input type="text" name="projekt" id="formProjekt"></div>
+        <div class="form-group form-group-full"><label>Bemerkungen</label><textarea name="bemerkungen" id="formBemerkungen" rows="3"></textarea></div>
+      </div></div>
+    </div>
+    <div class="akte-panel" data-akte-panel="technik">
+      <div class="akte-section"><div class="akte-section-head">Elektronik</div>
+      <div class="akte-section-body akte-grid">
+        <div class="form-group"><label>Elektronik</label><input type="text" id="formElektronikTechnik" data-elektronik-mirror="1"></div>
+        <div class="form-group"><label>Type</label><input type="text" name="elektronik_type" id="formElektronikType"></div>
+        <div class="form-group"><label>Geräte Nummer GN</label><input type="text" name="geraete_nummer" id="formGeraeteNummer"></div>
+        <div class="form-group"><label>Bussystem</label><input type="text" name="bussystem" id="formBussystem"></div>
+      </div></div>
+      <div class="akte-section"><div class="akte-section-head">Wägezellen</div>
+      <div class="akte-section-body">
+        <div class="form-group form-group-full kraftaufnehmer-block" id="kraftaufnehmerBlock">
+          <div id="kraftaufnehmerRows"></div>
+          <button type="button" class="btn btn-secondary btn-kraftaufnehmer-add" id="btnAddKraftaufnehmer">+ Wägezelle</button>
+          <input type="hidden" name="kraftaufnehmer_extra" id="formKraftaufnehmerExtra" value="">
+        </div>
+      </div></div>
+      <div class="akte-section"><div class="akte-section-head">Auslegung</div>
+      <div class="akte-section-body akte-grid">
+        <div class="form-group"><label>Nenngeschwindigkeit</label><input type="text" name="nenngeschwindigkeit" id="formNenngeschwindigkeit"></div>
+        <div class="form-group"><label>Material</label><input type="text" name="material" id="formMaterial"></div>
+        <div class="form-group"><label>Tacho</label><input type="text" name="tacho" id="formTacho"></div>
+      </div></div>
+      <div class="akte-section">
+        <div class="akte-section-head">TED / Mechanik</div>
+        <div class="akte-section-body">
+          <p class="muted" style="font-size:12px;margin:0 0 8px">Unter <strong>Dateien</strong> die TD-Datei (PDF/DOC/DOCX mit „TD“) anklicken, dann „Leere Felder aus TD füllen“.</p>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button type="button" class="btn btn-secondary" id="btnFillFromTdPdf">Leere Felder aus TD füllen</button>
+            <span id="fillFromTdPdfMsg" class="muted"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="akte-panel" data-akte-panel="galerie">
+      <div class="akte-section"><div class="akte-section-head">Bilder</div>
+      <div class="akte-section-body" id="akteGalleryRoot"><p class="muted">Galerie lädt nach dem Öffnen.</p></div></div>
+    </div>
+    <div class="akte-panel" data-akte-panel="docs">
+      <div class="akte-section"><div class="akte-section-head">Dokumente</div>
+      <div class="akte-section-body"><div id="anlagenDocsRoot" data-active-tab="docs"></div></div></div>
+    </div>
+    <div class="akte-panel" data-akte-panel="files">
+      <div class="akte-section"><div class="akte-section-head">PROJEKTE NEU</div>
+      <div class="akte-section-body">
+        <p id="modalPnHintForm" class="muted" style="font-size:12px;margin:0 0 8px 0"></p>
+        <div id="modalPnTreeForm" class="anlagen-pn-tree"></div>
+      </div></div>
+    </div>
+    <div class="akte-panel" data-akte-panel="hist">
+      <div class="akte-section"><div class="akte-section-head">Historie</div>
+      <div class="akte-section-body"><p class="muted">Versionshistorie über den Button Historie in der Liste (Admin).</p></div></div>
+    </div>
+  </form>
+</div>

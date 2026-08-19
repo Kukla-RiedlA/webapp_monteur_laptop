@@ -8,6 +8,7 @@ const { createApp, getDb, getMonteurDb, PORT, performAnlagenstammSave, flushMont
 const { createImageGalleryWindowManager } = require('./lib/image-gallery-window');
 const { createPdfViewerWindowManager } = require('./lib/pdf-viewer-window');
 const { attachEditContextMenu } = require('./lib/edit-context-menu');
+const { createAnlagenstammAkteWindowManager } = require('./lib/anlagenstamm-akte-window');
 const { configureSpellCheckerSession } = require('./lib/spellcheck-session');
 const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
 const {
@@ -29,6 +30,7 @@ let mainWindow;
 let updateCheckScheduled = false;
 let imageGalleryWindows = null;
 let pdfViewerWindows = null;
+let anlagenstammAkteWindows = null;
 
 function findWindowsUninstaller() {
   if (process.platform !== 'win32') return null;
@@ -139,6 +141,20 @@ function createWindow() {
   });
   mainWindow.on('closed', () => { mainWindow = null; });
   attachEditContextMenu(mainWindow.webContents);
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const u = new URL(url);
+      const local = u.hostname === '127.0.0.1' || u.hostname === 'localhost';
+      if (local && anlagenstammAkteWindows && (u.searchParams.get('popup') === '1' || /anlagenstamm-akte-window/i.test(u.pathname))) {
+        void anlagenstammAkteWindows.openAnlagenstammAkteWindow({
+          id: u.searchParams.get('id') || null,
+          fab: u.searchParams.get('fab') || '',
+        });
+        return { action: 'deny' };
+      }
+    } catch (_) { /* ignore */ }
+    return { action: 'allow' };
+  });
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
       mainWindow.webContents.toggleDevTools();
@@ -171,6 +187,15 @@ ipcMain.handle('anlagenstamm:save', async (event, payload) => {
   } catch (e) {
     return { ok: false, error: e.message || String(e) };
   }
+});
+
+ipcMain.handle('anlagenstamm:open-akte-window', async (_event, opts) => {
+  if (!anlagenstammAkteWindows) return { ok: false, error: 'not_ready' };
+  return anlagenstammAkteWindows.openAnlagenstammAkteWindow(opts || {});
+});
+ipcMain.handle('anlagenstamm:notify-saved', async (_event, payload) => {
+  if (anlagenstammAkteWindows) anlagenstammAkteWindows.notifyListSaved(payload || {});
+  return { ok: true };
 });
 
 ipcMain.handle('dienstreise:choose-folder', async () => {
@@ -675,6 +700,7 @@ app.whenReady().then(() => {
   configureSpellCheckerSession();
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
   pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
+  anlagenstammAkteWindows = createAnlagenstammAkteWindowManager(() => mainWindow, () => PORT);
   initLaptopUpdater({ getMainWindow: () => mainWindow });
   getDb().then((db) => {
     const serverApp = createApp(db);

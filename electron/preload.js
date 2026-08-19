@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 /** Erlaubte IPC-Kanäle für generisches invoke (Fallback, falls expose-Inkompatibilität). */
-const IPC_INVOKE_ALLOW = new Set(['anlagenstamm:search', 'anlagenstamm:save']);
+const IPC_INVOKE_ALLOW = new Set(['anlagenstamm:search', 'anlagenstamm:save', 'anlagenstamm:open-akte-window', 'anlagenstamm:notify-saved']);
 
 contextBridge.exposeInMainWorld('monteurApp', {
   apiBase: 'http://127.0.0.1:' + 39678,
@@ -27,6 +27,14 @@ contextBridge.exposeInMainWorld('monteurApp', {
   openImageGallery: (payload) => ipcRenderer.invoke('image-gallery:open', payload),
   anlagenstammSearch: (payload) => ipcRenderer.invoke('anlagenstamm:search', payload),
   anlagenstammSave: (payload) => ipcRenderer.invoke('anlagenstamm:save', payload),
+  openAnlagenstammAkteWindow: (opts) => ipcRenderer.invoke('anlagenstamm:open-akte-window', opts || {}),
+  notifyAnlagenstammSaved: (payload) => ipcRenderer.invoke('anlagenstamm:notify-saved', payload || {}),
+  onAnlagenstammSaved: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('anlagenstamm-saved', handler);
+    return () => ipcRenderer.removeListener('anlagenstamm-saved', handler);
+  },
   ipcInvoke: (channel, payload) => {
     if (typeof channel !== 'string' || !IPC_INVOKE_ALLOW.has(channel)) {
       return Promise.reject(new Error('IPC channel nicht erlaubt.'));

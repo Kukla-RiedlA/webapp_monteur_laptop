@@ -975,6 +975,8 @@ function renderPnModalTree(fab, nodes, target) {
         link.target = '_blank';
         link.rel = 'noopener';
         link.textContent = label;
+        link.setAttribute('data-pn-rel', rel);
+        link.setAttribute('data-pn-base', label);
         if (pnRasterImageByName(label)) {
           link.addEventListener('click', (e) => {
             e.preventDefault();
@@ -1092,6 +1094,138 @@ function setupPnTreeModal() {
   });
 }
 
+function isTdPdfDokuPath(rel, name) {
+  if (!rel || !name) return false;
+  var n = String(name);
+  var ext = (n.split('.').pop() || '').toLowerCase();
+  if (['pdf', 'doc', 'docx'].indexOf(ext) < 0) return false;
+  if (n.indexOf('TD') < 0) return false;
+  var segs = String(rel).replace(/\\/g, '/').toLowerCase().split('/');
+  var inDoku = segs.indexOf('doku') >= 0;
+  var stem = n.replace(/\.[^.]+$/, '');
+  var codeName = /^TD[DE]\d+/i.test(stem);
+  return inDoku || codeName;
+}
+
+function tdRelFromClickTarget(target) {
+  if (!target || !target.closest) return null;
+  var a = target.closest('a');
+  if (a) {
+    var relA = a.getAttribute('data-pn-rel') || '';
+    var nameA = (a.getAttribute('data-pn-base') || a.textContent || '').trim();
+    if (!relA) {
+      try {
+        var href = a.getAttribute('href') || '';
+        var u = new URL(href, window.location.origin);
+        relA = u.searchParams.get('path') || '';
+      } catch (_) { /* ignore */ }
+    }
+    if (relA) return { rel: relA, name: nameA || relA.split(/[/\\]/).pop() };
+  }
+  var row = target.closest('.dienstreise-explorer-row');
+  if (row && row.getAttribute('data-is-dir') !== '1') {
+    var relR = row.getAttribute('data-relative-path') || '';
+    var nameEl = row.querySelector('.dienstreise-explorer-filename');
+    var nameR = nameEl ? String(nameEl.textContent || '').trim() : '';
+    if (!nameR) nameR = relR.split(/[/\\]/).pop() || '';
+    if (relR) return { rel: relR, name: nameR };
+  }
+  return null;
+}
+
+function fillEmptyFieldsFromTdPdf() {
+  var map = {
+    type: 'formType',
+    leistung: 'formLeistung',
+    nenngeschwindigkeit: 'formNenngeschwindigkeit',
+    kraftaufnehmer: 'formKraftaufnehmer',
+    material: 'formMaterial',
+    tacho: 'formTacho',
+    elektronik: 'formElektronik',
+    geraete_nummer: 'formGeraeteNummer',
+    dms_nr: 'formDmsNr',
+    dms_position: 'formDmsPosition',
+    position: 'formPosition',
+    geliefert_ueber: 'formGeliefertUeber',
+    projekt: 'formProjekt',
+    bemerkungen: 'formBemerkungen'
+  };
+  var msgEl = document.getElementById('fillFromTdPdfMsg');
+  var formFabEl = document.getElementById('formFab');
+  var fab = formFabEl && formFabEl.value.trim();
+  if (!fab) {
+    if (msgEl) msgEl.textContent = 'Fabrikationsnummer fehlt.';
+    return;
+  }
+  if (msgEl) msgEl.textContent = 'Lese TD-Datei…';
+  var u = anlagenstammApiUrl('api/anlagenstamm_td_pdf_prefill.php?fab=' + encodeURIComponent(fab));
+  var pr = (window.__anlagenSelectedTdPdfRel || '').trim();
+  if (pr) u += '&path=' + encodeURIComponent(pr);
+  var req = (typeof anlagenstammFetch === 'function')
+    ? anlagenstammFetch(u, { credentials: 'same-origin' })
+    : fetch(u, { credentials: 'same-origin' });
+  req
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || d.ok === false) {
+        if (msgEl) msgEl.textContent = (d && d.error) ? d.error : 'Fehler beim Lesen der TD-Datei.';
+        return;
+      }
+      var p = d.prefill || {};
+      var filled = 0;
+      Object.keys(map).forEach(function (field) {
+        var value = (p[field] == null) ? '' : p[field].toString();
+        value = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
+        if (!value) return;
+        var el = document.getElementById(map[field]);
+        if (!el && field === 'kraftaufnehmer' && typeof window.kuklaInitKraftaufnehmerRows === 'function') {
+          window.kuklaInitKraftaufnehmerRows({ readOnly: anlagenReadOnly, primaryValue: value, extras: [] });
+          el = document.getElementById(map[field]);
+        }
+        if (!el) return;
+        var current = (el.value || '').toString().trim();
+        if (current !== '') return;
+        el.value = value;
+        try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) { /* ignore */ }
+        if (field === 'elektronik') {
+          var tek = document.getElementById('formElektronikTechnik');
+          if (tek && !(tek.value || '').toString().trim()) tek.value = value;
+        }
+        filled++;
+      });
+      if (msgEl) {
+        var recKeys = Object.keys(p);
+        if (filled > 0) msgEl.textContent = filled + ' leere Felder gefüllt' + (d.file ? ' (' + d.file + ').' : '.');
+        else if (recKeys.length > 0) msgEl.textContent = recKeys.length + ' Wert(e) im TD erkannt, aber betreffende Formularfelder sind schon befüllt (Prüfung: ' + recKeys.join(', ') + (d.file ? ' · ' + d.file : '') + ').';
+        else msgEl.textContent = (d.note || 'Keine Werte aus dem TD-Text zugeordnet.') + (d.file ? ' (' + d.file + ')' : '') + '.';
+      }
+    })
+    .catch(function (err) {
+      if (msgEl) msgEl.textContent = 'Fehler: ' + (err && err.message ? err.message : String(err));
+    });
+}
+
+function bindTdPrefillUi() {
+  var root = document.getElementById('formModal') || document;
+  if (root && !root._tdSelectBound) {
+    root._tdSelectBound = true;
+    root.addEventListener('click', function (e) {
+      var hit = tdRelFromClickTarget(e.target);
+      if (!hit) return;
+      if (!isTdPdfDokuPath(hit.rel, hit.name)) return;
+      window.__anlagenSelectedTdPdfRel = hit.rel;
+      var m = document.getElementById('fillFromTdPdfMsg');
+      if (m) m.textContent = 'TD-Quelle: ' + (hit.name || hit.rel);
+    });
+  }
+  var fillBtn = document.getElementById('btnFillFromTdPdf');
+  if (fillBtn && !fillBtn._tdFillBound) {
+    fillBtn._tdFillBound = true;
+    if (anlagenReadOnly) fillBtn.disabled = true;
+    else fillBtn.addEventListener('click', fillEmptyFieldsFromTdPdf);
+  }
+}
+
 function loadModalFilesForFab(fab) {
   if (typeof window.anlagenstammDocumentsRefresh === 'function') {
     window.anlagenstammDocumentsRefresh();
@@ -1113,7 +1247,7 @@ function loadModalFilesForFab(fab) {
     pnToggle.removeAttribute('data-pn-loaded');
     pnTree.innerHTML = '';
     if (pnHint) {
-      pnHint.textContent = 'Aufklappen für Ordner – Vorschaubilder laden beim Öffnen eines Ordners.';
+      pnHint.textContent = 'Aufklappen für Ordner. TD-Datei mit „TD“ im Namen anklicken, dann unter Technik „Leere Felder aus TD füllen“.';
     }
     pnToggle._pnPendingFab = fab;
     if (!pnToggle._pnBound) {
@@ -1133,6 +1267,10 @@ function loadModalFilesForFab(fab) {
 
 function fillFormFromRow(row) {
   row = row || {};
+  window.__anlagenSelectedTdPdfRel = '';
+  var tdMsg = document.getElementById('fillFromTdPdfMsg');
+  if (tdMsg) tdMsg.textContent = '';
+  bindTdPrefillUi();
   var set = function (id, val) {
     var el = document.getElementById(id);
     if (el) el.value = val != null ? String(val) : '';
@@ -1172,6 +1310,34 @@ function openFormModal() {
   if (formModal) formModal.classList.add('active');
 }
 
+function isAkteStandaloneWindow() {
+  return !!(window.KUKLA_ANLAGENSTAMM_AKTE_WINDOW);
+}
+
+function openAkteViaElectron(id) {
+  if (isAkteStandaloneWindow()) return false;
+  var api = (window.monteurApp && window.monteurApp.openAnlagenstammAkteWindow)
+    || (window.dispoApp && window.dispoApp.openAnlagenstammAkteWindow);
+  if (typeof api !== 'function') return false;
+  api({ id: id == null || id === '' ? null : id });
+  return true;
+}
+
+function notifyAnlagenstammSaved() {
+  try {
+    var bc = new BroadcastChannel('anlagenstamm-refresh');
+    bc.postMessage({ type: 'anlagenstamm-saved' });
+  } catch (e) {}
+  try {
+    if (window.opener && !window.opener.closed && window.opener.postMessage) {
+      window.opener.postMessage({ type: 'anlagenstamm-saved' }, window.location.origin);
+    }
+  } catch (e2) {}
+  if (window.monteurApp && typeof window.monteurApp.notifyAnlagenstammSaved === 'function') {
+    window.monteurApp.notifyAnlagenstammSaved();
+  }
+}
+
 function openNewModal() {
   fillFormFromRow({});
   var title = document.getElementById('modalTitle');
@@ -1208,15 +1374,21 @@ function openEditModal(id) {
 }
 
 function openNew() {
+  if (openAkteViaElectron(null)) return;
   openNewModal();
 }
 
 function editRow(id) {
+  if (openAkteViaElectron(id)) return;
   openEditModal(id);
 }
 
 function closeModal() {
-  formModal.classList.remove('active');
+  if (isAkteStandaloneWindow()) {
+    window.close();
+    return;
+  }
+  if (formModal) formModal.classList.remove('active');
 }
 
 function deleteRow(id, fab) {
@@ -1229,6 +1401,11 @@ function deleteRow(id, fab) {
     .then(r => r.json())
     .then(data => {
       if (data.success) {
+        notifyAnlagenstammSaved();
+        if (isAkteStandaloneWindow()) {
+          window.close();
+          return;
+        }
         closeModal();
         loadList();
       } else {
@@ -1268,6 +1445,11 @@ if (anlagenForm && !anlagenReadOnly) {
             geliefert_ueber: g('geliefert_ueber'),
             bemerkungen: g('bemerkungen')
           });
+        }
+        notifyAnlagenstammSaved();
+        if (isAkteStandaloneWindow()) {
+          setTimeout(function () { window.close(); }, 300);
+          return;
         }
         loadList();
         closeModal();
@@ -1557,6 +1739,9 @@ if (typeof window !== 'undefined') {
     var bc = new BroadcastChannel('anlagenstamm-refresh');
     bc.onmessage = function () { refreshFromPopup(); };
   } catch (err) { /* BroadcastChannel nicht unterstützt */ }
+  if (window.monteurApp && typeof window.monteurApp.onAnlagenstammSaved === 'function') {
+    window.monteurApp.onAnlagenstammSaved(function () { refreshFromPopup(); });
+  }
 }
 
 if (document.getElementById('kraftaufnehmerRows') && typeof window.kuklaInitKraftaufnehmerRows === 'function') {
@@ -1568,4 +1753,58 @@ if (document.getElementById('kraftaufnehmerRows') && typeof window.kuklaInitKraf
       extras: []
     });
   }
+}
+
+bindTdPrefillUi();
+
+function kuklaBootAnlagenakteWindow() {
+  if (!window.KUKLA_ANLAGENSTAMM_AKTE_WINDOW) return;
+  var params = new URLSearchParams(window.location.search);
+  var id = params.get('id');
+  var cancel = document.getElementById('btnFormCancel') || document.getElementById('popupBtnCancel');
+  if (cancel && !cancel._akteWinBound) {
+    cancel._akteWinBound = true;
+    cancel.addEventListener('click', function () { window.close(); });
+  }
+  function afterFill(row) {
+    row = row || {};
+    var title = document.getElementById('modalTitle');
+    var fab = row.fabrikationsnummer || 'Neue Anlage';
+    if (title) title.textContent = row.id ? ('Anlage · ' + fab) : 'Neue Anlage';
+    document.title = 'Anlagenakte · ' + fab;
+    var delWrap = document.getElementById('modalDeleteWrap');
+    if (delWrap) delWrap.style.display = row.id ? '' : 'none';
+    if (row.fabrikationsnummer && typeof loadModalFilesForFab === 'function') {
+      loadModalFilesForFab(row.fabrikationsnummer);
+    }
+    if (typeof window.anlagenstammDocumentsRefresh === 'function') window.anlagenstammDocumentsRefresh();
+  }
+  var fetchFn = typeof anlagenstammFetch === 'function' ? anlagenstammFetch : fetch;
+  if (!id) {
+    fillFormFromRow({});
+    afterFill({});
+    return;
+  }
+  fetchFn(anlagenstammApiUrl('api/anlagenstamm_get.php?id=' + encodeURIComponent(id)), {
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: typeof anlagenstammApiHeaders === 'function' ? anlagenstammApiHeaders() : undefined
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data || !data.success || !data.data) {
+        alert((data && data.error) || 'Anlage nicht gefunden');
+        return;
+      }
+      fillFormFromRow(data.data);
+      afterFill(data.data);
+    })
+    .catch(function (err) {
+      alert('Fehler: ' + (err && err.message ? err.message : String(err)));
+    });
+}
+window.kuklaBootAnlagenakteWindow = kuklaBootAnlagenakteWindow;
+window.fillFormFromRow = fillFormFromRow;
+if (window.KUKLA_ANLAGENSTAMM_AKTE_WINDOW) {
+  kuklaBootAnlagenakteWindow();
 }

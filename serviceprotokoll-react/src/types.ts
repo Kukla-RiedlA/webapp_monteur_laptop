@@ -144,3 +144,36 @@ export const DEFAULT_FORM: ServiceProtocolFormState = {
   pdfDe: true,
   pdfEn: false,
 };
+
+/** Leeres Formular für Auftrags-/FN-Wechsel (ohne Demo-Daten). */
+export const EMPTY_FORM: ServiceProtocolFormState = {
+  order: '',
+  project: '',
+  date: '',
+  activeFab: '',
+  plantType: '',
+  qmax: '',
+  qmaxUnit: 'kg/h',
+  vmax: '',
+  position: '',
+  dwc: '',
+  loadcellType: '',
+  serialNumber: '',
+  loadCells: DEFAULT_LOAD_CELLS.map((r) => ({
+    ...r,
+    type: '',
+    serialNumber: '',
+    position: '',
+    supplyVoltage: '',
+    sensitivity: '',
+    measurements: EMPTY_MEASUREMENTS.map((m) => ({ ...m })),
+  })),
+  supplyVoltage: '',
+  sensitivity: '',
+  generalRemarks: '',
+  status: 'geprueft',
+  monteur: '',
+  closingRemarks: '',
+  pdfDe: true,
+  pdfEn: false,
+};

@@ -4,6 +4,7 @@ import {
   DEFAULT_MEASUREMENTS,
   DEFAULT_TEST_LOAD,
   DEFAULT_WORK_STEPS,
+  EMPTY_FORM,
   EMPTY_MEASUREMENTS,
   type MeasurementRow,
   type ServiceProtocolFormState,
@@ -56,6 +57,25 @@ export function defaultBridgePayload(): SpBridgePayload {
     measurements: DEFAULT_MEASUREMENTS.map((r) => ({ ...r })),
     testLoad: { ...DEFAULT_TEST_LOAD },
     workSteps: DEFAULT_WORK_STEPS.map((r) => ({ ...r })),
+  };
+}
+
+/** Leerer Zustand beim Auftragswechsel – keine Demo- oder Alt-Daten. */
+export function emptyBridgePayload(jobs: SpBridgePayload['jobs'] = []): SpBridgePayload {
+  return {
+    jobId: '',
+    jobs: jobs.slice(),
+    fabNumbers: [],
+    form: {
+      ...EMPTY_FORM,
+      loadCells: EMPTY_FORM.loadCells.map((c) => ({
+        ...c,
+        measurements: cloneMeasurements(c.measurements),
+      })),
+    },
+    measurements: EMPTY_MEASUREMENTS.map((r) => ({ ...r })),
+    testLoad: { ...DEFAULT_TEST_LOAD },
+    workSteps: DEFAULT_WORK_STEPS.map((r) => ({ ...r, result: 'na' as StepResult, remark: '' })),
   };
 }
 

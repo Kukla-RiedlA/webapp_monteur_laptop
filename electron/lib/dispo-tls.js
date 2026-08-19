@@ -38,20 +38,31 @@ function applyDispoTlsPreference(userDataDir, allowInsecure) {
 
 function formatFetchError(err, baseUrl) {
   const msg = (err && err.message) ? String(err.message) : 'fetch failed';
-  const code = err && err.cause && err.cause.code ? err.cause.code : (err.code || '');
-  if (code === 'ECONNREFUSED' || msg.includes('ECONNREFUSED')) {
-    return `Verbindung abgelehnt: ${baseUrl} — Server läuft nicht oder Port falsch.`;
+  const cause = err && err.cause;
+  const code = (cause && cause.code) || err.code || '';
+  const causeMsg = cause && cause.message ? String(cause.message) : '';
+  const combined = (msg + ' ' + causeMsg + ' ' + String(code)).toLowerCase();
+  const urlHint = baseUrl ? String(baseUrl) : '';
+  const suffix = urlHint ? ': ' + urlHint : '';
+  if (code === 'ECONNREFUSED' || combined.includes('econnrefused')) {
+    return 'Verbindung abgelehnt' + suffix + ' — Server läuft nicht oder Port falsch.';
   }
-  if (code === 'ENOTFOUND' || msg.includes('ENOTFOUND')) {
-    return `Host nicht erreichbar: ${baseUrl} — DNS/Netzwerk prüfen.`;
+  if (code === 'ENOTFOUND' || combined.includes('enotfound')) {
+    return 'Host nicht erreichbar' + suffix + ' — DNS/Netzwerk prüfen.';
   }
-  if (code === 'ETIMEDOUT' || msg.includes('ETIMEDOUT')) {
-    return `Zeitüberschreitung: ${baseUrl} — VPN/Firewall prüfen.`;
+  if (code === 'ETIMEDOUT' || combined.includes('etimedout') || combined.includes('und_err_connect_timeout')) {
+    return 'Zeitüberschreitung' + suffix + ' — VPN/Firewall prüfen.';
   }
-  if (msg.toLowerCase().includes('certificate') || msg.includes('UNABLE_TO_VERIFY')) {
-    return `TLS-Zertifikat abgelehnt für ${baseUrl} — HTTPS mit selbstsigniertem Zertifikat: in Einstellungen erlauben oder http:// nutzen.`;
+  if (combined.includes('econnreset') || combined.includes('und_err_socket')) {
+    return 'Verbindung unterbrochen' + suffix + ' — VPN/Netzwerk prüfen und erneut versuchen.';
   }
-  return `${msg} (${baseUrl})`;
+  if (combined.includes('certificate') || combined.includes('unable_to_verify') || combined.includes('cert')) {
+    return 'TLS-Zertifikat abgelehnt' + suffix + ' — HTTPS mit selbstsigniertem Zertifikat: in Einstellungen erlauben oder http:// nutzen.';
+  }
+  if (combined.includes('fetch failed') || combined.includes('failed to fetch')) {
+    return 'Keine Verbindung zur Dispo' + suffix + ' — Netzwerk, VPN oder Firewall prüfen.';
+  }
+  return urlHint ? msg + ' (' + urlHint + ')' : msg;
 }
 
 module.exports = { applyDispoTlsPreference, formatFetchError, isPinnedDispoHost, PINNED_DISPO_HOSTS };

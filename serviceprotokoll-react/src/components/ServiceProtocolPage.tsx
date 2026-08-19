@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { cloneMeasurements, defaultBridgePayload, mergeBridgePayload } from '../bridge-utils';
+import { cloneMeasurements, defaultBridgePayload, emptyBridgePayload, mergeBridgePayload } from '../bridge-utils';
 import type { SpBridgePayload } from '../hooks/useElectronBridge';
 import { useElectronBridge, useEmbeddedMode } from '../hooks/useElectronBridge';
 import { ActionPanel } from './ActionPanel';
@@ -176,12 +176,17 @@ export function ServiceProtocolPage() {
 
   const handleJobChange = (nextJobId: string) => {
     const job = jobs.find((j) => j.id === nextJobId);
-    setBridgeState((prev) =>
-      mergeBridgePayload(prev, {
+    setBridgeState((prev) => {
+      const fresh = emptyBridgePayload(prev.jobs);
+      return {
+        ...fresh,
         jobId: nextJobId,
-        form: { ...prev.form, order: job ? job.label : prev.form.order },
-      }),
-    );
+        form: {
+          ...fresh.form,
+          order: job ? job.label : '',
+        },
+      };
+    });
     if (embedded) {
       window.parent.postMessage({ type: 'SP_JOB_CHANGE', jobId: nextJobId }, '*');
     }

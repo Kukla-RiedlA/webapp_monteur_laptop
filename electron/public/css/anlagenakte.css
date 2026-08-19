@@ -8,9 +8,11 @@
 }
 
 .akte-shell {
+  width: 100%;
   max-width: 1120px;
   margin: 0 auto;
   padding: 0 16px 32px;
+  box-sizing: border-box;
 }
 
 .akte-topbar {
@@ -256,14 +258,132 @@ body.akte-page.popup-form-window,
 .popup-form-window.akte-page,
 body.akte-page {
   background: #f5f5f5;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+body.akte-page.popup-form-window,
+.popup-form-window.akte-page,
+body.akte-page.popup-form-window .akte-shell,
+.popup-form-window.akte-shell,
+html.akte-window,
+html.akte-window body,
+html.akte-window .akte-shell {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.popup-form-window {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 #formModal.akte-modal .form-modal-content {
   background: #f5f5f5;
   width: min(1100px, 96vw);
+  max-width: none;
   max-height: 94vh;
   border-radius: 12px;
   padding: 0 16px 20px;
+  box-sizing: border-box;
+}
+
+.akte-tabs,
+.akte-panel.is-active,
+.akte-section {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Wägezellen: Zeile 1 Type/SN/Pos. 1fr; Zeile 2 V + mV/V schmal (~5 Zeichen sichtbar). */
+.kraftaufnehmer-block {
+  margin-bottom: 0;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-row {
+  display: block;
+  border: 1px solid #cfd8dc;
+  border-radius: 8px;
+  background: #fafbfc;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-row-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-row-line {
+  display: grid;
+  gap: 8px;
+  align-items: end;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-row-line-main {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-row-line-meas {
+  display: flex;
+  grid-template-columns: none;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  justify-content: flex-start;
+  width: max-content;
+  max-width: 100%;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-row-line-meas .kraftaufnehmer-field {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: #444;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-row input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-row-line-meas input[type="text"] {
+  width: 7ch;
+  max-width: 7ch;
+  min-width: 7ch;
+  box-sizing: border-box;
+}
+
+.kraftaufnehmer-block .kraftaufnehmer-row-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.kraftaufnehmer-block .btn-kraftaufnehmer-remove {
+  padding: 4px 10px;
+  min-width: 36px;
+}
+
+.kraftaufnehmer-block .btn-kraftaufnehmer-add {
+  margin-top: 4px;
 }
 
 .anlagen-table-scroll thead th {

@@ -26,6 +26,9 @@
             'if(typeof loadList==="function")window.loadList=loadList;',
             'if(typeof initAnlagenColumnPanel==="function")window.initAnlagenColumnPanel=initAnlagenColumnPanel;',
             'if(typeof applyAnlagenColumnVisibility==="function")window.applyAnlagenColumnVisibility=applyAnlagenColumnVisibility;',
+            'if(typeof fillFormFromRow==="function")window.fillFormFromRow=fillFormFromRow;',
+            'if(typeof kuklaBootAnlagenakteWindow==="function")window.kuklaBootAnlagenakteWindow=kuklaBootAnlagenakteWindow;',
+            'if(typeof loadModalFilesForFab==="function")window.loadModalFilesForFab=loadModalFilesForFab;',
           ].join('');
           s.textContent = `(function(){\n${code}\n${exportGlobals}\n})();`;
           document.body.appendChild(s);
