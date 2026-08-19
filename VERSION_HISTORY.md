@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.001
+- **Anlagenstamm:** Liste und TED/PN-Extras wieder offline-first — sofort aus SQLite, kein Warten auf Dispo beim Öffnen (App hing sonst komplett).
+
 ## V 2.006.000
 - **Release:** Plattformweite Stufe 2.006; Patch-Zähler auf 000.
 - **Härtung:** TLS Host-Pin (kein globaler Zertifikats-Bypass), Session-Cookies in JSON versiegelt, lokales API-Gateway nur mit Session-Token der eigenen App.

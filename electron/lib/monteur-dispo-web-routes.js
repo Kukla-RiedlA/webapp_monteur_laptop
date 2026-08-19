@@ -13,7 +13,7 @@ const { applyDispoTlsPreference } = require('./dispo-tls');
 const { registerDispoApiPhpProxyRoutes, createDispoHtmlProxyHandler } = require('./dispo-html-proxy');
 const { setDispoPingResult } = require('./connection-state');
 const { DEFAULT_DISPO_EXTERNAL_URL, DEFAULT_DISPO_INTERNAL_URL } = require('./dispo-defaults');
-const { normalizeDispoBase, buildDispoBaseCandidates } = require('./dispo-base-fallback');
+const { normalizeDispoBase, buildDispoBaseCandidates, isFetchNetworkError } = require('./dispo-base-fallback');
 
 let dispoProxy = null;
 
@@ -94,13 +94,27 @@ async function ensureProxyAuthenticated(dbDir, creds) {
     return { ok: false, needLogin: true, error: 'Dispo-Anmeldedaten fehlen.' };
   }
 
+  const probeAc = new AbortController();
+  const probeTimer = setTimeout(() => probeAc.abort(), 5000);
   try {
-    await proxy.getJson('/api/anlagenstamm_list.php?page=1&page_size=1&omit_fn_filter=1');
-    return { ok: true, proxy, authenticated: true, base: proxy.config.baseUrl };
-  } catch (e) {
-    if (e.status !== 401 && e.status !== 403) {
-      /* Session evtl. abgelaufen — neu anmelden */
+    const { res } = await proxy.fetchDispo('/api/anlagenstamm_list.php?page=1&page_size=1&omit_fn_filter=1', {
+      method: 'GET',
+      signal: probeAc.signal,
+    });
+    if (res && res.ok) {
+      return { ok: true, proxy, authenticated: true, base: proxy.config.baseUrl };
     }
+  } catch (e) {
+    const status = e && e.status;
+    if (status !== 401 && status !== 403 && isFetchNetworkError(e)) {
+      return {
+        ok: false,
+        authenticated: false,
+        error: (e && e.message) || 'Dispo nicht erreichbar',
+      };
+    }
+  } finally {
+    clearTimeout(probeTimer);
   }
 
   proxy.setConfig({

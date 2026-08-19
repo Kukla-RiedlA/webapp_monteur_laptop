@@ -11,4 +11,5 @@ globs:
 - **Kein** iframe `/dispo-remote/anlagenstamm.php` für die Haupt-UI.
 - **Kein** `window.open(?popup=1)` — Bearbeiten über Inline-`#formModal`.
 - Speichern: `POST /api/anlagenstamm_save.php` → `performAnlagenstammSave` (lokal + `pending_changes` + Push).
-- Erlaubt online: TED/PN-Extras-Hybrid, Datei-Download/-Öffnen, Sync.
+- Liste und TED/PN-Extras (`/api/anlagenstamm_list.php`, `/api/anlagenstamm_list_extras.php`) **sofort aus SQLite** antworten. Kein `await` auf Dispo auf dem Request-Pfad (sonst hängt die UI). Frische nur über Sync im Hintergrund.
+- Erlaubt online (nicht blockierend): Datei-Download/-Öffnen, expliziter Sync.

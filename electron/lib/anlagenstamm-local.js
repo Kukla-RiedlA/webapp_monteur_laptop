@@ -61,7 +61,12 @@ function dispoMonteurFetchHeaders(technicianId, authHeader) {
   return h;
 }
 
+const anlagenstammSchemaReady = new WeakSet();
+
 function ensureAnlagenstammLocalSchema(dbOrSql) {
+  if (dbOrSql && typeof dbOrSql === 'object' && anlagenstammSchemaReady.has(dbOrSql)) {
+    return;
+  }
   const run = (sql) => {
     if (dbOrSql && typeof dbOrSql.run === 'function' && !dbOrSql.prepare) {
       dbOrSql.run(sql);
@@ -201,6 +206,9 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
         console.warn('[anlagenstamm-local] server_file_id migration:', msg);
       }
     }
+  }
+  if (dbOrSql && typeof dbOrSql === 'object') {
+    anlagenstammSchemaReady.add(dbOrSql);
   }
 }
 

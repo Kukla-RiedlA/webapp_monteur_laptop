@@ -3,12 +3,9 @@
 const express = require('express');
 const { parseMultipart } = require('./multipart-upload');
 const {
-  hasLocalAnlagenstammData,
   getAnlagenstammListResponse,
   getAnlagenstammFnFocusResponse,
   getAnlagenstammExtrasResponse,
-  mergeAnlagenstammExtrasWithRemote,
-  persistMergedExtrasToDb,
   getAnlagenstammByIdResponse,
 } = require('./anlagenstamm-php-local');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
@@ -63,85 +60,6 @@ async function fetchDispoApiFilesList(ctx, technicianId, fab, credsOpt) {
   }
 }
 
-/** TED/PN-Extras direkt per Basic-Auth (wie Sync), unabhängig von Proxy-Session. */
-async function fetchDispoApiListExtras(ctx, body, credsOpt) {
-  const creds =
-    credsOpt && typeof credsOpt === 'object'
-      ? credsOpt
-      : ctx.resolveDispoServerCreds
-        ? ctx.resolveDispoServerCreds(body || {})
-        : {};
-  const base = String(creds.baseUrl || (ctx.getDispoBaseUrl ? ctx.getDispoBaseUrl() : '') || '')
-    .trim()
-    .replace(/\/$/, '');
-  const fabs = Array.isArray(body && body.fabs)
-    ? body.fabs.map((v) => String(v || '').trim()).filter(Boolean)
-    : [];
-  const u = String(creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : '') || '').trim();
-  if (!base || !u || !fabs.length) return null;
-  const url = `${base}/api/anlagenstamm_list_extras.php`;
-  try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 30000);
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurHeaders(ctx, null, creds)),
-      body: JSON.stringify({ fabs }),
-      signal: ac.signal,
-    });
-    clearTimeout(timer);
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data || data.success === false) return null;
-    return data;
-  } catch (_) {
-    return null;
-  }
-}
-
-async function fetchRemoteListExtras(ctx, body) {
-  const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds(body || {}) : {};
-  const viaApi = await fetchDispoApiListExtras(ctx, body, creds);
-  if (viaApi) return viaApi;
-  return proxyPostJson(ctx, '/api/anlagenstamm_list_extras.php', body || {}, creds);
-}
-
-async function proxyGetJson(ctx, path, credsOpt) {
-  const creds =
-    credsOpt && typeof credsOpt === 'object'
-      ? credsOpt
-      : ctx.resolveDispoServerCreds
-        ? ctx.resolveDispoServerCreds({})
-        : null;
-  const auth = await ctx.ensureProxyAuthenticated(creds);
-  if (!auth.ok || !auth.authenticated) return null;
-  try {
-    return await auth.proxy.getJson(path);
-  } catch (_) {
-    return null;
-  }
-}
-
-async function proxyPostJson(ctx, path, body, credsOpt) {
-  const creds =
-    credsOpt && typeof credsOpt === 'object'
-      ? credsOpt
-      : ctx.resolveDispoServerCreds
-        ? ctx.resolveDispoServerCreds(body || {})
-        : null;
-  const auth = await ctx.ensureProxyAuthenticated(creds);
-  if (!auth.ok || !auth.authenticated) return null;
-  try {
-    const { res } = await auth.proxy.fetchDispo(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {}),
-    });
-    return res.json().catch(() => ({}));
-  } catch (_) {
-    return null;
-  }
-}
-
 function registerAnlagenstammPhpRoutes(app, ctx) {
   const db = () => ctx.db;
 
@@ -159,25 +77,13 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     res.json(getAnlagenstammFnFocusResponse(db(), req.query));
   });
 
-  app.get('/api/anlagenstamm_list_extras.php', async (req, res) => {
-    const local = getAnlagenstammExtrasResponse(db(), req.query || {});
-    if (!hasLocalAnlagenstammData(db())) return res.json(local);
-    const body = req.query && req.query.fabs != null ? { fabs: req.query.fabs } : req.query || {};
-    const remote = await fetchRemoteListExtras(ctx, body);
-    const merged = mergeAnlagenstammExtrasWithRemote(local, remote);
-    const n = persistMergedExtrasToDb(db(), merged);
-    if (n > 0 && typeof ctx.saveDb === 'function') ctx.saveDb();
-    return res.json(merged);
+  app.get('/api/anlagenstamm_list_extras.php', (req, res) => {
+    // Offline-first: TED/PN aus SQLite, kein Warten auf Dispo (sonst hängt die ganze App).
+    res.json(getAnlagenstammExtrasResponse(db(), req.query || {}));
   });
 
-  app.post('/api/anlagenstamm_list_extras.php', express.json({ limit: '4mb' }), async (req, res) => {
-    const local = getAnlagenstammExtrasResponse(db(), req.body || {});
-    if (!hasLocalAnlagenstammData(db())) return res.json(local);
-    const remote = await fetchRemoteListExtras(ctx, req.body || {});
-    const merged = mergeAnlagenstammExtrasWithRemote(local, remote);
-    const n = persistMergedExtrasToDb(db(), merged);
-    if (n > 0 && typeof ctx.saveDb === 'function') ctx.saveDb();
-    return res.json(merged);
+  app.post('/api/anlagenstamm_list_extras.php', express.json({ limit: '4mb' }), (req, res) => {
+    res.json(getAnlagenstammExtrasResponse(db(), req.body || {}));
   });
 
   app.post('/api/anlagenstamm_save.php', async (req, res) => {

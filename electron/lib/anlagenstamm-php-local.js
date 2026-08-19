@@ -30,19 +30,36 @@ function readTreeCachePn(db, fab) {
   }
 }
 
-function enrichRowsWithTreePn(db, rows) {
-  return (rows || []).map((row) => {
-    const pn = String(row.pn_root_name || '').trim() || readTreeCachePn(db, row.fabrikationsnummer);
-    return pn ? { ...row, pn_root_name: pn } : row;
-  });
-}
-
 function hasLocalAnlagenstammData(db) {
   return rowCount(db) > 0;
 }
 
+const LIST_CACHE_TTL_MS = 8000;
+let listRowsCache = { db: null, count: -1, at: 0, rows: null };
+
+function invalidateAnlagenstammListCache() {
+  listRowsCache = { db: null, count: -1, at: 0, rows: null };
+}
+
+function getCachedListRows(db) {
+  const count = rowCount(db);
+  const now = Date.now();
+  if (
+    listRowsCache.db === db &&
+    listRowsCache.count === count &&
+    Array.isArray(listRowsCache.rows) &&
+    now - listRowsCache.at < LIST_CACHE_TTL_MS
+  ) {
+    return listRowsCache.rows;
+  }
+  const rows = listAllAnlagenstammLocal(db);
+  listRowsCache = { db, count, at: now, rows };
+  return rows;
+}
+
 function getAnlagenstammListResponse(db, query = {}) {
   if (!hasLocalAnlagenstammData(db)) {
+    invalidateAnlagenstammListCache();
     return {
       success: true,
       data: [],
@@ -54,16 +71,15 @@ function getAnlagenstammListResponse(db, query = {}) {
       source: 'local_empty',
     };
   }
-  const all = enrichRowsWithTreePn(db, listAllAnlagenstammLocal(db));
-  return paginateAnlagenstammList(all, query);
+  // pn_root_name liegt auf der Zeile; Tree-JSON je Anlage würde die UI auf dem Main-Thread einfrieren.
+  return paginateAnlagenstammList(getCachedListRows(db), query);
 }
 
 function getAnlagenstammFnFocusResponse(db, query = {}) {
   if (!hasLocalAnlagenstammData(db)) {
     return { success: true, match: 'none', source: 'local_empty' };
   }
-  const all = enrichRowsWithTreePn(db, listAllAnlagenstammLocal(db));
-  return resolveAnlagenstammFnFocus(all, query);
+  return resolveAnlagenstammFnFocus(getCachedListRows(db), query);
 }
 
 function readTedFromJobIndex(db, fab) {
@@ -162,7 +178,9 @@ function mergeAnlagenstammExtrasWithRemote(local, remote) {
 
 function persistMergedExtrasToDb(db, merged) {
   if (!db || !merged || merged.success === false) return 0;
-  return persistAnlagenstammExtras(db, merged.pn_by_fab || {}, merged.ted_by_fab || {});
+  const n = persistAnlagenstammExtras(db, merged.pn_by_fab || {}, merged.ted_by_fab || {});
+  if (n > 0) invalidateAnlagenstammListCache();
+  return n;
 }
 
 function getAnlagenstammByIdResponse(db, id) {
@@ -186,4 +204,5 @@ module.exports = {
   persistMergedExtrasToDb,
   getAnlagenstammByIdResponse,
   deleteAnlagenstammLocal,
+  invalidateAnlagenstammListCache,
 };

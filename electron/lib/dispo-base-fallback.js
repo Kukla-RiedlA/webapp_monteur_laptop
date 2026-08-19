@@ -74,9 +74,11 @@ function buildDispoBaseCandidates(opts) {
 
 function isFetchNetworkError(err) {
   if (!err) return false;
+  if (err.cause && err.cause !== err && isFetchNetworkError(err.cause)) return true;
   const msg = (err.message || String(err)).toLowerCase();
   return (
     err.name === 'AbortError' ||
+    msg.includes('abort') ||
     msg.includes('fetch failed') ||
     msg.includes('network') ||
     msg.includes('econnrefused') ||
