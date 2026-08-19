@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.000
+- **Release:** Plattformweite Stufe 2.006; Patch-Zähler auf 000.
+- **Härtung:** TLS Host-Pin (kein globaler Zertifikats-Bypass), Session-Cookies in JSON versiegelt, lokales API-Gateway nur mit Session-Token der eigenen App.
+
 ## V 2.005.028
 - **Anlagenstamm Persistenz:** Leistung, Versorgung und Sensitivität halten beim Speichern/Öffnen.
 - **Technik-Card Elektronik:** Type, Geräte Nummer GN, Bussystem; Übersicht-Elektronik bleibt gespiegelt.
