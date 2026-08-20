@@ -1117,13 +1117,20 @@
     Südtirol: 'IT', 'Südtirol (Italien)': 'IT', Zanzibar: 'TZ', 'Zanzibar (Tansania)': 'TZ',
     Azoren: 'PT', 'Azoren (Portugal)': 'PT', Madeira: 'PT', 'Madeira (Portugal)': 'PT',
     'Kanarische Inseln': 'ES', 'Kanaren': 'ES', 'Kanarische Inseln (Spanien)': 'ES',
-    Ceuta: 'ES', 'Ceuta (Spanien)': 'ES', Melilla: 'ES', 'Melilla (Spanien)': 'ES'
+    Ceuta: 'ES', 'Ceuta (Spanien)': 'ES', Melilla: 'ES', 'Melilla (Spanien)': 'ES',
+    Schottland: 'GB', Scotland: 'GB',
+    Taiwan: 'TW', Kosovo: 'XK', Palästina: 'PS', Palestine: 'PS',
+    Westsahara: 'EH', Guernsey: 'GG', Jersey: 'JE', 'Insel Man': 'IM', 'Isle of Man': 'IM',
+    'Französisch-Guayana': 'GF', 'Französische Süd- und Antarktisgebiete': 'TF',
+    'Spitzbergen und Jan Mayen': 'SJ', Bouvetinsel: 'BV',
+    'Kleinere Inselbesitzungen der Vereinigten Staaten': 'UM'
   };
 
   function normalizeCountryToCode(country) {
     if (!country || typeof country !== 'string') return '';
     var s = country.trim();
-    if (s.length === 2 && /^[A-Za-z]{2}$/.test(s)) return s.toUpperCase();
+    if (/^[A-Za-z]{2}$/.test(s)) return s.toUpperCase();
+    if (/^[A-Za-z]{2}[-_]/.test(s)) return s.slice(0, 2).toUpperCase();
     if (s.length === 3 && /^[A-Za-z]{3}$/.test(s)) return s.toUpperCase();
     var key = s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
     if (countryNameToCode[s]) return countryNameToCode[s];
@@ -5447,7 +5454,8 @@
     modalHtml += '<select id="job_site_edit_country" autocomplete="off">';
     modalHtml += '<option value="">Bitte wählen</option>';
     var countriesList = (typeof window.HOTEL_COUNTRIES !== 'undefined' && Array.isArray(window.HOTEL_COUNTRIES)) ? window.HOTEL_COUNTRIES : [];
-    countriesList.forEach(function (c) {
+    countriesList.forEach(function (c, idx) {
+      if (idx === 5) modalHtml += '<option value="" disabled>──────────</option>';
       var code = (c.code || '').toUpperCase();
       var sel = (currentCountry.toUpperCase() === code || currentCountry === (c.name || '')) ? ' selected' : '';
       var label = (c.name || '') + ' ' + (c.flag || '') + ' (' + (c.code || '') + ')';
@@ -5921,7 +5929,8 @@
     modalHtml += '<select id="hotel_edit_country" autocomplete="off">';
     modalHtml += '<option value="">Bitte wählen</option>';
     var countriesList = (typeof window.HOTEL_COUNTRIES !== 'undefined' && Array.isArray(window.HOTEL_COUNTRIES)) ? window.HOTEL_COUNTRIES : [];
-    countriesList.forEach(function (c) {
+    countriesList.forEach(function (c, idx) {
+      if (idx === 5) modalHtml += '<option value="" disabled>──────────</option>';
       var sel = (currentCountry === (c.code || '')) ? ' selected' : '';
       var label = (c.name || '') + ' ' + (c.flag || '') + ' (' + (c.code || '') + ')';
       modalHtml += '<option value="' + attr(c.code) + '"' + sel + '>' + escapeHtml(label) + '</option>';
