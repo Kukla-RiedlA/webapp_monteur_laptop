@@ -222,7 +222,10 @@ const pruefzertifikatLocal = require('./lib/pruefzertifikat-local');
 const {
   resolveMonteurDraftJsonPath,
   isMonteurDraftJsonBasename,
+  MONTEUR_DRAFT_BASENAMES,
   DRAFT_JSON_ENDPOINTS,
+  readLocalDraftFile,
+  stripDraftMeta,
 } = require('./lib/multi-device-sync');
 const {
   ensureAnlagenstammLocalSchema,
@@ -6024,6 +6027,7 @@ function createApp(db) {
       const protokolle = [];
       const parameterlisten = [];
       const seenParamKeys = new Set();
+      const seenProtoKeys = new Set();
       for (const d of catalog.documents || []) {
         const item = mapDoc(d);
         const key = String(item.fab || '') + '|' + String(item.name || '').toLowerCase();
@@ -6031,7 +6035,56 @@ function createApp(db) {
           seenParamKeys.add(key);
           parameterlisten.push(item);
         } else {
+          seenProtoKeys.add(key);
           protokolle.push(item);
+        }
+      }
+      const protocolJsonKindLabel = {
+        'serviceprotokoll.json': 'Serviceprotokoll JSON',
+        'montagebericht.json': 'Montagebericht JSON',
+        'kontrollwiegungsprotokoll.json': 'Kontrollwiegung JSON',
+        'schleppkettenprotokoll.json': 'Schleppketten-Test JSON',
+        'pruefzertifikat.json': 'Prüfzertifikat JSON',
+      };
+      const reiseDirForJson = catalog.reiseDir || resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      if (reiseDirForJson && fs.existsSync(reiseDirForJson)) {
+        for (const baseName of MONTEUR_DRAFT_BASENAMES) {
+          let jsonPath = '';
+          try {
+            jsonPath = resolveMonteurDraftJsonPath(reiseDirForJson, baseName, false);
+          } catch (_) {
+            jsonPath = '';
+          }
+          if (!jsonPath || !fs.existsSync(jsonPath)) continue;
+          let st = null;
+          try {
+            st = fs.statSync(jsonPath);
+          } catch (_) {
+            continue;
+          }
+          if (!st.isFile()) continue;
+          const rel = path
+            .relative(reiseDirForJson, jsonPath)
+            .split(path.sep)
+            .join('/');
+          const key = '|' + String(baseName).toLowerCase();
+          if (seenProtoKeys.has(key)) continue;
+          seenProtoKeys.add(key);
+          protokolle.push(
+            mapDoc(
+              {
+                id: 'json:' + rel,
+                type: protocolJsonKindLabel[String(baseName).toLowerCase()] || 'Protokoll JSON',
+                name: path.basename(jsonPath),
+                fab: '',
+                absPath: jsonPath,
+                relPath: rel,
+                size: st.size,
+                mtime: st.mtime ? st.mtime.toISOString() : null,
+              },
+              { source: 'protocol_json', protocol_json: true },
+            ),
+          );
         }
       }
       const fabs = parseJobFabrikationsnummernRows(jobRow.fabrikationsnummern)
@@ -10529,6 +10582,615 @@ function createApp(db) {
     return { savedRel, savedAbs, localWarning };
   }
 
+  function archivProtocolJsonKindFromName(name) {
+    const base = path.basename(String(name || '').replace(/\\/g, '/')).toLowerCase();
+    if (base === 'serviceprotokoll.json') return 'serviceprotokoll';
+    if (base === 'montagebericht.json') return 'montagebericht';
+    if (base === 'kontrollwiegungsprotokoll.json') return 'kontrollwiegung';
+    if (base === 'schleppkettenprotokoll.json') return 'schleppketten';
+    if (base === 'pruefzertifikat.json') return 'pruefzertifikat';
+    return null;
+  }
+
+  function unwrapByFabStore(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { byFab: {} };
+    let data = raw;
+    if (!data.byFab && data.payload && typeof data.payload === 'object' && data.payload.byFab) {
+      data = data.payload;
+    }
+    if (data.byFab && typeof data.byFab === 'object' && !Array.isArray(data.byFab)) {
+      return Object.assign({}, data, { byFab: data.byFab });
+    }
+    const fab = String(data.fabrikationsnummer || '').trim();
+    if (fab) return { byFab: { [fab]: data } };
+    return { byFab: {} };
+  }
+
+  function formatArchivDateOnly(str) {
+    const s = String(str || '').trim().slice(0, 10);
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return s;
+    return m[3] + '.' + m[2] + '.' + m[1];
+  }
+
+  function formatArchivDateRange(start, end) {
+    const s = String(start || '').trim().slice(0, 10);
+    const e = String(end || '').trim().slice(0, 10);
+    if (!s) return formatArchivDateOnly(e);
+    if (!e || s === e) return formatArchivDateOnly(s);
+    return formatArchivDateOnly(s) + ' – ' + formatArchivDateOnly(e);
+  }
+
+  function archivToFab(f) {
+    if (f == null) return '';
+    if (typeof f === 'string') return f.trim();
+    return String(f.fabrikationsnummer ?? f.Fabrikationsnummer ?? '').trim();
+  }
+
+  function buildArchivMontageberichtTableRows(dbFabRows, fabBemerkungen) {
+    const toTextbausteine = (bem) =>
+      (bem || '')
+        .toString()
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((t) => ({ text: t, html: t }));
+    const isRichFabHtml = (html) => {
+      const h = (html || '').toString();
+      if (!h.trim()) return false;
+      if (/<img\b/i.test(h) || /<table\b/i.test(h)) return true;
+      return h.length > 80 && /<(p|div|br|h[1-6]|ul|ol)\b/i.test(h);
+    };
+    const toTextbausteineFromRich = (html, plain) => {
+      const rawHtml = (html || '').toString();
+      if (rawHtml.trim()) {
+        if (isRichFabHtml(rawHtml)) {
+          const text = rawHtml
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<\/(div|p|li|tr|h[1-6])>/gi, '\n')
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/[ \t]+\n/g, '\n')
+            .replace(/\n[ \t]+/g, '\n')
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim();
+          return [{ text: text || String(plain || '').trim(), html: rawHtml.trim() }];
+        }
+        const parts = rawHtml
+          .split(/<br\s*\/?>/i)
+          .map((chunk) => {
+            const htmlPart = String(chunk || '').trim();
+            const text = htmlPart
+              .replace(/<[^>]*>/g, ' ')
+              .replace(/&nbsp;/gi, ' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+            return { text, html: htmlPart };
+          })
+          .filter((x) => x.text || x.html);
+        if (parts.length) return parts;
+        const textFallback = rawHtml
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<\/(div|p|li)>/gi, '\n')
+          .replace(/<[^>]*>/g, ' ')
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/\s+\n/g, '\n')
+          .replace(/\n\s+/g, '\n')
+          .trim();
+        if (textFallback) {
+          return [{ text: textFallback.replace(/^\s*[•▪◦●\-]\s*/, '').trim(), html: rawHtml.trim() }];
+        }
+      }
+      return toTextbausteine(plain || '');
+    };
+    const bemerkungenByFn = {};
+    const bemerkungenHtmlByFn = {};
+    const typePosByFn = {};
+    for (const fb of fabBemerkungen || []) {
+      const fn = archivToFab(fb);
+      if (!fn) continue;
+      typePosByFn[fn] = {
+        type: fb && fb.type != null ? String(fb.type).trim() : '',
+        position: fb && fb.position != null ? String(fb.position).trim() : '',
+      };
+      const fbHtml = fb && fb.bemerkungen_html != null ? String(fb.bemerkungen_html) : '';
+      if (fbHtml.trim()) bemerkungenHtmlByFn[fn] = fbHtml;
+      const explicitTb =
+        Array.isArray(fb.textbausteine) && fb.textbausteine.length > 0
+          ? fb.textbausteine
+              .map((t) => ({
+                text: String(t && t.text != null ? t.text : '').trim(),
+                html: String(t && t.html != null ? t.html : t && t.text != null ? t.text : '').trim(),
+              }))
+              .filter((t) => t.text || t.html)
+          : null;
+      const explicitHasImg = !!(explicitTb && explicitTb.some((t) => /<img\b/i.test(t.html || '')));
+      const tb =
+        isRichFabHtml(fbHtml) && (!explicitTb || !explicitHasImg)
+          ? toTextbausteineFromRich(fbHtml, fb && fb.bemerkungen)
+          : explicitTb && explicitTb.length > 0
+            ? explicitTb
+            : toTextbausteineFromRich(fbHtml, fb && fb.bemerkungen);
+      bemerkungenByFn[fn] = tb;
+    }
+    return (dbFabRows || []).map((row) => {
+      const fn = (row.fabrikationsnummer || '').toString().trim();
+      const fromForm = typePosByFn[fn];
+      const type =
+        fromForm != null
+          ? String(fromForm.type != null ? fromForm.type : '').trim()
+          : (row.type || '').toString().trim();
+      const position =
+        fromForm != null
+          ? String(fromForm.position != null ? fromForm.position : '').trim()
+          : (row.position || '').toString().trim();
+      const userTb = bemerkungenByFn[fn];
+      const tb =
+        userTb && userTb.length > 0
+          ? userTb
+          : Array.isArray(row.textbausteine)
+            ? row.textbausteine
+                .map((t) => ({
+                  text: String(t && t.text != null ? t.text : '').trim(),
+                  html: String(t && t.html != null ? t.html : t && t.text != null ? t.text : '').trim(),
+                }))
+                .filter((t) => t.text || t.html)
+            : [];
+      const bemerk = tb.map((x) => x.text).join('\n');
+      const bemerkHtml =
+        bemerkungenHtmlByFn[fn] || (tb.length === 1 && tb[0].html ? tb[0].html : '') || '';
+      return {
+        fabrikationsnummer: fn,
+        type,
+        position,
+        textbausteine: tb,
+        bemerkungen: bemerk,
+        bemerkungen_html: bemerkHtml,
+      };
+    });
+  }
+
+  async function writeArchivMontageberichtPdfs(reiseDir, localJobId, technicianId, draftPayload) {
+    const draft = stripDraftMeta(draftPayload || {});
+    const kopfFromDraft = draft.kopfdaten && typeof draft.kopfdaten === 'object' ? draft.kopfdaten : {};
+    const projekt = String(draft.projekt || kopfFromDraft.projekt || '').trim();
+    if (!projekt) {
+      throw new Error('Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm / manuell).');
+    }
+    const jobRow = db
+      .prepare(
+        `SELECT j.id, j.start_datetime, j.end_datetime, j.job_number, j.fabrikationsnummern,
+                c.name AS customer_name, ja.city, ja.country
+         FROM jobs j
+         LEFT JOIN customers c ON c.id = j.customer_id
+         LEFT JOIN job_addresses ja ON ja.job_id = j.id
+         WHERE j.id = ?`,
+      )
+      .get(localJobId);
+    if (!jobRow) throw new Error('Auftrag nicht gefunden.');
+    let dbFabRows = sortJobFabRows(
+      parseJobFabrikationsnummernRows(jobRow.fabrikationsnummern).map((r) => ({
+        fabrikationsnummer: archivToFab(r),
+        type: r && (r.type != null ? r.type : r.Type) != null ? String(r.type ?? r.Type).trim() : '',
+        position:
+          r && (r.position != null ? r.position : r.Position) != null
+            ? String(r.position ?? r.Position).trim()
+            : '',
+        geliefert_ueber: r && r.geliefert_ueber != null ? String(r.geliefert_ueber).trim() : '',
+      })),
+    ).filter((r) => r.fabrikationsnummer);
+    const fabBemerkungen = Array.isArray(draft.fabBemerkungen) ? draft.fabBemerkungen : [];
+    if (!dbFabRows.length) {
+      dbFabRows = fabBemerkungen
+        .map((fb) => ({
+          fabrikationsnummer: archivToFab(fb),
+          type: fb && fb.type != null ? String(fb.type).trim() : '',
+          position: fb && fb.position != null ? String(fb.position).trim() : '',
+        }))
+        .filter((r) => r.fabrikationsnummer);
+    }
+    if (!dbFabRows.length && Array.isArray(kopfFromDraft.fabrikationsnummern)) {
+      dbFabRows = kopfFromDraft.fabrikationsnummern
+        .map((f) => ({
+          fabrikationsnummer: archivToFab(f),
+          type: f && typeof f === 'object' && f.type != null ? String(f.type).trim() : '',
+          position: f && typeof f === 'object' && f.position != null ? String(f.position).trim() : '',
+        }))
+        .filter((r) => r.fabrikationsnummer);
+    }
+    if (!dbFabRows.length) {
+      throw new Error('Mindestens eine Fabrikationsnummer erforderlich.');
+    }
+    const tableRows = buildArchivMontageberichtTableRows(dbFabRows, fabBemerkungen);
+    const fabs = tableRows.map((r) => r.fabrikationsnummer).filter(Boolean);
+    const languages = parseProtocolLanguages(draft);
+    const kopfdatenForDocx = {
+      kunde: String(kopfFromDraft.kunde || jobRow.customer_name || '').trim(),
+      projekt,
+      datum: String(
+        kopfFromDraft.datum || formatArchivDateRange(jobRow.start_datetime, jobRow.end_datetime),
+      ).trim(),
+      servicetechniker: String(
+        kopfFromDraft.servicetechniker || getTechnicianDisplayName(technicianId) || '',
+      ).trim(),
+      ansprechperson: String(kopfFromDraft.ansprechperson || '').trim(),
+      geliefertUeber: String(
+        kopfFromDraft.geliefertUeber ||
+          (dbFabRows[0] && dbFabRows[0].geliefert_ueber) ||
+          '',
+      ).trim(),
+      bemerkungen: String(draft.bemerkungen || kopfFromDraft.bemerkungen || '').trim(),
+      bemerkungen_html: String(draft.bemerkungen_html || kopfFromDraft.bemerkungen_html || '').trim(),
+    };
+    if (!kopfdatenForDocx.ansprechperson) {
+      try {
+        const contacts = db
+          .prepare(`${JOB_CONTACTS_SELECT_SQL} WHERE job_id = ? ORDER BY sort_order, id`)
+          .all(localJobId);
+        const parts = [];
+        contacts.forEach((c) => {
+          const n = normalizeJobContactPayload(c);
+          if (!jobContactHasAny(n)) return;
+          const name =
+            (n.contact_name && String(n.contact_name).trim()) ||
+            `${n.first_name || ''} ${n.last_name || ''}`.trim();
+          if (name) parts.push(name);
+        });
+        kopfdatenForDocx.ansprechperson = parts.join('\n');
+      } catch (_) {
+        kopfdatenForDocx.ansprechperson = '';
+      }
+    }
+    const sigPng = await resolveTechnicianSignaturePng(technicianId, draft);
+    if (!sigPng) {
+      const err = new Error(
+        'Keine Profil-Unterschrift. Bitte unter Einstellungen hinterlegen oder für dieses Protokoll neu zeichnen.',
+      );
+      err.code = 'missing_technician_signature';
+      throw err;
+    }
+    const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
+    const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
+    const offlineCfgMb = getOfflinePullConfig(db, localJobId);
+    ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+    const montageFolderNameMb = resolveMonteurAuftragsordnerName(localJobId, technicianId);
+    const targetFolderNames = new Set();
+    for (const fab of fabs) {
+      let folderName = null;
+      const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(fab));
+      if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
+      if (!folderName) {
+        const fnNum = parseInt(String(fab).trim(), 10);
+        folderName =
+          (Number.isFinite(fnNum) ? findMonteurFolderForFab(docMonteurBase, fnNum) : null) ||
+          (Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null) ||
+          sanitizeDienstreiseFolderPart(fab);
+      }
+      targetFolderNames.add(folderName);
+    }
+    const fileBase = sanitizeExportFileBase(String(path.basename(reiseDir) || '').replace(/^\d+_/, ''));
+    const fileStemForLang = (lang) => (lang === 'en' ? `${fileBase}_report_GB` : `${fileBase}_Montage_DE`);
+    const savedRel = [];
+    const savedAbs = [];
+    for (const lang of languages) {
+      const pdfBytes = await protocolPdf.generateMontageberichtPdfBuffer(
+        {
+          kopfdaten: kopfdatenForDocx,
+          tableRows,
+          grundDesEinsatzes: String(draft.grundDesEinsatzes || ''),
+          grundDesEinsatzes_html: String(draft.grundDesEinsatzes_html || ''),
+          freitext: String(draft.freitext || ''),
+          technician_signature_png: sigPng,
+        },
+        { lang },
+      );
+      if (!pdfBytes || !pdfBytes.length) {
+        throw new Error(`PDF konnte nicht erzeugt werden (${lang === 'en' ? 'Englisch' : 'Deutsch'}).`);
+      }
+      const pdfFilename = `${fileStemForLang(lang)}.pdf`;
+      for (const folderName of targetFolderNames) {
+        const protokolleDir = buildMonteurWorkAbsDir(
+          docMonteurBase,
+          folderName,
+          montageFolderNameMb,
+          'Protokolle',
+        );
+        if (!fs.existsSync(protokolleDir)) fs.mkdirSync(protokolleDir, { recursive: true });
+        const absPdf = path.join(protokolleDir, pdfFilename);
+        writeFileWithRetry(absPdf, pdfBytes);
+        if (!savedAbs.includes(absPdf)) savedAbs.push(absPdf);
+        const rel = buildMonteurWorkRelPath(folderName, montageFolderNameMb, 'Protokolle/' + pdfFilename);
+        protectPathIfUnderDokumenteMonteur(db, localJobId, rel);
+        if (!savedRel.includes(rel)) savedRel.push(rel);
+      }
+    }
+    return { savedRel, savedAbs };
+  }
+
+  async function generateArchivProtocolPdfsFromJson(opts) {
+    const reiseDir = opts.reiseDir;
+    const localJobId = opts.localJobId;
+    const technicianId = opts.technicianId;
+    const jsonAbsPath = opts.jsonAbsPath;
+    const kind = opts.kind;
+    const payload = readLocalDraftFile(jsonAbsPath).payload || {};
+    const savedRel = [];
+    const savedAbs = [];
+    const warnings = [];
+
+    if (kind === 'montagebericht') {
+      const result = await writeArchivMontageberichtPdfs(reiseDir, localJobId, technicianId, payload);
+      return {
+        savedRel: result.savedRel || [],
+        savedAbs: result.savedAbs || [],
+        warning: undefined,
+      };
+    }
+
+    const store = unwrapByFabStore(payload);
+    const fabs = Object.keys(store.byFab || {}).filter((fn) => String(fn || '').trim());
+    if (!fabs.length) {
+      throw new Error('Die JSON-Datei enthält keine Protokolldaten je Fabrikationsnummer.');
+    }
+
+    for (const fab of fabs) {
+      const rec = store.byFab[fab] || {};
+      const recPayload = Object.assign({}, rec, { fabrikationsnummer: fab });
+      try {
+        if (kind === 'serviceprotokoll') {
+          const draftPayload = {
+            fabrikationsnummer: fab,
+            durchfuehrungsdatum: String(recPayload.durchfuehrungsdatum || '').trim(),
+            projekt: String(recPayload.projekt || '').trim(),
+            arbeitsschritte: Array.isArray(recPayload.arbeitsschritte) ? recPayload.arbeitsschritte : [],
+            messwerte: recPayload.messwerte && typeof recPayload.messwerte === 'object' ? recPayload.messwerte : {},
+            bemerkungen: String(recPayload.bemerkungen || ''),
+            kopf_pos_nr: String(recPayload.kopf_pos_nr || ''),
+            kopf_qmax: String(recPayload.kopf_qmax || ''),
+            kopf_vmax: String(recPayload.kopf_vmax || ''),
+            kopf_type: String(recPayload.kopf_type || ''),
+            kopf_dwc: String(recPayload.kopf_dwc || ''),
+            abschluss: normalizeServiceprotokollAbschluss(recPayload.abschluss),
+          };
+          if (!draftPayload.durchfuehrungsdatum) {
+            warnings.push('FN ' + fab + ': Datum der Durchführung fehlt.');
+            continue;
+          }
+          const steps = draftPayload.arbeitsschritte.filter((s) => {
+            if (!s) return false;
+            const de = String(s.bezeichnung_de != null ? s.bezeichnung_de : s.bezeichnung || '').trim();
+            const en = String(s.bezeichnung_en || '').trim();
+            return de !== '' || en !== '';
+          });
+          if (!steps.length) {
+            warnings.push('FN ' + fab + ': mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.');
+            continue;
+          }
+          draftPayload.arbeitsschritte = steps;
+          const pdfLangs = parseProtocolLanguages(recPayload);
+          draftPayload.languages = pdfLangs;
+          draftPayload.pdf_languages = pdfLangs;
+          const localPdf = await writeServiceprotokollPdfsLocally(
+            reiseDir,
+            localJobId,
+            fab,
+            technicianId,
+            Object.assign({}, draftPayload, {
+              signature_override_png:
+                recPayload.signature_override_png ||
+                (recPayload.abschluss && recPayload.abschluss.signature_override_png) ||
+                '',
+            }),
+            pdfLangs,
+          );
+          if (localPdf.savedRel) savedRel.push(...localPdf.savedRel);
+          if (localPdf.savedAbs) savedAbs.push(...localPdf.savedAbs);
+          if (localPdf.localWarning) warnings.push('FN ' + fab + ': ' + localPdf.localWarning);
+          continue;
+        }
+
+        if (kind === 'kontrollwiegung') {
+          const pdfLangs = parseProtocolLanguages(recPayload);
+          const payloadKw = enrichKontrollwiegungPdfPayload(
+            Object.assign({}, recPayload, { languages: pdfLangs, pdf_languages: pdfLangs }),
+            localJobId,
+            technicianId,
+          );
+          const sigPngKw = await resolveTechnicianSignaturePng(technicianId, recPayload);
+          if (!sigPngKw) {
+            const err = new Error(
+              'Keine Profil-Unterschrift. Bitte unter Einstellungen hinterlegen oder für dieses Protokoll neu zeichnen.',
+            );
+            err.code = 'missing_technician_signature';
+            throw err;
+          }
+          payloadKw.technician_signature_png = sigPngKw;
+          for (const lang of pdfLangs) {
+            const pdfPaths = resolveKontrollwiegungLocalPdfPaths(
+              reiseDir,
+              localJobId,
+              fab,
+              technicianId,
+              payloadKw.durchfuehrungsdatum,
+              lang,
+              pdfLangs,
+            );
+            const pdfDir = path.dirname(pdfPaths.full);
+            if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+            const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(payloadKw, { lang });
+            writeFileWithRetry(pdfPaths.full, pdfBuf);
+            savedRel.push(pdfPaths.rel);
+            savedAbs.push(pdfPaths.full);
+            protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+          }
+          continue;
+        }
+
+        if (kind === 'schleppketten') {
+          const pdfLangsSk = parseProtocolLanguages(recPayload);
+          const payloadSk = enrichKontrollwiegungPdfPayload(
+            Object.assign({}, recPayload, { languages: pdfLangsSk, pdf_languages: pdfLangsSk }),
+            localJobId,
+            technicianId,
+          );
+          payloadSk.messungen = schleppkettenLocal.enrichMessungen(payloadSk.messungen);
+          if (payloadSk.kunde) payloadSk.customer_name = payloadSk.kunde;
+          const sigPngSk = await resolveTechnicianSignaturePng(technicianId, recPayload);
+          if (!sigPngSk) {
+            const err = new Error(
+              'Keine Profil-Unterschrift. Bitte unter Einstellungen hinterlegen oder für dieses Protokoll neu zeichnen.',
+            );
+            err.code = 'missing_technician_signature';
+            throw err;
+          }
+          payloadSk.technician_signature_png = sigPngSk;
+          for (const lang of pdfLangsSk) {
+            const pdfPaths = resolveSchleppkettenLocalPdfPaths(
+              reiseDir,
+              localJobId,
+              fab,
+              technicianId,
+              payloadSk.durchfuehrungsdatum,
+              lang,
+              pdfLangsSk,
+            );
+            const pdfDir = path.dirname(pdfPaths.full);
+            if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+            const pdfBuf = await protocolPdf.generateSchleppkettenPdfBuffer(payloadSk, { lang });
+            writeFileWithRetry(pdfPaths.full, pdfBuf);
+            savedRel.push(pdfPaths.rel);
+            savedAbs.push(pdfPaths.full);
+            protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+          }
+          continue;
+        }
+
+        if (kind === 'pruefzertifikat') {
+          const pdfLangsPz = parseProtocolLanguages(recPayload);
+          const payloadPz = enrichKontrollwiegungPdfPayload(
+            Object.assign({}, recPayload, {
+              pruefdatum: recPayload.pruefdatum || recPayload.durchfuehrungsdatum,
+              durchfuehrungsdatum: recPayload.pruefdatum || recPayload.durchfuehrungsdatum,
+              languages: pdfLangsPz,
+              pdf_languages: pdfLangsPz,
+            }),
+            localJobId,
+            technicianId,
+          );
+          const sigPngPz = await resolveTechnicianSignaturePng(technicianId, recPayload);
+          if (!sigPngPz) {
+            const err = new Error(
+              'Keine Profil-Unterschrift. Bitte unter Einstellungen hinterlegen oder für dieses Protokoll neu zeichnen.',
+            );
+            err.code = 'missing_technician_signature';
+            throw err;
+          }
+          payloadPz.technician_signature_png = sigPngPz;
+          for (const lang of pdfLangsPz) {
+            const pdfPaths = resolvePruefzertifikatLocalPdfPaths(
+              reiseDir,
+              localJobId,
+              fab,
+              technicianId,
+              payloadPz.pruefdatum,
+              lang,
+            );
+            const pdfDir = path.dirname(pdfPaths.full);
+            if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+            const pdfBuf = await protocolPdf.generatePruefzertifikatPdfBuffer(payloadPz, { lang });
+            writeFileWithRetry(pdfPaths.full, pdfBuf);
+            savedRel.push(pdfPaths.rel);
+            savedAbs.push(pdfPaths.full);
+            protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
+          }
+        }
+      } catch (fabErr) {
+        if (fabErr && fabErr.code === 'missing_technician_signature') throw fabErr;
+        warnings.push('FN ' + fab + ': ' + (fabErr && fabErr.message ? fabErr.message : String(fabErr)));
+      }
+    }
+
+    if (!savedRel.length && !savedAbs.length) {
+      const err = new Error(warnings.join('\n') || 'Keine PDFs konnten erstellt werden.');
+      err.code = 'no_pdfs';
+      throw err;
+    }
+    return {
+      savedRel,
+      savedAbs,
+      warning: warnings.filter(Boolean).join('\n') || undefined,
+    };
+  }
+
+  app.post('/api/archiv/protocol_json_pdf', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const jobIdRaw = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      if (!technicianId || !jobIdRaw) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      const resolved = resolveLocalJobIdForTechnician(db, technicianId, jobIdRaw, { mode: 'auto' });
+      if (!resolved || !resolved.ok) {
+        return res.status((resolved && resolved.status) || 404).json({
+          ok: false,
+          error: (resolved && resolved.error) || 'Auftrag nicht gefunden.',
+        });
+      }
+      const localJobId = resolved.localId;
+      const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      if (!reiseDir || !fs.existsSync(reiseDir)) {
+        return res.status(404).json({ ok: false, error: 'Kein lokaler Projektordner mehr vorhanden.' });
+      }
+      const relIn = String(body.relative_path || body.relPath || body.rel || '').replace(/\\/g, '/').trim();
+      const nameIn = String(body.name || '').trim();
+      let jsonAbs = '';
+      if (relIn) {
+        jsonAbs = kundenDokumentation.assertPathUnderReise(reiseDir, path.join(reiseDir, relIn));
+      } else if (nameIn && archivProtocolJsonKindFromName(nameIn)) {
+        jsonAbs = resolveMonteurDraftJsonPath(reiseDir, path.basename(nameIn), false);
+      }
+      if (!jsonAbs || !fs.existsSync(jsonAbs) || !fs.statSync(jsonAbs).isFile()) {
+        return res.status(404).json({ ok: false, error: 'JSON-Datei nicht gefunden.' });
+      }
+      const kind = archivProtocolJsonKindFromName(jsonAbs);
+      if (!kind) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Nur Protokoll-JSON (Service, Montagebericht, Kontrollwiegung, Schleppketten, Prüfzertifikat).',
+        });
+      }
+      const result = await generateArchivProtocolPdfsFromJson({
+        reiseDir,
+        localJobId,
+        technicianId,
+        jsonAbsPath: jsonAbs,
+        kind,
+      });
+      try {
+        save();
+      } catch (_) {
+        /* optional */
+      }
+      return res.json({
+        ok: true,
+        kind,
+        saved: result.savedRel || [],
+        pdf_paths: result.savedAbs || [],
+        pdf_path: (result.savedAbs && result.savedAbs[0]) || null,
+        warning: result.warning,
+      });
+    } catch (e) {
+      if (e && e.code === 'missing_technician_signature') {
+        return failMissingSignature(res);
+      }
+      const msg = e && e.message ? e.message : String(e);
+      const status = e && e.code === 'no_pdfs' ? 400 : 500;
+      console.warn('[archiv/protocol_json_pdf]', msg);
+      return res.status(status).json({ ok: false, error: msg || 'PDF konnte nicht erstellt werden.' });
+    }
+  });
+
   async function downloadServiceprotokollPdfsFromDispo(
     dispoBaseUrl,
     protokollId,
@@ -13922,15 +14584,16 @@ function createApp(db) {
       }
       case 'sync_push': {
         const p = job.payload || {};
+        const creds = resolveDispoServerCreds(p);
         const technicianId = parseInt(p.technicianId, 10);
-        const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
+        const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
         const resolved = await resolveDispoWorkingBase({
           baseUrl: p.baseUrl,
-          externalUrl: p.externalUrl,
-          internalUrl: p.internalUrl,
+          externalUrl: creds.externalUrl || p.externalUrl,
+          internalUrl: creds.internalUrl || p.internalUrl,
           technicianId,
-          serverUsername: p.serverUsername,
-          serverPassword: p.serverPassword,
+          serverUsername: creds.serverUsername,
+          serverPassword: creds.serverPassword,
         });
         const baseUrl = (resolved.base || '').trim().replace(/\/$/, '');
         if (!baseUrl) throw new Error(resolved.error || 'Dispo-Basis-URL fehlt.');
@@ -13942,8 +14605,8 @@ function createApp(db) {
             { db, save, dbDir: DB_DIR, authHeaderFromCredentials },
             baseUrl,
             technicianId,
-            p.serverUsername,
-            p.serverPassword,
+            creds.serverUsername,
+            creds.serverPassword,
           );
         } catch (e) {
           console.warn('[abrechnung] flush after sync_push:', e && e.message ? e.message : e);
@@ -14171,7 +14834,7 @@ function createApp(db) {
   }
 
   const DISPO_PROBE_TIMEOUT_MS = 10000;
-  const DISPO_PROBE_LAN_MS = 6000;
+  const DISPO_PROBE_LAN_MS = 12000;
 
   /** @param {number} status @param {string} body */
   function errorTextFromDispoBody(status, body) {
@@ -14360,7 +15023,9 @@ function createApp(db) {
     const serverPassword = opts && opts.serverPassword;
 
     async function probeUrl(url) {
-      const { result } = await probeDispoBaseWithOptionalAuth(url, technicianId, serverUsername, serverPassword);
+      const { result } = await probeDispoBaseWithOptionalAuth(url, technicianId, serverUsername, serverPassword, {
+        skipProfile: true,
+      });
       return result;
     }
 
@@ -14390,7 +15055,8 @@ function createApp(db) {
     return { base: '', pick: null, error: lastErr };
   }
 
-  async function probeDispoBaseWithOptionalAuth(base, technicianId, serverUsername, serverPassword) {
+  async function probeDispoBaseWithOptionalAuth(base, technicianId, serverUsername, serverPassword, opts) {
+    const skipProfile = !!(opts && opts.skipProfile);
     const hasCreds =
       (serverUsername || '').toString().trim() !== '' &&
       serverPassword != null &&
@@ -14401,7 +15067,7 @@ function createApp(db) {
     try {
       let probeTechId = technicianId;
       let profile = null;
-      if (hasCreds) {
+      if (hasCreds && !skipProfile) {
         profile = await resolveMonteurFromDispoAuth(base, serverUsername, serverPassword, ac.signal);
         if (profile.ok && profile.technician_id) {
           probeTechId = profile.technician_id;
@@ -14472,17 +15138,36 @@ function createApp(db) {
         externalUrl: ext,
         internalUrl: int,
         probe: async (base) => {
-          const { result, profile } = await probeDispoBaseWithOptionalAuth(
+          const { result } = await probeDispoBaseWithOptionalAuth(
             base,
             technicianId,
             serverUsername,
             serverPassword,
+            { skipProfile: true },
           );
-          if (profile && profile.ok && profile.technician_id) lastProfile = profile;
           return result;
         },
       });
       if (pick.ok && pick.selected_base_url) {
+        if (serverUsername && serverPassword) {
+          const ac = new AbortController();
+          const ms = isPrivateLanHostname(safeHostname(pick.selected_base_url))
+            ? DISPO_PROBE_LAN_MS
+            : DISPO_PROBE_TIMEOUT_MS;
+          const timer = setTimeout(() => ac.abort(), ms);
+          try {
+            lastProfile = await resolveMonteurFromDispoAuth(
+              pick.selected_base_url,
+              serverUsername,
+              serverPassword,
+              ac.signal,
+            );
+          } catch (_) {
+            lastProfile = null;
+          } finally {
+            clearTimeout(timer);
+          }
+        }
         return finishSuccess(pick.selected_base_url, lastProfile);
       }
       const failPayload = { ok: false, error: pick.error || 'Verbindung fehlgeschlagen' };
@@ -14506,10 +15191,23 @@ function createApp(db) {
         technicianId,
         serverUsername,
         serverPassword,
+        { skipProfile: true },
       );
       if (profile && profile.ok && profile.technician_id) lastProfile = profile;
       if (result.ok) {
-        return finishSuccess(base, profile);
+        if (serverUsername && serverPassword && !(lastProfile && lastProfile.ok)) {
+          const ac = new AbortController();
+          const ms = isPrivateLanHostname(safeHostname(base)) ? DISPO_PROBE_LAN_MS : DISPO_PROBE_TIMEOUT_MS;
+          const timer = setTimeout(() => ac.abort(), ms);
+          try {
+            lastProfile = await resolveMonteurFromDispoAuth(base, serverUsername, serverPassword, ac.signal);
+          } catch (_) {
+            lastProfile = null;
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+        return finishSuccess(base, lastProfile && lastProfile.ok ? lastProfile : profile);
       }
       lastErr = result.error || lastErr;
     }
@@ -14560,40 +15258,45 @@ function createApp(db) {
     }
 
     if (pair.external && pair.internal) {
-      let profileOnPick = null;
       const pick = await pickReachableDispoBase({
         externalUrl: pair.external,
         internalUrl: pair.internal,
         probe: async (url) => {
-          try {
-            const profile = await authProfileOnBase(url);
-            if (profile.ok && profile.technician_id) profileOnPick = profile;
-            return {
-              ok: !!(profile.ok && profile.technician_id),
-              error: profile.error || (profile.ok ? undefined : 'Login fehlgeschlagen'),
-            };
-          } catch (e) {
-            const msg =
-              e && e.name === 'AbortError'
-                ? 'Timeout (Login)'
-                : e && e.message
-                  ? e.message
-                  : String(e);
-            return { ok: false, error: msg };
-          }
+          const { result } = await probeDispoBaseWithOptionalAuth(
+            url,
+            null,
+            serverUsername,
+            serverPassword,
+            { skipProfile: true },
+          );
+          return result;
         },
       });
-      if (pick.ok && pick.selected_base_url && profileOnPick) {
+      if (pick.ok && pick.selected_base_url) {
         try {
-          upsertLocalMonteurProfile(profileOnPick);
-        } catch (_) {}
-        return res.json({
-          ok: true,
-          used_base_url: pick.selected_base_url,
-          technician_id: profileOnPick.technician_id,
-          full_name: profileOnPick.full_name,
-          username: profileOnPick.username,
-        });
+          const profile = await authProfileOnBase(pick.selected_base_url);
+          if (profile.ok && profile.technician_id) {
+            try {
+              upsertLocalMonteurProfile(profile);
+            } catch (_) {}
+            return res.json({
+              ok: true,
+              used_base_url: pick.selected_base_url,
+              technician_id: profile.technician_id,
+              full_name: profile.full_name,
+              username: profile.username,
+            });
+          }
+          return res.json({ ok: false, error: profile.error || 'Login fehlgeschlagen' });
+        } catch (e) {
+          const msg =
+            e && e.name === 'AbortError'
+              ? 'Timeout (Login)'
+              : e && e.message
+                ? e.message
+                : String(e);
+          return res.json({ ok: false, error: msg });
+        }
       }
       if (!pick.ok && pick.error) {
         return res.json({ ok: false, error: pick.error });

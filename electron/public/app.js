@@ -458,7 +458,7 @@
       var p = new URL(u);
       if (p.hostname === '10.0.0.180' && p.port === '4433') {
         p.port = '';
-        return p.origin;
+        return p.origin.replace(/\/+$/, '');
       }
     } catch (e) { /* ignore */ }
     return u;
@@ -848,8 +848,8 @@
       var elInt = document.getElementById('serverUrlInternal');
       if (elInt) {
         var intLoaded = urlInt != null ? urlInt : DEFAULT_DISPO_SERVER_URL_INTERNAL;
-        if (intLoaded.replace(/\/+$/, '') === 'https://10.0.0.180:4433') {
-          intLoaded = DEFAULT_DISPO_SERVER_URL_INTERNAL;
+        intLoaded = migrateLegacyInternalDispoBase(intLoaded) || intLoaded;
+        if (intLoaded !== (urlInt != null ? String(urlInt).trim().replace(/\/+$/, '') : intLoaded)) {
           try { localStorage.setItem(SETTINGS_KEYS.serverUrlInternal, intLoaded); } catch (e) { /* ignore */ }
         }
         elInt.value = intLoaded;
@@ -9536,6 +9536,94 @@
     return sortLeistungRowsByFab(rows);
   }
 
+  function isArchivProtocolJsonName(name) {
+    var base = String(name || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+    return (
+      base === 'serviceprotokoll.json' ||
+      base === 'montagebericht.json' ||
+      base === 'kontrollwiegungsprotokoll.json' ||
+      base === 'schleppkettenprotokoll.json' ||
+      base === 'pruefzertifikat.json'
+    );
+  }
+
+  function refreshArchivAfterProtocolPdf(jobId, opts) {
+    opts = opts || {};
+    var expandEl = opts.expandEl;
+    var folderContainer = opts.folderContainer;
+    if (!folderContainer && expandEl) folderContainer = expandEl.querySelector('.archiv-folder-container');
+    if (!expandEl && folderContainer && folderContainer.closest) {
+      expandEl = folderContainer.closest('.archiv-job-expand');
+    }
+    if (expandEl) bindArchivJobDocuments(expandEl, jobId);
+    if (!folderContainer || !jobId) return;
+    var headers = {};
+    var techId = getTechId();
+    if (techId) headers['X-Technician-Id'] = String(techId);
+    var expanded = archivFolderExpanded[jobId] || {};
+    var rels = Object.keys(expanded);
+    fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId), { headers: headers })
+      .then(function (r) { return r.json(); })
+      .then(function (filesRes) {
+        archivFolderRoot[jobId] = (filesRes && filesRes.ok && filesRes.entries) ? filesRes.entries : [];
+        var chain = Promise.resolve();
+        rels.forEach(function (rel) {
+          chain = chain.then(function () {
+            return fetch(API_BASE + '/api/dienstreise/project_files?job_id=' + encodeURIComponent(jobId) + '&subpath=' + encodeURIComponent(rel), { headers: headers })
+              .then(function (r) { return r.json(); })
+              .then(function (data) {
+                if (data.ok && data.entries) expanded[rel] = data.entries;
+              })
+              .catch(function () { /* ignore */ });
+          });
+        });
+        return chain;
+      })
+      .then(function () {
+        renderArchivFolderTree(jobId, folderContainer);
+      })
+      .catch(function () { /* ignore */ });
+  }
+
+  function createArchivProtocolPdfFromJson(jobId, opts) {
+    opts = opts || {};
+    if (!jobId) {
+      showToast('Auftrag fehlt.');
+      return Promise.resolve();
+    }
+    var headers = { 'Content-Type': 'application/json' };
+    var techId = getTechId();
+    if (techId) headers['X-Technician-Id'] = String(techId);
+    var body = { job_id: jobId };
+    if (opts.relativePath) body.relative_path = opts.relativePath;
+    if (opts.name) body.name = opts.name;
+    return withProtocolProgress({ title: 'PDF wird erstellt…', total: 1 }, async function (prog) {
+      prog.setProgress(0, 1);
+      var r = await fetch(API_BASE + '/api/archiv/protocol_json_pdf', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        throw new Error(data.error || ('HTTP ' + r.status));
+      }
+      prog.setProgress(1, 1);
+      var paths = Array.isArray(data.pdf_paths) ? data.pdf_paths : [];
+      if (!paths.length && data.pdf_path) paths = [data.pdf_path];
+      for (var i = 0; i < paths.length; i++) {
+        if (paths[i]) await maybeOpenGeneratedPdf(paths[i]);
+      }
+      var count = (data.saved && data.saved.length) ? data.saved.length : paths.length;
+      showToast(count ? ('PDF erstellt (' + count + ')') : 'PDF erstellt');
+      if (data.warning) showToast(data.warning);
+      refreshArchivAfterProtocolPdf(jobId, opts);
+      return data;
+    }).catch(function (err) {
+      alert(err && err.message ? err.message : String(err));
+    });
+  }
+
   function renderArchivFolderTree(jobId, containerEl) {
     if (!containerEl) return;
     var root = archivFolderRoot[jobId];
@@ -9566,10 +9654,13 @@
       var isOpen = e.isDirectory && expanded[e.relativePath];
       var toggle = e.isDirectory ? ('<span class="archiv-folder-toggle" data-rel="' + escapeHtml(e.relativePath || '') + '">' + (isOpen ? '▼' : '▶') + '</span>') : '<span class="archiv-folder-toggle empty"></span>';
       var openBtn = e.isDirectory ? '' : '<button type="button" class="btn btn-ghost archiv-folder-open" title="Datei öffnen">Öffnen</button>';
+      var pdfBtn = (!e.isDirectory && isArchivProtocolJsonName(e.name))
+        ? '<button type="button" class="btn btn-ghost archiv-folder-pdf" title="PDF wie in der Protokoll-Ebene erzeugen">PDF</button>'
+        : '';
       html += '<div class="archiv-folder-row' + levelClass + '" data-is-dir="' + (e.isDirectory ? '1' : '0') + '" data-relative-path="' + escapeHtml(e.relativePath || '') + '" data-full-path="' + escapeHtml(e.fullPath || '') + '">' +
         '<div class="archiv-folder-name">' + toggle + icon + ' ' + escapeHtml(e.name) + '</div>' +
         '<div class="archiv-folder-meta">' + escapeHtml(sizeStr) + ' ' + escapeHtml(mtimeStr) + '</div>' +
-        (openBtn ? '<div class="archiv-folder-actions">' + openBtn + '</div>' : '') + '</div>';
+        (openBtn || pdfBtn ? '<div class="archiv-folder-actions">' + openBtn + pdfBtn + '</div>' : '') + '</div>';
     });
     html += '</div>';
     containerEl.innerHTML = html;
@@ -9583,6 +9674,22 @@
       });
       var openBtn = row.querySelector('.archiv-folder-open');
       if (openBtn) openBtn.addEventListener('click', function (ev) { ev.stopPropagation(); if (typeof monteurApp !== 'undefined' && monteurApp.openPath) monteurApp.openPath(fullPath); });
+      var pdfBtnEl = row.querySelector('.archiv-folder-pdf');
+      if (pdfBtnEl) {
+        pdfBtnEl.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          var rel = row.getAttribute('data-relative-path') || '';
+          var nameEl = row.querySelector('.archiv-folder-name');
+          var fileName = '';
+          if (nameEl) fileName = String(nameEl.textContent || '').replace(/^[▼▶]\s*/, '').trim();
+          createArchivProtocolPdfFromJson(jobId, {
+            relativePath: rel,
+            name: fileName,
+            expandEl: containerEl.closest ? containerEl.closest('.archiv-job-expand') : null,
+            folderContainer: containerEl
+          });
+        });
+      }
     });
     containerEl.querySelectorAll('.archiv-folder-row[data-is-dir="1"]').forEach(function (row) {
       row.style.cursor = 'pointer';
@@ -9643,14 +9750,19 @@
       html += '<div class="archiv-docs-name">' + escapeHtml(name) + '</div>';
       html += '<div class="archiv-docs-meta muted">' + escapeHtml(formatArchivDocMeta(item)) + '</div>';
       html += '</div>';
+      html += '<div class="archiv-docs-actions">';
       html += '<button type="button" class="btn btn-ghost archiv-docs-open" data-archiv-doc-idx="' + idx + '">Öffnen</button>';
+      if (isArchivProtocolJsonName(name) || (item && item.protocol_json)) {
+        html += '<button type="button" class="btn btn-ghost archiv-docs-pdf" data-archiv-doc-idx="' + idx + '" title="PDF wie in der Protokoll-Ebene erzeugen">PDF</button>';
+      }
+      html += '</div>';
       html += '</li>';
     });
     html += '</ul>';
     return html;
   }
 
-  function bindArchivDocumentList(containerEl, items) {
+  function bindArchivDocumentList(containerEl, items, jobId, expandEl) {
     if (!containerEl) return;
     containerEl.querySelectorAll('.archiv-docs-open').forEach(function (btn) {
       btn.addEventListener('click', function (ev) {
@@ -9670,6 +9782,21 @@
           return;
         }
         showToast('Datei ist lokal nicht mehr vorhanden.');
+      });
+    });
+    containerEl.querySelectorAll('.archiv-docs-pdf').forEach(function (btn) {
+      btn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var idx = parseInt(btn.getAttribute('data-archiv-doc-idx'), 10);
+        var item = items && items[idx];
+        if (!item) return;
+        createArchivProtocolPdfFromJson(jobId, {
+          relativePath: item.relPath || '',
+          name: item.name || '',
+          expandEl: expandEl,
+          folderContainer: expandEl ? expandEl.querySelector('.archiv-folder-container') : null
+        });
       });
     });
   }
@@ -9735,11 +9862,11 @@
         var params = (data && data.ok && Array.isArray(data.parameterlisten)) ? data.parameterlisten : [];
         if (protoEl) {
           protoEl.innerHTML = renderArchivDocumentRows(protokolle, 'Keine lokalen Protokolle verblieben.');
-          bindArchivDocumentList(protoEl, protokolle);
+          bindArchivDocumentList(protoEl, protokolle, jobId, expandEl);
         }
         if (paramEl) {
           paramEl.innerHTML = renderArchivDocumentRows(params, 'Keine lokalen Parameterlisten verblieben.');
-          bindArchivDocumentList(paramEl, params);
+          bindArchivDocumentList(paramEl, params, jobId, expandEl);
         }
       })
       .catch(function (e) {

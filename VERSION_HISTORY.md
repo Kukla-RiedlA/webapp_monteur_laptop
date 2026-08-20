@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.005
+- **Auftrag annehmen:** Bei Dispo-Netzfehler (`fetch failed`) wird der Auftrag lokal auf „in Arbeit“ gesetzt; Projektdateien und Status-Push folgen beim nächsten Sync.
+- **Sync intern:** Erreichbarkeit ohne paralleles Doppel-Login (weniger 429); interne URL `10.0.0.180:4433` wird auf Port 443 korrigiert; Push nutzt Session-Zugangsdaten.
+- **Archiv:** PDF aus Protokoll-JSON im Dateibaum erzeugen.
+
 ## V 2.006.003
 - **Sync/Login:** Kein Basic-Auth ohne Passwort in Proxy, Probe und Anlagenstamm; 401/429 nicht auf Zweit-URL wiederholen.
 

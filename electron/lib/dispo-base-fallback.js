@@ -3,7 +3,18 @@
  */
 
 function normalizeDispoBase(url) {
-  return (url || '').toString().trim().replace(/\/$/, '');
+  let u = (url || '').toString().trim().replace(/\/$/, '');
+  if (!u) return u;
+  try {
+    const p = new URL(u);
+    if (p.hostname === '10.0.0.180' && p.port === '4433') {
+      p.port = '';
+      u = p.origin.replace(/\/$/, '');
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return u;
 }
 
 function isPrivateLanHostname(hostname) {
