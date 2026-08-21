@@ -573,6 +573,53 @@
     navigateCell(host, inp, key);
   }
 
+  function isHourNumberInput(inp) {
+    return !!(inp && inp.tagName === 'INPUT' && inp.type === 'number' &&
+      (inp.classList.contains('zs-hour') || inp.classList.contains('zs-input')));
+  }
+
+  function applyWheelToScrollParent(fromEl, e) {
+    var dx = e.deltaX || 0;
+    var dy = e.deltaY || 0;
+    if (e.deltaMode === 1) {
+      dx *= 16;
+      dy *= 16;
+    } else if (e.deltaMode === 2) {
+      dx *= window.innerWidth;
+      dy *= window.innerHeight;
+    }
+    var node = fromEl.parentElement;
+    while (node && node !== document.documentElement) {
+      var style = window.getComputedStyle(node);
+      var oy = style.overflowY;
+      var ox = style.overflowX;
+      var canY = (oy === 'auto' || oy === 'scroll' || oy === 'overlay') && node.scrollHeight > node.clientHeight + 1;
+      var canX = (ox === 'auto' || ox === 'scroll' || ox === 'overlay') && node.scrollWidth > node.clientWidth + 1;
+      if ((canY && dy) || (canX && dx)) {
+        if (canY) node.scrollTop += dy;
+        if (canX) node.scrollLeft += dx;
+        return;
+      }
+      node = node.parentElement;
+    }
+    if (document.scrollingElement) {
+      document.scrollingElement.scrollTop += dy;
+      document.scrollingElement.scrollLeft += dx;
+    } else {
+      window.scrollBy(dx, dy);
+    }
+  }
+
+  function onHourWheel(e) {
+    var t = e.target;
+    var inp = t && t.closest ? t.closest('input') : t;
+    if (!isHourNumberInput(inp)) return;
+    if (document.activeElement !== inp) return;
+    // Mausrad darf den Stundenwert nicht ändern — nur Tastatureingabe
+    e.preventDefault();
+    applyWheelToScrollParent(inp, e);
+  }
+
   function readDisplayedDaysForPrint(host) {
     const rows = [];
     host.querySelectorAll('tr[data-day-date]').forEach(function (tr) {
@@ -701,6 +748,10 @@
         }, 0);
       });
     });
+    const wrap = host.querySelector('.zs-table-wrap');
+    if (wrap) {
+      wrap.addEventListener('wheel', onHourWheel, { passive: false, capture: true });
+    }
   }
 
   function setMsg(host, text, isErr) {

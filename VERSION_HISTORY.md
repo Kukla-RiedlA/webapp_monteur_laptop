@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.008
+- **Zeitschreibung:** Mausrad über Stundenfeldern ändert den Wert nicht mehr, sondern scrollt die Tabelle.
+
 ## V 2.006.007
 - **Projektdaten / FN:** Änderung an Leistung (z. B. `t/h` → `80 t/h`) wird in den Anlagenstamm übernommen (`dirty` + Pending). Der nächste Sync überschreibt sie nicht mehr mit dem alten Stammwert.
 - **Anlagenakte-Galerie:** Thumbnails kommen aus der lokalen SQLite (`image_thumb_cache`), die Rasterliste aus dem Offline-Tree. Das Fenster lädt die Galerie erst beim Tab und nur sichtbare Thumbs; Vollbilder erst beim Öffnen (dann ggf. online).
