@@ -8,6 +8,7 @@ const {
   getAnlagenstammExtrasResponse,
   getAnlagenstammByIdResponse,
 } = require('./anlagenstamm-php-local');
+const { buildLocalAnlagenstammGallery } = require('./anlagenstamm-gallery-local');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 
 function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
@@ -183,6 +184,36 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     } catch (e) {
       res.status(500).json({ success: false, error: e.message || String(e) });
     }
+  });
+
+  app.get('/api/anlagenstamm_gallery.php', (req, res) => {
+    const fab = String(req.query.fabrikationsnummer || req.query.fab || '').trim();
+    if (!fab) return res.status(400).json({ ok: false, error: 'Fabrikationsnummer fehlt' });
+    let tree = [];
+    if (typeof ctx.readAnlagenstammTreeCache === 'function') {
+      const cached = ctx.readAnlagenstammTreeCache(db(), fab);
+      if (cached && Array.isArray(cached.tree)) tree = cached.tree;
+    }
+    if (
+      (!tree || !tree.length) &&
+      typeof ctx.buildLocalProjekteNeuTreeForFab === 'function'
+    ) {
+      const local = ctx.buildLocalProjekteNeuTreeForFab(ctx.getTechnicianId(req), fab);
+      if (local && Array.isArray(local.tree) && local.tree.length) tree = local.tree;
+    }
+    const gallery = buildLocalAnlagenstammGallery(fab, tree, {
+      technicianId: ctx.getTechnicianId(req),
+    });
+    if (typeof ctx.prewarmAnlagenstammGalleryThumbs === 'function' && gallery.length) {
+      setImmediate(() => {
+        try {
+          ctx.prewarmAnlagenstammGalleryThumbs(fab, gallery);
+        } catch (_) {
+          /* ignore */
+        }
+      });
+    }
+    return res.json({ ok: true, gallery, source: 'local_cache' });
   });
 
   app.get('/api/anlagenstamm_files_list.php', async (req, res) => {

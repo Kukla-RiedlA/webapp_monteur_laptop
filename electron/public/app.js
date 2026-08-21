@@ -5293,7 +5293,18 @@
           applyAnlageDetailBuiltToProjektdaten(built);
           projektdatenFabSavedAt = Date.now();
           if (!closeAfter && savedRow) syncModalInputsFromBuiltRow(savedRow);
-          return jobRes;
+          if (!savedRow) return jobRes;
+          return persistAnlageRowToAnlagenstamm(savedRow)
+            .then(function () {
+              return jobRes;
+            })
+            .catch(function (stammErr) {
+              console.warn(
+                '[projektdaten] Anlagenstamm nach Leistungssave',
+                stammErr && stammErr.message ? stammErr.message : stammErr,
+              );
+              return jobRes;
+            });
         })
         .then(function (jobRes) {
           if (typeof showToast !== 'function') return;

@@ -234,6 +234,7 @@ const LOCAL_API_PHP_PREFIXES = [
   '/job_status_',
   '/mechanik_ted_excel_',
   '/anlagenstamm_file_download.php',
+  '/anlagenstamm_gallery.php',
 ];
 
 function isLocalPhpApi(req) {

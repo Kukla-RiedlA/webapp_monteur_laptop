@@ -187,6 +187,7 @@
   width: 100%;
   height: 110px;
   object-fit: cover;
+  background: #e8eee9;
 }
 
 .akte-gallery-item figcaption {

@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.007
+- **Projektdaten / FN:** Änderung an Leistung (z. B. `t/h` → `80 t/h`) wird in den Anlagenstamm übernommen (`dirty` + Pending). Der nächste Sync überschreibt sie nicht mehr mit dem alten Stammwert.
+- **Anlagenakte-Galerie:** Thumbnails kommen aus der lokalen SQLite (`image_thumb_cache`), die Rasterliste aus dem Offline-Tree. Das Fenster lädt die Galerie erst beim Tab und nur sichtbare Thumbs; Vollbilder erst beim Öffnen (dann ggf. online).
+
 ## V 2.006.006
 - **Sync-Queue:** Ausstehende Änderungen (Events) nutzen beim Push die aktuell erreichbare Dispo-URL und die Session-Zugangsdaten, nicht mehr eine festgebackene externe URL. Push-Fehler werden in den Einstellungen und in der Statusleiste angezeigt statt hinter „Online“ zu verschwinden. Bootstrap mit 0 B bei keinen Aufträgen in Arbeit ist der falsche Knopf für Events.
 - **Anlagenstamm-Push:** „Fabrikationsnummer existiert bereits“ blockiert die Queue nicht mehr — lokale SQLite-IDs werden nicht als Dispo-IDs gesendet; bestehender Stamm wird per FN aktualisiert.

@@ -75,6 +75,83 @@
   }
 
   var lastGalleryFab = null;
+  var galleryItems = [];
+  var galleryLoadToken = 0;
+
+  function isGalerieTabActive() {
+    var p = qs('.akte-panel[data-akte-panel="galerie"]');
+    return !!(p && p.classList.contains('is-active'));
+  }
+
+  function bindGalleryLazyThumbs(root) {
+    if (!root) return;
+    var imgs = qsa('img.akte-gallery-thumb', root);
+    function loadThumb(img, attempt) {
+      var src = img.getAttribute('data-thumb-src');
+      if (!src) return;
+      attempt = attempt || 0;
+      fetch(src, { credentials: 'same-origin' })
+        .then(function (r) {
+          if (r.status === 204) {
+            if (attempt < 12) {
+              setTimeout(function () { loadThumb(img, attempt + 1); }, 450);
+            }
+            return null;
+          }
+          if (!r.ok) throw new Error('thumb');
+          return r.blob();
+        })
+        .then(function (blob) {
+          if (!blob || !img.parentNode) return;
+          var prev = img.getAttribute('data-blob-url');
+          if (prev) {
+            try { URL.revokeObjectURL(prev); } catch (_) { /* ignore */ }
+          }
+          var obj = URL.createObjectURL(blob);
+          img.setAttribute('data-blob-url', obj);
+          img.src = obj;
+        })
+        .catch(function () {
+          if (attempt < 4) {
+            setTimeout(function () { loadThumb(img, attempt + 1); }, 700);
+          }
+        });
+    }
+    if (typeof IntersectionObserver === 'function') {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (!en.isIntersecting) return;
+          var img = en.target;
+          io.unobserve(img);
+          loadThumb(img, 0);
+        });
+      }, { root: null, rootMargin: '80px', threshold: 0.01 });
+      imgs.forEach(function (img) { io.observe(img); });
+    } else {
+      imgs.forEach(function (img) { loadThumb(img, 0); });
+    }
+  }
+
+  function openGalleryAt(index) {
+    var it = galleryItems[index];
+    if (!it) return;
+    if (window.MonteurImageGallery && typeof window.MonteurImageGallery.open === 'function') {
+      var gal = galleryItems.map(function (g) {
+        return { url: g.full_url, thumbUrl: g.thumb_url, label: g.title || '' };
+      });
+      window.MonteurImageGallery.open(gal, index, { title: it.title || 'Bildergalerie' });
+      return;
+    }
+    if (window.KuklaImageGallery && typeof window.KuklaImageGallery.open === 'function') {
+      var gal2 = galleryItems.map(function (g) {
+        return { title: g.title, src: g.full_url };
+      });
+      window.KuklaImageGallery.open({ items: gal2, startIndex: index });
+      return;
+    }
+    openViewer(it.title || 'Bild', '<img src="' + esc(it.full_url) + '" alt="" style="max-width:100%;height:auto">');
+  }
+
   function loadGallery() {
     var root = document.getElementById('akteGalleryRoot');
     var fabEl = document.getElementById('formFab');
@@ -85,15 +162,19 @@
     if (!fab) {
       root.innerHTML = '<p class="muted">Keine Fabrikationsnummer.</p>';
       root.removeAttribute('data-loaded');
+      galleryItems = [];
       return;
     }
+    var token = ++galleryLoadToken;
     root.innerHTML = '<p class="muted">Lade Galerie…</p>';
     var url = window.KUKLA_ANLAGENAKTE_GALLERY_URL
       ? (window.KUKLA_ANLAGENAKTE_GALLERY_URL + (window.KUKLA_ANLAGENAKTE_GALLERY_URL.indexOf('?') >= 0 ? '&' : '?') + 'fab=' + encodeURIComponent(fab))
       : endpoint('anlagenstamm_gallery.php', 'fab=' + encodeURIComponent(fab));
     jsonGet(url)
       .then(function (d) {
+        if (token !== galleryLoadToken) return;
         var items = (d && d.gallery) || [];
+        galleryItems = items;
         if (!items.length) {
           root.innerHTML = '<p class="muted">Keine Bilder in der Akte. Weitere Rasterdateien stehen unter Dateien (PROJEKTE NEU).</p>';
           root.setAttribute('data-loaded', '1');
@@ -114,30 +195,24 @@
         groups.forEach(function (folder) {
           html += '<div class="akte-gallery-group"><h3>' + esc(folder) + '</h3><div class="akte-gallery-grid">';
           byFolder[folder].forEach(function (it) {
-            html += '<figure class="akte-gallery-item" data-idx="' + it._idx + '"><img src="' + esc(it.thumb_url || it.full_url || '') +
-              '" alt=""><figcaption>' + esc(it.title || '') + '</figcaption></figure>';
+            html += '<figure class="akte-gallery-item" data-idx="' + it._idx + '"><img class="akte-gallery-thumb" alt="" data-thumb-src="' +
+              esc(it.thumb_url || '') + '" loading="lazy"><figcaption>' + esc(it.title || '') + '</figcaption></figure>';
           });
           html += '</div></div>';
         });
         root.innerHTML = html;
         root.setAttribute('data-loaded', '1');
+        bindGalleryLazyThumbs(root);
         qsa('.akte-gallery-item', root).forEach(function (fig) {
           fig.addEventListener('click', function () {
             var i = parseInt(fig.getAttribute('data-idx') || '0', 10);
-            var it = items[i];
-            if (!it) return;
-            if (window.KuklaImageGallery && typeof window.KuklaImageGallery.open === 'function') {
-              var gal = items.map(function (g) {
-                return { title: g.title, src: g.full_url };
-              });
-              window.KuklaImageGallery.open({ items: gal, startIndex: i });
-              return;
-            }
-            openViewer(it.title || 'Bild', '<img src="' + esc(it.full_url) + '" alt="" style="max-width:100%;height:auto">');
+            openGalleryAt(i);
           });
         });
       })
       .catch(function () {
+        if (token !== galleryLoadToken) return;
+        galleryItems = [];
         root.innerHTML = '<p class="muted">Galerie konnte nicht geladen werden.</p>';
       });
   }
@@ -227,7 +302,6 @@
     syncTitle();
     var fab = qs('#formFab');
     if (fab) fab.addEventListener('input', syncTitle);
-    loadGallery();
     var galTab = qs('.akte-tab[data-akte-tab="galerie"]');
     if (galTab && galTab.getAttribute('data-akte-gal-bound') !== '1') {
       galTab.setAttribute('data-akte-gal-bound', '1');
@@ -242,7 +316,7 @@
         var el = qs('#formFab');
         if (!el) return;
         var v = (el.value || '').trim();
-        if (v !== lastGalleryFab) loadGallery();
+        if (isGalerieTabActive() && v !== lastGalleryFab) loadGallery();
         syncTitle();
       }, 700);
     }

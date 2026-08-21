@@ -455,7 +455,8 @@ function enrichFabJsonWithLocalAnlagenstamm(db, fabJson) {
     const localRow = anlagenstammLookupByFab(db, fn);
     if (!localRow) return r;
     const localDirty = Number(localRow.dirty) === 1 && hasNonemptyStammField(localRow);
-    return mergeStammIntoJobRow(r, {}, localRow, localDirty);
+    // Dirty-Stamm gewinnt. Sonst Job-Wert behalten (Projektdaten-Edit), leere Felder aus Stamm füllen.
+    return mergeStammIntoJobRow(r, {}, localRow, localDirty, { preferJob: !localDirty });
   });
   return JSON.stringify(out);
 }
@@ -510,6 +511,30 @@ function computeAddedJobFabNums(oldFabJson, newFabJson) {
     added.push(fn);
   }
   return added;
+}
+
+/** FNs, deren Stammfelder in der Job-JSON geändert wurden (nicht neu hinzugefügt). */
+function computeChangedJobStammFns(oldFabJson, newFabJson) {
+  const oldBy = {};
+  for (const r of parseJobFabrikationsnummernRows(oldFabJson)) {
+    const fn = normJobFabKey(r);
+    if (fn) oldBy[fn] = r;
+  }
+  const changed = [];
+  const seen = new Set();
+  for (const r of parseJobFabrikationsnummernRows(newFabJson)) {
+    const fn = normJobFabKey(r);
+    if (!fn || seen.has(fn) || !oldBy[fn]) continue;
+    seen.add(fn);
+    const prev = oldBy[fn];
+    for (const k of JOB_FAB_STAMM_KEYS) {
+      if (stammFieldTrim(r[k]) !== stammFieldTrim(prev[k])) {
+        changed.push(fn);
+        break;
+      }
+    }
+  }
+  return changed;
 }
 
 function computeRemovedJobFabNums(oldFabJson, newFabJson) {
@@ -576,6 +601,42 @@ function syncJobFabRowsToAnlagenstammLocal(db, fabJson, opts) {
       const exVal = existing ? stammFieldTrim(existing[k]) : '';
       if (jobVal && !exVal) incoming[k] = jobVal;
     }
+    const clamped = clampForDispoAnlagenstamm(incoming);
+    if (!hasNonemptyStammField(clamped)) continue;
+    const payload = mergeAnlagenstammPayload(existing || {}, clamped);
+    const saved = anlagenstammSaveLocal(db, payload);
+    if (saved.ok) n++;
+  }
+  return n;
+}
+
+/**
+ * Explizite Projektdaten-Edits: Job-Stammfelder in anlagenstamm_local schreiben,
+ * auch wenn dort schon ein älterer Wert steht (sonst überschreibt der nächste Pull).
+ */
+function applyJobFabEditsToAnlagenstammLocal(db, fabJson, opts) {
+  ensureAnlagenstammLocalSchema(db);
+  let rows = parseJobFabrikationsnummernRows(fabJson);
+  rows = jobFabRowFilterByOnlyFns(rows, opts && opts.onlyFns);
+  let n = 0;
+  for (const r of rows) {
+    const fn = normJobFabKey(r);
+    if (!fn) continue;
+    const existing = anlagenstammLookupByFab(db, fn);
+    const incoming = {
+      id: existing && existing.id ? existing.id : 0,
+      fabrikationsnummer: fn,
+    };
+    let changed = false;
+    for (const k of JOB_FAB_STAMM_KEYS) {
+      const jobVal = stammFieldTrim(r[k]);
+      const exVal = existing ? stammFieldTrim(existing[k]) : '';
+      if (jobVal && jobVal !== exVal) {
+        incoming[k] = jobVal;
+        changed = true;
+      }
+    }
+    if (!changed) continue;
     const clamped = clampForDispoAnlagenstamm(incoming);
     if (!hasNonemptyStammField(clamped)) continue;
     const payload = mergeAnlagenstammPayload(existing || {}, clamped);
@@ -1286,6 +1347,7 @@ function createApp(db) {
 
   const { registerAnlagenstammPhpRoutes } = require('./lib/anlagenstamm-php-routes');
   const { registerAbrechnungPhpRoutes } = require('./lib/abrechnung-php-routes');
+  let prewarmAnlagenstammGalleryThumbsImpl = null;
   const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession, loadWebSession } = require('./lib/monteur-dispo-web-routes');
   const { registerMultiDeviceRoutes } = require('./lib/multi-device-routes');
   let multiDeviceApi = null;
@@ -1327,6 +1389,11 @@ function createApp(db) {
     getDispoBaseUrl: () => resolveDispoServerCreds({}).baseUrl || '',
     getDispoExternalUrl: () => resolveDispoServerCreds({}).externalUrl || '',
     getDispoInternalUrl: () => resolveDispoServerCreds({}).internalUrl || '',
+    prewarmAnlagenstammGalleryThumbs: (fab, gallery) => {
+      if (typeof prewarmAnlagenstammGalleryThumbsImpl === 'function') {
+        prewarmAnlagenstammGalleryThumbsImpl(fab, gallery);
+      }
+    },
   });
   registerAbrechnungPhpRoutes(app, {
     db,
@@ -3756,6 +3823,9 @@ function createApp(db) {
     '.heif': 'image/heif',
   };
 
+  const { createThumbGenerateQueue } = require('./lib/thumb-generate-queue');
+  const projekteNeuThumbQueue = createThumbGenerateQueue({ concurrency: 1 });
+
   /** WebP-Vorschau; bei sharp-Fehler Originalbild (Browser zeigt ggf. kleineres Icon). */
   async function buildProjekteNeuThumbnailBuffer(filePath, thumbMax) {
     try {
@@ -3799,18 +3869,11 @@ function createApp(db) {
     return readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
   }
 
-  async function serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePathOpt) {
-    const filePath = filePathOpt || resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath);
-    const cachedThumb = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, filePath);
-    if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
-      res.setHeader('Content-Type', cachedThumb.contentType);
-      res.setHeader('Cache-Control', 'private, max-age=604800');
-      res.setHeader('Content-Length', String(cachedThumb.buf.length));
-      return res.send(cachedThumb.buf);
-    }
-    if (!filePath) {
-      return res.status(404).json({ ok: false, error: 'thumb_not_image', local_unavailable: true });
-    }
+  function cacheKeyProjekteNeuThumb(fabValue, pnPath, thumbMax) {
+    return String(fabValue || '') + '\0' + String(pnPath || '') + '\0' + String(thumbMax || 256);
+  }
+
+  async function generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath) {
     const thumbOut = await buildProjekteNeuThumbnailBuffer(filePath, thumbMax);
     try {
       writeCachedProjekteNeuThumb(
@@ -3827,11 +3890,61 @@ function createApp(db) {
     } catch (_) {
       /* ignore */
     }
+    return thumbOut;
+  }
+
+  function enqueueProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath) {
+    return projekteNeuThumbQueue.enqueue(
+      { key: cacheKeyProjekteNeuThumb(fabValue, pnPath, thumbMax) },
+      () => generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath),
+    );
+  }
+
+  async function serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePathOpt, opts) {
+    const preferCache =
+      !!(opts && opts.preferCache) ||
+      String((opts && opts.preferCacheRaw) || '').toLowerCase() === '1' ||
+      String((opts && opts.preferCacheRaw) || '').toLowerCase() === 'true';
+    const filePath = filePathOpt || resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath);
+    const cachedThumb = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, filePath);
+    if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
+      res.setHeader('X-Thumb-Cache', 'hit');
+      res.setHeader('Content-Type', cachedThumb.contentType);
+      res.setHeader('Cache-Control', 'private, max-age=604800');
+      res.setHeader('Content-Length', String(cachedThumb.buf.length));
+      return res.send(cachedThumb.buf);
+    }
+    if (!filePath) {
+      return res.status(404).json({ ok: false, error: 'thumb_not_image', local_unavailable: true });
+    }
+    if (preferCache) {
+      enqueueProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath).catch(() => {});
+      res.setHeader('X-Thumb-Cache', 'miss');
+      res.setHeader('Retry-After', '1');
+      return res.status(204).end();
+    }
+    const thumbOut = await enqueueProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath);
+    res.setHeader('X-Thumb-Cache', 'generated');
     res.setHeader('Content-Type', thumbOut.contentType);
     res.setHeader('Cache-Control', 'private, max-age=604800');
     res.setHeader('Content-Length', String(thumbOut.buf.length));
     return res.send(thumbOut.buf);
   }
+
+  prewarmAnlagenstammGalleryThumbsImpl = function prewarmAnlagenstammGalleryThumbs(fab, gallery) {
+    const fabNorm = String(fab || '').trim();
+    if (!fabNorm || !Array.isArray(gallery) || !gallery.length) return;
+    const techId = getTechnicianId({ headers: {} }) || '';
+    for (const it of gallery) {
+      const rel = String((it && (it.rel_path || it.rel)) || '').trim();
+      if (!rel) continue;
+      const filePath = resolveProjekteNeuLocalFilePathAll(techId, fabNorm, rel);
+      if (!filePath) continue;
+      const cached = readCachedProjekteNeuThumb(db, DB_DIR, fabNorm, rel, 256, filePath);
+      if (cached && cached.buf && cached.buf.length) continue;
+      enqueueProjekteNeuThumb(fabNorm, rel, 256, filePath).catch(() => {});
+    }
+  };
 
   function cacheProjekteNeuTreesForJob(localJobId) {
     const jobRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
@@ -7341,6 +7454,10 @@ function createApp(db) {
         String(req.query.thumb || '').toLowerCase() === '1' || req.query.thumb === 'true';
       const wantInline =
         String(req.query.inline || '').toLowerCase() === '1' || req.query.inline === 'true';
+      const preferCache =
+        String(req.query.prefer_cache || '').toLowerCase() === '1' ||
+        String(req.query.prefer_cache || '').toLowerCase() === 'true';
+      const thumbOpts = { preferCache };
       let thumbMax = parseInt(req.query.thumbMax || req.query.thumb_max, 10);
       if (!Number.isFinite(thumbMax)) thumbMax = 256;
       thumbMax = Math.min(512, Math.max(64, thumbMax));
@@ -7352,7 +7469,7 @@ function createApp(db) {
         if (localPath) {
           try {
             if (wantThumb) {
-              return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, localPath);
+              return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, localPath, thumbOpts);
             }
             const buf = fs.readFileSync(localPath);
             const baseName = path.basename(localPath);
@@ -7393,7 +7510,7 @@ function createApp(db) {
         }
         if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
           if (wantThumb) {
-            return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePath);
+            return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePath, thumbOpts);
           }
           const buf = fs.readFileSync(filePath);
           const baseName = path.basename(filePath);
@@ -7420,6 +7537,9 @@ function createApp(db) {
       }
       const creds = loadDispoWebSessionCreds();
       const base = (creds.baseUrl || '').toString().trim().replace(/\/$/, '');
+      if (wantThumb && preferCache) {
+        return res.status(204).end();
+      }
       if (!base) {
         return res.status(404).json({ success: false, error: 'Datei nicht lokal gefunden.' });
       }
@@ -13121,8 +13241,13 @@ function createApp(db) {
           WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
         `).run(val, effectiveJobId, technicianId);
         if (r.changes) {
-          syncJobFabRowsToAnlagenstammLocal(db, val, { onlyFns: addedFns });
-          enqueueAnlagenstammPendingFromFabJson(db, val, { onlyFns: addedFns });
+          const changedFns = computeChangedJobStammFns(oldFabJson, val);
+          const stammFns = [...new Set([...(addedFns || []), ...(changedFns || [])])];
+          if (stammFns.length) {
+            applyJobFabEditsToAnlagenstammLocal(db, val, { onlyFns: stammFns });
+            syncJobFabRowsToAnlagenstammLocal(db, val, { onlyFns: addedFns });
+            enqueueAnlagenstammPendingFromFabJson(db, val, { onlyFns: stammFns });
+          }
           for (const fn of removedFns) {
             try {
               removeOfflinePullFab(db, effectiveJobId, fn);
@@ -14822,9 +14947,12 @@ function createApp(db) {
           const fn = normJobFabKey(r);
           const apiRow = fn ? byFab[fn] || {} : {};
           const localRow = fn ? anlagenstammLookupByFab(db, fn) : null;
-          const localDirty = localRow && Number(localRow.dirty) === 1;
+          const localDirty = localRow && Number(localRow.dirty) === 1 && hasNonemptyStammField(localRow);
           const jobRow = r && typeof r === 'object' ? r : { fabrikationsnummer: fn };
-          return mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty);
+          // Unsynced Projektdaten-Edit nicht mit altem Stamm zurückschreiben.
+          return mergeStammIntoJobRow(jobRow, apiRow, localRow, localDirty, {
+            preferJob: pendingFab !== undefined && !localDirty,
+          });
         }),
       );
       debugInfo.ok = true;
