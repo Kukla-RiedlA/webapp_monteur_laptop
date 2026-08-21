@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.006
+- **Sync-Queue:** Ausstehende Änderungen (Events) nutzen beim Push die aktuell erreichbare Dispo-URL und die Session-Zugangsdaten, nicht mehr eine festgebackene externe URL. Push-Fehler werden in den Einstellungen und in der Statusleiste angezeigt statt hinter „Online“ zu verschwinden. Bootstrap mit 0 B bei keinen Aufträgen in Arbeit ist der falsche Knopf für Events.
+- **Anlagenstamm-Push:** „Fabrikationsnummer existiert bereits“ blockiert die Queue nicht mehr — lokale SQLite-IDs werden nicht als Dispo-IDs gesendet; bestehender Stamm wird per FN aktualisiert.
+- **Einstellungen:** Kukla-Karten (Verbindung, Unterschrift, Speicherorte, Sync, Geräte, App). Neuer Block **Technischer Status** mit Queue, Push/Pull-Fehlern und ausstehenden Events.
+
 ## V 2.006.005
 - **Auftrag annehmen:** Bei Dispo-Netzfehler (`fetch failed`) wird der Auftrag lokal auf „in Arbeit“ gesetzt; Projektdateien und Status-Push folgen beim nächsten Sync.
 - **Sync intern:** Erreichbarkeit ohne paralleles Doppel-Login (weniger 429); interne URL `10.0.0.180:4433` wird auf Port 443 korrigiert; Push nutzt Session-Zugangsdaten.

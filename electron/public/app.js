@@ -793,6 +793,130 @@
       });
   }
 
+  function escapeHtmlTech(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function formatTechStatusJob(job) {
+    if (!job) return '—';
+    if (typeof job === 'string') return job;
+    var parts = [];
+    if (job.type) parts.push(job.type);
+    if (job.status) parts.push(job.status);
+    if (job.message) parts.push(job.message);
+    if (job.error) parts.push(job.error);
+    if (job.updated_at) parts.push(job.updated_at);
+    return parts.length ? parts.join(' · ') : '—';
+  }
+
+  function renderSettingsTechStatus(data) {
+    var banner = document.getElementById('settings-tech-error-banner');
+    var dl = document.getElementById('settings-tech-status-dl');
+    var tbody = document.getElementById('settings-tech-pending-body');
+    if (!dl && !tbody) return;
+    var errText =
+      data.pending_last_error ||
+      (data.last_sync_push && data.last_sync_push.status === 'failed'
+        ? data.last_sync_push.error || data.last_sync_push.message
+        : '') ||
+      (data.last_sync_pull && data.last_sync_pull.status === 'failed'
+        ? data.last_sync_pull.error || data.last_sync_pull.message
+        : '');
+    if (banner) {
+      if (errText) {
+        banner.hidden = false;
+        banner.textContent = errText;
+      } else {
+        banner.hidden = true;
+        banner.textContent = '';
+      }
+    }
+    if (dl) {
+      var rows = [
+        ['Ausstehende Änderungen', (data.pending_events != null ? data.pending_events : data.pending_changes) || 0],
+        ['Aufschlüsselung', data.pending_summary || '—'],
+        ['Uploads ausstehend', data.pending_uploads != null ? data.pending_uploads : 0],
+        ['Dead-Letter (aufgegeben)', data.pending_failed_count != null ? data.pending_failed_count : 0],
+        ['Letzter Queue-Fehler', data.pending_last_error || '—', !!data.pending_last_error],
+        ['Letzter Push', formatTechStatusJob(data.last_sync_push), data.last_sync_push && data.last_sync_push.status === 'failed'],
+        ['Letzter Pull', formatTechStatusJob(data.last_sync_pull), data.last_sync_pull && data.last_sync_pull.status === 'failed'],
+        ['Kalender zuletzt', data.calendar_cache_synced_at || '—'],
+        ['Jobs zuletzt', data.last_jobs_sync || '—'],
+        ['Laufende Jobs', Array.isArray(data.active_jobs) && data.active_jobs.length
+          ? data.active_jobs.map(function (j) {
+              return (j.type || '?') + ': ' + (j.status || '?') + (j.message ? ' (' + j.message + ')' : '');
+            }).join(', ')
+          : 'keine'],
+        ['Datenbank', data.db_size_human || '—'],
+        ['DB-Pfad', data.db_path || '—'],
+        ['Projektordner', data.dienstreise_files_configured ? (data.dienstreise_files_cache_human || '—') : 'nicht konfiguriert'],
+        ['Anlagenstamm lokal', data.anlagenstamm_local_count != null ? data.anlagenstamm_local_count : '—'],
+        ['Monteur-ID', data.technician_id != null ? data.technician_id : '—'],
+        ['Geräte-ID', data.device_id || '—'],
+      ];
+      dl.innerHTML = rows
+        .map(function (r) {
+          return (
+            '<dt>' +
+            escapeHtmlTech(r[0]) +
+            '</dt><dd' +
+            (r[2] ? ' class="is-error"' : '') +
+            '>' +
+            escapeHtmlTech(r[1]) +
+            '</dd>'
+          );
+        })
+        .join('');
+    }
+    if (tbody) {
+      var items = Array.isArray(data.pending_items) ? data.pending_items : [];
+      var failed = Array.isArray(data.pending_failed_preview) ? data.pending_failed_preview : [];
+      var lines = [];
+      if (!items.length && !failed.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="muted">Keine ausstehenden Änderungen.</td></tr>';
+      } else {
+        items.forEach(function (it) {
+          var err = it.last_error || '';
+          lines.push(
+            '<tr><td>' +
+              escapeHtmlTech(it.entity_type) +
+              '</td><td>' +
+              escapeHtmlTech(it.action) +
+              '</td><td>' +
+              escapeHtmlTech(it.entity_id) +
+              '</td><td>' +
+              escapeHtmlTech(it.attempts != null ? it.attempts : 0) +
+              '</td><td class="' +
+              (err ? 'is-error' : '') +
+              '">' +
+              escapeHtmlTech(err || '—') +
+              '</td></tr>',
+          );
+        });
+        failed.forEach(function (it) {
+          lines.push(
+            '<tr><td>' +
+              escapeHtmlTech(it.entity_type) +
+              ' (aufgegeben)</td><td>' +
+              escapeHtmlTech(it.action) +
+              '</td><td>' +
+              escapeHtmlTech(it.entity_id) +
+              '</td><td>' +
+              escapeHtmlTech(it.attempts != null ? it.attempts : 0) +
+              '</td><td class="is-error">' +
+              escapeHtmlTech(it.last_error || it.fail_reason || '—') +
+              '</td></tr>',
+          );
+        });
+        tbody.innerHTML = lines.join('');
+      }
+    }
+  }
+
   async function loadSettingsSyncStatus() {
     var summaryEl = document.getElementById('settings-sync-summary');
     var dbEl = document.getElementById('settings-db-size');
@@ -805,6 +929,9 @@
       });
       if (!data.ok) {
         if (summaryEl) summaryEl.textContent = 'Sync-Status nicht verfügbar.';
+        if (typeof renderSettingsTechStatus === 'function') {
+          renderSettingsTechStatus({ ok: false, pending_last_error: 'Sync-Status nicht verfügbar.' });
+        }
         return;
       }
       if (summaryEl) {
@@ -817,6 +944,32 @@
           (data.calendar_cache_synced_at || '—') +
           ', Jobs: ' +
           (data.last_jobs_sync || '—');
+      }
+      var pendingDetailEl = document.getElementById('settings-sync-pending-detail');
+      if (pendingDetailEl) {
+        var pendingN = data.pending_events != null ? data.pending_events : data.pending_changes || 0;
+        var detailParts = [];
+        if (pendingN > 0 && data.pending_summary) {
+          detailParts.push('Ausstehend: ' + data.pending_summary);
+        }
+        if (data.pending_last_error) {
+          detailParts.push('Letzter Fehler: ' + data.pending_last_error);
+        } else if (
+          data.last_sync_push &&
+          data.last_sync_push.status === 'failed' &&
+          (data.last_sync_push.error || data.last_sync_push.message)
+        ) {
+          detailParts.push(
+            'Letzter Push: ' + (data.last_sync_push.error || data.last_sync_push.message),
+          );
+        }
+        if (detailParts.length) {
+          pendingDetailEl.hidden = false;
+          pendingDetailEl.textContent = detailParts.join(' — ');
+        } else {
+          pendingDetailEl.hidden = true;
+          pendingDetailEl.textContent = '';
+        }
       }
       if (dbEl) {
         var size = data.db_size_human || '—';
@@ -834,8 +987,17 @@
       if (typeof updateMultiDeviceUiFromSyncStatus === 'function') {
         updateMultiDeviceUiFromSyncStatus(data);
       }
+      if (typeof renderSettingsTechStatus === 'function') {
+        renderSettingsTechStatus(data);
+      }
     } catch (e) {
       if (summaryEl) summaryEl.textContent = 'Sync-Status konnte nicht geladen werden.';
+      if (typeof renderSettingsTechStatus === 'function') {
+        renderSettingsTechStatus({
+          ok: false,
+          pending_last_error: 'Sync-Status konnte nicht geladen werden.',
+        });
+      }
     }
   }
 
@@ -7077,6 +7239,23 @@
         setConnectionBadge('online_syncing', 'Kopie/Sync läuft — Daten lokal verfügbar');
         return;
       }
+      if (st.last_sync_push && st.last_sync_push.status === 'failed' && st.pending_changes > 0) {
+        setConnectionBadge(
+          'degraded',
+          (st.last_sync_push.error || st.pending_last_error || 'Änderungen konnten nicht gesendet werden') +
+            ' — Klicken zum erneuten Synchronisieren',
+        );
+        updateMultiDeviceUiFromSyncStatus(st);
+        return;
+      }
+      if (st.pending_last_error && st.pending_changes > 0) {
+        setConnectionBadge(
+          'degraded',
+          st.pending_last_error + ' — ' + st.pending_changes + ' Änderung(en) ausstehend',
+        );
+        updateMultiDeviceUiFromSyncStatus(st);
+        return;
+      }
       if (st.pending_changes > 0) {
         setConnectionBadge('online', 'Online — ' + st.pending_changes + ' Änderung(en) ausstehend');
         updateMultiDeviceUiFromSyncStatus(st);
@@ -7332,7 +7511,10 @@
         !confirm(
           'Bootstrap starten?\nGeschätzte Download-Menge: ' +
             (ed.total_human || '?') +
-            '\n(Nur physische Projektordner.)',
+            '\n(Nur physische Projektordner von Aufträgen in Arbeit.)' +
+            (!(ed.jobs && ed.jobs.length)
+              ? '\n\nHinweis: Keine Aufträge in Arbeit — Bootstrap sendet keine ausstehenden Änderungen. Dafür „Jetzt synchronisieren“ nutzen.'
+              : ''),
         )
       ) {
         if (hint) hint.textContent = 'Abgebrochen.';
@@ -8888,6 +9070,12 @@
   if (btnRefreshDevices) {
     btnRefreshDevices.addEventListener('click', function () {
       refreshMonteurDevicesList();
+    });
+  }
+  var btnRefreshTechStatus = document.getElementById('btnRefreshTechStatus');
+  if (btnRefreshTechStatus) {
+    btnRefreshTechStatus.addEventListener('click', function () {
+      loadSettingsSyncStatus().catch(function () {});
     });
   }
   var btnMultiDeviceDeleteLocal = document.getElementById('btnMultiDeviceDeleteLocal');

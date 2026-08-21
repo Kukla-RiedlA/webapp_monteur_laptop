@@ -517,7 +517,7 @@ function stripEmptyStammFieldsForDispoPush(payload, existing) {
   const merged = mergeAnlagenstammPayload(existing, payload);
   const out = {};
   if (merged.fabrikationsnummer) out.fabrikationsnummer = merged.fabrikationsnummer;
-  if (merged.id != null && Number(merged.id) > 0) out.id = merged.id;
+  // Keine lokale SQLite-id an die Dispo senden — die API matched per Fabrikationsnummer.
   for (const k of ANLAGENSTAMM_MERGE_KEYS) {
     const v = stammFieldTrim(merged[k]);
     if (v !== '') out[k] = v;

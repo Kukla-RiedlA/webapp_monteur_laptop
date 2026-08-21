@@ -921,16 +921,85 @@
     .settings-row { margin-bottom: 1rem; }
     .settings-row label { display: block; margin-bottom: 0.25rem; color: var(--muted); font-size: 0.9rem; }
     .settings-row input { width: 100%; max-width: 400px; padding: 0.5rem 0.6rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
+    .view-einstellungen .settings-row input { max-width: 100%; }
     .settings-row-checkbox .settings-checkbox-label { display: flex; align-items: flex-start; gap: 0.5rem; max-width: 420px; cursor: pointer; color: var(--muted); font-size: 0.9rem; }
     .settings-row-checkbox input[type="checkbox"] { width: auto; max-width: none; margin-top: 0.2rem; flex-shrink: 0; }
     .settings-hint-tls { margin: 0 0 1rem; max-width: 420px; font-size: 0.9rem; color: var(--muted); line-height: 1.4; }
-    .settings-sync-section { margin: 1rem 0; padding: 0.85rem 0 0.25rem; border-top: 1px solid var(--accent); max-width: 620px; }
-    .settings-sync-section h3 { margin: 0 0 0.65rem; font-size: 1rem; color: var(--text); }
+    .settings-page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; margin: 0 0 1rem; }
+    .view-einstellungen.settings-page { max-width: 760px; padding: 1rem 1.15rem 2.5rem; }
+    .view-einstellungen .settings-page-title {
+      margin: 0 0 0.35rem;
+      font-size: 1.45rem;
+      font-weight: 600;
+      color: var(--text-strong, var(--text));
+    }
+    html[data-ui-theme="kukla"] .view-einstellungen .settings-page-title { color: var(--kukla-primary, #0e7b5a); }
+    .view-einstellungen .settings-card {
+      background: var(--card);
+      border: 1px solid var(--kukla-gray, #e3e3e3);
+      border-radius: 0;
+      padding: 1.1rem 1.15rem 1rem;
+      margin-bottom: 1rem;
+    }
+    .view-einstellungen .settings-card h2 {
+      margin: 0 0 0.3rem;
+      font-size: 1.12rem;
+      font-weight: 600;
+      color: var(--kukla-primary, var(--accent));
+    }
+    .view-einstellungen .settings-card-lead {
+      margin: 0 0 0.9rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .settings-tech-dl {
+      display: grid;
+      grid-template-columns: minmax(132px, 34%) 1fr;
+      gap: 0.4rem 1rem;
+      margin: 0 0 0.85rem;
+    }
+    .settings-tech-dl dt { margin: 0; color: var(--muted); font-size: 0.82rem; font-weight: 500; }
+    .settings-tech-dl dd { margin: 0; font-size: 0.88rem; word-break: break-word; line-height: 1.4; }
+    .settings-tech-dl dd.is-error { color: #b3261e; font-weight: 600; }
+    .settings-tech-banner {
+      margin: 0 0 0.85rem;
+      padding: 0.55rem 0.7rem;
+      border: 1px solid #ef4444;
+      background: rgba(254, 226, 226, 0.9);
+      color: #7f1d1d;
+      font-size: 0.88rem;
+      line-height: 1.4;
+    }
+    .settings-tech-banner[hidden] { display: none; }
+    .settings-tech-table-wrap { overflow-x: auto; margin: 0.5rem 0 0.75rem; }
+    .settings-tech-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .settings-tech-table th, .settings-tech-table td {
+      text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--kukla-gray, #e3e3e3); vertical-align: top;
+    }
+    .settings-tech-table th { color: var(--muted); font-weight: 600; }
+    .settings-tech-table td.is-error { color: #b3261e; }
+    html[data-ui-theme="kukla"] .view-einstellungen { font-family: var(--kukla-font, inherit); }
+    html[data-ui-theme="kukla"] .view-einstellungen .settings-card {
+      border-color: var(--kukla-gray, #e3e3e3);
+      box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+    }
+    html[data-ui-theme="dark"] .view-einstellungen .settings-card {
+      border-color: var(--accent);
+    }
+    html[data-ui-theme="dark"] .view-einstellungen .settings-card h2 { color: var(--text); }
+    html[data-ui-theme="dark"] .settings-tech-banner { background: rgba(179, 38, 30, 0.18); border-color: rgba(179, 38, 30, 0.55); color: #ffb4ab; }
+    html[data-ui-theme="dark"] .settings-tech-dl dd.is-error,
+    html[data-ui-theme="dark"] .settings-tech-table td.is-error { color: #ffb4ab; }
     .settings-sync-hint, .settings-db-size { margin: 0.35rem 0 0.75rem; font-size: 0.88rem; color: var(--muted); line-height: 1.45; word-break: break-word; }
     .settings-db-size { margin-bottom: 1rem; }
-    .settings-danger-zone { border: 1px solid rgba(179, 38, 30, 0.5); border-radius: 6px; padding: 0.85rem; margin-top: 1rem; max-width: 620px; background: rgba(179, 38, 30, 0.08); }
+    .settings-danger-zone { border: 1px solid rgba(179, 38, 30, 0.5); border-radius: 0; padding: 0.85rem; margin-top: 0; max-width: none; background: rgba(179, 38, 30, 0.08); }
     .settings-danger-zone h3 { margin: 0 0 0.4rem; font-size: 1rem; color: #ffb4ab; }
     .settings-danger-zone p { margin: 0 0 0.65rem; font-size: 0.9rem; color: var(--muted); line-height: 1.4; }
+    html[data-ui-theme="kukla"] .settings-danger-zone { background: #fff5f4; border-color: rgba(179, 38, 30, 0.35); }
+    html[data-ui-theme="kukla"] .settings-danger-zone h2,
+    html[data-ui-theme="kukla"] .settings-danger-zone h3 { color: #b3261e; }
+    html[data-ui-theme="dark"] .settings-danger-zone h2 { color: #ffb4ab; }
     .dienstreise-basepath-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; max-width: 520px; }
     .settings-saved-hint { margin-left: 0.75rem; color: var(--muted); font-size: 0.9rem; }
     .cal-toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
@@ -2990,59 +3059,24 @@
       </div>
     </div>
   </main>
-  <main id="viewEinstellungen" class="view-einstellungen">
-    <div class="card">
-      <h2>Einstellungen</h2>
-      <p class="muted" style="font-size:0.88rem;margin:0 0 1rem 0">Erscheinungsbild (hell Kukla / dunkel klassisch): Schalter in der Kopfzeile rechts neben dem Zahnrad.</p>
+  <main id="viewEinstellungen" class="view-einstellungen settings-page">
+    <h1 class="settings-page-title">Einstellungen</h1>
+    <p class="settings-card-lead">Erscheinungsbild (hell Kukla / dunkel klassisch): Schalter in der Kopfzeile rechts neben dem Zahnrad.</p>
+    <div class="settings-page-actions">
+      <button type="button" class="btn btn-primary" id="btnSaveSettings">Speichern</button>
+      <span id="settingsSavedHint" class="settings-saved-hint" aria-live="polite"></span>
+    </div>
+
+    <section class="settings-card">
+      <h2>Verbindung</h2>
+      <p class="settings-card-lead">Dispo-Zugang für Sync. Im Büro wird intern bevorzugt, unterwegs die externe Adresse.</p>
       <div class="settings-row">
         <label for="serverUrl">Dispo (extern / Standard)</label>
         <input type="text" id="serverUrl" placeholder="z.B. https://fsm.kukla.co.at:4433" value="https://fsm.kukla.co.at:4433" title="Öffentliche oder Standard-Basis-URL der Dispo (ohne abschließenden Slash). Wird genutzt, wenn keine interne URL erreichbar ist." />
       </div>
       <div class="settings-row">
         <label for="serverUrlInternal">Dispo (Firmennetz / intern)</label>
-        <input type="text" id="serverUrlInternal" placeholder="z.B. https://10.0.0.180" value="https://10.0.0.180" title="Optional: direkter Zugriff im Büro-LAN (z. B. https://10.0.0.180 ohne abweichenden Port). Die App prüft parallel extern und intern (10 s); wenn beide erreichbar sind, wird die interne Adresse bevorzugt." />
-      </div>
-      <div class="settings-row">
-        <label for="technicianId">Monteur-ID</label>
-        <input type="number" id="technicianId" min="1" readonly placeholder="Nach Dispo-Login" title="Wird automatisch aus Benutzername und Passwort ermittelt." />
-        <span id="monteurProfileHint" class="settings-saved-hint" style="display:block;margin-top:0.35rem" aria-live="polite"></span>
-      </div>
-      <div class="settings-row">
-        <label for="monteurFullName">Name (vollständig)</label>
-        <input type="text" id="monteurFullName" readonly placeholder="Nach Login aus Dispo" title="Aus Dispo übernommen nach erfolgreichem Login." />
-      </div>
-      <div class="settings-sync-section" id="settingsSignatureSection">
-        <h3>Meine Unterschrift</h3>
-        <p class="muted" style="font-size:0.88rem;margin:0 0 0.65rem;line-height:1.4;">
-          Wird in allen Protokoll-PDFs eingebettet. Zeichnen oder Bild hochladen (PNG/JPEG). Speichern synchronisiert mit dem Dispo-Server, wenn online.
-        </p>
-        <div class="settings-row">
-          <div style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start;">
-            <div>
-              <label for="techSigCanvas">Zeichnen</label>
-              <canvas id="techSigCanvas" width="400" height="120" style="display:block;width:400px;max-width:100%;height:120px;border:1px solid var(--accent);border-radius:4px;background:#fff;touch-action:none;cursor:crosshair;" aria-label="Unterschrift zeichnen"></canvas>
-              <div style="margin-top:0.4rem;display:flex;flex-wrap:wrap;gap:0.4rem;">
-                <button type="button" class="btn btn-ghost" id="btnTechSigClear">Zeichnung löschen</button>
-                <button type="button" class="btn btn-primary" id="btnTechSigSaveDraw">Unterschrift speichern</button>
-              </div>
-            </div>
-            <div>
-              <label>Vorschau (gespeichert)</label>
-              <div id="techSigPreviewWrap" style="width:220px;height:80px;border:1px dashed var(--accent);border-radius:4px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">
-                <img id="techSigPreview" alt="" style="max-width:100%;max-height:100%;display:none;" />
-                <span id="techSigPreviewEmpty" class="muted" style="font-size:0.85rem;">Keine Unterschrift</span>
-              </div>
-              <div style="margin-top:0.4rem;display:flex;flex-wrap:wrap;gap:0.4rem;">
-                <label class="btn btn-ghost" style="cursor:pointer;margin:0;">
-                  Bild hochladen…
-                  <input type="file" id="techSigUpload" accept="image/png,image/jpeg" hidden />
-                </label>
-                <button type="button" class="btn btn-ghost" id="btnTechSigDelete" disabled>Gespeicherte löschen</button>
-              </div>
-            </div>
-          </div>
-          <span id="techSigHint" class="settings-saved-hint" style="display:block;margin-top:0.5rem;" aria-live="polite"></span>
-        </div>
+        <input type="text" id="serverUrlInternal" placeholder="z.B. https://10.0.0.180" value="https://10.0.0.180" title="Optional: direkter Zugriff im Büro-LAN (z. B. https://10.0.0.180 ohne abweichenden Port)." />
       </div>
       <div class="settings-row">
         <label for="serverUsername">Benutzername (Dispo-Login)</label>
@@ -3056,46 +3090,127 @@
         HTTPS zum Dispo-Server: selbstsigniertes Zertifikat wird akzeptiert (fest voreingestellt, z.&nbsp;B. interne Kukla-URL).
       </p>
       <div class="settings-row">
-        <label for="dienstreiseBasePath">Speicherort Dienstreise-Ordner</label>
+        <label for="technicianId">Monteur-ID</label>
+        <input type="number" id="technicianId" min="1" readonly placeholder="Nach Dispo-Login" title="Wird automatisch aus Benutzername und Passwort ermittelt." />
+        <span id="monteurProfileHint" class="settings-saved-hint" style="display:block;margin-top:0.35rem" aria-live="polite"></span>
+      </div>
+      <div class="settings-row">
+        <label for="monteurFullName">Name (vollständig)</label>
+        <input type="text" id="monteurFullName" readonly placeholder="Nach Login aus Dispo" title="Aus Dispo übernommen nach erfolgreichem Login." />
+      </div>
+    </section>
+
+    <section class="settings-card" id="settingsSignatureSection">
+      <h2>Meine Unterschrift</h2>
+      <p class="settings-card-lead">Wird in allen Protokoll-PDFs eingebettet. Zeichnen oder Bild hochladen (PNG/JPEG). Speichern synchronisiert mit dem Dispo-Server, wenn online.</p>
+      <div class="settings-row">
+        <div style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start;">
+          <div>
+            <label for="techSigCanvas">Zeichnen</label>
+            <canvas id="techSigCanvas" width="400" height="120" style="display:block;width:400px;max-width:100%;height:120px;border:1px solid var(--accent);border-radius:4px;background:#fff;touch-action:none;cursor:crosshair;" aria-label="Unterschrift zeichnen"></canvas>
+            <div style="margin-top:0.4rem;display:flex;flex-wrap:wrap;gap:0.4rem;">
+              <button type="button" class="btn btn-ghost" id="btnTechSigClear">Zeichnung löschen</button>
+              <button type="button" class="btn btn-primary" id="btnTechSigSaveDraw">Unterschrift speichern</button>
+            </div>
+          </div>
+          <div>
+            <label>Vorschau (gespeichert)</label>
+            <div id="techSigPreviewWrap" style="width:220px;height:80px;border:1px dashed var(--accent);border-radius:4px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+              <img id="techSigPreview" alt="" style="max-width:100%;max-height:100%;display:none;" />
+              <span id="techSigPreviewEmpty" class="muted" style="font-size:0.85rem;">Keine Unterschrift</span>
+            </div>
+            <div style="margin-top:0.4rem;display:flex;flex-wrap:wrap;gap:0.4rem;">
+              <label class="btn btn-ghost" style="cursor:pointer;margin:0;">
+                Bild hochladen…
+                <input type="file" id="techSigUpload" accept="image/png,image/jpeg" hidden />
+              </label>
+              <button type="button" class="btn btn-ghost" id="btnTechSigDelete" disabled>Gespeicherte löschen</button>
+            </div>
+          </div>
+        </div>
+        <span id="techSigHint" class="settings-saved-hint" style="display:block;margin-top:0.5rem;" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="settings-card">
+      <h2>Speicherorte</h2>
+      <p class="settings-card-lead">Lokale Ordner für Dienstreise-Dateien und Zeitschreibung.</p>
+      <div class="settings-row">
+        <label for="dienstreiseBasePath">Dienstreise-Ordner</label>
         <div class="dienstreise-basepath-row">
           <input type="text" id="dienstreiseBasePath" placeholder="z.B. D:\Dienstreisen" title="Basisordner, unter dem Jahr und Reise-Ordner angelegt werden." />
           <button type="button" class="btn btn-ghost" id="btnDienstreiseBaseBrowse">Durchsuchen…</button>
         </div>
       </div>
       <div class="settings-row">
-        <label for="zeitschreibungBasePath">Speicherort Zeitaufzeichnungen-Ordner</label>
+        <label for="zeitschreibungBasePath">Zeitaufzeichnungen-Ordner</label>
         <div class="dienstreise-basepath-row">
           <input type="text" id="zeitschreibungBasePath" placeholder="z.B. …\Zeitaufzeichnungen" title="Basisordner für PDF/Excel der Zeitschreibung (Jahr/Monat-Unterordner)." />
           <button type="button" class="btn btn-ghost" id="btnZeitschreibungBaseBrowse">Durchsuchen…</button>
         </div>
       </div>
-      <div class="settings-sync-section">
-        <h3>Synchronisation</h3>
-        <p id="settings-sync-summary" class="settings-sync-hint muted">Wird geladen…</p>
-        <p id="settings-db-size" class="settings-db-size muted">Lokale Datenbank: …</p>
-        <div class="settings-row">
-          <label for="syncIntervalMinutes">Aktualisierungsintervall (Minuten)</label>
-          <input type="number" id="syncIntervalMinutes" value="5" min="1" max="1440" title="Wie oft die Verbindung zum Server geprüft und Daten synchronisiert werden (Standard: 5)." />
-        </div>
-        <div class="settings-row">
-          <button type="button" class="btn btn-primary" id="btnSyncNow" title="Aufträge und Abwesenheiten sofort vom Dispo-Server laden">Jetzt synchronisieren</button>
-          <span id="syncNowHint" class="settings-saved-hint" aria-live="polite"></span>
-        </div>
-        <div class="settings-row">
-          <button type="button" class="btn btn-ghost" id="btnDeviceBootstrap" title="Alle in_arbeit-Projektordner (physisch) auf dieses Gerät holen">Gerät synchronisieren (Bootstrap)</button>
-          <span id="deviceBootstrapHint" class="settings-saved-hint" aria-live="polite"></span>
-        </div>
-        <p id="deviceBootstrapEstimate" class="muted" style="font-size:0.85rem;margin:0.25rem 0 0.75rem;"></p>
+    </section>
+
+    <section class="settings-card">
+      <h2>Synchronisation</h2>
+      <p class="settings-card-lead">Aufträge und Änderungen mit der Dispo abgleichen. Bootstrap holt nur Projektordner von Aufträgen in Arbeit — nicht die ausstehenden Events.</p>
+      <p id="settings-sync-summary" class="settings-sync-hint muted">Wird geladen…</p>
+      <p id="settings-sync-pending-detail" class="settings-sync-hint" hidden></p>
+      <p id="settings-db-size" class="settings-db-size muted">Lokale Datenbank: …</p>
+      <div class="settings-row">
+        <label for="syncIntervalMinutes">Aktualisierungsintervall (Minuten)</label>
+        <input type="number" id="syncIntervalMinutes" value="5" min="1" max="1440" title="Wie oft die Verbindung zum Server geprüft und Daten synchronisiert werden (Standard: 5)." />
       </div>
-      <div class="settings-sync-section">
-        <h3>Angemeldete Geräte (Multi-Device)</h3>
-        <p class="muted" style="font-size:0.85rem;margin:0 0 0.5rem;">Dieses Gerät und weitere Laptops desselben Monteurs. Widerrufene Geräte dürfen nicht mehr syncen.</p>
-        <p id="selfDeviceIdHint" class="muted" style="font-size:0.8rem;margin:0 0 0.5rem;"></p>
-        <div id="monteurDevicesList" class="monteur-devices-list"><span class="empty">Noch nicht geladen.</span></div>
-        <div class="settings-row" style="margin-top:0.5rem;">
-          <button type="button" class="btn btn-ghost" id="btnRefreshDevices">Geräteliste aktualisieren</button>
-        </div>
+      <div class="settings-row">
+        <button type="button" class="btn btn-primary" id="btnSyncNow" title="Aufträge und Abwesenheiten sofort vom Dispo-Server laden">Jetzt synchronisieren</button>
+        <span id="syncNowHint" class="settings-saved-hint" aria-live="polite"></span>
       </div>
+      <div class="settings-row">
+        <button type="button" class="btn btn-ghost" id="btnDeviceBootstrap" title="Alle in_arbeit-Projektordner (physisch) auf dieses Gerät holen">Gerät synchronisieren (Bootstrap)</button>
+        <span id="deviceBootstrapHint" class="settings-saved-hint" aria-live="polite"></span>
+      </div>
+      <p id="deviceBootstrapEstimate" class="muted" style="font-size:0.85rem;margin:0.25rem 0 0;"></p>
+    </section>
+
+    <section class="settings-card" id="settingsTechStatusSection">
+      <h2>Technischer Status</h2>
+      <p class="settings-card-lead">Details zu Queue, letztem Push/Pull und Fehlern — zum Finden von Sync-Problemen.</p>
+      <p id="settings-tech-error-banner" class="settings-tech-banner" hidden></p>
+      <dl id="settings-tech-status-dl" class="settings-tech-dl muted"></dl>
+      <div class="settings-tech-table-wrap">
+        <table class="settings-tech-table" id="settings-tech-pending-table">
+          <thead>
+            <tr>
+              <th>Typ</th>
+              <th>Aktion</th>
+              <th>ID</th>
+              <th>Versuche</th>
+              <th>Fehler</th>
+            </tr>
+          </thead>
+          <tbody id="settings-tech-pending-body">
+            <tr><td colspan="5" class="muted">Wird geladen…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="settings-row" style="margin-bottom:0;">
+        <button type="button" class="btn btn-ghost" id="btnRefreshTechStatus">Status aktualisieren</button>
+      </div>
+    </section>
+
+    <section class="settings-card">
+      <h2>Angemeldete Geräte</h2>
+      <p class="settings-card-lead">Dieses Gerät und weitere Laptops desselben Monteurs. Widerrufene Geräte dürfen nicht mehr syncen.</p>
+      <p id="selfDeviceIdHint" class="muted" style="font-size:0.8rem;margin:0 0 0.5rem;"></p>
+      <div id="monteurDevicesList" class="monteur-devices-list"><span class="empty">Noch nicht geladen.</span></div>
+      <div class="settings-row" style="margin-top:0.5rem;margin-bottom:0;">
+        <button type="button" class="btn btn-ghost" id="btnRefreshDevices">Geräteliste aktualisieren</button>
+      </div>
+    </section>
+
+    <section class="settings-card">
+      <h2>App</h2>
+      <p class="settings-card-lead">Update, PDF-Anzeige und Anbindung der Handy-App.</p>
       <div class="settings-row">
         <button type="button" class="btn btn-ghost" id="btnCheckAppUpdate" title="Prüft, ob eine neuere Monteur-WebApp auf dem Dispo-Server bereitsteht">Auf Updates prüfen</button>
         <span id="checkAppUpdateHint" class="settings-saved-hint" aria-live="polite"></span>
@@ -3103,34 +3218,29 @@
       <div class="settings-row settings-row-checkbox">
         <label class="settings-checkbox-label" for="pdfAutoOpen">
           <input type="checkbox" id="pdfAutoOpen" />
-          <span>PDF nach dem Erstellen automatisch im Electron-Fenster öffnen (Chromium-Viewer, ohne Acrobat; jedes durch Speichern/PDF-Button erzeugte PDF)</span>
+          <span>PDF nach dem Erstellen automatisch im Electron-Fenster öffnen (Chromium-Viewer, ohne Acrobat)</span>
         </label>
       </div>
-      <div class="settings-row">
-        <button type="button" class="btn btn-primary" id="btnSaveSettings">Speichern</button>
-        <span id="settingsSavedHint" class="settings-saved-hint" aria-live="polite"></span>
-      </div>
-      <div class="settings-danger-zone" id="serverMaintenanceZone" hidden>
-        <h3>Server-Wartung</h3>
-        <p id="serverMaintenancePolicyHint" class="muted" style="margin:0 0 0.65rem;font-size:0.9rem;line-height:1.4;"></p>
-        <p id="serverMaintenanceHealthSummary" class="settings-sync-hint muted">Wird geladen…</p>
-        <div class="settings-row">
-          <button type="button" class="btn btn-danger" id="btnServerReboot" disabled>Server neu starten (+1 min)</button>
-          <span id="serverRebootHint" class="settings-saved-hint" aria-live="polite"></span>
-        </div>
-      </div>
-      <div class="settings-danger-zone">
-        <h3>App deinstallieren</h3>
-        <p>Entfernt die Monteur-WebApp und löscht die lokale App-Datenbank samt lokalen Einstellungen auf diesem PC. Dieser Vorgang kann nicht rückgängig gemacht werden.</p>
-        <button type="button" class="btn btn-danger" id="btnSelfUninstall">App deinstallieren und lokale Daten löschen</button>
-        <span id="selfUninstallHint" class="settings-saved-hint" aria-live="polite"></span>
-      </div>
-    </div>
-    <div class="card" style="margin-top: 1rem;">
-      <h2>Handy-App: Neues Gerät anbinden</h2>
-      <p class="muted" style="margin-bottom: 0.75rem;">QR-Code in der Dispo erzeugen (Profil) und mit der Handy-PWA scannen. Dazu das Dispo-Profil im Browser öffnen – dort auf „QR-Code erzeugen“ klicken.</p>
+      <p class="settings-card-lead" style="margin-top:0.5rem;">Handy-App: QR-Code in der Dispo erzeugen (Profil) und mit der Handy-PWA scannen.</p>
       <button type="button" class="btn btn-ghost" id="btnOpenProfileForQr">Profil im Browser öffnen (QR-Code erzeugen)</button>
-    </div>
+    </section>
+
+    <section class="settings-card settings-danger-zone" id="serverMaintenanceZone" hidden>
+      <h2>Server-Wartung</h2>
+      <p id="serverMaintenancePolicyHint" class="muted" style="margin:0 0 0.65rem;font-size:0.9rem;line-height:1.4;"></p>
+      <p id="serverMaintenanceHealthSummary" class="settings-sync-hint muted">Wird geladen…</p>
+      <div class="settings-row" style="margin-bottom:0;">
+        <button type="button" class="btn btn-danger" id="btnServerReboot" disabled>Server neu starten (+1 min)</button>
+        <span id="serverRebootHint" class="settings-saved-hint" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="settings-card settings-danger-zone">
+      <h2>App deinstallieren</h2>
+      <p>Entfernt die Monteur-WebApp und löscht die lokale App-Datenbank samt lokalen Einstellungen auf diesem PC. Dieser Vorgang kann nicht rückgängig gemacht werden.</p>
+      <button type="button" class="btn btn-danger" id="btnSelfUninstall">App deinstallieren und lokale Daten löschen</button>
+      <span id="selfUninstallHint" class="settings-saved-hint" aria-live="polite"></span>
+    </section>
   </main>
   <div id="tedExcelDownloadOverlay" class="ted-excel-download-overlay" hidden aria-live="polite" aria-busy="false">
     <div class="ted-excel-download-panel" role="status">

@@ -980,10 +980,8 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
   const existingAfterSave = fabKey ? anlagenstammLookupByFab(db, fabKey) : null;
   const pushStamm = stripEmptyStammFieldsForDispoPush(bodyNorm, existingBeforeSave || existingAfterSave || {});
   const pushPayload = Object.assign({}, pushStamm, {
-    id: localResult.id,
     fabrikationsnummer: localResult.fabrikationsnummer,
     serverUsername: body.serverUsername,
-    serverPassword: body.serverPassword,
     baseUrl: body.baseUrl || defaultBase,
     externalUrl: body.externalUrl,
     internalUrl: body.internalUrl,
@@ -13427,6 +13425,21 @@ function createApp(db) {
 
   app.get('/api/pending_changes', (req, res) => {
     const rows = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
+    const pending = (rows || []).map((row) => {
+      const copy = Object.assign({}, row);
+      if (copy.payload) {
+        try {
+          const obj = JSON.parse(copy.payload);
+          if (obj && typeof obj === 'object') {
+            if (obj.serverPassword) obj.serverPassword = '***';
+            copy.payload = JSON.stringify(obj);
+          }
+        } catch (_) {
+          /* Payload bleibt unverändert wenn kein JSON */
+        }
+      }
+      return copy;
+    });
     let failed = [];
     try {
       failed = db
@@ -13437,7 +13450,7 @@ function createApp(db) {
     } catch (_) {
       failed = [];
     }
-    res.json({ ok: true, pending: rows, failed });
+    res.json({ ok: true, pending, failed });
   });
 
   function authHeaderFromCredentials(username, password) {
@@ -14211,7 +14224,7 @@ function createApp(db) {
         await dbLock.runWithDbLock(async () => {
           setProgress('sync_pull', 0, 8, 'Sende Status/Pending vor Pull …');
           try {
-            await pushToServer(base, technicianId, db, auth);
+            await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, p));
             save();
           } catch (prePushErr) {
             console.warn(
@@ -14245,7 +14258,7 @@ function createApp(db) {
         await dbLock.runWithDbLock(async () => {
           setProgress('sync_pull', 2, 8, 'Sende ausstehende Änderungen …');
           try {
-            await pushToServer(base, technicianId, db, auth);
+            await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, p));
             save();
           } catch (pushErr) {
             console.warn(
@@ -14598,7 +14611,7 @@ function createApp(db) {
         const baseUrl = (resolved.base || '').trim().replace(/\/$/, '');
         if (!baseUrl) throw new Error(resolved.error || 'Dispo-Basis-URL fehlt.');
         setProgress('sync_push', 0, 2, 'Sende Änderungen zur Dispo …');
-        await pushToServer(baseUrl, technicianId, db, auth);
+        await pushToServer(baseUrl, technicianId, db, auth, liveDispoCredsForPush(baseUrl, creds));
         setProgress('sync_push', 1, 2, 'Abrechnungs-Outbox …');
         try {
           await flushAbrechnungOutbox(
@@ -15647,6 +15660,60 @@ function createApp(db) {
         )
         .all();
       const pendingN = db.prepare(`SELECT COUNT(*) AS n FROM pending_changes`).get();
+      let pendingLastError = null;
+      let pendingSummary = '';
+      try {
+        const errRow = db
+          .prepare(
+            `SELECT last_error FROM pending_changes
+             WHERE last_error IS NOT NULL AND TRIM(last_error) != ''
+             ORDER BY datetime(COALESCE(last_attempt_at, created_at)) DESC LIMIT 1`,
+          )
+          .get();
+        pendingLastError = errRow && errRow.last_error ? String(errRow.last_error).slice(0, 280) : null;
+        const groups = db
+          .prepare(`SELECT entity_type, action, COUNT(*) AS n FROM pending_changes GROUP BY entity_type, action`)
+          .all();
+        pendingSummary = (groups || [])
+          .map((g) => String(g.n) + '× ' + String(g.entity_type || '?') + '/' + String(g.action || '?'))
+          .join(', ');
+      } catch (_) {
+        pendingLastError = null;
+        pendingSummary = '';
+      }
+      let pendingItems = [];
+      let pendingFailedCount = 0;
+      let pendingFailedPreview = [];
+      try {
+        pendingItems = db
+          .prepare(
+            `SELECT id, entity_type, entity_id, action, attempts, last_error, last_attempt_at, created_at
+             FROM pending_changes ORDER BY id DESC LIMIT 20`,
+          )
+          .all();
+      } catch (_) {
+        pendingItems = [];
+      }
+      try {
+        const failedN = db.prepare('SELECT COUNT(*) AS n FROM pending_changes_failed').get();
+        pendingFailedCount = failedN && failedN.n != null ? Number(failedN.n) : 0;
+        pendingFailedPreview = db
+          .prepare(
+            `SELECT entity_type, entity_id, action, attempts, last_error, fail_reason, failed_at
+             FROM pending_changes_failed ORDER BY id DESC LIMIT 10`,
+          )
+          .all();
+      } catch (_) {
+        pendingFailedCount = 0;
+        pendingFailedPreview = [];
+      }
+      const lastPush = db
+        .prepare(
+          `SELECT updated_at, status, error, message FROM background_jobs
+           WHERE type = 'sync_push' AND status IN ('completed', 'failed', 'interrupted')
+           ORDER BY datetime(updated_at) DESC LIMIT 1`,
+        )
+        .get();
       let pendingUploadsN = 0;
       try {
         const upRow = db
@@ -15693,10 +15760,23 @@ function createApp(db) {
             }
           : null,
         last_jobs_sync: lastJobsSync,
+        last_sync_push: lastPush
+          ? {
+              updated_at: lastPush.updated_at,
+              status: lastPush.status,
+              error: lastPush.error,
+              message: lastPush.message || null,
+            }
+          : null,
         active_jobs: running || [],
         pending_changes: pendingN && pendingN.n != null ? Number(pendingN.n) : 0,
         pending_uploads: pendingUploadsN,
         pending_events: pendingN && pendingN.n != null ? Number(pendingN.n) : 0,
+        pending_last_error: pendingLastError,
+        pending_summary: pendingSummary,
+        pending_items: pendingItems || [],
+        pending_failed_count: pendingFailedCount,
+        pending_failed_preview: pendingFailedPreview || [],
         calendar_cache_synced_at: calRow && calRow.synced_at ? calRow.synced_at : null,
         anlagenstamm_local_count: stammN && stammN.n != null ? Number(stammN.n) : 0,
         anlagenstamm_sync_state: anlagenSyncState || null,
@@ -18250,8 +18330,55 @@ function cleanup_completed_job_files(db, jobId) {
   }
 }
 
-async function pushToServer(baseUrl, technicianId, db, authHeader) {
-  const base = baseUrl.replace(/\/$/, '');
+function liveDispoCredsForPush(baseUrl, payloadOrCreds) {
+  const p = payloadOrCreds && typeof payloadOrCreds === 'object' ? payloadOrCreds : {};
+  const creds = typeof resolveDispoServerCreds === 'function' ? resolveDispoServerCreds(p) : p;
+  return {
+    baseUrl: String(baseUrl || '').trim().replace(/\/$/, ''),
+    externalUrl: creds.externalUrl || p.externalUrl || '',
+    internalUrl: creds.internalUrl || p.internalUrl || '',
+    serverUsername: creds.serverUsername || p.serverUsername || '',
+    serverPassword: creds.serverPassword || p.serverPassword || '',
+  };
+}
+
+function mergeLiveDispoIntoPendingPayload(payloadRaw, live, fallbackBase) {
+  const src = payloadRaw && typeof payloadRaw === 'object' ? payloadRaw : {};
+  const liveObj = live && typeof live === 'object' ? live : {};
+  const base = String(liveObj.baseUrl || fallbackBase || src.baseUrl || '')
+    .trim()
+    .replace(/\/$/, '');
+  const out = Object.assign({}, src, {
+    baseUrl: base,
+    externalUrl: liveObj.externalUrl || src.externalUrl,
+    internalUrl: liveObj.internalUrl || src.internalUrl,
+  });
+  if (base) out.dispoBaseUrl = base;
+  if (liveObj.serverUsername) out.serverUsername = liveObj.serverUsername;
+  if (liveObj.serverPassword) out.serverPassword = liveObj.serverPassword;
+  return out;
+}
+
+function markPendingPushSkip(db, pendingRow, message) {
+  if (!pendingRow || pendingRow.id == null) return;
+  try {
+    db.prepare(
+      `UPDATE pending_changes SET last_error = ?, last_attempt_at = datetime('now') WHERE id = ?`,
+    ).run(String(message || '').slice(0, 4000), pendingRow.id);
+  } catch (_) {
+    /* Spalten fehlen vor Migration */
+  }
+}
+
+async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
+  const live = liveDispoCredsForPush(baseUrl, liveCreds);
+  const base = (live.baseUrl || String(baseUrl || '')).replace(/\/$/, '');
+  let pushFailures = 0;
+  let lastPushFailMsg = '';
+  const noteFail = (msg) => {
+    pushFailures += 1;
+    if (msg) lastPushFailMsg = String(msg);
+  };
   const pending = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
   pending.sort((a, b) => {
     const score = (p) => {
@@ -18291,6 +18418,8 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         continue;
       }
       if (!serverJobId) {
+        const skipMsg =
+          'Lokaler Auftrag hat keine Dispo-Verknüpfung (server_id). Eintrag bleibt in der Queue bis nach Sync-Pull.';
         logSyncPushError({
           reason: 'job_ohne_server_id',
           pending_entity_id: p.entity_id,
@@ -18298,9 +18427,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           job_gefunden: true,
           job_id_lokal: job.id,
           job_server_id: job.server_id,
-          hinweis:
-            'Lokaler Auftrag hat keine Dispo-Verknüpfung (server_id). Eintrag bleibt in der Queue bis nach Sync-Pull.',
+          hinweis: skipMsg,
         });
+        markPendingPushSkip(db, p, skipMsg);
+        noteFail(skipMsg);
         continue;
       }
       // Techniker-ID aus job_technicians verwenden (Auftrag ist diesem Techniker zugeordnet), nicht aus Einstellungen – sonst meldet Dispo „nicht zugeordnet“
@@ -18375,6 +18505,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           // erledigt niemals verwerfen — sonst holt der Pull den Auftrag als offen zurück.
           if (wantedSt !== 'erledigt') {
             db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+          } else {
+            markPendingPushSkip(db, p, errMsg);
+            noteFail(errMsg);
           }
           continue;
         }
@@ -18389,7 +18522,8 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         });
         const pushErr = new Error(errMsg);
         pushErr.status = r.status;
-        resolveSyncPushFailure(db, p, pushErr, 'job_' + p.action);
+        const outcome = resolveSyncPushFailure(db, p, pushErr, 'job_' + p.action);
+        if (outcome === 'retry' || outcome === 'offline') noteFail(errMsg);
         continue;
       }
       db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
@@ -18437,6 +18571,12 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
             pending_id: p.id,
             entity_id: p.entity_id,
           });
+          const absErr = new Error(
+            (errBody && errBody.error) || 'Abwesenheit anlegen fehlgeschlagen (HTTP ' + r.status + ')',
+          );
+          absErr.status = r.status;
+          const outcome = resolveSyncPushFailure(db, p, absErr, 'absence_create');
+          if (outcome === 'retry' || outcome === 'offline') noteFail(absErr.message);
         }
       } else if (p.action === 'update') {
         const row = db.prepare('SELECT server_id FROM absences WHERE id = ?').get(p.entity_id);
@@ -18459,6 +18599,12 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
             pending_id: p.id,
             entity_id: p.entity_id,
           });
+          const absErr = new Error(
+            (errBody && errBody.error) || 'Abwesenheit ändern fehlgeschlagen (HTTP ' + r.status + ')',
+          );
+          absErr.status = r.status;
+          const outcome = resolveSyncPushFailure(db, p, absErr, 'absence_update');
+          if (outcome === 'retry' || outcome === 'offline') noteFail(absErr.message);
         }
       } else if (p.action === 'delete') {
         const r = await fetch(`${base}/api/absence.php?id=${p.entity_id}&technician_id=${technicianId}`, { method: 'DELETE' });
@@ -18471,6 +18617,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
             pending_id: p.id,
             entity_id: p.entity_id,
           });
+          const absErr = new Error('Abwesenheit löschen fehlgeschlagen (HTTP ' + r.status + ')');
+          absErr.status = r.status;
+          const outcome = resolveSyncPushFailure(db, p, absErr, 'absence_delete');
+          if (outcome === 'retry' || outcome === 'offline') noteFail(absErr.message);
         }
       }
     }
@@ -18488,14 +18638,17 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         continue;
       }
       const pushStammBody = stripEmptyStammFieldsForDispoPush(payloadRaw, existingStamm || {});
-      const payload = Object.assign({}, pushStammBody, {
-        technician_id: techId,
-        baseUrl: (payloadRaw.baseUrl || baseUrl || '').toString().trim().replace(/\/$/, ''),
-        serverUsername: payloadRaw.serverUsername,
-        serverPassword: payloadRaw.serverPassword,
-        externalUrl: payloadRaw.externalUrl,
-        internalUrl: payloadRaw.internalUrl,
-      });
+      const payload = mergeLiveDispoIntoPendingPayload(
+        Object.assign({}, pushStammBody, {
+          technician_id: techId,
+          serverUsername: payloadRaw.serverUsername,
+          serverPassword: payloadRaw.serverPassword,
+          externalUrl: payloadRaw.externalUrl,
+          internalUrl: payloadRaw.internalUrl,
+        }),
+        live,
+        base,
+      );
       const canReachDispo =
         techId > 0 &&
         buildDispoBaseCandidates({
@@ -18504,17 +18657,26 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           internalUrl: payload.internalUrl,
         }).length > 0;
       if (!canReachDispo) {
+        const skipMsg = 'Dispo-URL oder Monteur-ID fehlt (Einstellungen prüfen, dann Sync).';
         logSyncPushError({
           reason: 'anlagenstamm_save',
-          error: 'Dispo-URL oder Monteur-ID fehlt (Einstellungen prüfen, dann Sync).',
+          error: skipMsg,
           entity_id: p.entity_id,
         });
+        markPendingPushSkip(db, p, skipMsg);
+        noteFail(skipMsg);
         continue;
       }
       try {
-        const data = await proxyAnlagenstammSave(
+        delete payload.id;
+        let data = await proxyAnlagenstammSave(
           Object.assign({}, payload, { technician_id: techId }),
         );
+        if (data && data.ok === false && /Fabrikationsnummer existiert bereits/i.test(String(data.error || ''))) {
+          const retryPayload = Object.assign({}, payload, { technician_id: techId });
+          delete retryPayload.id;
+          data = await proxyAnlagenstammSave(retryPayload);
+        }
         if (data && data.ok === false) {
           throw new Error(data.error || 'Anlagenstamm speichern fehlgeschlagen.');
         }
@@ -18532,16 +18694,15 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
+        const errMsg = e && e.message ? e.message : String(e);
         logSyncPushError({
           reason: 'anlagenstamm_save',
-          error: e && e.message ? e.message : String(e),
+          error: errMsg,
           entity_id: p.entity_id,
         });
-        const errMsg = e && e.message ? e.message : '';
-        if (/technician|baseUrl/i.test(errMsg)) {
-          continue;
-        }
-        throw e;
+        const outcome = resolveSyncPushFailure(db, p, e, 'anlagenstamm_save');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(errMsg);
+        continue;
       }
     }
     if (p.entity_type === 'anlagenstamm' && p.action === 'delete') {
@@ -18555,11 +18716,14 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
         continue;
       }
-      const payload = Object.assign({}, payloadRaw, {
-        id: serverId,
-        technician_id: techId,
-        baseUrl: (payloadRaw.baseUrl || baseUrl || '').toString().trim().replace(/\/$/, ''),
-      });
+      const payload = mergeLiveDispoIntoPendingPayload(
+        Object.assign({}, payloadRaw, {
+          id: serverId,
+          technician_id: techId,
+        }),
+        live,
+        base,
+      );
       const canReachDispo =
         techId > 0 &&
         buildDispoBaseCandidates({
@@ -18568,11 +18732,14 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           internalUrl: payload.internalUrl,
         }).length > 0;
       if (!canReachDispo) {
+        const skipMsg = 'Dispo-URL oder Monteur-ID fehlt (Einstellungen prüfen, dann Sync).';
         logSyncPushError({
           reason: 'anlagenstamm_delete',
-          error: 'Dispo-URL oder Monteur-ID fehlt (Einstellungen prüfen, dann Sync).',
+          error: skipMsg,
           entity_id: p.entity_id,
         });
+        markPendingPushSkip(db, p, skipMsg);
+        noteFail(skipMsg);
         continue;
       }
       try {
@@ -18592,23 +18759,26 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           /404|nicht gefunden|not found|Anlage nicht gefunden|Monteur-API-Datei wurde.*nicht gefunden/i.test(errMsg);
         if (dropPending) {
           db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        } else {
+          noteFail(errMsg);
         }
         continue;
       }
     }
     if (p.entity_type === 'textbausteine') {
       handled = true;
-      const payloadRaw = JSON.parse(p.payload || '{}');
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
       const techId =
         parseInt(String(payloadRaw.technician_id ?? payloadRaw.technicianId ?? technicianId), 10) || technicianId;
-      const tbBase = String(payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      const tbBase = String(payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       if (!tbBase || !techId) {
-        resolveSyncPushFailure(
+        const outcome = resolveSyncPushFailure(
           db,
           p,
           new Error('Dispo-URL oder Monteur-ID fehlt'),
           'textbausteine_push_skip',
         );
+        if (outcome === 'retry' || outcome === 'offline') noteFail('Dispo-URL oder Monteur-ID fehlt');
         continue;
       }
       try {
@@ -18679,18 +18849,22 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        resolveSyncPushFailure(db, p, e, 'textbausteine_push');
+        const outcome = resolveSyncPushFailure(db, p, e, 'textbausteine_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
         continue;
       }
     }
     if (p.entity_type === 'arbeitsschritte') {
       handled = true;
-      const payloadRaw = JSON.parse(p.payload || '{}');
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
       const techId =
         parseInt(String(payloadRaw.technician_id ?? payloadRaw.technicianId ?? technicianId), 10) || technicianId;
-      const asBase = String(payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      const asBase = String(payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       if (!asBase || !techId) {
+        const skipMsg = 'Dispo-URL oder Monteur-ID fehlt';
         logSyncPushError({ reason: 'arbeitsschritte_push_skip', pending_id: p.id });
+        markPendingPushSkip(db, p, skipMsg);
+        noteFail(skipMsg);
         continue;
       }
       try {
@@ -18783,14 +18957,15 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        resolveSyncPushFailure(db, p, e, 'arbeitsschritte_push');
+        const outcome = resolveSyncPushFailure(db, p, e, 'arbeitsschritte_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
         continue;
       }
     }
     if (p.entity_type === 'serviceprotokoll' && p.action === 'save') {
       handled = true;
-      const payloadRaw = JSON.parse(p.payload || '{}');
-      const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       const techId =
         parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
       if (!tbBase || !techId) {
@@ -18820,15 +18995,16 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
           throw pushErr;
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
-      } catch (e) {
-        resolveSyncPushFailure(db, p, e, 'serviceprotokoll_push');
+        } catch (e) {
+        const outcome = resolveSyncPushFailure(db, p, e, 'serviceprotokoll_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
         continue;
       }
     }
     if (p.entity_type === 'kontrollwiegung' && p.action === 'save') {
       handled = true;
-      const payloadRaw = JSON.parse(p.payload || '{}');
-      const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       const techId =
         parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
       if (!tbBase || !techId) {
@@ -18854,22 +19030,27 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        resolveSyncPushFailure(db, p, e, 'kontrollwiegung_push');
+        const outcome = resolveSyncPushFailure(db, p, e, 'kontrollwiegung_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
         continue;
       }
     }
     if (p.entity_type === 'signature' && p.action === 'submit') {
       handled = true;
-      const payloadRaw = JSON.parse(p.payload || '{}');
-      const tbBase = String(payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      const tbBase = String(payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       const techId =
         parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
-      if (!tbBase || !techId) continue;
+      if (!tbBase || !techId) {
+        const skipMsg = 'Dispo-URL oder Monteur-ID fehlt';
+        markPendingPushSkip(db, p, skipMsg);
+        noteFail(skipMsg);
+        continue;
+      }
       try {
-        const authSig = authHeaderFromCredentials(payloadRaw.serverUsername, payloadRaw.serverPassword);
         const r = await fetch(tbBase + '/dispo_api/api/signature_submit.php?technician_id=' + encodeURIComponent(techId), {
           method: 'POST',
-          headers: Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json' }, authSig || {}, header),
+          headers: Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json' }, header),
           body: JSON.stringify(payloadRaw.payload || {}),
         });
         if (!r.ok) {
@@ -18880,15 +19061,21 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        resolveSyncPushFailure(db, p, e, 'signature_push');
+        const outcome = resolveSyncPushFailure(db, p, e, 'signature_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
         continue;
       }
     }
     if (p.entity_type === 'rams') {
       handled = true;
-      const payloadRaw = JSON.parse(p.payload || '{}');
-      const tbBase = String(payloadRaw.baseUrl || baseUrl || '').trim().replace(/\/$/, '');
-      if (!tbBase || !payloadRaw.action) continue;
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      const tbBase = String(payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
+      if (!tbBase || !payloadRaw.action) {
+        const skipMsg = 'RAMS-Push: Dispo-URL oder action fehlt';
+        markPendingPushSkip(db, p, skipMsg);
+        noteFail(skipMsg);
+        continue;
+      }
       try {
         const qs = new URLSearchParams();
         qs.set('action', String(payloadRaw.action));
@@ -18911,17 +19098,21 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
-        resolveSyncPushFailure(db, p, e, 'rams_push');
+        const outcome = resolveSyncPushFailure(db, p, e, 'rams_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
         continue;
       }
     }
     if (!handled) {
-      resolveSyncPushFailure(
+      const outcome = resolveSyncPushFailure(
         db,
         p,
         new Error('Kein pushToServer-Handler für entity_type=' + String(p.entity_type)),
         'pending_unbekannt',
       );
+      if (outcome === 'retry' || outcome === 'offline') {
+        noteFail('Kein Handler für ' + String(p.entity_type));
+      }
     }
   }
   const pendingRequests = db.prepare('SELECT id, start_datetime, end_datetime, type, comment FROM absence_requests WHERE technician_id = ? AND status = ? AND (server_id IS NULL OR server_id = \'\')').all(technicianId, 'pending');
@@ -18969,6 +19160,14 @@ async function pushToServer(baseUrl, technicianId, db, authHeader) {
       }
     }
   } catch (e) {}
+  if (pushFailures > 0) {
+    const left = db.prepare('SELECT COUNT(*) AS n FROM pending_changes').get();
+    const nLeft = left && left.n != null ? Number(left.n) : 0;
+    throw new Error(
+      (lastPushFailMsg || pushFailures + ' Änderung(en) konnten nicht zur Dispo gesendet werden.') +
+        (nLeft ? ' ' + nLeft + ' noch ausstehend.' : ''),
+    );
+  }
 }
 
 module.exports = {
