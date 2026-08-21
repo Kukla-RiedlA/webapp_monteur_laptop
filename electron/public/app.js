@@ -9089,6 +9089,38 @@
       loadSettingsSyncStatus().catch(function () {});
     });
   }
+  var btnRetryFailedPending = document.getElementById('btnRetryFailedPending');
+  if (btnRetryFailedPending) {
+    btnRetryFailedPending.addEventListener('click', function () {
+      var hint = document.getElementById('retryFailedPendingHint');
+      var msg =
+        'Aufgegebene Änderungen wieder in die Queue legen und beim nächsten Sync erneut senden?\n\n' +
+        'Hotel-Adressen ohne Land werden danach mit leerem Land gespeichert.\n' +
+        'Serviceprotokolle werden erneut gespeichert (kann ein zweites Protokoll erzeugen, falls schon auf dem Server).';
+      if (!window.confirm(msg)) return;
+      btnRetryFailedPending.disabled = true;
+      if (hint) hint.textContent = 'Wird eingereiht…';
+      api('/api/sync_retry_failed', { method: 'POST', body: '{}' })
+        .then(function (data) {
+          var n = data && data.requeued != null ? data.requeued : 0;
+          if (hint) hint.textContent = n ? n + ' Einträge wieder in der Queue.' : 'Keine aufgegebenen Einträge.';
+          return loadSettingsSyncStatus();
+        })
+        .then(function () {
+          if (typeof checkConnectionAndSync === 'function') {
+            try {
+              checkConnectionAndSync({ blockingSync: false });
+            } catch (e) {}
+          }
+        })
+        .catch(function (e) {
+          if (hint) hint.textContent = 'Fehler: ' + (e && e.message ? e.message : e);
+        })
+        .finally(function () {
+          btnRetryFailedPending.disabled = false;
+        });
+    });
+  }
   var btnMultiDeviceDeleteLocal = document.getElementById('btnMultiDeviceDeleteLocal');
   if (btnMultiDeviceDeleteLocal) {
     btnMultiDeviceDeleteLocal.addEventListener('click', function () {

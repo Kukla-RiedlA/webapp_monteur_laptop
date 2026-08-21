@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.009
+- **Sync Dead-Letter:** Button „Aufgegebene erneut versuchen“ legt fehlgeschlagene Queue-Einträge wieder in die Sync-Queue.
+- **Hotel-Adresse:** Leeres Land wird als leerer String gespeichert, nicht als NULL (Dispo-MariaDB 1048).
+
 ## V 2.006.008
 - **Zeitschreibung:** Mausrad über Stundenfeldern ändert den Wert nicht mehr, sondern scrollt die Tabelle.
 

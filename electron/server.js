@@ -936,6 +936,58 @@ function resolveSyncPushFailure(db, pendingRow, err, reason) {
   return 'retry';
 }
 
+function sanitizeHotelAddressPendingPayload(rawPayload) {
+  let payload = rawPayload;
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload);
+    } catch (_) {
+      return rawPayload;
+    }
+  }
+  if (!payload || typeof payload !== 'object') {
+    return typeof rawPayload === 'string' ? rawPayload : '';
+  }
+  payload.hotel_country = payload.hotel_country != null ? String(payload.hotel_country) : '';
+  return JSON.stringify(payload);
+}
+
+function requeueFailedPendingChanges(dbConn) {
+  const rows = dbConn.prepare('SELECT * FROM pending_changes_failed ORDER BY id ASC').all() || [];
+  if (!rows.length) return 0;
+  const ins = dbConn.prepare(
+    `INSERT INTO pending_changes (entity_type, entity_id, action, payload, created_at, attempts, last_error, last_attempt_at)
+     VALUES (?, ?, ?, ?, ?, 0, NULL, NULL)`,
+  );
+  const del = dbConn.prepare('DELETE FROM pending_changes_failed WHERE id = ?');
+  let n = 0;
+  const apply = () => {
+    n = 0;
+    for (const row of rows) {
+      let payload = row.payload != null ? String(row.payload) : null;
+      if (String(row.action || '') === 'hotel_address' && payload) {
+        payload = sanitizeHotelAddressPendingPayload(payload);
+      }
+      ins.run(
+        String(row.entity_type || ''),
+        row.entity_id != null ? String(row.entity_id) : '',
+        String(row.action || ''),
+        payload,
+        row.created_at != null ? String(row.created_at) : null,
+      );
+      del.run(row.id);
+      n += 1;
+    }
+  };
+  if (typeof dbConn.transaction === 'function') {
+    const ret = dbConn.transaction(apply);
+    if (typeof ret === 'function') ret();
+  } else {
+    apply();
+  }
+  return n;
+}
+
 /** Laufzeit-Kontext für IPC / Flush (gesetzt in getDb und createApp). */
 const monteurRuntime = { db: null, save: null, bgJobs: null };
 let getDbPromise = null;
@@ -13105,7 +13157,7 @@ function createApp(db) {
         const house_number = hotelPayload.hotel_house_number || '';
         const zip = postalCodeNormalize(hotelPayload.hotel_zip || '', hotelPayload.hotel_country || '');
         const city = hotelPayload.hotel_city || '';
-        const country = hotelPayload.hotel_country || null;
+        const country = hotelPayload.hotel_country || '';
         const address_extra_1 = hotelPayload.hotel_address_extra_1 || null;
         const address_extra_2 = hotelPayload.hotel_address_extra_2 || null;
         const phone = hotelPayload.hotel_phone || null;
@@ -13576,6 +13628,16 @@ function createApp(db) {
       failed = [];
     }
     res.json({ ok: true, pending, failed });
+  });
+
+  app.post('/api/sync_retry_failed', express.json(), (req, res) => {
+    try {
+      const n = requeueFailedPendingChanges(db);
+      save();
+      res.json({ ok: true, requeued: n });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
   });
 
   function authHeaderFromCredentials(username, password) {
@@ -18374,7 +18436,7 @@ function insertOrUpdateJobHotel(db, jobId, j) {
   const house_number = (j.hotel_house_number != null ? String(j.hotel_house_number) : '').trim() || '';
   const zip = postalCodeNormalize((j.hotel_zip != null ? String(j.hotel_zip) : '').trim() || '', (j.hotel_country != null ? String(j.hotel_country) : '').trim() || '');
   const city = (j.hotel_city != null ? String(j.hotel_city) : '').trim() || '';
-  const country = (j.hotel_country != null ? String(j.hotel_country) : '').trim() || null;
+  const country = (j.hotel_country != null ? String(j.hotel_country) : '').trim() || '';
   const address_extra_1 = (j.hotel_address_extra_1 != null ? String(j.hotel_address_extra_1) : '').trim() || null;
   const address_extra_2 = (j.hotel_address_extra_2 != null ? String(j.hotel_address_extra_2) : '').trim() || null;
   const phone = (j.hotel_phone != null ? String(j.hotel_phone) : '').trim() || null;
@@ -18566,6 +18628,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
       const techIdForPush = (techRow && techRow.technician_id != null) ? techRow.technician_id : technicianId;
       const headerForJob = { 'Content-Type': 'application/json', 'X-Technician-Id': String(techIdForPush), ...(authHeader || {}) };
       const payload = JSON.parse(p.payload || '{}');
+      if (p.action === 'hotel_address' && payload && typeof payload === 'object') {
+        payload.hotel_country = payload.hotel_country != null ? String(payload.hotel_country) : '';
+      }
       if (p.action === 'fabrikationsnummern' && payload.fabrikationsnummern != null) {
         payload.fabrikationsnummern =
           typeof payload.fabrikationsnummern === 'string'
