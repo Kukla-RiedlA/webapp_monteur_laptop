@@ -57,14 +57,16 @@ Legende:
 
 ## Protokolle (Dienstreise-Ordner + Gateway)
 
-Speicherort Zwischenstände: `{DienstreiseOrdner}/` pro angenommenem Auftrag (`in_arbeit`). Upload beim Abschluss / `dienstreise_push`.
+Speicherort Zwischenstände: **kanonisch SQLite `protocol_drafts` / `protocol_draft_meta`** (Laptop) und MariaDB `monteur_protocol_drafts` (Dispo), **eine JSON-Zeile je Auftrag + Art + FN**. Während `in_arbeit` überschreibbar; sobald der Auftrag **erledigt** ist, `frozen=1` (unveränderbares Versionsarchiv). PDFs bleiben Dateien im Dienstreise-Ordner. Flache `Dokumente_Monteur/*.json` nur noch Legacy-Import. Upload beim Abschluss / `dienstreise_push` überspringt Draft-JSON-Namen.
 
-| Protokoll | Lokale Datei | Sync In | Sync Out | Offline lesen (Formular) | Offline schreiben | Multi-Device |
+| Protokoll | Lokale Ablage | Sync In | Sync Out | Offline lesen (Formular) | Offline schreiben | Multi-Device |
 |-----------|--------------|---------|----------|---------------------------|-------------------|--------------|
-| **Montagebericht** | `Dokumente_Monteur/montagebericht.json` (+ PDF/DOCX lokal) | Draft-GET + optional Anreicherung | Draft-POST bei Save (Server-Revision) | Ja | Ja: Daten + PDF lokal; **Kunden-Signatur online** (GAP-008) | Ja (`montagebericht_draft`) |
-| **Serviceprotokoll** | `Dokumente_Monteur/serviceprotokoll.json` (`byFab`) | Draft-GET | Draft-POST bei Save | Ja | Ja: Daten + **PDF lokal** (`protocol_pdf.js`) | Ja (`serviceprotokoll_draft`) |
+| **Montagebericht** | SQLite `protocol_drafts` (Kind `montagebericht`, je FN; ohne Datei) + PDF/DOCX lokal | Draft-GET + optional Anreicherung | Draft-POST bei Save (Server-Revision) | Ja | Ja: Daten + PDF lokal; **Kunden-Signatur online** (GAP-008) | Ja (`montagebericht_draft`) |
+| **Serviceprotokoll** | SQLite `protocol_drafts` (`byFab` je FN) | Draft-GET | Draft-POST bei Save | Ja | Ja: Daten + **PDF lokal** (`protocol_pdf.js`) | Ja (`serviceprotokoll_draft`) |
 | **Parameterlisten** | CSV + PDF im Ordner | — | Ingest optional (kein Outbox) | Ja | Ja lokal; Ingest queued fehlt — GAP-015 | Teilweise (Datei-Manifest) |
-| **Kontrollwiegungen** | `Dokumente_Monteur/kontrollwiegungsprotokoll.json` | Draft-GET | Draft-POST / `pending_changes` | Ja | Ja lokal + PDF lokal | Ja (`kontrollwiegungsprotokoll_draft`) |
+| **Kontrollwiegungen** | SQLite `protocol_drafts` (`kontrollwiegung`) | Draft-GET | Draft-POST / `pending_changes` | Ja | Ja lokal + PDF lokal | Ja (`kontrollwiegungsprotokoll_draft`) |
+| **Schleppkette** | SQLite `protocol_drafts` (`schleppkette`) | Draft-GET | Draft-POST | Ja | Ja lokal + PDF lokal | Ja (`schleppkettenprotokoll_draft`) |
+| **Prüfzertifikat** | SQLite `protocol_drafts` (`pruefzertifikat`) | Draft-GET | Draft-POST | Ja | Ja lokal + PDF lokal | Ja (`pruefzertifikat_draft`) |
 | **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein (nicht implementiert) | — |
 
 **Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“); während Sync Badge-Text **Sync…**. Verdächtiger leerer Jobs-Pull → `pull_warnings` + `degraded`, lokale Aufträge bleiben.

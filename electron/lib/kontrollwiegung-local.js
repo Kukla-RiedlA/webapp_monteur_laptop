@@ -3,12 +3,18 @@
 const path = require('path');
 const fs = require('fs');
 const { resolveMonteurDraftJsonPath } = require('./multi-device-sync');
+const protocolDrafts = require('./protocol-drafts-local');
+
+const BASENAME = 'kontrollwiegungsprotokoll.json';
 
 function kontrollwiegungJsonPath(reiseDir) {
-  return resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true);
+  return resolveMonteurDraftJsonPath(reiseDir, BASENAME, true);
 }
 
-function readKontrollwiegungStore(reiseDir) {
+function readKontrollwiegungStore(reiseDir, db, localJobId) {
+  if (db && localJobId) {
+    return protocolDrafts.readStore(db, localJobId, BASENAME, reiseDir);
+  }
   const p = kontrollwiegungJsonPath(reiseDir);
   if (!fs.existsSync(p)) return { byFab: {}, nextLocalId: 1 };
   try {
@@ -22,16 +28,20 @@ function readKontrollwiegungStore(reiseDir) {
   return { byFab: {}, nextLocalId: 1 };
 }
 
-function writeKontrollwiegungStore(reiseDir, store) {
+function writeKontrollwiegungStore(reiseDir, store, db, localJobId) {
+  if (db && localJobId) {
+    protocolDrafts.writeStore(db, localJobId, BASENAME, store, reiseDir);
+    return;
+  }
   const p = kontrollwiegungJsonPath(reiseDir);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(store, null, 2), 'utf8');
 }
 
-function saveKontrollwiegungLocal(reiseDir, fab, entry) {
+function saveKontrollwiegungLocal(reiseDir, fab, entry, db, localJobId) {
   const fn = String(fab || '').trim();
   if (!fn) throw new Error('Fabrikationsnummer fehlt.');
-  const store = readKontrollwiegungStore(reiseDir);
+  const store = readKontrollwiegungStore(reiseDir, db, localJobId);
   const localId = store.nextLocalId || 1;
   store.nextLocalId = localId + 1;
   const record = Object.assign({}, entry, {
@@ -42,12 +52,12 @@ function saveKontrollwiegungLocal(reiseDir, fab, entry) {
     fabrikationsnummer: fn,
   });
   store.byFab[fn] = record;
-  writeKontrollwiegungStore(reiseDir, store);
+  writeKontrollwiegungStore(reiseDir, store, db, localJobId);
   return record;
 }
 
-function getKontrollwiegungLocal(reiseDir, fab, localId) {
-  const store = readKontrollwiegungStore(reiseDir);
+function getKontrollwiegungLocal(reiseDir, fab, localId, db, localJobId) {
+  const store = readKontrollwiegungStore(reiseDir, db, localJobId);
   const fn = String(fab || '').trim();
   if (fn && store.byFab[fn]) return store.byFab[fn];
   if (localId != null) {

@@ -226,6 +226,12 @@ function applyRuntimeMigrations(db) {
   db.prepare("UPDATE jobs SET status = 'angelegt' WHERE LOWER(COALESCE(status, '')) = 'geplant'").run();
   ensureBackgroundJobsSchema(db);
   ensureAnlagenstammLocalSchema(db);
+  try {
+    const { ensureProtocolDraftsSchema } = require('./protocol-drafts-local');
+    ensureProtocolDraftsSchema(db);
+  } catch (_) {
+    /* optional during early boot */
+  }
   const { ensureImageThumbCacheSchema } = require('./image-thumb-cache');
   ensureImageThumbCacheSchema(db);
   const { ensureJobProtectedPathsSchema } = require('./job-protected-paths');

@@ -150,12 +150,14 @@ Gleiche Basis-URL wie die Dispo. Authentifizierung wie bisher: Monteur mit `tech
 
 Authentifizierung wie Kontrollwiegung: Query/Header `technician_id`, Dispo-Basic oder Monteur-Session je nach Client.
 
+**Kanonisch (ab Migration 067, Freeze 068):** Protokoll-JSON liegt in MariaDB `monteur_protocol_drafts` **eine Zeile je Auftrag + Art + Fabrikationsnummer** (Versionsarchiv über Aufträge hinweg). Solange der Auftrag `in_arbeit` ist, wird die Zeile überschrieben. Sobald der Auftrag **erledigt** (oder abgerechnet) ist, wird `frozen=1` gesetzt — die Version ist **unveränderbar**. Envelope der `*_draft.php`-APIs bleibt `{ ok, store/data, revision, server_updated_at }`. POST nach Erledigt → **409** `job_closed` / `draft_frozen`. Im Jobordner entsteht **keine** leere flache `*.json`. Fertige PDFs und Released-Tabellen bleiben zusätzlich; das JSON-Archiv wird beim PDF-Save **nicht** gelöscht.
+
 | Endpunkt | Methode | Kurzbeschreibung |
 |----------|---------|------------------|
 | `dispo_api/api/serviceprotokoll_defaults.php` | GET | `fabrikationsnummer`, `technician_id` → `{ ok, source: "fn"\|"preset"\|"global"\|"builtin", arbeitsschritte: [{ bezeichnung }], kopf?: { projekt, kopf_pos_nr, kopf_qmax, kopf_type, kopf_dwc }, preset_name?, preset_type_code? }` — Lade-Priorität: FN-Vorlage → Typ-Preset (Substring in `anlagenstamm.type`) → globaler Grundstock → Builtin |
 | `dispo_api/api/serviceprotokoll_save.php` | POST JSON | … → erzeugt PDF unter `Dokumente_Monteur/{FN}/Montage/{Auftragsordner}/Protokolle/` → `{ ok, protokoll_id, pdf_path?, warning? }` |
 | `dispo_api/api/serviceprotokoll_pdf.php` | GET | `id`, `technician_id` → PDF-Binary (aus Projektordner oder Regenerierung) |
-| `dispo_api/api/serviceprotokoll_draft.php` | GET / POST | Zwischenstand `Dokumente_Monteur/serviceprotokoll.json`: GET → `{ ok, store, revision, server_updated_at, schema_version }`; POST `store` + optional `base_revision`, `device_id` → bei `base_revision`-Mismatch **409** `{ ok:false, code:"conflict", revision, store }`; Job nicht `in_arbeit` → **409** `job_closed` / `job_not_writable`. Server-Revision (nicht Client-`updatedAt`) ist maßgeblich. |
+| `dispo_api/api/serviceprotokoll_draft.php` | GET / POST | Zwischenstand **in DB** (`monteur_protocol_drafts` je FN, Meta-Revision): GET → `{ ok, store, revision, server_updated_at, schema_version }`; POST `store` + optional `base_revision`, `device_id` → bei `base_revision`-Mismatch **409** `{ ok:false, code:"conflict", revision, store }`; Job nicht `in_arbeit` → **409** `job_closed` / `job_not_writable`; nach Erledigt ist die FN-Zeile `frozen` (Versionsarchiv). Keine leere `serviceprotokoll.json` im Jobordner. Server-Revision (nicht Client-`updatedAt`) ist maßgeblich. |
 
 ### 5.1b2 Multi-Device Sync (Monteur-Laptop ↔ Dispo)
 
@@ -168,14 +170,14 @@ Plattform-Übersicht: [`docs/MULTI_DEVICE_LAPTOP_SYNC.md`](../../docs/MULTI_DEVI
 | `dispo_api/api/monteur_device_list.php` | GET | `technician_id` → `{ ok, devices: [{ device_id, display_name, last_seen_at, app_version, revoked_at }] }` |
 | `dispo_api/api/monteur_device_revoke.php` | POST JSON | `technician_id`, `device_id` → setzt `revoked_at`, `{ ok }` |
 | `dispo_api/api/job_files_manifest.php` | GET | `technician_id`, `job_id`, optional `physical_only=1` → `{ ok, files: [{ rel_path, size_bytes, sha256, mtime_utc, source, revision }], total_bytes }` — physischer Tree; Union nur wenn `physical_only` nicht gesetzt |
-| `dispo_api/api/montagebericht_draft.php` | GET / POST | Analog SP: `Dokumente_Monteur/montagebericht.json`; Revision + `job_closed`-Gate |
-| `dispo_api/api/kontrollwiegungsprotokoll_draft.php` | GET / POST | Analog: `Dokumente_Monteur/kontrollwiegungsprotokoll.json`; Revision + Gate |
+| `dispo_api/api/montagebericht_draft.php` | GET / POST | Analog SP: Draft in DB (`protocol_kind=montagebericht`), auf alle Job-FNs aufgefächert; ohne FN Sentinel-Zeile; Revision + `job_closed`-Gate |
+| `dispo_api/api/kontrollwiegungsprotokoll_draft.php` | GET / POST | Analog: Draft in DB je FN (`kontrollwiegung`); Revision + Gate |
 | `dispo_api/api/schleppkettenprotokoll_save.php` | POST JSON | `technician_id`, `job_id`, `fabrikationsnummer`, `durchfuehrungsdatum`, Kopfdaten, `ketten[]`, `messungen[]` → Upsert DB; Berechnung Prüfkette/Fehler%/Leistung → `{ ok, protokoll_id }` |
-| `dispo_api/api/schleppkettenprotokoll_draft.php` | GET / POST | Zwischenstand `Dokumente_Monteur/schleppkettenprotokoll.json`; Revision + Gate |
+| `dispo_api/api/schleppkettenprotokoll_draft.php` | GET / POST | Zwischenstand in DB je FN (`schleppkette`); Revision + Gate |
 | `dispo_api/api/schleppkettenprotokoll_pdf.php` | GET | `id`, `technician_id` → PDF-Binary (dompdf Querformat) |
 | `dispo_api/api/pruefzertifikat_save.php` | POST JSON | Hersteller-Prüfzertifikat Snapshot (Meta, `verfahren`, `ergebnisse`, Toleranz, Status) → `{ ok, zertifikat_id, zertifikat_nr }` |
 | `dispo_api/api/pruefzertifikat_prefill.php` | GET | `technician_id`, `job_id`, `fabrikationsnummer` → Prefill aus KW/SK/Service → `{ ok, prefill }` |
-| `dispo_api/api/pruefzertifikat_draft.php` | GET / POST | Zwischenstand `Dokumente_Monteur/pruefzertifikat.json`; Revision + Gate |
+| `dispo_api/api/pruefzertifikat_draft.php` | GET / POST | Zwischenstand in DB je FN (`pruefzertifikat`); Revision + Gate |
 | `dispo_api/api/pruefzertifikat_pdf.php` | GET | `id`, `technician_id`, optional `lang=de\|en` → PDF-Binary |
 
 **Laptop-Gateway (Schleppketten / Prüfzertifikat):**
@@ -193,7 +195,7 @@ Plattform-Übersicht: [`docs/MULTI_DEVICE_LAPTOP_SYNC.md`](../../docs/MULTI_DEVI
 - `POST /api/device_bootstrap` — Speicherschätzung + voller physischer Pull für `in_arbeit`-Jobs.
 
 **Monteur-Laptop (Electron-Gateway, wie Montagebericht):**
-- `GET /api/protokolle/serviceprotokoll?job_id=` → lädt `serviceprotokoll.json` (lokal + Merge mit Dispo `serviceprotokoll_draft.php` wenn `server_id` und Dispo-Creds) → `{ ok, store: { byFab: { [fn]: draft } } }`.
+- `GET /api/protokolle/serviceprotokoll?job_id=` → lädt Draft aus lokaler SQLite (`protocol_drafts`) + Merge mit Dispo `serviceprotokoll_draft.php` wenn `server_id` und Dispo-Creds → `{ ok, store: { byFab: { [fn]: draft } } }`.
 - `POST /api/protokolle/serviceprotokoll` JSON: … `jsonOnly: false` → JSON + `serviceprotokoll_save` Dispo + PDF lokal unter `Dokumente_Monteur/{FN}/Montage/{Auftragsordner}/Protokolle/` → `{ ok, jsonOnly?, protokoll_id?, saved?: [relPath], warning? }`.
 - `GET /api/serviceprotokoll_defaults` (Proxy + lokaler Fallback), `GET /api/serviceprotokoll_pdf` (Proxy).
 

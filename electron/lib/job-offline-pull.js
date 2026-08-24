@@ -1,6 +1,7 @@
 'use strict';
 
 const { isMonteurDraftJsonBasename } = require('./multi-device-sync');
+const { isFnFolderAlias } = require('./projekte-neu-local');
 
 const DM_PREFIX = 'Dokumente_Monteur/';
 /** Im Modus explicit: PROJEKTE NEU / Anlage nur über Baumauswahl, nicht pauschal aus Manifest. */
@@ -13,7 +14,7 @@ const ALWAYS_PULL_PREFIXES = [
   'Dokumente_Monteur/Bilder',
 ];
 
-/** Flache Protokoll-JSONs unter Dokumente_Monteur/{name}.json — immer ziehen. */
+/** Flache Protokoll-JSONs unter Dokumente_Monteur/{name}.json — Quelle ist die Draft-API, nicht der Fileserver. */
 function isMonteurDraftJsonManifestPath(relPath) {
   const norm = normManifestPath(relPath);
   if (!norm.startsWith(DM_PREFIX)) return false;
@@ -120,12 +121,13 @@ function findFabForCanonicalFolder(pathsByFab, fabMap, canonicalFolder) {
   const name = String(canonicalFolder || '').trim();
   if (!name) return null;
   for (const entry of fabMap || []) {
-    if (String(entry.folder_name_canonical || '').trim() === name) {
+    const can = String(entry.folder_name_canonical || '').trim();
+    if (can === name || (can && isFnFolderAlias(can, name))) {
       return String(entry.fab || '').trim();
     }
   }
   for (const [fab] of pathsByFab) {
-    if (fab === name) return fab;
+    if (fab === name || isFnFolderAlias(fab, name)) return fab;
   }
   return null;
 }
@@ -176,10 +178,10 @@ function pathMatchesSelection(inner, prefixesMap) {
 function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
   const norm = normManifestPath(relPath);
   if (!norm) return false;
+  if (isMonteurDraftJsonManifestPath(norm)) return false;
   if (pullMode === 'legacy') return true;
   if (shouldAlwaysPullPrefix(norm)) return true;
   if (isMonteurPhotoManifestPath(norm)) return true;
-  if (isMonteurDraftJsonManifestPath(norm)) return true;
   if (shouldSkipPullPrefix(norm)) return false;
   if (!norm.startsWith(DM_PREFIX)) return false;
   const tail = norm.slice(DM_PREFIX.length);
@@ -200,8 +202,10 @@ function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
  * @param {Array<{ path: string }>} files
  */
 function filterManifestForPull(files, pullMode, pathsByFab, fabMap) {
-  if (pullMode === 'legacy') return files;
-  return files.filter((f) => shouldPullManifestFile(f.path, pullMode, pathsByFab, fabMap));
+  const list = Array.isArray(files) ? files : [];
+  const withoutDraftJson = list.filter((f) => !isMonteurDraftJsonManifestPath(f && f.path));
+  if (pullMode === 'legacy') return withoutDraftJson;
+  return withoutDraftJson.filter((f) => shouldPullManifestFile(f.path, pullMode, pathsByFab, fabMap));
 }
 
 /**

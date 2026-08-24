@@ -3,6 +3,9 @@
 const path = require('path');
 const fs = require('fs');
 const { resolveMonteurDraftJsonPath } = require('./multi-device-sync');
+const protocolDrafts = require('./protocol-drafts-local');
+
+const BASENAME = 'schleppkettenprotokoll.json';
 
 function parseLocaleNumber(v) {
   if (v == null || v === '') return null;
@@ -56,10 +59,13 @@ function enrichMessungen(messungen) {
 }
 
 function schleppkettenJsonPath(reiseDir) {
-  return resolveMonteurDraftJsonPath(reiseDir, 'schleppkettenprotokoll.json', true);
+  return resolveMonteurDraftJsonPath(reiseDir, BASENAME, true);
 }
 
-function readSchleppkettenStore(reiseDir) {
+function readSchleppkettenStore(reiseDir, db, localJobId) {
+  if (db && localJobId) {
+    return protocolDrafts.readStore(db, localJobId, BASENAME, reiseDir);
+  }
   const p = schleppkettenJsonPath(reiseDir);
   if (!fs.existsSync(p)) return { byFab: {}, nextLocalId: 1 };
   try {
@@ -73,16 +79,20 @@ function readSchleppkettenStore(reiseDir) {
   return { byFab: {}, nextLocalId: 1 };
 }
 
-function writeSchleppkettenStore(reiseDir, store) {
+function writeSchleppkettenStore(reiseDir, store, db, localJobId) {
+  if (db && localJobId) {
+    protocolDrafts.writeStore(db, localJobId, BASENAME, store, reiseDir);
+    return;
+  }
   const p = schleppkettenJsonPath(reiseDir);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(store, null, 2), 'utf8');
 }
 
-function saveSchleppkettenLocal(reiseDir, fab, entry) {
+function saveSchleppkettenLocal(reiseDir, fab, entry, db, localJobId) {
   const fn = String(fab || '').trim();
   if (!fn) throw new Error('Fabrikationsnummer fehlt.');
-  const store = readSchleppkettenStore(reiseDir);
+  const store = readSchleppkettenStore(reiseDir, db, localJobId);
   const localId = store.nextLocalId || 1;
   store.nextLocalId = localId + 1;
   const messungen = enrichMessungen(entry && entry.messungen);
@@ -95,12 +105,12 @@ function saveSchleppkettenLocal(reiseDir, fab, entry) {
     messungen,
   });
   store.byFab[fn] = record;
-  writeSchleppkettenStore(reiseDir, store);
+  writeSchleppkettenStore(reiseDir, store, db, localJobId);
   return record;
 }
 
-function getSchleppkettenLocal(reiseDir, fab, localId) {
-  const store = readSchleppkettenStore(reiseDir);
+function getSchleppkettenLocal(reiseDir, fab, localId, db, localJobId) {
+  const store = readSchleppkettenStore(reiseDir, db, localJobId);
   const fn = String(fab || '').trim();
   if (fn && store.byFab[fn]) return store.byFab[fn];
   if (localId != null) {

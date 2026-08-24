@@ -274,6 +274,31 @@ CREATE TABLE IF NOT EXISTS zeitschreibung_outbox (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Protokoll-Zwischenstände an FN (analog Dispo monteur_protocol_drafts)
+CREATE TABLE IF NOT EXISTS protocol_drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  local_job_id INTEGER NOT NULL,
+  protocol_kind TEXT NOT NULL,
+  fabrikationsnummer TEXT NOT NULL DEFAULT '',
+  payload_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  frozen INTEGER NOT NULL DEFAULT 0,
+  frozen_at TEXT,
+  UNIQUE (local_job_id, protocol_kind, fabrikationsnummer)
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_drafts_job ON protocol_drafts(local_job_id);
+CREATE INDEX IF NOT EXISTS idx_protocol_drafts_fab_frozen ON protocol_drafts(fabrikationsnummer, frozen, frozen_at);
+CREATE TABLE IF NOT EXISTS protocol_draft_meta (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  local_job_id INTEGER NOT NULL,
+  protocol_kind TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0,
+  server_updated_at TEXT,
+  extra_json TEXT,
+  UNIQUE (local_job_id, protocol_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_draft_meta_job ON protocol_draft_meta(local_job_id);
+
 -- Profil-Unterschrift (Cache von Dispo technician_signatures)
 CREATE TABLE IF NOT EXISTS technician_signature (
   technician_id INTEGER PRIMARY KEY,

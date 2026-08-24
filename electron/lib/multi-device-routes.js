@@ -13,6 +13,8 @@ const {
   writeLocalDraftFile,
   stripDraftMeta,
   draftPayloadsEqual,
+  isEmptyMonteurDraftPayload,
+  pruneEmptyMonteurDraftJsons,
   reconcileLocalTreeWithManifest,
   formatBytes,
   writeConflictCopy,
@@ -20,6 +22,7 @@ const {
   MONTEUR_DRAFT_BASENAMES,
   DRAFT_JSON_ENDPOINTS,
 } = require('./multi-device-sync');
+const protocolDrafts = require('./protocol-drafts-local');
 
 function ensureMultiDeviceTables(db) {
   db.exec(`
@@ -82,6 +85,35 @@ function registerMultiDeviceRoutes(deps) {
 
   function deviceId() {
     return getOrCreateDeviceId(DB_DIR);
+  }
+
+  function draftBasename(opts) {
+    return opts.basename || path.basename(String(opts.filePath || '').replace(/\\/g, '/'));
+  }
+
+  function readDraftState(opts) {
+    const basename = draftBasename(opts);
+    if (db && opts.localJobId && basename) {
+      return protocolDrafts.readDraft(db, opts.localJobId, basename, opts.reiseDir);
+    }
+    return readLocalDraftFile(opts.filePath);
+  }
+
+  function writeDraftState(opts, payload, revision, serverUpdatedAt) {
+    const basename = draftBasename(opts);
+    if (db && opts.localJobId && basename) {
+      protocolDrafts.writeDraft(
+        db,
+        opts.localJobId,
+        basename,
+        payload,
+        revision,
+        serverUpdatedAt,
+        opts.reiseDir,
+      );
+      return;
+    }
+    writeLocalDraftFile(opts.filePath, payload, revision, serverUpdatedAt);
   }
 
   function clearConflictsForFile(localJobId, serverJobId, relPath) {
@@ -170,11 +202,14 @@ function registerMultiDeviceRoutes(deps) {
     const endpoint = opts.endpoint;
     const technicianId = parseInt(opts.technicianId, 10);
     const serverJobId = parseInt(opts.serverJobId, 10);
-    const filePath = opts.filePath;
-    if (!base || !endpoint || !technicianId || !serverJobId || !filePath) {
+    const basename = draftBasename(opts);
+    if (!base || !endpoint || !technicianId || !serverJobId || !basename) {
       return { ok: false, skipped: true };
     }
-    const local = readLocalDraftFile(filePath);
+    const local = readDraftState(opts);
+    if (isEmptyMonteurDraftPayload(local.payload) && (!local.revision || local.revision <= 0)) {
+      return { ok: true, skipped: true, empty: true };
+    }
     const auth = authHeaderFromCreds(opts.username, opts.password);
     const postHeaders = {
       'Content-Type': 'application/json',
@@ -203,7 +238,7 @@ function registerMultiDeviceRoutes(deps) {
         if (remoteRev !== baseRevision) {
           console.warn(
             '[draft_push] align base_revision',
-            path.basename(filePath),
+            basename,
             'local=',
             baseRevision,
             'server=',
@@ -237,7 +272,7 @@ function registerMultiDeviceRoutes(deps) {
       if (r.status === 409 && data.code === 'job_closed') {
         console.warn(
           '[draft_push] job_closed',
-          path.basename(filePath),
+          basename,
           'job=',
           serverJobId,
         );
@@ -248,16 +283,16 @@ function registerMultiDeviceRoutes(deps) {
         const remoteRev = parseInt(data.revision, 10) || 0;
         // Gleicher Fachinhalt, nur Revisions-Drift → Meta übernehmen
         if (draftPayloadsEqual(local.payload, remotePayload)) {
-          writeLocalDraftFile(
-            filePath,
+          writeDraftState(
+            opts,
             stripDraftMeta(remotePayload),
             remoteRev,
             data.server_updated_at || null,
           );
-          clearConflictsForFile(opts.localJobId, serverJobId, path.basename(filePath));
+          clearConflictsForFile(opts.localJobId, serverJobId, basename);
           console.warn(
             '[draft_push] soft-resolve (equal payload)',
-            path.basename(filePath),
+            basename,
             'rev',
             remoteRev,
           );
@@ -272,7 +307,7 @@ function registerMultiDeviceRoutes(deps) {
         if (remoteRev !== baseRevision) {
           console.warn(
             '[draft_push] retry with remote base_revision',
-            path.basename(filePath),
+            basename,
             'localBase=',
             baseRevision,
             'remote=',
@@ -282,13 +317,13 @@ function registerMultiDeviceRoutes(deps) {
           r = retry.r;
           data = retry.data;
           if (r.ok && data && data.ok) {
-            writeLocalDraftFile(
-              filePath,
+            writeDraftState(
+              opts,
               stripDraftMeta(data.store || data.data || local.payload),
               data.revision != null ? data.revision : remoteRev + 1,
               data.server_updated_at || null,
             );
-            clearConflictsForFile(opts.localJobId, serverJobId, path.basename(filePath));
+            clearConflictsForFile(opts.localJobId, serverJobId, basename);
             return { ok: true, revision: data.revision, code: null, retried: true };
           }
           if (r.status === 409 && data.code === 'job_closed') {
@@ -297,7 +332,7 @@ function registerMultiDeviceRoutes(deps) {
         }
         console.warn(
           '[draft_push] hard conflict',
-          path.basename(filePath),
+          basename,
           'job=',
           serverJobId,
           'base=',
@@ -305,9 +340,9 @@ function registerMultiDeviceRoutes(deps) {
           'remote=',
           remoteRev,
         );
-        writeConflictCopy(filePath, deviceId());
-        writeLocalDraftFile(
-          filePath,
+        if (opts.filePath) writeConflictCopy(opts.filePath, deviceId());
+        writeDraftState(
+          opts,
           stripDraftMeta(data.store || data.data || remotePayload),
           parseInt(data.revision, 10) || remoteRev,
           data.server_updated_at || null,
@@ -319,7 +354,7 @@ function registerMultiDeviceRoutes(deps) {
           ).run(
             opts.localJobId || null,
             serverJobId,
-            path.basename(filePath),
+            basename,
             JSON.stringify({
               code: 'conflict',
               revision: data.revision,
@@ -338,22 +373,22 @@ function registerMultiDeviceRoutes(deps) {
       if (!r.ok || !data.ok) {
         console.warn(
           '[draft_push] failed',
-          path.basename(filePath),
+          basename,
           r.status,
           data.error || data.code || r.statusText,
         );
         return { ok: false, error: data.error || r.statusText, code: data.code };
       }
-      writeLocalDraftFile(
-        filePath,
+      writeDraftState(
+        opts,
         stripDraftMeta(data.store || data.data || local.payload),
         data.revision != null ? data.revision : local.revision + 1,
         data.server_updated_at || null,
       );
-      clearConflictsForFile(opts.localJobId, serverJobId, path.basename(filePath));
+      clearConflictsForFile(opts.localJobId, serverJobId, basename);
       return { ok: true, revision: data.revision, code: null };
     } catch (e) {
-      console.warn('[draft_push] exception', path.basename(filePath), e && e.message ? e.message : e);
+      console.warn('[draft_push] exception', basename, e && e.message ? e.message : e);
       return { ok: false, error: e.message || 'draft_push_failed' };
     }
   }
@@ -363,7 +398,8 @@ function registerMultiDeviceRoutes(deps) {
     const endpoint = opts.endpoint;
     const technicianId = parseInt(opts.technicianId, 10);
     const serverJobId = parseInt(opts.serverJobId, 10);
-    if (!base || !endpoint || !technicianId || !serverJobId || !opts.filePath) {
+    const basename = draftBasename(opts);
+    if (!base || !endpoint || !technicianId || !serverJobId || !basename) {
       return { ok: false };
     }
     const auth = authHeaderFromCreds(opts.username, opts.password);
@@ -382,11 +418,14 @@ function registerMultiDeviceRoutes(deps) {
       if (!r.ok || !data.ok) return { ok: false, error: data.error };
       const payload = stripDraftMeta(data.store || data.data || {});
       const remoteRev = parseInt(data.revision, 10) || 0;
-      const remoteEmpty = draftPayloadsEqual(payload, {});
-      if (remoteRev <= 0 && remoteEmpty) {
-        return { ok: true, skipped: true, empty: true };
+      const remoteEmpty = isEmptyMonteurDraftPayload(payload);
+      const local = readDraftState(opts);
+      if (remoteEmpty) {
+        if (remoteRev > 0 || isEmptyMonteurDraftPayload(local.payload)) {
+          writeDraftState(opts, payload, remoteRev, data.server_updated_at || null);
+        }
+        return { ok: true, skipped: remoteRev <= 0, empty: true, revision: remoteRev };
       }
-      const local = readLocalDraftFile(opts.filePath);
       if (
         local.revision > 0 &&
         local.revision >= remoteRev &&
@@ -394,12 +433,7 @@ function registerMultiDeviceRoutes(deps) {
       ) {
         return { ok: true, skipped: true, revision: local.revision };
       }
-      writeLocalDraftFile(
-        opts.filePath,
-        payload,
-        remoteRev,
-        data.server_updated_at || null,
-      );
+      writeDraftState(opts, payload, remoteRev, data.server_updated_at || null);
       return { ok: true, revision: remoteRev, store: payload };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -408,24 +442,25 @@ function registerMultiDeviceRoutes(deps) {
 
   async function pullAllJsonDrafts(opts) {
     const reiseDir = opts.reiseDir;
-    if (!reiseDir) return { ok: false, pulled: [] };
     const pulled = [];
     for (const basename of MONTEUR_DRAFT_BASENAMES) {
       const endpoint = DRAFT_JSON_ENDPOINTS[basename];
       if (!endpoint) continue;
-      const filePath = resolveMonteurDraftJsonPath(reiseDir, basename, true);
       const result = await pullJsonDraft({
         dispoBaseUrl: opts.dispoBaseUrl,
         endpoint,
         technicianId: opts.technicianId,
         serverJobId: opts.serverJobId,
         localJobId: opts.localJobId,
-        filePath,
+        reiseDir,
+        basename,
+        filePath: reiseDir ? resolveMonteurDraftJsonPath(reiseDir, basename, false) : '',
         username: opts.username,
         password: opts.password,
       });
       pulled.push({ basename, ok: !!(result && result.ok), skipped: !!(result && result.skipped) });
     }
+    if (reiseDir) pruneEmptyMonteurDraftJsons(reiseDir);
     return { ok: true, pulled };
   }
 

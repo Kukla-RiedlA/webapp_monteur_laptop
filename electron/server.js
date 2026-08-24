@@ -128,6 +128,9 @@ const {
   safeResolveUnderRoot,
   isIgnorableDirEntry,
   findMonteurFolderForFab,
+  folderNameMatchesFab,
+  isDatePrefixedProjectFolderName,
+  isFnFolderAlias,
 } = require('./lib/projekte-neu-local');
 const {
   buildMonteurMontageFolderName,
@@ -147,6 +150,7 @@ const {
   resolveCanonicalProjekteNeuFolderName,
   buildOfflinePreviewTree,
   migrateBareFabAnlageDirs,
+  migrateAliasFnFolders,
   resolveFabMapLocal,
   sanitizeDienstreiseFolderPart,
   sanitizeExportFileBase,
@@ -226,7 +230,10 @@ const {
   DRAFT_JSON_ENDPOINTS,
   readLocalDraftFile,
   stripDraftMeta,
+  pruneEmptyMonteurDraftJsons,
+  isEmptyMonteurDraftPayload,
 } = require('./lib/multi-device-sync');
+const protocolDrafts = require('./lib/protocol-drafts-local');
 const {
   ensureAnlagenstammLocalSchema,
   rowCount: anlagenstammLocalRowCount,
@@ -1498,7 +1505,7 @@ function createApp(db) {
     if (!creds.baseUrl) return;
     const endpoint = DRAFT_JSON_ENDPOINTS[basename];
     if (!endpoint) return;
-    const filePath = resolveMonteurDraftJsonPath(reiseDir, basename, true);
+    const filePath = resolveMonteurDraftJsonPath(reiseDir, basename, false);
     try {
       await multiDeviceApi.pullJsonDraft({
         dispoBaseUrl: creds.baseUrl,
@@ -1506,6 +1513,8 @@ function createApp(db) {
         technicianId,
         serverJobId: parsedServer,
         localJobId,
+        reiseDir,
+        basename,
         filePath,
         username: creds.serverUsername,
         password: creds.serverPassword,
@@ -2432,6 +2441,16 @@ function createApp(db) {
     }
   }
 
+  function freezeProtocolDraftsIfClosed(localJobId, status) {
+    const st = String(status || '').trim().toLowerCase();
+    if (st !== 'erledigt' && st !== 'abgerechnet') return;
+    try {
+      protocolDrafts.freezeJob(db, localJobId);
+    } catch (_) {
+      /* Schema optional */
+    }
+  }
+
   function getServerJobId(localJobIdOrServerId) {
     const row = getJobRowByLocalOrServerId(localJobIdOrServerId);
     if (!row) throw new Error('Auftrag nicht gefunden.');
@@ -3347,12 +3366,8 @@ function createApp(db) {
     try {
       db.prepare(
         `UPDATE anlagenstamm_local SET pn_root_name = ?
-         WHERE TRIM(fabrikationsnummer) = TRIM(?)
-           AND (
-             pn_root_name IS NULL OR TRIM(pn_root_name) = ''
-             OR TRIM(pn_root_name) = TRIM(?)
-           )`,
-      ).run(name, f, f);
+         WHERE TRIM(fabrikationsnummer) = TRIM(?)`,
+      ).run(name, f);
     } catch (_) {}
   }
 
@@ -3380,6 +3395,7 @@ function createApp(db) {
     if (reiseDir && fs.existsSync(reiseDir)) {
       migrateBareFabAnlageDirs(reiseDir, fabMap);
       removeStaleBareFabMonteurDirs(reiseDir, fabMap);
+      migrateAliasFnFolders(reiseDir, fabMap);
       ensureAnlageFnDirs(reiseDir, fabMap);
     }
     return fabMap;
@@ -3477,6 +3493,9 @@ function createApp(db) {
       }
       if (!isClosedJob) {
         ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+        try {
+          pruneEmptyMonteurDraftJsons(reiseDir);
+        } catch (_) {}
       }
       let subpath = (req.query.subpath || '').trim().replace(/^[\/\\]+|[\/\\]+$/g, '');
       if (subpath && (subpath.includes('..') || path.isAbsolute(subpath))) return res.status(400).json({ ok: false, error: 'Ungültiger Unterpfad.' });
@@ -3737,18 +3756,96 @@ function createApp(db) {
     }
   });
 
+  function jobFabsForLocalJob(localJobId, extraFab) {
+    const jobRow = lookupDienstreiseJobRow(localJobId);
+    const set = new Set();
+    if (jobRow) {
+      for (const n of fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern)) {
+        const s = String(n || '').trim();
+        if (s) set.add(s);
+      }
+    }
+    const extra = String(extraFab || '').trim();
+    if (extra) set.add(extra);
+    return [...set];
+  }
+
+  function canonicalProjekteNeuFolderForJob(localJobId, fab) {
+    const fabNorm = String(fab || '').trim();
+    if (!fabNorm) return '';
+    const jobRow = lookupDienstreiseJobRow(localJobId);
+    const jobFabs = jobFabsForLocalJob(localJobId, fabNorm);
+    let fabMapIn = [];
+    try {
+      fabMapIn = getOfflinePullConfig(db, localJobId).fab_map || [];
+    } catch (_) {}
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+    const fabMap = resolveFabMapLocal(
+      reiseDir,
+      fabMapIn,
+      jobFabs,
+      (f) => readAnlagenstammRootFolderName(db, f),
+      jobMetaForFnFolder(jobRow),
+    );
+    const hit = fabMap.find((e) => String(e.fab || '').trim() === fabNorm);
+    if (hit && hit.folder_name_canonical) return String(hit.folder_name_canonical).trim();
+    return buildCanonicalFabFolderName(fabNorm, jobRow);
+  }
+
   function getProjekteNeuLocalContext(localJobId, fab) {
     const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
     if (!reiseDir) return null;
     const da = path.join(reiseDir, 'Dokumente_Anlage');
-    const resolved = resolveProjekteNeuRoot(da, fab);
-    if (!resolved) return null;
     const offlineCfg = getOfflinePullConfig(db, localJobId);
-    return {
+    const montageFolderName = offlineCfg.montage_folder_name || null;
+    const jobRow = lookupDienstreiseJobRow(localJobId);
+    const jobFabs = jobFabsForLocalJob(localJobId, fab);
+    const fabMap = resolveFabMapLocal(
       reiseDir,
-      dm: da,
-      resolved: { ...resolved, montageFolderName: offlineCfg.montage_folder_name || null },
-    };
+      offlineCfg.fab_map || [],
+      jobFabs,
+      (f) => readAnlagenstammRootFolderName(db, f),
+      jobMetaForFnFolder(jobRow),
+    );
+    const hit = fabMap.find((e) => String(e.fab || '').trim() === String(fab || '').trim());
+    const canonical = hit && hit.folder_name_canonical ? String(hit.folder_name_canonical).trim() : '';
+    const singleBuilt = buildFnProjectFolderName(
+      Object.assign({ fab }, jobMetaForFnFolder(jobRow) || {}),
+    );
+    const resolved = resolveProjekteNeuRoot(da, fab);
+    if (
+      resolved &&
+      folderNameMatchesFab(resolved.folderName, fab) &&
+      !isDatePrefixedProjectFolderName(resolved.folderName)
+    ) {
+      const genSingle =
+        isBareFabFolderName(resolved.folderName) ||
+        resolved.folderName === String(fab) ||
+        (singleBuilt && isFnFolderAlias(resolved.folderName, singleBuilt));
+      if (!genSingle || !canonical || isFnFolderAlias(resolved.folderName, canonical)) {
+        return {
+          reiseDir,
+          dm: da,
+          resolved: { ...resolved, montageFolderName },
+        };
+      }
+    }
+    if (canonical) {
+      const root = path.join(da, canonical);
+      try {
+        if (!fs.existsSync(da)) fs.mkdirSync(da, { recursive: true });
+        if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true });
+        migrateAliasFnFolders(reiseDir, fabMap);
+        if (fs.existsSync(root) && fs.statSync(root).isDirectory()) {
+          return {
+            reiseDir,
+            dm: da,
+            resolved: { root, folderName: canonical, montageFolderName },
+          };
+        }
+      } catch (_) {}
+    }
+    return null;
   }
 
   /** FN aus Pfad (Legacy Bilder/11521/…, neu …/Montage/<AO>/Bilder/) und alle FNs des Auftrags. */
@@ -4110,7 +4207,15 @@ function createApp(db) {
       }
       const ctx = getProjekteNeuLocalContext(jobId, fab);
       if (!ctx) {
-        return res.json({ ok: true, local: false, enabled: false, tree: [], message: 'Kein lokaler PROJEKTE-NEU-Ordner für diese FN.' });
+        const suggested = canonicalProjekteNeuFolderForJob(jobId, fab);
+        return res.json({
+          ok: true,
+          local: false,
+          enabled: false,
+          tree: [],
+          folder: suggested || '',
+          message: 'Kein lokaler PROJEKTE-NEU-Ordner für diese FN.',
+        });
       }
       const scanned = scanProjekteNeuTree(ctx.resolved.root, {});
       upsertAnlagenstammTreeCache(
@@ -5793,6 +5898,7 @@ function createApp(db) {
         } else {
           db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
         }
+        freezeProtocolDraftsIfClosed(localJobId, 'erledigt');
       } catch (statusErr) {
         // Wenn das Status-Update/Pending-Flag scheitert, soll der Abschluss
         // trotzdem nicht komplett fehlschlagen.
@@ -6213,7 +6319,34 @@ function createApp(db) {
         'pruefzertifikat.json': 'Prüfzertifikat JSON',
       };
       const reiseDirForJson = catalog.reiseDir || resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      try {
+        const listed = protocolDrafts.listDraftsForJob(db, localJobId);
+        for (const item of listed) {
+          const baseName = item.basename;
+          const key = '|' + String(baseName).toLowerCase();
+          if (seenProtoKeys.has(key)) continue;
+          seenProtoKeys.add(key);
+          protokolle.push(
+            mapDoc(
+              {
+                id: 'json-db:' + baseName,
+                type: protocolJsonKindLabel[String(baseName).toLowerCase()] || 'Protokoll JSON',
+                name: baseName,
+                fab: '',
+                absPath: '',
+                relPath: 'db:' + baseName,
+                size: JSON.stringify(item.payload || {}).length,
+                mtime: item.server_updated_at || null,
+              },
+              { source: 'protocol_json', protocol_json: true, protocol_draft_db: true },
+            ),
+          );
+        }
+      } catch (_) {
+        /* SQLite optional */
+      }
       if (reiseDirForJson && fs.existsSync(reiseDirForJson)) {
+        pruneEmptyMonteurDraftJsons(reiseDirForJson);
         for (const baseName of MONTEUR_DRAFT_BASENAMES) {
           let jsonPath = '';
           try {
@@ -8382,12 +8515,14 @@ function createApp(db) {
         'montagebericht.json',
         req.query,
       );
-      const dataPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', true);
-      if (!fs.existsSync(dataPath)) {
-        return res.json({ ok: true, data: null });
-      }
-      const raw = fs.readFileSync(dataPath, 'utf8');
-      const data = JSON.parse(raw);
+      const draftMeta = protocolDrafts.readDraft(db, localJobId, 'montagebericht.json', reiseDir);
+      const payload = draftMeta && draftMeta.payload && Object.keys(draftMeta.payload).length ? draftMeta.payload : null;
+      const data = payload
+        ? Object.assign({}, payload, {
+            revision: draftMeta.revision,
+            server_updated_at: draftMeta.server_updated_at,
+          })
+        : null;
       res.json({ ok: true, data });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
@@ -8555,26 +8690,28 @@ function createApp(db) {
       const jsonOnly = body.jsonOnly === true || body.saveJsonOnly === true;
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      const montageberichtDataPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', true);
+      const montageberichtDataPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', false);
       const kopfdatenBemerkungen = (kopfdaten && kopfdaten.bemerkungen != null) ? String(kopfdaten.bemerkungen).trim() : '';
       const kopfdatenBemerkungenHtml = (kopfdaten && kopfdaten.bemerkungen_html != null) ? String(kopfdaten.bemerkungen_html).trim() : '';
-      // Revision/Meta erhalten — sonst base_revision=0 beim Push → Pseudo-Konflikt trotz nur einem Gerät
-      const { readLocalDraftFile, writeLocalDraftFile } = require('./lib/multi-device-sync');
-      const prevDraft = readLocalDraftFile(montageberichtDataPath);
-      writeLocalDraftFile(
-        montageberichtDataPath,
-        {
-          grundDesEinsatzes,
-          grundDesEinsatzes_html: grundDesEinsatzesHtml,
-          fabBemerkungen,
-          language,
-          languages,
-          bemerkungen: kopfdatenBemerkungen,
-          bemerkungen_html: kopfdatenBemerkungenHtml,
-          projekt: projektPflicht,
-        },
+      const prevDraft = protocolDrafts.readDraft(db, localJobId, 'montagebericht.json', reiseDir);
+      const montagePayload = {
+        grundDesEinsatzes,
+        grundDesEinsatzes_html: grundDesEinsatzesHtml,
+        fabBemerkungen,
+        language,
+        languages,
+        bemerkungen: kopfdatenBemerkungen,
+        bemerkungen_html: kopfdatenBemerkungenHtml,
+        projekt: projektPflicht,
+      };
+      protocolDrafts.writeDraft(
+        db,
+        localJobId,
+        'montagebericht.json',
+        montagePayload,
         prevDraft.revision,
         prevDraft.server_updated_at,
+        reiseDir,
       );
 
       // Dispo-Sync (Netz) erst NACH lokalem PDF – sonst wirkt Speichern „wie Word“ langsam.
@@ -8593,6 +8730,7 @@ function createApp(db) {
               technicianId,
               serverJobId,
               localJobId,
+              reiseDir,
               filePath: montageberichtDataPath,
               username: body.dispoUsername || body.serverUsername,
               password: body.dispoPassword ?? body.serverPassword,
@@ -8994,9 +9132,11 @@ function createApp(db) {
       }
       if (saved.length) {
         try {
-          const prevAfter = readLocalDraftFile(montageberichtDataPath);
-          writeLocalDraftFile(
-            montageberichtDataPath,
+          const prevAfter = protocolDrafts.readDraft(db, localJobId, 'montagebericht.json', reiseDir);
+          protocolDrafts.writeDraft(
+            db,
+            localJobId,
+            'montagebericht.json',
             Object.assign({}, prevAfter.payload || {}, {
               grundDesEinsatzes,
               grundDesEinsatzes_html: grundDesEinsatzesHtml,
@@ -9012,6 +9152,7 @@ function createApp(db) {
             }),
             prevAfter.revision,
             prevAfter.server_updated_at,
+            reiseDir,
           );
         } catch (_) { /* Meta optional */ }
       }
@@ -9057,27 +9198,20 @@ function createApp(db) {
       `).get(localJobId, technicianId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      const { readLocalDraftFile, resolveMonteurDraftJsonPath } = require('./lib/multi-device-sync');
       let rel = String(req.query.rel || '').trim().replace(/\\/g, '/');
       let absHint = '';
       if (!rel) {
         try {
-          const draftPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', false);
-          if (draftPath && fs.existsSync(draftPath)) {
-            const draft = readLocalDraftFile(draftPath);
-            const p = draft && draft.payload ? draft.payload : {};
-            if (p.last_pdf_rel) rel = String(p.last_pdf_rel).trim().replace(/\\/g, '/');
-            if (p.last_pdf_abs) absHint = String(p.last_pdf_abs).trim();
-          }
+          const draft = protocolDrafts.readDraft(db, localJobId, 'montagebericht.json', reiseDir);
+          const p = draft && draft.payload ? draft.payload : {};
+          if (p.last_pdf_rel) rel = String(p.last_pdf_rel).trim().replace(/\\/g, '/');
+          if (p.last_pdf_abs) absHint = String(p.last_pdf_abs).trim();
         } catch (_) { /* optional */ }
       } else {
         try {
-          const draftPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', false);
-          if (draftPath && fs.existsSync(draftPath)) {
-            const draft = readLocalDraftFile(draftPath);
-            const p = draft && draft.payload ? draft.payload : {};
-            if (p.last_pdf_abs) absHint = String(p.last_pdf_abs).trim();
-          }
+          const draft = protocolDrafts.readDraft(db, localJobId, 'montagebericht.json', reiseDir);
+          const p = draft && draft.payload ? draft.payload : {};
+          if (p.last_pdf_abs) absHint = String(p.last_pdf_abs).trim();
         } catch (_) { /* optional */ }
       }
       let full = '';
@@ -9157,7 +9291,7 @@ function createApp(db) {
         'kontrollwiegungsprotokoll.json',
         req.query,
       );
-      const store = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir);
+      const store = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir, db, localJobId);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 }, data: store });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
@@ -9200,7 +9334,7 @@ function createApp(db) {
         languages: parseProtocolLanguages(body),
         pdf_languages: parseProtocolLanguages(body),
       };
-      const record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, fab, entry);
+      const record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, fab, entry, db, localJobId);
       const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
       if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
         const serverJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
@@ -9213,6 +9347,7 @@ function createApp(db) {
               technicianId,
               serverJobId,
               localJobId,
+              reiseDir,
               filePath: kwPath,
               username: body.serverUsername || body.dispoUsername,
               password: body.serverPassword ?? body.dispoPassword,
@@ -9220,7 +9355,7 @@ function createApp(db) {
           } catch (_) { /* optional */ }
         }
       }
-      res.json({ ok: true, protokoll_id: record.protokoll_id, local_protokoll_id: record.protokoll_id, store: kontrollwiegungLocal.readKontrollwiegungStore(reiseDir) });
+      res.json({ ok: true, protokoll_id: record.protokoll_id, local_protokoll_id: record.protokoll_id, store: kontrollwiegungLocal.readKontrollwiegungStore(reiseDir, db, localJobId) });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Draft konnte nicht gespeichert werden.' });
     }
@@ -9266,7 +9401,7 @@ function createApp(db) {
       let savedPdfPath = null;
       const createPdf = body.create_pdf === true || body.createPdf === true;
       if (reiseDir) {
-        record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, payload.fabrikationsnummer, payload);
+        record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, payload.fabrikationsnummer, payload, db, localJobId);
         if (record) {
           payload.gespeichert_am = record.gespeichert_am || record.updated_at || '';
           payload.updated_at = record.updated_at || payload.gespeichert_am;
@@ -9299,12 +9434,12 @@ function createApp(db) {
           record.pdf_rel = savedPdf;
           record.pdf_rels = savedPdfs.map((p) => p.rel);
           record.languages = pdfLangs;
-          const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir);
+          const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir, db, localJobId);
           if (storeKw.byFab[payload.fabrikationsnummer]) {
             storeKw.byFab[payload.fabrikationsnummer].pdf_rel = savedPdf;
             storeKw.byFab[payload.fabrikationsnummer].pdf_rels = record.pdf_rels;
             storeKw.byFab[payload.fabrikationsnummer].languages = pdfLangs;
-            kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw);
+            kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw, db, localJobId);
           }
         }
         save();
@@ -9320,6 +9455,7 @@ function createApp(db) {
               technicianId,
               serverJobId,
               localJobId,
+              reiseDir,
               filePath: kwPath,
               username: body.serverUsername || body.dispoUsername,
               password: body.serverPassword ?? body.dispoPassword,
@@ -9402,7 +9538,7 @@ function createApp(db) {
         if (!reiseDir) {
           return res.status(404).json({ ok: false, error: 'Lokales Protokoll nicht gefunden (job_id fehlt).' });
         }
-        const rec = kontrollwiegungLocal.getKontrollwiegungLocal(reiseDir, fab, protokollIdRaw);
+        const rec = kontrollwiegungLocal.getKontrollwiegungLocal(reiseDir, fab, protokollIdRaw, db, localJobId);
         if (!rec) {
           return res.status(404).json({ ok: false, error: 'Lokales Protokoll nicht gefunden.' });
         }
@@ -9465,7 +9601,7 @@ function createApp(db) {
           }
           existing = { full: firstPaths.full, rel: firstPaths.rel };
           try {
-            const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir);
+            const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir, db, localJobId);
             const fnKey = String(rec.fabrikationsnummer || fab || '').trim();
             if (fnKey && storeKw.byFab[fnKey]) {
               storeKw.byFab[fnKey].pdf_rel = firstPaths.rel;
@@ -9476,7 +9612,7 @@ function createApp(db) {
                 storeKw.byFab[fnKey].kunde = pdfPayload.kunde;
                 storeKw.byFab[fnKey].customer_name = pdfPayload.kunde;
               }
-              kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw);
+              kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw, db, localJobId);
             }
           } catch (_) { /* optional */ }
           if (Number.isFinite(localJobId) && localJobId > 0) save();
@@ -9575,7 +9711,7 @@ function createApp(db) {
         'schleppkettenprotokoll.json',
         req.query,
       );
-      const store = schleppkettenLocal.readSchleppkettenStore(reiseDir);
+      const store = schleppkettenLocal.readSchleppkettenStore(reiseDir, db, localJobId);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 } });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
@@ -9604,12 +9740,12 @@ function createApp(db) {
         fabrikationsnummer: fab,
         messungen: Array.isArray(body.messungen) ? body.messungen : [],
       });
-      const record = schleppkettenLocal.saveSchleppkettenLocal(reiseDir, fab, entry);
+      const record = schleppkettenLocal.saveSchleppkettenLocal(reiseDir, fab, entry, db, localJobId);
       res.json({
         ok: true,
         protokoll_id: record.protokoll_id,
         local_protokoll_id: record.protokoll_id,
-        store: schleppkettenLocal.readSchleppkettenStore(reiseDir),
+        store: schleppkettenLocal.readSchleppkettenStore(reiseDir, db, localJobId),
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Draft konnte nicht gespeichert werden.' });
@@ -9684,7 +9820,7 @@ function createApp(db) {
       let savedPdfPath = null;
       const createPdf = body.create_pdf === true || body.createPdf === true;
       if (reiseDir) {
-        record = schleppkettenLocal.saveSchleppkettenLocal(reiseDir, payload.fabrikationsnummer, payload);
+        record = schleppkettenLocal.saveSchleppkettenLocal(reiseDir, payload.fabrikationsnummer, payload, db, localJobId);
         if (record) {
           payload.gespeichert_am = record.gespeichert_am || record.updated_at || '';
           payload.updated_at = record.updated_at || payload.gespeichert_am;
@@ -9718,12 +9854,12 @@ function createApp(db) {
           record.pdf_rel = savedPdf;
           record.pdf_rels = savedPdfs.map((p) => p.rel);
           record.languages = pdfLangsSk;
-          const storeSk = schleppkettenLocal.readSchleppkettenStore(reiseDir);
+          const storeSk = schleppkettenLocal.readSchleppkettenStore(reiseDir, db, localJobId);
           if (storeSk.byFab[payload.fabrikationsnummer]) {
             storeSk.byFab[payload.fabrikationsnummer].pdf_rel = savedPdf;
             storeSk.byFab[payload.fabrikationsnummer].pdf_rels = record.pdf_rels;
             storeSk.byFab[payload.fabrikationsnummer].languages = pdfLangsSk;
-            schleppkettenLocal.writeSchleppkettenStore(reiseDir, storeSk);
+            schleppkettenLocal.writeSchleppkettenStore(reiseDir, storeSk, db, localJobId);
           }
         }
         save();
@@ -9739,6 +9875,7 @@ function createApp(db) {
               technicianId,
               serverJobId: srvJobId,
               localJobId,
+              reiseDir,
               filePath: skPath,
               username: body.serverUsername || body.dispoUsername,
               password: body.serverPassword ?? body.dispoPassword,
@@ -9814,7 +9951,7 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
       }
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      const rec = schleppkettenLocal.getSchleppkettenLocal(reiseDir, fab, protokollIdRaw);
+      const rec = schleppkettenLocal.getSchleppkettenLocal(reiseDir, fab, protokollIdRaw, db, localJobId);
       if (!rec) {
         return res.status(404).json({ ok: false, error: 'Lokales Protokoll nicht gefunden.' });
       }
@@ -9924,7 +10061,7 @@ function createApp(db) {
         'pruefzertifikat.json',
         req.query,
       );
-      const store = pruefzertifikatLocal.readPruefzertifikatStore(reiseDir);
+      const store = pruefzertifikatLocal.readPruefzertifikatStore(reiseDir, db, localJobId);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 } });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
@@ -9971,7 +10108,7 @@ function createApp(db) {
             } catch (_) { /* optional */ }
             try {
               if (!(prefill.ergebnisse && prefill.ergebnisse.service)) {
-                const localSp = pruefzertifikatLocal.prefillFromLocalDrafts(reiseDir, fab, {});
+                const localSp = pruefzertifikatLocal.prefillFromLocalDrafts(reiseDir, fab, {}, db, localJobId);
                 if (localSp && localSp.ergebnisse && localSp.ergebnisse.service) {
                   prefill.ergebnisse = prefill.ergebnisse || {};
                   prefill.ergebnisse.service = localSp.ergebnisse.service;
@@ -10013,7 +10150,7 @@ function createApp(db) {
         job_number: jobRow && jobRow.job_number,
         technician_name: tech && tech.full_name,
         ...stammMeta,
-      });
+      }, db, localJobId);
       res.json({ ok: true, prefill, source: 'local' });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Prefill fehlgeschlagen.' });
@@ -10094,7 +10231,7 @@ function createApp(db) {
           if (!sigPngPz) return failMissingSignature(res);
           payload.technician_signature_png = sigPngPz;
         }
-        record = pruefzertifikatLocal.savePruefzertifikatLocal(reiseDir, payload.fabrikationsnummer, payload);
+        record = pruefzertifikatLocal.savePruefzertifikatLocal(reiseDir, payload.fabrikationsnummer, payload, db, localJobId);
         for (const lang of langs) {
           const pdfPaths = resolvePruefzertifikatLocalPdfPaths(
             reiseDir,
@@ -10113,11 +10250,11 @@ function createApp(db) {
         }
         if (record && savedPdfs.length) {
           record.pdf_rel = savedPdfs[0].rel;
-          const storePz = pruefzertifikatLocal.readPruefzertifikatStore(reiseDir);
+          const storePz = pruefzertifikatLocal.readPruefzertifikatStore(reiseDir, db, localJobId);
           if (storePz.byFab[payload.fabrikationsnummer]) {
             storePz.byFab[payload.fabrikationsnummer].pdf_rel = savedPdfs[0].rel;
             storePz.byFab[payload.fabrikationsnummer].pdfs = savedPdfs;
-            pruefzertifikatLocal.writePruefzertifikatStore(reiseDir, storePz);
+            pruefzertifikatLocal.writePruefzertifikatStore(reiseDir, storePz, db, localJobId);
           }
         }
         save();
@@ -10132,6 +10269,7 @@ function createApp(db) {
               technicianId,
               serverJobId: srvJobId,
               localJobId,
+              reiseDir,
               filePath: pzPath,
               username: body.serverUsername || body.dispoUsername,
               password: body.serverPassword ?? body.dispoPassword,
@@ -10194,7 +10332,11 @@ function createApp(db) {
     return resolveMonteurDraftJsonPath(reiseDir, 'serviceprotokoll.json', true);
   }
 
-  function readServiceprotokollStore(reiseDir) {
+  function readServiceprotokollStore(reiseDir, localJobId) {
+    if (localJobId) {
+      const store = protocolDrafts.readStore(db, localJobId, 'serviceprotokoll.json', reiseDir);
+      return normalizeServiceprotokollStore(store);
+    }
     const p = serviceprotokollJsonPath(reiseDir);
     if (!fs.existsSync(p)) return { byFab: {} };
     try {
@@ -10267,10 +10409,10 @@ function createApp(db) {
     return Object.assign({}, store, { byFab });
   }
 
-  function writeServiceprotokollDraft(reiseDir, fab, draft) {
+  function writeServiceprotokollDraft(reiseDir, fab, draft, localJobId) {
     const fn = String(fab || '').trim();
     if (!fn) throw new Error('Fabrikationsnummer fehlt');
-    const store = readServiceprotokollStore(reiseDir);
+    const store = readServiceprotokollStore(reiseDir, localJobId);
     const prev = store.byFab[fn] || {};
     const incoming = draft && typeof draft === 'object' ? draft : {};
     const incomingAbs = incoming.abschluss;
@@ -10286,9 +10428,14 @@ function createApp(db) {
       abschluss: abs,
       updatedAt: new Date().toISOString(),
     });
-    const outPath = serviceprotokollJsonPath(reiseDir);
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    writeFileWithRetry(outPath, JSON.stringify(normalizeServiceprotokollStore(store), null, 2));
+    const normalized = normalizeServiceprotokollStore(store);
+    if (localJobId) {
+      protocolDrafts.writeStore(db, localJobId, 'serviceprotokoll.json', normalized, reiseDir);
+    } else {
+      const outPath = serviceprotokollJsonPath(reiseDir);
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      writeFileWithRetry(outPath, JSON.stringify(normalized, null, 2));
+    }
     return store.byFab[fn];
   }
 
@@ -10413,6 +10560,12 @@ function createApp(db) {
     return performAnlagenstammSave(partial, technicianId);
   }
 
+  function isEmptyServiceprotokollStore(store) {
+    const byFab = store && store.byFab;
+    if (!byFab || typeof byFab !== 'object') return true;
+    return Object.keys(byFab).length === 0;
+  }
+
   function mergeServiceprotokollDraftStores(base, incoming) {
     const out = { byFab: {} };
     [base, incoming].forEach((store) => {
@@ -10466,42 +10619,59 @@ function createApp(db) {
     return { store: { byFab: {} }, revision: 0 };
   }
 
-  async function syncServiceprotokollStoreWithDispo(reiseDir, technicianId, serverJobId, dispoBaseUrl, authHeader) {
+  async function syncServiceprotokollStoreWithDispo(reiseDir, technicianId, serverJobId, dispoBaseUrl, authHeader, localJobId) {
     const base = String(dispoBaseUrl || '').trim().replace(/\/$/, '');
     if (!base || !serverJobId || !technicianId) {
-      return readServiceprotokollStore(reiseDir);
+      return readServiceprotokollStore(reiseDir, localJobId);
     }
-    const localPath = serviceprotokollJsonPath(reiseDir);
-    let localRevision = 0;
-    try {
-      if (fs.existsSync(localPath)) {
-        const raw = JSON.parse(fs.readFileSync(localPath, 'utf8'));
-        localRevision = parseInt(raw && raw.revision, 10) || 0;
+    const persist = (store, revision, serverUpdatedAt) => {
+      const normalized = normalizeServiceprotokollStore(store);
+      if (localJobId) {
+        protocolDrafts.writeDraft(
+          db,
+          localJobId,
+          'serviceprotokoll.json',
+          normalized,
+          revision,
+          serverUpdatedAt,
+          reiseDir,
+        );
+        return;
       }
-    } catch (_) {}
-    const local = readServiceprotokollStore(reiseDir);
-    const remoteMeta = await fetchServiceprotokollDraftFromDispo(base, serverJobId, technicianId, authHeader);
-    const remote = remoteMeta.store || { byFab: {} };
-    const merged = mergeServiceprotokollDraftStores(local, remote);
-    const localJson = JSON.stringify(local);
-    const remoteJson = JSON.stringify(remote);
-    const mergedJson = JSON.stringify(merged);
-    if (mergedJson !== localJson) {
+      const localPath = serviceprotokollJsonPath(reiseDir);
       fs.mkdirSync(path.dirname(localPath), { recursive: true });
       writeFileWithRetry(
         localPath,
         JSON.stringify(
-          Object.assign({}, merged, {
+          Object.assign({}, normalized, {
             schema_version: 1,
-            revision: remoteMeta.revision || localRevision,
-            server_updated_at: remoteMeta.server_updated_at || new Date().toISOString(),
+            revision: revision || 0,
+            server_updated_at: serverUpdatedAt || new Date().toISOString(),
           }),
           null,
           2,
         ),
       );
+    };
+    const localMeta = localJobId
+      ? protocolDrafts.readDraft(db, localJobId, 'serviceprotokoll.json', reiseDir)
+      : readLocalDraftFile(serviceprotokollJsonPath(reiseDir));
+    const localRevision = parseInt(localMeta.revision, 10) || 0;
+    const local = normalizeServiceprotokollStore(localMeta.payload || readServiceprotokollStore(reiseDir, localJobId));
+    const remoteMeta = await fetchServiceprotokollDraftFromDispo(base, serverJobId, technicianId, authHeader);
+    const remote = remoteMeta.store || { byFab: {} };
+    const merged = mergeServiceprotokollDraftStores(local, remote);
+    if (isEmptyServiceprotokollStore(merged) && isEmptyServiceprotokollStore(remote)) {
+      persist(merged, remoteMeta.revision || 0, remoteMeta.server_updated_at || null);
+      return merged;
     }
-    if (mergedJson !== remoteJson) {
+    const localJson = JSON.stringify(local);
+    const remoteJson = JSON.stringify(remote);
+    const mergedJson = JSON.stringify(merged);
+    if (mergedJson !== localJson && !(isEmptyServiceprotokollStore(merged) && isEmptyServiceprotokollStore(local))) {
+      persist(merged, remoteMeta.revision || localRevision, remoteMeta.server_updated_at || new Date().toISOString());
+    }
+    if (mergedJson !== remoteJson && !(isEmptyServiceprotokollStore(merged) && isEmptyServiceprotokollStore(remote))) {
       try {
         const postUrl = base + '/dispo_api/api/serviceprotokoll_draft.php';
         const deviceId =
@@ -10529,36 +10699,14 @@ function createApp(db) {
         if (postRes.status === 409 && postData.code === 'conflict' && multiDeviceApi) {
           try {
             const { writeConflictCopy } = require('./lib/multi-device-sync');
-            writeConflictCopy(localPath, deviceId);
+            writeConflictCopy(serviceprotokollJsonPath(reiseDir), deviceId);
           } catch (_) {}
           if (postData.store) {
-            writeFileWithRetry(
-              localPath,
-              JSON.stringify(
-                Object.assign({}, postData.store, {
-                  schema_version: 1,
-                  revision: postData.revision || 0,
-                  server_updated_at: postData.server_updated_at || null,
-                }),
-                null,
-                2,
-              ),
-            );
+            persist(postData.store, postData.revision || 0, postData.server_updated_at || null);
             return postData.store;
           }
         } else if (postRes.ok && postData.ok && postData.revision != null) {
-          writeFileWithRetry(
-            localPath,
-            JSON.stringify(
-              Object.assign({}, postData.store || merged, {
-                schema_version: 1,
-                revision: postData.revision,
-                server_updated_at: postData.server_updated_at || null,
-              }),
-              null,
-              2,
-            ),
-          );
+          persist(postData.store || merged, postData.revision, postData.server_updated_at || null);
         }
       } catch (_) { /* optional */ }
     }
@@ -11086,7 +11234,8 @@ function createApp(db) {
     const technicianId = opts.technicianId;
     const jsonAbsPath = opts.jsonAbsPath;
     const kind = opts.kind;
-    const payload = readLocalDraftFile(jsonAbsPath).payload || {};
+    const payload = opts.payload
+      || (jsonAbsPath ? (readLocalDraftFile(jsonAbsPath).payload || {}) : {});
     const savedRel = [];
     const savedAbs = [];
     const warnings = [];
@@ -11318,26 +11467,43 @@ function createApp(db) {
       const relIn = String(body.relative_path || body.relPath || body.rel || '').replace(/\\/g, '/').trim();
       const nameIn = String(body.name || '').trim();
       let jsonAbs = '';
-      if (relIn) {
-        jsonAbs = kundenDokumentation.assertPathUnderReise(reiseDir, path.join(reiseDir, relIn));
-      } else if (nameIn && archivProtocolJsonKindFromName(nameIn)) {
-        jsonAbs = resolveMonteurDraftJsonPath(reiseDir, path.basename(nameIn), false);
+      let dbPayload = null;
+      let kind = null;
+      const dbName = relIn.startsWith('db:')
+        ? relIn.slice(3)
+        : (nameIn && archivProtocolJsonKindFromName(nameIn) ? path.basename(nameIn) : '');
+      if (dbName && archivProtocolJsonKindFromName(dbName)) {
+        kind = archivProtocolJsonKindFromName(dbName);
+        const meta = protocolDrafts.readDraft(db, localJobId, path.basename(dbName), reiseDir);
+        if (meta && meta.payload && !isEmptyMonteurDraftPayload(meta.payload)) {
+          dbPayload = meta.payload;
+        }
       }
-      if (!jsonAbs || !fs.existsSync(jsonAbs) || !fs.statSync(jsonAbs).isFile()) {
-        return res.status(404).json({ ok: false, error: 'JSON-Datei nicht gefunden.' });
+      if (!dbPayload) {
+        if (relIn && !relIn.startsWith('db:')) {
+          jsonAbs = kundenDokumentation.assertPathUnderReise(reiseDir, path.join(reiseDir, relIn));
+        } else if (nameIn && archivProtocolJsonKindFromName(nameIn)) {
+          jsonAbs = resolveMonteurDraftJsonPath(reiseDir, path.basename(nameIn), false);
+        }
+        if (jsonAbs && fs.existsSync(jsonAbs) && fs.statSync(jsonAbs).isFile()) {
+          kind = archivProtocolJsonKindFromName(jsonAbs);
+        }
       }
-      const kind = archivProtocolJsonKindFromName(jsonAbs);
       if (!kind) {
         return res.status(400).json({
           ok: false,
           error: 'Nur Protokoll-JSON (Service, Montagebericht, Kontrollwiegung, Schleppketten, Prüfzertifikat).',
         });
       }
+      if (!dbPayload && (!jsonAbs || !fs.existsSync(jsonAbs) || !fs.statSync(jsonAbs).isFile())) {
+        return res.status(404).json({ ok: false, error: 'JSON-Zwischenstand nicht gefunden.' });
+      }
       const result = await generateArchivProtocolPdfsFromJson({
         reiseDir,
         localJobId,
         technicianId,
         jsonAbsPath: jsonAbs,
+        payload: dbPayload,
         kind,
       });
       try {
@@ -11434,11 +11600,11 @@ function createApp(db) {
       const creds = resolveDispoServerCreds(req.query || {});
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
-      let store = readServiceprotokollStore(reiseDir);
+      let store = readServiceprotokollStore(reiseDir, localJobId);
       if (!localOnly && creds.baseUrl && hasServerJobId) {
         const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
         try {
-          store = await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, creds.baseUrl, auth);
+          store = await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, creds.baseUrl, auth, localJobId);
         } catch (_) {
           /* lokaler Store bleibt */
         }
@@ -11531,7 +11697,7 @@ function createApp(db) {
       }
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      writeServiceprotokollDraft(reiseDir, fab, draftPayload);
+      writeServiceprotokollDraft(reiseDir, fab, draftPayload, localJobId);
 
       let syncWarning = messSyncWarning;
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
@@ -11540,7 +11706,7 @@ function createApp(db) {
       if (!skipDispoSync && dispoBaseUrl && hasServerJobId) {
         const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.serverPassword ?? body.serverPassword);
         try {
-          await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, dispoBaseUrl, authSync);
+          await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, dispoBaseUrl, authSync, localJobId);
         } catch (_) {
           syncWarning = [syncWarning, 'Zwischenstand: Dispo-Sync fehlgeschlagen.'].filter(Boolean).join('\n');
         }
@@ -11784,7 +11950,7 @@ function createApp(db) {
             messSyncWarning = [messSyncWarning, 'FN ' + fab + ': ' + (messErr.message || 'Anlagenstamm-Sync fehlgeschlagen')].filter(Boolean).join('\n');
           }
         }
-        writeServiceprotokollDraft(reiseDir, fab, draftPayload);
+        writeServiceprotokollDraft(reiseDir, fab, draftPayload, localJobId);
 
         try {
           const localPdf = await writeServiceprotokollPdfsLocally(
@@ -12046,41 +12212,12 @@ function createApp(db) {
    * Möglichkeit 1: Ordner = eine FN (exakt).
    * Möglichkeit 2/3: Ordner = Bereich "von - bis"; mit oder ohne Leerzeichen, Endzahl gekürzt möglich.
    * Beispiele: 11952 - 11958, 11952-11958, 11952-58, 11952 - 58.
+   * Datumsordner wie 30-2020-07-25_Kunde werden nicht als Bereich gewertet.
    * Gibt den Ordnernamen zurück oder null.
    */
   function findParameterlistenFolder(docAnlagePath, fn) {
     if (fn == null || fn === '' || !Number.isFinite(fn)) return null;
-    const fnNum = parseInt(fn, 10);
-    if (!fs.existsSync(docAnlagePath) || !fs.statSync(docAnlagePath).isDirectory()) return null;
-    let names;
-    try {
-      names = fs.readdirSync(docAnlagePath, { withFileTypes: true });
-    } catch (e) {
-      return null;
-    }
-    const dirs = names.filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name)).map((e) => e.name);
-
-    for (const dirName of dirs) {
-      if (dirName.includes(' - ')) continue;
-      const digitsOnly = dirName.replace(/\D/g, '');
-      if (digitsOnly && parseInt(digitsOnly, 10) === fnNum) return dirName;
-    }
-
-    const rangeRe = /(\d+)\s*-\s*(\d+)/;
-    for (const dirName of dirs) {
-      const m = dirName.match(rangeRe);
-      if (!m) continue;
-      let from = parseInt(m[1], 10);
-      let to = parseInt(m[2], 10);
-      const fromStr = m[1];
-      const toStr = m[2];
-      if (toStr.length < fromStr.length) {
-        const prefix = fromStr.slice(0, fromStr.length - toStr.length);
-        to = parseInt(prefix + toStr, 10);
-      }
-      if (fnNum >= from && fnNum <= to) return dirName;
-    }
-    return null;
+    return findMonteurFolderForFab(docAnlagePath, fn);
   }
 
   function resolveKundenDokumentationLocalJob(req, jobIdRaw) {
@@ -13258,6 +13395,7 @@ function createApp(db) {
         `).run(status, effectiveJobId, technicianId);
         if (r.changes) {
           db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'status', JSON.stringify({ status }));
+          freezeProtocolDraftsIfClosed(effectiveJobId, status);
           save();
           return res.json({ ok: true, updated: 'status' });
         }
@@ -13876,6 +14014,7 @@ function createApp(db) {
         ensureAnlageFnDirs(targetDir, fabMap);
         migrateBareFabAnlageDirs(targetDir, fabMap);
         removeStaleBareFabMonteurDirs(targetDir, fabMap);
+        migrateAliasFnFolders(targetDir, fabMap);
         const layoutPull = ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
         const montageFolderName = layoutPull.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
         if (montageFolderName) {
@@ -14077,7 +14216,7 @@ function createApp(db) {
         function shouldSkip(relPath, expectedSize, expectedMtimeMs, completedArr) {
           const localRel =
             String(relPath || '').startsWith('Dokumente_Monteur/')
-              ? mapServerManifestPathToLocalAnlageRel(relPath)
+              ? mapServerManifestPathToLocalAnlageRel(relPath, fabMap)
               : relPath;
           const lp = path.join(targetDir, localRel.replace(/\//g, path.sep));
           if (!fs.existsSync(lp)) return false;
@@ -14215,7 +14354,7 @@ function createApp(db) {
           if (shouldSkip(relPath, expectedSize, expectedMtimeMs, completed)) {
             const localRelSkip =
               String(relPath || '').startsWith('Dokumente_Monteur/')
-                ? mapServerManifestPathToLocalAnlageRel(relPath)
+                ? mapServerManifestPathToLocalAnlageRel(relPath, fabMap)
                 : relPath;
             const relNormSkip = normProjectRelPath(localRelSkip);
             if (
@@ -14262,7 +14401,7 @@ function createApp(db) {
           }
           const localRelPath =
             String(relPath || '').startsWith('Dokumente_Monteur/')
-              ? mapServerManifestPathToLocalAnlageRel(relPath)
+              ? mapServerManifestPathToLocalAnlageRel(relPath, fabMap)
               : relPath;
           const localPath = path.join(targetDir, localRelPath.replace(/\//g, path.sep));
           const dir = path.dirname(localPath);
@@ -17044,7 +17183,13 @@ function fabCacheLookupKeys(fab) {
 }
 
 function readAnlagenstammTreeCache(db, fab) {
-  return readAnlagenstammTreeCacheRow(db, fab);
+  const cached = readAnlagenstammTreeCacheRow(db, fab);
+  if (!cached) return cached;
+  const folder = String(cached.root_folder_name || '').trim();
+  if (folder && (isDatePrefixedProjectFolderName(folder) || !folderNameMatchesFab(folder, fab))) {
+    return null;
+  }
+  return cached;
 }
 
 function queryJobsOpenLocalRows(dbConn, technicianId, query) {
@@ -17208,13 +17353,20 @@ function readCalendarCachePayload(dbConn, start, end, technicianId) {
 function readAnlagenstammRootFolderName(db, fab) {
   const cached = readAnlagenstammTreeCache(db, fab);
   const fromTree = cached && cached.root_folder_name ? String(cached.root_folder_name).trim() : '';
-  if (fromTree && !isBareFabFolderName(fromTree)) return fromTree;
+  if (
+    fromTree &&
+    !isBareFabFolderName(fromTree) &&
+    folderNameMatchesFab(fromTree, fab) &&
+    !isDatePrefixedProjectFolderName(fromTree)
+  ) {
+    return fromTree;
+  }
   try {
     const row = db
       .prepare('SELECT pn_root_name FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1')
       .get(String(fab || '').trim());
     const pn = row && row.pn_root_name ? String(row.pn_root_name).trim() : '';
-    if (pn && !isBareFabFolderName(pn)) return pn;
+    if (pn && !isBareFabFolderName(pn) && folderNameMatchesFab(pn, fab)) return pn;
   } catch (_) {}
   return null;
 }
@@ -18338,6 +18490,15 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     } catch (_) {
       /* ignore */
     }
+    try {
+      const applied = db.prepare('SELECT status FROM jobs WHERE id = ?').get(existing.id);
+      const st = String((applied && applied.status) || nextStatus || '').trim().toLowerCase();
+      if (st === 'erledigt' || st === 'abgerechnet') {
+        protocolDrafts.freezeJob(db, existing.id);
+      }
+    } catch (_) {
+      /* ignore */
+    }
     if (
       prevSt === 'in_arbeit' &&
       (status === 'erledigt' || status === 'zugeteilt' || status === 'abgerechnet')
@@ -18408,6 +18569,13 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
       id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, fabOrphan, j.eap_nummer || null, j.bestellnummer || null, remoteUpdatedAt, orphan.id
     );
     clearSupersededPendingJobStatusOnPull(db, orphan.id, status);
+    try {
+      if (status === 'erledigt' || status === 'abgerechnet') {
+        protocolDrafts.freezeJob(db, orphan.id);
+      }
+    } catch (_) {
+      /* ignore */
+    }
     if (j.street != null) insertOrUpdateJobAddress(db, orphan.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, orphan.id, j);
     upsertJobContactsForLocalJob(db, orphan.id, j);

@@ -146,6 +146,38 @@ function draftPayloadsEqual(a, b) {
   return stableStringify(stripDraftMeta(a || {})) === stableStringify(stripDraftMeta(b || {}));
 }
 
+/** Leerer Store (kein byFab-Inhalt / leeres Objekt) — Datei nicht anlegen oder behalten. */
+function isEmptyMonteurDraftPayload(payload) {
+  const p = stripDraftMeta(payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {});
+  const keys = Object.keys(p);
+  if (keys.length === 0) return true;
+  if (Object.prototype.hasOwnProperty.call(p, 'byFab')) {
+    const byFab = p.byFab;
+    const emptyByFab = !byFab || typeof byFab !== 'object' || Object.keys(byFab).length === 0;
+    const otherKeys = keys.filter((k) => k !== 'byFab' && k !== 'nextLocalId');
+    return emptyByFab && otherKeys.length === 0;
+  }
+  return draftPayloadsEqual(p, {});
+}
+
+function pruneEmptyMonteurDraftJsons(reiseDir) {
+  if (!reiseDir) return 0;
+  let removed = 0;
+  for (const basename of MONTEUR_DRAFT_BASENAMES) {
+    const filePath = monteurDraftJsonPath(reiseDir, basename);
+    try {
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) continue;
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (!isEmptyMonteurDraftPayload(raw)) continue;
+      fs.unlinkSync(filePath);
+      removed += 1;
+    } catch (_) {
+      /* Datei behalten wenn unlesbar */
+    }
+  }
+  return removed;
+}
+
 function readLocalDraftFile(filePath) {
   if (!filePath || !fs.existsSync(filePath)) {
     return { payload: {}, revision: 0, server_updated_at: null };
@@ -165,7 +197,20 @@ function readLocalDraftFile(filePath) {
 }
 
 function writeLocalDraftFile(filePath, payload, revision, serverUpdatedAt) {
-  const wrapped = Object.assign({}, stripDraftMeta(payload), {
+  const clean = stripDraftMeta(payload);
+  if (isEmptyMonteurDraftPayload(clean)) {
+    try {
+      if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (_) {
+      /* ignore */
+    }
+    return {
+      schema_version: 1,
+      revision: Math.max(0, parseInt(revision, 10) || 0),
+      server_updated_at: serverUpdatedAt || null,
+    };
+  }
+  const wrapped = Object.assign({}, clean, {
     schema_version: 1,
     revision: Math.max(0, parseInt(revision, 10) || 0),
     server_updated_at: serverUpdatedAt || new Date().toISOString(),
@@ -258,6 +303,8 @@ module.exports = {
   stripDraftMeta,
   stableStringify,
   draftPayloadsEqual,
+  isEmptyMonteurDraftPayload,
+  pruneEmptyMonteurDraftJsons,
   readLocalDraftFile,
   writeLocalDraftFile,
   writeConflictCopy,

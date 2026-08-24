@@ -3,12 +3,18 @@
 const path = require('path');
 const fs = require('fs');
 const { resolveMonteurDraftJsonPath } = require('./multi-device-sync');
+const protocolDrafts = require('./protocol-drafts-local');
+
+const BASENAME = 'pruefzertifikat.json';
 
 function pruefzertifikatJsonPath(reiseDir) {
-  return resolveMonteurDraftJsonPath(reiseDir, 'pruefzertifikat.json', true);
+  return resolveMonteurDraftJsonPath(reiseDir, BASENAME, true);
 }
 
-function readPruefzertifikatStore(reiseDir) {
+function readPruefzertifikatStore(reiseDir, db, localJobId) {
+  if (db && localJobId) {
+    return protocolDrafts.readStore(db, localJobId, BASENAME, reiseDir);
+  }
   const p = pruefzertifikatJsonPath(reiseDir);
   if (!fs.existsSync(p)) return { byFab: {}, nextLocalId: 1 };
   try {
@@ -22,16 +28,20 @@ function readPruefzertifikatStore(reiseDir) {
   return { byFab: {}, nextLocalId: 1 };
 }
 
-function writePruefzertifikatStore(reiseDir, store) {
+function writePruefzertifikatStore(reiseDir, store, db, localJobId) {
+  if (db && localJobId) {
+    protocolDrafts.writeStore(db, localJobId, BASENAME, store, reiseDir);
+    return;
+  }
   const p = pruefzertifikatJsonPath(reiseDir);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(store, null, 2), 'utf8');
 }
 
-function savePruefzertifikatLocal(reiseDir, fab, entry) {
+function savePruefzertifikatLocal(reiseDir, fab, entry, db, localJobId) {
   const fn = String(fab || '').trim();
   if (!fn) throw new Error('Fabrikationsnummer fehlt.');
-  const store = readPruefzertifikatStore(reiseDir);
+  const store = readPruefzertifikatStore(reiseDir, db, localJobId);
   const localId = store.nextLocalId || 1;
   store.nextLocalId = localId + 1;
   const record = Object.assign({}, entry, {
@@ -43,12 +53,12 @@ function savePruefzertifikatLocal(reiseDir, fab, entry) {
     fabrikationsnummer: fn,
   });
   store.byFab[fn] = record;
-  writePruefzertifikatStore(reiseDir, store);
+  writePruefzertifikatStore(reiseDir, store, db, localJobId);
   return record;
 }
 
-function getPruefzertifikatLocal(reiseDir, fab, localId) {
-  const store = readPruefzertifikatStore(reiseDir);
+function getPruefzertifikatLocal(reiseDir, fab, localId, db, localJobId) {
+  const store = readPruefzertifikatStore(reiseDir, db, localJobId);
   const fn = String(fab || '').trim();
   if (fn && store.byFab[fn]) return store.byFab[fn];
   if (localId != null) {
@@ -109,7 +119,7 @@ function extractServiceMessFromMesswerte(messwerte) {
 }
 
 /** Prefill from local KW / SK / Service drafts when Dispo prefill unavailable. */
-function prefillFromLocalDrafts(reiseDir, fab, jobMeta) {
+function prefillFromLocalDrafts(reiseDir, fab, jobMeta, db, localJobId) {
   const fn = String(fab || '').trim();
   const stammProjekt =
     (jobMeta && jobMeta.projekt != null ? String(jobMeta.projekt).trim() : '') || '';
@@ -135,8 +145,8 @@ function prefillFromLocalDrafts(reiseDir, fab, jobMeta) {
   try {
     const kwLocal = require('./kontrollwiegung-local');
     const kw = kwLocal.getKontrollwiegungLocal
-      ? kwLocal.getKontrollwiegungLocal(reiseDir, fn)
-      : (kwLocal.readKontrollwiegungStore(reiseDir).byFab || {})[fn];
+      ? kwLocal.getKontrollwiegungLocal(reiseDir, fn, null, db, localJobId)
+      : (kwLocal.readKontrollwiegungStore(reiseDir, db, localJobId).byFab || {})[fn];
     if (kw) {
       out.verfahren.kontrollwiegung = true;
       out.pruefdatum = kw.durchfuehrungsdatum || out.pruefdatum;
@@ -167,7 +177,7 @@ function prefillFromLocalDrafts(reiseDir, fab, jobMeta) {
 
   try {
     const skLocal = require('./schleppketten-local');
-    const sk = skLocal.getSchleppkettenLocal(reiseDir, fn);
+    const sk = skLocal.getSchleppkettenLocal(reiseDir, fn, null, db, localJobId);
     if (sk) {
       out.verfahren.schleppketten = true;
       out.pruefdatum = out.pruefdatum || sk.durchfuehrungsdatum;
@@ -203,11 +213,18 @@ function prefillFromLocalDrafts(reiseDir, fab, jobMeta) {
   } catch (_) {}
 
   try {
-    const spPath = resolveMonteurDraftJsonPath(reiseDir, 'serviceprotokoll.json', true);
-    if (fs.existsSync(spPath)) {
-      const spStore = JSON.parse(fs.readFileSync(spPath, 'utf8'));
-      const sp = spStore && spStore.byFab && spStore.byFab[fn];
-      if (sp) {
+    let sp = null;
+    if (db && localJobId) {
+      const store = protocolDrafts.readStore(db, localJobId, 'serviceprotokoll.json', reiseDir);
+      sp = store && store.byFab ? store.byFab[fn] : null;
+    } else {
+      const spPath = resolveMonteurDraftJsonPath(reiseDir, 'serviceprotokoll.json', true);
+      if (fs.existsSync(spPath)) {
+        const spStore = JSON.parse(fs.readFileSync(spPath, 'utf8'));
+        sp = spStore && spStore.byFab && spStore.byFab[fn];
+      }
+    }
+    if (sp) {
         out.verfahren.service = true;
         out.type = out.type || sp.kopf_type || sp.type || '';
         out.elektronik = out.elektronik || sp.kopf_dwc || sp.dwc || '';
@@ -220,7 +237,6 @@ function prefillFromLocalDrafts(reiseDir, fab, jobMeta) {
         if (serviceMess) {
           out.ergebnisse.service = serviceMess;
         }
-      }
     }
   } catch (_) {}
 
