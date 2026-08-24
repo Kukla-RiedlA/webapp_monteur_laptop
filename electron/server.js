@@ -1346,6 +1346,9 @@ function fingerprintDispoBaseForRuntime(urlRaw) {
 function createApp(db) {
   const app = express();
   app.use(require('./lib/local-gateway-auth').localGatewayExpressMiddleware);
+  app.get(['/api/health', '/health'], (_req, res) => {
+    res.json({ ok: true });
+  });
 
   const getTechnicianId = (req) => {
     const raw = req.query.technician_id || req.headers['x-technician-id'];

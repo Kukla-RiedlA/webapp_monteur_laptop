@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.010
+- **Start:** Oberfläche lädt auch ohne Gateway-Token (HTML/CSS/JS). `/api/health` existiert. Zweites Starten holt das Fenster nach vorne; belegter Port zeigt einen Dialog statt eines unsichtbaren Prozesses. Fenster erscheint spätestens nach 4 s.
+
 ## V 2.006.009
 - **Sync Dead-Letter:** Button „Aufgegebene erneut versuchen“ legt fehlgeschlagene Queue-Einträge wieder in die Sync-Queue.
 - **Hotel-Adresse:** Leeres Land wird als leerer String gespeichert, nicht als NULL (Dispo-MariaDB 1048).

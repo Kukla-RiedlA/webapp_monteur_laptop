@@ -117,6 +117,13 @@ function scheduleUpdateCheck() {
   }, 12000);
 }
 
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1000,
@@ -131,14 +138,33 @@ function createWindow() {
     icon: path.join(__dirname, 'public', 'icon.png'),
   });
 
-  mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.maximize();
+  let shown = false;
+  function showMainWindow(reason) {
+    if (shown || !mainWindow || mainWindow.isDestroyed()) return;
+    shown = true;
+    if (reason) console.warn('[startup] Fenster anzeigen:', reason);
     mainWindow.show();
+    mainWindow.maximize();
+    mainWindow.focus();
     if (process.env.DEBUG === '1' || process.env.NODE_ENV === 'development') {
       mainWindow.webContents.openDevTools();
     }
+  }
+
+  mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+  mainWindow.once('ready-to-show', () => {
+    showMainWindow();
   });
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('[startup] did-fail-load', errorCode, errorDescription, validatedURL);
+    showMainWindow('did-fail-load ' + errorCode);
+  });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[startup] render-process-gone', details && details.reason, details && details.exitCode);
+  });
+  setTimeout(() => {
+    showMainWindow('Timeout — ready-to-show ausgeblieben');
+  }, 4000);
   mainWindow.on('closed', () => { mainWindow = null; });
   attachEditContextMenu(mainWindow.webContents);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -694,7 +720,17 @@ app.on('certificate-error', (event, _webContents, url, _error, _certificate, cal
   callback(false);
 });
 
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    focusMainWindow();
+  });
+}
+
 app.whenReady().then(() => {
+  if (!gotTheLock) return;
   Menu.setApplicationMenu(null);
   installLocalGatewayWebRequest(PORT);
   configureSpellCheckerSession();
@@ -706,6 +742,17 @@ app.whenReady().then(() => {
     const serverApp = createApp(db);
     const http = require('http');
     const server = http.createServer(serverApp);
+    server.on('error', (err) => {
+      console.error('Server-Start fehlgeschlagen:', err);
+      const busy = err && err.code === 'EADDRINUSE';
+      dialog.showErrorBox(
+        'Monteur WebApp',
+        busy
+          ? 'Port 39678 ist belegt. Die App läuft vermutlich schon — bitte vorhandenes Fenster prüfen oder den Prozess in der Taskleiste beenden.'
+          : ('Lokaler Server konnte nicht starten: ' + ((err && err.message) || String(err))),
+      );
+      app.quit();
+    });
     server.listen(PORT, '127.0.0.1', () => {
       console.log('Monteur WebApp lokal auf http://127.0.0.1:' + PORT);
       console.log('[monteur] Lokaler API-Server: Anlagenstamm POST /api/anlagenstamm_search – nach Update App neu starten, falls 404.');
@@ -714,6 +761,7 @@ app.whenReady().then(() => {
     });
   }).catch((err) => {
     console.error('DB-Start fehlgeschlagen:', err);
+    dialog.showErrorBox('Monteur WebApp', 'Datenbank konnte nicht geöffnet werden: ' + ((err && err.message) || String(err)));
     app.quit();
   });
   app.on('activate', () => {
