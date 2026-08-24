@@ -1598,7 +1598,7 @@
             </div>
             <div class="dienstreise-upload-row">
               <select id="startUploadSubfolder" class="dienstreise-select" aria-label="Zielordner">
-                <option value="Dokumente_Anlage" selected>Dokumente_Anlage (temporär)</option>
+                <option value="Dokumente_Anlage" selected>Dokumente_Anlage</option>
               </select>
               <input type="file" id="startFileInput" accept="*" multiple style="max-width: 200px;" />
               <button type="button" class="btn btn-ghost" id="btnStartUpload">Hochladen</button>
@@ -1608,7 +1608,7 @@
             <div class="start-mkdir-row">
               <label for="startMkdirParent" class="muted">Neuer Unterordner in</label>
               <select id="startMkdirParent" class="dienstreise-select">
-                <option value="Dokumente_Anlage" selected>Dokumente_Anlage (temporär)</option>
+                <option value="Dokumente_Anlage" selected>Dokumente_Anlage</option>
               </select>
               <input type="text" id="startMkdirName" placeholder="Ordnername" maxlength="120" />
               <button type="button" class="btn btn-ghost" id="startBtnMkdir">Anlegen</button>
@@ -1764,6 +1764,7 @@
         <div class="sp-v2-topbar-actions">
           <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickySave" title="Nur Daten speichern (JSON)">Speichern (JSON)</button>
           <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickyPdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
+          <button type="button" class="btn btn-primary" id="btnMontageberichtSaveAllPdfTop" style="display:none" title="PDF in alle FN-Ordner schreiben">Alle PDF</button>
         </div>
       </div>
       <div id="protokolleMontagebericht" class="protokolle-montagebericht">
@@ -1870,6 +1871,7 @@
                 <div class="mb-v2-actions-row">
                   <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Nur Daten speichern (JSON)">Speichern (JSON)</button>
                   <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
+                  <button type="button" class="btn btn-primary" id="btnMontageberichtSaveAllPdf" style="display:none" title="PDF in alle FN-Ordner schreiben">Alle PDF</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtPdf" style="display:none" title="PDF im Ordner Protokolle öffnen">PDF öffnen</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtSign" hidden title="Veraltet – Signatur kommt aus dem Profil" style="display:none;">Bericht unterschreiben</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
@@ -1906,6 +1908,7 @@
         <div class="sp-v2-topbar-actions">
           <button type="submit" form="kontrollwiegungForm" class="btn btn-primary" id="btnKontrollwiegungStickySave" title="Nur Daten speichern">Speichern (JSON)</button>
           <button type="submit" form="kontrollwiegungForm" class="btn btn-primary" id="btnKontrollwiegungStickyPdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
+          <button type="button" class="btn btn-primary" id="btnKontrollwiegungSaveAllPdfTop" style="display:none" title="Alle FNs – je FN ein PDF im FN-Ordner">Alle PDF</button>
         </div>
       </div>
       <form id="kontrollwiegungForm" class="sp-v2-form">
@@ -2027,6 +2030,7 @@
             <div class="mb-v2-actions-row">
               <button type="submit" class="btn btn-primary" id="btnKontrollwiegungSaveJson" title="Nur Daten speichern">Speichern (JSON)</button>
               <button type="submit" class="btn btn-primary" id="btnKontrollwiegungSavePdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
+              <button type="button" class="btn btn-primary" id="btnKontrollwiegungSaveAllPdf" style="display:none" title="Alle FNs – je FN ein PDF im FN-Ordner">Alle PDF</button>
               <button type="button" class="btn btn-ghost" id="kontrollwiegungPdf" style="display:none" title="PDF im Ordner Protokolle öffnen">PDF öffnen</button>
               <button type="button" class="btn btn-ghost" id="kontrollwiegungAbbrechen">Abbrechen</button>
             </div>
@@ -2519,6 +2523,12 @@
           <div class="kd-doc-toolbar">
             <button type="button" class="btn btn-ghost" id="btnKundenDocSelectAll">Alle</button>
             <button type="button" class="btn btn-ghost" id="btnKundenDocSelectNone">Keine</button>
+            <div class="kd-ext-filters" role="group" aria-label="Dateitypen für den Kundenversand">
+              <label class="kd-ext-check"><input type="checkbox" id="kundenDocExtPdf" data-ext="pdf" checked> PDF</label>
+              <label class="kd-ext-check"><input type="checkbox" id="kundenDocExtCsv" data-ext="csv" checked> CSV</label>
+              <label class="kd-ext-check"><input type="checkbox" id="kundenDocExtPa" data-ext="pa" checked> PA</label>
+              <label class="kd-ext-check"><input type="checkbox" id="kundenDocExtTxt" data-ext="txt" checked> TXT</label>
+            </div>
             <span id="kundenDocCount" class="kd-count muted">0 Dokumente</span>
           </div>
           <div class="kd-table-wrap">

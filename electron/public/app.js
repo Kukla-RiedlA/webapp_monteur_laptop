@@ -4634,12 +4634,11 @@
       html += '<label>Dokument hochladen</label>';
       html += '<div class="dienstreise-upload-row">';
       html += '<select id="dienstreiseUploadSubfolder" class="dienstreise-select">';
-      html += '<option value="Dokumente_Anlage" selected>Dokumente_Anlage (temporär)</option>';
+      html += '<option value="Dokumente_Anlage" selected>Dokumente_Anlage</option>';
       html += '</select>';
       html += '<input type="file" id="dienstreiseFileInput" accept="*" style="max-width: 220px;" />';
       html += '<button type="button" class="btn btn-ghost" id="btnDienstreiseUpload">Hochladen</button>';
       html += '</div>';
-      html += '<p class="muted" style="font-size:0.8rem;margin:0.25rem 0;">Temporäre Uploads – werden beim Abschluss gelöscht.</p>';
       html += '<span id="dienstreiseUploadHint" class="settings-saved-hint" aria-live="polite"></span>';
       html += '</div>';
     }
@@ -12121,8 +12120,13 @@
           }
         }
       } else if (msg) {
-        msg.textContent = statusText || 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
-        msg.classList.remove('projektdaten-projekte-neu-folder');
+        if (folderName) {
+          msg.textContent = projekteNeuFolderLabel(fab, folderName);
+          msg.classList.add('projektdaten-projekte-neu-folder');
+        } else {
+          msg.textContent = statusText || 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
+          msg.classList.remove('projektdaten-projekte-neu-folder');
+        }
       }
       if (toggleEl) toggleEl.setAttribute('data-loaded', '1');
     }
@@ -12161,8 +12165,11 @@
           60000,
         );
         if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
-        if (localTree && localTree.ok && localTree.enabled && Array.isArray(localTree.tree) && localTree.tree.length) {
+        if (localTree && localTree.ok && Array.isArray(localTree.tree) && localTree.tree.length) {
           return renderTree(localTree.tree, '', localTree.folder);
+        }
+        if (localTree && localTree.ok && localTree.folder && allowOnline === false) {
+          return renderTree([], localTree.message || '', localTree.folder);
         }
       }
       if (!allowOnline || (!getDispoExternalUrl() && !getDispoInternalUrl())) {
@@ -16478,10 +16485,22 @@
 
     var montageberichtJobLoadToken = 0;
 
+    function updateMontageberichtAllPdfVisibility(job) {
+      var allPdfBtn = document.getElementById('btnMontageberichtSaveAllPdf');
+      var allPdfBtnTop = document.getElementById('btnMontageberichtSaveAllPdfTop');
+      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+        ? parseJobFabrikationsnummernOrdered(job || {})
+        : [];
+      var show = fns.length >= 2 ? 'inline-block' : 'none';
+      if (allPdfBtn) allPdfBtn.style.display = show;
+      if (allPdfBtnTop) allPdfBtnTop.style.display = show;
+    }
+
     function resetMontageberichtEnteredFields() {
       try { delete window._kuklaMontageberichtSign; } catch (e) { window._kuklaMontageberichtSign = null; }
       var pdfBtnMb = document.getElementById('btnMontageberichtPdf');
       if (pdfBtnMb) pdfBtnMb.style.display = 'none';
+      updateMontageberichtAllPdfVisibility(null);
       if (grundInput) setRichEditorHtml(grundInput, '');
       var bemerkEl = document.getElementById('montageberichtBemerkungen');
       if (bemerkEl) setRichEditorHtml(bemerkEl, '');
@@ -16535,6 +16554,7 @@
           montageberichtJobData = loadedJob;
           var k = renderKopfdaten(montageberichtJobData);
           renderFabBemerkungen(k.fabrikationsnummern || []);
+          updateMontageberichtAllPdfVisibility(montageberichtJobData);
           var projEl = document.getElementById('montageberichtProjekt');
           if (projEl) projEl.value = deriveMontageberichtProjektFromAnlagenstamm(montageberichtJobData);
           try {
@@ -16841,6 +16861,8 @@
         var stickyPdfBtn = document.getElementById('btnMontageberichtStickyPdf');
         var savePdfBtn = document.getElementById('btnMontageberichtSavePdf');
         var saveJsonBtn = document.getElementById('btnMontageberichtSaveJson');
+        var allPdfBtn = document.getElementById('btnMontageberichtSaveAllPdf');
+        var allPdfBtnTop = document.getElementById('btnMontageberichtSaveAllPdfTop');
         try {
           await withProtocolProgress({ title: jsonOnly ? 'Speichern…' : 'PDF wird erstellt…', total: 1 }, async function (prog) {
             if (submitBtn) submitBtn.disabled = true;
@@ -16848,6 +16870,8 @@
             if (stickyPdfBtn) stickyPdfBtn.disabled = true;
             if (savePdfBtn && savePdfBtn !== submitBtn) savePdfBtn.disabled = true;
             if (saveJsonBtn && saveJsonBtn !== submitBtn) saveJsonBtn.disabled = true;
+            if (allPdfBtn) allPdfBtn.disabled = true;
+            if (allPdfBtnTop) allPdfBtnTop.disabled = true;
             prog.setProgress(0, 1);
             var r = await fetch(API_BASE + '/api/protokolle/montagebericht', {
               method: 'POST',
@@ -16891,9 +16915,40 @@
           if (stickyPdfBtn) stickyPdfBtn.disabled = false;
           if (savePdfBtn) savePdfBtn.disabled = false;
           if (saveJsonBtn) saveJsonBtn.disabled = false;
+          if (allPdfBtn) allPdfBtn.disabled = false;
+          if (allPdfBtnTop) allPdfBtnTop.disabled = false;
         }
       });
     }
+
+    function runMontageberichtAllPdf() {
+      if (!montageberichtJobData || !jobSelect || !jobSelect.value) {
+        alert('Bitte Auftrag wählen.');
+        return;
+      }
+      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+        ? parseJobFabrikationsnummernOrdered(montageberichtJobData)
+        : [];
+      if (fns.length < 2) {
+        alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
+        return;
+      }
+      var languages = getMontageberichtLanguages();
+      if (!languages.length) {
+        alert('Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).');
+        return;
+      }
+      var pdfBtn = document.getElementById('btnMontageberichtSavePdf');
+      if (form && pdfBtn && typeof form.requestSubmit === 'function') {
+        form.requestSubmit(pdfBtn);
+      } else if (form && pdfBtn) {
+        pdfBtn.click();
+      }
+    }
+    var btnMbAllPdf = document.getElementById('btnMontageberichtSaveAllPdf');
+    var btnMbAllPdfTop = document.getElementById('btnMontageberichtSaveAllPdfTop');
+    if (btnMbAllPdf) btnMbAllPdf.addEventListener('click', function () { runMontageberichtAllPdf(); });
+    if (btnMbAllPdfTop) btnMbAllPdfTop.addEventListener('click', function () { runMontageberichtAllPdf(); });
 
     var btnPdfMb = document.getElementById('btnMontageberichtPdf');
     if (btnPdfMb) {
@@ -16977,6 +17032,8 @@
       var addRowBtn = document.getElementById('kontrollwiegungAddRow');
       var form = document.getElementById('kontrollwiegungForm');
       var pdfBtn = document.getElementById('kontrollwiegungPdf');
+      var allPdfBtn = document.getElementById('btnKontrollwiegungSaveAllPdf');
+      var allPdfBtnTop = document.getElementById('btnKontrollwiegungSaveAllPdfTop');
       var abbrechenBtn = document.getElementById('kontrollwiegungAbbrechen');
   
       var kontrollwiegungJobData = null;
@@ -17436,10 +17493,20 @@
         });
       }
   
+      function updateAllPdfButtonVisibility(job) {
+        var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+          ? parseJobFabrikationsnummernOrdered(job || {})
+          : [];
+        var show = fns.length >= 2 ? 'inline-block' : 'none';
+        if (allPdfBtn) allPdfBtn.style.display = show;
+        if (allPdfBtnTop) allPdfBtnTop.style.display = show;
+      }
+
       function renderFabButtons(job) {
         if (!fabButtonsEl) return;
         var fns = job ? parseJobFabrikationsnummernOrdered(job) : [];
         if (fabGroupEl) fabGroupEl.style.display = fns.length ? 'block' : 'none';
+        updateAllPdfButtonVisibility(job);
         fabButtonsEl.innerHTML = '';
         if (!fns.length) {
           setActiveFabValue('');
@@ -17782,6 +17849,149 @@
         });
       }
   
+      async function saveKontrollwiegungFab(fab, opts) {
+        opts = opts || {};
+        fab = String(fab || '').trim();
+        var withPdf = !!opts.withPdf;
+        if (!kontrollwiegungJobData || !jobSelect || !jobSelect.value) {
+          return { ok: false, error: 'Bitte Auftrag wählen.' };
+        }
+        if (!fab) return { ok: false, error: 'Bitte Fabrikationsnummer wählen.' };
+        var datum = datumEl ? String(datumEl.value || '').trim() : '';
+        if (!datum) return { ok: false, error: 'Bitte Datum der Durchführung angeben.' };
+        syncWiegungenFromDom();
+        if (!wiegungen.length) return { ok: false, error: 'Mindestens eine Wiegung erforderlich.' };
+        var langsKw = getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn');
+        if (withPdf && !langsKw.length) {
+          return { ok: false, error: 'Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).' };
+        }
+        var draft = collectFormDraft();
+        kwDraftByFab[fab] = draft;
+        var body = {
+          technician_id: getTechId(),
+          job_id: parseInt(jobSelect.value, 10),
+          fabrikationsnummer: fab,
+          durchfuehrungsdatum: datum,
+          projekt: draft.projekt,
+          type: draft.type,
+          leistung: draft.leistung,
+          elektronik: draft.elektronik,
+          teilung_kontrollwaage: draft.teilung_kontrollwaage,
+          bereich_max: draft.bereich_max,
+          letzte_eichung: draft.letzte_eichung,
+          wiegungen: wiegungen,
+          languages: langsKw.length ? langsKw : (draft.languages || ['de']),
+          pdf_languages: langsKw.length ? langsKw : (draft.languages || ['de']),
+          create_pdf: withPdf,
+          base_url: getDispoBaseUrl(),
+          serverUsername: getDispoUsername(),
+          serverPassword: getDispoPassword()
+        };
+        try {
+          await persistKopfToAnlagenstamm(fab);
+          var r = await fetch(API_BASE + '/api/kontrollwiegungsprotokoll_save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+            body: JSON.stringify(body)
+          });
+          var data = await r.json().catch(function () { return {}; });
+          if (!r.ok || !data.ok) {
+            return { ok: false, error: data.error || String(r.status), data: data };
+          }
+          lastProtokollId = data.local_protokoll_id || data.protokoll_id || null;
+          if (kwDraftByFab[fab]) {
+            if (lastProtokollId != null) kwDraftByFab[fab].protokoll_id = lastProtokollId;
+            if (data.saved_pdf) kwDraftByFab[fab].pdf_rel = data.saved_pdf;
+            kwDraftByFab[fab].gespeichert_am = new Date().toISOString();
+          }
+          if (!opts.silent && data.warning) alert(data.warning);
+          else if (!opts.silent && typeof showToast === 'function') {
+            var saveMsg = withPdf ? 'Kontrollwiegungsprotokoll PDF erstellt.' : 'Kontrollwiegungsprotokoll gespeichert.';
+            if (data.saved_pdf) saveMsg += ' PDF: ' + data.saved_pdf;
+            showToast(saveMsg);
+          }
+          if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
+          if (withPdf && data.pdf_path && !opts.skipAutoOpen) {
+            await maybeOpenGeneratedPdf(data.pdf_path);
+          }
+          return { ok: true, data: data };
+        } catch (err) {
+          return { ok: false, error: err && err.message ? err.message : 'Unbekannt' };
+        }
+      }
+
+      function setAllPdfButtonsDisabled(disabled) {
+        if (allPdfBtn) allPdfBtn.disabled = !!disabled;
+        if (allPdfBtnTop) allPdfBtnTop.disabled = !!disabled;
+      }
+
+      async function runSaveAllPdf() {
+        if (!kontrollwiegungJobData || !jobSelect || !jobSelect.value) {
+          alert('Bitte Auftrag wählen.');
+          return;
+        }
+        var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+          ? parseJobFabrikationsnummernOrdered(kontrollwiegungJobData)
+          : [];
+        if (fns.length < 2) {
+          alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
+          return;
+        }
+        var langsKw = getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn');
+        if (!langsKw.length) {
+          alert('Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).');
+          return;
+        }
+        var cur = getActiveFab();
+        if (cur) stashDraftInMemory(cur);
+        setAllPdfButtonsDisabled(true);
+        var okCount = 0;
+        var savedNames = [];
+        var errors = [];
+        try {
+          await withProtocolProgress({ title: 'Alle PDF…', total: fns.length }, async function (prog) {
+            for (var i = 0; i < fns.length; i++) {
+              var fn = fns[i];
+              prog.setTitle('Alle PDF… FN ' + fn);
+              prog.setProgress(i, fns.length);
+              loadFabIntoForm(fn);
+              var datum = datumEl ? String(datumEl.value || '').trim() : '';
+              if (!datum) {
+                errors.push(fn + ': kein Datum');
+                continue;
+              }
+              var res = await saveKontrollwiegungFab(fn, { silent: true, withPdf: true, skipAutoOpen: true });
+              if (!res.ok) {
+                errors.push(fn + ': ' + (res.error || 'Fehler'));
+                continue;
+              }
+              okCount += 1;
+              if (res.data && res.data.saved_pdf) savedNames.push(res.data.saved_pdf);
+              if (res.data && res.data.pdf_path) {
+                await maybeOpenGeneratedPdf(res.data.pdf_path);
+              }
+            }
+            prog.setProgress(fns.length, fns.length);
+          });
+          await loadKontrollwiegungDraftsForJob(parseInt(jobSelect.value, 10));
+          if (cur) loadFabIntoForm(cur);
+          else if (fns[0]) loadFabIntoForm(fns[0]);
+          renderFabButtons(kontrollwiegungJobData);
+          var msg = okCount + ' von ' + fns.length + ' FN mit PDF gespeichert.';
+          if (savedNames.length) msg += ' ' + savedNames.join(', ');
+          if (errors.length) msg += ' Fehler: ' + errors.join('; ');
+          if (typeof showToast === 'function') showToast(msg);
+          if (errors.length && okCount === 0) alert(msg);
+        } catch (err) {
+          alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
+        } finally {
+          setAllPdfButtonsDisabled(false);
+        }
+      }
+
+      if (allPdfBtn) allPdfBtn.addEventListener('click', function () { runSaveAllPdf(); });
+      if (allPdfBtnTop) allPdfBtnTop.addEventListener('click', function () { runSaveAllPdf(); });
+
       if (form) {
         form.addEventListener('submit', async function (e) {
           e.preventDefault();
@@ -17793,60 +18003,15 @@
           if (!kontrollwiegungJobData) { alert('Bitte Auftrag wählen.'); return; }
           var fab = getActiveFab();
           if (!fab) { alert('Bitte Fabrikationsnummer wählen.'); return; }
-          var datum = (datumEl && datumEl.value) ? datumEl.value.trim() : '';
-          if (!datum) { alert('Bitte Datum der Durchführung angeben.'); return; }
-          syncWiegungenFromDom();
-          if (!wiegungen.length) { alert('Mindestens eine Wiegung erforderlich.'); return; }
-          var langsKw = getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn');
-          if (withPdf && !langsKw.length) {
-            alert('Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).');
-            return;
-          }
-          var draft = collectFormDraft();
-          kwDraftByFab[fab] = draft;
-          var body = {
-            technician_id: getTechId(),
-            job_id: parseInt(jobSelect.value, 10),
-            fabrikationsnummer: fab,
-            durchfuehrungsdatum: datum,
-            projekt: draft.projekt,
-            type: draft.type,
-            leistung: draft.leistung,
-            elektronik: draft.elektronik,
-            teilung_kontrollwaage: draft.teilung_kontrollwaage,
-            bereich_max: draft.bereich_max,
-            letzte_eichung: draft.letzte_eichung,
-            wiegungen: wiegungen,
-            languages: langsKw.length ? langsKw : (draft.languages || ['de']),
-            pdf_languages: langsKw.length ? langsKw : (draft.languages || ['de']),
-            create_pdf: withPdf,
-            base_url: getDispoBaseUrl(),
-            serverUsername: getDispoUsername(),
-            serverPassword: getDispoPassword()
-          };
           try {
             await withProtocolProgress({ title: withPdf ? 'PDF wird erstellt…' : 'Speichern…', total: 1 }, async function (prog) {
-              await persistKopfToAnlagenstamm(fab);
               prog.setProgress(0, 1);
-              var r = await fetch(API_BASE + '/api/kontrollwiegungsprotokoll_save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-                body: JSON.stringify(body)
-              });
-              var data = await r.json().catch(function () { return {}; });
-              if (!r.ok || !data.ok) {
-                alert('Fehler: ' + (data.error || r.status));
+              var res = await saveKontrollwiegungFab(fab, { silent: false, withPdf: withPdf });
+              if (!res.ok) {
+                alert('Fehler: ' + (res.error || 'Unbekannt'));
                 return;
               }
               prog.setProgress(1, 1);
-              if (data.warning) alert(data.warning);
-              else if (typeof showToast === 'function') {
-                var saveMsg = withPdf ? 'Kontrollwiegungsprotokoll PDF erstellt.' : 'Kontrollwiegungsprotokoll gespeichert.';
-                if (data.saved_pdf) saveMsg += ' PDF: ' + data.saved_pdf;
-                showToast(saveMsg);
-              }
-              lastProtokollId = data.local_protokoll_id || data.protokoll_id || null;
-              if (kwDraftByFab[fab]) kwDraftByFab[fab].protokoll_id = lastProtokollId;
               try {
                 await loadKontrollwiegungDraftsForJob(parseInt(jobSelect.value, 10));
                 renderFabButtons(kontrollwiegungJobData);
@@ -17857,12 +18022,6 @@
                   updateSpeicherMeta(fab, null);
                 }
               } catch (_) { /* optional */ }
-              if (pdfBtn) {
-                pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
-              }
-              if (withPdf && data.pdf_path) {
-                await maybeOpenGeneratedPdf(data.pdf_path);
-              }
             });
           } catch (err) {
             alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
@@ -23161,9 +23320,50 @@
       el.textContent = text;
     }
 
+    function docExt(name) {
+      var n = String(name || '');
+      var i = n.lastIndexOf('.');
+      if (i < 0) return '';
+      return n.slice(i + 1).toLowerCase();
+    }
+
+    function allowedDocExts() {
+      var ids = {
+        pdf: 'kundenDocExtPdf',
+        csv: 'kundenDocExtCsv',
+        pa: 'kundenDocExtPa',
+        txt: 'kundenDocExtTxt'
+      };
+      var allowed = {};
+      Object.keys(ids).forEach(function (ext) {
+        var el = document.getElementById(ids[ext]);
+        allowed[ext] = !el || !!el.checked;
+      });
+      return allowed;
+    }
+
+    function isDocExtAllowed(doc) {
+      var ext = docExt(doc && doc.name);
+      if (ext === 'pdf' || ext === 'csv' || ext === 'pa' || ext === 'txt') {
+        return !!allowedDocExts()[ext];
+      }
+      return true;
+    }
+
+    function visibleDocuments() {
+      return (state.documents || []).filter(isDocExtAllowed);
+    }
+
+    function applyExtFilterToSelection() {
+      (state.documents || []).forEach(function (d) {
+        if (!isDocExtAllowed(d)) state.selectedDocs[d.id] = false;
+      });
+    }
+
     function selectedPaths() {
+      applyExtFilterToSelection();
       var paths = [];
-      state.documents.forEach(function (d) {
+      visibleDocuments().forEach(function (d) {
         if (state.selectedDocs[d.id]) paths.push(d.absPath);
       });
       state.photos.forEach(function (p) {
@@ -23187,6 +23387,8 @@
 
     function renderDocs() {
       if (!tableBody) return;
+      applyExtFilterToSelection();
+      var docs = visibleDocuments();
       if (!state.documents.length) {
         tableBody.innerHTML = '<tr><td colspan="6" class="empty">' +
           (state.jobId ? 'Keine Dokumente für diesen Auftrag gefunden.' : 'Bitte Auftrag wählen.') +
@@ -23194,8 +23396,13 @@
         if (countEl) countEl.textContent = '0 Dokumente';
         return;
       }
+      if (!docs.length) {
+        tableBody.innerHTML = '<tr><td colspan="6" class="empty">Keine Dokumente für die gewählten Dateitypen.</td></tr>';
+        if (countEl) countEl.textContent = '0 / ' + state.documents.length + ' Dokumente';
+        return;
+      }
       var html = '';
-      state.documents.forEach(function (d) {
+      docs.forEach(function (d) {
         var checked = state.selectedDocs[d.id] ? ' checked' : '';
         html += '<tr data-id="' + escapeHtml(d.id) + '">' +
           '<td class="kd-col-check"><input type="checkbox" class="kd-doc-check" data-id="' + escapeHtml(d.id) + '"' + checked + '></td>' +
@@ -23207,7 +23414,11 @@
           '</tr>';
       });
       tableBody.innerHTML = html;
-      if (countEl) countEl.textContent = state.documents.length + ' Dokumente';
+      if (countEl) {
+        countEl.textContent = docs.length === state.documents.length
+          ? (docs.length + ' Dokumente')
+          : (docs.length + ' / ' + state.documents.length + ' Dokumente');
+      }
     }
 
     function previewSrc(photo) {
@@ -23367,16 +23578,32 @@
     var btnNone = document.getElementById('btnKundenDocSelectNone');
     if (btnAll) {
       btnAll.addEventListener('click', function () {
-        state.documents.forEach(function (d) { state.selectedDocs[d.id] = true; });
+        visibleDocuments().forEach(function (d) { state.selectedDocs[d.id] = true; });
         renderDocs();
       });
     }
     if (btnNone) {
       btnNone.addEventListener('click', function () {
-        state.documents.forEach(function (d) { state.selectedDocs[d.id] = false; });
+        visibleDocuments().forEach(function (d) { state.selectedDocs[d.id] = false; });
         renderDocs();
       });
     }
+
+    function onExtFilterChange(ev) {
+      var t = ev && ev.target;
+      var ext = t && t.getAttribute ? String(t.getAttribute('data-ext') || '').toLowerCase() : '';
+      if (ext) {
+        (state.documents || []).forEach(function (d) {
+          if (docExt(d.name) !== ext) return;
+          state.selectedDocs[d.id] = !!t.checked;
+        });
+      }
+      renderDocs();
+    }
+    ['kundenDocExtPdf', 'kundenDocExtCsv', 'kundenDocExtPa', 'kundenDocExtTxt'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('change', onExtFilterChange);
+    });
 
     function openGallery() {
       state.galleryDraft = {};

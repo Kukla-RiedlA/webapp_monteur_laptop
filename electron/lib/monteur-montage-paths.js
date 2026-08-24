@@ -2,7 +2,20 @@
 
 const fs = require('fs');
 const path = require('path');
-const { findMonteurFolderForFab, resolveCanonicalFolderFromDirList, isIgnorableDirEntry } = require('./projekte-neu-local');
+const {
+  findMonteurFolderForFab,
+  resolveCanonicalFolderFromDirList,
+  isIgnorableDirEntry,
+  isFnFolderAlias,
+  isRangeFnFolderName,
+  collectExactFnFolderMatches,
+  folderNameMatchesFab,
+  isDatePrefixedProjectFolderName,
+  parseFnRangeFromFolderName,
+  parseFabNumber,
+  uniqueSortedNumericFabs,
+  consecutiveNumericFabRuns,
+} = require('./projekte-neu-local');
 const { isMonteurDraftJsonBasename } = require('./multi-device-sync');
 
 function sanitizeDienstreiseFolderPart(str, maxLen) {
@@ -49,13 +62,21 @@ function sanitizeFnProjekteFolderPart(str, maxLen) {
 
 /**
  * Fallback-Ordnername wenn FN noch nicht unter PROJEKTE NEU:
- * FN_Kundenname_Ort_Länderkürzel (Parität Dispo job_project_build_fn_projekte_folder_name).
- * @param {{ fab?: string|number, customer_name?: string, city?: string, country?: string }} meta
+ * FN_Kundenname_Ort_Länderkürzel, bei zusammenhängenden neuen FNs desselben Auftrags
+ * „500 - 501_Kunde_Ort_LK“ (Parität Dispo).
+ * @param {{ fab?: string|number, range_from?: number, range_to?: number, customer_name?: string, city?: string, country?: string }} meta
  */
 function buildFnProjectFolderName(meta) {
-  const fn = String(meta && meta.fab != null ? meta.fab : '').trim();
-  if (!fn) return '';
-  const parts = [fn];
+  const rangeFrom = meta && meta.range_from != null ? Number(meta.range_from) : null;
+  const rangeTo = meta && meta.range_to != null ? Number(meta.range_to) : null;
+  let fnLabel = String(meta && meta.fab != null ? meta.fab : '').trim();
+  if (Number.isFinite(rangeFrom) && Number.isFinite(rangeTo) && rangeFrom !== rangeTo) {
+    const lo = Math.min(rangeFrom, rangeTo);
+    const hi = Math.max(rangeFrom, rangeTo);
+    fnLabel = lo + ' - ' + hi;
+  }
+  if (!fnLabel) return '';
+  const parts = [fnLabel];
   const firm = sanitizeFnProjekteFolderPart(meta && meta.customer_name ? meta.customer_name : '');
   if (firm) parts.push(firm);
   const ort = sanitizeFnProjekteFolderPart(meta && meta.city ? meta.city : '', 48);
@@ -137,6 +158,67 @@ function isMonteurWorkRelPath(relPath, auftragsordner) {
 function isBareFabFolderName(name) {
   const s = String(name || '').trim();
   return !!s && /^\d+$/.test(s);
+}
+
+function isNonBareFnFolderName(name) {
+  const s = String(name || '').trim();
+  return !!s && !isBareFabFolderName(s);
+}
+
+function isUsableFnHauptordnerName(name, fab) {
+  const n = String(name || '').trim();
+  if (!n || isDatePrefixedProjectFolderName(n)) return false;
+  if (fab && !folderNameMatchesFab(n, fab)) return false;
+  return true;
+}
+
+/**
+ * Ein Ordner je FN: Fileserver-Name (Leerzeichen) vor Dispo-Unterstrich-Variante.
+ * Datums-Unterordner (30-2020-07-25_…) werden nicht als Hauptordner verwendet.
+ * @param {string[]} matches
+ * @param {{ fab?: string|number, cache?: string, built?: string, existing?: string }} [hints]
+ */
+function pickPreferredFnFolderName(matches, hints) {
+  const fab = String((hints && hints.fab) || '').trim();
+  const cache = String((hints && hints.cache) || '').trim();
+  const built = String((hints && hints.built) || '').trim();
+  const existing = String((hints && hints.existing) || '').trim();
+  const singleFb = String((hints && hints.single_fallback) || '').trim();
+  const list = (matches || []).map((n) => String(n || '').trim()).filter((n) => isUsableFnHauptordnerName(n, fab));
+  const builtRange = parseFnRangeFromFolderName(built);
+  const builtIsMultiRange = !!(builtRange && builtRange.from !== builtRange.to);
+  function isGeneratedSingle(name) {
+    const n = String(name || '').trim();
+    if (!n) return false;
+    if (fab && (n === fab || isBareFabFolderName(n))) return true;
+    return !!(singleFb && isFnFolderAlias(n, singleFb));
+  }
+  const cacheUsable = isUsableFnHauptordnerName(cache, fab) && isNonBareFnFolderName(cache);
+  if (cacheUsable && !(isGeneratedSingle(cache) && builtIsMultiRange)) return cache;
+  const spaceMatch = list.find((n) => /\s/.test(n) && isNonBareFnFolderName(n) && !isGeneratedSingle(n));
+  if (spaceMatch) return spaceMatch;
+  const existingRange = parseFnRangeFromFolderName(existing);
+  const existingIsMultiRange = !!(existingRange && existingRange.from !== existingRange.to);
+  if (
+    existingIsMultiRange &&
+    isUsableFnHauptordnerName(existing, fab) &&
+    isNonBareFnFolderName(existing) &&
+    !(isGeneratedSingle(existing) && builtIsMultiRange)
+  ) {
+    return existing;
+  }
+  if (isUsableFnHauptordnerName(built, fab) && isNonBareFnFolderName(built)) return built;
+  if (isUsableFnHauptordnerName(existing, fab) && isNonBareFnFolderName(existing) && !(isGeneratedSingle(existing) && builtIsMultiRange)) {
+    return existing;
+  }
+  const nonBareMatch = list.find((n) => isNonBareFnFolderName(n));
+  if (nonBareMatch) return nonBareMatch;
+  return list[0] || (isUsableFnHauptordnerName(built, fab) ? built : '') || '';
+}
+
+function leadingFabDigits(name) {
+  const m = String(name || '').trim().match(/^(\d+)/);
+  return m ? m[1] : '';
 }
 
 /**
@@ -229,40 +311,77 @@ function resolveFabMapLocal(reiseDir, fabMapIn, jobFabNums, readRootFolderName, 
       : [...byFab.keys()];
   const out = [];
   const meta = jobMeta && typeof jobMeta === 'object' ? jobMeta : null;
+  const metaParts = {
+    customer_name: meta && meta.customer_name,
+    city: meta && meta.city,
+    country: meta && meta.country,
+  };
+  const perFab = new Map();
+  const needsNewNums = new Set();
   for (const fab of fabNums) {
     const existing = byFab.get(fab);
-    let folder_name_canonical =
+    const existingCanonical =
       existing && existing.folder_name_canonical != null
         ? String(existing.folder_name_canonical).trim()
         : '';
-
-    if (
-      (!folder_name_canonical ||
-        folder_name_canonical === fab ||
-        isBareFabFolderName(folder_name_canonical)) &&
+    const fromCache =
       typeof readRootFolderName === 'function'
-    ) {
-      const fromCache = String(readRootFolderName(fab) || '').trim();
-      if (fromCache && !isBareFabFolderName(fromCache)) folder_name_canonical = fromCache;
+        ? String(readRootFolderName(fab) || '').trim()
+        : '';
+    const fromDirs =
+      pickNonBareCanonicalDirName(dirNames, fab) ||
+      resolveCanonicalProjekteNeuFolderName(dirNames, fab) ||
+      '';
+    const diskMatches = collectExactFnFolderMatches(dirNames, fab);
+    const singleBuilt = buildFnProjectFolderName(Object.assign({ fab }, metaParts));
+    const n = parseFabNumber(fab);
+    const candidates = [fromCache, fromDirs, existingCanonical].concat(diskMatches);
+    let hasReal = false;
+    for (const name of candidates) {
+      const nm = String(name || '').trim();
+      if (!nm || !isUsableFnHauptordnerName(nm, fab) || isBareFabFolderName(nm)) continue;
+      if (isFnFolderAlias(nm, singleBuilt) || nm === fab) continue;
+      hasReal = true;
+      break;
     }
-
-    if (!folder_name_canonical || folder_name_canonical === fab || isBareFabFolderName(folder_name_canonical)) {
-      const fromDirs =
-        pickNonBareCanonicalDirName(dirNames, fab) ||
-        resolveCanonicalProjekteNeuFolderName(dirNames, fab);
-      if (fromDirs && !isBareFabFolderName(fromDirs)) folder_name_canonical = fromDirs;
+    if (n != null && !hasReal) needsNewNums.add(n);
+    perFab.set(fab, {
+      existingCanonical,
+      fromCache,
+      fromDirs,
+      diskMatches,
+      singleBuilt,
+      n,
+    });
+  }
+  const newItems = uniqueSortedNumericFabs(fabNums).filter((it) => needsNewNums.has(it.n));
+  const runByN = new Map();
+  for (const run of consecutiveNumericFabRuns(newItems)) {
+    for (const it of run) runByN.set(it.n, run);
+  }
+  for (const fab of fabNums) {
+    const info = perFab.get(fab);
+    const run = info && info.n != null ? runByN.get(info.n) : null;
+    let built = info ? info.singleBuilt : buildFnProjectFolderName(Object.assign({ fab }, metaParts));
+    if (run && run.length >= 2) {
+      built = buildFnProjectFolderName(
+        Object.assign(
+          {
+            fab,
+            range_from: run[0].n,
+            range_to: run[run.length - 1].n,
+          },
+          metaParts,
+        ),
+      );
     }
-
-    if (!folder_name_canonical || folder_name_canonical === fab || isBareFabFolderName(folder_name_canonical)) {
-      const built = buildFnProjectFolderName({
-        fab,
-        customer_name: meta && meta.customer_name,
-        city: meta && meta.city,
-        country: meta && meta.country,
-      });
-      if (built && !isBareFabFolderName(built)) folder_name_canonical = built;
-    }
-
+    let folder_name_canonical = pickPreferredFnFolderName(info ? info.diskMatches : [], {
+      fab,
+      cache: info ? info.fromCache : '',
+      built,
+      existing: info ? info.existingCanonical || info.fromDirs : '',
+      single_fallback: info ? info.singleBuilt : '',
+    });
     if (!folder_name_canonical) folder_name_canonical = fab;
     out.push({ fab, folder_name_canonical });
   }
@@ -328,10 +447,87 @@ function migrateBareFabDirsUnder(reiseDir, subfolder, fabFolderEntries) {
 }
 
 /**
+ * Führt Leerzeichen- und Unterstrich-Varianten derselben FN in den kanonischen Ordner zusammen.
+ */
+function migrateAliasFnFoldersUnder(reiseDir, subfolder, fabFolderEntries) {
+  const base = path.join(reiseDir, subfolder);
+  if (!fs.existsSync(base)) return;
+  const dirNames = listSubdirNames(base);
+  for (const entry of fabFolderEntries || []) {
+    const fab = String(entry.fab || '').trim();
+    const can = String(entry.folder_name_canonical || '').trim();
+    if (!fab) continue;
+    const matches = collectExactFnFolderMatches(dirNames, fab);
+    const preferred = can || pickPreferredFnFolderName(matches, {});
+    if (!preferred) continue;
+    const target = path.join(base, preferred);
+    for (const name of matches) {
+      if (name === preferred) continue;
+      const stale = path.join(base, name);
+      if (!fs.existsSync(stale)) continue;
+      try {
+        if (!fs.existsSync(target)) {
+          fs.renameSync(stale, target);
+        } else {
+          mergeDirContentsInto(stale, target);
+          fs.rmSync(stale, { recursive: true, force: true });
+        }
+        console.warn('[monteur-paths] FN-Alias zusammengeführt', subfolder, name, '->', preferred);
+      } catch (err) {
+        console.warn(
+          '[monteur-paths] FN-Alias-Migration',
+          subfolder,
+          name,
+          '->',
+          preferred,
+          err && err.message ? err.message : err,
+        );
+      }
+    }
+  }
+}
+
+function migrateAliasFnFolders(reiseDir, fabFolderEntries) {
+  migrateAliasFnFoldersUnder(reiseDir, 'Dokumente_Monteur', fabFolderEntries);
+  migrateAliasFnFoldersUnder(reiseDir, 'Dokumente_Anlage', fabFolderEntries);
+}
+
+/**
+ * Zieht Manifest-Pfade auf den kanonischen FN-Ordner (Leerzeichen- vs. Unterstrich-Alias).
+ * @param {string} relPath
+ * @param {Array<{ fab?: string|number, folder_name_canonical?: string }>} [fabMap]
+ */
+function rewriteFnFolderSegmentInRel(relPath, fabMap) {
+  const norm = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const parts = norm.split('/').filter(Boolean);
+  if (parts.length < 2) return norm;
+  if (parts[0] !== 'Dokumente_Monteur' && parts[0] !== 'Dokumente_Anlage') return norm;
+  const fnFolder = parts[1];
+  if (!fnFolder || isRangeFnFolderName(fnFolder)) return norm;
+  const fabDigits = leadingFabDigits(fnFolder);
+  for (const entry of fabMap || []) {
+    const can = String(entry.folder_name_canonical || '').trim();
+    const fab = String(entry.fab || '').trim();
+    if (!can) continue;
+    if (fnFolder === can || isFnFolderAlias(fnFolder, can)) {
+      parts[1] = can;
+      return parts.join('/');
+    }
+    const entryDigits = String(fab).replace(/\D/g, '');
+    if (fabDigits && entryDigits && fabDigits === entryDigits && !isRangeFnFolderName(fnFolder)) {
+      parts[1] = can;
+      return parts.join('/');
+    }
+  }
+  return norm;
+}
+
+/**
  * @param {string} reiseDir
  * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabFolderEntries
  */
 function ensureAnlageFnDirs(reiseDir, fabFolderEntries) {
+  migrateAliasFnFolders(reiseDir, fabFolderEntries);
   const anlageBase = path.join(reiseDir, 'Dokumente_Anlage');
   if (!fs.existsSync(anlageBase)) fs.mkdirSync(anlageBase, { recursive: true });
   for (const entry of fabFolderEntries || []) {
@@ -375,6 +571,7 @@ function isMonteurMontageIdentitySibling(name, desired, datePrefix, monteurSuffi
  * @returns {string} Desired-Name
  */
 function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) {
+  migrateAliasFnFolders(reiseDir, fabFolderEntries);
   const desired = String(desiredName || '').trim();
   const monteurBase = path.join(reiseDir, 'Dokumente_Monteur');
   if (!fs.existsSync(monteurBase)) fs.mkdirSync(monteurBase, { recursive: true });
@@ -388,12 +585,17 @@ function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) 
   const datePrefix = dateMatch ? dateMatch[1] + '_' : '';
 
   const fnFolders = new Set();
+  const canonicals = [];
   for (const entry of fabFolderEntries || []) {
     const fnFolder = String(entry.folder_name_canonical || '').trim();
-    if (fnFolder) fnFolders.add(fnFolder);
+    if (fnFolder) {
+      fnFolders.add(fnFolder);
+      canonicals.push(fnFolder);
+    }
   }
-  // Auch bestehende FN-Ordner ohne fab_map scannen (Align alter Geschwister).
+  // Bestehende FN-Ordner ohne fab_map (keine Alias eines kanonischen Namens).
   for (const name of listSubdirNames(monteurBase)) {
+    if (canonicals.some((c) => c === name || isFnFolderAlias(c, name))) continue;
     fnFolders.add(name);
   }
 
@@ -507,17 +709,20 @@ function isDokumenteMonteurKeepLocalRel(normPath) {
  * Server-Manifest: Dokumente_Monteur/<FN>/… → lokales Spiegel-Layout unter Dokumente_Anlage.
  * Ausnahme: Fotos/Montage bleiben unter Dokumente_Monteur.
  */
-function mapServerManifestPathToLocalAnlageRel(serverRelPath) {
+function mapServerManifestPathToLocalAnlageRel(serverRelPath, fabMap) {
   const norm = String(serverRelPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   const prefix = 'Dokumente_Monteur/';
-  if (!norm.startsWith(prefix)) return norm;
-  if (isDokumenteMonteurKeepLocalRel(norm)) return norm;
-  return 'Dokumente_Anlage/' + norm.slice(prefix.length);
+  const mapped = !norm.startsWith(prefix)
+    ? norm
+    : isDokumenteMonteurKeepLocalRel(norm)
+      ? norm
+      : 'Dokumente_Anlage/' + norm.slice(prefix.length);
+  return rewriteFnFolderSegmentInRel(mapped, fabMap);
 }
 
 /** @deprecated Alias — Downloads gehören nach Dokumente_Anlage. */
-function mapServerManifestPathToLocalRel(serverRelPath) {
-  return mapServerManifestPathToLocalAnlageRel(serverRelPath);
+function mapServerManifestPathToLocalRel(serverRelPath, fabMap) {
+  return mapServerManifestPathToLocalAnlageRel(serverRelPath, fabMap);
 }
 
 /**
@@ -612,6 +817,9 @@ module.exports = {
   collectReiseFnDirNames,
   pickNonBareCanonicalDirName,
   resolveFabMapLocal,
+  migrateAliasFnFolders,
+  rewriteFnFolderSegmentInRel,
+  isFnFolderAlias,
   isDokumenteMonteurKeepLocalRel,
   mapServerManifestPathToLocalAnlageRel,
   mapServerManifestPathToLocalRel,

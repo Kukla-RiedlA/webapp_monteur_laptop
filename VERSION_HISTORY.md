@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.012
+- **Protokolle Alle PDF:** Kontrollwiegung erzeugt je FN ein PDF; Montagebericht schreibt das Bericht-PDF in alle FN-Ordner (Button ab zwei FNs).
+- **Protokolle für Kunden:** Filter PDF / CSV / PA / TXT neben Alle/Keine; deaktivierte Endungen werden nicht kopiert oder per E-Mail versendet.
+- **FN-Ordner:** Bereichsordner (`500 - 501_…`) und Alias-Namen (Leerzeichen/Unterstrich) werden korrekt erkannt; Datums-Projektköpfe nicht als FN-Bereich gelesen.
+
 ## V 2.006.010
 - **Start:** Oberfläche lädt auch ohne Gateway-Token (HTML/CSS/JS). `/api/health` existiert. Zweites Starten holt das Fenster nach vorne; belegter Port zeigt einen Dialog statt eines unsichtbaren Prozesses. Fenster erscheint spätestens nach 4 s.
 

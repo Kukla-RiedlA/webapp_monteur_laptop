@@ -5,7 +5,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const KUNDEN_DOC_FOLDER = 'Kunden Dokumentation';
-const DOC_EXTS = new Set(['.pdf', '.csv']);
+const DOC_EXTS = new Set(['.pdf', '.csv', '.pa', '.txt']);
 const IMG_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
 const LEGACY_DOC_RE =
   /^(Serviceprotokoll_|Kontrollwiegungsprotokoll_|Schleppketten_Test_|Pruefzertifikat_|.*_Montage_DE|.*_report_GB)/i;
@@ -85,6 +85,8 @@ function classifyDocumentType(name) {
   if (/^Pruefzertifikat_/i.test(n)) return 'Prüfzertifikat';
   if (isMontageberichtName(n)) return 'Montagebericht';
   if (/\.csv$/i.test(n)) return 'Parameter CSV';
+  if (/\.pa$/i.test(n)) return 'Parameter PA';
+  if (/\.txt$/i.test(n)) return 'Textdatei';
   if (/\.pdf$/i.test(n)) return 'Parameter / Protokoll PDF';
   return 'Dokument';
 }
@@ -185,7 +187,7 @@ function scanKundenDokumentation(opts) {
       dirs = null;
     }
     if (!dirs) continue;
-    listDirFiles(dirs.protokolleDir, new Set(['.pdf'])).forEach((e) => pushDoc(e, fab));
+    listDirFiles(dirs.protokolleDir, DOC_EXTS).forEach((e) => pushDoc(e, fab));
     listDirFiles(dirs.parameterDir, DOC_EXTS).forEach((e) => pushDoc(e, fab));
     listDirFiles(dirs.bilderDir, IMG_EXTS).forEach((e) => pushPhoto(e, fab));
   }
@@ -194,7 +196,7 @@ function scanKundenDokumentation(opts) {
   const docMonteur = path.join(reiseDir, 'Dokumente_Monteur');
   if (fs.existsSync(docMonteur)) {
     listDirFiles(docMonteur, DOC_EXTS).forEach((e) => {
-      if (!LEGACY_DOC_RE.test(e.name) && !/\.csv$/i.test(e.name)) return;
+      if (!LEGACY_DOC_RE.test(e.name) && !/\.(csv|pa|txt)$/i.test(e.name)) return;
       pushDoc(e, '', classifyDocumentType(e.name));
     });
   }
