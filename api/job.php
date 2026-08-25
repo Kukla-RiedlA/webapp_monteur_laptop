@@ -32,6 +32,9 @@ if ($method === 'GET') {
         exit;
     }
     $job = $repo->getJobByIdForTechnician($jobId, $technicianId);
+    if ($job === null && method_exists($repo, 'getJobByIdForMobileRead')) {
+        $job = $repo->getJobByIdForMobileRead($jobId, $technicianId);
+    }
     if ($job === null) {
         http_response_code(404);
         echo json_encode(['ok' => false, 'error' => 'Auftrag nicht gefunden oder nicht zugeordnet.'], JSON_UNESCAPED_UNICODE);

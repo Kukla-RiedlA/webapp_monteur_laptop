@@ -97,6 +97,7 @@ const {
   isJobAssignedToTechnician,
   requireJobAssignedToTechnician,
   resolveLocalJobIdForTechnician,
+  jobAssignmentViewMeta,
 } = require('./lib/job-technician-gate');
 const { createDbLock } = require('./lib/db-lock');
 const { openMonteurDatabase, flushDb, getLastPersistError, getDb: getNativeDb } = require('./lib/db');
@@ -6562,10 +6563,9 @@ function createApp(db) {
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
       LEFT JOIN job_hotel_selection jhs ON jhs.job_id = j.id
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-        AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+      ORDER BY CASE WHEN CAST(j.server_id AS TEXT) = CAST(? AS TEXT) THEN 0 ELSE 1 END, j.id ASC
       LIMIT 1
-    `).get(jobId, jobId, technicianId, jobId);
+    `).get(jobId, jobId, jobId);
     if (!row) {
       return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
     }
@@ -6580,6 +6580,7 @@ function createApp(db) {
     } catch (e) {
       // Tabelle job_contacts fehlt ggf. – Fallback auf contact_person/contact_phone/contact_email vom Job/Kunde
     }
+    Object.assign(job, jobAssignmentViewMeta(db, localJobPk, technicianId));
     const baseUrl = (req.query.base_url || '').toString().trim();
     const enrich = req.query.enrich_anlagenstamm === '1' || req.query.enrich_anlagenstamm === 'true';
     const enrichLocalOnly = req.query.enrich_local_only === '1' || req.query.enrich_local_only === 'true';
@@ -6616,21 +6617,31 @@ function createApp(db) {
       if (!Number.isFinite(localId)) {
         return res.status(400).json({ ok: false, error: 'jobId ungültig.' });
       }
+      const viewOnly = req.body.viewOnly === true;
+      const serverJobIdArg = parseInt(req.body.serverJobId, 10) || 0;
       const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
-      let row = db
-        .prepare(
-          `SELECT j.id, j.server_id FROM jobs j
-           WHERE j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT)
-           ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
-           LIMIT 1`,
-        )
-        .get(localId, localId, localId);
+      const dispoFetchId = serverJobIdArg > 0 ? serverJobIdArg : localId;
+      let row = null;
+      if (viewOnly || serverJobIdArg > 0) {
+        row = db
+          .prepare(
+            `SELECT j.id, j.server_id FROM jobs j
+             WHERE CAST(j.server_id AS TEXT) = CAST(? AS TEXT)
+             LIMIT 1`,
+          )
+          .get(dispoFetchId);
+      } else {
+        row = db
+          .prepare(
+            `SELECT j.id, j.server_id FROM jobs j
+             WHERE j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT)
+             ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
+             LIMIT 1`,
+          )
+          .get(localId, localId, localId);
+      }
       if (row) {
-        const resolvedJob = resolveLocalJobIdForTechnician(db, technicianId, row.id, { mode: 'local' });
-        if (!resolvedJob.ok) {
-          return sendError(resolvedJob.status || 403, resolvedJob.error || 'Auftrag nicht zugeordnet.');
-        }
-        row = { id: resolvedJob.localId, server_id: resolvedJob.serverId };
+        row = { id: row.id, server_id: row.server_id };
       }
 
       async function finishWithDispoJob(data) {
@@ -6640,10 +6651,46 @@ function createApp(db) {
         if (data.job.fabrikationsnummern == null && data.job.Fabrikationsnummern != null) {
           data.job.fabrikationsnummern = data.job.Fabrikationsnummern;
         }
-        data.job = await enrichJobFabWithAnlagenstamm(data.job, base, auth);
-        const localDbId = row ? row.id : null;
+        // Stamm immer lokal mergen — nicht auf anlagenstamm_by_fab (HTTPS) warten.
+        data.job = await enrichJobFabWithAnlagenstamm(data.job, base, auth, { localOnly: true });
         const contacts = normalizeJobContactsFromPayload(data.job);
         data.job.job_contacts = contacts;
+        const calendarTechId = parseInt(req.body.calendarTechnicianId, 10) || 0;
+        const knownNotAssigned = data.job.assigned_to_me === false;
+        const dispoId = Number(data.job.id);
+        if (viewOnly) {
+          // Fremde/unzugeteilte Kalenderaufträge nicht in SQLite spiegeln:
+          // lokale jobs.id und Dispo-server_id können dieselbe Zahl haben (sonst landet CSR statt Alfred).
+          if (Number.isFinite(dispoId) && dispoId > 0) {
+            data.job.server_id = dispoId;
+          }
+          data.job.assignment_writable = false;
+          data.job.assigned_to_me = false;
+          if (!data.job.assignment_read_only_reason) {
+            data.job.assignment_read_only_reason = calendarTechId === 0
+              ? 'Nur Ansicht – Auftrag ist nicht zugeteilt.'
+              : 'Nur Ansicht – Auftrag ist einem anderen Techniker zugeteilt.';
+          }
+          return res.json(data);
+        }
+        try {
+          const custId = ensureCustomer(db, data.job);
+          const localId = insertOrUpdateJob(db, data.job, custId, technicianId, {
+            assignTechnician: !knownNotAssigned,
+            assignedTechnicianIds: knownNotAssigned && calendarTechId > 0 && calendarTechId !== Number(technicianId)
+              ? [calendarTechId]
+              : [],
+          });
+          if (localId) {
+            const serverId = data.job.id;
+            data.job.id = localId;
+            data.job.server_id = serverId;
+            Object.assign(data.job, jobAssignmentViewMeta(db, localId, technicianId));
+          }
+        } catch (persistErr) {
+          console.warn('[job_from_dispo] persist:', persistErr && persistErr.message ? persistErr.message : persistErr);
+        }
+        const localDbId = data.job.id != null ? data.job.id : (row ? row.id : null);
         if (localDbId != null) {
           try {
             const hotel = db.prepare('SELECT endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website FROM job_hotel_addresses WHERE job_id = ?').get(localDbId);
@@ -6674,7 +6721,11 @@ function createApp(db) {
       }
 
       async function fetchDispoJob(urlToFetch) {
-        const r = await fetch(urlToFetch, auth ? { headers: auth } : {});
+        const headers = auth ? Object.assign({}, auth) : {};
+        if (headers.Authorization && !headers['X-Kukla-Authorization']) {
+          headers['X-Kukla-Authorization'] = headers.Authorization;
+        }
+        const r = await fetch(urlToFetch, Object.keys(headers).length ? { headers } : {});
         const raw = await r.text();
         let data = {};
         try { data = raw ? JSON.parse(raw) : {}; } catch (_) { data = {}; }
@@ -6690,10 +6741,28 @@ function createApp(db) {
         return { ok: r.ok, status: r.status, statusText: r.statusText, data, raw };
       }
 
+      async function fetchDispoJobForView(serverJobId) {
+        const id = encodeURIComponent(serverJobId);
+        const tid = encodeURIComponent(technicianId);
+        const mobile = `${base}/api/mobile/job.php?id=${id}`;
+        const rsMobile = await fetchDispoJob(mobile);
+        if (rsMobile.ok && rsMobile.data && rsMobile.data.job) return rsMobile;
+        const primary = `${base}/dispo_api/api/job.php?id=${id}&technician_id=${tid}&debug=1`;
+        return fetchDispoJob(primary);
+      }
+
+      // Ansicht aus dem Kalender: immer die Dispo-Server-ID holen, nie eine lokale SQLite-ID.
+      if (viewOnly || serverJobIdArg > 0) {
+        const rsView = await fetchDispoJobForView(dispoFetchId);
+        if (!rsView.ok) {
+          return sendError(rsView.status, rsView.data.error || rsView.statusText || 'Dispo-Fehler');
+        }
+        return await finishWithDispoJob({ ok: true, ...rsView.data });
+      }
+
       // Kein lokaler SQLite-Eintrag: jobId ist oft die Dispo-Server-ID (z. B. Liste „Offene Aufträge“ / noch nicht synchronisiert)
       if (!row) {
-        const urlDirect = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(localId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
-        const rs0 = await fetchDispoJob(urlDirect);
+        const rs0 = await fetchDispoJobForView(localId);
         if (!rs0.ok) {
           return sendError(rs0.status, rs0.data.error || rs0.statusText || 'Dispo-Fehler');
         }
@@ -6701,8 +6770,7 @@ function createApp(db) {
       }
 
       const serverJobId = (row.server_id != null && row.server_id !== '') ? row.server_id : row.id;
-      const url = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(serverJobId)}&technician_id=${encodeURIComponent(technicianId)}&debug=1`;
-      const rs = await fetchDispoJob(url);
+      const rs = await fetchDispoJobForView(serverJobId);
       if (!rs.ok) {
         return sendError(rs.status, rs.data.error || rs.statusText || 'Dispo-Fehler');
       }
@@ -7061,6 +7129,9 @@ function createApp(db) {
     }
     ensureAnlagenstammLocalSchema(db);
     const localRows = anlagenstammGetRowsByFabs(db, list);
+    if (wantsLocalOnlyRequest(req.body || {})) {
+      return res.json({ ok: true, data: localRows, _source: 'local' });
+    }
     if (localRows.length > 0 && anlagenstammLocalRowCount(db) > 0) {
       return res.json({ ok: true, data: localRows, _source: 'local' });
     }
@@ -18452,7 +18523,29 @@ function clearSupersededPendingJobStatusOnPull(db, localJobId, serverStatus) {
   }
 }
 
-function insertOrUpdateJob(db, j, customerId, technicianId) {
+function applyJobTechnicianOpts(db, localJobId, technicianId, j, opts) {
+  opts = opts || {};
+  const lid = Number(localJobId);
+  if (!Number.isFinite(lid) || lid <= 0) return;
+  if (opts.assignTechnician !== false) {
+    const dispCount = Number(j && j.dispo_jt_count);
+    const tid = Number(technicianId);
+    if ((!Number.isFinite(dispCount) || dispCount > 0) && Number.isFinite(tid) && tid > 0) {
+      ensureTechnician(db, tid);
+      db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(lid, tid);
+    }
+  }
+  const extra = Array.isArray(opts.assignedTechnicianIds) ? opts.assignedTechnicianIds : [];
+  for (const raw of extra) {
+    const extraTid = Number(raw);
+    if (!Number.isFinite(extraTid) || extraTid <= 0) continue;
+    ensureTechnician(db, extraTid);
+    db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(lid, extraTid);
+  }
+}
+
+function insertOrUpdateJob(db, j, customerId, technicianId, opts) {
+  opts = opts || {};
   ensureJobsServerUpdatedAtColumn(db);
   const id = j.id;
   const existing = db.prepare('SELECT id FROM jobs WHERE server_id = ?').get(id);
@@ -18557,11 +18650,8 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     }
     if (j.street != null) insertOrUpdateJobAddress(db, existing.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, existing.id, j);
-    const dispCountUpd = Number(j.dispo_jt_count);
-    if (Number.isFinite(dispCountUpd) && dispCountUpd > 0) {
-      db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(existing.id, technicianId);
-    }
     upsertJobContactsForLocalJob(db, existing.id, j);
+    applyJobTechnicianOpts(db, existing.id, technicianId, j, opts);
     return existing.id;
   }
   // Verwaisten lokalen Auftrag (ohne server_id) mit Dispo-Auftrag verknüpfen – dann bleibt die lokale ID erhalten
@@ -18603,21 +18693,17 @@ function insertOrUpdateJob(db, j, customerId, technicianId) {
     if (j.street != null) insertOrUpdateJobAddress(db, orphan.id, j);
     if (hasHotelFields(j)) insertOrUpdateJobHotel(db, orphan.id, j);
     upsertJobContactsForLocalJob(db, orphan.id, j);
+    applyJobTechnicianOpts(db, orphan.id, technicianId, j, opts);
     return orphan.id;
   }
   const r2 = db.prepare('INSERT INTO jobs (server_id, job_number, customer_id, job_type, start_datetime, end_datetime, status, date_not_fixed, description, fabrikationsnummern, eap_nummer, bestellnummer, synced_at, server_updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'), ?)').run(
     id, j.job_number || null, customerId, j.job_type || 'Service', start, end, status, dateNotFixed, j.description || null, j.fabrikationsnummern || null, j.eap_nummer || null, j.bestellnummer || null, remoteUpdatedAt
   );
   const newId = r2.lastInsertRowid;
-  const dispCountNew = Number(j.dispo_jt_count);
-  // Auf Dispo ohne Techniker: keine lokale Zuordnung erzeugen (sonst „nicht unzugewiesen“ mehr). Ohne Feld: Altserver-Verhalten.
-  const assignLocalTech = !Number.isFinite(dispCountNew) || dispCountNew > 0;
-  if (assignLocalTech) {
-    db.prepare('INSERT OR IGNORE INTO job_technicians (job_id, technician_id) VALUES (?, ?)').run(newId, technicianId);
-  }
   if (j.street != null) insertOrUpdateJobAddress(db, newId, j);
   if (hasHotelFields(j)) insertOrUpdateJobHotel(db, newId, j);
   upsertJobContactsForLocalJob(db, newId, j);
+  applyJobTechnicianOpts(db, newId, technicianId, j, opts);
   return newId;
 }
 

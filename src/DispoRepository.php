@@ -130,8 +130,17 @@ final class DispoRepository
      *
      * @return array<string, mixed>|null
      */
-    public function getJobByIdForTechnician(int $jobId, int $technicianId): ?array
+    public function getJobByIdForMobileRead(int $jobId, int $technicianId): ?array
     {
+        return $this->getJobByIdForTechnician($jobId, $technicianId, false);
+    }
+
+    public function getJobByIdForTechnician(int $jobId, int $technicianId, bool $restrictToTechnicianAssignment = true): ?array
+    {
+        $assignmentSql = ' AND (
+                    EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = :technician_id)
+                    OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
+                  )';
         $sql = 'SELECT j.id, j.job_number, j.customer_id, j.job_type, j.start_datetime, j.end_datetime,
                        j.status, j.required_technicians, j.description, j.fabrikationsnummern, j.eap_nummer, j.bestellnummer,
                        j.created_at, j.updated_at,
@@ -150,16 +159,13 @@ final class DispoRepository
                 LEFT JOIN users u_up ON j.updated_by = u_up.id
                 LEFT JOIN job_addresses ja ON ja.job_id = j.id
                 LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
-                WHERE j.id = :job_id
-                  AND (
-                    EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = :technician_id)
-                    OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
-                  )';
+                WHERE j.id = :job_id' . ($restrictToTechnicianAssignment ? $assignmentSql : '');
         $stmt = $this->fsm->prepare($sql);
-        $stmt->execute([
-            ':job_id' => $jobId,
-            ':technician_id' => $technicianId,
-        ]);
+        $params = [':job_id' => $jobId];
+        if ($restrictToTechnicianAssignment) {
+            $params[':technician_id'] = $technicianId;
+        }
+        $stmt->execute($params);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!is_array($row)) {
             return null;

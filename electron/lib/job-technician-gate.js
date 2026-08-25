@@ -10,6 +10,30 @@ function parsePositiveInt(v) {
  * @param {number|string} localJobId
  * @param {number|string} technicianId
  */
+function jobAssignmentViewMeta(dbConn, localJobId, technicianId) {
+  const assigned = isJobAssignedToTechnician(dbConn, localJobId, technicianId);
+  if (assigned) {
+    return {
+      assignment_writable: true,
+      assigned_to_me: true,
+      assignment_read_only_reason: '',
+    };
+  }
+  const lid = parsePositiveInt(localJobId);
+  let hasAny = false;
+  if (lid) {
+    const row = dbConn.prepare('SELECT COUNT(*) AS n FROM job_technicians WHERE job_id = ?').get(lid);
+    hasAny = !!(row && Number(row.n) > 0);
+  }
+  return {
+    assignment_writable: false,
+    assigned_to_me: false,
+    assignment_read_only_reason: hasAny
+      ? 'Nur Ansicht – Auftrag ist einem anderen Techniker zugeteilt.'
+      : 'Nur Ansicht – Auftrag ist nicht zugeteilt.',
+  };
+}
+
 function isJobAssignedToTechnician(dbConn, localJobId, technicianId) {
   const lid = parsePositiveInt(localJobId);
   const tid = parsePositiveInt(technicianId);
@@ -138,4 +162,5 @@ module.exports = {
   isJobAssignedToTechnician,
   requireJobAssignedToTechnician,
   resolveLocalJobIdForTechnician,
+  jobAssignmentViewMeta,
 };

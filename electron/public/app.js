@@ -1312,13 +1312,32 @@
   /** Auftrag mit Status „angelegt“ (nur Anzeige, außer Fabrikationsnummern-Zeile). Legacy: „geplant“. */
   function isJobAngelegtReadOnly(job) {
     if (!job || typeof job !== 'object') return false;
+    if (isJobAssignmentReadOnly(job)) return true;
     var s = String(job.status || '').trim().toLowerCase();
     return s === 'angelegt' || s === 'geplant';
+  }
+
+  function isJobAssignmentReadOnly(job) {
+    if (!job || typeof job !== 'object') return false;
+    if (job.assignment_writable === false) return true;
+    if (job.assigned_to_me === false) return true;
+    return false;
+  }
+
+  function isJobProjektdatenReadOnly(job) {
+    return isJobAngelegtReadOnly(job) || isJobAssignmentReadOnly(job);
+  }
+
+  function jobAssignmentReadOnlyReason(job) {
+    if (!isJobAssignmentReadOnly(job)) return '';
+    if (job.assignment_read_only_reason) return String(job.assignment_read_only_reason);
+    return 'Nur Ansicht – Auftrag ist nicht zugeteilt oder einem anderen Techniker zugeordnet.';
   }
 
   /** Fabrikationsnummern dürfen auch bei angelegt/geplant/zugeteilt bearbeitet werden. */
   function canEditProjektdatenFabrikationsnummern(job) {
     if (!job || typeof job !== 'object') return false;
+    if (isJobAssignmentReadOnly(job)) return false;
     var s = String(job.status || '').trim().toLowerCase();
     return s !== 'abgerechnet';
   }
@@ -3334,6 +3353,16 @@
   }
 
   var jobDetailsJobId = null;
+  var projektdatenOpenSeq = 0;
+
+  function jobMatchesExpectedServerId(job, expected) {
+    expected = Number(expected || 0);
+    if (!(expected > 0) || !job) return true;
+    var gotServer = Number(job.server_id != null && String(job.server_id).trim() !== '' ? job.server_id : 0);
+    if (gotServer === expected) return true;
+    var gotId = Number(job.id != null ? job.id : 0);
+    return !gotServer && gotId === expected;
+  }
 
   function getDienstreiseExplorerJobId(uiKey) {
     if (uiKey === 'start') return startPageActiveJobId;
@@ -3438,11 +3467,11 @@
   function updateDienstreiseWriteControlsState() {
     var jid = getDienstreiseExplorerJobId('modal');
     var snap = jid ? getDienstreiseJobSnapshotByLocalId(jid) : null;
-    var ro = isJobAngelegtReadOnly(snap);
+    var ro = isJobProjektdatenReadOnly(snap);
     var upBtn = document.getElementById('btnDienstreiseUpload');
     if (upBtn) {
       upBtn.disabled = !!ro;
-      upBtn.title = ro ? 'Auftrag ist angelegt – nur Anzeige.' : '';
+      upBtn.title = ro ? 'Nur Ansicht – keine Bearbeitung.' : '';
     }
     var sub = document.getElementById('dienstreiseUploadSubfolder');
     var fi = document.getElementById('dienstreiseFileInput');
@@ -3497,13 +3526,16 @@
     updateProjektdatenHeadingMeta(job);
     content.innerHTML = renderJobDetailsContent(job);
     bindLeistungActions();
-    if (!displayOpts.skipDeferredLoads && getDispoBaseUrl()) {
+    if (!displayOpts.skipDeferredLoads) {
+      hydrateProjektdatenLeistungFromLocalStamm(job);
+    }
+    if (!displayOpts.skipDeferredLoads && getDispoBaseUrl() && !isJobAssignmentReadOnly(job)) {
       setTimeout(function () {
         loadMechanikTedLinks(job);
         loadHotelChoicesByFab(job);
       }, 0);
     }
-    var skipExplorer = displayOpts.skipExplorerReload === true;
+    var skipExplorer = displayOpts.skipExplorerReload === true || isJobAssignmentReadOnly(job);
     if (!skipExplorer && typeof loadDienstreiseExplorer === 'function') {
       var listEl = document.getElementById('dienstreiseExplorerList');
       var explorerStale =
@@ -3535,6 +3567,7 @@
     var viewStart = document.getElementById('viewStart');
     var viewEinstellungen = document.getElementById('viewEinstellungen');
     if (!content || !viewProjektdaten) return;
+    var openSeq = ++projektdatenOpenSeq;
     jobDetailsJobId = jobId;
     if (viewStart) viewStart.classList.add('hidden');
     if (viewEinstellungen) viewEinstellungen.classList.remove('active');
@@ -3547,9 +3580,17 @@
 
     var cachedJob = window.currentProjektdatenJob;
     var hasCachedJob = cachedJob && jobIdsEqual(cachedJob.id, jobId);
+    if (hasCachedJob && (options.fromDispo || options.viewOnly) && !jobMatchesExpectedServerId(cachedJob, options.serverJobId)) {
+      hasCachedJob = false;
+    }
     var syncPullRefresh = options.syncPullRefresh === true;
     var forceReloadFromDb = options.forceReloadFromDb === true;
-    if (hasCachedJob && !options.fromDispo && !syncPullRefresh && !forceReloadFromDb) {
+    var preview = options.calendarPreview && typeof options.calendarPreview === 'object'
+      ? calendarJobAsProjektdatenPreview(options.calendarPreview, techId)
+      : null;
+    if (preview) {
+      showJob(preview, { skipDeferredLoads: true, skipExplorerReload: true });
+    } else if (hasCachedJob && !options.fromDispo && !syncPullRefresh && !forceReloadFromDb) {
       showJob(cachedJob, {});
     } else if (!hasCachedJob || options.fromDispo || forceReloadFromDb) {
       content.innerHTML = '<span class="empty">Wird geladen…</span>';
@@ -3574,6 +3615,11 @@
     }
 
     function applyJobFromFetch(job, silent) {
+      if (openSeq !== projektdatenOpenSeq) return true;
+      if (options.serverJobId && job && !jobMatchesExpectedServerId(job, options.serverJobId)) {
+        console.warn('[projektdaten] lokaler Auftrag passt nicht zum Kalenderbalken', options.serverJobId, job && job.server_id, job && job.id);
+        return !!preview;
+      }
       if (!job) {
         if (!silent) showJob(null);
         return true;
@@ -3619,6 +3665,12 @@
           if (data.job) return applyJobFromFetch(data.job, silent);
           var cached = window.currentProjektdatenJob;
           if (cached && jobIdsEqual(cached.id, jobId)) return applyJobFromFetch(cached, silent);
+          if (!silent && getDispoBaseUrl()) {
+            return loadFromDispo().then(function (ok) {
+              if (!ok) showJob(null);
+              return ok;
+            });
+          }
           if (!silent) showJob(null);
           return false;
         })
@@ -3640,14 +3692,22 @@
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
         body: JSON.stringify(Object.assign({
           baseUrl: baseUrl,
-          jobId: jobId,
+          jobId: options.serverJobId || jobId,
+          serverJobId: options.serverJobId || 0,
+          calendarTechnicianId: options.calendarTechnicianId || 0,
+          viewOnly: options.fromDispo === true || options.viewOnly === true,
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
         }, dispoBasePayloadExtra()))
       })
         .then(function (r) { return r.json(); })
         .then(function (data) {
+          if (openSeq !== projektdatenOpenSeq) return true;
           if (data.ok && data.job) {
+            if (!jobMatchesExpectedServerId(data.job, options.serverJobId)) {
+              console.warn('[projektdaten] Dispo-Antwort passt nicht zum Kalenderbalken', options.serverJobId, data.job.server_id, data.job.id);
+              return !!preview;
+            }
             showJob(data.job);
             return true;
           }
@@ -3658,10 +3718,16 @@
         });
     }
 
-    if (options.fromDispo) {
-      content.innerHTML = '<span class="empty">Wird geladen…</span>';
+    if (options.fromDispo || options.viewOnly) {
+      if (!preview) {
+        content.innerHTML = '<span class="empty">Wird geladen…</span>';
+      }
       loadFromDispo().then(function (ok) {
-        if (!ok) loadLocal(false, false);
+        if (openSeq !== projektdatenOpenSeq) return;
+        // Nie GET /api/job mit der Dispo-ID: lokale jobs.id kann dieselbe Zahl sein (falscher Auftrag).
+        if (!ok && !preview) {
+          content.innerHTML = '<span class="empty">Auftrag konnte nicht von der Dispo geladen werden.</span>';
+        }
       });
       return;
     }
@@ -3942,6 +4008,62 @@
   function leistungRowsForJobPatch(rows) {
     var arr = (rows || []).filter(leistungRowHasVisibleData);
     return sortLeistungRowsByFab(arr.length > 0 ? arr : (rows || []).slice());
+  }
+
+  var LEISTUNG_STAMM_HYDRATE_KEYS = [
+    'type', 'leistung', 'nenngeschwindigkeit', 'kraftaufnehmer', 'dms_nr', 'tacho',
+    'elektronik', 'material', 'position', 'geliefert_ueber', 'projekt', 'bemerkungen',
+  ];
+
+  /** Type/Leistung/Position aus lokalem Anlagenstamm – ohne HTTPS. */
+  function hydrateProjektdatenLeistungFromLocalStamm(job) {
+    var rows = window.currentProjektdatenLeistungRows || [];
+    var fabs = [];
+    var seen = {};
+    for (var i = 0; i < rows.length; i++) {
+      var fn = String((rows[i] && rows[i].fabrikationsnummer) || '').trim();
+      if (!fn || seen[fn]) continue;
+      seen[fn] = true;
+      fabs.push(fn);
+    }
+    if (!fabs.length) return;
+    var jobIdAtStart = job && job.id != null ? job.id : jobDetailsJobId;
+    fetch(API_BASE + '/api/anlagenstamm_from_dispo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+      body: JSON.stringify({ fabs: fabs, local_only: 1 }),
+    })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) {
+        if (jobIdAtStart != null && !jobIdsEqual(jobDetailsJobId, jobIdAtStart)) return;
+        var list = data && Array.isArray(data.data) ? data.data : [];
+        if (!list.length) return;
+        var byFab = {};
+        list.forEach(function (st) {
+          var k = String((st && st.fabrikationsnummer) || '').trim();
+          if (k) byFab[k] = st;
+        });
+        var next = (window.currentProjektdatenLeistungRows || []).map(function (row) {
+          var k = String((row && row.fabrikationsnummer) || '').trim();
+          var st = byFab[k];
+          if (!st) return row;
+          var out = Object.assign({}, row);
+          LEISTUNG_STAMM_HYDRATE_KEYS.forEach(function (key) {
+            if (!String(out[key] || '').trim() && st[key] != null && String(st[key]).trim() !== '') {
+              out[key] = st[key];
+            }
+          });
+          return out;
+        });
+        window.currentProjektdatenLeistungRows = next;
+        if (window.currentProjektdatenJob) {
+          window.currentProjektdatenJob = Object.assign({}, window.currentProjektdatenJob, {
+            fabrikationsnummern: JSON.stringify(leistungRowsForJobPatch(next)),
+          });
+        }
+        refreshProjektdatenLeistungTableFromRows();
+      })
+      .catch(function () {});
   }
 
   function refreshProjektdatenLeistungTableFromRows() {
@@ -4318,7 +4440,8 @@
   }
 
   function renderJobDetailsContent(job) {
-    var readOnlyAngelegt = isJobAngelegtReadOnly(job);
+    var assignmentRo = isJobAssignmentReadOnly(job);
+    var readOnlyAngelegt = isJobProjektdatenReadOnly(job);
     var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
     var dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
     var countryRaw = (job.country || '').trim();
@@ -4343,7 +4466,9 @@
     window.currentProjektdatenLeistungRows = leistungRows;
 
     var html = '';
-    if (readOnlyAngelegt) {
+    if (assignmentRo) {
+      html += '<div class="projektdaten-readonly-banner" role="status">' + escapeHtml(jobAssignmentReadOnlyReason(job)) + '</div>';
+    } else if (isJobAngelegtReadOnly(job)) {
       html += '<div class="projektdaten-readonly-banner" role="status">Auftrag ist <strong>angelegt</strong> – hier nur Anzeige, keine Bearbeitung.</div>';
     }
     html += '<div class="projektdaten-meta-stack">';
@@ -5384,6 +5509,7 @@
           treeHost: treeHost,
           jobId: jobDetailsJobId,
           allowOnline: false,
+          cacheOnly: isJobAssignmentReadOnly(window.currentProjektdatenJob),
           keepTreeWhileLoading: true,
         });
       });
@@ -5414,6 +5540,7 @@
           treeHost: treeHostInit,
           jobId: jobDetailsJobId,
           allowOnline: false,
+          cacheOnly: isJobAssignmentReadOnly(window.currentProjektdatenJob),
           keepTreeWhileLoading: true,
         });
       } else {
@@ -7628,7 +7755,21 @@
             isProjektdatenViewVisible() &&
             typeof openJobDetailsModal === 'function'
           ) {
-            openJobDetailsModal(jobDetailsJobId, { syncPullRefresh: true });
+            var curPd = window.currentProjektdatenJob;
+            var pdSid = Number(curPd.server_id || 0);
+            if (curPd.assignment_writable === false || curPd.assigned_to_me === false) {
+              if (pdSid > 0) {
+                openJobDetailsModal(pdSid, {
+                  syncPullRefresh: true,
+                  fromDispo: true,
+                  viewOnly: true,
+                  serverJobId: pdSid,
+                  calendarPreview: curPd,
+                });
+              }
+            } else {
+              openJobDetailsModal(jobDetailsJobId, { syncPullRefresh: true });
+            }
           }
         } else if (pullJob.status === 'failed' || pullJob.status === 'interrupted') {
           throw new Error(pullJob.error || 'Pull fehlgeschlagen.');
@@ -11337,17 +11478,44 @@
     return true;
   }
 
+  var projekteNeuThumbObserver = null;
+  function ensureProjekteNeuThumbObserver() {
+    if (typeof IntersectionObserver === 'undefined') return null;
+    if (projekteNeuThumbObserver) return projekteNeuThumbObserver;
+    projekteNeuThumbObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        var timg = en.target;
+        if (projekteNeuThumbObserver) projekteNeuThumbObserver.unobserve(timg);
+        if (!timg.classList.contains('projekte-neu-thumb-pending')) return;
+        timg.classList.remove('projekte-neu-thumb-pending');
+        var fab = timg.getAttribute('data-pn-fab');
+        var rel = timg.getAttribute('data-pn-rel');
+        if (!fab || !rel) return;
+        loadProjekteNeuThumbnailImg(timg, fab, rel, {
+          jobId: timg.getAttribute('data-pn-job-id') || undefined,
+          thumbMax: parseInt(timg.getAttribute('data-pn-thumb-max') || '256', 10) || 256,
+        });
+      });
+    }, { root: null, rootMargin: '160px', threshold: 0.01 });
+    return projekteNeuThumbObserver;
+  }
+
   function loadPendingProjekteNeuThumbsIn(container) {
     if (!container) return;
+    var io = ensureProjekteNeuThumbObserver();
     container.querySelectorAll('img.projekte-neu-thumb-pending').forEach(function (timg) {
       if (!isProjekteNeuThumbInOpenDetails(timg)) return;
+      if (io) {
+        io.observe(timg);
+        return;
+      }
+      timg.classList.remove('projekte-neu-thumb-pending');
       var fab = timg.getAttribute('data-pn-fab');
       var rel = timg.getAttribute('data-pn-rel');
       if (!fab || !rel) return;
-      timg.classList.remove('projekte-neu-thumb-pending');
-      var jobId = timg.getAttribute('data-pn-job-id');
       loadProjekteNeuThumbnailImg(timg, fab, rel, {
-        jobId: jobId || undefined,
+        jobId: timg.getAttribute('data-pn-job-id') || undefined,
         thumbMax: parseInt(timg.getAttribute('data-pn-thumb-max') || '256', 10) || 256,
       });
     });
@@ -11986,6 +12154,7 @@
     var treeHost = opts.treeHost || null;
     var toggleEl = opts.toggleEl != null ? opts.toggleEl : null;
     var allowOnline = opts.allowOnline !== false;
+    var cacheOnly = opts.cacheOnly === true;
     var technicianId = getTechId();
     if (!treeHost) return;
     var loadToken = bumpProjekteNeuHostToken(treeHost);
@@ -12029,26 +12198,35 @@
       if (toggleEl) toggleEl.setAttribute('data-loaded', '1');
     }
     try {
-      var jobId = resolveProjekteNeuJobId(opts);
+      var jobId = cacheOnly ? null : resolveProjekteNeuJobId(opts);
       var hdrs = { headers: { 'X-Technician-Id': String(technicianId || '') } };
       var resolved = jobId
         ? { found: true, job_id: jobId }
-        : await fetchJsonLocal(
-            API_BASE + '/api/anlagenstamm/projekte_neu_resolve_local?fab=' + encodeURIComponent(fab),
-            hdrs,
-            12000,
-          );
+        : (cacheOnly
+          ? { found: false, job_id: null }
+          : await fetchJsonLocal(
+              API_BASE + '/api/anlagenstamm/projekte_neu_resolve_local?fab=' + encodeURIComponent(fab),
+              hdrs,
+              8000,
+            ));
       if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
       if (resolved && resolved.found && resolved.job_id) jobId = resolved.job_id;
       var cached = await fetchJsonLocal(
         API_BASE + '/api/anlagenstamm_tree_cached?fab=' + encodeURIComponent(fab),
         hdrs,
-        12000,
+        8000,
       );
       if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
       var cachedTreeEarly = (cached && cached.found && Array.isArray(cached.tree)) ? cached.tree : [];
       if (cachedTreeEarly.length) {
         renderTree(cachedTreeEarly, '', cached && cached.folder);
+        return;
+      }
+      if (cacheOnly) {
+        if (msg) {
+          msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten für diese FN.';
+          msg.classList.remove('projektdaten-projekte-neu-folder');
+        }
         return;
       }
       if (jobId) {
@@ -12060,7 +12238,7 @@
             encodeURIComponent(fab) +
             '&rescan=0',
           hdrs,
-          60000,
+          12000,
         );
         if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
         if (localTree && localTree.ok && Array.isArray(localTree.tree) && localTree.tree.length) {
@@ -12356,6 +12534,25 @@
     return jobHasNoTechnicianForOpenFilter(job);
   }
 
+  /** Sofortanzeige aus Kalenderbalken (Laptop-Optik), Details kommen von der Dispo nach. */
+  function calendarJobAsProjektdatenPreview(job, viewerTechId) {
+    if (!job || typeof job !== 'object') return null;
+    var jobTechId = Number(job.technician_id != null ? job.technician_id : job.technicianId);
+    var myId = Number(viewerTechId);
+    var isOwn = Number.isFinite(myId) && myId > 0 && Number.isFinite(jobTechId) && jobTechId === myId;
+    var unassigned = isCalendarJobUnassigned(job);
+    var ro = !isOwn;
+    return Object.assign({}, job, {
+      assignment_writable: !ro,
+      assigned_to_me: !!isOwn,
+      assignment_read_only_reason: ro
+        ? (unassigned
+          ? 'Nur Ansicht – Auftrag ist nicht zugeteilt.'
+          : 'Nur Ansicht – Auftrag ist einem anderen Techniker zugeteilt.')
+        : '',
+    });
+  }
+
   function calendarUnassignedLane(techById, job) {
     var u = techById && (techById[0] || techById['0']);
     var fromJobColor = job && job.technician_color ? String(job.technician_color).trim() : '';
@@ -12366,17 +12563,11 @@
     };
   }
 
-  /** Lokale jobs.id für Kalender-Aktionen (Klick, Modal) — nie blind server_job_id. */
+  /** Lokale jobs.id für Kalender-Aktionen — nur explizites local_job_id, nie server_job_id. */
   function calendarLocalActionJobId(job) {
     if (!job) return null;
     var lid = job.local_job_id != null ? parseInt(job.local_job_id, 10) : NaN;
     if (Number.isFinite(lid) && lid > 0) return lid;
-    var sid = job.server_id != null ? String(job.server_id).trim() : '';
-    var jid = job.id != null ? String(job.id).trim() : '';
-    if (jid && (!sid || jid !== sid)) {
-      var idNum = parseInt(job.id, 10);
-      if (Number.isFinite(idNum) && idNum > 0) return idNum;
-    }
     return null;
   }
 
@@ -12637,7 +12828,6 @@
           });
         });
         var localJobsByServerId = {};
-        var localJobsById = {};
         var params = { technician_id: myTechId, date_from: start, date_to: end, include_erledigt: 1 };
         var local = await Promise.all([
           fetch(API_BASE + '/api/my_jobs?' + qs(params), { headers: { 'X-Technician-Id': String(myTechId) } }).then(function (r) { return r.json(); }),
@@ -12645,30 +12835,33 @@
         ]);
         (local[0].jobs || []).forEach(function (j) {
           if (j.server_id != null) { localJobsByServerId[j.server_id] = j; localJobsByServerId[String(j.server_id)] = j; }
-          if (j.id != null) { localJobsById[j.id] = j; localJobsById[String(j.id)] = j; }
         });
         jobs = jobs.map(function (j) {
+          var calServerId = j.server_id != null && String(j.server_id).trim() !== '' ? j.server_id : j.id;
           var localJob =
-            localJobsByServerId[j.server_id] ||
-            localJobsByServerId[j.id] ||
-            localJobsByServerId[String(j.server_id)] ||
-            localJobsByServerId[String(j.id)] ||
-            localJobsById[j.id] ||
-            localJobsById[String(j.id)];
+            localJobsByServerId[calServerId] ||
+            localJobsByServerId[String(calServerId)] ||
+            null;
           var techDisplay = calendarJobTechFields(j, techById, myTechId);
+          if (localJob) {
+            var localSid = localJob.server_id != null ? String(localJob.server_id) : '';
+            if (!localSid || localSid !== String(calServerId)) {
+              localJob = null;
+            }
+          }
           if (localJob) {
             var cacheFlags = calendarBillingFlagsFrom(j);
             // Termin/Zuweisung kommen aus dem Cache (Dispo); lokal nur ID/Billing anreichern.
             var mergedJob = Object.assign({}, j, cacheFlags, techDisplay, {
               local_job_id: localJob.id,
-              id: localJob.id,
-              server_id: localJob.server_id != null ? localJob.server_id : j.id
+              server_id: calServerId,
             });
             mergedJob.date_not_fixed = mergeDateNotFixedFlag(localJob.date_not_fixed, j.date_not_fixed);
             return mergedJob;
           }
           return Object.assign({}, j, techDisplay, {
             local_job_id: j.local_job_id != null ? j.local_job_id : null,
+            server_id: calServerId,
           });
         });
         // Keine lokalen Aufträge mehr anhängen, die im Dispo-Cache fehlen — sonst bleiben
@@ -13218,12 +13411,15 @@
           const jobTechId = Number(j.technician_id);
           const isOwnTechJob = Number.isFinite(myTechIdForDetails) && myTechIdForDetails > 0 && Number.isFinite(jobTechId) && jobTechId === myTechIdForDetails;
           const actionJobId = calendarLocalActionJobId(j);
+          const serverJobId = parseInt(j.server_id != null ? j.server_id : j.id, 10);
+          const openJobId = actionJobId || (Number.isFinite(serverJobId) && serverJobId > 0 ? serverJobId : null);
           const canActOnJob = isOwnTechJob && actionJobId != null;
-          band.style.cursor = canActOnJob ? 'pointer' : 'default';
+          const canOpenDetails = openJobId != null;
+          band.style.cursor = canOpenDetails ? 'pointer' : 'default';
           const colSpan = colEnd - colStart;
           const maxChars = colSpan * 20;
           const bar = jobBarText(j, maxChars);
-          band.title = canActOnJob
+          band.title = canOpenDetails
             ? ((bar.title || '') + ' (Doppelklick: Projektdaten)')
             : isOwnTechJob && !actionJobId
               ? ((bar.title || '') + ' (noch nicht lokal zugeordnet – Sync ausführen)')
@@ -13245,8 +13441,19 @@
               setStartSelectedDayYmd(clickYmd, { reload: false, forceHighlight: true });
               if (typeof loadStartActiveJobById === 'function') loadStartActiveJobById(actionJobId, j);
             });
+          }
+          if (canOpenDetails) {
             band.addEventListener('dblclick', function () {
-              if (typeof openJobDetailsModal === 'function') openJobDetailsModal(actionJobId);
+              if (typeof openJobDetailsModal !== 'function') return;
+              var calServerId = Number.isFinite(serverJobId) ? serverJobId : 0;
+              var ownLocal = isOwnTechJob && actionJobId != null;
+              openJobDetailsModal(ownLocal ? actionJobId : calServerId, {
+                fromDispo: !ownLocal,
+                viewOnly: !isOwnTechJob,
+                serverJobId: calServerId,
+                calendarTechnicianId: Number.isFinite(jobTechId) ? jobTechId : 0,
+                calendarPreview: j,
+              });
             });
           }
         }
