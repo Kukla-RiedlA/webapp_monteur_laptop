@@ -12,6 +12,8 @@ const ALWAYS_PULL_PREFIXES = [
   'Dokumente_Buchhaltung',
   /** Legacy-PWA-Fotos — kein FN-Ordner, sonst filtert shouldPullManifestFile sie weg. */
   'Dokumente_Monteur/Bilder',
+  /** PWA Allgemein/Angebot — auftragsweit, ohne FN-Anlagenordner. */
+  'Dokumente_Monteur/Montage',
 ];
 
 /** Flache Protokoll-JSONs unter Dokumente_Monteur/{name}.json — Quelle ist die Draft-API, nicht der Fileserver. */
@@ -27,6 +29,7 @@ function isMonteurPhotoManifestPath(relPath) {
   const norm = normManifestPath(relPath);
   if (!norm) return false;
   if (norm === 'Dokumente_Monteur/Bilder' || norm.startsWith('Dokumente_Monteur/Bilder/')) return true;
+  if (norm === 'Dokumente_Monteur/Montage' || norm.startsWith('Dokumente_Monteur/Montage/')) return true;
   if (/^Dokumente_Monteur\/[^/]+\/Montage\/[^/]+\/Bilder(\/|$)/i.test(norm)) return true;
   // ohne FN: Dateien direkt unter Dokumente_Monteur/ (kein Unterordner)
   if (/^Dokumente_Monteur\/[^/]+\.(jpe?g|png|webp)$/i.test(norm)) return true;

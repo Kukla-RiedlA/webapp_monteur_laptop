@@ -160,6 +160,54 @@ function isBareFabFolderName(name) {
   return !!s && /^\d+$/.test(s);
 }
 
+/** PWA-Kategorien ohne FN: Dokumente_Monteur/Montage/<Auftrag>/Bilder/<Kategorie>/ */
+const PHOTO_SPECIAL_CATEGORIES = ['Allgemein', 'Angebot'];
+
+/** Keine FN-Anlagenordner — Legacy-Fotos bzw. auftragsweite Kategorie-Fotos. */
+function isDokumenteMonteurReservedTopDir(name) {
+  const n = String(name || '').trim().toLowerCase();
+  return n === 'bilder' || n === 'montage';
+}
+
+function isMonteurPhotoCategoryRel(relPath) {
+  const norm = String(relPath || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  return /^Dokumente_Monteur\/Montage\/[^/]+\/Bilder\/(Allgemein|Angebot)(\/|$)/i.test(norm);
+}
+
+function buildMonteurPhotoCategoryRelDir(auftragsordner, category) {
+  const ao = String(auftragsordner || '').trim();
+  const cat = String(category || '').trim();
+  if (!ao || !cat) return '';
+  return ['Dokumente_Monteur', 'Montage', ao, 'Bilder', cat].join('/');
+}
+
+/**
+ * Leere Ordner Allgemein/Angebot neben den FN-Bäumen, analog zum Dispo-Upload.
+ * FN-Fotos bleiben unter Dokumente_Monteur/<FN>/Montage/<Auftrag>/Bilder/.
+ */
+function ensureMonteurPhotoCategoryDirs(reiseDir, auftragsordner) {
+  const ao = String(auftragsordner || '').trim();
+  if (!ao || !reiseDir) return;
+  const monteurBase = path.join(reiseDir, 'Dokumente_Monteur');
+  if (!fs.existsSync(monteurBase)) fs.mkdirSync(monteurBase, { recursive: true });
+  for (const cat of PHOTO_SPECIAL_CATEGORIES) {
+    const dir = path.join(monteurBase, 'Montage', ao, 'Bilder', cat);
+    if (!fs.existsSync(dir)) {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+      } catch (err) {
+        console.warn(
+          '[monteur-paths] mkdir Foto-Kategorie',
+          dir,
+          err && err.message ? err.message : err,
+        );
+      }
+    }
+  }
+}
+
 function isNonBareFnFolderName(name) {
   const s = String(name || '').trim();
   return !!s && !isBareFabFolderName(s);
@@ -278,6 +326,7 @@ function collectReiseFnDirNames(reiseDir) {
   const out = [];
   for (const sub of ['Dokumente_Monteur', 'Dokumente_Anlage']) {
     for (const name of listSubdirNames(path.join(reiseDir, sub))) {
+      if (sub === 'Dokumente_Monteur' && isDokumenteMonteurReservedTopDir(name)) continue;
       const key = name.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -595,6 +644,7 @@ function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) 
   }
   // Bestehende FN-Ordner ohne fab_map (keine Alias eines kanonischen Namens).
   for (const name of listSubdirNames(monteurBase)) {
+    if (isDokumenteMonteurReservedTopDir(name)) continue;
     if (canonicals.some((c) => c === name || isFnFolderAlias(c, name))) continue;
     fnFolders.add(name);
   }
@@ -683,6 +733,7 @@ function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) 
       }
     }
   }
+  ensureMonteurPhotoCategoryDirs(reiseDir, desired);
   return desired;
 }
 
@@ -696,6 +747,8 @@ function isDokumenteMonteurKeepLocalRel(normPath) {
   if (!norm.startsWith(prefix)) return false;
   const tail = norm.slice(prefix.length);
   if (tail === 'Bilder' || tail.startsWith('Bilder/')) return true;
+  // Auftragsweite PWA-Kategorien (kein FN): Dokumente_Monteur/Montage/<Auftrag>/Bilder/Allgemein|Angebot
+  if (tail === 'Montage' || tail.startsWith('Montage/')) return true;
   // …/<FN|Parent>/Montage/<Auftrag>/… (inkl. …/Bilder/)
   if (/^[^/]+\/Montage(\/|$)/i.test(tail)) return true;
   // ohne FN: Bilddatei direkt unter Dokumente_Monteur/
@@ -807,6 +860,11 @@ module.exports = {
   buildMonteurWorkAbsDir,
   isMonteurWorkRelPath,
   isBareFabFolderName,
+  PHOTO_SPECIAL_CATEGORIES,
+  isDokumenteMonteurReservedTopDir,
+  isMonteurPhotoCategoryRel,
+  buildMonteurPhotoCategoryRelDir,
+  ensureMonteurPhotoCategoryDirs,
   ensureAnlageFnDirs,
   ensureMonteurMontageDirs,
   alignMonteurMontageDirs,

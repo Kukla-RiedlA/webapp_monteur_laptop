@@ -141,6 +141,8 @@ const {
   ensureAnlageFnDirs,
   ensureMonteurMontageDirs,
   alignMonteurMontageDirs,
+  ensureMonteurPhotoCategoryDirs,
+  buildMonteurPhotoCategoryRelDir,
   removeLegacyMonteurAuftragsordnerTopLevel,
   removeStaleBareFabMonteurDirs,
   isBareFabFolderName,
@@ -3446,6 +3448,21 @@ function createApp(db) {
         }
       }
     }
+    if (montageFolderName) {
+      ensureMonteurPhotoCategoryDirs(reiseDir, montageFolderName);
+      if (listProtectedPaths(db, localJobId).includes(DOKUMENTE_MONTEUR)) {
+        protectPathIfUnderDokumenteMonteur(
+          db,
+          localJobId,
+          buildMonteurPhotoCategoryRelDir(montageFolderName, 'Allgemein'),
+        );
+        protectPathIfUnderDokumenteMonteur(
+          db,
+          localJobId,
+          buildMonteurPhotoCategoryRelDir(montageFolderName, 'Angebot'),
+        );
+      }
+    }
     return { fabMap, montageFolderName };
   }
 
@@ -3540,7 +3557,9 @@ function createApp(db) {
         if (stat.isDirectory()) {
           // Frisch angelegte Projektordner enthalten zuerst nur leere Standardordner.
           // Diese Wurzelordner sichtbar lassen, sonst wirkt der Projektordner nicht angelegt.
-          if (subpath && isEffectivelyEmptyDir(fullPath)) continue;
+          // Allgemein/Angebot müssen auch leer sichtbar sein (PWA-Kategorien ohne Fotos).
+          const keepEmptyPhotoCategory = name === 'Allgemein' || name === 'Angebot';
+          if (subpath && isEffectivelyEmptyDir(fullPath) && !keepEmptyPhotoCategory) continue;
         }
         const relativePath = subpath ? (subpath.replace(/\\/g, '/') + '/' + name) : name;
         entries.push({

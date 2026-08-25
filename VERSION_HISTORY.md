@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.014
+- **PWA-Fotos Allgemein/Angebot:** Ordner unter `Dokumente_Monteur/Montage/<Auftragsordner>/Bilder/` werden lokal angelegt, im Explorer auch leer angezeigt und beim Offline-Pull vom Server geholt. FN-Fotos bleiben unter `Dokumente_Monteur/<FN>/Montage/…/Bilder/`.
+
 ## V 2.006.013
 - **Protokolle:** Hintergrund-Zwischenstand lokal (60 s, FN-Wechsel, Verlassen). Festes Speichern (JSON/PDF) geht auf den Server und fragt den Anlagenstamm. Beim Verlassen der Seite Hinweis, wenn noch nicht fest gespeichert – nicht beim FN-Wechsel.
 - **Serviceprotokoll:** FN-Wechsel lädt den Inhalt der neuen Nummer; Speichern übernimmt den React-Stand.
