@@ -4,6 +4,15 @@ Chronologische Kurznotizen zu Feld- und Statusänderungen, die Laptop, Dispo ode
 
 ---
 
+## 2026-08-25 – Textbausteine DE/EN analog Arbeitsschritte
+
+- **Alt:** Item nur `text` (ein Feld, oft HTML).
+- **Neu (additiv):** `text` bleibt Deutsch; Alias `text_de`; neu `text_en`. Speichern: mindestens DE oder EN.
+- **API:** `textbausteine_list` / `_save` / `_global_*` / `_publish_global`; Laptop-SQLite `text_en`.
+- **PWA:** Katalog-Editor nicht betroffen; Bericht speichert weiter `{ text }` aus Bemerkungszeilen.
+
+---
+
 ## 2026-05-13 – Auftrags-Status statt Sammel-`geplant`
 
 - **Alt:** fachlich oft alles unter `geplant`; lokale SQLite-Default `geplant`.

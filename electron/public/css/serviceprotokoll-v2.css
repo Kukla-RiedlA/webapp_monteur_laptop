@@ -25,6 +25,11 @@
   background: var(--sp-page);
 }
 
+.sp-react-frame.is-modal-blocked {
+  pointer-events: none;
+  visibility: hidden;
+}
+
 .sp-v2-legacy-host {
   display: none !important;
 }

@@ -12,6 +12,7 @@
   var jobSwitchPending = false;
   /** Letzter React-State (u. a. Abschluss-Status Justiert) – Quelle vor Speichern. */
   var lastReactPayload = null;
+  var ignoreReactUntil = 0;
 
   function reactPayloadFab(payload) {
     if (!payload || !payload.form) return '';
@@ -51,7 +52,12 @@
     if (!force && applying) return;
     var api = bridgeApi();
     if (!api || typeof api.pullPayload !== 'function') return;
-    postToReact({ type: 'SP_SYNC_STATE', payload: api.pullPayload() });
+    var payload = api.pullPayload();
+    // Host-Änderungen (z. B. Katalog-Übernehmen) müssen der Flush-Quelle entsprechen,
+    // sonst überschreibt ein veralteter React-State die neuen Arbeitsschritte.
+    rememberReactPayload(payload);
+    ignoreReactUntil = Date.now() + 900;
+    postToReact({ type: 'SP_SYNC_STATE', payload: payload });
   }
 
   function applyFromReact(payload) {
@@ -65,6 +71,23 @@
       applyingDepth -= 1;
       applying = applyingDepth > 0;
     }
+  }
+
+  function workStepsSignature(steps) {
+    return (steps || []).map(function (s) {
+      return String((s.labelDe || s.bezeichnung_de || '') + '\n' + (s.labelEn || s.bezeichnung_en || '') + '\n' + (s.label || '')).trim().toLowerCase();
+    }).join('||');
+  }
+
+  function keepHostWorkStepsIfStale(payload) {
+    if (!payload || Date.now() >= ignoreReactUntil || !lastReactPayload) return payload;
+    var hostSteps = lastReactPayload.workSteps;
+    if (!Array.isArray(hostSteps) || !hostSteps.length) return payload;
+    var incoming = payload.workSteps || [];
+    if (workStepsSignature(incoming) === workStepsSignature(hostSteps)) return payload;
+    if (incoming.length > hostSteps.length) return payload;
+    payload.workSteps = hostSteps;
+    return payload;
   }
 
   function rememberReactPayload(payload) {
@@ -110,6 +133,7 @@
 
     if (data.type === 'SP_STATE_CHANGE' && data.payload) {
       if (applying || fabSwitchPending || jobSwitchPending) return;
+      keepHostWorkStepsIfStale(data.payload);
       rememberReactPayload(data.payload);
       applyFromReact(data.payload);
       return;
@@ -151,6 +175,7 @@
         var actionFab = reactPayloadFab(data.payload);
         var actionHostFab = hostActiveFab();
         if (!actionHostFab || !actionFab || actionFab === actionHostFab) {
+          keepHostWorkStepsIfStale(data.payload);
           rememberReactPayload(data.payload);
           applyFromReact(data.payload);
         }

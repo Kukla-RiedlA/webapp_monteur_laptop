@@ -12335,6 +12335,9 @@
     if (typeof flushProtocolAutosaveOnViewChange === 'function') {
       flushProtocolAutosaveOnViewChange(name);
     }
+    if (typeof window.kuklaCloseSpStepPicker === 'function' && name !== 'protokolle-service') {
+      window.kuklaCloseSpStepPicker();
+    }
     const viewStart = document.getElementById('viewStart');
     const viewEinstellungen = document.getElementById('viewEinstellungen');
     const viewProjektdaten = document.getElementById('viewProjektdaten');
@@ -16732,6 +16735,26 @@
 
     var montageberichtTbCategories = [];
 
+    function montageberichtTbItemTexts(item) {
+      return {
+        de: String((item && (item.text_de != null ? item.text_de : item.text)) || '').trim(),
+        en: String((item && item.text_en) || '').trim()
+      };
+    }
+
+    function montageberichtTbInsertText(item) {
+      var langs = getMontageberichtLanguages();
+      var t = montageberichtTbItemTexts(item);
+      var parts = [];
+      if (langs.indexOf('de') >= 0 && t.de) parts.push(t.de);
+      if (langs.indexOf('en') >= 0 && t.en) parts.push(t.en);
+      if (!parts.length) {
+        if (t.de) parts.push(t.de);
+        else if (t.en) parts.push(t.en);
+      }
+      return parts.join('\n');
+    }
+
     function renderMontageberichtChips() {
       var listEl = document.getElementById('montageberichtTbList');
       var categorySelect = document.getElementById('montageberichtTbCategory');
@@ -16748,8 +16771,9 @@
       }
       var html = '';
       items.forEach(function (item) {
-        var plain = stripHtmlForPlain(item.text || '').slice(0, 60) + (stripHtmlForPlain(item.text || '').length > 60 ? '…' : '');
-        html += '<div class="montagebericht-tb-chip" draggable="true" data-text="' + escapeHtml(item.text || '') + '" title="' + escapeHtml(plain) + '">' + escapeHtml(plain) + '</div>';
+        var insertText = montageberichtTbInsertText(item);
+        var plain = stripHtmlForPlain(insertText).slice(0, 60) + (stripHtmlForPlain(insertText).length > 60 ? '…' : '');
+        html += '<div class="montagebericht-tb-chip" draggable="true" data-text="' + escapeHtml(insertText) + '" title="' + escapeHtml(plain) + '">' + escapeHtml(plain) + '</div>';
       });
       listEl.innerHTML = html || '<span class="muted" style="font-size:0.8rem">Keine Textbausteine</span>';
       listEl.querySelectorAll('.montagebericht-tb-chip').forEach(function (chip) {
@@ -16823,6 +16847,14 @@
       if (deEl) deEl.checked = !!set.de;
       if (enEl) enEl.checked = !!set.en;
     }
+
+    ['montageberichtLangDe', 'montageberichtLangEn'].forEach(function (id) {
+      var langEl = document.getElementById(id);
+      if (langEl && !langEl.dataset.tbLangBound) {
+        langEl.dataset.tbLangBound = '1';
+        langEl.addEventListener('change', renderMontageberichtChips);
+      }
+    });
 
     var montageberichtJobLoadToken = 0;
 
@@ -23317,7 +23349,7 @@
         var tl = payload.testLoad;
         applyPgTestToForm([tl.weight || '', tl.display || '', tl.deviation || '', tl.value4 || '']);
       }
-      if (serviceprotokollHostHydrated && Array.isArray(payload.workSteps)) {
+      if (serviceprotokollHostHydrated && Array.isArray(payload.workSteps) && Date.now() >= spWorkStepsHostLockUntil) {
         arbeitsschritte = payload.workSteps.map(function (s, i) {
           var prev = arbeitsschritte[i] || {};
           var de = String(s.labelDe != null ? s.labelDe : '').trim();
@@ -23433,9 +23465,108 @@
     var spCatalogPresetsCache = [];
     var spCatalogPickKeys = {};
     var spActivePresetStepKeys = {};
+    var spWorkStepsHostLockUntil = 0;
+
+    function lockHostWorkStepsFromReact(ms) {
+      spWorkStepsHostLockUntil = Date.now() + (ms || 900);
+    }
+
+    function focusHostTextInput(el) {
+      if (!el) return;
+      try { window.focus(); } catch (e) { /* ignore */ }
+      window.setTimeout(function () {
+        try {
+          el.focus();
+          if (typeof el.select === 'function') el.select();
+        } catch (err) { /* ignore */ }
+      }, 40);
+    }
+
+    function setSpReactFrameBlocked(blocked) {
+      var frame = document.getElementById('serviceprotokollReactFrame');
+      if (!frame) {
+        try { window.focus(); } catch (e) { /* ignore */ }
+        return;
+      }
+      if (blocked) {
+        frame.classList.add('is-modal-blocked');
+        frame.setAttribute('inert', '');
+        try {
+          if (document.activeElement === frame) frame.blur();
+          if (frame.contentWindow) frame.contentWindow.blur();
+          frame.blur();
+        } catch (e) { /* ignore */ }
+        try { window.focus(); } catch (e2) { /* ignore */ }
+      } else {
+        frame.classList.remove('is-modal-blocked');
+        frame.removeAttribute('inert');
+      }
+    }
 
     function spCatalogStepKey(scope, id) {
       return String(scope || 'global') + ':' + id;
+    }
+
+    function resolveSavedStepLocalId(data) {
+      if (!data) return 0;
+      if (data.local_id != null && data.local_id !== '') {
+        var lid = parseInt(data.local_id, 10);
+        if (lid) return lid;
+      }
+      if (data.id != null && data.id !== '') return parseInt(data.id, 10) || 0;
+      return 0;
+    }
+
+    function protocolHasOnlyEmptyPlaceholder() {
+      return arbeitsschritte.length === 1
+        && !String(arbeitsschritte[0].bezeichnung_de || '').trim()
+        && !String(arbeitsschritte[0].bezeichnung_en || '').trim();
+    }
+
+    function catalogStepToProtokollRow(s) {
+      return {
+        bezeichnung_de: s.bezeichnung_de || splitBilingualLabel(s.bezeichnung || '').de,
+        bezeichnung_en: s.bezeichnung_en || splitBilingualLabel(s.bezeichnung || '').en,
+        status: 'na',
+        bemerkung: ''
+      };
+    }
+
+    function currentStepLabelsFromMemory() {
+      return arbeitsschritte.map(function (s) {
+        return combineBilingualLabel(s.bezeichnung_de, s.bezeichnung_en).toLowerCase();
+      });
+    }
+
+    function appendCatalogStepToProtocol(s) {
+      if (!s) return false;
+      var row = catalogStepToProtokollRow(s);
+      var label = combineBilingualLabel(row.bezeichnung_de, row.bezeichnung_en).toLowerCase();
+      if (label && currentStepLabelsFromMemory().indexOf(label) >= 0) return false;
+      if (protocolHasOnlyEmptyPlaceholder()) arbeitsschritte = [row];
+      else arbeitsschritte.push(row);
+      return true;
+    }
+
+    function commitProtokollWorkSteps() {
+      lockHostWorkStepsFromReact(900);
+      renderSteps();
+      var fab = getActiveFab();
+      if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
+      notifyReactBridge(true);
+    }
+
+    function findCatalogStepByPickKey(key) {
+      var found = spCatalogCache.find(function (x) { return spCatalogStepKey(x.scope, x.id) === key; });
+      if (found) return found;
+      var parts = String(key || '').split(':');
+      var scope = parts[0] || 'user';
+      var keyId = parseInt(parts[1], 10);
+      if (!keyId) return null;
+      return spCatalogCache.find(function (x) {
+        return (x.scope || 'global') === scope
+          && (Number(x.id) === keyId || Number(x.server_id) === keyId);
+      }) || null;
     }
 
     function labelOfCatalogStep(s) {
@@ -23485,16 +23616,12 @@
 
     function isCatalogStepInProtocol(s) {
       var label = String(labelOfCatalogStep(s)).toLowerCase();
-      return currentStepLabels().indexOf(label) >= 0;
-    }
-
-    function isCatalogStepInActivePreset(s) {
-      return !!spActivePresetStepKeys[spCatalogStepKey(s.scope, s.id)];
+      return currentStepLabelsFromMemory().indexOf(label) >= 0;
     }
 
     function filterAvailableSpCatalogSteps(steps) {
       return (steps || []).filter(function (s) {
-        return !isCatalogStepInProtocol(s) && !isCatalogStepInActivePreset(s);
+        return !isCatalogStepInProtocol(s);
       });
     }
 
@@ -23512,7 +23639,7 @@
       if (!listEl) return;
       var available = filterAvailableSpCatalogSteps(spCatalogCache);
       if (!available.length) {
-        listEl.innerHTML = '<p class="muted" style="padding:0.75rem">Keine weiteren Schritte verfügbar (bereits im Protokoll oder im Typ-Preset enthalten).</p>';
+        listEl.innerHTML = '<p class="muted" style="padding:0.75rem">Keine weiteren Schritte verfügbar (bereits im Protokoll enthalten).</p>';
         return;
       }
       listEl.innerHTML = available.map(function (s) {
@@ -23537,10 +23664,15 @@
 
     function closeSpStepPickerModal() {
       var modal = document.getElementById('modalSpCatalog');
-      if (modal) modal.classList.remove('active');
+      if (modal) {
+        modal.classList.remove('active');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+      setSpReactFrameBlocked(false);
       hideSpCatalogNewStepPanel();
       spCatalogPickKeys = {};
     }
+    window.kuklaCloseSpStepPicker = closeSpStepPickerModal;
 
     async function openSpStepPickerModal() {
       try {
@@ -23551,29 +23683,30 @@
         spActivePresetStepKeys = resolveSpActivePresetStepKeys();
         renderSpCatalogList();
         var modal = document.getElementById('modalSpCatalog');
-        if (modal) modal.classList.add('active');
+        if (modal) {
+          modal.classList.add('active');
+          modal.setAttribute('aria-hidden', 'false');
+        }
+        setSpReactFrameBlocked(true);
+        var modalBox = modal && modal.querySelector('.modal-box');
+        if (modalBox) {
+          modalBox.setAttribute('tabindex', '-1');
+          try { modalBox.focus(); } catch (fe) { /* ignore */ }
+        }
       } catch (e) {
+        setSpReactFrameBlocked(false);
         alert('Katalog konnte nicht geladen werden: ' + (e && e.message ? e.message : e));
       }
     }
 
     function applySpStepPickerSelection() {
       syncStepsFromDom();
+      var added = 0;
       Object.keys(spCatalogPickKeys).forEach(function (key) {
         if (!spCatalogPickKeys[key]) return;
-        var s = spCatalogCache.find(function (x) { return spCatalogStepKey(x.scope, x.id) === key; });
-        if (!s) return;
-        arbeitsschritte.push({
-          bezeichnung_de: s.bezeichnung_de || splitBilingualLabel(s.bezeichnung || '').de,
-          bezeichnung_en: s.bezeichnung_en || splitBilingualLabel(s.bezeichnung || '').en,
-          status: 'na',
-          bemerkung: ''
-        });
+        if (appendCatalogStepToProtocol(findCatalogStepByPickKey(key))) added += 1;
       });
-      renderSteps();
-      var fab = getActiveFab();
-      if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
-      notifyReactBridge(true);
+      if (added > 0) commitProtokollWorkSteps();
       closeSpStepPickerModal();
     }
 
@@ -23604,18 +23737,33 @@
       hideSpCatalogNewStepPanel();
       await loadSpCatalogData();
       spActivePresetStepKeys = resolveSpActivePresetStepKeys();
-      var newId = data.id != null ? parseInt(data.id, 10) : 0;
-      if (newId > 0) spCatalogPickKeys[spCatalogStepKey('user', newId)] = true;
+      var newId = resolveSavedStepLocalId(data);
+      var created = null;
+      if (newId) {
+        created = findCatalogStepByPickKey(spCatalogStepKey('user', newId));
+      }
+      if (!created) {
+        created = spCatalogCache.find(function (x) {
+          return (x.scope || '') === 'user'
+            && String(x.bezeichnung_de || '').trim() === de
+            && String(x.bezeichnung_en || '').trim() === en;
+        }) || null;
+      }
+      syncStepsFromDom();
+      if (created) {
+        spCatalogPickKeys[spCatalogStepKey(created.scope, created.id)] = true;
+        appendCatalogStepToProtocol(created);
+        commitProtokollWorkSteps();
+      } else {
+        appendCatalogStepToProtocol({
+          bezeichnung_de: de,
+          bezeichnung_en: en
+        });
+        commitProtokollWorkSteps();
+      }
       renderSpCatalogList();
     }
 
-
-    function currentStepLabels() {
-      syncStepsFromDom();
-      return arbeitsschritte.map(function (s) {
-        return combineBilingualLabel(s.bezeichnung_de, s.bezeichnung_en).toLowerCase();
-      });
-    }
 
     async function loadSpCatalogData() {
       var listUrl =
@@ -23648,7 +23796,14 @@
     if (btnSpCatalogNew) {
       btnSpCatalogNew.addEventListener('click', function () {
         var panel = document.getElementById('spCatalogNewStepPanel');
-        if (panel) panel.style.display = panel.style.display === 'none' ? '' : 'none';
+        if (!panel) return;
+        var show = panel.style.display === 'none' || !panel.style.display;
+        panel.style.display = show ? '' : 'none';
+        if (show) {
+          setSpReactFrameBlocked(true);
+          if (panel.scrollIntoView) panel.scrollIntoView({ block: 'nearest' });
+          focusHostTextInput(document.getElementById('spCatalogStepDe'));
+        }
       });
     }
     var btnSpCatalogStepCreate = document.getElementById('btnSpCatalogStepCreate');
@@ -23668,6 +23823,18 @@
     var btnSpCatalogCancel = document.getElementById('btnSpCatalogCancel');
     if (btnSpCatalogCancel) {
       btnSpCatalogCancel.addEventListener('click', closeSpStepPickerModal);
+    }
+    var modalSpCatalog = document.getElementById('modalSpCatalog');
+    if (modalSpCatalog) {
+      modalSpCatalog.addEventListener('click', function (e) {
+        if (e.target === modalSpCatalog) closeSpStepPickerModal();
+      });
+      modalSpCatalog.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeSpStepPickerModal();
+        }
+      });
     }
 
     if (abbrechenBtn) {
@@ -24351,9 +24518,16 @@
 
   (function initTextbausteineView() {
     var tbCategories = [];
-    var selectedCategoryId = null;
-    var selectedCategoryScope = null;
-    var editingItemId = null;
+    var tbAllItems = [];
+    var tbItems = [];
+    var selectedCategoryId = 0;
+    var selectedCategoryScope = '';
+    var editingItemId = 0;
+    var dragFromIndex = -1;
+
+    function sameId(a, b) {
+      return Number(a) === Number(b);
+    }
 
     function escapeHtml(s) {
       if (s == null) return '';
@@ -24369,10 +24543,232 @@
       return (d.textContent || d.innerText || '').trim();
     }
 
+    function previewText(html) {
+      var t = stripHtml(html);
+      if (t.length > 140) t = t.slice(0, 137) + '…';
+      return t || '(leer)';
+    }
+
+    function catKey(scope, id) {
+      return String(scope || 'user') + ':' + id;
+    }
+
+    function flattenItems(categories) {
+      var out = [];
+      (categories || []).forEach(function (cat) {
+        (cat.items || []).forEach(function (item) {
+          out.push({
+            id: parseInt(item.id, 10),
+            text: item.text_de != null ? item.text_de : item.text,
+            text_de: item.text_de != null ? item.text_de : item.text,
+            text_en: item.text_en || '',
+            sort_order: item.sort_order || 0,
+            scope: item.scope || cat.scope || 'user',
+            category_id: parseInt(cat.id, 10),
+            category_scope: cat.scope || 'user',
+            category_name: cat.name || '',
+            server_id: item.server_id
+          });
+        });
+      });
+      return out;
+    }
+
+    function sortItemsDefault() {
+      tbItems.sort(function (a, b) {
+        var an = String(a.category_name || '').toLowerCase();
+        var bn = String(b.category_name || '').toLowerCase();
+        if (an !== bn) return an.localeCompare(bn, 'de');
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+        if (a.scope !== b.scope) return a.scope === 'global' ? -1 : 1;
+        return a.id - b.id;
+      });
+    }
+
+    function refreshVisibleItems() {
+      if (!selectedCategoryId) {
+        tbItems = tbAllItems.slice();
+        sortItemsDefault();
+        return;
+      }
+      tbItems = tbAllItems.filter(function (item) {
+        return sameId(item.category_id, selectedCategoryId)
+          && String(item.category_scope || 'user') === String(selectedCategoryScope || 'user');
+      });
+      tbItems.sort(function (a, b) {
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+        return a.id - b.id;
+      });
+    }
+
+    function updateCategoryToolbarState() {
+      var canSaveUser = selectedCategoryId && selectedCategoryScope === 'user';
+      var btnSave = document.getElementById('btnTbCategorySave');
+      var btnDel = document.getElementById('btnTbCategoryDelete');
+      if (btnSave) btnSave.disabled = !canSaveUser;
+      if (btnDel) btnDel.disabled = !canSaveUser;
+    }
+
+    function renderCategorySelect() {
+      var sel = document.getElementById('tbCategorySelect');
+      if (!sel) return;
+      var html = '<option value="">— Kategorie wählen —</option>';
+      tbCategories.forEach(function (c) {
+        var label = (c.name || '') + (c.scope === 'global' ? ' (global)' : '');
+        var val = catKey(c.scope || 'user', c.id);
+        var selected = sameId(c.id, selectedCategoryId) && (c.scope || 'user') === selectedCategoryScope;
+        html += '<option value="' + escapeHtml(val) + '"' + (selected ? ' selected' : '') + '>' + escapeHtml(label) + '</option>';
+      });
+      sel.innerHTML = html;
+    }
+
+    function applyCategoryByValue(val) {
+      if (!val) {
+        selectedCategoryId = 0;
+        selectedCategoryScope = '';
+        var nameEl = document.getElementById('tbCategoryName');
+        if (nameEl) nameEl.value = '';
+        refreshVisibleItems();
+        renderCategorySelect();
+        renderItems();
+        updateCategoryToolbarState();
+        return;
+      }
+      var parts = String(val).split(':');
+      var scope = parts[0] || 'user';
+      var cid = parseInt(parts[1], 10) || 0;
+      var c = tbCategories.find(function (x) { return sameId(x.id, cid) && (x.scope || 'user') === scope; });
+      if (!c) return;
+      selectedCategoryId = parseInt(c.id, 10);
+      selectedCategoryScope = scope;
+      var nameEl = document.getElementById('tbCategoryName');
+      if (nameEl) nameEl.value = c.name || '';
+      refreshVisibleItems();
+      renderCategorySelect();
+      renderItems();
+      updateCategoryToolbarState();
+    }
+
+    async function persistUserOrder() {
+      var orders = [];
+      document.querySelectorAll('#tbItemList .as-row').forEach(function (row, idx) {
+        if ((row.getAttribute('data-scope') || '') !== 'user') return;
+        orders.push({ id: parseInt(row.getAttribute('data-id'), 10), sort_order: idx + 1 });
+      });
+      if (!orders.length) return;
+      var r = await fetch(API_BASE + '/api/textbausteine_reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({
+          base_url: getDispoBaseUrl(),
+          technician_id: getTechId(),
+          orders: orders
+        })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Reihenfolge speichern fehlgeschlagen');
+    }
+
+    function bindRowDragDrop() {
+      var list = document.getElementById('tbItemList');
+      if (!list) return;
+      list.querySelectorAll('.as-row').forEach(function (row) {
+        row.addEventListener('dragstart', function (e) {
+          dragFromIndex = parseInt(row.getAttribute('data-index'), 10);
+          row.classList.add('as-row--dragging');
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', String(dragFromIndex));
+        });
+        row.addEventListener('dragend', function () {
+          row.classList.remove('as-row--dragging');
+          list.querySelectorAll('.as-row').forEach(function (r) { r.classList.remove('as-row--dragover'); });
+          dragFromIndex = -1;
+        });
+        row.addEventListener('dragover', function (e) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          row.classList.add('as-row--dragover');
+        });
+        row.addEventListener('dragleave', function () {
+          row.classList.remove('as-row--dragover');
+        });
+        row.addEventListener('drop', function (e) {
+          e.preventDefault();
+          row.classList.remove('as-row--dragover');
+          var from = dragFromIndex;
+          var to = parseInt(row.getAttribute('data-index'), 10);
+          if (from < 0 || to < 0 || from === to) return;
+          var moved = tbItems.splice(from, 1)[0];
+          tbItems.splice(to, 0, moved);
+          renderItems();
+          persistUserOrder().catch(function (err) { alert(err.message || err); });
+        });
+      });
+    }
+
+    function renderItems() {
+      var itemList = document.getElementById('tbItemList');
+      if (!itemList) return;
+      if (!tbItems.length) {
+        itemList.innerHTML = selectedCategoryId
+          ? '<p class="muted">Keine Textbausteine in dieser Kategorie.</p>'
+          : '<p class="muted">Keine Textbausteine.</p>';
+        return;
+      }
+      itemList.innerHTML = tbItems.map(function (item, idx) {
+        var global = item.scope === 'global';
+        var catLabel = item.category_name ? escapeHtml(item.category_name) : '';
+        var deSrc = String(item.text_de || item.text || '').trim();
+        var enSrc = String(item.text_en || '').trim();
+        var de = deSrc ? previewText(deSrc) : '';
+        var en = enSrc ? previewText(enSrc) : '';
+        var enHtml = en ? ' <span class="muted">/ ' + escapeHtml(en) + '</span>' : '';
+        return '<div class="as-row" draggable="true" data-id="' + item.id + '" data-scope="' + escapeHtml(item.scope || 'user') + '" data-index="' + idx + '">'
+          + '<span class="as-drag" title="Ziehen zum Sortieren">≡</span>'
+          + '<div class="as-row-main"><strong class="tb-preview">' + escapeHtml(de || (!en ? '(leer)' : '')) + '</strong>'
+          + enHtml
+          + ' <span class="muted">' + catLabel + (global ? (catLabel ? ' · ' : '') + '(global)' : '') + '</span></div>'
+          + '<div class="as-row-actions">'
+          + (global ? '' : '<button type="button" class="btn btn-ghost btn-tb-edit" data-id="' + item.id + '" draggable="false">Bearbeiten</button>'
+            + '<button type="button" class="btn btn-ghost btn-tb-pub" data-id="' + item.id + '" draggable="false">Für alle</button>'
+            + '<button type="button" class="btn btn-ghost btn-tb-del" data-id="' + item.id + '" draggable="false">Löschen</button>')
+          + '</div></div>';
+      }).join('');
+      itemList.querySelectorAll('.as-row-actions').forEach(function (wrap) {
+        wrap.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+        wrap.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+      });
+      itemList.querySelectorAll('.btn-tb-edit').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          openTbEditor(parseInt(btn.getAttribute('data-id'), 10));
+        });
+      });
+      itemList.querySelectorAll('.btn-tb-pub').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          publishTbItem(parseInt(btn.getAttribute('data-id'), 10)).catch(function (err) {
+            alert(err && err.message ? err.message : err);
+          });
+        });
+      });
+      itemList.querySelectorAll('.btn-tb-del').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          deleteTbItem(parseInt(btn.getAttribute('data-id'), 10)).catch(function (err) {
+            alert(err && err.message ? err.message : err);
+          });
+        });
+      });
+      bindRowDragDrop();
+    }
+
     window.loadTbCategories = async function () {
-      var listEl = document.getElementById('tbCategoryList');
+      var itemList = document.getElementById('tbItemList');
       try {
-        // Offline-First: immer lokal; Dispo-Merge nur über sync_pull
         var listUrl =
           API_BASE +
           '/api/textbausteine_list?technician_id=' +
@@ -24380,248 +24776,267 @@
           '&local_only=1';
         var r = await fetch(listUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
         var data = await r.json();
-        if (!data.ok || !data.categories) {
-          tbCategories = [];
-          if (listEl) listEl.innerHTML = '<span class="empty">Fehler oder keine Daten.</span>';
-          return;
-        }
-        tbCategories = data.categories;
-        var html = '';
-        tbCategories.forEach(function (cat) {
-          var scope = cat.scope || 'user';
-          var sel = selectedCategoryId === cat.id && selectedCategoryScope === scope ? ' selected' : '';
-          html += '<div class="textbausteine-category' + sel + '" data-id="' + cat.id + '" data-scope="' + escapeHtml(scope) + '">' + escapeHtml(cat.name) + (scope === 'global' ? ' <span class="muted" style="font-size:0.75rem">(global)</span>' : '') + '</div>';
-        });
-        if (listEl) listEl.innerHTML = html || '<span class="empty">Keine Kategorien.</span>';
-        listEl.querySelectorAll('.textbausteine-category').forEach(function (el) {
-          el.addEventListener('click', function () {
-            selectedCategoryId = parseInt(el.dataset.id, 10);
-            selectedCategoryScope = el.dataset.scope || 'user';
-            loadTbCategories();
-            loadTbItems();
+        if (!data.ok) throw new Error(data.error || 'Laden fehlgeschlagen');
+        tbCategories = data.categories || [];
+        tbAllItems = flattenItems(tbCategories);
+        if (selectedCategoryId) {
+          var c = tbCategories.find(function (x) {
+            return sameId(x.id, selectedCategoryId) && (x.scope || 'user') === selectedCategoryScope;
           });
-        });
+          if (!c) {
+            selectedCategoryId = 0;
+            selectedCategoryScope = '';
+            var nameEl = document.getElementById('tbCategoryName');
+            if (nameEl) nameEl.value = '';
+          }
+        }
+        refreshVisibleItems();
+        renderCategorySelect();
+        renderItems();
+        updateCategoryToolbarState();
       } catch (e) {
-        if (listEl) listEl.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
+        if (itemList) itemList.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
       }
     };
 
-    function loadTbItems() {
-      var detailArea = document.getElementById('tbDetailArea');
-      var hint = document.getElementById('tbSelectHint');
-      var titleEl = document.getElementById('tbCategoryTitle');
-      var itemList = document.getElementById('tbItemList');
-      var cat = tbCategories.find(function (c) { return c.id === selectedCategoryId && (c.scope || 'user') === selectedCategoryScope; });
-      if (!cat) {
-        if (detailArea) detailArea.style.display = 'none';
-        if (hint) { hint.style.display = 'block'; hint.textContent = 'Kategorie wählen oder neue anlegen.'; }
-        return;
-      }
-      if (detailArea) detailArea.style.display = 'block';
-      if (hint) hint.style.display = 'none';
-      if (titleEl) titleEl.textContent = cat.name + (cat.scope === 'global' ? ' (global, nur lesbar)' : '');
-      var isUserCategory = cat.scope === 'user';
-      var btnNewItem = document.getElementById('btnTbNewItem');
-      if (btnNewItem) btnNewItem.style.display = isUserCategory ? '' : 'none';
-      var items = cat.items || [];
-      var html = '';
-      items.forEach(function (item) {
-        var itemScope = item.scope || cat.scope || 'user';
-        var showActions = itemScope === 'user';
-        var actionsHtml = showActions
-          ? '<div class="textbausteine-item-actions">' +
-            '<button type="button" class="btn btn-ghost btn-edit-tb" data-id="' + item.id + '">Bearbeiten</button> ' +
-            '<button type="button" class="btn btn-ghost btn-delete-tb" data-id="' + item.id + '">Löschen</button> ' +
-            '<button type="button" class="btn btn-ghost btn-publish-tb" data-id="' + item.id + '">Für alle freigeben</button></div>'
-          : '';
-        html += '<div class="textbausteine-item" data-id="' + item.id + '" data-scope="' + escapeHtml(itemScope) + '">' +
-          '<div class="textbausteine-item-content">' + (item.text ? item.text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '') : '') + '</div>' +
-          actionsHtml + '</div>';
-      });
-      if (itemList) itemList.innerHTML = html || '<span class="empty">Keine Textbausteine in dieser Kategorie.</span>';
-      itemList.querySelectorAll('.btn-edit-tb').forEach(function (btn) {
-        btn.addEventListener('click', function () { openTbEditor(parseInt(btn.dataset.id, 10)); });
-      });
-      itemList.querySelectorAll('.btn-delete-tb').forEach(function (btn) {
-        btn.addEventListener('click', function () { deleteTbItem(parseInt(btn.dataset.id, 10)); });
-      });
-      itemList.querySelectorAll('.btn-publish-tb').forEach(function (btn) {
-        btn.addEventListener('click', function () { publishTbItem(parseInt(btn.dataset.id, 10)); });
-      });
+    function prepareTbEditorFocus() {
+      if (typeof window.kuklaCloseSpStepPicker === 'function') window.kuklaCloseSpStepPicker();
+      if (typeof setSpReactFrameBlocked === 'function') setSpReactFrameBlocked(true);
+      try {
+        var frame = document.getElementById('serviceprotokollReactFrame');
+        if (frame) {
+          frame.blur();
+          if (frame.contentWindow) frame.contentWindow.blur();
+        }
+        window.focus();
+      } catch (e) { /* ignore */ }
     }
 
     function openTbEditor(itemId) {
-      editingItemId = itemId;
-      var editor = document.getElementById('richtextEditor');
+      editingItemId = itemId || 0;
+      var deEl = document.getElementById('tbTextDe');
+      var enEl = document.getElementById('tbTextEn');
       var modal = document.getElementById('modalTbEditor');
       var titleEl = document.getElementById('modalTbEditorTitle');
-      if (itemId) {
-        var item = null;
-        tbCategories.some(function (cat) {
-          item = (cat.items || []).find(function (i) { return i.id === itemId; });
-          return !!item;
-        });
-        if (editor) editor.innerHTML = item ? item.text : '';
-        if (titleEl) titleEl.textContent = 'Textbaustein bearbeiten';
-      } else {
-        if (editor) editor.innerHTML = '';
-        if (titleEl) titleEl.textContent = 'Neuer Textbaustein';
+      var item = tbAllItems.concat(tbItems).find(function (x) {
+        return sameId(x.id, itemId) && x.scope === 'user';
+      }) || {};
+      if (deEl) deEl.value = itemId ? (item.text_de || item.text || '') : '';
+      if (enEl) enEl.value = itemId ? (item.text_en || '') : '';
+      if (titleEl) titleEl.textContent = itemId ? 'Textbaustein bearbeiten' : 'Neuer Textbaustein';
+      if (modal) {
+        modal.classList.add('active');
+        modal.setAttribute('aria-hidden', 'false');
       }
-      if (modal) modal.classList.add('active');
-      if (editor) editor.focus();
+      prepareTbEditorFocus();
+      if (deEl) {
+        window.setTimeout(function () {
+          try {
+            deEl.focus();
+            if (typeof deEl.select === 'function') deEl.select();
+          } catch (e) { /* ignore */ }
+        }, 40);
+      }
     }
 
     function closeTbEditor() {
-      editingItemId = null;
+      editingItemId = 0;
       var modal = document.getElementById('modalTbEditor');
-      if (modal) modal.classList.remove('active');
+      if (modal) {
+        modal.classList.remove('active');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+      if (typeof setSpReactFrameBlocked === 'function') setSpReactFrameBlocked(false);
     }
 
-    document.querySelectorAll('.richtext-btn').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var cmd = btn.dataset.cmd;
-        var imgAction = btn.getAttribute('data-rt-img');
-        var editor = document.getElementById('richtextEditor');
-        if (imgAction) {
-          if (editor && window.KuklaEditorImages) {
-            window.KuklaEditorImages.handleAction(editor, imgAction);
-          }
-          if (editor) editor.focus();
-          return;
-        }
-        if (!cmd) return;
-        document.execCommand(cmd, false, null);
-        if (editor) editor.focus();
+    async function saveTbItem() {
+      var deEl = document.getElementById('tbTextDe');
+      var enEl = document.getElementById('tbTextEn');
+      var textDe = ((deEl && deEl.value) || '').trim();
+      var textEn = ((enEl && enEl.value) || '').trim();
+      if (!textDe && !textEn) {
+        throw new Error('Bitte mindestens eine Bezeichnung (DE oder EN) eingeben.');
+      }
+      var categoryId = selectedCategoryId;
+      var existing = tbAllItems.concat(tbItems).find(function (x) {
+        return sameId(x.id, editingItemId) && x.scope === 'user';
       });
-    });
-
-    (function bindTbEditorImagePaste() {
-      var editor = document.getElementById('richtextEditor');
-      if (editor && window.KuklaEditorImages) {
-        window.KuklaEditorImages.bindPaste(editor);
+      if (editingItemId && existing) categoryId = existing.category_id;
+      if (!editingItemId && selectedCategoryScope !== 'user') {
+        throw new Error('Neue Textbausteine nur in einer eigenen Kategorie.');
       }
-    })();
-
-    document.getElementById('btnTbEditorSave').addEventListener('click', async function () {
-      var editor = document.getElementById('richtextEditor');
-      var html = editor ? editor.innerHTML : '';
-      var baseUrl = getDispoBaseUrl();
-      if (!baseUrl) { alert('Dispo-URL in Einstellungen eintragen.'); return; }
-      if (!selectedCategoryId) { alert('Kategorie wählen.'); return; }
-      try {
-        var body = {
-          base_url: baseUrl,
-          technician_id: getTechId(),
-          category_id: selectedCategoryId,
-          text: html,
-          id: editingItemId || undefined
-        };
-        var r = await fetch(API_BASE + '/api/textbausteine_save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-          body: JSON.stringify(body)
-        });
-        var data = await r.json().catch(function () { return {}; });
-        if (!r.ok || !data.ok) {
-          alert('Fehler: ' + (data.error || r.status));
-          return;
-        }
-        if (typeof showToast === 'function') showToast('Textbaustein gespeichert.');
-        closeTbEditor();
-        loadTbCategories();
-        loadTbItems();
-      } catch (e) {
-        alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt'));
+      if (!categoryId) {
+        throw new Error('Zuerst eine eigene Kategorie wählen oder erstellen.');
       }
-    });
-
-    document.getElementById('btnTbEditorCancel').addEventListener('click', closeTbEditor);
+      var maxSort = tbItems.reduce(function (m, s) { return Math.max(m, s.sort_order || 0); }, 0);
+      var body = {
+        base_url: getDispoBaseUrl(),
+        technician_id: getTechId(),
+        category_id: categoryId,
+        text: textDe,
+        text_de: textDe,
+        text_en: textEn,
+        id: editingItemId || undefined,
+        sort_order: editingItemId ? (existing && existing.sort_order) : maxSort + 1
+      };
+      var r = await fetch(API_BASE + '/api/textbausteine_save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Speichern fehlgeschlagen');
+      if (typeof showToast === 'function') showToast('Textbaustein gespeichert.');
+      closeTbEditor();
+      await window.loadTbCategories();
+    }
 
     async function publishTbItem(id) {
-      if (!confirm('Diesen Textbaustein für alle Techniker freigeben? Er wird danach nur noch in der Dispo vom Admin bearbeitet.')) return;
+      if (!confirm('Diesen Textbaustein für alle Techniker freigeben? Er erscheint danach als global und wird in der Dispo verwaltet.')) {
+        return;
+      }
       var baseUrl = getDispoBaseUrl();
       if (!baseUrl) { alert('Dispo-URL in Einstellungen eintragen.'); return; }
-      try {
-        var r = await fetch(API_BASE + '/api/textbausteine_publish_global', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-          body: JSON.stringify({ base_url: baseUrl, technician_id: getTechId(), item_id: id })
-        });
-        var data = await r.json().catch(function () { return {}; });
-        if (!r.ok || !data.ok) {
-          alert('Fehler: ' + (data.error || r.status));
-          return;
-        }
-        if (typeof showToast === 'function') showToast('Textbaustein für alle freigegeben.');
-        loadTbCategories();
-        loadTbItems();
-      } catch (e) {
-        alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt'));
-      }
+      var r = await fetch(API_BASE + '/api/textbausteine_publish_global', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({ base_url: baseUrl, technician_id: getTechId(), item_id: id, id: id })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Freigabe fehlgeschlagen');
+      if (typeof showToast === 'function') showToast('Textbaustein für alle freigegeben.');
+      await window.loadTbCategories();
     }
 
     async function deleteTbItem(id) {
       if (!confirm('Textbaustein wirklich löschen?')) return;
-      var baseUrl = getDispoBaseUrl();
-      if (!baseUrl) return;
-      try {
-        var r = await fetch(API_BASE + '/api/textbausteine_delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-          body: JSON.stringify({ base_url: baseUrl, technician_id: getTechId(), id: id })
-        });
-        var data = await r.json().catch(function () { return {}; });
-        if (!r.ok || !data.ok) {
-          alert('Fehler: ' + (data.error || r.status));
-          return;
-        }
-        if (typeof showToast === 'function') showToast('Textbaustein gelöscht.');
-        loadTbCategories();
-        loadTbItems();
-      } catch (e) {
-        alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt'));
-      }
+      var r = await fetch(API_BASE + '/api/textbausteine_delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({ base_url: getDispoBaseUrl(), technician_id: getTechId(), id: id })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Löschen fehlgeschlagen');
+      if (typeof showToast === 'function') showToast('Textbaustein gelöscht.');
+      await window.loadTbCategories();
     }
 
-    document.getElementById('btnTbNewItem').addEventListener('click', function () {
-      if (!selectedCategoryId) { alert('Zuerst Kategorie wählen.'); return; }
-      openTbEditor(null);
-    });
-
-    document.getElementById('btnTbNewCategory').addEventListener('click', function () {
-      document.getElementById('modalTbCategoryTitle').textContent = 'Neue Kategorie';
-      document.getElementById('tbCategoryName').value = '';
-      document.getElementById('modalTbCategory').classList.add('active');
-    });
-
-    document.getElementById('btnTbCategorySave').addEventListener('click', async function () {
-      var name = (document.getElementById('tbCategoryName').value || '').trim();
-      if (!name) { alert('Name eingeben.'); return; }
-      var baseUrl = getDispoBaseUrl();
-      if (!baseUrl) { alert('Dispo-URL in Einstellungen eintragen.'); return; }
-      try {
-        var r = await fetch(API_BASE + '/api/textbausteine_category_save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-          body: JSON.stringify({ base_url: baseUrl, technician_id: getTechId(), name: name })
-        });
-        var data = await r.json().catch(function () { return {}; });
-        if (!r.ok || !data.ok) {
-          var msg = data.error || (r.status ? 'HTTP ' + r.status : 'Unbekannter Fehler');
-          alert('Fehler: ' + msg);
-          return;
-        }
-        if (typeof showToast === 'function') showToast('Kategorie gespeichert.');
-        document.getElementById('modalTbCategory').classList.remove('active');
-        loadTbCategories();
-      } catch (e) {
-        alert('Fehler: ' + (e && e.message ? e.message : 'Unbekannt'));
+    async function ensureUserCategoryForNewItem() {
+      if (selectedCategoryId && selectedCategoryScope === 'user') return selectedCategoryId;
+      var nameEl = document.getElementById('tbCategoryName');
+      var name = ((nameEl && nameEl.value) || '').trim();
+      if (!name) {
+        throw new Error('Zuerst einen Kategorienamen eingeben und „Kategorie erstellen“, oder eine eigene Kategorie wählen.');
       }
-    });
+      var existing = tbCategories.find(function (x) {
+        return (x.scope || 'user') === 'user'
+          && String(x.name || '').trim().toLowerCase() === name.toLowerCase();
+      });
+      if (existing) {
+        applyCategoryByValue('user:' + existing.id);
+        return existing.id;
+      }
+      var data = await saveCategory(0);
+      var newId = data && (data.local_id || data.id) ? (data.local_id || data.id) : 0;
+      selectedCategoryId = newId;
+      selectedCategoryScope = 'user';
+      await window.loadTbCategories();
+      if (newId) applyCategoryByValue('user:' + newId);
+      return newId;
+    }
 
-    document.getElementById('btnTbCategoryCancel').addEventListener('click', function () {
-      document.getElementById('modalTbCategory').classList.remove('active');
-    });
+    async function saveCategory(id) {
+      var name = (document.getElementById('tbCategoryName').value || '').trim();
+      if (!name) throw new Error('Name eingeben.');
+      var body = {
+        base_url: getDispoBaseUrl(),
+        technician_id: getTechId(),
+        name: name
+      };
+      if (id) body.id = id;
+      var r = await fetch(API_BASE + '/api/textbausteine_category_save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Speichern fehlgeschlagen');
+      return data;
+    }
+
+    async function deleteCategory() {
+      if (!selectedCategoryId || selectedCategoryScope !== 'user') return;
+      if (!confirm('Kategorie löschen? Enthaltene private Textbausteine werden mitgelöscht.')) return;
+      var r = await fetch(API_BASE + '/api/textbausteine_category_delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({
+          base_url: getDispoBaseUrl(),
+          technician_id: getTechId(),
+          id: selectedCategoryId
+        })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Löschen fehlgeschlagen');
+      selectedCategoryId = 0;
+      selectedCategoryScope = '';
+      var nameEl = document.getElementById('tbCategoryName');
+      if (nameEl) nameEl.value = '';
+      await window.loadTbCategories();
+    }
+
+    var categorySelect = document.getElementById('tbCategorySelect');
+    if (categorySelect) {
+      categorySelect.addEventListener('change', function () {
+        applyCategoryByValue(this.value);
+      });
+    }
+    var btnCategorySave = document.getElementById('btnTbCategorySave');
+    if (btnCategorySave) {
+      btnCategorySave.addEventListener('click', function () {
+        if (!selectedCategoryId || selectedCategoryScope !== 'user') return;
+        saveCategory(selectedCategoryId).then(function () {
+          if (typeof showToast === 'function') showToast('Kategorie gespeichert.');
+          return window.loadTbCategories();
+        }).catch(function (e) { alert(e.message); });
+      });
+    }
+    var btnCategoryCreate = document.getElementById('btnTbCategoryCreate');
+    if (btnCategoryCreate) {
+      btnCategoryCreate.addEventListener('click', function () {
+        saveCategory(0).then(function (data) {
+          selectedCategoryId = data && (data.local_id || data.id) ? (data.local_id || data.id) : 0;
+          selectedCategoryScope = 'user';
+          return window.loadTbCategories();
+        }).then(function () {
+          if (selectedCategoryId) applyCategoryByValue('user:' + selectedCategoryId);
+        }).catch(function (e) { alert(e.message); });
+      });
+    }
+    var btnCategoryDelete = document.getElementById('btnTbCategoryDelete');
+    if (btnCategoryDelete) {
+      btnCategoryDelete.addEventListener('click', function () {
+        deleteCategory().catch(function (e) { alert(e.message); });
+      });
+    }
+    var btnNewItem = document.getElementById('btnTbNewItem');
+    if (btnNewItem) {
+      btnNewItem.addEventListener('click', function () {
+        ensureUserCategoryForNewItem().then(function () {
+          openTbEditor(0);
+        }).catch(function (e) { alert(e.message); });
+      });
+    }
+    var btnTbEditorSave = document.getElementById('btnTbEditorSave');
+    if (btnTbEditorSave) {
+      btnTbEditorSave.addEventListener('click', function () {
+        saveTbItem().catch(function (e) { alert(e.message); });
+      });
+    }
+    var btnTbEditorCancel = document.getElementById('btnTbEditorCancel');
+    if (btnTbEditorCancel) {
+      btnTbEditorCancel.addEventListener('click', closeTbEditor);
+    }
   })();
 
   (function initArbeitsschritteView() {
@@ -24827,11 +25242,15 @@
           + (s.bezeichnung_en ? ' <span class="muted">/ ' + esc(s.bezeichnung_en) + '</span>' : '')
           + (global ? ' <span class="muted">(global)</span>' : '') + '</div>'
           + '<div class="as-row-actions">'
-          + (global ? '' : '<button type="button" class="btn btn-ghost btn-as-edit-step" data-id="' + s.id + '">Bearbeiten</button>'
-            + '<button type="button" class="btn btn-ghost btn-as-pub-step" data-id="' + s.id + '">Für alle</button>'
-            + '<button type="button" class="btn btn-ghost btn-as-del-step" data-id="' + s.id + '">Löschen</button>')
+          + (global ? '' : '<button type="button" class="btn btn-ghost btn-as-edit-step" data-id="' + s.id + '" draggable="false">Bearbeiten</button>'
+            + '<button type="button" class="btn btn-ghost btn-as-pub-step" data-id="' + s.id + '" draggable="false">Für alle</button>'
+            + '<button type="button" class="btn btn-ghost btn-as-del-step" data-id="' + s.id + '" draggable="false">Löschen</button>')
           + '</div></div>';
       }).join('');
+      stepList.querySelectorAll('.as-row-actions').forEach(function (wrap) {
+        wrap.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+        wrap.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+      });
       stepList.querySelectorAll('.as-row-check').forEach(function (cb) {
         cb.addEventListener('change', function () {
           var key = cb.getAttribute('data-key');
@@ -24840,13 +25259,29 @@
         });
       });
       stepList.querySelectorAll('.btn-as-edit-step').forEach(function (btn) {
-        btn.addEventListener('click', function () { openStep(parseInt(btn.getAttribute('data-id'), 10)); });
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          openStep(parseInt(btn.getAttribute('data-id'), 10));
+        });
       });
       stepList.querySelectorAll('.btn-as-pub-step').forEach(function (btn) {
-        btn.addEventListener('click', function () { publishStep(parseInt(btn.getAttribute('data-id'), 10)); });
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          publishStep(parseInt(btn.getAttribute('data-id'), 10)).catch(function (err) {
+            alert(err && err.message ? err.message : err);
+          });
+        });
       });
       stepList.querySelectorAll('.btn-as-del-step').forEach(function (btn) {
-        btn.addEventListener('click', function () { deleteStep(parseInt(btn.getAttribute('data-id'), 10)); });
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          deleteStep(parseInt(btn.getAttribute('data-id'), 10)).catch(function (err) {
+            alert(err && err.message ? err.message : err);
+          });
+        });
       });
       bindRowDragDrop();
     }
@@ -24883,6 +25318,16 @@
       document.getElementById('asStepDe').value = s.bezeichnung_de || '';
       document.getElementById('asStepEn').value = s.bezeichnung_en || '';
       document.getElementById('modalAsStep').classList.add('active');
+      if (typeof window.kuklaCloseSpStepPicker === 'function') window.kuklaCloseSpStepPicker();
+      try {
+        var frame = document.getElementById('serviceprotokollReactFrame');
+        if (frame) {
+          frame.blur();
+          if (frame.contentWindow) frame.contentWindow.blur();
+        }
+        window.focus();
+      } catch (e) { /* ignore */ }
+      focusHostTextInput(document.getElementById('asStepDe'));
     }
 
     async function saveStep() {
@@ -24919,6 +25364,9 @@
     }
 
     async function publishStep(id) {
+      if (!confirm('Diesen Arbeitsschritt für alle Techniker freigeben? Er erscheint danach als global und wird in der Dispo verwaltet.')) {
+        return;
+      }
       var baseUrl = getDispoBaseUrl();
       if (!baseUrl) { alert('Dispo-URL in Einstellungen eintragen.'); return; }
       var r = await fetch(API_BASE + '/api/arbeitsschritte_publish_global', {
@@ -24928,6 +25376,7 @@
       });
       var data = await r.json().catch(function () { return {}; });
       if (!r.ok || !data.ok) throw new Error(data.error || 'Freigabe fehlgeschlagen');
+      if (typeof showToast === 'function') showToast('Arbeitsschritt für alle freigegeben.');
       await window.loadArbeitsschritteView();
     }
 

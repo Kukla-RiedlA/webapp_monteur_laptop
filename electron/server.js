@@ -6222,7 +6222,7 @@ function createApp(db) {
       INNER JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
-      WHERE j.status = 'erledigt'
+      WHERE j.status IN ('erledigt', 'abgerechnet')
         AND strftime('%Y', j.end_datetime) = ?
         AND (
           EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
@@ -12851,7 +12851,12 @@ function createApp(db) {
         try {
           const formBody = new URLSearchParams();
           formBody.append('technician_id', String(technicianId));
-          if (body.id && parseInt(body.id, 10) > 0) formBody.append('id', body.id);
+          const catRow = db
+            .prepare(`SELECT server_id FROM textbausteine_user_categories WHERE id = ? AND technician_id = ?`)
+            .get(result.id, technicianId);
+          const dispoCatId =
+            (catRow && parseInt(catRow.server_id, 10)) || (parseInt(body.id, 10) > 0 ? parseInt(body.id, 10) : 0);
+          if (dispoCatId > 0) formBody.append('id', String(dispoCatId));
           formBody.append('name', body.name || '');
           formBody.append('sort_order', body.sort_order || 0);
           const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_save.php', {
@@ -12887,17 +12892,22 @@ function createApp(db) {
     const technicianId = getTechnicianId(req) || body.technician_id;
     if (!body.id) return res.status(400).json({ ok: false, error: 'id erforderlich.' });
     try {
+      const catRow = db
+        .prepare(`SELECT server_id FROM textbausteine_user_categories WHERE id = ? AND technician_id = ?`)
+        .get(body.id, technicianId);
+      const dispoCatId =
+        (catRow && parseInt(catRow.server_id, 10)) || (parseInt(body.id, 10) > 0 ? parseInt(body.id, 10) : 0);
       textbausteineLocal.deleteCategoryLocal(db, technicianId, body.id);
       textbausteineLocal.queueTextbausteinePending(db, body.id, 'category_delete', {
         technician_id: technicianId,
         baseUrl,
-        id: body.id,
+        id: dispoCatId || body.id,
       });
       save();
-      if (baseUrl && technicianId) {
+      if (baseUrl && technicianId && dispoCatId > 0) {
         try {
           const formBody = new URLSearchParams();
-          formBody.append('id', body.id);
+          formBody.append('id', String(dispoCatId));
           formBody.append('technician_id', String(technicianId));
           const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_delete.php', {
             method: 'POST',
@@ -12927,26 +12937,120 @@ function createApp(db) {
     const body = req.body || {};
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req) || body.technician_id;
-    if (!baseUrl || body.item_id == null) {
-      return res.status(400).json({ ok: false, error: 'baseUrl und item_id erforderlich (nur online).' });
+    const localId = parseInt(body.item_id != null ? body.item_id : body.id, 10);
+    if (!localId) {
+      return res.status(400).json({ ok: false, error: 'item_id erforderlich.' });
+    }
+    if (!baseUrl) {
+      return res.status(400).json({ ok: false, error: 'Dispo-URL in Einstellungen eintragen (Freigabe nur online).' });
+    }
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
     }
     try {
+      textbausteineLocal.ensureTextbausteineSchema(db);
+      const row = textbausteineLocal.getUserItemWithCategory(db, technicianId, localId);
+      if (!row) {
+        return res.status(404).json({ ok: false, error: 'Textbaustein nicht gefunden.' });
+      }
+      let dispoCatId = parseInt(row.category_server_id, 10) || 0;
+      if (!(dispoCatId > 0) && parseInt(row.category_id, 10) > 0) {
+        dispoCatId = parseInt(row.category_id, 10);
+      }
+      if (!(dispoCatId > 0)) {
+        const catBody = new URLSearchParams();
+        catBody.append('technician_id', String(technicianId));
+        catBody.append('name', row.category_name || '');
+        catBody.append('sort_order', String(row.category_sort_order || 0));
+        const catR = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_save.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Technician-Id': String(technicianId),
+          },
+          body: catBody.toString(),
+        });
+        const catData = await catR.json().catch(() => ({}));
+        if (!catR.ok || !catData.ok || !catData.id) {
+          return res.status(catR.ok ? 400 : catR.status).json({
+            ok: false,
+            error: catData.error || 'Kategorie konnte nicht auf Dispo gespeichert werden.',
+          });
+        }
+        dispoCatId = parseInt(catData.id, 10);
+        db.prepare(
+          `UPDATE textbausteine_user_categories SET server_id = ? WHERE id = ? AND technician_id = ?`,
+        ).run(dispoCatId, row.category_id, parseInt(technicianId, 10));
+        save();
+      }
+      let dispoItemId = parseInt(row.server_id, 10) || 0;
+      if (!(dispoItemId > 0) && localId > 0) dispoItemId = localId;
+      if (!(dispoItemId > 0)) {
+        const saveBody = new URLSearchParams();
+        saveBody.append('technician_id', String(technicianId));
+        saveBody.append('category_id', String(dispoCatId));
+        saveBody.append('text', row.text || '');
+        saveBody.append('text_de', row.text || '');
+        saveBody.append('text_en', row.text_en || '');
+        saveBody.append('sort_order', String(row.sort_order || 0));
+        const saveR = await fetch(baseUrl + '/dispo_api/api/textbausteine_save.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Technician-Id': String(technicianId),
+          },
+          body: saveBody.toString(),
+        });
+        const saveData = await saveR.json().catch(() => ({}));
+        if (!saveR.ok || !saveData.ok || !saveData.id) {
+          return res.status(saveR.ok ? 400 : saveR.status).json({
+            ok: false,
+            error: saveData.error || 'Textbaustein konnte nicht auf Dispo gespeichert werden.',
+          });
+        }
+        dispoItemId = parseInt(saveData.id, 10);
+        db.prepare(`UPDATE textbausteine_user SET server_id = ? WHERE id = ? AND technician_id = ?`).run(
+          dispoItemId,
+          localId,
+          parseInt(technicianId, 10),
+        );
+        save();
+      }
       const formBody = new URLSearchParams();
-      formBody.append('technician_id', String(technicianId || 0));
-      formBody.append('item_id', String(body.item_id));
+      formBody.append('technician_id', String(technicianId));
+      formBody.append('item_id', String(dispoItemId));
       const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_publish_global.php', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'X-Technician-Id': String(technicianId || 0),
+          'X-Technician-Id': String(technicianId),
         },
         body: formBody.toString(),
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
-      res.json(data);
+      if (!r.ok || !data.ok) {
+        return res.status(r.status >= 400 ? r.status : 400).json(
+          data.ok === false ? data : { ok: false, error: data.error || 'Freigabe fehlgeschlagen' },
+        );
+      }
+      const globalId = parseInt(data.id, 10);
+      const globalCatId = parseInt(data.global_category_id, 10) || 0;
+      if (!(globalId > 0)) {
+        return res.status(502).json({ ok: false, error: 'Dispo lieferte keine globale ID.' });
+      }
+      textbausteineLocal.promoteUserItemToGlobal(db, technicianId, localId, globalId, globalCatId);
+      db.prepare(
+        `DELETE FROM pending_changes WHERE entity_type = 'textbausteine' AND entity_id = ? AND action IN ('item_save', 'item_delete', 'item_reorder')`,
+      ).run(String(localId));
+      save();
+      return res.json({
+        ok: true,
+        id: globalId,
+        local_id: localId,
+        global_category_id: globalCatId || undefined,
+      });
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      res.status(400).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -12954,8 +13058,10 @@ function createApp(db) {
     const body = req.body || {};
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req) || body.technician_id;
-    if (!body.category_id || body.text === undefined) {
-      return res.status(400).json({ ok: false, error: 'category_id und text erforderlich.' });
+    const textDe = String(body.text_de != null ? body.text_de : (body.text != null ? body.text : '')).trim();
+    const textEn = String(body.text_en != null ? body.text_en : '').trim();
+    if (!body.category_id || (!textDe && !textEn)) {
+      return res.status(400).json({ ok: false, error: 'category_id und text_de oder text_en erforderlich.' });
     }
     try {
       const result = textbausteineLocal.saveItemLocal(db, technicianId, body);
@@ -12970,9 +13076,23 @@ function createApp(db) {
         try {
           const formBody = new URLSearchParams();
           formBody.append('technician_id', String(technicianId));
-          if (body.id && parseInt(body.id, 10) > 0) formBody.append('id', body.id);
-          formBody.append('category_id', body.category_id);
-          formBody.append('text', body.text);
+          const itemRow = db
+            .prepare(`SELECT server_id, category_id, text, text_en FROM textbausteine_user WHERE id = ? AND technician_id = ?`)
+            .get(result.id, technicianId);
+          const dispoItemId =
+            (itemRow && parseInt(itemRow.server_id, 10)) || (parseInt(body.id, 10) > 0 ? parseInt(body.id, 10) : 0);
+          if (dispoItemId > 0) formBody.append('id', String(dispoItemId));
+          const catLocal = itemRow ? itemRow.category_id : body.category_id;
+          const catRow = db
+            .prepare(`SELECT server_id FROM textbausteine_user_categories WHERE id = ? AND technician_id = ?`)
+            .get(catLocal, technicianId);
+          const dispoCatId =
+            (catRow && parseInt(catRow.server_id, 10)) || (parseInt(catLocal, 10) > 0 ? parseInt(catLocal, 10) : 0);
+          if (!(dispoCatId > 0)) throw new Error('skip-dispo-no-category');
+          formBody.append('category_id', String(dispoCatId));
+          formBody.append('text', (itemRow && itemRow.text) || textDe);
+          formBody.append('text_de', (itemRow && itemRow.text) || textDe);
+          formBody.append('text_en', (itemRow && itemRow.text_en) || textEn);
           formBody.append('sort_order', body.sort_order || 0);
           const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_save.php', {
             method: 'POST',
@@ -13009,17 +13129,22 @@ function createApp(db) {
     const technicianId = getTechnicianId(req) || body.technician_id;
     if (!body.id) return res.status(400).json({ ok: false, error: 'id erforderlich.' });
     try {
+      const itemRow = db
+        .prepare(`SELECT server_id FROM textbausteine_user WHERE id = ? AND technician_id = ?`)
+        .get(body.id, technicianId);
+      const dispoItemId =
+        (itemRow && parseInt(itemRow.server_id, 10)) || (parseInt(body.id, 10) > 0 ? parseInt(body.id, 10) : 0);
       textbausteineLocal.deleteItemLocal(db, technicianId, body.id);
       textbausteineLocal.queueTextbausteinePending(db, body.id, 'item_delete', {
         technician_id: technicianId,
         baseUrl,
-        id: body.id,
+        id: dispoItemId || body.id,
       });
       save();
-      if (baseUrl) {
+      if (baseUrl && dispoItemId > 0) {
         try {
           const formBody = new URLSearchParams();
-          formBody.append('id', body.id);
+          formBody.append('id', String(dispoItemId));
           const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_delete.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -13036,6 +13161,21 @@ function createApp(db) {
         } catch (_) {}
       }
       res.json({ ok: true, deferred: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.post('/api/textbausteine_reorder', express.json(), async (req, res) => {
+    const body = req.body || {};
+    const technicianId = getTechnicianId(req) || body.technician_id;
+    let orders = body.orders;
+    if (!Array.isArray(orders)) orders = [];
+    try {
+      textbausteineLocal.ensureTextbausteineSchema(db);
+      textbausteineLocal.reorderUserItemsLocal(db, technicianId, orders);
+      save();
+      res.json({ ok: true });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message || String(e) });
     }
@@ -13189,26 +13329,86 @@ function createApp(db) {
     const body = req.body || {};
     const baseUrl = (body.base_url || body.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req) || body.technician_id;
-    if (!baseUrl || body.id == null) {
-      return res.status(400).json({ ok: false, error: 'baseUrl und id erforderlich (nur online).' });
+    const localId = parseInt(body.id, 10);
+    if (!localId) {
+      return res.status(400).json({ ok: false, error: 'id erforderlich.' });
+    }
+    if (!baseUrl) {
+      return res.status(400).json({ ok: false, error: 'Dispo-URL in Einstellungen eintragen (Freigabe nur online).' });
+    }
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
     }
     try {
+      arbeitsschritteLocal.ensureArbeitsschritteSchema(db);
+      const row = db
+        .prepare(
+          `SELECT id, bezeichnung_de, bezeichnung_en, sort_order, server_id
+           FROM arbeitsschritte_user WHERE id = ? AND technician_id = ?`,
+        )
+        .get(localId, parseInt(technicianId, 10));
+      if (!row) {
+        return res.status(404).json({ ok: false, error: 'Schritt nicht gefunden.' });
+      }
+      let dispoUserId = parseInt(row.server_id, 10) || 0;
+      if (!(dispoUserId > 0)) {
+        const saveBody = new URLSearchParams();
+        saveBody.append('technician_id', String(technicianId));
+        saveBody.append('bezeichnung_de', row.bezeichnung_de || '');
+        saveBody.append('bezeichnung_en', row.bezeichnung_en || '');
+        saveBody.append('sort_order', String(row.sort_order || 0));
+        const saveR = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_save.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Technician-Id': String(technicianId),
+          },
+          body: saveBody.toString(),
+        });
+        const saveData = await saveR.json().catch(() => ({}));
+        if (!saveR.ok || !saveData.ok || !saveData.id) {
+          return res.status(saveR.ok ? 400 : saveR.status).json({
+            ok: false,
+            error: saveData.error || 'Schritt konnte nicht auf Dispo gespeichert werden.',
+          });
+        }
+        dispoUserId = parseInt(saveData.id, 10);
+        db.prepare(`UPDATE arbeitsschritte_user SET server_id = ? WHERE id = ? AND technician_id = ?`).run(
+          dispoUserId,
+          localId,
+          parseInt(technicianId, 10),
+        );
+        save();
+      }
       const formBody = new URLSearchParams();
-      formBody.append('technician_id', String(technicianId || 0));
-      formBody.append('id', String(body.id));
+      formBody.append('technician_id', String(technicianId));
+      formBody.append('id', String(dispoUserId));
       const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_publish_global.php', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'X-Technician-Id': String(technicianId || 0),
+          'X-Technician-Id': String(technicianId),
         },
         body: formBody.toString(),
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || 'Fehler' });
-      res.json(data);
+      if (!r.ok || !data.ok) {
+        return res.status(r.status >= 400 ? r.status : 400).json(
+          data.ok === false ? data : { ok: false, error: data.error || 'Freigabe fehlgeschlagen' },
+        );
+      }
+      const globalId = parseInt(data.id, 10);
+      if (!(globalId > 0)) {
+        return res.status(502).json({ ok: false, error: 'Dispo lieferte keine globale ID.' });
+      }
+      arbeitsschritteLocal.promoteUserStepToGlobal(db, technicianId, localId, globalId);
+      db.prepare(
+        `DELETE FROM pending_changes WHERE entity_type = 'arbeitsschritte' AND entity_id = ? AND action IN ('step_save', 'step_publish')`,
+      ).run(String(localId));
+      save();
+      return res.json({ ok: true, id: globalId, local_id: localId });
     } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      res.status(400).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -19259,7 +19459,14 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
         if (p.action === 'category_save') {
           const formBody = new URLSearchParams();
           formBody.append('technician_id', String(techId));
-          if (payloadRaw.id && parseInt(payloadRaw.id, 10) > 0) formBody.append('id', payloadRaw.id);
+          const localCatId = parseInt(p.entity_id, 10);
+          const catRow = db
+            .prepare(`SELECT server_id FROM textbausteine_user_categories WHERE id = ? AND technician_id = ?`)
+            .get(localCatId, techId);
+          const dispoCatId =
+            (catRow && parseInt(catRow.server_id, 10)) ||
+            (payloadRaw.id && parseInt(payloadRaw.id, 10) > 0 ? parseInt(payloadRaw.id, 10) : 0);
+          if (dispoCatId > 0) formBody.append('id', String(dispoCatId));
           formBody.append('name', payloadRaw.name || '');
           formBody.append('sort_order', payloadRaw.sort_order || 0);
           const r = await fetch(tbBase + '/dispo_api/api/textbausteine_category_save.php', {
@@ -19290,9 +19497,29 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
         } else if (p.action === 'item_save') {
           const formBody = new URLSearchParams();
           formBody.append('technician_id', String(techId));
-          if (payloadRaw.id && parseInt(payloadRaw.id, 10) > 0) formBody.append('id', payloadRaw.id);
-          formBody.append('category_id', payloadRaw.category_id);
-          formBody.append('text', payloadRaw.text);
+          const localItemId = parseInt(p.entity_id, 10);
+          const itemRow = db
+            .prepare(`SELECT server_id, category_id, text, text_en FROM textbausteine_user WHERE id = ? AND technician_id = ?`)
+            .get(localItemId, techId);
+          const dispoItemId =
+            (itemRow && parseInt(itemRow.server_id, 10)) ||
+            (payloadRaw.id && parseInt(payloadRaw.id, 10) > 0 ? parseInt(payloadRaw.id, 10) : 0);
+          if (dispoItemId > 0) formBody.append('id', String(dispoItemId));
+          const catLocal = itemRow ? itemRow.category_id : payloadRaw.category_id;
+          const catRow = db
+            .prepare(`SELECT server_id FROM textbausteine_user_categories WHERE id = ? AND technician_id = ?`)
+            .get(catLocal, techId);
+          const dispoCatId =
+            (catRow && parseInt(catRow.server_id, 10)) ||
+            (parseInt(catLocal, 10) > 0 ? parseInt(catLocal, 10) : 0);
+          if (!(dispoCatId > 0)) throw new Error('Kategorie noch nicht auf Dispo.');
+          formBody.append('category_id', String(dispoCatId));
+          const textDe =
+            (itemRow && itemRow.text) || payloadRaw.text_de || payloadRaw.text || '';
+          const textEn = (itemRow && itemRow.text_en) || payloadRaw.text_en || '';
+          formBody.append('text', textDe);
+          formBody.append('text_de', textDe);
+          formBody.append('text_en', textEn);
           formBody.append('sort_order', payloadRaw.sort_order || 0);
           const r = await fetch(tbBase + '/dispo_api/api/textbausteine_save.php', {
             method: 'POST',
@@ -19318,6 +19545,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           });
           const data = await r.json().catch(() => ({}));
           if (!r.ok || !data.ok) throw new Error(data.error || r.statusText);
+        } else if (p.action === 'item_reorder') {
+          db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+          continue;
         } else {
           continue;
         }

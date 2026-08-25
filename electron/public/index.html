@@ -1086,6 +1086,25 @@
     .modal-overlay { position: fixed; top: var(--header-height); left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
     .modal-overlay.active { display: flex; }
     .accept-offline-overlay.modal-overlay.active { align-items: center; justify-content: center; padding: 1rem; z-index: 250; }
+    /* Über dem Serviceprotokoll-iframe (sonst fängt das Embed alle Klicks). */
+    #modalSpCatalog.modal-overlay.active {
+      top: 0;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 10050;
+    }
+    #modalSpCatalog .modal-box {
+      overflow: auto;
+    }
+    #modalAsStep.modal-overlay.active,
+    #modalTbEditor.modal-overlay.active {
+      z-index: 10050;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    #modalTbEditor .modal-box { overflow: auto; }
     .accept-offline-loading { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; padding: 1.5rem 0.5rem; text-align: center; }
     .accept-offline-loading progress { width: 100%; max-width: 20rem; height: 8px; }
     .rams-wizard-overlay.modal-overlay.active { align-items: center; justify-content: center; padding: 1rem; }
@@ -1331,7 +1350,8 @@
     .as-drag { cursor: grab; color: var(--muted); font-size: 1.1rem; line-height: 1; user-select: none; padding: 0 0.25rem; flex-shrink: 0; }
     .as-drag:active { cursor: grabbing; }
     .as-row-check { flex-shrink: 0; margin: 0; width: auto; }
-    .as-row-main { flex: 1; min-width: 0; }
+    .as-row-main { flex: 1; min-width: 0; overflow: hidden; }
+    .as-row-main .tb-preview { white-space: nowrap; }
     .as-row-actions { display: flex; gap: 0.35rem; flex-shrink: 0; flex-wrap: wrap; }
     .sp-catalog-list { max-height: 360px; overflow: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--card); }
     .sp-catalog-list .as-row { cursor: default; }
@@ -2817,70 +2837,42 @@
     </div>
   </main>
   <main id="viewTextbausteine" class="view-textbausteine" aria-label="Textbausteine">
-    <div class="card">
-      <h2>Textbausteine</h2>
-      <p class="muted" style="margin-bottom:1rem">Textbausteine für Montageberichte und andere Protokolle. Jeder Techniker kann Kategorien und Textbausteine anlegen und bearbeiten.</p>
-      <div class="textbausteine-layout">
-        <div class="textbausteine-sidebar">
-          <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem">
-            <button type="button" class="btn btn-primary" id="btnTbNewCategory">+ Kategorie</button>
-          </div>
-          <div id="tbCategoryList"></div>
-        </div>
-        <div class="textbausteine-editor-wrap">
-          <div id="tbDetailArea" style="display:none">
-            <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem">
-              <h3 id="tbCategoryTitle" style="margin:0;font-size:1rem"></h3>
-              <button type="button" class="btn btn-ghost" id="btnTbNewItem">+ Textbaustein</button>
+    <div class="sp-v2-page" style="padding:1rem;max-width:1100px;margin:0 auto">
+      <h2 class="sp-v2-page-title">Textbausteine</h2>
+      <p class="muted" style="margin:0 0 1rem">Masterliste und Kategorien für Montageberichte (global + privat).</p>
+      <section class="sp-v2-section">
+        <div class="sp-v2-section-body">
+          <div class="as-preset-toolbar">
+            <div class="as-field as-field-grow">
+              <label for="tbCategorySelect">Kategorie laden</label>
+              <select id="tbCategorySelect"><option value="">— Kategorie wählen —</option></select>
             </div>
-            <div id="tbItemList"></div>
+            <div class="as-field as-field-grow">
+              <label for="tbCategoryName">Name</label>
+              <input type="text" id="tbCategoryName" placeholder="z. B. Montage, Service">
+            </div>
+            <div class="as-preset-actions">
+              <button type="button" class="btn btn-primary" id="btnTbCategorySave" disabled>Kategorie speichern</button>
+              <button type="button" class="btn btn-primary" id="btnTbCategoryCreate">Kategorie erstellen</button>
+              <button type="button" class="btn btn-ghost" id="btnTbCategoryDelete" disabled title="Eigene Kategorie löschen">Löschen</button>
+            </div>
           </div>
-          <p id="tbSelectHint" class="empty">Kategorie wählen oder neue anlegen.</p>
+          <div class="as-list-header">
+            <strong>Textbausteine</strong>
+            <button type="button" class="btn btn-primary" id="btnTbNewItem" title="Privaten Textbaustein anlegen">+ Textbaustein</button>
+          </div>
+          <div id="tbItemList"></div>
         </div>
-      </div>
+      </section>
     </div>
     <div id="modalTbEditor" class="modal-overlay" aria-hidden="true">
       <div class="modal-box" style="max-width:640px">
         <h3 id="modalTbEditorTitle">Textbaustein bearbeiten</h3>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label>Text (mit Formatierung)</label>
-          <div class="richtext-toolbar">
-            <button type="button" class="richtext-btn" data-cmd="bold" title="Fett"><b>B</b></button>
-            <button type="button" class="richtext-btn" data-cmd="italic" title="Kursiv"><i>I</i></button>
-            <button type="button" class="richtext-btn" data-cmd="underline" title="Unterstrichen"><u>U</u></button>
-            <span style="width:1px;background:var(--muted);margin:0 0.25rem"></span>
-            <button type="button" class="richtext-btn" data-cmd="justifyLeft" title="Linksbündig">≡</button>
-            <button type="button" class="richtext-btn" data-cmd="justifyCenter" title="Zentriert">⊞</button>
-            <button type="button" class="richtext-btn" data-cmd="justifyRight" title="Rechtsbündig">≡</button>
-            <span style="width:1px;background:var(--muted);margin:0 0.25rem"></span>
-            <button type="button" class="richtext-btn" data-cmd="insertUnorderedList" title="Aufzählung">•</button>
-            <button type="button" class="richtext-btn" data-cmd="insertOrderedList" title="Nummerierung">1.</button>
-            <span style="width:1px;background:var(--muted);margin:0 0.25rem"></span>
-            <button type="button" class="richtext-btn" data-rt-img="insert" title="Bild einfügen">Bild</button>
-            <button type="button" class="richtext-btn" data-rt-img="25" title="Bildbreite 25 %">25%</button>
-            <button type="button" class="richtext-btn" data-rt-img="50" title="Bildbreite 50 %">50%</button>
-            <button type="button" class="richtext-btn" data-rt-img="100" title="Bildbreite 100 %">100%</button>
-            <button type="button" class="richtext-btn" data-rt-img="rotate" title="Bild 90° drehen">Drehen</button>
-            <button type="button" class="richtext-btn" data-rt-img="remove" title="Bild entfernen">Entfernen</button>
-          </div>
-          <div id="richtextEditor" class="richtext-editor" contenteditable="true" spellcheck="true" lang="de"></div>
-        </div>
+        <div class="form-group"><label>Bezeichnung DE</label><textarea id="tbTextDe" style="width:100%" rows="4"></textarea></div>
+        <div class="form-group"><label>Bezeichnung EN</label><textarea id="tbTextEn" style="width:100%" rows="4"></textarea></div>
         <div style="display:flex;gap:0.5rem;margin-top:1rem">
           <button type="button" class="btn btn-primary" id="btnTbEditorSave">Speichern</button>
           <button type="button" class="btn btn-ghost" id="btnTbEditorCancel">Abbrechen</button>
-        </div>
-      </div>
-    </div>
-    <div id="modalTbCategory" class="modal-overlay" aria-hidden="true">
-      <div class="modal-box">
-        <h3 id="modalTbCategoryTitle">Neue Kategorie</h3>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label>Name</label>
-          <input type="text" id="tbCategoryName" placeholder="z.B. Montage, Service" style="width:100%;padding:0.5rem;border:1px solid var(--accent);border-radius:4px;background:var(--bg);color:var(--text)">
-        </div>
-        <div style="display:flex;gap:0.5rem">
-          <button type="button" class="btn btn-primary" id="btnTbCategorySave">Speichern</button>
-          <button type="button" class="btn btn-ghost" id="btnTbCategoryCancel">Abbrechen</button>
         </div>
       </div>
     </div>
@@ -2930,10 +2922,10 @@
       </div>
     </div>
   </main>
-  <div id="modalSpCatalog" class="modal-overlay" aria-hidden="true">
+  <div id="modalSpCatalog" class="modal-overlay accept-offline-overlay" aria-hidden="true">
     <div class="modal-box" style="max-width:1280px;width:min(96vw,1280px)">
       <h3>Arbeitsschritte hinzufügen</h3>
-      <p class="muted" style="margin:0 0 0.75rem">Schritte aus dem Katalog wählen oder einen neuen privaten Schritt anlegen.</p>
+      <p class="muted" style="margin:0 0 0.75rem">Schritte aus dem Katalog wählen und „Übernehmen“, oder einen neuen privaten Schritt anlegen – der wird sofort ins Protokoll eingefügt.</p>
       <div class="as-list-header">
         <strong>Verfügbare Schritte</strong>
         <button type="button" class="btn btn-primary" id="btnSpCatalogNewStep">+ Schritt</button>

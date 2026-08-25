@@ -226,6 +226,26 @@ Masterliste + Typ-Presets (global + privat pro Techniker). Scope analog Textbaus
 
 **PWA:** Katalog im Serviceprotokoll ruft `arbeitsschritte_list.php` direkt auf; keine Offline-Verwaltung.
 
+### 5.1d Textbausteine (Dispo `dispo_api/`, Monteur `technician_id`)
+
+Masterliste + Kategorien (global + privat). Items gehören 1:n zu einer Kategorie (`category_id`). Laptop-UI analog Arbeitsschritte (Toolbar Kategorie laden/Name/Speichern/Erstellen/Löschen, eine Liste). Eingabe zweisprachig wie Arbeitsschritte: `text`/`text_de` (Deutsch) und `text_en` (Englisch); mindestens eines Pflicht. `text` bleibt Deutsch (Abwärtskompatibilität), `text_de` ist Alias.
+
+| Endpunkt | Methode | Kurzbeschreibung |
+|----------|---------|------------------|
+| `dispo_api/api/textbausteine_list.php` | GET | `technician_id` → `{ ok, categories: [{ id, scope, name, items: [{ id, text, text_de, text_en, sort_order, scope? }] }] }` |
+| `dispo_api/api/textbausteine_save.php` | POST | User-Item anlegen/ändern (`technician_id`, `category_id` Dispo-ID, `text`/`text_de`, `text_en`, `id?`) |
+| `dispo_api/api/textbausteine_delete.php` | POST | User-Item löschen (`id`) |
+| `dispo_api/api/textbausteine_publish_global.php` | POST | User-Item → global (inkl. `text_en`); Response `{ ok, id, global_category_id }` (`id` = neues globales Item) |
+| `dispo_api/api/textbausteine_category_save.php` | POST | User-Kategorie anlegen/ändern |
+| `dispo_api/api/textbausteine_category_delete.php` | POST | User-Kategorie inkl. Items löschen |
+
+**Monteur-Laptop (Electron-Gateway):**
+- `GET /api/textbausteine_list` — lokaler SQLite-Cache (`local_only=1`)
+- `POST /api/textbausteine_save`, `_delete`, `_publish_global`, `_category_save`, `_category_delete`, `_reorder`
+- `_publish_global`: lokale `item_id` (auch negativ) → ggf. erst Dispo-Save mit `server_id`, dann Publish, lokal nach `textbausteine_global` verschieben
+- `_reorder`: nur **user**-Items lokal (`sort_order`)
+- `sync_pull` / `sync_push` mit `entity_type='textbausteine'` in `pending_changes`
+
 ### 5.1 Dispo-Web Admin (nur eingeloggte Dispo-Session, `perm_admin`)
 
 Nur für die **interne** PHP/JS-Oberfläche; keine Monteur-Apps. Antworten nutzen **`ok`** (boolean) wie in Abschnitt 3.

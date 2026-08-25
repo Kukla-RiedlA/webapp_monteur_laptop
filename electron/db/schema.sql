@@ -187,6 +187,7 @@ CREATE TABLE IF NOT EXISTS textbausteine_user (
   technician_id INTEGER NOT NULL,
   category_id INTEGER NOT NULL,
   text TEXT NOT NULL,
+  text_en TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0,
   server_id INTEGER,
   updated_at TEXT,

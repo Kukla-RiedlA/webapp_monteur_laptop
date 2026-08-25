@@ -410,6 +410,55 @@ function deleteStepLocal(db, technicianId, stepId) {
   return { ok: true };
 }
 
+function promoteUserStepToGlobal(db, technicianId, localUserId, globalId) {
+  const tid = parseInt(technicianId, 10);
+  const uid = parseInt(localUserId, 10);
+  const gid = parseInt(globalId, 10);
+  if (!tid || !uid || !(gid > 0)) throw new Error('id erforderlich.');
+  const row = db
+    .prepare(
+      `SELECT bezeichnung_de, bezeichnung_en, sort_order FROM arbeitsschritte_user WHERE id = ? AND technician_id = ?`,
+    )
+    .get(uid, tid);
+  if (!row) throw new Error('Schritt nicht gefunden.');
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  db.prepare(
+    `INSERT INTO arbeitsschritte_global (id, bezeichnung_de, bezeichnung_en, sort_order, server_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET bezeichnung_de = excluded.bezeichnung_de,
+       bezeichnung_en = excluded.bezeichnung_en, sort_order = excluded.sort_order,
+       server_id = excluded.server_id, updated_at = excluded.updated_at`,
+  ).run(gid, String(row.bezeichnung_de || ''), String(row.bezeichnung_en || ''), parseInt(row.sort_order, 10) || 0, gid, now);
+
+  const refs = db
+    .prepare(
+      `SELECT preset_scope, preset_id, sort_order FROM arbeitsschritte_preset_step WHERE step_scope = 'user' AND step_id = ?`,
+    )
+    .all(uid);
+  refs.forEach(function (ref) {
+    const exists = db
+      .prepare(
+        `SELECT id FROM arbeitsschritte_preset_step
+         WHERE preset_scope = ? AND preset_id = ? AND step_scope = 'global' AND step_id = ?`,
+      )
+      .get(ref.preset_scope, ref.preset_id, gid);
+    if (exists) {
+      db.prepare(
+        `DELETE FROM arbeitsschritte_preset_step
+         WHERE preset_scope = ? AND preset_id = ? AND step_scope = 'user' AND step_id = ?`,
+      ).run(ref.preset_scope, ref.preset_id, uid);
+    } else {
+      db.prepare(
+        `UPDATE arbeitsschritte_preset_step SET step_scope = 'global', step_id = ?
+         WHERE preset_scope = ? AND preset_id = ? AND step_scope = 'user' AND step_id = ?`,
+      ).run(gid, ref.preset_scope, ref.preset_id, uid);
+    }
+  });
+  db.prepare(`DELETE FROM arbeitsschritte_preset_step WHERE step_scope = 'user' AND step_id = ?`).run(uid);
+  db.prepare(`DELETE FROM arbeitsschritte_user WHERE id = ? AND technician_id = ?`).run(uid, tid);
+  return { ok: true, id: gid, scope: 'global' };
+}
+
 function savePresetLocal(db, technicianId, body) {
   const tid = parseInt(technicianId, 10);
   if (!tid) throw new Error('technician_id erforderlich.');
@@ -546,6 +595,7 @@ module.exports = {
   mergeArbeitsschritteFromRemote,
   saveStepLocal,
   deleteStepLocal,
+  promoteUserStepToGlobal,
   savePresetLocal,
   deletePresetLocal,
   queueArbeitsschrittePending,
