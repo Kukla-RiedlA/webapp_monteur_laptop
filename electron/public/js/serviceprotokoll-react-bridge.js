@@ -6,11 +6,27 @@
 
   var frame = null;
   var applying = false;
+  var applyingDepth = 0;
   var pendingFabSwitch = 0;
   var fabSwitchPending = false;
   var jobSwitchPending = false;
   /** Letzter React-State (u. a. Abschluss-Status Justiert) – Quelle vor Speichern. */
   var lastReactPayload = null;
+
+  function reactPayloadFab(payload) {
+    if (!payload || !payload.form) return '';
+    return String(payload.form.activeFab || '').trim();
+  }
+
+  function hostActiveFab() {
+    var api = bridgeApi();
+    if (!api || typeof api.getActiveFab !== 'function') return '';
+    try {
+      return String(api.getActiveFab() || '').trim();
+    } catch (e) {
+      return '';
+    }
+  }
 
   function getFrame() {
     if (!frame) frame = document.getElementById('serviceprotokollReactFrame');
@@ -41,11 +57,13 @@
   function applyFromReact(payload) {
     var api = bridgeApi();
     if (!api || typeof api.applyPayload !== 'function') return;
+    applyingDepth += 1;
     applying = true;
     try {
       api.applyPayload(payload);
     } finally {
-      applying = false;
+      applyingDepth -= 1;
+      applying = applyingDepth > 0;
     }
   }
 
@@ -55,6 +73,9 @@
 
   function flushFromReact() {
     if (!lastReactPayload) return false;
+    var payloadFab = reactPayloadFab(lastReactPayload);
+    var hostFab = hostActiveFab();
+    if (hostFab && payloadFab && payloadFab !== hostFab) return false;
     applyFromReact(lastReactPayload);
     return true;
   }
@@ -62,6 +83,9 @@
   window.serviceprotokollReactBridge = {
     syncToReact: syncToReact,
     flushFromReact: flushFromReact,
+    setAutosaveHint: function (text, isError) {
+      postToReact({ type: 'SP_AUTOSAVE_STATUS', text: text || '', error: !!isError });
+    },
     getLastPayload: function () {
       return lastReactPayload;
     },
@@ -85,8 +109,8 @@
     }
 
     if (data.type === 'SP_STATE_CHANGE' && data.payload) {
-      rememberReactPayload(data.payload);
       if (applying || fabSwitchPending || jobSwitchPending) return;
+      rememberReactPayload(data.payload);
       applyFromReact(data.payload);
       return;
     }
@@ -105,21 +129,31 @@
 
     if (data.type === 'SP_FAB_CHANGE' && data.fab != null && api && typeof api.selectFab === 'function') {
       var switchId = ++pendingFabSwitch;
+      applyingDepth += 1;
       applying = true;
       fabSwitchPending = true;
       Promise.resolve(api.selectFab(String(data.fab))).finally(function () {
         if (switchId !== pendingFabSwitch) return;
-        applying = false;
+        applyingDepth -= 1;
+        applying = applyingDepth > 0;
         syncToReact(true);
-        fabSwitchPending = false;
+        window.setTimeout(function () {
+          if (switchId !== pendingFabSwitch) return;
+          fabSwitchPending = false;
+          syncToReact(true);
+        }, 80);
       });
       return;
     }
 
     if (data.type === 'SP_ACTION' && data.action && api && typeof api.triggerAction === 'function') {
       if (data.payload) {
-        rememberReactPayload(data.payload);
-        applyFromReact(data.payload);
+        var actionFab = reactPayloadFab(data.payload);
+        var actionHostFab = hostActiveFab();
+        if (!actionHostFab || !actionFab || actionFab === actionHostFab) {
+          rememberReactPayload(data.payload);
+          applyFromReact(data.payload);
+        }
       } else {
         flushFromReact();
       }

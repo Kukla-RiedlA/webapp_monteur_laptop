@@ -178,20 +178,6 @@
     .cal-cell { cursor: pointer; }
     .start-card-nested { margin-top: 0.5rem; margin-bottom: 0.75rem; padding: 0.75rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); }
     .start-card-nested h3 { margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--muted); font-weight: 600; }
-    .start-drop-zone {
-      border: 2px dashed var(--accent);
-      border-radius: 8px;
-      padding: 1.25rem 1rem;
-      text-align: center;
-      color: var(--muted);
-      font-size: 0.88rem;
-      margin-bottom: 0.65rem;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .start-drop-zone.drop-target { border-color: var(--focus-ring-color, #6eb5ff); background: rgba(110, 181, 255, 0.08); }
-    .start-drop-zone.start-drop-readonly { opacity: 0.55; pointer-events: none; }
-    .start-mkdir-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.5rem; font-size: 0.88rem; }
-    .start-mkdir-row input[type="text"] { flex: 1; min-width: 120px; max-width: 200px; padding: 0.35rem 0.5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: var(--text); }
     #startExplorerList.dienstreise-explorer-list { max-height: 240px; }
     .view-start .start-left main, .view-start .start-right main { max-width: none; margin: 0; padding: 0; }
     .card { background: var(--card); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--accent); }
@@ -1590,31 +1576,6 @@
               <span class="empty">Kein Auftrag ausgewählt.</span>
             </div>
           </div>
-          <div class="start-card-nested" id="startDropCard">
-            <h3>Dateien ablegen</h3>
-            <div id="startDropZone" class="start-drop-zone" tabindex="0">
-              Dateien hierher ziehen oder einfügen (Strg+V)<br>
-              <span class="muted" style="font-size:0.8rem;">oder Datei wählen und Hochladen</span>
-            </div>
-            <div class="dienstreise-upload-row">
-              <select id="startUploadSubfolder" class="dienstreise-select" aria-label="Zielordner">
-                <option value="Dokumente_Anlage" selected>Dokumente_Anlage</option>
-              </select>
-              <input type="file" id="startFileInput" accept="*" multiple style="max-width: 200px;" />
-              <button type="button" class="btn btn-ghost" id="btnStartUpload">Hochladen</button>
-            </div>
-            <p class="muted" style="font-size:0.8rem;margin:0.25rem 0 0.5rem;">Unter <strong>Dokumente_Anlage</strong>: voller PROJEKTE-NEU-Baum aus der DB (● offline nach Annehmen, ☁ erst beim Öffnen laden; TED nur unter Mechanik-TED). Monteur-Dokumente unter Dokumente_Monteur/&lt;Fileserver-FN&gt;/Montage/&lt;Auftragsordner&gt;/.</p>
-            <span id="startUploadHint" class="settings-saved-hint" aria-live="polite"></span>
-            <div class="start-mkdir-row">
-              <label for="startMkdirParent" class="muted">Neuer Unterordner in</label>
-              <select id="startMkdirParent" class="dienstreise-select">
-                <option value="Dokumente_Anlage" selected>Dokumente_Anlage</option>
-              </select>
-              <input type="text" id="startMkdirName" placeholder="Ordnername" maxlength="120" />
-              <button type="button" class="btn btn-ghost" id="startBtnMkdir">Anlegen</button>
-            </div>
-            <span id="startMkdirHint" class="settings-saved-hint" aria-live="polite"></span>
-          </div>
         </div>
       </main>
     </div>
@@ -1760,7 +1721,10 @@
   <main id="viewProtokolleMontagebericht" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Montagebericht">
     <div class="card sp-v2-card mb-v2-page">
       <div class="sp-v2-topbar mb-v2-topbar">
-        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Montagebericht</h2>
+        <div class="sp-v2-topbar-title-wrap">
+          <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Montagebericht</h2>
+          <p id="montageberichtAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
+        </div>
         <div class="sp-v2-topbar-actions">
           <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickySave" title="Nur Daten speichern (JSON)">Speichern (JSON)</button>
           <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickyPdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
@@ -1905,6 +1869,7 @@
     <div class="card sp-v2-card kw-v2-page">
       <div class="sp-v2-topbar">
         <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Kontrollwiegungsprotokoll</h2>
+        <p id="kontrollwiegungAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
         <div class="sp-v2-topbar-actions">
           <button type="submit" form="kontrollwiegungForm" class="btn btn-primary" id="btnKontrollwiegungStickySave" title="Nur Daten speichern">Speichern (JSON)</button>
           <button type="submit" form="kontrollwiegungForm" class="btn btn-primary" id="btnKontrollwiegungStickyPdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
@@ -2043,6 +2008,7 @@
     <div class="card sp-v2-card sk-v2-page">
       <div class="sp-v2-topbar">
         <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Schleppketten-Test <span class="muted" style="font-weight:normal;font-size:0.85rem">/ chain calibration</span></h2>
+        <p id="schleppkettenAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
         <div class="sp-v2-topbar-actions">
           <button type="submit" form="schleppkettenForm" class="btn btn-primary" id="btnSchleppkettenStickySave" title="Nur Daten speichern">Speichern (JSON)</button>
           <button type="submit" form="schleppkettenForm" class="btn btn-primary" id="btnSchleppkettenStickyPdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
@@ -2218,6 +2184,7 @@
     <div class="card sp-v2-card pz-v2-page">
       <div class="sp-v2-topbar">
         <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Prüfzertifikat <span class="muted" style="font-weight:normal;font-size:0.85rem">/ Manufacturer Inspection</span></h2>
+        <p id="pruefzertifikatAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
         <div class="sp-v2-topbar-actions">
           <button type="button" class="btn btn-ghost" id="btnPruefzertifikatPrefill" title="Daten aus Kontrollwiegung / Schleppketten / Service übernehmen">Aus Protokollen übernehmen</button>
           <button type="submit" form="pruefzertifikatForm" class="btn btn-primary" id="btnPruefzertifikatStickySave" title="Nur Daten speichern" data-mode="data">Speichern (JSON)</button>

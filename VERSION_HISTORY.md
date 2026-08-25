@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.013
+- **Protokolle:** Hintergrund-Zwischenstand lokal (60 s, FN-Wechsel, Verlassen). Festes Speichern (JSON/PDF) geht auf den Server und fragt den Anlagenstamm. Beim Verlassen der Seite Hinweis, wenn noch nicht fest gespeichert – nicht beim FN-Wechsel.
+- **Serviceprotokoll:** FN-Wechsel lädt den Inhalt der neuen Nummer; Speichern übernimmt den React-Stand.
+
 ## V 2.006.012
 - **Protokolle Alle PDF:** Kontrollwiegung erzeugt je FN ein PDF; Montagebericht schreibt das Bericht-PDF in alle FN-Ordner (Button ab zwei FNs).
 - **Protokolle für Kunden:** Filter PDF / CSV / PA / TXT neben Alle/Keine; deaktivierte Endungen werden nicht kopiert oder per E-Mail versendet.

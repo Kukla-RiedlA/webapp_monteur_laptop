@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { cloneMeasurements, defaultBridgePayload, emptyBridgePayload, mergeBridgePayload } from '../bridge-utils';
 import type { SpBridgePayload } from '../hooks/useElectronBridge';
 import { useElectronBridge, useEmbeddedMode } from '../hooks/useElectronBridge';
@@ -51,6 +51,12 @@ export function ServiceProtocolPage() {
 
   const fabChips = fabNumbers.length ? fabNumbers : embedded ? [] : FAB_NUMBERS;
   const displayLang: 'de' | 'en' | 'both' = form.pdfEn && !form.pdfDe ? 'en' : form.pdfDe && form.pdfEn ? 'both' : 'de';
+  const [pendingFab, setPendingFab] = useState<string | null>(null);
+  const activeFabVisual = pendingFab || form.activeFab || '';
+
+  useEffect(() => {
+    if (form.activeFab) setPendingFab(null);
+  }, [form.activeFab]);
 
   const patchForm = useCallback((patch: Partial<ServiceProtocolFormState>) => {
     setBridgeState((prev) => {
@@ -165,16 +171,17 @@ export function ServiceProtocolPage() {
     [bridgeState],
   );
 
-  const { sendAction } = useElectronBridge(bridgeState, setBridgeState, logPayload);
+  const { sendAction, autosaveHint, autosaveError } = useElectronBridge(bridgeState, setBridgeState, logPayload);
 
   const jobOptions =
     jobs.length > 0
-      ? jobs.map((j) => ({ value: j.id, label: j.label }))
+      ? [{ value: '', label: '– Bitte wählen –' }, ...jobs.map((j) => ({ value: j.id, label: j.label }))]
       : form.order
-        ? [{ value: jobId || form.order, label: form.order }]
-        : [];
+        ? [{ value: '', label: '– Bitte wählen –' }, { value: jobId || form.order, label: form.order }]
+        : [{ value: '', label: '– Bitte wählen –' }];
 
   const handleJobChange = (nextJobId: string) => {
+    if (nextJobId === (jobId || '')) return;
     const job = jobs.find((j) => j.id === nextJobId);
     setBridgeState((prev) => {
       const fresh = emptyBridgePayload(prev.jobs);
@@ -187,16 +194,17 @@ export function ServiceProtocolPage() {
         },
       };
     });
-    if (embedded) {
+    if (embedded && nextJobId) {
       window.parent.postMessage({ type: 'SP_JOB_CHANGE', jobId: nextJobId }, '*');
     }
   };
 
   const handleFabChange = (fab: string) => {
+    if (!fab || fab === activeFabVisual) return;
     if (embedded) {
-      setBridgeState((prev) =>
-        mergeBridgePayload(prev, { form: { ...prev.form, activeFab: fab } }),
-      );
+      // Nur Chip markieren. Formularfelder kommen ausschließlich vom Host (SP_SYNC_STATE),
+      // sonst bleibt der alte Inhalt stehen und ein Debounce würde ihn zurückspielen.
+      setPendingFab(fab);
       window.parent.postMessage({ type: 'SP_FAB_CHANGE', fab }, '*');
       return;
     }
@@ -209,9 +217,12 @@ export function ServiceProtocolPage() {
         <header
           className={`mb-5 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20 -mx-4 bg-kukla-page/95 px-4 py-2 backdrop-blur md:-mx-6 md:px-6`}
         >
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-3">
             <SpIcon name="ClipboardList" className="h-8 w-8 shrink-0" />
             <h1 className="text-2xl font-bold text-[#111827] md:text-[1.75rem]">Serviceprotokoll</h1>
+            <span className={`text-sm font-semibold ${autosaveError ? 'text-amber-700' : 'text-[#166534]'}`}>
+              {autosaveHint || 'Zuletzt gespeichert: –'}
+            </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" className="sp-btn-primary" onClick={() => sendAction('stickySave')}>
@@ -286,7 +297,7 @@ export function ServiceProtocolPage() {
                     <NumberChip
                       key={fab}
                       value={fab}
-                      active={form.activeFab === fab}
+                      active={activeFabVisual === fab}
                       onClick={() => handleFabChange(fab)}
                     />
                   ))}

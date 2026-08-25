@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MeasurementRow, ServiceProtocolFormState, TestLoadValues, WorkStep } from '../types';
 
 export interface SpBridgePayload {
@@ -14,7 +14,8 @@ export interface SpBridgePayload {
 type BridgeMessage =
   | { type: 'SP_SYNC_STATE'; payload: SpBridgePayload }
   | { type: 'SP_JOBS'; jobs: { id: string; label: string }[] }
-  | { type: 'SP_TOAST'; message: string };
+  | { type: 'SP_TOAST'; message: string }
+  | { type: 'SP_AUTOSAVE_STATUS'; text?: string; error?: boolean };
 
 const EMBEDDED = typeof window !== 'undefined' && window.self !== window.top;
 
@@ -31,6 +32,8 @@ export function useElectronBridge(
   stateRef.current = state;
   const suppressPush = useRef(false);
   const hostReady = useRef(false);
+  const [autosaveHint, setAutosaveHint] = useState('');
+  const [autosaveError, setAutosaveError] = useState(false);
 
   useEffect(() => {
     if (!EMBEDDED) return;
@@ -46,10 +49,14 @@ export function useElectronBridge(
         setState(data.payload);
         window.setTimeout(() => {
           suppressPush.current = false;
-        }, 250);
+        }, 400);
       }
       if (data.type === 'SP_TOAST' && data.message) {
         console.info('[Serviceprotokoll]', data.message);
+      }
+      if (data.type === 'SP_AUTOSAVE_STATUS') {
+        setAutosaveHint(String(data.text || ''));
+        setAutosaveError(!!data.error);
       }
     }
 
@@ -88,5 +95,5 @@ export function useElectronBridge(
     [onAction],
   );
 
-  return { embedded: EMBEDDED, sendAction };
+  return { embedded: EMBEDDED, sendAction, autosaveHint, autosaveError };
 }

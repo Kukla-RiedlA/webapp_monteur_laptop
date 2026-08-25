@@ -3244,88 +3244,6 @@
     return lines.length ? lines.join('') : '<span class="muted">Kein Baustellen-Ansprechpartner hinterlegt.</span>';
   }
 
-  function getStartUploadRelativeDir() {
-    if (startExplorerSubpath && String(startExplorerSubpath).trim()) {
-      return String(startExplorerSubpath).trim().replace(/\\/g, '/').replace(/\/+$/, '');
-    }
-    var subEl = document.getElementById('startUploadSubfolder');
-    return subEl && subEl.value ? subEl.value : 'Dokumente_Anlage';
-  }
-
-  function uploadDienstreiseFiles(localJobId, relativeDir, fileList, hintEl) {
-    if (!localJobId || !fileList || !fileList.length) {
-      if (hintEl) hintEl.textContent = 'Keine Dateien.';
-      return Promise.resolve(false);
-    }
-    var relDir = (relativeDir || 'Dokumente_Anlage').replace(/\\/g, '/').replace(/\/+$/, '');
-    var snap = getDienstreiseJobSnapshotByLocalId(localJobId) || startPageActiveJobSnapshot;
-    if (isJobAngelegtReadOnly(snap)) {
-      if (hintEl) hintEl.textContent = 'Auftrag ist angelegt – nur Anzeige.';
-      return Promise.resolve(false);
-    }
-    if (hintEl) hintEl.textContent = 'Hochladen …';
-    var chain = Promise.resolve();
-    var okCount = 0;
-    var files = Array.prototype.slice.call(fileList);
-    files.forEach(function (file) {
-      chain = chain.then(function () {
-        return new Promise(function (resolve) {
-          var reader = new FileReader();
-          reader.onload = function () {
-            var b64 = reader.result;
-            if (typeof b64 === 'string' && b64.indexOf('base64,') !== -1) {
-              b64 = b64.slice(b64.indexOf('base64,') + 7);
-            }
-            fetch(API_BASE + '/api/dienstreise/upload', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                job_id: localJobId,
-                relative_path: relDir,
-                filename: file.name,
-                content: b64,
-              }),
-            })
-              .then(function (r) {
-                return r.text().then(function (text) {
-                  var data;
-                  try {
-                    data = text ? JSON.parse(text) : {};
-                  } catch (_) {
-                    data = {};
-                  }
-                  if (r.ok && data.ok) okCount++;
-                  resolve();
-                });
-              })
-              .catch(function () {
-                resolve();
-              });
-          };
-          reader.onerror = function () {
-            resolve();
-          };
-          reader.readAsDataURL(file);
-        });
-      });
-    });
-    return chain.then(function () {
-      if (hintEl) {
-        hintEl.textContent = okCount ? okCount + ' Datei(en) hochgeladen.' : 'Upload fehlgeschlagen.';
-        if (okCount) setTimeout(function () { hintEl.textContent = ''; }, 3000);
-      }
-      if (okCount) {
-        if (getDienstreiseExplorerJobId('start') == localJobId) {
-          loadDienstreiseExplorer(localJobId, startExplorerSubpath, 'start');
-        }
-        if (getDienstreiseExplorerJobId('modal') == localJobId) {
-          loadDienstreiseExplorer(localJobId, dienstreiseExplorerSubpath, 'modal');
-        }
-      }
-      return okCount > 0;
-    });
-  }
-
   function dedupeOpenJobsById(jobs) {
     var arr = Array.isArray(jobs) ? jobs : [];
     var seen = new Set();
@@ -3530,26 +3448,6 @@
     var fi = document.getElementById('dienstreiseFileInput');
     if (sub) sub.disabled = !!ro;
     if (fi) fi.disabled = !!ro;
-    var startUp = document.getElementById('btnStartUpload');
-    var startFi = document.getElementById('startFileInput');
-    var startSub = document.getElementById('startUploadSubfolder');
-    var startMk = document.getElementById('startBtnMkdir');
-    var startMkName = document.getElementById('startMkdirName');
-    var startMkParent = document.getElementById('startMkdirParent');
-    var startDrop = document.getElementById('startDropZone');
-    var startJid = getDienstreiseExplorerJobId('start');
-    var startSnap = startJid ? getDienstreiseJobSnapshotByLocalId(startJid) : null;
-    var startRo = isJobAngelegtReadOnly(startSnap);
-    if (startUp) startUp.disabled = !!startRo;
-    if (startFi) startFi.disabled = !!startRo;
-    if (startSub) startSub.disabled = !!startRo;
-    if (startMk) startMk.disabled = !!startRo;
-    if (startMkName) startMkName.disabled = !!startRo;
-    if (startMkParent) startMkParent.disabled = !!startRo;
-    if (startDrop) {
-      startDrop.classList.toggle('start-drop-readonly', !!startRo);
-      startDrop.setAttribute('aria-disabled', startRo ? 'true' : 'false');
-    }
   }
 
   /** Firmenname / Ort / Flagge neben der Überschrift „Projektdaten“. */
@@ -12227,6 +12125,38 @@
   }
 
   function showView(name) {
+    if (typeof skipProtocolLeaveGuard !== 'undefined' && skipProtocolLeaveGuard) {
+      skipProtocolLeaveGuard = false;
+    } else if (!protocolLeaveDialogOpen && typeof getActiveProtocolAutosaveViewId === 'function' && Array.isArray(protocolAutosaveControllers)) {
+      var currentProtocolViewId = getActiveProtocolAutosaveViewId();
+      var targetProtocolViewId = protocolViewIdForShowViewName(name);
+      if (currentProtocolViewId && currentProtocolViewId !== targetProtocolViewId) {
+        var leaveCtrl = null;
+        for (var lci = 0; lci < protocolAutosaveControllers.length; lci++) {
+          if (protocolAutosaveControllers[lci] && protocolAutosaveControllers[lci].viewId === currentProtocolViewId) {
+            leaveCtrl = protocolAutosaveControllers[lci];
+            break;
+          }
+        }
+        if (leaveCtrl && typeof leaveCtrl.hasUncommittedChanges === 'function' && leaveCtrl.hasUncommittedChanges()) {
+          protocolLeaveDialogOpen = true;
+          showProtocolUncommittedLeaveDialog().then(function (choice) {
+            protocolLeaveDialogOpen = false;
+            if (choice === 'stay') return;
+            if (choice === 'save') {
+              if (typeof leaveCtrl.commitSave === 'function') leaveCtrl.commitSave();
+              return;
+            }
+            skipProtocolLeaveGuard = true;
+            showView(name);
+          });
+          return;
+        }
+      }
+    }
+    if (typeof flushProtocolAutosaveOnViewChange === 'function') {
+      flushProtocolAutosaveOnViewChange(name);
+    }
     const viewStart = document.getElementById('viewStart');
     const viewEinstellungen = document.getElementById('viewEinstellungen');
     const viewProjektdaten = document.getElementById('viewProjektdaten');
@@ -13927,11 +13857,6 @@
         if (!rel) return;
         if (ui.key === 'start') {
           startExplorerSubpath = rel;
-          var mp = document.getElementById('startMkdirParent');
-          var upSub = document.getElementById('startUploadSubfolder');
-          var top = rel.split('/')[0];
-          if (mp && top) mp.value = top;
-          if (upSub && top) upSub.value = top;
         }
         var expandedMap = ui.getExpanded();
         if (expandedMap[rel]) {
@@ -15492,28 +15417,6 @@
     return String(todayJobs[0].id);
   }
 
-  /** Nächster Auftrag mit Start nach heute (aufsteigend nach Einsatzdatum). */
-  function resolveUpcomingProtokollJobId(jobs) {
-    if (!Array.isArray(jobs) || !jobs.length) return '';
-    var today = getProtokollTodayYmd();
-    var upcoming = jobs.filter(function (j) {
-      var s = jobStartYmd(j);
-      return s && s > today;
-    });
-    if (!upcoming.length) return '';
-    if (typeof sortOpenJobsByEinsatzdatumAsc === 'function') {
-      upcoming = sortOpenJobsByEinsatzdatumAsc(upcoming);
-    } else {
-      upcoming.sort(function (a, b) {
-        var sa = jobStartYmd(a);
-        var sb = jobStartYmd(b);
-        if (sa !== sb) return sa < sb ? -1 : 1;
-        return (Number(a.id) || 0) - (Number(b.id) || 0);
-      });
-    }
-    return String(upcoming[0].id);
-  }
-
   function findJobInListById(jobs, id) {
     if (id == null || id === '' || !Array.isArray(jobs)) return null;
     for (var i = 0; i < jobs.length; i++) {
@@ -15525,13 +15428,244 @@
     return null;
   }
 
-  /** true, wenn Auftrag heute läuft oder in der Zukunft startet. */
-  function isProtokollJobCurrentOrUpcoming(job) {
-    if (!job) return false;
-    var today = getProtokollTodayYmd();
-    if (typeof jobCoversYmd === 'function' && jobCoversYmd(job, today)) return true;
-    var s = jobStartYmd(job);
-    return !!(s && s >= today);
+  var protocolAutosaveControllers = [];
+
+  function formatProtocolAutosaveClock() {
+    var d = new Date();
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  function applyProtocolAutosaveHint(el, text, isError) {
+    if (!el) return;
+    el.hidden = false;
+    el.textContent = text || 'Zuletzt gespeichert: –';
+    el.classList.toggle('is-error', !!isError);
+  }
+
+  function protocolAutosaveFingerprint(value) {
+    try {
+      return JSON.stringify(value);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function showProtocolUncommittedLeaveDialog() {
+    return new Promise(function (resolve) {
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay anlage-detail-modal';
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.style.zIndex = '10060';
+      var box = document.createElement('div');
+      box.className = 'modal-box';
+      box.style.maxWidth = '32rem';
+      var title = document.createElement('h3');
+      title.textContent = 'Noch nicht fest gespeichert';
+      var body = document.createElement('p');
+      body.style.margin = '0.75rem 0 1rem';
+      body.style.lineHeight = '1.45';
+      body.textContent =
+        'Die Änderungen sind bisher nur lokal auf diesem Gerät gesichert. Speichern auf dem Server und die Übernahme in den Anlagenstamm wurden noch nicht ausgeführt.';
+      var actions = document.createElement('div');
+      actions.className = 'modal-actions';
+      var btnStay = document.createElement('button');
+      btnStay.type = 'button';
+      btnStay.className = 'btn btn-primary';
+      btnStay.textContent = 'Zurück zum Protokoll';
+      var btnSave = document.createElement('button');
+      btnSave.type = 'button';
+      btnSave.className = 'btn btn-primary';
+      btnSave.textContent = 'Jetzt speichern (JSON)';
+      var btnLeave = document.createElement('button');
+      btnLeave.type = 'button';
+      btnLeave.className = 'btn btn-ghost';
+      btnLeave.textContent = 'Trotzdem verlassen';
+      actions.appendChild(btnStay);
+      actions.appendChild(btnSave);
+      actions.appendChild(btnLeave);
+      box.appendChild(title);
+      box.appendChild(body);
+      box.appendChild(actions);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      function finish(choice) {
+        if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(choice);
+      }
+      btnStay.addEventListener('click', function () { finish('stay'); });
+      btnSave.addEventListener('click', function () { finish('save'); });
+      btnLeave.addEventListener('click', function () { finish('leave'); });
+      overlay.addEventListener('click', function (e) {
+        if (e.target === overlay) finish('stay');
+      });
+      overlay.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          finish('stay');
+        }
+      });
+      setTimeout(function () {
+        try { btnStay.focus(); } catch (err) { /* ignore */ }
+      }, 0);
+    });
+  }
+
+  var skipProtocolLeaveGuard = false;
+  var protocolLeaveDialogOpen = false;
+  var PROTOCOL_AUTOSAVE_VIEW_IDS = [
+    'viewProtokolleMontagebericht',
+    'viewProtokolleKontrollwiegungen',
+    'viewProtokolleSchleppketten',
+    'viewProtokollePruefzertifikat',
+    'viewProtokolleService'
+  ];
+
+  function protocolViewIdForShowViewName(name) {
+    var map = {
+      'protokolle-montagebericht': 'viewProtokolleMontagebericht',
+      'protokolle-kontrollwiegungen': 'viewProtokolleKontrollwiegungen',
+      'protokolle-schleppketten': 'viewProtokolleSchleppketten',
+      'protokolle-pruefzertifikat': 'viewProtokollePruefzertifikat',
+      'protokolle-service': 'viewProtokolleService'
+    };
+    return map[name] || '';
+  }
+
+  function getActiveProtocolAutosaveViewId() {
+    for (var i = 0; i < PROTOCOL_AUTOSAVE_VIEW_IDS.length; i++) {
+      var el = document.getElementById(PROTOCOL_AUTOSAVE_VIEW_IDS[i]);
+      if (el && el.classList.contains('active')) return PROTOCOL_AUTOSAVE_VIEW_IDS[i];
+    }
+    return '';
+  }
+
+  function createProtocolAutosave(opts) {
+    opts = opts || {};
+    var intervalMs = opts.intervalMs > 0 ? opts.intervalMs : 60000;
+    var viewId = opts.viewId || '';
+    var timerId = null;
+    var inFlight = false;
+    var lastSavedFingerprint = '';
+    var lastCommittedFingerprint = '';
+    var sessionUncommitted = false;
+
+    function currentFingerprint() {
+      try {
+        return typeof opts.fingerprint === 'function' ? String(opts.fingerprint() || '') : '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function isViewActive() {
+      var el = document.getElementById(viewId);
+      return !!(el && el.classList.contains('active'));
+    }
+
+    function setHint(ok) {
+      if (typeof opts.setHint !== 'function') return;
+      if (ok) opts.setHint('Zuletzt gespeichert: ' + formatProtocolAutosaveClock(), false);
+      else opts.setHint('Speichern fehlgeschlagen', true);
+    }
+
+    async function runSave(force) {
+      if (inFlight) return { ok: false, skipped: true, reason: 'busy' };
+      if (typeof opts.isReady === 'function' && !opts.isReady()) {
+        return { ok: false, skipped: true, reason: 'not-ready' };
+      }
+      var fp = currentFingerprint();
+      if (!force && fp && fp === lastSavedFingerprint) {
+        return { ok: true, skipped: true, reason: 'unchanged' };
+      }
+      inFlight = true;
+      try {
+        var result = await Promise.race([
+          Promise.resolve(opts.save()),
+          new Promise(function (resolve) {
+            setTimeout(function () { resolve({ ok: false, error: 'timeout' }); }, 12000);
+          })
+        ]);
+        if (!result || result.skipped) {
+          return { ok: true, skipped: true };
+        }
+        if (result.ok === false) {
+          setHint(false);
+          return result;
+        }
+        lastSavedFingerprint = currentFingerprint() || fp;
+        sessionUncommitted = true;
+        setHint(true);
+        return { ok: true };
+      } catch (e) {
+        setHint(false);
+        return { ok: false, error: e };
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    function start() {
+      if (timerId) return;
+      timerId = setInterval(function () {
+        if (!isViewActive()) return;
+        runSave(false);
+      }, intervalMs);
+    }
+
+    function stop() {
+      if (!timerId) return;
+      clearInterval(timerId);
+      timerId = null;
+    }
+
+    var controller = {
+      viewId: viewId,
+      start: start,
+      stop: stop,
+      flush: function () { return runSave(true); },
+      persistBackground: function () {
+        runSave(true).catch(function () { /* FN-Wechsel darf nicht blockieren */ });
+      },
+      markSaved: function () {
+        lastSavedFingerprint = currentFingerprint();
+        lastCommittedFingerprint = lastSavedFingerprint;
+      },
+      markCommitted: function () {
+        sessionUncommitted = false;
+        lastSavedFingerprint = currentFingerprint();
+        lastCommittedFingerprint = lastSavedFingerprint;
+      },
+      noteDirtyFromCurrent: function () {
+        var fp = currentFingerprint();
+        if (!fp) return;
+        if (!lastCommittedFingerprint || fp !== lastCommittedFingerprint) sessionUncommitted = true;
+      },
+      hasUncommittedChanges: function () {
+        if (typeof opts.isReady === 'function' && !opts.isReady()) return false;
+        if (sessionUncommitted) return true;
+        var fp = currentFingerprint();
+        if (!fp || !lastCommittedFingerprint) return false;
+        return fp !== lastCommittedFingerprint;
+      },
+      commitSave: function () {
+        if (typeof opts.commitSave === 'function') opts.commitSave();
+      },
+      isViewActive: isViewActive
+    };
+    protocolAutosaveControllers.push(controller);
+    start();
+    return controller;
+  }
+
+  function flushProtocolAutosaveOnViewChange() {
+    protocolAutosaveControllers.forEach(function (c) {
+      if (!c || typeof c.isViewActive !== 'function' || !c.isViewActive()) return;
+      if (typeof c.flush === 'function') {
+        Promise.resolve(c.flush()).catch(function () { /* best-effort */ });
+      }
+    });
   }
 
   (function initProtokolleMontagebericht() {
@@ -16607,6 +16741,7 @@
               if (pdfBtnClear) pdfBtnClear.style.display = 'none';
             }
           } catch (loadErr) { /* gespeicherte Daten optional */ }
+          if (montageberichtAutosave) montageberichtAutosave.markSaved();
         } catch (e) {
           if (loadToken !== montageberichtJobLoadToken) return;
           kopfdatenEl.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
@@ -16747,25 +16882,9 @@
           });
       });
     }
-    if (form) {
-      form.addEventListener('submit', async function (e) {
-        e.preventDefault();
-        var submitBtn = e.submitter;
-        var allowedIds = {
-          btnMontageberichtSavePdf: true,
-          btnMontageberichtSaveJson: true,
-          btnMontageberichtStickySave: true,
-          btnMontageberichtStickyPdf: true
-        };
-        if (submitBtn && submitBtn.id && !allowedIds[submitBtn.id]) {
-          return;
-        }
-        var jsonOnly = !!(submitBtn && (
-          submitBtn.id === 'btnMontageberichtStickySave' ||
-          submitBtn.id === 'btnMontageberichtSaveJson'
-        ));
-        if (!montageberichtJobData) { alert('Bitte Auftrag wählen.'); return; }
-        var fabBemerkungen = [];
+    function collectMontageberichtFields() {
+      var fabBemerkungen = [];
+      if (fabContainer) {
         fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
           var fn = (block.getAttribute('data-fab') || '').trim();
           if (fn === 'undefined') fn = '';
@@ -16786,20 +16905,22 @@
             textbausteine: textbausteine
           });
         });
-        var parsedFab = montageberichtJobData.fabrikationsnummern ? (function () {
-          try {
-            var p = JSON.parse(montageberichtJobData.fabrikationsnummern);
-            return Array.isArray(p) ? p : [];
-          } catch (errP) { return []; }
-        }()) : [];
-        var fabWithDetails = parsedFab.map(function (r) {
-          return {
-            fabrikationsnummer: (r.fabrikationsnummer || r.Fabrikationsnummer || '').toString().trim(),
-            type: (r.type || r.Type || '').toString().trim(),
-            position: (r.position || r.Position || '').toString().trim(),
-            geliefert_ueber: (r.geliefert_ueber || r.geliefertUeber || '').toString().trim()
-          };
-        });
+      }
+      var parsedFab = montageberichtJobData && montageberichtJobData.fabrikationsnummern ? (function () {
+        try {
+          var p = JSON.parse(montageberichtJobData.fabrikationsnummern);
+          return Array.isArray(p) ? p : [];
+        } catch (errP) { return []; }
+      }()) : [];
+      var fabWithDetails = parsedFab.map(function (r) {
+        return {
+          fabrikationsnummer: (r.fabrikationsnummer || r.Fabrikationsnummer || '').toString().trim(),
+          type: (r.type || r.Type || '').toString().trim(),
+          position: (r.position || r.Position || '').toString().trim(),
+          geliefert_ueber: (r.geliefert_ueber || r.geliefertUeber || '').toString().trim()
+        };
+      });
+      if (fabContainer) {
         fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
           var fn = (block.getAttribute('data-fab') || '').trim();
           var typeInp = block.querySelector('input[data-mb-type]');
@@ -16814,29 +16935,119 @@
             }
           }
         });
-        var geliefertUeberVal = (fabWithDetails[0] && fabWithDetails[0].geliefert_ueber) || '';
-        var bemerkungenEl = document.getElementById('montageberichtBemerkungen');
-        var bemerkungenVal = bemerkungenEl ? getRichEditorPlain(bemerkungenEl) : '';
-        var bemerkungenValHtml = bemerkungenEl ? getRichEditorHtml(bemerkungenEl) : '';
-        var grundVal = grundInput ? getRichEditorPlain(grundInput) : '';
-        var grundValHtml = grundInput ? getRichEditorHtml(grundInput) : '';
-        var projektVal = (document.getElementById('montageberichtProjekt') && document.getElementById('montageberichtProjekt').value) ? document.getElementById('montageberichtProjekt').value.trim() : '';
-        if (!projektVal) {
+      }
+      var geliefertUeberVal = (fabWithDetails[0] && fabWithDetails[0].geliefert_ueber) || '';
+      var bemerkungenEl = document.getElementById('montageberichtBemerkungen');
+      var bemerkungenVal = bemerkungenEl ? getRichEditorPlain(bemerkungenEl) : '';
+      var bemerkungenValHtml = bemerkungenEl ? getRichEditorHtml(bemerkungenEl) : '';
+      var grundVal = grundInput ? getRichEditorPlain(grundInput) : '';
+      var grundValHtml = grundInput ? getRichEditorHtml(grundInput) : '';
+      var projektVal = (document.getElementById('montageberichtProjekt') && document.getElementById('montageberichtProjekt').value)
+        ? document.getElementById('montageberichtProjekt').value.trim()
+        : '';
+      var kopfdaten = {
+        kunde: montageberichtJobData ? montageberichtJobData.customer_name : '',
+        projekt: projektVal,
+        datum: montageberichtJobData
+          ? formatDateRange(montageberichtJobData.start_datetime, montageberichtJobData.end_datetime)
+          : '',
+        servicetechniker: (document.getElementById('technicianName') || {}).textContent || '',
+        ansprechperson: montageberichtJobData ? resolveMontageberichtAnsprechperson(montageberichtJobData) : '',
+        geliefertUeber: geliefertUeberVal,
+        fabrikationsnummern: fabWithDetails,
+        bemerkungen: bemerkungenVal,
+        bemerkungen_html: bemerkungenValHtml
+      };
+      return {
+        fabBemerkungen: fabBemerkungen,
+        kopfdaten: kopfdaten,
+        grundVal: grundVal,
+        grundValHtml: grundValHtml,
+        projektVal: projektVal,
+        languages: getMontageberichtLanguages()
+      };
+    }
+
+    async function persistMontageberichtJsonSilent() {
+      if (!montageberichtJobData || !jobSelect || !jobSelect.value) {
+        return { ok: false, skipped: true };
+      }
+      var fields = collectMontageberichtFields();
+      if (!fields.projektVal && fields.kopfdaten) {
+        fields.projektVal = String(fields.kopfdaten.projekt || '').trim();
+      }
+      var languages = fields.languages && fields.languages.length ? fields.languages : ['de'];
+      var body = {
+        job_id: parseInt(jobSelect.value, 10),
+        language: languages[0],
+        languages: languages,
+        kopfdaten: fields.kopfdaten,
+        fabBemerkungen: fields.fabBemerkungen,
+        grundDesEinsatzes: fields.grundVal,
+        grundDesEinsatzes_html: fields.grundValHtml,
+        freitext: '',
+        jsonOnly: true,
+        local_only: true,
+        skip_dispo_sync: true,
+        dispoBaseUrl: getDispoBaseUrl(),
+        technicianId: getTechId(),
+        serverUsername: getDispoUsername(),
+        serverPassword: getDispoPassword(),
+        signature_override_png: ''
+      };
+      var r = await fetch(API_BASE + '/api/protokolle/montagebericht', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify(body)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) return { ok: false, error: data.error || r.status };
+      return { ok: true };
+    }
+
+    var montageberichtAutosaveHintEl = document.getElementById('montageberichtAutosaveHint');
+    var montageberichtAutosave = createProtocolAutosave({
+      viewId: 'viewProtokolleMontagebericht',
+      isReady: function () {
+        return !!(montageberichtJobData && jobSelect && jobSelect.value);
+      },
+      fingerprint: function () {
+        return protocolAutosaveFingerprint(collectMontageberichtFields());
+      },
+      save: persistMontageberichtJsonSilent,
+      commitSave: function () {
+        var btn = document.getElementById('btnMontageberichtStickySave');
+        if (btn) btn.click();
+      },
+      setHint: function (text, isError) {
+        applyProtocolAutosaveHint(montageberichtAutosaveHintEl, text, isError);
+      }
+    });
+
+    if (form) {
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        var submitBtn = e.submitter;
+        var allowedIds = {
+          btnMontageberichtSavePdf: true,
+          btnMontageberichtSaveJson: true,
+          btnMontageberichtStickySave: true,
+          btnMontageberichtStickyPdf: true
+        };
+        if (submitBtn && submitBtn.id && !allowedIds[submitBtn.id]) {
+          return;
+        }
+        var jsonOnly = !!(submitBtn && (
+          submitBtn.id === 'btnMontageberichtStickySave' ||
+          submitBtn.id === 'btnMontageberichtSaveJson'
+        ));
+        if (!montageberichtJobData) { alert('Bitte Auftrag wählen.'); return; }
+        var fields = collectMontageberichtFields();
+        if (!fields.projektVal) {
           alert('Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm oder manuell).');
           return;
         }
-        var kopfdaten = {
-          kunde: montageberichtJobData.customer_name,
-          projekt: projektVal,
-          datum: formatDateRange(montageberichtJobData.start_datetime, montageberichtJobData.end_datetime),
-          servicetechniker: (document.getElementById('technicianName') || {}).textContent || '',
-          ansprechperson: resolveMontageberichtAnsprechperson(montageberichtJobData),
-          geliefertUeber: geliefertUeberVal,
-          fabrikationsnummern: fabWithDetails,
-          bemerkungen: bemerkungenVal,
-          bemerkungen_html: bemerkungenValHtml
-        };
-        var languages = getMontageberichtLanguages();
+        var languages = fields.languages;
         if (!languages.length) {
           alert('Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).');
           return;
@@ -16845,10 +17056,10 @@
           job_id: parseInt(jobSelect.value, 10),
           language: languages[0],
           languages: languages,
-          kopfdaten: kopfdaten,
-          fabBemerkungen: fabBemerkungen,
-          grundDesEinsatzes: grundVal,
-          grundDesEinsatzes_html: grundValHtml,
+          kopfdaten: fields.kopfdaten,
+          fabBemerkungen: fields.fabBemerkungen,
+          grundDesEinsatzes: fields.grundVal,
+          grundDesEinsatzes_html: fields.grundValHtml,
           freitext: '',
           jsonOnly: jsonOnly,
           dispoBaseUrl: getDispoBaseUrl(),
@@ -16903,6 +17114,7 @@
                 : (Array.isArray(data.languages) && data.languages[0] === 'en' ? ' (GB)' : ' (DE)');
               showToast((jsonOnly ? 'Montagebericht gespeichert' : 'Montagebericht PDF erstellt') + langNote + (data.rel ? (': ' + data.rel) : ''));
             }
+            if (montageberichtAutosave) montageberichtAutosave.markCommitted();
             if (!jsonOnly && data.path) {
               await maybeOpenGeneratedPdf(data.path);
             }
@@ -17565,11 +17777,12 @@
         if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
       }
   
-      async function persistDraftJsonForFab(fab) {
+      async function persistDraftJsonForFab(fab, opts) {
+        opts = opts || {};
         fab = String(fab || '').trim();
         if (!fab || !jobSelect || !jobSelect.value) return null;
-        stashDraftInMemory(fab);
-        var draft = kwDraftByFab[fab] || collectFormDraft();
+        if (!opts.skipStash && !opts.payloadSnapshot) stashDraftInMemory(fab);
+        var draft = opts.payloadSnapshot || kwDraftByFab[fab] || collectFormDraft();
         var body = {
           technician_id: getTechId(),
           job_id: parseInt(jobSelect.value, 10),
@@ -17589,6 +17802,10 @@
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
         };
+        if (opts.localOnly) {
+          body.local_only = true;
+          body.skip_dispo_sync = true;
+        }
         var r = await fetch(API_BASE + '/api/protokolle/kontrollwiegung', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -17604,24 +17821,59 @@
         return data;
       }
 
+      var kontrollwiegungAutosaveHintEl = document.getElementById('kontrollwiegungAutosaveHint');
+      var kontrollwiegungAutosave = createProtocolAutosave({
+        viewId: 'viewProtokolleKontrollwiegungen',
+        isReady: function () {
+          return !!(kontrollwiegungJobData && jobSelect && jobSelect.value && getActiveFab());
+        },
+        fingerprint: function () {
+          return protocolAutosaveFingerprint({
+            fab: getActiveFab(),
+            draft: collectFormDraft()
+          });
+        },
+        save: async function () {
+          var fab = getActiveFab();
+          if (!fab) return { ok: false, skipped: true };
+          await persistDraftJsonForFab(fab, { localOnly: true });
+          var draft = kwDraftByFab[fab];
+          if (draft) {
+            draft.gespeichert_am = new Date().toISOString();
+            updateSpeicherMeta(fab, draft);
+          }
+          return { ok: true };
+        },
+        commitSave: function () {
+          var btn = document.getElementById('btnKontrollwiegungStickySave');
+          if (btn) btn.click();
+        },
+        setHint: function (text, isError) {
+          applyProtocolAutosaveHint(kontrollwiegungAutosaveHintEl, text, isError);
+        }
+      });
+
       function switchKontrollwiegungFab(newFab) {
         newFab = newFab ? String(newFab).trim() : '';
         if (!newFab || kwFabSwitching) return;
         var cur = getActiveFab();
         if (cur === newFab) return;
         kwFabSwitching = true;
-        var persistPrev = Promise.resolve();
         if (cur) {
+          if (kontrollwiegungAutosave) kontrollwiegungAutosave.noteDirtyFromCurrent();
           stashDraftInMemory(cur);
-          persistPrev = persistDraftJsonForFab(cur).catch(function () { /* best-effort */ });
+          persistDraftJsonForFab(cur, {
+            localOnly: true,
+            skipStash: true,
+            payloadSnapshot: kwDraftByFab[cur]
+          }).catch(function () { /* best-effort */ });
         }
-        persistPrev.finally(function () {
-          try {
-            loadFabIntoForm(newFab);
-          } finally {
-            kwFabSwitching = false;
-          }
-        });
+        try {
+          loadFabIntoForm(newFab);
+          if (kontrollwiegungAutosave) kontrollwiegungAutosave.markSaved();
+        } finally {
+          kwFabSwitching = false;
+        }
       }
   
       function patchJobFabStammFields(fab, fields) {
@@ -17822,6 +18074,7 @@
             }
           }
           loadFabIntoForm(preferredFab || fns[0]);
+          if (kontrollwiegungAutosave) kontrollwiegungAutosave.markSaved();
         } else {
           applyDraftToForm({
             durchfuehrungsdatum: todayIsoLocal(),
@@ -17914,6 +18167,7 @@
           if (withPdf && data.pdf_path && !opts.skipAutoOpen) {
             await maybeOpenGeneratedPdf(data.pdf_path);
           }
+          if (kontrollwiegungAutosave) kontrollwiegungAutosave.markCommitted();
           return { ok: true, data: data };
         } catch (err) {
           return { ok: false, error: err && err.message ? err.message : 'Unbekannt' };
@@ -18792,11 +19046,12 @@
       lastProtokollId = draft && draft.protokoll_id != null ? draft.protokoll_id : null;
       if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
     }
-    async function persistDraftJsonForFab(fab) {
+    async function persistDraftJsonForFab(fab, opts) {
+      opts = opts || {};
       fab = String(fab || '').trim();
       if (!fab || !jobSelect || !jobSelect.value) return null;
-      stashDraftInMemory(fab);
-      var draft = skDraftByFab[fab] || collectFormDraft();
+      if (!opts.skipStash && !opts.payloadSnapshot) stashDraftInMemory(fab);
+      var draft = opts.payloadSnapshot || skDraftByFab[fab] || collectFormDraft();
       var body = Object.assign({}, draft, {
         technician_id: getTechId(),
         job_id: parseInt(jobSelect.value, 10),
@@ -18805,6 +19060,10 @@
         serverUsername: getDispoUsername(),
         serverPassword: getDispoPassword()
       });
+      if (opts.localOnly) {
+        body.local_only = true;
+        body.skip_dispo_sync = true;
+      }
       var r = await fetch(API_BASE + '/api/protokolle/schleppketten', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -18819,24 +19078,58 @@
       }
       return data;
     }
+    var schleppkettenAutosaveHintEl = document.getElementById('schleppkettenAutosaveHint');
+    var schleppkettenAutosave = createProtocolAutosave({
+      viewId: 'viewProtokolleSchleppketten',
+      isReady: function () {
+        return !!(skJobData && jobSelect && jobSelect.value && getActiveFab());
+      },
+      fingerprint: function () {
+        return protocolAutosaveFingerprint({
+          fab: getActiveFab(),
+          draft: collectFormDraft()
+        });
+      },
+      save: async function () {
+        var fab = getActiveFab();
+        if (!fab) return { ok: false, skipped: true };
+        await persistDraftJsonForFab(fab, { localOnly: true });
+        var draft = skDraftByFab[fab];
+        if (draft) {
+          draft.gespeichert_am = new Date().toISOString();
+          updateSpeicherMeta(fab, draft);
+        }
+        return { ok: true };
+      },
+      commitSave: function () {
+        var btn = document.getElementById('btnSchleppkettenStickySave');
+        if (btn) btn.click();
+      },
+      setHint: function (text, isError) {
+        applyProtocolAutosaveHint(schleppkettenAutosaveHintEl, text, isError);
+      }
+    });
     function switchSchleppkettenFab(newFab) {
       newFab = newFab ? String(newFab).trim() : '';
       if (!newFab || skFabSwitching) return;
       var cur = getActiveFab();
       if (cur === newFab) return;
       skFabSwitching = true;
-      var persistPrev = Promise.resolve();
       if (cur) {
+        if (schleppkettenAutosave) schleppkettenAutosave.noteDirtyFromCurrent();
         stashDraftInMemory(cur);
-        persistPrev = persistDraftJsonForFab(cur).catch(function () { /* best-effort */ });
+        persistDraftJsonForFab(cur, {
+          localOnly: true,
+          skipStash: true,
+          payloadSnapshot: skDraftByFab[cur]
+        }).catch(function () { /* best-effort */ });
       }
-      persistPrev.finally(function () {
-        try {
-          loadFabIntoForm(newFab);
-        } finally {
-          skFabSwitching = false;
-        }
-      });
+      try {
+        loadFabIntoForm(newFab);
+        if (schleppkettenAutosave) schleppkettenAutosave.markSaved();
+      } finally {
+        skFabSwitching = false;
+      }
     }
     function patchJobFabStammFields(fab, fields) {
       if (!skJobData || !skJobData.fabrikationsnummern || !fields) return;
@@ -19047,6 +19340,7 @@
           }
         }
         loadFabIntoForm(preferredFab || fns[0]);
+        if (schleppkettenAutosave) schleppkettenAutosave.markSaved();
       } else {
         applyDraftToForm({
           durchfuehrungsdatum: todayIsoLocal(),
@@ -19148,6 +19442,7 @@
         if (withPdf && data.pdf_path && !opts.skipAutoOpen) {
           await maybeOpenGeneratedPdf(data.pdf_path);
         }
+        if (schleppkettenAutosave) schleppkettenAutosave.markCommitted();
         return { ok: true, data: data };
       } catch (err) {
         return { ok: false, error: err && err.message ? err.message : 'Unbekannt' };
@@ -19310,6 +19605,7 @@
 
     var pzJobData = null;
     var pzDraftByFab = {};
+    var pzAutosave = null;
     var activeFab = '';
     var saveMode = 'data';
     var linkedIds = {};
@@ -19666,10 +19962,20 @@
       if (!newFab) return;
       var cur = getActiveFab();
       if (cur === newFab) return;
-      if (cur) pzDraftByFab[cur] = Object.assign({}, collectPayload(), { fabrikationsnummer: cur });
+      if (cur) {
+        if (pzAutosave) pzAutosave.noteDirtyFromCurrent();
+        pzDraftByFab[cur] = Object.assign({}, collectPayload(), { fabrikationsnummer: cur });
+        savePruefzertifikatFab(cur, {
+          silent: true,
+          withPdf: false,
+          localOnly: true,
+          payloadSnapshot: pzDraftByFab[cur]
+        }).catch(function () { return null; });
+      }
       setActiveFabValue(newFab);
       renderFabButtonsActive();
       await loadFab(newFab);
+      if (pzAutosave) pzAutosave.markSaved();
     }
     async function loadFab(fab) {
       fab = String(fab || '').trim();
@@ -19812,6 +20118,7 @@
           if (pzDraftByFab[fns[i]]) { preferred = fns[i]; break; }
         }
         await loadFab(preferred || fns[0]);
+        if (pzAutosave) pzAutosave.markSaved();
       } else {
         if (el('pruefzertifikatDatum') && !el('pruefzertifikatDatum').value) el('pruefzertifikatDatum').value = todayIsoLocal();
         if (el('pruefzertifikatNaechste') && !el('pruefzertifikatNaechste').value) el('pruefzertifikatNaechste').value = plusMonthsIso(todayIsoLocal(), 12);
@@ -19845,18 +20152,34 @@
       var silent = !!opts.silent;
       fab = String(fab || '').trim();
       if (!pzJobData || !fab) {
-        return { ok: false, error: 'Auftrag und FN erforderlich.' };
+        return { ok: false, skipped: silent, error: 'Auftrag und FN erforderlich.' };
       }
-      var datum = el('pruefzertifikatDatum') ? el('pruefzertifikatDatum').value : '';
+      var draft;
+      if (opts.payloadSnapshot && typeof opts.payloadSnapshot === 'object') {
+        draft = Object.assign({}, opts.payloadSnapshot, { fabrikationsnummer: fab });
+      } else if (getActiveFab() === fab) {
+        recomputeStatus();
+        draft = collectPayload();
+      } else {
+        draft = pzDraftByFab[fab] ? Object.assign({}, pzDraftByFab[fab], { fabrikationsnummer: fab }) : null;
+      }
+      if (!draft) {
+        return { ok: false, skipped: silent, error: 'Kein Entwurf für FN ' + fab + '.' };
+      }
+      var datum = String(draft.pruefdatum || '').trim();
+      if (!datum && el('pruefzertifikatDatum') && getActiveFab() === fab) {
+        datum = el('pruefzertifikatDatum').value || '';
+        draft.pruefdatum = datum;
+      }
       if (!datum) {
-        return { ok: false, error: 'Bitte Prüfdatum angeben (FN ' + fab + ').' };
+        return { ok: false, skipped: silent, error: 'Bitte Prüfdatum angeben (FN ' + fab + ').' };
       }
-      recomputeStatus();
-      var pdfLangs = collectPdfLanguages();
+      var pdfLangs = Array.isArray(draft.pdf_languages) && draft.pdf_languages.length
+        ? draft.pdf_languages
+        : (Array.isArray(draft.languages) && draft.languages.length ? draft.languages : collectPdfLanguages());
       if (withPdf && !pdfLangs.length) {
         return { ok: false, error: 'Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).' };
       }
-      var draft = collectPayload();
       pzDraftByFab[fab] = Object.assign({}, draft, {
         fabrikationsnummer: fab,
         gespeichert_am: new Date().toISOString()
@@ -19877,6 +20200,10 @@
             : '',
         kunde_unterschrift: ''
       });
+      if (opts.localOnly || (silent && !withPdf)) {
+        body.local_only = true;
+        body.skip_dispo_sync = true;
+      }
       var r = await fetch(API_BASE + '/api/pruefzertifikat_save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
@@ -19906,8 +20233,38 @@
           }
         }
       }
+      if (!opts.localOnly && pzAutosave) pzAutosave.markCommitted();
       return { ok: true, data: data, fab: fab };
     }
+
+    var pruefzertifikatAutosaveHintEl = document.getElementById('pruefzertifikatAutosaveHint');
+    pzAutosave = createProtocolAutosave({
+      viewId: 'viewProtokollePruefzertifikat',
+      isReady: function () {
+        return !!(pzJobData && jobSelect && jobSelect.value && getActiveFab());
+      },
+      fingerprint: function () {
+        return protocolAutosaveFingerprint({
+          fab: getActiveFab(),
+          draft: collectPayload()
+        });
+      },
+      save: async function () {
+        var fab = getActiveFab();
+        if (!fab) return { ok: false, skipped: true };
+        return savePruefzertifikatFab(fab, { silent: true, withPdf: false, localOnly: true });
+      },
+      commitSave: function () {
+        var btn = el('btnPruefzertifikatStickySave');
+        if (btn) {
+          saveMode = 'data';
+          btn.click();
+        }
+      },
+      setHint: function (text, isError) {
+        applyProtocolAutosaveHint(pruefzertifikatAutosaveHintEl, text, isError);
+      }
+    });
 
     var btnPrefill = el('btnPruefzertifikatPrefill');
     if (btnPrefill) btnPrefill.addEventListener('click', function () { runPrefill(getActiveFab(), false); });
@@ -20110,6 +20467,7 @@
     var abbrechenBtn = document.getElementById('serviceprotokollAbbrechen');
 
     var serviceJobData = null;
+    var serviceprotokollAutosave = null;
     var arbeitsschritte = [];
     var lastProtokollId = null;
     var defaultsSource = 'global';
@@ -20381,12 +20739,16 @@
       versSpEl.addEventListener('input', updateVersSpannungHint);
       versSpEl.addEventListener('change', updateVersSpannungHint);
     }
+    var serviceprotokollForceJsonSubmit = false;
     var stickySaveBtn = document.getElementById('btnServiceprotokollStickySave');
     if (stickySaveBtn) {
       stickySaveBtn.addEventListener('click', function () {
         flushServiceprotokollReactToHost();
         var btn = document.getElementById('btnServiceprotokollSaveJson');
-        if (btn) btn.click();
+        if (btn) {
+          serviceprotokollForceJsonSubmit = true;
+          btn.click();
+        }
       });
     }
     var stickyPdfBtn = document.getElementById('btnServiceprotokollStickyPdf');
@@ -20425,37 +20787,24 @@
     function resolveDefaultServiceprotokollJobId(jobs) {
       if (!Array.isArray(jobs) || !jobs.length) return '';
       var preferred = '';
+      var todayYmd = typeof getProtokollTodayYmd === 'function' ? getProtokollTodayYmd() : '';
+      function jobStartsInFuture(job) {
+        var s = jobStartYmd(job);
+        return !!(s && todayYmd && s > todayYmd);
+      }
       // 1) Expliziter Deep-Link
       try {
         preferred = jobIdInServiceJobList(jobs, new URLSearchParams(window.location.search).get('job_id'));
       } catch (e) {}
-      // 2) Start-/Explorer-Kontext nur, wenn Auftrag aktuell oder kommend
+      // 2) Startseiten-Auftrag = aktueller Auftrag, aber nie ein zukünftiger (nächster)
       if (!preferred && typeof startPageActiveJobId !== 'undefined' && startPageActiveJobId) {
         var startJob = findJobInListById(jobs, startPageActiveJobId);
-        if (startJob && isProtokollJobCurrentOrUpcoming(startJob)) {
+        if (startJob && !jobStartsInFuture(startJob)) {
           preferred = String(startJob.id);
         }
       }
-      if (!preferred && typeof getDienstreiseExplorerJobId === 'function') {
-        var ctxId = getDienstreiseExplorerJobId();
-        var ctxJob = findJobInListById(jobs, ctxId);
-        if (ctxJob && isProtokollJobCurrentOrUpcoming(ctxJob)) {
-          preferred = String(ctxJob.id);
-        }
-      }
-      // 3) Heutiger Auftrag, sonst nächster kommender
+      // 3) Gleicher Default wie Montagebericht/Kontrollwiegung/…: heutiger Auftrag
       if (!preferred) preferred = resolveTodayProtokollJobId(jobs);
-      if (!preferred) preferred = resolveUpcomingProtokollJobId(jobs);
-      // 4) Zuletzt verwendeter nur, wenn noch aktuell/kommend (kein sticky Alter Auftrag)
-      if (!preferred) {
-        try {
-          var lastId = localStorage.getItem(SP_LAST_JOB_KEY);
-          var lastJob = findJobInListById(jobs, lastId);
-          if (lastJob && isProtokollJobCurrentOrUpcoming(lastJob)) {
-            preferred = String(lastJob.id);
-          }
-        } catch (e2) {}
-      }
       if (!preferred && jobs.length === 1) preferred = String(jobs[0].id);
       return preferred;
     }
@@ -21188,15 +21537,19 @@
 
     async function persistDraftJsonForFab(fab, opts) {
       opts = opts || {};
-      if (!fab || !jobSelect || !jobSelect.value || !serviceJobData) return;
+      if (!fab || !jobSelect || !jobSelect.value || !serviceJobData) return { ok: false, skipped: true };
       fab = String(fab).trim();
-      if (!opts.skipStash && isServiceprotokollFormReadyForFab(fab)) {
-        stashDraftInMemory(fab);
+      if (!opts.skipStash && (isServiceprotokollFormReadyForFab(fab) || getActiveFab() === fab)) {
+        stashDraftInMemory(fab, { force: true });
       }
       var cached = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fab];
-      if (!opts.payloadSnapshot && !isServiceprotokollFormReadyForFab(fab) && !cached) return;
+      if (!opts.payloadSnapshot && !isServiceprotokollFormReadyForFab(fab) && !cached && getActiveFab() !== fab) {
+        return { ok: false, skipped: true };
+      }
       var payload = opts.payloadSnapshot || collectDraftPayloadForFab(fab);
-      if (!payload.projekt) return;
+      if (!payload.projekt) {
+        payload.projekt = resolveServiceprotokollProjekt(serviceJobData, fab) || '';
+      }
       var body = {
         technician_id: getTechId(),
         job_id: parseInt(jobSelect.value, 10),
@@ -21211,12 +21564,14 @@
         kopf_vmax: payload.kopf_vmax,
         kopf_type: payload.kopf_type,
         kopf_dwc: payload.kopf_dwc,
+        abschluss: payload.abschluss || { status: 'geprueft' },
         languages: payload.languages || collectPdfLanguages(),
         pdf_languages: payload.pdf_languages || payload.languages || collectPdfLanguages(),
         jsonOnly: true,
-        skip_dispo_sync: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
-        base_url: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
-        dispoBaseUrl: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) ? undefined : getDispoBaseUrl(),
+        skip_dispo_sync: opts.localOnly || (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
+        local_only: opts.localOnly || undefined,
+        base_url: (opts.localOnly || (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly())) ? undefined : getDispoBaseUrl(),
+        dispoBaseUrl: (opts.localOnly || (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly())) ? undefined : getDispoBaseUrl(),
         serverUsername: getDispoUsername(),
         serverPassword: getDispoPassword()
       };
@@ -21224,10 +21579,55 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
         body: JSON.stringify(body)
-      }).catch(function () { /* optional bei FN-Wechsel */ });
-      if (opts.background) return;
-      await persistPromise;
+      });
+      if (opts.background) {
+        persistPromise.catch(function () { /* optional bei FN-Wechsel */ });
+        return { ok: true };
+      }
+      var r = await persistPromise;
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        return { ok: false, error: (data && data.error) || r.status };
+      }
+      return { ok: true, data: data };
     }
+
+    serviceprotokollAutosave = createProtocolAutosave({
+      viewId: 'viewProtokolleService',
+      isReady: function () {
+        return !!(serviceJobData && jobSelect && jobSelect.value && getActiveFab() && !serviceprotokollFabSwitching);
+      },
+      fingerprint: function () {
+        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
+          window.serviceprotokollReactBridge.flushFromReact();
+        }
+        var fab = getActiveFab();
+        return protocolAutosaveFingerprint({
+          fab: fab,
+          draft: collectDraftPayloadForFab(fab)
+        });
+      },
+      save: async function () {
+        var fab = getActiveFab();
+        if (!fab || serviceprotokollFabSwitching) return { ok: false, skipped: true };
+        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
+          window.serviceprotokollReactBridge.flushFromReact();
+        }
+        return persistDraftJsonForFab(fab, { localOnly: true });
+      },
+      commitSave: function () {
+        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
+          window.serviceprotokollReactBridge.flushFromReact();
+        }
+        var btn = document.getElementById('btnServiceprotokollStickySave');
+        if (btn) btn.click();
+      },
+      setHint: function (text, isError) {
+        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.setAutosaveHint === 'function') {
+          window.serviceprotokollReactBridge.setAutosaveHint(text, isError);
+        }
+      }
+    });
 
     function renderFabButtonsActive() {
       if (!fabButtonsEl) return;
@@ -21323,27 +21723,27 @@
       if (!newFab) return;
       var cur = getActiveFab();
       if (cur === newFab) return;
-      var loadToken = ++serviceprotokollFabLoadToken;
-      serviceprotokollFabSwitching = true;
-      var persistSnapshot = null;
       if (cur) {
-        if (isServiceprotokollFormReadyForFab(cur)) {
-          stashDraftInMemory(cur);
-          if (serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[cur]) {
-            var snapCandidate = serviceprotokollDraftStore.byFab[cur];
-            if (isMeaningfulServiceprotokollDraft(snapCandidate)) {
-              persistSnapshot = Object.assign({}, snapCandidate);
-            }
-          }
+        if (serviceprotokollAutosave) serviceprotokollAutosave.noteDirtyFromCurrent();
+        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
+          window.serviceprotokollReactBridge.flushFromReact();
         }
-        if (persistSnapshot) {
+        stashDraftInMemory(cur, { force: true });
+        var snapCandidate = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[cur]
+          ? Object.assign({}, serviceprotokollDraftStore.byFab[cur])
+          : collectDraftPayloadForFab(cur);
+        if (snapCandidate) {
           persistDraftJsonForFab(cur, {
             skipAnlagenstamm: true,
             background: true,
-            payloadSnapshot: persistSnapshot
+            localOnly: true,
+            skipStash: true,
+            payloadSnapshot: snapCandidate
           });
         }
       }
+      var loadToken = ++serviceprotokollFabLoadToken;
+      serviceprotokollFabSwitching = true;
       serviceprotokollFormReadyFab = '';
       setActiveFabValue(newFab);
       renderFabButtonsActive();
@@ -21353,6 +21753,7 @@
       } finally {
         if (loadToken === serviceprotokollFabLoadToken) {
           serviceprotokollFabSwitching = false;
+          if (serviceprotokollAutosave) serviceprotokollAutosave.markSaved();
           notifyReactBridge(true);
         }
       }
@@ -22106,6 +22507,7 @@
         applyMessTypeFromStamm(null, jobKopf);
       }
       renderSteps();
+      notifyReactBridge(true);
 
       await applyAnlagenstammFelderFromLocalStamm(fab, {
         loadToken: loadToken,
@@ -22155,8 +22557,6 @@
       if (isServiceprotokollFabLoadCurrent(loadToken, fab)) {
         serviceprotokollFormReadyFab = fab;
         serviceprotokollHostHydrated = true;
-      }
-      if (!serviceprotokollFabSwitching) {
         notifyReactBridge(true);
       }
     }
@@ -22267,6 +22667,7 @@
           setActiveFabValue(firstFab);
           renderFabButtonsActive();
           await loadDefaultsForFab(firstFab, fabLoadToken);
+          if (serviceprotokollAutosave) serviceprotokollAutosave.markSaved();
         }
       } catch (e) {
         if (loadToken === serviceprotokollJobLoadToken) {
@@ -22313,9 +22714,12 @@
       });
       form.addEventListener('submit', async function (e) {
         e.preventDefault();
+        flushServiceprotokollReactToHost();
+        var forceJson = serviceprotokollForceJsonSubmit;
+        serviceprotokollForceJsonSubmit = false;
         var submitBtn = e.submitter;
-        var jsonOnly = !!(submitBtn && submitBtn.id === 'btnServiceprotokollSaveJson');
-        if (!submitBtn || (submitBtn.id !== 'btnServiceprotokollSaveJson' && submitBtn.id !== 'btnServiceprotokollSavePdf')) {
+        var jsonOnly = forceJson || !!(submitBtn && submitBtn.id === 'btnServiceprotokollSaveJson');
+        if (!jsonOnly && (!submitBtn || (submitBtn.id !== 'btnServiceprotokollSaveJson' && submitBtn.id !== 'btnServiceprotokollSavePdf'))) {
           return;
         }
         if (!serviceJobData) { alert('Bitte Auftrag wählen.'); return; }
@@ -22324,13 +22728,17 @@
         var datum = (datumEl && datumEl.value) ? datumEl.value.trim() : '';
         if (!jsonOnly && !datum) { alert('Bitte Datum angeben.'); return; }
         var projektVal = (document.getElementById('serviceprotokollProjekt') && document.getElementById('serviceprotokollProjekt').value) ? document.getElementById('serviceprotokollProjekt').value.trim() : '';
+        if (!projektVal) projektVal = resolveServiceprotokollProjekt(serviceJobData, fab);
+        if (projektVal) {
+          var projElFilled = document.getElementById('serviceprotokollProjekt');
+          if (projElFilled && !String(projElFilled.value || '').trim()) projElFilled.value = projektVal;
+        }
         if (!projektVal) { alert('Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm / manuell).'); return; }
         syncStepsFromDom();
         var stepsPayload = collectArbeitsschrittePayload().filter(function (s) { return s.bezeichnung_de !== '' || s.bezeichnung_en !== ''; });
         if (!jsonOnly && stepsPayload.length === 0) { alert('Mindestens ein Arbeitsschritt mit Bezeichnung erforderlich.'); return; }
         var pdfLangs = collectPdfLanguages();
         if (!jsonOnly && !pdfLangs.length) { alert('Bitte mindestens eine PDF-Sprache wählen (DE und/oder EN).'); return; }
-        // Abschluss-Status (Justiert etc.) VOR async Anlagenstamm-Dialog aus React/DOM sichern
         flushServiceprotokollReactToHost();
         var abschlussPayload = collectAbschlussPayload();
         var applyStamm = false;
@@ -22410,6 +22818,7 @@
             if (getActiveFab() === fab) {
               serviceprotokollFormReadyFab = fab;
             }
+            if (serviceprotokollAutosave) serviceprotokollAutosave.markCommitted();
             if (data.jsonOnly) {
               if (typeof showToast === 'function') showToast('Zwischenstand gespeichert (serviceprotokoll.json).');
             } else {
@@ -22506,6 +22915,7 @@
             prog.setProgress(built.protokolle.length || 1, built.protokolle.length || 1);
             if (data.warning) console.warn('[Serviceprotokoll]', data.warning);
             await loadServiceprotokollDraftsForJob(body.job_id);
+            if (serviceprotokollAutosave) serviceprotokollAutosave.markCommitted();
             if (typeof showToast === 'function') {
               var savedCount = data.saved && data.saved.length ? data.saved.length : 0;
               var expectedCount = built.protokolle.length * (pdfLangs.length || 1);
@@ -22724,10 +23134,6 @@
         }
         renderSteps();
       }
-      if (f.activeFab && f.activeFab !== getActiveFab()) {
-        setActiveFabValue(f.activeFab);
-        renderFabButtonsActive();
-      }
       updateVersSpannungHint();
     }
 
@@ -22771,6 +23177,7 @@
     window.serviceprotokollBridge = {
       pullPayload: spPullPayloadForReact,
       applyPayload: spApplyPayloadFromReact,
+      getActiveFab: getActiveFab,
       selectJob: function (jobId) {
         if (!jobSelect || !jobId) return;
         jobSelect.value = jobId;
@@ -24434,103 +24841,6 @@
     loadCalendarMonth({ soft: true });
   });
   document.getElementById('calShowAllTech').addEventListener('change', () => loadCalendarMonth({ soft: true }));
-
-  (function initStartPageControls() {
-    var dropZone = document.getElementById('startDropZone');
-    var viewStart = document.getElementById('viewStart');
-    if (dropZone) {
-      dropZone.addEventListener('dragover', function (e) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-        dropZone.classList.add('drop-target');
-      });
-      dropZone.addEventListener('dragleave', function () {
-        dropZone.classList.remove('drop-target');
-      });
-      dropZone.addEventListener('drop', function (e) {
-        e.preventDefault();
-        dropZone.classList.remove('drop-target');
-        var jid = startPageActiveJobId;
-        if (!jid || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
-        uploadDienstreiseFiles(jid, getStartUploadRelativeDir(), e.dataTransfer.files, document.getElementById('startUploadHint'));
-      });
-    }
-    if (viewStart) {
-      viewStart.addEventListener('paste', function (e) {
-        if (!isStartViewVisible() || !startPageActiveJobId) return;
-        var files = e.clipboardData && e.clipboardData.files;
-        if (!files || !files.length) return;
-        e.preventDefault();
-        uploadDienstreiseFiles(startPageActiveJobId, getStartUploadRelativeDir(), files, document.getElementById('startUploadHint'));
-      });
-    }
-    var btnUp = document.getElementById('btnStartUpload');
-    if (btnUp) {
-      btnUp.addEventListener('click', function () {
-        var jid = startPageActiveJobId;
-        var fi = document.getElementById('startFileInput');
-        var hint = document.getElementById('startUploadHint');
-        if (!jid) {
-          if (hint) hint.textContent = 'Kein aktiver Auftrag.';
-          return;
-        }
-        if (!fi || !fi.files || !fi.files.length) {
-          if (hint) hint.textContent = 'Bitte Datei(en) wählen.';
-          return;
-        }
-        uploadDienstreiseFiles(jid, getStartUploadRelativeDir(), fi.files, hint).then(function () {
-          if (fi) fi.value = '';
-        });
-      });
-    }
-    var btnMk = document.getElementById('startBtnMkdir');
-    if (btnMk) {
-      btnMk.addEventListener('click', function () {
-        var jid = startPageActiveJobId;
-        var hint = document.getElementById('startMkdirHint');
-        var parentEl = document.getElementById('startMkdirParent');
-        var nameEl = document.getElementById('startMkdirName');
-        if (!jid) {
-          if (hint) hint.textContent = 'Kein aktiver Auftrag.';
-          return;
-        }
-        var parentPath = parentEl && parentEl.value ? parentEl.value : 'Dokumente_Anlage';
-        var folderName = nameEl && nameEl.value ? nameEl.value.trim() : '';
-        if (!folderName) {
-          if (hint) hint.textContent = 'Ordnername eingeben.';
-          return;
-        }
-        if (hint) hint.textContent = 'Wird angelegt …';
-        fetch(API_BASE + '/api/dienstreise/mkdir', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            job_id: jid,
-            parent_subpath: parentPath,
-            folder_name: folderName,
-          }),
-        })
-          .then(function (r) {
-            return r.json();
-          })
-          .then(function (data) {
-            if (!data.ok) {
-              if (hint) hint.textContent = data.error || 'Anlegen fehlgeschlagen.';
-              return;
-            }
-            if (hint) hint.textContent = 'Ordner angelegt.';
-            if (nameEl) nameEl.value = '';
-            setTimeout(function () {
-              if (hint) hint.textContent = '';
-            }, 2500);
-            loadDienstreiseExplorer(jid, startExplorerSubpath, 'start');
-          })
-          .catch(function (err) {
-            if (hint) hint.textContent = err && err.message ? err.message : 'Anlegen fehlgeschlagen.';
-          });
-      });
-    }
-  })();
 
   /** Bridge fuer rams_wizard.js (nach Laden von app.js verfuegbar). */
   window.MonteurRamsBridge = {

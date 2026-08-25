@@ -8553,8 +8553,9 @@ function createApp(db) {
       const grundDesEinsatzes = (body.grundDesEinsatzes || '').trim();
       const grundDesEinsatzesHtml = (body.grundDesEinsatzes_html || '').toString().trim();
       const freitext = (body.freitext || '').trim();
+      const jsonOnlyEarly = body.jsonOnly === true || body.saveJsonOnly === true;
       const projektPflicht = (kopfdaten.projekt != null ? String(kopfdaten.projekt) : '').trim();
-      if (!projektPflicht) {
+      if (!projektPflicht && !jsonOnlyEarly) {
         return res.status(400).json({ ok: false, error: 'Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm / manuell).' });
       }
 
@@ -8837,7 +8838,9 @@ function createApp(db) {
       };
 
       if (jsonOnly) {
-        await runMontageberichtDispoSync();
+        if (!wantsLocalOnlyRequest(body)) {
+          await runMontageberichtDispoSync();
+        }
         return res.json({
           ok: true,
           jsonOnly: true,
@@ -9336,7 +9339,7 @@ function createApp(db) {
       };
       const record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, fab, entry, db, localJobId);
       const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
-      if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
+      if (!wantsLocalOnlyRequest(body) && dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
         const serverJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
         if (serverJobId > 0) {
           const kwPath = resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true);
@@ -10258,7 +10261,7 @@ function createApp(db) {
           }
         }
         save();
-        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
+        if (!wantsLocalOnlyRequest(body) && dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
           const jobRow = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
           const srvJobId = jobRow && jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
           if (srvJobId > 0) {
@@ -10279,30 +10282,32 @@ function createApp(db) {
       }
       let protokollId = record ? record.protokoll_id : 'local:' + Date.now();
       let deferred = false;
-      if (dispoBaseUrl) {
-        try {
-          const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
-          const url = dispoBaseUrl + '/dispo_api/api/pruefzertifikat_save.php';
-          const r = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
-            body: JSON.stringify(payload),
-          });
-          const data = await r.json().catch(() => ({}));
-          if (r.ok && data.ok) {
-            protokollId = data.zertifikat_id || data.protokoll_id || data.id || protokollId;
-            return res.json(Object.assign({}, data, {
-              saved_pdfs: savedPdfs,
-              saved_pdf: savedPdfs[0] && savedPdfs[0].rel,
-              local_protokoll_id: record && record.protokoll_id,
-            }));
+      if (!wantsLocalOnlyRequest(body)) {
+        if (dispoBaseUrl) {
+          try {
+            const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
+            const url = dispoBaseUrl + '/dispo_api/api/pruefzertifikat_save.php';
+            const r = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+              body: JSON.stringify(payload),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (r.ok && data.ok) {
+              protokollId = data.zertifikat_id || data.protokoll_id || data.id || protokollId;
+              return res.json(Object.assign({}, data, {
+                saved_pdfs: savedPdfs,
+                saved_pdf: savedPdfs[0] && savedPdfs[0].rel,
+                local_protokoll_id: record && record.protokoll_id,
+              }));
+            }
+            deferred = true;
+          } catch (_) {
+            deferred = true;
           }
-          deferred = true;
-        } catch (_) {
+        } else {
           deferred = true;
         }
-      } else {
-        deferred = true;
       }
       if (deferred && localJobId) {
         queueDispoProxyPending(
@@ -11648,7 +11653,7 @@ function createApp(db) {
       }
 
       const projekt = String(body.projekt || '').trim();
-      if (!projekt) {
+      if (!projekt && !jsonOnly) {
         return res.status(400).json({ ok: false, error: 'Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm / manuell).' });
       }
 
