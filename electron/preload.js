@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('monteurApp', {
   anlagenstammSearch: (payload) => ipcRenderer.invoke('anlagenstamm:search', payload),
   anlagenstammSave: (payload) => ipcRenderer.invoke('anlagenstamm:save', payload),
   openAnlagenstammAkteWindow: (opts) => ipcRenderer.invoke('anlagenstamm:open-akte-window', opts || {}),
+  openBugReport: () => ipcRenderer.invoke('bug-report:open'),
+  setBugReportAlwaysOnTop: (on) => ipcRenderer.invoke('bug-report:always-on-top', !!on),
   notifyAnlagenstammSaved: (payload) => ipcRenderer.invoke('anlagenstamm:notify-saved', payload || {}),
   onAnlagenstammSaved: (callback) => {
     if (typeof callback !== 'function') return () => {};

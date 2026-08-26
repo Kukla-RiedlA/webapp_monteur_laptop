@@ -1540,6 +1540,21 @@ function createApp(db) {
   });
   registerMonteurDispoWebRoutes(app, { db, dbDir: DB_DIR });
   app.use(express.json({ limit: '50mb' }));
+  const { registerBugReportRoutes } = require('./lib/bug-report-routes');
+  registerBugReportRoutes(app, {
+    resolveDispoServerCreds,
+    authHeaderFromCredentials,
+    fetchWithTimeout,
+    getTechnicianId,
+    getAppVersion: () => {
+      try {
+        const v = require('./version.json');
+        return (v && (v.version || v.label)) || '';
+      } catch (_) {
+        return '';
+      }
+    },
+  });
 
   multiDeviceApi = registerMultiDeviceRoutes({
     app,

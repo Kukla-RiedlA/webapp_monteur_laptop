@@ -14648,6 +14648,14 @@
     });
   })();
   document.getElementById('btnViewEinstellungen').addEventListener('click', () => showView('einstellungen'));
+  const btnBug = document.getElementById('btnViewBugReport');
+  if (btnBug) {
+    btnBug.addEventListener('click', () => {
+      if (typeof monteurApp !== 'undefined' && typeof monteurApp.openBugReport === 'function') {
+        monteurApp.openBugReport();
+      }
+    });
+  }
 
   /** Gemeinsame Bild-Hilfen für Montagebericht- und Textbausteine-Editor (Base64). */
   (function initKuklaEditorImages() {

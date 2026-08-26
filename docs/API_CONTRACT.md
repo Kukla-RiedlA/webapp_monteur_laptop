@@ -246,6 +246,23 @@ Masterliste + Kategorien (global + privat). Items gehören 1:n zu einer Kategori
 - `_reorder`: nur **user**-Items lokal (`sort_order`)
 - `sync_pull` / `sync_push` mit `entity_type='textbausteine'` in `pending_changes`
 
+### 5.1e Bugreport / Wünsche (Dispo `api/`, Laptop-Gateway)
+
+Geteilte Meldungsliste (Bug + Wunsch), Kommentare, Screenshot auf dem Server. Handy-PWA nicht in diesem Paket.
+
+| Endpunkt | Methode | Kurzbeschreibung |
+|----------|---------|------------------|
+| `api/bug_report_list.php` / `api/mobile/bug_report_list.php` | GET | `status` (`open`\|`done`), `kind` (`bug`\|`wish`) → `{ ok, reports[], can_resolve, actor_name }` |
+| `api/bug_report_get.php` / `api/mobile/bug_report_get.php` | GET | `id` → `{ ok, report, can_resolve }` inkl. `comments[]` |
+| `api/bug_report_create.php` / `api/mobile/bug_report_create.php` | POST JSON | `kind`, `title`, `body`, `app_client`, `app_version`, optional `screenshot_base64` |
+| `api/bug_report_comment.php` / `api/mobile/bug_report_comment.php` | POST JSON | `report_id`, `body` |
+| `api/bug_report_set_status.php` / `api/mobile/bug_report_set_status.php` | POST JSON | `id`, `status` (`open`\|`done`) — nur Admin oder Alois Riedl |
+| `api/bug_report_screenshot.php` / `api/mobile/bug_report_screenshot.php` | GET | `id` → Bildbytes; POST JSON `screenshot_base64` |
+
+**Monteur-Laptop:** `GET/POST /api/bug_report/*` proxied auf `api/mobile/bug_report_*.php`.
+
+**Dispo-Desktop:** PHP-Proxy `/api/bug_report_*.php` plus Offline-Fallback `/api/bug-report/*` (SQLite-Spiegel).
+
 ### 5.1 Dispo-Web Admin (nur eingeloggte Dispo-Session, `perm_admin`)
 
 Nur für die **interne** PHP/JS-Oberfläche; keine Monteur-Apps. Antworten nutzen **`ok`** (boolean) wie in Abschnitt 3.

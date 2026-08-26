@@ -9,6 +9,7 @@ const { createImageGalleryWindowManager } = require('./lib/image-gallery-window'
 const { createPdfViewerWindowManager } = require('./lib/pdf-viewer-window');
 const { attachEditContextMenu } = require('./lib/edit-context-menu');
 const { createAnlagenstammAkteWindowManager } = require('./lib/anlagenstamm-akte-window');
+const { createBugReportWindowManager } = require('./lib/bug-report-window');
 const { configureSpellCheckerSession } = require('./lib/spellcheck-session');
 const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
 const {
@@ -31,6 +32,7 @@ let updateCheckScheduled = false;
 let imageGalleryWindows = null;
 let pdfViewerWindows = null;
 let anlagenstammAkteWindows = null;
+let bugReportWindows = null;
 
 function findWindowsUninstaller() {
   if (process.platform !== 'win32') return null;
@@ -222,6 +224,14 @@ ipcMain.handle('anlagenstamm:open-akte-window', async (_event, opts) => {
 ipcMain.handle('anlagenstamm:notify-saved', async (_event, payload) => {
   if (anlagenstammAkteWindows) anlagenstammAkteWindows.notifyListSaved(payload || {});
   return { ok: true };
+});
+ipcMain.handle('bug-report:open', async () => {
+  if (!bugReportWindows) return { ok: false, error: 'not_ready' };
+  return bugReportWindows.openBugReportWindow();
+});
+ipcMain.handle('bug-report:always-on-top', async (_e, on) => {
+  if (!bugReportWindows) return { ok: false };
+  return bugReportWindows.setAlwaysOnTop(!!on);
 });
 
 ipcMain.handle('dienstreise:choose-folder', async () => {
@@ -737,6 +747,7 @@ app.whenReady().then(() => {
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
   pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
   anlagenstammAkteWindows = createAnlagenstammAkteWindowManager(() => mainWindow, () => PORT);
+  bugReportWindows = createBugReportWindowManager(() => mainWindow, () => PORT, () => app.getPath('userData'));
   initLaptopUpdater({ getMainWindow: () => mainWindow });
   getDb().then((db) => {
     const serverApp = createApp(db);
