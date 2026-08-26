@@ -333,8 +333,13 @@ function assembleFromDb(db, localJobId, kind) {
   const extra = parseJsonObject(meta && meta.extra_json, {});
   const revision = meta ? parseInt(meta.revision, 10) || 0 : 0;
   const serverUpdated = meta && meta.server_updated_at ? String(meta.server_updated_at) : null;
+  let localUpdatedAt = null;
+  for (const row of rows) {
+    const t = row && row.updated_at ? String(row.updated_at).trim() : '';
+    if (t && (!localUpdatedAt || t > localUpdatedAt)) localUpdatedAt = t;
+  }
   if (!rows.length && revision <= 0) {
-    return { payload: emptyPayloadForKind(kind), revision: 0, server_updated_at: null };
+    return { payload: emptyPayloadForKind(kind), revision: 0, server_updated_at: null, local_updated_at: null };
   }
   if (isByFabKind(kind)) {
     const byFab = {};
@@ -352,7 +357,7 @@ function assembleFromDb(db, localJobId, kind) {
     let next = parseInt(extra.nextLocalId, 10) || 0;
     if (next < maxLocal + 1) next = maxLocal + 1;
     if (next > 1 || extra.nextLocalId != null) payload.nextLocalId = Math.max(1, next);
-    return { payload, revision, server_updated_at: serverUpdated };
+    return { payload, revision, server_updated_at: serverUpdated, local_updated_at: localUpdatedAt };
   }
   let payload = {};
   for (const row of rows) {
@@ -363,7 +368,7 @@ function assembleFromDb(db, localJobId, kind) {
     }
   }
   if (!Object.keys(payload).length && extra && Object.keys(extra).length) payload = extra;
-  return { payload, revision, server_updated_at: serverUpdated };
+  return { payload, revision, server_updated_at: serverUpdated, local_updated_at: localUpdatedAt };
 }
 
 function importLegacyFile(db, localJobId, basename, reiseDir) {
@@ -402,7 +407,7 @@ function readDraft(db, localJobId, basename, reiseDir) {
   ensureProtocolDraftsSchema(db);
   const kind = kindFromBasename(basename);
   if (!kind || !localJobId) {
-    return { payload: {}, revision: 0, server_updated_at: null };
+    return { payload: {}, revision: 0, server_updated_at: null, local_updated_at: null };
   }
   importLegacyFile(db, localJobId, basename, reiseDir);
   return assembleFromDb(db, localJobId, kind);
@@ -462,6 +467,7 @@ function listDraftsForJob(db, localJobId) {
       kind,
       revision: assembled.revision,
       server_updated_at: assembled.server_updated_at,
+      local_updated_at: assembled.local_updated_at,
       payload: assembled.payload,
     });
   }

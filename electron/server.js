@@ -218,6 +218,7 @@ const {
   evaluateJobPullRemovalGuard,
   fetchWithTimeout,
   DISPO_FETCH_TIMEOUT_MS,
+  isHandledPendingEntityType,
 } = require('./lib/local_first');
 const textbausteineLocal = require('./lib/textbausteine-local');
 const arbeitsschritteLocal = require('./lib/arbeitsschritte-local');
@@ -722,6 +723,17 @@ function writeFileWithRetry(filePath, data, maxRetries = 3) {
   }
 }
 
+function keepExistingLocalPdf(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return false;
+    const st = fs.statSync(filePath);
+    // Dispo-Download darf eine vorhandene lokale PDF nie überschreiben.
+    return !!(st && st.isFile() && st.size > 0);
+  } catch (_) {
+    return false;
+  }
+}
+
 function monteurDbSaveErrorMessage() {
   const e = getLastPersistError();
   if (!e) {
@@ -998,6 +1010,50 @@ function requeueFailedPendingChanges(dbConn) {
   return n;
 }
 
+function requeueFailedPendingByTypes(dbConn, types) {
+  const list = Array.isArray(types) ? types.map((t) => String(t || '')).filter(Boolean) : [];
+  if (!dbConn || !list.length) return 0;
+  const placeholders = list.map(() => '?').join(',');
+  let rows = [];
+  try {
+    rows =
+      dbConn
+        .prepare(
+          `SELECT * FROM pending_changes_failed WHERE entity_type IN (${placeholders}) ORDER BY id ASC`,
+        )
+        .all(...list) || [];
+  } catch (_) {
+    return 0;
+  }
+  if (!rows.length) return 0;
+  const ins = dbConn.prepare(
+    `INSERT INTO pending_changes (entity_type, entity_id, action, payload, created_at, attempts, last_error, last_attempt_at)
+     VALUES (?, ?, ?, ?, ?, 0, NULL, NULL)`,
+  );
+  const del = dbConn.prepare('DELETE FROM pending_changes_failed WHERE id = ?');
+  let n = 0;
+  const apply = () => {
+    for (const row of rows) {
+      ins.run(
+        String(row.entity_type || ''),
+        row.entity_id != null ? String(row.entity_id) : '',
+        String(row.action || ''),
+        row.payload != null ? String(row.payload) : null,
+        row.created_at != null ? String(row.created_at) : null,
+      );
+      del.run(row.id);
+      n += 1;
+    }
+  };
+  if (typeof dbConn.transaction === 'function') {
+    const ret = dbConn.transaction(apply);
+    if (typeof ret === 'function') ret();
+  } else {
+    apply();
+  }
+  return n;
+}
+
 /** Laufzeit-Kontext für IPC / Flush (gesetzt in getDb und createApp). */
 const monteurRuntime = { db: null, save: null, bgJobs: null };
 let getDbPromise = null;
@@ -1054,6 +1110,15 @@ async function loadDbOnce() {
   }
   monteurRuntime.db = wrapper;
   monteurRuntime.save = () => wrapper.save();
+  try {
+    const n = requeueFailedPendingByTypes(wrapper, ['schleppketten', 'pruefzertifikat', 'protocol_draft']);
+    if (n > 0) {
+      console.log('[sync] requeued dead-letter:', n, 'schleppketten/pruefzertifikat/protocol_draft');
+      wrapper.save();
+    }
+  } catch (requeueErr) {
+    console.warn('[sync] requeue dead-letter:', requeueErr && requeueErr.message ? requeueErr.message : requeueErr);
+  }
   return wrapper;
 }
 
@@ -1353,6 +1418,9 @@ function fingerprintDispoBaseForRuntime(urlRaw) {
   return crypto.createHash('sha256').update(base, 'utf8').digest('hex').slice(0, 24);
 }
 
+/** Wird in createApp auf multiDeviceApi.pushJsonDraft gesetzt (pending protocol_draft). */
+let protocolDraftPushImpl = null;
+
 function createApp(db) {
   const app = express();
   app.use(require('./lib/local-gateway-auth').localGatewayExpressMiddleware);
@@ -1494,6 +1562,7 @@ function createApp(db) {
       }
     },
   });
+  protocolDraftPushImpl = (opts) => multiDeviceApi.pushJsonDraft(opts);
 
   /**
    * Protokoll-JSON vom Dispo-Draft-API nach Dokumente_Monteur holen (zweiter Laptop).
@@ -1810,6 +1879,65 @@ function createApp(db) {
 
   /** @type {ReturnType<typeof createBackgroundJobService> | null} */
   let bgJobs = null;
+
+  function enqueueDienstreisePushChanged(localJobId, technicianId, dispoBaseUrl, username, password, extra) {
+    const jobsSvc = bgJobs;
+    const lid = parseInt(localJobId, 10);
+    const tid = parseInt(technicianId, 10);
+    if (!jobsSvc || !Number.isFinite(lid) || lid <= 0 || !Number.isFinite(tid) || tid <= 0) return;
+    const base = String(dispoBaseUrl || '').trim().replace(/\/$/, '');
+    const payload = Object.assign(
+      {
+        job_id: lid,
+        technicianId: tid,
+        technician_id: tid,
+        dispo_base_url: base,
+        dispoBaseUrl: base,
+        dispo_username: username || '',
+        dispo_password: password != null ? String(password) : '',
+        onlyChanged: true,
+      },
+      extra && typeof extra === 'object' ? extra : {},
+    );
+    jobsSvc.enqueue('dienstreise_push', payload, 'dienstreise_push:' + lid);
+    if (typeof jobsSvc.kick === 'function') jobsSvc.kick();
+  }
+
+  function queueProtocolDraftAndFiles(opts) {
+    const o = opts || {};
+    const localJobId = parseInt(o.localJobId, 10);
+    const technicianId = parseInt(o.technicianId, 10);
+    const basename = o.basename;
+    const serverJobId = parseInt(o.serverJobId, 10);
+    if (
+      multiDeviceApi &&
+      typeof multiDeviceApi.queueDraftPushPending === 'function' &&
+      Number.isFinite(localJobId) &&
+      localJobId > 0 &&
+      basename &&
+      Number.isFinite(serverJobId) &&
+      serverJobId > 0
+    ) {
+      const endpoint = o.endpoint || DRAFT_JSON_ENDPOINTS[basename];
+      if (endpoint) {
+        multiDeviceApi.queueDraftPushPending({
+          dispoBaseUrl: o.dispoBaseUrl,
+          endpoint,
+          technicianId,
+          serverJobId,
+          localJobId,
+          reiseDir: o.reiseDir,
+          filePath:
+            o.filePath ||
+            (o.reiseDir ? resolveMonteurDraftJsonPath(o.reiseDir, basename, false) : ''),
+          basename,
+          username: o.username,
+          password: o.password,
+        });
+      }
+    }
+    enqueueDienstreisePushChanged(localJobId, technicianId, o.dispoBaseUrl, o.username, o.password, o.pushExtra);
+  }
 
   let appVersion = 'V 1.001';
   try {
@@ -2247,6 +2375,9 @@ function createApp(db) {
               ? String(body.dispo_password)
               : '',
         technician_id: parseInt(body.technicianId != null ? body.technicianId : body.technician_id, 10) || 0,
+        onlyChanged: true,
+        externalUrl: body.externalUrl || body.dispoExternalUrl || '',
+        internalUrl: body.internalUrl || body.dispoInternalUrl || '',
       },
       dedupeKey,
     );
@@ -2855,6 +2986,7 @@ function createApp(db) {
           if (e.isDirectory()) {
             walk(full, rel);
           } else if (e.isFile()) {
+            if (isMonteurDraftJsonBasename(e.name)) continue;
             result.push({ relPathFromSub: rel, fullPath: full });
           }
         }
@@ -2877,8 +3009,8 @@ function createApp(db) {
       }
       for (const f of files) {
         const relNorm = normProjectRelPath(f.relPathFromRoot);
-        if (relNorm && remoteProjectPathSetHas(remoteFiles, relNorm)) {
-          recordDienstreisePushCache(db, localJobId, relNorm, f.fullPath);
+        const needsPush = localDienstreiseFileNeedsDispoPush(db, localJobId, f.relPathFromRoot, f.fullPath);
+        if (relNorm && remoteProjectPathSetHas(remoteFiles, relNorm) && !needsPush) {
           continue;
         }
         await uploadJobProjectFileToDispo(base, jobId, technicianId, authHeader, f.relPathFromRoot, f.fullPath);
@@ -5833,7 +5965,11 @@ function createApp(db) {
         bumpProgress('finish_verify', step, totalSteps, 'Prüfe ' + folder + ' (' + localFiles.length + ') …');
         if (!localFiles.length) continue;
         let remoteFiles = await collectRemoteFilesForFolder(folder, localFiles);
-        let missing = localFiles.filter((p) => !remoteProjectPathSetHas(remoteFiles, p));
+        let missing = localFiles.filter((p) => {
+          const full = path.join(reiseDir, p.split('/').join(path.sep));
+          if (!remoteProjectPathSetHas(remoteFiles, p)) return true;
+          return localDienstreiseFileNeedsDispoPush(db, localJobId, p, full);
+        });
         if (missing.length > 0 && effectiveDispoBase && technicianId) {
           for (const rel of missing) {
             const full = path.join(reiseDir, rel.split('/').join(path.sep));
@@ -5857,7 +5993,11 @@ function createApp(db) {
             }
           }
           remoteFiles = await collectRemoteFilesForFolder(folder, localFiles);
-          missing = localFiles.filter((p) => !remoteProjectPathSetHas(remoteFiles, p));
+          missing = localFiles.filter((p) => {
+            const full = path.join(reiseDir, p.split('/').join(path.sep));
+            if (!remoteProjectPathSetHas(remoteFiles, p)) return true;
+            return localDienstreiseFileNeedsDispoPush(db, localJobId, p, full);
+          });
         }
         for (const okRel of localFiles.filter((p) => !missing.includes(p))) {
           const fullOk = path.join(reiseDir, okRel.split('/').join(path.sep));
@@ -8804,6 +8944,17 @@ function createApp(db) {
         prevDraft.server_updated_at,
         reiseDir,
       );
+      queueProtocolDraftAndFiles({
+        localJobId,
+        technicianId,
+        serverJobId: parsedServerJobId,
+        dispoBaseUrl,
+        basename: 'montagebericht.json',
+        reiseDir,
+        filePath: montageberichtDataPath,
+        username: body.dispoUsername || body.serverUsername,
+        password: body.dispoPassword ?? body.serverPassword,
+      });
 
       // Dispo-Sync (Netz) erst NACH lokalem PDF – sonst wirkt Speichern „wie Word“ langsam.
       let syncWarning = null;
@@ -8837,6 +8988,7 @@ function createApp(db) {
                   dispoBaseUrl,
                   dispoUsername: body.dispoUsername || body.serverUsername,
                   dispoPassword: body.dispoPassword ?? body.serverPassword,
+                  onlyChanged: true,
                 },
                 dedupeKey,
               );
@@ -9247,6 +9399,17 @@ function createApp(db) {
             prevAfter.server_updated_at,
             reiseDir,
           );
+          queueProtocolDraftAndFiles({
+            localJobId,
+            technicianId,
+            serverJobId: parsedServerJobId,
+            dispoBaseUrl,
+            basename: 'montagebericht.json',
+            reiseDir,
+            filePath: montageberichtDataPath,
+            username: body.dispoUsername || body.serverUsername,
+            password: body.dispoPassword ?? body.serverPassword,
+          });
         } catch (_) { /* Meta optional */ }
       }
 
@@ -9537,23 +9700,32 @@ function createApp(db) {
         }
         save();
         }
-        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
-          const jobRow = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
-          const serverJobId = jobRow && jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
-          if (serverJobId > 0) {
-            const kwPath = resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true);
-            await multiDeviceApi.pushJsonDraft({
-              dispoBaseUrl,
-              endpoint: '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
-              technicianId,
-              serverJobId,
-              localJobId,
-              reiseDir,
-              filePath: kwPath,
-              username: body.serverUsername || body.dispoUsername,
-              password: body.serverPassword ?? body.dispoPassword,
-            });
-          }
+        const jobRowKw = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+        const serverJobIdKw = jobRowKw && jobRowKw.server_id != null ? parseInt(jobRowKw.server_id, 10) : 0;
+        const kwPath = resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true);
+        queueProtocolDraftAndFiles({
+          localJobId,
+          technicianId,
+          serverJobId: serverJobIdKw,
+          dispoBaseUrl,
+          basename: 'kontrollwiegungsprotokoll.json',
+          reiseDir,
+          filePath: kwPath,
+          username: body.serverUsername || body.dispoUsername,
+          password: body.serverPassword ?? body.dispoPassword,
+        });
+        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft && serverJobIdKw > 0 && !wantsLocalOnlyRequest(body)) {
+          await multiDeviceApi.pushJsonDraft({
+            dispoBaseUrl,
+            endpoint: '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
+            technicianId,
+            serverJobId: serverJobIdKw,
+            localJobId,
+            reiseDir,
+            filePath: kwPath,
+            username: body.serverUsername || body.dispoUsername,
+            password: body.serverPassword ?? body.dispoPassword,
+          });
         }
       }
       let protokollId = record ? record.protokoll_id : 'local:' + Date.now();
@@ -9957,23 +10129,32 @@ function createApp(db) {
         }
         save();
         }
-        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
-          const jobRow = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
-          const srvJobId = jobRow && jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
-          if (srvJobId > 0) {
-            const skPath = resolveMonteurDraftJsonPath(reiseDir, 'schleppkettenprotokoll.json', true);
-            await multiDeviceApi.pushJsonDraft({
-              dispoBaseUrl,
-              endpoint: '/dispo_api/api/schleppkettenprotokoll_draft.php',
-              technicianId,
-              serverJobId: srvJobId,
-              localJobId,
-              reiseDir,
-              filePath: skPath,
-              username: body.serverUsername || body.dispoUsername,
-              password: body.serverPassword ?? body.dispoPassword,
-            });
-          }
+        const jobRowSk = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+        const srvJobId = jobRowSk && jobRowSk.server_id != null ? parseInt(jobRowSk.server_id, 10) : 0;
+        const skPath = resolveMonteurDraftJsonPath(reiseDir, 'schleppkettenprotokoll.json', true);
+        queueProtocolDraftAndFiles({
+          localJobId,
+          technicianId,
+          serverJobId: srvJobId,
+          dispoBaseUrl,
+          basename: 'schleppkettenprotokoll.json',
+          reiseDir,
+          filePath: skPath,
+          username: body.serverUsername || body.dispoUsername,
+          password: body.serverPassword ?? body.dispoPassword,
+        });
+        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft && srvJobId > 0 && !wantsLocalOnlyRequest(body)) {
+          await multiDeviceApi.pushJsonDraft({
+            dispoBaseUrl,
+            endpoint: '/dispo_api/api/schleppkettenprotokoll_draft.php',
+            technicianId,
+            serverJobId: srvJobId,
+            localJobId,
+            reiseDir,
+            filePath: skPath,
+            username: body.serverUsername || body.dispoUsername,
+            password: body.serverPassword ?? body.dispoPassword,
+          });
         }
       }
       let protokollId = record ? record.protokoll_id : 'local:' + Date.now();
@@ -10351,23 +10532,32 @@ function createApp(db) {
           }
         }
         save();
-        if (!wantsLocalOnlyRequest(body) && dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
-          const jobRow = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
-          const srvJobId = jobRow && jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
-          if (srvJobId > 0) {
-            const pzPath = resolveMonteurDraftJsonPath(reiseDir, 'pruefzertifikat.json', true);
-            await multiDeviceApi.pushJsonDraft({
-              dispoBaseUrl,
-              endpoint: '/dispo_api/api/pruefzertifikat_draft.php',
-              technicianId,
-              serverJobId: srvJobId,
-              localJobId,
-              reiseDir,
-              filePath: pzPath,
-              username: body.serverUsername || body.dispoUsername,
-              password: body.serverPassword ?? body.dispoPassword,
-            });
-          }
+        const jobRowPz = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+        const srvJobId = jobRowPz && jobRowPz.server_id != null ? parseInt(jobRowPz.server_id, 10) : 0;
+        const pzPath = resolveMonteurDraftJsonPath(reiseDir, 'pruefzertifikat.json', true);
+        queueProtocolDraftAndFiles({
+          localJobId,
+          technicianId,
+          serverJobId: srvJobId,
+          dispoBaseUrl,
+          basename: 'pruefzertifikat.json',
+          reiseDir,
+          filePath: pzPath,
+          username: body.serverUsername || body.dispoUsername,
+          password: body.serverPassword ?? body.dispoPassword,
+        });
+        if (!wantsLocalOnlyRequest(body) && dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft && srvJobId > 0) {
+          await multiDeviceApi.pushJsonDraft({
+            dispoBaseUrl,
+            endpoint: '/dispo_api/api/pruefzertifikat_draft.php',
+            technicianId,
+            serverJobId: srvJobId,
+            localJobId,
+            reiseDir,
+            filePath: pzPath,
+            username: body.serverUsername || body.dispoUsername,
+            password: body.serverPassword ?? body.dispoPassword,
+          });
         }
       }
       let protokollId = record ? record.protokoll_id : 'local:' + Date.now();
@@ -11664,7 +11854,13 @@ function createApp(db) {
         const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
         const suffix = multiLang ? '_' + lang.toUpperCase() : lang === 'en' ? '_EN' : '';
         const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
-        writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
+        const fullLocalPdf = path.join(targetDir, pdfName);
+        if (keepExistingLocalPdf(fullLocalPdf)) {
+          savedRel.push(relDir + '/' + pdfName);
+          protectPathIfUnderDokumenteMonteur(db, localJobId, relDir + '/' + pdfName);
+          continue;
+        }
+        writeFileWithRetry(fullLocalPdf, pdfBuf);
         savedRel.push(relDir + '/' + pdfName);
         protectPathIfUnderDokumenteMonteur(db, localJobId, relDir + '/' + pdfName);
       } catch (localErr) {
@@ -11797,6 +11993,17 @@ function createApp(db) {
       let syncWarning = messSyncWarning;
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
+      queueProtocolDraftAndFiles({
+        localJobId,
+        technicianId,
+        serverJobId: parsedServerJobId,
+        dispoBaseUrl,
+        basename: 'serviceprotokoll.json',
+        reiseDir,
+        filePath: serviceprotokollJsonPath(reiseDir),
+        username: body.dispoUsername || body.serverUsername,
+        password: body.dispoPassword ?? body.serverPassword,
+      });
       const skipDispoSync = wantsLocalOnlyRequest(body) || shouldDeferDispoSync({ hasBaseUrl: !!dispoBaseUrl, localOnly: body.local_only });
       if (!skipDispoSync && dispoBaseUrl && hasServerJobId) {
         const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.serverPassword ?? body.serverPassword);
@@ -11868,6 +12075,17 @@ function createApp(db) {
       let savedRel = localPdf.savedRel || [];
       let savedAbs = localPdf.savedAbs || [];
       let localWarning = localPdf.localWarning;
+      queueProtocolDraftAndFiles({
+        localJobId,
+        technicianId,
+        serverJobId: parsedServerJobId,
+        dispoBaseUrl,
+        basename: 'serviceprotokoll.json',
+        reiseDir,
+        filePath: serviceprotokollJsonPath(reiseDir),
+        username: body.serverUsername || body.dispoUsername,
+        password: body.serverPassword ?? body.dispoPassword,
+      });
       let protokollId = 'local:' + Date.now();
       let deferred = false;
       let saveData = {};
@@ -12087,6 +12305,18 @@ function createApp(db) {
         });
       }
 
+      queueProtocolDraftAndFiles({
+        localJobId,
+        technicianId,
+        serverJobId: parsedServerJobId,
+        dispoBaseUrl,
+        basename: 'serviceprotokoll.json',
+        reiseDir,
+        filePath: serviceprotokollJsonPath(reiseDir),
+        username: body.serverUsername || body.dispoUsername,
+        password: body.serverPassword ?? body.dispoPassword,
+      });
+
       let saveData = {};
       let dispoWarning = null;
       const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
@@ -12199,7 +12429,10 @@ function createApp(db) {
               const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + '.pdf';
               const { targetDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fabRaw, technicianId);
               if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-              writeFileWithRetry(path.join(targetDir, pdfName), pdfBuf);
+              const localPdfFull = path.join(targetDir, pdfName);
+              if (!keepExistingLocalPdf(localPdfFull)) {
+                writeFileWithRetry(localPdfFull, pdfBuf);
+              }
             } else {
               localWarning = 'PDF lokal konnte nicht vom Server geladen werden.';
             }
@@ -14562,6 +14795,52 @@ function createApp(db) {
         }
         setProgress('download', skippedStart, total, total ? '' : 'Keine Dateien.');
 
+        async function pushLocalChangesBeforePull() {
+          setProgress('push_first', 0, 1, 'Lokale neuere Dateien zuerst senden …');
+          try {
+            await dbLock.runWithDbLock(async () => {
+              await pushToServer(
+                dispoBaseUrl,
+                technicianId,
+                db,
+                authHeader,
+                liveDispoCredsForPush(dispoBaseUrl, {
+                  serverUsername: dispoUsername,
+                  serverPassword: dispoPassword,
+                  externalUrl: p.externalUrl,
+                  internalUrl: p.internalUrl,
+                }),
+              );
+              save();
+            });
+          } catch (prePushErr) {
+            console.warn(
+              '[dienstreise_pull] pre-pull pending:',
+              prePushErr && prePushErr.message ? prePushErr.message : prePushErr,
+            );
+          }
+          try {
+            await syncDienstreiseFoldersToDispo(
+              localJobId,
+              dispoBaseUrl,
+              technicianId,
+              dispoUsername,
+              dispoPassword,
+              {
+                onlyChanged: true,
+                externalUrl: p.externalUrl,
+                internalUrl: p.internalUrl,
+              },
+            );
+          } catch (filePushErr) {
+            console.warn(
+              '[dienstreise_pull] pre-pull files:',
+              filePushErr && filePushErr.message ? filePushErr.message : filePushErr,
+            );
+          }
+          setProgress('push_first', 1, 1, 'Lokale Änderungen gesendet.');
+        }
+
         async function pullProtocolJsonDrafts() {
           if (!multiDeviceApi || !multiDeviceApi.pullAllJsonDrafts) return;
           setProgress('drafts', 0, 1, 'Protokoll-Zwischenstände …');
@@ -14583,6 +14862,8 @@ function createApp(db) {
           }
           setProgress('drafts', 1, 1, 'Protokoll-Zwischenstände.');
         }
+
+        await pushLocalChangesBeforePull();
 
         if (total === 0) {
           await pullProtocolJsonDrafts();
@@ -14801,10 +15082,21 @@ function createApp(db) {
       case 'dienstreise_push': {
         const p = job.payload || {};
         const localJobId = parseInt(p.job_id, 10);
-        const dispoBaseUrl = (p.dispo_base_url || '').trim().replace(/\/$/, '');
-        const technicianId = parseInt(p.technician_id, 10);
+        const dispoBaseUrl = (p.dispo_base_url || p.dispoBaseUrl || '').trim().replace(/\/$/, '');
+        const technicianId = parseInt(p.technician_id != null ? p.technician_id : p.technicianId, 10);
         setProgress('dienstreise_push', 0, 1, 'Synchronisiere Dienstreise-Ordner …');
-        await syncDienstreiseFoldersToDispo(localJobId, dispoBaseUrl, technicianId, String(p.dispo_username || ''), String(p.dispo_password || ''));
+        await syncDienstreiseFoldersToDispo(
+          localJobId,
+          dispoBaseUrl,
+          technicianId,
+          String(p.dispo_username || p.dispoUsername || ''),
+          String(p.dispo_password != null ? p.dispo_password : p.dispoPassword || ''),
+          {
+            onlyChanged: p.onlyChanged !== false,
+            externalUrl: p.externalUrl,
+            internalUrl: p.internalUrl,
+          },
+        );
         if (dispoBaseUrl) {
           try {
             await syncProtokollTemplates(dispoBaseUrl);
@@ -14976,6 +15268,20 @@ function createApp(db) {
         }
         await dbLock.runWithDbLock(async () => {
           setProgress('sync_pull', 6, 8, 'Projektordner (Änderungen) …');
+          try {
+            const openJobs = listLocalJobsForPeriodicDienstreisePull(technicianId);
+            for (const row of openJobs) {
+              enqueueDienstreisePushChanged(row.id, technicianId, base, p.serverUsername, p.serverPassword, {
+                externalUrl: p.externalUrl,
+                internalUrl: p.internalUrl,
+              });
+            }
+          } catch (pushChangedErr) {
+            console.warn(
+              '[sync_pull] dienstreise_changed_push:',
+              pushChangedErr && pushChangedErr.message ? pushChangedErr.message : pushChangedErr,
+            );
+          }
           try {
             const delta = enqueuePeriodicDienstreiseDeltaPulls({
               technicianId,
@@ -17584,6 +17890,9 @@ async function pullArbeitsschritteFromDispo(baseUrl, technicianId, dbConn, authH
 }
 
 function queueDispoProxyPending(dbConn, entityType, entityId, action, payload) {
+  if (!isHandledPendingEntityType(entityType)) {
+    console.warn('[pending_changes] entity_type ohne pushToServer-Handler:', entityType);
+  }
   dbConn
     .prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
     .run(entityType, String(entityId), action, JSON.stringify(payload));
@@ -19739,6 +20048,117 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
         continue;
       }
     }
+    if (p.entity_type === 'schleppketten' && p.action === 'save') {
+      handled = true;
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
+      const techId =
+        parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
+      if (!tbBase || !techId) {
+        resolveSyncPushFailure(
+          db,
+          p,
+          new Error('Dispo-URL oder Monteur-ID fehlt'),
+          'schleppketten_push_skip',
+        );
+        continue;
+      }
+      try {
+        const r = await fetch(tbBase + '/dispo_api/api/schleppkettenprotokoll_save.php', {
+          method: 'POST',
+          headers: header,
+          body: JSON.stringify(payloadRaw),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+          const pushErr = new Error(data.error || r.statusText);
+          pushErr.status = r.status;
+          throw pushErr;
+        }
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        const outcome = resolveSyncPushFailure(db, p, e, 'schleppketten_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
+        continue;
+      }
+    }
+    if (p.entity_type === 'pruefzertifikat' && p.action === 'save') {
+      handled = true;
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
+      const techId =
+        parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
+      if (!tbBase || !techId) {
+        resolveSyncPushFailure(
+          db,
+          p,
+          new Error('Dispo-URL oder Monteur-ID fehlt'),
+          'pruefzertifikat_push_skip',
+        );
+        continue;
+      }
+      try {
+        const r = await fetch(tbBase + '/dispo_api/api/pruefzertifikat_save.php', {
+          method: 'POST',
+          headers: header,
+          body: JSON.stringify(payloadRaw),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+          const pushErr = new Error(data.error || r.statusText);
+          pushErr.status = r.status;
+          throw pushErr;
+        }
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        const outcome = resolveSyncPushFailure(db, p, e, 'pruefzertifikat_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
+        continue;
+      }
+    }
+    if (p.entity_type === 'protocol_draft' && p.action === 'push') {
+      handled = true;
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      if (typeof protocolDraftPushImpl !== 'function') {
+        resolveSyncPushFailure(db, p, new Error('Draft-Push nicht bereit'), 'protocol_draft_push');
+        continue;
+      }
+      try {
+        const result = await protocolDraftPushImpl({
+          dispoBaseUrl: payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base,
+          endpoint: payloadRaw.endpoint,
+          technicianId:
+            parseInt(payloadRaw.technicianId != null ? payloadRaw.technicianId : technicianId, 10) ||
+            technicianId,
+          serverJobId: payloadRaw.serverJobId,
+          localJobId: payloadRaw.localJobId,
+          reiseDir: payloadRaw.reiseDir,
+          filePath: payloadRaw.filePath,
+          basename: payloadRaw.basename,
+          username: payloadRaw.username || payloadRaw.serverUsername || live.serverUsername,
+          password:
+            payloadRaw.password != null
+              ? payloadRaw.password
+              : payloadRaw.serverPassword != null
+                ? payloadRaw.serverPassword
+                : live.serverPassword,
+        });
+        if (result && (result.ok || result.queued || result.skipped)) {
+          try {
+            db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+          } catch (_) {
+            /* Zeile kann schon durch queueDraftPushPending ersetzt sein */
+          }
+        } else {
+          const pushErr = new Error((result && result.error) || 'draft_push_failed');
+          throw pushErr;
+        }
+      } catch (e) {
+        const outcome = resolveSyncPushFailure(db, p, e, 'protocol_draft_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
+        continue;
+      }
+    }
     if (p.entity_type === 'signature' && p.action === 'submit') {
       handled = true;
       const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
@@ -19811,7 +20231,11 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
       const outcome = resolveSyncPushFailure(
         db,
         p,
-        new Error('Kein pushToServer-Handler für entity_type=' + String(p.entity_type)),
+        new Error(
+          isHandledPendingEntityType(p.entity_type)
+            ? 'Kein pushToServer-Zweig für entity_type=' + String(p.entity_type)
+            : 'Kein pushToServer-Handler für entity_type=' + String(p.entity_type),
+        ),
         'pending_unbekannt',
       );
       if (outcome === 'retry' || outcome === 'offline') {

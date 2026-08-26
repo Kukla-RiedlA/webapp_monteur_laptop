@@ -68,6 +68,67 @@ function shouldDeferDispoSync(opts) {
   return false;
 }
 
+/** pending_changes-Typen, die pushToServer abarbeiten muss (Queue ohne Handler = Dead-Letter). */
+const HANDLED_PENDING_ENTITY_TYPES = [
+  'job',
+  'absence',
+  'anlagenstamm',
+  'textbausteine',
+  'arbeitsschritte',
+  'serviceprotokoll',
+  'kontrollwiegung',
+  'schleppketten',
+  'pruefzertifikat',
+  'protocol_draft',
+  'signature',
+  'rams',
+];
+
+function isHandledPendingEntityType(entityType) {
+  return HANDLED_PENDING_ENTITY_TYPES.indexOf(String(entityType || '')) >= 0;
+}
+
+const SYNC_TS_TOLERANCE_MS = 2000;
+
+function parseSyncTimestampMs(value) {
+  if (value == null || value === '') return 0;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 1e12 ? value : value > 1e9 ? value : 0;
+  }
+  const s = String(value).trim();
+  if (!s) return 0;
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return n > 1e12 ? n : n > 1e9 ? n * 1000 : 0;
+  }
+  const ms = Date.parse(s.replace(' ', 'T'));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/**
+ * Lokal gilt als neuer, wenn der lokale Zeitstempel nach Toleranz über dem Remote liegt.
+ * Fehlt einer der Stempel, ist das Ergebnis unsicher (null) — dann nicht Remote-only gewinnen.
+ * @returns {boolean|null} true = lokal neuer, false = remote neuer/gleich, null = unsicher
+ */
+function isLocalFresher(localTs, remoteTs, toleranceMs) {
+  const tol = Number.isFinite(toleranceMs) ? toleranceMs : SYNC_TS_TOLERANCE_MS;
+  const localMs = parseSyncTimestampMs(localTs);
+  const remoteMs = parseSyncTimestampMs(remoteTs);
+  if (!localMs && !remoteMs) return null;
+  if (localMs && !remoteMs) return true;
+  if (!localMs && remoteMs) return false;
+  if (localMs > remoteMs + tol) return true;
+  if (remoteMs > localMs + tol) return false;
+  return false;
+}
+
+function timestampsAreUncertain(localTs, remoteTs) {
+  const localMs = parseSyncTimestampMs(localTs);
+  const remoteMs = parseSyncTimestampMs(remoteTs);
+  return !localMs && !remoteMs;
+}
+
 function wantsLocalOnlyRequest(src) {
   const s = src && typeof src === 'object' ? src : {};
   return (
@@ -139,6 +200,8 @@ async function fetchWithTimeout(url, options, timeoutMs) {
 module.exports = {
   DISPO_FETCH_TIMEOUT_MS,
   SYNC_PUSH_MAX_ATTEMPTS,
+  SYNC_TS_TOLERANCE_MS,
+  HANDLED_PENDING_ENTITY_TYPES,
   normalizeBaseUrl,
   isLikelyOfflineSyncError,
   isPermanentSyncPushError,
@@ -146,4 +209,8 @@ module.exports = {
   wantsLocalOnlyRequest,
   evaluateJobPullRemovalGuard,
   fetchWithTimeout,
+  isHandledPendingEntityType,
+  parseSyncTimestampMs,
+  isLocalFresher,
+  timestampsAreUncertain,
 };

@@ -18,11 +18,14 @@ const {
   reconcileLocalTreeWithManifest,
   formatBytes,
   writeConflictCopy,
+  writePayloadConflictCopy,
+  mergeByFabStores,
   resolveMonteurDraftJsonPath,
   MONTEUR_DRAFT_BASENAMES,
   DRAFT_JSON_ENDPOINTS,
 } = require('./multi-device-sync');
 const protocolDrafts = require('./protocol-drafts-local');
+const { isLocalFresher, timestampsAreUncertain } = require('./local_first');
 
 function ensureMultiDeviceTables(db) {
   db.exec(`
@@ -114,6 +117,61 @@ function registerMultiDeviceRoutes(deps) {
       return;
     }
     writeLocalDraftFile(opts.filePath, payload, revision, serverUpdatedAt);
+  }
+
+  function preserveLocalDraftCopy(opts, payload) {
+    const filePath =
+      opts.filePath ||
+      (opts.reiseDir && opts.basename
+        ? resolveMonteurDraftJsonPath(opts.reiseDir, opts.basename, false)
+        : '');
+    return writePayloadConflictCopy(filePath, payload || {}, deviceId());
+  }
+
+  function clearDraftPushPending(opts) {
+    const localJobId = opts && opts.localJobId;
+    const basename = draftBasename(opts || {});
+    if (!db || !localJobId || !basename) return;
+    try {
+      db.prepare(
+        `DELETE FROM pending_changes WHERE entity_type = 'protocol_draft' AND entity_id = ? AND action = 'push'`,
+      ).run(String(localJobId) + ':' + basename);
+      save();
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function queueDraftPushPending(opts) {
+    const localJobId = opts && opts.localJobId;
+    const basename = draftBasename(opts || {});
+    if (!db || !localJobId || !basename) return false;
+    const entityId = String(localJobId) + ':' + basename;
+    const payload = {
+      dispoBaseUrl: opts.dispoBaseUrl,
+      endpoint: opts.endpoint,
+      technicianId: opts.technicianId,
+      serverJobId: opts.serverJobId,
+      localJobId,
+      reiseDir: opts.reiseDir || '',
+      filePath: opts.filePath || '',
+      basename,
+      username: opts.username,
+      password: opts.password,
+    };
+    try {
+      db.prepare(
+        `DELETE FROM pending_changes WHERE entity_type = 'protocol_draft' AND entity_id = ? AND action = 'push'`,
+      ).run(entityId);
+      db.prepare(
+        `INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`,
+      ).run('protocol_draft', entityId, 'push', JSON.stringify(payload));
+      save();
+      return true;
+    } catch (e) {
+      console.warn('[draft_push] queue failed', basename, e && e.message ? e.message : e);
+      return false;
+    }
   }
 
   function clearConflictsForFile(localJobId, serverJobId, relPath) {
@@ -290,6 +348,7 @@ function registerMultiDeviceRoutes(deps) {
             data.server_updated_at || null,
           );
           clearConflictsForFile(opts.localJobId, serverJobId, basename);
+          clearDraftPushPending(opts);
           console.warn(
             '[draft_push] soft-resolve (equal payload)',
             basename,
@@ -324,6 +383,7 @@ function registerMultiDeviceRoutes(deps) {
               data.server_updated_at || null,
             );
             clearConflictsForFile(opts.localJobId, serverJobId, basename);
+            clearDraftPushPending(opts);
             return { ok: true, revision: data.revision, code: null, retried: true };
           }
           if (r.status === 409 && data.code === 'job_closed') {
@@ -340,13 +400,8 @@ function registerMultiDeviceRoutes(deps) {
           'remote=',
           remoteRev,
         );
+        preserveLocalDraftCopy(opts, local.payload);
         if (opts.filePath) writeConflictCopy(opts.filePath, deviceId());
-        writeDraftState(
-          opts,
-          stripDraftMeta(data.store || data.data || remotePayload),
-          parseInt(data.revision, 10) || remoteRev,
-          data.server_updated_at || null,
-        );
         try {
           db.prepare(
             `INSERT INTO multi_device_conflicts (local_job_id, server_job_id, rel_path, detail_json)
@@ -359,6 +414,7 @@ function registerMultiDeviceRoutes(deps) {
               code: 'conflict',
               revision: data.revision,
               local_base: baseRevision,
+              kept: 'local',
             }),
           );
           save();
@@ -367,7 +423,8 @@ function registerMultiDeviceRoutes(deps) {
           ok: false,
           code: 'conflict',
           revision: data.revision,
-          store: data.store || data.data || remotePayload,
+          store: local.payload,
+          kept_local: true,
         };
       }
       if (!r.ok || !data.ok) {
@@ -377,7 +434,8 @@ function registerMultiDeviceRoutes(deps) {
           r.status,
           data.error || data.code || r.statusText,
         );
-        return { ok: false, error: data.error || r.statusText, code: data.code };
+        queueDraftPushPending(opts);
+        return { ok: false, error: data.error || r.statusText, code: data.code, queued: true };
       }
       writeDraftState(
         opts,
@@ -386,10 +444,12 @@ function registerMultiDeviceRoutes(deps) {
         data.server_updated_at || null,
       );
       clearConflictsForFile(opts.localJobId, serverJobId, basename);
+      clearDraftPushPending(opts);
       return { ok: true, revision: data.revision, code: null };
     } catch (e) {
       console.warn('[draft_push] exception', basename, e && e.message ? e.message : e);
-      return { ok: false, error: e.message || 'draft_push_failed' };
+      queueDraftPushPending(opts);
+      return { ok: false, error: e.message || 'draft_push_failed', queued: true };
     }
   }
 
@@ -420,21 +480,59 @@ function registerMultiDeviceRoutes(deps) {
       const remoteRev = parseInt(data.revision, 10) || 0;
       const remoteEmpty = isEmptyMonteurDraftPayload(payload);
       const local = readDraftState(opts);
+      const localEmpty = isEmptyMonteurDraftPayload(local.payload);
+      const remoteTs = data.server_updated_at || null;
+      const localTs = local.local_updated_at || local.server_updated_at || null;
+      const hasByFab =
+        (local.payload && local.payload.byFab && typeof local.payload.byFab === 'object') ||
+        (payload && payload.byFab && typeof payload.byFab === 'object');
+
       if (remoteEmpty) {
-        if (remoteRev > 0 || isEmptyMonteurDraftPayload(local.payload)) {
-          writeDraftState(opts, payload, remoteRev, data.server_updated_at || null);
+        if (localEmpty) {
+          if (remoteRev > 0) {
+            writeDraftState(opts, payload, remoteRev, remoteTs);
+          }
+          return { ok: true, skipped: remoteRev <= 0, empty: true, revision: remoteRev };
         }
-        return { ok: true, skipped: remoteRev <= 0, empty: true, revision: remoteRev };
+        return { ok: true, skipped: true, local_newer: true, empty_remote: true, revision: local.revision };
       }
-      if (
-        local.revision > 0 &&
-        local.revision >= remoteRev &&
-        draftPayloadsEqual(local.payload, payload)
-      ) {
-        return { ok: true, skipped: true, revision: local.revision };
+
+      if (draftPayloadsEqual(local.payload, payload)) {
+        if (remoteRev > (parseInt(local.revision, 10) || 0) || remoteTs) {
+          writeDraftState(opts, payload, remoteRev, remoteTs || local.server_updated_at || null);
+        }
+        return { ok: true, skipped: true, revision: remoteRev || local.revision };
       }
-      writeDraftState(opts, payload, remoteRev, data.server_updated_at || null);
-      return { ok: true, revision: remoteRev, store: payload };
+
+      if (localEmpty) {
+        writeDraftState(opts, payload, remoteRev, remoteTs);
+        return { ok: true, revision: remoteRev, store: payload };
+      }
+
+      const localNewer = isLocalFresher(localTs, remoteTs);
+      if (localNewer === true) {
+        return { ok: true, skipped: true, local_newer: true, revision: local.revision };
+      }
+      if (localNewer === null || timestampsAreUncertain(localTs, remoteTs)) {
+        preserveLocalDraftCopy(opts, local.payload);
+        return { ok: true, skipped: true, local_newer: true, uncertain: true, revision: local.revision };
+      }
+
+      preserveLocalDraftCopy(opts, local.payload);
+      let nextPayload = payload;
+      if (hasByFab) {
+        const merged = mergeByFabStores(local.payload, payload);
+        nextPayload = merged.payload;
+      }
+      writeDraftState(opts, nextPayload, remoteRev, remoteTs);
+      const extraLocalFabs = hasByFab && !draftPayloadsEqual(nextPayload, payload);
+      return {
+        ok: true,
+        revision: remoteRev,
+        store: nextPayload,
+        merged: extraLocalFabs,
+        local_newer: extraLocalFabs,
+      };
     } catch (e) {
       return { ok: false, error: e.message };
     }
@@ -458,7 +556,30 @@ function registerMultiDeviceRoutes(deps) {
         username: opts.username,
         password: opts.password,
       });
-      pulled.push({ basename, ok: !!(result && result.ok), skipped: !!(result && result.skipped) });
+      if (result && result.local_newer) {
+        try {
+          await pushJsonDraft({
+            dispoBaseUrl: opts.dispoBaseUrl,
+            endpoint,
+            technicianId: opts.technicianId,
+            serverJobId: opts.serverJobId,
+            localJobId: opts.localJobId,
+            reiseDir,
+            basename,
+            filePath: reiseDir ? resolveMonteurDraftJsonPath(reiseDir, basename, false) : '',
+            username: opts.username,
+            password: opts.password,
+          });
+        } catch (pushErr) {
+          console.warn('[draft_pull] local_newer push', basename, pushErr && pushErr.message ? pushErr.message : pushErr);
+        }
+      }
+      pulled.push({
+        basename,
+        ok: !!(result && result.ok),
+        skipped: !!(result && result.skipped),
+        local_newer: !!(result && result.local_newer),
+      });
     }
     if (reiseDir) pruneEmptyMonteurDraftJsons(reiseDir);
     return { ok: true, pulled };
@@ -782,6 +903,7 @@ function registerMultiDeviceRoutes(deps) {
     registerDeviceOnDispo,
     heartbeatOnDispo,
     pushJsonDraft,
+    queueDraftPushPending,
     pullJsonDraft,
     pullAllJsonDrafts,
     markJobPendingLocalCleanup,

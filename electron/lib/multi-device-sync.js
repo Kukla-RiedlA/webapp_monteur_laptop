@@ -190,7 +190,19 @@ function readLocalDraftFile(filePath) {
       data.server_updated_at != null && String(data.server_updated_at).trim()
         ? String(data.server_updated_at)
         : null;
-    return { payload: stripDraftMeta(data), revision, server_updated_at: serverUpdated };
+    let localUpdatedAt = serverUpdated;
+    try {
+      const st = fs.statSync(filePath);
+      if (st && st.mtime) localUpdatedAt = new Date(st.mtimeMs || st.mtime).toISOString();
+    } catch (_) {
+      /* ignore */
+    }
+    return {
+      payload: stripDraftMeta(data),
+      revision,
+      server_updated_at: serverUpdated,
+      local_updated_at: localUpdatedAt,
+    };
   } catch (_) {
     return { payload: {}, revision: 0, server_updated_at: null };
   }
@@ -220,6 +232,53 @@ function writeLocalDraftFile(filePath, payload, revision, serverUpdatedAt) {
   return wrapped;
 }
 
+function draftEntryTimestamp(entry) {
+  if (!entry || typeof entry !== 'object') return '';
+  return String(entry.updatedAt || entry.updated_at || entry.gespeichert_am || entry.server_updated_at || '').trim();
+}
+
+/**
+ * Union der byFab-Stores. Pro FN gewinnt der neuere updatedAt; FN nur auf einer Seite bleibt.
+ */
+function mergeByFabStores(localPayload, remotePayload) {
+  const local = localPayload && typeof localPayload === 'object' && !Array.isArray(localPayload) ? localPayload : {};
+  const remote = remotePayload && typeof remotePayload === 'object' && !Array.isArray(remotePayload) ? remotePayload : {};
+  const localBy = local.byFab && typeof local.byFab === 'object' ? local.byFab : {};
+  const remoteBy = remote.byFab && typeof remote.byFab === 'object' ? remote.byFab : {};
+  const keys = new Set([...Object.keys(localBy), ...Object.keys(remoteBy)]);
+  const byFab = {};
+  let usedBoth = false;
+  for (const raw of keys) {
+    const key = String(raw || '').trim();
+    if (!key) continue;
+    const loc = localBy[raw] || localBy[key];
+    const rem = remoteBy[raw] || remoteBy[key];
+    if (loc && rem && typeof loc === 'object' && typeof rem === 'object') {
+      const locMs = Date.parse(draftEntryTimestamp(loc)) || 0;
+      const remMs = Date.parse(draftEntryTimestamp(rem)) || 0;
+      if (locMs && remMs && remMs > locMs + 2000) {
+        byFab[key] = rem;
+      } else {
+        byFab[key] = loc;
+      }
+      usedBoth = true;
+    } else if (loc && typeof loc === 'object') {
+      byFab[key] = loc;
+      usedBoth = true;
+    } else if (rem && typeof rem === 'object') {
+      byFab[key] = rem;
+      usedBoth = true;
+    }
+  }
+  const extra = Object.assign({}, stripDraftMeta(remote), stripDraftMeta(local));
+  delete extra.byFab;
+  const out = Object.assign({}, extra, { byFab });
+  if (local.nextLocalId != null || remote.nextLocalId != null) {
+    out.nextLocalId = Math.max(Number(local.nextLocalId) || 1, Number(remote.nextLocalId) || 1);
+  }
+  return { payload: out, merged: usedBoth };
+}
+
 function writeConflictCopy(filePath, deviceId) {
   if (!filePath || !fs.existsSync(filePath)) return null;
   const dir = path.dirname(filePath);
@@ -230,6 +289,25 @@ function writeConflictCopy(filePath, deviceId) {
   const dest = path.join(dir, conflictName);
   try {
     fs.copyFileSync(filePath, dest);
+    return dest;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Conflict-Copy aus Payload, auch wenn die Draft-Datei nur in SQLite liegt. */
+function writePayloadConflictCopy(filePath, payload, deviceId) {
+  if (filePath && fs.existsSync(filePath)) return writeConflictCopy(filePath, deviceId);
+  if (!filePath || payload == null || typeof payload !== 'object') return null;
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  if (!dir || !base) return null;
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const safeDevice = String(deviceId || 'device').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'device';
+  const dest = path.join(dir, base + '.conflict-' + safeDevice + '-' + ts);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(dest, JSON.stringify(payload, null, 2), 'utf8');
     return dest;
   } catch (_) {
     return null;
@@ -308,6 +386,9 @@ module.exports = {
   readLocalDraftFile,
   writeLocalDraftFile,
   writeConflictCopy,
+  writePayloadConflictCopy,
+  draftEntryTimestamp,
+  mergeByFabStores,
   sha256File,
   reconcileLocalTreeWithManifest,
   formatBytes,
