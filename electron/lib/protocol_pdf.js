@@ -2,6 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { htmlToStyledBlocks, styledBlocksToPlain } = require('./html_rich_text');
 
 async function embedLogo(pdfDoc) {
   const baseDir = path.join(__dirname, '..');
@@ -93,28 +94,39 @@ async function drawTechnicianSignatureAt(pdfDoc, page, opts) {
  * Unicode-fähige Schriften (Windows Arial/Calibri), sonst Helvetica.
  * Benötigt @pdf-lib/fontkit für TTF.
  */
+async function embedTtfIfExists(pdfDoc, filePath, fallback) {
+  if (!filePath || !fs.existsSync(filePath)) return fallback;
+  try {
+    return await pdfDoc.embedFont(fs.readFileSync(filePath), { subset: true });
+  } catch (_) {
+    return fallback;
+  }
+}
+
 async function embedProtocolFonts(pdfDoc) {
   const { StandardFonts } = require('pdf-lib');
   const winDir = process.env.WINDIR || process.env.SystemRoot || 'C:\\Windows';
   const fontsDir = path.join(winDir, 'Fonts');
-  const pairs = [
-    ['arial.ttf', 'arialbd.ttf'],
-    ['calibri.ttf', 'calibrib.ttf'],
-    ['segoeui.ttf', 'segoeuib.ttf'],
+  const families = [
+    ['arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf'],
+    ['calibri.ttf', 'calibrib.ttf', 'calibrii.ttf', 'calibriz.ttf'],
+    ['segoeui.ttf', 'segoeuib.ttf', 'segoeuii.ttf', 'segoeuiz.ttf'],
   ];
   try {
     const fontkit = require('@pdf-lib/fontkit');
     pdfDoc.registerFontkit(fontkit);
-    for (const [reg, bold] of pairs) {
+    for (const [reg, bold, italic, boldItalic] of families) {
       const regPath = path.join(fontsDir, reg);
       const boldPath = path.join(fontsDir, bold);
       if (!fs.existsSync(regPath) || !fs.existsSync(boldPath)) continue;
       try {
         const font = await pdfDoc.embedFont(fs.readFileSync(regPath), { subset: true });
         const fontBold = await pdfDoc.embedFont(fs.readFileSync(boldPath), { subset: true });
-        return { font, fontBold, unicode: true };
+        const fontItalic = await embedTtfIfExists(pdfDoc, path.join(fontsDir, italic), font);
+        const fontBoldItalic = await embedTtfIfExists(pdfDoc, path.join(fontsDir, boldItalic), fontBold);
+        return { font, fontBold, fontItalic, fontBoldItalic, unicode: true };
       } catch (_) {
-        /* next pair */
+        /* next family */
       }
     }
   } catch (_) {
@@ -122,7 +134,82 @@ async function embedProtocolFonts(pdfDoc) {
   }
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  return { font, fontBold, unicode: false };
+  const fontItalic = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+  const fontBoldItalic = await pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique);
+  return { font, fontBold, fontItalic, fontBoldItalic, unicode: false };
+}
+
+function fontForStyledRun(run, fonts) {
+  if (run && run.bold && run.italic) return fonts.fontBoldItalic || fonts.fontBold || fonts.font;
+  if (run && run.bold) return fonts.fontBold || fonts.font;
+  if (run && run.italic) return fonts.fontItalic || fonts.font;
+  return fonts.font;
+}
+
+function wrapStyledRuns(runs, fonts, size, maxW) {
+  const tokens = [];
+  (runs || []).forEach((run) => {
+    String(run.text || '').split(/(\s+)/).forEach((part) => {
+      if (!part) return;
+      tokens.push({
+        text: part,
+        bold: !!run.bold,
+        italic: !!run.italic,
+        underline: !!run.underline,
+        isSpace: /^\s+$/.test(part),
+      });
+    });
+  });
+  const lines = [];
+  let line = [];
+  let lineW = 0;
+  const tokW = (tok) => fontForStyledRun(tok, fonts).widthOfTextAtSize(tok.text, size);
+  const pushLine = () => {
+    while (line.length && line[line.length - 1].isSpace) line.pop();
+    lines.push(line);
+    line = [];
+    lineW = 0;
+  };
+  tokens.forEach((tok) => {
+    const w = tokW(tok);
+    if (line.length && !tok.isSpace && lineW + w > maxW) pushLine();
+    if (!line.length && tok.isSpace) return;
+    line.push(tok);
+    lineW += w;
+  });
+  if (line.length) pushLine();
+  if (!lines.length) lines.push([]);
+  return lines;
+}
+
+function drawStyledLine(page, line, x, y, size, fonts, color) {
+  let cx = x;
+  (line || []).forEach((tok) => {
+    const f = fontForStyledRun(tok, fonts);
+    const w = f.widthOfTextAtSize(tok.text, size);
+    if (tok.text && !tok.isSpace) {
+      page.drawText(tok.text, { x: cx, y, size, font: f, color });
+      if (tok.underline) {
+        page.drawLine({
+          start: { x: cx, y: y - 1.4 },
+          end: { x: cx + w, y: y - 1.4 },
+          thickness: 0.55,
+          color,
+        });
+      }
+    }
+    cx += w;
+  });
+}
+
+function paragraphsFromTextItem(item) {
+  if (item && Array.isArray(item.paragraphs)) return item.paragraphs;
+  const t = String((item && item.text) || '');
+  return t.split('\n').map((line) =>
+    (line
+      ? [{ text: line, bold: false, italic: false, underline: false }]
+      : []),
+  );
 }
 
 function stripHtml(text) {
@@ -2436,59 +2523,30 @@ function sanitizePdfWinAnsi(text) {
 }
 
 function htmlFragmentToPlainPdf(html) {
-  return decodeHtmlEntitiesPdf(
-    String(html || '')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
-      .replace(/<li[^>]*>/gi, '\u2022 ')
-      .replace(/<[^>]+>/g, ' '),
-  )
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  return styledBlocksToPlain(htmlToStyledBlocks(html));
 }
 
 /**
- * Richtext (HTML oder Plain) → Zeichenblöcke + Bild-Blöcke (data-URL).
+ * Richtext (HTML oder Plain) → Zeichenblöcke (Absätze/Runs) + Bild-Blöcke (data-URL).
  */
 function htmlToMbContentBlocks(html, plainFallback, unicodeCapable) {
   const uni = !!unicodeCapable;
-  const raw = String(html || '').trim();
-  if (!raw) {
-    const p = String(plainFallback || '').trim();
-    return p ? [{ type: 'text', text: sanitizePdfText(p, uni) }] : [];
-  }
-  if (!/<[a-z]/i.test(raw)) {
-    return [{ type: 'text', text: sanitizePdfText(decodeHtmlEntitiesPdf(raw), uni) }];
-  }
-  const blocks = [];
-  const re = /<img\b[^>]*>/gi;
-  let last = 0;
-  let m;
-  while ((m = re.exec(raw))) {
-    const before = htmlFragmentToPlainPdf(raw.slice(last, m.index));
-    if (before) blocks.push({ type: 'text', text: sanitizePdfText(before, uni) });
-    const tag = m[0];
-    const srcM = tag.match(/\bsrc\s*=\s*["']([^"']+)["']/i);
-    let widthPct = 100;
-    const styleW = tag.match(/width\s*:\s*([\d.]+)\s*%/i);
-    const attrW = tag.match(/\bwidth\s*=\s*["']([\d.]+)%["']/i);
-    if (styleW) widthPct = Math.min(100, Math.max(10, parseFloat(styleW[1]) || 100));
-    else if (attrW) widthPct = Math.min(100, Math.max(10, parseFloat(attrW[1]) || 100));
-    if (srcM && srcM[1]) {
-      blocks.push({ type: 'image', src: decodeHtmlEntitiesPdf(srcM[1].trim()), widthPct });
-    }
-    last = m.index + m[0].length;
-  }
-  const after = htmlFragmentToPlainPdf(raw.slice(last));
-  if (after) blocks.push({ type: 'text', text: sanitizePdfText(after, uni) });
-  if (!blocks.length) {
-    const plain = htmlFragmentToPlainPdf(raw) || String(plainFallback || '').trim();
-    if (plain) blocks.push({ type: 'text', text: sanitizePdfText(plain, uni) });
-  }
-  return blocks;
+  return htmlToStyledBlocks(html, plainFallback).map((b) => {
+    if (b.type === 'image') return b;
+    return {
+      type: 'text',
+      paragraphs: (b.paragraphs || []).map((runs) =>
+        (runs || [])
+          .map((r) => ({
+            text: sanitizePdfText(r.text, uni),
+            bold: !!r.bold,
+            italic: !!r.italic,
+            underline: !!r.underline,
+          }))
+          .filter((r) => r.text),
+      ),
+    };
+  }).filter((b) => b.type === 'image' || (b.paragraphs && b.paragraphs.length));
 }
 
 async function embedContentImage(pdfDoc, src) {
@@ -2561,6 +2619,12 @@ async function generateMontageberichtPdfBuffer(payload, options) {
   const fonts = await embedProtocolFonts(pdfDoc);
   const font = fonts.font;
   const fontBold = fonts.fontBold;
+  const styleFonts = {
+    font,
+    fontBold,
+    fontItalic: fonts.fontItalic || font,
+    fontBoldItalic: fonts.fontBoldItalic || fonts.fontBold || font,
+  };
   const unicodeOk = !!fonts.unicode;
   const S = (t) => sanitizePdfText(t, unicodeOk);
 
@@ -2634,7 +2698,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     const out = [];
     for (const b of rawBlocks) {
       if (b.type === 'text') {
-        if (b.text) out.push(b);
+        if ((b.paragraphs && b.paragraphs.length) || b.text) out.push(b);
         continue;
       }
       if (b.type === 'image') {
@@ -2872,9 +2936,20 @@ async function generateMontageberichtPdfBuffer(payload, options) {
 
   function estimateItemHeight(item) {
     if (item.type === 'section') return 18;
-    if (item.type === 'fn_header') return 38;
+    if (item.type === 'fn_header') return 36; // box 22 + Abstand 14
     if (item.type === 'fn_sep') return 14;
-    if (item.type === 'text') return measureTextHeight(item.text, 9, 12, tableInnerW) + 6;
+    if (item.type === 'text') {
+      const paras = paragraphsFromTextItem(item);
+      let lines = 0;
+      paras.forEach((runs) => {
+        if (!runs || !runs.length) {
+          lines += 1;
+          return;
+        }
+        lines += wrapStyledRuns(runs, styleFonts, 9, tableInnerW).length;
+      });
+      return Math.max(12, lines * 12) + 6;
+    }
     if (item.type === 'image' && item.img) {
       const maxW = tableInnerW * ((item.widthPct || 100) / 100);
       const scale = Math.min(1, maxW / item.img.width);
@@ -2883,11 +2958,37 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     return 12;
   }
 
+  /**
+   * FN-Leiste gehört zum Textblock: ganze Sektion zusammenhalten, wenn sie
+   * auf eine Folgeseite passt; sonst mindestens Leiste + Textanfang (3 Zeilen).
+   */
+  function measureFnBlockKeepHeight(headerIndex) {
+    const headerH = estimateItemHeight(queue[headerIndex]);
+    let restH = 0;
+    let firstContentH = 0;
+    for (let j = headerIndex + 1; j < queue.length; j++) {
+      const it = queue[j];
+      const ih = estimateItemHeight(it);
+      restH += ih;
+      if (!firstContentH && (it.type === 'text' || it.type === 'image')) {
+        firstContentH = it.type === 'image' ? Math.min(ih, 80) : Math.min(ih, 12 * 3 + 6);
+      }
+      if (it.type === 'fn_sep') break;
+    }
+    const total = headerH + restH;
+    const chromeH = marginTop + headerBandH + 12;
+    const freshAvail = PAGE_H - chromeH - contentBottom;
+    if (total <= freshAvail) return total;
+    return headerH + Math.max(firstContentH || 36, 36);
+  }
+
   newPage();
-  queue.forEach((item) => {
+  for (let qi = 0; qi < queue.length; qi++) {
+    const item = queue[qi];
     const h = estimateItemHeight(item);
-    // Abschnitte / FN-Header möglichst als Block halten
-    if (item.type === 'section' || item.type === 'fn_header') {
+    if (item.type === 'fn_header') {
+      needSpace(measureFnBlockKeepHeight(qi));
+    } else if (item.type === 'section') {
       needSpace(Math.min(Math.max(h, 40), 160));
     } else if (item.type === 'image') {
       needSpace(Math.min(h, Math.max(80, y - contentBottom)));
@@ -2897,7 +2998,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     if (item.type === 'section') {
       page.drawText(item.title, { x: marginX, y: y, size: 10, font: fontBold, color: greenDark });
       y -= 14;
-      return;
+      continue;
     }
     if (item.type === 'fn_sep') {
       needSpace(12);
@@ -2909,12 +3010,11 @@ async function generateMontageberichtPdfBuffer(payload, options) {
         color: greenSoft,
       });
       y -= 10;
-      return;
+      continue;
     }
     if (item.type === 'fn_header') {
       const boxH = 22;
-      const gapBelow = 14; // Abstand zur ersten Textzeile
-      needSpace(boxH + gapBelow);
+      const gapBelow = 14;
       page.drawRectangle({
         x: marginX,
         y: y - boxH,
@@ -2963,44 +3063,28 @@ async function generateMontageberichtPdfBuffer(payload, options) {
         color: white,
       });
       y -= boxH + gapBelow;
-      return;
+      continue;
     }
     if (item.type === 'text') {
       const size = 9;
       const lineH = 12;
       const maxW = tableInnerW;
-      const paragraphs = String(item.text || '').split('\n');
-      paragraphs.forEach((para, pi) => {
-        const words = para.split(/\s+/).filter(Boolean);
-        if (!words.length) {
+      const paragraphs = paragraphsFromTextItem(item);
+      paragraphs.forEach((runs) => {
+        if (!runs || !runs.length) {
           needSpace(lineH);
           y -= lineH;
           return;
         }
-        let line = '';
-        const flush = () => {
-          if (!line) return;
+        const wrapped = wrapStyledRuns(runs, styleFonts, size, maxW);
+        wrapped.forEach((line) => {
           needSpace(lineH + 2);
-          page.drawText(line, { x: marginX, y, size, font, color: grayText });
+          drawStyledLine(page, line, marginX, y, size, styleFonts, grayText);
           y -= lineH;
-          line = '';
-        };
-        words.forEach((word) => {
-          const test = line ? line + ' ' + word : word;
-          if (font.widthOfTextAtSize(test, size) > maxW && line) {
-            flush();
-            line = word;
-          } else {
-            line = test;
-          }
         });
-        flush();
-        if (pi < paragraphs.length - 1) {
-          /* paragraph gap already via empty lines */
-        }
       });
       y -= 6;
-      return;
+      continue;
     }
     if (item.type === 'image' && item.img) {
       const maxW = tableInnerW * ((item.widthPct || 100) / 100);
@@ -3022,7 +3106,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
       });
       y -= ih + 10;
     }
-  });
+  }
 
   pages.forEach((p, i) => {
     drawFooter(p, i, pages.length, i === pages.length - 1);
@@ -3618,4 +3702,6 @@ module.exports = {
   generateSchleppkettenPdfBuffer,
   generateMontageberichtPdfBuffer,
   generatePruefzertifikatPdfBuffer,
+  htmlToMbContentBlocks,
+  htmlFragmentToPlainPdf,
 };

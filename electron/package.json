@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "2.6.17",
+  "version": "2.6.18",
   "description": "Monteur WebApp - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -14,6 +14,11 @@
     "postinstall": "electron-builder install-app-deps",
     "test:parameter-pdf": "node scripts/test-parameter-pdf.js",
     "test:parameter-pdf:open": "node scripts/test-parameter-pdf.js --open",
+    "test:html-rich-text": "node --test lib/html_rich_text.test.js",
+    "test:montagebericht-pdf-parity": "node ./node_modules/electron/cli.js scripts/test-montagebericht-pdf-parity.js",
+    "test:montagebericht-pdf-parity:open": "node ./node_modules/electron/cli.js scripts/test-montagebericht-pdf-parity.js --open",
+    "test:montagebericht-pdf-pagebreak": "node ./node_modules/electron/cli.js scripts/test-montagebericht-pdf-pagebreak.js",
+    "test:montagebericht-pdf-pagebreak:open": "node ./node_modules/electron/cli.js scripts/test-montagebericht-pdf-pagebreak.js --open",
     "test:serviceprotokoll-pdf": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js",
     "test:serviceprotokoll-pdf:open": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js --open",
     "test:sync-offline": "node --test lib/sync-lww.test.js lib/sync-offline-verify.test.js"

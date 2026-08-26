@@ -188,6 +188,7 @@
 
 .mb-rich-editor {
   width: 100%;
+  max-width: 531pt; /* PDF tableInnerW – Soft-Wrap näher am Montagebericht-PDF */
   min-height: 3.2rem;
   height: auto;
   max-height: none;
@@ -199,8 +200,9 @@
   resize: none;
   overflow: hidden;
   box-sizing: border-box;
-  font-size: 0.875rem;
-  line-height: 1.45;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 9pt;
+  line-height: 12pt;
 }
 
 .mb-rich-editor[contenteditable="true"]:focus {
