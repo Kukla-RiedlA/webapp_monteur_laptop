@@ -769,6 +769,7 @@ function upsertAnlagenstammRows(db, rows) {
     return true;
   }
 
+  function applyRows() {
   for (const raw of rows) {
     const row = clampForDispoAnlagenstamm(raw);
     const id = parseInt(row.id, 10);
@@ -832,6 +833,16 @@ function upsertAnlagenstammRows(db, rows) {
       syncedAt,
     );
   }
+  }
+  if (typeof db.transaction === 'function') {
+    db.transaction(applyRows);
+  } else {
+    applyRows();
+  }
+}
+
+function yieldEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 function searchLocal(db, filters) {
@@ -1384,6 +1395,7 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
         if (typeof saveFn === 'function') saveFn();
       });
       if (onProgress) onProgress({ page, totalPages, totalCount, resuming: resuming || page > 1 });
+      await yieldEventLoop();
       page += 1;
     } while (page <= totalPages);
     let purged = 0;
@@ -1682,6 +1694,7 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
       if (onProgress) {
         onProgress({ page, totalPages, totalCount, written, skipped, resuming: resuming || page > 1 });
       }
+      await yieldEventLoop();
       page += 1;
     } while (page <= totalPages);
     await withDbLock(async () => {

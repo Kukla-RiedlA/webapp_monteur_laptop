@@ -5,6 +5,8 @@ const path = require('path');
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+  // DirectComposition: GPU-Hänger → glasiges Fenster. GDI bleibt bedienbar.
+  app.commandLine.appendSwitch('disable-direct-composition');
 }
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -132,6 +134,40 @@ function focusMainWindow() {
   mainWindow.focus();
 }
 
+let lastHangReloadAt = 0;
+function attachHangRecovery(win) {
+  if (!win) return;
+  let unresponsiveTimer = null;
+  const paint = () => {
+    try {
+      if (win && !win.isDestroyed()) win.webContents.invalidate();
+    } catch (_) { /* ignore */ }
+  };
+  win.on('show', paint);
+  win.on('restore', paint);
+  win.on('focus', paint);
+  win.on('unresponsive', () => {
+    console.error('[window] unresponsive');
+    paint();
+    if (unresponsiveTimer) return;
+    unresponsiveTimer = setTimeout(() => {
+      unresponsiveTimer = null;
+      if (!win || win.isDestroyed()) return;
+      const now = Date.now();
+      if (now - lastHangReloadAt < 15000) return;
+      lastHangReloadAt = now;
+      console.error('[window] reload after hang');
+      try { win.reload(); } catch (_) { /* ignore */ }
+    }, 4000);
+  });
+  win.on('responsive', () => {
+    if (unresponsiveTimer) {
+      clearTimeout(unresponsiveTimer);
+      unresponsiveTimer = null;
+    }
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1000,
@@ -178,6 +214,7 @@ function createWindow() {
       }, 400);
     }
   });
+  attachHangRecovery(mainWindow);
   setTimeout(() => {
     showMainWindow('Timeout — ready-to-show ausgeblieben');
   }, 4000);

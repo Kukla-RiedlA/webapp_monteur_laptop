@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.023
+- **Stabilität:** Glasiges „Keine Rückmeldung“ während Sync: WAL-Checkpoint blockiert den Hauptprozess nicht mehr; DirectComposition aus; Fenster lädt nach Hänger neu.
+
 ## V 2.006.021
 - **Serviceprotokoll:** Auftragsliste wie die anderen Protokolle (keine Etex-Demo mehr im React-Dropdown).
 - **Stabilität:** Transparentes Hängen auf manchen Windows-PCs abgesichert (PDF-Viewer-Timeout, GPU-Reload, max. zwei Auto-PDFs).

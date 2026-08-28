@@ -31,8 +31,11 @@ function createDbCompat() {
     transaction(fn) {
       db.transaction(fn)();
     },
+    // better-sqlite3 schreibt sofort. FULL-Checkpoint nach jedem save() blockiert den
+    // Electron-Hauptprozess (glasiges Fenster, „Keine Rückmeldung“) während Sync.
+    // TRUNCATE bleibt flushDb() / App-Ende vorbehalten.
     save() {
-      persistDb('FULL');
+      persistDb('PASSIVE');
       return !getLastPersistError();
     },
   };

@@ -15373,6 +15373,7 @@ function createApp(db) {
                 syncResult.purged != null ? syncResult.purged : 0,
               );
             }
+            await new Promise((r) => setImmediate(r));
             flushDb();
             try {
               const pnTreeSync = await syncProjekteNeuTreesFromDispo(
@@ -16548,17 +16549,18 @@ function createApp(db) {
   }
 
   function getLocalDbStats() {
-    try {
-      flushDb();
-    } catch (_) {}
-    if (!fs.existsSync(DB_PATH)) {
-      return { db_path: DB_PATH, db_size_bytes: 0, db_size_human: '0 B' };
+    // Kein wal_checkpoint: TRUNCATE während Sync blockiert den Electron-Hauptprozess.
+    let size = 0;
+    for (const suffix of ['', '-wal', '-shm']) {
+      const p = DB_PATH + suffix;
+      try {
+        if (fs.existsSync(p)) size += fs.statSync(p).size;
+      } catch (_) { /* ignore */ }
     }
-    const st = fs.statSync(DB_PATH);
     return {
       db_path: DB_PATH,
-      db_size_bytes: st.size,
-      db_size_human: formatBytesHuman(st.size),
+      db_size_bytes: size,
+      db_size_human: formatBytesHuman(size),
     };
   }
 
@@ -16581,18 +16583,25 @@ function createApp(db) {
     return total;
   }
 
+  let dienstreiseSizeCache = { at: 0, result: null };
   function getDienstreiseFilesStats() {
     const base = getDienstreiseBasePath();
     if (!base) {
       return { configured: false, bytes: 0, human: '—', base_path: '' };
     }
+    const now = Date.now();
+    if (dienstreiseSizeCache.result && now - dienstreiseSizeCache.at < 60000) {
+      return dienstreiseSizeCache.result;
+    }
     const bytes = dirSizeBytesRecursive(base, 0);
-    return {
+    const result = {
       configured: true,
       bytes,
       human: formatBytesHuman(bytes),
       base_path: base,
     };
+    dienstreiseSizeCache = { at: now, result };
+    return result;
   }
 
   app.get('/api/sync_status', (req, res) => {
@@ -18050,20 +18059,34 @@ function upsertCalendarCache(db, calendarData, opts) {
   const jobs = Array.isArray(calendarData.jobs) ? calendarData.jobs : [];
   const absences = Array.isArray(calendarData.absences) ? calendarData.absences : [];
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const delTech = db.prepare('DELETE FROM calendar_cache_technicians');
+  const delJobs = db.prepare('DELETE FROM calendar_cache_jobs');
+  const delAbs = db.prepare('DELETE FROM calendar_cache_absences');
+  const delJobsRange = db.prepare(
+    `DELETE FROM calendar_cache_jobs WHERE end_datetime >= ? AND start_datetime <= ?`,
+  );
+  const delAbsRange = db.prepare(
+    `DELETE FROM calendar_cache_absences WHERE end_datetime >= ? AND start_datetime <= ?`,
+  );
+  const insTech = db.prepare(
+    'INSERT OR REPLACE INTO calendar_cache_technicians (technician_id, name, color, synced_at) VALUES (?, ?, ?, ?)',
+  );
+  const insJob = db.prepare(`INSERT OR REPLACE INTO calendar_cache_jobs
+        (cache_key, server_job_id, technician_id, customer_name, job_number, city, country, status, start_datetime, end_datetime, technician_name, technician_color, montage_verrechnet, billing_travel_complete, date_not_fixed, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insAbs = db.prepare(`INSERT OR REPLACE INTO calendar_cache_absences
+        (cache_key, server_absence_id, technician_id, type, comment, start_datetime, end_datetime, technician_name, technician_color, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   db.transaction(() => {
     if (replaceAll || !rangeStart || !rangeEnd) {
-      db.prepare('DELETE FROM calendar_cache_technicians').run();
-      db.prepare('DELETE FROM calendar_cache_jobs').run();
-      db.prepare('DELETE FROM calendar_cache_absences').run();
+      delTech.run();
+      delJobs.run();
+      delAbs.run();
     } else {
       // Sichtbarer Zeitraum: alte Termine/Abwesenheiten in diesem Fenster entfernen (Umbuchungen),
       // andere Monate im Cache behalten.
-      db.prepare(
-        `DELETE FROM calendar_cache_jobs WHERE end_datetime >= ? AND start_datetime <= ?`,
-      ).run(rangeStart, rangeEnd);
-      db.prepare(
-        `DELETE FROM calendar_cache_absences WHERE end_datetime >= ? AND start_datetime <= ?`,
-      ).run(rangeStart, rangeEnd);
+      delJobsRange.run(rangeStart, rangeEnd);
+      delAbsRange.run(rangeStart, rangeEnd);
     }
 
     for (const t of technicians) {
@@ -18074,8 +18097,7 @@ function upsertCalendarCache(db, calendarData, opts) {
         String(t.name || t.full_name || t.technician_name || '').trim() ||
         (tid === 0 ? 'Nicht zugewiesen' : 'Techniker ' + tid);
       const color = String(t.color || t.farbe || '').trim() || (tid === 0 ? '#94a3b8' : '#4a90e2');
-      db.prepare('INSERT OR REPLACE INTO calendar_cache_technicians (technician_id, name, color, synced_at) VALUES (?, ?, ?, ?)')
-        .run(tid, name, color, syncedAt);
+      insTech.run(tid, name, color, syncedAt);
     }
 
     for (const j of jobs) {
@@ -18085,10 +18107,7 @@ function upsertCalendarCache(db, calendarData, opts) {
       const end = pickCalendarEventDateTime(j, true);
       if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(tid) || tid < 0 || !start || !end) continue;
       const cacheKey = String(sid) + ':' + String(tid);
-      db.prepare(`INSERT OR REPLACE INTO calendar_cache_jobs
-        (cache_key, server_job_id, technician_id, customer_name, job_number, city, country, status, start_datetime, end_datetime, technician_name, technician_color, montage_verrechnet, billing_travel_complete, date_not_fixed, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      insJob.run(
         cacheKey, sid, tid,
         String(j.customer_name || j.customer || ''), String(j.job_number || ''),
         String(j.city || ''), String(j.country || j.country_code || ''), String(j.status || ''),
@@ -18108,10 +18127,7 @@ function upsertCalendarCache(db, calendarData, opts) {
       const type = String(a.type || '');
       if (!Number.isFinite(tid) || tid <= 0 || !start || !end) continue;
       const cacheKey = [sidRaw || 'x', tid, start, end, type].join(':');
-      db.prepare(`INSERT OR REPLACE INTO calendar_cache_absences
-        (cache_key, server_absence_id, technician_id, type, comment, start_datetime, end_datetime, technician_name, technician_color, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      insAbs.run(
         cacheKey, sidRaw !== '' ? Number(sidRaw) : null, tid, type, String(a.comment || ''),
         start, end, String(a.technician_name || ''), String(a.technician_color || ''), syncedAt
       );
