@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.020
+- **Protokolle:** Nach dem Erstellen öffnen sich PDF bzw. mehrere PDFs (DE/EN, Alle PDF) im Electron-Viewer; Auto-Open ist standardmäßig an.
+- **Parameterlisten:** PA3- und PAL-Dateien werden als PDF erzeugt (DWC-Ausdruck).
+- **Bugreport:** Nebenfenster bleibt auf einem sichtbaren Bildschirm und kommt nach vorne.
+
 ## V 2.006.016
 - **Textbausteine:** Eingabe wie Arbeitsschritte mit Bezeichnung DE und EN; Liste und Montagebericht-Chips nutzen die gewählte Sprache. Rich-Text-Editor entfällt.
 - **Arbeitsschritte:** „Für alle“ übernimmt den Schritt lokal ins Globale; Katalog-Übernehmen wird nicht mehr vom React-iframe überschrieben.

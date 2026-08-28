@@ -2,7 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, screen } = require('electron');
 const { attachEditContextMenu } = require('./edit-context-menu');
 
 function boundsPath(userDataDir) {
@@ -32,23 +32,75 @@ function saveBounds(userDataDir, win) {
   } catch (_) { /* ignore */ }
 }
 
+function isBoundsOnScreen(b) {
+  if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return false;
+  const w = Number(b.width) || 480;
+  const h = Number(b.height) || 720;
+  return screen.getAllDisplays().some((d) => {
+    const a = d.workArea || d.bounds;
+    const overlapX = b.x < a.x + a.width && b.x + w > a.x;
+    const overlapY = b.y < a.y + a.height && b.y + h > a.y;
+    const visibleW = Math.min(b.x + w, a.x + a.width) - Math.max(b.x, a.x);
+    const visibleH = Math.min(b.y + h, a.y + a.height) - Math.max(b.y, a.y);
+    return overlapX && overlapY && visibleW >= 80 && visibleH >= 80;
+  });
+}
+
+function clampToWorkArea(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    const b = win.getBounds();
+    const d = screen.getDisplayMatching(b);
+    const a = d.workArea;
+    const w = Math.min(Math.max(400, b.width), a.width);
+    const h = Math.min(Math.max(560, b.height), a.height);
+    const x = Math.max(a.x, Math.min(b.x, a.x + a.width - w));
+    const y = Math.max(a.y, Math.min(b.y, a.y + a.height - h));
+    win.setBounds({ x: Math.round(x), y: Math.round(y), width: Math.round(w), height: Math.round(h) });
+  } catch (_) { /* ignore */ }
+}
+
+function placeBesideMain(target, getMainWindow) {
+  const main = typeof getMainWindow === 'function' ? getMainWindow() : getMainWindow;
+  if (!target || target.isDestroyed()) return;
+  try {
+    const tb = target.getBounds();
+    const display = main && !main.isDestroyed()
+      ? screen.getDisplayMatching(main.getBounds())
+      : screen.getPrimaryDisplay();
+    const a = display.workArea;
+    const w = Math.min(Math.max(400, tb.width), a.width);
+    const h = Math.min(Math.max(560, tb.height), a.height);
+    let x = a.x + a.width - w - 12;
+    let y = a.y + 48;
+    if (main && !main.isDestroyed()) {
+      const b = main.getBounds();
+      const right = b.x + b.width + 8;
+      const left = b.x - w - 8;
+      y = Math.max(a.y, Math.min(b.y + 40, a.y + a.height - h));
+      if (right + w <= a.x + a.width) {
+        x = right;
+      } else if (left >= a.x) {
+        x = left;
+      }
+    }
+    target.setBounds({ x: Math.round(x), y: Math.round(y), width: Math.round(w), height: Math.round(h) });
+  } catch (_) {
+    clampToWorkArea(target);
+  }
+}
+
+function raiseWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  clampToWorkArea(win);
+  win.show();
+  win.moveTop();
+  win.focus();
+}
+
 function createBugReportWindowManager(getMainWindow, getPort, getUserDataDir) {
   let win = null;
-
-  function placeBesideMain(target) {
-    const main = typeof getMainWindow === 'function' ? getMainWindow() : getMainWindow;
-    if (!main || main.isDestroyed()) return;
-    try {
-      const b = main.getBounds();
-      const w = target.getBounds();
-      let x = b.x + b.width + 8;
-      let y = Math.max(40, b.y + 40);
-      if (x + w.width > b.x + b.width + 2000) {
-        x = Math.max(40, b.x - w.width - 8);
-      }
-      target.setPosition(Math.round(x), Math.round(y));
-    } catch (_) { /* ignore */ }
-  }
 
   async function openBugReportWindow() {
     const port = typeof getPort === 'function' ? getPort() : getPort;
@@ -56,19 +108,19 @@ function createBugReportWindowManager(getMainWindow, getPort, getUserDataDir) {
     const userDataDir = typeof getUserDataDir === 'function' ? getUserDataDir() : getUserDataDir;
 
     if (win && !win.isDestroyed()) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
+      raiseWindow(win);
       return { ok: true, focused: true };
     }
 
     const saved = userDataDir ? loadBounds(userDataDir) : null;
+    const useSaved = !!(saved && isBoundsOnScreen(saved));
     win = new BrowserWindow({
       width: saved && saved.width ? saved.width : 480,
       height: saved && saved.height ? saved.height : 720,
       minWidth: 400,
       minHeight: 560,
-      x: saved && Number.isFinite(saved.x) ? saved.x : undefined,
-      y: saved && Number.isFinite(saved.y) ? saved.y : undefined,
+      x: useSaved ? saved.x : undefined,
+      y: useSaved ? saved.y : undefined,
       title: 'Bugreport',
       parent: undefined,
       modal: false,
@@ -89,14 +141,20 @@ function createBugReportWindowManager(getMainWindow, getPort, getUserDataDir) {
     try {
       attachEditContextMenu(win.webContents);
     } catch (_) { /* optional */ }
-    await win.loadURL(url);
-    if (!(saved && Number.isFinite(saved.x))) {
-      placeBesideMain(win);
+    try {
+      await win.loadURL(url);
+    } catch (e) {
+      console.error('[bug-report] loadURL', e && e.message ? e.message : e);
+    }
+    if (useSaved) {
+      clampToWorkArea(win);
+    } else {
+      placeBesideMain(win, getMainWindow);
     }
     if (saved && saved.pin) {
       win.setAlwaysOnTop(true, 'floating');
     }
-    win.show();
+    raiseWindow(win);
     return { ok: true };
   }
 

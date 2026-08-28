@@ -3,7 +3,7 @@
 const path = require('path');
 const crypto = require('crypto');
 
-const PARAM_EXT_RE = /\.(csv|txt|pa4|pa5|pal)$/i;
+const PARAM_EXT_RE = /\.(csv|txt|pa3|pa4|pa5|pal)$/i;
 
 function isSupportedParameterFileName(fileName) {
   return PARAM_EXT_RE.test(String(fileName || '').trim());

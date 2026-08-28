@@ -12,35 +12,54 @@ const { BrowserWindow, app } = require('electron');
 function createPdfViewerWindowManager(getMainWindow) {
   const windows = new Set();
 
-  function prepareReadablePdfPath(filePath) {
+  function win32LongPath(filePath) {
+    const n = path.resolve(String(filePath || ''));
+    if (process.platform !== 'win32' || !n) return n;
+    if (n.startsWith('\\\\?\\')) return n;
+    if (n.startsWith('\\\\')) return '\\\\?\\UNC\\' + n.slice(2);
+    return '\\\\?\\' + n;
+  }
+
+  function existingPdfPath(filePath) {
     const normalized = path.normalize(String(filePath || '').trim());
     if (!normalized) return null;
-    if (!fs.existsSync(normalized)) return null;
-    const needsCopy =
-      normalized.length >= 200 ||
-      /[^\x20-\x7E]/.test(normalized) ||
-      /[\u2022\u2023\u2043\u2219\u25E6\u25AA\u25CF\u00B7•▪◦●∙·]/.test(normalized);
-    if (!needsCopy) return normalized;
+    const candidates = [normalized];
+    if (process.platform === 'win32') candidates.push(win32LongPath(normalized));
+    for (const c of candidates) {
+      try {
+        if (fs.existsSync(c)) return c;
+      } catch (_) { /* continue */ }
+    }
+    return null;
+  }
+
+  function prepareReadablePdfPath(filePath) {
+    const existing = existingPdfPath(filePath);
+    if (!existing) return null;
     try {
       const tmpDir = app.getPath('temp');
       const base =
-        String(path.basename(normalized, '.pdf'))
+        String(path.basename(String(filePath || existing), '.pdf'))
           .replace(/[^\w.\-()+]/gi, '_')
           .replace(/_+/g, '_')
           .slice(0, 60) || 'dokument';
       const tmpPath = path.join(tmpDir, `kukla_pdfview_${Date.now()}_${base}.pdf`);
-      fs.copyFileSync(normalized, tmpPath);
+      fs.copyFileSync(existing, tmpPath);
       return tmpPath;
-    } catch (_) {
-      return normalized;
+    } catch (e) {
+      console.warn('[pdf-viewer] temp-Kopie fehlgeschlagen:', e && e.message ? e.message : e);
+      return existing.startsWith('\\\\?\\') ? path.normalize(String(filePath || '').trim()) : existing;
     }
   }
 
   async function openPdf(filePath) {
     const sourcePath = path.normalize(String(filePath || '').trim());
+    console.log('[pdf-viewer] open', sourcePath);
     const readable = prepareReadablePdfPath(sourcePath);
     if (!readable) {
-      return { ok: false, error: 'PDF nicht gefunden: ' + (sourcePath || '') };
+      const err = 'PDF nicht gefunden: ' + (sourcePath || '');
+      console.warn('[pdf-viewer]', err);
+      return { ok: false, error: err };
     }
 
     const title = path.basename(sourcePath || readable) || 'PDF';
@@ -51,7 +70,6 @@ function createPdfViewerWindowManager(getMainWindow) {
       minWidth: 640,
       minHeight: 480,
       title,
-      // Eigenes Fenster (nicht modal am Main) – parallel nutzbar
       parent: undefined,
       modal: false,
       backgroundColor: '#525659',
@@ -66,7 +84,8 @@ function createPdfViewerWindowManager(getMainWindow) {
     if (main && !main.isDestroyed()) {
       try {
         const b = main.getBounds();
-        win.setPosition(Math.max(40, b.x + 40), Math.max(40, b.y + 40));
+        const cascade = 40 + windows.size * 28;
+        win.setPosition(Math.max(40, b.x + cascade), Math.max(40, b.y + cascade));
       } catch (_) { /* ignore */ }
     }
     windows.add(win);
@@ -77,11 +96,22 @@ function createPdfViewerWindowManager(getMainWindow) {
       attachEditContextMenu(win.webContents);
     } catch (_) { /* optional */ }
 
+    function bringToFront() {
+      if (win.isDestroyed()) return;
+      try {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.moveTop();
+        win.focus();
+      } catch (_) { /* ignore */ }
+    }
+
     try {
       await win.loadURL(pathToFileURL(readable).href);
       if (win.isDestroyed()) return { ok: false, error: 'Fenster geschlossen.' };
-      win.show();
-      win.focus();
+      bringToFront();
+      setTimeout(bringToFront, 120);
+      console.log('[pdf-viewer] ok', title);
       return {
         ok: true,
         via: 'electron-pdf-viewer',
@@ -89,10 +119,12 @@ function createPdfViewerWindowManager(getMainWindow) {
         viewPath: readable !== sourcePath ? readable : undefined,
       };
     } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      console.warn('[pdf-viewer] loadURL fehlgeschlagen:', msg);
       try {
         if (!win.isDestroyed()) win.close();
       } catch (_) { /* ignore */ }
-      return { ok: false, error: e && e.message ? e.message : String(e) };
+      return { ok: false, error: msg };
     }
   }
 

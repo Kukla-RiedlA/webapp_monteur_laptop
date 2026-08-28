@@ -1,16 +1,28 @@
 'use strict';
 
 /**
- * CSV (Semikolon-getrennt) in PDF-Tabelle umwandeln (pdf-lib).
- * Layout wie Referenz-PDF: Logo links, DWC-7/Printout Mitte, Adresse rechts,
- * Zeile "Parameter", Tabelle mit Name/Value/Unit/Comment, Fußzeile Seite x/y.
- * Für Verwendung in server.js und in test-parameter-pdf.js.
+ * Parameterdatei in PDF umwandeln (pdf-lib).
+ * PAL (DWC-6) → KUKLink-Liste, PA3 (DWC-5/3) → Zweispalt-Dump,
+ * CSV/PA7 → DWC-7-Layout (Logo, Printout, Name/Value/Unit/Comment).
  */
 
 const path = require('path');
 const fs = require('fs');
+const { palToPdfBuffer, isPalDwc6Format } = require('./pal-to-pdf');
+const { pa3ToPdfBuffer, isPa3DumpFormat } = require('./pa3-to-pdf');
 
 async function csvToPdfBuffer(csvText, options) {
+  const filename = options && options.filename;
+  if (isPa3DumpFormat(csvText, filename)) {
+    return pa3ToPdfBuffer(csvText, options);
+  }
+  if (isPalDwc6Format(csvText, filename)) {
+    return palToPdfBuffer(csvText, options);
+  }
+  return csvToPdfBufferDwc7(csvText, options);
+}
+
+async function csvToPdfBufferDwc7(csvText, options) {
   const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
   // Nur Semikolon trennt Spalten; Komma (z. B. in 0,0) ist kein Trennzeichen.
   const delimiter = ';';

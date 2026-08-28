@@ -6429,7 +6429,7 @@ function createApp(db) {
     const t = String(type || '');
     const n = String(name || '');
     if (/parameter/i.test(t)) return true;
-    if (/\.csv$/i.test(n)) return true;
+    if (/\.(csv|pal|pa3|pa4|pa5|txt)$/i.test(n)) return true;
     return false;
   }
 
@@ -9264,6 +9264,7 @@ function createApp(db) {
 
       const saved = [];
       let firstAbsPdf = '';
+      const uniqueAbsPdfs = [];
 
       for (const lang of languages) {
         let pdfBytes = null;
@@ -9303,6 +9304,7 @@ function createApp(db) {
 
         const stem = fileStemForLang(lang);
         const pdfFilename = `${stem}.pdf`;
+        let langAbs = '';
         for (const folderName of targetFolderNames) {
           const protokolleDir = buildMonteurWorkAbsDir(
             docMonteurBase,
@@ -9314,12 +9316,14 @@ function createApp(db) {
           const absPdf = path.join(protokolleDir, pdfFilename);
           writeFileWithRetry(absPdf, pdfBytes);
           if (!firstAbsPdf) firstAbsPdf = absPdf;
+          if (!langAbs) langAbs = absPdf;
           protectPathIfUnderDokumenteMonteur(
             db,
             localJobId,
             buildMonteurWorkRelPath(folderName, montageFolderNameMb, 'Protokolle/' + pdfFilename),
           );
         }
+        if (langAbs) uniqueAbsPdfs.push(langAbs);
         for (const f of fabs) {
           const fnFolder = resolveFnFolder(f);
           saved.push(buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, 'Protokolle/' + pdfFilename));
@@ -9435,6 +9439,8 @@ function createApp(db) {
         languages,
         saved,
         path: absPath || undefined,
+        pdf_path: absPath || undefined,
+        pdf_paths: uniqueAbsPdfs.length ? uniqueAbsPdfs : (absPath ? [absPath] : []),
         rel: saved[0] || undefined,
       });
       setImmediate(() => {
@@ -9670,6 +9676,7 @@ function createApp(db) {
       let record = null;
       let savedPdf = null;
       let savedPdfPath = null;
+      const savedPdfs = [];
       const createPdf = body.create_pdf === true || body.createPdf === true;
       if (reiseDir) {
         record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, payload.fabrikationsnummer, payload, db, localJobId);
@@ -9681,7 +9688,6 @@ function createApp(db) {
         const sigPngKw = await resolveTechnicianSignaturePng(technicianId, body);
         if (!sigPngKw) return failMissingSignature(res);
         payload.technician_signature_png = sigPngKw;
-        const savedPdfs = [];
         for (const lang of pdfLangs) {
           const pdfPaths = resolveKontrollwiegungLocalPdfPaths(
             reiseDir,
@@ -9763,7 +9769,7 @@ function createApp(db) {
               ).run(String(localJobId) + ':' + String(payload.fabrikationsnummer || ''));
               save();
             }
-            return res.json(Object.assign({}, data, { saved_pdf: savedPdf, pdf_path: savedPdfPath || undefined, local_protokoll_id: record && record.protokoll_id }));
+            return res.json(Object.assign({}, data, protocolPdfClientFields(savedPdfs), { local_protokoll_id: record && record.protokoll_id }));
           }
           deferred = true;
         } catch (_) {
@@ -9782,14 +9788,12 @@ function createApp(db) {
         );
         save();
       }
-      res.json({
+      res.json(Object.assign({
         ok: true,
         protokoll_id: protokollId,
-        saved_pdf: savedPdf,
-        pdf_path: savedPdfPath || undefined,
         deferred,
         local_protokoll_id: record && record.protokoll_id,
-      });
+      }, protocolPdfClientFields(savedPdfs)));
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Kontrollwiegung konnte nicht gespeichert werden.' });
     }
@@ -10098,6 +10102,7 @@ function createApp(db) {
       let record = null;
       let savedPdf = null;
       let savedPdfPath = null;
+      const savedPdfs = [];
       const createPdf = body.create_pdf === true || body.createPdf === true;
       if (reiseDir) {
         record = schleppkettenLocal.saveSchleppkettenLocal(reiseDir, payload.fabrikationsnummer, payload, db, localJobId);
@@ -10110,7 +10115,6 @@ function createApp(db) {
         const sigPngSk = await resolveTechnicianSignaturePng(technicianId, body);
         if (!sigPngSk) return failMissingSignature(res);
         payload.technician_signature_png = sigPngSk;
-        const savedPdfs = [];
         for (const lang of pdfLangsSk) {
           const pdfPaths = resolveSchleppkettenLocalPdfPaths(
             reiseDir,
@@ -10192,7 +10196,7 @@ function createApp(db) {
               ).run(String(localJobId) + ':' + String(payload.fabrikationsnummer || ''));
               save();
             }
-            return res.json(Object.assign({}, data, { saved_pdf: savedPdf, pdf_path: savedPdfPath || undefined, local_protokoll_id: record && record.protokoll_id }));
+            return res.json(Object.assign({}, data, protocolPdfClientFields(savedPdfs), { local_protokoll_id: record && record.protokoll_id }));
           }
           deferred = true;
         } catch (_) {
@@ -10211,14 +10215,12 @@ function createApp(db) {
         );
         save();
       }
-      res.json({
+      res.json(Object.assign({
         ok: true,
         deferred: !!deferred,
         protokoll_id: protokollId,
         local_protokoll_id: record && record.protokoll_id,
-        saved_pdf: savedPdf,
-        pdf_path: savedPdfPath || undefined,
-      });
+      }, protocolPdfClientFields(savedPdfs)));
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Schleppketten-Test konnte nicht gespeichert werden.' });
     }
@@ -10590,9 +10592,7 @@ function createApp(db) {
             const data = await r.json().catch(() => ({}));
             if (r.ok && data.ok) {
               protokollId = data.zertifikat_id || data.protokoll_id || data.id || protokollId;
-              return res.json(Object.assign({}, data, {
-                saved_pdfs: savedPdfs,
-                saved_pdf: savedPdfs[0] && savedPdfs[0].rel,
+              return res.json(Object.assign({}, data, protocolPdfClientFields(savedPdfs), {
                 local_protokoll_id: record && record.protokoll_id,
               }));
             }
@@ -10614,15 +10614,13 @@ function createApp(db) {
         );
         save();
       }
-      res.json({
+      res.json(Object.assign({
         ok: true,
         deferred: !!deferred,
         protokoll_id: protokollId,
         zertifikat_id: protokollId,
         local_protokoll_id: record && record.protokoll_id,
-        saved_pdfs: savedPdfs,
-        saved_pdf: savedPdfs[0] && savedPdfs[0].rel,
-      });
+      }, protocolPdfClientFields(savedPdfs)));
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Prüfzertifikat konnte nicht gespeichert werden.' });
     }
@@ -11102,6 +11100,16 @@ function createApp(db) {
     const multi = list.length > 1;
     if (multi) return '_' + String(lang || 'de').toUpperCase();
     return String(lang || '').toLowerCase() === 'en' ? '_EN' : '';
+  }
+
+  function protocolPdfClientFields(savedPdfs) {
+    const list = Array.isArray(savedPdfs) ? savedPdfs : [];
+    return {
+      saved_pdfs: list,
+      saved_pdf: (list[0] && list[0].rel) || null,
+      pdf_path: (list[0] && list[0].path) || undefined,
+      pdf_paths: list.map((p) => p && p.path).filter(Boolean),
+    };
   }
 
   function resolveKontrollwiegungLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum, lang, langs) {
@@ -12951,11 +12959,12 @@ function createApp(db) {
       let pdfBytes = null;
       try {
         const csvToPdfBuffer = getCsvToPdfBuffer();
-        pdfBytes = await csvToPdfBuffer(csvText, { filename });
+        const sourcePath = (body.source_path || body.sourcePath || filename).toString().trim() || filename;
+        pdfBytes = await csvToPdfBuffer(csvText, { filename, sourcePath });
       } catch (pdfErr) {
         console.warn('Parameter-PDF on-demand (Akte):', pdfErr && pdfErr.message ? pdfErr.message : pdfErr);
       }
-      const pdfBasename = filename.replace(/\.csv$/i, '') + '.pdf';
+      const pdfBasename = filename.replace(/\.(csv|txt|pa3|pa4|pa5|pal)$/i, '') + '.pdf';
       const pdfPath = path.join(paramDir, pdfBasename);
       if (pdfBytes) {
         writeFileWithRetry(pdfPath, pdfBytes);
@@ -13022,6 +13031,8 @@ function createApp(db) {
         ok: true,
         savedCsv,
         savedPdf,
+        pdf_path: pdfBytes ? pdfPath : undefined,
+        pdf_paths: pdfBytes ? [pdfPath] : [],
         ingest_ok: !!(ingest && ingest.ok),
         ingest_error: ingestError,
         dispo_ingest_ok: serverFileId != null,

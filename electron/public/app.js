@@ -300,29 +300,111 @@
     dienstreiseBasePath: 'monteur_dienstreiseBasePath',
     zeitschreibungBasePath: 'monteur_zeitschreibungBasePath',
     uiTheme: 'monteur_uiTheme',
-    pdfAutoOpen: 'monteur_pdfAutoOpen',
+    pdfAutoOpen: 'monteur_pdfOpenAfterCreate',
   };
 
   function isPdfAutoOpenEnabled() {
     try {
-      return localStorage.getItem(SETTINGS_KEYS.pdfAutoOpen) === '1';
+      return localStorage.getItem(SETTINGS_KEYS.pdfAutoOpen) !== '0';
     } catch (e) {
-      return false;
+      return true;
     }
   }
 
+  function collectGeneratedPdfPaths(data) {
+    var out = [];
+    var seen = Object.create(null);
+    function add(p) {
+      if (p == null) return;
+      var s = String(p).trim();
+      if (!s || seen[s]) return;
+      seen[s] = true;
+      out.push(s);
+    }
+    if (!data) return out;
+    if (typeof data === 'string') {
+      add(data);
+      return out;
+    }
+    if (Array.isArray(data)) {
+      data.forEach(function (item) {
+        if (typeof item === 'string') add(item);
+        else if (item && item.path) add(item.path);
+      });
+      return out;
+    }
+    if (Array.isArray(data.pdf_paths)) data.pdf_paths.forEach(add);
+    if (Array.isArray(data.saved_pdfs)) {
+      data.saved_pdfs.forEach(function (p) {
+        if (typeof p === 'string') add(p);
+        else if (p && p.path) add(p.path);
+      });
+    }
+    add(data.pdf_path);
+    add(data.path);
+    return out;
+  }
+
+  var protocolProgressDepth = 0;
+  var queuedPdfOpenPaths = [];
+
   async function maybeOpenGeneratedPdf(absPath) {
-    if (!absPath || !isPdfAutoOpenEnabled()) return;
-    if (typeof monteurApp === 'undefined') return;
+    if (!absPath) return;
+    if (!isPdfAutoOpenEnabled()) {
+      console.warn('[pdf-auto-open] übersprungen (Einstellungen: PDF nicht automatisch öffnen)');
+      return;
+    }
+    if (typeof monteurApp === 'undefined') {
+      console.warn('[pdf-auto-open] monteurApp fehlt');
+      return;
+    }
     try {
+      var result = null;
       if (typeof monteurApp.openPdf === 'function') {
-        await monteurApp.openPdf(String(absPath));
-        return;
+        result = await monteurApp.openPdf(String(absPath));
+      } else if (typeof monteurApp.openPath === 'function') {
+        result = await monteurApp.openPath(String(absPath));
+      } else {
+        result = { ok: false, error: 'PDF-Viewer nicht verfügbar.' };
       }
-      if (typeof monteurApp.openPath === 'function') {
-        await monteurApp.openPath(String(absPath));
+      if (result && result.ok === false) {
+        console.warn('[pdf-auto-open] fehlgeschlagen:', result.error || absPath);
+        if (typeof showToast === 'function') {
+          showToast('PDF konnte nicht geöffnet werden: ' + (result.error || absPath));
+        }
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      console.warn('[pdf-auto-open]', e);
+      if (typeof showToast === 'function') {
+        showToast('PDF konnte nicht geöffnet werden: ' + (e && e.message ? e.message : String(e)));
+      }
+    }
+  }
+
+  async function flushQueuedPdfOpens() {
+    var paths = queuedPdfOpenPaths.splice(0, queuedPdfOpenPaths.length);
+    if (!paths.length) return;
+    await new Promise(function (resolve) { setTimeout(resolve, 80); });
+    for (var i = 0; i < paths.length; i++) {
+      await maybeOpenGeneratedPdf(paths[i]);
+    }
+  }
+
+  async function maybeOpenGeneratedPdfs(dataOrPaths) {
+    var paths = collectGeneratedPdfPaths(dataOrPaths);
+    if (!paths.length) {
+      console.warn('[pdf-auto-open] keine Pfade in der Server-Antwort', dataOrPaths);
+      return;
+    }
+    if (protocolProgressDepth > 0) {
+      paths.forEach(function (p) {
+        if (p && queuedPdfOpenPaths.indexOf(p) === -1) queuedPdfOpenPaths.push(p);
+      });
+      return;
+    }
+    for (var i = 0; i < paths.length; i++) {
+      await maybeOpenGeneratedPdf(paths[i]);
+    }
   }
 
   /** Protokoll-PDF manuell öffnen: immer Electron-Viewer (kein Acrobat). */
@@ -394,6 +476,7 @@
     }
     if (labelEl) labelEl.textContent = opts.title || 'Bitte warten…';
     setProgress(0, total);
+    protocolProgressDepth += 1;
     try {
       return await runFn({
         setProgress: setProgress,
@@ -403,12 +486,16 @@
         }
       });
     } finally {
+      protocolProgressDepth -= 1;
       if (overlay) {
         overlay.hidden = true;
         overlay.setAttribute('aria-busy', 'false');
       }
       if (barEl) barEl.style.width = '0%';
       if (countEl) countEl.hidden = true;
+      if (protocolProgressDepth === 0) {
+        try { await flushQueuedPdfOpens(); } catch (e) { console.warn('[pdf-auto-open] flush', e); }
+      }
     }
   }
 
@@ -1051,7 +1138,7 @@
       applyUiTheme(uiTh);
       var pdfAutoEl = document.getElementById('pdfAutoOpen');
       if (pdfAutoEl) {
-        pdfAutoEl.checked = localStorage.getItem(SETTINGS_KEYS.pdfAutoOpen) === '1';
+        pdfAutoEl.checked = localStorage.getItem(SETTINGS_KEYS.pdfAutoOpen) !== '0';
       }
     } catch (e) { /* ignore */ }
     refreshVaultAuthFlag();
@@ -9887,10 +9974,9 @@
         throw new Error(data.error || ('HTTP ' + r.status));
       }
       prog.setProgress(1, 1);
-      var paths = Array.isArray(data.pdf_paths) ? data.pdf_paths : [];
-      if (!paths.length && data.pdf_path) paths = [data.pdf_path];
+      var paths = collectGeneratedPdfPaths(data);
       for (var i = 0; i < paths.length; i++) {
-        if (paths[i]) await maybeOpenGeneratedPdf(paths[i]);
+        await maybeOpenGeneratedPdf(paths[i]);
       }
       var count = (data.saved && data.saved.length) ? data.saved.length : paths.length;
       showToast(count ? ('PDF erstellt (' + count + ')') : 'PDF erstellt');
@@ -14651,9 +14737,15 @@
   const btnBug = document.getElementById('btnViewBugReport');
   if (btnBug) {
     btnBug.addEventListener('click', () => {
-      if (typeof monteurApp !== 'undefined' && typeof monteurApp.openBugReport === 'function') {
-        monteurApp.openBugReport();
+      const api = (typeof monteurApp !== 'undefined' && monteurApp) || window.monteurApp;
+      const fn = api && api.openBugReport;
+      if (typeof fn !== 'function') {
+        window.alert('Bugreport-Fenster ist nicht verfügbar. Bitte die App neu starten.');
+        return;
       }
+      Promise.resolve(fn()).catch(function (err) {
+        window.alert('Bugreport konnte nicht geöffnet werden: ' + ((err && err.message) || err));
+      });
     });
   }
 
@@ -15660,9 +15752,36 @@
     el.classList.toggle('is-error', !!isError);
   }
 
+  var PROTOCOL_AUTOSAVE_VOLATILE_KEYS = {
+    gespeichert_am: true,
+    updated_at: true,
+    protokoll_id: true,
+    local_id: true,
+    local_protokoll_id: true,
+    pdf_rel: true,
+    last_pdf_rel: true,
+    pdf_path: true,
+    saved_pdf: true
+  };
+
+  function stripVolatileProtocolAutosaveFields(value) {
+    if (value == null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) {
+      var arr = [];
+      for (var i = 0; i < value.length; i++) arr.push(stripVolatileProtocolAutosaveFields(value[i]));
+      return arr;
+    }
+    var out = {};
+    Object.keys(value).forEach(function (k) {
+      if (PROTOCOL_AUTOSAVE_VOLATILE_KEYS[k]) return;
+      out[k] = stripVolatileProtocolAutosaveFields(value[k]);
+    });
+    return out;
+  }
+
   function protocolAutosaveFingerprint(value) {
     try {
-      return JSON.stringify(value);
+      return JSON.stringify(stripVolatileProtocolAutosaveFields(value));
     } catch (e) {
       return '';
     }
@@ -15794,7 +15913,7 @@
         return { ok: false, skipped: true, reason: 'not-ready' };
       }
       var fp = currentFingerprint();
-      if (!force && fp && fp === lastSavedFingerprint) {
+      if (fp && fp === lastSavedFingerprint) {
         return { ok: true, skipped: true, reason: 'unchanged' };
       }
       inFlight = true;
@@ -15812,8 +15931,11 @@
           setHint(false);
           return result;
         }
-        lastSavedFingerprint = currentFingerprint() || fp;
-        sessionUncommitted = true;
+        var nextFp = currentFingerprint() || fp;
+        lastSavedFingerprint = nextFp;
+        if (isViewActive() && (!lastCommittedFingerprint || nextFp !== lastCommittedFingerprint)) {
+          sessionUncommitted = true;
+        }
         setHint(true);
         return { ok: true };
       } catch (e) {
@@ -15846,9 +15968,10 @@
       persistBackground: function () {
         runSave(true).catch(function () { /* FN-Wechsel darf nicht blockieren */ });
       },
-      markSaved: function () {
+      markSaved: function (markOpts) {
         lastSavedFingerprint = currentFingerprint();
         lastCommittedFingerprint = lastSavedFingerprint;
+        if (!markOpts || !markOpts.keepUncommitted) sessionUncommitted = false;
       },
       markCommitted: function () {
         sessionUncommitted = false;
@@ -17362,8 +17485,8 @@
               showToast((jsonOnly ? 'Montagebericht gespeichert' : 'Montagebericht PDF erstellt') + langNote + (data.rel ? (': ' + data.rel) : ''));
             }
             if (montageberichtAutosave) montageberichtAutosave.markCommitted();
-            if (!jsonOnly && data.path) {
-              await maybeOpenGeneratedPdf(data.path);
+            if (!jsonOnly) {
+              await maybeOpenGeneratedPdfs(data);
             }
           });
         } catch (err) {
@@ -18117,7 +18240,7 @@
         }
         try {
           loadFabIntoForm(newFab);
-          if (kontrollwiegungAutosave) kontrollwiegungAutosave.markSaved();
+          if (kontrollwiegungAutosave) kontrollwiegungAutosave.markSaved({ keepUncommitted: true });
         } finally {
           kwFabSwitching = false;
         }
@@ -18411,8 +18534,8 @@
             showToast(saveMsg);
           }
           if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
-          if (withPdf && data.pdf_path && !opts.skipAutoOpen) {
-            await maybeOpenGeneratedPdf(data.pdf_path);
+          if (withPdf && !opts.skipAutoOpen) {
+            await maybeOpenGeneratedPdfs(data);
           }
           if (kontrollwiegungAutosave) kontrollwiegungAutosave.markCommitted();
           return { ok: true, data: data };
@@ -18468,9 +18591,7 @@
               }
               okCount += 1;
               if (res.data && res.data.saved_pdf) savedNames.push(res.data.saved_pdf);
-              if (res.data && res.data.pdf_path) {
-                await maybeOpenGeneratedPdf(res.data.pdf_path);
-              }
+              await maybeOpenGeneratedPdfs(res.data);
             }
             prog.setProgress(fns.length, fns.length);
           });
@@ -18522,6 +18643,7 @@
                 } else {
                   updateSpeicherMeta(fab, null);
                 }
+                if (kontrollwiegungAutosave) kontrollwiegungAutosave.markCommitted();
               } catch (_) { /* optional */ }
             });
           } catch (err) {
@@ -19373,7 +19495,7 @@
       }
       try {
         loadFabIntoForm(newFab);
-        if (schleppkettenAutosave) schleppkettenAutosave.markSaved();
+        if (schleppkettenAutosave) schleppkettenAutosave.markSaved({ keepUncommitted: true });
       } finally {
         skFabSwitching = false;
       }
@@ -19686,8 +19808,8 @@
           showToast(msg);
         }
         if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
-        if (withPdf && data.pdf_path && !opts.skipAutoOpen) {
-          await maybeOpenGeneratedPdf(data.pdf_path);
+        if (withPdf && !opts.skipAutoOpen) {
+          await maybeOpenGeneratedPdfs(data);
         }
         if (schleppkettenAutosave) schleppkettenAutosave.markCommitted();
         return { ok: true, data: data };
@@ -19738,9 +19860,7 @@
             }
             okCount += 1;
             if (res.data && res.data.saved_pdf) savedNames.push(res.data.saved_pdf);
-            if (res.data && res.data.pdf_path) {
-              await maybeOpenGeneratedPdf(res.data.pdf_path);
-            }
+            await maybeOpenGeneratedPdfs(res.data);
           }
           prog.setProgress(fns.length, fns.length);
         });
@@ -19785,6 +19905,7 @@
           applyDraftToForm(skDraftByFab[fab], stammFieldsForFab(skJobData, fab));
           updateSpeicherMeta(fab, skDraftByFab[fab]);
         }
+        if (schleppkettenAutosave) schleppkettenAutosave.markCommitted();
       });
     });
     if (pdfBtn) {
@@ -20222,7 +20343,7 @@
       setActiveFabValue(newFab);
       renderFabButtonsActive();
       await loadFab(newFab);
-      if (pzAutosave) pzAutosave.markSaved();
+      if (pzAutosave) pzAutosave.markSaved({ keepUncommitted: true });
     }
     async function loadFab(fab) {
       fab = String(fab || '').trim();
@@ -20473,12 +20594,8 @@
         setStatusMsg(msg, true);
         if (typeof showToast === 'function') showToast(msg);
       }
-      if (withPdf && !opts.skipAutoOpen && Array.isArray(data.saved_pdfs)) {
-        for (var pi = 0; pi < data.saved_pdfs.length; pi++) {
-          if (data.saved_pdfs[pi] && data.saved_pdfs[pi].path) {
-            await maybeOpenGeneratedPdf(data.saved_pdfs[pi].path);
-          }
-        }
+      if (withPdf && !opts.skipAutoOpen) {
+        await maybeOpenGeneratedPdfs(data);
       }
       if (!opts.localOnly && pzAutosave) pzAutosave.markCommitted();
       return { ok: true, data: data, fab: fab };
@@ -20624,9 +20741,9 @@
               for (var j = 0; j < res.data.saved_pdfs.length; j++) {
                 var p = res.data.saved_pdfs[j];
                 if (p && (p.name || p.rel)) savedNames.push(p.name || p.rel);
-                if (p && p.path) await maybeOpenGeneratedPdf(p.path);
               }
             }
+            await maybeOpenGeneratedPdfs(res.data);
           }
           prog.setProgress(fns.length, fns.length);
         });
@@ -22000,7 +22117,7 @@
       } finally {
         if (loadToken === serviceprotokollFabLoadToken) {
           serviceprotokollFabSwitching = false;
-          if (serviceprotokollAutosave) serviceprotokollAutosave.markSaved();
+          if (serviceprotokollAutosave) serviceprotokollAutosave.markSaved({ keepUncommitted: true });
           notifyReactBridge(true);
         }
       }
@@ -23075,13 +23192,7 @@
                 if (data.saved && data.saved.length) msg += ' (' + data.saved.join(', ') + ')';
                 showToast(msg);
               }
-              if (Array.isArray(data.pdf_paths)) {
-                for (var pi = 0; pi < data.pdf_paths.length; pi++) {
-                  await maybeOpenGeneratedPdf(data.pdf_paths[pi]);
-                }
-              } else if (data.pdf_path) {
-                await maybeOpenGeneratedPdf(data.pdf_path);
-              }
+              await maybeOpenGeneratedPdfs(data);
             }
           });
         } catch (err) {
@@ -23173,11 +23284,7 @@
               if (data.saved && data.saved.length) toastMsg += ' ' + data.saved.join(', ');
               showToast(toastMsg);
             }
-            if (Array.isArray(data.pdf_paths)) {
-              for (var oi = 0; oi < data.pdf_paths.length; oi++) {
-                await maybeOpenGeneratedPdf(data.pdf_paths[oi]);
-              }
-            }
+            await maybeOpenGeneratedPdfs(data);
           });
         } catch (err) {
           alert('Fehler: ' + (err && err.message ? err.message : 'Unbekannt'));
@@ -23972,7 +24079,7 @@
           return;
         }
         if (!files || files.length === 0) {
-          alert('Bitte mindestens eine CSV-Datei auswählen.');
+          alert('Bitte mindestens eine Parameterdatei auswählen.');
           return;
         }
         if (resultsEl) {
@@ -23988,7 +24095,12 @@
             var r = await fetch(API_BASE + '/api/protokolle/parameterlisten', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-              body: JSON.stringify(anlagenstammDispoBody({ job_id: jobId, filename: filename, content: content }))
+              body: JSON.stringify(anlagenstammDispoBody({
+                job_id: jobId,
+                filename: filename,
+                content: content,
+                source_path: file.path || filename
+              }))
             });
             var data = await r.json().catch(function () { return {}; });
             if (!r.ok) {
@@ -24008,8 +24120,10 @@
                 ok: true,
                 savedCsv: data.savedCsv,
                 savedPdf: data.savedPdf,
+                pdfPath: data.pdf_path || '',
                 warn: warnParts.length ? warnParts.join(' · ') : '',
               });
+              await maybeOpenGeneratedPdfs(data);
             } else {
               outcomes.push({ file: filename, ok: false, error: data.error || 'Unbekannter Fehler' });
             }
@@ -24021,7 +24135,7 @@
           var html = '';
           outcomes.forEach(function (o) {
             if (o.ok) {
-              html += '<p><strong>' + escapeHtml(o.file) + '</strong>: gespeichert (CSV + PDF)' +
+              html += '<p><strong>' + escapeHtml(o.file) + '</strong>: gespeichert (Datei + PDF)' +
                 (o.warn ? ' <span class="muted">(' + escapeHtml(o.warn) + ')</span>' : '') + '</p>';
             } else {
               html += '<p><strong>' + escapeHtml(o.file) + '</strong>: <span class="error">' + escapeHtml(o.error) + '</span></p>';
@@ -25518,5 +25632,7 @@
       return '';
     }
   };
+  window.maybeOpenGeneratedPdf = maybeOpenGeneratedPdf;
+  window.maybeOpenGeneratedPdfs = maybeOpenGeneratedPdfs;
   window.loadDienstreiseList = loadDienstreiseList;
 })();

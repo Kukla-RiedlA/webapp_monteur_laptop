@@ -794,6 +794,11 @@
         if (data.synced) msg += ' · an Dispo übertragen';
         else if (data.sync_pending) msg += ' · Sync ausstehend (beim nächsten sync_push)';
         setMsg(host, msg, false);
+        if (typeof global.maybeOpenGeneratedPdfs === 'function') {
+          await global.maybeOpenGeneratedPdfs(data);
+        } else if (data.pdf_path && global.monteurApp && typeof global.monteurApp.openPdf === 'function') {
+          try { await global.monteurApp.openPdf(String(data.pdf_path)); } catch (_) { /* ignore */ }
+        }
       } else {
         let msg = 'Gespeichert';
         if (data.synced) msg += ' und an Dispo übertragen.';

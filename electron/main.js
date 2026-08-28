@@ -226,8 +226,16 @@ ipcMain.handle('anlagenstamm:notify-saved', async (_event, payload) => {
   return { ok: true };
 });
 ipcMain.handle('bug-report:open', async () => {
-  if (!bugReportWindows) return { ok: false, error: 'not_ready' };
-  return bugReportWindows.openBugReportWindow();
+  try {
+    if (!bugReportWindows) return { ok: false, error: 'not_ready' };
+    return await bugReportWindows.openBugReportWindow();
+  } catch (e) {
+    console.error('[bug-report] open', e);
+    try {
+      dialog.showErrorBox('Bugreport', e && e.message ? e.message : String(e));
+    } catch (_) { /* ignore */ }
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
 });
 ipcMain.handle('bug-report:always-on-top', async (_e, on) => {
   if (!bugReportWindows) return { ok: false };
@@ -458,7 +466,10 @@ ipcMain.handle('pdf:open-viewer', async (_event, filePath) => {
   if (!pdfViewerWindows) {
     pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
   }
-  return pdfViewerWindows.openPdf(filePath);
+  console.log('[pdf:open-viewer]', filePath);
+  const result = await pdfViewerWindows.openPdf(filePath);
+  console.log('[pdf:open-viewer] result', result && result.ok ? 'ok' : (result && result.error));
+  return result;
 });
 
 function openWithDialogMonteur(filePath) {

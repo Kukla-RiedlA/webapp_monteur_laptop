@@ -1878,8 +1878,8 @@
         </select>
       </div>
       <div class="form-group" style="margin-bottom:0.75rem">
-        <label>CSV-Dateien</label>
-        <input type="file" id="parameterlistenFiles" accept=".csv" multiple style="position:absolute;width:0.1px;height:0.1px;opacity:0;overflow:hidden">
+        <label>Parameterdateien</label>
+        <input type="file" id="parameterlistenFiles" accept=".csv,.pal,.pa3,.txt,.pa4,.pa5" multiple style="position:absolute;width:0.1px;height:0.1px;opacity:0;overflow:hidden">
         <button type="button" class="btn btn-ghost" id="btnParameterlistenChooseFiles">Datei auswählen …</button>
       </div>
       <button type="button" class="btn btn-primary" id="btnParameterlistenUpload">Hochladen und PDFs erzeugen</button>
@@ -3189,7 +3189,7 @@
       </div>
       <div class="settings-row settings-row-checkbox">
         <label class="settings-checkbox-label" for="pdfAutoOpen">
-          <input type="checkbox" id="pdfAutoOpen" />
+          <input type="checkbox" id="pdfAutoOpen" checked />
           <span>PDF nach dem Erstellen automatisch im Electron-Fenster öffnen (Chromium-Viewer, ohne Acrobat)</span>
         </label>
       </div>
