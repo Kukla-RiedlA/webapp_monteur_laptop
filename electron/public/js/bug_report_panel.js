@@ -18,7 +18,7 @@
   var screenshotUrlFn = typeof cfg.screenshotUrl === 'function' ? cfg.screenshotUrl : null;
 
   var state = {
-    pane: 'new',
+    pane: 'list',
     kind: 'bug',
     statusFilter: 'open',
     kindFilter: 'all',
@@ -238,7 +238,10 @@
     if (state.kindFilter === 'bug' || state.kindFilter === 'wish') q.push('kind=' + state.kindFilter);
     var data = await apiFetch('list', { query: q.join('&') });
     state.reports = data.reports || [];
-    if (typeof data.can_resolve === 'boolean') canResolve = data.can_resolve;
+    if (typeof data.can_resolve === 'boolean') {
+      canResolve = data.can_resolve;
+      if (window.KUKLA_BUG_REPORT) window.KUKLA_BUG_REPORT.can_resolve = data.can_resolve;
+    }
     if (data.actor_name) actorName = data.actor_name;
     var nameEl = root.querySelector('[data-br-actor]');
     if (nameEl) nameEl.value = actorName;
@@ -294,7 +297,13 @@
   }
 
   async function toggleDone(id, done) {
-    if (!canResolve) return;
+    var live = window.KUKLA_BUG_REPORT || {};
+    if (typeof live.can_resolve === 'boolean') canResolve = live.can_resolve;
+    if (!canResolve) {
+      setStatus('Erledigt dürfen nur Admin und Alois Riedl setzen.', true);
+      renderList();
+      return;
+    }
     try {
       await apiFetch('status', { method: 'POST', body: { id: id, status: done ? 'done' : 'open' } });
       await loadList();
@@ -379,7 +388,7 @@
     html += '<button type="button" class="bug-report-chip" data-br-kind-filter="wish" aria-pressed="' + (state.kindFilter === 'wish') + '">Wunsch</button>';
     html += '</div>';
     if (!state.reports.length) {
-      html += '<p class="bug-report-empty">Keine Einträge.</p>';
+      html += '<p class="bug-report-empty">Keine Einträge in diesem Filter. Tab „Neuer Eintrag“ zum Anlegen, oder Filter auf „Alle“ stellen.</p>';
       host.innerHTML = html;
       return;
     }
@@ -550,7 +559,5 @@
   });
 
   render();
-  if (state.pane === 'list') {
-    loadList().catch(function (err) { setStatus(err.message, true); });
-  }
+  loadList().catch(function (err) { setStatus(err.message, true); });
 })();

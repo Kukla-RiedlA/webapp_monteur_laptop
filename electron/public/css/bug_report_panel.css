@@ -83,6 +83,11 @@
 .bug-report-tabs button[aria-selected="true"] {
   color: var(--br-accent-dark);
   border-bottom-color: var(--br-accent);
+  font-weight: 600;
+}
+
+[data-br-pane][hidden] {
+  display: none !important;
 }
 
 .bug-report-kind {
