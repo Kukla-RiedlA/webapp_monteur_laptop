@@ -1,14 +1,34 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
-// Vor app.ready: Windows zeichnet sonst verdeckte Fenster nicht mehr (transparent, nur Taskmanager).
+function gpuSoftwareFallbackPath() {
+  try {
+    return path.join(app.getPath('userData'), 'gpu-software-fallback');
+  } catch (_) {
+    return null;
+  }
+}
+
+function enableGpuSoftwareFallback() {
+  const fp = gpuSoftwareFallbackPath();
+  if (!fp) return;
+  try {
+    fs.writeFileSync(fp, new Date().toISOString(), 'utf8');
+  } catch (_) { /* ignore */ }
+}
+
+// Vor app.ready: Occlusion-Flags. DirectComposition nur nach GPU-Crash (nächster Start).
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-  // DirectComposition: GPU-Hänger → glasiges Fenster. GDI bleibt bedienbar.
-  app.commandLine.appendSwitch('disable-direct-composition');
+  try {
+    const fp = gpuSoftwareFallbackPath();
+    if (fp && fs.existsSync(fp)) {
+      app.commandLine.appendSwitch('disable-direct-composition');
+    }
+  } catch (_) { /* ignore */ }
 }
-const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 
@@ -34,6 +54,7 @@ const {
   isInsecureTlsAllowed,
 } = require('./lib/laptop-updater');
 const { installLocalGatewayWebRequest } = require('./lib/local-gateway-auth');
+const hangDiag = require('./lib/hang-diagnostics');
 
 let mainWindow;
 let updateCheckScheduled = false;
@@ -148,6 +169,7 @@ function attachHangRecovery(win) {
   win.on('focus', paint);
   win.on('unresponsive', () => {
     console.error('[window] unresponsive');
+    hangDiag.write('error', 'window_unresponsive', {});
     paint();
     if (unresponsiveTimer) return;
     unresponsiveTimer = setTimeout(() => {
@@ -528,13 +550,18 @@ app.on('child-process-gone', (_event, details) => {
   const type = details && details.type;
   const reason = details && details.reason;
   console.error('[process-gone]', type, reason, details && details.exitCode);
-  if (type === 'GPU' && mainWindow && !mainWindow.isDestroyed()) {
-    const now = Date.now();
-    if (now - lastGpuReloadAt < 8000) return;
-    lastGpuReloadAt = now;
-    setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
-    }, 400);
+  hangDiag.write('error', 'child_process_gone', { type: type, reason: reason, exitCode: details && details.exitCode });
+  if (type === 'GPU') {
+    hangDiag.noteGpuGone(details);
+    enableGpuSoftwareFallback();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const now = Date.now();
+      if (now - lastGpuReloadAt < 8000) return;
+      lastGpuReloadAt = now;
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+      }, 400);
+    }
   }
 });
 
@@ -816,8 +843,18 @@ if (!gotTheLock) {
   });
 }
 
+ipcMain.handle('hang:heartbeat', async () => {
+  hangDiag.noteRendererPing();
+  return { ok: true, t: Date.now() };
+});
+
 app.whenReady().then(() => {
   if (!gotTheLock) return;
+  let appVer = '';
+  try {
+    appVer = require('./version.json').version || '';
+  } catch (_) { /* ignore */ }
+  hangDiag.init({ userDataDir: app.getPath('userData'), version: appVer });
   Menu.setApplicationMenu(null);
   installLocalGatewayWebRequest(PORT);
   configureSpellCheckerSession();

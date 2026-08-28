@@ -1,6 +1,16 @@
 (function () {
   const API_BASE = typeof monteurApp !== 'undefined' ? monteurApp.apiBase : 'http://127.0.0.1:39678';
 
+  function startHangHeartbeat() {
+    if (typeof monteurApp === 'undefined' || typeof monteurApp.hangHeartbeat !== 'function') return;
+    function beat() {
+      monteurApp.hangHeartbeat().catch(function () {});
+    }
+    beat();
+    setInterval(beat, 2000);
+  }
+  startHangHeartbeat();
+
   /** POST mit Timeout (verhindert endloses „Prüfe…“ wenn der Server blockiert). */
   function fetchApiPostJson(path, body, timeoutMs) {
     var ac = new AbortController();
@@ -12894,7 +12904,7 @@
     var monthChanged = monthKey !== lastCalendarMonthKey;
     // Soft/Sync: bestehendes Grid stehen lassen. Leeres Skelett nur beim Erstaufbau oder Monatswechsel ohne Soft.
     if (!soft && (!hasExistingGrid || monthChanged)) {
-      renderCalendarGrid(gridStart, gridEnd, [], [], null);
+      await renderCalendarGrid(gridStart, gridEnd, [], [], null);
     }
 
     if (showAll) {
@@ -12913,7 +12923,7 @@
         if (!hasCached) {
           setCalendarError('Kalender noch nicht synchronisiert — Badge klicken (Sync mit Dispo).');
           if (!soft || !hasExistingGrid) {
-            renderCalendarGrid(gridStart, gridEnd, [], [], null);
+            await renderCalendarGrid(gridStart, gridEnd, [], [], null);
           }
           return;
         }
@@ -13001,7 +13011,7 @@
         });
       } catch (e) {
         if (!soft || !hasExistingGrid) {
-          renderCalendarGrid(gridStart, gridEnd, [], [], null);
+          await renderCalendarGrid(gridStart, gridEnd, [], [], null);
         }
         setCalendarError('Kalender (Cache): ' + e.message);
         return;
@@ -13025,7 +13035,7 @@
         } catch (_) { /* Billing aus Cache optional */ }
       } catch (e) {
         if (!soft || !hasExistingGrid) {
-          renderCalendarGrid(gridStart, gridEnd, [], [], null);
+          await renderCalendarGrid(gridStart, gridEnd, [], [], null);
         }
         setCalendarError('Fehler: ' + e.message);
         return;
@@ -13038,7 +13048,7 @@
       (calendarApiData && calendarApiData.technicians) ? calendarApiData.technicians : null,
       showAll
     );
-    renderCalendarGrid(gridStart, gridEnd, jobs, absences, techniciansFromApi);
+    await renderCalendarGrid(gridStart, gridEnd, jobs, absences, techniciansFromApi);
 
     // Performance: Eigener-Techniker-Modus rendert sofort aus lokaler DB.
     // Optionale zentrale Dispo-Farbe wird asynchron nachgeladen und bei Bedarf nachgerendert.
@@ -13067,7 +13077,7 @@
               ? absences.map(function (a) { return Object.assign({}, a, { technician_color: dispoColor }); })
               : absences;
             if (dispoColor || (cached && cached.ok === true && Array.isArray(cached.jobs))) {
-              renderCalendarGrid(
+              return renderCalendarGrid(
                 gridStart,
                 gridEnd,
                 filterCalendarJobsForView(patchedJobs, false),
@@ -13356,7 +13366,17 @@
     }
   }
 
-  function renderCalendarGrid(gridStart, gridEnd, jobs, absences, techniciansFromApi) {
+  function yieldCalendarPaint() {
+    return new Promise(function (resolve) {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(function () { resolve(); });
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
+  async function renderCalendarGrid(gridStart, gridEnd, jobs, absences, techniciansFromApi) {
     setCalendarError('');
     const myTechIdForDetails = Number(getTechId());
     const monthLabel = new Date(calCurrentMonth.getFullYear(), calCurrentMonth.getMonth(), 1);
@@ -13565,6 +13585,9 @@
 
       weekRow.appendChild(bands);
       wrapper.appendChild(weekRow);
+      if ((jobs.length + absences.length) > 60) {
+        await yieldCalendarPaint();
+      }
     }
 
     calGrid.innerHTML = '';

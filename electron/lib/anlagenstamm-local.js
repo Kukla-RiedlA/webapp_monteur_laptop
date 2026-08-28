@@ -8,6 +8,7 @@ const {
   normalizeDispoBase,
   isFetchNetworkError,
 } = require('./dispo-base-fallback');
+const hangDiag = require('./hang-diagnostics');
 
 const DISPO_EXPORT_CHUNK_TIMEOUT_MS = 90 * 1000;
 
@@ -1390,9 +1391,11 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
         if (Number.isFinite(id) && id > 0) seenIds.add(id);
       }
       await withDbLock(async () => {
-        if (rows.length) upsertAnlagenstammRows(db, rows);
-        updateStammResumeProgress(db, page, totalPages, totalCount);
-        if (typeof saveFn === 'function') saveFn();
+        hangDiag.timeSync('anlagenstamm_upsert_page', () => {
+          if (rows.length) upsertAnlagenstammRows(db, rows);
+          updateStammResumeProgress(db, page, totalPages, totalCount);
+          if (typeof saveFn === 'function') saveFn();
+        });
       });
       if (onProgress) onProgress({ page, totalPages, totalCount, resuming: resuming || page > 1 });
       await yieldEventLoop();

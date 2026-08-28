@@ -8,6 +8,7 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const { ensureBackgroundJobsSchema } = require('./background_jobs');
 const { ensureAnlagenstammLocalSchema } = require('./anlagenstamm-local');
+const hangDiag = require('./hang-diagnostics');
 
 let dbInstance = null;
 let dbPath = null;
@@ -291,12 +292,14 @@ function persistDb(mode = 'PASSIVE') {
   if (!dbInstance) return;
   const allowed = new Set(['PASSIVE', 'FULL', 'TRUNCATE', 'RESTART']);
   const checkpointMode = allowed.has(mode) ? mode : 'PASSIVE';
-  try {
-    dbInstance.pragma(`wal_checkpoint(${checkpointMode})`);
-    lastPersistError = null;
-  } catch (e) {
-    lastPersistError = e;
-  }
+  hangDiag.timeSync('wal_checkpoint_' + checkpointMode, () => {
+    try {
+      dbInstance.pragma(`wal_checkpoint(${checkpointMode})`);
+      lastPersistError = null;
+    } catch (e) {
+      lastPersistError = e;
+    }
+  });
 }
 
 /** Vor App-Ende / nach großem Sync: WAL in monteur.db überführen (Backup-Tools lesen nur .db). */

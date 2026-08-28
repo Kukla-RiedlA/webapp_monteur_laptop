@@ -59,6 +59,16 @@ function registerBugReportRoutes(app, ctx) {
     if (!body.app_version && ctx.getAppVersion) {
       body.app_version = ctx.getAppVersion() || '';
     }
+    try {
+      const hang = require('./hang-diagnostics');
+      const lines = hang.getRecentLines(200);
+      if (lines && lines.length) {
+        const dump = lines.join('\n');
+        const clip = dump.length > 12000 ? dump.slice(-12000) : dump;
+        const extra = '\n\n--- hang-diag ---\n' + clip;
+        body.body = String(body.body || '') + extra;
+      }
+    } catch (_) { /* Diagnose darf Create nicht blockieren */ }
     return proxyJson(req, res, '/api/mobile/bug_report_create.php', 'POST', body);
   });
 

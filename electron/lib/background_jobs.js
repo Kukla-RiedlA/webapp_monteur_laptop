@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const hangDiag = require('./hang-diagnostics');
 const {
   isJobAssignedToTechnician,
 } = require('./job-technician-gate');
@@ -364,6 +365,7 @@ function createBackgroundJobService(db, save, hooks) {
     });
 
     (async () => {
+      hangDiag.setBackgroundJob(job.type);
       try {
         await Promise.race([
           executeJob(job, {
@@ -425,6 +427,7 @@ function createBackgroundJobService(db, save, hooks) {
           });
         }
       } finally {
+        hangDiag.setBackgroundJob('');
         if (jobTimeoutId) clearTimeout(jobTimeoutId);
         abortControllers.delete(job.id);
         runningWorkers.delete(job.id);

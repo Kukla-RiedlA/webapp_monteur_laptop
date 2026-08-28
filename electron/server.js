@@ -100,6 +100,7 @@ const {
   jobAssignmentViewMeta,
 } = require('./lib/job-technician-gate');
 const { createDbLock } = require('./lib/db-lock');
+const hangDiag = require('./lib/hang-diagnostics');
 const { openMonteurDatabase, flushDb, getLastPersistError, getDb: getNativeDb } = require('./lib/db');
 const { createDbCompat } = require('./lib/db-compat');
 const {
@@ -1966,7 +1967,9 @@ function createApp(db) {
     try {
       if (fs.existsSync(DIENSTREISE_CONFIG_PATH)) {
         const data = JSON.parse(fs.readFileSync(DIENSTREISE_CONFIG_PATH, 'utf8'));
-        return (data && data.basePath && typeof data.basePath === 'string') ? data.basePath.trim() : '';
+        const p = (data && data.basePath && typeof data.basePath === 'string') ? data.basePath.trim() : '';
+        hangDiag.setDiskRoot(p);
+        return p;
       }
     } catch (e) { /* ignore */ }
     return '';
@@ -15374,7 +15377,6 @@ function createApp(db) {
               );
             }
             await new Promise((r) => setImmediate(r));
-            flushDb();
             try {
               const pnTreeSync = await syncProjekteNeuTreesFromDispo(
                 db,
@@ -16583,25 +16585,18 @@ function createApp(db) {
     return total;
   }
 
-  let dienstreiseSizeCache = { at: 0, result: null };
   function getDienstreiseFilesStats() {
     const base = getDienstreiseBasePath();
     if (!base) {
       return { configured: false, bytes: 0, human: '—', base_path: '' };
     }
-    const now = Date.now();
-    if (dienstreiseSizeCache.result && now - dienstreiseSizeCache.at < 60000) {
-      return dienstreiseSizeCache.result;
-    }
-    const bytes = dirSizeBytesRecursive(base, 0);
-    const result = {
+    hangDiag.setDiskRoot(base);
+    return {
       configured: true,
-      bytes,
-      human: formatBytesHuman(bytes),
+      bytes: 0,
+      human: '—',
       base_path: base,
     };
-    dienstreiseSizeCache = { at: now, result };
-    return result;
   }
 
   app.get('/api/sync_status', (req, res) => {
@@ -16762,6 +16757,15 @@ function createApp(db) {
       });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.get('/api/hang_diag', (_req, res) => {
+    try {
+      const snap = hangDiag.snapshot();
+      return res.json(Object.assign({ ok: true }, snap));
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -18077,6 +18081,7 @@ function upsertCalendarCache(db, calendarData, opts) {
   const insAbs = db.prepare(`INSERT OR REPLACE INTO calendar_cache_absences
         (cache_key, server_absence_id, technician_id, type, comment, start_datetime, end_datetime, technician_name, technician_color, synced_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  hangDiag.timeSync('upsert_calendar_cache', () => {
   db.transaction(() => {
     if (replaceAll || !rangeStart || !rangeEnd) {
       delTech.run();
@@ -18132,6 +18137,7 @@ function upsertCalendarCache(db, calendarData, opts) {
         start, end, String(a.technician_name || ''), String(a.technician_color || ''), syncedAt
       );
     }
+  });
   });
 }
 
