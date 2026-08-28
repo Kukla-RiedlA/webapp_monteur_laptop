@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.021
+- **Serviceprotokoll:** Auftragsliste wie die anderen Protokolle (keine Etex-Demo mehr im React-Dropdown).
+- **Stabilität:** Transparentes Hängen auf manchen Windows-PCs abgesichert (PDF-Viewer-Timeout, GPU-Reload, max. zwei Auto-PDFs).
+
 ## V 2.006.020
 - **Protokolle:** Nach dem Erstellen öffnen sich PDF bzw. mehrere PDFs (DE/EN, Alle PDF) im Electron-Viewer; Auto-Open ist standardmäßig an.
 - **Parameterlisten:** PA3- und PAL-Dateien werden als PDF erzeugt (DWC-Ausdruck).

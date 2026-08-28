@@ -173,12 +173,10 @@ export function ServiceProtocolPage() {
 
   const { sendAction, autosaveHint, autosaveError } = useElectronBridge(bridgeState, setBridgeState, logPayload);
 
-  const jobOptions =
-    jobs.length > 0
-      ? [{ value: '', label: '– Bitte wählen –' }, ...jobs.map((j) => ({ value: j.id, label: j.label }))]
-      : form.order
-        ? [{ value: '', label: '– Bitte wählen –' }, { value: jobId || form.order, label: form.order }]
-        : [{ value: '', label: '– Bitte wählen –' }];
+  const jobOptions = [
+    { value: '', label: '– Bitte wählen –' },
+    ...jobs.map((j) => ({ value: j.id, label: j.label })),
+  ];
 
   const handleJobChange = (nextJobId: string) => {
     if (nextJobId === (jobId || '')) return;

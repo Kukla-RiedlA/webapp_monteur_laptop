@@ -41,12 +41,21 @@ export function useElectronBridge(
     function onMessage(ev: MessageEvent) {
       const data = ev.data as BridgeMessage | undefined;
       if (!data || typeof data !== 'object') return;
+      if (data.type === 'SP_JOBS' && Array.isArray(data.jobs)) {
+        hostReady.current = true;
+        const nextJobs = data.jobs;
+        setState({ ...stateRef.current, jobs: nextJobs.length ? nextJobs : stateRef.current.jobs });
+        return;
+      }
       if (data.type === 'SP_SYNC_STATE' && data.payload) {
         hostReady.current = true;
         // Länger unterdrücken als der Push-Debounce (120ms), sonst überschreibt
         // ein alter leerer React-State die gerade aus dem Anlagenstamm gefüllten Felder.
         suppressPush.current = true;
-        setState(data.payload);
+        const incoming = data.payload;
+        const jobs =
+          Array.isArray(incoming.jobs) && incoming.jobs.length ? incoming.jobs : stateRef.current.jobs;
+        setState({ ...incoming, jobs });
         window.setTimeout(() => {
           suppressPush.current = false;
         }, 400);

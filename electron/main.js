@@ -1,5 +1,11 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu } = require('electron');
 const path = require('path');
+
+// Vor app.ready: Windows zeichnet sonst verdeckte Fenster nicht mehr (transparent, nur Taskmanager).
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+}
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
@@ -131,11 +137,13 @@ function createWindow() {
     width: 1000,
     height: 700,
     show: false,
+    backgroundColor: '#f7f8f8',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       spellcheck: true,
+      backgroundThrottling: false,
     },
     icon: path.join(__dirname, 'public', 'icon.png'),
   });
@@ -162,7 +170,13 @@ function createWindow() {
     showMainWindow('did-fail-load ' + errorCode);
   });
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[startup] render-process-gone', details && details.reason, details && details.exitCode);
+    const reason = details && details.reason;
+    console.error('[startup] render-process-gone', reason, details && details.exitCode);
+    if (reason === 'crashed' || reason === 'oom' || reason === 'killed' || reason === 'abnormal-exit') {
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+      }, 400);
+    }
   });
   setTimeout(() => {
     showMainWindow('Timeout — ready-to-show ausgeblieben');
@@ -470,6 +484,21 @@ ipcMain.handle('pdf:open-viewer', async (_event, filePath) => {
   const result = await pdfViewerWindows.openPdf(filePath);
   console.log('[pdf:open-viewer] result', result && result.ok ? 'ok' : (result && result.error));
   return result;
+});
+
+let lastGpuReloadAt = 0;
+app.on('child-process-gone', (_event, details) => {
+  const type = details && details.type;
+  const reason = details && details.reason;
+  console.error('[process-gone]', type, reason, details && details.exitCode);
+  if (type === 'GPU' && mainWindow && !mainWindow.isDestroyed()) {
+    const now = Date.now();
+    if (now - lastGpuReloadAt < 8000) return;
+    lastGpuReloadAt = now;
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+    }, 400);
+  }
 });
 
 function openWithDialogMonteur(filePath) {

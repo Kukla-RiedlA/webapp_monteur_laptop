@@ -105,6 +105,9 @@
 
   window.serviceprotokollReactBridge = {
     syncToReact: syncToReact,
+    pushJobs: function (jobs) {
+      postToReact({ type: 'SP_JOBS', jobs: Array.isArray(jobs) ? jobs : [] });
+    },
     flushFromReact: flushFromReact,
     setAutosaveHint: function (text, isError) {
       postToReact({ type: 'SP_AUTOSAVE_STATUS', text: text || '', error: !!isError });
@@ -127,7 +130,18 @@
     var api = bridgeApi();
 
     if (data.type === 'SP_READY') {
-      syncToReact();
+      var tries = 0;
+      function trySync() {
+        var api = bridgeApi();
+        if (!api || typeof api.pullPayload !== 'function') {
+          if (tries++ < 25) {
+            window.setTimeout(trySync, 80);
+          }
+          return;
+        }
+        syncToReact(true);
+      }
+      trySync();
       return;
     }
 

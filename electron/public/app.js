@@ -360,13 +360,17 @@
     }
     try {
       var result = null;
-      if (typeof monteurApp.openPdf === 'function') {
-        result = await monteurApp.openPdf(String(absPath));
-      } else if (typeof monteurApp.openPath === 'function') {
-        result = await monteurApp.openPath(String(absPath));
-      } else {
-        result = { ok: false, error: 'PDF-Viewer nicht verfügbar.' };
-      }
+      var openPromise = typeof monteurApp.openPdf === 'function'
+        ? monteurApp.openPdf(String(absPath))
+        : (typeof monteurApp.openPath === 'function'
+          ? monteurApp.openPath(String(absPath))
+          : Promise.resolve({ ok: false, error: 'PDF-Viewer nicht verfügbar.' }));
+      result = await Promise.race([
+        openPromise,
+        new Promise(function (resolve) {
+          setTimeout(function () { resolve({ ok: false, error: 'Zeitüberschreitung beim Öffnen.' }); }, 20000);
+        }),
+      ]);
       if (result && result.ok === false) {
         console.warn('[pdf-auto-open] fehlgeschlagen:', result.error || absPath);
         if (typeof showToast === 'function') {
@@ -385,6 +389,11 @@
     var paths = queuedPdfOpenPaths.splice(0, queuedPdfOpenPaths.length);
     if (!paths.length) return;
     await new Promise(function (resolve) { setTimeout(resolve, 80); });
+    var maxOpen = 2;
+    if (paths.length > maxOpen && typeof showToast === 'function') {
+      showToast(maxOpen + ' von ' + paths.length + ' PDFs geöffnet.');
+    }
+    paths = paths.slice(0, maxOpen);
     for (var i = 0; i < paths.length; i++) {
       await maybeOpenGeneratedPdf(paths[i]);
     }
@@ -402,6 +411,11 @@
       });
       return;
     }
+    var maxOpen = 2;
+    if (paths.length > maxOpen && typeof showToast === 'function') {
+      showToast(maxOpen + ' von ' + paths.length + ' PDFs geöffnet.');
+    }
+    paths = paths.slice(0, maxOpen);
     for (var i = 0; i < paths.length; i++) {
       await maybeOpenGeneratedPdf(paths[i]);
     }
@@ -20831,6 +20845,7 @@
     var abbrechenBtn = document.getElementById('serviceprotokollAbbrechen');
 
     var serviceJobData = null;
+    var serviceAssignedJobOptions = [];
     var serviceprotokollAutosave = null;
     var arbeitsschritte = [];
     var lastProtokollId = null;
@@ -23307,7 +23322,22 @@
       return m[3] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0');
     }
 
+    function rememberServiceAssignedJobs(jobs) {
+      serviceAssignedJobOptions = (Array.isArray(jobs) ? jobs : []).map(function (j) {
+        if (!j) return null;
+        var label = String((j.job_number || '') + ' ' + (j.customer_name || '')).trim();
+        if (!label) label = String(j.id || '');
+        return { id: String(j.id), label: label };
+      }).filter(Boolean);
+      try {
+        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.pushJobs === 'function') {
+          window.serviceprotokollReactBridge.pushJobs(serviceAssignedJobOptions);
+        }
+      } catch (e) { /* iframe ggf. noch nicht bereit */ }
+    }
+
     function spCollectJobOptions() {
+      if (serviceAssignedJobOptions.length) return serviceAssignedJobOptions.slice();
       if (!jobSelect) return [];
       var out = [];
       for (var i = 0; i < jobSelect.options.length; i++) {
@@ -23960,12 +23990,14 @@
 
     window.openProtokolleService = function () {
       loadServiceJobs().then(function (jobs) {
+        rememberServiceAssignedJobs(jobs);
         if (jobSelect) {
           jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
             jobs.map(function (j) {
               return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
             }).join('');
         }
+        notifyReactBridge(true);
         serviceJobData = null;
         serviceprotokollDraftStore = { byFab: {} };
         serviceprotokollFormReadyFab = '';

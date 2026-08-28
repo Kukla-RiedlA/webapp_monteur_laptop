@@ -118,17 +118,18 @@ export const DEFAULT_LOAD_CELLS: LoadCellRow[] = [
   },
 ];
 
+/** Nur für isolierte Vite-Vorschau. Embedded Electron startet leer (siehe emptyBridgePayload). */
 export const DEFAULT_FORM: ServiceProtocolFormState = {
-  order: 'Etex Building Performance GmbH, Siniat-Werk Lippendorf',
-  project: 'Etex Lippendorf Vorbereitungsstation',
-  date: '29.06.2026',
-  activeFab: '7118',
-  plantType: 'E-DBW-H-I-800/2600D-ZS-320/390',
-  qmax: '25',
+  order: '',
+  project: '',
+  date: '',
+  activeFab: '',
+  plantType: '',
+  qmax: '',
   qmaxUnit: 'kg/h',
   vmax: '',
-  position: 'Stuckgips',
-  dwc: 'DWC-7C',
+  position: '',
+  dwc: '',
   loadcellType: '',
   serialNumber: '',
   loadCells: DEFAULT_LOAD_CELLS.map((r) => ({
