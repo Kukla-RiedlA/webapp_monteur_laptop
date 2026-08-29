@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.025
+- **Stabilität:** Chromium-Occlusion-Flags und Auto-Reload bei „Keine Rückmeldung“ entfernt (Fenster wie vor 021). DirectComposition bleibt an.
+- **Sync:** Datei-mtime-Scan und FN-Alias-Merge auf OneDrive geben den Event-Loop zwischendurch frei; welche Dateien erkannt/zusammengeführt werden, ist unverändert.
+- **Login:** Dispo-Erreichbarkeit ohne implizite Monteur-ID 1; Erstinstallation erkennt den Host auch bei HTTP 400/401/403/429.
+- **Zeitschreibung:** Web-Parity-CSS aktualisiert (Cache-Bust).
+
 ## V 2.006.024
 - **Stabilität:** DirectComposition nicht mehr global aus (ganzer PC wurde sonst langsam). GPU-Softwarepfad nur nach GPU-Absturz auf diesem Gerät.
 - **Diagnose:** hang-diag.log unter AppData (Event-Loop, Renderer-Heartbeat, Sync-Phasen); Bugreport hängt die letzten Zeilen an.

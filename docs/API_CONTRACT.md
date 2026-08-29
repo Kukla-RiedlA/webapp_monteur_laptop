@@ -59,14 +59,14 @@ Der **Renderer** (`electron/public/app.js`) spricht **`API_BASE`** (lokaler Expr
 
 | Route | Methode | Body (JSON, Keys wie im Code) | Antwort (Kern) |
 |-------|---------|-------------------------------|----------------|
-| `/api/check_connection` | POST | `baseUrl`, `technicianId`, `serverUsername`, `serverPassword` | `{ "ok": true, "used_base_url"? }` oder `{ "ok": false, "error": "…" }` — Probe mit **Timeout 10 s** (wie `dispo_pick_base`). |
+| `/api/check_connection` | POST | `baseUrl`, `technicianId`, `serverUsername`, `serverPassword` | `{ "ok": true, "used_base_url"? }` oder `{ "ok": false, "error": "…" }` — Probe mit **Timeout 10 s** (wie `dispo_pick_base`). **Erstinstallation** (keine `technicianId`): Host gilt als erreichbar bei HTTP 200/400/401/403/429; die Monteur-ID kommt danach aus `monteur_auth` (kein Fallback auf ID 1). |
 | `/api/sync_status` | GET | — (optional Session/`technician_id`) | `{ "ok": true, "last_sync_pull", "active_jobs", "pending_changes", "calendar_cache_synced_at", "anlagenstamm_local_count", "high_priority_jobs" }` |
 | `/api/offline_manifest` | GET | Query `job_id` (lokal oder Server-ID) | `{ "ok": true, "local_job_id", "reise_dir", "dienstreise_pull", "ted_index", "projekte_neu_enabled", "project_file_count" }` |
 | `/api/dispo_pick_base` | POST | `externalUrl`, `internalUrl` (optional leer), `technicianId`, `serverUsername`, `serverPassword` | `{ "ok": true, "selected_base_url": "https://…", "preferred_source": "internal"\|"external"\|"single", "tried": [ { "url", "ok", "error"? } ] }` oder `{ "ok": false, "error": "…", "tried": … }` |
 
 Hinweis: Das sind **lokale** Laptop-Gateway-Payloads (historisch camelCase). Neue **Dispo-öffentliche** APIs bleiben bei `snake_case` gemäß Abschnitt 2.
 
-**Semantik `dispo_pick_base`:** Beide URLs werden **parallel** geprüft mit **Timeout 10 s** pro Probe (wie `check_connection`: zuerst **`/api/my_jobs.php`**, bei Fehlschlag **`…/dispo_api/api/jobs_open.php`**). Sind **beide** URLs OK, wird die **interne** Basis gewählt. Nur eine URL konfiguriert → `preferred_source: "single"`. Abrechnung: wenn die dedizierte Abrechnungs-API nicht erreichbar ist, kann die App die Auftragsliste aus dem **lokalen Sync** befüllen (`/api/abrechnung/refresh` mit `partial`/`warnings`).
+**Semantik `dispo_pick_base`:** Beide URLs werden **parallel** geprüft mit **Timeout 10 s** pro Probe (wie `check_connection`: zuerst **`/api/my_jobs.php`**, bei Fehlschlag **`…/dispo_api/api/jobs_open.php`**). Ohne `technicianId` zählt eine Dispo-HTTP-Antwort (auch 400/401/403) als erreichbar — nicht die Admin-ID 1. Sind **beide** URLs OK, wird die **interne** Basis gewählt. Nur eine URL konfiguriert → `preferred_source: "single"`. Abrechnung: wenn die dedizierte Abrechnungs-API nicht erreichbar ist, kann die App die Auftragsliste aus dem **lokalen Sync** befüllen (`/api/abrechnung/refresh` mit `partial`/`warnings`).
 
 **Abrechnung (Electron-Gateway):** `GET /api/abrechnung/bundle` liefert neben Dateimetadaten **`comments`**: `{ "dispo": [ … ], "buchhaltung": [ … ] }` (Felder wie Dispo `dispo_api/api/abrechnung_notes.php`: u. a. `id`, `body`, `created_at`, `author_name`). **`notes`** (`dispo`/`buchhaltung` als Strings) bleibt für ältere Cache-Zeilen kompatibel; neue Daten liegen in **`comments_json`** im lokalen Cache.
 

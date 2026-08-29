@@ -13,6 +13,9 @@
   --zs-border: #d8e3df;
   --zs-border-strong: #94a3b8;
   --zs-input-border: #cbd5e1;
+  --zs-input-bg: #fff;
+  --zs-input-fg: #1a1a1a;
+  --zs-surface: #fff;
   --zs-sum-bg: #f1f5f9;
   --zs-sticky-w-tag: 6.5rem;
   --zs-sticky-w-wt: 2.2rem;
@@ -98,9 +101,9 @@
   padding: 0.4rem 0.65rem;
   border: 1px solid var(--zs-border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--zs-surface);
   font-size: 0.8125rem;
-  color: #334155;
+  color: var(--zs-input-fg);
   line-height: 1.3;
 }
 
@@ -126,7 +129,7 @@
   max-height: none;
   border: 1px solid var(--zs-border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--zs-surface);
   position: relative;
 }
 
@@ -209,7 +212,7 @@
   min-width: var(--zs-sticky-w-tag);
   max-width: var(--zs-sticky-w-tag);
   z-index: 20;
-  background: #fff;
+  background: var(--zs-surface);
 }
 
 .page-zeitschreibung .zs-table .zs-sticky-wt {
@@ -220,7 +223,7 @@
   max-width: var(--zs-sticky-w-wt);
   text-align: center;
   z-index: 20;
-  background: #fff;
+  background: var(--zs-surface);
 }
 
 .page-zeitschreibung .zs-table .zs-sticky-holiday {
@@ -230,7 +233,7 @@
   min-width: var(--zs-sticky-w-holiday);
   max-width: var(--zs-sticky-w-holiday);
   z-index: 20;
-  background: #fff;
+  background: var(--zs-surface);
   box-shadow: 4px 0 6px -4px rgba(15, 23, 42, 0.28);
 }
 
@@ -314,7 +317,8 @@
   font: inherit;
   border: 1px solid var(--zs-input-border);
   border-radius: 4px;
-  background: #fff;
+  background: var(--zs-input-bg);
+  color: var(--zs-input-fg);
   height: 1.7rem;
   transition: box-shadow 0.1s ease, outline-color 0.1s ease;
 }
@@ -323,7 +327,7 @@
 .page-zeitschreibung .zs-input:focus-visible {
   outline: 2px solid var(--zs-focus-ring);
   outline-offset: 0;
-  box-shadow: 0 0 0 1px #fff;
+  box-shadow: 0 0 0 1px var(--zs-input-bg);
   border-color: var(--zs-focus-ring);
   z-index: 1;
   position: relative;
@@ -499,4 +503,94 @@
 
 #view-zeitschreibung .page-zeitschreibung .btn {
   font-family: inherit;
+}
+
+html[data-ui-theme="dark"] #view-zeitschreibung {
+  --zs-head-bg: #1e3a32;
+  --zs-head-group-bg: #16352c;
+  --zs-head-fg: #7dcea0;
+  --zs-sa: #3d3420;
+  --zs-so: #3d2a22;
+  --zs-holiday: #5a2a2a;
+  --zs-focus-ring: #4a90e2;
+  --zs-row-active: rgba(74, 144, 226, 0.2);
+  --zs-col-active: rgba(74, 144, 226, 0.14);
+  --zs-border: #2d3a48;
+  --zs-border-strong: #64748b;
+  --zs-input-border: #475569;
+  --zs-input-bg: #0f172a;
+  --zs-input-fg: #e8e8e8;
+  --zs-surface: #16213e;
+  --zs-sum-bg: #1e293b;
+  background: var(--bg);
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-active-bar.is-idle .zs-active-bar-text,
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-meta-line,
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-status,
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-msg,
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-overview-actions .zs-msg {
+  color: var(--muted);
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-holiday {
+  color: #fbbf24;
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-lohn-kommentar {
+  color: #cbd5e1;
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-row-locked .zs-input:disabled {
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-input.is-corrected {
+  background: #3d2e1a;
+  color: var(--zs-input-fg);
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-row-locked .zs-input.is-corrected:disabled {
+  background: #4a3518;
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-table thead tr.zs-head-cols th.zs-col-active {
+  color: #93c5fd;
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-print-btn {
+  background: var(--zs-surface);
+  color: #7dcea0;
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-print-btn:hover {
+  background: #1e3a32;
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .sp-v2-field input,
+html[data-ui-theme="dark"] .page-zeitschreibung .sp-v2-field select {
+  background: var(--zs-input-bg);
+  color: var(--zs-input-fg);
+  border-color: var(--zs-input-border);
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .sp-v2-section {
+  background: var(--zs-surface);
+  border-color: var(--zs-border);
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .sp-v2-section-head {
+  background: var(--zs-head-bg);
+  color: var(--zs-head-fg);
+  border-color: var(--zs-border);
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .sp-v2-field label,
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-tech-name {
+  color: var(--zs-head-fg);
+}
+
+html[data-ui-theme="dark"] .page-zeitschreibung .zs-table {
+  color: var(--text);
 }

@@ -10,23 +10,12 @@ function gpuSoftwareFallbackPath() {
   }
 }
 
-function enableGpuSoftwareFallback() {
-  const fp = gpuSoftwareFallbackPath();
-  if (!fp) return;
-  try {
-    fs.writeFileSync(fp, new Date().toISOString(), 'utf8');
-  } catch (_) { /* ignore */ }
-}
-
-// Vor app.ready: Occlusion-Flags. DirectComposition nur nach GPU-Crash (nächster Start).
+// DirectComposition bleibt an (023 hat den Desktop auf Intel-Xe ausgebremst).
+// Altes Fallback-File von 023/024 löschen, sonst gilt disable-direct-composition weiter.
 if (process.platform === 'win32') {
-  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
-  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
   try {
     const fp = gpuSoftwareFallbackPath();
-    if (fp && fs.existsSync(fp)) {
-      app.commandLine.appendSwitch('disable-direct-composition');
-    }
+    if (fp && fs.existsSync(fp)) fs.unlinkSync(fp);
   } catch (_) { /* ignore */ }
 }
 const { pathToFileURL } = require('url');
@@ -155,41 +144,6 @@ function focusMainWindow() {
   mainWindow.focus();
 }
 
-let lastHangReloadAt = 0;
-function attachHangRecovery(win) {
-  if (!win) return;
-  let unresponsiveTimer = null;
-  const paint = () => {
-    try {
-      if (win && !win.isDestroyed()) win.webContents.invalidate();
-    } catch (_) { /* ignore */ }
-  };
-  win.on('show', paint);
-  win.on('restore', paint);
-  win.on('focus', paint);
-  win.on('unresponsive', () => {
-    console.error('[window] unresponsive');
-    hangDiag.write('error', 'window_unresponsive', {});
-    paint();
-    if (unresponsiveTimer) return;
-    unresponsiveTimer = setTimeout(() => {
-      unresponsiveTimer = null;
-      if (!win || win.isDestroyed()) return;
-      const now = Date.now();
-      if (now - lastHangReloadAt < 15000) return;
-      lastHangReloadAt = now;
-      console.error('[window] reload after hang');
-      try { win.reload(); } catch (_) { /* ignore */ }
-    }, 4000);
-  });
-  win.on('responsive', () => {
-    if (unresponsiveTimer) {
-      clearTimeout(unresponsiveTimer);
-      unresponsiveTimer = null;
-    }
-  });
-}
-
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1000,
@@ -236,7 +190,6 @@ function createWindow() {
       }, 400);
     }
   });
-  attachHangRecovery(mainWindow);
   setTimeout(() => {
     showMainWindow('Timeout — ready-to-show ausgeblieben');
   }, 4000);
@@ -553,7 +506,6 @@ app.on('child-process-gone', (_event, details) => {
   hangDiag.write('error', 'child_process_gone', { type: type, reason: reason, exitCode: details && details.exitCode });
   if (type === 'GPU') {
     hangDiag.noteGpuGone(details);
-    enableGpuSoftwareFallback();
     if (mainWindow && !mainWindow.isDestroyed()) {
       const now = Date.now();
       if (now - lastGpuReloadAt < 8000) return;

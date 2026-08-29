@@ -297,15 +297,15 @@ function removeLegacyMonteurAuftragsordnerTopLevel(reiseDir, auftragsordner, fab
 /**
  * Entfernt irrtümlich angelegte reine FN-Ziffern-Ordner (12300), wenn kanonischer Fileserver-Name existiert.
  */
-function removeStaleBareFabMonteurDirs(reiseDir, fabFolderEntries) {
-  migrateBareFabDirsUnder(reiseDir, 'Dokumente_Monteur', fabFolderEntries);
+async function removeStaleBareFabMonteurDirs(reiseDir, fabFolderEntries) {
+  await migrateBareFabDirsUnder(reiseDir, 'Dokumente_Monteur', fabFolderEntries);
 }
 
 /**
  * Benennt reine FN-Ziffern-Ordner (7118) in kanonische Fileserver-Namen um bzw. merged Inhalt.
  */
-function migrateBareFabAnlageDirs(reiseDir, fabFolderEntries) {
-  migrateBareFabDirsUnder(reiseDir, 'Dokumente_Anlage', fabFolderEntries);
+async function migrateBareFabAnlageDirs(reiseDir, fabFolderEntries) {
+  await migrateBareFabDirsUnder(reiseDir, 'Dokumente_Anlage', fabFolderEntries);
 }
 
 function listSubdirNames(baseDir) {
@@ -437,35 +437,52 @@ function resolveFabMapLocal(reiseDir, fabMapIn, jobFabNums, readRootFolderName, 
   return out;
 }
 
+function yieldEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function renameAsync(src, dst) {
+  await fs.promises.rename(src, dst);
+}
+
+async function rmRecursiveAsync(dirPath) {
+  await fs.promises.rm(dirPath, { recursive: true, force: true });
+}
+
 function mergeDirContentsInto(srcDir, dstDir) {
   let names;
   try {
     names = fs.readdirSync(srcDir, { withFileTypes: true });
   } catch (_) {
-    return;
+    return Promise.resolve();
   }
   if (!fs.existsSync(dstDir)) fs.mkdirSync(dstDir, { recursive: true });
-  for (const ent of names) {
-    const src = path.join(srcDir, ent.name);
-    const dst = path.join(dstDir, ent.name);
-    try {
-      if (ent.isDirectory()) {
-        if (!fs.existsSync(dst)) {
-          fs.renameSync(src, dst);
-        } else {
-          mergeDirContentsInto(src, dst);
-          fs.rmSync(src, { recursive: true, force: true });
+  return (async () => {
+    let n = 0;
+    for (const ent of names) {
+      const src = path.join(srcDir, ent.name);
+      const dst = path.join(dstDir, ent.name);
+      try {
+        if (ent.isDirectory()) {
+          if (!fs.existsSync(dst)) {
+            await renameAsync(src, dst);
+          } else {
+            await mergeDirContentsInto(src, dst);
+            await rmRecursiveAsync(src);
+          }
+        } else if (!fs.existsSync(dst)) {
+          await renameAsync(src, dst);
         }
-      } else if (!fs.existsSync(dst)) {
-        fs.renameSync(src, dst);
+      } catch (err) {
+        console.warn('[monteur-paths] merge', src, '->', dst, err && err.message ? err.message : err);
       }
-    } catch (err) {
-      console.warn('[monteur-paths] merge', src, '->', dst, err && err.message ? err.message : err);
+      n += 1;
+      if (n % 8 === 0) await yieldEventLoop();
     }
-  }
+  })();
 }
 
-function migrateBareFabDirsUnder(reiseDir, subfolder, fabFolderEntries) {
+async function migrateBareFabDirsUnder(reiseDir, subfolder, fabFolderEntries) {
   const base = path.join(reiseDir, subfolder);
   if (!fs.existsSync(base)) return;
   for (const entry of fabFolderEntries || []) {
@@ -477,10 +494,10 @@ function migrateBareFabDirsUnder(reiseDir, subfolder, fabFolderEntries) {
     const target = path.join(base, can);
     try {
       if (!fs.existsSync(target)) {
-        fs.renameSync(stale, target);
+        await renameAsync(stale, target);
       } else {
-        mergeDirContentsInto(stale, target);
-        fs.rmSync(stale, { recursive: true, force: true });
+        await mergeDirContentsInto(stale, target);
+        await rmRecursiveAsync(stale);
       }
     } catch (err) {
       console.warn(
@@ -492,6 +509,7 @@ function migrateBareFabDirsUnder(reiseDir, subfolder, fabFolderEntries) {
         err && err.message ? err.message : err,
       );
     }
+    await yieldEventLoop();
   }
 }
 
@@ -500,45 +518,51 @@ function migrateBareFabDirsUnder(reiseDir, subfolder, fabFolderEntries) {
  */
 function migrateAliasFnFoldersUnder(reiseDir, subfolder, fabFolderEntries) {
   const base = path.join(reiseDir, subfolder);
-  if (!fs.existsSync(base)) return;
+  if (!fs.existsSync(base)) return Promise.resolve();
   const dirNames = listSubdirNames(base);
-  for (const entry of fabFolderEntries || []) {
-    const fab = String(entry.fab || '').trim();
-    const can = String(entry.folder_name_canonical || '').trim();
-    if (!fab) continue;
-    const matches = collectExactFnFolderMatches(dirNames, fab);
-    const preferred = can || pickPreferredFnFolderName(matches, {});
-    if (!preferred) continue;
-    const target = path.join(base, preferred);
-    for (const name of matches) {
-      if (name === preferred) continue;
-      const stale = path.join(base, name);
-      if (!fs.existsSync(stale)) continue;
-      try {
-        if (!fs.existsSync(target)) {
-          fs.renameSync(stale, target);
-        } else {
-          mergeDirContentsInto(stale, target);
-          fs.rmSync(stale, { recursive: true, force: true });
+  return (async () => {
+    for (const entry of fabFolderEntries || []) {
+      const fab = String(entry.fab || '').trim();
+      const can = String(entry.folder_name_canonical || '').trim();
+      if (!fab) continue;
+      const matches = collectExactFnFolderMatches(dirNames, fab);
+      const preferred = can || pickPreferredFnFolderName(matches, {});
+      if (!preferred) continue;
+      const target = path.join(base, preferred);
+      for (const name of matches) {
+        if (name === preferred) continue;
+        const stale = path.join(base, name);
+        if (!fs.existsSync(stale)) continue;
+        try {
+          if (!fs.existsSync(target)) {
+            await renameAsync(stale, target);
+          } else {
+            await mergeDirContentsInto(stale, target);
+            await rmRecursiveAsync(stale);
+          }
+          console.warn('[monteur-paths] FN-Alias zusammengeführt', subfolder, name, '->', preferred);
+        } catch (err) {
+          console.warn(
+            '[monteur-paths] FN-Alias-Migration',
+            subfolder,
+            name,
+            '->',
+            preferred,
+            err && err.message ? err.message : err,
+          );
         }
-        console.warn('[monteur-paths] FN-Alias zusammengeführt', subfolder, name, '->', preferred);
-      } catch (err) {
-        console.warn(
-          '[monteur-paths] FN-Alias-Migration',
-          subfolder,
-          name,
-          '->',
-          preferred,
-          err && err.message ? err.message : err,
-        );
+        await yieldEventLoop();
       }
     }
-  }
+  })();
 }
 
 function migrateAliasFnFolders(reiseDir, fabFolderEntries) {
-  migrateAliasFnFoldersUnder(reiseDir, 'Dokumente_Monteur', fabFolderEntries);
-  migrateAliasFnFoldersUnder(reiseDir, 'Dokumente_Anlage', fabFolderEntries);
+  return (async () => {
+    await migrateAliasFnFoldersUnder(reiseDir, 'Dokumente_Monteur', fabFolderEntries);
+    await yieldEventLoop();
+    await migrateAliasFnFoldersUnder(reiseDir, 'Dokumente_Anlage', fabFolderEntries);
+  })();
 }
 
 /**
@@ -575,8 +599,8 @@ function rewriteFnFolderSegmentInRel(relPath, fabMap) {
  * @param {string} reiseDir
  * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabFolderEntries
  */
-function ensureAnlageFnDirs(reiseDir, fabFolderEntries) {
-  migrateAliasFnFolders(reiseDir, fabFolderEntries);
+async function ensureAnlageFnDirs(reiseDir, fabFolderEntries) {
+  await migrateAliasFnFolders(reiseDir, fabFolderEntries);
   const anlageBase = path.join(reiseDir, 'Dokumente_Anlage');
   if (!fs.existsSync(anlageBase)) fs.mkdirSync(anlageBase, { recursive: true });
   for (const entry of fabFolderEntries || []) {
@@ -596,8 +620,8 @@ function ensureAnlageFnDirs(reiseDir, fabFolderEntries) {
  * @param {string} auftragsordner Desired-Name
  * @param {{ technicianDisplayName?: string, previousName?: string|null }} [opts]
  */
-function ensureMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner, opts) {
-  alignMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner, opts);
+async function ensureMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner, opts) {
+  await alignMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner, opts);
 }
 
 /**
@@ -619,8 +643,8 @@ function isMonteurMontageIdentitySibling(name, desired, datePrefix, monteurSuffi
  * Bestehende Auftragsordner umbenennen/mergen statt neu anzulegen.
  * @returns {string} Desired-Name
  */
-function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) {
-  migrateAliasFnFolders(reiseDir, fabFolderEntries);
+async function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) {
+  await migrateAliasFnFolders(reiseDir, fabFolderEntries);
   const desired = String(desiredName || '').trim();
   const monteurBase = path.join(reiseDir, 'Dokumente_Monteur');
   if (!fs.existsSync(monteurBase)) fs.mkdirSync(monteurBase, { recursive: true });
@@ -680,10 +704,10 @@ function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) 
       if (!fs.existsSync(oldPath)) continue;
       try {
         if (!fs.existsSync(desiredPath)) {
-          fs.renameSync(oldPath, desiredPath);
+          await renameAsync(oldPath, desiredPath);
         } else {
-          mergeDirContentsInto(oldPath, desiredPath);
-          fs.rmSync(oldPath, { recursive: true, force: true });
+          await mergeDirContentsInto(oldPath, desiredPath);
+          await rmRecursiveAsync(oldPath);
         }
       } catch (err) {
         console.warn(
@@ -694,6 +718,7 @@ function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) 
           err && err.message ? err.message : err,
         );
       }
+      await yieldEventLoop();
     }
     if (!fs.existsSync(desiredPath)) {
       try {

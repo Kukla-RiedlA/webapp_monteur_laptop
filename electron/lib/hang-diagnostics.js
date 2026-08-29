@@ -23,6 +23,8 @@ let diskKind = 'unset';
 let lastRendererPingAt = 0;
 let lastLoopScheduledAt = 0;
 let loopTimer = null;
+let flushTimer = null;
+let pendingDisk = [];
 const ring = [];
 
 function classifyPathKind(filePath) {
@@ -33,25 +35,32 @@ function classifyPathKind(filePath) {
   return 'local';
 }
 
-function appendLine(text) {
+function appendLine(text, toDisk) {
   ring.push(text);
   if (ring.length > RING_MAX) ring.shift();
-  if (!logPath) return;
-  try {
-    fs.appendFileSync(logPath, text + '\n');
-    let size = 0;
-    try {
-      size = fs.statSync(logPath).size;
-    } catch (_) {
-      return;
-    }
-    if (size <= MAX_FILE_BYTES) return;
-    const buf = fs.readFileSync(logPath, 'utf8');
-    const keep = buf.slice(Math.floor(buf.length / 2));
-    fs.writeFileSync(logPath, keep.startsWith('\n') ? keep.slice(1) : keep);
-  } catch (_) {
-    /* Diagnose darf die App nicht crashen */
-  }
+  if (!toDisk || !logPath) return;
+  pendingDisk.push(text);
+  if (flushTimer) return;
+  flushTimer = setTimeout(flushDisk, 1500);
+  if (typeof flushTimer.unref === 'function') flushTimer.unref();
+}
+
+function flushDisk() {
+  flushTimer = null;
+  if (!logPath || !pendingDisk.length) return;
+  const chunk = pendingDisk.join('\n') + '\n';
+  pendingDisk = [];
+  fs.promises
+    .appendFile(logPath, chunk)
+    .then(() => fs.promises.stat(logPath))
+    .then((st) => {
+      if (!st || st.size <= MAX_FILE_BYTES) return null;
+      return fs.promises.readFile(logPath, 'utf8').then((buf) => {
+        const keep = buf.slice(Math.floor(buf.length / 2));
+        return fs.promises.writeFile(logPath, keep.startsWith('\n') ? keep.slice(1) : keep);
+      });
+    })
+    .catch(() => {});
 }
 
 function write(level, msg, extra) {
@@ -68,7 +77,7 @@ function write(level, msg, extra) {
     },
     extra && typeof extra === 'object' ? extra : {},
   );
-  appendLine(JSON.stringify(rec));
+  appendLine(JSON.stringify(rec), level === 'error' || msg === 'hang_diag_start');
 }
 
 function startLoopWatch() {
@@ -82,7 +91,6 @@ function startLoopWatch() {
       const immediateLag = Date.now() - scheduled;
       const lag = Math.max(0, intervalLag, immediateLag);
       if (lag >= LAG_MS) write('error', 'event_loop_lag', { lagMs: lag });
-      else if (lag >= WARN_MS) write('warn', 'event_loop_lag', { lagMs: lag });
       if (lastRendererPingAt && Date.now() - lastRendererPingAt > RENDERER_STALE_MS) {
         write('error', 'renderer_heartbeat_missing', {
           rendererAgeMs: Date.now() - lastRendererPingAt,

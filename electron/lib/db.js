@@ -292,14 +292,16 @@ function persistDb(mode = 'PASSIVE') {
   if (!dbInstance) return;
   const allowed = new Set(['PASSIVE', 'FULL', 'TRUNCATE', 'RESTART']);
   const checkpointMode = allowed.has(mode) ? mode : 'PASSIVE';
-  hangDiag.timeSync('wal_checkpoint_' + checkpointMode, () => {
+  const run = () => {
     try {
       dbInstance.pragma(`wal_checkpoint(${checkpointMode})`);
       lastPersistError = null;
     } catch (e) {
       lastPersistError = e;
     }
-  });
+  };
+  if (checkpointMode === 'PASSIVE') run();
+  else hangDiag.timeSync('wal_checkpoint_' + checkpointMode, run);
 }
 
 /** Vor App-Ende / nach großem Sync: WAL in monteur.db überführen (Backup-Tools lesen nur .db). */

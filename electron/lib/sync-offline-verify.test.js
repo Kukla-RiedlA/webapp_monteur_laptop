@@ -172,6 +172,13 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
     );
   });
 
+  it('mtime-Scan bleibt gleich, gibt aber den Event-Loop frei', () => {
+    assert.ok(serverSrc.includes('async function collectChangedDienstreiseSyncFileEntries'));
+    assert.ok(serverSrc.includes('await collectChangedDienstreiseSyncFileEntries'));
+    assert.ok(serverSrc.includes('await yieldEventLoop()'));
+    assert.ok(serverSrc.includes('localDienstreiseFileNeedsDispoPush(dbConn, localJobId, f.relPathFromRoot, f.fullPath)'));
+  });
+
   it('Finish-Verify lädt geänderte Dateien nach, nicht nur fehlende Namen', () => {
     assert.ok(serverSrc.includes('localDienstreiseFileNeedsDispoPush(db, localJobId, p, full)'));
   });
