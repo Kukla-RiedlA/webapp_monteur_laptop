@@ -3696,12 +3696,438 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   return Buffer.from(await pdfDoc.save());
 }
 
+function wrapPdfPlain(font, text, size, maxW) {
+  const raw = String(text || '').replace(/\r\n/g, '\n');
+  const paragraphs = raw.split('\n');
+  const lines = [];
+  for (const para of paragraphs) {
+    const words = para.split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      lines.push('');
+      continue;
+    }
+    let cur = '';
+    for (const w of words) {
+      const test = cur ? cur + ' ' + w : w;
+      if (font.widthOfTextAtSize(test, size) <= maxW) {
+        cur = test;
+      } else {
+        if (cur) lines.push(cur);
+        if (font.widthOfTextAtSize(w, size) <= maxW) {
+          cur = w;
+        } else {
+          let chunk = '';
+          for (const ch of w) {
+            if (font.widthOfTextAtSize(chunk + ch, size) <= maxW) chunk += ch;
+            else {
+              if (chunk) lines.push(chunk);
+              chunk = ch;
+            }
+          }
+          cur = chunk;
+        }
+      }
+    }
+    if (cur) lines.push(cur);
+  }
+  return lines;
+}
+
+/**
+ * Arbeitsnachweis / Working Report – A4, Corporate-Layout wie Montagebericht/Service.
+ * payload: { document, arbeitsnachweis, items, customer_name, technician_signature_png, customer_signature_png }
+ */
+async function generateArbeitsnachweisPdfBuffer(payload, options) {
+  const { PDFDocument, rgb } = require('pdf-lib');
+  const lang = (options && options.lang) === 'en' ? 'en' : ((payload && payload.language) === 'en' ? 'en' : 'de');
+  const de = lang !== 'en';
+  const pdfDoc = await PDFDocument.create();
+  const fonts = await embedProtocolFonts(pdfDoc);
+  const font = fonts.font;
+  const fontBold = fonts.fontBold;
+  const unicodeOk = !!fonts.unicode;
+  const S = (t) => sanitizePdfText(t, unicodeOk);
+
+  const PAGE_W = 595.28;
+  const PAGE_H = 841.89;
+  const marginX = 32;
+  const marginTop = 24;
+  const marginBottom = 40;
+  const green = rgb(14 / 255, 123 / 255, 90 / 255);
+  const greenDark = rgb(12 / 255, 106 / 255, 77 / 255);
+  const greenSoft = rgb(207 / 255, 232 / 255, 209 / 255);
+  const greenHeader = rgb(232 / 255, 244 / 255, 236 / 255);
+  const grayText = rgb(0.25, 0.25, 0.25);
+  const grayMuted = rgb(0.45, 0.45, 0.45);
+  const lineGray = rgb(0.78, 0.82, 0.8);
+  const white = rgb(1, 1, 1);
+  const tableInnerW = PAGE_W - marginX * 2;
+  const headerBandH = 52;
+  const contentBottom = marginBottom + PROTOCOL_FOOTER_RESERVED_H;
+
+  const L = {
+    title: 'ARBEITSNACHWEIS / WORKING REPORT',
+    titleSub: de ? 'Working report' : 'Arbeitsnachweis',
+    no: de ? 'Nr.' : 'No.',
+    customer: de ? 'Auftraggeber' : 'Customer',
+    site: de ? 'Baustelle' : 'Site',
+    type: de ? 'Typ / Type' : 'Type',
+    fab: de ? 'Fabr.-Nr.' : 'Serial No.',
+    tech: de ? 'KUKLA-Techniker' : 'KUKLA Engineer',
+    car: de ? 'Auto / Car' : 'Car',
+    startKm: 'Start km',
+    endKm: 'End km',
+    totalKm: 'Total km',
+    living: de ? 'Tagesauslösen' : 'Living costs',
+    overnight: de ? 'Nächtigung beigestellt' : 'Overnight stay provided',
+    yes: de ? 'Ja' : 'Yes',
+    no: de ? 'Nein' : 'No',
+    date: de ? 'Datum' : 'Date',
+    time: de ? 'Zeit' : 'Time',
+    works: de ? 'Durchgeführte Arbeiten' : 'Executed works',
+    normal: de ? 'Normalstd.' : 'Normal hours',
+    ot50: de ? 'Ü50' : 'OT 50%',
+    ot100: de ? 'Ü100' : 'OT 100%',
+    sum: de ? 'Summe' : 'Total',
+    parts: de ? 'Ersatzteile' : 'Spare parts',
+    qty: de ? 'Stk.' : 'Pcs.',
+    designation: de ? 'Bezeichnung' : 'Designation',
+    typeNo: 'Type No.',
+    remarks: de ? 'Bemerkung' : 'Remarks',
+    sigTech: de ? 'Unterschrift KUKLA-Techniker' : 'Signature KUKLA Engineer',
+    sigCust: de ? 'Unterschrift Auftraggeber' : 'Signature Customer',
+    confirm: de
+      ? 'Der Auftraggeber bestätigt die in diesem Arbeitsnachweis angeführten Arbeitszeiten, durchgeführten Arbeiten und gegebenenfalls verwendeten Ersatzteile.'
+      : 'The customer confirms the working hours, executed works and, where applicable, spare parts stated in this working report.',
+    footer: de
+      ? 'Dieser Arbeitsnachweis gilt als Grundlage für die Rechnungslegung.'
+      : 'This working report is the basis for invoicing.',
+    page: de ? 'Seite' : 'Page',
+  };
+
+  const doc = (payload && payload.document) || {};
+  const an = (payload && payload.arbeitsnachweis) || {};
+  const items = Array.isArray(payload && payload.items) ? payload.items : [];
+  const work = items.filter((r) => (r && r.item_type) === 'arbeitszeile');
+  const parts = items.filter((r) => (r && r.item_type) === 'ersatzteil');
+  const customerName = S((payload && payload.customer_name) || doc.customer_name || '').trim();
+  const number = S(doc.number || '').trim();
+  const logo = await embedLogo(pdfDoc);
+  const techSig = await embedSignatureImage(pdfDoc, payload && payload.technician_signature_png);
+  const custSig = await embedSignatureImage(pdfDoc, payload && payload.customer_signature_png);
+
+  function fmtNum(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n === 0) return '';
+    return String(Math.round(n * 100) / 100).replace('.', ',');
+  }
+  function fmtDate(v) {
+    const s = String(v || '').trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return S(s);
+    return m[3] + '.' + m[2] + '.' + m[1];
+  }
+
+  const pages = [];
+  function newPage() {
+    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+    pages.push(page);
+    return page;
+  }
+
+  function drawChrome() {
+    const page = pages[pages.length - 1];
+    let yTop = PAGE_H - marginTop;
+    if (logo) {
+      const maxH = 40;
+      const maxW = 110;
+      const scale = Math.min(maxW / logo.width, maxH / logo.height);
+      page.drawImage(logo, {
+        x: marginX,
+        y: yTop - logo.height * scale,
+        width: logo.width * scale,
+        height: logo.height * scale,
+      });
+    } else {
+      page.drawText('KUKLA', { x: marginX, y: yTop - 18, size: 14, font: fontBold, color: green });
+    }
+    page.drawText(L.title, {
+      x: marginX + 130,
+      y: yTop - 16,
+      size: 14,
+      font: fontBold,
+      color: greenDark,
+    });
+    page.drawText(L.titleSub, {
+      x: marginX + 130,
+      y: yTop - 32,
+      size: 9,
+      font,
+      color: grayMuted,
+    });
+    const addrLines = [
+      'KUKLA Waagenfabrik GmbH & Co KG',
+      'Fadingerstr. 1-11 · 4840 Vöcklabruck',
+      'Tel. +43 7672 26666-0 · www.kukla.co.at',
+    ];
+    let ay = yTop - 12;
+    addrLines.forEach((line) => {
+      const safe = S(line);
+      const tw = font.widthOfTextAtSize(safe, 7);
+      page.drawText(safe, { x: PAGE_W - marginX - tw, y: ay, size: 7, font, color: grayMuted });
+      ay -= 9;
+    });
+    yTop -= headerBandH;
+    page.drawRectangle({ x: marginX, y: yTop - 3, width: tableInnerW, height: 3, color: green });
+    if (number) {
+      const nr = L.no + ' ' + number;
+      const tw = fontBold.widthOfTextAtSize(nr, 9);
+      page.drawText(nr, { x: PAGE_W - marginX - tw, y: yTop - 16, size: 9, font: fontBold, color: greenDark });
+    }
+    return yTop - 22;
+  }
+
+  let page = newPage();
+  let y = drawChrome();
+
+  function ensureSpace(need) {
+    if (y - need < contentBottom) {
+      page = newPage();
+      y = drawChrome();
+      return true;
+    }
+    return false;
+  }
+
+  const metaH = 92;
+  page.drawRectangle({
+    x: marginX,
+    y: y - metaH,
+    width: tableInnerW,
+    height: metaH,
+    color: greenHeader,
+    borderColor: greenSoft,
+    borderWidth: 0.8,
+  });
+  const pad = 10;
+  const colW = tableInnerW / 2 - pad * 2;
+  const overnight = an.naechtigung_beigestellt === true || an.naechtigung_beigestellt === 1 || an.naechtigung_beigestellt === '1';
+  const left = [
+    [L.customer, customerName],
+    [L.site, S(an.site || '')],
+    [L.type, S(an.equipment_type || '')],
+    [L.fab, S(an.fabrikationsnummer || '')],
+  ];
+  const right = [
+    [L.tech, S(an.technician_name || '')],
+    [L.car, S(an.car_info || '')],
+    [L.startKm + ' / ' + L.endKm + ' / ' + L.totalKm,
+      [an.start_km, an.end_km, an.total_km].map((v) => (v == null || v === '' ? '–' : String(v))).join(' / ')],
+    [L.living, S(an.living_costs || '')],
+    [L.overnight, overnight ? L.yes : L.no],
+  ];
+  function drawKV(pairs, x0, y0) {
+    let yy = y0;
+    pairs.forEach(([lab, val]) => {
+      page.drawText(S(lab), { x: x0, y: yy, size: 7, font, color: grayMuted });
+      const lines = wrapPdfPlain(font, S(val || '–'), 9, colW);
+      yy -= 10;
+      lines.slice(0, 2).forEach((ln) => {
+        page.drawText(ln, { x: x0, y: yy, size: 9, font: fontBold, color: grayText });
+        yy -= 11;
+      });
+    });
+  }
+  drawKV(left, marginX + pad, y - 14);
+  drawKV(right, marginX + tableInnerW / 2 + pad, y - 14);
+  y -= metaH + 14;
+
+  const colDate = 58;
+  const colTime = 70;
+  const colN = 42;
+  const col50 = 38;
+  const col100 = 42;
+  const colWorks = tableInnerW - colDate - colTime - colN - col50 - col100;
+
+  function drawTableHead(headers, widths) {
+    const h = 16;
+    ensureSpace(h + 4);
+    page.drawRectangle({ x: marginX, y: y - h, width: tableInnerW, height: h, color: greenHeader });
+    let x = marginX;
+    headers.forEach((hTxt, i) => {
+      page.drawText(S(hTxt), { x: x + 3, y: y - 12, size: 7, font: fontBold, color: greenDark });
+      x += widths[i];
+    });
+    y -= h;
+  }
+
+  drawTableHead([L.date, L.time, L.works, L.normal, L.ot50, L.ot100], [colDate, colTime, colWorks, colN, col50, col100]);
+
+  let sumN = 0;
+  let sum50 = 0;
+  let sum100 = 0;
+  work.forEach((row, idx) => {
+    const descLines = wrapPdfPlain(font, S(row.description || ''), 8, colWorks - 6);
+    const h = Math.max(16, descLines.length * 10 + 8);
+    if (ensureSpace(h + 2)) {
+      drawTableHead([L.date, L.time, L.works, L.normal, L.ot50, L.ot100], [colDate, colTime, colWorks, colN, col50, col100]);
+    }
+    if (idx % 2 === 1) {
+      page.drawRectangle({ x: marginX, y: y - h, width: tableInnerW, height: h, color: greenHeader });
+    }
+    page.drawLine({
+      start: { x: marginX, y: y - h },
+      end: { x: marginX + tableInnerW, y: y - h },
+      thickness: 0.3,
+      color: lineGray,
+    });
+    const n = Number(row.normal_hours) || 0;
+    const o50 = Number(row.overtime_50) || 0;
+    const o100 = Number(row.overtime_100) || 0;
+    sumN += n;
+    sum50 += o50;
+    sum100 += o100;
+    const baseY = y - 12;
+    page.drawText(fmtDate(row.item_date), { x: marginX + 3, y: baseY, size: 8, font, color: grayText });
+    page.drawText(S(row.item_time || ''), { x: marginX + colDate + 3, y: baseY, size: 8, font, color: grayText });
+    descLines.forEach((ln, li) => {
+      page.drawText(ln, { x: marginX + colDate + colTime + 3, y: y - 12 - li * 10, size: 8, font, color: grayText });
+    });
+    const nx = marginX + colDate + colTime + colWorks;
+    page.drawText(fmtNum(n), { x: nx + 3, y: baseY, size: 8, font, color: grayText });
+    page.drawText(fmtNum(o50), { x: nx + colN + 3, y: baseY, size: 8, font, color: grayText });
+    page.drawText(fmtNum(o100), { x: nx + colN + col50 + 3, y: baseY, size: 8, font, color: grayText });
+    y -= h;
+  });
+
+  ensureSpace(18);
+  page.drawRectangle({ x: marginX, y: y - 16, width: tableInnerW, height: 16, color: greenSoft });
+  page.drawText(L.sum, { x: marginX + colDate + colTime + 3, y: y - 12, size: 8, font: fontBold, color: greenDark });
+  const nx = marginX + colDate + colTime + colWorks;
+  page.drawText(fmtNum(sumN) || '0', { x: nx + 3, y: y - 12, size: 8, font: fontBold, color: greenDark });
+  page.drawText(fmtNum(sum50) || '0', { x: nx + colN + 3, y: y - 12, size: 8, font: fontBold, color: greenDark });
+  page.drawText(fmtNum(sum100) || '0', { x: nx + colN + col50 + 3, y: y - 12, size: 8, font: fontBold, color: greenDark });
+  y -= 22;
+
+  if (parts.length) {
+    const colQty = 40;
+    const colType = 90;
+    const colDes = tableInnerW - colQty - colType;
+    drawTableHead([L.qty, L.designation, L.typeNo], [colQty, colDes, colType]);
+    parts.forEach((row, idx) => {
+      const desLines = wrapPdfPlain(font, S(row.designation || row.description || ''), 8, colDes - 6);
+      const h = Math.max(16, desLines.length * 10 + 6);
+      if (ensureSpace(h + 2)) {
+        drawTableHead([L.qty, L.designation, L.typeNo], [colQty, colDes, colType]);
+      }
+      if (idx % 2 === 1) {
+        page.drawRectangle({ x: marginX, y: y - h, width: tableInnerW, height: h, color: greenHeader });
+      }
+      page.drawText(fmtNum(row.quantity) || String(row.quantity || ''), {
+        x: marginX + 3,
+        y: y - 12,
+        size: 8,
+        font,
+        color: grayText,
+      });
+      desLines.forEach((ln, li) => {
+        page.drawText(ln, { x: marginX + colQty + 3, y: y - 12 - li * 10, size: 8, font, color: grayText });
+      });
+      page.drawText(S(row.type_no || ''), {
+        x: marginX + colQty + colDes + 3,
+        y: y - 12,
+        size: 8,
+        font,
+        color: grayText,
+      });
+      y -= h;
+    });
+    y -= 10;
+  }
+
+  const remarks = S(an.remarks || '').trim();
+  if (remarks) {
+    const rLines = wrapPdfPlain(font, remarks, 9, tableInnerW - 8);
+    ensureSpace(18 + rLines.length * 11);
+    page.drawText(L.remarks, { x: marginX, y: y, size: 9, font: fontBold, color: greenDark });
+    y -= 14;
+    rLines.forEach((ln) => {
+      page.drawText(ln, { x: marginX, y: y, size: 9, font, color: grayText });
+      y -= 11;
+    });
+    y -= 8;
+  }
+
+  const confirmLines = wrapPdfPlain(font, L.confirm, 8, tableInnerW);
+  const sigH = 56;
+  const sigBlockH = 28 + confirmLines.length * 11 + sigH + 24;
+  ensureSpace(sigBlockH);
+  confirmLines.forEach((ln) => {
+    page.drawText(ln, { x: marginX, y: y, size: 8, font, color: grayText });
+    y -= 11;
+  });
+  y -= 8;
+  const sigW = (tableInnerW - 16) / 2;
+  function drawSigBox(x, img, label, name) {
+    page.drawText(S(label), { x: x, y: y, size: 7, font, color: grayMuted });
+    page.drawRectangle({
+      x: x,
+      y: y - sigH - 4,
+      width: sigW,
+      height: sigH,
+      borderColor: greenSoft,
+      borderWidth: 0.7,
+      color: white,
+    });
+    if (img) {
+      const scale = Math.min((sigW - 12) / img.width, (sigH - 10) / img.height, 1);
+      page.drawImage(img, {
+        x: x + 6,
+        y: y - sigH + 2,
+        width: img.width * scale,
+        height: img.height * scale,
+      });
+    }
+    if (name) {
+      page.drawText(S(name), { x: x, y: y - sigH - 16, size: 8, font, color: grayText });
+    }
+  }
+  const custName = S((payload && payload.customer_signer_name) || '').trim();
+  drawSigBox(marginX, techSig, L.sigTech, S(an.technician_name || ''));
+  drawSigBox(marginX + sigW + 16, custSig, L.sigCust, custName);
+
+  const count = pages.length;
+  pages.forEach((p, idx) => {
+    const footerLineY = marginBottom + PROTOCOL_FOOTER_RESERVED_H - 10;
+    p.drawLine({
+      start: { x: marginX, y: footerLineY },
+      end: { x: marginX + tableInnerW, y: footerLineY },
+      thickness: 0.6,
+      color: greenSoft,
+    });
+    p.drawText(S(L.footer), { x: marginX, y: marginBottom, size: 7, font, color: grayMuted });
+    const pageLabel = L.page + ' ' + (idx + 1);
+    const tw = font.widthOfTextAtSize(pageLabel, 8);
+    p.drawText(pageLabel, {
+      x: PAGE_W - marginX - tw,
+      y: marginBottom,
+      size: 8,
+      font,
+      color: grayMuted,
+    });
+  });
+  void count;
+
+  return Buffer.from(await pdfDoc.save());
+}
+
 module.exports = {
   generateServiceprotokollPdfBuffer,
   generateKontrollwiegungPdfBuffer,
   generateSchleppkettenPdfBuffer,
   generateMontageberichtPdfBuffer,
   generatePruefzertifikatPdfBuffer,
+  generateArbeitsnachweisPdfBuffer,
   htmlToMbContentBlocks,
   htmlFragmentToPlainPdf,
 };

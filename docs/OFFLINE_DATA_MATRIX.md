@@ -68,6 +68,7 @@ Speicherort Zwischenstände: **kanonisch SQLite `protocol_drafts` / `protocol_dr
 | **Schleppkette** | SQLite `protocol_drafts` (`schleppkette`) | Draft-GET | Draft-POST | Ja | Ja lokal + PDF lokal | Ja (`schleppkettenprotokoll_draft`) |
 | **Prüfzertifikat** | SQLite `protocol_drafts` (`pruefzertifikat`) | Draft-GET | Draft-POST | Ja | Ja lokal + PDF lokal | Ja (`pruefzertifikat_draft`) |
 | **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein (nicht implementiert) | — |
+| **Arbeitsnachweis (Beleg, nicht Protokoll)** | localStorage-Draft (`local_uuid`) + Dispo `documents`; PWA IndexedDB `arbeitsnachweis_drafts` | Mobile `arbeitsnachweis.php?action=get/list` | `save` / `signature` / `pdf_upload` | Teilweise (lokaler Draft) | Speichern braucht Dispo; PDF nur Laptop `protocol_pdf.js` | Ja (`local_uuid`) |
 
 **Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“); während Sync Badge-Text **Sync…**. Verdächtiger leerer Jobs-Pull → `pull_warnings` + `degraded`, lokale Aufträge bleiben.
 

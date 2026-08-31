@@ -1,4 +1,5 @@
 .env
+electron/.env
 node_modules/
 electron/node_modules/
 electron/db/*.db

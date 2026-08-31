@@ -25,6 +25,7 @@
   <link rel="stylesheet" href="css/anlagenakte-form-viewer.css">
   <link rel="stylesheet" href="css/serviceprotokoll-v2.css">
   <link rel="stylesheet" href="css/montagebericht-v2.css">
+  <link rel="stylesheet" href="css/arbeitsnachweis.css">
   <link rel="stylesheet" href="css/kontrollwiegung-v2.css">
   <link rel="stylesheet" href="css/schleppketten-v2.css">
   <link rel="stylesheet" href="css/kunden-dokumentation.css">
@@ -1501,6 +1502,7 @@
     <div class="toolbar-dropdown-wrap">
       <button type="button" class="btn btn-ghost" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">Protokolle ▾</button>
       <div class="toolbar-dropdown" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-arbeitsnachweis">Arbeitsnachweis</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-montagebericht">Montagebericht</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-parameterlisten">Parameterlisten</button>
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-kontrollwiegungen">Kontrollwiegungen</button>
@@ -1739,6 +1741,149 @@
       </div>
     </div>
   </main>
+  <main id="viewProtokolleArbeitsnachweis" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Arbeitsnachweis">
+    <div class="card sp-v2-card an-page">
+      <div class="sp-v2-topbar">
+        <div class="sp-v2-topbar-title-wrap">
+          <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Arbeitsnachweis</h2>
+          <p id="anAutosaveHint" class="protocol-autosave-hint">Entwurf</p>
+        </div>
+        <div class="sp-v2-topbar-actions">
+          <button type="button" class="btn btn-primary" id="btnAnSave">Speichern</button>
+          <button type="button" class="btn btn-primary" id="btnAnPdf">PDF</button>
+          <button type="button" class="btn btn-ghost" id="btnAnTimesheet">Zeiten in Zeitschreibung übernehmen</button>
+        </div>
+      </div>
+      <form id="anForm" class="sp-v2-form">
+        <input type="hidden" id="anDocumentId" value="">
+        <input type="hidden" id="anLocalUuid" value="">
+        <input type="hidden" id="anContentVersion" value="1">
+
+        <section class="sp-v2-section" aria-labelledby="anSec1Title">
+          <header class="sp-v2-section-head" id="anSec1Title"><span class="sp-v2-num">1</span> Auftrag &amp; Identifikation</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="anJob">Auftrag</label>
+                <select id="anJob" class="dienstreise-select"></select>
+              </div>
+              <div class="sp-v2-field">
+                <label for="anFab">Fabr.-Nr.</label>
+                <select id="anFab" class="dienstreise-select"></select>
+              </div>
+              <div class="sp-v2-field">
+                <span id="anLangLabel">Sprache</span>
+                <div class="an-lang-radios" role="radiogroup" aria-labelledby="anLangLabel">
+                  <label><input type="radio" name="anLang" value="de" checked> Deutsch</label>
+                  <label><input type="radio" name="anLang" value="en"> English</label>
+                </div>
+              </div>
+            </div>
+            <p class="an-hint">Der Auftrag dient nur der Vorbelegung. Im PDF erscheint keine Auftragsnummer.</p>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="anSec2Title">
+          <header class="sp-v2-section-head" id="anSec2Title"><span class="sp-v2-num">2</span> Kopfdaten</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field"><label for="anCustomer">Auftraggeber</label><input type="text" id="anCustomer" readonly></div>
+              <div class="sp-v2-field"><label for="anSite">Baustelle / Site</label><input type="text" id="anSite"></div>
+              <div class="sp-v2-field"><label for="anType">Typ / Type</label><input type="text" id="anType"></div>
+              <div class="sp-v2-field"><label for="anTech">KUKLA-Techniker</label><input type="text" id="anTech" readonly></div>
+              <div class="sp-v2-field"><label for="anCar">Auto / Car</label><input type="text" id="anCar"></div>
+              <div class="sp-v2-field"><label for="anLiving">Tagesauslösen</label><input type="text" id="anLiving" placeholder="Freitext"></div>
+              <div class="sp-v2-field"><label for="anStartKm">Start km</label><input type="number" id="anStartKm" min="0" step="1"></div>
+              <div class="sp-v2-field"><label for="anEndKm">End km</label><input type="number" id="anEndKm" min="0" step="1"></div>
+              <div class="sp-v2-field"><label for="anTotalKm">Total km</label><input type="number" id="anTotalKm" min="0" step="1"><label class="an-check"><input type="checkbox" id="anTotalKmManual"> manuell</label></div>
+              <div class="sp-v2-field"><label>Nächtigung beigestellt</label>
+                <div class="an-lang-radios">
+                  <label><input type="radio" name="anOvernight" value="1"> Ja</label>
+                  <label><input type="radio" name="anOvernight" value="0" checked> Nein</label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="anSec3Title">
+          <header class="sp-v2-section-head" id="anSec3Title"><span class="sp-v2-num">3</span> Arbeiten</header>
+          <div class="sp-v2-section-body">
+            <div class="an-table-wrap">
+              <table class="an-table" id="anWorkTable">
+                <thead>
+                  <tr>
+                    <th>Datum</th><th>Zeit</th><th>Durchgeführte Arbeiten</th>
+                    <th>Normalstd.</th><th>Ü50</th><th>Ü100</th><th></th>
+                  </tr>
+                </thead>
+                <tbody id="anWorkBody"></tbody>
+                <tfoot>
+                  <tr>
+                    <td colspan="3">Summe</td>
+                    <td id="anSumN">0</td><td id="anSum50">0</td><td id="anSum100">0</td><td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            <button type="button" class="btn btn-ghost" id="btnAnAddWork">+ Arbeitszeile</button>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="anSec4Title">
+          <header class="sp-v2-section-head" id="anSec4Title"><span class="sp-v2-num">4</span> Ersatzteile</header>
+          <div class="sp-v2-section-body">
+            <div class="an-table-wrap">
+              <table class="an-table" id="anPartsTable">
+                <thead><tr><th>Stk.</th><th>Bezeichnung</th><th>Type No.</th><th></th></tr></thead>
+                <tbody id="anPartsBody"></tbody>
+              </table>
+            </div>
+            <button type="button" class="btn btn-ghost" id="btnAnAddPart">+ Ersatzteil</button>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="anSec5Title">
+          <header class="sp-v2-section-head" id="anSec5Title"><span class="sp-v2-num">5</span> Bemerkung</header>
+          <div class="sp-v2-section-body">
+            <textarea id="anRemarks" rows="3" spellcheck="true" lang="de"></textarea>
+          </div>
+        </section>
+
+        <section class="sp-v2-section" aria-labelledby="anSec6Title">
+          <header class="sp-v2-section-head" id="anSec6Title"><span class="sp-v2-num">6</span> Bestätigung &amp; Unterschriften</header>
+          <div class="sp-v2-section-body">
+            <p id="anConfirmText" class="an-confirm">Der Auftraggeber bestätigt die in diesem Arbeitsnachweis angeführten Arbeitszeiten, durchgeführten Arbeiten und gegebenenfalls verwendeten Ersatzteile.</p>
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="anSignerContact">Ansprechpartner (Baustelle)</label>
+                <select id="anSignerContact" class="dienstreise-select"></select>
+              </div>
+              <div class="sp-v2-field"><label for="anSignerName">Name Auftraggeber</label><input type="text" id="anSignerName"></div>
+              <div class="sp-v2-field"><label for="anSignerEmail">E-Mail</label><input type="email" id="anSignerEmail"></div>
+            </div>
+            <label class="an-check"><input type="checkbox" id="anSaveContact" checked> Als Baustellen-Ansprechpartner speichern</label>
+            <div class="an-preview-actions">
+              <button type="button" class="btn btn-primary" id="btnAnPreview">Kunden-Vorschau</button>
+            </div>
+            <div id="anSigStatus" class="an-sig-status"></div>
+          </div>
+        </section>
+      </form>
+    </div>
+    <div id="anPreviewModal" class="an-modal" hidden>
+      <div class="an-modal-box" role="dialog" aria-labelledby="anPreviewTitle">
+        <h3 id="anPreviewTitle">Kunden-Vorschau</h3>
+        <div id="anPreviewBody" class="an-preview-body"></div>
+        <canvas id="anSigCanvas" class="an-sig-canvas" width="480" height="180"></canvas>
+        <div class="an-preview-actions">
+          <button type="button" class="btn btn-ghost" id="btnAnSigClear">Unterschrift löschen</button>
+          <button type="button" class="btn btn-primary" id="btnAnSign">Unterschreiben</button>
+          <button type="button" class="btn btn-ghost" id="btnAnPreviewClose">Schließen</button>
+        </div>
+      </div>
+    </div>
+  </main>
   <main id="viewProtokolleMontagebericht" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Montagebericht">
     <div class="card sp-v2-card mb-v2-page">
       <div class="sp-v2-topbar mb-v2-topbar">
@@ -1800,7 +1945,10 @@
                   <div id="montageberichtGrund" class="mb-rich-editor" data-mb-editor="grund" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></div>
                 </div>
                 <div class="sp-v2-field">
-                  <label for="montageberichtBemerkungen">Bemerkungen</label>
+                  <div class="mb-copilot-label-row">
+                    <label for="montageberichtBemerkungen">Bemerkungen</label>
+                    <button type="button" class="btn btn-ghost" id="btnCopilotCheckText" hidden>Text prüfen</button>
+                  </div>
                   <div id="montageberichtBemerkungen" class="mb-rich-editor" data-mb-editor="bemerkungen" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></div>
                 </div>
               </div>
@@ -3253,8 +3401,11 @@
   <script src="assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260701"></script>
   <script src="js/view-abrechnung.js?v=20260702c"></script>
   <script src="js/view-zeitschreibung.js?v=20260726b"></script>
+  <script src="js/signature-pad.js"></script>
+  <script src="js/arbeitsnachweis.js"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js"></script>
+  <script src="js/probe-copilot-text.js"></script>
   <script src="js/serviceprotokoll-react-bridge.js"></script>
   <script src="js/abrechnung-laptop-bridge.js?v=20260616f"></script>
   <script src="rams_wizard.js"></script>

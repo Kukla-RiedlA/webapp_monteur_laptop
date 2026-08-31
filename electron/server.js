@@ -7156,6 +7156,105 @@ function createApp(db) {
     }
   });
 
+  app.all('/api/laptop_arbeitsnachweis_proxy', express.json({ limit: '20mb' }), async (req, res) => {
+    const body = (req.body && typeof req.body === 'object') ? req.body : {};
+    const baseUrl = (body.baseUrl || body.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
+    const action = (body.action || req.query.action || '').toString().trim();
+    const method = (body.method || (body.payload || action === 'save' || action === 'signature' || action === 'pdf_upload' || action === 'timesheet_apply' || action === 'timesheet_preview' || action === 'contact_save' ? 'POST' : 'GET')).toString().toUpperCase();
+    const queryParams = (body.queryParams && typeof body.queryParams === 'object') ? body.queryParams : {};
+    const payload = body.payload;
+    try {
+      if (!action) {
+        return res.status(400).json({ ok: false, error: 'action erforderlich.' });
+      }
+      if (!baseUrl) {
+        return res.status(400).json({ ok: false, error: 'baseUrl erforderlich.' });
+      }
+      const auth = authHeaderFromIncomingBasicOrQuery(req);
+      if (!auth) {
+        return res.status(401).json({ ok: false, error: 'Basic-Auth erforderlich.' });
+      }
+      const qs = new URLSearchParams();
+      qs.set('action', action);
+      Object.keys(queryParams).forEach((k) => {
+        if (queryParams[k] !== undefined && queryParams[k] !== null) qs.set(k, String(queryParams[k]));
+      });
+      const url = `${baseUrl}/api/mobile/arbeitsnachweis.php?${qs.toString()}`;
+      const headers = Object.assign(
+        { Accept: 'application/json' },
+        auth || {},
+        auth && auth.Authorization ? { 'X-Kukla-Authorization': auth.Authorization } : {}
+      );
+      const opts = { method: method, headers: headers };
+      if (method !== 'GET' && method !== 'HEAD') {
+        headers['Content-Type'] = 'application/json';
+        const postBody = payload && typeof payload === 'object' ? Object.assign({ action: action }, payload) : { action: action };
+        opts.body = JSON.stringify(postBody);
+      }
+      const r = await fetch(url, opts);
+      const ct = r.headers.get('content-type') || '';
+      if (ct.indexOf('pdf') !== -1) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        res.status(r.status).type('application/pdf').send(buf);
+        return;
+      }
+      const raw = await r.text();
+      res.status(r.status).type('application/json').send(raw);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'arbeitsnachweis_proxy' });
+    }
+  });
+
+  app.post('/api/arbeitsnachweis/pdf', express.json({ limit: '12mb' }), async (req, res) => {
+    try {
+      const payload = req.body && typeof req.body === 'object' ? req.body : {};
+      const lang = payload.language === 'en' || (payload.document && payload.document.language === 'en') ? 'en' : 'de';
+      const techId = getTechnicianId(req);
+      if (!payload.technician_signature_png && techId) {
+        try {
+          payload.technician_signature_png = await resolveTechnicianSignaturePng(techId, payload);
+        } catch (_) { /* optional */ }
+      }
+      const pdfBytes = await protocolPdf.generateArbeitsnachweisPdfBuffer(payload, { lang });
+      const pdfBase64 = Buffer.from(pdfBytes).toString('base64');
+      let savedPath = '';
+      try {
+        const localJobId = parseInt(payload.job_id || (payload.document && payload.document.job_id) || 0, 10);
+        if (localJobId > 0) {
+          const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true });
+          if (reiseDir) {
+            const dir = path.join(reiseDir, 'Dokumente_Monteur', 'Arbeitsnachweise');
+            fs.mkdirSync(dir, { recursive: true });
+            const num = (payload.document && payload.document.number) || ('AN-' + Date.now());
+            const safe = String(num).replace(/[^\w.-]+/g, '_');
+            savedPath = path.join(dir, safe + '.pdf');
+            fs.writeFileSync(savedPath, pdfBytes);
+          }
+        }
+      } catch (_) { /* optional local copy */ }
+      res.json({ ok: true, pdf_base64: pdfBase64, path: savedPath || null });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'PDF-Erzeugung fehlgeschlagen' });
+    }
+  });
+
+  app.post('/api/arbeitsnachweis/outlook', express.json({ limit: '2mb' }), async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+      const result = kundenDokumentation.openOutlookDraft({
+        recipients: Array.isArray(body.recipients) ? body.recipients : [],
+        attachments,
+        subject: body.subject || 'Arbeitsnachweis / Working report',
+        body: body.body || '',
+        htmlBody: body.html_body || body.htmlBody || '',
+      });
+      res.json({ ok: true, outlook: result });
+    } catch (e) {
+      res.json({ ok: false, outlook_error: e && e.message ? e.message : String(e) });
+    }
+  });
+
   /**
    * Aktive Auftraege des Technikers fuer "RAMS Erstellen" im Laptop.
    * Liefert das schon vorhandene Dispo-Endpoint `dispo_api/api/jobs_open.php`.

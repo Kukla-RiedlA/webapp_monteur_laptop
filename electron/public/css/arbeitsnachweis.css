@@ -1,0 +1,44 @@
+/* Arbeitsnachweis – sp-v2 wie Montagebericht/Service */
+
+#viewProtokolleArbeitsnachweis.view-protokolle {
+  background: var(--sp-page, #f7f8f8);
+  padding: 0;
+  min-height: calc(100vh - 120px);
+}
+
+.an-page { max-width: 1100px; margin: 0 auto; }
+.an-lang-radios { display: flex; gap: 1rem; align-items: center; margin-top: 0.35rem; }
+.an-lang-radios label { font-weight: 500; }
+.an-hint { color: #666; font-size: 0.85rem; margin: 0.5rem 0 0; }
+.an-check { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 500; margin-top: 0.25rem; }
+.an-table-wrap { overflow-x: auto; }
+.an-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.an-table th, .an-table td { border-bottom: 1px solid #cfe8d1; padding: 4px 6px; text-align: left; vertical-align: top; }
+.an-table th { background: #e8f4ec; color: #0e7b5a; font-size: 0.8rem; }
+.an-table input, .an-table textarea { width: 100%; box-sizing: border-box; }
+.an-table textarea { min-height: 42px; resize: vertical; }
+.an-table tfoot td { font-weight: 700; color: #0e7b5a; }
+.an-confirm { background: #e8f4ec; border-left: 4px solid #0e7b5a; padding: 0.75rem 1rem; border-radius: 6px; }
+.an-sig-canvas {
+  display: block; width: 100%; max-width: 480px; height: 180px;
+  border: 1px solid #0e7b5a; background: #fff; touch-action: none; margin: 0.75rem 0;
+}
+.an-modal {
+  position: fixed; inset: 0; z-index: 8000; background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center; padding: 12px;
+}
+.an-modal[hidden] { display: none !important; }
+.an-modal-box {
+  background: #fff; border-radius: 10px; max-width: 720px; width: 100%;
+  max-height: 94vh; overflow: auto; padding: 1rem 1.25rem;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+.an-preview-body { font-size: 0.9rem; margin-bottom: 0.75rem; white-space: pre-wrap; }
+.an-preview-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.an-sig-status { margin-top: 0.5rem; font-size: 0.9rem; color: #0e7b5a; }
+@media (max-width: 768px) {
+  .an-table thead { display: none; }
+  .an-table, .an-table tbody, .an-table tr, .an-table td { display: block; width: 100%; }
+  .an-table tr { border: 1px solid #cfe8d1; border-radius: 8px; margin-bottom: 0.6rem; padding: 0.4rem; }
+  .an-table td { border: 0; }
+}

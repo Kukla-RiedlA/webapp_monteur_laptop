@@ -12457,7 +12457,7 @@
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
     const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
-    const protokolleViewIds = ['viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleKunden', 'viewProtokolleService'];
+    const protokolleViewIds = ['viewProtokolleArbeitsnachweis', 'viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleKunden', 'viewProtokolleService'];
     viewStart.classList.remove('only-left', 'only-right', 'hidden');
     viewEinstellungen.classList.remove('active');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
@@ -12517,6 +12517,7 @@
     if (name && name.startsWith('protokolle-')) {
       viewStart.classList.add('hidden');
       const map = {
+        'protokolle-arbeitsnachweis': 'viewProtokolleArbeitsnachweis',
         'protokolle-montagebericht': 'viewProtokolleMontagebericht',
         'protokolle-parameterlisten': 'viewProtokolleParameterlisten',
         'protokolle-kontrollwiegungen': 'viewProtokolleKontrollwiegungen',
@@ -12530,6 +12531,9 @@
       if (viewId) {
         const el = document.getElementById(viewId);
         if (el) el.classList.add('active');
+      }
+      if (name === 'protokolle-arbeitsnachweis' && typeof window.openAndResetArbeitsnachweisForm === 'function') {
+        window.openAndResetArbeitsnachweisForm();
       }
       if (name === 'protokolle-montagebericht' && typeof window.openAndResetMontageberichtForm === 'function') {
         window.openAndResetMontageberichtForm();
@@ -15898,6 +15902,7 @@
 
   function protocolViewIdForShowViewName(name) {
     var map = {
+      'protokolle-arbeitsnachweis': 'viewProtokolleArbeitsnachweis',
       'protokolle-montagebericht': 'viewProtokolleMontagebericht',
       'protokolle-kontrollwiegungen': 'viewProtokolleKontrollwiegungen',
       'protokolle-schleppketten': 'viewProtokolleSchleppketten',

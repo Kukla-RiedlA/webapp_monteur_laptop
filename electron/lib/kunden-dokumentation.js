@@ -330,9 +330,24 @@ function openOutlookDraft(opts) {
     : [];
   const subject = String(opts.subject || 'Kundendokumentation');
   const body = String(opts.body || '');
+  const htmlBody = opts.htmlBody != null ? String(opts.htmlBody) : '';
 
   const recipList = recipients.map((e) => "'" + escapePsSingleQuoted(e) + "'").join(',');
   const attList = attachments.map((p) => "'" + escapePsSingleQuoted(p) + "'").join(',');
+
+  const htmlEscaped = htmlBody.replace(/'@/g, "'@ ");
+  const useHtml = htmlEscaped.trim() !== '';
+
+  const bodyAssign = useHtml
+    ? `
+$inspector = $mail.GetInspector
+$signatureHtml = [string]$mail.HTMLBody
+$html = @'
+${htmlEscaped}
+'@
+$mail.HTMLBody = $html + $signatureHtml
+`
+    : `$mail.Body = '${escapePsSingleQuoted(body)}'`;
 
   const ps = `
 $ErrorActionPreference = 'Stop'
@@ -343,7 +358,7 @@ try {
 }
 $mail = $outlook.CreateItem(0)
 $mail.Subject = '${escapePsSingleQuoted(subject)}'
-$mail.Body = '${escapePsSingleQuoted(body)}'
+${bodyAssign}
 $recipients = @(${recipList})
 foreach ($r in $recipients) {
   if ($r -and $r.Trim() -ne '') { [void]$mail.Recipients.Add($r.Trim()) }
