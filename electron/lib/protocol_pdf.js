@@ -3793,6 +3793,7 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     qty: de ? 'Stk.' : 'Pcs.',
     designation: de ? 'Bezeichnung' : 'Designation',
     typeNo: 'Type No.',
+    comment: de ? 'Kommentar' : 'Comment',
     remarks: de ? 'Bemerkung' : 'Remarks',
     sigTech: de ? 'Unterschrift KUKLA-Techniker' : 'Signature KUKLA Engineer',
     sigCust: de ? 'Unterschrift Auftraggeber' : 'Signature Customer',
@@ -3899,7 +3900,24 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     return false;
   }
 
-  const metaH = 92;
+  const overnight = an.naechtigung_beigestellt === true || an.naechtigung_beigestellt === 1 || an.naechtigung_beigestellt === '1';
+  let fabs = [];
+  if (Array.isArray(an.fabrikationsnummern)) fabs = an.fabrikationsnummern;
+  else if (Array.isArray(payload && payload.fabrikationsnummern)) fabs = payload.fabrikationsnummern;
+  if (!fabs.length) {
+    const fn0 = String(an.fabrikationsnummer || '').trim();
+    const ty0 = String(an.equipment_type || '').trim();
+    if (fn0 || ty0) fabs = [{ fabrikationsnummer: fn0, type: ty0 }];
+  }
+  const fabLines = fabs.map((r) => {
+    const fn = String((r && (r.fabrikationsnummer || r.fn)) || '').trim();
+    const ty = String((r && (r.type || r.typ)) || '').trim();
+    if (fn && ty) return fn + '  ·  ' + ty;
+    return fn || ty;
+  }).filter(Boolean);
+  const fabText = fabLines.length ? fabLines.join('; ') : (S(an.fabrikationsnummer || '') || '–');
+
+  const metaH = Math.max(92, 56 + Math.max(fabLines.length, 1) * 12 + 36);
   page.drawRectangle({
     x: marginX,
     y: y - metaH,
@@ -3911,12 +3929,10 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   });
   const pad = 10;
   const colW = tableInnerW / 2 - pad * 2;
-  const overnight = an.naechtigung_beigestellt === true || an.naechtigung_beigestellt === 1 || an.naechtigung_beigestellt === '1';
   const left = [
     [L.customer, customerName],
     [L.site, S(an.site || '')],
-    [L.type, S(an.equipment_type || '')],
-    [L.fab, S(an.fabrikationsnummer || '')],
+    [L.fab + ' / ' + L.type, S(fabText)],
   ];
   const right = [
     [L.tech, S(an.technician_name || '')],
@@ -3932,7 +3948,7 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
       page.drawText(S(lab), { x: x0, y: yy, size: 7, font, color: grayMuted });
       const lines = wrapPdfPlain(font, S(val || '–'), 9, colW);
       yy -= 10;
-      lines.slice(0, 2).forEach((ln) => {
+      lines.slice(0, 6).forEach((ln) => {
         page.drawText(ln, { x: x0, y: yy, size: 9, font: fontBold, color: grayText });
         yy -= 11;
       });
@@ -3942,11 +3958,11 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   drawKV(right, marginX + tableInnerW / 2 + pad, y - 14);
   y -= metaH + 14;
 
-  const colDate = 58;
-  const colTime = 70;
-  const colN = 42;
-  const col50 = 38;
-  const col100 = 42;
+  const colDate = 54;
+  const colTime = 62;
+  const colN = 36;
+  const col50 = 34;
+  const col100 = 36;
   const colWorks = tableInnerW - colDate - colTime - colN - col50 - col100;
 
   function drawTableHead(headers, widths) {
@@ -4010,15 +4026,17 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   y -= 22;
 
   if (parts.length) {
-    const colQty = 40;
-    const colType = 90;
-    const colDes = tableInnerW - colQty - colType;
-    drawTableHead([L.qty, L.designation, L.typeNo], [colQty, colDes, colType]);
+    const colQty = 32;
+    const colType = 72;
+    const colComment = Math.floor(tableInnerW * 0.34);
+    const colDes = tableInnerW - colQty - colType - colComment;
+    drawTableHead([L.qty, L.designation, L.typeNo, L.comment], [colQty, colDes, colType, colComment]);
     parts.forEach((row, idx) => {
-      const desLines = wrapPdfPlain(font, S(row.designation || row.description || ''), 8, colDes - 6);
-      const h = Math.max(16, desLines.length * 10 + 6);
+      const desLines = wrapPdfPlain(font, S(row.designation || ''), 8, colDes - 6);
+      const cmtLines = wrapPdfPlain(font, S(row.description || row.comment || ''), 8, colComment - 6);
+      const h = Math.max(16, Math.max(desLines.length, cmtLines.length) * 10 + 6);
       if (ensureSpace(h + 2)) {
-        drawTableHead([L.qty, L.designation, L.typeNo], [colQty, colDes, colType]);
+        drawTableHead([L.qty, L.designation, L.typeNo, L.comment], [colQty, colDes, colType, colComment]);
       }
       if (idx % 2 === 1) {
         page.drawRectangle({ x: marginX, y: y - h, width: tableInnerW, height: h, color: greenHeader });
@@ -4039,6 +4057,15 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
         size: 8,
         font,
         color: grayText,
+      });
+      cmtLines.forEach((ln, li) => {
+        page.drawText(ln, {
+          x: marginX + colQty + colDes + colType + 3,
+          y: y - 12 - li * 10,
+          size: 8,
+          font,
+          color: grayText,
+        });
       });
       y -= h;
     });

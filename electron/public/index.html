@@ -1767,19 +1767,19 @@
                 <label for="anJob">Auftrag</label>
                 <select id="anJob" class="dienstreise-select"></select>
               </div>
-              <div class="sp-v2-field">
-                <label for="anFab">Fabr.-Nr.</label>
-                <select id="anFab" class="dienstreise-select"></select>
-              </div>
-              <div class="sp-v2-field">
-                <span id="anLangLabel">Sprache</span>
-                <div class="an-lang-radios" role="radiogroup" aria-labelledby="anLangLabel">
-                  <label><input type="radio" name="anLang" value="de" checked> Deutsch</label>
-                  <label><input type="radio" name="anLang" value="en"> English</label>
+              <div class="sp-v2-field an-radio-field">
+                <div class="an-radio-stack" role="radiogroup" aria-labelledby="anLangCaption">
+                  <div class="an-radio-opts">
+                    <label><input type="radio" name="anLang" value="de" checked> Deutsch</label>
+                    <label><input type="radio" name="anLang" value="en"> English</label>
+                  </div>
+                  <span id="anLangCaption" class="an-radio-caption">Sprache</span>
                 </div>
               </div>
             </div>
-            <p class="an-hint">Der Auftrag dient nur der Vorbelegung. Im PDF erscheint keine Auftragsnummer.</p>
+            <div id="anFabList" class="an-fab-list" aria-label="Fabrikationsnummern"></div>
+            <input type="hidden" id="anFabsJson" value="[]">
+            <p class="an-hint">Der Auftrag dient nur der Vorbelegung. Im PDF erscheint keine Auftragsnummer. Alle FN und Typen des Auftrags stehen auf dem Nachweis.</p>
           </div>
         </section>
 
@@ -1788,18 +1788,20 @@
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field"><label for="anCustomer">Auftraggeber</label><input type="text" id="anCustomer" readonly></div>
-              <div class="sp-v2-field"><label for="anSite">Baustelle / Site</label><input type="text" id="anSite"></div>
-              <div class="sp-v2-field"><label for="anType">Typ / Type</label><input type="text" id="anType"></div>
+              <div class="sp-v2-field an-site-field"><label for="anSite">Baustelle / Site</label><input type="text" id="anSite"></div>
               <div class="sp-v2-field"><label for="anTech">KUKLA-Techniker</label><input type="text" id="anTech" readonly></div>
               <div class="sp-v2-field"><label for="anCar">Auto / Car</label><input type="text" id="anCar"></div>
               <div class="sp-v2-field"><label for="anLiving">Tagesauslösen</label><input type="text" id="anLiving" placeholder="Freitext"></div>
               <div class="sp-v2-field"><label for="anStartKm">Start km</label><input type="number" id="anStartKm" min="0" step="1"></div>
               <div class="sp-v2-field"><label for="anEndKm">End km</label><input type="number" id="anEndKm" min="0" step="1"></div>
-              <div class="sp-v2-field"><label for="anTotalKm">Total km</label><input type="number" id="anTotalKm" min="0" step="1"><label class="an-check"><input type="checkbox" id="anTotalKmManual"> manuell</label></div>
-              <div class="sp-v2-field"><label>Nächtigung beigestellt</label>
-                <div class="an-lang-radios">
-                  <label><input type="radio" name="anOvernight" value="1"> Ja</label>
-                  <label><input type="radio" name="anOvernight" value="0" checked> Nein</label>
+              <div class="sp-v2-field"><label for="anTotalKm">Total km</label><input type="number" id="anTotalKm" min="0" step="1"><label class="an-check"><input type="checkbox" id="anTotalKmManual"> Total km selbst eintragen</label></div>
+              <div class="sp-v2-field an-radio-field">
+                <div class="an-radio-stack" role="radiogroup" aria-labelledby="anOvernightCaption">
+                  <div class="an-radio-opts">
+                    <label><input type="radio" name="anOvernight" value="1"> Ja</label>
+                    <label><input type="radio" name="anOvernight" value="0" checked> Nein</label>
+                  </div>
+                  <span id="anOvernightCaption" class="an-radio-caption">Nächtigung beigestellt</span>
                 </div>
               </div>
             </div>
@@ -1810,18 +1812,37 @@
           <header class="sp-v2-section-head" id="anSec3Title"><span class="sp-v2-num">3</span> Arbeiten</header>
           <div class="sp-v2-section-body">
             <div class="an-table-wrap">
-              <table class="an-table" id="anWorkTable">
+              <table class="an-table an-work-table" id="anWorkTable">
+                <colgroup>
+                  <col class="an-col-date">
+                  <col class="an-col-time">
+                  <col class="an-col-time">
+                  <col class="an-col-works">
+                  <col class="an-col-hrs">
+                  <col class="an-col-hrs">
+                  <col class="an-col-hrs">
+                  <col class="an-col-del">
+                </colgroup>
                 <thead>
                   <tr>
-                    <th>Datum</th><th>Zeit</th><th>Durchgeführte Arbeiten</th>
-                    <th>Normalstd.</th><th>Ü50</th><th>Ü100</th><th></th>
+                    <th>Datum</th>
+                    <th class="an-th-center">Von</th>
+                    <th class="an-th-center">Bis</th>
+                    <th>Durchgeführte Arbeiten</th>
+                    <th class="an-th-center">Normalstd.</th>
+                    <th class="an-th-center">Ü50</th>
+                    <th class="an-th-center">Ü100</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody id="anWorkBody"></tbody>
                 <tfoot>
                   <tr>
-                    <td colspan="3">Summe</td>
-                    <td id="anSumN">0</td><td id="anSum50">0</td><td id="anSum100">0</td><td></td>
+                    <td colspan="4">Summe</td>
+                    <td id="anSumN" class="an-th-center">0</td>
+                    <td id="anSum50" class="an-th-center">0</td>
+                    <td id="anSum100" class="an-th-center">0</td>
+                    <td></td>
                   </tr>
                 </tfoot>
               </table>
@@ -1834,8 +1855,15 @@
           <header class="sp-v2-section-head" id="anSec4Title"><span class="sp-v2-num">4</span> Ersatzteile</header>
           <div class="sp-v2-section-body">
             <div class="an-table-wrap">
-              <table class="an-table" id="anPartsTable">
-                <thead><tr><th>Stk.</th><th>Bezeichnung</th><th>Type No.</th><th></th></tr></thead>
+              <table class="an-table an-parts-table" id="anPartsTable">
+                <colgroup>
+                  <col class="an-col-qty">
+                  <col class="an-col-des">
+                  <col class="an-col-typeno">
+                  <col class="an-col-comment">
+                  <col class="an-col-del">
+                </colgroup>
+                <thead><tr><th class="an-th-center">Stk.</th><th>Bezeichnung</th><th>Type No.</th><th>Kommentar</th><th></th></tr></thead>
                 <tbody id="anPartsBody"></tbody>
               </table>
             </div>
@@ -1846,7 +1874,7 @@
         <section class="sp-v2-section" aria-labelledby="anSec5Title">
           <header class="sp-v2-section-head" id="anSec5Title"><span class="sp-v2-num">5</span> Bemerkung</header>
           <div class="sp-v2-section-body">
-            <textarea id="anRemarks" rows="3" spellcheck="true" lang="de"></textarea>
+            <div class="sp-v2-field an-remarks-field"><label for="anRemarks">Bemerkung</label><textarea id="anRemarks" rows="3" spellcheck="true" lang="de"></textarea></div>
           </div>
         </section>
 

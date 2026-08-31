@@ -31,6 +31,11 @@
     if (tid) h['X-Technician-Id'] = String(tid);
     return h;
   }
+  function dispoJobId(job) {
+    if (!job) return 0;
+    var sid = job.server_id != null && String(job.server_id).trim() !== '' ? job.server_id : job.id;
+    return parseInt(sid, 10) || 0;
+  }
   function proxy(action, opts) {
     opts = opts || {};
     var baseUrl = (window.getDispoBaseUrl && window.getDispoBaseUrl()) || '';
@@ -58,11 +63,107 @@
     var n = parseFloat(String(v || '').replace(',', '.'));
     return Number.isFinite(n) ? n : 0;
   }
+  function splitTime(s) {
+    var t = String(s || '').trim();
+    var m = t.match(/^(\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})/);
+    if (m) return { from: padHm(m[1]), to: padHm(m[2]) };
+    if (/^\d{1,2}:\d{2}$/.test(t)) return { from: padHm(t), to: '' };
+    return { from: '', to: '' };
+  }
+  function padHm(s) {
+    var m = String(s || '').match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return String(s || '');
+    return ('0' + m[1]).slice(-2) + ':' + m[2];
+  }
+  function joinTime(from, to) {
+    from = padHm((from || '').trim());
+    to = padHm((to || '').trim());
+    if (from && to) return from + '–' + to;
+    return from || to || '';
+  }
+  function todayIso() {
+    return new Date().toISOString().slice(0, 10);
+  }
+  function addOneDay(iso) {
+    var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return todayIso();
+    var d = new Date(Date.UTC(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10)));
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+  }
+  function nextWorkDate() {
+    var last = '';
+    el('anWorkBody').querySelectorAll('[data-f=date]').forEach(function (inp) {
+      if (inp.value) last = inp.value;
+    });
+    return last ? addOneDay(last) : todayIso();
+  }
+  function normalizeFabs(raw) {
+    var list = [];
+    if (Array.isArray(raw)) list = raw;
+    else if (typeof raw === 'string' && raw.trim()) {
+      try {
+        var p = JSON.parse(raw);
+        list = Array.isArray(p) ? p : [p];
+      } catch (e) {
+        list = String(raw).split(/[,;]+/).map(function (x) { return { fabrikationsnummer: x.trim(), type: '' }; });
+      }
+    }
+    return list.map(function (x) {
+      if (x && typeof x === 'object') {
+        return {
+          fabrikationsnummer: String(x.fabrikationsnummer || x.fn || x.fab || x.nr || '').trim(),
+          type: String(x.type || x.Type || x.typ || x.Typ || '').trim()
+        };
+      }
+      return { fabrikationsnummer: String(x || '').trim(), type: '' };
+    }).filter(function (r) { return r.fabrikationsnummer || r.type; });
+  }
+  function siteFromJob(job) {
+    if (!job) return '';
+    var lines = [];
+    var name = String(job.endkunde || '').trim() || String(job.customer_name || '').trim();
+    if (name) lines.push(name);
+    var street = [job.street, job.house_number].map(function (x) { return String(x || '').trim(); }).filter(Boolean).join(' ');
+    if (street) lines.push(street);
+    var zipCity = [job.zip, job.city].map(function (x) { return String(x || '').trim(); }).filter(Boolean).join(' ');
+    if (zipCity) lines.push(zipCity);
+    var country = String(job.country || '').trim();
+    if (country) lines.push(country);
+    var extra1 = String(job.address_extra_1 || '').trim();
+    if (extra1) lines.push(extra1);
+    var extra2 = String(job.address_extra_2 || '').trim();
+    if (extra2) lines.push(extra2);
+    return lines.join(', ');
+  }
+  function contactName(c) {
+    c = c || {};
+    var cn = String(c.contact_name || c.contactName || '').trim();
+    if (cn) return cn;
+    return (String(c.first_name || '') + ' ' + String(c.last_name || '')).trim();
+  }
+  function contactEmail(c) {
+    c = c || {};
+    return String(c.email || c.contact_email || '').trim();
+  }
+  function contactsFromJob(job) {
+    if (!job) return [];
+    if (Array.isArray(job.job_contacts) && job.job_contacts.length) {
+      return job.job_contacts.filter(function (c) {
+        return contactName(c) || contactEmail(c);
+      });
+    }
+    var name = String(job.baustellen_ansprechpartner || job.job_contact_name || job.contact_person || job.contact_name || job.ansprechpartner || '').trim();
+    var email = String(job.job_contact_email || job.baustelle_email || job.contact_email || '').trim();
+    if (name || email) return [{ contact_name: name, email: email }];
+    return [];
+  }
   function collectWork() {
     var rows = [];
     el('anWorkBody').querySelectorAll('tr').forEach(function (tr, i) {
       var d = tr.querySelector('[data-f=date]');
-      var t = tr.querySelector('[data-f=time]');
+      var tf = tr.querySelector('[data-f=time_from]');
+      var tt = tr.querySelector('[data-f=time_to]');
       var w = tr.querySelector('[data-f=works]');
       var n = tr.querySelector('[data-f=n]');
       var a = tr.querySelector('[data-f=u50]');
@@ -73,7 +174,7 @@
         item_type: 'arbeitszeile',
         sort_order: i,
         item_date: d.value || '',
-        item_time: (t && t.value) || '',
+        item_time: joinTime(tf && tf.value, tt && tt.value),
         description: (w && w.value) || '',
         normal_hours: num(n && n.value),
         overtime_50: num(a && a.value),
@@ -88,16 +189,25 @@
       var q = tr.querySelector('[data-f=qty]');
       var d = tr.querySelector('[data-f=des]');
       var t = tr.querySelector('[data-f=type]');
-      if (!d || (!d.value && !num(q && q.value))) return;
+      var c = tr.querySelector('[data-f=comment]');
+      if (!d || (!d.value && !num(q && q.value) && !(c && c.value))) return;
       rows.push({
         item_type: 'ersatzteil',
         sort_order: i,
         quantity: num(q && q.value),
         designation: d.value || '',
-        type_no: (t && t.value) || ''
+        type_no: (t && t.value) || '',
+        description: (c && c.value) || ''
       });
     });
     return rows;
+  }
+  function currentFabs() {
+    try {
+      return normalizeFabs(JSON.parse(el('anFabsJson').value || '[]'));
+    } catch (e) {
+      return [];
+    }
   }
   function collectPayload() {
     var start = el('anStartKm').value;
@@ -105,20 +215,24 @@
     var total = el('anTotalKm').value;
     var manual = el('anTotalKmManual').checked;
     var overnight = document.querySelector('input[name="anOvernight"]:checked');
+    var fabs = currentFabs();
+    var snapFn = fabs.map(function (r) { return r.fabrikationsnummer; }).filter(Boolean).join(', ');
+    var snapTy = fabs.map(function (r) { return r.type; }).filter(Boolean).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(', ');
     return {
       id: parseInt(el('anDocumentId').value, 10) || 0,
       local_uuid: el('anLocalUuid').value,
       job_id: parseInt(el('anJob').value, 10) || 0,
       language: lang(),
-      document_date: (collectWork()[0] && collectWork()[0].item_date) || new Date().toISOString().slice(0, 10),
+      document_date: (collectWork()[0] && collectWork()[0].item_date) || todayIso(),
       customer_name: el('anCustomer').value,
       signer_name: el('anSignerName').value,
       signer_email: el('anSignerEmail').value,
       save_contact: el('anSaveContact').checked,
       arbeitsnachweis: {
         site: el('anSite').value,
-        equipment_type: el('anType').value,
-        fabrikationsnummer: el('anFab').value,
+        equipment_type: snapTy,
+        fabrikationsnummer: snapFn,
+        fabrikationsnummern: fabs,
         technician_name: el('anTech').value,
         car_info: el('anCar').value,
         living_costs: el('anLiving').value,
@@ -143,21 +257,24 @@
   }
   function addWorkRow(row) {
     row = row || {};
+    var times = splitTime(row.item_time);
     var tr = document.createElement('tr');
     tr.innerHTML =
       '<td><input type="date" data-f="date"></td>' +
-      '<td><input type="text" data-f="time" placeholder="08:00–17:00"></td>' +
+      '<td class="an-cell-center"><input type="time" class="an-input-time" data-f="time_from" step="60"></td>' +
+      '<td class="an-cell-center"><input type="time" class="an-input-time" data-f="time_to" step="60"></td>' +
       '<td><textarea data-f="works" rows="2"></textarea></td>' +
-      '<td><input type="number" data-f="n" step="0.01" min="0"></td>' +
-      '<td><input type="number" data-f="u50" step="0.01" min="0"></td>' +
-      '<td><input type="number" data-f="u100" step="0.01" min="0"></td>' +
+      '<td class="an-cell-center"><input type="number" class="an-input-hrs" data-f="n" step="0.25" min="0" max="24"></td>' +
+      '<td class="an-cell-center"><input type="number" class="an-input-hrs" data-f="u50" step="0.25" min="0" max="24"></td>' +
+      '<td class="an-cell-center"><input type="number" class="an-input-hrs" data-f="u100" step="0.25" min="0" max="24"></td>' +
       '<td><button type="button" class="btn btn-ghost an-del">×</button></td>';
     tr.querySelector('[data-f=date]').value = row.item_date || '';
-    tr.querySelector('[data-f=time]').value = row.item_time || '';
+    tr.querySelector('[data-f=time_from]').value = times.from;
+    tr.querySelector('[data-f=time_to]').value = times.to;
     tr.querySelector('[data-f=works]').value = row.description || '';
-    tr.querySelector('[data-f=n]').value = row.normal_hours != null ? row.normal_hours : '';
-    tr.querySelector('[data-f=u50]').value = row.overtime_50 != null ? row.overtime_50 : '';
-    tr.querySelector('[data-f=u100]').value = row.overtime_100 != null ? row.overtime_100 : '';
+    tr.querySelector('[data-f=n]').value = row.normal_hours != null && row.normal_hours !== '' ? row.normal_hours : '';
+    tr.querySelector('[data-f=u50]').value = row.overtime_50 != null && row.overtime_50 !== '' ? row.overtime_50 : '';
+    tr.querySelector('[data-f=u100]').value = row.overtime_100 != null && row.overtime_100 !== '' ? row.overtime_100 : '';
     tr.querySelector('.an-del').addEventListener('click', function () { tr.remove(); updateSums(); maybeInvalidate(); });
     tr.querySelectorAll('input,textarea').forEach(function (inp) {
       inp.addEventListener('input', function () { updateSums(); maybeInvalidate(); saveLocalDraft(); });
@@ -169,13 +286,15 @@
     row = row || {};
     var tr = document.createElement('tr');
     tr.innerHTML =
-      '<td><input type="number" data-f="qty" step="0.01" min="0"></td>' +
+      '<td class="an-cell-center"><input type="number" class="an-input-qty" data-f="qty" step="1" min="0" max="999"></td>' +
       '<td><input type="text" data-f="des"></td>' +
       '<td><input type="text" data-f="type"></td>' +
+      '<td><input type="text" data-f="comment"></td>' +
       '<td><button type="button" class="btn btn-ghost an-del">×</button></td>';
-    tr.querySelector('[data-f=qty]').value = row.quantity != null ? row.quantity : '';
-    tr.querySelector('[data-f=des]').value = row.designation || row.description || '';
+    tr.querySelector('[data-f=qty]').value = row.quantity != null && row.quantity !== '' ? row.quantity : '';
+    tr.querySelector('[data-f=des]').value = row.designation || '';
     tr.querySelector('[data-f=type]').value = row.type_no || '';
+    tr.querySelector('[data-f=comment]').value = row.description || row.comment || '';
     tr.querySelector('.an-del').addEventListener('click', function () { tr.remove(); maybeInvalidate(); });
     tr.querySelectorAll('input').forEach(function (inp) {
       inp.addEventListener('input', function () { maybeInvalidate(); saveLocalDraft(); });
@@ -221,8 +340,9 @@
     var sel = el('anSignerContact');
     sel.innerHTML = '<option value="">– ' + (lang() === 'en' ? 'select / new' : 'wählen / neu') + ' –</option>';
     (contacts || []).forEach(function (c, i) {
-      var name = c.contact_name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim() || c.title || '';
-      var email = c.email || c.contact_email || '';
+      var name = contactName(c);
+      var email = contactEmail(c);
+      if (!name && !email) return;
       var opt = document.createElement('option');
       opt.value = String(i);
       opt.textContent = name + (email ? ' <' + email + '>' : '');
@@ -231,26 +351,23 @@
       sel.appendChild(opt);
     });
   }
-  function fillFabs(job) {
-    var sel = el('anFab');
-    var list = [];
-    try {
-      var raw = job && job.fabrikationsnummern;
-      if (Array.isArray(raw)) list = raw;
-      else if (typeof raw === 'string' && raw.trim()) {
-        var p = JSON.parse(raw);
-        list = Array.isArray(p) ? p : String(raw).split(/[,;]+/);
-      }
-    } catch (e) {
-      list = String((job && job.fabrikationsnummern) || '').split(/[,;]+/);
+  function renderFabs(list) {
+    var fabs = normalizeFabs(list);
+    el('anFabsJson').value = JSON.stringify(fabs);
+    var host = el('anFabList');
+    if (!fabs.length) {
+      host.innerHTML = '<p class="an-fab-empty">' + (lang() === 'en' ? 'No serial numbers on this job.' : 'Keine Fabrikationsnummern am Auftrag.') + '</p>';
+      return;
     }
-    list = list.map(function (x) {
-      if (x && typeof x === 'object') return String(x.fabrikationsnummer || x.fn || x.nr || '').trim();
-      return String(x || '').trim();
-    }).filter(Boolean);
-    sel.innerHTML = '<option value=""></option>' + list.map(function (f) {
-      return '<option value="' + f.replace(/"/g, '&quot;') + '">' + f + '</option>';
+    var rows = fabs.map(function (r) {
+      return '<tr><td>' + escapeHtml(r.fabrikationsnummer) + '</td><td>' + escapeHtml(r.type) + '</td></tr>';
     }).join('');
+    host.innerHTML = '<table><thead><tr><th>Fabr.-Nr.</th><th>Typ / Type</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
   }
   async function loadJobs() {
     var techId = window.getTechId && window.getTechId();
@@ -260,13 +377,18 @@
     var data = await r.json();
     var jobs = (data && data.jobs) || [];
     el('anJob').innerHTML = '<option value="">– Auftrag –</option>' + jobs.map(function (j) {
-      return '<option value="' + j.id + '">' + (j.job_number || '#' + j.id) + ' ' + (j.customer_name || '') + '</option>';
+      var id = dispoJobId(j);
+      return '<option value="' + id + '">' + (j.job_number || '#' + id) + ' ' + (j.customer_name || '') + '</option>';
     }).join('');
   }
   async function onJobChange() {
     var id = parseInt(el('anJob').value, 10);
     jobData = null;
-    if (!id) return;
+    if (!id) {
+      renderFabs([]);
+      fillContacts([]);
+      return;
+    }
     var techId = window.getTechId && window.getTechId();
     var r = await fetch(API_BASE + '/api/job?id=' + id + '&technician_id=' + encodeURIComponent(techId || ''), {
       headers: Object.assign({ 'X-Technician-Id': String(techId || '') }, authHeaders())
@@ -275,20 +397,26 @@
     jobData = data && data.job;
     if (!jobData) return;
     el('anCustomer').value = jobData.customer_name || '';
-    fillFabs(jobData);
-    fillContacts(jobData.job_contacts || []);
+    el('anSite').value = siteFromJob(jobData);
+    renderFabs(jobData.fabrikationsnummern);
+    fillContacts(contactsFromJob(jobData));
     var pre = await proxy('prefill', { method: 'GET', queryParams: { job_id: id } }).catch(function () { return null; });
     var p = pre && pre.prefill;
     if (p) {
-      if (p.site) el('anSite').value = p.site;
-      if (p.equipment_type) el('anType').value = p.equipment_type;
-      if (p.fabrikationsnummer && !el('anFab').value) el('anFab').value = p.fabrikationsnummer;
+      if (!el('anSite').value && p.site) el('anSite').value = p.site;
       if (p.technician_name) el('anTech').value = p.technician_name;
-      fillContacts(p.contacts || jobData.job_contacts || []);
+      var preFabs = normalizeFabs(p.fabrikationsnummern);
+      if (preFabs.length && !currentFabs().length) renderFabs(preFabs);
+      var preContacts = p.job_contacts || p.contacts;
+      if ((!el('anSignerContact').options || el('anSignerContact').options.length <= 1) && preContacts && preContacts.length) {
+        fillContacts(preContacts);
+      } else if (preContacts && preContacts.length && !contactsFromJob(jobData).length) {
+        fillContacts(preContacts);
+      }
     }
     if (!el('anTech').value) {
       var nameEl = document.getElementById('technicianName');
-      el('anTech').value = (nameEl && nameEl.value) || '';
+      el('anTech').value = (nameEl && (nameEl.value || nameEl.textContent)) || '';
     }
   }
   async function saveRemote() {
@@ -319,15 +447,16 @@
     var lines = [];
     lines.push((lang() === 'en' ? 'Customer: ' : 'Auftraggeber: ') + p.customer_name);
     lines.push((lang() === 'en' ? 'Site: ' : 'Baustelle: ') + p.arbeitsnachweis.site);
-    lines.push((lang() === 'en' ? 'Type: ' : 'Typ: ') + p.arbeitsnachweis.equipment_type);
-    lines.push('FN: ' + p.arbeitsnachweis.fabrikationsnummer);
+    currentFabs().forEach(function (f) {
+      lines.push('FN ' + f.fabrikationsnummer + (f.type ? '  Typ ' + f.type : ''));
+    });
     lines.push('');
     collectWork().forEach(function (r) {
       lines.push(r.item_date + '  ' + r.item_time + '  ' + r.description + '  N ' + r.normal_hours + ' Ü50 ' + r.overtime_50 + ' Ü100 ' + r.overtime_100);
     });
     lines.push('');
     collectParts().forEach(function (r) {
-      lines.push((r.quantity || '') + ' × ' + r.designation + (r.type_no ? ' (' + r.type_no + ')' : ''));
+      lines.push((r.quantity || '') + ' × ' + r.designation + (r.type_no ? ' (' + r.type_no + ')' : '') + (r.description ? ' – ' + r.description : ''));
     });
     if (p.arbeitsnachweis.remarks) {
       lines.push('');
@@ -446,7 +575,8 @@
     el('anContentVersion').value = '1';
     el('anWorkBody').innerHTML = '';
     el('anPartsBody').innerHTML = '';
-    addWorkRow({ item_date: new Date().toISOString().slice(0, 10) });
+    renderFabs([]);
+    addWorkRow({ item_date: todayIso() });
     lastCustomerSig = false;
     signedFingerprint = '';
     el('anSigStatus').textContent = '';
@@ -456,8 +586,8 @@
   function boot() {
     if (!el('anForm')) return;
     if (!el('anLocalUuid').value) el('anLocalUuid').value = uuid();
-    if (!el('anWorkBody').children.length) addWorkRow({ item_date: new Date().toISOString().slice(0, 10) });
-    el('btnAnAddWork').addEventListener('click', function () { addWorkRow(); });
+    if (!el('anWorkBody').children.length) addWorkRow({ item_date: todayIso() });
+    el('btnAnAddWork').addEventListener('click', function () { addWorkRow({ item_date: nextWorkDate() }); });
     el('btnAnAddPart').addEventListener('click', function () { addPartRow(); });
     el('anJob').addEventListener('change', onJobChange);
     el('anSignerContact').addEventListener('change', function () {
