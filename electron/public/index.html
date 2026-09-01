@@ -1756,8 +1756,10 @@
       </div>
       <form id="anForm" class="sp-v2-form">
         <input type="hidden" id="anDocumentId" value="">
+        <input type="hidden" id="anLocalDocId" value="">
         <input type="hidden" id="anLocalUuid" value="">
         <input type="hidden" id="anContentVersion" value="1">
+        <input type="hidden" id="anTimesheetApplied" value="0">
 
         <section class="sp-v2-section" aria-labelledby="anSec1Title">
           <header class="sp-v2-section-head" id="anSec1Title"><span class="sp-v2-num">1</span> Auftrag &amp; Identifikation</header>
@@ -1794,7 +1796,7 @@
               <div class="sp-v2-field"><label for="anLiving">Tagesauslösen</label><input type="text" id="anLiving" placeholder="Freitext"></div>
               <div class="sp-v2-field"><label for="anStartKm">Start km</label><input type="number" id="anStartKm" min="0" step="1"></div>
               <div class="sp-v2-field"><label for="anEndKm">End km</label><input type="number" id="anEndKm" min="0" step="1"></div>
-              <div class="sp-v2-field"><label for="anTotalKm">Total km</label><input type="number" id="anTotalKm" min="0" step="1"><label class="an-check"><input type="checkbox" id="anTotalKmManual"> Total km selbst eintragen</label></div>
+              <div class="sp-v2-field"><label for="anTotalKm">Total km</label><input type="number" id="anTotalKm" min="0" step="1"></div>
               <div class="sp-v2-field an-radio-field">
                 <div class="an-radio-stack" role="radiogroup" aria-labelledby="anOvernightCaption">
                   <div class="an-radio-opts">
@@ -1811,7 +1813,7 @@
         <section class="sp-v2-section" aria-labelledby="anSec3Title">
           <header class="sp-v2-section-head" id="anSec3Title"><span class="sp-v2-num">3</span> Arbeiten</header>
           <div class="sp-v2-section-body">
-            <div class="an-table-wrap">
+            <div class="an-table-wrap an-work-table-wrap">
               <table class="an-table an-work-table" id="anWorkTable">
                 <colgroup>
                   <col class="an-col-date">

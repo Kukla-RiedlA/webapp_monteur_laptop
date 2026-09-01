@@ -7,6 +7,16 @@
 }
 
 .an-page { max-width: 1100px; margin: 0 auto; }
+/* Native Select-Popup darf nicht von den Karten abgeschnitten werden. */
+#viewProtokolleArbeitsnachweis .sp-v2-section,
+#viewProtokolleArbeitsnachweis .sp-v2-section-body,
+#viewProtokolleArbeitsnachweis .sp-v2-field {
+  overflow: visible;
+}
+#viewProtokolleArbeitsnachweis .sp-v2-field select option {
+  min-height: 1.6em;
+  padding: 4px 8px;
+}
 .an-hint { color: #666; font-size: 0.85rem; margin: 0.5rem 0 0; }
 .an-check { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 500; margin-top: 0.25rem; }
 
@@ -70,11 +80,12 @@
 }
 
 .an-table-wrap { overflow-x: auto; }
+.an-work-table-wrap { overflow: visible; }
 .an-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .an-table th, .an-table td { border-bottom: 1px solid #cfe8d1; padding: 4px 6px; text-align: left; vertical-align: top; }
 .an-table th { background: #e8f4ec; color: #0e7b5a; font-size: 0.8rem; }
 .an-table input, .an-table textarea { width: 100%; box-sizing: border-box; }
-.an-table textarea { min-height: 42px; resize: vertical; }
+.an-table textarea { min-height: 42px; resize: none; overflow: hidden; field-sizing: content; }
 .an-table tfoot td { font-weight: 700; color: #0e7b5a; }
 .an-th-center { text-align: center !important; }
 
@@ -100,6 +111,7 @@
   padding-left: 0.25rem !important;
   padding-right: 0.25rem !important;
 }
+.an-input-time { font-variant-numeric: tabular-nums; }
 .an-input-qty { width: 3.6em !important; max-width: 3.6em; }
 .an-cell-center { text-align: center; }
 .an-cell-center input { margin: 0 auto; display: inline-block; }

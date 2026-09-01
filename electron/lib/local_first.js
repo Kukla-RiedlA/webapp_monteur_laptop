@@ -82,6 +82,7 @@ const HANDLED_PENDING_ENTITY_TYPES = [
   'protocol_draft',
   'signature',
   'rams',
+  'arbeitsnachweis',
 ];
 
 function isHandledPendingEntityType(entityType) {

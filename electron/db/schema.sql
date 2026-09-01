@@ -309,3 +309,75 @@ CREATE TABLE IF NOT EXISTS technician_signature (
   dirty INTEGER NOT NULL DEFAULT 0
 );
 
+-- Arbeitsnachweis (Beleg, analog Dispo documents / document_arbeitsnachweis)
+CREATE TABLE IF NOT EXISTS documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER,
+  local_job_id INTEGER,
+  server_job_id INTEGER,
+  customer_id INTEGER,
+  document_type TEXT NOT NULL DEFAULT 'arbeitsnachweis',
+  number TEXT,
+  document_date TEXT,
+  status TEXT NOT NULL DEFAULT 'entwurf',
+  language TEXT DEFAULT 'de',
+  notes TEXT,
+  content_version INTEGER NOT NULL DEFAULT 1,
+  local_uuid TEXT,
+  customer_name TEXT,
+  created_by INTEGER,
+  dirty INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_local_uuid ON documents(local_uuid);
+CREATE INDEX IF NOT EXISTS idx_documents_job ON documents(server_job_id, local_job_id);
+CREATE TABLE IF NOT EXISTS document_arbeitsnachweis (
+  document_id INTEGER PRIMARY KEY,
+  site TEXT,
+  equipment_type TEXT,
+  fabrikationsnummer TEXT,
+  fabrikationsnummern TEXT,
+  technician_name TEXT,
+  car_info TEXT,
+  total_km INTEGER,
+  total_km_manual INTEGER NOT NULL DEFAULT 0,
+  start_km INTEGER,
+  end_km INTEGER,
+  living_costs TEXT,
+  naechtigung_beigestellt INTEGER NOT NULL DEFAULT 0,
+  remarks TEXT,
+  timesheet_applied INTEGER NOT NULL DEFAULT 0,
+  save_contact INTEGER NOT NULL DEFAULT 0,
+  signer_name TEXT,
+  signer_email TEXT
+);
+CREATE TABLE IF NOT EXISTS document_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id INTEGER NOT NULL,
+  item_type TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  description TEXT,
+  quantity REAL,
+  unit TEXT,
+  item_date TEXT,
+  item_time TEXT,
+  normal_hours REAL,
+  overtime_50 REAL,
+  overtime_100 REAL,
+  designation TEXT,
+  type_no TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_document_items_doc ON document_items(document_id, sort_order);
+CREATE TABLE IF NOT EXISTS document_signatures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id INTEGER NOT NULL,
+  signer_type TEXT NOT NULL,
+  user_id INTEGER,
+  signer_name TEXT,
+  signer_email TEXT,
+  signed_at TEXT,
+  content_version INTEGER,
+  invalidated_at TEXT
+);
+

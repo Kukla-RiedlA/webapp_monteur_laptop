@@ -249,6 +249,12 @@ function applyRuntimeMigrations(db) {
   } catch (_) {
     /* optional during early boot */
   }
+  try {
+    const anLocal = require('./arbeitsnachweis-local');
+    anLocal.ensureArbeitsnachweisLocalSchema(db);
+  } catch (_) {
+    /* optional during early boot */
+  }
 }
 
 /**

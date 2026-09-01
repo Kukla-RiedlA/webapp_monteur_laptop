@@ -7156,6 +7156,159 @@ function createApp(db) {
     }
   });
 
+  const anLocal = require('./lib/arbeitsnachweis-local');
+  anLocal.ensureArbeitsnachweisLocalSchema(db);
+
+  function anDispoBaseUrl(req, body) {
+    const b = body && typeof body === 'object' ? body : {};
+    const q = (req.query && req.query.baseUrl) || '';
+    const fromBody = b.baseUrl || b.base_url || '';
+    const creds = resolveDispoServerCreds(b);
+    return String(fromBody || q || creds.baseUrl || '')
+      .trim()
+      .replace(/\/$/, '');
+  }
+
+  function anDispoAuthHeaders(req, extra) {
+    const auth = authHeaderFromIncomingBasicOrQuery(req);
+    return Object.assign(
+      { Accept: 'application/json' },
+      extra || {},
+      auth || {},
+      auth && auth.Authorization ? { 'X-Kukla-Authorization': auth.Authorization } : {},
+    );
+  }
+
+  async function tryDispoArbeitsnachweisDraft(req, jobId) {
+    const jid = parseInt(jobId, 10) || 0;
+    const base = anDispoBaseUrl(req, req.query);
+    if (!base || jid <= 0) return null;
+    const auth = authHeaderFromIncomingBasicOrQuery(req);
+    if (!auth) return null;
+    const url = `${base}/api/mobile/arbeitsnachweis.php?action=draft&job_id=${encodeURIComponent(jid)}`;
+    const r = await fetch(url, { method: 'GET', headers: anDispoAuthHeaders(req) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok || !data) return null;
+    return data;
+  }
+
+  async function tryDispoArbeitsnachweisSave(req, dispoPayload) {
+    const base = anDispoBaseUrl(req, req.body);
+    if (!base) return { ok: false, offline: true };
+    const auth = authHeaderFromIncomingBasicOrQuery(req);
+    if (!auth) return { ok: false, offline: true };
+    const url = `${base}/api/mobile/arbeitsnachweis.php?action=save`;
+    const headers = anDispoAuthHeaders(req, { 'Content-Type': 'application/json' });
+    const r = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(Object.assign({ action: 'save' }, dispoPayload || {})),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      const err = new Error((data && data.error) || r.statusText || 'Dispo-Speichern fehlgeschlagen');
+      err.status = r.status;
+      throw err;
+    }
+    return data;
+  }
+
+  app.get('/api/arbeitsnachweis', async (req, res) => {
+    try {
+      anLocal.ensureArbeitsnachweisLocalSchema(db);
+      const latest = req.query.latest === '1' || req.query.latest === 'true';
+      const uuid = String(req.query.local_uuid || '').trim();
+      const jobId = parseInt(req.query.job_id, 10) || 0;
+      const id = parseInt(req.query.id, 10) || 0;
+      let loaded = null;
+      if (id > 0) loaded = anLocal.loadRow(db, id);
+      if (!loaded && uuid) loaded = anLocal.findByUuid(db, uuid);
+      if (!loaded && jobId > 0) loaded = anLocal.findByJob(db, jobId);
+      if (!loaded && latest) loaded = anLocal.findLatest(db, getTechnicianId(req));
+      const pullJobId = jobId
+        || (loaded && loaded.document && (loaded.document.server_job_id || loaded.document.local_job_id))
+        || 0;
+      if (pullJobId > 0) {
+        try {
+          const remote = await tryDispoArbeitsnachweisDraft(req, pullJobId);
+          if (remote && remote.document) {
+            const mapped = anLocal.fromDispoPublic(remote);
+            if (mapped) {
+              return res.json(anLocal.upsertFromPayload(db, mapped, {
+                technicianId: getTechnicianId(req),
+                dirty: false,
+              }));
+            }
+          }
+        } catch (ePull) {
+          // lokal bleibt
+        }
+      }
+      return res.json(anLocal.toPublic(loaded));
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'arbeitsnachweis_get' });
+    }
+  });
+
+  app.get('/api/arbeitsnachweis/list', (req, res) => {
+    try {
+      anLocal.ensureArbeitsnachweisLocalSchema(db);
+      const jobId = parseInt(req.query.job_id, 10) || 0;
+      const documents = jobId > 0 ? anLocal.listByJob(db, jobId) : [];
+      res.json({ ok: true, documents });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'arbeitsnachweis_list' });
+    }
+  });
+
+  app.post('/api/arbeitsnachweis', express.json({ limit: '12mb' }), async (req, res) => {
+    try {
+      anLocal.ensureArbeitsnachweisLocalSchema(db);
+      const payload = req.body && typeof req.body === 'object' ? req.body : {};
+      const techId = getTechnicianId(req);
+      const local = anLocal.upsertFromPayload(db, payload, { technicianId: techId, dirty: true });
+      const localId = local && local.local_id;
+      const dispoPayload = anLocal.toDispoSavePayload(anLocal.loadRow(db, localId));
+      if (dispoPayload) dispoPayload.baseUrl = anDispoBaseUrl(req, payload);
+      let synced = false;
+      try {
+        const remote = await tryDispoArbeitsnachweisSave(req, dispoPayload);
+        if (remote && remote.ok) {
+          anLocal.markSynced(db, localId, remote.document_id, {
+            number: remote.number,
+            status: remote.status,
+            content_version: remote.content_version,
+            local_uuid: remote.local_uuid,
+          });
+          synced = true;
+          Object.assign(local, anLocal.toPublic(anLocal.loadRow(db, localId)));
+          local.server_id = remote.document_id;
+          local.document_id = remote.document_id;
+          local.synced = true;
+          if (remote.local_uuid) local.local_uuid = remote.local_uuid;
+        }
+      } catch (e) {
+        anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload || {}, {
+          technician_id: techId,
+          baseUrl: anDispoBaseUrl(req, payload),
+        }));
+      }
+      if (!synced && localId) {
+        anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload || {}, {
+          technician_id: techId,
+          baseUrl: anDispoBaseUrl(req, payload),
+        }));
+      }
+      save();
+      res.json(Object.assign({ ok: true, document_id: local.server_id || 0, local_id: localId }, local, {
+        synced,
+        offline: !synced,
+      }));
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'arbeitsnachweis_save' });
+    }
+  });
+
   app.all('/api/laptop_arbeitsnachweis_proxy', express.json({ limit: '20mb' }), async (req, res) => {
     const body = (req.body && typeof req.body === 'object') ? req.body : {};
     const baseUrl = (body.baseUrl || body.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
@@ -20417,6 +20570,45 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
         const outcome = resolveSyncPushFailure(db, p, e, 'rams_push');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
+        continue;
+      }
+    }
+    if (p.entity_type === 'arbeitsnachweis' && p.action === 'save') {
+      handled = true;
+      const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      const tbBase = String(payloadRaw.baseUrl || payloadRaw.dispoBaseUrl || base || '')
+        .trim()
+        .replace(/\/$/, '');
+      if (!tbBase) {
+        resolveSyncPushFailure(db, p, new Error('Dispo-URL fehlt'), 'arbeitsnachweis_push_skip');
+        continue;
+      }
+      try {
+        const url = `${tbBase}/api/mobile/arbeitsnachweis.php?action=save`;
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: Object.assign({ Accept: 'application/json', 'Content-Type': 'application/json' }, header),
+          body: JSON.stringify(Object.assign({ action: 'save' }, payloadRaw)),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+          const pushErr = new Error(data.error || r.statusText);
+          pushErr.status = r.status;
+          throw pushErr;
+        }
+        try {
+          const anLoc = require('./lib/arbeitsnachweis-local');
+          anLoc.markSynced(db, p.entity_id, data.document_id, {
+            number: data.number,
+            status: data.status,
+            content_version: data.content_version,
+            local_uuid: data.local_uuid,
+          });
+        } catch (_) {}
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+      } catch (e) {
+        const outcome = resolveSyncPushFailure(db, p, e, 'arbeitsnachweis_push');
         if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
         continue;
       }
