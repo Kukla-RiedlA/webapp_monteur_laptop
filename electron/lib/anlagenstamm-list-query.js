@@ -45,7 +45,8 @@ function compareFabSort(fabA, fabB, dir) {
   const aNum = /^[0-9]+$/.test(a);
   const bNum = /^[0-9]+$/.test(b);
   if (aNum !== bNum) {
-    return dir * (aNum ? -1 : 1);
+    // Wie Dispo: Zahlen-FNs immer vor Text (key1 DESC), unabhängig von asc/desc.
+    return aNum ? -1 : 1;
   }
   if (aNum && bNum) {
     const na = parseInt(a, 10);

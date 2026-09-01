@@ -8,6 +8,8 @@ const {
   parseTedMechanik,
   persistAnlagenstammExtras,
   normalizeFabDigits,
+  repairMergedFnLeistungLocal,
+  getAnlagenstammDataGeneration,
 } = require('./anlagenstamm-local');
 const {
   paginateAnlagenstammList,
@@ -34,27 +36,41 @@ function hasLocalAnlagenstammData(db) {
   return rowCount(db) > 0;
 }
 
-const LIST_CACHE_TTL_MS = 8000;
-let listRowsCache = { db: null, count: -1, at: 0, rows: null };
+let listRowsCache = { db: null, count: -1, gen: -1, rows: null };
+let fnRepairScheduled = false;
 
 function invalidateAnlagenstammListCache() {
-  listRowsCache = { db: null, count: -1, at: 0, rows: null };
+  listRowsCache = { db: null, count: -1, gen: -1, rows: null };
 }
 
 function getCachedListRows(db) {
   const count = rowCount(db);
-  const now = Date.now();
+  const gen = getAnlagenstammDataGeneration();
   if (
     listRowsCache.db === db &&
     listRowsCache.count === count &&
-    Array.isArray(listRowsCache.rows) &&
-    now - listRowsCache.at < LIST_CACHE_TTL_MS
+    listRowsCache.gen === gen &&
+    Array.isArray(listRowsCache.rows)
   ) {
     return listRowsCache.rows;
   }
   const rows = listAllAnlagenstammLocal(db, { light: true });
-  listRowsCache = { db, count, at: now, rows };
+  listRowsCache = { db, count, gen, rows };
   return rows;
+}
+
+function scheduleMergedFnRepair(db) {
+  if (fnRepairScheduled) return;
+  fnRepairScheduled = true;
+  setImmediate(() => {
+    fnRepairScheduled = false;
+    try {
+      const repaired = repairMergedFnLeistungLocal(db);
+      if (repaired > 0) invalidateAnlagenstammListCache();
+    } catch (err) {
+      console.warn('[anlagenstamm] FN/Leistung-Korrektur:', err && err.message ? err.message : err);
+    }
+  });
 }
 
 function getAnlagenstammListResponse(db, query = {}) {
@@ -72,14 +88,18 @@ function getAnlagenstammListResponse(db, query = {}) {
     };
   }
   // pn_root_name liegt auf der Zeile; Tree-JSON je Anlage würde die UI auf dem Main-Thread einfrieren.
-  return paginateAnlagenstammList(getCachedListRows(db), query);
+  const payload = paginateAnlagenstammList(getCachedListRows(db), query);
+  scheduleMergedFnRepair(db);
+  return payload;
 }
 
 function getAnlagenstammFnFocusResponse(db, query = {}) {
   if (!hasLocalAnlagenstammData(db)) {
     return { success: true, match: 'none', source: 'local_empty' };
   }
-  return resolveAnlagenstammFnFocus(getCachedListRows(db), query);
+  const payload = resolveAnlagenstammFnFocus(getCachedListRows(db), query);
+  scheduleMergedFnRepair(db);
+  return payload;
 }
 
 function readTedFromJobIndex(db, fab) {

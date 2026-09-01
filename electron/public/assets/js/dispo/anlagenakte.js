@@ -84,7 +84,10 @@
   }
 
   function bindGalleryLazyThumbs(root) {
-    if (!root) return;
+    if (window.kuklaAnlagenThumbLoader && typeof window.kuklaAnlagenThumbLoader.bindLazyThumbs === 'function') {
+      window.kuklaAnlagenThumbLoader.bindLazyThumbs(root, 'img.akte-gallery-thumb');
+      return;
+    }
     var imgs = qsa('img.akte-gallery-thumb', root);
     function loadThumb(img, attempt) {
       var src = img.getAttribute('data-thumb-src');
@@ -93,8 +96,8 @@
       fetch(src, { credentials: 'same-origin' })
         .then(function (r) {
           if (r.status === 204) {
-            if (attempt < 12) {
-              setTimeout(function () { loadThumb(img, attempt + 1); }, 450);
+            if (attempt < 24) {
+              setTimeout(function () { loadThumb(img, attempt + 1); }, 400);
             }
             return null;
           }
@@ -112,7 +115,7 @@
           img.src = obj;
         })
         .catch(function () {
-          if (attempt < 4) {
+          if (attempt < 6) {
             setTimeout(function () { loadThumb(img, attempt + 1); }, 700);
           }
         });

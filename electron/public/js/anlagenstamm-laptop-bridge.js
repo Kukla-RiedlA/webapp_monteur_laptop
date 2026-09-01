@@ -427,7 +427,7 @@
     return global.MonteurImageGallery.collectRasterFilesFromTree(pnExplorerState.tree, function (_n, name, rel) {
       return {
         url: pnDownloadUrl(fab, rel, 'inline=1'),
-        thumbUrl: pnDownloadUrl(fab, rel, 'thumb=1&thumb_max=256'),
+        thumbUrl: pnDownloadUrl(fab, rel, 'thumb=1&thumb_max=256&prefer_cache=1'),
         label: name || rel,
       };
     });
@@ -460,11 +460,17 @@
   function loadPnThumb(img, fab, relPath) {
     if (!img || !fab || !relPath) return;
     img.loading = 'lazy';
-    img.src = pnDownloadUrl(fab, relPath, 'thumb=1&thumb_max=256');
+    const src = pnDownloadUrl(fab, relPath, 'thumb=1&thumb_max=256&prefer_cache=1');
+    if (global.kuklaAnlagenThumbLoader) {
+      global.kuklaAnlagenThumbLoader.loadThumbIntoImg(img, src, 0);
+      return;
+    }
+    img.src = src;
     img.onerror = function () {
       img.onerror = null;
-      fetch(pnDownloadUrl(fab, relPath, 'thumb=1&thumb_max=256'), { headers: techHeaders() })
+      fetch(src, { headers: techHeaders() })
         .then((r) => {
+          if (r.status === 204) throw new Error('thumb');
           if (!r.ok) throw new Error('thumb');
           return r.blob();
         })
@@ -478,13 +484,7 @@
           img.setAttribute('data-blob-url', objUrl);
           img.src = objUrl;
         })
-        .catch(() => {
-          if (!img.parentNode) return;
-          const ic = document.createElement('span');
-          ic.className = 'icon';
-          ic.textContent = '\uD83D\uDCC4';
-          img.replaceWith(ic);
-        });
+        .catch(() => {});
     };
   }
 

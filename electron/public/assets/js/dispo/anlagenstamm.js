@@ -696,7 +696,11 @@ function renderListRows(rows, options) {
       </td>
     </tr>
   `).join('');
-    tableBody.innerHTML = append ? (tableBody.innerHTML + html) : html;
+    if (append) {
+      tableBody.insertAdjacentHTML('beforeend', html);
+    } else {
+      tableBody.innerHTML = html;
+    }
   }
   if (emptyMsg) {
     const hasAnyRows = !!(tableBody && tableBody.querySelector('tr[data-id]'));
@@ -898,7 +902,7 @@ function pnBuildGalleryImages(fab, nodes) {
     const hrefBase = '/api/anlagenstamm_file_download.php?' + pnProjekteNeuDownloadQuery(fab, rel);
     return {
       url: hrefBase + '&inline=1',
-      thumbUrl: hrefBase + '&thumb=1&thumb_max=256',
+      thumbUrl: hrefBase + '&thumb=1&thumb_max=256&prefer_cache=1',
       label: name || rel,
     };
   });
@@ -962,6 +966,9 @@ function renderPnModalTree(fab, nodes, target) {
           thumb.alt = label;
           thumb.setAttribute('data-pn-href-base', hrefBase);
           thumb.setAttribute('data-pn-label', label);
+          if (window.kuklaAnlagenThumbLoader) {
+            thumb.setAttribute('data-thumb-src', window.kuklaAnlagenThumbLoader.thumbUrlFromHrefBase(hrefBase));
+          }
           wrap.appendChild(thumb);
         } else {
           const ic = document.createElement('span');
@@ -1010,7 +1017,12 @@ function renderPnModalTree(fab, nodes, target) {
         if (!hrefBase) return;
         thumb.classList.remove('anlagen-pn-thumb-pending');
         thumb.loading = 'lazy';
-        thumb.src = hrefBase + '&thumb=1&thumb_max=256';
+        if (window.kuklaAnlagenThumbLoader) {
+          const src = thumb.getAttribute('data-thumb-src') || window.kuklaAnlagenThumbLoader.thumbUrlFromHrefBase(hrefBase);
+          window.kuklaAnlagenThumbLoader.loadThumbIntoImg(thumb, src, 0);
+        } else {
+          thumb.src = hrefBase + '&thumb=1&thumb_max=256&prefer_cache=1';
+        }
         thumb.addEventListener('click', function () {
           const fullUrl = hrefBase + '&inline=1';
           let idx = 0;

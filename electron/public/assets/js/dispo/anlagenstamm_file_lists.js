@@ -175,7 +175,7 @@
       var hrefBase = '/api/anlagenstamm_file_download.php?' + pnProjekteNeuDownloadQueryLists(fab, rel);
       return {
         url: hrefBase + '&inline=1',
-        thumbUrl: hrefBase + '&thumb=1&thumb_max=256',
+        thumbUrl: hrefBase + '&thumb=1&thumb_max=256&prefer_cache=1',
         label: name || rel,
       };
     });
@@ -223,7 +223,12 @@
       if (!hrefBase) return;
       thumb.classList.remove('anlagen-pn-thumb-pending');
       thumb.loading = 'lazy';
-      thumb.src = hrefBase + '&thumb=1&thumb_max=256';
+      if (window.kuklaAnlagenThumbLoader) {
+        var src = thumb.getAttribute('data-thumb-src') || window.kuklaAnlagenThumbLoader.thumbUrlFromHrefBase(hrefBase);
+        window.kuklaAnlagenThumbLoader.loadThumbIntoImg(thumb, src, 0);
+      } else {
+        thumb.src = hrefBase + '&thumb=1&thumb_max=256&prefer_cache=1';
+      }
       thumb.addEventListener('click', function () {
         var fullUrl = hrefBase + '&inline=1';
         var galleryImages = [];
@@ -287,6 +292,9 @@
           thumb.alt = label;
           thumb.setAttribute('data-pn-href-base', hrefBase);
           thumb.setAttribute('data-pn-label', label);
+          if (window.kuklaAnlagenThumbLoader) {
+            thumb.setAttribute('data-thumb-src', window.kuklaAnlagenThumbLoader.thumbUrlFromHrefBase(hrefBase));
+          }
           try {
             thumb.setAttribute('data-pn-gallery', JSON.stringify(galleryImages || []));
           } catch (e) { /* ignore */ }

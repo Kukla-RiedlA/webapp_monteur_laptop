@@ -9,8 +9,19 @@ const {
   isFetchNetworkError,
 } = require('./dispo-base-fallback');
 const hangDiag = require('./hang-diagnostics');
+const fnLeistungSplit = require('./anlagenstamm-fn-leistung-split');
 
 const DISPO_EXPORT_CHUNK_TIMEOUT_MS = 90 * 1000;
+
+let anlagenstammDataGeneration = 0;
+
+function bumpAnlagenstammDataGeneration() {
+  anlagenstammDataGeneration += 1;
+}
+
+function getAnlagenstammDataGeneration() {
+  return anlagenstammDataGeneration;
+}
 
 /** Bekannte Dispo-Basis zuerst (nach resolveDispoWorkingBase), dann Fallback-Kandidaten. */
 function buildAnlagenstammSyncBases(payload) {
@@ -775,6 +786,9 @@ function upsertAnlagenstammRows(db, rows) {
     const row = clampForDispoAnlagenstamm(raw);
     const id = parseInt(row.id, 10);
     if (!Number.isFinite(id) || id <= 0) continue;
+    const split = fnLeistungSplit.normalizeRow(row.fabrikationsnummer, row.leistung);
+    row.fabrikationsnummer = split.fabrikationsnummer;
+    row.leistung = split.leistung;
     const fab = clampDispoField(row.fabrikationsnummer, DISPO_ANLAGENSTAMM_MAX.fabrikationsnummer).trim();
     const byId = getByIdStmt.get(id);
     if (byId && Number(byId.dirty) === 1 && hasNonemptyStammField(byId)) continue;
@@ -835,11 +849,8 @@ function upsertAnlagenstammRows(db, rows) {
     );
   }
   }
-  if (typeof db.transaction === 'function') {
-    db.transaction(applyRows);
-  } else {
-    applyRows();
-  }
+  runDbTransaction(db, applyRows);
+  bumpAnlagenstammDataGeneration();
 }
 
 function yieldEventLoop() {
@@ -941,6 +952,56 @@ function dedupeAnlagenstammLocalByFab(db, fab) {
   return keepId;
 }
 
+/**
+ * Lokalen Cache an die Dispo-Splitregel anpassen (auch wenn der Vollsync wegen TTL übersprungen wird).
+ * dirty bleibt erhalten; saubere Duplikat-Zeilen (gleiche FN nach Split) werden entfernt.
+ */
+function repairMergedFnLeistungLocal(db) {
+  if (!db || typeof db.prepare !== 'function') return 0;
+  ensureAnlagenstammLocalSchema(db);
+  const candidates = db
+    .prepare(
+      `SELECT id, fabrikationsnummer, leistung, dirty
+       FROM anlagenstamm_local
+       WHERE instr(fabrikationsnummer, ' ') > 0
+          OR instr(lower(fabrikationsnummer), 't/h') > 0
+          OR instr(lower(fabrikationsnummer), 'kg') > 0
+          OR (length(trim(fabrikationsnummer)) > 5 AND fabrikationsnummer GLOB '[0-9]*')`,
+    )
+    .all();
+  if (!candidates.length) return 0;
+
+  const upd = db.prepare(
+    `UPDATE anlagenstamm_local SET fabrikationsnummer = ?, leistung = ? WHERE id = ?`,
+  );
+  const del = db.prepare('DELETE FROM anlagenstamm_local WHERE id = ? AND dirty = 0');
+  const findClean = db.prepare(
+    `SELECT id FROM anlagenstamm_local WHERE id != ? AND TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1`,
+  );
+
+  let changed = 0;
+  const apply = () => {
+    for (const row of candidates) {
+      const fab = String(row.fabrikationsnummer || '').trim();
+      const leist = String(row.leistung || '').trim();
+      const norm = fnLeistungSplit.normalizeRow(fab, leist);
+      if (norm.fabrikationsnummer === fab && norm.leistung === leist) continue;
+      const other = findClean.get(row.id, norm.fabrikationsnummer);
+      if (other && Number(row.dirty) !== 1) {
+        del.run(row.id);
+        changed += 1;
+        continue;
+      }
+      upd.run(norm.fabrikationsnummer, norm.leistung, row.id);
+      changed += 1;
+      dedupeAnlagenstammLocalByFab(db, norm.fabrikationsnummer);
+    }
+  };
+  runDbTransaction(db, apply);
+  if (changed > 0) bumpAnlagenstammDataGeneration();
+  return changed;
+}
+
 function getRowsByFabs(db, fabs) {
   const list = Array.isArray(fabs) ? fabs.map((f) => String(f).trim()).filter(Boolean) : [];
   if (!list.length) return [];
@@ -954,6 +1015,9 @@ function getRowsByFabs(db, fabs) {
 
 function saveLocal(db, payload) {
   const normalized = clampForDispoAnlagenstamm(payload || {});
+  const split = fnLeistungSplit.normalizeRow(normalized.fabrikationsnummer, normalized.leistung);
+  normalized.fabrikationsnummer = split.fabrikationsnummer;
+  normalized.leistung = split.leistung;
   const fab = String(normalized.fabrikationsnummer ?? '').trim();
   if (!fab) return { ok: false, error: 'Fabrikationsnummer fehlt' };
   let id = parseInt(normalized.id, 10);
@@ -1040,6 +1104,7 @@ function saveLocal(db, payload) {
   dedupeAnlagenstammLocalByFab(db, fab);
   const kept = lookupByFab(db, fab);
   if (kept && kept.id) id = kept.id;
+  bumpAnlagenstammDataGeneration();
   return { ok: true, id, fabrikationsnummer: fab, fields, _pending: true };
 }
 
@@ -1101,7 +1166,19 @@ async function fetchExportChunk(base, technicianId, authHeader, page, pageSize) 
       const err = (data && data.error) || r.statusText || 'HTTP ' + r.status;
       return { ok: false, error: err, _httpStatus: r.status };
     }
-    return Object.assign({}, data, { ok: true, _used_base_url: base });
+    if (data && data.ok === false) {
+      return { ok: false, error: data.error || 'Export fehlgeschlagen', _httpStatus: r.status };
+    }
+    return {
+      ok: true,
+      rows: Array.isArray(data.rows) ? data.rows : [],
+      page: data.page != null ? Number(data.page) : page,
+      page_size: data.page_size != null ? Number(data.page_size) : pageSize,
+      total_count: data.total_count != null ? Number(data.total_count) : 0,
+      total_pages: data.total_pages != null ? Number(data.total_pages) : 1,
+      _used_base_url: base,
+      _skip_extras: true,
+    };
   } catch (e) {
     if (e && e.name === 'AbortError') {
       return {
@@ -1203,6 +1280,27 @@ function prepareAnlagenstammSyncRun(db, options) {
     return resetAnlagenstammSyncPhases(db);
   }
   const state = getAnlagenstammSyncResumeState(db);
+  if (state.sync_error) {
+    return resetAnlagenstammSyncPhases(db);
+  }
+  if (
+    !state.stamm_phase_completed &&
+    state.stamm_total_pages > 0 &&
+    state.stamm_next_page > state.stamm_total_pages
+  ) {
+    return resetAnlagenstammSyncPhases(db);
+  }
+  const localN = rowCount(db);
+  if (state.total_count > 0 && localN > state.total_count + 10) {
+    console.warn(
+      '[anlagenstamm_db_sync] lokale Zeilen',
+      localN,
+      '> Server',
+      state.total_count,
+      '— Vollabgleich inkl. Purge',
+    );
+    return resetAnlagenstammSyncPhases(db);
+  }
   if (state.resume_pending) {
     return state;
   }
@@ -1214,6 +1312,16 @@ function prepareAnlagenstammSyncRun(db, options) {
     return resetAnlagenstammSyncPhases(db);
   }
   return state;
+}
+
+/** db-compat führt fn sofort aus; better-sqlite3 liefert eine Runner-Funktion. */
+function runDbTransaction(db, fn) {
+  if (db && typeof db.transaction === 'function') {
+    const ret = db.transaction(fn);
+    if (typeof ret === 'function') ret();
+  } else {
+    fn();
+  }
 }
 
 /**
@@ -1231,15 +1339,9 @@ function purgeAnlagenstammLocalOrphans(db, seenIds) {
   }
   if (!toDelete.length) return 0;
   const del = db.prepare('DELETE FROM anlagenstamm_local WHERE id = ? AND dirty = 0');
-  const runTx =
-    typeof db.transaction === 'function'
-      ? db.transaction((ids) => {
-          for (let i = 0; i < ids.length; i++) del.run(ids[i]);
-        })
-      : (ids) => {
-          for (let i = 0; i < ids.length; i++) del.run(ids[i]);
-        };
-  runTx(toDelete);
+  runDbTransaction(db, () => {
+    for (let i = 0; i < toDelete.length; i++) del.run(toDelete[i]);
+  });
   return toDelete.length;
 }
 
@@ -1344,10 +1446,16 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
   }
   const resumeFresh = getAnlagenstammSyncResumeState(db);
   if (resumeFresh.stamm_phase_completed) {
+    let repaired = 0;
+    await withDbLock(async () => {
+      repaired = repairMergedFnLeistungLocal(db);
+      if (repaired > 0 && typeof saveFn === 'function') saveFn();
+    });
     return {
       ok: true,
       skipped: true,
       resumed: false,
+      repaired,
       total_count: resumeFresh.stamm_total_pages || resumeFresh.total_count || 0,
       row_count: rowCount(db),
       purged: 0,
@@ -1355,19 +1463,31 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
   }
 
   const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
+  const technicianId = parseInt(payload.technician_id ?? payload.technicianId, 10);
   const pageSize = 500;
   let page = Math.max(1, resumeFresh.stamm_next_page || 1);
   const resuming = page > 1;
-  const startedFromPageOne = page === 1;
+  let startedFromPageOne = page === 1;
   let totalPages = resumeFresh.stamm_total_pages || 1;
   let totalCount = resumeFresh.total_count || 0;
   const seenIds = new Set();
+
+  async function fetchStammPage(base) {
+    if (Number.isFinite(technicianId) && technicianId > 0) {
+      const chunk = await fetchExportChunk(base, technicianId, auth, page, pageSize);
+      if (chunk && chunk.ok) return chunk;
+      if (chunk && chunk.error && !/not logged in/i.test(String(chunk.error))) {
+        return chunk;
+      }
+    }
+    return fetchAnlagenstammListPage(base, auth, page, pageSize);
+  }
 
   const runOnBase = async (base) => {
     do {
       let data;
       try {
-        data = await fetchAnlagenstammListPage(base, auth, page, pageSize);
+        data = await fetchStammPage(base);
       } catch (err) {
         if (isRetryableExportChunkFailure(null, err)) throw err;
         return { ok: false, error: err && err.message ? err.message : String(err) };
@@ -1383,7 +1503,7 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
       totalPages = data.total_pages != null ? Number(data.total_pages) : 1;
       totalCount = data.total_count != null ? Number(data.total_count) : 0;
       let rows = Array.isArray(data.rows) ? data.rows : [];
-      if (rows.length) {
+      if (rows.length && !data._skip_extras) {
         rows = await mergeExtrasIntoRows(base, auth, rows);
       }
       for (let i = 0; i < rows.length; i++) {
@@ -1398,16 +1518,77 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
         });
       });
       if (onProgress) onProgress({ page, totalPages, totalCount, resuming: resuming || page > 1 });
+      console.log('[anlagenstamm_db_sync] Seite', page + '/' + totalPages, 'Zeilen', rows.length);
       await yieldEventLoop();
       page += 1;
     } while (page <= totalPages);
+    const fullSeen = startedFromPageOne || (totalCount > 0 && seenIds.size >= totalCount);
+    if (!fullSeen) {
+      console.log(
+        '[anlagenstamm_db_sync] Resume ohne vollständige ID-Menge (',
+        seenIds.size,
+        '/',
+        totalCount,
+        ') — zweiter Lauf ab Seite 1',
+      );
+      await withDbLock(async () => {
+        resetAnlagenstammSyncPhases(db);
+        if (typeof saveFn === 'function') saveFn();
+      });
+      page = 1;
+      startedFromPageOne = true;
+      seenIds.clear();
+      totalPages = 1;
+      do {
+        let data2;
+        try {
+          data2 = await fetchStammPage(base);
+        } catch (err) {
+          if (isRetryableExportChunkFailure(null, err)) throw err;
+          return { ok: false, error: err && err.message ? err.message : String(err) };
+        }
+        if (!data2.ok) {
+          if (isRetryableExportChunkFailure(data2)) {
+            throw Object.assign(new Error(data2.error || 'Anlagenstamm-Export fehlgeschlagen'), {
+              _httpStatus: data2._httpStatus,
+            });
+          }
+          return data2;
+        }
+        totalPages = data2.total_pages != null ? Number(data2.total_pages) : 1;
+        totalCount = data2.total_count != null ? Number(data2.total_count) : 0;
+        let rows2 = Array.isArray(data2.rows) ? data2.rows : [];
+        if (rows2.length && !data2._skip_extras) {
+          rows2 = await mergeExtrasIntoRows(base, auth, rows2);
+        }
+        for (let i = 0; i < rows2.length; i++) {
+          const id = parseInt(rows2[i] && rows2[i].id, 10);
+          if (Number.isFinite(id) && id > 0) seenIds.add(id);
+        }
+        await withDbLock(async () => {
+          hangDiag.timeSync('anlagenstamm_upsert_page', () => {
+            if (rows2.length) upsertAnlagenstammRows(db, rows2);
+            updateStammResumeProgress(db, page, totalPages, totalCount);
+            if (typeof saveFn === 'function') saveFn();
+          });
+        });
+        if (onProgress) onProgress({ page, totalPages, totalCount, resuming: false });
+        console.log('[anlagenstamm_db_sync] Seite', page + '/' + totalPages, 'Zeilen', rows2.length);
+        await yieldEventLoop();
+        page += 1;
+      } while (page <= totalPages);
+    }
     let purged = 0;
     await withDbLock(async () => {
-      if (startedFromPageOne) {
+      if (startedFromPageOne || (totalCount > 0 && seenIds.size >= totalCount)) {
         purged = purgeAnlagenstammLocalOrphans(db, seenIds);
+        if (purged > 0) {
+          console.log('[anlagenstamm_db_sync] orphans entfernt:', purged);
+        }
       }
-      markStammPhaseCompleted(db, totalPages, totalCount);
-      if (typeof saveFn === 'function') saveFn();
+    markStammPhaseCompleted(db, totalPages, totalCount);
+    repairMergedFnLeistungLocal(db);
+    if (typeof saveFn === 'function') saveFn();
     });
     return {
       ok: true,
@@ -1430,6 +1611,7 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
     return Object.assign({ ok: true }, inner || {});
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);
+    console.warn('[anlagenstamm_db_sync]', msg, e && e.stack ? e.stack : '');
     try {
       await withDbLock(async () => {
         db.prepare(
@@ -2009,6 +2191,9 @@ module.exports = {
   parseKraftaufnehmerExtra,
   listAnlagenstammForApi,
   upsertAnlagenstammRows,
+  repairMergedFnLeistungLocal,
+  getAnlagenstammDataGeneration,
+  bumpAnlagenstammDataGeneration,
   mergeExtrasIntoRows,
   persistAnlagenstammExtras,
   lookupFabInExtrasMap,

@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.032
+- **Anlagenakte-Galerie:** Thumbnails liegen wieder in der lokalen SQLite (`image_thumb_cache`) und werden ohne Vollbild angezeigt. Fehlt ein Thumb, holt die App im Hintergrund nur die Dispo-Vorschau; das große Bild lädt erst beim Öffnen.
+- **Anlagenstamm:** Öffnen und Nachladen frieren die App nicht mehr ein (Listen-Cache, kein Dateibaum-Walk für Thumbs, Tabelle ohne innerHTML-Neuaufbau).
+- **Anlagenstamm FN/Leistung:** Zusammengeklebte Werte (z. B. `12300 50 t/h`) werden lokal getrennt; Sortierung wie in der Dispo.
+
 ## V 2.006.025
 - **Stabilität:** Chromium-Occlusion-Flags und Auto-Reload bei „Keine Rückmeldung“ entfernt (Fenster wie vor 021). DirectComposition bleibt an.
 - **Sync:** Datei-mtime-Scan und FN-Alias-Merge auf OneDrive geben den Event-Loop zwischendurch frei; welche Dateien erkannt/zusammengeführt werden, ist unverändert.

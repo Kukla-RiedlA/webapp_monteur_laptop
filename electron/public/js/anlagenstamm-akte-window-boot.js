@@ -12,13 +12,14 @@
     const shell = await shellRes.text();
     const scripts = [
       '/js/monteur-image-gallery.js',
-      '/assets/js/dispo/anlagenstamm_file_lists.js?v=20260819akte',
+      '/js/anlagenstamm-thumb-loader.js?v=20260901thumb',
+      '/assets/js/dispo/anlagenstamm_file_lists.js?v=20260901thumb',
       '/assets/js/dispo/anlagenstamm_documents.js?v=20260819akte',
       '/assets/js/dispo/anlagenakte-form-viewer.js?v=20260819akte',
-      '/assets/js/dispo/anlagenakte.js?v=20260821gal',
+      '/assets/js/dispo/anlagenakte.js?v=20260901thumb',
       '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260819akte',
-      '/assets/js/dispo/anlagenstamm.js?v=20260819akte',
-      '/js/anlagenstamm-laptop-bridge.js?v=20260819akte',
+      '/assets/js/dispo/anlagenstamm.js?v=20260901thumb',
+      '/js/anlagenstamm-laptop-bridge.js?v=20260901thumb',
     ];
     await global.kuklaWebPage.mount(host, { html: shell, scripts: scripts });
   }

@@ -205,9 +205,10 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       technicianId: ctx.getTechnicianId(req),
     });
     if (typeof ctx.prewarmAnlagenstammGalleryThumbs === 'function' && gallery.length) {
+      const technicianId = ctx.getTechnicianId(req);
       setImmediate(() => {
         try {
-          ctx.prewarmAnlagenstammGalleryThumbs(fab, gallery);
+          ctx.prewarmAnlagenstammGalleryThumbs(fab, gallery, technicianId);
         } catch (_) {
           /* ignore */
         }

@@ -95,7 +95,7 @@ function readCachedProjekteNeuThumb(db, dbDir, fab, relPath, thumbMax, filePathO
   return readFilesystemProjekteNeuThumb(dbDir, fab, relPath, thumbMax);
 }
 
-/** Thumbnail persistieren – primär SQLite, Legacy-Datei optional mit. */
+/** Thumbnail persistieren – nur SQLite (kein Datei-I/O auf dem UI-Thread). */
 function writeCachedProjekteNeuThumb(db, dbDir, fab, relPath, thumbMax, buf, contentType, filePathOpt) {
   if (!buf || !buf.length) return null;
   const ct = String(contentType || 'image/webp');
@@ -110,6 +110,7 @@ function writeCachedProjekteNeuThumb(db, dbDir, fab, relPath, thumbMax, buf, con
       ct,
       filePathOpt,
     );
+    return true;
   }
   try {
     writeFilesystemProjekteNeuThumb(dbDir, fab, relPath, thumbMax, buf);
