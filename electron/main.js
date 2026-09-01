@@ -2,6 +2,46 @@ const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu } = require(
 const path = require('path');
 const fs = require('fs');
 
+function loadElectronDotEnv() {
+  const envPath = path.join(__dirname, '.env');
+  let raw = '';
+  try {
+    raw = fs.readFileSync(envPath, 'utf8');
+  } catch (_) {
+    return;
+  }
+  String(raw).split(/\r?\n/).forEach((line) => {
+    const t = String(line || '').trim();
+    if (!t || t.startsWith('#')) return;
+    const eq = t.indexOf('=');
+    if (eq <= 0) return;
+    const key = t.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return;
+    if (process.env[key] != null && String(process.env[key]) !== '') return;
+    let val = t.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    process.env[key] = val;
+  });
+}
+loadElectronDotEnv();
+
+const { createCopilotProbe } = require('./lib/copilot-probe');
+let copilotProbe = null;
+function getCopilotProbe() {
+  if (!copilotProbe) {
+    copilotProbe = createCopilotProbe({
+      userDataDir: app.getPath('userData'),
+      openBrowser: (url) => shell.openExternal(url),
+    });
+  }
+  return copilotProbe;
+}
+
 function gpuSoftwareFallbackPath() {
   try {
     return path.join(app.getPath('userData'), 'gpu-software-fallback');
@@ -798,6 +838,33 @@ if (!gotTheLock) {
 ipcMain.handle('hang:heartbeat', async () => {
   hangDiag.noteRendererPing();
   return { ok: true, t: Date.now() };
+});
+
+ipcMain.handle('copilot:status', async () => {
+  try {
+    return await getCopilotProbe().status();
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
+});
+
+ipcMain.handle('copilot:checkText', async (_event, payload) => {
+  try {
+    const text = typeof payload === 'string'
+      ? payload
+      : (payload && payload.text != null ? String(payload.text) : '');
+    return await getCopilotProbe().checkText(text);
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
+});
+
+ipcMain.handle('copilot:signOut', async () => {
+  try {
+    return await getCopilotProbe().signOut();
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
 });
 
 app.whenReady().then(() => {

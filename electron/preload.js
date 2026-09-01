@@ -53,6 +53,9 @@ contextBridge.exposeInMainWorld('monteurApp', {
   installAppUpdateNow: () => ipcRenderer.invoke('laptop:update-install-now'),
   uninstallAppAndRemoveLocalData: () => ipcRenderer.invoke('app:self-uninstall-remove-data'),
   hangHeartbeat: () => ipcRenderer.invoke('hang:heartbeat'),
+  copilotStatus: () => ipcRenderer.invoke('copilot:status'),
+  copilotCheckText: (text) => ipcRenderer.invoke('copilot:checkText', text),
+  copilotSignOut: () => ipcRenderer.invoke('copilot:signOut'),
   onAppUpdateStatus: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const handler = (_event, payload) => callback(payload);
