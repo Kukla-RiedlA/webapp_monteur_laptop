@@ -1885,9 +1885,13 @@
           <div class="sp-v2-section-body">
             <p id="anConfirmText" class="an-confirm">Der Auftraggeber bestätigt die in diesem Arbeitsnachweis angeführten Arbeitszeiten, durchgeführten Arbeiten und gegebenenfalls verwendeten Ersatzteile.</p>
             <div class="sp-v2-grid-3">
-              <div class="sp-v2-field">
-                <label for="anSignerContact">Ansprechpartner (Baustelle)</label>
-                <select id="anSignerContact" class="dienstreise-select"></select>
+              <div class="sp-v2-field an-contact-field">
+                <label id="anSignerContactLabel" for="anSignerContactBtn">Ansprechpartner (Baustelle)</label>
+                <div class="an-combo">
+                  <button type="button" id="anSignerContactBtn" class="an-combo-btn" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="anSignerContactLabel">– wählen / neu –</button>
+                  <ul id="anSignerContactMenu" class="an-combo-menu" role="listbox" hidden></ul>
+                </div>
+                <select id="anSignerContact" class="an-combo-select" tabindex="-1" aria-hidden="true"></select>
               </div>
               <div class="sp-v2-field"><label for="anSignerName">Name Auftraggeber</label><input type="text" id="anSignerName"></div>
               <div class="sp-v2-field"><label for="anSignerEmail">E-Mail</label><input type="email" id="anSignerEmail"></div>

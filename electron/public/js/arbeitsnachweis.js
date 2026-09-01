@@ -135,6 +135,13 @@
     }
     setRadio('anLang', (doc.language || data.language) === 'en' ? 'en' : 'de');
     applyLang();
+    var contactSel = el('anSignerContact');
+    if (!contactSel || contactSel.options.length <= 1) {
+      var jobForContacts = jobData || findCachedJob(parseInt(jobId, 10) || 0, parseInt(jobId, 10) || 0);
+      fillContacts(contactsFromJob(jobForContacts));
+    } else {
+      syncContactCombo();
+    }
     el('anCustomer').value = data.customer_name || doc.customer_name || el('anCustomer').value || '';
     if (an.site) el('anSite').value = an.site;
     if (an.technician_name) el('anTech').value = an.technician_name;
@@ -299,13 +306,22 @@
     c = c || {};
     return String(c.email || c.contact_email || '').trim();
   }
+  function contactLabel(c) {
+    var name = contactName(c);
+    var email = contactEmail(c);
+    if (name && email) return name + ' <' + email + '>';
+    if (name) return name;
+    if (email) return email;
+    var phone = String(c.mobile || c.phone || c.contact_phone || '').trim();
+    return phone || '';
+  }
   function contactsFromJob(job) {
     if (!job) return [];
-    if (Array.isArray(job.job_contacts) && job.job_contacts.length) {
-      return job.job_contacts.filter(function (c) {
-        return contactName(c) || contactEmail(c);
-      });
-    }
+    var list = [];
+    if (Array.isArray(job.job_contacts) && job.job_contacts.length) list = job.job_contacts;
+    else if (Array.isArray(job.contacts) && job.contacts.length) list = job.contacts;
+    var out = list.filter(function (c) { return contactLabel(c); });
+    if (out.length) return out;
     var name = String(job.baustellen_ansprechpartner || job.job_contact_name || job.contact_person || job.contact_name || job.ansprechpartner || '').trim();
     var email = String(job.job_contact_email || job.baustelle_email || job.contact_email || '').trim();
     if (name || email) return [{ contact_name: name, email: email }];
@@ -512,27 +528,103 @@
       ? 'Customer signature will be cleared on save.'
       : 'Kundenunterschrift wird beim Speichern gelöscht.';
   }
+  function contactPlaceholder() {
+    return lang() === 'en' ? '– select / new –' : '– wählen / neu –';
+  }
   function applyLang() {
     var en = lang() === 'en';
     el('anConfirmText').textContent = en
       ? 'The customer confirms the working hours, executed works and, where applicable, spare parts stated in this working report.'
       : 'Der Auftraggeber bestätigt die in diesem Arbeitsnachweis angeführten Arbeitszeiten, durchgeführten Arbeiten und gegebenenfalls verwendeten Ersatzteile.';
+    var sel = el('anSignerContact');
+    if (sel && sel.options[0] && sel.options[0].value === '') sel.options[0].textContent = contactPlaceholder();
+    syncContactCombo();
+  }
+  function closeContactCombo() {
+    var menu = el('anSignerContactMenu');
+    var btn = el('anSignerContactBtn');
+    if (menu) menu.hidden = true;
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+  function placeContactCombo() {
+    var btn = el('anSignerContactBtn');
+    var menu = el('anSignerContactMenu');
+    if (!btn || !menu) return;
+    if (menu.parentNode !== document.body) document.body.appendChild(menu);
+    var r = btn.getBoundingClientRect();
+    menu.style.left = Math.round(r.left) + 'px';
+    menu.style.top = Math.round(r.bottom + 2) + 'px';
+    menu.style.width = Math.round(Math.max(r.width, 220)) + 'px';
+  }
+  function openContactCombo() {
+    var menu = el('anSignerContactMenu');
+    var btn = el('anSignerContactBtn');
+    if (!menu || !btn) return;
+    if (!el('anSignerContact') || !el('anSignerContact').options.length) fillContacts([]);
+    syncContactCombo();
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    placeContactCombo();
+  }
+  function pickContactOption(value) {
+    var sel = el('anSignerContact');
+    if (!sel) return;
+    sel.value = value == null ? '' : String(value);
+    var opt = sel.selectedOptions[0];
+    if (opt && opt.dataset) {
+      if (opt.dataset.name) el('anSignerName').value = opt.dataset.name;
+      if (opt.dataset.email) el('anSignerEmail').value = opt.dataset.email;
+    }
+    syncContactCombo();
+    closeContactCombo();
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  function syncContactCombo() {
+    var sel = el('anSignerContact');
+    var menu = el('anSignerContactMenu');
+    var btn = el('anSignerContactBtn');
+    if (!sel || !menu || !btn) return;
+    menu.innerHTML = '';
+    Array.prototype.forEach.call(sel.options, function (opt) {
+      var li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.dataset.value = opt.value;
+      li.textContent = opt.textContent;
+      if (opt.selected) li.setAttribute('aria-selected', 'true');
+      li.addEventListener('mousedown', function (ev) {
+        ev.preventDefault();
+        pickContactOption(opt.value);
+      });
+      menu.appendChild(li);
+    });
+    var cur = sel.selectedOptions[0];
+    btn.textContent = (cur && cur.textContent) ? cur.textContent : contactPlaceholder();
   }
   function fillContacts(contacts) {
     var sel = el('anSignerContact');
     if (!sel) return;
-    sel.innerHTML = '<option value="">– ' + (lang() === 'en' ? 'select / new' : 'wählen / neu') + ' –</option>';
+    var prev = sel.value;
+    sel.innerHTML = '';
+    var ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = contactPlaceholder();
+    sel.appendChild(ph);
     (contacts || []).forEach(function (c, i) {
       var name = contactName(c);
       var email = contactEmail(c);
-      if (!name && !email) return;
+      var label = contactLabel(c);
+      if (!label) return;
       var opt = document.createElement('option');
       opt.value = String(i);
-      opt.textContent = name + (email ? ' <' + email + '>' : '');
+      opt.textContent = label;
       opt.dataset.name = name;
       opt.dataset.email = email;
       sel.appendChild(opt);
     });
+    if (prev && Array.prototype.some.call(sel.options, function (o) { return o.value === prev; })) {
+      sel.value = prev;
+    }
+    syncContactCombo();
   }
   function renderFabs(list) {
     var fabs = normalizeFabs(list);
@@ -851,11 +943,34 @@
     el('btnAnAddPart').addEventListener('click', function () { addPartRow(); });
     el('anJob').addEventListener('focus', function () { persistLocal().catch(function () {}); });
     el('anJob').addEventListener('change', function () { onJobChange().catch(function () {}); });
+    fillContacts([]);
+    if (el('anSignerContactBtn')) {
+      el('anSignerContactBtn').addEventListener('click', function (ev) {
+        ev.preventDefault();
+        var menu = el('anSignerContactMenu');
+        if (menu && !menu.hidden) closeContactCombo();
+        else openContactCombo();
+      });
+    }
+    document.addEventListener('mousedown', function (ev) {
+      var menu = el('anSignerContactMenu');
+      var btn = el('anSignerContactBtn');
+      if (!menu || menu.hidden) return;
+      if (menu.contains(ev.target) || (btn && btn.contains(ev.target))) return;
+      closeContactCombo();
+    });
+    window.addEventListener('resize', function () {
+      if (el('anSignerContactMenu') && !el('anSignerContactMenu').hidden) placeContactCombo();
+    });
+    window.addEventListener('scroll', function () {
+      if (el('anSignerContactMenu') && !el('anSignerContactMenu').hidden) placeContactCombo();
+    }, true);
     el('anSignerContact').addEventListener('change', function () {
       var opt = el('anSignerContact').selectedOptions[0];
       if (!opt || !opt.dataset) return;
       if (opt.dataset.name) el('anSignerName').value = opt.dataset.name;
       if (opt.dataset.email) el('anSignerEmail').value = opt.dataset.email;
+      syncContactCombo();
     });
     ['anStartKm', 'anEndKm'].forEach(function (id) {
       el(id).addEventListener('input', updateTotalKm);
