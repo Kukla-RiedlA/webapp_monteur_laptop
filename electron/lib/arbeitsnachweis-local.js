@@ -203,6 +203,10 @@ function toPublic(loaded) {
     synced: !Number(d.dirty),
     status: d.status || 'entwurf',
     number: d.number || null,
+    updated_at: d.updated_at || null,
+    signer_name: an.signer_name || '',
+    signer_email: an.signer_email || '',
+    save_contact: !!an.save_contact,
     content_version: d.content_version || 1,
   };
 }
@@ -382,9 +386,31 @@ function upsertFromPayload(db, payload, opts) {
     naechtigung_beigestellt: an.naechtigung_beigestellt ? 1 : 0,
     remarks: an.remarks || '',
     timesheet_applied: timesheetApplied,
-    save_contact: payload && payload.save_contact ? 1 : 0,
-    signer_name: (payload && payload.signer_name) || an.signer_name || '',
-    signer_email: (payload && payload.signer_email) || an.signer_email || '',
+    save_contact: (function () {
+      const incoming = payload && Object.prototype.hasOwnProperty.call(payload, 'save_contact')
+        ? payload.save_contact
+        : an.save_contact;
+      if (incoming === true || incoming === 1 || incoming === '1') return 1;
+      if (opts.dirty === false && existing && existing.arbeitsnachweis && existing.arbeitsnachweis.save_contact) return 1;
+      if (incoming === false || incoming === 0 || incoming === '0') return 0;
+      return existing && existing.arbeitsnachweis && existing.arbeitsnachweis.save_contact ? 1 : 0;
+    })(),
+    signer_name: (function () {
+      const incoming = String((payload && payload.signer_name) || an.signer_name || '').trim();
+      if (incoming) return incoming;
+      if (opts.dirty === false && existing && existing.arbeitsnachweis && existing.arbeitsnachweis.signer_name) {
+        return String(existing.arbeitsnachweis.signer_name);
+      }
+      return incoming;
+    })(),
+    signer_email: (function () {
+      const incoming = String((payload && payload.signer_email) || an.signer_email || '').trim();
+      if (incoming) return incoming;
+      if (opts.dirty === false && existing && existing.arbeitsnachweis && existing.arbeitsnachweis.signer_email) {
+        return String(existing.arbeitsnachweis.signer_email);
+      }
+      return incoming;
+    })(),
   };
   const existsAn = db.prepare('SELECT 1 FROM document_arbeitsnachweis WHERE document_id = ?').get(id);
   if (existsAn) {
@@ -495,7 +521,11 @@ function fromDispoPublic(payload) {
     save_contact: !!(an.save_contact || payload.save_contact),
     signer_name: an.signer_name || payload.signer_name || '',
     signer_email: an.signer_email || payload.signer_email || '',
-    arbeitsnachweis: an,
+    arbeitsnachweis: Object.assign({}, an, {
+      signer_name: an.signer_name || payload.signer_name || '',
+      signer_email: an.signer_email || payload.signer_email || '',
+      save_contact: !!(an.save_contact || payload.save_contact),
+    }),
     items: Array.isArray(payload.items) ? payload.items : [],
   };
 }
@@ -529,6 +559,9 @@ function toDispoSavePayload(loaded) {
       naechtigung_beigestellt: !!an.naechtigung_beigestellt,
       remarks: an.remarks || '',
       timesheet_applied: !!an.timesheet_applied,
+      signer_name: an.signer_name || '',
+      signer_email: an.signer_email || '',
+      save_contact: !!an.save_contact,
     },
     items: loaded.items || [],
   };

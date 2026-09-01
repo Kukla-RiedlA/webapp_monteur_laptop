@@ -1745,10 +1745,14 @@
     <div class="card sp-v2-card an-page">
       <div class="sp-v2-topbar">
         <div class="sp-v2-topbar-title-wrap">
-          <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Arbeitsnachweis</h2>
-          <p id="anAutosaveHint" class="protocol-autosave-hint">Entwurf</p>
+          <h2 class="sp-v2-page-title">
+            <img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true">
+            <span>Arbeitsnachweis</span>
+            <span id="anAutosaveHint" class="an-doc-status">Entwurf</span>
+          </h2>
         </div>
         <div class="sp-v2-topbar-actions">
+          <p id="anLastSaved" class="an-last-saved" title="Zuletzt gespeichert">–</p>
           <button type="button" class="btn btn-primary" id="btnAnSave">Speichern</button>
           <button type="button" class="btn btn-primary" id="btnAnPdf">PDF</button>
           <button type="button" class="btn btn-ghost" id="btnAnTimesheet">Zeiten in Zeitschreibung übernehmen</button>
@@ -1794,9 +1798,9 @@
               <div class="sp-v2-field"><label for="anTech">KUKLA-Techniker</label><input type="text" id="anTech" readonly></div>
               <div class="sp-v2-field"><label for="anCar">Auto / Car</label><input type="text" id="anCar"></div>
               <div class="sp-v2-field"><label for="anLiving">Tagesauslösen</label><input type="text" id="anLiving" placeholder="Freitext"></div>
-              <div class="sp-v2-field"><label for="anStartKm">Start km</label><input type="number" id="anStartKm" min="0" step="1"></div>
-              <div class="sp-v2-field"><label for="anEndKm">End km</label><input type="number" id="anEndKm" min="0" step="1"></div>
-              <div class="sp-v2-field"><label for="anTotalKm">Total km</label><input type="number" id="anTotalKm" min="0" step="1"></div>
+              <div class="sp-v2-field"><label for="anStartKm">Start km</label><input type="number" id="anStartKm" min="0" max="200000" step="1"></div>
+              <div class="sp-v2-field"><label for="anEndKm">End km</label><input type="number" id="anEndKm" min="0" max="200000" step="1"></div>
+              <div class="sp-v2-field"><label for="anTotalKm">Total km</label><input type="number" id="anTotalKm" min="0" max="200000" step="1"></div>
               <div class="sp-v2-field an-radio-field">
                 <div class="an-radio-stack" role="radiogroup" aria-labelledby="anOvernightCaption">
                   <div class="an-radio-opts">
@@ -1906,10 +1910,13 @@
       </form>
     </div>
     <div id="anPreviewModal" class="an-modal" hidden>
-      <div class="an-modal-box" role="dialog" aria-labelledby="anPreviewTitle">
-        <h3 id="anPreviewTitle">Kunden-Vorschau</h3>
+      <div class="an-modal-box an-preview-box" role="dialog" aria-labelledby="anPreviewTitle">
+        <h3 id="anPreviewTitle" class="an-preview-dialog-title">Kunden-Vorschau</h3>
         <div id="anPreviewBody" class="an-preview-body"></div>
-        <canvas id="anSigCanvas" class="an-sig-canvas" width="480" height="180"></canvas>
+        <div class="an-preview-sig">
+          <p class="an-preview-sig-label" id="anSigLabel">Unterschrift Auftraggeber</p>
+          <canvas id="anSigCanvas" class="an-sig-canvas" width="640" height="160"></canvas>
+        </div>
         <div class="an-preview-actions">
           <button type="button" class="btn btn-ghost" id="btnAnSigClear">Unterschrift löschen</button>
           <button type="button" class="btn btn-primary" id="btnAnSign">Unterschreiben</button>
@@ -1922,7 +1929,7 @@
     <div class="card sp-v2-card mb-v2-page">
       <div class="sp-v2-topbar mb-v2-topbar">
         <div class="sp-v2-topbar-title-wrap">
-          <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Montagebericht</h2>
+          <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/beleg/montagebericht.png" alt="" aria-hidden="true"> Montagebericht</h2>
           <p id="montageberichtAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
         </div>
         <div class="sp-v2-topbar-actions">

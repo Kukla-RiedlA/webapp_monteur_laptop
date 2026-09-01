@@ -10,6 +10,7 @@
   var lastCustomerSig = false;
   var persistTimer = null;
   var jobLoadBusy = false;
+  var lastDocNumber = '';
 
   function el(id) { return document.getElementById(id); }
   function lang() {
@@ -77,20 +78,42 @@
     var r = document.querySelector('input[name="' + name + '"][value="' + String(value) + '"]');
     if (r) r.checked = true;
   }
+  function formatSavedAt(raw) {
+    if (!raw) return '';
+    var s = String(raw).trim();
+    if (!s) return '';
+    var d;
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) {
+      d = new Date(s.replace(' ', 'T') + 'Z');
+    } else {
+      d = new Date(s);
+    }
+    if (isNaN(d.getTime())) return '';
+    function pad(n) { return String(n).padStart(2, '0'); }
+    return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
   function applyStatusUi(data) {
     data = data || {};
     var doc = data.document || {};
     var an = data.arbeitsnachweis || {};
     var st = data.status || doc.status || 'entwurf';
     var num = data.number || doc.number || '';
+    if (num) lastDocNumber = String(num);
     if (an.timesheet_applied || data.timesheet_applied) {
       if (el('anTimesheetApplied')) el('anTimesheetApplied').value = flagOn(an.timesheet_applied) || flagOn(data.timesheet_applied) ? '1' : el('anTimesheetApplied').value;
     }
-    var hint = (num ? num + ' · ' : '') + st;
+    var hint = (num ? num + ' – ' : '') + st;
     if (data.synced === false || data.offline) {
-      hint += lang() === 'en' ? ' · saved locally' : ' · lokal gespeichert';
+      hint += lang() === 'en' ? ' · locally' : ' · lokal';
     }
     if (el('anAutosaveHint')) el('anAutosaveHint').textContent = hint;
+    var savedRaw = data.updated_at || doc.updated_at || '';
+    var savedText = formatSavedAt(savedRaw);
+    if (!savedText && data.ok) savedText = formatSavedAt(new Date().toISOString());
+    if (el('anLastSaved') && savedText) {
+      el('anLastSaved').textContent = savedText;
+      el('anLastSaved').title = (lang() === 'en' ? 'Last saved: ' : 'Zuletzt gespeichert: ') + savedText;
+    }
     var tsBtn = el('btnAnTimesheet');
     if (tsBtn) {
       var applied = el('anTimesheetApplied') && el('anTimesheetApplied').value === '1';
@@ -134,14 +157,15 @@
       }
     }
     setRadio('anLang', (doc.language || data.language) === 'en' ? 'en' : 'de');
+    var jobForContacts = jobData || findCachedJob(parseInt(jobId, 10) || 0, parseInt(jobId, 10) || 0);
+    var signerName = data.signer_name || an.signer_name || '';
+    var signerEmail = data.signer_email || an.signer_email || '';
+    if (el('anSignerName')) el('anSignerName').value = signerName;
+    if (el('anSignerEmail')) el('anSignerEmail').value = signerEmail;
+    if (el('anSaveContact')) el('anSaveContact').checked = flagOn(data.save_contact) || flagOn(an.save_contact);
+    fillContacts(ensureSignerInContacts(contactsFromJob(jobForContacts), signerName, signerEmail));
+    selectMatchingContact(signerName, signerEmail);
     applyLang();
-    var contactSel = el('anSignerContact');
-    if (!contactSel || contactSel.options.length <= 1) {
-      var jobForContacts = jobData || findCachedJob(parseInt(jobId, 10) || 0, parseInt(jobId, 10) || 0);
-      fillContacts(contactsFromJob(jobForContacts));
-    } else {
-      syncContactCombo();
-    }
     el('anCustomer').value = data.customer_name || doc.customer_name || el('anCustomer').value || '';
     if (an.site) el('anSite').value = an.site;
     if (an.technician_name) el('anTech').value = an.technician_name;
@@ -154,9 +178,6 @@
     setRadio('anOvernight', flagOn(an.naechtigung_beigestellt) ? '1' : '0');
     el('anRemarks').value = an.remarks || '';
     if (el('anTimesheetApplied')) el('anTimesheetApplied').value = flagOn(an.timesheet_applied) ? '1' : '0';
-    if (el('anSaveContact')) el('anSaveContact').checked = flagOn(data.save_contact) || flagOn(an.save_contact);
-    if (el('anSignerName') && (data.signer_name || an.signer_name)) el('anSignerName').value = data.signer_name || an.signer_name;
-    if (el('anSignerEmail') && (data.signer_email || an.signer_email)) el('anSignerEmail').value = data.signer_email || an.signer_email;
     renderFabs(an.fabrikationsnummern);
     var work = items.filter(function (r) { return r && r.item_type === 'arbeitszeile'; });
     var parts = items.filter(function (r) { return r && r.item_type === 'ersatzteil'; });
@@ -279,8 +300,8 @@
       return { fabrikationsnummer: String(x || '').trim(), type: '' };
     }).filter(function (r) { return r.fabrikationsnummer || r.type; });
   }
-  function siteFromJob(job) {
-    if (!job) return '';
+  function siteAddressLines(job) {
+    if (!job) return [];
     var lines = [];
     var name = String(job.endkunde || '').trim() || String(job.customer_name || '').trim();
     if (name) lines.push(name);
@@ -294,7 +315,20 @@
     if (extra1) lines.push(extra1);
     var extra2 = String(job.address_extra_2 || '').trim();
     if (extra2) lines.push(extra2);
-    return lines.join(', ');
+    return lines;
+  }
+  function siteFromJob(job) {
+    return siteAddressLines(job).join(', ');
+  }
+  function formatSiteLines(raw, job) {
+    var text = String(raw || '').trim();
+    var fromJob = siteAddressLines(job);
+    if (fromJob.length && (!text || text === fromJob.join(', '))) return fromJob;
+    if (!text) return [];
+    if (/\r|\n/.test(text)) {
+      return text.split(/\r?\n/).map(function (ln) { return ln.trim(); }).filter(Boolean);
+    }
+    return text.split(/\s*,\s*/).map(function (ln) { return ln.trim(); }).filter(Boolean);
   }
   function contactName(c) {
     c = c || {};
@@ -326,6 +360,41 @@
     var email = String(job.job_contact_email || job.baustelle_email || job.contact_email || '').trim();
     if (name || email) return [{ contact_name: name, email: email }];
     return [];
+  }
+  function ensureSignerInContacts(list, name, email) {
+    list = (list || []).slice();
+    name = String(name || '').trim();
+    email = String(email || '').trim();
+    if (!name && !email) return list;
+    var found = list.some(function (c) {
+      var on = contactName(c);
+      var oe = contactEmail(c);
+      if (email && oe && email.toLowerCase() === oe.toLowerCase()) return true;
+      return !!(name && on && name === on && (!email || !oe || email.toLowerCase() === oe.toLowerCase()));
+    });
+    if (!found) list.push({ contact_name: name, email: email });
+    return list;
+  }
+  function selectMatchingContact(name, email) {
+    var sel = el('anSignerContact');
+    if (!sel) return;
+    name = String(name || '').trim();
+    email = String(email || '').trim();
+    if (!name && !email) {
+      sel.value = '';
+      syncContactCombo();
+      return;
+    }
+    var match = '';
+    Array.prototype.forEach.call(sel.options, function (opt) {
+      if (match || !opt.value) return;
+      var on = String(opt.dataset.name || '').trim();
+      var oe = String(opt.dataset.email || '').trim();
+      if (email && oe && email.toLowerCase() === oe.toLowerCase()) match = opt.value;
+      else if (name && on && name === on && (!email || !oe)) match = opt.value;
+    });
+    if (match) sel.value = match;
+    syncContactCombo();
   }
   function collectWork() {
     var rows = [];
@@ -379,9 +448,6 @@
     }
   }
   function collectPayload() {
-    var start = el('anStartKm').value;
-    var end = el('anEndKm').value;
-    var total = el('anTotalKm').value;
     var overnight = document.querySelector('input[name="anOvernight"]:checked');
     var fabs = currentFabs();
     var snapFn = fabs.map(function (r) { return r.fabrikationsnummer; }).filter(Boolean).join(', ');
@@ -405,13 +471,16 @@
         technician_name: el('anTech').value,
         car_info: el('anCar').value,
         living_costs: el('anLiving').value,
-        start_km: start === '' ? null : parseInt(start, 10),
-        end_km: end === '' ? null : parseInt(end, 10),
-        total_km: total === '' ? null : parseInt(total, 10),
+        start_km: kmNum('anStartKm'),
+        end_km: kmNum('anEndKm'),
+        total_km: kmNum('anTotalKm'),
         total_km_manual: isTotalKmManual(),
         naechtigung_beigestellt: !!(overnight && overnight.value === '1'),
         remarks: el('anRemarks').value,
-        timesheet_applied: !!(el('anTimesheetApplied') && el('anTimesheetApplied').value === '1')
+        timesheet_applied: !!(el('anTimesheetApplied') && el('anTimesheetApplied').value === '1'),
+        signer_name: el('anSignerName').value,
+        signer_email: el('anSignerEmail').value,
+        save_contact: el('anSaveContact').checked
       },
       items: collectWork().concat(collectParts())
     };
@@ -497,7 +566,17 @@
   }
   function kmNum(id) {
     var n = parseInt(el(id).value, 10);
-    return Number.isFinite(n) ? n : null;
+    if (!Number.isFinite(n)) return null;
+    if (n < 0) return 0;
+    if (n > 200000) return 200000;
+    return n;
+  }
+  function clampKmField(inp) {
+    if (!inp) return;
+    var n = parseInt(inp.value, 10);
+    if (!Number.isFinite(n)) return;
+    if (n > 200000) inp.value = '200000';
+    else if (n < 0) inp.value = '0';
   }
   function computedTotalKm() {
     var s = kmNum('anStartKm');
@@ -536,6 +615,8 @@
     el('anConfirmText').textContent = en
       ? 'The customer confirms the working hours, executed works and, where applicable, spare parts stated in this working report.'
       : 'Der Auftraggeber bestätigt die in diesem Arbeitsnachweis angeführten Arbeitszeiten, durchgeführten Arbeiten und gegebenenfalls verwendeten Ersatzteile.';
+    if (el('anPreviewTitle')) el('anPreviewTitle').textContent = en ? 'Customer preview' : 'Kunden-Vorschau';
+    if (el('anSigLabel')) el('anSigLabel').textContent = en ? 'Customer signature' : 'Unterschrift Auftraggeber';
     var sel = el('anSignerContact');
     if (sel && sel.options[0] && sel.options[0].value === '') sel.options[0].textContent = contactPlaceholder();
     syncContactCombo();
@@ -572,8 +653,8 @@
     sel.value = value == null ? '' : String(value);
     var opt = sel.selectedOptions[0];
     if (opt && opt.dataset) {
-      if (opt.dataset.name) el('anSignerName').value = opt.dataset.name;
-      if (opt.dataset.email) el('anSignerEmail').value = opt.dataset.email;
+      el('anSignerName').value = opt.dataset.name || '';
+      el('anSignerEmail').value = opt.dataset.email || '';
     }
     syncContactCombo();
     closeContactCombo();
@@ -624,7 +705,10 @@
     if (prev && Array.prototype.some.call(sel.options, function (o) { return o.value === prev; })) {
       sel.value = prev;
     }
-    syncContactCombo();
+    var n = el('anSignerName') ? String(el('anSignerName').value || '').trim() : '';
+    var em = el('anSignerEmail') ? String(el('anSignerEmail').value || '').trim() : '';
+    if (n || em) selectMatchingContact(n, em);
+    else syncContactCombo();
   }
   function renderFabs(list) {
     var fabs = normalizeFabs(list);
@@ -779,29 +863,145 @@
     }
     return res;
   }
-  function previewHtml() {
-    var p = collectPayload();
-    var lines = [];
-    lines.push((lang() === 'en' ? 'Customer: ' : 'Auftraggeber: ') + p.customer_name);
-    lines.push((lang() === 'en' ? 'Site: ' : 'Baustelle: ') + p.arbeitsnachweis.site);
-    currentFabs().forEach(function (f) {
-      lines.push('FN ' + f.fabrikationsnummer + (f.type ? '  Typ ' + f.type : ''));
-    });
-    lines.push('');
-    collectWork().forEach(function (r) {
-      lines.push(r.item_date + '  ' + r.item_time + '  ' + r.description + '  N ' + r.normal_hours + ' Ü50 ' + r.overtime_50 + ' Ü100 ' + r.overtime_100);
-    });
-    lines.push('');
-    collectParts().forEach(function (r) {
-      lines.push((r.quantity || '') + ' × ' + r.designation + (r.type_no ? ' (' + r.type_no + ')' : '') + (r.description ? ' – ' + r.description : ''));
-    });
-    if (p.arbeitsnachweis.remarks) {
-      lines.push('');
-      lines.push(p.arbeitsnachweis.remarks);
+  function fmtPreviewDate(iso) {
+    var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return String(iso || '–');
+    return m[3] + '.' + m[2] + '.' + m[1];
+  }
+  function fmtPreviewHrs(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n) || n === 0) return '';
+    return String(Math.round(n * 100) / 100).replace('.', ',');
+  }
+  function fmtPreviewHrsSum(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n)) n = 0;
+    return String(Math.round(n * 100) / 100).replace('.', ',');
+  }
+  function previewKv(label, value, span) {
+    return '<div class="an-pv-kv' + (span ? ' an-pv-span' : '') + '"><span class="an-pv-k">' + escapeHtml(label) + '</span><span class="an-pv-v">' + escapeHtml(value || '') + '</span></div>';
+  }
+  function previewSiteBlock(label, lines) {
+    var body = (lines || []).map(function (ln) {
+      return '<span class="an-pv-v-line">' + escapeHtml(ln) + '</span>';
+    }).join('');
+    return '<div class="an-pv-kv an-pv-span"><span class="an-pv-k">' + escapeHtml(label) + '</span><div class="an-pv-v an-pv-addr">' + body + '</div></div>';
+  }
+  function previewKmBlock(car, start, end, total, carLabel) {
+    function col(lab, val, extra) {
+      var shown = (val == null || val === '') ? '' : String(val);
+      return '<div class="an-pv-km-col' + (extra || '') + '"><span class="an-pv-k">' + escapeHtml(lab) + '</span><span class="an-pv-v">' + escapeHtml(shown) + '</span></div>';
     }
-    lines.push('');
-    lines.push(el('anConfirmText').textContent);
-    return lines.join('\n');
+    return '<div class="an-pv-km an-pv-span">' +
+      col(carLabel || 'Car', car, ' an-pv-km-col--car') +
+      col('Start', start) +
+      col('End', end) +
+      col('Total km', total) +
+      '</div>';
+  }
+  function previewHtml() {
+    var en = lang() === 'en';
+    var p = collectPayload();
+    var an = p.arbeitsnachweis || {};
+    var work = collectWork();
+    var parts = collectParts();
+    var fabs = currentFabs();
+    var L = {
+      title: en ? 'WORKING REPORT' : 'ARBEITSNACHWEIS',
+      sub: en ? 'Arbeitsnachweis' : 'Working Report',
+      no: en ? 'No.' : 'Nr.',
+      customer: en ? 'Customer' : 'Auftraggeber',
+      site: en ? 'Site' : 'Baustelle',
+      tech: en ? 'KUKLA Engineer' : 'KUKLA-Techniker',
+      car: en ? 'Car' : 'Auto',
+      km: 'km',
+      overnight: en ? 'Overnight stay provided' : 'Nächtigung beigestellt',
+      yes: en ? 'Yes' : 'Ja',
+      no: en ? 'No' : 'Nein',
+      plants: en ? 'Equipment' : 'Anlagen',
+      fn: en ? 'Serial No.' : 'Fabr.-Nr.',
+      type: en ? 'Type' : 'Typ / Type',
+      works: en ? 'Executed works' : 'Durchgeführte Arbeiten',
+      date: en ? 'Date' : 'Datum',
+      time: en ? 'Time' : 'Zeit',
+      desc: en ? 'Works' : 'Arbeiten',
+      n: en ? 'Normal' : 'Normalstd.',
+      ot50: en ? 'OT 50%' : 'Ü50',
+      ot100: en ? 'OT 100%' : 'Ü100',
+      sum: en ? 'Total' : 'Summe',
+      parts: en ? 'Spare parts' : 'Ersatzteile',
+      qty: en ? 'Pcs.' : 'Stk.',
+      designation: en ? 'Designation' : 'Bezeichnung',
+      typeNo: 'Type No.',
+      comment: en ? 'Comment' : 'Kommentar',
+      remarks: en ? 'Remarks' : 'Bemerkung',
+      empty: en ? 'None' : 'Keine Einträge'
+    };
+    var html = [];
+    html.push('<article class="an-pv">');
+    html.push('<header class="an-pv-head">');
+    html.push('<img class="an-pv-logo" src="assets/img/kukla_logo_claim_green.png" alt="KUKLA">');
+    html.push('<div class="an-pv-head-text"><p class="an-pv-kicker">' + (en ? 'Customer preview' : 'Kunden-Vorschau') + '</p><h4>' + L.title + '</h4><p class="an-pv-sub">' + L.sub + '</p></div>');
+    if (lastDocNumber) html.push('<div class="an-pv-nr">' + escapeHtml(L.no + ' ' + lastDocNumber) + '</div>');
+    html.push('</header>');
+    html.push('<section class="an-pv-meta">');
+    html.push(previewKv(L.customer, p.customer_name));
+    html.push(previewKv(L.tech, an.technician_name));
+    html.push(previewSiteBlock(L.site, formatSiteLines(an.site, jobData)));
+    if (an.car_info || an.start_km != null || an.end_km != null || an.total_km != null) {
+      html.push(previewKmBlock(an.car_info, an.start_km, an.end_km, an.total_km, L.car));
+    }
+    if (an.naechtigung_beigestellt) html.push(previewKv(L.overnight, L.yes));
+    html.push('</section>');
+    html.push('<section class="an-pv-sec"><h5>' + L.plants + '</h5>');
+    if (!fabs.length) {
+      html.push('<p class="an-pv-empty">' + L.empty + '</p>');
+    } else {
+      html.push('<div class="an-pv-table-wrap"><table class="an-pv-table an-pv-fabs"><thead><tr><th>' + L.fn + '</th><th>' + L.type + '</th><th>' + L.fn + '</th><th>' + L.type + '</th></tr></thead><tbody>');
+      for (var fi = 0; fi < fabs.length; fi += 2) {
+        var fa = fabs[fi];
+        var fb = fabs[fi + 1];
+        html.push('<tr><td class="an-pv-fn">' + escapeHtml(fa.fabrikationsnummer) + '</td><td>' + escapeHtml(fa.type) + '</td>');
+        if (fb) {
+          html.push('<td class="an-pv-fn an-pv-fabs-split">' + escapeHtml(fb.fabrikationsnummer) + '</td><td>' + escapeHtml(fb.type) + '</td>');
+        } else {
+          html.push('<td class="an-pv-fn an-pv-fabs-split"></td><td></td>');
+        }
+        html.push('</tr>');
+      }
+      html.push('</tbody></table></div>');
+    }
+    html.push('</section>');
+    html.push('<section class="an-pv-sec"><h5>' + L.works + '</h5>');
+    if (!work.length) {
+      html.push('<p class="an-pv-empty">' + L.empty + '</p>');
+    } else {
+      var sumN = 0;
+      var sum50 = 0;
+      var sum100 = 0;
+      html.push('<div class="an-pv-table-wrap"><table class="an-pv-table an-pv-work"><thead><tr><th>' + L.date + '</th><th>' + L.time + '</th><th>' + L.desc + '</th><th class="an-pv-num">' + L.n + '</th><th class="an-pv-num">' + L.ot50 + '</th><th class="an-pv-num">' + L.ot100 + '</th></tr></thead><tbody>');
+      work.forEach(function (r) {
+        sumN += Number(r.normal_hours) || 0;
+        sum50 += Number(r.overtime_50) || 0;
+        sum100 += Number(r.overtime_100) || 0;
+        html.push('<tr><td>' + escapeHtml(fmtPreviewDate(r.item_date)) + '</td><td class="an-pv-nowrap">' + escapeHtml(r.item_time || '–') + '</td><td>' + escapeHtml(r.description) + '</td><td class="an-pv-num">' + fmtPreviewHrs(r.normal_hours) + '</td><td class="an-pv-num">' + fmtPreviewHrs(r.overtime_50) + '</td><td class="an-pv-num">' + fmtPreviewHrs(r.overtime_100) + '</td></tr>');
+      });
+      html.push('</tbody><tfoot><tr><td colspan="3">' + L.sum + '</td><td class="an-pv-num">' + fmtPreviewHrsSum(sumN) + '</td><td class="an-pv-num">' + fmtPreviewHrsSum(sum50) + '</td><td class="an-pv-num">' + fmtPreviewHrsSum(sum100) + '</td></tr></tfoot></table></div>');
+    }
+    html.push('</section>');
+    if (parts.length) {
+      html.push('<section class="an-pv-sec"><h5>' + L.parts + '</h5><div class="an-pv-table-wrap"><table class="an-pv-table"><thead><tr><th class="an-pv-num">' + L.qty + '</th><th>' + L.designation + '</th><th>' + L.typeNo + '</th><th>' + L.comment + '</th></tr></thead><tbody>');
+      parts.forEach(function (r) {
+        html.push('<tr><td class="an-pv-num">' + escapeHtml(r.quantity == null || r.quantity === '' ? '' : String(r.quantity).replace('.', ',')) + '</td><td>' + escapeHtml(r.designation) + '</td><td>' + escapeHtml(r.type_no) + '</td><td>' + escapeHtml(r.description) + '</td></tr>');
+      });
+      html.push('</tbody></table></div></section>');
+    }
+    if (an.remarks) {
+      html.push('<section class="an-pv-sec"><h5>' + L.remarks + '</h5><p class="an-pv-remarks">' + escapeHtml(an.remarks) + '</p></section>');
+    }
+    html.push('<p class="an-pv-confirm">' + escapeHtml(el('anConfirmText').textContent) + '</p>');
+    html.push('</article>');
+    return html.join('');
   }
   async function signCustomer() {
     if (!pad || pad.isEmpty()) {
@@ -834,10 +1034,18 @@
     lastCustomerSig = true;
     signedFingerprint = fingerprint(collectPayload());
     el('anSigStatus').textContent = lang() === 'en' ? 'Signed.' : 'Unterzeichnet.';
+    var customerPng = pad.toDataUrl();
     el('anPreviewModal').hidden = true;
-    await generatePdfAndMail(saved, pad.toDataUrl());
+    try {
+      await generatePdfAndMail(saved, customerPng);
+    } catch (e) {
+      window.alert((e && e.message) || (lang() === 'en'
+        ? 'PDF or e-mail failed after signing.'
+        : 'PDF oder E-Mail nach dem Unterschreiben fehlgeschlagen.'));
+    }
   }
   async function generatePdfAndMail(saved, customerPng) {
+    var en = lang() === 'en';
     var payload = collectPayload();
     payload.document = {
       number: saved && saved.number,
@@ -848,35 +1056,53 @@
     payload.customer_signature_png = customerPng || '';
     payload.customer_signer_name = el('anSignerName').value;
     payload.job_id = payload.job_id;
-    var pdfRes = await fetch(API_BASE + '/api/arbeitsnachweis/pdf', {
+    var pdfHttp = await fetch(API_BASE + '/api/arbeitsnachweis/pdf', {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(payload)
-    }).then(function (r) { return r.json(); }).catch(function () { return null; });
-    if (pdfRes && pdfRes.ok && pdfRes.pdf_base64 && saved && saved.document_id) {
+    }).catch(function () { return null; });
+    var pdfRes = null;
+    if (pdfHttp) {
+      pdfRes = await pdfHttp.json().catch(function () { return null; });
+    }
+    if (!pdfRes || !pdfRes.ok || !pdfRes.path) {
+      window.alert((pdfRes && pdfRes.error) || (en
+        ? 'PDF could not be created. Outlook was not opened.'
+        : 'PDF konnte nicht erzeugt werden. Outlook wurde nicht geöffnet.'));
+      return;
+    }
+    if (pdfRes.pdf_base64 && saved && saved.document_id) {
       await proxy('pdf_upload', {
         payload: { document_id: saved.document_id, pdf_base64: pdfRes.pdf_base64 }
       }).catch(function () { return null; });
     }
-    var en = lang() === 'en';
     var html = en
       ? '<p>Dear Sir or Madam,</p><p>Please find attached the working report.</p><p>Thank you very much.</p>'
       : '<p>Sehr geehrte Damen und Herren,</p><p>anbei erhalten Sie den Arbeitsnachweis.</p><p>Vielen Dank.</p>';
     var outlookBody = {
       recipients: [el('anSignerEmail').value.trim()].filter(Boolean),
-      attachments: pdfRes && pdfRes.path ? [pdfRes.path] : [],
+      attachments: [pdfRes.path],
       subject: en ? 'Working report' : 'Arbeitsnachweis',
       html_body: html
     };
-    fetch(API_BASE + '/api/arbeitsnachweis/outlook', {
+    var o = await fetch(API_BASE + '/api/arbeitsnachweis/outlook', {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(outlookBody)
-    }).then(function (r) { return r.json(); }).then(function (o) {
-      if (o && o.outlook_error) {
-        window.alert((en ? 'Outlook could not be opened: ' : 'Outlook konnte nicht geöffnet werden: ') + o.outlook_error);
-      }
-    }).catch(function () { /* Abschluss nicht blockieren */ });
+    }).then(function (r) { return r.json(); }).catch(function () { return null; });
+    if (o && o.outlook_error) {
+      window.alert((en ? 'Outlook could not be opened: ' : 'Outlook konnte nicht geöffnet werden: ') + o.outlook_error);
+      return;
+    }
+    if (!o || o.ok === false) {
+      window.alert(en ? 'Outlook could not be opened.' : 'Outlook konnte nicht geöffnet werden.');
+      return;
+    }
+    if (o.outlook && o.outlook.attachmentCount === 0) {
+      window.alert(en
+        ? 'Outlook opened, but the PDF could not be attached. File: ' + pdfRes.path
+        : 'Outlook wurde geöffnet, aber das PDF konnte nicht angehängt werden. Datei: ' + pdfRes.path);
+    }
   }
   async function transferTimesheet() {
     var saved = await saveRemote();
@@ -931,6 +1157,10 @@
     signedFingerprint = '';
     el('anSigStatus').textContent = '';
     el('anAutosaveHint').textContent = 'Entwurf';
+    if (el('anLastSaved')) {
+      el('anLastSaved').textContent = '–';
+      el('anLastSaved').title = lang() === 'en' ? 'Not saved yet' : 'Noch nicht gespeichert';
+    }
     document.querySelector('input[name="anLang"][value="de"]').checked = true;
     applyLang();
     applyStatusUi({ status: 'entwurf' });
@@ -968,12 +1198,15 @@
     el('anSignerContact').addEventListener('change', function () {
       var opt = el('anSignerContact').selectedOptions[0];
       if (!opt || !opt.dataset) return;
-      if (opt.dataset.name) el('anSignerName').value = opt.dataset.name;
-      if (opt.dataset.email) el('anSignerEmail').value = opt.dataset.email;
+      el('anSignerName').value = opt.dataset.name || '';
+      el('anSignerEmail').value = opt.dataset.email || '';
       syncContactCombo();
     });
     ['anStartKm', 'anEndKm'].forEach(function (id) {
-      el(id).addEventListener('input', updateTotalKm);
+      el(id).addEventListener('input', function () {
+        clampKmField(el(id));
+        updateTotalKm();
+      });
     });
     document.querySelectorAll('input[name="anLang"]').forEach(function (r) {
       r.addEventListener('change', applyLang);
@@ -987,7 +1220,7 @@
     });
     el('btnAnTimesheet').addEventListener('click', transferTimesheet);
     el('btnAnPreview').addEventListener('click', function () {
-      el('anPreviewBody').textContent = previewHtml();
+      el('anPreviewBody').innerHTML = previewHtml();
       el('anPreviewModal').hidden = false;
       if (window.KuklaSignaturePad) pad = window.KuklaSignaturePad.attach(el('anSigCanvas'));
     });
@@ -1002,7 +1235,10 @@
         headers: getHeaders()
       }).then(function (r) { return r.json(); });
     }).then(function (data) {
-      if (data && data.document) applyPayload(data);
+      if (data && data.document) {
+        applyPayload(data);
+        if (data.synced === false) persistLocal().catch(function () {});
+      }
     }).catch(function () {});
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

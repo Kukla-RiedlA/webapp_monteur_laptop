@@ -1609,6 +1609,54 @@ function registerAbrechnungRoutesInner(app, ctx) {
   });
 }
 
+function queueAbrechnungLocalFile(ctx, opts) {
+  const db = ctx && ctx.db;
+  const save = ctx && ctx.save;
+  if (!db) throw new Error('db fehlt');
+  ensureSchema(db);
+  const jobServerId = parseInt(opts && opts.jobServerId, 10);
+  const technicianId = parseInt(opts && opts.technicianId, 10);
+  const bucket = String((opts && opts.bucket) || 'dispo').trim() || 'dispo';
+  const storedName = normalizeAbrechnungRelativeName((opts && (opts.storedName || opts.filename)) || '');
+  const localPath = String((opts && opts.localPath) || '');
+  if (!Number.isFinite(jobServerId) || jobServerId <= 0 || !storedName || !localPath || !fs.existsSync(localPath)) {
+    return false;
+  }
+  const jid = resolveDispoJobIdForAbrechnung(db, jobServerId);
+  let size = 0;
+  try {
+    size = fs.statSync(localPath).size;
+  } catch (_) {
+    size = 0;
+  }
+  const uploaderName = phpLocal.resolveTechnicianDisplayName(db, technicianId);
+  const uploadedAt = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO abrechnung_files_meta (
+      job_server_id, bucket, file_name, size_bytes, synced_at, uploaded_at, uploaded_by_name, uploaded_by_user_id
+    ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
+    ON CONFLICT(job_server_id, bucket, file_name) DO UPDATE SET
+      size_bytes = excluded.size_bytes,
+      uploaded_at = excluded.uploaded_at,
+      uploaded_by_name = excluded.uploaded_by_name,
+      uploaded_by_user_id = excluded.uploaded_by_user_id
+  `).run(jid, bucket, storedName, size, uploadedAt, uploaderName || null, technicianId || null);
+  db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
+    'upload',
+    JSON.stringify({
+      job_id: jid,
+      bucket,
+      filename: storedName,
+      local_path: localPath,
+      beleg_prefix: '',
+      orig_filename: storedName,
+      uploader_name: uploaderName || '',
+    }),
+  );
+  if (typeof save === 'function') save();
+  return true;
+}
+
 function registerAbrechnungRoutes(app, ctx) {
   ensureSchema(ctx.db);
   registerAbrechnungRoutesInner(app, ctx);
@@ -1617,6 +1665,7 @@ function registerAbrechnungRoutes(app, ctx) {
 module.exports = {
   registerAbrechnungRoutes,
   flushAbrechnungOutbox,
+  queueAbrechnungLocalFile,
   runAbrechnungRefreshCore,
   resolveDispoJobIdForAbrechnung,
   readCommentsFromRow,

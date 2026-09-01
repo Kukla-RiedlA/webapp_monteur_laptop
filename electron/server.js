@@ -90,7 +90,8 @@ function configurePersistentDbDir() {
     console.warn('[monteur-db] configurePersistentDbDir:', e && e.message ? e.message : e);
   }
 }
-const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore } = require('./lib/abrechnung-routes');
+const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore, queueAbrechnungLocalFile } = require('./lib/abrechnung-routes');
+const { copyProtocolsToLocalAbrechnung } = require('./lib/abrechnung-protocol-copy');
 const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, pullRecentLohnLocks, ensureTables: ensureZeitschreibungTables } = require('./lib/zeitschreibung-routes');
 const { createBackgroundJobService } = require('./lib/background_jobs');
 const {
@@ -6051,6 +6052,62 @@ function createApp(db) {
         step += verifyPlan.length;
       }
 
+      bumpProgress('finish_abrechnung', step, totalSteps, 'Arbeitsnachweis und Montagebericht in die Abrechnung …');
+      let abrechnungCopied = [];
+      try {
+        abrechnungCopied = copyProtocolsToLocalAbrechnung(reiseDir) || [];
+      } catch (copyErr) {
+        console.warn(
+          '[finish_and_cleanup] Abrechnung-Protokollkopie:',
+          copyErr && copyErr.message ? copyErr.message : copyErr,
+        );
+      }
+      for (const item of abrechnungCopied) {
+        const n = normalizeProtectedRelPath(item && item.destRel);
+        if (n && !protectedPaths.includes(n)) protectedPaths.push(n);
+      }
+      const abJobId = jobId || getServerJobId(localJobId);
+      if (abrechnungCopied.length && technicianId && abJobId) {
+        const abCtx = {
+          db,
+          save,
+          dbDir: DB_DIR,
+          resolveDienstreiseReiseDirForJob: (jobIdRef, opts) => resolveDienstreiseReiseDirForJob(jobIdRef, opts),
+        };
+        for (const item of abrechnungCopied) {
+          try {
+            queueAbrechnungLocalFile(abCtx, {
+              jobServerId: abJobId,
+              technicianId,
+              bucket: 'dispo',
+              storedName: item.storedName,
+              localPath: item.destAbs,
+            });
+          } catch (qErr) {
+            console.warn(
+              '[finish_and_cleanup] Abrechnung-Queue:',
+              qErr && qErr.message ? qErr.message : qErr,
+            );
+          }
+        }
+        if (!forceOfflineFinish && (effectiveDispoBase || dispoBaseUrl)) {
+          try {
+            await flushAbrechnungOutbox(
+              { db, save, dbDir: DB_DIR, authHeaderFromCredentials },
+              effectiveDispoBase || dispoBaseUrl,
+              technicianId,
+              dispoUsername,
+              dispoPassword,
+            );
+          } catch (flushErr) {
+            console.warn(
+              '[finish_and_cleanup] Abrechnung-Flush:',
+              flushErr && flushErr.message ? flushErr.message : flushErr,
+            );
+          }
+        }
+      }
+
       bumpProgress(
         'finish_cleanup',
         step,
@@ -7234,9 +7291,26 @@ function createApp(db) {
           if (remote && remote.document) {
             const mapped = anLocal.fromDispoPublic(remote);
             if (mapped) {
+              const loc = (loaded && loaded.arbeitsnachweis) || {};
+              const mappedAn = mapped.arbeitsnachweis || {};
+              const remoteSigner = String(mapped.signer_name || mappedAn.signer_name || '').trim();
+              if (!remoteSigner && loc.signer_name) {
+                mapped.signer_name = loc.signer_name;
+                mappedAn.signer_name = loc.signer_name;
+              }
+              if (!String(mapped.signer_email || mappedAn.signer_email || '').trim() && loc.signer_email) {
+                mapped.signer_email = loc.signer_email;
+                mappedAn.signer_email = loc.signer_email;
+              }
+              if (!mapped.save_contact && !mappedAn.save_contact && loc.save_contact) {
+                mapped.save_contact = true;
+                mappedAn.save_contact = true;
+              }
+              mapped.arbeitsnachweis = mappedAn;
+              const keptLocalSigner = !remoteSigner && !!String(loc.signer_name || '').trim();
               return res.json(anLocal.upsertFromPayload(db, mapped, {
                 technicianId: getTechnicianId(req),
-                dirty: false,
+                dirty: keptLocalSigner,
               }));
             }
           }
@@ -7370,23 +7444,39 @@ function createApp(db) {
       }
       const pdfBytes = await protocolPdf.generateArbeitsnachweisPdfBuffer(payload, { lang });
       const pdfBase64 = Buffer.from(pdfBytes).toString('base64');
-      let savedPath = '';
+      const num = (payload.document && payload.document.number) || ('AN-' + Date.now());
+      const safe = String(num).replace(/[^\w.-]+/g, '_') || ('AN-' + Date.now());
+      const fileName = safe + '.pdf';
+      let archivePath = '';
       try {
-        const localJobId = parseInt(payload.job_id || (payload.document && payload.document.job_id) || 0, 10);
-        if (localJobId > 0) {
-          const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true });
+        const jobId = parseInt(payload.job_id || (payload.document && payload.document.job_id) || 0, 10);
+        if (jobId > 0) {
+          const reiseDir = resolveDienstreiseReiseDirForJob(jobId, { createIfMissing: true });
           if (reiseDir) {
             const dir = path.join(reiseDir, 'Dokumente_Monteur', 'Arbeitsnachweise');
             fs.mkdirSync(dir, { recursive: true });
-            const num = (payload.document && payload.document.number) || ('AN-' + Date.now());
-            const safe = String(num).replace(/[^\w.-]+/g, '_');
-            savedPath = path.join(dir, safe + '.pdf');
-            fs.writeFileSync(savedPath, pdfBytes);
+            archivePath = path.join(dir, fileName);
+            fs.writeFileSync(archivePath, pdfBytes);
           }
         }
-      } catch (_) { /* optional local copy */ }
-      res.json({ ok: true, pdf_base64: pdfBase64, path: savedPath || null });
+      } catch (e) {
+        console.error('[arbeitsnachweis/pdf] Archiv-Kopie fehlgeschlagen:', e && e.message);
+      }
+      const tmpDir = path.join(os.tmpdir(), 'kukla-arbeitsnachweis');
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const savedPath = path.join(tmpDir, fileName);
+      fs.writeFileSync(savedPath, pdfBytes);
+      if (!fs.existsSync(savedPath) || fs.statSync(savedPath).size < 8) {
+        throw new Error('PDF-Datei konnte nicht gespeichert werden.');
+      }
+      res.json({
+        ok: true,
+        pdf_base64: pdfBase64,
+        path: savedPath,
+        archive_path: archivePath || null,
+      });
     } catch (e) {
+      console.error('[arbeitsnachweis/pdf]', e);
       res.status(500).json({ ok: false, error: e.message || 'PDF-Erzeugung fehlgeschlagen' });
     }
   });

@@ -30,6 +30,7 @@
     { id: 'hotel', label: 'Hotel', prefix: 'Hotel', icon: 'hotel.png' },
     { id: 'leihwagen', label: 'Leihauto', prefix: 'Leihwagen', icon: 'leihauto.png' },
     { id: 'arbeitsnachweis', label: 'Arbeitsnachweis', prefix: 'Arbeitsnachweis', icon: 'arbeitsnachweis.png' },
+    { id: 'montagebericht', label: 'Montagebericht', prefix: 'Montagebericht', icon: 'montagebericht.png' },
     { id: 'kfz', label: 'Maut / Parken', prefix: 'KFZ', icon: 'maut_parken.png' },
     { id: 'email', label: 'E-Mail', prefix: 'Email', icon: 'email.png' },
     { id: 'angebot', label: 'Angebot', prefix: 'Angebot', icon: 'angebot.png' },

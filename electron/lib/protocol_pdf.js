@@ -3766,17 +3766,17 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   const contentBottom = marginBottom + PROTOCOL_FOOTER_RESERVED_H;
 
   const L = {
-    title: 'ARBEITSNACHWEIS / WORKING REPORT',
-    titleSub: de ? 'Working report' : 'Arbeitsnachweis',
+    title: de ? 'ARBEITSNACHWEIS' : 'WORKING REPORT',
+    titleSub: de ? 'Working Report' : 'Arbeitsnachweis',
     no: de ? 'Nr.' : 'No.',
     customer: de ? 'Auftraggeber' : 'Customer',
     site: de ? 'Baustelle' : 'Site',
     type: de ? 'Typ / Type' : 'Type',
     fab: de ? 'Fabr.-Nr.' : 'Serial No.',
     tech: de ? 'KUKLA-Techniker' : 'KUKLA Engineer',
-    car: de ? 'Auto / Car' : 'Car',
-    startKm: 'Start km',
-    endKm: 'End km',
+    car: de ? 'Auto' : 'Car',
+    startKm: 'Start',
+    endKm: 'End',
     totalKm: 'Total km',
     living: de ? 'Tagesauslösen' : 'Living costs',
     overnight: de ? 'Nächtigung beigestellt' : 'Overnight stay provided',
@@ -3852,16 +3852,20 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     } else {
       page.drawText('KUKLA', { x: marginX, y: yTop - 18, size: 14, font: fontBold, color: green });
     }
+    const titleSize = 15;
+    const titleW = fontBold.widthOfTextAtSize(L.title, titleSize);
+    const subW = font.widthOfTextAtSize(L.titleSub, 9);
+    const titleCx = PAGE_W / 2;
     page.drawText(L.title, {
-      x: marginX + 130,
-      y: yTop - 16,
-      size: 14,
+      x: titleCx - titleW / 2,
+      y: yTop - 18,
+      size: titleSize,
       font: fontBold,
       color: greenDark,
     });
     page.drawText(L.titleSub, {
-      x: marginX + 130,
-      y: yTop - 32,
+      x: titleCx - subW / 2,
+      y: yTop - 34,
       size: 9,
       font,
       color: grayMuted,
@@ -3900,6 +3904,30 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     return false;
   }
 
+  function drawTxt(pg, text, opts) {
+    const t = String(text == null ? '' : text);
+    if (!t.trim()) return;
+    pg.drawText(t, opts);
+  }
+  function drawCentered(pg, text, x, w, yy, size, useFont, color) {
+    const t = String(text == null ? '' : text);
+    if (!t.trim()) return;
+    const tw = useFont.widthOfTextAtSize(t, size);
+    pg.drawText(t, { x: x + Math.max(0, (w - tw) / 2), y: yy, size, font: useFont, color });
+  }
+  function kmDisp(v) {
+    if (v == null || v === '') return '';
+    return String(v);
+  }
+  function siteLinesFromText(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return [];
+    if (/\r|\n/.test(text)) {
+      return text.split(/\r?\n/).map((ln) => ln.trim()).filter(Boolean);
+    }
+    return text.split(/\s*,\s*/).map((ln) => ln.trim()).filter(Boolean);
+  }
+
   const overnight = an.naechtigung_beigestellt === true || an.naechtigung_beigestellt === 1 || an.naechtigung_beigestellt === '1';
   let fabs = [];
   if (Array.isArray(an.fabrikationsnummern)) fabs = an.fabrikationsnummern;
@@ -3909,15 +3937,36 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     const ty0 = String(an.equipment_type || '').trim();
     if (fn0 || ty0) fabs = [{ fabrikationsnummer: fn0, type: ty0 }];
   }
-  const fabLines = fabs.map((r) => {
-    const fn = String((r && (r.fabrikationsnummer || r.fn)) || '').trim();
-    const ty = String((r && (r.type || r.typ)) || '').trim();
-    if (fn && ty) return fn + '  ·  ' + ty;
-    return fn || ty;
-  }).filter(Boolean);
-  const fabText = fabLines.length ? fabLines.join('; ') : (S(an.fabrikationsnummer || '') || '–');
+  const fabRows = fabs.map((r) => ({
+    fn: String((r && (r.fabrikationsnummer || r.fn)) || '').trim(),
+    type: String((r && (r.type || r.typ)) || '').trim(),
+  })).filter((r) => r.fn || r.type);
+  const siteLines = siteLinesFromText(an.site || '').map((ln) => S(ln)).filter(Boolean);
+  const living = S(an.living_costs || '').trim();
+  const car = S(an.car_info || '').trim();
+  const pad = 10;
+  const halfW = tableInnerW / 2;
+  const colMaxW = halfW - pad * 2;
+  const siteMaxW = tableInnerW - pad * 2;
+  const custLines = wrapPdfPlain(fontBold, customerName || '', 9, colMaxW).filter((ln) => String(ln || '').trim());
+  const techLines = wrapPdfPlain(fontBold, S(an.technician_name || ''), 9, colMaxW).filter((ln) => String(ln || '').trim());
+  const siteWrapped = [];
+  siteLines.forEach((ln) => {
+    wrapPdfPlain(fontBold, ln, 9, siteMaxW).forEach((wln) => {
+      if (String(wln || '').trim()) siteWrapped.push(wln);
+    });
+  });
+  const kmInner = tableInnerW - pad * 2;
+  const kmGap = 8;
+  const carW = Math.floor(kmInner * 0.34);
+  const kmW = Math.floor((kmInner - carW - kmGap * 3) / 3);
+  const carWrap = wrapPdfPlain(fontBold, car, 9, Math.max(24, carW - 4)).filter((ln) => String(ln || '').trim());
+  const kmRowH = 14 + Math.max(12, carWrap.length * 11);
+  const topRowH = 12 + Math.max(custLines.length, techLines.length, 1) * 11 + 6;
+  const siteH = 12 + Math.max(siteWrapped.length, 1) * 11 + 4;
+  const extraH = living || overnight ? 24 : 0;
+  const metaH = pad * 2 + topRowH + siteH + kmRowH + extraH;
 
-  const metaH = Math.max(92, 56 + Math.max(fabLines.length, 1) * 12 + 36);
   page.drawRectangle({
     x: marginX,
     y: y - metaH,
@@ -3927,35 +3976,57 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     borderColor: greenSoft,
     borderWidth: 0.8,
   });
-  const pad = 10;
-  const colW = tableInnerW / 2 - pad * 2;
-  const left = [
-    [L.customer, customerName],
-    [L.site, S(an.site || '')],
-    [L.fab + ' / ' + L.type, S(fabText)],
+
+  let my = y - pad - 2;
+  drawTxt(page, S(L.customer), { x: marginX + pad, y: my, size: 7, font, color: grayMuted });
+  drawTxt(page, S(L.tech), { x: marginX + halfW + pad, y: my, size: 7, font, color: grayMuted });
+  my -= 11;
+  const nameLines = Math.max(custLines.length, techLines.length, 1);
+  for (let i = 0; i < nameLines; i++) {
+    drawTxt(page, custLines[i] || '', { x: marginX + pad, y: my, size: 9, font: fontBold, color: grayText });
+    drawTxt(page, techLines[i] || '', { x: marginX + halfW + pad, y: my, size: 9, font: fontBold, color: grayText });
+    my -= 11;
+  }
+  my -= 5;
+  drawTxt(page, S(L.site), { x: marginX + pad, y: my, size: 7, font, color: grayMuted });
+  my -= 11;
+  if (siteWrapped.length) {
+    siteWrapped.forEach((wln) => {
+      drawTxt(page, wln, { x: marginX + pad, y: my, size: 9, font: fontBold, color: grayText });
+      my -= 11;
+    });
+  } else {
+    my -= 11;
+  }
+  my -= 4;
+  const kmCols = [
+    { lab: L.car, valLines: carWrap, w: carW },
+    { lab: L.startKm, valLines: kmDisp(an.start_km) ? [kmDisp(an.start_km)] : [], w: kmW },
+    { lab: L.endKm, valLines: kmDisp(an.end_km) ? [kmDisp(an.end_km)] : [], w: kmW },
+    { lab: L.totalKm, valLines: kmDisp(an.total_km) ? [kmDisp(an.total_km)] : [], w: kmW },
   ];
-  const right = [
-    [L.tech, S(an.technician_name || '')],
-    [L.car, S(an.car_info || '')],
-    [L.startKm + ' / ' + L.endKm + ' / ' + L.totalKm,
-      [an.start_km, an.end_km, an.total_km].map((v) => (v == null || v === '' ? '–' : String(v))).join(' / ')],
-    [L.living, S(an.living_costs || '')],
-    [L.overnight, overnight ? L.yes : L.no],
-  ];
-  function drawKV(pairs, x0, y0) {
-    let yy = y0;
-    pairs.forEach(([lab, val]) => {
-      page.drawText(S(lab), { x: x0, y: yy, size: 7, font, color: grayMuted });
-      const lines = wrapPdfPlain(font, S(val || '–'), 9, colW);
-      yy -= 10;
-      lines.slice(0, 6).forEach((ln) => {
-        page.drawText(ln, { x: x0, y: yy, size: 9, font: fontBold, color: grayText });
-        yy -= 11;
-      });
+  let kx = marginX + pad;
+  kmCols.forEach((c) => {
+    drawCentered(page, S(c.lab), kx, c.w, my, 7, font, grayMuted);
+    (c.valLines || []).forEach((ln, li) => {
+      drawCentered(page, ln, kx, c.w, my - 12 - li * 11, 9, fontBold, grayText);
+    });
+    kx += c.w + kmGap;
+  });
+  my -= kmRowH;
+  if (living || overnight) {
+    drawTxt(page, S(L.living), { x: marginX + pad, y: my, size: 7, font, color: grayMuted });
+    drawTxt(page, S(L.overnight), { x: marginX + halfW + pad, y: my, size: 7, font, color: grayMuted });
+    my -= 11;
+    drawTxt(page, living, { x: marginX + pad, y: my, size: 9, font: fontBold, color: grayText });
+    drawTxt(page, overnight ? L.yes : L.no, {
+      x: marginX + halfW + pad,
+      y: my,
+      size: 9,
+      font: fontBold,
+      color: grayText,
     });
   }
-  drawKV(left, marginX + pad, y - 14);
-  drawKV(right, marginX + tableInnerW / 2 + pad, y - 14);
   y -= metaH + 14;
 
   const colDate = 54;
@@ -3977,6 +4048,68 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     y -= h;
   }
 
+  const colFn = 58;
+  const colType = tableInnerW / 2 - colFn;
+  const fabWidths = [colFn, colType, colFn, colType];
+  if (fabRows.length) {
+    drawTxt(page, S(de ? 'Anlagen' : 'Equipment'), {
+      x: marginX,
+      y,
+      size: 9,
+      font: fontBold,
+      color: greenDark,
+    });
+    y -= 14;
+    drawTableHead([L.fab, L.type, L.fab, L.type], fabWidths);
+    const midX = marginX + colFn + colType;
+    function drawFabSplit(topY, botY) {
+      page.drawLine({
+        start: { x: midX, y: topY },
+        end: { x: midX, y: botY },
+        thickness: 1.2,
+        color: green,
+      });
+    }
+    drawFabSplit(y + 16, y);
+    for (let i = 0; i < fabRows.length; i += 2) {
+      const a = fabRows[i];
+      const b = fabRows[i + 1] || { fn: '', type: '' };
+      const aFn = wrapPdfPlain(fontBold, S(a.fn), 8, colFn - 8);
+      const bFn = wrapPdfPlain(fontBold, S(b.fn), 8, colFn - 8);
+      const aType = wrapPdfPlain(font, S(a.type), 8, colType - 8);
+      const bType = wrapPdfPlain(font, S(b.type), 8, colType - 8);
+      const lines = Math.max(aFn.length, bFn.length, aType.length, bType.length, 1);
+      const h = Math.max(16, lines * 10 + 6);
+      if (ensureSpace(h + 2)) {
+        drawTableHead([L.fab, L.type, L.fab, L.type], fabWidths);
+        drawFabSplit(y + 16, y);
+      }
+      if ((i / 2) % 2 === 1) {
+        page.drawRectangle({ x: marginX, y: y - h, width: tableInnerW, height: h, color: greenHeader });
+      }
+      page.drawLine({
+        start: { x: marginX, y: y - h },
+        end: { x: marginX + tableInnerW, y: y - h },
+        thickness: 0.3,
+        color: lineGray,
+      });
+      drawFabSplit(y, y - h);
+      function drawCellLines(arr, x, useFont) {
+        arr.forEach((ln, li) => {
+          drawTxt(page, ln, { x, y: y - 11 - li * 10, size: 8, font: useFont, color: grayText });
+        });
+      }
+      drawCellLines(aFn, marginX + 4, fontBold);
+      drawCellLines(aType, marginX + colFn + 4, font);
+      drawCellLines(bFn, midX + 6, fontBold);
+      drawCellLines(bType, midX + colFn + 6, font);
+      y -= h;
+    }
+    y -= 12;
+  }
+
+  drawTxt(page, S(L.works), { x: marginX, y, size: 9, font: fontBold, color: greenDark });
+  y -= 14;
   drawTableHead([L.date, L.time, L.works, L.normal, L.ot50, L.ot100], [colDate, colTime, colWorks, colN, col50, col100]);
 
   let sumN = 0;
@@ -4010,9 +4143,9 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
       page.drawText(ln, { x: marginX + colDate + colTime + 3, y: y - 12 - li * 10, size: 8, font, color: grayText });
     });
     const nx = marginX + colDate + colTime + colWorks;
-    page.drawText(fmtNum(n), { x: nx + 3, y: baseY, size: 8, font, color: grayText });
-    page.drawText(fmtNum(o50), { x: nx + colN + 3, y: baseY, size: 8, font, color: grayText });
-    page.drawText(fmtNum(o100), { x: nx + colN + col50 + 3, y: baseY, size: 8, font, color: grayText });
+    drawCentered(page, fmtNum(n), nx, colN, baseY, 8, font, grayText);
+    drawCentered(page, fmtNum(o50), nx + colN, col50, baseY, 8, font, grayText);
+    drawCentered(page, fmtNum(o100), nx + colN + col50, col100, baseY, 8, font, grayText);
     y -= h;
   });
 
@@ -4020,9 +4153,9 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   page.drawRectangle({ x: marginX, y: y - 16, width: tableInnerW, height: 16, color: greenSoft });
   page.drawText(L.sum, { x: marginX + colDate + colTime + 3, y: y - 12, size: 8, font: fontBold, color: greenDark });
   const nx = marginX + colDate + colTime + colWorks;
-  page.drawText(fmtNum(sumN) || '0', { x: nx + 3, y: y - 12, size: 8, font: fontBold, color: greenDark });
-  page.drawText(fmtNum(sum50) || '0', { x: nx + colN + 3, y: y - 12, size: 8, font: fontBold, color: greenDark });
-  page.drawText(fmtNum(sum100) || '0', { x: nx + colN + col50 + 3, y: y - 12, size: 8, font: fontBold, color: greenDark });
+  drawCentered(page, fmtNum(sumN) || '0', nx, colN, y - 12, 8, fontBold, greenDark);
+  drawCentered(page, fmtNum(sum50) || '0', nx + colN, col50, y - 12, 8, fontBold, greenDark);
+  drawCentered(page, fmtNum(sum100) || '0', nx + colN + col50, col100, y - 12, 8, fontBold, greenDark);
   y -= 22;
 
   if (parts.length) {

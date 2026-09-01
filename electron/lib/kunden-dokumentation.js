@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -318,6 +319,20 @@ function escapePsSingleQuoted(s) {
   return String(s == null ? '' : s).replace(/'/g, "''");
 }
 
+function copyAttachmentForOutlook(src) {
+  const abs = path.resolve(String(src || ''));
+  if (!abs || !fs.existsSync(abs)) return null;
+  try {
+    const tmpDir = path.join(os.tmpdir(), 'kukla-outlook-attach');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const dest = path.join(tmpDir, Date.now() + '-' + path.basename(abs));
+    fs.copyFileSync(abs, dest);
+    return fs.existsSync(dest) ? dest : abs;
+  } catch (_) {
+    return abs;
+  }
+}
+
 /**
  * Öffnet klassischen Outlook-Entwurf mit Empfängern und Anhängen.
  */
@@ -326,7 +341,7 @@ function openOutlookDraft(opts) {
     ? opts.recipients.map((e) => String(e || '').trim()).filter(Boolean)
     : [];
   const attachments = Array.isArray(opts.attachments)
-    ? opts.attachments.map((p) => path.resolve(String(p))).filter((p) => fs.existsSync(p))
+    ? opts.attachments.map((p) => copyAttachmentForOutlook(p)).filter(Boolean)
     : [];
   const subject = String(opts.subject || 'Kundendokumentation');
   const body = String(opts.body || '');
