@@ -612,6 +612,16 @@
   }
   function applyLang() {
     var en = lang() === 'en';
+    if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.applyForm === 'function') {
+      window.ProtocolFormI18n.applyForm('arbeitsnachweis');
+    }
+    var hint = el('anAutosaveHint');
+    if (hint) {
+      var curHint = String(hint.textContent || '').trim();
+      if (!curHint || curHint === 'Entwurf' || curHint === 'Draft') {
+        hint.textContent = en ? 'Draft' : 'Entwurf';
+      }
+    }
     el('anConfirmText').textContent = en
       ? 'The customer confirms the working hours, executed works and, where applicable, spare parts stated in this working report.'
       : 'Der Auftraggeber bestätigt die in diesem Arbeitsnachweis angeführten Arbeitszeiten, durchgeführten Arbeiten und gegebenenfalls verwendeten Ersatzteile.';
@@ -620,6 +630,26 @@
     var sel = el('anSignerContact');
     if (sel && sel.options[0] && sel.options[0].value === '') sel.options[0].textContent = contactPlaceholder();
     syncContactCombo();
+    if (el('anRemarks')) el('anRemarks').setAttribute('lang', en ? 'en' : 'de');
+    var tsBtn = el('btnAnTimesheet');
+    if (tsBtn) {
+      var applied = el('anTimesheetApplied') && el('anTimesheetApplied').value === '1';
+      tsBtn.textContent = applied
+        ? (en ? 'Already transferred to timesheet' : 'Bereits in Zeitschreibung')
+        : (en ? 'Transfer hours to timesheet' : 'Zeiten in Zeitschreibung übernehmen');
+    }
+    if (el('anLastSaved') && el('anLastSaved').textContent && el('anLastSaved').textContent !== '–') {
+      el('anLastSaved').title = (en ? 'Last saved: ' : 'Zuletzt gespeichert: ') + el('anLastSaved').textContent;
+    }
+    var jobSel = el('anJob');
+    if (jobSel && jobSel.options[0] && jobSel.options[0].value === '') {
+      jobSel.options[0].textContent = en ? '– Job –' : '– Auftrag –';
+    }
+    var fabsHost = el('anFabList');
+    if (fabsHost) {
+      var thFab = fabsHost.querySelector('thead th:first-child');
+      if (thFab) thFab.textContent = en ? 'Serial no.' : 'Fabr.-Nr.';
+    }
   }
   function closeContactCombo() {
     var menu = el('anSignerContactMenu');
@@ -721,7 +751,7 @@
     var rows = fabs.map(function (r) {
       return '<tr><td>' + escapeHtml(r.fabrikationsnummer) + '</td><td>' + escapeHtml(r.type) + '</td></tr>';
     }).join('');
-    host.innerHTML = '<table><thead><tr><th>Fabr.-Nr.</th><th>Typ / Type</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    host.innerHTML = '<table><thead><tr><th>' + (lang() === 'en' ? 'Serial no.' : 'Fabr.-Nr.') + '</th><th>Typ / Type</th></tr></thead><tbody>' + rows + '</tbody></table>';
   }
   function escapeHtml(s) {
     return String(s || '').replace(/[&<>"']/g, function (c) {
@@ -750,7 +780,7 @@
     sel.innerHTML = '';
     var ph = document.createElement('option');
     ph.value = '';
-    ph.textContent = '– Auftrag –';
+    ph.textContent = lang() === 'en' ? '– Job –' : '– Auftrag –';
     sel.appendChild(ph);
     jobs.forEach(function (j) {
       var opt = document.createElement('option');
@@ -885,14 +915,14 @@
     var body = (lines || []).map(function (ln) {
       return '<span class="an-pv-v-line">' + escapeHtml(ln) + '</span>';
     }).join('');
-    return '<div class="an-pv-kv an-pv-span"><span class="an-pv-k">' + escapeHtml(label) + '</span><div class="an-pv-v an-pv-addr">' + body + '</div></div>';
+    return '<div class="an-pv-kv"><span class="an-pv-k">' + escapeHtml(label) + '</span><div class="an-pv-v an-pv-addr">' + body + '</div></div>';
   }
   function previewKmBlock(car, start, end, total, carLabel) {
     function col(lab, val, extra) {
       var shown = (val == null || val === '') ? '' : String(val);
       return '<div class="an-pv-km-col' + (extra || '') + '"><span class="an-pv-k">' + escapeHtml(lab) + '</span><span class="an-pv-v">' + escapeHtml(shown) + '</span></div>';
     }
-    return '<div class="an-pv-km an-pv-span">' +
+    return '<div class="an-pv-km">' +
       col(carLabel || 'Car', car, ' an-pv-km-col--car') +
       col('Start', start) +
       col('End', end) +
@@ -915,9 +945,10 @@
       tech: en ? 'KUKLA Engineer' : 'KUKLA-Techniker',
       car: en ? 'Car' : 'Auto',
       km: 'km',
+      living: en ? 'Living costs' : 'Tagesauslösen',
       overnight: en ? 'Overnight stay provided' : 'Nächtigung beigestellt',
       yes: en ? 'Yes' : 'Ja',
-      no: en ? 'No' : 'Nein',
+      noVal: en ? 'No' : 'Nein',
       plants: en ? 'Equipment' : 'Anlagen',
       fn: en ? 'Serial No.' : 'Fabr.-Nr.',
       type: en ? 'Type' : 'Typ / Type',
@@ -945,14 +976,17 @@
     if (lastDocNumber) html.push('<div class="an-pv-nr">' + escapeHtml(L.no + ' ' + lastDocNumber) + '</div>');
     html.push('</header>');
     html.push('<section class="an-pv-meta">');
+    html.push('<div class="an-pv-meta-col">');
     html.push(previewKv(L.customer, p.customer_name));
-    html.push(previewKv(L.tech, an.technician_name));
     html.push(previewSiteBlock(L.site, formatSiteLines(an.site, jobData)));
-    if (an.car_info || an.start_km != null || an.end_km != null || an.total_km != null) {
-      html.push(previewKmBlock(an.car_info, an.start_km, an.end_km, an.total_km, L.car));
-    }
-    if (an.naechtigung_beigestellt) html.push(previewKv(L.overnight, L.yes));
-    html.push('</section>');
+    html.push('</div>');
+    html.push('<div class="an-pv-meta-col">');
+    html.push(previewKv(L.tech, an.technician_name));
+    html.push(previewKmBlock(an.car_info, an.start_km, an.end_km, an.total_km, L.car));
+    html.push('<div class="an-pv-meta-row2">');
+    html.push(previewKv(L.living, an.living_costs));
+    html.push(previewKv(L.overnight, an.naechtigung_beigestellt ? L.yes : L.noVal));
+    html.push('</div></div></section>');
     html.push('<section class="an-pv-sec"><h5>' + L.plants + '</h5>');
     if (!fabs.length) {
       html.push('<p class="an-pv-empty">' + L.empty + '</p>');
@@ -1055,6 +1089,7 @@
     };
     payload.customer_signature_png = customerPng || '';
     payload.customer_signer_name = el('anSignerName').value;
+    if (customerPng) payload.customer_signed_at = new Date().toISOString();
     payload.job_id = payload.job_id;
     var pdfHttp = await fetch(API_BASE + '/api/arbeitsnachweis/pdf', {
       method: 'POST',
@@ -1156,7 +1191,7 @@
     lastCustomerSig = false;
     signedFingerprint = '';
     el('anSigStatus').textContent = '';
-    el('anAutosaveHint').textContent = 'Entwurf';
+    el('anAutosaveHint').textContent = lang() === 'en' ? 'Draft' : 'Entwurf';
     if (el('anLastSaved')) {
       el('anLastSaved').textContent = '–';
       el('anLastSaved').title = lang() === 'en' ? 'Not saved yet' : 'Noch nicht gespeichert';
@@ -1222,6 +1257,8 @@
     el('btnAnPreview').addEventListener('click', function () {
       el('anPreviewBody').innerHTML = previewHtml();
       el('anPreviewModal').hidden = false;
+      if (el('anPreviewSigName')) el('anPreviewSigName').textContent = (el('anSignerName') && el('anSignerName').value) || '';
+      if (el('anPreviewSigTime')) el('anPreviewSigTime').textContent = '';
       if (window.KuklaSignaturePad) pad = window.KuklaSignaturePad.attach(el('anSigCanvas'));
     });
     el('btnAnPreviewClose').addEventListener('click', function () { el('anPreviewModal').hidden = true; });

@@ -210,6 +210,7 @@ function dispoMonteurFetchHeaders(technicianId, authHeader) {
   const a = authHeader && authHeader.Authorization;
   if (a) {
     h['X-Kukla-Authorization'] = a;
+    h['X-Authorization'] = a;
   }
   return h;
 }
@@ -7347,23 +7348,32 @@ function createApp(db) {
   }
 
   function anDispoAuthHeaders(req, extra) {
-    const auth = authHeaderFromIncomingBasicOrQuery(req);
-    return Object.assign(
+    const incoming = authHeaderFromIncomingBasicOrQuery(req);
+    const headers = Object.assign(
       { Accept: 'application/json' },
+      incoming || {},
       extra || {},
-      auth || {},
-      auth && auth.Authorization ? { 'X-Kukla-Authorization': auth.Authorization } : {},
     );
+    const a = headers.Authorization;
+    if (a) {
+      headers['X-Kukla-Authorization'] = a;
+      headers['X-Authorization'] = a;
+    }
+    return headers;
   }
 
   async function tryDispoArbeitsnachweisDraft(req, jobId) {
     const jid = parseInt(jobId, 10) || 0;
     const base = anDispoBaseUrl(req, req.query);
     if (!base || jid <= 0) return null;
-    const auth = authHeaderFromIncomingBasicOrQuery(req);
+    let auth = authHeaderFromIncomingBasicOrQuery(req);
+    if (!auth || !auth.Authorization) {
+      const creds = resolveDispoServerCreds(req.query || {});
+      auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+    }
     if (!auth) return null;
     const url = `${base}/api/mobile/arbeitsnachweis.php?action=draft&job_id=${encodeURIComponent(jid)}`;
-    const r = await fetch(url, { method: 'GET', headers: anDispoAuthHeaders(req) });
+    const r = await fetch(url, { method: 'GET', headers: anDispoAuthHeaders(req, auth) });
     const data = await r.json().catch(() => null);
     if (!r.ok || !data) return null;
     return data;
@@ -7372,10 +7382,14 @@ function createApp(db) {
   async function tryDispoArbeitsnachweisSave(req, dispoPayload) {
     const base = anDispoBaseUrl(req, req.body);
     if (!base) return { ok: false, offline: true };
-    const auth = authHeaderFromIncomingBasicOrQuery(req);
+    let auth = authHeaderFromIncomingBasicOrQuery(req);
+    if (!auth || !auth.Authorization) {
+      const creds = resolveDispoServerCreds(Object.assign({}, req.body || {}, dispoPayload || {}));
+      auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+    }
     if (!auth) return { ok: false, offline: true };
     const url = `${base}/api/mobile/arbeitsnachweis.php?action=save`;
-    const headers = anDispoAuthHeaders(req, { 'Content-Type': 'application/json' });
+    const headers = anDispoAuthHeaders(req, Object.assign({ 'Content-Type': 'application/json' }, auth));
     const r = await fetch(url, {
       method: 'POST',
       headers,
@@ -7411,6 +7425,20 @@ function createApp(db) {
           if (remote && remote.document) {
             const mapped = anLocal.fromDispoPublic(remote);
             if (mapped) {
+              const localW = anLocal.contentWeight(loaded || {});
+              const remoteW = anLocal.contentWeight(mapped);
+              if (loaded && loaded.document && localW > remoteW) {
+                const localId = loaded.document.id;
+                anLocal.markDirty(db, localId);
+                const dispoPayload = anLocal.toDispoSavePayload(loaded);
+                if (dispoPayload) {
+                  anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload, {
+                    technician_id: getTechnicianId(req),
+                    baseUrl: anDispoBaseUrl(req, {}),
+                  }));
+                }
+                return res.json(anLocal.toPublic(loaded));
+              }
               const loc = (loaded && loaded.arbeitsnachweis) || {};
               const mappedAn = mapped.arbeitsnachweis || {};
               const remoteSigner = String(mapped.signer_name || mappedAn.signer_name || '').trim();
@@ -14791,11 +14819,31 @@ function createApp(db) {
     res.json({ ok: true, pending, failed });
   });
 
-  app.post('/api/sync_retry_failed', express.json(), (req, res) => {
+  app.post('/api/sync_retry_failed', express.json(), async (req, res) => {
     try {
       const n = requeueFailedPendingChanges(db);
       save();
-      res.json({ ok: true, requeued: n });
+      let pushed = false;
+      let pushError = '';
+      try {
+        const creds = resolveDispoServerCreds(req.body || {});
+        const techId = getTechnicianId(req);
+        const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+        const base = String((creds && creds.baseUrl) || '').trim().replace(/\/$/, '');
+        if (n > 0 && base && auth && techId) {
+          await pushToServer(base, techId, db, auth, liveDispoCredsForPush(base, creds));
+          save();
+          pushed = true;
+        }
+      } catch (ePush) {
+        pushError = ePush && ePush.message ? String(ePush.message) : String(ePush);
+      }
+      res.json({
+        ok: true,
+        requeued: n,
+        pushed,
+        push_error: pushError || null,
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
     }
@@ -19939,6 +19987,14 @@ function markPendingPushSkip(db, pendingRow, message) {
 async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
   const live = liveDispoCredsForPush(baseUrl, liveCreds);
   const base = (live.baseUrl || String(baseUrl || '')).replace(/\/$/, '');
+  let auth = authHeader && authHeader.Authorization ? authHeader : null;
+  if (!auth) {
+    const u = String(live.serverUsername || '').trim();
+    const p = String(live.serverPassword || '');
+    if (u && p) {
+      auth = { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
+    }
+  }
   let pushFailures = 0;
   let lastPushFailMsg = '';
   const noteFail = (msg) => {
@@ -19959,11 +20015,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
     if (sa !== sb) return sa - sb;
     return (a.id || 0) - (b.id || 0);
   });
-  const header = applyKuklaAuditHeaders({
-    'Content-Type': 'application/json',
-    'X-Technician-Id': String(technicianId),
-    ...(authHeader || {}),
-  });
+  const header = Object.assign(
+    { 'Content-Type': 'application/json' },
+    dispoMonteurFetchHeaders(technicianId, auth || authHeader),
+  );
   for (const p of pending) {
     let handled = false;
     if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address' || p.action === 'hotel_selection' || p.action === 'job_address' || p.action === 'job_contacts')) {
@@ -20002,7 +20057,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
       // Techniker-ID aus job_technicians verwenden (Auftrag ist diesem Techniker zugeordnet), nicht aus Einstellungen – sonst meldet Dispo „nicht zugeordnet“
       const techRow = job && job.id != null ? db.prepare('SELECT technician_id FROM job_technicians WHERE job_id = ? LIMIT 1').get(job.id) : null;
       const techIdForPush = (techRow && techRow.technician_id != null) ? techRow.technician_id : technicianId;
-      const headerForJob = { 'Content-Type': 'application/json', 'X-Technician-Id': String(techIdForPush), ...(authHeader || {}) };
+      const headerForJob = Object.assign(
+        { 'Content-Type': 'application/json' },
+        dispoMonteurFetchHeaders(techIdForPush, auth || authHeader),
+      );
       const payload = JSON.parse(p.payload || '{}');
       if (p.action === 'hotel_address' && payload && typeof payload === 'object') {
         payload.hotel_country = payload.hotel_country != null ? String(payload.hotel_country) : '';
@@ -20824,11 +20882,21 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
         continue;
       }
       try {
+        const anLoc = require('./lib/arbeitsnachweis-local');
+        let localPay = null;
+        try {
+          localPay = anLoc.toDispoSavePayload(anLoc.loadRow(db, p.entity_id));
+        } catch (_) {}
+        const chosen = anLoc.resolveSavePayload(payloadRaw, localPay) || payloadRaw;
         const url = `${tbBase}/api/mobile/arbeitsnachweis.php?action=save`;
+        const postBody = Object.assign({ action: 'save' }, chosen);
+        delete postBody.serverPassword;
+        delete postBody.dispo_password;
+        delete postBody.dispoPassword;
         const r = await fetch(url, {
           method: 'POST',
           headers: Object.assign({ Accept: 'application/json', 'Content-Type': 'application/json' }, header),
-          body: JSON.stringify(Object.assign({ action: 'save' }, payloadRaw)),
+          body: JSON.stringify(postBody),
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok || !data.ok) {
@@ -20837,15 +20905,17 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           throw pushErr;
         }
         try {
-          const anLoc = require('./lib/arbeitsnachweis-local');
           anLoc.markSynced(db, p.entity_id, data.document_id, {
             number: data.number,
             status: data.status,
             content_version: data.content_version,
             local_uuid: data.local_uuid,
           });
+          anLoc.clearFailedPending(db, p.entity_id);
         } catch (_) {}
-        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        db.prepare(
+          `DELETE FROM pending_changes WHERE entity_type = 'arbeitsnachweis' AND entity_id = ? AND action = 'save'`,
+        ).run(p.entity_id);
       } catch (e) {
         const outcome = resolveSyncPushFailure(db, p, e, 'arbeitsnachweis_push');
         if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);

@@ -13,6 +13,7 @@ import { TestLoadFields } from './TestLoadFields';
 import { WorkStepsTable } from './WorkStepsTable';
 import type { LoadCellRow, MeasurementRow, ServiceProtocolFormState, StepResult } from '../types';
 import { EMPTY_MEASUREMENTS, FAB_NUMBERS } from '../types';
+import { localizeAutosaveHint, maskLangFromPdf, t, type UiLang } from '../i18n';
 
 function ensureLoadCells(form: ServiceProtocolFormState, fallbackMeasurements?: MeasurementRow[]): LoadCellRow[] {
   const fallback = cloneMeasurements(fallbackMeasurements);
@@ -50,7 +51,8 @@ export function ServiceProtocolPage() {
   const loadCells = ensureLoadCells(form, bridgeState.measurements);
 
   const fabChips = fabNumbers.length ? fabNumbers : embedded ? [] : FAB_NUMBERS;
-  const displayLang: 'de' | 'en' | 'both' = form.pdfEn && !form.pdfDe ? 'en' : form.pdfDe && form.pdfEn ? 'both' : 'de';
+  const uiLang: UiLang = maskLangFromPdf(form.pdfDe, form.pdfEn);
+  const displayLang = uiLang;
   const [pendingFab, setPendingFab] = useState<string | null>(null);
   const activeFabVisual = pendingFab || form.activeFab || '';
 
@@ -174,7 +176,7 @@ export function ServiceProtocolPage() {
   const { sendAction, autosaveHint, autosaveError } = useElectronBridge(bridgeState, setBridgeState, logPayload);
 
   const jobOptions = [
-    { value: '', label: '– Bitte wählen –' },
+    { value: '', label: t(uiLang, 'pleaseSelect') },
     ...jobs.map((j) => ({ value: j.id, label: j.label })),
   ];
 
@@ -210,34 +212,34 @@ export function ServiceProtocolPage() {
   };
 
   return (
-    <div className={embedded ? 'bg-kukla-page pb-6' : 'min-h-screen bg-kukla-page pb-10'}>
+    <div className={embedded ? 'bg-kukla-page pb-6' : 'min-h-screen bg-kukla-page pb-10'} lang={uiLang}>
       <div className="mx-auto max-w-[1280px] px-4 py-4 md:px-6">
         <header
           className={`mb-5 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20 -mx-4 bg-kukla-page/95 px-4 py-2 backdrop-blur md:-mx-6 md:px-6`}
         >
           <div className="flex min-w-0 flex-wrap items-baseline gap-3">
             <SpIcon name="ClipboardList" className="h-8 w-8 shrink-0" />
-            <h1 className="text-2xl font-bold text-[#111827] md:text-[1.75rem]">Serviceprotokoll</h1>
+            <h1 className="text-2xl font-bold text-[#111827] md:text-[1.75rem]">{t(uiLang, 'title')}</h1>
             <span className={`text-sm font-semibold ${autosaveError ? 'text-amber-700' : 'text-[#166534]'}`}>
-              {autosaveHint || 'Zuletzt gespeichert: –'}
+              {localizeAutosaveHint(autosaveHint, uiLang)}
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" className="sp-btn-primary" onClick={() => sendAction('stickySave')}>
               <SpIcon name="Save" className="h-4 w-4" />
-              Speichern (JSON)
+              {t(uiLang, 'saveJson')}
             </button>
             <button type="button" className="sp-btn-primary" onClick={() => sendAction('pdf')}>
-              einzel PDF
+              {t(uiLang, 'singlePdf')}
             </button>
             {fabChips.length >= 2 ? (
               <button type="button" className="sp-btn-primary" onClick={() => sendAction('pdfAll')}>
-                Alle PDF
+                {t(uiLang, 'allPdf')}
               </button>
             ) : null}
             <button
               type="button"
-              aria-label="Menü"
+              aria-label={t(uiLang, 'menu')}
               className="inline-flex h-[38px] w-[38px] items-center justify-center rounded-lg border border-kukla-border bg-white shadow-card hover:bg-kukla-mint"
             >
               <SpIcon name="MoreVertical" className="h-5 w-5" />
@@ -246,26 +248,26 @@ export function ServiceProtocolPage() {
         </header>
 
         <div className="space-y-4">
-          <SectionCard number={1} title="Auftrag & Identifikation" icon="Building2">
+          <SectionCard number={1} title={t(uiLang, 'secJob')} icon="Building2">
             <div className="grid gap-4">
               <SelectInput
-                label="Auftrag"
+                label={t(uiLang, 'job')}
                 value={jobId || ''}
                 onChange={(e) => handleJobChange(e.target.value)}
-                options={jobOptions.length ? jobOptions : [{ value: '', label: '– Bitte wählen –' }]}
+                options={jobOptions.length ? jobOptions : [{ value: '', label: t(uiLang, 'pleaseSelect') }]}
               />
               <div className="grid gap-4 md:grid-cols-2">
-                <TextInput label="Projekt" value={form.project} onChange={(e) => patchForm({ project: e.target.value })} />
+                <TextInput label={t(uiLang, 'project')} value={form.project} onChange={(e) => patchForm({ project: e.target.value })} />
                 <TextInput
-                  label="Datum"
+                  label={t(uiLang, 'date')}
                   value={form.date}
                   onChange={(e) => patchForm({ date: e.target.value })}
                   icon={<SpIcon name="Calendar" className="h-4 w-4" />}
                 />
               </div>
               <div>
-                <span className="text-sm font-semibold text-[#111827]">Sprache</span>
-                <div className="mt-1 flex min-h-9 flex-wrap items-center gap-x-4 gap-y-2" role="group" aria-label="Sprache">
+                <span className="text-sm font-semibold text-[#111827]">{t(uiLang, 'language')}</span>
+                <div className="mt-1 flex min-h-9 flex-wrap items-center gap-x-4 gap-y-2" role="group" aria-label={t(uiLang, 'language')}>
                   <label className="inline-flex items-center gap-2 text-sm font-normal text-[#111827]">
                     <input
                       type="checkbox"
@@ -273,7 +275,7 @@ export function ServiceProtocolPage() {
                       checked={form.pdfDe}
                       onChange={(e) => patchForm({ pdfDe: e.target.checked })}
                     />
-                    Deutsch
+                    {t(uiLang, 'german')}
                   </label>
                   <label className="inline-flex items-center gap-2 text-sm font-normal text-[#111827]">
                     <input
@@ -282,14 +284,14 @@ export function ServiceProtocolPage() {
                       checked={form.pdfEn}
                       onChange={(e) => patchForm({ pdfEn: e.target.checked })}
                     />
-                    Englisch
+                    {t(uiLang, 'english')}
                   </label>
                 </div>
               </div>
             </div>
             {(fabChips.length ? fabChips : []).length > 0 ? (
               <div className="mt-4">
-                <span className="mb-2 block text-sm font-semibold text-[#111827]">Fabrikationsnummer</span>
+                <span className="mb-2 block text-sm font-semibold text-[#111827]">{t(uiLang, 'serialNumber')}</span>
                 <div className="flex flex-wrap gap-2">
                   {fabChips.map((fab) => (
                     <NumberChip
@@ -305,9 +307,9 @@ export function ServiceProtocolPage() {
           </SectionCard>
 
           <div className="space-y-4">
-            <SectionCard number={2} title="Anlagendaten" icon="Factory">
+            <SectionCard number={2} title={t(uiLang, 'plantData')} icon="Factory">
               <div className="grid gap-3 md:grid-cols-2">
-                <TextInput label="Type" value={form.plantType} onChange={(e) => patchForm({ plantType: e.target.value })} />
+                <TextInput label={t(uiLang, 'type')} value={form.plantType} onChange={(e) => patchForm({ plantType: e.target.value })} />
                 <div className="grid grid-cols-2 gap-3">
                   <TextInput
                     label="Qmax"
@@ -315,22 +317,22 @@ export function ServiceProtocolPage() {
                     inputMode="text"
                     maxLength={100}
                     autoComplete="off"
-                    placeholder="z.B. 30 t/h"
+                    placeholder={t(uiLang, 'qmaxPh')}
                     onChange={(e) => patchForm({ qmax: e.target.value })}
                   />
                   <TextInput
                     label="v max"
                     value={form.vmax || ''}
                     onChange={(e) => patchForm({ vmax: e.target.value })}
-                    placeholder="aus Anlagenstamm"
+                    placeholder={t(uiLang, 'vmaxPh')}
                   />
                 </div>
-                <TextInput label="Pos.-Nr." value={form.position} onChange={(e) => patchForm({ position: e.target.value })} />
+                <TextInput label={t(uiLang, 'posNr')} value={form.position} onChange={(e) => patchForm({ position: e.target.value })} />
                 <TextInput label="DWC" value={form.dwc} onChange={(e) => patchForm({ dwc: e.target.value })} />
               </div>
             </SectionCard>
 
-            <SectionCard number={3} title="Wägezelle & Messwerte" icon="Scale">
+            <SectionCard number={3} title={t(uiLang, 'loadCell')} icon="Scale">
               <div className="grid gap-3">
                 {loadCells.map((cell, idx) => (
                   <div
@@ -342,8 +344,8 @@ export function ServiceProtocolPage() {
                         <button
                           type="button"
                           className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
-                          aria-label="Wägezelle hinzufügen"
-                          title="Weitere Wägezelle hinzufügen"
+                          aria-label={t(uiLang, 'addLoadCell')}
+                          title={t(uiLang, 'addLoadCellTitle')}
                           onClick={addLoadCell}
                         >
                           <SpIcon name="Plus" className="h-4 w-4" />
@@ -353,8 +355,8 @@ export function ServiceProtocolPage() {
                         <button
                           type="button"
                           className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
-                          aria-label="Wägezelle entfernen"
-                          title="Wägezelle entfernen"
+                          aria-label={t(uiLang, 'removeLoadCell')}
+                          title={t(uiLang, 'removeLoadCell')}
                           onClick={() => removeLoadCell(cell.id)}
                         >
                           <SpIcon name="X" className="h-4 w-4" />
@@ -363,34 +365,34 @@ export function ServiceProtocolPage() {
                     </div>
                     <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.05fr)_minmax(0,1.15fr)_minmax(3.25rem,0.48fr)_minmax(3.25rem,0.48fr)] gap-2 pr-20">
                       <TextInput
-                        label="Type"
+                        label={t(uiLang, 'type')}
                         className="h-8 text-sm"
                         value={cell.type}
                         onChange={(e) => patchLoadCell(cell.id, { type: e.target.value })}
                       />
                       <TextInput
-                        label="Seriennummer"
+                        label={t(uiLang, 'serial')}
                         className="h-8 text-sm"
                         value={cell.serialNumber}
                         onChange={(e) => patchLoadCell(cell.id, { serialNumber: e.target.value })}
                       />
                       <TextInput
-                        label="Pos."
+                        label={t(uiLang, 'pos')}
                         className="h-8 text-sm"
                         value={cell.position}
                         onChange={(e) => patchLoadCell(cell.id, { position: e.target.value })}
                       />
                       <TextInput
-                        label="Vers. V"
-                        title="Versorgungsspannung V"
+                        label={t(uiLang, 'supplyV')}
+                        title={t(uiLang, 'supplyVTitle')}
                         className="h-8 text-sm"
                         value={cell.supplyVoltage || ''}
                         inputMode="decimal"
                         onChange={(e) => patchLoadCell(cell.id, { supplyVoltage: e.target.value })}
                       />
                       <TextInput
-                        label="Sens. mV/V"
-                        title="Sensitivität mV/V"
+                        label={t(uiLang, 'sens')}
+                        title={t(uiLang, 'sensTitle')}
                         className="h-8 text-sm"
                         value={cell.sensitivity || ''}
                         inputMode="decimal"
@@ -412,8 +414,9 @@ export function ServiceProtocolPage() {
             </SectionCard>
           </div>
 
-          <SectionCard number={4} title="Prüfgewichtstest — Abweichung (%)" icon="LineChart">
+          <SectionCard number={4} title={t(uiLang, 'testLoad')} icon="LineChart">
             <TestLoadFields
+              lang={uiLang}
               values={testLoad}
               onChange={(field, value) =>
                 setBridgeState((prev) => ({
@@ -424,7 +427,7 @@ export function ServiceProtocolPage() {
             />
           </SectionCard>
 
-          <SectionCard number={5} title="Arbeitsschritte" icon="ClipboardCheck">
+          <SectionCard number={5} title={t(uiLang, 'workSteps')} icon="ClipboardCheck">
             <WorkStepsTable
               steps={workSteps}
               displayLang={displayLang}
@@ -450,10 +453,10 @@ export function ServiceProtocolPage() {
               onReset={() => sendAction('resetWorkSteps')}
             />
             <label className="mt-4 flex flex-col gap-1">
-              <span className="text-sm font-semibold text-[#111827]">Allgemeine Bemerkungen</span>
+              <span className="text-sm font-semibold text-[#111827]">{t(uiLang, 'generalRemarks')}</span>
               <textarea
                 className="sp-textarea min-h-[80px]"
-                placeholder="Bemerkungen eingeben …"
+                placeholder={t(uiLang, 'remarksPh')}
                 value={form.generalRemarks}
                 onChange={(e) => patchForm({ generalRemarks: e.target.value })}
               />
@@ -461,15 +464,15 @@ export function ServiceProtocolPage() {
           </SectionCard>
 
           <div className="grid gap-4 lg:grid-cols-[1fr_min(280px,36%)]">
-            <SectionCard number={6} title="Abschluss" icon="ClipboardCheck">
+            <SectionCard number={6} title={t(uiLang, 'closing')} icon="ClipboardCheck">
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <fieldset className="space-y-2 border-0 p-0">
-                    <legend className="mb-1 text-sm font-semibold">Status</legend>
+                    <legend className="mb-1 text-sm font-semibold">{t(uiLang, 'status')}</legend>
                     {[
-                      { value: 'geprueft', label: 'Geprüft' },
-                      { value: 'justiert', label: 'Justiert' },
-                      { value: 'mangel', label: 'Mangel festgestellt' },
+                      { value: 'geprueft', label: t(uiLang, 'checked') },
+                      { value: 'justiert', label: t(uiLang, 'adjusted') },
+                      { value: 'mangel', label: t(uiLang, 'defect') },
                     ].map((opt) => (
                       <label key={opt.value} className="flex items-center gap-2 text-sm">
                         <input
@@ -483,24 +486,24 @@ export function ServiceProtocolPage() {
                     ))}
                   </fieldset>
                   <label className="mt-4 flex flex-col gap-1">
-                    <span className="text-sm font-semibold">Monteur</span>
+                    <span className="text-sm font-semibold">{t(uiLang, 'technician')}</span>
                     <select className="sp-input" value={form.monteur} onChange={(e) => patchForm({ monteur: e.target.value })}>
-                      <option value="">Name auswählen</option>
+                      <option value="">{t(uiLang, 'selectName')}</option>
                       {form.monteur ? <option value={form.monteur}>{form.monteur}</option> : null}
                     </select>
                   </label>
                   <div className="mt-4">
-                    <SignatureBox label="Profil-Unterschrift (Einstellungen)" />
+                    <SignatureBox label={t(uiLang, 'profileSig')} />
                     <p className="mt-1 text-xs text-[#6b7280]">
-                      Unterschrift unter Einstellungen hinterlegen. Finales PDF nur mit Profil-Unterschrift.
+                      {t(uiLang, 'profileSigHint')}
                     </p>
                   </div>
                 </div>
                 <label className="flex flex-col gap-1">
-                  <span className="text-sm font-semibold">Bemerkungen</span>
+                  <span className="text-sm font-semibold">{t(uiLang, 'remarks')}</span>
                   <textarea
                     className="sp-textarea min-h-[140px]"
-                    placeholder="Bemerkungen eingeben …"
+                    placeholder={t(uiLang, 'remarksPh')}
                     value={form.closingRemarks}
                     onChange={(e) => patchForm({ closingRemarks: e.target.value })}
                   />
@@ -509,6 +512,7 @@ export function ServiceProtocolPage() {
             </SectionCard>
 
             <ActionPanel
+              lang={uiLang}
               onPdfCreate={() => sendAction('pdf')}
               onPdfCreateAll={() => sendAction('pdfAll')}
               onSaveData={() => sendAction('saveJson')}

@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.034
+- **Arbeitsnachweis-Sync:** Queue sendet den aktuellen SQLite-Stand statt eingefrorener Dead-Letter; Pull überschreibt vollere lokale Entwürfe nicht.
+- **Auth:** „Token fehlt“ ist kein sofortiger Dead-Letter; Retry pusht mit aktuellem Stand.
+- **PDF:** Kopf und Kundenunterschrift wie in der Vorschau.
+- **Serviceprotokoll:** Formulartexte über i18n.
+
 ## V 2.006.032
 - **Anlagenakte-Galerie:** Thumbnails liegen wieder in der lokalen SQLite (`image_thumb_cache`) und werden ohne Vollbild angezeigt. Fehlt ein Thumb, holt die App im Hintergrund nur die Dispo-Vorschau; das große Bild lädt erst beim Öffnen.
 - **Anlagenstamm:** Öffnen und Nachladen frieren die App nicht mehr ein (Listen-Cache, kein Dateibaum-Walk für Thumbs, Tabelle ohne innerHTML-Neuaufbau).

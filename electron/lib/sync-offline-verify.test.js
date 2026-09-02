@@ -15,6 +15,7 @@ const path = require('path');
 const {
   HANDLED_PENDING_ENTITY_TYPES,
   isHandledPendingEntityType,
+  isPermanentSyncPushError,
   isLocalFresher,
   evaluateJobPullRemovalGuard,
   wantsLocalOnlyRequest,
@@ -126,6 +127,19 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
         'pushToServer fehlt für ' + type,
       );
     }
+  });
+
+  it('pushToServer setzt X-Kukla-Authorization für Apache/PHP', () => {
+    const start = serverSrc.indexOf('async function pushToServer');
+    assert.ok(start >= 0);
+    const chunk = serverSrc.slice(start, start + 2500);
+    assert.ok(chunk.includes('dispoMonteurFetchHeaders'), 'pushToServer muss dispoMonteurFetchHeaders nutzen');
+  });
+
+  it('Token fehlt ist nicht sofort Dead-Letter', () => {
+    const err = new Error('Token fehlt');
+    err.status = 401;
+    assert.equal(isPermanentSyncPushError(err), false);
   });
 
   it('queueDispoProxyPending-Typen sind Teilmenge der Handler', () => {

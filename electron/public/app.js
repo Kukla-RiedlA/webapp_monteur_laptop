@@ -63,6 +63,9 @@
     var enEl = document.getElementById(enId);
     if (deEl) deEl.checked = !!set.de;
     if (enEl) enEl.checked = !!set.en;
+    if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.applyFromChecks === 'function') {
+      window.ProtocolFormI18n.applyFromChecks(deId, enId);
+    }
   }
 
   function languagesFromDraft(draft) {
@@ -71,6 +74,30 @@
     if (Array.isArray(draft.pdf_languages) && draft.pdf_languages.length) return draft.pdf_languages;
     if (draft.language) return [draft.language];
     return ['de'];
+  }
+
+  function protocolPleaseSelect(viewId) {
+    var lang = 'de';
+    if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.langForView === 'function') {
+      lang = window.ProtocolFormI18n.langForView(viewId);
+    }
+    if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.pleaseSelect === 'function') {
+      return window.ProtocolFormI18n.pleaseSelect(lang);
+    }
+    return '– Bitte wählen –';
+  }
+
+  function refreshProtocolFormLang(viewId) {
+    if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.applyByRootId === 'function') {
+      window.ProtocolFormI18n.applyByRootId(viewId);
+    }
+  }
+
+  function protocolUiLang(deId, enId) {
+    if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.maskLangFromChecks === 'function') {
+      return window.ProtocolFormI18n.maskLangFromChecks(deId, enId);
+    }
+    return 'de';
   }
 
   /** @param {string} jobId */
@@ -9252,7 +9279,12 @@
       api('/api/sync_retry_failed', { method: 'POST', body: '{}' })
         .then(function (data) {
           var n = data && data.requeued != null ? data.requeued : 0;
-          if (hint) hint.textContent = n ? n + ' Einträge wieder in der Queue.' : 'Keine aufgegebenen Einträge.';
+          var parts = [];
+          if (n) parts.push(n + ' Einträge wieder in der Queue.');
+          else parts.push('Keine aufgegebenen Einträge.');
+          if (data && data.pushed) parts.push('Sofort zur Dispo gesendet.');
+          if (data && data.push_error) parts.push('Push: ' + data.push_error);
+          if (hint) hint.textContent = parts.join(' ');
           return loadSettingsSyncStatus();
         })
         .then(function () {
@@ -15789,7 +15821,13 @@
   function applyProtocolAutosaveHint(el, text, isError) {
     if (!el) return;
     el.hidden = false;
-    el.textContent = text || 'Zuletzt gespeichert: –';
+    var fallback = 'Zuletzt gespeichert: –';
+    if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.autosaveHint === 'function' && el.id) {
+      var view = el.closest && el.closest('.view-protokolle-sub');
+      var lang = view && window.ProtocolFormI18n.langForView ? window.ProtocolFormI18n.langForView(view.id) : 'de';
+      fallback = window.ProtocolFormI18n.autosaveHint(true, lang, '–');
+    }
+    el.textContent = text || fallback;
     el.classList.toggle('is-error', !!isError);
   }
 
@@ -15945,6 +15983,14 @@
 
     function setHint(ok) {
       if (typeof opts.setHint !== 'function') return;
+      var lang = 'de';
+      if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.langForView === 'function') {
+        lang = window.ProtocolFormI18n.langForView(viewId);
+      }
+      if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.autosaveHint === 'function') {
+        opts.setHint(window.ProtocolFormI18n.autosaveHint(ok, lang, ok ? formatProtocolAutosaveClock() : ''), !ok);
+        return;
+      }
       if (ok) opts.setHint('Zuletzt gespeichert: ' + formatProtocolAutosaveClock(), false);
       else opts.setHint('Speichern fehlgeschlagen', true);
     }
@@ -16215,15 +16261,16 @@
       var fabList = k.fabrikationsnummern.map(function (r) { return r.fabrikationsnummer; }).filter(Boolean);
       var auftragsnr = (job.job_number != null && String(job.job_number).trim()) ? String(job.job_number).trim() : '';
       kopfdatenEl.innerHTML =
-        '<div class="mb-v2-kopfdaten-row"><strong>Kunde:</strong> ' + escapeHtml(k.kunde) + '</div>' +
-        (auftragsnr ? '<div class="mb-v2-kopfdaten-row kopfdaten-secondary"><strong>Auftragsnr.:</strong> ' + escapeHtml(auftragsnr) + '</div>' : '') +
+        '<div class="mb-v2-kopfdaten-row"><strong data-i18n-en="Customer:">Kunde:</strong> ' + escapeHtml(k.kunde) + '</div>' +
+        (auftragsnr ? '<div class="mb-v2-kopfdaten-row kopfdaten-secondary"><strong data-i18n-en="Job no.:">Auftragsnr.:</strong> ' + escapeHtml(auftragsnr) + '</div>' : '') +
         '<div class="kopfdaten-fn"><strong>FN.:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
         (k.geliefertUeber ? '<div class="kopfdaten-secondary">' + escapeHtml(k.geliefertUeber) + '</div>' : '') +
-        '<div class="mb-v2-kopfdaten-row"><strong>Datum:</strong> ' + escapeHtml(k.datum) + '</div>' +
-        '<div class="mb-v2-kopfdaten-row"><strong>Servicetechniker:</strong> ' + escapeHtml(k.servicetechniker) + '</div>' +
-        '<div class="mb-v2-kopfdaten-row"><strong>Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson).replace(/\n/g, '<br>') + '</div>';
+        '<div class="mb-v2-kopfdaten-row"><strong data-i18n-en="Date:">Datum:</strong> ' + escapeHtml(k.datum) + '</div>' +
+        '<div class="mb-v2-kopfdaten-row"><strong data-i18n-en="Service engineer:">Servicetechniker:</strong> ' + escapeHtml(k.servicetechniker) + '</div>' +
+        '<div class="mb-v2-kopfdaten-row"><strong data-i18n-en="Contact person:">Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson).replace(/\n/g, '<br>') + '</div>';
       kopfdatenEl.hidden = false;
       kopfdatenEl.removeAttribute('aria-hidden');
+      refreshProtocolFormLang('viewProtokolleMontagebericht');
       return k;
     }
 
@@ -16239,17 +16286,18 @@
         html += '<tr>';
         html += '<td style="width:22%"><strong>FN.:</strong> ' + escapeHtml(fn || '–') + '</td>';
         html += '<td style="width:39%"><div class="montagebericht-fab-row-flex"><strong>Type:</strong>' +
-          '<input type="text" data-mb-type="" autocomplete="off" value="' + escapeHtml(t) + '" placeholder="aus Anlagenstamm"></div></td>';
-        html += '<td style="width:39%"><div class="montagebericht-fab-row-flex"><strong>Pos.Nr.:</strong>' +
-          '<input type="text" data-mb-position="" autocomplete="off" value="' + escapeHtml(p) + '" placeholder="aus Anlagenstamm"></div></td>';
+          '<input type="text" data-mb-type="" autocomplete="off" value="' + escapeHtml(t) + '" placeholder="aus Anlagenstamm" data-i18n-placeholder-en="from equipment master"></div></td>';
+        html += '<td style="width:39%"><div class="montagebericht-fab-row-flex"><strong data-i18n-en="Pos. no.:">Pos.Nr.:</strong>' +
+          '<input type="text" data-mb-position="" autocomplete="off" value="' + escapeHtml(p) + '" placeholder="aus Anlagenstamm" data-i18n-placeholder-en="from equipment master"></div></td>';
         html += '</tr></table>';
         html += '<div class="montagebericht-fab-body">';
-        html += '<label>Bemerkungen / Textbausteine</label>';
-        html += '<div data-fab-rich="' + escapeHtml(fn) + '" data-mb-editor="fab" class="mb-rich-editor" contenteditable="true" spellcheck="true" style="min-height:3rem" title="Textbaustein hierher ziehen"></div>';
+        html += '<label data-i18n-en="Remarks / text modules">Bemerkungen / Textbausteine</label>';
+        html += '<div data-fab-rich="' + escapeHtml(fn) + '" data-mb-editor="fab" class="mb-rich-editor" contenteditable="true" spellcheck="true" style="min-height:3rem" title="Textbaustein hierher ziehen" data-i18n-title-en="Drag text module here"></div>';
         html += '</div></div>';
       });
       fabContainer.innerHTML = html;
       initFabBemerkungenDropTargets();
+      refreshProtocolFormLang('viewProtokolleMontagebericht');
     }
 
     function stripHtmlForPlain(html) {
@@ -16948,7 +16996,8 @@
         var plain = stripHtmlForPlain(insertText).slice(0, 60) + (stripHtmlForPlain(insertText).length > 60 ? '…' : '');
         html += '<div class="montagebericht-tb-chip" draggable="true" data-text="' + escapeHtml(insertText) + '" title="' + escapeHtml(plain) + '">' + escapeHtml(plain) + '</div>';
       });
-      listEl.innerHTML = html || '<span class="muted" style="font-size:0.8rem">Keine Textbausteine</span>';
+      listEl.innerHTML = html || '<span class="muted" style="font-size:0.8rem" data-i18n-en="No text modules">Keine Textbausteine</span>';
+      refreshProtocolFormLang('viewProtokolleMontagebericht');
       listEl.querySelectorAll('.montagebericht-tb-chip').forEach(function (chip) {
         chip.addEventListener('dragstart', function (e) {
           chip.classList.add('dragging');
@@ -16975,13 +17024,14 @@
         var data = await r.json();
         if (!data.ok || !data.categories) {
           montageberichtTbCategories = [];
-          if (categorySelect) categorySelect.innerHTML = '<option value="">– Kategorie –</option>';
-          listEl.innerHTML = '<span class="muted" style="font-size:0.8rem">Keine Textbausteine (lokal leer – nach Sync verfügbar)</span>';
+          if (categorySelect) categorySelect.innerHTML = '<option value="" data-i18n-en="All">– Kategorie –</option>';
+          listEl.innerHTML = '<span class="muted" style="font-size:0.8rem" data-i18n-en="No text modules (empty locally – available after sync)">Keine Textbausteine (lokal leer – nach Sync verfügbar)</span>';
+          refreshProtocolFormLang('viewProtokolleMontagebericht');
           return;
         }
         montageberichtTbCategories = data.categories;
         if (categorySelect) {
-          categorySelect.innerHTML = '<option value="">Alle</option>' +
+          categorySelect.innerHTML = '<option value="" data-i18n-en="All">Alle</option>' +
             montageberichtTbCategories.map(function (cat) {
               return '<option value="' + cat.id + '">' + escapeHtml(cat.name || '') + '</option>';
             }).join('');
@@ -17019,13 +17069,21 @@
       if (!set.de && !set.en) set.de = true;
       if (deEl) deEl.checked = !!set.de;
       if (enEl) enEl.checked = !!set.en;
+      if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.applyForm === 'function') {
+        window.ProtocolFormI18n.applyForm('montagebericht');
+      }
     }
 
     ['montageberichtLangDe', 'montageberichtLangEn'].forEach(function (id) {
       var langEl = document.getElementById(id);
       if (langEl && !langEl.dataset.tbLangBound) {
         langEl.dataset.tbLangBound = '1';
-        langEl.addEventListener('change', renderMontageberichtChips);
+        langEl.addEventListener('change', function () {
+          renderMontageberichtChips();
+          if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.applyForm === 'function') {
+            window.ProtocolFormI18n.applyForm('montagebericht');
+          }
+        });
       }
     });
 
@@ -18049,8 +18107,8 @@
           '<td class="kw-col-num"><input type="text" name="brutto_kg" data-kw-calc="tara-brutto" value="' + val('brutto_kg') + '" inputmode="decimal" autocomplete="off"></td>' +
           '<td class="kw-col-bem"><input type="text" name="bemerkung" value="' + val('bemerkung') + '"></td>' +
           '<td class="kw-col-act"><div class="kw-act-wrap">' +
-          '<input type="checkbox" class="kw-in-summe" name="in_summe" title="In Summe einbeziehen" aria-label="In Summe einbeziehen"' + (inSumme ? ' checked' : '') + '>' +
-          '<button type="button" class="btn btn-ghost kw-remove" title="Wiegung entfernen" aria-label="Wiegung entfernen">×</button>' +
+          '<input type="checkbox" class="kw-in-summe" name="in_summe" title="In Summe einbeziehen" data-i18n-title-en="Include in total" aria-label="In Summe einbeziehen" data-i18n-aria-en="Include in total"' + (inSumme ? ' checked' : '') + '>' +
+          '<button type="button" class="btn btn-ghost kw-remove" title="Wiegung entfernen" data-i18n-title-en="Remove weighing" aria-label="Wiegung entfernen" data-i18n-aria-en="Remove weighing">×</button>' +
           '</div></td>' +
           '</tr>';
       }
@@ -18101,6 +18159,7 @@
           });
         });
         updateSummeRow();
+        refreshProtocolFormLang('viewProtokolleKontrollwiegungen');
       }
 
       function addRow() {
@@ -18750,10 +18809,11 @@
       window.openProtokolleKontrollwiegungen = function () {
         loadKontrollwiegungJobs().then(function (jobs) {
           if (jobSelect) {
-            jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
+            jobSelect.innerHTML = '<option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>' +
               jobs.map(function (j) {
                 return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
               }).join('');
+            refreshProtocolFormLang('viewProtokolleKontrollwiegungen');
             var defaultJobId = resolveTodayProtokollJobId(jobs);
             if (defaultJobId) {
               jobSelect.value = defaultJobId;
@@ -19261,14 +19321,14 @@
       var inSumme = k.in_summe === false || k.in_summe === 0 || k.in_summe === '0' ? false : true;
       return '<tr class="schleppketten-kette-row" data-idx="' + idx + '">' +
         '<td class="sk-col-nr"><span class="sk-num">' + (idx + 1) + '</span></td>' +
-        '<td class="sk-col-ketten-tag"><input type="text" name="kette_tag" value="' + val('tag') + '" autocomplete="off" placeholder="Name"></td>' +
+        '<td class="sk-col-ketten-tag"><input type="text" name="kette_tag" value="' + val('tag') + '" autocomplete="off" placeholder="Name" data-i18n-placeholder-en="Name"></td>' +
         '<td class="sk-col-ketten-type"><input type="text" name="ketten_type" value="' + val('ketten_type') + '" autocomplete="off"></td>' +
         '<td class="sk-col-num"><input type="text" name="laenge" data-sk-kette-calc value="' + val('laenge') + '" inputmode="decimal" autocomplete="off"></td>' +
         '<td class="sk-col-num"><input type="text" name="gewicht_pro_kette" data-sk-kette-calc value="' + val('gewicht_pro_kette') + '" inputmode="decimal" autocomplete="off"></td>' +
-        '<td class="sk-col-num"><input type="text" name="gewicht_pro_meter" value="' + val('gewicht_pro_meter') + '" inputmode="decimal" autocomplete="off" title="Wird aus Gewicht/Länge berechnet, ist aber editierbar"></td>' +
+        '<td class="sk-col-num"><input type="text" name="gewicht_pro_meter" value="' + val('gewicht_pro_meter') + '" inputmode="decimal" autocomplete="off" title="Wird aus Gewicht/Länge berechnet, ist aber editierbar" data-i18n-title-en="Calculated from weight/length, still editable"></td>' +
         '<td class="sk-col-act"><div class="sk-act-wrap">' +
-        '<input type="checkbox" class="sk-in-summe" name="kette_in_summe" title="Kette verwenden / in Summe"' + (inSumme ? ' checked' : '') + '>' +
-        '<button type="button" class="btn btn-ghost sk-kette-remove" title="Kette entfernen">×</button>' +
+        '<input type="checkbox" class="sk-in-summe" name="kette_in_summe" title="Kette verwenden / in Summe" data-i18n-title-en="Use chain / include in total"' + (inSumme ? ' checked' : '') + '>' +
+        '<button type="button" class="btn btn-ghost sk-kette-remove" title="Kette entfernen" data-i18n-title-en="Remove chain">×</button>' +
         '</div></td></tr>';
     }
     function bindKetteRow(rowEl) {
@@ -19302,6 +19362,7 @@
       kettenContainer.innerHTML = ketten.map(function (_, i) { return buildKetteRowHtml(i); }).join('');
       kettenContainer.querySelectorAll('.schleppketten-kette-row').forEach(bindKetteRow);
       updateKettenSummeRow();
+      refreshProtocolFormLang('viewProtokolleSchleppketten');
     }
     function updateSummeRow() {
       var sumRow = document.getElementById('schleppkettenSummeRow');
@@ -19352,15 +19413,15 @@
         '<td class="sk-col-nr"><span class="sk-num">' + (idx + 1) + '</span></td>' +
         '<td class="sk-col-num"><input type="text" name="bandwaage_t" data-sk-calc value="' + val('bandwaage_t') + '" inputmode="decimal" autocomplete="off"></td>' +
         '<td class="sk-col-num"><input type="text" name="pruefkette_t" class="sk-calc-field" value="' + val('pruefkette_t') + '" readonly tabindex="-1" autocomplete="off"></td>' +
-        '<td class="sk-col-num"><input type="text" name="kg_pro_m" data-sk-calc value="' + val('kg_pro_m') + '" inputmode="decimal" autocomplete="off" title="Übernahme aus Summe Gewicht/Meter der Ketten, editierbar"></td>' +
+        '<td class="sk-col-num"><input type="text" name="kg_pro_m" data-sk-calc value="' + val('kg_pro_m') + '" inputmode="decimal" autocomplete="off" title="Übernahme aus Summe Gewicht/Meter der Ketten, editierbar" data-i18n-title-en="Taken from chain weight/metre total, still editable"></td>' +
         '<td class="sk-col-num"><input type="text" name="geschwindigkeit_ms" data-sk-calc value="' + val('geschwindigkeit_ms') + '" inputmode="decimal" autocomplete="off"></td>' +
         '<td class="sk-col-num"><input type="text" name="messzeit_s" data-sk-calc value="' + val('messzeit_s') + '" inputmode="decimal" autocomplete="off"></td>' +
         '<td class="sk-col-num"><input type="text" name="fehler_prozent" class="sk-calc-field" value="' + val('fehler_prozent') + '" readonly tabindex="-1"></td>' +
         '<td class="sk-col-num"><input type="text" name="leistung_th" class="sk-calc-field" value="' + val('leistung_th') + '" readonly tabindex="-1" autocomplete="off"></td>' +
         '<td class="sk-col-bem"><input type="text" name="bemerkung" value="' + val('bemerkung') + '"></td>' +
         '<td class="sk-col-act"><div class="sk-act-wrap">' +
-        '<input type="checkbox" class="sk-in-summe" name="in_summe" title="In Summe"' + (inSumme ? ' checked' : '') + '>' +
-        '<button type="button" class="btn btn-ghost sk-remove" title="Entfernen">×</button>' +
+        '<input type="checkbox" class="sk-in-summe" name="in_summe" title="In Summe" data-i18n-title-en="Include in total"' + (inSumme ? ' checked' : '') + '>' +
+        '<button type="button" class="btn btn-ghost sk-remove" title="Entfernen" data-i18n-title-en="Remove">×</button>' +
         '</div></td></tr>';
     }
     function bindRow(rowEl) {
@@ -19385,6 +19446,7 @@
       zeilenContainer.innerHTML = messungen.map(function (_, i) { return buildRowHtml(i); }).join('');
       zeilenContainer.querySelectorAll('.schleppketten-row').forEach(bindRow);
       updateSummeRow();
+      refreshProtocolFormLang('viewProtokolleSchleppketten');
     }
     function renderFabButtonsActive() {
       if (!fabButtonsEl) return;
@@ -19982,10 +20044,11 @@
 
     window.openProtokolleSchleppketten = function () {
       loadJobs().then(function (jobs) {
-        jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
+        jobSelect.innerHTML = '<option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>' +
           jobs.map(function (j) {
             return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
           }).join('');
+        refreshProtocolFormLang('viewProtokolleSchleppketten');
         var defaultJobId = typeof resolveTodayProtokollJobId === 'function' ? resolveTodayProtokollJobId(jobs) : 0;
         if (defaultJobId) {
           jobSelect.value = defaultJobId;
@@ -20841,10 +20904,11 @@
 
     window.openProtokollePruefzertifikat = function () {
       loadJobs().then(function (jobs) {
-        jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
+        jobSelect.innerHTML = '<option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>' +
           (jobs || []).map(function (j) {
             return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
           }).join('');
+        refreshProtocolFormLang('viewProtokollePruefzertifikat');
         var defaultJobId = typeof resolveTodayProtokollJobId === 'function' ? resolveTodayProtokollJobId(jobs || []) : 0;
         if (defaultJobId) {
           jobSelect.value = String(defaultJobId);
@@ -22755,8 +22819,7 @@
       var hasDe = list.indexOf('de') >= 0;
       var hasEn = list.indexOf('en') >= 0;
       if (hasEn && !hasDe) return en || de;
-      if (hasDe && !hasEn) return de || en;
-      return combineBilingualLabel(de, en);
+      return de || en;
     }
 
     function mergeServiceprotokollKopf(apiKopf, jobKopf) {
@@ -22780,7 +22843,11 @@
       var status = s.status || 'na';
       var rowClass = 'serviceprotokoll-step sp-step-row sp-step-' + status;
       var display = stepDisplayLabel(s.bezeichnung_de, s.bezeichnung_en);
-      var textCell = '<input type="text" class="sp-step-label-input" value="' + escapeHtml(display) + '" placeholder="Arbeitsschritt" readonly>' +
+      var uiLang = protocolUiLang('spPdfDe', 'spPdfEn');
+      var phStep = uiLang === 'en' ? 'Work step' : 'Arbeitsschritt';
+      var phOpt = uiLang === 'en' ? 'optional' : 'optional';
+      var delTitle = uiLang === 'en' ? 'Delete row' : 'Zeile löschen';
+      var textCell = '<input type="text" class="sp-step-label-input" value="' + escapeHtml(display) + '" placeholder="' + escapeHtml(phStep) + '" readonly>' +
         '<input type="hidden" class="sp-bezeichnung-de" value="' + escapeHtml(s.bezeichnung_de || '') + '">' +
         '<input type="hidden" class="sp-bezeichnung-en" value="' + escapeHtml(s.bezeichnung_en || '') + '">';
       return '<tr class="' + rowClass + '" data-idx="' + idx + '" data-status="' + escapeHtml(status) + '">' +
@@ -22791,8 +22858,8 @@
         '<button type="button" class="btn btn-ghost sp-status' + (status === 'na' ? ' is-active' : '') + '" data-status="na">n.a.</button>' +
         '</div></td>' +
         '<td class="sp-col-text">' + textCell + '</td>' +
-        '<td class="sp-col-bem"><input type="text" class="sp-bemerkung" value="' + escapeHtml(s.bemerkung || '') + '" placeholder="optional"></td>' +
-        '<td class="sp-col-act"><button type="button" class="btn btn-ghost sp-remove" title="Zeile löschen" aria-label="Zeile löschen"><img class="sp-v2-icon" src="icons/x-delete-green.svg" alt="" aria-hidden="true"></button></td></tr>';
+        '<td class="sp-col-bem"><input type="text" class="sp-bemerkung" value="' + escapeHtml(s.bemerkung || '') + '" placeholder="' + escapeHtml(phOpt) + '"></td>' +
+        '<td class="sp-col-act"><button type="button" class="btn btn-ghost sp-remove" title="' + escapeHtml(delTitle) + '" aria-label="' + escapeHtml(delTitle) + '"><img class="sp-v2-icon" src="icons/x-delete-green.svg" alt="" aria-hidden="true"></button></td></tr>';
     }
 
     function syncStepsFromDom() {
@@ -22819,7 +22886,9 @@
     function renderSteps() {
       if (!stepsContainer) return;
       if (!arbeitsschritte.length) {
-        stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">FN wählen, um Arbeitsschritte zu laden.</td></tr>';
+        stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">' +
+          (protocolUiLang('spPdfDe', 'spPdfEn') === 'en' ? 'Select a serial number to load work steps.' : 'FN wählen, um Arbeitsschritte zu laden.') +
+          '</td></tr>';
         return;
       }
       stepsContainer.innerHTML = arbeitsschritte.map(function (_, i) { return buildStepRowHtml(i); }).join('');
@@ -22858,6 +22927,7 @@
           renderSteps();
         });
       });
+      refreshProtocolFormLang('viewProtokolleService');
     }
 
     async function resetArbeitsschritteToDefaults() {
@@ -24020,10 +24090,11 @@
       loadServiceJobs().then(function (jobs) {
         rememberServiceAssignedJobs(jobs);
         if (jobSelect) {
-          jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>' +
+          jobSelect.innerHTML = '<option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>' +
             jobs.map(function (j) {
               return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
             }).join('');
+          refreshProtocolFormLang('viewProtokolleService');
         }
         notifyReactBridge(true);
         serviceJobData = null;

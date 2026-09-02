@@ -491,6 +491,31 @@ function markSynced(db, localId, serverId, extra) {
     extra.local_uuid ? String(extra.local_uuid) : '',
     n,
   );
+  clearFailedPending(db, n);
+}
+
+function markDirty(db, localId) {
+  const n = parseInt(localId, 10);
+  if (!Number.isFinite(n) || n <= 0) return;
+  db.prepare(`UPDATE documents SET dirty = 1, updated_at = datetime('now') WHERE id = ?`).run(n);
+}
+
+function clearFailedPending(db, localId) {
+  const n = parseInt(localId, 10);
+  if (!Number.isFinite(n) || n <= 0 || !db) return;
+  try {
+    db.prepare(
+      `DELETE FROM pending_changes_failed WHERE entity_type = 'arbeitsnachweis' AND CAST(entity_id AS INTEGER) = ?`,
+    ).run(n);
+  } catch (_) {
+    try {
+      db.prepare(
+        `DELETE FROM pending_changes_failed WHERE entity_type = 'arbeitsnachweis' AND entity_id = ?`,
+      ).run(String(n));
+    } catch (_2) {
+      /* schema ohne pending_changes_failed */
+    }
+  }
 }
 
 function markTimesheetApplied(db, localId) {
@@ -528,6 +553,41 @@ function fromDispoPublic(payload) {
     }),
     items: Array.isArray(payload.items) ? payload.items : [],
   };
+}
+
+function contentWeight(payload) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const items = Array.isArray(p.items) ? p.items : [];
+  const an = p.arbeitsnachweis && typeof p.arbeitsnachweis === 'object' ? p.arbeitsnachweis : {};
+  let n = 0;
+  items.forEach((row) => {
+    if (!row || typeof row !== 'object') return;
+    if (row.item_type === 'arbeitszeile') {
+      const hrs =
+        (parseFloat(row.normal_hours) || 0) +
+        (parseFloat(row.overtime_50) || 0) +
+        (parseFloat(row.overtime_100) || 0);
+      if (String(row.description || '').trim() || String(row.item_time || '').trim() || hrs > 0) n += 3;
+      else if (row.item_date) n += 1;
+    } else if (row.item_type === 'ersatzteil') {
+      if (String(row.designation || '').trim() || parseFloat(row.quantity) > 0) n += 2;
+    }
+  });
+  ['car_info', 'living_costs', 'remarks', 'signer_name'].forEach((k) => {
+    if (String(an[k] || '').trim()) n += 2;
+  });
+  ['start_km', 'end_km', 'total_km'].forEach((k) => {
+    if (an[k] != null && an[k] !== '') n += 1;
+  });
+  return n;
+}
+
+function resolveSavePayload(snapshot, localPayload) {
+  if (localPayload && (!snapshot || contentWeight(localPayload) >= contentWeight(snapshot))) {
+    const meta = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    return Object.assign({}, meta, localPayload);
+  }
+  return snapshot || localPayload || null;
 }
 
 function toDispoSavePayload(loaded) {
@@ -589,8 +649,12 @@ module.exports = {
   toPublic,
   fromDispoPublic,
   markSynced,
+  markDirty,
   markTimesheetApplied,
+  contentWeight,
+  resolveSavePayload,
   toDispoSavePayload,
   queuePending,
+  clearFailedPending,
   resolveJobIds,
 };

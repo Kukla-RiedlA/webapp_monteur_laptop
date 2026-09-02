@@ -35,6 +35,8 @@ function isPermanentSyncPushError(err) {
   const msg = err && err.message ? String(err.message) : String(err || '');
   if (!msg) return false;
   if (isLikelyOfflineSyncError(err)) return false;
+  // Apache liefert den Login oft nicht an PHP — Retry, nicht sofort aufgeben.
+  if (/Token fehlt/i.test(msg)) return false;
   if (
     /syntax error|parse error|unexpected identifier|unexpected token|ParseError|CompileError/i.test(
       msg,
@@ -42,8 +44,8 @@ function isPermanentSyncPushError(err) {
   ) {
     return true;
   }
-  if (/\b(401|403|404|405|409|410|422)\b/.test(msg)) return true;
-  if (/^Dispo:\s*(401|403|404|405|409|410|422)\b/i.test(msg)) return true;
+  if (/\b(401|403|404|405|409|410|422)\b/.test(msg) && !/Token fehlt/i.test(msg)) return true;
+  if (/^Dispo:\s*(401|403|404|405|409|410|422)\b/i.test(msg) && !/Token fehlt/i.test(msg)) return true;
   if (
     /nicht erlaubt|Method not allowed|unautorisiert|unauthorized|forbidden|nicht gefunden|not found|erforderlich|ungültig|ungueltig|JSON-Body|Validierung|validation/i.test(
       msg,
@@ -52,6 +54,7 @@ function isPermanentSyncPushError(err) {
     return true;
   }
   if (err && Number.isFinite(err.status) && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
+    if (err.status === 401 && /Token fehlt/i.test(msg)) return false;
     return true;
   }
   return false;

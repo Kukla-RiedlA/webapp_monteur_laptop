@@ -1,26 +1,26 @@
 import type { MeasurementRow } from '../types';
+import { t, type UiLang } from '../i18n';
 
 interface MeasurementTableProps {
   rows: MeasurementRow[];
-  displayLang?: 'de' | 'en' | 'both';
+  displayLang?: UiLang;
   onChange: (id: string, field: keyof Omit<MeasurementRow, 'id' | 'label' | 'labelDe' | 'labelEn'>, value: string) => void;
 }
 
-function measurementLabel(row: MeasurementRow, displayLang: 'de' | 'en' | 'both'): string {
+function measurementLabel(row: MeasurementRow, displayLang: UiLang): string {
   const de = String(row.labelDe || '').trim();
   const en = String(row.labelEn || '').trim();
   if (displayLang === 'en') return en || de || row.label;
-  if (displayLang === 'de') return de || en || row.label;
-  return row.label || (de && en && de !== en ? de + ' / ' + en : de || en);
+  return de || en || row.label;
 }
 
-export function MeasurementTable({ rows, displayLang = 'both', onChange }: MeasurementTableProps) {
+export function MeasurementTable({ rows, displayLang = 'de', onChange }: MeasurementTableProps) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr className="sp-table-head">
-            <th className="sp-table-cell w-[36%] text-left">{displayLang === 'en' ? 'Point' : 'Messpunkt'}</th>
+            <th className="sp-table-cell w-[36%] text-left">{t(displayLang, 'point')}</th>
             <th className="sp-table-cell text-center">kg</th>
             <th className="sp-table-cell text-center">mV</th>
             <th className="sp-table-cell text-center">mA</th>

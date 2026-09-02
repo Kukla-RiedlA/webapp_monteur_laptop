@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "2.6.33",
+  "version": "2.6.34",
   "description": "Monteur WebApp - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -24,7 +24,7 @@
     "test:montagebericht-pdf-pagebreak:open": "node ./node_modules/electron/cli.js scripts/test-montagebericht-pdf-pagebreak.js --open",
     "test:serviceprotokoll-pdf": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js",
     "test:serviceprotokoll-pdf:open": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js --open",
-    "test:sync-offline": "node --test lib/sync-lww.test.js lib/sync-offline-verify.test.js",
+    "test:sync-offline": "node --test lib/sync-lww.test.js lib/sync-offline-verify.test.js lib/arbeitsnachweis-weight.test.js",
     "test:dispo-probe": "node --test lib/dispo-probe.test.js"
   },
   "devDependencies": {

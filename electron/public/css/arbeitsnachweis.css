@@ -241,6 +241,29 @@
   text-transform: uppercase;
   color: #0c6a4d;
 }
+.an-preview-sig-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 6px;
+  width: 100%;
+}
+.an-preview-sig-name {
+  min-width: 0;
+  font-size: 0.88rem;
+  font-weight: 650;
+  color: #1a1a1a;
+}
+.an-preview-sig-time {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  color: #6b7280;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .an-preview-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.9rem; }
 .an-sig-status { margin-top: 0.5rem; font-size: 0.9rem; color: #0e7b5a; }
 
@@ -279,12 +302,28 @@
 .an-pv-meta {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px 20px;
+  gap: 0;
   background: #e8f4ec;
   border: 1px solid #cfe8d1;
   border-radius: 8px;
-  padding: 12px 14px;
+  padding: 0;
   margin-bottom: 1rem;
+  overflow: hidden;
+}
+.an-pv-meta-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.an-pv-meta-col + .an-pv-meta-col {
+  border-left: 1px solid #cfe8d1;
+}
+.an-pv-meta-row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
 }
 .an-pv-kv { min-width: 0; }
 .an-pv-span { grid-column: 1 / -1; }
@@ -308,21 +347,18 @@
 .an-pv-addr { display: flex; flex-direction: column; gap: 1px; }
 .an-pv-v-line { display: block; }
 .an-pv-km {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: flex-start;
-  gap: 0.35rem 1.15rem;
-  width: max-content;
-  max-width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) repeat(3, minmax(0, 1fr));
+  gap: 6px 10px;
+  width: 100%;
 }
 .an-pv-km-col {
-  min-width: 4.6rem;
-  text-align: center;
+  min-width: 0;
+  text-align: left;
 }
-.an-pv-km-col--car { min-width: 5.6rem; }
+.an-pv-km-col--car { min-width: 0; }
 .an-pv-km .an-pv-k,
-.an-pv-km .an-pv-v { text-align: center; }
+.an-pv-km .an-pv-v { text-align: left; }
 .an-pv-km .an-pv-v {
   min-height: 1.2em;
   font-variant-numeric: tabular-nums;
@@ -395,6 +431,7 @@
 }
 @media (max-width: 700px) {
   .an-pv-meta { grid-template-columns: 1fr; }
+  .an-pv-meta-col + .an-pv-meta-col { border-left: 0; border-top: 1px solid #cfe8d1; }
   .an-pv-head { flex-wrap: wrap; }
   .an-pv-nr { margin-left: 0; }
 }

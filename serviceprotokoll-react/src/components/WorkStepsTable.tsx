@@ -1,9 +1,10 @@
 import type { StepResult, WorkStep } from '../types';
 import { SpIcon } from './SpIcon';
+import { t, type UiLang } from '../i18n';
 
 interface WorkStepsTableProps {
   steps: WorkStep[];
-  displayLang: 'de' | 'en' | 'both';
+  displayLang: UiLang;
   onResultChange: (id: string, result: StepResult) => void;
   onRemarkChange: (id: string, remark: string) => void;
   onDelete: (id: string) => void;
@@ -11,12 +12,10 @@ interface WorkStepsTableProps {
   onReset: () => void;
 }
 
-function stepLabel(step: WorkStep, displayLang: 'de' | 'en' | 'both'): string {
+function stepLabel(step: WorkStep, displayLang: UiLang): string {
   const de = String(step.labelDe || '').trim();
   const en = String(step.labelEn || '').trim();
   if (displayLang === 'en') return en || de || step.label;
-  if (displayLang === 'de') return de || en || step.label;
-  if (de && en && de !== en) return de + ' / ' + en;
   return de || en || step.label;
 }
 
@@ -33,10 +32,10 @@ export function WorkStepsTable({ steps, displayLang, onResultChange, onRemarkCha
         <table className="w-full min-w-[760px] border-collapse text-sm">
           <thead>
             <tr className="sp-table-head">
-              <th className="sp-table-cell w-10">{displayLang === 'en' ? 'No.' : 'Nr'}</th>
-              <th className="sp-table-cell w-[9.5rem]">{displayLang === 'en' ? 'Result' : 'Ergebnis'}</th>
-              <th className="sp-table-cell w-[22%]">{displayLang === 'en' ? 'Work step' : 'Arbeitsschritt (kurz)'}</th>
-              <th className="sp-table-cell">{displayLang === 'en' ? 'Remark' : 'Bemerkung'}</th>
+              <th className="sp-table-cell w-10">{t(displayLang, 'no')}</th>
+              <th className="sp-table-cell w-[9.5rem]">{t(displayLang, 'result')}</th>
+              <th className="sp-table-cell w-[22%]">{t(displayLang, 'workStep')}</th>
+              <th className="sp-table-cell">{t(displayLang, 'remark')}</th>
               <th className="sp-table-cell w-12 text-center"> </th>
             </tr>
           </thead>
@@ -76,7 +75,7 @@ export function WorkStepsTable({ steps, displayLang, onResultChange, onRemarkCha
                 <td className="sp-table-cell p-1 text-center">
                   <button
                     type="button"
-                    aria-label="Zeile löschen"
+                    aria-label={t(displayLang, 'deleteRow')}
                     onClick={() => onDelete(step.id)}
                     className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-kukla-border bg-white hover:bg-kukla-mint"
                   >
@@ -95,14 +94,14 @@ export function WorkStepsTable({ steps, displayLang, onResultChange, onRemarkCha
           className="inline-flex items-center gap-1.5 rounded-md border border-kukla-border bg-white px-3 py-1.5 text-sm font-semibold text-kukla-green hover:bg-kukla-mint/50"
         >
           <SpIcon name="Plus" className="h-4 w-4" />
-          weiteren Arbeitsschritt hinzufügen
+          {t(displayLang, 'addStep')}
         </button>
         <button
           type="button"
           onClick={onReset}
           className="inline-flex items-center gap-1.5 rounded-md border border-kukla-border bg-white px-3 py-1.5 text-sm font-semibold text-[#4b5563] hover:bg-kukla-mint/50"
         >
-          Liste zurücksetzen
+          {t(displayLang, 'resetList')}
         </button>
       </div>
     </div>

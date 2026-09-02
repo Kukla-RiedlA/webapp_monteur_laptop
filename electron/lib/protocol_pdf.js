@@ -3768,7 +3768,7 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   const L = {
     title: de ? 'ARBEITSNACHWEIS' : 'WORKING REPORT',
     titleSub: de ? 'Working Report' : 'Arbeitsnachweis',
-    no: de ? 'Nr.' : 'No.',
+    nr: de ? 'Nr.' : 'No.',
     customer: de ? 'Auftraggeber' : 'Customer',
     site: de ? 'Baustelle' : 'Site',
     type: de ? 'Typ / Type' : 'Type',
@@ -3781,7 +3781,7 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     living: de ? 'Tagesauslösen' : 'Living costs',
     overnight: de ? 'Nächtigung beigestellt' : 'Overnight stay provided',
     yes: de ? 'Ja' : 'Yes',
-    no: de ? 'Nein' : 'No',
+    noVal: de ? 'Nein' : 'No',
     date: de ? 'Datum' : 'Date',
     time: de ? 'Zeit' : 'Time',
     works: de ? 'Durchgeführte Arbeiten' : 'Executed works',
@@ -3827,6 +3827,29 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!m) return S(s);
     return m[3] + '.' + m[2] + '.' + m[1];
+  }
+  function fmtDateTime(v) {
+    const s = String(v || '').trim();
+    if (!s) return '';
+    if (/^\d{2}\.\d{2}\.\d{4}/.test(s)) return S(s);
+    const iso = s.includes('T') ? s : s.replace(' ', 'T');
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return S(s);
+    const p2 = (n) => String(n).padStart(2, '0');
+    return p2(d.getDate()) + '.' + p2(d.getMonth() + 1) + '.' + d.getFullYear()
+      + '  ' + p2(d.getHours()) + ':' + p2(d.getMinutes());
+  }
+  function pickCustomerSignedAt() {
+    const direct = payload && (payload.customer_signed_at || payload.customer_signature_at);
+    if (direct) return String(direct);
+    const sigs = Array.isArray(payload && payload.signatures) ? payload.signatures : [];
+    for (const s of sigs) {
+      if (!s || s.signer_type !== 'kunde') continue;
+      if (s.invalidated_at) continue;
+      if (s.signed_at) return String(s.signed_at);
+    }
+    if (payload && payload.customer_signature_png) return new Date().toISOString();
+    return '';
   }
 
   const pages = [];
@@ -3885,7 +3908,7 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     yTop -= headerBandH;
     page.drawRectangle({ x: marginX, y: yTop - 3, width: tableInnerW, height: 3, color: green });
     if (number) {
-      const nr = L.no + ' ' + number;
+      const nr = L.nr + ' ' + number;
       const tw = fontBold.widthOfTextAtSize(nr, 9);
       page.drawText(nr, { x: PAGE_W - marginX - tw, y: yTop - 16, size: 9, font: fontBold, color: greenDark });
     }
@@ -3914,6 +3937,12 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     if (!t.trim()) return;
     const tw = useFont.widthOfTextAtSize(t, size);
     pg.drawText(t, { x: x + Math.max(0, (w - tw) / 2), y: yy, size, font: useFont, color });
+  }
+  function drawRight(pg, text, rightX, yy, size, useFont, color) {
+    const t = String(text == null ? '' : text);
+    if (!t.trim()) return;
+    const tw = useFont.widthOfTextAtSize(t, size);
+    pg.drawText(t, { x: rightX - tw, y: yy, size, font: useFont, color });
   }
   function kmDisp(v) {
     if (v == null || v === '') return '';
@@ -3946,26 +3975,28 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   const car = S(an.car_info || '').trim();
   const pad = 10;
   const halfW = tableInnerW / 2;
-  const colMaxW = halfW - pad * 2;
-  const siteMaxW = tableInnerW - pad * 2;
-  const custLines = wrapPdfPlain(fontBold, customerName || '', 9, colMaxW).filter((ln) => String(ln || '').trim());
-  const techLines = wrapPdfPlain(fontBold, S(an.technician_name || ''), 9, colMaxW).filter((ln) => String(ln || '').trim());
+  const colInnerW = halfW - pad * 2;
+  const leftX = marginX + pad;
+  const rightX = marginX + halfW + pad;
+  const custLines = wrapPdfPlain(fontBold, customerName || '', 9, colInnerW).filter((ln) => String(ln || '').trim());
+  const techLines = wrapPdfPlain(fontBold, S(an.technician_name || ''), 9, colInnerW).filter((ln) => String(ln || '').trim());
   const siteWrapped = [];
   siteLines.forEach((ln) => {
-    wrapPdfPlain(fontBold, ln, 9, siteMaxW).forEach((wln) => {
+    wrapPdfPlain(fontBold, ln, 9, colInnerW).forEach((wln) => {
       if (String(wln || '').trim()) siteWrapped.push(wln);
     });
   });
-  const kmInner = tableInnerW - pad * 2;
-  const kmGap = 8;
-  const carW = Math.floor(kmInner * 0.34);
-  const kmW = Math.floor((kmInner - carW - kmGap * 3) / 3);
-  const carWrap = wrapPdfPlain(fontBold, car, 9, Math.max(24, carW - 4)).filter((ln) => String(ln || '').trim());
-  const kmRowH = 14 + Math.max(12, carWrap.length * 11);
-  const topRowH = 12 + Math.max(custLines.length, techLines.length, 1) * 11 + 6;
-  const siteH = 12 + Math.max(siteWrapped.length, 1) * 11 + 4;
-  const extraH = living || overnight ? 24 : 0;
-  const metaH = pad * 2 + topRowH + siteH + kmRowH + extraH;
+  const kmGap = 6;
+  const kmColW = Math.floor((colInnerW - kmGap * 3) / 4);
+  const carWrap = wrapPdfPlain(fontBold, car, 9, Math.max(18, kmColW - 2)).filter((ln) => String(ln || '').trim());
+  const kmValH = Math.max(12, carWrap.length * 11);
+  const kmRowH = 12 + kmValH + 4;
+  const costsH = 24;
+  const blockGap = 8;
+  const leftH = 12 + Math.max(custLines.length, 1) * 11 + blockGap
+    + 12 + Math.max(siteWrapped.length, 1) * 11;
+  const rightH = 12 + Math.max(techLines.length, 1) * 11 + blockGap + kmRowH + blockGap + costsH;
+  const metaH = pad * 2 + Math.max(leftH, rightH);
 
   page.drawRectangle({
     x: marginX,
@@ -3976,57 +4007,64 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     borderColor: greenSoft,
     borderWidth: 0.8,
   });
-
-  let my = y - pad - 2;
-  drawTxt(page, S(L.customer), { x: marginX + pad, y: my, size: 7, font, color: grayMuted });
-  drawTxt(page, S(L.tech), { x: marginX + halfW + pad, y: my, size: 7, font, color: grayMuted });
-  my -= 11;
-  const nameLines = Math.max(custLines.length, techLines.length, 1);
-  for (let i = 0; i < nameLines; i++) {
-    drawTxt(page, custLines[i] || '', { x: marginX + pad, y: my, size: 9, font: fontBold, color: grayText });
-    drawTxt(page, techLines[i] || '', { x: marginX + halfW + pad, y: my, size: 9, font: fontBold, color: grayText });
-    my -= 11;
-  }
-  my -= 5;
-  drawTxt(page, S(L.site), { x: marginX + pad, y: my, size: 7, font, color: grayMuted });
-  my -= 11;
-  if (siteWrapped.length) {
-    siteWrapped.forEach((wln) => {
-      drawTxt(page, wln, { x: marginX + pad, y: my, size: 9, font: fontBold, color: grayText });
-      my -= 11;
-    });
-  } else {
-    my -= 11;
-  }
-  my -= 4;
-  const kmCols = [
-    { lab: L.car, valLines: carWrap, w: carW },
-    { lab: L.startKm, valLines: kmDisp(an.start_km) ? [kmDisp(an.start_km)] : [], w: kmW },
-    { lab: L.endKm, valLines: kmDisp(an.end_km) ? [kmDisp(an.end_km)] : [], w: kmW },
-    { lab: L.totalKm, valLines: kmDisp(an.total_km) ? [kmDisp(an.total_km)] : [], w: kmW },
-  ];
-  let kx = marginX + pad;
-  kmCols.forEach((c) => {
-    drawCentered(page, S(c.lab), kx, c.w, my, 7, font, grayMuted);
-    (c.valLines || []).forEach((ln, li) => {
-      drawCentered(page, ln, kx, c.w, my - 12 - li * 11, 9, fontBold, grayText);
-    });
-    kx += c.w + kmGap;
+  page.drawLine({
+    start: { x: marginX + halfW, y: y - 7 },
+    end: { x: marginX + halfW, y: y - metaH + 7 },
+    thickness: 0.6,
+    color: greenSoft,
   });
-  my -= kmRowH;
-  if (living || overnight) {
-    drawTxt(page, S(L.living), { x: marginX + pad, y: my, size: 7, font, color: grayMuted });
-    drawTxt(page, S(L.overnight), { x: marginX + halfW + pad, y: my, size: 7, font, color: grayMuted });
-    my -= 11;
-    drawTxt(page, living, { x: marginX + pad, y: my, size: 9, font: fontBold, color: grayText });
-    drawTxt(page, overnight ? L.yes : L.no, {
-      x: marginX + halfW + pad,
-      y: my,
-      size: 9,
-      font: fontBold,
-      color: grayText,
+
+  const y0 = y - pad - 2;
+  let ly = y0;
+  drawTxt(page, S(L.customer), { x: leftX, y: ly, size: 7, font, color: grayMuted });
+  ly -= 11;
+  (custLines.length ? custLines : ['']).forEach((ln) => {
+    drawTxt(page, ln, { x: leftX, y: ly, size: 9, font: fontBold, color: grayText });
+    ly -= 11;
+  });
+  ly -= blockGap;
+  drawTxt(page, S(L.site), { x: leftX, y: ly, size: 7, font, color: grayMuted });
+  ly -= 11;
+  (siteWrapped.length ? siteWrapped : ['']).forEach((ln) => {
+    drawTxt(page, ln, { x: leftX, y: ly, size: 9, font: fontBold, color: grayText });
+    ly -= 11;
+  });
+
+  let ry = y0;
+  drawTxt(page, S(L.tech), { x: rightX, y: ry, size: 7, font, color: grayMuted });
+  ry -= 11;
+  (techLines.length ? techLines : ['']).forEach((ln) => {
+    drawTxt(page, ln, { x: rightX, y: ry, size: 9, font: fontBold, color: grayText });
+    ry -= 11;
+  });
+  ry -= blockGap;
+  const kmCols = [
+    { lab: L.car, valLines: carWrap },
+    { lab: L.startKm, valLines: kmDisp(an.start_km) ? [kmDisp(an.start_km)] : [] },
+    { lab: L.endKm, valLines: kmDisp(an.end_km) ? [kmDisp(an.end_km)] : [] },
+    { lab: L.totalKm, valLines: kmDisp(an.total_km) ? [kmDisp(an.total_km)] : [] },
+  ];
+  let kx = rightX;
+  kmCols.forEach((c) => {
+    drawTxt(page, S(c.lab), { x: kx, y: ry, size: 7, font, color: grayMuted });
+    (c.valLines && c.valLines.length ? c.valLines : ['']).forEach((ln, li) => {
+      drawTxt(page, ln, { x: kx, y: ry - 12 - li * 11, size: 9, font: fontBold, color: grayText });
     });
-  }
+    kx += kmColW + kmGap;
+  });
+  ry -= kmRowH + blockGap;
+  const costW = Math.floor((colInnerW - kmGap) / 2);
+  drawTxt(page, S(L.living), { x: rightX, y: ry, size: 7, font, color: grayMuted });
+  drawTxt(page, S(L.overnight), { x: rightX + costW + kmGap, y: ry, size: 7, font, color: grayMuted });
+  ry -= 11;
+  drawTxt(page, living, { x: rightX, y: ry, size: 9, font: fontBold, color: grayText });
+  drawTxt(page, overnight ? L.yes : L.noVal, {
+    x: rightX + costW + kmGap,
+    y: ry,
+    size: 9,
+    font: fontBold,
+    color: grayText,
+  });
   y -= metaH + 14;
 
   const colDate = 54;
@@ -4228,7 +4266,7 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   });
   y -= 8;
   const sigW = (tableInnerW - 16) / 2;
-  function drawSigBox(x, img, label, name) {
+  function drawSigBox(x, img, label, name, signedAt) {
     page.drawText(S(label), { x: x, y: y, size: 7, font, color: grayMuted });
     page.drawRectangle({
       x: x,
@@ -4248,13 +4286,24 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
         height: img.height * scale,
       });
     }
+    const nameY = y - sigH - 16;
+    const stamp = signedAt ? fmtDateTime(signedAt) : '';
+    const stampW = stamp ? font.widthOfTextAtSize(stamp, 8) : 0;
+    const nameMaxW = stamp ? Math.max(40, sigW - stampW - 8) : sigW;
     if (name) {
-      page.drawText(S(name), { x: x, y: y - sigH - 16, size: 8, font, color: grayText });
+      let nm = S(name);
+      while (nm.length > 1 && font.widthOfTextAtSize(nm, 8) > nameMaxW) {
+        nm = nm.slice(0, -1);
+      }
+      page.drawText(nm, { x: x, y: nameY, size: 8, font, color: grayText });
+    }
+    if (stamp) {
+      drawRight(page, stamp, x + sigW, nameY, 8, font, grayMuted);
     }
   }
   const custName = S((payload && payload.customer_signer_name) || '').trim();
   drawSigBox(marginX, techSig, L.sigTech, S(an.technician_name || ''));
-  drawSigBox(marginX + sigW + 16, custSig, L.sigCust, custName);
+  drawSigBox(marginX + sigW + 16, custSig, L.sigCust, custName, pickCustomerSignedAt());
 
   const count = pages.length;
   pages.forEach((p, idx) => {

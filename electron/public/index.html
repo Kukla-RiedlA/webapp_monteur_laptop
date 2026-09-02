@@ -69,6 +69,7 @@
     .btn-primary:hover { background: var(--btn-primary-hover); }
     .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--accent); }
     .btn-ghost:hover { background: var(--accent); }
+    [data-form-lang="en"] .i18n-hide-when-en { display: none !important; }
     .sp-fab-buttons { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.35rem; }
     .sp-fab-buttons .sp-fab-btn { min-width: 4.5rem; padding: 0.4rem 0.75rem; font-size: 0.9rem; }
     .sp-fab-buttons .sp-fab-btn.is-active { background: var(--accent); font-weight: 600; }
@@ -1747,7 +1748,7 @@
         <div class="sp-v2-topbar-title-wrap">
           <h2 class="sp-v2-page-title">
             <img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true">
-            <span>Arbeitsnachweis</span>
+            <span data-i18n-en="Working report">Arbeitsnachweis</span>
             <span id="anAutosaveHint" class="an-doc-status">Entwurf</span>
           </h2>
         </div>
@@ -1766,11 +1767,11 @@
         <input type="hidden" id="anTimesheetApplied" value="0">
 
         <section class="sp-v2-section" aria-labelledby="anSec1Title">
-          <header class="sp-v2-section-head" id="anSec1Title"><span class="sp-v2-num">1</span> Auftrag &amp; Identifikation</header>
+          <header class="sp-v2-section-head" id="anSec1Title" data-i18n-en="Job & identification"><span class="sp-v2-num">1</span> Auftrag &amp; Identifikation</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
-                <label for="anJob">Auftrag</label>
+                <label for="anJob" data-i18n-en="Job">Auftrag</label>
                 <select id="anJob" class="dienstreise-select"></select>
               </div>
               <div class="sp-v2-field an-radio-field">
@@ -1790,14 +1791,14 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="anSec2Title">
-          <header class="sp-v2-section-head" id="anSec2Title"><span class="sp-v2-num">2</span> Kopfdaten</header>
+          <header class="sp-v2-section-head" id="anSec2Title" data-i18n-en="Header data"><span class="sp-v2-num">2</span> Kopfdaten</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
-              <div class="sp-v2-field"><label for="anCustomer">Auftraggeber</label><input type="text" id="anCustomer" readonly></div>
-              <div class="sp-v2-field an-site-field"><label for="anSite">Baustelle / Site</label><input type="text" id="anSite"></div>
-              <div class="sp-v2-field"><label for="anTech">KUKLA-Techniker</label><input type="text" id="anTech" readonly></div>
-              <div class="sp-v2-field"><label for="anCar">Auto / Car</label><input type="text" id="anCar"></div>
-              <div class="sp-v2-field"><label for="anLiving">Tagesauslösen</label><input type="text" id="anLiving" placeholder="Freitext"></div>
+              <div class="sp-v2-field"><label for="anCustomer" data-i18n-en="Customer">Auftraggeber</label><input type="text" id="anCustomer" readonly></div>
+              <div class="sp-v2-field an-site-field"><label for="anSite" data-i18n-en="Site">Baustelle / Site</label><input type="text" id="anSite"></div>
+              <div class="sp-v2-field"><label for="anTech" data-i18n-en="KUKLA technician">KUKLA-Techniker</label><input type="text" id="anTech" readonly></div>
+              <div class="sp-v2-field"><label for="anCar" data-i18n-en="Car">Auto / Car</label><input type="text" id="anCar"></div>
+              <div class="sp-v2-field"><label for="anLiving" data-i18n-en="Daily allowances">Tagesauslösen</label><input type="text" id="anLiving" placeholder="Freitext" data-i18n-placeholder-en="Free text"></div>
               <div class="sp-v2-field"><label for="anStartKm">Start km</label><input type="number" id="anStartKm" min="0" max="200000" step="1"></div>
               <div class="sp-v2-field"><label for="anEndKm">End km</label><input type="number" id="anEndKm" min="0" max="200000" step="1"></div>
               <div class="sp-v2-field"><label for="anTotalKm">Total km</label><input type="number" id="anTotalKm" min="0" max="200000" step="1"></div>
@@ -1815,7 +1816,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="anSec3Title">
-          <header class="sp-v2-section-head" id="anSec3Title"><span class="sp-v2-num">3</span> Arbeiten</header>
+          <header class="sp-v2-section-head" id="anSec3Title" data-i18n-en="Work"><span class="sp-v2-num">3</span> Arbeiten</header>
           <div class="sp-v2-section-body">
             <div class="an-table-wrap an-work-table-wrap">
               <table class="an-table an-work-table" id="anWorkTable">
@@ -1831,11 +1832,11 @@
                 </colgroup>
                 <thead>
                   <tr>
-                    <th>Datum</th>
-                    <th class="an-th-center">Von</th>
-                    <th class="an-th-center">Bis</th>
-                    <th>Durchgeführte Arbeiten</th>
-                    <th class="an-th-center">Normalstd.</th>
+                    <th data-i18n-en="Date">Datum</th>
+                    <th class="an-th-center" data-i18n-en="From">Von</th>
+                    <th class="an-th-center" data-i18n-en="To">Bis</th>
+                    <th data-i18n-en="Work performed">Durchgeführte Arbeiten</th>
+                    <th class="an-th-center" data-i18n-en="Regular hrs">Normalstd.</th>
                     <th class="an-th-center">Ü50</th>
                     <th class="an-th-center">Ü100</th>
                     <th></th>
@@ -1844,7 +1845,7 @@
                 <tbody id="anWorkBody"></tbody>
                 <tfoot>
                   <tr>
-                    <td colspan="4">Summe</td>
+                    <td colspan="4" data-i18n-en="Total">Summe</td>
                     <td id="anSumN" class="an-th-center">0</td>
                     <td id="anSum50" class="an-th-center">0</td>
                     <td id="anSum100" class="an-th-center">0</td>
@@ -1858,7 +1859,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="anSec4Title">
-          <header class="sp-v2-section-head" id="anSec4Title"><span class="sp-v2-num">4</span> Ersatzteile</header>
+          <header class="sp-v2-section-head" id="anSec4Title" data-i18n-en="Spare parts"><span class="sp-v2-num">4</span> Ersatzteile</header>
           <div class="sp-v2-section-body">
             <div class="an-table-wrap">
               <table class="an-table an-parts-table" id="anPartsTable">
@@ -1869,7 +1870,7 @@
                   <col class="an-col-comment">
                   <col class="an-col-del">
                 </colgroup>
-                <thead><tr><th class="an-th-center">Stk.</th><th>Bezeichnung</th><th>Type No.</th><th>Kommentar</th><th></th></tr></thead>
+                <thead><tr><th class="an-th-center" data-i18n-en="Qty">Stk.</th><th data-i18n-en="Description">Bezeichnung</th><th>Type No.</th><th data-i18n-en="Comment">Kommentar</th><th></th></tr></thead>
                 <tbody id="anPartsBody"></tbody>
               </table>
             </div>
@@ -1878,14 +1879,14 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="anSec5Title">
-          <header class="sp-v2-section-head" id="anSec5Title"><span class="sp-v2-num">5</span> Bemerkung</header>
+          <header class="sp-v2-section-head" id="anSec5Title" data-i18n-en="Remarks"><span class="sp-v2-num">5</span> Bemerkung</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-field an-remarks-field"><label for="anRemarks">Bemerkung</label><textarea id="anRemarks" rows="3" spellcheck="true" lang="de"></textarea></div>
           </div>
         </section>
 
         <section class="sp-v2-section" aria-labelledby="anSec6Title">
-          <header class="sp-v2-section-head" id="anSec6Title"><span class="sp-v2-num">6</span> Bestätigung &amp; Unterschriften</header>
+          <header class="sp-v2-section-head" id="anSec6Title" data-i18n-en="Confirmation &amp; signatures"><span class="sp-v2-num">6</span> Bestätigung &amp; Unterschriften</header>
           <div class="sp-v2-section-body">
             <p id="anConfirmText" class="an-confirm">Der Auftraggeber bestätigt die in diesem Arbeitsnachweis angeführten Arbeitszeiten, durchgeführten Arbeiten und gegebenenfalls verwendeten Ersatzteile.</p>
             <div class="sp-v2-grid-3">
@@ -1916,6 +1917,10 @@
         <div class="an-preview-sig">
           <p class="an-preview-sig-label" id="anSigLabel">Unterschrift Auftraggeber</p>
           <canvas id="anSigCanvas" class="an-sig-canvas" width="640" height="160"></canvas>
+          <div class="an-preview-sig-meta">
+            <span class="an-preview-sig-name" id="anPreviewSigName"></span>
+            <span class="an-preview-sig-time" id="anPreviewSigTime"></span>
+          </div>
         </div>
         <div class="an-preview-actions">
           <button type="button" class="btn btn-ghost" id="btnAnSigClear">Unterschrift löschen</button>
@@ -1947,26 +1952,26 @@
             </div>
             <div class="mb-v2-tb-sidebar-body">
               <select id="montageberichtTbCategory" class="dienstreise-select" aria-label="Textbaustein-Kategorie">
-                <option value="">– Kategorie –</option>
+                    <option value="" data-i18n-en="All">– Kategorie –</option>
               </select>
               <div id="montageberichtTbList" class="montagebericht-tb-list"></div>
             </div>
           </aside>
           <form id="montageberichtForm" class="sp-v2-form mb-v2-form">
             <section class="sp-v2-section" aria-labelledby="mbV2Sec1Title">
-              <header class="sp-v2-section-head" id="mbV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
+          <header class="sp-v2-section-head" id="mbV2Sec1Title" data-i18n-en="Job & identification"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
               <div class="sp-v2-section-body">
                 <div class="sp-v2-grid-3">
                   <div class="sp-v2-field">
-                    <label for="montageberichtJob">Auftrag</label>
+                    <label for="montageberichtJob" data-i18n-en="Job">Auftrag</label>
                     <select id="montageberichtJob" class="dienstreise-select" required></select>
                   </div>
                   <div class="sp-v2-field">
-                    <label for="montageberichtProjekt">Projekt <span class="muted" style="font-weight:normal">(Pflichtfeld)</span></label>
+                    <label for="montageberichtProjekt" data-i18n-en="Project">Projekt <span class="muted" style="font-weight:normal" data-i18n-en="(required)">(Pflichtfeld)</span></label>
                     <input type="text" id="montageberichtProjekt" required placeholder="Aus Anlagenstamm oder manuell" autocomplete="off">
                   </div>
                   <div class="sp-v2-field">
-                    <span id="montageberichtLangLabel">Sprache</span>
+                    <span id="montageberichtLangLabel" data-i18n-en="Language">Sprache</span>
                     <div class="mb-lang-checks" role="group" aria-labelledby="montageberichtLangLabel">
                       <label class="mb-lang-check"><input type="checkbox" id="montageberichtLangDe" value="de" checked> Deutsch</label>
                       <label class="mb-lang-check"><input type="checkbox" id="montageberichtLangEn" value="en"> Englisch</label>
@@ -1979,7 +1984,7 @@
             </section>
 
             <section class="sp-v2-section" aria-labelledby="mbV2Sec2Title">
-              <header class="sp-v2-section-head" id="mbV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Berichtsinhalt</header>
+          <header class="sp-v2-section-head" id="mbV2Sec2Title" data-i18n-en="Report content"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Berichtsinhalt</header>
               <div class="sp-v2-section-body">
                 <div class="sp-v2-field" style="margin-bottom:0.85rem">
                   <label for="montageberichtGrund">Grund des Einsatzes</label>
@@ -1996,7 +2001,7 @@
             </section>
 
             <section class="sp-v2-section" aria-labelledby="mbV2Sec3Title">
-              <header class="sp-v2-section-head" id="mbV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Fabrikationsnummern</header>
+          <header class="sp-v2-section-head" id="mbV2Sec3Title" data-i18n-en="Serial numbers"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Fabrikationsnummern</header>
               <div class="sp-v2-section-body">
                 <div class="montagebericht-toolbar" id="montageberichtToolbar">
                   <div class="toolbar-group">
@@ -2040,7 +2045,7 @@
             </section>
 
             <section class="sp-v2-section" aria-labelledby="mbV2Sec4Title">
-              <header class="sp-v2-section-head" id="mbV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern</header>
+              <header class="sp-v2-section-head" id="mbV2Sec4Title" data-i18n-en="Save"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern</header>
               <div class="sp-v2-section-body">
                 <div class="mb-v2-actions-row">
                   <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Nur Daten speichern (JSON)">Speichern (JSON)</button>
@@ -2088,25 +2093,25 @@
       </div>
       <form id="kontrollwiegungForm" class="sp-v2-form">
         <section class="sp-v2-section" aria-labelledby="kwV2Sec1Title">
-          <header class="sp-v2-section-head" id="kwV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
+          <header class="sp-v2-section-head" id="kwV2Sec1Title" data-i18n-en="Job & identification"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
-                <label for="kontrollwiegungJob">Auftrag</label>
+                <label for="kontrollwiegungJob" data-i18n-en="Job">Auftrag</label>
                 <select id="kontrollwiegungJob" class="dienstreise-select" required>
-                  <option value="">– Bitte wählen –</option>
+                  <option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>
                 </select>
               </div>
               <div class="sp-v2-field">
-                <label for="kontrollwiegungProjekt">Projekt</label>
+                <label for="kontrollwiegungProjekt" data-i18n-en="Project">Projekt</label>
                 <input type="text" id="kontrollwiegungProjekt" placeholder="Aus Anlagenstamm oder manuell" autocomplete="off">
               </div>
               <div class="sp-v2-field sp-v2-field-date">
-                <label for="kontrollwiegungDatum">Datum</label>
+                  <label for="kontrollwiegungDatum" data-i18n-en="Date">Datum</label>
                 <input type="date" id="kontrollwiegungDatum" required>
               </div>
               <div class="sp-v2-field">
-                <span id="kontrollwiegungLangLabel">Sprache</span>
+                <span id="kontrollwiegungLangLabel" data-i18n-en="Language">Sprache</span>
                 <div class="mb-lang-checks" role="group" aria-labelledby="kontrollwiegungLangLabel">
                   <label class="mb-lang-check"><input type="checkbox" id="kontrollwiegungLangDe" value="de" checked> Deutsch</label>
                   <label class="mb-lang-check"><input type="checkbox" id="kontrollwiegungLangEn" value="en"> Englisch</label>
@@ -2115,7 +2120,7 @@
             </div>
             <p id="kontrollwiegungKundeHint" class="mb-v2-hint-block" hidden></p>
             <div class="sp-v2-fab-block" id="kontrollwiegungFabGroup" style="display:none">
-              <label>Fabrikationsnummer</label>
+              <label data-i18n-en="Serial number">Fabrikationsnummer</label>
               <input type="hidden" id="kontrollwiegungFab" name="kontrollwiegungFab" value="">
               <div id="kontrollwiegungFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
               <p id="kontrollwiegungSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
@@ -2124,7 +2129,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="kwV2Sec2Title">
-          <header class="sp-v2-section-head" id="kwV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Kopfdaten</header>
+          <header class="sp-v2-section-head" id="kwV2Sec2Title" data-i18n-en="Header data"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Kopfdaten</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
@@ -2132,7 +2137,7 @@
                 <input type="text" id="kontrollwiegungType" autocomplete="off">
               </div>
               <div class="sp-v2-field">
-                <label for="kontrollwiegungLeistung">Leistung</label>
+                  <label for="kontrollwiegungLeistung" data-i18n-en="Capacity">Leistung</label>
                 <input type="text" id="kontrollwiegungLeistung" autocomplete="off">
               </div>
               <div class="sp-v2-field">
@@ -2156,7 +2161,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="kwV2Sec3Title">
-          <header class="sp-v2-section-head" id="kwV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Wiegungen</header>
+          <header class="sp-v2-section-head" id="kwV2Sec3Title" data-i18n-en="Weighings"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Wiegungen</header>
           <div class="sp-v2-section-body">
             <div class="kontrollwiegung-zeilen-wrap">
               <div class="mb-v2-actions-row" style="margin-bottom:0.75rem">
@@ -2167,15 +2172,15 @@
                   <thead>
                     <tr>
                       <th class="kw-col-nr">#</th>
-                      <th class="kw-col-num">Bandwaage [kg]</th>
-                      <th class="kw-col-num">Kontrollwaage [kg]</th>
-                      <th class="kw-col-num">Fehler [kg]</th>
-                      <th class="kw-col-num">Fehler [%]</th>
-                      <th class="kw-col-num">Leistung [t/h]</th>
-                      <th class="kw-col-num">Tara [kg]</th>
-                      <th class="kw-col-num">Brutto [kg]</th>
-                      <th class="kw-col-bem">Bemerkung</th>
-                      <th class="kw-col-act" title="In Summe / Löschen">Σ / ×</th>
+                      <th class="kw-col-num" data-i18n-en="Belt scale [kg]">Bandwaage [kg]</th>
+                      <th class="kw-col-num" data-i18n-en="Control scale [kg]">Kontrollwaage [kg]</th>
+                      <th class="kw-col-num" data-i18n-en="Error [kg]">Fehler [kg]</th>
+                      <th class="kw-col-num" data-i18n-en="Error [%]">Fehler [%]</th>
+                      <th class="kw-col-num" data-i18n-en="Capacity [t/h]">Leistung [t/h]</th>
+                      <th class="kw-col-num" data-i18n-en="Tare [kg]">Tara [kg]</th>
+                      <th class="kw-col-num" data-i18n-en="Gross [kg]">Brutto [kg]</th>
+                      <th class="kw-col-bem" data-i18n-en="Remark">Bemerkung</th>
+                  <th class="kw-col-act" title="In Summe / Löschen" data-i18n-title-en="In total / delete">Σ / ×</th>
                     </tr>
                   </thead>
                   <tbody id="kontrollwiegungZeilen"></tbody>
@@ -2189,7 +2194,7 @@
                       <td class="kw-col-num" data-kw-sum="leistung_th">–</td>
                       <td class="kw-col-num" data-kw-sum="tara_kg">–</td>
                       <td class="kw-col-num" data-kw-sum="brutto_kg">–</td>
-                      <td class="kw-col-bem" data-kw-sum-label>Summe der markierten Wiegungen</td>
+                      <td class="kw-col-bem" data-kw-sum-label data-i18n-en="Sum of selected weighings">Summe der markierten Wiegungen</td>
                       <td class="kw-col-act"></td>
                     </tr>
                   </tfoot>
@@ -2200,7 +2205,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="kwV2Sec4Title">
-          <header class="sp-v2-section-head" id="kwV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
+          <header class="sp-v2-section-head" id="kwV2Sec4Title" data-i18n-en="Save &amp; export"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
           <div class="sp-v2-section-body">
             <div class="mb-v2-actions-row">
               <button type="submit" class="btn btn-primary" id="btnKontrollwiegungSaveJson" title="Nur Daten speichern">Speichern (JSON)</button>
@@ -2217,7 +2222,7 @@
   <main id="viewProtokolleSchleppketten" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Schleppketten-Test">
     <div class="card sp-v2-card sk-v2-page">
       <div class="sp-v2-topbar">
-        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Schleppketten-Test <span class="muted" style="font-weight:normal;font-size:0.85rem">/ chain calibration</span></h2>
+          <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Schleppketten-Test <span class="muted i18n-hide-when-en" style="font-weight:normal;font-size:0.85rem">/ chain calibration</span></h2>
         <p id="schleppkettenAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
         <div class="sp-v2-topbar-actions">
           <button type="submit" form="schleppkettenForm" class="btn btn-primary" id="btnSchleppkettenStickySave" title="Nur Daten speichern">Speichern (JSON)</button>
@@ -2227,25 +2232,25 @@
       </div>
       <form id="schleppkettenForm" class="sp-v2-form">
         <section class="sp-v2-section" aria-labelledby="skV2Sec1Title">
-          <header class="sp-v2-section-head" id="skV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
+          <header class="sp-v2-section-head" id="skV2Sec1Title" data-i18n-en="Job & identification"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
-                <label for="schleppkettenJob">Auftrag</label>
+                <label for="schleppkettenJob" data-i18n-en="Job">Auftrag</label>
                 <select id="schleppkettenJob" class="dienstreise-select" required>
-                  <option value="">– Bitte wählen –</option>
+                  <option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>
                 </select>
               </div>
               <div class="sp-v2-field">
-                <label for="schleppkettenProjekt">Projekt</label>
+                <label for="schleppkettenProjekt" data-i18n-en="Project">Projekt</label>
                 <input type="text" id="schleppkettenProjekt" placeholder="Aus Anlagenstamm oder manuell" autocomplete="off">
               </div>
               <div class="sp-v2-field sp-v2-field-date">
-                <label for="schleppkettenDatum">Datum</label>
+                  <label for="schleppkettenDatum" data-i18n-en="Date">Datum</label>
                 <input type="date" id="schleppkettenDatum" required>
               </div>
               <div class="sp-v2-field">
-                <span id="schleppkettenLangLabel">Sprache</span>
+                <span id="schleppkettenLangLabel" data-i18n-en="Language">Sprache</span>
                 <div class="mb-lang-checks" role="group" aria-labelledby="schleppkettenLangLabel">
                   <label class="mb-lang-check"><input type="checkbox" id="schleppkettenLangDe" value="de" checked> Deutsch</label>
                   <label class="mb-lang-check"><input type="checkbox" id="schleppkettenLangEn" value="en"> Englisch</label>
@@ -2254,7 +2259,7 @@
             </div>
             <p id="schleppkettenKundeHint" class="mb-v2-hint-block" hidden></p>
             <div class="sp-v2-fab-block" id="schleppkettenFabGroup" style="display:none">
-              <label>Fabrikationsnummer</label>
+              <label data-i18n-en="Serial number">Fabrikationsnummer</label>
               <input type="hidden" id="schleppkettenFab" name="schleppkettenFab" value="">
               <div id="schleppkettenFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
               <p id="schleppkettenSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
@@ -2263,7 +2268,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="skV2Sec2Title">
-          <header class="sp-v2-section-head" id="skV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Kopfdaten</header>
+          <header class="sp-v2-section-head" id="skV2Sec2Title" data-i18n-en="Header data"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Kopfdaten</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
@@ -2271,7 +2276,7 @@
                 <input type="text" id="schleppkettenType" autocomplete="off">
               </div>
               <div class="sp-v2-field">
-                <label for="schleppkettenLeistung">Leistung</label>
+                  <label for="schleppkettenLeistung" data-i18n-en="Capacity">Leistung</label>
                 <input type="text" id="schleppkettenLeistung" autocomplete="off">
               </div>
               <div class="sp-v2-field">
@@ -2299,7 +2304,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="skV2Sec3Title">
-          <header class="sp-v2-section-head" id="skV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Ketten Daten</header>
+          <header class="sp-v2-section-head" id="skV2Sec3Title" data-i18n-en="Chain data"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Ketten Daten</header>
           <div class="sp-v2-section-body">
             <div class="mb-v2-actions-row" style="margin-bottom:0.75rem">
               <button type="button" class="btn btn-ghost" id="schleppkettenAddKette">+ Kette hinzufügen</button>
@@ -2309,19 +2314,19 @@
                 <thead>
                   <tr>
                     <th class="sk-col-nr">#</th>
-                    <th class="sk-col-ketten-tag">Tag (Name)</th>
-                    <th class="sk-col-ketten-type">Ketten Type</th>
-                    <th class="sk-col-num">Länge</th>
-                    <th class="sk-col-num">Gewicht / Kette</th>
-                    <th class="sk-col-num">Gewicht / Meter</th>
-                    <th class="sk-col-act" title="Verwendet / Summe / Löschen">Σ / ×</th>
+                    <th class="sk-col-ketten-tag" data-i18n-en="Tag (name)">Tag (Name)</th>
+                    <th class="sk-col-ketten-type" data-i18n-en="Chain type">Ketten Type</th>
+                    <th class="sk-col-num" data-i18n-en="Length">Länge</th>
+                    <th class="sk-col-num" data-i18n-en="Weight / chain">Gewicht / Kette</th>
+                    <th class="sk-col-num" data-i18n-en="Weight / metre">Gewicht / Meter</th>
+                    <th class="sk-col-act" title="Verwendet / Summe / Löschen" data-i18n-title-en="Used / total / delete">Σ / ×</th>
                   </tr>
                 </thead>
                 <tbody id="schleppkettenKettenZeilen"></tbody>
                 <tfoot>
                   <tr id="schleppkettenKettenSummeRow" class="sk-summe-row">
                     <td class="sk-col-nr"><strong>Σ</strong></td>
-                    <td class="sk-col-ketten-tag" colspan="2">Summe der markierten Ketten</td>
+                    <td class="sk-col-ketten-tag" colspan="2" data-i18n-en="Sum of selected chains">Summe der markierten Ketten</td>
                     <td class="sk-col-num" data-sk-kette-sum="laenge">–</td>
                     <td class="sk-col-num" data-sk-kette-sum="gewicht_pro_kette">–</td>
                     <td class="sk-col-num" data-sk-kette-sum="gewicht_pro_meter">–</td>
@@ -2334,7 +2339,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="skV2Sec4Title">
-          <header class="sp-v2-section-head" id="skV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Messungen</header>
+          <header class="sp-v2-section-head" id="skV2Sec4Title" data-i18n-en="Measurements"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Messungen</header>
           <div class="sp-v2-section-body">
             <div class="mb-v2-actions-row" style="margin-bottom:0.75rem">
               <button type="button" class="btn btn-ghost" id="schleppkettenAddRow">+ Messung hinzufügen</button>
@@ -2344,15 +2349,15 @@
                 <thead>
                   <tr>
                     <th class="sk-col-nr">#</th>
-                    <th class="sk-col-num">Bandwaage [t]</th>
-                    <th class="sk-col-num">Prüfkette [t]</th>
+                    <th class="sk-col-num" data-i18n-en="Belt scale [t]">Bandwaage [t]</th>
+                    <th class="sk-col-num" data-i18n-en="Test chain [t]">Prüfkette [t]</th>
                     <th class="sk-col-num">kg/m</th>
-                    <th class="sk-col-num">Geschw. [m/s]</th>
-                    <th class="sk-col-num">Messzeit [s]</th>
-                    <th class="sk-col-num">Fehler [%]</th>
-                    <th class="sk-col-num">Leistung [t/h]</th>
-                    <th class="sk-col-bem">Bemerkung</th>
-                    <th class="sk-col-act" title="In Summe / Löschen">Σ / ×</th>
+                    <th class="sk-col-num" data-i18n-en="Speed [m/s]">Geschw. [m/s]</th>
+                    <th class="sk-col-num" data-i18n-en="Measuring time [s]">Messzeit [s]</th>
+                    <th class="sk-col-num" data-i18n-en="Error [%]">Fehler [%]</th>
+                    <th class="sk-col-num" data-i18n-en="Capacity [t/h]">Leistung [t/h]</th>
+                    <th class="sk-col-bem" data-i18n-en="Remark">Bemerkung</th>
+                    <th class="sk-col-act" title="In Summe / Löschen" data-i18n-title-en="In total / delete">Σ / ×</th>
                   </tr>
                 </thead>
                 <tbody id="schleppkettenZeilen"></tbody>
@@ -2366,7 +2371,7 @@
                     <td class="sk-col-num" data-sk-sum="messzeit_s">–</td>
                     <td class="sk-col-num" data-sk-sum="fehler_prozent">–</td>
                     <td class="sk-col-num" data-sk-sum="leistung_th">–</td>
-                    <td class="sk-col-bem">Summe der markierten Messungen</td>
+                    <td class="sk-col-bem" data-i18n-en="Sum of selected measurements">Summe der markierten Messungen</td>
                     <td class="sk-col-act"></td>
                   </tr>
                 </tfoot>
@@ -2376,7 +2381,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="skV2Sec5Title">
-          <header class="sp-v2-section-head" id="skV2Sec5Title"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
+          <header class="sp-v2-section-head" id="skV2Sec5Title" data-i18n-en="Save &amp; export"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
           <div class="sp-v2-section-body">
             <div class="mb-v2-actions-row">
               <button type="submit" class="btn btn-primary" id="btnSchleppkettenSaveJson" title="Nur Daten speichern">Speichern (JSON)</button>
@@ -2393,7 +2398,7 @@
   <main id="viewProtokollePruefzertifikat" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Prüfzertifikat">
     <div class="card sp-v2-card pz-v2-page">
       <div class="sp-v2-topbar">
-        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Prüfzertifikat <span class="muted" style="font-weight:normal;font-size:0.85rem">/ Manufacturer Inspection</span></h2>
+        <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Prüfzertifikat <span class="muted i18n-hide-when-en" style="font-weight:normal;font-size:0.85rem">/ Manufacturer Inspection</span></h2>
         <p id="pruefzertifikatAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
         <div class="sp-v2-topbar-actions">
           <button type="button" class="btn btn-ghost" id="btnPruefzertifikatPrefill" title="Daten aus Kontrollwiegung / Schleppketten / Service übernehmen">Aus Protokollen übernehmen</button>
@@ -2404,13 +2409,13 @@
       </div>
       <form id="pruefzertifikatForm" class="sp-v2-form">
         <section class="sp-v2-section" aria-labelledby="pzV2Sec1Title">
-          <header class="sp-v2-section-head" id="pzV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Zertifikat</header>
+          <header class="sp-v2-section-head" id="pzV2Sec1Title" data-i18n-en="Job & certificate"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Zertifikat</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
-                <label for="pruefzertifikatJob">Auftrag</label>
+                <label for="pruefzertifikatJob" data-i18n-en="Job">Auftrag</label>
                 <select id="pruefzertifikatJob" class="dienstreise-select" required>
-                  <option value="">– Bitte wählen –</option>
+                  <option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>
                 </select>
               </div>
               <div class="sp-v2-field">
@@ -2442,7 +2447,7 @@
                 <input type="text" id="pruefzertifikatStandort" autocomplete="off">
               </div>
               <div class="sp-v2-field">
-                <span id="pruefzertifikatLangLabel">Sprache</span>
+                <span id="pruefzertifikatLangLabel" data-i18n-en="Language">Sprache</span>
                 <div class="mb-lang-checks" role="group" aria-labelledby="pruefzertifikatLangLabel">
                   <label class="mb-lang-check"><input type="checkbox" id="pzPdfDe" value="de" checked> Deutsch</label>
                   <label class="mb-lang-check"><input type="checkbox" id="pzPdfEn" value="en"> Englisch</label>
@@ -2451,7 +2456,7 @@
             </div>
             <p id="pruefzertifikatKundeHint" class="mb-v2-hint-block" hidden></p>
             <div class="sp-v2-fab-block" id="pruefzertifikatFabGroup" style="display:none">
-              <label>Fabrikationsnummer <span class="muted" style="font-weight:normal">(Zertifikat für FN wählen)</span></label>
+              <label data-i18n-en="Serial number">Fabrikationsnummer <span class="muted" style="font-weight:normal" data-i18n-en="(choose FN for certificate)">(Zertifikat für FN wählen)</span></label>
               <input type="hidden" id="pruefzertifikatFab" name="pruefzertifikatFab" value="">
               <div id="pruefzertifikatFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
               <p id="pruefzertifikatSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
@@ -2460,7 +2465,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="pzV2Sec2Title">
-          <header class="sp-v2-section-head" id="pzV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Anlagendaten</header>
+          <header class="sp-v2-section-head" id="pzV2Sec2Title" data-i18n-en="Equipment data"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Anlagendaten</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
@@ -2492,7 +2497,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="pzV2Sec3Title">
-          <header class="sp-v2-section-head" id="pzV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Prüfverfahren &amp; Ergebnisse</header>
+          <header class="sp-v2-section-head" id="pzV2Sec3Title" data-i18n-en="Inspection methods &amp; results"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Prüfverfahren &amp; Ergebnisse</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-pdf-lang pz-verfahren-toggles" style="margin-bottom:0.75rem" role="group" aria-label="Prüfverfahren">
               <span>Verfahren</span>
@@ -2549,7 +2554,7 @@
                   <table class="sp-mess-table" aria-label="Messwerte Wägezelle">
                     <thead>
                       <tr>
-                        <th scope="col">Messpunkt</th>
+                        <th scope="col" data-i18n-en="Point">Messpunkt</th>
                         <th scope="col">kg</th>
                         <th scope="col">mV</th>
                         <th scope="col">mA</th>
@@ -2558,21 +2563,21 @@
                     </thead>
                     <tbody>
                       <tr>
-                        <th scope="row">DMS entlastet / released</th>
+                        <th scope="row" data-i18n-en="Load cell released">DMS entlastet / released</th>
                         <td><input type="text" id="pzSpDmsKg" autocomplete="off" inputmode="decimal"></td>
                         <td><input type="text" id="pzSpDmsMv" autocomplete="off" inputmode="decimal"></td>
                         <td><input type="text" id="pzSpDmsMa" autocomplete="off" inputmode="decimal"></td>
                         <td><input type="text" id="pzSpDmsG" autocomplete="off" inputmode="decimal"></td>
                       </tr>
                       <tr>
-                        <th scope="row">Tara / tare</th>
+                        <th scope="row" data-i18n-en="Tare">Tara / tare</th>
                         <td><input type="text" id="pzSpTaraKg" autocomplete="off" inputmode="decimal"></td>
                         <td><input type="text" id="pzSpTaraMv" autocomplete="off" inputmode="decimal"></td>
                         <td><input type="text" id="pzSpTaraMa" autocomplete="off" inputmode="decimal"></td>
                         <td><input type="text" id="pzSpTaraG" autocomplete="off" inputmode="decimal"></td>
                       </tr>
                       <tr>
-                        <th scope="row">Prüfgewicht / test load</th>
+                        <th scope="row" data-i18n-en="Test load">Prüfgewicht / test load</th>
                         <td><input type="text" id="pzSpPgKg" autocomplete="off" inputmode="decimal"></td>
                         <td><input type="text" id="pzSpPgMv" autocomplete="off" inputmode="decimal"></td>
                         <td><input type="text" id="pzSpPgMa" autocomplete="off" inputmode="decimal"></td>
@@ -2582,7 +2587,7 @@
                   </table>
                 </div>
                 <div class="sp-v2-pgtest-block" style="margin-top:0.75rem">
-                  <div class="sp-v2-pgtest-head">Prüfgewichtstest / test with test load — Abweichung (%)</div>
+                  <div class="sp-v2-pgtest-head" data-i18n-en="Test with test load — deviation (%)">Prüfgewichtstest / test with test load — Abweichung (%)</div>
                   <div class="sp-v2-pgtest-grid">
                     <label class="sp-v2-pgtest-cell"><span>1 (%)</span><input type="text" id="pzSpPgTest1" autocomplete="off" inputmode="decimal" aria-label="Abweichung 1 (%)"></label>
                     <label class="sp-v2-pgtest-cell"><span>2 (%)</span><input type="text" id="pzSpPgTest2" autocomplete="off" inputmode="decimal" aria-label="Abweichung 2 (%)"></label>
@@ -2623,7 +2628,7 @@
               <label for="pzKundeUnterschrift" hidden>Kunde (optional)</label>
               <input type="hidden" id="pzKundeUnterschrift" value="">
               <div class="pz-field" style="margin-top:0.5rem;">
-                <label>Profil-Unterschrift</label>
+                <label data-i18n-en="Profile signature">Profil-Unterschrift</label>
                 <div id="pzProfileSigPreview" style="height:70px;border:1px dashed var(--accent);border-radius:4px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">
                   <img id="pzProfileSigImg" alt="" style="max-height:100%;max-width:100%;display:none;" />
                   <span id="pzProfileSigEmpty" class="muted" style="font-size:0.85rem;">Keine Profil-Unterschrift</span>
@@ -2642,7 +2647,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="pzV2Sec4Title">
-          <header class="sp-v2-section-head" id="pzV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Speichern &amp; PDF</header>
+          <header class="sp-v2-section-head" id="pzV2Sec4Title" data-i18n-en="Save &amp; PDF"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Speichern &amp; PDF</header>
           <div class="sp-v2-section-body">
             <div class="mb-v2-actions-row" style="margin-top:0.75rem">
               <button type="submit" class="btn btn-primary" id="btnPruefzertifikatSaveData" data-mode="data">Speichern (JSON)</button>
@@ -2794,25 +2799,25 @@
         <div id="serviceprotokollKopfdaten" class="montagebericht-kopfdaten" hidden aria-hidden="true"></div>
 
         <section class="sp-v2-section" aria-labelledby="spV2Sec1Title">
-          <header class="sp-v2-section-head" id="spV2Sec1Title"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
+          <header class="sp-v2-section-head" id="spV2Sec1Title" data-i18n-en="Job & identification"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
-                <label for="serviceprotokollJob">Auftrag</label>
+                <label for="serviceprotokollJob" data-i18n-en="Job">Auftrag</label>
                 <select id="serviceprotokollJob" class="dienstreise-select" required>
-                  <option value="">– Bitte wählen –</option>
+                  <option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>
                 </select>
               </div>
               <div class="sp-v2-field">
-                <label for="serviceprotokollProjekt">Projekt</label>
+                <label for="serviceprotokollProjekt" data-i18n-en="Project">Projekt</label>
                 <input type="text" id="serviceprotokollProjekt" required placeholder="Aus Anlagenstamm oder manuell" autocomplete="off">
               </div>
               <div class="sp-v2-field">
-                <label for="serviceprotokollDatum">Datum</label>
+                <label for="serviceprotokollDatum" data-i18n-en="Date">Datum</label>
                 <input type="date" id="serviceprotokollDatum" required>
               </div>
               <div class="sp-v2-field">
-                <span id="serviceprotokollLangLabel">Sprache</span>
+                <span id="serviceprotokollLangLabel" data-i18n-en="Language">Sprache</span>
                 <div class="mb-lang-checks" role="group" aria-labelledby="serviceprotokollLangLabel">
                   <label class="mb-lang-check"><input type="checkbox" id="spPdfDe" value="de" checked> Deutsch</label>
                   <label class="mb-lang-check"><input type="checkbox" id="spPdfEn" value="en"> Englisch</label>
@@ -2820,7 +2825,7 @@
               </div>
             </div>
             <div class="sp-v2-fab-block" id="serviceprotokollFabGroup" style="display:none">
-              <label>Fabrikationsnummer</label>
+              <label data-i18n-en="Serial number">Fabrikationsnummer</label>
               <input type="hidden" id="serviceprotokollFab" name="serviceprotokollFab" value="">
               <div id="serviceprotokollFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
             </div>
@@ -2830,7 +2835,7 @@
         <div class="sp-v2-blocks-234">
         <div class="sp-v2-row-2col">
         <section class="sp-v2-section" aria-labelledby="spV2Sec2Title">
-          <header class="sp-v2-section-head" id="spV2Sec2Title"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Anlagendaten</header>
+          <header class="sp-v2-section-head" id="spV2Sec2Title" data-i18n-en="Equipment data"><span class="sp-v2-num">2</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Anlagendaten</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-stack">
               <div class="sp-v2-field">
@@ -2860,7 +2865,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="spV2Sec3Title">
-          <header class="sp-v2-section-head" id="spV2Sec3Title"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Wägezelle &amp; Messwerte</header>
+          <header class="sp-v2-section-head" id="spV2Sec3Title" data-i18n-en="Load cell &amp; readings"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Wägezelle &amp; Messwerte</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-stack">
               <div id="spMessLoadCellsHost"></div>
@@ -2894,21 +2899,21 @@
                   <table class="sp-mess-table" aria-label="Messwerte Wägezelle Primär">
                     <tbody>
                       <tr>
-                        <th scope="row">DMS entlastet / released</th>
+                        <th scope="row" data-i18n-en="Load cell released">DMS entlastet / released</th>
                         <td><input type="text" id="spMessDmsKg" autocomplete="off" aria-label="DMS entlastet kg"></td>
                         <td><input type="text" id="spMessDmsMv" autocomplete="off" aria-label="DMS entlastet mV"></td>
                         <td><input type="text" id="spMessDmsMa" autocomplete="off" aria-label="DMS entlastet mA"></td>
                         <td><input type="text" id="spMessDmsG" autocomplete="off" aria-label="DMS entlastet g Prozent"></td>
                       </tr>
                       <tr>
-                        <th scope="row">Tara / tare</th>
+                        <th scope="row" data-i18n-en="Tare">Tara / tare</th>
                         <td><input type="text" id="spMessTaraKg" autocomplete="off" aria-label="Tara kg"></td>
                         <td><input type="text" id="spMessTaraMv" autocomplete="off" aria-label="Tara mV"></td>
                         <td><input type="text" id="spMessTaraMa" autocomplete="off" aria-label="Tara mA"></td>
                         <td><input type="text" id="spMessTaraG" autocomplete="off" aria-label="Tara g Prozent"></td>
                       </tr>
                       <tr>
-                        <th scope="row">Prüfgewicht / test load</th>
+                        <th scope="row" data-i18n-en="Test load">Prüfgewicht / test load</th>
                         <td><input type="text" id="spMessPgKg" autocomplete="off" aria-label="Prüfgewicht kg"></td>
                         <td><input type="text" id="spMessPgMv" autocomplete="off" aria-label="Prüfgewicht mV"></td>
                         <td><input type="text" id="spMessPgMa" autocomplete="off" aria-label="Prüfgewicht mA"></td>
@@ -2924,10 +2929,10 @@
         </div>
 
         <section class="sp-v2-section" aria-labelledby="spV2Sec4Title">
-          <header class="sp-v2-section-head" id="spV2Sec4Title"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/chart-up-green.svg" alt="" aria-hidden="true"> Prüfgewichtstest</header>
+          <header class="sp-v2-section-head" id="spV2Sec4Title" data-i18n-en="Test with test load"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/chart-up-green.svg" alt="" aria-hidden="true"> Prüfgewichtstest</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-pgtest-card">
-              <div class="sp-v2-pgtest-head">Prüfgewichtstest / test with test load — Abweichung (%)</div>
+              <div class="sp-v2-pgtest-head" data-i18n-en="Test with test load — deviation (%)">Prüfgewichtstest / test with test load — Abweichung (%)</div>
               <div class="sp-v2-pgtest-row">
                 <label class="sp-v2-pgtest-cell"><span>1 (%)</span><input type="text" id="spMessPgTest1" autocomplete="off" inputmode="decimal" aria-label="Abweichung 1 (%)"></label>
                 <label class="sp-v2-pgtest-cell"><span>2 (%)</span><input type="text" id="spMessPgTest2" autocomplete="off" inputmode="decimal" aria-label="Abweichung 2 (%)"></label>
@@ -2939,7 +2944,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="spV2Sec5Title">
-          <header class="sp-v2-section-head" id="spV2Sec5Title"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte</header>
+          <header class="sp-v2-section-head" id="spV2Sec5Title" data-i18n-en="Work steps"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-steps-head">
               <div>
@@ -2973,7 +2978,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="spV2Sec6Title">
-          <header class="sp-v2-section-head" id="spV2Sec6Title"><span class="sp-v2-num">6</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Abschluss</header>
+          <header class="sp-v2-section-head" id="spV2Sec6Title" data-i18n-en="Closing"><span class="sp-v2-num">6</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Abschluss</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-abschluss-grid">
               <div class="sp-v2-abschluss-main">
@@ -2993,7 +2998,7 @@
                 </div>
                 <div class="sp-v2-sig-grid">
                   <div class="sp-v2-sig-box">
-                    <label>Profil-Unterschrift</label>
+                    <label data-i18n-en="Profile signature">Profil-Unterschrift</label>
                     <div id="spProfileSigPreview" class="sp-v2-sig-pad" style="display:flex;align-items:center;justify-content:center;background:#fff;">
                       <img id="spProfileSigImg" alt="" style="max-width:100%;max-height:100%;display:none;" />
                       <span id="spProfileSigEmpty" class="muted" style="font-size:0.85rem;">Keine Profil-Unterschrift – bitte unter Einstellungen hinterlegen</span>
@@ -3443,6 +3448,7 @@
   <script src="js/view-abrechnung.js?v=20260702c"></script>
   <script src="js/view-zeitschreibung.js?v=20260726b"></script>
   <script src="js/signature-pad.js"></script>
+  <script src="js/protocol-form-i18n.js"></script>
   <script src="js/arbeitsnachweis.js"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js"></script>

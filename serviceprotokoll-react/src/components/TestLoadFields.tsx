@@ -1,7 +1,9 @@
 import type { TestLoadValues } from '../types';
+import { t, type UiLang } from '../i18n';
 
 interface TestLoadFieldsProps {
   values: TestLoadValues;
+  lang?: UiLang;
   onChange: (field: keyof TestLoadValues, value: string) => void;
 }
 
@@ -12,7 +14,7 @@ const FIELDS: { key: keyof TestLoadValues; label: string }[] = [
   { key: 'value4', label: '4 (%)' },
 ];
 
-export function TestLoadFields({ values, onChange }: TestLoadFieldsProps) {
+export function TestLoadFields({ values, lang = 'de', onChange }: TestLoadFieldsProps) {
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       {FIELDS.map(({ key, label }) => (
@@ -21,7 +23,7 @@ export function TestLoadFields({ values, onChange }: TestLoadFieldsProps) {
           <input
             className="sp-input h-[38px] text-sm"
             inputMode="decimal"
-            aria-label={`Abweichung ${label}`}
+            aria-label={`${t(lang, 'deviation')} ${label}`}
             value={values[key]}
             onChange={(e) => onChange(key, e.target.value)}
           />
