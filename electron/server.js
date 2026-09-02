@@ -147,6 +147,9 @@ const {
   alignMonteurMontageDirs,
   ensureMonteurPhotoCategoryDirs,
   buildMonteurPhotoCategoryRelDir,
+  expandTopLevelMontageRelToFnFolders,
+  migrateTopLevelMontageIntoFnFolders,
+  isDokumenteMonteurReservedTopDir,
   removeLegacyMonteurAuftragsordnerTopLevel,
   removeStaleBareFabMonteurDirs,
   isBareFabFolderName,
@@ -3578,7 +3581,8 @@ function createApp(db) {
   }
 
   /**
-   * Dokumente_Monteur/<FN>/Montage/<Auftragsordner>/ für alle FNs des Auftrags anlegen/alignen.
+   * Vorhandene Dokumente_Monteur/<FN>/Montage/<Auftragsordner>/ alignen (Rename/Merge).
+   * Keine leeren FN-/Montage-Bäume auf Vorrat.
    */
   async function ensureJobReiseFolderLayout(localJobId, reiseDir, technicianIdOpt) {
     if (!reiseDir || !fs.existsSync(reiseDir)) return { fabMap: [], montageFolderName: '' };
@@ -3596,6 +3600,7 @@ function createApp(db) {
         technicianDisplayName: techDisplay,
         previousName: previousName || null,
       });
+      await migrateTopLevelMontageIntoFnFolders(reiseDir, fabMap);
       if (previousName && previousName !== montageFolderName) {
         rewriteDienstreisePushCacheMontageFolder(localJobId, previousName, montageFolderName);
       }
@@ -3618,16 +3623,34 @@ function createApp(db) {
     if (montageFolderName) {
       ensureMonteurPhotoCategoryDirs(reiseDir, montageFolderName);
       if (listProtectedPaths(db, localJobId).includes(DOKUMENTE_MONTEUR)) {
-        protectPathIfUnderDokumenteMonteur(
-          db,
-          localJobId,
-          buildMonteurPhotoCategoryRelDir(montageFolderName, 'Allgemein'),
-        );
-        protectPathIfUnderDokumenteMonteur(
-          db,
-          localJobId,
-          buildMonteurPhotoCategoryRelDir(montageFolderName, 'Angebot'),
-        );
+        const fabForProtect = fabMap.length ? fabMap : [];
+        if (fabForProtect.length) {
+          for (const entry of fabForProtect) {
+            const fnFolder = entry && (entry.folder_name_canonical || entry.folderName);
+            if (!fnFolder) continue;
+            protectPathIfUnderDokumenteMonteur(
+              db,
+              localJobId,
+              buildMonteurPhotoCategoryRelDir(montageFolderName, 'Allgemein', fnFolder),
+            );
+            protectPathIfUnderDokumenteMonteur(
+              db,
+              localJobId,
+              buildMonteurPhotoCategoryRelDir(montageFolderName, 'Angebot', fnFolder),
+            );
+          }
+        } else {
+          protectPathIfUnderDokumenteMonteur(
+            db,
+            localJobId,
+            buildMonteurPhotoCategoryRelDir(montageFolderName, 'Allgemein'),
+          );
+          protectPathIfUnderDokumenteMonteur(
+            db,
+            localJobId,
+            buildMonteurPhotoCategoryRelDir(montageFolderName, 'Angebot'),
+          );
+        }
       }
     }
     return { fabMap, montageFolderName };
@@ -3676,7 +3699,9 @@ function createApp(db) {
         });
       }
       if (!isClosedJob) {
-        await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+        try {
+          await migrateTopLevelMontageIntoFnFolders(reiseDir, await ensureFabMapCanonicalForJob(localJobId, reiseDir));
+        } catch (_) {}
         try {
           pruneEmptyMonteurDraftJsons(reiseDir);
         } catch (_) {}
@@ -3722,9 +3747,8 @@ function createApp(db) {
         let stat;
         try { stat = fs.statSync(fullPath); } catch (e) { continue; }
         if (stat.isDirectory()) {
-          // Frisch angelegte Projektordner enthalten zuerst nur leere Standardordner.
-          // Diese Wurzelordner sichtbar lassen, sonst wirkt der Projektordner nicht angelegt.
-          // Allgemein/Angebot müssen auch leer sichtbar sein (PWA-Kategorien ohne Fotos).
+          // Wurzeln (ohne subpath) sichtbar lassen, sonst wirkt der Projektordner nicht angelegt.
+          // Leere Allgemein/Angebot nur anzeigen, wenn sie schon existieren (kein Vorrats-mkdir).
           const keepEmptyPhotoCategory = name === 'Allgemein' || name === 'Angebot';
           if (subpath && isEffectivelyEmptyDir(fullPath) && !keepEmptyPhotoCategory) continue;
         }
@@ -4019,8 +4043,6 @@ function createApp(db) {
     if (canonical) {
       const root = path.join(da, canonical);
       try {
-        if (!fs.existsSync(da)) fs.mkdirSync(da, { recursive: true });
-        if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true });
         if (fs.existsSync(root) && fs.statSync(root).isDirectory()) {
           return {
             reiseDir,
@@ -4721,6 +4743,10 @@ function createApp(db) {
       }
 
       await copyRecursive('');
+      try {
+        const layoutCopy = await ensureJobReiseFolderLayout(jobRow.id, targetDir, technicianId);
+        await migrateTopLevelMontageIntoFnFolders(targetDir, (layoutCopy && layoutCopy.fabMap) || []);
+      } catch (_) {}
       res.json({ ok: true, message: 'Projektordner wurde in den Dienstreise-Ordner kopiert.' });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Kopieren fehlgeschlagen.' });
@@ -5259,9 +5285,6 @@ function createApp(db) {
       }
       const localJobId = resolved.localJobId;
       const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
-      if (reiseDir && fs.existsSync(reiseDir)) {
-        await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
-      }
       const paths = seedDokumenteMonteurProtectedPaths(
         db,
         localJobId,
@@ -15210,11 +15233,48 @@ function createApp(db) {
          * Überspringen wenn lokal vorhanden und nicht älter als Dispo (mtime), sonst Größenvergleich.
          * Download nur wenn Dispo-Datei fehlt lokal, neuer ist (mtime) oder Größe abweicht.
          */
-        function shouldSkip(relPath, expectedSize, expectedMtimeMs, completedArr) {
-          const localRel =
+        function localFnEntriesForPull() {
+          const extra = [];
+          try {
+            const dm = path.join(targetDir, 'Dokumente_Monteur');
+            if (fs.existsSync(dm)) {
+              for (const ent of fs.readdirSync(dm, { withFileTypes: true })) {
+                if (!ent.isDirectory() || isDokumenteMonteurReservedTopDir(ent.name)) continue;
+                extra.push({ folder_name_canonical: ent.name, fab: ent.name });
+              }
+            }
+          } catch (_) {}
+          return [...(Array.isArray(fabMap) ? fabMap : []), ...extra];
+        }
+
+        function localRelsForPullFile(relPath) {
+          const mapped =
             String(relPath || '').startsWith('Dokumente_Monteur/')
               ? mapServerManifestPathToLocalAnlageRel(relPath, fabMap)
               : relPath;
+          return expandTopLevelMontageRelToFnFolders(mapped, localFnEntriesForPull());
+        }
+
+        function copyPullFileToSiblingRels(primaryAbs, localRels) {
+          if (!primaryAbs || !fs.existsSync(primaryAbs)) return;
+          for (let s = 1; s < localRels.length; s++) {
+            const siblingAbs = path.join(targetDir, String(localRels[s] || '').replace(/\//g, path.sep));
+            if (siblingAbs === primaryAbs || fs.existsSync(siblingAbs)) continue;
+            try {
+              const siblingDir = path.dirname(siblingAbs);
+              if (!fs.existsSync(siblingDir)) fs.mkdirSync(siblingDir, { recursive: true });
+              fs.copyFileSync(primaryAbs, siblingAbs);
+            } catch (copyErr) {
+              console.warn(
+                '[dienstreise_pull] PWA-Foto FN-Kopie',
+                copyErr && copyErr.message ? copyErr.message : copyErr,
+              );
+            }
+          }
+        }
+
+        function shouldSkip(relPath, expectedSize, expectedMtimeMs, completedArr) {
+          const localRel = localRelsForPullFile(relPath)[0] || relPath;
           const lp = path.join(targetDir, localRel.replace(/\//g, path.sep));
           if (!fs.existsSync(lp)) return false;
           let localSize = null;
@@ -15397,10 +15457,9 @@ function createApp(db) {
           const expectedSize = files[i].size;
           const expectedMtimeMs = files[i].mtime_ms;
           if (shouldSkip(relPath, expectedSize, expectedMtimeMs, completed)) {
-            const localRelSkip =
-              String(relPath || '').startsWith('Dokumente_Monteur/')
-                ? mapServerManifestPathToLocalAnlageRel(relPath, fabMap)
-                : relPath;
+            const localRelsSkip = localRelsForPullFile(relPath);
+            const localRelSkip = localRelsSkip[0] || relPath;
+            copyPullFileToSiblingRels(path.join(targetDir, String(localRelSkip).replace(/\//g, path.sep)), localRelsSkip);
             const relNormSkip = normProjectRelPath(localRelSkip);
             if (
               relNormSkip &&
@@ -15444,10 +15503,8 @@ function createApp(db) {
               if (e.message && e.message.startsWith('Download fehlgeschlagen')) throw e;
             }
           }
-          const localRelPath =
-            String(relPath || '').startsWith('Dokumente_Monteur/')
-              ? mapServerManifestPathToLocalAnlageRel(relPath, fabMap)
-              : relPath;
+          const localRels = localRelsForPullFile(relPath);
+          const localRelPath = localRels[0] || relPath;
           const localPath = path.join(targetDir, localRelPath.replace(/\//g, path.sep));
           const dir = path.dirname(localPath);
           if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -15458,6 +15515,7 @@ function createApp(db) {
           } catch (_) {}
           fs.renameSync(partPath, localPath);
           applyLocalFileMtimeFromDispo(localPath, fileMtimeMs);
+          copyPullFileToSiblingRels(localPath, localRels);
           const relNormPull = normProjectRelPath(localRelPath);
           if (
             relNormPull &&
@@ -15476,6 +15534,15 @@ function createApp(db) {
           } else {
             throw dlErr;
           }
+        }
+
+        try {
+          await migrateTopLevelMontageIntoFnFolders(targetDir, localFnEntriesForPull());
+        } catch (migErr) {
+          console.warn(
+            '[dienstreise_pull] Top-Level-Montage → FN',
+            migErr && migErr.message ? migErr.message : migErr,
+          );
         }
 
         await pullProtocolJsonDrafts();

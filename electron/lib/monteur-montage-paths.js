@@ -173,39 +173,144 @@ function isMonteurPhotoCategoryRel(relPath) {
   const norm = String(relPath || '')
     .replace(/\\/g, '/')
     .replace(/^\/+/, '');
-  return /^Dokumente_Monteur\/Montage\/[^/]+\/Bilder\/(Allgemein|Angebot)(\/|$)/i.test(norm);
+  if (/^Dokumente_Monteur\/Montage\/[^/]+\/Bilder\/(Allgemein|Angebot)(\/|$)/i.test(norm)) return true;
+  return /^Dokumente_Monteur\/[^/]+\/Montage\/[^/]+\/Bilder\/(Allgemein|Angebot)(\/|$)/i.test(norm);
 }
 
-function buildMonteurPhotoCategoryRelDir(auftragsordner, category) {
+function buildMonteurPhotoCategoryRelDir(auftragsordner, category, fnFolder) {
   const ao = String(auftragsordner || '').trim();
   const cat = String(category || '').trim();
   if (!ao || !cat) return '';
+  const fn = String(fnFolder || '').trim();
+  if (fn) return ['Dokumente_Monteur', fn, 'Montage', ao, 'Bilder', cat].join('/');
   return ['Dokumente_Monteur', 'Montage', ao, 'Bilder', cat].join('/');
 }
 
-/**
- * Leere Ordner Allgemein/Angebot neben den FN-Bäumen, analog zum Dispo-Upload.
- * FN-Fotos bleiben unter Dokumente_Monteur/<FN>/Montage/<Auftrag>/Bilder/.
- */
-function ensureMonteurPhotoCategoryDirs(reiseDir, auftragsordner) {
-  const ao = String(auftragsordner || '').trim();
-  if (!ao || !reiseDir) return;
-  const monteurBase = path.join(reiseDir, 'Dokumente_Monteur');
-  if (!fs.existsSync(monteurBase)) fs.mkdirSync(monteurBase, { recursive: true });
-  for (const cat of PHOTO_SPECIAL_CATEGORIES) {
-    const dir = path.join(monteurBase, 'Montage', ao, 'Bilder', cat);
-    if (!fs.existsSync(dir)) {
-      try {
-        fs.mkdirSync(dir, { recursive: true });
-      } catch (err) {
-        console.warn(
-          '[monteur-paths] mkdir Foto-Kategorie',
-          dir,
-          err && err.message ? err.message : err,
-        );
-      }
-    }
+function canonicalFnFolderNames(fabFolderEntries) {
+  const out = [];
+  const seen = new Set();
+  for (const entry of fabFolderEntries || []) {
+    const n = String(entry && (entry.folder_name_canonical || entry.folderName) || '').trim();
+    if (!n || isDokumenteMonteurReservedTopDir(n)) continue;
+    const key = n.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(n);
   }
+  return out;
+}
+
+/** Server-Pfad Dokumente_Monteur/Montage/<AO>/… → je FN unter Dokumente_Monteur/<FN>/Montage/<AO>/… */
+function expandTopLevelMontageRelToFnFolders(relPath, fabFolderEntries) {
+  const norm = String(relPath || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  const m = /^Dokumente_Monteur\/Montage\/([^/]+)\/(.+)$/i.exec(norm);
+  if (!m) return [norm];
+  const fns = canonicalFnFolderNames(fabFolderEntries);
+  if (!fns.length) return [norm];
+  return fns.map((fn) => ['Dokumente_Monteur', fn, 'Montage', m[1], ...m[2].split('/')].join('/'));
+}
+
+function dirContainsAnyFile(dir) {
+  if (!dir || !fs.existsSync(dir)) return false;
+  let names;
+  try {
+    names = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (_) {
+    return false;
+  }
+  for (const ent of names) {
+    if (isIgnorableDirEntry(ent.name)) continue;
+    const full = path.join(dir, ent.name);
+    if (ent.isFile()) return true;
+    if (ent.isDirectory() && dirContainsAnyFile(full)) return true;
+  }
+  return false;
+}
+
+async function copyDirContentsInto(srcDir, dstDir) {
+  let names;
+  try {
+    names = fs.readdirSync(srcDir, { withFileTypes: true });
+  } catch (_) {
+    return;
+  }
+  if (!fs.existsSync(dstDir)) fs.mkdirSync(dstDir, { recursive: true });
+  let n = 0;
+  for (const ent of names) {
+    const src = path.join(srcDir, ent.name);
+    const dst = path.join(dstDir, ent.name);
+    try {
+      if (ent.isDirectory()) {
+        await copyDirContentsInto(src, dst);
+      } else if (!fs.existsSync(dst)) {
+        await fs.promises.copyFile(src, dst);
+      }
+    } catch (err) {
+      console.warn('[monteur-paths] copy', src, '->', dst, err && err.message ? err.message : err);
+    }
+    n += 1;
+    if (n % 8 === 0) await yieldEventLoop();
+  }
+}
+
+/**
+ * PWA-Fotos lagen fälschlich parallel unter Dokumente_Monteur/Montage/…
+ * statt unter Dokumente_Monteur/<FN>/Montage/…. Zusammenführen, leeren Rest löschen.
+ */
+async function migrateTopLevelMontageIntoFnFolders(reiseDir, fabFolderEntries) {
+  const monteurBase = path.join(reiseDir, 'Dokumente_Monteur');
+  const topMontage = path.join(monteurBase, 'Montage');
+  if (!reiseDir || !fs.existsSync(topMontage)) return;
+  const fnFolders = [];
+  const seen = new Set();
+  function addFn(name) {
+    const n = String(name || '').trim();
+    if (!n || isDokumenteMonteurReservedTopDir(n)) return;
+    const key = n.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    fnFolders.push(n);
+  }
+  for (const name of listSubdirNames(monteurBase)) addFn(name);
+  for (const n of canonicalFnFolderNames(fabFolderEntries)) {
+    if (fs.existsSync(path.join(monteurBase, n))) addFn(n);
+  }
+  if (!dirContainsAnyFile(topMontage)) {
+    try {
+      await rmRecursiveAsync(topMontage);
+    } catch (err) {
+      console.warn('[monteur-paths] leeres Top-Level-Montage nicht entfernt', err && err.message ? err.message : err);
+    }
+    return;
+  }
+  if (!fnFolders.length) return;
+  for (let i = 0; i < fnFolders.length; i++) {
+    const dst = path.join(monteurBase, fnFolders[i], 'Montage');
+    try {
+      if (i < fnFolders.length - 1) await copyDirContentsInto(topMontage, dst);
+      else {
+        await mergeDirContentsInto(topMontage, dst);
+        if (fs.existsSync(topMontage)) await rmRecursiveAsync(topMontage);
+      }
+    } catch (err) {
+      console.warn(
+        '[monteur-paths] Top-Level-Montage → FN',
+        fnFolders[i],
+        err && err.message ? err.message : err,
+      );
+    }
+    await yieldEventLoop();
+  }
+}
+
+/**
+ * Kein Vorrats-mkdir für Allgemein/Angebot — Ordner entstehen beim Foto-Upload
+ * (Parent von dirname). API bleibt für Aufrufer, die Align/Protect anstoßen.
+ */
+function ensureMonteurPhotoCategoryDirs(_reiseDir, _auftragsordner) {
+  /* lazy: keine leeren Foto-Kategorien */
 }
 
 function isNonBareFnFolderName(name) {
@@ -576,7 +681,9 @@ function rewriteFnFolderSegmentInRel(relPath, fabMap) {
   if (parts.length < 2) return norm;
   if (parts[0] !== 'Dokumente_Monteur' && parts[0] !== 'Dokumente_Anlage') return norm;
   const fnFolder = parts[1];
-  if (!fnFolder || isRangeFnFolderName(fnFolder)) return norm;
+  const inner = parts.slice(2).join('/');
+  const isPhotoUnderFn = /^Montage\/[^/]+\/Bilder(\/|$)/i.test(inner);
+  if (!fnFolder || (isRangeFnFolderName(fnFolder) && !isPhotoUnderFn)) return norm;
   const fabDigits = leadingFabDigits(fnFolder);
   for (const entry of fabMap || []) {
     const can = String(entry.folder_name_canonical || '').trim();
@@ -587,7 +694,7 @@ function rewriteFnFolderSegmentInRel(relPath, fabMap) {
       return parts.join('/');
     }
     const entryDigits = String(fab).replace(/\D/g, '');
-    if (fabDigits && entryDigits && fabDigits === entryDigits && !isRangeFnFolderName(fnFolder)) {
+    if (fabDigits && entryDigits && fabDigits === entryDigits) {
       parts[1] = can;
       return parts.join('/');
     }
@@ -596,24 +703,18 @@ function rewriteFnFolderSegmentInRel(relPath, fabMap) {
 }
 
 /**
+ * Alias-Migration unter Dokumente_Anlage/Monteur — keine leeren FN-Ordner auf Vorrat.
  * @param {string} reiseDir
  * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabFolderEntries
  */
 async function ensureAnlageFnDirs(reiseDir, fabFolderEntries) {
   await migrateAliasFnFolders(reiseDir, fabFolderEntries);
-  const anlageBase = path.join(reiseDir, 'Dokumente_Anlage');
-  if (!fs.existsSync(anlageBase)) fs.mkdirSync(anlageBase, { recursive: true });
-  for (const entry of fabFolderEntries || []) {
-    const fnFolder = String(entry.folder_name_canonical || '').trim();
-    if (!fnFolder) continue;
-    const target = path.join(anlageBase, fnFolder);
-    if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
-  }
 }
 
 /**
- * Dokumente_Monteur/<Fileserver-FN>/Montage/<Auftragsordner>/ für Monteur-Dokumente.
- * Vor mkdir: Geschwister derselben Identität (Datum+Monteur) bzw. previousName → Desired umbenennen/mergen.
+ * Vorhandene Dokumente_Monteur/<Fileserver-FN>/Montage/<Auftragsordner>/ alignen.
+ * Geschwister derselben Identität (Datum+Monteur) bzw. previousName → Desired umbenennen/mergen.
+ * Keine leeren FN-/Montage-/Bilder-Ordner auf Vorrat.
  *
  * @param {string} reiseDir
  * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabFolderEntries
@@ -640,15 +741,14 @@ function isMonteurMontageIdentitySibling(name, desired, datePrefix, monteurSuffi
 }
 
 /**
- * Bestehende Auftragsordner umbenennen/mergen statt neu anzulegen.
+ * Bestehende Auftragsordner umbenennen/mergen — keine leeren FN-/Montage-Bäume.
  * @returns {string} Desired-Name
  */
 async function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) {
   await migrateAliasFnFolders(reiseDir, fabFolderEntries);
   const desired = String(desiredName || '').trim();
   const monteurBase = path.join(reiseDir, 'Dokumente_Monteur');
-  if (!fs.existsSync(monteurBase)) fs.mkdirSync(monteurBase, { recursive: true });
-  if (!desired) return desired;
+  if (!desired || !fs.existsSync(monteurBase)) return desired;
 
   const techName = opts && opts.technicianDisplayName != null ? String(opts.technicianDisplayName) : '';
   const previousName = opts && opts.previousName != null ? String(opts.previousName).trim() : '';
@@ -657,27 +757,15 @@ async function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, 
   const dateMatch = desired.match(/^(\d{4}-\d{2}-\d{2})_/);
   const datePrefix = dateMatch ? dateMatch[1] + '_' : '';
 
-  const fnFolders = new Set();
-  const canonicals = [];
-  for (const entry of fabFolderEntries || []) {
-    const fnFolder = String(entry.folder_name_canonical || '').trim();
-    if (fnFolder) {
-      fnFolders.add(fnFolder);
-      canonicals.push(fnFolder);
-    }
-  }
-  // Bestehende FN-Ordner ohne fab_map (keine Alias eines kanonischen Namens).
+  const fnFolders = [];
   for (const name of listSubdirNames(monteurBase)) {
     if (isDokumenteMonteurReservedTopDir(name)) continue;
-    if (canonicals.some((c) => c === name || isFnFolderAlias(c, name))) continue;
-    fnFolders.add(name);
+    fnFolders.push(name);
   }
 
   for (const fnFolder of fnFolders) {
     const montageDir = path.join(monteurBase, fnFolder, 'Montage');
-    if (!fs.existsSync(montageDir)) {
-      fs.mkdirSync(montageDir, { recursive: true });
-    }
+    if (!fs.existsSync(montageDir)) continue;
     let children = [];
     try {
       children = fs
@@ -720,45 +808,7 @@ async function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, 
       }
       await yieldEventLoop();
     }
-    if (!fs.existsSync(desiredPath)) {
-      try {
-        fs.mkdirSync(desiredPath, { recursive: true });
-      } catch (err) {
-        console.warn(
-          '[monteur-paths] mkdir Auftragsordner',
-          desiredPath,
-          err && err.message ? err.message : err,
-        );
-      }
-    }
-    const bilderPath = path.join(desiredPath, 'Bilder');
-    if (!fs.existsSync(bilderPath)) {
-      try {
-        fs.mkdirSync(bilderPath, { recursive: true });
-      } catch (err) {
-        console.warn(
-          '[monteur-paths] mkdir Bilder',
-          bilderPath,
-          err && err.message ? err.message : err,
-        );
-      }
-    }
-    for (const sub of ['Parameter', 'Protokolle']) {
-      const subPath = path.join(desiredPath, sub);
-      if (!fs.existsSync(subPath)) {
-        try {
-          fs.mkdirSync(subPath, { recursive: true });
-        } catch (err) {
-          console.warn(
-            '[monteur-paths] mkdir ' + sub,
-            subPath,
-            err && err.message ? err.message : err,
-          );
-        }
-      }
-    }
   }
-  ensureMonteurPhotoCategoryDirs(reiseDir, desired);
   return desired;
 }
 
@@ -889,6 +939,8 @@ module.exports = {
   isDokumenteMonteurReservedTopDir,
   isMonteurPhotoCategoryRel,
   buildMonteurPhotoCategoryRelDir,
+  expandTopLevelMontageRelToFnFolders,
+  migrateTopLevelMontageIntoFnFolders,
   ensureMonteurPhotoCategoryDirs,
   ensureAnlageFnDirs,
   ensureMonteurMontageDirs,
