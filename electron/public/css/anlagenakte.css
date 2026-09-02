@@ -84,6 +84,11 @@
   font-weight: 600;
 }
 
+.akte-tab.has-open-hinweis {
+  color: #c0392b;
+  font-weight: 700;
+}
+
 .akte-panel {
   display: none;
 }

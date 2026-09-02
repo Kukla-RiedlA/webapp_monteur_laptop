@@ -8411,6 +8411,10 @@
             else if (status === 'rejected') showToast('Ihre Abwesenheit wurde abgelehnt.');
             loadJobsAndAbsences();
             pollAbsenceRequestDecisions();
+          } else if (msg.channel === 'hinweis') {
+            if (window.KuklaLaptopHinweise && typeof window.KuklaLaptopHinweise.refresh === 'function') {
+              window.KuklaLaptopHinweise.refresh();
+            }
           } else if ((msg.channel === 'server_status' || msg.channel === 'auth_security') && isAlertRecipientUser()) {
             var p = msg.payload || {};
             var title = p.title || (msg.channel === 'auth_security' ? 'Login-Sicherheit' : 'Server-Status');

@@ -264,6 +264,28 @@ Geteilte Meldungsliste (Bug + Wunsch), Kommentare, Screenshot auf dem Server. Ha
 
 **Dispo-Desktop:** PHP-Proxy `/api/bug_report_*.php` plus Offline-Fallback `/api/bug-report/*` (SQLite-Spiegel).
 
+### 5.1f Montagehinweise (Dispo `api/`, Mobile, Laptop-Gateway)
+
+Hinweise zu Fabrikationsnummer (`scope=fn`) und Auftrag (`scope=job`). Envelope `ok`, Keys `snake_case`. Dateien ohne Base64 in Sync-Outbox.
+
+| Endpunkt | Methode | Kurzbeschreibung |
+|----------|---------|------------------|
+| `api/hinweise.php` | GET | Query `mine=1` (Lampe+Popup), `fabrikationsnummer`, `job_id`, Übersicht `q`, `date_from/to`, `deadline_from/to`, `overdue`, `sort_col/dir` → `{ ok, items[], lamp?, popup?, total? }` |
+| `api/hinweise.php` | POST | JSON oder multipart `files[]`: `scope`, `body` und/oder Datei, `tag`, `deadline`, `fabrikationsnummer` oder `job_id`, optional `client_uuid` |
+| `api/hinweis_action.php` | POST JSON | `hinweis_id`, `action` (`verwerfen`/`aufheben`/`shown`/`kept`/`dismissed`), optional `client_action_id` |
+| `api/hinweis_done.php` | POST JSON | `hinweis_id` — global `status=done` |
+| `api/hinweis_file.php` | GET | `id` — Dateibytes |
+| `api/mobile/hinweise.php` | GET | wie Dispo GET, URLs unter `/api/mobile/hinweis_file.php` |
+| `api/mobile/hinweise_create.php` | POST | nur `scope=fn`, `source=techniker` |
+| `api/mobile/hinweis_action.php` | POST JSON | `verwerfen` \| `aufheben` \| `erledigt` |
+| `api/mobile/hinweis_file.php` | GET | `id` |
+
+Antwortfelder u. a.: `hinweis_id`, `scope`, `fabrikationsnummer`, `job_id`, `body`, `tag`, `deadline`, `overdue`, `files`, `created_at`, `created_by_name`, `my_action`, `status`. Job-Liste: `has_open_hinweise`. Job-Detail: `open_hinweise` (ohne Binärdaten).
+
+**Monteur-Laptop:** `GET /api/hinweise/mine`, `GET /api/hinweise`, `POST /api/hinweise/create`, `POST /api/hinweise/action`, `GET /api/hinweise/file` → `api/mobile/hinweise*.php`.
+
+**Tags:** `inbetriebnahme` \| `allgemein` \| `service` \| `betrieb`. Lampe: `red` / `yellow` / `off`.
+
 ### 5.1 Dispo-Web Admin (nur eingeloggte Dispo-Session, `perm_admin`)
 
 Nur für die **interne** PHP/JS-Oberfläche; keine Monteur-Apps. Antworten nutzen **`ok`** (boolean) wie in Abschnitt 3.

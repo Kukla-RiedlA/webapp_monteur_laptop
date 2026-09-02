@@ -203,6 +203,13 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
     assert.ok(serverSrc.includes('if (!keepExistingLocalPdf(localPdfFull))'));
   });
 
+  it('Projekt-/TED-Downloads ersetzen ohne unlink der Zieldatei', () => {
+    assert.ok(serverSrc.includes('replaceFileWithoutUnlink'));
+    assert.equal(serverSrc.includes("targetPath + '.part'"), false);
+    assert.equal(serverSrc.includes("localPath + '.part'"), false);
+    assert.equal(serverSrc.includes("finalPath + '.part'"), false);
+  });
+
   it('Wieder-Online: Push vor JSON-Pull', () => {
     const pullIdx = serverSrc.indexOf("case 'dienstreise_pull'");
     const pushFn = serverSrc.indexOf('async function pushLocalChangesBeforePull', pullIdx);

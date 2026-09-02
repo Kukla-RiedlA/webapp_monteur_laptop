@@ -52,6 +52,7 @@ Legende:
 | **RAMS** | — | Live | Live / Queue bei Fehler | Nein — **Bootstrap-Ausnahme** GAP-009 | Nein | Live-only |
 | TED-Metadaten | `job_ted_index` | `sync_pull` / `dienstreise_pull` | — | Ja (Index); Datei wenn im Ordner | Pull online | Ja |
 | **Geräte / Multi-Device** | `device_id` in userData | register/heartbeat | — | — | — | Ja (`monteur_devices`) |
+| **Montagehinweise** | — (Live) | GET `/api/hinweise/mine` + Job-Felder `open_hinweise` / `has_open_hinweise` | Action/Create an Dispo; Dateien als Pfad (`userData/hinweise-outbox/`), kein Base64 in `pending_changes` | Lampe/Popup nur online (Poll) | Create FN online; Outbox-Pfad geplant | Ja (Dispo kanonisch) |
 
 ---
 

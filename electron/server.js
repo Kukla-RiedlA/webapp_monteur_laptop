@@ -93,6 +93,7 @@ function configurePersistentDbDir() {
 const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore, queueAbrechnungLocalFile } = require('./lib/abrechnung-routes');
 const { copyProtocolsToLocalAbrechnung } = require('./lib/abrechnung-protocol-copy');
 const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, pullRecentLohnLocks, ensureTables: ensureZeitschreibungTables } = require('./lib/zeitschreibung-routes');
+const { registerHinweiseRoutes } = require('./lib/hinweise-routes');
 const { createBackgroundJobService } = require('./lib/background_jobs');
 const {
   isJobAssignedToTechnician,
@@ -197,9 +198,11 @@ const {
 const {
   resolveTedExcelLocal,
   isExcelFilePath,
+  tedLocalFileLooksComplete,
   safeTedFileName,
   safeTedLocalFileName,
 } = require('./lib/ted-excel-local');
+const { replaceFileWithoutUnlink } = require('./lib/replace-file-cloud-safe');
 const { applyKuklaAuditHeaders } = require('./lib/audit-client-headers');
 
 /** Apache/FPM liefert Authorization oft nicht an PHP — Dispo liest X-Kukla-Authorization. */
@@ -8963,12 +8966,7 @@ function createApp(db) {
         const tedDir = path.join(reiseDir, 'TED');
         if (!fs.existsSync(tedDir)) fs.mkdirSync(tedDir, { recursive: true });
         const targetPath = path.join(tedDir, safeName);
-        const partPath = targetPath + '.part';
-        fs.writeFileSync(partPath, buf);
-        try {
-          if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
-        } catch (_) {}
-        fs.renameSync(partPath, targetPath);
+        replaceFileWithoutUnlink(targetPath, buf);
         try {
           upsertJobTedIndex(db, localJobId, jobId, [{ rel_path: relPath, file_name: safeName, fab }]);
           save();
@@ -14949,6 +14947,25 @@ function createApp(db) {
       }
     },
   });
+  registerHinweiseRoutes(app, {
+    getTechnicianId,
+    resolveDispoPushCreds: () => {
+      try {
+        const c = resolveDispoServerCreds({});
+        const baseUrl = String((c && c.baseUrl) || '').trim();
+        if (!baseUrl) return null;
+        return {
+          baseUrl,
+          authHeader: authHeaderFromCredentials(
+            (c && c.serverUsername) || '',
+            (c && c.serverPassword) || '',
+          ),
+        };
+      } catch (_) {
+        return null;
+      }
+    },
+  });
   try {
     ensureZeitschreibungTables(db);
   } catch (e) {
@@ -15554,14 +15571,7 @@ function createApp(db) {
           const localRels = localRelsForPullFile(relPath);
           const localRelPath = localRels[0] || relPath;
           const localPath = path.join(targetDir, localRelPath.replace(/\//g, path.sep));
-          const dir = path.dirname(localPath);
-          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-          const partPath = localPath + '.part';
-          fs.writeFileSync(partPath, buf);
-          try {
-            if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
-          } catch (_) {}
-          fs.renameSync(partPath, localPath);
+          replaceFileWithoutUnlink(localPath, buf);
           applyLocalFileMtimeFromDispo(localPath, fileMtimeMs);
           copyPullFileToSiblingRels(localPath, localRels);
           const relNormPull = normProjectRelPath(localRelPath);
@@ -18315,28 +18325,19 @@ async function pullTedExcelIntoReiseDir(opts) {
     const rel = String(ent.rel_path || '').trim().replace(/\\/g, '/');
     if (!rel || rel.includes('..')) continue;
     const localPath = resolveTedLocalAbsPath(targetDir, db, localJobId, ent, usedLocalNames);
+    const localComplete = tedLocalFileLooksComplete(localPath, ent && ent.file_size);
     const alreadyDone = !forcePull && tedCompletedIncludes(completed, entryKey, ent);
-    if (alreadyDone) {
-      try {
-        if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
-          idx++;
-          skipped++;
-          continue;
-        }
-      } catch (_) {
-        /* fehlerhaft → neu laden */
-      }
+    if (alreadyDone && localComplete) {
+      idx++;
+      skipped++;
+      continue;
     }
-    try {
-      if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
-        if (!completed.includes(entryKey)) completed.push(entryKey);
-        mergeCheckpoint({ ted_completed: completed });
-        idx++;
-        skipped++;
-        continue;
-      }
-    } catch (_) {
-      /* neu laden */
+    if (localComplete) {
+      if (!completed.includes(entryKey)) completed.push(entryKey);
+      mergeCheckpoint({ ted_completed: completed });
+      idx++;
+      skipped++;
+      continue;
     }
     if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
     idx++;
@@ -18352,14 +18353,7 @@ async function pullTedExcelIntoReiseDir(opts) {
         ent.fab,
       );
       const finalPath = resolveTedLocalAbsPath(targetDir, db, localJobId, ent, usedLocalNames);
-      const partPath = finalPath + '.part';
-      const finalDir = path.dirname(finalPath);
-      if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
-      fs.writeFileSync(partPath, dl.buf);
-      try {
-        if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
-      } catch (_) {}
-      fs.renameSync(partPath, finalPath);
+      replaceFileWithoutUnlink(finalPath, dl.buf);
       if (!completed.includes(entryKey)) completed.push(entryKey);
       mergeCheckpoint({ ted_completed: completed });
       downloaded++;

@@ -65,6 +65,25 @@ function isExcelFilePath(targetPath) {
 }
 
 /**
+ * Vorhandene TED-Datei nicht neu laden, wenn sie vollständig wirkt.
+ * Ohne erwartete Größe reicht size > 0 (Index-Cache ohne file_size).
+ * @param {string} localPath
+ * @param {number|string|null} [expectedSize]
+ */
+function tedLocalFileLooksComplete(localPath, expectedSize) {
+  try {
+    if (!localPath || !fs.existsSync(localPath)) return false;
+    const st = fs.statSync(localPath);
+    if (!st.isFile() || st.size <= 0) return false;
+    const want = parseInt(expectedSize, 10);
+    if (Number.isFinite(want) && want > 0 && st.size !== want) return false;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * @param {string} relPath
  * @returns {string[]}
  */
@@ -260,6 +279,7 @@ function resolveTedExcelLocal(opts) {
 module.exports = {
   resolveTedExcelLocal,
   isExcelFilePath,
+  tedLocalFileLooksComplete,
   tedRelPathVariants,
   safeTedFileName,
   safeTedLocalFileName,

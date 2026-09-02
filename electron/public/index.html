@@ -40,6 +40,17 @@
     .app-title { margin: 0; font-size: 1.1rem; font-weight: 600; padding: 0.75rem 1rem 0.25rem; color: var(--text); }
     .toolbar { display: flex; align-items: center; gap: 1rem; padding: 0.25rem 1rem 0.75rem; background: var(--card); flex-wrap: wrap; }
     .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
+    .hinweis-lamp { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 0; background: transparent; cursor: pointer; color: #9aa3a0; }
+    .hinweis-lamp.is-red { color: #c0392b; }
+    .hinweis-lamp.is-yellow { color: #d4a017; }
+    .hinweis-lamp.is-off { color: #c5cdc9; }
+    .hinweis-lamp svg { width: 22px; height: 22px; }
+    .hinweis-modal { display: none; position: fixed; inset: 0; z-index: 4000; background: rgba(0,0,0,.45); align-items: center; justify-content: center; padding: 16px; }
+    .hinweis-modal.is-open { display: flex; }
+    .hinweis-modal-card { background: var(--card, #fff); max-width: 560px; width: 100%; max-height: 85vh; overflow: auto; border-radius: 12px; padding: 16px; }
+    .hinweis-card { border: 1px solid #d8e3df; border-left: 4px solid #0e7b5a; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+    .hinweis-card.is-overdue { border-left-color: #c0392b; }
+    .akte-tab.has-open-hinweis { color: #c0392b; font-weight: 700; }
     .toolbar-technician-name { color: var(--text); font-size: 0.95rem; }
     .app-version { font-size: 0.8rem; color: var(--muted); margin-left: 0.5rem; }
     .app-update-hint {
@@ -1530,6 +1541,9 @@
       </div>
     </div>
     <span class="toolbar-right">
+      <button type="button" id="hinweisLampBtn" class="hinweis-lamp is-off" title="Montagehinweise" aria-label="Montagehinweise">
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M9 21h6v-1.5H9V21zm3-19a7 7 0 00-4 12.7V17h8v-2.3A7 7 0 0012 2zm2.2 11.4l-.7.4V15.5h-3v-1.7l-.7-.4A5.5 5.5 0 1112 3.5a5.5 5.5 0 012.2 9.9z"/></svg>
+      </button>
       <span id="technicianName" class="toolbar-technician-name"></span>
       <span class="jobs-badge-wrap" id="backgroundJobsWrap" style="display:none;" title="">
         <span id="backgroundJobsBadge" class="jobs-badge">Sync</span>
@@ -3452,6 +3466,7 @@
   <script src="js/arbeitsnachweis.js"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js"></script>
+  <script src="js/hinweis-lamp.js"></script>
   <script src="js/probe-copilot-text.js"></script>
   <script src="js/serviceprotokoll-react-bridge.js"></script>
   <script src="js/abrechnung-laptop-bridge.js?v=20260616f"></script>
