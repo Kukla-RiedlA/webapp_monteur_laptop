@@ -45,7 +45,7 @@
   width: 1rem;
   height: 1rem;
   margin: 0;
-  accent-color: var(--sp-green, #007a4d);
+  accent-color: var(--sp-green, #0e7b5a);
 }
 
 .kd-count {
@@ -209,7 +209,7 @@
 }
 
 .kd-gallery-item.selected {
-  border-color: var(--sp-green, #007a4d);
+  border-color: var(--sp-green, #0e7b5a);
   box-shadow: 0 0 0 2px rgba(0, 122, 77, 0.2);
 }
 

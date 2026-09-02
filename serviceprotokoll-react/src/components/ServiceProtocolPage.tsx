@@ -271,7 +271,7 @@ export function ServiceProtocolPage() {
                   <label className="inline-flex items-center gap-2 text-sm font-normal text-[#111827]">
                     <input
                       type="checkbox"
-                      className="h-4 w-4 accent-[#007a4d]"
+                      className="h-4 w-4 accent-[#0e7b5a]"
                       checked={form.pdfDe}
                       onChange={(e) => patchForm({ pdfDe: e.target.checked })}
                     />
@@ -280,7 +280,7 @@ export function ServiceProtocolPage() {
                   <label className="inline-flex items-center gap-2 text-sm font-normal text-[#111827]">
                     <input
                       type="checkbox"
-                      className="h-4 w-4 accent-[#007a4d]"
+                      className="h-4 w-4 accent-[#0e7b5a]"
                       checked={form.pdfEn}
                       onChange={(e) => patchForm({ pdfEn: e.target.checked })}
                     />

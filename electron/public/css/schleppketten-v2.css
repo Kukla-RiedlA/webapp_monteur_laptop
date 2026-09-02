@@ -109,7 +109,7 @@ body.has-sticky-header .sk-mess-table-wrap thead th {
   width: 1rem;
   height: 1rem;
   margin: 0;
-  accent-color: var(--sp-green, #007a4d);
+  accent-color: var(--sp-green, #0e7b5a);
   cursor: pointer;
 }
 

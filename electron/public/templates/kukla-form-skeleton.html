@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<!--
+  Kukla Formular-Skeleton (Laptop / Desktop-Protokolle).
+  Kopieren, IDs/Felder ersetzen, NICHT das Layout-System neu erfinden.
+  CSS: electron/public/css/serviceprotokoll-v2.css (lädt --sp-* als Kukla-Aliase).
+  Rule: .cursor/rules/formular-pdf-design.mdc
+-->
+<div class="sp-v2-form" data-kukla-form-skeleton>
+  <div class="sp-v2-topbar">
+    <div class="sp-v2-topbar-title-wrap">
+      <h1 class="sp-v2-page-title">Dokumenttitel</h1>
+    </div>
+    <div class="sp-v2-topbar-actions">
+      <label class="sp-v2-pdf-lang"><input type="checkbox" checked> DE</label>
+      <label class="sp-v2-pdf-lang"><input type="checkbox"> EN</label>
+      <button type="button" class="btn-primary">PDF</button>
+    </div>
+  </div>
+
+  <section class="sp-v2-section">
+    <div class="sp-v2-section-head">
+      <span class="sp-v2-num">1</span>
+      <h2>Kopfdaten</h2>
+    </div>
+    <div class="sp-v2-section-body">
+      <div class="sp-v2-grid-3">
+        <div class="sp-v2-field">
+          <label for="kf-kunde">Kunde</label>
+          <input id="kf-kunde" type="text" autocomplete="off">
+        </div>
+        <div class="sp-v2-field">
+          <label for="kf-ort">Ort</label>
+          <input id="kf-ort" type="text" autocomplete="off">
+        </div>
+        <div class="sp-v2-field">
+          <label for="kf-datum">Datum</label>
+          <input id="kf-datum" type="date">
+        </div>
+      </div>
+      <p class="sp-v2-hint">Hinweise unter dem Raster, nicht in die Felder quetschen.</p>
+    </div>
+  </section>
+
+  <section class="sp-v2-section">
+    <div class="sp-v2-section-head">
+      <span class="sp-v2-num">2</span>
+      <h2>Inhalt</h2>
+    </div>
+    <div class="sp-v2-section-body">
+      <div class="sp-v2-field">
+        <label for="kf-text">Freitext</label>
+        <textarea id="kf-text" rows="4"></textarea>
+      </div>
+    </div>
+  </section>
+
+  <section class="sp-v2-section">
+    <div class="sp-v2-section-head">
+      <span class="sp-v2-num">3</span>
+      <h2>Unterschrift</h2>
+    </div>
+    <div class="sp-v2-section-body">
+      <div class="sp-v2-sig-grid">
+        <div class="sp-v2-sig-box">
+          <label>Techniker</label>
+          <div class="sp-v2-sig-pad" data-role="signature"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>

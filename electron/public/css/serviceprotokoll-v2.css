@@ -1,8 +1,9 @@
 /* Serviceprotokoll v2 – Mockup-Stil (Karten, grüne Akzente, Icons) */
 
 :root {
-  --sp-green: #007a4d;
-  --sp-green-hover: #006841;
+  /* Alias auf Kukla-Marke – keine zweite Grün-Welt (#007a4d). */
+  --sp-green: var(--kukla-primary, #0e7b5a);
+  --sp-green-hover: var(--kukla-primary-hover, #0c6b4f);
   --sp-mint: #eefaf5;
   --sp-border: #d8e3df;
   --sp-page: #f7f8f8;

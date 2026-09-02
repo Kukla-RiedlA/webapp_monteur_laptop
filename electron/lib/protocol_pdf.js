@@ -3,6 +3,14 @@
 const path = require('path');
 const fs = require('fs');
 const { htmlToStyledBlocks, styledBlocksToPlain } = require('./html_rich_text');
+const { kuklaPdfColors } = require('./protocol_pdf_layout');
+
+/**
+ * Pflicht für neue Dokumenttypen in dieser Datei:
+ * embedLogo (PNG Alpha), kuklaPdfColors, Kopfband, Footer, Keep-together für FN/Sektion.
+ * Keine neuen Grün-Werte, keine zweite Engine. Siehe protocol_pdf_layout.js
+ * und .cursor/rules/formular-pdf-design.mdc.
+ */
 
 async function embedLogo(pdfDoc) {
   const baseDir = path.join(__dirname, '..');
@@ -565,14 +573,8 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   const marginX = 32;
   const marginTop = 24;
   const marginBottom = 40;
-  const green = rgb(14 / 255, 123 / 255, 90 / 255);
-  const greenDark = rgb(12 / 255, 106 / 255, 77 / 255);
-  const greenSoft = rgb(207 / 255, 232 / 255, 209 / 255);
-  const greenHeader = rgb(232 / 255, 244 / 255, 236 / 255);
-  const grayText = rgb(0.25, 0.25, 0.25);
-  const grayMuted = rgb(0.45, 0.45, 0.45);
-  const lineGray = rgb(0.78, 0.82, 0.8);
-  const white = rgb(1, 1, 1);
+  const { green, greenDark, greenSoft, greenHeader, grayText, grayMuted, lineGray, white } =
+    kuklaPdfColors(rgb);
   const tableInnerW = PAGE_W - marginX * 2;
 
   const logo = await embedLogo(pdfDoc);
@@ -1466,15 +1468,8 @@ async function generateKontrollwiegungPdfBuffer(payload, options) {
   const marginX = 28;
   const marginTop = 22;
   const marginBottom = 36;
-  const green = rgb(14 / 255, 123 / 255, 90 / 255);
-  const greenDark = rgb(12 / 255, 106 / 255, 77 / 255);
-  const greenSoft = rgb(207 / 255, 232 / 255, 209 / 255);
-  const greenHeader = rgb(232 / 255, 244 / 255, 236 / 255);
-  const grayText = rgb(0.25, 0.25, 0.25);
-  const grayMuted = rgb(0.45, 0.45, 0.45);
-  const lineGray = rgb(0.78, 0.82, 0.8);
-  const white = rgb(1, 1, 1);
-  const sumBg = rgb(0.93, 0.96, 0.94);
+  const { green, greenDark, greenSoft, greenHeader, grayText, grayMuted, lineGray, white, sumBg } =
+    kuklaPdfColors(rgb);
 
   const logo = await embedLogo(pdfDoc);
   const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
@@ -1910,15 +1905,8 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
   const marginX = 26;
   const marginTop = 22;
   const marginBottom = 36;
-  const green = rgb(14 / 255, 123 / 255, 90 / 255);
-  const greenDark = rgb(12 / 255, 106 / 255, 77 / 255);
-  const greenSoft = rgb(207 / 255, 232 / 255, 209 / 255);
-  const greenHeader = rgb(232 / 255, 244 / 255, 236 / 255);
-  const grayText = rgb(0.25, 0.25, 0.25);
-  const grayMuted = rgb(0.45, 0.45, 0.45);
-  const lineGray = rgb(0.78, 0.82, 0.8);
-  const white = rgb(1, 1, 1);
-  const sumBg = rgb(0.93, 0.96, 0.94);
+  const { green, greenDark, greenSoft, greenHeader, grayText, grayMuted, lineGray, white, sumBg } =
+    kuklaPdfColors(rgb);
 
   const logo = await embedLogo(pdfDoc);
   const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
@@ -2633,14 +2621,8 @@ async function generateMontageberichtPdfBuffer(payload, options) {
   const marginX = 32;
   const marginTop = 24;
   const marginBottom = 40;
-  const green = rgb(14 / 255, 123 / 255, 90 / 255);
-  const greenDark = rgb(12 / 255, 106 / 255, 77 / 255);
-  const greenSoft = rgb(207 / 255, 232 / 255, 209 / 255);
-  const greenHeader = rgb(232 / 255, 244 / 255, 236 / 255);
-  const grayText = rgb(0.25, 0.25, 0.25);
-  const grayMuted = rgb(0.45, 0.45, 0.45);
-  const lineGray = rgb(0.78, 0.82, 0.8);
-  const white = rgb(1, 1, 1);
+  const { green, greenDark, greenSoft, greenHeader, grayText, grayMuted, lineGray, white } =
+    kuklaPdfColors(rgb);
   const tableInnerW = PAGE_W - marginX * 2;
   const headerBandH = 52;
   const contentBottom = marginBottom + PROTOCOL_FOOTER_RESERVED_H;
@@ -3135,13 +3117,8 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   const marginTop = 28;
   const marginBottom = 42;
   const contentBottom = marginBottom + PROTOCOL_FOOTER_RESERVED_H;
-  const green = rgb(14 / 255, 123 / 255, 90 / 255);
-  const greenDark = rgb(12 / 255, 106 / 255, 77 / 255);
-  const greenSoft = rgb(207 / 255, 232 / 255, 209 / 255);
-  const greenHeader = rgb(232 / 255, 244 / 255, 236 / 255);
+  const { green, greenDark, greenSoft, greenHeader, grayMuted, white } = kuklaPdfColors(rgb);
   const grayText = rgb(0.22, 0.22, 0.22);
-  const grayMuted = rgb(0.45, 0.45, 0.45);
-  const white = rgb(1, 1, 1);
   const tableInnerW = PAGE_W - marginX * 2;
 
   const logo = await embedLogo(pdfDoc);
@@ -3753,14 +3730,8 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   const marginX = 32;
   const marginTop = 24;
   const marginBottom = 40;
-  const green = rgb(14 / 255, 123 / 255, 90 / 255);
-  const greenDark = rgb(12 / 255, 106 / 255, 77 / 255);
-  const greenSoft = rgb(207 / 255, 232 / 255, 209 / 255);
-  const greenHeader = rgb(232 / 255, 244 / 255, 236 / 255);
-  const grayText = rgb(0.25, 0.25, 0.25);
-  const grayMuted = rgb(0.45, 0.45, 0.45);
-  const lineGray = rgb(0.78, 0.82, 0.8);
-  const white = rgb(1, 1, 1);
+  const { green, greenDark, greenSoft, greenHeader, grayText, grayMuted, lineGray, white } =
+    kuklaPdfColors(rgb);
   const tableInnerW = PAGE_W - marginX * 2;
   const headerBandH = 52;
   const contentBottom = marginBottom + PROTOCOL_FOOTER_RESERVED_H;

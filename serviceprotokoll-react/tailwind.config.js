@@ -5,8 +5,8 @@ export default {
     extend: {
       colors: {
         kukla: {
-          green: '#007a4d',
-          'green-alt': '#007f5f',
+          green: '#0e7b5a',
+          'green-alt': '#0c6b4f',
           mint: '#eefaf5',
           border: '#d8e3df',
           page: '#f7f8f8',

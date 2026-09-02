@@ -149,7 +149,7 @@ body.has-sticky-header .kw-wiegung-table-wrap thead th {
   width: 1rem;
   height: 1rem;
   margin: 0;
-  accent-color: var(--sp-green, #007a4d);
+  accent-color: var(--sp-green, #0e7b5a);
   cursor: pointer;
 }
 
@@ -166,7 +166,7 @@ body.has-sticky-header .kw-wiegung-table-wrap thead th {
   height: 0.45rem;
   margin-left: 0.35rem;
   border-radius: 50%;
-  background: var(--sp-green, #007a4d);
+  background: var(--sp-green, #0e7b5a);
   vertical-align: middle;
 }
 

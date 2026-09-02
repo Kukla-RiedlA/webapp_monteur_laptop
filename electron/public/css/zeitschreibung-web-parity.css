@@ -3,7 +3,7 @@
 #view-zeitschreibung {
   --zs-head-bg: #eefaf5;
   --zs-head-group-bg: #e3f5ed;
-  --zs-head-fg: #007a4d;
+  --zs-head-fg: #0e7b5a;
   --zs-sa: #fff8d6;
   --zs-so: #fde9df;
   --zs-holiday: #ffb3b3;
@@ -72,7 +72,7 @@
 
 .page-zeitschreibung .zs-tech-name {
   font-weight: 600;
-  color: var(--sp-green, #007a4d);
+  color: var(--sp-green, #0e7b5a);
 }
 
 .page-zeitschreibung .zs-status {
@@ -459,8 +459,8 @@
   flex-shrink: 0;
   font-size: 0.85rem;
   padding: 0.35rem 0.75rem;
-  border: 1px solid var(--sp-green, #007a4d);
-  color: var(--sp-green, #007a4d);
+  border: 1px solid var(--sp-green, #0e7b5a);
+  color: var(--sp-green, #0e7b5a);
   background: #fff;
   border-radius: 8px;
   cursor: pointer;
@@ -471,9 +471,9 @@
 }
 
 .page-zeitschreibung .zs-print-btn-primary {
-  background: var(--sp-green, #007a4d);
+  background: var(--sp-green, #0e7b5a);
   color: #fff;
-  border-color: var(--sp-green, #007a4d);
+  border-color: var(--sp-green, #0e7b5a);
 }
 
 .page-zeitschreibung .zs-print-btn-primary:hover {

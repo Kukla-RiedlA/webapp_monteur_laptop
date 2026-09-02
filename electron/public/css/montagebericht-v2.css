@@ -96,7 +96,7 @@
 
 .montagebericht-tb-chip:hover {
   background: var(--sp-mint, #eefaf5);
-  border-color: var(--sp-green, #007a4d);
+  border-color: var(--sp-green, #0e7b5a);
 }
 
 .montagebericht-tb-chip:active {
@@ -181,8 +181,8 @@
 }
 
 .montagebericht-toolbar .btn.active {
-  background: var(--sp-green, #007a4d);
-  border-color: var(--sp-green, #007a4d);
+  background: var(--sp-green, #0e7b5a);
+  border-color: var(--sp-green, #0e7b5a);
   color: #fff;
 }
 
@@ -207,7 +207,7 @@
 
 .mb-rich-editor[contenteditable="true"]:focus {
   outline: none;
-  border-color: var(--sp-green, #007a4d);
+  border-color: var(--sp-green, #0e7b5a);
   box-shadow: 0 0 0 2px rgba(0, 122, 77, 0.2);
 }
 
@@ -229,7 +229,7 @@
 }
 
 .mb-rich-editor img.mb-img-selected {
-  outline: 2px solid var(--sp-green, #007a4d);
+  outline: 2px solid var(--sp-green, #0e7b5a);
   outline-offset: 2px;
   cursor: default;
 }
@@ -241,7 +241,7 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  background: var(--sp-green, #007a4d);
+  background: var(--sp-green, #0e7b5a);
   border: 2px solid #fff;
   border-radius: 2px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
@@ -274,7 +274,7 @@
 
 .mb-project-photo-card:hover,
 .mb-project-photo-card:focus {
-  border-color: var(--sp-green, #007a4d);
+  border-color: var(--sp-green, #0e7b5a);
   box-shadow: 0 0 0 2px rgba(0, 122, 77, 0.2);
   outline: none;
 }
@@ -354,7 +354,7 @@
 
 .montagebericht-fab-kopf input:focus {
   outline: none;
-  border-color: var(--sp-green, #007a4d);
+  border-color: var(--sp-green, #0e7b5a);
   box-shadow: 0 0 0 2px rgba(0, 122, 77, 0.2);
 }
 
@@ -379,7 +379,7 @@
 
 .montagebericht-fab-felder input[data-fab].drop-target,
 .montagebericht-fab-felder [data-fab-rich].drop-target {
-  outline: 2px solid var(--sp-green, #007a4d);
+  outline: 2px solid var(--sp-green, #0e7b5a);
   outline-offset: 2px;
 }
 
@@ -413,7 +413,7 @@
   width: 1rem;
   height: 1rem;
   margin: 0;
-  accent-color: var(--sp-green, #007a4d);
+  accent-color: var(--sp-green, #0e7b5a);
 }
 
 .mb-v2-actions-row {
@@ -425,13 +425,13 @@
 }
 
 .mb-v2-actions-row .btn-primary {
-  background: var(--sp-green, #007a4d);
-  border-color: var(--sp-green, #007a4d);
+  background: var(--sp-green, #0e7b5a);
+  border-color: var(--sp-green, #0e7b5a);
 }
 
 .mb-v2-actions-row .btn-primary:hover {
-  background: var(--sp-green-hover, #006841);
-  border-color: var(--sp-green-hover, #006841);
+  background: var(--sp-green-hover, #0c6b4f);
+  border-color: var(--sp-green-hover, #0c6b4f);
 }
 
 #viewProtokolleMontagebericht .sp-v2-field select,

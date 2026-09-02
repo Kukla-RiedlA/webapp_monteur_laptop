@@ -1,0 +1,63 @@
+---
+description: Formulare und PDFs – Pflichtvorlage, Tokens, Anti-Patterns (alle Plattformen)
+globs: "**/*.{html,css,php,js,tsx}"
+alwaysApply: true
+---
+
+# Formular- und PDF-Design (Pflicht)
+
+Neue oder geänderte **Online-Formulare** und **PDFs** dürfen nicht frei gestaltet werden. Erst Vorlage kopieren, dann Felder einsetzen. Ohne Checkliste gilt die Arbeit als unfertig.
+
+Kanonische Checkliste: `docs/design/FORMULAR_PDF_CHECKLISTE.md` (Plattform-Root).
+
+## 1) Farben – keine neuen Hex-Werte
+
+| Token | Wert | Nutzung |
+|-------|------|---------|
+| `--kukla-primary` | `#0e7b5a` | Akzente, Buttons, Kanten, PDF-Grün |
+| `--kukla-primary-hover` / dunkel | `#0c6b4f` / `#0c6a4d` | Hover, Sektions-Titel |
+| Kachel-Rand | `#cfe8d1` | Kartenkontur |
+| Mint-Fläche | `#eefaf5` | Sektionskopf, Meta-Band |
+| Body-Text | `#1a1a1a` / `#111827` | kein reines Grau-Blau als Markenfarbe |
+
+`--sp-green` und `--sp-green-hover` sind **Aliase** auf Kukla-Primär, nicht eine zweite Markenfarbe. Kein `#007a4d`, kein `#3d5a80` als Hausfarbe.
+
+Wahrheit CSS: `dispo/assets/css/kukla-brand.css`, `webapp_handy/pwa/css/app-shell.css`, `webapp_monteur_laptop/electron/public/css/kukla-brand.css`.
+
+## 2) Online-Formular – Kopiervorlage, nicht leere Seite
+
+| Plattform | Skeleton / Referenz | Pflicht-Muster |
+|-----------|---------------------|----------------|
+| Laptop / Desktop-Protokolle | `webapp_monteur_laptop/electron/public/templates/kukla-form-skeleton.html` plus CSS `serviceprotokoll-v2.css` / Montagebericht v2 | `sp-v2-section`, `sp-v2-grid-3`, `sp-v2-field`, Kartenradius 8–12px |
+| PWA | `webapp_handy/docs/kukla-form-skeleton.html` plus `kukla-surface-*` in `app-shell.css` | `kukla-surface-form`, `kukla-surface-field`, `kukla-surface-section` – **keine** neuen `.an-card`-Duplikate |
+| Dispo-Web | Auftrag-Maske Variante D + `kukla-brand.css` | Felder nicht auf feste Mini-Höhe quetschen; Tabellen-Kopf-Regel einhalten |
+| Dispo-Desktop | dieselben Web-Assets / Parität | kein eigenes Form-Theme |
+
+## 3) PDF – Formular und Export in einem Arbeitspaket
+
+- Bildschirm-**Vorschau und PDF-Kopf müssen zusammenpassen** (Lektion Arbeitsnachweis: nicht erst Formular, PDF „später“).
+- **Keine neue PDF-Engine.** Laptop/Electron: `pdf-lib` über `electron/lib/protocol_pdf.js` und `protocol_pdf_layout.js`. Server: mPDF mit `dispo/inc/rams/Pdf/assets/pdf_styles.css` oder bestehendes Dompdf-Muster. LibreOffice nur bei echter Excel-1:1-Vorlage.
+- Neue Laptop-PDFs **müssen** nutzen: `embedLogo` (PNG mit Transparenz zuerst), gemeinsames Farbset aus `protocol_pdf_layout.js`, Seiten-Kopfband, Footer „Seite n“, Keep-together für FN-/Sektionsleisten.
+- Server-HTML-PDFs: kein Flex/Grid (mPDF/Dompdf). `page-break-inside: avoid` nur auf Blöcken, nicht auf hohen `tr`.
+
+## 4) Anti-Patterns (aus wiederholten Nachbesserungen)
+
+Nicht noch einmal bauen, dann per Chat flicken:
+
+1. **FN-Leiste / Sektionskopf allein am Seitenende** – Keep-together; Testvorlage `electron/scripts/test-montagebericht-pdf-pagebreak.js`.
+2. **Logo mit weißem/schwarzem Kasten** – PNG mit Alpha, nicht JPG als Erstes.
+3. **Meta-Zeilen auf ~72px gequetscht** – `min-height` / Grid `auto`, nicht starre Zeilenhöhe für mehrzeilige Felder.
+4. **Selects/Dropdowns abgeschnitten** – `overflow: visible` auf Karten; native Popups nicht in `overflow: hidden`.
+5. **Tabellen-Kopf schwimmt** – `.cursor/rules/dispo-tabellen-kopfzeile-sticky.mdc`.
+6. **Print/PDF mit Sticky-Offset** – Druck-CSS ohne `top: 120px` aus der Bildschirm-Navi.
+7. **Clipped Flags / `???`** – kein `overflow: hidden` auf Badges ohne Platzprüfung.
+8. **PDF-Kopf weicht von der Vorschau ab** – dieselbe Reihenfolge: Logo, Titel, Nr., Meta-Zeilen.
+
+## 5) Definition of Done (Formular oder PDF)
+
+- [ ] Skeleton/Referenz kopiert, keine neuen Hausfarben.
+- [ ] Formular im Browser: Desktop-Breite **und** schmal (~360px PWA).
+- [ ] PDF-Beispiel: langer Text (Seitenumbruch), leere Felder, DE und EN falls das Dokument bilingual ist.
+- [ ] Logo ohne Kasten; FN-/Sektionsblock nicht allein am Seitenende.
+- [ ] Vorschau-Kopf und PDF-Kopf gleiche Struktur.
+- [ ] Checkliste in `docs/design/FORMULAR_PDF_CHECKLISTE.md` durchgegangen.

@@ -5,6 +5,10 @@
  * Test-Routine: Montagebericht-PDF hält FN-Leiste und Textblock zusammen.
  * Die grüne FN-Leiste darf nicht allein am Seitenende stehen.
  *
+ * Schablone für JEDES neue Laptop-PDF: Fixture mit langem Fülltext, sodass
+ * der kritische Block ohne Keep-together am Seitenende stünde. Gate laut
+ * .cursor/rules/formular-pdf-design.mdc und docs/design/FORMULAR_PDF_CHECKLISTE.md.
+ *
  * Aus electron/:
  *   node scripts/test-montagebericht-pdf-pagebreak.js
  *   npm run test:montagebericht-pdf-pagebreak          (Electron → inkl. PNG)

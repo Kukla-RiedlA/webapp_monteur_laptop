@@ -31,7 +31,7 @@
   }
 
   .sp-btn-primary {
-    @apply inline-flex h-[38px] items-center justify-center gap-2 rounded-lg bg-kukla-green px-4 text-sm font-semibold text-white shadow-card transition hover:bg-[#006841];
+    @apply inline-flex h-[38px] items-center justify-center gap-2 rounded-lg bg-kukla-green px-4 text-sm font-semibold text-white shadow-card transition hover:bg-[#0c6b4f];
   }
 
   .sp-btn-outline {
