@@ -57,14 +57,20 @@ function registerHinweiseRoutes(app, ctx) {
     }
   });
 
-  app.post('/api/hinweise/create', express.raw({ type: '*/*', limit: '30mb' }), async (req, res) => {
+  app.post('/api/hinweise/create', express.raw({ type: () => true, limit: '30mb' }), async (req, res) => {
     try {
       const url = await dispoUrl('/api/mobile/hinweise_create.php');
+      const buf = Buffer.isBuffer(req.body)
+        ? req.body
+        : Buffer.from(req.body == null ? [] : req.body);
       const ct = req.headers['content-type'] || 'application/octet-stream';
       const r = await fetch(url, {
         method: 'POST',
-        headers: headersFor(req, { 'Content-Type': ct }),
-        body: req.body,
+        headers: headersFor(req, {
+          'Content-Type': ct,
+          'Content-Length': String(buf.length),
+        }),
+        body: buf,
       });
       const body = await r.text();
       res.status(r.status).type('json').send(body);

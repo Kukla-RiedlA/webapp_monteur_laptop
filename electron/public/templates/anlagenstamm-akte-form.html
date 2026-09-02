@@ -89,14 +89,36 @@
       <div class="akte-section"><div class="akte-section-head">Montagehinweise</div>
       <div class="akte-section-body">
         <div id="akteHinweiseList"></div>
-        <form id="akteHinweisCreateForm" style="margin-top:12px">
+        <div class="hinweis-create-form" id="akteHinweisCreateForm">
           <input type="hidden" name="scope" value="fn">
-          <label>Tag <select name="tag"><option value="allgemein">Allgemein</option><option value="inbetriebnahme">Inbetriebnahme</option><option value="service">Service</option><option value="betrieb">Betrieb</option></select></label>
-          <label>Text <textarea name="body" rows="3"></textarea></label>
-          <label>Deadline <input type="date" name="deadline"></label>
-          <div class="hinweis-drop">Dateien <input type="file" name="files[]" multiple></div>
-          <button type="submit" class="btn btn-primary">Hinweis speichern</button>
-        </form>
+          <div class="hinweis-field">
+            <label for="akteHinweisTag">Tag</label>
+            <select id="akteHinweisTag" name="tag">
+              <option value="allgemein">Allgemein</option>
+              <option value="inbetriebnahme">Inbetriebnahme</option>
+              <option value="service">Service</option>
+              <option value="betrieb">Betrieb</option>
+            </select>
+          </div>
+          <div class="hinweis-field">
+            <label for="akteHinweisDeadline">Deadline (optional)</label>
+            <input type="date" id="akteHinweisDeadline" name="deadline">
+          </div>
+          <div class="hinweis-field hinweis-field-full">
+            <label for="akteHinweisBody">Text</label>
+            <textarea id="akteHinweisBody" name="body" rows="4" placeholder="Hinweistext und/oder Dateien anhängen"></textarea>
+          </div>
+          <div class="hinweis-field hinweis-field-full">
+            <div class="hinweis-drop" data-hinweis-drop>
+              Dateien hierher ziehen oder klicken (jpeg/png/webp/gif, pdf, docx/xlsx, zip, max. 25 MB)
+              <input type="file" name="files[]" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.docx,.xlsx,.zip">
+              <div class="hinweis-drop-list" data-hinweis-drop-list></div>
+            </div>
+          </div>
+          <div class="hinweis-create-actions">
+            <button type="button" class="btn btn-primary" data-hinweis-save>Hinweis speichern</button>
+          </div>
+        </div>
       </div></div>
     </div>
     <div class="akte-panel" data-akte-panel="hist">

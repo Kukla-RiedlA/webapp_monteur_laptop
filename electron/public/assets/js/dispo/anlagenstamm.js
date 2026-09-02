@@ -1435,6 +1435,9 @@ if (anlagenForm && !anlagenReadOnly) {
   var elTech = document.getElementById('formElektronikTechnik');
   if (elMain && elTech && elTech.value && !elMain.value) elMain.value = elTech.value;
   const fd = new FormData(this);
+  this.querySelectorAll('.hinweis-create-form [name]').forEach(function (el) {
+    if (el.name) fd.delete(el.name);
+  });
   fetch(anlagenstammApiUrl('api/anlagenstamm_save.php'), { method: 'POST', body: fd, headers: anlagenstammApiHeaders() })
     .then(r => r.json())
     .then(data => {

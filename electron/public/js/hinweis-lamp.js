@@ -87,6 +87,72 @@
       .catch(function () {});
   }
 
+  function bindDropzone(zone) {
+    if (!zone || zone.getAttribute('data-bound')) return;
+    zone.setAttribute('data-bound', '1');
+    var input = zone.querySelector('input[type="file"]');
+    var list = zone.querySelector('[data-hinweis-drop-list]');
+    function names() {
+      if (!list || !input || !input.files) return;
+      var n = [];
+      for (var i = 0; i < input.files.length; i++) n.push(input.files[i].name);
+      list.textContent = n.join(', ');
+    }
+    zone.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (input) input.click();
+    });
+    zone.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      zone.classList.add('is-drag');
+    });
+    zone.addEventListener('dragleave', function () {
+      zone.classList.remove('is-drag');
+    });
+    zone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      zone.classList.remove('is-drag');
+      if (!input || !e.dataTransfer || !e.dataTransfer.files) return;
+      input.files = e.dataTransfer.files;
+      names();
+    });
+    if (input) input.addEventListener('change', names);
+  }
+
+  function collectFormData(root) {
+    var fd = new FormData();
+    if (!root) return fd;
+    var nodes = root.querySelectorAll('input, select, textarea');
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!el.name || el.disabled) continue;
+      var type = String(el.type || '').toLowerCase();
+      if (type === 'file') {
+        var files = el.files || [];
+        for (var f = 0; f < files.length; f++) fd.append(el.name, files[f]);
+        continue;
+      }
+      if ((type === 'checkbox' || type === 'radio') && !el.checked) continue;
+      fd.append(el.name, el.value);
+    }
+    return fd;
+  }
+
+  function resetCreateForm(root) {
+    if (!root) return;
+    root.querySelectorAll('input, select, textarea').forEach(function (el) {
+      var type = String(el.type || '').toLowerCase();
+      if (type === 'hidden') return;
+      if (type === 'file') { el.value = ''; return; }
+      if (el.tagName === 'SELECT') { el.selectedIndex = 0; return; }
+      el.value = '';
+    });
+    var list = root.querySelector('[data-hinweis-drop-list]');
+    if (list) list.textContent = '';
+  }
+
   function loadAkte() {
     var list = document.getElementById('akteHinweiseList');
     if (!list) return;
@@ -105,16 +171,20 @@
     var form = document.getElementById('akteHinweisCreateForm');
     if (form && !form.getAttribute('data-bound')) {
       form.setAttribute('data-bound', '1');
-      form.addEventListener('submit', function (e) {
+      bindDropzone(form.querySelector('[data-hinweis-drop]'));
+      form.addEventListener('click', function (e) {
+        var btn = e.target.closest && e.target.closest('[data-hinweis-save]');
+        if (!btn || !form.contains(btn)) return;
         e.preventDefault();
-        var fd = new FormData(form);
+        e.stopPropagation();
+        var fd = collectFormData(form);
         fd.set('scope', 'fn');
-        fd.set('fabrikationsnummer', fab);
+        fd.set('fabrikationsnummer', fabEl ? String(fabEl.value || '').trim() : fab);
         fetch(API_BASE + '/api/hinweise/create', { method: 'POST', body: fd })
           .then(function (r) { return r.json(); })
           .then(function (d) {
             if (!d || d.ok === false) throw new Error((d && d.error) || 'Fehler');
-            form.reset();
+            resetCreateForm(form);
             loadAkte();
             refresh();
           })
