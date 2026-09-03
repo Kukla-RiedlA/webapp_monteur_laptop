@@ -21489,7 +21489,9 @@
         function finish(ok) {
           if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
           try {
-            var frame = document.getElementById('serviceprotokollReactFrame');
+            var kind = window.__kuklaProtokollHostKind;
+            var frameId = kind === 'ibn' ? 'inbetriebnahmeReactFrame' : 'serviceprotokollReactFrame';
+            var frame = document.getElementById(frameId);
             if (frame && frame.contentWindow) frame.contentWindow.focus();
             else window.focus();
           } catch (e) { /* ignore */ }
@@ -22162,9 +22164,6 @@
         return !!(serviceJobData && jobSelect && jobSelect.value && getActiveFab() && !serviceprotokollFabSwitching);
       },
       fingerprint: function () {
-        if (activeReactBridge() && typeof activeReactBridge().flushFromReact === 'function') {
-          activeReactBridge().flushFromReact();
-        }
         var fab = getActiveFab();
         return protocolAutosaveFingerprint({
           fab: fab,
@@ -23341,7 +23340,6 @@
           kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
           abschluss: abschlussPayload,
           signature_override_png: (abschlussPayload && abschlussPayload.signature_override_png) || '',
-          apply_to_anlagenstamm: applyStamm || undefined,
           jsonOnly: jsonOnly,
           local_only: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
           skip_dispo_sync: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
@@ -23456,7 +23454,6 @@
           protokolle: built.protokolle,
           pdf_languages: pdfLangs,
           signature_override_png: (abschlussNow && abschlussNow.signature_override_png) || '',
-          apply_to_anlagenstamm: applyStamm || undefined,
           base_url: getDispoBaseUrl(),
           dispoBaseUrl: getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
@@ -23617,6 +23614,14 @@
       };
     }
 
+    function spWorkStepsSignature(steps) {
+      return (steps || []).map(function (s) {
+        return String(
+          (s.bezeichnung_de || '') + '\n' + (s.bezeichnung_en || '') + '\n' + (s.status || '') + '\n' + (s.bemerkung || ''),
+        ).toLowerCase();
+      }).join('||');
+    }
+
     function spApplyPayloadFromReact(payload) {
       if (serviceprotokollFabSwitching) return;
       if (!payload || !payload.form) return;
@@ -23658,7 +23663,12 @@
             measurements: matrixToMeasurementsRows(mm)
           };
         });
-        applySpLoadCellsToForm(mergedCells);
+        var cellsSig = function (list) {
+          return JSON.stringify((list || []).map(function (c) {
+            return [c.type || '', c.serialNumber || '', c.position || '', c.supplyVoltage || '', c.sensitivity || '', c.mess_matrix || null];
+          }));
+        };
+        if (cellsSig(mergedCells) !== cellsSig(curCells)) applySpLoadCellsToForm(mergedCells);
       } else {
         setVal('spMessType', f.loadcellType);
         setVal('spMessSeriennummer', f.serialNumber);
@@ -23688,7 +23698,7 @@
         applyPgTestToForm([tl.weight || '', tl.display || '', tl.deviation || '', tl.value4 || '']);
       }
       if (serviceprotokollHostHydrated && Array.isArray(payload.workSteps) && Date.now() >= spWorkStepsHostLockUntil) {
-        arbeitsschritte = payload.workSteps.map(function (s, i) {
+        var nextSteps = payload.workSteps.map(function (s, i) {
           var prev = arbeitsschritte[i] || {};
           var de = String(s.labelDe != null ? s.labelDe : '').trim();
           var en = String(s.labelEn != null ? s.labelEn : '').trim();
@@ -23706,10 +23716,12 @@
             bemerkung: String(s.remark || '')
           };
         });
-        if (!arbeitsschritte.length) {
-          arbeitsschritte = [{ bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' }];
+        if (!nextSteps.length) {
+          nextSteps = [{ bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' }];
         }
-        renderSteps();
+        var stepsChanged = spWorkStepsSignature(nextSteps) !== spWorkStepsSignature(arbeitsschritte);
+        arbeitsschritte = nextSteps;
+        if (stepsChanged) renderSteps();
       }
       updateVersSpannungHint();
     }
@@ -24192,9 +24204,29 @@
       });
     }
 
+    function setProtokollReactFrameActive(kind) {
+      var ibn = document.getElementById('inbetriebnahmeReactFrame');
+      var svc = document.getElementById('serviceprotokollReactFrame');
+      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn';
+      var svcSrc = 'serviceprotokoll-react/index.html';
+      function srcOf(el) {
+        return String((el && el.getAttribute('src')) || '');
+      }
+      if (kind === 'ibn') {
+        if (svc && srcOf(svc).indexOf('serviceprotokoll-react/index.html') !== -1 && srcOf(svc).indexOf('kind=ibn') === -1) {
+          svc.src = 'about:blank';
+        }
+        if (ibn && srcOf(ibn).indexOf('kind=ibn') === -1) ibn.src = ibnSrc;
+        return;
+      }
+      if (ibn && srcOf(ibn).indexOf('kind=ibn') !== -1) ibn.src = 'about:blank';
+      if (svc && srcOf(svc).indexOf('serviceprotokoll-react/index.html') === -1) svc.src = svcSrc;
+    }
+
     function openServiceLikeProtokoll(kindCfg) {
       spProtocol = kindCfg || SP_PROTOCOL_SERVICE;
       window.__kuklaProtokollHostKind = spProtocol.hostKind;
+      setProtokollReactFrameActive(spProtocol.hostKind);
       loadServiceJobs().then(function (jobs) {
         rememberServiceAssignedJobs(jobs);
         if (jobSelect) {

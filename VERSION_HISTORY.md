@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.041
+- **IBN/Service-Speichern:** Hänger beim Ändern von Anlagenparametern (Type/Qmax/v) behoben – nur ein React-Formular aktiv, kein doppelter Anlagenstamm-Save, Job-Abgleich nur bei geänderten Feldern.
+
 ## V 2.006.040
 - **Inbetriebnahme-Protokoll:** eigenes Formular (wie Service) mit IBN-Katalog, SQLite-Zwischenstand und PDF-Titel.
 - **Speichern:** Toast ohne Dateiname; „Zuletzt gespeichert“ nach Speichern und nach erneutem Öffnen aus der DB.

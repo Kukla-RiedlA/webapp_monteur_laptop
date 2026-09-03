@@ -347,6 +347,15 @@ function stammFieldTrim(val) {
   return s;
 }
 
+function stammJobFieldsChanged(before, after) {
+  const a = before || {};
+  const b = after || {};
+  for (const k of JOB_FAB_STAMM_KEYS) {
+    if (stammFieldTrim(a[k]) !== stammFieldTrim(b[k])) return true;
+  }
+  return false;
+}
+
 function parseJobFabrikationsnummernRows(raw) {
   if (raw == null || raw === '') return [];
   const s = String(raw).trim();
@@ -482,22 +491,29 @@ function enrichFabJsonWithLocalAnlagenstamm(db, fabJson) {
   return JSON.stringify(out);
 }
 
+function yieldStammJobFanout() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 /** Nach lokalem Stamm-Save: alle Aufträge mit dieser FN in jobs.fabrikationsnummern aktualisieren. */
-function applyLocalAnlagenstammToMatchingJobs(db, fab) {
+async function applyLocalAnlagenstammToMatchingJobs(db, fab) {
   ensureAnlagenstammLocalSchema(db);
   const stamm = anlagenstammLookupByFab(db, String(fab || '').trim());
   if (!stamm) return 0;
   const fn = normJobFabKey({ fabrikationsnummer: fab });
   if (!fn) return 0;
   const localDirty = Number(stamm.dirty) === 1;
+  const like = '%' + String(fn).replace(/%/g, '').replace(/_/g, '') + '%';
   const jobRows = db
     .prepare(
       `SELECT id, fabrikationsnummern FROM jobs
-       WHERE fabrikationsnummern IS NOT NULL AND TRIM(fabrikationsnummern) != ''`,
+       WHERE fabrikationsnummern IS NOT NULL AND TRIM(fabrikationsnummern) != ''
+         AND fabrikationsnummern LIKE ?`,
     )
-    .all();
+    .all(like);
   let updated = 0;
-  for (const j of jobRows) {
+  for (let i = 0; i < jobRows.length; i++) {
+    const j = jobRows[i];
     const parsed = parseJobFabrikationsnummernRows(j.fabrikationsnummern);
     let touched = false;
     const next = parsed.map((r) => {
@@ -512,6 +528,7 @@ function applyLocalAnlagenstammToMatchingJobs(db, fab) {
       );
       updated++;
     }
+    if (i > 0 && i % 8 === 0) await yieldStammJobFanout();
   }
   return updated;
 }
@@ -1166,8 +1183,9 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
     return localResult;
   }
   const fabKey = String(localResult.fabrikationsnummer || '').trim();
-  if (fabKey) {
-    applyLocalAnlagenstammToMatchingJobs(db, fabKey);
+  const existingAfterSave = fabKey ? anlagenstammLookupByFab(db, fabKey) : null;
+  if (fabKey && stammJobFieldsChanged(existingBeforeSave, existingAfterSave || bodyMerged)) {
+    await applyLocalAnlagenstammToMatchingJobs(db, fabKey);
   }
   const baseCandidates = buildDispoBaseCandidates({
     baseUrl: body.baseUrl,
@@ -1175,7 +1193,6 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
     internalUrl: body.internalUrl,
   });
   const defaultBase = baseCandidates.length ? baseCandidates[0] : '';
-  const existingAfterSave = fabKey ? anlagenstammLookupByFab(db, fabKey) : null;
   const pushStamm = stripEmptyStammFieldsForDispoPush(bodyNorm, existingBeforeSave || existingAfterSave || {});
   const pushPayload = Object.assign({}, pushStamm, {
     fabrikationsnummer: localResult.fabrikationsnummer,
@@ -20444,7 +20461,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
             db.prepare('UPDATE anlagenstamm_local SET dirty = 0 WHERE TRIM(fabrikationsnummer) = TRIM(?)').run(fab);
           }
           dedupeAnlagenstammLocalByFab(db, fab);
-          applyLocalAnlagenstammToMatchingJobs(db, fab);
+          await applyLocalAnlagenstammToMatchingJobs(db, fab);
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
       } catch (e) {
