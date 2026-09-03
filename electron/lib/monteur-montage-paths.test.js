@@ -149,4 +149,15 @@ describe('monteur-montage-paths lazy mkdir', () => {
     assert.equal(fs.existsSync(stale), false);
     assert.equal(fs.existsSync(path.join(anlage, '7118_Kunde_Ort_DE', 'a.txt')), true);
   });
+
+  it('leerer FN-Alias-Ordner wird entfernt ohne Merge-Log', async () => {
+    const anlage = path.join(reiseDir, 'Dokumente_Anlage');
+    const can = '7118_Kunde_Ort_DE';
+    fs.mkdirSync(path.join(anlage, can), { recursive: true });
+    fs.writeFileSync(path.join(anlage, can, 'keep.txt'), 'x');
+    fs.mkdirSync(path.join(anlage, '7118'), { recursive: true });
+    await migrateAliasFnFolders(reiseDir, [{ fab: '7118', folder_name_canonical: can }]);
+    assert.equal(fs.existsSync(path.join(anlage, '7118')), false);
+    assert.equal(fs.existsSync(path.join(anlage, can, 'keep.txt')), true);
+  });
 });

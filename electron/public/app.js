@@ -3664,6 +3664,9 @@
     updateProjektdatenHeadingMeta(job);
     content.innerHTML = renderJobDetailsContent(job);
     bindLeistungActions();
+    if (window.KuklaLaptopHinweise && typeof window.KuklaLaptopHinweise.loadJob === 'function') {
+      window.KuklaLaptopHinweise.loadJob(job);
+    }
     if (!displayOpts.skipDeferredLoads) {
       hydrateProjektdatenLeistungFromLocalStamm(job);
     }
@@ -4774,6 +4777,9 @@
       }
       html += '</tbody></table></div>';
     }
+    html += '</div>';
+    html += '<div class="modal-detail-section projektdaten-hinweise-section" id="jobHinweiseCard" hidden>';
+    html += '<div id="jobHinweiseList"></div>';
     html += '</div>';
     html += '</div>';
     html += '<aside class="projektdaten-leistung-split-side" aria-label="PROJEKTE NEU">';

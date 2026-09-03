@@ -23,13 +23,15 @@ describe('replaceFileWithoutUnlink', () => {
     }
   });
 
-  it('legt eine neue Datei an', () => {
+  it('legt eine neue Datei an', async () => {
     const dest = path.join(dir, 'neu.xls');
-    replaceFileWithoutUnlink(dest, Buffer.from('ted-a'));
+    const ret = replaceFileWithoutUnlink(dest, Buffer.from('ted-a'));
+    assert.equal(typeof ret.then, 'function');
+    await ret;
     assert.equal(fs.readFileSync(dest, 'utf8'), 'ted-a');
   });
 
-  it('überschreibt vorhandene Datei ohne unlink der Zieldatei', () => {
+  it('überschreibt vorhandene Datei ohne unlink der Zieldatei', async () => {
     const dest = path.join(dir, '1230401DF-AL_Aksaray-71.xls');
     fs.writeFileSync(dest, 'alt');
     const origUnlink = fs.unlinkSync;
@@ -39,7 +41,7 @@ describe('replaceFileWithoutUnlink', () => {
       return origUnlink(p);
     };
     try {
-      replaceFileWithoutUnlink(dest, Buffer.from('neu-inhalt'));
+      await replaceFileWithoutUnlink(dest, Buffer.from('neu-inhalt'));
     } finally {
       fs.unlinkSync = origUnlink;
     }

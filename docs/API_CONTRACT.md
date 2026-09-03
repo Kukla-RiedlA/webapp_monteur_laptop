@@ -271,7 +271,7 @@ Hinweise zu Fabrikationsnummer (`scope=fn`) und Auftrag (`scope=job`). Envelope 
 | Endpunkt | Methode | Kurzbeschreibung |
 |----------|---------|------------------|
 | `api/hinweise.php` | GET | Query `mine=1` (Lampe+Popup), `fabrikationsnummer`, `job_id`, Übersicht `q`, `date_from/to`, `deadline_from/to`, `overdue`, `sort_col/dir` → `{ ok, items[], lamp?, popup?, total? }` |
-| `api/hinweise.php` | POST | JSON oder multipart `files[]`: `scope`, `body` und/oder Datei, `tag`, `deadline`, `fabrikationsnummer` oder `job_id`, optional `client_uuid` |
+| `api/hinweise.php` | POST | Anlegen: JSON oder multipart `files[]` mit `scope`, `body` und/oder Datei, `tag`, `deadline`, `fabrikationsnummer` oder `job_id`, optional `client_uuid`. Bearbeiten: zusätzlich `hinweis_id` — ändert `body`/`tag`/`deadline`, hängt neue Dateien an; Scope/FN/Auftrag unverändert. |
 | `api/hinweis_action.php` | POST JSON | `hinweis_id`, `action` (`verwerfen`/`aufheben`/`shown`/`kept`/`dismissed`), optional `client_action_id` |
 | `api/hinweis_done.php` | POST JSON | `hinweis_id` — global `status=done` |
 | `api/hinweis_file.php` | GET | `id` — Dateibytes |

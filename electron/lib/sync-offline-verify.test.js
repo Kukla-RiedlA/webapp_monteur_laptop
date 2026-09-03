@@ -205,6 +205,9 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
 
   it('Projekt-/TED-Downloads ersetzen ohne unlink der Zieldatei', () => {
     assert.ok(serverSrc.includes('replaceFileWithoutUnlink'));
+    assert.ok(serverSrc.includes('tedExcelPullInFlight'));
+    assert.ok(serverSrc.includes('yieldTedPullLoop'));
+    assert.equal(serverSrc.includes('sleepSync'), false);
     assert.equal(serverSrc.includes("targetPath + '.part'"), false);
     assert.equal(serverSrc.includes("localPath + '.part'"), false);
     assert.equal(serverSrc.includes("finalPath + '.part'"), false);
@@ -220,6 +223,7 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
   });
 
   it('sync_pull queued geänderte Dateien vor Delta-Pull', () => {
+    assert.ok(serverSrc.includes('opts.skipDeepSearch === false'));
     const syncIdx = serverSrc.indexOf("case 'sync_pull'");
     const changed = serverSrc.indexOf('enqueueDienstreisePushChanged', syncIdx);
     const delta = serverSrc.indexOf('enqueuePeriodicDienstreiseDeltaPulls', syncIdx);

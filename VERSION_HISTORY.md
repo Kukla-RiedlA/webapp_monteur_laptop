@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.038
+- **Montagehinweise:** lokale Ablage, Gateway-Routen, Lampe und CSS in der Laptop-App.
+- **Anlagenstamm:** Galerie und Montage-Pfade robuster; Cloud-sicheres Datei-Ersetzen.
+
 ## V 2.006.034
 - **Arbeitsnachweis-Sync:** Queue sendet den aktuellen SQLite-Stand statt eingefrorener Dead-Letter; Pull überschreibt vollere lokale Entwürfe nicht.
 - **Auth:** „Token fehlt“ ist kein sofortiger Dead-Letter; Retry pusht mit aktuellem Stand.

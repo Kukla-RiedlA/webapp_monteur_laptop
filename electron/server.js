@@ -1506,7 +1506,7 @@ function createApp(db) {
     upsertAnlagenstammTreeCache,
     buildLocalProjekteNeuTreeForFab: (technicianId, fab) => {
       const f = String(fab || '').trim();
-      if (!f || !technicianId) return null;
+      if (!f) return null;
       const cached = readAnlagenstammTreeCache(db, f);
       if (cached && cached.tree && cached.tree.length) {
         const first = cached.tree[0];
@@ -1516,16 +1516,7 @@ function createApp(db) {
           root_name: first && (first.name || first.label) ? String(first.name || first.label) : '',
         };
       }
-      const jobId = resolveLocalJobIdForFab(technicianId, f);
-      if (!jobId) return null;
-      const pnCtx = getProjekteNeuLocalContext(jobId, f);
-      if (!pnCtx) return null;
-      const scanned = scanProjekteNeuTree(pnCtx.resolved.root, {});
-      return {
-        enabled: true,
-        tree: scanned.tree,
-        root_name: pnCtx.resolved.folderName || '',
-      };
+      return null;
     },
     getDispoUsername: () => resolveDispoServerCreds({}).serverUsername || '',
     getDispoPassword: () => resolveDispoServerCreds({}).serverPassword || '',
@@ -3727,7 +3718,8 @@ function createApp(db) {
           fabMap,
           db,
           readTreeCache: (fab) => readAnlagenstammTreeCache(db, fab),
-          resolveLocalFile: (lid, fab, pnRel) => resolveProjekteNeuLocalFilePath(lid, fab, pnRel),
+          resolveLocalFile: (lid, fab, pnRel) =>
+            resolveProjekteNeuLocalFilePath(lid, fab, pnRel, { skipDeepSearch: true }),
         });
         if (anlageResult) {
           return res.json({
@@ -3742,29 +3734,61 @@ function createApp(db) {
       }
 
       const dirPath = subpath ? path.join(reiseDir, subpath) : reiseDir;
-      if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
-      const names = fs.readdirSync(dirPath);
+      let dirStat;
+      try {
+        dirStat = await fs.promises.stat(dirPath);
+      } catch (_) {
+        return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
+      }
+      if (!dirStat.isDirectory()) return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
+      let dirents;
+      try {
+        dirents = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message || 'Dateiliste konnte nicht gelesen werden.' });
+      }
       const entries = [];
-      for (const name of names) {
-        if (isIgnorableDirEntry(name)) continue; // versteckte/Systemdateien weder anzeigen noch für "leer" zählen
+      let listed = 0;
+      for (const ent of dirents) {
+        const name = ent.name;
+        if (isIgnorableDirEntry(name)) continue;
         const fullPath = path.join(dirPath, name);
-        let stat;
-        try { stat = fs.statSync(fullPath); } catch (e) { continue; }
-        if (stat.isDirectory()) {
-          // Wurzeln (ohne subpath) sichtbar lassen, sonst wirkt der Projektordner nicht angelegt.
-          // Leere Allgemein/Angebot nur anzeigen, wenn sie schon existieren (kein Vorrats-mkdir).
+        const isDirectory = ent.isDirectory();
+        if (!isDirectory && !ent.isFile()) continue;
+        if (isDirectory) {
           const keepEmptyPhotoCategory = name === 'Allgemein' || name === 'Angebot';
-          if (subpath && isEffectivelyEmptyDir(fullPath) && !keepEmptyPhotoCategory) continue;
+          if (subpath && !keepEmptyPhotoCategory && dirents.length <= 24) {
+            try {
+              const childNames = await fs.promises.readdir(fullPath);
+              const visible = childNames.filter((n) => !isIgnorableDirEntry(n));
+              if (!visible.length) continue;
+            } catch (_) {
+              continue;
+            }
+          }
+        }
+        let size = null;
+        let mtime = null;
+        if (!isDirectory) {
+          try {
+            const st = await fs.promises.stat(fullPath);
+            size = st.size;
+            mtime = st.mtime ? st.mtime.toISOString() : null;
+          } catch (e) {
+            continue;
+          }
         }
         const relativePath = subpath ? (subpath.replace(/\\/g, '/') + '/' + name) : name;
         entries.push({
           name,
           relativePath,
           fullPath,
-          isDirectory: stat.isDirectory(),
-          size: stat.isFile() ? stat.size : null,
-          mtime: stat.mtime ? stat.mtime.toISOString() : null,
+          isDirectory,
+          size,
+          mtime,
         });
+        listed += 1;
+        if (listed % 8 === 0) await yieldEventLoop();
       }
       entries.sort((a, b) => {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
@@ -4119,8 +4143,9 @@ function createApp(db) {
       } catch (_) {}
     }
     const baseName = path.basename(rel);
-    if (baseName && !opts.skipDeepSearch) {
-      const maxWalk = 8000;
+    if (baseName && opts.skipDeepSearch === false) {
+      const onOnedrive = hangDiag.classifyPathKind(ctx.reiseDir) === 'onedrive';
+      const maxWalk = onOnedrive ? 250 : 8000;
       let walked = 0;
       const stack = [ctx.dm];
       while (stack.length && walked < maxWalk) {
@@ -4333,16 +4358,6 @@ function createApp(db) {
       }
       return remote;
     }
-    try {
-      filePath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, null, {
-        skipDeepSearch: true,
-      });
-    } catch (_) {
-      filePath = null;
-    }
-    if (filePath) {
-      return generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath);
-    }
     return null;
   }
 
@@ -4409,9 +4424,6 @@ function createApp(db) {
   function cacheProjekteNeuTreesForJob(localJobId) {
     const jobRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
     if (!jobRow) return;
-    const ctxBase = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
-    if (!ctxBase || !fs.existsSync(ctxBase)) return;
-    const dm = path.join(ctxBase, 'Dokumente_Anlage');
     const fabs = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern);
     const fabNums = [...fabs].sort((a, b) => compareFabrikationsnummerKeys(a, b));
     for (const fabNum of fabNums) {
@@ -4419,20 +4431,7 @@ function createApp(db) {
       const cached = readAnlagenstammTreeCache(db, fab);
       if (cached && Array.isArray(cached.tree) && cached.tree.length > 0) {
         ingestProjekteNeuParameterTree(localJobId, fab, cached.tree);
-        continue;
       }
-      const ctx = getProjekteNeuLocalContext(localJobId, fab);
-      if (!ctx) continue;
-      const scanned = scanProjekteNeuTree(ctx.resolved.root, {});
-      if (scanned.tree.length > 0) {
-        upsertAnlagenstammTreeCache(
-          db,
-          fab,
-          { enabled: true, tree: scanned.tree, folder_name: ctx.resolved.folderName },
-          { root_folder_name: ctx.resolved.folderName },
-        );
-      }
-      ingestProjekteNeuParameterTree(localJobId, fab, scanned.tree);
     }
     save();
   }
@@ -4512,6 +4511,16 @@ function createApp(db) {
             folder: folderFromCache,
           });
         }
+        const suggested = canonicalProjekteNeuFolderForJob(jobId, fab);
+        return res.json({
+          ok: true,
+          local: false,
+          enabled: false,
+          tree: [],
+          folder: suggested || '',
+          from_cache: false,
+          message: 'Kein lokaler PROJEKTE-NEU-Cache für diese FN.',
+        });
       }
       const ctx = getProjekteNeuLocalContext(jobId, fab);
       if (!ctx) {
@@ -8273,7 +8282,9 @@ function createApp(db) {
       return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
     }
     if (sourceNorm === 'projekte_neu' && pnPath && wantThumb) {
-      return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, null);
+      return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, null, {
+        preferCache: true,
+      });
     }
     if (sourceNorm === 'projekte_neu' && pnPath) {
       const filePath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdRaw, {
@@ -8966,7 +8977,7 @@ function createApp(db) {
         const tedDir = path.join(reiseDir, 'TED');
         if (!fs.existsSync(tedDir)) fs.mkdirSync(tedDir, { recursive: true });
         const targetPath = path.join(tedDir, safeName);
-        replaceFileWithoutUnlink(targetPath, buf);
+        await replaceFileWithoutUnlink(targetPath, buf);
         try {
           upsertJobTedIndex(db, localJobId, jobId, [{ rel_path: relPath, file_name: safeName, fab }]);
           save();
@@ -15320,15 +15331,15 @@ function createApp(db) {
           return expandTopLevelMontageRelToFnFolders(mapped, localFnEntriesForPull());
         }
 
-        function copyPullFileToSiblingRels(primaryAbs, localRels) {
+        async function copyPullFileToSiblingRels(primaryAbs, localRels) {
           if (!primaryAbs || !fs.existsSync(primaryAbs)) return;
           for (let s = 1; s < localRels.length; s++) {
             const siblingAbs = path.join(targetDir, String(localRels[s] || '').replace(/\//g, path.sep));
             if (siblingAbs === primaryAbs || fs.existsSync(siblingAbs)) continue;
             try {
               const siblingDir = path.dirname(siblingAbs);
-              if (!fs.existsSync(siblingDir)) fs.mkdirSync(siblingDir, { recursive: true });
-              fs.copyFileSync(primaryAbs, siblingAbs);
+              await fs.promises.mkdir(siblingDir, { recursive: true });
+              await fs.promises.copyFile(primaryAbs, siblingAbs);
             } catch (copyErr) {
               console.warn(
                 '[dienstreise_pull] PWA-Foto FN-Kopie',
@@ -15524,7 +15535,7 @@ function createApp(db) {
           if (shouldSkip(relPath, expectedSize, expectedMtimeMs, completed)) {
             const localRelsSkip = localRelsForPullFile(relPath);
             const localRelSkip = localRelsSkip[0] || relPath;
-            copyPullFileToSiblingRels(path.join(targetDir, String(localRelSkip).replace(/\//g, path.sep)), localRelsSkip);
+            await copyPullFileToSiblingRels(path.join(targetDir, String(localRelSkip).replace(/\//g, path.sep)), localRelsSkip);
             const relNormSkip = normProjectRelPath(localRelSkip);
             if (
               relNormSkip &&
@@ -15571,9 +15582,9 @@ function createApp(db) {
           const localRels = localRelsForPullFile(relPath);
           const localRelPath = localRels[0] || relPath;
           const localPath = path.join(targetDir, localRelPath.replace(/\//g, path.sep));
-          replaceFileWithoutUnlink(localPath, buf);
+          await hangDiag.timeAsync('onedrive_write', () => replaceFileWithoutUnlink(localPath, buf));
           applyLocalFileMtimeFromDispo(localPath, fileMtimeMs);
-          copyPullFileToSiblingRels(localPath, localRels);
+          await copyPullFileToSiblingRels(localPath, localRels);
           const relNormPull = normProjectRelPath(localRelPath);
           if (
             relNormPull &&
@@ -15584,6 +15595,7 @@ function createApp(db) {
           if (!completed.includes(relPath)) completed.push(relPath);
           mergeCheckpoint({ completed });
           setProgress('file', i + 1, total, relPath);
+          await yieldEventLoop();
         }
         } catch (dlErr) {
           if (acceptJob) {
@@ -18234,7 +18246,26 @@ function resolveTedLocalAbsPath(targetDir, db, localJobId, ent, usedLocalNames) 
   return path.join(targetDir, 'TED', safeTedLocalFileName(ent, usedLocalNames));
 }
 
+const tedExcelPullInFlight = new Map();
+
+function yieldTedPullLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 async function pullTedExcelIntoReiseDir(opts) {
+  const key = String((opts && opts.localJobId) || '') + ':' + String((opts && opts.serverJobId) || '');
+  const existing = key !== ':' ? tedExcelPullInFlight.get(key) : null;
+  if (existing) return existing;
+  const run = pullTedExcelIntoReiseDirLocked(opts);
+  if (key !== ':') tedExcelPullInFlight.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (key !== ':' && tedExcelPullInFlight.get(key) === run) tedExcelPullInFlight.delete(key);
+  }
+}
+
+async function pullTedExcelIntoReiseDirLocked(opts) {
   const {
     db,
     dbLock,
@@ -18330,6 +18361,7 @@ async function pullTedExcelIntoReiseDir(opts) {
     if (alreadyDone && localComplete) {
       idx++;
       skipped++;
+      if (skipped % 4 === 0) await yieldTedPullLoop();
       continue;
     }
     if (localComplete) {
@@ -18337,6 +18369,7 @@ async function pullTedExcelIntoReiseDir(opts) {
       mergeCheckpoint({ ted_completed: completed });
       idx++;
       skipped++;
+      if (skipped % 4 === 0) await yieldTedPullLoop();
       continue;
     }
     if (signal && signal.aborted) throw Object.assign(new Error('Abgebrochen'), { name: 'AbortError' });
@@ -18353,7 +18386,7 @@ async function pullTedExcelIntoReiseDir(opts) {
         ent.fab,
       );
       const finalPath = resolveTedLocalAbsPath(targetDir, db, localJobId, ent, usedLocalNames);
-      replaceFileWithoutUnlink(finalPath, dl.buf);
+      await hangDiag.timeAsync('onedrive_write', () => replaceFileWithoutUnlink(finalPath, dl.buf));
       if (!completed.includes(entryKey)) completed.push(entryKey);
       mergeCheckpoint({ ted_completed: completed });
       downloaded++;
@@ -18364,6 +18397,7 @@ async function pullTedExcelIntoReiseDir(opts) {
         'rel=' + rel,
         'bytes=' + dl.buf.length,
       );
+      await yieldTedPullLoop();
     } catch (dlErr) {
       tedErrors++;
       console.warn(
@@ -18380,6 +18414,7 @@ async function pullTedExcelIntoReiseDir(opts) {
     console.warn('[pullTedExcel] ' + tedErrors + ' von ' + total + ' TED-Dateien fehlgeschlagen (job ' + serverJobId + ').');
   }
   let present = 0;
+  let checked = 0;
   for (const ent of entries) {
     const rel = String(ent.rel_path || '').trim().replace(/\\/g, '/');
     if (!rel || rel.includes('..')) continue;
@@ -18387,6 +18422,8 @@ async function pullTedExcelIntoReiseDir(opts) {
     try {
       if (fs.existsSync(p) && fs.statSync(p).size > 0) present++;
     } catch (_) {}
+    checked += 1;
+    if (checked % 5 === 0) await yieldTedPullLoop();
   }
   return { total, downloaded, skipped, failed: tedErrors, present };
 }
@@ -18403,13 +18440,7 @@ function fabCacheLookupKeys(fab) {
 }
 
 function readAnlagenstammTreeCache(db, fab) {
-  const cached = readAnlagenstammTreeCacheRow(db, fab);
-  if (!cached) return cached;
-  const folder = String(cached.root_folder_name || '').trim();
-  if (folder && (isDatePrefixedProjectFolderName(folder) || !folderNameMatchesFab(folder, fab))) {
-    return null;
-  }
-  return cached;
+  return readAnlagenstammTreeCacheRow(db, fab);
 }
 
 function queryJobsOpenLocalRows(dbConn, technicianId, query) {

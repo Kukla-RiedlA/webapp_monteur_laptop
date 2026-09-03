@@ -546,6 +546,18 @@ function yieldEventLoop() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+function dirHasVisibleEntries(dirPath) {
+  try {
+    const names = fs.readdirSync(dirPath);
+    return names.some((n) => !isIgnorableDirEntry(n));
+  } catch (_) {
+    return true;
+  }
+}
+
+const lastAnlageFnEnsureAt = new Map();
+const ANLAGE_FN_ENSURE_TTL_MS = 90 * 1000;
+
 async function renameAsync(src, dst) {
   await fs.promises.rename(src, dst);
 }
@@ -641,11 +653,14 @@ function migrateAliasFnFoldersUnder(reiseDir, subfolder, fabFolderEntries) {
         try {
           if (!fs.existsSync(target)) {
             await renameAsync(stale, target);
+            console.warn('[monteur-paths] FN-Alias zusammengeführt', subfolder, name, '->', preferred);
+          } else if (!dirHasVisibleEntries(stale)) {
+            await rmRecursiveAsync(stale);
           } else {
             await mergeDirContentsInto(stale, target);
             await rmRecursiveAsync(stale);
+            console.warn('[monteur-paths] FN-Alias zusammengeführt', subfolder, name, '->', preferred);
           }
-          console.warn('[monteur-paths] FN-Alias zusammengeführt', subfolder, name, '->', preferred);
         } catch (err) {
           console.warn(
             '[monteur-paths] FN-Alias-Migration',
@@ -708,7 +723,11 @@ function rewriteFnFolderSegmentInRel(relPath, fabMap) {
  * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabFolderEntries
  */
 async function ensureAnlageFnDirs(reiseDir, fabFolderEntries) {
+  const key = String(reiseDir || '');
+  const now = Date.now();
+  if (key && now - (lastAnlageFnEnsureAt.get(key) || 0) < ANLAGE_FN_ENSURE_TTL_MS) return;
   await migrateAliasFnFolders(reiseDir, fabFolderEntries);
+  if (key) lastAnlageFnEnsureAt.set(key, now);
 }
 
 /**

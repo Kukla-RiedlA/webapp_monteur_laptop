@@ -236,6 +236,12 @@ const ANLAGENSTAMM_LOCAL_SELECT = `SELECT id, fabrikationsnummer, type, leistung
               pn_root_name, ted_mechanik, dirty, synced_at
        FROM anlagenstamm_local`;
 
+const ANLAGENSTAMM_LOCAL_SELECT_LIGHT = `SELECT id, fabrikationsnummer, type, leistung, kraftaufnehmer, nenngeschwindigkeit,
+              material, tacho, elektronik, elektronik_type, geraete_nummer, bussystem, dms_nr, dms_position, vers_spannung, sensitivitaet, position, aktueller_kunde, letzter_besuch,
+              geliefert_ueber, projekt, bemerkungen, customer_country,
+              pn_root_name, dirty, synced_at
+       FROM anlagenstamm_local`;
+
 const KA_EXTRA_FIELD_MAX = 100;
 const KA_EXTRA_MAX_ITEMS = 20;
 
@@ -352,10 +358,12 @@ function mapRowToListApi(row, opts) {
 
 function listAllAnlagenstammLocal(db, opts) {
   ensureAnlagenstammLocalSchema(db);
-  const rows = db
-    .prepare(`${ANLAGENSTAMM_LOCAL_SELECT} ORDER BY TRIM(fabrikationsnummer) ASC, id ASC`)
-    .all();
-  const mapOpts = opts && opts.light ? { light: true } : undefined;
+  const light = !!(opts && opts.light);
+  const sql = light ? ANLAGENSTAMM_LOCAL_SELECT_LIGHT : ANLAGENSTAMM_LOCAL_SELECT;
+  const rows = hangDiag.timeSync('anlagenstamm_list_all', () =>
+    db.prepare(`${sql} ORDER BY TRIM(fabrikationsnummer) ASC, id ASC`).all(),
+  );
+  const mapOpts = light ? { light: true } : undefined;
   return rows.map((row) => mapRowToListApi(row, mapOpts));
 }
 
@@ -769,7 +777,7 @@ function isRecentLocalAnlagenstammGuard(local, serverRow) {
   return false;
 }
 
-function upsertAnlagenstammRows(db, rows) {
+function upsertAnlagenstammRows(db, rows, opts) {
   const syncedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
   const getByIdStmt = db.prepare('SELECT * FROM anlagenstamm_local WHERE id = ?');
   const delStubStmt = db.prepare('DELETE FROM anlagenstamm_local WHERE id = ?');
@@ -850,6 +858,21 @@ function upsertAnlagenstammRows(db, rows) {
   }
   }
   runDbTransaction(db, applyRows);
+  if (!(opts && opts.skipBump)) bumpAnlagenstammDataGeneration();
+}
+
+const ANLAGENSTAMM_UPSERT_YIELD_CHUNK = 40;
+
+async function upsertAnlagenstammRowsYielding(db, rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return;
+  for (let i = 0; i < list.length; i += ANLAGENSTAMM_UPSERT_YIELD_CHUNK) {
+    const slice = list.slice(i, i + ANLAGENSTAMM_UPSERT_YIELD_CHUNK);
+    hangDiag.timeSync('anlagenstamm_upsert_page', () => {
+      upsertAnlagenstammRows(db, slice, { skipBump: true });
+    });
+    await yieldEventLoop();
+  }
   bumpAnlagenstammDataGeneration();
 }
 
@@ -1511,8 +1534,8 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
         if (Number.isFinite(id) && id > 0) seenIds.add(id);
       }
       await withDbLock(async () => {
-        hangDiag.timeSync('anlagenstamm_upsert_page', () => {
-          if (rows.length) upsertAnlagenstammRows(db, rows);
+        if (rows.length) await upsertAnlagenstammRowsYielding(db, rows);
+        hangDiag.timeSync('anlagenstamm_save', () => {
           updateStammResumeProgress(db, page, totalPages, totalCount);
           if (typeof saveFn === 'function') saveFn();
         });
@@ -1566,8 +1589,8 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
           if (Number.isFinite(id) && id > 0) seenIds.add(id);
         }
         await withDbLock(async () => {
-          hangDiag.timeSync('anlagenstamm_upsert_page', () => {
-            if (rows2.length) upsertAnlagenstammRows(db, rows2);
+          if (rows2.length) await upsertAnlagenstammRowsYielding(db, rows2);
+          hangDiag.timeSync('anlagenstamm_save', () => {
             updateStammResumeProgress(db, page, totalPages, totalCount);
             if (typeof saveFn === 'function') saveFn();
           });

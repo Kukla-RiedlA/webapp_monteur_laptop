@@ -190,20 +190,20 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     const fab = String(req.query.fabrikationsnummer || req.query.fab || '').trim();
     if (!fab) return res.status(400).json({ ok: false, error: 'Fabrikationsnummer fehlt' });
     let tree = [];
+    let source = 'local_cache_empty';
     if (typeof ctx.readAnlagenstammTreeCache === 'function') {
       const cached = ctx.readAnlagenstammTreeCache(db(), fab);
-      if (cached && Array.isArray(cached.tree)) tree = cached.tree;
-    }
-    if (
-      (!tree || !tree.length) &&
-      typeof ctx.buildLocalProjekteNeuTreeForFab === 'function'
-    ) {
-      const local = ctx.buildLocalProjekteNeuTreeForFab(ctx.getTechnicianId(req), fab);
-      if (local && Array.isArray(local.tree) && local.tree.length) tree = local.tree;
+      if (cached && Array.isArray(cached.tree) && cached.tree.length) {
+        tree = cached.tree;
+        source = 'local_cache';
+      }
     }
     const gallery = buildLocalAnlagenstammGallery(fab, tree, {
       technicianId: ctx.getTechnicianId(req),
     });
+    try {
+      console.log('[anlagenstamm_gallery]', fab, 'items=' + gallery.length, 'source=' + source);
+    } catch (_) {}
     if (typeof ctx.prewarmAnlagenstammGalleryThumbs === 'function' && gallery.length) {
       const technicianId = ctx.getTechnicianId(req);
       setImmediate(() => {
@@ -214,7 +214,7 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
         }
       });
     }
-    return res.json({ ok: true, gallery, source: 'local_cache' });
+    return res.json({ ok: true, gallery, source });
   });
 
   app.get('/api/anlagenstamm_files_list.php', async (req, res) => {
@@ -278,11 +278,7 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     if (typeof ctx.buildLocalProjekteNeuTreeForFab === 'function') {
       const local = ctx.buildLocalProjekteNeuTreeForFab(technicianId, fab);
       if (local && local.tree && local.tree.length) {
-        if (typeof ctx.upsertAnlagenstammTreeCache === 'function') {
-          ctx.upsertAnlagenstammTreeCache(db(), fab, local);
-          if (typeof ctx.saveDb === 'function') ctx.saveDb();
-        }
-        return res.json(filesListPayload(local, 'local_scan'));
+        return res.json(filesListPayload(local, 'local_cache'));
       }
     }
 
