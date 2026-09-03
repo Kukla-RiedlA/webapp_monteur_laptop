@@ -9,7 +9,7 @@ const KUNDEN_DOC_FOLDER = 'Kunden Dokumentation';
 const DOC_EXTS = new Set(['.pdf', '.csv', '.pa', '.txt']);
 const IMG_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
 const LEGACY_DOC_RE =
-  /^(Serviceprotokoll_|Kontrollwiegungsprotokoll_|Schleppketten_Test_|Pruefzertifikat_|.*_Montage_DE|.*_report_GB)/i;
+  /^(Serviceprotokoll_|Inbetriebnahmeprotokoll_|Kontrollwiegungsprotokoll_|Schleppketten_Test_|Pruefzertifikat_|.*_Montage_DE|.*_report_GB)/i;
 
 function isIgnorableName(name) {
   const n = String(name || '');
@@ -81,6 +81,7 @@ function isMontageberichtName(name) {
 function classifyDocumentType(name) {
   const n = String(name || '');
   if (/^Serviceprotokoll_/i.test(n)) return 'Serviceprotokoll';
+  if (/^Inbetriebnahmeprotokoll_/i.test(n)) return 'Inbetriebnahme Protokoll';
   if (/^Kontrollwiegungsprotokoll_/i.test(n)) return 'Kontrollwiegung';
   if (/^Schleppketten_Test_/i.test(n)) return 'Schleppketten-Test';
   if (/^Pruefzertifikat_/i.test(n)) return 'Prüfzertifikat';

@@ -6,8 +6,9 @@ export function maskLangFromPdf(pdfDe: boolean, pdfEn: boolean): UiLang {
 
 const STRINGS = {
   title: { de: 'Serviceprotokoll', en: 'Service protocol' },
+  titleIbn: { de: 'Inbetriebnahme Protokoll', en: 'Commissioning report' },
   lastSavedDash: { de: 'Zuletzt gespeichert: –', en: 'Last saved: –' },
-  saveJson: { de: 'Speichern (JSON)', en: 'Save (JSON)' },
+  saveJson: { de: 'Speichern', en: 'Save' },
   singlePdf: { de: 'einzel PDF', en: 'Single PDF' },
   allPdf: { de: 'Alle PDF', en: 'All PDFs' },
   menu: { de: 'Menü', en: 'Menu' },

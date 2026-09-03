@@ -36,11 +36,27 @@ function normalizeCatalogKind(kind) {
   return String(kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service';
 }
 
+function tableHasColumn(db, table, column) {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+    return rows.some(function (r) {
+      return String(r.name) === column;
+    });
+  } catch (_) {
+    return false;
+  }
+}
+
 function addCatalogKindColumn(db, table) {
+  if (tableHasColumn(db, table, 'catalog_kind')) return;
   try {
     db.exec(`ALTER TABLE ${table} ADD COLUMN catalog_kind TEXT NOT NULL DEFAULT 'service'`);
   } catch (_) {
-    /* already exists */
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN catalog_kind TEXT DEFAULT 'service'`);
+    } catch (e2) {
+      /* ignore */
+    }
   }
 }
 
@@ -95,15 +111,21 @@ function ensureArbeitsschritteSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_as_global_sort ON arbeitsschritte_global(sort_order);
     CREATE INDEX IF NOT EXISTS idx_as_user_tech ON arbeitsschritte_user(technician_id, sort_order);
-    CREATE INDEX IF NOT EXISTS idx_as_global_kind_sort ON arbeitsschritte_global(catalog_kind, sort_order);
-    CREATE INDEX IF NOT EXISTS idx_as_user_kind_tech ON arbeitsschritte_user(catalog_kind, technician_id, sort_order);
-    CREATE INDEX IF NOT EXISTS idx_as_preset_global_kind ON arbeitsschritte_preset_global(catalog_kind, type_code);
-    CREATE INDEX IF NOT EXISTS idx_as_preset_user_kind ON arbeitsschritte_preset_user(catalog_kind, type_code);
   `);
   addCatalogKindColumn(db, 'arbeitsschritte_global');
   addCatalogKindColumn(db, 'arbeitsschritte_user');
   addCatalogKindColumn(db, 'arbeitsschritte_preset_global');
   addCatalogKindColumn(db, 'arbeitsschritte_preset_user');
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_as_global_kind_sort ON arbeitsschritte_global(catalog_kind, sort_order);
+      CREATE INDEX IF NOT EXISTS idx_as_user_kind_tech ON arbeitsschritte_user(catalog_kind, technician_id, sort_order);
+      CREATE INDEX IF NOT EXISTS idx_as_preset_global_kind ON arbeitsschritte_preset_global(catalog_kind, type_code);
+      CREATE INDEX IF NOT EXISTS idx_as_preset_user_kind ON arbeitsschritte_preset_user(catalog_kind, type_code);
+    `);
+  } catch (_) {
+    /* Spalte fehlt noch */
+  }
   seedGrundstockIfEmpty(db);
 }
 

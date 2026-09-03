@@ -53,6 +53,8 @@ export function ServiceProtocolPage() {
   const fabChips = fabNumbers.length ? fabNumbers : embedded ? [] : FAB_NUMBERS;
   const uiLang: UiLang = maskLangFromPdf(form.pdfDe, form.pdfEn);
   const displayLang = uiLang;
+  const protocolKind = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('kind') === 'ibn' ? 'ibn' : 'service';
+  const titleKey = protocolKind === 'ibn' ? 'titleIbn' : 'title';
   const [pendingFab, setPendingFab] = useState<string | null>(null);
   const activeFabVisual = pendingFab || form.activeFab || '';
 
@@ -219,7 +221,7 @@ export function ServiceProtocolPage() {
         >
           <div className="flex min-w-0 flex-wrap items-baseline gap-3">
             <SpIcon name="ClipboardList" className="h-8 w-8 shrink-0" />
-            <h1 className="text-2xl font-bold text-[#111827] md:text-[1.75rem]">{t(uiLang, 'title')}</h1>
+            <h1 className="text-2xl font-bold text-[#111827] md:text-[1.75rem]">{t(uiLang, titleKey)}</h1>
             <span className={`text-sm font-semibold ${autosaveError ? 'text-amber-700' : 'text-[#166534]'}`}>
               {localizeAutosaveHint(autosaveHint, uiLang)}
             </span>

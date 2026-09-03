@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.040
+- **Inbetriebnahme-Protokoll:** eigenes Formular (wie Service) mit IBN-Katalog, SQLite-Zwischenstand und PDF-Titel.
+- **Speichern:** Toast ohne Dateiname; „Zuletzt gespeichert“ nach Speichern und nach erneutem Öffnen aus der DB.
+
 ## V 2.006.039
 - **Arbeitsschritte:** lokaler Katalog `catalog_kind` (Service/IBN); Sync zieht beide Kataloge, ohne den Service-Grundstock zu überschreiben.
 

@@ -6694,7 +6694,8 @@ function createApp(db) {
         }
       }
       const protocolJsonKindLabel = {
-        'serviceprotokoll.json': 'Serviceprotokoll JSON',
+        'serviceprotokoll.json': 'Serviceprotokoll',
+        'inbetriebnahmeprotokoll.json': 'Inbetriebnahme Protokoll',
         'montagebericht.json': 'Montagebericht JSON',
         'kontrollwiegungsprotokoll.json': 'Kontrollwiegung JSON',
         'schleppkettenprotokoll.json': 'Schleppketten-Test JSON',
@@ -9144,8 +9145,9 @@ function createApp(db) {
     }
   }
 
-  function buildServiceprotokollDefaultsFromLocal(fab, technicianId) {
+  function buildServiceprotokollDefaultsFromLocal(fab, technicianId, catalogKind) {
     const fn = String(fab || '').trim();
+    const kind = String(catalogKind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service';
     let anlagenType = '';
     let kopf = {};
     try {
@@ -9172,7 +9174,7 @@ function createApp(db) {
     } catch (_) { /* optional */ }
     try {
       arbeitsschritteLocal.ensureArbeitsschritteSchema(db);
-      const resolved = arbeitsschritteLocal.resolveDefaultsLocal(db, technicianId, anlagenType);
+      const resolved = arbeitsschritteLocal.resolveDefaultsLocal(db, technicianId, anlagenType, kind);
       if (resolved && Array.isArray(resolved.arbeitsschritte) && resolved.arbeitsschritte.length) {
         return Object.assign({ ok: true, kopf }, resolved);
       }
@@ -9182,7 +9184,7 @@ function createApp(db) {
       return {
         ok: true,
         source: 'builtin',
-        arbeitsschritte: arbeitsschritteLocal.builtinDefaults(),
+        arbeitsschritte: kind === 'ibn' ? [] : arbeitsschritteLocal.builtinDefaults(),
         kopf,
       };
     }
@@ -9200,18 +9202,21 @@ function createApp(db) {
       if (!technicianId) {
         return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
       }
-      const local = buildServiceprotokollDefaultsFromLocal(fab, technicianId);
+      const catalogKind = String(req.query.catalog_kind || req.query.catalogKind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service';
+      const local = buildServiceprotokollDefaultsFromLocal(fab, technicianId, catalogKind);
       if (localOnly || !dispoBaseUrl) {
         if (local) return res.json(local);
         return res.status(400).json({ ok: false, error: 'Kein lokaler Defaults-Cache – bitte einmal online synchronisieren.' });
       }
       const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
+      const defaultsPhp = catalogKind === 'ibn' ? 'inbetriebnahme_defaults.php' : 'serviceprotokoll_defaults.php';
       const url =
         dispoBaseUrl +
-        '/dispo_api/api/serviceprotokoll_defaults.php?fabrikationsnummer=' +
+        '/dispo_api/api/' + defaultsPhp + '?fabrikationsnummer=' +
         encodeURIComponent(fab) +
         '&technician_id=' +
-        encodeURIComponent(technicianId);
+        encodeURIComponent(technicianId) +
+        (catalogKind === 'ibn' ? '&catalog_kind=ibn' : '');
       try {
         const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
         const data = await r.json().catch(() => ({}));
@@ -11000,6 +11005,7 @@ function createApp(db) {
         kontrollwiegungsprotokoll_id: body.kontrollwiegungsprotokoll_id || null,
         schleppkettenprotokoll_id: body.schleppkettenprotokoll_id || null,
         serviceprotokoll_id: body.serviceprotokoll_id || null,
+        inbetriebnahme_id: body.inbetriebnahme_id || null,
         languages: storedLangs,
         pdf_languages: storedLangs,
         dispoBaseUrl,
@@ -11123,16 +11129,59 @@ function createApp(db) {
     }
   });
 
-  function serviceprotokollJsonPath(reiseDir) {
-    return resolveMonteurDraftJsonPath(reiseDir, 'serviceprotokoll.json', true);
+  const SERVICE_LIKE_PROTOCOL = {
+    serviceprotokoll: {
+      routeKey: 'serviceprotokoll',
+      basename: 'serviceprotokoll.json',
+      entityType: 'serviceprotokoll',
+      draftPhp: 'serviceprotokoll_draft.php',
+      savePhp: 'serviceprotokoll_save.php',
+      saveAllPhp: 'serviceprotokoll_save_all.php',
+      pdfPhp: 'serviceprotokoll_pdf.php',
+      pdfPrefix: 'Serviceprotokoll',
+      titleDe: 'Serviceprotokoll',
+      titleEn: 'Service protocol',
+      saveError: 'Serviceprotokoll konnte nicht gespeichert werden.',
+    },
+    inbetriebnahme: {
+      routeKey: 'inbetriebnahme',
+      basename: 'inbetriebnahmeprotokoll.json',
+      entityType: 'inbetriebnahme',
+      draftPhp: 'inbetriebnahme_draft.php',
+      savePhp: 'inbetriebnahme_save.php',
+      saveAllPhp: 'inbetriebnahme_save_all.php',
+      pdfPhp: 'inbetriebnahme_pdf.php',
+      pdfPrefix: 'Inbetriebnahmeprotokoll',
+      titleDe: 'Inbetriebnahme Protokoll',
+      titleEn: 'Commissioning report',
+      saveError: 'Inbetriebnahme-Protokoll konnte nicht gespeichert werden.',
+    },
+  };
+
+  function serviceLikeSpecFromArg(spec) {
+    if (spec && spec.basename) return spec;
+    if (spec === 'inbetriebnahme' || spec === 'ibn') return SERVICE_LIKE_PROTOCOL.inbetriebnahme;
+    return SERVICE_LIKE_PROTOCOL.serviceprotokoll;
   }
 
-  function readServiceprotokollStore(reiseDir, localJobId) {
+  function serviceLikeSpecFromReq(req) {
+    const p = String((req && req.originalUrl) || (req && req.path) || (req && req.url) || '');
+    if (p.indexOf('/inbetriebnahme') !== -1) return SERVICE_LIKE_PROTOCOL.inbetriebnahme;
+    return SERVICE_LIKE_PROTOCOL.serviceprotokoll;
+  }
+
+  function serviceprotokollJsonPath(reiseDir, spec) {
+    const s = serviceLikeSpecFromArg(spec);
+    return resolveMonteurDraftJsonPath(reiseDir, s.basename, true);
+  }
+
+  function readServiceprotokollStore(reiseDir, localJobId, spec) {
+    const s = serviceLikeSpecFromArg(spec);
     if (localJobId) {
-      const store = protocolDrafts.readStore(db, localJobId, 'serviceprotokoll.json', reiseDir);
+      const store = protocolDrafts.readStore(db, localJobId, s.basename, reiseDir);
       return normalizeServiceprotokollStore(store);
     }
-    const p = serviceprotokollJsonPath(reiseDir);
+    const p = serviceprotokollJsonPath(reiseDir, s);
     if (!fs.existsSync(p)) return { byFab: {} };
     try {
       const data = JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -11204,10 +11253,11 @@ function createApp(db) {
     return Object.assign({}, store, { byFab });
   }
 
-  function writeServiceprotokollDraft(reiseDir, fab, draft, localJobId) {
+  function writeServiceprotokollDraft(reiseDir, fab, draft, localJobId, spec) {
+    const s = serviceLikeSpecFromArg(spec);
     const fn = String(fab || '').trim();
     if (!fn) throw new Error('Fabrikationsnummer fehlt');
-    const store = readServiceprotokollStore(reiseDir, localJobId);
+    const store = readServiceprotokollStore(reiseDir, localJobId, s);
     const prev = store.byFab[fn] || {};
     const incoming = draft && typeof draft === 'object' ? draft : {};
     const incomingAbs = incoming.abschluss;
@@ -11225,9 +11275,9 @@ function createApp(db) {
     });
     const normalized = normalizeServiceprotokollStore(store);
     if (localJobId) {
-      protocolDrafts.writeStore(db, localJobId, 'serviceprotokoll.json', normalized, reiseDir);
+      protocolDrafts.writeStore(db, localJobId, s.basename, normalized, reiseDir);
     } else {
-      const outPath = serviceprotokollJsonPath(reiseDir);
+      const outPath = serviceprotokollJsonPath(reiseDir, s);
       fs.mkdirSync(path.dirname(outPath), { recursive: true });
       writeFileWithRetry(outPath, JSON.stringify(normalized, null, 2));
     }
@@ -11395,10 +11445,11 @@ function createApp(db) {
     return out;
   }
 
-  async function fetchServiceprotokollDraftFromDispo(dispoBaseUrl, serverJobId, technicianId, authHeader) {
+  async function fetchServiceprotokollDraftFromDispo(dispoBaseUrl, serverJobId, technicianId, authHeader, spec) {
+    const s = serviceLikeSpecFromArg(spec);
     const base = String(dispoBaseUrl || '').trim().replace(/\/$/, '');
     if (!base || !serverJobId || !technicianId) return { store: { byFab: {} }, revision: 0 };
-    const url = base + '/dispo_api/api/serviceprotokoll_draft.php?job_id=' + encodeURIComponent(serverJobId) +
+    const url = base + '/dispo_api/api/' + s.draftPhp + '?job_id=' + encodeURIComponent(serverJobId) +
       '&technician_id=' + encodeURIComponent(technicianId);
     try {
       const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId), ...(authHeader || {}) } });
@@ -11414,10 +11465,11 @@ function createApp(db) {
     return { store: { byFab: {} }, revision: 0 };
   }
 
-  async function syncServiceprotokollStoreWithDispo(reiseDir, technicianId, serverJobId, dispoBaseUrl, authHeader, localJobId) {
+  async function syncServiceprotokollStoreWithDispo(reiseDir, technicianId, serverJobId, dispoBaseUrl, authHeader, localJobId, spec) {
+    const s = serviceLikeSpecFromArg(spec);
     const base = String(dispoBaseUrl || '').trim().replace(/\/$/, '');
     if (!base || !serverJobId || !technicianId) {
-      return readServiceprotokollStore(reiseDir, localJobId);
+      return readServiceprotokollStore(reiseDir, localJobId, s);
     }
     const persist = (store, revision, serverUpdatedAt) => {
       const normalized = normalizeServiceprotokollStore(store);
@@ -11425,7 +11477,7 @@ function createApp(db) {
         protocolDrafts.writeDraft(
           db,
           localJobId,
-          'serviceprotokoll.json',
+          s.basename,
           normalized,
           revision,
           serverUpdatedAt,
@@ -11433,7 +11485,7 @@ function createApp(db) {
         );
         return;
       }
-      const localPath = serviceprotokollJsonPath(reiseDir);
+      const localPath = serviceprotokollJsonPath(reiseDir, s);
       fs.mkdirSync(path.dirname(localPath), { recursive: true });
       writeFileWithRetry(
         localPath,
@@ -11449,11 +11501,11 @@ function createApp(db) {
       );
     };
     const localMeta = localJobId
-      ? protocolDrafts.readDraft(db, localJobId, 'serviceprotokoll.json', reiseDir)
-      : readLocalDraftFile(serviceprotokollJsonPath(reiseDir));
+      ? protocolDrafts.readDraft(db, localJobId, s.basename, reiseDir)
+      : readLocalDraftFile(serviceprotokollJsonPath(reiseDir, s));
     const localRevision = parseInt(localMeta.revision, 10) || 0;
-    const local = normalizeServiceprotokollStore(localMeta.payload || readServiceprotokollStore(reiseDir, localJobId));
-    const remoteMeta = await fetchServiceprotokollDraftFromDispo(base, serverJobId, technicianId, authHeader);
+    const local = normalizeServiceprotokollStore(localMeta.payload || readServiceprotokollStore(reiseDir, localJobId, s));
+    const remoteMeta = await fetchServiceprotokollDraftFromDispo(base, serverJobId, technicianId, authHeader, s);
     const remote = remoteMeta.store || { byFab: {} };
     const merged = mergeServiceprotokollDraftStores(local, remote);
     if (isEmptyServiceprotokollStore(merged) && isEmptyServiceprotokollStore(remote)) {
@@ -11468,7 +11520,7 @@ function createApp(db) {
     }
     if (mergedJson !== remoteJson && !(isEmptyServiceprotokollStore(merged) && isEmptyServiceprotokollStore(remote))) {
       try {
-        const postUrl = base + '/dispo_api/api/serviceprotokoll_draft.php';
+        const postUrl = base + '/dispo_api/api/' + s.draftPhp;
         const deviceId =
           multiDeviceApi && multiDeviceApi.deviceId ? multiDeviceApi.deviceId() : undefined;
         const postRes = await fetchWithTimeout(postUrl, {
@@ -11494,7 +11546,7 @@ function createApp(db) {
         if (postRes.status === 409 && postData.code === 'conflict' && multiDeviceApi) {
           try {
             const { writeConflictCopy } = require('./lib/multi-device-sync');
-            writeConflictCopy(serviceprotokollJsonPath(reiseDir), deviceId);
+            writeConflictCopy(serviceprotokollJsonPath(reiseDir, s), deviceId);
           } catch (_) {}
           if (postData.store) {
             persist(postData.store, postData.revision || 0, postData.server_updated_at || null);
@@ -11670,7 +11722,8 @@ function createApp(db) {
       .filter(Boolean);
   }
 
-  async function writeServiceprotokollPdfsLocally(reiseDir, localJobId, fab, technicianId, draftPayload, pdfLangs) {
+  async function writeServiceprotokollPdfsLocally(reiseDir, localJobId, fab, technicianId, draftPayload, pdfLangs, spec) {
+    const s = serviceLikeSpecFromArg(spec);
     const langs = pdfLangs && pdfLangs.length ? pdfLangs : ['de'];
     const multiLang = langs.length > 1;
     const datum = String(draftPayload.durchfuehrungsdatum || '').replace(/-/g, '');
@@ -11698,9 +11751,13 @@ function createApp(db) {
     let localWarning = null;
     for (const lang of langs) {
       try {
-        const pdfBuf = await protocolPdf.generateServiceprotokollPdfBuffer(enriched, { lang });
+        const pdfBuf = await protocolPdf.generateServiceprotokollPdfBuffer(enriched, {
+          lang,
+          titleDe: s.titleDe,
+          titleEn: s.titleEn,
+        });
         const suffix = multiLang ? '_' + lang.toUpperCase() : lang === 'en' ? '_EN' : '';
-        const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
+        const pdfName = s.pdfPrefix + '_' + safeFn + '_' + datum + suffix + '.pdf';
         const fullPath = path.join(targetDir, pdfName);
         writeFileWithRetry(fullPath, pdfBuf);
         savedRel.push(relDir + '/' + pdfName);
@@ -11717,6 +11774,7 @@ function createApp(db) {
   function archivProtocolJsonKindFromName(name) {
     const base = path.basename(String(name || '').replace(/\\/g, '/')).toLowerCase();
     if (base === 'serviceprotokoll.json') return 'serviceprotokoll';
+    if (base === 'inbetriebnahmeprotokoll.json') return 'inbetriebnahme';
     if (base === 'montagebericht.json') return 'montagebericht';
     if (base === 'kontrollwiegungsprotokoll.json') return 'kontrollwiegung';
     if (base === 'schleppkettenprotokoll.json') return 'schleppketten';
@@ -12070,7 +12128,8 @@ function createApp(db) {
       const rec = store.byFab[fab] || {};
       const recPayload = Object.assign({}, rec, { fabrikationsnummer: fab });
       try {
-        if (kind === 'serviceprotokoll') {
+        if (kind === 'serviceprotokoll' || kind === 'inbetriebnahme') {
+          const regenSpec = kind === 'inbetriebnahme' ? SERVICE_LIKE_PROTOCOL.inbetriebnahme : SERVICE_LIKE_PROTOCOL.serviceprotokoll;
           const draftPayload = {
             fabrikationsnummer: fab,
             durchfuehrungsdatum: String(recPayload.durchfuehrungsdatum || '').trim(),
@@ -12115,6 +12174,7 @@ function createApp(db) {
                 '',
             }),
             pdfLangs,
+            regenSpec,
           );
           if (localPdf.savedRel) savedRel.push(...localPdf.savedRel);
           if (localPdf.savedAbs) savedAbs.push(...localPdf.savedAbs);
@@ -12351,7 +12411,9 @@ function createApp(db) {
     fab,
     pdfLangs,
     durchfuehrungsdatum,
+    spec,
   ) {
+    const s = serviceLikeSpecFromArg(spec);
     const langs = pdfLangs && pdfLangs.length ? pdfLangs : ['de'];
     const multiLang = langs.length > 1;
     const datum = String(durchfuehrungsdatum || '').replace(/-/g, '');
@@ -12364,7 +12426,9 @@ function createApp(db) {
       try {
         const pdfUrl =
           dispoBaseUrl +
-          '/dispo_api/api/serviceprotokoll_pdf.php?id=' +
+          '/dispo_api/api/' +
+          s.pdfPhp +
+          '?id=' +
           encodeURIComponent(protokollId) +
           '&technician_id=' +
           encodeURIComponent(technicianId) +
@@ -12379,7 +12443,7 @@ function createApp(db) {
         }
         const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
         const suffix = multiLang ? '_' + lang.toUpperCase() : lang === 'en' ? '_EN' : '';
-        const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + suffix + '.pdf';
+        const pdfName = s.pdfPrefix + '_' + safeFn + '_' + datum + suffix + '.pdf';
         const fullLocalPdf = path.join(targetDir, pdfName);
         if (keepExistingLocalPdf(fullLocalPdf)) {
           savedRel.push(relDir + '/' + pdfName);
@@ -12396,8 +12460,9 @@ function createApp(db) {
     return { savedRel, localWarning };
   }
 
-  app.get('/api/protokolle/serviceprotokoll', async (req, res) => {
+  async function handleServiceLikeProtokollGet(req, res) {
     try {
+      const spec = serviceLikeSpecFromReq(req);
       const technicianId = getTechnicianId(req);
       const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
       const fab = (req.query.fabrikationsnummer || req.query.fab || '').toString().trim();
@@ -12417,11 +12482,11 @@ function createApp(db) {
       const creds = resolveDispoServerCreds(req.query || {});
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
-      let store = readServiceprotokollStore(reiseDir, localJobId);
+      let store = readServiceprotokollStore(reiseDir, localJobId, spec);
       if (!localOnly && creds.baseUrl && hasServerJobId) {
         const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
         try {
-          store = await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, creds.baseUrl, auth, localJobId);
+          store = await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, creds.baseUrl, auth, localJobId, spec);
         } catch (_) {
           /* lokaler Store bleibt */
         }
@@ -12433,9 +12498,14 @@ function createApp(db) {
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
     }
-  });
+  }
+  app.get('/api/protokolle/serviceprotokoll', handleServiceLikeProtokollGet);
+  app.get('/api/protokolle/inbetriebnahme', handleServiceLikeProtokollGet);
 
-  app.post('/api/protokolle/serviceprotokoll', express.json(), async (req, res) => {
+  app.post('/api/protokolle/serviceprotokoll', express.json(), handleServiceLikeProtokollPost);
+  app.post('/api/protokolle/inbetriebnahme', express.json(), handleServiceLikeProtokollPost);
+  async function handleServiceLikeProtokollPost(req, res) {
+    const spec = serviceLikeSpecFromReq(req);
     try {
       const body = req.body || {};
       const technicianId = getTechnicianId(req);
@@ -12514,7 +12584,7 @@ function createApp(db) {
       }
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      writeServiceprotokollDraft(reiseDir, fab, draftPayload, localJobId);
+      writeServiceprotokollDraft(reiseDir, fab, draftPayload, localJobId, spec);
 
       let syncWarning = messSyncWarning;
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
@@ -12524,9 +12594,9 @@ function createApp(db) {
         technicianId,
         serverJobId: parsedServerJobId,
         dispoBaseUrl,
-        basename: 'serviceprotokoll.json',
+        basename: spec.basename,
         reiseDir,
-        filePath: serviceprotokollJsonPath(reiseDir),
+        filePath: serviceprotokollJsonPath(reiseDir, spec),
         username: body.dispoUsername || body.serverUsername,
         password: body.dispoPassword ?? body.serverPassword,
       });
@@ -12534,7 +12604,7 @@ function createApp(db) {
       if (!skipDispoSync && dispoBaseUrl && hasServerJobId) {
         const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.serverPassword ?? body.serverPassword);
         try {
-          await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, dispoBaseUrl, authSync, localJobId);
+          await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, dispoBaseUrl, authSync, localJobId, spec);
         } catch (_) {
           syncWarning = [syncWarning, 'Zwischenstand: Dispo-Sync fehlgeschlagen.'].filter(Boolean).join('\n');
         }
@@ -12597,6 +12667,7 @@ function createApp(db) {
           signature_override_png: body.signature_override_png || '',
         }),
         pdfLangs,
+        spec,
       );
       let savedRel = localPdf.savedRel || [];
       let savedAbs = localPdf.savedAbs || [];
@@ -12606,9 +12677,9 @@ function createApp(db) {
         technicianId,
         serverJobId: parsedServerJobId,
         dispoBaseUrl,
-        basename: 'serviceprotokoll.json',
+        basename: spec.basename,
         reiseDir,
-        filePath: serviceprotokollJsonPath(reiseDir),
+        filePath: serviceprotokollJsonPath(reiseDir, spec),
         username: body.serverUsername || body.dispoUsername,
         password: body.serverPassword ?? body.dispoPassword,
       });
@@ -12620,7 +12691,7 @@ function createApp(db) {
       if (!skipDispoSync && dispoBaseUrl && hasServerJobId) {
         try {
           const saveRes = await fetchWithTimeout(
-            dispoBaseUrl + '/dispo_api/api/serviceprotokoll_save.php',
+            dispoBaseUrl + '/dispo_api/api/' + spec.savePhp,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
@@ -12632,8 +12703,8 @@ function createApp(db) {
           if (saveRes.ok && saveData.ok && saveData.protokoll_id) {
             protokollId = saveData.protokoll_id;
             db.prepare(
-              `DELETE FROM pending_changes WHERE entity_type = 'serviceprotokoll' AND entity_id = ? AND action = 'save'`,
-            ).run(String(localJobId) + ':' + fab);
+              `DELETE FROM pending_changes WHERE entity_type = ? AND entity_id = ? AND action = 'save'`,
+            ).run(spec.entityType, String(localJobId) + ':' + fab);
             // Wichtig: Dispo-PDF nur laden, wenn lokales Corporate-PDF fehlt.
             // downloadServiceprotokollPdfsFromDispo schreibt in dieselben Dateinamen und
             // würde sonst das lokale Layout (wie bei „Alle PDF“) mit dem Dispo-Template überschreiben.
@@ -12649,6 +12720,7 @@ function createApp(db) {
                 fab,
                 pdfLangs,
                 draftPayload.durchfuehrungsdatum,
+                spec,
               );
             }
             if ((!savedRel || !savedRel.length) && dispoPdf.savedRel && dispoPdf.savedRel.length) {
@@ -12659,19 +12731,19 @@ function createApp(db) {
             }
           } else {
             deferred = true;
-            queueDispoProxyPending(db, 'serviceprotokoll', localJobId + ':' + fab, 'save', savePayload);
+            queueDispoProxyPending(db, spec.entityType, localJobId + ':' + fab, 'save', savePayload);
             save();
             syncWarning = [syncWarning, saveData.error || 'Dispo-Speichern fehlgeschlagen – Sync-Queue.'].filter(Boolean).join('\n');
           }
         } catch (dispoErr) {
           deferred = true;
-          queueDispoProxyPending(db, 'serviceprotokoll', localJobId + ':' + fab, 'save', savePayload);
+          queueDispoProxyPending(db, spec.entityType, localJobId + ':' + fab, 'save', savePayload);
           save();
           syncWarning = [syncWarning, 'Dispo nicht erreichbar – Sync-Queue.'].filter(Boolean).join('\n');
         }
       } else {
         deferred = true;
-        queueDispoProxyPending(db, 'serviceprotokoll', localJobId + ':' + fab, 'save', savePayload);
+        queueDispoProxyPending(db, spec.entityType, localJobId + ':' + fab, 'save', savePayload);
         save();
       }
 
@@ -12690,11 +12762,14 @@ function createApp(db) {
       if (e && e.code === 'missing_technician_signature') {
         return failMissingSignature(res);
       }
-      res.status(500).json({ ok: false, error: e.message || 'Serviceprotokoll konnte nicht gespeichert werden.' });
+      res.status(500).json({ ok: false, error: e.message || spec.saveError });
     }
-  });
+  }
 
-  app.post('/api/protokolle/serviceprotokoll/all-pdf', express.json(), async (req, res) => {
+  app.post('/api/protokolle/serviceprotokoll/all-pdf', express.json(), handleServiceLikeProtokollAllPdf);
+  app.post('/api/protokolle/inbetriebnahme/all-pdf', express.json(), handleServiceLikeProtokollAllPdf);
+  async function handleServiceLikeProtokollAllPdf(req, res) {
+    const spec = serviceLikeSpecFromReq(req);
     try {
       const body = req.body || {};
       const technicianId = getTechnicianId(req);
@@ -12789,7 +12864,7 @@ function createApp(db) {
             messSyncWarning = [messSyncWarning, 'FN ' + fab + ': ' + (messErr.message || 'Anlagenstamm-Sync fehlgeschlagen')].filter(Boolean).join('\n');
           }
         }
-        writeServiceprotokollDraft(reiseDir, fab, draftPayload, localJobId);
+        writeServiceprotokollDraft(reiseDir, fab, draftPayload, localJobId, spec);
 
         try {
           const localPdf = await writeServiceprotokollPdfsLocally(
@@ -12805,6 +12880,7 @@ function createApp(db) {
               signature_override_png: body.signature_override_png || '',
             }),
             pdfLangs,
+            spec,
           );
           if (localPdf.savedRel && localPdf.savedRel.length) {
             savedRel.push(...localPdf.savedRel);
@@ -12836,9 +12912,9 @@ function createApp(db) {
         technicianId,
         serverJobId: parsedServerJobId,
         dispoBaseUrl,
-        basename: 'serviceprotokoll.json',
+        basename: spec.basename,
         reiseDir,
-        filePath: serviceprotokollJsonPath(reiseDir),
+        filePath: serviceprotokollJsonPath(reiseDir, spec),
         username: body.serverUsername || body.dispoUsername,
         password: body.serverPassword ?? body.dispoPassword,
       });
@@ -12848,7 +12924,7 @@ function createApp(db) {
       const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
       if (!skipDispoSync && dispoBaseUrl && hasServerJobId) {
         try {
-          const saveAllUrl = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_save_all.php';
+          const saveAllUrl = dispoBaseUrl + '/dispo_api/api/' + spec.saveAllPhp;
           const savePayload = {
             technician_id: body.technician_id != null ? body.technician_id : technicianId,
             job_id: parsedServerJobId,
@@ -12894,7 +12970,7 @@ function createApp(db) {
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'PDFs konnten nicht erstellt werden.' });
     }
-  });
+  }
 
   app.post('/api/serviceprotokoll_save', express.json(), async (req, res) => {
     try {
@@ -14009,6 +14085,7 @@ function createApp(db) {
           formBody.append('bezeichnung_de', body.bezeichnung_de || '');
           formBody.append('bezeichnung_en', body.bezeichnung_en || '');
           formBody.append('sort_order', body.sort_order || 0);
+          formBody.append('catalog_kind', String(body.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_save.php', {
             method: 'POST',
             headers: {
@@ -14202,6 +14279,7 @@ function createApp(db) {
           formBody.append('type_code', body.type_code || '');
           formBody.append('sort_order', body.sort_order || 0);
           formBody.append('step_refs', JSON.stringify(body.step_refs || []));
+          formBody.append('catalog_kind', String(body.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_preset_save.php', {
             method: 'POST',
             headers: {
@@ -20581,6 +20659,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           formBody.append('bezeichnung_de', payloadRaw.bezeichnung_de || '');
           formBody.append('bezeichnung_en', payloadRaw.bezeichnung_en || '');
           formBody.append('sort_order', payloadRaw.sort_order || 0);
+          formBody.append('catalog_kind', String(payloadRaw.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
           const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_save.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
@@ -20633,6 +20712,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           formBody.append('type_code', payloadRaw.type_code || '');
           formBody.append('sort_order', payloadRaw.sort_order || 0);
           formBody.append('step_refs', JSON.stringify(payloadRaw.step_refs || []));
+          formBody.append('catalog_kind', String(payloadRaw.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
           const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_preset_save.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
@@ -20668,8 +20748,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
         continue;
       }
     }
-    if (p.entity_type === 'serviceprotokoll' && p.action === 'save') {
+    if ((p.entity_type === 'serviceprotokoll' || p.entity_type === 'inbetriebnahme') && p.action === 'save') {
       handled = true;
+      const protoSpec = p.entity_type === 'inbetriebnahme' ? SERVICE_LIKE_PROTOCOL.inbetriebnahme : SERVICE_LIKE_PROTOCOL.serviceprotokoll;
       const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
       const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       const techId =
@@ -20679,17 +20760,17 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           db,
           p,
           new Error('Dispo-URL oder Monteur-ID fehlt'),
-          'serviceprotokoll_push_skip',
+          protoSpec.entityType + '_push_skip',
         );
         continue;
       }
       try {
         const jobId = parseInt(payloadRaw.job_id, 10);
         if (!Number.isFinite(jobId) || jobId <= 0) {
-          resolveSyncPushFailure(db, p, new Error('job_id ungültig'), 'serviceprotokoll_push');
+          resolveSyncPushFailure(db, p, new Error('job_id ungültig'), protoSpec.entityType + '_push');
           continue;
         }
-        const r = await fetch(tbBase + '/dispo_api/api/serviceprotokoll_save.php', {
+        const r = await fetch(tbBase + '/dispo_api/api/' + protoSpec.savePhp, {
           method: 'POST',
           headers: header,
           body: JSON.stringify(payloadRaw),
@@ -20702,7 +20783,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
         }
         db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
         } catch (e) {
-        const outcome = resolveSyncPushFailure(db, p, e, 'serviceprotokoll_push');
+        const outcome = resolveSyncPushFailure(db, p, e, protoSpec.entityType + '_push');
         if (outcome === 'retry' || outcome === 'offline') noteFail(e && e.message ? e.message : e);
         continue;
       }

@@ -240,6 +240,34 @@ function prefillFromLocalDrafts(reiseDir, fab, jobMeta, db, localJobId) {
     }
   } catch (_) {}
 
+  try {
+    let ibn = null;
+    if (db && localJobId) {
+      const store = protocolDrafts.readStore(db, localJobId, 'inbetriebnahmeprotokoll.json', reiseDir);
+      ibn = store && store.byFab ? store.byFab[fn] : null;
+    } else {
+      const ibnPath = resolveMonteurDraftJsonPath(reiseDir, 'inbetriebnahmeprotokoll.json', true);
+      if (fs.existsSync(ibnPath)) {
+        const ibnStore = JSON.parse(fs.readFileSync(ibnPath, 'utf8'));
+        ibn = ibnStore && ibnStore.byFab && ibnStore.byFab[fn];
+      }
+    }
+    if (ibn) {
+        out.verfahren.inbetriebnahme = true;
+        out.type = out.type || ibn.kopf_type || ibn.type || '';
+        out.elektronik = out.elektronik || ibn.kopf_dwc || ibn.dwc || '';
+        out.pos_nr = out.pos_nr || ibn.kopf_pos_nr || ibn.pos_nr || '';
+        out.nennleistung = out.nennleistung || ibn.kopf_qmax || '';
+        if (ibn.durchfuehrungsdatum && !out.verfahren.kontrollwiegung && !out.verfahren.schleppketten && !out.verfahren.service) {
+          out.pruefdatum = ibn.durchfuehrungsdatum;
+        }
+        const ibnMess = extractServiceMessFromMesswerte(ibn.messwerte);
+        if (ibnMess) {
+          out.ergebnisse.inbetriebnahme = ibnMess;
+        }
+    }
+  } catch (_) {}
+
   out.zertifikat_nr = 'PZ-' + fn + '-' + String(out.pruefdatum || '').replace(/-/g, '');
   const errs = [];
   if (out.ergebnisse.kontrollwiegung && out.ergebnisse.kontrollwiegung.fehler_prozent != null) {

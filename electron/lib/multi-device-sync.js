@@ -11,6 +11,7 @@ const crypto = require('crypto');
 
 const MONTEUR_DRAFT_BASENAMES = [
   'serviceprotokoll.json',
+  'inbetriebnahmeprotokoll.json',
   'montagebericht.json',
   'kontrollwiegungsprotokoll.json',
   'schleppkettenprotokoll.json',
@@ -20,6 +21,7 @@ const MONTEUR_DRAFT_BASENAMES = [
 /** Dispo-Draft-APIs zu den kanonischen Dateinamen unter Dokumente_Monteur/. */
 const DRAFT_JSON_ENDPOINTS = {
   'serviceprotokoll.json': '/dispo_api/api/serviceprotokoll_draft.php',
+  'inbetriebnahmeprotokoll.json': '/dispo_api/api/inbetriebnahme_draft.php',
   'montagebericht.json': '/dispo_api/api/montagebericht_draft.php',
   'kontrollwiegungsprotokoll.json': '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
   'schleppkettenprotokoll.json': '/dispo_api/api/schleppkettenprotokoll_draft.php',

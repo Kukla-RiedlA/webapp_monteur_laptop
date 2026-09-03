@@ -9971,6 +9971,7 @@
     var base = String(name || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
     return (
       base === 'serviceprotokoll.json' ||
+      base === 'inbetriebnahmeprotokoll.json' ||
       base === 'montagebericht.json' ||
       base === 'kontrollwiegungsprotokoll.json' ||
       base === 'schleppkettenprotokoll.json' ||
@@ -12487,7 +12488,7 @@
     if (typeof flushProtocolAutosaveOnViewChange === 'function') {
       flushProtocolAutosaveOnViewChange(name);
     }
-    if (typeof window.kuklaCloseSpStepPicker === 'function' && name !== 'protokolle-service') {
+    if (typeof window.kuklaCloseSpStepPicker === 'function' && name !== 'protokolle-service' && name !== 'protokolle-inbetriebnahme') {
       window.kuklaCloseSpStepPicker();
     }
     const viewStart = document.getElementById('viewStart');
@@ -12518,6 +12519,8 @@
     if (viewTextbausteine) viewTextbausteine.classList.remove('active');
     const viewArbeitsschritte = document.getElementById('viewArbeitsschritte');
     if (viewArbeitsschritte) viewArbeitsschritte.classList.remove('active');
+    const viewArbeitsschritteIbn = document.getElementById('viewArbeitsschritteIbn');
+    if (viewArbeitsschritteIbn) viewArbeitsschritteIbn.classList.remove('active');
     if (viewArchiv) viewArchiv.classList.remove('active');
     if (viewAbwesenheiten) viewAbwesenheiten.classList.remove('active');
     if (viewAnlagenstamm) viewAnlagenstamm.classList.remove('active');
@@ -12598,6 +12601,9 @@
       if (name === 'protokolle-service' && typeof window.openProtokolleService === 'function') {
         window.openProtokolleService();
       }
+      if (name === 'protokolle-inbetriebnahme' && typeof window.openProtokolleInbetriebnahme === 'function') {
+        window.openProtokolleInbetriebnahme();
+      }
       return;
     }
     if (name === 'textbausteine') {
@@ -12613,6 +12619,14 @@
       if (viewArbeitsschritte) {
         viewArbeitsschritte.classList.add('active');
         if (typeof loadArbeitsschritteView === 'function') loadArbeitsschritteView();
+      }
+      return;
+    }
+    if (name === 'arbeitsschritte-ibn') {
+      viewStart.classList.add('hidden');
+      if (viewArbeitsschritteIbn) {
+        viewArbeitsschritteIbn.classList.add('active');
+        if (typeof loadArbeitsschritteIbnView === 'function') loadArbeitsschritteIbnView();
       }
       return;
     }
@@ -15823,8 +15837,17 @@
 
   var protocolAutosaveControllers = [];
 
-  function formatProtocolAutosaveClock() {
+  function formatProtocolAutosaveClock(iso) {
     var d = new Date();
+    if (iso) {
+      var s = String(iso).trim();
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) {
+        s = s.replace(' ', 'T');
+        if (s.indexOf('Z') === -1 && s.indexOf('+') === -1) s += 'Z';
+      }
+      var parsed = new Date(s);
+      if (!isNaN(parsed.getTime())) d = parsed;
+    }
     return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
   }
 
@@ -15902,7 +15925,7 @@
       var btnSave = document.createElement('button');
       btnSave.type = 'button';
       btnSave.className = 'btn btn-primary';
-      btnSave.textContent = 'Jetzt speichern (JSON)';
+      btnSave.textContent = 'Jetzt speichern';
       var btnLeave = document.createElement('button');
       btnLeave.type = 'button';
       btnLeave.className = 'btn btn-ghost';
@@ -15945,7 +15968,8 @@
     'viewProtokolleKontrollwiegungen',
     'viewProtokolleSchleppketten',
     'viewProtokollePruefzertifikat',
-    'viewProtokolleService'
+    'viewProtokolleService',
+    'viewProtokolleInbetriebnahme'
   ];
 
   function protocolViewIdForShowViewName(name) {
@@ -15955,7 +15979,8 @@
       'protokolle-kontrollwiegungen': 'viewProtokolleKontrollwiegungen',
       'protokolle-schleppketten': 'viewProtokolleSchleppketten',
       'protokolle-pruefzertifikat': 'viewProtokollePruefzertifikat',
-      'protokolle-service': 'viewProtokolleService'
+      'protokolle-service': 'viewProtokolleService',
+      'protokolle-inbetriebnahme': 'viewProtokolleInbetriebnahme'
     };
     return map[name] || '';
   }
@@ -15987,21 +16012,26 @@
     }
 
     function isViewActive() {
-      var el = document.getElementById(viewId);
-      return !!(el && el.classList.contains('active'));
+      var ids = Array.isArray(opts.viewIds) && opts.viewIds.length ? opts.viewIds : [viewId];
+      for (var i = 0; i < ids.length; i++) {
+        var el = document.getElementById(ids[i]);
+        if (el && el.classList.contains('active')) return true;
+      }
+      return false;
     }
 
-    function setHint(ok) {
+    function setHint(ok, savedAtIso) {
       if (typeof opts.setHint !== 'function') return;
       var lang = 'de';
       if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.langForView === 'function') {
         lang = window.ProtocolFormI18n.langForView(viewId);
       }
+      var clock = ok ? formatProtocolAutosaveClock(savedAtIso) : '';
       if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.autosaveHint === 'function') {
-        opts.setHint(window.ProtocolFormI18n.autosaveHint(ok, lang, ok ? formatProtocolAutosaveClock() : ''), !ok);
+        opts.setHint(window.ProtocolFormI18n.autosaveHint(ok, lang, clock), !ok);
         return;
       }
-      if (ok) opts.setHint('Zuletzt gespeichert: ' + formatProtocolAutosaveClock(), false);
+      if (ok) opts.setHint('Zuletzt gespeichert: ' + clock, false);
       else opts.setHint('Speichern fehlgeschlagen', true);
     }
 
@@ -16070,11 +16100,14 @@
         lastSavedFingerprint = currentFingerprint();
         lastCommittedFingerprint = lastSavedFingerprint;
         if (!markOpts || !markOpts.keepUncommitted) sessionUncommitted = false;
+        var savedAt = markOpts && markOpts.savedAt ? String(markOpts.savedAt).trim() : '';
+        if (savedAt) setHint(true, savedAt);
       },
       markCommitted: function () {
         sessionUncommitted = false;
         lastSavedFingerprint = currentFingerprint();
         lastCommittedFingerprint = lastSavedFingerprint;
+        setHint(true);
       },
       noteDirtyFromCurrent: function () {
         var fp = currentFingerprint();
@@ -20228,15 +20261,19 @@
       var kwOn = !!(el('pzVerfahrenKw') && el('pzVerfahrenKw').checked);
       var skOn = !!(el('pzVerfahrenSk') && el('pzVerfahrenSk').checked);
       var spOn = !!(el('pzVerfahrenSp') && el('pzVerfahrenSp').checked);
+      var ibnOn = !!(el('pzVerfahrenIbn') && el('pzVerfahrenIbn').checked);
       var blockKw = el('pzBlockKw');
       var blockSk = el('pzBlockSk');
       var blockSp = el('pzBlockSp');
+      var blockIbn = el('pzBlockIbn');
       if (blockKw) blockKw.hidden = !kwOn;
       if (blockSk) blockSk.hidden = !skOn;
       if (blockSp) blockSp.hidden = !spOn;
+      if (blockIbn) blockIbn.hidden = !ibnOn;
       recomputeStatus();
     }
-    function collectServiceMessFromForm() {
+    function collectServiceMessFromForm(prefix) {
+      prefix = prefix || 'pzSp';
       function cell(kgId, mvId, maId, gId) {
         return {
           kg: el(kgId) ? String(el(kgId).value || '').trim() : '',
@@ -20246,15 +20283,15 @@
         };
       }
       var matrix = {
-        dms: cell('pzSpDmsKg', 'pzSpDmsMv', 'pzSpDmsMa', 'pzSpDmsG'),
-        tara: cell('pzSpTaraKg', 'pzSpTaraMv', 'pzSpTaraMa', 'pzSpTaraG'),
-        pruefgewicht: cell('pzSpPgKg', 'pzSpPgMv', 'pzSpPgMa', 'pzSpPgG')
+        dms: cell(prefix + 'DmsKg', prefix + 'DmsMv', prefix + 'DmsMa', prefix + 'DmsG'),
+        tara: cell(prefix + 'TaraKg', prefix + 'TaraMv', prefix + 'TaraMa', prefix + 'TaraG'),
+        pruefgewicht: cell(prefix + 'PgKg', prefix + 'PgMv', prefix + 'PgMa', prefix + 'PgG')
       };
       var pg = [
-        el('pzSpPgTest1') ? String(el('pzSpPgTest1').value || '').trim() : '',
-        el('pzSpPgTest2') ? String(el('pzSpPgTest2').value || '').trim() : '',
-        el('pzSpPgTest3') ? String(el('pzSpPgTest3').value || '').trim() : '',
-        el('pzSpPgTest4') ? String(el('pzSpPgTest4').value || '').trim() : ''
+        el(prefix + 'PgTest1') ? String(el(prefix + 'PgTest1').value || '').trim() : '',
+        el(prefix + 'PgTest2') ? String(el(prefix + 'PgTest2').value || '').trim() : '',
+        el(prefix + 'PgTest3') ? String(el(prefix + 'PgTest3').value || '').trim() : '',
+        el(prefix + 'PgTest4') ? String(el(prefix + 'PgTest4').value || '').trim() : ''
       ];
       var hasMatrix = ['dms', 'tara', 'pruefgewicht'].some(function (k) {
         var r = matrix[k];
@@ -20264,27 +20301,28 @@
       if (!hasMatrix && !hasPg) return undefined;
       return { mess_matrix: matrix, pruefgewichtstest: pg };
     }
-    function applyServiceMessToForm(service) {
+    function applyServiceMessToForm(service, prefix) {
       service = service || {};
+      prefix = prefix || 'pzSp';
       var empty = { kg: '', mv: '', ma: '', g_prozent: '' };
       var mm = service.mess_matrix && typeof service.mess_matrix === 'object' ? service.mess_matrix : {};
       var dms = Object.assign({}, empty, mm.dms || {});
       var tara = Object.assign({}, empty, mm.tara || {});
       var pgRow = Object.assign({}, empty, mm.pruefgewicht || {});
-      function setCell(prefix, row) {
-        if (el(prefix + 'Kg')) el(prefix + 'Kg').value = row.kg || '';
-        if (el(prefix + 'Mv')) el(prefix + 'Mv').value = row.mv || '';
-        if (el(prefix + 'Ma')) el(prefix + 'Ma').value = row.ma || '';
-        if (el(prefix + 'G')) el(prefix + 'G').value = row.g_prozent || '';
+      function setCell(cellPrefix, row) {
+        if (el(cellPrefix + 'Kg')) el(cellPrefix + 'Kg').value = row.kg || '';
+        if (el(cellPrefix + 'Mv')) el(cellPrefix + 'Mv').value = row.mv || '';
+        if (el(cellPrefix + 'Ma')) el(cellPrefix + 'Ma').value = row.ma || '';
+        if (el(cellPrefix + 'G')) el(cellPrefix + 'G').value = row.g_prozent || '';
       }
-      setCell('pzSpDms', dms);
-      setCell('pzSpTara', tara);
-      setCell('pzSpPg', pgRow);
+      setCell(prefix + 'Dms', dms);
+      setCell(prefix + 'Tara', tara);
+      setCell(prefix + 'Pg', pgRow);
       var pg = Array.isArray(service.pruefgewichtstest) ? service.pruefgewichtstest : ['', '', '', ''];
-      if (el('pzSpPgTest1')) el('pzSpPgTest1').value = pg[0] != null ? String(pg[0]) : '';
-      if (el('pzSpPgTest2')) el('pzSpPgTest2').value = pg[1] != null ? String(pg[1]) : '';
-      if (el('pzSpPgTest3')) el('pzSpPgTest3').value = pg[2] != null ? String(pg[2]) : '';
-      if (el('pzSpPgTest4')) el('pzSpPgTest4').value = pg[3] != null ? String(pg[3]) : '';
+      if (el(prefix + 'PgTest1')) el(prefix + 'PgTest1').value = pg[0] != null ? String(pg[0]) : '';
+      if (el(prefix + 'PgTest2')) el(prefix + 'PgTest2').value = pg[1] != null ? String(pg[1]) : '';
+      if (el(prefix + 'PgTest3')) el(prefix + 'PgTest3').value = pg[2] != null ? String(pg[2]) : '';
+      if (el(prefix + 'PgTest4')) el(prefix + 'PgTest4').value = pg[3] != null ? String(pg[3]) : '';
     }
     function collectPayload() {
       var statusVal = el('pzStatus') ? el('pzStatus').value : '';
@@ -20305,7 +20343,8 @@
         verfahren: {
           kontrollwiegung: !!(el('pzVerfahrenKw') && el('pzVerfahrenKw').checked),
           schleppketten: !!(el('pzVerfahrenSk') && el('pzVerfahrenSk').checked),
-          service: !!(el('pzVerfahrenSp') && el('pzVerfahrenSp').checked)
+          service: !!(el('pzVerfahrenSp') && el('pzVerfahrenSp').checked),
+          inbetriebnahme: !!(el('pzVerfahrenIbn') && el('pzVerfahrenIbn').checked)
         },
         ergebnisse: {
           kontrollwiegung: (el('pzVerfahrenKw') && el('pzVerfahrenKw').checked) ? {
@@ -20318,7 +20357,8 @@
             anzahl: parseNum(el('pzSkAnzahl') && el('pzSkAnzahl').value),
             datum: el('pzSkDatum') ? el('pzSkDatum').value : ''
           } : undefined,
-          service: (el('pzVerfahrenSp') && el('pzVerfahrenSp').checked) ? collectServiceMessFromForm() : undefined
+          service: (el('pzVerfahrenSp') && el('pzVerfahrenSp').checked) ? collectServiceMessFromForm('pzSp') : undefined,
+          inbetriebnahme: (el('pzVerfahrenIbn') && el('pzVerfahrenIbn').checked) ? collectServiceMessFromForm('pzIbn') : undefined
         },
         zulaessige_abweichung_pct: parseNum(el('pzToleranz') && el('pzToleranz').value),
         status_bestanden: statusBestanden,
@@ -20332,6 +20372,7 @@
         kontrollwiegungsprotokoll_id: linkedIds.kontrollwiegungsprotokoll_id || null,
         schleppkettenprotokoll_id: linkedIds.schleppkettenprotokoll_id || null,
         serviceprotokoll_id: linkedIds.serviceprotokoll_id || null,
+        inbetriebnahme_id: linkedIds.inbetriebnahme_id || null,
         languages: collectPdfLanguages(),
         pdf_languages: collectPdfLanguages()
       };
@@ -20341,7 +20382,8 @@
       linkedIds = {
         kontrollwiegungsprotokoll_id: p.kontrollwiegungsprotokoll_id || null,
         schleppkettenprotokoll_id: p.schleppkettenprotokoll_id || null,
-        serviceprotokoll_id: p.serviceprotokoll_id || null
+        serviceprotokoll_id: p.serviceprotokoll_id || null,
+        inbetriebnahme_id: p.inbetriebnahme_id || null
       };
       if (el('pruefzertifikatNr')) el('pruefzertifikatNr').value = p.zertifikat_nr || '';
       if (el('pruefzertifikatDatum')) el('pruefzertifikatDatum').value = p.pruefdatum || todayIsoLocal();
@@ -20358,6 +20400,7 @@
       if (el('pzVerfahrenKw')) el('pzVerfahrenKw').checked = !!(p.verfahren && p.verfahren.kontrollwiegung);
       if (el('pzVerfahrenSk')) el('pzVerfahrenSk').checked = !!(p.verfahren && p.verfahren.schleppketten);
       if (el('pzVerfahrenSp')) el('pzVerfahrenSp').checked = !!(p.verfahren && p.verfahren.service);
+      if (el('pzVerfahrenIbn')) el('pzVerfahrenIbn').checked = !!(p.verfahren && p.verfahren.inbetriebnahme);
       var kw = (p.ergebnisse && p.ergebnisse.kontrollwiegung) || {};
       var sk = (p.ergebnisse && p.ergebnisse.schleppketten) || {};
       if (el('pzKwFehler')) el('pzKwFehler').value = formatPctDisplay(kw.fehler_prozent);
@@ -20366,7 +20409,8 @@
       if (el('pzSkFehler')) el('pzSkFehler').value = formatPctDisplay(sk.fehler_prozent);
       if (el('pzSkAnzahl')) el('pzSkAnzahl').value = sk.anzahl != null ? String(sk.anzahl) : '';
       if (el('pzSkDatum')) el('pzSkDatum').value = sk.datum || '';
-      applyServiceMessToForm((p.ergebnisse && p.ergebnisse.service) || {});
+      applyServiceMessToForm((p.ergebnisse && p.ergebnisse.service) || {}, 'pzSp');
+      applyServiceMessToForm((p.ergebnisse && p.ergebnisse.inbetriebnahme) || {}, 'pzIbn');
       if (el('pzToleranz')) el('pzToleranz').value = formatPctDisplay(p.zulaessige_abweichung_pct != null ? p.zulaessige_abweichung_pct : 0.5);
       if (el('pzStatus')) {
         if (p.status_bestanden === true || p.status_bestanden === 1) el('pzStatus').value = '1';
@@ -20624,7 +20668,7 @@
       if (node) node.addEventListener('change', recomputeStatus);
       if (node) node.addEventListener('input', recomputeStatus);
     });
-    ['pzVerfahrenKw', 'pzVerfahrenSk', 'pzVerfahrenSp'].forEach(function (id) {
+    ['pzVerfahrenKw', 'pzVerfahrenSk', 'pzVerfahrenSp', 'pzVerfahrenIbn'].forEach(function (id) {
       var node = el(id);
       if (node) node.addEventListener('change', syncVerfahrenBlocksVisibility);
     });
@@ -20935,6 +20979,27 @@
   })();
 
   (function initProtokolleService() {
+    var SP_PROTOCOL_SERVICE = {
+      hostKind: 'service',
+      catalogKind: 'service',
+      apiPath: '/api/protokolle/serviceprotokoll',
+      allPdfPath: '/api/protokolle/serviceprotokoll/all-pdf',
+      viewId: 'viewProtokolleService',
+      reactBridgeKey: 'serviceprotokollReactBridge',
+      toastSave: 'Zwischenstand gespeichert.'
+    };
+    var SP_PROTOCOL_IBN = {
+      hostKind: 'ibn',
+      catalogKind: 'ibn',
+      apiPath: '/api/protokolle/inbetriebnahme',
+      allPdfPath: '/api/protokolle/inbetriebnahme/all-pdf',
+      viewId: 'viewProtokolleInbetriebnahme',
+      reactBridgeKey: 'inbetriebnahmeReactBridge',
+      toastSave: 'Zwischenstand gespeichert.'
+    };
+    var spProtocol = SP_PROTOCOL_SERVICE;
+    window.__kuklaProtokollHostKind = 'service';
+
     var jobSelect = document.getElementById('serviceprotokollJob');
     var kopfdatenEl = document.getElementById('serviceprotokollKopfdaten');
     var fabHidden = document.getElementById('serviceprotokollFab');
@@ -21081,8 +21146,8 @@
 
     function flushServiceprotokollReactToHost() {
       try {
-        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
-          window.serviceprotokollReactBridge.flushFromReact();
+        if (activeReactBridge() && typeof activeReactBridge().flushFromReact === 'function') {
+          activeReactBridge().flushFromReact();
         }
       } catch (e) { /* ignore */ }
     }
@@ -21091,8 +21156,8 @@
       abschluss = normalizeSpAbschlussObject(abschluss);
       try {
         var last =
-          window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.getLastPayload === 'function'
-            ? window.serviceprotokollReactBridge.getLastPayload()
+          activeReactBridge() && typeof activeReactBridge().getLastPayload === 'function'
+            ? activeReactBridge().getLastPayload()
             : null;
         var form = last && last.form ? last.form : null;
         if (!form) return abschluss;
@@ -21588,14 +21653,14 @@
     }
 
     function beginServiceprotokollJobSwitchGuard() {
-      if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.beginJobSwitch === 'function') {
-        window.serviceprotokollReactBridge.beginJobSwitch();
+      if (activeReactBridge() && typeof activeReactBridge().beginJobSwitch === 'function') {
+        activeReactBridge().beginJobSwitch();
       }
     }
 
     function endServiceprotokollJobSwitchGuard() {
-      if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.endJobSwitch === 'function') {
-        window.serviceprotokollReactBridge.endJobSwitch();
+      if (activeReactBridge() && typeof activeReactBridge().endJobSwitch === 'function') {
+        activeReactBridge().endJobSwitch();
       }
     }
 
@@ -22056,7 +22121,7 @@
         serverUsername: getDispoUsername(),
         serverPassword: getDispoPassword()
       };
-      var persistPromise = fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
+      var persistPromise = fetch(API_BASE + spProtocol.apiPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
         body: JSON.stringify(body)
@@ -22073,14 +22138,32 @@
       return { ok: true, data: data };
     }
 
+    function serviceprotokollDraftSavedAt(fab) {
+      fab = String(fab || '').trim();
+      var d = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fab];
+      if (!d || typeof d !== 'object') return '';
+      return String(d.updatedAt || d.updated_at || d.gespeichert_am || '').trim();
+    }
+
+    function markServiceprotokollAutosaveFromDraft(fab, extra) {
+      if (!serviceprotokollAutosave) return;
+      extra = extra || {};
+      var savedAt = extra.savedAt != null ? String(extra.savedAt).trim() : serviceprotokollDraftSavedAt(fab);
+      var opts = Object.assign({}, extra);
+      if (savedAt) opts.savedAt = savedAt;
+      else delete opts.savedAt;
+      serviceprotokollAutosave.markSaved(opts);
+    }
+
     serviceprotokollAutosave = createProtocolAutosave({
       viewId: 'viewProtokolleService',
+      viewIds: ['viewProtokolleService', 'viewProtokolleInbetriebnahme'],
       isReady: function () {
         return !!(serviceJobData && jobSelect && jobSelect.value && getActiveFab() && !serviceprotokollFabSwitching);
       },
       fingerprint: function () {
-        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
-          window.serviceprotokollReactBridge.flushFromReact();
+        if (activeReactBridge() && typeof activeReactBridge().flushFromReact === 'function') {
+          activeReactBridge().flushFromReact();
         }
         var fab = getActiveFab();
         return protocolAutosaveFingerprint({
@@ -22091,21 +22174,21 @@
       save: async function () {
         var fab = getActiveFab();
         if (!fab || serviceprotokollFabSwitching) return { ok: false, skipped: true };
-        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
-          window.serviceprotokollReactBridge.flushFromReact();
+        if (activeReactBridge() && typeof activeReactBridge().flushFromReact === 'function') {
+          activeReactBridge().flushFromReact();
         }
         return persistDraftJsonForFab(fab, { localOnly: true });
       },
       commitSave: function () {
-        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
-          window.serviceprotokollReactBridge.flushFromReact();
+        if (activeReactBridge() && typeof activeReactBridge().flushFromReact === 'function') {
+          activeReactBridge().flushFromReact();
         }
         var btn = document.getElementById('btnServiceprotokollStickySave');
         if (btn) btn.click();
       },
       setHint: function (text, isError) {
-        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.setAutosaveHint === 'function') {
-          window.serviceprotokollReactBridge.setAutosaveHint(text, isError);
+        if (activeReactBridge() && typeof activeReactBridge().setAutosaveHint === 'function') {
+          activeReactBridge().setAutosaveHint(text, isError);
         }
       }
     });
@@ -22206,8 +22289,8 @@
       if (cur === newFab) return;
       if (cur) {
         if (serviceprotokollAutosave) serviceprotokollAutosave.noteDirtyFromCurrent();
-        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.flushFromReact === 'function') {
-          window.serviceprotokollReactBridge.flushFromReact();
+        if (activeReactBridge() && typeof activeReactBridge().flushFromReact === 'function') {
+          activeReactBridge().flushFromReact();
         }
         stashDraftInMemory(cur, { force: true });
         var snapCandidate = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[cur]
@@ -22229,12 +22312,13 @@
       setActiveFabValue(newFab);
       renderFabButtonsActive();
       clearServiceprotokollFabFormShell();
+      var savedAtFab = serviceprotokollDraftSavedAt(newFab);
       try {
-        await loadDefaultsForFab(newFab, loadToken);
+          await loadDefaultsForFab(newFab, loadToken);
       } finally {
         if (loadToken === serviceprotokollFabLoadToken) {
           serviceprotokollFabSwitching = false;
-          if (serviceprotokollAutosave) serviceprotokollAutosave.markSaved({ keepUncommitted: true });
+          markServiceprotokollAutosaveFromDraft(newFab, { keepUncommitted: true, savedAt: savedAtFab });
           notifyReactBridge(true);
         }
       }
@@ -22346,7 +22430,7 @@
       serviceprotokollDraftStore = { byFab: {} };
       if (!jobId) return;
       try {
-        var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll?job_id=' + encodeURIComponent(jobId), {
+        var r = await fetch(API_BASE + spProtocol.apiPath + '?job_id=' + encodeURIComponent(jobId), {
           headers: { 'X-Technician-Id': String(getTechId()) }
         });
         var data = await r.json().catch(function () { return {}; });
@@ -22949,7 +23033,7 @@
       var techId = getTechId();
       var q = 'fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(techId) + '&local_only=1';
       try {
-        var r = await fetch(API_BASE + '/api/serviceprotokoll_defaults?' + q, {
+        var r = await fetch(API_BASE + '/api/serviceprotokoll_defaults?' + q + '&catalog_kind=' + encodeURIComponent(spProtocol.catalogKind), {
           headers: { 'X-Technician-Id': String(techId) }
         });
         var data = await r.json().catch(function () { return {}; });
@@ -23005,7 +23089,7 @@
       var techId = getTechId();
       var q = 'fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(techId) + '&local_only=1';
       try {
-        var r = await fetch(API_BASE + '/api/serviceprotokoll_defaults?' + q, {
+        var r = await fetch(API_BASE + '/api/serviceprotokoll_defaults?' + q + '&catalog_kind=' + encodeURIComponent(spProtocol.catalogKind), {
           headers: { 'X-Technician-Id': String(techId) }
         });
         if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
@@ -23153,8 +23237,9 @@
           var fabLoadToken = ++serviceprotokollFabLoadToken;
           setActiveFabValue(firstFab);
           renderFabButtonsActive();
+          var savedAtOnLoad = serviceprotokollDraftSavedAt(firstFab);
           await loadDefaultsForFab(firstFab, fabLoadToken);
-          if (serviceprotokollAutosave) serviceprotokollAutosave.markSaved();
+          markServiceprotokollAutosaveFromDraft(firstFab, { savedAt: savedAtOnLoad });
         }
       } catch (e) {
         if (loadToken === serviceprotokollJobLoadToken) {
@@ -23280,7 +23365,7 @@
           await withProtocolProgress({ title: jsonOnly ? 'Speichern…' : 'PDF wird erstellt…', total: 1 }, async function (prog) {
             stashDraftInMemory(fab);
             prog.setProgress(0, 1);
-            var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll', {
+            var r = await fetch(API_BASE + spProtocol.apiPath, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
               body: JSON.stringify(body)
@@ -23307,7 +23392,7 @@
             }
             if (serviceprotokollAutosave) serviceprotokollAutosave.markCommitted();
             if (data.jsonOnly) {
-              if (typeof showToast === 'function') showToast('Zwischenstand gespeichert (serviceprotokoll.json).');
+              if (typeof showToast === 'function') showToast(spProtocol.toastSave);
             } else {
               lastProtokollId = data.protokoll_id != null ? data.protokoll_id : null;
               if (typeof showToast === 'function') {
@@ -23383,7 +23468,7 @@
         try {
           await withProtocolProgress({ title: 'Alle PDF…', total: built.protokolle.length || 1 }, async function (prog) {
             prog.setProgress(0, built.protokolle.length || 1);
-            var r = await fetch(API_BASE + '/api/protokolle/serviceprotokoll/all-pdf', {
+            var r = await fetch(API_BASE + spProtocol.allPdfPath, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
               body: JSON.stringify(body)
@@ -23438,8 +23523,8 @@
         return { id: String(j.id), label: label };
       }).filter(Boolean);
       try {
-        if (window.serviceprotokollReactBridge && typeof window.serviceprotokollReactBridge.pushJobs === 'function') {
-          window.serviceprotokollReactBridge.pushJobs(serviceAssignedJobOptions);
+        if (activeReactBridge() && typeof activeReactBridge().pushJobs === 'function') {
+          activeReactBridge().pushJobs(serviceAssignedJobOptions);
         }
       } catch (e) { /* iframe ggf. noch nicht bereit */ }
     }
@@ -23629,11 +23714,15 @@
       updateVersSpannungHint();
     }
 
+    function activeReactBridge() {
+      var key = spProtocol && spProtocol.reactBridgeKey ? spProtocol.reactBridgeKey : 'serviceprotokollReactBridge';
+      return window[key] || null;
+    }
+
     function notifyReactBridge(forceSync) {
-      if (typeof window.serviceprotokollReactBridge !== 'undefined' &&
-          window.serviceprotokollReactBridge &&
-          typeof window.serviceprotokollReactBridge.syncToReact === 'function') {
-        window.serviceprotokollReactBridge.syncToReact(!!forceSync);
+      var br = activeReactBridge();
+      if (br && typeof br.syncToReact === 'function') {
+        br.syncToReact(!!forceSync);
       }
     }
 
@@ -23714,6 +23803,8 @@
       }
     };
 
+    window.inbetriebnahmeBridge = window.serviceprotokollBridge;
+
     var spCatalogCache = [];
     var spCatalogPresetsCache = [];
     var spCatalogPickKeys = {};
@@ -23736,9 +23827,9 @@
     }
 
     function setSpReactFrameBlocked(blocked) {
-      var frame = document.getElementById('serviceprotokollReactFrame');
+      ['serviceprotokollReactFrame', 'inbetriebnahmeReactFrame'].forEach(function (frameId) {
+      var frame = document.getElementById(frameId);
       if (!frame) {
-        try { window.focus(); } catch (e) { /* ignore */ }
         return;
       }
       if (blocked) {
@@ -23754,6 +23845,7 @@
         frame.classList.remove('is-modal-blocked');
         frame.removeAttribute('inert');
       }
+      });
     }
 
     function spCatalogStepKey(scope, id) {
@@ -24020,7 +24112,7 @@
 
     async function loadSpCatalogData() {
       var listUrl =
-        API_BASE + '/api/arbeitsschritte_list?technician_id=' + getTechId() + '&local_only=1';
+        API_BASE + '/api/arbeitsschritte_list?technician_id=' + getTechId() + '&local_only=1&catalog_kind=' + encodeURIComponent(spProtocol.catalogKind);
       var r = await fetch(listUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
       var data = await r.json().catch(function () { return {}; });
       if (!r.ok || !data.ok || !Array.isArray(data.steps)) {
@@ -24092,11 +24184,17 @@
 
     if (abbrechenBtn) {
       abbrechenBtn.addEventListener('click', function () {
+        if (spProtocol.hostKind === 'ibn' && typeof window.openProtokolleInbetriebnahme === 'function') {
+          window.openProtokolleInbetriebnahme();
+          return;
+        }
         if (typeof window.openProtokolleService === 'function') window.openProtokolleService();
       });
     }
 
-    window.openProtokolleService = function () {
+    function openServiceLikeProtokoll(kindCfg) {
+      spProtocol = kindCfg || SP_PROTOCOL_SERVICE;
+      window.__kuklaProtokollHostKind = spProtocol.hostKind;
       loadServiceJobs().then(function (jobs) {
         rememberServiceAssignedJobs(jobs);
         if (jobSelect) {
@@ -24104,7 +24202,7 @@
             jobs.map(function (j) {
               return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
             }).join('');
-          refreshProtocolFormLang('viewProtokolleService');
+          refreshProtocolFormLang(spProtocol.viewId);
         }
         notifyReactBridge(true);
         serviceJobData = null;
@@ -24138,6 +24236,12 @@
           applyServiceprotokollJobSelection(defaultJobId);
         }
       });
+    }
+    window.openProtokolleService = function () {
+      openServiceLikeProtokoll(SP_PROTOCOL_SERVICE);
+    };
+    window.openProtokolleInbetriebnahme = function () {
+      openServiceLikeProtokoll(SP_PROTOCOL_IBN);
     };
   })();
 
@@ -25302,7 +25406,15 @@
     }
   })();
 
-  (function initArbeitsschritteView() {
+  function createArbeitsschritteView(cfg) {
+    var catalogKind = cfg.catalogKind === 'ibn' ? 'ibn' : 'service';
+    var ids = cfg.ids || {};
+    function el(name) {
+      return document.getElementById(ids[name]);
+    }
+    function reload() {
+      return window[cfg.loadName]();
+    }
     var asSteps = [];
     var asPresets = [];
     var editingStepId = 0;
@@ -25328,7 +25440,8 @@
         API_BASE +
         '/api/arbeitsschritte_list?technician_id=' +
         getTechId() +
-        '&local_only=1'
+        '&local_only=1&catalog_kind=' +
+        encodeURIComponent(catalogKind)
       );
     }
 
@@ -25364,14 +25477,14 @@
 
     function updatePresetToolbarState() {
       var canSaveUser = selectedPresetId > 0 && selectedPresetScope === 'user';
-      var btnSave = document.getElementById('btnAsPresetSave');
-      var btnDel = document.getElementById('btnAsPresetDelete');
+      var btnSave = el('btnPresetSave');
+      var btnDel = el('btnPresetDelete');
       if (btnSave) btnSave.disabled = !canSaveUser;
       if (btnDel) btnDel.disabled = !canSaveUser;
     }
 
     function renderPresetSelect() {
-      var sel = document.getElementById('asPresetSelect');
+      var sel = el('presetSelect');
       if (!sel) return;
       var html = '<option value="">— Preset wählen —</option>';
       asPresets.forEach(function (p) {
@@ -25387,8 +25500,8 @@
       if (!val) {
         selectedPresetId = 0;
         selectedPresetScope = '';
-        var nameEl = document.getElementById('asPresetName');
-        var typeEl = document.getElementById('asPresetType');
+        var nameEl = el('presetName');
+        var typeEl = el('presetType');
         if (nameEl) nameEl.value = '';
         if (typeEl) typeEl.value = '';
         checkedKeys = {};
@@ -25405,8 +25518,8 @@
       if (!p) return;
       selectedPresetId = pid;
       selectedPresetScope = scope;
-      var nameEl = document.getElementById('asPresetName');
-      var typeEl = document.getElementById('asPresetType');
+      var nameEl = el('presetName');
+      var typeEl = el('presetType');
       if (nameEl) nameEl.value = p.name || '';
       if (typeEl) typeEl.value = p.type_code || '';
       sortStepsForPreset(p.step_refs || []);
@@ -25417,8 +25530,10 @@
 
     function collectStepRefsFromDom() {
       var refs = [];
+      var list = el('stepList');
+      if (!list) return refs;
       var order = 1;
-      document.querySelectorAll('#asStepList .as-row').forEach(function (row) {
+      list.querySelectorAll('.as-row').forEach(function (row) {
         var cb = row.querySelector('input.as-row-check');
         if (!cb || !cb.checked) return;
         refs.push({
@@ -25432,7 +25547,9 @@
 
     async function persistUserOrder() {
       var orders = [];
-      document.querySelectorAll('#asStepList .as-row').forEach(function (row, idx) {
+      var list = el('stepList');
+      if (!list) return;
+      list.querySelectorAll('.as-row').forEach(function (row, idx) {
         if ((row.getAttribute('data-scope') || '') !== 'user') return;
         orders.push({ id: parseInt(row.getAttribute('data-id'), 10), sort_order: idx + 1 });
       });
@@ -25451,7 +25568,7 @@
     }
 
     function bindRowDragDrop() {
-      var list = document.getElementById('asStepList');
+      var list = el('stepList');
       if (!list) return;
       list.querySelectorAll('.as-row').forEach(function (row) {
         row.addEventListener('dragstart', function (e) {
@@ -25488,7 +25605,7 @@
     }
 
     function renderSteps() {
-      var stepList = document.getElementById('asStepList');
+      var stepList = el('stepList');
       if (!stepList) return;
       if (!asSteps.length) {
         stepList.innerHTML = '<p class="muted">Keine Schritte.</p>';
@@ -25549,8 +25666,8 @@
       bindRowDragDrop();
     }
 
-    window.loadArbeitsschritteView = async function () {
-      var stepList = document.getElementById('asStepList');
+    window[cfg.loadName] = async function () {
+      var stepList = el('stepList');
       try {
         var r = await fetch(listUrl(), { headers: { 'X-Technician-Id': String(getTechId()) } });
         var data = await r.json();
@@ -25577,10 +25694,10 @@
     function openStep(id) {
       editingStepId = id || 0;
       var s = asSteps.find(function (x) { return x.id === id && x.scope === 'user'; }) || {};
-      document.getElementById('modalAsStepTitle').textContent = id ? 'Schritt bearbeiten' : 'Neuer Schritt';
-      document.getElementById('asStepDe').value = s.bezeichnung_de || '';
-      document.getElementById('asStepEn').value = s.bezeichnung_en || '';
-      document.getElementById('modalAsStep').classList.add('active');
+      el('modalTitle').textContent = id ? 'Schritt bearbeiten' : 'Neuer Schritt';
+      el('stepDe').value = s.bezeichnung_de || '';
+      el('stepEn').value = s.bezeichnung_en || '';
+      el('modal').classList.add('active');
       if (typeof window.kuklaCloseSpStepPicker === 'function') window.kuklaCloseSpStepPicker();
       try {
         var frame = document.getElementById('serviceprotokollReactFrame');
@@ -25590,7 +25707,7 @@
         }
         window.focus();
       } catch (e) { /* ignore */ }
-      focusHostTextInput(document.getElementById('asStepDe'));
+      focusHostTextInput(el('stepDe'));
     }
 
     async function saveStep() {
@@ -25598,9 +25715,10 @@
       var body = {
         base_url: getDispoBaseUrl(),
         technician_id: getTechId(),
+        catalog_kind: catalogKind,
         id: editingStepId || undefined,
-        bezeichnung_de: document.getElementById('asStepDe').value,
-        bezeichnung_en: document.getElementById('asStepEn').value,
+        bezeichnung_de: el('stepDe').value,
+        bezeichnung_en: el('stepEn').value,
         sort_order: editingStepId ? undefined : maxSort + 1
       };
       var r = await fetch(API_BASE + '/api/arbeitsschritte_save', {
@@ -25610,8 +25728,8 @@
       });
       var data = await r.json().catch(function () { return {}; });
       if (!r.ok || !data.ok) throw new Error(data.error || 'Speichern fehlgeschlagen');
-      document.getElementById('modalAsStep').classList.remove('active');
-      await window.loadArbeitsschritteView();
+      el('modal').classList.remove('active');
+      await reload();
     }
 
     async function deleteStep(id) {
@@ -25623,7 +25741,7 @@
       });
       var data = await r.json().catch(function () { return {}; });
       if (!r.ok || !data.ok) throw new Error(data.error || 'Löschen fehlgeschlagen');
-      await window.loadArbeitsschritteView();
+      await reload();
     }
 
     async function publishStep(id) {
@@ -25640,7 +25758,7 @@
       var data = await r.json().catch(function () { return {}; });
       if (!r.ok || !data.ok) throw new Error(data.error || 'Freigabe fehlgeschlagen');
       if (typeof showToast === 'function') showToast('Arbeitsschritt für alle freigegeben.');
-      await window.loadArbeitsschritteView();
+      await reload();
     }
 
     async function savePreset(id) {
@@ -25648,8 +25766,9 @@
       var body = {
         base_url: getDispoBaseUrl(),
         technician_id: getTechId(),
-        name: document.getElementById('asPresetName').value,
-        type_code: document.getElementById('asPresetType').value,
+        catalog_kind: catalogKind,
+        name: el('presetName').value,
+        type_code: el('presetType').value,
         step_refs: refs
       };
       if (id) body.id = id;
@@ -25680,49 +25799,90 @@
       selectedPresetId = 0;
       selectedPresetScope = '';
       checkedKeys = {};
-      await window.loadArbeitsschritteView();
+      await reload();
     }
 
-    var presetSelect = document.getElementById('asPresetSelect');
+    var presetSelect = el('presetSelect');
     if (presetSelect) {
       presetSelect.addEventListener('change', function () {
         applyPresetByValue(this.value);
       });
     }
-    var btnPresetSave = document.getElementById('btnAsPresetSave');
+    var btnPresetSave = el('btnPresetSave');
     if (btnPresetSave) {
       btnPresetSave.addEventListener('click', function () {
         if (!selectedPresetId || selectedPresetScope !== 'user') return;
         savePreset(selectedPresetId).then(function () {
-          return window.loadArbeitsschritteView();
+          return reload();
         }).catch(function (e) { alert(e.message); });
       });
     }
-    var btnPresetCreate = document.getElementById('btnAsPresetCreate');
+    var btnPresetCreate = el('btnPresetCreate');
     if (btnPresetCreate) {
       btnPresetCreate.addEventListener('click', function () {
         savePreset(0).then(function (data) {
           selectedPresetId = data && data.id ? data.id : 0;
           selectedPresetScope = 'user';
-          return window.loadArbeitsschritteView();
+          return reload();
         }).then(function () {
           if (selectedPresetId) applyPresetByValue('user:' + selectedPresetId);
         }).catch(function (e) { alert(e.message); });
       });
     }
-    var btnPresetDelete = document.getElementById('btnAsPresetDelete');
+    var btnPresetDelete = el('btnPresetDelete');
     if (btnPresetDelete) {
       btnPresetDelete.addEventListener('click', function () {
         deletePreset().catch(function (e) { alert(e.message); });
       });
     }
-    var btnNewStep = document.getElementById('btnAsNewStep');
+    var btnNewStep = el('btnNewStep');
     if (btnNewStep) btnNewStep.addEventListener('click', function () { openStep(0); });
-    var btnAsStepSave = document.getElementById('btnAsStepSave');
+    var btnAsStepSave = el('btnStepSave');
     if (btnAsStepSave) btnAsStepSave.addEventListener('click', function () { saveStep().catch(function (e) { alert(e.message); }); });
-    var btnAsStepCancel = document.getElementById('btnAsStepCancel');
-    if (btnAsStepCancel) btnAsStepCancel.addEventListener('click', function () { document.getElementById('modalAsStep').classList.remove('active'); });
-  })();
+    var btnAsStepCancel = el('btnStepCancel');
+    if (btnAsStepCancel) btnAsStepCancel.addEventListener('click', function () { el('modal').classList.remove('active'); });
+  }
+
+  createArbeitsschritteView({
+    catalogKind: 'service',
+    loadName: 'loadArbeitsschritteView',
+    ids: {
+      presetSelect: 'asPresetSelect',
+      presetName: 'asPresetName',
+      presetType: 'asPresetType',
+      btnPresetSave: 'btnAsPresetSave',
+      btnPresetCreate: 'btnAsPresetCreate',
+      btnPresetDelete: 'btnAsPresetDelete',
+      btnNewStep: 'btnAsNewStep',
+      stepList: 'asStepList',
+      modal: 'modalAsStep',
+      modalTitle: 'modalAsStepTitle',
+      stepDe: 'asStepDe',
+      stepEn: 'asStepEn',
+      btnStepSave: 'btnAsStepSave',
+      btnStepCancel: 'btnAsStepCancel'
+    }
+  });
+  createArbeitsschritteView({
+    catalogKind: 'ibn',
+    loadName: 'loadArbeitsschritteIbnView',
+    ids: {
+      presetSelect: 'asIbnPresetSelect',
+      presetName: 'asIbnPresetName',
+      presetType: 'asIbnPresetType',
+      btnPresetSave: 'btnAsIbnPresetSave',
+      btnPresetCreate: 'btnAsIbnPresetCreate',
+      btnPresetDelete: 'btnAsIbnPresetDelete',
+      btnNewStep: 'btnAsIbnNewStep',
+      stepList: 'asIbnStepList',
+      modal: 'modalAsIbnStep',
+      modalTitle: 'modalAsIbnStepTitle',
+      stepDe: 'asIbnStepDe',
+      stepEn: 'asIbnStepEn',
+      btnStepSave: 'btnAsIbnStepSave',
+      btnStepCancel: 'btnAsIbnStepCancel'
+    }
+  });
 
   const btnArchivApply = document.getElementById('btnArchivFilterApply');
   if (btnArchivApply) {

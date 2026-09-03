@@ -1102,6 +1102,7 @@
       overflow: auto;
     }
     #modalAsStep.modal-overlay.active,
+    #modalAsIbnStep.modal-overlay.active,
     #modalTbEditor.modal-overlay.active {
       z-index: 10050;
       align-items: center;
@@ -1528,7 +1529,8 @@
       <button type="button" class="btn btn-ghost" id="btnViewBausteine" aria-haspopup="true" aria-expanded="false">Bausteine ▾</button>
       <div class="toolbar-dropdown" id="bausteineDropdown" role="menu" aria-label="Bausteine Untermenü">
         <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="textbausteine">Textbausteine</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="arbeitsschritte">Arbeitsschritte</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="arbeitsschritte">Arbeitsschritte Service</button>
+        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="arbeitsschritte-ibn">Arbeitsschritte Inbetriebnahme</button>
       </div>
     </div>
     <span class="toolbar-right">
@@ -2509,6 +2511,7 @@
               <label><input type="checkbox" id="pzVerfahrenKw"> Kontrollwiegung</label>
               <label><input type="checkbox" id="pzVerfahrenSk"> Schleppketten-Test</label>
               <label><input type="checkbox" id="pzVerfahrenSp"> Serviceprotokoll</label>
+              <label><input type="checkbox" id="pzVerfahrenIbn"> Inbetriebnahme</label>
             </div>
 
             <div class="pz-verfahren-blocks">
@@ -2601,6 +2604,56 @@
                   </div>
                 </div>
               </div>
+
+              <div class="pz-verfahren-block" id="pzBlockIbn" data-verfahren="inbetriebnahme" hidden>
+                <h3 class="pz-verfahren-block-title">Inbetriebnahme Protokoll</h3>
+                <p class="pz-verfahren-block-hint muted" style="margin-bottom:0.65rem">Messwerte Wägezelle und Prüfgewichtstest aus dem Inbetriebnahme-Protokoll (editierbar).</p>
+                <div class="sp-mess-table-wrap pz-sp-mess-wrap">
+                  <table class="sp-mess-table" aria-label="Messwerte Wägezelle Inbetriebnahme">
+                    <thead>
+                      <tr>
+                        <th scope="col" data-i18n-en="Point">Messpunkt</th>
+                        <th scope="col">kg</th>
+                        <th scope="col">mV</th>
+                        <th scope="col">mA</th>
+                        <th scope="col">g %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <th scope="row" data-i18n-en="Load cell released">DMS entlastet / released</th>
+                        <td><input type="text" id="pzIbnDmsKg" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzIbnDmsMv" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzIbnDmsMa" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzIbnDmsG" autocomplete="off" inputmode="decimal"></td>
+                      </tr>
+                      <tr>
+                        <th scope="row" data-i18n-en="Tare">Tara / tare</th>
+                        <td><input type="text" id="pzIbnTaraKg" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzIbnTaraMv" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzIbnTaraMa" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzIbnTaraG" autocomplete="off" inputmode="decimal"></td>
+                      </tr>
+                      <tr>
+                        <th scope="row" data-i18n-en="Test load">Prüfgewicht / test load</th>
+                        <td><input type="text" id="pzIbnPgKg" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzIbnPgMv" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzIbnPgMa" autocomplete="off" inputmode="decimal"></td>
+                        <td><input type="text" id="pzIbnPgG" autocomplete="off" inputmode="decimal"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="sp-v2-pgtest-block" style="margin-top:0.75rem">
+                  <div class="sp-v2-pgtest-head" data-i18n-en="Test with test load — deviation (%)">Prüfgewichtstest / test with test load — Abweichung (%)</div>
+                  <div class="sp-v2-pgtest-grid">
+                    <label class="sp-v2-pgtest-cell"><span>1 (%)</span><input type="text" id="pzIbnPgTest1" autocomplete="off" inputmode="decimal" aria-label="Abweichung 1 (%)"></label>
+                    <label class="sp-v2-pgtest-cell"><span>2 (%)</span><input type="text" id="pzIbnPgTest2" autocomplete="off" inputmode="decimal" aria-label="Abweichung 2 (%)"></label>
+                    <label class="sp-v2-pgtest-cell"><span>3 (%)</span><input type="text" id="pzIbnPgTest3" autocomplete="off" inputmode="decimal" aria-label="Abweichung 3 (%)"></label>
+                    <label class="sp-v2-pgtest-cell"><span>4 (%)</span><input type="text" id="pzIbnPgTest4" autocomplete="off" inputmode="decimal" aria-label="Abweichung 4 (%)"></label>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div class="sp-v2-grid-3" style="margin-top:0.85rem">
@@ -2667,10 +2720,7 @@
     </div>
   </main>
   <main id="viewProtokolleInbetriebnahme" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Inbetriebnahme">
-    <div class="card">
-      <h2>Inbetriebnahme</h2>
-      <p class="empty">Bereich Inbetriebnahme – Inhalt wird in Kürze bereitgestellt.</p>
-    </div>
+    <iframe id="inbetriebnahmeReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?kind=ibn" title="Inbetriebnahme Protokoll"></iframe>
   </main>
   <main id="viewProtokolleKunden" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Protokolle für Kunden">
     <div class="card sp-v2-card kd-v2-page">
@@ -2794,7 +2844,7 @@
       <div class="sp-v2-topbar">
         <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-title-green.svg" alt="" aria-hidden="true"> Serviceprotokoll</h2>
         <div class="sp-v2-topbar-actions">
-        <button type="button" class="btn btn-primary" id="btnServiceprotokollStickySave" title="Zwischenstand speichern (serviceprotokoll.json)">Speichern (JSON)</button>
+        <button type="button" class="btn btn-primary" id="btnServiceprotokollStickySave" title="Zwischenstand speichern">Speichern</button>
         <button type="button" class="btn btn-primary" id="btnServiceprotokollStickyPdf" title="Zwischenstand plus PDF">einzel PDF</button>
         <button type="button" class="btn btn-primary" id="btnServiceprotokollSaveAllPdfTop" style="display:none" title="Alle FNs – je FN ein PDF im FN-Ordner">Alle PDF</button>
         <button type="button" class="sp-v2-menu-btn" aria-label="Menü"><img src="icons/dots-vertical-green.svg" alt="" aria-hidden="true"></button>
@@ -3025,7 +3075,7 @@
                 <div class="sp-v2-actions-stack">
                   <button type="submit" class="btn btn-primary" id="btnServiceprotokollSavePdf" title="Zwischenstand plus PDF im Projektordner">einzel PDF</button>
                   <button type="button" class="btn btn-primary" id="btnServiceprotokollSaveAllPdf" style="display:none" title="Alle FNs – je FN ein PDF im FN-Ordner">Alle PDF</button>
-                  <button type="submit" class="btn btn-primary" id="btnServiceprotokollSaveJson" title="Speichert serviceprotokoll.json – ohne PDF">Speichern (JSON)</button>
+                  <button type="submit" class="btn btn-primary" id="btnServiceprotokollSaveJson" title="Zwischenstand speichern – ohne PDF">Speichern</button>
                   <button type="button" class="btn btn-ghost" id="serviceprotokollAbbrechen">Abbrechen</button>
                 </div>
               </div>
@@ -3079,7 +3129,7 @@
   </main>
   <main id="viewArbeitsschritte" class="view-arbeitsschritte" aria-label="Arbeitsschritte">
     <div class="sp-v2-page" style="padding:1rem;max-width:1100px;margin:0 auto">
-      <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte</h2>
+      <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte Service</h2>
       <p class="muted" style="margin:0 0 1rem">Masterliste und Typ-Presets für Serviceprotokolle (global + privat).</p>
       <section class="sp-v2-section">
         <div class="sp-v2-section-body">
@@ -3118,6 +3168,51 @@
         <div style="display:flex;gap:0.5rem;margin-top:1rem">
           <button type="button" class="btn btn-primary" id="btnAsStepSave">Speichern</button>
           <button type="button" class="btn btn-ghost" id="btnAsStepCancel">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+  </main>
+  <main id="viewArbeitsschritteIbn" class="view-arbeitsschritte" aria-label="Arbeitsschritte Inbetriebnahme">
+    <div class="sp-v2-page" style="padding:1rem;max-width:1100px;margin:0 auto">
+      <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Arbeitsschritte Inbetriebnahme</h2>
+      <p class="muted" style="margin:0 0 1rem">Masterliste und Typ-Presets für Inbetriebnahme-Protokolle (global + privat).</p>
+      <section class="sp-v2-section">
+        <div class="sp-v2-section-body">
+          <div class="as-preset-toolbar">
+            <div class="as-field as-field-grow">
+              <label for="asIbnPresetSelect">Preset laden</label>
+              <select id="asIbnPresetSelect"><option value="">— Preset wählen —</option></select>
+            </div>
+            <div class="as-field as-field-grow">
+              <label for="asIbnPresetName">Name</label>
+              <input type="text" id="asIbnPresetName" placeholder="z. B. Bandwaage EBW">
+            </div>
+            <div class="as-field" style="max-width:110px">
+              <label for="asIbnPresetType">Typ</label>
+              <input type="text" id="asIbnPresetType" maxlength="6" placeholder="EBW">
+            </div>
+            <div class="as-preset-actions">
+              <button type="button" class="btn btn-primary" id="btnAsIbnPresetSave" disabled>Preset speichern</button>
+              <button type="button" class="btn btn-primary" id="btnAsIbnPresetCreate">Preset erstellen</button>
+              <button type="button" class="btn btn-ghost" id="btnAsIbnPresetDelete" disabled title="Eigenes Preset löschen">Löschen</button>
+            </div>
+          </div>
+          <div class="as-list-header">
+            <strong>Schritte</strong>
+            <button type="button" class="btn btn-primary" id="btnAsIbnNewStep">+ Schritt</button>
+          </div>
+          <div id="asIbnStepList"></div>
+        </div>
+      </section>
+    </div>
+    <div id="modalAsIbnStep" class="modal-overlay" aria-hidden="true">
+      <div class="modal-box" style="max-width:520px">
+        <h3 id="modalAsIbnStepTitle">Arbeitsschritt</h3>
+        <div class="form-group"><label>Bezeichnung DE</label><input type="text" id="asIbnStepDe" style="width:100%"></div>
+        <div class="form-group"><label>Bezeichnung EN</label><input type="text" id="asIbnStepEn" style="width:100%"></div>
+        <div style="display:flex;gap:0.5rem;margin-top:1rem">
+          <button type="button" class="btn btn-primary" id="btnAsIbnStepSave">Speichern</button>
+          <button type="button" class="btn btn-ghost" id="btnAsIbnStepCancel">Abbrechen</button>
         </div>
       </div>
     </div>

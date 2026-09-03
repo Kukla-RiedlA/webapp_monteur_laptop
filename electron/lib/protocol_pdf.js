@@ -769,7 +769,9 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       page.drawText('KUKLA', { x: marginX, y: y - 18, size: 14, font: fontBold, color: green });
     }
 
-    const title = de ? 'Serviceprotokoll' : 'Service protocol';
+    const titleDe = (options && options.titleDe) || 'Serviceprotokoll';
+    const titleEn = (options && options.titleEn) || 'Service protocol';
+    const title = de ? titleDe : titleEn;
     page.drawText(title, {
       x: marginX + 130,
       y: y - 16,
@@ -777,7 +779,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       font: fontBold,
       color: greenDark,
     });
-    page.drawText(de ? 'service protocol' : 'Serviceprotokoll', {
+    page.drawText(de ? titleEn : titleDe, {
       x: marginX + 130,
       y: y - 32,
       size: 9,
@@ -3372,6 +3374,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   if (verfahren.kontrollwiegung) methods.push(t('Kontrollwiegung', 'Control weighing'));
   if (verfahren.schleppketten) methods.push(t('Schleppketten-Test', 'Chain calibration test'));
   if (verfahren.service) methods.push(t('Serviceprotokoll', 'Service protocol'));
+  if (verfahren.inbetriebnahme) methods.push(t('Inbetriebnahme Protokoll', 'Commissioning report'));
   drawSectionHead(t('Prüfverfahren', 'Inspection methods'));
   page.drawText(S(methods.length ? methods.join('  ·  ') : '–'), {
     x: marginX,
@@ -3402,6 +3405,9 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   }
   if (verfahren.service) {
     resultRows.push([t('Serviceprotokoll', 'Service protocol'), '–', '–', '–']);
+  }
+  if (verfahren.inbetriebnahme) {
+    resultRows.push([t('Inbetriebnahme Protokoll', 'Commissioning report'), '–', '–', '–']);
   }
 
   drawSectionHead(t('Ergebnisse', 'Results'));
@@ -3466,12 +3472,28 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   );
   y -= GAP_AFTER_TABLE;
 
-  // —— Service-Messwerte ——
-  const serviceMess =
-    verfahren.service && ergebnisse.service && typeof ergebnisse.service === 'object'
-      ? ergebnisse.service
-      : null;
-  if (serviceMess) {
+  // —— Service-/IBN-Messwerte ——
+  const messBlocks = [];
+  if (verfahren.service && ergebnisse.service && typeof ergebnisse.service === 'object') {
+    messBlocks.push({
+      titleDe: 'Messwerte Wägezelle',
+      titleEn: 'Load cell measurements',
+      pgTitleDe: 'Prüfgewichtstest',
+      pgTitleEn: 'Test with test load',
+      data: ergebnisse.service,
+    });
+  }
+  if (verfahren.inbetriebnahme && ergebnisse.inbetriebnahme && typeof ergebnisse.inbetriebnahme === 'object') {
+    messBlocks.push({
+      titleDe: 'Messwerte Wägezelle (Inbetriebnahme)',
+      titleEn: 'Load cell measurements (commissioning)',
+      pgTitleDe: 'Prüfgewichtstest (Inbetriebnahme)',
+      pgTitleEn: 'Test with test load (commissioning)',
+      data: ergebnisse.inbetriebnahme,
+    });
+  }
+  messBlocks.forEach((block) => {
+    const serviceMess = block.data;
     const emptyCell = { kg: '', mv: '', ma: '', g_prozent: '' };
     const mm =
       serviceMess.mess_matrix && typeof serviceMess.mess_matrix === 'object'
@@ -3497,7 +3519,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     });
     const messRowH = 15;
     if (messRows.length) {
-      drawSectionHead(t('Messwerte Wägezelle', 'Load cell measurements'));
+      drawSectionHead(t(block.titleDe, block.titleEn));
       const mColW = [
         tableInnerW * 0.36,
         tableInnerW * 0.16,
@@ -3562,12 +3584,12 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
       grayText,
       white,
       S,
-      title: t('Prüfgewichtstest', 'Test with test load'),
+      title: t(block.pgTitleDe, block.pgTitleEn),
       gapBlock: GAP_BLOCK,
       gapTitle: GAP_TITLE,
       gapAfter: GAP_AFTER_TABLE,
     });
-  }
+  });
 
   // —— Siegelbox ——
   y -= GAP_BLOCK;

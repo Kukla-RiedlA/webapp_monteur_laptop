@@ -1,211 +1,272 @@
 /**
  * PostMessage-Bridge zwischen Electron (Legacy-DOM + app.js) und React-iframe.
+ * Zwei Instanzen: Service (#serviceprotokollReactFrame) und IBN (#inbetriebnahmeReactFrame).
  */
 (function () {
   'use strict';
 
-  var frame = null;
-  var applying = false;
-  var applyingDepth = 0;
-  var pendingFabSwitch = 0;
-  var fabSwitchPending = false;
-  var jobSwitchPending = false;
-  /** Letzter React-State (u. a. Abschluss-Status Justiert) – Quelle vor Speichern. */
-  var lastReactPayload = null;
-  var ignoreReactUntil = 0;
+  function createProtokollReactBridge(opts) {
+    var frameId = opts.frameId;
+    var hostBridgeKey = opts.hostBridgeKey;
+    var exportKey = opts.exportKey;
+    var hostKind = opts.hostKind;
+    var frame = null;
+    var applying = false;
+    var applyingDepth = 0;
+    var pendingFabSwitch = 0;
+    var fabSwitchPending = false;
+    var jobSwitchPending = false;
+    var lastReactPayload = null;
+    var ignoreReactUntil = 0;
+    var lastAutosave = { text: '', error: false };
 
-  function reactPayloadFab(payload) {
-    if (!payload || !payload.form) return '';
-    return String(payload.form.activeFab || '').trim();
-  }
-
-  function hostActiveFab() {
-    var api = bridgeApi();
-    if (!api || typeof api.getActiveFab !== 'function') return '';
-    try {
-      return String(api.getActiveFab() || '').trim();
-    } catch (e) {
-      return '';
-    }
-  }
-
-  function getFrame() {
-    if (!frame) frame = document.getElementById('serviceprotokollReactFrame');
-    return frame;
-  }
-
-  function postToReact(msg) {
-    var f = getFrame();
-    if (!f || !f.contentWindow) return;
-    try {
-      f.contentWindow.postMessage(msg, '*');
-    } catch (e) {
-      console.warn('[SP-Bridge] postMessage fehlgeschlagen', e);
-    }
-  }
-
-  function bridgeApi() {
-    return window.serviceprotokollBridge || null;
-  }
-
-  function syncToReact(force) {
-    if (!force && applying) return;
-    var api = bridgeApi();
-    if (!api || typeof api.pullPayload !== 'function') return;
-    var payload = api.pullPayload();
-    // Host-Änderungen (z. B. Katalog-Übernehmen) müssen der Flush-Quelle entsprechen,
-    // sonst überschreibt ein veralteter React-State die neuen Arbeitsschritte.
-    rememberReactPayload(payload);
-    ignoreReactUntil = Date.now() + 900;
-    postToReact({ type: 'SP_SYNC_STATE', payload: payload });
-  }
-
-  function applyFromReact(payload) {
-    var api = bridgeApi();
-    if (!api || typeof api.applyPayload !== 'function') return;
-    applyingDepth += 1;
-    applying = true;
-    try {
-      api.applyPayload(payload);
-    } finally {
-      applyingDepth -= 1;
-      applying = applyingDepth > 0;
-    }
-  }
-
-  function workStepsSignature(steps) {
-    return (steps || []).map(function (s) {
-      return String((s.labelDe || s.bezeichnung_de || '') + '\n' + (s.labelEn || s.bezeichnung_en || '') + '\n' + (s.label || '')).trim().toLowerCase();
-    }).join('||');
-  }
-
-  function keepHostWorkStepsIfStale(payload) {
-    if (!payload || Date.now() >= ignoreReactUntil || !lastReactPayload) return payload;
-    var hostSteps = lastReactPayload.workSteps;
-    if (!Array.isArray(hostSteps) || !hostSteps.length) return payload;
-    var incoming = payload.workSteps || [];
-    if (workStepsSignature(incoming) === workStepsSignature(hostSteps)) return payload;
-    if (incoming.length > hostSteps.length) return payload;
-    payload.workSteps = hostSteps;
-    return payload;
-  }
-
-  function rememberReactPayload(payload) {
-    if (payload && typeof payload === 'object') lastReactPayload = payload;
-  }
-
-  function flushFromReact() {
-    if (!lastReactPayload) return false;
-    var payloadFab = reactPayloadFab(lastReactPayload);
-    var hostFab = hostActiveFab();
-    if (hostFab && payloadFab && payloadFab !== hostFab) return false;
-    applyFromReact(lastReactPayload);
-    return true;
-  }
-
-  window.serviceprotokollReactBridge = {
-    syncToReact: syncToReact,
-    pushJobs: function (jobs) {
-      postToReact({ type: 'SP_JOBS', jobs: Array.isArray(jobs) ? jobs : [] });
-    },
-    flushFromReact: flushFromReact,
-    setAutosaveHint: function (text, isError) {
-      postToReact({ type: 'SP_AUTOSAVE_STATUS', text: text || '', error: !!isError });
-    },
-    getLastPayload: function () {
-      return lastReactPayload;
-    },
-    beginJobSwitch: function () {
-      jobSwitchPending = true;
-      lastReactPayload = null;
-    },
-    endJobSwitch: function () {
-      jobSwitchPending = false;
-    },
-  };
-
-  window.addEventListener('message', function (ev) {
-    var data = ev.data;
-    if (!data || typeof data !== 'object') return;
-    var api = bridgeApi();
-
-    if (data.type === 'SP_READY') {
-      var tries = 0;
-      function trySync() {
-        var api = bridgeApi();
-        if (!api || typeof api.pullPayload !== 'function') {
-          if (tries++ < 25) {
-            window.setTimeout(trySync, 80);
-          }
-          return;
-        }
-        syncToReact(true);
-      }
-      trySync();
-      return;
-    }
-
-    if (data.type === 'SP_STATE_CHANGE' && data.payload) {
-      if (applying || fabSwitchPending || jobSwitchPending) return;
-      keepHostWorkStepsIfStale(data.payload);
-      rememberReactPayload(data.payload);
-      applyFromReact(data.payload);
-      return;
-    }
-
-    if (data.type === 'SP_JOB_CHANGE' && data.jobId != null && api && typeof api.selectJob === 'function') {
-      jobSwitchPending = true;
-      lastReactPayload = null;
-      applying = true;
-      Promise.resolve(api.selectJob(String(data.jobId))).finally(function () {
-        applying = false;
-        jobSwitchPending = false;
-        syncToReact();
+    function postAutosaveHint() {
+      if (!lastAutosave.text && !lastAutosave.error) return;
+      postToReact({
+        type: 'SP_AUTOSAVE_STATUS',
+        text: lastAutosave.text,
+        error: lastAutosave.error,
       });
-      return;
     }
 
-    if (data.type === 'SP_FAB_CHANGE' && data.fab != null && api && typeof api.selectFab === 'function') {
-      var switchId = ++pendingFabSwitch;
+    function isActiveHost() {
+      return window.__kuklaProtokollHostKind === hostKind;
+    }
+
+    function reactPayloadFab(payload) {
+      if (!payload || !payload.form) return '';
+      return String(payload.form.activeFab || '').trim();
+    }
+
+    function hostActiveFab() {
+      var api = bridgeApi();
+      if (!api || typeof api.getActiveFab !== 'function') return '';
+      try {
+        return String(api.getActiveFab() || '').trim();
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function getFrame() {
+      if (!frame) frame = document.getElementById(frameId);
+      return frame;
+    }
+
+    function postToReact(msg) {
+      var f = getFrame();
+      if (!f || !f.contentWindow) return;
+      try {
+        f.contentWindow.postMessage(msg, '*');
+      } catch (e) {
+        console.warn('[SP-Bridge] postMessage fehlgeschlagen', e);
+      }
+    }
+
+    function bridgeApi() {
+      return window[hostBridgeKey] || null;
+    }
+
+    function messageFromThisFrame(ev) {
+      var f = getFrame();
+      return !!(f && f.contentWindow && ev && ev.source === f.contentWindow);
+    }
+
+    function syncToReact(force) {
+      if (!isActiveHost()) return;
+      if (!force && applying) return;
+      var api = bridgeApi();
+      if (!api || typeof api.pullPayload !== 'function') return;
+      var payload = api.pullPayload();
+      rememberReactPayload(payload);
+      ignoreReactUntil = Date.now() + 900;
+      postToReact({ type: 'SP_SYNC_STATE', payload: payload });
+      postAutosaveHint();
+    }
+
+    function applyFromReact(payload) {
+      if (!isActiveHost()) return;
+      var api = bridgeApi();
+      if (!api || typeof api.applyPayload !== 'function') return;
       applyingDepth += 1;
       applying = true;
-      fabSwitchPending = true;
-      Promise.resolve(api.selectFab(String(data.fab))).finally(function () {
-        if (switchId !== pendingFabSwitch) return;
+      try {
+        api.applyPayload(payload);
+      } finally {
         applyingDepth -= 1;
         applying = applyingDepth > 0;
-        syncToReact(true);
-        window.setTimeout(function () {
-          if (switchId !== pendingFabSwitch) return;
-          fabSwitchPending = false;
-          syncToReact(true);
-        }, 80);
-      });
-      return;
-    }
-
-    if (data.type === 'SP_ACTION' && data.action && api && typeof api.triggerAction === 'function') {
-      if (data.payload) {
-        var actionFab = reactPayloadFab(data.payload);
-        var actionHostFab = hostActiveFab();
-        if (!actionHostFab || !actionFab || actionFab === actionHostFab) {
-          keepHostWorkStepsIfStale(data.payload);
-          rememberReactPayload(data.payload);
-          applyFromReact(data.payload);
-        }
-      } else {
-        flushFromReact();
       }
-      api.triggerAction(String(data.action));
     }
-  });
 
-  document.addEventListener('DOMContentLoaded', function () {
-    var f = getFrame();
-    if (f) {
-      f.addEventListener('load', function () {
-        window.setTimeout(syncToReact, 80);
-      });
+    function workStepsSignature(steps) {
+      return (steps || []).map(function (s) {
+        return String((s.labelDe || s.bezeichnung_de || '') + '\n' + (s.labelEn || s.bezeichnung_en || '') + '\n' + (s.label || '')).trim().toLowerCase();
+      }).join('||');
     }
+
+    function keepHostWorkStepsIfStale(payload) {
+      if (!payload || Date.now() >= ignoreReactUntil || !lastReactPayload) return payload;
+      var hostSteps = lastReactPayload.workSteps;
+      if (!Array.isArray(hostSteps) || !hostSteps.length) return payload;
+      var incoming = payload.workSteps || [];
+      if (workStepsSignature(incoming) === workStepsSignature(hostSteps)) return payload;
+      if (incoming.length > hostSteps.length) return payload;
+      payload.workSteps = hostSteps;
+      return payload;
+    }
+
+    function rememberReactPayload(payload) {
+      if (payload && typeof payload === 'object') lastReactPayload = payload;
+    }
+
+    function flushFromReact() {
+      if (!isActiveHost()) return false;
+      if (!lastReactPayload) return false;
+      var payloadFab = reactPayloadFab(lastReactPayload);
+      var hostFab = hostActiveFab();
+      if (hostFab && payloadFab && payloadFab !== hostFab) return false;
+      applyFromReact(lastReactPayload);
+      return true;
+    }
+
+    var api = {
+      syncToReact: syncToReact,
+      pushJobs: function (jobs) {
+        postToReact({ type: 'SP_JOBS', jobs: Array.isArray(jobs) ? jobs : [] });
+      },
+      flushFromReact: flushFromReact,
+      setAutosaveHint: function (text, isError) {
+        lastAutosave = { text: text || '', error: !!isError };
+        postToReact({ type: 'SP_AUTOSAVE_STATUS', text: lastAutosave.text, error: lastAutosave.error });
+      },
+      replayAutosaveHint: function () {
+        postAutosaveHint();
+      },
+      getLastPayload: function () {
+        return lastReactPayload;
+      },
+      beginJobSwitch: function () {
+        jobSwitchPending = true;
+        lastReactPayload = null;
+      },
+      endJobSwitch: function () {
+        jobSwitchPending = false;
+      },
+    };
+
+    window[exportKey] = api;
+
+    window.addEventListener('message', function (ev) {
+      var data = ev.data;
+      if (!data || typeof data !== 'object') return;
+      if (!messageFromThisFrame(ev)) return;
+      var host = bridgeApi();
+
+      if (data.type === 'SP_READY') {
+        var tries = 0;
+        function trySync() {
+          if (!isActiveHost()) return;
+          var hostApi = bridgeApi();
+          if (!hostApi || typeof hostApi.pullPayload !== 'function') {
+            if (tries++ < 25) {
+              window.setTimeout(trySync, 80);
+            }
+            return;
+          }
+          syncToReact(true);
+          postAutosaveHint();
+        }
+        trySync();
+        return;
+      }
+
+      if (data.type === 'SP_STATE_CHANGE' && data.payload) {
+        if (!isActiveHost() || applying || fabSwitchPending || jobSwitchPending) return;
+        keepHostWorkStepsIfStale(data.payload);
+        rememberReactPayload(data.payload);
+        applyFromReact(data.payload);
+        return;
+      }
+
+      if (data.type === 'SP_JOB_CHANGE' && data.jobId != null && host && typeof host.selectJob === 'function') {
+        if (!isActiveHost()) return;
+        jobSwitchPending = true;
+        lastReactPayload = null;
+        applying = true;
+        Promise.resolve(host.selectJob(String(data.jobId))).finally(function () {
+          applying = false;
+          jobSwitchPending = false;
+          syncToReact();
+        });
+        return;
+      }
+
+      if (data.type === 'SP_FAB_CHANGE' && data.fab != null && host && typeof host.selectFab === 'function') {
+        if (!isActiveHost()) return;
+        var switchId = ++pendingFabSwitch;
+        applyingDepth += 1;
+        applying = true;
+        fabSwitchPending = true;
+        Promise.resolve(host.selectFab(String(data.fab))).finally(function () {
+          if (switchId !== pendingFabSwitch) return;
+          applyingDepth -= 1;
+          applying = applyingDepth > 0;
+          syncToReact(true);
+          window.setTimeout(function () {
+            if (switchId !== pendingFabSwitch) return;
+            fabSwitchPending = false;
+            syncToReact(true);
+          }, 80);
+        });
+        return;
+      }
+
+      if (data.type === 'SP_ACTION' && data.action && host && typeof host.triggerAction === 'function') {
+        if (!isActiveHost()) return;
+        if (data.payload) {
+          var actionFab = reactPayloadFab(data.payload);
+          var actionHostFab = hostActiveFab();
+          if (!actionHostFab || !actionFab || actionFab === actionHostFab) {
+            keepHostWorkStepsIfStale(data.payload);
+            rememberReactPayload(data.payload);
+            applyFromReact(data.payload);
+          }
+        } else {
+          flushFromReact();
+        }
+        host.triggerAction(String(data.action));
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', function () {
+      var f = getFrame();
+      if (f) {
+        f.addEventListener('load', function () {
+          window.setTimeout(function () {
+            if (isActiveHost()) {
+              syncToReact();
+              postAutosaveHint();
+            }
+          }, 80);
+        });
+      }
+    });
+
+    return api;
+  }
+
+  window.__kuklaProtokollHostKind = window.__kuklaProtokollHostKind || 'service';
+
+  createProtokollReactBridge({
+    frameId: 'serviceprotokollReactFrame',
+    hostBridgeKey: 'serviceprotokollBridge',
+    exportKey: 'serviceprotokollReactBridge',
+    hostKind: 'service',
+  });
+  createProtokollReactBridge({
+    frameId: 'inbetriebnahmeReactFrame',
+    hostBridgeKey: 'inbetriebnahmeBridge',
+    exportKey: 'inbetriebnahmeReactBridge',
+    hostKind: 'ibn',
   });
 })();

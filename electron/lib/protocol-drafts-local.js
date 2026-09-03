@@ -16,6 +16,7 @@ const {
 
 const KIND_BY_BASENAME = {
   'serviceprotokoll.json': 'serviceprotokoll',
+  'inbetriebnahmeprotokoll.json': 'inbetriebnahme',
   'montagebericht.json': 'montagebericht',
   'kontrollwiegungsprotokoll.json': 'kontrollwiegung',
   'schleppkettenprotokoll.json': 'schleppkette',
@@ -349,6 +350,9 @@ function assembleFromDb(db, localJobId, kind) {
       if (!fab) continue;
       const draft = parseJsonObject(row.payload_json, null);
       if (!draft) continue;
+      if (!draft.updatedAt && !draft.updated_at && row.updated_at) {
+        draft.updatedAt = String(row.updated_at).trim().replace(' ', 'T');
+      }
       byFab[fab] = draft;
       const lid = parseInt(draft.local_id, 10) || 0;
       if (lid > maxLocal) maxLocal = lid;

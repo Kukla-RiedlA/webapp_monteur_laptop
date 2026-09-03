@@ -390,7 +390,7 @@
       en: 'spPdfEn',
       map: [
         { sel: '.sp-v2-page-title', en: 'Service protocol' },
-        { sel: '#btnServiceprotokollStickySave', en: 'Save (JSON)' },
+        { sel: '#btnServiceprotokollStickySave', en: 'Save' },
         { sel: '#btnServiceprotokollStickyPdf', en: 'Single PDF' },
         { sel: '#btnServiceprotokollSaveAllPdfTop', en: 'All PDFs' },
         { sel: '#spV2Sec1Title', en: 'Job & identification' },
@@ -433,7 +433,7 @@
         { sel: '[data-sp-sig-clear]', en: 'Clear' },
         { sel: '#btnServiceprotokollSavePdf', en: 'Single PDF' },
         { sel: '#btnServiceprotokollSaveAllPdf', en: 'All PDFs' },
-        { sel: '#btnServiceprotokollSaveJson', en: 'Save (JSON)' },
+        { sel: '#btnServiceprotokollSaveJson', en: 'Save' },
         { sel: '#serviceprotokollAbbrechen', en: 'Cancel' }
       ]
     }
@@ -503,6 +503,7 @@
       if (inp.id === 'pzVerfahrenKw') en = 'Control weighing';
       else if (inp.id === 'pzVerfahrenSk') en = 'Chain calibration test';
       else if (inp.id === 'pzVerfahrenSp') en = 'Service protocol';
+      else if (inp.id === 'pzVerfahrenIbn') en = 'Commissioning';
       if (en) setNodeText(lab, lang === 'en' ? en : lab.dataset.i18nDe);
     });
     var statusLabs = root.querySelectorAll('input[name="serviceprotokollStatus"]');
