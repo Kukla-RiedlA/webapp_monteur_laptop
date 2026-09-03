@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { MeasurementRow } from '../types';
 import { t, type UiLang } from '../i18n';
 
@@ -14,7 +15,7 @@ function measurementLabel(row: MeasurementRow, displayLang: UiLang): string {
   return de || en || row.label;
 }
 
-export function MeasurementTable({ rows, displayLang = 'de', onChange }: MeasurementTableProps) {
+export const MeasurementTable = memo(function MeasurementTable({ rows, displayLang = 'de', onChange }: MeasurementTableProps) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">
@@ -48,4 +49,4 @@ export function MeasurementTable({ rows, displayLang = 'de', onChange }: Measure
       </table>
     </div>
   );
-}
+});

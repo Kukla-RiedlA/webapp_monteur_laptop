@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { StepResult, WorkStep } from '../types';
 import { SpIcon } from './SpIcon';
 import { t, type UiLang } from '../i18n';
@@ -25,7 +26,7 @@ const RESULTS: { key: StepResult; label: string }[] = [
   { key: 'na', label: 'n.a.' },
 ];
 
-export function WorkStepsTable({ steps, displayLang, onResultChange, onRemarkChange, onDelete, onAdd, onReset }: WorkStepsTableProps) {
+export const WorkStepsTable = memo(function WorkStepsTable({ steps, displayLang, onResultChange, onRemarkChange, onDelete, onAdd, onReset }: WorkStepsTableProps) {
   return (
     <div>
       <div className="overflow-x-auto">
@@ -106,4 +107,4 @@ export function WorkStepsTable({ steps, displayLang, onResultChange, onRemarkCha
       </div>
     </div>
   );
-}
+});

@@ -16,20 +16,8 @@ import { EMPTY_MEASUREMENTS, FAB_NUMBERS } from '../types';
 import { localizeAutosaveHint, maskLangFromPdf, t, type UiLang } from '../i18n';
 
 function ensureLoadCells(form: ServiceProtocolFormState, fallbackMeasurements?: MeasurementRow[]): LoadCellRow[] {
+  if (Array.isArray(form.loadCells) && form.loadCells.length) return form.loadCells;
   const fallback = cloneMeasurements(fallbackMeasurements);
-  if (Array.isArray(form.loadCells) && form.loadCells.length) {
-    return form.loadCells.map((c, i) => ({
-      id: c.id || String(i + 1),
-      type: c.type || '',
-      serialNumber: c.serialNumber || '',
-      position: c.position || '',
-      supplyVoltage: c.supplyVoltage ?? (i === 0 ? form.supplyVoltage || '' : ''),
-      sensitivity: c.sensitivity ?? (i === 0 ? form.sensitivity || '' : ''),
-      measurements: cloneMeasurements(
-        c.measurements && c.measurements.length ? c.measurements : i === 0 ? fallback : EMPTY_MEASUREMENTS,
-      ),
-    }));
-  }
   return [
     {
       id: '1',
@@ -64,14 +52,15 @@ export function ServiceProtocolPage() {
 
   const patchForm = useCallback((patch: Partial<ServiceProtocolFormState>) => {
     setBridgeState((prev) => {
-      const nextForm = { ...prev.form, ...patch };
       if (Array.isArray(patch.loadCells) && patch.loadCells.length) {
+        const nextForm = { ...prev.form, ...patch };
         nextForm.loadcellType = patch.loadCells[0].type || '';
         nextForm.serialNumber = patch.loadCells[0].serialNumber || '';
         nextForm.supplyVoltage = patch.loadCells[0].supplyVoltage || '';
         nextForm.sensitivity = patch.loadCells[0].sensitivity || '';
+        return mergeBridgePayload(prev, { form: nextForm });
       }
-      return mergeBridgePayload(prev, { form: nextForm });
+      return { ...prev, form: { ...prev.form, ...patch } };
     });
   }, []);
 
@@ -175,7 +164,30 @@ export function ServiceProtocolPage() {
     [bridgeState],
   );
 
+  const onStepResultChange = useCallback((id: string, result: StepResult) => {
+    setBridgeState((prev) => ({
+      ...prev,
+      workSteps: prev.workSteps.map((s) => (s.id === id ? { ...s, result } : s)),
+    }));
+  }, []);
+
+  const onStepRemarkChange = useCallback((id: string, remark: string) => {
+    setBridgeState((prev) => ({
+      ...prev,
+      workSteps: prev.workSteps.map((s) => (s.id === id ? { ...s, remark } : s)),
+    }));
+  }, []);
+
+  const onStepDelete = useCallback((id: string) => {
+    setBridgeState((prev) => ({
+      ...prev,
+      workSteps: prev.workSteps.filter((s) => s.id !== id),
+    }));
+  }, []);
+
   const { sendAction, autosaveHint, autosaveError } = useElectronBridge(bridgeState, setBridgeState, logPayload);
+  const onAddStep = useCallback(() => sendAction('openStepPicker'), [sendAction]);
+  const onResetSteps = useCallback(() => sendAction('resetWorkSteps'), [sendAction]);
 
   const jobOptions = [
     { value: '', label: t(uiLang, 'pleaseSelect') },
@@ -433,26 +445,11 @@ export function ServiceProtocolPage() {
             <WorkStepsTable
               steps={workSteps}
               displayLang={displayLang}
-              onResultChange={(id, result: StepResult) =>
-                setBridgeState((prev) => ({
-                  ...prev,
-                  workSteps: prev.workSteps.map((s) => (s.id === id ? { ...s, result } : s)),
-                }))
-              }
-              onRemarkChange={(id, remark) =>
-                setBridgeState((prev) => ({
-                  ...prev,
-                  workSteps: prev.workSteps.map((s) => (s.id === id ? { ...s, remark } : s)),
-                }))
-              }
-              onDelete={(id) =>
-                setBridgeState((prev) => ({
-                  ...prev,
-                  workSteps: prev.workSteps.filter((s) => s.id !== id),
-                }))
-              }
-              onAdd={() => sendAction('openStepPicker')}
-              onReset={() => sendAction('resetWorkSteps')}
+              onResultChange={onStepResultChange}
+              onRemarkChange={onStepRemarkChange}
+              onDelete={onStepDelete}
+              onAdd={onAddStep}
+              onReset={onResetSteps}
             />
             <label className="mt-4 flex flex-col gap-1">
               <span className="text-sm font-semibold text-[#111827]">{t(uiLang, 'generalRemarks')}</span>

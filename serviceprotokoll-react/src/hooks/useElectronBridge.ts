@@ -82,7 +82,7 @@ export function useElectronBridge(
 
   useEffect(() => {
     if (!EMBEDDED) return;
-    const t = window.setTimeout(pushState, 120);
+    const t = window.setTimeout(pushState, 280);
     return () => window.clearTimeout(t);
   }, [state, pushState]);
 

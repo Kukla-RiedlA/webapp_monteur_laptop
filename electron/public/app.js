@@ -23622,6 +23622,27 @@
       }).join('||');
     }
 
+    function spReactWorkStepsSignature(steps) {
+      return (steps || []).map(function (s) {
+        return String((s.labelDe || '') + '\n' + (s.labelEn || '') + '\n' + (s.result || '') + '\n' + (s.remark || '')).toLowerCase();
+      }).join('||');
+    }
+
+    function spReactLoadCellsSignature(cells) {
+      return JSON.stringify((cells || []).map(function (c) {
+        return [
+          c.type || '',
+          c.serialNumber || '',
+          c.position || '',
+          c.supplyVoltage || '',
+          c.sensitivity || '',
+          c.measurements || c.mess_matrix || null
+        ];
+      }));
+    }
+
+    var spLastReactLoadCellsSig = '';
+
     function spApplyPayloadFromReact(payload) {
       if (serviceprotokollFabSwitching) return;
       if (!payload || !payload.form) return;
@@ -23638,37 +23659,36 @@
       setVal('serviceprotokollPos', f.position);
       setVal('serviceprotokollDwc', f.dwc);
       if (Array.isArray(f.loadCells) && f.loadCells.length) {
-        // Leere Vers/Sens aus React dürfen Stamm-Werte im Hidden-DOM nicht überschreiben.
-        var curCells = collectSpLoadCellsFromForm();
-        var mergedCells = f.loadCells.map(function (c, i) {
-          var prev = curCells[i] || {};
-          var mm;
-          if (Array.isArray(c.measurements) && c.measurements.length) {
-            mm = measurementsRowsToMatrix(c.measurements);
-          } else if (c.mess_matrix) {
-            mm = cloneMessMatrix(c.mess_matrix);
-          } else if (i === 0 && Array.isArray(payload.measurements) && payload.measurements.length) {
-            mm = measurementsRowsToMatrix(payload.measurements);
-          } else {
-            mm = cellMessMatrixFromCell(prev);
-          }
-          return {
-            id: c.id || String(i + 1),
-            type: c.type || '',
-            serialNumber: c.serialNumber || '',
-            position: c.position || '',
-            supplyVoltage: String(c.supplyVoltage || '').trim() || prev.supplyVoltage || '',
-            sensitivity: String(c.sensitivity || '').trim() || prev.sensitivity || '',
-            mess_matrix: mm,
-            measurements: matrixToMeasurementsRows(mm)
-          };
-        });
-        var cellsSig = function (list) {
-          return JSON.stringify((list || []).map(function (c) {
-            return [c.type || '', c.serialNumber || '', c.position || '', c.supplyVoltage || '', c.sensitivity || '', c.mess_matrix || null];
-          }));
-        };
-        if (cellsSig(mergedCells) !== cellsSig(curCells)) applySpLoadCellsToForm(mergedCells);
+        var incomingCellsSig = spReactLoadCellsSignature(f.loadCells);
+        if (incomingCellsSig !== spLastReactLoadCellsSig) {
+          spLastReactLoadCellsSig = incomingCellsSig;
+          // Leere Vers/Sens aus React dürfen Stamm-Werte im Hidden-DOM nicht überschreiben.
+          var curCells = collectSpLoadCellsFromForm();
+          var mergedCells = f.loadCells.map(function (c, i) {
+            var prev = curCells[i] || {};
+            var mm;
+            if (Array.isArray(c.measurements) && c.measurements.length) {
+              mm = measurementsRowsToMatrix(c.measurements);
+            } else if (c.mess_matrix) {
+              mm = cloneMessMatrix(c.mess_matrix);
+            } else if (i === 0 && Array.isArray(payload.measurements) && payload.measurements.length) {
+              mm = measurementsRowsToMatrix(payload.measurements);
+            } else {
+              mm = cellMessMatrixFromCell(prev);
+            }
+            return {
+              id: c.id || String(i + 1),
+              type: c.type || '',
+              serialNumber: c.serialNumber || '',
+              position: c.position || '',
+              supplyVoltage: String(c.supplyVoltage || '').trim() || prev.supplyVoltage || '',
+              sensitivity: String(c.sensitivity || '').trim() || prev.sensitivity || '',
+              mess_matrix: mm,
+              measurements: matrixToMeasurementsRows(mm)
+            };
+          });
+          applySpLoadCellsToForm(mergedCells);
+        }
       } else {
         setVal('spMessType', f.loadcellType);
         setVal('spMessSeriennummer', f.serialNumber);
@@ -23698,30 +23718,31 @@
         applyPgTestToForm([tl.weight || '', tl.display || '', tl.deviation || '', tl.value4 || '']);
       }
       if (serviceprotokollHostHydrated && Array.isArray(payload.workSteps) && Date.now() >= spWorkStepsHostLockUntil) {
-        var nextSteps = payload.workSteps.map(function (s, i) {
-          var prev = arbeitsschritte[i] || {};
-          var de = String(s.labelDe != null ? s.labelDe : '').trim();
-          var en = String(s.labelEn != null ? s.labelEn : '').trim();
-          if (!de && !en && s.label) {
-            var parts = splitBilingualLabel(s.label);
-            de = parts.de;
-            en = parts.en;
+        if (spReactWorkStepsSignature(payload.workSteps) !== spWorkStepsSignature(arbeitsschritte)) {
+          var nextSteps = payload.workSteps.map(function (s, i) {
+            var prev = arbeitsschritte[i] || {};
+            var de = String(s.labelDe != null ? s.labelDe : '').trim();
+            var en = String(s.labelEn != null ? s.labelEn : '').trim();
+            if (!de && !en && s.label) {
+              var parts = splitBilingualLabel(s.label);
+              de = parts.de;
+              en = parts.en;
+            }
+            if (!de) de = String(prev.bezeichnung_de || '').trim();
+            if (!en) en = String(prev.bezeichnung_en || '').trim();
+            return {
+              bezeichnung_de: de,
+              bezeichnung_en: en,
+              status: s.result || 'na',
+              bemerkung: String(s.remark || '')
+            };
+          });
+          if (!nextSteps.length) {
+            nextSteps = [{ bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' }];
           }
-          if (!de) de = String(prev.bezeichnung_de || '').trim();
-          if (!en) en = String(prev.bezeichnung_en || '').trim();
-          return {
-            bezeichnung_de: de,
-            bezeichnung_en: en,
-            status: s.result || 'na',
-            bemerkung: String(s.remark || '')
-          };
-        });
-        if (!nextSteps.length) {
-          nextSteps = [{ bezeichnung_de: '', bezeichnung_en: '', status: 'na', bemerkung: '' }];
+          arbeitsschritte = nextSteps;
+          renderSteps();
         }
-        var stepsChanged = spWorkStepsSignature(nextSteps) !== spWorkStepsSignature(arbeitsschritte);
-        arbeitsschritte = nextSteps;
-        if (stepsChanged) renderSteps();
       }
       updateVersSpannungHint();
     }

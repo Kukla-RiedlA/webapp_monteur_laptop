@@ -19,6 +19,30 @@
     var lastReactPayload = null;
     var ignoreReactUntil = 0;
     var lastAutosave = { text: '', error: false };
+    var applyTimer = null;
+    var APPLY_IDLE_MS = 450;
+
+    function cancelScheduledApply() {
+      if (applyTimer) {
+        clearTimeout(applyTimer);
+        applyTimer = null;
+      }
+    }
+
+    function scheduleApplyFromReact(payload) {
+      rememberReactPayload(payload);
+      cancelScheduledApply();
+      applyTimer = setTimeout(function () {
+        applyTimer = null;
+        if (lastReactPayload) applyFromReact(lastReactPayload);
+      }, APPLY_IDLE_MS);
+    }
+
+    function applyFromReactNow(payload) {
+      cancelScheduledApply();
+      if (payload) rememberReactPayload(payload);
+      if (lastReactPayload) applyFromReact(lastReactPayload);
+    }
 
     function postAutosaveHint() {
       if (!lastAutosave.text && !lastAutosave.error) return;
@@ -125,7 +149,7 @@
       var payloadFab = reactPayloadFab(lastReactPayload);
       var hostFab = hostActiveFab();
       if (hostFab && payloadFab && payloadFab !== hostFab) return false;
-      applyFromReact(lastReactPayload);
+      applyFromReactNow(lastReactPayload);
       return true;
     }
 
@@ -183,8 +207,7 @@
       if (data.type === 'SP_STATE_CHANGE' && data.payload) {
         if (!isActiveHost() || applying || fabSwitchPending || jobSwitchPending) return;
         keepHostWorkStepsIfStale(data.payload);
-        rememberReactPayload(data.payload);
-        applyFromReact(data.payload);
+        scheduleApplyFromReact(data.payload);
         return;
       }
 
@@ -228,8 +251,7 @@
           var actionHostFab = hostActiveFab();
           if (!actionHostFab || !actionFab || actionFab === actionHostFab) {
             keepHostWorkStepsIfStale(data.payload);
-            rememberReactPayload(data.payload);
-            applyFromReact(data.payload);
+            applyFromReactNow(data.payload);
           }
         } else {
           flushFromReact();
