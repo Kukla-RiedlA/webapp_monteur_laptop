@@ -208,7 +208,7 @@ Masterliste + Typ-Presets (global + privat pro Techniker). Scope analog Textbaus
 
 | Endpunkt | Methode | Kurzbeschreibung |
 |----------|---------|------------------|
-| `dispo_api/api/arbeitsschritte_list.php` | GET | `technician_id` → `{ ok, steps: [{ id, scope, bezeichnung_de, bezeichnung_en, bezeichnung, sort_order }], presets: [{ id, scope, name, type_code, step_refs[] }] }` |
+| `dispo_api/api/arbeitsschritte_list.php` | GET | `technician_id`, optional `catalog_kind` (`service` Default, `ibn`) → `{ ok, catalog_kind, steps: [{ id, scope, bezeichnung_de, bezeichnung_en, bezeichnung, sort_order }], presets: [{ id, scope, name, type_code, step_refs[] }] }` |
 | `dispo_api/api/arbeitsschritte_save.php` | POST | User-Schritt anlegen/ändern (`technician_id`, `id?`, `bezeichnung_de`, `bezeichnung_en`, `sort_order`) |
 | `dispo_api/api/arbeitsschritte_delete.php` | POST | User-Schritt löschen (`technician_id`, `id`) |
 | `dispo_api/api/arbeitsschritte_publish_global.php` | POST | User-Schritt → global freigeben |
@@ -220,7 +220,7 @@ Masterliste + Typ-Presets (global + privat pro Techniker). Scope analog Textbaus
 **Dispo-Admin** (nur `perm_admin`, Seite `arbeitsschritte_admin.php`): `arbeitsschritte_global_save.php`, `arbeitsschritte_global_delete.php`, `arbeitsschritte_global_reorder.php`, `arbeitsschritte_preset_global_save.php`, `arbeitsschritte_preset_global_delete.php`.
 
 **Monteur-Laptop (Electron-Gateway):**
-- `GET /api/arbeitsschritte_list` — lokaler SQLite-Cache + optional Merge vom Server (`base_url`, `technician_id`)
+- `GET /api/arbeitsschritte_list` — lokaler SQLite-Cache + optional Merge vom Server (`base_url`, `technician_id`, `catalog_kind`; Default `service`). `sync_pull` lädt `service` und `ibn` getrennt.
 - `POST /api/arbeitsschritte_save`, `_delete`, `_publish_global`, `_preset_save`, `_preset_delete`, `_reorder`
 - `_reorder`: nur **user**-Schritte lokal (`sort_order`); optional Proxy zu `arbeitsschritte_reorder.php` bei Online (`base_url`, `technician_id`, `orders`)
 - `sync_pull` / `sync_push` mit `entity_type='arbeitsschritte'` in `pending_changes`

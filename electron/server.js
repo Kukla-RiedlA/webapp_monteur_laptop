@@ -13947,22 +13947,28 @@ function createApp(db) {
     const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req);
     const localOnly = wantsLocalOnlyRequest(req.query);
+    const catalogKind = String(req.query.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service';
     try {
       arbeitsschritteLocal.ensureArbeitsschritteSchema(db);
-      let local = arbeitsschritteLocal.listArbeitsschritteLocal(db, technicianId);
+      let local = arbeitsschritteLocal.listArbeitsschritteLocal(db, technicianId, catalogKind);
       if (localOnly || !baseUrl || !technicianId) {
         local.data_source = 'local';
         return res.json(local);
       }
       try {
         const url =
-          baseUrl + '/dispo_api/api/arbeitsschritte_list.php?technician_id=' + encodeURIComponent(technicianId);
+          baseUrl +
+          '/dispo_api/api/arbeitsschritte_list.php?technician_id=' +
+          encodeURIComponent(technicianId) +
+          '&catalog_kind=' +
+          encodeURIComponent(catalogKind);
         const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId) } });
         const data = await r.json().catch(() => ({}));
         if (r.ok && data.ok) {
+          data.catalog_kind = catalogKind;
           arbeitsschritteLocal.mergeArbeitsschritteFromRemote(db, technicianId, data);
           save();
-          local = arbeitsschritteLocal.listArbeitsschritteLocal(db, technicianId);
+          local = arbeitsschritteLocal.listArbeitsschritteLocal(db, technicianId, catalogKind);
           local.data_source = 'dispo';
           return res.json(local);
         }
@@ -18527,16 +18533,34 @@ async function pullArbeitsschritteFromDispo(baseUrl, technicianId, dbConn, authH
   const base = String(baseUrl || '').trim().replace(/\/$/, '');
   const tid = parseInt(technicianId, 10);
   if (!base || !tid) return { ok: false, skipped: true };
-  const url = base + '/dispo_api/api/arbeitsschritte_list.php?technician_id=' + encodeURIComponent(tid);
-  const r = await fetch(url, {
-    headers: Object.assign({ 'X-Technician-Id': String(tid) }, authHeader || {}),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok || !data.ok) {
-    throw new Error((data && data.error) || r.statusText || 'arbeitsschritte_list fehlgeschlagen');
+  let steps = 0;
+  let presets = 0;
+  for (const kind of ['service', 'ibn']) {
+    const url =
+      base +
+      '/dispo_api/api/arbeitsschritte_list.php?technician_id=' +
+      encodeURIComponent(tid) +
+      '&catalog_kind=' +
+      encodeURIComponent(kind);
+    try {
+      const r = await fetch(url, {
+        headers: Object.assign({ 'X-Technician-Id': String(tid) }, authHeader || {}),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        if (kind === 'ibn') continue;
+        throw new Error((data && data.error) || r.statusText || 'arbeitsschritte_list fehlgeschlagen');
+      }
+      data.catalog_kind = kind;
+      arbeitsschritteLocal.mergeArbeitsschritteFromRemote(dbConn, tid, data);
+      steps += (data.steps || []).length;
+      presets += (data.presets || []).length;
+    } catch (e) {
+      if (kind === 'ibn') continue;
+      throw e;
+    }
   }
-  arbeitsschritteLocal.mergeArbeitsschritteFromRemote(dbConn, tid, data);
-  return { ok: true, steps: (data.steps || []).length, presets: (data.presets || []).length };
+  return { ok: true, steps, presets };
 }
 
 function queueDispoProxyPending(dbConn, entityType, entityId, action, payload) {

@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.039
+- **Arbeitsschritte:** lokaler Katalog `catalog_kind` (Service/IBN); Sync zieht beide Kataloge, ohne den Service-Grundstock zu überschreiben.
+
 ## V 2.006.038
 - **Montagehinweise:** lokale Ablage, Gateway-Routen, Lampe und CSS in der Laptop-App.
 - **Anlagenstamm:** Galerie und Montage-Pfade robuster; Cloud-sicheres Datei-Ersetzen.
