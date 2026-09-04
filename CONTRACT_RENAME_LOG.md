@@ -4,6 +4,14 @@ Chronologische Kurznotizen zu Feld- und Statusänderungen, die Laptop, Dispo ode
 
 ---
 
+## 2026-09-04 – Mess-/Wiegungszeilen `in_pdf` (additiv)
+
+- **Alt:** Nur Laptop-JSON/`payload_json`; KW-DB ohne Flags; SK-Messungen nur `in_summe`. PDF zeigte alle DB-Zeilen.
+- **Neu (additiv):** `in_summe` + `in_pdf` an `kontrollwiegungsprotokoll_zeilen` und `schleppkettenprotokoll_messungen.in_pdf`. Summe erzwingt Druck. Dispo-Save/PDF/Prefill speichern und filtern relational (Migration 079).
+- **API:** `wiegungen[]` / `messungen[]` in `kontrollwiegungsprotokoll_save` / `schleppkettenprotokoll_save`.
+
+---
+
 ## 2026-08-25 – Textbausteine DE/EN analog Arbeitsschritte
 
 - **Alt:** Item nur `text` (ein Feld, oft HTML).
