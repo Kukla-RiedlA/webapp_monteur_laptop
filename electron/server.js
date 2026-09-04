@@ -276,6 +276,7 @@ const {
   upsertAnlagenstammTreeCacheRow,
   parseKraftaufnehmerExtra,
   normalizeMotorRows,
+  mergeMotorRowsFillGaps,
   listMotorsForStamm,
   syncProtocolMotorsToStamm,
   getAnlagenstammSyncResumeState,
@@ -9316,11 +9317,22 @@ function createApp(db) {
         const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
         const data = await r.json().catch(() => ({}));
         if (r.ok && data.ok && Array.isArray(data.arbeitsschritte) && data.arbeitsschritte.length > 0) {
+          const localMotors = (local && (local.motoren || (local.kopf && local.kopf.motoren))) || [];
+          const remoteMotors = Array.isArray(data.motoren)
+            ? data.motoren
+            : (data.kopf && Array.isArray(data.kopf.motoren) ? data.kopf.motoren : []);
+          data.motoren = mergeMotorRowsFillGaps(remoteMotors, localMotors, true);
+          if (data.kopf && typeof data.kopf === 'object') {
+            data.kopf.motoren = data.motoren;
+          }
           return res.json(data);
         }
         if (local) {
           if (r.ok && data.ok && data.kopf) local.kopf = Object.assign({}, local.kopf || {}, data.kopf);
-          if (r.ok && data.ok && Array.isArray(data.motoren)) local.motoren = data.motoren;
+          const localMotors = local.motoren || (local.kopf && local.kopf.motoren) || [];
+          const remoteMotors = r.ok && data.ok && Array.isArray(data.motoren) ? data.motoren : [];
+          local.motoren = mergeMotorRowsFillGaps(remoteMotors, localMotors, true);
+          if (local.kopf && typeof local.kopf === 'object') local.kopf.motoren = local.motoren;
           return res.json(local);
         }
         if (r.ok) return res.json(data);
@@ -11404,10 +11416,13 @@ function createApp(db) {
     if (!dbConn) return { ok: false, error: 'Lokale Datenbank nicht bereit.' };
     const existing = anlagenstammLookupByFab(dbConn, fabKey);
     if (!existing || !existing.id) return null;
+    const existingMotors = listMotorsForStamm(dbConn, existing.id);
+    const merged = mergeMotorRowsFillGaps(list, existingMotors, false);
+    if (!merged.length) return null;
     try {
       return await performAnlagenstammSave({
         fabrikationsnummer: fabKey,
-        motoren: list,
+        motoren: merged,
         technician_id: technicianId,
         baseUrl: body.baseUrl || body.dispoBaseUrl,
         externalUrl: body.externalUrl,

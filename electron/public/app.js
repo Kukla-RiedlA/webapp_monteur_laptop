@@ -21805,6 +21805,63 @@
       return normalizeSpMotorRows(row.motoren || (row.kopf && row.kopf.motoren) || []);
     }
 
+    function mergeSpMotorsFillGapsFromStamm(stammMotors, appendUnused) {
+      var stamm = normalizeSpMotorRows(stammMotors);
+      var cur = collectSpMotors();
+      if (!stamm.length) return;
+      if (!cur.length) {
+        setSpMotors(stamm, { replaceEmpty: true });
+        return;
+      }
+      var used = {};
+      function matchKey(row) {
+        var id = String((row && row.anlagenstamm_motor_id) || '').trim();
+        if (id && id !== '0') return 'id:' + id;
+        var pos = String((row && row.positionsnummer) || '').trim().toLowerCase();
+        if (pos) return 'pos:' + pos;
+        return '';
+      }
+      function take(p) {
+        var key = matchKey(p);
+        if (key) {
+          for (var i = 0; i < stamm.length; i++) {
+            if (used[i]) continue;
+            if (matchKey(stamm[i]) === key) {
+              used[i] = true;
+              return stamm[i];
+            }
+          }
+        }
+        return null;
+      }
+      var merged = cur.map(function (p) {
+        var s = take(p);
+        if (!s) {
+          for (var i = 0; i < stamm.length; i++) {
+            if (!used[i]) {
+              used[i] = true;
+              s = stamm[i];
+              break;
+            }
+          }
+        }
+        if (!s) return p;
+        var out = emptySpMotorRow();
+        SP_MOTOR_KEYS.forEach(function (k) {
+          out[k] = (p[k] && String(p[k]).trim()) ? String(p[k]).trim() : (s[k] || '');
+        });
+        out.anlagenstamm_motor_id = p.anlagenstamm_motor_id || s.anlagenstamm_motor_id || '';
+        out._uiId = p._uiId || s._uiId || '';
+        return out;
+      });
+      if (appendUnused !== false) {
+        stamm.forEach(function (s, i) {
+          if (!used[i]) merged.push(s);
+        });
+      }
+      setSpMotors(merged, { replaceEmpty: true });
+    }
+
     function motorsToReactForm(list) {
       return normalizeSpMotorRows(list).map(function (m, i) {
         var r = { id: m._uiId || String(i + 1), anlagenstammMotorId: m.anlagenstamm_motor_id || '' };
@@ -21880,16 +21937,19 @@
           }
           lockHostMotorsFromReact(2500);
           setSpMotors(motors, { replaceEmpty: true });
-          stashDraftInMemory(fab, { force: true });
-          notifyReactBridge(true);
-          window.setTimeout(function () {
+          return lookupAnlagenstammRowForFab(fab).then(function (row) {
+            mergeSpMotorsFillGapsFromStamm(motorsFromStammRow(row), true);
+            stashDraftInMemory(fab, { force: true });
             notifyReactBridge(true);
-          }, 80);
-          var applied = collectSpMotors();
-          var msg = applied.length + ' Motor(en) geladen';
-          if (d.file) msg += ' (' + d.file + ')';
-          else if (d.note) msg += ' – ' + d.note;
-          if (typeof showToast === 'function') showToast(msg);
+            window.setTimeout(function () {
+              notifyReactBridge(true);
+            }, 80);
+            var applied = collectSpMotors();
+            var msg = applied.length + ' Motor(en) geladen';
+            if (d.file) msg += ' (' + d.file + ')';
+            else if (d.note) msg += ' – ' + d.note;
+            if (typeof showToast === 'function') showToast(msg);
+          });
         })
         .catch(function (err) {
           if (typeof showToast === 'function') {
@@ -23009,17 +23069,12 @@
       var merged = mergeKopfFillGaps(fromStamm, readKopfFieldsFromForm());
       applyKopfFields(merged);
       applyServiceprotokollProjekt(serviceJobData, fab, merged.projekt);
+      mergeSpMotorsFillGapsFromStamm(motorsFromStammRow(row), true);
       if (opts.preferStamm) {
         applySpLoadCellsToForm(loadCellsFromStammMess(mapped.mess, jobKopf));
         updateVersSpannungHint();
-        var stammMotors = motorsFromStammRow(row);
-        if (stammMotors.length) setSpMotors(stammMotors, { replaceEmpty: true });
       } else {
         applyMessTypeFromStamm(mapped.mess, jobKopf);
-        if (!collectSpMotors().length) {
-          var fillMotors = motorsFromStammRow(row);
-          if (fillMotors.length) setSpMotors(fillMotors);
-        }
       }
     }
 
@@ -23335,12 +23390,10 @@
           applyKopfFields(mergedKopf);
           applyServiceprotokollProjekt(serviceJobData, fab, mergedKopf.projekt);
           applyMessTypeFromStamm(apiKopfRaw, jobKopf);
-          if (!draftApplied && !collectSpMotors().length) {
-            var apiMotors = Array.isArray(data.motoren)
-              ? data.motoren
-              : (apiKopfRaw && Array.isArray(apiKopfRaw.motoren) ? apiKopfRaw.motoren : []);
-            if (apiMotors.length) setSpMotors(apiMotors, { replaceEmpty: true });
-          }
+          var apiMotors = Array.isArray(data.motoren)
+            ? data.motoren
+            : (apiKopfRaw && Array.isArray(apiKopfRaw.motoren) ? apiKopfRaw.motoren : []);
+          if (apiMotors.length) mergeSpMotorsFillGapsFromStamm(apiMotors, true);
         } else if (!draftApplied) {
           defaultsSource = 'builtin';
         }
@@ -24024,10 +24077,7 @@
       var merged = mergeKopfFillGaps(stammKopf, readKopfFieldsFromForm());
       applyKopfFields(merged);
       applyServiceprotokollProjekt(serviceJobData, fab, merged.projekt || stammKopf.projekt);
-      if (!collectSpMotors().length) {
-        var syncMotors = motorsFromStammRow(row);
-        if (syncMotors.length) setSpMotors(syncMotors);
-      }
+      mergeSpMotorsFillGapsFromStamm(motorsFromStammRow(row), true);
       if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
       notifyReactBridge(true);
     }

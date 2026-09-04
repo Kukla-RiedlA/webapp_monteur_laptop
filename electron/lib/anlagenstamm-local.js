@@ -565,6 +565,62 @@ function normalizeMotorRows(payload) {
   return out;
 }
 
+function motorRowMatchKey(row) {
+  const id = Number(row && (row.anlagenstamm_motor_id || row.id) || 0);
+  if (Number.isFinite(id) && id > 0) return 'id:' + id;
+  const pos = String((row && row.positionsnummer) || '').trim().toLowerCase();
+  if (pos) return 'pos:' + pos;
+  return '';
+}
+
+function mergeMotorRowsFillGaps(incoming, existing, appendUnusedExisting) {
+  const inc = normalizeMotorRows({ motoren: Array.isArray(incoming) ? incoming : [] });
+  const ex = normalizeMotorRows({ motoren: Array.isArray(existing) ? existing : [] });
+  if (!inc.length) return appendUnusedExisting ? ex : [];
+  if (!ex.length) return inc;
+  const used = {};
+  function takeMatch(row) {
+    const key = motorRowMatchKey(row);
+    if (!key) return null;
+    for (let i = 0; i < ex.length; i++) {
+      if (used[i]) continue;
+      if (motorRowMatchKey(ex[i]) === key) {
+        used[i] = true;
+        return ex[i];
+      }
+    }
+    return null;
+  }
+  const out = inc.map((row) => {
+    let src = takeMatch(row);
+    if (!src) {
+      for (let i = 0; i < ex.length; i++) {
+        if (!used[i]) {
+          used[i] = true;
+          src = ex[i];
+          break;
+        }
+      }
+    }
+    if (!src) return row;
+    const merged = Object.assign({}, row);
+    ANLAGENSTAMM_MOTOR_KEYS.forEach((k) => {
+      if (!merged[k] && src[k]) merged[k] = src[k];
+    });
+    if (!merged.anlagenstamm_motor_id && src.anlagenstamm_motor_id) {
+      merged.anlagenstamm_motor_id = src.anlagenstamm_motor_id;
+    }
+    if (!merged.id && src.id) merged.id = src.id;
+    return merged;
+  });
+  if (appendUnusedExisting) {
+    ex.forEach((row, i) => {
+      if (!used[i]) out.push(row);
+    });
+  }
+  return out;
+}
+
 function listMotorsForStamm(db, anlagenstammId) {
   const id = Number(anlagenstammId) || 0;
   if (!id || !db) return [];
@@ -605,7 +661,9 @@ function syncProtocolMotorsToStamm(db, fab, rows) {
   if (!f || !db) return;
   const stamm = lookupByFab(db, f);
   if (!stamm || !stamm.id) return;
-  const normalized = normalizeMotorRows({ motoren: Array.isArray(rows) ? rows : [] });
+  const incoming = Array.isArray(rows) ? rows : [];
+  const existing = listMotorsForStamm(db, stamm.id);
+  const normalized = mergeMotorRowsFillGaps(incoming, existing, false);
   if (!normalized.length) return;
   replaceMotorsForStamm(db, stamm.id, normalized);
 }
@@ -2388,6 +2446,7 @@ module.exports = {
   isRecentLocalAnlagenstammGuard,
   clampForDispoAnlagenstamm,
   normalizeMotorRows,
+  mergeMotorRowsFillGaps,
   listMotorsForStamm,
   replaceMotorsForStamm,
   syncProtocolMotorsToStamm,
