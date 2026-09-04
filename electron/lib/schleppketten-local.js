@@ -54,6 +54,13 @@ function enrichMessungen(messungen) {
     if (base.in_summe === undefined) {
       base.in_summe = true;
     }
+    if (base.in_pdf === undefined) {
+      const inSumme = !(base.in_summe === false || base.in_summe === 0 || base.in_summe === '0');
+      base.in_pdf = inSumme;
+    }
+    if (base.in_summe !== false && base.in_summe !== 0 && base.in_summe !== '0') {
+      base.in_pdf = true;
+    }
     return Object.assign(base, computed);
   });
 }

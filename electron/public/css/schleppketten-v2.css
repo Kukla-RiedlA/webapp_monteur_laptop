@@ -93,9 +93,20 @@ body.has-sticky-header .sk-mess-table-wrap thead th {
   text-align: center;
 }
 
+.sk-mess-table:not(.sk-ketten-table) .sk-col-act {
+  width: 6.8rem;
+}
+
 .sk-mess-table .sk-num {
   font-weight: 700;
   color: var(--sp-primary, #0e7b5a);
+}
+
+.proto-print-th-icon {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  vertical-align: -0.1rem;
 }
 
 .sk-act-wrap {
@@ -105,12 +116,19 @@ body.has-sticky-header .sk-mess-table-wrap thead th {
   gap: 0.25rem;
 }
 
-.sk-mess-table .sk-in-summe {
+.sk-mess-table .sk-in-summe,
+.sk-mess-table .sk-in-pdf,
+.sk-mess-table .proto-in-pdf {
   width: 1rem;
   height: 1rem;
   margin: 0;
   accent-color: var(--sp-green, #0e7b5a);
   cursor: pointer;
+}
+
+.sk-mess-table .proto-in-pdf:disabled {
+  cursor: not-allowed;
+  opacity: 0.85;
 }
 
 .sk-mess-table .sk-remove,

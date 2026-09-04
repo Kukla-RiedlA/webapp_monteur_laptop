@@ -1446,8 +1446,21 @@ function clipText(font, text, size, maxWidth, unicodeCapable) {
   return t + '...';
 }
 
+function rowFlagFalse(v) {
+  return v === false || v === 0 || v === '0';
+}
+
 function rowInSumme(row) {
-  return !(row && (row.in_summe === false || row.in_summe === 0 || row.in_summe === '0'));
+  return !rowFlagFalse(row && row.in_summe);
+}
+
+/** PDF-Zeile: bei Summe immer; sonst nur in_pdf. Legacy ohne in_pdf: nicht in Summe = nicht im PDF. */
+function rowInPdf(row) {
+  if (rowInSumme(row)) return true;
+  if (row && row.in_pdf !== undefined && row.in_pdf !== null && row.in_pdf !== '') {
+    return !rowFlagFalse(row.in_pdf);
+  }
+  return false;
 }
 
 /**
@@ -1476,8 +1489,8 @@ async function generateKontrollwiegungPdfBuffer(payload, options) {
   const logo = await embedLogo(pdfDoc);
   const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
   const rowsAll = Array.isArray(payload.wiegungen) ? payload.wiegungen : [];
-  // PDF: nur Zeilen, die für die Summe markiert sind (in_summe)
-  const dataRows = rowsAll.filter(rowInSumme);
+  // PDF: nur Zeilen mit Druck-Flag (in_pdf); Summe erzwingt Druck
+  const dataRows = rowsAll.filter(rowInPdf);
 
   const cols = de
     ? [
@@ -1913,7 +1926,7 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
   const logo = await embedLogo(pdfDoc);
   const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
   const rowsAll = skLocal.enrichMessungen(Array.isArray(payload.messungen) ? payload.messungen : []);
-  const dataRows = rowsAll.filter(rowInSumme);
+  const dataRows = rowsAll.filter(rowInPdf);
 
   const cols = de
     ? [
@@ -4332,4 +4345,6 @@ module.exports = {
   generateArbeitsnachweisPdfBuffer,
   htmlToMbContentBlocks,
   htmlFragmentToPlainPdf,
+  rowInSumme,
+  rowInPdf,
 };

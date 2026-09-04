@@ -127,7 +127,7 @@ body.has-sticky-header .kw-wiegung-table-wrap thead th {
 }
 
 .kw-wiegung-table .kw-col-act {
-  width: 4.2rem;
+  width: 6.8rem;
   text-align: center;
 }
 
@@ -138,6 +138,13 @@ body.has-sticky-header .kw-wiegung-table-wrap thead th {
   text-align: center;
 }
 
+.proto-print-th-icon {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  vertical-align: -0.1rem;
+}
+
 .kw-wiegung-table .kw-act-wrap {
   display: flex;
   align-items: center;
@@ -145,12 +152,19 @@ body.has-sticky-header .kw-wiegung-table-wrap thead th {
   gap: 0.25rem;
 }
 
-.kw-wiegung-table .kw-in-summe {
+.kw-wiegung-table .kw-in-summe,
+.kw-wiegung-table .kw-in-pdf,
+.kw-wiegung-table .proto-in-pdf {
   width: 1rem;
   height: 1rem;
   margin: 0;
   accent-color: var(--sp-green, #0e7b5a);
   cursor: pointer;
+}
+
+.kw-wiegung-table .proto-in-pdf:disabled {
+  cursor: not-allowed;
+  opacity: 0.85;
 }
 
 .kw-wiegung-table .kw-remove {

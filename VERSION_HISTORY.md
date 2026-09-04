@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.006.043
+- **Kontrollwiegung / Schleppketten:** zweite Checkbox steuert die PDF-Anzeige; Summe erzwingt Druck und ist dann nicht abwählbar.
+
+## V 2.006.042
+- **IBN/Service-Speichern:** Protokoll-Eingabe ohne Neuaufbau der Arbeitsschritt-Liste.
+
 ## V 2.006.041
 - **IBN/Service-Speichern:** Hänger beim Ändern von Anlagenparametern (Type/Qmax/v) behoben – nur ein React-Formular aktiv, kein doppelter Anlagenstamm-Save, Job-Abgleich nur bei geänderten Feldern.
 

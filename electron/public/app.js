@@ -76,6 +76,57 @@
     return ['de'];
   }
 
+  function protocolFlagFalse(v) {
+    return v === false || v === 0 || v === '0';
+  }
+
+  function protocolRowInSumme(row) {
+    return !protocolFlagFalse(row && row.in_summe);
+  }
+
+  /** Im PDF: bei Summe immer; sonst nur in_pdf. Alte Daten ohne in_pdf: nicht in Summe = nicht im PDF. */
+  function protocolRowInPdf(row) {
+    if (protocolRowInSumme(row)) return true;
+    if (row && row.in_pdf !== undefined && row.in_pdf !== null && row.in_pdf !== '') {
+      return !protocolFlagFalse(row.in_pdf);
+    }
+    return false;
+  }
+
+  function protocolCollectSumAndPdf(rowEl) {
+    var sumCb = rowEl.querySelector('input[name="in_summe"]');
+    var pdfCb = rowEl.querySelector('input[name="in_pdf"]');
+    var inSumme = sumCb ? !!sumCb.checked : true;
+    var inPdf = inSumme ? true : (pdfCb ? !!pdfCb.checked : false);
+    return { in_summe: inSumme, in_pdf: inPdf };
+  }
+
+  function protocolSyncPdfCheckbox(rowEl) {
+    var sumCb = rowEl.querySelector('input[name="in_summe"]');
+    var pdfCb = rowEl.querySelector('input[name="in_pdf"]');
+    if (!sumCb || !pdfCb) return;
+    if (sumCb.checked) {
+      pdfCb.checked = true;
+      pdfCb.disabled = true;
+      pdfCb.title = 'Im PDF (Pflicht, weil in Summe)';
+      pdfCb.setAttribute('data-i18n-title-en', 'In PDF (required because included in total)');
+    } else {
+      pdfCb.disabled = false;
+      pdfCb.title = 'Im PDF drucken';
+      pdfCb.setAttribute('data-i18n-title-en', 'Print in PDF');
+    }
+  }
+
+  function protocolPrintCheckboxHtml(inSumme, inPdf, extraClass) {
+    var cls = 'proto-in-pdf' + (extraClass ? ' ' + extraClass : '');
+    return '<input type="checkbox" class="' + cls + '" name="in_pdf" title="' +
+      (inSumme ? 'Im PDF (Pflicht, weil in Summe)' : 'Im PDF drucken') +
+      '" data-i18n-title-en="' +
+      (inSumme ? 'In PDF (required because included in total)' : 'Print in PDF') +
+      '" aria-label="Im PDF drucken" data-i18n-aria-en="Print in PDF"' +
+      (inPdf ? ' checked' : '') + (inSumme ? ' disabled' : '') + '>';
+  }
+
   function protocolPleaseSelect(viewId) {
     var lang = 'de';
     if (window.ProtocolFormI18n && typeof window.ProtocolFormI18n.langForView === 'function') {
@@ -17898,7 +17949,8 @@
           tara_kg: '',
           brutto_kg: '',
           bemerkung: '',
-          in_summe: true
+          in_summe: true,
+          in_pdf: true
         };
       }
 
@@ -17965,7 +18017,8 @@
                 tara_kg: w.tara_kg != null ? w.tara_kg : '',
                 brutto_kg: w.brutto_kg != null ? w.brutto_kg : '',
                 bemerkung: w.bemerkung != null ? w.bemerkung : '',
-                in_summe: w.in_summe === false || w.in_summe === 0 || w.in_summe === '0' ? false : true
+                in_summe: protocolRowInSumme(w),
+                in_pdf: protocolRowInPdf(w)
               };
             })
           : [emptyWiegung()];
@@ -18003,7 +18056,7 @@
       }
 
       function getRowData(rowEl) {
-        var sumCb = rowEl.querySelector('input[name="in_summe"]');
+        var flags = protocolCollectSumAndPdf(rowEl);
         return {
           bandwaage_kg: (rowEl.querySelector('input[name="bandwaage_kg"]') || {}).value,
           kontrollwaage_kg: (rowEl.querySelector('input[name="kontrollwaage_kg"]') || {}).value,
@@ -18013,7 +18066,8 @@
           tara_kg: (rowEl.querySelector('input[name="tara_kg"]') || {}).value,
           brutto_kg: (rowEl.querySelector('input[name="brutto_kg"]') || {}).value,
           bemerkung: (rowEl.querySelector('input[name="bemerkung"]') || {}).value || '',
-          in_summe: sumCb ? !!sumCb.checked : true
+          in_summe: flags.in_summe,
+          in_pdf: flags.in_pdf
         };
       }
 
@@ -18138,7 +18192,8 @@
         function val(key) {
           return escapeHtml(w[key] != null ? w[key] : '');
         }
-        var inSumme = w.in_summe === false || w.in_summe === 0 || w.in_summe === '0' ? false : true;
+        var inSumme = protocolRowInSumme(w);
+        var inPdf = protocolRowInPdf(w);
         return '<tr class="kontrollwiegung-row" data-idx="' + idx + '">' +
           '<td class="kw-col-nr"><span class="kw-num">' + n + '</span></td>' +
           '<td class="kw-col-num"><input type="text" name="bandwaage_kg" data-kw-calc="fehler" value="' + val('bandwaage_kg') + '" inputmode="decimal" autocomplete="off"></td>' +
@@ -18151,6 +18206,7 @@
           '<td class="kw-col-bem"><input type="text" name="bemerkung" value="' + val('bemerkung') + '"></td>' +
           '<td class="kw-col-act"><div class="kw-act-wrap">' +
           '<input type="checkbox" class="kw-in-summe" name="in_summe" title="In Summe einbeziehen" data-i18n-title-en="Include in total" aria-label="In Summe einbeziehen" data-i18n-aria-en="Include in total"' + (inSumme ? ' checked' : '') + '>' +
+          protocolPrintCheckboxHtml(inSumme, inPdf, 'kw-in-pdf') +
           '<button type="button" class="btn btn-ghost kw-remove" title="Wiegung entfernen" data-i18n-title-en="Remove weighing" aria-label="Wiegung entfernen" data-i18n-aria-en="Remove weighing">×</button>' +
           '</div></td>' +
           '</tr>';
@@ -18171,7 +18227,12 @@
           inp.addEventListener('input', updateSummeRow);
         });
         var sumCb = rowEl.querySelector('input[name="in_summe"]');
-        if (sumCb) sumCb.addEventListener('change', updateSummeRow);
+        if (sumCb) {
+          sumCb.addEventListener('change', function () {
+            protocolSyncPdfCheckbox(rowEl);
+            updateSummeRow();
+          });
+        }
       }
 
       function renderZeilen() {
@@ -19058,6 +19119,7 @@
         messzeit_s: '',
         bemerkung: '',
         in_summe: true,
+        in_pdf: true,
         pruefkette_t: '',
         fehler_prozent: '',
         leistung_th: ''
@@ -19221,7 +19283,8 @@
               geschwindigkeit_ms: m.geschwindigkeit_ms != null ? m.geschwindigkeit_ms : '',
               messzeit_s: m.messzeit_s != null ? m.messzeit_s : '',
               bemerkung: m.bemerkung != null ? m.bemerkung : '',
-              in_summe: m.in_summe === false || m.in_summe === 0 || m.in_summe === '0' ? false : true
+              in_summe: protocolRowInSumme(m),
+              in_pdf: protocolRowInPdf(m)
             });
           })
         : [emptyMessung()];
@@ -19233,14 +19296,15 @@
       updateSpeicherMeta(getActiveFab(), draft);
     }
     function getRowData(rowEl) {
-      var sumCb = rowEl.querySelector('input[name="in_summe"]');
+      var flags = protocolCollectSumAndPdf(rowEl);
       return computeRow({
         bandwaage_t: (rowEl.querySelector('input[name="bandwaage_t"]') || {}).value,
         kg_pro_m: (rowEl.querySelector('input[name="kg_pro_m"]') || {}).value,
         geschwindigkeit_ms: (rowEl.querySelector('input[name="geschwindigkeit_ms"]') || {}).value,
         messzeit_s: (rowEl.querySelector('input[name="messzeit_s"]') || {}).value,
         bemerkung: (rowEl.querySelector('input[name="bemerkung"]') || {}).value,
-        in_summe: sumCb ? !!sumCb.checked : true
+        in_summe: flags.in_summe,
+        in_pdf: flags.in_pdf
       });
     }
     function syncMessungenFromDom() {
@@ -19451,7 +19515,8 @@
     function buildRowHtml(idx) {
       var m = messungen[idx] || emptyMessung(idx);
       function val(k) { return escapeHtml(m[k] != null ? m[k] : ''); }
-      var inSumme = m.in_summe === false || m.in_summe === 0 || m.in_summe === '0' ? false : true;
+      var inSumme = protocolRowInSumme(m);
+      var inPdf = protocolRowInPdf(m);
       return '<tr class="schleppketten-row" data-idx="' + idx + '">' +
         '<td class="sk-col-nr"><span class="sk-num">' + (idx + 1) + '</span></td>' +
         '<td class="sk-col-num"><input type="text" name="bandwaage_t" data-sk-calc value="' + val('bandwaage_t') + '" inputmode="decimal" autocomplete="off"></td>' +
@@ -19464,6 +19529,7 @@
         '<td class="sk-col-bem"><input type="text" name="bemerkung" value="' + val('bemerkung') + '"></td>' +
         '<td class="sk-col-act"><div class="sk-act-wrap">' +
         '<input type="checkbox" class="sk-in-summe" name="in_summe" title="In Summe" data-i18n-title-en="Include in total"' + (inSumme ? ' checked' : '') + '>' +
+        protocolPrintCheckboxHtml(inSumme, inPdf, 'sk-in-pdf') +
         '<button type="button" class="btn btn-ghost sk-remove" title="Entfernen" data-i18n-title-en="Remove">×</button>' +
         '</div></td></tr>';
     }
@@ -19472,7 +19538,12 @@
         inp.addEventListener('input', function () { updateRowCalc(rowEl); });
       });
       var sumCb = rowEl.querySelector('input[name="in_summe"]');
-      if (sumCb) sumCb.addEventListener('change', updateSummeRow);
+      if (sumCb) {
+        sumCb.addEventListener('change', function () {
+          protocolSyncPdfCheckbox(rowEl);
+          updateSummeRow();
+        });
+      }
       var rm = rowEl.querySelector('.sk-remove');
       if (rm) rm.addEventListener('click', function () {
         syncMessungenFromDom();
