@@ -676,5 +676,9 @@
   window.kuklaFmtAkteDateTime = fmtDateTimeLocal;
   formFab.addEventListener('blur', refresh);
   formFab.addEventListener('change', refresh);
-  refresh();
+  var docsPanel = document.querySelector('.akte-panel[data-akte-panel="docs"]');
+  var docsActive = !docsPanel || docsPanel.classList.contains('is-active');
+  if (docsActive && !window.KUKLA_ANLAGENSTAMM_AKTE_WINDOW) {
+    refresh();
+  }
 })();

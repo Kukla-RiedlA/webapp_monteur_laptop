@@ -1309,9 +1309,17 @@ function bindTdPrefillUi() {
   }
 }
 
+function isAktePanelActive(panelId) {
+  var p = document.querySelector('.akte-panel[data-akte-panel="' + panelId + '"]');
+  return !!(p && p.classList.contains('is-active'));
+}
+
 function loadModalFilesForFab(fab) {
-  if (typeof window.anlagenstammDocumentsRefresh === 'function') {
-    window.anlagenstammDocumentsRefresh();
+  var docsPanel = document.querySelector('.akte-panel[data-akte-panel="docs"]');
+  if (!docsPanel || isAktePanelActive('docs')) {
+    if (typeof window.anlagenstammDocumentsRefresh === 'function') {
+      window.anlagenstammDocumentsRefresh();
+    }
   }
   var pnToggle = document.getElementById('modalPnTreeToggle');
   var pnTree = document.getElementById('modalPnTreeForm');
@@ -1319,16 +1327,20 @@ function loadModalFilesForFab(fab) {
   function fetchPnPanels() {
     var pendingFab = (pnToggle && pnToggle._pnPendingFab) || fab;
     if (typeof window.anlagenstammFetchFilesPanels !== 'function') return;
+    if (pnTree && pnTree.getAttribute('data-pn-fetch-fab') === String(pendingFab || '')) return;
+    if (pnTree) pnTree.setAttribute('data-pn-fetch-fab', String(pendingFab || ''));
     window.anlagenstammFetchFilesPanels(pendingFab, {
       listUl: null,
       pnTree: pnTree,
       pnHint: pnHint
     });
   }
+  window.kuklaEnsureAkteFilesLoaded = fetchPnPanels;
   if (pnToggle && pnTree) {
     pnToggle.open = false;
     pnToggle.removeAttribute('data-pn-loaded');
     pnTree.innerHTML = '';
+    pnTree.removeAttribute('data-pn-fetch-fab');
     if (pnHint) {
       pnHint.textContent = 'Aufklappen für Ordner. TD-Datei mit „TD“ im Namen anklicken, dann unter Technik „Leere Felder aus TD füllen“.';
     }
@@ -1342,6 +1354,17 @@ function loadModalFilesForFab(fab) {
         fetchPnPanels();
         pnToggle.setAttribute('data-pn-loaded', '1');
       });
+    }
+    if (isAktePanelActive('files')) {
+      fetchPnPanels();
+      pnToggle.setAttribute('data-pn-loaded', '1');
+    }
+    return;
+  }
+  var filesPanel = document.querySelector('.akte-panel[data-akte-panel="files"]');
+  if (filesPanel && !isAktePanelActive('files')) {
+    if (pnHint) {
+      pnHint.textContent = 'Ordner werden geladen, sobald der Tab Dateien geöffnet wird.';
     }
     return;
   }
@@ -1878,7 +1901,6 @@ function kuklaBootAnlagenakteWindow() {
     if (row.fabrikationsnummer && typeof loadModalFilesForFab === 'function') {
       loadModalFilesForFab(row.fabrikationsnummer);
     }
-    if (typeof window.anlagenstammDocumentsRefresh === 'function') window.anlagenstammDocumentsRefresh();
   }
   var fetchFn = typeof anlagenstammFetch === 'function' ? anlagenstammFetch : fetch;
   if (!id) {

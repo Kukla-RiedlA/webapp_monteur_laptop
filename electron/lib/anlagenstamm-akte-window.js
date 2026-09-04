@@ -39,13 +39,13 @@ function createAnlagenstammAkteWindowManager(getMainWindow, getPort) {
     if (opts.readOnly) qs.set('ro', '1');
     const url = `http://127.0.0.1:${port}/anlagenstamm-akte-window.html?${qs.toString()}`;
 
-    const main = typeof getMainWindow === 'function' ? getMainWindow() : getMainWindow;
     const win = new BrowserWindow({
       width: 1100,
       height: 900,
       title: opts.fab ? ('Anlagenakte · ' + opts.fab) : 'Anlagenakte',
-      parent: main || undefined,
+      // Kein parent: sonst friert Schließen mit dem Hauptfenster ein, wenn der Main-Thread hängt.
       modal: false,
+      show: true,
       backgroundColor: '#f5f5f5',
       webPreferences: {
         preload: path.join(__dirname, '..', 'preload.js'),
@@ -59,7 +59,7 @@ function createAnlagenstammAkteWindowManager(getMainWindow, getPort) {
       if (windows.get(key) === win) windows.delete(key);
     });
     attachEditContextMenu(win.webContents);
-    await win.loadURL(url);
+    win.loadURL(url).catch(() => {});
     return { ok: true };
   }
 

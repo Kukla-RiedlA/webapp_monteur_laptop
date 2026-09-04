@@ -213,13 +213,22 @@
     return true;
   }
 
+  function pnGalleryFromNode(el) {
+    var node = el;
+    while (node) {
+      if (node.__pnGalleryImages && Array.isArray(node.__pnGalleryImages)) return node.__pnGalleryImages;
+      if (node.classList && node.classList.contains('anlagen-pn-tree')) break;
+      node = node.parentElement;
+    }
+    return [];
+  }
+
   function pnLoadPendingThumbsIn(container) {
     if (!container) return;
     container.querySelectorAll('img.anlagen-pn-thumb-pending').forEach(function (thumb) {
       if (!pnIsThumbInOpenDetails(thumb)) return;
       var hrefBase = thumb.getAttribute('data-pn-href-base');
       var label = thumb.getAttribute('data-pn-label') || '';
-      var galleryJson = thumb.getAttribute('data-pn-gallery');
       if (!hrefBase) return;
       thumb.classList.remove('anlagen-pn-thumb-pending');
       thumb.loading = 'lazy';
@@ -231,10 +240,7 @@
       }
       thumb.addEventListener('click', function () {
         var fullUrl = hrefBase + '&inline=1';
-        var galleryImages = [];
-        try {
-          galleryImages = galleryJson ? JSON.parse(galleryJson) : [];
-        } catch (e) { /* ignore */ }
+        var galleryImages = pnGalleryFromNode(thumb);
         var idx = 0;
         for (var gi = 0; gi < galleryImages.length; gi++) {
           if (galleryImages[gi].url === fullUrl || String(galleryImages[gi].label) === label) {
@@ -259,9 +265,6 @@
 
   function walkTreeUl(fab, nodes, depth, galleryImages) {
     depth = depth || 0;
-    if (depth === 0 && !galleryImages) {
-      galleryImages = pnBuildGalleryImagesForLists(fab, nodes);
-    }
     nodes = nodes || [];
     var ul = document.createElement('ul');
     ul.className = 'anlagen-pn-tree-ul';
@@ -277,7 +280,12 @@
         summary.textContent = n.name || '(Ordner)';
         details.appendChild(summary);
         if (n.children && n.children.length) {
-          details.appendChild(walkTreeUl(fab, n.children, depth + 1, galleryImages));
+          details.addEventListener('toggle', function fillPnKids() {
+            if (!details.open || details.getAttribute('data-pn-kids') === '1') return;
+            details.setAttribute('data-pn-kids', '1');
+            details.appendChild(walkTreeUl(fab, n.children, depth + 1, galleryImages));
+            pnLoadPendingThumbsIn(details);
+          });
         }
         li.appendChild(details);
       } else if (n.type === 'file') {
@@ -295,9 +303,6 @@
           if (window.kuklaAnlagenThumbLoader) {
             thumb.setAttribute('data-thumb-src', window.kuklaAnlagenThumbLoader.thumbUrlFromHrefBase(hrefBase));
           }
-          try {
-            thumb.setAttribute('data-pn-gallery', JSON.stringify(galleryImages || []));
-          } catch (e) { /* ignore */ }
           wrap.appendChild(thumb);
         } else {
           var ic = document.createElement('span');
@@ -315,14 +320,15 @@
           link.addEventListener('click', function (ev) {
             ev.preventDefault();
             var fullUrl = hrefBase + '&inline=1';
+            var gal = galleryImages || pnGalleryFromNode(link);
             var idx = 0;
-            for (var gj = 0; gj < galleryImages.length; gj++) {
-              if (galleryImages[gj].url === fullUrl || String(galleryImages[gj].label) === label) {
+            for (var gj = 0; gj < gal.length; gj++) {
+              if (gal[gj].url === fullUrl || String(gal[gj].label) === label) {
                 idx = gj;
                 break;
               }
             }
-            pnOpenProjekteNeuImageLightboxLists(fullUrl, label, galleryImages, idx);
+            pnOpenProjekteNeuImageLightboxLists(fullUrl, label, gal, idx);
           });
         }
         wrap.appendChild(link);
@@ -372,7 +378,9 @@
       treeEl.appendChild(p);
       return;
     }
-    treeEl.appendChild(walkTreeUl(fab, nodes));
+    var galleryImages = pnBuildGalleryImagesForLists(fab, nodes);
+    treeEl.__pnGalleryImages = galleryImages;
+    treeEl.appendChild(walkTreeUl(fab, nodes, 0, galleryImages));
     pnBindLazyThumbs(treeEl);
     pnLoadPendingThumbsIn(treeEl);
   }

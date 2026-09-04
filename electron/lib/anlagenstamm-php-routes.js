@@ -264,7 +264,6 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       ) {
         try {
           db().prepare('DELETE FROM anlagenstamm_tree_cache WHERE fab = ?').run(fab);
-          if (typeof ctx.saveDb === 'function') ctx.saveDb();
         } catch (_) {
           /* ignore */
         }
@@ -286,7 +285,6 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     if (apiData && apiData.projekte_neu) {
       if (typeof ctx.upsertAnlagenstammTreeCache === 'function') {
         ctx.upsertAnlagenstammTreeCache(db(), fab, apiData.projekte_neu);
-        if (typeof ctx.saveDb === 'function') ctx.saveDb();
       }
       return res.json(Object.assign({ source: 'dispo_api' }, apiData));
     }
@@ -301,7 +299,6 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       const data = await auth.proxy.getJson(`/api/anlagenstamm_files_list.php${qs ? `?${qs}` : ''}`);
       if (typeof ctx.upsertAnlagenstammTreeCache === 'function' && data && data.projekte_neu) {
         ctx.upsertAnlagenstammTreeCache(db(), fab, data.projekte_neu);
-        if (typeof ctx.saveDb === 'function') ctx.saveDb();
       }
       return res.json(Object.assign({ source: 'dispo_online' }, data));
     } catch (e) {

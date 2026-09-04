@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.000
+- **Release:** Plattformweite Stufe 2.007; Patch-Zähler auf 000.
+- **Anlagenakte:** Öffnen hängt nicht mehr am Dateibaum; Dokumente/PROJEKTE NEU erst beim Tab. Aktenfenster unabhängig vom Hauptfenster (Schließen bleibt bedienbar).
+- **Kontrollwiegung:** Zwischenstand nur in SQLite, ohne Dienstreise-Ordner auf OneDrive – Eingabe friert nicht mehr ein.
+
 ## V 2.006.043
 - **Kontrollwiegung / Schleppketten:** zweite Checkbox steuert die PDF-Anzeige; Summe erzwingt Druck und ist dann nicht abwählbar.
 

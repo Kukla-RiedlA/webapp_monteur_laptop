@@ -32,7 +32,14 @@
       if (btn.getAttribute('data-akte-bound') === '1') return;
       btn.setAttribute('data-akte-bound', '1');
       btn.addEventListener('click', function () {
-        activateTab(btn.getAttribute('data-akte-tab') || 'overview');
+        var tabId = btn.getAttribute('data-akte-tab') || 'overview';
+        activateTab(tabId);
+        if (tabId === 'files' && typeof window.kuklaEnsureAkteFilesLoaded === 'function') {
+          window.kuklaEnsureAkteFilesLoaded();
+        }
+        if (tabId === 'docs' && typeof window.anlagenstammDocumentsRefresh === 'function') {
+          window.anlagenstammDocumentsRefresh();
+        }
       });
     });
   }

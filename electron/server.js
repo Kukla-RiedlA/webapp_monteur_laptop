@@ -10169,7 +10169,7 @@ function createApp(db) {
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const reiseDir = null;
       await pullOneJsonDraftForJob(
         reiseDir,
         localJobId,
@@ -10203,7 +10203,7 @@ function createApp(db) {
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const reiseDir = wantsLocalOnlyRequest(body) ? null : getOrCreateDienstreiseFolderForJob(localJobId);
       const entry = {
         technician_id: technicianId,
         job_id: localJobId,
@@ -10596,7 +10596,7 @@ function createApp(db) {
           AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const reiseDir = null;
       await pullOneJsonDraftForJob(
         reiseDir,
         localJobId,
@@ -10627,7 +10627,7 @@ function createApp(db) {
           AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const reiseDir = wantsLocalOnlyRequest(body) ? null : getOrCreateDienstreiseFolderForJob(localJobId);
       const entry = Object.assign({}, body, {
         technician_id: technicianId,
         job_id: localJobId,

@@ -20,13 +20,9 @@ function readTreeCachePn(db, fab) {
   if (!db || !fab) return '';
   try {
     const row = db
-      .prepare('SELECT tree_json FROM anlagenstamm_tree_cache WHERE fab = ? LIMIT 1')
+      .prepare('SELECT root_folder_name FROM anlagenstamm_tree_cache WHERE fab = ? LIMIT 1')
       .get(String(fab).trim());
-    if (!row || !row.tree_json) return '';
-    const tree = JSON.parse(row.tree_json);
-    if (!Array.isArray(tree) || !tree.length) return '';
-    const first = tree[0];
-    return String((first && (first.name || first.label)) || '').trim();
+    return row && row.root_folder_name ? String(row.root_folder_name).trim() : '';
   } catch (_) {
     return '';
   }
@@ -247,4 +243,5 @@ module.exports = {
   getAnlagenstammByIdResponse,
   deleteAnlagenstammLocal,
   invalidateAnlagenstammListCache,
+  readTreeCachePn,
 };
