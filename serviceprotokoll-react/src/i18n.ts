@@ -27,6 +27,14 @@ const STRINGS = {
   vmaxPh: { de: 'aus Anlagenstamm', en: 'from equipment master' },
   posNr: { de: 'Pos.-Nr.', en: 'Pos. no.' },
   loadCell: { de: 'Wägezelle & Messwerte', en: 'Load cell & readings' },
+  motorDrive: { de: 'Motor / Frequenzumrichter', en: 'Motor / frequency converter' },
+  addMotor: { de: 'Motor hinzufügen', en: 'Add motor' },
+  addMotorTitle: { de: 'Weiteren Motor hinzufügen', en: 'Add another motor' },
+  removeMotor: { de: 'Motor entfernen', en: 'Remove motor' },
+  noMotors: { de: 'Keine Motoren. Über + Motor anlegen oder aus dem Anlagenstamm übernehmen.', en: 'No motors. Add via + Motor or take from equipment master.' },
+  motorAssign: { de: 'Zuordnung', en: 'Assignment' },
+  motorData: { de: 'Motordaten', en: 'Motor data' },
+  motorFc: { de: 'Frequenzumrichter', en: 'Frequency converter' },
   addLoadCell: { de: 'Wägezelle hinzufügen', en: 'Add load cell' },
   addLoadCellTitle: { de: 'Weitere Wägezelle hinzufügen', en: 'Add another load cell' },
   removeLoadCell: { de: 'Wägezelle entfernen', en: 'Remove load cell' },
@@ -71,6 +79,42 @@ export type I18nKey = keyof typeof STRINGS;
 export function t(lang: UiLang, key: I18nKey): string {
   const row = STRINGS[key];
   return (lang === 'en' ? row.en : row.de) || row.de;
+}
+
+const MOTOR_FIELD_LABELS: Record<string, { de: string; en: string }> = {
+  bezeichnung: { de: 'Bezeichnung', en: 'Designation' },
+  positionsnummer: { de: 'Positionsnummer', en: 'Position no.' },
+  hersteller: { de: 'Hersteller', en: 'Manufacturer' },
+  type: { de: 'Type', en: 'Type' },
+  seriennummer: { de: 'Seriennummer', en: 'Serial number' },
+  nennleistung_kw: { de: 'Nennleistung kW', en: 'Rated output kW' },
+  leistungsfaktor: { de: 'cos φ', en: 'cos φ' },
+  nenndrehzahl: { de: 'Nenndrehzahl min-1', en: 'Rated speed min-1' },
+  nennstrom: { de: 'Nennstrom A', en: 'Rated current A' },
+  getriebeuebersetzung: { de: 'Übersetzung 1:', en: 'Gear ratio 1:' },
+  getriebedrehzahl: { de: 'Nenndrehzahl Getriebe min-1', en: 'Gear rated speed min-1' },
+  nennspannung: { de: 'Nennspannung V', en: 'Rated voltage V' },
+  nennfrequenz: { de: 'Nennfrequenz Hz', en: 'Rated frequency Hz' },
+  bauform: { de: 'Bauform', en: 'Construction' },
+  schaltung: { de: 'Schaltung Y/∆', en: 'Connection Y/∆' },
+  isolationsklasse: { de: 'Isolationsklasse', en: 'Insulation class' },
+  schutzart: { de: 'Schutzart', en: 'Protection' },
+  leerlaufstrom_50hz: { de: 'Leerlaufstrom 50 Hz A', en: 'No-load current 50 Hz A' },
+  anlaufart: { de: 'Anlaufart', en: 'Starting' },
+  fu_hersteller: { de: 'FU Hersteller', en: 'FC manufacturer' },
+  fu_type: { de: 'FU Type', en: 'FC type' },
+  fu_nennstrom_eingestellt: { de: 'Nennstrom / eingestellt A', en: 'Rated / set current A' },
+  fu_max_speed: { de: 'max. Speed min-1', en: 'max. Speed min-1' },
+  fu_max_frequency: { de: 'max. Frequency Hz', en: 'max. Frequency Hz' },
+  laststrom_calculated: { de: 'Laststrom calculated A', en: 'Load current calculated A' },
+  laststrom_fat: { de: 'Laststrom FAT A', en: 'Load current FAT A' },
+  laststrom_sat: { de: 'Laststrom SAT A', en: 'Load current SAT A' },
+};
+
+export function motorFieldLabel(lang: UiLang, key: string): string {
+  const row = MOTOR_FIELD_LABELS[key];
+  if (!row) return key;
+  return lang === 'en' ? row.en : row.de;
 }
 
 export function localizeAutosaveHint(hint: string, lang: UiLang): string {

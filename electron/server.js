@@ -275,6 +275,9 @@ const {
   readAnlagenstammTreeCacheRow,
   upsertAnlagenstammTreeCacheRow,
   parseKraftaufnehmerExtra,
+  normalizeMotorRows,
+  listMotorsForStamm,
+  syncProtocolMotorsToStamm,
   getAnlagenstammSyncResumeState,
   prepareAnlagenstammSyncRun,
   finalizeAnlagenstammSyncRun,
@@ -1175,9 +1178,18 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
   }
   ensureAnlagenstammLocalSchema(db);
   const bodyNorm = clampForDispoAnlagenstamm(body || {});
+  const hasMotorPayload = Object.prototype.hasOwnProperty.call(body || {}, 'motoren')
+    || Object.prototype.hasOwnProperty.call(body || {}, 'motor')
+    || Object.keys(body || {}).some((k) => /^motor\[\d+]\[/.test(k));
+  if (hasMotorPayload) {
+    bodyNorm.motoren = normalizeMotorRows(body || {});
+  }
   const fabForLookup = String(bodyNorm.fabrikationsnummer || '').trim();
   const existingBeforeSave = fabForLookup ? anlagenstammLookupByFab(db, fabForLookup) : null;
   const bodyMerged = mergeAnlagenstammPayload(existingBeforeSave || {}, bodyNorm);
+  if (hasMotorPayload) {
+    bodyMerged.motoren = bodyNorm.motoren;
+  }
   const localResult = anlagenstammSaveLocal(db, bodyMerged);
   if (!localResult.ok) {
     return localResult;
@@ -7845,6 +7857,17 @@ function createApp(db) {
     }
   });
 
+  function attachMotorsToLocalStammRow(dbConn, row) {
+    if (!row) return null;
+    const out = Object.assign({}, row);
+    try {
+      out.motoren = listMotorsForStamm(dbConn, row.id);
+    } catch (_) {
+      out.motoren = [];
+    }
+    return out;
+  }
+
   app.post('/api/anlagenstamm_lookup', express.json(), async (req, res) => {
     const body = req.body || {};
     const { baseUrl, fab, serverUsername, serverPassword } = body;
@@ -7859,7 +7882,7 @@ function createApp(db) {
       body.sync_dispo === true;
     const localOnly = wantsLocalOnlyRequest(body) || !syncDispo;
     if (localOnly) {
-      const row = anlagenstammLookupByFab(db, fabValue);
+      const row = attachMotorsToLocalStammRow(db, anlagenstammLookupByFab(db, fabValue));
       return res.json({
         ok: true,
         row: row || null,
@@ -7868,7 +7891,7 @@ function createApp(db) {
       });
     }
     if (anlagenstammLocalRowCount(db) > 0) {
-      const row = anlagenstammLookupByFab(db, fabValue);
+      const row = attachMotorsToLocalStammRow(db, anlagenstammLookupByFab(db, fabValue));
       if (row) {
         return res.json({ ok: true, row, anlage: row, _source: 'local' });
       }
@@ -9185,6 +9208,7 @@ function createApp(db) {
             mess_sensitivitaet: row.sensitivitaet != null ? String(row.sensitivitaet).trim() : '',
             mess_waegezellen_extra: parseKraftaufnehmerExtra(row.kraftaufnehmer_extra),
             projekt: row.projekt != null ? String(row.projekt).trim() : '',
+            motoren: listMotorsForStamm(db, row.id),
           };
         }
       }
@@ -9193,7 +9217,7 @@ function createApp(db) {
       arbeitsschritteLocal.ensureArbeitsschritteSchema(db);
       const resolved = arbeitsschritteLocal.resolveDefaultsLocal(db, technicianId, anlagenType, kind);
       if (resolved && Array.isArray(resolved.arbeitsschritte) && resolved.arbeitsschritte.length) {
-        return Object.assign({ ok: true, kopf }, resolved);
+        return Object.assign({ ok: true, kopf, motoren: kopf.motoren || [] }, resolved);
       }
     } catch (_) { /* fallback */ }
     const parsed = parseServiceprotokollDefaultsBuffer(readServiceprotokollDefaultsLocal());
@@ -9203,9 +9227,11 @@ function createApp(db) {
         source: 'builtin',
         arbeitsschritte: kind === 'ibn' ? [] : arbeitsschritteLocal.builtinDefaults(),
         kopf,
+        motoren: kopf.motoren || [],
       };
     }
     parsed.kopf = Object.assign({}, parsed.kopf || {}, kopf);
+    parsed.motoren = kopf.motoren || [];
     if (fn) parsed.source = 'local_cache';
     return parsed;
   }
@@ -9242,6 +9268,7 @@ function createApp(db) {
         }
         if (local) {
           if (r.ok && data.ok && data.kopf) local.kopf = Object.assign({}, local.kopf || {}, data.kopf);
+          if (r.ok && data.ok && Array.isArray(data.motoren)) local.motoren = data.motoren;
           return res.json(local);
         }
         if (r.ok) return res.json(data);
@@ -11301,6 +11328,15 @@ function createApp(db) {
     return store.byFab[fn];
   }
 
+  function pickProtocolMotors(src) {
+    if (!src || typeof src !== 'object') return [];
+    if (Array.isArray(src.motoren)) return normalizeMotorRows({ motoren: src.motoren });
+    if (src.messwerte && Array.isArray(src.messwerte.motoren)) {
+      return normalizeMotorRows({ motoren: src.messwerte.motoren });
+    }
+    return [];
+  }
+
   function shouldApplyServiceprotokollToAnlagenstamm(body) {
     const b = body || {};
     if (b.apply_to_anlagenstamm === true || b.apply_to_anlagenstamm === 1 || b.apply_to_anlagenstamm === '1') return true;
@@ -12160,6 +12196,7 @@ function createApp(db) {
             kopf_type: String(recPayload.kopf_type || ''),
             kopf_dwc: String(recPayload.kopf_dwc || ''),
             abschluss: normalizeServiceprotokollAbschluss(recPayload.abschluss),
+            motoren: pickProtocolMotors(recPayload),
           };
           if (!draftPayload.durchfuehrungsdatum) {
             warnings.push('FN ' + fab + ': Datum der Durchführung fehlt.');
@@ -12569,6 +12606,7 @@ function createApp(db) {
         kopf_type: String(body.kopf_type || ''),
         kopf_dwc: String(body.kopf_dwc || ''),
         abschluss: normalizeServiceprotokollAbschluss(body.abschluss),
+        motoren: pickProtocolMotors(body),
       };
       const langsMaybe = parseProtocolLanguagesMaybe(body);
       if (langsMaybe && langsMaybe.length) {
@@ -12595,6 +12633,9 @@ function createApp(db) {
           if (messSync && messSync.ok === false) {
             messSyncWarning = 'Anlagenstamm (technische Daten): ' + (messSync.error || 'lokal nicht gespeichert');
           }
+          try {
+            syncProtocolMotorsToStamm(db, fab, draftPayload.motoren || []);
+          } catch (_) { /* optional */ }
         } catch (messErr) {
           messSyncWarning = 'Anlagenstamm (technische Daten): ' + (messErr.message || 'Speichern fehlgeschlagen');
         }
@@ -12664,6 +12705,7 @@ function createApp(db) {
         kopf_type: draftPayload.kopf_type,
         kopf_dwc: draftPayload.kopf_dwc,
         abschluss: draftPayload.abschluss || {},
+        motoren: draftPayload.motoren || [],
         pdf_languages: pdfLangs,
         dispoBaseUrl,
         serverUsername: body.serverUsername || body.dispoUsername,
@@ -12863,6 +12905,7 @@ function createApp(db) {
           abschluss: normalizeServiceprotokollAbschluss(p.abschluss),
           languages: pdfLangs,
           pdf_languages: pdfLangs,
+          motoren: pickProtocolMotors(p),
         };
         if (applyToAnlagenstamm) {
           try {
@@ -12877,6 +12920,9 @@ function createApp(db) {
             if (messSync && messSync.ok === false) {
               messSyncWarning = [messSyncWarning, 'FN ' + fab + ': Anlagenstamm (technische Daten) lokal nicht gespeichert'].filter(Boolean).join('\n');
             }
+            try {
+              syncProtocolMotorsToStamm(db, fab, draftPayload.motoren || []);
+            } catch (_) { /* optional */ }
           } catch (messErr) {
             messSyncWarning = [messSyncWarning, 'FN ' + fab + ': ' + (messErr.message || 'Anlagenstamm-Sync fehlgeschlagen')].filter(Boolean).join('\n');
           }

@@ -21086,6 +21086,7 @@
     var serviceAssignedJobOptions = [];
     var serviceprotokollAutosave = null;
     var arbeitsschritte = [];
+    var serviceprotokollMotors = [];
     var lastProtokollId = null;
     var defaultsSource = 'global';
     var serviceprotokollDraftStore = { byFab: {} };
@@ -21685,6 +21686,7 @@
         kopf_vmax: body.kopf_vmax != null ? body.kopf_vmax : (prev.kopf_vmax || ''),
         kopf_type: body.kopf_type != null ? body.kopf_type : (prev.kopf_type || ''),
         kopf_dwc: body.kopf_dwc != null ? body.kopf_dwc : (prev.kopf_dwc || ''),
+        motoren: Array.isArray(body.motoren) ? body.motoren : (Array.isArray(prev.motoren) ? prev.motoren : []),
         abschluss: body.abschluss && typeof body.abschluss === 'object' && !Array.isArray(body.abschluss)
           ? normalizeSpAbschlussObject(body.abschluss)
           : (prev.abschluss && typeof prev.abschluss === 'object' && !Array.isArray(prev.abschluss)
@@ -21719,6 +21721,7 @@
       setProtocolLanguagesOnChecks('spPdfDe', 'spPdfEn', ['de']);
       clearAbschlussFields();
       arbeitsschritte = [];
+      serviceprotokollMotors = [];
       if (stepsContainer) {
         stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">Fabrikationsnummer wird geladen …</td></tr>';
       }
@@ -21757,6 +21760,77 @@
           mess_waegezellen_extra: parseSpKraftaufnehmerExtra(row.kraftaufnehmer_extra)
         },
       };
+    }
+
+    var SP_MOTOR_KEYS = [
+      'bezeichnung', 'positionsnummer', 'hersteller', 'type', 'seriennummer',
+      'nennleistung_kw', 'leistungsfaktor', 'nenndrehzahl', 'nennstrom',
+      'getriebeuebersetzung', 'getriebedrehzahl', 'nennspannung', 'nennfrequenz',
+      'bauform', 'schaltung', 'isolationsklasse', 'schutzart', 'leerlaufstrom_50hz',
+      'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt',
+      'fu_max_speed', 'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat'
+    ];
+
+    function emptySpMotorRow() {
+      var o = { anlagenstamm_motor_id: '' };
+      SP_MOTOR_KEYS.forEach(function (k) { o[k] = ''; });
+      return o;
+    }
+
+    function normalizeSpMotorRow(item, i) {
+      var o = emptySpMotorRow();
+      if (!item || typeof item !== 'object') return o;
+      SP_MOTOR_KEYS.forEach(function (k) {
+        o[k] = item[k] != null ? String(item[k]).trim() : '';
+      });
+      var mid = item.anlagenstamm_motor_id != null ? item.anlagenstamm_motor_id : (item.anlagenstammMotorId != null ? item.anlagenstammMotorId : item.id);
+      o.anlagenstamm_motor_id = mid != null && String(mid).trim() !== '' ? String(mid).trim() : '';
+      o._uiId = item.id != null && String(item.id).trim() !== '' ? String(item.id) : String(i + 1);
+      return o;
+    }
+
+    function normalizeSpMotorRows(list) {
+      if (!Array.isArray(list)) return [];
+      var out = [];
+      list.forEach(function (item, i) {
+        var row = normalizeSpMotorRow(item, i);
+        var any = SP_MOTOR_KEYS.some(function (k) { return row[k]; }) || row.anlagenstamm_motor_id;
+        if (any) out.push(row);
+      });
+      return out;
+    }
+
+    function motorsFromStammRow(row) {
+      if (!row) return [];
+      return normalizeSpMotorRows(row.motoren || (row.kopf && row.kopf.motoren) || []);
+    }
+
+    function motorsToReactForm(list) {
+      return normalizeSpMotorRows(list).map(function (m, i) {
+        var r = { id: m._uiId || String(i + 1), anlagenstammMotorId: m.anlagenstamm_motor_id || '' };
+        SP_MOTOR_KEYS.forEach(function (k) { r[k] = m[k] || ''; });
+        return r;
+      });
+    }
+
+    function motorsFromReactForm(list) {
+      return normalizeSpMotorRows((list || []).map(function (m) {
+        var o = m && typeof m === 'object' ? m : {};
+        return Object.assign({}, o, {
+          anlagenstamm_motor_id: o.anlagenstamm_motor_id || o.anlagenstammMotorId || ''
+        });
+      }));
+    }
+
+    function collectSpMotors() {
+      return normalizeSpMotorRows(serviceprotokollMotors);
+    }
+
+    function setSpMotors(list, opts) {
+      opts = opts || {};
+      var next = normalizeSpMotorRows(list);
+      if (!opts.replaceEmpty && !next.length && serviceprotokollMotors.length) return;
+      serviceprotokollMotors = next;
     }
 
     function parseSpKraftaufnehmerExtra(raw) {
@@ -22093,7 +22167,8 @@
         kopf_dwc: cached.kopf_dwc || '',
         abschluss: normalizeSpAbschlussObject(cached.abschluss),
         languages: languagesFromDraft(cached),
-        pdf_languages: languagesFromDraft(cached)
+        pdf_languages: languagesFromDraft(cached),
+        motoren: Array.isArray(cached.motoren) ? cached.motoren : []
       };
     }
 
@@ -22117,7 +22192,8 @@
           kopf_dwc: jobKopf.kopf_dwc || '',
           abschluss: { status: 'geprueft' },
           languages: collectPdfLanguages(),
-          pdf_languages: collectPdfLanguages()
+          pdf_languages: collectPdfLanguages(),
+          motoren: []
         };
       }
       var projektVal = (document.getElementById('serviceprotokollProjekt') || {}).value || '';
@@ -22139,7 +22215,8 @@
         kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
         abschluss: collectAbschlussPayload(),
         languages: collectPdfLanguages(),
-        pdf_languages: collectPdfLanguages()
+        pdf_languages: collectPdfLanguages(),
+        motoren: collectSpMotors()
       };
     }
 
@@ -22184,6 +22261,7 @@
         kopf_type: payload.kopf_type,
         kopf_dwc: payload.kopf_dwc,
         abschluss: payload.abschluss || { status: 'geprueft' },
+        motoren: payload.motoren || [],
         languages: payload.languages || collectPdfLanguages(),
         pdf_languages: payload.pdf_languages || payload.languages || collectPdfLanguages(),
         jsonOnly: true,
@@ -22309,6 +22387,7 @@
           kopf_vmax: (draft && draft.kopf_vmax) || '',
           kopf_type: (draft && draft.kopf_type) || '',
           kopf_dwc: (draft && draft.kopf_dwc) || '',
+          motoren: (draft && Array.isArray(draft.motoren)) ? draft.motoren : [],
           abschluss: (draft && draft.abschluss != null && !Array.isArray(draft.abschluss) && typeof draft.abschluss === 'object')
             ? normalizeSpAbschlussObject(draft.abschluss)
             : (fn === cur ? collectAbschlussPayload() : { status: 'geprueft' })
@@ -22492,6 +22571,7 @@
         });
       }
       setProtocolLanguagesOnChecks('spPdfDe', 'spPdfEn', languagesFromDraft(draft));
+      if (Array.isArray(draft.motoren)) setSpMotors(draft.motoren, { replaceEmpty: true });
       if (arbeitsschritte.length) renderSteps();
       return true;
     }
@@ -22864,8 +22944,14 @@
       if (opts.preferStamm) {
         applySpLoadCellsToForm(loadCellsFromStammMess(mapped.mess, jobKopf));
         updateVersSpannungHint();
+        var stammMotors = motorsFromStammRow(row);
+        if (stammMotors.length) setSpMotors(stammMotors, { replaceEmpty: true });
       } else {
         applyMessTypeFromStamm(mapped.mess, jobKopf);
+        if (!collectSpMotors().length) {
+          var fillMotors = motorsFromStammRow(row);
+          if (fillMotors.length) setSpMotors(fillMotors);
+        }
       }
     }
 
@@ -23181,6 +23267,12 @@
           applyKopfFields(mergedKopf);
           applyServiceprotokollProjekt(serviceJobData, fab, mergedKopf.projekt);
           applyMessTypeFromStamm(apiKopfRaw, jobKopf);
+          if (!draftApplied && !collectSpMotors().length) {
+            var apiMotors = Array.isArray(data.motoren)
+              ? data.motoren
+              : (apiKopfRaw && Array.isArray(apiKopfRaw.motoren) ? apiKopfRaw.motoren : []);
+            if (apiMotors.length) setSpMotors(apiMotors, { replaceEmpty: true });
+          }
         } else if (!draftApplied) {
           defaultsSource = 'builtin';
         }
@@ -23419,7 +23511,9 @@
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword(),
           languages: pdfLangs,
-          pdf_languages: pdfLangs
+          pdf_languages: pdfLangs,
+          motoren: collectSpMotors(),
+          apply_to_anlagenstamm: applyStamm ? 1 : 0
         };
         var submitButtons = form.querySelectorAll('button[type="submit"]');
         var stickyBtns = [
@@ -23528,7 +23622,8 @@
           base_url: getDispoBaseUrl(),
           dispoBaseUrl: getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
-          serverPassword: getDispoPassword()
+          serverPassword: getDispoPassword(),
+          apply_to_anlagenstamm: applyStamm ? 1 : 0
         };
         var allPdfBtnTop = document.getElementById('btnServiceprotokollSaveAllPdfTop');
         allPdfBtn.disabled = true;
@@ -23656,7 +23751,8 @@
           monteur: monteurLabel,
           closingRemarks: (document.getElementById('serviceprotokollAbschlussBemerkungen') || {}).value || '',
           pdfDe: !!(document.getElementById('spPdfDe') && document.getElementById('spPdfDe').checked),
-          pdfEn: !!(document.getElementById('spPdfEn') && document.getElementById('spPdfEn').checked)
+          pdfEn: !!(document.getElementById('spPdfEn') && document.getElementById('spPdfEn').checked),
+          motors: motorsToReactForm(collectSpMotors())
         },
         measurements: matrixToMeasurementsRows(firstMm),
         testLoad: {
@@ -23773,6 +23869,9 @@
           applyMessMatrixToForm(measurementsRowsToMatrix(payload.measurements));
         }
       }
+      if (Array.isArray(f.motors)) {
+        setSpMotors(motorsFromReactForm(f.motors), { replaceEmpty: true });
+      }
       setVal('serviceprotokollBemerkungen', f.generalRemarks);
       setVal('serviceprotokollAbschlussBemerkungen', f.closingRemarks);
       var pdfDe = document.getElementById('spPdfDe');
@@ -23854,6 +23953,10 @@
       var merged = mergeKopfFillGaps(stammKopf, readKopfFieldsFromForm());
       applyKopfFields(merged);
       applyServiceprotokollProjekt(serviceJobData, fab, merged.projekt || stammKopf.projekt);
+      if (!collectSpMotors().length) {
+        var syncMotors = motorsFromStammRow(row);
+        if (syncMotors.length) setSpMotors(syncMotors);
+      }
       if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
       notifyReactBridge(true);
     }

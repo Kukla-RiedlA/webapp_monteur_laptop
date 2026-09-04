@@ -4,7 +4,10 @@ import {
   DEFAULT_WORK_STEPS,
   EMPTY_FORM,
   EMPTY_MEASUREMENTS,
+  emptyMotorRow,
+  MOTOR_FIELD_KEYS,
   type MeasurementRow,
+  type MotorRow,
   type ServiceProtocolFormState,
   type StepResult,
   type TestLoadValues,
@@ -56,6 +59,7 @@ export function emptyBridgePayload(jobs: SpBridgePayload['jobs'] = []): SpBridge
         ...c,
         measurements: cloneMeasurements(c.measurements),
       })),
+      motors: [],
     },
     measurements: EMPTY_MEASUREMENTS.map((r) => ({ ...r })),
     testLoad: { ...DEFAULT_TEST_LOAD },
@@ -66,6 +70,15 @@ export function emptyBridgePayload(jobs: SpBridgePayload['jobs'] = []): SpBridge
 export function mapStepStatus(raw: string): StepResult {
   if (raw === 'ok' || raw === 'nok' || raw === 'na') return raw;
   return 'na';
+}
+
+function cloneMotor(row: Partial<MotorRow> | null | undefined, i: number): MotorRow {
+  const base = emptyMotorRow(row && row.id ? String(row.id) : String(i + 1));
+  MOTOR_FIELD_KEYS.forEach((k) => {
+    base[k] = row && row[k] != null ? String(row[k]) : '';
+  });
+  base.anlagenstammMotorId = row && row.anlagenstammMotorId != null ? String(row.anlagenstammMotorId) : '';
+  return base;
 }
 
 export function mergeBridgePayload(base: SpBridgePayload, patch: Partial<SpBridgePayload>): SpBridgePayload {
@@ -98,6 +111,11 @@ export function mergeBridgePayload(base: SpBridgePayload, patch: Partial<SpBridg
         measurements: cloneMeasurements(patch.measurements ?? base.measurements),
       },
     ];
+  }
+  if (patch.form && Array.isArray(patch.form.motors)) {
+    form.motors = patch.form.motors.map((m, i) => cloneMotor(m, i));
+  } else if (!Array.isArray(form.motors)) {
+    form.motors = [];
   }
   const measurements =
     form.loadCells[0]?.measurements?.length

@@ -392,6 +392,25 @@ html.akte-window .akte-shell {
   margin-top: 4px;
 }
 
+.motor-row-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #0c6a4d;
+  margin-top: 4px;
+}
+
+.motor-block .motor-row-line {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+.motor-block-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
 .anlagen-table-scroll thead th {
   position: static;
 }

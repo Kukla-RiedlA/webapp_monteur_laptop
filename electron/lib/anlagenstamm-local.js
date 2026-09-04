@@ -163,6 +163,41 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       }
     }
   }
+  run(`CREATE TABLE IF NOT EXISTS anlagenstamm_motor_local (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      anlagenstamm_id INTEGER NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      bezeichnung TEXT,
+      positionsnummer TEXT,
+      hersteller TEXT,
+      type TEXT,
+      seriennummer TEXT,
+      nennleistung_kw TEXT,
+      leistungsfaktor TEXT,
+      nenndrehzahl TEXT,
+      nennstrom TEXT,
+      getriebeuebersetzung TEXT,
+      getriebedrehzahl TEXT,
+      nennspannung TEXT,
+      nennfrequenz TEXT,
+      bauform TEXT,
+      schaltung TEXT,
+      isolationsklasse TEXT,
+      schutzart TEXT,
+      leerlaufstrom_50hz TEXT,
+      anlaufart TEXT,
+      fu_hersteller TEXT,
+      fu_type TEXT,
+      fu_nennstrom_eingestellt TEXT,
+      fu_max_speed TEXT,
+      fu_max_frequency TEXT,
+      laststrom_calculated TEXT,
+      laststrom_fat TEXT,
+      laststrom_sat TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT
+    )`);
+  run('CREATE INDEX IF NOT EXISTS idx_as_motor_local_stamm ON anlagenstamm_motor_local (anlagenstamm_id, sort_order)');
   run(`CREATE TABLE IF NOT EXISTS anlagenstamm_parameter_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       fab TEXT NOT NULL,
@@ -353,6 +388,7 @@ function mapRowToListApi(row, opts) {
     customer_country: row.customer_country || '',
     pn_root_name: row.pn_root_name || '',
     ted_mechanik: light ? (row.ted_mechanik || '') : parseTedMechanik(row.ted_mechanik),
+    motoren: light ? [] : listMotorsForStamm(opts && opts.db, row.id),
   };
 }
 
@@ -363,7 +399,7 @@ function listAllAnlagenstammLocal(db, opts) {
   const rows = hangDiag.timeSync('anlagenstamm_list_all', () =>
     db.prepare(`${sql} ORDER BY TRIM(fabrikationsnummer) ASC, id ASC`).all(),
   );
-  const mapOpts = light ? { light: true } : undefined;
+  const mapOpts = { light, db };
   return rows.map((row) => mapRowToListApi(row, mapOpts));
 }
 
@@ -372,7 +408,7 @@ function lookupById(db, id) {
   const n = parseInt(id, 10);
   if (!Number.isFinite(n) || n <= 0) return null;
   const row = db.prepare(`${ANLAGENSTAMM_LOCAL_SELECT} WHERE id = ?`).get(n);
-  return row ? mapRowToListApi(row) : null;
+  return row ? mapRowToListApi(row, { db }) : null;
 }
 
 function deleteLocal(db, id) {
@@ -382,6 +418,7 @@ function deleteLocal(db, id) {
   const row = db.prepare('SELECT id, fabrikationsnummer FROM anlagenstamm_local WHERE id = ?').get(n);
   if (!row) return { success: false, error: 'Anlage nicht gefunden' };
   const fab = String(row.fabrikationsnummer || '').trim();
+  db.prepare('DELETE FROM anlagenstamm_motor_local WHERE anlagenstamm_id = ?').run(n);
   db.prepare('DELETE FROM anlagenstamm_local WHERE id = ?').run(n);
   if (fab) {
     db.prepare(
@@ -401,7 +438,7 @@ function listAnlagenstammForApi(db, limit, offset) {
        LIMIT ? OFFSET ?`,
     )
     .all(limit, offset);
-  return rows.map(mapRowToListApi);
+  return rows.map((row) => mapRowToListApi(row, { db }));
 }
 
 /** Dispo `anlagenstamm` – Spaltenlängen (fsm_init.sql). */
@@ -460,6 +497,123 @@ function clampRowToDispoLimits(row, limits) {
 
 function clampForDispoAnlagenstamm(rowOrPayload) {
   return clampRowToDispoLimits(rowOrPayload, DISPO_ANLAGENSTAMM_MAX);
+}
+
+const ANLAGENSTAMM_MOTOR_KEYS = [
+  'bezeichnung', 'positionsnummer', 'hersteller', 'type', 'seriennummer',
+  'nennleistung_kw', 'leistungsfaktor', 'nenndrehzahl', 'nennstrom',
+  'getriebeuebersetzung', 'getriebedrehzahl', 'nennspannung', 'nennfrequenz',
+  'bauform', 'schaltung', 'isolationsklasse', 'schutzart', 'leerlaufstrom_50hz',
+  'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt',
+  'fu_max_speed', 'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
+];
+
+function parseIndexedFieldGroups(fields, prefix) {
+  const re = new RegExp('^' + prefix + '\\[(\\d+)\\]\\[([a-z0-9_]+)\\]$', 'i');
+  const byIndex = {};
+  for (const [name, val] of Object.entries(fields || {})) {
+    const m = re.exec(String(name));
+    if (!m) continue;
+    const i = Number(m[1]);
+    if (!byIndex[i]) byIndex[i] = {};
+    byIndex[i][m[2]] = val;
+  }
+  return Object.keys(byIndex)
+    .map((k) => Number(k))
+    .sort((a, b) => a - b)
+    .map((i) => byIndex[i]);
+}
+
+function normalizeMotorRows(payload) {
+  let raw = [];
+  if (payload && Array.isArray(payload.motoren)) raw = payload.motoren;
+  else if (payload && Array.isArray(payload.motor)) raw = payload.motor;
+  else raw = parseIndexedFieldGroups(payload, 'motor');
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const row = {};
+    let any = false;
+    for (const k of ANLAGENSTAMM_MOTOR_KEYS) {
+      const v = item[k] != null ? String(item[k]).trim() : '';
+      row[k] = v;
+      if (v) any = true;
+    }
+    if (item.id != null && Number(item.id) > 0) row.id = Number(item.id);
+    const stammMotorId = Number(item.anlagenstamm_motor_id || 0);
+    if (Number.isFinite(stammMotorId) && stammMotorId > 0) {
+      row.anlagenstamm_motor_id = stammMotorId;
+    }
+    if (any) out.push(row);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+function listMotorsForStamm(db, anlagenstammId) {
+  const id = Number(anlagenstammId) || 0;
+  if (!id || !db) return [];
+  try {
+    return db.prepare(
+      'SELECT * FROM anlagenstamm_motor_local WHERE anlagenstamm_id = ? ORDER BY sort_order ASC, id ASC',
+    ).all(id);
+  } catch (_) {
+    return [];
+  }
+}
+
+function replaceMotorsForStamm(db, anlagenstammId, rows) {
+  const id = Number(anlagenstammId) || 0;
+  if (!id || !db) return;
+  try {
+    db.prepare('DELETE FROM anlagenstamm_motor_local WHERE anlagenstamm_id = ?').run(id);
+  } catch (_) {
+    return;
+  }
+  const ins = db.prepare(
+    `INSERT INTO anlagenstamm_motor_local (
+      anlagenstamm_id, sort_order, ${ANLAGENSTAMM_MOTOR_KEYS.join(', ')}, updated_at
+    ) VALUES (?, ?, ${ANLAGENSTAMM_MOTOR_KEYS.map(() => '?').join(', ')}, datetime('now'))`,
+  );
+  (rows || []).forEach((r, sortOrder) => {
+    const params = [id, sortOrder];
+    ANLAGENSTAMM_MOTOR_KEYS.forEach((k) => {
+      const v = r[k] != null ? String(r[k]).trim() : '';
+      params.push(v !== '' ? v : null);
+    });
+    ins.run(...params);
+  });
+}
+
+function syncProtocolMotorsToStamm(db, fab, rows) {
+  const f = String(fab || '').trim();
+  if (!f || !Array.isArray(rows) || !rows.length) return;
+  const stamm = lookupByFab(db, f);
+  if (!stamm || !stamm.id) return;
+  const upd = db.prepare(
+    `UPDATE anlagenstamm_motor_local SET
+      fu_hersteller = ?, fu_type = ?, fu_nennstrom_eingestellt = ?,
+      fu_max_speed = ?, fu_max_frequency = ?,
+      laststrom_calculated = ?, laststrom_fat = ?, laststrom_sat = ?,
+      updated_at = datetime('now')
+     WHERE id = ? AND anlagenstamm_id = ?`,
+  );
+  rows.forEach((r) => {
+    const mid = Number(r.anlagenstamm_motor_id || r.id || 0);
+    if (mid <= 0) return;
+    upd.run(
+      r.fu_hersteller || null,
+      r.fu_type || null,
+      r.fu_nennstrom_eingestellt || null,
+      r.fu_max_speed || null,
+      r.fu_max_frequency || null,
+      r.laststrom_calculated || null,
+      r.laststrom_fat || null,
+      r.laststrom_sat || null,
+      mid,
+      stamm.id,
+    );
+  });
 }
 
 /** Leere/null/Whitespace – nie bestehende Stammwerte überschreiben (Sync + saveLocal). */
@@ -521,6 +675,11 @@ function mergeAnlagenstammPayload(existing, incoming) {
   } else {
     out.kraftaufnehmer_extra = '';
   }
+  if (Object.prototype.hasOwnProperty.call(inc, 'motoren')
+    || Object.prototype.hasOwnProperty.call(inc, 'motor')
+    || Object.keys(inc).some((k) => /^motor\[\d+]\[/.test(k))) {
+    out.motoren = normalizeMotorRows(inc);
+  }
   return out;
 }
 
@@ -544,6 +703,11 @@ function stripEmptyStammFieldsForDispoPush(payload, existing) {
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'kraftaufnehmer_extra')) {
     out.kraftaufnehmer_extra = merged.kraftaufnehmer_extra || '';
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'motoren')
+    || Object.prototype.hasOwnProperty.call(payload, 'motor')
+    || Object.keys(payload || {}).some((k) => /^motor\[\d+]\[/.test(k))) {
+    out.motoren = normalizeMotorRows(payload);
   }
   return clampForDispoAnlagenstamm(out);
 }
@@ -921,7 +1085,7 @@ function searchLocal(db, filters) {
     .all(...params);
   return {
     ok: true,
-    rows: rows.map(mapRowToListApi),
+    rows: rows.map((row) => mapRowToListApi(row, { db })),
     page,
     page_size: pageSize,
     total_count: totalCount,
@@ -1128,6 +1292,11 @@ function saveLocal(db, payload) {
   const kept = lookupByFab(db, fab);
   if (kept && kept.id) id = kept.id;
   bumpAnlagenstammDataGeneration();
+  if (Object.prototype.hasOwnProperty.call(payload || {}, 'motoren')
+    || Object.prototype.hasOwnProperty.call(payload || {}, 'motor')
+    || Object.keys(payload || {}).some((k) => /^motor\[\d+]\[/.test(k))) {
+    replaceMotorsForStamm(db, id, normalizeMotorRows(payload));
+  }
   return { ok: true, id, fabrikationsnummer: fab, fields, _pending: true };
 }
 
@@ -2224,6 +2393,10 @@ module.exports = {
   ANLAGENSTAMM_RECENT_LOCAL_GRACE_MS,
   isRecentLocalAnlagenstammGuard,
   clampForDispoAnlagenstamm,
+  normalizeMotorRows,
+  listMotorsForStamm,
+  replaceMotorsForStamm,
+  syncProtocolMotorsToStamm,
   clampForDispoJobFabrikation,
   clampFabrikationsnummernJson,
   stammFieldTrim,

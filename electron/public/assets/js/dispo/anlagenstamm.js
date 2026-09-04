@@ -1217,6 +1217,52 @@ function fillEmptyFieldsFromTdPdf() {
     });
 }
 
+function isMlPdfDokuPath(rel, name) {
+  if (!rel || !name) return false;
+  var n = String(name);
+  var ext = (n.split('.').pop() || '').toLowerCase();
+  if (ext !== 'pdf') return false;
+  var segs = String(rel).replace(/\\/g, '/').toLowerCase();
+  var inMotorList = segs.indexOf('motor list') >= 0 || segs.indexOf('01.02') >= 0;
+  var mlName = /_ml_/i.test(n) || /motor.?list/i.test(n);
+  return inMotorList || mlName;
+}
+
+function fillMotorsFromMlPdf() {
+  var msgEl = document.getElementById('fillFromMlPdfMsg');
+  var formFabEl = document.getElementById('formFab');
+  var fab = formFabEl && formFabEl.value.trim();
+  if (!fab) {
+    if (msgEl) msgEl.textContent = 'Fabrikationsnummer fehlt.';
+    return;
+  }
+  if (msgEl) msgEl.textContent = 'Lese Motorliste…';
+  var u = anlagenstammApiUrl('api/anlagenstamm_ml_pdf_prefill.php?fab=' + encodeURIComponent(fab));
+  var pr = (window.__anlagenSelectedMlPdfRel || '').trim();
+  if (pr) u += '&path=' + encodeURIComponent(pr);
+  var req = (typeof anlagenstammFetch === 'function')
+    ? anlagenstammFetch(u, { credentials: 'same-origin' })
+    : fetch(u, { credentials: 'same-origin' });
+  req
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || d.ok === false) {
+        if (msgEl) msgEl.textContent = (d && d.error) ? d.error : 'Fehler beim Lesen der Motorliste.';
+        return;
+      }
+      var motors = Array.isArray(d.motors) ? d.motors : [];
+      if (!motors.length) {
+        if (msgEl) msgEl.textContent = (d.note || 'Keine Antriebe im PDF erkannt.') + (d.file ? ' (' + d.file + ')' : '');
+        return;
+      }
+      if (typeof window.kuklaMotorSetRows === 'function') window.kuklaMotorSetRows(motors);
+      if (msgEl) msgEl.textContent = motors.length + ' Motor(en) geladen' + (d.file ? ' (' + d.file + ')' : '');
+    })
+    .catch(function (err) {
+      if (msgEl) msgEl.textContent = 'Fehler: ' + (err && err.message ? err.message : String(err));
+    });
+}
+
 function bindTdPrefillUi() {
   var root = document.getElementById('formModal') || document;
   if (root && !root._tdSelectBound) {
@@ -1224,10 +1270,16 @@ function bindTdPrefillUi() {
     root.addEventListener('click', function (e) {
       var hit = tdRelFromClickTarget(e.target);
       if (!hit) return;
-      if (!isTdPdfDokuPath(hit.rel, hit.name)) return;
-      window.__anlagenSelectedTdPdfRel = hit.rel;
-      var m = document.getElementById('fillFromTdPdfMsg');
-      if (m) m.textContent = 'TD-Quelle: ' + (hit.name || hit.rel);
+      if (isTdPdfDokuPath(hit.rel, hit.name)) {
+        window.__anlagenSelectedTdPdfRel = hit.rel;
+        var m = document.getElementById('fillFromTdPdfMsg');
+        if (m) m.textContent = 'TD-Quelle: ' + (hit.name || hit.rel);
+      }
+      if (isMlPdfDokuPath(hit.rel, hit.name)) {
+        window.__anlagenSelectedMlPdfRel = hit.rel;
+        var ml = document.getElementById('fillFromMlPdfMsg');
+        if (ml) ml.textContent = 'Motorliste: ' + (hit.name || hit.rel);
+      }
     });
   }
   var fillBtn = document.getElementById('btnFillFromTdPdf');
@@ -1235,6 +1287,12 @@ function bindTdPrefillUi() {
     fillBtn._tdFillBound = true;
     if (anlagenReadOnly) fillBtn.disabled = true;
     else fillBtn.addEventListener('click', fillEmptyFieldsFromTdPdf);
+  }
+  var mlBtn = document.getElementById('btnFillFromMlPdf');
+  if (mlBtn && !mlBtn._mlFillBound) {
+    mlBtn._mlFillBound = true;
+    if (anlagenReadOnly) mlBtn.disabled = true;
+    else mlBtn.addEventListener('click', fillMotorsFromMlPdf);
   }
 }
 
@@ -1315,6 +1373,12 @@ function fillFormFromRow(row) {
     });
   } else {
     set('formKraftaufnehmer', row.kraftaufnehmer || '');
+  }
+  if (typeof window.kuklaInitMotorRows === 'function') {
+    window.kuklaInitMotorRows({
+      readOnly: anlagenReadOnly,
+      rows: Array.isArray(row.motoren) ? row.motoren : []
+    });
   }
 }
 
@@ -1766,6 +1830,15 @@ if (document.getElementById('kraftaufnehmerRows') && typeof window.kuklaInitKraf
       readOnly: anlagenReadOnly,
       primaryValue: '',
       extras: []
+    });
+  }
+}
+if (document.getElementById('motorRows') && typeof window.kuklaInitMotorRows === 'function') {
+  var motorBox = document.getElementById('motorRows');
+  if (!motorBox || !motorBox.querySelector('.motor-row')) {
+    window.kuklaInitMotorRows({
+      readOnly: anlagenReadOnly,
+      rows: []
     });
   }
 }

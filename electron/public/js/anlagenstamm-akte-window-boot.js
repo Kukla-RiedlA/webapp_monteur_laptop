@@ -18,7 +18,8 @@
       '/assets/js/dispo/anlagenakte-form-viewer.js?v=20260819akte',
       '/assets/js/dispo/anlagenakte.js?v=20260901thumb',
       '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260819akte',
-      '/assets/js/dispo/anlagenstamm.js?v=20260901thumb',
+      '/assets/js/dispo/anlagenstamm_motor_rows.js?v=20260904motor',
+      '/assets/js/dispo/anlagenstamm.js?v=20260904motor',
       '/js/anlagenstamm-laptop-bridge.js?v=20260901thumb',
     ];
     await global.kuklaWebPage.mount(host, { html: shell, scripts: scripts });

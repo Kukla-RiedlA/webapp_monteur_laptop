@@ -38,6 +38,81 @@ export interface LoadCellRow {
   measurements?: MeasurementRow[];
 }
 
+export interface MotorRow {
+  id: string;
+  anlagenstammMotorId?: string;
+  bezeichnung: string;
+  positionsnummer: string;
+  hersteller: string;
+  type: string;
+  seriennummer: string;
+  nennleistung_kw: string;
+  leistungsfaktor: string;
+  nenndrehzahl: string;
+  nennstrom: string;
+  getriebeuebersetzung: string;
+  getriebedrehzahl: string;
+  nennspannung: string;
+  nennfrequenz: string;
+  bauform: string;
+  schaltung: string;
+  isolationsklasse: string;
+  schutzart: string;
+  leerlaufstrom_50hz: string;
+  anlaufart: string;
+  fu_hersteller: string;
+  fu_type: string;
+  fu_nennstrom_eingestellt: string;
+  fu_max_speed: string;
+  fu_max_frequency: string;
+  laststrom_calculated: string;
+  laststrom_fat: string;
+  laststrom_sat: string;
+}
+
+export const MOTOR_FIELD_KEYS: Array<keyof Omit<MotorRow, 'id' | 'anlagenstammMotorId'>> = [
+  'bezeichnung', 'positionsnummer', 'hersteller', 'type', 'seriennummer',
+  'nennleistung_kw', 'leistungsfaktor', 'nenndrehzahl', 'nennstrom',
+  'getriebeuebersetzung', 'getriebedrehzahl', 'nennspannung', 'nennfrequenz',
+  'bauform', 'schaltung', 'isolationsklasse', 'schutzart', 'leerlaufstrom_50hz',
+  'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt',
+  'fu_max_speed', 'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
+];
+
+export function emptyMotorRow(id: string): MotorRow {
+  return {
+    id,
+    anlagenstammMotorId: '',
+    bezeichnung: '',
+    positionsnummer: '',
+    hersteller: '',
+    type: '',
+    seriennummer: '',
+    nennleistung_kw: '',
+    leistungsfaktor: '',
+    nenndrehzahl: '',
+    nennstrom: '',
+    getriebeuebersetzung: '',
+    getriebedrehzahl: '',
+    nennspannung: '',
+    nennfrequenz: '',
+    bauform: '',
+    schaltung: '',
+    isolationsklasse: '',
+    schutzart: '',
+    leerlaufstrom_50hz: '',
+    anlaufart: '',
+    fu_hersteller: '',
+    fu_type: '',
+    fu_nennstrom_eingestellt: '',
+    fu_max_speed: '',
+    fu_max_frequency: '',
+    laststrom_calculated: '',
+    laststrom_fat: '',
+    laststrom_sat: '',
+  };
+}
+
 export interface ServiceProtocolFormState {
   order: string;
   project: string;
@@ -54,6 +129,7 @@ export interface ServiceProtocolFormState {
   /** @deprecated use loadCells[0] */
   serialNumber: string;
   loadCells: LoadCellRow[];
+  motors: MotorRow[];
   supplyVoltage: string;
   sensitivity: string;
   generalRemarks: string;
@@ -136,6 +212,7 @@ export const DEFAULT_FORM: ServiceProtocolFormState = {
     ...r,
     measurements: (r.measurements || EMPTY_MEASUREMENTS).map((m) => ({ ...m })),
   })),
+  motors: [],
   supplyVoltage: '',
   sensitivity: '',
   generalRemarks: '',
@@ -169,6 +246,7 @@ export const EMPTY_FORM: ServiceProtocolFormState = {
     sensitivity: '',
     measurements: EMPTY_MEASUREMENTS.map((m) => ({ ...m })),
   })),
+  motors: [],
   supplyVoltage: '',
   sensitivity: '',
   generalRemarks: '',

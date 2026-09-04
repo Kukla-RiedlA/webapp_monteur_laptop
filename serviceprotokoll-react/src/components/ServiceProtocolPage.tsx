@@ -11,9 +11,9 @@ import { SpIcon } from './SpIcon';
 import { SelectInput, TextInput } from './TextInput';
 import { TestLoadFields } from './TestLoadFields';
 import { WorkStepsTable } from './WorkStepsTable';
-import type { LoadCellRow, MeasurementRow, ServiceProtocolFormState, StepResult } from '../types';
-import { EMPTY_MEASUREMENTS, FAB_NUMBERS } from '../types';
-import { localizeAutosaveHint, maskLangFromPdf, t, type UiLang } from '../i18n';
+import type { LoadCellRow, MeasurementRow, MotorRow, ServiceProtocolFormState, StepResult } from '../types';
+import { EMPTY_MEASUREMENTS, FAB_NUMBERS, emptyMotorRow } from '../types';
+import { localizeAutosaveHint, maskLangFromPdf, motorFieldLabel, t, type UiLang } from '../i18n';
 
 function ensureLoadCells(form: ServiceProtocolFormState, fallbackMeasurements?: MeasurementRow[]): LoadCellRow[] {
   if (Array.isArray(form.loadCells) && form.loadCells.length) return form.loadCells;
@@ -37,6 +37,7 @@ export function ServiceProtocolPage() {
 
   const { form, testLoad, workSteps, jobs, jobId, fabNumbers } = bridgeState;
   const loadCells = ensureLoadCells(form, bridgeState.measurements);
+  const motors: MotorRow[] = Array.isArray(form.motors) ? form.motors : [];
 
   const fabChips = fabNumbers.length ? fabNumbers : embedded ? [] : FAB_NUMBERS;
   const uiLang: UiLang = maskLangFromPdf(form.pdfDe, form.pdfEn);
@@ -154,6 +155,30 @@ export function ServiceProtocolPage() {
         },
         measurements: cloneMeasurements(next[0]?.measurements),
       });
+    });
+  }, []);
+
+  const patchMotor = useCallback((id: string, patch: Partial<MotorRow>) => {
+    setBridgeState((prev) => {
+      const list = (Array.isArray(prev.form.motors) ? prev.form.motors : []).map((m) =>
+        m.id === id ? { ...m, ...patch } : m,
+      );
+      return mergeBridgePayload(prev, { form: { ...prev.form, motors: list } });
+    });
+  }, []);
+
+  const addMotor = useCallback(() => {
+    setBridgeState((prev) => {
+      const list = Array.isArray(prev.form.motors) ? prev.form.motors.slice() : [];
+      list.push(emptyMotorRow(String(Date.now())));
+      return mergeBridgePayload(prev, { form: { ...prev.form, motors: list } });
+    });
+  }, []);
+
+  const removeMotor = useCallback((id: string) => {
+    setBridgeState((prev) => {
+      const list = (Array.isArray(prev.form.motors) ? prev.form.motors : []).filter((m) => m.id !== id);
+      return mergeBridgePayload(prev, { form: { ...prev.form, motors: list } });
     });
   }, []);
 
@@ -426,9 +451,84 @@ export function ServiceProtocolPage() {
                 ))}
               </div>
             </SectionCard>
+
+            <SectionCard
+              number={4}
+              title={t(uiLang, 'motorDrive')}
+              icon="Factory"
+              headerExtra={
+                <button
+                  type="button"
+                  className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
+                  aria-label={t(uiLang, 'addMotor')}
+                  title={t(uiLang, 'addMotorTitle')}
+                  onClick={addMotor}
+                >
+                  <SpIcon name="Plus" className="h-4 w-4" />
+                </button>
+              }
+            >
+              {motors.length === 0 ? (
+                <p className="text-sm text-[#6b7280]">{t(uiLang, 'noMotors')}</p>
+              ) : (
+                <div className="grid gap-3">
+                  {motors.map((motor) => (
+                    <div key={motor.id} className="relative rounded-xl border border-kukla-border bg-white p-3 shadow-card">
+                      <div className="absolute right-2 top-2 z-10">
+                        <button
+                          type="button"
+                          className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
+                          aria-label={t(uiLang, 'removeMotor')}
+                          title={t(uiLang, 'removeMotor')}
+                          onClick={() => removeMotor(motor.id)}
+                        >
+                          <SpIcon name="X" className="h-4 w-4" />
+                        </button>
+                      </div>
+                      {(
+                        [
+                          { title: t(uiLang, 'motorAssign'), keys: ['bezeichnung', 'positionsnummer'] },
+                          {
+                            title: t(uiLang, 'motorData'),
+                            keys: [
+                              'hersteller', 'type', 'seriennummer', 'nennleistung_kw', 'leistungsfaktor',
+                              'nenndrehzahl', 'nennstrom', 'getriebeuebersetzung', 'getriebedrehzahl',
+                              'nennspannung', 'nennfrequenz', 'bauform', 'schaltung', 'isolationsklasse',
+                              'schutzart', 'leerlaufstrom_50hz', 'anlaufart',
+                            ],
+                          },
+                          {
+                            title: t(uiLang, 'motorFc'),
+                            keys: [
+                              'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt', 'fu_max_speed',
+                              'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
+                            ],
+                          },
+                        ] as Array<{ title: string; keys: Array<keyof MotorRow> }>
+                      ).map((group) => (
+                        <div key={group.title} className="mb-2 pr-10">
+                          <div className="mb-1 text-[11px] font-bold text-[#0c6a4d]">{group.title}</div>
+                          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                            {group.keys.map((key) => (
+                              <TextInput
+                                key={key}
+                                label={motorFieldLabel(uiLang, String(key))}
+                                className="h-8 text-sm"
+                                value={String(motor[key] || '')}
+                                onChange={(e) => patchMotor(motor.id, { [key]: e.target.value } as Partial<MotorRow>)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </SectionCard>
           </div>
 
-          <SectionCard number={4} title={t(uiLang, 'testLoad')} icon="LineChart">
+          <SectionCard number={5} title={t(uiLang, 'testLoad')} icon="LineChart">
             <TestLoadFields
               lang={uiLang}
               values={testLoad}
@@ -441,7 +541,7 @@ export function ServiceProtocolPage() {
             />
           </SectionCard>
 
-          <SectionCard number={5} title={t(uiLang, 'workSteps')} icon="ClipboardCheck">
+          <SectionCard number={6} title={t(uiLang, 'workSteps')} icon="ClipboardCheck">
             <WorkStepsTable
               steps={workSteps}
               displayLang={displayLang}
@@ -463,7 +563,7 @@ export function ServiceProtocolPage() {
           </SectionCard>
 
           <div className="grid gap-4 lg:grid-cols-[1fr_min(280px,36%)]">
-            <SectionCard number={6} title={t(uiLang, 'closing')} icon="ClipboardCheck">
+            <SectionCard number={7} title={t(uiLang, 'closing')} icon="ClipboardCheck">
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <fieldset className="space-y-2 border-0 p-0">

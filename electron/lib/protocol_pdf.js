@@ -594,6 +594,19 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     .filter(Boolean);
 
   const mess = payload.messwerte && typeof payload.messwerte === 'object' ? payload.messwerte : {};
+  function protocolMotorsFromPayload(src) {
+    const raw = Array.isArray(src && src.motoren)
+      ? src.motoren
+      : (Array.isArray(mess.motoren) ? mess.motoren : []);
+    return raw.filter((r) => r && typeof r === 'object').filter((r) => {
+      return [
+        'bezeichnung', 'positionsnummer', 'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt',
+        'fu_max_speed', 'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
+        'hersteller', 'type', 'seriennummer',
+      ].some((k) => String(r[k] || '').trim());
+    });
+  }
+  const motorRowsPdf = protocolMotorsFromPayload(payload);
   function emptyMessCellRow() {
     return { kg: '', mv: '', ma: '', g_prozent: '' };
   }
@@ -1094,6 +1107,9 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     waegezellenBlocks.forEach((wz) => {
       blocks.push({ type: 'wz', wz });
     });
+    motorRowsPdf.forEach((motor, index) => {
+      blocks.push({ type: 'motor', motor, index });
+    });
     if (pgVals.some(Boolean)) {
       blocks.push({ type: 'pg' });
     }
@@ -1150,7 +1166,8 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     if (block.type === 'wz') {
       const rowsN = (block.wz && block.wz.rows && block.wz.rows.length) || 0;
       need = 20 + 28 + (rowsN ? 18 + rowsN * 16 + 14 : 8) + 10;
-    } else if (block.type === 'mess') need = 20 + 18 + messRows.length * 16 + 14;
+    } else if (block.type === 'motor') need = 20 + 22 + 10 * 15 + 12;
+    else if (block.type === 'mess') need = 20 + 18 + messRows.length * 16 + 14;
     else if (block.type === 'pg') need = 20 + 14 + 18 + 16 + 10;
     else if (block.type === 'bemerk') need = 40;
     else if (block.type === 'abschluss_bemerk') need = 40;
@@ -1269,6 +1286,55 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         } else {
           y -= 6;
         }
+      } else if (block.type === 'motor') {
+        const m = block.motor || {};
+        const idx = block.index != null ? block.index : 0;
+        let title = de ? 'Motor / Frequenzumrichter' : 'Motor / frequency converter';
+        if (motorRowsPdf.length > 1) title += ' ' + (idx + 1);
+        const head = String(m.bezeichnung || '').trim();
+        const pos = String(m.positionsnummer || '').trim();
+        if (head || pos) title += ': ' + [head, pos ? '(' + pos + ')' : ''].filter(Boolean).join(' ');
+        y = drawSectionTitle(page, y, title);
+        const motorPairs = [
+          [de ? 'Bezeichnung' : 'Designation', m.bezeichnung],
+          [de ? 'Positionsnummer' : 'Position no.', m.positionsnummer],
+          [de ? 'FU Hersteller' : 'FC manufacturer', m.fu_hersteller],
+          [de ? 'FU Type' : 'FC type', m.fu_type],
+          [de ? 'Nennstrom / eingestellt A' : 'Rated / set current A', m.fu_nennstrom_eingestellt],
+          [de ? 'max. Speed min-1' : 'max. Speed min-1', m.fu_max_speed],
+          [de ? 'max. Frequency Hz' : 'max. Frequency Hz', m.fu_max_frequency],
+          [de ? 'Laststrom calculated A' : 'Load current calculated A', m.laststrom_calculated],
+          [de ? 'Laststrom FAT A' : 'Load current FAT A', m.laststrom_fat],
+          [de ? 'Laststrom SAT A' : 'Load current SAT A', m.laststrom_sat],
+        ].filter((p) => String(p[1] || '').trim());
+        const rowH = 15;
+        const tableH = Math.max(rowH, Math.ceil(motorPairs.length / 2) * rowH);
+        page.drawRectangle({
+          x: marginX,
+          y: y - tableH,
+          width: tableInnerW,
+          height: tableH,
+          borderColor: greenSoft,
+          borderWidth: 0.5,
+          color: greenHeader,
+        });
+        motorPairs.forEach((pair, pi) => {
+          const col = pi % 2;
+          const rowI = Math.floor(pi / 2);
+          const x0 = marginX + 6 + col * (tableInnerW / 2);
+          const yy = y - 11 - rowI * rowH;
+          const label = pair[0] + ': ';
+          page.drawText(label, { x: x0, y: yy, size: 6.5, font, color: grayMuted });
+          const lw = font.widthOfTextAtSize(label, 6.5);
+          page.drawText(clip(fontBold, String(pair[1]), 8, tableInnerW / 2 - lw - 16), {
+            x: x0 + lw,
+            y: yy,
+            size: 8,
+            font: fontBold,
+            color: grayText,
+          });
+        });
+        y -= tableH + 10;
       } else if (block.type === 'pg') {
         y = drawPruefgewichtstestRow(page, y, {
           vals: pgVals,
