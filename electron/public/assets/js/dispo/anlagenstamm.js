@@ -1244,7 +1244,20 @@ function fillMotorsFromMlPdf() {
     ? anlagenstammFetch(u, { credentials: 'same-origin' })
     : fetch(u, { credentials: 'same-origin' });
   req
-    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      return r.text().then(function (t) {
+        var d = null;
+        try { d = t ? JSON.parse(t) : null; } catch (e) {
+          throw new Error(r.status === 404
+            ? 'Motorlisten-API nicht gefunden (Deploy fehlt).'
+            : 'Serverfehler beim Lesen der Motorliste (HTTP ' + r.status + ').');
+        }
+        if (!d) {
+          throw new Error('Leere Serverantwort (HTTP ' + r.status + ').');
+        }
+        return d;
+      });
+    })
     .then(function (d) {
       if (!d || d.ok === false) {
         if (msgEl) msgEl.textContent = (d && d.error) ? d.error : 'Fehler beim Lesen der Motorliste.';
