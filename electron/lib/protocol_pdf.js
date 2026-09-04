@@ -600,7 +600,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       : (Array.isArray(mess.motoren) ? mess.motoren : []);
     return raw.filter((r) => r && typeof r === 'object').filter((r) => {
       return [
-        'bezeichnung', 'positionsnummer', 'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt',
+        'bezeichnung', 'positionsnummer', 'fu_hersteller', 'fu_type', 'fu_nennstrom', 'fu_nennstrom_eingestellt',
         'fu_max_speed', 'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
         'hersteller', 'type', 'seriennummer',
       ].some((k) => String(r[k] || '').trim());
@@ -1300,7 +1300,8 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
           [de ? 'Positionsnummer' : 'Position no.', m.positionsnummer],
           [de ? 'FU Hersteller' : 'FC manufacturer', m.fu_hersteller],
           [de ? 'FU Type' : 'FC type', m.fu_type],
-          [de ? 'Nennstrom / eingestellt A' : 'Rated / set current A', m.fu_nennstrom_eingestellt],
+          [de ? 'Nennstrom A' : 'Rated current A', m.fu_nennstrom],
+          [de ? 'eingestellt A' : 'Set current A', m.fu_nennstrom_eingestellt],
           [de ? 'max. Speed min-1' : 'max. Speed min-1', m.fu_max_speed],
           [de ? 'max. Frequency Hz' : 'max. Frequency Hz', m.fu_max_frequency],
           [de ? 'Laststrom calculated A' : 'Load current calculated A', m.laststrom_calculated],

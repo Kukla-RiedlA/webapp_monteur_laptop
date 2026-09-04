@@ -188,6 +188,7 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       anlaufart TEXT,
       fu_hersteller TEXT,
       fu_type TEXT,
+      fu_nennstrom TEXT,
       fu_nennstrom_eingestellt TEXT,
       fu_max_speed TEXT,
       fu_max_frequency TEXT,
@@ -198,6 +199,20 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       updated_at TEXT
     )`);
   run('CREATE INDEX IF NOT EXISTS idx_as_motor_local_stamm ON anlagenstamm_motor_local (anlagenstamm_id, sort_order)');
+  if (dbOrSql && typeof dbOrSql.prepare === 'function') {
+    try {
+      const motorCols = dbOrSql.prepare('PRAGMA table_info(anlagenstamm_motor_local)').all();
+      const motorNames = new Set(motorCols.map((c) => c && c.name));
+      if (!motorNames.has('fu_nennstrom')) {
+        run('ALTER TABLE anlagenstamm_motor_local ADD COLUMN fu_nennstrom TEXT');
+      }
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err);
+      if (!/duplicate column name/i.test(msg)) {
+        console.warn('[anlagenstamm_motor_local] column migration:', msg);
+      }
+    }
+  }
   run(`CREATE TABLE IF NOT EXISTS anlagenstamm_parameter_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       fab TEXT NOT NULL,
@@ -504,7 +519,7 @@ const ANLAGENSTAMM_MOTOR_KEYS = [
   'nennleistung_kw', 'leistungsfaktor', 'nenndrehzahl', 'nennstrom',
   'getriebeuebersetzung', 'getriebedrehzahl', 'nennspannung', 'nennfrequenz',
   'bauform', 'schaltung', 'isolationsklasse', 'schutzart', 'leerlaufstrom_50hz',
-  'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt',
+  'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom', 'fu_nennstrom_eingestellt',
   'fu_max_speed', 'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
 ];
 
@@ -592,7 +607,7 @@ function syncProtocolMotorsToStamm(db, fab, rows) {
   if (!stamm || !stamm.id) return;
   const upd = db.prepare(
     `UPDATE anlagenstamm_motor_local SET
-      fu_hersteller = ?, fu_type = ?, fu_nennstrom_eingestellt = ?,
+      fu_hersteller = ?, fu_type = ?, fu_nennstrom = ?, fu_nennstrom_eingestellt = ?,
       fu_max_speed = ?, fu_max_frequency = ?,
       laststrom_calculated = ?, laststrom_fat = ?, laststrom_sat = ?,
       updated_at = datetime('now')
@@ -604,6 +619,7 @@ function syncProtocolMotorsToStamm(db, fab, rows) {
     upd.run(
       r.fu_hersteller || null,
       r.fu_type || null,
+      r.fu_nennstrom || null,
       r.fu_nennstrom_eingestellt || null,
       r.fu_max_speed || null,
       r.fu_max_frequency || null,

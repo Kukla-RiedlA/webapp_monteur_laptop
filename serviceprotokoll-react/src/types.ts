@@ -62,6 +62,7 @@ export interface MotorRow {
   anlaufart: string;
   fu_hersteller: string;
   fu_type: string;
+  fu_nennstrom: string;
   fu_nennstrom_eingestellt: string;
   fu_max_speed: string;
   fu_max_frequency: string;
@@ -75,7 +76,7 @@ export const MOTOR_FIELD_KEYS: Array<keyof Omit<MotorRow, 'id' | 'anlagenstammMo
   'nennleistung_kw', 'leistungsfaktor', 'nenndrehzahl', 'nennstrom',
   'getriebeuebersetzung', 'getriebedrehzahl', 'nennspannung', 'nennfrequenz',
   'bauform', 'schaltung', 'isolationsklasse', 'schutzart', 'leerlaufstrom_50hz',
-  'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt',
+  'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom', 'fu_nennstrom_eingestellt',
   'fu_max_speed', 'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
 ];
 
@@ -104,6 +105,7 @@ export function emptyMotorRow(id: string): MotorRow {
     anlaufart: '',
     fu_hersteller: '',
     fu_type: '',
+    fu_nennstrom: '',
     fu_nennstrom_eingestellt: '',
     fu_max_speed: '',
     fu_max_frequency: '',

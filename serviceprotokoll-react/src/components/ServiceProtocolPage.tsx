@@ -500,7 +500,7 @@ export function ServiceProtocolPage() {
                           {
                             title: t(uiLang, 'motorFc'),
                             keys: [
-                              'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt', 'fu_max_speed',
+                              'fu_hersteller', 'fu_type', 'fu_nennstrom', 'fu_nennstrom_eingestellt', 'fu_max_speed',
                               'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
                             ],
                           },

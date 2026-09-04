@@ -21767,7 +21767,7 @@
       'nennleistung_kw', 'leistungsfaktor', 'nenndrehzahl', 'nennstrom',
       'getriebeuebersetzung', 'getriebedrehzahl', 'nennspannung', 'nennfrequenz',
       'bauform', 'schaltung', 'isolationsklasse', 'schutzart', 'leerlaufstrom_50hz',
-      'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom_eingestellt',
+      'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom', 'fu_nennstrom_eingestellt',
       'fu_max_speed', 'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat'
     ];
 
