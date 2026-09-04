@@ -35,6 +35,22 @@ async function embedLogo(pdfDoc) {
   return null;
 }
 
+function isFuAnlaufart(value) {
+  const raw = String(value == null ? '' : value)
+    .toLowerCase()
+    .replace(/ü/g, 'u')
+    .replace(/ä/g, 'a')
+    .replace(/ö/g, 'o')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!raw) return false;
+  if (raw === 'fu' || raw === 'fc') return true;
+  if (raw.includes('frequenzumrichter')) return true;
+  if (raw.includes('frequency converter')) return true;
+  return /\bfreq\b/.test(raw) && /\bconv/.test(raw);
+}
+
 /**
  * PNG/JPEG Base64 (roh oder data-URL) für pdf-lib einbetten.
  */
@@ -600,7 +616,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       : (Array.isArray(mess.motoren) ? mess.motoren : []);
     return raw.filter((r) => r && typeof r === 'object').filter((r) => {
       return [
-        'bezeichnung', 'positionsnummer', 'fu_hersteller', 'fu_type', 'fu_nennstrom', 'fu_nennstrom_eingestellt',
+        'bezeichnung', 'positionsnummer', 'anlaufart', 'fu_hersteller', 'fu_type', 'fu_nennstrom', 'fu_nennstrom_eingestellt',
         'fu_max_speed', 'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
         'hersteller', 'type', 'seriennummer',
       ].some((k) => String(r[k] || '').trim());
@@ -1298,16 +1314,21 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         const motorPairs = [
           [de ? 'Bezeichnung' : 'Designation', m.bezeichnung],
           [de ? 'Positionsnummer' : 'Position no.', m.positionsnummer],
-          [de ? 'FU Hersteller' : 'FC manufacturer', m.fu_hersteller],
-          [de ? 'FU Type' : 'FC type', m.fu_type],
-          [de ? 'Nennstrom A' : 'Rated current A', m.fu_nennstrom],
-          [de ? 'eingestellt A' : 'Set current A', m.fu_nennstrom_eingestellt],
-          [de ? 'max. Speed min-1' : 'max. Speed min-1', m.fu_max_speed],
-          [de ? 'max. Frequency Hz' : 'max. Frequency Hz', m.fu_max_frequency],
-          [de ? 'Laststrom calculated A' : 'Load current calculated A', m.laststrom_calculated],
-          [de ? 'Laststrom FAT A' : 'Load current FAT A', m.laststrom_fat],
-          [de ? 'Laststrom SAT A' : 'Load current SAT A', m.laststrom_sat],
-        ].filter((p) => String(p[1] || '').trim());
+        ].concat(
+          isFuAnlaufart(m.anlaufart)
+            ? [
+                [de ? 'FU Hersteller' : 'FC manufacturer', m.fu_hersteller],
+                [de ? 'FU Type' : 'FC type', m.fu_type],
+                [de ? 'Nennstrom A' : 'Rated current A', m.fu_nennstrom],
+                [de ? 'eingestellt A' : 'Set current A', m.fu_nennstrom_eingestellt],
+                [de ? 'max. Speed min-1' : 'max. Speed min-1', m.fu_max_speed],
+                [de ? 'max. Frequency Hz' : 'max. Frequency Hz', m.fu_max_frequency],
+                [de ? 'Laststrom calculated A' : 'Load current calculated A', m.laststrom_calculated],
+                [de ? 'Laststrom FAT A' : 'Load current FAT A', m.laststrom_fat],
+                [de ? 'Laststrom SAT A' : 'Load current SAT A', m.laststrom_sat],
+              ]
+            : [],
+        ).filter((p) => String(p[1] || '').trim());
         const rowH = 15;
         const tableH = Math.max(rowH, Math.ceil(motorPairs.length / 2) * rowH);
         page.drawRectangle({

@@ -14,6 +14,7 @@ import { WorkStepsTable } from './WorkStepsTable';
 import type { LoadCellRow, MeasurementRow, MotorRow, ServiceProtocolFormState, StepResult } from '../types';
 import { EMPTY_MEASUREMENTS, FAB_NUMBERS, emptyMotorRow } from '../types';
 import { localizeAutosaveHint, maskLangFromPdf, motorFieldLabel, t, type UiLang } from '../i18n';
+import { isFuAnlaufart } from '../motor-utils';
 
 function ensureLoadCells(form: ServiceProtocolFormState, fallbackMeasurements?: MeasurementRow[]): LoadCellRow[] {
   if (Array.isArray(form.loadCells) && form.loadCells.length) return form.loadCells;
@@ -457,15 +458,26 @@ export function ServiceProtocolPage() {
               title={t(uiLang, 'motorDrive')}
               icon="Factory"
               headerExtra={
-                <button
-                  type="button"
-                  className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
-                  aria-label={t(uiLang, 'addMotor')}
-                  title={t(uiLang, 'addMotorTitle')}
-                  onClick={addMotor}
-                >
-                  <SpIcon name="Plus" className="h-4 w-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="inline-flex h-[32px] max-w-[11.5rem] items-center justify-center rounded-lg border border-kukla-border bg-white px-2 text-[11px] font-semibold leading-tight text-[#0c6a4d] hover:bg-kukla-mint"
+                    aria-label={t(uiLang, 'loadMotors')}
+                    title={t(uiLang, 'loadMotorsTitle')}
+                    onClick={() => sendAction('loadMotorsFromMlPdf')}
+                  >
+                    {t(uiLang, 'loadMotors')}
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-kukla-mint"
+                    aria-label={t(uiLang, 'addMotor')}
+                    title={t(uiLang, 'addMotorTitle')}
+                    onClick={addMotor}
+                  >
+                    <SpIcon name="Plus" className="h-4 w-4" />
+                  </button>
+                </div>
               }
             >
               {motors.length === 0 ? (
@@ -494,18 +506,22 @@ export function ServiceProtocolPage() {
                               'hersteller', 'type', 'seriennummer', 'nennleistung_kw', 'leistungsfaktor',
                               'nenndrehzahl', 'nennstrom', 'getriebeuebersetzung', 'getriebedrehzahl',
                               'nennspannung', 'nennfrequenz', 'bauform', 'schaltung', 'isolationsklasse',
-                              'schutzart', 'leerlaufstrom_50hz', 'anlaufart',
+                              'schutzart', 'leerlaufstrom_50hz',
                             ],
                           },
+                          { title: t(uiLang, 'motorAccessories'), keys: ['anlaufart'] },
                           {
                             title: t(uiLang, 'motorFc'),
                             keys: [
                               'fu_hersteller', 'fu_type', 'fu_nennstrom', 'fu_nennstrom_eingestellt', 'fu_max_speed',
                               'fu_max_frequency', 'laststrom_calculated', 'laststrom_fat', 'laststrom_sat',
                             ],
+                            fuOnly: true,
                           },
-                        ] as Array<{ title: string; keys: Array<keyof MotorRow> }>
-                      ).map((group) => (
+                        ] as Array<{ title: string; keys: Array<keyof MotorRow>; fuOnly?: boolean }>
+                      )
+                        .filter((group) => !group.fuOnly || isFuAnlaufart(motor.anlaufart))
+                        .map((group) => (
                         <div key={group.title} className="mb-2 pr-10">
                           <div className="mb-1 text-[11px] font-bold text-[#0c6a4d]">{group.title}</div>
                           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">

@@ -7916,6 +7916,58 @@ function createApp(db) {
     }
   });
 
+  app.get('/api/anlagenstamm_ml_pdf_prefill', async (req, res) => {
+    try {
+      const fab = String(req.query.fab || req.query.fabrikationsnummer || '').trim();
+      if (!fab) {
+        return res.status(400).json({ ok: false, error: 'Parameter fab fehlt.' });
+      }
+      ensureAnlagenstammLocalSchema(db);
+      const localRow = anlagenstammLookupByFab(db, fab);
+      const localMotors = localRow ? listMotorsForStamm(db, localRow.id) : [];
+      const creds = loadDispoWebSessionCreds();
+      const technicianId = getTechnicianId(req);
+      const base = String(creds.baseUrl || '').replace(/\/$/, '');
+      let remote = null;
+      if (base && technicianId) {
+        const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+        const url =
+          `${base}/dispo_api/api/anlagenstamm_ml_pdf_prefill.php?fab=${encodeURIComponent(fab)}` +
+          `&technician_id=${encodeURIComponent(technicianId)}`;
+        try {
+          const r = await fetch(url, {
+            headers: Object.assign(
+              { 'X-Technician-Id': String(technicianId) },
+              auth || {},
+            ),
+          });
+          remote = await r.json().catch(() => ({}));
+          if (r.ok && remote && remote.ok && Array.isArray(remote.motors) && remote.motors.length) {
+            return res.json(remote);
+          }
+        } catch (_) {
+          /* offline: lokaler Stamm */
+        }
+      }
+      if (localMotors.length) {
+        return res.json({
+          ok: true,
+          motors: localMotors,
+          note: 'Aus lokalem Anlagenstamm.',
+        });
+      }
+      if (remote && typeof remote === 'object' && remote.ok === false) {
+        return res.status(400).json(remote);
+      }
+      return res.json({
+        ok: false,
+        error: 'Keine Motorliste gefunden (PDF oder Anlagenstamm).',
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   app.post('/api/anlagenstamm_search', express.json(), async (req, res) => {
     const body = req.body || {};
     ensureAnlagenstammLocalSchema(db);

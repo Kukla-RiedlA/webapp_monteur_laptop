@@ -21833,6 +21833,63 @@
       serviceprotokollMotors = next;
     }
 
+    var spLoadMotorsBusy = false;
+    function loadSpMotorsFromMlPdf() {
+      if (spLoadMotorsBusy) return;
+      var fab = getActiveFab();
+      if (!fab) {
+        if (typeof showToast === 'function') showToast('Bitte zuerst eine Fabrikationsnummer wählen.');
+        return;
+      }
+      spLoadMotorsBusy = true;
+      if (typeof showToast === 'function') showToast('Lese Motorliste…');
+      fetch(API_BASE + '/api/anlagenstamm_ml_pdf_prefill?fab=' + encodeURIComponent(fab), {
+        headers: { 'X-Technician-Id': String(getTechId() || '') }
+      })
+        .then(function (r) {
+          return r.text().then(function (t) {
+            var d = null;
+            try { d = t ? JSON.parse(t) : null; } catch (e) {
+              throw new Error(r.status === 404
+                ? 'Motorlisten-API nicht gefunden.'
+                : 'Serverfehler beim Lesen der Motorliste (HTTP ' + r.status + ').');
+            }
+            if (!d) throw new Error('Leere Serverantwort (HTTP ' + r.status + ').');
+            return d;
+          });
+        })
+        .then(function (d) {
+          if (!d || d.ok === false) {
+            if (typeof showToast === 'function') {
+              showToast((d && d.error) ? d.error : 'Fehler beim Lesen der Motorliste.');
+            }
+            return;
+          }
+          var motors = Array.isArray(d.motors) ? d.motors : [];
+          if (!motors.length) {
+            if (typeof showToast === 'function') {
+              showToast(d.note || 'Keine Antriebe in der Motorliste erkannt.');
+            }
+            return;
+          }
+          setSpMotors(motors);
+          if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
+          notifyReactBridge(true);
+          var msg = motors.length + ' Motor(en) geladen';
+          if (d.file) msg += ' (' + d.file + ')';
+          else if (d.note) msg += ' – ' + d.note;
+          if (typeof showToast === 'function') showToast(msg);
+        })
+        .catch(function (err) {
+          if (typeof showToast === 'function') {
+            showToast('Fehler: ' + (err && err.message ? err.message : String(err)));
+          }
+        })
+        .then(function () {
+          spLoadMotorsBusy = false;
+        });
+    }
+
     function parseSpKraftaufnehmerExtra(raw) {
       if (raw == null || raw === '') return [];
       if (Array.isArray(raw)) {
@@ -24002,6 +24059,10 @@
         }
         if (action === 'openStepPicker') {
           openSpStepPickerModal();
+          return;
+        }
+        if (action === 'loadMotorsFromMlPdf') {
+          loadSpMotorsFromMlPdf();
           return;
         }
         if (action === 'resetWorkSteps') {

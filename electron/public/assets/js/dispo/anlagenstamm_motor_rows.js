@@ -94,6 +94,7 @@
     },
     { title: 'Zubehör', keys: ['anlaufart'] },
     {
+      id: 'fu',
       title: 'Frequenzumrichter',
       keys: [
         'fu_hersteller',
@@ -108,6 +109,41 @@
       ],
     },
   ];
+
+  function isFuAnlaufart(v) {
+    var s = String(v == null ? '' : v)
+      .toLowerCase()
+      .replace(/ü/g, 'u')
+      .replace(/ä/g, 'a')
+      .replace(/ö/g, 'o')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!s) return false;
+    if (s === 'fu' || s === 'fc') return true;
+    if (s.indexOf('frequenzumrichter') !== -1) return true;
+    if (s.indexOf('frequency converter') !== -1) return true;
+    return /\bfreq\b/.test(s) && /\bconv/.test(s);
+  }
+
+  function syncFuVisibility(row) {
+    if (!row) return;
+    var inp = row.querySelector('input[data-motor-key="anlaufart"]');
+    var fu = row.querySelector('.motor-row-fu-block');
+    if (!fu) return;
+    fu.style.display = isFuAnlaufart(inp && inp.value) ? '' : 'none';
+  }
+
+  function bindFuVisibility(row) {
+    if (!row || row._fuBound) return;
+    row._fuBound = true;
+    var inp = row.querySelector('input[data-motor-key="anlaufart"]');
+    if (inp) {
+      inp.addEventListener('input', function () { syncFuVisibility(row); });
+      inp.addEventListener('change', function () { syncFuVisibility(row); });
+    }
+    syncFuVisibility(row);
+  }
 
   var state = {
     containerId: 'motorRows',
@@ -187,16 +223,19 @@
     var fields = document.createElement('div');
     fields.className = 'kraftaufnehmer-row-fields';
     GROUPS.forEach(function (g) {
+      var wrap = document.createElement('div');
+      if (g.id === 'fu') wrap.className = 'motor-row-fu-block';
       var head = document.createElement('div');
       head.className = 'motor-row-group-title';
       head.textContent = g.title;
-      fields.appendChild(head);
+      wrap.appendChild(head);
       var line = document.createElement('div');
       line.className = 'kraftaufnehmer-row-line motor-row-line';
       g.keys.forEach(function (k) {
         line.appendChild(makeField(k, data[k], idx));
       });
-      fields.appendChild(line);
+      wrap.appendChild(line);
+      fields.appendChild(wrap);
     });
     row.appendChild(fields);
     if (!state.readOnly) {
@@ -215,6 +254,7 @@
       row.appendChild(actions);
     }
     container.appendChild(row);
+    bindFuVisibility(row);
     reindex();
   }
 
