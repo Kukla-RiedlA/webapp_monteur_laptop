@@ -602,34 +602,12 @@ function replaceMotorsForStamm(db, anlagenstammId, rows) {
 
 function syncProtocolMotorsToStamm(db, fab, rows) {
   const f = String(fab || '').trim();
-  if (!f || !Array.isArray(rows) || !rows.length) return;
+  if (!f || !db) return;
   const stamm = lookupByFab(db, f);
   if (!stamm || !stamm.id) return;
-  const upd = db.prepare(
-    `UPDATE anlagenstamm_motor_local SET
-      fu_hersteller = ?, fu_type = ?, fu_nennstrom = ?, fu_nennstrom_eingestellt = ?,
-      fu_max_speed = ?, fu_max_frequency = ?,
-      laststrom_calculated = ?, laststrom_fat = ?, laststrom_sat = ?,
-      updated_at = datetime('now')
-     WHERE id = ? AND anlagenstamm_id = ?`,
-  );
-  rows.forEach((r) => {
-    const mid = Number(r.anlagenstamm_motor_id || r.id || 0);
-    if (mid <= 0) return;
-    upd.run(
-      r.fu_hersteller || null,
-      r.fu_type || null,
-      r.fu_nennstrom || null,
-      r.fu_nennstrom_eingestellt || null,
-      r.fu_max_speed || null,
-      r.fu_max_frequency || null,
-      r.laststrom_calculated || null,
-      r.laststrom_fat || null,
-      r.laststrom_sat || null,
-      mid,
-      stamm.id,
-    );
-  });
+  const normalized = normalizeMotorRows({ motoren: Array.isArray(rows) ? rows : [] });
+  if (!normalized.length) return;
+  replaceMotorsForStamm(db, stamm.id, normalized);
 }
 
 /** Leere/null/Whitespace – nie bestehende Stammwerte überschreiben (Sync + saveLocal). */

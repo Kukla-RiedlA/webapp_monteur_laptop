@@ -139,6 +139,31 @@
       return payload;
     }
 
+    function motorsSignature(motors) {
+      return (motors || []).map(function (m) {
+        if (!m || typeof m !== 'object') return '';
+        return [
+          m.bezeichnung || '',
+          m.hersteller || '',
+          m.type || '',
+          m.seriennummer || '',
+          m.anlagenstammMotorId || m.anlagenstamm_motor_id || '',
+        ].join('\n');
+      }).join('||');
+    }
+
+    function keepHostMotorsIfStale(payload) {
+      if (!payload || !payload.form || Date.now() >= ignoreReactUntil || !lastReactPayload) return payload;
+      var hostForm = lastReactPayload.form || {};
+      var hostMotors = hostForm.motors;
+      if (!Array.isArray(hostMotors) || !hostMotors.length) return payload;
+      var incoming = Array.isArray(payload.form.motors) ? payload.form.motors : [];
+      if (motorsSignature(incoming) === motorsSignature(hostMotors)) return payload;
+      if (incoming.length > hostMotors.length) return payload;
+      payload.form.motors = hostMotors;
+      return payload;
+    }
+
     function rememberReactPayload(payload) {
       if (payload && typeof payload === 'object') lastReactPayload = payload;
     }
@@ -207,6 +232,7 @@
       if (data.type === 'SP_STATE_CHANGE' && data.payload) {
         if (!isActiveHost() || applying || fabSwitchPending || jobSwitchPending) return;
         keepHostWorkStepsIfStale(data.payload);
+        keepHostMotorsIfStale(data.payload);
         scheduleApplyFromReact(data.payload);
         return;
       }
@@ -246,17 +272,24 @@
 
       if (data.type === 'SP_ACTION' && data.action && host && typeof host.triggerAction === 'function') {
         if (!isActiveHost()) return;
+        var actionName = String(data.action);
+        if (actionName === 'loadMotorsFromMlPdf') {
+          cancelScheduledApply();
+          host.triggerAction(actionName);
+          return;
+        }
         if (data.payload) {
           var actionFab = reactPayloadFab(data.payload);
           var actionHostFab = hostActiveFab();
           if (!actionHostFab || !actionFab || actionFab === actionHostFab) {
             keepHostWorkStepsIfStale(data.payload);
+            keepHostMotorsIfStale(data.payload);
             applyFromReactNow(data.payload);
           }
         } else {
           flushFromReact();
         }
-        host.triggerAction(String(data.action));
+        host.triggerAction(actionName);
       }
     });
 

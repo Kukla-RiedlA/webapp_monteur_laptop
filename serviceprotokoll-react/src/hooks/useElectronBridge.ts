@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { mergeBridgePayload } from '../bridge-utils';
 import type { MeasurementRow, ServiceProtocolFormState, TestLoadValues, WorkStep } from '../types';
 
 export interface SpBridgePayload {
@@ -55,7 +56,7 @@ export function useElectronBridge(
         const incoming = data.payload;
         const jobs =
           Array.isArray(incoming.jobs) && incoming.jobs.length ? incoming.jobs : stateRef.current.jobs;
-        setState({ ...incoming, jobs });
+        setState(mergeBridgePayload(stateRef.current, { ...incoming, jobs }));
         window.setTimeout(() => {
           suppressPush.current = false;
         }, 400);

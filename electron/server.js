@@ -11396,6 +11396,30 @@ function createApp(db) {
     return false;
   }
 
+  async function persistProtocolMotorsToAnlagenstamm(body, technicianId, fab, motors) {
+    const fabKey = String(fab || '').trim();
+    const list = Array.isArray(motors) ? motors : [];
+    if (!fabKey || !list.length) return null;
+    const dbConn = monteurRuntime && monteurRuntime.db;
+    if (!dbConn) return { ok: false, error: 'Lokale Datenbank nicht bereit.' };
+    const existing = anlagenstammLookupByFab(dbConn, fabKey);
+    if (!existing || !existing.id) return null;
+    try {
+      return await performAnlagenstammSave({
+        fabrikationsnummer: fabKey,
+        motoren: list,
+        technician_id: technicianId,
+        baseUrl: body.baseUrl || body.dispoBaseUrl,
+        externalUrl: body.externalUrl,
+        internalUrl: body.internalUrl,
+        serverUsername: body.serverUsername || body.dispoUsername,
+        serverPassword: body.serverPassword ?? body.dispoPassword,
+      }, technicianId);
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  }
+
   function encodeKaExtraFromMess(m) {
     let extras = m && Array.isArray(m.waegezellen_extra) ? m.waegezellen_extra : [];
     if ((!extras || !extras.length) && m && Array.isArray(m.waegezellen) && m.waegezellen.length > 1) {
@@ -12685,13 +12709,16 @@ function createApp(db) {
           if (messSync && messSync.ok === false) {
             messSyncWarning = 'Anlagenstamm (technische Daten): ' + (messSync.error || 'lokal nicht gespeichert');
           }
-          try {
-            syncProtocolMotorsToStamm(db, fab, draftPayload.motoren || []);
-          } catch (_) { /* optional */ }
         } catch (messErr) {
           messSyncWarning = 'Anlagenstamm (technische Daten): ' + (messErr.message || 'Speichern fehlgeschlagen');
         }
       }
+      try {
+        const motorSync = await persistProtocolMotorsToAnlagenstamm(body, technicianId, fab, draftPayload.motoren);
+        if (motorSync && motorSync.ok === false) {
+          messSyncWarning = [messSyncWarning, 'Anlagenstamm (Motoren): ' + (motorSync.error || 'nicht gespeichert')].filter(Boolean).join('\n');
+        }
+      } catch (_) { /* optional */ }
 
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       writeServiceprotokollDraft(reiseDir, fab, draftPayload, localJobId, spec);
@@ -12972,13 +12999,16 @@ function createApp(db) {
             if (messSync && messSync.ok === false) {
               messSyncWarning = [messSyncWarning, 'FN ' + fab + ': Anlagenstamm (technische Daten) lokal nicht gespeichert'].filter(Boolean).join('\n');
             }
-            try {
-              syncProtocolMotorsToStamm(db, fab, draftPayload.motoren || []);
-            } catch (_) { /* optional */ }
           } catch (messErr) {
             messSyncWarning = [messSyncWarning, 'FN ' + fab + ': ' + (messErr.message || 'Anlagenstamm-Sync fehlgeschlagen')].filter(Boolean).join('\n');
           }
         }
+        try {
+          const motorSync = await persistProtocolMotorsToAnlagenstamm(body, technicianId, fab, draftPayload.motoren);
+          if (motorSync && motorSync.ok === false) {
+            messSyncWarning = [messSyncWarning, 'FN ' + fab + ': Anlagenstamm (Motoren) nicht gespeichert'].filter(Boolean).join('\n');
+          }
+        } catch (_) { /* optional */ }
         writeServiceprotokollDraft(reiseDir, fab, draftPayload, localJobId, spec);
 
         try {

@@ -21833,6 +21833,11 @@
       serviceprotokollMotors = next;
     }
 
+    var spMotorsHostLockUntil = 0;
+    function lockHostMotorsFromReact(ms) {
+      spMotorsHostLockUntil = Date.now() + (ms || 2500);
+    }
+
     var spLoadMotorsBusy = false;
     function loadSpMotorsFromMlPdf() {
       if (spLoadMotorsBusy) return;
@@ -21842,6 +21847,7 @@
         return;
       }
       spLoadMotorsBusy = true;
+      lockHostMotorsFromReact(4000);
       if (typeof showToast === 'function') showToast('Lese Motorliste…');
       fetch(API_BASE + '/api/anlagenstamm_ml_pdf_prefill?fab=' + encodeURIComponent(fab), {
         headers: { 'X-Technician-Id': String(getTechId() || '') }
@@ -21872,10 +21878,15 @@
             }
             return;
           }
-          setSpMotors(motors);
-          if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
+          lockHostMotorsFromReact(2500);
+          setSpMotors(motors, { replaceEmpty: true });
+          stashDraftInMemory(fab, { force: true });
           notifyReactBridge(true);
-          var msg = motors.length + ' Motor(en) geladen';
+          window.setTimeout(function () {
+            notifyReactBridge(true);
+          }, 80);
+          var applied = collectSpMotors();
+          var msg = applied.length + ' Motor(en) geladen';
           if (d.file) msg += ' (' + d.file + ')';
           else if (d.note) msg += ' – ' + d.note;
           if (typeof showToast === 'function') showToast(msg);
@@ -23926,8 +23937,11 @@
           applyMessMatrixToForm(measurementsRowsToMatrix(payload.measurements));
         }
       }
-      if (Array.isArray(f.motors)) {
-        setSpMotors(motorsFromReactForm(f.motors), { replaceEmpty: true });
+      if (Array.isArray(f.motors) && Date.now() >= spMotorsHostLockUntil) {
+        var incomingMotors = motorsFromReactForm(f.motors);
+        if (incomingMotors.length || !collectSpMotors().length) {
+          setSpMotors(incomingMotors, { replaceEmpty: !!incomingMotors.length });
+        }
       }
       setVal('serviceprotokollBemerkungen', f.generalRemarks);
       setVal('serviceprotokollAbschlussBemerkungen', f.closingRemarks);
