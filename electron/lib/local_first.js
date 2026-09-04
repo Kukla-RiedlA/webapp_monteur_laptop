@@ -53,6 +53,9 @@ function isPermanentSyncPushError(err) {
   ) {
     return true;
   }
+  if (/SQLSTATE\[23000\]|Integrity constraint|foreign key constraint/i.test(msg)) {
+    return true;
+  }
   if (err && Number.isFinite(err.status) && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
     if (err.status === 401 && /Token fehlt/i.test(msg)) return false;
     return true;

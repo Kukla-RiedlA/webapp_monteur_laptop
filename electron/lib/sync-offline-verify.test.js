@@ -142,6 +142,25 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
     assert.equal(isPermanentSyncPushError(err), false);
   });
 
+  it('Foreign-Key-Verletzung ist Dead-Letter (kein Retry-Loop)', () => {
+    const err = new Error(
+      'SQLSTATE[23000]: Integrity constraint violation: 1452 Cannot add or update a child row: a foreign key constraint fails (`fsm`.`kontrollwiegungsprotokoll`, CONSTRAINT `fk_kw_job` FOREIGN KEY (`job_id`) REFERENCES `jobs` (`id`) ON DELETE CASCADE)',
+    );
+    err.status = 500;
+    assert.equal(isPermanentSyncPushError(err), true);
+  });
+
+  it('Kontrollwiegung-Save und Queue mappen lokale job_id auf server_id', () => {
+    const saveStart = serverSrc.indexOf("app.post('/api/kontrollwiegungsprotokoll_save'");
+    assert.ok(saveStart >= 0);
+    const saveChunk = serverSrc.slice(saveStart, saveStart + 2500);
+    assert.ok(saveChunk.includes('applyDispoServerJobIdToPayload'), 'Save muss lokale job_id auf Dispo-ID mappen');
+    const pushStart = serverSrc.indexOf("p.entity_type === 'kontrollwiegung' && p.action === 'save'");
+    assert.ok(pushStart >= 0);
+    const pushChunk = serverSrc.slice(pushStart, pushStart + 1200);
+    assert.ok(pushChunk.includes('applyDispoServerJobIdToPayload'), 'Queue-Push muss lokale job_id auf Dispo-ID mappen');
+  });
+
   it('queueDispoProxyPending-Typen sind Teilmenge der Handler', () => {
     const queued = new Set();
     const re = /queueDispoProxyPending\(\s*(?:db(?:Conn)?\s*,\s*)?'([a-z_]+)'/g;

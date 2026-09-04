@@ -91,6 +91,7 @@ function configurePersistentDbDir() {
   }
 }
 const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore, queueAbrechnungLocalFile } = require('./lib/abrechnung-routes');
+const { applyDispoServerJobIdToPayload } = require('./lib/job-id-map');
 const { copyProtocolsToLocalAbrechnung } = require('./lib/abrechnung-protocol-copy');
 const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, pullRecentLohnLocks, ensureTables: ensureZeitschreibungTables } = require('./lib/zeitschreibung-routes');
 const { registerHinweiseRoutes } = require('./lib/hinweise-routes');
@@ -10275,6 +10276,7 @@ function createApp(db) {
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
       };
+      applyDispoServerJobIdToPayload(db, payload);
       const pdfLangs = parseProtocolLanguages(body);
       payload.languages = pdfLangs;
       payload.pdf_languages = pdfLangs;
@@ -10700,6 +10702,7 @@ function createApp(db) {
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
       };
+      applyDispoServerJobIdToPayload(db, payload);
       const pdfLangsSk = parseProtocolLanguages(body);
       payload.languages = pdfLangsSk;
       payload.pdf_languages = pdfLangsSk;
@@ -11120,6 +11123,7 @@ function createApp(db) {
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
       };
+      applyDispoServerJobIdToPayload(db, payload);
       enrichKontrollwiegungPdfPayload(payload, localJobId, technicianId);
       let reiseDir = null;
       if (Number.isFinite(localJobId) && localJobId > 0) {
@@ -20912,6 +20916,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
       handled = true;
       const protoSpec = p.entity_type === 'inbetriebnahme' ? SERVICE_LIKE_PROTOCOL.inbetriebnahme : SERVICE_LIKE_PROTOCOL.serviceprotokoll;
       const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      applyDispoServerJobIdToPayload(db, payloadRaw);
       const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       const techId =
         parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
@@ -20951,6 +20956,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
     if (p.entity_type === 'kontrollwiegung' && p.action === 'save') {
       handled = true;
       const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      applyDispoServerJobIdToPayload(db, payloadRaw);
       const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       const techId =
         parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
@@ -20985,6 +20991,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
     if (p.entity_type === 'schleppketten' && p.action === 'save') {
       handled = true;
       const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      applyDispoServerJobIdToPayload(db, payloadRaw);
       const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       const techId =
         parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;
@@ -21019,6 +21026,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
     if (p.entity_type === 'pruefzertifikat' && p.action === 'save') {
       handled = true;
       const payloadRaw = mergeLiveDispoIntoPendingPayload(JSON.parse(p.payload || '{}'), live, base);
+      applyDispoServerJobIdToPayload(db, payloadRaw);
       const tbBase = String(payloadRaw.dispoBaseUrl || payloadRaw.baseUrl || base || '').trim().replace(/\/$/, '');
       const techId =
         parseInt(String(payloadRaw.technician_id ?? technicianId), 10) || technicianId;

@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.001
+- **Kontrollwiegung-Sync:** Queue sendet die Dispo-`job_id` (`server_id`) statt der lokalen SQLite-ID – behebt FK-Fehler `fk_kw_job` beim Push.
+
 ## V 2.007.000
 - **Release:** Plattformweite Stufe 2.007; Patch-Zähler auf 000.
 - **Anlagenakte:** Öffnen hängt nicht mehr am Dateibaum; Dokumente/PROJEKTE NEU erst beim Tab. Aktenfenster unabhängig vom Hauptfenster (Schließen bleibt bedienbar).
