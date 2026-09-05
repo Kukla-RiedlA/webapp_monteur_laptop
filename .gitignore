@@ -16,5 +16,7 @@ electron/dist/
 electron/dist-build/
 electron/dist-build-*/
 electron/test-output/
+debug-*.log
+.cursor/debug-*.log
 tools/MkcertCaInstaller/bin/
 tools/MkcertCaInstaller/obj/
