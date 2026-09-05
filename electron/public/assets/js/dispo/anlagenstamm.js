@@ -1535,9 +1535,16 @@ if (anlagenForm && !anlagenReadOnly) {
   var elTech = document.getElementById('formElektronikTechnik');
   if (elMain && elTech && elTech.value && !elMain.value) elMain.value = elTech.value;
   const fd = new FormData(this);
-  this.querySelectorAll('.hinweis-create-form [name]').forEach(function (el) {
-    if (el.name) fd.delete(el.name);
-  });
+  if (window.KuklaHinweise && typeof KuklaHinweise.omitCreateFieldsFromFormData === 'function') {
+    KuklaHinweise.omitCreateFieldsFromFormData(this, fd);
+  } else {
+    this.querySelectorAll('.hinweis-create-form [name]').forEach(function (el) {
+      if (!el.name || el.name === 'fabrikationsnummer' || el.name === 'id') return;
+      fd.delete(el.name);
+    });
+  }
+  var fabElSave = document.getElementById('formFab');
+  if (fabElSave) fd.set('fabrikationsnummer', String(fabElSave.value || '').trim());
   fetch(anlagenstammApiUrl('api/anlagenstamm_save.php'), { method: 'POST', body: fd, headers: anlagenstammApiHeaders() })
     .then(r => r.json())
     .then(data => {
