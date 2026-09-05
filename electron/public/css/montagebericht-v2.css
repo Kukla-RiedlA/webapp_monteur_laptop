@@ -129,6 +129,67 @@
   color: var(--sp-text, #111827);
 }
 
+.mb-v2-fab-head {
+  margin-top: 0.45rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--kukla-primary, #0e7b5a);
+}
+
+.mb-v2-fab-wrap {
+  overflow-x: auto;
+  border: 1px solid #cfe8d1;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.mb-v2-fab-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.mb-v2-fab-table th,
+.mb-v2-fab-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid #e6eee8;
+  font-size: 0.8rem;
+  color: var(--sp-text, #111827);
+}
+
+.mb-v2-fab-table th {
+  background: #eefaf5;
+  color: var(--kukla-primary, #0e7b5a);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mb-v2-fab-table tbody tr:nth-child(even) td {
+  background: #f7fbf8;
+}
+
+.mb-v2-fab-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.mb-v2-fab-table .mb-v2-fab-fn {
+  width: 5.6rem;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.mb-v2-fab-table th:nth-child(3),
+.mb-v2-fab-table td.mb-v2-fab-split {
+  border-left: 2px solid var(--kukla-primary, #0e7b5a);
+  padding-left: 0.7rem;
+}
+
 .mb-v2-kopfdaten .kopfdaten-secondary {
   font-size: 0.85rem;
   color: var(--sp-muted, #4b5563);

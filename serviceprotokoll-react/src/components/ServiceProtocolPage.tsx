@@ -45,6 +45,8 @@ export function ServiceProtocolPage() {
   const displayLang = uiLang;
   const protocolKind = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('kind') === 'ibn' ? 'ibn' : 'service';
   const titleKey = protocolKind === 'ibn' ? 'titleIbn' : 'title';
+  const plantTypeNorm = String(form.plantType || '').toUpperCase().replace(/\s+/g, '');
+  const vmaxIsBehaelter = /^D-?DW(?:$|[^A-Z])/.test(plantTypeNorm) || /V-?DG-?1(?:$|[^0-9])/.test(plantTypeNorm);
   const [pendingFab, setPendingFab] = useState<string | null>(null);
   const activeFabVisual = pendingFab || form.activeFab || '';
 
@@ -361,7 +363,7 @@ export function ServiceProtocolPage() {
                     onChange={(e) => patchForm({ qmax: e.target.value })}
                   />
                   <TextInput
-                    label="v max"
+                    label={vmaxIsBehaelter ? t(uiLang, 'behaelterNenninhalt') : 'v max'}
                     value={form.vmax || ''}
                     onChange={(e) => patchForm({ vmax: e.target.value })}
                     placeholder={t(uiLang, 'vmaxPh')}
@@ -557,7 +559,22 @@ export function ServiceProtocolPage() {
             />
           </SectionCard>
 
-          <SectionCard number={6} title={t(uiLang, 'workSteps')} icon="ClipboardCheck">
+          <SectionCard
+            number={6}
+            title={t(uiLang, 'workSteps')}
+            icon="ClipboardCheck"
+            headerExtra={
+              <button
+                type="button"
+                className="inline-flex h-[32px] max-w-[14.5rem] items-center justify-center rounded-lg border border-kukla-border bg-white px-2 text-[11px] font-semibold leading-tight text-[#0c6a4d] hover:bg-kukla-mint"
+                aria-label={t(uiLang, 'copyStepsFromType')}
+                title={t(uiLang, 'copyStepsFromTypeTitle')}
+                onClick={() => sendAction('copyWorkStepsFromPreviousType')}
+              >
+                {t(uiLang, 'copyStepsFromType')}
+              </button>
+            }
+          >
             <WorkStepsTable
               steps={workSteps}
               displayLang={displayLang}

@@ -20,6 +20,10 @@ const {
   writeConflictCopy,
   writePayloadConflictCopy,
   mergeByFabStores,
+  mergeFlatProtocolStores,
+  hasRealByFab,
+  draftDataImageCount,
+  draftTimestampNewer,
   resolveMonteurDraftJsonPath,
   MONTEUR_DRAFT_BASENAMES,
   DRAFT_JSON_ENDPOINTS,
@@ -299,8 +303,15 @@ function registerMultiDeviceRoutes(deps) {
           typeof remotePayload === 'object' &&
           !isEmptyMonteurDraftPayload(remotePayload)
         ) {
-          const merged = mergeByFabStores(local.payload, remotePayload);
-          local.payload = merged.payload;
+          if (hasRealByFab(local.payload) || hasRealByFab(remotePayload)) {
+            const merged = mergeByFabStores(local.payload, remotePayload);
+            local.payload = merged.payload;
+          } else {
+            const merged = mergeFlatProtocolStores(local.payload, remotePayload);
+            if (draftDataImageCount(merged) > draftDataImageCount(local.payload)) {
+              local.payload = merged;
+            }
+          }
         }
         if (remoteRev !== baseRevision) {
           console.warn(
@@ -381,7 +392,10 @@ function registerMultiDeviceRoutes(deps) {
             'remote=',
             remoteRev,
           );
-          const mergedConflict = mergeByFabStores(local.payload, stripDraftMeta(remotePayload));
+          const mergedConflict =
+            hasRealByFab(local.payload) || hasRealByFab(stripDraftMeta(remotePayload))
+              ? mergeByFabStores(local.payload, stripDraftMeta(remotePayload))
+              : { payload: mergeFlatProtocolStores(local.payload, stripDraftMeta(remotePayload)) };
           local.payload = mergedConflict.payload;
           const retry = await postWithBase(remoteRev);
           r = retry.r;
@@ -495,9 +509,7 @@ function registerMultiDeviceRoutes(deps) {
       const local = readDraftState(opts);
       const localEmpty = isEmptyMonteurDraftPayload(local.payload);
       const remoteTs = data.server_updated_at || null;
-      const hasByFab =
-        (local.payload && local.payload.byFab && typeof local.payload.byFab === 'object') ||
-        (payload && payload.byFab && typeof payload.byFab === 'object');
+      const hasByFab = hasRealByFab(local.payload) || hasRealByFab(payload);
 
       if (remoteEmpty) {
         if (localEmpty) {
@@ -540,6 +552,16 @@ function registerMultiDeviceRoutes(deps) {
             local_newer: true,
           };
         }
+      }
+      const locRev = parseInt(local.revision, 10) || 0;
+      const remImgs = draftDataImageCount(payload);
+      const locImgs = draftDataImageCount(local.payload);
+      const remNewer = remoteRev > locRev || draftTimestampNewer(remoteTs, local.server_updated_at);
+      if (!hasByFab && (remImgs > locImgs || remNewer)) {
+        const mergedFlat = mergeFlatProtocolStores(local.payload, payload);
+        const toWrite = remNewer ? payload : mergedFlat;
+        writeDraftState(opts, toWrite, Math.max(locRev, remoteRev), remNewer ? remoteTs : local.server_updated_at || remoteTs);
+        return { ok: true, revision: Math.max(locRev, remoteRev), store: toWrite, replaced: remNewer, merged: !remNewer };
       }
       return { ok: true, skipped: true, local_newer: true, revision: local.revision };
     } catch (e) {

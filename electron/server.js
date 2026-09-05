@@ -285,6 +285,10 @@ const {
   finalizeAnlagenstammSyncRun,
 } = require('./lib/anlagenstamm-local');
 const {
+  anlagenstammTypeHasBehaelterNenninhalt,
+  anlagenstammVmaxValueFromRow,
+} = require('./lib/anlagenstamm-type');
+const {
   readCachedProjekteNeuFile,
   writeCachedProjekteNeuFile,
   readCachedProjekteNeuThumb,
@@ -306,6 +310,7 @@ const JOB_FAB_STAMM_KEYS = [
   'type',
   'leistung',
   'nenngeschwindigkeit',
+  'behaelter_nenninhalt',
   'kraftaufnehmer',
   'kraftaufnehmer_extra',
   'dms_nr',
@@ -1461,6 +1466,35 @@ function fingerprintDispoBaseForRuntime(urlRaw) {
 
 /** Wird in createApp auf multiDeviceApi.pushJsonDraft gesetzt (pending protocol_draft). */
 let protocolDraftPushImpl = null;
+
+const SERVICE_LIKE_PROTOCOL = {
+  serviceprotokoll: {
+    routeKey: 'serviceprotokoll',
+    basename: 'serviceprotokoll.json',
+    entityType: 'serviceprotokoll',
+    draftPhp: 'serviceprotokoll_draft.php',
+    savePhp: 'serviceprotokoll_save.php',
+    saveAllPhp: 'serviceprotokoll_save_all.php',
+    pdfPhp: 'serviceprotokoll_pdf.php',
+    pdfPrefix: 'Serviceprotokoll',
+    titleDe: 'Serviceprotokoll',
+    titleEn: 'Service protocol',
+    saveError: 'Serviceprotokoll konnte nicht gespeichert werden.',
+  },
+  inbetriebnahme: {
+    routeKey: 'inbetriebnahme',
+    basename: 'inbetriebnahmeprotokoll.json',
+    entityType: 'inbetriebnahme',
+    draftPhp: 'inbetriebnahme_draft.php',
+    savePhp: 'inbetriebnahme_save.php',
+    saveAllPhp: 'inbetriebnahme_save_all.php',
+    pdfPhp: 'inbetriebnahme_pdf.php',
+    pdfPrefix: 'Inbetriebnahmeprotokoll',
+    titleDe: 'Inbetriebnahme Protokoll',
+    titleEn: 'Commissioning report',
+    saveError: 'Inbetriebnahme-Protokoll konnte nicht gespeichert werden.',
+  },
+};
 
 function createApp(db) {
   const app = express();
@@ -9317,6 +9351,7 @@ function createApp(db) {
           kopf = {
             kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
             kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
+            kopf_vmax: anlagenstammVmaxValueFromRow(row),
             kopf_type: anlagenType,
             kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
             mess_waegezelle_type: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
@@ -11337,35 +11372,6 @@ function createApp(db) {
     }
   });
 
-  const SERVICE_LIKE_PROTOCOL = {
-    serviceprotokoll: {
-      routeKey: 'serviceprotokoll',
-      basename: 'serviceprotokoll.json',
-      entityType: 'serviceprotokoll',
-      draftPhp: 'serviceprotokoll_draft.php',
-      savePhp: 'serviceprotokoll_save.php',
-      saveAllPhp: 'serviceprotokoll_save_all.php',
-      pdfPhp: 'serviceprotokoll_pdf.php',
-      pdfPrefix: 'Serviceprotokoll',
-      titleDe: 'Serviceprotokoll',
-      titleEn: 'Service protocol',
-      saveError: 'Serviceprotokoll konnte nicht gespeichert werden.',
-    },
-    inbetriebnahme: {
-      routeKey: 'inbetriebnahme',
-      basename: 'inbetriebnahmeprotokoll.json',
-      entityType: 'inbetriebnahme',
-      draftPhp: 'inbetriebnahme_draft.php',
-      savePhp: 'inbetriebnahme_save.php',
-      saveAllPhp: 'inbetriebnahme_save_all.php',
-      pdfPhp: 'inbetriebnahme_pdf.php',
-      pdfPrefix: 'Inbetriebnahmeprotokoll',
-      titleDe: 'Inbetriebnahme Protokoll',
-      titleEn: 'Commissioning report',
-      saveError: 'Inbetriebnahme-Protokoll konnte nicht gespeichert werden.',
-    },
-  };
-
   function serviceLikeSpecFromArg(spec) {
     if (spec && spec.basename) return spec;
     if (spec === 'inbetriebnahme' || spec === 'ibn') return SERVICE_LIKE_PROTOCOL.inbetriebnahme;
@@ -11624,7 +11630,13 @@ function createApp(db) {
     if (dwcVal) partial.elektronik = dwcVal;
     if (posVal) partial.position = posVal;
     if (qmaxVal) partial.leistung = qmaxVal;
-    if (vmaxVal) partial.nenngeschwindigkeit = vmaxVal;
+    if (vmaxVal) {
+      if (anlagenstammTypeHasBehaelterNenninhalt(plantTypeVal)) {
+        partial.behaelter_nenninhalt = vmaxVal;
+      } else {
+        partial.nenngeschwindigkeit = vmaxVal;
+      }
+    }
     if (plantTypeVal) partial.type = plantTypeVal;
     if (projektVal) partial.projekt = projektVal;
     const dmsPosVal = String(
@@ -16347,10 +16359,13 @@ function createApp(db) {
                     pnTreeSync.total_count || 0,
                   );
                 }
-                await dbLock.runWithDbLock(async () => {
-                  finalizeAnlagenstammSyncRun(db);
-                  save();
-                });
+                const bothSkipped = !!(syncResult.skipped && pnTreeSync.skipped);
+                if (!bothSkipped) {
+                  await dbLock.runWithDbLock(async () => {
+                    finalizeAnlagenstammSyncRun(db);
+                    save();
+                  });
+                }
               } else if (pnTreeSync._notFound) {
                 console.warn(
                   '[sync_pull] anlagenstamm_pn_tree: DB-Export nicht verfügbar (Server-Update / anlagenstamm_pn_tree_export_chunk.php). Kein Dateisystem-Fallback im Sync.',
@@ -16465,10 +16480,13 @@ function createApp(db) {
             { dbLock, save },
           );
           if (pnTreeSync.ok) {
-            await dbLock.runWithDbLock(async () => {
-              finalizeAnlagenstammSyncRun(db);
-              save();
-            });
+            const bothSkipped = !!(syncResult.skipped && pnTreeSync.skipped);
+            if (!bothSkipped) {
+              await dbLock.runWithDbLock(async () => {
+                finalizeAnlagenstammSyncRun(db);
+                save();
+              });
+            }
             console.log(
               '[anlagenstamm_db_sync] anlagenstamm_pn_tree:',
               pnTreeSync.written || 0,

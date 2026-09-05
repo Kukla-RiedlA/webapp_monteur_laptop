@@ -103,6 +103,69 @@ function fileUrl(p) {
   return 'file://' + s;
 }
 
+function itemX(it) {
+  return it && it.transform ? it.transform[4] : 0;
+}
+function itemY(it) {
+  return it && it.transform ? it.transform[5] : 0;
+}
+
+async function assertFnTypeSplitLayout() {
+  const pdfBytes = await generateMontageberichtPdfBuffer(
+    {
+      kopfdaten: {
+        kunde: 'IPS Makina',
+        projekt: 'Aksaray',
+        datum: '31.08.2026 - 06.09.2026',
+        geliefertUeber: 'IPS Makina Tuerkei',
+        servicetechniker: 'Riedl Alois',
+        ansprechperson: 'Goeksel Oezkan\nAlois Riedl',
+      },
+      tableRows: [
+        { fabrikationsnummer: '12304', type: 'E-DBW-AL-800/2800' },
+        { fabrikationsnummer: '12305', type: 'E-K-DBW-A-400/ASG-800' },
+        { fabrikationsnummer: '12306', type: 'TYPE-C' },
+        { fabrikationsnummer: '12307', type: 'TYPE-D' },
+      ],
+      grundDesEinsatzes: 'Split-Layout-Test',
+    },
+    { lang: 'de' },
+  );
+  fs.writeFileSync(path.join(OUT_DIR, 'montagebericht-fn-type-split.pdf'), pdfBytes);
+
+  let pdfjs;
+  try {
+    pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  } catch (e) {
+    console.warn('pdfjs-dist nicht ladbar, FN/Type-Layout-Check uebersprungen:', e.message);
+    return;
+  }
+  try {
+    pdfjs.GlobalWorkerOptions.workerSrc = false;
+  } catch (_) { /* ignore */ }
+  const pdf = await pdfjs.getDocument({
+    data: new Uint8Array(pdfBytes),
+    disableWorker: true,
+  }).promise;
+  const page = await pdf.getPage(1);
+  const tc = await page.getTextContent();
+  const items = (tc.items || []).filter((it) => it && it.str);
+  const joined = items.map((it) => it.str).join(' ');
+  assert(joined.indexOf('12304, 12305') < 0, 'PDF: FN noch als Kommaliste');
+  assert(joined.indexOf('Anlagen') >= 0, 'PDF: Titel Anlagen fehlt');
+  assert(joined.indexOf('Fabr.-Nr.') >= 0, 'PDF: Spalte Fabr.-Nr. fehlt');
+  const fnA = items.find((it) => it.str === '12304');
+  const fnB = items.find((it) => it.str === '12305');
+  const typeA = items.find((it) => String(it.str || '').indexOf('E-DBW-AL') >= 0);
+  const typeB = items.find((it) => String(it.str || '').indexOf('E-K-DBW') >= 0);
+  assert(fnA && fnB, 'PDF: FN 12304/12305 nicht gefunden');
+  assert(typeA && typeB, 'PDF: Type-Texte nicht gefunden');
+  assert(Math.abs(itemY(fnA) - itemY(fnB)) < 3, 'PDF: 12304 und 12305 nicht in derselben Zeile');
+  assert(itemX(fnA) < itemX(fnB), 'PDF: 12305 nicht rechts von 12304');
+  assert(itemX(fnA) < itemX(typeA), 'PDF: Type nicht rechts von FN 12304');
+  assert(itemX(fnB) < itemX(typeB), 'PDF: Type nicht rechts von FN 12305');
+}
+
 async function assertDistinctStyleFonts(pdfBytes) {
   let pdfjs;
   try {
@@ -203,6 +266,8 @@ async function run() {
   console.log('OK: Parser-Fixtures');
 
   if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
+  await assertFnTypeSplitLayout();
+  console.log('OK: FN/Type-Zweispalter wie Arbeitsnachweis');
   fs.writeFileSync(
     OUT_RUNS,
     JSON.stringify(
@@ -244,6 +309,9 @@ async function run() {
       'nächste',
       'LangerSatz',
       'Montagebericht',
+      'Anlagen',
+      'Fabr.-Nr.',
+      'Waage',
     ];
     const missing = required.filter((t) => pdfText.indexOf(t) < 0);
     if (missing.length) {

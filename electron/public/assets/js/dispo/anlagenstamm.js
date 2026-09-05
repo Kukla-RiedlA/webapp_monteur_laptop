@@ -36,6 +36,22 @@ const ANLAGEN_EXTRAS_CHUNK_SIZE = 50;
 const SORT_COLUMN_KEYS = ['fabrikationsnummer','type','leistung','ted_mechanik','pn_root_name','nenngeschwindigkeit','kraftaufnehmer','dms_nr','tacho','elektronik','material','position','aktueller_kunde','letzter_besuch','geliefert_ueber','projekt','bemerkungen'];
 /** Aktuelle Sortierung: { col: number, dir: 1 | -1 } oder null */
 let currentSort = null;
+
+function anlagenstammTypeHasBehaelterNenninhalt(type) {
+  var t = String(type || '').toUpperCase().replace(/\s+/g, '');
+  if (!t) return false;
+  if (/^D-?DW(?:$|[^A-Z])/.test(t)) return true;
+  if (/V-?DG-?1(?:$|[^0-9])/.test(t)) return true;
+  return false;
+}
+
+function anlagenstammSyncBehaelterNenninhaltVisibility() {
+  var typeEl = document.getElementById('formType');
+  var wrap = document.getElementById('formBehaelterNenninhaltWrap');
+  if (!wrap) return;
+  wrap.hidden = !anlagenstammTypeHasBehaelterNenninhalt(typeEl && typeEl.value);
+}
+
 const pnTreeCache = new Map();
 const FILTER_PARAM_BY_COL = [
   'filter_fn',
@@ -1386,6 +1402,7 @@ function fillFormFromRow(row) {
   set('formType', row.type || '');
   set('formLeistung', row.leistung || '');
   set('formNenngeschwindigkeit', row.nenngeschwindigkeit || '');
+  set('formBehaelterNenninhalt', row.behaelter_nenninhalt || '');
   set('formMaterial', row.material || '');
   set('formTacho', row.tacho || '');
   set('formElektronik', row.elektronik || '');
@@ -1416,6 +1433,14 @@ function fillFormFromRow(row) {
       rows: Array.isArray(row.motoren) ? row.motoren : []
     });
   }
+  anlagenstammSyncBehaelterNenninhaltVisibility();
+}
+
+var formTypeElBind = document.getElementById('formType');
+if (formTypeElBind && formTypeElBind.getAttribute('data-behaelter-bound') !== '1') {
+  formTypeElBind.setAttribute('data-behaelter-bound', '1');
+  formTypeElBind.addEventListener('input', anlagenstammSyncBehaelterNenninhaltVisibility);
+  formTypeElBind.addEventListener('change', anlagenstammSyncBehaelterNenninhaltVisibility);
 }
 
 function openFormModal() {
@@ -1556,6 +1581,7 @@ if (anlagenForm && !anlagenReadOnly) {
             type: g('type'),
             leistung: g('leistung'),
             nenngeschwindigkeit: g('nenngeschwindigkeit'),
+            behaelter_nenninhalt: g('behaelter_nenninhalt'),
             elektronik: g('elektronik'),
             position: g('position'),
             projekt: g('projekt'),

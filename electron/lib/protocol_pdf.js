@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { htmlToStyledBlocks, styledBlocksToPlain } = require('./html_rich_text');
 const { kuklaPdfColors } = require('./protocol_pdf_layout');
+const { anlagenstammVmaxLabel, anlagenstammTypeHasBehaelterNenninhalt } = require('./anlagenstamm-type');
 
 /**
  * Pflicht für neue Dokumenttypen in dieser Datei:
@@ -894,8 +895,20 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         row: 1,
         col: 1,
         span: 1,
-        label: 'Qmax',
-        value: payload.kopf_qmax || '',
+        label: (function () {
+          const plantType = payload.kopf_type || payload.type || '';
+          if (anlagenstammTypeHasBehaelterNenninhalt(plantType) || payload.kopf_vmax) {
+            return 'Qmax / ' + anlagenstammVmaxLabel(plantType, de ? 'de' : 'en');
+          }
+          return 'Qmax';
+        })(),
+        value: (function () {
+          const plantType = payload.kopf_type || payload.type || '';
+          if (anlagenstammTypeHasBehaelterNenninhalt(plantType) || payload.kopf_vmax) {
+            return [payload.kopf_qmax || '', payload.kopf_vmax || ''].filter(Boolean).join('  ·  ');
+          }
+          return payload.kopf_qmax || '';
+        })(),
       },
       {
         row: 1,
@@ -2737,7 +2750,9 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     geliefert: de ? 'geliefert über' : 'Delivered via',
     projekt: de ? 'Projekt / project' : 'Project',
     datum: de ? 'Datum / date' : 'Date',
-    fn: 'FN',
+    anlagen: de ? 'Anlagen' : 'Equipment',
+    fabCol: de ? 'Fabr.-Nr.' : 'Serial No.',
+    typeCol: de ? 'Typ / Type' : 'Type',
     tech: de ? 'Servicetechniker' : 'Service engineer',
     contact: de ? 'Ansprechperson' : 'Contact person',
     grund: de ? 'Grund des Einsatzes' : 'Purpose of visit',
@@ -2762,11 +2777,13 @@ async function generateMontageberichtPdfBuffer(payload, options) {
   )
     .map((s) => S(s).trim())
     .filter(Boolean);
-  const metaBlockH = 118 + Math.max(0, ansprechLines.length - 1) * 12;
-  const fnList = tableRows
-    .map((r) => String((r && r.fabrikationsnummer) || '').trim())
-    .filter(Boolean)
-    .join(', ');
+  const metaBlockH = 92 + Math.max(0, ansprechLines.length - 1) * 12;
+  const fabRows = tableRows
+    .map((r) => ({
+      fn: String((r && (r.fabrikationsnummer || r.fn)) || '').trim(),
+      type: String((r && (r.type || r.typ)) || '').trim(),
+    }))
+    .filter((r) => r.fn || r.type);
 
   let grundPlain = String((payload && payload.grundDesEinsatzes) || '').trim();
   const freitext = String((payload && payload.freitext) || '').trim();
@@ -2890,7 +2907,6 @@ async function generateMontageberichtPdfBuffer(payload, options) {
       [
         [L.kunde, kunde],
         [L.projekt, projekt],
-        [L.fn, fnList],
         [L.datum, datumVal || '–'],
       ],
       [
@@ -3067,7 +3083,107 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     return headerH + Math.max(firstContentH || 36, 36);
   }
 
+  function drawFnTypeTable() {
+    if (!fabRows.length) return;
+    const colFn = 58;
+    const colType = tableInnerW / 2 - colFn;
+    const fabWidths = [colFn, colType, colFn, colType];
+    const midX = marginX + colFn + colType;
+    const headH = 16;
+    if (y - (14 + headH + 18) < contentBottom) newPage();
+    page.drawText(S(L.anlagen), {
+      x: marginX,
+      y,
+      size: 9,
+      font: fontBold,
+      color: greenDark,
+    });
+    y -= 14;
+    function drawFabHead() {
+      page.drawRectangle({
+        x: marginX,
+        y: y - headH,
+        width: tableInnerW,
+        height: headH,
+        color: greenHeader,
+      });
+      let x = marginX;
+      [L.fabCol, L.typeCol, L.fabCol, L.typeCol].forEach((hTxt, i) => {
+        page.drawText(S(hTxt), {
+          x: x + 3,
+          y: y - 12,
+          size: 7,
+          font: fontBold,
+          color: greenDark,
+        });
+        x += fabWidths[i];
+      });
+      y -= headH;
+    }
+    function drawFabSplit(topY, botY) {
+      page.drawLine({
+        start: { x: midX, y: topY },
+        end: { x: midX, y: botY },
+        thickness: 1.2,
+        color: green,
+      });
+    }
+    drawFabHead();
+    drawFabSplit(y + headH, y);
+    for (let i = 0; i < fabRows.length; i += 2) {
+      const a = fabRows[i];
+      const b = fabRows[i + 1] || { fn: '', type: '' };
+      const aFn = wrapPdfPlain(fontBold, S(a.fn), 8, colFn - 8);
+      const bFn = wrapPdfPlain(fontBold, S(b.fn), 8, colFn - 8);
+      const aType = wrapPdfPlain(font, S(a.type), 8, colType - 8);
+      const bType = wrapPdfPlain(font, S(b.type), 8, colType - 8);
+      const lines = Math.max(aFn.length, bFn.length, aType.length, bType.length, 1);
+      const h = Math.max(16, lines * 10 + 6);
+      if (y - h - 2 < contentBottom) {
+        newPage();
+        drawFabHead();
+        drawFabSplit(y + headH, y);
+      }
+      if ((i / 2) % 2 === 1) {
+        page.drawRectangle({
+          x: marginX,
+          y: y - h,
+          width: tableInnerW,
+          height: h,
+          color: greenHeader,
+        });
+      }
+      page.drawLine({
+        start: { x: marginX, y: y - h },
+        end: { x: marginX + tableInnerW, y: y - h },
+        thickness: 0.3,
+        color: lineGray,
+      });
+      drawFabSplit(y, y - h);
+      function drawCellLines(arr, x, useFont) {
+        arr.forEach((ln, li) => {
+          const t = String(ln || '').trim();
+          if (!t) return;
+          page.drawText(t, {
+            x,
+            y: y - 11 - li * 10,
+            size: 8,
+            font: useFont,
+            color: grayText,
+          });
+        });
+      }
+      drawCellLines(aFn, marginX + 4, fontBold);
+      drawCellLines(aType, marginX + colFn + 4, font);
+      drawCellLines(bFn, midX + 6, fontBold);
+      drawCellLines(bType, midX + colFn + 6, font);
+      y -= h;
+    }
+    y -= 12;
+  }
+
   newPage();
+  drawFnTypeTable();
   for (let qi = 0; qi < queue.length; qi++) {
     const item = queue[qi];
     const h = estimateItemHeight(item);

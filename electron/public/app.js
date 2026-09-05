@@ -1,6 +1,14 @@
 (function () {
   const API_BASE = typeof monteurApp !== 'undefined' ? monteurApp.apiBase : 'http://127.0.0.1:39678';
 
+  function kuklaAnlagenstammTypeHasBehaelterNenninhalt(type) {
+    var t = String(type || '').toUpperCase().replace(/\s+/g, '');
+    if (!t) return false;
+    if (/^D-?DW(?:$|[^A-Z])/.test(t)) return true;
+    if (/V-?DG-?1(?:$|[^0-9])/.test(t)) return true;
+    return false;
+  }
+
   function startHangHeartbeat() {
     if (typeof monteurApp === 'undefined' || typeof monteurApp.hangHeartbeat !== 'function') return;
     function beat() {
@@ -1007,9 +1015,10 @@
     var dl = document.getElementById('settings-tech-status-dl');
     var tbody = document.getElementById('settings-tech-pending-body');
     if (!dl && !tbody) return;
+    var pendingN = (data.pending_events != null ? data.pending_events : data.pending_changes) || 0;
     var errText =
       data.pending_last_error ||
-      (data.last_sync_push && data.last_sync_push.status === 'failed'
+      (data.last_sync_push && data.last_sync_push.status === 'failed' && pendingN > 0
         ? data.last_sync_push.error || data.last_sync_push.message
         : '') ||
       (data.last_sync_pull && data.last_sync_pull.status === 'failed'
@@ -1031,7 +1040,7 @@
         ['Uploads ausstehend', data.pending_uploads != null ? data.pending_uploads : 0],
         ['Dead-Letter (aufgegeben)', data.pending_failed_count != null ? data.pending_failed_count : 0],
         ['Letzter Queue-Fehler', data.pending_last_error || '—', !!data.pending_last_error],
-        ['Letzter Push', formatTechStatusJob(data.last_sync_push), data.last_sync_push && data.last_sync_push.status === 'failed'],
+        ['Letzter Push', formatTechStatusJob(data.last_sync_push), data.last_sync_push && data.last_sync_push.status === 'failed' && pendingN > 0],
         ['Letzter Pull', formatTechStatusJob(data.last_sync_pull), data.last_sync_pull && data.last_sync_pull.status === 'failed'],
         ['Kalender zuletzt', data.calendar_cache_synced_at || '—'],
         ['Jobs zuletzt', data.last_jobs_sync || '—'],
@@ -1144,6 +1153,7 @@
         if (data.pending_last_error) {
           detailParts.push('Letzter Fehler: ' + data.pending_last_error);
         } else if (
+          pendingN > 0 &&
           data.last_sync_push &&
           data.last_sync_push.status === 'failed' &&
           (data.last_sync_push.error || data.last_sync_push.message)
@@ -4011,6 +4021,7 @@
       type: '',
       leistung: '',
       nenngeschwindigkeit: '',
+      behaelter_nenninhalt: '',
       kraftaufnehmer: '',
       dms_nr: '',
       dms_position: '',
@@ -4051,6 +4062,7 @@
           type: sanitizeLeistungField(prev.type),
           leistung: sanitizeLeistungField(prev.leistung),
           nenngeschwindigkeit: sanitizeLeistungField(prev.nenngeschwindigkeit),
+          behaelter_nenninhalt: sanitizeLeistungField(prev.behaelter_nenninhalt),
           kraftaufnehmer: sanitizeLeistungField(prev.kraftaufnehmer),
           dms_nr: sanitizeLeistungField(prev.dms_nr),
           tacho: sanitizeLeistungField(prev.tacho),
@@ -4140,6 +4152,7 @@
               type: '',
               leistung: '',
               nenngeschwindigkeit: '',
+              behaelter_nenninhalt: '',
               kraftaufnehmer: '',
               dms_nr: '',
               dms_position: '',
@@ -4178,6 +4191,7 @@
           type: get(r, ['type', 'Type', 'typ', 'Typ']),
           leistung: get(r, ['leistung', 'Leistung']),
           nenngeschwindigkeit: get(r, ['nenngeschwindigkeit', 'Nenngeschwindigkeit']),
+          behaelter_nenninhalt: get(r, ['behaelter_nenninhalt', 'Behälter Nenninhalt']),
           kraftaufnehmer: get(r, ['kraftaufnehmer', 'Kraftaufnehmer']),
           dms_nr: get(r, ['dms_nr', 'DMS Nr.', 'dms_nr']),
           dms_position: get(r, ['dms_position', 'DMS Position', 'dmsPosition']),
@@ -4192,7 +4206,7 @@
       });
     }
     if (leistungRows.length === 0) {
-      leistungRows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', kraftaufnehmer: '', dms_nr: '', dms_position: '', tacho: '', elektronik: '', material: '', position: '', geliefert_ueber: '', projekt: '', bemerkungen: '' });
+      leistungRows.push({ fabrikationsnummer: '', type: '', leistung: '', nenngeschwindigkeit: '', behaelter_nenninhalt: '', kraftaufnehmer: '', dms_nr: '', dms_position: '', tacho: '', elektronik: '', material: '', position: '', geliefert_ueber: '', projekt: '', bemerkungen: '' });
     }
     return sortLeistungRowsByFab(leistungRows);
   }
@@ -4203,7 +4217,7 @@
   }
 
   var LEISTUNG_STAMM_HYDRATE_KEYS = [
-    'type', 'leistung', 'nenngeschwindigkeit', 'kraftaufnehmer', 'dms_nr', 'tacho',
+    'type', 'leistung', 'nenngeschwindigkeit', 'behaelter_nenninhalt', 'kraftaufnehmer', 'dms_nr', 'tacho',
     'elektronik', 'material', 'position', 'geliefert_ueber', 'projekt', 'bemerkungen',
   ];
 
@@ -4316,6 +4330,7 @@
       type: sanitizeLeistungField(fields.type),
       leistung: sanitizeLeistungField(fields.leistung),
       nenngeschwindigkeit: sanitizeLeistungField(fields.nenngeschwindigkeit),
+      behaelter_nenninhalt: sanitizeLeistungField(fields.behaelter_nenninhalt),
       kraftaufnehmer: sanitizeLeistungField(fields.kraftaufnehmer),
       dms_nr: sanitizeLeistungField(fields.dms_nr),
       dms_position: sanitizeLeistungField(fields.dms_position),
@@ -4361,7 +4376,7 @@
   var anlageDetailOpenToken = 0;
 
   var ANLAGE_DETAIL_STAMM_KEYS = [
-    'type', 'leistung', 'nenngeschwindigkeit', 'kraftaufnehmer', 'dms_nr', 'dms_position',
+    'type', 'leistung', 'nenngeschwindigkeit', 'behaelter_nenninhalt', 'kraftaufnehmer', 'dms_nr', 'dms_position',
     'tacho', 'elektronik', 'material', 'position', 'geliefert_ueber', 'projekt', 'bemerkungen'
   ];
 
@@ -4391,6 +4406,7 @@
       type: sanitizeLeistungField(row.type),
       leistung: sanitizeLeistungField(row.leistung),
       nenngeschwindigkeit: sanitizeLeistungField(row.nenngeschwindigkeit),
+      behaelter_nenninhalt: sanitizeLeistungField(row.behaelter_nenninhalt),
       kraftaufnehmer: sanitizeLeistungField(row.kraftaufnehmer),
       material: sanitizeLeistungField(row.material),
       tacho: sanitizeLeistungField(row.tacho),
@@ -5312,6 +5328,7 @@
         setFromStammIfEmpty('anlageDetailType', st.type);
         setFromStammIfEmpty('anlageDetailLeistung', st.leistung);
         setFromStammIfEmpty('anlageDetailNenngeschwindigkeit', st.nenngeschwindigkeit);
+        setFromStammIfEmpty('anlageDetailBehaelterNenninhalt', st.behaelter_nenninhalt);
         setFromStammIfEmpty('anlageDetailKraftaufnehmer', st.kraftaufnehmer);
         setFromStammIfEmpty('anlageDetailDmsNr', st.dms_nr);
         setFromStammIfEmpty('anlageDetailTacho', st.tacho);
@@ -5373,6 +5390,8 @@
     modalHtml += '<dt>Type</dt><dd><input type="text" id="anlageDetailType" value="' + attr(row.type) + '"></dd>';
     modalHtml += '<dt>Leistung</dt><dd><input type="text" id="anlageDetailLeistung" value="' + attr(row.leistung) + '"></dd>';
     modalHtml += '<dt>Nenngeschwindigkeit</dt><dd><input type="text" id="anlageDetailNenngeschwindigkeit" value="' + attr(row.nenngeschwindigkeit) + '"></dd>';
+    var behaelterHidden = kuklaAnlagenstammTypeHasBehaelterNenninhalt(row.type) ? '' : ' hidden';
+    modalHtml += '<dt id="anlageDetailBehaelterNenninhaltDt"' + behaelterHidden + '>Behälter Nenninhalt</dt><dd id="anlageDetailBehaelterNenninhaltDd"' + behaelterHidden + '><input type="text" id="anlageDetailBehaelterNenninhalt" value="' + attr(row.behaelter_nenninhalt) + '"></dd>';
     modalHtml += '<dt>Kraftaufnehmer</dt><dd><input type="text" id="anlageDetailKraftaufnehmer" value="' + attr(row.kraftaufnehmer) + '"></dd>';
     modalHtml += '<dt>DMS Nr.</dt><dd><input type="text" id="anlageDetailDmsNr" value="' + attr(row.dms_nr) + '"></dd>';
     modalHtml += '<dt>Tacho</dt><dd><input type="text" id="anlageDetailTacho" value="' + attr(row.tacho) + '"></dd>';
@@ -5431,6 +5450,7 @@
         ['anlageDetailType', row.type],
         ['anlageDetailLeistung', row.leistung],
         ['anlageDetailNenngeschwindigkeit', row.nenngeschwindigkeit],
+        ['anlageDetailBehaelterNenninhalt', row.behaelter_nenninhalt],
         ['anlageDetailKraftaufnehmer', row.kraftaufnehmer],
         ['anlageDetailDmsNr', row.dms_nr],
         ['anlageDetailTacho', row.tacho],
@@ -5457,6 +5477,20 @@
     modal.addEventListener('click', function (e) {
       if (e.target === modal) closeModal();
     });
+    function syncAnlageDetailBehaelterVisibility() {
+      var typeEl = document.getElementById('anlageDetailType');
+      var show = kuklaAnlagenstammTypeHasBehaelterNenninhalt(typeEl && typeEl.value);
+      ['anlageDetailBehaelterNenninhaltDt', 'anlageDetailBehaelterNenninhaltDd'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.hidden = !show;
+      });
+    }
+    var anlageTypeEl = document.getElementById('anlageDetailType');
+    if (anlageTypeEl) {
+      anlageTypeEl.addEventListener('input', syncAnlageDetailBehaelterVisibility);
+      anlageTypeEl.addEventListener('change', syncAnlageDetailBehaelterVisibility);
+    }
+    syncAnlageDetailBehaelterVisibility();
     var anlageSaveBusy = false;
     var anlageSaveQueued = null;
     var anlageDetailIgnoreBlur = false;
@@ -5471,6 +5505,7 @@
         type: sanitizeLeistungField(document.getElementById('anlageDetailType') && document.getElementById('anlageDetailType').value),
         leistung: sanitizeLeistungField(document.getElementById('anlageDetailLeistung') && document.getElementById('anlageDetailLeistung').value),
         nenngeschwindigkeit: sanitizeLeistungField(document.getElementById('anlageDetailNenngeschwindigkeit') && document.getElementById('anlageDetailNenngeschwindigkeit').value),
+        behaelter_nenninhalt: sanitizeLeistungField(document.getElementById('anlageDetailBehaelterNenninhalt') && document.getElementById('anlageDetailBehaelterNenninhalt').value),
         kraftaufnehmer: sanitizeLeistungField(document.getElementById('anlageDetailKraftaufnehmer') && document.getElementById('anlageDetailKraftaufnehmer').value),
         dms_nr: sanitizeLeistungField(document.getElementById('anlageDetailDmsNr') && document.getElementById('anlageDetailDmsNr').value),
         tacho: sanitizeLeistungField(document.getElementById('anlageDetailTacho') && document.getElementById('anlageDetailTacho').value),
@@ -5643,6 +5678,7 @@
           type: '',
           leistung: '',
           nenngeschwindigkeit: '',
+          behaelter_nenninhalt: '',
           kraftaufnehmer: '',
           dms_nr: '',
           dms_position: '',
@@ -9943,6 +9979,7 @@
               type: '',
               leistung: '',
               nenngeschwindigkeit: '',
+              behaelter_nenninhalt: '',
               kraftaufnehmer: '',
               dms_nr: '',
               dms_position: '',
@@ -9984,6 +10021,7 @@
           type: get(r, ['type', 'Type', 'typ', 'Typ']),
           leistung: get(r, ['leistung', 'Leistung']),
           nenngeschwindigkeit: get(r, ['nenngeschwindigkeit', 'Nenngeschwindigkeit']),
+          behaelter_nenninhalt: get(r, ['behaelter_nenninhalt', 'Behälter Nenninhalt']),
           kraftaufnehmer: get(r, ['kraftaufnehmer', 'Kraftaufnehmer']),
           dms_nr: get(r, ['dms_nr', 'DMS Nr.', 'dms_nr']),
           dms_position: get(r, ['dms_position', 'DMS Position', 'dmsPosition']),
@@ -10003,6 +10041,7 @@
         type: '',
         leistung: '',
         nenngeschwindigkeit: '',
+        behaelter_nenninhalt: '',
         kraftaufnehmer: '',
         dms_nr: '',
         dms_position: '',
@@ -10507,6 +10546,7 @@
       '<div><label for="as-form-type">Type</label><input type="text" id="as-form-type" value="' + v('type') + '"></div>' +
       '<div><label for="as-form-leistung">Leistung</label><input type="text" id="as-form-leistung" value="' + v('leistung') + '"></div>' +
       '<div><label for="as-form-nenngeschwindigkeit">Nenngeschwindigkeit</label><input type="text" id="as-form-nenngeschwindigkeit" value="' + v('nenngeschwindigkeit') + '"></div>' +
+      '<div id="as-form-behaelter-wrap"' + (kuklaAnlagenstammTypeHasBehaelterNenninhalt(a && a.type) ? '' : ' hidden') + '><label for="as-form-behaelter-nenninhalt">Behälter Nenninhalt</label><input type="text" id="as-form-behaelter-nenninhalt" value="' + v('behaelter_nenninhalt') + '"></div>' +
       '</div></div>' +
       '<div class="anlagenstamm-form-section"><h4>Kraftaufnehmer</h4><div class="anlagenstamm-form-grid">' +
       '<div class="form-full kraftaufnehmer-block" id="kraftaufnehmerBlock">' +
@@ -10800,6 +10840,7 @@
       type: ((document.getElementById('as-form-type') || {}).value || ''),
       leistung: ((document.getElementById('as-form-leistung') || {}).value || ''),
       nenngeschwindigkeit: ((document.getElementById('as-form-nenngeschwindigkeit') || {}).value || ''),
+      behaelter_nenninhalt: ((document.getElementById('as-form-behaelter-nenninhalt') || {}).value || ''),
       kraftaufnehmer: ((document.getElementById('as-form-kraftaufnehmer') || {}).value || ''),
       kraftaufnehmer_extra: extraEl ? (extraEl.value || '') : '',
       material: ((document.getElementById('as-form-material') || {}).value || ''),
@@ -10845,6 +10886,17 @@
     }
     var saveBtn = document.getElementById('btnAnlagenstammSave');
     if (saveBtn) saveBtn.addEventListener('click', function () { saveAnlagenstammFromForm(); });
+    function syncAsFormBehaelterVisibility() {
+      var wrap = document.getElementById('as-form-behaelter-wrap');
+      var typeEl = document.getElementById('as-form-type');
+      if (wrap) wrap.hidden = !kuklaAnlagenstammTypeHasBehaelterNenninhalt(typeEl && typeEl.value);
+    }
+    var asTypeEl = document.getElementById('as-form-type');
+    if (asTypeEl) {
+      asTypeEl.addEventListener('input', syncAsFormBehaelterVisibility);
+      asTypeEl.addEventListener('change', syncAsFormBehaelterVisibility);
+    }
+    syncAsFormBehaelterVisibility();
   }
 
   async function saveAnlagenstammFromForm() {
@@ -10867,6 +10919,7 @@
         type: payload.type,
         leistung: payload.leistung,
         nenngeschwindigkeit: payload.nenngeschwindigkeit,
+        behaelter_nenninhalt: payload.behaelter_nenninhalt,
         kraftaufnehmer: payload.kraftaufnehmer,
         kraftaufnehmer_extra: payload.kraftaufnehmer_extra,
         material: payload.material,
@@ -16352,16 +16405,39 @@
         };
       });
       k.geliefertUeber = geliefertUeber || (k.fabrikationsnummern[0] && k.fabrikationsnummern[0].geliefert_ueber) || '';
-      var fabList = k.fabrikationsnummern.map(function (r) { return r.fabrikationsnummer; }).filter(Boolean);
       var auftragsnr = (job.job_number != null && String(job.job_number).trim()) ? String(job.job_number).trim() : '';
+      var fabPairs = (k.fabrikationsnummern || []).filter(function (r) {
+        return r && (r.fabrikationsnummer || r.type);
+      });
+      var fabTableHtml = '';
+      if (fabPairs.length) {
+        var fabRowsHtml = '';
+        for (var fi = 0; fi < fabPairs.length; fi += 2) {
+          var fa = fabPairs[fi];
+          var fb = fabPairs[fi + 1];
+          fabRowsHtml += '<tr><td class="mb-v2-fab-fn">' + escapeHtml(fa.fabrikationsnummer || '') + '</td><td>' + escapeHtml(fa.type || '') + '</td>';
+          if (fb) {
+            fabRowsHtml += '<td class="mb-v2-fab-fn mb-v2-fab-split">' + escapeHtml(fb.fabrikationsnummer || '') + '</td><td>' + escapeHtml(fb.type || '') + '</td>';
+          } else {
+            fabRowsHtml += '<td class="mb-v2-fab-fn mb-v2-fab-split"></td><td></td>';
+          }
+          fabRowsHtml += '</tr>';
+        }
+        fabTableHtml =
+          '<div class="mb-v2-fab-head" data-i18n-en="Equipment">Anlagen</div>' +
+          '<div class="mb-v2-fab-wrap"><table class="mb-v2-fab-table">' +
+          '<thead><tr><th data-i18n-en="Serial No.">Fabr.-Nr.</th><th data-i18n-en="Type">Typ / Type</th>' +
+          '<th data-i18n-en="Serial No.">Fabr.-Nr.</th><th data-i18n-en="Type">Typ / Type</th></tr></thead>' +
+          '<tbody>' + fabRowsHtml + '</tbody></table></div>';
+      }
       kopfdatenEl.innerHTML =
         '<div class="mb-v2-kopfdaten-row"><strong data-i18n-en="Customer:">Kunde:</strong> ' + escapeHtml(k.kunde) + '</div>' +
         (auftragsnr ? '<div class="mb-v2-kopfdaten-row kopfdaten-secondary"><strong data-i18n-en="Job no.:">Auftragsnr.:</strong> ' + escapeHtml(auftragsnr) + '</div>' : '') +
-        '<div class="kopfdaten-fn"><strong>FN.:</strong> ' + escapeHtml(fabList.join(', ')) + '</div>' +
         (k.geliefertUeber ? '<div class="kopfdaten-secondary">' + escapeHtml(k.geliefertUeber) + '</div>' : '') +
         '<div class="mb-v2-kopfdaten-row"><strong data-i18n-en="Date:">Datum:</strong> ' + escapeHtml(k.datum) + '</div>' +
         '<div class="mb-v2-kopfdaten-row"><strong data-i18n-en="Service engineer:">Servicetechniker:</strong> ' + escapeHtml(k.servicetechniker) + '</div>' +
-        '<div class="mb-v2-kopfdaten-row"><strong data-i18n-en="Contact person:">Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson).replace(/\n/g, '<br>') + '</div>';
+        '<div class="mb-v2-kopfdaten-row"><strong data-i18n-en="Contact person:">Ansprechperson:</strong> ' + escapeHtml(k.ansprechperson).replace(/\n/g, '<br>') + '</div>' +
+        fabTableHtml;
       kopfdatenEl.hidden = false;
       kopfdatenEl.removeAttribute('aria-hidden');
       refreshProtocolFormLang('viewProtokolleMontagebericht');
@@ -21468,15 +21544,44 @@
       return fab !== '' && getActiveFab() === fab && serviceprotokollFormReadyFab === fab;
     }
 
+    function anlagenstammTypeHasBehaelterNenninhalt(type) {
+      return kuklaAnlagenstammTypeHasBehaelterNenninhalt(type);
+    }
+
+    function anlagenstammVmaxValueFromRow(row) {
+      if (!row) return '';
+      if (anlagenstammTypeHasBehaelterNenninhalt(row.type)) {
+        return row.behaelter_nenninhalt != null ? String(row.behaelter_nenninhalt).trim() : '';
+      }
+      return row.nenngeschwindigkeit != null ? String(row.nenngeschwindigkeit).trim() : '';
+    }
+
+    function updateServiceprotokollVmaxLabel(type) {
+      var lab = document.querySelector('label[for="serviceprotokollVmax"]');
+      var lang = 'de';
+      try {
+        if (window.KuklaProtocolFormI18n && typeof window.KuklaProtocolFormI18n.maskLangFromChecks === 'function') {
+          lang = window.KuklaProtocolFormI18n.maskLangFromChecks('serviceprotokollLangDe', 'serviceprotokollLangEn') || 'de';
+        } else {
+          var enEl = document.getElementById('serviceprotokollLangEn');
+          var deEl = document.getElementById('serviceprotokollLangDe');
+          if (enEl && enEl.checked && !(deEl && deEl.checked)) lang = 'en';
+        }
+      } catch (eLang) { /* default de */ }
+      var behaelter = anlagenstammTypeHasBehaelterNenninhalt(type);
+      if (lab) lab.textContent = behaelter ? (lang === 'en' ? 'Vessel nom. capacity' : 'Behälter Nenninhalt') : 'v max';
+    }
+
     function collectServiceprotokollTechnikFromForm() {
       var san = typeof sanitizeLeistungField === 'function' ? sanitizeLeistungField : function (v) {
         return v == null ? '' : String(v).trim();
       };
-      return {
+      var typeVal = san((document.getElementById('serviceprotokollType') || {}).value);
+      var vmaxVal = san((document.getElementById('serviceprotokollVmax') || {}).value);
+      var out = {
         position: san((document.getElementById('serviceprotokollPos') || {}).value),
         leistung: san((document.getElementById('serviceprotokollQmax') || {}).value),
-        nenngeschwindigkeit: san((document.getElementById('serviceprotokollVmax') || {}).value),
-        type: san((document.getElementById('serviceprotokollType') || {}).value),
+        type: typeVal,
         elektronik: san((document.getElementById('serviceprotokollDwc') || {}).value),
         kraftaufnehmer: san((document.getElementById('spMessType') || {}).value),
         dms_nr: san((document.getElementById('spMessSeriennummer') || {}).value),
@@ -21489,12 +21594,19 @@
         })(),
         projekt: san((document.getElementById('serviceprotokollProjekt') || {}).value)
       };
+      if (anlagenstammTypeHasBehaelterNenninhalt(typeVal)) {
+        out.behaelter_nenninhalt = vmaxVal;
+      } else {
+        out.nenngeschwindigkeit = vmaxVal;
+      }
+      return out;
     }
 
     var SP_TECHNIK_FIELD_LABELS = {
       position: 'Pos.-Nr.',
       leistung: 'Qmax',
       nenngeschwindigkeit: 'v max',
+      behaelter_nenninhalt: 'Behälter Nenninhalt',
       type: 'Type',
       elektronik: 'DWC',
       kraftaufnehmer: 'Wägezelle Type',
@@ -21640,7 +21752,7 @@
         var touched = false;
         for (var i = 0; i < parsed.length; i++) {
           if (String(parsed[i].fabrikationsnummer || '').trim() !== fabKey) continue;
-          ['kraftaufnehmer', 'dms_nr', 'dms_position', 'vers_spannung', 'sensitivitaet', 'kraftaufnehmer_extra', 'elektronik', 'type', 'leistung', 'nenngeschwindigkeit', 'position', 'projekt'].forEach(function (k) {
+          ['kraftaufnehmer', 'dms_nr', 'dms_position', 'vers_spannung', 'sensitivitaet', 'kraftaufnehmer_extra', 'elektronik', 'type', 'leistung', 'nenngeschwindigkeit', 'behaelter_nenninhalt', 'position', 'projekt'].forEach(function (k) {
             if (fields[k] != null && fields[k] !== '') parsed[i][k] = fields[k];
           });
           touched = true;
@@ -21774,7 +21886,7 @@
         kopf: {
           kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
           kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
-          kopf_vmax: row.nenngeschwindigkeit != null ? String(row.nenngeschwindigkeit).trim() : '',
+          kopf_vmax: anlagenstammVmaxValueFromRow(row),
           kopf_type: row.type != null ? String(row.type).trim() : '',
           kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
           projekt: row.projekt != null ? String(row.projekt).trim() : '',
@@ -22826,6 +22938,18 @@
       if (vmax) vmax.value = kopf.kopf_vmax || '';
       if (type) type.value = kopf.kopf_type || '';
       if (dwc) dwc.value = kopf.kopf_dwc || '';
+      updateServiceprotokollVmaxLabel(kopf.kopf_type || (type && type.value) || '');
+    }
+
+    var spTypeElBind = document.getElementById('serviceprotokollType');
+    if (spTypeElBind && spTypeElBind.getAttribute('data-behaelter-bound') !== '1') {
+      spTypeElBind.setAttribute('data-behaelter-bound', '1');
+      spTypeElBind.addEventListener('input', function () {
+        updateServiceprotokollVmaxLabel(spTypeElBind.value);
+      });
+      spTypeElBind.addEventListener('change', function () {
+        updateServiceprotokollVmaxLabel(spTypeElBind.value);
+      });
     }
 
     function clampServiceprotokollQmax(val) {
@@ -23118,7 +23242,7 @@
           return {
             kopf_pos_nr: row.position != null ? String(row.position).trim() : '',
             kopf_qmax: row.leistung != null ? String(row.leistung).trim() : '',
-            kopf_vmax: row.nenngeschwindigkeit != null ? String(row.nenngeschwindigkeit).trim() : '',
+            kopf_vmax: anlagenstammVmaxValueFromRow(row),
             kopf_type: row.type != null ? String(row.type).trim() : '',
             kopf_dwc: row.elektronik != null ? String(row.elektronik).trim() : '',
             kraftaufnehmer: row.kraftaufnehmer != null ? String(row.kraftaufnehmer).trim() : '',
@@ -23206,6 +23330,98 @@
         status: row.status || 'na',
         bemerkung: row.bemerkung || ''
       };
+    }
+
+    function normalizeSpTypeKey(value) {
+      return String(value || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    }
+
+    function typeKeyForFab(fn) {
+      fn = String(fn || '').trim();
+      if (!fn) return '';
+      var draft = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fn];
+      var fromDraft = draft && draft.kopf_type != null ? String(draft.kopf_type).trim() : '';
+      if (fromDraft) return normalizeSpTypeKey(fromDraft);
+      var kopf = kopfFromJobFabRow(serviceJobData, fn);
+      return normalizeSpTypeKey(kopf && kopf.kopf_type);
+    }
+
+    function stepsFromFabDraft(fn) {
+      var draft = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fn];
+      return Array.isArray(draft && draft.arbeitsschritte) ? draft.arbeitsschritte : [];
+    }
+
+    function cloneArbeitsschritteUnchecked(rows) {
+      return (rows || []).map(function (row) {
+        var s = stepFromRaw(row);
+        s.status = 'na';
+        s.bemerkung = '';
+        return s;
+      }).filter(function (s) {
+        return String(s.bezeichnung_de || '').trim() !== '' || String(s.bezeichnung_en || '').trim() !== '';
+      });
+    }
+
+    function copyArbeitsschritteFromPreviousSameType() {
+      var fab = getActiveFab();
+      var en = protocolUiLang('spPdfDe', 'spPdfEn') === 'en';
+      if (!fab) {
+        if (typeof showToast === 'function') {
+          showToast(en ? 'Please select a serial number first.' : 'Bitte zuerst eine Fabrikationsnummer wählen.');
+        }
+        return;
+      }
+      stashDraftInMemory(fab, { force: true });
+      syncStepsFromDom();
+      var typeEl = document.getElementById('serviceprotokollType');
+      var curType = normalizeSpTypeKey(typeEl ? typeEl.value : '');
+      if (!curType) curType = typeKeyForFab(fab);
+      if (!curType) {
+        if (typeof showToast === 'function') {
+          showToast(en ? 'No matching predecessor found.' : 'Kein passender Vorgänger vorhanden.');
+        }
+        return;
+      }
+      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
+        ? parseJobFabrikationsnummernOrdered(serviceJobData || {})
+        : [];
+      var idx = -1;
+      for (var i = 0; i < fns.length; i++) {
+        if (String(fns[i]).trim() === String(fab).trim()) {
+          idx = i;
+          break;
+        }
+      }
+      var sourceFab = '';
+      var copied = null;
+      for (var j = idx - 1; j >= 0; j--) {
+        var prevFab = String(fns[j] || '').trim();
+        if (!prevFab || typeKeyForFab(prevFab) !== curType) continue;
+        var cloned = cloneArbeitsschritteUnchecked(stepsFromFabDraft(prevFab));
+        if (!cloned.length) continue;
+        sourceFab = prevFab;
+        copied = cloned;
+        break;
+      }
+      if (!copied) {
+        if (typeof showToast === 'function') {
+          showToast(en ? 'No matching predecessor found.' : 'Kein passender Vorgänger vorhanden.');
+        }
+        return;
+      }
+      lockHostWorkStepsFromReact(2500);
+      arbeitsschritte = copied;
+      renderSteps();
+      stashDraftInMemory(fab, { force: true });
+      notifyReactBridge(true);
+      if (typeof showToast === 'function') {
+        showToast(en
+          ? ('Work steps copied from serial no. ' + sourceFab + '.')
+          : ('Arbeitsschritte von FN ' + sourceFab + ' übernommen.'));
+      }
     }
 
     function collectPdfLanguages() {
@@ -23972,6 +24188,7 @@
       setVal('serviceprotokollType', f.plantType);
       setVal('serviceprotokollQmax', clampServiceprotokollQmax(f.qmax));
       setVal('serviceprotokollVmax', f.vmax);
+      updateServiceprotokollVmaxLabel(f.plantType);
       setVal('serviceprotokollPos', f.position);
       setVal('serviceprotokollDwc', f.dwc);
       if (Array.isArray(f.loadCells) && f.loadCells.length) {
@@ -24157,6 +24374,10 @@
           loadSpMotorsFromMlPdf();
           return;
         }
+        if (action === 'copyWorkStepsFromPreviousType') {
+          copyArbeitsschritteFromPreviousSameType();
+          return;
+        }
         if (action === 'resetWorkSteps') {
           resetArbeitsschritteToDefaults();
         }
@@ -24278,17 +24499,22 @@
       return s.bezeichnung || combineBilingualLabel(s.bezeichnung_de, s.bezeichnung_en);
     }
 
+    function compactTypeToken(value) {
+      return String(value || '').toLowerCase().replace(/[\s\-_.\/]+/g, '');
+    }
+
     function findMatchingPresetForSp(presets, anlagenType) {
       var haystack = (anlagenType || '').trim();
       if (!haystack) return null;
-      var hayLower = haystack.toLowerCase();
+      var hayNorm = compactTypeToken(haystack);
       var candidates = [];
       (presets || []).forEach(function (p) {
         var code = (p.type_code || '').trim();
-        if (!code || hayLower.indexOf(code.toLowerCase()) < 0) return;
+        var codeNorm = compactTypeToken(code);
+        if (!codeNorm || hayNorm.indexOf(codeNorm) < 0) return;
         candidates.push({
           preset: p,
-          codeLen: code.length,
+          codeLen: codeNorm.length,
           priority: (p.scope || 'user') === 'global' ? 1 : 0,
           sortOrder: p.sort_order || 0,
           id: p.id || 0
@@ -24313,8 +24539,16 @@
     }
 
     function resolveSpActivePresetStepKeys() {
+      if (typeof flushServiceprotokollReactToHost === 'function') {
+        try { flushServiceprotokollReactToHost(); } catch (e) { /* ignore */ }
+      }
       var typeEl = document.getElementById('serviceprotokollType');
-      var anlagenType = typeEl ? typeEl.value : '';
+      var anlagenType = typeEl ? String(typeEl.value || '').trim() : '';
+      if (!anlagenType) {
+        var br = activeReactBridge();
+        var last = br && typeof br.getLastPayload === 'function' ? br.getLastPayload() : null;
+        anlagenType = last && last.form && last.form.plantType ? String(last.form.plantType).trim() : '';
+      }
       var preset = findMatchingPresetForSp(spCatalogPresetsCache, anlagenType);
       return buildPresetStepKeySet(preset);
     }
@@ -24324,9 +24558,13 @@
       return currentStepLabelsFromMemory().indexOf(label) >= 0;
     }
 
+    function isCatalogStepInActivePreset(s) {
+      return !!spActivePresetStepKeys[spCatalogStepKey(s.scope, s.id)];
+    }
+
     function filterAvailableSpCatalogSteps(steps) {
       return (steps || []).filter(function (s) {
-        return !isCatalogStepInProtocol(s);
+        return !isCatalogStepInProtocol(s) && !isCatalogStepInActivePreset(s);
       });
     }
 
@@ -24344,7 +24582,7 @@
       if (!listEl) return;
       var available = filterAvailableSpCatalogSteps(spCatalogCache);
       if (!available.length) {
-        listEl.innerHTML = '<p class="muted" style="padding:0.75rem">Keine weiteren Schritte verfügbar (bereits im Protokoll enthalten).</p>';
+        listEl.innerHTML = '<p class="muted" style="padding:0.75rem">Keine weiteren Schritte verfügbar (bereits im Protokoll oder im Typ-Preset enthalten).</p>';
         return;
       }
       listEl.innerHTML = available.map(function (s) {
@@ -24489,6 +24727,12 @@
     if (btnSpCatalog) {
       btnSpCatalog.addEventListener('click', function () {
         openSpStepPickerModal();
+      });
+    }
+    var btnSpCopyStepsFromType = document.getElementById('btnSpCopyStepsFromType');
+    if (btnSpCopyStepsFromType) {
+      btnSpCopyStepsFromType.addEventListener('click', function () {
+        copyArbeitsschritteFromPreviousSameType();
       });
     }
     var btnSpResetSteps = document.getElementById('btnSpResetSteps');

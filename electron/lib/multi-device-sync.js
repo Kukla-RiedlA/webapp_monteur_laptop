@@ -125,6 +125,92 @@ function stripDraftMeta(obj) {
   delete out.server_updated_at;
   delete out.schema_version;
   delete out._conflict;
+  if (out.byFab && typeof out.byFab === 'object' && !Array.isArray(out.byFab) && Object.keys(out.byFab).length === 0) {
+    delete out.byFab;
+  }
+  return out;
+}
+
+function hasRealByFab(payload) {
+  const byFab = payload && payload.byFab;
+  return !!(byFab && typeof byFab === 'object' && !Array.isArray(byFab) && Object.keys(byFab).length > 0);
+}
+
+function draftDataImageCount(payload) {
+  return (JSON.stringify(payload || {}).match(/data:image\//gi) || []).length;
+}
+
+function parseDraftTsMs(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return 0;
+  const iso = s.includes('T') ? s : s.replace(' ', 'T');
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function draftTimestampNewer(candidate, baseline) {
+  const a = parseDraftTsMs(candidate);
+  const b = parseDraftTsMs(baseline);
+  return !!(a && b && a > b + 2000);
+}
+
+function htmlHasDataImage(html) {
+  return /data:image\//i.test(String(html || ''));
+}
+
+function pickHtmlPreferringImages(localHtml, remoteHtml) {
+  const locS = localHtml == null ? '' : String(localHtml);
+  const remS = remoteHtml == null ? '' : String(remoteHtml);
+  const locImg = htmlHasDataImage(locS);
+  const remImg = htmlHasDataImage(remS);
+  if (remImg && !locImg) return remS;
+  if (locImg && !remImg) return locS;
+  if (remImg && locImg) return remS.length >= locS.length ? remS : locS;
+  return remS.length > locS.length ? remS : locS;
+}
+
+function rowHasDataImage(row) {
+  return draftDataImageCount(row) > 0;
+}
+
+/**
+ * Montagebericht (kein byFab): eingebettete data:image-Bilder aus Remote behalten,
+ * lokalen Text nicht pauschal verwerfen.
+ */
+function mergeFlatProtocolStores(localPayload, remotePayload) {
+  const local = stripDraftMeta(localPayload || {});
+  const remote = stripDraftMeta(remotePayload || {});
+  const out = Object.assign({}, remote, local);
+  delete out.byFab;
+  ['grundDesEinsatzes_html', 'bemerkungen_html'].forEach((k) => {
+    if (local[k] != null || remote[k] != null) {
+      out[k] = pickHtmlPreferringImages(local[k], remote[k]);
+    }
+  });
+  const locFabs = Array.isArray(local.fabBemerkungen) ? local.fabBemerkungen : [];
+  const remFabs = Array.isArray(remote.fabBemerkungen) ? remote.fabBemerkungen : [];
+  if (locFabs.length || remFabs.length) {
+    const byFn = new Map();
+    remFabs.concat(locFabs).forEach((row) => {
+      if (!row || typeof row !== 'object') return;
+      const fn = String(row.fabrikationsnummer || '').trim();
+      const prev = byFn.get(fn);
+      if (!prev) {
+        byFn.set(fn, Object.assign({}, row));
+        return;
+      }
+      const locRow = row;
+      const remRow = prev;
+      const merged = Object.assign({}, remRow, locRow);
+      merged.bemerkungen_html = pickHtmlPreferringImages(locRow.bemerkungen_html, remRow.bemerkungen_html);
+      if (rowHasDataImage(remRow) && !rowHasDataImage(locRow)) {
+        byFn.set(fn, Object.assign({}, locRow, remRow, { bemerkungen_html: merged.bemerkungen_html }));
+        return;
+      }
+      byFn.set(fn, merged);
+    });
+    out.fabBemerkungen = Array.from(byFn.values());
+  }
   return out;
 }
 
@@ -309,7 +395,10 @@ function mergeByFabStores(localPayload, remotePayload, opts) {
   }
   const extra = Object.assign({}, stripDraftMeta(remote), stripDraftMeta(local));
   delete extra.byFab;
-  const out = Object.assign({}, extra, { byFab });
+  const out = Object.assign({}, extra);
+  if (Object.keys(byFab).length > 0) {
+    out.byFab = byFab;
+  }
   if (local.nextLocalId != null || remote.nextLocalId != null) {
     out.nextLocalId = Math.max(Number(local.nextLocalId) || 1, Number(remote.nextLocalId) || 1);
   }
@@ -419,6 +508,10 @@ module.exports = {
   stableStringify,
   draftPayloadsEqual,
   isEmptyMonteurDraftPayload,
+  hasRealByFab,
+  draftDataImageCount,
+  draftTimestampNewer,
+  mergeFlatProtocolStores,
   pruneEmptyMonteurDraftJsons,
   readLocalDraftFile,
   writeLocalDraftFile,

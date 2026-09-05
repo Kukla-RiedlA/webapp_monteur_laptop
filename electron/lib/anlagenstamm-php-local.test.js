@@ -115,6 +115,19 @@ describe('Montagebericht Draft-IO', () => {
   });
 });
 
+describe('Sync-Push Service/IBN', () => {
+  it('SERVICE_LIKE_PROTOCOL liegt auf Modulebene fuer pushToServer', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    const constIdx = src.indexOf('const SERVICE_LIKE_PROTOCOL');
+    const createIdx = src.indexOf('function createApp(db)');
+    const pushIdx = src.indexOf('async function pushToServer');
+    assert.ok(constIdx >= 0 && createIdx > constIdx);
+    assert.ok(pushIdx > createIdx);
+    assert.match(src.slice(constIdx, createIdx), /inbetriebnahme_save\.php/);
+    assert.match(src.slice(pushIdx), /SERVICE_LIKE_PROTOCOL\.inbetriebnahme/);
+  });
+});
+
 describe('Dokumente: Raster nicht unter Montagebericht', () => {
   it('Frontend entfernt JPG/PNG aus Dokumenten-Kategorien (Galerie)', () => {
     const src = fs.readFileSync(

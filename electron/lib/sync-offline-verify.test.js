@@ -24,6 +24,7 @@ const {
   MONTEUR_DRAFT_BASENAMES,
   DRAFT_JSON_ENDPOINTS,
   mergeByFabStores,
+  mergeFlatProtocolStores,
   isEmptyMonteurDraftPayload,
   pruneEmptyMonteurDraftJsons,
   writeLocalDraftFile,
@@ -299,6 +300,25 @@ describe('Draft-APIs und Datenverlust-Schutz', () => {
     assert.equal(isEmptyMonteurDraftPayload({ grundDesEinsatzes: 'x' }), false);
   });
 
+  it('mergeFlatProtocolStores übernimmt Remote-data:image in HTML', () => {
+    const local = {
+      bemerkungen_html: '<p>lokal ohne bild</p>',
+      fabBemerkungen: [{ fabrikationsnummer: '12304', bemerkungen_html: '<ul><li>text</li></ul>' }],
+    };
+    const remote = {
+      bemerkungen_html: '<p>remote</p><img src="data:image/jpeg;base64,abc">',
+      fabBemerkungen: [
+        {
+          fabrikationsnummer: '12304',
+          bemerkungen_html: '<p>mit bild</p><img src="data:image/png;base64,xyz">',
+        },
+      ],
+    };
+    const merged = mergeFlatProtocolStores(local, remote);
+    assert.match(merged.bemerkungen_html, /data:image\/jpeg/);
+    assert.match(merged.fabBemerkungen[0].bemerkungen_html, /data:image\/png/);
+  });
+
   it('Conflict-Copy erhält den lokalen Stand zusätzlich', () => {
     const dir = tmpDir('kukla-conflict-');
     const filePath = path.join(dir, 'Dokumente_Monteur', 'serviceprotokoll.json');
@@ -402,6 +422,30 @@ describe('pullJsonDraft Last-Write-Wins (simuliertes Dispo)', () => {
     assert.equal(result.empty_remote, true);
     const local = readLocalDraftFile(filePath(basename));
     assert.equal(local.payload.grundDesEinsatzes, 'bleibt');
+  });
+
+  it('Montagebericht: neueres Remote mit data:image überschreibt älteren lokalen Stand ohne Bild', async () => {
+    const basename = 'montagebericht.json';
+    writeLocalDraftFile(
+      filePath(basename),
+      { grundDesEinsatzes: 'alt', bemerkungen_html: '<p>ohne bild</p>', byFab: {} },
+      40,
+      '2026-09-05 07:36:04',
+    );
+    const result = await pull(basename, {
+      ok: true,
+      revision: 41,
+      server_updated_at: '2026-09-05 11:40:29',
+      store: {
+        grundDesEinsatzes: 'neu',
+        bemerkungen_html: '<p>mit bild</p><img src="data:image/jpeg;base64,qqq">',
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.skipped, undefined);
+    const local = readLocalDraftFile(filePath(basename));
+    assert.match(String(local.payload.bemerkungen_html || ''), /data:image\/jpeg/);
+    assert.equal(local.revision, 41);
   });
 
   it('Kontrollwiegung: lokale FN bleibt, Dispo überschreibt sie nicht', async () => {

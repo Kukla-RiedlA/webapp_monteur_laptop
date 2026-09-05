@@ -572,6 +572,19 @@ function queueArbeitsschrittePending(db, entityId, action, payload) {
   );
 }
 
+function compactTypeToken(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s\-_.\/]+/g, '');
+}
+
+function typeTokenContainsCode(anlagenType, typeCode) {
+  const hay = compactTypeToken(anlagenType);
+  const code = compactTypeToken(typeCode);
+  if (!hay || !code) return false;
+  return hay.indexOf(code) !== -1;
+}
+
 function findMatchingPresetLocal(db, technicianId, anlagenType, catalogKind) {
   const haystack = String(anlagenType || '').trim();
   if (!haystack) return null;
@@ -579,8 +592,7 @@ function findMatchingPresetLocal(db, technicianId, anlagenType, catalogKind) {
   const candidates = [];
   (data.presets || []).forEach(function (p) {
     const code = String(p.type_code || '').trim();
-    if (!code) return;
-    if (haystack.toLowerCase().indexOf(code.toLowerCase()) === -1) return;
+    if (!typeTokenContainsCode(haystack, code)) return;
     candidates.push({
       preset_scope: p.scope === 'global' ? 'global' : 'user',
       preset_id: p.id,
@@ -588,11 +600,12 @@ function findMatchingPresetLocal(db, technicianId, anlagenType, catalogKind) {
       name: p.name,
       sort_order: p.sort_order || 0,
       priority: p.scope === 'global' ? 1 : 0,
+      codeLen: compactTypeToken(code).length,
     });
   });
   if (!candidates.length) return null;
   candidates.sort(function (a, b) {
-    if (b.type_code.length !== a.type_code.length) return b.type_code.length - a.type_code.length;
+    if (b.codeLen !== a.codeLen) return b.codeLen - a.codeLen;
     if (b.priority !== a.priority) return b.priority - a.priority;
     if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
     return a.preset_id - b.preset_id;
@@ -675,4 +688,6 @@ module.exports = {
   reorderUserStepsLocal,
   builtinDefaults,
   combineBezeichnung,
+  compactTypeToken,
+  typeTokenContainsCode,
 };

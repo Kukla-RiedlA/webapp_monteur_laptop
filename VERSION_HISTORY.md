@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.005
+- **Anlagenstamm:** zusätzliche Größe Behälter Nenninhalt bei Type D-DW / V-DG-1.
+- **Service-/IBN-Protokoll:** v max wird bei diesen Types durch Behälter Nenninhalt ersetzt (Formular, React, PDF).
+
 ## V 2.007.003
 - **Anlagenakte Galerie:** Montage-Fotos unter `Dokumente_Monteur` bekommen lokale Vorschaubilder (nicht mehr graue Kacheln).
 - **Anlagenakte Dokumente:** nur echte Dateien (PDF, Office, Parameterlisten); keine 0-Byte-JSON-Entwürfe und keine leere Bilder-Sektion.

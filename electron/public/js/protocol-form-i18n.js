@@ -404,7 +404,6 @@
         { sel: '#spV2Sec2Title', en: 'Equipment data' },
         { sel: 'label[for="serviceprotokollType"]', en: 'Type' },
         { sel: 'label[for="serviceprotokollQmax"]', en: 'Qmax' },
-        { sel: 'label[for="serviceprotokollVmax"]', en: 'v max' },
         { sel: 'label[for="serviceprotokollPos"]', en: 'Pos. no.' },
         { sel: 'label[for="serviceprotokollDwc"]', en: 'DWC' },
         { sel: '#serviceprotokollVmax', attr: 'placeholder', en: 'from equipment master' },
@@ -417,6 +416,8 @@
         { sel: '#spV2Sec5Title', en: 'Work steps' },
         { sel: '#spV2Sec5Title + .sp-v2-section-body .sp-v2-steps-head strong', en: 'Check points' },
         { sel: '#spV2Sec5Title + .sp-v2-section-body .sp-v2-steps-head .muted', en: 'OK / n.i.O. / n.a. – remark if needed' },
+        { sel: '#btnSpCopyStepsFromType', en: 'Copy from same type' },
+        { sel: '#btnSpCopyStepsFromType', attr: 'title', en: 'Take over work steps from the previous serial number of the same type (unchecked)' },
         { sel: '.sp-steps-table', attr: 'aria', en: 'Work steps' },
         { sel: '.sp-steps-table thead th.sp-col-nr', en: 'No.' },
         { sel: '.sp-steps-table thead th.sp-col-status', en: 'Result' },
@@ -457,6 +458,16 @@
     applyDataAttrs(root, lang);
     var map = cfg.map || [];
     for (var i = 0; i < map.length; i++) applyEntry(root, lang, map[i]);
+    if (key === 'serviceprotokoll') {
+      var typeElSp = document.getElementById('serviceprotokollType');
+      var labVmax = root.querySelector('label[for="serviceprotokollVmax"]');
+      if (labVmax) {
+        var tSp = String((typeElSp && typeElSp.value) || '').toUpperCase().replace(/\s+/g, '');
+        var isBehaelter = /^D-?DW(?:$|[^A-Z])/.test(tSp) || /V-?DG-?1(?:$|[^0-9])/.test(tSp);
+        if (isBehaelter) labVmax.textContent = lang === 'en' ? 'Vessel nom. capacity' : 'Behälter Nenninhalt';
+        else labVmax.textContent = 'v max';
+      }
+    }
     applyOvernightAndSaveContact(root, lang, key);
     applyLangCheckLabels(root, lang);
     root.querySelectorAll('textarea, [contenteditable="true"]').forEach(function (el) {

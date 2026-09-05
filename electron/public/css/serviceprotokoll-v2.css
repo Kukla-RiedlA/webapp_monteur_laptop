@@ -488,6 +488,21 @@ html[data-ui-theme="dark"] .sp-v2-topbar {
   margin-bottom: 0.65rem;
 }
 
+#btnSpCopyStepsFromType {
+  flex-shrink: 0;
+  max-width: 14.5rem;
+  height: 32px;
+  padding: 0 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.15;
+  color: #0c6a4d;
+  background: #fff;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 8px;
+  white-space: normal;
+}
+
 .sp-steps-wrap {
   overflow-x: auto;
 }

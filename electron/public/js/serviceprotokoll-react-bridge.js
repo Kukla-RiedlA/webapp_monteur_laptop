@@ -273,7 +273,7 @@
       if (data.type === 'SP_ACTION' && data.action && host && typeof host.triggerAction === 'function') {
         if (!isActiveHost()) return;
         var actionName = String(data.action);
-        if (actionName === 'loadMotorsFromMlPdf') {
+        if (actionName === 'loadMotorsFromMlPdf' || actionName === 'copyWorkStepsFromPreviousType') {
           cancelScheduledApply();
           host.triggerAction(actionName);
           return;
