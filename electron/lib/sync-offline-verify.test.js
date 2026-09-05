@@ -16,6 +16,7 @@ const {
   HANDLED_PENDING_ENTITY_TYPES,
   isHandledPendingEntityType,
   isPermanentSyncPushError,
+  isOldDispoMissingSchedulePatch,
   isLocalFresher,
   evaluateJobPullRemovalGuard,
   wantsLocalOnlyRequest,
@@ -143,6 +144,15 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
     assert.equal(isPermanentSyncPushError(err), false);
   });
 
+  it('alte Dispo ohne schedule-PATCH ist nicht Dead-Letter', () => {
+    const err = new Error(
+      'Body: status, description, fabrikationsnummern, Hotel-Adresse, hotel_selection, Auftragsadresse oder job_contacts erforderlich.',
+    );
+    err.status = 400;
+    assert.equal(isOldDispoMissingSchedulePatch(err), true);
+    assert.equal(isPermanentSyncPushError(err), false);
+  });
+
   it('Foreign-Key-Verletzung ist Dead-Letter (kein Retry-Loop)', () => {
     const err = new Error(
       'SQLSTATE[23000]: Integrity constraint violation: 1452 Cannot add or update a child row: a foreign key constraint fails (`fsm`.`kontrollwiegungsprotokoll`, CONSTRAINT `fk_kw_job` FOREIGN KEY (`job_id`) REFERENCES `jobs` (`id`) ON DELETE CASCADE)',
@@ -170,7 +180,11 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
     assert.ok(queued.has('schleppketten'));
     assert.ok(queued.has('pruefzertifikat'));
     assert.ok(queued.has('kontrollwiegung'));
-    assert.ok(queued.has('serviceprotokoll'));
+    assert.ok(
+      queued.has('serviceprotokoll') || /queueDispoProxyPending\(\s*db,\s*spec\.entityType/.test(serverSrc),
+      'Serviceprotokoll muss in die Sync-Queue (direkt oder via spec.entityType)',
+    );
+    assert.match(serverSrc, /entityType:\s*'serviceprotokoll'/);
     for (const type of queued) {
       assert.equal(
         isHandledPendingEntityType(type),

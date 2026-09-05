@@ -28,6 +28,17 @@ function isLikelyOfflineSyncError(err) {
 }
 
 /**
+ * Alte Dispo-job.php kennt PATCH start_datetime noch nicht (HTTP 400 „Body: … erforderlich“
+ * ohne start_datetime). Nach Dispo-Deploy ist derselbe Payload gültig — nicht Dead-Letter.
+ */
+function isOldDispoMissingSchedulePatch(err) {
+  const msg = err && err.message ? String(err.message) : String(err || '');
+  if (!msg) return false;
+  if (/start_datetime/i.test(msg)) return false;
+  return /erforderlich/i.test(msg) && /fabrikationsnummern/i.test(msg) && /Body:/i.test(msg);
+}
+
+/**
  * Fehler, die durch erneutes Pushen derselben Pending-Zeile nicht heilbar sind
  * (Parse-/Syntaxfehler, Auth, Validierung, 4xx). Sofort Dead-Letter statt Endlos-Retry.
  */
@@ -35,6 +46,7 @@ function isPermanentSyncPushError(err) {
   const msg = err && err.message ? String(err.message) : String(err || '');
   if (!msg) return false;
   if (isLikelyOfflineSyncError(err)) return false;
+  if (isOldDispoMissingSchedulePatch(err)) return false;
   // Apache liefert den Login oft nicht an PHP — Retry, nicht sofort aufgeben.
   if (/Token fehlt/i.test(msg)) return false;
   if (
@@ -212,6 +224,7 @@ module.exports = {
   normalizeBaseUrl,
   isLikelyOfflineSyncError,
   isPermanentSyncPushError,
+  isOldDispoMissingSchedulePatch,
   shouldDeferDispoSync,
   wantsLocalOnlyRequest,
   evaluateJobPullRemovalGuard,

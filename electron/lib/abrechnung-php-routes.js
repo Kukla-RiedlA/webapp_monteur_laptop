@@ -595,7 +595,12 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       const body = String(fields.body || '').trim();
       const jobId = Number(fields.job_id || 0);
       if (!commentId || !body) return { ok: false, status: 400, error: 'Eingabe unvollständig.' };
-      const dispoJobId = getCore().resolveDispoJobIdForAbrechnung(ctx.db, jobId);
+      let dispoJobId = getCore().resolveDispoJobIdForAbrechnung(ctx.db, jobId);
+      if (!dispoJobId) {
+        const found = phpLocal.findCommentInNotesCache(ctx.db, getCore().readCommentsFromRow, commentId);
+        if (found) dispoJobId = found.jobServerId;
+      }
+      const writeCache = (db, jid, comments) => getCore().writeCommentsCache(db, jid, comments);
       const d = dispoCtx(ctx, req);
       if (d.baseUrl && d.authHeader && d.authHeader.Authorization) {
         try {
@@ -622,13 +627,24 @@ function registerAbrechnungPhpRoutes(app, ctx) {
         ctx.db,
         ctx.save,
         getCore().readCommentsFromRow,
-        (db, jid, comments) => getCore().writeCommentsCache(db, jid, comments),
+        writeCache,
         dispoJobId,
         commentId,
         body,
       );
       if (!local.ok) return local;
-      return { ok: true, source: 'local' };
+      const queuedJobId = local.job_id || dispoJobId;
+      ctx.db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
+        'comment_edit',
+        JSON.stringify({ job_id: queuedJobId, comment_id: commentId, body }),
+      );
+      ctx.save();
+      try {
+        await flushOutboxFromCtx(ctx, d, d.technicianId);
+      } catch (_) {
+        /* nächster Refresh */
+      }
+      return { ok: true, source: 'local', queued: true };
     });
   });
 
@@ -637,7 +653,12 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       const commentId = Number(fields.comment_id || fields.id || 0);
       const jobId = Number(fields.job_id || 0);
       if (!commentId) return { ok: false, status: 400, error: 'Eingabe unvollständig.' };
-      const dispoJobId = getCore().resolveDispoJobIdForAbrechnung(ctx.db, jobId);
+      let dispoJobId = getCore().resolveDispoJobIdForAbrechnung(ctx.db, jobId);
+      if (!dispoJobId) {
+        const found = phpLocal.findCommentInNotesCache(ctx.db, getCore().readCommentsFromRow, commentId);
+        if (found) dispoJobId = found.jobServerId;
+      }
+      const writeCache = (db, jid, comments) => getCore().writeCommentsCache(db, jid, comments);
       const d = dispoCtx(ctx, req);
       if (d.baseUrl && d.authHeader && d.authHeader.Authorization) {
         try {
@@ -664,12 +685,23 @@ function registerAbrechnungPhpRoutes(app, ctx) {
         ctx.db,
         ctx.save,
         getCore().readCommentsFromRow,
-        (db, jid, comments) => getCore().writeCommentsCache(db, jid, comments),
+        writeCache,
         dispoJobId,
         commentId,
       );
       if (!local.ok) return local;
-      return { ok: true, source: 'local' };
+      const queuedJobId = local.job_id || dispoJobId;
+      ctx.db.prepare('INSERT INTO abrechnung_outbox (op, payload) VALUES (?, ?)').run(
+        'comment_delete',
+        JSON.stringify({ job_id: queuedJobId, comment_id: commentId }),
+      );
+      ctx.save();
+      try {
+        await flushOutboxFromCtx(ctx, d, d.technicianId);
+      } catch (_) {
+        /* nächster Refresh */
+      }
+      return { ok: true, source: 'local', queued: true };
     });
   });
 

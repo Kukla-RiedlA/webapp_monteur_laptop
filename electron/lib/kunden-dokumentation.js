@@ -9,7 +9,9 @@ const KUNDEN_DOC_FOLDER = 'Kunden Dokumentation';
 const DOC_EXTS = new Set(['.pdf', '.csv', '.pa', '.txt']);
 const IMG_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
 const LEGACY_DOC_RE =
-  /^(Serviceprotokoll_|Inbetriebnahmeprotokoll_|Kontrollwiegungsprotokoll_|Schleppketten_Test_|Pruefzertifikat_|.*_Montage_DE|.*_report_GB)/i;
+  /^(Serviceprotokoll_|Service_protocol_|Inbetriebnahmeprotokoll_|Commissioning_report_|Kontrollwiegungsprotokoll_|Calibration_protocol_|Schleppketten_Test_|Chain_calibration_|Pruefzertifikat_|Inspection_certificate_|Montage_Bericht_|Assembly_report_|.*_Montage_DE|.*_Assembly_report_GB|.*_report_GB)/i;
+
+const { isMontageberichtExportName } = require('./protocol-pdf-names');
 
 function isIgnorableName(name) {
   const n = String(name || '');
@@ -74,17 +76,16 @@ function listDirFiles(dir, exts) {
 }
 
 function isMontageberichtName(name) {
-  const n = String(name || '');
-  return /_Montage_DE\.pdf$/i.test(n) || /_report_GB\.pdf$/i.test(n);
+  return isMontageberichtExportName(name);
 }
 
 function classifyDocumentType(name) {
   const n = String(name || '');
-  if (/^Serviceprotokoll_/i.test(n)) return 'Serviceprotokoll';
-  if (/^Inbetriebnahmeprotokoll_/i.test(n)) return 'Inbetriebnahme Protokoll';
-  if (/^Kontrollwiegungsprotokoll_/i.test(n)) return 'Kontrollwiegung';
-  if (/^Schleppketten_Test_/i.test(n)) return 'Schleppketten-Test';
-  if (/^Pruefzertifikat_/i.test(n)) return 'Prüfzertifikat';
+  if (/^Serviceprotokoll_/i.test(n) || /^Service_protocol_/i.test(n)) return 'Serviceprotokoll';
+  if (/^Inbetriebnahmeprotokoll_/i.test(n) || /^Commissioning_report_/i.test(n)) return 'Inbetriebnahme Protokoll';
+  if (/^Kontrollwiegungsprotokoll_/i.test(n) || /^Calibration_protocol_/i.test(n)) return 'Kontrollwiegung';
+  if (/^Schleppketten_Test_/i.test(n) || /^Chain_calibration_/i.test(n)) return 'Schleppketten-Test';
+  if (/^Pruefzertifikat_/i.test(n) || /^Inspection_certificate_/i.test(n)) return 'Prüfzertifikat';
   if (isMontageberichtName(n)) return 'Montagebericht';
   if (/\.csv$/i.test(n)) return 'Parameter CSV';
   if (/\.pa$/i.test(n)) return 'Parameter PA';

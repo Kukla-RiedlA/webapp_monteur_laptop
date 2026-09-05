@@ -480,10 +480,47 @@ function listAbrechnungJobsPhp(db, monat, technicianId, includeAbgerechnet = fal
   return { ok: true, jobs, technicians: [], source: 'local' };
 }
 
+function findCommentInNotesCache(db, readCommentsFromRow, commentId) {
+  const cid = Number(commentId);
+  if (!Number.isFinite(cid) || cid <= 0 || !db) return null;
+  let rows = [];
+  try {
+    rows = db.prepare(
+      'SELECT job_server_id, dispo, buchhaltung, comments_json FROM abrechnung_notes_cache',
+    ).all();
+  } catch (_) {
+    return null;
+  }
+  for (const row of rows) {
+    const comments = readCommentsFromRow(row);
+    for (const key of ['dispo', 'buchhaltung']) {
+      const item = (comments[key] || []).find((c) => Number(c.id) === cid);
+      if (item) {
+        return {
+          jobServerId: Number(row.job_server_id),
+          bucket: key,
+          comments,
+          item,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function resolveCommentCacheJobId(db, readCommentsFromRow, dispoJobId, commentId) {
+  const hinted = Number(dispoJobId);
+  if (Number.isFinite(hinted) && hinted > 0) return hinted;
+  const found = findCommentInNotesCache(db, readCommentsFromRow, commentId);
+  return found && found.jobServerId > 0 ? found.jobServerId : 0;
+}
+
 function updateCommentInCache(db, save, readCommentsFromRow, writeCommentsCache, dispoJobId, commentId, body) {
+  const jobId = resolveCommentCacheJobId(db, readCommentsFromRow, dispoJobId, commentId);
+  if (!jobId) return { ok: false, status: 404, error: 'Kommentar nicht gefunden.' };
   const row = db
     .prepare('SELECT dispo, buchhaltung, comments_json, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?')
-    .get(dispoJobId);
+    .get(jobId);
   const comments = readCommentsFromRow(row);
   let found = false;
   for (const key of ['dispo', 'buchhaltung']) {
@@ -496,15 +533,17 @@ function updateCommentInCache(db, save, readCommentsFromRow, writeCommentsCache,
     });
   }
   if (!found) return { ok: false, status: 404, error: 'Kommentar nicht gefunden.' };
-  writeCommentsCache(db, dispoJobId, comments);
+  writeCommentsCache(db, jobId, comments);
   if (typeof save === 'function') save();
-  return { ok: true, source: 'local' };
+  return { ok: true, source: 'local', job_id: jobId };
 }
 
 function deleteCommentInCache(db, save, readCommentsFromRow, writeCommentsCache, dispoJobId, commentId) {
+  const jobId = resolveCommentCacheJobId(db, readCommentsFromRow, dispoJobId, commentId);
+  if (!jobId) return { ok: false, status: 404, error: 'Kommentar nicht gefunden.' };
   const row = db
     .prepare('SELECT dispo, buchhaltung, comments_json, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?')
-    .get(dispoJobId);
+    .get(jobId);
   const comments = readCommentsFromRow(row);
   let found = false;
   for (const key of ['dispo', 'buchhaltung']) {
@@ -513,9 +552,9 @@ function deleteCommentInCache(db, save, readCommentsFromRow, writeCommentsCache,
     if (comments[key].length < before) found = true;
   }
   if (!found) return { ok: false, status: 404, error: 'Kommentar nicht gefunden.' };
-  writeCommentsCache(db, dispoJobId, comments);
+  writeCommentsCache(db, jobId, comments);
   if (typeof save === 'function') save();
-  return { ok: true, source: 'local' };
+  return { ok: true, source: 'local', job_id: jobId };
 }
 
 function resolveTechnicianDisplayName(db, technicianId) {
@@ -549,6 +588,8 @@ module.exports = {
   readBillingCache,
   listAbrechnungJobsPhp,
   monteurCanWriteJob,
+  findCommentInNotesCache,
+  resolveCommentCacheJobId,
   updateCommentInCache,
   deleteCommentInCache,
   resolveTechnicianDisplayName,

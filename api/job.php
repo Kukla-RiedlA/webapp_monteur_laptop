@@ -84,6 +84,31 @@ if ($method === 'PATCH' || $method === 'POST') {
         exit;
     }
 
+    if (array_key_exists('start_datetime', $data) || array_key_exists('end_datetime', $data) || array_key_exists('date_not_fixed', $data)) {
+        $startRaw = isset($data['start_datetime']) ? (string) $data['start_datetime'] : '';
+        $endRaw = isset($data['end_datetime']) ? (string) $data['end_datetime'] : $startRaw;
+        if (trim($startRaw) === '') {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => 'start_datetime erforderlich.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $dnf = array_key_exists('date_not_fixed', $data) ? $data['date_not_fixed'] : null;
+        $res = $repo->updateJobSchedule($jobId, $technicianId, $startRaw, $endRaw, $dnf, $technicianId);
+        if (empty($res['ok'])) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => (string) ($res['error'] ?? 'Zeitraum-Update fehlgeschlagen.')], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        echo json_encode([
+            'ok' => true,
+            'updated' => 'schedule',
+            'start_datetime' => $res['start_datetime'] ?? null,
+            'end_datetime' => $res['end_datetime'] ?? null,
+            'date_not_fixed' => $res['date_not_fixed'] ?? null,
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
     if (array_key_exists('fabrikationsnummern', $data)) {
         $rows = [];
         if (is_string($data['fabrikationsnummern'])) {
@@ -105,7 +130,7 @@ if ($method === 'PATCH' || $method === 'POST') {
     }
 
     http_response_code(400);
-    echo json_encode(['ok' => false, 'error' => 'Body: status, description oder fabrikationsnummern erforderlich.'], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['ok' => false, 'error' => 'Body: status, description, start_datetime/end_datetime oder fabrikationsnummern erforderlich.'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 

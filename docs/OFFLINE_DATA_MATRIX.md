@@ -35,7 +35,7 @@ Legende:
 
 | Bereich | SQLite (Auszug) | Sync In | Sync Out | Offline lesen | Offline schreiben | Multi-Device |
 |---------|-------------------|---------|----------|---------------|-------------------|--------------|
-| Aufträge / Stammdaten | `jobs`, `customers`, `job_addresses`, `job_technicians`, `job_contacts`, `job_hotel_addresses` | `sync_pull` u. a. | Status, Beschreibung, Hotel, FNs → `pending_changes` / Push | Ja (letzter Stand) | Ja (`PATCH /api/job`); Push wenn online | Ja (Dispo-Status global; `job_closed`-Gate) |
+| Aufträge / Stammdaten | `jobs`, `customers`, `job_addresses`, `job_technicians`, `job_contacts`, `job_hotel_addresses` | `sync_pull` u. a. | Status, Beschreibung, Zeitraum (`schedule`), Hotel, FNs → `pending_changes` / Push | Ja (letzter Stand) | Ja (`PATCH /api/job`); Push wenn online | Ja (Dispo-Status global; `job_closed`-Gate) |
 | **Auftrag annehmen** | `jobs`, Dienstreise-Ordner | optional Pull | Status `in_arbeit` | Teilweise | **Ja** (`POST /api/dienstreise/accept_offline`) | Ja (idempotent über `server_id`) |
 | **Auftrag abschließen** | Dienstreise-Ordner | `dienstreise_push` | Finish-Sync | Ja | Online-Statuswechsel; lokal defer | Ja (andere Geräte read-only + „Lokale Kopie löschen“) |
 | **Auftrag freigeben** | `jobs` | — | Push dann Status `zugeteilt` | Ja | Ja (Queue); Multi-Device: Push Pflicht | Ja (Warnung bei Peer-Presence) |

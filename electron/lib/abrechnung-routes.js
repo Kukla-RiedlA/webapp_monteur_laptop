@@ -1079,6 +1079,52 @@ async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername,
           }
           throw delErr;
         }
+      } else if (row.op === 'comment_edit') {
+        const outboxJobId = resolveDispoJobIdForAbrechnung(db, payload.job_id);
+        await dispoAbrechnungPostJson(
+          baseUrl,
+          'abrechnung_comment_edit.php',
+          {
+            technician_id: technicianId,
+            job_id: outboxJobId,
+            comment_id: payload.comment_id,
+            body: payload.body || '',
+          },
+          authHeader,
+          technicianId,
+        );
+        try {
+          await syncCommentsOnlyFromDispo(ctx, baseUrl, technicianId, authHeader, outboxJobId);
+        } catch (_) {
+          /* Kommentarliste folgt beim nächsten Refresh */
+        }
+      } else if (row.op === 'comment_delete') {
+        const outboxJobId = resolveDispoJobIdForAbrechnung(db, payload.job_id);
+        try {
+          await dispoAbrechnungPostJson(
+            baseUrl,
+            'abrechnung_comment_delete.php',
+            {
+              technician_id: technicianId,
+              job_id: outboxJobId,
+              comment_id: payload.comment_id,
+            },
+            authHeader,
+            technicianId,
+          );
+        } catch (delErr) {
+          const msg = delErr && delErr.message ? String(delErr.message) : String(delErr);
+          if (/nicht gefunden|not found|404/i.test(msg)) {
+            db.prepare('DELETE FROM abrechnung_outbox WHERE id = ?').run(row.id);
+            continue;
+          }
+          throw delErr;
+        }
+        try {
+          await syncCommentsOnlyFromDispo(ctx, baseUrl, technicianId, authHeader, outboxJobId);
+        } catch (_) {
+          /* Kommentarliste folgt beim nächsten Refresh */
+        }
       }
       db.prepare('DELETE FROM abrechnung_outbox WHERE id = ?').run(row.id);
     } catch (e) {

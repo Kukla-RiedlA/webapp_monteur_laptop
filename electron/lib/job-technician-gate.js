@@ -64,6 +64,23 @@ function requireJobAssignedToTechnician(dbConn, localJobId, technicianId) {
 }
 
 /**
+ * Laptop-PATCH: Kalender-Vorschau hat oft Dispo-`id`. Explizites `local_job_id` gewinnt.
+ * @param {{ job_id?: *, local_job_id?: *, server_id?: * }} body
+ * @returns {{ ref: number|null, mode: 'local'|'server'|'auto' }}
+ */
+function resolvePatchJobRef(body) {
+  const src = body && typeof body === 'object' ? body : {};
+  const localHint = parsePositiveInt(src.local_job_id);
+  const jobHint = parsePositiveInt(src.job_id);
+  const serverHint = parsePositiveInt(src.server_id);
+  if (localHint) return { ref: localHint, mode: 'local' };
+  if (serverHint && jobHint && jobHint === serverHint) return { ref: serverHint, mode: 'server' };
+  if (jobHint) return { ref: jobHint, mode: 'auto' };
+  if (serverHint) return { ref: serverHint, mode: 'server' };
+  return { ref: null, mode: 'auto' };
+}
+
+/**
  * @param {import('better-sqlite3').Database} dbConn
  * @param {number|string} technicianId
  * @param {number|string} ref
@@ -162,5 +179,6 @@ module.exports = {
   isJobAssignedToTechnician,
   requireJobAssignedToTechnician,
   resolveLocalJobIdForTechnician,
+  resolvePatchJobRef,
   jobAssignmentViewMeta,
 };

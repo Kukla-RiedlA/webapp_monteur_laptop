@@ -161,7 +161,9 @@
   function currentJobId() {
     var v = jobSelect && jobSelect.value ? String(jobSelect.value) : '';
     var n = parseInt(v, 10);
-    return isNaN(n) || n <= 0 ? 0 : n;
+    if (!isNaN(n) && n > 0) return n;
+    var pf = cfg.prefillJob && cfg.prefillJob.id ? parseInt(String(cfg.prefillJob.id), 10) : 0;
+    return !isNaN(pf) && pf > 0 ? pf : 0;
   }
 
   function setUiBusy(on) {
@@ -830,6 +832,8 @@
             }
             var fd2 = new FormData();
             fd2.append('csrf_token', cfg.csrfComment || '');
+            fd2.append('job_id', String(currentJobId()));
+            fd2.append('bucket', COMMENT_BUCKET);
             fd2.append('comment_id', String(c.id));
             fetch('/api/abrechnung_comment_delete.php', { method: 'POST', body: fd2, credentials: 'same-origin' })
               .then(function (r) { return r.json(); })
@@ -1104,6 +1108,8 @@
       if (editId > 0) {
         var fdEdit = new FormData();
         fdEdit.append('csrf_token', cfg.csrfComment || '');
+        fdEdit.append('job_id', String(jid));
+        fdEdit.append('bucket', COMMENT_BUCKET);
         fdEdit.append('comment_id', String(editId));
         fdEdit.append('body', body);
         fetch('/api/abrechnung_comment_edit.php', { method: 'POST', body: fdEdit, credentials: 'same-origin' })

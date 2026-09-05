@@ -4,6 +4,18 @@ Chronologische Kurznotizen zu Feld- und Statusänderungen, die Laptop, Dispo ode
 
 ---
 
+## 2026-09-05 – Abrechnung-Kommentar Edit/Delete (Monteur-API)
+
+- **Alt:** Laptop-Edit sendete nur `comment_id` (ohne `job_id`); lokale Cache-Suche mit `job_server_id = 0` → „Kommentar nicht gefunden.“ Keine `dispo_api`-Endpunkte für Edit/Delete.
+- **Neu:** FormData enthält `job_id` (und `bucket`). Cache-Suche über alle Jobs, falls `job_id` fehlt. `POST dispo_api/api/abrechnung_comment_edit.php` / `_delete.php`, Wrapper `api/monteur_abrechnung_comment_*`, Mobile `api/mobile/abrechnung_comment_*`. Outbox-Ops `comment_edit` / `comment_delete`.
+
+## 2026-09-05 – Auftragszeitraum PATCH (`schedule`)
+
+- **Alt:** Zeitraum in der Laptop-App nur Anzeige; PATCH `/api/job` und Dispo `job.php` ohne Start/Ende.
+- **Neu (additiv):** `start_datetime`, `end_datetime`, optional `date_not_fixed`. Laptop queued `pending_changes` action `schedule`. Dispo `dispo_api/api/job.php` und `api/mobile/job.php`.
+
+---
+
 ## 2026-09-04 – Mess-/Wiegungszeilen `in_pdf` (additiv)
 
 - **Alt:** Nur Laptop-JSON/`payload_json`; KW-DB ohne Flags; SK-Messungen nur `in_summe`. PDF zeigte alle DB-Zeilen.

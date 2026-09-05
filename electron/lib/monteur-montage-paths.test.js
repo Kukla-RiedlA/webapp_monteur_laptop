@@ -20,6 +20,10 @@ const {
   migrateTopLevelMontageIntoFnFolders,
   expandTopLevelMontageRelToFnFolders,
   mapServerManifestPathToLocalAnlageRel,
+  looksLikeStaleFnOrProjectHeaderDir,
+  removeUnrelatedTopLevelProjectFolders,
+  isUsableFnHauptordnerName,
+  resolveFabMapLocal,
 } = require('./monteur-montage-paths');
 
 function tmpReise() {
@@ -159,5 +163,191 @@ describe('monteur-montage-paths lazy mkdir', () => {
     await migrateAliasFnFolders(reiseDir, [{ fab: '7118', folder_name_canonical: can }]);
     assert.equal(fs.existsSync(path.join(anlage, '7118')), false);
     assert.equal(fs.existsSync(path.join(anlage, can, 'keep.txt')), true);
+  });
+});
+
+describe('verwaiste Projektköpfe / FN-Ordner', () => {
+  let reiseDir;
+  beforeEach(() => {
+    reiseDir = tmpReise();
+  });
+  afterEach(() => {
+    fs.rmSync(reiseDir, { recursive: true, force: true });
+  });
+
+  it('Gyproc-Datumsordner ist Projektkopf, kein FN-Hauptordner', () => {
+    const gyproc = '30-2020-07-25_Saint_Gobain_Gyproc_Alekto_NO';
+    assert.equal(looksLikeStaleFnOrProjectHeaderDir(gyproc), true);
+    assert.equal(isUsableFnHauptordnerName(gyproc), false);
+  });
+
+  it('entfernt Datums-Projektköpfe ohne Bezug zur aktuellen FN-Liste', async () => {
+    const gyproc = '30-2020-07-25_Saint_Gobain_Gyproc_Alekto_NO';
+    const keep = '7118_Kunde_Ort_DE';
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', gyproc), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', gyproc, 'x.txt'), 'x');
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', keep), { recursive: true });
+    await removeUnrelatedTopLevelProjectFolders(reiseDir, [
+      { fab: '7118', folder_name_canonical: keep },
+    ]);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', gyproc)), false);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', keep)), true);
+  });
+
+  it('lässt gültige FN-Bereichsordner der aktuellen FNs stehen', async () => {
+    const range = '20500-20501_Test Sunstwo, AT';
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', range), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'keep.txt'), 'x');
+    await removeUnrelatedTopLevelProjectFolders(reiseDir, [
+      { fab: '20500', folder_name_canonical: range },
+      { fab: '20501', folder_name_canonical: range },
+    ]);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'keep.txt')), true);
+  });
+
+  it('löscht ohne FN-Liste nichts (leere fab_map)', async () => {
+    const range = '20500-20501_Test Sunstwo, AT';
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', range), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'keep.txt'), 'x');
+    await removeUnrelatedTopLevelProjectFolders(reiseDir, []);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'keep.txt')), true);
+  });
+});
+
+describe('FN-Bereich vs. Einzelordner', () => {
+  let reiseDir;
+  beforeEach(() => {
+    reiseDir = tmpReise();
+  });
+  afterEach(() => {
+    fs.rmSync(reiseDir, { recursive: true, force: true });
+  });
+
+  it('resolveFabMapLocal nutzt den Fileserver-Bereich für beide FNs', () => {
+    const range = '20500-20501_Test Sunstwo, AT';
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', range), { recursive: true });
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', '20501_Test_Sunstwo_AT'), { recursive: true });
+    const map = resolveFabMapLocal(
+      reiseDir,
+      [
+        { fab: '20500', folder_name_canonical: range },
+        { fab: '20501', folder_name_canonical: '20501_Test_Sunstwo_AT' },
+      ],
+      ['20500', '20501'],
+      (fab) => (fab === '20501' ? '20501_Test_Sunstwo_AT' : range),
+      { customer_name: 'Test', city: 'Sunstwo', country: 'AT' },
+    );
+    assert.equal(map.length, 2);
+    assert.equal(map[0].folder_name_canonical, range);
+    assert.equal(map[1].folder_name_canonical, range);
+  });
+
+  it('migrateAlias führt Einzel-FN in den Bereichsordner, nicht umgekehrt', async () => {
+    const range = '20500-20501_Test Sunstwo, AT';
+    const single = '20501_Test_Sunstwo_AT';
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'Montage'), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'keep.txt'), 'range');
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', single), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', single, 'extra.txt'), 'single');
+    await migrateAliasFnFolders(reiseDir, [
+      { fab: '20500', folder_name_canonical: range },
+      { fab: '20501', folder_name_canonical: range },
+    ]);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', single)), false);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'keep.txt')), true);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'extra.txt')), true);
+  });
+
+  it('migrateAlias löscht keinen Bereichsordner zugunsten eines Einzel-FN-Namens', async () => {
+    const range = '20500-20501_Test Sunstwo, AT';
+    const single = '20500_Test_Sunstwo_AT';
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', range), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'range.txt'), 'x');
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', single), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', single, 'single.txt'), 'y');
+    await migrateAliasFnFolders(reiseDir, [
+      { fab: '20500', folder_name_canonical: single },
+      { fab: '20501', folder_name_canonical: '20501_Test_Sunstwo_AT' },
+    ]);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', range, 'range.txt')), true);
+  });
+
+  it('führt „, AT“ und „, _AT“ in den Fileserver-Namen zusammen', async () => {
+    const fileserver = '20500-20501_Test Sunstwo, AT';
+    const localUgly = '20500-20501_Test Sunstwo, _AT';
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver, 'keep.txt'), 'ok');
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', localUgly), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', localUgly, 'extra.txt'), 'x');
+    const map = resolveFabMapLocal(
+      reiseDir,
+      [
+        { fab: '20500', folder_name_canonical: localUgly },
+        { fab: '20501', folder_name_canonical: localUgly },
+      ],
+      ['20500', '20501'],
+      () => localUgly,
+      { customer_name: 'Test', city: 'Sunstwo', country: 'AT' },
+    );
+    assert.equal(map[0].folder_name_canonical, fileserver);
+    assert.equal(map[1].folder_name_canonical, fileserver);
+    await migrateAliasFnFolders(reiseDir, map);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', localUgly)), false);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver, 'keep.txt')), true);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver, 'extra.txt')), true);
+  });
+});
+
+describe('pickPreferredExactFnDir', () => {
+  const { pickPreferredExactFnDir } = require('./projekte-neu-local');
+
+  it('bevorzugt den langen FN-Ordner vor der reinen Ziffer', () => {
+    const picked = pickPreferredExactFnDir(
+      ['20500', '20500_Test_Sunstwo_AT', '20501_Test_Sunstwo_AT'],
+      '20500',
+    );
+    assert.equal(picked, '20500_Test_Sunstwo_AT');
+  });
+
+  it('nimmt die Ziffer nur wenn kein langer Name existiert', () => {
+    assert.equal(pickPreferredExactFnDir(['20500', 'anderes'], '20500'), '20500');
+  });
+});
+
+describe('Montagebericht-Dateiname', () => {
+  const {
+    montageberichtExportStem,
+    isLegacyMontageberichtEnExportName,
+    cleanupLegacyMontageberichtEnPdfLocal,
+  } = require('./monteur-montage-paths');
+
+  it('DE und EN: Typ zuerst, dann Auftrag, dann Sprache', () => {
+    const base = '2026-09-06_Test_Sunstwo_AT';
+    assert.equal(montageberichtExportStem(base, 'de'), 'Montage_Bericht_2026-09-06_Test_Sunstwo_AT_DE');
+    assert.equal(montageberichtExportStem(base, 'en'), 'Assembly_report_2026-09-06_Test_Sunstwo_AT_GB');
+  });
+
+  it('erkennt alte Dateinamen als Legacy, neue nicht', () => {
+    assert.equal(isLegacyMontageberichtEnExportName('2026-09-06_Test_Sunstwo_AT_report_GB.pdf'), true);
+    assert.equal(isLegacyMontageberichtEnExportName('2026-09-06_Test_Sunstwo_AT_Montage_DE.pdf'), true);
+    assert.equal(isLegacyMontageberichtEnExportName('2026-09-06_Test_Sunstwo_AT_Assembly_report_GB.pdf'), true);
+    assert.equal(isLegacyMontageberichtEnExportName('Assembly_report_2026-09-06_Test_Sunstwo_AT_GB.pdf'), false);
+    assert.equal(isLegacyMontageberichtEnExportName('Montage_Bericht_2026-09-06_Test_Sunstwo_AT_DE.pdf'), false);
+  });
+
+  it('entfernt alte Montagebericht-PDFs nach neuem Export', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kukla-mb-en-'));
+    const base = '2026-09-06_Test_Sunstwo_AT';
+    try {
+      fs.writeFileSync(path.join(dir, base + '_report_GB.pdf'), 'old-en');
+      fs.writeFileSync(path.join(dir, base + '_Montage_DE.pdf'), 'old-de');
+      fs.writeFileSync(path.join(dir, 'Montage_Bericht_' + base + '_DE.pdf'), 'new');
+      cleanupLegacyMontageberichtEnPdfLocal(dir, base);
+      assert.equal(fs.existsSync(path.join(dir, base + '_report_GB.pdf')), false);
+      assert.equal(fs.existsSync(path.join(dir, base + '_Montage_DE.pdf')), false);
+      assert.equal(fs.existsSync(path.join(dir, 'Montage_Bericht_' + base + '_DE.pdf')), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

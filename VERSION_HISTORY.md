@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.006
+- **FN-Ordner:** Bereichs- und Einzel-FN nutzen denselben Ordner; Alias-Schreibweisen werden zusammengeführt, statt Ordner anzulegen und sofort zu löschen.
+- **Protokoll-PDFs:** Dateiname beginnt mit dem Dokumenttyp (DE/EN), Endung `_DE`/`_GB`; Legacy-Namen beim Speichern entfernen.
+- **Auftragszeitraum:** PATCH mit `start_datetime`/`end_datetime`; Job-Zuordnung über `local_job_id` plus Dispo-`server_id`.
+- **Abrechnung:** Kommentare ändern und löschen inkl. Outbox-Sync.
+
 ## V 2.007.005
 - **Anlagenstamm:** zusätzliche Größe Behälter Nenninhalt bei Type D-DW / V-DG-1.
 - **Service-/IBN-Protokoll:** v max wird bei diesen Types durch Behälter Nenninhalt ersetzt (Formular, React, PDF).

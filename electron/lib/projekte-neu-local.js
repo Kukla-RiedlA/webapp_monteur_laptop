@@ -14,11 +14,13 @@ function isIgnorableDirEntry(name) {
   return lower === 'thumbs.db' || lower === 'desktop.ini';
 }
 
-/** Leerzeichen und Unterstriche gelten als derselbe FN-Ordner. */
+/** Leerzeichen, Unterstriche und „, AT“ / „, _AT“ gelten als derselbe FN-Ordner. */
 function fnFolderAliasKey(name) {
   return String(name || '')
     .trim()
+    .replace(/,\s*_*/g, ',')
     .replace(/\s+/g, '_')
+    .replace(/,+/g, '_')
     .replace(/_+/g, '_')
     .toLowerCase();
 }
@@ -169,6 +171,8 @@ function pickPreferredExactFnDir(dirNames, fab) {
   if (!exact.length) return null;
   const withSpaces = exact.filter((n) => /\s/.test(n));
   if (withSpaces.length) return withSpaces[0];
+  const nonBare = exact.filter((n) => !/^\d+$/.test(String(n).trim()));
+  if (nonBare.length) return nonBare[0];
   return exact[0];
 }
 
@@ -338,6 +342,7 @@ module.exports = {
   consecutiveNumericFabRuns,
   collectExactFnFolderMatches,
   pickPreferredExactFnDir,
+  pickFnRangeDir,
   safeResolveUnderRoot,
   scanProjekteNeuTree,
   resolveProjekteNeuRoot,

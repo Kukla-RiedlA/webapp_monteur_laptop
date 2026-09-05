@@ -13,10 +13,15 @@ const {
   isDatePrefixedProjectFolderName,
   parseFnRangeFromFolderName,
   parseFabNumber,
+  pickFnRangeDir,
   uniqueSortedNumericFabs,
   consecutiveNumericFabRuns,
 } = require('./projekte-neu-local');
 const { isMonteurDraftJsonBasename } = require('./multi-device-sync');
+const {
+  montageberichtExportStem: montageberichtExportStemRaw,
+  isLegacyMontageberichtExportName,
+} = require('./protocol-pdf-names');
 
 function sanitizeDienstreiseFolderPart(str, maxLen) {
   if (typeof str !== 'string') return '';
@@ -96,6 +101,40 @@ function sanitizeExportFileBase(str) {
     .replace(/\.pdf$/i, '')
     .replace(/\.docx$/i, '');
   return sanitizeDienstreiseFolderPart(base, 72) || 'Dokument';
+}
+
+/**
+ * Montagebericht-Dateiname: Montage_Bericht_<Auftrag>_DE / Assembly_report_<Auftrag>_GB.
+ */
+function montageberichtExportStem(fileBase, lang) {
+  return montageberichtExportStemRaw(sanitizeExportFileBase(fileBase), lang);
+}
+
+function isLegacyMontageberichtEnExportName(name) {
+  return isLegacyMontageberichtExportName(name);
+}
+
+function cleanupLegacyMontageberichtEnPdfLocal(protokolleDir, fileBase) {
+  const removed = [];
+  if (!protokolleDir || !fs.existsSync(protokolleDir)) return removed;
+  const base = String(fileBase || '').trim();
+  let names = [];
+  try {
+    names = fs.readdirSync(protokolleDir);
+  } catch (_) {
+    return removed;
+  }
+  for (const name of names) {
+    if (!isLegacyMontageberichtExportName(name)) continue;
+    if (base && name.indexOf(base) < 0) continue;
+    const abs = path.join(protokolleDir, name);
+    try {
+      if (!fs.statSync(abs).isFile()) continue;
+      fs.unlinkSync(abs);
+      removed.push(name);
+    } catch (_) {}
+  }
+  return removed;
 }
 
 /**
@@ -325,35 +364,158 @@ function isUsableFnHauptordnerName(name, fab) {
   return true;
 }
 
+/** Date-prefixed Projektkopf (30-2020-07-25_Kunde_Ort) oder FN-Hauptordner ohne Bezug zur aktuellen FN-Liste. */
+function looksLikeStaleFnOrProjectHeaderDir(name) {
+  const n = String(name || '').trim();
+  if (!n) return false;
+  if (isDatePrefixedProjectFolderName(n)) return true;
+  if (parseFnRangeFromFolderName(n)) return true;
+  const m = n.match(/^(\d{3,6})(?:[_-\s]|$)/);
+  if (!m) return false;
+  if (m[1].length === 4) {
+    const year = parseInt(m[1], 10);
+    if (year >= 1900 && year <= 2100) return false;
+  }
+  return true;
+}
+
+function dirBelongsToCurrentFabs(name, fabFolderEntries) {
+  const n = String(name || '').trim();
+  if (!n) return false;
+  for (const e of fabFolderEntries || []) {
+    const can = String((e && e.folder_name_canonical) || '').trim();
+    const fab = String((e && e.fab) || '').trim();
+    if (can && (can === n || isFnFolderAlias(can, n))) return true;
+    if (fab && (folderNameMatchesFab(n, fab) || isFnFolderAlias(n, fab))) return true;
+  }
+  return false;
+}
+
 /**
- * Ein Ordner je FN: Fileserver-Name (Leerzeichen) vor Dispo-Unterstrich-Variante.
+ * Entfernt Datums-Projektköpfe und verwaiste FN-Ordner, die zu keiner aktuellen Auftrags-FN gehören.
+ */
+async function removeUnrelatedTopLevelProjectFolders(reiseDir, fabFolderEntries) {
+  if (!reiseDir || !fs.existsSync(reiseDir)) return [];
+  const entries = (fabFolderEntries || []).filter(
+    (e) => e && (String((e.fab || '')).trim() || String((e.folder_name_canonical || '')).trim()),
+  );
+  if (!entries.length) return [];
+  const removed = [];
+  for (const sub of ['Dokumente_Monteur', 'Dokumente_Anlage']) {
+    const base = path.join(reiseDir, sub);
+    for (const name of listSubdirNames(base)) {
+      if (sub === 'Dokumente_Monteur' && isDokumenteMonteurReservedTopDir(name)) continue;
+      if (!looksLikeStaleFnOrProjectHeaderDir(name)) continue;
+      if (dirBelongsToCurrentFabs(name, entries)) continue;
+      const full = path.join(base, name);
+      try {
+        await rmRecursiveAsync(full);
+        removed.push(sub + '/' + name);
+        console.warn('[monteur-paths] Unrelated folder removed', sub + '/' + name);
+      } catch (err) {
+        console.warn(
+          '[monteur-paths] Unrelated folder not removed:',
+          full,
+          err && err.message ? err.message : err,
+        );
+      }
+    }
+  }
+  return removed;
+}
+
+function isMultiFnRangeFolderName(name) {
+  const range = parseFnRangeFromFolderName(name);
+  return !!(range && range.from !== range.to);
+}
+
+/**
+ * Vorhandener Fileserver-Bereichsordner schlägt generierte Einzel-FN-Namen.
+ * Sonst entstehen zwei Ordner (20500-20501_… und 20501_Test_…) und einer wird gleich wieder gelöscht.
+ */
+function pickPreferredRangeFolderName(names) {
+  const hits = [];
+  const seen = new Set();
+  for (const raw of names || []) {
+    const n = String(raw || '').trim();
+    if (!n || seen.has(n) || !isMultiFnRangeFolderName(n)) continue;
+    seen.add(n);
+    hits.push(n);
+  }
+  if (!hits.length) return '';
+  function fileserverNameScore(n) {
+    // Fileserver: „20500-20501_Kunde Ort, AT“ — nicht „, _AT“.
+    if (/,\s[A-Za-z]{2}\s*$/.test(n) && !/,\s+_/.test(n)) return 4;
+    if (/\s/.test(n) && !/,\s+_/.test(n)) return 3;
+    if (/\s/.test(n)) return 2;
+    return 1;
+  }
+  hits.sort((a, b) => fileserverNameScore(b) - fileserverNameScore(a));
+  return hits[0];
+}
+
+/**
+ * Alle FNs, die ein gemeinsamer Bereichsordner abdeckt, müssen denselben Namen nutzen.
+ * @param {Array<{ fab: string, folder_name_canonical: string }>} entries
+ * @param {string[]} extraRangeNames
+ */
+function unifyFabMapSharedRanges(entries, extraRangeNames) {
+  const out = (entries || []).map((e) => ({
+    fab: String((e && e.fab) || '').trim(),
+    folder_name_canonical: String((e && e.folder_name_canonical) || '').trim(),
+  }));
+  const rangeNames = [];
+  for (const n of extraRangeNames || []) {
+    if (isMultiFnRangeFolderName(n)) rangeNames.push(String(n).trim());
+  }
+  for (const e of out) {
+    if (isMultiFnRangeFolderName(e.folder_name_canonical)) rangeNames.push(e.folder_name_canonical);
+  }
+  for (const e of out) {
+    const n = parseFabNumber(e.fab);
+    if (n == null) continue;
+    const covering = rangeNames.filter((name) => {
+      const range = parseFnRangeFromFolderName(name);
+      return range && n >= range.from && n <= range.to;
+    });
+    const shared = pickPreferredRangeFolderName(covering);
+    if (shared) e.folder_name_canonical = shared;
+  }
+  return out;
+}
+
+/**
+ * Ein Ordner je FN: vorhandener Bereichsordner, dann Fileserver-Name (Leerzeichen) vor Unterstrich.
  * Datums-Unterordner (30-2020-07-25_…) werden nicht als Hauptordner verwendet.
  * @param {string[]} matches
- * @param {{ fab?: string|number, cache?: string, built?: string, existing?: string }} [hints]
+ * @param {{ fab?: string|number, cache?: string, built?: string, existing?: string, rangeDir?: string, single_fallback?: string }} [hints]
  */
 function pickPreferredFnFolderName(matches, hints) {
   const fab = String((hints && hints.fab) || '').trim();
   const cache = String((hints && hints.cache) || '').trim();
   const built = String((hints && hints.built) || '').trim();
   const existing = String((hints && hints.existing) || '').trim();
+  const rangeDir = String((hints && hints.rangeDir) || '').trim();
   const singleFb = String((hints && hints.single_fallback) || '').trim();
   const list = (matches || []).map((n) => String(n || '').trim()).filter((n) => isUsableFnHauptordnerName(n, fab));
-  const builtRange = parseFnRangeFromFolderName(built);
-  const builtIsMultiRange = !!(builtRange && builtRange.from !== builtRange.to);
+  const builtIsMultiRange = isMultiFnRangeFolderName(built);
+  const rangeDirUsable =
+    isUsableFnHauptordnerName(rangeDir, fab) && isNonBareFnFolderName(rangeDir) && isMultiFnRangeFolderName(rangeDir);
   function isGeneratedSingle(name) {
     const n = String(name || '').trim();
     if (!n) return false;
+    if (isMultiFnRangeFolderName(n)) return false;
     if (fab && (n === fab || isBareFabFolderName(n))) return true;
     return !!(singleFb && isFnFolderAlias(n, singleFb));
   }
+  // Platte (Fileserver-Bereich) vor Cache/Generated — verhindert Anlegen/Löschen-Flackern.
+  if (rangeDirUsable) return rangeDir;
   const cacheUsable = isUsableFnHauptordnerName(cache, fab) && isNonBareFnFolderName(cache);
   if (cacheUsable && !(isGeneratedSingle(cache) && builtIsMultiRange)) return cache;
   const spaceMatch = list.find((n) => /\s/.test(n) && isNonBareFnFolderName(n) && !isGeneratedSingle(n));
   if (spaceMatch) return spaceMatch;
-  const existingRange = parseFnRangeFromFolderName(existing);
-  const existingIsMultiRange = !!(existingRange && existingRange.from !== existingRange.to);
   if (
-    existingIsMultiRange &&
+    isMultiFnRangeFolderName(existing) &&
     isUsableFnHauptordnerName(existing, fab) &&
     isNonBareFnFolderName(existing) &&
     !(isGeneratedSingle(existing) && builtIsMultiRange)
@@ -482,9 +644,11 @@ function resolveFabMapLocal(reiseDir, fabMapIn, jobFabNums, readRootFolderName, 
       typeof readRootFolderName === 'function'
         ? String(readRootFolderName(fab) || '').trim()
         : '';
+    const rangeDir = pickFnRangeDir(dirNames, fab) || '';
     const fromDirs =
       pickNonBareCanonicalDirName(dirNames, fab) ||
       resolveCanonicalProjekteNeuFolderName(dirNames, fab) ||
+      rangeDir ||
       '';
     const diskMatches = collectExactFnFolderMatches(dirNames, fab);
     const singleBuilt = buildFnProjectFolderName(Object.assign({ fab }, metaParts));
@@ -503,6 +667,7 @@ function resolveFabMapLocal(reiseDir, fabMapIn, jobFabNums, readRootFolderName, 
       existingCanonical,
       fromCache,
       fromDirs,
+      rangeDir,
       diskMatches,
       singleBuilt,
       n,
@@ -534,12 +699,14 @@ function resolveFabMapLocal(reiseDir, fabMapIn, jobFabNums, readRootFolderName, 
       cache: info ? info.fromCache : '',
       built,
       existing: info ? info.existingCanonical || info.fromDirs : '',
+      rangeDir: info ? info.rangeDir : '',
       single_fallback: info ? info.singleBuilt : '',
     });
     if (!folder_name_canonical) folder_name_canonical = fab;
     out.push({ fab, folder_name_canonical });
   }
-  return out;
+  const diskRangeNames = dirNames.filter((n) => isMultiFnRangeFolderName(n));
+  return unifyFabMapSharedRanges(out, diskRangeNames);
 }
 
 function yieldEventLoop() {
@@ -633,6 +800,29 @@ async function migrateBareFabDirsUnder(reiseDir, subfolder, fabFolderEntries) {
 /**
  * Führt Leerzeichen- und Unterstrich-Varianten derselben FN in den kanonischen Ordner zusammen.
  */
+function collectAliasFoldersToMerge(dirNames, fab, preferred) {
+  const seen = new Set();
+  const out = [];
+  function add(raw) {
+    const n = String(raw || '').trim();
+    if (!n || n === preferred || seen.has(n)) return;
+    seen.add(n);
+    out.push(n);
+  }
+  for (const n of collectExactFnFolderMatches(dirNames, fab)) add(n);
+  for (const n of dirNames || []) {
+    if (isFnFolderAlias(n, preferred)) add(n);
+  }
+  const prefRange = parseFnRangeFromFolderName(preferred);
+  if (prefRange && prefRange.from !== prefRange.to) {
+    for (const n of dirNames || []) {
+      const range = parseFnRangeFromFolderName(n);
+      if (range && range.from === prefRange.from && range.to === prefRange.to) add(n);
+    }
+  }
+  return out;
+}
+
 function migrateAliasFnFoldersUnder(reiseDir, subfolder, fabFolderEntries) {
   const base = path.join(reiseDir, subfolder);
   if (!fs.existsSync(base)) return Promise.resolve();
@@ -645,8 +835,9 @@ function migrateAliasFnFoldersUnder(reiseDir, subfolder, fabFolderEntries) {
       const matches = collectExactFnFolderMatches(dirNames, fab);
       const preferred = can || pickPreferredFnFolderName(matches, {});
       if (!preferred) continue;
+      const toMerge = collectAliasFoldersToMerge(dirNames, fab, preferred);
       const target = path.join(base, preferred);
-      for (const name of matches) {
+      for (const name of toMerge) {
         if (name === preferred) continue;
         const stale = path.join(base, name);
         if (!fs.existsSync(stale)) continue;
@@ -948,6 +1139,9 @@ module.exports = {
   sanitizeDienstreiseFolderPart,
   sanitizeFnProjekteFolderPart,
   sanitizeExportFileBase,
+  montageberichtExportStem,
+  isLegacyMontageberichtEnExportName,
+  cleanupLegacyMontageberichtEnPdfLocal,
   buildFnProjectFolderName,
   buildMonteurMontageFolderName,
   buildMonteurWorkRelPath,
@@ -967,10 +1161,15 @@ module.exports = {
   isMonteurMontageIdentitySibling,
   removeLegacyMonteurAuftragsordnerTopLevel,
   removeStaleBareFabMonteurDirs,
+  removeUnrelatedTopLevelProjectFolders,
+  looksLikeStaleFnOrProjectHeaderDir,
+  dirBelongsToCurrentFabs,
+  isUsableFnHauptordnerName,
   migrateBareFabAnlageDirs,
   collectReiseFnDirNames,
   pickNonBareCanonicalDirName,
   resolveFabMapLocal,
+  unifyFabMapSharedRanges,
   migrateAliasFnFolders,
   rewriteFnFolderSegmentInRel,
   isFnFolderAlias,

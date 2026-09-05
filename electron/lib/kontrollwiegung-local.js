@@ -71,9 +71,8 @@ function getKontrollwiegungLocal(reiseDir, fab, localId, db, localJobId) {
 
 /** Legacy: flache Ablage unter Dokumente_Monteur/. Neu: …/Montage/<AO>/Protokolle/ (server.js). */
 function localPdfPathForKontrollwiegung(reiseDir, fab, datum) {
-  const safeFn = String(fab || '').replace(/[^\w.-]+/g, '_');
-  const d = String(datum || '').replace(/-/g, '');
-  const name = 'Kontrollwiegungsprotokoll_' + safeFn + '_' + d + '.pdf';
+  const { fnProtocolPdfFilename } = require('./protocol-pdf-names');
+  const name = fnProtocolPdfFilename('kontrollwiegung', fab, datum, 'de');
   return { full: path.join(reiseDir, 'Dokumente_Monteur', name), rel: 'Dokumente_Monteur/' + name, name };
 }
 

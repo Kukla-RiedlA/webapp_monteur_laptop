@@ -313,6 +313,93 @@ final class DispoRepository
     }
 
     /**
+     * Auftragszeitraum aktualisieren (nur wenn Monteur zugeordnet, nicht abgerechnet).
+     *
+     * @return array{ok:bool, error?:string, start_datetime?:string, end_datetime?:string, date_not_fixed?:int|null}
+     */
+    public function updateJobSchedule(int $jobId, int $technicianId, string $startRaw, string $endRaw, $dateNotFixed = null, ?int $updatedBy = null): array
+    {
+        $start = $this->normalizeJobScheduleDatetime($startRaw, false);
+        $end = $this->normalizeJobScheduleDatetime($endRaw !== '' ? $endRaw : $startRaw, true);
+        if ($start === null) {
+            return ['ok' => false, 'error' => 'start_datetime fehlt oder ungültig (YYYY-MM-DD).'];
+        }
+        if ($end === null) {
+            return ['ok' => false, 'error' => 'end_datetime fehlt oder ungültig (YYYY-MM-DD).'];
+        }
+        if ($end < $start) {
+            return ['ok' => false, 'error' => 'end_datetime darf nicht vor start_datetime liegen.'];
+        }
+        $chk = $this->fsm->prepare(
+            'SELECT j.status FROM jobs j
+                INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = :technician_id
+                WHERE j.id = :job_id LIMIT 1'
+        );
+        $chk->execute([
+            ':job_id' => $jobId,
+            ':technician_id' => $technicianId,
+        ]);
+        $cur = $chk->fetch(\PDO::FETCH_ASSOC);
+        if ($cur === false) {
+            return ['ok' => false, 'error' => 'Auftrag nicht gefunden oder nicht zugeordnet.'];
+        }
+        $st = strtolower(trim((string) ($cur['status'] ?? '')));
+        if ($st === 'abgerechnet') {
+            return ['ok' => false, 'error' => 'Auftrag ist abgerechnet – Zeitraum nicht änderbar.'];
+        }
+        $dnf = $dateNotFixed === null ? null : ((int) $dateNotFixed === 1 ? 1 : 0);
+        if ($dnf === null) {
+            $sql = 'UPDATE jobs j
+                INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = :technician_id
+                SET j.start_datetime = :start_datetime, j.end_datetime = :end_datetime,
+                    j.updated_at = NOW(), j.updated_by = :updated_by
+                WHERE j.id = :job_id';
+            $params = [
+                ':job_id' => $jobId,
+                ':technician_id' => $technicianId,
+                ':start_datetime' => $start,
+                ':end_datetime' => $end,
+                ':updated_by' => $updatedBy ?? $technicianId,
+            ];
+        } else {
+            $sql = 'UPDATE jobs j
+                INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = :technician_id
+                SET j.start_datetime = :start_datetime, j.end_datetime = :end_datetime, j.date_not_fixed = :date_not_fixed,
+                    j.updated_at = NOW(), j.updated_by = :updated_by
+                WHERE j.id = :job_id';
+            $params = [
+                ':job_id' => $jobId,
+                ':technician_id' => $technicianId,
+                ':start_datetime' => $start,
+                ':end_datetime' => $end,
+                ':date_not_fixed' => $dnf,
+                ':updated_by' => $updatedBy ?? $technicianId,
+            ];
+        }
+        $stmt = $this->fsm->prepare($sql);
+        $stmt->execute($params);
+        return [
+            'ok' => true,
+            'start_datetime' => $start,
+            'end_datetime' => $end,
+            'date_not_fixed' => $dnf,
+        ];
+    }
+
+    private function normalizeJobScheduleDatetime(string $raw, bool $isEnd): ?string
+    {
+        $s = trim(str_replace('T', ' ', $raw));
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})$/', $s, $m)) {
+            return $m[1] . ($isEnd ? ' 23:59:59' : ' 00:00:00');
+        }
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})[ ](\d{2}:\d{2})(?::(\d{2}))?$/', $s, $m)) {
+            $sec = isset($m[3]) && $m[3] !== '' ? $m[3] : ($isEnd ? '59' : '00');
+            return $m[1] . ' ' . $m[2] . ':' . $sec;
+        }
+        return null;
+    }
+
+    /**
      * Leistungsdaten (job_fabrikation) für einen Auftrag aktualisieren.
      *
      * @param list<array<string, mixed>> $rows

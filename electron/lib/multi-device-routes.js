@@ -533,9 +533,12 @@ function registerMultiDeviceRoutes(deps) {
         return { ok: true, revision: remoteRev, store: payload };
       }
 
-      /* Gerät hat schon Inhalt: FN mergen (Inhalt vor Stub, sonst Zeitstempel). Leere Dispo wischt nicht. */
+      /* Gerät hat schon Inhalt: FN mergen (Inhalt vor Stub, sonst Zeitstempel). Leere Dispo wischt nicht.
+         Kontrollwiegung: vorhandene lokale FN nie durch Dispo ersetzen (V 2.007.002). */
       if (hasByFab) {
-        const merged = mergeByFabStores(local.payload, payload);
+        const merged = mergeByFabStores(local.payload, payload, {
+          preferLocal: basename === 'kontrollwiegungsprotokoll.json',
+        });
         if (!draftPayloadsEqual(merged.payload, local.payload)) {
           preserveLocalDraftCopy(opts, local.payload);
           writeDraftState(

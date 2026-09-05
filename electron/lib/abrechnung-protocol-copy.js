@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { applyBelegPrefix, stripKnownBelegPrefix } = require('./abrechnung-php-local');
+const { isMontageberichtExportName } = require('./protocol-pdf-names');
 
 function isIgnorableName(name) {
   const n = String(name || '');
@@ -12,12 +13,7 @@ function isIgnorableName(name) {
 }
 
 function isMontageberichtSourceName(name) {
-  const n = String(name || '');
-  return (
-    /_Montage_DE\.(pdf|docx)$/i.test(n) ||
-    /_report_GB\.(pdf|docx)$/i.test(n) ||
-    /^Montagebericht_(DE|EN)\.(pdf|docx)$/i.test(n)
-  );
+  return isMontageberichtExportName(name);
 }
 
 function isArbeitsnachweisSourceRel(rel, name) {

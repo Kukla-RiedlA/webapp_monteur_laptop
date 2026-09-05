@@ -3720,11 +3720,18 @@
       content.innerHTML = '<span class="empty">Fehler: Auftrag nicht gefunden.</span>';
       return;
     }
-    if (job.id != null) jobDetailsJobId = job.id;
+    if (job.id != null) {
+      var shownLocalId = parseInt(job.local_job_id != null ? job.local_job_id : job.id, 10);
+      if (Number.isFinite(shownLocalId) && shownLocalId > 0) {
+        jobDetailsJobId = shownLocalId;
+        if (job.local_job_id == null) job.local_job_id = shownLocalId;
+      }
+    }
     window.currentProjektdatenJob = job;
     updateProjektdatenHeadingMeta(job);
     content.innerHTML = renderJobDetailsContent(job);
     bindLeistungActions();
+    bindJobSchedule();
     if (window.KuklaLaptopHinweise && typeof window.KuklaLaptopHinweise.loadJob === 'function') {
       window.KuklaLaptopHinweise.loadJob(job);
     }
@@ -4647,11 +4654,86 @@
     return result.trim();
   }
 
+  function isoDateInputValue(raw) {
+    var s = String(raw || '').trim().slice(0, 10);
+    if (!s || s === '1000-01-01') return '';
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+  }
+
+  function renderJobScheduleFieldHtml(job, forceReadOnly) {
+    var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
+    var dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
+    var st = String(job.status || '').trim().toLowerCase();
+    var scheduleRo = !!forceReadOnly || st === 'erledigt' || st === 'abgerechnet';
+    if (scheduleRo) {
+      return dateRangeStr ? v(dateRangeStr) : v(formatDateOnly(job.start_datetime) || job.start_datetime);
+    }
+    var startIso = isoDateInputValue(job.start_datetime);
+    var endIso = isoDateInputValue(job.end_datetime);
+    var html = '<div class="job-schedule-edit" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">';
+    html += '<input type="date" id="jobScheduleStart" value="' + escapeHtml(startIso) + '">';
+    html += '<span>–</span>';
+    html += '<input type="date" id="jobScheduleEnd" value="' + escapeHtml(endIso) + '">';
+    html += '<button type="button" class="btn btn-primary" id="btnSaveJobSchedule">Speichern</button>';
+    html += '</div>';
+    return html;
+  }
+
+  function bindJobSchedule() {
+    var btn = document.getElementById('btnSaveJobSchedule');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var job = window.currentProjektdatenJob;
+      if (!job) return;
+      var hintedLocal = parseInt(job.local_job_id, 10);
+      var hasLocalHint = Number.isFinite(hintedLocal) && hintedLocal > 0;
+      var localId = hasLocalHint ? hintedLocal : parseInt(job.id, 10);
+      var serverId = parseInt(job.server_id != null && String(job.server_id).trim() !== '' ? job.server_id : 0, 10);
+      if (!Number.isFinite(localId) || localId <= 0) return;
+      var startEl = document.getElementById('jobScheduleStart');
+      var endEl = document.getElementById('jobScheduleEnd');
+      var start = startEl ? String(startEl.value || '').trim() : '';
+      var end = endEl ? String(endEl.value || '').trim() : '';
+      if (!start) {
+        alert('Bitte ein Startdatum wählen.');
+        return;
+      }
+      if (!end) end = start;
+      if (end < start) {
+        alert('Das Endedatum darf nicht vor dem Startdatum liegen.');
+        return;
+      }
+      btn.disabled = true;
+      var patchBody = {
+        job_id: localId,
+        start_datetime: start,
+        end_datetime: end
+      };
+      if (hasLocalHint) patchBody.local_job_id = localId;
+      if (Number.isFinite(serverId) && serverId > 0) patchBody.server_id = serverId;
+      api('/api/job', {
+        method: 'PATCH',
+        body: JSON.stringify(patchBody)
+      }).then(function () {
+        var updated = Object.assign({}, job, {
+          id: localId,
+          local_job_id: localId,
+          start_datetime: start + ' 00:00:00',
+          end_datetime: end + ' 23:59:59'
+        });
+        showProjektdatenJob(updated, { skipExplorerReload: true, skipDeferredLoads: true });
+      }).catch(function (e) {
+        alert('Zeitraum speichern fehlgeschlagen: ' + (e && e.message ? e.message : e));
+        var b = document.getElementById('btnSaveJobSchedule');
+        if (b) b.disabled = false;
+      });
+    });
+  }
+
   function renderJobDetailsContent(job) {
     var assignmentRo = isJobAssignmentReadOnly(job);
     var readOnlyAngelegt = isJobProjektdatenReadOnly(job);
     var v = function (x) { return (x != null && String(x).trim() !== '' ? escapeHtml(String(x).trim()) : '–'); };
-    var dateRangeStr = formatDateRange(job.start_datetime, job.end_datetime);
     var countryRaw = (job.country || '').trim();
     var countryCode = normalizeCountryToCode(job.country);
     var countryPart = countryCode ? (countryFlagImg(countryCode) + (countryRaw ? ' ' + escapeHtml(countryRaw) : ' ' + countryCode)) : (countryRaw ? escapeHtml(countryRaw) : '');
@@ -4687,7 +4769,7 @@
     html += '<div class="modal-detail-section"><h4>Auftrag</h4><dl class="modal-detail-dl">';
     html += '<dt>Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
     html += '<dt>Typ</dt><dd>' + v(job.job_type) + '</dd>';
-    html += '<dt>Zeitraum</dt><dd>' + (dateRangeStr ? v(dateRangeStr) : v(formatDateOnly(job.start_datetime) || job.start_datetime)) + '</dd>';
+    html += '<dt>Zeitraum</dt><dd>' + renderJobScheduleFieldHtml(job, assignmentRo || readOnlyAngelegt) + '</dd>';
     html += '<dt>Status</dt><dd>' + v(job.status) + '</dd>';
     html += '</dl></div>';
     html += '<div class="modal-detail-section"><h4>Kunde</h4><dl class="modal-detail-dl">';
@@ -5804,6 +5886,7 @@
       window.currentProjektdatenJob = updatedJob;
       content.innerHTML = renderJobDetailsContent(updatedJob);
       bindLeistungActions();
+      bindJobSchedule();
       if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
     }
   }
@@ -12819,7 +12902,15 @@
     var isOwn = Number.isFinite(myId) && myId > 0 && Number.isFinite(jobTechId) && jobTechId === myId;
     var unassigned = isCalendarJobUnassigned(job);
     var ro = !isOwn;
+    var localId = parseInt(job.local_job_id, 10);
+    var serverId = parseInt(job.server_id != null && String(job.server_id).trim() !== '' ? job.server_id : 0, 10);
+    if (!(Number.isFinite(serverId) && serverId > 0) && job.id != null && Number.isFinite(localId) && localId > 0) {
+      serverId = parseInt(job.id, 10);
+    }
     return Object.assign({}, job, {
+      id: Number.isFinite(localId) && localId > 0 ? localId : job.id,
+      local_job_id: Number.isFinite(localId) && localId > 0 ? localId : job.local_job_id,
+      server_id: Number.isFinite(serverId) && serverId > 0 ? serverId : job.server_id,
       assignment_writable: !ro,
       assigned_to_me: !!isOwn,
       assignment_read_only_reason: ro

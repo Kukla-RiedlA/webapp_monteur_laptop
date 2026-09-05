@@ -100,6 +100,7 @@ const {
   isJobAssignedToTechnician,
   requireJobAssignedToTechnician,
   resolveLocalJobIdForTechnician,
+  resolvePatchJobRef,
   jobAssignmentViewMeta,
 } = require('./lib/job-technician-gate');
 const { createDbLock } = require('./lib/db-lock');
@@ -154,6 +155,10 @@ const {
   isDokumenteMonteurReservedTopDir,
   removeLegacyMonteurAuftragsordnerTopLevel,
   removeStaleBareFabMonteurDirs,
+  removeUnrelatedTopLevelProjectFolders,
+  looksLikeStaleFnOrProjectHeaderDir,
+  dirBelongsToCurrentFabs,
+  isUsableFnHauptordnerName,
   isBareFabFolderName,
   mapServerManifestPathToLocalAnlageRel,
   getMonteurWorkRoot,
@@ -163,9 +168,14 @@ const {
   migrateBareFabAnlageDirs,
   migrateAliasFnFolders,
   resolveFabMapLocal,
+  unifyFabMapSharedRanges,
   sanitizeDienstreiseFolderPart,
   sanitizeExportFileBase,
+  montageberichtExportStem,
+  isLegacyMontageberichtEnExportName,
+  cleanupLegacyMontageberichtEnPdfLocal,
 } = require('./lib/monteur-montage-paths');
+const { fnProtocolPdfFilename, serviceLikePdfKind, labeledProtocolPdfFilename } = require('./lib/protocol-pdf-names');
 const kundenDokumentation = require('./lib/kunden-dokumentation');
 const {
   ensureJobOfflinePullSchema,
@@ -222,6 +232,7 @@ function dispoMonteurFetchHeaders(technicianId, authHeader) {
 const {
   isLikelyOfflineSyncError,
   isPermanentSyncPushError,
+  isOldDispoMissingSchedulePatch,
   SYNC_PUSH_MAX_ATTEMPTS,
   shouldDeferDispoSync,
   normalizeBaseUrl,
@@ -474,6 +485,27 @@ function mergeFabRowsPreferLocal(localRows, serverRows) {
     const serverR = serverByFn[fn] || {};
     return mergeStammIntoJobRow(localR, serverR, null, false, { preferJob: true });
   });
+  return JSON.stringify(mergedRows);
+}
+
+/** Dispo bestimmt die FN-Menge; lokale Stammfelder der noch vorhandenen FNs bleiben. */
+function mergeFabRowsServerAuthoritative(localRows, serverRows) {
+  const localList = Array.isArray(localRows) ? localRows : [];
+  const serverList = Array.isArray(serverRows) ? serverRows : [];
+  const localByFn = {};
+  for (const r of localList) {
+    const fn = normJobFabKey(r);
+    if (fn) localByFn[fn] = r;
+  }
+  const seen = new Set();
+  const mergedRows = [];
+  for (const r of serverList) {
+    const fn = normJobFabKey(r);
+    if (!fn || seen.has(fn)) continue;
+    seen.add(fn);
+    const localR = localByFn[fn] || { fabrikationsnummer: fn };
+    mergedRows.push(mergeStammIntoJobRow(localR, r, null, false, { preferJob: true }));
+  }
   return JSON.stringify(mergedRows);
 }
 
@@ -937,6 +969,23 @@ function resolveSyncPushFailure(db, pendingRow, err, reason) {
   }
   const prevAttempts = Number(pendingRow.attempts) || 0;
   const attempts = prevAttempts + 1;
+  const waitForDispoSchedule =
+    String(pendingRow.action || '') === 'schedule' && isOldDispoMissingSchedulePatch(err);
+  if (waitForDispoSchedule) {
+    try {
+      db.prepare(
+        `UPDATE pending_changes SET attempts = ?, last_error = ?, last_attempt_at = datetime('now') WHERE id = ?`,
+      ).run(attempts, msg.slice(0, 4000), pendingRow.id);
+    } catch (_) {
+      /* ignore */
+    }
+    pendingRow.attempts = attempts;
+    console.warn('[sync_push] schedule: Dispo kennt Zeitraum-PATCH noch nicht, bleibt in Queue:', {
+      pending_id: pendingRow.id,
+      error: msg.slice(0, 200),
+    });
+    return 'retry';
+  }
   const permanent = isPermanentSyncPushError(err);
   if (permanent || attempts >= SYNC_PUSH_MAX_ATTEMPTS) {
     try {
@@ -1091,6 +1140,47 @@ function requeueFailedPendingByTypes(dbConn, types) {
   return n;
 }
 
+function requeueFailedSchedulePending(dbConn) {
+  let rows = [];
+  try {
+    rows =
+      dbConn
+        .prepare(
+          `SELECT * FROM pending_changes_failed WHERE entity_type = 'job' AND action = 'schedule' ORDER BY id ASC`,
+        )
+        .all() || [];
+  } catch (_) {
+    return 0;
+  }
+  if (!rows.length) return 0;
+  const ins = dbConn.prepare(
+    `INSERT INTO pending_changes (entity_type, entity_id, action, payload, created_at, attempts, last_error, last_attempt_at)
+     VALUES (?, ?, ?, ?, ?, 0, NULL, NULL)`,
+  );
+  const del = dbConn.prepare('DELETE FROM pending_changes_failed WHERE id = ?');
+  let n = 0;
+  const apply = () => {
+    for (const row of rows) {
+      ins.run(
+        String(row.entity_type || ''),
+        row.entity_id != null ? String(row.entity_id) : '',
+        String(row.action || ''),
+        row.payload != null ? String(row.payload) : null,
+        row.created_at != null ? String(row.created_at) : null,
+      );
+      del.run(row.id);
+      n += 1;
+    }
+  };
+  if (typeof dbConn.transaction === 'function') {
+    const ret = dbConn.transaction(apply);
+    if (typeof ret === 'function') ret();
+  } else {
+    apply();
+  }
+  return n;
+}
+
 /** Laufzeit-Kontext für IPC / Flush (gesetzt in getDb und createApp). */
 const monteurRuntime = { db: null, save: null, bgJobs: null };
 let getDbPromise = null;
@@ -1149,8 +1239,13 @@ async function loadDbOnce() {
   monteurRuntime.save = () => wrapper.save();
   try {
     const n = requeueFailedPendingByTypes(wrapper, ['schleppketten', 'pruefzertifikat', 'protocol_draft']);
+    const nSchedule = requeueFailedSchedulePending(wrapper);
     if (n > 0) {
       console.log('[sync] requeued dead-letter:', n, 'schleppketten/pruefzertifikat/protocol_draft');
+      wrapper.save();
+    }
+    if (nSchedule > 0) {
+      console.log('[sync] requeued dead-letter:', nSchedule, 'job/schedule');
       wrapper.save();
     }
   } catch (requeueErr) {
@@ -1732,12 +1827,14 @@ function createApp(db) {
   }
 
   /** Lokaler Auftrag für Schreibzugriff; blockiert Status nur Anzeige / abgerechnet. */
-  function getWritableLocalJobMetaForPatch(dbConn, technicianId, rawJobId) {
-    const resolved = resolveLocalJobIdForTechnician(dbConn, technicianId, rawJobId, { mode: 'auto' });
+  function getWritableLocalJobMetaForPatch(dbConn, technicianId, rawJobId, opts) {
+    const resolved = resolveLocalJobIdForTechnician(dbConn, technicianId, rawJobId, {
+      mode: (opts && opts.mode) || 'auto',
+    });
     if (!resolved.ok) return { error: resolved.error, status: resolved.status };
     const blocked = localJobWriteBlocked(resolved.status);
     if (blocked) return blocked;
-    return { localId: resolved.localId };
+    return { localId: resolved.localId, serverId: resolved.serverId };
   }
 
   /** Dienstreise-/Datei-Schreibzugriff: gleiche Regeln wie PATCH (inkl. Techniker-Zuordnung), sonst nur Status-Prüfung per lokaler ID (z. B. Upload ohne technicianId im Body). */
@@ -3638,7 +3735,8 @@ function createApp(db) {
   function rememberSuggestedFnFolder(fab, folderName) {
     const f = String(fab || '').trim();
     const name = String(folderName || '').trim();
-    if (!f || !name || isBareFabFolderName(name)) return;
+    if (!f || !name || isBareFabFolderName(name) || isDatePrefixedProjectFolderName(name)) return;
+    if (!isUsableFnHauptordnerName(name, f)) return;
     try {
       upsertAnlagenstammTreeCache(db, f, { enabled: false, tree: [] }, { root_folder_name: name });
     } catch (_) {}
@@ -3674,6 +3772,7 @@ function createApp(db) {
     if (reiseDir && fs.existsSync(reiseDir)) {
       await migrateBareFabAnlageDirs(reiseDir, fabMap);
       await removeStaleBareFabMonteurDirs(reiseDir, fabMap);
+      await removeUnrelatedTopLevelProjectFolders(reiseDir, fabMap);
       await migrateAliasFnFolders(reiseDir, fabMap);
       await ensureAnlageFnDirs(reiseDir, fabMap);
     }
@@ -3805,9 +3904,11 @@ function createApp(db) {
           hint,
         });
       }
+      let fabMapForList = [];
       if (!isClosedJob) {
         try {
-          await migrateTopLevelMontageIntoFnFolders(reiseDir, await ensureFabMapCanonicalForJob(localJobId, reiseDir));
+          fabMapForList = await ensureFabMapCanonicalForJob(localJobId, reiseDir);
+          await migrateTopLevelMontageIntoFnFolders(reiseDir, fabMapForList);
         } catch (_) {}
         try {
           pruneEmptyMonteurDraftJsons(reiseDir);
@@ -3864,8 +3965,17 @@ function createApp(db) {
       for (const ent of dirents) {
         const name = ent.name;
         if (isIgnorableDirEntry(name)) continue;
-        const fullPath = path.join(dirPath, name);
         const isDirectory = ent.isDirectory();
+        const listRoot = String(subpath || '').replace(/\\/g, '/');
+        if (
+          isDirectory &&
+          (listRoot === 'Dokumente_Monteur' || listRoot === 'Dokumente_Anlage') &&
+          looksLikeStaleFnOrProjectHeaderDir(name) &&
+          !dirBelongsToCurrentFabs(name, fabMapForList)
+        ) {
+          continue;
+        }
+        const fullPath = path.join(dirPath, name);
         if (!isDirectory && !ent.isFile()) continue;
         if (isDirectory) {
           const keepEmptyPhotoCategory = name === 'Allgemein' || name === 'Angebot';
@@ -4140,6 +4250,32 @@ function createApp(db) {
     const hit = fabMap.find((e) => String(e.fab || '').trim() === fabNorm);
     if (hit && hit.folder_name_canonical) return String(hit.folder_name_canonical).trim();
     return buildCanonicalFabFolderName(fabNorm, jobRow);
+  }
+
+  /** Schreibziel: langer FN-Ordner, nie reine Ziffer (20500), sonst entsteht Anlegen/Löschen-Flackern. */
+  function resolveWritableMonteurFnFolder(localJobId, fab, docMonteurBase, docAnlageBase, fabMapOpt) {
+    const fabStr = String(fab || '').trim();
+    if (!fabStr) return '';
+    const jobRow = lookupDienstreiseJobRow(localJobId);
+    let name = '';
+    if (Array.isArray(fabMapOpt)) {
+      const hit = fabMapOpt.find((e) => String(e.fab) === fabStr);
+      name = hit && hit.folder_name_canonical ? String(hit.folder_name_canonical).trim() : '';
+    }
+    if (!name || isBareFabFolderName(name)) {
+      name = canonicalProjekteNeuFolderForJob(localJobId, fabStr);
+    }
+    if (!name || isBareFabFolderName(name)) {
+      const found =
+        findMonteurFolderForFab(docMonteurBase, fabStr) ||
+        findParameterlistenFolder(docAnlageBase, fabStr);
+      if (found && !isBareFabFolderName(found)) name = found;
+    }
+    if (!name || isBareFabFolderName(name)) {
+      name = buildCanonicalFabFolderName(fabStr, jobRow);
+    }
+    if (!name) name = sanitizeDienstreiseFolderPart(fabStr);
+    return name;
   }
 
   function getProjekteNeuLocalContext(localJobId, fab) {
@@ -4621,8 +4757,12 @@ function createApp(db) {
       if (!rescan) {
         const cached = readAnlagenstammTreeCache(db, fab);
         if (cached && cached.tree.length > 0) {
+          const fromCacheRaw =
+            cached.root_folder_name && String(cached.root_folder_name).trim()
+              ? String(cached.root_folder_name).trim()
+              : '';
           const folderFromCache =
-            (cached.root_folder_name && String(cached.root_folder_name).trim()) ||
+            (fromCacheRaw && isUsableFnHauptordnerName(fromCacheRaw, fab) ? fromCacheRaw : '') ||
             readAnlagenstammRootFolderName(db, fab) ||
             '';
           return res.json({
@@ -5169,7 +5309,7 @@ function createApp(db) {
               (pn.root_name && String(pn.root_name).trim()) ||
               (pn.suggested_folder_name && String(pn.suggested_folder_name).trim()) ||
               '';
-            if (fromApi) folder_name_canonical = fromApi;
+            if (fromApi && isUsableFnHauptordnerName(fromApi, fab)) folder_name_canonical = fromApi;
           }
         } catch (_) {
           /* optional */
@@ -5180,10 +5320,15 @@ function createApp(db) {
         folder_name_canonical = buildCanonicalFabFolderName(fab, jobDetail);
       }
       if (!folder_name_canonical) folder_name_canonical = fab;
-      rememberSuggestedFnFolder(fab, folder_name_canonical);
       out.push({ fab, folder_name_canonical });
     }
-    return out;
+    const unified = unifyFabMapSharedRanges(out, monteurDirNames);
+    for (const entry of unified) {
+      if (entry && entry.folder_name_canonical) {
+        rememberSuggestedFnFolder(entry.fab, entry.folder_name_canonical);
+      }
+    }
+    return unified;
   }
 
   async function buildAcceptOfflinePreview(localJobId, technicianId, dispoBaseUrl, authHeader, urlOpts) {
@@ -5257,7 +5402,7 @@ function createApp(db) {
             (pn.root_name && String(pn.root_name).trim()) ||
             (pn.suggested_folder_name && String(pn.suggested_folder_name).trim()) ||
             '';
-          if (fromApi) folder_name_canonical = fromApi;
+          if (fromApi && isUsableFnHauptordnerName(fromApi, fab)) folder_name_canonical = fromApi;
         }
       } catch (anlErr) {
         console.warn('[accept_offline_preview] anlagenstamm', fab, anlErr && anlErr.message ? anlErr.message : anlErr);
@@ -7051,7 +7196,7 @@ function createApp(db) {
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
       LEFT JOIN job_hotel_selection jhs ON jhs.job_id = j.id
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
-      ORDER BY CASE WHEN CAST(j.server_id AS TEXT) = CAST(? AS TEXT) THEN 0 ELSE 1 END, j.id ASC
+      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
       LIMIT 1
     `).get(jobId, jobId, jobId);
     if (!row) {
@@ -7059,6 +7204,7 @@ function createApp(db) {
     }
     const localJobPk = row.id;
     let job = { ...row };
+    job.local_job_id = localJobPk;
     job.job_contacts = job.job_contacts || [];
     try {
       const contacts = db.prepare(`${JOB_CONTACTS_SELECT_SQL} WHERE job_id = ? ORDER BY sort_order, id`).all(localJobPk);
@@ -7732,7 +7878,7 @@ function createApp(db) {
       const pdfBase64 = Buffer.from(pdfBytes).toString('base64');
       const num = (payload.document && payload.document.number) || ('AN-' + Date.now());
       const safe = String(num).replace(/[^\w.-]+/g, '_') || ('AN-' + Date.now());
-      const fileName = safe + '.pdf';
+      const fileName = labeledProtocolPdfFilename('arbeitsnachweis', safe, lang);
       let archivePath = '';
       try {
         const jobId = parseInt(payload.job_id || (payload.document && payload.document.job_id) || 0, 10);
@@ -9820,10 +9966,9 @@ function createApp(db) {
         });
       }
 
-      // Dateiname ohne führende Auftrags-Indexnummer; DE → …_Montage_DE, EN → …_report_GB
+      // Dateiname ohne führende Auftrags-Indexnummer; DE → …_Montage_DE, EN → …_Assembly_report_GB
       const fileBase = sanitizeExportFileBase(String(path.basename(reiseDir) || '').replace(/^\d+_/, ''));
-      const fileStemForLang = (lang) =>
-        lang === 'en' ? `${fileBase}_report_GB` : `${fileBase}_Montage_DE`;
+      const fileStemForLang = (lang) => montageberichtExportStem(fileBase, lang);
 
       const toTextbausteine = (bem) => (bem || '').toString().split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((t) => ({ text: t, html: t }));
       const isRichFabHtml = (html) => {
@@ -9948,34 +10093,25 @@ function createApp(db) {
 
       const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
       const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
-      const offlineCfgMb = getOfflinePullConfig(db, localJobId);
-      await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
-      const montageFolderNameMb = resolveMonteurAuftragsordnerName(localJobId, technicianId);
+      const layoutMb = await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+      const montageFolderNameMb =
+        layoutMb.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
+      const fabMapMb = layoutMb.fabMap || [];
 
       const targetFolderNames = new Set();
       for (const fab of fabs) {
-        let folderName = null;
-        const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(fab));
-        if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
-        if (!folderName) {
-          const fnNum = parseInt(String(fab).trim(), 10);
-          folderName =
-            (Number.isFinite(fnNum) ? findMonteurFolderForFab(docMonteurBase, fnNum) : null) ||
-            (Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null) ||
-            sanitizeDienstreiseFolderPart(fab);
-        }
-        targetFolderNames.add(folderName);
+        const folderName = resolveWritableMonteurFnFolder(
+          localJobId,
+          fab,
+          docMonteurBase,
+          docAnlageBase,
+          fabMapMb,
+        );
+        if (folderName) targetFolderNames.add(folderName);
       }
 
-      const resolveFnFolder = (f) => {
-        const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(f));
-        return (
-          (fromMap && fromMap.folder_name_canonical) ||
-          findMonteurFolderForFab(docMonteurBase, f) ||
-          findParameterlistenFolder(docAnlageBase, f) ||
-          sanitizeDienstreiseFolderPart(f)
-        );
-      };
+      const resolveFnFolder = (f) =>
+        resolveWritableMonteurFnFolder(localJobId, f, docMonteurBase, docAnlageBase, fabMapMb);
 
       const saved = [];
       let firstAbsPdf = '';
@@ -10030,6 +10166,7 @@ function createApp(db) {
           if (!fs.existsSync(protokolleDir)) fs.mkdirSync(protokolleDir, { recursive: true });
           const absPdf = path.join(protokolleDir, pdfFilename);
           writeFileWithRetry(absPdf, pdfBytes);
+          cleanupLegacyMontageberichtEnPdfLocal(protokolleDir, fileBase);
           if (!firstAbsPdf) firstAbsPdf = absPdf;
           if (!langAbs) langAbs = absPdf;
           protectPathIfUnderDokumenteMonteur(
@@ -10043,6 +10180,10 @@ function createApp(db) {
           const fnFolder = resolveFnFolder(f);
           saved.push(buildMonteurWorkRelPath(fnFolder, montageFolderNameMb, 'Protokolle/' + pdfFilename));
         }
+      }
+      if (fabMapMb.length) {
+        await removeStaleBareFabMonteurDirs(reiseDir, fabMapMb);
+        await migrateAliasFnFolders(reiseDir, fabMapMb);
       }
 
       // Legacy-DOCX lokal entfernen + Dispo-Löschliste (auch wenn nur remote noch existiert)
@@ -10684,10 +10825,7 @@ function createApp(db) {
   });
 
   function resolveSchleppkettenLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum, lang, langs) {
-    const safeFn = String(fab || '').replace(/[^\w.-]+/g, '_');
-    const d = String(datum || '').replace(/-/g, '');
-    const suffix = protocolPdfLangSuffix(lang || 'de', langs);
-    const name = 'Schleppketten_Test_' + safeFn + '_' + d + suffix + '.pdf';
+    const name = fnProtocolPdfFilename('schleppketten', fab, datum, lang);
     if (Number.isFinite(localJobId) && localJobId > 0 && fab) {
       try {
         const { targetDir, relDir } = resolveMonteurProtokollePdfTargetSync(
@@ -11041,10 +11179,7 @@ function createApp(db) {
   });
 
   function resolvePruefzertifikatLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum, lang) {
-    const safeFn = String(fab || '').replace(/[^\w.-]+/g, '_');
-    const d = String(datum || '').replace(/-/g, '');
-    const suffix = lang === 'en' ? '_EN' : '';
-    const name = 'Pruefzertifikat_' + safeFn + '_' + d + suffix + '.pdf';
+    const name = fnProtocolPdfFilename('pruefzertifikat', fab, datum, lang);
     if (Number.isFinite(localJobId) && localJobId > 0 && fab) {
       try {
         const { targetDir, relDir } = resolveMonteurProtokollePdfTargetSync(
@@ -11819,18 +11954,14 @@ function createApp(db) {
   function resolveMonteurProtokollePdfTargetSync(reiseDir, localJobId, fab, technicianId) {
     const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
     const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
-    const offlineCfg = getOfflinePullConfig(db, localJobId);
     const montageFolderName = resolveMonteurAuftragsordnerName(localJobId, technicianId);
-    let folderName = null;
-    const fromMap = (offlineCfg.fab_map || []).find((e) => String(e.fab) === String(fab));
-    if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
-    if (!folderName) {
-      const fnNum = parseInt(String(fab).trim(), 10);
-      folderName =
-        (Number.isFinite(fnNum) ? findMonteurFolderForFab(docMonteurBase, fnNum) : null) ||
-        (Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null) ||
-        sanitizeDienstreiseFolderPart(fab);
-    }
+    const folderName = resolveWritableMonteurFnFolder(
+      localJobId,
+      fab,
+      docMonteurBase,
+      docAnlageBase,
+      getOfflinePullConfig(db, localJobId).fab_map || [],
+    );
     const targetDir = buildMonteurWorkAbsDir(docMonteurBase, folderName, montageFolderName, 'Protokolle');
     const relDir = buildMonteurWorkRelPath(folderName, montageFolderName, 'Protokolle');
     return { targetDir, relDir, folderName, montageFolderName };
@@ -11924,10 +12055,7 @@ function createApp(db) {
   }
 
   function resolveKontrollwiegungLocalPdfPaths(reiseDir, localJobId, fab, technicianId, datum, lang, langs) {
-    const safeFn = String(fab || '').replace(/[^\w.-]+/g, '_');
-    const d = String(datum || '').replace(/-/g, '');
-    const suffix = protocolPdfLangSuffix(lang || 'de', langs);
-    const name = 'Kontrollwiegungsprotokoll_' + safeFn + '_' + d + suffix + '.pdf';
+    const name = fnProtocolPdfFilename('kontrollwiegung', fab, datum, lang);
     if (Number.isFinite(localJobId) && localJobId > 0 && fab) {
       try {
         const { targetDir, relDir } = resolveMonteurProtokollePdfTargetSync(
@@ -12015,8 +12143,7 @@ function createApp(db) {
           titleDe: s.titleDe,
           titleEn: s.titleEn,
         });
-        const suffix = multiLang ? '_' + lang.toUpperCase() : lang === 'en' ? '_EN' : '';
-        const pdfName = s.pdfPrefix + '_' + safeFn + '_' + datum + suffix + '.pdf';
+        const pdfName = fnProtocolPdfFilename(serviceLikePdfKind(s), fab, datum, lang);
         const fullPath = path.join(targetDir, pdfName);
         writeFileWithRetry(fullPath, pdfBuf);
         savedRel.push(relDir + '/' + pdfName);
@@ -12300,25 +12427,23 @@ function createApp(db) {
     }
     const docMonteurBase = path.join(reiseDir, 'Dokumente_Monteur');
     const docAnlageBase = path.join(reiseDir, 'Dokumente_Anlage');
-    const offlineCfgMb = getOfflinePullConfig(db, localJobId);
-    await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
-    const montageFolderNameMb = resolveMonteurAuftragsordnerName(localJobId, technicianId);
+    const layoutMb = await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+    const montageFolderNameMb =
+      layoutMb.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
+    const fabMapMb = layoutMb.fabMap || [];
     const targetFolderNames = new Set();
     for (const fab of fabs) {
-      let folderName = null;
-      const fromMap = (offlineCfgMb.fab_map || []).find((e) => String(e.fab) === String(fab));
-      if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
-      if (!folderName) {
-        const fnNum = parseInt(String(fab).trim(), 10);
-        folderName =
-          (Number.isFinite(fnNum) ? findMonteurFolderForFab(docMonteurBase, fnNum) : null) ||
-          (Number.isFinite(fnNum) ? findParameterlistenFolder(docAnlageBase, fnNum) : null) ||
-          sanitizeDienstreiseFolderPart(fab);
-      }
-      targetFolderNames.add(folderName);
+      const folderName = resolveWritableMonteurFnFolder(
+        localJobId,
+        fab,
+        docMonteurBase,
+        docAnlageBase,
+        fabMapMb,
+      );
+      if (folderName) targetFolderNames.add(folderName);
     }
     const fileBase = sanitizeExportFileBase(String(path.basename(reiseDir) || '').replace(/^\d+_/, ''));
-    const fileStemForLang = (lang) => (lang === 'en' ? `${fileBase}_report_GB` : `${fileBase}_Montage_DE`);
+    const fileStemForLang = (lang) => montageberichtExportStem(fileBase, lang);
     const savedRel = [];
     const savedAbs = [];
     for (const lang of languages) {
@@ -12347,6 +12472,7 @@ function createApp(db) {
         if (!fs.existsSync(protokolleDir)) fs.mkdirSync(protokolleDir, { recursive: true });
         const absPdf = path.join(protokolleDir, pdfFilename);
         writeFileWithRetry(absPdf, pdfBytes);
+        cleanupLegacyMontageberichtEnPdfLocal(protokolleDir, fileBase);
         if (!savedAbs.includes(absPdf)) savedAbs.push(absPdf);
         const rel = buildMonteurWorkRelPath(folderName, montageFolderNameMb, 'Protokolle/' + pdfFilename);
         protectPathIfUnderDokumenteMonteur(db, localJobId, rel);
@@ -12705,8 +12831,7 @@ function createApp(db) {
           continue;
         }
         const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
-        const suffix = multiLang ? '_' + lang.toUpperCase() : lang === 'en' ? '_EN' : '';
-        const pdfName = s.pdfPrefix + '_' + safeFn + '_' + datum + suffix + '.pdf';
+        const pdfName = fnProtocolPdfFilename(serviceLikePdfKind(s), fab, datum, lang);
         const fullLocalPdf = path.join(targetDir, pdfName);
         if (keepExistingLocalPdf(fullLocalPdf)) {
           savedRel.push(relDir + '/' + pdfName);
@@ -13308,7 +13433,7 @@ function createApp(db) {
               const fabRaw = String(body.fabrikationsnummer || '').trim();
               const datum = String(body.durchfuehrungsdatum || '').replace(/-/g, '');
               const safeFn = fabRaw.replace(/[^\w.-]+/g, '_');
-              const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + '.pdf';
+              const pdfName = fnProtocolPdfFilename('serviceprotokoll', fabRaw, body.durchfuehrungsdatum, 'de');
               const { targetDir } = await resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fabRaw, technicianId);
               if (!targetDir) {
                 throw new Error('PDF-Zielordner fehlt (Reiseordner nicht gebunden).');
@@ -13767,9 +13892,9 @@ function createApp(db) {
       const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
       const docMonteurPath = path.join(reiseDir, 'Dokumente_Monteur');
       const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
-      const offlineCfgPl = getOfflinePullConfig(db, localJobId);
-      await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
-      const montageFolderNamePl = resolveMonteurAuftragsordnerName(localJobId, technicianId);
+      const layoutPl = await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+      const montageFolderNamePl =
+        layoutPl.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
       let csvBuffer;
       try {
         csvBuffer = Buffer.from(contentBase64, 'base64');
@@ -13787,13 +13912,24 @@ function createApp(db) {
       }
 
       const fnAllowedOnJob = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern).has(fn);
-      let folderName = null;
-      const fromMap = (offlineCfgPl.fab_map || []).find((e) => String(e.fab) === String(fn));
-      if (fromMap && fromMap.folder_name_canonical) folderName = fromMap.folder_name_canonical;
-      if (!folderName) folderName = findMonteurFolderForFab(docMonteurPath, fn);
-      if (!folderName) folderName = findParameterlistenFolder(docAnlagePath, fn);
-      if (!folderName && fnAllowedOnJob) {
-        folderName = String(fn);
+      let folderName = resolveWritableMonteurFnFolder(
+        localJobId,
+        fn,
+        docMonteurPath,
+        docAnlagePath,
+        layoutPl.fabMap || [],
+      );
+      if (!fnAllowedOnJob) {
+        const existing =
+          findMonteurFolderForFab(docMonteurPath, fn) || findParameterlistenFolder(docAnlagePath, fn);
+        if (!existing) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              'FN passt nicht zum Auftrag (Fabrikationsnummer in den Projektdaten prüfen; Dateiname z. B. FN12186_….csv).',
+          });
+        }
+        folderName = existing;
       }
       if (!folderName) {
         return res.status(400).json({
@@ -14689,7 +14825,9 @@ function createApp(db) {
   app.patch('/api/job', express.json(), (req, res) => {
     const technicianId = getTechnicianId(req);
     const body = req.body || {};
-    const { job_id, status, description, fabrikationsnummern, hotel_selection } = body;
+    const { status, description, fabrikationsnummern, hotel_selection } = body;
+    const patchRef = resolvePatchJobRef(body);
+    const job_id = patchRef.ref;
     if (!technicianId || !job_id) {
       return res.status(400).json({ ok: false, error: 'technician_id und job_id erforderlich.' });
     }
@@ -14698,15 +14836,26 @@ function createApp(db) {
     const fabOnlyPatch = fabrikationsnummern !== undefined
       && status === undefined
       && description === undefined
+      && body.start_datetime === undefined
+      && body.end_datetime === undefined
+      && body.date_not_fixed === undefined
       && !hotel_selection
       && !Array.isArray(body.job_contacts)
       && !hotelKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k))
       && !jobSiteKeys.some((k) => Object.prototype.hasOwnProperty.call(body, k));
     const gate = fabOnlyPatch
       ? getLocalJobMetaForFabrikationsnummernPatch(db, technicianId, job_id)
-      : getWritableLocalJobMetaForPatch(db, technicianId, job_id);
+      : getWritableLocalJobMetaForPatch(db, technicianId, job_id, { mode: patchRef.mode });
     if (gate.error) {
       return res.status(gate.status).json({ ok: false, error: gate.error });
+    }
+    const wantServerId = parseInt(body.server_id, 10);
+    if (Number.isFinite(wantServerId) && wantServerId > 0 && gate.serverId != null
+      && Number(gate.serverId) !== wantServerId) {
+      return res.status(409).json({
+        ok: false,
+        error: 'Job-ID-Konflikt: local_job_id und server_id gehören zu verschiedenen Aufträgen.',
+      });
     }
     const effectiveJobId = gate.localId;
     const allowed = ['angelegt', 'zugeteilt', 'in_arbeit', 'erledigt', 'abgerechnet', 'geplant'];
@@ -14833,6 +14982,60 @@ function createApp(db) {
           db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run('job', effectiveJobId, 'description', JSON.stringify({ description }));
           save();
           return res.json({ ok: true, updated: 'description' });
+        }
+      }
+      const hasSchedule =
+        Object.prototype.hasOwnProperty.call(body, 'start_datetime') ||
+        Object.prototype.hasOwnProperty.call(body, 'end_datetime') ||
+        Object.prototype.hasOwnProperty.call(body, 'date_not_fixed');
+      if (hasSchedule) {
+        const cur = db.prepare('SELECT start_datetime, end_datetime, date_not_fixed FROM jobs WHERE id = ?').get(effectiveJobId);
+        const startRaw =
+          body.start_datetime != null && String(body.start_datetime).trim() !== ''
+            ? String(body.start_datetime)
+            : String((cur && cur.start_datetime) || '');
+        const endRaw =
+          body.end_datetime != null && String(body.end_datetime).trim() !== ''
+            ? String(body.end_datetime)
+            : String((cur && cur.end_datetime) || startRaw);
+        const startNorm = normalizeJobScheduleDatetimeLocal(startRaw, false);
+        const endNorm = normalizeJobScheduleDatetimeLocal(endRaw || startRaw, true);
+        if (!startNorm) {
+          return res.status(400).json({ ok: false, error: 'start_datetime fehlt oder ungültig (YYYY-MM-DD).' });
+        }
+        if (!endNorm) {
+          return res.status(400).json({ ok: false, error: 'end_datetime fehlt oder ungültig (YYYY-MM-DD).' });
+        }
+        if (endNorm < startNorm) {
+          return res.status(400).json({ ok: false, error: 'end_datetime darf nicht vor start_datetime liegen.' });
+        }
+        let dnf = cur && cur.date_not_fixed != null ? (Number(cur.date_not_fixed) === 1 ? 1 : 0) : 0;
+        if (Object.prototype.hasOwnProperty.call(body, 'date_not_fixed')) {
+          dnf = Number(body.date_not_fixed) === 1 ? 1 : 0;
+        }
+        const r = db.prepare(`
+          UPDATE jobs SET start_datetime = ?, end_datetime = ?, date_not_fixed = ?, updated_at = datetime('now')
+          WHERE id = ? AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = jobs.id AND jt.technician_id = ?)
+        `).run(startNorm, endNorm, dnf, effectiveJobId, technicianId);
+        if (r.changes) {
+          applyLocalJobScheduleToCalendarCache(db, effectiveJobId, startNorm, endNorm, dnf);
+          db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'job' AND entity_id = ? AND action = 'schedule'`).run(
+            effectiveJobId,
+          );
+          db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`).run(
+            'job',
+            effectiveJobId,
+            'schedule',
+            JSON.stringify({ start_datetime: startNorm, end_datetime: endNorm, date_not_fixed: dnf }),
+          );
+          save();
+          return res.json({
+            ok: true,
+            updated: 'schedule',
+            start_datetime: startNorm,
+            end_datetime: endNorm,
+            date_not_fixed: dnf,
+          });
         }
       }
       if (fabrikationsnummern !== undefined) {
@@ -19011,7 +19214,7 @@ function readAnlagenstammRootFolderName(db, fab) {
       .prepare('SELECT pn_root_name FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) LIMIT 1')
       .get(String(fab || '').trim());
     const pn = row && row.pn_root_name ? String(row.pn_root_name).trim() : '';
-    if (pn && !isBareFabFolderName(pn) && folderNameMatchesFab(pn, fab)) return pn;
+    if (pn && isUsableFnHauptordnerName(pn, fab) && !isBareFabFolderName(pn)) return pn;
   } catch (_) {}
   return null;
 }
@@ -19177,6 +19380,7 @@ function reconcileLocalJobsFromCalendarCache(db, technicianId, calendarData) {
       const end = pickCalendarEventDateTime(entry, true);
       if (!start || !end) continue;
       const dateNotFixed = Number(entry.date_not_fixed) === 1 ? 1 : 0;
+      if (getPendingJobActionPayload(db, local.id, 'schedule')) continue;
       db.prepare(
         `UPDATE jobs SET start_datetime = ?, end_datetime = ?, date_not_fixed = ?, synced_at = datetime('now') WHERE id = ?`,
       ).run(start, end, dateNotFixed, local.id);
@@ -19752,21 +19956,55 @@ function dropStaleEmptyFabPendingOnPull(db, localJobId, serverFab) {
   }
 }
 
-/** Pull: lokale/pending Leistungszeilen mit Dispo-Stand zusammenführen (nie blind überschreiben). */
+function jobFabJsonWasProvided(serverFab) {
+  return serverFab != null && String(serverFab).trim() !== '';
+}
+
+function applyRemovedJobFabsAfterPull(db, localJobId, oldFabJson, newFabJson) {
+  const removed = computeRemovedJobFabNums(oldFabJson, newFabJson);
+  for (const fn of removed) {
+    try {
+      removeOfflinePullFab(db, localJobId, fn);
+    } catch (rmOffErr) {
+      console.warn(
+        '[sync_pull] removeOfflinePullFab',
+        fn,
+        rmOffErr && rmOffErr.message ? rmOffErr.message : rmOffErr,
+      );
+    }
+  }
+  return removed;
+}
+
+/** Pull: ohne lokales FN-Pending ist die Dispo-FN-Menge maßgeblich (entfernte FNs verschwinden). */
 function mergeFabForJobPull(db, localJobId, serverFab) {
   const pending = getPendingJobFabrikationsnummern(db, localJobId);
   const curRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
   const curFab = curRow && curRow.fabrikationsnummern ? curRow.fabrikationsnummern : null;
-  let localFab = curFab;
+  const serverProvided = jobFabJsonWasProvided(serverFab);
+  let merged;
   if (pending !== undefined) {
-    localFab = curFab ? mergeJobFabrikationsnummernJson(curFab, pending) || pending : pending;
+    const localFab = curFab ? mergeJobFabrikationsnummernJson(curFab, pending) || pending : pending;
+    if (!serverProvided) {
+      merged = localFab != null ? enrichFabJsonWithLocalAnlagenstamm(db, localFab) : null;
+    } else if (!localFab) {
+      merged = enrichFabJsonWithLocalAnlagenstamm(db, serverFab);
+    } else {
+      merged = enrichFabJsonWithLocalAnlagenstamm(db, mergeJobFabrikationsnummernJson(localFab, serverFab) || localFab);
+    }
+  } else if (!serverProvided) {
+    merged = curFab != null ? enrichFabJsonWithLocalAnlagenstamm(db, curFab) : null;
+  } else {
+    merged = enrichFabJsonWithLocalAnlagenstamm(
+      db,
+      mergeFabRowsServerAuthoritative(
+        parseJobFabrikationsnummernRows(curFab),
+        parseJobFabrikationsnummernRows(serverFab),
+      ),
+    );
   }
-  if (serverFab == null || serverFab === '') {
-    return localFab != null ? enrichFabJsonWithLocalAnlagenstamm(db, localFab) : null;
-  }
-  if (!localFab) return enrichFabJsonWithLocalAnlagenstamm(db, serverFab);
-  const merged = mergeJobFabrikationsnummernJson(localFab, serverFab) || localFab;
-  return enrichFabJsonWithLocalAnlagenstamm(db, merged);
+  applyRemovedJobFabsAfterPull(db, localJobId, curFab, merged);
+  return merged;
 }
 
 /** Baustellen-Ansprechpartner aus Dispo-Payload (nicht Kunden-contact_person). */
@@ -20103,6 +20341,37 @@ function applyJobTechnicianOpts(db, localJobId, technicianId, j, opts) {
   }
 }
 
+function normalizeJobScheduleDatetimeLocal(raw, isEnd) {
+  const s = String(raw || '').replace('T', ' ').trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return s + (isEnd ? ' 23:59:59' : ' 00:00:00');
+  }
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[ ](\d{2}:\d{2})(?::(\d{2}))?/);
+  if (m) {
+    const sec = m[3] != null && m[3] !== '' ? m[3] : (isEnd ? '59' : '00');
+    return m[1] + ' ' + m[2] + ':' + sec;
+  }
+  const day = s.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return day + (isEnd ? ' 23:59:59' : ' 00:00:00');
+  }
+  return null;
+}
+
+function applyLocalJobScheduleToCalendarCache(db, localJobId, start, end, dateNotFixed) {
+  const row = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+  const sid = row && row.server_id != null ? Number(row.server_id) : 0;
+  if (!Number.isFinite(sid) || sid <= 0) return;
+  try {
+    db.prepare(
+      `UPDATE calendar_cache_jobs SET start_datetime = ?, end_datetime = ?, date_not_fixed = ?, synced_at = datetime('now') WHERE server_job_id = ?`,
+    ).run(start, end, dateNotFixed, sid);
+  } catch (_) {
+    /* Cache optional */
+  }
+}
+
 function insertOrUpdateJob(db, j, customerId, technicianId, opts) {
   opts = opts || {};
   ensureJobsServerUpdatedAtColumn(db);
@@ -20133,6 +20402,7 @@ function insertOrUpdateJob(db, j, customerId, technicianId, opts) {
 
     const pendingStatus = getPendingJobStatusPayload(db, existing.id);
     const pendingDesc = getPendingJobActionPayload(db, existing.id, 'description');
+    const pendingSchedule = getPendingJobActionPayload(db, existing.id, 'schedule');
 
     if (pendingStatus) {
       nextStatus = pendingStatus;
@@ -20146,7 +20416,17 @@ function insertOrUpdateJob(db, j, customerId, technicianId, opts) {
       nextDesc = prevRow.description;
     }
 
-    if (!serverIsFresher && !pendingStatus && prevRow) {
+    if (pendingSchedule) {
+      if (pendingSchedule.start_datetime) {
+        nextStart = String(pendingSchedule.start_datetime).replace('T', ' ').substring(0, 19);
+      }
+      if (pendingSchedule.end_datetime) {
+        nextEnd = String(pendingSchedule.end_datetime).replace('T', ' ').substring(0, 19);
+      }
+      if (pendingSchedule.date_not_fixed != null) {
+        nextDateNotFixed = Number(pendingSchedule.date_not_fixed) === 1 ? 1 : 0;
+      }
+    } else if (!serverIsFresher && prevRow) {
       if (prevRow.start_datetime) nextStart = String(prevRow.start_datetime).replace('T', ' ').substring(0, 19);
       if (prevRow.end_datetime) nextEnd = String(prevRow.end_datetime).replace('T', ' ').substring(0, 19);
       if (prevRow.date_not_fixed != null) nextDateNotFixed = Number(prevRow.date_not_fixed) === 1 ? 1 : 0;
@@ -20417,6 +20697,11 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
     pushFailures += 1;
     if (msg) lastPushFailMsg = String(msg);
   };
+  try {
+    requeueFailedSchedulePending(db);
+  } catch (_) {
+    /* ignore */
+  }
   const pending = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
   pending.sort((a, b) => {
     const score = (p) => {
@@ -20437,7 +20722,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
   );
   for (const p of pending) {
     let handled = false;
-    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address' || p.action === 'hotel_selection' || p.action === 'job_address' || p.action === 'job_contacts')) {
+    if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'schedule' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address' || p.action === 'hotel_selection' || p.action === 'job_address' || p.action === 'job_contacts')) {
       handled = true;
       let job = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(p.entity_id);
       if (!job) job = db.prepare('SELECT id, server_id FROM jobs WHERE server_id = ?').get(p.entity_id);
