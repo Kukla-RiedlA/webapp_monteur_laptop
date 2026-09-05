@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.003
+- **Anlagenakte Galerie:** Montage-Fotos unter `Dokumente_Monteur` bekommen lokale Vorschaubilder (nicht mehr graue Kacheln).
+- **Anlagenakte Dokumente:** nur echte Dateien (PDF, Office, Parameterlisten); keine 0-Byte-JSON-Entwürfe und keine leere Bilder-Sektion.
+
 ## V 2.007.002
 - **Montagebericht:** Autosave ohne Dienstreise-Ordner und ohne Dispo-Aufrufe – Eingabe hängt nicht mehr.
 - **Kontrollwiegung-Sync:** Draft wieder von/zur Dispo, ohne OneDrive-Ordner anzulegen.

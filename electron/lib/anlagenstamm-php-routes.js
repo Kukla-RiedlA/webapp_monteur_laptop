@@ -9,6 +9,7 @@ const {
   getAnlagenstammByIdResponse,
 } = require('./anlagenstamm-php-local');
 const { buildLocalAnlagenstammGallery } = require('./anlagenstamm-gallery-local');
+const { buildLocalAnlagenstammDocumentsList } = require('./anlagenstamm-documents-local');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 
 function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
@@ -198,8 +199,16 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
         source = 'local_cache';
       }
     }
+    let extraFiles = [];
+    try {
+      extraFiles =
+        typeof ctx.listMontageGalleryFiles === 'function' ? ctx.listMontageGalleryFiles(fab) || [] : [];
+    } catch (_) {
+      extraFiles = [];
+    }
     const gallery = buildLocalAnlagenstammGallery(fab, tree, {
       technicianId: ctx.getTechnicianId(req),
+      extraFiles,
     });
     try {
       console.log('[anlagenstamm_gallery]', fab, 'items=' + gallery.length, 'source=' + source);
@@ -215,6 +224,27 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       });
     }
     return res.json({ ok: true, gallery, source });
+  });
+
+  app.get('/api/anlagenstamm_documents_list.php', (req, res) => {
+    const fab = String(req.query.fab || req.query.fabrikationsnummer || '').trim();
+    if (!fab) return res.status(400).json({ ok: false, success: false, error: 'Fabrikationsnummer fehlt' });
+    let payload;
+    try {
+      payload = buildLocalAnlagenstammDocumentsList(db(), fab);
+    } catch (_) {
+      payload = {
+        ok: true,
+        success: true,
+        fab,
+        parameter_fab: fab,
+        categories: [],
+        events: [],
+        timeline: [],
+        source: 'local_fast',
+      };
+    }
+    return res.json(payload);
   });
 
   app.get('/api/anlagenstamm_files_list.php', async (req, res) => {

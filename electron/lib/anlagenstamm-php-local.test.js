@@ -69,7 +69,7 @@ describe('Kontrollwiegung Draft-IO', () => {
       /app\.post\('\/api\/protokolle\/kontrollwiegung'[\s\S]*?app\.post\('\/api\/kontrollwiegungsprotokoll_save'/,
     );
     assert.ok(post, 'POST kontrollwiegung nicht gefunden');
-    assert.match(post[0], /wantsLocalOnlyRequest\(body\) \? null/);
+    assert.match(post[0], /localOnlyKw \? null/);
     assert.match(post[0], /pushJsonDraft\(draftPushOpts\)/);
   });
 
@@ -112,5 +112,37 @@ describe('Montagebericht Draft-IO', () => {
     );
     assert.ok(post, 'POST montagebericht nicht gefunden');
     assert.match(post[0], /wantsLocalOnlyRequest\(body\) \? null/);
+  });
+});
+
+describe('Dokumente: Raster nicht unter Montagebericht', () => {
+  it('Frontend entfernt JPG/PNG aus Dokumenten-Kategorien (Galerie)', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'public', 'assets', 'js', 'dispo', 'anlagenstamm_documents.js'),
+      'utf8',
+    );
+    assert.match(src, /function relocateRasterDocuments/);
+    assert.match(src, /relocateRasterDocuments\(data\.categories/);
+  });
+
+  it('documents_list.php ist lokale Fast-Route ohne Dispo-Proxy', () => {
+    const src = fs.readFileSync(path.join(__dirname, 'anlagenstamm-php-routes.js'), 'utf8');
+    assert.match(src, /app\.get\('\/api\/anlagenstamm_documents_list\.php'/);
+    assert.match(src, /source: 'local_fast'/);
+    const proxy = fs.readFileSync(path.join(__dirname, 'dispo-html-proxy.js'), 'utf8');
+    assert.match(proxy, /\/anlagenstamm_documents_list\.php/);
+  });
+
+  it('PHP erkennt Bilder-Ordner und Raster vor Montage-Ordner', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', '..', '..', 'dispo', 'inc', 'anlagenstamm_doc_categories.php'),
+      'utf8',
+    );
+    assert.match(src, /function anlagenstamm_doc_is_raster/);
+    const guess = src.match(/function anlagenstamm_doc_guess_slug[\s\S]*?function anlagenstamm_doc_fn_dir_safe/);
+    assert.ok(guess, 'guess_slug nicht gefunden');
+    const bilderIdx = guess[0].indexOf("return 'bild'");
+    const montageLoop = guess[0].indexOf('$folderMap[$low]');
+    assert.ok(bilderIdx >= 0 && montageLoop > bilderIdx);
   });
 });

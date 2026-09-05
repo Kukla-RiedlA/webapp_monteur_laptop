@@ -1561,6 +1561,28 @@ function createApp(db) {
         prewarmAnlagenstammGalleryThumbsImpl(fab, gallery, technicianId);
       }
     },
+    listMontageGalleryFiles: (fab) => {
+      const { jobHasFab } = require('./lib/anlagenstamm-documents-local');
+      const { listMontageRastersFromDokumenteMonteurPaths } = require('./lib/anlagenstamm-gallery-local');
+      const fabNorm = String(fab || '').trim();
+      const fabDigits = fabNorm.replace(/\D/g, '') || fabNorm;
+      if (!fabDigits) return [];
+      let jobs = [];
+      try {
+        jobs = db.prepare('SELECT id, fabrikationsnummern FROM jobs').all();
+      } catch (_) {
+        return [];
+      }
+      const paths = [];
+      for (const j of jobs) {
+        if (!jobHasFab(j.fabrikationsnummern, fabDigits)) continue;
+        const bound = getBoundReiseDirForJob(j.id);
+        if (!bound) continue;
+        paths.push({ dm: path.join(bound, 'Dokumente_Monteur'), jobId: j.id });
+      }
+      const files = listMontageRastersFromDokumenteMonteurPaths(paths, fabNorm, { max: 80 });
+      return files;
+    },
   });
   registerAbrechnungPhpRoutes(app, {
     db,
@@ -1986,7 +2008,9 @@ function createApp(db) {
         });
       }
     }
-    enqueueDienstreisePushChanged(localJobId, technicianId, o.dispoBaseUrl, o.username, o.password, o.pushExtra);
+    if (o.skipFolderPush === false) {
+      enqueueDienstreisePushChanged(localJobId, technicianId, o.dispoBaseUrl, o.username, o.password, o.pushExtra);
+    }
   }
 
   let appVersion = 'V 1.001';
@@ -2730,10 +2754,20 @@ function createApp(db) {
   async function collectLocalSyncFolderFileEntries(reiseDir, subfolder) {
     const result = [];
     const startDir = path.join(reiseDir, subfolder);
-    if (!fs.existsSync(startDir)) return result;
+    try {
+      await fs.promises.access(startDir);
+    } catch (_) {
+      return result;
+    }
     let seen = 0;
     async function walk(currentDir, relBase) {
-      const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+      let entries;
+      try {
+        entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+      } catch (_) {
+        return;
+      }
+      await yieldEventLoop();
       for (const e of entries) {
         if (isIgnorableDirEntry(e.name)) continue;
         const full = path.join(currentDir, e.name);
@@ -2748,7 +2782,7 @@ function createApp(db) {
             fullPath: full,
           });
           seen += 1;
-          if (seen % 20 === 0) await yieldEventLoop();
+          if (seen % 8 === 0) await yieldEventLoop();
         }
       }
     }
@@ -2821,9 +2855,9 @@ function createApp(db) {
     }
   }
 
-  function uploadJobProjectFileToDispo(base, serverJobId, technicianId, authHeader, relPathFromRoot, fullPath) {
+  async function uploadJobProjectFileToDispo(base, serverJobId, technicianId, authHeader, relPathFromRoot, fullPath) {
     const url = base.replace(/\/$/, '') + '/api/job_project_file_upload.php';
-    const fileBuf = fs.readFileSync(fullPath);
+    const fileBuf = await fs.promises.readFile(fullPath);
     const httpsUploadAgent = isDispoInsecureTlsAllowed() ? new https.Agent({ rejectUnauthorized: false }) : undefined;
     return new Promise((resolve, reject) => {
       const form = new FormData();
@@ -3038,10 +3072,20 @@ function createApp(db) {
     async function collectLocalFiles(rootDir, subfolder) {
       const result = [];
       const startDir = path.join(rootDir, subfolder);
-      if (!fs.existsSync(startDir)) return result;
+      try {
+        await fs.promises.access(startDir);
+      } catch (_) {
+        return result;
+      }
       let seen = 0;
       async function walk(currentDir, relBase) {
-        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        let entries;
+        try {
+          entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+        } catch (_) {
+          return;
+        }
+        await yieldEventLoop();
         for (const e of entries) {
           if (isIgnorableDirEntry(e.name)) continue;
           const full = path.join(currentDir, e.name);
@@ -3052,7 +3096,7 @@ function createApp(db) {
             if (isMonteurDraftJsonBasename(e.name)) continue;
             result.push({ relPathFromSub: rel, fullPath: full });
             seen += 1;
-            if (seen % 20 === 0) await yieldEventLoop();
+            if (seen % 8 === 0) await yieldEventLoop();
           }
         }
       }
@@ -4370,6 +4414,15 @@ function createApp(db) {
     const cached = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, null);
     if (cached && cached.buf && cached.buf.length) return cached;
     let filePath = filePathOpt || readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
+    if (!filePath) {
+      try {
+        filePath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, null, {
+          skipDeepSearch: true,
+        });
+      } catch (_) {
+        filePath = null;
+      }
+    }
     if (filePath) {
       return generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath);
     }
@@ -4423,7 +4476,7 @@ function createApp(db) {
     if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
       return sendProjekteNeuThumbResponse(res, cachedThumb, 'hit');
     }
-    if (preferCache) {
+    if (preferCache && !filePathOpt) {
       enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt).catch(() => {});
       res.setHeader('X-Thumb-Cache', 'miss');
       res.setHeader('Retry-After', '1');
@@ -4446,12 +4499,16 @@ function createApp(db) {
     const fabNorm = String(fab || '').trim();
     if (!fabNorm || !Array.isArray(gallery) || !gallery.length) return;
     const techId = technicianId || getTechnicianId({ headers: {} }) || '';
+    const maxPrewarm = 8;
+    let queued = 0;
     for (const it of gallery) {
+      if (queued >= maxPrewarm) break;
       const rel = String((it && (it.rel_path || it.rel)) || '').trim();
       if (!rel) continue;
       const cached = readCachedProjekteNeuThumb(db, DB_DIR, fabNorm, rel, 256, null);
       if (cached && cached.buf && cached.buf.length) continue;
       enqueueProjekteNeuThumbFill(techId, fabNorm, rel, 256, null).catch(() => {});
+      queued += 1;
     }
   };
 
@@ -8509,11 +8566,15 @@ function createApp(db) {
         return res.status(400).json({ success: false, error: 'fab erforderlich.' });
       }
       if (wantThumb && sourceNorm === 'projekte_neu' && pnPath) {
-        return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, null, thumbOpts);
+        thumbOpts.jobId = req.query.job_id || '';
+        const localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id, {
+          skipDeepSearch: true,
+        });
+        return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, localPath, thumbOpts);
       }
       if (sourceNorm === 'projekte_neu' && pnPath) {
         const localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id, {
-          skipDeepSearch: false,
+          skipDeepSearch: true,
         });
         if (localPath) {
           try {
@@ -10047,6 +10108,7 @@ function createApp(db) {
             filePath: montageberichtDataPath,
             username: body.dispoUsername || body.serverUsername,
             password: body.dispoPassword ?? body.serverPassword,
+            skipFolderPush: false,
           });
         } catch (_) { /* Meta optional */ }
       }
@@ -10179,6 +10241,7 @@ function createApp(db) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
       const reiseDir = null;
+      const credsKw = resolveDispoServerCreds(req.query || {});
       await pullOneJsonDraftForJob(
         reiseDir,
         localJobId,
@@ -10212,7 +10275,8 @@ function createApp(db) {
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
-      const reiseDir = wantsLocalOnlyRequest(body) ? null : getOrCreateDienstreiseFolderForJob(localJobId);
+      const localOnlyKw = wantsLocalOnlyRequest(body);
+      const reiseDir = localOnlyKw ? null : getOrCreateDienstreiseFolderForJob(localJobId);
       const entry = {
         technician_id: technicianId,
         job_id: localJobId,
@@ -10233,6 +10297,7 @@ function createApp(db) {
       const record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, fab, entry, db, localJobId);
       const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
       const serverJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
+      let pushMode = 'none';
       if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft && serverJobId > 0) {
         const kwPath = reiseDir ? resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true) : '';
         const draftPushOpts = {
@@ -10247,11 +10312,13 @@ function createApp(db) {
           username: body.serverUsername || body.dispoUsername,
           password: body.serverPassword ?? body.dispoPassword,
         };
-        if (wantsLocalOnlyRequest(body)) {
+        if (localOnlyKw) {
+          pushMode = 'bg';
           setImmediate(() => {
             multiDeviceApi.pushJsonDraft(draftPushOpts).catch(() => { /* Autosave: Draft-Push im Hintergrund */ });
           });
         } else {
+          pushMode = 'await';
           try {
             await multiDeviceApi.pushJsonDraft(draftPushOpts);
           } catch (_) { /* optional */ }
@@ -10296,60 +10363,68 @@ function createApp(db) {
       payload.pdf_languages = pdfLangs;
       enrichKontrollwiegungPdfPayload(payload, localJobId, technicianId);
       let reiseDir = null;
-      if (Number.isFinite(localJobId) && localJobId > 0) {
-        reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      }
       let record = null;
       let savedPdf = null;
       let savedPdfPath = null;
       const savedPdfs = [];
       const createPdf = body.create_pdf === true || body.createPdf === true;
-      if (reiseDir) {
-        record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, payload.fabrikationsnummer, payload, db, localJobId);
+      if (Number.isFinite(localJobId) && localJobId > 0) {
+        if (createPdf) {
+          reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+        }
+        record = kontrollwiegungLocal.saveKontrollwiegungLocal(
+          reiseDir,
+          payload.fabrikationsnummer,
+          payload,
+          db,
+          localJobId,
+        );
         if (record) {
           payload.gespeichert_am = record.gespeichert_am || record.updated_at || '';
           payload.updated_at = record.updated_at || payload.gespeichert_am;
         }
-        if (createPdf) {
-        const sigPngKw = await resolveTechnicianSignaturePng(technicianId, body);
-        if (!sigPngKw) return failMissingSignature(res);
-        payload.technician_signature_png = sigPngKw;
-        for (const lang of pdfLangs) {
-          const pdfPaths = resolveKontrollwiegungLocalPdfPaths(
-            reiseDir,
-            localJobId,
-            payload.fabrikationsnummer,
-            technicianId,
-            payload.durchfuehrungsdatum,
-            lang,
-            pdfLangs,
-          );
-          const pdfDir = path.dirname(pdfPaths.full);
-          if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
-          const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(payload, { lang });
-          writeFileWithRetry(pdfPaths.full, pdfBuf);
-          savedPdfs.push({ rel: pdfPaths.rel, path: pdfPaths.full, name: pdfPaths.name, lang });
-          protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
-        }
-        savedPdf = savedPdfs[0] ? savedPdfs[0].rel : null;
-        savedPdfPath = savedPdfs[0] ? savedPdfs[0].path : null;
-        if (record) {
-          record.pdf_rel = savedPdf;
-          record.pdf_rels = savedPdfs.map((p) => p.rel);
-          record.languages = pdfLangs;
-          const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir, db, localJobId);
-          if (storeKw.byFab[payload.fabrikationsnummer]) {
-            storeKw.byFab[payload.fabrikationsnummer].pdf_rel = savedPdf;
-            storeKw.byFab[payload.fabrikationsnummer].pdf_rels = record.pdf_rels;
-            storeKw.byFab[payload.fabrikationsnummer].languages = pdfLangs;
-            kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw, db, localJobId);
+        if (createPdf && reiseDir) {
+          const sigPngKw = await resolveTechnicianSignaturePng(technicianId, body);
+          if (!sigPngKw) return failMissingSignature(res);
+          payload.technician_signature_png = sigPngKw;
+          for (const lang of pdfLangs) {
+            const pdfPaths = resolveKontrollwiegungLocalPdfPaths(
+              reiseDir,
+              localJobId,
+              payload.fabrikationsnummer,
+              technicianId,
+              payload.durchfuehrungsdatum,
+              lang,
+              pdfLangs,
+            );
+            const pdfDir = path.dirname(pdfPaths.full);
+            if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+            const pdfBuf = await protocolPdf.generateKontrollwiegungPdfBuffer(payload, { lang });
+            writeFileWithRetry(pdfPaths.full, pdfBuf);
+            savedPdfs.push({ rel: pdfPaths.rel, path: pdfPaths.full, name: pdfPaths.name, lang });
+            protectPathIfUnderDokumenteMonteur(db, localJobId, pdfPaths.rel);
           }
-        }
-        save();
+          savedPdf = savedPdfs[0] ? savedPdfs[0].rel : null;
+          savedPdfPath = savedPdfs[0] ? savedPdfs[0].path : null;
+          if (record) {
+            record.pdf_rel = savedPdf;
+            record.pdf_rels = savedPdfs.map((p) => p.rel);
+            record.languages = pdfLangs;
+            const storeKw = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir, db, localJobId);
+            if (storeKw.byFab[payload.fabrikationsnummer]) {
+              storeKw.byFab[payload.fabrikationsnummer].pdf_rel = savedPdf;
+              storeKw.byFab[payload.fabrikationsnummer].pdf_rels = record.pdf_rels;
+              storeKw.byFab[payload.fabrikationsnummer].languages = pdfLangs;
+              kontrollwiegungLocal.writeKontrollwiegungStore(reiseDir, storeKw, db, localJobId);
+            }
+          }
+          save();
         }
         const jobRowKw = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
         const serverJobIdKw = jobRowKw && jobRowKw.server_id != null ? parseInt(jobRowKw.server_id, 10) : 0;
-        const kwPath = resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true);
+        const kwPath = reiseDir
+          ? resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true)
+          : '';
         queueProtocolDraftAndFiles({
           localJobId,
           technicianId,
@@ -10360,9 +10435,10 @@ function createApp(db) {
           filePath: kwPath,
           username: body.serverUsername || body.dispoUsername,
           password: body.serverPassword ?? body.dispoPassword,
+          skipFolderPush: !createPdf,
         });
-        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft && serverJobIdKw > 0 && !wantsLocalOnlyRequest(body)) {
-          await multiDeviceApi.pushJsonDraft({
+        if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft && serverJobIdKw > 0) {
+          const draftPushOpts = {
             dispoBaseUrl,
             endpoint: '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
             technicianId,
@@ -10370,8 +10446,12 @@ function createApp(db) {
             localJobId,
             reiseDir,
             filePath: kwPath,
+            basename: 'kontrollwiegungsprotokoll.json',
             username: body.serverUsername || body.dispoUsername,
             password: body.serverPassword ?? body.dispoPassword,
+          };
+          setImmediate(() => {
+            multiDeviceApi.pushJsonDraft(draftPushOpts).catch(() => {});
           });
         }
       }
@@ -10381,7 +10461,7 @@ function createApp(db) {
         try {
           const auth = authHeaderFromCredentials(body.serverUsername || body.dispoUsername, body.serverPassword ?? body.dispoPassword);
           const url = dispoBaseUrl + '/dispo_api/api/kontrollwiegungsprotokoll_save.php';
-          const r = await fetch(url, {
+          const r = await fetchWithTimeout(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
             body: JSON.stringify(payload),
@@ -10788,6 +10868,7 @@ function createApp(db) {
           filePath: skPath,
           username: body.serverUsername || body.dispoUsername,
           password: body.serverPassword ?? body.dispoPassword,
+          skipFolderPush: !createPdf,
         });
         if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft && srvJobId > 0 && !wantsLocalOnlyRequest(body)) {
           await multiDeviceApi.pushJsonDraft({
@@ -11191,6 +11272,7 @@ function createApp(db) {
           filePath: pzPath,
           username: body.serverUsername || body.dispoUsername,
           password: body.serverPassword ?? body.dispoPassword,
+          skipFolderPush: false,
         });
         if (!wantsLocalOnlyRequest(body) && dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft && srvJobId > 0) {
           await multiDeviceApi.pushJsonDraft({
@@ -11890,7 +11972,10 @@ function createApp(db) {
     const multiLang = langs.length > 1;
     const datum = String(draftPayload.durchfuehrungsdatum || '').replace(/-/g, '');
     const safeFn = String(fab).replace(/[^\w.-]+/g, '_');
-    const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
+    const { targetDir, relDir } = await resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
+    if (!targetDir) {
+      throw new Error('PDF-Zielordner fehlt (Reiseordner nicht gebunden).');
+    }
     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
     const enriched = Object.assign({}, draftPayload, {
       fabrikationsnummer: draftPayload.fabrikationsnummer || fab,
@@ -12581,7 +12666,10 @@ function createApp(db) {
     const multiLang = langs.length > 1;
     const datum = String(durchfuehrungsdatum || '').replace(/-/g, '');
     const safeFn = String(fab).replace(/[^\w.-]+/g, '_');
-    const { targetDir, relDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
+    const { targetDir, relDir } = await resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fab, technicianId);
+    if (!targetDir) {
+      throw new Error('PDF-Zielordner fehlt (Reiseordner nicht gebunden).');
+    }
     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
     const savedRel = [];
     let localWarning = null;
@@ -12853,6 +12941,7 @@ function createApp(db) {
         filePath: serviceprotokollJsonPath(reiseDir, spec),
         username: body.serverUsername || body.dispoUsername,
         password: body.serverPassword ?? body.dispoPassword,
+        skipFolderPush: false,
       });
       let protokollId = 'local:' + Date.now();
       let deferred = false;
@@ -13095,6 +13184,7 @@ function createApp(db) {
         filePath: serviceprotokollJsonPath(reiseDir, spec),
         username: body.serverUsername || body.dispoUsername,
         password: body.serverPassword ?? body.dispoPassword,
+        skipFolderPush: false,
       });
 
       let saveData = {};
@@ -13207,7 +13297,10 @@ function createApp(db) {
               const datum = String(body.durchfuehrungsdatum || '').replace(/-/g, '');
               const safeFn = fabRaw.replace(/[^\w.-]+/g, '_');
               const pdfName = 'Serviceprotokoll_' + safeFn + '_' + datum + '.pdf';
-              const { targetDir } = resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fabRaw, technicianId);
+              const { targetDir } = await resolveServiceprotokollLocalPdfTarget(reiseDir, localJobId, fabRaw, technicianId);
+              if (!targetDir) {
+                throw new Error('PDF-Zielordner fehlt (Reiseordner nicht gebunden).');
+              }
               if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
               const localPdfFull = path.join(targetDir, pdfName);
               if (!keepExistingLocalPdf(localPdfFull)) {

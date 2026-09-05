@@ -255,6 +255,7 @@ function registerMultiDeviceRoutes(deps) {
   }
 
   async function pushJsonDraft(opts) {
+    const tPush = Date.now();
     const base = String(opts.dispoBaseUrl || '').replace(/\/$/, '');
     const endpoint = opts.endpoint;
     const technicianId = parseInt(opts.technicianId, 10);
@@ -292,6 +293,15 @@ function registerMultiDeviceRoutes(deps) {
       const gd = await gr.json().catch(() => ({}));
       if (gr.ok && gd && gd.ok) {
         const remoteRev = parseInt(gd.revision, 10) || 0;
+        const remotePayload = stripDraftMeta(gd.store || gd.data || {});
+        if (
+          remotePayload &&
+          typeof remotePayload === 'object' &&
+          !isEmptyMonteurDraftPayload(remotePayload)
+        ) {
+          const merged = mergeByFabStores(local.payload, remotePayload);
+          local.payload = merged.payload;
+        }
         if (remoteRev !== baseRevision) {
           console.warn(
             '[draft_push] align base_revision',
@@ -361,7 +371,7 @@ function registerMultiDeviceRoutes(deps) {
             soft_resolved: true,
           };
         }
-        // Bewusstes Speichern auf diesem Gerät: einmal mit Server-Revision erneut pushen (Lokal gewinnt)
+        // Bewusstes Speichern auf diesem Gerät: mit Server-Revision erneut pushen (gemergter Store)
         if (remoteRev !== baseRevision) {
           console.warn(
             '[draft_push] retry with remote base_revision',
@@ -371,6 +381,8 @@ function registerMultiDeviceRoutes(deps) {
             'remote=',
             remoteRev,
           );
+          const mergedConflict = mergeByFabStores(local.payload, stripDraftMeta(remotePayload));
+          local.payload = mergedConflict.payload;
           const retry = await postWithBase(remoteRev);
           r = retry.r;
           data = retry.data;
@@ -474,7 +486,9 @@ function registerMultiDeviceRoutes(deps) {
         headers: { 'X-Technician-Id': String(technicianId), ...auth },
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) return { ok: false, error: data.error };
+      if (!r.ok || !data.ok) {
+        return { ok: false, error: data.error };
+      }
       const payload = stripDraftMeta(data.store || data.data || {});
       const remoteRev = parseInt(data.revision, 10) || 0;
       const remoteEmpty = isEmptyMonteurDraftPayload(payload);
@@ -507,9 +521,9 @@ function registerMultiDeviceRoutes(deps) {
         return { ok: true, revision: remoteRev, store: payload };
       }
 
-      /* Gerät hat schon Inhalt: Dispo darf vorhandene FN nicht ersetzen, nur fehlende ergänzen. */
+      /* Gerät hat schon Inhalt: FN mergen (Inhalt vor Stub, sonst Zeitstempel). Leere Dispo wischt nicht. */
       if (hasByFab) {
-        const merged = mergeByFabStores(local.payload, payload, { preferLocal: true });
+        const merged = mergeByFabStores(local.payload, payload);
         if (!draftPayloadsEqual(merged.payload, local.payload)) {
           preserveLocalDraftCopy(opts, local.payload);
           writeDraftState(

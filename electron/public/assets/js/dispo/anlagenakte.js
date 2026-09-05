@@ -201,6 +201,12 @@
           }
           byFolder[folder].push(it);
         });
+        groups.sort(function (a, b) {
+          var am = /^Montage/i.test(a);
+          var bm = /^Montage/i.test(b);
+          if (am !== bm) return am ? -1 : 1;
+          return a.localeCompare(b, 'de');
+        });
         var html = '';
         groups.forEach(function (folder) {
           html += '<div class="akte-gallery-group"><h3>' + esc(folder) + '</h3><div class="akte-gallery-grid">';

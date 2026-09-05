@@ -62,6 +62,32 @@ describe('mergeByFabStores', () => {
     assert.equal(merged.payload.byFab.A.v, 'local');
     assert.equal(merged.payload.byFab.B.v, 'nur-dispo');
   });
+  it('empty local stub loses to remote wiegungen even if local timestamp is newer', () => {
+    const merged = mergeByFabStores(
+      {
+        byFab: {
+          A: {
+            updated_at: '2026-09-05T12:00:00Z',
+            wiegungen: [{ nr: 1 }],
+          },
+        },
+      },
+      {
+        byFab: {
+          A: {
+            updated_at: '2026-09-04T10:00:00Z',
+            wiegungen: [{ nr: 1, soll: '100', ist: '100' }],
+          },
+          B: {
+            updated_at: '2026-09-04T10:00:00Z',
+            wiegungen: [{ nr: 1, soll: '50', ist: '50' }],
+          },
+        },
+      },
+    );
+    assert.equal(merged.payload.byFab.A.wiegungen[0].soll, '100');
+    assert.equal(merged.payload.byFab.B.wiegungen[0].soll, '50');
+  });
 });
 
 describe('HANDLED_PENDING_ENTITY_TYPES', () => {

@@ -8,6 +8,11 @@ const {
   GALLERY_MAX,
   walkRasterFiles,
   classifyGalleryRel,
+  galleryParentFolder,
+  galleryFabKey,
+  isMontageJobPhoto,
+  folderMatchesOtherFab,
+  listMontageRastersFromDokumenteMonteurPaths,
   buildLocalAnlagenstammGallery,
 } = require('./anlagenstamm-gallery-local');
 const { registerAnlagenstammPhpRoutes } = require('./anlagenstamm-php-routes');
@@ -79,6 +84,84 @@ describe('Anlagenstamm-Galerie lokal', () => {
       gallery.map((g) => g.rel_path),
       ['10582 - 10584/a.JPG'],
     );
+  });
+
+  it('ordnet Montage-Pfad und Kameraname der Gruppe Montage mit Datum zu', () => {
+    assert.equal(
+      galleryParentFolder(
+        'Montage/2026-08-31_IPS_Kunde/Bilder/12304_2026-09-01_11-00-52.jpg',
+        '12304_2026-09-01_11-00-52.jpg',
+        '12304',
+      ),
+      'Montage / 2026-08-31',
+    );
+    assert.equal(
+      galleryParentFolder('Bilder/12304/12304_2026-09-01_11-00-52.jpg', '12304_2026-09-01_11-00-52.jpg', '12304'),
+      'Montage / 2026-09-01',
+    );
+    assert.equal(isMontageJobPhoto('Bilder/12304/IMG_8479.JPG', 'IMG_8479.JPG', '12304'), false);
+    assert.equal(folderMatchesOtherFab('2026-08-31_IPS_Kunde', '12304'), false);
+    assert.equal(folderMatchesOtherFab('Montage', '12304'), false);
+    assert.equal(galleryFabKey('12304_IPS Makina'), '12304');
+    const galSuff = buildLocalAnlagenstammGallery('12304 extra', [
+      dirNode('Bilder', [dirNode('12304', [fileNode('IMG_1.JPG', 'Bilder/12304/IMG_1.JPG')])]),
+    ]);
+    assert.equal(galSuff.length, 1);
+  });
+
+  it('behaelt Montage-Fotos auch wenn das FN-Archiv GALLERY_MAX fuellt', () => {
+    const ownKids = [];
+    for (let i = 0; i < 20; i += 1) {
+      ownKids.push(fileNode('own' + i + '.jpg', 'Bilder/12304/own' + i + '.jpg'));
+    }
+    const tree = [
+      dirNode('Bilder', [dirNode('12304', ownKids)]),
+      dirNode('Montage', [
+        dirNode('2026-08-31_AO', [
+          dirNode('Bilder', [
+            fileNode(
+              '12304_2026-09-01_11-00-52.jpg',
+              'Montage/2026-08-31_AO/Bilder/12304_2026-09-01_11-00-52.jpg',
+            ),
+          ]),
+        ]),
+      ]),
+    ];
+    const gallery = buildLocalAnlagenstammGallery('12304', tree, { max: 8 });
+    const montage = gallery.filter((g) => String(g.parent_folder || '').startsWith('Montage'));
+    assert.equal(montage.length, 1);
+    assert.equal(montage[0].parent_folder, 'Montage / 2026-08-31');
+    assert.ok(gallery.some((g) => String(g.rel_path).startsWith('Bilder/12304/')));
+  });
+
+  it('nimmt lokale Auftragsfotos extraFiles und filtert fremde FN', () => {
+    const extra = [
+      {
+        name: '12304_2026-09-01_11-00-52.jpg',
+        rel: 'Dokumente_Monteur/12304_Kunde/Montage/2026-08-31_AO/Bilder/12304_2026-09-01_11-00-52.jpg',
+      },
+      {
+        name: '12305_2026-09-02_09-57-08.jpg',
+        rel: 'Dokumente_Monteur/12304_Kunde/Montage/2026-08-31_AO/Bilder/12305_2026-09-02_09-57-08.jpg',
+      },
+    ];
+    const gallery = buildLocalAnlagenstammGallery('12304', [], { extraFiles: extra });
+    assert.equal(gallery.length, 1);
+    assert.equal(gallery[0].parent_folder, 'Montage / 2026-08-31');
+    assert.ok(gallery[0].rel_path.includes('12304_2026-09-01'));
+  });
+
+  it('listet Montage-Bilder nur aus bekannten FN-Ordnern, ohne Tiefenscan', () => {
+    const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kukla-gal-'));
+    const dm = path.join(tmp, 'Dokumente_Monteur');
+    const bilder = path.join(dm, '12304_Kunde', 'Montage', '2026-08-31_AO', 'Bilder');
+    fs.mkdirSync(bilder, { recursive: true });
+    fs.writeFileSync(path.join(bilder, '12304_2026-09-01_11-00-52.jpg'), 'x');
+    fs.writeFileSync(path.join(bilder, '12305_2026-09-02_09-57-08.jpg'), 'x');
+    const listed = listMontageRastersFromDokumenteMonteurPaths([{ dm, jobId: 166 }], '12304', { max: 80 });
+    assert.equal(listed.length, 1);
+    assert.ok(listed[0].rel.includes('12304_2026-09-01_11-00-52.jpg'));
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 
   it('bevorzugt FN-Bilder vor unzugeordneten bis GALLERY_MAX', () => {
@@ -159,7 +242,8 @@ describe('Galerie-Request-Pfad ohne OneDrive', () => {
       /async function fillProjekteNeuThumbCache[\s\S]*?\n  function enqueueProjekteNeuThumbFill/,
     );
     assert.ok(fill, 'fillProjekteNeuThumbCache nicht gefunden');
-    assert.equal(fill[0].includes('resolveProjekteNeuLocalFilePathAll'), false);
+    assert.ok(fill[0].includes('skipDeepSearch: true'));
+    assert.equal(fill[0].includes('skipDeepSearch: false'), false);
     const cacheFn = serverSrc.match(
       /function cacheProjekteNeuTreesForJob[\s\S]*?\n  function resolveLocalJobIdForFab/,
     );

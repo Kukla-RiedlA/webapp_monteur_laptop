@@ -239,8 +239,29 @@ function draftEntryTimestamp(entry) {
   return String(entry.updatedAt || entry.updated_at || entry.gespeichert_am || entry.server_updated_at || '').trim();
 }
 
+/** 0 = leerer Autosave-Stub, >0 = fachlicher Inhalt (z. B. Wiegungen). */
+function draftEntryContentScore(entry) {
+  if (!entry || typeof entry !== 'object') return 0;
+  if (Array.isArray(entry.wiegungen)) {
+    let n = 0;
+    for (const row of entry.wiegungen) {
+      if (!row || typeof row !== 'object') continue;
+      const filled = Object.keys(row).some((k) => {
+        if (k === 'id' || k === 'nr' || k === 'zeile' || k === 'row') return false;
+        const v = row[k];
+        if (v == null) return false;
+        if (typeof v === 'number') return Number.isFinite(v);
+        return String(v).trim() !== '';
+      });
+      if (filled) n += 1;
+    }
+    return n;
+  }
+  return 1;
+}
+
 /**
- * Union der byFab-Stores. Pro FN gewinnt der neuere updatedAt; FN nur auf einer Seite bleibt.
+ * Union der byFab-Stores. Pro FN: Inhalt vor leerem Stub, sonst neuerer updatedAt.
  * preferLocal: vorhandene lokale FN nie durch Dispo ersetzen (nur fehlende FN ergänzen).
  */
 function mergeByFabStores(localPayload, remotePayload, opts) {
@@ -261,12 +282,20 @@ function mergeByFabStores(localPayload, remotePayload, opts) {
       if (preferLocal) {
         byFab[key] = loc;
       } else {
-        const locMs = Date.parse(draftEntryTimestamp(loc)) || 0;
-        const remMs = Date.parse(draftEntryTimestamp(rem)) || 0;
-        if (locMs && remMs && remMs > locMs + 2000) {
+        const locScore = draftEntryContentScore(loc);
+        const remScore = draftEntryContentScore(rem);
+        if (locScore === 0 && remScore > 0) {
           byFab[key] = rem;
-        } else {
+        } else if (remScore === 0 && locScore > 0) {
           byFab[key] = loc;
+        } else {
+          const locMs = Date.parse(draftEntryTimestamp(loc)) || 0;
+          const remMs = Date.parse(draftEntryTimestamp(rem)) || 0;
+          if (locMs && remMs && remMs > locMs + 2000) {
+            byFab[key] = rem;
+          } else {
+            byFab[key] = loc;
+          }
         }
       }
       usedBoth = true;

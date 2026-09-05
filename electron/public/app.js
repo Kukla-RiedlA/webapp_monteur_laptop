@@ -18744,13 +18744,13 @@
           serverPassword: getDispoPassword()
         };
         try {
-          await persistKopfToAnlagenstamm(fab);
           var r = await fetch(API_BASE + '/api/kontrollwiegungsprotokoll_save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
             body: JSON.stringify(body)
           });
           var data = await r.json().catch(function () { return {}; });
+          persistKopfToAnlagenstamm(fab).catch(function () { /* Anlagenstamm nach Speichern, UI nicht blockieren */ });
           if (!r.ok || !data.ok) {
             return { ok: false, error: data.error || String(r.status), data: data };
           }

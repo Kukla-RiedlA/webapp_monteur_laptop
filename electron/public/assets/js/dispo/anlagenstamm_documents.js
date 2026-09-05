@@ -407,13 +407,35 @@
     return rest;
   }
 
+  function isRasterDoc(d) {
+    var mime = String((d && d.mime) || '').toLowerCase();
+    if (mime.indexOf('image/') === 0 && mime.indexOf('svg') === -1) return true;
+    var n = String((d && (d.display_name || d.original_name || d.file_path)) || '');
+    return /\.(jpe?g|png|gif|webp|bmp|tiff?|heic|heif)$/i.test(n);
+  }
+
+  function relocateRasterDocuments(categories) {
+    var cats = Array.isArray(categories) ? categories : [];
+    cats.forEach(function (cat) {
+      if (!cat) return;
+      cat.documents = (cat.documents || []).filter(function (d) { return !isRasterDoc(d); });
+    });
+    return cats;
+  }
+
   function renderCategories(categories, fab, downloadFab) {
     var html = '';
     (categories || []).forEach(function (cat) {
       var slug = cat.slug || '';
       var label = cat.label || slug;
-      var docs = dedupeProtocolDocs(cat.documents || []);
+      var docs = dedupeProtocolDocs(cat.documents || []).filter(function (d) {
+        if (!d) return false;
+        if (d.view_kind === 'form_json') return false;
+        if (String(d.mime || '').toLowerCase().indexOf('json') >= 0) return false;
+        return true;
+      });
       var isImage = !!cat.is_image;
+      if (isImage) return;
       html += '<details class="anlagen-doc-cat">';
       html += '<summary>' + esc(label) + ' <span class="muted">(' + docs.length + ')</span></summary>';
       html += '<div class="anlagen-doc-cat-body">';
@@ -579,7 +601,8 @@
     lastDocsData = data;
     var fab = fabVal();
     var downloadFab = paramDownloadFab(data, fab);
-    var categories = data.categories || [];
+    var categories = relocateRasterDocuments(data.categories || []);
+    data.categories = categories;
     var tab = root.getAttribute('data-active-tab') || 'docs';
     var nav = '<div class="anlagen-docs-tabs">';
     nav += '<button type="button" class="btn anlagen-tab-btn' + (tab === 'docs' ? ' btn-primary' : '') + '" data-tab="docs">Dokumente</button>';
@@ -659,6 +682,9 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (seq !== loadSeq) return;
+        if (data && data.ok) {
+          data.categories = relocateRasterDocuments(data.categories || []);
+        }
         if (!data || !data.ok) {
           root.innerHTML = '<p class="muted">Konnte Dokumente nicht laden.</p>';
           return;
