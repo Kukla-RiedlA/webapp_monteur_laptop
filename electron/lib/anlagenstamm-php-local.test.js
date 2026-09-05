@@ -70,5 +70,47 @@ describe('Kontrollwiegung Draft-IO', () => {
     );
     assert.ok(post, 'POST kontrollwiegung nicht gefunden');
     assert.match(post[0], /wantsLocalOnlyRequest\(body\) \? null/);
+    assert.match(post[0], /pushJsonDraft\(draftPushOpts\)/);
+  });
+
+  it('GET zieht Draft ohne Dienstreise-Ordner anzulegen', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    const get = src.match(
+      /app\.get\('\/api\/protokolle\/kontrollwiegung'[\s\S]*?app\.post\('\/api\/protokolle\/kontrollwiegung'/,
+    );
+    assert.ok(get, 'GET kontrollwiegung nicht gefunden');
+    assert.equal(get[0].includes('getOrCreateDienstreiseFolderForJob'), false);
+    assert.match(get[0], /pullOneJsonDraftForJob/);
+  });
+
+  it('Draft-Pull braucht keinen Dienstreise-Ordner', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    const fn = src.match(
+      /async function pullOneJsonDraftForJob\([\s\S]*?\n  \/\*\* Schreibzugriff blockiert/,
+    );
+    assert.ok(fn, 'pullOneJsonDraftForJob nicht gefunden');
+    assert.equal(/!technicianId \|\| !reiseDir/.test(fn[0]), false);
+    assert.match(fn[0], /reiseDir \? resolveMonteurDraftJsonPath/);
+  });
+});
+
+describe('Montagebericht Draft-IO', () => {
+  it('GET legt keinen Dienstreise-Ordner an', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    const get = src.match(
+      /app\.get\('\/api\/protokolle\/montagebericht'[\s\S]*?app\.post\('\/api\/protokolle\/montagebericht'/,
+    );
+    assert.ok(get, 'GET montagebericht nicht gefunden');
+    assert.match(get[0], /const reiseDir = null/);
+    assert.equal(get[0].includes('getOrCreateDienstreiseFolderForJob'), false);
+  });
+
+  it('local_only Autosave legt keinen Dienstreise-Ordner an', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    const post = src.match(
+      /app\.post\('\/api\/protokolle\/montagebericht'[\s\S]*?app\.get\('\/api\/montagebericht_pdf'/,
+    );
+    assert.ok(post, 'POST montagebericht nicht gefunden');
+    assert.match(post[0], /wantsLocalOnlyRequest\(body\) \? null/);
   });
 });

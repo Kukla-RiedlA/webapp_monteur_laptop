@@ -404,7 +404,7 @@ describe('pullJsonDraft Last-Write-Wins (simuliertes Dispo)', () => {
     assert.equal(local.payload.grundDesEinsatzes, 'bleibt');
   });
 
-  it('Remote neuer: Conflict-Copy + Merge, lokale Extra-FN bleibt', async () => {
+  it('Kontrollwiegung: lokale FN bleibt, Dispo überschreibt sie nicht', async () => {
     const basename = 'kontrollwiegungsprotokoll.json';
     const p = filePath(basename);
     writeLocalDraftFile(
@@ -432,10 +432,42 @@ describe('pullJsonDraft Last-Write-Wins (simuliertes Dispo)', () => {
     });
     assert.equal(result.ok, true);
     const local = readLocalDraftFile(p);
-    assert.equal(local.payload.byFab.ALT.v, 'remote-neu');
+    assert.equal(local.payload.byFab.ALT.v, 'lokal-alt');
     assert.equal(local.payload.byFab.NURLOKAL.v, 'nur-laptop');
-    const conflict = fs.readdirSync(path.dirname(p)).filter((n) => n.includes('.conflict-'));
-    assert.ok(conflict.length >= 1, 'Conflict-Copy der lokalen Version fehlt');
+  });
+
+  it('Kontrollwiegung: lokale Wiegungen bleiben bei neuerem Dispo-Stand', async () => {
+    const basename = 'kontrollwiegungsprotokoll.json';
+    const p = filePath(basename);
+    writeLocalDraftFile(
+      p,
+      {
+        byFab: {
+          FN1: {
+            updated_at: '2026-09-04T10:00:00Z',
+            wiegungen: [{ nennlast: '100', ist: '99.8' }],
+          },
+        },
+      },
+      1,
+      '2026-09-04T10:00:00Z',
+    );
+    const result = await pull(basename, {
+      ok: true,
+      revision: 12,
+      server_updated_at: '2026-09-05T08:00:00Z',
+      store: {
+        byFab: {
+          FN1: {
+            updated_at: '2026-09-05T08:00:00Z',
+            wiegungen: [{ nennlast: '0', ist: '0' }],
+          },
+        },
+      },
+    });
+    assert.equal(result.ok, true);
+    const local = readLocalDraftFile(p);
+    assert.equal(local.payload.byFab.FN1.wiegungen[0].ist, '99.8');
   });
 
   it('Remote ohne Zeitstempel: lokale Datei bleibt (nicht Remote-only)', async () => {

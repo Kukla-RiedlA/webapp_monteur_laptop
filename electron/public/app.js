@@ -16709,10 +16709,12 @@
       el.style.height = 'auto';
       var next = Math.max(el.scrollHeight, 52);
       el.style.height = next + 'px';
+      var pendingImgs = false;
       el.querySelectorAll('img').forEach(function (img) {
         if (img.complete && img.naturalHeight) return;
         if (img.getAttribute('data-mb-resize-bound') === '1') return;
         img.setAttribute('data-mb-resize-bound', '1');
+        pendingImgs = true;
         var onDone = function () {
           img.removeEventListener('load', onDone);
           img.removeEventListener('error', onDone);
@@ -16721,7 +16723,7 @@
         img.addEventListener('load', onDone);
         img.addEventListener('error', onDone);
       });
-      // Nach Layout/Bild-Decode noch einmal nachmessen
+      if (!pendingImgs) return;
       requestAnimationFrame(function () {
         el.style.height = 'auto';
         el.style.height = Math.max(el.scrollHeight, 52) + 'px';
@@ -16731,10 +16733,18 @@
     function bindMontageberichtAutoGrow(el) {
       if (!el || el.getAttribute('data-mb-autogrow') === '1') return;
       el.setAttribute('data-mb-autogrow', '1');
-      el.addEventListener('input', function () { autoResizeFabTextarea(el); });
+      var resizeRaf = 0;
+      function scheduleResize() {
+        if (resizeRaf) return;
+        resizeRaf = requestAnimationFrame(function () {
+          resizeRaf = 0;
+          autoResizeFabTextarea(el);
+        });
+      }
+      el.addEventListener('input', scheduleResize);
       el.addEventListener('paste', function () {
-        setTimeout(function () { autoResizeFabTextarea(el); }, 0);
-        setTimeout(function () { autoResizeFabTextarea(el); }, 120);
+        scheduleResize();
+        setTimeout(scheduleResize, 120);
       });
       autoResizeFabTextarea(el);
     }
@@ -16985,7 +16995,11 @@
           autoResizeFabTextarea(montageberichtActiveEditor);
         });
       }
-      document.addEventListener('selectionchange', updateMontageberichtToolbarState);
+      document.addEventListener('selectionchange', function () {
+        var view = document.getElementById('viewProtokolleMontagebericht');
+        if (!view || !view.classList.contains('active')) return;
+        updateMontageberichtToolbarState();
+      });
       form.addEventListener('focusin', function (ev) {
         var editor = ev.target && ev.target.closest('[data-mb-editor], [data-fab-rich]');
         if (!editor) return;
@@ -17256,7 +17270,10 @@
           var projEl = document.getElementById('montageberichtProjekt');
           if (projEl) projEl.value = deriveMontageberichtProjektFromAnlagenstamm(montageberichtJobData);
           try {
-            var loadR = await fetch(API_BASE + '/api/protokolle/montagebericht?job_id=' + id, { headers: { 'X-Technician-Id': String(getTechId()) } });
+            var mbLoadUrl = API_BASE + '/api/protokolle/montagebericht?job_id=' + id;
+            var mbBase = typeof getDispoBaseUrl === 'function' ? String(getDispoBaseUrl() || '').replace(/\/$/, '') : '';
+            if (mbBase) mbLoadUrl += '&baseUrl=' + encodeURIComponent(mbBase);
+            var loadR = await fetch(mbLoadUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
             var loadData = await loadR.json();
             if (loadToken !== montageberichtJobLoadToken) return;
             if (loadData.ok && loadData.data) {
@@ -17446,7 +17463,8 @@
           });
       });
     }
-    function collectMontageberichtFields() {
+    function collectMontageberichtFields(opts) {
+      var light = !!(opts && opts.light);
       var fabBemerkungen = [];
       if (fabContainer) {
         fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
@@ -17457,9 +17475,9 @@
           var ta = block.querySelector('[data-fab-rich]');
           var t = typeInp ? (typeInp.value || '').trim() : '';
           var pos = posInp ? (posInp.value || '').trim() : '';
-          var bemerkungen = ta ? getRichEditorPlain(ta) : '';
-          var bemerkungenHtml = ta ? getRichEditorHtml(ta) : '';
-          var textbausteine = extractTextbausteineFromHtml(bemerkungenHtml, bemerkungen);
+          var bemerkungen = ta ? (light ? String(ta.textContent || '') : getRichEditorPlain(ta)) : '';
+          var bemerkungenHtml = ta ? (light ? String(ta.innerHTML || '') : getRichEditorHtml(ta)) : '';
+          var textbausteine = light ? [] : extractTextbausteineFromHtml(bemerkungenHtml, bemerkungen);
           fabBemerkungen.push({
             fabrikationsnummer: fn,
             type: t,
@@ -17502,10 +17520,18 @@
       }
       var geliefertUeberVal = (fabWithDetails[0] && fabWithDetails[0].geliefert_ueber) || '';
       var bemerkungenEl = document.getElementById('montageberichtBemerkungen');
-      var bemerkungenVal = bemerkungenEl ? getRichEditorPlain(bemerkungenEl) : '';
-      var bemerkungenValHtml = bemerkungenEl ? getRichEditorHtml(bemerkungenEl) : '';
-      var grundVal = grundInput ? getRichEditorPlain(grundInput) : '';
-      var grundValHtml = grundInput ? getRichEditorHtml(grundInput) : '';
+      var bemerkungenVal = bemerkungenEl
+        ? (light ? String(bemerkungenEl.textContent || '') : getRichEditorPlain(bemerkungenEl))
+        : '';
+      var bemerkungenValHtml = bemerkungenEl
+        ? (light ? String(bemerkungenEl.innerHTML || '') : getRichEditorHtml(bemerkungenEl))
+        : '';
+      var grundVal = grundInput
+        ? (light ? String(grundInput.textContent || '') : getRichEditorPlain(grundInput))
+        : '';
+      var grundValHtml = grundInput
+        ? (light ? String(grundInput.innerHTML || '') : getRichEditorHtml(grundInput))
+        : '';
       var projektVal = (document.getElementById('montageberichtProjekt') && document.getElementById('montageberichtProjekt').value)
         ? document.getElementById('montageberichtProjekt').value.trim()
         : '';
@@ -17536,7 +17562,7 @@
       if (!montageberichtJobData || !jobSelect || !jobSelect.value) {
         return { ok: false, skipped: true };
       }
-      var fields = collectMontageberichtFields();
+      var fields = collectMontageberichtFields({ light: true });
       if (!fields.projektVal && fields.kopfdaten) {
         fields.projektVal = String(fields.kopfdaten.projekt || '').trim();
       }
@@ -17553,10 +17579,7 @@
         jsonOnly: true,
         local_only: true,
         skip_dispo_sync: true,
-        dispoBaseUrl: getDispoBaseUrl(),
         technicianId: getTechId(),
-        serverUsername: getDispoUsername(),
-        serverPassword: getDispoPassword(),
         signature_override_png: ''
       };
       var r = await fetch(API_BASE + '/api/protokolle/montagebericht', {
@@ -17576,7 +17599,7 @@
         return !!(montageberichtJobData && jobSelect && jobSelect.value);
       },
       fingerprint: function () {
-        return protocolAutosaveFingerprint(collectMontageberichtFields());
+        return protocolAutosaveFingerprint(collectMontageberichtFields({ light: true }));
       },
       save: persistMontageberichtJsonSilent,
       commitSave: function () {
@@ -18595,8 +18618,13 @@
         kwDraftByFab = {};
         if (!jobId) return;
         try {
+          var loadUrl = API_BASE + '/api/protokolle/kontrollwiegung?job_id=' + encodeURIComponent(jobId);
+          var dispoBase = typeof getDispoBaseUrl === 'function' ? String(getDispoBaseUrl() || '').replace(/\/$/, '') : '';
+          if (dispoBase) loadUrl += '&baseUrl=' + encodeURIComponent(dispoBase);
+          var dispoUser = typeof getDispoUsername === 'function' ? String(getDispoUsername() || '').trim() : '';
+          if (dispoUser) loadUrl += '&serverUsername=' + encodeURIComponent(dispoUser);
           var r = await fetch(
-            API_BASE + '/api/protokolle/kontrollwiegung?job_id=' + encodeURIComponent(jobId),
+            loadUrl,
             { headers: { 'X-Technician-Id': String(getTechId()) } }
           );
           var data = await r.json().catch(function () { return {}; });

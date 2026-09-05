@@ -53,6 +53,15 @@ describe('mergeByFabStores', () => {
     );
     assert.equal(merged.payload.byFab.A.v, 'remote');
   });
+  it('preferLocal keeps existing local FN even if remote is newer', () => {
+    const merged = mergeByFabStores(
+      { byFab: { A: { updated_at: '2026-08-26T10:00:00Z', v: 'local' } } },
+      { byFab: { A: { updated_at: '2026-08-26T13:00:00Z', v: 'remote' }, B: { v: 'nur-dispo' } } },
+      { preferLocal: true },
+    );
+    assert.equal(merged.payload.byFab.A.v, 'local');
+    assert.equal(merged.payload.byFab.B.v, 'nur-dispo');
+  });
 });
 
 describe('HANDLED_PENDING_ENTITY_TYPES', () => {

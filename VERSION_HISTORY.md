@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.002
+- **Montagebericht:** Autosave ohne Dienstreise-Ordner und ohne Dispo-Aufrufe – Eingabe hängt nicht mehr.
+- **Kontrollwiegung-Sync:** Draft wieder von/zur Dispo, ohne OneDrive-Ordner anzulegen.
+- **Protokoll-Pull:** vorhandene lokale FN-Daten (z. B. Wiegeprotokoll) werden von der Dispo nicht überschrieben.
+
 ## V 2.007.001
 - **Kontrollwiegung-Sync:** Queue sendet die Dispo-`job_id` (`server_id`) statt der lokalen SQLite-ID – behebt FK-Fehler `fk_kw_job` beim Push.
 

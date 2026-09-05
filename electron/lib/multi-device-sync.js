@@ -241,8 +241,10 @@ function draftEntryTimestamp(entry) {
 
 /**
  * Union der byFab-Stores. Pro FN gewinnt der neuere updatedAt; FN nur auf einer Seite bleibt.
+ * preferLocal: vorhandene lokale FN nie durch Dispo ersetzen (nur fehlende FN ergänzen).
  */
-function mergeByFabStores(localPayload, remotePayload) {
+function mergeByFabStores(localPayload, remotePayload, opts) {
+  const preferLocal = !!(opts && opts.preferLocal);
   const local = localPayload && typeof localPayload === 'object' && !Array.isArray(localPayload) ? localPayload : {};
   const remote = remotePayload && typeof remotePayload === 'object' && !Array.isArray(remotePayload) ? remotePayload : {};
   const localBy = local.byFab && typeof local.byFab === 'object' ? local.byFab : {};
@@ -256,12 +258,16 @@ function mergeByFabStores(localPayload, remotePayload) {
     const loc = localBy[raw] || localBy[key];
     const rem = remoteBy[raw] || remoteBy[key];
     if (loc && rem && typeof loc === 'object' && typeof rem === 'object') {
-      const locMs = Date.parse(draftEntryTimestamp(loc)) || 0;
-      const remMs = Date.parse(draftEntryTimestamp(rem)) || 0;
-      if (locMs && remMs && remMs > locMs + 2000) {
-        byFab[key] = rem;
-      } else {
+      if (preferLocal) {
         byFab[key] = loc;
+      } else {
+        const locMs = Date.parse(draftEntryTimestamp(loc)) || 0;
+        const remMs = Date.parse(draftEntryTimestamp(rem)) || 0;
+        if (locMs && remMs && remMs > locMs + 2000) {
+          byFab[key] = rem;
+        } else {
+          byFab[key] = loc;
+        }
       }
       usedBoth = true;
     } else if (loc && typeof loc === 'object') {

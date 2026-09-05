@@ -1507,7 +1507,9 @@ function createApp(db) {
     const user = bodyUser || String(session.serverUsername || '').trim();
     const bodyPass = String(b.serverPassword || b.dispoPassword || b.dispo_password || '');
     const pass = bodyPass !== '' ? bodyPass : String(session.serverPassword || '');
-    const baseUrl = String(b.baseUrl || session.baseUrl || session.externalUrl || '')
+    const baseUrl = String(
+      b.baseUrl || b.base_url || b.dispoBaseUrl || session.baseUrl || session.externalUrl || '',
+    )
       .trim()
       .replace(/\/$/, '');
     return {
@@ -1612,19 +1614,20 @@ function createApp(db) {
   protocolDraftPushImpl = (opts) => multiDeviceApi.pushJsonDraft(opts);
 
   /**
-   * Protokoll-JSON vom Dispo-Draft-API nach Dokumente_Monteur holen (zweiter Laptop).
+   * Protokoll-JSON vom Dispo-Draft-API in SQLite holen (zweiter Laptop).
+   * Kein Dienstreise-Ordner nötig — sonst hängt GET/Autosave auf OneDrive.
    * Ohne Session/Creds oder bei local_only: no-op.
    */
   async function pullOneJsonDraftForJob(reiseDir, localJobId, serverJobId, technicianId, basename, reqSrc) {
     if (!multiDeviceApi || !multiDeviceApi.pullJsonDraft) return;
     if (wantsLocalOnlyRequest(reqSrc || {})) return;
     const parsedServer = parseInt(serverJobId, 10);
-    if (!Number.isFinite(parsedServer) || parsedServer <= 0 || !technicianId || !reiseDir) return;
+    if (!Number.isFinite(parsedServer) || parsedServer <= 0 || !technicianId) return;
     const creds = resolveDispoServerCreds(reqSrc || {});
     if (!creds.baseUrl) return;
     const endpoint = DRAFT_JSON_ENDPOINTS[basename];
     if (!endpoint) return;
-    const filePath = resolveMonteurDraftJsonPath(reiseDir, basename, false);
+    const filePath = reiseDir ? resolveMonteurDraftJsonPath(reiseDir, basename, false) : '';
     try {
       await multiDeviceApi.pullJsonDraft({
         dispoBaseUrl: creds.baseUrl,
@@ -1632,7 +1635,7 @@ function createApp(db) {
         technicianId,
         serverJobId: parsedServer,
         localJobId,
-        reiseDir,
+        reiseDir: reiseDir || null,
         basename,
         filePath,
         username: creds.serverUsername,
@@ -9362,7 +9365,7 @@ function createApp(db) {
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const reiseDir = null;
       await pullOneJsonDraftForJob(
         reiseDir,
         localJobId,
@@ -9410,6 +9413,7 @@ function createApp(db) {
       const grundDesEinsatzesHtml = (body.grundDesEinsatzes_html || '').toString().trim();
       const freitext = (body.freitext || '').trim();
       const jsonOnlyEarly = body.jsonOnly === true || body.saveJsonOnly === true;
+      const localOnly = wantsLocalOnlyRequest(body);
       const projektPflicht = (kopfdaten.projekt != null ? String(kopfdaten.projekt) : '').trim();
       if (!projektPflicht && !jsonOnlyEarly) {
         return res.status(400).json({ ok: false, error: 'Bitte das Feld „Projekt“ ausfüllen (Anlagenstamm / manuell).' });
@@ -9442,7 +9446,7 @@ function createApp(db) {
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
       const serverJobId = hasServerJobId ? parsedServerJobId : null;
-      if (dispoBaseUrl && hasServerJobId) {
+      if (!localOnly && dispoBaseUrl && hasServerJobId) {
         try {
           const auth = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
           const url = dispoBaseUrl + '/dispo_api/api/montagebericht_data.php?job_id=' + encodeURIComponent(serverJobId) + '&technician_id=' + encodeURIComponent(technicianId);
@@ -9476,7 +9480,7 @@ function createApp(db) {
           dbFabRows = parts.map((fn) => ({ fabrikationsnummer: fn, type: '', position: '' }));
         }
       }
-      if (dbFabRows.length === 0 && dispoBaseUrl) {
+      if (dbFabRows.length === 0 && !localOnly && dispoBaseUrl) {
         const reqFabs = (kopfdaten.fabrikationsnummern || []).map(toFab).filter(Boolean);
         const reqFabsAlt = (fabBemerkungen || []).map((fb) => toFab(fb)).filter(Boolean);
         const parts = reqFabs.length > 0 ? reqFabs : reqFabsAlt;
@@ -9499,7 +9503,7 @@ function createApp(db) {
             dbFabRows = parts.map((fn) => ({ fabrikationsnummer: fn, type: '', position: '' }));
           }
         }
-      } else if (dbFabRows.length > 0 && dispoBaseUrl) {
+      } else if (dbFabRows.length > 0 && !localOnly && dispoBaseUrl) {
         const needsEnrich = dbFabRows.every((r) => !(r.type || r.position));
         if (needsEnrich) {
           try {
@@ -9546,8 +9550,10 @@ function createApp(db) {
 
       const jsonOnly = body.jsonOnly === true || body.saveJsonOnly === true;
 
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      const montageberichtDataPath = resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', false);
+      const reiseDir = wantsLocalOnlyRequest(body) ? null : getOrCreateDienstreiseFolderForJob(localJobId);
+      const montageberichtDataPath = reiseDir
+        ? resolveMonteurDraftJsonPath(reiseDir, 'montagebericht.json', false)
+        : '';
       const kopfdatenBemerkungen = (kopfdaten && kopfdaten.bemerkungen != null) ? String(kopfdaten.bemerkungen).trim() : '';
       const kopfdatenBemerkungenHtml = (kopfdaten && kopfdaten.bemerkungen_html != null) ? String(kopfdaten.bemerkungen_html).trim() : '';
       const prevDraft = protocolDrafts.readDraft(db, localJobId, 'montagebericht.json', reiseDir);
@@ -9570,17 +9576,19 @@ function createApp(db) {
         prevDraft.server_updated_at,
         reiseDir,
       );
-      queueProtocolDraftAndFiles({
-        localJobId,
-        technicianId,
-        serverJobId: parsedServerJobId,
-        dispoBaseUrl,
-        basename: 'montagebericht.json',
-        reiseDir,
-        filePath: montageberichtDataPath,
-        username: body.dispoUsername || body.serverUsername,
-        password: body.dispoPassword ?? body.serverPassword,
-      });
+      if (!localOnly) {
+        queueProtocolDraftAndFiles({
+          localJobId,
+          technicianId,
+          serverJobId: parsedServerJobId,
+          dispoBaseUrl,
+          basename: 'montagebericht.json',
+          reiseDir,
+          filePath: montageberichtDataPath,
+          username: body.dispoUsername || body.serverUsername,
+          password: body.dispoPassword ?? body.serverPassword,
+        });
+      }
 
       // Dispo-Sync (Netz) erst NACH lokalem PDF – sonst wirkt Speichern „wie Word“ langsam.
       let syncWarning = null;
@@ -9706,7 +9714,7 @@ function createApp(db) {
       };
 
       if (jsonOnly) {
-        if (!wantsLocalOnlyRequest(body)) {
+        if (!localOnly) {
           await runMontageberichtDispoSync();
         }
         return res.json({
@@ -10224,22 +10232,28 @@ function createApp(db) {
       };
       const record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, fab, entry, db, localJobId);
       const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
-      if (!wantsLocalOnlyRequest(body) && dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
-        const serverJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
-        if (serverJobId > 0) {
-          const kwPath = resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true);
+      const serverJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : 0;
+      if (dispoBaseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft && serverJobId > 0) {
+        const kwPath = reiseDir ? resolveMonteurDraftJsonPath(reiseDir, 'kontrollwiegungsprotokoll.json', true) : '';
+        const draftPushOpts = {
+          dispoBaseUrl,
+          endpoint: '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
+          technicianId,
+          serverJobId,
+          localJobId,
+          reiseDir,
+          filePath: kwPath,
+          basename: 'kontrollwiegungsprotokoll.json',
+          username: body.serverUsername || body.dispoUsername,
+          password: body.serverPassword ?? body.dispoPassword,
+        };
+        if (wantsLocalOnlyRequest(body)) {
+          setImmediate(() => {
+            multiDeviceApi.pushJsonDraft(draftPushOpts).catch(() => { /* Autosave: Draft-Push im Hintergrund */ });
+          });
+        } else {
           try {
-            await multiDeviceApi.pushJsonDraft({
-              dispoBaseUrl,
-              endpoint: '/dispo_api/api/kontrollwiegungsprotokoll_draft.php',
-              technicianId,
-              serverJobId,
-              localJobId,
-              reiseDir,
-              filePath: kwPath,
-              username: body.serverUsername || body.dispoUsername,
-              password: body.serverPassword ?? body.dispoPassword,
-            });
+            await multiDeviceApi.pushJsonDraft(draftPushOpts);
           } catch (_) { /* optional */ }
         }
       }

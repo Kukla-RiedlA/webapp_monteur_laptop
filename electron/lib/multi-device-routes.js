@@ -25,7 +25,6 @@ const {
   DRAFT_JSON_ENDPOINTS,
 } = require('./multi-device-sync');
 const protocolDrafts = require('./protocol-drafts-local');
-const { isLocalFresher, timestampsAreUncertain } = require('./local_first');
 
 function ensureMultiDeviceTables(db) {
   db.exec(`
@@ -482,7 +481,6 @@ function registerMultiDeviceRoutes(deps) {
       const local = readDraftState(opts);
       const localEmpty = isEmptyMonteurDraftPayload(local.payload);
       const remoteTs = data.server_updated_at || null;
-      const localTs = local.local_updated_at || local.server_updated_at || null;
       const hasByFab =
         (local.payload && local.payload.byFab && typeof local.payload.byFab === 'object') ||
         (payload && payload.byFab && typeof payload.byFab === 'object');
@@ -509,30 +507,27 @@ function registerMultiDeviceRoutes(deps) {
         return { ok: true, revision: remoteRev, store: payload };
       }
 
-      const localNewer = isLocalFresher(localTs, remoteTs);
-      if (localNewer === true) {
-        return { ok: true, skipped: true, local_newer: true, revision: local.revision };
-      }
-      if (localNewer === null || timestampsAreUncertain(localTs, remoteTs)) {
-        preserveLocalDraftCopy(opts, local.payload);
-        return { ok: true, skipped: true, local_newer: true, uncertain: true, revision: local.revision };
-      }
-
-      preserveLocalDraftCopy(opts, local.payload);
-      let nextPayload = payload;
+      /* Gerät hat schon Inhalt: Dispo darf vorhandene FN nicht ersetzen, nur fehlende ergänzen. */
       if (hasByFab) {
-        const merged = mergeByFabStores(local.payload, payload);
-        nextPayload = merged.payload;
+        const merged = mergeByFabStores(local.payload, payload, { preferLocal: true });
+        if (!draftPayloadsEqual(merged.payload, local.payload)) {
+          preserveLocalDraftCopy(opts, local.payload);
+          writeDraftState(
+            opts,
+            merged.payload,
+            Math.max(parseInt(local.revision, 10) || 0, remoteRev),
+            local.server_updated_at || remoteTs,
+          );
+          return {
+            ok: true,
+            revision: Math.max(parseInt(local.revision, 10) || 0, remoteRev),
+            store: merged.payload,
+            merged: true,
+            local_newer: true,
+          };
+        }
       }
-      writeDraftState(opts, nextPayload, remoteRev, remoteTs);
-      const extraLocalFabs = hasByFab && !draftPayloadsEqual(nextPayload, payload);
-      return {
-        ok: true,
-        revision: remoteRev,
-        store: nextPayload,
-        merged: extraLocalFabs,
-        local_newer: extraLocalFabs,
-      };
+      return { ok: true, skipped: true, local_newer: true, revision: local.revision };
     } catch (e) {
       return { ok: false, error: e.message };
     }
