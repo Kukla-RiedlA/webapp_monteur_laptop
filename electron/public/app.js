@@ -24965,6 +24965,16 @@
     var fileInput = document.getElementById('parameterlistenFiles');
     var btnUpload = document.getElementById('btnParameterlistenUpload');
     var resultsEl = document.getElementById('parameterlistenResults');
+    var fileListWrap = document.getElementById('parameterlistenFileListWrap');
+    var fileListEl = document.getElementById('parameterlistenFileList');
+    var previewWrap = document.getElementById('parameterlistenPreviewWrap');
+    var previewEl = document.getElementById('parameterlistenPreview');
+    var previewLabel = document.getElementById('parameterlistenPreviewLabel');
+    var previewHintEl = document.getElementById('parameterlistenPreviewHint');
+    var selectedFiles = [];
+    var previewIndex = -1;
+    var PREVIEW_MAX_CHARS = 200000;
+    var PREVIEW_MAX_ROWS = 1500;
 
     // Datei-Dialog nur über Button öffnen, wenn ein Auftrag gewählt ist (vermeidet Absturz beim Abbrechen)
     var btnChooseFiles = document.getElementById('btnParameterlistenChooseFiles');
@@ -24978,10 +24988,12 @@
       });
       fileInput.addEventListener('change', function () {
         try {
-          if (!fileInput.files || fileInput.files.length === 0) {
-            fileInput.value = '';
+          var incoming = fileInput.files;
+          if (incoming && incoming.length > 0) {
+            addSelectedFiles(incoming);
           }
         } catch (_) { /* Abbrechen sauber abfangen */ }
+        try { fileInput.value = ''; } catch (_) { /* ignore */ }
       });
     }
 
@@ -25015,6 +25027,369 @@
       return d.innerHTML;
     }
 
+    function formatFileSize(n) {
+      var b = Number(n) || 0;
+      if (b < 1024) return b + ' B';
+      if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+      return (b / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function fileKey(file) {
+      return (file && file.name ? file.name : '') + '\0' + (file && file.size != null ? file.size : '') + '\0' + (file && file.lastModified != null ? file.lastModified : '');
+    }
+
+    function addSelectedFiles(fileList) {
+      var added = 0;
+      var existing = {};
+      selectedFiles.forEach(function (f) { existing[fileKey(f)] = true; });
+      Array.prototype.forEach.call(fileList, function (file) {
+        if (!file || existing[fileKey(file)]) return;
+        existing[fileKey(file)] = true;
+        selectedFiles.push(file);
+        added += 1;
+      });
+      renderSelectedFiles();
+    }
+
+    function removeSelectedFile(index) {
+      if (index < 0 || index >= selectedFiles.length) return;
+      selectedFiles.splice(index, 1);
+      if (selectedFiles.length === 0 || previewIndex === index) {
+        previewIndex = -1;
+      } else if (previewIndex > index) {
+        previewIndex -= 1;
+      }
+      renderSelectedFiles();
+    }
+
+    function hidePreview() {
+      if (previewWrap) previewWrap.hidden = true;
+      if (previewEl) previewEl.innerHTML = '';
+      if (previewLabel) previewLabel.textContent = 'Rohdaten';
+      if (previewHintEl) previewHintEl.hidden = selectedFiles.length === 0;
+    }
+
+    function renderSelectedFiles() {
+      if (!fileListEl || !fileListWrap) return;
+      if (selectedFiles.length === 0) {
+        fileListEl.innerHTML = '';
+        fileListWrap.hidden = true;
+        hidePreview();
+        return;
+      }
+      fileListWrap.hidden = false;
+      if (previewHintEl) previewHintEl.hidden = previewIndex >= 0;
+      var html = '';
+      selectedFiles.forEach(function (file, i) {
+        var active = i === previewIndex ? ' is-active' : '';
+        html += '<li class="parameterlisten-file-item' + active + '" data-index="' + i + '">' +
+          '<span class="parameterlisten-file-name" title="' + escapeHtml(file.name) + '">' + escapeHtml(file.name) + '</span>' +
+          '<span class="parameterlisten-file-meta">' + escapeHtml(formatFileSize(file.size)) + '</span>' +
+          '<button type="button" class="parameterlisten-file-remove" data-remove-index="' + i + '" title="Datei entfernen" aria-label="Datei entfernen">' +
+          '<img src="icons/x-delete-green.svg" alt="" aria-hidden="true">' +
+          '</button></li>';
+      });
+      fileListEl.innerHTML = html;
+      loadPreview(previewIndex);
+    }
+
+    function readFileAsArrayBuffer(file) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () { resolve(reader.result); };
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    function decodeParameterText(buffer) {
+      var bytes = new Uint8Array(buffer || []);
+      if (!bytes.length) return '';
+      function decode(label) {
+        try { return new TextDecoder(label).decode(bytes); } catch (_) { return ''; }
+      }
+      var text = '';
+      if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+        text = decode('utf-16le');
+      } else if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
+        text = decode('utf-16be');
+      } else {
+        var check = Math.min(bytes.length, 400);
+        var nuls = 0;
+        for (var i = 1; i < check; i += 2) {
+          if (bytes[i] === 0) nuls += 1;
+        }
+        if (check > 20 && nuls / Math.floor(check / 2) > 0.6) {
+          text = decode('utf-16le');
+        } else {
+          var utf8 = decode('utf-8');
+          text = (utf8 && !/\uFFFD/.test(utf8)) ? utf8 : (decode('latin1') || utf8);
+        }
+      }
+      var nulCount = (text.match(/\0/g) || []).length;
+      if (nulCount > text.length * 0.25) text = text.replace(/\0/g, '');
+      return text;
+    }
+
+    function splitDelimitedLine(line) {
+      var delimiter = ';';
+      var parts = [];
+      var inQuote = false;
+      var cur = '';
+      var src = String(line || '');
+      for (var i = 0; i < src.length; i++) {
+        var ch = src[i];
+        if (ch === '"') {
+          if (inQuote && src[i + 1] === '"') {
+            cur += '"';
+            i += 1;
+          } else {
+            inQuote = !inQuote;
+          }
+        } else if (ch === delimiter && !inQuote) {
+          parts.push(cur.trim());
+          cur = '';
+        } else {
+          cur += ch;
+        }
+      }
+      parts.push(cur.trim());
+      while (parts.length > 0 && parts[parts.length - 1] === '') parts.pop();
+      return parts;
+    }
+
+    function isSeparatorCells(parts) {
+      if (!parts || !parts.length) return false;
+      return parts.every(function (c) {
+        return !c || /^[\s\-–—_=]+$/.test(c);
+      });
+    }
+
+    function isCsvHeaderRow(parts) {
+      return parts && parts.length >= 4 &&
+        /^name$/i.test(parts[0]) &&
+        /^value$/i.test(parts[1]) &&
+        /^unit$/i.test(parts[2]) &&
+        /^comment$/i.test(parts[3]);
+    }
+
+    function looksLikePa3(text, filename) {
+      var name = String(filename || '');
+      var src = String(text || '');
+      if (/\.pa3$/i.test(name)) return true;
+      if (/WAAGENFABRIK\s+KUKLA/i.test(src) && /Parameterausdruck/i.test(src)) return true;
+      if (/<NENNDATEN/i.test(src) && /--\*--\*{8,}--\*--/.test(src)) return true;
+      return false;
+    }
+
+    function looksLikePal(text, filename) {
+      if (/\.pal$/i.test(String(filename || ''))) return true;
+      var lines = String(text || '').split(/\r\n|\n|\r/).map(function (s) { return s.trim(); }).filter(Boolean);
+      if (lines.length < 3) return false;
+      var considered = 0;
+      var hits = 0;
+      lines.forEach(function (line) {
+        if (line.indexOf(';') < 0) return;
+        considered += 1;
+        var parts = splitDelimitedLine(line);
+        if (/^\d+$/.test(parts[0] || '') && parts.length >= 4) hits += 1;
+      });
+      return considered >= 3 && hits >= 3 && hits / considered >= 0.5;
+    }
+
+    function palGroupForParId(id) {
+      var n = Number(id);
+      if (!Number.isFinite(n)) return null;
+      if (n >= 100 && n <= 119) return 'Parametergruppe Nenndaten';
+      if (n >= 120 && n <= 134) return 'Parametergruppe Grenzwerte';
+      if (n >= 135 && n <= 199) return 'Parametergruppe Einteilung / Zähler / Test';
+      if (n >= 200 && n <= 399) return 'Parametergruppe Wiegekanaleinstellung';
+      if (n >= 400 && n <= 419) return 'Digitale Eingänge';
+      if (n >= 420 && n <= 459) return 'Digitale Ausgänge';
+      if (n >= 460 && n <= 521) return 'Analoge Ausgänge';
+      if (n >= 522 && n <= 699) return 'Parametergruppe Simulation';
+      if (n >= 700 && n <= 998) return 'Bus';
+      if (n === 999) return 'Checksum';
+      return null;
+    }
+
+    function previewColClass(colClass) {
+      if (colClass === 'value') return 'is-value';
+      if (colClass === 'unit') return 'is-unit';
+      if (colClass === 'parid') return 'is-parid';
+      if (colClass === 'name') return 'is-name';
+      if (colClass === 'comment') return 'is-comment';
+      return '';
+    }
+
+    function renderPreviewTable(headers, rows, colClasses, truncated) {
+      var html = '<div class="parameterlisten-preview-table-wrap"><table class="parameterlisten-preview-table">';
+      html += '<thead><tr>';
+      headers.forEach(function (h, i) {
+        var cls = previewColClass(colClasses[i]);
+        html += '<th' + (cls ? ' class="' + cls + '"' : '') + '>' + escapeHtml(h) + '</th>';
+      });
+      html += '</tr></thead><tbody>';
+      rows.forEach(function (row) {
+        if (row.sep) {
+          html += '<tr class="is-sep"><td colspan="' + headers.length + '"></td></tr>';
+          return;
+        }
+        if (row.group) {
+          html += '<tr class="is-group"><td colspan="' + headers.length + '">' + escapeHtml(row.group) + '</td></tr>';
+          return;
+        }
+        var cells = row.cells || [];
+        html += '<tr>';
+        headers.forEach(function (_, i) {
+          var cls = previewColClass(colClasses[i]);
+          html += '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + escapeHtml(cells[i] || '') + '</td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+      if (truncated) {
+        html += '<p class="parameterlisten-preview-note">Vorschau gekürzt (erste ' + PREVIEW_MAX_ROWS + ' Zeilen).</p>';
+      }
+      return html;
+    }
+
+    function buildCsvPreviewHtml(text) {
+      var src = String(text || '');
+      if ((src.match(/;/g) || []).length < 2) {
+        return '<pre class="parameterlisten-preview-pre">' + escapeHtml(src) + '</pre>';
+      }
+      var lines = String(text || '').split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+      var rows = lines.map(splitDelimitedLine);
+      var headerRowIndex = -1;
+      for (var r = 0; r < rows.length; r++) {
+        if (isCsvHeaderRow(rows[r])) {
+          headerRowIndex = r;
+          break;
+        }
+      }
+      var metaParts = [];
+      if (headerRowIndex > 0) {
+        rows.slice(0, headerRowIndex).forEach(function (parts) {
+          var joined = parts.filter(Boolean).join(' · ');
+          if (joined) metaParts.push(joined);
+        });
+      }
+      var dataRows = headerRowIndex >= 0 ? rows.slice(headerRowIndex + 1) : rows;
+      var truncated = false;
+      if (dataRows.length > PREVIEW_MAX_ROWS) {
+        dataRows = dataRows.slice(0, PREVIEW_MAX_ROWS);
+        truncated = true;
+      }
+      var tableRows = dataRows.map(function (parts) {
+        if (isSeparatorCells(parts)) return { sep: true };
+        var cells = parts.slice();
+        if (cells.length > 4) cells = cells.slice(0, 4);
+        while (cells.length < 4) cells.push('');
+        return { cells: cells };
+      });
+      var html = '';
+      if (metaParts.length) {
+        html += '<p class="parameterlisten-preview-meta">' + escapeHtml(metaParts.join(' · ')) + '</p>';
+      }
+      html += renderPreviewTable(['Name', 'Value', 'Unit', 'Comment'], tableRows, ['name', 'value', 'unit', 'comment'], truncated);
+      return html;
+    }
+
+    function buildPalPreviewHtml(text) {
+      var lines = String(text || '').split(/\r\n|\n|\r/);
+      var tableRows = [];
+      var lastGroup = null;
+      var truncated = false;
+      var count = 0;
+      for (var i = 0; i < lines.length; i++) {
+        var line = String(lines[i] || '').trim();
+        if (!line || line.indexOf(';') < 0) continue;
+        var parts = splitDelimitedLine(line);
+        if (!/^\d+$/.test(parts[0] || '') || parts.length < 3) continue;
+        count += 1;
+        if (count > PREVIEW_MAX_ROWS) {
+          truncated = true;
+          break;
+        }
+        var group = palGroupForParId(parts[0]);
+        if (group && group !== lastGroup) {
+          tableRows.push({ group: group });
+          lastGroup = group;
+        }
+        tableRows.push({
+          cells: [
+            parts[0],
+            parts[1] || '',
+            String(parts[2] || '').replace(/\./g, ','),
+            parts[3] || '',
+          ],
+        });
+      }
+      return renderPreviewTable(['ParID', 'Bezeichnung', 'Wert', 'Einheit'], tableRows, ['parid', 'name', 'value', 'unit'], truncated);
+    }
+
+    function buildPreviewHtml(text, filename) {
+      var src = String(text || '').replace(/\0/g, '');
+      if (!src.trim()) {
+        return '<p class="parameterlisten-preview-note">Datei ist leer.</p>';
+      }
+      if (looksLikePa3(src, filename)) {
+        var clipped = src;
+        var note = '';
+        if (clipped.length > PREVIEW_MAX_CHARS) {
+          clipped = clipped.slice(0, PREVIEW_MAX_CHARS);
+          note = '<p class="parameterlisten-preview-note">Vorschau gekürzt.</p>';
+        }
+        return '<pre class="parameterlisten-preview-pre">' + escapeHtml(clipped) + '</pre>' + note;
+      }
+      if (looksLikePal(src, filename)) {
+        return buildPalPreviewHtml(src);
+      }
+      return buildCsvPreviewHtml(src);
+    }
+
+    async function loadPreview(index) {
+      if (!previewEl) return;
+      if (index < 0 || !selectedFiles[index]) {
+        hidePreview();
+        if (previewHintEl) previewHintEl.hidden = selectedFiles.length === 0;
+        return;
+      }
+      var file = selectedFiles[index];
+      if (previewWrap) previewWrap.hidden = false;
+      if (previewHintEl) previewHintEl.hidden = true;
+      if (previewLabel) previewLabel.textContent = 'Rohdaten – ' + file.name;
+      previewEl.innerHTML = '<p class="parameterlisten-preview-note">Lade Vorschau …</p>';
+      try {
+        var buffer = await readFileAsArrayBuffer(file);
+        if (previewIndex !== index || selectedFiles[index] !== file) return;
+        var text = decodeParameterText(buffer);
+        previewEl.innerHTML = buildPreviewHtml(text, file.name);
+      } catch (err) {
+        if (previewIndex !== index) return;
+        previewEl.innerHTML = '<p class="parameterlisten-preview-note">Vorschau konnte nicht gelesen werden.</p>';
+      }
+    }
+
+    if (fileListEl) {
+      fileListEl.addEventListener('click', function (ev) {
+        var removeBtn = ev.target && ev.target.closest ? ev.target.closest('[data-remove-index]') : null;
+        if (removeBtn) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          removeSelectedFile(parseInt(removeBtn.getAttribute('data-remove-index'), 10));
+          return;
+        }
+        var item = ev.target && ev.target.closest ? ev.target.closest('[data-index]') : null;
+        if (!item) return;
+        var idx = parseInt(item.getAttribute('data-index'), 10);
+        if (!Number.isFinite(idx) || idx === previewIndex) return;
+        previewIndex = idx;
+        renderSelectedFiles();
+      });
+    }
+
     function readFileAsBase64(file) {
       return new Promise(function (resolve, reject) {
         var reader = new FileReader();
@@ -25030,10 +25405,10 @@
 
     if (btnUpload) {
       btnUpload.addEventListener('click', async function () {
-        if (!jobSelect || !fileInput) return;
+        if (!jobSelect) return;
         await loadParameterlistenJobs();
         var jobId = jobSelect.value ? parseInt(jobSelect.value, 10) : null;
-        var files = fileInput.files;
+        var files = selectedFiles.slice();
         if (!jobId) {
           alert('Bitte einen Auftrag wählen.');
           return;
@@ -25109,7 +25484,13 @@
           else if (okCount > 0) showToast(okCount + ' gespeichert, ' + (outcomes.length - okCount) + ' Fehler.');
           else showToast('Fehler beim Hochladen.');
         }
-        fileInput.value = '';
+        if (fileInput) fileInput.value = '';
+        var allOk = outcomes.length > 0 && outcomes.every(function (o) { return o.ok; });
+        if (allOk) {
+          selectedFiles = [];
+          previewIndex = -1;
+          renderSelectedFiles();
+        }
       });
     }
 

@@ -426,6 +426,168 @@
     .view-protokolle.active { display: block; }
     .view-protokolle-sub { display: none; }
     .view-protokolle-sub.active { display: block; }
+    #viewProtokolleParameterlisten .card {
+      max-width: 42rem;
+    }
+    .parameterlisten-file-list-wrap,
+    .parameterlisten-preview-wrap { margin-bottom: 0.75rem; }
+    .parameterlisten-file-list-wrap > label,
+    .parameterlisten-preview-wrap > label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+      color: var(--text);
+    }
+    .parameterlisten-file-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      border: 1px solid var(--accent, #cfe8d1);
+      border-radius: 8px;
+      overflow: visible;
+      background: var(--bg);
+    }
+    .parameterlisten-file-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.45rem 0.55rem;
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+      cursor: pointer;
+    }
+    .parameterlisten-file-item:last-child { border-bottom: none; }
+    .parameterlisten-file-item:hover { background: rgba(14, 123, 90, 0.1); }
+    .parameterlisten-file-item.is-active {
+      background: rgba(14, 123, 90, 0.12);
+      outline: 2px solid var(--kukla-primary, #0e7b5a);
+      outline-offset: -2px;
+    }
+    .parameterlisten-file-name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.9rem;
+    }
+    .parameterlisten-file-meta {
+      flex-shrink: 0;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .parameterlisten-file-remove {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.75rem;
+      height: 1.75rem;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--kukla-primary, #0e7b5a);
+    }
+    .parameterlisten-file-remove:hover { background: rgba(185, 28, 28, 0.1); }
+    .parameterlisten-file-remove img {
+      width: 16px;
+      height: 16px;
+      display: block;
+    }
+    .parameterlisten-preview-hint {
+      margin: 0.4rem 0 0;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .parameterlisten-preview-meta {
+      margin: 0 0 0.4rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .parameterlisten-preview-table-wrap {
+      max-height: 28rem;
+      width: max-content;
+      max-width: 100%;
+      overflow: auto;
+      border: 1px solid var(--accent, #cfe8d1);
+      border-radius: 8px;
+      background: var(--bg);
+    }
+    .parameterlisten-preview-table {
+      width: max-content;
+      max-width: 100%;
+      border-collapse: collapse;
+      table-layout: auto;
+      font-size: 0.8rem;
+      color: var(--text);
+    }
+    .parameterlisten-preview-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #eefaf5;
+      color: var(--kukla-primary-hover, #0c6b4f);
+      font-weight: 600;
+      text-align: left;
+      padding: 0.35rem 0.5rem;
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+      white-space: nowrap;
+    }
+    .parameterlisten-preview-table td {
+      padding: 0.22rem 0.5rem;
+      border-bottom: 1px solid rgba(14, 123, 90, 0.12);
+      vertical-align: top;
+      word-break: break-word;
+    }
+    .parameterlisten-preview-table .is-name {
+      max-width: 16rem;
+    }
+    .parameterlisten-preview-table .is-value {
+      white-space: nowrap;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .parameterlisten-preview-table .is-parid {
+      white-space: nowrap;
+    }
+    .parameterlisten-preview-table .is-unit {
+      max-width: 10rem;
+    }
+    .parameterlisten-preview-table .is-comment {
+      max-width: 10rem;
+    }
+    .parameterlisten-preview-table tr.is-sep td {
+      padding: 0.12rem 0.45rem;
+      background: #eefaf5;
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+    }
+    .parameterlisten-preview-table tr.is-group td {
+      font-weight: 600;
+      background: #eefaf5;
+      color: var(--kukla-primary-hover, #0c6b4f);
+    }
+    .parameterlisten-preview-pre {
+      margin: 0;
+      max-height: 28rem;
+      overflow: auto;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--accent, #cfe8d1);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Consolas, "Segoe UI Mono", "Courier New", monospace;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .parameterlisten-preview-note {
+      margin: 0.4rem 0 0;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
     .toolbar-dropdown-wrap { position: relative; display: inline-block; }
     .toolbar-dropdown { position: absolute; top: 100%; left: 0; min-width: 180px; margin-top: 2px; padding: 0.25rem 0; background: var(--card); border: 1px solid var(--accent); border-radius: 6px; box-shadow: var(--dropdown-shadow); z-index: 300; display: none; }
     .toolbar-dropdown.open { display: block; }
@@ -2082,6 +2244,15 @@
         <label>Parameterdateien</label>
         <input type="file" id="parameterlistenFiles" accept=".csv,.pal,.pa3,.txt,.pa4,.pa5" multiple style="position:absolute;width:0.1px;height:0.1px;opacity:0;overflow:hidden">
         <button type="button" class="btn btn-ghost" id="btnParameterlistenChooseFiles">Datei auswählen …</button>
+      </div>
+      <div id="parameterlistenFileListWrap" class="parameterlisten-file-list-wrap" hidden>
+        <label>Ausgewählte Dateien</label>
+        <ul id="parameterlistenFileList" class="parameterlisten-file-list"></ul>
+        <p id="parameterlistenPreviewHint" class="parameterlisten-preview-hint">Datei in der Liste anklicken, um die Vorschau zu sehen.</p>
+      </div>
+      <div id="parameterlistenPreviewWrap" class="parameterlisten-preview-wrap" hidden>
+        <label id="parameterlistenPreviewLabel">Rohdaten</label>
+        <div id="parameterlistenPreview" class="parameterlisten-preview"></div>
       </div>
       <button type="button" class="btn btn-primary" id="btnParameterlistenUpload">Hochladen und PDFs erzeugen</button>
       <div id="parameterlistenResults" class="parameterlisten-results" style="margin-top:1rem;display:none"></div>
