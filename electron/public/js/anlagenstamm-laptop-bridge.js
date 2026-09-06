@@ -906,6 +906,49 @@
     );
   }
 
+  function setupPnDownloadIntercept() {
+    if (global.__anlagenPnDownloadIntercept) return;
+    global.__anlagenPnDownloadIntercept = true;
+    document.addEventListener(
+      'click',
+      function (ev) {
+        if (ev.defaultPrevented) return;
+        if (ev.button != null && ev.button !== 0) return;
+        if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+        const a =
+          ev.target && ev.target.closest
+            ? ev.target.closest('a[href*="anlagenstamm_file_download.php"]')
+            : null;
+        if (!a) return;
+        let u;
+        try {
+          u = new URL(a.getAttribute('href') || a.href, global.location.href);
+        } catch (_) {
+          return;
+        }
+        const source = String(u.searchParams.get('source') || '').toLowerCase();
+        const rel = u.searchParams.get('path') || '';
+        const fab = u.searchParams.get('fab') || u.searchParams.get('fabrikationsnummer') || '';
+        if (source !== 'projekte_neu' || !rel || !fab) return;
+        const name = rel.split('/').pop() || '';
+        if (isRasterImage(name)) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (/motor list|01\.02|motorle|_ml_|motor.?list/i.test(rel + ' ' + name)) {
+          try {
+            global.__anlagenSelectedMlPdfRel = rel;
+            const ml = document.getElementById('fillFromMlPdfMsg');
+            if (ml) ml.textContent = 'Motorliste: ' + name;
+          } catch (_) {}
+        }
+        openPnFile(fab, rel).catch((e) => {
+          showBridgeError(e && e.message ? e.message : String(e));
+        });
+      },
+      true,
+    );
+  }
+
   function onAnlagenstammDataSynced() {
     pnTreeCache.clear();
     pnPrefetchDone.clear();
@@ -928,6 +971,7 @@
       bindTedLinks(host || document.body);
       setupPnRootLinks();
       setupTedLinks();
+      setupPnDownloadIntercept();
       global.dispoDesktopAnlagenstamm = global.dispoDesktopAnlagenstamm || {};
       global.dispoDesktopAnlagenstamm.renderPnTree = renderPnTree;
       global.dispoDesktopAnlagenstamm.bindTedLinks = bindTedLinks;

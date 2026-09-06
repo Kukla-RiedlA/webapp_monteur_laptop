@@ -236,6 +236,7 @@ const LOCAL_API_PHP_PREFIXES = [
   '/anlagenstamm_file_download.php',
   '/anlagenstamm_gallery.php',
   '/anlagenstamm_documents_list.php',
+  '/anlagenstamm_ml_pdf_prefill.php',
 ];
 
 function isLocalPhpApi(req) {

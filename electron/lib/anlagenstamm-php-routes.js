@@ -10,7 +10,9 @@ const {
 } = require('./anlagenstamm-php-local');
 const { buildLocalAnlagenstammGallery } = require('./anlagenstamm-gallery-local');
 const { buildLocalAnlagenstammDocumentsList } = require('./anlagenstamm-documents-local');
+const fs = require('fs');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
+const { parseMlPdfBuffer } = require('./anlagenstamm-ml-pdf');
 
 function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
   const creds =
@@ -60,6 +62,74 @@ async function fetchDispoApiFilesList(ctx, technicianId, fab, credsOpt) {
   } catch (_) {
     return null;
   }
+}
+
+async function fetchDispoApiMlPdfPrefill(ctx, technicianId, fab, pathRel, debug, credsOpt) {
+  const creds =
+    credsOpt && typeof credsOpt === 'object'
+      ? credsOpt
+      : ctx.resolveDispoServerCreds
+        ? ctx.resolveDispoServerCreds({})
+        : {};
+  const base = String(creds.baseUrl || (ctx.getDispoBaseUrl ? ctx.getDispoBaseUrl() : '') || '')
+    .trim()
+    .replace(/\/$/, '');
+  const fabNorm = String(fab || '').trim();
+  if (!base || !technicianId || !fabNorm) return null;
+  const u = String(creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : '') || '').trim();
+  if (!u) return null;
+  const qs = new URLSearchParams({
+    technician_id: String(technicianId),
+    fab: fabNorm,
+  });
+  if (pathRel) qs.set('path', String(pathRel));
+  if (debug) qs.set('debug', '1');
+  const url = `${base}/dispo_api/api/anlagenstamm_ml_pdf_prefill.php?${qs.toString()}`;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30000);
+    const r = await fetch(url, { headers: dispoMonteurHeaders(ctx, technicianId, creds), signal: ac.signal });
+    clearTimeout(timer);
+    const data = await r.json().catch(() => ({}));
+    if (!data || typeof data !== 'object') return null;
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function parseLocalMlPdfPath(filePath) {
+  try {
+    const buf = fs.readFileSync(filePath);
+    return await parseMlPdfBuffer(buf);
+  } catch (_) {
+    return null;
+  }
+}
+
+function looksLikePdfBuffer(buf) {
+  if (!buf || !buf.length) return false;
+  const head = buf.slice(0, 24).toString('utf8').trim();
+  if (head.startsWith('{') || head.startsWith('<')) return false;
+  return buf.slice(0, 5).toString('latin1') === '%PDF-' || buf.length > 80;
+}
+
+async function downloadMlPdfViaSession(ctx, technicianId, fab, pathRel) {
+  if (!pathRel || typeof ctx.tryProxyFetchDispoBinary !== 'function') return null;
+  const qs =
+    `fab=${encodeURIComponent(fab)}&fabrikationsnummer=${encodeURIComponent(fab)}` +
+    `&source=projekte_neu&path=${encodeURIComponent(pathRel)}`;
+  const suffixes = [
+    `/api/anlagenstamm_file_download.php?${qs}`,
+    `/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId || '')}&${qs}`,
+  ];
+  for (const suffix of suffixes) {
+    try {
+      const hit = await ctx.tryProxyFetchDispoBinary(suffix);
+      if (hit && looksLikePdfBuffer(hit.buf)) return hit.buf;
+    } catch (_) {}
+  }
+  return null;
 }
 
 /** TD-Prefill (pdftotext auf dem Dispo-Server). Länger timeout, PDF/Word-Parse. */
@@ -334,6 +404,96 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     } catch (e) {
       return res.status(502).json({ success: false, error: e.message || String(e) });
     }
+  });
+
+  app.get(['/api/anlagenstamm_ml_pdf_prefill.php', '/api/anlagenstamm_ml_pdf_prefill'], async (req, res) => {
+    const fab = String(req.query.fab || req.query.fabrikationsnummer || '').trim();
+    if (!fab) return res.status(400).json({ ok: false, error: 'fab fehlt.' });
+    const pathRel = String(req.query.path || '').trim();
+    const debug = String(req.query.debug || '') === '1';
+    const technicianId = ctx.getTechnicianId(req);
+    const jobId = req.query.job_id;
+
+    async function parsedOk(parsed, fileLabel, source) {
+      const motors = parsed && Array.isArray(parsed.motors) ? parsed.motors : [];
+      if (!motors.length) return null;
+      const out = { ok: true, motors, file: fileLabel || pathRel || '', source };
+      if (debug && parsed.text) out.text_head = String(parsed.text).slice(0, 800);
+      return out;
+    }
+
+    if (pathRel && typeof ctx.resolveProjekteNeuLocalFile === 'function') {
+      try {
+        const localPath = ctx.resolveProjekteNeuLocalFile(technicianId, fab, pathRel, jobId);
+        if (localPath) {
+          const parsed = await parseLocalMlPdfPath(localPath);
+          const hit = await parsedOk(parsed, pathRel, 'local_file');
+          if (hit) return res.json(hit);
+        }
+      } catch (_) {}
+    }
+
+    const apiData = await fetchDispoApiMlPdfPrefill(ctx, technicianId, fab, pathRel, debug);
+    if (apiData && apiData.ok && Array.isArray(apiData.motors) && apiData.motors.length) {
+      return res.json(Object.assign({ source: 'dispo_api' }, apiData));
+    }
+
+    let downloadPath = pathRel || String((apiData && apiData.file) || '').trim();
+    if (downloadPath) {
+      const buf = await downloadMlPdfViaSession(ctx, technicianId, fab, downloadPath);
+      if (buf) {
+        try {
+          const parsed = await parseMlPdfBuffer(buf);
+          const hit = await parsedOk(parsed, downloadPath, 'dispo_file');
+          if (hit) return res.json(hit);
+          if (parsed && parsed.ok) {
+            return res.json({
+              ok: true,
+              motors: [],
+              file: downloadPath,
+              note: parsed.note || 'PDF gelesen, aber keine Antriebe zugeordnet.',
+              source: 'dispo_file',
+            });
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (apiData && typeof apiData === 'object' && (apiData.ok === true || apiData.ok === false)) {
+      return res.json(Object.assign({ source: 'dispo_api' }, apiData));
+    }
+
+    const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds({}) : null;
+    const auth = await ctx.ensureProxyAuthenticated(creds);
+    if (auth && auth.ok && auth.authenticated) {
+      try {
+        const qs = new URLSearchParams({ fab });
+        if (pathRel) qs.set('path', pathRel);
+        if (debug) qs.set('debug', '1');
+        const data = await auth.proxy.getJson(`/api/anlagenstamm_ml_pdf_prefill.php?${qs.toString()}`);
+        if (data && data.ok && Array.isArray(data.motors) && data.motors.length) {
+          return res.json(Object.assign({ source: 'dispo_online' }, data));
+        }
+        if (data && typeof data === 'object') {
+          const fileFromDispo = String((data && data.file) || downloadPath || '').trim();
+          if (fileFromDispo) {
+            const buf = await downloadMlPdfViaSession(ctx, technicianId, fab, fileFromDispo);
+            if (buf) {
+              const parsed = await parseMlPdfBuffer(buf);
+              const hit = await parsedOk(parsed, fileFromDispo, 'dispo_file');
+              if (hit) return res.json(hit);
+            }
+          }
+          return res.json(Object.assign({ source: 'dispo_online' }, data || {}));
+        }
+      } catch (e) {
+        return res.status(502).json({ ok: false, error: e.message || String(e) });
+      }
+    }
+    return res.status(503).json({
+      ok: false,
+      error: 'Keine Motorliste gefunden (PDF oder Anlagenstamm).',
+    });
   });
 
   app.get('/api/anlagenstamm_td_pdf_prefill.php', async (req, res) => {

@@ -4889,8 +4889,8 @@
       for (var k = 0; k < indices.length; k++) {
         var i = indices[k];
         var row = leistungRows[i];
-        out += '<tr class="projektdaten-leistung-row" data-row-index="' + escapeHtml(String(i)) + '">';
-        out += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCellFab(row.fabrikationsnummer) + '</td>';
+        out += '<tr class="projektdaten-leistung-row" data-row-index="' + escapeHtml(String(i)) + '" title="Doppelklick: Anlagenakte öffnen">';
+        out += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '" title="Doppelklick: Anlagenakte öffnen">' + vCellFab(row.fabrikationsnummer) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.type) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.leistung) + '</td>';
         out += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.position) + '</td>';
@@ -4916,8 +4916,8 @@
       for (var i = 0; i < leistungRows.length; i++) {
         var row = leistungRows[i];
         if (!leistungRowShowInTable(row)) continue;
-        html += '<tr class="projektdaten-leistung-row" data-row-index="' + escapeHtml(String(i)) + '">';
-        html += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '">' + vCellFab(row.fabrikationsnummer) + '</td>';
+        html += '<tr class="projektdaten-leistung-row" data-row-index="' + escapeHtml(String(i)) + '" title="Doppelklick: Anlagenakte öffnen">';
+        html += '<td class="' + leistungCellClass + ' hotel-fab-cell" data-row-index="' + escapeHtml(String(i)) + '" data-fab="' + escapeHtml(String(row.fabrikationsnummer || '')) + '" title="Doppelklick: Anlagenakte öffnen">' + vCellFab(row.fabrikationsnummer) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.type) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.leistung) + '</td>';
         html += '<td class="' + leistungCellClass + '" data-row-index="' + escapeHtml(String(i)) + '">' + vCellStamm(row.position) + '</td>';
@@ -5786,6 +5786,44 @@
     });
   }
 
+  function openProjektdatenAnlagenakte(fab) {
+    fab = String(fab || '').trim();
+    if (!fab) return;
+    var api = (window.monteurApp && typeof window.monteurApp.openAnlagenstammAkteWindow === 'function')
+      ? window.monteurApp.openAnlagenstammAkteWindow
+      : null;
+    var readOnly = (typeof isJobAssignmentReadOnly === 'function' && isJobAssignmentReadOnly(window.currentProjektdatenJob))
+      || (typeof isJobAngelegtReadOnly === 'function' && isJobAngelegtReadOnly(window.currentProjektdatenJob));
+    function openWin(id) {
+      var opts = { fab: fab, readOnly: !!readOnly };
+      if (id) opts.id = id;
+      if (api) {
+        api(opts);
+        return;
+      }
+      var qs = new URLSearchParams();
+      qs.set('akte_window', '1');
+      if (id) qs.set('id', String(id));
+      qs.set('fab', fab);
+      if (readOnly) qs.set('ro', '1');
+      window.open('/anlagenstamm-akte-window.html?' + qs.toString(), '_blank', 'noopener');
+    }
+    fetch(API_BASE + '/api/anlagenstamm_lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+      body: JSON.stringify({ fab: fab })
+    })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) {
+        var st = data && data.ok && data.row ? data.row : null;
+        var sid = st && st.id != null && parseInt(st.id, 10) > 0 ? parseInt(st.id, 10) : 0;
+        openWin(sid || null);
+      })
+      .catch(function () {
+        openWin(null);
+      });
+  }
+
   function bindLeistungActions() {
     var content = document.getElementById('viewProjektdatenContent');
     if (!content) return;
@@ -5826,15 +5864,18 @@
           keepTreeWhileLoading: true,
         });
       });
-    }
-    content.querySelectorAll('.modal-leistung-cell-clickable').forEach(function (td) {
-      td.addEventListener('dblclick', function (e) {
-        if (e.target && e.target.closest && e.target.closest('.fn-hotel-picker-btn')) return;
-        if (e.target && e.target.closest && e.target.closest('[data-action="remove-fab"]')) return;
-        var idx = td.getAttribute('data-row-index');
-        if (idx !== null && idx !== '') openAnlageDetailModal(parseInt(idx, 10));
+      content.addEventListener('dblclick', function (ev) {
+        if (ev.target.closest && (ev.target.closest('[data-action="remove-fab"]') || ev.target.closest('button') || ev.target.closest('a'))) return;
+        var tr = ev.target && ev.target.closest ? ev.target.closest('.projektdaten-leistung-row') : null;
+        if (!tr || !content.contains(tr)) return;
+        var fabCell = tr.querySelector('[data-fab]');
+        var fabVal = fabCell ? String(fabCell.getAttribute('data-fab') || '').trim() : '';
+        if (!fabVal) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        openProjektdatenAnlagenakte(fabVal);
       });
-    });
+    }
     bindHotelAddressDblclick();
     bindJobSiteAddressContactDblclick();
     var treeHostInit = document.getElementById('projektdatenProjekteNeuTree');

@@ -1,0 +1,192 @@
+Motorle.doc
+BELT SCALES
+M O T O R - L I S T
+Project
+Knauf UK
+Sittingbourne
+Section
+Drive
+weigh feeder
+Sheet
+1 / 5
+Item
+W-M1
+FN.: 10066
+Pos. No.:
+Supplier
+Kukla
+Date
+22.12.16
+Typ of drive
+Helical bevel geared motor
+Manufacturer :
+SEW - Eurodrive
+Type :
+KA47 R37 DRS71M4/TF/ES7C/EI7C
+Serial - No. :
+50.7386306501.0001.16
+Factor of effective power :
+cos f
+0,72
+Rated output :
+KW
+0,55
+Rated current :
+A
+1,62
+Rated speed :
+min
+-1
+1360 / 4,2
+Rated voltage :
+V / Hz
+380 - 420 Y / 50
+Type of construction :
+M1-M2A / 10 / 180° (L) / n
+Type of protection :
+IP 55
+Insulation classes :
+155 (F)
+Starting :
+Frequency converter
+No load operation :
+A
+~ 0,63
+Accessories :
+
+Section
+Drive
+Back combing
+Sheet
+2 / 5
+Item
+W-M2
+FN.: 10066
+Typ of drive
+Helical bevel geared motor
+Manufacturer :
+SEW - Eurodrive
+Type :
+KA37 DRS71M4/TF
+Serial - No. :
+50.7386306503.0001.16
+Factor of effective power :
+cos f
+0,72
+Rated output :
+KW
+0,55
+Rated current :
+A
+1,62
+Rated speed :
+min
+-1
+1360 / 130
+Rated voltage :
+V / Hz
+380 - 420 Y / 50
+Type of construction :
+M1-M2A / 10 / 180° (L) / n
+Type of protection :
+IP 55
+Insulation classes :
+155 (F)
+Starting :
+Frequency converter
+No load operation :
+A
+~ 0,96
+
+Section
+Drive
+Combing
+Sheet
+3 / 5
+Item
+W-M3
+Manufacturer :
+SEW - Eurodrive
+Type :
+KA37 DRS71M4/TF
+Serial - No. :
+50.7386306504.0001.16
+Rated output :
+KW
+0,55
+Rated current :
+A
+1,62
+Rated speed :
+min
+-1
+1360 / 130
+Rated voltage :
+V / Hz
+380 - 420 Y / 50
+Starting :
+Frequency converter
+
+Section
+Drive
+Cleaning brush
+Sheet
+4 / 5
+Item
+W-M4
+Manufacturer :
+SEW - Eurodrive
+Type :
+KA37 DRS71M4/TF
+Serial - No. :
+50.7386306502.0001.16
+Rated output :
+KW
+0,55
+Rated current :
+A
+1,62
+Rated speed :
+min
+-1
+1360 / 130
+Rated voltage :
+V / Hz
+380 - 420 Y / 50
+Starting :
+Direct
+
+Section
+Drive
+Discharge device
+Sheet
+5 / 5
+Item
+W-M5
+Manufacturer :
+SEW - Eurodrive
+Type :
+KF77 R37 DRN80M4
+Serial - No. :
+50.7386306505.0001.16
+Factor of effective power :
+cos f
+0,74
+Rated output :
+KW
+0,75
+Rated current :
+A
+1,75
+Rated speed :
+min
+-1
+1440 / 1,4
+Rated voltage :
+V / Hz
+400 Y / 50
+Starting :
+Direct
+No load operation :
+A
+~ 1,09

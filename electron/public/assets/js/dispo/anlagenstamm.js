@@ -1240,7 +1240,7 @@ function isMlPdfDokuPath(rel, name) {
   if (ext !== 'pdf') return false;
   var segs = String(rel).replace(/\\/g, '/').toLowerCase();
   var inMotorList = segs.indexOf('motor list') >= 0 || segs.indexOf('01.02') >= 0;
-  var mlName = /_ml_/i.test(n) || /motor.?list/i.test(n);
+  var mlName = /_ml_/i.test(n) || /motor.?list/i.test(n) || /motorle/i.test(n);
   return inMotorList || mlName;
 }
 
@@ -1918,6 +1918,7 @@ function kuklaBootAnlagenakteWindow() {
   if (!window.KUKLA_ANLAGENSTAMM_AKTE_WINDOW) return;
   var params = new URLSearchParams(window.location.search);
   var id = params.get('id');
+  var fabParam = (params.get('fab') || '').trim();
   var cancel = document.getElementById('btnFormCancel') || document.getElementById('popupBtnCancel');
   if (cancel && !cancel._akteWinBound) {
     cancel._akteWinBound = true;
@@ -1926,8 +1927,8 @@ function kuklaBootAnlagenakteWindow() {
   function afterFill(row) {
     row = row || {};
     var title = document.getElementById('modalTitle');
-    var fab = row.fabrikationsnummer || 'Neue Anlage';
-    if (title) title.textContent = row.id ? ('Anlage · ' + fab) : 'Neue Anlage';
+    var fab = row.fabrikationsnummer || fabParam || 'Neue Anlage';
+    if (title) title.textContent = row.id ? ('Anlage · ' + fab) : (fabParam ? ('Anlage · ' + fabParam) : 'Neue Anlage');
     document.title = 'Anlagenakte · ' + fab;
     var delWrap = document.getElementById('modalDeleteWrap');
     if (delWrap) delWrap.style.display = row.id ? '' : 'none';
@@ -1936,28 +1937,62 @@ function kuklaBootAnlagenakteWindow() {
     }
   }
   var fetchFn = typeof anlagenstammFetch === 'function' ? anlagenstammFetch : fetch;
-  if (!id) {
-    fillFormFromRow({});
-    afterFill({});
+  function loadById(numId) {
+    fetchFn(anlagenstammApiUrl('api/anlagenstamm_get.php?id=' + encodeURIComponent(numId)), {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: typeof anlagenstammApiHeaders === 'function' ? anlagenstammApiHeaders() : undefined
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || !data.success || !data.data) {
+          if (fabParam) return loadByFab(fabParam);
+          alert((data && data.error) || 'Anlage nicht gefunden');
+          return;
+        }
+        fillFormFromRow(data.data);
+        afterFill(data.data);
+      })
+      .catch(function (err) {
+        alert('Fehler: ' + (err && err.message ? err.message : String(err)));
+      });
+  }
+  function loadByFab(fab) {
+    fetchFn('/api/anlagenstamm_lookup', {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: Object.assign(
+        { 'Content-Type': 'application/json' },
+        typeof anlagenstammApiHeaders === 'function' ? anlagenstammApiHeaders() : {}
+      ),
+      body: JSON.stringify({ fab: fab })
+    })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) {
+        var row = data && data.ok && data.row ? data.row : null;
+        if (row && row.id) {
+          fillFormFromRow(row);
+          afterFill(row);
+          return;
+        }
+        fillFormFromRow({ fabrikationsnummer: fab });
+        afterFill({ fabrikationsnummer: fab });
+      })
+      .catch(function (err) {
+        alert('Fehler: ' + (err && err.message ? err.message : String(err)));
+      });
+  }
+  if (id) {
+    loadById(id);
     return;
   }
-  fetchFn(anlagenstammApiUrl('api/anlagenstamm_get.php?id=' + encodeURIComponent(id)), {
-    credentials: 'same-origin',
-    cache: 'no-store',
-    headers: typeof anlagenstammApiHeaders === 'function' ? anlagenstammApiHeaders() : undefined
-  })
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      if (!data || !data.success || !data.data) {
-        alert((data && data.error) || 'Anlage nicht gefunden');
-        return;
-      }
-      fillFormFromRow(data.data);
-      afterFill(data.data);
-    })
-    .catch(function (err) {
-      alert('Fehler: ' + (err && err.message ? err.message : String(err)));
-    });
+  if (fabParam) {
+    loadByFab(fabParam);
+    return;
+  }
+  fillFormFromRow({});
+  afterFill({});
 }
 window.kuklaBootAnlagenakteWindow = kuklaBootAnlagenakteWindow;
 window.fillFormFromRow = fillFormFromRow;

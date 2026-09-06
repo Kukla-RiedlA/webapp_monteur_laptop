@@ -1643,7 +1643,7 @@ function createApp(db) {
   const { registerAnlagenstammPhpRoutes } = require('./lib/anlagenstamm-php-routes');
   const { registerAbrechnungPhpRoutes } = require('./lib/abrechnung-php-routes');
   let prewarmAnlagenstammGalleryThumbsImpl = null;
-  const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession, loadWebSession } = require('./lib/monteur-dispo-web-routes');
+  const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession, loadWebSession, tryProxyFetchDispoBinary } = require('./lib/monteur-dispo-web-routes');
   const { registerMultiDeviceRoutes } = require('./lib/multi-device-routes');
   let multiDeviceApi = null;
   registerAnlagenstammPhpRoutes(app, {
@@ -1675,6 +1675,10 @@ function createApp(db) {
     getDispoBaseUrl: () => resolveDispoServerCreds({}).baseUrl || '',
     getDispoExternalUrl: () => resolveDispoServerCreds({}).externalUrl || '',
     getDispoInternalUrl: () => resolveDispoServerCreds({}).internalUrl || '',
+    dbDir: DB_DIR,
+    tryProxyFetchDispoBinary: (suffix) => tryProxyFetchDispoBinary(DB_DIR, suffix),
+    resolveProjekteNeuLocalFile: (technicianId, fab, pnPath, jobId) =>
+      resolveProjekteNeuLocalFilePathAll(technicianId, fab, pnPath, jobId, { skipDeepSearch: false }),
     prewarmAnlagenstammGalleryThumbs: (fab, gallery, technicianId) => {
       if (typeof prewarmAnlagenstammGalleryThumbsImpl === 'function') {
         prewarmAnlagenstammGalleryThumbsImpl(fab, gallery, technicianId);
@@ -8582,6 +8586,46 @@ function createApp(db) {
     }
   });
 
+  function contentTypeForDownloadName(name) {
+    const ext = path.extname(String(name || '')).toLowerCase();
+    const map = {
+      '.pdf': 'application/pdf',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.bmp': 'image/bmp',
+      '.tif': 'image/tiff',
+      '.tiff': 'image/tiff',
+    };
+    return map[ext] || 'application/octet-stream';
+  }
+
+  function bufferLooksLikeJsonError(buf) {
+    if (!buf || !buf.length) return true;
+    const head = buf.slice(0, 40).toString('utf8').trim();
+    return head.startsWith('{') || head.startsWith('<');
+  }
+
+  async function fetchProjekteNeuFileViaDispoSession(technicianId, fabValue, pnPath, extraQuery) {
+    const qs =
+      `fab=${encodeURIComponent(fabValue)}&fabrikationsnummer=${encodeURIComponent(fabValue)}` +
+      `&source=projekte_neu&path=${encodeURIComponent(pnPath)}` +
+      (extraQuery ? `&${extraQuery}` : '');
+    const suffixes = [
+      `/api/anlagenstamm_file_download.php?${qs}`,
+      `/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId || '')}&${qs}`,
+    ];
+    for (const suffix of suffixes) {
+      try {
+        const hit = await tryProxyFetchDispoBinary(DB_DIR, suffix);
+        if (hit && hit.buf && !bufferLooksLikeJsonError(hit.buf)) return hit;
+      } catch (_) {}
+    }
+    return null;
+  }
+
   app.post('/api/anlagenstamm_file_download', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
     const {
@@ -8754,13 +8798,13 @@ function createApp(db) {
       }
       if (sourceNorm === 'projekte_neu' && pnPath) {
         const localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id, {
-          skipDeepSearch: true,
+          skipDeepSearch: wantThumb,
         });
         if (localPath) {
           try {
             const buf = fs.readFileSync(localPath);
             const baseName = path.basename(localPath);
-            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Type', contentTypeForDownloadName(baseName));
             res.setHeader(
               'Content-Disposition',
               (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
@@ -8769,6 +8813,23 @@ function createApp(db) {
             return res.send(buf);
           } catch (_) {
             /* fall through */
+          }
+        }
+        if (!wantThumb) {
+          const viaSess = await fetchProjekteNeuFileViaDispoSession(technicianId, fabValue, pnPath, wantInline ? 'inline=1' : '');
+          if (viaSess && viaSess.buf) {
+            try {
+              writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, viaSess.buf);
+            } catch (_) {}
+            const baseName = pnPath.split(/[/\\]/).pop() || 'download';
+            const ct = contentTypeForDownloadName(baseName);
+            res.setHeader('Content-Type', ct);
+            res.setHeader(
+              'Content-Disposition',
+              (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+            );
+            res.setHeader('Content-Length', String(viaSess.buf.length));
+            return res.send(viaSess.buf);
           }
         }
       }
@@ -8865,7 +8926,15 @@ function createApp(db) {
       res.setHeader('Content-Length', String(buf.length));
       return res.send(buf);
     } catch (e) {
-      return res.status(500).json({ success: false, error: e.message || String(e) });
+      const msg = e && e.message ? String(e.message) : String(e);
+      if (/fetch failed/i.test(msg)) {
+        return res.status(502).json({
+          success: false,
+          ok: false,
+          error: 'Datei konnte nicht geladen werden (Dispo nicht erreichbar).',
+        });
+      }
+      return res.status(500).json({ success: false, error: msg });
     }
   });
 
@@ -8897,20 +8966,39 @@ function createApp(db) {
       return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
     }
     if (sourceNorm === 'projekte_neu' && pnPath) {
-      let localJobId = parseInt(jobIdRaw, 10);
-      if (!Number.isFinite(localJobId) || localJobId <= 0) localJobId = null;
-      if (localJobId) {
-        const mapped = getJobRowByLocalOrServerId(localJobId);
-        localJobId = mapped ? mapped.id : null;
+      const localAll = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdRaw, {
+        skipDeepSearch: false,
+      });
+      if (localAll) {
+        try {
+          console.log('[anlagenstamm_file_open] local', localAll);
+        } catch (_) {}
+        return res.json({ ok: true, path: localAll, filename: path.basename(localAll), source: 'local' });
       }
-      if (!localJobId) localJobId = resolveLocalJobIdForFab(technicianId, fabValue);
-      if (localJobId) {
-        const localPath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath);
-        if (localPath) {
+      if (!localOnly) {
+        const viaSess = await fetchProjekteNeuFileViaDispoSession(technicianId, fabValue, pnPath);
+        if (viaSess && viaSess.buf) {
           try {
-            console.log('[anlagenstamm_file_open] local', localPath);
-          } catch (_) {}
-          return res.json({ ok: true, path: localPath, filename: path.basename(localPath), source: 'local' });
+            const openDir = path.join(DB_DIR, 'anlagenstamm_open');
+            if (!fs.existsSync(openDir)) fs.mkdirSync(openDir, { recursive: true });
+            const rawName = pnPath.split(/[/\\]/).pop() || String(fallbackName || '').trim() || 'download';
+            const safeName = String(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'download';
+            const stamp = new Date().toISOString().replace(/[^\d]/g, '').slice(0, 14);
+            const targetPath = path.join(openDir, `${stamp}_${safeName}`);
+            fs.writeFileSync(targetPath, viaSess.buf);
+            try {
+              writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, viaSess.buf);
+            } catch (_) {}
+            return res.json({
+              ok: true,
+              path: targetPath,
+              filename: safeName,
+              size: viaSess.buf.length,
+              source: 'dispo_session',
+            });
+          } catch (e) {
+            try { console.warn('[anlagenstamm_file_open] session write', e.message); } catch (_) {}
+          }
         }
       }
       if (localOnly) {
