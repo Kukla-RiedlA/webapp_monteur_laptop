@@ -231,6 +231,7 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       content_fn TEXT,
       used_fn TEXT,
       server_file_id INTEGER,
+      raw_content TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
@@ -262,6 +263,10 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       const hasServerId = cols.some((c) => c && c.name === 'server_file_id');
       if (!hasServerId) {
         run('ALTER TABLE anlagenstamm_parameter_files ADD COLUMN server_file_id INTEGER');
+      }
+      const hasRaw = cols.some((c) => c && c.name === 'raw_content');
+      if (!hasRaw) {
+        run('ALTER TABLE anlagenstamm_parameter_files ADD COLUMN raw_content TEXT');
       }
     } catch (err) {
       const msg = err && err.message ? String(err.message) : String(err);
@@ -2174,7 +2179,10 @@ function normalizeFabDigits(fab) {
 }
 
 function sanitizeSource(source) {
-  return String(source || '').toLowerCase().trim() === 'projekte_neu' ? 'projekte_neu' : 'upload';
+  const s = String(source || '').toLowerCase().trim();
+  if (s === 'projekte_neu') return 'projekte_neu';
+  if (s === 'kuklink') return 'kuklink';
+  return 'upload';
 }
 
 function upsertParameterFile(db, payload) {
@@ -2191,8 +2199,8 @@ function upsertParameterFile(db, payload) {
     ? 'original_deleted'
     : 'present';
   const ins = db.prepare(`INSERT INTO anlagenstamm_parameter_files
-    (fab, source, source_file_status, technician_id, technician_name, uploaded_at, original_filename, mime, size, sha256, storage_relpath, source_path, filename_fn, content_fn, used_fn, server_file_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    (fab, source, source_file_status, technician_id, technician_name, uploaded_at, original_filename, mime, size, sha256, storage_relpath, source_path, filename_fn, content_fn, used_fn, server_file_id, raw_content, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     ON CONFLICT(fab, source, sha256) DO UPDATE SET
       source_file_status = excluded.source_file_status,
       technician_id = excluded.technician_id,
@@ -2207,6 +2215,7 @@ function upsertParameterFile(db, payload) {
       content_fn = excluded.content_fn,
       used_fn = excluded.used_fn,
       server_file_id = COALESCE(excluded.server_file_id, server_file_id),
+      raw_content = COALESCE(excluded.raw_content, raw_content),
       updated_at = datetime('now')
   `);
   try {
@@ -2227,6 +2236,7 @@ function upsertParameterFile(db, payload) {
       payload && payload.content_fn != null ? String(payload.content_fn) : null,
       payload && payload.used_fn != null ? String(payload.used_fn) : null,
       payload && payload.server_file_id != null ? Number(payload.server_file_id) : null,
+      payload && payload.raw_content != null ? String(payload.raw_content) : null,
     );
   } catch (err) {
     const msg = err && err.message ? String(err.message) : String(err);

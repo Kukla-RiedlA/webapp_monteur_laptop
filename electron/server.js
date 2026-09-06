@@ -95,6 +95,8 @@ const { applyDispoServerJobIdToPayload } = require('./lib/job-id-map');
 const { copyProtocolsToLocalAbrechnung } = require('./lib/abrechnung-protocol-copy');
 const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, pullRecentLohnLocks, ensureTables: ensureZeitschreibungTables } = require('./lib/zeitschreibung-routes');
 const { registerHinweiseRoutes } = require('./lib/hinweise-routes');
+const { registerKuklinkRoutes } = require('./lib/kuklink/register-routes');
+const kuklinkFormat = require('./lib/kuklink/format-detect');
 const { createBackgroundJobService } = require('./lib/background_jobs');
 const {
   isJobAssignedToTechnician,
@@ -1961,9 +1963,10 @@ function createApp(db) {
     if (!Buffer.isBuffer(buf) || buf.length === 0) return { ok: false, skipped: true, reason: 'empty_buffer' };
     const parsed = parseParameterFile(buf, { fileName });
     if (!parsed || !parsed.ok) return { ok: false, skipped: true, reason: 'parse_failed' };
-    const usedFab = normalizeParameterFab(parsed.used_fab);
+    const usedFab = normalizeParameterFab((opts && opts.fabOverride) || parsed.used_fab);
     if (!usedFab) return { ok: false, skipped: true, reason: 'fab_missing' };
     const uploadedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const rawText = buf.toString('latin1');
     const insert = upsertParameterFile(db, {
       fab: usedFab,
       source,
@@ -1978,9 +1981,10 @@ function createApp(db) {
       storage_relpath: storageRelPath,
       source_path: sourcePath,
       filename_fn: parsed.filename_fab || null,
-      content_fn: parsed.content_fab || null,
+      content_fn: parsed.content_fab || usedFab,
       used_fn: usedFab,
       server_file_id: opts && opts.serverFileId != null ? Number(opts.serverFileId) : null,
+      raw_content: rawText,
       entries: parsed.entries || [],
     });
     if (insert && insert.ok) save();
@@ -15547,6 +15551,224 @@ function createApp(db) {
       }
     },
   });
+
+  function ensureKuklinkSchema() {
+    db.exec(`CREATE TABLE IF NOT EXISTS kuklink_dumps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER,
+      technician_id INTEGER,
+      fab TEXT,
+      device_family TEXT NOT NULL,
+      original_filename TEXT,
+      encoding TEXT,
+      sha256 TEXT,
+      raw_content BLOB NOT NULL,
+      port_path TEXT,
+      baud_rate INTEGER,
+      parity TEXT,
+      data_bits INTEGER,
+      stop_bits INTEGER,
+      pdf_relpath TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+  }
+
+  async function saveKuklinkDumpToJob(args) {
+    const dump = args && args.dump;
+    const req = args && args.req;
+    const technicianId = getTechnicianId(req);
+    const localJobId = parseInt(args && args.jobId, 10);
+    if (!localJobId || !technicianId) {
+      return { ok: false, error: 'job_id und technician_id erforderlich.' };
+    }
+    if (!dump || !dump.text) {
+      return { ok: false, error: 'Kein Dump vorhanden.' };
+    }
+    const jobRow = db.prepare(`
+      SELECT j.id, j.status, j.fabrikationsnummern FROM jobs j
+      WHERE j.id = ?
+        AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+    `).get(localJobId, technicianId);
+    if (!jobRow) {
+      return { ok: false, error: 'Auftrag nicht gefunden.' };
+    }
+    const blocked = localJobWriteBlocked(jobRow.status);
+    if (blocked) {
+      return { ok: false, error: blocked.error };
+    }
+
+    const family = dump.family || kuklinkFormat.detectDumpFamily(dump.text).family;
+    if (!family) {
+      return { ok: false, error: 'Dump-Format unbekannt (weder PA-TXT noch PAL).' };
+    }
+    const fabFromDump = kuklinkFormat.extractFabFromDump(dump.text, dump.filename);
+    const fab =
+      String((args && args.fabOverride) || '')
+        .replace(/\D/g, '')
+        .replace(/^0+/, '') ||
+      fabFromDump ||
+      '';
+    if (!fab) {
+      return { ok: false, error: 'Keine Fabrikationsnummer im Dump. Bitte FN angeben.' };
+    }
+    const fn = parseInt(fab, 10);
+    const filename = dump.filename || kuklinkFormat.suggestedFilename(family, fab);
+    const csvBuffer = Buffer.isBuffer(dump.buffer)
+      ? dump.buffer
+      : Buffer.from(dump.text, 'latin1');
+
+    const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+    const docMonteurPath = path.join(reiseDir, 'Dokumente_Monteur');
+    const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
+    const layoutPl = await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
+    const montageFolderNamePl =
+      layoutPl.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
+    const fnAllowedOnJob = fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern).has(fn);
+    let folderName = resolveWritableMonteurFnFolder(
+      localJobId,
+      fn,
+      docMonteurPath,
+      docAnlagePath,
+      layoutPl.fabMap || [],
+    );
+    if (!fnAllowedOnJob) {
+      const existing =
+        findMonteurFolderForFab(docMonteurPath, fn) || findParameterlistenFolder(docAnlagePath, fn);
+      if (!existing) {
+        return {
+          ok: false,
+          error:
+            'FN passt nicht zum Auftrag (Fabrikationsnummer in den Projektdaten prüfen).',
+        };
+      }
+      folderName = path.basename(existing);
+    }
+    if (!folderName) {
+      return { ok: false, error: 'FN-Ordner nicht gefunden.' };
+    }
+
+    const paramDir = path.join(docMonteurPath, folderName, montageFolderNamePl, 'Parameter');
+    fs.mkdirSync(paramDir, { recursive: true });
+
+    let csvText = dump.text;
+    let pdfBytes = null;
+    try {
+      const csvToPdfBuffer = getCsvToPdfBuffer();
+      pdfBytes = await csvToPdfBuffer(csvText, { filename, sourcePath: filename });
+    } catch (pdfErr) {
+      console.warn('[kuklink] PDF:', pdfErr && pdfErr.message ? pdfErr.message : pdfErr);
+    }
+    const pdfBasename = filename.replace(/\.(csv|txt|pa3|pa4|pa5|pal)$/i, '') + '.pdf';
+    const pdfPath = path.join(paramDir, pdfBasename);
+    if (pdfBytes) {
+      writeFileWithRetry(pdfPath, pdfBytes);
+    }
+
+    const savedPdf = buildMonteurWorkRelPath(folderName, montageFolderNamePl, path.join('Parameter', pdfBasename));
+    protectPathIfUnderDokumenteMonteur(db, localJobId, savedPdf);
+
+    const sha256 = crypto.createHash('sha256').update(csvBuffer).digest('hex');
+    ensureKuklinkSchema();
+    const settings = dump.settings || {};
+    const dumpInsert = db.prepare(
+      `INSERT INTO kuklink_dumps (
+        job_id, technician_id, fab, device_family, original_filename, encoding, sha256, raw_content,
+        port_path, baud_rate, parity, data_bits, stop_bits, pdf_relpath
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      localJobId,
+      technicianId,
+      String(fn),
+      family,
+      filename,
+      'latin1',
+      sha256,
+      csvBuffer,
+      settings.path || null,
+      settings.baudRate != null ? Number(settings.baudRate) : null,
+      settings.parity || null,
+      settings.dataBits != null ? Number(settings.dataBits) : null,
+      settings.stopBits != null ? Number(settings.stopBits) : null,
+      savedPdf,
+    );
+
+    const technicianName = getTechnicianDisplayName(technicianId);
+    let serverFileId = null;
+    let dispoIngestError = null;
+    const dispoCandidates = buildDispoBaseCandidates({
+      baseUrl: args.baseUrl,
+      externalUrl: args.externalUrl,
+      internalUrl: args.internalUrl,
+    });
+    if (dispoCandidates.length > 0) {
+      try {
+        const remote = await proxyAnlagenstammParameterIngest({
+          technician_id: technicianId,
+          baseUrl: args.baseUrl,
+          externalUrl: args.externalUrl,
+          internalUrl: args.internalUrl,
+          serverUsername: args.serverUsername,
+          serverPassword: args.serverPassword,
+          filename,
+          content: csvBuffer.toString('base64'),
+          source: 'upload',
+          mime: 'text/plain',
+          fab_override: String(fn),
+        });
+        if (remote && remote.ok !== false) {
+          serverFileId = remote.id != null ? Number(remote.id) : null;
+        } else {
+          dispoIngestError = remote && remote.error ? String(remote.error) : 'Dispo-Ingest fehlgeschlagen';
+        }
+      } catch (dispoErr) {
+        dispoIngestError = dispoErr && dispoErr.message ? dispoErr.message : String(dispoErr);
+      }
+    }
+
+    let ingest = null;
+    let ingestError = null;
+    try {
+      ingest = ingestParameterFileIntoAnlagenstamm({
+        fileName: filename,
+        source: 'kuklink',
+        sourcePath: savedPdf.replace(/\\/g, '/'),
+        storageRelPath: pdfPath,
+        buffer: csvBuffer,
+        mime: 'text/plain',
+        technicianId,
+        technicianName,
+        serverFileId,
+        fabOverride: String(fn),
+      });
+      if (ingest && ingest.ok === false && ingest.error) {
+        ingestError = String(ingest.error);
+      }
+    } catch (ingestErr) {
+      ingestError = ingestErr && ingestErr.message ? ingestErr.message : String(ingestErr);
+    }
+
+    save();
+    return {
+      ok: true,
+      family,
+      fab: String(fn),
+      filename,
+      savedPdf,
+      pdf_path: pdfPath,
+      dump_id: dumpInsert && dumpInsert.lastInsertRowid != null ? Number(dumpInsert.lastInsertRowid) : null,
+      ingest_ok: !!(ingest && ingest.ok !== false),
+      ingest_error: ingestError || undefined,
+      dispo_ingest_ok: serverFileId != null,
+      dispo_ingest_error: dispoIngestError || undefined,
+      dispo_ingest_skipped: dispoCandidates.length === 0,
+    };
+  }
+
+  registerKuklinkRoutes(app, {
+    dbDir: DB_DIR,
+    saveDumpToJob: saveKuklinkDumpToJob,
+  });
+
   try {
     ensureZeitschreibungTables(db);
   } catch (e) {

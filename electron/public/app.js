@@ -25006,6 +25006,9 @@
 
     window.openProtokolleParameterlisten = function () {
       loadParameterlistenJobs();
+      if (typeof window.openProtokolleKuklink === 'function') {
+        window.openProtokolleKuklink();
+      }
     };
 
     function escapeHtml(s) {
@@ -25113,9 +25116,304 @@
       });
     }
 
+    if (jobSelect) {
+      jobSelect.addEventListener('change', function () {
+        var kukJob = document.getElementById('kuklinkJob');
+        if (kukJob && jobSelect.value) kukJob.value = jobSelect.value;
+      });
+    }
+
     if (document.getElementById('btnViewProtokolle')) {
       document.getElementById('btnViewProtokolle').addEventListener('click', function () {
         loadParameterlistenJobs();
+      });
+    }
+  })();
+
+  (function initProtokolleKuklink() {
+    var portSelect = document.getElementById('kuklinkPort');
+    var jobSelect = document.getElementById('kuklinkJob');
+    var statusEl = document.getElementById('kuklinkStatus');
+    var previewEl = document.getElementById('kuklinkPreview');
+    var termMetaEl = document.getElementById('kuklinkTermMeta');
+    var advancedEl = document.getElementById('kuklinkAdvanced');
+    var btnConnect = document.getElementById('btnKuklinkConnect');
+    var btnDisconnect = document.getElementById('btnKuklinkDisconnect');
+    var btnManual = document.getElementById('btnKuklinkManual');
+    var btnDump = document.getElementById('btnKuklinkDump');
+    var btnSave = document.getElementById('btnKuklinkSave');
+    var btnRefresh = document.getElementById('btnKuklinkRefreshPorts');
+    if (!portSelect) return;
+
+    var liveTimer = null;
+    var liveWanted = false;
+    var termSeq = 0;
+    var termGen = 0;
+    var liveBusy = false;
+
+    function setStatus(text) {
+      if (statusEl) statusEl.textContent = text || '';
+    }
+
+    function stopLiveTerminal() {
+      liveWanted = false;
+      if (liveTimer) {
+        clearInterval(liveTimer);
+        liveTimer = null;
+      }
+    }
+
+    function appendTerminalChunk(chunk, reset) {
+      if (!previewEl) return;
+      var stick =
+        previewEl.scrollHeight - previewEl.scrollTop - previewEl.clientHeight < 48;
+      if (reset) previewEl.textContent = chunk || '';
+      else if (chunk) previewEl.textContent += chunk;
+      if (stick) previewEl.scrollTop = previewEl.scrollHeight;
+    }
+
+    async function pollTerminalOnce() {
+      if (liveBusy) return;
+      liveBusy = true;
+      try {
+        var data = await api('/api/kuklink/terminal?after=' + termSeq + '&generation=' + termGen);
+        if (data.reset) {
+          termGen = data.generation || 0;
+          termSeq = data.seq || 0;
+          appendTerminalChunk(data.chunk || '', true);
+        } else if (data.chunk) {
+          termSeq = data.seq || termSeq;
+          termGen = data.generation || termGen;
+          appendTerminalChunk(data.chunk, false);
+        } else {
+          termSeq = data.seq != null ? data.seq : termSeq;
+          termGen = data.generation || termGen;
+        }
+        if (termMetaEl) {
+          var n = data.rxBytes != null ? data.rxBytes : 0;
+          termMetaEl.textContent = n ? n + ' Byte empfangen' : '';
+        }
+      } catch (_) {
+        /* Port kann während Probe kurz fehlen */
+      } finally {
+        liveBusy = false;
+      }
+    }
+
+    function startLiveTerminal() {
+      liveWanted = true;
+      if (liveTimer) return;
+      pollTerminalOnce();
+      liveTimer = setInterval(function () {
+        if (!liveWanted) {
+          stopLiveTerminal();
+          return;
+        }
+        pollTerminalOnce();
+      }, 150);
+    }
+
+    async function loadJobs() {
+      if (!jobSelect) return;
+      var jobs = await fetchMyAssignedJobs();
+      var currentVal = jobSelect.value;
+      jobSelect.innerHTML = '<option value="">– Bitte wählen –</option>';
+      jobs.forEach(function (job) {
+        var opt = document.createElement('option');
+        opt.value = job.id;
+        opt.textContent = (job.job_number || job.id) + (job.customer_name ? ' – ' + job.customer_name : '');
+        jobSelect.appendChild(opt);
+      });
+      if (currentVal && Array.prototype.some.call(jobSelect.options, function (o) { return o.value === currentVal; })) {
+        jobSelect.value = currentVal;
+      } else {
+        var defaultJobId = resolveTodayProtokollJobId(jobs);
+        if (defaultJobId) jobSelect.value = defaultJobId;
+      }
+    }
+
+    async function loadPorts() {
+      var data = await api('/api/kuklink/ports');
+      var ports = (data && data.ports) || [];
+      var cur = portSelect.value;
+      portSelect.innerHTML = '<option value="">– Bitte wählen –</option>';
+      ports.forEach(function (p) {
+        var opt = document.createElement('option');
+        opt.value = p.path;
+        opt.textContent = p.friendlyName || p.path;
+        portSelect.appendChild(opt);
+      });
+      if (cur && Array.prototype.some.call(portSelect.options, function (o) { return o.value === cur; })) {
+        portSelect.value = cur;
+      } else if (ports.length === 1) {
+        portSelect.value = ports[0].path;
+      }
+      if (data && data.status && data.status.connected) {
+        setStatus(
+          'Verbunden: ' +
+            (data.status.label || data.status.family || '') +
+            ' · ' +
+            data.status.path +
+            ' ' +
+            data.status.baudRate +
+            ' ' +
+            data.status.dataBits +
+            data.status.parity.charAt(0).toUpperCase() +
+            data.status.stopBits,
+        );
+      }
+    }
+
+    window.openProtokolleKuklink = function () {
+      loadJobs().then(function () {
+        var paramJob = document.getElementById('parameterlistenJob');
+        if (paramJob && paramJob.value && jobSelect) jobSelect.value = paramJob.value;
+      });
+      loadPorts().catch(function (e) {
+        setStatus((e && e.message) ? e.message : String(e));
+      });
+      startLiveTerminal();
+    };
+
+    if (jobSelect) {
+      jobSelect.addEventListener('change', function () {
+        var paramJob = document.getElementById('parameterlistenJob');
+        if (paramJob && jobSelect.value) paramJob.value = jobSelect.value;
+      });
+    }
+
+    if (btnRefresh) {
+      btnRefresh.addEventListener('click', function () {
+        loadPorts().catch(function (e) {
+          setStatus((e && e.message) ? e.message : String(e));
+        });
+      });
+    }
+    if (btnManual && advancedEl) {
+      btnManual.addEventListener('click', function () {
+        advancedEl.hidden = !advancedEl.hidden;
+      });
+    }
+    if (btnConnect) {
+      btnConnect.addEventListener('click', async function () {
+        var path = portSelect.value;
+        if (!path) {
+          alert('Bitte einen COM-Port wählen.');
+          return;
+        }
+        setStatus('Verbinde, prüfe Baudrate und Parität …');
+        termSeq = 0;
+        termGen = 0;
+        if (previewEl) previewEl.textContent = '';
+        startLiveTerminal();
+        var body = { path: path };
+        if (advancedEl && !advancedEl.hidden) {
+          body.manual = true;
+          body.baudRate = parseInt(document.getElementById('kuklinkBaud').value, 10);
+          body.dataBits = parseInt(document.getElementById('kuklinkDataBits').value, 10);
+          body.parity = document.getElementById('kuklinkParity').value;
+          body.stopBits = 1;
+        }
+        try {
+          var data = await api('/api/kuklink/connect', { method: 'POST', body: JSON.stringify(body) });
+          if (!data.ok) {
+            if (data.needManual && advancedEl) advancedEl.hidden = false;
+            setStatus(data.error || 'Verbindung fehlgeschlagen');
+            return;
+          }
+          var st = data.status || {};
+          setStatus(
+            'Verbunden: ' +
+              (st.label || st.family || '') +
+              ' · ' +
+              st.path +
+              ' ' +
+              st.baudRate +
+              '/' +
+              st.dataBits +
+              '/' +
+              st.parity +
+              '/' +
+              st.stopBits,
+          );
+          pollTerminalOnce();
+        } catch (e) {
+          if (advancedEl) advancedEl.hidden = false;
+          setStatus((e && e.message) ? e.message : String(e));
+        }
+      });
+    }
+    if (btnDisconnect) {
+      btnDisconnect.addEventListener('click', async function () {
+        try {
+          await api('/api/kuklink/disconnect', { method: 'POST', body: '{}' });
+          setStatus('Nicht verbunden');
+          pollTerminalOnce();
+        } catch (e) {
+          setStatus((e && e.message) ? e.message : String(e));
+        }
+      });
+    }
+    if (btnDump) {
+      btnDump.addEventListener('click', async function () {
+        setStatus('Parameterliste wird gelesen …');
+        startLiveTerminal();
+        try {
+          var data = await api('/api/kuklink/dump', { method: 'POST', body: '{}' });
+          if (!data.ok) {
+            setStatus(data.error || 'Dump fehlgeschlagen');
+            return;
+          }
+          setStatus(
+            (data.label || data.family || '') +
+              (data.fab ? ' · FN ' + data.fab : '') +
+              ' · ' +
+              (data.text ? data.text.length : 0) +
+              ' Zeichen',
+          );
+          pollTerminalOnce();
+        } catch (e) {
+          setStatus((e && e.message) ? e.message : String(e));
+        }
+      });
+    }
+    if (btnSave) {
+      btnSave.addEventListener('click', async function () {
+        var jobId = jobSelect && jobSelect.value ? parseInt(jobSelect.value, 10) : null;
+        if (!jobId) {
+          alert('Bitte einen Auftrag wählen.');
+          return;
+        }
+        setStatus('Speichere PDF und Rohdaten …');
+        try {
+          var data = await api('/api/kuklink/save', {
+            method: 'POST',
+            body: JSON.stringify(anlagenstammDispoBody({ job_id: jobId })),
+          });
+          if (!data.ok) {
+            setStatus(data.error || 'Speichern fehlgeschlagen');
+            return;
+          }
+          var warn = [];
+          if (data.ingest_error) warn.push('Cache: ' + data.ingest_error);
+          if (data.dispo_ingest_error) warn.push('Dispo: ' + data.dispo_ingest_error);
+          else if (data.dispo_ingest_skipped) warn.push('Dispo: offline');
+          else if (data.dispo_ingest_ok) warn.push('Anlagenstamm-Server: übernommen');
+          setStatus(
+            'Gespeichert FN ' +
+              data.fab +
+              ' (' +
+              data.family +
+              ')' +
+              (data.savedPdf ? ' · ' + data.savedPdf : '') +
+              (warn.length ? ' · ' + warn.join(' · ') : ''),
+          );
+          if (typeof maybeOpenGeneratedPdfs === 'function') {
+            await maybeOpenGeneratedPdfs(data);
+          }
+        } catch (e) {
+          setStatus((e && e.message) ? e.message : String(e));
+        }
       });
     }
   })();

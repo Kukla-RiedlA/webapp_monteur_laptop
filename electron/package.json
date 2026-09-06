@@ -26,7 +26,8 @@
     "test:serviceprotokoll-pdf": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js",
     "test:serviceprotokoll-pdf:open": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js --open",
     "test:sync-offline": "node --test lib/sync-lww.test.js lib/sync-offline-verify.test.js lib/arbeitsnachweis-weight.test.js lib/job-id-map.test.js lib/job-technician-gate.test.js",
-    "test:dispo-probe": "node --test lib/dispo-probe.test.js"
+    "test:dispo-probe": "node --test lib/dispo-probe.test.js",
+    "test:kuklink-format": "node --test lib/kuklink/format-detect.test.js"
   },
   "devDependencies": {
     "electron": "^41.2.0",
@@ -47,6 +48,7 @@
     "form-data": "^4.0.0",
     "pdf-lib": "^1.17.1",
     "pizzip": "^3.1.6",
+    "serialport": "^12.0.0",
     "sharp": "^0.33.5",
     "ws": "^8.14.2"
   },
@@ -70,6 +72,8 @@
     ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**",
+      "**/node_modules/serialport/**",
+      "**/node_modules/@serialport/**",
       "**/node_modules/docx2pdf-converter/**"
     ],
     "publish": {
