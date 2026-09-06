@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.008
+- **Erledigt:** `.conflict-*`-Sicherungen der Protokoll-JSONs werden beim Aufräumen des Auftragsordners gelöscht und in der Dateiliste nicht mehr angezeigt.
+
 ## V 2.007.007
 - **Protokoll-PDFs / OneDrive:** Speichern überschreibt die Datei, statt sie zu löschen und neu anzulegen – verhindert `-1`/`-2`-Duplikate. Vorhandene OneDrive-Kopien werden aufgeräumt.
 

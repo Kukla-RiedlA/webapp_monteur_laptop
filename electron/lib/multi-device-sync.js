@@ -41,6 +41,39 @@ function isMonteurDraftJsonBasename(name) {
   return false;
 }
 
+function isProtocolConflictCopyName(name) {
+  const base = path.basename(String(name || '').replace(/\\/g, '/'));
+  return /\.conflict-/i.test(base);
+}
+
+function removeProtocolConflictCopies(rootDir) {
+  const removed = [];
+  if (!rootDir || !fs.existsSync(rootDir)) return removed;
+  let names;
+  try {
+    names = fs.readdirSync(rootDir, { withFileTypes: true });
+  } catch (_) {
+    return removed;
+  }
+  for (const ent of names) {
+    const n = String(ent.name || '');
+    if (!n || n === '.' || n === '..') continue;
+    const full = path.join(rootDir, n);
+    if (ent.isDirectory()) {
+      removed.push(...removeProtocolConflictCopies(full));
+      continue;
+    }
+    if (!ent.isFile() || !isProtocolConflictCopyName(n)) continue;
+    try {
+      fs.unlinkSync(full);
+      removed.push(n);
+    } catch (_) {
+      /* OneDrive kann die Datei kurz sperren */
+    }
+  }
+  return removed;
+}
+
 /** Kanonischer Schreibpfad: Dokumente_Monteur/{basename}. */
 function monteurDraftJsonPath(reiseDir, basename) {
   const base = path.basename(String(basename || '').replace(/\\/g, '/'));
@@ -517,6 +550,8 @@ module.exports = {
   writeLocalDraftFile,
   writeConflictCopy,
   writePayloadConflictCopy,
+  isProtocolConflictCopyName,
+  removeProtocolConflictCopies,
   draftEntryTimestamp,
   mergeByFabStores,
   sha256File,

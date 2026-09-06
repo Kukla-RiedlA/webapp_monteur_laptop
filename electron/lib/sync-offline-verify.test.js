@@ -32,6 +32,7 @@ const {
   readLocalDraftFile,
   writePayloadConflictCopy,
   isMonteurDraftJsonBasename,
+  removeProtocolConflictCopies,
 } = require('./multi-device-sync');
 const { registerMultiDeviceRoutes } = require('./multi-device-routes');
 const protocolDrafts = require('./protocol-drafts-local');
@@ -344,6 +345,36 @@ describe('Draft-APIs und Datenverlust-Schutz', () => {
     assert.equal(fs.existsSync(filePath), true);
     assert.ok(path.basename(copy).includes('.conflict-'));
     rmDir(dir);
+  });
+
+  it('removeProtocolConflictCopies löscht nur .conflict- Dateien', () => {
+    const dir = tmpDir('kukla-conflict-rm-');
+    const monteur = path.join(dir, 'Dokumente_Monteur');
+    fs.mkdirSync(monteur, { recursive: true });
+    fs.writeFileSync(path.join(monteur, 'montagebericht.json'), '{"ok":true}');
+    fs.writeFileSync(
+      path.join(monteur, 'montagebericht.json.conflict-lap-abc-2026-09-04T08-37-48-816Z'),
+      '{"old":1}',
+    );
+    fs.writeFileSync(
+      path.join(monteur, 'kontrollwiegungsprotokoll.json.conflict-lap-abc-2026-09-03T14-46-12-229Z'),
+      '{"old":2}',
+    );
+    const removed = removeProtocolConflictCopies(dir);
+    assert.equal(removed.length, 2);
+    assert.equal(fs.existsSync(path.join(monteur, 'montagebericht.json')), true);
+    assert.equal(
+      fs.existsSync(path.join(monteur, 'montagebericht.json.conflict-lap-abc-2026-09-04T08-37-48-816Z')),
+      false,
+    );
+    rmDir(dir);
+  });
+
+  it('Finish-Cleanup entfernt Conflict-Copies vor dem Schutz-Scan', () => {
+    const start = serverSrc.indexOf('function cleanupDienstreiseReiseDir');
+    assert.ok(start >= 0);
+    const chunk = serverSrc.slice(start, start + 900);
+    assert.ok(chunk.includes('removeProtocolConflictCopies(reiseDir)'));
   });
 
   it('byFab-Merge behält FN nur lokal und nur remote', () => {

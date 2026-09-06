@@ -15,7 +15,15 @@ const { isMontageberichtExportName } = require('./protocol-pdf-names');
 
 function isIgnorableName(name) {
   const n = String(name || '');
-  return !n || n === '.' || n === '..' || n.startsWith('.') || n === 'Thumbs.db' || n === 'desktop.ini';
+  return (
+    !n ||
+    n === '.' ||
+    n === '..' ||
+    n.startsWith('.') ||
+    n === 'Thumbs.db' ||
+    n === 'desktop.ini' ||
+    /\.conflict-/i.test(n)
+  );
 }
 
 function safeFabPrefix(fab) {

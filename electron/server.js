@@ -259,6 +259,8 @@ const {
   stripDraftMeta,
   pruneEmptyMonteurDraftJsons,
   isEmptyMonteurDraftPayload,
+  isProtocolConflictCopyName,
+  removeProtocolConflictCopies,
 } = require('./lib/multi-device-sync');
 const protocolDrafts = require('./lib/protocol-drafts-local');
 const {
@@ -3677,6 +3679,7 @@ function createApp(db) {
     if (name.startsWith('.')) return true;
     const lower = name.toLowerCase();
     if (lower === 'thumbs.db' || lower === 'desktop.ini' || lower === '.ds_store') return true;
+    if (/\.conflict-/i.test(name)) return true;
     return false;
   }
 
@@ -6135,6 +6138,15 @@ function createApp(db) {
       .filter(Boolean);
 
     if (!reiseDir || !fs.existsSync(reiseDir)) return;
+
+    try {
+      removeProtocolConflictCopies(reiseDir);
+    } catch (err) {
+      console.warn(
+        '[finish_cleanup] conflict-copies:',
+        err && err.message ? err.message : err,
+      );
+    }
 
     const finishMsg = (suffix) => FINISH_CLEANUP_HINT + (suffix || ' …');
 

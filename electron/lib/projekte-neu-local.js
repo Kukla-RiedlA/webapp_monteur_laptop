@@ -11,7 +11,8 @@ function isIgnorableDirEntry(name) {
   if (!n || n === '.' || n === '..') return true;
   if (n.startsWith('.')) return true;
   const lower = n.toLowerCase();
-  return lower === 'thumbs.db' || lower === 'desktop.ini';
+  if (lower === 'thumbs.db' || lower === 'desktop.ini') return true;
+  return /\.conflict-/i.test(n);
 }
 
 /** Leerzeichen, Unterstriche und „, AT“ / „, _AT“ gelten als derselbe FN-Ordner. */
