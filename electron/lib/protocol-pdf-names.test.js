@@ -6,6 +6,8 @@ const {
   montageberichtExportStem,
   fnProtocolPdfFilename,
   labeledProtocolPdfFilename,
+  isLegacyMontageberichtExportName,
+  isCurrentMontageberichtExportName,
 } = require('./protocol-pdf-names');
 
 describe('protocol-pdf-names', () => {
@@ -37,5 +39,16 @@ describe('protocol-pdf-names', () => {
       'Inspection_certificate_20500_20260905_GB.pdf',
     );
     assert.equal(labeledProtocolPdfFilename('arbeitsnachweis', 'AN-12', 'en'), 'Working_report_AN-12_GB.pdf');
+  });
+
+  it('OneDrive -1-Kopien gelten als derselbe Montagebericht-Typ', () => {
+    assert.equal(
+      isCurrentMontageberichtExportName('Assembly_report_2026-09-06_Test_Sunstwo_AT_GB-1.pdf'),
+      true,
+    );
+    assert.equal(
+      isLegacyMontageberichtExportName('2026-09-06_Test_Sunstwo_AT_Montage_DE-2.pdf'),
+      true,
+    );
   });
 });

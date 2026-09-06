@@ -22,6 +22,7 @@ const {
   montageberichtExportStem: montageberichtExportStemRaw,
   isLegacyMontageberichtExportName,
 } = require('./protocol-pdf-names');
+const { sweepOnedriveNumberedDuplicates, sweepOnedriveNumberedDuplicatesTree } = require('./onedrive-numbered-duplicates');
 
 function sanitizeDienstreiseFolderPart(str, maxLen) {
   if (typeof str !== 'string') return '';
@@ -134,7 +135,8 @@ function cleanupLegacyMontageberichtEnPdfLocal(protokolleDir, fileBase) {
       removed.push(name);
     } catch (_) {}
   }
-  return removed;
+  const swept = sweepOnedriveNumberedDuplicates(protokolleDir);
+  return removed.concat(swept);
 }
 
 /**
@@ -850,6 +852,7 @@ function migrateAliasFnFoldersUnder(reiseDir, subfolder, fabFolderEntries) {
           } else {
             await mergeDirContentsInto(stale, target);
             await rmRecursiveAsync(stale);
+            sweepOnedriveNumberedDuplicatesTree(target);
             console.warn('[monteur-paths] FN-Alias zusammengeführt', subfolder, name, '->', preferred);
           }
         } catch (err) {
@@ -864,6 +867,12 @@ function migrateAliasFnFoldersUnder(reiseDir, subfolder, fabFolderEntries) {
         }
         await yieldEventLoop();
       }
+    }
+    for (const entry of fabFolderEntries || []) {
+      const can = String(entry.folder_name_canonical || '').trim();
+      if (!can) continue;
+      const target = path.join(base, can);
+      if (fs.existsSync(target)) sweepOnedriveNumberedDuplicatesTree(target);
     }
   })();
 }

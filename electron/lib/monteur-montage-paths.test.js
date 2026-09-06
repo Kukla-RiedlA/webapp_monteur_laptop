@@ -341,11 +341,15 @@ describe('Montagebericht-Dateiname', () => {
     try {
       fs.writeFileSync(path.join(dir, base + '_report_GB.pdf'), 'old-en');
       fs.writeFileSync(path.join(dir, base + '_Montage_DE.pdf'), 'old-de');
+      fs.writeFileSync(path.join(dir, base + '_Montage_DE-1.pdf'), 'old-de-dup');
       fs.writeFileSync(path.join(dir, 'Montage_Bericht_' + base + '_DE.pdf'), 'new');
+      fs.writeFileSync(path.join(dir, 'Montage_Bericht_' + base + '_DE-1.pdf'), 'new-dup');
       cleanupLegacyMontageberichtEnPdfLocal(dir, base);
       assert.equal(fs.existsSync(path.join(dir, base + '_report_GB.pdf')), false);
       assert.equal(fs.existsSync(path.join(dir, base + '_Montage_DE.pdf')), false);
+      assert.equal(fs.existsSync(path.join(dir, base + '_Montage_DE-1.pdf')), false);
       assert.equal(fs.existsSync(path.join(dir, 'Montage_Bericht_' + base + '_DE.pdf')), true);
+      assert.equal(fs.existsSync(path.join(dir, 'Montage_Bericht_' + base + '_DE-1.pdf')), false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

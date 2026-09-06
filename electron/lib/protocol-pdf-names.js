@@ -48,12 +48,18 @@ function montageberichtPdfFilename(fileBase, lang) {
   return montageberichtExportStem(fileBase, lang) + '.pdf';
 }
 
+function stripOnedriveCopySuffix(name) {
+  return String(name || '').replace(/-(\d{1,2})(\.[^.]+)$/i, '$2');
+}
+
 function isCurrentMontageberichtExportName(name) {
-  return /^(Montage_Bericht_|Assembly_report_).+_(DE|GB)\.(pdf|docx)$/i.test(String(name || ''));
+  return /^(Montage_Bericht_|Assembly_report_).+_(DE|GB)\.(pdf|docx)$/i.test(
+    stripOnedriveCopySuffix(name),
+  );
 }
 
 function isMontageberichtExportName(name) {
-  const n = String(name || '');
+  const n = stripOnedriveCopySuffix(name);
   if (isCurrentMontageberichtExportName(n)) return true;
   return (
     /_Montage_DE\.(pdf|docx)$/i.test(n) ||
@@ -64,7 +70,7 @@ function isMontageberichtExportName(name) {
 }
 
 function isLegacyMontageberichtExportName(name) {
-  const n = String(name || '');
+  const n = stripOnedriveCopySuffix(name);
   if (!n || isCurrentMontageberichtExportName(n)) return false;
   return isMontageberichtExportName(n);
 }
@@ -102,6 +108,7 @@ module.exports = {
   montageberichtPdfFilename,
   isCurrentMontageberichtExportName,
   isMontageberichtExportName,
+  stripOnedriveCopySuffix,
   isLegacyMontageberichtExportName,
   fnProtocolPdfFilename,
   labeledProtocolPdfFilename,

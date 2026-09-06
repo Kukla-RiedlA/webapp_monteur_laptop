@@ -213,7 +213,8 @@ const {
   safeTedFileName,
   safeTedLocalFileName,
 } = require('./lib/ted-excel-local');
-const { replaceFileWithoutUnlink } = require('./lib/replace-file-cloud-safe');
+const { replaceFileWithoutUnlink, replaceFileWithoutUnlinkSync } = require('./lib/replace-file-cloud-safe');
+const { sweepOnedriveNumberedDuplicates } = require('./lib/onedrive-numbered-duplicates');
 const { applyKuklaAuditHeaders } = require('./lib/audit-client-headers');
 
 /** Apache/FPM liefert Authorization oft nicht an PHP — Dispo liest X-Kukla-Authorization. */
@@ -771,24 +772,11 @@ function hasPendingOrDirtyAnlagenstamm(db) {
 }
 
 
-/** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). */
+/** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). Überschreibt, ohne vorher zu löschen. */
 function writeFileWithRetry(filePath, data, maxRetries = 3) {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      fs.writeFileSync(filePath, data);
-      return;
-    } catch (e) {
-      const isBusy = e.code === 'EBUSY' || e.errno === -4082;
-      if (isBusy && i < maxRetries - 1) {
-        const delay = 400 * (i + 1);
-        const end = Date.now() + delay;
-        while (Date.now() < end) { /* warten */ }
-      } else if (isBusy) {
-        throw new Error('Datei ist gesperrt (z. B. durch OneDrive-Sync oder geöffnetes Word). Bitte schließen und erneut versuchen.');
-      } else {
-        throw e;
-      }
-    }
+  replaceFileWithoutUnlinkSync(filePath, data, { maxRetries });
+  if (/\.(pdf|docx)$/i.test(String(filePath || ''))) {
+    sweepOnedriveNumberedDuplicates(path.dirname(filePath));
   }
 }
 

@@ -23,6 +23,28 @@ function unlinkQuiet(filePath) {
   }
 }
 
+function sleepSync(ms) {
+  const n = Number(ms);
+  const wait = Number.isFinite(n) && n > 0 ? n : 0;
+  if (!wait) return;
+  const end = Date.now() + wait;
+  while (Date.now() < end) {
+    /* OneDrive-Sperre: kurzes Warten wie bisher writeFileWithRetry */
+  }
+}
+
+function toBuffer(data) {
+  return Buffer.isBuffer(data) ? data : Buffer.from(data);
+}
+
+function makeTempPath(dest) {
+  const ext = path.extname(dest) || '.bin';
+  return path.join(
+    os.tmpdir(),
+    'kukla-put-' + process.pid + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + ext,
+  );
+}
+
 function busyError(err) {
   const busy = isRetryableFsError(err);
   return new Error(
@@ -53,12 +75,8 @@ async function replaceFileWithoutUnlink(destPath, data, opts) {
   const dir = path.dirname(dest);
   await fs.promises.mkdir(dir, { recursive: true });
 
-  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-  const ext = path.extname(dest) || '.bin';
-  const tmp = path.join(
-    os.tmpdir(),
-    'kukla-put-' + process.pid + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + ext,
-  );
+  const buf = toBuffer(data);
+  const tmp = makeTempPath(dest);
   await fs.promises.writeFile(tmp, buf);
   let lastErr = null;
   try {
@@ -91,6 +109,53 @@ async function replaceFileWithoutUnlink(destPath, data, opts) {
   }
 }
 
+/**
+ * Synchrones Gegenstück für bestehende writeFileWithRetry-Aufrufe.
+ * Gleiches OneDrive-Muster: Temp außerhalb des Sync-Ordners, dann copy auf das Ziel.
+ */
+function replaceFileWithoutUnlinkSync(destPath, data, opts) {
+  const dest = String(destPath || '').trim();
+  if (!dest) throw new Error('Zielpfad fehlt.');
+  const maxRetries = opts && opts.maxRetries != null ? Number(opts.maxRetries) : 3;
+  const retries = Number.isFinite(maxRetries) && maxRetries > 0 ? maxRetries : 3;
+  const dir = path.dirname(dest);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const buf = toBuffer(data);
+  const tmp = makeTempPath(dest);
+  fs.writeFileSync(tmp, buf);
+  let lastErr = null;
+  try {
+    for (let i = 0; i < retries; i++) {
+      try {
+        fs.copyFileSync(tmp, dest);
+        return dest;
+      } catch (e) {
+        lastErr = e;
+        if (isRetryableFsError(e) && i < retries - 1) {
+          sleepSync(400 * (i + 1));
+          continue;
+        }
+        try {
+          fs.writeFileSync(dest, buf);
+          return dest;
+        } catch (e2) {
+          lastErr = e2;
+          if (isRetryableFsError(e2) && i < retries - 1) {
+            sleepSync(400 * (i + 1));
+            continue;
+          }
+          throw busyError(e2);
+        }
+      }
+    }
+    throw busyError(lastErr);
+  } finally {
+    unlinkQuiet(tmp);
+  }
+}
+
 module.exports = {
   replaceFileWithoutUnlink,
+  replaceFileWithoutUnlinkSync,
 };

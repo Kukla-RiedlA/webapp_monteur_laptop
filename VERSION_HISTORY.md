@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.007
+- **Protokoll-PDFs / OneDrive:** Speichern überschreibt die Datei, statt sie zu löschen und neu anzulegen – verhindert `-1`/`-2`-Duplikate. Vorhandene OneDrive-Kopien werden aufgeräumt.
+
 ## V 2.007.006
 - **FN-Ordner:** Bereichs- und Einzel-FN nutzen denselben Ordner; Alias-Schreibweisen werden zusammengeführt, statt Ordner anzulegen und sofort zu löschen.
 - **Protokoll-PDFs:** Dateiname beginnt mit dem Dokumenttyp (DE/EN), Endung `_DE`/`_GB`; Legacy-Namen beim Speichern entfernen.

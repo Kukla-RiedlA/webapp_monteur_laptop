@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { replaceFileWithoutUnlink } = require('./replace-file-cloud-safe');
+const { replaceFileWithoutUnlink, replaceFileWithoutUnlinkSync } = require('./replace-file-cloud-safe');
 const { tedLocalFileLooksComplete } = require('./ted-excel-local');
 
 describe('replaceFileWithoutUnlink', () => {
@@ -48,6 +48,24 @@ describe('replaceFileWithoutUnlink', () => {
     assert.equal(fs.readFileSync(dest, 'utf8'), 'neu-inhalt');
     assert.deepEqual(unlinkedDest, []);
     assert.equal(fs.existsSync(dest + '.part'), false);
+  });
+
+  it('Sync-Variante überschreibt ohne unlink der Zieldatei', () => {
+    const dest = path.join(dir, 'protokoll.pdf');
+    fs.writeFileSync(dest, 'alt');
+    const origUnlink = fs.unlinkSync;
+    const unlinkedDest = [];
+    fs.unlinkSync = (p) => {
+      if (path.resolve(String(p)) === path.resolve(dest)) unlinkedDest.push(p);
+      return origUnlink(p);
+    };
+    try {
+      replaceFileWithoutUnlinkSync(dest, Buffer.from('neu'));
+    } finally {
+      fs.unlinkSync = origUnlink;
+    }
+    assert.equal(fs.readFileSync(dest, 'utf8'), 'neu');
+    assert.deepEqual(unlinkedDest, []);
   });
 });
 
