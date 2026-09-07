@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { replaceFileWithoutUnlink, replaceFileWithoutUnlinkSync } = require('./replace-file-cloud-safe');
 const { tedLocalFileLooksComplete } = require('./ted-excel-local');
+const { fsExistsSync, fsReadFileSync, win32FsPath } = require('./win32-long-path');
 
 describe('replaceFileWithoutUnlink', () => {
   let dir;
@@ -17,9 +18,13 @@ describe('replaceFileWithoutUnlink', () => {
 
   afterEach(() => {
     try {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(process.platform === 'win32' ? win32FsPath(dir) : dir, { recursive: true, force: true });
     } catch (_) {
-      /* ignore */
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch (__) {
+        /* ignore */
+      }
     }
   });
 
@@ -66,6 +71,19 @@ describe('replaceFileWithoutUnlink', () => {
     }
     assert.equal(fs.readFileSync(dest, 'utf8'), 'neu');
     assert.deepEqual(unlinkedDest, []);
+  });
+
+  it('schreibt unter Windows in einen Pfad länger als MAX_PATH', async () => {
+    if (process.platform !== 'win32') return;
+    let dest = dir;
+    while (dest.length < 250) {
+      dest = path.join(dest, '11603_Knauf Enginnering GmbH Iphofen Stuckgips Sittingbourne');
+    }
+    dest = path.join(dest, 'Montage', 'Bilder', '11603_2026-03-21_09-57-23.jpg');
+    assert.ok(dest.length > 260);
+    await replaceFileWithoutUnlink(dest, Buffer.from('foto-bytes'));
+    assert.equal(fsExistsSync(dest), true);
+    assert.equal(fsReadFileSync(dest).toString(), 'foto-bytes');
   });
 });
 

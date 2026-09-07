@@ -490,7 +490,13 @@
       });
   }
 
+  function isRamsUiEnabled() {
+    var root = document.getElementById('viewDienstreise');
+    return !!(root && root.getAttribute('data-rams-ui') !== 'off');
+  }
+
   function setAuftraegeTab(tab) {
+    if (!isRamsUiEnabled() && tab !== 'list') tab = 'list';
     document.querySelectorAll('.auftraege-tab').forEach(function (t) {
       var on = t.getAttribute('data-auftraege-tab') === tab;
       t.classList.toggle('is-active', on);
@@ -520,6 +526,10 @@
   }
 
   function initAuftraegeRamsUi() {
+    if (!isRamsUiEnabled()) {
+      setAuftraegeTab('list');
+      return;
+    }
     document.querySelectorAll('.auftraege-tab[data-auftraege-tab]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var tab = btn.getAttribute('data-auftraege-tab');

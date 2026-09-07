@@ -1,6 +1,6 @@
 'use strict';
 
-const fs = require('fs');
+const { fsStatSync } = require('./win32-long-path');
 
 const THUMB_KIND_PROJEKTE_NEU = 'projekte_neu';
 const THUMB_KIND_DIENSTREISE = 'dienstreise';
@@ -13,7 +13,11 @@ function normalizeRelPath(relPath) {
 }
 
 function normalizeScopeId(scopeId) {
-  return String(scopeId || '').trim();
+  const s = String(scopeId || '').trim();
+  if (!s) return '';
+  if (/^\d{4,6}$/.test(s)) return s;
+  const m = s.match(/(?:^|\D)(\d{4,6})(?!\d)/);
+  return m ? m[1] : s;
 }
 
 function clampThumbMax(thumbMax) {
@@ -46,7 +50,7 @@ function ensureImageThumbCacheSchema(db) {
 function sourceStatMeta(filePath) {
   if (!filePath) return { source_mtime: null, source_size: null };
   try {
-    const st = fs.statSync(filePath);
+    const st = fsStatSync(filePath);
     return {
       source_mtime: st.mtime ? String(st.mtimeMs) : null,
       source_size: st.isFile() ? st.size : null,
@@ -125,4 +129,5 @@ module.exports = {
   readImageThumbCache,
   writeImageThumbCache,
   normalizeRelPath,
+  normalizeScopeId,
 };

@@ -15,6 +15,16 @@ describe('local documents list', () => {
     assert.equal(jobHasFab('1230,1231', '12304'), false);
   });
 
+  it('erkennt FN in JSON-Leistungszeilen', () => {
+    const json = JSON.stringify([
+      { fabrikationsnummer: '12304', type: 'Bandwaage' },
+      { fabrikationsnummer: '12305' },
+    ]);
+    assert.equal(jobHasFab(json, '12304'), true);
+    assert.equal(jobHasFab(json, '12306'), false);
+    assert.equal(jobHasFab('[{"fabrikationsnummer":"11603"}]', '11603'), true);
+  });
+
   it('legt Parameterlisten an und lässt JSON-Entwürfe weg', () => {
     const db = {
       prepare(sql) {

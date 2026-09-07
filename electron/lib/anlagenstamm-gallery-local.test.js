@@ -139,6 +139,7 @@ describe('Anlagenstamm-Galerie lokal', () => {
       {
         name: '12304_2026-09-01_11-00-52.jpg',
         rel: 'Dokumente_Monteur/12304_Kunde/Montage/2026-08-31_AO/Bilder/12304_2026-09-01_11-00-52.jpg',
+        jobId: 166,
       },
       {
         name: '12305_2026-09-02_09-57-08.jpg',
@@ -149,6 +150,8 @@ describe('Anlagenstamm-Galerie lokal', () => {
     assert.equal(gallery.length, 1);
     assert.equal(gallery[0].parent_folder, 'Montage / 2026-08-31');
     assert.ok(gallery[0].rel_path.includes('12304_2026-09-01'));
+    assert.equal(gallery[0].job_id, 166);
+    assert.ok(String(gallery[0].thumb_url).includes('job_id=166'));
   });
 
   it('listet Montage-Bilder nur aus bekannten FN-Ordnern, ohne Tiefenscan', () => {
@@ -161,6 +164,39 @@ describe('Anlagenstamm-Galerie lokal', () => {
     const listed = listMontageRastersFromDokumenteMonteurPaths([{ dm, jobId: 166 }], '12304', { max: 80 });
     assert.equal(listed.length, 1);
     assert.ok(listed[0].rel.includes('12304_2026-09-01_11-00-52.jpg'));
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('findet PWA-Fotos unter Bilder/Allgemein und Bilder/Angebot', () => {
+    const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kukla-gal-'));
+    const dm = path.join(tmp, 'Dokumente_Monteur');
+    const ao = path.join(dm, '12304_Kunde', 'Montage', '2026-08-31_AO', 'Bilder');
+    fs.mkdirSync(path.join(ao, 'Allgemein'), { recursive: true });
+    fs.mkdirSync(path.join(ao, 'Angebot'), { recursive: true });
+    fs.writeFileSync(path.join(ao, 'Allgemein', 'Allgemein_2026-09-01_11-00-52.jpg'), 'x');
+    fs.writeFileSync(path.join(ao, 'Angebot', 'Angebot_2026-09-01_12-00-00.jpg'), 'x');
+    fs.writeFileSync(path.join(ao, '12304_2026-09-01_13-00-00.jpg'), 'x');
+    const listed = listMontageRastersFromDokumenteMonteurPaths([{ dm, jobId: 166 }], '12304', { max: 80 });
+    const names = listed.map((f) => f.name).sort();
+    assert.deepEqual(names, [
+      '12304_2026-09-01_13-00-00.jpg',
+      'Allgemein_2026-09-01_11-00-52.jpg',
+      'Angebot_2026-09-01_12-00-00.jpg',
+    ]);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('listet mehr als 8 Auftragsordner', () => {
+    const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kukla-gal-'));
+    const dm = path.join(tmp, 'Dokumente_Monteur');
+    for (let i = 1; i <= 10; i += 1) {
+      const d = String(i).padStart(2, '0');
+      const bilder = path.join(dm, '12304_Kunde', 'Montage', '2026-08-' + d + '_AO', 'Bilder');
+      fs.mkdirSync(bilder, { recursive: true });
+      fs.writeFileSync(path.join(bilder, '12304_2026-08-' + d + '_10-00-00.jpg'), 'x');
+    }
+    const listed = listMontageRastersFromDokumenteMonteurPaths([{ dm, jobId: 1 }], '12304', { max: 150 });
+    assert.equal(listed.length, 10);
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
@@ -233,6 +269,58 @@ describe('Anlagenstamm-Galerie lokal', () => {
     assert.equal(res.body.source, 'local_cache_empty');
     assert.equal(res.body.gallery.length, 0);
   });
+
+  it('Galerie-Route nimmt extraFiles aus Cache, nicht aus Sync-Scan', () => {
+    const app = mockApp();
+    let scanCalls = 0;
+    registerAnlagenstammPhpRoutes(app, {
+      db: {},
+      getTechnicianId: () => '14',
+      readAnlagenstammTreeCache: () => null,
+      getCachedMontageGalleryFiles: () => [
+        {
+          name: '12304_2026-09-01_11-00-52.jpg',
+          rel: 'Dokumente_Monteur/12304_Kunde/Montage/2026-08-31_AO/Bilder/12304_2026-09-01_11-00-52.jpg',
+          jobId: 166,
+        },
+      ],
+      hasMontageGalleryCache: () => true,
+      listMontageGalleryFiles: () => {
+        scanCalls += 1;
+        throw new Error('sync_scan_forbidden');
+      },
+    });
+    const res = jsonRes();
+    app.handlers['/api/anlagenstamm_gallery.php']({ query: { fab: '12304' } }, res);
+    assert.equal(scanCalls, 0);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.montage_pending, false);
+    assert.equal(res.body.gallery.length, 1);
+    assert.equal(res.body.gallery[0].job_id, 166);
+    assert.ok(String(res.body.gallery[0].rel_path).includes('12304_2026-09-01'));
+  });
+
+  it('leerer Montage-Cache setzt montage_pending ohne Sync-Scan', () => {
+    const app = mockApp();
+    let scanCalls = 0;
+    registerAnlagenstammPhpRoutes(app, {
+      db: {},
+      getTechnicianId: () => '14',
+      readAnlagenstammTreeCache: () => null,
+      getCachedMontageGalleryFiles: () => [],
+      hasMontageGalleryCache: () => false,
+      listMontageGalleryFiles: () => {
+        scanCalls += 1;
+        throw new Error('sync_scan_forbidden');
+      },
+    });
+    const res = jsonRes();
+    app.handlers['/api/anlagenstamm_gallery.php']({ query: { fab: '12304' } }, res);
+    assert.equal(scanCalls, 0);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.montage_pending, true);
+    assert.equal(res.body.gallery.length, 0);
+  });
 });
 
 describe('Galerie-Request-Pfad ohne OneDrive', () => {
@@ -242,8 +330,9 @@ describe('Galerie-Request-Pfad ohne OneDrive', () => {
       /async function fillProjekteNeuThumbCache[\s\S]*?\n  function enqueueProjekteNeuThumbFill/,
     );
     assert.ok(fill, 'fillProjekteNeuThumbCache nicht gefunden');
-    assert.ok(fill[0].includes('skipDeepSearch: true'));
-    assert.equal(fill[0].includes('skipDeepSearch: false'), false);
+    assert.ok(fill[0].includes("classifyPathKind(filePath) === 'onedrive'"));
+    assert.equal(fill[0].includes('resolveProjekteNeuLocalFilePathAll'), false);
+    assert.equal(fill[0].includes('fsReadFileSync'), false);
     const cacheFn = serverSrc.match(
       /function cacheProjekteNeuTreesForJob[\s\S]*?\n  function resolveLocalJobIdForFab/,
     );
@@ -258,5 +347,26 @@ describe('Galerie-Request-Pfad ohne OneDrive', () => {
     );
     assert.ok(gallery, 'gallery-Handler nicht gefunden');
     assert.equal(gallery[0].includes('buildLocalProjekteNeuTreeForFab'), false);
+  });
+
+  it('prefer_cache liefert 204 ohne auf die Queue zu warten', () => {
+    const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    const serve = serverSrc.match(
+      /async function serveProjekteNeuThumb[\s\S]*?\n  prewarmAnlagenstammGalleryThumbsImpl/,
+    );
+    assert.ok(serve, 'serveProjekteNeuThumb nicht gefunden');
+    assert.ok(serve[0].includes('if (preferCache)'));
+    assert.equal(serve[0].includes('preferCache && !filePathOpt'), false);
+    assert.ok(serve[0].includes("return res.status(204).end()"));
+    const prewarm = serverSrc.match(
+      /prewarmAnlagenstammGalleryThumbsImpl = function prewarmAnlagenstammGalleryThumbs[\s\S]*?\n  function cacheProjekteNeuTreesForJob/,
+    );
+    assert.ok(prewarm, 'prewarmAnlagenstammGalleryThumbs nicht gefunden');
+    assert.equal(prewarm[0].includes('enqueueProjekteNeuThumbFill'), false);
+    assert.ok(prewarm[0].includes('listMontageRastersFromDokumenteMonteurPathsAsync'));
+    const getThumb = serverSrc.match(
+      /app\.get\('\/api\/anlagenstamm_file_download\.php'[\s\S]*?wantThumb && pnPath[\s\S]*?serveProjekteNeuThumb\(res, technicianId, fabValue, pnPath, thumbMax, null/,
+    );
+    assert.ok(getThumb, 'GET-Thumb ohne Local-Resolve nicht gefunden');
   });
 });

@@ -26,11 +26,41 @@ function fabDigits(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
+function fabDigitSetFromJobRaw(raw) {
+  const set = new Set();
+  const add = (v) => {
+    const d = fabDigits(v);
+    if (!d) return;
+    const n = parseInt(d, 10);
+    if (Number.isFinite(n) && n > 0) set.add(String(n));
+  };
+  if (raw == null || raw === '') return set;
+  const s = String(raw).trim();
+  if (!s) return set;
+  try {
+    const parsed = JSON.parse(s);
+    const rows = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? [parsed] : [];
+    for (const row of rows) {
+      if (row && typeof row === 'object') {
+        add(row.fabrikationsnummer != null ? row.fabrikationsnummer : row.Fabrikationsnummer);
+      } else {
+        add(row);
+      }
+    }
+    if (set.size > 0) return set;
+  } catch (_) {
+    /* Komma-/Semikolon-Liste */
+  }
+  for (const part of s.split(/[\s;,]+/)) {
+    if (part.trim()) add(part);
+  }
+  return set;
+}
+
 function jobHasFab(fabrikationsnummern, fabNorm) {
-  const raw = String(fabrikationsnummern || '');
-  if (!fabNorm || !raw) return false;
-  const parts = raw.split(/[,;\s]+/).map((p) => fabDigits(p)).filter(Boolean);
-  return parts.includes(fabNorm);
+  const want = fabDigits(fabNorm) || String(fabNorm || '').trim();
+  if (!want) return false;
+  return fabDigitSetFromJobRaw(fabrikationsnummern).has(want);
 }
 
 function isRealListedDocument(doc) {
@@ -123,5 +153,6 @@ module.exports = {
   emptyCategories,
   isRealListedDocument,
   jobHasFab,
+  fabDigitSetFromJobRaw,
   KIND_TO_SLUG,
 };

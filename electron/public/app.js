@@ -6908,7 +6908,314 @@
     }
   }
 
-  function runFinishJobStream(localJobId, triggerButton) {
+  var finishJobFilesState = {
+    jobId: null,
+    triggerButton: null,
+    files: [],
+    selected: {},
+    fnOptions: [],
+  };
+
+  function closeFinishJobFilesModal() {
+    var modal = document.getElementById('modalFinishJobFiles');
+    if (modal) {
+      modal.classList.remove('active');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+    finishJobFilesState.jobId = null;
+    finishJobFilesState.triggerButton = null;
+  }
+
+  function finishJobSelectedRelPaths() {
+    var out = [];
+    (finishJobFilesState.files || []).forEach(function (f) {
+      if (finishJobFilesState.selected[f.rel_path]) out.push(f.rel_path);
+    });
+    return out;
+  }
+
+  function renderFinishJobFilesList() {
+    var listEl = document.getElementById('finishJobFilesList');
+    if (!listEl) return;
+    var files = finishJobFilesState.files || [];
+    if (!files.length) {
+      listEl.innerHTML = '<p class="muted" style="margin:0.75rem">Keine Monteur-Dateien für diesen Auftrag gefunden.</p>';
+      return;
+    }
+    var groups = {};
+    var order = [];
+    files.forEach(function (f) {
+      var key = f.fn_label || 'Ohne FN';
+      if (!groups[key]) {
+        groups[key] = [];
+        order.push(key);
+      }
+      groups[key].push(f);
+    });
+    var html = '';
+    order.forEach(function (key) {
+      html += '<div class="finish-job-files-group">';
+      html += '<div class="finish-job-files-group-title">' + escapeHtml(key) + '</div>';
+      groups[key].forEach(function (f) {
+        var checked = finishJobFilesState.selected[f.rel_path] ? ' checked' : '';
+        var meta = [];
+        if (f.folder_label) meta.push(f.folder_label);
+        if (f.size_bytes != null && f.size_bytes !== '') meta.push(formatFileSize(f.size_bytes));
+        html +=
+          '<div class="finish-job-file-row" data-rel="' +
+          escapeHtml(f.rel_path) +
+          '" data-abs="' +
+          escapeHtml(f.abs_path || '') +
+          '">' +
+          '<input type="checkbox" class="finish-job-file-check"' +
+          checked +
+          ' />' +
+          '<span class="finish-job-file-name">' +
+          escapeHtml(f.name) +
+          '</span>' +
+          '<span class="finish-job-file-meta">' +
+          escapeHtml(meta.join(' · ')) +
+          '</span>' +
+          '</div>';
+      });
+      html += '</div>';
+    });
+    listEl.innerHTML = html;
+  }
+
+  function fillFinishJobFnSelect() {
+    var sel = document.getElementById('finishJobFnSelect');
+    var wrapLabel = document.getElementById('finishJobFnLabel');
+    if (!sel) return;
+    var opts = finishJobFilesState.fnOptions || [];
+    sel.innerHTML = opts
+      .map(function (n) {
+        return '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + '</option>';
+      })
+      .join('');
+    var show = opts.length > 1;
+    sel.hidden = !show && opts.length <= 1;
+    if (wrapLabel) wrapLabel.hidden = opts.length <= 1;
+    if (opts.length === 1) sel.value = opts[0];
+  }
+
+  function openFinishJobListedFile(absPath) {
+    if (!absPath) return;
+    var app = typeof monteurApp !== 'undefined' ? monteurApp : window.monteurApp;
+    if (!app) return;
+    var isPdf = /\.pdf$/i.test(absPath);
+    var opener =
+      isPdf && typeof app.openPdf === 'function'
+        ? app.openPdf
+        : typeof app.openPath === 'function'
+          ? app.openPath
+          : null;
+    if (!opener) return;
+    Promise.resolve(opener.call(app, String(absPath))).catch(function (err) {
+      var msg = err && err.message ? err.message : 'Datei konnte nicht geöffnet werden.';
+      var hint = document.getElementById('finishJobFilesMsg');
+      if (hint) hint.textContent = msg;
+    });
+  }
+
+  function mergeFinishJobSavedFiles(saved) {
+    (saved || []).forEach(function (f) {
+      if (!f || !f.rel_path) return;
+      var exists = finishJobFilesState.files.some(function (x) {
+        return x.rel_path === f.rel_path;
+      });
+      if (!exists) finishJobFilesState.files.push(f);
+      finishJobFilesState.selected[f.rel_path] = true;
+      if (f.fn_label && finishJobFilesState.fnOptions.indexOf(f.fn_label) < 0) {
+        finishJobFilesState.fnOptions.push(f.fn_label);
+      }
+    });
+    renderFinishJobFilesList();
+    fillFinishJobFnSelect();
+  }
+
+  async function uploadFinishJobExtraFiles(fileList) {
+    var jobId = finishJobFilesState.jobId;
+    if (!jobId || !fileList || !fileList.length) return;
+    var msg = document.getElementById('finishJobFilesMsg');
+    var fd = new FormData();
+    fd.append('job_id', String(jobId));
+    var techId = getTechId();
+    if (techId) fd.append('technician_id', String(techId));
+    var fnSel = document.getElementById('finishJobFnSelect');
+    if (fnSel && fnSel.value) fd.append('fn', fnSel.value);
+    var count = 0;
+    for (var i = 0; i < fileList.length; i++) {
+      var file = fileList[i];
+      if (!file || file.size == null) continue;
+      if (file.type === '' && (!file.name || file.name.indexOf('.') < 0)) continue;
+      fd.append('file', file, file.name || 'datei');
+      count += 1;
+    }
+    if (!count) {
+      if (msg) msg.textContent = 'Bitte Dateien wählen (keine Ordner).';
+      return;
+    }
+    if (msg) msg.textContent = 'Dateien werden hinzugefügt …';
+    try {
+      var headers = {};
+      if (techId) headers['X-Technician-Id'] = String(techId);
+      var r = await fetch(API_BASE + '/api/dienstreise/finish_extra_files', {
+        method: 'POST',
+        headers: headers,
+        body: fd,
+      });
+      var data = await r.json().catch(function () {
+        return {};
+      });
+      if (!r.ok || !data.ok) {
+        throw new Error((data && data.error) || 'Upload fehlgeschlagen.');
+      }
+      mergeFinishJobSavedFiles(data.files || []);
+      if (msg) msg.textContent = (data.files && data.files.length ? data.files.length : count) + ' Datei(en) hinzugefügt.';
+    } catch (err) {
+      if (msg) msg.textContent = err && err.message ? err.message : 'Zusatzdatei fehlgeschlagen.';
+    }
+  }
+
+  function bindFinishJobFilesModalOnce() {
+    var modal = document.getElementById('modalFinishJobFiles');
+    if (!modal || modal.getAttribute('data-bound') === '1') return;
+    modal.setAttribute('data-bound', '1');
+    var listEl = document.getElementById('finishJobFilesList');
+    if (listEl) {
+      listEl.addEventListener('change', function (e) {
+        var inp = e.target && e.target.closest ? e.target.closest('.finish-job-file-check') : null;
+        if (!inp) return;
+        var row = inp.closest('.finish-job-file-row');
+        var rel = row && row.getAttribute('data-rel');
+        if (!rel) return;
+        finishJobFilesState.selected[rel] = !!inp.checked;
+      });
+      listEl.addEventListener('dblclick', function (e) {
+        if (e.target && e.target.closest && e.target.closest('.finish-job-file-check')) return;
+        var row = e.target && e.target.closest ? e.target.closest('.finish-job-file-row') : null;
+        if (!row) return;
+        e.preventDefault();
+        openFinishJobListedFile(row.getAttribute('data-abs'));
+      });
+    }
+    var drop = document.getElementById('finishJobDropzone');
+    if (drop) {
+      ['dragenter', 'dragover'].forEach(function (evName) {
+        drop.addEventListener(evName, function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          drop.classList.add('is-dragover');
+        });
+      });
+      ['dragleave', 'drop'].forEach(function (evName) {
+        drop.addEventListener(evName, function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          drop.classList.remove('is-dragover');
+        });
+      });
+      drop.addEventListener('drop', function (e) {
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files.length) uploadFinishJobExtraFiles(files);
+      });
+    }
+    var browse = document.getElementById('finishJobFilesBrowse');
+    var input = document.getElementById('finishJobFilesInput');
+    if (browse && input) {
+      browse.addEventListener('click', function () {
+        input.value = '';
+        input.click();
+      });
+      input.addEventListener('change', function () {
+        if (input.files && input.files.length) uploadFinishJobExtraFiles(input.files);
+      });
+    }
+    var btnAll = document.getElementById('finishJobFilesBtnAll');
+    var btnNone = document.getElementById('finishJobFilesBtnNone');
+    var btnCancel = document.getElementById('finishJobFilesBtnCancel');
+    var btnConfirm = document.getElementById('finishJobFilesBtnConfirm');
+    if (btnAll) {
+      btnAll.addEventListener('click', function () {
+        (finishJobFilesState.files || []).forEach(function (f) {
+          finishJobFilesState.selected[f.rel_path] = true;
+        });
+        renderFinishJobFilesList();
+      });
+    }
+    if (btnNone) {
+      btnNone.addEventListener('click', function () {
+        (finishJobFilesState.files || []).forEach(function (f) {
+          finishJobFilesState.selected[f.rel_path] = false;
+        });
+        renderFinishJobFilesList();
+      });
+    }
+    if (btnCancel) btnCancel.addEventListener('click', closeFinishJobFilesModal);
+    if (btnConfirm) {
+      btnConfirm.addEventListener('click', function () {
+        var jobId = finishJobFilesState.jobId;
+        var btn = finishJobFilesState.triggerButton;
+        var paths = finishJobSelectedRelPaths();
+        closeFinishJobFilesModal();
+        if (jobId) runFinishJobStream(jobId, btn, paths);
+      });
+    }
+    modal.addEventListener('click', function (e) {
+      if (e.target.id === 'modalFinishJobFiles') closeFinishJobFilesModal();
+    });
+  }
+
+  async function openFinishJobFilesModal(jobId, triggerButton) {
+    bindFinishJobFilesModalOnce();
+    var modal = document.getElementById('modalFinishJobFiles');
+    var msg = document.getElementById('finishJobFilesMsg');
+    var listEl = document.getElementById('finishJobFilesList');
+    if (!modal) {
+      runFinishJobStream(jobId, triggerButton);
+      return;
+    }
+    finishJobFilesState.jobId = jobId;
+    finishJobFilesState.triggerButton = triggerButton;
+    finishJobFilesState.files = [];
+    finishJobFilesState.selected = {};
+    finishJobFilesState.fnOptions = [];
+    if (listEl) listEl.innerHTML = '<p class="muted" style="margin:0.75rem">Lade Dateiliste …</p>';
+    if (msg) msg.textContent = '';
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    try {
+      var techId = getTechId();
+      var qs = 'job_id=' + encodeURIComponent(jobId);
+      if (techId) qs += '&technician_id=' + encodeURIComponent(String(techId));
+      var r = await fetch(API_BASE + '/api/dienstreise/finish_file_list?' + qs, {
+        headers: techId ? { 'X-Technician-Id': String(techId) } : {},
+      });
+      var data = await r.json().catch(function () {
+        return {};
+      });
+      if (!r.ok || !data.ok) {
+        throw new Error((data && data.error) || 'Dateiliste fehlgeschlagen.');
+      }
+      finishJobFilesState.files = data.files || [];
+      finishJobFilesState.fnOptions = data.fn_options || [];
+      finishJobFilesState.files.forEach(function (f) {
+        finishJobFilesState.selected[f.rel_path] = true;
+      });
+      renderFinishJobFilesList();
+      fillFinishJobFnSelect();
+    } catch (err) {
+      if (listEl) {
+        listEl.innerHTML =
+          '<p class="muted" style="margin:0.75rem">' +
+          escapeHtml(err && err.message ? err.message : 'Dateiliste fehlgeschlagen.') +
+          '</p>';
+      }
+    }
+  }
+
+  function runFinishJobStream(localJobId, triggerButton, transferRelPaths) {
     if (finishJobStreamBusy) return;
     var techIdPre = getTechId();
     if (techIdPre) {
@@ -6920,7 +7227,6 @@
         }
       } catch (e) { /* weiter */ }
     }
-    if (!confirm('Ist der Auftrag wirklich erledigt?')) return;
 
     finishJobStreamBusy = true;
     finishJobActiveLocalJobId = localJobId;
@@ -6944,6 +7250,9 @@
       dispoUsername: getDispoUsername(),
       dispoPassword: getDispoPassword(),
     };
+    if (Array.isArray(transferRelPaths)) {
+      body.transfer_rel_paths = transferRelPaths;
+    }
 
     finishJobUiTimeoutId = setTimeout(function () {
       finishJobUiTimeoutId = null;
@@ -7000,7 +7309,7 @@
   }
 
   function finishAndCleanup(jobId, triggerButton) {
-    runFinishJobStream(jobId, triggerButton);
+    openFinishJobFilesModal(jobId, triggerButton);
   }
 
   function releaseDienstreiseJob(jobId, triggerButton) {

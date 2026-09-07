@@ -162,6 +162,48 @@
     openViewer(it.title || 'Bild', '<img src="' + esc(it.full_url) + '" alt="" style="max-width:100%;height:auto">');
   }
 
+  function renderGalleryGrid(root, items) {
+    galleryItems = items || [];
+    if (!galleryItems.length) {
+      root.innerHTML = '<p class="muted">Keine Bilder in der Akte. Weitere Rasterdateien stehen unter Dateien (PROJEKTE NEU).</p>';
+      return;
+    }
+    var groups = [];
+    var byFolder = {};
+    galleryItems.forEach(function (it, idx) {
+      it._idx = idx;
+      var folder = String(it.parent_folder || '').trim() || 'Bilder';
+      if (!byFolder[folder]) {
+        byFolder[folder] = [];
+        groups.push(folder);
+      }
+      byFolder[folder].push(it);
+    });
+    groups.sort(function (a, b) {
+      var am = /^Montage/i.test(a);
+      var bm = /^Montage/i.test(b);
+      if (am !== bm) return am ? -1 : 1;
+      return a.localeCompare(b, 'de');
+    });
+    var html = '';
+    groups.forEach(function (folder) {
+      html += '<div class="akte-gallery-group"><h3>' + esc(folder) + '</h3><div class="akte-gallery-grid">';
+      byFolder[folder].forEach(function (it) {
+        html += '<figure class="akte-gallery-item" data-idx="' + it._idx + '"><img class="akte-gallery-thumb" alt="" data-thumb-src="' +
+          esc(it.thumb_url || '') + '" loading="lazy"><figcaption>' + esc(it.title || '') + '</figcaption></figure>';
+      });
+      html += '</div></div>';
+    });
+    root.innerHTML = html;
+    bindGalleryLazyThumbs(root);
+    qsa('.akte-gallery-item', root).forEach(function (fig) {
+      fig.addEventListener('click', function () {
+        var i = parseInt(fig.getAttribute('data-idx') || '0', 10);
+        openGalleryAt(i);
+      });
+    });
+  }
+
   function loadGallery() {
     var root = document.getElementById('akteGalleryRoot');
     var fabEl = document.getElementById('formFab');
@@ -180,52 +222,19 @@
     var url = window.KUKLA_ANLAGENAKTE_GALLERY_URL
       ? (window.KUKLA_ANLAGENAKTE_GALLERY_URL + (window.KUKLA_ANLAGENAKTE_GALLERY_URL.indexOf('?') >= 0 ? '&' : '?') + 'fab=' + encodeURIComponent(fab))
       : endpoint('anlagenstamm_gallery.php', 'fab=' + encodeURIComponent(fab));
+    function apply(d, pollLeft) {
+      if (token !== galleryLoadToken) return;
+      renderGalleryGrid(root, (d && d.gallery) || []);
+      root.setAttribute('data-loaded', '1');
+      if (d && d.montage_pending && pollLeft > 0) {
+        setTimeout(function () {
+          if (token !== galleryLoadToken) return;
+          jsonGet(url).then(function (d2) { apply(d2, pollLeft - 1); }).catch(function () {});
+        }, 800);
+      }
+    }
     jsonGet(url)
-      .then(function (d) {
-        if (token !== galleryLoadToken) return;
-        var items = (d && d.gallery) || [];
-        galleryItems = items;
-        if (!items.length) {
-          root.innerHTML = '<p class="muted">Keine Bilder in der Akte. Weitere Rasterdateien stehen unter Dateien (PROJEKTE NEU).</p>';
-          root.setAttribute('data-loaded', '1');
-          return;
-        }
-        var groups = [];
-        var byFolder = {};
-        items.forEach(function (it, idx) {
-          it._idx = idx;
-          var folder = String(it.parent_folder || '').trim() || 'Bilder';
-          if (!byFolder[folder]) {
-            byFolder[folder] = [];
-            groups.push(folder);
-          }
-          byFolder[folder].push(it);
-        });
-        groups.sort(function (a, b) {
-          var am = /^Montage/i.test(a);
-          var bm = /^Montage/i.test(b);
-          if (am !== bm) return am ? -1 : 1;
-          return a.localeCompare(b, 'de');
-        });
-        var html = '';
-        groups.forEach(function (folder) {
-          html += '<div class="akte-gallery-group"><h3>' + esc(folder) + '</h3><div class="akte-gallery-grid">';
-          byFolder[folder].forEach(function (it) {
-            html += '<figure class="akte-gallery-item" data-idx="' + it._idx + '"><img class="akte-gallery-thumb" alt="" data-thumb-src="' +
-              esc(it.thumb_url || '') + '" loading="lazy"><figcaption>' + esc(it.title || '') + '</figcaption></figure>';
-          });
-          html += '</div></div>';
-        });
-        root.innerHTML = html;
-        root.setAttribute('data-loaded', '1');
-        bindGalleryLazyThumbs(root);
-        qsa('.akte-gallery-item', root).forEach(function (fig) {
-          fig.addEventListener('click', function () {
-            var i = parseInt(fig.getAttribute('data-idx') || '0', 10);
-            openGalleryAt(i);
-          });
-        });
-      })
+      .then(function (d) { apply(d, 3); })
       .catch(function () {
         if (token !== galleryLoadToken) return;
         galleryItems = [];

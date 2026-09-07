@@ -1,18 +1,19 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
 const {
   isDatePrefixedProjectFolderName,
   parseFnRangeFromFolderName,
   folderNameMatchesFab,
   findMonteurFolderForFab,
+  findMonteurFolderForFabAsync,
   isIgnorableDirEntry,
 } = require('./projekte-neu-local');
+const { fsExistsSync, fsStatSync, fsReaddirSync, fsReaddir, fsStat } = require('./win32-long-path');
 
 const RASTER_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic', 'heif']);
 const GALLERY_MAX = 150;
-const MONTAGE_GALLERY_MAX = 80;
+const MONTAGE_GALLERY_MAX = GALLERY_MAX;
 
 function isRasterName(name) {
   const m = String(name || '')
@@ -202,7 +203,7 @@ function collectRastersLimited(absDir, relPrefix, out, max, depth, jobId, fab) {
   if (out.length >= max || depth < 0) return;
   let ents;
   try {
-    ents = fs.readdirSync(absDir, { withFileTypes: true });
+    ents = fsReaddirSync(absDir, { withFileTypes: true });
   } catch (_) {
     return;
   }
@@ -256,37 +257,141 @@ function listMontageRastersFromDokumenteMonteurPaths(dmEntries, fab, opts) {
     };
     addMontageRoot(folderName);
     addMontageRoot(null);
-    let dmDirs = [];
-    try {
-      dmDirs = fs.readdirSync(dm, { withFileTypes: true });
-    } catch (_) {
-      dmDirs = [];
-    }
-    let extraFolders = 0;
-    for (const ent of dmDirs) {
-      if (extraFolders >= 12) break;
-      if (!ent.isDirectory() || isIgnorableDirEntry(ent.name)) continue;
-      if (folderName && ent.name === folderName) continue;
-      extraFolders += 1;
-      addMontageRoot(ent.name);
+    if (!folderName) {
+      let dmDirs = [];
+      try {
+        dmDirs = fsReaddirSync(dm, { withFileTypes: true });
+      } catch (_) {
+        dmDirs = [];
+      }
+      let extraFolders = 0;
+      for (const ent of dmDirs) {
+        if (extraFolders >= 12) break;
+        if (!ent.isDirectory() || isIgnorableDirEntry(ent.name)) continue;
+        extraFolders += 1;
+        addMontageRoot(ent.name);
+      }
     }
     for (const root of montageRoots) {
       if (out.length >= max) break;
       let aos;
       try {
-        if (!fs.existsSync(root.abs) || !fs.statSync(root.abs).isDirectory()) continue;
-        aos = fs.readdirSync(root.abs, { withFileTypes: true });
+        if (!fsExistsSync(root.abs) || !fsStatSync(root.abs).isDirectory()) continue;
+        aos = fsReaddirSync(root.abs, { withFileTypes: true });
       } catch (_) {
         continue;
       }
       let aoN = 0;
       for (const ao of aos) {
-        if (out.length >= max || aoN >= 8) break;
+        if (out.length >= max || aoN >= GALLERY_MAX) break;
         if (!ao.isDirectory() || isIgnorableDirEntry(ao.name)) continue;
         aoN += 1;
         const bilderAbs = path.join(root.abs, ao.name, 'Bilder');
         const bilderRel = posixJoin(root.rel, ao.name, 'Bilder');
         collectRastersLimited(bilderAbs, bilderRel, out, max, 2, jobId, fab);
+      }
+    }
+  }
+  const uniq = [];
+  for (const f of out) {
+    const k = String(f.rel || '').toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    uniq.push(f);
+  }
+  return uniq;
+}
+
+async function collectRastersLimitedAsync(absDir, relPrefix, out, max, depth, jobId, fab, yieldFn) {
+  if (out.length >= max || depth < 0) return;
+  if (typeof yieldFn === 'function') await yieldFn();
+  let ents;
+  try {
+    ents = await fsReaddir(absDir, { withFileTypes: true });
+  } catch (_) {
+    return;
+  }
+  for (const ent of ents) {
+    if (out.length >= max) return;
+    if (isIgnorableDirEntry(ent.name)) continue;
+    const abs = path.join(absDir, ent.name);
+    const rel = posixJoin(relPrefix, ent.name);
+    if (ent.isDirectory()) {
+      await collectRastersLimitedAsync(abs, rel, out, max, depth - 1, jobId, fab, yieldFn);
+      continue;
+    }
+    if (!ent.isFile() || !isRasterName(ent.name)) continue;
+    if (fab && !isMontageJobPhoto(rel, ent.name, fab)) continue;
+    const item = { name: ent.name, rel };
+    if (jobId) item.jobId = jobId;
+    out.push(item);
+  }
+}
+
+async function listMontageRastersFromDokumenteMonteurPathsAsync(dmEntries, fab, opts) {
+  const max = opts && opts.max != null ? Number(opts.max) : MONTAGE_GALLERY_MAX;
+  const yieldFn = opts && typeof opts.yieldFn === 'function' ? opts.yieldFn : null;
+  const out = [];
+  const seen = new Set();
+  for (const entry of dmEntries || []) {
+    if (out.length >= max) break;
+    if (yieldFn) await yieldFn();
+    const dm = entry && entry.dm;
+    const jobId = entry && entry.jobId;
+    if (!dm) continue;
+    const folderName = await findMonteurFolderForFabAsync(dm, fab);
+    const montageRoots = [];
+    const seenRoots = new Set();
+    const addMontageRoot = (folder) => {
+      const abs = folder
+        ? path.join(dm, folder, 'Montage')
+        : path.join(dm, 'Montage');
+      const key = String(abs).toLowerCase();
+      if (seenRoots.has(key)) return;
+      seenRoots.add(key);
+      montageRoots.push({
+        abs,
+        rel: folder
+          ? posixJoin('Dokumente_Monteur', folder, 'Montage')
+          : posixJoin('Dokumente_Monteur', 'Montage'),
+      });
+    };
+    addMontageRoot(folderName);
+    addMontageRoot(null);
+    if (!folderName) {
+      let dmDirs = [];
+      try {
+        dmDirs = await fsReaddir(dm, { withFileTypes: true });
+      } catch (_) {
+        dmDirs = [];
+      }
+      let extraFolders = 0;
+      for (const ent of dmDirs) {
+        if (extraFolders >= 12) break;
+        if (!ent.isDirectory() || isIgnorableDirEntry(ent.name)) continue;
+        extraFolders += 1;
+        addMontageRoot(ent.name);
+      }
+    }
+    for (const root of montageRoots) {
+      if (out.length >= max) break;
+      if (yieldFn) await yieldFn();
+      let aos;
+      try {
+        const st = await fsStat(root.abs);
+        if (!st || !st.isDirectory()) continue;
+        aos = await fsReaddir(root.abs, { withFileTypes: true });
+      } catch (_) {
+        continue;
+      }
+      let aoN = 0;
+      for (const ao of aos) {
+        if (out.length >= max || aoN >= GALLERY_MAX) break;
+        if (!ao.isDirectory() || isIgnorableDirEntry(ao.name)) continue;
+        aoN += 1;
+        const bilderAbs = path.join(root.abs, ao.name, 'Bilder');
+        const bilderRel = posixJoin(root.rel, ao.name, 'Bilder');
+        await collectRastersLimitedAsync(bilderAbs, bilderRel, out, max, 2, jobId, fab, yieldFn);
       }
     }
   }
@@ -319,7 +424,7 @@ function mapGalleryItem(fabNorm, file, extra) {
   const parent = galleryParentFolder(file.rel, file.name, fabNorm);
   const qExtra = Object.assign({}, extra);
   if (file.jobId) qExtra.job_id = String(file.jobId);
-  return {
+  const item = {
     key: 'pn:' + file.rel.toLowerCase(),
     title: parent && parent !== 'Stamm' ? parent + ' / ' + file.name : file.name,
     parent_folder: parent || 'Stamm',
@@ -333,6 +438,8 @@ function mapGalleryItem(fabNorm, file, extra) {
       downloadQuery(fabNorm, file.rel, Object.assign({ inline: '1' }, qExtra)),
     is_title: false,
   };
+  if (file.jobId) item.job_id = file.jobId;
+  return item;
 }
 
 /**
@@ -347,9 +454,10 @@ function buildLocalAnlagenstammGallery(fab, tree, opts) {
   const files = [];
   const max = opts && opts.max != null ? Number(opts.max) : GALLERY_MAX;
   const treeNodes = Array.isArray(tree) ? tree : [];
-  walkRasterFiles(treeNodes, files, 0, (dirName) => shouldSkipGalleryDir(dirName, fabNorm));
+  const walkCap = Math.max(max * 3, GALLERY_MAX);
+  walkRasterFiles(treeNodes, files, walkCap, (dirName) => shouldSkipGalleryDir(dirName, fabNorm));
   if (!files.length) {
-    walkRasterFiles(treeNodes, files, 0, null);
+    walkRasterFiles(treeNodes, files, walkCap, null);
   }
   for (const extra of Array.isArray(opts && opts.extraFiles) ? opts.extraFiles : []) {
     if (!extra || typeof extra !== 'object') continue;
@@ -409,5 +517,6 @@ module.exports = {
   folderMatchesOtherFab,
   isIsoDatePrefixedFolderName,
   listMontageRastersFromDokumenteMonteurPaths,
+  listMontageRastersFromDokumenteMonteurPathsAsync,
   buildLocalAnlagenstammGallery,
 };

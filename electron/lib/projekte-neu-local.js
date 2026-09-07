@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { fsExistsSync, fsStatSync, fsReaddirSync, fsReaddir, fsStat } = require('./win32-long-path');
 
 const DEFAULT_MAX_DEPTH = 25;
 const DEFAULT_MAX_ENTRIES = 15000;
@@ -196,12 +197,12 @@ function findMonteurFolderForFab(dokumenteMonteurPath, fab) {
   const digits = fabStr.replace(/\D/g, '');
   if (!digits) return null;
   if (!Number.isFinite(parseInt(digits, 10))) return null;
-  if (!fs.existsSync(dokumenteMonteurPath) || !fs.statSync(dokumenteMonteurPath).isDirectory()) {
+  if (!fsExistsSync(dokumenteMonteurPath) || !fsStatSync(dokumenteMonteurPath).isDirectory()) {
     return null;
   }
   let names;
   try {
-    names = fs.readdirSync(dokumenteMonteurPath, { withFileTypes: true });
+    names = fsReaddirSync(dokumenteMonteurPath, { withFileTypes: true });
   } catch (_) {
     return null;
   }
@@ -209,6 +210,32 @@ function findMonteurFolderForFab(dokumenteMonteurPath, fab) {
     .filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name))
     .map((e) => e.name);
 
+  const exact = pickPreferredExactFnDir(dirs, fab);
+  if (exact) return exact;
+  return pickFnRangeDir(dirs, fab);
+}
+
+async function findMonteurFolderForFabAsync(dokumenteMonteurPath, fab) {
+  const fabStr = String(fab ?? '').trim();
+  const digits = fabStr.replace(/\D/g, '');
+  if (!digits) return null;
+  if (!Number.isFinite(parseInt(digits, 10))) return null;
+  let st;
+  try {
+    st = await fsStat(dokumenteMonteurPath);
+  } catch (_) {
+    return null;
+  }
+  if (!st || !st.isDirectory()) return null;
+  let names;
+  try {
+    names = await fsReaddir(dokumenteMonteurPath, { withFileTypes: true });
+  } catch (_) {
+    return null;
+  }
+  const dirs = names
+    .filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name))
+    .map((e) => e.name);
   const exact = pickPreferredExactFnDir(dirs, fab);
   if (exact) return exact;
   return pickFnRangeDir(dirs, fab);
@@ -339,6 +366,7 @@ function resolveCanonicalFolderFromDirList(dirNames, fab) {
 
 module.exports = {
   findMonteurFolderForFab,
+  findMonteurFolderForFabAsync,
   resolveCanonicalFolderFromDirList,
   fnFolderAliasKey,
   isFnFolderAlias,

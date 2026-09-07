@@ -270,11 +270,22 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       }
     }
     let extraFiles = [];
-    try {
-      extraFiles =
-        typeof ctx.listMontageGalleryFiles === 'function' ? ctx.listMontageGalleryFiles(fab) || [] : [];
-    } catch (_) {
-      extraFiles = [];
+    let montagePending = true;
+    if (typeof ctx.getCachedMontageGalleryFiles === 'function') {
+      try {
+        extraFiles = ctx.getCachedMontageGalleryFiles(fab) || [];
+      } catch (_) {
+        extraFiles = [];
+      }
+      montagePending =
+        typeof ctx.hasMontageGalleryCache === 'function' ? !ctx.hasMontageGalleryCache(fab) : extraFiles.length === 0;
+    } else if (typeof ctx.listMontageGalleryFiles === 'function') {
+      try {
+        extraFiles = ctx.listMontageGalleryFiles(fab) || [];
+        montagePending = false;
+      } catch (_) {
+        extraFiles = [];
+      }
     }
     const gallery = buildLocalAnlagenstammGallery(fab, tree, {
       technicianId: ctx.getTechnicianId(req),
@@ -283,17 +294,14 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     try {
       console.log('[anlagenstamm_gallery]', fab, 'items=' + gallery.length, 'source=' + source);
     } catch (_) {}
-    if (typeof ctx.prewarmAnlagenstammGalleryThumbs === 'function' && gallery.length) {
-      const technicianId = ctx.getTechnicianId(req);
+    if (montagePending && typeof ctx.refreshMontageGalleryFiles === 'function') {
       setImmediate(() => {
-        try {
-          ctx.prewarmAnlagenstammGalleryThumbs(fab, gallery, technicianId);
-        } catch (_) {
-          /* ignore */
-        }
+        Promise.resolve()
+          .then(() => ctx.refreshMontageGalleryFiles(fab))
+          .catch(() => {});
       });
     }
-    return res.json({ ok: true, gallery, source });
+    return res.json({ ok: true, gallery, source, montage_pending: !!montagePending });
   });
 
   app.get('/api/anlagenstamm_documents_list.php', (req, res) => {

@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.012
+- **Anlagenakte Galerie:** Laden blockiert die App nicht mehr (kein synchroner OneDrive-Scan); Montagefotos kommen im Hintergrund, Vorschaubilder nur aus dem lokalen Cache.
+- **Auftrag abschließen:** Dateien für PROJEKTE NEU auswählbar (`transfer_rel_paths`); ohne Auswahl wie bisher alles.
+- **Zeitschreibung:** Kopfzeile bleibt beim Scrollen im sichtbaren Bereich.
+- **Windows-Pfade:** Lange OneDrive-Pfade (`\\?\`) für Galerie und Dateiauflösung.
+
 ## V 2.007.008
 - **Erledigt:** `.conflict-*`-Sicherungen der Protokoll-JSONs werden beim Aufräumen des Auftragsordners gelöscht und in der Dateiliste nicht mehr angezeigt.
 

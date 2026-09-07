@@ -215,6 +215,16 @@ const {
   safeTedLocalFileName,
 } = require('./lib/ted-excel-local');
 const { replaceFileWithoutUnlink, replaceFileWithoutUnlinkSync } = require('./lib/replace-file-cloud-safe');
+const {
+  win32FsPath,
+  fsExistsSync,
+  fsStatSync,
+  fsStat,
+  fsReaddir,
+  fsReaddirSync,
+  fsRealpathSync,
+  fsReadFileSync,
+} = require('./lib/win32-long-path');
 const { sweepOnedriveNumberedDuplicates } = require('./lib/onedrive-numbered-duplicates');
 const { applyKuklaAuditHeaders } = require('./lib/audit-client-headers');
 
@@ -265,6 +275,15 @@ const {
 } = require('./lib/multi-device-sync');
 const protocolDrafts = require('./lib/protocol-drafts-local');
 const {
+  isFinishUploadRelPath,
+  isSonstigesRel,
+  parseOptionalTransferRelPaths,
+  transferRelMatches,
+  listFinishTransferFiles,
+  saveFinishExtraFile,
+} = require('./lib/finish-transfer-files');
+const { parseMultipart } = require('./lib/multipart-upload');
+const {
   ensureAnlagenstammLocalSchema,
   rowCount: anlagenstammLocalRowCount,
   searchLocal: anlagenstammSearchLocal,
@@ -314,6 +333,7 @@ const {
   readImageThumbCache,
   writeImageThumbCache,
   THUMB_KIND_DIENSTREISE,
+  normalizeScopeId,
 } = require('./lib/image-thumb-cache');
 const {
   isSupportedParameterFileName,
@@ -1537,11 +1557,15 @@ function dispoEntryMtimeMs(entry) {
 /** Lokale mtime an Dispo anlehnen, damit Delta-Sync nicht bei jedem Lauf erneut lädt. */
 function applyLocalFileMtimeFromDispo(filePath, mtimeMs) {
   if (mtimeMs == null || !Number.isFinite(mtimeMs) || mtimeMs <= 0) return;
+  const sec = mtimeMs / 1000;
   try {
-    const sec = mtimeMs / 1000;
-    fs.utimesSync(filePath, sec, sec);
+    fs.utimesSync(win32FsPath(filePath), sec, sec);
   } catch (_) {
-    /* ignore */
+    try {
+      fs.utimesSync(filePath, sec, sec);
+    } catch (__) {
+      /* ignore */
+    }
   }
 }
 
@@ -1645,6 +1669,22 @@ function createApp(db) {
   const { registerAnlagenstammPhpRoutes } = require('./lib/anlagenstamm-php-routes');
   const { registerAbrechnungPhpRoutes } = require('./lib/abrechnung-php-routes');
   let prewarmAnlagenstammGalleryThumbsImpl = null;
+  const montageGalleryFileCache = new Map();
+  const montageGalleryRefreshInflight = new Map();
+  function montageGalleryCacheKey(fab) {
+    return String(fab || '').replace(/\D/g, '') || String(fab || '').trim();
+  }
+  function getCachedMontageGalleryFiles(fab) {
+    const hit = montageGalleryFileCache.get(montageGalleryCacheKey(fab));
+    return hit && Array.isArray(hit.files) ? hit.files : [];
+  }
+  function hasMontageGalleryCache(fab) {
+    return montageGalleryFileCache.has(montageGalleryCacheKey(fab));
+  }
+  let refreshMontageGalleryFilesImpl = async () => {};
+  async function refreshMontageGalleryFiles(fab) {
+    return refreshMontageGalleryFilesImpl(fab);
+  }
   const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession, loadWebSession, tryProxyFetchDispoBinary } = require('./lib/monteur-dispo-web-routes');
   const { registerMultiDeviceRoutes } = require('./lib/multi-device-routes');
   let multiDeviceApi = null;
@@ -1686,28 +1726,9 @@ function createApp(db) {
         prewarmAnlagenstammGalleryThumbsImpl(fab, gallery, technicianId);
       }
     },
-    listMontageGalleryFiles: (fab) => {
-      const { jobHasFab } = require('./lib/anlagenstamm-documents-local');
-      const { listMontageRastersFromDokumenteMonteurPaths } = require('./lib/anlagenstamm-gallery-local');
-      const fabNorm = String(fab || '').trim();
-      const fabDigits = fabNorm.replace(/\D/g, '') || fabNorm;
-      if (!fabDigits) return [];
-      let jobs = [];
-      try {
-        jobs = db.prepare('SELECT id, fabrikationsnummern FROM jobs').all();
-      } catch (_) {
-        return [];
-      }
-      const paths = [];
-      for (const j of jobs) {
-        if (!jobHasFab(j.fabrikationsnummern, fabDigits)) continue;
-        const bound = getBoundReiseDirForJob(j.id);
-        if (!bound) continue;
-        paths.push({ dm: path.join(bound, 'Dokumente_Monteur'), jobId: j.id });
-      }
-      const files = listMontageRastersFromDokumenteMonteurPaths(paths, fabNorm, { max: 80 });
-      return files;
-    },
+    getCachedMontageGalleryFiles: (fab) => getCachedMontageGalleryFiles(fab),
+    hasMontageGalleryCache: (fab) => hasMontageGalleryCache(fab),
+    refreshMontageGalleryFiles: (fab) => refreshMontageGalleryFiles(fab),
   });
   registerAbrechnungPhpRoutes(app, {
     db,
@@ -2718,7 +2739,7 @@ function createApp(db) {
     performReleaseDienstreiseJob(lid, technicianId);
   }
 
-  async function pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, status) {
+  async function pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, status, extraBody) {
     if (!dispoBaseUrl || !serverJobId) return { ok: false, error: 'Keine Dispo-Verknüpfung.' };
     const st = String(status || '').trim().toLowerCase();
     if (!st) return { ok: false, error: 'Status fehlt.' };
@@ -2728,10 +2749,17 @@ function createApp(db) {
       'X-Technician-Id': String(technicianId),
       ...(authHeader || {}),
     };
+    const payload = { job_id: serverJobId, status: st };
+    if (extraBody && typeof extraBody === 'object') {
+      for (const key of Object.keys(extraBody)) {
+        if (extraBody[key] === undefined) continue;
+        payload[key] = extraBody[key];
+      }
+    }
     const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${technicianId}`, {
       method: 'PATCH',
       headers: headerForJob,
-      body: JSON.stringify({ job_id: serverJobId, status: st }),
+      body: JSON.stringify(payload),
     });
     if (!r.ok) {
       let errMsg = 'Dispo: ' + r.status;
@@ -2748,12 +2776,12 @@ function createApp(db) {
    * Erledigt an Dispo wie Handy-PWA. Dispo erlaubt erledigt nur von zugeteilt/in_arbeit —
    * bei angelegt/geplant zuerst in_arbeit, dann erledigt.
    */
-  async function pushJobStatusErledigtToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader) {
-    const first = await pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt');
+  async function pushJobStatusErledigtToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, extraBody) {
+    const first = await pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt', extraBody);
     if (first.ok) return first;
     const mid = await pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'in_arbeit');
     if (!mid.ok) return first;
-    return pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt');
+    return pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt', extraBody);
   }
 
   async function pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader) {
@@ -2822,7 +2850,7 @@ function createApp(db) {
 
   function readLocalFileStatForPush(fullPath) {
     try {
-      const st = fs.statSync(fullPath);
+      const st = fsStatSync(fullPath);
       const mtimeMs = st.mtimeMs != null ? st.mtimeMs : st.mtime ? st.mtime.getTime() : 0;
       return { mtimeMs: Number(mtimeMs) || 0, size: Number(st.size) || 0 };
     } catch (_) {
@@ -3967,14 +3995,14 @@ function createApp(db) {
       const dirPath = subpath ? path.join(reiseDir, subpath) : reiseDir;
       let dirStat;
       try {
-        dirStat = await fs.promises.stat(dirPath);
+        dirStat = await fsStat(dirPath);
       } catch (_) {
         return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
       }
       if (!dirStat.isDirectory()) return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
       let dirents;
       try {
-        dirents = await fs.promises.readdir(dirPath, { withFileTypes: true });
+        dirents = await fsReaddir(dirPath, { withFileTypes: true });
       } catch (e) {
         return res.status(500).json({ ok: false, error: e.message || 'Dateiliste konnte nicht gelesen werden.' });
       }
@@ -4006,7 +4034,7 @@ function createApp(db) {
           const keepEmptyPhotoCategory = name === 'Allgemein' || name === 'Angebot';
           if (subpath && !keepEmptyPhotoCategory && dirents.length <= 24) {
             try {
-              const childNames = await fs.promises.readdir(fullPath);
+              const childNames = await fsReaddir(fullPath);
               const visible = childNames.filter((n) => !isIgnorableDirEntry(n));
               if (!visible.length) continue;
             } catch (_) {
@@ -4018,11 +4046,11 @@ function createApp(db) {
         let mtime = null;
         if (!isDirectory) {
           try {
-            const st = await fs.promises.stat(fullPath);
+            const st = await fsStat(fullPath);
             size = st.size;
             mtime = st.mtime ? st.mtime.toISOString() : null;
-          } catch (e) {
-            continue;
+          } catch (_) {
+            /* Lange Windows-Pfade: Datei trotzdem anzeigen. */
           }
         }
         const relativePath = subpath ? (subpath.replace(/\\/g, '/') + '/' + name) : name;
@@ -4078,7 +4106,7 @@ function createApp(db) {
         });
       }
       const docMonteur = path.join(reiseDir, 'Dokumente_Monteur');
-      if (!fs.existsSync(docMonteur) || !fs.statSync(docMonteur).isDirectory()) {
+      if (!fsExistsSync(docMonteur) || !fsStatSync(docMonteur).isDirectory()) {
         return res.json({ ok: true, photos: [], folder_missing: false, hint: 'Keine Dokumente_Monteur vorhanden.' });
       }
       const imgRe = /\.(jpe?g|png|gif|webp|bmp)$/i;
@@ -4089,7 +4117,7 @@ function createApp(db) {
         if (photos.length >= maxFiles || depth > maxDepth) return;
         let names = [];
         try {
-          names = fs.readdirSync(dir);
+          names = fsReaddirSync(dir);
         } catch (_) {
           return;
         }
@@ -4099,7 +4127,7 @@ function createApp(db) {
           const full = path.join(dir, name);
           let st;
           try {
-            st = fs.statSync(full);
+            st = fsStatSync(full);
           } catch (_) {
             continue;
           }
@@ -4144,12 +4172,17 @@ function createApp(db) {
     const parts = rel ? rel.split(/[/\\]/).filter(Boolean) : [];
     if (!parts.length) return null;
     const filePath = path.join(reiseDir, ...parts);
-    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+    if (!fsExistsSync(filePath)) return null;
+    try {
+      if (!fsStatSync(filePath).isFile()) return null;
+    } catch (_) {
+      return null;
+    }
     let realReise;
     let realFile;
     try {
-      realReise = fs.realpathSync(reiseDir);
-      realFile = fs.realpathSync(filePath);
+      realReise = fsRealpathSync(reiseDir);
+      realFile = fsRealpathSync(filePath);
     } catch (_) {
       return null;
     }
@@ -4212,7 +4245,7 @@ function createApp(db) {
           return res.status(415).json({ ok: false, error: thumbErr.message || 'thumb_not_image' });
         }
       }
-      const buf = fs.readFileSync(filePath);
+      const buf = fsReadFileSync(filePath);
       const ext = path.extname(baseName).toLowerCase();
       const mimeMap = {
         '.jpg': 'image/jpeg',
@@ -4412,7 +4445,7 @@ function createApp(db) {
       if (seen.has(key)) continue;
       seen.add(key);
       try {
-        if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+        if (fsExistsSync(p) && fsStatSync(p).isFile()) return p;
       } catch (_) {}
     }
     const baseName = path.basename(rel);
@@ -4426,7 +4459,7 @@ function createApp(db) {
         walked += 1;
         let entries;
         try {
-          entries = fs.readdirSync(dir, { withFileTypes: true });
+          entries = fsReaddirSync(dir, { withFileTypes: true });
         } catch (_) {
           continue;
         }
@@ -4434,7 +4467,7 @@ function createApp(db) {
           if (!ent.isDirectory() && ent.name === baseName) {
             const hit = path.join(dir, ent.name);
             try {
-              if (fs.statSync(hit).isFile()) return hit;
+              if (fsStatSync(hit).isFile()) return hit;
             } catch (_) {}
           } else if (ent.isDirectory() && !isIgnorableDirEntry(ent.name)) {
             stack.push(path.join(dir, ent.name));
@@ -4487,24 +4520,15 @@ function createApp(db) {
   const { createThumbGenerateQueue } = require('./lib/thumb-generate-queue');
   const projekteNeuThumbQueue = createThumbGenerateQueue({ concurrency: 1 });
 
-  /** WebP-Vorschau; bei sharp-Fehler Originalbild (Browser zeigt ggf. kleineres Icon). */
+  /** WebP-Vorschau; bei sharp-Fehler kein OneDrive-Vollbild (hängt sonst die App). */
   async function buildProjekteNeuThumbnailBuffer(filePath, thumbMax) {
-    try {
-      const sharp = require('sharp');
-      const buf = await sharp(filePath)
-        .rotate()
-        .resize(thumbMax, thumbMax, { fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 82 })
-        .toBuffer();
-      return { buf, contentType: 'image/webp' };
-    } catch (thumbErr) {
-      const ext = path.extname(filePath).toLowerCase();
-      if (!PROJEKTE_NEU_RASTER_EXT.has(ext)) throw thumbErr;
-      return {
-        buf: fs.readFileSync(filePath),
-        contentType: PROJEKTE_NEU_RASTER_MIME[ext] || 'image/jpeg',
-      };
-    }
+    const sharp = require('sharp');
+    const buf = await sharp(win32FsPath(filePath))
+      .rotate()
+      .resize(thumbMax, thumbMax, { fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toBuffer();
+    return { buf, contentType: 'image/webp' };
   }
 
   function resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdOpt, resolveOpts) {
@@ -4531,7 +4555,7 @@ function createApp(db) {
   }
 
   function cacheKeyProjekteNeuThumb(fabValue, pnPath, thumbMax) {
-    return String(fabValue || '') + '\0' + String(pnPath || '') + '\0' + String(thumbMax || 256);
+    return normalizeScopeId(fabValue) + '\0' + String(pnPath || '') + '\0' + String(thumbMax || 256);
   }
 
   let thumbDbSaveTimer = null;
@@ -4605,21 +4629,19 @@ function createApp(db) {
     return thumbOut;
   }
 
-  async function fillProjekteNeuThumbCache(technicianId, fabValue, pnPath, thumbMax, filePathOpt) {
+  async function fillProjekteNeuThumbCache(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt) {
     const cached = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, null);
     if (cached && cached.buf && cached.buf.length) return cached;
     let filePath = filePathOpt || readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
-    if (!filePath) {
-      try {
-        filePath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, null, {
-          skipDeepSearch: true,
-        });
-      } catch (_) {
-        filePath = null;
-      }
+    if (filePath && hangDiag.classifyPathKind(filePath) === 'onedrive') {
+      filePath = null;
     }
     if (filePath) {
-      return generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath);
+      try {
+        return await generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath);
+      } catch (_) {
+        /* Dispo-Thumb statt OneDrive-Vollbild */
+      }
     }
     const remote = await fetchDispoProjekteNeuThumb(technicianId, fabValue, pnPath, thumbMax);
     if (remote) {
@@ -4643,10 +4665,10 @@ function createApp(db) {
     return null;
   }
 
-  function enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt) {
+  function enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt) {
     return projekteNeuThumbQueue.enqueue(
       { key: cacheKeyProjekteNeuThumb(fabValue, pnPath, thumbMax) },
-      () => fillProjekteNeuThumbCache(technicianId, fabValue, pnPath, thumbMax, filePathOpt),
+      () => fillProjekteNeuThumbCache(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt),
     );
   }
 
@@ -4671,8 +4693,9 @@ function createApp(db) {
     if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
       return sendProjekteNeuThumbResponse(res, cachedThumb, 'hit');
     }
-    if (preferCache && !filePathOpt) {
-      enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt).catch(() => {});
+    const jobIdOpt = opts && (opts.jobId || opts.job_id);
+    if (preferCache) {
+      enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt).catch(() => {});
       res.setHeader('X-Thumb-Cache', 'miss');
       res.setHeader('Retry-After', '1');
       return res.status(204).end();
@@ -4683,6 +4706,7 @@ function createApp(db) {
       pnPath,
       thumbMax,
       filePathOpt,
+      jobIdOpt,
     );
     if (!thumbOut || !thumbOut.buf || !thumbOut.buf.length) {
       return res.status(404).json({ ok: false, error: 'thumb_not_image', local_unavailable: true });
@@ -4690,21 +4714,54 @@ function createApp(db) {
     return sendProjekteNeuThumbResponse(res, thumbOut, 'generated');
   }
 
-  prewarmAnlagenstammGalleryThumbsImpl = function prewarmAnlagenstammGalleryThumbs(fab, gallery, technicianId) {
-    const fabNorm = String(fab || '').trim();
-    if (!fabNorm || !Array.isArray(gallery) || !gallery.length) return;
-    const techId = technicianId || getTechnicianId({ headers: {} }) || '';
-    const maxPrewarm = 8;
-    let queued = 0;
-    for (const it of gallery) {
-      if (queued >= maxPrewarm) break;
-      const rel = String((it && (it.rel_path || it.rel)) || '').trim();
-      if (!rel) continue;
-      const cached = readCachedProjekteNeuThumb(db, DB_DIR, fabNorm, rel, 256, null);
-      if (cached && cached.buf && cached.buf.length) continue;
-      enqueueProjekteNeuThumbFill(techId, fabNorm, rel, 256, null).catch(() => {});
-      queued += 1;
-    }
+  prewarmAnlagenstammGalleryThumbsImpl = function prewarmAnlagenstammGalleryThumbs() {
+    /* Galerie darf nicht hängen: Thumbs nur on-demand (prefer_cache 204). */
+  };
+
+  refreshMontageGalleryFilesImpl = async function refreshMontageGalleryFilesWork(fab) {
+    const key = montageGalleryCacheKey(fab);
+    if (!key) return;
+    if (montageGalleryRefreshInflight.has(key)) return montageGalleryRefreshInflight.get(key);
+    const run = (async () => {
+      await yieldEventLoop();
+      const { jobHasFab } = require('./lib/anlagenstamm-documents-local');
+      const {
+        listMontageRastersFromDokumenteMonteurPathsAsync,
+        GALLERY_MAX,
+      } = require('./lib/anlagenstamm-gallery-local');
+      let jobs = [];
+      try {
+        jobs = db.prepare('SELECT id, fabrikationsnummern FROM jobs').all();
+      } catch (_) {
+        montageGalleryFileCache.set(key, { files: [], at: Date.now() });
+        return;
+      }
+      const paths = [];
+      let n = 0;
+      for (const j of jobs) {
+        if (!jobHasFab(j.fabrikationsnummern, key)) continue;
+        n += 1;
+        if (n % 4 === 0) await yieldEventLoop();
+        let bound = '';
+        try {
+          const row = db.prepare('SELECT folder_path FROM job_reise_folder_binding WHERE local_job_id = ?').get(j.id);
+          bound = row && row.folder_path ? String(row.folder_path).trim() : '';
+        } catch (_) {
+          bound = '';
+        }
+        if (!bound) continue;
+        paths.push({ dm: path.join(bound, 'Dokumente_Monteur'), jobId: j.id });
+      }
+      const files = await listMontageRastersFromDokumenteMonteurPathsAsync(paths, fab, {
+        max: GALLERY_MAX,
+        yieldFn: yieldEventLoop,
+      });
+      montageGalleryFileCache.set(key, { files: files || [], at: Date.now() });
+    })().finally(() => {
+      montageGalleryRefreshInflight.delete(key);
+    });
+    montageGalleryRefreshInflight.set(key, run);
+    return run;
   };
 
   function cacheProjekteNeuTreesForJob(localJobId) {
@@ -4895,7 +4952,7 @@ function createApp(db) {
       if (wantThumb) {
         return serveProjekteNeuThumb(res, getTechnicianId(req), fab, relPath, thumbMax, filePath);
       }
-      const buf = fs.readFileSync(filePath);
+      const buf = fsReadFileSync(filePath);
       const ext = path.extname(baseName).toLowerCase();
       const mimeMap = {
         '.jpg': 'image/jpeg',
@@ -5661,7 +5718,35 @@ function createApp(db) {
     }
   });
 
-  app.get('/api/dienstreise/:id', (req, res) => {
+  app.get('/api/dienstreise/finish_file_list', (req, res) => {
+    try {
+      const localJobId = parseInt(req.query.job_id != null ? req.query.job_id : req.query.jobId, 10);
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const technicianId = parseInt(
+        req.query.technician_id != null ? req.query.technician_id : req.headers['x-technician-id'],
+        10,
+      );
+      const finishGate = gateDienstreiseWrite(db, technicianId, localJobId);
+      if (finishGate) return res.status(finishGate.status).json({ ok: false, error: finishGate.error });
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!reiseDir || !fs.existsSync(reiseDir)) {
+        return res.status(400).json({ ok: false, error: 'Dienstreise-Ordner nicht gefunden.' });
+      }
+      const auftragsordner = resolveMonteurAuftragsordnerName(localJobId, technicianId);
+      const listed = listFinishTransferFiles(reiseDir, auftragsordner);
+      res.json({
+        ok: true,
+        files: listed.files,
+        groups: listed.groups,
+        fn_options: listed.fn_options,
+        auftragsordner,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Dateiliste fehlgeschlagen.' });
+    }
+  });
+
+  app.get('/api/dienstreise/:id(\\d+)', (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ ok: false, error: 'id fehlt.' });
     const row = db.prepare('SELECT id, year, running_number, start_date, company_name, city, country_code, folder_name, created_at FROM dienstreisen WHERE id = ?').get(id);
@@ -6309,13 +6394,20 @@ function createApp(db) {
     if (!reiseDir || !fs.existsSync(reiseDir)) throw new Error('Dienstreise-Ordner nicht gefunden.');
 
     const auftragsordner = resolveMonteurAuftragsordnerName(localJobId, technicianId);
-    const monteurWorkOnly = (rel) => isMonteurWorkRelPath(rel, auftragsordner);
+    const transferRelPaths = parseOptionalTransferRelPaths(body);
+    const finishUploadOnly = (rel) => {
+      if (!isFinishUploadRelPath(rel, auftragsordner)) return false;
+      if (transferRelPaths !== undefined && isSonstigesRel(rel) && !transferRelMatches(rel, transferRelPaths)) {
+        return false;
+      }
+      return true;
+    };
     const changedBeforeFinish = await collectChangedDienstreiseSyncFileEntries(
       db,
       reiseDir,
       localJobId,
       FINISH_SYNC_FOLDERS,
-      monteurWorkOnly,
+      finishUploadOnly,
     );
     const verifyPlan = [];
     for (const folder of FINISH_SYNC_FOLDERS) {
@@ -6369,7 +6461,7 @@ function createApp(db) {
                 {
                   onlyChanged: true,
                   folders: FINISH_SYNC_FOLDERS,
-                  relPathPredicate: monteurWorkOnly,
+                  relPathPredicate: finishUploadOnly,
                   externalUrl: body.dispoExternalUrl || body.externalUrl,
                   internalUrl: body.dispoInternalUrl || body.internalUrl,
                 },
@@ -6579,8 +6671,12 @@ function createApp(db) {
             db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
           }
           clearPendingJobStatus(db, localJobId);
+          const pendingStatus = { status: 'erledigt' };
+          if (transferRelPaths !== undefined) {
+            pendingStatus.transfer_rel_paths = transferRelPaths;
+          }
           db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
-            .run('job', localJobId, 'status', JSON.stringify({ status: 'erledigt' }));
+            .run('job', localJobId, 'status', JSON.stringify(pendingStatus));
         } else {
           db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
         }
@@ -6618,11 +6714,14 @@ function createApp(db) {
           if (statusPushBase && serverJobId) {
             bumpProgress('finish_status', step, totalSteps, 'Status „erledigt“ wird an Dispo gesendet …');
             const authHeaderStatus = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
+            const statusExtra =
+              transferRelPaths !== undefined ? { transfer_rel_paths: transferRelPaths } : undefined;
             const pushRes = await pushJobStatusErledigtToDispo(
               statusPushBase,
               techIdForPush,
               serverJobId,
               authHeaderStatus,
+              statusExtra,
             );
             if (pushRes.ok) {
               clearPendingJobStatus(db, localJobId);
@@ -6641,6 +6740,75 @@ function createApp(db) {
         }
       }
   }
+
+  app.post('/api/dienstreise/finish_extra_files', async (req, res) => {
+    try {
+      const parsed = await parseMultipart(req);
+      const fields = parsed.fields || {};
+      const files = parsed.files || [];
+      const localJobId = parseInt(fields.job_id != null ? fields.job_id : fields.jobId, 10);
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const technicianId = parseInt(
+        fields.technician_id != null
+          ? fields.technician_id
+          : fields.technicianId != null
+            ? fields.technicianId
+            : req.headers['x-technician-id'],
+        10,
+      );
+      const finishGate = gateDienstreiseWrite(db, technicianId, localJobId);
+      if (finishGate) return res.status(finishGate.status).json({ ok: false, error: finishGate.error });
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!reiseDir || !fs.existsSync(reiseDir)) {
+        return res.status(400).json({ ok: false, error: 'Dienstreise-Ordner nicht gefunden.' });
+      }
+      const auftragsordner = resolveMonteurAuftragsordnerName(localJobId, technicianId);
+      let fnFolder = String(fields.fn || fields.fn_folder || fields.fnFolder || '').trim();
+      if (!fnFolder || fnFolder === 'Ohne FN') {
+        const listed = listFinishTransferFiles(reiseDir, auftragsordner);
+        fnFolder = listed.fn_options[0] || '';
+      }
+      if (!fnFolder) {
+        const jobRow = lookupDienstreiseJobRow(localJobId);
+        const fabs = fabNumbersFromJobFabrikationsnummern(jobRow && jobRow.fabrikationsnummern);
+        const firstFab = fabs && fabs.size ? [...fabs][0] : null;
+        if (firstFab) {
+          fnFolder = buildFnProjectFolderName({
+            fab: String(firstFab),
+            customer_name: jobRow && jobRow.customer_name,
+            city: jobRow && jobRow.city,
+            country: jobRow && jobRow.country,
+          });
+        }
+      }
+      if (!files.length) return res.status(400).json({ ok: false, error: 'Keine Datei.' });
+      const saved = [];
+      const skipped = [];
+      for (const f of files) {
+        try {
+          const row = saveFinishExtraFile({
+            reiseDir,
+            auftragsordner,
+            fnFolder,
+            filename: f.filename,
+            buffer: f.buffer,
+          });
+          saved.push(row);
+        } catch (fileErr) {
+          skipped.push((fileErr && fileErr.message) || String(f.filename || 'datei'));
+        }
+      }
+      if (!saved.length) {
+        return res.status(400).json({
+          ok: false,
+          error: skipped[0] || 'Keine Datei gespeichert.',
+        });
+      }
+      res.json({ ok: true, files: saved, skipped });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Zusatzdatei fehlgeschlagen.' });
+    }
+  });
 
   app.post('/api/dienstreise/finish_and_cleanup', express.json(), async (req, res) => {
     try {
@@ -6674,6 +6842,7 @@ function createApp(db) {
           internalUrl: body.dispoInternalUrl || body.internalUrl,
           technicianId,
           technician_id: technicianId,
+          transfer_rel_paths: Array.isArray(body.transfer_rel_paths) ? body.transfer_rel_paths : undefined,
           dispoUsername: (body.dispoUsername || body.dispo_username || '').trim(),
           dispo_username: (body.dispoUsername || body.dispo_username || '').trim(),
           dispoPassword:
@@ -8693,6 +8862,7 @@ function createApp(db) {
     if (sourceNorm === 'projekte_neu' && pnPath && wantThumb) {
       return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, null, {
         preferCache: true,
+        jobId: jobIdRaw,
       });
     }
     if (sourceNorm === 'projekte_neu' && pnPath) {
@@ -8819,18 +8989,15 @@ function createApp(db) {
       if (!technicianId || !fabValue) {
         return res.status(400).json({ success: false, error: 'fab erforderlich.' });
       }
-      if (wantThumb && sourceNorm === 'projekte_neu' && pnPath) {
+      if (wantThumb && pnPath) {
         thumbOpts.jobId = req.query.job_id || '';
-        const localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id, {
-          skipDeepSearch: true,
-        });
-        return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, localPath, thumbOpts);
+        return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, null, thumbOpts);
       }
       if (sourceNorm === 'projekte_neu' && pnPath) {
         const localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id, {
-          skipDeepSearch: wantThumb,
+          skipDeepSearch: true,
         });
-        if (localPath) {
+        if (localPath && hangDiag.classifyPathKind(localPath) !== 'onedrive') {
           try {
             const buf = fs.readFileSync(localPath);
             const baseName = path.basename(localPath);
@@ -8870,16 +9037,16 @@ function createApp(db) {
       if (localJobId && pnPath) {
         let filePath = null;
         if (sourceNorm === 'projekte_neu') {
-          filePath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath, { skipDeepSearch: wantThumb });
+          filePath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath, { skipDeepSearch: true });
         }
         if (!filePath) {
           const relNorm = pnPath.replace(/\//g, path.sep);
           filePath = resolveDienstreiseProjectFilePath(localJobId, relNorm);
         }
+        if (filePath && hangDiag.classifyPathKind(filePath) === 'onedrive') {
+          filePath = null;
+        }
         if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-          if (wantThumb) {
-            return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePath, thumbOpts);
-          }
           const buf = fs.readFileSync(filePath);
           const baseName = path.basename(filePath);
           res.setHeader('Content-Type', 'application/octet-stream');
@@ -16013,8 +16180,8 @@ function createApp(db) {
           const extra = [];
           try {
             const dm = path.join(targetDir, 'Dokumente_Monteur');
-            if (fs.existsSync(dm)) {
-              for (const ent of fs.readdirSync(dm, { withFileTypes: true })) {
+            if (fsExistsSync(dm)) {
+              for (const ent of fsReaddirSync(dm, { withFileTypes: true })) {
                 if (!ent.isDirectory() || isDokumenteMonteurReservedTopDir(ent.name)) continue;
                 extra.push({ folder_name_canonical: ent.name, fab: ent.name });
               }
@@ -16032,14 +16199,14 @@ function createApp(db) {
         }
 
         async function copyPullFileToSiblingRels(primaryAbs, localRels) {
-          if (!primaryAbs || !fs.existsSync(primaryAbs)) return;
+          if (!primaryAbs || !fsExistsSync(primaryAbs)) return;
           for (let s = 1; s < localRels.length; s++) {
             const siblingAbs = path.join(targetDir, String(localRels[s] || '').replace(/\//g, path.sep));
-            if (siblingAbs === primaryAbs || fs.existsSync(siblingAbs)) continue;
+            if (siblingAbs === primaryAbs || fsExistsSync(siblingAbs)) continue;
             try {
               const siblingDir = path.dirname(siblingAbs);
-              await fs.promises.mkdir(siblingDir, { recursive: true });
-              await fs.promises.copyFile(primaryAbs, siblingAbs);
+              await fs.promises.mkdir(win32FsPath(siblingDir), { recursive: true });
+              await fs.promises.copyFile(win32FsPath(primaryAbs), win32FsPath(siblingAbs));
             } catch (copyErr) {
               console.warn(
                 '[dienstreise_pull] PWA-Foto FN-Kopie',
@@ -16052,11 +16219,11 @@ function createApp(db) {
         function shouldSkip(relPath, expectedSize, expectedMtimeMs, completedArr) {
           const localRel = localRelsForPullFile(relPath)[0] || relPath;
           const lp = path.join(targetDir, localRel.replace(/\//g, path.sep));
-          if (!fs.existsSync(lp)) return false;
+          if (!fsExistsSync(lp)) return false;
           let localSize = null;
           let localMtimeMs = null;
           try {
-            const st = fs.statSync(lp);
+            const st = fsStatSync(lp);
             localSize = st.size;
             localMtimeMs = st.mtimeMs != null ? st.mtimeMs : st.mtime ? st.mtime.getTime() : null;
           } catch (_) {
@@ -16232,6 +16399,7 @@ function createApp(db) {
           const relPath = files[i].path;
           const expectedSize = files[i].size;
           const expectedMtimeMs = files[i].mtime_ms;
+          try {
           if (shouldSkip(relPath, expectedSize, expectedMtimeMs, completed)) {
             const localRelsSkip = localRelsForPullFile(relPath);
             const localRelSkip = localRelsSkip[0] || relPath;
@@ -16242,7 +16410,7 @@ function createApp(db) {
               DIENSTREISE_SYNC_FOLDERS.some((fd) => relNormSkip === fd || relNormSkip.startsWith(fd + '/'))
             ) {
               const lpSkip = path.join(targetDir, localRelSkip.replace(/\//g, path.sep));
-              if (fs.existsSync(lpSkip)) recordDienstreisePushCache(db, localJobId, relNormSkip, lpSkip);
+              if (fsExistsSync(lpSkip)) recordDienstreisePushCache(db, localJobId, relNormSkip, lpSkip);
             }
             setProgress('file', i + 1, total, relPath);
             continue;
@@ -16296,8 +16464,16 @@ function createApp(db) {
           mergeCheckpoint({ completed });
           setProgress('file', i + 1, total, relPath);
           await yieldEventLoop();
+          } catch (fileErr) {
+            if (fileErr && fileErr.name === 'AbortError') throw fileErr;
+            const fileMsg = fileErr && fileErr.message ? fileErr.message : String(fileErr);
+            console.warn('[dienstreise_pull] Datei übersprungen:', relPath, fileMsg);
+            copyWarning = [copyWarning, relPath + ': ' + fileMsg].filter(Boolean).join(' ');
+            setProgress('file', i + 1, total, relPath);
+          }
         }
         } catch (dlErr) {
+          if (dlErr && dlErr.name === 'AbortError') throw dlErr;
           if (acceptJob) {
             copyWarning = [copyWarning, formatFetchError(dlErr, dispoBaseUrl)].filter(Boolean).join(' ');
             console.warn('[dienstreise_pull] accept: Download unterbrochen.', copyWarning);
@@ -16362,7 +16538,10 @@ function createApp(db) {
               status_sync_warning: [statusSyncWarning, copyWarning].filter(Boolean).join(' ') || null,
             });
           } else {
-            mergeCheckpoint({ finalize_done: true });
+            mergeCheckpoint({
+              finalize_done: true,
+              status_sync_warning: copyWarning || null,
+            });
           }
         }
         try {
@@ -20936,10 +21115,14 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
             body: JSON.stringify({ job_id: serverJobId, status: 'in_arbeit' }),
           });
           if (mid.ok) {
+            const erledigtRetry = { job_id: serverJobId, status: 'erledigt' };
+            if (Array.isArray(payload.transfer_rel_paths)) {
+              erledigtRetry.transfer_rel_paths = payload.transfer_rel_paths;
+            }
             r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, {
               method: 'PATCH',
               headers: headerForJob,
-              body: JSON.stringify({ job_id: serverJobId, status: 'erledigt' }),
+              body: JSON.stringify(erledigtRetry),
             });
           }
         } catch (_) {

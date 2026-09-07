@@ -6,6 +6,7 @@ const {
   THUMB_KIND_PROJEKTE_NEU,
   readImageThumbCache,
   writeImageThumbCache,
+  normalizeScopeId,
 } = require('./image-thumb-cache');
 
 function makeMemDb() {
@@ -53,6 +54,20 @@ describe('image_thumb_cache', () => {
     const hit = readImageThumbCache(db, THUMB_KIND_PROJEKTE_NEU, '12300', '12229/IMG_3626.JPG', 256, null);
     assert.ok(hit);
     assert.equal(hit.contentType, 'image/webp');
+    assert.equal(Buffer.compare(hit.buf, buf), 0);
+  });
+
+  it('normalisiert FN-Scope damit 12304 und 12304_Kunde denselben Cache treffen', () => {
+    assert.equal(normalizeScopeId('12304'), '12304');
+    assert.equal(normalizeScopeId('12304_Kunde'), '12304');
+    const db = makeMemDb();
+    const buf = Buffer.from('RIFF....WEBPFAKE');
+    assert.equal(
+      writeImageThumbCache(db, THUMB_KIND_PROJEKTE_NEU, '12304_Kunde', 'Montage/a.jpg', 256, buf, 'image/webp', null),
+      true,
+    );
+    const hit = readImageThumbCache(db, THUMB_KIND_PROJEKTE_NEU, '12304', 'Montage/a.jpg', 256, null);
+    assert.ok(hit);
     assert.equal(Buffer.compare(hit.buf, buf), 0);
   });
 });

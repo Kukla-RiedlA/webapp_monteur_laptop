@@ -30,7 +30,7 @@
   <link rel="stylesheet" href="css/schleppketten-v2.css">
   <link rel="stylesheet" href="css/kunden-dokumentation.css">
   <link rel="stylesheet" href="css/abrechnung-web-parity.css">
-  <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260828">
+  <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260907">
   <link rel="stylesheet" href="css/hinweise.css?v=20260902files">
   <style>
     * { box-sizing: border-box; }
@@ -367,6 +367,11 @@
     .view-einstellungen.active { display: block; }
     .view-dienstreise { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-dienstreise.active { display: block; }
+    /* RAMS-UI vorübergehend aus, bis das Feature fertig ist. Zum Reaktivieren: data-rams-ui="off" am #viewDienstreise entfernen. */
+    #viewDienstreise[data-rams-ui="off"] .auftraege-tabs,
+    #viewDienstreise[data-rams-ui="off"] #auftraegePaneRamsFetch,
+    #viewDienstreise[data-rams-ui="off"] #auftraegePaneRamsCreate,
+    #viewDienstreise[data-rams-ui="off"] #ramsWizardOverlay { display: none !important; }
     .auftraege-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--accent); margin-bottom: 1rem; flex-wrap: wrap; }
     .auftraege-tab { background: transparent; border: 1px solid transparent; border-bottom: none; padding: 0.5rem 0.9rem; font: inherit; color: var(--muted); cursor: pointer; border-top-left-radius: 6px; border-top-right-radius: 6px; }
     .auftraege-tab:hover { color: var(--text); }
@@ -1259,6 +1264,148 @@
     .modal-overlay { position: fixed; top: var(--header-height); left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
     .modal-overlay.active { display: flex; }
     .accept-offline-overlay.modal-overlay.active { align-items: center; justify-content: center; padding: 1rem; z-index: 250; }
+    #modalFinishJobFiles.modal-overlay.active {
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 250;
+    }
+    #modalFinishJobFiles .finish-job-files-box {
+      width: min(96vw, 42rem);
+      max-width: min(96vw, 42rem);
+      max-height: calc(100vh - var(--header-height, 3.5rem) - 2rem);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+    #modalFinishJobFiles .finish-job-files-box h3 {
+      flex-shrink: 0;
+    }
+    #modalFinishJobFiles .finish-job-files-hint {
+      margin: 0 0 0.5rem;
+      font-size: 0.85rem;
+    }
+    #modalFinishJobFiles .finish-job-files-list {
+      flex: 1;
+      min-height: 8rem;
+      overflow: auto;
+      margin: 0 0 0.75rem;
+      border: 1px solid var(--accent, #cfe8d1);
+      border-radius: 8px;
+      background: var(--card, #fff);
+    }
+    #modalFinishJobFiles .finish-job-files-group {
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+    }
+    #modalFinishJobFiles .finish-job-files-group:last-child { border-bottom: none; }
+    #modalFinishJobFiles .finish-job-files-group-title {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      margin: 0;
+      padding: 0.4rem 0.65rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      background: var(--accent, #eefaf5);
+      color: var(--kukla-primary-hover, #0c6b4f);
+    }
+    #modalFinishJobFiles .finish-job-file-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      padding: 0.4rem 0.65rem;
+      cursor: default;
+    }
+    #modalFinishJobFiles .finish-job-file-row:hover {
+      background: rgba(14, 123, 90, 0.06);
+    }
+    #modalFinishJobFiles .finish-job-file-row input[type="checkbox"] {
+      flex-shrink: 0;
+      margin-top: 0.2rem;
+    }
+    #modalFinishJobFiles .finish-job-file-name {
+      flex: 1;
+      min-width: 0;
+      word-break: break-word;
+      color: var(--text, #1a1a1a);
+    }
+    #modalFinishJobFiles .finish-job-file-row:hover .finish-job-file-name {
+      text-decoration: underline;
+      color: var(--kukla-primary, #0e7b5a);
+    }
+    #modalFinishJobFiles .finish-job-file-meta {
+      flex-shrink: 0;
+      font-size: 0.78rem;
+      color: var(--muted, #5c5c5c);
+      white-space: nowrap;
+    }
+    #modalFinishJobFiles .finish-job-dropzone {
+      flex-shrink: 0;
+      border: 1px dashed var(--kukla-primary, #0e7b5a);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      margin-bottom: 0.65rem;
+      text-align: center;
+      background: var(--accent, #eefaf5);
+      font-size: 0.85rem;
+    }
+    #modalFinishJobFiles .finish-job-dropzone.is-dragover {
+      outline: 2px solid var(--kukla-primary, #0e7b5a);
+    }
+    #modalFinishJobFiles .finish-job-dropzone-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      justify-content: center;
+      align-items: center;
+      margin-top: 0.35rem;
+    }
+    #modalFinishJobFiles .finish-job-fn-select {
+      min-width: 8rem;
+      max-width: 100%;
+    }
+    #modalFinishJobFiles .finish-job-files-footer {
+      flex-shrink: 0;
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    @media (max-width: 720px) {
+      #modalFinishJobFiles .finish-job-files-box {
+        width: 96vw;
+        max-width: 96vw;
+        max-height: calc(100vh - var(--header-height, 3.5rem) - 1.5rem);
+      }
+      #modalFinishJobFiles .finish-job-file-row {
+        flex-wrap: wrap;
+      }
+      #modalFinishJobFiles .finish-job-file-meta {
+        width: 100%;
+        padding-left: 1.4rem;
+        white-space: normal;
+      }
+      #modalFinishJobFiles .finish-job-files-footer {
+        flex-direction: column;
+      }
+      #modalFinishJobFiles .finish-job-files-footer .btn {
+        width: 100%;
+      }
+    }
+    @media (max-height: 720px) {
+      #modalFinishJobFiles .finish-job-dropzone {
+        padding: 0.4rem 0.5rem;
+        margin-bottom: 0.4rem;
+      }
+      #modalFinishJobFiles .finish-job-files-hint {
+        font-size: 0.8rem;
+        margin-bottom: 0.35rem;
+      }
+      #modalFinishJobFiles .finish-job-files-list {
+        min-height: 5rem;
+      }
+    }
     /* Über dem Serviceprotokoll-iframe (sonst fängt das Embed alle Klicks). */
     #modalSpCatalog.modal-overlay.active {
       top: 0;
@@ -1669,7 +1816,7 @@
     <h1 class="app-title">Kukla Monteur Tool</h1>
     <nav class="toolbar" aria-label="Hauptnavigation">
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
-    <button class="btn btn-ghost" id="btnViewDienstreise" title="Auftragsliste, RAMS Abrufen und Erstellen">Aufträge</button>
+    <button class="btn btn-ghost" id="btnViewDienstreise" title="Auftragsliste">Aufträge</button>
     <button type="button" class="btn btn-ghost" id="btnViewAbrechnung" title="Abrechnung">Abrechnung</button>
     <button type="button" class="btn btn-ghost" id="btnViewZeitschreibung" title="Zeitschreibung">Zeitschreibung</button>
     <div class="toolbar-dropdown-wrap">
@@ -1824,6 +1971,29 @@
       </div>
     </div>
   </div>
+  <div id="modalFinishJobFiles" class="modal-overlay accept-offline-overlay" aria-hidden="true">
+    <div class="modal-box modal-box--wide finish-job-files-box" role="dialog" aria-labelledby="finishJobFilesTitle">
+      <h3 id="finishJobFilesTitle">Dateien nach PROJEKTE NEU</h3>
+      <p class="muted finish-job-files-hint">Haken setzen, was nach PROJEKTE NEU kopiert wird. Doppelklick öffnet die Datei zur Kontrolle.</p>
+      <div id="finishJobFilesList" class="finish-job-files-list"></div>
+      <div id="finishJobDropzone" class="finish-job-dropzone">
+        <div>Zusätzliche Dateien hierher ziehen oder suchen.</div>
+        <div class="finish-job-dropzone-actions">
+          <label class="muted" for="finishJobFnSelect" id="finishJobFnLabel">FN</label>
+          <select id="finishJobFnSelect" class="finish-job-fn-select" aria-labelledby="finishJobFnLabel"></select>
+          <button type="button" class="btn btn-ghost" id="finishJobFilesBrowse">Dateien suchen</button>
+          <input type="file" id="finishJobFilesInput" multiple hidden />
+        </div>
+      </div>
+      <p id="finishJobFilesMsg" class="muted" style="font-size:0.85rem;margin:0 0 0.5rem;" aria-live="polite"></p>
+      <div class="finish-job-files-footer">
+        <button type="button" class="btn btn-ghost" id="finishJobFilesBtnAll">Alle</button>
+        <button type="button" class="btn btn-ghost" id="finishJobFilesBtnNone">Keine</button>
+        <button type="button" class="btn btn-ghost" id="finishJobFilesBtnCancel">Abbrechen</button>
+        <button type="button" class="btn btn-primary" id="finishJobFilesBtnConfirm">Erledigt &amp; kopieren</button>
+      </div>
+    </div>
+  </div>
   <div id="modalAddAnlagen" class="modal-overlay accept-offline-overlay" aria-hidden="true">
     <div class="modal-box" role="dialog" aria-labelledby="modalAddAnlagenTitle" style="max-width:28rem;margin:auto;align-self:center;">
       <h3 id="modalAddAnlagenTitle">Anlage(n) hinzufügen</h3>
@@ -1864,7 +2034,7 @@
   <main id="view-zeitschreibung" class="view-zeitschreibung view-host-panel" aria-label="Zeitschreibung">
     <div id="zeitschreibung-host"></div>
   </main>
-  <main id="viewDienstreise" class="view-dienstreise view-auftraege" aria-label="Aufträge">
+  <main id="viewDienstreise" class="view-dienstreise view-auftraege" aria-label="Aufträge" data-rams-ui="off">
     <div class="card">
       <div class="auftraege-tabs" role="tablist" aria-label="Aufträge Untermenü">
         <button type="button" class="auftraege-tab is-active" role="tab" aria-selected="true" id="auftraegeTabList" data-auftraege-tab="list">Auftragsliste</button>

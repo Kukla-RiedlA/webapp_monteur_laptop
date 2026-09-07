@@ -14,11 +14,11 @@
       html: shell,
       scripts: [
         '/js/monteur-image-gallery.js',
-        '/js/anlagenstamm-thumb-loader.js?v=20260904hang',
+        '/js/anlagenstamm-thumb-loader.js?v=20260907hang2',
         '/assets/js/dispo/anlagenstamm_file_lists.js?v=20260904hang',
         '/assets/js/dispo/anlagenstamm_documents.js?v=20260904hang',
         '/assets/js/dispo/anlagenakte-form-viewer.js?v=20260817c',
-        '/assets/js/dispo/anlagenakte.js?v=20260904hang',
+        '/assets/js/dispo/anlagenakte.js?v=20260907hang2',
         '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260819akte',
         '/assets/js/dispo/anlagenstamm_motor_rows.js?v=20260904motor3',
         '/assets/js/dispo/anlagenstamm.js?v=20260904hang',
