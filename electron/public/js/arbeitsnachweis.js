@@ -63,13 +63,10 @@
   function applyJobKopf(job) {
     if (!job) return;
     jobData = job;
-    el('anCustomer').value = job.customer_name || job.customer || el('anCustomer').value || '';
-    var site = siteFromJob(job);
-    if (site) el('anSite').value = site;
-    var fabs = normalizeFabs(job.fabrikationsnummern);
-    if (fabs.length || !currentFabs().length) renderFabs(fabs);
-    var contacts = contactsFromJob(job);
-    fillContacts(contacts);
+    el('anCustomer').value = job.customer_name || job.customer || '';
+    el('anSite').value = siteFromJob(job);
+    renderFabs(normalizeFabs(job.fabrikationsnummern));
+    fillContacts(contactsFromJob(job));
   }
   function flagOn(v) {
     return v === true || v === 1 || v === '1';
@@ -799,15 +796,8 @@
     var sel = el('anJob');
     var opt = sel.options[sel.selectedIndex];
     var id = parseInt(sel.value, 10);
-    jobData = null;
-    if (!id) {
-      el('anCustomer').value = '';
-      el('anSite').value = '';
-      el('anTech').value = '';
-      renderFabs([]);
-      fillContacts([]);
-      return;
-    }
+    resetForm({ keepJob: true });
+    if (!id) return;
     var localId = parseInt(opt && opt.dataset.localId, 10) || id;
     var serverId = parseInt(opt && opt.dataset.serverId, 10) || id;
     applyJobKopf(findCachedJob(localId, serverId));
@@ -1177,17 +1167,32 @@
       persistLocal().catch(function () {});
     }, 700);
   }
-  function resetForm() {
+  function resetForm(opts) {
+    opts = opts || {};
+    var jobEl = el('anJob');
+    var keepJobValue = opts.keepJob && jobEl ? jobEl.value : '';
+    var keepJobIndex = opts.keepJob && jobEl ? jobEl.selectedIndex : -1;
+    var keepLang = opts.keepJob ? lang() : 'de';
     el('anForm').reset();
+    if (opts.keepJob && jobEl) {
+      jobEl.value = keepJobValue;
+      if (jobEl.value !== keepJobValue && keepJobIndex >= 0) jobEl.selectedIndex = keepJobIndex;
+    }
+    jobData = null;
+    lastDocNumber = '';
     el('anDocumentId').value = '';
     if (el('anLocalDocId')) el('anLocalDocId').value = '';
     el('anLocalUuid').value = uuid();
     el('anContentVersion').value = '1';
     if (el('anTimesheetApplied')) el('anTimesheetApplied').value = '0';
+    if (el('anSignerName')) el('anSignerName').value = '';
+    if (el('anSignerEmail')) el('anSignerEmail').value = '';
     el('anWorkBody').innerHTML = '';
     el('anPartsBody').innerHTML = '';
     renderFabs([]);
+    fillContacts([]);
     addWorkRow({ item_date: todayIso() });
+    updateSums();
     lastCustomerSig = false;
     signedFingerprint = '';
     el('anSigStatus').textContent = '';
@@ -1196,7 +1201,7 @@
       el('anLastSaved').textContent = '–';
       el('anLastSaved').title = lang() === 'en' ? 'Not saved yet' : 'Noch nicht gespeichert';
     }
-    document.querySelector('input[name="anLang"][value="de"]').checked = true;
+    setRadio('anLang', keepLang);
     applyLang();
     applyStatusUi({ status: 'entwurf' });
   }

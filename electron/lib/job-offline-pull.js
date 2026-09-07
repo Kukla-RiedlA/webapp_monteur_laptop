@@ -1,7 +1,7 @@
 'use strict';
 
 const { isMonteurDraftJsonBasename } = require('./multi-device-sync');
-const { isFnFolderAlias } = require('./projekte-neu-local');
+const { isFnFolderAlias, isProjekteNeuMontageFolderName } = require('./projekte-neu-local');
 
 const DM_PREFIX = 'Dokumente_Monteur/';
 /** Im Modus explicit: PROJEKTE NEU / Anlage nur über Baumauswahl, nicht pauschal aus Manifest. */
@@ -147,8 +147,17 @@ function shouldSkipPullPrefix(relPath) {
   return false;
 }
 
+function manifestRelIsProjekteNeuMontage(relPath) {
+  const parts = normManifestPath(relPath).split('/');
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    if (/^Montage$/i.test(parts[i]) && isProjekteNeuMontageFolderName(parts[i + 1])) return true;
+  }
+  return false;
+}
+
 function shouldAlwaysPullPrefix(relPath) {
   const norm = normManifestPath(relPath);
+  if (manifestRelIsProjekteNeuMontage(norm)) return false;
   for (const p of ALWAYS_PULL_PREFIXES) {
     if (norm === p || norm.startsWith(p + '/')) return true;
   }
@@ -181,6 +190,7 @@ function pathMatchesSelection(inner, prefixesMap) {
 function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
   const norm = normManifestPath(relPath);
   if (!norm) return false;
+  if (manifestRelIsProjekteNeuMontage(norm)) return false;
   if (isMonteurDraftJsonManifestPath(norm)) return false;
   if (pullMode === 'legacy') return true;
   if (shouldAlwaysPullPrefix(norm)) return true;

@@ -1,0 +1,255 @@
+:root {
+  --pdf-annot-bg: #eefaf5;
+  --pdf-annot-stage: #d7e8df;
+  --pdf-annot-ink: #c1121f;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  font-family: var(--kukla-font, "Segoe UI", system-ui, sans-serif);
+  color: var(--kukla-body-text, #1a1a1a);
+  background: var(--pdf-annot-bg);
+  overflow: hidden;
+}
+
+.pdf-annot-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.pdf-annot-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: #eefaf5;
+  border-bottom: 1px solid #cfe8d1;
+  flex-shrink: 0;
+}
+
+.pdf-annot-title {
+  min-width: 0;
+  flex: 1 1 180px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pdf-annot-status {
+  font-size: 12px;
+  color: var(--kukla-muted, #5c5c5c);
+  white-space: nowrap;
+}
+
+.pdf-annot-btn,
+.pdf-annot-tool {
+  border: 1px solid #cfe8d1;
+  background: #fff;
+  color: #1a1a1a;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pdf-annot-btn:hover,
+.pdf-annot-tool:hover {
+  background: #eefaf5;
+}
+
+.pdf-annot-btn[disabled],
+.pdf-annot-tool[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pdf-annot-btn-primary {
+  background: var(--kukla-primary, #0e7b5a);
+  border-color: var(--kukla-primary, #0e7b5a);
+  color: #fff;
+}
+
+.pdf-annot-btn-primary:hover {
+  background: var(--kukla-primary-hover, #0c6b4f);
+}
+
+.pdf-annot-tool {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pdf-annot-tool.is-active {
+  background: var(--kukla-primary, #0e7b5a);
+  border-color: var(--kukla-primary, #0e7b5a);
+  color: #fff;
+}
+
+.pdf-annot-tool.is-active:hover {
+  background: var(--kukla-primary-hover, #0c6b4f);
+}
+
+.pdf-annot-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pdf-annot-sep {
+  width: 1px;
+  height: 22px;
+  background: #cfe8d1;
+  margin: 0 4px;
+}
+
+.pdf-annot-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #cfe8d1;
+  padding: 0;
+  cursor: pointer;
+}
+
+.pdf-annot-swatch.is-active {
+  box-shadow: 0 0 0 2px var(--kukla-primary, #0e7b5a);
+}
+
+.pdf-annot-width {
+  border: 1px solid #cfe8d1;
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 13px;
+  background: #fff;
+}
+
+.pdf-annot-zoom-btn {
+  min-width: 34px;
+  padding-left: 8px;
+  padding-right: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.pdf-annot-zoom-label {
+  min-width: 52px;
+  border: 1px solid #cfe8d1;
+  background: #fff;
+  color: #1a1a1a;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pdf-annot-zoom-label:hover {
+  background: #eefaf5;
+}
+
+.pdf-annot-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--pdf-annot-stage);
+  padding: 16px 12px 32px;
+}
+
+.pdf-annot-error {
+  margin: 24px auto;
+  max-width: 520px;
+  background: #fff;
+  border: 1px solid #cfe8d1;
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+
+.pdf-page {
+  position: relative;
+  margin: 0 auto 16px;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+}
+
+.pdf-page canvas {
+  display: block;
+}
+
+.pdf-page-render {
+  width: 100%;
+  height: auto;
+}
+
+.pdf-page-ink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.pdf-page-texts {
+  position: absolute;
+  inset: 0;
+}
+
+.pdf-text-box {
+  position: absolute;
+  min-width: 24px;
+  max-width: 70%;
+  padding: 1px 3px;
+  font-size: 14px;
+  line-height: 1.25;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px dashed currentColor;
+  outline: none;
+  cursor: grab;
+  pointer-events: auto;
+  user-select: none;
+  touch-action: none;
+}
+
+.pdf-text-box.is-editing {
+  background: #fff;
+  border-style: solid;
+  cursor: text;
+  user-select: text;
+}
+
+.pdf-text-box.is-dragging {
+  cursor: grabbing;
+  background: #fff;
+}
+
+.pdf-page-texts {
+  pointer-events: none;
+}
+
+body.is-draw .pdf-page-ink { cursor: crosshair; }
+body.is-text .pdf-page-texts {
+  pointer-events: auto;
+  cursor: text;
+}
+body.is-text .pdf-page-ink { pointer-events: none; }
+body.is-eraser .pdf-page-ink { cursor: cell; }
+body.is-eraser .pdf-text-box { cursor: pointer; }
+body.is-move .pdf-page-ink { cursor: grab; }
+body.is-move .pdf-text-box { cursor: grab; }
+body.is-move .pdf-page-ink.is-dragging,
+body.is-move .pdf-text-box.is-dragging { cursor: grabbing; }

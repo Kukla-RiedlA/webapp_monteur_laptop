@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDF</title>
+  <link rel="stylesheet" href="css/kukla-brand.css" />
+  <link rel="stylesheet" href="css/pdf-annotator.css" />
+</head>
+<body class="is-pen">
+  <div class="pdf-annot-root">
+    <header class="pdf-annot-toolbar">
+      <div class="pdf-annot-title" id="pdfTitle">PDF</div>
+      <button type="button" class="pdf-annot-tool is-active" data-tool="pen" title="Freihand" aria-label="Freihand">
+        <svg class="pdf-annot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20c2-6 7-9 16-12"/><path d="M15.5 4.5l4 4"/></svg>
+      </button>
+      <button type="button" class="pdf-annot-tool" data-tool="line" title="Strich" aria-label="Strich">
+        <svg class="pdf-annot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19L19 5"/></svg>
+      </button>
+      <button type="button" class="pdf-annot-tool" data-tool="circle" title="Kreis" aria-label="Kreis">
+        <svg class="pdf-annot-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>
+      </button>
+      <button type="button" class="pdf-annot-tool" data-tool="text" title="Text" aria-label="Text">
+        <svg class="pdf-annot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14"/><path d="M12 6v13"/><path d="M8 19h8"/></svg>
+      </button>
+      <button type="button" class="pdf-annot-tool" data-tool="move" title="Verschieben" aria-label="Verschieben">
+        <svg class="pdf-annot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 13V4.5a1.5 1.5 0 0 1 3 0V12"/><path d="M11 11.2V6.5a1.5 1.5 0 1 1 3 0V12"/><path d="M14 11.8V8.5a1.5 1.5 0 1 1 3 0V14a6 6 0 0 1-6 6h-1.2A6 6 0 0 1 4.5 16L3.2 14.2a1.4 1.4 0 0 1 2-2L8 15"/></svg>
+      </button>
+      <button type="button" class="pdf-annot-tool" data-tool="eraser" title="Radierer" aria-label="Radierer">
+        <svg class="pdf-annot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.5 15.5L9 6a2 2 0 0 0-2.8 0L4 8.2a2 2 0 0 0 0 2.8l7.5 7.5H20"/><path d="M7.8 11.2l5 5"/></svg>
+      </button>
+      <span class="pdf-annot-sep"></span>
+      <button type="button" class="pdf-annot-swatch is-active" data-color="#c1121f" style="background:#c1121f" title="Rot"></button>
+      <button type="button" class="pdf-annot-swatch" data-color="#0e7b5a" style="background:#0e7b5a" title="Grün"></button>
+      <button type="button" class="pdf-annot-swatch" data-color="#1a1a1a" style="background:#1a1a1a" title="Schwarz"></button>
+      <select class="pdf-annot-width" id="pdfWidth" title="Stiftdicke">
+        <option value="1.5">Dünn</option>
+        <option value="2.5" selected>Mittel</option>
+        <option value="5">Dick</option>
+      </select>
+      <select class="pdf-annot-width" id="pdfTextSize" title="Textgröße" hidden>
+        <option value="10">Klein</option>
+        <option value="14" selected>Mittel</option>
+        <option value="20">Groß</option>
+        <option value="28">Sehr groß</option>
+      </select>
+      <span class="pdf-annot-sep"></span>
+      <button type="button" class="pdf-annot-btn pdf-annot-zoom-btn" id="pdfZoomOut" title="Verkleinern (Strg + −)">−</button>
+      <button type="button" class="pdf-annot-zoom-label" id="pdfZoomLabel" title="Seitenbreite (Strg + 0)">100%</button>
+      <button type="button" class="pdf-annot-btn pdf-annot-zoom-btn" id="pdfZoomIn" title="Vergrößern (Strg + +)">+</button>
+      <span class="pdf-annot-sep"></span>
+      <button type="button" class="pdf-annot-btn" id="pdfUndo">Rückgängig</button>
+      <button type="button" class="pdf-annot-btn pdf-annot-btn-primary" id="pdfSave">Speichern</button>
+      <button type="button" class="pdf-annot-btn" id="pdfSaveAs">Speichern unter</button>
+      <span class="pdf-annot-status" id="pdfStatus">Laden …</span>
+    </header>
+    <main class="pdf-annot-stage" id="pdfStage"></main>
+  </div>
+  <script type="module" src="js/pdf-annotator.js"></script>
+</body>
+</html>

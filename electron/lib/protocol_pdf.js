@@ -1564,6 +1564,11 @@ function rowInPdf(row) {
   return false;
 }
 
+/** PDF-Summenzeile: nur Σ-markierte Zeilen, auch wenn weitere Zeilen nur gedruckt werden. */
+function rowsForPdfSum(rows) {
+  return (Array.isArray(rows) ? rows : []).filter(rowInSumme);
+}
+
 /**
  * Kontrollwiegungsprotokoll – A4 Querformat, Tabellenlayout (Kukla-Corporate).
  */
@@ -1638,7 +1643,7 @@ async function generateKontrollwiegungPdfBuffer(payload, options) {
     let sumKontr = 0;
     let hasBandKontr = false;
     let any = false;
-    dataRows.forEach((row) => {
+    rowsForPdfSum(dataRows).forEach((row) => {
       any = true;
       keys.forEach((k) => {
         const n = parseLocaleNumber(row[k]);
@@ -2070,7 +2075,7 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
     let sumLeist = 0;
     let nLeist = 0;
     let any = false;
-    dataRows.forEach((row) => {
+    rowsForPdfSum(dataRows).forEach((row) => {
       any = true;
       const band = parseLocaleNumber(row.bandwaage_t);
       const pk = parseLocaleNumber(row.pruefkette_t);
@@ -4551,4 +4556,5 @@ module.exports = {
   htmlFragmentToPlainPdf,
   rowInSumme,
   rowInPdf,
+  rowsForPdfSum,
 };

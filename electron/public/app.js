@@ -120,6 +120,7 @@
       pdfCb.setAttribute('data-i18n-title-en', 'In PDF (required because included in total)');
     } else {
       pdfCb.disabled = false;
+      pdfCb.checked = false;
       pdfCb.title = 'Im PDF drucken';
       pdfCb.setAttribute('data-i18n-title-en', 'Print in PDF');
     }
@@ -14056,6 +14057,42 @@
     return openAnlagenstammProjekteNeuLocal(fab, pnRel, name, { jobId: jobId });
   }
 
+  /** Datei im Projektordner öffnen (Doppelklick / gleicher Weg wie „Öffnen“ für Dokumente). */
+  function openDienstreiseExplorerFileRow(row, jobId, listEl) {
+    if (!row || row.getAttribute('data-is-dir') === '1') return Promise.resolve();
+    if (row.getAttribute('data-anlage-db') === '1') {
+      return openDienstreiseAnlageDbFile(row, jobId).catch(function (err) {
+        if (typeof showToast === 'function') {
+          showToast((err && err.message) ? err.message : 'Datei konnte nicht geöffnet werden.');
+        }
+      });
+    }
+    var rel = row.getAttribute('data-relative-path') || '';
+    var fileNameEl = row.querySelector('.dienstreise-explorer-filename');
+    var name = fileNameEl ? fileNameEl.textContent.trim() : '';
+    if (rel && isProjekteNeuRasterImage(name || rel)) {
+      openDienstreiseProjectImageInLightbox(jobId, rel, {
+        alt: name,
+        listEl: listEl,
+      });
+      return Promise.resolve();
+    }
+    var fullPath = row.getAttribute('data-full-path');
+    if (!fullPath || typeof monteurApp === 'undefined' || !monteurApp.openPath) {
+      if (typeof showToast === 'function') showToast('Datei konnte nicht geöffnet werden.');
+      return Promise.resolve();
+    }
+    return Promise.resolve(monteurApp.openPath(fullPath)).then(function (r) {
+      if (r && r.ok === false && typeof showToast === 'function') {
+        showToast(r.error || 'Datei konnte nicht geöffnet werden.');
+      }
+    }).catch(function (err) {
+      if (typeof showToast === 'function') {
+        showToast((err && err.message) ? err.message : 'Datei konnte nicht geöffnet werden.');
+      }
+    });
+  }
+
   function explorerEntryStructSig(e) {
     if (!e) return '';
     return [
@@ -14326,6 +14363,10 @@
           listEl: listEl,
         });
       });
+      img.addEventListener('dblclick', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      });
     });
     listEl.querySelectorAll('[data-explorer-preview]').forEach(function (btn) {
       btn.addEventListener('click', function (ev) {
@@ -14457,14 +14498,12 @@
     });
     listEl.querySelectorAll('.dienstreise-explorer-row[data-is-dir="0"]').forEach(function (row) {
       row.style.cursor = 'pointer';
-      row.addEventListener('click', function (ev) {
+      if (!row.getAttribute('title')) row.setAttribute('title', 'Doppelklick zum Öffnen');
+      row.addEventListener('dblclick', function (ev) {
         if (ev.target.closest('.dienstreise-explorer-actions')) return;
         if (ev.target.closest('[data-explorer-thumb]')) return;
-        if (row.getAttribute('data-anlage-db') === '1') {
-          openDienstreiseAnlageDbFile(row, jobId).catch(function (err) {
-            showToast((err && err.message) ? err.message : 'Datei konnte nicht geöffnet werden.');
-          });
-        }
+        ev.preventDefault();
+        openDienstreiseExplorerFileRow(row, jobId, listEl);
       });
       row.addEventListener('contextmenu', function (ev) {
         if (ev.target.closest('.dienstreise-explorer-actions')) return;

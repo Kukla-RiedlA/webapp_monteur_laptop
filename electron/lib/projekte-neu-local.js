@@ -48,6 +48,14 @@ function isDatePrefixedProjectFolderName(name) {
 }
 
 /**
+ * Historischer Montage-/Service-Ordner aus PROJEKTE NEU: 2022_05_12_HN_Service
+ * Nicht der Laptop-Auftragsordner (2026-05-12_Firma_Ort_Land_Monteur).
+ */
+function isProjekteNeuMontageFolderName(name) {
+  return /^\d{4}_\d{2}_\d{2}(?:[_-]|$)/.test(String(name || '').trim());
+}
+
+/**
  * FN-Bereich aus Ordnernamen (Dispo-Konvention).
  * Beispiele: 11952 - 11958, 11952-11958, 11952-58, 11952 - 58, 500-501.
  * @returns {{ from: number, to: number }|null}
@@ -336,6 +344,7 @@ module.exports = {
   isFnFolderAlias,
   isRangeFnFolderName,
   isDatePrefixedProjectFolderName,
+  isProjekteNeuMontageFolderName,
   parseFnRangeFromFolderName,
   folderNameMatchesFab,
   parseFabNumber,

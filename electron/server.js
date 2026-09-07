@@ -137,6 +137,7 @@ const {
   findMonteurFolderForFab,
   folderNameMatchesFab,
   isDatePrefixedProjectFolderName,
+  isProjekteNeuMontageFolderName,
   isFnFolderAlias,
 } = require('./lib/projekte-neu-local');
 const {
@@ -308,6 +309,7 @@ const {
   readCachedProjekteNeuThumb,
   writeCachedProjekteNeuThumb,
 } = require('./lib/projekte-neu-file-cache');
+const { materializeOpenablePath } = require('./lib/openable-local-file');
 const {
   readImageThumbCache,
   writeImageThumbCache,
@@ -3455,6 +3457,27 @@ function createApp(db) {
     return n;
   }
 
+  function listBoundReiseDirsForAnnotator() {
+    ensureJobReiseFolderBindingSchema(db);
+    let rows = [];
+    try {
+      rows = db.prepare(
+        'SELECT folder_path FROM job_reise_folder_binding ORDER BY created_at DESC',
+      ).all();
+    } catch (_) {
+      rows = [];
+    }
+    const out = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const p = row && row.folder_path ? String(row.folder_path).trim() : '';
+      if (!p || seen.has(p.toLowerCase()) || !fs.existsSync(p)) continue;
+      seen.add(p.toLowerCase());
+      out.push(p);
+    }
+    return out;
+  }
+
   /**
    * Acrobat öffnet unter Windows oft still keine PDFs, wenn der Pfad Bullet-Zeichen (•) enthält.
    * Bestehende Reiseordner einmalig umbenennen und Binding aktualisieren.
@@ -3967,6 +3990,13 @@ function createApp(db) {
           (listRoot === 'Dokumente_Monteur' || listRoot === 'Dokumente_Anlage') &&
           looksLikeStaleFnOrProjectHeaderDir(name) &&
           !dirBelongsToCurrentFabs(name, fabMapForList)
+        ) {
+          continue;
+        }
+        if (
+          isDirectory &&
+          isProjekteNeuMontageFolderName(name) &&
+          /(^|\/)Montage$/i.test(listRoot)
         ) {
           continue;
         }
@@ -8973,7 +9003,19 @@ function createApp(db) {
         try {
           console.log('[anlagenstamm_file_open] local', localAll);
         } catch (_) {}
-        return res.json({ ok: true, path: localAll, filename: path.basename(localAll), source: 'local' });
+        const displayName =
+          pnPath.split(/[/\\]/).pop() || String(fallbackName || '').trim() || path.basename(localAll);
+        const openPath = materializeOpenablePath(
+          localAll,
+          path.join(DB_DIR, 'anlagenstamm_open'),
+          displayName,
+        );
+        return res.json({
+          ok: true,
+          path: openPath || localAll,
+          filename: path.basename(openPath || localAll),
+          source: 'local',
+        });
       }
       if (!localOnly) {
         const viaSess = await fetchProjekteNeuFileViaDispoSession(technicianId, fabValue, pnPath);
@@ -18454,6 +18496,11 @@ function createApp(db) {
     } catch (e) {
       return res.status(502).json({ ok: false, error: e.message || String(e) });
     }
+  });
+
+  const { registerPdfAnnotatorRoutes } = require('./lib/pdf-annotator-routes');
+  registerPdfAnnotatorRoutes(app, {
+    listReiseDirs: listBoundReiseDirsForAnnotator,
   });
 
   app.use(express.static(path.join(__dirname, 'public')));

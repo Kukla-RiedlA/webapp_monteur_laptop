@@ -25,6 +25,7 @@ const {
   isUsableFnHauptordnerName,
   resolveFabMapLocal,
 } = require('./monteur-montage-paths');
+const { shouldPullManifestFile } = require('./job-offline-pull');
 
 function tmpReise() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kukla-montage-'));
@@ -129,6 +130,51 @@ describe('monteur-montage-paths lazy mkdir', () => {
     assert.deepEqual(rels, [
       'Dokumente_Monteur/12304_Kunde_Ort_TR/Montage/2026-08-31_AO/Bilder/Allgemein/x.jpg',
     ]);
+  });
+
+  it('PROJEKTE-NEU-Montageordner werden nicht unter die FN kopiert', async () => {
+    const fn = '10066_Knauf UK, Sittingbourne';
+    const pn = '2022_05_12_HN_Service';
+    const ao = '2026-05-12_Knauf_Sittingbourne_UK_Riedl';
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage', ao, 'Protokolle'), { recursive: true });
+    const pnDir = path.join(reiseDir, 'Dokumente_Monteur', 'Montage', pn);
+    fs.mkdirSync(pnDir, { recursive: true });
+    fs.writeFileSync(path.join(pnDir, 'plan.pdf'), 'x');
+    await migrateTopLevelMontageIntoFnFolders(reiseDir, [{ fab: '10066', folder_name_canonical: fn }]);
+    assert.equal(
+      fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage', pn)),
+      false,
+    );
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage', ao, 'Protokolle')), true);
+  });
+
+  it('expand lässt PROJEKTE-NEU-Montagepfade auf Top-Level', () => {
+    const rels = expandTopLevelMontageRelToFnFolders(
+      'Dokumente_Monteur/Montage/2022_05_12_HN_Service/plan.pdf',
+      [{ fab: '10066', folder_name_canonical: '10066_Knauf UK, Sittingbourne' }],
+    );
+    assert.deepEqual(rels, ['Dokumente_Monteur/Montage/2022_05_12_HN_Service/plan.pdf']);
+  });
+
+  it('Pull übernimmt keine PROJEKTE-NEU-Montageordner', () => {
+    assert.equal(
+      shouldPullManifestFile(
+        'Dokumente_Monteur/Montage/2022_05_12_HN_Service/plan.pdf',
+        'explicit',
+        new Map(),
+        [],
+      ),
+      false,
+    );
+    assert.equal(
+      shouldPullManifestFile(
+        'Dokumente_Monteur/Montage/2026-05-12_Knauf_UK_Riedl/Bilder/Allgemein/a.jpg',
+        'explicit',
+        new Map(),
+        [],
+      ),
+      true,
+    );
   });
 
   it('Bereichs-FN-Fotos werden auf den kanonischen FN-Ordner gemappt', () => {

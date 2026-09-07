@@ -31,6 +31,7 @@ function loadElectronDotEnv() {
 loadElectronDotEnv();
 
 const { createCopilotProbe } = require('./lib/copilot-probe');
+const { looksLikePdfFile } = require('./lib/openable-local-file');
 let copilotProbe = null;
 function getCopilotProbe() {
   if (!copilotProbe) {
@@ -91,6 +92,13 @@ let imageGalleryWindows = null;
 let pdfViewerWindows = null;
 let anlagenstammAkteWindows = null;
 let bugReportWindows = null;
+
+function ensurePdfViewerWindows() {
+  if (!pdfViewerWindows) {
+    pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow, () => PORT);
+  }
+  return pdfViewerWindows;
+}
 
 function findWindowsUninstaller() {
   if (process.platform !== 'win32') return null;
@@ -477,12 +485,21 @@ async function openDienstreisePath(filePath) {
       return { ok: false, error: 'Datei nicht gefunden: ' + normalized };
     }
     trace('exists', normalized);
-    // PDFs immer im Electron-Chromium-Viewer – Acrobat scheitert an langen OneDrive-Pfaden.
-    if (String(path.extname(normalized)).toLowerCase() === '.pdf') {
-      if (!pdfViewerWindows) {
-        pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
+    // PDFs immer im Electron-Viewer (Skizze + Text) – auch ohne .pdf-Endung (PROJEKTE-NEU-Cache).
+    if (looksLikePdfFile(normalized)) {
+      let pdfPath = normalized;
+      if (!/\.pdf$/i.test(normalized)) {
+        try {
+          const tmpDir = app.getPath('temp');
+          pdfPath = path.join(tmpDir, `kukla_pdfopen_${Date.now()}.pdf`);
+          fs.copyFileSync(normalized, pdfPath);
+          trace('pdf.namedCopy', pdfPath);
+        } catch (e) {
+          trace('pdf.namedCopy.fail', e && e.message ? e.message : String(e));
+          pdfPath = normalized;
+        }
       }
-      const pdfResult = await pdfViewerWindows.openPdf(normalized);
+      const pdfResult = await ensurePdfViewerWindows().openPdf(pdfPath);
       trace('pdf.electronViewer', pdfResult && pdfResult.ok ? 'ok' : (pdfResult && pdfResult.error) || 'fail');
       return pdfResult;
     }
@@ -529,11 +546,18 @@ async function openDienstreisePath(filePath) {
 ipcMain.handle('dienstreise:open-path', async (_event, filePath) => openDienstreisePath(filePath));
 
 ipcMain.handle('pdf:open-viewer', async (_event, filePath) => {
-  if (!pdfViewerWindows) {
-    pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
-  }
   console.log('[pdf:open-viewer]', filePath);
-  const result = await pdfViewerWindows.openPdf(filePath);
+  const normalized = path.normalize(String(filePath || '').trim());
+  let pdfPath = normalized;
+  if (looksLikePdfFile(normalized) && !/\.pdf$/i.test(normalized)) {
+    try {
+      pdfPath = path.join(app.getPath('temp'), `kukla_pdfopen_${Date.now()}.pdf`);
+      fs.copyFileSync(normalized, pdfPath);
+    } catch (_) {
+      pdfPath = normalized;
+    }
+  }
+  const result = await ensurePdfViewerWindows().openPdf(pdfPath);
   console.log('[pdf:open-viewer] result', result && result.ok ? 'ok' : (result && result.error));
   return result;
 });
@@ -878,7 +902,7 @@ app.whenReady().then(() => {
   installLocalGatewayWebRequest(PORT);
   configureSpellCheckerSession();
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
-  pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
+  pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow, () => PORT);
   anlagenstammAkteWindows = createAnlagenstammAkteWindowManager(() => mainWindow, () => PORT);
   bugReportWindows = createBugReportWindowManager(() => mainWindow, () => PORT, () => app.getPath('userData'));
   initLaptopUpdater({ getMainWindow: () => mainWindow });

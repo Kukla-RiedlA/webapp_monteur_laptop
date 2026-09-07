@@ -11,6 +11,7 @@ const {
   collectExactFnFolderMatches,
   folderNameMatchesFab,
   isDatePrefixedProjectFolderName,
+  isProjekteNeuMontageFolderName,
   parseFnRangeFromFolderName,
   parseFabNumber,
   pickFnRangeDir,
@@ -248,6 +249,7 @@ function expandTopLevelMontageRelToFnFolders(relPath, fabFolderEntries) {
     .replace(/^\/+/, '');
   const m = /^Dokumente_Monteur\/Montage\/([^/]+)\/(.+)$/i.exec(norm);
   if (!m) return [norm];
+  if (isProjekteNeuMontageFolderName(m[1])) return [norm];
   const fns = canonicalFnFolderNames(fabFolderEntries);
   if (!fns.length) return [norm];
   return fns.map((fn) => ['Dokumente_Monteur', fn, 'Montage', m[1], ...m[2].split('/')].join('/'));
@@ -280,6 +282,7 @@ async function copyDirContentsInto(srcDir, dstDir) {
   if (!fs.existsSync(dstDir)) fs.mkdirSync(dstDir, { recursive: true });
   let n = 0;
   for (const ent of names) {
+    if (isProjekteNeuMontageFolderName(ent.name)) continue;
     const src = path.join(srcDir, ent.name);
     const dst = path.join(dstDir, ent.name);
     try {
@@ -746,6 +749,7 @@ function mergeDirContentsInto(srcDir, dstDir) {
   return (async () => {
     let n = 0;
     for (const ent of names) {
+      if (isProjekteNeuMontageFolderName(ent.name)) continue;
       const src = path.join(srcDir, ent.name);
       const dst = path.join(dstDir, ent.name);
       try {
@@ -996,6 +1000,7 @@ async function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, 
     }
     const candidates = [];
     for (const child of children) {
+      if (isProjekteNeuMontageFolderName(child)) continue;
       if (child === desired) continue;
       if (previousName && child === previousName) {
         candidates.push(child);
@@ -1159,6 +1164,7 @@ module.exports = {
   isBareFabFolderName,
   PHOTO_SPECIAL_CATEGORIES,
   isDokumenteMonteurReservedTopDir,
+  isProjekteNeuMontageFolderName,
   isMonteurPhotoCategoryRel,
   buildMonteurPhotoCategoryRelDir,
   expandTopLevelMontageRelToFnFolders,
