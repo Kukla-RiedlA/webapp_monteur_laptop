@@ -306,6 +306,7 @@ const {
   compareParameterFilesById,
   buildParameterTrendChain,
   syncProjekteNeuTreesFromDispo,
+  syncProjekteNeuThumbsFromDispo,
   ensureAnlagenstammTreeCacheSchema,
   readAnlagenstammTreeCacheRow,
   upsertAnlagenstammTreeCacheRow,
@@ -10766,6 +10767,7 @@ function createApp(db) {
         wiegungen: Array.isArray(body.wiegungen) ? body.wiegungen : [],
         languages: parseProtocolLanguages(body),
         pdf_languages: parseProtocolLanguages(body),
+        include_in_pdf: body.include_in_pdf !== false,
       };
       const record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, fab, entry, db, localJobId);
       const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
@@ -10826,6 +10828,7 @@ function createApp(db) {
         bereich_max: body.bereich_max != null ? String(body.bereich_max).trim() : '',
         letzte_eichung: body.letzte_eichung != null ? String(body.letzte_eichung).trim() : '',
         wiegungen: Array.isArray(body.wiegungen) ? body.wiegungen : [],
+        include_in_pdf: body.include_in_pdf !== false,
         dispoBaseUrl,
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
@@ -11681,6 +11684,7 @@ function createApp(db) {
         inbetriebnahme_id: body.inbetriebnahme_id || null,
         languages: storedLangs,
         pdf_languages: storedLangs,
+        include_in_pdf: body.include_in_pdf !== false,
         dispoBaseUrl,
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
@@ -13238,6 +13242,7 @@ function createApp(db) {
         kopf_dwc: String(body.kopf_dwc || ''),
         abschluss: normalizeServiceprotokollAbschluss(body.abschluss),
         motoren: pickProtocolMotors(body),
+        include_in_pdf: body.include_in_pdf !== false,
       };
       const langsMaybe = parseProtocolLanguagesMaybe(body);
       if (langsMaybe && langsMaybe.length) {
@@ -13541,6 +13546,7 @@ function createApp(db) {
           languages: pdfLangs,
           pdf_languages: pdfLangs,
           motoren: pickProtocolMotors(p),
+          include_in_pdf: p.include_in_pdf !== false,
         };
         if (applyToAnlagenstamm) {
           try {
@@ -16869,6 +16875,52 @@ function createApp(db) {
                     pnTreeSync.skipped || 0,
                     'unverändert, gesamt',
                     pnTreeSync.total_count || 0,
+                    pnTreeSync.delta ? '(delta)' : '(voll)',
+                  );
+                }
+                try {
+                  const pnThumbSync = await syncProjekteNeuThumbsFromDispo(
+                    db,
+                    {
+                      baseUrl: base,
+                      externalUrl: p.externalUrl,
+                      internalUrl: p.internalUrl,
+                      technician_id: technicianId,
+                      serverUsername: p.serverUsername,
+                      serverPassword: p.serverPassword,
+                    },
+                    (prog) => {
+                      if (prog && prog.page && prog.totalPages) {
+                        const label =
+                          (prog.resuming ? 'Fortsetzung ' : '') +
+                          'PROJEKTE-NEU-Thumbs ' +
+                          prog.page +
+                          '/' +
+                          prog.totalPages;
+                        setProgress('anlagenstamm_pn_thumbs', prog.page, prog.totalPages, label);
+                      }
+                    },
+                    { dbLock, save },
+                  );
+                  if (pnThumbSync.ok) {
+                    console.log(
+                      '[sync_pull] anlagenstamm_pn_thumbs:',
+                      pnThumbSync.written || 0,
+                      'geschrieben, gesamt FNs',
+                      pnThumbSync.total_count || 0,
+                      pnThumbSync.delta ? '(delta)' : '(voll)',
+                    );
+                  } else if (pnThumbSync._notFound) {
+                    console.warn(
+                      '[sync_pull] anlagenstamm_pn_thumbs: Export nicht verfügbar (Server-Update).',
+                    );
+                  } else {
+                    console.warn('[sync_pull] anlagenstamm_pn_thumbs:', pnThumbSync.error || 'fehlgeschlagen');
+                  }
+                } catch (thumbErr) {
+                  console.warn(
+                    '[sync_pull] anlagenstamm_pn_thumbs:',
+                    thumbErr && thumbErr.message ? thumbErr.message : thumbErr,
                   );
                 }
                 const bothSkipped = !!(syncResult.skipped && pnTreeSync.skipped);
@@ -17006,7 +17058,51 @@ function createApp(db) {
               pnTreeSync.skipped || 0,
               'unverändert, gesamt',
               pnTreeSync.total_count || 0,
+              pnTreeSync.delta ? '(delta)' : '(voll)',
             );
+            try {
+              const pnThumbSync = await syncProjekteNeuThumbsFromDispo(
+                db,
+                {
+                  baseUrl: base,
+                  externalUrl: p.externalUrl,
+                  internalUrl: p.internalUrl,
+                  technician_id: technicianId,
+                  serverUsername: p.serverUsername,
+                  serverPassword: p.serverPassword,
+                },
+                (prog) => {
+                  if (prog && prog.page && prog.totalPages) {
+                    const label =
+                      (prog.resuming ? 'Fortsetzung ' : '') +
+                      'PROJEKTE-NEU-Thumbs ' +
+                      prog.page +
+                      '/' +
+                      prog.totalPages;
+                    setProgress('anlagenstamm_pn_thumbs', prog.page, prog.totalPages, label);
+                  }
+                },
+                { dbLock, save },
+              );
+              if (pnThumbSync.ok) {
+                console.log(
+                  '[anlagenstamm_db_sync] anlagenstamm_pn_thumbs:',
+                  pnThumbSync.written || 0,
+                  'geschrieben, gesamt FNs',
+                  pnThumbSync.total_count || 0,
+                  pnThumbSync.delta ? '(delta)' : '(voll)',
+                );
+              } else if (pnThumbSync._notFound) {
+                console.warn('[anlagenstamm_db_sync] anlagenstamm_pn_thumbs: Export nicht verfügbar.');
+              } else {
+                console.warn('[anlagenstamm_db_sync] anlagenstamm_pn_thumbs:', pnThumbSync.error || 'fehlgeschlagen');
+              }
+            } catch (thumbErr) {
+              console.warn(
+                '[anlagenstamm_db_sync] anlagenstamm_pn_thumbs:',
+                thumbErr && thumbErr.message ? thumbErr.message : thumbErr,
+              );
+            }
           } else if (pnTreeSync._notFound) {
             console.warn(
               '[anlagenstamm_db_sync] anlagenstamm_pn_tree: DB-Export nicht verfügbar — kein Dateisystem-Fallback im Sync.',

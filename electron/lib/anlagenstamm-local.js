@@ -10,6 +10,13 @@ const {
 } = require('./dispo-base-fallback');
 const hangDiag = require('./hang-diagnostics');
 const fnLeistungSplit = require('./anlagenstamm-fn-leistung-split');
+const {
+  THUMB_KIND_PROJEKTE_NEU,
+  writeImageThumbCache,
+  deleteImageThumbCacheExcept,
+  deleteImageThumbCacheScope,
+  ensureImageThumbCacheSchema,
+} = require('./image-thumb-cache');
 
 const DISPO_EXPORT_CHUNK_TIMEOUT_MS = 90 * 1000;
 
@@ -132,7 +139,14 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       stamm_phase_completed INTEGER NOT NULL DEFAULT 0,
       pn_tree_next_page INTEGER NOT NULL DEFAULT 1,
       pn_tree_total_pages INTEGER NOT NULL DEFAULT 0,
-      pn_tree_phase_completed INTEGER NOT NULL DEFAULT 0
+      pn_tree_phase_completed INTEGER NOT NULL DEFAULT 0,
+      pn_tree_since TEXT,
+      pn_tree_last_full_at TEXT,
+      pn_thumbs_next_page INTEGER NOT NULL DEFAULT 1,
+      pn_thumbs_total_pages INTEGER NOT NULL DEFAULT 0,
+      pn_thumbs_phase_completed INTEGER NOT NULL DEFAULT 0,
+      pn_thumbs_since TEXT,
+      pn_thumbs_last_full_at TEXT
     )`);
   if (dbOrSql && typeof dbOrSql.prepare === 'function') {
     try {
@@ -155,6 +169,27 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       }
       if (!names.has('pn_tree_phase_completed')) {
         run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_tree_phase_completed INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!names.has('pn_tree_since')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_tree_since TEXT');
+      }
+      if (!names.has('pn_tree_last_full_at')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_tree_last_full_at TEXT');
+      }
+      if (!names.has('pn_thumbs_next_page')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_thumbs_next_page INTEGER NOT NULL DEFAULT 1');
+      }
+      if (!names.has('pn_thumbs_total_pages')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_thumbs_total_pages INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!names.has('pn_thumbs_phase_completed')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_thumbs_phase_completed INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!names.has('pn_thumbs_since')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_thumbs_since TEXT');
+      }
+      if (!names.has('pn_thumbs_last_full_at')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_thumbs_last_full_at TEXT');
       }
     } catch (err) {
       const msg = err && err.message ? String(err.message) : String(err);
@@ -1456,6 +1491,13 @@ function defaultAnlagenstammSyncResumeState() {
     pn_tree_next_page: 1,
     pn_tree_total_pages: 0,
     pn_tree_phase_completed: false,
+    pn_tree_since: '',
+    pn_tree_last_full_at: null,
+    pn_thumbs_next_page: 1,
+    pn_thumbs_total_pages: 0,
+    pn_thumbs_phase_completed: false,
+    pn_thumbs_since: '',
+    pn_thumbs_last_full_at: null,
     resume_pending: false,
   };
 }
@@ -1466,15 +1508,20 @@ function getAnlagenstammSyncResumeState(db) {
     .prepare(
       `SELECT last_full_sync_at, last_page, total_count, sync_error,
               stamm_next_page, stamm_total_pages, stamm_phase_completed,
-              pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed
+              pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed,
+              pn_tree_since, pn_tree_last_full_at,
+              pn_thumbs_next_page, pn_thumbs_total_pages, pn_thumbs_phase_completed,
+              pn_thumbs_since, pn_thumbs_last_full_at
        FROM anlagenstamm_sync_state WHERE id = 1`,
     )
     .get();
   if (!row) return defaultAnlagenstammSyncResumeState();
   const stammDone = Number(row.stamm_phase_completed) === 1;
   const pnDone = Number(row.pn_tree_phase_completed) === 1;
+  const pnThumbsDone = Number(row.pn_thumbs_phase_completed) === 1;
   const stammNext = Math.max(1, Number(row.stamm_next_page) || 1);
   const pnNext = Math.max(1, Number(row.pn_tree_next_page) || 1);
+  const pnThumbsNext = Math.max(1, Number(row.pn_thumbs_next_page) || 1);
   return {
     last_full_sync_at: row.last_full_sync_at || null,
     last_page: row.last_page != null ? Number(row.last_page) : 0,
@@ -1486,7 +1533,19 @@ function getAnlagenstammSyncResumeState(db) {
     pn_tree_next_page: pnNext,
     pn_tree_total_pages: Number(row.pn_tree_total_pages) || 0,
     pn_tree_phase_completed: pnDone,
-    resume_pending: (!stammDone && stammNext > 1) || (!pnDone && pnNext > 1) || (stammDone && !pnDone),
+    pn_tree_since: row.pn_tree_since ? String(row.pn_tree_since) : '',
+    pn_tree_last_full_at: row.pn_tree_last_full_at || null,
+    pn_thumbs_next_page: pnThumbsNext,
+    pn_thumbs_total_pages: Number(row.pn_thumbs_total_pages) || 0,
+    pn_thumbs_phase_completed: pnThumbsDone,
+    pn_thumbs_since: row.pn_thumbs_since ? String(row.pn_thumbs_since) : '',
+    pn_thumbs_last_full_at: row.pn_thumbs_last_full_at || null,
+    resume_pending:
+      (!stammDone && stammNext > 1) ||
+      (!pnDone && pnNext > 1) ||
+      (!pnThumbsDone && pnThumbsNext > 1) ||
+      (stammDone && !pnDone) ||
+      (pnDone && !pnThumbsDone),
   };
 }
 
@@ -1506,18 +1565,57 @@ function isAnlagenstammFullSyncTtlExpired(lastFullSyncAt) {
   return Date.now() - ms >= ANLAGENSTAMM_FULL_RESYNC_TTL_MS;
 }
 
+const PN_TREE_FULL_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
+
+function parseSyncTimestampMs(raw) {
+  if (raw == null || String(raw).trim() === '') return NaN;
+  let iso = String(raw).trim();
+  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso)) {
+    iso = iso.includes('T') ? iso + 'Z' : iso.replace(' ', 'T') + 'Z';
+  } else if (!iso.includes('T')) {
+    iso = iso.replace(' ', 'T');
+  }
+  return Date.parse(iso);
+}
+
+function isPnFullRefreshDue(lastFullAt) {
+  const ms = parseSyncTimestampMs(lastFullAt);
+  if (!Number.isFinite(ms)) return true;
+  return Date.now() - ms >= PN_TREE_FULL_REFRESH_MS;
+}
+
 /** Sync-Phasen zurücksetzen (manueller Vollabgleich oder TTL-Ablauf). */
-function resetAnlagenstammSyncPhases(db) {
+function resetAnlagenstammSyncPhases(db, options) {
   ensureAnlagenstammLocalSchema(db);
-  db.prepare(
-    `INSERT INTO anlagenstamm_sync_state (id, stamm_next_page, stamm_total_pages, stamm_phase_completed,
-      pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed, sync_error)
-     VALUES (1, 1, 0, 0, 1, 0, 0, NULL)
-     ON CONFLICT(id) DO UPDATE SET
-       stamm_next_page = 1, stamm_total_pages = 0, stamm_phase_completed = 0,
-       pn_tree_next_page = 1, pn_tree_total_pages = 0, pn_tree_phase_completed = 0,
-       sync_error = NULL`,
-  ).run();
+  const resetWatermarks = !!(options && options.resetWatermarks);
+  if (resetWatermarks) {
+    db.prepare(
+      `INSERT INTO anlagenstamm_sync_state (id, stamm_next_page, stamm_total_pages, stamm_phase_completed,
+        pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed,
+        pn_thumbs_next_page, pn_thumbs_total_pages, pn_thumbs_phase_completed,
+        pn_tree_since, pn_tree_last_full_at, pn_thumbs_since, pn_thumbs_last_full_at, sync_error)
+       VALUES (1, 1, 0, 0, 1, 0, 0, 1, 0, 0, NULL, NULL, NULL, NULL, NULL)
+       ON CONFLICT(id) DO UPDATE SET
+         stamm_next_page = 1, stamm_total_pages = 0, stamm_phase_completed = 0,
+         pn_tree_next_page = 1, pn_tree_total_pages = 0, pn_tree_phase_completed = 0,
+         pn_thumbs_next_page = 1, pn_thumbs_total_pages = 0, pn_thumbs_phase_completed = 0,
+         pn_tree_since = NULL, pn_tree_last_full_at = NULL,
+         pn_thumbs_since = NULL, pn_thumbs_last_full_at = NULL,
+         sync_error = NULL`,
+    ).run();
+  } else {
+    db.prepare(
+      `INSERT INTO anlagenstamm_sync_state (id, stamm_next_page, stamm_total_pages, stamm_phase_completed,
+        pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed,
+        pn_thumbs_next_page, pn_thumbs_total_pages, pn_thumbs_phase_completed, sync_error)
+       VALUES (1, 1, 0, 0, 1, 0, 0, 1, 0, 0, NULL)
+       ON CONFLICT(id) DO UPDATE SET
+         stamm_next_page = 1, stamm_total_pages = 0, stamm_phase_completed = 0,
+         pn_tree_next_page = 1, pn_tree_total_pages = 0, pn_tree_phase_completed = 0,
+         pn_thumbs_next_page = 1, pn_thumbs_total_pages = 0, pn_thumbs_phase_completed = 0,
+         sync_error = NULL`,
+    ).run();
+  }
   return getAnlagenstammSyncResumeState(db);
 }
 
@@ -1528,7 +1626,7 @@ function resetAnlagenstammSyncPhases(db) {
 function prepareAnlagenstammSyncRun(db, options) {
   ensureAnlagenstammLocalSchema(db);
   if (options && options.forceFull) {
-    return resetAnlagenstammSyncPhases(db);
+    return resetAnlagenstammSyncPhases(db, { resetWatermarks: true });
   }
   const state = getAnlagenstammSyncResumeState(db);
   if (state.sync_error) {
@@ -1994,11 +2092,14 @@ function upsertAnlagenstammTreeCacheRow(db, fab, pnRaw, meta) {
   `).run(fabNorm, enabled, treeJson, syncedAt, sig || null, truncated, rootFolderName || null);
 }
 
-async function fetchPnTreeExportChunk(base, technicianId, authHeader, page, pageSize) {
+async function fetchPnTreeExportChunk(base, technicianId, authHeader, page, pageSize, sinceUpdatedAt) {
   const relativePhp = '/dispo_api/api/anlagenstamm_pn_tree_export_chunk.php';
   const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), PN_TREE_EXPORT_CHUNK_TIMEOUT_MS);
+  const body = { page, page_size: pageSize };
+  const since = String(sinceUpdatedAt || '').trim();
+  if (since) body.since_updated_at = since;
   try {
     const r = await fetch(url, {
       method: 'POST',
@@ -2006,7 +2107,7 @@ async function fetchPnTreeExportChunk(base, technicianId, authHeader, page, page
         { 'Content-Type': 'application/json' },
         dispoMonteurFetchHeaders(technicianId, authHeader),
       ),
-      body: JSON.stringify({ page, page_size: pageSize }),
+      body: JSON.stringify(body),
       signal: ac.signal,
     });
     const data = await r.json().catch(() => ({}));
@@ -2029,8 +2130,46 @@ async function fetchPnTreeExportChunk(base, technicianId, authHeader, page, page
   }
 }
 
+function markPnTreeWatermark(db, since, isFull) {
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  if (isFull) {
+    db.prepare(
+      `INSERT INTO anlagenstamm_sync_state (id, pn_tree_since, pn_tree_last_full_at)
+       VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET pn_tree_since = excluded.pn_tree_since, pn_tree_last_full_at = excluded.pn_tree_last_full_at`,
+    ).run(since || now, now);
+  } else {
+    db.prepare(
+      `INSERT INTO anlagenstamm_sync_state (id, pn_tree_since)
+       VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET pn_tree_since = excluded.pn_tree_since`,
+    ).run(since || now);
+  }
+}
+
+function purgeAnlagenstammTreeCacheOrphans(db, seenFabs) {
+  ensureAnlagenstammTreeCacheSchema(db);
+  const seen = new Set();
+  for (const fab of seenFabs || []) {
+    const s = String(fab || '').trim();
+    if (s) seen.add(s);
+  }
+  const rows = db.prepare('SELECT fab FROM anlagenstamm_tree_cache').all();
+  const del = db.prepare('DELETE FROM anlagenstamm_tree_cache WHERE fab = ?');
+  let n = 0;
+  for (const row of rows || []) {
+    const fab = String(row.fab || '').trim();
+    if (!fab || seen.has(fab)) continue;
+    del.run(row.fab);
+    deleteImageThumbCacheScope(db, THUMB_KIND_PROJEKTE_NEU, fab);
+    n += 1;
+  }
+  return n;
+}
+
 /**
- * Vollständiger Abgleich aller PROJEKTE-NEU-Bäume aus der Server-DB in anlagenstamm_tree_cache.
+ * Abgleich der PROJEKTE-NEU-Bäume aus der Server-DB in anlagenstamm_tree_cache.
+ * Nach dem ersten Lauf Delta via since_updated_at; alle 7 Tage Vollabgleich inkl. Prune.
  */
 async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
   options = options || {};
@@ -2053,31 +2192,25 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
   }
 
   const resumeBefore = getAnlagenstammSyncResumeState(db);
-  if (resumeBefore.pn_tree_phase_completed) {
-    return {
-      ok: true,
-      skipped: true,
-      resumed: false,
-      total_count: resumeBefore.pn_tree_total_pages || 0,
-      written: 0,
-      skipped_count: 0,
-    };
-  }
-
+  const resumeInterrupted = !resumeBefore.pn_tree_phase_completed && resumeBefore.pn_tree_next_page > 1;
+  const fullRefresh = !resumeInterrupted && isPnFullRefreshDue(resumeBefore.pn_tree_last_full_at);
+  const since = fullRefresh ? '' : String(resumeBefore.pn_tree_since || '').trim();
   const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const pageSize = 25;
-  let page = Math.max(1, resumeBefore.pn_tree_next_page || 1);
+  let page = resumeInterrupted ? Math.max(1, resumeBefore.pn_tree_next_page || 1) : 1;
   const resuming = page > 1;
-  let totalPages = resumeBefore.pn_tree_total_pages || 1;
+  let totalPages = resumeInterrupted ? resumeBefore.pn_tree_total_pages || 1 : 1;
   let totalCount = 0;
   let written = 0;
   let skipped = 0;
+  const seenFabs = new Set();
+  let watermark = since;
 
   const runOnBase = async (base) => {
     do {
       let data;
       try {
-        data = await fetchPnTreeExportChunk(base, technicianId, auth, page, pageSize);
+        data = await fetchPnTreeExportChunk(base, technicianId, auth, page, pageSize, since);
       } catch (err) {
         if (isRetryableExportChunkFailure(null, err)) throw err;
         return { ok: false, error: err && err.message ? err.message : String(err) };
@@ -2095,11 +2228,14 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
       }
       totalPages = data.total_pages != null ? Number(data.total_pages) : 1;
       totalCount = data.total_count != null ? Number(data.total_count) : 0;
+      if (data.server_time) watermark = String(data.server_time);
       const items = Array.isArray(data.items) ? data.items : [];
       await withDbLock(async () => {
         for (const item of items) {
           const fab = String(item.fab || '').trim();
           if (!fab) continue;
+          seenFabs.add(fab);
+          if (item.updated_at) watermark = String(item.updated_at);
           const sig = String(item.content_signature || '').trim();
           if (sig) {
             const existing = readAnlagenstammTreeCacheRow(db, fab);
@@ -2134,10 +2270,21 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
       page += 1;
     } while (page <= totalPages);
     await withDbLock(async () => {
+      if (!since) {
+        purgeAnlagenstammTreeCacheOrphans(db, seenFabs);
+      }
       markPnTreePhaseCompleted(db, totalPages);
+      markPnTreeWatermark(db, watermark, !since);
       if (typeof saveFn === 'function') saveFn();
     });
-    return { ok: true, total_count: totalCount, written, skipped, resumed: resuming };
+    return {
+      ok: true,
+      total_count: totalCount,
+      written,
+      skipped,
+      resumed: resuming,
+      delta: !!since,
+    };
   };
 
   try {
@@ -2148,6 +2295,234 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
     const inner = tried.result;
     if (inner && inner.ok === false) {
       return { ok: false, error: inner.error || 'PROJEKTE-NEU-Export fehlgeschlagen.', _notFound: !!inner._notFound };
+    }
+    return Object.assign({ ok: true }, inner || {});
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e);
+    return { ok: false, error: msg };
+  }
+}
+
+const PN_THUMBS_EXPORT_CHUNK_TIMEOUT_MS = 180000;
+
+async function fetchPnThumbsExportChunk(base, technicianId, authHeader, page, pageSize, sinceUpdatedAt, thumbMax) {
+  const relativePhp = '/dispo_api/api/anlagenstamm_pn_thumbs_export_chunk.php';
+  const url = `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), PN_THUMBS_EXPORT_CHUNK_TIMEOUT_MS);
+  const body = { page, page_size: pageSize, thumb_max: thumbMax || 256 };
+  const since = String(sinceUpdatedAt || '').trim();
+  if (since) body.since_updated_at = since;
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: Object.assign(
+        { 'Content-Type': 'application/json' },
+        dispoMonteurFetchHeaders(technicianId, authHeader),
+      ),
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const err = (data && data.error) || r.statusText || 'HTTP ' + r.status;
+      return { ok: false, error: err, _httpStatus: r.status };
+    }
+    return Object.assign({}, data, { ok: true, _used_base_url: base });
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      return {
+        ok: false,
+        error: 'Timeout nach ' + Math.round(PN_THUMBS_EXPORT_CHUNK_TIMEOUT_MS / 1000) + ' s (PROJEKTE-NEU-Thumb-Export)',
+        _httpStatus: 0,
+      };
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function applyPnThumbExportItem(db, item) {
+  const fab = String((item && item.fab) || '').trim();
+  if (!fab) return { written: 0, pruned: 0 };
+  const thumbMax = item.thumb_max != null ? Number(item.thumb_max) : 256;
+  const thumbs = Array.isArray(item.thumbs) ? item.thumbs : [];
+  let written = 0;
+  for (const thumb of thumbs) {
+    const rel = String((thumb && thumb.rel_path) || '').trim();
+    const b64 = String((thumb && thumb.thumb_blob_b64) || '').trim();
+    if (!rel || !b64) continue;
+    let buf;
+    try {
+      buf = Buffer.from(b64, 'base64');
+    } catch (_) {
+      continue;
+    }
+    if (!buf.length) continue;
+    writeImageThumbCache(
+      db,
+      THUMB_KIND_PROJEKTE_NEU,
+      fab,
+      rel,
+      thumb.thumb_max != null ? thumb.thumb_max : thumbMax,
+      buf,
+      thumb.content_type || 'image/webp',
+      null,
+      {
+        source_mtime: thumb.source_mtime_unix != null ? thumb.source_mtime_unix : null,
+        source_size: thumb.source_size_bytes != null ? thumb.source_size_bytes : null,
+      },
+    );
+    written += 1;
+  }
+  const keep = Array.isArray(item.keep_rel_paths) ? item.keep_rel_paths : thumbs.map((t) => t && t.rel_path);
+  const pruned = deleteImageThumbCacheExcept(db, THUMB_KIND_PROJEKTE_NEU, fab, keep, thumbMax);
+  return { written, pruned };
+}
+
+function updatePnThumbsResumeProgress(db, completedPage, totalPages) {
+  db.prepare(
+    `INSERT INTO anlagenstamm_sync_state (id, pn_thumbs_next_page, pn_thumbs_total_pages, pn_thumbs_phase_completed, sync_error)
+     VALUES (1, ?, ?, 0, NULL)
+     ON CONFLICT(id) DO UPDATE SET
+       pn_thumbs_next_page = excluded.pn_thumbs_next_page,
+       pn_thumbs_total_pages = excluded.pn_thumbs_total_pages,
+       pn_thumbs_phase_completed = 0,
+       sync_error = NULL`,
+  ).run(completedPage + 1, totalPages);
+}
+
+function markPnThumbsPhaseCompleted(db, totalPages) {
+  db.prepare(
+    `INSERT INTO anlagenstamm_sync_state (id, pn_thumbs_next_page, pn_thumbs_total_pages, pn_thumbs_phase_completed, sync_error)
+     VALUES (1, 1, ?, 1, NULL)
+     ON CONFLICT(id) DO UPDATE SET
+       pn_thumbs_next_page = 1,
+       pn_thumbs_total_pages = excluded.pn_thumbs_total_pages,
+       pn_thumbs_phase_completed = 1,
+       sync_error = NULL`,
+  ).run(totalPages);
+}
+
+function markPnThumbsWatermark(db, since, isFull) {
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  if (isFull) {
+    db.prepare(
+      `INSERT INTO anlagenstamm_sync_state (id, pn_thumbs_since, pn_thumbs_last_full_at)
+       VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET pn_thumbs_since = excluded.pn_thumbs_since, pn_thumbs_last_full_at = excluded.pn_thumbs_last_full_at`,
+    ).run(since || now, now);
+  } else {
+    db.prepare(
+      `INSERT INTO anlagenstamm_sync_state (id, pn_thumbs_since)
+       VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET pn_thumbs_since = excluded.pn_thumbs_since`,
+    ).run(since || now);
+  }
+}
+
+/**
+ * Bulk-Thumbs aus der Server-DB in image_thumb_cache (keine Vollbilder).
+ */
+async function syncProjekteNeuThumbsFromDispo(db, payload, onProgress, options) {
+  options = options || {};
+  const dbLock = options.dbLock;
+  const saveFn = options.save;
+
+  function withDbLock(fn) {
+    if (dbLock && typeof dbLock.runWithDbLock === 'function') {
+      return dbLock.runWithDbLock(fn);
+    }
+    return Promise.resolve(fn());
+  }
+
+  ensureImageThumbCacheSchema(db);
+  const bases = buildAnlagenstammSyncBases(payload);
+  const technicianId = parseInt(payload.technician_id, 10);
+  const username = (payload.serverUsername || '').toString().trim();
+  if (!bases.length || !username || !Number.isFinite(technicianId) || technicianId <= 0) {
+    return { ok: false, error: 'baseUrl, technician_id und Anmeldedaten erforderlich.' };
+  }
+
+  const resumeBefore = getAnlagenstammSyncResumeState(db);
+  const resumeInterrupted = !resumeBefore.pn_thumbs_phase_completed && resumeBefore.pn_thumbs_next_page > 1;
+  const fullRefresh = !resumeInterrupted && isPnFullRefreshDue(resumeBefore.pn_thumbs_last_full_at);
+  const since = fullRefresh ? '' : String(resumeBefore.pn_thumbs_since || '').trim();
+  const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
+  const pageSize = 3;
+  const thumbMax = 256;
+  let page = resumeInterrupted ? Math.max(1, resumeBefore.pn_thumbs_next_page || 1) : 1;
+  const resuming = page > 1;
+  let totalPages = resumeInterrupted ? resumeBefore.pn_thumbs_total_pages || 1 : 1;
+  let totalCount = 0;
+  let written = 0;
+  let pruned = 0;
+  let watermark = since;
+
+  const runOnBase = async (base) => {
+    do {
+      let data;
+      try {
+        data = await fetchPnThumbsExportChunk(base, technicianId, auth, page, pageSize, since, thumbMax);
+      } catch (err) {
+        if (isRetryableExportChunkFailure(null, err)) throw err;
+        return { ok: false, error: err && err.message ? err.message : String(err) };
+      }
+      if (!data.ok) {
+        if (data._httpStatus === 404) {
+          return { ok: false, error: 'PROJEKTE-NEU-Thumb-Export nicht verfügbar (Server-Update erforderlich).', _notFound: true };
+        }
+        if (isRetryableExportChunkFailure(data)) {
+          throw Object.assign(new Error(data.error || 'PROJEKTE-NEU-Thumb-Export fehlgeschlagen'), {
+            _httpStatus: data._httpStatus,
+          });
+        }
+        return data;
+      }
+      totalPages = data.total_pages != null ? Number(data.total_pages) : 1;
+      totalCount = data.total_count != null ? Number(data.total_count) : 0;
+      if (data.server_time) watermark = String(data.server_time);
+      const items = Array.isArray(data.items) ? data.items : [];
+      await withDbLock(async () => {
+        for (const item of items) {
+          if (item && item.updated_at) watermark = String(item.updated_at);
+          const r = applyPnThumbExportItem(db, item);
+          written += r.written;
+          pruned += r.pruned;
+        }
+        updatePnThumbsResumeProgress(db, page, totalPages);
+        if (typeof saveFn === 'function') saveFn();
+      });
+      if (onProgress) {
+        onProgress({ page, totalPages, totalCount, written, pruned, resuming: resuming || page > 1 });
+      }
+      await yieldEventLoop();
+      page += 1;
+    } while (page <= totalPages);
+    await withDbLock(async () => {
+      markPnThumbsPhaseCompleted(db, totalPages);
+      markPnThumbsWatermark(db, watermark, !since);
+      if (typeof saveFn === 'function') saveFn();
+    });
+    return {
+      ok: true,
+      total_count: totalCount,
+      written,
+      pruned,
+      resumed: resuming,
+      delta: !!since,
+    };
+  };
+
+  try {
+    const tried = await tryDispoBasesInOrder(bases, runOnBase);
+    if (tried.error) {
+      return { ok: false, error: tried.error };
+    }
+    const inner = tried.result;
+    if (inner && inner.ok === false) {
+      return { ok: false, error: inner.error || 'PROJEKTE-NEU-Thumb-Export fehlgeschlagen.', _notFound: !!inner._notFound };
     }
     return Object.assign({ ok: true }, inner || {});
   } catch (e) {
@@ -2472,6 +2847,8 @@ module.exports = {
   saveLocal,
   syncAnlagenstammFromDispo,
   syncProjekteNeuTreesFromDispo,
+  syncProjekteNeuThumbsFromDispo,
+  applyPnThumbExportItem,
   getAnlagenstammSyncResumeState,
   resetAnlagenstammSyncPhases,
   prepareAnlagenstammSyncRun,
