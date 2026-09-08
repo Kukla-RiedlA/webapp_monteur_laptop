@@ -2669,7 +2669,7 @@
               msgEl: msgEl,
               treeHost: treeHost,
               jobId: jobDetailsJobId,
-              allowOnline: false,
+              allowOnline: true,
               keepTreeWhileLoading: true,
             });
           }
@@ -5670,7 +5670,7 @@
         treeHost: document.getElementById('anlageDetailProjekteNeuTree'),
         toggleEl: pnToggle,
         jobId: jobId,
-        allowOnline: false
+        allowOnline: true
       });
     }
     if (pnToggle) {
@@ -6017,7 +6017,7 @@
           msgEl: msgEl,
           treeHost: treeHost,
           jobId: jobDetailsJobId,
-          allowOnline: false,
+          allowOnline: !isJobAssignmentReadOnly(window.currentProjektdatenJob),
           cacheOnly: isJobAssignmentReadOnly(window.currentProjektdatenJob),
           keepTreeWhileLoading: true,
         });
@@ -6051,7 +6051,7 @@
           msgEl: msgElInit,
           treeHost: treeHostInit,
           jobId: jobDetailsJobId,
-          allowOnline: false,
+          allowOnline: !isJobAssignmentReadOnly(window.currentProjektdatenJob),
           cacheOnly: isJobAssignmentReadOnly(window.currentProjektdatenJob),
           keepTreeWhileLoading: true,
         });
@@ -13103,8 +13103,9 @@
         }
         return;
       }
+      var localTree = null;
       if (jobId) {
-        var localTree = await fetchJsonLocal(
+        localTree = await fetchJsonLocal(
           API_BASE +
             '/api/dienstreise/projekte_neu_tree?job_id=' +
             encodeURIComponent(jobId) +
@@ -13122,34 +13123,39 @@
           return renderTree([], localTree.message || '', localTree.folder);
         }
       }
-      if (!allowOnline || (!getDispoExternalUrl() && !getDispoInternalUrl())) {
+      if (!allowOnline) {
         if (msg) {
-          msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten für diese FN. Bitte Anlagenstamm synchronisieren (lädt Ordnerstruktur aus der Server-DB) – Dateien werden bei Bedarf online geladen und lokal zwischengespeichert.';
+          if (jobId && localTree && localTree.folder) {
+            renderTree([], localTree.message || '', localTree.folder);
+          } else {
+            msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten für diese FN. Bitte Anlagenstamm synchronisieren (lädt Ordnerstruktur aus der Server-DB) – Dateien werden bei Bedarf online geladen und lokal zwischengespeichert.';
+          }
         }
         return;
       }
-      var payload = {
-        baseUrl: getDispoBaseUrl(),
-        fab: fab,
-        serverUsername: getServerUsername(),
-        serverPassword: getServerPassword()
-      };
-      var files = await api('/api/anlagenstamm_files_list', { method: 'POST', body: JSON.stringify(payload) });
+      // Gleicher Endpoint wie Anlagenakte DATEIEN: Cache, sonst Dispo-DB-Baum, und Cache füllen.
+      var files = await fetchJsonLocal(
+        API_BASE +
+          '/api/anlagenstamm_files_list.php?fab=' +
+          encodeURIComponent(fab) +
+          '&fabrikationsnummer=' +
+          encodeURIComponent(fab) +
+          '&_ts=' +
+          Date.now(),
+        hdrs,
+        25000,
+      );
       var pnRaw = files && files.projekte_neu ? files.projekte_neu : {};
-      if (!pnRaw || !pnRaw.enabled) {
+      var tree = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
+      if (tree.length) {
+        renderTree(tree, '', pnRaw.folder_name || pnRaw.root_name);
+        return;
+      }
+      if (!pnRaw || pnRaw.enabled === false) {
         if (msg) msg.textContent = 'PROJEKTE NEU ist für diese Anlage nicht verfügbar (weder lokal noch am Server).';
         return;
       }
-      var tree = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
-      if (!tree.length) {
-        if (msg) msg.textContent = 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
-        return;
-      }
-      renderTree(
-        tree,
-        'Noch keine lokale Kopie – Struktur vom Server (nach „Auftrag annehmen“ offline nutzbar).',
-        pnRaw.folder_name,
-      );
+      if (msg) msg.textContent = 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
     } catch (e) {
       if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
       var errText = (e && e.message) ? e.message : String(e);
