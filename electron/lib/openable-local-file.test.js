@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { looksLikePdfFile, materializeOpenablePath, safeOpenFileName } = require('./openable-local-file');
+const { looksLikePdfFile, isCsvFilePath, stripOpenStampPrefix, materializeOpenablePath, safeOpenFileName } = require('./openable-local-file');
 
 describe('openable-local-file', () => {
   it('erkennt PDF an der Endung und am Dateikopf', () => {
@@ -39,6 +39,28 @@ describe('openable-local-file', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('erkennt CSV nur an der Endung', () => {
+    assert.equal(isCsvFilePath('FN12186_PA7.csv'), true);
+    assert.equal(isCsvFilePath('C:\\\\cache\\\\liste.CSV'), true);
+    assert.equal(isCsvFilePath('liste.xlsx'), false);
+    assert.equal(isCsvFilePath('liste.csv.txt'), false);
+  });
+
+  it('entfernt nur den Öffnen-Cache-Zeitstempel vom Dateinamen', () => {
+    assert.equal(
+      stripOpenStampPrefix('20260908092345_FN11603_PA7_EN_20240710_0726.CSV'),
+      'FN11603_PA7_EN_20240710_0726.CSV',
+    );
+    assert.equal(
+      stripOpenStampPrefix('C:\\\\cache\\\\20260908092345_FN11603_PA7_DE_20240610_1130 (alt).CSV'),
+      'FN11603_PA7_DE_20240610_1130 (alt).CSV',
+    );
+    assert.equal(
+      stripOpenStampPrefix('FN11603_PA7_EN_20240710_0726.CSV'),
+      'FN11603_PA7_EN_20240710_0726.CSV',
+    );
   });
 
   it('lässt Dateien mit Endung unverändert', () => {

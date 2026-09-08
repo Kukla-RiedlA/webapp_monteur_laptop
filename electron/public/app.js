@@ -408,6 +408,41 @@
     }
   }
 
+  function isCsvFileName(name) {
+    return /\.csv$/i.test(String(name || ''));
+  }
+
+  function fileDownloadActionLabel(fileName) {
+    return isCsvFileName(fileName) ? 'Speichern unter' : 'Öffnen';
+  }
+
+  function fileDownloadActionTitle(fileName) {
+    return isCsvFileName(fileName)
+      ? 'CSV nur herunterladen (Speichern unter)'
+      : 'Mit Standardprogramm bzw. Explorer öffnen';
+  }
+
+  function localFileOpenFollowupSkipped(r) {
+    return !!(r && (r.canceled || r.via === 'csv-save-as'));
+  }
+
+  async function openMonteurLocalFile(fullPath) {
+    if (!fullPath || typeof monteurApp === 'undefined' || typeof monteurApp.openPath !== 'function') {
+      return { ok: false, error: 'Öffnen nicht verfügbar.' };
+    }
+    var r = await monteurApp.openPath(String(fullPath));
+    if (r && r.canceled) return r;
+    if (r && r.via === 'csv-save-as' && typeof showToast === 'function') {
+      showToast('CSV gespeichert.');
+    }
+    return r;
+  }
+
+  try {
+    window.isCsvFileName = isCsvFileName;
+    window.openMonteurLocalFile = openMonteurLocalFile;
+  } catch (_) { /* ignore */ }
+
   function collectGeneratedPdfPaths(data) {
     var out = [];
     var seen = Object.create(null);
@@ -5365,12 +5400,17 @@
           alert('TED-Datei: ' + err);
           return;
         }
-        setTedExcelDownloadLoading(true, 'Starte Excel…');
+        setTedExcelDownloadLoading(true, /\.csv$/i.test(String(result.data.path || fileName || '')) ? 'Speichern unter…' : 'Starte Excel…');
         var openFn = (typeof monteurApp !== 'undefined' && (monteurApp.openExcel || monteurApp.openPath))
           ? (monteurApp.openExcel || monteurApp.openPath)
           : null;
         if (openFn) {
           return openFn(String(result.data.path)).then(function (openRes) {
+            if (openRes && openRes.canceled) return;
+            if (openRes && openRes.via === 'csv-save-as') {
+              if (typeof showToast === 'function') showToast('CSV gespeichert.');
+              return;
+            }
             if (openRes && openRes.error) alert('Excel konnte nicht gestartet werden: ' + openRes.error);
           });
         }
@@ -7011,7 +7051,18 @@
           ? app.openPath
           : null;
     if (!opener) return;
-    Promise.resolve(opener.call(app, String(absPath))).catch(function (err) {
+    Promise.resolve(opener.call(app, String(absPath))).then(function (r) {
+      if (r && r.canceled) return;
+      if (r && r.via === 'csv-save-as' && typeof showToast === 'function') {
+        showToast('CSV gespeichert.');
+        return;
+      }
+      if (r && r.ok === false) {
+        var msg = r.error || 'Datei konnte nicht geöffnet werden.';
+        var hint = document.getElementById('finishJobFilesMsg');
+        if (hint) hint.textContent = msg;
+      }
+    }).catch(function (err) {
       var msg = err && err.message ? err.message : 'Datei konnte nicht geöffnet werden.';
       var hint = document.getElementById('finishJobFilesMsg');
       if (hint) hint.textContent = msg;
@@ -10608,7 +10659,7 @@
       var mtimeStr = formatFileDate(e.mtime);
       var isOpen = e.isDirectory && expanded[e.relativePath];
       var toggle = e.isDirectory ? ('<span class="archiv-folder-toggle" data-rel="' + escapeHtml(e.relativePath || '') + '">' + (isOpen ? '▼' : '▶') + '</span>') : '<span class="archiv-folder-toggle empty"></span>';
-      var openBtn = e.isDirectory ? '' : '<button type="button" class="btn btn-ghost archiv-folder-open" title="Datei öffnen">Öffnen</button>';
+      var openBtn = e.isDirectory ? '' : '<button type="button" class="btn btn-ghost archiv-folder-open" title="' + escapeHtml(fileDownloadActionTitle(e.name)) + '">' + escapeHtml(fileDownloadActionLabel(e.name)) + '</button>';
       var pdfBtn = (!e.isDirectory && isArchivProtocolJsonName(e.name))
         ? '<button type="button" class="btn btn-ghost archiv-folder-pdf" title="PDF wie in der Protokoll-Ebene erzeugen">PDF</button>'
         : '';
@@ -10625,10 +10676,10 @@
       row.style.cursor = 'pointer';
       row.addEventListener('click', function (ev) {
         if (ev.target.closest('.archiv-folder-actions')) return;
-        if (typeof monteurApp !== 'undefined' && monteurApp.openPath) monteurApp.openPath(fullPath);
+        if (typeof openMonteurLocalFile === 'function') openMonteurLocalFile(fullPath);
       });
       var openBtn = row.querySelector('.archiv-folder-open');
-      if (openBtn) openBtn.addEventListener('click', function (ev) { ev.stopPropagation(); if (typeof monteurApp !== 'undefined' && monteurApp.openPath) monteurApp.openPath(fullPath); });
+      if (openBtn) openBtn.addEventListener('click', function (ev) { ev.stopPropagation(); if (typeof openMonteurLocalFile === 'function') openMonteurLocalFile(fullPath); });
       var pdfBtnEl = row.querySelector('.archiv-folder-pdf');
       if (pdfBtnEl) {
         pdfBtnEl.addEventListener('click', function (ev) {
@@ -10666,8 +10717,10 @@
 
   function openArchivLocalPath(fullPath) {
     if (!fullPath) return;
-    if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
-      Promise.resolve(monteurApp.openPath(String(fullPath))).then(function (r) {
+    if (typeof openMonteurLocalFile === 'function') {
+      Promise.resolve(openMonteurLocalFile(String(fullPath))).then(function (r) {
+        if (r && r.canceled) return;
+        if (r && r.via === 'csv-save-as') return;
         if (r && r.ok === false && r.error) showToast('Öffnen fehlgeschlagen: ' + r.error);
       }).catch(function (err) {
         showToast('Öffnen fehlgeschlagen: ' + (err && err.message ? err.message : String(err)));
@@ -10706,7 +10759,8 @@
       html += '<div class="archiv-docs-meta muted">' + escapeHtml(formatArchivDocMeta(item)) + '</div>';
       html += '</div>';
       html += '<div class="archiv-docs-actions">';
-      html += '<button type="button" class="btn btn-ghost archiv-docs-open" data-archiv-doc-idx="' + idx + '">Öffnen</button>';
+      html += '<button type="button" class="btn btn-ghost archiv-docs-open" data-archiv-doc-idx="' + idx + '">' +
+        escapeHtml(fileDownloadActionLabel(name)) + '</button>';
       if (isArchivProtocolJsonName(name) || (item && item.protocol_json)) {
         html += '<button type="button" class="btn btn-ghost archiv-docs-pdf" data-archiv-doc-idx="' + idx + '" title="PDF wie in der Protokoll-Ebene erzeugen">PDF</button>';
       }
@@ -11795,7 +11849,10 @@
         });
         const openData = await openResp.json().catch(function () { return {}; });
         if (openResp.ok && openData && openData.ok === true && openData.path) {
-          const openResult = await monteurApp.openPath(String(openData.path));
+          const openResult = await openMonteurLocalFile(String(openData.path));
+          if (localFileOpenFollowupSkipped(openResult)) {
+            return;
+          }
           if (!openResult || openResult.ok !== false) {
             showToast('Datei wird mit dem Standardprogramm geöffnet.');
             return;
@@ -11859,7 +11916,10 @@
     });
     const openData = await openResp.json().catch(function () { return {}; });
     if (openResp.ok && openData && openData.ok === true && openData.path && typeof monteurApp !== 'undefined' && monteurApp.openPath) {
-      const openResult = await monteurApp.openPath(String(openData.path));
+      const openResult = await openMonteurLocalFile(String(openData.path));
+      if (localFileOpenFollowupSkipped(openResult)) {
+        return;
+      }
       if (!openResult || openResult.ok !== false) {
         showToast('Datei wird direkt lokal geöffnet.');
         return;
@@ -11921,7 +11981,10 @@
     });
     const openData = await openResp.json().catch(function () { return {}; });
     if (openResp.ok && openData && openData.ok === true && openData.path && typeof monteurApp !== 'undefined' && monteurApp.openPath) {
-      const openResult = await monteurApp.openPath(String(openData.path));
+      const openResult = await openMonteurLocalFile(String(openData.path));
+      if (localFileOpenFollowupSkipped(openResult)) {
+        return;
+      }
       if (!openResult || openResult.ok !== false) {
         showToast('Datei wird direkt lokal geöffnet.');
         return;
@@ -12004,7 +12067,10 @@
       throw new Error((data && data.error) ? data.error : 'Öffnen fehlgeschlagen.');
     }
     if (typeof monteurApp !== 'undefined' && monteurApp.openPath) {
-      const openRes = await monteurApp.openPath(String(data.path));
+      const openRes = await openMonteurLocalFile(String(data.path));
+      if (openRes && openRes.canceled) {
+        return;
+      }
       if (openRes && openRes.ok === false) {
         throw new Error(openRes.error || 'Datei konnte nicht mit lokalem Programm geöffnet werden.');
       }
@@ -12715,7 +12781,7 @@
         openBtn.type = 'button';
         openBtn.className = 'dienstreise-explorer-filename projekte-neu-open-link';
         openBtn.textContent = label;
-        openBtn.title = 'Öffnen';
+        openBtn.title = isCsvFileName(label) ? 'CSV nur herunterladen (Speichern unter)' : 'Öffnen';
         openBtn.addEventListener('click', function () {
           if (isProjekteNeuRasterImage(label)) {
             openProjekteNeuImageInLightbox(fab, rel, {
@@ -14387,11 +14453,13 @@
       return Promise.resolve();
     }
     var fullPath = row.getAttribute('data-full-path');
-    if (!fullPath || typeof monteurApp === 'undefined' || !monteurApp.openPath) {
+    if (!fullPath || typeof openMonteurLocalFile !== 'function') {
       if (typeof showToast === 'function') showToast('Datei konnte nicht geöffnet werden.');
       return Promise.resolve();
     }
-    return Promise.resolve(monteurApp.openPath(fullPath)).then(function (r) {
+    return Promise.resolve(openMonteurLocalFile(fullPath)).then(function (r) {
+      if (r && r.canceled) return;
+      if (r && r.via === 'csv-save-as') return;
       if (r && r.ok === false && typeof showToast === 'function') {
         showToast(r.error || 'Datei konnte nicht geöffnet werden.');
       }
@@ -14636,7 +14704,11 @@
         '<div class="dienstreise-explorer-actions">' +
         protectControl +
         previewBtn +
-        '<button type="button" class="btn btn-ghost" data-explorer-open title="Mit Standardprogramm bzw. Explorer öffnen">Öffnen</button>' +
+        '<button type="button" class="btn btn-ghost" data-explorer-open title="' +
+        escapeHtml(fileDownloadActionTitle(e.name)) +
+        '">' +
+        escapeHtml(fileDownloadActionLabel(e.name)) +
+        '</button>' +
         deleteBtn +
         '</div></div>';
     });
@@ -14708,7 +14780,7 @@
           return;
         }
         var fullPath = row.getAttribute('data-full-path');
-        if (fullPath && typeof monteurApp !== 'undefined' && monteurApp.openPath) monteurApp.openPath(fullPath);
+        if (fullPath && typeof openMonteurLocalFile === 'function') openMonteurLocalFile(fullPath);
       });
     });
     listEl.querySelectorAll('[data-explorer-delete]').forEach(function (btn) {
@@ -14807,7 +14879,11 @@
     });
     listEl.querySelectorAll('.dienstreise-explorer-row[data-is-dir="0"]').forEach(function (row) {
       row.style.cursor = 'pointer';
-      if (!row.getAttribute('title')) row.setAttribute('title', 'Doppelklick zum Öffnen');
+      if (!row.getAttribute('title')) {
+        var nameEl = row.querySelector('.dienstreise-explorer-filename');
+        var rowName = nameEl ? nameEl.textContent.trim() : (row.getAttribute('data-relative-path') || '');
+        row.setAttribute('title', isCsvFileName(rowName) ? 'CSV nur herunterladen (Speichern unter)' : 'Doppelklick zum Öffnen');
+      }
       row.addEventListener('dblclick', function (ev) {
         if (ev.target.closest('.dienstreise-explorer-actions')) return;
         if (ev.target.closest('[data-explorer-thumb]')) return;

@@ -31,7 +31,7 @@ function loadElectronDotEnv() {
 loadElectronDotEnv();
 
 const { createCopilotProbe } = require('./lib/copilot-probe');
-const { looksLikePdfFile } = require('./lib/openable-local-file');
+const { looksLikePdfFile, isCsvFilePath, stripOpenStampPrefix } = require('./lib/openable-local-file');
 let copilotProbe = null;
 function getCopilotProbe() {
   if (!copilotProbe) {
@@ -328,7 +328,34 @@ ipcMain.handle('dienstreise:choose-folder', async () => {
   return result.filePaths[0];
 });
 
-async function openDienstreisePath(filePath) {
+async function saveLocalFileAs(event, filePath, defaultName) {
+  if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
+  const normalized = path.normalize(filePath.trim());
+  if (!fs.existsSync(normalized)) return { ok: false, error: 'file_not_found' };
+  const owner =
+    (event && event.sender && BrowserWindow.fromWebContents(event.sender)) || mainWindow;
+  const csv = isCsvFilePath(normalized) || isCsvFilePath(defaultName);
+  const suggested = stripOpenStampPrefix(defaultName || path.basename(normalized));
+  const result = await dialog.showSaveDialog(owner || undefined, {
+    title: 'Speichern unter',
+    defaultPath: suggested,
+    filters: csv
+      ? [
+          { name: 'CSV', extensions: ['csv'] },
+          { name: 'Alle Dateien', extensions: ['*'] },
+        ]
+      : [{ name: 'Alle Dateien', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  try {
+    fs.copyFileSync(normalized, result.filePath);
+    return { ok: true, via: csv ? 'csv-save-as' : 'save-as', path: result.filePath };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+async function openDienstreisePath(filePath, event) {
   if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
   const raw = filePath.trim();
   const normalized = path.normalize(raw);
@@ -341,7 +368,7 @@ async function openDienstreisePath(filePath) {
   }
   function isExcelFile(targetPath) {
     const ext = String(path.extname(targetPath || '')).toLowerCase();
-    return ext === '.xls' || ext === '.xlsx' || ext === '.xlsm' || ext === '.xlsb' || ext === '.csv';
+    return ext === '.xls' || ext === '.xlsx' || ext === '.xlsm' || ext === '.xlsb';
   }
   function pathNeedsAcrobatSafeCopy(targetPath) {
     const p = String(targetPath || '');
@@ -485,6 +512,11 @@ async function openDienstreisePath(filePath) {
       return { ok: false, error: 'Datei nicht gefunden: ' + normalized };
     }
     trace('exists', normalized);
+    // CSV nie in Excel/Standardprogramm öffnen – nur Speichern unter.
+    if (isCsvFilePath(normalized)) {
+      trace('csv.saveAs', normalized);
+      return saveLocalFileAs(event, normalized);
+    }
     // PDFs immer im Electron-Viewer (Skizze + Text) – auch ohne .pdf-Endung (PROJEKTE-NEU-Cache).
     if (looksLikePdfFile(normalized)) {
       let pdfPath = normalized;
@@ -543,7 +575,7 @@ async function openDienstreisePath(filePath) {
   }
 }
 
-ipcMain.handle('dienstreise:open-path', async (_event, filePath) => openDienstreisePath(filePath));
+ipcMain.handle('dienstreise:open-path', async (event, filePath) => openDienstreisePath(filePath, event));
 
 ipcMain.handle('pdf:open-viewer', async (_event, filePath) => {
   console.log('[pdf:open-viewer]', filePath);
@@ -605,20 +637,7 @@ function openWithDialogMonteur(filePath) {
 ipcMain.handle('dienstreise:open-with-dialog', async (_event, filePath) => openWithDialogMonteur(filePath));
 
 ipcMain.handle('dienstreise:save-file-as', async (event, filePath, defaultName) => {
-  if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
-  const normalized = path.normalize(filePath.trim());
-  if (!fs.existsSync(normalized)) return { ok: false, error: 'file_not_found' };
-  const win = BrowserWindow.fromWebContents(event.sender);
-  const result = await dialog.showSaveDialog(win || undefined, {
-    defaultPath: defaultName || path.basename(normalized),
-  });
-  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
-  try {
-    fs.copyFileSync(normalized, result.filePath);
-    return { ok: true, path: result.filePath };
-  } catch (e) {
-    return { ok: false, error: e.message || String(e) };
-  }
+  return saveLocalFileAs(event, filePath, defaultName);
 });
 
 ipcMain.handle('dienstreise:show-in-folder', async (_event, filePath) => {
@@ -633,41 +652,47 @@ ipcMain.handle('dienstreise:file-context-menu', async (event, spec) => {
   const fileName = (spec && spec.fileName) || (filePath ? path.basename(filePath) : 'Datei');
   if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: 'file_not_found' };
   const win = BrowserWindow.fromWebContents(event.sender);
+  const csv = isCsvFilePath(filePath);
+  const items = [];
+  if (!csv) {
+    items.push({
+      label: 'Öffnen',
+      click: () => {
+        void openDienstreisePath(filePath, event);
+      },
+    });
+    items.push({
+      label: 'Öffnen mit…',
+      click: () => {
+        void openWithDialogMonteur(filePath);
+      },
+    });
+  }
+  items.push({
+    label: 'Speichern unter…',
+    click: async () => {
+      await saveLocalFileAs(event, filePath, fileName);
+    },
+  });
+  if (csv) {
+    items.push({
+      label: 'Öffnen mit…',
+      click: () => {
+        void openWithDialogMonteur(filePath);
+      },
+    });
+  }
+  items.push(
+    { type: 'separator' },
+    {
+      label: 'Im Explorer anzeigen',
+      click: () => {
+        shell.showItemInFolder(filePath);
+      },
+    },
+  );
   return new Promise((resolve) => {
-    const menu = Menu.buildFromTemplate([
-      {
-        label: 'Öffnen',
-        click: () => {
-          void openDienstreisePath(filePath);
-        },
-      },
-      {
-        label: 'Öffnen mit…',
-        click: () => {
-          void openWithDialogMonteur(filePath);
-        },
-      },
-      {
-        label: 'Speichern unter…',
-        click: async () => {
-          const result = await dialog.showSaveDialog(win || undefined, { defaultPath: fileName });
-          if (!result.canceled && result.filePath) {
-            try {
-              fs.copyFileSync(filePath, result.filePath);
-            } catch (_) {
-              /* ignore */
-            }
-          }
-        },
-      },
-      { type: 'separator' },
-      {
-        label: 'Im Explorer anzeigen',
-        click: () => {
-          shell.showItemInFolder(filePath);
-        },
-      },
-    ]);
+    const menu = Menu.buildFromTemplate(items);
     menu.popup({ window: win || undefined, callback: () => resolve({ ok: true }) });
   });
 });

@@ -9180,7 +9180,7 @@ function createApp(db) {
         return res.json({
           ok: true,
           path: openPath || localAll,
-          filename: path.basename(openPath || localAll),
+          filename: displayName,
           source: 'local',
         });
       }

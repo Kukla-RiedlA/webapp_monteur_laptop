@@ -22,7 +22,7 @@
         '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260819akte',
         '/assets/js/dispo/anlagenstamm_motor_rows.js?v=20260904motor3',
         '/assets/js/dispo/anlagenstamm.js?v=20260904hang',
-        '/js/anlagenstamm-laptop-bridge.js?v=20260901thumb',
+        '/js/anlagenstamm-laptop-bridge.js?v=20260908csv2',
       ],
       reloadHandler: reload,
     });

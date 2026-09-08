@@ -7,6 +7,10 @@ function looksLikePdfBuffer(buf) {
   return Buffer.isBuffer(buf) && buf.length >= 5 && buf.slice(0, 5).toString('latin1') === '%PDF-';
 }
 
+function isCsvFilePath(filePath) {
+  return String(path.extname(String(filePath || ''))).toLowerCase() === '.csv';
+}
+
 function looksLikePdfFile(filePath) {
   const p = String(filePath || '').trim();
   if (!p) return false;
@@ -36,6 +40,15 @@ function safeOpenFileName(displayName, fallbackExt) {
   return name;
 }
 
+function stripOpenStampPrefix(name) {
+  const base = String(name || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop() || '';
+  const stripped = base.replace(/^\d{14}_/, '');
+  return stripped || base;
+}
+
 function copyToNamedOpenPath(sourcePath, destDir, displayName, fallbackExt) {
   const src = path.normalize(String(sourcePath || '').trim());
   if (!src || !fs.existsSync(src)) return '';
@@ -60,6 +73,8 @@ function materializeOpenablePath(sourcePath, destDir, displayName) {
 module.exports = {
   looksLikePdfBuffer,
   looksLikePdfFile,
+  isCsvFilePath,
+  stripOpenStampPrefix,
   safeOpenFileName,
   copyToNamedOpenPath,
   materializeOpenablePath,

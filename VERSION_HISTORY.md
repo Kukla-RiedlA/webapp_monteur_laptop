@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.013
+- **CSV-Dateien:** nicht mehr in Excel öffnen, sondern Dialog „Speichern unter“; Overlay nach dem Speichern hängt nicht; Dateiname bleibt ohne Download-Zeitstempel.
+
 ## V 2.007.012
 - **Anlagenakte Galerie:** Laden blockiert die App nicht mehr (kein synchroner OneDrive-Scan); Montagefotos kommen im Hintergrund, Vorschaubilder nur aus dem lokalen Cache.
 - **Auftrag abschließen:** Dateien für PROJEKTE NEU auswählbar (`transfer_rel_paths`); ohne Auswahl wie bisher alles.
