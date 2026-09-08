@@ -973,6 +973,9 @@
       });
       ul.appendChild(li);
     });
+    if (window.KuklaFilePreviewHover && typeof window.KuklaFilePreviewHover.bindAbrechnungList === 'function') {
+      window.KuklaFilePreviewHover.bindAbrechnungList(ul, bucket, currentJobId);
+    }
   }
 
   function loadAllForJob() {

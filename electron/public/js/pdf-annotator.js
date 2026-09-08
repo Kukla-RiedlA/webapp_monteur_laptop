@@ -321,6 +321,27 @@ function zoomBy(delta, anchor, immediate) {
   requestZoom(base + delta, anchor, immediate);
 }
 
+async function appendPdfTextLayer(pdfPage, viewport, wrap, seq) {
+  if (typeof pdfjsLib.TextLayer !== 'function') return;
+  try {
+    const textContent = await pdfPage.getTextContent();
+    if (seq !== renderSeq) return;
+    if (!textContent || !Array.isArray(textContent.items) || !textContent.items.length) return;
+    const layerDiv = document.createElement('div');
+    layerDiv.className = 'textLayer pdf-page-textlayer';
+    layerDiv.style.setProperty('--scale-factor', String(viewport.scale));
+    wrap.appendChild(layerDiv);
+    const layer = new pdfjsLib.TextLayer({
+      textContentSource: textContent,
+      container: layerDiv,
+      viewport,
+    });
+    await layer.render();
+  } catch (_) {
+    /* Scan-PDF oder ohne auswählbaren Text */
+  }
+}
+
 async function renderPdf(pdf, viewKeep) {
   const seq = ++renderSeq;
   const keep = viewKeep || state.viewKeep;
@@ -360,6 +381,8 @@ async function renderPdf(pdf, viewKeep) {
     const texts = document.createElement('div');
     texts.className = 'pdf-page-texts';
     wrap.appendChild(renderCanvas);
+    await appendPdfTextLayer(pdfPage, viewport, wrap, seq);
+    if (seq !== renderSeq) return false;
     wrap.appendChild(ink);
     wrap.appendChild(texts);
     frag.appendChild(wrap);
@@ -761,18 +784,35 @@ function beginEditText(page, item, el, isNew) {
   el.addEventListener('blur', commit);
 }
 
+function isKnownTool(tool) {
+  return DRAW_TOOLS.indexOf(tool) >= 0
+    || tool === 'text'
+    || tool === 'eraser'
+    || tool === 'move'
+    || tool === 'select';
+}
+
+function clearPdfTextSelection() {
+  try {
+    const sel = window.getSelection();
+    if (sel && sel.removeAllRanges) sel.removeAllRanges();
+  } catch (_) { /* ignore */ }
+}
+
 function setTool(tool) {
-  const next = DRAW_TOOLS.indexOf(tool) >= 0 || tool === 'text' || tool === 'eraser' || tool === 'move' ? tool : 'pen';
+  const next = isKnownTool(tool) ? tool : 'pen';
+  if (state.tool === 'select' && next !== 'select') clearPdfTextSelection();
   state.tool = next;
   document.body.classList.toggle('is-draw', DRAW_TOOLS.indexOf(next) >= 0);
   document.body.classList.toggle('is-text', next === 'text');
   document.body.classList.toggle('is-pen', next === 'pen');
   document.body.classList.toggle('is-eraser', next === 'eraser');
   document.body.classList.toggle('is-move', next === 'move');
+  document.body.classList.toggle('is-select', next === 'select');
   document.querySelectorAll('[data-tool]').forEach((btn) => {
     btn.classList.toggle('is-active', btn.getAttribute('data-tool') === next);
   });
-  if (widthEl) widthEl.hidden = next === 'text' || next === 'eraser' || next === 'move';
+  if (widthEl) widthEl.hidden = next === 'text' || next === 'eraser' || next === 'move' || next === 'select';
   if (textSizeEl) textSizeEl.hidden = next !== 'text';
 }
 

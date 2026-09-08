@@ -36,11 +36,12 @@ export function ServiceProtocolPage() {
   const embedded = useEmbeddedMode();
   const [bridgeState, setBridgeState] = useState<SpBridgePayload>(defaultBridgePayload);
 
-  const { form, testLoad, workSteps, jobs, jobId, fabNumbers } = bridgeState;
+  const { form, testLoad, workSteps, jobs, jobId, fabNumbers, fabIncludeByFab } = bridgeState;
   const loadCells = ensureLoadCells(form, bridgeState.measurements);
   const motors: MotorRow[] = Array.isArray(form.motors) ? form.motors : [];
 
   const fabChips = fabNumbers.length ? fabNumbers : embedded ? [] : FAB_NUMBERS;
+  const includedFabCount = fabChips.filter((fab) => fabIncludeByFab?.[fab] !== false).length;
   const uiLang: UiLang = maskLangFromPdf(form.pdfDe, form.pdfEn);
   const displayLang = uiLang;
   const protocolKind = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('kind') === 'ibn' ? 'ibn' : 'service';
@@ -243,6 +244,7 @@ export function ServiceProtocolPage() {
 
   const handleFabChange = (fab: string) => {
     if (!fab || fab === activeFabVisual) return;
+    if (fabIncludeByFab?.[fab] === false) return;
     if (embedded) {
       // Nur Chip markieren. Formularfelder kommen ausschließlich vom Host (SP_SYNC_STATE),
       // sonst bleibt der alte Inhalt stehen und ein Debounce würde ihn zurückspielen.
@@ -251,6 +253,23 @@ export function ServiceProtocolPage() {
       return;
     }
     patchForm({ activeFab: fab });
+  };
+
+  const pushLangChange = (pdfDe: boolean, pdfEn: boolean) => {
+    patchForm({ pdfDe, pdfEn });
+    if (embedded) {
+      window.parent.postMessage({ type: 'SP_LANG_CHANGE', pdfDe, pdfEn }, '*');
+    }
+  };
+
+  const handleFabIncludeToggle = (fab: string, included: boolean) => {
+    setBridgeState((prev) => ({
+      ...prev,
+      fabIncludeByFab: { ...(prev.fabIncludeByFab || {}), [fab]: included },
+    }));
+    if (embedded) {
+      window.parent.postMessage({ type: 'SP_FAB_INCLUDE_CHANGE', fab, included }, '*');
+    }
   };
 
   return (
@@ -274,7 +293,7 @@ export function ServiceProtocolPage() {
             <button type="button" className="sp-btn-primary" onClick={() => sendAction('pdf')}>
               {t(uiLang, 'singlePdf')}
             </button>
-            {fabChips.length >= 2 ? (
+            {includedFabCount >= 2 ? (
               <button type="button" className="sp-btn-primary" onClick={() => sendAction('pdfAll')}>
                 {t(uiLang, 'allPdf')}
               </button>
@@ -315,7 +334,7 @@ export function ServiceProtocolPage() {
                       type="checkbox"
                       className="h-4 w-4 accent-[#0e7b5a]"
                       checked={form.pdfDe}
-                      onChange={(e) => patchForm({ pdfDe: e.target.checked })}
+                      onChange={(e) => pushLangChange(e.target.checked, form.pdfEn)}
                     />
                     {t(uiLang, 'german')}
                   </label>
@@ -324,7 +343,7 @@ export function ServiceProtocolPage() {
                       type="checkbox"
                       className="h-4 w-4 accent-[#0e7b5a]"
                       checked={form.pdfEn}
-                      onChange={(e) => patchForm({ pdfEn: e.target.checked })}
+                      onChange={(e) => pushLangChange(form.pdfDe, e.target.checked)}
                     />
                     {t(uiLang, 'english')}
                   </label>
@@ -340,7 +359,10 @@ export function ServiceProtocolPage() {
                       key={fab}
                       value={fab}
                       active={activeFabVisual === fab}
+                      included={fabIncludeByFab?.[fab] !== false}
+                      includeLabel={t(uiLang, 'includeFnInProtocol') + ' ' + fab}
                       onClick={() => handleFabChange(fab)}
+                      onToggleInclude={(included) => handleFabIncludeToggle(fab, included)}
                     />
                   ))}
                 </div>

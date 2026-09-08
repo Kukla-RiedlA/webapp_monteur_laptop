@@ -23,13 +23,14 @@
   <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
   <link rel="stylesheet" href="css/anlagenakte.css">
   <link rel="stylesheet" href="css/anlagenakte-form-viewer.css">
-  <link rel="stylesheet" href="css/serviceprotokoll-v2.css">
+  <link rel="stylesheet" href="css/serviceprotokoll-v2.css?v=fabinclude1">
   <link rel="stylesheet" href="css/montagebericht-v2.css">
   <link rel="stylesheet" href="css/arbeitsnachweis.css">
   <link rel="stylesheet" href="css/kontrollwiegung-v2.css">
   <link rel="stylesheet" href="css/schleppketten-v2.css">
   <link rel="stylesheet" href="css/kunden-dokumentation.css">
   <link rel="stylesheet" href="css/abrechnung-web-parity.css">
+  <link rel="stylesheet" href="css/file_preview_hover.css?v=20260908hover">
   <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260907">
   <link rel="stylesheet" href="css/hinweise.css?v=20260902files">
   <style>
@@ -75,6 +76,8 @@
     .sp-fab-buttons { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.35rem; }
     .sp-fab-buttons .sp-fab-btn { min-width: 4.5rem; padding: 0.4rem 0.75rem; font-size: 0.9rem; }
     .sp-fab-buttons .sp-fab-btn.is-active { background: var(--accent); font-weight: 600; }
+    .sp-fab-chip.is-excluded .sp-fab-btn:hover,
+    .sp-fab-chip .sp-fab-btn:disabled:hover { background: transparent; }
     .sp-mess-section-title { display: block; font-weight: 600; margin-bottom: 0.5rem; }
     .sp-mess-block {
       width: fit-content;
@@ -3186,7 +3189,7 @@
     </div>
   </main>
   <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">
-    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html" title="Serviceprotokoll"></iframe>
+    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=langshare2" title="Serviceprotokoll"></iframe>
     <div id="serviceprotokollLegacyHost" class="sp-v2-legacy-host" hidden aria-hidden="true">
     <div class="card sp-v2-card">
       <div class="sp-v2-topbar">
@@ -3894,16 +3897,17 @@
   <script src="js/web-page-host.js"></script>
   <script src="js/view-anlagenstamm.js"></script>
   <script src="assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260701"></script>
-  <script src="js/view-abrechnung.js?v=20260702c"></script>
+  <script src="assets/js/dispo/file_preview_hover.js?v=20260908hover"></script>
+  <script src="js/view-abrechnung.js?v=20260908hover"></script>
   <script src="js/view-zeitschreibung.js?v=20260726b"></script>
   <script src="js/signature-pad.js"></script>
   <script src="js/protocol-form-i18n.js"></script>
   <script src="js/arbeitsnachweis.js"></script>
   <script src="js/monteur-image-gallery.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=langshare2"></script>
   <script src="js/hinweis-lamp.js?v=20260902files"></script>
   <script src="js/probe-copilot-text.js"></script>
-  <script src="js/serviceprotokoll-react-bridge.js"></script>
+  <script src="js/serviceprotokoll-react-bridge.js?v=langshare2"></script>
   <script src="js/abrechnung-laptop-bridge.js?v=20260616f"></script>
   <script src="rams_wizard.js"></script>
 </body>

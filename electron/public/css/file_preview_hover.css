@@ -1,0 +1,56 @@
+/* Hover-Vorschau — eigene Datei, ohne diese CSS-Datei kein Overlay-Layout. */
+.kukla-file-preview-pop {
+  position: fixed;
+  z-index: 4000;
+  display: none;
+  pointer-events: none;
+  box-sizing: border-box;
+  max-width: min(720px, 48vw);
+  max-height: calc(100vh - 132px);
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #cfe8d1;
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  overflow: auto;
+}
+
+.kukla-file-preview-pop.is-open {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kukla-file-preview-pop img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  max-height: calc(100vh - 156px);
+  object-fit: contain;
+  background: #f7f8f8;
+}
+
+.kukla-file-preview-pop .kukla-file-preview-msg {
+  margin: 0;
+  padding: 12px 8px;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.kukla-file-preview-pop .kukla-file-preview-text {
+  margin: 0;
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #1a1a1a;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 28vh;
+  overflow: auto;
+  background: #eefaf5;
+  border-radius: 8px;
+}
+
+.kukla-file-preview-pop.is-loading .kukla-file-preview-msg {
+  color: #0e7b5a;
+}

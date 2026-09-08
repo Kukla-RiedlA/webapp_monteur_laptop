@@ -30,6 +30,7 @@ html, body {
   background: #eefaf5;
   border-bottom: 1px solid #cfe8d1;
   flex-shrink: 0;
+  user-select: none;
 }
 
 .pdf-annot-title {
@@ -200,11 +201,64 @@ html, body {
   inset: 0;
   width: 100%;
   height: 100%;
+  z-index: 2;
 }
 
 .pdf-page-texts {
   position: absolute;
   inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.pdf-page-textlayer,
+.textLayer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: clip;
+  line-height: 1;
+  transform-origin: 0 0;
+  z-index: 1;
+  pointer-events: none;
+  user-select: none;
+  --scale-factor: 1;
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --total-scale-factor: calc(var(--scale-factor) * var(--visual-viewport-scale, 1));
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.textLayer .markedContent {
+  display: contents;
+}
+
+.textLayer ::selection {
+  background: rgba(14, 123, 90, 0.28);
+}
+
+.textLayer br::selection {
+  background: transparent;
 }
 
 .pdf-text-box {
@@ -237,10 +291,6 @@ html, body {
   background: #fff;
 }
 
-.pdf-page-texts {
-  pointer-events: none;
-}
-
 body.is-draw .pdf-page-ink { cursor: crosshair; }
 body.is-text .pdf-page-texts {
   pointer-events: auto;
@@ -253,3 +303,13 @@ body.is-move .pdf-page-ink { cursor: grab; }
 body.is-move .pdf-text-box { cursor: grab; }
 body.is-move .pdf-page-ink.is-dragging,
 body.is-move .pdf-text-box.is-dragging { cursor: grabbing; }
+body.is-select .pdf-page { cursor: text; }
+body.is-select .pdf-page-ink,
+body.is-select .pdf-page-texts { pointer-events: none; }
+body.is-select .pdf-page-textlayer,
+body.is-select .textLayer {
+  z-index: 4;
+  pointer-events: auto;
+  user-select: text;
+  cursor: text;
+}

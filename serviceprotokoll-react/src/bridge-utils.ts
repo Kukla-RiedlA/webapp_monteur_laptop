@@ -53,6 +53,7 @@ export function emptyBridgePayload(jobs: SpBridgePayload['jobs'] = []): SpBridge
     jobId: '',
     jobs: jobs.slice(),
     fabNumbers: [],
+    fabIncludeByFab: {},
     form: {
       ...EMPTY_FORM,
       loadCells: EMPTY_FORM.loadCells.map((c) => ({
@@ -130,6 +131,7 @@ export function mergeBridgePayload(base: SpBridgePayload, patch: Partial<SpBridg
     workSteps: patch.workSteps ?? base.workSteps,
     jobs: patch.jobs ?? base.jobs,
     fabNumbers: patch.fabNumbers ?? base.fabNumbers,
+    fabIncludeByFab: patch.fabIncludeByFab ?? base.fabIncludeByFab,
   };
 }
 

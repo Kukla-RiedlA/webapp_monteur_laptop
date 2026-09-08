@@ -84,6 +84,36 @@
     return ['de'];
   }
 
+  /** Eine Sprachwahl pro Protokolltyp, nicht je FN. Neuester Draft gewinnt. */
+  function sharedLanguagesFromDraftMap(draftByFab) {
+    var best = null;
+    var bestTs = -1;
+    Object.keys(draftByFab || {}).forEach(function (fn) {
+      var d = draftByFab[fn];
+      if (!d || typeof d !== 'object') return;
+      var ts = Date.parse(d.updatedAt || d.updated_at || d.gespeichert_am || '') || 0;
+      if (!best || ts >= bestTs) {
+        bestTs = ts;
+        best = d;
+      }
+    });
+    return languagesFromDraft(best);
+  }
+
+  function stampDraftMapLanguages(draftByFab, langs) {
+    var list = Array.isArray(langs) && langs.length ? langs.slice() : ['de'];
+    Object.keys(draftByFab || {}).forEach(function (fn) {
+      if (!draftByFab[fn] || typeof draftByFab[fn] !== 'object') return;
+      draftByFab[fn].languages = list.slice();
+      draftByFab[fn].pdf_languages = list.slice();
+    });
+  }
+
+  function applySharedProtocolLanguages(deId, enId, draftByFab) {
+    setProtocolLanguagesOnChecks(deId, enId, sharedLanguagesFromDraftMap(draftByFab));
+    stampDraftMapLanguages(draftByFab, getProtocolLanguagesFromChecks(deId, enId));
+  }
+
   function protocolFlagFalse(v) {
     return v === false || v === 0 || v === '0';
   }
@@ -4409,6 +4439,9 @@
     var fab = String(row.fabrikationsnummer || '').trim();
     if (!fab) return;
     mergeAnlagenstammFieldsIntoOpenJob(fab, row);
+    if (typeof window.kuklaSyncMontageberichtFromAnlagenstamm === 'function') {
+      window.kuklaSyncMontageberichtFromAnlagenstamm(fab, row);
+    }
     if (typeof window.kuklaSyncServiceprotokollFromAnlagenstamm === 'function') {
       window.kuklaSyncServiceprotokollFromAnlagenstamm(fab, row);
     }
@@ -5019,6 +5052,90 @@
       out = String(raw).split(/[\s;,]+/).map(function (p) { return p.trim(); }).filter(Boolean);
     }
     return sortFabrikationsnummerStrings(out);
+  }
+
+  /** FN ist für das aktuelle Protokoll / Alle PDF angehakt (Default: ja). */
+  function isFabIncluded(draft) {
+    return !(draft && typeof draft === 'object' && draft.include_in_pdf === false);
+  }
+
+  function setFabIncluded(draftByFab, fn, included) {
+    fn = String(fn || '').trim();
+    if (!fn || !draftByFab) return;
+    if (!draftByFab[fn] || typeof draftByFab[fn] !== 'object') draftByFab[fn] = {};
+    draftByFab[fn].include_in_pdf = included !== false;
+  }
+
+  function includedFabsFromList(fns, draftByFab) {
+    return (fns || []).filter(function (fn) {
+      return isFabIncluded(draftByFab && draftByFab[fn]);
+    });
+  }
+
+  function firstIncludedFab(fns, draftByFab) {
+    var list = includedFabsFromList(fns, draftByFab);
+    return list.length ? list[0] : '';
+  }
+
+  function applyProtocolFabChipActive(container, cur) {
+    if (!container) return;
+    cur = String(cur || '').trim();
+    container.querySelectorAll('.sp-fab-chip').forEach(function (chip) {
+      var fn = String(chip.getAttribute('data-fab') || '').trim();
+      var included = !chip.classList.contains('is-excluded');
+      var active = included && fn === cur;
+      chip.classList.toggle('is-active', active);
+      var btn = chip.querySelector('.sp-fab-btn');
+      if (btn) btn.classList.toggle('is-active', active);
+    });
+    container.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
+      if (btn.closest('.sp-fab-chip')) return;
+      btn.classList.toggle('is-active', btn.getAttribute('data-fab') === cur);
+    });
+  }
+
+  /**
+   * FN-Chip mit Checkbox (nicht im Button, damit Abwahl den Chip nicht sperrt).
+   * @param {{ fn: string, active?: boolean, saved?: boolean, included?: boolean, title?: string, onSelect?: Function, onToggleInclude?: Function }} opts
+   */
+  function renderProtocolFabChip(opts) {
+    opts = opts || {};
+    var fn = String(opts.fn || '').trim();
+    var included = opts.included !== false;
+    var active = !!(opts.active && included);
+    var wrap = document.createElement('div');
+    wrap.className = 'sp-fab-chip' + (included ? '' : ' is-excluded') + (active ? ' is-active' : '');
+    wrap.setAttribute('data-fab', fn);
+
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'sp-fab-include';
+    cb.checked = included;
+    cb.setAttribute('aria-label', 'FN ' + fn + ' für dieses Protokoll');
+    cb.title = 'Diese FN im Protokoll und bei „Alle PDF“ berücksichtigen';
+    cb.addEventListener('click', function (e) {
+      e.stopPropagation();
+    });
+    cb.addEventListener('change', function (e) {
+      e.stopPropagation();
+      if (typeof opts.onToggleInclude === 'function') opts.onToggleInclude(fn, cb.checked);
+    });
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-ghost sp-fab-btn' + (active ? ' is-active' : '') + (opts.saved ? ' is-saved' : '');
+    btn.setAttribute('data-fab', fn);
+    btn.textContent = fn;
+    btn.disabled = !included;
+    if (opts.title) btn.title = opts.title;
+    btn.addEventListener('click', function () {
+      if (!included) return;
+      if (typeof opts.onSelect === 'function') opts.onSelect(fn);
+    });
+
+    wrap.appendChild(cb);
+    wrap.appendChild(btn);
+    return wrap;
   }
 
   /** Anzeigename des PROJEKTE-NEU-Fabrikationsordners (Sidebar Projektdaten). */
@@ -17026,6 +17143,55 @@
       refreshProtocolFormLang('viewProtokolleMontagebericht');
     }
 
+    /** Entwurf füllt Type/Pos.Nr. nur, wenn das Stamm-Feld noch leer ist. */
+    function applyMontageberichtDraftStammIfEmpty(inputEl, draftVal) {
+      if (!inputEl) return;
+      if (String(inputEl.value || '').trim()) return;
+      var draft = draftVal != null ? String(draftVal).trim() : '';
+      if (draft) inputEl.value = draft;
+    }
+
+    function patchMontageberichtJobFabStamm(fab, fields) {
+      fab = String(fab || '').trim();
+      if (!fab || !fields || !montageberichtJobData || !montageberichtJobData.fabrikationsnummern) return;
+      try {
+        var parsed = JSON.parse(montageberichtJobData.fabrikationsnummern);
+        if (!Array.isArray(parsed)) return;
+        var touched = false;
+        for (var i = 0; i < parsed.length; i++) {
+          var fn = String(parsed[i].fabrikationsnummer || parsed[i].Fabrikationsnummer || '').trim();
+          if (fn !== fab) continue;
+          if (fields.type) parsed[i].type = fields.type;
+          if (fields.position) parsed[i].position = fields.position;
+          touched = true;
+        }
+        if (touched) {
+          montageberichtJobData = Object.assign({}, montageberichtJobData, {
+            fabrikationsnummern: JSON.stringify(parsed)
+          });
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    function syncMontageberichtFromAnlagenstamm(fab, row) {
+      fab = String(fab || '').trim();
+      if (!fab || !row) return;
+      var typeVal = String(row.type != null ? row.type : '').trim();
+      var posVal = String(row.position != null ? row.position : '').trim();
+      if (!typeVal && !posVal) return;
+      if (fabContainer) {
+        fabContainer.querySelectorAll('.montagebericht-fab-block').forEach(function (block) {
+          if ((block.getAttribute('data-fab') || '').trim() !== fab) return;
+          var ti = block.querySelector('input[data-mb-type]');
+          var pi = block.querySelector('input[data-mb-position]');
+          if (ti && typeVal) ti.value = typeVal;
+          if (pi && posVal) pi.value = posVal;
+        });
+      }
+      patchMontageberichtJobFabStamm(fab, { type: typeVal, position: posVal });
+    }
+    window.kuklaSyncMontageberichtFromAnlagenstamm = syncMontageberichtFromAnlagenstamm;
+
     function stripHtmlForPlain(html) {
       if (!html) return '';
       var d = document.createElement('div');
@@ -17926,8 +18092,8 @@
                   if (!fb) return;
                   var ti = block.querySelector('input[data-mb-type]');
                   var pi = block.querySelector('input[data-mb-position]');
-                  if (ti && fb.type != null) ti.value = String(fb.type);
-                  if (pi && fb.position != null) pi.value = String(fb.position);
+                  applyMontageberichtDraftStammIfEmpty(ti, fb.type);
+                  applyMontageberichtDraftStammIfEmpty(pi, fb.position);
                   var ta = block.querySelector('[data-fab-rich]');
                   if (ta) {
                     var valHtml = fb.bemerkungen_html || '';
@@ -18625,7 +18791,8 @@
           languages: getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'),
           gespeichert_am: prev.gespeichert_am || '',
           updated_at: prev.updated_at || '',
-          protokoll_id: prev.protokoll_id != null ? prev.protokoll_id : null
+          protokoll_id: prev.protokoll_id != null ? prev.protokoll_id : null,
+          include_in_pdf: prev.include_in_pdf !== false
         };
       }
 
@@ -18660,7 +18827,6 @@
         if (letzteEichungEl) {
           letzteEichungEl.value = draft.letzte_eichung != null ? String(draft.letzte_eichung) : '';
         }
-        setProtocolLanguagesOnChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn', languagesFromDraft(draft));
         wiegungen = Array.isArray(draft.wiegungen) && draft.wiegungen.length
           ? draft.wiegungen.map(function (w) {
               return {
@@ -18928,20 +19094,34 @@
       }
   
       function renderFabButtonsActive() {
-        if (!fabButtonsEl) return;
-        var cur = getActiveFab();
-        fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
-          btn.classList.toggle('is-active', btn.getAttribute('data-fab') === cur);
-        });
+        applyProtocolFabChipActive(fabButtonsEl, getActiveFab());
       }
   
       function updateAllPdfButtonVisibility(job) {
         var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
           ? parseJobFabrikationsnummernOrdered(job || {})
           : [];
-        var show = fns.length >= 2 ? 'inline-block' : 'none';
+        var show = includedFabsFromList(fns, kwDraftByFab).length >= 2 ? 'inline-block' : 'none';
         if (allPdfBtn) allPdfBtn.style.display = show;
         if (allPdfBtnTop) allPdfBtnTop.style.display = show;
+      }
+
+      function toggleKontrollwiegungFabInclude(fn, included) {
+        fn = String(fn || '').trim();
+        if (!fn) return;
+        if (getActiveFab() === fn) stashDraftInMemory(fn);
+        setFabIncluded(kwDraftByFab, fn, included);
+        persistDraftJsonForFab(fn, {
+          localOnly: true,
+          skipStash: true,
+          payloadSnapshot: kwDraftByFab[fn]
+        }).catch(function () { /* best-effort */ });
+        if (!included && getActiveFab() === fn) {
+          var next = firstIncludedFab(parseJobFabrikationsnummernOrdered(kontrollwiegungJobData || {}), kwDraftByFab);
+          if (next) switchKontrollwiegungFab(next);
+          else setActiveFabValue('');
+        }
+        renderFabButtons(kontrollwiegungJobData);
       }
 
       function renderFabButtons(job) {
@@ -18955,20 +19135,19 @@
           return;
         }
         fns.forEach(function (fn) {
-          var btn = document.createElement('button');
-          btn.type = 'button';
           var draft = kwDraftByFab[fn];
           var savedAt = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
-          btn.className = 'btn btn-ghost sp-fab-btn' + (fn === getActiveFab() ? ' is-active' : '') + (savedAt ? ' is-saved' : '');
-          btn.setAttribute('data-fab', fn);
-          btn.textContent = fn;
-          btn.title = savedAt
-            ? ('FN ' + fn + ' · Gespeichert: ' + formatGespeichertAmDisplay(savedAt))
-            : ('FN ' + fn + ' · Noch nicht gespeichert');
-          btn.addEventListener('click', function () {
-            switchKontrollwiegungFab(fn);
-          });
-          fabButtonsEl.appendChild(btn);
+          fabButtonsEl.appendChild(renderProtocolFabChip({
+            fn: fn,
+            active: fn === getActiveFab(),
+            saved: !!savedAt,
+            included: isFabIncluded(draft),
+            title: savedAt
+              ? ('FN ' + fn + ' · Gespeichert: ' + formatGespeichertAmDisplay(savedAt))
+              : ('FN ' + fn + ' · Noch nicht gespeichert'),
+            onSelect: function (sel) { switchKontrollwiegungFab(sel); },
+            onToggleInclude: toggleKontrollwiegungFabInclude
+          }));
         });
       }
   
@@ -19028,6 +19207,7 @@
           wiegungen: Array.isArray(draft.wiegungen) ? draft.wiegungen : [],
           languages: draft.languages || getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'),
           pdf_languages: draft.languages || getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'),
+          include_in_pdf: draft.include_in_pdf !== false,
           base_url: getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
@@ -19086,6 +19266,7 @@
       function switchKontrollwiegungFab(newFab) {
         newFab = newFab ? String(newFab).trim() : '';
         if (!newFab || kwFabSwitching) return;
+        if (!isFabIncluded(kwDraftByFab[newFab])) return;
         var cur = getActiveFab();
         if (cur === newFab) return;
         kwFabSwitching = true;
@@ -19242,7 +19423,8 @@
           gespeichert_am: rec.gespeichert_am || rec.updated_at || '',
           updated_at: rec.updated_at || rec.gespeichert_am || '',
           fabrikationsnummer: rec.fabrikationsnummer != null ? String(rec.fabrikationsnummer) : '',
-          languages: languagesFromDraft(rec)
+          languages: languagesFromDraft(rec),
+          include_in_pdf: rec.include_in_pdf !== false
         };
       }
 
@@ -19284,6 +19466,7 @@
           updateKundeHint(null);
           renderFabButtons(null);
           updateSpeicherMeta('', null);
+          setProtocolLanguagesOnChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn', ['de']);
           if (projektEl) projektEl.value = '';
           if (typeEl) typeEl.value = '';
           if (leistungEl) leistungEl.value = '';
@@ -19298,17 +19481,13 @@
         kontrollwiegungJobData = await loadJobWithAnlagenstammKw(jobId);
         updateKundeHint(kontrollwiegungJobData);
         await loadKontrollwiegungDraftsForJob(jobId);
+        applySharedProtocolLanguages('kontrollwiegungLangDe', 'kontrollwiegungLangEn', kwDraftByFab);
         renderFabButtons(kontrollwiegungJobData);
         var fns = parseJobFabrikationsnummernOrdered(kontrollwiegungJobData || {});
-        var preferredFab = '';
+        var preferredFab = firstIncludedFab(fns, kwDraftByFab);
         if (fns.length) {
-          for (var i = 0; i < fns.length; i++) {
-            if (kwDraftByFab[fns[i]]) {
-              preferredFab = fns[i];
-              break;
-            }
-          }
-          loadFabIntoForm(preferredFab || fns[0]);
+          if (preferredFab) loadFabIntoForm(preferredFab);
+          else setActiveFabValue('');
           if (kontrollwiegungAutosave) kontrollwiegungAutosave.markSaved();
         } else {
           applyDraftToForm({
@@ -19370,6 +19549,7 @@
           wiegungen: wiegungen,
           languages: langsKw.length ? langsKw : (draft.languages || ['de']),
           pdf_languages: langsKw.length ? langsKw : (draft.languages || ['de']),
+          include_in_pdf: draft.include_in_pdf !== false,
           create_pdf: withPdf,
           base_url: getDispoBaseUrl(),
           serverUsername: getDispoUsername(),
@@ -19419,11 +19599,14 @@
           alert('Bitte Auftrag wählen.');
           return;
         }
-        var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
-          ? parseJobFabrikationsnummernOrdered(kontrollwiegungJobData)
-          : [];
+        var fns = includedFabsFromList(
+          typeof parseJobFabrikationsnummernOrdered === 'function'
+            ? parseJobFabrikationsnummernOrdered(kontrollwiegungJobData)
+            : [],
+          kwDraftByFab
+        );
         if (fns.length < 2) {
-          alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
+          alert('Für „Alle PDF“ werden mindestens zwei angehakte Fabrikationsnummern benötigt.');
           return;
         }
         var langsKw = getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn');
@@ -19461,6 +19644,7 @@
             prog.setProgress(fns.length, fns.length);
           });
           await loadKontrollwiegungDraftsForJob(parseInt(jobSelect.value, 10));
+          stampDraftMapLanguages(kwDraftByFab, getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'));
           if (cur) loadFabIntoForm(cur);
           else if (fns[0]) loadFabIntoForm(fns[0]);
           renderFabButtons(kontrollwiegungJobData);
@@ -19478,6 +19662,15 @@
 
       if (allPdfBtn) allPdfBtn.addEventListener('click', function () { runSaveAllPdf(); });
       if (allPdfBtnTop) allPdfBtnTop.addEventListener('click', function () { runSaveAllPdf(); });
+
+      ['kontrollwiegungLangDe', 'kontrollwiegungLangEn'].forEach(function (id) {
+        var langEl = document.getElementById(id);
+        if (langEl) {
+          langEl.addEventListener('change', function () {
+            stampDraftMapLanguages(kwDraftByFab, getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'));
+          });
+        }
+      });
 
       if (form) {
         form.addEventListener('submit', async function (e) {
@@ -19501,6 +19694,7 @@
               prog.setProgress(1, 1);
               try {
                 await loadKontrollwiegungDraftsForJob(parseInt(jobSelect.value, 10));
+                stampDraftMapLanguages(kwDraftByFab, getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'));
                 renderFabButtons(kontrollwiegungJobData);
                 if (kwDraftByFab[fab]) {
                   applyDraftToForm(kwDraftByFab[fab], stammFieldsForFab(kontrollwiegungJobData, fab));
@@ -19901,7 +20095,8 @@
         languages: getProtocolLanguagesFromChecks('schleppkettenLangDe', 'schleppkettenLangEn'),
         gespeichert_am: prev.gespeichert_am || '',
         updated_at: prev.updated_at || '',
-        protokoll_id: prev.protokoll_id != null ? prev.protokoll_id : null
+        protokoll_id: prev.protokoll_id != null ? prev.protokoll_id : null,
+        include_in_pdf: prev.include_in_pdf !== false
       };
     }
     function stashDraftInMemory(fab) {
@@ -19950,7 +20145,6 @@
         : [emptyMessung()];
       renderRows();
       applyKettenSumToMessungenKgProM({ onlyIfEmpty: true });
-      setProtocolLanguagesOnChecks('schleppkettenLangDe', 'schleppkettenLangEn', languagesFromDraft(draft));
       lastProtokollId = draft.protokoll_id || null;
       if (pdfBtn) pdfBtn.style.display = lastProtokollId != null ? 'inline-block' : 'none';
       updateSpeicherMeta(getActiveFab(), draft);
@@ -20223,19 +20417,33 @@
       refreshProtocolFormLang('viewProtokolleSchleppketten');
     }
     function renderFabButtonsActive() {
-      if (!fabButtonsEl) return;
-      var cur = getActiveFab();
-      fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
-        btn.classList.toggle('is-active', btn.getAttribute('data-fab') === cur);
-      });
+      applyProtocolFabChipActive(fabButtonsEl, getActiveFab());
     }
     function updateAllPdfButtonVisibility(job) {
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
         ? parseJobFabrikationsnummernOrdered(job || {})
         : [];
-      var show = fns.length >= 2 ? 'inline-block' : 'none';
+      var show = includedFabsFromList(fns, skDraftByFab).length >= 2 ? 'inline-block' : 'none';
       if (allPdfBtn) allPdfBtn.style.display = show;
       if (allPdfBtnFooter) allPdfBtnFooter.style.display = show;
+    }
+
+    function toggleSchleppkettenFabInclude(fn, included) {
+      fn = String(fn || '').trim();
+      if (!fn) return;
+      if (getActiveFab() === fn) stashDraftInMemory(fn);
+      setFabIncluded(skDraftByFab, fn, included);
+      persistDraftJsonForFab(fn, {
+        localOnly: true,
+        skipStash: true,
+        payloadSnapshot: skDraftByFab[fn]
+      }).catch(function () { /* best-effort */ });
+      if (!included && getActiveFab() === fn) {
+        var next = firstIncludedFab(parseJobFabrikationsnummernOrdered(skJobData || {}), skDraftByFab);
+        if (next) switchSchleppkettenFab(next);
+        else setActiveFabValue('');
+      }
+      renderFabButtons(skJobData);
     }
 
     function renderFabButtons(job) {
@@ -20249,20 +20457,19 @@
         return;
       }
       fns.forEach(function (fn) {
-        var btn = document.createElement('button');
-        btn.type = 'button';
         var draft = skDraftByFab[fn];
         var savedAt = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
-        btn.className = 'btn btn-ghost sp-fab-btn' + (fn === getActiveFab() ? ' is-active' : '') + (savedAt ? ' is-saved' : '');
-        btn.setAttribute('data-fab', fn);
-        btn.textContent = fn;
-        btn.title = savedAt
-          ? ('FN ' + fn + ' · Gespeichert: ' + formatGespeichertAmDisplay(savedAt))
-          : ('FN ' + fn + ' · Noch nicht gespeichert');
-        btn.addEventListener('click', function () {
-          switchSchleppkettenFab(fn);
-        });
-        fabButtonsEl.appendChild(btn);
+        fabButtonsEl.appendChild(renderProtocolFabChip({
+          fn: fn,
+          active: fn === getActiveFab(),
+          saved: !!savedAt,
+          included: isFabIncluded(draft),
+          title: savedAt
+            ? ('FN ' + fn + ' · Gespeichert: ' + formatGespeichertAmDisplay(savedAt))
+            : ('FN ' + fn + ' · Noch nicht gespeichert'),
+          onSelect: function (sel) { switchSchleppkettenFab(sel); },
+          onToggleInclude: toggleSchleppkettenFabInclude
+        }));
       });
     }
     function loadFabIntoForm(fab) {
@@ -20359,6 +20566,7 @@
     function switchSchleppkettenFab(newFab) {
       newFab = newFab ? String(newFab).trim() : '';
       if (!newFab || skFabSwitching) return;
+      if (!isFabIncluded(skDraftByFab[newFab])) return;
       var cur = getActiveFab();
       if (cur === newFab) return;
       skFabSwitching = true;
@@ -20485,7 +20693,8 @@
         gespeichert_am: rec.gespeichert_am || rec.updated_at || '',
         updated_at: rec.updated_at || rec.gespeichert_am || '',
         fabrikationsnummer: rec.fabrikationsnummer != null ? String(rec.fabrikationsnummer) : '',
-        languages: languagesFromDraft(rec)
+        languages: languagesFromDraft(rec),
+        include_in_pdf: rec.include_in_pdf !== false
       };
     }
     async function loadDraftsForJob(jobId) {
@@ -20559,6 +20768,7 @@
         updateKundeHint(null);
         renderFabButtons(null);
         updateSpeicherMeta('', null);
+        setProtocolLanguagesOnChecks('schleppkettenLangDe', 'schleppkettenLangEn', ['de']);
         if (projektEl) projektEl.value = '';
         if (typeEl) typeEl.value = '';
         if (leistungEl) leistungEl.value = '';
@@ -20576,17 +20786,13 @@
       skJobData = await loadJobWithAnlagenstammSk(jobId);
       updateKundeHint(skJobData);
       await loadDraftsForJob(jobId);
+      applySharedProtocolLanguages('schleppkettenLangDe', 'schleppkettenLangEn', skDraftByFab);
       renderFabButtons(skJobData);
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(skJobData || {}) : [];
-      var preferredFab = '';
+      var preferredFab = firstIncludedFab(fns, skDraftByFab);
       if (fns.length) {
-        for (var i = 0; i < fns.length; i++) {
-          if (skDraftByFab[fns[i]]) {
-            preferredFab = fns[i];
-            break;
-          }
-        }
-        loadFabIntoForm(preferredFab || fns[0]);
+        if (preferredFab) loadFabIntoForm(preferredFab);
+        else setActiveFabValue('');
         if (schleppkettenAutosave) schleppkettenAutosave.markSaved();
       } else {
         applyDraftToForm({
@@ -20706,11 +20912,14 @@
         alert('Bitte Auftrag wählen.');
         return;
       }
-      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
-        ? parseJobFabrikationsnummernOrdered(skJobData)
-        : [];
+      var fns = includedFabsFromList(
+        typeof parseJobFabrikationsnummernOrdered === 'function'
+          ? parseJobFabrikationsnummernOrdered(skJobData)
+          : [],
+        skDraftByFab
+      );
       if (fns.length < 2) {
-        alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
+        alert('Für „Alle PDF“ werden mindestens zwei angehakte Fabrikationsnummern benötigt.');
         return;
       }
       var cur = getActiveFab();
@@ -20743,6 +20952,7 @@
           prog.setProgress(fns.length, fns.length);
         });
         await loadDraftsForJob(parseInt(jobSelect.value, 10));
+        stampDraftMapLanguages(skDraftByFab, getProtocolLanguagesFromChecks('schleppkettenLangDe', 'schleppkettenLangEn'));
         if (cur) loadFabIntoForm(cur);
         else if (fns[0]) loadFabIntoForm(fns[0]);
         renderFabButtons(skJobData);
@@ -20761,6 +20971,15 @@
     if (allPdfBtn) allPdfBtn.addEventListener('click', function () { runSaveAllPdf(); });
     if (allPdfBtnFooter) allPdfBtnFooter.addEventListener('click', function () { runSaveAllPdf(); });
 
+    ['schleppkettenLangDe', 'schleppkettenLangEn'].forEach(function (id) {
+      var langEl = document.getElementById(id);
+      if (langEl) {
+        langEl.addEventListener('change', function () {
+          stampDraftMapLanguages(skDraftByFab, getProtocolLanguagesFromChecks('schleppkettenLangDe', 'schleppkettenLangEn'));
+        });
+      }
+    });
+
     form.addEventListener('submit', async function (e) {
       e.preventDefault();
       var submitBtn = e.submitter;
@@ -20778,6 +20997,7 @@
           return;
         }
         await loadDraftsForJob(parseInt(jobSelect.value, 10));
+        stampDraftMapLanguages(skDraftByFab, getProtocolLanguagesFromChecks('schleppkettenLangDe', 'schleppkettenLangEn'));
         renderFabButtons(skJobData);
         if (skDraftByFab[fab]) {
           applyDraftToForm(skDraftByFab[fab], stammFieldsForFab(skJobData, fab));
@@ -21105,7 +21325,8 @@
         serviceprotokoll_id: linkedIds.serviceprotokoll_id || null,
         inbetriebnahme_id: linkedIds.inbetriebnahme_id || null,
         languages: collectPdfLanguages(),
-        pdf_languages: collectPdfLanguages()
+        pdf_languages: collectPdfLanguages(),
+        include_in_pdf: isFabIncluded(pzDraftByFab[getActiveFab()])
       };
     }
     function applyPrefill(p) {
@@ -21153,7 +21374,6 @@
       if (el('pzBemerkungen')) el('pzBemerkungen').value = p.bemerkungen || '';
       if (el('pzKonformitaet')) el('pzKonformitaet').value = p.konformitaet_text || '';
       if (el('pzKundeUnterschrift')) el('pzKundeUnterschrift').value = p.kunde_unterschrift || '';
-      setProtocolLanguagesOnChecks('pzPdfDe', 'pzPdfEn', languagesFromDraft(p));
       syncVerfahrenBlocksVisibility();
     }
     function clearPruefzertifikatSignature() {
@@ -21172,11 +21392,7 @@
       clearPruefzertifikatSignature();
     }
     function renderFabButtonsActive() {
-      if (!fabButtonsEl) return;
-      fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
-        var fn = btn.getAttribute('data-fab') || '';
-        btn.classList.toggle('is-active', fn === getActiveFab());
-      });
+      applyProtocolFabChipActive(fabButtonsEl, getActiveFab());
     }
     function updateAllPdfButtonVisibility(job) {
       var allPdfBtn = el('btnPruefzertifikatSaveAllPdf');
@@ -21184,10 +21400,33 @@
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
         ? parseJobFabrikationsnummernOrdered(job || {})
         : [];
-      var show = fns.length >= 2 ? 'inline-block' : 'none';
+      var show = includedFabsFromList(fns, pzDraftByFab).length >= 2 ? 'inline-block' : 'none';
       if (allPdfBtn) allPdfBtn.style.display = show;
       if (allPdfBtnTop) allPdfBtnTop.style.display = show;
     }
+
+    function togglePruefzertifikatFabInclude(fn, included) {
+      fn = String(fn || '').trim();
+      if (!fn) return;
+      if (getActiveFab() === fn) {
+        pzDraftByFab[fn] = Object.assign({}, collectPayload(), { fabrikationsnummer: fn });
+      }
+      setFabIncluded(pzDraftByFab, fn, included);
+      if (!pzDraftByFab[fn].pruefdatum) pzDraftByFab[fn].pruefdatum = todayIsoLocal();
+      savePruefzertifikatFab(fn, {
+        silent: true,
+        withPdf: false,
+        localOnly: true,
+        payloadSnapshot: pzDraftByFab[fn]
+      }).catch(function () { return null; });
+      if (!included && getActiveFab() === fn) {
+        var next = firstIncludedFab(parseJobFabrikationsnummernOrdered(pzJobData || {}), pzDraftByFab);
+        if (next) switchPruefzertifikatFab(next);
+        else setActiveFabValue('');
+      }
+      renderFabButtons(pzJobData);
+    }
+
     function renderFabButtons(job) {
       if (!fabButtonsEl) return;
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(job || {}) : [];
@@ -21199,25 +21438,25 @@
         return;
       }
       fns.forEach(function (fn) {
-        var btn = document.createElement('button');
-        btn.type = 'button';
         var draft = pzDraftByFab[fn];
         var savedAt = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
-        btn.className = 'btn btn-ghost sp-fab-btn' + (fn === getActiveFab() ? ' is-active' : '') + (savedAt ? ' is-saved' : '');
-        btn.setAttribute('data-fab', fn);
-        btn.textContent = fn;
-        btn.title = savedAt
-          ? ('FN ' + fn + ' · Gespeichert')
-          : ('FN ' + fn + ' · Zertifikat für diese Fabrikationsnummer');
-        btn.addEventListener('click', function () {
-          switchPruefzertifikatFab(fn);
-        });
-        fabButtonsEl.appendChild(btn);
+        fabButtonsEl.appendChild(renderProtocolFabChip({
+          fn: fn,
+          active: fn === getActiveFab(),
+          saved: !!savedAt,
+          included: isFabIncluded(draft),
+          title: savedAt
+            ? ('FN ' + fn + ' · Gespeichert')
+            : ('FN ' + fn + ' · Zertifikat für diese Fabrikationsnummer'),
+          onSelect: function (sel) { switchPruefzertifikatFab(sel); },
+          onToggleInclude: togglePruefzertifikatFabInclude
+        }));
       });
     }
     async function switchPruefzertifikatFab(newFab) {
       newFab = newFab ? String(newFab).trim() : '';
       if (!newFab) return;
+      if (!isFabIncluded(pzDraftByFab[newFab])) return;
       var cur = getActiveFab();
       if (cur === newFab) return;
       if (cur) {
@@ -21343,6 +21582,7 @@
         updateAllPdfButtonVisibility(null);
         if (hintEl) hintEl.hidden = true;
         updateSpeicherMeta('', null);
+        setProtocolLanguagesOnChecks('pzPdfDe', 'pzPdfEn', ['de']);
         return;
       }
       pzJobData = await loadJobWithAnlagenstammPz(jobId);
@@ -21368,14 +21608,13 @@
           pzDraftByFab = storeData.store.byFab;
         }
       } catch (_) { /* ignore */ }
+      applySharedProtocolLanguages('pzPdfDe', 'pzPdfEn', pzDraftByFab);
       renderFabButtons(pzJobData);
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(pzJobData) : [];
+      var preferred = firstIncludedFab(fns, pzDraftByFab);
       if (fns.length) {
-        var preferred = '';
-        for (var i = 0; i < fns.length; i++) {
-          if (pzDraftByFab[fns[i]]) { preferred = fns[i]; break; }
-        }
-        await loadFab(preferred || fns[0]);
+        if (preferred) await loadFab(preferred);
+        else setActiveFabValue('');
         if (pzAutosave) pzAutosave.markSaved();
       } else {
         if (el('pruefzertifikatDatum') && !el('pruefzertifikatDatum').value) el('pruefzertifikatDatum').value = todayIsoLocal();
@@ -21432,9 +21671,7 @@
       if (!datum) {
         return { ok: false, skipped: silent, error: 'Bitte Prüfdatum angeben (FN ' + fab + ').' };
       }
-      var pdfLangs = Array.isArray(draft.pdf_languages) && draft.pdf_languages.length
-        ? draft.pdf_languages
-        : (Array.isArray(draft.languages) && draft.languages.length ? draft.languages : collectPdfLanguages());
+      var pdfLangs = collectPdfLanguages();
       if (withPdf && !pdfLangs.length) {
         return { ok: false, error: 'Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).' };
       }
@@ -21586,11 +21823,14 @@
         alert('Bitte Auftrag wählen.');
         return;
       }
-      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
-        ? parseJobFabrikationsnummernOrdered(pzJobData)
-        : [];
+      var fns = includedFabsFromList(
+        typeof parseJobFabrikationsnummernOrdered === 'function'
+          ? parseJobFabrikationsnummernOrdered(pzJobData)
+          : [],
+        pzDraftByFab
+      );
       if (fns.length < 2) {
-        alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
+        alert('Für „Alle PDF“ werden mindestens zwei angehakte Fabrikationsnummern benötigt.');
         return;
       }
       var pdfLangs = collectPdfLanguages();
@@ -21657,6 +21897,14 @@
     var btnAllPdfTop = el('btnPruefzertifikatSaveAllPdfTop');
     if (btnAllPdf) btnAllPdf.addEventListener('click', function () { runPruefzertifikatAllPdf(); });
     if (btnAllPdfTop) btnAllPdfTop.addEventListener('click', function () { runPruefzertifikatAllPdf(); });
+    ['pzPdfDe', 'pzPdfEn'].forEach(function (id) {
+      var langEl = el(id);
+      if (langEl) {
+        langEl.addEventListener('change', function () {
+          stampDraftMapLanguages(pzDraftByFab, collectPdfLanguages());
+        });
+      }
+    });
     var abbrechen = el('pruefzertifikatAbbrechen');
     if (abbrechen) {
       abbrechen.addEventListener('click', function () {
@@ -22414,7 +22662,6 @@
       var bemEl = document.getElementById('serviceprotokollBemerkungen');
       if (bemEl) bemEl.value = '';
       if (datumEl) datumEl.value = (typeof getProtokollTodayYmd === 'function') ? getProtokollTodayYmd() : '';
-      setProtocolLanguagesOnChecks('spPdfDe', 'spPdfEn', ['de']);
       clearAbschlussFields();
       arbeitsschritte = [];
       serviceprotokollMotors = [];
@@ -22990,9 +23237,10 @@
         kopf_type: cached.kopf_type || '',
         kopf_dwc: cached.kopf_dwc || '',
         abschluss: normalizeSpAbschlussObject(cached.abschluss),
-        languages: languagesFromDraft(cached),
-        pdf_languages: languagesFromDraft(cached),
-        motoren: Array.isArray(cached.motoren) ? cached.motoren : []
+        languages: collectPdfLanguages(),
+        pdf_languages: collectPdfLanguages(),
+        motoren: Array.isArray(cached.motoren) ? cached.motoren : [],
+        include_in_pdf: isFabIncluded(cached)
       };
     }
 
@@ -23017,7 +23265,8 @@
           abschluss: { status: 'geprueft' },
           languages: collectPdfLanguages(),
           pdf_languages: collectPdfLanguages(),
-          motoren: []
+          motoren: [],
+          include_in_pdf: isFabIncluded(cached)
         };
       }
       var projektVal = (document.getElementById('serviceprotokollProjekt') || {}).value || '';
@@ -23040,7 +23289,8 @@
         abschluss: collectAbschlussPayload(),
         languages: collectPdfLanguages(),
         pdf_languages: collectPdfLanguages(),
-        motoren: collectSpMotors()
+        motoren: collectSpMotors(),
+        include_in_pdf: isFabIncluded(cached)
       };
     }
 
@@ -23086,8 +23336,9 @@
         kopf_dwc: payload.kopf_dwc,
         abschluss: payload.abschluss || { status: 'geprueft' },
         motoren: payload.motoren || [],
-        languages: payload.languages || collectPdfLanguages(),
-        pdf_languages: payload.pdf_languages || payload.languages || collectPdfLanguages(),
+        languages: collectPdfLanguages(),
+        pdf_languages: collectPdfLanguages(),
+        include_in_pdf: payload.include_in_pdf !== false,
         jsonOnly: true,
         skip_dispo_sync: opts.localOnly || (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
         local_only: opts.localOnly || undefined,
@@ -23166,11 +23417,7 @@
     });
 
     function renderFabButtonsActive() {
-      if (!fabButtonsEl) return;
-      var cur = getActiveFab();
-      fabButtonsEl.querySelectorAll('.sp-fab-btn').forEach(function (btn) {
-        btn.classList.toggle('is-active', btn.getAttribute('data-fab') === cur);
-      });
+      applyProtocolFabChipActive(fabButtonsEl, getActiveFab());
     }
 
     async function buildAllProtokollPayloads() {
@@ -23179,8 +23426,11 @@
         stashDraftInMemory(cur);
         await persistDraftJsonForFab(cur);
       }
-      var fns = parseJobFabrikationsnummernOrdered(serviceJobData || {});
-      if (!fns.length) return { error: 'Keine Fabrikationsnummern im Auftrag.' };
+      var fns = includedFabsFromList(
+        parseJobFabrikationsnummernOrdered(serviceJobData || {}),
+        serviceprotokollDraftStore.byFab
+      );
+      if (!fns.length) return { error: 'Keine Fabrikationsnummer für dieses Protokoll angehakt.' };
       var missing = [];
       var protokolle = [];
       fns.forEach(function (fn) {
@@ -23214,7 +23464,8 @@
           motoren: (draft && Array.isArray(draft.motoren)) ? draft.motoren : [],
           abschluss: (draft && draft.abschluss != null && !Array.isArray(draft.abschluss) && typeof draft.abschluss === 'object')
             ? normalizeSpAbschlussObject(draft.abschluss)
-            : (fn === cur ? collectAbschlussPayload() : { status: 'geprueft' })
+            : (fn === cur ? collectAbschlussPayload() : { status: 'geprueft' }),
+          include_in_pdf: true
         });
       });
       if (missing.length) {
@@ -23227,9 +23478,30 @@
       var allPdfBtn = document.getElementById('btnServiceprotokollSaveAllPdf');
       var allPdfBtnTop = document.getElementById('btnServiceprotokollSaveAllPdfTop');
       var fns = job ? parseJobFabrikationsnummernOrdered(job) : [];
-      var show = fns.length >= 2 ? 'inline-block' : 'none';
+      var show = includedFabsFromList(fns, serviceprotokollDraftStore.byFab).length >= 2 ? 'inline-block' : 'none';
       if (allPdfBtn) allPdfBtn.style.display = show;
       if (allPdfBtnTop) allPdfBtnTop.style.display = show;
+    }
+
+    function toggleServiceprotokollFabInclude(fn, included) {
+      fn = String(fn || '').trim();
+      if (!fn) return;
+      if (!serviceprotokollDraftStore.byFab) serviceprotokollDraftStore.byFab = {};
+      if (getActiveFab() === fn) stashDraftInMemory(fn, { force: true });
+      setFabIncluded(serviceprotokollDraftStore.byFab, fn, included);
+      persistDraftJsonForFab(fn, {
+        skipStash: true,
+        localOnly: true,
+        background: true,
+        payloadSnapshot: serviceprotokollDraftStore.byFab[fn]
+      });
+      if (!included && getActiveFab() === fn) {
+        var next = firstIncludedFab(parseJobFabrikationsnummernOrdered(serviceJobData || {}), serviceprotokollDraftStore.byFab);
+        if (next) switchServiceprotokollFab(next);
+        else setActiveFabValue('');
+      }
+      renderFabButtons(serviceJobData);
+      notifyReactBridge(true);
     }
 
     function renderFabButtons(job) {
@@ -23242,22 +23514,22 @@
         setActiveFabValue('');
         return;
       }
+      var byFab = serviceprotokollDraftStore.byFab || {};
       fns.forEach(function (fn) {
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-ghost sp-fab-btn' + (fn === getActiveFab() ? ' is-active' : '');
-        btn.setAttribute('data-fab', fn);
-        btn.textContent = fn;
-        btn.addEventListener('click', function () {
-          switchServiceprotokollFab(fn);
-        });
-        fabButtonsEl.appendChild(btn);
+        fabButtonsEl.appendChild(renderProtocolFabChip({
+          fn: fn,
+          active: fn === getActiveFab(),
+          included: isFabIncluded(byFab[fn]),
+          onSelect: function (sel) { switchServiceprotokollFab(sel); },
+          onToggleInclude: toggleServiceprotokollFabInclude
+        }));
       });
     }
 
     async function switchServiceprotokollFab(newFab) {
       newFab = newFab ? String(newFab).trim() : '';
       if (!newFab) return;
+      if (!isFabIncluded(serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[newFab])) return;
       var cur = getActiveFab();
       if (cur === newFab) return;
       if (cur) {
@@ -23394,7 +23666,6 @@
           return stepFromRaw(row);
         });
       }
-      setProtocolLanguagesOnChecks('spPdfDe', 'spPdfEn', languagesFromDraft(draft));
       if (Array.isArray(draft.motoren)) setSpMotors(draft.motoren, { replaceEmpty: true });
       if (arbeitsschritte.length) renderSteps();
       return true;
@@ -23985,6 +24256,20 @@
       return langs.length ? langs : ['de'];
     }
 
+    function applyHostPdfLanguages(pdfDe, pdfEn) {
+      var langs = [];
+      if (pdfDe) langs.push('de');
+      if (pdfEn) langs.push('en');
+      setProtocolLanguagesOnChecks('spPdfDe', 'spPdfEn', langs);
+      stampDraftMapLanguages(serviceprotokollDraftStore.byFab, collectPdfLanguages());
+      renderSteps();
+      var fab = getActiveFab();
+      if (fab && serviceJobData) {
+        persistDraftJsonForFab(fab, { localOnly: true, background: true });
+      }
+      notifyReactBridge(true);
+    }
+
     function stepDisplayLabel(de, en, langs) {
       de = String(de || '').trim();
       en = String(en || '').trim();
@@ -24296,6 +24581,7 @@
         kopfdatenEl.hidden = true;
         kopfdatenEl.setAttribute('aria-hidden', 'true');
       }
+        setProtocolLanguagesOnChecks('spPdfDe', 'spPdfEn', ['de']);
         renderFabButtons(null);
         updateAllPdfButtonVisibility(null);
         if (stepsContainer) stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">Auftrag wählen, um Arbeitsschritte zu laden.</td></tr>';
@@ -24313,9 +24599,10 @@
         serviceJobData = job;
         rememberServiceprotokollJobId(id);
         if (serviceJobData) renderKopfdatenService(serviceJobData);
+        applySharedProtocolLanguages('spPdfDe', 'spPdfEn', serviceprotokollDraftStore.byFab);
         renderFabButtons(serviceJobData);
         var fns = parseJobFabrikationsnummernOrdered(serviceJobData || {});
-        var firstFab = fns.length ? fns[0] : '';
+        var firstFab = firstIncludedFab(fns, serviceprotokollDraftStore.byFab);
         if (firstFab) {
           var fabLoadToken = ++serviceprotokollFabLoadToken;
           setActiveFabValue(firstFab);
@@ -24361,6 +24648,7 @@
       form.addEventListener('change', function (e) {
         var t = e && e.target;
         if (t && (t.id === 'spPdfDe' || t.id === 'spPdfEn')) {
+          stampDraftMapLanguages(serviceprotokollDraftStore.byFab, collectPdfLanguages());
           renderSteps();
           notifyReactBridge(true);
         }
@@ -24465,6 +24753,7 @@
             applyAbschlussPayload(body.abschluss);
             notifyReactBridge(true);
             loadServiceprotokollDraftsForJob(body.job_id).then(function () {
+              stampDraftMapLanguages(serviceprotokollDraftStore.byFab, collectPdfLanguages());
               var cached = serviceprotokollDraftStore.byFab && serviceprotokollDraftStore.byFab[fab];
               if (cached && cached.abschluss) {
                 applyAbschlussPayload(cached.abschluss);
@@ -24641,6 +24930,15 @@
         jobId: jobSelect ? String(jobSelect.value || '') : '',
         jobs: spCollectJobOptions(),
         fabNumbers: parseJobFabrikationsnummernOrdered(serviceJobData || {}),
+        fabIncludeByFab: (function () {
+          var out = {};
+          var fns = parseJobFabrikationsnummernOrdered(serviceJobData || {});
+          var byFab = serviceprotokollDraftStore.byFab || {};
+          fns.forEach(function (fn) {
+            out[fn] = isFabIncluded(byFab[fn]);
+          });
+          return out;
+        }()),
         form: {
           order: jobOpt ? String(jobOpt.textContent || '').trim() : '',
           project: (document.getElementById('serviceprotokollProjekt') || {}).value || '',
@@ -24799,12 +25097,6 @@
       }
       setVal('serviceprotokollBemerkungen', f.generalRemarks);
       setVal('serviceprotokollAbschlussBemerkungen', f.closingRemarks);
-      var pdfDe = document.getElementById('spPdfDe');
-      var pdfEn = document.getElementById('spPdfEn');
-      if (serviceprotokollHostHydrated) {
-        if (pdfDe) pdfDe.checked = !!f.pdfDe;
-        if (pdfEn) pdfEn.checked = !!f.pdfEn;
-      }
       document.querySelectorAll('input[name="serviceprotokollStatus"]').forEach(function (el) {
         el.checked = el.value === normalizeSpAbschlussStatus(f.status || 'geprueft');
       });
@@ -24897,6 +25189,12 @@
       },
       selectFab: function (fab) {
         return switchServiceprotokollFab(fab);
+      },
+      setFabInclude: function (fab, included) {
+        toggleServiceprotokollFabInclude(fab, included);
+      },
+      setPdfLanguages: function (pdfDe, pdfEn) {
+        applyHostPdfLanguages(!!pdfDe, !!pdfEn);
       },
       triggerAction: function (action) {
         if (action === 'cancel') {
@@ -25355,8 +25653,8 @@
     function setProtokollReactFrameActive(kind) {
       var ibn = document.getElementById('inbetriebnahmeReactFrame');
       var svc = document.getElementById('serviceprotokollReactFrame');
-      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn';
-      var svcSrc = 'serviceprotokoll-react/index.html';
+      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn&v=langshare2';
+      var svcSrc = 'serviceprotokoll-react/index.html?v=langshare2';
       function srcOf(el) {
         return String((el && el.getAttribute('src')) || '');
       }
@@ -25364,11 +25662,11 @@
         if (svc && srcOf(svc).indexOf('serviceprotokoll-react/index.html') !== -1 && srcOf(svc).indexOf('kind=ibn') === -1) {
           svc.src = 'about:blank';
         }
-        if (ibn && srcOf(ibn).indexOf('kind=ibn') === -1) ibn.src = ibnSrc;
+        if (ibn && srcOf(ibn) !== ibnSrc) ibn.src = ibnSrc;
         return;
       }
       if (ibn && srcOf(ibn).indexOf('kind=ibn') !== -1) ibn.src = 'about:blank';
-      if (svc && srcOf(svc).indexOf('serviceprotokoll-react/index.html') === -1) svc.src = svcSrc;
+      if (svc && srcOf(svc) !== svcSrc) svc.src = svcSrc;
     }
 
     function openServiceLikeProtokoll(kindCfg) {

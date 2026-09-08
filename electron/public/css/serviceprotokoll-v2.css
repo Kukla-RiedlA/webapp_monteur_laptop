@@ -316,6 +316,26 @@ html[data-ui-theme="dark"] .sp-v2-topbar {
   gap: 0.5rem;
 }
 
+.sp-fab-chip {
+  display: inline-flex;
+  align-items: stretch;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--sp-border);
+  background: #fff;
+  overflow: hidden;
+}
+
+.sp-fab-chip .sp-fab-include {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: auto 0.15rem auto 0.5rem;
+  flex-shrink: 0;
+  accent-color: var(--sp-green);
+  cursor: pointer;
+  z-index: 1;
+}
+
 .sp-fab-btn {
   min-width: 4.5rem;
   height: 38px;
@@ -333,11 +353,34 @@ html[data-ui-theme="dark"] .sp-v2-topbar {
   gap: 0.35rem;
 }
 
+.sp-fab-chip .sp-fab-btn {
+  border: none;
+  border-radius: 0;
+  height: 100%;
+  background: transparent;
+  box-shadow: none;
+}
+
 .sp-fab-btn.is-active {
   background: var(--sp-green);
   border-color: var(--sp-green);
   color: #fff;
   box-shadow: var(--sp-shadow);
+}
+
+.sp-fab-chip.is-active {
+  background: var(--sp-green);
+  border-color: var(--sp-green);
+  color: #fff;
+  box-shadow: var(--sp-shadow);
+}
+
+.sp-fab-chip.is-active .sp-fab-btn,
+.sp-fab-chip.is-active .sp-fab-btn.is-active {
+  background: transparent;
+  border-color: transparent;
+  color: #fff;
+  box-shadow: none;
 }
 
 .sp-fab-btn.is-active::before {
@@ -347,6 +390,25 @@ html[data-ui-theme="dark"] .sp-v2-topbar {
   height: 1rem;
   background: url('../icons/check-green.svg') center / contain no-repeat;
   filter: brightness(0) invert(1);
+}
+
+.sp-fab-chip.is-excluded {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  color: #6b7280;
+}
+
+.sp-fab-chip.is-excluded .sp-fab-btn,
+.sp-fab-chip .sp-fab-btn:disabled {
+  color: #6b7280;
+  cursor: not-allowed;
+  opacity: 1;
+  background: transparent;
+}
+
+.sp-fab-chip.is-excluded .sp-fab-btn:hover,
+.sp-fab-chip .sp-fab-btn:disabled:hover {
+  background: transparent;
 }
 
 .sp-v2-hint {
