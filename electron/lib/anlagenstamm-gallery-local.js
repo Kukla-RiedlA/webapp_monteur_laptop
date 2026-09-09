@@ -168,6 +168,31 @@ function galleryParentFolder(relPath, fileName, fab) {
   return parts[parts.length - 2] || 'Stamm';
 }
 
+function isDokumenteMonteurRel(rel) {
+  return /(?:^|\/)Dokumente_Monteur(?:\/|$)/i.test(String(rel || '').replace(/\\/g, '/'));
+}
+
+/** Gleiche Kachel: Ordnergruppe + Dateiname, unabhängig vom Alias-Pfad. */
+function galleryDedupKey(rel, name, fab) {
+  const parent = galleryParentFolder(rel, name, fab);
+  const base = String(name || String(rel || '').replace(/\\/g, '/').split('/').pop() || '')
+    .toLowerCase()
+    .trim();
+  return String(parent || '').toLowerCase() + '\0' + base;
+}
+
+function preferGalleryFile(prev, next) {
+  if (!prev) return next;
+  if (!next) return prev;
+  const prevDm = isDokumenteMonteurRel(prev.rel);
+  const nextDm = isDokumenteMonteurRel(next.rel);
+  if (prevDm && !nextDm) return next;
+  if (!prevDm && nextDm) return prev;
+  const prevLen = String(prev.rel || '').length;
+  const nextLen = String(next.rel || '').length;
+  return nextLen < prevLen ? next : prev;
+}
+
 function walkRasterFiles(nodes, out, max, skipDir) {
   const limit = Number.isFinite(max) && max > 0 ? max : 0;
   (nodes || []).forEach((n) => {
@@ -475,6 +500,20 @@ function buildLocalAnlagenstammGallery(fab, tree, opts) {
   const own = [];
   const unassigned = [];
   const seen = new Set();
+  const byIdent = new Map();
+  function pushDeduped(bucket, file) {
+    const ident = galleryDedupKey(file.rel, file.name, fabNorm);
+    const prev = byIdent.get(ident);
+    if (prev) {
+      const chosen = preferGalleryFile(prev.file, file);
+      if (chosen === prev.file) return;
+      prev.bucket[prev.index] = chosen;
+      byIdent.set(ident, { bucket: prev.bucket, index: prev.index, file: chosen });
+      return;
+    }
+    bucket.push(file);
+    byIdent.set(ident, { bucket, index: bucket.length - 1, file });
+  }
   for (const f of files) {
     const rel = f.rel;
     const key = 'pn:' + rel.toLowerCase();
@@ -485,12 +524,12 @@ function buildLocalAnlagenstammGallery(fab, tree, opts) {
     const digits = String(fabNorm).replace(/\D/g, '');
     if (lead && digits && lead !== digits) continue;
     if (isMontageJobPhoto(rel, f.name, fabNorm)) {
-      montage.push(f);
+      pushDeduped(montage, f);
       continue;
     }
     if (kind === 'other') continue;
-    if (kind === 'own') own.push(f);
-    else unassigned.push(f);
+    if (kind === 'own') pushDeduped(own, f);
+    else pushDeduped(unassigned, f);
   }
   const pickedMontage = montage.slice(0, max);
   const rest = Math.max(0, max - pickedMontage.length);
@@ -510,6 +549,8 @@ module.exports = {
   isMontageJobPhoto,
   galleryMontageGroup,
   galleryParentFolder,
+  galleryDedupKey,
+  isDokumenteMonteurRel,
   walkRasterFiles,
   classifyGalleryRel,
   galleryFabKey,

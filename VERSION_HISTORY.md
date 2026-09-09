@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.019
+- **Anlagenakte Galerie:** doppelte Montage-Kacheln (Archiv und `Dokumente_Monteur`) zusammengefasst; fehlende Vorschaubilder für Auftragsfotos werden lokal erzeugt, ohne OneDrive im Galerie-Request zu scannen.
+
 ## V 2.007.013
 - **CSV-Dateien:** nicht mehr in Excel öffnen, sondern Dialog „Speichern unter“; Overlay nach dem Speichern hängt nicht; Dateiname bleibt ohne Download-Zeitstempel.
 

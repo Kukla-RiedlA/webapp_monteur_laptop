@@ -331,6 +331,7 @@ const {
   writeCachedProjekteNeuFile,
   readCachedProjekteNeuThumb,
   writeCachedProjekteNeuThumb,
+  projekteNeuFileCachePath,
 } = require('./lib/projekte-neu-file-cache');
 const { materializeOpenablePath } = require('./lib/openable-local-file');
 const {
@@ -4651,6 +4652,79 @@ function createApp(db) {
     return thumbOut;
   }
 
+  async function copyLocalFileToProjekteNeuCache(srcPath, fabValue, pnPath) {
+    const dest = projekteNeuFileCachePath(DB_DIR, fabValue, pnPath);
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    let timer = null;
+    try {
+      await Promise.race([
+        fs.promises.copyFile(win32FsPath(srcPath), win32FsPath(dest)),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('stage_timeout')), 20000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    return dest;
+  }
+
+  async function tryFillThumbFromStagedLocalFile(technicianId, fabValue, pnPath, thumbMax, jobIdOpt) {
+    const jobId = jobIdOpt != null ? parseInt(jobIdOpt, 10) : 0;
+    if (Number.isFinite(jobId) && jobId > 0) {
+      try {
+        const reused = readImageThumbCache(
+          db,
+          THUMB_KIND_DIENSTREISE,
+          String(jobId),
+          pnPath,
+          thumbMax,
+          null,
+        );
+        if (reused && reused.buf && reused.buf.length) {
+          writeCachedProjekteNeuThumb(
+            db,
+            DB_DIR,
+            fabValue,
+            pnPath,
+            thumbMax,
+            reused.buf,
+            reused.contentType,
+            null,
+          );
+          scheduleThumbDbSave();
+          return reused;
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    let staged = readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
+    if (staged && hangDiag.classifyPathKind(staged) === 'onedrive') staged = null;
+    if (!staged) {
+      let src = null;
+      try {
+        src = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdOpt, {
+          skipDeepSearch: true,
+        });
+      } catch (_) {
+        src = null;
+      }
+      if (!src) return null;
+      try {
+        staged = await copyLocalFileToProjekteNeuCache(src, fabValue, pnPath);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (!staged || hangDiag.classifyPathKind(staged) === 'onedrive') return null;
+    try {
+      return await generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, staged);
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function fillProjekteNeuThumbCache(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt) {
     const cached = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, null);
     if (cached && cached.buf && cached.buf.length) return cached;
@@ -4684,7 +4758,7 @@ function createApp(db) {
       }
       return remote;
     }
-    return null;
+    return tryFillThumbFromStagedLocalFile(technicianId, fabValue, pnPath, thumbMax, jobIdOpt);
   }
 
   function enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt) {

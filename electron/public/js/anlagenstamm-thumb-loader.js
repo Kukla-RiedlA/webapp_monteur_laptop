@@ -31,7 +31,7 @@
     return fetch(src, { credentials: 'same-origin' })
       .then(function (r) {
         if (r.status === 204) {
-          if (attempt < 20) {
+          if (attempt < 36) {
             setTimeout(function () { enqueue(img, src, attempt + 1); }, 700);
           }
           return null;

@@ -134,6 +134,44 @@ describe('Anlagenstamm-Galerie lokal', () => {
     assert.ok(gallery.some((g) => String(g.rel_path).startsWith('Bilder/12304/')));
   });
 
+  it('dedupliziert gleiche Dateinamen aus PN-Tree und Dokumente_Monteur', () => {
+    const tree = [
+      dirNode('Montage', [
+        fileNode('20220510_130459.jpg', 'Montage/20220510_130459.jpg'),
+        fileNode('20220510_130507.jpg', 'Montage/20220510_130507.jpg'),
+      ]),
+    ];
+    const extra = [
+      {
+        name: '20220510_130459.jpg',
+        rel: 'Dokumente_Monteur/10066_Knauf/Montage/20220510_130459.jpg',
+        jobId: 17,
+      },
+      {
+        name: '20220510_130507.jpg',
+        rel: 'Dokumente_Monteur/10066_Knauf/Montage/20220510_130507.jpg',
+        jobId: 17,
+      },
+      {
+        name: '10066_2026-09-09_11-28-51.jpg',
+        rel: 'Dokumente_Monteur/10066_Knauf/Montage/2026-09-06_AO/Bilder/10066_2026-09-09_11-28-51.jpg',
+        jobId: 17,
+      },
+    ];
+    const gallery = buildLocalAnlagenstammGallery('10066', tree, { extraFiles: extra });
+    const names = gallery.map((g) => g.rel_path.split('/').pop()).sort();
+    assert.deepEqual(names, [
+      '10066_2026-09-09_11-28-51.jpg',
+      '20220510_130459.jpg',
+      '20220510_130507.jpg',
+    ]);
+    const archive = gallery.find((g) => String(g.rel_path).endsWith('20220510_130459.jpg'));
+    assert.equal(archive.rel_path, 'Montage/20220510_130459.jpg');
+    const jobPhoto = gallery.find((g) => String(g.rel_path).includes('11-28-51'));
+    assert.equal(jobPhoto.job_id, 17);
+    assert.ok(String(jobPhoto.thumb_url).includes('job_id=17'));
+  });
+
   it('nimmt lokale Auftragsfotos extraFiles und filtert fremde FN', () => {
     const extra = [
       {
@@ -349,8 +387,11 @@ describe('Galerie-Request-Pfad ohne OneDrive', () => {
     );
     assert.ok(fill, 'fillProjekteNeuThumbCache nicht gefunden');
     assert.ok(fill[0].includes("classifyPathKind(filePath) === 'onedrive'"));
+    assert.ok(fill[0].includes('tryFillThumbFromStagedLocalFile'));
     assert.equal(fill[0].includes('resolveProjekteNeuLocalFilePathAll'), false);
     assert.equal(fill[0].includes('fsReadFileSync'), false);
+    assert.ok(serverSrc.includes('async function tryFillThumbFromStagedLocalFile'));
+    assert.ok(serverSrc.includes('copyLocalFileToProjekteNeuCache'));
     const cacheFn = serverSrc.match(
       /function cacheProjekteNeuTreesForJob[\s\S]*?\n  function resolveLocalJobIdForFab/,
     );
