@@ -1,7 +1,7 @@
 'use strict';
 
 const { isMonteurDraftJsonBasename } = require('./multi-device-sync');
-const { isFnFolderAlias, isProjekteNeuMontageFolderName } = require('./projekte-neu-local');
+const { isFnFolderAlias, isProjekteNeuMontageFolderName, folderNameMatchesFab } = require('./projekte-neu-local');
 
 const DM_PREFIX = 'Dokumente_Monteur/';
 /** Im Modus explicit: PROJEKTE NEU / Anlage nur über Baumauswahl, nicht pauschal aus Manifest. */
@@ -125,12 +125,16 @@ function findFabForCanonicalFolder(pathsByFab, fabMap, canonicalFolder) {
   if (!name) return null;
   for (const entry of fabMap || []) {
     const can = String(entry.folder_name_canonical || '').trim();
+    const fab = String(entry.fab || '').trim();
     if (can === name || (can && isFnFolderAlias(can, name))) {
-      return String(entry.fab || '').trim();
+      return fab;
+    }
+    if (fab && folderNameMatchesFab(name, fab)) {
+      return fab;
     }
   }
   for (const [fab] of pathsByFab) {
-    if (fab === name || isFnFolderAlias(fab, name)) return fab;
+    if (fab === name || isFnFolderAlias(fab, name) || folderNameMatchesFab(name, fab)) return fab;
   }
   return null;
 }

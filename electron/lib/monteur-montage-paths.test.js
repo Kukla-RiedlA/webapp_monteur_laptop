@@ -342,6 +342,29 @@ describe('FN-Bereich vs. Einzelordner', () => {
     assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver, 'keep.txt')), true);
     assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver, 'extra.txt')), true);
   });
+
+  it('führt (UK)-Alias in den Fileserver-Namen zusammen und legt keinen zweiten Fallback an', async () => {
+    const fileserver = '10066_Knauf UK, Sittingbourne';
+    const alias = '10066_Knauf (UK)_Sittingbourne_GB';
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', alias), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', alias, 'pwa.jpg'), 'x');
+    fs.mkdirSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver), { recursive: true });
+    fs.writeFileSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver, 'fs.txt'), 'y');
+    const map = resolveFabMapLocal(
+      reiseDir,
+      [{ fab: '10066', folder_name_canonical: alias }],
+      ['10066'],
+      () => fileserver,
+      { customer_name: 'Knauf (UK)', city: 'Sittingbourne', country: 'GB' },
+    );
+    assert.equal(map[0].folder_name_canonical, fileserver);
+    await migrateAliasFnFolders(reiseDir, map);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', alias)), false);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver, 'pwa.jpg')), true);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver, 'fs.txt')), true);
+    const dirs = listDirs(path.join(reiseDir, 'Dokumente_Monteur')).filter((n) => n.startsWith('10066'));
+    assert.deepEqual(dirs, [fileserver]);
+  });
 });
 
 describe('pickPreferredExactFnDir', () => {

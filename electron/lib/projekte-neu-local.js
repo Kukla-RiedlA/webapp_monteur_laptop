@@ -16,14 +16,16 @@ function isIgnorableDirEntry(name) {
   return /\.conflict-/i.test(n);
 }
 
-/** Leerzeichen, Unterstriche und „, AT“ / „, _AT“ gelten als derselbe FN-Ordner. */
+/** Leerzeichen, Unterstriche, Komma und „(UK)“/„UK“ gelten als derselbe FN-Ordner. */
 function fnFolderAliasKey(name) {
   return String(name || '')
     .trim()
+    .replace(/[()]/g, '')
     .replace(/,\s*_*/g, ',')
     .replace(/\s+/g, '_')
     .replace(/,+/g, '_')
     .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
     .toLowerCase();
 }
 
@@ -169,10 +171,59 @@ function collectExactFnFolderMatches(dirNames, fab) {
   for (const raw of dirNames || []) {
     const n = String(raw || '').trim();
     if (!n || isRangeFnFolderName(n) || isDatePrefixedProjectFolderName(n)) continue;
-    const digitsOnly = n.replace(/\D/g, '');
-    if (digitsOnly && parseInt(digitsOnly, 10) === fnNum) out.push(n);
+    const lead = (n.match(/^(\d{4,8})/) || [])[1];
+    if (lead && parseInt(lead, 10) === fnNum) out.push(n);
   }
   return out;
+}
+
+/** Alle FN-Treffer inkl. Bereichsordner (für Galerie/Merge). */
+function collectAllFnFolderMatches(dirNames, fab) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of dirNames || []) {
+    const n = String(raw || '').trim();
+    if (!n || seen.has(n) || isDatePrefixedProjectFolderName(n)) continue;
+    if (!folderNameMatchesFab(n, fab)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
+function listMonteurTopDirNames(dokumenteMonteurPath) {
+  if (!fsExistsSync(dokumenteMonteurPath) || !fsStatSync(dokumenteMonteurPath).isDirectory()) {
+    return [];
+  }
+  let names;
+  try {
+    names = fsReaddirSync(dokumenteMonteurPath, { withFileTypes: true });
+  } catch (_) {
+    return [];
+  }
+  return names.filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name)).map((e) => e.name);
+}
+
+function collectMonteurFoldersForFab(dokumenteMonteurPath, fab) {
+  return collectAllFnFolderMatches(listMonteurTopDirNames(dokumenteMonteurPath), fab);
+}
+
+async function collectMonteurFoldersForFabAsync(dokumenteMonteurPath, fab) {
+  let st;
+  try {
+    st = await fsStat(dokumenteMonteurPath);
+  } catch (_) {
+    return [];
+  }
+  if (!st || !st.isDirectory()) return [];
+  let names;
+  try {
+    names = await fsReaddir(dokumenteMonteurPath, { withFileTypes: true });
+  } catch (_) {
+    return [];
+  }
+  const dirs = names.filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name)).map((e) => e.name);
+  return collectAllFnFolderMatches(dirs, fab);
 }
 
 /** Bei mehreren Treffern: Fileserver-Stil (mit Leerzeichen) vor Unterstrich-Variante. */
@@ -379,6 +430,9 @@ module.exports = {
   uniqueSortedNumericFabs,
   consecutiveNumericFabRuns,
   collectExactFnFolderMatches,
+  collectAllFnFolderMatches,
+  collectMonteurFoldersForFab,
+  collectMonteurFoldersForFabAsync,
   pickPreferredExactFnDir,
   pickFnRangeDir,
   safeResolveUnderRoot,

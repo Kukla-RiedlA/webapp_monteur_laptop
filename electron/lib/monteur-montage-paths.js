@@ -527,10 +527,13 @@ function pickPreferredFnFolderName(matches, hints) {
   ) {
     return existing;
   }
-  if (isUsableFnHauptordnerName(built, fab) && isNonBareFnFolderName(built)) return built;
+  const diskNonGenerated = list.find((n) => isNonBareFnFolderName(n) && !isGeneratedSingle(n));
+  if (diskNonGenerated) return diskNonGenerated;
+  if (list.length) return list[0];
   if (isUsableFnHauptordnerName(existing, fab) && isNonBareFnFolderName(existing) && !(isGeneratedSingle(existing) && builtIsMultiRange)) {
     return existing;
   }
+  if (isUsableFnHauptordnerName(built, fab) && isNonBareFnFolderName(built)) return built;
   const nonBareMatch = list.find((n) => isNonBareFnFolderName(n));
   if (nonBareMatch) return nonBareMatch;
   return list[0] || (isUsableFnHauptordnerName(built, fab) ? built : '') || '';
@@ -809,15 +812,17 @@ async function migrateBareFabDirsUnder(reiseDir, subfolder, fabFolderEntries) {
 function collectAliasFoldersToMerge(dirNames, fab, preferred) {
   const seen = new Set();
   const out = [];
+  const preferredIsRange = isMultiFnRangeFolderName(preferred);
   function add(raw) {
     const n = String(raw || '').trim();
     if (!n || n === preferred || seen.has(n)) return;
+    if (isMultiFnRangeFolderName(n) && !preferredIsRange) return;
     seen.add(n);
     out.push(n);
   }
   for (const n of collectExactFnFolderMatches(dirNames, fab)) add(n);
   for (const n of dirNames || []) {
-    if (isFnFolderAlias(n, preferred)) add(n);
+    if (isFnFolderAlias(n, preferred) || folderNameMatchesFab(n, fab)) add(n);
   }
   const prefRange = parseFnRangeFromFolderName(preferred);
   if (prefRange && prefRange.from !== prefRange.to) {

@@ -5,8 +5,8 @@ const {
   isDatePrefixedProjectFolderName,
   parseFnRangeFromFolderName,
   folderNameMatchesFab,
-  findMonteurFolderForFab,
-  findMonteurFolderForFabAsync,
+  collectMonteurFoldersForFab,
+  collectMonteurFoldersForFabAsync,
   isIgnorableDirEntry,
 } = require('./projekte-neu-local');
 const { fsExistsSync, fsStatSync, fsReaddirSync, fsReaddir, fsStat } = require('./win32-long-path');
@@ -238,7 +238,7 @@ function listMontageRastersFromDokumenteMonteurPaths(dmEntries, fab, opts) {
     const dm = entry && entry.dm;
     const jobId = entry && entry.jobId;
     if (!dm) continue;
-    const folderName = findMonteurFolderForFab(dm, fab);
+    const folders = collectMonteurFoldersForFab(dm, fab);
     const montageRoots = [];
     const seenRoots = new Set();
     const addMontageRoot = (folder) => {
@@ -255,9 +255,9 @@ function listMontageRastersFromDokumenteMonteurPaths(dmEntries, fab, opts) {
           : posixJoin('Dokumente_Monteur', 'Montage'),
       });
     };
-    addMontageRoot(folderName);
+    for (const folderName of folders) addMontageRoot(folderName);
     addMontageRoot(null);
-    if (!folderName) {
+    if (!folders.length) {
       let dmDirs = [];
       try {
         dmDirs = fsReaddirSync(dm, { withFileTypes: true });
@@ -339,7 +339,7 @@ async function listMontageRastersFromDokumenteMonteurPathsAsync(dmEntries, fab, 
     const dm = entry && entry.dm;
     const jobId = entry && entry.jobId;
     if (!dm) continue;
-    const folderName = await findMonteurFolderForFabAsync(dm, fab);
+    const folders = await collectMonteurFoldersForFabAsync(dm, fab);
     const montageRoots = [];
     const seenRoots = new Set();
     const addMontageRoot = (folder) => {
@@ -356,9 +356,9 @@ async function listMontageRastersFromDokumenteMonteurPathsAsync(dmEntries, fab, 
           : posixJoin('Dokumente_Monteur', 'Montage'),
       });
     };
-    addMontageRoot(folderName);
+    for (const folderName of folders) addMontageRoot(folderName);
     addMontageRoot(null);
-    if (!folderName) {
+    if (!folders.length) {
       let dmDirs = [];
       try {
         dmDirs = await fsReaddir(dm, { withFileTypes: true });

@@ -186,6 +186,24 @@ describe('Anlagenstamm-Galerie lokal', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('findet PWA-Fotos in Alias-FN-Ordnern derselben Nummer', () => {
+    const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kukla-gal-'));
+    const dm = path.join(tmp, 'Dokumente_Monteur');
+    const a = path.join(dm, '10066_Knauf (UK)_Sittingbourne_GB', 'Montage', '2026-08-31_AO', 'Bilder');
+    const b = path.join(dm, '10066_Knauf UK, Sittingbourne', 'Montage', '2026-09-01_AO2', 'Bilder');
+    fs.mkdirSync(a, { recursive: true });
+    fs.mkdirSync(b, { recursive: true });
+    fs.writeFileSync(path.join(a, '10066_2026-08-31_11-00-52.jpg'), 'x');
+    fs.writeFileSync(path.join(b, '10066_2026-09-01_12-00-00.jpg'), 'y');
+    const listed = listMontageRastersFromDokumenteMonteurPaths([{ dm, jobId: 1 }], '10066', { max: 80 });
+    const names = listed.map((f) => f.name).sort();
+    assert.deepEqual(names, [
+      '10066_2026-08-31_11-00-52.jpg',
+      '10066_2026-09-01_12-00-00.jpg',
+    ]);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   it('listet mehr als 8 Auftragsordner', () => {
     const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kukla-gal-'));
     const dm = path.join(tmp, 'Dokumente_Monteur');
