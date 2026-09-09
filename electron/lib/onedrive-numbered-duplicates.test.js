@@ -23,6 +23,13 @@ describe('onedrive-numbered-duplicates', () => {
     assert.equal(parseOnedriveNumberedCopy('Serviceprotokoll_20500_20260905_DE.pdf'), null);
   });
 
+  it('erkennt Datei-1.pdf, nicht PWA HH-MM-SS Fotos', () => {
+    assert.ok(parseOnedriveNumberedCopy('plan-1.pdf'));
+    assert.equal(parseOnedriveNumberedCopy('10066_2026-09-09_11-28-51.jpg'), null);
+    assert.equal(parseOnedriveNumberedCopy('10066_2026-09-09_11-29-04.jpg'), null);
+    assert.equal(parseOnedriveNumberedCopy('10066_2026-09-09_11.jpg'), null);
+  });
+
   it('löscht -1 wenn die kanonische Datei existiert', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kukla-od-dup-'));
     try {
@@ -64,6 +71,21 @@ describe('onedrive-numbered-duplicates', () => {
         fs.existsSync(path.join(dir, 'Kontrollwiegungsprotokoll_20500_20260905_DE-1.pdf')),
         false,
       );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('löscht PWA-Fotos mit Sekunden nicht als OneDrive-Kopie', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kukla-od-'));
+    try {
+      fs.writeFileSync(path.join(dir, '10066_2026-09-09_11.jpg'), 'a');
+      fs.writeFileSync(path.join(dir, '10066_2026-09-09_11-28-51.jpg'), 'b');
+      fs.writeFileSync(path.join(dir, '10066_2026-09-09_11-29-04.jpg'), 'c');
+      sweepOnedriveNumberedDuplicates(dir);
+      assert.equal(fs.existsSync(path.join(dir, '10066_2026-09-09_11.jpg')), true);
+      assert.equal(fs.existsSync(path.join(dir, '10066_2026-09-09_11-28-51.jpg')), true);
+      assert.equal(fs.existsSync(path.join(dir, '10066_2026-09-09_11-29-04.jpg')), true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

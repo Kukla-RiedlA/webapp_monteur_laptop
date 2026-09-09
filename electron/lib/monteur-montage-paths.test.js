@@ -24,6 +24,9 @@ const {
   removeUnrelatedTopLevelProjectFolders,
   isUsableFnHauptordnerName,
   resolveFabMapLocal,
+  resolveExplorerListAbsDirs,
+  collapseExplorerFnDirEntries,
+  resolveReiseFileViaFnAliases,
 } = require('./monteur-montage-paths');
 const { shouldPullManifestFile } = require('./job-offline-pull');
 
@@ -364,6 +367,65 @@ describe('FN-Bereich vs. Einzelordner', () => {
     assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fileserver, 'fs.txt')), true);
     const dirs = listDirs(path.join(reiseDir, 'Dokumente_Monteur')).filter((n) => n.startsWith('10066'));
     assert.deepEqual(dirs, [fileserver]);
+  });
+});
+
+describe('Explorer FN-Alias-Union', () => {
+  let reiseDir;
+  beforeEach(() => {
+    reiseDir = tmpReise();
+  });
+  afterEach(() => {
+    fs.rmSync(reiseDir, { recursive: true, force: true });
+  });
+
+  it('listet Bilder aus FN-Alias-Ordnern unter dem kanonischen Pfad', () => {
+    const dm = path.join(reiseDir, 'Dokumente_Monteur');
+    const ao = '2026-09-06_Knauf_(UK)_Sittingbourne_GB_Riedl_Alois';
+    const can = '10066_Knauf UK, Sittingbourne';
+    const alias = '10066_Knauf (UK)_Sittingbourne_GB';
+    const bilderCan = path.join(dm, can, 'Montage', ao, 'Bilder');
+    const bilderAlias = path.join(dm, alias, 'Montage', ao, 'Bilder');
+    fs.mkdirSync(bilderCan, { recursive: true });
+    fs.mkdirSync(bilderAlias, { recursive: true });
+    fs.writeFileSync(path.join(bilderCan, '10066_2026-09-09_11.jpg'), 'a');
+    fs.writeFileSync(path.join(bilderAlias, '10066_2026-09-09_11-28-51.jpg'), 'b');
+    fs.writeFileSync(path.join(bilderAlias, '10066_2026-09-09_11-29-04.jpg'), 'c');
+    const fabMap = [{ fab: '10066', folder_name_canonical: can }];
+    const dirs = resolveExplorerListAbsDirs(
+      reiseDir,
+      'Dokumente_Monteur/' + can + '/Montage/' + ao + '/Bilder',
+      fabMap,
+    );
+    const names = new Set();
+    for (const d of dirs) {
+      if (!fs.existsSync(d)) continue;
+      for (const n of fs.readdirSync(d)) names.add(n);
+    }
+    assert.equal(names.has('10066_2026-09-09_11.jpg'), true);
+    assert.equal(names.has('10066_2026-09-09_11-28-51.jpg'), true);
+    assert.equal(names.has('10066_2026-09-09_11-29-04.jpg'), true);
+    const found = resolveReiseFileViaFnAliases(
+      reiseDir,
+      'Dokumente_Monteur/' + can + '/Montage/' + ao + '/Bilder/10066_2026-09-09_11-28-51.jpg',
+      fabMap,
+    );
+    assert.ok(found && found.endsWith('10066_2026-09-09_11-28-51.jpg'));
+  });
+
+  it('zieht FN-Aliase in der Top-Liste auf einen Anzeigenamen zusammen', () => {
+    const entries = [
+      { name: '10066_Knauf (UK)_Sittingbourne_GB', isDirectory: true, relativePath: 'Dokumente_Monteur/10066_Knauf (UK)_Sittingbourne_GB' },
+      { name: '10066_Knauf UK, Sittingbourne', isDirectory: true, relativePath: 'Dokumente_Monteur/10066_Knauf UK, Sittingbourne' },
+      { name: '10227_Knauf UK, Sittingbourne', isDirectory: true, relativePath: 'Dokumente_Monteur/10227_Knauf UK, Sittingbourne' },
+    ];
+    const collapsed = collapseExplorerFnDirEntries(entries, [
+      { fab: '10066', folder_name_canonical: '10066_Knauf UK, Sittingbourne' },
+      { fab: '10227', folder_name_canonical: '10227_Knauf UK, Sittingbourne' },
+    ], 'Dokumente_Monteur');
+    const names = collapsed.map((e) => e.name);
+    assert.equal(names.filter((n) => n === '10066_Knauf UK, Sittingbourne').length, 1);
+    assert.equal(names.includes('10066_Knauf (UK)_Sittingbourne_GB'), false);
   });
 });
 

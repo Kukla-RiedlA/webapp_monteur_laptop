@@ -175,6 +175,9 @@ const {
   montageberichtExportStem,
   isLegacyMontageberichtEnExportName,
   cleanupLegacyMontageberichtEnPdfLocal,
+  resolveExplorerListAbsDirs,
+  collapseExplorerFnDirEntries,
+  resolveReiseFileViaFnAliases,
 } = require('./lib/monteur-montage-paths');
 const { fnProtocolPdfFilename, serviceLikePdfKind, labeledProtocolPdfFilename } = require('./lib/protocol-pdf-names');
 const kundenDokumentation = require('./lib/kunden-dokumentation');
@@ -3993,25 +3996,26 @@ function createApp(db) {
         }
       }
 
-      const dirPath = subpath ? path.join(reiseDir, subpath) : reiseDir;
+      const dirCandidates = resolveExplorerListAbsDirs(reiseDir, subpath, fabMapForList);
+      const byName = new Map();
+      for (const dirPath of dirCandidates) {
       let dirStat;
       try {
         dirStat = await fsStat(dirPath);
       } catch (_) {
-        return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
+        continue;
       }
-      if (!dirStat.isDirectory()) return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
+      if (!dirStat.isDirectory()) continue;
       let dirents;
       try {
         dirents = await fsReaddir(dirPath, { withFileTypes: true });
       } catch (e) {
         return res.status(500).json({ ok: false, error: e.message || 'Dateiliste konnte nicht gelesen werden.' });
       }
-      const entries = [];
       let listed = 0;
       for (const ent of dirents) {
         const name = ent.name;
-        if (isIgnorableDirEntry(name)) continue;
+        if (isIgnorableDirEntry(name) || byName.has(name)) continue;
         const isDirectory = ent.isDirectory();
         const listRoot = String(subpath || '').replace(/\\/g, '/');
         if (
@@ -4055,7 +4059,7 @@ function createApp(db) {
           }
         }
         const relativePath = subpath ? (subpath.replace(/\\/g, '/') + '/' + name) : name;
-        entries.push({
+        byName.set(name, {
           name,
           relativePath,
           fullPath,
@@ -4066,6 +4070,8 @@ function createApp(db) {
         listed += 1;
         if (listed % 8 === 0) await yieldEventLoop();
       }
+      }
+      let entries = collapseExplorerFnDirEntries([...byName.values()], fabMapForList, subpath);
       entries.sort((a, b) => {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
         return (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
@@ -4172,7 +4178,22 @@ function createApp(db) {
     if (rel && (rel.includes('..') || path.isAbsolute(rel))) return null;
     const parts = rel ? rel.split(/[/\\]/).filter(Boolean) : [];
     if (!parts.length) return null;
-    const filePath = path.join(reiseDir, ...parts);
+    let fabMap = [];
+    try {
+      const jobRow = lookupDienstreiseJobRow(jobId);
+      const jobFabs = jobRow ? fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern) : [];
+      const offlineCfg = getOfflinePullConfig(db, jobId);
+      fabMap = resolveFabMapLocal(
+        reiseDir,
+        (offlineCfg && offlineCfg.fab_map) || [],
+        jobFabs,
+        (fab) => readAnlagenstammRootFolderName(db, fab),
+        jobMetaForFnFolder(jobRow),
+      );
+    } catch (_) {
+      fabMap = [];
+    }
+    const filePath = resolveReiseFileViaFnAliases(reiseDir, rel, fabMap) || path.join(reiseDir, ...parts);
     if (!fsExistsSync(filePath)) return null;
     try {
       if (!fsStatSync(filePath).isFile()) return null;

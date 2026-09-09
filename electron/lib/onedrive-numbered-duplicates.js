@@ -8,6 +8,8 @@ const NUMBERED_COPY_RE = /^(.*)-(\d{1,2})(\.[^.]+)$/i;
 
 function parseOnedriveNumberedCopy(name) {
   const n = String(name || '');
+  // PWA/Kamera: FN_YYYY-MM-DD_HH-MM-SS.ext — die Sekunden sind keine OneDrive-Kopie „-N“.
+  if (/_\d{2}-\d{2}-\d{2}\.[^.]+$/i.test(n)) return null;
   const m = n.match(NUMBERED_COPY_RE);
   if (!m) return null;
   return { stem: m[1], n: parseInt(m[2], 10), ext: m[3], canonical: m[1] + m[3] };

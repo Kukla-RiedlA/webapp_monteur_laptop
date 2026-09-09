@@ -809,6 +809,174 @@ async function migrateBareFabDirsUnder(reiseDir, subfolder, fabFolderEntries) {
 /**
  * Führt Leerzeichen- und Unterstrich-Varianten derselben FN in den kanonischen Ordner zusammen.
  */
+function fnFoldersMatchSameJob(a, b, fabFolderEntries) {
+  const na = String(a || '').trim();
+  const nb = String(b || '').trim();
+  if (!na || !nb) return false;
+  if (na === nb || isFnFolderAlias(na, nb)) return true;
+  const da = leadingFabDigits(na);
+  const db = leadingFabDigits(nb);
+  if (da && da === db) return true;
+  for (const e of fabFolderEntries || []) {
+    const fab = String((e && e.fab) || '').trim();
+    const can = String((e && e.folder_name_canonical) || '').trim();
+    if (fab && folderNameMatchesFab(na, fab) && folderNameMatchesFab(nb, fab)) return true;
+    if (can && (na === can || isFnFolderAlias(na, can) || (fab && folderNameMatchesFab(na, fab)))) {
+      if (nb === can || isFnFolderAlias(nb, can) || (fab && folderNameMatchesFab(nb, fab))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Physische FN-Alias-Ordner (Leerzeichen, (UK), nur Ziffern) unter Dokumente_Monteur/Anlage.
+ * @returns {string[]}
+ */
+function physicalFnAliasAbsDirs(baseAbs, folderName, fabFolderEntries) {
+  const name = String(folderName || '').trim();
+  if (!baseAbs || !name) return [];
+  const out = [];
+  const seen = new Set();
+  function add(abs) {
+    if (!abs || seen.has(abs) || !fs.existsSync(abs)) return;
+    try {
+      if (!fs.statSync(abs).isDirectory()) return;
+    } catch (_) {
+      return;
+    }
+    seen.add(abs);
+    out.push(abs);
+  }
+  add(path.join(baseAbs, name));
+  for (const n of listSubdirNames(baseAbs)) {
+    if (n === name) continue;
+    if (isDokumenteMonteurReservedTopDir(n) || isDatePrefixedProjectFolderName(n)) continue;
+    if (fnFoldersMatchSameJob(n, name, fabFolderEntries)) add(path.join(baseAbs, n));
+  }
+  return out;
+}
+
+function montageIdentityPrefixSuffix(aoName) {
+  const n = String(aoName || '').trim();
+  const m = n.match(/^(\d{4}-\d{2}-\d{2}_)(.+)(_[^_]+_[^_]+)$/);
+  if (!m) return { datePrefix: '', monteurSuffix: '' };
+  return { datePrefix: m[1], monteurSuffix: m[3] };
+}
+
+function physicalMontageRestAbsDirs(fnRootAbs, restParts) {
+  const rest = Array.isArray(restParts) ? restParts.filter(Boolean) : [];
+  if (!rest.length) return [fnRootAbs];
+  if (!/^Montage$/i.test(rest[0]) || !rest[1]) {
+    return [path.join(fnRootAbs, ...rest)];
+  }
+  const ao = rest[1];
+  const after = rest.slice(2);
+  const montageAbs = path.join(fnRootAbs, rest[0]);
+  const { datePrefix, monteurSuffix } = montageIdentityPrefixSuffix(ao);
+  const aos = [ao];
+  if (datePrefix && monteurSuffix) {
+    for (const n of listSubdirNames(montageAbs)) {
+      if (n !== ao && isMonteurMontageIdentitySibling(n, ao, datePrefix, monteurSuffix)) aos.push(n);
+    }
+  }
+  return aos.map((a) => (after.length ? path.join(montageAbs, a, ...after) : path.join(montageAbs, a)));
+}
+
+/**
+ * Lokale Explorer-Verzeichnisse inkl. FN- und Auftragsordner-Aliase (wie Dispo-Listing).
+ * @returns {string[]}
+ */
+function resolveExplorerListAbsDirs(reiseDir, subpath, fabFolderEntries) {
+  const norm = String(subpath || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+  if (!reiseDir) return [];
+  if (!norm) return [reiseDir];
+  const parts = norm.split('/').filter(Boolean);
+  const top = parts[0];
+  const direct = path.join(reiseDir, ...parts);
+  if (top !== 'Dokumente_Monteur' && top !== 'Dokumente_Anlage') {
+    return [direct];
+  }
+  if (parts.length === 1) return [path.join(reiseDir, top)];
+  const fnName = parts[1];
+  const rest = parts.slice(2);
+  const base = path.join(reiseDir, top);
+  const fnRoots = physicalFnAliasAbsDirs(base, fnName, fabFolderEntries);
+  const out = [];
+  const seen = new Set();
+  for (const root of fnRoots) {
+    const dirs = rest.length ? physicalMontageRestAbsDirs(root, rest) : [root];
+    for (const d of dirs) {
+      if (!d || seen.has(d)) continue;
+      seen.add(d);
+      out.push(d);
+    }
+  }
+  return out.length ? out : [direct];
+}
+
+function canonicalFnExplorerName(name, fabFolderEntries) {
+  const n = String(name || '').trim();
+  if (!n || isDokumenteMonteurReservedTopDir(n) || isDatePrefixedProjectFolderName(n)) return n;
+  for (const e of fabFolderEntries || []) {
+    const can = String((e && e.folder_name_canonical) || '').trim();
+    const fab = String((e && e.fab) || '').trim();
+    if (!can) continue;
+    if (n === can || isFnFolderAlias(n, can) || (fab && folderNameMatchesFab(n, fab))) return can;
+  }
+  return n;
+}
+
+function collapseExplorerFnDirEntries(entries, fabFolderEntries, parentRel) {
+  const parent = String(parentRel || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+  if (parent !== 'Dokumente_Monteur' && parent !== 'Dokumente_Anlage') return entries || [];
+  const emitted = new Set();
+  const out = [];
+  for (const e of entries || []) {
+    if (!e || !e.isDirectory) {
+      out.push(e);
+      continue;
+    }
+    const display = canonicalFnExplorerName(e.name, fabFolderEntries);
+    const key = String(display).toLowerCase();
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+    out.push(Object.assign({}, e, { name: display, relativePath: parent + '/' + display }));
+  }
+  return out;
+}
+
+function resolveReiseFileViaFnAliases(reiseDir, relPath, fabFolderEntries) {
+  const norm = String(relPath || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+  if (!reiseDir || !norm || norm.includes('..')) return null;
+  const parts = norm.split('/').filter(Boolean);
+  const direct = path.join(reiseDir, ...parts);
+  try {
+    if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct;
+  } catch (_) {
+    /* alias */
+  }
+  if (parts.length < 3) return null;
+  const top = parts[0];
+  if (top !== 'Dokumente_Monteur' && top !== 'Dokumente_Anlage') return null;
+  const parentRel = parts.slice(0, -1).join('/');
+  const baseName = parts[parts.length - 1];
+  for (const dir of resolveExplorerListAbsDirs(reiseDir, parentRel, fabFolderEntries)) {
+    const cand = path.join(dir, baseName);
+    try {
+      if (fs.existsSync(cand) && fs.statSync(cand).isFile()) return cand;
+    } catch (_) {
+      /* next */
+    }
+  }
+  return null;
+}
+
 function collectAliasFoldersToMerge(dirNames, fab, preferred) {
   const seen = new Set();
   const out = [];
@@ -1192,6 +1360,9 @@ module.exports = {
   unifyFabMapSharedRanges,
   migrateAliasFnFolders,
   rewriteFnFolderSegmentInRel,
+  resolveExplorerListAbsDirs,
+  collapseExplorerFnDirEntries,
+  resolveReiseFileViaFnAliases,
   isFnFolderAlias,
   isDokumenteMonteurKeepLocalRel,
   mapServerManifestPathToLocalAnlageRel,
