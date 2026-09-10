@@ -2696,7 +2696,7 @@ function listParameterFilesByFab(db, fab) {
     .prepare(
       `SELECT f.id, f.fab, f.source, f.source_file_status, f.technician_id, f.technician_name,
               f.uploaded_at, f.original_filename, f.mime, f.size, f.sha256, f.storage_relpath,
-              f.source_path, f.filename_fn, f.content_fn, f.used_fn,
+              f.source_path, f.filename_fn, f.content_fn, f.used_fn, f.server_file_id,
               (SELECT COUNT(*) FROM anlagenstamm_parameter_entries e WHERE e.file_id = f.id) AS entry_count
        FROM anlagenstamm_parameter_files f
        WHERE f.fab = ?

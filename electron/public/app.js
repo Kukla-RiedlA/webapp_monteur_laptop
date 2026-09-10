@@ -13285,6 +13285,12 @@
         }
       }
     }
+    var leavingMb = typeof getActiveProtocolAutosaveViewId === 'function'
+      && getActiveProtocolAutosaveViewId() === 'viewProtokolleMontagebericht'
+      && protocolViewIdForShowViewName(name) !== 'viewProtokolleMontagebericht';
+    if (leavingMb && typeof window.cancelMontageberichtPendingLoad === 'function') {
+      window.cancelMontageberichtPendingLoad();
+    }
     if (typeof flushProtocolAutosaveOnViewChange === 'function') {
       flushProtocolAutosaveOnViewChange(name);
     }
@@ -17688,13 +17694,44 @@
       return d.innerHTML;
     }
 
-    function setRichEditorHtml(el, html) {
-      if (!el) return;
-      el.innerHTML = normalizeMontageberichtHtml(html || '');
-      if (window.KuklaImageDraw && typeof window.KuklaImageDraw.hydrate === 'function') {
-        window.KuklaImageDraw.hydrate(el);
+    function sanitizeMontageberichtHtmlFast(html) {
+      var raw = (html == null) ? '' : String(html);
+      if (!raw) return '';
+      if (raw.indexOf('<script') === -1 && raw.indexOf('<style') === -1 && raw.indexOf('mb-img-annotate') === -1) {
+        return raw;
       }
-      autoResizeFabTextarea(el);
+      var d = document.createElement('div');
+      d.innerHTML = raw;
+      d.querySelectorAll('script,style').forEach(function (n) { n.remove(); });
+      d.querySelectorAll('svg.mb-draw-layer').forEach(function (n) { n.remove(); });
+      d.querySelectorAll('span.mb-img-annotate').forEach(function (wrap) {
+        var img = wrap.querySelector('img');
+        if (!img) {
+          wrap.remove();
+          return;
+        }
+        wrap.parentNode.insertBefore(img, wrap);
+        wrap.remove();
+      });
+      return d.innerHTML;
+    }
+
+    function setRichEditorHtml(el, html, opts) {
+      if (!el) return;
+      var fast = !!(opts && opts.fast);
+      el.innerHTML = fast ? sanitizeMontageberichtHtmlFast(html || '') : normalizeMontageberichtHtml(html || '');
+      function afterPaint() {
+        if (window.KuklaImageDraw && typeof window.KuklaImageDraw.hydrate === 'function') {
+          window.KuklaImageDraw.hydrate(el);
+        }
+        autoResizeFabTextarea(el);
+      }
+      if (fast) {
+        if (window.requestAnimationFrame) requestAnimationFrame(afterPaint);
+        else setTimeout(afterPaint, 0);
+      } else {
+        afterPaint();
+      }
     }
 
     function getRichEditorHtml(el) {
@@ -18216,6 +18253,13 @@
     });
 
     var montageberichtJobLoadToken = 0;
+    var montageberichtFormReady = false;
+
+    function cancelMontageberichtPendingLoad() {
+      montageberichtJobLoadToken += 1;
+      montageberichtFormReady = false;
+    }
+    window.cancelMontageberichtPendingLoad = cancelMontageberichtPendingLoad;
 
     function resetMontageberichtEnteredFields() {
       try { delete window._kuklaMontageberichtSign; } catch (e) { window._kuklaMontageberichtSign = null; }
@@ -18238,6 +18282,7 @@
     function openAndResetMontageberichtForm() {
       if (divMontage) divMontage.style.display = 'block';
       montageberichtJobData = null;
+      montageberichtFormReady = false;
       montageberichtJobLoadToken += 1;
       resetMontageberichtEnteredFields();
       if (jobSelect) jobSelect.innerHTML = '<option value="">Lade…</option>';
@@ -18265,6 +18310,7 @@
       jobSelect.addEventListener('change', async function () {
         var id = parseInt(this.value, 10);
         var loadToken = ++montageberichtJobLoadToken;
+        montageberichtFormReady = false;
         resetMontageberichtEnteredFields();
         montageberichtJobData = null;
         if (!id) return;
@@ -18285,9 +18331,9 @@
             if (loadToken !== montageberichtJobLoadToken) return;
             if (loadData.ok && loadData.data) {
               var d = loadData.data;
-              if (grundInput) setRichEditorHtml(grundInput, d.grundDesEinsatzes_html || d.grundDesEinsatzes || '');
+              if (grundInput) setRichEditorHtml(grundInput, d.grundDesEinsatzes_html || d.grundDesEinsatzes || '', { fast: true });
               var bemerkEl = document.getElementById('montageberichtBemerkungen');
-              if (bemerkEl) setRichEditorHtml(bemerkEl, d.bemerkungen_html || ((d.bemerkungen != null && d.bemerkungen !== '') ? d.bemerkungen : ''));
+              if (bemerkEl) setRichEditorHtml(bemerkEl, d.bemerkungen_html || ((d.bemerkungen != null && d.bemerkungen !== '') ? d.bemerkungen : ''), { fast: true });
               setMontageberichtLanguages(
                 (Array.isArray(d.languages) && d.languages.length)
                   ? d.languages
@@ -18310,7 +18356,7 @@
                     if (!valHtml && Array.isArray(fb.textbausteine) && fb.textbausteine.length) {
                       valHtml = '<ul>' + fb.textbausteine.map(function (t) { return '<li>' + escapeHtml((t && t.text) || '') + '</li>'; }).join('') + '</ul>';
                     }
-                    setRichEditorHtml(ta, valHtml);
+                    setRichEditorHtml(ta, valHtml, { fast: true });
                   }
                 });
               }
@@ -18329,6 +18375,8 @@
               if (pdfBtnClear) pdfBtnClear.style.display = 'none';
             }
           } catch (loadErr) { /* gespeicherte Daten optional */ }
+          if (loadToken !== montageberichtJobLoadToken) return;
+          montageberichtFormReady = true;
           if (montageberichtAutosave) montageberichtAutosave.markSaved();
         } catch (e) {
           if (loadToken !== montageberichtJobLoadToken) return;
@@ -18566,7 +18614,7 @@
     }
 
     async function persistMontageberichtJsonSilent() {
-      if (!montageberichtJobData || !jobSelect || !jobSelect.value) {
+      if (!montageberichtFormReady || !montageberichtJobData || !jobSelect || !jobSelect.value) {
         return { ok: false, skipped: true };
       }
       var fields = collectMontageberichtFields({ light: true });
@@ -18603,13 +18651,14 @@
     var montageberichtAutosave = createProtocolAutosave({
       viewId: 'viewProtokolleMontagebericht',
       isReady: function () {
-        return !!(montageberichtJobData && jobSelect && jobSelect.value);
+        return !!(montageberichtFormReady && montageberichtJobData && jobSelect && jobSelect.value);
       },
       fingerprint: function () {
         return protocolAutosaveFingerprint(collectMontageberichtFields({ light: true }));
       },
       save: persistMontageberichtJsonSilent,
       commitSave: function () {
+        if (!montageberichtFormReady) return;
         var btn = document.getElementById('btnMontageberichtStickySave');
         if (btn) btn.click();
       },

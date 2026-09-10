@@ -9,7 +9,10 @@ const {
   getAnlagenstammByIdResponse,
 } = require('./anlagenstamm-php-local');
 const { buildLocalAnlagenstammGallery } = require('./anlagenstamm-gallery-local');
-const { buildLocalAnlagenstammDocumentsList } = require('./anlagenstamm-documents-local');
+const {
+  buildLocalAnlagenstammDocumentsList,
+  mergeRemoteDocumentsList,
+} = require('./anlagenstamm-documents-local');
 const fs = require('fs');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 const { parseMlPdfBuffer } = require('./anlagenstamm-ml-pdf');
@@ -34,8 +37,7 @@ function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
   return h;
 }
 
-/** Monteur-API (dispo_api): Basic-Auth, optional Request-Creds oder persistierte Session. */
-async function fetchDispoApiFilesList(ctx, technicianId, fab, credsOpt) {
+async function fetchDispoApiGet(ctx, technicianId, fab, relativePhp, credsOpt, timeoutMs) {
   const creds =
     credsOpt && typeof credsOpt === 'object'
       ? credsOpt
@@ -50,10 +52,10 @@ async function fetchDispoApiFilesList(ctx, technicianId, fab, credsOpt) {
   const u = String(creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : '') || '').trim();
   if (!u) return null;
   const url =
-    `${base}/dispo_api/api/anlagenstamm_files_list.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabNorm)}`;
+    `${base}${relativePhp}?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabNorm)}`;
   try {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 12000);
+    const timer = setTimeout(() => ac.abort(), timeoutMs || 12000);
     const r = await fetch(url, { headers: dispoMonteurHeaders(ctx, technicianId, creds), signal: ac.signal });
     clearTimeout(timer);
     const data = await r.json().catch(() => ({}));
@@ -62,6 +64,22 @@ async function fetchDispoApiFilesList(ctx, technicianId, fab, credsOpt) {
   } catch (_) {
     return null;
   }
+}
+
+/** Monteur-API (dispo_api): Basic-Auth, optional Request-Creds oder persistierte Session. */
+async function fetchDispoApiFilesList(ctx, technicianId, fab, credsOpt) {
+  return fetchDispoApiGet(ctx, technicianId, fab, '/dispo_api/api/anlagenstamm_files_list.php', credsOpt, 12000);
+}
+
+async function fetchDispoApiDocumentsList(ctx, technicianId, fab, credsOpt) {
+  return fetchDispoApiGet(
+    ctx,
+    technicianId,
+    fab,
+    '/dispo_api/api/anlagenstamm_documents_list.php',
+    credsOpt,
+    15000,
+  );
 }
 
 async function fetchDispoApiMlPdfPrefill(ctx, technicianId, fab, pathRel, debug, credsOpt) {
@@ -304,14 +322,14 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     return res.json({ ok: true, gallery, source, montage_pending: !!montagePending });
   });
 
-  app.get('/api/anlagenstamm_documents_list.php', (req, res) => {
+  app.get('/api/anlagenstamm_documents_list.php', async (req, res) => {
     const fab = String(req.query.fab || req.query.fabrikationsnummer || '').trim();
     if (!fab) return res.status(400).json({ ok: false, success: false, error: 'Fabrikationsnummer fehlt' });
-    let payload;
+    let local;
     try {
-      payload = buildLocalAnlagenstammDocumentsList(db(), fab);
+      local = buildLocalAnlagenstammDocumentsList(db(), fab);
     } catch (_) {
-      payload = {
+      local = {
         ok: true,
         success: true,
         fab,
@@ -322,7 +340,39 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
         source: 'local_fast',
       };
     }
-    return res.json(payload);
+    const technicianId = ctx.getTechnicianId ? ctx.getTechnicianId(req) : 0;
+    let remote = null;
+    try {
+      remote = await fetchDispoApiDocumentsList(ctx, technicianId, fab);
+    } catch (_) {
+      remote = null;
+    }
+    if (
+      !(remote && (remote.ok === true || remote.success === true) && Array.isArray(remote.categories)) &&
+      typeof ctx.ensureProxyAuthenticated === 'function'
+    ) {
+      try {
+        const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds({}) : null;
+        const auth = await ctx.ensureProxyAuthenticated(creds);
+        if (auth && auth.ok && auth.authenticated && auth.proxy && typeof auth.proxy.getJson === 'function') {
+          const qs = new URLSearchParams({ fab }).toString();
+          remote = await auth.proxy.getJson('/api/anlagenstamm_documents_list.php?' + qs);
+        }
+      } catch (_) {
+        /* offline */
+      }
+    }
+    if (remote && (remote.ok === true || remote.success === true) && Array.isArray(remote.categories)) {
+      remote.source = remote.source || 'dispo_api';
+      const merged = mergeRemoteDocumentsList(local, remote);
+      try {
+        const paramCat = (merged.categories || []).find((c) => c.slug === 'parameterliste');
+        const n = paramCat && Array.isArray(paramCat.documents) ? paramCat.documents.length : 0;
+        console.log('[anlagenstamm_documents]', fab, 'source=' + merged.source, 'param=' + n);
+      } catch (_) {}
+      return res.json(merged);
+    }
+    return res.json(local);
   });
 
   app.get('/api/anlagenstamm_files_list.php', async (req, res) => {

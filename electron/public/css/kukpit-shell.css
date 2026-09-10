@@ -132,11 +132,12 @@
 
 .header-claim {
   position: absolute;
-  right: 22px;
+  right: 10px;
   top: 28px;
   z-index: 3;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 16px;
   pointer-events: none;
 }
@@ -157,6 +158,7 @@
   line-height: 1.55;
   text-transform: uppercase;
   text-align: right;
+  width: max-content;
   color: rgba(255, 255, 255, 0.85);
 }
 
@@ -373,7 +375,7 @@
 .app-header #technicianName::after { content: " ▾"; }
 
 body.has-titlebar-overlay .win-controls { display: none; }
-body.has-titlebar-overlay .header-claim { right: 148px; }
+body.has-titlebar-overlay .header-claim { right: 10px; top: 36px; }
 body.has-titlebar-overlay .header-top { padding-right: 140px; }
 body.has-titlebar-overlay .app-header::after {
   content: "";

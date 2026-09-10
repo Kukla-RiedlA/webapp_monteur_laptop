@@ -826,15 +826,35 @@
     var scope = root || document;
     unwrapAnnotates(scope);
     bindImageReorder(scope);
+    var pending = [];
     eachRichEditor(scope, function (ed) {
       lockEditor(ed);
       prepareEditorImages(ed);
       ed.querySelectorAll('img[data-mb-draw]').forEach(function (img) {
-        attachOverlay(img);
-        renderOverlay(img);
+        pending.push(img);
       });
     });
-    syncAllOverlays();
+    function attachNext() {
+      var img = pending.shift();
+      if (!img) {
+        syncAllOverlays();
+        return;
+      }
+      if (img.isConnected) {
+        attachOverlay(img);
+        renderOverlay(img);
+      }
+      if (!pending.length) {
+        syncAllOverlays();
+        return;
+      }
+      if (window.requestIdleCallback) {
+        window.requestIdleCallback(attachNext, { timeout: 250 });
+      } else {
+        setTimeout(attachNext, 0);
+      }
+    }
+    if (pending.length) attachNext();
   }
 
   function startTool(name, img) {

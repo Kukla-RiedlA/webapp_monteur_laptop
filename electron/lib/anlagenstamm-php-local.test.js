@@ -138,9 +138,11 @@ describe('Dokumente: Raster nicht unter Montagebericht', () => {
     assert.match(src, /relocateRasterDocuments\(data\.categories/);
   });
 
-  it('documents_list.php ist lokale Fast-Route ohne Dispo-Proxy', () => {
+  it('documents_list.php lädt Dispo-Liste und fällt auf local_fast zurück', () => {
     const src = fs.readFileSync(path.join(__dirname, 'anlagenstamm-php-routes.js'), 'utf8');
     assert.match(src, /app\.get\('\/api\/anlagenstamm_documents_list\.php'/);
+    assert.match(src, /fetchDispoApiDocumentsList/);
+    assert.match(src, /mergeRemoteDocumentsList/);
     assert.match(src, /source: 'local_fast'/);
     const proxy = fs.readFileSync(path.join(__dirname, 'dispo-html-proxy.js'), 'utf8');
     assert.match(proxy, /\/anlagenstamm_documents_list\.php/);

@@ -25,6 +25,40 @@ describe('local documents list', () => {
     assert.equal(jobHasFab('[{"fabrikationsnummer":"11603"}]', '11603'), true);
   });
 
+  it('nimmt Dispo-Parameterlisten und ergänzt nur lokale Extra-Dateien', () => {
+    const { mergeRemoteDocumentsList } = require('./anlagenstamm-documents-local');
+    const local = {
+      categories: [
+        { slug: 'parameterliste', documents: [{ parameter_file_id: 1, original_name: 'A.CSV', size_bytes: 10 }] },
+        { slug: 'montagebericht', documents: [] },
+      ],
+    };
+    const remote = {
+      ok: true,
+      fab: '10066',
+      parameter_fab: '10066',
+      source: 'dispo_api',
+      categories: [
+        {
+          slug: 'parameterliste',
+          documents: [
+            { parameter_file_id: 80, original_name: 'ALT.CSV', size_bytes: 99 },
+            { parameter_file_id: 1, original_name: 'A.CSV', size_bytes: 10 },
+          ],
+        },
+        { slug: 'montagebericht', documents: [{ id: 5, original_name: 'MB.pdf', size_bytes: 20 }] },
+      ],
+      events: [],
+      timeline: [],
+    };
+    const merged = mergeRemoteDocumentsList(local, remote);
+    const param = merged.categories.find((c) => c.slug === 'parameterliste');
+    const mb = merged.categories.find((c) => c.slug === 'montagebericht');
+    assert.equal(param.documents.length, 2);
+    assert.equal(mb.documents.length, 1);
+    assert.equal(merged.source, 'dispo_api');
+  });
+
   it('legt Parameterlisten an und lässt JSON-Entwürfe weg', () => {
     const db = {
       prepare(sql) {

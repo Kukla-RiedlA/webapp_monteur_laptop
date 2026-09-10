@@ -87,9 +87,10 @@ function mapParameterDocs(db, fabNorm) {
     if (n > 0) notes += ' · ' + n + ' Werte';
     if (String(row.source_file_status || '') === 'original_deleted') notes += ' · Originaldatei gelöscht';
     const name = String(row.original_filename || 'Parameterliste');
+    const serverId = row.server_file_id != null ? Number(row.server_file_id) : 0;
     return {
       id: 0,
-      parameter_file_id: row.id,
+      parameter_file_id: serverId > 0 ? serverId : row.id,
       document_type: 'parameterliste',
       file_path: String(row.storage_relpath || row.source_path || ''),
       original_name: name,
@@ -148,8 +149,82 @@ function buildLocalAnlagenstammDocumentsList(db, fab) {
   };
 }
 
+function docIdentityKeys(doc) {
+  const keys = [];
+  const pid = Number(doc && doc.parameter_file_id) || 0;
+  if (pid > 0) keys.push('p:' + pid);
+  const did = Number(doc && doc.id) || 0;
+  if (did > 0) keys.push('d:' + did);
+  const name = String((doc && (doc.original_name || doc.display_name)) || '')
+    .trim()
+    .toLowerCase();
+  const sz = Number(doc && doc.size_bytes) || 0;
+  if (name) keys.push('n:' + name + ':' + sz);
+  const pathRel = String((doc && doc.file_path) || '')
+    .replace(/\\/g, '/')
+    .trim()
+    .toLowerCase();
+  if (pathRel) keys.push('f:' + pathRel);
+  return keys;
+}
+
+function mergeRemoteDocumentsList(localPayload, remotePayload) {
+  const local = localPayload && typeof localPayload === 'object' ? localPayload : {};
+  const remote = remotePayload && typeof remotePayload === 'object' ? remotePayload : null;
+  if (!remote || !Array.isArray(remote.categories)) {
+    return local;
+  }
+  const ordered = emptyCategories();
+  const bySlug = {};
+  for (const cat of ordered) bySlug[cat.slug] = cat;
+  const seen = new Set();
+  function addDoc(slug, doc) {
+    if (!doc || typeof doc !== 'object') return;
+    const target = bySlug[slug] ? slug : 'sonstiges';
+    if (!bySlug[target]) return;
+    const keys = docIdentityKeys(doc);
+    if (keys.some((k) => seen.has(k))) return;
+    for (const k of keys) seen.add(k);
+    bySlug[target].documents.push(doc);
+  }
+  for (const cat of remote.categories) {
+    const slug = String((cat && cat.slug) || '');
+    for (const doc of (cat && cat.documents) || []) {
+      addDoc(slug, doc);
+    }
+  }
+  for (const cat of local.categories || []) {
+    const slug = String((cat && cat.slug) || '');
+    for (const doc of (cat && cat.documents) || []) {
+      addDoc(slug, doc);
+    }
+  }
+  const remoteEvents = Array.isArray(remote.events) ? remote.events : [];
+  const localEvents = Array.isArray(local.events) ? local.events : [];
+  const evSeen = new Set();
+  const events = [];
+  for (const ev of remoteEvents.concat(localEvents)) {
+    const id = ev && ev.id != null ? 'e:' + ev.id : 't:' + String((ev && ev.title) || '') + ':' + String((ev && ev.event_date) || '');
+    if (evSeen.has(id)) continue;
+    evSeen.add(id);
+    events.push(ev);
+  }
+  const timeline = Array.isArray(remote.timeline) && remote.timeline.length ? remote.timeline : local.timeline || [];
+  return {
+    ok: true,
+    success: true,
+    fab: String(remote.fab || local.fab || '').trim(),
+    parameter_fab: String(remote.parameter_fab || local.parameter_fab || '').trim(),
+    categories: ordered,
+    events,
+    timeline,
+    source: remote.source || 'dispo_api',
+  };
+}
+
 module.exports = {
   buildLocalAnlagenstammDocumentsList,
+  mergeRemoteDocumentsList,
   emptyCategories,
   isRealListedDocument,
   jobHasFab,
