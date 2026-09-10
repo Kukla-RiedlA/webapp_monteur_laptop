@@ -82,4 +82,16 @@ describe('htmlToStyledBlocks', () => {
     assert.equal(blocks[1].widthPct, 50);
     assert.equal(blocks[2].type, 'text');
   });
+
+  it('decodes data-mb-draw annotations on images', () => {
+    const shapes = [{ t: 'line', x1: 10, y1: 10, x2: 90, y2: 20, c: '#0e7b5a', w: 0.8 }];
+    const b64 = Buffer.from(JSON.stringify(shapes), 'utf8').toString('base64');
+    const blocks = htmlToStyledBlocks(
+      `<img src="data:image/png;base64,aaa" data-mb-draw="${b64}" style="width:100%">`,
+    );
+    assert.equal(blocks[0].type, 'image');
+    assert.equal(blocks[0].draw.length, 1);
+    assert.equal(blocks[0].draw[0].t, 'line');
+    assert.equal(blocks[0].draw[0].x2, 90);
+  });
 });

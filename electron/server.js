@@ -1,5 +1,5 @@
 /**
- * Lokaler API-Server für die Monteur WebApp (Offline).
+ * Lokaler API-Server für KUKpit (Offline).
  * SQLite via better-sqlite3 (WAL) im Electron-Hauptprozess.
  */
 
@@ -147,6 +147,7 @@ const {
   buildMonteurWorkAbsDir,
   isMonteurWorkRelPath,
   ensureAnlageFnDirs,
+  ensureCanonicalFnFolders,
   ensureMonteurMontageDirs,
   alignMonteurMontageDirs,
   ensureMonteurPhotoCategoryDirs,
@@ -191,6 +192,8 @@ const {
   mergeOfflinePullSelection,
   removeOfflinePullFab,
   updateOfflinePullFabMap,
+  isTedInnerPath,
+  pathMatchesSelection,
   ensureMontageFolderNameInConfig,
   updateMontageFolderNameInConfig,
 } = require('./lib/job-offline-pull');
@@ -4875,6 +4878,122 @@ function createApp(db) {
     save();
   }
 
+  /**
+   * Gewählte PROJEKTE-NEU-Dateien nach Dokumente_Anlage/<FN>/ ziehen.
+   * Job-Fileserver hat neu hinzugefügte FNs oft noch nicht; Vorschau kommt vom Anlagenstamm.
+   */
+  async function pullSelectedProjekteNeuIntoReise(opts) {
+    const {
+      dispoBaseUrl,
+      technicianId,
+      authHeader,
+      signal,
+      targetDir,
+      fabMap,
+      pathsByFab,
+      setProgress,
+    } = opts || {};
+    if (!targetDir || !pathsByFab || !pathsByFab.size) return 0;
+    const hdr = dispoMonteurFetchHeaders(technicianId, authHeader);
+    let downloaded = 0;
+    for (const [fab, prefixes] of pathsByFab) {
+      if (!prefixes || !prefixes.size) continue;
+      const entry = (fabMap || []).find((e) => String((e && e.fab) || '') === String(fab));
+      const canonical = String((entry && entry.folder_name_canonical) || fab || '').trim();
+      if (!canonical || canonical.includes('..') || /[\\/]/.test(canonical)) continue;
+      const destRoot = path.join(targetDir, 'Dokumente_Anlage', canonical);
+      if (!fs.existsSync(destRoot)) fs.mkdirSync(destRoot, { recursive: true });
+      for (const [prefix, kind] of prefixes) {
+        const p = String(prefix || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (!p || String(kind || '') === 'file') continue;
+        try {
+          fs.mkdirSync(path.join(destRoot, ...p.split('/').filter(Boolean)), { recursive: true });
+        } catch (_) {}
+      }
+      let tree = [];
+      try {
+        const cached = readAnlagenstammTreeCache(db, fab);
+        if (cached && Array.isArray(cached.tree) && cached.tree.length) tree = cached.tree;
+      } catch (_) {}
+      if (!tree.length && dispoBaseUrl) {
+        try {
+          const url =
+            dispoBaseUrl +
+            '/dispo_api/api/anlagenstamm_files_list.php?technician_id=' +
+            encodeURIComponent(technicianId) +
+            '&fab=' +
+            encodeURIComponent(fab);
+          const r = await fetch(url, { headers: hdr, signal });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data && data.projekte_neu && Array.isArray(data.projekte_neu.tree)) {
+            tree = data.projekte_neu.tree;
+            try {
+              upsertAnlagenstammTreeCache(db, fab, data.projekte_neu);
+            } catch (_) {}
+          }
+        } catch (listErr) {
+          console.warn(
+            '[dienstreise_pull] projekte_neu list',
+            fab,
+            listErr && listErr.message ? listErr.message : listErr,
+          );
+        }
+      }
+      const flat = [];
+      flattenProjekteNeuFiles(tree, '', flat);
+      for (const item of flat) {
+        const inner = String((item && item.rel) || '')
+          .replace(/\\/g, '/')
+          .replace(/^\/+/, '');
+        if (!inner || inner.includes('..') || isTedInnerPath(inner)) continue;
+        if (!pathMatchesSelection(inner, prefixes)) continue;
+        const dest = path.join(destRoot, ...inner.split('/').filter(Boolean));
+        try {
+          if (fsExistsSync(dest) && fsStatSync(dest).isFile()) continue;
+        } catch (_) {}
+        if (!dispoBaseUrl) continue;
+        const url =
+          dispoBaseUrl +
+          '/dispo_api/api/anlagenstamm_file_download.php?technician_id=' +
+          encodeURIComponent(technicianId) +
+          '&fab=' +
+          encodeURIComponent(fab) +
+          '&source=projekte_neu&path=' +
+          encodeURIComponent(inner);
+        try {
+          if (setProgress) setProgress('projekte_neu', downloaded, 0, canonical + '/' + inner);
+          const r = await fetch(url, { headers: hdr, signal });
+          const buf = Buffer.from(await r.arrayBuffer());
+          if (!r.ok || !buf.length) continue;
+          const ctDl = (r.headers.get('content-type') || '').toLowerCase();
+          if (ctDl.includes('application/json')) {
+            try {
+              const j = JSON.parse(buf.toString('utf8'));
+              if (j && j.ok === false) continue;
+            } catch (_) {}
+          }
+          const parent = path.dirname(dest);
+          if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
+          await hangDiag.timeAsync('onedrive_write', () => replaceFileWithoutUnlink(dest, buf));
+          try {
+            writeCachedProjekteNeuFile(DB_DIR, fab, inner, buf);
+          } catch (_) {}
+          downloaded += 1;
+        } catch (dlErr) {
+          if (dlErr && dlErr.name === 'AbortError') throw dlErr;
+          console.warn(
+            '[dienstreise_pull] projekte_neu file',
+            fab,
+            inner,
+            dlErr && dlErr.message ? dlErr.message : dlErr,
+          );
+        }
+        await yieldEventLoop();
+      }
+    }
+    return downloaded;
+  }
+
   function resolveLocalJobIdForFab(technicianId, fab) {
     const fabNorm = String(fab || '').trim();
     if (!fabNorm || !technicianId) return null;
@@ -6019,6 +6138,9 @@ function createApp(db) {
           }
           offlinePullMode = 'explicit';
           save();
+          try {
+            ensureCanonicalFnFolders(layoutDir || targetDir, fabMapResolved, montageName);
+          } catch (_) {}
         } catch (layoutErr) {
           console.warn(
             '[accept] Montage-Ordner:',
@@ -6034,10 +6156,15 @@ function createApp(db) {
           }
           offlinePullMode = 'explicit';
           save();
+          try {
+            ensureCanonicalFnFolders(targetDir, fabMap, montageName);
+          } catch (_) {}
         }
       }
 
-      const dedupeKey = 'dienstreise_pull:' + localJobId + ':' + (acceptJob ? 'accept' : 'copy');
+      const forceRefresh = !acceptJob && Object.prototype.hasOwnProperty.call(body, 'offline_paths');
+      const dedupeKey =
+        'dienstreise_pull:' + localJobId + ':' + (acceptJob ? 'accept' : forceRefresh ? 'copy_sel' : 'copy');
       const { job_id } = bgJobs.enqueue(
         'dienstreise_pull',
         {
@@ -6051,6 +6178,7 @@ function createApp(db) {
           include_bilder: includeBilder,
           accept_job: acceptJob,
           offline_pull_mode: offlinePullMode,
+          force_refresh: forceRefresh,
         },
         dedupeKey,
       );
@@ -16047,6 +16175,7 @@ function createApp(db) {
         });
         const offlineCfg = getOfflinePullConfig(db, localJobId);
         const pullMode = p.offline_pull_mode || offlineCfg.pull_mode || 'legacy';
+        const forceRefresh = !!p.force_refresh;
         const skipTedOnPull = acceptJob || pullMode === 'explicit';
         const pathsByFab = getOfflinePullPathsByFab(db, localJobId);
         let fabMap = offlineCfg.fab_map || [];
@@ -16081,6 +16210,18 @@ function createApp(db) {
         await migrateAliasFnFolders(targetDir, fabMap);
         const layoutPull = await ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
         const montageFolderName = layoutPull.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
+        try {
+          ensureCanonicalFnFolders(
+            targetDir,
+            (layoutPull && layoutPull.fabMap && layoutPull.fabMap.length ? layoutPull.fabMap : fabMap),
+            montageFolderName,
+          );
+        } catch (fnMkErr) {
+          console.warn(
+            '[dienstreise_pull] FN-Ordner:',
+            fnMkErr && fnMkErr.message ? fnMkErr.message : fnMkErr,
+          );
+        }
         if (montageFolderName) {
           removeLegacyMonteurAuftragsordnerTopLevel(targetDir, montageFolderName, fabMap);
         }
@@ -16096,7 +16237,7 @@ function createApp(db) {
           (Array.isArray(chk.completed) && chk.completed.length > 0) ||
           (Array.isArray(chk.ted_completed) && chk.ted_completed.length > 0) ||
           !!chk.refresh_done_at;
-        if (!hasOwnProgress) {
+        if (!forceRefresh && !hasOwnProgress) {
           const prev = loadLastCompletedDienstreisePullCheckpoint(localJobId);
           if (prev) {
             if (!prev.dispo_base_fingerprint || prev.dispo_base_fingerprint === fp) {
@@ -16118,7 +16259,10 @@ function createApp(db) {
           }
         }
         const refreshAge = chk.refresh_done_at ? Date.now() - new Date(chk.refresh_done_at).getTime() : Infinity;
-        const skipRefresh = !periodicDelta && !!(chk.refresh_done_at && refreshAge < 15 * 60 * 1000 && chk.dispo_base_fingerprint === fp);
+        const skipRefresh =
+          !forceRefresh &&
+          !periodicDelta &&
+          !!(chk.refresh_done_at && refreshAge < 15 * 60 * 1000 && chk.dispo_base_fingerprint === fp);
         let copyWarning = null;
         let skipCopyDueToNetwork = false;
         setProgress('refresh', 0, 1, skipRefresh ? 'Dispo-Refresh (Checkpoint, TTL).' : 'Dispo wird aktualisiert …');
@@ -16243,7 +16387,7 @@ function createApp(db) {
         let files = null;
         if (skipCopyDueToNetwork) {
           files = [];
-        } else if (!periodicDelta && Array.isArray(chk.files) && chk.files.length) {
+        } else if (!forceRefresh && !periodicDelta && Array.isArray(chk.files) && chk.files.length) {
           files = filterManifestForPull(chk.files, pullMode, pathsByFab, fabMap);
         } else {
           files = [];
@@ -16357,6 +16501,28 @@ function createApp(db) {
             }
           } catch (e) {
             console.warn('[dienstreise_pull] job_mark_docs_loaded', e && e.message ? e.message : e);
+          }
+        }
+
+        if (pullMode === 'explicit' && pathsByFab && pathsByFab.size) {
+          try {
+            const pnN = await pullSelectedProjekteNeuIntoReise({
+              dispoBaseUrl,
+              technicianId,
+              authHeader,
+              signal,
+              targetDir,
+              fabMap,
+              pathsByFab,
+              setProgress,
+            });
+            if (pnN) setProgress('projekte_neu', pnN, pnN, pnN + ' PROJEKTE-NEU-Dateien.');
+          } catch (pnErr) {
+            if (pnErr && pnErr.name === 'AbortError') throw pnErr;
+            console.warn(
+              '[dienstreise_pull] projekte_neu:',
+              pnErr && pnErr.message ? pnErr.message : pnErr,
+            );
           }
         }
 

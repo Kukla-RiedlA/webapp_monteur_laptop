@@ -322,6 +322,39 @@
           .catch(function () {});
       });
     }
+    function updateHeaderFolderDownloadBar(jobs) {
+      var track = document.getElementById('headerFolderDlTrack');
+      var fill = document.getElementById('headerFolderDlFill');
+      if (!track || !fill) return;
+      var pulls = (jobs || []).filter(function (j) {
+        return (
+          j &&
+          j.type === 'dienstreise_pull' &&
+          (j.status === 'queued' || j.status === 'running')
+        );
+      });
+      if (!pulls.length) {
+        track.classList.remove('is-indeterminate');
+        fill.style.width = '0%';
+        return;
+      }
+      var cur = 0;
+      var tot = 0;
+      pulls.forEach(function (j) {
+        cur += Number(j.progress_current) || 0;
+        tot += Number(j.progress_total) || 0;
+      });
+      if (tot > 0) {
+        track.classList.remove('is-indeterminate');
+        var pct = Math.max(2, Math.min(100, Math.round((cur / tot) * 100)));
+        fill.style.width = pct + '%';
+      } else {
+        track.classList.add('is-indeterminate');
+        fill.style.width = '';
+      }
+    }
+    var headerJobsPollMs = 2800;
+    var headerJobsPollTimer = null;
     function refresh() {
       fetch(API_BASE + '/api/background_jobs/reap', {
         method: 'POST',
@@ -330,7 +363,7 @@
       })
         .catch(function () {})
         .then(function () {
-          return fetch(API_BASE + '/api/background_jobs?running=1&limit=10');
+          return fetch(API_BASE + '/api/background_jobs?active=1&limit=20');
         })
         .then(function (r) {
           return r.json();
@@ -339,8 +372,22 @@
           var wrapEl = document.getElementById('backgroundJobsWrap');
           var badge = document.getElementById('backgroundJobsBadge');
           var jobs = data && data.jobs ? data.jobs : [];
+          var running = jobs.filter(function (j) {
+            return j && (j.status === 'running' || j.status === 'queued');
+          });
+          updateHeaderFolderDownloadBar(running);
+          var pullActive = running.some(function (j) { return j && j.type === 'dienstreise_pull'; });
+          if (headerJobsPollTimer && pullActive && headerJobsPollMs !== 800) {
+            headerJobsPollMs = 800;
+            clearInterval(headerJobsPollTimer);
+            headerJobsPollTimer = setInterval(refresh, headerJobsPollMs);
+          } else if (headerJobsPollTimer && !pullActive && headerJobsPollMs !== 2800) {
+            headerJobsPollMs = 2800;
+            clearInterval(headerJobsPollTimer);
+            headerJobsPollTimer = setInterval(refresh, headerJobsPollMs);
+          }
           if (!wrapEl || !badge) return;
-          if (!jobs.length) {
+          if (!running.length) {
             wrapEl.style.display = 'none';
             wrapEl.removeAttribute('title');
             if (typeof applySyncBadgeAfterRun === 'function') {
@@ -349,8 +396,8 @@
             return;
           }
           wrapEl.style.display = '';
-          badge.textContent = 'Sync ' + jobs.length;
-          var lines = jobs.slice(0, 8).map(function (j) {
+          badge.textContent = 'Sync ' + running.length;
+          var lines = running.slice(0, 8).map(function (j) {
             var ph = j.progress_phase || j.status || '';
             var msg = j.message ? String(j.message) : '';
             var cur = j.progress_current != null ? j.progress_current : '';
@@ -366,7 +413,7 @@
         .catch(function () {});
     }
     refresh();
-    setInterval(refresh, 2800);
+    headerJobsPollTimer = setInterval(refresh, headerJobsPollMs);
   }
 
   const getTechId = () => parseInt(document.getElementById('technicianId').value, 10) || 0;
@@ -16241,12 +16288,12 @@
     function setImgWidthPercent(img, pct) {
       if (!img) return;
       var p = Math.max(10, Math.min(100, parseInt(pct, 10) || 100));
+      img.setAttribute('data-mb-width', String(p));
       img.style.width = p + '%';
       img.style.height = 'auto';
       img.style.maxWidth = '100%';
       img.removeAttribute('width');
       img.removeAttribute('height');
-      img.setAttribute('data-mb-width', String(p));
       var ed = img.closest('.mb-rich-editor, [data-mb-editor], [data-fab-rich], .richtext-editor');
       if (ed) {
         try { ed.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) { /* ignore */ }
@@ -16320,7 +16367,7 @@
 
     function insertImgHtml(el, dataUrl, savedRange) {
       if (!el || !dataUrl) return;
-      insertHtmlChunk(el, '<img src="' + dataUrl + '" alt="" style="max-width:100%;height:auto;" />', savedRange);
+      insertHtmlChunk(el, '<img src="' + dataUrl + '" alt="" contenteditable="false" draggable="false" style="max-width:100%;height:auto;" />', savedRange);
     }
 
     function pickAndInsert(el) {
@@ -16370,13 +16417,22 @@
       }
       if (action === 'remove') {
         hideMbImgResizeHandle();
-        if (img.parentNode) img.parentNode.removeChild(img);
+        if (window.KuklaImageDraw && window.KuklaImageDraw.removeSelectedOrFalse(img)) {
+          try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (eRs) { /* ignore */ }
+          return;
+        }
+        var wrapRm = img.parentNode && img.parentNode.classList && img.parentNode.classList.contains('mb-img-annotate')
+          ? img.parentNode : img;
+        if (wrapRm.parentNode) wrapRm.parentNode.removeChild(wrapRm);
         try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (eR) { /* ignore */ }
         return;
       }
       if (action === 'rotate') {
         rotateDataUrl90(img.getAttribute('src') || img.src).then(function (dataUrl) {
           img.setAttribute('src', dataUrl);
+          if (window.KuklaImageDraw && window.KuklaImageDraw.rotateForImage) {
+            window.KuklaImageDraw.rotateForImage(img);
+          }
           showMbImgResizeHandle(img, el);
           try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (eRo) { /* ignore */ }
         }).catch(function () { /* ignore */ });
@@ -16530,12 +16586,25 @@
         }
       });
       el.addEventListener('click', function (ev) {
+        var imgHit = window.KuklaImageDraw && window.KuklaImageDraw.imageFromEvent
+          ? window.KuklaImageDraw.imageFromEvent(ev)
+          : (ev.target && ev.target.tagName === 'IMG' ? ev.target : null);
         el.querySelectorAll('img.mb-img-selected').forEach(function (n) {
           n.classList.remove('mb-img-selected');
         });
-        if (ev.target && ev.target.tagName === 'IMG') {
-          ev.target.classList.add('mb-img-selected');
-          showMbImgResizeHandle(ev.target, el);
+        if (imgHit && el.contains(imgHit)) {
+          imgHit.classList.add('mb-img-selected');
+          var drawing = window.KuklaImageDraw && window.KuklaImageDraw.isDrawingToolActive && window.KuklaImageDraw.isDrawingToolActive();
+          imgHit.setAttribute('draggable', 'false');
+          imgHit.setAttribute('contenteditable', 'false');
+          if (window.KuklaImageDraw && window.KuklaImageDraw.rememberImage) {
+            window.KuklaImageDraw.rememberImage(imgHit);
+          }
+          if (drawing) {
+            hideMbImgResizeHandle();
+          } else {
+            showMbImgResizeHandle(imgHit, el);
+          }
         } else {
           hideMbImgResizeHandle();
         }
@@ -16545,7 +16614,10 @@
     document.addEventListener('mousedown', function (ev) {
       if (!mbImgResizeUi.handle) return;
       if (ev.target === mbImgResizeUi.handle) return;
-      if (ev.target && ev.target.tagName === 'IMG' && ev.target.classList.contains('mb-img-selected')) return;
+      if (ev.target && ev.target.closest && ev.target.closest('#montageberichtToolbar')) return;
+      if (ev.target && ev.target.closest && ev.target.closest('.mb-img-annotate')) return;
+      if (ev.target && ev.target.closest && ev.target.closest('.mb-img-drag-handle')) return;
+      if (ev.target && ev.target.tagName === 'IMG') return;
       if (mbImgResizeUi.editor && mbImgResizeUi.editor.contains(ev.target) && ev.target.tagName === 'IMG') return;
       hideMbImgResizeHandle();
       document.querySelectorAll('img.mb-img-selected').forEach(function (n) {
@@ -16568,6 +16640,9 @@
         scope.querySelectorAll('.mb-rich-editor, [data-mb-editor], #richtextEditor, .richtext-editor').forEach(function (node) {
           bindPaste(node);
         });
+        if (window.KuklaImageDraw && window.KuklaImageDraw.bindImageReorder) {
+          window.KuklaImageDraw.bindImageReorder(scope);
+        }
       },
     };
   })();
@@ -17321,6 +17396,8 @@
 
     function getSelectedImgInEditor(editorEl) {
       if (!editorEl) return null;
+      var selected = editorEl.querySelector('img.mb-img-selected');
+      if (selected) return selected;
       var sel = window.getSelection ? window.getSelection() : null;
       if (!sel || sel.rangeCount === 0) return null;
       var node = sel.anchorNode;
@@ -17346,7 +17423,9 @@
 
     function setImgWidthPercent(img, pct) {
       if (!img) return;
-      img.style.width = pct + '%';
+      var p = Math.max(10, Math.min(100, parseInt(pct, 10) || 100));
+      img.setAttribute('data-mb-width', String(p));
+      img.style.width = p + '%';
       img.style.height = 'auto';
       img.style.maxWidth = '100%';
       img.removeAttribute('width');
@@ -17360,7 +17439,7 @@
 
     function insertImageHtmlIntoEditor(el, dataUrl) {
       if (!ensureEditorFocus(el) || !dataUrl) return;
-      var html = '<img src="' + dataUrl + '" alt="" style="max-width:100%;height:auto;" />';
+      var html = '<img src="' + dataUrl + '" alt="" contenteditable="false" draggable="false" style="max-width:100%;height:auto;" />';
       try {
         document.execCommand('insertHTML', false, html);
       } catch (e) {
@@ -17407,13 +17486,22 @@
         return;
       }
       if (action === 'remove') {
-        if (img.parentNode) img.parentNode.removeChild(img);
+        if (window.KuklaImageDraw && window.KuklaImageDraw.removeSelectedOrFalse(img)) {
+          autoResizeFabTextarea(el);
+          return;
+        }
+        var wrapRm = img.parentNode && img.parentNode.classList && img.parentNode.classList.contains('mb-img-annotate')
+          ? img.parentNode : img;
+        if (wrapRm.parentNode) wrapRm.parentNode.removeChild(wrapRm);
         autoResizeFabTextarea(el);
         return;
       }
       if (action === 'rotate') {
         rotateDataUrl90(img.getAttribute('src') || img.src).then(function (dataUrl) {
           img.setAttribute('src', dataUrl);
+          if (window.KuklaImageDraw && window.KuklaImageDraw.rotateForImage) {
+            window.KuklaImageDraw.rotateForImage(img);
+          }
           autoResizeFabTextarea(el);
         }).catch(function () { /* ignore */ });
       }
@@ -17432,13 +17520,26 @@
         }).catch(function () { /* ignore */ });
       });
       el.addEventListener('click', function (ev) {
+        var imgHit = window.KuklaImageDraw && window.KuklaImageDraw.imageFromEvent
+          ? window.KuklaImageDraw.imageFromEvent(ev)
+          : (ev.target && ev.target.tagName === 'IMG' ? ev.target : null);
         el.querySelectorAll('img.mb-img-selected').forEach(function (n) {
           n.classList.remove('mb-img-selected');
         });
-        if (ev.target && ev.target.tagName === 'IMG') {
-          ev.target.classList.add('mb-img-selected');
-          if (window.KuklaEditorImages && window.KuklaEditorImages.showResizeHandle) {
-            window.KuklaEditorImages.showResizeHandle(ev.target, el);
+        if (imgHit && el.contains(imgHit)) {
+          imgHit.classList.add('mb-img-selected');
+          var drawing = window.KuklaImageDraw && window.KuklaImageDraw.isDrawingToolActive && window.KuklaImageDraw.isDrawingToolActive();
+          imgHit.setAttribute('draggable', 'false');
+          imgHit.setAttribute('contenteditable', 'false');
+          if (window.KuklaImageDraw && window.KuklaImageDraw.rememberImage) {
+            window.KuklaImageDraw.rememberImage(imgHit);
+          }
+          if (drawing) {
+            if (window.KuklaEditorImages && window.KuklaEditorImages.hideResizeHandle) {
+              window.KuklaEditorImages.hideResizeHandle();
+            }
+          } else if (window.KuklaEditorImages && window.KuklaEditorImages.showResizeHandle) {
+            window.KuklaEditorImages.showResizeHandle(imgHit, el);
           }
         } else if (window.KuklaEditorImages && window.KuklaEditorImages.hideResizeHandle) {
           window.KuklaEditorImages.hideResizeHandle();
@@ -17451,6 +17552,7 @@
       var d = document.createElement('div');
       d.innerHTML = raw;
       d.querySelectorAll('script,style').forEach(function (n) { n.remove(); });
+      d.querySelectorAll('svg.mb-draw-layer').forEach(function (n) { n.remove(); });
       d.querySelectorAll('*').forEach(function (node) {
         var tag = (node.tagName || '').toLowerCase();
         if (tag === 'img') {
@@ -17459,7 +17561,7 @@
             node.remove();
             return;
           }
-          var keep = ['src', 'alt', 'width', 'height', 'style'];
+          var keep = ['src', 'alt', 'width', 'height', 'style', 'data-mb-draw', 'data-mb-width', 'class', 'contenteditable', 'draggable'];
           var attrs = Array.prototype.slice.call(node.attributes || []);
           attrs.forEach(function (a) {
             if (keep.indexOf(a.name) === -1) node.removeAttribute(a.name);
@@ -17467,6 +17569,9 @@
           if (!node.getAttribute('style')) {
             node.setAttribute('style', 'max-width:100%;height:auto;');
           }
+          return;
+        }
+        if (tag === 'span' && node.classList && node.classList.contains('mb-img-annotate')) {
           return;
         }
         if (['b', 'strong', 'i', 'em', 'u', 'span', 'div', 'p', 'ul', 'ol', 'li', 'br',
@@ -17488,12 +17593,32 @@
           if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) node.removeAttribute('href');
         }
       });
+      d.querySelectorAll('span.mb-img-annotate').forEach(function (wrap) {
+        var img = wrap.querySelector('img');
+        if (!img) {
+          wrap.remove();
+          return;
+        }
+        var w = img.getAttribute('data-mb-width');
+        if (w === '25' || w === '50' || w === '100') {
+          img.style.width = w + '%';
+          img.style.height = 'auto';
+        } else if ((img.style.width || '') === '100%') {
+          img.style.width = '';
+          img.removeAttribute('data-mb-width');
+        }
+        wrap.parentNode.insertBefore(img, wrap);
+        wrap.remove();
+      });
       return d.innerHTML;
     }
 
     function setRichEditorHtml(el, html) {
       if (!el) return;
       el.innerHTML = normalizeMontageberichtHtml(html || '');
+      if (window.KuklaImageDraw && typeof window.KuklaImageDraw.hydrate === 'function') {
+        window.KuklaImageDraw.hydrate(el);
+      }
       autoResizeFabTextarea(el);
     }
 
@@ -17785,6 +17910,16 @@
           autoResizeFabTextarea(montageberichtActiveEditor);
         });
       });
+      if (window.KuklaImageDraw && typeof window.KuklaImageDraw.bindToolbar === 'function') {
+        window.KuklaImageDraw.bindToolbar(toolbarEl, function () {
+          var view = document.getElementById('viewProtokolleMontagebericht');
+          return getSelectedImgInEditor(montageberichtActiveEditor)
+            || (montageberichtActiveEditor && montageberichtActiveEditor.querySelector('img.mb-img-selected'))
+            || (view && view.querySelector('img.mb-img-selected'))
+            || (montageberichtActiveEditor && montageberichtActiveEditor.querySelector('img'))
+            || (view && view.querySelector('.mb-rich-editor img, [data-mb-editor] img'));
+        });
+      }
       if (toolbarFont) {
         toolbarFont.addEventListener('change', function () {
           if (!ensureEditorFocus(montageberichtActiveEditor)) return;
@@ -17826,6 +17961,9 @@
         bindMontageberichtAutoGrow(el);
         if (window.KuklaEditorImages) window.KuklaEditorImages.bindPaste(el);
         else bindEditorImagePaste(el);
+        if (window.KuklaImageDraw && window.KuklaImageDraw.bindImageReorder) {
+          window.KuklaImageDraw.bindImageReorder(el);
+        }
         el.addEventListener('dragover', function (e) {
           if (e.dataTransfer.types.indexOf('text/plain') >= 0 || e.dataTransfer.types.indexOf('text/html') >= 0 || e.dataTransfer.types.indexOf('Files') >= 0) {
             e.preventDefault();
@@ -17837,6 +17975,9 @@
         el.addEventListener('drop', function (e) {
           el.classList.remove('drop-target');
           e.preventDefault();
+          var moved = '';
+          try { moved = e.dataTransfer.getData('text/plain') || ''; } catch (eMove) { moved = ''; }
+          if (moved === 'mb-img') return;
           var files = e.dataTransfer && e.dataTransfer.files;
           if (files && files.length) {
             var imgFile = null;
@@ -18001,22 +18142,10 @@
 
     var montageberichtJobLoadToken = 0;
 
-    function updateMontageberichtAllPdfVisibility(job) {
-      var allPdfBtn = document.getElementById('btnMontageberichtSaveAllPdf');
-      var allPdfBtnTop = document.getElementById('btnMontageberichtSaveAllPdfTop');
-      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
-        ? parseJobFabrikationsnummernOrdered(job || {})
-        : [];
-      var show = fns.length >= 2 ? 'inline-block' : 'none';
-      if (allPdfBtn) allPdfBtn.style.display = show;
-      if (allPdfBtnTop) allPdfBtnTop.style.display = show;
-    }
-
     function resetMontageberichtEnteredFields() {
       try { delete window._kuklaMontageberichtSign; } catch (e) { window._kuklaMontageberichtSign = null; }
       var pdfBtnMb = document.getElementById('btnMontageberichtPdf');
       if (pdfBtnMb) pdfBtnMb.style.display = 'none';
-      updateMontageberichtAllPdfVisibility(null);
       if (grundInput) setRichEditorHtml(grundInput, '');
       var bemerkEl = document.getElementById('montageberichtBemerkungen');
       if (bemerkEl) setRichEditorHtml(bemerkEl, '');
@@ -18070,7 +18199,6 @@
           montageberichtJobData = loadedJob;
           var k = renderKopfdaten(montageberichtJobData);
           renderFabBemerkungen(k.fabrikationsnummern || []);
-          updateMontageberichtAllPdfVisibility(montageberichtJobData);
           var projEl = document.getElementById('montageberichtProjekt');
           if (projEl) projEl.value = deriveMontageberichtProjektFromAnlagenstamm(montageberichtJobData);
           try {
@@ -18463,8 +18591,6 @@
         var stickyPdfBtn = document.getElementById('btnMontageberichtStickyPdf');
         var savePdfBtn = document.getElementById('btnMontageberichtSavePdf');
         var saveJsonBtn = document.getElementById('btnMontageberichtSaveJson');
-        var allPdfBtn = document.getElementById('btnMontageberichtSaveAllPdf');
-        var allPdfBtnTop = document.getElementById('btnMontageberichtSaveAllPdfTop');
         try {
           await withProtocolProgress({ title: jsonOnly ? 'Speichern…' : 'PDF wird erstellt…', total: 1 }, async function (prog) {
             if (submitBtn) submitBtn.disabled = true;
@@ -18472,8 +18598,6 @@
             if (stickyPdfBtn) stickyPdfBtn.disabled = true;
             if (savePdfBtn && savePdfBtn !== submitBtn) savePdfBtn.disabled = true;
             if (saveJsonBtn && saveJsonBtn !== submitBtn) saveJsonBtn.disabled = true;
-            if (allPdfBtn) allPdfBtn.disabled = true;
-            if (allPdfBtnTop) allPdfBtnTop.disabled = true;
             prog.setProgress(0, 1);
             var r = await fetch(API_BASE + '/api/protokolle/montagebericht', {
               method: 'POST',
@@ -18518,40 +18642,9 @@
           if (stickyPdfBtn) stickyPdfBtn.disabled = false;
           if (savePdfBtn) savePdfBtn.disabled = false;
           if (saveJsonBtn) saveJsonBtn.disabled = false;
-          if (allPdfBtn) allPdfBtn.disabled = false;
-          if (allPdfBtnTop) allPdfBtnTop.disabled = false;
         }
       });
     }
-
-    function runMontageberichtAllPdf() {
-      if (!montageberichtJobData || !jobSelect || !jobSelect.value) {
-        alert('Bitte Auftrag wählen.');
-        return;
-      }
-      var fns = typeof parseJobFabrikationsnummernOrdered === 'function'
-        ? parseJobFabrikationsnummernOrdered(montageberichtJobData)
-        : [];
-      if (fns.length < 2) {
-        alert('Für „Alle PDF“ werden mindestens zwei Fabrikationsnummern benötigt.');
-        return;
-      }
-      var languages = getMontageberichtLanguages();
-      if (!languages.length) {
-        alert('Bitte mindestens eine Sprache auswählen (Deutsch und/oder Englisch).');
-        return;
-      }
-      var pdfBtn = document.getElementById('btnMontageberichtSavePdf');
-      if (form && pdfBtn && typeof form.requestSubmit === 'function') {
-        form.requestSubmit(pdfBtn);
-      } else if (form && pdfBtn) {
-        pdfBtn.click();
-      }
-    }
-    var btnMbAllPdf = document.getElementById('btnMontageberichtSaveAllPdf');
-    var btnMbAllPdfTop = document.getElementById('btnMontageberichtSaveAllPdfTop');
-    if (btnMbAllPdf) btnMbAllPdf.addEventListener('click', function () { runMontageberichtAllPdf(); });
-    if (btnMbAllPdfTop) btnMbAllPdfTop.addEventListener('click', function () { runMontageberichtAllPdf(); });
 
     var btnPdfMb = document.getElementById('btnMontageberichtPdf');
     if (btnPdfMb) {

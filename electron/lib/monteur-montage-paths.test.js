@@ -13,6 +13,7 @@ const path = require('path');
 
 const {
   ensureAnlageFnDirs,
+  ensureCanonicalFnFolders,
   ensureMonteurMontageDirs,
   ensureMonteurPhotoCategoryDirs,
   alignMonteurMontageDirs,
@@ -62,6 +63,14 @@ describe('monteur-montage-paths lazy mkdir', () => {
       { fab: '7118', folder_name_canonical: '7118_Kunde_Ort_DE' },
     ]);
     assert.deepEqual(listDirs(path.join(reiseDir, 'Dokumente_Anlage')), []);
+  });
+
+  it('ensureCanonicalFnFolders legt FN-Ordner unter Anlage und Monteur an', () => {
+    const fn = '7118_Kunde_Ort_DE';
+    const ao = '2026-06-01_Firma_Ort_DE_Mustermann';
+    ensureCanonicalFnFolders(reiseDir, [{ fab: '7118', folder_name_canonical: fn }], ao);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Anlage', fn)), true);
+    assert.equal(fs.existsSync(path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage', ao)), true);
   });
 
   it('ensureMonteurPhotoCategoryDirs legt Allgemein/Angebot nicht an', () => {

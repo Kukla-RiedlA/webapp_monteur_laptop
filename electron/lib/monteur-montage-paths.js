@@ -1108,6 +1108,33 @@ async function ensureAnlageFnDirs(reiseDir, fabFolderEntries) {
 }
 
 /**
+ * FN-Hauptordner anlegen (nach neu hinzugefügter FN / explizitem Offline-Pull).
+ * Im Gegensatz zu ensureAnlageFnDirs bewusst mkdir, damit der Explorer die FN sofort zeigt.
+ */
+function ensureCanonicalFnFolders(reiseDir, fabFolderEntries, montageFolderName) {
+  if (!reiseDir || !fs.existsSync(reiseDir)) return;
+  const anlage = path.join(reiseDir, 'Dokumente_Anlage');
+  const monteur = path.join(reiseDir, 'Dokumente_Monteur');
+  if (!fs.existsSync(anlage)) fs.mkdirSync(anlage, { recursive: true });
+  if (!fs.existsSync(monteur)) fs.mkdirSync(monteur, { recursive: true });
+  const ao = String(montageFolderName || '').trim();
+  for (const e of fabFolderEntries || []) {
+    const can = String((e && e.folder_name_canonical) || '').trim();
+    if (!can || can.includes('..') || path.isAbsolute(can) || /[\\/]/.test(can)) continue;
+    try {
+      fs.mkdirSync(path.join(anlage, can), { recursive: true });
+      if (ao) fs.mkdirSync(path.join(monteur, can, 'Montage', ao), { recursive: true });
+    } catch (err) {
+      console.warn(
+        '[monteur-paths] FN-Ordner anlegen',
+        can,
+        err && err.message ? err.message : err,
+      );
+    }
+  }
+}
+
+/**
  * Vorhandene Dokumente_Monteur/<Fileserver-FN>/Montage/<Auftragsordner>/ alignen.
  * Geschwister derselben Identität (Datum+Monteur) bzw. previousName → Desired umbenennen/mergen.
  * Keine leeren FN-/Montage-/Bilder-Ordner auf Vorrat.
@@ -1344,6 +1371,7 @@ module.exports = {
   migrateTopLevelMontageIntoFnFolders,
   ensureMonteurPhotoCategoryDirs,
   ensureAnlageFnDirs,
+  ensureCanonicalFnFolders,
   ensureMonteurMontageDirs,
   alignMonteurMontageDirs,
   isMonteurMontageIdentitySibling,

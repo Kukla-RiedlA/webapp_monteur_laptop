@@ -13,6 +13,81 @@ const { anlagenstammVmaxLabel, anlagenstammTypeHasBehaelterNenninhalt } = requir
  * und .cursor/rules/formular-pdf-design.mdc.
  */
 
+function hexToPdfRgb(hex, rgbFn) {
+  const raw = String(hex || '').replace('#', '').trim();
+  const n = raw.length === 3
+    ? raw.split('').map((c) => c + c).join('')
+    : raw;
+  if (!/^[0-9a-fA-F]{6}$/.test(n)) return rgbFn(14 / 255, 123 / 255, 90 / 255);
+  const r = parseInt(n.slice(0, 2), 16) / 255;
+  const g = parseInt(n.slice(2, 4), 16) / 255;
+  const b = parseInt(n.slice(4, 6), 16) / 255;
+  return rgbFn(r, g, b);
+}
+
+function drawMbImageShapes(page, shapes, box, rgbFn) {
+  const list = Array.isArray(shapes) ? shapes : [];
+  if (!list.length || !page || !box) return;
+  const { x, y, iw, ih } = box;
+  const mapX = (px) => x + (Number(px) / 100) * iw;
+  const mapY = (py) => y + (1 - Number(py) / 100) * ih;
+  const strokeFor = (shape) => Math.max(0.4, (Number(shape.w) || 0.8) / 100 * iw);
+
+  list.forEach((shape) => {
+    if (!shape || !shape.t) return;
+    const color = hexToPdfRgb(shape.c, rgbFn);
+    const thickness = strokeFor(shape);
+    if (shape.t === 'line') {
+      page.drawLine({
+        start: { x: mapX(shape.x1), y: mapY(shape.y1) },
+        end: { x: mapX(shape.x2), y: mapY(shape.y2) },
+        thickness,
+        color,
+      });
+      return;
+    }
+    if (shape.t === 'path' && Array.isArray(shape.pts)) {
+      for (let i = 1; i < shape.pts.length; i += 1) {
+        const a = shape.pts[i - 1];
+        const b = shape.pts[i];
+        if (!a || !b) continue;
+        page.drawLine({
+          start: { x: mapX(a[0]), y: mapY(a[1]) },
+          end: { x: mapX(b[0]), y: mapY(b[1]) },
+          thickness,
+          color,
+        });
+      }
+      return;
+    }
+    if (shape.t === 'rect') {
+      const rx = Math.min(Number(shape.x) || 0, (Number(shape.x) || 0) + (Number(shape.bw) || 0));
+      const ry = Math.min(Number(shape.y) || 0, (Number(shape.y) || 0) + (Number(shape.bh) || 0));
+      const rw = Math.abs(Number(shape.bw) || 0);
+      const rh = Math.abs(Number(shape.bh) || 0);
+      page.drawRectangle({
+        x: mapX(rx),
+        y: mapY(ry + rh),
+        width: (rw / 100) * iw,
+        height: (rh / 100) * ih,
+        borderColor: color,
+        borderWidth: thickness,
+      });
+      return;
+    }
+    if (shape.t === 'circle' && typeof page.drawEllipse === 'function') {
+      page.drawEllipse({
+        x: mapX(shape.cx),
+        y: mapY(shape.cy),
+        xScale: (Math.abs(Number(shape.rx) || 0) / 100) * iw,
+        yScale: (Math.abs(Number(shape.ry) || 0) / 100) * ih,
+        borderColor: color,
+        borderWidth: thickness,
+      });
+    }
+  });
+}
+
 async function embedLogo(pdfDoc) {
   const baseDir = path.join(__dirname, '..');
   // PNG mit Transparenz zuerst (kein schwarzer/weißer Kasten im PDF)
@@ -2810,7 +2885,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
       }
       if (b.type === 'image') {
         const img = await embedContentImage(pdfDoc, b.src);
-        if (img) out.push({ type: 'image', img, widthPct: b.widthPct || 100 });
+        if (img) out.push({ type: 'image', img, widthPct: b.widthPct || 100, draw: b.draw || [] });
       }
     }
     return out;
@@ -3310,6 +3385,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
         width: iw,
         height: ih,
       });
+      drawMbImageShapes(page, item.draw, { x: marginX, y: y - ih, iw, ih }, rgb);
       y -= ih + 10;
     }
   }

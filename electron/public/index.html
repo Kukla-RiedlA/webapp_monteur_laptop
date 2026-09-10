@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kukla Monteur Tool</title>
+  <title>KUKpit</title>
   <link rel="icon" href="icon.png" type="image/png">
   <script>
     (function () {
@@ -39,9 +39,57 @@
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
     /* sticky (nicht fixed): bleibt im Fluss, überdeckt Inhalt nicht */
     .app-header { position: sticky; top: 0; z-index: 200; background: var(--card); border-bottom: 1px solid var(--accent); }
-    .app-title { margin: 0; font-size: 1.1rem; font-weight: 600; padding: 0.75rem 1rem 0.25rem; color: var(--text); }
+    .app-brand { display: flex; align-items: center; gap: 0.65rem; padding: 0.5rem 1rem 0.2rem; }
+    .app-brand-mark { flex-shrink: 0; display: block; height: 48px; width: auto; max-width: 96px; object-fit: contain; background: #eefaf5; border-radius: 8px; padding: 3px 5px; box-sizing: border-box; }
+    .app-brand-text { display: flex; flex-direction: column; width: max-content; min-width: 0; }
+    .app-title { margin: 0; padding: 0; font-size: 1.25rem; font-weight: 700; line-height: 1.05; letter-spacing: 0.02em; color: var(--text); }
+    .app-tagline { display: block; margin-top: 2px; font-size: 0.52rem; font-weight: 500; line-height: 1.15; white-space: nowrap; width: 100%; text-align: justify; text-align-last: justify; color: var(--muted); }
     .toolbar { display: flex; align-items: center; gap: 1rem; padding: 0.25rem 1rem 0.75rem; background: var(--card); flex-wrap: wrap; }
     .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
+    .header-sync-stack {
+      display: inline-flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: stretch;
+      align-self: stretch;
+      min-width: 9.5rem;
+      gap: 3px;
+    }
+    .header-sync-row {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .header-folder-dl-track {
+      display: block;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.22);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    html[data-ui-theme="dark"] .header-folder-dl-track {
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .header-folder-dl-fill {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: #eefaf5;
+      border-radius: 2px;
+      transition: width 0.25s ease-out;
+    }
+    html[data-ui-theme="dark"] .header-folder-dl-fill {
+      background: #0e7b5a;
+    }
+    .header-folder-dl-track.is-indeterminate .header-folder-dl-fill {
+      width: 35% !important;
+      animation: header-folder-dl-slide 1.1s ease-in-out infinite;
+    }
+    @keyframes header-folder-dl-slide {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(320%); }
+    }
     .hinweis-modal { z-index: 4000; }
     .toolbar-technician-name { color: var(--text); font-size: 0.95rem; }
     .app-version { font-size: 0.8rem; color: var(--muted); margin-left: 0.5rem; }
@@ -1816,7 +1864,13 @@
 </head>
 <body>
   <header class="app-header" role="banner">
-    <h1 class="app-title">Kukla Monteur Tool</h1>
+    <div class="app-brand">
+      <img class="app-brand-mark" src="assets/img/kukla_logo_claim_green.png" alt="KUKLA" width="96" height="48">
+      <div class="app-brand-text">
+        <h1 class="app-title">KUKpit</h1>
+        <span class="app-tagline">Kukla Monteur Cockpit</span>
+      </div>
+    </div>
     <nav class="toolbar" aria-label="Hauptnavigation">
       <button class="btn btn-ghost" id="btnViewStart">Start</button>
     <button class="btn btn-ghost" id="btnViewDienstreise" title="Auftragsliste">Aufträge</button>
@@ -1857,11 +1911,18 @@
         <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M9 21h6v-1.5H9V21zm3-19a7 7 0 00-4 12.7V17h8v-2.3A7 7 0 0012 2zm2.2 11.4l-.7.4V15.5h-3v-1.7l-.7-.4A5.5 5.5 0 1112 3.5a5.5 5.5 0 012.2 9.9z"/></svg>
       </button>
       <span id="technicianName" class="toolbar-technician-name"></span>
-      <span class="jobs-badge-wrap" id="backgroundJobsWrap" style="display:none;" title="">
-        <span id="backgroundJobsBadge" class="jobs-badge">Sync</span>
-      </span>
-      <span class="connection-badge-wrap" id="connectionBadgeWrap">
-        <span id="connectionBadge" class="offline-badge">Verbindung wird geprüft…</span>
+      <span class="header-sync-stack" id="headerSyncStack">
+        <span class="header-sync-row">
+          <span class="jobs-badge-wrap" id="backgroundJobsWrap" style="display:none;" title="">
+            <span id="backgroundJobsBadge" class="jobs-badge">Sync</span>
+          </span>
+          <span class="connection-badge-wrap" id="connectionBadgeWrap">
+            <span id="connectionBadge" class="offline-badge">Verbindung wird geprüft…</span>
+          </span>
+        </span>
+        <span class="header-folder-dl-track" id="headerFolderDlTrack" aria-hidden="true">
+          <span class="header-folder-dl-fill" id="headerFolderDlFill"></span>
+        </span>
       </span>
       <button type="button" class="btn btn-ghost" id="btnViewBugReport" title="Bugreport">Bugreport</button>
       <button type="button" class="btn btn-ghost btn-icon" id="btnViewEinstellungen" title="Einstellungen" aria-label="Einstellungen">⚙</button>
@@ -2282,14 +2343,96 @@
   <main id="viewProtokolleMontagebericht" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Montagebericht">
     <div class="card sp-v2-card mb-v2-page">
       <div class="sp-v2-topbar mb-v2-topbar">
-        <div class="sp-v2-topbar-title-wrap">
-          <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/beleg/montagebericht.png" alt="" aria-hidden="true"> Montagebericht</h2>
-          <p id="montageberichtAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
+        <div class="mb-v2-topbar-row">
+          <div class="sp-v2-topbar-title-wrap">
+            <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/beleg/montagebericht.png" alt="" aria-hidden="true"> Montagebericht</h2>
+          </div>
+          <div class="mb-v2-topbar-actions-stack">
+            <div class="sp-v2-topbar-actions">
+              <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickySave" title="Nur Daten speichern">Speichern</button>
+              <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickyPdf" title="Daten speichern und PDF erzeugen">PDF</button>
+            </div>
+            <p id="montageberichtAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
+          </div>
         </div>
-        <div class="sp-v2-topbar-actions">
-          <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickySave" title="Nur Daten speichern (JSON)">Speichern (JSON)</button>
-          <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickyPdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
-          <button type="button" class="btn btn-primary" id="btnMontageberichtSaveAllPdfTop" style="display:none" title="PDF in alle FN-Ordner schreiben">Alle PDF</button>
+        <div class="montagebericht-toolbar" id="montageberichtToolbar">
+          <div class="toolbar-cluster" data-mb-cluster="text">
+            <span class="toolbar-cluster-label">Text</span>
+            <div class="toolbar-group">
+              <select id="mbToolbarFont" title="Schriftart">
+                <option value="Calibri">Calibri</option>
+                <option value="Arial">Arial</option>
+                <option value="Times New Roman">Times New Roman</option>
+                <option value="Verdana">Verdana</option>
+              </select>
+              <select id="mbToolbarSize" title="Schriftgröße">
+                <option value="2">10</option>
+                <option value="3" selected>12</option>
+                <option value="4">14</option>
+                <option value="5">18</option>
+              </select>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="bold" title="Fett"><strong>B</strong></button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="italic" title="Kursiv"><em>I</em></button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="underline" title="Unterstrichen"><u>U</u></button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="insertUnorderedList" title="Aufzählung">• Liste</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="insertOrderedList" title="Nummerierung">1. Liste</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyLeft" title="Linksbündig">Links</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyCenter" title="Zentriert">Zentriert</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyRight" title="Rechtsbündig">Rechts</button>
+            </div>
+          </div>
+          <div class="toolbar-cluster" data-mb-cluster="image">
+            <span class="toolbar-cluster-label">Bild</span>
+            <div class="toolbar-group">
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-img="insert" title="Bild vom Gerät einfügen" aria-label="Bild einfügen">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 16l5-5 4 4 3-3 4 4"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-img="from-project" title="Fotos aus dem Projektordner (Handy-PWA)" aria-label="Projekt-Foto">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h5l2-2h9v12H4z"/><path d="M8 14l3-3 3 3 2-2 3 3"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost" data-mb-img="25" title="Bildbreite 25 %">25%</button>
+              <button type="button" class="btn btn-ghost" data-mb-img="50" title="Bildbreite 50 %">50%</button>
+              <button type="button" class="btn btn-ghost" data-mb-img="100" title="Bildbreite 100 %">100%</button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="move" title="Bild greifen und im Text verschieben" aria-label="Bild verschieben">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"/><path d="M12 3l-3 3"/><path d="M12 3l3 3"/><path d="M12 21l-3-3"/><path d="M12 21l3-3"/><path d="M3 12h18"/><path d="M3 12l3-3"/><path d="M3 12l3 3"/><path d="M21 12l-3-3"/><path d="M21 12l-3 3"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-img="rotate" title="Bild 90° drehen" aria-label="Drehen">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.2-5.5"/><path d="M20 4v5h-5"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-img="remove" title="Bild entfernen" aria-label="Entfernen">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14"/><path d="M9 7V5h6v2"/><path d="M7 7l1 12h8l1-12"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="toolbar-cluster" data-mb-cluster="draw">
+            <span class="toolbar-cluster-label">Zeichnen</span>
+            <div class="toolbar-group">
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="line" title="Strich auf dem Bild" aria-label="Strich">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19L19 5"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="free" title="Freihand auf dem Bild" aria-label="Freihand">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20c2-6 7-9 16-12"/><path d="M15.5 4.5l4 4"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="rect" title="Rechteck auf dem Bild" aria-label="Rechteck">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="6" width="14" height="12" rx="1"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="circle" title="Kreis auf dem Bild" aria-label="Kreis">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="erase" title="Zeichnung radieren" aria-label="Radierer">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.5 15.5L9 6a2 2 0 0 0-2.8 0L4 8.2a2 2 0 0 0 0 2.8l7.5 7.5H20"/><path d="M7.8 11.2l5 5"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw-act="undo" title="Letzte Zeichnung rückgängig" aria-label="Rückgängig">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14l-4-4 4-4"/><path d="M5 10h8a6 6 0 1 1 0 12H8"/></svg>
+              </button>
+              <select id="mbDrawStroke" title="Strichstärke">
+                <option value="0.4">2</option>
+                <option value="0.8" selected>4</option>
+                <option value="1.6">8</option>
+              </select>
+              <input type="color" id="mbDrawColor" value="#0e7b5a" title="Zeichenfarbe">
+            </div>
+          </div>
         </div>
       </div>
       <div id="protokolleMontagebericht" class="protokolle-montagebericht">
@@ -2352,43 +2495,6 @@
             <section class="sp-v2-section" aria-labelledby="mbV2Sec3Title">
           <header class="sp-v2-section-head" id="mbV2Sec3Title" data-i18n-en="Serial numbers"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Fabrikationsnummern</header>
               <div class="sp-v2-section-body">
-                <div class="montagebericht-toolbar" id="montageberichtToolbar">
-                  <div class="toolbar-group">
-                    <select id="mbToolbarFont" title="Schriftart">
-                      <option value="Calibri">Calibri</option>
-                      <option value="Arial">Arial</option>
-                      <option value="Times New Roman">Times New Roman</option>
-                      <option value="Verdana">Verdana</option>
-                    </select>
-                    <select id="mbToolbarSize" title="Schriftgröße">
-                      <option value="2">10</option>
-                      <option value="3" selected>12</option>
-                      <option value="4">14</option>
-                      <option value="5">18</option>
-                    </select>
-                  </div>
-                  <div class="toolbar-group">
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="bold" title="Fett"><strong>B</strong></button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="italic" title="Kursiv"><em>I</em></button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="underline" title="Unterstrichen"><u>U</u></button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="insertUnorderedList" title="Aufzählung">• Liste</button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="insertOrderedList" title="Nummerierung">1. Liste</button>
-                  </div>
-                  <div class="toolbar-group">
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="justifyLeft" title="Linksbündig">Links</button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="justifyCenter" title="Zentriert">Zentriert</button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="justifyRight" title="Rechtsbündig">Rechts</button>
-                  </div>
-                  <div class="toolbar-group">
-                    <button type="button" class="btn btn-ghost" data-mb-img="insert" title="Bild vom Gerät einfügen">Bild</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="from-project" title="Fotos aus dem Projektordner (Handy-PWA)">Projekt-Foto</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="25" title="Bildbreite 25 %">25%</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="50" title="Bildbreite 50 %">50%</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="100" title="Bildbreite 100 %">100%</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="rotate" title="Bild 90° drehen">Drehen</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="remove" title="Bild entfernen">Entfernen</button>
-                  </div>
-                </div>
                 <div id="montageberichtFabBemerkungen" class="montagebericht-fab-felder"></div>
               </div>
             </section>
@@ -2397,9 +2503,8 @@
               <header class="sp-v2-section-head" id="mbV2Sec4Title" data-i18n-en="Save"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern</header>
               <div class="sp-v2-section-body">
                 <div class="mb-v2-actions-row">
-                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Nur Daten speichern (JSON)">Speichern (JSON)</button>
-                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
-                  <button type="button" class="btn btn-primary" id="btnMontageberichtSaveAllPdf" style="display:none" title="PDF in alle FN-Ordner schreiben">Alle PDF</button>
+                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Nur Daten speichern">Speichern</button>
+                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Daten speichern und PDF erzeugen">PDF</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtPdf" style="display:none" title="PDF im Ordner Protokolle öffnen">PDF öffnen</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtSign" hidden title="Veraltet – Signatur kommt aus dem Profil" style="display:none;">Bericht unterschreiben</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
@@ -3902,6 +4007,7 @@
   <script src="js/view-zeitschreibung.js?v=20260726b"></script>
   <script src="js/signature-pad.js"></script>
   <script src="js/protocol-form-i18n.js"></script>
+  <script src="js/mb-image-draw.js"></script>
   <script src="js/arbeitsnachweis.js"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js?v=langshare2"></script>

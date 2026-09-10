@@ -20,7 +20,45 @@
 }
 
 .mb-v2-topbar {
+  flex-direction: column;
+  align-items: stretch;
+  overflow: visible;
   margin-bottom: 1rem;
+  gap: 0.55rem;
+}
+
+.mb-v2-topbar-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.mb-v2-topbar-actions-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.mb-v2-topbar .protocol-autosave-hint {
+  flex: none;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mb-v2-topbar .montagebericht-toolbar {
+  width: 100%;
+  margin-bottom: 0;
+  box-sizing: border-box;
+}
+
+@media print {
+  .mb-v2-topbar .montagebericht-toolbar {
+    display: none;
+  }
 }
 
 .mb-v2-layout {
@@ -207,44 +245,112 @@
 
 .montagebericht-toolbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  align-items: center;
-  margin-bottom: 0.75rem;
-  padding: 0.55rem 0.65rem;
+  flex-wrap: nowrap;
+  gap: 0.3rem 0.45rem;
+  align-items: flex-end;
+  margin-bottom: 0.5rem;
+  padding: 0.28rem 0.45rem 0.35rem;
   border: 1px solid var(--sp-border, #d8e3df);
   border-radius: 8px;
   background: var(--sp-mint, #eefaf5);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.montagebericht-toolbar .toolbar-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.montagebericht-toolbar .toolbar-cluster-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sp-muted, #4b5563);
+  line-height: 1.1;
 }
 
 .montagebericht-toolbar .toolbar-group {
   display: inline-flex;
-  gap: 0.35rem;
+  flex-wrap: nowrap;
+  gap: 0.2rem;
   align-items: center;
 }
 
-.montagebericht-toolbar select {
-  height: 32px;
-  padding: 0 0.45rem;
+.montagebericht-toolbar #mbDrawColor {
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: 1px solid var(--sp-border, #d8e3df);
-  border-radius: 6px;
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.montagebericht-toolbar select {
+  height: 24px;
+  padding: 0 0.25rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 5px;
   background: #fff;
   color: var(--sp-text, #111827);
-  font-size: 0.82rem;
+  font-size: 0.72rem;
 }
 
 .montagebericht-toolbar .btn {
-  padding: 0.28rem 0.55rem;
-  font-size: 0.82rem;
-  min-width: 2rem;
-  height: 32px;
-  border-radius: 6px;
+  padding: 0 0.32rem;
+  font-size: 0.72rem;
+  min-width: 1.6rem;
+  height: 24px;
+  border-radius: 5px;
+}
+
+.montagebericht-toolbar .btn.mb-tool {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.montagebericht-toolbar .mb-tool-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (max-width: 1100px) {
+  .montagebericht-toolbar {
+    flex-wrap: wrap;
+    overflow-y: visible;
+  }
+  .montagebericht-toolbar .toolbar-group {
+    flex-wrap: wrap;
+  }
 }
 
 .montagebericht-toolbar .btn.active {
   background: var(--sp-green, #0e7b5a);
   border-color: var(--sp-green, #0e7b5a);
   color: #fff;
+}
+
+body.mb-img-move-mode .mb-rich-editor img {
+  cursor: grab;
+}
+
+body.mb-img-move-mode .mb-img-dragging {
+  cursor: grabbing;
 }
 
 .mb-rich-editor {
@@ -287,12 +393,54 @@
   height: auto;
   display: inline-block;
   vertical-align: middle;
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+svg.mb-draw-layer-float {
+  position: fixed;
+  overflow: visible;
+  pointer-events: none;
+  touch-action: none;
+}
+
+svg.mb-draw-layer-float.is-drawing {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+svg.mb-draw-layer-float.is-erasing {
+  pointer-events: auto;
+  cursor: cell;
 }
 
 .mb-rich-editor img.mb-img-selected {
-  outline: 2px solid var(--sp-green, #0e7b5a);
-  outline-offset: 2px;
-  cursor: default;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--sp-green, #0e7b5a);
+  cursor: grab;
+}
+
+.mb-img-dragging {
+  opacity: 0.45;
+}
+
+.mb-draw-shape {
+  fill: none;
+  cursor: move;
+  pointer-events: stroke;
+}
+
+.mb-draw-handle {
+  fill: var(--sp-green, #0e7b5a);
+  stroke: #fff;
+  stroke-width: 1.2;
+  cursor: nwse-resize;
+  pointer-events: auto;
+}
+
+.mb-draw-shape.is-selected {
+  filter: drop-shadow(0 0 1px #fff);
 }
 
 .mb-img-drag-handle {

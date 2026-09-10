@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "2.7.20",
+  "version": "2.7.21",
   "description": "KUKpit (Kukla Monteur Cockpit) - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",

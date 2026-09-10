@@ -87,7 +87,20 @@ function parseImgMeta(tag) {
   if (styleW) widthPct = Math.min(100, Math.max(10, parseFloat(styleW[1]) || 100));
   else if (attrW) widthPct = Math.min(100, Math.max(10, parseFloat(attrW[1]) || 100));
   const src = srcM ? decodeHtmlEntities(srcM[1].trim()) : '';
-  return { src, widthPct };
+  const drawM = String(tag || '').match(/\bdata-mb-draw\s*=\s*["']([^"']+)["']/i);
+  return { src, widthPct, draw: decodeMbDrawAttr(drawM ? drawM[1] : '') };
+}
+
+function decodeMbDrawAttr(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return [];
+  try {
+    const json = Buffer.from(s, 'base64').toString('utf8');
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
 }
 
 function runsHaveText(runs) {
@@ -229,7 +242,7 @@ function htmlToStyledBlocks(html, plainFallback) {
         current = [];
       }
       const meta = parseImgMeta(token);
-      if (meta.src) blocks.push({ type: 'image', src: meta.src, widthPct: meta.widthPct });
+      if (meta.src) blocks.push({ type: 'image', src: meta.src, widthPct: meta.widthPct, draw: meta.draw || [] });
       return;
     }
 
@@ -280,6 +293,7 @@ function styledBlocksToPlain(blocks) {
 
 module.exports = {
   decodeHtmlEntities,
+  decodeMbDrawAttr,
   htmlToStyledBlocks,
   styledBlocksToPlain,
   styleFromTag,

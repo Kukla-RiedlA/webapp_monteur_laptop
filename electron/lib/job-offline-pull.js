@@ -396,4 +396,5 @@ module.exports = {
   mergeOfflinePullSelection,
   removeOfflinePullFab,
   isTedInnerPath,
+  pathMatchesSelection,
 };
