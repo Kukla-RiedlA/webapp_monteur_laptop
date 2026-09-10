@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { applyBelegPrefix, stripKnownBelegPrefix } = require('./abrechnung-php-local');
+const { applyBelegPrefix, stripKnownBelegPrefix, stripLeadingDatetime } = require('./abrechnung-php-local');
 const { isMontageberichtExportName } = require('./protocol-pdf-names');
 
 function isIgnorableName(name) {
@@ -25,6 +25,8 @@ function isArbeitsnachweisSourceRel(rel, name) {
 function abrechnungStemKey(filename) {
   let base = path.basename(String(filename || ''), path.extname(String(filename || '')));
   base = stripKnownBelegPrefix(base);
+  const afterDate = stripLeadingDatetime(base);
+  if (afterDate) base = afterDate;
   return base.toLowerCase().trim();
 }
 

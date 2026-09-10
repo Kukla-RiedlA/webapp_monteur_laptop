@@ -89,22 +89,77 @@ function stripKnownBelegPrefix(baseName) {
   return base;
 }
 
-function applyBelegPrefix(origName, prefix) {
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function formatYmd(d) {
+  const x = d instanceof Date && !Number.isNaN(d.getTime()) ? d : new Date();
+  return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
+}
+
+function formatHms(d) {
+  const x = d instanceof Date && !Number.isNaN(d.getTime()) ? d : new Date();
+  return `${pad2(x.getHours())}-${pad2(x.getMinutes())}-${pad2(x.getSeconds())}`;
+}
+
+function stripLeadingDatetime(baseName) {
+  const base = String(baseName || '');
+  const m = base.match(/^(\d{4}-\d{2}-\d{2})(?:_(\d{2}-\d{2}-\d{2}))?(?:_(.*))?$/);
+  if (!m) return base;
+  return m[3] || '';
+}
+
+function isGenericScanName(name) {
+  const base = path.basename(String(name || ''), path.extname(String(name || ''))).toLowerCase().trim();
+  if (!base) return true;
+  const generic = ['scan', 'datei', 'document', 'image', 'photo', 'blob', 'capture', 'unnamed', 'img'];
+  if (generic.includes(base)) return true;
+  return /^(image|photo|img|scan|document|capture)[\s._-]*\d+$/i.test(base);
+}
+
+function prepareBelegStem(origName) {
+  const orig = path.basename(String(origName || 'datei'));
+  const ext = path.extname(orig);
+  let baseName = ext ? path.basename(orig, ext) : orig;
+  baseName = sanitizeUploadBasename(baseName);
+  baseName = stripKnownBelegPrefix(baseName);
+  baseName = sanitizeUploadBasename(baseName);
+  const afterDate = stripLeadingDatetime(baseName);
+  if (!afterDate) return '';
+  return sanitizeUploadBasename(afterDate);
+}
+
+function applyBelegPrefix(origName, prefix, options = {}) {
   const orig = path.basename(String(origName || 'datei'));
   const ext = path.extname(orig);
   let baseName = ext ? path.basename(orig, ext) : orig;
   baseName = sanitizeUploadBasename(baseName);
   const p = String(prefix || '').trim();
-  if (!belegPrefixAllowed(p)) {
+  const allowUnknown = Boolean(options && options.allowUnknownPrefix);
+  const captured = options && options.capturedAt instanceof Date ? options.capturedAt : null;
+  const ymd = options && /^\d{4}-\d{2}-\d{2}$/.test(String(options.date || ''))
+    ? String(options.date)
+    : formatYmd(captured);
+  const hms = options && /^\d{2}-\d{2}-\d{2}$/.test(String(options.time || ''))
+    ? String(options.time)
+    : formatHms(captured);
+  if (!p || (!allowUnknown && !belegPrefixAllowed(p))) {
     return `${baseName}${ext}`;
   }
-  baseName = stripKnownBelegPrefix(baseName);
-  baseName = sanitizeUploadBasename(baseName);
-  return `${p}_${baseName}${ext}`;
+  const scanExt = ext || '.pdf';
+  if (options && options.scan) {
+    return `${p}_${ymd}_${hms}${scanExt}`;
+  }
+  const stem = prepareBelegStem(origName);
+  if (!stem) {
+    return `${p}_${ymd}_${hms}${scanExt}`;
+  }
+  return `${p}_${ymd}_${stem}${ext}`;
 }
 
-function resolveUniqueStoredName(origName, prefix, targetDir) {
-  let stored = applyBelegPrefix(origName, prefix);
+function resolveUniqueStoredName(origName, prefix, targetDir, options = {}) {
+  let stored = applyBelegPrefix(origName, prefix, options);
   const ext = path.extname(stored);
   let baseName = ext ? path.basename(stored, ext) : stored;
   let counter = 1;
@@ -579,6 +634,9 @@ module.exports = {
   belegPrefixAllowed,
   applyBelegPrefix,
   stripKnownBelegPrefix,
+  stripLeadingDatetime,
+  isGenericScanName,
+  prepareBelegStem,
   resolveUniqueStoredName,
   buildPageConfig,
   parseMitAbgerechnet,
