@@ -12,12 +12,13 @@
       --facet-angle: 36deg;
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; background: #f3f4f4; font-family: "Segoe UI", Inter, system-ui, sans-serif; }
+    html, body { margin: 0; background: #f5f5f5; font-family: "Segoe UI", Inter, system-ui, sans-serif; }
     .app-header {
       position: relative;
       overflow: hidden;
       color: #fff;
-      background: linear-gradient(90deg, #0e7b5a 0%, #14926e 55%, #1aa57c 100%);
+      background: linear-gradient(110deg, #0c6b4f 0%, #0e7b5a 38%, #12886a 68%, #0a5a48 100%);
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
     }
     .header-facet {
       position: absolute;
@@ -33,42 +34,61 @@
     .header-top {
       position: relative;
       z-index: 2;
+      overflow: hidden;
       display: flex;
       align-items: center;
       min-height: 82px;
-      padding: 10px 16px 10px 18px;
+      padding: 10px 16px 10px 20px;
+    }
+    .header-top::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      width: 34%;
+      background: rgba(255, 255, 255, 0.035);
+      clip-path: polygon(0 0, 18% 0, 4% 100%, 0 100%);
+      pointer-events: none;
+      z-index: 0;
     }
     .logo-plate {
+      position: relative;
+      z-index: 1;
       background: #fff;
-      border-radius: 8px;
-      height: 54px;
+      border-radius: 7px;
+      height: 56px;
       padding: 4px 8px;
       display: flex;
       align-items: center;
       flex-shrink: 0;
     }
-    .logo-plate img { height: 46px; width: auto; display: block; }
+    .logo-plate img { height: 48px; width: auto; display: block; }
     .brand-rule {
+      position: relative;
+      z-index: 1;
       width: 1px;
-      height: 42px;
-      margin: 0 14px;
-      background: rgba(255,255,255,0.45);
+      height: 48px;
+      margin: 0 28px 0 28px;
+      background: rgba(255,255,255,0.30);
       flex-shrink: 0;
     }
+    .brand-text { position: relative; z-index: 1; }
     .brand-title {
       margin: 0;
-      font-size: 32px;
-      line-height: 0.95;
+      font-size: 31px;
+      line-height: 1;
       font-weight: 700;
+      color: #fff;
       letter-spacing: 0.01em;
     }
-    .brand-title .pit { font-weight: 500; }
+    .brand-title .pit { font-weight: 400; }
     .brand-tagline {
-      margin-top: 5px;
-      font-size: 10px;
-      letter-spacing: 0.17em;
+      margin-top: 4px;
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 2px;
+      line-height: 1.2;
       text-transform: uppercase;
-      opacity: 0.8;
+      color: rgba(255,255,255,0.82);
       white-space: nowrap;
     }
     .win-controls {
@@ -98,27 +118,27 @@
       gap: 16px;
     }
     .header-claim-slash {
-      width: 1.5px;
+      width: 2px;
       height: 52px;
-      background: rgba(255,255,255,0.78);
+      background: rgba(255,255,255,0.72);
       transform: rotate(var(--facet-angle));
       flex-shrink: 0;
     }
     .header-claim-text {
       margin: 0;
-      font-size: 11px;
-      font-weight: 400;
-      letter-spacing: 0.2em;
-      line-height: 1.3;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      line-height: 1.55;
       text-transform: uppercase;
       text-align: right;
-      color: rgba(255,255,255,0.82);
+      color: rgba(255,255,255,0.85);
     }
     .header-rule {
       position: relative;
       z-index: 2;
       height: 1px;
-      background: rgba(255,255,255,0.4);
+      background: rgba(255,255,255,0.10);
     }
     .app-nav {
       position: relative;
@@ -126,28 +146,35 @@
       display: flex;
       align-items: center;
       gap: 4px;
-      padding: 8px 16px 10px;
-      min-height: 48px;
+      padding: 0 16px;
+      height: 52px;
+      background: rgba(12, 107, 79, 0.30);
     }
     .nav-item {
       display: inline-flex;
       align-items: center;
-      gap: 7px;
-      padding: 7px 12px;
+      gap: 6px;
+      height: 34px;
+      padding: 0 10px;
       border: 0;
       background: transparent;
-      color: rgba(255,255,255,0.95);
-      border-radius: 8px;
+      color: rgba(255,255,255,0.94);
+      border-radius: 6px;
       font: inherit;
-      font-size: 14px;
+      font-size: 13px;
+      font-weight: 500;
       white-space: nowrap;
+      transition: background-color 140ms ease;
     }
-    .nav-item svg { width: 16px; height: 16px; }
-    .nav-item:hover { background: rgba(255,255,255,0.1); }
+    .nav-item svg { width: 15px; height: 15px; }
+    .nav-item:hover { background: rgba(255,255,255,0.08); }
     .nav-item.is-active {
       background: #fff;
-      color: #0e7b5a;
+      color: #0c6b4f;
       font-weight: 600;
+      padding: 0 12px;
+      border-radius: 7px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10);
     }
     .nav-drop { position: relative; }
     .nav-drop-menu {
@@ -180,29 +207,35 @@
       margin-left: auto;
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       padding-left: 14px;
-      border-left: 1px solid rgba(255,255,255,0.55);
-      min-height: 28px;
-      font-size: 13px;
+      border-left: 1px solid rgba(255,255,255,0.30);
+      min-height: 32px;
+      font-size: 12px;
+      font-weight: 500;
     }
-    .user-name { white-space: nowrap; }
+    .user-name { white-space: nowrap; color: rgba(255,255,255,0.95); }
     .badge-sync {
       background: #6b45d6;
       color: #fff;
-      border-radius: 999px;
-      padding: 4px 10px;
-      font-size: 12px;
+      border-radius: 7px;
+      height: 25px;
+      padding: 0 8px;
+      display: inline-flex;
+      align-items: center;
+      font-size: 10px;
       font-weight: 600;
     }
     .online-pill {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
-      border-radius: 999px;
-      background: rgba(8, 40, 34, 0.35);
-      border: 1px solid rgba(255,255,255,0.16);
+      height: 25px;
+      padding: 0 9px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.08);
+      border: 1px solid rgba(255,255,255,0.14);
+      font-size: 10px;
     }
     .dot-online {
       width: 8px;
@@ -212,12 +245,13 @@
     }
     .meta-sep {
       width: 1px;
-      height: 16px;
-      background: rgba(255,255,255,0.45);
+      height: 25px;
+      margin: 0 10px;
+      background: rgba(255,255,255,0.25);
     }
     .icon-btn {
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       border: 0;
       padding: 0;
       border-radius: 6px;
@@ -227,13 +261,13 @@
       align-items: center;
       justify-content: center;
     }
-    .icon-btn svg { width: 16px; height: 16px; }
-    .icon-btn:hover { background: rgba(255,255,255,0.1); }
+    .icon-btn svg { width: 15px; height: 15px; }
+    .icon-btn:hover { background: rgba(255,255,255,0.08); }
     .theme-toggle {
-      width: 38px;
-      height: 20px;
+      width: 40px;
+      height: 22px;
       border-radius: 999px;
-      background: #7dffa0;
+      background: #0e7b5a;
       position: relative;
       flex-shrink: 0;
     }
@@ -247,8 +281,17 @@
       top: 2px;
       right: 2px;
     }
-    .version { font-size: 11px; opacity: 0.75; white-space: nowrap; }
-    .page { min-height: 360px; }
+    .version {
+      font-size: 9px;
+      font-weight: 400;
+      color: rgba(255,255,255,0.78);
+      margin-left: 8px;
+      margin-right: 14px;
+      white-space: nowrap;
+    }
+    @media (max-width: 1200px) {
+      .header-claim { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -264,7 +307,7 @@
         <img src="assets/img/kukla_logo_claim_green.png" alt="KUKLA">
       </div>
       <span class="brand-rule"></span>
-      <div>
+      <div class="brand-text">
         <h1 class="brand-title">KUK<span class="pit">pit</span></h1>
         <div class="brand-tagline">Kukla Monteur Cockpit</div>
       </div>

@@ -194,11 +194,25 @@ function focusMainWindow() {
 }
 
 function createWindow() {
+  const win32Overlay = process.platform === 'win32';
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
     show: false,
-    backgroundColor: '#f7f8f8',
+    backgroundColor: '#0e7b5a',
+    ...(win32Overlay
+      ? {
+          titleBarStyle: 'hidden',
+          titleBarOverlay: {
+            color: '#0b4f43',
+            symbolColor: '#ffffff',
+            height: 32,
+          },
+        }
+      : {
+          frame: false,
+          thickFrame: true,
+        }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -221,6 +235,17 @@ function createWindow() {
       mainWindow.webContents.openDevTools();
     }
   }
+
+  mainWindow.on('maximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:maximize-change', true);
+    }
+  });
+  mainWindow.on('unmaximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:maximize-change', false);
+    }
+  });
 
   mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
   mainWindow.once('ready-to-show', () => {
@@ -265,6 +290,17 @@ function createWindow() {
     }
   });
 }
+
+ipcMain.handle('window:control', async (event, action) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return { ok: false };
+  if (action === 'minimize') win.minimize();
+  else if (action === 'maximize') {
+    if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+  } else if (action === 'close') win.close();
+  return { ok: true, maximized: win.isDestroyed() ? false : win.isMaximized() };
+});
 
 ipcMain.handle('anlagenstamm:search', async (event, payload) => {
   const body = payload || {};

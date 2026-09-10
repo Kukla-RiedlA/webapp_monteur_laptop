@@ -15,5 +15,6 @@
   --kukla-muted: #5c5c5c;
   --kukla-font: "Kanit", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   --kukla-radius: 0;
+  --kukla-ui-radius: 8px;
   --kukla-focus-ring: 0 0 0 2px rgba(14, 123, 90, 0.35);
 }

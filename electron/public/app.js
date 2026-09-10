@@ -13229,6 +13229,32 @@
     });
   }
 
+  function updateKukpitNavActive(name) {
+    var officeNames = {
+      abrechnung: 1,
+      zeitschreibung: 1,
+      abwesenheiten: 1,
+      textbausteine: 1,
+      arbeitsschritte: 1,
+      'arbeitsschritte-ibn': 1
+    };
+    var ids = ['btnViewStart', 'btnViewDienstreise', 'btnViewProtokolle', 'btnViewAnlagenstamm', 'btnViewOffice', 'btnViewArchiv', 'btnViewEinstellungen'];
+    ids.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.classList.remove('is-active');
+    });
+    var targetId = null;
+    if (name === 'start' || !name) targetId = 'btnViewStart';
+    else if (name === 'dienstreise') targetId = 'btnViewDienstreise';
+    else if (name === 'archiv') targetId = 'btnViewArchiv';
+    else if (name === 'anlagenstamm') targetId = 'btnViewAnlagenstamm';
+    else if (name === 'einstellungen') targetId = 'btnViewEinstellungen';
+    else if (name && String(name).indexOf('protokolle-') === 0) targetId = 'btnViewProtokolle';
+    else if (officeNames[name]) targetId = 'btnViewOffice';
+    var t = targetId && document.getElementById(targetId);
+    if (t) t.classList.add('is-active');
+  }
+
   function showView(name) {
     if (typeof skipProtocolLeaveGuard !== 'undefined' && skipProtocolLeaveGuard) {
       skipProtocolLeaveGuard = false;
@@ -13262,6 +13288,7 @@
     if (typeof flushProtocolAutosaveOnViewChange === 'function') {
       flushProtocolAutosaveOnViewChange(name);
     }
+    updateKukpitNavActive(name);
     if (typeof window.kuklaCloseSpStepPicker === 'function' && name !== 'protokolle-service' && name !== 'protokolle-inbetriebnahme') {
       window.kuklaCloseSpStepPicker();
     }
@@ -15572,6 +15599,34 @@
     if (!btn || !dropdown) return;
     btn.addEventListener('click', function (e) {
       e.stopPropagation();
+      var office = document.getElementById('officeDropdown');
+      if (office) office.classList.remove('open');
+      dropdown.classList.toggle('open');
+      btn.setAttribute('aria-expanded', dropdown.classList.contains('open'));
+    });
+    dropdown.querySelectorAll('.toolbar-dropdown-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        const view = item.getAttribute('data-view');
+        if (view) showView(view);
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+    });
+    document.addEventListener('click', function (e) {
+      if (dropdown.classList.contains('open') && !dropdown.contains(e.target) && !btn.contains(e.target)) {
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
+  (function initOfficeDropdown() {
+    const btn = document.getElementById('btnViewOffice');
+    const dropdown = document.getElementById('officeDropdown');
+    if (!btn || !dropdown) return;
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var proto = document.getElementById('protokolleDropdown');
+      if (proto) proto.classList.remove('open');
       dropdown.classList.toggle('open');
       btn.setAttribute('aria-expanded', dropdown.classList.contains('open'));
     });
@@ -15638,29 +15693,49 @@
   });
   (function initAbwesenheitenDropdown() {
     const btn = document.getElementById('btnViewAbwesenheiten');
-    const dropdown = document.getElementById('abwesenheitenDropdown');
-    if (!btn || !dropdown) return;
-    btn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      dropdown.classList.toggle('open');
-      btn.setAttribute('aria-expanded', dropdown.classList.contains('open'));
-    });
-    dropdown.querySelectorAll('.toolbar-dropdown-item').forEach(function (item) {
-      item.addEventListener('click', function () {
-        const view = item.getAttribute('data-view');
-        if (view) showView(view);
-        dropdown.classList.remove('open');
-        btn.setAttribute('aria-expanded', 'false');
-      });
-    });
-    document.addEventListener('click', function (e) {
-      if (dropdown.classList.contains('open') && !dropdown.contains(e.target) && !btn.contains(e.target)) {
-        dropdown.classList.remove('open');
-        btn.setAttribute('aria-expanded', 'false');
-      }
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      showView('abwesenheiten');
     });
   })();
   document.getElementById('btnViewEinstellungen').addEventListener('click', () => showView('einstellungen'));
+  var techNameBtn = document.getElementById('technicianName');
+  if (techNameBtn) {
+    techNameBtn.addEventListener('click', function () { showView('einstellungen'); });
+  }
+  (function initKukpitWindowControls() {
+    var api = (typeof monteurApp !== 'undefined' && monteurApp) || window.monteurApp;
+    if (api && api.hasTitleBarOverlay) {
+      document.body.classList.add('has-titlebar-overlay');
+    }
+    var minBtn = document.getElementById('winBtnMin');
+    var maxBtn = document.getElementById('winBtnMax');
+    var closeBtn = document.getElementById('winBtnClose');
+    function setMaxLabel(maximized) {
+      if (!maxBtn) return;
+      maxBtn.textContent = maximized ? '❐' : '□';
+      maxBtn.setAttribute('aria-label', maximized ? 'Wiederherstellen' : 'Maximieren');
+    }
+    function control(action) {
+      if (!api || typeof api.windowControl !== 'function') return;
+      Promise.resolve(api.windowControl(action)).then(function (res) {
+        if (res && typeof res.maximized === 'boolean') setMaxLabel(res.maximized);
+      }).catch(function () {});
+    }
+    if (minBtn) minBtn.addEventListener('click', function () { control('minimize'); });
+    if (maxBtn) maxBtn.addEventListener('click', function () { control('maximize'); });
+    if (closeBtn) closeBtn.addEventListener('click', function () { control('close'); });
+    var top = document.getElementById('kukpitHeaderTop');
+    if (top) {
+      top.addEventListener('dblclick', function (e) {
+        if (e.target && e.target.closest && e.target.closest('button, a, input, label')) return;
+        control('maximize');
+      });
+    }
+    if (api && typeof api.onWindowMaximizeChange === 'function') {
+      api.onWindowMaximizeChange(setMaxLabel);
+    }
+  })();
   const btnBug = document.getElementById('btnViewBugReport');
   if (btnBug) {
     btnBug.addEventListener('click', () => {

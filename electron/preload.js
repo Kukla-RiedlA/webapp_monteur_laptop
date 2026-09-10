@@ -53,6 +53,14 @@ contextBridge.exposeInMainWorld('monteurApp', {
   installAppUpdateNow: () => ipcRenderer.invoke('laptop:update-install-now'),
   uninstallAppAndRemoveLocalData: () => ipcRenderer.invoke('app:self-uninstall-remove-data'),
   hangHeartbeat: () => ipcRenderer.invoke('hang:heartbeat'),
+  hasTitleBarOverlay: process.platform === 'win32',
+  windowControl: (action) => ipcRenderer.invoke('window:control', action),
+  onWindowMaximizeChange: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, maximized) => callback(!!maximized);
+    ipcRenderer.on('window:maximize-change', handler);
+    return () => ipcRenderer.removeListener('window:maximize-change', handler);
+  },
   copilotStatus: () => ipcRenderer.invoke('copilot:status'),
   copilotCheckText: (text) => ipcRenderer.invoke('copilot:checkText', text),
   copilotSignOut: () => ipcRenderer.invoke('copilot:signOut'),

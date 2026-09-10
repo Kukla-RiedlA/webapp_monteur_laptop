@@ -19,6 +19,9 @@
   </script>
   <link rel="stylesheet" href="ui-theme.css">
   <link rel="stylesheet" href="css/kukla-brand.css">
+  <link rel="stylesheet" href="css/kukpit-tokens.css">
+  <link rel="stylesheet" href="css/kukpit-shell.css">
+  <link rel="stylesheet" href="css/kukpit-components.css">
   <link rel="stylesheet" href="css/modules-web-parity.css">
   <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
   <link rel="stylesheet" href="css/anlagenakte.css">
@@ -33,18 +36,12 @@
   <link rel="stylesheet" href="css/file_preview_hover.css?v=20260908hover">
   <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260907">
   <link rel="stylesheet" href="css/hinweise.css?v=20260902files">
+  <link rel="stylesheet" href="css/kukpit-shell.css">
   <style>
     * { box-sizing: border-box; }
     html { scroll-padding-top: var(--header-height, 72px); }
     body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
-    /* sticky (nicht fixed): bleibt im Fluss, überdeckt Inhalt nicht */
-    .app-header { position: sticky; top: 0; z-index: 200; background: var(--card); border-bottom: 1px solid var(--accent); }
-    .app-brand { display: flex; align-items: center; gap: 0.65rem; padding: 0.5rem 1rem 0.2rem; }
-    .app-brand-mark { flex-shrink: 0; display: block; height: 48px; width: auto; max-width: 96px; object-fit: contain; background: #eefaf5; border-radius: 8px; padding: 3px 5px; box-sizing: border-box; }
-    .app-brand-text { display: flex; flex-direction: column; width: max-content; min-width: 0; }
-    .app-title { margin: 0; padding: 0; font-size: 1.25rem; font-weight: 700; line-height: 1.05; letter-spacing: 0.02em; color: var(--text); }
-    .app-tagline { display: block; margin-top: 2px; font-size: 0.52rem; font-weight: 500; line-height: 1.15; white-space: nowrap; width: 100%; text-align: justify; text-align-last: justify; color: var(--muted); }
-    .toolbar { display: flex; align-items: center; gap: 1rem; padding: 0.25rem 1rem 0.75rem; background: var(--card); flex-wrap: wrap; }
+    /* Header-Look: kukpit-shell.css */
     .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
     .header-sync-stack {
       display: inline-flex;
@@ -1864,79 +1861,113 @@
 </head>
 <body>
   <header class="app-header" role="banner">
-    <div class="app-brand">
-      <img class="app-brand-mark" src="assets/img/kukla_logo_claim_green.png" alt="KUKLA" width="96" height="48">
-      <div class="app-brand-text">
-        <h1 class="app-title">KUKpit</h1>
-        <span class="app-tagline">Kukla Monteur Cockpit</span>
+    <div class="header-facet" aria-hidden="true"></div>
+    <div class="win-controls" aria-label="Fenster">
+      <button type="button" class="win-btn" id="winBtnMin" aria-label="Minimieren">–</button>
+      <button type="button" class="win-btn" id="winBtnMax" aria-label="Maximieren">□</button>
+      <button type="button" class="win-btn close" id="winBtnClose" aria-label="Schließen">×</button>
+    </div>
+    <div class="header-top" id="kukpitHeaderTop">
+      <div class="logo-plate">
+        <img class="app-brand-mark" src="assets/img/kukla_logo_claim_green.png" alt="KUKLA" width="96" height="48">
+      </div>
+      <span class="brand-rule"></span>
+      <div class="brand-text">
+        <h1 class="brand-title app-title">KUK<span class="pit">pit</span></h1>
+        <div class="brand-tagline app-tagline">Kukla Monteur Cockpit</div>
+      </div>
+      <div class="header-claim">
+        <span class="header-claim-slash" aria-hidden="true"></span>
+        <p class="header-claim-text">Weighing<br>Precision<br>in every project</p>
       </div>
     </div>
-    <nav class="toolbar" aria-label="Hauptnavigation">
-      <button class="btn btn-ghost" id="btnViewStart">Start</button>
-    <button class="btn btn-ghost" id="btnViewDienstreise" title="Auftragsliste">Aufträge</button>
-    <button type="button" class="btn btn-ghost" id="btnViewAbrechnung" title="Abrechnung">Abrechnung</button>
-    <button type="button" class="btn btn-ghost" id="btnViewZeitschreibung" title="Zeitschreibung">Zeitschreibung</button>
-    <div class="toolbar-dropdown-wrap">
-      <button type="button" class="btn btn-ghost" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">Protokolle ▾</button>
-      <div class="toolbar-dropdown" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-arbeitsnachweis">Arbeitsnachweis</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-montagebericht">Montagebericht</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-parameterlisten">Parameterlisten</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-kontrollwiegungen">Kontrollwiegungen</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-schleppketten">Schleppketten-Test</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-pruefzertifikat">Prüfzertifikat</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-service">Service</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-kunden">Protokolle für Kunden</button>
-      </div>
-    </div>
-    <button class="btn btn-ghost" id="btnViewArchiv">Archiv</button>
-    <button class="btn btn-ghost" id="btnViewAnlagenstamm">Anlagenstamm</button>
-    <div class="toolbar-dropdown-wrap">
-      <button type="button" class="btn btn-ghost" id="btnViewAbwesenheiten" aria-haspopup="true" aria-expanded="false">Abwesenheiten ▾</button>
-      <div id="abwesenheitenDropdown" class="toolbar-dropdown" role="menu" aria-label="Abwesenheiten">
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="abwesenheiten">Abwesenheiten</button>
-      </div>
-    </div>
-    <div class="toolbar-dropdown-wrap">
-      <button type="button" class="btn btn-ghost" id="btnViewBausteine" aria-haspopup="true" aria-expanded="false">Bausteine ▾</button>
-      <div class="toolbar-dropdown" id="bausteineDropdown" role="menu" aria-label="Bausteine Untermenü">
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="textbausteine">Textbausteine</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="arbeitsschritte">Arbeitsschritte Service</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="arbeitsschritte-ibn">Arbeitsschritte Inbetriebnahme</button>
-      </div>
-    </div>
-    <span class="toolbar-right">
-      <button type="button" id="hinweisLampBtn" class="hinweis-lamp is-off" title="Montagehinweise" aria-label="Montagehinweise">
-        <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M9 21h6v-1.5H9V21zm3-19a7 7 0 00-4 12.7V17h8v-2.3A7 7 0 0012 2zm2.2 11.4l-.7.4V15.5h-3v-1.7l-.7-.4A5.5 5.5 0 1112 3.5a5.5 5.5 0 012.2 9.9z"/></svg>
+    <div class="header-rule"></div>
+    <nav class="app-nav toolbar" aria-label="Hauptnavigation">
+      <button type="button" class="nav-item is-active" id="btnViewStart">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.2 4 10v10h6v-6h4v6h6V10z"/></svg>
+        Start
       </button>
-      <span id="technicianName" class="toolbar-technician-name"></span>
-      <span class="header-sync-stack" id="headerSyncStack">
-        <span class="header-sync-row">
-          <span class="jobs-badge-wrap" id="backgroundJobsWrap" style="display:none;" title="">
-            <span id="backgroundJobsBadge" class="jobs-badge">Sync</span>
+      <button type="button" class="nav-item" id="btnViewDienstreise" title="Auftragsliste">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="7" y="3.5" width="10" height="17" rx="1.5"/><path d="M10 8h4M10 12h4M10 16h2.5"/></svg>
+        Aufträge
+      </button>
+      <div class="nav-drop toolbar-dropdown-wrap">
+        <button type="button" class="nav-item" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="6" y="4" width="12" height="16" rx="1.5"/><path d="M9 8h6M9 12h6"/></svg>
+          Protokolle ▾
+        </button>
+        <div class="toolbar-dropdown nav-drop-menu" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-arbeitsnachweis">Arbeitsnachweis</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-montagebericht">Montagebericht</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-parameterlisten">Parameterlisten</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-kontrollwiegungen">Kontrollwiegungen</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-schleppketten">Schleppketten-Test</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-pruefzertifikat">Prüfzertifikat</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-service">Service</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-kunden">Protokolle für Kunden</button>
+        </div>
+      </div>
+      <button type="button" class="nav-item" id="btnViewAnlagenstamm">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="7" rx="6" ry="2.3"/><path d="M6 7v5c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4V7M6 12v5c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4v-5"/></svg>
+        Anlagenstamm
+      </button>
+      <div class="nav-drop toolbar-dropdown-wrap">
+        <button type="button" class="nav-item" id="btnViewOffice" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 12h8M8 15h5"/></svg>
+          Office ▾
+        </button>
+        <div class="toolbar-dropdown nav-drop-menu" id="officeDropdown" role="menu" aria-label="Office">
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewAbrechnung" title="Abrechnung">Abrechnung</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewZeitschreibung" title="Zeitschreibung">Zeitschreibung</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewAbwesenheiten" data-view="abwesenheiten">Abwesenheiten</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="arbeitsschritte">Arbeitsschritte Service</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="arbeitsschritte-ibn">Arbeitsschritte Inbetriebnahme</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="textbausteine">Textbausteine</button>
+        </div>
+      </div>
+      <button type="button" class="nav-item" id="btnViewArchiv">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 8h6l2 2h8v10H4z"/></svg>
+        Archiv
+      </button>
+      <div class="nav-meta toolbar-right">
+        <button type="button" id="hinweisLampBtn" class="hinweis-lamp icon-btn is-off" title="Montagehinweise" aria-label="Montagehinweise">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M9 21h6v-1.5H9V21zm3-19a7 7 0 00-4 12.7V17h8v-2.3A7 7 0 0012 2zm2.2 11.4l-.7.4V15.5h-3v-1.7l-.7-.4A5.5 5.5 0 1112 3.5a5.5 5.5 0 012.2 9.9z"/></svg>
+        </button>
+        <button type="button" id="technicianName" class="toolbar-technician-name user-name" title="Einstellungen"></button>
+        <span class="header-sync-stack" id="headerSyncStack">
+          <span class="header-sync-row">
+            <span class="jobs-badge-wrap" id="backgroundJobsWrap" style="display:none;" title="">
+              <span id="backgroundJobsBadge" class="jobs-badge">Sync</span>
+            </span>
+            <span class="connection-badge-wrap" id="connectionBadgeWrap">
+              <span id="connectionBadge" class="offline-badge">Verbindung wird geprüft…</span>
+            </span>
           </span>
-          <span class="connection-badge-wrap" id="connectionBadgeWrap">
-            <span id="connectionBadge" class="offline-badge">Verbindung wird geprüft…</span>
+          <span class="header-folder-dl-track" id="headerFolderDlTrack" aria-hidden="true">
+            <span class="header-folder-dl-fill" id="headerFolderDlFill"></span>
           </span>
         </span>
-        <span class="header-folder-dl-track" id="headerFolderDlTrack" aria-hidden="true">
-          <span class="header-folder-dl-fill" id="headerFolderDlFill"></span>
-        </span>
-      </span>
-      <button type="button" class="btn btn-ghost" id="btnViewBugReport" title="Bugreport">Bugreport</button>
-      <button type="button" class="btn btn-ghost btn-icon" id="btnViewEinstellungen" title="Einstellungen" aria-label="Einstellungen">⚙</button>
-      <label class="theme-toggle-wrap" for="uiThemeDarkToggle" title="Klassisches dunkles Erscheinungsbild (ein/aus)">
-        <span class="theme-toggle-label">Klassisches dunkles Erscheinungsbild</span>
-        <span class="theme-toggle-shell">
-          <input type="checkbox" class="theme-toggle" id="uiThemeDarkToggle" role="switch" aria-label="Klassisches dunkles Erscheinungsbild" />
-          <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-thumb"></span></span>
-        </span>
-      </label>
-      <button type="button" class="app-update-hint" id="appUpdateHint" hidden title="Neue Version verfügbar">Update verfügbar</button>
-      <span id="appVersion" class="app-version"></span>
-    </span>
+        <span class="meta-sep" aria-hidden="true"></span>
+        <button type="button" class="icon-btn" id="btnViewBugReport" title="Bugreport" aria-label="Bugreport">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v5M12 16h.01"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="btnViewEinstellungen" title="Einstellungen" aria-label="Einstellungen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1A2 2 0 1 1 7 4.4l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1A2 2 0 1 1 19.6 7l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+        <label class="theme-toggle-wrap" for="uiThemeDarkToggle" title="Klassisches dunkles Erscheinungsbild (ein/aus)">
+          <span class="theme-toggle-label">Klassisches dunkles Erscheinungsbild</span>
+          <span class="theme-toggle-shell">
+            <input type="checkbox" class="theme-toggle" id="uiThemeDarkToggle" role="switch" aria-label="Klassisches dunkles Erscheinungsbild" />
+            <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-thumb"></span></span>
+          </span>
+        </label>
+        <button type="button" class="app-update-hint" id="appUpdateHint" hidden title="Neue Version verfügbar">Update verfügbar</button>
+        <span id="appVersion" class="app-version"></span>
+      </div>
     </nav>
+    <div id="bausteineDropdown" hidden></div>
+    <div id="abwesenheitenDropdown" hidden></div>
   </header>
   <div id="multiDeviceBanner" class="multi-device-banner" hidden role="status" aria-live="polite">
     <div id="multiDeviceBannerText" class="multi-device-banner-text"></div>

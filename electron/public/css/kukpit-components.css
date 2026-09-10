@@ -1,0 +1,19 @@
+/* Shared KUKpit components — tokens, not a second brand palette */
+
+.btn {
+  border-radius: var(--kukpit-radius-sm, 6px);
+}
+
+.card {
+  border-radius: var(--kukpit-radius, 8px);
+}
+
+.modal-box {
+  border-radius: var(--kukpit-radius, 8px);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select,
+textarea {
+  border-radius: var(--kukpit-radius-sm, 6px);
+}

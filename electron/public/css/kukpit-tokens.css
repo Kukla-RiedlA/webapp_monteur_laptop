@@ -1,0 +1,30 @@
+/**
+ * KUKpit semantic tokens (aliases on kukla-brand).
+ * Status purple --kukpit-sync is not a brand color.
+ */
+:root {
+  --kukpit-radius-sm: 6px;
+  --kukpit-radius: 8px;
+  --kukpit-radius-lg: 12px;
+  --kukpit-radius-pill: 999px;
+  --kukpit-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+  --kukpit-shadow-drop: 0 4px 14px rgba(0, 0, 0, 0.12);
+  --facet-angle: 36deg;
+  --kukpit-header-from: #0c6b4f;
+  --kukpit-header-mid: #0e7b5a;
+  --kukpit-header-bright: #12886a;
+  --kukpit-header-to: #0a5a48;
+  --kukpit-facet-from: #156b58;
+  --kukpit-facet-mid: #0b4f43;
+  --kukpit-facet-to: #07352e;
+  --kukpit-header-text: #ffffff;
+  --kukpit-nav-overlay: rgba(12, 107, 79, 0.30);
+  --kukpit-sync: #6b45d6;
+}
+
+html[data-ui-theme="dark"] {
+  --kukpit-header-from: #0c6b4f;
+  --kukpit-header-mid: #0e7b5a;
+  --kukpit-header-bright: #12886a;
+  --kukpit-header-to: #0a5a48;
+}
