@@ -104,6 +104,7 @@ function findWindowsUninstaller() {
   if (process.platform !== 'win32') return null;
   const installDir = path.dirname(process.execPath);
   const names = [
+    'Uninstall KUKpit.exe',
     'Uninstall Monteur WebApp.exe',
     'Uninstall monteur-webapp.exe',
     'Uninstall ' + app.getName() + '.exe',
@@ -939,7 +940,7 @@ app.whenReady().then(() => {
       console.error('Server-Start fehlgeschlagen:', err);
       const busy = err && err.code === 'EADDRINUSE';
       dialog.showErrorBox(
-        'Monteur WebApp',
+        'KUKpit',
         busy
           ? 'Port 39678 ist belegt. Die App läuft vermutlich schon — bitte vorhandenes Fenster prüfen oder den Prozess in der Taskleiste beenden.'
           : ('Lokaler Server konnte nicht starten: ' + ((err && err.message) || String(err))),
@@ -947,14 +948,14 @@ app.whenReady().then(() => {
       app.quit();
     });
     server.listen(PORT, '127.0.0.1', () => {
-      console.log('Monteur WebApp lokal auf http://127.0.0.1:' + PORT);
+      console.log('KUKpit lokal auf http://127.0.0.1:' + PORT);
       console.log('[monteur] Lokaler API-Server: Anlagenstamm POST /api/anlagenstamm_search – nach Update App neu starten, falls 404.');
       createWindow();
       scheduleUpdateCheck();
     });
   }).catch((err) => {
     console.error('DB-Start fehlgeschlagen:', err);
-    dialog.showErrorBox('Monteur WebApp', 'Datenbank konnte nicht geöffnet werden: ' + ((err && err.message) || String(err)));
+    dialog.showErrorBox('KUKpit', 'Datenbank konnte nicht geöffnet werden: ' + ((err && err.message) || String(err)));
     app.quit();
   });
   app.on('activate', () => {

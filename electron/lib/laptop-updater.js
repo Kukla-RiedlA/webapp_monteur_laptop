@@ -267,7 +267,7 @@ async function showUpdateAvailableDialog() {
     defaultId: 0,
     cancelId: 1,
     title: 'Update verfügbar',
-    message: 'Eine neuere Version der Monteur WebApp ist auf dem Server verfügbar.',
+    message: 'Eine neuere Version von KUKpit ist auf dem Server verfügbar.',
     detail:
       'Installiert: ' +
       installed +

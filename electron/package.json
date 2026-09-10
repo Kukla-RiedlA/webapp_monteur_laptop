@@ -1,7 +1,7 @@
 {
   "name": "monteur-webapp",
-  "version": "2.7.19",
-  "description": "Monteur WebApp - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
+  "version": "2.7.20",
+  "description": "KUKpit (Kukla Monteur Cockpit) - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
   "license": "MIT",
@@ -53,7 +53,7 @@
   },
   "build": {
     "appId": "de.kukla.monteur-webapp",
-    "productName": "Monteur WebApp",
+    "productName": "KUKpit",
     "directories": {
       "output": "dist"
     },

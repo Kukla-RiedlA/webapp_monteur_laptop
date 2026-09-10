@@ -12,7 +12,7 @@ $repoRoot = $PSScriptRoot
 $electronDir = Join-Path $repoRoot "electron"
 
 function Stop-MonteurElectronForBuild {
-    foreach ($name in @("electron", "Monteur WebApp")) {
+    foreach ($name in @("electron", "KUKpit", "Monteur WebApp")) {
         Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "Beende Prozess: $($_.ProcessName) (PID $($_.Id))"
             Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue

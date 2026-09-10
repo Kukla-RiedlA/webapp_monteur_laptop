@@ -11,7 +11,7 @@ html[data-ui-theme="dark"] {
   --accent: #0f3460;
   --text: #e8e8e8;
   --muted: #a0a0a0;
-  --header-height: 72px;
+  --header-height: 88px;
   --btn-primary: #4a90e2;
   --btn-primary-hover: #357abd;
   --text-strong: #ffffff;
@@ -31,7 +31,7 @@ html[data-ui-theme="kukla"] {
   --accent: #0e7b5a;
   --text: #1a1a1a;
   --muted: #5c5c5c;
-  --header-height: 72px;
+  --header-height: 88px;
   --btn-primary: #0e7b5a;
   --btn-primary-hover: #0c6b4f;
   --text-strong: #1a1a1a;
@@ -53,6 +53,14 @@ html[data-ui-theme="kukla"] .app-header {
 
 html[data-ui-theme="kukla"] .app-title {
   color: #fff;
+}
+
+html[data-ui-theme="kukla"] .app-tagline {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+html[data-ui-theme="kukla"] .app-brand-mark {
+  background: #eefaf5;
 }
 
 html[data-ui-theme="kukla"] .toolbar {
@@ -86,6 +94,14 @@ html[data-ui-theme="dark"] .app-header {
 
 html[data-ui-theme="dark"] .app-title {
   color: var(--text);
+}
+
+html[data-ui-theme="dark"] .app-tagline {
+  color: var(--muted);
+}
+
+html[data-ui-theme="dark"] .app-brand-mark {
+  background: #eefaf5;
 }
 
 html[data-ui-theme="dark"] .toolbar {
