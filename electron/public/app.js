@@ -3848,6 +3848,7 @@
     if (window.KuklaLaptopHinweise && typeof window.KuklaLaptopHinweise.loadJob === 'function') {
       window.KuklaLaptopHinweise.loadJob(job);
     }
+    emitJobFabsUpdated(job);
     if (!displayOpts.skipDeferredLoads) {
       hydrateProjektdatenLeistungFromLocalStamm(job);
     }
@@ -4392,6 +4393,21 @@
       .catch(function () {});
   }
 
+  function emitJobFabsUpdated(job) {
+    try {
+      var fabRows = window.currentProjektdatenLeistungRows || [];
+      window.dispatchEvent(new CustomEvent('kukla-job-fabs-updated', {
+        detail: {
+          job: job || window.currentProjektdatenJob || null,
+          rows: fabRows,
+          fabrikationsnummern: job && job.fabrikationsnummern
+            ? job.fabrikationsnummern
+            : (window.currentProjektdatenJob && window.currentProjektdatenJob.fabrikationsnummern)
+        }
+      }));
+    } catch (e) { /* optional */ }
+  }
+
   function refreshProjektdatenLeistungTableFromRows() {
     var rows = window.currentProjektdatenLeistungRows || [];
     var content = document.getElementById('viewProjektdatenContent');
@@ -4429,6 +4445,7 @@
       else if (col === 2) td.textContent = formatLeistungCellDisplay(row.leistung);
       else if (col === 3) td.textContent = formatLeistungCellDisplay(row.position);
     });
+    emitJobFabsUpdated(window.currentProjektdatenJob);
   }
 
   function applyAnlageDetailBuiltToProjektdaten(built) {
@@ -4441,6 +4458,7 @@
       });
     }
     refreshProjektdatenLeistungTableFromRows();
+    emitJobFabsUpdated(window.currentProjektdatenJob);
   }
 
   function mergeAnlagenstammFieldsIntoOpenJob(fab, fields) {
@@ -25876,8 +25894,8 @@
     function setProtokollReactFrameActive(kind) {
       var ibn = document.getElementById('inbetriebnahmeReactFrame');
       var svc = document.getElementById('serviceprotokollReactFrame');
-      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn&v=langshare2';
-      var svcSrc = 'serviceprotokoll-react/index.html?v=langshare2';
+      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn&v=langshare3';
+      var svcSrc = 'serviceprotokoll-react/index.html?v=langshare3';
       function srcOf(el) {
         return String((el && el.getAttribute('src')) || '');
       }

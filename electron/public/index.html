@@ -20,13 +20,13 @@
   <link rel="stylesheet" href="ui-theme.css">
   <link rel="stylesheet" href="css/kukla-brand.css">
   <link rel="stylesheet" href="css/kukpit-tokens.css">
-  <link rel="stylesheet" href="css/kukpit-shell.css">
+  <link rel="stylesheet" href="css/kukpit-shell.css?v=20260910proto">
   <link rel="stylesheet" href="css/kukpit-components.css">
   <link rel="stylesheet" href="css/modules-web-parity.css">
   <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
   <link rel="stylesheet" href="css/anlagenakte.css">
   <link rel="stylesheet" href="css/anlagenakte-form-viewer.css">
-  <link rel="stylesheet" href="css/serviceprotokoll-v2.css?v=fabinclude1">
+  <link rel="stylesheet" href="css/serviceprotokoll-v2.css?v=20260910sticky">
   <link rel="stylesheet" href="css/montagebericht-v2.css">
   <link rel="stylesheet" href="css/arbeitsnachweis.css">
   <link rel="stylesheet" href="css/kontrollwiegung-v2.css">
@@ -36,11 +36,11 @@
   <link rel="stylesheet" href="css/file_preview_hover.css?v=20260908hover">
   <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260907">
   <link rel="stylesheet" href="css/hinweise.css?v=20260902files">
-  <link rel="stylesheet" href="css/kukpit-shell.css">
+  <link rel="stylesheet" href="css/kukpit-shell.css?v=20260910proto">
   <style>
     * { box-sizing: border-box; }
-    html { scroll-padding-top: var(--header-height, 72px); }
-    body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+    html { height: 100%; overflow: hidden; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); height: 100%; min-height: 0; overflow: hidden; }
     /* Header-Look: kukpit-shell.css */
     .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
     .header-sync-stack {
@@ -3325,7 +3325,7 @@
     </div>
   </main>
   <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">
-    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=langshare2" title="Serviceprotokoll"></iframe>
+    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=langshare3" title="Serviceprotokoll"></iframe>
     <div id="serviceprotokollLegacyHost" class="sp-v2-legacy-host" hidden aria-hidden="true">
     <div class="card sp-v2-card">
       <div class="sp-v2-topbar">
@@ -4039,7 +4039,7 @@
   <script src="js/signature-pad.js"></script>
   <script src="js/protocol-form-i18n.js"></script>
   <script src="js/mb-image-draw.js"></script>
-  <script src="js/arbeitsnachweis.js"></script>
+  <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js?v=langshare2"></script>
   <script src="js/hinweis-lamp.js?v=20260902files"></script>

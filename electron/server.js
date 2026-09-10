@@ -8136,19 +8136,20 @@ function createApp(db) {
           if (remote && remote.document) {
             const mapped = anLocal.fromDispoPublic(remote);
             if (mapped) {
+              if (!mapped.job_id && pullJobId > 0) mapped.job_id = pullJobId;
               const localW = anLocal.contentWeight(loaded || {});
               const remoteW = anLocal.contentWeight(mapped);
               if (loaded && loaded.document && localW > remoteW) {
                 const localId = loaded.document.id;
                 anLocal.markDirty(db, localId);
-                const dispoPayload = anLocal.toDispoSavePayload(loaded);
+                const dispoPayload = anLocal.toDispoSavePayload(loaded, db);
                 if (dispoPayload) {
                   anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload, {
                     technician_id: getTechnicianId(req),
                     baseUrl: anDispoBaseUrl(req, {}),
                   }));
                 }
-                return res.json(anLocal.toPublic(loaded));
+                return res.json(anLocal.toPublic(loaded, db));
               }
               const loc = (loaded && loaded.arbeitsnachweis) || {};
               const mappedAn = mapped.arbeitsnachweis || {};
@@ -8177,7 +8178,7 @@ function createApp(db) {
           // lokal bleibt
         }
       }
-      return res.json(anLocal.toPublic(loaded));
+      return res.json(anLocal.toPublic(loaded, db));
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'arbeitsnachweis_get' });
     }
@@ -8201,7 +8202,7 @@ function createApp(db) {
       const techId = getTechnicianId(req);
       const local = anLocal.upsertFromPayload(db, payload, { technicianId: techId, dirty: true });
       const localId = local && local.local_id;
-      const dispoPayload = anLocal.toDispoSavePayload(anLocal.loadRow(db, localId));
+      const dispoPayload = anLocal.toDispoSavePayload(anLocal.loadRow(db, localId), db);
       if (dispoPayload) dispoPayload.baseUrl = anDispoBaseUrl(req, payload);
       let synced = false;
       try {
@@ -8214,7 +8215,7 @@ function createApp(db) {
             local_uuid: remote.local_uuid,
           });
           synced = true;
-          Object.assign(local, anLocal.toPublic(anLocal.loadRow(db, localId)));
+          Object.assign(local, anLocal.toPublic(anLocal.loadRow(db, localId), db));
           local.server_id = remote.document_id;
           local.document_id = remote.document_id;
           local.synced = true;
@@ -8293,7 +8294,7 @@ function createApp(db) {
 
   app.post('/api/arbeitsnachweis/pdf', express.json({ limit: '12mb' }), async (req, res) => {
     try {
-      const payload = req.body && typeof req.body === 'object' ? req.body : {};
+      const payload = anLocal.mergeJobFabsIntoPayload(db, req.body && typeof req.body === 'object' ? req.body : {});
       const lang = payload.language === 'en' || (payload.document && payload.document.language === 'en') ? 'en' : 'de';
       const techId = getTechnicianId(req);
       if (!payload.technician_signature_png && techId) {
@@ -22268,9 +22269,12 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
         const anLoc = require('./lib/arbeitsnachweis-local');
         let localPay = null;
         try {
-          localPay = anLoc.toDispoSavePayload(anLoc.loadRow(db, p.entity_id));
+          localPay = anLoc.toDispoSavePayload(anLoc.loadRow(db, p.entity_id), db);
         } catch (_) {}
-        const chosen = anLoc.resolveSavePayload(payloadRaw, localPay) || payloadRaw;
+        const chosen = anLoc.mergeJobFabsIntoPayload(
+          db,
+          anLoc.resolveSavePayload(payloadRaw, localPay) || payloadRaw,
+        );
         const url = `${tbBase}/api/mobile/arbeitsnachweis.php?action=save`;
         const postBody = Object.assign({ action: 'save' }, chosen);
         delete postBody.serverPassword;

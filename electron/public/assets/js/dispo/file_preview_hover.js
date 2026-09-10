@@ -290,6 +290,11 @@
     });
   }
 
+  function previewAnchor(row) {
+    if (!row) return null;
+    return row.querySelector('a.job-file-link, a[href]');
+  }
+
   function bindList(root, getSpec) {
     if (!root) return;
     if (root.dataset.kuklaPreviewBound !== '1') {
@@ -297,6 +302,19 @@
       root.addEventListener('mouseover', function (e) {
         var row = e.target.closest ? e.target.closest('li') : null;
         if (!row || !root.contains(row)) return;
+        var anchor = previewAnchor(row);
+        if (!anchor || !anchor.contains(e.target)) {
+          if (showTimer) {
+            clearTimeout(showTimer);
+            showTimer = 0;
+          }
+          if (!hideTimer) hideTimer = setTimeout(hide, 80);
+          return;
+        }
+        if (hideTimer) {
+          clearTimeout(hideTimer);
+          hideTimer = 0;
+        }
         var spec = getSpec(row);
         if (!spec || !spec.url) return;
         prefetch(spec);
@@ -304,15 +322,15 @@
         showTimer = setTimeout(function () {
           if (currentKey === spec.url && pop && pop.classList.contains('is-open')) {
             if (pop.classList.contains('is-loading') || imageIsReady()) {
-              place(row);
+              place(anchor);
               return;
             }
             if (failedKeys[spec.url]) {
-              place(row);
+              place(anchor);
               return;
             }
           }
-          load(spec, row);
+          load(spec, anchor);
         }, 60);
       });
       root.addEventListener('mouseleave', function () {

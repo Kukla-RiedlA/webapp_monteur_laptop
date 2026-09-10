@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.025
+- **KUKpit-Layout:** Bildlaufleiste bleibt unter der Kopfzeile; Protokoll-Titelzeilen (Speichern/PDF) überlappen die Formularfelder nicht mehr.
+- **Arbeitsnachweis:** Fabrikationsnummern aus dem Auftrag werden lokal mitgeführt und beim Speichern/PDF nicht verloren.
+
 ## V 2.007.019
 - **Anlagenakte Galerie:** doppelte Montage-Kacheln (Archiv und `Dokumente_Monteur`) zusammengefasst; fehlende Vorschaubilder für Auftragsfotos werden lokal erzeugt, ohne OneDrive im Galerie-Request zu scannen.
 

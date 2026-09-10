@@ -159,6 +159,103 @@ function resolveJobIds(db, rawJobId) {
   return { localJobId: parseInt(row.id, 10) || 0, serverJobId: sid || n };
 }
 
+function normalizeFabRows(raw) {
+  if (raw == null || raw === '') return [];
+  if (typeof raw !== 'string' && !Array.isArray(raw) && typeof raw === 'object') {
+    if (typeof Buffer !== 'undefined' && Buffer.isBuffer(raw)) raw = raw.toString('utf8');
+    else if (Array.isArray(raw.fabrikationsnummern)) raw = raw.fabrikationsnummern;
+  }
+  let list = [];
+  if (Array.isArray(raw)) list = raw;
+  else if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const p = JSON.parse(raw);
+      list = Array.isArray(p) ? p : p && Array.isArray(p.fabrikationsnummern) ? p.fabrikationsnummern : [p];
+    } catch (_) {
+      list = String(raw)
+        .split(/[,;]+/)
+        .map((x) => ({ fabrikationsnummer: x.trim(), type: '' }));
+    }
+  }
+  return list
+    .map((x) => {
+      if (x && typeof x === 'object') {
+        return {
+          fabrikationsnummer: String(x.fabrikationsnummer || x.fn || x.fab || x.nr || x.Fabrikationsnummer || '').trim(),
+          type: String(x.type || x.Type || x.typ || x.Typ || '').trim(),
+        };
+      }
+      return { fabrikationsnummer: String(x || '').trim(), type: '' };
+    })
+    .filter((r) => r.fabrikationsnummer || r.type);
+}
+
+function mergeFabRows(existing, incoming) {
+  const byKey = new Map();
+  const order = [];
+  function add(r) {
+    const k = String((r && r.fabrikationsnummer) || '').trim();
+    if (!k) return;
+    if (!byKey.has(k)) {
+      byKey.set(k, { fabrikationsnummer: k, type: String((r && r.type) || '').trim() });
+      order.push(k);
+    } else if (r && r.type && !byKey.get(k).type) {
+      byKey.get(k).type = String(r.type).trim();
+    }
+  }
+  normalizeFabRows(existing).forEach(add);
+  normalizeFabRows(incoming).forEach(add);
+  return order.map((k) => byKey.get(k));
+}
+
+function fabsFromJob(db, rawJobId) {
+  if (!db) return [];
+  const n = parseInt(rawJobId, 10) || 0;
+  if (n <= 0) return [];
+  let rows = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT id, server_id, fabrikationsnummern FROM jobs
+         WHERE id = ? OR CAST(server_id AS TEXT) = CAST(? AS TEXT)`,
+      )
+      .all(n, n);
+  } catch (_) {
+    return [];
+  }
+  let best = [];
+  (rows || []).forEach((row) => {
+    const parsed = normalizeFabRows(row && row.fabrikationsnummern);
+    if (parsed.length > best.length) best = parsed;
+  });
+  return best;
+}
+
+function applyJobFabsToAn(an, jobFabs) {
+  const out = an && typeof an === 'object' ? an : {};
+  const incoming = normalizeFabRows(jobFabs);
+  if (!incoming.length) return out;
+  const merged = mergeFabRows(out.fabrikationsnummern, incoming);
+  out.fabrikationsnummern = merged;
+  out.fabrikationsnummer = merged.map((r) => r.fabrikationsnummer).filter(Boolean).join(', ');
+  const types = merged.map((r) => r.type).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+  if (types.length) out.equipment_type = types.join(', ');
+  return out;
+}
+
+function mergeJobFabsIntoPayload(db, payload) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const an = p.arbeitsnachweis && typeof p.arbeitsnachweis === 'object' ? p.arbeitsnachweis : {};
+  const jobId =
+    parseInt(p.job_id, 10) ||
+    parseInt(p.document && p.document.job_id, 10) ||
+    parseInt(p.document && p.document.server_job_id, 10) ||
+    parseInt(p.document && p.document.local_job_id, 10) ||
+    0;
+  p.arbeitsnachweis = applyJobFabsToAn(an, fabsFromJob(db, jobId));
+  return p;
+}
+
 function loadRow(db, id) {
   const document = db.prepare('SELECT * FROM documents WHERE id = ?').get(id);
   if (!document) return null;
@@ -185,10 +282,42 @@ function loadRow(db, id) {
   return { document, arbeitsnachweis: an, items, signatures };
 }
 
-function toPublic(loaded) {
+function persistMergedFabs(db, documentId, an) {
+  if (!db || !documentId || !an) return;
+  const rows = normalizeFabRows(an.fabrikationsnummern);
+  if (!rows.length) return;
+  try {
+    db.prepare(
+      `UPDATE document_arbeitsnachweis
+       SET fabrikationsnummern = ?, fabrikationsnummer = ?, equipment_type = ?
+       WHERE document_id = ?`,
+    ).run(
+      JSON.stringify(rows),
+      an.fabrikationsnummer || rows.map((r) => r.fabrikationsnummer).filter(Boolean).join(', '),
+      an.equipment_type || '',
+      documentId,
+    );
+  } catch (_) {
+    /* Schema fehlt ggf. */
+  }
+}
+
+function toPublic(loaded, db) {
   if (!loaded || !loaded.document) return { ok: true, document: null };
   const d = loaded.document;
-  const an = loaded.arbeitsnachweis || {};
+  const jobFabs = db ? fabsFromJob(db, d.server_job_id || d.local_job_id || 0) : [];
+  const before = normalizeFabRows((loaded.arbeitsnachweis || {}).fabrikationsnummern);
+  const an = applyJobFabsToAn(loaded.arbeitsnachweis || {}, jobFabs);
+  const after = normalizeFabRows(an.fabrikationsnummern);
+  if (db && jobFabs.length && after.length > before.length) {
+    persistMergedFabs(db, d.id, an);
+    console.log('[arbeitsnachweis] FN vom Auftrag nachgetragen', {
+      number: d.number || d.id,
+      job_id: d.server_job_id || d.local_job_id,
+      vorher: before.map((r) => r.fabrikationsnummer),
+      nachher: after.map((r) => r.fabrikationsnummer),
+    });
+  }
   return {
     ok: true,
     document: d,
@@ -280,11 +409,8 @@ function upsertFromPayload(db, payload, opts) {
   ensureArbeitsnachweisLocalSchema(db);
   opts = opts || {};
   const techId = parseInt(opts.technicianId, 10) || 0;
-  const an = (payload && payload.arbeitsnachweis) || {};
   const items = Array.isArray(payload && payload.items) ? payload.items : [];
   const uuid = String((payload && payload.local_uuid) || '').trim() || newUuid();
-  const jobRaw = parseInt(payload && payload.job_id, 10) || 0;
-  const ids = resolveJobIds(db, jobRaw);
   const serverDocId = parseInt((payload && (payload.server_id || payload.document_id || payload.id)) || 0, 10) || 0;
 
   let existing = findByUuid(db, uuid);
@@ -294,10 +420,28 @@ function upsertFromPayload(db, payload, opts) {
       .get(serverDocId, 'arbeitsnachweis');
     if (bySrv) existing = loadRow(db, bySrv.id);
   }
+  let jobRaw = parseInt(payload && payload.job_id, 10) || 0;
+  if (!jobRaw && existing && existing.document) {
+    jobRaw = parseInt(existing.document.server_job_id, 10) || parseInt(existing.document.local_job_id, 10) || 0;
+  }
   if (!existing && jobRaw > 0 && opts.reuseJobDraft !== false) {
     existing = findByJob(db, jobRaw);
+    if (!jobRaw && existing && existing.document) {
+      jobRaw = parseInt(existing.document.server_job_id, 10) || parseInt(existing.document.local_job_id, 10) || 0;
+    }
   }
 
+  const jobFabs = fabsFromJob(db, jobRaw);
+  const anIn = (payload && payload.arbeitsnachweis) || {};
+  const beforeFabs = normalizeFabRows(anIn.fabrikationsnummern);
+  const an = applyJobFabsToAn(anIn, jobFabs);
+  console.log('[arbeitsnachweis] fabs merge', {
+    job_id: jobRaw,
+    job_fns: jobFabs.length,
+    an_fns: beforeFabs.length,
+    merged_fns: normalizeFabRows(an.fabrikationsnummern).length,
+  });
+  const ids = resolveJobIds(db, jobRaw);
   const status = String((payload && payload.status) || (existing && existing.document.status) || 'entwurf');
   const language = String((payload && payload.language) || 'de') === 'en' ? 'en' : 'de';
   const customerName = String((payload && payload.customer_name) || '').trim();
@@ -469,7 +613,7 @@ function upsertFromPayload(db, payload, opts) {
     );
   });
 
-  return toPublic(loadRow(db, id));
+  return toPublic(loadRow(db, id), db);
 }
 
 function markSynced(db, localId, serverId, extra) {
@@ -590,10 +734,13 @@ function resolveSavePayload(snapshot, localPayload) {
   return snapshot || localPayload || null;
 }
 
-function toDispoSavePayload(loaded) {
+function toDispoSavePayload(loaded, db) {
   if (!loaded || !loaded.document) return null;
   const d = loaded.document;
-  const an = loaded.arbeitsnachweis || {};
+  const an = applyJobFabsToAn(
+    loaded.arbeitsnachweis || {},
+    db ? fabsFromJob(db, d.server_job_id || d.local_job_id || 0) : [],
+  );
   return {
     id: d.server_id || 0,
     local_uuid: d.local_uuid,
@@ -657,4 +804,9 @@ module.exports = {
   queuePending,
   clearFailedPending,
   resolveJobIds,
+  normalizeFabRows,
+  mergeFabRows,
+  fabsFromJob,
+  applyJobFabsToAn,
+  mergeJobFabsIntoPayload,
 };

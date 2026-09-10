@@ -64,3 +64,32 @@ describe('resolveSavePayload', () => {
     assert.equal(chosen, snapshot);
   });
 });
+
+describe('merge job FNs into Arbeitsnachweis', () => {
+  const { mergeFabRows, applyJobFabsToAn } = require('./arbeitsnachweis-local');
+  it('keeps existing FNs and adds later job FNs', () => {
+    const merged = mergeFabRows(
+      [{ fabrikationsnummer: '111', type: 'A' }],
+      [{ fabrikationsnummer: '222', type: 'B' }],
+    );
+    assert.deepEqual(merged, [
+      { fabrikationsnummer: '111', type: 'A' },
+      { fabrikationsnummer: '222', type: 'B' },
+    ]);
+  });
+  it('fills empty snapshot from later job FNs', () => {
+    const an = applyJobFabsToAn({ fabrikationsnummern: [] }, [
+      { fabrikationsnummer: '12306', type: 'E-DBW' },
+    ]);
+    assert.equal(an.fabrikationsnummer, '12306');
+    assert.equal(an.fabrikationsnummern.length, 1);
+    assert.equal(an.equipment_type, 'E-DBW');
+  });
+  it('fills missing type from later job row', () => {
+    const merged = mergeFabRows(
+      [{ fabrikationsnummer: '12306', type: '' }],
+      [{ fabrikationsnummer: '12306', type: 'E-DBW' }],
+    );
+    assert.equal(merged[0].type, 'E-DBW');
+  });
+});
