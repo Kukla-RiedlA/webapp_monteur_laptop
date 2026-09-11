@@ -354,6 +354,7 @@ const {
   isSupportedParameterFileName,
   parseParameterFile,
   normalizeFabDigits: normalizeParameterFab,
+  resolveTargetFab,
 } = require('./lib/anlagenstamm-parameter-parser');
 const {
   compareParameterTextLines,
@@ -2008,7 +2009,12 @@ function createApp(db) {
     if (!Buffer.isBuffer(buf) || buf.length === 0) return { ok: false, skipped: true, reason: 'empty_buffer' };
     const parsed = parseParameterFile(buf, { fileName });
     if (!parsed || !parsed.ok) return { ok: false, skipped: true, reason: 'parse_failed' };
-    const usedFab = normalizeParameterFab(parsed.used_fab);
+    const resolved = resolveTargetFab(parsed.used_fab, opts && opts.fabOverride);
+    if (!resolved || !resolved.ok) {
+      const err = resolved && resolved.error ? String(resolved.error) : 'fab_missing';
+      return { ok: false, skipped: true, reason: 'fab_missing', error: err };
+    }
+    const usedFab = normalizeParameterFab(resolved.fab);
     if (!usedFab) return { ok: false, skipped: true, reason: 'fab_missing' };
     const fileLabel = parsed.file_name || path.basename(fileName);
     const uploadedAt =
@@ -8898,6 +8904,125 @@ function createApp(db) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
   });
+
+  app.post(
+    ['/api/anlagenstamm_parameter_ingest', '/api/anlagenstamm_parameter_ingest.php'],
+    express.json({ limit: '40mb' }),
+    async (req, res) => {
+      const technicianId = getTechnicianId(req);
+      const body = req.body || {};
+      const fabValue = String(body.fab || body.fabrikationsnummer || '').trim();
+      const filename = String(body.filename || body.file_name || '').trim();
+      const contentBase64 = body.content != null ? body.content : body.file_base64;
+      if (!technicianId || !fabValue) {
+        return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+      }
+      if (!filename || contentBase64 == null || contentBase64 === '') {
+        return res.status(400).json({ ok: false, error: 'filename und content (base64) erforderlich.' });
+      }
+      let buf;
+      try {
+        buf = Buffer.from(String(contentBase64), 'base64');
+      } catch (e) {
+        return res.status(400).json({ ok: false, error: 'Ungültiger Base64-Inhalt.' });
+      }
+      if (!buf.length) {
+        return res.status(400).json({ ok: false, error: 'Leere Datei.' });
+      }
+      if (!isSupportedParameterFileName(filename)) {
+        return res.status(400).json({ ok: false, error: 'Nicht unterstützte Dateiendung.' });
+      }
+      const fabNorm = normalizeParameterFab(fabValue);
+      if (!fabNorm) {
+        return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
+      }
+      const parsed = parseParameterFile(buf, { fileName: filename });
+      const resolved = resolveTargetFab(parsed && parsed.used_fab, fabNorm);
+      if (!resolved || !resolved.ok) {
+        return res.status(400).json({
+          ok: false,
+          error: (resolved && resolved.error) || 'Fabrikationsnummer nicht erkannt.',
+        });
+      }
+      const mime = String(body.mime || '').trim() || 'text/plain';
+      const technicianName = getTechnicianDisplayName(technicianId);
+      let cacheFile = '';
+      try {
+        cacheFile = uploadCachePath(DB_DIR, fabNorm, filename);
+        fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+        writeFileWithRetry(cacheFile, buf);
+      } catch (cacheErr) {
+        return res.status(500).json({
+          ok: false,
+          error:
+            'Datei konnte lokal nicht gespeichert werden: ' +
+            (cacheErr && cacheErr.message ? cacheErr.message : cacheErr),
+        });
+      }
+      const dispoPayload = parameterDispoPayload(req, {
+        fab: fabNorm,
+        filename,
+        content: String(contentBase64),
+        source: 'upload',
+        mime,
+        technician_id: technicianId,
+      });
+      let serverFileId = null;
+      let dispoIngestError = null;
+      const dispoCandidates = buildDispoBaseCandidates(dispoPayload);
+      if (dispoCandidates.length > 0) {
+        try {
+          const remote = await proxyAnlagenstammParameterIngest(dispoPayload);
+          if (remote && remote.ok !== false) {
+            serverFileId = remote.id != null ? Number(remote.id) : null;
+          } else {
+            dispoIngestError = remote && remote.error ? String(remote.error) : 'Dispo-Ingest fehlgeschlagen';
+          }
+        } catch (dispoErr) {
+          dispoIngestError = dispoErr && dispoErr.message ? dispoErr.message : String(dispoErr);
+        }
+      }
+      let ingest = null;
+      let ingestError = null;
+      try {
+        ingest = ingestParameterFileIntoAnlagenstamm({
+          fileName: filename,
+          source: 'upload',
+          sourcePath: cacheFile,
+          storageRelPath: cacheFile,
+          buffer: buf,
+          mime,
+          technicianId,
+          technicianName,
+          serverFileId,
+          fabOverride: fabNorm,
+        });
+        if (ingest && ingest.ok === false && ingest.error) {
+          ingestError = String(ingest.error);
+        }
+      } catch (ingestErr) {
+        ingestError = ingestErr && ingestErr.message ? ingestErr.message : String(ingestErr);
+      }
+      const localOk = !!(ingest && ingest.ok);
+      if (!localOk && serverFileId == null) {
+        return res.status(400).json({
+          ok: false,
+          error: ingestError || dispoIngestError || 'Hochladen fehlgeschlagen.',
+        });
+      }
+      return res.json({
+        ok: true,
+        id: serverFileId != null ? serverFileId : ingest && ingest.id != null ? Number(ingest.id) : 0,
+        fab: fabNorm,
+        used_fab: fabNorm,
+        ingest_ok: localOk,
+        ingest_error: ingestError,
+        dispo_ingest_ok: serverFileId != null,
+        dispo_ingest_error: dispoIngestError,
+        dispo_ingest_skipped: dispoCandidates.length === 0,
+      });
+    },
+  );
 
   app.post('/api/anlagenstamm_parameter_trend', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);

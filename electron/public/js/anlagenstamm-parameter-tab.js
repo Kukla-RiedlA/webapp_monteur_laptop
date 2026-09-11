@@ -204,13 +204,208 @@
     window.open(url, 'kukla_param_compare', 'width=1280,height=860,scrollbars=yes,resizable=yes');
   }
 
-  function renderList(rootEl, fab, files) {
-    var list = Array.isArray(files) ? files.slice() : [];
-    if (!list.length) {
-      rootEl.innerHTML = '<p class="akte-muted muted">Keine Parameterlisten für diese Fabrikationsnummer.</p>';
+  function canUpload() {
+    if (isPwa()) return false;
+    return root.ANLAGENSTAMM_READ_ONLY !== true;
+  }
+
+  function fileToBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var s = String(reader.result || '');
+        var i = s.indexOf(',');
+        resolve(i >= 0 ? s.slice(i + 1) : s);
+      };
+      reader.onerror = function () { reject(new Error('Datei konnte nicht gelesen werden.')); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function postIngest(fab, filename, contentB64, mime) {
+    var payload = {
+      fab: fab,
+      filename: filename,
+      content: contentB64,
+      source: 'upload',
+      mime: mime || 'text/plain',
+    };
+    if (isMonteurLaptop()) {
+      payload.technician_id = techId();
+      try {
+        if (typeof root.getDispoBaseUrl === 'function') payload.baseUrl = root.getDispoBaseUrl();
+        if (typeof root.getDispoUsername === 'function') payload.serverUsername = root.getDispoUsername();
+      } catch (_) {}
+      return jsonPost('/api/anlagenstamm_parameter_ingest', payload);
+    }
+    return jsonPost('/api/anlagenstamm_parameter_ingest.php', payload);
+  }
+
+  function selectedFilesFromInput(input) {
+    var out = [];
+    if (!input || !input.files) return out;
+    Array.prototype.forEach.call(input.files, function (f) { if (f) out.push(f); });
+    return out;
+  }
+
+  function renderSelectedFiles(listEl, files) {
+    if (!listEl) return;
+    if (!files.length) {
+      listEl.innerHTML = '<li class="akte-muted muted">Keine Datei gewählt.</li>';
       return;
     }
-    var html = '<p class="akte-muted muted" style="margin:0 0 8px">Zwei Listen ankreuzen – der Vergleich öffnet sich in einem eigenen Fenster.</p>';
+    listEl.innerHTML = files.map(function (f) {
+      return '<li>' + esc(f.name) + (f.size ? ' · ' + esc(fmtSize(f.size)) : '') + '</li>';
+    }).join('');
+  }
+
+  function ensureUploadModal() {
+    var modal = document.getElementById('akteParamUploadModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'akteParamUploadModal';
+    modal.className = 'parameterlisten-akte-modal';
+    modal.hidden = true;
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'akteParamUploadTitle');
+    modal.innerHTML =
+      '<div class="parameterlisten-akte-modal-dialog">' +
+      '<div class="parameterlisten-akte-modal-head" id="akteParamUploadTitle">Parameterlisten hochladen</div>' +
+      '<div class="parameterlisten-akte-modal-body">' +
+      '<p class="akte-muted muted" id="akteParamUploadHint"></p>' +
+      '<div class="parameterlisten-akte-upload-field">' +
+      '<label>Parameterdateien</label>' +
+      '<input type="file" id="akteParamUploadFiles" accept=".csv,.pal,.pa3,.txt,.pa4,.pa5,.pa6,.pa7" multiple>' +
+      '<button type="button" class="btn btn-secondary kukla-jobs-refresh" id="akteParamUploadChoose">Datei auswählen …</button>' +
+      '</div>' +
+      '<ul class="parameterlisten-akte-upload-list" id="akteParamUploadList"></ul>' +
+      '<p class="akte-muted muted" id="akteParamUploadStatus"></p>' +
+      '</div>' +
+      '<div class="parameterlisten-akte-modal-footer">' +
+      '<button type="button" class="btn btn-secondary kukla-jobs-refresh" id="akteParamUploadCancel">Abbrechen</button>' +
+      '<button type="button" class="btn btn-primary" id="akteParamUploadSubmit">Hochladen</button>' +
+      '</div></div>';
+    document.body.appendChild(modal);
+    var input = document.getElementById('akteParamUploadFiles');
+    var listEl = document.getElementById('akteParamUploadList');
+    var statusEl = document.getElementById('akteParamUploadStatus');
+    var choose = document.getElementById('akteParamUploadChoose');
+    var cancel = document.getElementById('akteParamUploadCancel');
+    var submit = document.getElementById('akteParamUploadSubmit');
+    modal._plFiles = [];
+    function refreshList() {
+      modal._plFiles = selectedFilesFromInput(input);
+      renderSelectedFiles(listEl, modal._plFiles);
+    }
+    choose.addEventListener('click', function () { input.click(); });
+    input.addEventListener('change', refreshList);
+    cancel.addEventListener('click', function () { closeUploadModal(); });
+    modal.addEventListener('click', function (ev) { if (ev.target === modal) closeUploadModal(); });
+    submit.addEventListener('click', function () {
+      var fab = String(modal.getAttribute('data-pl-fab') || currentFab() || '').trim();
+      var files = modal._plFiles || [];
+      if (!fab) {
+        statusEl.textContent = 'Fabrikationsnummer fehlt.';
+        return;
+      }
+      if (!files.length) {
+        statusEl.textContent = 'Bitte mindestens eine Datei wählen.';
+        return;
+      }
+      submit.disabled = true;
+      choose.disabled = true;
+      statusEl.textContent = 'Hochladen …';
+      var results = [];
+      var i = 0;
+      function next() {
+        if (i >= files.length) {
+          submit.disabled = false;
+          choose.disabled = false;
+          statusEl.textContent = results.join(' · ');
+          var rootEl = document.getElementById('anlagenParameterRoot');
+          if (rootEl) load(rootEl, fab);
+          var failed = results.some(function (r) { return /fehlgeschlagen|Fehler|gehört zu/i.test(r); });
+          if (!failed) {
+            setTimeout(function () { closeUploadModal(); }, 700);
+          }
+          return;
+        }
+        var file = files[i];
+        var name = file && file.name ? file.name : 'datei';
+        fileToBase64(file).then(function (b64) {
+          return postIngest(fab, name, b64, file.type || 'text/plain');
+        }).then(function (data) {
+          if (!data || !data.ok) throw new Error((data && data.error) || 'Hochladen fehlgeschlagen');
+          var note = name + ': gespeichert';
+          if (data.dispo_ingest_error) note += ' (Dispo: ' + data.dispo_ingest_error + ')';
+          results.push(note);
+        }).catch(function (err) {
+          results.push(name + ': ' + (err && err.message ? err.message : String(err)));
+        }).then(function () {
+          i += 1;
+          next();
+        });
+      }
+      next();
+    });
+    refreshList();
+    return modal;
+  }
+
+  function closeUploadModal() {
+    var modal = document.getElementById('akteParamUploadModal');
+    if (!modal) return;
+    modal.hidden = true;
+    var input = document.getElementById('akteParamUploadFiles');
+    if (input) input.value = '';
+    modal._plFiles = [];
+    renderSelectedFiles(document.getElementById('akteParamUploadList'), []);
+    var statusEl = document.getElementById('akteParamUploadStatus');
+    if (statusEl) statusEl.textContent = '';
+    var submit = document.getElementById('akteParamUploadSubmit');
+    var choose = document.getElementById('akteParamUploadChoose');
+    if (submit) submit.disabled = false;
+    if (choose) choose.disabled = false;
+  }
+
+  function openUploadModal(fab) {
+    var modal = ensureUploadModal();
+    fab = String(fab || currentFab() || '').trim();
+    modal.setAttribute('data-pl-fab', fab);
+    var hint = document.getElementById('akteParamUploadHint');
+    if (hint) {
+      hint.textContent = fab
+        ? ('Dateien für Anlage ' + fab + '. Es wird kein PDF erzeugt – das machen Sie bei Bedarf mit dem Button PDF.')
+        : 'Fabrikationsnummer fehlt.';
+    }
+    var input = document.getElementById('akteParamUploadFiles');
+    if (input) input.value = '';
+    modal._plFiles = [];
+    renderSelectedFiles(document.getElementById('akteParamUploadList'), []);
+    var statusEl = document.getElementById('akteParamUploadStatus');
+    if (statusEl) statusEl.textContent = '';
+    modal.hidden = false;
+  }
+
+  function toolbarHtml(fab) {
+    if (!canUpload()) return '';
+    return '<div class="parameterlisten-akte-toolbar">' +
+      '<button type="button" class="btn btn-primary" data-pl-act="upload">Hochladen</button>' +
+      '</div>';
+  }
+
+  function renderList(rootEl, fab, files) {
+    var list = Array.isArray(files) ? files.slice() : [];
+    var html = toolbarHtml(fab);
+    if (!list.length) {
+      html += '<p class="akte-muted muted">Keine Parameterlisten für diese Fabrikationsnummer.</p>';
+      rootEl.innerHTML = html;
+      rootEl._plFiles = [];
+      rootEl._plFab = fab;
+      return;
+    }
+    html += '<p class="akte-muted muted" style="margin:0 0 8px">Zwei Listen ankreuzen – der Vergleich öffnet sich in einem eigenen Fenster.</p>';
     html += '<div class="parameterlisten-akte-list">';
     list.forEach(function (f) {
       var name = f.original_filename || 'parameterliste';
@@ -276,7 +471,8 @@
       var id = row ? row.getAttribute('data-pl-file-id') : '';
       var fab = rootEl._plFab || currentFab();
       var act = btn.getAttribute('data-pl-act');
-      if (act === 'open') openView(fab, id);
+      if (act === 'upload') openUploadModal(fab);
+      else if (act === 'open') openView(fab, id);
       else if (act === 'download') triggerDownload(downloadUrl(fab, id));
       else if (act === 'pdf') triggerDownload(pdfUrl(fab, id));
     });
@@ -289,15 +485,16 @@
     fab = String(fab || currentFab() || '').trim();
     lastFab = fab;
     if (!fab) {
-      rootEl.innerHTML = '<p class="akte-muted muted">Fabrikationsnummer fehlt.</p>';
+      rootEl.innerHTML = toolbarHtml('') + '<p class="akte-muted muted">Fabrikationsnummer fehlt.</p>';
       return;
     }
-    rootEl.innerHTML = '<p class="akte-muted muted">Parameterlisten werden geladen …</p>';
+    rootEl.innerHTML = toolbarHtml(fab) + '<p class="akte-muted muted">Parameterlisten werden geladen …</p>';
     fetchList(fab).then(function (data) {
       if (!data || !data.ok) throw new Error((data && data.error) || 'Liste fehlgeschlagen');
       renderList(rootEl, data.fab || fab, data.files || []);
     }).catch(function (e) {
-      rootEl.innerHTML = '<p class="akte-muted muted">Fehler: ' + esc(e.message || String(e)) + '</p>';
+      rootEl.innerHTML = toolbarHtml(fab) + '<p class="akte-muted muted">Fehler: ' + esc(e.message || String(e)) + '</p>';
+      rootEl._plFab = fab;
     });
   }
 

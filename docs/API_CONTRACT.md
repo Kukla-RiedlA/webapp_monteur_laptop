@@ -88,6 +88,9 @@ Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über d
 | Laptop `/api/protokolle/parameterlisten/pdf` | POST | wie file | `{ ok, pdf_path, pdf_paths }` |
 | Laptop `/api/protokolle/parameterlisten/delete` | POST | `job_id`, `upload_id` oder `fab`+`sha256` | `{ ok, local_deleted, dispo_delete_error? }` — nur `source=upload` |
 | Dispo `api/anlagenstamm_parameter_files_list.php` | GET/POST | `fab` | Session. `{ ok, fab, files: [{ id, original_filename, display_datetime, size, source, entry_count }] }` |
+| Dispo `api/anlagenstamm_parameter_ingest.php` | POST JSON | `fab`, `filename`, `content` (base64), optional `mime` | Session, Schreibrecht Anlagenstamm. Speichert in `{FN}/Parameterlisten/` und indiziert. **Kein PDF.** `{ ok, id, fab, used_fab, entry_count }` |
+| Dispo `dispo_api/api/anlagenstamm_parameter_ingest.php` | POST JSON | `filename`, `content` (base64), optional `fab`, `mime`, `source`, `storage_rel_path` | Monteur-Auth. Optionales `fab` bindet an die geöffnete Anlage; abweichende FN in Datei/Name wird abgelehnt. **Kein PDF.** |
+| Laptop `POST /api/anlagenstamm_parameter_ingest` | POST JSON | `fab`, `filename`, `content` (base64), `technician_id` | Alias `.php`. Lokal cachen + Dispo-Ingest. **Kein PDF.** `{ ok, id, fab, dispo_ingest_ok, dispo_ingest_error? }` |
 | Dispo `api/mobile/anlagenstamm_parameter_files_list.php` | GET | `fab` | Bearer. gleiche `files`-Liste |
 | Laptop `POST /api/anlagenstamm_parameter_files_list` | POST | `fab`, `technician_id`, Dispo-Creds | `{ ok, fab, files, data_source }` |
 | Laptop `GET /api/anlagenstamm_parameter_view.php` | GET | `fab`, `file_id` | `{ ok, raw_content, file: { id, original_filename } }` — Alias ohne `.php` |

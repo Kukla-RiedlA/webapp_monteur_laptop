@@ -20,7 +20,7 @@
         '/assets/js/dispo/anlagenstamm_documents.js?v=20260904hang',
         '/assets/js/dispo/anlagenakte-form-viewer.js?v=20260817c',
         '/assets/js/dispo/anlagenakte.js?v=20260907hang2',
-        '/js/anlagenstamm-parameter-tab.js?v=20260911param',
+        '/js/anlagenstamm-parameter-tab.js?v=20260911upload',
         '/js/parameter-text-compare.js?v=20260911param',
         '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260819akte',
         '/assets/js/dispo/anlagenstamm_motor_rows.js?v=20260904motor3',

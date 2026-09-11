@@ -151,6 +151,32 @@ function parseParameterFile(buffer, opts) {
   };
 }
 
+/**
+ * Bindet einen Upload an die geöffnete Anlage. Abweichende FN in Datei/Name wird abgelehnt.
+ */
+function resolveTargetFab(parsedUsedFab, fabOverride) {
+  const parsedFab = normalizeFabDigits(parsedUsedFab);
+  const requested = normalizeFabDigits(fabOverride);
+  if (requested) {
+    if (parsedFab && parsedFab !== requested) {
+      return {
+        ok: false,
+        error:
+          'Die Datei gehört zu Fabrikationsnummer ' +
+          parsedFab +
+          ', die geöffnete Anlage ist ' +
+          requested +
+          '.',
+      };
+    }
+    return { ok: true, fab: requested };
+  }
+  if (!parsedFab) {
+    return { ok: false, error: 'Keine Fabrikationsnummer erkannt (Dateiname oder Dateiinhalt).' };
+  }
+  return { ok: true, fab: parsedFab };
+}
+
 module.exports = {
   isSupportedParameterFileName,
   parseParameterFile,
@@ -158,4 +184,5 @@ module.exports = {
   extractFilenameFab,
   extractContentFab,
   isLinePlaceholder,
+  resolveTargetFab,
 };

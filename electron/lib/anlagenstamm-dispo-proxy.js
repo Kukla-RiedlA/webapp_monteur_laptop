@@ -331,6 +331,7 @@ async function proxyAnlagenstammParameterIngest(payload) {
     source: payload.source || 'upload',
     storage_rel_path: payload.storage_rel_path,
     mime: payload.mime,
+    fab: payload.fab || payload.fabrikationsnummer || '',
   };
   return proxyDispoPostJson(payload, '/dispo_api/api/anlagenstamm_parameter_ingest.php', body);
 }
