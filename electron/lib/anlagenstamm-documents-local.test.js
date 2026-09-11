@@ -113,4 +113,30 @@ describe('local documents list', () => {
     assert.equal(kw.documents.length, 0);
     assert.equal(data.source, 'local_fast');
   });
+
+  it('mappt Dokumente-Parameterlisten auf die Akte-Parameter-Liste', () => {
+    const { mapParameterFilesFromDocumentsList } = require('./anlagenstamm-documents-local');
+    const files = mapParameterFilesFromDocumentsList({
+      categories: [
+        {
+          slug: 'parameterliste',
+          documents: [
+            {
+              parameter_file_id: 44,
+              original_name: 'FN10265_PA7_DE_20251118_1032.CSV',
+              size_bytes: 88000,
+              notes: 'Projekte neu · — · 910 Werte',
+              display_datetime: '2025-11-18 10:32',
+            },
+            { id: 0, original_name: 'skip-me.csv' },
+          ],
+        },
+      ],
+    });
+    assert.equal(files.length, 1);
+    assert.equal(files[0].id, 44);
+    assert.equal(files[0].source, 'projekte_neu');
+    assert.equal(files[0].entry_count, 910);
+    assert.equal(files[0].original_filename, 'FN10265_PA7_DE_20251118_1032.CSV');
+  });
 });

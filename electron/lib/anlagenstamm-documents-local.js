@@ -1,7 +1,7 @@
 'use strict';
 
 const { listParameterFilesByFab, normalizeFabDigits } = require('./anlagenstamm-local');
-const { resolveDisplayDatetime } = require('./anlagenstamm-filename-datetime');
+const { resolveDisplayDatetime, decorateParameterListItem, sortParameterFilesByDisplayDesc } = require('./anlagenstamm-filename-datetime');
 
 const KIND_TO_SLUG = {
   kontrollwiegung: 'wiegeprotokoll',
@@ -227,9 +227,46 @@ function mergeRemoteDocumentsList(localPayload, remotePayload) {
   };
 }
 
+function mapParameterFilesFromDocumentsList(payload) {
+  const cats = payload && Array.isArray(payload.categories) ? payload.categories : [];
+  const paramCat = cats.find((c) => c && String(c.slug || '') === 'parameterliste');
+  const docs = paramCat && Array.isArray(paramCat.documents) ? paramCat.documents : [];
+  const files = [];
+  for (const d of docs) {
+    if (!d || typeof d !== 'object') continue;
+    const id = Number(d.parameter_file_id || d.id || 0);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    const notes = String(d.notes || '');
+    const source =
+      String(d.parameter_source || '').trim() === 'projekte_neu' || /projekte\s*neu/i.test(notes)
+        ? 'projekte_neu'
+        : 'upload';
+    const entryMatch = notes.match(/(\d+)\s*Werte/i);
+    const name = String(d.original_name || d.display_name || d.original_filename || 'parameterliste');
+    files.push(
+      decorateParameterListItem({
+        id,
+        local_id: id,
+        original_filename: name,
+        size: d.size_bytes != null ? Number(d.size_bytes) : d.size != null ? Number(d.size) : 0,
+        source,
+        source_file_status: d.source_file_status || 'present',
+        technician_name: d.uploaded_by_username || d.technician_name || null,
+        uploaded_at: d.display_datetime || d.created_at || d.uploaded_at || '',
+        display_datetime: d.display_datetime || d.created_at || '',
+        entry_count: entryMatch ? Number(entryMatch[1]) : d.entry_count != null ? Number(d.entry_count) : 0,
+        source_path: d.file_path || d.source_path || '',
+        mime: d.mime || 'application/octet-stream',
+      }),
+    );
+  }
+  return sortParameterFilesByDisplayDesc(files);
+}
+
 module.exports = {
   buildLocalAnlagenstammDocumentsList,
   mergeRemoteDocumentsList,
+  mapParameterFilesFromDocumentsList,
   emptyCategories,
   isRealListedDocument,
   jobHasFab,

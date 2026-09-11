@@ -14934,6 +14934,7 @@ function createApp(db) {
   }
 
   async function mapAnlagenstammParameterFiles(fabNorm, technicianId, body, localJobId) {
+    const { mapParameterFilesFromDocumentsList } = require('./lib/anlagenstamm-documents-local');
     const mapLocalFiles = (rows) =>
       sortParameterFilesByDisplayDesc(
         (rows || []).map((row) =>
@@ -14964,17 +14965,21 @@ function createApp(db) {
       } catch (_) {}
     }
     const localFiles = mapLocalFiles(listParameterFilesByFab(db, fabNorm));
-    const candidates = buildDispoBaseCandidates({
-      baseUrl: body.baseUrl,
-      externalUrl: body.externalUrl,
-      internalUrl: body.internalUrl,
+    const creds = resolveDispoServerCreds(body || {});
+    const dispoBody = Object.assign({}, body || {}, {
+      technician_id: technicianId,
+      fab: fabNorm,
+      baseUrl: String((body && body.baseUrl) || creds.baseUrl || '').trim(),
+      externalUrl: String((body && body.externalUrl) || creds.externalUrl || '').trim(),
+      internalUrl: String((body && body.internalUrl) || creds.internalUrl || '').trim(),
+      serverUsername: String((body && body.serverUsername) || creds.serverUsername || '').trim(),
+      serverPassword: (body && body.serverPassword) || creds.serverPassword || '',
     });
+    const candidates = buildDispoBaseCandidates(dispoBody);
     if (candidates.length > 0) {
       try {
-        const remote = await proxyAnlagenstammParameterFilesList(
-          Object.assign({}, body, { technician_id: technicianId, fab: fabNorm }),
-        );
-        if (remote && remote.ok !== false && Array.isArray(remote.files)) {
+        const remote = await proxyAnlagenstammParameterFilesList(dispoBody);
+        if (remote && remote.ok !== false && Array.isArray(remote.files) && remote.files.length) {
           cacheParameterFilesFromDispo(db, fabNorm, remote.files);
           save();
           const remoteFiles = sortParameterFilesByDisplayDesc(
@@ -14992,6 +14997,47 @@ function createApp(db) {
           dispoErr && dispoErr.message ? dispoErr.message : dispoErr,
         );
       }
+    }
+    if (localFiles.length) {
+      return { files: localFiles, data_source: 'cache' };
+    }
+    try {
+      let docsPayload = null;
+      const authHeader = authHeaderFromCredentials(dispoBody.serverUsername, dispoBody.serverPassword);
+      for (const base of candidates) {
+        try {
+          const q = new URLSearchParams({
+            technician_id: String(technicianId),
+            fab: fabNorm,
+          });
+          const url = `${base}/dispo_api/api/anlagenstamm_documents_list.php?${q.toString()}`;
+          const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader) });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data && Array.isArray(data.categories)) {
+            docsPayload = data;
+            break;
+          }
+        } catch (_) {}
+      }
+      if (!docsPayload) {
+        const auth = await ensureProxyAuthenticated(DB_DIR, dispoBody);
+        if (auth && auth.ok && auth.proxy && typeof auth.proxy.getJson === 'function') {
+          docsPayload = await auth.proxy.getJson(
+            '/api/anlagenstamm_documents_list.php?fab=' + encodeURIComponent(fabNorm),
+          );
+        }
+      }
+      const fromDocs = mapParameterFilesFromDocumentsList(docsPayload);
+      if (fromDocs.length) {
+        cacheParameterFilesFromDispo(db, fabNorm, fromDocs);
+        save();
+        return { files: fromDocs, data_source: 'documents' };
+      }
+    } catch (docsErr) {
+      console.warn(
+        '[parameterlisten] documents fallback:',
+        docsErr && docsErr.message ? docsErr.message : docsErr,
+      );
     }
     return {
       files: localFiles,
