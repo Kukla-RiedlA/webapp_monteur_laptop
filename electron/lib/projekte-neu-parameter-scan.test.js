@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { scanProjekteNeuParameterFiles } = require('./projekte-neu-local');
+const { scanProjekteNeuParameterFiles, safeResolveUnderRoot } = require('./projekte-neu-local');
 const { isSupportedParameterFileName } = require('./anlagenstamm-parameter-parser');
 
 describe('scanProjekteNeuParameterFiles', () => {
@@ -42,6 +42,9 @@ describe('scanProjekteNeuParameterFiles', () => {
     const montageHit = found.find((f) => f.name === 'FN09751_PA7_EN_20260201_0433.CSV');
     assert.ok(montageHit);
     assert.match(montageHit.rel.replace(/\\/g, '/'), /Montage\//);
+    const abs = safeResolveUnderRoot(root, montageHit.rel);
+    assert.ok(abs);
+    assert.equal(fs.existsSync(abs), true);
   });
 
   it('erkennt die vereinbarten Parameter-Endungen', () => {

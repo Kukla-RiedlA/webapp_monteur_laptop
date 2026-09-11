@@ -14895,7 +14895,31 @@ function createApp(db) {
         return false;
       });
       if (local) {
-        const candidates = [local.storage_relpath, local.source_path].filter(Boolean);
+        const candidates = [];
+        const pushCand = (p) => {
+          const s = String(p || '').trim();
+          if (s && !candidates.includes(s)) candidates.push(s);
+        };
+        pushCand(local.storage_relpath);
+        pushCand(local.source_path);
+        try {
+          const ctx = getProjekteNeuLocalContext(localJobId, fabNorm);
+          if (ctx && ctx.resolved && ctx.resolved.root) {
+            const root = ctx.resolved.root;
+            for (const rel of [local.source_path, local.storage_relpath]) {
+              const norm = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
+              if (!norm || path.isAbsolute(String(rel || ''))) continue;
+              const abs = safeResolveUnderRoot(root, norm);
+              if (abs) pushCand(abs);
+            }
+            const wantName = String(local.original_filename || '').trim();
+            if (wantName) {
+              const scanned = scanProjekteNeuParameterFiles(root);
+              const hit = scanned.find((f) => String(f.name || '') === wantName);
+              if (hit && hit.abs) pushCand(hit.abs);
+            }
+          }
+        } catch (_) {}
         for (const p of candidates) {
           if (jobParameterUploads.fileExists(p)) {
             return {
@@ -14913,13 +14937,16 @@ function createApp(db) {
         externalUrl: body.externalUrl,
         internalUrl: body.internalUrl,
       });
-      if (candidates.length > 0 && Number.isFinite(fid) && fid > 0) {
+      let lastDispoError = '';
+      const serverFid = local && local.server_file_id != null ? parseInt(local.server_file_id, 10) : 0;
+      const downloadId = Number.isFinite(serverFid) && serverFid > 0 ? serverFid : fid;
+      if (candidates.length > 0 && Number.isFinite(downloadId) && downloadId > 0) {
         try {
           const remote = await proxyAnlagenstammParameterDownload(
             Object.assign({}, body, {
               technician_id: technicianId,
               fab: fabNorm,
-              file_id: fid,
+              file_id: downloadId,
             }),
           );
           if (remote && remote.ok && remote.buffer) {
@@ -14930,12 +14957,14 @@ function createApp(db) {
               fab: fabNorm,
             };
           }
+          if (remote && remote.error) lastDispoError = String(remote.error);
         } catch (dispoErr) {
-          console.warn(
-            '[parameterlisten] file dispo:',
-            dispoErr && dispoErr.message ? dispoErr.message : dispoErr,
-          );
+          lastDispoError = dispoErr && dispoErr.message ? String(dispoErr.message) : String(dispoErr);
+          console.warn('[parameterlisten] file dispo:', lastDispoError);
         }
+      }
+      if (lastDispoError) {
+        return { ok: false, error: lastDispoError };
       }
     }
     return { ok: false, error: 'Datei nicht gefunden.' };
