@@ -33,6 +33,13 @@ function extractFilenameFab(fileName) {
   return '';
 }
 
+/** Trennlinien wie --------- / _____ / ------------- [- -------------] sind kein Fachwert. */
+function isLinePlaceholder(value) {
+  const s = String(value || '').trim();
+  if (s.length < 3) return false;
+  return s.replace(/[^0-9A-Za-zÄÖÜäöüß]/g, '') === '';
+}
+
 function decodeBufferSmart(buffer) {
   const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
   const attempts = ['utf8', 'latin1'];
@@ -110,6 +117,7 @@ function extractEntries(text) {
     const line = String(raw || '').trim();
     if (!line) continue;
     if (line.length > 512) continue;
+    if (isLinePlaceholder(line)) continue;
     let parsed = null;
     if (line.indexOf(';') >= 0) parsed = parseDelimitedLine(line, lineNo);
     if (!parsed && line.indexOf(':') >= 0) parsed = parseColonLine(line, lineNo);
@@ -149,4 +157,5 @@ module.exports = {
   normalizeFabDigits,
   extractFilenameFab,
   extractContentFab,
+  isLinePlaceholder,
 };

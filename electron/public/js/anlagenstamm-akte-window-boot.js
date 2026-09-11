@@ -4,6 +4,7 @@
 (function (global) {
   async function boot() {
     global.KUKLA_ANLAGENSTAMM_AKTE_WINDOW = true;
+    global.KUKLA_MONTEUR_LAPTOP = true;
     const params = new URLSearchParams(global.location.search);
     if (params.get('ro') === '1') global.ANLAGENSTAMM_READ_ONLY = true;
     const host = document.getElementById('anlagenstamm-akte-host');
@@ -17,6 +18,8 @@
       '/assets/js/dispo/anlagenstamm_documents.js?v=20260904hang',
       '/assets/js/dispo/anlagenakte-form-viewer.js?v=20260819akte',
       '/assets/js/dispo/anlagenakte.js?v=20260909thumbs',
+      '/js/anlagenstamm-parameter-tab.js?v=20260911param',
+      '/js/parameter-text-compare.js?v=20260911param',
       '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260819akte',
       '/assets/js/dispo/anlagenstamm_motor_rows.js?v=20260904motor3',
       '/assets/js/dispo/anlagenstamm.js?v=20260906ml',

@@ -355,6 +355,10 @@ const {
   parseParameterFile,
   normalizeFabDigits: normalizeParameterFab,
 } = require('./lib/anlagenstamm-parameter-parser');
+const {
+  compareParameterTextLines,
+  decodeParameterBufferToText,
+} = require('./lib/anlagenstamm-parameter-trend');
 const jobParameterUploads = require('./lib/job-parameter-uploads');
 
 /** Felder Leistungszeile / Anlagenstamm (Abgleich Projektdaten ↔ Sync). */
@@ -9078,6 +9082,97 @@ function createApp(db) {
     }
   });
 
+  function parameterDispoPayload(req, extra) {
+    const creds = resolveDispoServerCreds({});
+    return Object.assign(
+      {
+        technician_id: getTechnicianId(req),
+        baseUrl: creds.baseUrl || '',
+        serverUsername: creds.serverUsername || '',
+        serverPassword: creds.serverPassword || '',
+        externalUrl: creds.externalUrl || '',
+        internalUrl: creds.internalUrl || '',
+      },
+      extra || {},
+    );
+  }
+
+  async function loadParameterFileBufferForAkte(req, fabNorm, fileId) {
+    const payload = parameterDispoPayload(req, { fab: fabNorm, file_id: fileId });
+    try {
+      const remote = await proxyAnlagenstammParameterDownload(payload);
+      if (remote && remote.ok && remote.buffer) {
+        return {
+          ok: true,
+          buffer: remote.buffer,
+          filename: remote.xDownloadFilename || 'parameterliste',
+        };
+      }
+    } catch (_) {}
+    const files = listParameterFilesByFab(db, fabNorm) || [];
+    const local = files.find((r) => {
+      if (Number(r.id) === fileId) return true;
+      if (r.server_file_id != null && Number(r.server_file_id) === fileId) return true;
+      return false;
+    });
+    if (!local) return { ok: false, error: 'Datei nicht gefunden.' };
+    const candidates = [local.storage_relpath, local.source_path, local.cache_path].filter(Boolean);
+    for (const p of candidates) {
+      try {
+        if (p && fs.existsSync(p)) {
+          return { ok: true, buffer: fs.readFileSync(p), filename: local.original_filename || 'parameterliste' };
+        }
+      } catch (_) {}
+    }
+    return { ok: false, error: 'Datei nicht gefunden.' };
+  }
+
+  app.get(['/api/anlagenstamm_parameter_view.php', '/api/anlagenstamm_parameter_view'], async (req, res) => {
+    const fabNorm = normalizeParameterFab(req.query.fab || req.query.fabrikationsnummer || '');
+    const fileId = parseInt(req.query.file_id, 10);
+    if (!fabNorm || !Number.isFinite(fileId) || fileId <= 0) {
+      return res.status(400).json({ ok: false, error: 'fab und file_id erforderlich.' });
+    }
+    try {
+      const got = await loadParameterFileBufferForAkte(req, fabNorm, fileId);
+      if (!got.ok) return res.status(404).json({ ok: false, error: got.error || 'Datei nicht gefunden.' });
+      return res.json({
+        ok: true,
+        raw_content: decodeParameterBufferToText(got.buffer),
+        file: { original_filename: got.filename || 'parameterliste', id: fileId },
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get(['/api/anlagenstamm_parameter_download.php', '/api/anlagenstamm_parameter_pdf.php'], async (req, res) => {
+    const fabNorm = normalizeParameterFab(req.query.fab || req.query.fabrikationsnummer || '');
+    const fileId = parseInt(req.query.file_id, 10);
+    const wantPdf = String(req.path || '').indexOf('_pdf') >= 0;
+    if (!fabNorm || !Number.isFinite(fileId) || fileId <= 0) {
+      return res.status(400).json({ ok: false, error: 'fab und file_id erforderlich.' });
+    }
+    try {
+      const got = await loadParameterFileBufferForAkte(req, fabNorm, fileId);
+      if (!got.ok) return res.status(404).json({ ok: false, error: got.error || 'Datei nicht gefunden.' });
+      const filename = String(got.filename || 'parameterliste').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+      if (wantPdf) {
+        const csvToPdfBuffer = getCsvToPdfBuffer();
+        const text = decodeParameterBufferToText(got.buffer);
+        const pdfBytes = await csvToPdfBuffer(text, { filename });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'inline; filename="' + filename.replace(/"/g, '') + '.pdf"');
+        return res.send(Buffer.from(pdfBytes));
+      }
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'attachment; filename="' + filename.replace(/"/g, '') + '"');
+      return res.send(got.buffer);
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
   function contentTypeForDownloadName(name) {
     const ext = path.extname(String(name || '')).toLowerCase();
     const map = {
@@ -14969,6 +15064,71 @@ function createApp(db) {
     }
     return { ok: false, error: 'Datei nicht gefunden.' };
   }
+
+  app.post('/api/protokolle/parameterlisten/compare', express.json({ limit: '40mb' }), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const fabNorm = normalizeParameterFab(body.fab || '');
+      if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
+      const fromId = parseInt(body.from_file_id, 10);
+      const toId = parseInt(body.to_file_id, 10);
+      if (!Number.isFinite(fromId) || fromId <= 0 || !Number.isFinite(toId) || toId <= 0 || fromId === toId) {
+        return res.status(400).json({ ok: false, error: 'Zwei unterschiedliche Dateien zum Vergleich nötig.' });
+      }
+      const fromGot = await resolveParameterlistenFileBytes({
+        localJobId: resolved.localJobId,
+        technicianId,
+        jobRow,
+        fab: fabNorm,
+        fileId: fromId,
+        sha256: body.from_sha256,
+        source: 'anlagenstamm',
+        body,
+      });
+      if (!fromGot.ok) {
+        return res.status(404).json({ ok: false, error: fromGot.error || 'Von-Datei nicht gefunden.' });
+      }
+      const toGot = await resolveParameterlistenFileBytes({
+        localJobId: resolved.localJobId,
+        technicianId,
+        jobRow,
+        fab: fabNorm,
+        fileId: toId,
+        sha256: body.to_sha256,
+        source: 'anlagenstamm',
+        body,
+      });
+      if (!toGot.ok) {
+        return res.status(404).json({ ok: false, error: toGot.error || 'Zu-Datei nicht gefunden.' });
+      }
+      const diff = compareParameterTextLines(
+        decodeParameterBufferToText(fromGot.buffer),
+        decodeParameterBufferToText(toGot.buffer),
+      );
+      return res.json({
+        ok: true,
+        fab: fabNorm,
+        from_file: {
+          original_filename: fromGot.filename || '',
+          file_id: fromId,
+        },
+        to_file: {
+          original_filename: toGot.filename || '',
+          file_id: toId,
+        },
+        summary: diff.summary,
+        line_rows: diff.rows,
+      });
+    } catch (e) {
+      console.warn('[parameterlisten] compare', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
 
   app.post('/api/protokolle/parameterlisten/file', express.json({ limit: '40mb' }), async (req, res) => {
     try {

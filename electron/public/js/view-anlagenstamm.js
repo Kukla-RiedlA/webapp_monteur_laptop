@@ -4,6 +4,7 @@
 (function (global) {
   async function load(host, readOnly) {
     global.ANLAGENSTAMM_READ_ONLY = !!readOnly;
+    global.KUKLA_MONTEUR_LAPTOP = true;
     const shellRes = await fetch('/templates/anlagenstamm-shell.html?v=20260819akte');
     const shell = await shellRes.text();
     const reload = () => {
@@ -19,6 +20,8 @@
         '/assets/js/dispo/anlagenstamm_documents.js?v=20260904hang',
         '/assets/js/dispo/anlagenakte-form-viewer.js?v=20260817c',
         '/assets/js/dispo/anlagenakte.js?v=20260907hang2',
+        '/js/anlagenstamm-parameter-tab.js?v=20260911param',
+        '/js/parameter-text-compare.js?v=20260911param',
         '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260819akte',
         '/assets/js/dispo/anlagenstamm_motor_rows.js?v=20260904motor3',
         '/assets/js/dispo/anlagenstamm.js?v=20260904hang',

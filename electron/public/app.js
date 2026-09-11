@@ -11707,7 +11707,8 @@
 
   function isParamLinePlaceholder(v) {
     var s = String(v || '').trim();
-    return s.length >= 3 && /^[\s\-–—_=.*~]+$/.test(s);
+    if (s.length < 3) return false;
+    return s.replace(/[^0-9A-Za-zÄÖÜäöüß]/g, '') === '';
   }
 
   function isIgnorableDashChange(c) {
@@ -26210,6 +26211,48 @@
         '</p>');
     }
 
+    function renderParamNppParts(parts, fallbackText) {
+      var list = Array.isArray(parts) ? parts : [];
+      if (!list.length) return escapeHtml(fallbackText != null ? String(fallbackText) : '');
+      return list.map(function (p) {
+        var t = escapeHtml(p && p.text != null ? String(p.text) : '');
+        if (p && p.changed) return '<span class="param-npp-inline">' + t + '</span>';
+        return t;
+      }).join('');
+    }
+
+    function renderParamNppCompare(data, fromName, toName) {
+      var rows = (data && Array.isArray(data.line_rows)) ? data.line_rows : [];
+      var sum = (data && data.summary) || {};
+      var html = '<p class="parameterlisten-fn-compare-hint">' +
+        escapeHtml(fromName || '') + ' → ' + escapeHtml(toName || '') +
+        ' · geändert ' + (sum.changed || 0) +
+        ', neu ' + (sum.added || 0) +
+        ', entfernt ' + (sum.removed || 0) +
+        '</p>';
+      html += '<div class="parameterlisten-fn-compare-toolbar">';
+      html += '<label><input type="checkbox" data-pl-npp-only-diff> Nur Unterschiede</label>';
+      html += '</div>';
+      html += '<div class="param-npp-wrap">';
+      html += '<div class="param-npp-head"><span title="' + escapeHtml(fromName || '') + '">' +
+        escapeHtml(fromName || 'älter') + '</span><span title="' + escapeHtml(toName || '') + '">' +
+        escapeHtml(toName || 'neuer') + '</span></div>';
+      rows.forEach(function (row) {
+        var t = row && row.type ? String(row.type) : 'equal';
+        html += '<div class="param-npp-row param-npp-' + escapeHtml(t) + '">';
+        html += '<div class="param-npp-pane param-npp-left">';
+        html += '<span class="param-npp-ln">' + (row.left_line_no ? String(row.left_line_no) : '') + '</span>';
+        html += '<pre class="param-npp-text">' + renderParamNppParts(row.left_parts, row.left_text) + '</pre>';
+        html += '</div>';
+        html += '<div class="param-npp-pane param-npp-right">';
+        html += '<span class="param-npp-ln">' + (row.right_line_no ? String(row.right_line_no) : '') + '</span>';
+        html += '<pre class="param-npp-text">' + renderParamNppParts(row.right_parts, row.right_text) + '</pre>';
+        html += '</div></div>';
+      });
+      html += '</div>';
+      return html;
+    }
+
     async function runFnCompare(splitEl) {
       if (!splitEl) return;
       var fab = splitEl.getAttribute('data-pl-fab') || '';
@@ -26242,12 +26285,17 @@
       var toId = toF.id || toF.local_id;
       setFnComparePanel(splitEl, '<p class="parameterlisten-fn-compare-hint">Vergleich wird berechnet …</p>');
       try {
+        var jobId = jobSelect && jobSelect.value ? parseInt(jobSelect.value, 10) : 0;
         var body = parameterlistenDispoBody({
+          job_id: jobId,
           fab: fab,
           from_file_id: fromId,
-          to_file_id: toId
+          to_file_id: toId,
+          source: 'anlagenstamm'
         });
-        var r = await fetch(API_BASE + '/api/anlagenstamm_parameter_trend', {
+        if (fromF.sha256) body.from_sha256 = fromF.sha256;
+        if (toF.sha256) body.to_sha256 = toF.sha256;
+        var r = await fetch(API_BASE + '/api/protokolle/parameterlisten/compare', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
           body: JSON.stringify(body)
@@ -26256,25 +26304,19 @@
         if (!r.ok || !data.ok) {
           throw new Error((data && data.error) ? data.error : ('HTTP ' + r.status));
         }
-        var changes = (data.changes || []).filter(function (c) { return !isIgnorableDashChange(c); });
-        var sum = {
-          changed: changes.filter(function (c) { return c.status === 'changed'; }).length,
-          added: changes.filter(function (c) { return c.status === 'added'; }).length,
-          removed: changes.filter(function (c) { return c.status === 'removed'; }).length
-        };
         var fromName = (data.from_file && data.from_file.original_filename) || fromF.original_filename || '';
         var toName = (data.to_file && data.to_file.original_filename) || toF.original_filename || '';
-        var headExtra = escapeHtml(fromName) + ' → ' + escapeHtml(toName) +
-          ' · geändert ' + sum.changed +
-          ', neu ' + sum.added +
-          ', entfernt ' + sum.removed;
-        var table = typeof renderAspTrendChangesTable === 'function'
-          ? renderAspTrendChangesTable(changes, false)
-          : '<p class="parameterlisten-fn-compare-hint">Vergleichstabelle nicht verfügbar.</p>';
         var panel = splitEl.querySelector('.parameterlisten-fn-compare');
         if (panel) {
           panel.innerHTML = '<div class="parameterlisten-fn-compare-head">Vergleich</div>' +
-            '<p class="parameterlisten-fn-compare-hint">' + headExtra + '</p>' + table;
+            renderParamNppCompare(data, fromName, toName);
+          var onlyDiff = panel.querySelector('[data-pl-npp-only-diff]');
+          var wrap = panel.querySelector('.param-npp-wrap');
+          if (onlyDiff && wrap) {
+            onlyDiff.onchange = function () {
+              wrap.classList.toggle('is-only-diff', !!onlyDiff.checked);
+            };
+          }
         }
       } catch (e) {
         var msg = e && e.message ? e.message : String(e);

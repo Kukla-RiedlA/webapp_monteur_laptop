@@ -763,7 +763,7 @@
       min-width: 0;
       min-height: 4.5rem;
       overflow: auto;
-      max-height: 32rem;
+      max-height: 70vh;
     }
     .parameterlisten-fn-compare-head {
       padding: 0.55rem 0.75rem;
@@ -772,7 +772,7 @@
       color: #0c6a4d;
       position: sticky;
       top: 0;
-      z-index: 1;
+      z-index: 2;
     }
     .parameterlisten-fn-compare .anlagenstamm-trend-table {
       font-size: 0.8rem;
@@ -782,6 +782,92 @@
       padding: 0.7rem 0.75rem;
       color: var(--muted, #4b5563);
       font-size: 0.85rem;
+    }
+    .parameterlisten-fn-compare-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.35rem 0.75rem 0.55rem;
+      font-size: 0.82rem;
+      color: var(--muted, #4b5563);
+    }
+    .parameterlisten-fn-compare-toolbar label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      cursor: pointer;
+    }
+    .param-npp-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 0;
+      position: sticky;
+      top: 2.4rem;
+      z-index: 1;
+      background: #eefaf5;
+      border-top: 1px solid #cfe8d1;
+      border-bottom: 1px solid #cfe8d1;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #0c6a4d;
+    }
+    .param-npp-head span {
+      padding: 0.35rem 0.5rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .param-npp-head span:last-child {
+      border-left: 1px solid #cfe8d1;
+    }
+    .param-npp-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.75rem;
+      line-height: 1.35;
+    }
+    .param-npp-pane {
+      display: grid;
+      grid-template-columns: 3.1rem minmax(0, 1fr);
+      min-width: 0;
+      border-bottom: 1px solid rgba(207, 232, 209, 0.7);
+    }
+    .param-npp-pane:last-child {
+      border-left: 1px solid #cfe8d1;
+    }
+    .param-npp-ln {
+      padding: 0 0.35rem;
+      text-align: right;
+      color: var(--muted, #6b7280);
+      user-select: none;
+      background: rgba(238, 250, 245, 0.55);
+    }
+    .param-npp-text {
+      margin: 0;
+      padding: 0 0.4rem;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: inherit;
+    }
+    .param-npp-row.param-npp-removed .param-npp-left,
+    .param-npp-row.param-npp-added .param-npp-right {
+      background: rgba(220, 53, 69, 0.16);
+    }
+    .param-npp-row.param-npp-changed .param-npp-pane {
+      background: rgba(255, 193, 7, 0.18);
+    }
+    .param-npp-inline {
+      background: rgba(255, 193, 7, 0.55);
+      border-radius: 2px;
+    }
+    .param-npp-row.param-npp-removed .param-npp-inline,
+    .param-npp-row.param-npp-added .param-npp-inline {
+      background: rgba(220, 53, 69, 0.28);
+    }
+    .param-npp-wrap.is-only-diff .param-npp-row.param-npp-equal {
+      display: none;
     }
     @media (max-width: 900px) {
       .parameterlisten-fn-split { grid-template-columns: 1fr; }

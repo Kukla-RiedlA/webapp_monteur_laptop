@@ -40,6 +40,9 @@
         if (tabId === 'docs' && typeof window.anlagenstammDocumentsRefresh === 'function') {
           window.anlagenstammDocumentsRefresh();
         }
+        if (tabId === 'parameter' && window.KuklaAnlagenParameterTab) {
+          window.KuklaAnlagenParameterTab.load();
+        }
       });
     });
   }

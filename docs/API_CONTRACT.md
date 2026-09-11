@@ -84,8 +84,17 @@ Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über d
 |-------|---------|------|---------|
 | Laptop `/api/protokolle/parameterlisten/list` | POST | `job_id`, Dispo-Basis/Credentials | `{ ok, job_uploads, anlagenstamm: [{ fab, files }] }` — Dateien mit `display_datetime` (Stempel aus Dateiname `…_YYYYMMDD_HHMM`, sonst Quellen-mtime; nicht Scan-/Cache-Zeit). `uploaded_at` in der Liste entspricht diesem Anzeige-Stempel. Anlagenstamm-Dateien (`csv`, `txt`, `pal`, `pa3`, `pa4`, `pa5`, `pa6`, `pa7`) kommen **rekursiv** aus dem FN-Ordner (inkl. Unterordner wie `Montage`), nicht nur aus dem Ordnerstamm. Dispo-List-Endpunkte stoßen vor der Antwort einen Dateisystem-Sync an. |
 | Laptop `/api/protokolle/parameterlisten/file` | POST | `job_id`, `upload_id` oder `fab`+`file_id`, optional `as_download` | JSON `content_base64` oder Binär-Download |
+| Laptop `/api/protokolle/parameterlisten/compare` | POST | `job_id`, `fab`, `from_file_id`, `to_file_id`, optional `from_sha256`/`to_sha256` | `{ ok, from_file, to_file, summary: { changed, added, removed, equal }, line_rows }` — Zeilenvergleich analog Notepad++ Compare. Trennstriche (`---------`, `------------- [- -------------]`) zählen nicht als Änderung. `line_rows[].type`: `equal` / `changed` / `added` / `removed`; `left_parts`/`right_parts` mit `{ text, changed }` für Intra-Zeilen-Markierung. |
 | Laptop `/api/protokolle/parameterlisten/pdf` | POST | wie file | `{ ok, pdf_path, pdf_paths }` |
 | Laptop `/api/protokolle/parameterlisten/delete` | POST | `job_id`, `upload_id` oder `fab`+`sha256` | `{ ok, local_deleted, dispo_delete_error? }` — nur `source=upload` |
+| Dispo `api/anlagenstamm_parameter_files_list.php` | GET/POST | `fab` | Session. `{ ok, fab, files: [{ id, original_filename, display_datetime, size, source, entry_count }] }` |
+| Dispo `api/mobile/anlagenstamm_parameter_files_list.php` | GET | `fab` | Bearer. gleiche `files`-Liste |
+| Laptop `POST /api/anlagenstamm_parameter_files_list` | POST | `fab`, `technician_id`, Dispo-Creds | `{ ok, fab, files, data_source }` |
+| Laptop `GET /api/anlagenstamm_parameter_view.php` | GET | `fab`, `file_id` | `{ ok, raw_content, file: { id, original_filename } }` — Alias ohne `.php` |
+| Laptop `GET /api/anlagenstamm_parameter_download.php` | GET | `fab`, `file_id` | Binär-Download |
+| Laptop `GET /api/anlagenstamm_parameter_pdf.php` | GET | `fab`, `file_id` | PDF inline (`csv-to-pdf`) |
+| Dispo `anlagenstamm_parameter_compare.php` | GET | `fab`, `from_file_id`, `to_file_id` | HTML-Popup, Zeilenvergleich analog Notepad++ Compare |
+| Laptop/Desktop `/parameter-compare-window.html` | GET | gleiche Query | Client lädt beide Views und rendert denselben Vergleich |
 | Dispo `dispo_api/api/anlagenstamm_parameter_delete.php` | POST | `fab`, `file_id` oder `sha256` | `{ ok, id, fab, sha256 }` |
 | Dispo `api/mobile/anlagenstamm_parameter_delete.php` | POST | gleich, Bearer | gleich |
 

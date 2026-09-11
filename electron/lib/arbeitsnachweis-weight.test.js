@@ -92,4 +92,61 @@ describe('merge job FNs into Arbeitsnachweis', () => {
     );
     assert.equal(merged[0].type, 'E-DBW');
   });
+  it('does not drop FNs when a shorter snapshot arrives', () => {
+    const merged = mergeFabRows(
+      [
+        { fabrikationsnummer: '10066', type: 'A' },
+        { fabrikationsnummer: '10227', type: 'B' },
+        { fabrikationsnummer: '11503', type: 'C' },
+      ],
+      [{ fabrikationsnummer: '10066', type: 'A' }],
+    );
+    assert.equal(merged.length, 3);
+    assert.deepEqual(
+      merged.map((r) => r.fabrikationsnummer),
+      ['10066', '10227', '11503'],
+    );
+  });
+  it('unions job FNs onto a short AN snapshot', () => {
+    const an = applyJobFabsToAn(
+      {
+        fabrikationsnummern: [
+          { fabrikationsnummer: '10066', type: 'A' },
+          { fabrikationsnummer: '11503', type: 'C' },
+          { fabrikationsnummer: '12529', type: 'D' },
+        ],
+      },
+      [
+        { fabrikationsnummer: '10066', type: 'A' },
+        { fabrikationsnummer: '10227', type: 'B' },
+        { fabrikationsnummer: '10384', type: 'E' },
+        { fabrikationsnummer: '11503', type: 'C' },
+        { fabrikationsnummer: '12529', type: 'D' },
+      ],
+    );
+    assert.equal(an.fabrikationsnummern.length, 5);
+    assert.deepEqual(
+      an.fabrikationsnummern.map((r) => r.fabrikationsnummer),
+      ['10066', '10227', '10384', '11503', '12529'],
+    );
+  });
+  it('uses live job order instead of the short snapshot order', () => {
+    const an = applyJobFabsToAn(
+      {
+        fabrikationsnummern: [
+          { fabrikationsnummer: '12529', type: 'D' },
+          { fabrikationsnummer: '10066', type: 'A' },
+        ],
+      },
+      [
+        { fabrikationsnummer: '10066', type: 'A' },
+        { fabrikationsnummer: '10227', type: 'B' },
+        { fabrikationsnummer: '12529', type: 'D' },
+      ],
+    );
+    assert.deepEqual(
+      an.fabrikationsnummern.map((r) => r.fabrikationsnummer),
+      ['10066', '10227', '12529'],
+    );
+  });
 });

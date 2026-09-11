@@ -235,7 +235,8 @@ function applyJobFabsToAn(an, jobFabs) {
   const out = an && typeof an === 'object' ? an : {};
   const incoming = normalizeFabRows(jobFabs);
   if (!incoming.length) return out;
-  const merged = mergeFabRows(out.fabrikationsnummern, incoming);
+  // Live-Auftrag zuerst: der Beleg-Schnappschuss darf die Liste nicht anführen.
+  const merged = mergeFabRows(incoming, out.fabrikationsnummern);
   out.fabrikationsnummern = merged;
   out.fabrikationsnummer = merged.map((r) => r.fabrikationsnummer).filter(Boolean).join(', ');
   const types = merged.map((r) => r.type).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
@@ -309,9 +310,14 @@ function toPublic(loaded, db) {
   const before = normalizeFabRows((loaded.arbeitsnachweis || {}).fabrikationsnummern);
   const an = applyJobFabsToAn(loaded.arbeitsnachweis || {}, jobFabs);
   const after = normalizeFabRows(an.fabrikationsnummern);
-  if (db && jobFabs.length && after.length > before.length) {
+  const snapshotStale =
+    jobFabs.length > 0 &&
+    (after.length !== before.length ||
+      JSON.stringify(after.map((r) => r.fabrikationsnummer)) !==
+        JSON.stringify(before.map((r) => r.fabrikationsnummer)));
+  if (db && snapshotStale) {
     persistMergedFabs(db, d.id, an);
-    console.log('[arbeitsnachweis] FN vom Auftrag nachgetragen', {
+    console.log('[arbeitsnachweis] FN-Snapshot vom Auftrag ersetzt', {
       number: d.number || d.id,
       job_id: d.server_job_id || d.local_job_id,
       vorher: before.map((r) => r.fabrikationsnummer),
@@ -434,11 +440,15 @@ function upsertFromPayload(db, payload, opts) {
   const jobFabs = fabsFromJob(db, jobRaw);
   const anIn = (payload && payload.arbeitsnachweis) || {};
   const beforeFabs = normalizeFabRows(anIn.fabrikationsnummern);
-  const an = applyJobFabsToAn(anIn, jobFabs);
+  const existingFabs =
+    existing && existing.arbeitsnachweis ? existing.arbeitsnachweis.fabrikationsnummern : [];
+  // Union: Dispo-Entwurf oder altes AN-JSON darf keine Job-FN streichen.
+  const an = applyJobFabsToAn(applyJobFabsToAn(anIn, existingFabs), jobFabs);
   console.log('[arbeitsnachweis] fabs merge', {
     job_id: jobRaw,
     job_fns: jobFabs.length,
     an_fns: beforeFabs.length,
+    existing_fns: normalizeFabRows(existingFabs).length,
     merged_fns: normalizeFabRows(an.fabrikationsnummern).length,
   });
   const ids = resolveJobIds(db, jobRaw);
