@@ -25,11 +25,29 @@ function normValue(entry) {
   return String(entry.param_value != null ? entry.param_value : '').trim();
 }
 
+/** Trennlinien wie --------- / _____ / **** zählen nicht als Fachwert. */
+function isLinePlaceholder(value) {
+  const s = String(value || '').trim();
+  if (s.length < 3) return false;
+  return /^[\s\-–—_=.*~]+$/.test(s);
+}
+
+function valuesEquivalentForCompare(oldVal, newVal) {
+  const a = String(oldVal == null ? '' : oldVal).trim();
+  const b = String(newVal == null ? '' : newVal).trim();
+  if (a === b) return true;
+  if (isLinePlaceholder(a) && isLinePlaceholder(b)) return true;
+  if (isLinePlaceholder(a) && b === '') return true;
+  if (isLinePlaceholder(b) && a === '') return true;
+  return false;
+}
+
 function buildKeyedEntries(entries) {
   const list = Array.isArray(entries) ? entries : [];
   const map = new Map();
   const order = [];
   for (const ent of list) {
+    if (isLinePlaceholder(ent && ent.param_key)) continue;
     const mk = entryMatchKey(ent);
     if (!mk) continue;
     let slot = mk;
@@ -67,6 +85,10 @@ function compareParameterEntryMaps(fromMap, toMap, fromOrder, toOrder) {
     const oldRow = from.get(mk) || null;
     const newRow = to.get(mk) || null;
     if (!oldRow && newRow) {
+      if (isLinePlaceholder(newRow.param_value) || isLinePlaceholder(newRow.param_key)) {
+        unchanged += 1;
+        continue;
+      }
       changes.push({
         status: 'added',
         param_key: newRow.param_key,
@@ -81,6 +103,10 @@ function compareParameterEntryMaps(fromMap, toMap, fromOrder, toOrder) {
       continue;
     }
     if (oldRow && !newRow) {
+      if (isLinePlaceholder(oldRow.param_value) || isLinePlaceholder(oldRow.param_key)) {
+        unchanged += 1;
+        continue;
+      }
       changes.push({
         status: 'removed',
         param_key: oldRow.param_key,
@@ -95,7 +121,12 @@ function compareParameterEntryMaps(fromMap, toMap, fromOrder, toOrder) {
       continue;
     }
     if (!oldRow || !newRow) continue;
-    if (oldRow.param_value === newRow.param_value && oldRow.unit === newRow.unit) {
+    if (
+      valuesEquivalentForCompare(oldRow.param_value, newRow.param_value) &&
+      (oldRow.unit === newRow.unit ||
+        isLinePlaceholder(oldRow.param_value) ||
+        isLinePlaceholder(newRow.param_value))
+    ) {
       unchanged += 1;
       changes.push({
         status: 'unchanged',
@@ -154,4 +185,6 @@ module.exports = {
   buildKeyedEntries,
   compareParameterEntryLists,
   compareParameterEntryMaps,
+  isLinePlaceholder,
+  valuesEquivalentForCompare,
 };

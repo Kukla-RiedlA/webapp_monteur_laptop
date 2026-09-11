@@ -78,6 +78,19 @@ Weitere lokale Routen (Sync, Projektdateien, Anlagenstamm): unverändert über d
 
 **`POST /api/dienstreise/copy_project_stream`:** gleiches **`202`**/`job_id`-Muster ohne Status-Wechsel (Dedupe-Key unterscheidet **`accept`** vs. **`copy`**).
 
+**Parameterlisten (Laptop-Gateway + Dispo):**
+
+| Route | Methode | Body | Antwort |
+|-------|---------|------|---------|
+| Laptop `/api/protokolle/parameterlisten/list` | POST | `job_id`, Dispo-Basis/Credentials | `{ ok, job_uploads, anlagenstamm: [{ fab, files }] }` — Dateien mit `display_datetime` (Stempel aus Dateiname `…_YYYYMMDD_HHMM`, sonst Quellen-mtime; nicht Scan-/Cache-Zeit). `uploaded_at` in der Liste entspricht diesem Anzeige-Stempel. Anlagenstamm-Dateien (`csv`, `txt`, `pal`, `pa3`, `pa4`, `pa5`, `pa6`, `pa7`) kommen **rekursiv** aus dem FN-Ordner (inkl. Unterordner wie `Montage`), nicht nur aus dem Ordnerstamm. Dispo-List-Endpunkte stoßen vor der Antwort einen Dateisystem-Sync an. |
+| Laptop `/api/protokolle/parameterlisten/file` | POST | `job_id`, `upload_id` oder `fab`+`file_id`, optional `as_download` | JSON `content_base64` oder Binär-Download |
+| Laptop `/api/protokolle/parameterlisten/pdf` | POST | wie file | `{ ok, pdf_path, pdf_paths }` |
+| Laptop `/api/protokolle/parameterlisten/delete` | POST | `job_id`, `upload_id` oder `fab`+`sha256` | `{ ok, local_deleted, dispo_delete_error? }` — nur `source=upload` |
+| Dispo `dispo_api/api/anlagenstamm_parameter_delete.php` | POST | `fab`, `file_id` oder `sha256` | `{ ok, id, fab, sha256 }` |
+| Dispo `api/mobile/anlagenstamm_parameter_delete.php` | POST | gleich, Bearer | gleich |
+
+Löschen von `projekte_neu` ist verboten (`code: not_upload`).
+
 **`POST /api/dienstreise/sync_to_dispo`:** **`202`** + `job_id`; Typ **`dienstreise_push`** (`syncDienstreiseFoldersToDispo` + optional Protokoll-Vorlagen).
 
 **`POST /api/sync_pull`** / **`POST /api/sync_push`:** jeweils **`202`** + `job_id` (globale Queue, max. ein Job gleichzeitig). Pull umfasst Kalender-Cache, Fab-Anlagenstamm (bis 200 FN, **Priorität angenommene/in_arbeit-Jobs**), **TED-Metadaten** (`job_ted_index` via `mechanik_ted_excel_list`) und Protokoll-Vorlagen. **`sync_pull`** antwortet mit **HTTP 409** und `{ "ok": false, "deferred": true, "error": "…" }`, wenn **`dienstreise_pull`** / **`dienstreise_push`** / **`sync_push`** noch in der Queue sind (Client wertet `deferred` nicht als harten Fehler).

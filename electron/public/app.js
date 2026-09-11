@@ -8106,6 +8106,9 @@
       typeof loadDienstreiseList === 'function' ? Promise.resolve(loadDienstreiseList({ soft: true })) : Promise.resolve(),
     ]).then(function () {
       if (force) localListsRefreshAt = 0;
+      try {
+        window.dispatchEvent(new CustomEvent('kukla-jobs-synced', { detail: { force: !!force } }));
+      } catch (e) { /* ignore */ }
     });
   }
 
@@ -11657,6 +11660,27 @@
     });
   }
 
+  function anlagenstammFilenameDatetimeIso(filename) {
+    var base = String(filename || '').replace(/\\/g, '/').split('/').pop() || '';
+    var m = base.match(/_(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])_([01]\d|2[0-3])([0-5]\d)(?:([0-5]\d))?/);
+    if (!m) return '';
+    var y = parseInt(m[1], 10);
+    var mo = parseInt(m[2], 10);
+    var day = parseInt(m[3], 10);
+    var dt = new Date(y, mo - 1, day);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== day) return '';
+    var sec = m[6] ? m[6] : '00';
+    return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + sec;
+  }
+
+  function anlagenstammFileDisplayDatetime(file) {
+    if (!file) return '';
+    var fromName = anlagenstammFilenameDatetimeIso(file.original_filename || file.name || file.display_name || '');
+    if (fromName) return fromName;
+    if (file.display_datetime) return String(file.display_datetime);
+    return file.uploaded_at || file.mtime || file.created_at || '';
+  }
+
   function readDownloadNameFromResponse(resp, fallbackName) {
     if (!resp || !resp.headers) return fallbackName;
     var xName = resp.headers.get('x-download-filename');
@@ -11677,12 +11701,32 @@
 
   function aspTrendOptionLabel(f) {
     var name = String(f.original_filename || 'Datei');
-    var date = fmtDateTimeLocal(f.uploaded_at);
+    var date = fmtDateTimeLocal(anlagenstammFileDisplayDatetime(f));
     return name + ' (' + date + ')';
+  }
+
+  function isParamLinePlaceholder(v) {
+    var s = String(v || '').trim();
+    return s.length >= 3 && /^[\s\-–—_=.*~]+$/.test(s);
+  }
+
+  function isIgnorableDashChange(c) {
+    if (!c) return false;
+    var a = String(c.value_old != null ? c.value_old : '').trim();
+    var b = String(c.value_new != null ? c.value_new : '').trim();
+    var st = c.status || '';
+    if (st === 'changed') {
+      if (isParamLinePlaceholder(a) && isParamLinePlaceholder(b)) return true;
+      if (isParamLinePlaceholder(a) && b === '') return true;
+      if (isParamLinePlaceholder(b) && a === '') return true;
+    }
+    if ((st === 'added' || st === 'removed') && (isParamLinePlaceholder(a) || isParamLinePlaceholder(b))) return true;
+    return false;
   }
 
   function renderAspTrendChangesTable(changes, showUnchanged) {
     var rows = Array.isArray(changes) ? changes : [];
+    rows = rows.filter(function (c) { return !isIgnorableDashChange(c); });
     if (!showUnchanged) {
       rows = rows.filter(function (c) { return c.status !== 'unchanged'; });
     }
@@ -11708,8 +11752,8 @@
 
   function wireAspTrendToolbar(fabNorm, list) {
     var chron = list.slice().sort(function (a, b) {
-      var ta = Date.parse(String(a.uploaded_at || '').replace(' ', 'T'));
-      var tb = Date.parse(String(b.uploaded_at || '').replace(' ', 'T'));
+      var ta = Date.parse(String(anlagenstammFileDisplayDatetime(a) || '').replace(' ', 'T'));
+      var tb = Date.parse(String(anlagenstammFileDisplayDatetime(b) || '').replace(' ', 'T'));
       if (isNaN(ta)) ta = 0;
       if (isNaN(tb)) tb = 0;
       return ta - tb;
@@ -11860,7 +11904,7 @@
           var who = f.technician_name ? String(f.technician_name) : (f.source === 'projekte_neu' ? '—' : 'Unbekannt');
           var status = f.source_file_status === 'original_deleted' ? 'Originaldatei gelöscht' : '';
           var name = String(f.original_filename || '');
-          var date = fmtDateTimeLocal(f.uploaded_at);
+          var date = fmtDateTimeLocal(anlagenstammFileDisplayDatetime(f));
           return '<div class="anlagenstamm-paramlist-row">' +
             '<div><strong>' + escapeHtml(name) + '</strong>' + (status ? '<div class="muted">' + escapeHtml(status) + '</div>' : '') + '</div>' +
             '<div>' + escapeHtml(sourceLabel) + '</div>' +
@@ -26020,8 +26064,487 @@
       }
     }
 
+    var jobUploadsEl = document.getElementById('parameterlistenJobUploads');
+    var anlagenstammEl = document.getElementById('parameterlistenAnlagenstamm');
+    var deleteModal = document.getElementById('parameterlistenDeleteModal');
+    var deleteBodyEl = document.getElementById('parameterlistenDeleteBody');
+    var deletePending = null;
+
+    function formatParamWhen(iso) {
+      if (!iso) return '';
+      try {
+        if (typeof fmtDateTimeLocal === 'function') return fmtDateTimeLocal(iso);
+      } catch (_) {}
+      return String(iso).replace('T', ' ').slice(0, 16);
+    }
+
+    function formatParamExt(name) {
+      var m = String(name || '').match(/\.([a-z0-9]+)$/i);
+      return m ? m[1].toUpperCase() : '';
+    }
+
+    function renderParamActionButtons(item, kind) {
+      var html = '<div class="parameterlisten-file-actions">';
+      html += '<button type="button" class="btn btn-ghost" data-pl-act="open">Öffnen</button>';
+      html += '<button type="button" class="btn btn-ghost" data-pl-act="download">Herunterladen</button>';
+      html += '<button type="button" class="btn btn-ghost" data-pl-act="pdf">PDF</button>';
+      if (kind === 'job' && item && item.can_delete !== false) {
+        html += '<button type="button" class="parameterlisten-delete" data-pl-act="delete" title="Löschen" aria-label="Löschen">';
+        html += '<img src="icons/x-delete-green.svg" alt="" aria-hidden="true"></button>';
+      }
+      html += '</div>';
+      return html;
+    }
+
+    function renderParamFileRow(item, kind) {
+      var name = (item && (item.original_filename || item.name)) || 'parameterliste';
+      var fab = item && item.fab ? String(item.fab) : '';
+      var when = formatParamWhen(anlagenstammFileDisplayDatetime(item) || (item && item.mtime));
+      var ext = formatParamExt(name);
+      var meta = [];
+      if (ext) meta.push(ext);
+      if (when) meta.push(when);
+      if (item && item.size) meta.push(formatFileSize(item.size));
+      if (kind === 'stamm') {
+        meta.push(item.source === 'projekte_neu' ? 'Projekte neu' : 'Upload');
+        if (item.entry_count) meta.push(String(item.entry_count) + ' Werte');
+        if (item.technician_name) meta.push(String(item.technician_name));
+      }
+      var html = '<div class="parameterlisten-file-row" data-pl-kind="' + kind + '"';
+      if (kind === 'stamm' && item) {
+        html += ' data-pl-file-id="' + escapeHtml(String(item.id || item.local_id || '')) + '"';
+      }
+      html += '>';
+      if (kind === 'stamm') {
+        html += '<label class="parameterlisten-compare-check" title="Zum Vergleich auswählen">';
+        html += '<input type="checkbox" data-pl-compare="1" aria-label="Zum Vergleich auswählen"';
+        if (!item || !(item.id || item.local_id)) html += ' disabled';
+        html += '></label>';
+      }
+      html += '<div class="parameterlisten-file-main"><div class="parameterlisten-file-title">';
+      html += '<span class="name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</span>';
+      if (fab) html += '<span class="parameterlisten-pill">FN ' + escapeHtml(fab) + '</span>';
+      if (item && item.is_backup) html += '<span class="parameterlisten-pill is-backup">Backup</span>';
+      html += '</div><div class="parameterlisten-file-meta">' + escapeHtml(meta.join(' · ')) + '</div></div>';
+      html += renderParamActionButtons(item, kind);
+      html += '</div>';
+      return html;
+    }
+
+    function renderJobUploads(list) {
+      if (!jobUploadsEl) return;
+      if (!list || !list.length) {
+        jobUploadsEl.innerHTML = '<p class="parameterlisten-empty">Noch keine Parameterlisten für diesen Auftrag.</p>';
+        jobUploadsEl._plItems = [];
+        return;
+      }
+      jobUploadsEl._plItems = list;
+      jobUploadsEl.innerHTML = list.map(function (item) { return renderParamFileRow(item, 'job'); }).join('');
+    }
+
+    function renderAnlagenstammGroups(groups) {
+      if (!anlagenstammEl) return;
+      anlagenstammEl._plGroups = groups || [];
+      if (!groups || !groups.length) {
+        anlagenstammEl.innerHTML = '<p class="parameterlisten-empty">Keine Fabrikationsnummern in diesem Auftrag.</p>';
+        return;
+      }
+      var html = '';
+      groups.forEach(function (g, gi) {
+        var files = (g && g.files) || [];
+        var fab = String(g.fab || '');
+        html += '<div class="parameterlisten-fn-split" data-pl-fab="' + escapeHtml(fab) + '">';
+        html += '<details class="parameterlisten-fn-group"' + (gi === 0 ? ' open' : '') + '>';
+        html += '<summary>FN ' + escapeHtml(fab) + ' (' + files.length + ')</summary>';
+        if (!files.length) {
+          html += '<p class="parameterlisten-empty">Keine Parameterlisten im Anlagenstamm.</p>';
+        } else {
+          files.forEach(function (f) {
+            var row = Object.assign({ fab: fab }, f);
+            html += renderParamFileRow(row, 'stamm');
+          });
+        }
+        html += '</details>';
+        html += '<div class="parameterlisten-fn-compare" data-pl-compare-panel="' + escapeHtml(fab) + '">';
+        html += '<div class="parameterlisten-fn-compare-head">Vergleich</div>';
+        html += '<p class="parameterlisten-fn-compare-hint">' +
+          (files.length >= 2
+            ? 'Zwei CSV ankreuzen, um sie zu vergleichen.'
+            : 'Mindestens zwei Listen nötig für einen Vergleich.') +
+          '</p>';
+        html += '</div></div>';
+      });
+      anlagenstammEl.innerHTML = html;
+    }
+
+    function findStammItemByFileId(fab, fileId) {
+      var groups = anlagenstammEl && anlagenstammEl._plGroups ? anlagenstammEl._plGroups : [];
+      var want = String(fileId || '');
+      var i;
+      for (i = 0; i < groups.length; i++) {
+        if (String(groups[i].fab || '') !== String(fab || '')) continue;
+        var files = groups[i].files || [];
+        var j;
+        for (j = 0; j < files.length; j++) {
+          var id = String(files[j].id || files[j].local_id || '');
+          if (id && id === want) return Object.assign({ fab: groups[i].fab }, files[j]);
+        }
+      }
+      return null;
+    }
+
+    function setFnComparePanel(splitEl, innerHtml) {
+      var panel = splitEl && splitEl.querySelector ? splitEl.querySelector('.parameterlisten-fn-compare') : null;
+      if (!panel) return;
+      var fab = splitEl.getAttribute('data-pl-fab') || '';
+      panel.innerHTML = '<div class="parameterlisten-fn-compare-head">Vergleich</div>' + innerHtml;
+      panel.setAttribute('data-pl-compare-panel', fab);
+    }
+
+    function resetFnCompareHint(splitEl) {
+      var filesLen = splitEl ? splitEl.querySelectorAll('.parameterlisten-file-row[data-pl-kind="stamm"]').length : 0;
+      setFnComparePanel(splitEl, '<p class="parameterlisten-fn-compare-hint">' +
+        (filesLen >= 2
+          ? 'Zwei CSV ankreuzen, um sie zu vergleichen.'
+          : 'Mindestens zwei Listen nötig für einen Vergleich.') +
+        '</p>');
+    }
+
+    async function runFnCompare(splitEl) {
+      if (!splitEl) return;
+      var fab = splitEl.getAttribute('data-pl-fab') || '';
+      var boxes = splitEl.querySelectorAll('input[data-pl-compare]:checked');
+      if (boxes.length < 2) {
+        resetFnCompareHint(splitEl);
+        return;
+      }
+      var items = [];
+      Array.prototype.forEach.call(boxes, function (box) {
+        var row = box.closest('.parameterlisten-file-row');
+        var id = row ? row.getAttribute('data-pl-file-id') : '';
+        var item = findStammItemByFileId(fab, id);
+        if (item) items.push(item);
+      });
+      if (items.length < 2) {
+        setFnComparePanel(splitEl, '<p class="parameterlisten-fn-compare-hint">Dateien für den Vergleich nicht gefunden.</p>');
+        return;
+      }
+      items.sort(function (a, b) {
+        var ta = Date.parse(String(anlagenstammFileDisplayDatetime(a) || '').replace(' ', 'T'));
+        var tb = Date.parse(String(anlagenstammFileDisplayDatetime(b) || '').replace(' ', 'T'));
+        if (isNaN(ta)) ta = 0;
+        if (isNaN(tb)) tb = 0;
+        return ta - tb;
+      });
+      var fromF = items[0];
+      var toF = items[1];
+      var fromId = fromF.id || fromF.local_id;
+      var toId = toF.id || toF.local_id;
+      setFnComparePanel(splitEl, '<p class="parameterlisten-fn-compare-hint">Vergleich wird berechnet …</p>');
+      try {
+        var body = parameterlistenDispoBody({
+          fab: fab,
+          from_file_id: fromId,
+          to_file_id: toId
+        });
+        var r = await fetch(API_BASE + '/api/anlagenstamm_parameter_trend', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+          body: JSON.stringify(body)
+        });
+        var data = await r.json().catch(function () { return {}; });
+        if (!r.ok || !data.ok) {
+          throw new Error((data && data.error) ? data.error : ('HTTP ' + r.status));
+        }
+        var changes = (data.changes || []).filter(function (c) { return !isIgnorableDashChange(c); });
+        var sum = {
+          changed: changes.filter(function (c) { return c.status === 'changed'; }).length,
+          added: changes.filter(function (c) { return c.status === 'added'; }).length,
+          removed: changes.filter(function (c) { return c.status === 'removed'; }).length
+        };
+        var fromName = (data.from_file && data.from_file.original_filename) || fromF.original_filename || '';
+        var toName = (data.to_file && data.to_file.original_filename) || toF.original_filename || '';
+        var headExtra = escapeHtml(fromName) + ' → ' + escapeHtml(toName) +
+          ' · geändert ' + sum.changed +
+          ', neu ' + sum.added +
+          ', entfernt ' + sum.removed;
+        var table = typeof renderAspTrendChangesTable === 'function'
+          ? renderAspTrendChangesTable(changes, false)
+          : '<p class="parameterlisten-fn-compare-hint">Vergleichstabelle nicht verfügbar.</p>';
+        var panel = splitEl.querySelector('.parameterlisten-fn-compare');
+        if (panel) {
+          panel.innerHTML = '<div class="parameterlisten-fn-compare-head">Vergleich</div>' +
+            '<p class="parameterlisten-fn-compare-hint">' + headExtra + '</p>' + table;
+        }
+      } catch (e) {
+        var msg = e && e.message ? e.message : String(e);
+        setFnComparePanel(splitEl, '<p class="parameterlisten-fn-compare-hint">Fehler: ' + escapeHtml(msg) + '</p>');
+      }
+    }
+
+    function onFnCompareCheckChange(cb) {
+      var splitEl = cb && cb.closest ? cb.closest('.parameterlisten-fn-split') : null;
+      if (!splitEl) return;
+      var checked = splitEl.querySelectorAll('input[data-pl-compare]:checked');
+      if (cb.checked && checked.length > 2) {
+        Array.prototype.forEach.call(checked, function (box) {
+          if (box !== cb && splitEl.querySelectorAll('input[data-pl-compare]:checked').length > 2) {
+            box.checked = false;
+          }
+        });
+      }
+      var still = splitEl.querySelectorAll('input[data-pl-compare]:checked');
+      if (still.length === 2) runFnCompare(splitEl);
+      else resetFnCompareHint(splitEl);
+    }
+
+    async function loadParameterlistenLists() {
+      if (!jobSelect) return;
+      var jobId = jobSelect.value ? parseInt(jobSelect.value, 10) : 0;
+      if (!jobId) {
+        renderJobUploads([]);
+        if (jobUploadsEl) jobUploadsEl.innerHTML = '<p class="parameterlisten-empty">Bitte einen Auftrag wählen.</p>';
+        if (anlagenstammEl) anlagenstammEl.innerHTML = '<p class="parameterlisten-empty">Bitte einen Auftrag wählen.</p>';
+        return;
+      }
+      if (jobUploadsEl) jobUploadsEl.innerHTML = '<p class="parameterlisten-empty">Lade …</p>';
+      if (anlagenstammEl) anlagenstammEl.innerHTML = '<p class="parameterlisten-empty">Lade …</p>';
+      try {
+        var r = await fetch(API_BASE + '/api/protokolle/parameterlisten/list', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+          body: JSON.stringify(parameterlistenDispoBody({ job_id: jobId }))
+        });
+        var data = await r.json().catch(function () { return {}; });
+        if (!r.ok || !data.ok) {
+          var err = (data && data.error) ? data.error : ('HTTP ' + r.status);
+          if (jobUploadsEl) jobUploadsEl.innerHTML = '<p class="parameterlisten-empty">Fehler: ' + escapeHtml(err) + '</p>';
+          if (anlagenstammEl) anlagenstammEl.innerHTML = '<p class="parameterlisten-empty">Fehler: ' + escapeHtml(err) + '</p>';
+          return;
+        }
+        renderJobUploads(Array.isArray(data.job_uploads) ? data.job_uploads : []);
+        renderAnlagenstammGroups(Array.isArray(data.anlagenstamm) ? data.anlagenstamm : []);
+      } catch (e) {
+        var msg = e && e.message ? e.message : String(e);
+        if (jobUploadsEl) jobUploadsEl.innerHTML = '<p class="parameterlisten-empty">Fehler: ' + escapeHtml(msg) + '</p>';
+        if (anlagenstammEl) anlagenstammEl.innerHTML = '<p class="parameterlisten-empty">Fehler: ' + escapeHtml(msg) + '</p>';
+      }
+    }
+
+    function decodeBase64ToUint8(b64) {
+      var bin = atob(b64);
+      var out = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+
+    function parameterlistenDispoBody(extra) {
+      var body = anlagenstammDispoBody(extra);
+      if (typeof getDispoPassword === 'function') {
+        body.serverPassword = getDispoPassword();
+      } else if (typeof getServerPassword === 'function') {
+        body.serverPassword = getServerPassword();
+      }
+      return body;
+    }
+
+    function itemActionPayload(kind, item) {
+      var jobId = jobSelect && jobSelect.value ? parseInt(jobSelect.value, 10) : 0;
+      var payload = parameterlistenDispoBody({
+        job_id: jobId,
+        source: kind === 'stamm' ? 'anlagenstamm' : 'job'
+      });
+      if (kind === 'job') {
+        if (item.id) payload.upload_id = item.id;
+        if (item.sha256) payload.sha256 = item.sha256;
+        if (item.fab) payload.fab = item.fab;
+      } else {
+        payload.fab = item.fab;
+        payload.file_id = item.id || item.local_id;
+        if (item.sha256) payload.sha256 = item.sha256;
+      }
+      return payload;
+    }
+
+    async function openStoredParameterFile(kind, item) {
+      var payload = itemActionPayload(kind, item);
+      var r = await fetch(API_BASE + '/api/protokolle/parameterlisten/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+        body: JSON.stringify(payload)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok || !data.content_base64) {
+        throw new Error((data && data.error) ? data.error : 'Datei konnte nicht gelesen werden.');
+      }
+      var bytes = decodeBase64ToUint8(data.content_base64);
+      var text = decodeParameterText(bytes.buffer);
+      if (previewWrap) previewWrap.hidden = false;
+      if (previewHintEl) previewHintEl.hidden = true;
+      if (previewLabel) previewLabel.textContent = 'Rohdaten – ' + (data.filename || item.original_filename || '');
+      if (previewEl) previewEl.innerHTML = buildPreviewHtml(text, data.filename || item.original_filename || '');
+      try {
+        previewWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (_) {}
+    }
+
+    async function downloadStoredParameterFile(kind, item) {
+      var payload = itemActionPayload(kind, item);
+      payload.as_download = true;
+      var r = await fetch(API_BASE + '/api/protokolle/parameterlisten/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) {
+        var errJ = await r.json().catch(function () { return {}; });
+        throw new Error((errJ && errJ.error) ? errJ.error : 'Download fehlgeschlagen.');
+      }
+      var blob = await r.blob();
+      var name = item.original_filename || item.name || 'parameterliste';
+      var xName = r.headers.get('x-download-filename') || '';
+      if (xName) {
+        try { name = decodeURIComponent(xName); } catch (_) { name = xName; }
+      }
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      if (typeof showToast === 'function') showToast('Download gestartet.');
+    }
+
+    async function pdfStoredParameterFile(kind, item) {
+      var payload = itemActionPayload(kind, item);
+      var r = await fetch(API_BASE + '/api/protokolle/parameterlisten/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+        body: JSON.stringify(payload)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        throw new Error((data && data.error) ? data.error : 'PDF fehlgeschlagen.');
+      }
+      if (typeof maybeOpenGeneratedPdfs === 'function') await maybeOpenGeneratedPdfs(data);
+    }
+
+    function closeDeleteModal() {
+      deletePending = null;
+      if (deleteModal) deleteModal.hidden = true;
+    }
+
+    function openDeleteModal(item) {
+      deletePending = item;
+      if (deleteBodyEl) {
+        deleteBodyEl.textContent =
+          'Parameterdatei „' + (item.original_filename || 'Datei') +
+          '“ wirklich löschen? Sie wird lokal, im Backup und im Anlagenstamm (Dispo) entfernt.';
+      }
+      if (deleteModal) deleteModal.hidden = false;
+    }
+
+    async function confirmDeletePending() {
+      var item = deletePending;
+      closeDeleteModal();
+      if (!item) return;
+      var payload = itemActionPayload('job', item);
+      var r = await fetch(API_BASE + '/api/protokolle/parameterlisten/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId() || '') },
+        body: JSON.stringify(payload)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        throw new Error((data && data.error) ? data.error : 'Löschen fehlgeschlagen.');
+      }
+      if (data.dispo_delete_error && typeof showToast === 'function') {
+        showToast('Lokal gelöscht. Dispo: ' + data.dispo_delete_error);
+      } else if (typeof showToast === 'function') {
+        showToast('Parameterdatei gelöscht.');
+      }
+      await loadParameterlistenLists();
+    }
+
+    function bindParamListClicks(host) {
+      if (!host) return;
+      host.addEventListener('click', function (ev) {
+        var btn = ev.target && ev.target.closest ? ev.target.closest('[data-pl-act]') : null;
+        if (!btn) return;
+        var row = btn.closest('.parameterlisten-file-row');
+        if (!row) return;
+        var kind = row.getAttribute('data-pl-kind') || 'job';
+        var act = btn.getAttribute('data-pl-act');
+        var item = null;
+        if (kind === 'job') {
+          var rows = host.querySelectorAll('.parameterlisten-file-row');
+          var idx = Array.prototype.indexOf.call(rows, row);
+          item = (host._plItems || [])[idx];
+        } else {
+          var groups = anlagenstammEl && anlagenstammEl._plGroups ? anlagenstammEl._plGroups : [];
+          var details = row.closest('details');
+          var gi = details ? Array.prototype.indexOf.call(host.querySelectorAll('details'), details) : -1;
+          var group = gi >= 0 ? groups[gi] : null;
+          var files = group && group.files ? group.files : [];
+          var fileRows = details ? details.querySelectorAll('.parameterlisten-file-row') : [];
+          var fi = Array.prototype.indexOf.call(fileRows, row);
+          item = files[fi] ? Object.assign({ fab: group.fab }, files[fi]) : null;
+        }
+        if (!item) return;
+        var run = Promise.resolve();
+        if (act === 'open') run = openStoredParameterFile(kind, item);
+        else if (act === 'download') run = downloadStoredParameterFile(kind, item);
+        else if (act === 'pdf') run = pdfStoredParameterFile(kind, item);
+        else if (act === 'delete') {
+          openDeleteModal(item);
+          return;
+        }
+        run.catch(function (err) {
+          var msg = err && err.message ? err.message : String(err);
+          if (typeof showToast === 'function') showToast(msg);
+          else alert(msg);
+        });
+      });
+    }
+
+    bindParamListClicks(jobUploadsEl);
+    bindParamListClicks(anlagenstammEl);
+    if (anlagenstammEl) {
+      anlagenstammEl.addEventListener('change', function (ev) {
+        var cb = ev.target && ev.target.closest ? ev.target.closest('input[data-pl-compare]') : null;
+        if (!cb) return;
+        onFnCompareCheckChange(cb);
+      });
+    }
+    if (jobSelect) {
+      jobSelect.addEventListener('change', function () {
+        loadParameterlistenLists();
+      });
+    }
+    var deleteCancel = document.getElementById('parameterlistenDeleteCancel');
+    var deleteConfirm = document.getElementById('parameterlistenDeleteConfirm');
+    if (deleteCancel) deleteCancel.addEventListener('click', closeDeleteModal);
+    if (deleteConfirm) {
+      deleteConfirm.addEventListener('click', function () {
+        confirmDeletePending().catch(function (err) {
+          var msg = err && err.message ? err.message : String(err);
+          if (typeof showToast === 'function') showToast(msg);
+          else alert(msg);
+        });
+      });
+    }
+    if (deleteModal) {
+      deleteModal.addEventListener('click', function (ev) {
+        if (ev.target === deleteModal) closeDeleteModal();
+      });
+    }
+
     window.openProtokolleParameterlisten = function () {
-      loadParameterlistenJobs();
+      loadParameterlistenJobs().then(function () {
+        loadParameterlistenLists();
+      });
     };
 
     function escapeHtml(s) {
@@ -26434,7 +26957,7 @@
             var r = await fetch(API_BASE + '/api/protokolle/parameterlisten', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
-              body: JSON.stringify(anlagenstammDispoBody({
+              body: JSON.stringify(parameterlistenDispoBody({
                 job_id: jobId,
                 filename: filename,
                 content: content,
@@ -26495,6 +27018,7 @@
           previewIndex = -1;
           renderSelectedFiles();
         }
+        loadParameterlistenLists();
       });
     }
 

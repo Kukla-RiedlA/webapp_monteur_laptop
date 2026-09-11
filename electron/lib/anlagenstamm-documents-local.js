@@ -1,6 +1,7 @@
 'use strict';
 
 const { listParameterFilesByFab, normalizeFabDigits } = require('./anlagenstamm-local');
+const { resolveDisplayDatetime } = require('./anlagenstamm-filename-datetime');
 
 const KIND_TO_SLUG = {
   kontrollwiegung: 'wiegeprotokoll',
@@ -86,7 +87,11 @@ function mapParameterDocs(db, fabNorm) {
     if (tech) notes += ' · ' + tech;
     if (n > 0) notes += ' · ' + n + ' Werte';
     if (String(row.source_file_status || '') === 'original_deleted') notes += ' · Originaldatei gelöscht';
-    const name = String(row.original_filename || 'Parameterliste');
+      const name = String(row.original_filename || 'Parameterliste');
+    const display = resolveDisplayDatetime({
+      filename: name,
+      fallbackDatetime: row.uploaded_at,
+    }) || String(row.uploaded_at || '');
     const serverId = row.server_file_id != null ? Number(row.server_file_id) : 0;
     return {
       id: 0,
@@ -98,9 +103,9 @@ function mapParameterDocs(db, fabNorm) {
       mime: String(row.mime || 'application/octet-stream'),
       size_bytes: row.size != null ? Number(row.size) : 0,
       notes,
-      document_date: String(row.uploaded_at || '').slice(0, 10),
-      created_at: String(row.uploaded_at || ''),
-      display_datetime: String(row.uploaded_at || ''),
+      document_date: display.slice(0, 10),
+      created_at: display,
+      display_datetime: display,
       job_id: null,
       created_by: row.technician_id != null ? Number(row.technician_id) : null,
       uploaded_by_username: tech,

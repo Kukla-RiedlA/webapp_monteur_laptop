@@ -17,6 +17,13 @@ const {
   deleteImageThumbCacheScope,
   ensureImageThumbCacheSchema,
 } = require('./image-thumb-cache');
+const {
+  resolveDisplayDatetime,
+  decorateParameterListItem,
+  sortParameterFilesByDisplayDesc,
+  sortParameterFilesByDisplayAsc,
+  mergeParameterFileLists,
+} = require('./anlagenstamm-filename-datetime');
 
 const DISPO_EXPORT_CHUNK_TIMEOUT_MS = 90 * 1000;
 
@@ -2559,9 +2566,14 @@ function upsertParameterFile(db, payload) {
   const source = sanitizeSource(payload && payload.source);
   const sha256 = String((payload && payload.sha256) || '').trim();
   if (!sha256) return { ok: false, error: 'sha256 fehlt' };
-  const uploadedAt = String((payload && payload.uploaded_at) || '').trim() || new Date().toISOString().replace('T', ' ').slice(0, 19);
   const originalFilename = String((payload && payload.original_filename) || '').trim();
   if (!originalFilename) return { ok: false, error: 'original_filename fehlt' };
+  const uploadedAt =
+    resolveDisplayDatetime({
+      filename: originalFilename,
+      sourceMtimeIso: payload && (payload.mtime || payload.source_mtime),
+      fallbackDatetime: payload && payload.uploaded_at,
+    }) || new Date().toISOString().replace('T', ' ').slice(0, 19);
   const sourceFileStatus = String((payload && payload.source_file_status) || '').trim() === 'original_deleted'
     ? 'original_deleted'
     : 'present';
@@ -2639,13 +2651,14 @@ function cacheParameterFilesFromDispo(db, fab, files) {
     if (!f || typeof f !== 'object') continue;
     const sha = String(f.sha256 || '').trim();
     if (!sha) continue;
+    const decorated = decorateParameterListItem(f);
     upsertParameterFile(db, {
       fab: fabNorm,
       source: f.source,
       source_file_status: f.source_file_status || 'present',
       technician_id: f.technician_id,
       technician_name: f.technician_name,
-      uploaded_at: f.uploaded_at,
+      uploaded_at: decorated.uploaded_at,
       original_filename: f.original_filename,
       mime: f.mime,
       size: f.size,
@@ -2689,10 +2702,31 @@ function markMissingProjekteNeuFiles(db, fab, presentSourcePaths) {
   return changed;
 }
 
+function deleteParameterFileByFabSha(db, fab, sha256, source) {
+  ensureAnlagenstammLocalSchema(db);
+  const fabNorm = normalizeFabDigits(fab);
+  const sha = String(sha256 || '').trim().toLowerCase();
+  const src = sanitizeSource(source);
+  if (!fabNorm || !sha) return { ok: false, error: 'fab und sha256 erforderlich.' };
+  if (src !== 'upload') {
+    return { ok: false, error: 'Nur hochgeladene Parameterlisten können gelöscht werden.', code: 'not_upload' };
+  }
+  const row = db
+    .prepare(
+      `SELECT id, source, storage_relpath, source_path FROM anlagenstamm_parameter_files
+       WHERE fab = ? AND sha256 = ? AND source = ? LIMIT 1`,
+    )
+    .get(fabNorm, sha, src);
+  if (!row) return { ok: true, deleted: 0 };
+  db.prepare('DELETE FROM anlagenstamm_parameter_entries WHERE file_id = ?').run(row.id);
+  db.prepare('DELETE FROM anlagenstamm_parameter_files WHERE id = ?').run(row.id);
+  return { ok: true, deleted: 1, id: Number(row.id) };
+}
+
 function listParameterFilesByFab(db, fab) {
   const fabNorm = normalizeFabDigits(fab);
   if (!fabNorm) return [];
-  return db
+  const rows = db
     .prepare(
       `SELECT f.id, f.fab, f.source, f.source_file_status, f.technician_id, f.technician_name,
               f.uploaded_at, f.original_filename, f.mime, f.size, f.sha256, f.storage_relpath,
@@ -2703,6 +2737,7 @@ function listParameterFilesByFab(db, fab) {
        ORDER BY datetime(f.uploaded_at) DESC, f.id DESC`,
     )
     .all(fabNorm);
+  return sortParameterFilesByDisplayDesc(rows.map((row) => decorateParameterListItem(row)));
 }
 
 function listParameterEntriesByFileId(db, fileId) {
@@ -2768,14 +2803,17 @@ function compareParameterFilesById(db, fab, fromFileId, toFileId) {
 function buildParameterTrendChain(db, fab) {
   const fabNorm = normalizeFabDigits(fab);
   if (!fabNorm) return { ok: false, error: 'Ungültige Fabrikationsnummer.' };
-  const files = db
-    .prepare(
-      `SELECT id, uploaded_at, original_filename
-       FROM anlagenstamm_parameter_files
-       WHERE fab = ?
-       ORDER BY datetime(uploaded_at) ASC, id ASC`,
-    )
-    .all(fabNorm);
+  const files = sortParameterFilesByDisplayAsc(
+    db
+      .prepare(
+        `SELECT id, uploaded_at, original_filename
+         FROM anlagenstamm_parameter_files
+         WHERE fab = ?
+         ORDER BY datetime(uploaded_at) ASC, id ASC`,
+      )
+      .all(fabNorm)
+      .map((row) => decorateParameterListItem(row)),
+  );
   if (files.length < 2) {
     return {
       ok: true,
@@ -2866,9 +2904,14 @@ module.exports = {
   upsertParameterFile,
   cacheParameterFilesFromDispo,
   listParameterFilesByFab,
+  deleteParameterFileByFabSha,
   markMissingProjekteNeuFiles,
   normalizeFabDigits,
   listParameterEntriesByFileId,
   compareParameterFilesById,
   buildParameterTrendChain,
+  decorateParameterListItem,
+  sortParameterFilesByDisplayDesc,
+  mergeParameterFileLists,
+  resolveDisplayDatetime,
 };

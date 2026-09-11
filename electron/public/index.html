@@ -480,7 +480,7 @@
     .view-protokolle-sub { display: none; }
     .view-protokolle-sub.active { display: block; }
     #viewProtokolleParameterlisten .card {
-      max-width: 42rem;
+      max-width: none;
     }
     .parameterlisten-file-list-wrap,
     .parameterlisten-preview-wrap { margin-bottom: 0.75rem; }
@@ -637,6 +637,192 @@
       word-break: break-word;
     }
     .parameterlisten-preview-note {
+      margin: 0.45rem 0 0;
+      font-size: 0.82rem;
+      color: var(--muted, #4b5563);
+    }
+    .parameterlisten-lists { margin-top: 0.35rem; }
+    .parameterlisten-empty {
+      margin: 0;
+      padding: 0.65rem 0.75rem;
+      color: var(--muted, #4b5563);
+      font-size: 0.9rem;
+    }
+    .parameterlisten-file-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.5rem 0.75rem;
+      align-items: center;
+      padding: 0.55rem 0.7rem;
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+    }
+    .parameterlisten-file-row:last-child { border-bottom: none; }
+    .parameterlisten-file-main { min-width: 0; }
+    .parameterlisten-file-title {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem 0.5rem;
+      font-weight: 600;
+      font-size: 0.92rem;
+    }
+    .parameterlisten-file-title span.name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .parameterlisten-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      background: #eefaf5;
+      color: #0c6a4d;
+      border: 1px solid #cfe8d1;
+    }
+    .parameterlisten-pill.is-backup {
+      background: #fff7ed;
+      color: #9a3412;
+      border-color: #fed7aa;
+    }
+    .parameterlisten-file-meta {
+      margin-top: 0.15rem;
+      font-size: 0.78rem;
+      color: var(--muted, #4b5563);
+    }
+    .parameterlisten-file-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      justify-content: flex-end;
+    }
+    .parameterlisten-file-actions .btn {
+      padding: 0.28rem 0.55rem;
+      font-size: 0.82rem;
+    }
+    .parameterlisten-delete {
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+    }
+    .parameterlisten-delete:hover { background: rgba(185, 28, 28, 0.1); }
+    .parameterlisten-delete img { width: 16px; height: 16px; }
+    .parameterlisten-file-row[data-pl-kind="stamm"] {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+    .parameterlisten-compare-check {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.1rem 0.15rem 0.1rem 0;
+    }
+    .parameterlisten-compare-check input {
+      width: 1.05rem;
+      height: 1.05rem;
+      accent-color: var(--kukla-primary, #0e7b5a);
+      cursor: pointer;
+    }
+    .parameterlisten-fn-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 0.75rem;
+      align-items: start;
+      margin-bottom: 0.75rem;
+    }
+    .parameterlisten-fn-group {
+      border: 1px solid #cfe8d1;
+      border-radius: 10px;
+      margin-bottom: 0;
+      background: #fff;
+      overflow: visible;
+      min-width: 0;
+    }
+    .parameterlisten-fn-group > summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 0.55rem 0.75rem;
+      font-weight: 600;
+      background: #eefaf5;
+      color: #0c6a4d;
+    }
+    .parameterlisten-fn-group > summary::-webkit-details-marker { display: none; }
+    .parameterlisten-fn-compare {
+      border: 1px solid #cfe8d1;
+      border-radius: 10px;
+      background: #fff;
+      min-width: 0;
+      min-height: 4.5rem;
+      overflow: auto;
+      max-height: 32rem;
+    }
+    .parameterlisten-fn-compare-head {
+      padding: 0.55rem 0.75rem;
+      font-weight: 600;
+      background: #eefaf5;
+      color: #0c6a4d;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    .parameterlisten-fn-compare .anlagenstamm-trend-table {
+      font-size: 0.8rem;
+    }
+    .parameterlisten-fn-compare-hint {
+      margin: 0;
+      padding: 0.7rem 0.75rem;
+      color: var(--muted, #4b5563);
+      font-size: 0.85rem;
+    }
+    @media (max-width: 900px) {
+      .parameterlisten-fn-split { grid-template-columns: 1fr; }
+    }
+    .parameterlisten-modal[hidden] { display: none !important; }
+    .parameterlisten-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 4000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(17, 24, 39, 0.45);
+      padding: 1rem;
+    }
+    .parameterlisten-modal-dialog {
+      width: min(28rem, 100%);
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #cfe8d1;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+      overflow: hidden;
+    }
+    .parameterlisten-modal-head {
+      padding: 0.7rem 0.9rem;
+      background: #eefaf5;
+      color: #0c6a4d;
+      font-weight: 700;
+    }
+    .parameterlisten-modal-body {
+      padding: 0.9rem;
+      color: #1a1a1a;
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+    .parameterlisten-modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.45rem;
+      padding: 0.65rem 0.9rem 0.9rem;
+    }
       margin: 0.4rem 0 0;
       font-size: 0.75rem;
       color: var(--muted);
@@ -2548,30 +2734,68 @@
     </div>
   </main>
   <main id="viewProtokolleParameterlisten" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Parameterlisten">
-    <div class="card">
-      <h2>Parameterlisten</h2>
-      <div class="form-group" style="margin-bottom:0.75rem">
-        <label>Auftrag</label>
-        <select id="parameterlistenJob" class="dienstreise-select">
-          <option value="">– Bitte wählen –</option>
-        </select>
+    <div class="card sp-v2-card">
+      <div class="sp-v2-topbar">
+        <h2 class="sp-v2-page-title">Parameterlisten</h2>
       </div>
-      <div class="form-group" style="margin-bottom:0.75rem">
-        <label>Parameterdateien</label>
-        <input type="file" id="parameterlistenFiles" accept=".csv,.pal,.pa3,.txt,.pa4,.pa5" multiple style="position:absolute;width:0.1px;height:0.1px;opacity:0;overflow:hidden">
-        <button type="button" class="btn btn-ghost" id="btnParameterlistenChooseFiles">Datei auswählen …</button>
+      <div class="sp-v2-form">
+        <section class="sp-v2-section" aria-labelledby="plV2SecUpload">
+          <header class="sp-v2-section-head" id="plV2SecUpload"><span class="sp-v2-num">1</span> Dateien hochladen</header>
+          <div class="sp-v2-section-body">
+            <div class="form-group" style="margin-bottom:0.75rem">
+              <label for="parameterlistenJob">Auftrag</label>
+              <select id="parameterlistenJob" class="dienstreise-select">
+                <option value="">– Bitte wählen –</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0.75rem">
+              <label>Parameterdateien</label>
+              <input type="file" id="parameterlistenFiles" accept=".csv,.pal,.pa3,.txt,.pa4,.pa5" multiple style="position:absolute;width:0.1px;height:0.1px;opacity:0;overflow:hidden">
+              <button type="button" class="btn btn-ghost" id="btnParameterlistenChooseFiles">Datei auswählen …</button>
+            </div>
+            <div id="parameterlistenFileListWrap" class="parameterlisten-file-list-wrap" hidden>
+              <label>Ausgewählte Dateien</label>
+              <ul id="parameterlistenFileList" class="parameterlisten-file-list"></ul>
+              <p id="parameterlistenPreviewHint" class="parameterlisten-preview-hint">Datei in der Liste anklicken, um die Vorschau zu sehen.</p>
+            </div>
+            <div id="parameterlistenPreviewWrap" class="parameterlisten-preview-wrap" hidden>
+              <label id="parameterlistenPreviewLabel">Rohdaten</label>
+              <div id="parameterlistenPreview" class="parameterlisten-preview"></div>
+            </div>
+            <button type="button" class="btn btn-primary" id="btnParameterlistenUpload">Hochladen und PDFs erzeugen</button>
+            <div id="parameterlistenResults" class="parameterlisten-results" style="margin-top:1rem;display:none"></div>
+          </div>
+        </section>
+        <section class="sp-v2-section" aria-labelledby="plV2SecJob">
+          <header class="sp-v2-section-head" id="plV2SecJob"><span class="sp-v2-num">2</span> In diesem Auftrag</header>
+          <div class="sp-v2-section-body">
+            <p class="muted" style="margin:0 0 0.5rem;font-size:0.85rem">Hochgeladene Parameterlisten inkl. Backup nach Freigabe und erneuter Annahme.</p>
+            <div id="parameterlistenJobUploads" class="parameterlisten-lists">
+              <p class="parameterlisten-empty">Bitte einen Auftrag wählen.</p>
+            </div>
+          </div>
+        </section>
+        <section class="sp-v2-section" aria-labelledby="plV2SecStamm">
+          <header class="sp-v2-section-head" id="plV2SecStamm"><span class="sp-v2-num">3</span> Anlagenstamm nach FN</header>
+          <div class="sp-v2-section-body">
+            <div id="parameterlistenAnlagenstamm" class="parameterlisten-lists">
+              <p class="parameterlisten-empty">Bitte einen Auftrag wählen.</p>
+            </div>
+          </div>
+        </section>
       </div>
-      <div id="parameterlistenFileListWrap" class="parameterlisten-file-list-wrap" hidden>
-        <label>Ausgewählte Dateien</label>
-        <ul id="parameterlistenFileList" class="parameterlisten-file-list"></ul>
-        <p id="parameterlistenPreviewHint" class="parameterlisten-preview-hint">Datei in der Liste anklicken, um die Vorschau zu sehen.</p>
+    </div>
+    <div id="parameterlistenDeleteModal" class="parameterlisten-modal" hidden>
+      <div class="parameterlisten-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="parameterlistenDeleteTitle">
+        <div class="parameterlisten-modal-head" id="parameterlistenDeleteTitle">Parameterdatei löschen</div>
+        <div class="parameterlisten-modal-body" id="parameterlistenDeleteBody">
+          Parameterdatei wirklich löschen? Sie wird lokal, im Backup und im Anlagenstamm (Dispo) entfernt.
+        </div>
+        <div class="parameterlisten-modal-footer">
+          <button type="button" class="btn btn-ghost" id="parameterlistenDeleteCancel">Abbrechen</button>
+          <button type="button" class="btn btn-primary" id="parameterlistenDeleteConfirm">Löschen</button>
+        </div>
       </div>
-      <div id="parameterlistenPreviewWrap" class="parameterlisten-preview-wrap" hidden>
-        <label id="parameterlistenPreviewLabel">Rohdaten</label>
-        <div id="parameterlistenPreview" class="parameterlisten-preview"></div>
-      </div>
-      <button type="button" class="btn btn-primary" id="btnParameterlistenUpload">Hochladen und PDFs erzeugen</button>
-      <div id="parameterlistenResults" class="parameterlisten-results" style="margin-top:1rem;display:none"></div>
     </div>
   </main>
   <main id="viewProtokolleKontrollwiegungen" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Kontrollwiegungen">

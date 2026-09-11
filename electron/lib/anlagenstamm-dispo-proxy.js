@@ -335,6 +335,15 @@ async function proxyAnlagenstammParameterIngest(payload) {
   return proxyDispoPostJson(payload, '/dispo_api/api/anlagenstamm_parameter_ingest.php', body);
 }
 
+async function proxyAnlagenstammParameterDelete(payload) {
+  const body = {
+    fab: String(payload.fab || '').trim(),
+    file_id: payload.file_id != null ? Number(payload.file_id) : 0,
+    sha256: String(payload.sha256 || '').trim(),
+  };
+  return proxyDispoPostJson(payload, '/dispo_api/api/anlagenstamm_parameter_delete.php', body);
+}
+
 async function proxyAnlagenstammParameterDownloadOnce(payload, base) {
   const technicianId = parseInt(String(payload.technician_id ?? payload.technicianId ?? '0'), 10);
   const authHeader = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
@@ -401,6 +410,7 @@ module.exports = {
   proxyAnlagenstammParameterFilesList,
   proxyAnlagenstammParameterTrend,
   proxyAnlagenstammParameterIngest,
+  proxyAnlagenstammParameterDelete,
   proxyAnlagenstammParameterDownload,
   authHeaderFromCredentials,
   dispoMonteurFetchHeaders,

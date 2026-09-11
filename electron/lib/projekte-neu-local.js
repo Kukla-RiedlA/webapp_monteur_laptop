@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { fsExistsSync, fsStatSync, fsReaddirSync, fsReaddir, fsStat } = require('./win32-long-path');
+const { isSupportedParameterFileName } = require('./anlagenstamm-parameter-parser');
 
 const DEFAULT_MAX_DEPTH = 25;
 const DEFAULT_MAX_ENTRIES = 15000;
@@ -385,6 +386,65 @@ function scanProjekteNeuTree(absRoot, opts) {
 }
 
 /**
+ * Rekursive Suche nur nach Parameterlisten (CSV/PAL/PA3/…), inkl. Montage.
+ * Bilder und sonstige Dateien zählen nicht gegen das Limit.
+ *
+ * @param {string} absRoot
+ * @param {{ maxDepth?: number, maxFiles?: number }} [opts]
+ * @returns {Array<{ rel: string, name: string, abs: string, size: number, mtime: number }>}
+ */
+function scanProjekteNeuParameterFiles(absRoot, opts) {
+  const o = opts && typeof opts === 'object' ? opts : {};
+  const maxDepth = o.maxDepth != null ? o.maxDepth : DEFAULT_MAX_DEPTH;
+  const maxFiles = o.maxFiles != null ? o.maxFiles : 400;
+  const out = [];
+  if (!absRoot || !fsExistsSync(absRoot)) return out;
+  try {
+    const stRoot = fsStatSync(absRoot);
+    if (!stRoot || !stRoot.isDirectory()) return out;
+  } catch (_) {
+    return out;
+  }
+
+  function walk(absDir, relFromFab, depth) {
+    if (depth > maxDepth || out.length >= maxFiles) return;
+    let names;
+    try {
+      names = fsReaddirSync(absDir);
+    } catch (_) {
+      return;
+    }
+    for (const name of names) {
+      if (isIgnorableDirEntry(name)) continue;
+      if (out.length >= maxFiles) return;
+      const full = path.join(absDir, name);
+      const rel = relFromFab ? relFromFab + '/' + name : name;
+      let st;
+      try {
+        st = fsStatSync(full);
+      } catch (_) {
+        continue;
+      }
+      if (st.isDirectory()) {
+        walk(full, rel, depth + 1);
+        continue;
+      }
+      if (!st.isFile() || !isSupportedParameterFileName(name)) continue;
+      out.push({
+        rel: String(rel).replace(/\\/g, '/'),
+        name,
+        abs: full,
+        size: st.size || 0,
+        mtime: Math.floor((st.mtimeMs || 0) / 1000),
+      });
+    }
+  }
+
+  walk(absRoot, '', 0);
+  return out;
+}
+
+/**
  * @param {string} dokumenteMonteurPath
  * @param {string} fab
  * @returns {{ root: string, folderName: string }|null}
@@ -437,6 +497,7 @@ module.exports = {
   pickFnRangeDir,
   safeResolveUnderRoot,
   scanProjekteNeuTree,
+  scanProjekteNeuParameterFiles,
   resolveProjekteNeuRoot,
   isIgnorableDirEntry,
 };

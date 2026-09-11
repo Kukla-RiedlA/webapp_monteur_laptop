@@ -115,6 +115,7 @@ const {
   proxyAnlagenstammParameterTrend,
   proxyAnlagenstammParameterIngest,
   proxyAnlagenstammParameterDownload,
+  proxyAnlagenstammParameterDelete,
 } = require('./lib/anlagenstamm-dispo-proxy');
 const {
   buildDispoBaseCandidates,
@@ -132,6 +133,7 @@ const {
   resolveProjekteNeuRoot,
   resolveCanonicalFolderFromDirList,
   scanProjekteNeuTree,
+  scanProjekteNeuParameterFiles,
   safeResolveUnderRoot,
   isIgnorableDirEntry,
   findMonteurFolderForFab,
@@ -308,6 +310,11 @@ const {
   upsertParameterFile,
   cacheParameterFilesFromDispo,
   listParameterFilesByFab,
+  deleteParameterFileByFabSha,
+  decorateParameterListItem,
+  sortParameterFilesByDisplayDesc,
+  mergeParameterFileLists,
+  resolveDisplayDatetime,
   markMissingProjekteNeuFiles,
   compareParameterFilesById,
   buildParameterTrendChain,
@@ -348,6 +355,7 @@ const {
   parseParameterFile,
   normalizeFabDigits: normalizeParameterFab,
 } = require('./lib/anlagenstamm-parameter-parser');
+const jobParameterUploads = require('./lib/job-parameter-uploads');
 
 /** Felder Leistungszeile / Anlagenstamm (Abgleich Projektdaten ↔ Sync). */
 const JOB_FAB_STAMM_KEYS = [
@@ -1998,7 +2006,13 @@ function createApp(db) {
     if (!parsed || !parsed.ok) return { ok: false, skipped: true, reason: 'parse_failed' };
     const usedFab = normalizeParameterFab(parsed.used_fab);
     if (!usedFab) return { ok: false, skipped: true, reason: 'fab_missing' };
-    const uploadedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const fileLabel = parsed.file_name || path.basename(fileName);
+    const uploadedAt =
+      resolveDisplayDatetime({
+        filename: fileLabel,
+        sourceMtimeIso: opts && opts.mtime,
+        fallbackDatetime: opts && opts.uploadedAt,
+      }) || new Date().toISOString().replace('T', ' ').slice(0, 19);
     const insert = upsertParameterFile(db, {
       fab: usedFab,
       source,
@@ -2006,7 +2020,7 @@ function createApp(db) {
       technician_id: opts && opts.technicianId != null ? Number(opts.technicianId) : null,
       technician_name: opts && opts.technicianName ? String(opts.technicianName) : null,
       uploaded_at: uploadedAt,
-      original_filename: parsed.file_name || path.basename(fileName),
+      original_filename: fileLabel,
       mime: opts && opts.mime ? String(opts.mime) : 'application/octet-stream',
       size: buf.length,
       sha256: parsed.sha256,
@@ -2046,23 +2060,40 @@ function createApp(db) {
     }
   }
 
-  function ingestProjekteNeuParameterTree(localJobId, fab, tree) {
+  function ingestProjekteNeuParameterTree(localJobId, fab, tree, opts) {
     const fabNorm = normalizeParameterFab(fab);
     if (!fabNorm) return { scanned: 0, ingested: 0 };
-    const flat = [];
-    flattenProjekteNeuFiles(tree, '', flat);
+    const markMissing = !opts || opts.markMissing !== false;
+    let items = [];
+    try {
+      const ctx = getProjekteNeuLocalContext(localJobId, fabNorm);
+      if (ctx && ctx.resolved && ctx.resolved.root) {
+        items = scanProjekteNeuParameterFiles(ctx.resolved.root);
+      }
+    } catch (_) {}
+    if (!items.length) {
+      const flat = [];
+      flattenProjekteNeuFiles(tree, '', flat);
+      for (const item of flat) {
+        if (!isSupportedParameterFileName(item.name)) continue;
+        items.push(item);
+      }
+    }
     const presentPaths = [];
     let ingested = 0;
-    for (const item of flat) {
-      if (!isSupportedParameterFileName(item.name)) continue;
+    for (const item of items) {
+      const name = String(item.name || '').trim() || path.basename(String(item.rel || ''));
+      if (!isSupportedParameterFileName(name)) continue;
       const rel = String(item.rel || '').trim().replace(/\\/g, '/');
       if (!rel) continue;
       presentPaths.push(rel);
-      let filePath = null;
-      try {
-        filePath = resolveProjekteNeuLocalFilePath(localJobId, fabNorm, rel);
-      } catch (_) {
-        filePath = null;
+      let filePath = item.abs ? String(item.abs) : null;
+      if (!filePath) {
+        try {
+          filePath = resolveProjekteNeuLocalFilePath(localJobId, fabNorm, rel);
+        } catch (_) {
+          filePath = null;
+        }
       }
       if (!filePath || !fs.existsSync(filePath)) continue;
       let buf;
@@ -2072,7 +2103,7 @@ function createApp(db) {
         continue;
       }
       const parsed = ingestParameterFileIntoAnlagenstamm({
-        fileName: item.name,
+        fileName: name,
         source: 'projekte_neu',
         sourcePath: rel,
         storageRelPath: filePath,
@@ -2080,12 +2111,15 @@ function createApp(db) {
         mime: 'application/octet-stream',
         technicianId: null,
         technicianName: null,
+        mtime: item.mtime || null,
       });
       if (parsed && parsed.ok) ingested += 1;
     }
-    markMissingProjekteNeuFiles(db, fabNorm, presentPaths);
+    if (markMissing) {
+      markMissingProjekteNeuFiles(db, fabNorm, presentPaths);
+    }
     save();
-    return { scanned: flat.length, ingested, tracked: presentPaths.length };
+    return { scanned: items.length, ingested, tracked: presentPaths.length };
   }
 
   /** Gleiche logische Abwesenheit trotz unterschiedlicher ID (Anfrage vs. Absence) oder T/Space in Datumswerten erkennen. */
@@ -3913,7 +3947,72 @@ function createApp(db) {
         }
       }
     }
+    restoreParameterUploadsForJob(localJobId, reiseDir, technicianIdOpt, fabMap, montageFolderName);
     return { fabMap, montageFolderName };
+  }
+
+  function getParameterUploadsCacheRoot() {
+    try {
+      const { app } = require('electron');
+      if (app && typeof app.getPath === 'function') {
+        return path.join(app.getPath('userData'), 'parameter-uploads');
+      }
+    } catch (_) {}
+    return path.join(DB_DIR, 'parameter-uploads');
+  }
+
+  function loadParameterJobMeta(localJobId) {
+    return db
+      .prepare(
+        `SELECT j.id, j.server_id, j.job_number, j.status, j.fabrikationsnummern
+         FROM jobs j WHERE j.id = ? LIMIT 1`,
+      )
+      .get(localJobId);
+  }
+
+  function restoreParameterUploadsForJob(localJobId, reiseDir, technicianId, fabMap, montageFolderName) {
+    if (!reiseDir || !fs.existsSync(reiseDir)) return;
+    const jobRow = loadParameterJobMeta(localJobId);
+    if (!jobRow) return;
+    const docMonteurPath = path.join(reiseDir, 'Dokumente_Monteur');
+    const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
+    const ao = montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
+    if (!ao) return;
+    try {
+      jobParameterUploads.restoreUploadsToJobFolder(db, {
+        local_job_id: localJobId,
+        server_job_id: jobRow.server_id,
+        job_number: jobRow.job_number,
+        resolveParamDir: (fab) => {
+          const folderName = resolveWritableMonteurFnFolder(
+            localJobId,
+            fab,
+            docMonteurPath,
+            docAnlagePath,
+            fabMap || [],
+          );
+          if (!folderName) return null;
+          return buildMonteurWorkAbsDir(docMonteurPath, folderName, ao, 'Parameter');
+        },
+        relFor: (fab, filename) => {
+          const folderName = resolveWritableMonteurFnFolder(
+            localJobId,
+            fab,
+            docMonteurPath,
+            docAnlagePath,
+            fabMap || [],
+          );
+          if (!folderName) return null;
+          return buildMonteurWorkRelPath(folderName, ao, path.join('Parameter', filename));
+        },
+      });
+      save();
+    } catch (err) {
+      console.warn(
+        '[parameterlisten] restore:',
+        err && err.message ? err.message : err,
+      );
+    }
   }
 
   /** Liste der Dateien/Ordner im Projektordner eines Auftrags (Explorer-Ansicht). subpath = relativer Pfad (z. B. "" oder "Dokumente_Monteur"). */
@@ -8105,6 +8204,7 @@ function createApp(db) {
       method: 'POST',
       headers,
       body: JSON.stringify(Object.assign({ action: 'save' }, dispoPayload || {})),
+      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
@@ -8130,7 +8230,10 @@ function createApp(db) {
       const pullJobId = jobId
         || (loaded && loaded.document && (loaded.document.server_job_id || loaded.document.local_job_id))
         || 0;
-      if (pullJobId > 0) {
+      // Offline-first: lokaler Beleg inkl. Job-FN ist die Anzeige. Dispo-Entwurf
+      // nur holen, wenn noch nichts lokal liegt (sonst überschreibt ein alter
+      // Online-Snapshot die Anlagenliste).
+      if (!loaded && pullJobId > 0) {
         try {
           const remote = await tryDispoArbeitsnachweisDraft(req, pullJobId);
           if (remote && remote.document) {
@@ -8204,40 +8307,40 @@ function createApp(db) {
       const localId = local && local.local_id;
       const dispoPayload = anLocal.toDispoSavePayload(anLocal.loadRow(db, localId), db);
       if (dispoPayload) dispoPayload.baseUrl = anDispoBaseUrl(req, payload);
-      let synced = false;
-      try {
-        const remote = await tryDispoArbeitsnachweisSave(req, dispoPayload);
-        if (remote && remote.ok) {
-          anLocal.markSynced(db, localId, remote.document_id, {
-            number: remote.number,
-            status: remote.status,
-            content_version: remote.content_version,
-            local_uuid: remote.local_uuid,
-          });
-          synced = true;
-          Object.assign(local, anLocal.toPublic(anLocal.loadRow(db, localId), db));
-          local.server_id = remote.document_id;
-          local.document_id = remote.document_id;
-          local.synced = true;
-          if (remote.local_uuid) local.local_uuid = remote.local_uuid;
-        }
-      } catch (e) {
-        anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload || {}, {
-          technician_id: techId,
-          baseUrl: anDispoBaseUrl(req, payload),
-        }));
-      }
-      if (!synced && localId) {
-        anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload || {}, {
+      if (localId && dispoPayload) {
+        anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload, {
           technician_id: techId,
           baseUrl: anDispoBaseUrl(req, payload),
         }));
       }
       save();
       res.json(Object.assign({ ok: true, document_id: local.server_id || 0, local_id: localId }, local, {
-        synced,
-        offline: !synced,
+        synced: false,
+        offline: true,
       }));
+      if (!localId || !dispoPayload) return;
+      setImmediate(() => {
+        tryDispoArbeitsnachweisSave(req, dispoPayload)
+          .then((remote) => {
+            if (!remote || !remote.ok) return;
+            anLocal.markSynced(db, localId, remote.document_id, {
+              number: remote.number,
+              status: remote.status,
+              content_version: remote.content_version,
+              local_uuid: remote.local_uuid,
+            });
+            anLocal.clearFailedPending(db, localId);
+            try {
+              db.prepare(
+                `DELETE FROM pending_changes WHERE entity_type = 'arbeitsnachweis' AND entity_id = ? AND action = 'save'`,
+              ).run(localId);
+            } catch (_) {}
+            save();
+          })
+          .catch(() => {
+            /* pending_changes übernimmt den Push */
+          });
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'arbeitsnachweis_save' });
     }
@@ -8774,53 +8877,18 @@ function createApp(db) {
       const fabNorm = normalizeParameterFab(fabValue);
       if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
       ensureAnlagenstammLocalSchema(db);
-      const mapLocalFiles = (rows) =>
-        rows.map((row) => ({
-          id: row.server_file_id != null ? Number(row.server_file_id) : row.id,
-          local_id: row.id,
-          fab: row.fab,
-          source: row.source,
-          source_file_status: row.source_file_status || 'present',
-          technician_id: row.technician_id,
-          technician_name: row.technician_name || null,
-          uploaded_at: row.uploaded_at || null,
-          original_filename: row.original_filename || '',
-          size: row.size != null ? Number(row.size) : 0,
-          mime: row.mime || 'application/octet-stream',
-          entry_count: row.entry_count != null ? Number(row.entry_count) : 0,
-          source_path: row.source_path || null,
-        }));
-      const candidates = buildDispoBaseCandidates({
-        baseUrl: body.baseUrl,
-        externalUrl: body.externalUrl,
-        internalUrl: body.internalUrl,
-      });
-      if (candidates.length > 0) {
-        try {
-          const remote = await proxyAnlagenstammParameterFilesList(
-            Object.assign({}, body, { technician_id: technicianId, fab: fabNorm }),
-          );
-          if (remote && remote.ok !== false && Array.isArray(remote.files)) {
-            cacheParameterFilesFromDispo(db, fabNorm, remote.files);
-            save();
-            return res.json({
-              ok: true,
-              fab: fabNorm,
-              files: remote.files,
-              data_source: 'dispo',
-            });
-          }
-        } catch (dispoErr) {
-          console.warn('[parameter_files_list] Dispo:', dispoErr && dispoErr.message ? dispoErr.message : dispoErr);
-        }
-      }
-      const files = mapLocalFiles(listParameterFilesByFab(db, fabNorm));
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const listed = await mapAnlagenstammParameterFiles(
+        fabNorm,
+        technicianId,
+        body,
+        Number.isFinite(localJobId) && localJobId > 0 ? localJobId : 0,
+      );
       return res.json({
         ok: true,
         fab: fabNorm,
-        files,
-        data_source: 'cache',
-        cache_notice: 'Cache – nicht mit Dispo synchron (offline oder keine Verbindung).',
+        files: listed.files || [],
+        data_source: listed.data_source,
       });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
@@ -14404,7 +14472,7 @@ function createApp(db) {
       }
 
       const jobRow = db.prepare(`
-        SELECT j.id, j.status, j.fabrikationsnummern FROM jobs j
+        SELECT j.id, j.status, j.fabrikationsnummern, j.server_id, j.job_number FROM jobs j
         WHERE j.id = ?
           AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
@@ -14552,6 +14620,36 @@ function createApp(db) {
         ingestError = ingestErr && ingestErr.message ? ingestErr.message : String(ingestErr);
         console.warn('[parameterlisten] lokaler Cache:', ingestError);
       }
+      try {
+        const sha = parsedParam && parsedParam.sha256 ? String(parsedParam.sha256) : jobParameterUploads.sha256Buffer(csvBuffer);
+        const cachePath = jobParameterUploads.writeCacheFile(
+          getParameterUploadsCacheRoot(),
+          jobParameterUploads.jobKey(jobRow.server_id, localJobId),
+          sha,
+          filename,
+          csvBuffer,
+        );
+        jobParameterUploads.upsertJobParameterUpload(db, {
+          local_job_id: localJobId,
+          server_job_id: jobRow.server_id,
+          job_number: jobRow.job_number,
+          fab: String(fn),
+          original_filename: filename,
+          sha256: sha,
+          cache_path: cachePath,
+          job_rel_path: savedCsv.replace(/\\/g, '/'),
+          size: csvBuffer.length,
+          technician_id: technicianId,
+          dispo_file_id: serverFileId,
+          mime: 'text/plain',
+        });
+        save();
+      } catch (cacheErr) {
+        console.warn(
+          '[parameterlisten] job-upload-cache:',
+          cacheErr && cacheErr.message ? cacheErr.message : cacheErr,
+        );
+      }
       res.json({
         ok: true,
         savedCsv,
@@ -14576,6 +14674,450 @@ function createApp(db) {
         'Unbekannter Fehler';
       console.error('[parameterlisten] Upload:', errMsg, e);
       res.status(500).json({ ok: false, error: 'Parameterlisten-Upload fehlgeschlagen: ' + errMsg });
+    }
+  });
+
+  function collectJobParameterDirs(localJobId, technicianId, jobRow) {
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+    const dirs = [];
+    if (!reiseDir || !fs.existsSync(reiseDir)) return { reiseDir: null, dirs, montageFolderName: '' };
+    const docMonteurPath = path.join(reiseDir, 'Dokumente_Monteur');
+    const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
+    const offlineCfg = getOfflinePullConfig(db, localJobId);
+    const ao =
+      (offlineCfg && offlineCfg.montage_folder_name) ||
+      resolveMonteurAuftragsordnerName(localJobId, technicianId);
+    const fabNums = fabNumbersFromJobFabrikationsnummern(jobRow && jobRow.fabrikationsnummern);
+    const fabMap = resolveFabMapLocal(
+      reiseDir,
+      (offlineCfg && offlineCfg.fab_map) || [],
+      [...fabNums].map(String),
+      (f) => readAnlagenstammRootFolderName(db, f),
+      jobMetaForFnFolder(jobRow),
+    );
+    for (const n of [...fabNums].sort((a, b) => a - b)) {
+      const folderName = resolveWritableMonteurFnFolder(
+        localJobId,
+        n,
+        docMonteurPath,
+        docAnlagePath,
+        fabMap,
+      );
+      if (!folderName || !ao) continue;
+      dirs.push({
+        fab: String(n),
+        dir: buildMonteurWorkAbsDir(docMonteurPath, folderName, ao, 'Parameter'),
+        folderName,
+      });
+    }
+    return { reiseDir, dirs, montageFolderName: ao || '' };
+  }
+
+  async function mapAnlagenstammParameterFiles(fabNorm, technicianId, body, localJobId) {
+    const mapLocalFiles = (rows) =>
+      sortParameterFilesByDisplayDesc(
+        (rows || []).map((row) =>
+          decorateParameterListItem({
+            id: row.server_file_id != null ? Number(row.server_file_id) : row.id,
+            local_id: row.id,
+            fab: row.fab,
+            source: row.source,
+            source_file_status: row.source_file_status || 'present',
+            technician_id: row.technician_id,
+            technician_name: row.technician_name || null,
+            uploaded_at: row.uploaded_at || null,
+            original_filename: row.original_filename || '',
+            size: row.size != null ? Number(row.size) : 0,
+            mime: row.mime || 'application/octet-stream',
+            entry_count: row.entry_count != null ? Number(row.entry_count) : 0,
+            source_path: row.source_path || null,
+            storage_relpath: row.storage_relpath || null,
+            sha256: row.sha256 || null,
+            display_datetime: row.display_datetime || null,
+          }),
+        ),
+      );
+    const lid = parseInt(localJobId, 10);
+    if (Number.isFinite(lid) && lid > 0) {
+      try {
+        ingestProjekteNeuParameterTree(lid, fabNorm, [], { markMissing: false });
+      } catch (_) {}
+    }
+    const localFiles = mapLocalFiles(listParameterFilesByFab(db, fabNorm));
+    const candidates = buildDispoBaseCandidates({
+      baseUrl: body.baseUrl,
+      externalUrl: body.externalUrl,
+      internalUrl: body.internalUrl,
+    });
+    if (candidates.length > 0) {
+      try {
+        const remote = await proxyAnlagenstammParameterFilesList(
+          Object.assign({}, body, { technician_id: technicianId, fab: fabNorm }),
+        );
+        if (remote && remote.ok !== false && Array.isArray(remote.files)) {
+          cacheParameterFilesFromDispo(db, fabNorm, remote.files);
+          save();
+          const remoteFiles = sortParameterFilesByDisplayDesc(
+            remote.files.map((f) => decorateParameterListItem(f)),
+          );
+          const files = mergeParameterFileLists(remoteFiles, localFiles);
+          return {
+            files,
+            data_source: files.length > remoteFiles.length ? 'merged' : 'dispo',
+          };
+        }
+      } catch (dispoErr) {
+        console.warn(
+          '[parameterlisten] anlagenstamm list:',
+          dispoErr && dispoErr.message ? dispoErr.message : dispoErr,
+        );
+      }
+    }
+    return {
+      files: localFiles,
+      data_source: 'cache',
+    };
+  }
+
+  app.post('/api/protokolle/parameterlisten/list', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const assigned = db
+        .prepare('SELECT 1 FROM job_technicians WHERE job_id = ? AND technician_id = ? LIMIT 1')
+        .get(resolved.localJobId, technicianId);
+      if (!assigned) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const collected = collectJobParameterDirs(resolved.localJobId, technicianId, jobRow);
+      const reiseDir = collected.reiseDir;
+      const jobUploads = jobParameterUploads.listMergedJobUploads(db, {
+        local_job_id: resolved.localJobId,
+        server_job_id: jobRow.server_id,
+        job_number: jobRow.job_number,
+        paramDirs: collected.dirs,
+        resolveJobAbs: (rel) => {
+          if (!reiseDir || !rel) return '';
+          return path.join(reiseDir, String(rel).replace(/\//g, path.sep));
+        },
+      });
+      const fabs = [...fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern)].sort((a, b) => a - b);
+      const anlagenstamm = [];
+      for (const n of fabs) {
+        const fabNorm = String(n);
+        const listed = await mapAnlagenstammParameterFiles(
+          fabNorm,
+          technicianId,
+          body,
+          resolved.localJobId,
+        );
+        anlagenstamm.push({
+          fab: fabNorm,
+          files: listed.files || [],
+          data_source: listed.data_source,
+        });
+      }
+      return res.json({
+        ok: true,
+        job_id: resolved.localJobId,
+        job_uploads: jobUploads,
+        anlagenstamm,
+      });
+    } catch (e) {
+      console.warn('[parameterlisten] list', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  async function resolveParameterlistenFileBytes(opts) {
+    const {
+      localJobId,
+      technicianId,
+      jobRow,
+      uploadId,
+      sha256,
+      fab,
+      fileId,
+      source,
+      body,
+    } = opts;
+    const fabNorm = normalizeParameterFab(fab || '');
+    if (source !== 'anlagenstamm') {
+      const collected = collectJobParameterDirs(localJobId, technicianId, jobRow);
+      const merged = jobParameterUploads.listMergedJobUploads(db, {
+        local_job_id: localJobId,
+        server_job_id: jobRow.server_id,
+        job_number: jobRow.job_number,
+        paramDirs: collected.dirs,
+        resolveJobAbs: (rel) => {
+          if (!collected.reiseDir || !rel) return '';
+          return path.join(collected.reiseDir, String(rel).replace(/\//g, path.sep));
+        },
+      });
+      let row = null;
+      const uid = parseInt(uploadId, 10);
+      if (Number.isFinite(uid) && uid > 0) {
+        row = merged.find((r) => Number(r.id) === uid) || null;
+        if (!row) {
+          const dbRow = jobParameterUploads.getUploadById(db, uid);
+          if (dbRow) {
+            row = {
+              original_filename: dbRow.original_filename,
+              abs_path: null,
+              cache_path: dbRow.cache_path,
+            };
+          }
+        }
+      }
+      if (!row && sha256 && fabNorm) {
+        row = merged.find(
+          (r) => String(r.fab) === fabNorm && String(r.sha256 || '').toLowerCase() === String(sha256).toLowerCase(),
+        );
+      }
+      if (row) {
+        const got = jobParameterUploads.resolveUploadBytes(row);
+        if (got.ok) {
+          return Object.assign({ filename: row.original_filename || got.filename, fab: row.fab || fabNorm }, got);
+        }
+      }
+    }
+    if (fabNorm) {
+      const localRows = listParameterFilesByFab(db, fabNorm) || [];
+      const fid = parseInt(fileId, 10);
+      const local = localRows.find((r) => {
+        if (sha256 && String(r.sha256 || '').toLowerCase() === String(sha256).toLowerCase()) return true;
+        if (Number.isFinite(fid) && fid > 0) {
+          if (Number(r.id) === fid) return true;
+          if (r.server_file_id != null && Number(r.server_file_id) === fid) return true;
+        }
+        return false;
+      });
+      if (local) {
+        const candidates = [local.storage_relpath, local.source_path].filter(Boolean);
+        for (const p of candidates) {
+          if (jobParameterUploads.fileExists(p)) {
+            return {
+              ok: true,
+              path: p,
+              buffer: fs.readFileSync(p),
+              filename: local.original_filename,
+              fab: fabNorm,
+            };
+          }
+        }
+      }
+      const candidates = buildDispoBaseCandidates({
+        baseUrl: body.baseUrl,
+        externalUrl: body.externalUrl,
+        internalUrl: body.internalUrl,
+      });
+      if (candidates.length > 0 && Number.isFinite(fid) && fid > 0) {
+        try {
+          const remote = await proxyAnlagenstammParameterDownload(
+            Object.assign({}, body, {
+              technician_id: technicianId,
+              fab: fabNorm,
+              file_id: fid,
+            }),
+          );
+          if (remote && remote.ok && remote.buffer) {
+            return {
+              ok: true,
+              buffer: remote.buffer,
+              filename: remote.xDownloadFilename || (local && local.original_filename) || 'parameterliste',
+              fab: fabNorm,
+            };
+          }
+        } catch (dispoErr) {
+          console.warn(
+            '[parameterlisten] file dispo:',
+            dispoErr && dispoErr.message ? dispoErr.message : dispoErr,
+          );
+        }
+      }
+    }
+    return { ok: false, error: 'Datei nicht gefunden.' };
+  }
+
+  app.post('/api/protokolle/parameterlisten/file', express.json({ limit: '40mb' }), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const got = await resolveParameterlistenFileBytes({
+        localJobId: resolved.localJobId,
+        technicianId,
+        jobRow,
+        uploadId: body.upload_id,
+        sha256: body.sha256,
+        fab: body.fab,
+        fileId: body.file_id,
+        source: body.source,
+        body,
+      });
+      if (!got.ok) return res.status(404).json({ ok: false, error: got.error || 'Datei nicht gefunden.' });
+      const filename = got.filename || 'parameterliste';
+      if (body.as_download === true || body.as_download === 1 || body.as_download === '1') {
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', 'attachment; filename="' + filename.replace(/"/g, '') + '"');
+        res.setHeader('X-Download-Filename', encodeURIComponent(filename));
+        return res.send(got.buffer);
+      }
+      return res.json({
+        ok: true,
+        filename,
+        fab: got.fab || null,
+        mime: 'application/octet-stream',
+        size: got.buffer.length,
+        path: got.path || null,
+        content_base64: got.buffer.toString('base64'),
+      });
+    } catch (e) {
+      console.warn('[parameterlisten] file', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/parameterlisten/pdf', express.json({ limit: '40mb' }), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const got = await resolveParameterlistenFileBytes({
+        localJobId: resolved.localJobId,
+        technicianId,
+        jobRow,
+        uploadId: body.upload_id,
+        sha256: body.sha256,
+        fab: body.fab,
+        fileId: body.file_id,
+        source: body.source,
+        body,
+      });
+      if (!got.ok) return res.status(404).json({ ok: false, error: got.error || 'Datei nicht gefunden.' });
+      const filename = got.filename || 'parameterliste';
+      let csvText = got.buffer.toString('utf8');
+      if (!csvText || /[\uFFFD]/.test(csvText)) csvText = got.buffer.toString('latin1');
+      const csvToPdfBuffer = getCsvToPdfBuffer();
+      const pdfBytes = await csvToPdfBuffer(csvText, { filename, sourcePath: got.path || filename });
+      const pdfName = jobParameterUploads.pdfBasenameFor(filename);
+      let pdfPath = '';
+      if (got.path) {
+        pdfPath = path.join(path.dirname(got.path), pdfName);
+      } else {
+        pdfPath = path.join(os.tmpdir(), 'kukla-param-' + Date.now() + '-' + pdfName);
+      }
+      writeFileWithRetry(pdfPath, pdfBytes);
+      return res.json({ ok: true, pdf_path: pdfPath, pdf_paths: [pdfPath], filename: pdfName });
+    } catch (e) {
+      console.warn('[parameterlisten] pdf', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/parameterlisten/delete', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const blocked = localJobWriteBlocked(jobRow.status);
+      if (blocked) return res.status(blocked.status).json({ ok: false, error: blocked.error });
+      const collected = collectJobParameterDirs(resolved.localJobId, technicianId, jobRow);
+      const merged = jobParameterUploads.listMergedJobUploads(db, {
+        local_job_id: resolved.localJobId,
+        server_job_id: jobRow.server_id,
+        job_number: jobRow.job_number,
+        paramDirs: collected.dirs,
+        resolveJobAbs: (rel) => {
+          if (!collected.reiseDir || !rel) return '';
+          return path.join(collected.reiseDir, String(rel).replace(/\//g, path.sep));
+        },
+      });
+      const uid = parseInt(body.upload_id, 10);
+      const sha = String(body.sha256 || '').trim().toLowerCase();
+      const fabNorm = normalizeParameterFab(body.fab || '');
+      let target =
+        Number.isFinite(uid) && uid > 0 ? merged.find((r) => Number(r.id) === uid) : null;
+      if (!target && sha) {
+        target = merged.find(
+          (r) => (!fabNorm || String(r.fab) === fabNorm) && String(r.sha256 || '').toLowerCase() === sha,
+        );
+      }
+      if (!target) {
+        const dbRow = Number.isFinite(uid) && uid > 0 ? jobParameterUploads.getUploadById(db, uid) : null;
+        if (dbRow) {
+          target = {
+            id: dbRow.id,
+            fab: dbRow.fab,
+            sha256: dbRow.sha256,
+            abs_path: dbRow.job_rel_path && collected.reiseDir
+              ? path.join(collected.reiseDir, String(dbRow.job_rel_path).replace(/\//g, path.sep))
+              : null,
+            original_filename: dbRow.original_filename,
+            dispo_file_id: dbRow.dispo_file_id,
+          };
+        }
+      }
+      if (!target) return res.status(404).json({ ok: false, error: 'Upload nicht gefunden.' });
+      if (target.abs_path) jobParameterUploads.unlinkJobCopies(target.abs_path);
+      if (target.id) jobParameterUploads.deleteUploadRow(db, target.id);
+      const fabDel = String(target.fab || fabNorm || '');
+      const shaDel = String(target.sha256 || sha || '');
+      let localAs = null;
+      try {
+        localAs = deleteParameterFileByFabSha(db, fabDel, shaDel, 'upload');
+      } catch (asErr) {
+        console.warn('[parameterlisten] delete local as:', asErr && asErr.message ? asErr.message : asErr);
+      }
+      save();
+      let dispoDeleteError = null;
+      const dispoCandidates = buildDispoBaseCandidates({
+        baseUrl: body.baseUrl,
+        externalUrl: body.externalUrl,
+        internalUrl: body.internalUrl,
+      });
+      if (dispoCandidates.length > 0 && fabDel && (shaDel || target.dispo_file_id)) {
+        try {
+          const remote = await proxyAnlagenstammParameterDelete({
+            technician_id: technicianId,
+            baseUrl: body.baseUrl,
+            externalUrl: body.externalUrl,
+            internalUrl: body.internalUrl,
+            serverUsername: body.serverUsername,
+            serverPassword: body.serverPassword,
+            fab: fabDel,
+            file_id: target.dispo_file_id || 0,
+            sha256: shaDel,
+          });
+          if (remote && remote.ok === false) {
+            dispoDeleteError = remote.error || 'Dispo-Löschen fehlgeschlagen';
+          }
+        } catch (dispoErr) {
+          dispoDeleteError = dispoErr && dispoErr.message ? dispoErr.message : String(dispoErr);
+        }
+      } else if (dispoCandidates.length === 0) {
+        dispoDeleteError = 'Dispo nicht konfiguriert – lokal gelöscht.';
+      }
+      return res.json({
+        ok: true,
+        local_deleted: true,
+        anlagenstamm_local_deleted: !!(localAs && localAs.deleted),
+        dispo_delete_error: dispoDeleteError,
+      });
+    } catch (e) {
+      console.warn('[parameterlisten] delete', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
     }
   });
 
@@ -20632,6 +21174,19 @@ function jobFabJsonWasProvided(serverFab) {
   return serverFab != null && String(serverFab).trim() !== '';
 }
 
+/** true = JSON-Array der Leistungszeilen (job_fabrikation); false = Semikolon-Spalte/Fragment. */
+function jobFabPayloadIsStructuredJson(serverFab) {
+  if (serverFab == null) return false;
+  if (Array.isArray(serverFab)) return true;
+  const s = String(serverFab).trim();
+  if (!s || (s[0] !== '[' && s[0] !== '{')) return false;
+  try {
+    return Array.isArray(JSON.parse(s));
+  } catch (_) {
+    return false;
+  }
+}
+
 function applyRemovedJobFabsAfterPull(db, localJobId, oldFabJson, newFabJson) {
   const removed = computeRemovedJobFabNums(oldFabJson, newFabJson);
   for (const fn of removed) {
@@ -20666,14 +21221,27 @@ function mergeFabForJobPull(db, localJobId, serverFab) {
     }
   } else if (!serverProvided) {
     merged = curFab != null ? enrichFabJsonWithLocalAnlagenstamm(db, curFab) : null;
-  } else {
+  } else if (!jobFabPayloadIsStructuredJson(serverFab)) {
+    // jobs.fabrikationsnummern-Spalte kann hinter job_fabrikation zurückbleiben.
+    // Union statt Ersetzen, sonst fehlen nach Sync Anlagen im Arbeitsnachweis.
     merged = enrichFabJsonWithLocalAnlagenstamm(
       db,
-      mergeFabRowsServerAuthoritative(
-        parseJobFabrikationsnummernRows(curFab),
-        parseJobFabrikationsnummernRows(serverFab),
-      ),
+      mergeJobFabrikationsnummernJson(curFab, serverFab) || curFab || serverFab,
     );
+  } else {
+    const serverRows = parseJobFabrikationsnummernRows(serverFab);
+    const localRows = parseJobFabrikationsnummernRows(curFab);
+    if (localRows.length > serverRows.length) {
+      merged = enrichFabJsonWithLocalAnlagenstamm(
+        db,
+        mergeJobFabrikationsnummernJson(curFab, serverFab) || curFab,
+      );
+    } else {
+      merged = enrichFabJsonWithLocalAnlagenstamm(
+        db,
+        mergeFabRowsServerAuthoritative(localRows, serverRows),
+      );
+    }
   }
   applyRemovedJobFabsAfterPull(db, localJobId, curFab, merged);
   return merged;
