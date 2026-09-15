@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.032
+- **KUKLink:** Parameterlisten direkt über COM (DWC-3/5, DWC-4, DWC-6), Live-Terminal, PDF im Auftragsordner; COM-Port unter der Auftragsauswahl.
+
 ## V 2.007.025
 - **KUKpit-Layout:** Bildlaufleiste bleibt unter der Kopfzeile; Protokoll-Titelzeilen (Speichern/PDF) überlappen die Formularfelder nicht mehr.
 - **Arbeitsnachweis:** Fabrikationsnummern aus dem Auftrag werden lokal mitgeführt und beim Speichern/PDF nicht verloren.
