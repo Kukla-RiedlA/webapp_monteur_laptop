@@ -10,14 +10,24 @@ const path = require('path');
 const fs = require('fs');
 const { palToPdfBuffer, isPalDwc6Format } = require('./pal-to-pdf');
 const { pa3ToPdfBuffer, isPa3DumpFormat } = require('./pa3-to-pdf');
+const { isIdPaFormat, idPaToPal } = require('./kuklink/idpa-to-pal');
+const { extractFabFromDump } = require('./kuklink/format-detect');
 
 async function csvToPdfBuffer(csvText, options) {
   const filename = options && options.filename;
-  if (isPa3DumpFormat(csvText, filename)) {
-    return pa3ToPdfBuffer(csvText, options);
+  if (isIdPaFormat(csvText)) {
+    const pal = idPaToPal(csvText);
+    const fab = extractFabFromDump(csvText, filename);
+    const sourcePath = (options && options.sourcePath) || (fab ? 'FN_' + fab : 'parameter.pal');
+    return palToPdfBuffer(pal, Object.assign({}, options, { filename: fab ? 'FN_' + fab + '.pal' : filename, sourcePath }));
   }
   if (isPalDwc6Format(csvText, filename)) {
-    return palToPdfBuffer(csvText, options);
+    const fab = extractFabFromDump(csvText, filename);
+    const sourcePath = (options && options.sourcePath) || (fab ? 'FN_' + fab : filename || 'parameter.pal');
+    return palToPdfBuffer(csvText, Object.assign({}, options, { sourcePath }));
+  }
+  if (isPa3DumpFormat(csvText, filename)) {
+    return pa3ToPdfBuffer(csvText, options);
   }
   return csvToPdfBufferDwc7(csvText, options);
 }

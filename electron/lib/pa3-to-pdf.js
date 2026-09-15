@@ -9,13 +9,16 @@ const { sanitizeForWinAnsi } = require('./pdf-winansi');
 
 function isPa3DumpFormat(text, filename) {
   const name = String(filename || '');
-  if (/\.pa3$/i.test(name)) return true;
+  if (/\.pa[345]$/i.test(name)) return true;
   const src = String(text || '');
-  if (/WAAGENFABRIK\s+KUKLA/i.test(src) && /Parameterausdruck/i.test(src)) return true;
-  if (/<NENNDATEN/i.test(src) && /--\*--\*{8,}--\*--/.test(src)) return true;
-  if (/\.pa[45]$/i.test(name) && /WAAGENFABRIK\s+KUKLA/i.test(src) && /Parameterausdruck/i.test(src)) {
+  if (
+    /WAAGENFABRIK\s+KUKLA/i.test(src) &&
+    /Parameter\s*(ausdruck|printout)|Printout parametre|termine parametri|impresoParametros/i.test(src)
+  ) {
     return true;
   }
+  if (/<NENNDATEN/i.test(src) && /--\*--\*{8,}--\*--/.test(src)) return true;
+  if (/WAAGENFABRIK\s+KUKLA/i.test(src) && /\*{4,}/.test(src) && /No:_{2,}/i.test(src)) return true;
   return false;
 }
 

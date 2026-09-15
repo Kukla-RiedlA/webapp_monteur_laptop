@@ -1,10 +1,12 @@
 'use strict';
 
 /**
- * PAL (DWC-6): Semikolon-Liste ParID; Bezeichnung; Wert; Einheit; Min; Max
- * → KUKLink-V2.0-Listenausdruck (ParID / Bezeichnung / Wert / Einheit, Parametergruppen).
+ * PAL (DWC-6 / IdPa→PAL): KUKLink-V2.0-Listenausdruck
+ * (Logo links, grüner Kopf, rote Parametergruppen, ParID / Bezeichnung / Wert / Einheit).
  */
 
+const fs = require('fs');
+const path = require('path');
 const { sanitizeForWinAnsi } = require('./pdf-winansi');
 
 function isPalDwc6Format(text, filename) {
@@ -48,7 +50,9 @@ function dwc6GroupForParId(id) {
 }
 
 function germanizeValue(value) {
-  return String(value || '').replace(/\./g, ',');
+  const s = String(value || '');
+  if (/^\d+\.\d+$/.test(s)) return s.replace('.', ',');
+  return s;
 }
 
 function parsePalRows(text) {
@@ -101,6 +105,29 @@ function buildItems(rows) {
   return items;
 }
 
+async function embedKuklaLogo(pdfDoc) {
+  const baseDir = path.join(__dirname, '..');
+  const logoPaths = [
+    path.join(baseDir, 'public', 'assets', 'img', 'kukla_logo_wordmark.jpg'),
+    path.join(baseDir, 'public', 'assets', 'img', 'kukla_logo_claim_green.png'),
+    path.join(baseDir, '..', '..', 'dispo', 'assets', 'img', 'kukla_logo_claim_green.png'),
+    path.join(baseDir, '..', '..', 'dispo', 'assets', 'img', 'kukla_logo.png'),
+    path.join(baseDir, 'public', 'assets', 'img', 'kukla_logo.jpg'),
+    path.join(baseDir, '..', '..', 'dispo', 'assets', 'img', 'kukla_logo.jpg'),
+  ];
+  for (const logoPath of logoPaths) {
+    try {
+      if (!fs.existsSync(logoPath)) continue;
+      const bytes = fs.readFileSync(logoPath);
+      if (/\.png$/i.test(logoPath)) return await pdfDoc.embedPng(bytes);
+      return await pdfDoc.embedJpg(bytes);
+    } catch (_) {
+      /* next */
+    }
+  }
+  return null;
+}
+
 async function palToPdfBuffer(text, options) {
   const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
   const rows = parsePalRows(text);
@@ -110,38 +137,36 @@ async function palToPdfBuffer(text, options) {
   const dateStr = formatDeDateTime((options && options.now) || new Date());
 
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Courier);
-  const fontBold = await pdfDoc.embedFont(StandardFonts.CourierBold);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const black = rgb(0, 0, 0);
+  const headerGreen = rgb(0, 64 / 255, 0);
+  const groupRed = rgb(192 / 255, 0, 0);
+  const logo = await embedKuklaLogo(pdfDoc);
+
   const pageW = 595;
   const pageH = 842;
-  const margin = 36;
-  const fontSize = 9;
-  const lineHeight = 12;
-  const headerLines = 5;
-  const headerHeight = headerLines * lineHeight + 8;
-  const footerHeight = 22;
-  const contentTop = pageH - margin - headerHeight;
-  const contentBottom = margin + footerHeight;
-  const maxRowsPerPage = Math.max(8, Math.floor((contentTop - contentBottom) / lineHeight));
-
-  function itemSlots(item) {
-    return item && item.type === 'group' ? 2 : 1;
-  }
+  const tableLeft = 57;
+  const tableRight = 465;
+  const fontSize = 8;
+  const lineHeight = 14.8;
+  const contentBottom = 28;
+  // Seite 1 der KUKLink-V2.0-Vorlage: Spaltenkopf + 7 Gruppen + Parameter bis 471
+  const maxRowsPerPage = 37;
 
   const items = buildItems(rows);
   const pages = [];
   let buf = [];
   let used = 0;
   for (let i = 0; i < items.length; i++) {
-    const slots = itemSlots(items[i]);
-    if (used + slots > maxRowsPerPage && buf.length > 0) {
+    const isColHead = items[i] && items[i].type === 'colhead';
+    if (!isColHead && used + 1 > maxRowsPerPage && buf.length > 0) {
       pages.push(buf);
       buf = [];
       used = 0;
     }
     buf.push(items[i]);
-    used += slots;
+    used += 1;
   }
   if (buf.length) pages.push(buf);
   if (pages.length === 0) pages.push([]);
@@ -149,42 +174,55 @@ async function palToPdfBuffer(text, options) {
 
   function drawHLine(page, y) {
     page.drawLine({
-      start: { x: margin, y },
-      end: { x: pageW - margin, y },
-      thickness: 0.6,
+      start: { x: tableLeft, y },
+      end: { x: tableRight, y },
+      thickness: 0.5,
       color: black,
     });
   }
 
   function drawHeader(page) {
-    let y = pageH - margin - fontSize;
-    const lines = [
-      { text: 'KUKLink V2.0 - www.kukla.co.at', bold: true },
-      { text: 'Parameter Ausdruck: ' + sourcePath, bold: false },
-      { text: 'Fabriknummer: ' + (fab || ''), bold: false },
-      { text: dateStr, bold: false },
-    ];
-    for (const line of lines) {
-      const t = sanitizeForWinAnsi(line.text);
-      page.drawText(t, {
-        x: margin,
-        y,
-        size: fontSize,
-        font: line.bold ? fontBold : font,
-        color: black,
+    const yTop = pageH - 55;
+    let logoH = 0;
+    if (logo) {
+      const maxLogoW = 102;
+      const maxLogoH = 61;
+      const scale = Math.min(maxLogoW / logo.width, maxLogoH / logo.height);
+      const logoW = logo.width * scale;
+      logoH = logo.height * scale;
+      page.drawImage(logo, {
+        x: tableLeft,
+        y: yTop - logoH,
+        width: logoW,
+        height: logoH,
       });
-      y -= lineHeight;
     }
-    drawHLine(page, y + 4);
-    return y - 4;
+    const headerLines = [
+      'KUKLink V2.0 - www.kukla.co.at',
+      'Parameter Ausdruck: ' + (fab ? 'FN_' + fab : sourcePath),
+      'Fabriknummer: ' + (fab || ''),
+      dateStr,
+    ];
+    let yText = yTop - 10;
+    for (const line of headerLines) {
+      page.drawText(sanitizeForWinAnsi(line), {
+        x: 170,
+        y: yText,
+        size: fontSize,
+        font: fontBold,
+        color: headerGreen,
+      });
+      yText -= 14.2;
+    }
+    return Math.min(yTop - logoH, yText) - 4;
   }
 
-  function drawPageNum(page, pageNum, y) {
+  function drawPageNum(page, pageNum) {
     const label = '- ' + pageNum + ' -';
     const w = font.widthOfTextAtSize(label, fontSize);
     page.drawText(label, {
       x: (pageW - w) / 2,
-      y,
+      y: 18,
       size: fontSize,
       font,
       color: black,
@@ -192,26 +230,32 @@ async function palToPdfBuffer(text, options) {
   }
 
   const colX = {
-    parId: margin,
-    name: margin + 36,
-    value: margin + 250,
-    unit: margin + 370,
+    parId: tableLeft,
+    name: 75,
+    value: 240,
+    unit: 305,
   };
 
   function drawColHead(page, y) {
+    drawHLine(page, y + fontSize + 4);
     page.drawText('ParID', { x: colX.parId, y, size: fontSize, font: fontBold, color: black });
-    page.drawText('Bezeichnung', { x: colX.name, y, size: fontSize, font: fontBold, color: black });
+    page.drawText('Bezeichnung', { x: 94, y, size: fontSize, font: fontBold, color: black });
     page.drawText('Wert', { x: colX.value, y, size: fontSize, font: fontBold, color: black });
-    page.drawText('Einheit', { x: colX.unit, y, size: fontSize, font: fontBold, color: black });
+    page.drawText('Einheit', { x: 299, y, size: fontSize, font: fontBold, color: black });
     drawHLine(page, y - 3);
     return y - lineHeight;
   }
 
   function drawGroup(page, y, text) {
-    page.drawText(sanitizeForWinAnsi(text), { x: margin, y, size: fontSize, font: fontBold, color: black });
-    y -= lineHeight;
-    drawHLine(page, y + fontSize * 0.45);
-    return y - 2;
+    page.drawText(sanitizeForWinAnsi(text), {
+      x: tableLeft,
+      y,
+      size: fontSize,
+      font: fontBold,
+      color: groupRed,
+    });
+    drawHLine(page, y - 3);
+    return y - lineHeight;
   }
 
   function drawParam(page, y, row) {
@@ -222,14 +266,14 @@ async function palToPdfBuffer(text, options) {
       font,
       color: black,
     });
-    page.drawText(sanitizeForWinAnsi(row.name).slice(0, 36), {
+    page.drawText(sanitizeForWinAnsi(row.name).slice(0, 42), {
       x: colX.name,
       y,
       size: fontSize,
       font,
       color: black,
     });
-    page.drawText(sanitizeForWinAnsi(row.value).slice(0, 22), {
+    page.drawText(sanitizeForWinAnsi(row.value).slice(0, 28), {
       x: colX.value,
       y,
       size: fontSize,
@@ -253,23 +297,17 @@ async function palToPdfBuffer(text, options) {
     const page = pdfDoc.addPage([pageW, pageH]);
     const pageNum = p + 1;
     let y = drawHeader(page);
+    const pageItems = pages[p].filter((item) => !(pageNum > 1 && item.type === 'colhead'));
     if (pageNum > 1) {
-      y -= 4;
-      drawPageNum(page, pageNum, y);
-      y -= lineHeight;
-      drawHLine(page, y + 6);
-      y -= 4;
+      drawHLine(page, y + fontSize + 4);
     }
-    const pageItems = pages[p];
     for (const item of pageItems) {
       if (y < contentBottom + lineHeight) break;
       if (item.type === 'colhead') y = drawColHead(page, y);
       else if (item.type === 'group') y = drawGroup(page, y, item.text);
       else if (item.type === 'param') y = drawParam(page, y, item.row);
     }
-    if (pageNum === 1) {
-      drawPageNum(page, pageNum, margin);
-    }
+    drawPageNum(page, pageNum);
   }
 
   return await pdfDoc.save();

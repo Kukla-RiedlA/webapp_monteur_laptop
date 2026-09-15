@@ -46,13 +46,22 @@ function decodeBufferSmart(buffer) {
 }
 
 function extractContentFab(text) {
-  const src = String(text || '');
-  if (!src) return '';
+  const src = String(text || '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ');
+  if (!src.trim()) return '';
   const patterns = [
-    /fabricationnumber\s*[:;]\s*(\d{3,})/i,
-    /\bFN\s*[:; ]\s*(\d{3,})/i,
+    // DWC-4 Kopf: "DWC4 L2.10 FN: 2007"
+    /\bFN\b[^\d]{0,12}(\d{3,5})\b/i,
+    // DWC-3/5 Kopf: ****<sprachabhängige Bezeichnung>: 2007
+    /\*{2,}\s*[^\d\r\n*]{0,24}:\s*(\d{3,5})/,
     /fabriknummer\s*[:;]\s*(\d{3,})/i,
+    /fabric(?:ation)?[\s.]*number\s*[:;]\s*(\d{3,})/i,
+    /no\.\s*d[ei]\s+fabb?r(?:ic)?\.?\s*[:;]\s*(\d{3,})/i,
+    /na\s+de\s+fabr\.?\s*[:;]\s*(\d{3,})/i,
+    /fabricationnumber\s*[:;]\s*(\d{3,})/i,
     /;\s*fabriknummer\s*;\s*(\d{3,})\s*;/i,
+    /^\s*110\s*;\s*[^;\n]{0,40};\s*(\d{3,})/im,
+    /^\s*IdPa\s+110\s+(\d{3,})\b/im,
+    /^\s*IdPa\s+\d+\s+(\d{3,})\s+\d+\s+\d+\s+FabrikNum/im,
   ];
   for (const re of patterns) {
     const m = src.match(re);

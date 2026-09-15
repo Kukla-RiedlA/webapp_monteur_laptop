@@ -6,6 +6,7 @@ const {
   decodeDumpBuffer,
   detectDumpFamily,
   looksLikePrintableDump,
+  FAMILY_LEGACY,
 } = require('./format-detect');
 
 const BAUD_ORDER = [9600, 1200, 19200];
@@ -16,7 +17,9 @@ const FRAMES = [
   { dataBits: 7, parity: 'none', stopBits: 1 },
 ];
 
+// L2.36 (Rw3.c): case 'P' / case 0x02 → tx_derzeit(1). Altes VB-KUKLink sendet "P".
 const TRIGGERS = [
+  { name: 'p', bytes: Buffer.from('P', 'ascii'), ackOnLf: true },
   { name: 'stx', bytes: Buffer.from([0x02]), ackOnLf: true },
   { name: 'etx_ov', bytes: Buffer.from('\x03OV', 'latin1'), ackOnLf: true },
 ];
@@ -56,15 +59,33 @@ function buildMatrix(portPath, lastPref) {
   return out;
 }
 
+function looksLikeUsefulDump(text) {
+  const src = String(text || '');
+  if (detectDumpFamily(src).family) return true;
+  if (/Parameterausdruck|Fabriknummer|WAAGENFABRIK\s+KUKLA/i.test(src)) return true;
+  if ((src.match(/;/g) || []).length >= 8 && /^\s*\d+\s*;/m.test(src)) return true;
+  const letters = (src.match(/[A-Za-zÄÖÜäöüß]/g) || []).length;
+  return looksLikePrintableDump(src) && src.trim().length >= 40 && letters >= 20;
+}
+
 function classifyBuffer(buf) {
   if (!buf || !buf.length) return null;
   const decoded = decodeDumpBuffer(buf);
   if (!looksLikePrintableDump(decoded.text)) return null;
   const fam = detectDumpFamily(decoded.text);
-  if (!fam.family) return null;
+  if (fam.family) {
+    return {
+      family: fam.family,
+      label: fam.label,
+      text: decoded.text,
+      encoding: decoded.encoding,
+      bytes: buf.length,
+    };
+  }
+  if (!looksLikeUsefulDump(decoded.text)) return null;
   return {
-    family: fam.family,
-    label: fam.label,
+    family: fam.family || FAMILY_LEGACY,
+    label: fam.label || 'DWC-3/4/5',
     text: decoded.text,
     encoding: decoded.encoding,
     bytes: buf.length,
@@ -86,24 +107,23 @@ async function tryOneSetting(settings, opts) {
     settings.dataBits +
     String(settings.parity || 'none').charAt(0).toUpperCase() +
     settings.stopBits;
-  term.meta('Probe ' + (settings.path || '') + ' · ' + frame);
   try {
     for (const trig of TRIGGERS) {
-      term.tx(trig.name === 'stx' ? 'STX' : 'ETX OV');
       await serial.writeBytes(port, trig.bytes);
       const buf = await serial.collectBytes(port, {
         maxMs,
         idleMs,
         minBytes: 12,
         ackOnLf: trig.ackOnLf,
-        onChunk: (chunk) => term.rx(chunk),
       });
       const hit = classifyBuffer(buf);
       if (hit) {
-        term.meta('Treffer ' + (hit.label || hit.family) + ' · ' + hit.bytes + ' Byte');
+        term.replaceWithDump(
+          hit.text,
+          'Verbunden ' + (settings.path || '') + ' · ' + frame + ' · ' + (hit.label || hit.family),
+        );
         return { ok: true, port, settings, trigger: trig.name, dump: hit };
       }
-      term.meta('keine gültige Antwort (' + trig.name + ')');
     }
     await serial.closePort(port);
     return { ok: false, error: 'keine gültige Antwort', settings };
@@ -156,6 +176,7 @@ async function probeConnect(portPath, opts) {
 module.exports = {
   BAUD_ORDER,
   FRAMES,
+  TRIGGERS,
   buildMatrix,
   normalizeSettings,
   probeConnect,

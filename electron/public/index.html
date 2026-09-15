@@ -205,15 +205,63 @@
       font-size: 0.9rem;
     }
     .kuklink-term-head strong { color: var(--text-strong, #1a1a1a); }
+    .kuklink-presets {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.35rem;
+    }
+    .kuklink-serial-row {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: flex-end;
+      gap: 0.65rem;
+      margin-bottom: 0.75rem;
+    }
+    .kuklink-serial-row .form-group {
+      margin: 0;
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .kuklink-serial-row .form-group label {
+      display: block;
+      white-space: nowrap;
+    }
+    .kuklink-serial-row select.dienstreise-select {
+      width: 100%;
+      min-width: 0;
+      max-width: none;
+      box-sizing: border-box;
+    }
+    .kuklink-port-row {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    #kuklinkPort.dienstreise-select {
+      flex: 0 0 auto;
+      width: auto;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    #kuklinkBaud { min-width: 6.4rem; }
+    #kuklinkParity { min-width: 7.6rem; }
+    #kuklinkDataBits,
+    #kuklinkStopBits { min-width: 5.6rem; }
     #kuklinkPreview, .kuklink-term {
-      max-height: 18rem;
+      max-height: 22rem;
       min-height: 8rem;
       overflow: auto;
       background: var(--kukla-gray-soft, #eefaf5);
       padding: 0.75rem;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 0.8rem;
+      white-space: pre;
+      word-break: normal;
+      overflow-wrap: normal;
+      font-size: 0.72rem;
+      line-height: 1.15;
       font-family: ui-monospace, Consolas, 'Cascadia Mono', monospace;
       border-radius: 8px;
       border: 1px solid var(--accent);
@@ -2122,47 +2170,66 @@
       </div>
       <div class="card">
         <h2>KUKLink</h2>
-        <p class="sp-v2-hint" style="margin-top:0">Waagencomputer am COM-Port auslesen. Baudrate und Parität werden automatisch geprüft. DWC-3/4/5 (PA) und DWC-6 (PAL): Rohdaten in die Datenbank, PDF in den Parameter-Ordner.</p>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label for="kuklinkPort">COM-Port</label>
-          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
-            <select id="kuklinkPort" class="dienstreise-select" style="min-width:12rem;flex:1">
-              <option value="">– Ports laden … –</option>
-            </select>
-            <button type="button" class="btn btn-ghost" id="btnKuklinkRefreshPorts">Aktualisieren</button>
-          </div>
-        </div>
         <div class="form-group" style="margin-bottom:0.75rem">
           <label for="kuklinkJob">Auftrag</label>
           <select id="kuklinkJob" class="dienstreise-select">
             <option value="">– Bitte wählen –</option>
           </select>
         </div>
-        <div id="kuklinkAdvanced" hidden>
-          <div class="sp-v2-grid-3" style="margin-bottom:0.75rem">
+        <div class="form-group kuklink-port-group" style="margin-bottom:0.75rem">
+          <label for="kuklinkPort">COM-Port</label>
+          <div class="kuklink-port-row">
+            <select id="kuklinkPort" class="dienstreise-select">
+              <option value="">– Ports laden … –</option>
+            </select>
+            <button type="button" class="btn btn-ghost" id="btnKuklinkRefreshPorts">Aktualisieren</button>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <span id="kuklinkPresetLabel">Gerät / Schnittstelle</span>
+          <div class="kuklink-presets" role="group" aria-labelledby="kuklinkPresetLabel">
+            <button type="button" class="btn btn-primary kuklink-preset" id="btnKuklinkDwc35" data-preset="dwc35">DWC-3/5 = 9600,n,8,1</button>
+            <button type="button" class="btn btn-ghost kuklink-preset" id="btnKuklinkDwc4" data-preset="dwc4">DWC-4 / L2 = 1200,n,8,1</button>
+            <button type="button" class="btn btn-ghost kuklink-preset" id="btnKuklinkDwc6" data-preset="dwc6">DWC-6 = 9600,n,8,1</button>
+          </div>
+        </div>
+        <div id="kuklinkAdvanced">
+          <div class="kuklink-serial-row">
             <div class="form-group">
               <label for="kuklinkBaud">Baud</label>
               <select id="kuklinkBaud" class="dienstreise-select">
-                <option value="9600">9600</option>
                 <option value="1200">1200</option>
+                <option value="2400">2400</option>
+                <option value="4800">4800</option>
+                <option value="9600" selected>9600</option>
+                <option value="14400">14400</option>
                 <option value="19200">19200</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="kuklinkDataBits">Datenbits</label>
-              <select id="kuklinkDataBits" class="dienstreise-select">
-                <option value="8">8</option>
-                <option value="7">7</option>
+                <option value="38400">38400</option>
+                <option value="57600">57600</option>
               </select>
             </div>
             <div class="form-group">
               <label for="kuklinkParity">Parität</label>
               <select id="kuklinkParity" class="dienstreise-select">
-                <option value="none">keine</option>
+                <option value="none" selected>keine (n)</option>
                 <option value="even">even</option>
                 <option value="odd">odd</option>
                 <option value="mark">mark</option>
                 <option value="space">space</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="kuklinkDataBits">Datenbits</label>
+              <select id="kuklinkDataBits" class="dienstreise-select">
+                <option value="8" selected>8</option>
+                <option value="7">7</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="kuklinkStopBits">Stoppbits</label>
+              <select id="kuklinkStopBits" class="dienstreise-select">
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
               </select>
             </div>
           </div>
@@ -2170,7 +2237,6 @@
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
           <button type="button" class="btn btn-primary" id="btnKuklinkConnect">Verbinden</button>
           <button type="button" class="btn btn-ghost" id="btnKuklinkDisconnect">Trennen</button>
-          <button type="button" class="btn btn-ghost" id="btnKuklinkManual">Schnittstelle manuell</button>
           <button type="button" class="btn btn-primary" id="btnKuklinkDump">Parameterliste holen</button>
           <button type="button" class="btn btn-primary" id="btnKuklinkSave">PDF speichern</button>
         </div>

@@ -46,19 +46,18 @@ function registerKuklinkRoutes(app, ctx) {
       const body = req.body || {};
       const path = String(body.path || body.port || '').trim();
       if (!path) return res.status(400).json({ ok: false, error: 'COM-Port fehlt.' });
-      const manual = body.manual === true || body.manual === 1;
-      const settings = manual
-        ? {
-            path,
-            baudRate: body.baudRate,
-            dataBits: body.dataBits,
-            parity: body.parity,
-            stopBits: body.stopBits,
-          }
-        : null;
+      const settings = {
+        path,
+        baudRate: body.baudRate,
+        dataBits: body.dataBits,
+        parity: body.parity,
+        stopBits: body.stopBits,
+      };
       const result = await kuklink.connect(path, {
-        dbDir: ctx.dbDir,
-        settings: settings,
+        settings,
+        trigger: body.trigger,
+        family: body.family,
+        label: body.label,
       });
       if (!result.ok) {
         return res.json(result);

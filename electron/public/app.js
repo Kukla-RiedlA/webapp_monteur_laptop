@@ -25136,15 +25136,25 @@
     var statusEl = document.getElementById('kuklinkStatus');
     var previewEl = document.getElementById('kuklinkPreview');
     var termMetaEl = document.getElementById('kuklinkTermMeta');
-    var advancedEl = document.getElementById('kuklinkAdvanced');
+    var baudEl = document.getElementById('kuklinkBaud');
+    var dataBitsEl = document.getElementById('kuklinkDataBits');
+    var parityEl = document.getElementById('kuklinkParity');
+    var stopBitsEl = document.getElementById('kuklinkStopBits');
     var btnConnect = document.getElementById('btnKuklinkConnect');
     var btnDisconnect = document.getElementById('btnKuklinkDisconnect');
-    var btnManual = document.getElementById('btnKuklinkManual');
     var btnDump = document.getElementById('btnKuklinkDump');
     var btnSave = document.getElementById('btnKuklinkSave');
     var btnRefresh = document.getElementById('btnKuklinkRefreshPorts');
     if (!portSelect) return;
 
+    var PRESETS = {
+      dwc35: { baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1, trigger: 'p_or_stx', family: 'legacy_pa', label: 'DWC-3/5' },
+      dwc4: { baudRate: 1200, dataBits: 8, parity: 'none', stopBits: 1, trigger: 'p_or_stx', family: 'legacy_pa', label: 'DWC-4 L2' },
+      dwc6: { baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1, trigger: 'etx_ov', family: 'dwc6_pal', label: 'DWC-6' },
+    };
+    var selectedPreset = 'dwc35';
+    var skipConfigClose = false;
+    var portOpen = false;
     var liveTimer = null;
     var liveWanted = false;
     var termSeq = 0;
@@ -25153,6 +25163,72 @@
 
     function setStatus(text) {
       if (statusEl) statusEl.textContent = text || '';
+    }
+
+    function fitPortSelectWidth() {
+      if (!portSelect) return;
+      var opt = portSelect.options[portSelect.selectedIndex];
+      var text = (opt && opt.textContent) ? opt.textContent : '';
+      var cs = window.getComputedStyle(portSelect);
+      var probe = document.createElement('span');
+      probe.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap;font:' + cs.font;
+      probe.textContent = text || '–';
+      document.body.appendChild(probe);
+      var w = Math.ceil(probe.getBoundingClientRect().width) + 48;
+      probe.remove();
+      portSelect.style.width = Math.max(88, w) + 'px';
+    }
+
+    function serialFrame(s) {
+      var baud = s && s.baudRate != null ? s.baudRate : '';
+      var par = String((s && s.parity) || 'none').charAt(0).toLowerCase() || 'n';
+      var bits = s && s.dataBits != null ? s.dataBits : 8;
+      var stop = s && s.stopBits != null ? s.stopBits : 1;
+      return baud + ',' + par + ',' + bits + ',' + stop;
+    }
+
+    function currentPreset() {
+      return PRESETS[selectedPreset] || PRESETS.dwc35;
+    }
+
+    function updatePresetButtons() {
+      document.querySelectorAll('.kuklink-preset').forEach(function (btn) {
+        var on = btn.getAttribute('data-preset') === selectedPreset;
+        btn.classList.toggle('btn-primary', on);
+        btn.classList.toggle('btn-ghost', !on);
+      });
+    }
+
+    function applyPreset(id, closePort) {
+      var p = PRESETS[id];
+      if (!p) return;
+      selectedPreset = id;
+      skipConfigClose = true;
+      if (baudEl) baudEl.value = String(p.baudRate);
+      if (parityEl) parityEl.value = p.parity;
+      if (dataBitsEl) dataBitsEl.value = String(p.dataBits);
+      if (stopBitsEl) stopBitsEl.value = String(p.stopBits);
+      skipConfigClose = false;
+      updatePresetButtons();
+      if (closePort !== false) closePortForConfigChange();
+    }
+
+    async function closePortForConfigChange() {
+      if (!portOpen) return;
+      try {
+        await api('/api/kuklink/disconnect', { method: 'POST', body: '{}' });
+        portOpen = false;
+        setStatus('Nicht verbunden (Schnittstelle geändert)');
+        pollTerminalOnce();
+      } catch (e) {
+        portOpen = false;
+        setStatus((e && e.message) ? e.message : String(e));
+      }
+    }
+
+    function onConfigChange() {
+      if (skipConfigClose) return;
+      closePortForConfigChange();
     }
 
     function stopLiveTerminal() {
@@ -25194,7 +25270,7 @@
           termMetaEl.textContent = n ? n + ' Byte empfangen' : '';
         }
       } catch (_) {
-        /* Port kann während Probe kurz fehlen */
+        /* Terminal-Polling darf fehlschlagen */
       } finally {
         liveBusy = false;
       }
@@ -25211,6 +25287,20 @@
         }
         pollTerminalOnce();
       }, 150);
+    }
+
+    function settingsBody(path) {
+      var p = currentPreset();
+      return {
+        path: path,
+        baudRate: baudEl ? parseInt(baudEl.value, 10) : p.baudRate,
+        dataBits: dataBitsEl ? parseInt(dataBitsEl.value, 10) : p.dataBits,
+        parity: parityEl ? parityEl.value : p.parity,
+        stopBits: stopBitsEl ? parseInt(stopBitsEl.value, 10) : p.stopBits,
+        trigger: p.trigger,
+        family: p.family,
+        label: p.label,
+      };
     }
 
     async function loadJobs() {
@@ -25236,6 +25326,7 @@
       var data = await api('/api/kuklink/ports');
       var ports = (data && data.ports) || [];
       var cur = portSelect.value;
+      skipConfigClose = true;
       portSelect.innerHTML = '<option value="">– Bitte wählen –</option>';
       ports.forEach(function (p) {
         var opt = document.createElement('option');
@@ -25248,18 +25339,17 @@
       } else if (ports.length === 1) {
         portSelect.value = ports[0].path;
       }
+      skipConfigClose = false;
+      fitPortSelectWidth();
       if (data && data.status && data.status.connected) {
+        portOpen = true;
         setStatus(
           'Verbunden: ' +
             (data.status.label || data.status.family || '') +
             ' · ' +
             data.status.path +
             ' ' +
-            data.status.baudRate +
-            ' ' +
-            data.status.dataBits +
-            data.status.parity.charAt(0).toUpperCase() +
-            data.status.stopBits,
+            serialFrame(data.status),
         );
       }
     }
@@ -25282,16 +25372,25 @@
       });
     }
 
+    document.querySelectorAll('.kuklink-preset').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        applyPreset(btn.getAttribute('data-preset'), true);
+      });
+    });
+    updatePresetButtons();
+
+    [portSelect, baudEl, dataBitsEl, parityEl, stopBitsEl].forEach(function (el) {
+      if (!el) return;
+      el.addEventListener('change', onConfigChange);
+    });
+    portSelect.addEventListener('change', fitPortSelectWidth);
+    fitPortSelectWidth();
+
     if (btnRefresh) {
       btnRefresh.addEventListener('click', function () {
         loadPorts().catch(function (e) {
           setStatus((e && e.message) ? e.message : String(e));
         });
-      });
-    }
-    if (btnManual && advancedEl) {
-      btnManual.addEventListener('click', function () {
-        advancedEl.hidden = !advancedEl.hidden;
       });
     }
     if (btnConnect) {
@@ -25301,26 +25400,20 @@
           alert('Bitte einen COM-Port wählen.');
           return;
         }
-        setStatus('Verbinde, prüfe Baudrate und Parität …');
+        var body = settingsBody(path);
+        setStatus('Verbinde ' + path + ' · ' + serialFrame(body) + ' …');
         termSeq = 0;
         termGen = 0;
         if (previewEl) previewEl.textContent = '';
         startLiveTerminal();
-        var body = { path: path };
-        if (advancedEl && !advancedEl.hidden) {
-          body.manual = true;
-          body.baudRate = parseInt(document.getElementById('kuklinkBaud').value, 10);
-          body.dataBits = parseInt(document.getElementById('kuklinkDataBits').value, 10);
-          body.parity = document.getElementById('kuklinkParity').value;
-          body.stopBits = 1;
-        }
         try {
           var data = await api('/api/kuklink/connect', { method: 'POST', body: JSON.stringify(body) });
           if (!data.ok) {
-            if (data.needManual && advancedEl) advancedEl.hidden = false;
+            portOpen = false;
             setStatus(data.error || 'Verbindung fehlgeschlagen');
             return;
           }
+          portOpen = true;
           var st = data.status || {};
           setStatus(
             'Verbunden: ' +
@@ -25328,17 +25421,11 @@
               ' · ' +
               st.path +
               ' ' +
-              st.baudRate +
-              '/' +
-              st.dataBits +
-              '/' +
-              st.parity +
-              '/' +
-              st.stopBits,
+              serialFrame(st),
           );
           pollTerminalOnce();
         } catch (e) {
-          if (advancedEl) advancedEl.hidden = false;
+          portOpen = false;
           setStatus((e && e.message) ? e.message : String(e));
         }
       });
@@ -25347,6 +25434,7 @@
       btnDisconnect.addEventListener('click', async function () {
         try {
           await api('/api/kuklink/disconnect', { method: 'POST', body: '{}' });
+          portOpen = false;
           setStatus('Nicht verbunden');
           pollTerminalOnce();
         } catch (e) {

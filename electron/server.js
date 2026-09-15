@@ -97,6 +97,7 @@ const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, pullRecentLohnL
 const { registerHinweiseRoutes } = require('./lib/hinweise-routes');
 const { registerKuklinkRoutes } = require('./lib/kuklink/register-routes');
 const kuklinkFormat = require('./lib/kuklink/format-detect');
+const { idPaToPal, isIdPaFormat } = require('./lib/kuklink/idpa-to-pal');
 const { createBackgroundJobService } = require('./lib/background_jobs');
 const {
   isJobAssignedToTechnician,
@@ -15612,10 +15613,13 @@ function createApp(db) {
       return { ok: false, error: 'Keine Fabrikationsnummer im Dump. Bitte FN angeben.' };
     }
     const fn = parseInt(fab, 10);
-    const filename = dump.filename || kuklinkFormat.suggestedFilename(family, fab);
-    const csvBuffer = Buffer.isBuffer(dump.buffer)
-      ? dump.buffer
-      : Buffer.from(dump.text, 'latin1');
+    const idPa = isIdPaFormat(dump.text);
+    const palText = idPa ? idPaToPal(dump.text) : dump.text;
+    const filename =
+      dump.filename && !idPa
+        ? dump.filename
+        : kuklinkFormat.suggestedFilename(family, fab, dump.text);
+    const csvBuffer = Buffer.from(palText, 'latin1');
 
     const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
     const docMonteurPath = path.join(reiseDir, 'Dokumente_Monteur');
@@ -15650,15 +15654,18 @@ function createApp(db) {
     const paramDir = path.join(docMonteurPath, folderName, montageFolderNamePl, 'Parameter');
     fs.mkdirSync(paramDir, { recursive: true });
 
-    let csvText = dump.text;
+    let csvText = palText;
     let pdfBytes = null;
     try {
       const csvToPdfBuffer = getCsvToPdfBuffer();
-      pdfBytes = await csvToPdfBuffer(csvText, { filename, sourcePath: filename });
+      pdfBytes = await csvToPdfBuffer(csvText, {
+        filename,
+        sourcePath: 'FN_' + String(fn),
+      });
     } catch (pdfErr) {
       console.warn('[kuklink] PDF:', pdfErr && pdfErr.message ? pdfErr.message : pdfErr);
     }
-    const pdfBasename = filename.replace(/\.(csv|txt|pa3|pa4|pa5|pal)$/i, '') + '.pdf';
+    const pdfBasename = 'FN_' + String(fn) + '.pdf';
     const pdfPath = path.join(paramDir, pdfBasename);
     if (pdfBytes) {
       writeFileWithRetry(pdfPath, pdfBytes);

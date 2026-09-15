@@ -21,6 +21,30 @@ function listPorts() {
   return SerialPort.list();
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function setSignalNone(port) {
+  return new Promise((resolve) => {
+    if (!port || typeof port.set !== 'function') {
+      resolve();
+      return;
+    }
+    port.set({ dtr: false, rts: false, brk: false }, () => resolve());
+  });
+}
+
+function flushPort(port) {
+  return new Promise((resolve) => {
+    if (!port || typeof port.flush !== 'function') {
+      resolve();
+      return;
+    }
+    port.flush(() => resolve());
+  });
+}
+
 function openPort(opts) {
   const SerialPort = loadSerialPort();
   const port = new SerialPort({
@@ -29,12 +53,25 @@ function openPort(opts) {
     dataBits: Number(opts.dataBits) || 8,
     parity: opts.parity || 'none',
     stopBits: Number(opts.stopBits) || 1,
+    rtscts: false,
+    xon: false,
+    xoff: false,
     autoOpen: false,
   });
   return new Promise((resolve, reject) => {
-    port.open((err) => {
-      if (err) reject(err);
-      else resolve(port);
+    port.open(async (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      try {
+        // SuperCom ComSetState(..., SIGNAL_NONE): DTR/RTS aus
+        await setSignalNone(port);
+        await sleep(150);
+        resolve(port);
+      } catch (e) {
+        resolve(port);
+      }
     });
   });
 }
@@ -59,6 +96,17 @@ function writeBytes(port, data) {
   });
 }
 
+/** Wie KUKLink sendString: Byte für Byte mit Pause (SEC0_05 = 50 ms). */
+async function writeBytesWithGap(port, data, gapMs) {
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  const gap = Number(gapMs) || 0;
+  if (!gap || buf.length <= 1) return writeBytes(port, buf);
+  for (let i = 0; i < buf.length; i++) {
+    await writeBytes(port, buf.subarray(i, i + 1));
+    await new Promise((resolve) => setTimeout(resolve, gap));
+  }
+}
+
 /**
  * Bytes sammeln. Bei LF optional ACK 0x00 (DWC-3/4/5 Parameterausdruck).
  * Ende: Idle nach mindestens minBytes, oder maxMs.
@@ -68,6 +116,7 @@ function collectBytes(port, opts) {
   const idleMs = opts && opts.idleMs != null ? Number(opts.idleMs) : 1200;
   const minBytes = opts && opts.minBytes != null ? Number(opts.minBytes) : 16;
   const ackOnLf = !!(opts && opts.ackOnLf);
+  const abortIfEmptyMs = opts && opts.abortIfEmptyMs != null ? Number(opts.abortIfEmptyMs) : 0;
   const onChunk = opts && typeof opts.onChunk === 'function' ? opts.onChunk : null;
   const chunks = [];
   let lastRx = Date.now();
@@ -83,7 +132,7 @@ function collectBytes(port, opts) {
     }
     if (ackOnLf) {
       for (let i = 0; i < buf.length; i++) {
-        if (buf[i] === 0x0a) {
+        if (buf[i] === 0x0a || buf[i] === 0x0d) {
           try {
             port.write(Buffer.from([0x00]));
           } catch (_) {}
@@ -99,6 +148,10 @@ function collectBytes(port, opts) {
       const now = Date.now();
       const n = chunks.reduce((s, c) => s + c.length, 0);
       if (now - started >= maxMs) {
+        finish();
+        return;
+      }
+      if (abortIfEmptyMs > 0 && n === 0 && now - started >= abortIfEmptyMs) {
         finish();
         return;
       }
@@ -139,7 +192,11 @@ module.exports = {
   openPort,
   closePort,
   writeBytes,
+  writeBytesWithGap,
   collectBytes,
+  flushPort,
+  setSignalNone,
+  sleep,
   readPrefs,
   writePrefs,
 };

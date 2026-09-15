@@ -17,7 +17,12 @@ function formatRx(buf) {
   let out = '';
   for (let i = 0; i < src.length; i++) {
     const b = src[i];
-    if (b === 0x0a || b === 0x0d || b === 0x09) {
+    if (b === 0x0d) {
+      out += '\n';
+      if (src[i + 1] === 0x0a) i += 1;
+    } else if (b === 0x0c) {
+      out += '\n\n';
+    } else if (b === 0x0a || b === 0x09) {
       out += String.fromCharCode(b);
     } else if (b === 0x02) {
       out += '<STX>';
@@ -87,11 +92,20 @@ function snapshot() {
   return { generation, seq: text.length, text, rxBytes };
 }
 
+/** Probe-Log ersetzen durch den erfolgreichen Dump. */
+function replaceWithDump(dumpText, header) {
+  clear();
+  const h = String(header || '').trim();
+  if (h) meta(h);
+  append(String(dumpText || ''));
+}
+
 module.exports = {
   clear,
   rx,
   tx,
   meta,
+  replaceWithDump,
   since,
   snapshot,
   formatRx,
