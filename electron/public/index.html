@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kukla Monteur Tool</title>
+  <title>KUKpit</title>
   <link rel="icon" href="icon.png" type="image/png">
   <script>
     (function () {
@@ -19,28 +19,74 @@
   </script>
   <link rel="stylesheet" href="ui-theme.css">
   <link rel="stylesheet" href="css/kukla-brand.css">
+  <link rel="stylesheet" href="css/kukpit-tokens.css">
+  <link rel="stylesheet" href="css/kukpit-shell.css?v=20260910proto">
+  <link rel="stylesheet" href="css/kukpit-components.css">
   <link rel="stylesheet" href="css/modules-web-parity.css">
   <link rel="stylesheet" href="css/anlagenstamm-dispo.css">
   <link rel="stylesheet" href="css/anlagenakte.css">
   <link rel="stylesheet" href="css/anlagenakte-form-viewer.css">
-  <link rel="stylesheet" href="css/serviceprotokoll-v2.css">
+  <link rel="stylesheet" href="css/serviceprotokoll-v2.css?v=20260910sticky">
   <link rel="stylesheet" href="css/montagebericht-v2.css">
   <link rel="stylesheet" href="css/arbeitsnachweis.css">
   <link rel="stylesheet" href="css/kontrollwiegung-v2.css">
   <link rel="stylesheet" href="css/schleppketten-v2.css">
   <link rel="stylesheet" href="css/kunden-dokumentation.css">
   <link rel="stylesheet" href="css/abrechnung-web-parity.css">
-  <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260828">
+  <link rel="stylesheet" href="css/file_preview_hover.css?v=20260908hover">
+  <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20260907">
   <link rel="stylesheet" href="css/hinweise.css?v=20260902files">
+  <link rel="stylesheet" href="css/kukpit-shell.css?v=20260910proto">
   <style>
     * { box-sizing: border-box; }
-    html { scroll-padding-top: var(--header-height, 72px); }
-    body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
-    /* sticky (nicht fixed): bleibt im Fluss, überdeckt Inhalt nicht */
-    .app-header { position: sticky; top: 0; z-index: 200; background: var(--card); border-bottom: 1px solid var(--accent); }
-    .app-title { margin: 0; font-size: 1.1rem; font-weight: 600; padding: 0.75rem 1rem 0.25rem; color: var(--text); }
-    .toolbar { display: flex; align-items: center; gap: 1rem; padding: 0.25rem 1rem 0.75rem; background: var(--card); flex-wrap: wrap; }
+    html { height: 100%; overflow: hidden; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); height: 100%; min-height: 0; overflow: hidden; }
+    /* Header-Look: kukpit-shell.css */
     .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
+    .header-sync-stack {
+      display: inline-flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: stretch;
+      align-self: stretch;
+      min-width: 9.5rem;
+      gap: 3px;
+    }
+    .header-sync-row {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .header-folder-dl-track {
+      display: block;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.22);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    html[data-ui-theme="dark"] .header-folder-dl-track {
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .header-folder-dl-fill {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: #eefaf5;
+      border-radius: 2px;
+      transition: width 0.25s ease-out;
+    }
+    html[data-ui-theme="dark"] .header-folder-dl-fill {
+      background: #0e7b5a;
+    }
+    .header-folder-dl-track.is-indeterminate .header-folder-dl-fill {
+      width: 35% !important;
+      animation: header-folder-dl-slide 1.1s ease-in-out infinite;
+    }
+    @keyframes header-folder-dl-slide {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(320%); }
+    }
     .hinweis-modal { z-index: 4000; }
     .toolbar-technician-name { color: var(--text); font-size: 0.95rem; }
     .app-version { font-size: 0.8rem; color: var(--muted); margin-left: 0.5rem; }
@@ -75,6 +121,8 @@
     .sp-fab-buttons { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.35rem; }
     .sp-fab-buttons .sp-fab-btn { min-width: 4.5rem; padding: 0.4rem 0.75rem; font-size: 0.9rem; }
     .sp-fab-buttons .sp-fab-btn.is-active { background: var(--accent); font-weight: 600; }
+    .sp-fab-chip.is-excluded .sp-fab-btn:hover,
+    .sp-fab-chip .sp-fab-btn:disabled:hover { background: transparent; }
     .sp-mess-section-title { display: block; font-weight: 600; margin-bottom: 0.5rem; }
     .sp-mess-block {
       width: fit-content;
@@ -448,6 +496,11 @@
     .view-einstellungen.active { display: block; }
     .view-dienstreise { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-dienstreise.active { display: block; }
+    /* RAMS-UI vorübergehend aus, bis das Feature fertig ist. Zum Reaktivieren: data-rams-ui="off" am #viewDienstreise entfernen. */
+    #viewDienstreise[data-rams-ui="off"] .auftraege-tabs,
+    #viewDienstreise[data-rams-ui="off"] #auftraegePaneRamsFetch,
+    #viewDienstreise[data-rams-ui="off"] #auftraegePaneRamsCreate,
+    #viewDienstreise[data-rams-ui="off"] #ramsWizardOverlay { display: none !important; }
     .auftraege-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--accent); margin-bottom: 1rem; flex-wrap: wrap; }
     .auftraege-tab { background: transparent; border: 1px solid transparent; border-bottom: none; padding: 0.5rem 0.9rem; font: inherit; color: var(--muted); cursor: pointer; border-top-left-radius: 6px; border-top-right-radius: 6px; }
     .auftraege-tab:hover { color: var(--text); }
@@ -507,6 +560,440 @@
     .view-protokolle.active { display: block; }
     .view-protokolle-sub { display: none; }
     .view-protokolle-sub.active { display: block; }
+    #viewProtokolleParameterlisten .card {
+      max-width: none;
+    }
+    .parameterlisten-file-list-wrap,
+    .parameterlisten-preview-wrap { margin-bottom: 0.75rem; }
+    .parameterlisten-file-list-wrap > label,
+    .parameterlisten-preview-wrap > label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+      color: var(--text);
+    }
+    .parameterlisten-file-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      border: 1px solid var(--accent, #cfe8d1);
+      border-radius: 8px;
+      overflow: visible;
+      background: var(--bg);
+    }
+    .parameterlisten-file-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.45rem 0.55rem;
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+      cursor: pointer;
+    }
+    .parameterlisten-file-item:last-child { border-bottom: none; }
+    .parameterlisten-file-item:hover { background: rgba(14, 123, 90, 0.1); }
+    .parameterlisten-file-item.is-active {
+      background: rgba(14, 123, 90, 0.12);
+      outline: 2px solid var(--kukla-primary, #0e7b5a);
+      outline-offset: -2px;
+    }
+    .parameterlisten-file-name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.9rem;
+    }
+    .parameterlisten-file-meta {
+      flex-shrink: 0;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .parameterlisten-file-remove {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.75rem;
+      height: 1.75rem;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--kukla-primary, #0e7b5a);
+    }
+    .parameterlisten-file-remove:hover { background: rgba(185, 28, 28, 0.1); }
+    .parameterlisten-file-remove img {
+      width: 16px;
+      height: 16px;
+      display: block;
+    }
+    .parameterlisten-preview-hint {
+      margin: 0.4rem 0 0;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .parameterlisten-preview-meta {
+      margin: 0 0 0.4rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .parameterlisten-preview-table-wrap {
+      max-height: 28rem;
+      width: max-content;
+      max-width: 100%;
+      overflow: auto;
+      border: 1px solid var(--accent, #cfe8d1);
+      border-radius: 8px;
+      background: var(--bg);
+    }
+    .parameterlisten-preview-table {
+      width: max-content;
+      max-width: 100%;
+      border-collapse: collapse;
+      table-layout: auto;
+      font-size: 0.8rem;
+      color: var(--text);
+    }
+    .parameterlisten-preview-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #eefaf5;
+      color: var(--kukla-primary-hover, #0c6b4f);
+      font-weight: 600;
+      text-align: left;
+      padding: 0.35rem 0.5rem;
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+      white-space: nowrap;
+    }
+    .parameterlisten-preview-table td {
+      padding: 0.22rem 0.5rem;
+      border-bottom: 1px solid rgba(14, 123, 90, 0.12);
+      vertical-align: top;
+      word-break: break-word;
+    }
+    .parameterlisten-preview-table .is-name {
+      max-width: 16rem;
+    }
+    .parameterlisten-preview-table .is-value {
+      white-space: nowrap;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .parameterlisten-preview-table .is-parid {
+      white-space: nowrap;
+    }
+    .parameterlisten-preview-table .is-unit {
+      max-width: 10rem;
+    }
+    .parameterlisten-preview-table .is-comment {
+      max-width: 10rem;
+    }
+    .parameterlisten-preview-table tr.is-sep td {
+      padding: 0.12rem 0.45rem;
+      background: #eefaf5;
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+    }
+    .parameterlisten-preview-table tr.is-group td {
+      font-weight: 600;
+      background: #eefaf5;
+      color: var(--kukla-primary-hover, #0c6b4f);
+    }
+    .parameterlisten-preview-pre {
+      margin: 0;
+      max-height: 28rem;
+      overflow: auto;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--accent, #cfe8d1);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Consolas, "Segoe UI Mono", "Courier New", monospace;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .parameterlisten-preview-note {
+      margin: 0.45rem 0 0;
+      font-size: 0.82rem;
+      color: var(--muted, #4b5563);
+    }
+    .parameterlisten-lists { margin-top: 0.35rem; }
+    .parameterlisten-empty {
+      margin: 0;
+      padding: 0.65rem 0.75rem;
+      color: var(--muted, #4b5563);
+      font-size: 0.9rem;
+    }
+    .parameterlisten-file-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.5rem 0.75rem;
+      align-items: center;
+      padding: 0.55rem 0.7rem;
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+    }
+    .parameterlisten-file-row:last-child { border-bottom: none; }
+    .parameterlisten-file-main { min-width: 0; }
+    .parameterlisten-file-title {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem 0.5rem;
+      font-weight: 600;
+      font-size: 0.92rem;
+    }
+    .parameterlisten-file-title span.name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .parameterlisten-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      background: #eefaf5;
+      color: #0c6a4d;
+      border: 1px solid #cfe8d1;
+    }
+    .parameterlisten-pill.is-backup {
+      background: #fff7ed;
+      color: #9a3412;
+      border-color: #fed7aa;
+    }
+    .parameterlisten-file-meta {
+      margin-top: 0.15rem;
+      font-size: 0.78rem;
+      color: var(--muted, #4b5563);
+    }
+    .parameterlisten-file-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      justify-content: flex-end;
+    }
+    .parameterlisten-file-actions .btn {
+      padding: 0.28rem 0.55rem;
+      font-size: 0.82rem;
+    }
+    .parameterlisten-delete {
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+    }
+    .parameterlisten-delete:hover { background: rgba(185, 28, 28, 0.1); }
+    .parameterlisten-delete img { width: 16px; height: 16px; }
+    .parameterlisten-file-row[data-pl-kind="stamm"] {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+    .parameterlisten-compare-check {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.1rem 0.15rem 0.1rem 0;
+    }
+    .parameterlisten-compare-check input {
+      width: 1.05rem;
+      height: 1.05rem;
+      accent-color: var(--kukla-primary, #0e7b5a);
+      cursor: pointer;
+    }
+    .parameterlisten-fn-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 0.75rem;
+      align-items: start;
+      margin-bottom: 0.75rem;
+    }
+    .parameterlisten-fn-group {
+      border: 1px solid #cfe8d1;
+      border-radius: 10px;
+      margin-bottom: 0;
+      background: #fff;
+      overflow: visible;
+      min-width: 0;
+    }
+    .parameterlisten-fn-group > summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 0.55rem 0.75rem;
+      font-weight: 600;
+      background: #eefaf5;
+      color: #0c6a4d;
+    }
+    .parameterlisten-fn-group > summary::-webkit-details-marker { display: none; }
+    .parameterlisten-fn-compare {
+      border: 1px solid #cfe8d1;
+      border-radius: 10px;
+      background: #fff;
+      min-width: 0;
+      min-height: 4.5rem;
+      overflow: auto;
+      max-height: 70vh;
+    }
+    .parameterlisten-fn-compare-head {
+      padding: 0.55rem 0.75rem;
+      font-weight: 600;
+      background: #eefaf5;
+      color: #0c6a4d;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .parameterlisten-fn-compare .anlagenstamm-trend-table {
+      font-size: 0.8rem;
+    }
+    .parameterlisten-fn-compare-hint {
+      margin: 0;
+      padding: 0.7rem 0.75rem;
+      color: var(--muted, #4b5563);
+      font-size: 0.85rem;
+    }
+    .parameterlisten-fn-compare-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.35rem 0.75rem 0.55rem;
+      font-size: 0.82rem;
+      color: var(--muted, #4b5563);
+    }
+    .parameterlisten-fn-compare-toolbar label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      cursor: pointer;
+    }
+    .param-npp-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 0;
+      position: sticky;
+      top: 2.4rem;
+      z-index: 1;
+      background: #eefaf5;
+      border-top: 1px solid #cfe8d1;
+      border-bottom: 1px solid #cfe8d1;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #0c6a4d;
+    }
+    .param-npp-head span {
+      padding: 0.35rem 0.5rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .param-npp-head span:last-child {
+      border-left: 1px solid #cfe8d1;
+    }
+    .param-npp-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.75rem;
+      line-height: 1.35;
+    }
+    .param-npp-pane {
+      display: grid;
+      grid-template-columns: 3.1rem minmax(0, 1fr);
+      min-width: 0;
+      border-bottom: 1px solid rgba(207, 232, 209, 0.7);
+    }
+    .param-npp-pane:last-child {
+      border-left: 1px solid #cfe8d1;
+    }
+    .param-npp-ln {
+      padding: 0 0.35rem;
+      text-align: right;
+      color: var(--muted, #6b7280);
+      user-select: none;
+      background: rgba(238, 250, 245, 0.55);
+    }
+    .param-npp-text {
+      margin: 0;
+      padding: 0 0.4rem;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: inherit;
+    }
+    .param-npp-row.param-npp-removed .param-npp-left,
+    .param-npp-row.param-npp-added .param-npp-right {
+      background: rgba(220, 53, 69, 0.16);
+    }
+    .param-npp-row.param-npp-changed .param-npp-pane {
+      background: rgba(255, 193, 7, 0.18);
+    }
+    .param-npp-inline {
+      background: rgba(255, 193, 7, 0.55);
+      border-radius: 2px;
+    }
+    .param-npp-row.param-npp-removed .param-npp-inline,
+    .param-npp-row.param-npp-added .param-npp-inline {
+      background: rgba(220, 53, 69, 0.28);
+    }
+    .param-npp-wrap.is-only-diff .param-npp-row.param-npp-equal {
+      display: none;
+    }
+    @media (max-width: 900px) {
+      .parameterlisten-fn-split { grid-template-columns: 1fr; }
+    }
+    .parameterlisten-modal[hidden] { display: none !important; }
+    .parameterlisten-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 4000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(17, 24, 39, 0.45);
+      padding: 1rem;
+    }
+    .parameterlisten-modal-dialog {
+      width: min(28rem, 100%);
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #cfe8d1;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+      overflow: hidden;
+    }
+    .parameterlisten-modal-head {
+      padding: 0.7rem 0.9rem;
+      background: #eefaf5;
+      color: #0c6a4d;
+      font-weight: 700;
+    }
+    .parameterlisten-modal-body {
+      padding: 0.9rem;
+      color: #1a1a1a;
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+    .parameterlisten-modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.45rem;
+      padding: 0.65rem 0.9rem 0.9rem;
+    }
+      margin: 0.4rem 0 0;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
     .toolbar-dropdown-wrap { position: relative; display: inline-block; }
     .toolbar-dropdown { position: absolute; top: 100%; left: 0; min-width: 180px; margin-top: 2px; padding: 0.25rem 0; background: var(--card); border: 1px solid var(--accent); border-radius: 6px; box-shadow: var(--dropdown-shadow); z-index: 300; display: none; }
     .toolbar-dropdown.open { display: block; }
@@ -594,6 +1081,7 @@
       display: block;
     }
     .dienstreise-explorer-filename { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dienstreise-explorer-row[data-is-dir="0"] .dienstreise-explorer-name { user-select: none; }
     .dienstreise-explorer-filename.projekte-neu-open-link {
       border: none;
       background: transparent;
@@ -715,6 +1203,12 @@
     .anlagenstamm-pn-tree-block > .anlagenstamm-pn-parent-heading:first-child { margin-top: 0; }
     .view-projektdaten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-projektdaten.active { display: block; }
+    .view-projektdaten .projektdaten-leistung-row {
+      cursor: pointer;
+    }
+    .view-projektdaten .projektdaten-leistung-row .modal-leistung-col-action {
+      cursor: default;
+    }
     .view-projektdaten .card { max-width: none; }
     .projektdaten-heading-row {
       display: flex;
@@ -1171,6 +1665,148 @@
     .modal-overlay { position: fixed; top: var(--header-height); left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: stretch; justify-content: stretch; z-index: 100; }
     .modal-overlay.active { display: flex; }
     .accept-offline-overlay.modal-overlay.active { align-items: center; justify-content: center; padding: 1rem; z-index: 250; }
+    #modalFinishJobFiles.modal-overlay.active {
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 250;
+    }
+    #modalFinishJobFiles .finish-job-files-box {
+      width: min(96vw, 42rem);
+      max-width: min(96vw, 42rem);
+      max-height: calc(100vh - var(--header-height, 3.5rem) - 2rem);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+    #modalFinishJobFiles .finish-job-files-box h3 {
+      flex-shrink: 0;
+    }
+    #modalFinishJobFiles .finish-job-files-hint {
+      margin: 0 0 0.5rem;
+      font-size: 0.85rem;
+    }
+    #modalFinishJobFiles .finish-job-files-list {
+      flex: 1;
+      min-height: 8rem;
+      overflow: auto;
+      margin: 0 0 0.75rem;
+      border: 1px solid var(--accent, #cfe8d1);
+      border-radius: 8px;
+      background: var(--card, #fff);
+    }
+    #modalFinishJobFiles .finish-job-files-group {
+      border-bottom: 1px solid var(--accent, #cfe8d1);
+    }
+    #modalFinishJobFiles .finish-job-files-group:last-child { border-bottom: none; }
+    #modalFinishJobFiles .finish-job-files-group-title {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      margin: 0;
+      padding: 0.4rem 0.65rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      background: var(--accent, #eefaf5);
+      color: var(--kukla-primary-hover, #0c6b4f);
+    }
+    #modalFinishJobFiles .finish-job-file-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      padding: 0.4rem 0.65rem;
+      cursor: default;
+    }
+    #modalFinishJobFiles .finish-job-file-row:hover {
+      background: rgba(14, 123, 90, 0.06);
+    }
+    #modalFinishJobFiles .finish-job-file-row input[type="checkbox"] {
+      flex-shrink: 0;
+      margin-top: 0.2rem;
+    }
+    #modalFinishJobFiles .finish-job-file-name {
+      flex: 1;
+      min-width: 0;
+      word-break: break-word;
+      color: var(--text, #1a1a1a);
+    }
+    #modalFinishJobFiles .finish-job-file-row:hover .finish-job-file-name {
+      text-decoration: underline;
+      color: var(--kukla-primary, #0e7b5a);
+    }
+    #modalFinishJobFiles .finish-job-file-meta {
+      flex-shrink: 0;
+      font-size: 0.78rem;
+      color: var(--muted, #5c5c5c);
+      white-space: nowrap;
+    }
+    #modalFinishJobFiles .finish-job-dropzone {
+      flex-shrink: 0;
+      border: 1px dashed var(--kukla-primary, #0e7b5a);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      margin-bottom: 0.65rem;
+      text-align: center;
+      background: var(--accent, #eefaf5);
+      font-size: 0.85rem;
+    }
+    #modalFinishJobFiles .finish-job-dropzone.is-dragover {
+      outline: 2px solid var(--kukla-primary, #0e7b5a);
+    }
+    #modalFinishJobFiles .finish-job-dropzone-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      justify-content: center;
+      align-items: center;
+      margin-top: 0.35rem;
+    }
+    #modalFinishJobFiles .finish-job-fn-select {
+      min-width: 8rem;
+      max-width: 100%;
+    }
+    #modalFinishJobFiles .finish-job-files-footer {
+      flex-shrink: 0;
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    @media (max-width: 720px) {
+      #modalFinishJobFiles .finish-job-files-box {
+        width: 96vw;
+        max-width: 96vw;
+        max-height: calc(100vh - var(--header-height, 3.5rem) - 1.5rem);
+      }
+      #modalFinishJobFiles .finish-job-file-row {
+        flex-wrap: wrap;
+      }
+      #modalFinishJobFiles .finish-job-file-meta {
+        width: 100%;
+        padding-left: 1.4rem;
+        white-space: normal;
+      }
+      #modalFinishJobFiles .finish-job-files-footer {
+        flex-direction: column;
+      }
+      #modalFinishJobFiles .finish-job-files-footer .btn {
+        width: 100%;
+      }
+    }
+    @media (max-height: 720px) {
+      #modalFinishJobFiles .finish-job-dropzone {
+        padding: 0.4rem 0.5rem;
+        margin-bottom: 0.4rem;
+      }
+      #modalFinishJobFiles .finish-job-files-hint {
+        font-size: 0.8rem;
+        margin-bottom: 0.35rem;
+      }
+      #modalFinishJobFiles .finish-job-files-list {
+        min-height: 5rem;
+      }
+    }
     /* Über dem Serviceprotokoll-iframe (sonst fängt das Embed alle Klicks). */
     #modalSpCatalog.modal-overlay.active {
       top: 0;
@@ -1578,66 +2214,113 @@
 </head>
 <body>
   <header class="app-header" role="banner">
-    <h1 class="app-title">Kukla Monteur Tool</h1>
-    <nav class="toolbar" aria-label="Hauptnavigation">
-      <button class="btn btn-ghost" id="btnViewStart">Start</button>
-    <button class="btn btn-ghost" id="btnViewDienstreise" title="Auftragsliste, RAMS Abrufen und Erstellen">Aufträge</button>
-    <button type="button" class="btn btn-ghost" id="btnViewAbrechnung" title="Abrechnung">Abrechnung</button>
-    <button type="button" class="btn btn-ghost" id="btnViewZeitschreibung" title="Zeitschreibung">Zeitschreibung</button>
-    <div class="toolbar-dropdown-wrap">
-      <button type="button" class="btn btn-ghost" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">Protokolle ▾</button>
-      <div class="toolbar-dropdown" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-arbeitsnachweis">Arbeitsnachweis</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-montagebericht">Montagebericht</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-parameterlisten">Parameterlisten</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-kontrollwiegungen">Kontrollwiegungen</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-schleppketten">Schleppketten-Test</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-pruefzertifikat">Prüfzertifikat</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-service">Service</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="protokolle-kunden">Protokolle für Kunden</button>
+    <div class="header-facet" aria-hidden="true"></div>
+    <div class="win-controls" aria-label="Fenster">
+      <button type="button" class="win-btn" id="winBtnMin" aria-label="Minimieren">–</button>
+      <button type="button" class="win-btn" id="winBtnMax" aria-label="Maximieren">□</button>
+      <button type="button" class="win-btn close" id="winBtnClose" aria-label="Schließen">×</button>
+    </div>
+    <div class="header-top" id="kukpitHeaderTop">
+      <div class="logo-plate">
+        <img class="app-brand-mark" src="assets/img/kukla_logo_claim_green.png" alt="KUKLA" width="96" height="48">
+      </div>
+      <span class="brand-rule"></span>
+      <div class="brand-text">
+        <h1 class="brand-title app-title">KUK<span class="pit">pit</span></h1>
+        <div class="brand-tagline app-tagline">Kukla Monteur Cockpit</div>
+      </div>
+      <div class="header-claim">
+        <span class="header-claim-slash" aria-hidden="true"></span>
+        <p class="header-claim-text">Weighing<br>Precision<br>in every project</p>
       </div>
     </div>
-    <button class="btn btn-ghost" id="btnViewArchiv">Archiv</button>
-    <button class="btn btn-ghost" id="btnViewAnlagenstamm">Anlagenstamm</button>
-    <div class="toolbar-dropdown-wrap">
-      <button type="button" class="btn btn-ghost" id="btnViewAbwesenheiten" aria-haspopup="true" aria-expanded="false">Abwesenheiten ▾</button>
-      <div id="abwesenheitenDropdown" class="toolbar-dropdown" role="menu" aria-label="Abwesenheiten">
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="abwesenheiten">Abwesenheiten</button>
-      </div>
-    </div>
-    <div class="toolbar-dropdown-wrap">
-      <button type="button" class="btn btn-ghost" id="btnViewBausteine" aria-haspopup="true" aria-expanded="false">Bausteine ▾</button>
-      <div class="toolbar-dropdown" id="bausteineDropdown" role="menu" aria-label="Bausteine Untermenü">
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="textbausteine">Textbausteine</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="arbeitsschritte">Arbeitsschritte Service</button>
-        <button type="button" class="toolbar-dropdown-item" role="menuitem" data-view="arbeitsschritte-ibn">Arbeitsschritte Inbetriebnahme</button>
-      </div>
-    </div>
-    <span class="toolbar-right">
-      <button type="button" id="hinweisLampBtn" class="hinweis-lamp is-off" title="Montagehinweise" aria-label="Montagehinweise">
-        <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M9 21h6v-1.5H9V21zm3-19a7 7 0 00-4 12.7V17h8v-2.3A7 7 0 0012 2zm2.2 11.4l-.7.4V15.5h-3v-1.7l-.7-.4A5.5 5.5 0 1112 3.5a5.5 5.5 0 012.2 9.9z"/></svg>
+    <div class="header-rule"></div>
+    <nav class="app-nav toolbar" aria-label="Hauptnavigation">
+      <button type="button" class="nav-item is-active" id="btnViewStart">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.2 4 10v10h6v-6h4v6h6V10z"/></svg>
+        Start
       </button>
-      <span id="technicianName" class="toolbar-technician-name"></span>
-      <span class="jobs-badge-wrap" id="backgroundJobsWrap" style="display:none;" title="">
-        <span id="backgroundJobsBadge" class="jobs-badge">Sync</span>
-      </span>
-      <span class="connection-badge-wrap" id="connectionBadgeWrap">
-        <span id="connectionBadge" class="offline-badge">Verbindung wird geprüft…</span>
-      </span>
-      <button type="button" class="btn btn-ghost" id="btnViewBugReport" title="Bugreport">Bugreport</button>
-      <button type="button" class="btn btn-ghost btn-icon" id="btnViewEinstellungen" title="Einstellungen" aria-label="Einstellungen">⚙</button>
-      <label class="theme-toggle-wrap" for="uiThemeDarkToggle" title="Klassisches dunkles Erscheinungsbild (ein/aus)">
-        <span class="theme-toggle-label">Klassisches dunkles Erscheinungsbild</span>
-        <span class="theme-toggle-shell">
-          <input type="checkbox" class="theme-toggle" id="uiThemeDarkToggle" role="switch" aria-label="Klassisches dunkles Erscheinungsbild" />
-          <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-thumb"></span></span>
+      <button type="button" class="nav-item" id="btnViewDienstreise" title="Auftragsliste">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="7" y="3.5" width="10" height="17" rx="1.5"/><path d="M10 8h4M10 12h4M10 16h2.5"/></svg>
+        Aufträge
+      </button>
+      <div class="nav-drop toolbar-dropdown-wrap">
+        <button type="button" class="nav-item" id="btnViewProtokolle" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="6" y="4" width="12" height="16" rx="1.5"/><path d="M9 8h6M9 12h6"/></svg>
+          Protokolle ▾
+        </button>
+        <div class="toolbar-dropdown nav-drop-menu" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-arbeitsnachweis">Arbeitsnachweis</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-montagebericht">Montagebericht</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-parameterlisten">Parameterlisten</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-kontrollwiegungen">Kontrollwiegungen</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-schleppketten">Schleppketten-Test</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-pruefzertifikat">Prüfzertifikat</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-service">Service</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-kunden">Protokolle für Kunden</button>
+        </div>
+      </div>
+      <button type="button" class="nav-item" id="btnViewAnlagenstamm">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="7" rx="6" ry="2.3"/><path d="M6 7v5c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4V7M6 12v5c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4v-5"/></svg>
+        Anlagenstamm
+      </button>
+      <div class="nav-drop toolbar-dropdown-wrap">
+        <button type="button" class="nav-item" id="btnViewOffice" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 12h8M8 15h5"/></svg>
+          Office ▾
+        </button>
+        <div class="toolbar-dropdown nav-drop-menu" id="officeDropdown" role="menu" aria-label="Office">
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewAbrechnung" title="Abrechnung">Abrechnung</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewZeitschreibung" title="Zeitschreibung">Zeitschreibung</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewAbwesenheiten" data-view="abwesenheiten">Abwesenheiten</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="arbeitsschritte">Arbeitsschritte Service</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="arbeitsschritte-ibn">Arbeitsschritte Inbetriebnahme</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="textbausteine">Textbausteine</button>
+        </div>
+      </div>
+      <button type="button" class="nav-item" id="btnViewArchiv">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 8h6l2 2h8v10H4z"/></svg>
+        Archiv
+      </button>
+      <div class="nav-meta toolbar-right">
+        <button type="button" id="hinweisLampBtn" class="hinweis-lamp icon-btn is-off" title="Montagehinweise" aria-label="Montagehinweise">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M9 21h6v-1.5H9V21zm3-19a7 7 0 00-4 12.7V17h8v-2.3A7 7 0 0012 2zm2.2 11.4l-.7.4V15.5h-3v-1.7l-.7-.4A5.5 5.5 0 1112 3.5a5.5 5.5 0 012.2 9.9z"/></svg>
+        </button>
+        <button type="button" id="technicianName" class="toolbar-technician-name user-name" title="Einstellungen"></button>
+        <span class="header-sync-stack" id="headerSyncStack">
+          <span class="header-sync-row">
+            <span class="jobs-badge-wrap" id="backgroundJobsWrap" style="display:none;" title="">
+              <span id="backgroundJobsBadge" class="jobs-badge">Sync</span>
+            </span>
+            <span class="connection-badge-wrap" id="connectionBadgeWrap">
+              <span id="connectionBadge" class="offline-badge">Verbindung wird geprüft…</span>
+            </span>
+          </span>
+          <span class="header-folder-dl-track" id="headerFolderDlTrack" aria-hidden="true">
+            <span class="header-folder-dl-fill" id="headerFolderDlFill"></span>
+          </span>
         </span>
-      </label>
-      <button type="button" class="app-update-hint" id="appUpdateHint" hidden title="Neue Version verfügbar">Update verfügbar</button>
-      <span id="appVersion" class="app-version"></span>
-    </span>
+        <span class="meta-sep" aria-hidden="true"></span>
+        <button type="button" class="icon-btn" id="btnViewBugReport" title="Bugreport" aria-label="Bugreport">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v5M12 16h.01"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="btnViewEinstellungen" title="Einstellungen" aria-label="Einstellungen">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1A2 2 0 1 1 7 4.4l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1A2 2 0 1 1 19.6 7l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+        <label class="theme-toggle-wrap" for="uiThemeDarkToggle" title="Klassisches dunkles Erscheinungsbild (ein/aus)">
+          <span class="theme-toggle-label">Klassisches dunkles Erscheinungsbild</span>
+          <span class="theme-toggle-shell">
+            <input type="checkbox" class="theme-toggle" id="uiThemeDarkToggle" role="switch" aria-label="Klassisches dunkles Erscheinungsbild" />
+            <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-thumb"></span></span>
+          </span>
+        </label>
+        <button type="button" class="app-update-hint" id="appUpdateHint" hidden title="Neue Version verfügbar">Update verfügbar</button>
+        <span id="appVersion" class="app-version"></span>
+      </div>
     </nav>
+    <div id="bausteineDropdown" hidden></div>
+    <div id="abwesenheitenDropdown" hidden></div>
   </header>
   <div id="multiDeviceBanner" class="multi-device-banner" hidden role="status" aria-live="polite">
     <div id="multiDeviceBannerText" class="multi-device-banner-text"></div>
@@ -1736,6 +2419,29 @@
       </div>
     </div>
   </div>
+  <div id="modalFinishJobFiles" class="modal-overlay accept-offline-overlay" aria-hidden="true">
+    <div class="modal-box modal-box--wide finish-job-files-box" role="dialog" aria-labelledby="finishJobFilesTitle">
+      <h3 id="finishJobFilesTitle">Dateien nach PROJEKTE NEU</h3>
+      <p class="muted finish-job-files-hint">Haken setzen, was nach PROJEKTE NEU kopiert wird. Doppelklick öffnet die Datei zur Kontrolle.</p>
+      <div id="finishJobFilesList" class="finish-job-files-list"></div>
+      <div id="finishJobDropzone" class="finish-job-dropzone">
+        <div>Zusätzliche Dateien hierher ziehen oder suchen.</div>
+        <div class="finish-job-dropzone-actions">
+          <label class="muted" for="finishJobFnSelect" id="finishJobFnLabel">FN</label>
+          <select id="finishJobFnSelect" class="finish-job-fn-select" aria-labelledby="finishJobFnLabel"></select>
+          <button type="button" class="btn btn-ghost" id="finishJobFilesBrowse">Dateien suchen</button>
+          <input type="file" id="finishJobFilesInput" multiple hidden />
+        </div>
+      </div>
+      <p id="finishJobFilesMsg" class="muted" style="font-size:0.85rem;margin:0 0 0.5rem;" aria-live="polite"></p>
+      <div class="finish-job-files-footer">
+        <button type="button" class="btn btn-ghost" id="finishJobFilesBtnAll">Alle</button>
+        <button type="button" class="btn btn-ghost" id="finishJobFilesBtnNone">Keine</button>
+        <button type="button" class="btn btn-ghost" id="finishJobFilesBtnCancel">Abbrechen</button>
+        <button type="button" class="btn btn-primary" id="finishJobFilesBtnConfirm">Erledigt &amp; kopieren</button>
+      </div>
+    </div>
+  </div>
   <div id="modalAddAnlagen" class="modal-overlay accept-offline-overlay" aria-hidden="true">
     <div class="modal-box" role="dialog" aria-labelledby="modalAddAnlagenTitle" style="max-width:28rem;margin:auto;align-self:center;">
       <h3 id="modalAddAnlagenTitle">Anlage(n) hinzufügen</h3>
@@ -1776,7 +2482,7 @@
   <main id="view-zeitschreibung" class="view-zeitschreibung view-host-panel" aria-label="Zeitschreibung">
     <div id="zeitschreibung-host"></div>
   </main>
-  <main id="viewDienstreise" class="view-dienstreise view-auftraege" aria-label="Aufträge">
+  <main id="viewDienstreise" class="view-dienstreise view-auftraege" aria-label="Aufträge" data-rams-ui="off">
     <div class="card">
       <div class="auftraege-tabs" role="tablist" aria-label="Aufträge Untermenü">
         <button type="button" class="auftraege-tab is-active" role="tab" aria-selected="true" id="auftraegeTabList" data-auftraege-tab="list">Auftragsliste</button>
@@ -2021,14 +2727,96 @@
   <main id="viewProtokolleMontagebericht" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Montagebericht">
     <div class="card sp-v2-card mb-v2-page">
       <div class="sp-v2-topbar mb-v2-topbar">
-        <div class="sp-v2-topbar-title-wrap">
-          <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/beleg/montagebericht.png" alt="" aria-hidden="true"> Montagebericht</h2>
-          <p id="montageberichtAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
+        <div class="mb-v2-topbar-row">
+          <div class="sp-v2-topbar-title-wrap">
+            <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/beleg/montagebericht.png" alt="" aria-hidden="true"> Montagebericht</h2>
+          </div>
+          <div class="mb-v2-topbar-actions-stack">
+            <div class="sp-v2-topbar-actions">
+              <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickySave" title="Nur Daten speichern">Speichern</button>
+              <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickyPdf" title="Daten speichern und PDF erzeugen">PDF</button>
+            </div>
+            <p id="montageberichtAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
+          </div>
         </div>
-        <div class="sp-v2-topbar-actions">
-          <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickySave" title="Nur Daten speichern (JSON)">Speichern (JSON)</button>
-          <button type="submit" form="montageberichtForm" class="btn btn-primary" id="btnMontageberichtStickyPdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
-          <button type="button" class="btn btn-primary" id="btnMontageberichtSaveAllPdfTop" style="display:none" title="PDF in alle FN-Ordner schreiben">Alle PDF</button>
+        <div class="montagebericht-toolbar" id="montageberichtToolbar">
+          <div class="toolbar-cluster" data-mb-cluster="text">
+            <span class="toolbar-cluster-label">Text</span>
+            <div class="toolbar-group">
+              <select id="mbToolbarFont" title="Schriftart">
+                <option value="Calibri">Calibri</option>
+                <option value="Arial">Arial</option>
+                <option value="Times New Roman">Times New Roman</option>
+                <option value="Verdana">Verdana</option>
+              </select>
+              <select id="mbToolbarSize" title="Schriftgröße">
+                <option value="2">10</option>
+                <option value="3" selected>12</option>
+                <option value="4">14</option>
+                <option value="5">18</option>
+              </select>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="bold" title="Fett"><strong>B</strong></button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="italic" title="Kursiv"><em>I</em></button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="underline" title="Unterstrichen"><u>U</u></button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="insertUnorderedList" title="Aufzählung">• Liste</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="insertOrderedList" title="Nummerierung">1. Liste</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyLeft" title="Linksbündig">Links</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyCenter" title="Zentriert">Zentriert</button>
+              <button type="button" class="btn btn-ghost" data-mb-cmd="justifyRight" title="Rechtsbündig">Rechts</button>
+            </div>
+          </div>
+          <div class="toolbar-cluster" data-mb-cluster="image">
+            <span class="toolbar-cluster-label">Bild</span>
+            <div class="toolbar-group">
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-img="insert" title="Bild vom Gerät einfügen" aria-label="Bild einfügen">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 16l5-5 4 4 3-3 4 4"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-img="from-project" title="Fotos aus dem Projektordner (Handy-PWA)" aria-label="Projekt-Foto">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h5l2-2h9v12H4z"/><path d="M8 14l3-3 3 3 2-2 3 3"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost" data-mb-img="25" title="Bildbreite 25 %">25%</button>
+              <button type="button" class="btn btn-ghost" data-mb-img="50" title="Bildbreite 50 %">50%</button>
+              <button type="button" class="btn btn-ghost" data-mb-img="100" title="Bildbreite 100 %">100%</button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="move" title="Bild greifen und im Text verschieben" aria-label="Bild verschieben">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"/><path d="M12 3l-3 3"/><path d="M12 3l3 3"/><path d="M12 21l-3-3"/><path d="M12 21l3-3"/><path d="M3 12h18"/><path d="M3 12l3-3"/><path d="M3 12l3 3"/><path d="M21 12l-3-3"/><path d="M21 12l-3 3"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-img="rotate" title="Bild 90° drehen" aria-label="Drehen">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.2-5.5"/><path d="M20 4v5h-5"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-img="remove" title="Bild entfernen" aria-label="Entfernen">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14"/><path d="M9 7V5h6v2"/><path d="M7 7l1 12h8l1-12"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="toolbar-cluster" data-mb-cluster="draw">
+            <span class="toolbar-cluster-label">Zeichnen</span>
+            <div class="toolbar-group">
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="line" title="Strich auf dem Bild" aria-label="Strich">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19L19 5"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="free" title="Freihand auf dem Bild" aria-label="Freihand">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20c2-6 7-9 16-12"/><path d="M15.5 4.5l4 4"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="rect" title="Rechteck auf dem Bild" aria-label="Rechteck">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="6" width="14" height="12" rx="1"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="circle" title="Kreis auf dem Bild" aria-label="Kreis">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw="erase" title="Zeichnung radieren" aria-label="Radierer">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.5 15.5L9 6a2 2 0 0 0-2.8 0L4 8.2a2 2 0 0 0 0 2.8l7.5 7.5H20"/><path d="M7.8 11.2l5 5"/></svg>
+              </button>
+              <button type="button" class="btn btn-ghost mb-tool" data-mb-draw-act="undo" title="Letzte Zeichnung rückgängig" aria-label="Rückgängig">
+                <svg class="mb-tool-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14l-4-4 4-4"/><path d="M5 10h8a6 6 0 1 1 0 12H8"/></svg>
+              </button>
+              <select id="mbDrawStroke" title="Strichstärke">
+                <option value="0.4">2</option>
+                <option value="0.8" selected>4</option>
+                <option value="1.6">8</option>
+              </select>
+              <input type="color" id="mbDrawColor" value="#0e7b5a" title="Zeichenfarbe">
+            </div>
+          </div>
         </div>
       </div>
       <div id="protokolleMontagebericht" class="protokolle-montagebericht">
@@ -2091,43 +2879,6 @@
             <section class="sp-v2-section" aria-labelledby="mbV2Sec3Title">
           <header class="sp-v2-section-head" id="mbV2Sec3Title" data-i18n-en="Serial numbers"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/factory-green.svg" alt="" aria-hidden="true"> Fabrikationsnummern</header>
               <div class="sp-v2-section-body">
-                <div class="montagebericht-toolbar" id="montageberichtToolbar">
-                  <div class="toolbar-group">
-                    <select id="mbToolbarFont" title="Schriftart">
-                      <option value="Calibri">Calibri</option>
-                      <option value="Arial">Arial</option>
-                      <option value="Times New Roman">Times New Roman</option>
-                      <option value="Verdana">Verdana</option>
-                    </select>
-                    <select id="mbToolbarSize" title="Schriftgröße">
-                      <option value="2">10</option>
-                      <option value="3" selected>12</option>
-                      <option value="4">14</option>
-                      <option value="5">18</option>
-                    </select>
-                  </div>
-                  <div class="toolbar-group">
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="bold" title="Fett"><strong>B</strong></button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="italic" title="Kursiv"><em>I</em></button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="underline" title="Unterstrichen"><u>U</u></button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="insertUnorderedList" title="Aufzählung">• Liste</button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="insertOrderedList" title="Nummerierung">1. Liste</button>
-                  </div>
-                  <div class="toolbar-group">
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="justifyLeft" title="Linksbündig">Links</button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="justifyCenter" title="Zentriert">Zentriert</button>
-                    <button type="button" class="btn btn-ghost" data-mb-cmd="justifyRight" title="Rechtsbündig">Rechts</button>
-                  </div>
-                  <div class="toolbar-group">
-                    <button type="button" class="btn btn-ghost" data-mb-img="insert" title="Bild vom Gerät einfügen">Bild</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="from-project" title="Fotos aus dem Projektordner (Handy-PWA)">Projekt-Foto</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="25" title="Bildbreite 25 %">25%</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="50" title="Bildbreite 50 %">50%</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="100" title="Bildbreite 100 %">100%</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="rotate" title="Bild 90° drehen">Drehen</button>
-                    <button type="button" class="btn btn-ghost" data-mb-img="remove" title="Bild entfernen">Entfernen</button>
-                  </div>
-                </div>
                 <div id="montageberichtFabBemerkungen" class="montagebericht-fab-felder"></div>
               </div>
             </section>
@@ -2136,9 +2887,8 @@
               <header class="sp-v2-section-head" id="mbV2Sec4Title" data-i18n-en="Save"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern</header>
               <div class="sp-v2-section-body">
                 <div class="mb-v2-actions-row">
-                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Nur Daten speichern (JSON)">Speichern (JSON)</button>
-                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Daten speichern und PDF erzeugen">einzel PDF</button>
-                  <button type="button" class="btn btn-primary" id="btnMontageberichtSaveAllPdf" style="display:none" title="PDF in alle FN-Ordner schreiben">Alle PDF</button>
+                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Nur Daten speichern">Speichern</button>
+                  <button type="submit" class="btn btn-primary" id="btnMontageberichtSavePdf" title="Daten speichern und PDF erzeugen">PDF</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtPdf" style="display:none" title="PDF im Ordner Protokolle öffnen">PDF öffnen</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtSign" hidden title="Veraltet – Signatur kommt aus dem Profil" style="display:none;">Bericht unterschreiben</button>
                   <button type="button" class="btn btn-ghost" id="btnMontageberichtAbbrechen">Abbrechen</button>
@@ -2152,21 +2902,56 @@
   </main>
   <main id="viewProtokolleParameterlisten" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Parameterlisten">
     <div class="parameterlisten-split">
-      <div class="card">
-        <h2>Parameterlisten</h2>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label>Auftrag</label>
-          <select id="parameterlistenJob" class="dienstreise-select">
-            <option value="">– Bitte wählen –</option>
-          </select>
+      <div class="card sp-v2-card">
+        <div class="sp-v2-topbar">
+          <h2 class="sp-v2-page-title">Parameterlisten</h2>
         </div>
-        <div class="form-group" style="margin-bottom:0.75rem">
-          <label>Parameterdateien</label>
-          <input type="file" id="parameterlistenFiles" accept=".csv,.pal,.pa3,.txt,.pa4,.pa5" multiple style="position:absolute;width:0.1px;height:0.1px;opacity:0;overflow:hidden">
-          <button type="button" class="btn btn-ghost" id="btnParameterlistenChooseFiles">Datei auswählen …</button>
+        <div class="sp-v2-form">
+          <section class="sp-v2-section" aria-labelledby="plV2SecUpload">
+            <header class="sp-v2-section-head" id="plV2SecUpload"><span class="sp-v2-num">1</span> Dateien hochladen</header>
+            <div class="sp-v2-section-body">
+              <div class="form-group" style="margin-bottom:0.75rem">
+                <label for="parameterlistenJob">Auftrag</label>
+                <select id="parameterlistenJob" class="dienstreise-select">
+                  <option value="">– Bitte wählen –</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:0.75rem">
+                <label>Parameterdateien</label>
+                <input type="file" id="parameterlistenFiles" accept=".csv,.pal,.pa3,.txt,.pa4,.pa5" multiple style="position:absolute;width:0.1px;height:0.1px;opacity:0;overflow:hidden">
+                <button type="button" class="btn btn-ghost" id="btnParameterlistenChooseFiles">Datei auswählen …</button>
+              </div>
+              <div id="parameterlistenFileListWrap" class="parameterlisten-file-list-wrap" hidden>
+                <label>Ausgewählte Dateien</label>
+                <ul id="parameterlistenFileList" class="parameterlisten-file-list"></ul>
+                <p id="parameterlistenPreviewHint" class="parameterlisten-preview-hint">Datei in der Liste anklicken, um die Vorschau zu sehen.</p>
+              </div>
+              <div id="parameterlistenPreviewWrap" class="parameterlisten-preview-wrap" hidden>
+                <label id="parameterlistenPreviewLabel">Rohdaten</label>
+                <div id="parameterlistenPreview" class="parameterlisten-preview"></div>
+              </div>
+              <button type="button" class="btn btn-primary" id="btnParameterlistenUpload">Hochladen und PDFs erzeugen</button>
+              <div id="parameterlistenResults" class="parameterlisten-results" style="margin-top:1rem;display:none"></div>
+            </div>
+          </section>
+          <section class="sp-v2-section" aria-labelledby="plV2SecJob">
+            <header class="sp-v2-section-head" id="plV2SecJob"><span class="sp-v2-num">2</span> In diesem Auftrag</header>
+            <div class="sp-v2-section-body">
+              <p class="muted" style="margin:0 0 0.5rem;font-size:0.85rem">Hochgeladene Parameterlisten inkl. Backup nach Freigabe und erneuter Annahme.</p>
+              <div id="parameterlistenJobUploads" class="parameterlisten-lists">
+                <p class="parameterlisten-empty">Bitte einen Auftrag wählen.</p>
+              </div>
+            </div>
+          </section>
+          <section class="sp-v2-section" aria-labelledby="plV2SecStamm">
+            <header class="sp-v2-section-head" id="plV2SecStamm"><span class="sp-v2-num">3</span> Anlagenstamm nach FN</header>
+            <div class="sp-v2-section-body">
+              <div id="parameterlistenAnlagenstamm" class="parameterlisten-lists">
+                <p class="parameterlisten-empty">Bitte einen Auftrag wählen.</p>
+              </div>
+            </div>
+          </section>
         </div>
-        <button type="button" class="btn btn-primary" id="btnParameterlistenUpload">Hochladen und PDFs erzeugen</button>
-        <div id="parameterlistenResults" class="parameterlisten-results" style="margin-top:1rem;display:none"></div>
       </div>
       <div class="card">
         <h2>KUKLink</h2>
@@ -2246,6 +3031,18 @@
           <span id="kuklinkTermMeta" class="muted"></span>
         </div>
         <pre id="kuklinkPreview" class="kuklink-term" aria-live="polite"></pre>
+      </div>
+    </div>
+    <div id="parameterlistenDeleteModal" class="parameterlisten-modal" hidden>
+      <div class="parameterlisten-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="parameterlistenDeleteTitle">
+        <div class="parameterlisten-modal-head" id="parameterlistenDeleteTitle">Parameterdatei löschen</div>
+        <div class="parameterlisten-modal-body" id="parameterlistenDeleteBody">
+          Parameterdatei wirklich löschen? Sie wird lokal, im Backup und im Anlagenstamm (Dispo) entfernt.
+        </div>
+        <div class="parameterlisten-modal-footer">
+          <button type="button" class="btn btn-ghost" id="parameterlistenDeleteCancel">Abbrechen</button>
+          <button type="button" class="btn btn-primary" id="parameterlistenDeleteConfirm">Löschen</button>
+        </div>
       </div>
     </div>
   </main>
@@ -3000,7 +3797,7 @@
     </div>
   </main>
   <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">
-    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html" title="Serviceprotokoll"></iframe>
+    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=langshare3" title="Serviceprotokoll"></iframe>
     <div id="serviceprotokollLegacyHost" class="sp-v2-legacy-host" hidden aria-hidden="true">
     <div class="card sp-v2-card">
       <div class="sp-v2-topbar">
@@ -3708,16 +4505,18 @@
   <script src="js/web-page-host.js"></script>
   <script src="js/view-anlagenstamm.js"></script>
   <script src="assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260701"></script>
-  <script src="js/view-abrechnung.js?v=20260702c"></script>
+  <script src="assets/js/dispo/file_preview_hover.js?v=20260908hover"></script>
+  <script src="js/view-abrechnung.js?v=20260908hover"></script>
   <script src="js/view-zeitschreibung.js?v=20260726b"></script>
   <script src="js/signature-pad.js"></script>
   <script src="js/protocol-form-i18n.js"></script>
-  <script src="js/arbeitsnachweis.js"></script>
+  <script src="js/mb-image-draw.js"></script>
+  <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=langshare2"></script>
   <script src="js/hinweis-lamp.js?v=20260902files"></script>
   <script src="js/probe-copilot-text.js"></script>
-  <script src="js/serviceprotokoll-react-bridge.js"></script>
+  <script src="js/serviceprotokoll-react-bridge.js?v=langshare2"></script>
   <script src="js/abrechnung-laptop-bridge.js?v=20260616f"></script>
   <script src="rams_wizard.js"></script>
 </body>

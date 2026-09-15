@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { win32FsPath } = require('./win32-long-path');
 
 function sleep(ms) {
   const n = Number(ms);
@@ -17,7 +18,11 @@ function isRetryableFsError(err) {
 
 function unlinkQuiet(filePath) {
   try {
-    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    if (!filePath) return;
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    else if (process.platform === 'win32' && fs.existsSync(win32FsPath(filePath))) {
+      fs.unlinkSync(win32FsPath(filePath));
+    }
   } catch (_) {
     /* Temp-Datei */
   }
@@ -72,8 +77,9 @@ async function replaceFileWithoutUnlink(destPath, data, opts) {
   if (!dest) throw new Error('Zielpfad fehlt.');
   const maxRetries = opts && opts.maxRetries != null ? Number(opts.maxRetries) : 3;
   const retries = Number.isFinite(maxRetries) && maxRetries > 0 ? maxRetries : 3;
-  const dir = path.dirname(dest);
-  await fs.promises.mkdir(dir, { recursive: true });
+  const destFs = win32FsPath(dest);
+  const dirFs = win32FsPath(path.dirname(dest));
+  await fs.promises.mkdir(dirFs, { recursive: true });
 
   const buf = toBuffer(data);
   const tmp = makeTempPath(dest);
@@ -82,7 +88,7 @@ async function replaceFileWithoutUnlink(destPath, data, opts) {
   try {
     for (let i = 0; i < retries; i++) {
       try {
-        await fs.promises.copyFile(tmp, dest);
+        await fs.promises.copyFile(tmp, destFs);
         return dest;
       } catch (e) {
         lastErr = e;
@@ -91,7 +97,7 @@ async function replaceFileWithoutUnlink(destPath, data, opts) {
           continue;
         }
         try {
-          await fs.promises.writeFile(dest, buf);
+          await fs.promises.writeFile(destFs, buf);
           return dest;
         } catch (e2) {
           lastErr = e2;
@@ -118,8 +124,9 @@ function replaceFileWithoutUnlinkSync(destPath, data, opts) {
   if (!dest) throw new Error('Zielpfad fehlt.');
   const maxRetries = opts && opts.maxRetries != null ? Number(opts.maxRetries) : 3;
   const retries = Number.isFinite(maxRetries) && maxRetries > 0 ? maxRetries : 3;
-  const dir = path.dirname(dest);
-  fs.mkdirSync(dir, { recursive: true });
+  const destFs = win32FsPath(dest);
+  const dirFs = win32FsPath(path.dirname(dest));
+  fs.mkdirSync(dirFs, { recursive: true });
 
   const buf = toBuffer(data);
   const tmp = makeTempPath(dest);
@@ -128,7 +135,7 @@ function replaceFileWithoutUnlinkSync(destPath, data, opts) {
   try {
     for (let i = 0; i < retries; i++) {
       try {
-        fs.copyFileSync(tmp, dest);
+        fs.copyFileSync(tmp, destFs);
         return dest;
       } catch (e) {
         lastErr = e;
@@ -137,7 +144,7 @@ function replaceFileWithoutUnlinkSync(destPath, data, opts) {
           continue;
         }
         try {
-          fs.writeFileSync(dest, buf);
+          fs.writeFileSync(destFs, buf);
           return dest;
         } catch (e2) {
           lastErr = e2;

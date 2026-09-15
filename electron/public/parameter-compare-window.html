@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parameter-Vergleich</title>
+  <link rel="stylesheet" href="css/kukla-brand.css">
+  <link rel="stylesheet" href="css/anlagenakte.css">
+  <style>
+    html, body { margin: 0; padding: 12px; background: #f5f5f5; color: #1a1a1a; }
+    h1 { font-size: 1.2rem; margin: 0 0 8px; color: #0c6a4d; }
+  </style>
+</head>
+<body class="akte-page">
+  <h1>Parameter-Vergleich</h1>
+  <div id="paramCompareRoot"><p class="akte-muted muted">Vergleich wird berechnet …</p></div>
+  <script src="/js/parameter-text-compare.js?v=20260911param"></script>
+  <script>
+    (function () {
+      var q = new URLSearchParams(window.location.search);
+      var fab = String(q.get('fab') || '').trim();
+      var fromId = String(q.get('from_file_id') || '').trim();
+      var toId = String(q.get('to_file_id') || '').trim();
+      var root = document.getElementById('paramCompareRoot');
+      var Cmp = window.KuklaParameterTextCompare;
+      function viewUrl(fileId) {
+        return '/api/anlagenstamm_parameter_view.php?fab=' + encodeURIComponent(fab) +
+          '&file_id=' + encodeURIComponent(fileId);
+      }
+      if (!fab || !fromId || !toId || fromId === toId) {
+        root.innerHTML = '<p class="akte-muted muted">Zwei unterschiedliche Dateien zum Vergleich nötig.</p>';
+        return;
+      }
+      if (!Cmp) {
+        root.innerHTML = '<p class="akte-muted muted">Vergleichsmodul fehlt.</p>';
+        return;
+      }
+      Promise.all([
+        fetch(viewUrl(fromId), { credentials: 'same-origin' }).then(function (r) { return r.json(); }),
+        fetch(viewUrl(toId), { credentials: 'same-origin' }).then(function (r) { return r.json(); }),
+      ]).then(function (parts) {
+        var a = parts[0];
+        var b = parts[1];
+        if (!a || !a.ok || !b || !b.ok) {
+          throw new Error((a && a.error) || (b && b.error) || 'Dateien nicht geladen');
+        }
+        var diff = Cmp.compareParameterTextLines(a.raw_content || '', b.raw_content || '');
+        var fromName = (a.file && a.file.original_filename) || 'älter';
+        var toName = (b.file && b.file.original_filename) || 'neuer';
+        root.innerHTML = Cmp.renderCompareHtml(diff, fromName, toName);
+        Cmp.bindOnlyDiff(root);
+      }).catch(function (e) {
+        root.innerHTML = '<p class="akte-muted muted">' + String(e.message || e) + '</p>';
+      });
+    })();
+  </script>
+</body>
+</html>

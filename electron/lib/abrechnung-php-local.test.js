@@ -95,3 +95,37 @@ describe('Kommentar-Edit sendet job_id', () => {
     assert.match(src, /fd2\.append\('job_id'/);
   });
 });
+
+describe('Beleg-Dateinamen', () => {
+  const opts = { date: '2026-09-11', time: '14-30-05' };
+
+  it('setzt Prefix_Datum_Original', () => {
+    assert.equal(
+      phpLocal.applyBelegPrefix('Knauf UK Bestellnummer 4505535068.pdf', 'Transport', opts),
+      'Transport_2026-09-11_Knauf UK Bestellnummer 4505535068.pdf',
+    );
+  });
+
+  it('streift bekanntes Prefix und Datum ab', () => {
+    assert.equal(
+      phpLocal.applyBelegPrefix('Hotel_2026-09-02_rechnung.pdf', 'Transport', opts),
+      'Transport_2026-09-11_rechnung.pdf',
+    );
+  });
+
+  it('Scan-Fallback ohne Username', () => {
+    assert.equal(
+      phpLocal.applyBelegPrefix('scan.pdf', 'Hotel', { ...opts, scan: true }),
+      'Hotel_2026-09-11_14-30-05.pdf',
+    );
+  });
+
+  it('Kollision hängt -1 an', () => {
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kukla-beleg-'));
+    const first = phpLocal.applyBelegPrefix('rechnung.pdf', 'Angebot', opts);
+    fs.writeFileSync(path.join(dir, first), 'x');
+    const second = phpLocal.resolveUniqueStoredName('rechnung.pdf', 'Angebot', dir, opts);
+    assert.equal(second, 'Angebot_2026-09-11_rechnung-1.pdf');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

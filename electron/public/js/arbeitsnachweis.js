@@ -63,13 +63,11 @@
   function applyJobKopf(job) {
     if (!job) return;
     jobData = job;
-    el('anCustomer').value = job.customer_name || job.customer || el('anCustomer').value || '';
-    var site = siteFromJob(job);
-    if (site) el('anSite').value = site;
-    var fabs = normalizeFabs(job.fabrikationsnummern);
-    if (fabs.length || !currentFabs().length) renderFabs(fabs);
-    var contacts = contactsFromJob(job);
-    fillContacts(contacts);
+    el('anCustomer').value = job.customer_name || job.customer || '';
+    el('anSite').value = siteFromJob(job);
+    var fromJob = fabsFromJobSources(job);
+    if (fromJob.length) renderFabs(mergeFabs(currentFabs(), fromJob));
+    fillContacts(contactsFromJob(job));
   }
   function flagOn(v) {
     return v === true || v === 1 || v === '1';
@@ -178,7 +176,11 @@
     setRadio('anOvernight', flagOn(an.naechtigung_beigestellt) ? '1' : '0');
     el('anRemarks').value = an.remarks || '';
     if (el('anTimesheetApplied')) el('anTimesheetApplied').value = flagOn(an.timesheet_applied) ? '1' : '0';
-    renderFabs(an.fabrikationsnummern);
+    var fromJob = fabsFromJobSources(jobData || findCachedJob(
+      selectedJobIds().localId,
+      selectedJobIds().serverId
+    ));
+    renderFabs(fromJob.length ? mergeFabs(fromJob, an.fabrikationsnummern) : an.fabrikationsnummern);
     var work = items.filter(function (r) { return r && r.item_type === 'arbeitszeile'; });
     var parts = items.filter(function (r) { return r && r.item_type === 'ersatzteil'; });
     el('anWorkBody').innerHTML = '';
@@ -279,26 +281,102 @@
     });
     return last ? addOneDay(last) : todayIso();
   }
-  function normalizeFabs(raw) {
-    var list = [];
-    if (Array.isArray(raw)) list = raw;
-    else if (typeof raw === 'string' && raw.trim()) {
+  function flattenFabList(raw) {
+    if (raw == null || raw === '') return [];
+    if (Array.isArray(raw)) {
+      var nested = [];
+      raw.forEach(function (item) {
+        if (Array.isArray(item)) nested = nested.concat(flattenFabList(item));
+        else nested.push(item);
+      });
+      return nested;
+    }
+    if (typeof raw === 'string') {
+      var s = raw.trim();
+      if (!s) return [];
       try {
-        var p = JSON.parse(raw);
-        list = Array.isArray(p) ? p : [p];
+        return flattenFabList(JSON.parse(s));
       } catch (e) {
-        list = String(raw).split(/[,;]+/).map(function (x) { return { fabrikationsnummer: x.trim(), type: '' }; });
+        return s.split(/[\s;,]+/).map(function (x) { return { fabrikationsnummer: x.trim(), type: '' }; });
       }
     }
-    return list.map(function (x) {
+    if (typeof raw === 'object') {
+      if (Array.isArray(raw.fabrikationsnummern)) return flattenFabList(raw.fabrikationsnummern);
+      if (Array.isArray(raw.rows)) return flattenFabList(raw.rows);
+      return [raw];
+    }
+    return [];
+  }
+  function normalizeFabs(raw) {
+    return flattenFabList(raw).map(function (x) {
       if (x && typeof x === 'object') {
         return {
-          fabrikationsnummer: String(x.fabrikationsnummer || x.fn || x.fab || x.nr || '').trim(),
+          fabrikationsnummer: String(x.fabrikationsnummer || x.fn || x.fab || x.nr || x.Fabrikationsnummer || '').trim(),
           type: String(x.type || x.Type || x.typ || x.Typ || '').trim()
         };
       }
       return { fabrikationsnummer: String(x || '').trim(), type: '' };
     }).filter(function (r) { return r.fabrikationsnummer || r.type; });
+  }
+  function mergeFabs(existing, incoming) {
+    var byKey = {};
+    var order = [];
+    function add(r) {
+      var k = String((r && r.fabrikationsnummer) || '').trim();
+      if (!k) return;
+      if (!byKey[k]) {
+        byKey[k] = { fabrikationsnummer: k, type: String((r && r.type) || '').trim() };
+        order.push(k);
+      } else if (r && r.type && !byKey[k].type) {
+        byKey[k].type = String(r.type).trim();
+      }
+    }
+    normalizeFabs(existing).forEach(add);
+    normalizeFabs(incoming).forEach(add);
+    return order.map(function (k) { return byKey[k]; }).sort(function (a, b) {
+      var na = parseInt(a.fabrikationsnummer, 10);
+      var nb = parseInt(b.fabrikationsnummer, 10);
+      if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+      return String(a.fabrikationsnummer).localeCompare(String(b.fabrikationsnummer), undefined, { numeric: true });
+    });
+  }
+  function jobSourceIdsMatch(job, localId, serverId) {
+    if (!job) return false;
+    var lid = parseInt(job.local_job_id != null ? job.local_job_id : job.id, 10) || 0;
+    var sid = parseInt(job.server_id != null ? job.server_id : 0, 10) || 0;
+    var jn = String(job.job_number || '').trim();
+    if (localId && (lid === localId || sid === localId)) return true;
+    if (serverId && (sid === serverId || lid === serverId)) return true;
+    var sel = el('anJob');
+    var opt = sel && sel.options[sel.selectedIndex];
+    var label = opt ? String(opt.textContent || '') : '';
+    if (jn && label.indexOf(jn) === 0) return true;
+    return false;
+  }
+  function selectedJobIds() {
+    var sel = el('anJob');
+    var opt = sel && sel.options[sel.selectedIndex];
+    return {
+      localId: parseInt(opt && opt.dataset.localId, 10) || parseInt(sel && sel.value, 10) || 0,
+      serverId: parseInt(opt && opt.dataset.serverId, 10) || parseInt(sel && sel.value, 10) || 0
+    };
+  }
+  function fabsFromJobSources(job) {
+    var ids = selectedJobIds();
+    var out = normalizeFabs(job && job.fabrikationsnummern);
+    try {
+      var pj = window.currentProjektdatenJob;
+      var rows = window.currentProjektdatenLeistungRows;
+      if (pj && (jobSourceIdsMatch(pj, ids.localId, ids.serverId) || (job && jobSourceIdsMatch(pj, parseInt(job.id, 10) || 0, dispoJobId(job))))) {
+        out = mergeFabs(out, pj.fabrikationsnummern);
+        out = mergeFabs(out, rows);
+      }
+    } catch (e) { /* optional */ }
+    return out;
+  }
+  function syncFabsFromJob(job) {
+    var merged = mergeFabs(currentFabs(), fabsFromJobSources(job || jobData));
+    if (merged.length) renderFabs(merged);
   }
   function siteAddressLines(job) {
     if (!job) return [];
@@ -759,7 +837,7 @@
     });
   }
   async function fetchLocalJob(jobId, techId) {
-    var r = await fetch(API_BASE + '/api/job?id=' + encodeURIComponent(jobId) + '&technician_id=' + encodeURIComponent(techId || ''), {
+    var r = await fetch(API_BASE + '/api/job?id=' + encodeURIComponent(jobId) + '&technician_id=' + encodeURIComponent(techId || '') + '&enrich_anlagenstamm=1&enrich_local_only=1', {
       headers: { 'X-Technician-Id': String(techId || ''), Accept: 'application/json' }
     });
     var data = await r.json().catch(function () { return null; });
@@ -777,6 +855,13 @@
     var jobs = (data && data.jobs) || [];
     jobsCache = jobs;
     var sel = el('anJob');
+    var prevLocal = '';
+    var prevServer = '';
+    if (sel && sel.options && sel.selectedIndex >= 0) {
+      var prevOpt = sel.options[sel.selectedIndex];
+      prevLocal = (prevOpt && prevOpt.dataset.localId) || '';
+      prevServer = (prevOpt && prevOpt.dataset.serverId) || sel.value || '';
+    }
     sel.innerHTML = '';
     var ph = document.createElement('option');
     ph.value = '';
@@ -792,6 +877,18 @@
       opt.textContent = (j.job_number || '#' + (sid || lid)) + ' ' + (j.customer_name || '');
       sel.appendChild(opt);
     });
+    if (prevLocal || prevServer) {
+      var opts = sel.options;
+      for (var i = 0; i < opts.length; i++) {
+        if (
+          (prevLocal && opts[i].dataset.localId === prevLocal) ||
+          (prevServer && (opts[i].dataset.serverId === prevServer || opts[i].value === prevServer))
+        ) {
+          sel.selectedIndex = i;
+          break;
+        }
+      }
+    }
   }
   async function onJobChange() {
     jobLoadBusy = true;
@@ -799,57 +896,48 @@
     var sel = el('anJob');
     var opt = sel.options[sel.selectedIndex];
     var id = parseInt(sel.value, 10);
-    jobData = null;
-    if (!id) {
-      el('anCustomer').value = '';
-      el('anSite').value = '';
-      el('anTech').value = '';
-      renderFabs([]);
-      fillContacts([]);
-      return;
-    }
+    resetForm({ keepJob: true });
+    if (!id) return;
     var localId = parseInt(opt && opt.dataset.localId, 10) || id;
     var serverId = parseInt(opt && opt.dataset.serverId, 10) || id;
     applyJobKopf(findCachedJob(localId, serverId));
     if (!el('anTech').value) el('anTech').value = technicianDisplayName();
     var techId = window.getTechId && window.getTechId();
+    var detail = null;
     try {
-      var detail = await fetchLocalJob(localId, techId);
+      detail = await fetchLocalJob(localId, techId);
       if (!detail && serverId && serverId !== localId) detail = await fetchLocalJob(serverId, techId);
       if (detail) applyJobKopf(detail);
     } catch (e) { /* Liste reicht für die Kopfdaten */ }
-    var pre = await proxy('prefill', { method: 'GET', queryParams: { job_id: serverId || id } }).catch(function () { return null; });
-    var p = pre && pre.prefill;
-    if (p) {
-      if (p.customer_name && !el('anCustomer').value) el('anCustomer').value = p.customer_name;
-      if (!el('anSite').value && p.site) el('anSite').value = p.site;
-      if (p.technician_name) el('anTech').value = p.technician_name;
-      var preFabs = normalizeFabs(p.fabrikationsnummern);
-      if (preFabs.length && !currentFabs().length) renderFabs(preFabs);
-      var preContacts = p.job_contacts || p.contacts;
-      if (preContacts && preContacts.length) fillContacts(preContacts);
-    }
-    if (!el('anTech').value) el('anTech').value = technicianDisplayName();
     try {
       var saved = await fetch(anLocalGetUrl({ job_id: String(serverId || id) }), {
         headers: getHeaders()
       }).then(function (r) { return r.json(); });
       if (saved && saved.document) {
         applyPayload(saved);
+        if (detail) applyJobKopf(detail);
+        else syncFabsFromJob(jobData);
         if (!el('anTech').value) el('anTech').value = technicianDisplayName();
-        if (saved.synced === false) persistLocal().catch(function () {});
-        return;
-      }
-    } catch (e2) { /* Prefill bleibt */ }
-    var list = await proxy('list', { method: 'GET', queryParams: { job_id: serverId || id } }).catch(function () { return null; });
-    if (list && list.documents && list.documents[0] && list.documents[0].id) {
-      var got = await proxy('get', { method: 'GET', queryParams: { id: list.documents[0].id } }).catch(function () { return null; });
-      if (got && got.document) {
-        applyPayload(got);
         persistLocal().catch(function () {});
       }
-    }
+    } catch (e2) { /* Prefill bleibt */ }
+    proxy('prefill', { method: 'GET', queryParams: { job_id: serverId || id } })
+      .then(function (pre) {
+        var p = pre && pre.prefill;
+        if (!p) return;
+        if (p.customer_name && !el('anCustomer').value) el('anCustomer').value = p.customer_name;
+        if (!el('anSite').value && p.site) el('anSite').value = p.site;
+        if (p.technician_name && !el('anTech').value) el('anTech').value = p.technician_name;
+        var preFabs = normalizeFabs(p.fabrikationsnummern);
+        if (preFabs.length) renderFabs(mergeFabs(currentFabs(), preFabs));
+        var preContacts = p.job_contacts || p.contacts;
+        if (preContacts && preContacts.length && !(el('anSignerContact') && el('anSignerContact').options.length > 1)) {
+          fillContacts(preContacts);
+        }
+      })
+      .catch(function () {});
     } finally {
+      syncFabsFromJob(jobData);
       jobLoadBusy = false;
     }
   }
@@ -1177,17 +1265,32 @@
       persistLocal().catch(function () {});
     }, 700);
   }
-  function resetForm() {
+  function resetForm(opts) {
+    opts = opts || {};
+    var jobEl = el('anJob');
+    var keepJobValue = opts.keepJob && jobEl ? jobEl.value : '';
+    var keepJobIndex = opts.keepJob && jobEl ? jobEl.selectedIndex : -1;
+    var keepLang = opts.keepJob ? lang() : 'de';
     el('anForm').reset();
+    if (opts.keepJob && jobEl) {
+      jobEl.value = keepJobValue;
+      if (jobEl.value !== keepJobValue && keepJobIndex >= 0) jobEl.selectedIndex = keepJobIndex;
+    }
+    jobData = null;
+    lastDocNumber = '';
     el('anDocumentId').value = '';
     if (el('anLocalDocId')) el('anLocalDocId').value = '';
     el('anLocalUuid').value = uuid();
     el('anContentVersion').value = '1';
     if (el('anTimesheetApplied')) el('anTimesheetApplied').value = '0';
+    if (el('anSignerName')) el('anSignerName').value = '';
+    if (el('anSignerEmail')) el('anSignerEmail').value = '';
     el('anWorkBody').innerHTML = '';
     el('anPartsBody').innerHTML = '';
     renderFabs([]);
+    fillContacts([]);
     addWorkRow({ item_date: todayIso() });
+    updateSums();
     lastCustomerSig = false;
     signedFingerprint = '';
     el('anSigStatus').textContent = '';
@@ -1196,7 +1299,7 @@
       el('anLastSaved').textContent = '–';
       el('anLastSaved').title = lang() === 'en' ? 'Not saved yet' : 'Noch nicht gespeichert';
     }
-    document.querySelector('input[name="anLang"][value="de"]').checked = true;
+    setRadio('anLang', keepLang);
     applyLang();
     applyStatusUi({ status: 'entwurf' });
   }
@@ -1264,19 +1367,74 @@
     el('btnAnPreviewClose').addEventListener('click', function () { el('anPreviewModal').hidden = true; });
     el('btnAnSigClear').addEventListener('click', function () { if (pad) pad.clear(); });
     el('btnAnSign').addEventListener('click', signCustomer);
+    window.addEventListener('kukla-job-fabs-updated', function (ev) {
+      var d = (ev && ev.detail) || {};
+      var ids = selectedJobIds();
+      if (d.job && !jobSourceIdsMatch(d.job, ids.localId, ids.serverId)) return;
+      renderFabs(mergeFabs(currentFabs(), mergeFabs(d.fabrikationsnummern, d.rows)));
+    });
+    window.addEventListener('kukla-jobs-synced', function () {
+      hydrateJobFabsForForm().catch(function () {});
+    });
     loadJobs().catch(function () {});
   }
-  window.openAndResetArbeitsnachweisForm = function () {
-    loadJobs().then(function () {
-      return fetch(anLocalGetUrl({ latest: '1' }), {
-        headers: getHeaders()
-      }).then(function (r) { return r.json(); });
-    }).then(function (data) {
-      if (data && data.document) {
-        applyPayload(data);
-        if (data.synced === false) persistLocal().catch(function () {});
+  async function hydrateJobFabsForForm(opts) {
+    opts = opts || {};
+    try { await loadJobs(); } catch (e) { /* Cache bleibt */ }
+    var ids = selectedJobIds();
+    if (!ids.localId && !ids.serverId) return;
+    var cached = findCachedJob(ids.localId, ids.serverId);
+    if (opts.fillKopf && cached) applyJobKopf(cached);
+    else if (cached) {
+      jobData = cached;
+      syncFabsFromJob(cached);
+    }
+    var techId = window.getTechId && window.getTechId();
+    try {
+      var detail = await fetchLocalJob(ids.localId || ids.serverId, techId);
+      if (!detail && ids.serverId && ids.serverId !== ids.localId) {
+        detail = await fetchLocalJob(ids.serverId, techId);
       }
-    }).catch(function () {});
+      if (detail) {
+        if (opts.fillKopf) applyJobKopf(detail);
+        else {
+          jobData = detail;
+          syncFabsFromJob(detail);
+        }
+      }
+    } catch (e) { /* Liste/Cache reicht */ }
+    syncFabsFromJob(jobData);
+  }
+  window.flushArbeitsnachweisPersist = function () {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    return persistLocal().catch(function () {});
+  };
+  window.openAndResetArbeitsnachweisForm = function () {
+    jobLoadBusy = true;
+    jobData = null;
+    renderFabs([]);
+    var jobsP = loadJobs().catch(function () {});
+    fetch(anLocalGetUrl({ latest: '1' }), {
+      headers: getHeaders()
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        return jobsP.then(function () {
+          if (data && data.document) applyPayload(data);
+          return hydrateJobFabsForForm({ fillKopf: true }).then(function () {
+            return persistLocal().catch(function () {});
+          });
+        });
+      })
+      .catch(function () {
+        return jobsP.then(function () { return hydrateJobFabsForForm({ fillKopf: true }); });
+      })
+      .then(function () {
+        jobLoadBusy = false;
+      });
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();

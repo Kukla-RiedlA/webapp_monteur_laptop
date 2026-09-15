@@ -4,6 +4,22 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.025
+- **KUKpit-Layout:** Bildlaufleiste bleibt unter der Kopfzeile; Protokoll-Titelzeilen (Speichern/PDF) überlappen die Formularfelder nicht mehr.
+- **Arbeitsnachweis:** Fabrikationsnummern aus dem Auftrag werden lokal mitgeführt und beim Speichern/PDF nicht verloren.
+
+## V 2.007.019
+- **Anlagenakte Galerie:** doppelte Montage-Kacheln (Archiv und `Dokumente_Monteur`) zusammengefasst; fehlende Vorschaubilder für Auftragsfotos werden lokal erzeugt, ohne OneDrive im Galerie-Request zu scannen.
+
+## V 2.007.013
+- **CSV-Dateien:** nicht mehr in Excel öffnen, sondern Dialog „Speichern unter“; Overlay nach dem Speichern hängt nicht; Dateiname bleibt ohne Download-Zeitstempel.
+
+## V 2.007.012
+- **Anlagenakte Galerie:** Laden blockiert die App nicht mehr (kein synchroner OneDrive-Scan); Montagefotos kommen im Hintergrund, Vorschaubilder nur aus dem lokalen Cache.
+- **Auftrag abschließen:** Dateien für PROJEKTE NEU auswählbar (`transfer_rel_paths`); ohne Auswahl wie bisher alles.
+- **Zeitschreibung:** Kopfzeile bleibt beim Scrollen im sichtbaren Bereich.
+- **Windows-Pfade:** Lange OneDrive-Pfade (`\\?\`) für Galerie und Dateiauflösung.
+
 ## V 2.007.008
 - **Erledigt:** `.conflict-*`-Sicherungen der Protokoll-JSONs werden beim Aufräumen des Auftragsordners gelöscht und in der Dateiliste nicht mehr angezeigt.
 

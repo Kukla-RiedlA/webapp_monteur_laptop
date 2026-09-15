@@ -1,4 +1,4 @@
-# Monteur WebApp – Electron (Windows, Offline)
+# KUKpit – Electron (Windows, Offline)
 
 Desktop-App mit **eigener lokaler SQLite-DB** für Offline-Nutzung. Bei Bedarf Sync mit der PHP-WebApp (Dispo-Server).
 
@@ -88,7 +88,7 @@ Die UI spricht immer mit diesem lokalen Server; Sync verbindet sich mit dem **Di
 7. Offene Aufträge mit Filter offline aus SQLite sichtbar.
 8. Terminal: kein wiederholtes `[sync_pull] anlagenstamm_db_sync: Statement closed`.
 
-## Icon (Kukla Monteur Tool)
+## Icon (KUKpit)
 
 - **Fenster/Taskbar:** `public/icon.png` (Windows nutzt PNG; für bessere Darstellung z. B. 256×256 px verwenden).
 - **Browser-Tab (Favicon):** `public/icon.svg` (K-Logo auf blauem Grund).  

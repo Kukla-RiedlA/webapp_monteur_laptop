@@ -3,7 +3,7 @@
 const path = require('path');
 const crypto = require('crypto');
 
-const PARAM_EXT_RE = /\.(csv|txt|pa3|pa4|pa5|pal)$/i;
+const PARAM_EXT_RE = /\.(csv|txt|pa3|pa4|pa5|pa6|pa7|pal)$/i;
 
 function isSupportedParameterFileName(fileName) {
   return PARAM_EXT_RE.test(String(fileName || '').trim());
@@ -31,6 +31,13 @@ function extractFilenameFab(fileName) {
     if (fab) return fab;
   }
   return '';
+}
+
+/** Trennlinien wie --------- / _____ / ------------- [- -------------] sind kein Fachwert. */
+function isLinePlaceholder(value) {
+  const s = String(value || '').trim();
+  if (s.length < 3) return false;
+  return s.replace(/[^0-9A-Za-zÄÖÜäöüß]/g, '') === '';
 }
 
 function decodeBufferSmart(buffer) {
@@ -119,6 +126,7 @@ function extractEntries(text) {
     const line = String(raw || '').trim();
     if (!line) continue;
     if (line.length > 512) continue;
+    if (isLinePlaceholder(line)) continue;
     let parsed = null;
     if (line.indexOf(';') >= 0) parsed = parseDelimitedLine(line, lineNo);
     if (!parsed && line.indexOf(':') >= 0) parsed = parseColonLine(line, lineNo);
@@ -152,10 +160,38 @@ function parseParameterFile(buffer, opts) {
   };
 }
 
+/**
+ * Bindet einen Upload an die geöffnete Anlage. Abweichende FN in Datei/Name wird abgelehnt.
+ */
+function resolveTargetFab(parsedUsedFab, fabOverride) {
+  const parsedFab = normalizeFabDigits(parsedUsedFab);
+  const requested = normalizeFabDigits(fabOverride);
+  if (requested) {
+    if (parsedFab && parsedFab !== requested) {
+      return {
+        ok: false,
+        error:
+          'Die Datei gehört zu Fabrikationsnummer ' +
+          parsedFab +
+          ', die geöffnete Anlage ist ' +
+          requested +
+          '.',
+      };
+    }
+    return { ok: true, fab: requested };
+  }
+  if (!parsedFab) {
+    return { ok: false, error: 'Keine Fabrikationsnummer erkannt (Dateiname oder Dateiinhalt).' };
+  }
+  return { ok: true, fab: parsedFab };
+}
+
 module.exports = {
   isSupportedParameterFileName,
   parseParameterFile,
   normalizeFabDigits,
   extractFilenameFab,
   extractContentFab,
+  isLinePlaceholder,
+  resolveTargetFab,
 };

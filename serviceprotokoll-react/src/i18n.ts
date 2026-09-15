@@ -21,6 +21,7 @@ const STRINGS = {
   german: { de: 'Deutsch', en: 'German' },
   english: { de: 'Englisch', en: 'English' },
   serialNumber: { de: 'Fabrikationsnummer', en: 'Serial number' },
+  includeFnInProtocol: { de: 'FN in diesem Protokoll berücksichtigen', en: 'Include this serial number in this protocol' },
   plantData: { de: 'Anlagendaten', en: 'Equipment data' },
   type: { de: 'Type', en: 'Type' },
   qmaxPh: { de: 'z.B. 30 t/h', en: 'e.g. 30 t/h' },

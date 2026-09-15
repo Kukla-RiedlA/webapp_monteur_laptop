@@ -2,6 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const { fsExistsSync, fsStatSync, fsReaddirSync, fsReaddir, fsStat } = require('./win32-long-path');
+const { isSupportedParameterFileName } = require('./anlagenstamm-parameter-parser');
 
 const DEFAULT_MAX_DEPTH = 25;
 const DEFAULT_MAX_ENTRIES = 15000;
@@ -15,14 +17,16 @@ function isIgnorableDirEntry(name) {
   return /\.conflict-/i.test(n);
 }
 
-/** Leerzeichen, Unterstriche und „, AT“ / „, _AT“ gelten als derselbe FN-Ordner. */
+/** Leerzeichen, Unterstriche, Komma und „(UK)“/„UK“ gelten als derselbe FN-Ordner. */
 function fnFolderAliasKey(name) {
   return String(name || '')
     .trim()
+    .replace(/[()]/g, '')
     .replace(/,\s*_*/g, ',')
     .replace(/\s+/g, '_')
     .replace(/,+/g, '_')
     .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
     .toLowerCase();
 }
 
@@ -45,6 +49,14 @@ function isRangeFnFolderName(name) {
  */
 function isDatePrefixedProjectFolderName(name) {
   return /^\d{1,2}-\d{4}-\d{2}-\d{2}(?:[_-\s]|$)/.test(String(name || '').trim());
+}
+
+/**
+ * Historischer Montage-/Service-Ordner aus PROJEKTE NEU: 2022_05_12_HN_Service
+ * Nicht der Laptop-Auftragsordner (2026-05-12_Firma_Ort_Land_Monteur).
+ */
+function isProjekteNeuMontageFolderName(name) {
+  return /^\d{4}_\d{2}_\d{2}(?:[_-]|$)/.test(String(name || '').trim());
 }
 
 /**
@@ -160,10 +172,59 @@ function collectExactFnFolderMatches(dirNames, fab) {
   for (const raw of dirNames || []) {
     const n = String(raw || '').trim();
     if (!n || isRangeFnFolderName(n) || isDatePrefixedProjectFolderName(n)) continue;
-    const digitsOnly = n.replace(/\D/g, '');
-    if (digitsOnly && parseInt(digitsOnly, 10) === fnNum) out.push(n);
+    const lead = (n.match(/^(\d{4,8})/) || [])[1];
+    if (lead && parseInt(lead, 10) === fnNum) out.push(n);
   }
   return out;
+}
+
+/** Alle FN-Treffer inkl. Bereichsordner (für Galerie/Merge). */
+function collectAllFnFolderMatches(dirNames, fab) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of dirNames || []) {
+    const n = String(raw || '').trim();
+    if (!n || seen.has(n) || isDatePrefixedProjectFolderName(n)) continue;
+    if (!folderNameMatchesFab(n, fab)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
+function listMonteurTopDirNames(dokumenteMonteurPath) {
+  if (!fsExistsSync(dokumenteMonteurPath) || !fsStatSync(dokumenteMonteurPath).isDirectory()) {
+    return [];
+  }
+  let names;
+  try {
+    names = fsReaddirSync(dokumenteMonteurPath, { withFileTypes: true });
+  } catch (_) {
+    return [];
+  }
+  return names.filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name)).map((e) => e.name);
+}
+
+function collectMonteurFoldersForFab(dokumenteMonteurPath, fab) {
+  return collectAllFnFolderMatches(listMonteurTopDirNames(dokumenteMonteurPath), fab);
+}
+
+async function collectMonteurFoldersForFabAsync(dokumenteMonteurPath, fab) {
+  let st;
+  try {
+    st = await fsStat(dokumenteMonteurPath);
+  } catch (_) {
+    return [];
+  }
+  if (!st || !st.isDirectory()) return [];
+  let names;
+  try {
+    names = await fsReaddir(dokumenteMonteurPath, { withFileTypes: true });
+  } catch (_) {
+    return [];
+  }
+  const dirs = names.filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name)).map((e) => e.name);
+  return collectAllFnFolderMatches(dirs, fab);
 }
 
 /** Bei mehreren Treffern: Fileserver-Stil (mit Leerzeichen) vor Unterstrich-Variante. */
@@ -188,12 +249,12 @@ function findMonteurFolderForFab(dokumenteMonteurPath, fab) {
   const digits = fabStr.replace(/\D/g, '');
   if (!digits) return null;
   if (!Number.isFinite(parseInt(digits, 10))) return null;
-  if (!fs.existsSync(dokumenteMonteurPath) || !fs.statSync(dokumenteMonteurPath).isDirectory()) {
+  if (!fsExistsSync(dokumenteMonteurPath) || !fsStatSync(dokumenteMonteurPath).isDirectory()) {
     return null;
   }
   let names;
   try {
-    names = fs.readdirSync(dokumenteMonteurPath, { withFileTypes: true });
+    names = fsReaddirSync(dokumenteMonteurPath, { withFileTypes: true });
   } catch (_) {
     return null;
   }
@@ -201,6 +262,32 @@ function findMonteurFolderForFab(dokumenteMonteurPath, fab) {
     .filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name))
     .map((e) => e.name);
 
+  const exact = pickPreferredExactFnDir(dirs, fab);
+  if (exact) return exact;
+  return pickFnRangeDir(dirs, fab);
+}
+
+async function findMonteurFolderForFabAsync(dokumenteMonteurPath, fab) {
+  const fabStr = String(fab ?? '').trim();
+  const digits = fabStr.replace(/\D/g, '');
+  if (!digits) return null;
+  if (!Number.isFinite(parseInt(digits, 10))) return null;
+  let st;
+  try {
+    st = await fsStat(dokumenteMonteurPath);
+  } catch (_) {
+    return null;
+  }
+  if (!st || !st.isDirectory()) return null;
+  let names;
+  try {
+    names = await fsReaddir(dokumenteMonteurPath, { withFileTypes: true });
+  } catch (_) {
+    return null;
+  }
+  const dirs = names
+    .filter((e) => e.isDirectory() && !isIgnorableDirEntry(e.name))
+    .map((e) => e.name);
   const exact = pickPreferredExactFnDir(dirs, fab);
   if (exact) return exact;
   return pickFnRangeDir(dirs, fab);
@@ -299,6 +386,65 @@ function scanProjekteNeuTree(absRoot, opts) {
 }
 
 /**
+ * Rekursive Suche nur nach Parameterlisten (CSV/PAL/PA3/…), inkl. Montage.
+ * Bilder und sonstige Dateien zählen nicht gegen das Limit.
+ *
+ * @param {string} absRoot
+ * @param {{ maxDepth?: number, maxFiles?: number }} [opts]
+ * @returns {Array<{ rel: string, name: string, abs: string, size: number, mtime: number }>}
+ */
+function scanProjekteNeuParameterFiles(absRoot, opts) {
+  const o = opts && typeof opts === 'object' ? opts : {};
+  const maxDepth = o.maxDepth != null ? o.maxDepth : DEFAULT_MAX_DEPTH;
+  const maxFiles = o.maxFiles != null ? o.maxFiles : 400;
+  const out = [];
+  if (!absRoot || !fsExistsSync(absRoot)) return out;
+  try {
+    const stRoot = fsStatSync(absRoot);
+    if (!stRoot || !stRoot.isDirectory()) return out;
+  } catch (_) {
+    return out;
+  }
+
+  function walk(absDir, relFromFab, depth) {
+    if (depth > maxDepth || out.length >= maxFiles) return;
+    let names;
+    try {
+      names = fsReaddirSync(absDir);
+    } catch (_) {
+      return;
+    }
+    for (const name of names) {
+      if (isIgnorableDirEntry(name)) continue;
+      if (out.length >= maxFiles) return;
+      const full = path.join(absDir, name);
+      const rel = relFromFab ? relFromFab + '/' + name : name;
+      let st;
+      try {
+        st = fsStatSync(full);
+      } catch (_) {
+        continue;
+      }
+      if (st.isDirectory()) {
+        walk(full, rel, depth + 1);
+        continue;
+      }
+      if (!st.isFile() || !isSupportedParameterFileName(name)) continue;
+      out.push({
+        rel: String(rel).replace(/\\/g, '/'),
+        name,
+        abs: full,
+        size: st.size || 0,
+        mtime: Math.floor((st.mtimeMs || 0) / 1000),
+      });
+    }
+  }
+
+  walk(absRoot, '', 0);
+  return out;
+}
+
+/**
  * @param {string} dokumenteMonteurPath
  * @param {string} fab
  * @returns {{ root: string, folderName: string }|null}
@@ -331,21 +477,27 @@ function resolveCanonicalFolderFromDirList(dirNames, fab) {
 
 module.exports = {
   findMonteurFolderForFab,
+  findMonteurFolderForFabAsync,
   resolveCanonicalFolderFromDirList,
   fnFolderAliasKey,
   isFnFolderAlias,
   isRangeFnFolderName,
   isDatePrefixedProjectFolderName,
+  isProjekteNeuMontageFolderName,
   parseFnRangeFromFolderName,
   folderNameMatchesFab,
   parseFabNumber,
   uniqueSortedNumericFabs,
   consecutiveNumericFabRuns,
   collectExactFnFolderMatches,
+  collectAllFnFolderMatches,
+  collectMonteurFoldersForFab,
+  collectMonteurFoldersForFabAsync,
   pickPreferredExactFnDir,
   pickFnRangeDir,
   safeResolveUnderRoot,
   scanProjekteNeuTree,
+  scanProjekteNeuParameterFiles,
   resolveProjekteNeuRoot,
   isIgnorableDirEntry,
 };

@@ -270,6 +270,19 @@
         return;
       }
 
+      if (data.type === 'SP_FAB_INCLUDE_CHANGE' && data.fab != null && host && typeof host.setFabInclude === 'function') {
+        if (!isActiveHost()) return;
+        host.setFabInclude(String(data.fab), data.included !== false);
+        syncToReact(true);
+        return;
+      }
+
+      if (data.type === 'SP_LANG_CHANGE' && host && typeof host.setPdfLanguages === 'function') {
+        if (!isActiveHost()) return;
+        host.setPdfLanguages(!!data.pdfDe, !!data.pdfEn);
+        return;
+      }
+
       if (data.type === 'SP_ACTION' && data.action && host && typeof host.triggerAction === 'function') {
         if (!isActiveHost()) return;
         var actionName = String(data.action);

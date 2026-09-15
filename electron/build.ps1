@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
 
 function Stop-MonteurElectronForBuild {
-    $names = @("electron", "Monteur WebApp")
+    $names = @("electron", "KUKpit", "Monteur WebApp")
     foreach ($name in $names) {
         Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "Beende Prozess: $($_.ProcessName) (PID $($_.Id))"

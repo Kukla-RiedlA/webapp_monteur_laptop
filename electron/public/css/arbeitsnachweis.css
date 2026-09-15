@@ -3,7 +3,7 @@
 #viewProtokolleArbeitsnachweis.view-protokolle {
   background: var(--sp-page, #f7f8f8);
   padding: 0;
-  min-height: calc(100vh - 120px);
+  min-height: 0;
 }
 
 .an-page { max-width: 1100px; margin: 0 auto; }
@@ -21,7 +21,7 @@
   margin: 0;
   padding: 0.2em 0.55em;
   border-radius: 4px;
-  background: #3d5a80;
+  background: var(--kukla-primary, #0e7b5a);
   color: #fff;
   font-size: 0.8rem;
   font-weight: 600;

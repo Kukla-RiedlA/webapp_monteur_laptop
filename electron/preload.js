@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld('monteurApp', {
   openPath: (filePath) => ipcRenderer.invoke('dienstreise:open-path', filePath),
   /** TED/Mechanik-Excel: gleicher IPC, dokumentiert als Excel-Öffnen (EXCEL.EXE zuerst unter Windows). */
   openExcel: (filePath) => ipcRenderer.invoke('dienstreise:open-path', filePath),
-  /** PDF im eigenen Electron-Fenster (Chromium-Viewer, ohne Acrobat). */
+  /** PDF im eigenen Electron-Fenster (Skizze + Text, ohne Acrobat). */
   openPdf: (filePath) => ipcRenderer.invoke('pdf:open-viewer', filePath),
   openWithDialog: (filePath) => ipcRenderer.invoke('dienstreise:open-with-dialog', filePath),
   saveFileAs: (filePath, defaultName) => ipcRenderer.invoke('dienstreise:save-file-as', filePath, defaultName),
@@ -53,6 +53,14 @@ contextBridge.exposeInMainWorld('monteurApp', {
   installAppUpdateNow: () => ipcRenderer.invoke('laptop:update-install-now'),
   uninstallAppAndRemoveLocalData: () => ipcRenderer.invoke('app:self-uninstall-remove-data'),
   hangHeartbeat: () => ipcRenderer.invoke('hang:heartbeat'),
+  hasTitleBarOverlay: process.platform === 'win32',
+  windowControl: (action) => ipcRenderer.invoke('window:control', action),
+  onWindowMaximizeChange: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, maximized) => callback(!!maximized);
+    ipcRenderer.on('window:maximize-change', handler);
+    return () => ipcRenderer.removeListener('window:maximize-change', handler);
+  },
   copilotStatus: () => ipcRenderer.invoke('copilot:status'),
   copilotCheckText: (text) => ipcRenderer.invoke('copilot:checkText', text),
   copilotSignOut: () => ipcRenderer.invoke('copilot:signOut'),

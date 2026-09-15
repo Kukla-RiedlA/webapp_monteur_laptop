@@ -1,6 +1,7 @@
 'use strict';
 
 const { listParameterFilesByFab, normalizeFabDigits } = require('./anlagenstamm-local');
+const { resolveDisplayDatetime, decorateParameterListItem, sortParameterFilesByDisplayDesc } = require('./anlagenstamm-filename-datetime');
 
 const KIND_TO_SLUG = {
   kontrollwiegung: 'wiegeprotokoll',
@@ -26,11 +27,41 @@ function fabDigits(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
+function fabDigitSetFromJobRaw(raw) {
+  const set = new Set();
+  const add = (v) => {
+    const d = fabDigits(v);
+    if (!d) return;
+    const n = parseInt(d, 10);
+    if (Number.isFinite(n) && n > 0) set.add(String(n));
+  };
+  if (raw == null || raw === '') return set;
+  const s = String(raw).trim();
+  if (!s) return set;
+  try {
+    const parsed = JSON.parse(s);
+    const rows = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? [parsed] : [];
+    for (const row of rows) {
+      if (row && typeof row === 'object') {
+        add(row.fabrikationsnummer != null ? row.fabrikationsnummer : row.Fabrikationsnummer);
+      } else {
+        add(row);
+      }
+    }
+    if (set.size > 0) return set;
+  } catch (_) {
+    /* Komma-/Semikolon-Liste */
+  }
+  for (const part of s.split(/[\s;,]+/)) {
+    if (part.trim()) add(part);
+  }
+  return set;
+}
+
 function jobHasFab(fabrikationsnummern, fabNorm) {
-  const raw = String(fabrikationsnummern || '');
-  if (!fabNorm || !raw) return false;
-  const parts = raw.split(/[,;\s]+/).map((p) => fabDigits(p)).filter(Boolean);
-  return parts.includes(fabNorm);
+  const want = fabDigits(fabNorm) || String(fabNorm || '').trim();
+  if (!want) return false;
+  return fabDigitSetFromJobRaw(fabrikationsnummern).has(want);
 }
 
 function isRealListedDocument(doc) {
@@ -56,10 +87,15 @@ function mapParameterDocs(db, fabNorm) {
     if (tech) notes += ' · ' + tech;
     if (n > 0) notes += ' · ' + n + ' Werte';
     if (String(row.source_file_status || '') === 'original_deleted') notes += ' · Originaldatei gelöscht';
-    const name = String(row.original_filename || 'Parameterliste');
+      const name = String(row.original_filename || 'Parameterliste');
+    const display = resolveDisplayDatetime({
+      filename: name,
+      fallbackDatetime: row.uploaded_at,
+    }) || String(row.uploaded_at || '');
+    const serverId = row.server_file_id != null ? Number(row.server_file_id) : 0;
     return {
       id: 0,
-      parameter_file_id: row.id,
+      parameter_file_id: serverId > 0 ? serverId : row.id,
       document_type: 'parameterliste',
       file_path: String(row.storage_relpath || row.source_path || ''),
       original_name: name,
@@ -67,9 +103,9 @@ function mapParameterDocs(db, fabNorm) {
       mime: String(row.mime || 'application/octet-stream'),
       size_bytes: row.size != null ? Number(row.size) : 0,
       notes,
-      document_date: String(row.uploaded_at || '').slice(0, 10),
-      created_at: String(row.uploaded_at || ''),
-      display_datetime: String(row.uploaded_at || ''),
+      document_date: display.slice(0, 10),
+      created_at: display,
+      display_datetime: display,
       job_id: null,
       created_by: row.technician_id != null ? Number(row.technician_id) : null,
       uploaded_by_username: tech,
@@ -118,10 +154,122 @@ function buildLocalAnlagenstammDocumentsList(db, fab) {
   };
 }
 
+function docIdentityKeys(doc) {
+  const keys = [];
+  const pid = Number(doc && doc.parameter_file_id) || 0;
+  if (pid > 0) keys.push('p:' + pid);
+  const did = Number(doc && doc.id) || 0;
+  if (did > 0) keys.push('d:' + did);
+  const name = String((doc && (doc.original_name || doc.display_name)) || '')
+    .trim()
+    .toLowerCase();
+  const sz = Number(doc && doc.size_bytes) || 0;
+  if (name) keys.push('n:' + name + ':' + sz);
+  const pathRel = String((doc && doc.file_path) || '')
+    .replace(/\\/g, '/')
+    .trim()
+    .toLowerCase();
+  if (pathRel) keys.push('f:' + pathRel);
+  return keys;
+}
+
+function mergeRemoteDocumentsList(localPayload, remotePayload) {
+  const local = localPayload && typeof localPayload === 'object' ? localPayload : {};
+  const remote = remotePayload && typeof remotePayload === 'object' ? remotePayload : null;
+  if (!remote || !Array.isArray(remote.categories)) {
+    return local;
+  }
+  const ordered = emptyCategories();
+  const bySlug = {};
+  for (const cat of ordered) bySlug[cat.slug] = cat;
+  const seen = new Set();
+  function addDoc(slug, doc) {
+    if (!doc || typeof doc !== 'object') return;
+    const target = bySlug[slug] ? slug : 'sonstiges';
+    if (!bySlug[target]) return;
+    const keys = docIdentityKeys(doc);
+    if (keys.some((k) => seen.has(k))) return;
+    for (const k of keys) seen.add(k);
+    bySlug[target].documents.push(doc);
+  }
+  for (const cat of remote.categories) {
+    const slug = String((cat && cat.slug) || '');
+    for (const doc of (cat && cat.documents) || []) {
+      addDoc(slug, doc);
+    }
+  }
+  for (const cat of local.categories || []) {
+    const slug = String((cat && cat.slug) || '');
+    for (const doc of (cat && cat.documents) || []) {
+      addDoc(slug, doc);
+    }
+  }
+  const remoteEvents = Array.isArray(remote.events) ? remote.events : [];
+  const localEvents = Array.isArray(local.events) ? local.events : [];
+  const evSeen = new Set();
+  const events = [];
+  for (const ev of remoteEvents.concat(localEvents)) {
+    const id = ev && ev.id != null ? 'e:' + ev.id : 't:' + String((ev && ev.title) || '') + ':' + String((ev && ev.event_date) || '');
+    if (evSeen.has(id)) continue;
+    evSeen.add(id);
+    events.push(ev);
+  }
+  const timeline = Array.isArray(remote.timeline) && remote.timeline.length ? remote.timeline : local.timeline || [];
+  return {
+    ok: true,
+    success: true,
+    fab: String(remote.fab || local.fab || '').trim(),
+    parameter_fab: String(remote.parameter_fab || local.parameter_fab || '').trim(),
+    categories: ordered,
+    events,
+    timeline,
+    source: remote.source || 'dispo_api',
+  };
+}
+
+function mapParameterFilesFromDocumentsList(payload) {
+  const cats = payload && Array.isArray(payload.categories) ? payload.categories : [];
+  const paramCat = cats.find((c) => c && String(c.slug || '') === 'parameterliste');
+  const docs = paramCat && Array.isArray(paramCat.documents) ? paramCat.documents : [];
+  const files = [];
+  for (const d of docs) {
+    if (!d || typeof d !== 'object') continue;
+    const id = Number(d.parameter_file_id || d.id || 0);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    const notes = String(d.notes || '');
+    const source =
+      String(d.parameter_source || '').trim() === 'projekte_neu' || /projekte\s*neu/i.test(notes)
+        ? 'projekte_neu'
+        : 'upload';
+    const entryMatch = notes.match(/(\d+)\s*Werte/i);
+    const name = String(d.original_name || d.display_name || d.original_filename || 'parameterliste');
+    files.push(
+      decorateParameterListItem({
+        id,
+        local_id: id,
+        original_filename: name,
+        size: d.size_bytes != null ? Number(d.size_bytes) : d.size != null ? Number(d.size) : 0,
+        source,
+        source_file_status: d.source_file_status || 'present',
+        technician_name: d.uploaded_by_username || d.technician_name || null,
+        uploaded_at: d.display_datetime || d.created_at || d.uploaded_at || '',
+        display_datetime: d.display_datetime || d.created_at || '',
+        entry_count: entryMatch ? Number(entryMatch[1]) : d.entry_count != null ? Number(d.entry_count) : 0,
+        source_path: d.file_path || d.source_path || '',
+        mime: d.mime || 'application/octet-stream',
+      }),
+    );
+  }
+  return sortParameterFilesByDisplayDesc(files);
+}
+
 module.exports = {
   buildLocalAnlagenstammDocumentsList,
+  mergeRemoteDocumentsList,
+  mapParameterFilesFromDocumentsList,
   emptyCategories,
   isRealListedDocument,
   jobHasFab,
+  fabDigitSetFromJobRaw,
   KIND_TO_SLUG,
 };

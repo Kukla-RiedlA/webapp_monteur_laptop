@@ -1,7 +1,7 @@
 {
   "name": "monteur-webapp",
-  "version": "2.7.8",
-  "description": "Monteur WebApp - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
+  "version": "2.7.30",
+  "description": "KUKpit (Kukla Monteur Cockpit) - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
   "license": "MIT",
@@ -18,6 +18,7 @@
     "test:fn-leistung-split": "node --test lib/anlagenstamm-fn-leistung-split.test.js",
     "test:anlagenstamm-list-query": "node --test lib/anlagenstamm-list-query.test.js",
     "test:anlagenstamm-php-local": "node --test lib/anlagenstamm-php-local.test.js",
+    "test:parameter-parser": "node --test lib/anlagenstamm-parameter-parser.test.js",
     "test:image-thumb-cache": "node --test lib/image-thumb-cache.test.js",
     "test:montagebericht-pdf-parity": "node ./node_modules/electron/cli.js scripts/test-montagebericht-pdf-parity.js",
     "test:montagebericht-pdf-parity:open": "node ./node_modules/electron/cli.js scripts/test-montagebericht-pdf-parity.js --open",
@@ -27,13 +28,12 @@
     "test:serviceprotokoll-pdf:open": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js --open",
     "test:sync-offline": "node --test lib/sync-lww.test.js lib/sync-offline-verify.test.js lib/arbeitsnachweis-weight.test.js lib/job-id-map.test.js lib/job-technician-gate.test.js",
     "test:dispo-probe": "node --test lib/dispo-probe.test.js",
-    "test:kuklink-format": "node --test lib/kuklink/format-detect.test.js"
+    "test:kuklink-format": "node --test lib/kuklink/format-detect.test.js",
+    "test:pdf-annotator": "node --test lib/pdf-flatten-markup.test.js lib/pdf-annotator-sessions.test.js"
   },
   "devDependencies": {
     "electron": "^41.2.0",
-    "electron-builder": "^26.8.1",
-    "pdf-parse": "^1.1.4",
-    "pdfjs-dist": "^5.6.205"
+    "electron-builder": "^26.8.1"
   },
   "dependencies": {
     "@azure/msal-node": "^3.8.4",
@@ -47,6 +47,8 @@
     "express": "^4.18.2",
     "form-data": "^4.0.0",
     "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.4",
+    "pdfjs-dist": "^5.6.205",
     "pizzip": "^3.1.6",
     "serialport": "^12.0.0",
     "sharp": "^0.33.5",
@@ -54,7 +56,7 @@
   },
   "build": {
     "appId": "de.kukla.monteur-webapp",
-    "productName": "Monteur WebApp",
+    "productName": "KUKpit",
     "directories": {
       "output": "dist"
     },
@@ -68,7 +70,12 @@
       "version.json",
       "db/schema.sql",
       "public/**",
-      "templates/**"
+      "templates/**",
+      "node_modules/pdfjs-dist/build/**",
+      "node_modules/pdfjs-dist/cmaps/**",
+      "node_modules/pdfjs-dist/standard_fonts/**",
+      "node_modules/pdfjs-dist/wasm/**",
+      "node_modules/pdfjs-dist/package.json"
     ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**",

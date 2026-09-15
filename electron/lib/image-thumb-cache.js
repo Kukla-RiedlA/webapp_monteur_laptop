@@ -1,6 +1,6 @@
 'use strict';
 
-const fs = require('fs');
+const { fsStatSync } = require('./win32-long-path');
 
 const THUMB_KIND_PROJEKTE_NEU = 'projekte_neu';
 const THUMB_KIND_DIENSTREISE = 'dienstreise';
@@ -13,7 +13,11 @@ function normalizeRelPath(relPath) {
 }
 
 function normalizeScopeId(scopeId) {
-  return String(scopeId || '').trim();
+  const s = String(scopeId || '').trim();
+  if (!s) return '';
+  if (/^\d{4,6}$/.test(s)) return s;
+  const m = s.match(/(?:^|\D)(\d{4,6})(?!\d)/);
+  return m ? m[1] : s;
 }
 
 function clampThumbMax(thumbMax) {
@@ -46,7 +50,7 @@ function ensureImageThumbCacheSchema(db) {
 function sourceStatMeta(filePath) {
   if (!filePath) return { source_mtime: null, source_size: null };
   try {
-    const st = fs.statSync(filePath);
+    const st = fsStatSync(filePath);
     return {
       source_mtime: st.mtime ? String(st.mtimeMs) : null,
       source_size: st.isFile() ? st.size : null,
@@ -88,13 +92,22 @@ function readImageThumbCache(db, kind, scopeId, relPath, thumbMax, filePathOpt) 
   };
 }
 
-function writeImageThumbCache(db, kind, scopeId, relPath, thumbMax, buf, contentType, filePathOpt) {
+function writeImageThumbCache(db, kind, scopeId, relPath, thumbMax, buf, contentType, filePathOpt, sourceMeta) {
   if (!db || typeof db.prepare !== 'function' || !buf || !buf.length) return false;
   ensureImageThumbCacheSchema(db);
   const rel = normalizeRelPath(relPath);
   const scope = normalizeScopeId(scopeId);
   const max = clampThumbMax(thumbMax);
   const meta = sourceStatMeta(filePathOpt);
+  if (sourceMeta && typeof sourceMeta === 'object') {
+    if (sourceMeta.source_mtime != null && sourceMeta.source_mtime !== '') {
+      meta.source_mtime = String(sourceMeta.source_mtime);
+    }
+    if (sourceMeta.source_size != null && sourceMeta.source_size !== '') {
+      const n = Number(sourceMeta.source_size);
+      meta.source_size = Number.isFinite(n) ? n : meta.source_size;
+    }
+  }
   db.prepare(
     `INSERT INTO image_thumb_cache (
        cache_kind, scope_id, rel_path, thumb_max, content_type, thumb_blob, source_mtime, source_size, cached_at
@@ -118,11 +131,49 @@ function writeImageThumbCache(db, kind, scopeId, relPath, thumbMax, buf, content
   return true;
 }
 
+function deleteImageThumbCacheExcept(db, kind, scopeId, keepRelPaths, thumbMax) {
+  if (!db || typeof db.prepare !== 'function') return 0;
+  ensureImageThumbCacheSchema(db);
+  const scope = normalizeScopeId(scopeId);
+  const max = clampThumbMax(thumbMax);
+  if (!kind || !scope) return 0;
+  const keep = new Set((Array.isArray(keepRelPaths) ? keepRelPaths : []).map(normalizeRelPath).filter(Boolean));
+  const rows = db
+    .prepare(
+      'SELECT rel_path FROM image_thumb_cache WHERE cache_kind = ? AND scope_id = ? AND thumb_max = ?',
+    )
+    .all(kind, scope, max);
+  const del = db.prepare(
+    'DELETE FROM image_thumb_cache WHERE cache_kind = ? AND scope_id = ? AND rel_path = ? AND thumb_max = ?',
+  );
+  let n = 0;
+  for (const row of rows || []) {
+    const rel = normalizeRelPath(row && row.rel_path);
+    if (!rel || keep.has(rel)) continue;
+    del.run(kind, scope, rel, max);
+    n += 1;
+  }
+  return n;
+}
+
+function deleteImageThumbCacheScope(db, kind, scopeId) {
+  if (!db || typeof db.prepare !== 'function') return 0;
+  ensureImageThumbCacheSchema(db);
+  const scope = normalizeScopeId(scopeId);
+  if (!kind || !scope) return 0;
+  const info = db.prepare('DELETE FROM image_thumb_cache WHERE cache_kind = ? AND scope_id = ?').run(kind, scope);
+  return info && info.changes != null ? Number(info.changes) : 0;
+}
+
 module.exports = {
   THUMB_KIND_PROJEKTE_NEU,
   THUMB_KIND_DIENSTREISE,
   ensureImageThumbCacheSchema,
   readImageThumbCache,
   writeImageThumbCache,
+  deleteImageThumbCacheExcept,
+  deleteImageThumbCacheScope,
   normalizeRelPath,
+  normalizeScopeId,
+  clampThumbMax,
 };

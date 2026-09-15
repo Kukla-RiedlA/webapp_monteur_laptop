@@ -1,5 +1,5 @@
 /**
- * Lokaler API-Server für die Monteur WebApp (Offline).
+ * Lokaler API-Server für KUKpit (Offline).
  * SQLite via better-sqlite3 (WAL) im Electron-Hauptprozess.
  */
 
@@ -118,6 +118,7 @@ const {
   proxyAnlagenstammParameterTrend,
   proxyAnlagenstammParameterIngest,
   proxyAnlagenstammParameterDownload,
+  proxyAnlagenstammParameterDelete,
 } = require('./lib/anlagenstamm-dispo-proxy');
 const {
   buildDispoBaseCandidates,
@@ -135,11 +136,13 @@ const {
   resolveProjekteNeuRoot,
   resolveCanonicalFolderFromDirList,
   scanProjekteNeuTree,
+  scanProjekteNeuParameterFiles,
   safeResolveUnderRoot,
   isIgnorableDirEntry,
   findMonteurFolderForFab,
   folderNameMatchesFab,
   isDatePrefixedProjectFolderName,
+  isProjekteNeuMontageFolderName,
   isFnFolderAlias,
 } = require('./lib/projekte-neu-local');
 const {
@@ -149,6 +152,7 @@ const {
   buildMonteurWorkAbsDir,
   isMonteurWorkRelPath,
   ensureAnlageFnDirs,
+  ensureCanonicalFnFolders,
   ensureMonteurMontageDirs,
   alignMonteurMontageDirs,
   ensureMonteurPhotoCategoryDirs,
@@ -177,6 +181,9 @@ const {
   montageberichtExportStem,
   isLegacyMontageberichtEnExportName,
   cleanupLegacyMontageberichtEnPdfLocal,
+  resolveExplorerListAbsDirs,
+  collapseExplorerFnDirEntries,
+  resolveReiseFileViaFnAliases,
 } = require('./lib/monteur-montage-paths');
 const { fnProtocolPdfFilename, serviceLikePdfKind, labeledProtocolPdfFilename } = require('./lib/protocol-pdf-names');
 const kundenDokumentation = require('./lib/kunden-dokumentation');
@@ -190,6 +197,8 @@ const {
   mergeOfflinePullSelection,
   removeOfflinePullFab,
   updateOfflinePullFabMap,
+  isTedInnerPath,
+  pathMatchesSelection,
   ensureMontageFolderNameInConfig,
   updateMontageFolderNameInConfig,
 } = require('./lib/job-offline-pull');
@@ -217,6 +226,16 @@ const {
   safeTedLocalFileName,
 } = require('./lib/ted-excel-local');
 const { replaceFileWithoutUnlink, replaceFileWithoutUnlinkSync } = require('./lib/replace-file-cloud-safe');
+const {
+  win32FsPath,
+  fsExistsSync,
+  fsStatSync,
+  fsStat,
+  fsReaddir,
+  fsReaddirSync,
+  fsRealpathSync,
+  fsReadFileSync,
+} = require('./lib/win32-long-path');
 const { sweepOnedriveNumberedDuplicates } = require('./lib/onedrive-numbered-duplicates');
 const { applyKuklaAuditHeaders } = require('./lib/audit-client-headers');
 
@@ -267,6 +286,15 @@ const {
 } = require('./lib/multi-device-sync');
 const protocolDrafts = require('./lib/protocol-drafts-local');
 const {
+  isFinishUploadRelPath,
+  isSonstigesRel,
+  parseOptionalTransferRelPaths,
+  transferRelMatches,
+  listFinishTransferFiles,
+  saveFinishExtraFile,
+} = require('./lib/finish-transfer-files');
+const { parseMultipart } = require('./lib/multipart-upload');
+const {
   ensureAnlagenstammLocalSchema,
   rowCount: anlagenstammLocalRowCount,
   searchLocal: anlagenstammSearchLocal,
@@ -285,10 +313,16 @@ const {
   upsertParameterFile,
   cacheParameterFilesFromDispo,
   listParameterFilesByFab,
+  deleteParameterFileByFabSha,
+  decorateParameterListItem,
+  sortParameterFilesByDisplayDesc,
+  mergeParameterFileLists,
+  resolveDisplayDatetime,
   markMissingProjekteNeuFiles,
   compareParameterFilesById,
   buildParameterTrendChain,
   syncProjekteNeuTreesFromDispo,
+  syncProjekteNeuThumbsFromDispo,
   ensureAnlagenstammTreeCacheSchema,
   readAnlagenstammTreeCacheRow,
   upsertAnlagenstammTreeCacheRow,
@@ -310,17 +344,26 @@ const {
   writeCachedProjekteNeuFile,
   readCachedProjekteNeuThumb,
   writeCachedProjekteNeuThumb,
+  projekteNeuFileCachePath,
 } = require('./lib/projekte-neu-file-cache');
+const { materializeOpenablePath } = require('./lib/openable-local-file');
 const {
   readImageThumbCache,
   writeImageThumbCache,
   THUMB_KIND_DIENSTREISE,
+  normalizeScopeId,
 } = require('./lib/image-thumb-cache');
 const {
   isSupportedParameterFileName,
   parseParameterFile,
   normalizeFabDigits: normalizeParameterFab,
+  resolveTargetFab,
 } = require('./lib/anlagenstamm-parameter-parser');
+const {
+  compareParameterTextLines,
+  decodeParameterBufferToText,
+} = require('./lib/anlagenstamm-parameter-trend');
+const jobParameterUploads = require('./lib/job-parameter-uploads');
 
 /** Felder Leistungszeile / Anlagenstamm (Abgleich Projektdaten ↔ Sync). */
 const JOB_FAB_STAMM_KEYS = [
@@ -1538,11 +1581,15 @@ function dispoEntryMtimeMs(entry) {
 /** Lokale mtime an Dispo anlehnen, damit Delta-Sync nicht bei jedem Lauf erneut lädt. */
 function applyLocalFileMtimeFromDispo(filePath, mtimeMs) {
   if (mtimeMs == null || !Number.isFinite(mtimeMs) || mtimeMs <= 0) return;
+  const sec = mtimeMs / 1000;
   try {
-    const sec = mtimeMs / 1000;
-    fs.utimesSync(filePath, sec, sec);
+    fs.utimesSync(win32FsPath(filePath), sec, sec);
   } catch (_) {
-    /* ignore */
+    try {
+      fs.utimesSync(filePath, sec, sec);
+    } catch (__) {
+      /* ignore */
+    }
   }
 }
 
@@ -1646,7 +1693,23 @@ function createApp(db) {
   const { registerAnlagenstammPhpRoutes } = require('./lib/anlagenstamm-php-routes');
   const { registerAbrechnungPhpRoutes } = require('./lib/abrechnung-php-routes');
   let prewarmAnlagenstammGalleryThumbsImpl = null;
-  const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession, loadWebSession } = require('./lib/monteur-dispo-web-routes');
+  const montageGalleryFileCache = new Map();
+  const montageGalleryRefreshInflight = new Map();
+  function montageGalleryCacheKey(fab) {
+    return String(fab || '').replace(/\D/g, '') || String(fab || '').trim();
+  }
+  function getCachedMontageGalleryFiles(fab) {
+    const hit = montageGalleryFileCache.get(montageGalleryCacheKey(fab));
+    return hit && Array.isArray(hit.files) ? hit.files : [];
+  }
+  function hasMontageGalleryCache(fab) {
+    return montageGalleryFileCache.has(montageGalleryCacheKey(fab));
+  }
+  let refreshMontageGalleryFilesImpl = async () => {};
+  async function refreshMontageGalleryFiles(fab) {
+    return refreshMontageGalleryFilesImpl(fab);
+  }
+  const { registerMonteurDispoWebRoutes, ensureProxyAuthenticated, saveWebSession, loadWebSession, tryProxyFetchDispoBinary } = require('./lib/monteur-dispo-web-routes');
   const { registerMultiDeviceRoutes } = require('./lib/multi-device-routes');
   let multiDeviceApi = null;
   registerAnlagenstammPhpRoutes(app, {
@@ -1678,33 +1741,18 @@ function createApp(db) {
     getDispoBaseUrl: () => resolveDispoServerCreds({}).baseUrl || '',
     getDispoExternalUrl: () => resolveDispoServerCreds({}).externalUrl || '',
     getDispoInternalUrl: () => resolveDispoServerCreds({}).internalUrl || '',
+    dbDir: DB_DIR,
+    tryProxyFetchDispoBinary: (suffix) => tryProxyFetchDispoBinary(DB_DIR, suffix),
+    resolveProjekteNeuLocalFile: (technicianId, fab, pnPath, jobId) =>
+      resolveProjekteNeuLocalFilePathAll(technicianId, fab, pnPath, jobId, { skipDeepSearch: false }),
     prewarmAnlagenstammGalleryThumbs: (fab, gallery, technicianId) => {
       if (typeof prewarmAnlagenstammGalleryThumbsImpl === 'function') {
         prewarmAnlagenstammGalleryThumbsImpl(fab, gallery, technicianId);
       }
     },
-    listMontageGalleryFiles: (fab) => {
-      const { jobHasFab } = require('./lib/anlagenstamm-documents-local');
-      const { listMontageRastersFromDokumenteMonteurPaths } = require('./lib/anlagenstamm-gallery-local');
-      const fabNorm = String(fab || '').trim();
-      const fabDigits = fabNorm.replace(/\D/g, '') || fabNorm;
-      if (!fabDigits) return [];
-      let jobs = [];
-      try {
-        jobs = db.prepare('SELECT id, fabrikationsnummern FROM jobs').all();
-      } catch (_) {
-        return [];
-      }
-      const paths = [];
-      for (const j of jobs) {
-        if (!jobHasFab(j.fabrikationsnummern, fabDigits)) continue;
-        const bound = getBoundReiseDirForJob(j.id);
-        if (!bound) continue;
-        paths.push({ dm: path.join(bound, 'Dokumente_Monteur'), jobId: j.id });
-      }
-      const files = listMontageRastersFromDokumenteMonteurPaths(paths, fabNorm, { max: 80 });
-      return files;
-    },
+    getCachedMontageGalleryFiles: (fab) => getCachedMontageGalleryFiles(fab),
+    hasMontageGalleryCache: (fab) => hasMontageGalleryCache(fab),
+    refreshMontageGalleryFiles: (fab) => refreshMontageGalleryFiles(fab),
   });
   registerAbrechnungPhpRoutes(app, {
     db,
@@ -1964,10 +2012,20 @@ function createApp(db) {
     if (!Buffer.isBuffer(buf) || buf.length === 0) return { ok: false, skipped: true, reason: 'empty_buffer' };
     const parsed = parseParameterFile(buf, { fileName });
     if (!parsed || !parsed.ok) return { ok: false, skipped: true, reason: 'parse_failed' };
-    const usedFab = normalizeParameterFab((opts && opts.fabOverride) || parsed.used_fab);
+    const resolved = resolveTargetFab(parsed.used_fab, opts && opts.fabOverride);
+    if (!resolved || !resolved.ok) {
+      const err = resolved && resolved.error ? String(resolved.error) : 'fab_missing';
+      return { ok: false, skipped: true, reason: 'fab_missing', error: err };
+    }
+    const usedFab = normalizeParameterFab(resolved.fab);
     if (!usedFab) return { ok: false, skipped: true, reason: 'fab_missing' };
-    const uploadedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
-    const rawText = buf.toString('latin1');
+    const fileLabel = parsed.file_name || path.basename(fileName);
+    const uploadedAt =
+      resolveDisplayDatetime({
+        filename: fileLabel,
+        sourceMtimeIso: opts && opts.mtime,
+        fallbackDatetime: opts && opts.uploadedAt,
+      }) || new Date().toISOString().replace('T', ' ').slice(0, 19);
     const insert = upsertParameterFile(db, {
       fab: usedFab,
       source,
@@ -1975,17 +2033,16 @@ function createApp(db) {
       technician_id: opts && opts.technicianId != null ? Number(opts.technicianId) : null,
       technician_name: opts && opts.technicianName ? String(opts.technicianName) : null,
       uploaded_at: uploadedAt,
-      original_filename: parsed.file_name || path.basename(fileName),
+      original_filename: fileLabel,
       mime: opts && opts.mime ? String(opts.mime) : 'application/octet-stream',
       size: buf.length,
       sha256: parsed.sha256,
       storage_relpath: storageRelPath,
       source_path: sourcePath,
       filename_fn: parsed.filename_fab || null,
-      content_fn: parsed.content_fab || usedFab,
+      content_fn: parsed.content_fab || null,
       used_fn: usedFab,
       server_file_id: opts && opts.serverFileId != null ? Number(opts.serverFileId) : null,
-      raw_content: rawText,
       entries: parsed.entries || [],
     });
     if (insert && insert.ok) save();
@@ -2016,23 +2073,40 @@ function createApp(db) {
     }
   }
 
-  function ingestProjekteNeuParameterTree(localJobId, fab, tree) {
+  function ingestProjekteNeuParameterTree(localJobId, fab, tree, opts) {
     const fabNorm = normalizeParameterFab(fab);
     if (!fabNorm) return { scanned: 0, ingested: 0 };
-    const flat = [];
-    flattenProjekteNeuFiles(tree, '', flat);
+    const markMissing = !opts || opts.markMissing !== false;
+    let items = [];
+    try {
+      const ctx = getProjekteNeuLocalContext(localJobId, fabNorm);
+      if (ctx && ctx.resolved && ctx.resolved.root) {
+        items = scanProjekteNeuParameterFiles(ctx.resolved.root);
+      }
+    } catch (_) {}
+    if (!items.length) {
+      const flat = [];
+      flattenProjekteNeuFiles(tree, '', flat);
+      for (const item of flat) {
+        if (!isSupportedParameterFileName(item.name)) continue;
+        items.push(item);
+      }
+    }
     const presentPaths = [];
     let ingested = 0;
-    for (const item of flat) {
-      if (!isSupportedParameterFileName(item.name)) continue;
+    for (const item of items) {
+      const name = String(item.name || '').trim() || path.basename(String(item.rel || ''));
+      if (!isSupportedParameterFileName(name)) continue;
       const rel = String(item.rel || '').trim().replace(/\\/g, '/');
       if (!rel) continue;
       presentPaths.push(rel);
-      let filePath = null;
-      try {
-        filePath = resolveProjekteNeuLocalFilePath(localJobId, fabNorm, rel);
-      } catch (_) {
-        filePath = null;
+      let filePath = item.abs ? String(item.abs) : null;
+      if (!filePath) {
+        try {
+          filePath = resolveProjekteNeuLocalFilePath(localJobId, fabNorm, rel);
+        } catch (_) {
+          filePath = null;
+        }
       }
       if (!filePath || !fs.existsSync(filePath)) continue;
       let buf;
@@ -2042,7 +2116,7 @@ function createApp(db) {
         continue;
       }
       const parsed = ingestParameterFileIntoAnlagenstamm({
-        fileName: item.name,
+        fileName: name,
         source: 'projekte_neu',
         sourcePath: rel,
         storageRelPath: filePath,
@@ -2050,12 +2124,15 @@ function createApp(db) {
         mime: 'application/octet-stream',
         technicianId: null,
         technicianName: null,
+        mtime: item.mtime || null,
       });
       if (parsed && parsed.ok) ingested += 1;
     }
-    markMissingProjekteNeuFiles(db, fabNorm, presentPaths);
+    if (markMissing) {
+      markMissingProjekteNeuFiles(db, fabNorm, presentPaths);
+    }
     save();
-    return { scanned: flat.length, ingested, tracked: presentPaths.length };
+    return { scanned: items.length, ingested, tracked: presentPaths.length };
   }
 
   /** Gleiche logische Abwesenheit trotz unterschiedlicher ID (Anfrage vs. Absence) oder T/Space in Datumswerten erkennen. */
@@ -2717,7 +2794,7 @@ function createApp(db) {
     performReleaseDienstreiseJob(lid, technicianId);
   }
 
-  async function pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, status) {
+  async function pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, status, extraBody) {
     if (!dispoBaseUrl || !serverJobId) return { ok: false, error: 'Keine Dispo-Verknüpfung.' };
     const st = String(status || '').trim().toLowerCase();
     if (!st) return { ok: false, error: 'Status fehlt.' };
@@ -2727,10 +2804,17 @@ function createApp(db) {
       'X-Technician-Id': String(technicianId),
       ...(authHeader || {}),
     };
+    const payload = { job_id: serverJobId, status: st };
+    if (extraBody && typeof extraBody === 'object') {
+      for (const key of Object.keys(extraBody)) {
+        if (extraBody[key] === undefined) continue;
+        payload[key] = extraBody[key];
+      }
+    }
     const r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${technicianId}`, {
       method: 'PATCH',
       headers: headerForJob,
-      body: JSON.stringify({ job_id: serverJobId, status: st }),
+      body: JSON.stringify(payload),
     });
     if (!r.ok) {
       let errMsg = 'Dispo: ' + r.status;
@@ -2747,12 +2831,12 @@ function createApp(db) {
    * Erledigt an Dispo wie Handy-PWA. Dispo erlaubt erledigt nur von zugeteilt/in_arbeit —
    * bei angelegt/geplant zuerst in_arbeit, dann erledigt.
    */
-  async function pushJobStatusErledigtToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader) {
-    const first = await pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt');
+  async function pushJobStatusErledigtToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, extraBody) {
+    const first = await pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt', extraBody);
     if (first.ok) return first;
     const mid = await pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'in_arbeit');
     if (!mid.ok) return first;
-    return pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt');
+    return pushJobStatusToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader, 'erledigt', extraBody);
   }
 
   async function pushJobStatusInArbeitToDispo(dispoBaseUrl, technicianId, serverJobId, authHeader) {
@@ -2821,7 +2905,7 @@ function createApp(db) {
 
   function readLocalFileStatForPush(fullPath) {
     try {
-      const st = fs.statSync(fullPath);
+      const st = fsStatSync(fullPath);
       const mtimeMs = st.mtimeMs != null ? st.mtimeMs : st.mtime ? st.mtime.getTime() : 0;
       return { mtimeMs: Number(mtimeMs) || 0, size: Number(st.size) || 0 };
     } catch (_) {
@@ -3456,6 +3540,27 @@ function createApp(db) {
     return n;
   }
 
+  function listBoundReiseDirsForAnnotator() {
+    ensureJobReiseFolderBindingSchema(db);
+    let rows = [];
+    try {
+      rows = db.prepare(
+        'SELECT folder_path FROM job_reise_folder_binding ORDER BY created_at DESC',
+      ).all();
+    } catch (_) {
+      rows = [];
+    }
+    const out = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const p = row && row.folder_path ? String(row.folder_path).trim() : '';
+      if (!p || seen.has(p.toLowerCase()) || !fs.existsSync(p)) continue;
+      seen.add(p.toLowerCase());
+      out.push(p);
+    }
+    return out;
+  }
+
   /**
    * Acrobat öffnet unter Windows oft still keine PDFs, wenn der Pfad Bullet-Zeichen (•) enthält.
    * Bestehende Reiseordner einmalig umbenennen und Binding aktualisieren.
@@ -3855,7 +3960,72 @@ function createApp(db) {
         }
       }
     }
+    restoreParameterUploadsForJob(localJobId, reiseDir, technicianIdOpt, fabMap, montageFolderName);
     return { fabMap, montageFolderName };
+  }
+
+  function getParameterUploadsCacheRoot() {
+    try {
+      const { app } = require('electron');
+      if (app && typeof app.getPath === 'function') {
+        return path.join(app.getPath('userData'), 'parameter-uploads');
+      }
+    } catch (_) {}
+    return path.join(DB_DIR, 'parameter-uploads');
+  }
+
+  function loadParameterJobMeta(localJobId) {
+    return db
+      .prepare(
+        `SELECT j.id, j.server_id, j.job_number, j.status, j.fabrikationsnummern
+         FROM jobs j WHERE j.id = ? LIMIT 1`,
+      )
+      .get(localJobId);
+  }
+
+  function restoreParameterUploadsForJob(localJobId, reiseDir, technicianId, fabMap, montageFolderName) {
+    if (!reiseDir || !fs.existsSync(reiseDir)) return;
+    const jobRow = loadParameterJobMeta(localJobId);
+    if (!jobRow) return;
+    const docMonteurPath = path.join(reiseDir, 'Dokumente_Monteur');
+    const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
+    const ao = montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
+    if (!ao) return;
+    try {
+      jobParameterUploads.restoreUploadsToJobFolder(db, {
+        local_job_id: localJobId,
+        server_job_id: jobRow.server_id,
+        job_number: jobRow.job_number,
+        resolveParamDir: (fab) => {
+          const folderName = resolveWritableMonteurFnFolder(
+            localJobId,
+            fab,
+            docMonteurPath,
+            docAnlagePath,
+            fabMap || [],
+          );
+          if (!folderName) return null;
+          return buildMonteurWorkAbsDir(docMonteurPath, folderName, ao, 'Parameter');
+        },
+        relFor: (fab, filename) => {
+          const folderName = resolveWritableMonteurFnFolder(
+            localJobId,
+            fab,
+            docMonteurPath,
+            docAnlagePath,
+            fabMap || [],
+          );
+          if (!folderName) return null;
+          return buildMonteurWorkRelPath(folderName, ao, path.join('Parameter', filename));
+        },
+      });
+      save();
+    } catch (err) {
+      console.warn(
+        '[parameterlisten] restore:',
+        err && err.message ? err.message : err,
+      );
+    }
   }
 
   /** Liste der Dateien/Ordner im Projektordner eines Auftrags (Explorer-Ansicht). subpath = relativer Pfad (z. B. "" oder "Dokumente_Monteur"). */
@@ -3942,25 +4112,26 @@ function createApp(db) {
         }
       }
 
-      const dirPath = subpath ? path.join(reiseDir, subpath) : reiseDir;
+      const dirCandidates = resolveExplorerListAbsDirs(reiseDir, subpath, fabMapForList);
+      const byName = new Map();
+      for (const dirPath of dirCandidates) {
       let dirStat;
       try {
-        dirStat = await fs.promises.stat(dirPath);
+        dirStat = await fsStat(dirPath);
       } catch (_) {
-        return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
+        continue;
       }
-      if (!dirStat.isDirectory()) return res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries: [] });
+      if (!dirStat.isDirectory()) continue;
       let dirents;
       try {
-        dirents = await fs.promises.readdir(dirPath, { withFileTypes: true });
+        dirents = await fsReaddir(dirPath, { withFileTypes: true });
       } catch (e) {
         return res.status(500).json({ ok: false, error: e.message || 'Dateiliste konnte nicht gelesen werden.' });
       }
-      const entries = [];
       let listed = 0;
       for (const ent of dirents) {
         const name = ent.name;
-        if (isIgnorableDirEntry(name)) continue;
+        if (isIgnorableDirEntry(name) || byName.has(name)) continue;
         const isDirectory = ent.isDirectory();
         const listRoot = String(subpath || '').replace(/\\/g, '/');
         if (
@@ -3971,13 +4142,20 @@ function createApp(db) {
         ) {
           continue;
         }
+        if (
+          isDirectory &&
+          isProjekteNeuMontageFolderName(name) &&
+          /(^|\/)Montage$/i.test(listRoot)
+        ) {
+          continue;
+        }
         const fullPath = path.join(dirPath, name);
         if (!isDirectory && !ent.isFile()) continue;
         if (isDirectory) {
           const keepEmptyPhotoCategory = name === 'Allgemein' || name === 'Angebot';
           if (subpath && !keepEmptyPhotoCategory && dirents.length <= 24) {
             try {
-              const childNames = await fs.promises.readdir(fullPath);
+              const childNames = await fsReaddir(fullPath);
               const visible = childNames.filter((n) => !isIgnorableDirEntry(n));
               if (!visible.length) continue;
             } catch (_) {
@@ -3989,15 +4167,15 @@ function createApp(db) {
         let mtime = null;
         if (!isDirectory) {
           try {
-            const st = await fs.promises.stat(fullPath);
+            const st = await fsStat(fullPath);
             size = st.size;
             mtime = st.mtime ? st.mtime.toISOString() : null;
-          } catch (e) {
-            continue;
+          } catch (_) {
+            /* Lange Windows-Pfade: Datei trotzdem anzeigen. */
           }
         }
         const relativePath = subpath ? (subpath.replace(/\\/g, '/') + '/' + name) : name;
-        entries.push({
+        byName.set(name, {
           name,
           relativePath,
           fullPath,
@@ -4008,6 +4186,8 @@ function createApp(db) {
         listed += 1;
         if (listed % 8 === 0) await yieldEventLoop();
       }
+      }
+      let entries = collapseExplorerFnDirEntries([...byName.values()], fabMapForList, subpath);
       entries.sort((a, b) => {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
         return (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
@@ -4049,7 +4229,7 @@ function createApp(db) {
         });
       }
       const docMonteur = path.join(reiseDir, 'Dokumente_Monteur');
-      if (!fs.existsSync(docMonteur) || !fs.statSync(docMonteur).isDirectory()) {
+      if (!fsExistsSync(docMonteur) || !fsStatSync(docMonteur).isDirectory()) {
         return res.json({ ok: true, photos: [], folder_missing: false, hint: 'Keine Dokumente_Monteur vorhanden.' });
       }
       const imgRe = /\.(jpe?g|png|gif|webp|bmp)$/i;
@@ -4060,7 +4240,7 @@ function createApp(db) {
         if (photos.length >= maxFiles || depth > maxDepth) return;
         let names = [];
         try {
-          names = fs.readdirSync(dir);
+          names = fsReaddirSync(dir);
         } catch (_) {
           return;
         }
@@ -4070,7 +4250,7 @@ function createApp(db) {
           const full = path.join(dir, name);
           let st;
           try {
-            st = fs.statSync(full);
+            st = fsStatSync(full);
           } catch (_) {
             continue;
           }
@@ -4114,13 +4294,33 @@ function createApp(db) {
     if (rel && (rel.includes('..') || path.isAbsolute(rel))) return null;
     const parts = rel ? rel.split(/[/\\]/).filter(Boolean) : [];
     if (!parts.length) return null;
-    const filePath = path.join(reiseDir, ...parts);
-    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+    let fabMap = [];
+    try {
+      const jobRow = lookupDienstreiseJobRow(jobId);
+      const jobFabs = jobRow ? fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern) : [];
+      const offlineCfg = getOfflinePullConfig(db, jobId);
+      fabMap = resolveFabMapLocal(
+        reiseDir,
+        (offlineCfg && offlineCfg.fab_map) || [],
+        jobFabs,
+        (fab) => readAnlagenstammRootFolderName(db, fab),
+        jobMetaForFnFolder(jobRow),
+      );
+    } catch (_) {
+      fabMap = [];
+    }
+    const filePath = resolveReiseFileViaFnAliases(reiseDir, rel, fabMap) || path.join(reiseDir, ...parts);
+    if (!fsExistsSync(filePath)) return null;
+    try {
+      if (!fsStatSync(filePath).isFile()) return null;
+    } catch (_) {
+      return null;
+    }
     let realReise;
     let realFile;
     try {
-      realReise = fs.realpathSync(reiseDir);
-      realFile = fs.realpathSync(filePath);
+      realReise = fsRealpathSync(reiseDir);
+      realFile = fsRealpathSync(filePath);
     } catch (_) {
       return null;
     }
@@ -4183,7 +4383,7 @@ function createApp(db) {
           return res.status(415).json({ ok: false, error: thumbErr.message || 'thumb_not_image' });
         }
       }
-      const buf = fs.readFileSync(filePath);
+      const buf = fsReadFileSync(filePath);
       const ext = path.extname(baseName).toLowerCase();
       const mimeMap = {
         '.jpg': 'image/jpeg',
@@ -4383,7 +4583,7 @@ function createApp(db) {
       if (seen.has(key)) continue;
       seen.add(key);
       try {
-        if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+        if (fsExistsSync(p) && fsStatSync(p).isFile()) return p;
       } catch (_) {}
     }
     const baseName = path.basename(rel);
@@ -4397,7 +4597,7 @@ function createApp(db) {
         walked += 1;
         let entries;
         try {
-          entries = fs.readdirSync(dir, { withFileTypes: true });
+          entries = fsReaddirSync(dir, { withFileTypes: true });
         } catch (_) {
           continue;
         }
@@ -4405,7 +4605,7 @@ function createApp(db) {
           if (!ent.isDirectory() && ent.name === baseName) {
             const hit = path.join(dir, ent.name);
             try {
-              if (fs.statSync(hit).isFile()) return hit;
+              if (fsStatSync(hit).isFile()) return hit;
             } catch (_) {}
           } else if (ent.isDirectory() && !isIgnorableDirEntry(ent.name)) {
             stack.push(path.join(dir, ent.name));
@@ -4458,24 +4658,15 @@ function createApp(db) {
   const { createThumbGenerateQueue } = require('./lib/thumb-generate-queue');
   const projekteNeuThumbQueue = createThumbGenerateQueue({ concurrency: 1 });
 
-  /** WebP-Vorschau; bei sharp-Fehler Originalbild (Browser zeigt ggf. kleineres Icon). */
+  /** WebP-Vorschau; bei sharp-Fehler kein OneDrive-Vollbild (hängt sonst die App). */
   async function buildProjekteNeuThumbnailBuffer(filePath, thumbMax) {
-    try {
-      const sharp = require('sharp');
-      const buf = await sharp(filePath)
-        .rotate()
-        .resize(thumbMax, thumbMax, { fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 82 })
-        .toBuffer();
-      return { buf, contentType: 'image/webp' };
-    } catch (thumbErr) {
-      const ext = path.extname(filePath).toLowerCase();
-      if (!PROJEKTE_NEU_RASTER_EXT.has(ext)) throw thumbErr;
-      return {
-        buf: fs.readFileSync(filePath),
-        contentType: PROJEKTE_NEU_RASTER_MIME[ext] || 'image/jpeg',
-      };
-    }
+    const sharp = require('sharp');
+    const buf = await sharp(win32FsPath(filePath))
+      .rotate()
+      .resize(thumbMax, thumbMax, { fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toBuffer();
+    return { buf, contentType: 'image/webp' };
   }
 
   function resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdOpt, resolveOpts) {
@@ -4502,7 +4693,7 @@ function createApp(db) {
   }
 
   function cacheKeyProjekteNeuThumb(fabValue, pnPath, thumbMax) {
-    return String(fabValue || '') + '\0' + String(pnPath || '') + '\0' + String(thumbMax || 256);
+    return normalizeScopeId(fabValue) + '\0' + String(pnPath || '') + '\0' + String(thumbMax || 256);
   }
 
   let thumbDbSaveTimer = null;
@@ -4576,21 +4767,92 @@ function createApp(db) {
     return thumbOut;
   }
 
-  async function fillProjekteNeuThumbCache(technicianId, fabValue, pnPath, thumbMax, filePathOpt) {
-    const cached = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, null);
-    if (cached && cached.buf && cached.buf.length) return cached;
-    let filePath = filePathOpt || readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
-    if (!filePath) {
+  async function copyLocalFileToProjekteNeuCache(srcPath, fabValue, pnPath) {
+    const dest = projekteNeuFileCachePath(DB_DIR, fabValue, pnPath);
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    let timer = null;
+    try {
+      await Promise.race([
+        fs.promises.copyFile(win32FsPath(srcPath), win32FsPath(dest)),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('stage_timeout')), 20000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    return dest;
+  }
+
+  async function tryFillThumbFromStagedLocalFile(technicianId, fabValue, pnPath, thumbMax, jobIdOpt) {
+    const jobId = jobIdOpt != null ? parseInt(jobIdOpt, 10) : 0;
+    if (Number.isFinite(jobId) && jobId > 0) {
       try {
-        filePath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, null, {
+        const reused = readImageThumbCache(
+          db,
+          THUMB_KIND_DIENSTREISE,
+          String(jobId),
+          pnPath,
+          thumbMax,
+          null,
+        );
+        if (reused && reused.buf && reused.buf.length) {
+          writeCachedProjekteNeuThumb(
+            db,
+            DB_DIR,
+            fabValue,
+            pnPath,
+            thumbMax,
+            reused.buf,
+            reused.contentType,
+            null,
+          );
+          scheduleThumbDbSave();
+          return reused;
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    let staged = readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
+    if (staged && hangDiag.classifyPathKind(staged) === 'onedrive') staged = null;
+    if (!staged) {
+      let src = null;
+      try {
+        src = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdOpt, {
           skipDeepSearch: true,
         });
       } catch (_) {
-        filePath = null;
+        src = null;
+      }
+      if (!src) return null;
+      try {
+        staged = await copyLocalFileToProjekteNeuCache(src, fabValue, pnPath);
+      } catch (_) {
+        return null;
       }
     }
+    if (!staged || hangDiag.classifyPathKind(staged) === 'onedrive') return null;
+    try {
+      return await generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, staged);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function fillProjekteNeuThumbCache(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt) {
+    const cached = readCachedProjekteNeuThumb(db, DB_DIR, fabValue, pnPath, thumbMax, null);
+    if (cached && cached.buf && cached.buf.length) return cached;
+    let filePath = filePathOpt || readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
+    if (filePath && hangDiag.classifyPathKind(filePath) === 'onedrive') {
+      filePath = null;
+    }
     if (filePath) {
-      return generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath);
+      try {
+        return await generateAndCacheProjekteNeuThumb(fabValue, pnPath, thumbMax, filePath);
+      } catch (_) {
+        /* Dispo-Thumb statt OneDrive-Vollbild */
+      }
     }
     const remote = await fetchDispoProjekteNeuThumb(technicianId, fabValue, pnPath, thumbMax);
     if (remote) {
@@ -4611,13 +4873,13 @@ function createApp(db) {
       }
       return remote;
     }
-    return null;
+    return tryFillThumbFromStagedLocalFile(technicianId, fabValue, pnPath, thumbMax, jobIdOpt);
   }
 
-  function enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt) {
+  function enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt) {
     return projekteNeuThumbQueue.enqueue(
       { key: cacheKeyProjekteNeuThumb(fabValue, pnPath, thumbMax) },
-      () => fillProjekteNeuThumbCache(technicianId, fabValue, pnPath, thumbMax, filePathOpt),
+      () => fillProjekteNeuThumbCache(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt),
     );
   }
 
@@ -4642,8 +4904,9 @@ function createApp(db) {
     if (cachedThumb && cachedThumb.buf && cachedThumb.buf.length) {
       return sendProjekteNeuThumbResponse(res, cachedThumb, 'hit');
     }
-    if (preferCache && !filePathOpt) {
-      enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt).catch(() => {});
+    const jobIdOpt = opts && (opts.jobId || opts.job_id);
+    if (preferCache) {
+      enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt).catch(() => {});
       res.setHeader('X-Thumb-Cache', 'miss');
       res.setHeader('Retry-After', '1');
       return res.status(204).end();
@@ -4654,6 +4917,7 @@ function createApp(db) {
       pnPath,
       thumbMax,
       filePathOpt,
+      jobIdOpt,
     );
     if (!thumbOut || !thumbOut.buf || !thumbOut.buf.length) {
       return res.status(404).json({ ok: false, error: 'thumb_not_image', local_unavailable: true });
@@ -4661,21 +4925,54 @@ function createApp(db) {
     return sendProjekteNeuThumbResponse(res, thumbOut, 'generated');
   }
 
-  prewarmAnlagenstammGalleryThumbsImpl = function prewarmAnlagenstammGalleryThumbs(fab, gallery, technicianId) {
-    const fabNorm = String(fab || '').trim();
-    if (!fabNorm || !Array.isArray(gallery) || !gallery.length) return;
-    const techId = technicianId || getTechnicianId({ headers: {} }) || '';
-    const maxPrewarm = 8;
-    let queued = 0;
-    for (const it of gallery) {
-      if (queued >= maxPrewarm) break;
-      const rel = String((it && (it.rel_path || it.rel)) || '').trim();
-      if (!rel) continue;
-      const cached = readCachedProjekteNeuThumb(db, DB_DIR, fabNorm, rel, 256, null);
-      if (cached && cached.buf && cached.buf.length) continue;
-      enqueueProjekteNeuThumbFill(techId, fabNorm, rel, 256, null).catch(() => {});
-      queued += 1;
-    }
+  prewarmAnlagenstammGalleryThumbsImpl = function prewarmAnlagenstammGalleryThumbs() {
+    /* Galerie darf nicht hängen: Thumbs nur on-demand (prefer_cache 204). */
+  };
+
+  refreshMontageGalleryFilesImpl = async function refreshMontageGalleryFilesWork(fab) {
+    const key = montageGalleryCacheKey(fab);
+    if (!key) return;
+    if (montageGalleryRefreshInflight.has(key)) return montageGalleryRefreshInflight.get(key);
+    const run = (async () => {
+      await yieldEventLoop();
+      const { jobHasFab } = require('./lib/anlagenstamm-documents-local');
+      const {
+        listMontageRastersFromDokumenteMonteurPathsAsync,
+        GALLERY_MAX,
+      } = require('./lib/anlagenstamm-gallery-local');
+      let jobs = [];
+      try {
+        jobs = db.prepare('SELECT id, fabrikationsnummern FROM jobs').all();
+      } catch (_) {
+        montageGalleryFileCache.set(key, { files: [], at: Date.now() });
+        return;
+      }
+      const paths = [];
+      let n = 0;
+      for (const j of jobs) {
+        if (!jobHasFab(j.fabrikationsnummern, key)) continue;
+        n += 1;
+        if (n % 4 === 0) await yieldEventLoop();
+        let bound = '';
+        try {
+          const row = db.prepare('SELECT folder_path FROM job_reise_folder_binding WHERE local_job_id = ?').get(j.id);
+          bound = row && row.folder_path ? String(row.folder_path).trim() : '';
+        } catch (_) {
+          bound = '';
+        }
+        if (!bound) continue;
+        paths.push({ dm: path.join(bound, 'Dokumente_Monteur'), jobId: j.id });
+      }
+      const files = await listMontageRastersFromDokumenteMonteurPathsAsync(paths, fab, {
+        max: GALLERY_MAX,
+        yieldFn: yieldEventLoop,
+      });
+      montageGalleryFileCache.set(key, { files: files || [], at: Date.now() });
+    })().finally(() => {
+      montageGalleryRefreshInflight.delete(key);
+    });
+    montageGalleryRefreshInflight.set(key, run);
+    return run;
   };
 
   function cacheProjekteNeuTreesForJob(localJobId) {
@@ -4691,6 +4988,122 @@ function createApp(db) {
       }
     }
     save();
+  }
+
+  /**
+   * Gewählte PROJEKTE-NEU-Dateien nach Dokumente_Anlage/<FN>/ ziehen.
+   * Job-Fileserver hat neu hinzugefügte FNs oft noch nicht; Vorschau kommt vom Anlagenstamm.
+   */
+  async function pullSelectedProjekteNeuIntoReise(opts) {
+    const {
+      dispoBaseUrl,
+      technicianId,
+      authHeader,
+      signal,
+      targetDir,
+      fabMap,
+      pathsByFab,
+      setProgress,
+    } = opts || {};
+    if (!targetDir || !pathsByFab || !pathsByFab.size) return 0;
+    const hdr = dispoMonteurFetchHeaders(technicianId, authHeader);
+    let downloaded = 0;
+    for (const [fab, prefixes] of pathsByFab) {
+      if (!prefixes || !prefixes.size) continue;
+      const entry = (fabMap || []).find((e) => String((e && e.fab) || '') === String(fab));
+      const canonical = String((entry && entry.folder_name_canonical) || fab || '').trim();
+      if (!canonical || canonical.includes('..') || /[\\/]/.test(canonical)) continue;
+      const destRoot = path.join(targetDir, 'Dokumente_Anlage', canonical);
+      if (!fs.existsSync(destRoot)) fs.mkdirSync(destRoot, { recursive: true });
+      for (const [prefix, kind] of prefixes) {
+        const p = String(prefix || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (!p || String(kind || '') === 'file') continue;
+        try {
+          fs.mkdirSync(path.join(destRoot, ...p.split('/').filter(Boolean)), { recursive: true });
+        } catch (_) {}
+      }
+      let tree = [];
+      try {
+        const cached = readAnlagenstammTreeCache(db, fab);
+        if (cached && Array.isArray(cached.tree) && cached.tree.length) tree = cached.tree;
+      } catch (_) {}
+      if (!tree.length && dispoBaseUrl) {
+        try {
+          const url =
+            dispoBaseUrl +
+            '/dispo_api/api/anlagenstamm_files_list.php?technician_id=' +
+            encodeURIComponent(technicianId) +
+            '&fab=' +
+            encodeURIComponent(fab);
+          const r = await fetch(url, { headers: hdr, signal });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data && data.projekte_neu && Array.isArray(data.projekte_neu.tree)) {
+            tree = data.projekte_neu.tree;
+            try {
+              upsertAnlagenstammTreeCache(db, fab, data.projekte_neu);
+            } catch (_) {}
+          }
+        } catch (listErr) {
+          console.warn(
+            '[dienstreise_pull] projekte_neu list',
+            fab,
+            listErr && listErr.message ? listErr.message : listErr,
+          );
+        }
+      }
+      const flat = [];
+      flattenProjekteNeuFiles(tree, '', flat);
+      for (const item of flat) {
+        const inner = String((item && item.rel) || '')
+          .replace(/\\/g, '/')
+          .replace(/^\/+/, '');
+        if (!inner || inner.includes('..') || isTedInnerPath(inner)) continue;
+        if (!pathMatchesSelection(inner, prefixes)) continue;
+        const dest = path.join(destRoot, ...inner.split('/').filter(Boolean));
+        try {
+          if (fsExistsSync(dest) && fsStatSync(dest).isFile()) continue;
+        } catch (_) {}
+        if (!dispoBaseUrl) continue;
+        const url =
+          dispoBaseUrl +
+          '/dispo_api/api/anlagenstamm_file_download.php?technician_id=' +
+          encodeURIComponent(technicianId) +
+          '&fab=' +
+          encodeURIComponent(fab) +
+          '&source=projekte_neu&path=' +
+          encodeURIComponent(inner);
+        try {
+          if (setProgress) setProgress('projekte_neu', downloaded, 0, canonical + '/' + inner);
+          const r = await fetch(url, { headers: hdr, signal });
+          const buf = Buffer.from(await r.arrayBuffer());
+          if (!r.ok || !buf.length) continue;
+          const ctDl = (r.headers.get('content-type') || '').toLowerCase();
+          if (ctDl.includes('application/json')) {
+            try {
+              const j = JSON.parse(buf.toString('utf8'));
+              if (j && j.ok === false) continue;
+            } catch (_) {}
+          }
+          const parent = path.dirname(dest);
+          if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
+          await hangDiag.timeAsync('onedrive_write', () => replaceFileWithoutUnlink(dest, buf));
+          try {
+            writeCachedProjekteNeuFile(DB_DIR, fab, inner, buf);
+          } catch (_) {}
+          downloaded += 1;
+        } catch (dlErr) {
+          if (dlErr && dlErr.name === 'AbortError') throw dlErr;
+          console.warn(
+            '[dienstreise_pull] projekte_neu file',
+            fab,
+            inner,
+            dlErr && dlErr.message ? dlErr.message : dlErr,
+          );
+        }
+        await yieldEventLoop();
+      }
+    }
+    return downloaded;
   }
 
   function resolveLocalJobIdForFab(technicianId, fab) {
@@ -4866,7 +5279,7 @@ function createApp(db) {
       if (wantThumb) {
         return serveProjekteNeuThumb(res, getTechnicianId(req), fab, relPath, thumbMax, filePath);
       }
-      const buf = fs.readFileSync(filePath);
+      const buf = fsReadFileSync(filePath);
       const ext = path.extname(baseName).toLowerCase();
       const mimeMap = {
         '.jpg': 'image/jpeg',
@@ -5632,7 +6045,35 @@ function createApp(db) {
     }
   });
 
-  app.get('/api/dienstreise/:id', (req, res) => {
+  app.get('/api/dienstreise/finish_file_list', (req, res) => {
+    try {
+      const localJobId = parseInt(req.query.job_id != null ? req.query.job_id : req.query.jobId, 10);
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const technicianId = parseInt(
+        req.query.technician_id != null ? req.query.technician_id : req.headers['x-technician-id'],
+        10,
+      );
+      const finishGate = gateDienstreiseWrite(db, technicianId, localJobId);
+      if (finishGate) return res.status(finishGate.status).json({ ok: false, error: finishGate.error });
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!reiseDir || !fs.existsSync(reiseDir)) {
+        return res.status(400).json({ ok: false, error: 'Dienstreise-Ordner nicht gefunden.' });
+      }
+      const auftragsordner = resolveMonteurAuftragsordnerName(localJobId, technicianId);
+      const listed = listFinishTransferFiles(reiseDir, auftragsordner);
+      res.json({
+        ok: true,
+        files: listed.files,
+        groups: listed.groups,
+        fn_options: listed.fn_options,
+        auftragsordner,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Dateiliste fehlgeschlagen.' });
+    }
+  });
+
+  app.get('/api/dienstreise/:id(\\d+)', (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ ok: false, error: 'id fehlt.' });
     const row = db.prepare('SELECT id, year, running_number, start_date, company_name, city, country_code, folder_name, created_at FROM dienstreisen WHERE id = ?').get(id);
@@ -5809,6 +6250,9 @@ function createApp(db) {
           }
           offlinePullMode = 'explicit';
           save();
+          try {
+            ensureCanonicalFnFolders(layoutDir || targetDir, fabMapResolved, montageName);
+          } catch (_) {}
         } catch (layoutErr) {
           console.warn(
             '[accept] Montage-Ordner:',
@@ -5824,10 +6268,15 @@ function createApp(db) {
           }
           offlinePullMode = 'explicit';
           save();
+          try {
+            ensureCanonicalFnFolders(targetDir, fabMap, montageName);
+          } catch (_) {}
         }
       }
 
-      const dedupeKey = 'dienstreise_pull:' + localJobId + ':' + (acceptJob ? 'accept' : 'copy');
+      const forceRefresh = !acceptJob && Object.prototype.hasOwnProperty.call(body, 'offline_paths');
+      const dedupeKey =
+        'dienstreise_pull:' + localJobId + ':' + (acceptJob ? 'accept' : forceRefresh ? 'copy_sel' : 'copy');
       const { job_id } = bgJobs.enqueue(
         'dienstreise_pull',
         {
@@ -5841,6 +6290,7 @@ function createApp(db) {
           include_bilder: includeBilder,
           accept_job: acceptJob,
           offline_pull_mode: offlinePullMode,
+          force_refresh: forceRefresh,
         },
         dedupeKey,
       );
@@ -6280,13 +6730,20 @@ function createApp(db) {
     if (!reiseDir || !fs.existsSync(reiseDir)) throw new Error('Dienstreise-Ordner nicht gefunden.');
 
     const auftragsordner = resolveMonteurAuftragsordnerName(localJobId, technicianId);
-    const monteurWorkOnly = (rel) => isMonteurWorkRelPath(rel, auftragsordner);
+    const transferRelPaths = parseOptionalTransferRelPaths(body);
+    const finishUploadOnly = (rel) => {
+      if (!isFinishUploadRelPath(rel, auftragsordner)) return false;
+      if (transferRelPaths !== undefined && isSonstigesRel(rel) && !transferRelMatches(rel, transferRelPaths)) {
+        return false;
+      }
+      return true;
+    };
     const changedBeforeFinish = await collectChangedDienstreiseSyncFileEntries(
       db,
       reiseDir,
       localJobId,
       FINISH_SYNC_FOLDERS,
-      monteurWorkOnly,
+      finishUploadOnly,
     );
     const verifyPlan = [];
     for (const folder of FINISH_SYNC_FOLDERS) {
@@ -6340,7 +6797,7 @@ function createApp(db) {
                 {
                   onlyChanged: true,
                   folders: FINISH_SYNC_FOLDERS,
-                  relPathPredicate: monteurWorkOnly,
+                  relPathPredicate: finishUploadOnly,
                   externalUrl: body.dispoExternalUrl || body.externalUrl,
                   internalUrl: body.dispoInternalUrl || body.internalUrl,
                 },
@@ -6550,8 +7007,12 @@ function createApp(db) {
             db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
           }
           clearPendingJobStatus(db, localJobId);
+          const pendingStatus = { status: 'erledigt' };
+          if (transferRelPaths !== undefined) {
+            pendingStatus.transfer_rel_paths = transferRelPaths;
+          }
           db.prepare(`INSERT INTO pending_changes (entity_type, entity_id, action, payload) VALUES (?, ?, ?, ?)`)
-            .run('job', localJobId, 'status', JSON.stringify({ status: 'erledigt' }));
+            .run('job', localJobId, 'status', JSON.stringify(pendingStatus));
         } else {
           db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run('erledigt', localJobId);
         }
@@ -6589,11 +7050,14 @@ function createApp(db) {
           if (statusPushBase && serverJobId) {
             bumpProgress('finish_status', step, totalSteps, 'Status „erledigt“ wird an Dispo gesendet …');
             const authHeaderStatus = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
+            const statusExtra =
+              transferRelPaths !== undefined ? { transfer_rel_paths: transferRelPaths } : undefined;
             const pushRes = await pushJobStatusErledigtToDispo(
               statusPushBase,
               techIdForPush,
               serverJobId,
               authHeaderStatus,
+              statusExtra,
             );
             if (pushRes.ok) {
               clearPendingJobStatus(db, localJobId);
@@ -6612,6 +7076,75 @@ function createApp(db) {
         }
       }
   }
+
+  app.post('/api/dienstreise/finish_extra_files', async (req, res) => {
+    try {
+      const parsed = await parseMultipart(req);
+      const fields = parsed.fields || {};
+      const files = parsed.files || [];
+      const localJobId = parseInt(fields.job_id != null ? fields.job_id : fields.jobId, 10);
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const technicianId = parseInt(
+        fields.technician_id != null
+          ? fields.technician_id
+          : fields.technicianId != null
+            ? fields.technicianId
+            : req.headers['x-technician-id'],
+        10,
+      );
+      const finishGate = gateDienstreiseWrite(db, technicianId, localJobId);
+      if (finishGate) return res.status(finishGate.status).json({ ok: false, error: finishGate.error });
+      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      if (!reiseDir || !fs.existsSync(reiseDir)) {
+        return res.status(400).json({ ok: false, error: 'Dienstreise-Ordner nicht gefunden.' });
+      }
+      const auftragsordner = resolveMonteurAuftragsordnerName(localJobId, technicianId);
+      let fnFolder = String(fields.fn || fields.fn_folder || fields.fnFolder || '').trim();
+      if (!fnFolder || fnFolder === 'Ohne FN') {
+        const listed = listFinishTransferFiles(reiseDir, auftragsordner);
+        fnFolder = listed.fn_options[0] || '';
+      }
+      if (!fnFolder) {
+        const jobRow = lookupDienstreiseJobRow(localJobId);
+        const fabs = fabNumbersFromJobFabrikationsnummern(jobRow && jobRow.fabrikationsnummern);
+        const firstFab = fabs && fabs.size ? [...fabs][0] : null;
+        if (firstFab) {
+          fnFolder = buildFnProjectFolderName({
+            fab: String(firstFab),
+            customer_name: jobRow && jobRow.customer_name,
+            city: jobRow && jobRow.city,
+            country: jobRow && jobRow.country,
+          });
+        }
+      }
+      if (!files.length) return res.status(400).json({ ok: false, error: 'Keine Datei.' });
+      const saved = [];
+      const skipped = [];
+      for (const f of files) {
+        try {
+          const row = saveFinishExtraFile({
+            reiseDir,
+            auftragsordner,
+            fnFolder,
+            filename: f.filename,
+            buffer: f.buffer,
+          });
+          saved.push(row);
+        } catch (fileErr) {
+          skipped.push((fileErr && fileErr.message) || String(f.filename || 'datei'));
+        }
+      }
+      if (!saved.length) {
+        return res.status(400).json({
+          ok: false,
+          error: skipped[0] || 'Keine Datei gespeichert.',
+        });
+      }
+      res.json({ ok: true, files: saved, skipped });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Zusatzdatei fehlgeschlagen.' });
+    }
+  });
 
   app.post('/api/dienstreise/finish_and_cleanup', express.json(), async (req, res) => {
     try {
@@ -6645,6 +7178,7 @@ function createApp(db) {
           internalUrl: body.dispoInternalUrl || body.internalUrl,
           technicianId,
           technician_id: technicianId,
+          transfer_rel_paths: Array.isArray(body.transfer_rel_paths) ? body.transfer_rel_paths : undefined,
           dispoUsername: (body.dispoUsername || body.dispo_username || '').trim(),
           dispo_username: (body.dispoUsername || body.dispo_username || '').trim(),
           dispoPassword:
@@ -7683,6 +8217,7 @@ function createApp(db) {
       method: 'POST',
       headers,
       body: JSON.stringify(Object.assign({ action: 'save' }, dispoPayload || {})),
+      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
@@ -7708,25 +8243,29 @@ function createApp(db) {
       const pullJobId = jobId
         || (loaded && loaded.document && (loaded.document.server_job_id || loaded.document.local_job_id))
         || 0;
-      if (pullJobId > 0) {
+      // Offline-first: lokaler Beleg inkl. Job-FN ist die Anzeige. Dispo-Entwurf
+      // nur holen, wenn noch nichts lokal liegt (sonst überschreibt ein alter
+      // Online-Snapshot die Anlagenliste).
+      if (!loaded && pullJobId > 0) {
         try {
           const remote = await tryDispoArbeitsnachweisDraft(req, pullJobId);
           if (remote && remote.document) {
             const mapped = anLocal.fromDispoPublic(remote);
             if (mapped) {
+              if (!mapped.job_id && pullJobId > 0) mapped.job_id = pullJobId;
               const localW = anLocal.contentWeight(loaded || {});
               const remoteW = anLocal.contentWeight(mapped);
               if (loaded && loaded.document && localW > remoteW) {
                 const localId = loaded.document.id;
                 anLocal.markDirty(db, localId);
-                const dispoPayload = anLocal.toDispoSavePayload(loaded);
+                const dispoPayload = anLocal.toDispoSavePayload(loaded, db);
                 if (dispoPayload) {
                   anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload, {
                     technician_id: getTechnicianId(req),
                     baseUrl: anDispoBaseUrl(req, {}),
                   }));
                 }
-                return res.json(anLocal.toPublic(loaded));
+                return res.json(anLocal.toPublic(loaded, db));
               }
               const loc = (loaded && loaded.arbeitsnachweis) || {};
               const mappedAn = mapped.arbeitsnachweis || {};
@@ -7755,7 +8294,7 @@ function createApp(db) {
           // lokal bleibt
         }
       }
-      return res.json(anLocal.toPublic(loaded));
+      return res.json(anLocal.toPublic(loaded, db));
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'arbeitsnachweis_get' });
     }
@@ -7779,42 +8318,42 @@ function createApp(db) {
       const techId = getTechnicianId(req);
       const local = anLocal.upsertFromPayload(db, payload, { technicianId: techId, dirty: true });
       const localId = local && local.local_id;
-      const dispoPayload = anLocal.toDispoSavePayload(anLocal.loadRow(db, localId));
+      const dispoPayload = anLocal.toDispoSavePayload(anLocal.loadRow(db, localId), db);
       if (dispoPayload) dispoPayload.baseUrl = anDispoBaseUrl(req, payload);
-      let synced = false;
-      try {
-        const remote = await tryDispoArbeitsnachweisSave(req, dispoPayload);
-        if (remote && remote.ok) {
-          anLocal.markSynced(db, localId, remote.document_id, {
-            number: remote.number,
-            status: remote.status,
-            content_version: remote.content_version,
-            local_uuid: remote.local_uuid,
-          });
-          synced = true;
-          Object.assign(local, anLocal.toPublic(anLocal.loadRow(db, localId)));
-          local.server_id = remote.document_id;
-          local.document_id = remote.document_id;
-          local.synced = true;
-          if (remote.local_uuid) local.local_uuid = remote.local_uuid;
-        }
-      } catch (e) {
-        anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload || {}, {
-          technician_id: techId,
-          baseUrl: anDispoBaseUrl(req, payload),
-        }));
-      }
-      if (!synced && localId) {
-        anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload || {}, {
+      if (localId && dispoPayload) {
+        anLocal.queuePending(db, localId, 'save', Object.assign({}, dispoPayload, {
           technician_id: techId,
           baseUrl: anDispoBaseUrl(req, payload),
         }));
       }
       save();
       res.json(Object.assign({ ok: true, document_id: local.server_id || 0, local_id: localId }, local, {
-        synced,
-        offline: !synced,
+        synced: false,
+        offline: true,
       }));
+      if (!localId || !dispoPayload) return;
+      setImmediate(() => {
+        tryDispoArbeitsnachweisSave(req, dispoPayload)
+          .then((remote) => {
+            if (!remote || !remote.ok) return;
+            anLocal.markSynced(db, localId, remote.document_id, {
+              number: remote.number,
+              status: remote.status,
+              content_version: remote.content_version,
+              local_uuid: remote.local_uuid,
+            });
+            anLocal.clearFailedPending(db, localId);
+            try {
+              db.prepare(
+                `DELETE FROM pending_changes WHERE entity_type = 'arbeitsnachweis' AND entity_id = ? AND action = 'save'`,
+              ).run(localId);
+            } catch (_) {}
+            save();
+          })
+          .catch(() => {
+            /* pending_changes übernimmt den Push */
+          });
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'arbeitsnachweis_save' });
     }
@@ -7871,7 +8410,7 @@ function createApp(db) {
 
   app.post('/api/arbeitsnachweis/pdf', express.json({ limit: '12mb' }), async (req, res) => {
     try {
-      const payload = req.body && typeof req.body === 'object' ? req.body : {};
+      const payload = anLocal.mergeJobFabsIntoPayload(db, req.body && typeof req.body === 'object' ? req.body : {});
       const lang = payload.language === 'en' || (payload.document && payload.document.language === 'en') ? 'en' : 'de';
       const techId = getTechnicianId(req);
       if (!payload.technician_signature_png && techId) {
@@ -8351,58 +8890,142 @@ function createApp(db) {
       const fabNorm = normalizeParameterFab(fabValue);
       if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
       ensureAnlagenstammLocalSchema(db);
-      const mapLocalFiles = (rows) =>
-        rows.map((row) => ({
-          id: row.server_file_id != null ? Number(row.server_file_id) : row.id,
-          local_id: row.id,
-          fab: row.fab,
-          source: row.source,
-          source_file_status: row.source_file_status || 'present',
-          technician_id: row.technician_id,
-          technician_name: row.technician_name || null,
-          uploaded_at: row.uploaded_at || null,
-          original_filename: row.original_filename || '',
-          size: row.size != null ? Number(row.size) : 0,
-          mime: row.mime || 'application/octet-stream',
-          entry_count: row.entry_count != null ? Number(row.entry_count) : 0,
-          source_path: row.source_path || null,
-        }));
-      const candidates = buildDispoBaseCandidates({
-        baseUrl: body.baseUrl,
-        externalUrl: body.externalUrl,
-        internalUrl: body.internalUrl,
-      });
-      if (candidates.length > 0) {
-        try {
-          const remote = await proxyAnlagenstammParameterFilesList(
-            Object.assign({}, body, { technician_id: technicianId, fab: fabNorm }),
-          );
-          if (remote && remote.ok !== false && Array.isArray(remote.files)) {
-            cacheParameterFilesFromDispo(db, fabNorm, remote.files);
-            save();
-            return res.json({
-              ok: true,
-              fab: fabNorm,
-              files: remote.files,
-              data_source: 'dispo',
-            });
-          }
-        } catch (dispoErr) {
-          console.warn('[parameter_files_list] Dispo:', dispoErr && dispoErr.message ? dispoErr.message : dispoErr);
-        }
-      }
-      const files = mapLocalFiles(listParameterFilesByFab(db, fabNorm));
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const listed = await mapAnlagenstammParameterFiles(
+        fabNorm,
+        technicianId,
+        body,
+        Number.isFinite(localJobId) && localJobId > 0 ? localJobId : 0,
+      );
       return res.json({
         ok: true,
         fab: fabNorm,
-        files,
-        data_source: 'cache',
-        cache_notice: 'Cache – nicht mit Dispo synchron (offline oder keine Verbindung).',
+        files: listed.files || [],
+        data_source: listed.data_source,
       });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
   });
+
+  app.post(
+    ['/api/anlagenstamm_parameter_ingest', '/api/anlagenstamm_parameter_ingest.php'],
+    express.json({ limit: '40mb' }),
+    async (req, res) => {
+      const technicianId = getTechnicianId(req);
+      const body = req.body || {};
+      const fabValue = String(body.fab || body.fabrikationsnummer || '').trim();
+      const filename = String(body.filename || body.file_name || '').trim();
+      const contentBase64 = body.content != null ? body.content : body.file_base64;
+      if (!technicianId || !fabValue) {
+        return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
+      }
+      if (!filename || contentBase64 == null || contentBase64 === '') {
+        return res.status(400).json({ ok: false, error: 'filename und content (base64) erforderlich.' });
+      }
+      let buf;
+      try {
+        buf = Buffer.from(String(contentBase64), 'base64');
+      } catch (e) {
+        return res.status(400).json({ ok: false, error: 'Ungültiger Base64-Inhalt.' });
+      }
+      if (!buf.length) {
+        return res.status(400).json({ ok: false, error: 'Leere Datei.' });
+      }
+      if (!isSupportedParameterFileName(filename)) {
+        return res.status(400).json({ ok: false, error: 'Nicht unterstützte Dateiendung.' });
+      }
+      const fabNorm = normalizeParameterFab(fabValue);
+      if (!fabNorm) {
+        return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
+      }
+      const parsed = parseParameterFile(buf, { fileName: filename });
+      const resolved = resolveTargetFab(parsed && parsed.used_fab, fabNorm);
+      if (!resolved || !resolved.ok) {
+        return res.status(400).json({
+          ok: false,
+          error: (resolved && resolved.error) || 'Fabrikationsnummer nicht erkannt.',
+        });
+      }
+      const mime = String(body.mime || '').trim() || 'text/plain';
+      const technicianName = getTechnicianDisplayName(technicianId);
+      let cacheFile = '';
+      try {
+        cacheFile = uploadCachePath(DB_DIR, fabNorm, filename);
+        fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+        writeFileWithRetry(cacheFile, buf);
+      } catch (cacheErr) {
+        return res.status(500).json({
+          ok: false,
+          error:
+            'Datei konnte lokal nicht gespeichert werden: ' +
+            (cacheErr && cacheErr.message ? cacheErr.message : cacheErr),
+        });
+      }
+      const dispoPayload = parameterDispoPayload(req, {
+        fab: fabNorm,
+        filename,
+        content: String(contentBase64),
+        source: 'upload',
+        mime,
+        technician_id: technicianId,
+      });
+      let serverFileId = null;
+      let dispoIngestError = null;
+      const dispoCandidates = buildDispoBaseCandidates(dispoPayload);
+      if (dispoCandidates.length > 0) {
+        try {
+          const remote = await proxyAnlagenstammParameterIngest(dispoPayload);
+          if (remote && remote.ok !== false) {
+            serverFileId = remote.id != null ? Number(remote.id) : null;
+          } else {
+            dispoIngestError = remote && remote.error ? String(remote.error) : 'Dispo-Ingest fehlgeschlagen';
+          }
+        } catch (dispoErr) {
+          dispoIngestError = dispoErr && dispoErr.message ? dispoErr.message : String(dispoErr);
+        }
+      }
+      let ingest = null;
+      let ingestError = null;
+      try {
+        ingest = ingestParameterFileIntoAnlagenstamm({
+          fileName: filename,
+          source: 'upload',
+          sourcePath: cacheFile,
+          storageRelPath: cacheFile,
+          buffer: buf,
+          mime,
+          technicianId,
+          technicianName,
+          serverFileId,
+          fabOverride: fabNorm,
+        });
+        if (ingest && ingest.ok === false && ingest.error) {
+          ingestError = String(ingest.error);
+        }
+      } catch (ingestErr) {
+        ingestError = ingestErr && ingestErr.message ? ingestErr.message : String(ingestErr);
+      }
+      const localOk = !!(ingest && ingest.ok);
+      if (!localOk && serverFileId == null) {
+        return res.status(400).json({
+          ok: false,
+          error: ingestError || dispoIngestError || 'Hochladen fehlgeschlagen.',
+        });
+      }
+      return res.json({
+        ok: true,
+        id: serverFileId != null ? serverFileId : ingest && ingest.id != null ? Number(ingest.id) : 0,
+        fab: fabNorm,
+        used_fab: fabNorm,
+        ingest_ok: localOk,
+        ingest_error: ingestError,
+        dispo_ingest_ok: serverFileId != null,
+        dispo_ingest_error: dispoIngestError,
+        dispo_ingest_skipped: dispoCandidates.length === 0,
+      });
+    },
+  );
 
   app.post('/api/anlagenstamm_parameter_trend', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
@@ -8587,6 +9210,137 @@ function createApp(db) {
     }
   });
 
+  function parameterDispoPayload(req, extra) {
+    const creds = resolveDispoServerCreds({});
+    return Object.assign(
+      {
+        technician_id: getTechnicianId(req),
+        baseUrl: creds.baseUrl || '',
+        serverUsername: creds.serverUsername || '',
+        serverPassword: creds.serverPassword || '',
+        externalUrl: creds.externalUrl || '',
+        internalUrl: creds.internalUrl || '',
+      },
+      extra || {},
+    );
+  }
+
+  async function loadParameterFileBufferForAkte(req, fabNorm, fileId) {
+    const payload = parameterDispoPayload(req, { fab: fabNorm, file_id: fileId });
+    try {
+      const remote = await proxyAnlagenstammParameterDownload(payload);
+      if (remote && remote.ok && remote.buffer) {
+        return {
+          ok: true,
+          buffer: remote.buffer,
+          filename: remote.xDownloadFilename || 'parameterliste',
+        };
+      }
+    } catch (_) {}
+    const files = listParameterFilesByFab(db, fabNorm) || [];
+    const local = files.find((r) => {
+      if (Number(r.id) === fileId) return true;
+      if (r.server_file_id != null && Number(r.server_file_id) === fileId) return true;
+      return false;
+    });
+    if (!local) return { ok: false, error: 'Datei nicht gefunden.' };
+    const candidates = [local.storage_relpath, local.source_path, local.cache_path].filter(Boolean);
+    for (const p of candidates) {
+      try {
+        if (p && fs.existsSync(p)) {
+          return { ok: true, buffer: fs.readFileSync(p), filename: local.original_filename || 'parameterliste' };
+        }
+      } catch (_) {}
+    }
+    return { ok: false, error: 'Datei nicht gefunden.' };
+  }
+
+  app.get(['/api/anlagenstamm_parameter_view.php', '/api/anlagenstamm_parameter_view'], async (req, res) => {
+    const fabNorm = normalizeParameterFab(req.query.fab || req.query.fabrikationsnummer || '');
+    const fileId = parseInt(req.query.file_id, 10);
+    if (!fabNorm || !Number.isFinite(fileId) || fileId <= 0) {
+      return res.status(400).json({ ok: false, error: 'fab und file_id erforderlich.' });
+    }
+    try {
+      const got = await loadParameterFileBufferForAkte(req, fabNorm, fileId);
+      if (!got.ok) return res.status(404).json({ ok: false, error: got.error || 'Datei nicht gefunden.' });
+      return res.json({
+        ok: true,
+        raw_content: decodeParameterBufferToText(got.buffer),
+        file: { original_filename: got.filename || 'parameterliste', id: fileId },
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  app.get(['/api/anlagenstamm_parameter_download.php', '/api/anlagenstamm_parameter_pdf.php'], async (req, res) => {
+    const fabNorm = normalizeParameterFab(req.query.fab || req.query.fabrikationsnummer || '');
+    const fileId = parseInt(req.query.file_id, 10);
+    const wantPdf = String(req.path || '').indexOf('_pdf') >= 0;
+    if (!fabNorm || !Number.isFinite(fileId) || fileId <= 0) {
+      return res.status(400).json({ ok: false, error: 'fab und file_id erforderlich.' });
+    }
+    try {
+      const got = await loadParameterFileBufferForAkte(req, fabNorm, fileId);
+      if (!got.ok) return res.status(404).json({ ok: false, error: got.error || 'Datei nicht gefunden.' });
+      const filename = String(got.filename || 'parameterliste').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+      if (wantPdf) {
+        const csvToPdfBuffer = getCsvToPdfBuffer();
+        const text = decodeParameterBufferToText(got.buffer);
+        const pdfBytes = await csvToPdfBuffer(text, { filename });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'inline; filename="' + filename.replace(/"/g, '') + '.pdf"');
+        return res.send(Buffer.from(pdfBytes));
+      }
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'attachment; filename="' + filename.replace(/"/g, '') + '"');
+      return res.send(got.buffer);
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
+  function contentTypeForDownloadName(name) {
+    const ext = path.extname(String(name || '')).toLowerCase();
+    const map = {
+      '.pdf': 'application/pdf',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.bmp': 'image/bmp',
+      '.tif': 'image/tiff',
+      '.tiff': 'image/tiff',
+    };
+    return map[ext] || 'application/octet-stream';
+  }
+
+  function bufferLooksLikeJsonError(buf) {
+    if (!buf || !buf.length) return true;
+    const head = buf.slice(0, 40).toString('utf8').trim();
+    return head.startsWith('{') || head.startsWith('<');
+  }
+
+  async function fetchProjekteNeuFileViaDispoSession(technicianId, fabValue, pnPath, extraQuery) {
+    const qs =
+      `fab=${encodeURIComponent(fabValue)}&fabrikationsnummer=${encodeURIComponent(fabValue)}` +
+      `&source=projekte_neu&path=${encodeURIComponent(pnPath)}` +
+      (extraQuery ? `&${extraQuery}` : '');
+    const suffixes = [
+      `/api/anlagenstamm_file_download.php?${qs}`,
+      `/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId || '')}&${qs}`,
+    ];
+    for (const suffix of suffixes) {
+      try {
+        const hit = await tryProxyFetchDispoBinary(DB_DIR, suffix);
+        if (hit && hit.buf && !bufferLooksLikeJsonError(hit.buf)) return hit;
+      } catch (_) {}
+    }
+    return null;
+  }
+
   app.post('/api/anlagenstamm_file_download', express.json(), async (req, res) => {
     const technicianId = getTechnicianId(req);
     const {
@@ -8624,6 +9378,7 @@ function createApp(db) {
     if (sourceNorm === 'projekte_neu' && pnPath && wantThumb) {
       return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, null, {
         preferCache: true,
+        jobId: jobIdRaw,
       });
     }
     if (sourceNorm === 'projekte_neu' && pnPath) {
@@ -8750,22 +9505,19 @@ function createApp(db) {
       if (!technicianId || !fabValue) {
         return res.status(400).json({ success: false, error: 'fab erforderlich.' });
       }
-      if (wantThumb && sourceNorm === 'projekte_neu' && pnPath) {
+      if (wantThumb && pnPath) {
         thumbOpts.jobId = req.query.job_id || '';
-        const localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id, {
-          skipDeepSearch: true,
-        });
-        return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, localPath, thumbOpts);
+        return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, null, thumbOpts);
       }
       if (sourceNorm === 'projekte_neu' && pnPath) {
         const localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id, {
           skipDeepSearch: true,
         });
-        if (localPath) {
+        if (localPath && hangDiag.classifyPathKind(localPath) !== 'onedrive') {
           try {
             const buf = fs.readFileSync(localPath);
             const baseName = path.basename(localPath);
-            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Type', contentTypeForDownloadName(baseName));
             res.setHeader(
               'Content-Disposition',
               (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
@@ -8776,6 +9528,23 @@ function createApp(db) {
             /* fall through */
           }
         }
+        if (!wantThumb) {
+          const viaSess = await fetchProjekteNeuFileViaDispoSession(technicianId, fabValue, pnPath, wantInline ? 'inline=1' : '');
+          if (viaSess && viaSess.buf) {
+            try {
+              writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, viaSess.buf);
+            } catch (_) {}
+            const baseName = pnPath.split(/[/\\]/).pop() || 'download';
+            const ct = contentTypeForDownloadName(baseName);
+            res.setHeader('Content-Type', ct);
+            res.setHeader(
+              'Content-Disposition',
+              (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+            );
+            res.setHeader('Content-Length', String(viaSess.buf.length));
+            return res.send(viaSess.buf);
+          }
+        }
       }
       let localJobId = parseInt(req.query.job_id, 10);
       if (!Number.isFinite(localJobId) || localJobId <= 0) {
@@ -8784,16 +9553,16 @@ function createApp(db) {
       if (localJobId && pnPath) {
         let filePath = null;
         if (sourceNorm === 'projekte_neu') {
-          filePath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath, { skipDeepSearch: wantThumb });
+          filePath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath, { skipDeepSearch: true });
         }
         if (!filePath) {
           const relNorm = pnPath.replace(/\//g, path.sep);
           filePath = resolveDienstreiseProjectFilePath(localJobId, relNorm);
         }
+        if (filePath && hangDiag.classifyPathKind(filePath) === 'onedrive') {
+          filePath = null;
+        }
         if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-          if (wantThumb) {
-            return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, filePath, thumbOpts);
-          }
           const buf = fs.readFileSync(filePath);
           const baseName = path.basename(filePath);
           res.setHeader('Content-Type', 'application/octet-stream');
@@ -8870,7 +9639,15 @@ function createApp(db) {
       res.setHeader('Content-Length', String(buf.length));
       return res.send(buf);
     } catch (e) {
-      return res.status(500).json({ success: false, error: e.message || String(e) });
+      const msg = e && e.message ? String(e.message) : String(e);
+      if (/fetch failed/i.test(msg)) {
+        return res.status(502).json({
+          success: false,
+          ok: false,
+          error: 'Datei konnte nicht geladen werden (Dispo nicht erreichbar).',
+        });
+      }
+      return res.status(500).json({ success: false, error: msg });
     }
   });
 
@@ -8902,20 +9679,51 @@ function createApp(db) {
       return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
     }
     if (sourceNorm === 'projekte_neu' && pnPath) {
-      let localJobId = parseInt(jobIdRaw, 10);
-      if (!Number.isFinite(localJobId) || localJobId <= 0) localJobId = null;
-      if (localJobId) {
-        const mapped = getJobRowByLocalOrServerId(localJobId);
-        localJobId = mapped ? mapped.id : null;
+      const localAll = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdRaw, {
+        skipDeepSearch: false,
+      });
+      if (localAll) {
+        try {
+          console.log('[anlagenstamm_file_open] local', localAll);
+        } catch (_) {}
+        const displayName =
+          pnPath.split(/[/\\]/).pop() || String(fallbackName || '').trim() || path.basename(localAll);
+        const openPath = materializeOpenablePath(
+          localAll,
+          path.join(DB_DIR, 'anlagenstamm_open'),
+          displayName,
+        );
+        return res.json({
+          ok: true,
+          path: openPath || localAll,
+          filename: displayName,
+          source: 'local',
+        });
       }
-      if (!localJobId) localJobId = resolveLocalJobIdForFab(technicianId, fabValue);
-      if (localJobId) {
-        const localPath = resolveProjekteNeuLocalFilePath(localJobId, fabValue, pnPath);
-        if (localPath) {
+      if (!localOnly) {
+        const viaSess = await fetchProjekteNeuFileViaDispoSession(technicianId, fabValue, pnPath);
+        if (viaSess && viaSess.buf) {
           try {
-            console.log('[anlagenstamm_file_open] local', localPath);
-          } catch (_) {}
-          return res.json({ ok: true, path: localPath, filename: path.basename(localPath), source: 'local' });
+            const openDir = path.join(DB_DIR, 'anlagenstamm_open');
+            if (!fs.existsSync(openDir)) fs.mkdirSync(openDir, { recursive: true });
+            const rawName = pnPath.split(/[/\\]/).pop() || String(fallbackName || '').trim() || 'download';
+            const safeName = String(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'download';
+            const stamp = new Date().toISOString().replace(/[^\d]/g, '').slice(0, 14);
+            const targetPath = path.join(openDir, `${stamp}_${safeName}`);
+            fs.writeFileSync(targetPath, viaSess.buf);
+            try {
+              writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, viaSess.buf);
+            } catch (_) {}
+            return res.json({
+              ok: true,
+              path: targetPath,
+              filename: safeName,
+              size: viaSess.buf.length,
+              source: 'dispo_session',
+            });
+          } catch (e) {
+            try { console.warn('[anlagenstamm_file_open] session write', e.message); } catch (_) {}
+          }
         }
       }
       if (localOnly) {
@@ -10474,6 +11282,7 @@ function createApp(db) {
         wiegungen: Array.isArray(body.wiegungen) ? body.wiegungen : [],
         languages: parseProtocolLanguages(body),
         pdf_languages: parseProtocolLanguages(body),
+        include_in_pdf: body.include_in_pdf !== false,
       };
       const record = kontrollwiegungLocal.saveKontrollwiegungLocal(reiseDir, fab, entry, db, localJobId);
       const dispoBaseUrl = (body.base_url || body.dispoBaseUrl || body.baseUrl || '').toString().trim().replace(/\/$/, '');
@@ -10534,6 +11343,7 @@ function createApp(db) {
         bereich_max: body.bereich_max != null ? String(body.bereich_max).trim() : '',
         letzte_eichung: body.letzte_eichung != null ? String(body.letzte_eichung).trim() : '',
         wiegungen: Array.isArray(body.wiegungen) ? body.wiegungen : [],
+        include_in_pdf: body.include_in_pdf !== false,
         dispoBaseUrl,
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
@@ -11389,6 +12199,7 @@ function createApp(db) {
         inbetriebnahme_id: body.inbetriebnahme_id || null,
         languages: storedLangs,
         pdf_languages: storedLangs,
+        include_in_pdf: body.include_in_pdf !== false,
         dispoBaseUrl,
         serverUsername: body.serverUsername || body.dispoUsername,
         serverPassword: body.serverPassword ?? body.dispoPassword,
@@ -12946,6 +13757,7 @@ function createApp(db) {
         kopf_dwc: String(body.kopf_dwc || ''),
         abschluss: normalizeServiceprotokollAbschluss(body.abschluss),
         motoren: pickProtocolMotors(body),
+        include_in_pdf: body.include_in_pdf !== false,
       };
       const langsMaybe = parseProtocolLanguagesMaybe(body);
       if (langsMaybe && langsMaybe.length) {
@@ -13249,6 +14061,7 @@ function createApp(db) {
           languages: pdfLangs,
           pdf_languages: pdfLangs,
           motoren: pickProtocolMotors(p),
+          include_in_pdf: p.include_in_pdf !== false,
         };
         if (applyToAnlagenstamm) {
           try {
@@ -13882,7 +14695,7 @@ function createApp(db) {
       }
 
       const jobRow = db.prepare(`
-        SELECT j.id, j.status, j.fabrikationsnummern FROM jobs j
+        SELECT j.id, j.status, j.fabrikationsnummern, j.server_id, j.job_number FROM jobs j
         WHERE j.id = ?
           AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
       `).get(localJobId, technicianId);
@@ -14030,6 +14843,36 @@ function createApp(db) {
         ingestError = ingestErr && ingestErr.message ? ingestErr.message : String(ingestErr);
         console.warn('[parameterlisten] lokaler Cache:', ingestError);
       }
+      try {
+        const sha = parsedParam && parsedParam.sha256 ? String(parsedParam.sha256) : jobParameterUploads.sha256Buffer(csvBuffer);
+        const cachePath = jobParameterUploads.writeCacheFile(
+          getParameterUploadsCacheRoot(),
+          jobParameterUploads.jobKey(jobRow.server_id, localJobId),
+          sha,
+          filename,
+          csvBuffer,
+        );
+        jobParameterUploads.upsertJobParameterUpload(db, {
+          local_job_id: localJobId,
+          server_job_id: jobRow.server_id,
+          job_number: jobRow.job_number,
+          fab: String(fn),
+          original_filename: filename,
+          sha256: sha,
+          cache_path: cachePath,
+          job_rel_path: savedCsv.replace(/\\/g, '/'),
+          size: csvBuffer.length,
+          technician_id: technicianId,
+          dispo_file_id: serverFileId,
+          mime: 'text/plain',
+        });
+        save();
+      } catch (cacheErr) {
+        console.warn(
+          '[parameterlisten] job-upload-cache:',
+          cacheErr && cacheErr.message ? cacheErr.message : cacheErr,
+        );
+      }
       res.json({
         ok: true,
         savedCsv,
@@ -14054,6 +14897,590 @@ function createApp(db) {
         'Unbekannter Fehler';
       console.error('[parameterlisten] Upload:', errMsg, e);
       res.status(500).json({ ok: false, error: 'Parameterlisten-Upload fehlgeschlagen: ' + errMsg });
+    }
+  });
+
+  function collectJobParameterDirs(localJobId, technicianId, jobRow) {
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+    const dirs = [];
+    if (!reiseDir || !fs.existsSync(reiseDir)) return { reiseDir: null, dirs, montageFolderName: '' };
+    const docMonteurPath = path.join(reiseDir, 'Dokumente_Monteur');
+    const docAnlagePath = path.join(reiseDir, 'Dokumente_Anlage');
+    const offlineCfg = getOfflinePullConfig(db, localJobId);
+    const ao =
+      (offlineCfg && offlineCfg.montage_folder_name) ||
+      resolveMonteurAuftragsordnerName(localJobId, technicianId);
+    const fabNums = fabNumbersFromJobFabrikationsnummern(jobRow && jobRow.fabrikationsnummern);
+    const fabMap = resolveFabMapLocal(
+      reiseDir,
+      (offlineCfg && offlineCfg.fab_map) || [],
+      [...fabNums].map(String),
+      (f) => readAnlagenstammRootFolderName(db, f),
+      jobMetaForFnFolder(jobRow),
+    );
+    for (const n of [...fabNums].sort((a, b) => a - b)) {
+      const folderName = resolveWritableMonteurFnFolder(
+        localJobId,
+        n,
+        docMonteurPath,
+        docAnlagePath,
+        fabMap,
+      );
+      if (!folderName || !ao) continue;
+      dirs.push({
+        fab: String(n),
+        dir: buildMonteurWorkAbsDir(docMonteurPath, folderName, ao, 'Parameter'),
+        folderName,
+      });
+    }
+    return { reiseDir, dirs, montageFolderName: ao || '' };
+  }
+
+  async function mapAnlagenstammParameterFiles(fabNorm, technicianId, body, localJobId) {
+    const { mapParameterFilesFromDocumentsList } = require('./lib/anlagenstamm-documents-local');
+    const mapLocalFiles = (rows) =>
+      sortParameterFilesByDisplayDesc(
+        (rows || []).map((row) =>
+          decorateParameterListItem({
+            id: row.server_file_id != null ? Number(row.server_file_id) : row.id,
+            local_id: row.id,
+            fab: row.fab,
+            source: row.source,
+            source_file_status: row.source_file_status || 'present',
+            technician_id: row.technician_id,
+            technician_name: row.technician_name || null,
+            uploaded_at: row.uploaded_at || null,
+            original_filename: row.original_filename || '',
+            size: row.size != null ? Number(row.size) : 0,
+            mime: row.mime || 'application/octet-stream',
+            entry_count: row.entry_count != null ? Number(row.entry_count) : 0,
+            source_path: row.source_path || null,
+            storage_relpath: row.storage_relpath || null,
+            sha256: row.sha256 || null,
+            display_datetime: row.display_datetime || null,
+          }),
+        ),
+      );
+    const lid = parseInt(localJobId, 10);
+    if (Number.isFinite(lid) && lid > 0) {
+      try {
+        ingestProjekteNeuParameterTree(lid, fabNorm, [], { markMissing: false });
+      } catch (_) {}
+    }
+    const localFiles = mapLocalFiles(listParameterFilesByFab(db, fabNorm));
+    const creds = resolveDispoServerCreds(body || {});
+    const dispoBody = Object.assign({}, body || {}, {
+      technician_id: technicianId,
+      fab: fabNorm,
+      baseUrl: String((body && body.baseUrl) || creds.baseUrl || '').trim(),
+      externalUrl: String((body && body.externalUrl) || creds.externalUrl || '').trim(),
+      internalUrl: String((body && body.internalUrl) || creds.internalUrl || '').trim(),
+      serverUsername: String((body && body.serverUsername) || creds.serverUsername || '').trim(),
+      serverPassword: (body && body.serverPassword) || creds.serverPassword || '',
+    });
+    const candidates = buildDispoBaseCandidates(dispoBody);
+    if (candidates.length > 0) {
+      try {
+        const remote = await proxyAnlagenstammParameterFilesList(dispoBody);
+        if (remote && remote.ok !== false && Array.isArray(remote.files) && remote.files.length) {
+          cacheParameterFilesFromDispo(db, fabNorm, remote.files);
+          save();
+          const remoteFiles = sortParameterFilesByDisplayDesc(
+            remote.files.map((f) => decorateParameterListItem(f)),
+          );
+          const files = mergeParameterFileLists(remoteFiles, localFiles);
+          return {
+            files,
+            data_source: files.length > remoteFiles.length ? 'merged' : 'dispo',
+          };
+        }
+      } catch (dispoErr) {
+        console.warn(
+          '[parameterlisten] anlagenstamm list:',
+          dispoErr && dispoErr.message ? dispoErr.message : dispoErr,
+        );
+      }
+    }
+    if (localFiles.length) {
+      return { files: localFiles, data_source: 'cache' };
+    }
+    try {
+      let docsPayload = null;
+      const authHeader = authHeaderFromCredentials(dispoBody.serverUsername, dispoBody.serverPassword);
+      for (const base of candidates) {
+        try {
+          const q = new URLSearchParams({
+            technician_id: String(technicianId),
+            fab: fabNorm,
+          });
+          const url = `${base}/dispo_api/api/anlagenstamm_documents_list.php?${q.toString()}`;
+          const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader) });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data && Array.isArray(data.categories)) {
+            docsPayload = data;
+            break;
+          }
+        } catch (_) {}
+      }
+      if (!docsPayload) {
+        const auth = await ensureProxyAuthenticated(DB_DIR, dispoBody);
+        if (auth && auth.ok && auth.proxy && typeof auth.proxy.getJson === 'function') {
+          docsPayload = await auth.proxy.getJson(
+            '/api/anlagenstamm_documents_list.php?fab=' + encodeURIComponent(fabNorm),
+          );
+        }
+      }
+      const fromDocs = mapParameterFilesFromDocumentsList(docsPayload);
+      if (fromDocs.length) {
+        cacheParameterFilesFromDispo(db, fabNorm, fromDocs);
+        save();
+        return { files: fromDocs, data_source: 'documents' };
+      }
+    } catch (docsErr) {
+      console.warn(
+        '[parameterlisten] documents fallback:',
+        docsErr && docsErr.message ? docsErr.message : docsErr,
+      );
+    }
+    return {
+      files: localFiles,
+      data_source: 'cache',
+    };
+  }
+
+  app.post('/api/protokolle/parameterlisten/list', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const assigned = db
+        .prepare('SELECT 1 FROM job_technicians WHERE job_id = ? AND technician_id = ? LIMIT 1')
+        .get(resolved.localJobId, technicianId);
+      if (!assigned) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const collected = collectJobParameterDirs(resolved.localJobId, technicianId, jobRow);
+      const reiseDir = collected.reiseDir;
+      const jobUploads = jobParameterUploads.listMergedJobUploads(db, {
+        local_job_id: resolved.localJobId,
+        server_job_id: jobRow.server_id,
+        job_number: jobRow.job_number,
+        paramDirs: collected.dirs,
+        resolveJobAbs: (rel) => {
+          if (!reiseDir || !rel) return '';
+          return path.join(reiseDir, String(rel).replace(/\//g, path.sep));
+        },
+      });
+      const fabs = [...fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern)].sort((a, b) => a - b);
+      const anlagenstamm = [];
+      for (const n of fabs) {
+        const fabNorm = String(n);
+        const listed = await mapAnlagenstammParameterFiles(
+          fabNorm,
+          technicianId,
+          body,
+          resolved.localJobId,
+        );
+        anlagenstamm.push({
+          fab: fabNorm,
+          files: listed.files || [],
+          data_source: listed.data_source,
+        });
+      }
+      return res.json({
+        ok: true,
+        job_id: resolved.localJobId,
+        job_uploads: jobUploads,
+        anlagenstamm,
+      });
+    } catch (e) {
+      console.warn('[parameterlisten] list', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  async function resolveParameterlistenFileBytes(opts) {
+    const {
+      localJobId,
+      technicianId,
+      jobRow,
+      uploadId,
+      sha256,
+      fab,
+      fileId,
+      source,
+      body,
+    } = opts;
+    const fabNorm = normalizeParameterFab(fab || '');
+    if (source !== 'anlagenstamm') {
+      const collected = collectJobParameterDirs(localJobId, technicianId, jobRow);
+      const merged = jobParameterUploads.listMergedJobUploads(db, {
+        local_job_id: localJobId,
+        server_job_id: jobRow.server_id,
+        job_number: jobRow.job_number,
+        paramDirs: collected.dirs,
+        resolveJobAbs: (rel) => {
+          if (!collected.reiseDir || !rel) return '';
+          return path.join(collected.reiseDir, String(rel).replace(/\//g, path.sep));
+        },
+      });
+      let row = null;
+      const uid = parseInt(uploadId, 10);
+      if (Number.isFinite(uid) && uid > 0) {
+        row = merged.find((r) => Number(r.id) === uid) || null;
+        if (!row) {
+          const dbRow = jobParameterUploads.getUploadById(db, uid);
+          if (dbRow) {
+            row = {
+              original_filename: dbRow.original_filename,
+              abs_path: null,
+              cache_path: dbRow.cache_path,
+            };
+          }
+        }
+      }
+      if (!row && sha256 && fabNorm) {
+        row = merged.find(
+          (r) => String(r.fab) === fabNorm && String(r.sha256 || '').toLowerCase() === String(sha256).toLowerCase(),
+        );
+      }
+      if (row) {
+        const got = jobParameterUploads.resolveUploadBytes(row);
+        if (got.ok) {
+          return Object.assign({ filename: row.original_filename || got.filename, fab: row.fab || fabNorm }, got);
+        }
+      }
+    }
+    if (fabNorm) {
+      const localRows = listParameterFilesByFab(db, fabNorm) || [];
+      const fid = parseInt(fileId, 10);
+      const local = localRows.find((r) => {
+        if (sha256 && String(r.sha256 || '').toLowerCase() === String(sha256).toLowerCase()) return true;
+        if (Number.isFinite(fid) && fid > 0) {
+          if (Number(r.id) === fid) return true;
+          if (r.server_file_id != null && Number(r.server_file_id) === fid) return true;
+        }
+        return false;
+      });
+      if (local) {
+        const candidates = [];
+        const pushCand = (p) => {
+          const s = String(p || '').trim();
+          if (s && !candidates.includes(s)) candidates.push(s);
+        };
+        pushCand(local.storage_relpath);
+        pushCand(local.source_path);
+        try {
+          const ctx = getProjekteNeuLocalContext(localJobId, fabNorm);
+          if (ctx && ctx.resolved && ctx.resolved.root) {
+            const root = ctx.resolved.root;
+            for (const rel of [local.source_path, local.storage_relpath]) {
+              const norm = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
+              if (!norm || path.isAbsolute(String(rel || ''))) continue;
+              const abs = safeResolveUnderRoot(root, norm);
+              if (abs) pushCand(abs);
+            }
+            const wantName = String(local.original_filename || '').trim();
+            if (wantName) {
+              const scanned = scanProjekteNeuParameterFiles(root);
+              const hit = scanned.find((f) => String(f.name || '') === wantName);
+              if (hit && hit.abs) pushCand(hit.abs);
+            }
+          }
+        } catch (_) {}
+        for (const p of candidates) {
+          if (jobParameterUploads.fileExists(p)) {
+            return {
+              ok: true,
+              path: p,
+              buffer: fs.readFileSync(p),
+              filename: local.original_filename,
+              fab: fabNorm,
+            };
+          }
+        }
+      }
+      const candidates = buildDispoBaseCandidates({
+        baseUrl: body.baseUrl,
+        externalUrl: body.externalUrl,
+        internalUrl: body.internalUrl,
+      });
+      let lastDispoError = '';
+      const serverFid = local && local.server_file_id != null ? parseInt(local.server_file_id, 10) : 0;
+      const downloadId = Number.isFinite(serverFid) && serverFid > 0 ? serverFid : fid;
+      if (candidates.length > 0 && Number.isFinite(downloadId) && downloadId > 0) {
+        try {
+          const remote = await proxyAnlagenstammParameterDownload(
+            Object.assign({}, body, {
+              technician_id: technicianId,
+              fab: fabNorm,
+              file_id: downloadId,
+            }),
+          );
+          if (remote && remote.ok && remote.buffer) {
+            return {
+              ok: true,
+              buffer: remote.buffer,
+              filename: remote.xDownloadFilename || (local && local.original_filename) || 'parameterliste',
+              fab: fabNorm,
+            };
+          }
+          if (remote && remote.error) lastDispoError = String(remote.error);
+        } catch (dispoErr) {
+          lastDispoError = dispoErr && dispoErr.message ? String(dispoErr.message) : String(dispoErr);
+          console.warn('[parameterlisten] file dispo:', lastDispoError);
+        }
+      }
+      if (lastDispoError) {
+        return { ok: false, error: lastDispoError };
+      }
+    }
+    return { ok: false, error: 'Datei nicht gefunden.' };
+  }
+
+  app.post('/api/protokolle/parameterlisten/compare', express.json({ limit: '40mb' }), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const fabNorm = normalizeParameterFab(body.fab || '');
+      if (!fabNorm) return res.status(400).json({ ok: false, error: 'Ungültige Fabrikationsnummer.' });
+      const fromId = parseInt(body.from_file_id, 10);
+      const toId = parseInt(body.to_file_id, 10);
+      if (!Number.isFinite(fromId) || fromId <= 0 || !Number.isFinite(toId) || toId <= 0 || fromId === toId) {
+        return res.status(400).json({ ok: false, error: 'Zwei unterschiedliche Dateien zum Vergleich nötig.' });
+      }
+      const fromGot = await resolveParameterlistenFileBytes({
+        localJobId: resolved.localJobId,
+        technicianId,
+        jobRow,
+        fab: fabNorm,
+        fileId: fromId,
+        sha256: body.from_sha256,
+        source: 'anlagenstamm',
+        body,
+      });
+      if (!fromGot.ok) {
+        return res.status(404).json({ ok: false, error: fromGot.error || 'Von-Datei nicht gefunden.' });
+      }
+      const toGot = await resolveParameterlistenFileBytes({
+        localJobId: resolved.localJobId,
+        technicianId,
+        jobRow,
+        fab: fabNorm,
+        fileId: toId,
+        sha256: body.to_sha256,
+        source: 'anlagenstamm',
+        body,
+      });
+      if (!toGot.ok) {
+        return res.status(404).json({ ok: false, error: toGot.error || 'Zu-Datei nicht gefunden.' });
+      }
+      const diff = compareParameterTextLines(
+        decodeParameterBufferToText(fromGot.buffer),
+        decodeParameterBufferToText(toGot.buffer),
+      );
+      return res.json({
+        ok: true,
+        fab: fabNorm,
+        from_file: {
+          original_filename: fromGot.filename || '',
+          file_id: fromId,
+        },
+        to_file: {
+          original_filename: toGot.filename || '',
+          file_id: toId,
+        },
+        summary: diff.summary,
+        line_rows: diff.rows,
+      });
+    } catch (e) {
+      console.warn('[parameterlisten] compare', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/parameterlisten/file', express.json({ limit: '40mb' }), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const got = await resolveParameterlistenFileBytes({
+        localJobId: resolved.localJobId,
+        technicianId,
+        jobRow,
+        uploadId: body.upload_id,
+        sha256: body.sha256,
+        fab: body.fab,
+        fileId: body.file_id,
+        source: body.source,
+        body,
+      });
+      if (!got.ok) return res.status(404).json({ ok: false, error: got.error || 'Datei nicht gefunden.' });
+      const filename = got.filename || 'parameterliste';
+      if (body.as_download === true || body.as_download === 1 || body.as_download === '1') {
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', 'attachment; filename="' + filename.replace(/"/g, '') + '"');
+        res.setHeader('X-Download-Filename', encodeURIComponent(filename));
+        return res.send(got.buffer);
+      }
+      return res.json({
+        ok: true,
+        filename,
+        fab: got.fab || null,
+        mime: 'application/octet-stream',
+        size: got.buffer.length,
+        path: got.path || null,
+        content_base64: got.buffer.toString('base64'),
+      });
+    } catch (e) {
+      console.warn('[parameterlisten] file', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/parameterlisten/pdf', express.json({ limit: '40mb' }), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const got = await resolveParameterlistenFileBytes({
+        localJobId: resolved.localJobId,
+        technicianId,
+        jobRow,
+        uploadId: body.upload_id,
+        sha256: body.sha256,
+        fab: body.fab,
+        fileId: body.file_id,
+        source: body.source,
+        body,
+      });
+      if (!got.ok) return res.status(404).json({ ok: false, error: got.error || 'Datei nicht gefunden.' });
+      const filename = got.filename || 'parameterliste';
+      let csvText = got.buffer.toString('utf8');
+      if (!csvText || /[\uFFFD]/.test(csvText)) csvText = got.buffer.toString('latin1');
+      const csvToPdfBuffer = getCsvToPdfBuffer();
+      const pdfBytes = await csvToPdfBuffer(csvText, { filename, sourcePath: got.path || filename });
+      const pdfName = jobParameterUploads.pdfBasenameFor(filename);
+      let pdfPath = '';
+      if (got.path) {
+        pdfPath = path.join(path.dirname(got.path), pdfName);
+      } else {
+        pdfPath = path.join(os.tmpdir(), 'kukla-param-' + Date.now() + '-' + pdfName);
+      }
+      writeFileWithRetry(pdfPath, pdfBytes);
+      return res.json({ ok: true, pdf_path: pdfPath, pdf_paths: [pdfPath], filename: pdfName });
+    } catch (e) {
+      console.warn('[parameterlisten] pdf', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/parameterlisten/delete', express.json(), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const resolved = resolveKundenDokumentationLocalJob(req, body.job_id != null ? body.job_id : body.jobId);
+      if (!resolved.ok) return res.status(resolved.status).json({ ok: false, error: resolved.error });
+      const jobRow = loadParameterJobMeta(resolved.localJobId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const blocked = localJobWriteBlocked(jobRow.status);
+      if (blocked) return res.status(blocked.status).json({ ok: false, error: blocked.error });
+      const collected = collectJobParameterDirs(resolved.localJobId, technicianId, jobRow);
+      const merged = jobParameterUploads.listMergedJobUploads(db, {
+        local_job_id: resolved.localJobId,
+        server_job_id: jobRow.server_id,
+        job_number: jobRow.job_number,
+        paramDirs: collected.dirs,
+        resolveJobAbs: (rel) => {
+          if (!collected.reiseDir || !rel) return '';
+          return path.join(collected.reiseDir, String(rel).replace(/\//g, path.sep));
+        },
+      });
+      const uid = parseInt(body.upload_id, 10);
+      const sha = String(body.sha256 || '').trim().toLowerCase();
+      const fabNorm = normalizeParameterFab(body.fab || '');
+      let target =
+        Number.isFinite(uid) && uid > 0 ? merged.find((r) => Number(r.id) === uid) : null;
+      if (!target && sha) {
+        target = merged.find(
+          (r) => (!fabNorm || String(r.fab) === fabNorm) && String(r.sha256 || '').toLowerCase() === sha,
+        );
+      }
+      if (!target) {
+        const dbRow = Number.isFinite(uid) && uid > 0 ? jobParameterUploads.getUploadById(db, uid) : null;
+        if (dbRow) {
+          target = {
+            id: dbRow.id,
+            fab: dbRow.fab,
+            sha256: dbRow.sha256,
+            abs_path: dbRow.job_rel_path && collected.reiseDir
+              ? path.join(collected.reiseDir, String(dbRow.job_rel_path).replace(/\//g, path.sep))
+              : null,
+            original_filename: dbRow.original_filename,
+            dispo_file_id: dbRow.dispo_file_id,
+          };
+        }
+      }
+      if (!target) return res.status(404).json({ ok: false, error: 'Upload nicht gefunden.' });
+      if (target.abs_path) jobParameterUploads.unlinkJobCopies(target.abs_path);
+      if (target.id) jobParameterUploads.deleteUploadRow(db, target.id);
+      const fabDel = String(target.fab || fabNorm || '');
+      const shaDel = String(target.sha256 || sha || '');
+      let localAs = null;
+      try {
+        localAs = deleteParameterFileByFabSha(db, fabDel, shaDel, 'upload');
+      } catch (asErr) {
+        console.warn('[parameterlisten] delete local as:', asErr && asErr.message ? asErr.message : asErr);
+      }
+      save();
+      let dispoDeleteError = null;
+      const dispoCandidates = buildDispoBaseCandidates({
+        baseUrl: body.baseUrl,
+        externalUrl: body.externalUrl,
+        internalUrl: body.internalUrl,
+      });
+      if (dispoCandidates.length > 0 && fabDel && (shaDel || target.dispo_file_id)) {
+        try {
+          const remote = await proxyAnlagenstammParameterDelete({
+            technician_id: technicianId,
+            baseUrl: body.baseUrl,
+            externalUrl: body.externalUrl,
+            internalUrl: body.internalUrl,
+            serverUsername: body.serverUsername,
+            serverPassword: body.serverPassword,
+            fab: fabDel,
+            file_id: target.dispo_file_id || 0,
+            sha256: shaDel,
+          });
+          if (remote && remote.ok === false) {
+            dispoDeleteError = remote.error || 'Dispo-Löschen fehlgeschlagen';
+          }
+        } catch (dispoErr) {
+          dispoDeleteError = dispoErr && dispoErr.message ? dispoErr.message : String(dispoErr);
+        }
+      } else if (dispoCandidates.length === 0) {
+        dispoDeleteError = 'Dispo nicht konfiguriert – lokal gelöscht.';
+      }
+      return res.json({
+        ok: true,
+        local_deleted: true,
+        anlagenstamm_local_deleted: !!(localAs && localAs.deleted),
+        dispo_delete_error: dispoDeleteError,
+      });
+    } catch (e) {
+      console.warn('[parameterlisten] delete', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
     }
   });
 
@@ -15878,6 +17305,7 @@ function createApp(db) {
         });
         const offlineCfg = getOfflinePullConfig(db, localJobId);
         const pullMode = p.offline_pull_mode || offlineCfg.pull_mode || 'legacy';
+        const forceRefresh = !!p.force_refresh;
         const skipTedOnPull = acceptJob || pullMode === 'explicit';
         const pathsByFab = getOfflinePullPathsByFab(db, localJobId);
         let fabMap = offlineCfg.fab_map || [];
@@ -15912,6 +17340,18 @@ function createApp(db) {
         await migrateAliasFnFolders(targetDir, fabMap);
         const layoutPull = await ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
         const montageFolderName = layoutPull.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
+        try {
+          ensureCanonicalFnFolders(
+            targetDir,
+            (layoutPull && layoutPull.fabMap && layoutPull.fabMap.length ? layoutPull.fabMap : fabMap),
+            montageFolderName,
+          );
+        } catch (fnMkErr) {
+          console.warn(
+            '[dienstreise_pull] FN-Ordner:',
+            fnMkErr && fnMkErr.message ? fnMkErr.message : fnMkErr,
+          );
+        }
         if (montageFolderName) {
           removeLegacyMonteurAuftragsordnerTopLevel(targetDir, montageFolderName, fabMap);
         }
@@ -15927,7 +17367,7 @@ function createApp(db) {
           (Array.isArray(chk.completed) && chk.completed.length > 0) ||
           (Array.isArray(chk.ted_completed) && chk.ted_completed.length > 0) ||
           !!chk.refresh_done_at;
-        if (!hasOwnProgress) {
+        if (!forceRefresh && !hasOwnProgress) {
           const prev = loadLastCompletedDienstreisePullCheckpoint(localJobId);
           if (prev) {
             if (!prev.dispo_base_fingerprint || prev.dispo_base_fingerprint === fp) {
@@ -15949,7 +17389,10 @@ function createApp(db) {
           }
         }
         const refreshAge = chk.refresh_done_at ? Date.now() - new Date(chk.refresh_done_at).getTime() : Infinity;
-        const skipRefresh = !periodicDelta && !!(chk.refresh_done_at && refreshAge < 15 * 60 * 1000 && chk.dispo_base_fingerprint === fp);
+        const skipRefresh =
+          !forceRefresh &&
+          !periodicDelta &&
+          !!(chk.refresh_done_at && refreshAge < 15 * 60 * 1000 && chk.dispo_base_fingerprint === fp);
         let copyWarning = null;
         let skipCopyDueToNetwork = false;
         setProgress('refresh', 0, 1, skipRefresh ? 'Dispo-Refresh (Checkpoint, TTL).' : 'Dispo wird aktualisiert …');
@@ -16074,7 +17517,7 @@ function createApp(db) {
         let files = null;
         if (skipCopyDueToNetwork) {
           files = [];
-        } else if (!periodicDelta && Array.isArray(chk.files) && chk.files.length) {
+        } else if (!forceRefresh && !periodicDelta && Array.isArray(chk.files) && chk.files.length) {
           files = filterManifestForPull(chk.files, pullMode, pathsByFab, fabMap);
         } else {
           files = [];
@@ -16112,8 +17555,8 @@ function createApp(db) {
           const extra = [];
           try {
             const dm = path.join(targetDir, 'Dokumente_Monteur');
-            if (fs.existsSync(dm)) {
-              for (const ent of fs.readdirSync(dm, { withFileTypes: true })) {
+            if (fsExistsSync(dm)) {
+              for (const ent of fsReaddirSync(dm, { withFileTypes: true })) {
                 if (!ent.isDirectory() || isDokumenteMonteurReservedTopDir(ent.name)) continue;
                 extra.push({ folder_name_canonical: ent.name, fab: ent.name });
               }
@@ -16131,14 +17574,14 @@ function createApp(db) {
         }
 
         async function copyPullFileToSiblingRels(primaryAbs, localRels) {
-          if (!primaryAbs || !fs.existsSync(primaryAbs)) return;
+          if (!primaryAbs || !fsExistsSync(primaryAbs)) return;
           for (let s = 1; s < localRels.length; s++) {
             const siblingAbs = path.join(targetDir, String(localRels[s] || '').replace(/\//g, path.sep));
-            if (siblingAbs === primaryAbs || fs.existsSync(siblingAbs)) continue;
+            if (siblingAbs === primaryAbs || fsExistsSync(siblingAbs)) continue;
             try {
               const siblingDir = path.dirname(siblingAbs);
-              await fs.promises.mkdir(siblingDir, { recursive: true });
-              await fs.promises.copyFile(primaryAbs, siblingAbs);
+              await fs.promises.mkdir(win32FsPath(siblingDir), { recursive: true });
+              await fs.promises.copyFile(win32FsPath(primaryAbs), win32FsPath(siblingAbs));
             } catch (copyErr) {
               console.warn(
                 '[dienstreise_pull] PWA-Foto FN-Kopie',
@@ -16151,11 +17594,11 @@ function createApp(db) {
         function shouldSkip(relPath, expectedSize, expectedMtimeMs, completedArr) {
           const localRel = localRelsForPullFile(relPath)[0] || relPath;
           const lp = path.join(targetDir, localRel.replace(/\//g, path.sep));
-          if (!fs.existsSync(lp)) return false;
+          if (!fsExistsSync(lp)) return false;
           let localSize = null;
           let localMtimeMs = null;
           try {
-            const st = fs.statSync(lp);
+            const st = fsStatSync(lp);
             localSize = st.size;
             localMtimeMs = st.mtimeMs != null ? st.mtimeMs : st.mtime ? st.mtime.getTime() : null;
           } catch (_) {
@@ -16188,6 +17631,28 @@ function createApp(db) {
             }
           } catch (e) {
             console.warn('[dienstreise_pull] job_mark_docs_loaded', e && e.message ? e.message : e);
+          }
+        }
+
+        if (pullMode === 'explicit' && pathsByFab && pathsByFab.size) {
+          try {
+            const pnN = await pullSelectedProjekteNeuIntoReise({
+              dispoBaseUrl,
+              technicianId,
+              authHeader,
+              signal,
+              targetDir,
+              fabMap,
+              pathsByFab,
+              setProgress,
+            });
+            if (pnN) setProgress('projekte_neu', pnN, pnN, pnN + ' PROJEKTE-NEU-Dateien.');
+          } catch (pnErr) {
+            if (pnErr && pnErr.name === 'AbortError') throw pnErr;
+            console.warn(
+              '[dienstreise_pull] projekte_neu:',
+              pnErr && pnErr.message ? pnErr.message : pnErr,
+            );
           }
         }
 
@@ -16331,6 +17796,7 @@ function createApp(db) {
           const relPath = files[i].path;
           const expectedSize = files[i].size;
           const expectedMtimeMs = files[i].mtime_ms;
+          try {
           if (shouldSkip(relPath, expectedSize, expectedMtimeMs, completed)) {
             const localRelsSkip = localRelsForPullFile(relPath);
             const localRelSkip = localRelsSkip[0] || relPath;
@@ -16341,7 +17807,7 @@ function createApp(db) {
               DIENSTREISE_SYNC_FOLDERS.some((fd) => relNormSkip === fd || relNormSkip.startsWith(fd + '/'))
             ) {
               const lpSkip = path.join(targetDir, localRelSkip.replace(/\//g, path.sep));
-              if (fs.existsSync(lpSkip)) recordDienstreisePushCache(db, localJobId, relNormSkip, lpSkip);
+              if (fsExistsSync(lpSkip)) recordDienstreisePushCache(db, localJobId, relNormSkip, lpSkip);
             }
             setProgress('file', i + 1, total, relPath);
             continue;
@@ -16395,8 +17861,16 @@ function createApp(db) {
           mergeCheckpoint({ completed });
           setProgress('file', i + 1, total, relPath);
           await yieldEventLoop();
+          } catch (fileErr) {
+            if (fileErr && fileErr.name === 'AbortError') throw fileErr;
+            const fileMsg = fileErr && fileErr.message ? fileErr.message : String(fileErr);
+            console.warn('[dienstreise_pull] Datei übersprungen:', relPath, fileMsg);
+            copyWarning = [copyWarning, relPath + ': ' + fileMsg].filter(Boolean).join(' ');
+            setProgress('file', i + 1, total, relPath);
+          }
         }
         } catch (dlErr) {
+          if (dlErr && dlErr.name === 'AbortError') throw dlErr;
           if (acceptJob) {
             copyWarning = [copyWarning, formatFetchError(dlErr, dispoBaseUrl)].filter(Boolean).join(' ');
             console.warn('[dienstreise_pull] accept: Download unterbrochen.', copyWarning);
@@ -16461,7 +17935,10 @@ function createApp(db) {
               status_sync_warning: [statusSyncWarning, copyWarning].filter(Boolean).join(' ') || null,
             });
           } else {
-            mergeCheckpoint({ finalize_done: true });
+            mergeCheckpoint({
+              finalize_done: true,
+              status_sync_warning: copyWarning || null,
+            });
           }
         }
         try {
@@ -16789,6 +18266,52 @@ function createApp(db) {
                     pnTreeSync.skipped || 0,
                     'unverändert, gesamt',
                     pnTreeSync.total_count || 0,
+                    pnTreeSync.delta ? '(delta)' : '(voll)',
+                  );
+                }
+                try {
+                  const pnThumbSync = await syncProjekteNeuThumbsFromDispo(
+                    db,
+                    {
+                      baseUrl: base,
+                      externalUrl: p.externalUrl,
+                      internalUrl: p.internalUrl,
+                      technician_id: technicianId,
+                      serverUsername: p.serverUsername,
+                      serverPassword: p.serverPassword,
+                    },
+                    (prog) => {
+                      if (prog && prog.page && prog.totalPages) {
+                        const label =
+                          (prog.resuming ? 'Fortsetzung ' : '') +
+                          'PROJEKTE-NEU-Thumbs ' +
+                          prog.page +
+                          '/' +
+                          prog.totalPages;
+                        setProgress('anlagenstamm_pn_thumbs', prog.page, prog.totalPages, label);
+                      }
+                    },
+                    { dbLock, save },
+                  );
+                  if (pnThumbSync.ok) {
+                    console.log(
+                      '[sync_pull] anlagenstamm_pn_thumbs:',
+                      pnThumbSync.written || 0,
+                      'geschrieben, gesamt FNs',
+                      pnThumbSync.total_count || 0,
+                      pnThumbSync.delta ? '(delta)' : '(voll)',
+                    );
+                  } else if (pnThumbSync._notFound) {
+                    console.warn(
+                      '[sync_pull] anlagenstamm_pn_thumbs: Export nicht verfügbar (Server-Update).',
+                    );
+                  } else {
+                    console.warn('[sync_pull] anlagenstamm_pn_thumbs:', pnThumbSync.error || 'fehlgeschlagen');
+                  }
+                } catch (thumbErr) {
+                  console.warn(
+                    '[sync_pull] anlagenstamm_pn_thumbs:',
+                    thumbErr && thumbErr.message ? thumbErr.message : thumbErr,
                   );
                 }
                 const bothSkipped = !!(syncResult.skipped && pnTreeSync.skipped);
@@ -16926,7 +18449,51 @@ function createApp(db) {
               pnTreeSync.skipped || 0,
               'unverändert, gesamt',
               pnTreeSync.total_count || 0,
+              pnTreeSync.delta ? '(delta)' : '(voll)',
             );
+            try {
+              const pnThumbSync = await syncProjekteNeuThumbsFromDispo(
+                db,
+                {
+                  baseUrl: base,
+                  externalUrl: p.externalUrl,
+                  internalUrl: p.internalUrl,
+                  technician_id: technicianId,
+                  serverUsername: p.serverUsername,
+                  serverPassword: p.serverPassword,
+                },
+                (prog) => {
+                  if (prog && prog.page && prog.totalPages) {
+                    const label =
+                      (prog.resuming ? 'Fortsetzung ' : '') +
+                      'PROJEKTE-NEU-Thumbs ' +
+                      prog.page +
+                      '/' +
+                      prog.totalPages;
+                    setProgress('anlagenstamm_pn_thumbs', prog.page, prog.totalPages, label);
+                  }
+                },
+                { dbLock, save },
+              );
+              if (pnThumbSync.ok) {
+                console.log(
+                  '[anlagenstamm_db_sync] anlagenstamm_pn_thumbs:',
+                  pnThumbSync.written || 0,
+                  'geschrieben, gesamt FNs',
+                  pnThumbSync.total_count || 0,
+                  pnThumbSync.delta ? '(delta)' : '(voll)',
+                );
+              } else if (pnThumbSync._notFound) {
+                console.warn('[anlagenstamm_db_sync] anlagenstamm_pn_thumbs: Export nicht verfügbar.');
+              } else {
+                console.warn('[anlagenstamm_db_sync] anlagenstamm_pn_thumbs:', pnThumbSync.error || 'fehlgeschlagen');
+              }
+            } catch (thumbErr) {
+              console.warn(
+                '[anlagenstamm_db_sync] anlagenstamm_pn_thumbs:',
+                thumbErr && thumbErr.message ? thumbErr.message : thumbErr,
+              );
+            }
           } else if (pnTreeSync._notFound) {
             console.warn(
               '[anlagenstamm_db_sync] anlagenstamm_pn_tree: DB-Export nicht verfügbar — kein Dateisystem-Fallback im Sync.',
@@ -18597,6 +20164,11 @@ function createApp(db) {
     }
   });
 
+  const { registerPdfAnnotatorRoutes } = require('./lib/pdf-annotator-routes');
+  registerPdfAnnotatorRoutes(app, {
+    listReiseDirs: listBoundReiseDirsForAnnotator,
+  });
+
   app.use(express.static(path.join(__dirname, 'public')));
   return app;
 }
@@ -20189,6 +21761,19 @@ function jobFabJsonWasProvided(serverFab) {
   return serverFab != null && String(serverFab).trim() !== '';
 }
 
+/** true = JSON-Array der Leistungszeilen (job_fabrikation); false = Semikolon-Spalte/Fragment. */
+function jobFabPayloadIsStructuredJson(serverFab) {
+  if (serverFab == null) return false;
+  if (Array.isArray(serverFab)) return true;
+  const s = String(serverFab).trim();
+  if (!s || (s[0] !== '[' && s[0] !== '{')) return false;
+  try {
+    return Array.isArray(JSON.parse(s));
+  } catch (_) {
+    return false;
+  }
+}
+
 function applyRemovedJobFabsAfterPull(db, localJobId, oldFabJson, newFabJson) {
   const removed = computeRemovedJobFabNums(oldFabJson, newFabJson);
   for (const fn of removed) {
@@ -20223,14 +21808,27 @@ function mergeFabForJobPull(db, localJobId, serverFab) {
     }
   } else if (!serverProvided) {
     merged = curFab != null ? enrichFabJsonWithLocalAnlagenstamm(db, curFab) : null;
-  } else {
+  } else if (!jobFabPayloadIsStructuredJson(serverFab)) {
+    // jobs.fabrikationsnummern-Spalte kann hinter job_fabrikation zurückbleiben.
+    // Union statt Ersetzen, sonst fehlen nach Sync Anlagen im Arbeitsnachweis.
     merged = enrichFabJsonWithLocalAnlagenstamm(
       db,
-      mergeFabRowsServerAuthoritative(
-        parseJobFabrikationsnummernRows(curFab),
-        parseJobFabrikationsnummernRows(serverFab),
-      ),
+      mergeJobFabrikationsnummernJson(curFab, serverFab) || curFab || serverFab,
     );
+  } else {
+    const serverRows = parseJobFabrikationsnummernRows(serverFab);
+    const localRows = parseJobFabrikationsnummernRows(curFab);
+    if (localRows.length > serverRows.length) {
+      merged = enrichFabJsonWithLocalAnlagenstamm(
+        db,
+        mergeJobFabrikationsnummernJson(curFab, serverFab) || curFab,
+      );
+    } else {
+      merged = enrichFabJsonWithLocalAnlagenstamm(
+        db,
+        mergeFabRowsServerAuthoritative(localRows, serverRows),
+      );
+    }
   }
   applyRemovedJobFabsAfterPull(db, localJobId, curFab, merged);
   return merged;
@@ -21030,10 +22628,14 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
             body: JSON.stringify({ job_id: serverJobId, status: 'in_arbeit' }),
           });
           if (mid.ok) {
+            const erledigtRetry = { job_id: serverJobId, status: 'erledigt' };
+            if (Array.isArray(payload.transfer_rel_paths)) {
+              erledigtRetry.transfer_rel_paths = payload.transfer_rel_paths;
+            }
             r = await fetch(`${base}/dispo_api/api/job.php?technician_id=${techIdForPush}`, {
               method: 'PATCH',
               headers: headerForJob,
-              body: JSON.stringify({ job_id: serverJobId, status: 'erledigt' }),
+              body: JSON.stringify(erledigtRetry),
             });
           }
         } catch (_) {
@@ -21822,9 +23424,12 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
         const anLoc = require('./lib/arbeitsnachweis-local');
         let localPay = null;
         try {
-          localPay = anLoc.toDispoSavePayload(anLoc.loadRow(db, p.entity_id));
+          localPay = anLoc.toDispoSavePayload(anLoc.loadRow(db, p.entity_id), db);
         } catch (_) {}
-        const chosen = anLoc.resolveSavePayload(payloadRaw, localPay) || payloadRaw;
+        const chosen = anLoc.mergeJobFabsIntoPayload(
+          db,
+          anLoc.resolveSavePayload(payloadRaw, localPay) || payloadRaw,
+        );
         const url = `${tbBase}/api/mobile/arbeitsnachweis.php?action=save`;
         const postBody = Object.assign({ action: 'save' }, chosen);
         delete postBody.serverPassword;

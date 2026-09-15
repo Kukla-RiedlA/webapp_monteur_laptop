@@ -31,6 +31,7 @@ function loadElectronDotEnv() {
 loadElectronDotEnv();
 
 const { createCopilotProbe } = require('./lib/copilot-probe');
+const { looksLikePdfFile, isCsvFilePath, stripOpenStampPrefix } = require('./lib/openable-local-file');
 let copilotProbe = null;
 function getCopilotProbe() {
   if (!copilotProbe) {
@@ -92,10 +93,18 @@ let pdfViewerWindows = null;
 let anlagenstammAkteWindows = null;
 let bugReportWindows = null;
 
+function ensurePdfViewerWindows() {
+  if (!pdfViewerWindows) {
+    pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow, () => PORT);
+  }
+  return pdfViewerWindows;
+}
+
 function findWindowsUninstaller() {
   if (process.platform !== 'win32') return null;
   const installDir = path.dirname(process.execPath);
   const names = [
+    'Uninstall KUKpit.exe',
     'Uninstall Monteur WebApp.exe',
     'Uninstall monteur-webapp.exe',
     'Uninstall ' + app.getName() + '.exe',
@@ -185,11 +194,25 @@ function focusMainWindow() {
 }
 
 function createWindow() {
+  const win32Overlay = process.platform === 'win32';
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
     show: false,
-    backgroundColor: '#f7f8f8',
+    backgroundColor: '#0e7b5a',
+    ...(win32Overlay
+      ? {
+          titleBarStyle: 'hidden',
+          titleBarOverlay: {
+            color: '#0b4f43',
+            symbolColor: '#ffffff',
+            height: 32,
+          },
+        }
+      : {
+          frame: false,
+          thickFrame: true,
+        }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -212,6 +235,17 @@ function createWindow() {
       mainWindow.webContents.openDevTools();
     }
   }
+
+  mainWindow.on('maximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:maximize-change', true);
+    }
+  });
+  mainWindow.on('unmaximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:maximize-change', false);
+    }
+  });
 
   mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
   mainWindow.once('ready-to-show', () => {
@@ -256,6 +290,17 @@ function createWindow() {
     }
   });
 }
+
+ipcMain.handle('window:control', async (event, action) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return { ok: false };
+  if (action === 'minimize') win.minimize();
+  else if (action === 'maximize') {
+    if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+  } else if (action === 'close') win.close();
+  return { ok: true, maximized: win.isDestroyed() ? false : win.isMaximized() };
+});
 
 ipcMain.handle('anlagenstamm:search', async (event, payload) => {
   const body = payload || {};
@@ -320,7 +365,34 @@ ipcMain.handle('dienstreise:choose-folder', async () => {
   return result.filePaths[0];
 });
 
-async function openDienstreisePath(filePath) {
+async function saveLocalFileAs(event, filePath, defaultName) {
+  if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
+  const normalized = path.normalize(filePath.trim());
+  if (!fs.existsSync(normalized)) return { ok: false, error: 'file_not_found' };
+  const owner =
+    (event && event.sender && BrowserWindow.fromWebContents(event.sender)) || mainWindow;
+  const csv = isCsvFilePath(normalized) || isCsvFilePath(defaultName);
+  const suggested = stripOpenStampPrefix(defaultName || path.basename(normalized));
+  const result = await dialog.showSaveDialog(owner || undefined, {
+    title: 'Speichern unter',
+    defaultPath: suggested,
+    filters: csv
+      ? [
+          { name: 'CSV', extensions: ['csv'] },
+          { name: 'Alle Dateien', extensions: ['*'] },
+        ]
+      : [{ name: 'Alle Dateien', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  try {
+    fs.copyFileSync(normalized, result.filePath);
+    return { ok: true, via: csv ? 'csv-save-as' : 'save-as', path: result.filePath };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+async function openDienstreisePath(filePath, event) {
   if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
   const raw = filePath.trim();
   const normalized = path.normalize(raw);
@@ -333,7 +405,7 @@ async function openDienstreisePath(filePath) {
   }
   function isExcelFile(targetPath) {
     const ext = String(path.extname(targetPath || '')).toLowerCase();
-    return ext === '.xls' || ext === '.xlsx' || ext === '.xlsm' || ext === '.xlsb' || ext === '.csv';
+    return ext === '.xls' || ext === '.xlsx' || ext === '.xlsm' || ext === '.xlsb';
   }
   function pathNeedsAcrobatSafeCopy(targetPath) {
     const p = String(targetPath || '');
@@ -477,12 +549,26 @@ async function openDienstreisePath(filePath) {
       return { ok: false, error: 'Datei nicht gefunden: ' + normalized };
     }
     trace('exists', normalized);
-    // PDFs immer im Electron-Chromium-Viewer – Acrobat scheitert an langen OneDrive-Pfaden.
-    if (String(path.extname(normalized)).toLowerCase() === '.pdf') {
-      if (!pdfViewerWindows) {
-        pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
+    // CSV nie in Excel/Standardprogramm öffnen – nur Speichern unter.
+    if (isCsvFilePath(normalized)) {
+      trace('csv.saveAs', normalized);
+      return saveLocalFileAs(event, normalized);
+    }
+    // PDFs immer im Electron-Viewer (Skizze + Text) – auch ohne .pdf-Endung (PROJEKTE-NEU-Cache).
+    if (looksLikePdfFile(normalized)) {
+      let pdfPath = normalized;
+      if (!/\.pdf$/i.test(normalized)) {
+        try {
+          const tmpDir = app.getPath('temp');
+          pdfPath = path.join(tmpDir, `kukla_pdfopen_${Date.now()}.pdf`);
+          fs.copyFileSync(normalized, pdfPath);
+          trace('pdf.namedCopy', pdfPath);
+        } catch (e) {
+          trace('pdf.namedCopy.fail', e && e.message ? e.message : String(e));
+          pdfPath = normalized;
+        }
       }
-      const pdfResult = await pdfViewerWindows.openPdf(normalized);
+      const pdfResult = await ensurePdfViewerWindows().openPdf(pdfPath);
       trace('pdf.electronViewer', pdfResult && pdfResult.ok ? 'ok' : (pdfResult && pdfResult.error) || 'fail');
       return pdfResult;
     }
@@ -526,14 +612,21 @@ async function openDienstreisePath(filePath) {
   }
 }
 
-ipcMain.handle('dienstreise:open-path', async (_event, filePath) => openDienstreisePath(filePath));
+ipcMain.handle('dienstreise:open-path', async (event, filePath) => openDienstreisePath(filePath, event));
 
 ipcMain.handle('pdf:open-viewer', async (_event, filePath) => {
-  if (!pdfViewerWindows) {
-    pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
-  }
   console.log('[pdf:open-viewer]', filePath);
-  const result = await pdfViewerWindows.openPdf(filePath);
+  const normalized = path.normalize(String(filePath || '').trim());
+  let pdfPath = normalized;
+  if (looksLikePdfFile(normalized) && !/\.pdf$/i.test(normalized)) {
+    try {
+      pdfPath = path.join(app.getPath('temp'), `kukla_pdfopen_${Date.now()}.pdf`);
+      fs.copyFileSync(normalized, pdfPath);
+    } catch (_) {
+      pdfPath = normalized;
+    }
+  }
+  const result = await ensurePdfViewerWindows().openPdf(pdfPath);
   console.log('[pdf:open-viewer] result', result && result.ok ? 'ok' : (result && result.error));
   return result;
 });
@@ -581,20 +674,7 @@ function openWithDialogMonteur(filePath) {
 ipcMain.handle('dienstreise:open-with-dialog', async (_event, filePath) => openWithDialogMonteur(filePath));
 
 ipcMain.handle('dienstreise:save-file-as', async (event, filePath, defaultName) => {
-  if (typeof filePath !== 'string' || !filePath.trim()) return { ok: false, error: 'Pfad fehlt.' };
-  const normalized = path.normalize(filePath.trim());
-  if (!fs.existsSync(normalized)) return { ok: false, error: 'file_not_found' };
-  const win = BrowserWindow.fromWebContents(event.sender);
-  const result = await dialog.showSaveDialog(win || undefined, {
-    defaultPath: defaultName || path.basename(normalized),
-  });
-  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
-  try {
-    fs.copyFileSync(normalized, result.filePath);
-    return { ok: true, path: result.filePath };
-  } catch (e) {
-    return { ok: false, error: e.message || String(e) };
-  }
+  return saveLocalFileAs(event, filePath, defaultName);
 });
 
 ipcMain.handle('dienstreise:show-in-folder', async (_event, filePath) => {
@@ -609,41 +689,47 @@ ipcMain.handle('dienstreise:file-context-menu', async (event, spec) => {
   const fileName = (spec && spec.fileName) || (filePath ? path.basename(filePath) : 'Datei');
   if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: 'file_not_found' };
   const win = BrowserWindow.fromWebContents(event.sender);
+  const csv = isCsvFilePath(filePath);
+  const items = [];
+  if (!csv) {
+    items.push({
+      label: 'Öffnen',
+      click: () => {
+        void openDienstreisePath(filePath, event);
+      },
+    });
+    items.push({
+      label: 'Öffnen mit…',
+      click: () => {
+        void openWithDialogMonteur(filePath);
+      },
+    });
+  }
+  items.push({
+    label: 'Speichern unter…',
+    click: async () => {
+      await saveLocalFileAs(event, filePath, fileName);
+    },
+  });
+  if (csv) {
+    items.push({
+      label: 'Öffnen mit…',
+      click: () => {
+        void openWithDialogMonteur(filePath);
+      },
+    });
+  }
+  items.push(
+    { type: 'separator' },
+    {
+      label: 'Im Explorer anzeigen',
+      click: () => {
+        shell.showItemInFolder(filePath);
+      },
+    },
+  );
   return new Promise((resolve) => {
-    const menu = Menu.buildFromTemplate([
-      {
-        label: 'Öffnen',
-        click: () => {
-          void openDienstreisePath(filePath);
-        },
-      },
-      {
-        label: 'Öffnen mit…',
-        click: () => {
-          void openWithDialogMonteur(filePath);
-        },
-      },
-      {
-        label: 'Speichern unter…',
-        click: async () => {
-          const result = await dialog.showSaveDialog(win || undefined, { defaultPath: fileName });
-          if (!result.canceled && result.filePath) {
-            try {
-              fs.copyFileSync(filePath, result.filePath);
-            } catch (_) {
-              /* ignore */
-            }
-          }
-        },
-      },
-      { type: 'separator' },
-      {
-        label: 'Im Explorer anzeigen',
-        click: () => {
-          shell.showItemInFolder(filePath);
-        },
-      },
-    ]);
+    const menu = Menu.buildFromTemplate(items);
     menu.popup({ window: win || undefined, callback: () => resolve({ ok: true }) });
   });
 });
@@ -878,7 +964,7 @@ app.whenReady().then(() => {
   installLocalGatewayWebRequest(PORT);
   configureSpellCheckerSession();
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
-  pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow);
+  pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow, () => PORT);
   anlagenstammAkteWindows = createAnlagenstammAkteWindowManager(() => mainWindow, () => PORT);
   bugReportWindows = createBugReportWindowManager(() => mainWindow, () => PORT, () => app.getPath('userData'));
   initLaptopUpdater({ getMainWindow: () => mainWindow });
@@ -890,7 +976,7 @@ app.whenReady().then(() => {
       console.error('Server-Start fehlgeschlagen:', err);
       const busy = err && err.code === 'EADDRINUSE';
       dialog.showErrorBox(
-        'Monteur WebApp',
+        'KUKpit',
         busy
           ? 'Port 39678 ist belegt. Die App läuft vermutlich schon — bitte vorhandenes Fenster prüfen oder den Prozess in der Taskleiste beenden.'
           : ('Lokaler Server konnte nicht starten: ' + ((err && err.message) || String(err))),
@@ -898,14 +984,14 @@ app.whenReady().then(() => {
       app.quit();
     });
     server.listen(PORT, '127.0.0.1', () => {
-      console.log('Monteur WebApp lokal auf http://127.0.0.1:' + PORT);
+      console.log('KUKpit lokal auf http://127.0.0.1:' + PORT);
       console.log('[monteur] Lokaler API-Server: Anlagenstamm POST /api/anlagenstamm_search – nach Update App neu starten, falls 404.');
       createWindow();
       scheduleUpdateCheck();
     });
   }).catch((err) => {
     console.error('DB-Start fehlgeschlagen:', err);
-    dialog.showErrorBox('Monteur WebApp', 'Datenbank konnte nicht geöffnet werden: ' + ((err && err.message) || String(err)));
+    dialog.showErrorBox('KUKpit', 'Datenbank konnte nicht geöffnet werden: ' + ((err && err.message) || String(err)));
     app.quit();
   });
   app.on('activate', () => {

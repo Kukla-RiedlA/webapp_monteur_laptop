@@ -45,6 +45,7 @@ Legende:
 | Dienstreisen | `dienstreisen` | Sync | `dienstreise_*` Jobs | Ja | Upload lokal; Push online | Ja (kontinuierlich) |
 | Kalender-Ansicht | `calendar_cache_*` | `sync_pull` / live `/api/calendar` | — | Ja (`calendar_cached`) | — | Ja (Cache) |
 | Anlagenstamm-Baum | `anlagenstamm_tree_cache` | Lazy/Fetch | — | Ja nach Sync | — | Ja (Server) |
+| **Anlagenstamm PN-Thumbs** | `image_thumb_cache` (`projekte_neu`) | `sync_pull` / `anlagenstamm_db_sync` Bulk-Export | — | Ja nach Sync (Galerie) | — | Ja (Server-DB) |
 | **Anlagenstamm (Liste/Edit)** | `anlagenstamm_local`, `pending_changes` | `sync_pull` | `sync_push` / save | Ja | Ja | Ja (dirty bleibt) |
 | **Textbausteine** | `textbausteine_user_*` | `sync_pull` | `pending_changes` / Push | **Ja** (`local_only`) | **Ja** | Ja |
 | **Arbeitsschritte** | lokal + Presets | `sync_pull` | Queue / Push | **Ja** (`local_only`) | **Ja** | Ja |

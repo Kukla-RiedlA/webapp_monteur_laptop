@@ -77,7 +77,7 @@
   }
 
   function bridgeToast(message) {
-    showBridgeStatus(message);
+    hideBridgeStatus();
     if (typeof global.showToast === 'function') {
       global.showToast(message);
       return;
@@ -116,6 +116,9 @@
     if (okBtn) {
       okBtn.addEventListener('click', () => hideBridgeStatus());
     }
+    el.addEventListener('click', (ev) => {
+      if (ev.target === el) hideBridgeStatus();
+    });
     bridgeStatusEl = el;
     return el;
   }
@@ -137,7 +140,35 @@
     showBridgeStatus(message, { error: true });
   }
 
+  function isCsvFileName(name) {
+    return /\.csv$/i.test(String(name || ''));
+  }
+
+  function csvBasename(filePath, preferredName) {
+    const raw = String(preferredName || filePath || '').replace(/^.*[\\/]/, '') || 'datei.csv';
+    const stripped = raw.replace(/^\d{14}_/, '');
+    return stripped || raw || 'datei.csv';
+  }
+
   async function openLocalFilePath(filePath, opts) {
+    opts = opts || {};
+    if (isCsvFileName(filePath) || isCsvFileName(opts.fileName)) {
+      if (global.monteurApp && typeof global.monteurApp.saveFileAs === 'function') {
+        showBridgeStatus('Speichern unter…');
+        const res = await global.monteurApp.saveFileAs(
+          String(filePath),
+          csvBasename(filePath, opts.fileName),
+        );
+        hideBridgeStatus();
+        if (res && res.canceled) return;
+        if (res && res.error) {
+          showBridgeError(res.error);
+          throw new Error(res.error);
+        }
+        if (typeof global.showToast === 'function') global.showToast('CSV gespeichert.');
+        return;
+      }
+    }
     const useExcel = !opts || opts.excel !== false;
     showBridgeStatus(useExcel ? 'Excel wird gestartet…' : 'Datei wird geöffnet…');
     const openFn =
@@ -149,6 +180,11 @@
     }
     const openRes = await openFn(String(filePath));
     hideBridgeStatus();
+    if (openRes && openRes.canceled) return;
+    if (openRes && openRes.via === 'csv-save-as') {
+      bridgeToast('CSV gespeichert.');
+      return;
+    }
     if (openRes && openRes.error) {
       showBridgeError(openRes.error);
       throw new Error(openRes.error);
@@ -490,7 +526,8 @@
 
   async function openPnFileExternal(fab, relPath) {
     const localPath = await resolvePnLocalPath(fab, relPath);
-    await openLocalFilePath(localPath, { excel: false });
+    const originalName = (relPath || '').split(/[/\\]/).pop() || '';
+    await openLocalFilePath(localPath, { excel: false, fileName: originalName });
     return { ok: true, path: localPath };
   }
 
@@ -585,6 +622,7 @@
           '</span>'
         : '<span class="explorer-toggle empty"></span>';
       const isImg = !r.isDir && isRasterImage(r.name);
+      const isCsv = !r.isDir && isCsvFileName(r.name);
       const nameVisual = isImg
         ? '<img class="dienstreise-explorer-thumb" data-pn-thumb alt="" />'
         : typeof window.windowsStyleFsIconHtml === 'function'
@@ -616,7 +654,11 @@
           : (isImg
             ? '<button type="button" class="btn btn-ghost" data-pn-preview title="Bild in der App anzeigen">Vorschau</button>'
             : '') +
-            '<button type="button" class="btn btn-ghost" data-pn-open title="Mit Standardprogramm öffnen">Öffnen</button>') +
+            '<button type="button" class="btn btn-ghost" data-pn-open title="' +
+            (isCsv ? 'CSV nur herunterladen (Speichern unter)' : 'Mit Standardprogramm öffnen') +
+            '">' +
+            (isCsv ? 'Speichern unter' : 'Öffnen') +
+            '</button>') +
         '</div></div>';
     });
     html += '</div>';
@@ -676,8 +718,9 @@
       const fileNameEl = row.querySelector('.dienstreise-explorer-filename');
       const fileName = (fileNameEl && fileNameEl.textContent.trim()) || rel.split('/').pop() || '';
       const isImg = isRasterImage(fileName);
+      const isCsv = isCsvFileName(fileName);
       row.style.cursor = 'pointer';
-      row.setAttribute('title', isImg ? 'Bild in der App anzeigen' : 'Datei öffnen');
+      row.setAttribute('title', isImg ? 'Bild in der App anzeigen' : (isCsv ? 'CSV nur herunterladen (Speichern unter)' : 'Datei öffnen'));
       row.addEventListener('click', (ev) => {
         if (ev.target.closest('.dienstreise-explorer-actions')) return;
         if (ev.target.closest('[data-pn-open]')) return;
@@ -816,7 +859,7 @@
       showBridgeError(err);
       throw new Error(err);
     }
-    await openLocalFilePath(d.path, { excel: true });
+    await openLocalFilePath(d.path, { excel: true, fileName: fileName || d.filename });
     return d;
   }
 
@@ -906,6 +949,49 @@
     );
   }
 
+  function setupPnDownloadIntercept() {
+    if (global.__anlagenPnDownloadIntercept) return;
+    global.__anlagenPnDownloadIntercept = true;
+    document.addEventListener(
+      'click',
+      function (ev) {
+        if (ev.defaultPrevented) return;
+        if (ev.button != null && ev.button !== 0) return;
+        if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+        const a =
+          ev.target && ev.target.closest
+            ? ev.target.closest('a[href*="anlagenstamm_file_download.php"]')
+            : null;
+        if (!a) return;
+        let u;
+        try {
+          u = new URL(a.getAttribute('href') || a.href, global.location.href);
+        } catch (_) {
+          return;
+        }
+        const source = String(u.searchParams.get('source') || '').toLowerCase();
+        const rel = u.searchParams.get('path') || '';
+        const fab = u.searchParams.get('fab') || u.searchParams.get('fabrikationsnummer') || '';
+        if (source !== 'projekte_neu' || !rel || !fab) return;
+        const name = rel.split('/').pop() || '';
+        if (isRasterImage(name)) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (/motor list|01\.02|motorle|_ml_|motor.?list/i.test(rel + ' ' + name)) {
+          try {
+            global.__anlagenSelectedMlPdfRel = rel;
+            const ml = document.getElementById('fillFromMlPdfMsg');
+            if (ml) ml.textContent = 'Motorliste: ' + name;
+          } catch (_) {}
+        }
+        openPnFile(fab, rel).catch((e) => {
+          showBridgeError(e && e.message ? e.message : String(e));
+        });
+      },
+      true,
+    );
+  }
+
   function onAnlagenstammDataSynced() {
     pnTreeCache.clear();
     pnPrefetchDone.clear();
@@ -928,6 +1014,7 @@
       bindTedLinks(host || document.body);
       setupPnRootLinks();
       setupTedLinks();
+      setupPnDownloadIntercept();
       global.dispoDesktopAnlagenstamm = global.dispoDesktopAnlagenstamm || {};
       global.dispoDesktopAnlagenstamm.renderPnTree = renderPnTree;
       global.dispoDesktopAnlagenstamm.bindTedLinks = bindTedLinks;

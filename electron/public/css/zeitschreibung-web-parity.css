@@ -57,6 +57,12 @@
 }
 
 .page-zeitschreibung .zs-sp-topbar {
+  /* Scrollport ist #zeitschreibung-host, nicht das Fenster.
+     top: var(--header-height) schiebt die Überschrift in die Zeitraum-Karte
+     (besonders wenn die Nav umbricht und --header-height > 72px wird). */
+  position: sticky;
+  top: 0;
+  z-index: 30;
   margin-bottom: 0;
 }
 

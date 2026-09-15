@@ -5,6 +5,8 @@ const fs = require('fs');
 const express = require('express');
 const { parseMultipart } = require('./multipart-upload');
 const phpLocal = require('./abrechnung-php-local');
+const preview = require('./job-file-preview');
+const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 
 function getCore() {
   return require('./abrechnung-routes');
@@ -40,6 +42,34 @@ function dispoCtx(ctx, req) {
     authHeader: auth,
     serverUsername: creds.serverUsername || '',
     serverPassword: creds.serverPassword || '',
+  };
+}
+
+function makePreviewProxy(d) {
+  return {
+    async fetchDispo(urlPath, init) {
+      const base = String((d && d.baseUrl) || '').replace(/\/$/, '');
+      if (!base || !d.authHeader || !d.authHeader.Authorization) {
+        throw new Error('offline');
+      }
+      const timeoutMs = init && init.timeoutMs != null ? Number(init.timeoutMs) : 25000;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const headers = applyKuklaAuditHeaders({ ...(d.authHeader || {}) });
+        if (d.technicianId) headers['X-Technician-Id'] = String(d.technicianId);
+        const suffix = String(urlPath || '').startsWith('/') ? urlPath : '/' + urlPath;
+        const res = await fetch(base + suffix, {
+          method: (init && init.method) || 'GET',
+          headers,
+          signal: ctrl.signal,
+          redirect: 'follow',
+        });
+        return { res, base };
+      } finally {
+        clearTimeout(timer);
+      }
+    },
   };
 }
 
@@ -274,6 +304,44 @@ function registerAbrechnungPhpRoutes(app, ctx) {
     jsonRes(res, { ok: true, files, source: files.length ? 'local' : 'empty' });
   });
 
+  app.get('/api/abrechnung_file_preview.php', async (req, res) => {
+    try {
+      const jobId = Number(req.query.job_id || 0);
+      const bucket = String(req.query.bucket || 'dispo').trim();
+      const filename = getCore().normalizeAbrechnungRelativeName(
+        String(req.query.filename || req.query.name || ''),
+      );
+      const wantMeta = String(req.query.meta || '') === '1';
+      if (!jobId || !filename) {
+        return jsonRes(res, { ok: false, error: 'Parameter fehlen.', previewable: false }, 400);
+      }
+      const dispoJobId = getCore().resolveDispoJobIdForAbrechnung(ctx.db, jobId);
+      const fp = getCore().findLocalAbrechnungFilePath(
+        ctx.dbDir,
+        ctx.db,
+        jobId,
+        bucket,
+        filename,
+        getCore().abrechnungFileCtxFrom(ctx),
+      );
+      const d = dispoCtx(ctx, req);
+      const q = 'job_id=' + encodeURIComponent(String(dispoJobId || jobId))
+        + '&bucket=' + encodeURIComponent(bucket)
+        + '&name=' + encodeURIComponent(filename);
+      await preview.handlePreviewRequest(res, fp, wantMeta, {
+        proxy: makePreviewProxy(d),
+        url: '/api/abrechnung_file_preview.php?' + q,
+        cacheJpg: preview.remoteCacheJpg(
+          getCore().cacheRoot(ctx.dbDir),
+          dispoJobId || jobId,
+          bucket + '_' + filename,
+        ),
+      });
+    } catch (e) {
+      jsonRes(res, { ok: false, previewable: false, error: e.message || String(e) }, 500);
+    }
+  });
+
   app.get('/api/abrechnung_file_download.php', async (req, res) => {
     try {
       const jobId = Number(req.query.job_id || 0);
@@ -357,6 +425,9 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       const safeName = phpLocal.resolveUniqueStoredName(origName, belegPrefix, targetDir);
       const localPath = path.join(targetDir, path.basename(safeName));
       fs.writeFileSync(localPath, file.buffer);
+      try {
+        preview.generateInBackground(localPath);
+      } catch (_) {}
       const uploaderName = phpLocal.resolveTechnicianDisplayName(ctx.db, tid);
       const uploadedAt = new Date().toISOString();
       ctx.db
@@ -398,6 +469,9 @@ function registerAbrechnungPhpRoutes(app, ctx) {
               if (fs.existsSync(localPath) && !fs.existsSync(altPath)) {
                 fs.renameSync(localPath, altPath);
               }
+              try {
+                preview.generateInBackground(fs.existsSync(altPath) ? altPath : localPath);
+              } catch (_) {}
             } catch (_) {
               /* ignore */
             }
