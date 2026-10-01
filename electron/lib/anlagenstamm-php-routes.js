@@ -16,6 +16,7 @@ const {
 const fs = require('fs');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
 const { parseMlPdfBuffer } = require('./anlagenstamm-ml-pdf');
+const { readParameterSourceText, decodeParameterFileBytes, normalizeFabDigits } = require('./anlagenstamm-local');
 
 function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
   const creds =
@@ -583,6 +584,69 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       ok: false,
       error: 'TD-Daten nur online (Dispo-Server). Bitte Verbindung prüfen.',
     });
+  });
+
+  /**
+   * Parameter-PDF wie Protokolle/Parameterlisten (csv-to-pdf: PA-Ausdruck, PAL, DWC-7).
+   */
+  app.get('/api/anlagenstamm_parameter_pdf.php', async (req, res) => {
+    const fab = normalizeFabDigits(String(req.query.fab || req.query.fabrikationsnummer || ''));
+    const fileId = parseInt(req.query.file_id, 10);
+    if (!fab || !Number.isFinite(fileId) || fileId <= 0) {
+      return res.status(400).json({ ok: false, error: 'file_id und fab erforderlich' });
+    }
+    let source = readParameterSourceText(db(), fileId, fab);
+    let filename = source && source.filename ? source.filename : 'Parameterliste.csv';
+    let text = source && source.text ? String(source.text) : '';
+    if (!text.trim()) {
+      const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds({}) : {};
+      const serverFileId =
+        source && source.server_file_id && source.server_file_id > 0 ? source.server_file_id : fileId;
+      try {
+        const { proxyAnlagenstammParameterDownload } = require('./anlagenstamm-dispo-proxy');
+        const remote = await proxyAnlagenstammParameterDownload(
+          Object.assign({}, creds, {
+            technician_id: ctx.getTechnicianId(req),
+            fab,
+            file_id: serverFileId,
+          }),
+        );
+        if (remote && remote.ok && remote.buffer && remote.buffer.length) {
+          text = decodeParameterFileBytes(remote.buffer);
+          const remoteName = remote.xDownloadFilename || '';
+          if (remoteName) {
+            try {
+              filename = decodeURIComponent(remoteName);
+            } catch (_) {
+              filename = remoteName;
+            }
+          }
+        }
+      } catch (e) {
+        if (!text.trim()) {
+          return res.status(502).json({
+            ok: false,
+            error: e && e.message ? e.message : 'Parameterdatei nicht ladbar.',
+          });
+        }
+      }
+    }
+    if (!text.trim()) {
+      return res.status(404).json({ ok: false, error: 'Kein Rohtext für PDF' });
+    }
+    try {
+      const { csvToPdfBuffer } = require('./csv-to-pdf');
+      const pdfBytes = await csvToPdfBuffer(text, { filename, sourcePath: filename });
+      const outName = String(filename).replace(/\.(csv|txt|pa3|pa4|pa5|pa6|pa7|pal)$/i, '') + '.pdf';
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename="' + outName.replace(/"/g, '') + '"');
+      return res.send(Buffer.from(pdfBytes));
+    } catch (e) {
+      return res.status(500).json({
+        ok: false,
+        error: e && e.message ? e.message : 'Parameter-PDF fehlgeschlagen.',
+      });
+    }
   });
 
   /** Kompatibilität: alte List-Route delegiert. */

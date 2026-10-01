@@ -2763,6 +2763,47 @@ function listParameterEntriesByFileId(db, fileId) {
     .all(fid);
 }
 
+function decodeParameterFileBytes(buf) {
+  const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(buf || '');
+  let text = raw.toString('utf8');
+  if (!text || text.includes('\uFFFD')) text = raw.toString('latin1');
+  return text;
+}
+
+/** Rohtext einer gespeicherten Parameterdatei (lokal oder über server_file_id). */
+function readParameterSourceText(db, fileId, fab) {
+  const fid = parseInt(fileId, 10);
+  const fabNorm = normalizeFabDigits(fab);
+  if (!db || !Number.isFinite(fid) || fid <= 0 || !fabNorm) return null;
+  const row = db
+    .prepare(
+      `SELECT id, original_filename, raw_content, storage_relpath, source_path, server_file_id
+       FROM anlagenstamm_parameter_files
+       WHERE fab = ? AND (id = ? OR server_file_id = ?)
+       ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id DESC
+       LIMIT 1`,
+    )
+    .get(fabNorm, fid, fid, fid);
+  if (!row) return null;
+  let text = row.raw_content != null ? String(row.raw_content) : '';
+  if (!text.trim()) {
+    const p = String(row.storage_relpath || row.source_path || '').trim();
+    if (p && fs.existsSync(p)) {
+      try {
+        text = decodeParameterFileBytes(fs.readFileSync(p));
+      } catch (_) {
+        text = '';
+      }
+    }
+  }
+  return {
+    local_id: row.id,
+    server_file_id: row.server_file_id != null ? Number(row.server_file_id) : null,
+    filename: String(row.original_filename || 'Parameterliste.csv'),
+    text,
+  };
+}
+
 function getParameterFileMeta(db, fileId, fab) {
   const fid = parseInt(fileId, 10);
   const fabNorm = normalizeFabDigits(fab);
@@ -2915,6 +2956,8 @@ module.exports = {
   cacheParameterFilesFromDispo,
   listParameterFilesByFab,
   deleteParameterFileByFabSha,
+  readParameterSourceText,
+  decodeParameterFileBytes,
   markMissingProjekteNeuFiles,
   normalizeFabDigits,
   listParameterEntriesByFileId,

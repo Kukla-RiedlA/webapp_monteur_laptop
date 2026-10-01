@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.033
+- **Montagebericht:** Speichern nimmt deutsches Datum und das Enddatum, wenn der Start fehlt. Die Meldung nennt den echten Grund statt „kein gültiges Startdatum“.
+- **Anlagenstamm:** Parameter-PDF (Akte und Liste) hat denselben Aufbau wie unter Protokolle/Parameterlisten.
+
 ## V 2.007.032
 - **KUKLink:** Parameterlisten direkt über COM (DWC-3/5, DWC-4, DWC-6), Live-Terminal, PDF im Auftragsordner; COM-Port unter der Auftragsauswahl.
 

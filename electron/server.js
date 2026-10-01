@@ -13,6 +13,7 @@ const WebSocket = require('ws');
 const FormData = require('form-data');
 const csvToPdfPath = path.join(__dirname, 'lib', 'csv-to-pdf.js');
 const { postalCodeNormalize } = require(path.join(__dirname, 'lib', 'postal_code_util.js'));
+const { jobFolderDatePart } = require(path.join(__dirname, 'lib', 'job-folder-date.js'));
 
 function getCsvToPdfBuffer() {
   try {
@@ -3414,7 +3415,7 @@ function createApp(db) {
     const fabs = fabNumbersFromJobFabrikationsnummern(row.fabrikationsnummern);
     if (!fabs || fabs.size === 0) return null;
     const years = new Set();
-    const startStr = (row.start_datetime || '').trim().slice(0, 10);
+    const startStr = jobFolderDatePart(row.start_datetime, row.end_datetime);
     if (/^\d{4}/.test(startStr)) years.add(startStr.slice(0, 4));
     years.add(String(new Date().getFullYear()));
     const py = new Date().getFullYear() - 1;
@@ -3441,7 +3442,7 @@ function createApp(db) {
     return null;
   }
 
-  function lookupDienstreiseJobRow(jobIdRef) {
+  function lookupDienstreiseJobRow(jobIdRef, opts) {
     if (jobIdRef == null || jobIdRef === '') return null;
     const id = typeof jobIdRef === 'number' ? jobIdRef : parseInt(jobIdRef, 10);
     if (!Number.isFinite(id)) return null;
@@ -3450,10 +3451,13 @@ function createApp(db) {
       LEFT JOIN customers c ON c.id = j.customer_id
       LEFT JOIN job_addresses ja ON ja.job_id = j.id`;
     const cols =
-      'j.id, j.server_id, j.start_datetime, j.fabrikationsnummern, c.name AS customer_name, ja.city, ja.country';
+      'j.id, j.server_id, j.start_datetime, j.end_datetime, j.fabrikationsnummern, c.name AS customer_name, ja.city, ja.country';
     const byLocal = db
       .prepare(`SELECT ${cols} ${joinSql} WHERE j.id = ? LIMIT 1`)
       .get(id);
+    // Speichern kennt die lokale jobs.id (Formular). Dort darf eine kollidierende server_id
+    // nicht einen anderen Auftrag mit leerem Beginn liefern.
+    if (opts && opts.idMode === 'local') return byLocal || null;
     const byServer = db
       .prepare(`SELECT ${cols} ${joinSql} WHERE CAST(j.server_id AS TEXT) = CAST(? AS TEXT) LIMIT 1`)
       .get(id);
@@ -3610,29 +3614,39 @@ function createApp(db) {
    */
   function resolveDienstreiseReiseDirForJob(jobIdRef, opts) {
     const createIfMissing = !!(opts && opts.createIfMissing);
+    const throwOnFail = !!(opts && opts.throwOnFail);
+    const failCreate = (message) => {
+      if (!createIfMissing) return null;
+      if (throwOnFail) throw new Error(message);
+      try {
+        console.warn('[dienstreise] Projektordner:', message);
+      } catch (_) {}
+      return null;
+    };
     const base = getDienstreiseBasePath();
-    if (!base) return null;
-    const row = lookupDienstreiseJobRow(jobIdRef);
-    if (!row) return null;
+    if (!base) return failCreate('Speicherort Dienstreise ist nicht konfiguriert.');
+    const row = (opts && opts.jobRow) || lookupDienstreiseJobRow(jobIdRef, opts);
+    if (!row) return failCreate('Auftrag nicht gefunden.');
     if (createIfMissing && !opts.skipFolderStatusGate) {
       const assignGate = requireJobHasTechnicianAssignment(db, row.id);
-      if (assignGate) return null;
+      if (assignGate) return failCreate(assignGate.error);
       const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(row.id);
-      if (dienstreiseProjectFolderBlocked(statusRow ? statusRow.status : null)) return null;
+      const folderGate = dienstreiseProjectFolderBlocked(statusRow ? statusRow.status : null);
+      if (folderGate) return failCreate(folderGate.error);
     }
     const bound = getBoundReiseDirForJob(row.id);
     if (bound) return repairAcrobatHostileReiseDir(row.id, bound);
-    const startStr = (row.start_datetime || '').trim().slice(0, 10);
+    const startStr = jobFolderDatePart(row.start_datetime, row.end_datetime);
     const hasValidStart = /^\d{4}-\d{2}-\d{2}$/.test(startStr);
+    const companyName = (row.customer_name || '').trim() || 'Auftrag';
+    const city = (row.city || '').trim();
+    const countryRaw = (row.country || '').trim();
+    const countryCode = countryRaw.length >= 2 ? countryRaw.slice(0, 2).toUpperCase() : countryRaw;
+    const firm = sanitizeDienstreiseFolderPart(companyName);
+    const ort = sanitizeDienstreiseFolderPart(city);
+    const lk = sanitizeDienstreiseFolderPart(countryCode);
     if (hasValidStart) {
       const year = startStr.slice(0, 4);
-      const companyName = (row.customer_name || '').trim() || 'Auftrag';
-      const city = (row.city || '').trim();
-      const countryRaw = (row.country || '').trim();
-      const countryCode = countryRaw.length >= 2 ? countryRaw.slice(0, 2).toUpperCase() : countryRaw;
-      const firm = sanitizeDienstreiseFolderPart(companyName);
-      const ort = sanitizeDienstreiseFolderPart(city);
-      const lk = sanitizeDienstreiseFolderPart(countryCode);
       const existing = findExistingReiseDir(base, year, startStr, firm, ort, lk);
       if (existing) {
         const repaired = repairAcrobatHostileReiseDir(row.id, existing);
@@ -3645,17 +3659,21 @@ function createApp(db) {
       if (scanned) return repairAcrobatHostileReiseDir(row.id, scanned);
       return null;
     }
-    if (!hasValidStart) return null;
+    if (!hasValidStart) return failCreate('Auftrag hat kein gültiges Startdatum.');
     try {
-      const companyName = (row.customer_name || '').trim() || 'Auftrag';
-      const city = (row.city || '').trim();
-      const countryRaw = (row.country || '').trim();
-      const countryCode = countryRaw.length >= 2 ? countryRaw.slice(0, 2).toUpperCase() : countryRaw;
       const created = createDienstreiseFolder(base, startStr, companyName, city, countryCode);
       bindReiseFolderForJob(row.id, created.fullPath);
       return created.fullPath;
-    } catch (_) {
-      return null;
+    } catch (e) {
+      const year = startStr.slice(0, 4);
+      const again = findExistingReiseDir(base, year, startStr, firm, ort, lk);
+      if (again) {
+        const repaired = repairAcrobatHostileReiseDir(row.id, again);
+        bindReiseFolderForJob(row.id, repaired);
+        return repaired;
+      }
+      const msg = e && e.message ? e.message : 'Projektordner konnte nicht angelegt werden.';
+      return failCreate(msg);
     }
   }
 
@@ -3676,11 +3694,14 @@ function createApp(db) {
     }
     const base = getDienstreiseBasePath();
     if (!base) throw new Error('Speicherort Dienstreise ist nicht konfiguriert.');
-    const row = lookupDienstreiseJobRow(localJobId);
+    const row = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     if (!row) throw new Error('Auftrag nicht gefunden.');
-    const dir = resolveDienstreiseReiseDirForJob(localJobId, {
+    const dir = resolveDienstreiseReiseDirForJob(row.id, {
       createIfMissing: true,
       skipFolderStatusGate: !!opts.skipAssignmentCheck,
+      throwOnFail: true,
+      idMode: 'local',
+      jobRow: row,
     });
     if (!dir) throw new Error('Auftrag hat kein gültiges Startdatum.');
     return dir;

@@ -11911,7 +11911,8 @@
             '<div>' + escapeHtml(sourceLabel) + '</div>' +
             '<div>' + escapeHtml(who) + '<div class="muted">' + escapeHtml(date) + '</div></div>' +
             '<div>' + escapeHtml(String(f.entry_count || 0)) + ' Werte</div>' +
-            '<div><button class="btn btn-ghost" data-asp-file-id="' + encodeURIComponent(String(f.id || '')) + '" data-asp-filename="' + encodeURIComponent(name) + '">Download</button></div>' +
+            '<div><button type="button" class="btn btn-ghost" data-asp-pdf="1" data-asp-file-id="' + encodeURIComponent(String(f.id || '')) + '">PDF</button> ' +
+            '<button type="button" class="btn btn-ghost" data-asp-file-id="' + encodeURIComponent(String(f.id || '')) + '" data-asp-filename="' + encodeURIComponent(name) + '">Download</button></div>' +
             '</div>';
         }).join('');
       wireAspTrendToolbar(fabNorm, list);
@@ -11937,8 +11938,14 @@
       wrapEl.querySelectorAll('[data-asp-file-id]').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var fileId = parseInt(decodeURIComponent(btn.getAttribute('data-asp-file-id') || ''), 10);
-          var fileName = decodeURIComponent(btn.getAttribute('data-asp-filename') || '');
           if (!fileId) return;
+          if (btn.getAttribute('data-asp-pdf') === '1') {
+            var pdfUrl = API_BASE + '/api/anlagenstamm_parameter_pdf.php?fab=' +
+              encodeURIComponent(fabNorm) + '&file_id=' + encodeURIComponent(String(fileId));
+            window.open(pdfUrl, '_blank', 'noopener');
+            return;
+          }
+          var fileName = decodeURIComponent(btn.getAttribute('data-asp-filename') || '');
           downloadAnlagenstammParameterFile(fabNorm, fileId, fileName).catch(function (err) {
             if (msgEl) msgEl.textContent = 'Fehler: ' + (err.message || String(err));
           });
@@ -18793,8 +18800,7 @@
             });
             var data = await r.json().catch(function () { return {}; });
             if (!r.ok || !data.ok) {
-              alert('Fehler: ' + (data.error || r.status));
-              return;
+              throw new Error(data.error || String(r.status));
             }
             prog.setProgress(1, 1);
             var pdfRel = (data.rel || (data.saved && data.saved[0])) || '';

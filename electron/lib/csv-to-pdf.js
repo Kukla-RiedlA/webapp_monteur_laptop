@@ -4,6 +4,7 @@
  * Parameterdatei in PDF umwandeln (pdf-lib).
  * PAL (DWC-6) → KUKLink-Liste, PA3 (DWC-5/3) → Zweispalt-Dump,
  * CSV/PA7 → DWC-7-Layout (Logo, Printout, Name/Value/Unit/Comment).
+ * Dieselbe Datei liegt unter dispo/tools/parameter-pdf/lib/ (Server-Anlagenstamm).
  */
 
 const path = require('path');
@@ -116,6 +117,7 @@ async function csvToPdfBufferDwc7(csvText, options) {
   const logoPaths = [
     path.join(baseDir, '..', 'dispo', 'assets', 'img', 'kukla_logo.jpg'),
     path.join(baseDir, 'public', 'assets', 'img', 'kukla_logo.jpg'),
+    path.join(__dirname, '..', '..', '..', 'assets', 'img', 'kukla_logo.jpg'),
   ];
   for (const logoPath of logoPaths) {
     try {
