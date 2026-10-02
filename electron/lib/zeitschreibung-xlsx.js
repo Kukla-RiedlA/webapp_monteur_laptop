@@ -204,6 +204,17 @@ async function generateZeitschreibungXlsxBuffer(payload) {
   sheetXml = setInlineStrCell(sheetXml, 'L7', 'Krank');
   sheetXml = setInlineStrCell(sheetXml, 'O7', 'Arzt');
 
+  const uebertrag = calc.uebertragFromRecord(payload.uebertrag);
+  const prevMonth = month <= 1 ? 12 : month - 1;
+  sheetXml = setInlineStrCell(sheetXml, 'A6', 'Übertrag ' + (calc.MONTH_NAMES[prevMonth] || ''));
+  for (const { col, field } of HOUR_COLS) {
+    const n = calc.num(uebertrag[field]);
+    sheetXml = setNumberCell(sheetXml, `${col}6`, n > 0 ? n : null);
+  }
+  sheetXml = setNumberCell(sheetXml, 'M6', calc.num(uebertrag.day_sum) > 0 ? calc.num(uebertrag.day_sum) : null);
+  sheetXml = setInlineStrCell(sheetXml, 'N6', uebertrag.bemerkung || '');
+  sheetXml = sheetXml.replace('SUM(D8:D38)', 'SUM(D6:D38)').replace('SUM(M8:M38)', 'SUM(M6:M38)');
+
   const dim = calc.daysInMonth(year, month);
   for (let day = 1; day <= 31; day++) {
     const row = FIRST_DATA_ROW + day - 1;

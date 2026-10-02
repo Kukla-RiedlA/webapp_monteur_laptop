@@ -107,6 +107,27 @@ function ensureTables(db) {
   } catch (_) {
     /* Spalte existiert bereits */
   }
+  const uebertragCols = [
+    'uebertrag_anw', 'uebertrag_montage', 'uebertrag_ue50', 'uebertrag_ue100', 'uebertrag_weg',
+    'uebertrag_urlaub', 'uebertrag_za_plus', 'uebertrag_za_minus', 'uebertrag_krank', 'uebertrag_arzt',
+  ];
+  for (const col of uebertragCols) {
+    try {
+      db.exec('ALTER TABLE timesheets ADD COLUMN ' + col + ' REAL NOT NULL DEFAULT 0');
+    } catch (_) {
+      /* exists */
+    }
+  }
+  try {
+    db.exec('ALTER TABLE timesheets ADD COLUMN uebertrag_bemerkung TEXT NOT NULL DEFAULT \'\'');
+  } catch (_) {
+    /* exists */
+  }
+  try {
+    db.exec('ALTER TABLE timesheets ADD COLUMN uebertrag_lohn_kommentar TEXT NOT NULL DEFAULT \'\'');
+  } catch (_) {
+    /* exists */
+  }
   const lohnOverrideCols = [
     'lohn_anw', 'lohn_montage', 'lohn_ue50', 'lohn_ue100', 'lohn_weg',
     'lohn_urlaub', 'lohn_za_plus', 'lohn_za_minus', 'lohn_krank', 'lohn_arzt',
@@ -261,6 +282,7 @@ function loadTimesheet(db, technicianId, year, month) {
       days,
       sums,
       gesamt: calc.gesamtSum(sums),
+      uebertrag: calc.emptyUebertrag(),
       pdf_path: null,
       xlsx_path: null,
       server_id: null,
@@ -295,6 +317,7 @@ function loadTimesheet(db, technicianId, year, month) {
     days,
     sums,
     gesamt: head.gesamt,
+    uebertrag: calc.uebertragFromRecord(head),
     pdf_path: head.pdf_path,
     xlsx_path: head.xlsx_path,
     server_id: head.server_id,
@@ -309,7 +332,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
   }
 
   const existing = db
-    .prepare('SELECT id, status FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+    .prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
     .get(technicianId, year, month);
 
   // Gesperrte Tage + Lohn-Overrides aus lokaler DB behalten.
@@ -385,9 +408,10 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     d.day_sum = calc.daySum(d);
   }
   // Header-Summen effektiv (mit Lohn-Overrides)
-  const sums = calc.columnSumsEffective
+  const daySums = calc.columnSumsEffective
     ? calc.columnSumsEffective(days)
     : calc.columnSums(days);
+  const sums = calc.addUebertragToSums(daySums, calc.uebertragFromRecord(existing));
   const gesamt = calc.gesamtSum(sums);
 
   // Nach Freigabe nicht durch erneutes Speichern auf draft zurücksetzen.
@@ -520,7 +544,11 @@ async function writeExportFiles(dbDir, db, writeFileWithRetry, technicianId, yea
   const pdfPath = path.join(dir, `${stem}.pdf`);
   const xlsxPath = path.join(dir, `${stem}.xlsx`);
   const exportDays = calc.daysForExport(days);
-  const exportSums = calc.columnSumsEffective(days);
+  const head = db
+    .prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+    .get(technicianId, year, month);
+  const uebertrag = calc.uebertragFromRecord(head);
+  const exportSums = calc.addUebertragToSums(calc.columnSumsEffective(days), uebertrag);
   const exportGesamt = calc.gesamtSum(exportSums);
   const monLabel = calc.MONTH_NAMES[month] || String(month);
   const payload = {
@@ -531,6 +559,7 @@ async function writeExportFiles(dbDir, db, writeFileWithRetry, technicianId, yea
     days: exportDays,
     sums: exportSums,
     gesamt: exportGesamt,
+    uebertrag,
   };
   const pdfBuf = await generateZeitschreibungPdfBuffer(payload);
   const xlsxBuf = await generateZeitschreibungXlsxBuffer(payload);
@@ -686,6 +715,44 @@ async function pullLohnLocksFromDispo(db, technicianId, year, month, resolveDisp
   return pullLohnLocksWithCreds(db, technicianId, year, month, creds.baseUrl, creds.authHeader || null);
 }
 
+function storeUebertrag(db, technicianId, year, month, uebertrag) {
+  const u = calc.uebertragFromRecord(uebertrag);
+  let row = db
+    .prepare('SELECT id FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+    .get(technicianId, year, month);
+  if (!row) {
+    db.prepare(
+      `INSERT INTO timesheets (technician_id, year, month, status, updated_at) VALUES (?, ?, ?, 'draft', datetime('now'))`,
+    ).run(technicianId, year, month);
+    row = db
+      .prepare('SELECT id FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+      .get(technicianId, year, month);
+  }
+  if (!row) return;
+  db.prepare(
+    `UPDATE timesheets SET
+       uebertrag_anw=?, uebertrag_montage=?, uebertrag_ue50=?, uebertrag_ue100=?, uebertrag_weg=?,
+       uebertrag_urlaub=?, uebertrag_za_plus=?, uebertrag_za_minus=?, uebertrag_krank=?, uebertrag_arzt=?,
+       uebertrag_bemerkung=?, uebertrag_lohn_kommentar=?, updated_at=datetime('now')
+     WHERE id = ?`,
+  ).run(
+    u.anw, u.montage, u.ue50, u.ue100, u.weg,
+    u.urlaub, u.za_plus, u.za_minus, u.krank, u.arzt,
+    u.bemerkung || '', u.lohn_kommentar || '',
+    row.id,
+  );
+}
+
+function uebertragSame(a, b) {
+  const left = calc.uebertragFromRecord(a);
+  const right = calc.uebertragFromRecord(b);
+  for (const f of calc.HOUR_FIELDS) {
+    if (calc.num(left[f]) !== calc.num(right[f])) return false;
+  }
+  return String(left.bemerkung || '') === String(right.bemerkung || '')
+    && String(left.lohn_kommentar || '') === String(right.lohn_kommentar || '');
+}
+
 async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, authHeader) {
   if (!baseUrl || !technicianId || !year || !month) {
     return { ok: false, changed: false, days: null };
@@ -761,6 +828,12 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     } else if (d.lohn_kommentar == null) {
       d.lohn_kommentar = '';
     }
+  }
+
+  const serverUebertrag = data.timesheet && data.timesheet.uebertrag ? data.timesheet.uebertrag : null;
+  if (serverUebertrag && !uebertragSame(local.uebertrag, serverUebertrag)) {
+    storeUebertrag(db, technicianId, year, month, serverUebertrag);
+    changed = true;
   }
 
   if (changed) {
@@ -861,11 +934,11 @@ function registerZeitschreibungRoutes(app, ctx) {
       // Frisch von Dispo gemergte Tage bevorzugt (auch wenn Persist unverändert war)
       if (pull && pull.ok && Array.isArray(pull.days) && pull.days.length) {
         data.days = pull.days;
-        data.sums = calc.columnSumsEffective(pull.days);
+        data.sums = calc.addUebertragToSums(calc.columnSumsEffective(pull.days), data.uebertrag);
         data.gesamt = calc.gesamtSum(data.sums);
         data.lohn_pulled = true;
       } else {
-        data.sums = calc.columnSumsEffective(data.days || []);
+        data.sums = calc.addUebertragToSums(calc.columnSumsEffective(data.days || []), data.uebertrag);
         data.gesamt = calc.gesamtSum(data.sums);
         data.lohn_pulled = false;
       }
@@ -940,7 +1013,12 @@ function registerZeitschreibungRoutes(app, ctx) {
       for (const d of days) {
         if (d.day_sum == null) d.day_sum = calc.daySumEffective(d);
       }
-      const sums = calc.columnSumsEffective(days);
+      const dbHead = body.technician_id
+        ? getDb().prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+          .get(parseInt(String(body.technician_id), 10), year, month)
+        : null;
+      const uebertrag = calc.uebertragFromRecord(dbHead || body.uebertrag || null);
+      const sums = calc.addUebertragToSums(calc.columnSumsEffective(days), uebertrag);
       const monLabel = calc.MONTH_NAMES[month] || String(month);
       const title =
         String(body.title || '').trim() ||
@@ -953,6 +1031,7 @@ function registerZeitschreibungRoutes(app, ctx) {
         days,
         sums,
         gesamt: calc.gesamtSum(sums),
+        uebertrag,
       });
       res.type('html').send(html);
     } catch (e) {

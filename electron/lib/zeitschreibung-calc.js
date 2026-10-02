@@ -207,6 +207,45 @@ function daysForExport(days) {
   });
 }
 
+function emptyUebertrag() {
+  const u = { bemerkung: '', lohn_kommentar: '', day_sum: 0 };
+  for (const f of HOUR_FIELDS) u[f] = 0;
+  return u;
+}
+
+function uebertragDaySum(u) {
+  return daySumEffective(u || {});
+}
+
+function uebertragFromRecord(src) {
+  const u = emptyUebertrag();
+  if (!src || typeof src !== 'object') return u;
+  const row = src.uebertrag && typeof src.uebertrag === 'object' ? src.uebertrag : src;
+  const prefixed = row.uebertrag_anw != null || row.uebertrag_bemerkung != null || row.uebertrag_lohn_kommentar != null;
+  for (const f of HOUR_FIELDS) {
+    if (prefixed) u[f] = num(row['uebertrag_' + f]);
+    else if (row[f] != null && row[f] !== '') u[f] = num(row[f]);
+  }
+  if (prefixed) {
+    u.bemerkung = row.uebertrag_bemerkung != null ? String(row.uebertrag_bemerkung) : '';
+    u.lohn_kommentar = row.uebertrag_lohn_kommentar != null ? String(row.uebertrag_lohn_kommentar) : '';
+  } else {
+    u.bemerkung = row.bemerkung != null ? String(row.bemerkung) : '';
+    u.lohn_kommentar = row.lohn_kommentar != null ? String(row.lohn_kommentar) : '';
+  }
+  u.day_sum = uebertragDaySum(u);
+  return u;
+}
+
+function addUebertragToSums(sums, uebertrag) {
+  const base = sums || {};
+  const u = uebertrag || emptyUebertrag();
+  const out = {};
+  for (const f of HOUR_FIELDS) out[f] = num(base[f]) + num(u[f]);
+  out.day_sum = num(base.day_sum) + uebertragDaySum(u);
+  return out;
+}
+
 /** Monat Gesamt: Anw+Montage+Ü50+Ü100+Weg − Urlaub + ZA+ − ZA− − Krank − Arzt */
 function gesamtSum(sums) {
   const s = sums || {};
@@ -386,6 +425,9 @@ module.exports = {
   columnSums,
   columnSumsEffective,
   daysForExport,
+  emptyUebertrag,
+  uebertragFromRecord,
+  addUebertragToSums,
   gesamtSum,
   daysInMonth,
   buildMonthDays,

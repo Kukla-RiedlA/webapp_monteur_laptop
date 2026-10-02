@@ -31,6 +31,7 @@
     technicianId: 0,
     technicianName: '',
     days: [],
+    uebertrag: null,
     status: 'draft',
     dirty: false,
   };
@@ -71,7 +72,33 @@
       for (const f of HOUR_FIELDS) s[f] += hourEff(d, f);
       s.day_sum += daySumEff(d);
     }
+    const u = state.uebertrag || {};
+    for (const f of HOUR_FIELDS) s[f] += num(u[f]);
+    s.day_sum += daySum(u);
     return s;
+  }
+
+  function uebertragLabel() {
+    const prev = state.month <= 1 ? 12 : state.month - 1;
+    return 'Übertrag ' + (MONTH_NAMES[prev] || '');
+  }
+
+  function uebertragRowHtml() {
+    const u = state.uebertrag || {};
+    const sumVal = daySum(u);
+    const hours = HOUR_FIELDS.map(function (f) {
+      const sep = (f === 'weg' || f === 'arzt') ? ' zs-sep-after' : '';
+      const v = num(u[f]);
+      return `<td class="zs-col-hour${sep}" data-col="${f}">${v ? escapeHtml(fmt(v)) : ''}</td>`;
+    }).join('');
+    return `<tr class="zs-row-uebertrag" data-uebertrag="1">
+        <td class="zs-uebertrag-label zs-sticky-tag zs-sep-after" colspan="3" data-col="tag">${escapeHtml(uebertragLabel())}</td>
+        ${hours}
+        <td class="zs-sum zs-sep-after" data-col="summe">${escapeHtml(fmt(sumVal))}</td>
+        <td class="zs-col-bemerkung" data-col="bemerkung">${escapeHtml(u.bemerkung || '')}</td>
+        <td class="zs-col-lohn" data-col="lohn_kommentar">${escapeHtml(u.lohn_kommentar || '')}</td>
+        <td class="zs-col-status zs-dash" data-col="status">–</td>
+      </tr>`;
   }
 
   function korrLabel(d, field) {
@@ -342,7 +369,7 @@
           <th class="zs-col-status" data-col="status" title="Sperrstatus">Status</th>
         </tr>
       </thead>
-      <tbody>${body}</tbody>
+      <tbody>${uebertragRowHtml()}${body}</tbody>
       <tfoot><tr>
         <th class="zs-sticky-tag" scope="row">Gesamt</th>
         <th class="zs-sticky-wt" data-sum="gesamt">${escapeHtml(fmtAlways(g))}</th>
@@ -822,6 +849,7 @@
       '&month=' + encodeURIComponent(state.month),
     );
     state.days = data.days || [];
+    state.uebertrag = data.uebertrag || {};
     state.status = data.status || 'draft';
     state.technicianName = data.technician_name || state.technicianName;
     host.innerHTML = renderShell();

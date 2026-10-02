@@ -92,7 +92,26 @@ function buildColgroupHtml() {
   );
 }
 
-function buildTableHtml(days, sums) {
+function uebertragRowHtml(uebertrag, label) {
+  const u = calc.uebertragFromRecord(uebertrag);
+  const hours = calc.HOUR_FIELDS.map((f) => {
+    const sep = f === 'weg' || f === 'arzt' ? ' zs-sep-after' : '';
+    const n = calc.num(u[f]);
+    return '<td class="zs-col-hour' + sep + '">' + (n ? escapeHtml(fmtHours(n)) : '') + '</td>';
+  }).join('');
+  return (
+    '<tr class="zs-row-uebertrag">' +
+    '<td class="zs-uebertrag-label zs-sep-after" colspan="3">' + escapeHtml(label) + '</td>' +
+    hours +
+    '<td class="zs-col-sum zs-sep-after">' + escapeHtml(fmtHours(u.day_sum)) + '</td>' +
+    '<td class="zs-col-bemerkung">' + escapeHtml(u.bemerkung || '') + '</td>' +
+    '<td class="zs-col-lohn">' + escapeHtml(u.lohn_kommentar || '') + '</td>' +
+    '<td class="zs-col-status">–</td>' +
+    '</tr>'
+  );
+}
+
+function buildTableHtml(days, sums, uebertrag, uebertragLabel) {
   const hourHeaders = calc.HOUR_FIELDS.map((f) => {
     const sep = f === 'weg' || f === 'arzt' ? ' zs-sep-after' : '';
     const labels = {
@@ -118,7 +137,7 @@ function buildTableHtml(days, sums) {
     );
   }).join('');
 
-  let body = '';
+  let body = uebertragRowHtml(uebertrag, uebertragLabel || 'Übertrag');
   for (const d of days || []) {
     const locked = !!Number(d.lohn_gesperrt);
     const sumVal = d.day_sum != null ? d.day_sum : calc.daySumEffective(d);
@@ -228,7 +247,10 @@ function buildPrintDocumentHtml(payload) {
   const month = Number(payload.month);
   const name = String(payload.technicianName || '');
   const days = (Array.isArray(payload.days) ? payload.days : []).map(calc.enrichDay);
-  const sums = payload.sums || calc.columnSumsEffective(days);
+  const uebertrag = calc.uebertragFromRecord(payload.uebertrag);
+  const sums = payload.sums || calc.addUebertragToSums(calc.columnSumsEffective(days), uebertrag);
+  const prevMonth = month <= 1 ? 12 : month - 1;
+  const uebertragLabel = 'Übertrag ' + (calc.MONTH_NAMES[prevMonth] || '');
   const monLabel = calc.MONTH_NAMES[month] || String(month);
   const title =
     String(payload.title || '').trim() ||
@@ -245,7 +267,7 @@ function buildPrintDocumentHtml(payload) {
     '<h1>' +
     escapeHtml(title) +
     '</h1>' +
-    buildTableHtml(days, sums) +
+    buildTableHtml(days, sums, uebertrag, uebertragLabel) +
     '</body></html>'
   );
 }

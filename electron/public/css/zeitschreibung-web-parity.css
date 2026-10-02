@@ -28,9 +28,11 @@
 #view-zeitschreibung #zeitschreibung-host {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   width: 100%;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
 }
 
 .page-zeitschreibung.zs-sp-page {
@@ -42,7 +44,9 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  min-height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .zs-sp-col {
@@ -57,13 +61,10 @@
 }
 
 .page-zeitschreibung .zs-sp-topbar {
-  /* Scrollport ist #zeitschreibung-host, nicht das Fenster.
-     top: var(--header-height) schiebt die Überschrift in die Zeitraum-Karte
-     (besonders wenn die Nav umbricht und --header-height > 72px wird). */
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 30;
   margin-bottom: 0;
+  flex: 0 0 auto;
 }
 
 .page-zeitschreibung .zs-meta-line {
@@ -128,15 +129,25 @@
   font-weight: 400;
 }
 
-/* Card wächst mit allen Zeilen; Scroll nur auf der Seite (#zeitschreibung-host) */
+/* Scroll nur im Tabellen-Container (wie Dispo): beide Kopfzeilen sticky im Wrap. */
 .page-zeitschreibung .zs-table-wrap {
-  overflow: visible;
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
   max-width: 100%;
   max-height: none;
   border: 1px solid var(--zs-border);
   border-radius: 8px;
   background: var(--zs-surface);
   position: relative;
+}
+
+.page-zeitschreibung .zs-table-wrap thead {
+  display: table-header-group;
+}
+
+.page-zeitschreibung .zs-table-wrap tbody {
+  display: table-row-group;
 }
 
 .page-zeitschreibung .zs-table {
@@ -166,11 +177,10 @@
   font-weight: 600;
 }
 
-/* Gruppen-Kopf (kein innere Sticky-Scrollport — Card ist voll hoch) */
 .page-zeitschreibung .zs-table thead tr.zs-head-groups th {
-  position: static;
-  top: auto;
-  z-index: auto;
+  position: sticky;
+  top: 0;
+  z-index: 40;
   background: var(--zs-head-group-bg);
   font-size: 10px;
   font-weight: 700;
@@ -180,19 +190,18 @@
   height: var(--zs-head-group-h);
   line-height: 1.2;
   border-bottom: 1px solid var(--zs-border-strong);
-  box-shadow: none;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
 }
 
-/* Spalten-Kopf */
 .page-zeitschreibung .zs-table thead tr.zs-head-cols th {
-  position: static;
-  top: auto;
-  z-index: auto;
+  position: sticky;
+  top: var(--zs-head-group-h);
+  z-index: 39;
   background: var(--zs-head-bg);
   font-size: 11px;
   letter-spacing: -0.02em;
   padding: 4px 3px;
-  box-shadow: none;
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.06);
 }
 
 .page-zeitschreibung .zs-table tfoot th {
@@ -599,4 +608,43 @@ html[data-ui-theme="dark"] .page-zeitschreibung .zs-tech-name {
 
 html[data-ui-theme="dark"] .page-zeitschreibung .zs-table {
   color: var(--text);
+}
+
+.page-zeitschreibung .zs-table tbody tr.zs-row-uebertrag > td {
+  background: var(--zs-head-bg);
+  font-weight: 600;
+}
+
+.page-zeitschreibung .zs-table td.zs-uebertrag-label {
+  width: auto;
+  min-width: calc(var(--zs-sticky-w-tag) + var(--zs-sticky-w-wt) + var(--zs-sticky-w-holiday));
+  max-width: none;
+  text-align: left;
+  padding-left: 6px;
+}
+
+@media print {
+  #view-zeitschreibung #zeitschreibung-host,
+  .page-zeitschreibung.zs-sp-page {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  .page-zeitschreibung .zs-table-wrap {
+    overflow: visible !important;
+    max-height: none !important;
+    flex: none !important;
+  }
+
+  .page-zeitschreibung .zs-table thead tr.zs-head-groups th,
+  .page-zeitschreibung .zs-table thead tr.zs-head-cols th,
+  .page-zeitschreibung .zs-table .zs-sticky-tag,
+  .page-zeitschreibung .zs-table .zs-sticky-wt,
+  .page-zeitschreibung .zs-table .zs-sticky-holiday {
+    position: static !important;
+    top: auto !important;
+    left: auto !important;
+    box-shadow: none !important;
+  }
 }
