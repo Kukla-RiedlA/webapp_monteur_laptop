@@ -456,9 +456,19 @@
 
 .page-zeitschreibung .zs-overview-head {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.5rem 0.75rem;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.page-zeitschreibung .zs-overview-head > #zsOverviewTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .page-zeitschreibung .zs-overview-actions {
