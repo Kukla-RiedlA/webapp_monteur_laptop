@@ -224,76 +224,215 @@ function parseMotorListText(text) {
   return out;
 }
 
-function afterLabel(text, label) {
-  const pat = new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s+([^\\r\\n]+)', 'iu');
-  const all = [];
-  let m;
-  const re = new RegExp(pat.source, 'giu');
-  while ((m = re.exec(text))) {
-    const v = String(m[1] || '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!v || v === '-' || v === '—' || v === '____' || v.toLowerCase() === 'n') continue;
-    all.push(v);
-  }
-  return all;
+/** Längere Bezeichnungen zuerst, damit „Rated speed“ nicht „Rated speed Gear“ schluckt. */
+const SHEET_LABELS = [
+  ['fu_max_speed', ['max. Speed', 'max. Drehzahl', 'Velocidad máxima', 'Velocidad maxima']],
+  ['fu_max_frequency', ['max. Frequency', 'max. Frequenz', 'Frecuencia máxima', 'Frecuencia maxima']],
+  ['fu_nennstrom_pair', ['Rated current / Adjusted', 'Nennstrom / Einstellung', 'Corriente nominal / Ajuste']],
+  ['leerlaufstrom_50hz', ['No load current at 50 Hz', 'Leerlaufstrom bei 50 Hz', 'Leerlauflauf bei 50 Hz', 'Corriente sin carga en 50 Hz']],
+  ['getriebedrehzahl', ['Rated speed Gear', 'Nenndrehzahl Getriebe', 'Velocidad nominal de la caja de engranajes']],
+  ['nenndrehzahl', ['Rated speed', 'Nenndrehzahl Motor', 'Nenndrehzahl', 'Velocidad nominal del motor', 'Velocidad nominal']],
+  ['nennstrom', ['Rated current', 'Nennstrom', 'Corriente nominal']],
+  ['leistungsfaktor', ['Factor of effective power', 'Wirkleistungsfaktor', 'Factor de potencia activa', 'Factor de potencia efectiva']],
+  ['nennleistung_kw', ['Rated output', 'Nennleistung', 'Potencia nominal']],
+  ['nennspannung', ['Rated voltage', 'Nennspannung', 'Voltaje nominal', 'Tensión nominal', 'Tension nominal']],
+  ['nennfrequenz', ['Rated frequency', 'Nennfrequenz', 'Frecuencia nominal']],
+  ['getriebeuebersetzung', ['Leverage Gear', 'Übersetzung Getriebe', 'Uebersetzung Getriebe', 'Relación de transmisión', 'Relacion de transmision']],
+  ['bauform', ['Type of construction', 'Bauform', 'Diseño', 'Diseno', 'Tipo de construcción', 'Tipo de construccion']],
+  ['schutzart', ['Type of protection', 'Schutzart', 'Grado de protección', 'Grado de proteccion', 'Protección', 'Proteccion']],
+  ['isolationsklasse', ['Insulation classes', 'Insulation class', 'Isolationsklasse', 'Clase de aislamiento']],
+  ['schaltung', ['Connection', 'Schaltung', 'Circuito']],
+  ['anlaufart', ['Starting', 'Anlauf', 'Arranque', 'Arrancar']],
+  ['seriennummer', ['Serial Number', 'Serial - No.', 'Serial-No.', 'Seriennummer', 'Fabrikationsnummer', 'Número de fabricación', 'Numero de fabricacion']],
+  ['auxiliary', ['Auxiliary drive', 'Zusatzantrieb', 'Hilfsantrieb', 'Accionamiento auxiliar']],
+  ['application', ['Application', 'Verwendung', 'Anwendung', 'Aplicación', 'Aplicacion']],
+  ['positionsnummer', ['Position', 'Posición', 'Posicion']],
+  ['type', ['Type', 'Typ', 'Tipo']],
+  ['hersteller', ['Manufacturer', 'Hersteller', 'Fabricante']],
+].flatMap(([field, labels]) => labels.map((lab) => ({ field, lab: lab.toLowerCase() })));
+
+SHEET_LABELS.sort((a, b) => b.lab.length - a.lab.length);
+
+const SHEET_FU_FIELDS = new Set(['fu_max_speed', 'fu_max_frequency', 'fu_nennstrom_pair']);
+const SHEET_MOTOR_FIELDS = new Set([
+  'anlaufart',
+  'leerlaufstrom_50hz',
+  'schutzart',
+  'isolationsklasse',
+  'schaltung',
+  'bauform',
+  'nennspannung',
+  'nennfrequenz',
+  'getriebeuebersetzung',
+  'getriebedrehzahl',
+  'nennstrom',
+  'nenndrehzahl',
+  'leistungsfaktor',
+  'nennleistung_kw',
+  'seriennummer',
+  'positionsnummer',
+  'application',
+  'auxiliary',
+]);
+
+function isSkippableSheetLine(ln) {
+  const t = String(ln || '').trim();
+  if (!t) return true;
+  if (isUnitLine(t)) return true;
+  return !/[0-9A-Za-zÄÖÜäöüßÁÉÍÓÚáéíóúñÑ]/.test(t);
 }
 
-function parseDataSheetPage(page) {
+function matchSheetLabel(line) {
+  const norm = String(line || '').trim();
+  const low = norm.toLowerCase();
+  for (const a of SHEET_LABELS) {
+    if (low === a.lab || low === a.lab + ':') return { field: a.field, value: '' };
+    if (!low.startsWith(a.lab)) continue;
+    const rest = norm.slice(a.lab.length).replace(/^[\s:]+/, '');
+    return { field: a.field, value: rest };
+  }
+  return null;
+}
+
+function cleanSheetValue(raw) {
+  let s = String(raw || '')
+    .replace(/[✓✔]/g, '')
+    .replace(/\uF0FC/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s || isPlaceholder(s)) return '';
+  s = s.replace(/^(?:kW|KW|Hz|cos\s*φ|cos\s*phi|cos\s*f)\s*/iu, '');
+  s = s.replace(/^min⁻1(?=\d)/u, '');
+  s = s.replace(/^min-1(?=\d)/, '');
+  s = s.replace(/^A(?=\d)/, '');
+  s = s.replace(/^V(?=\d)/, '');
+  s = s.replace(/^~\s*/, '');
+  s = s.trim();
+  if (!s || isPlaceholder(s)) return '';
+  if (/^(?:calculated|berechnet|calculado)\s*FATSAT$/i.test(s)) return '';
+  if (/^of\s/i.test(s)) return '';
+  if (/\b(of\s+scale|capacity|construction|protection)\b/i.test(s) && !/\d/.test(s)) return '';
+  if (/^,\d/.test(s)) s = '0' + s;
+  return s;
+}
+
+function assignSheetType(row, val, section) {
+  if (!val) return;
+  const fu = /sinamics|\bg120\b|micromaster/i.test(val);
+  const motor = /^(?:K[A-Z]?\d|DRN|DRS|DRE)/i.test(val) || /DRN|DRS|DRE/.test(val);
+  if (fu || (section === 'fu' && !motor)) {
+    if (!row.fu_type) row.fu_type = val;
+    return;
+  }
+  if (!row.type) row.type = val;
+}
+
+function assignSheetHersteller(row, val, section) {
+  if (!val) return;
+  const asFu = section === 'fu' || /siemens/i.test(val);
+  if (asFu && !row.fu_hersteller) {
+    row.fu_hersteller = val;
+    return;
+  }
+  if (!row.hersteller) row.hersteller = val;
+  else if (!row.fu_hersteller) row.fu_hersteller = val;
+}
+
+function parseDataSheetChunk(page) {
+  const lines = nonemptyLines(page).filter((ln) => !isSkippableSheetLine(ln));
   const row = emptyMotorRow();
-  let aux = (afterLabel(page, 'Auxiliary drive')[0] || afterLabel(page, 'Hilfsantrieb')[0] || '').trim();
-  let app = (afterLabel(page, 'Application')[0] || afterLabel(page, 'Anwendung')[0] || '').trim();
-  let xd = '';
-  const xm = (aux + ' ' + page).match(/\bXD\s*([1-7])\b/i);
-  if (xm) xd = 'XD' + xm[1];
-  let bez = app;
-  if (xd) bez = xd + (bez ? ' ' + bez : '');
-  row.bezeichnung = clamp(bez);
-  row.positionsnummer = clamp(afterLabel(page, 'Position')[0] || '');
-  const man = afterLabel(page, 'Manufacturer');
-  man.sort((a, b) => b.length - a.length);
-  row.hersteller = clamp(man[0] || '');
-  let type = '';
-  for (const cand of afterLabel(page, 'Type')) {
-    if (/\b(of\s+scale|capacity|fabr|construction|protection)\b/i.test(cand)) continue;
-    if (/^of\s/i.test(cand)) continue;
-    const t = cleanValue(cand);
-    if (t) {
-      type = t;
-      break;
+  let section = 'sheet';
+  let application = '';
+  let auxiliary = '';
+  for (let i = 0; i < lines.length; i++) {
+    const hit = matchSheetLabel(lines[i]);
+    if (!hit) continue;
+    let raw = hit.value;
+    if (!raw) {
+      for (let j = i + 1; j < lines.length && j < i + 5; j++) {
+        if (isSkippableSheetLine(lines[j])) continue;
+        if (matchSheetLabel(lines[j])) break;
+        raw = lines[j];
+        break;
+      }
+    }
+    const val = cleanSheetValue(raw);
+    if (SHEET_FU_FIELDS.has(hit.field)) section = 'fu';
+    if (SHEET_MOTOR_FIELDS.has(hit.field)) section = 'motor';
+    if (!val) continue;
+    if (hit.field === 'seriennummer' && /^\d{1,6}$/.test(val)) continue;
+    if (hit.field === 'type') {
+      assignSheetType(row, val, section);
+      continue;
+    }
+    if (hit.field === 'hersteller') {
+      assignSheetHersteller(row, val, section);
+      continue;
+    }
+    if (hit.field === 'fu_nennstrom_pair') {
+      const pair = splitSlashPair(val);
+      if (!row.fu_nennstrom) row.fu_nennstrom = pair[0];
+      if (!row.fu_nennstrom_eingestellt) row.fu_nennstrom_eingestellt = pair[1];
+      continue;
+    }
+    if (hit.field === 'application') {
+      if (!application) application = val;
+      continue;
+    }
+    if (hit.field === 'auxiliary') {
+      if (!auxiliary) auxiliary = val;
+      continue;
+    }
+    if (!row[hit.field]) row[hit.field] = val;
+  }
+  const xd = (auxiliary.match(/\bXD\s*([1-7])\b/i) || [])[0] || '';
+  const xdNorm = xd ? xd.replace(/\s+/g, '').toUpperCase() : '';
+  let bez = application;
+  if (xdNorm) bez = xdNorm + (bez ? ' ' + bez : '');
+  row.bezeichnung = bez;
+  if (!row.anlaufart) {
+    for (const ln of lines) {
+      if (/^(Frequency converter|Frequenzumrichter|Convertidor de frecuencia)$/i.test(String(ln || '').trim())) {
+        row.anlaufart = String(ln).trim();
+        break;
+      }
     }
   }
-  if (!type) {
-    const tm = page.match(/\b(K[A-Z]\d{2}\S*)/u);
-    if (tm) type = tm[1];
-  }
-  row.type = clamp(type);
-  row.seriennummer = clamp(afterLabel(page, 'Serial Number')[0] || afterLabel(page, 'Seriennummer')[0] || '');
-  row.nennleistung_kw = clamp(cleanValue(afterLabel(page, 'Rated output')[0] || ''));
-  row.leistungsfaktor = clamp(cleanValue(afterLabel(page, 'Factor of effective power')[0] || ''));
-  for (const cand of afterLabel(page, 'Rated speed')) {
-    if (/^\s*Gear\b/i.test(cand)) continue;
-    row.nenndrehzahl = clamp(cleanValue(cand));
-    break;
-  }
-  let nennstromRaw = '';
-  for (const cand of afterLabel(page, 'Rated current')) {
-    if (/Adjusted/i.test(cand)) continue;
-    nennstromRaw = cand;
-    break;
-  }
-  row.nennstrom = clamp(cleanValue(nennstromRaw));
-  row.getriebeuebersetzung = clamp(afterLabel(page, 'Leverage Gear')[0] || '');
-  row.getriebedrehzahl = clamp(cleanValue(afterLabel(page, 'Rated speed Gear')[0] || ''));
-  row.nennspannung = clamp(cleanValue(afterLabel(page, 'Rated voltage')[0] || ''));
-  row.nennfrequenz = clamp(cleanValue(afterLabel(page, 'Rated frequency')[0] || ''));
-  row.bauform = clamp(afterLabel(page, 'Type of construction')[0] || '');
-  row.schaltung = clamp(afterLabel(page, 'Connection')[0] || '');
-  row.isolationsklasse = clamp(afterLabel(page, 'Insulation class')[0] || '');
-  row.schutzart = clamp(afterLabel(page, 'Type of protection')[0] || '');
-  row.leerlaufstrom_50hz = clamp(cleanValue(afterLabel(page, 'No load current at 50 Hz')[0] || ''));
-  row.anlaufart = clamp(afterLabel(page, 'Starting')[0] || '');
   return normalizeOne(row);
+}
+
+function isDataSheetChunk(chunk) {
+  return /Motor data|Motordaten|Datos de motor|Auxiliary drive|Zusatzantrieb|Hilfsantrieb|Accionamiento auxiliar|Rated output|Nennleistung|Potencia nominal/i.test(
+    String(chunk || ''),
+  );
+}
+
+function splitDataSheetChunks(text) {
+  const raw = String(text || '').replace(/\r\n/g, '\n');
+  const pages = raw.split(/\f/).map((s) => s.trim()).filter(Boolean);
+  const startRe = /(?=^(?:max\. Speed|max\. Drehzahl|Velocidad máxima|Velocidad maxima))/im;
+  const out = [];
+  for (const page of pages.length ? pages : [raw]) {
+    const bits = page.split(startRe).map((s) => s.trim()).filter(Boolean);
+    if (bits.length > 1) out.push(...bits);
+    else if (page) out.push(page);
+  }
+  return out;
+}
+
+function parseDataSheetText(text) {
+  const out = [];
+  const seen = new Set();
+  for (const chunk of splitDataSheetChunks(text)) {
+    if (!isDataSheetChunk(chunk)) continue;
+    const row = parseDataSheetChunk(chunk);
+    if (!row) continue;
+    const key = [row.positionsnummer, row.seriennummer, row.type].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
 }
 
 function parseMlPdfText(text) {
@@ -302,16 +441,17 @@ function parseMlPdfText(text) {
     const list = parseMotorListText(raw);
     if (list.length) return list;
   }
-  const chunks = raw.replace(/\r\n/g, '\n').split(/\f|(?=Motor data sheet)/i);
-  const out = [];
-  for (const chunk of chunks) {
-    const c = String(chunk || '').trim();
-    if (!c) continue;
-    if (!/Motor data|Auxiliary drive|Hilfsantrieb/i.test(c)) continue;
-    const row = parseDataSheetPage(c);
-    if (row) out.push(row);
-  }
-  return out;
+  return parseDataSheetText(raw);
+}
+
+/** 0 Deutsch, 1 Englisch, 2 sonstige, 3 Spanisch (Fallback). */
+function mlPdfLangRank(relPath) {
+  const r = String(relPath || '').replace(/\\/g, '/').toLowerCase();
+  const base = r.split('/').pop() || '';
+  if (/(^|\/)(deutsch|german)(\/|$)/.test(r) || /_de\./.test(base)) return 0;
+  if (/(^|\/)(englisch|english)(\/|$)/.test(r) || /_en\./.test(base)) return 1;
+  if (/(^|\/)(spanisch|spanish|espa)/.test(r) || /_sp\./.test(base)) return 3;
+  return 2;
 }
 
 function loadPdfParse() {
@@ -362,4 +502,5 @@ module.exports = {
   extractPdfText,
   isMlPdfCandidate,
   isMotorListLayout,
+  mlPdfLangRank,
 };

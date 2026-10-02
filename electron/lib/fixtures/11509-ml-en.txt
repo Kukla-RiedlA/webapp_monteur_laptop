@@ -1,0 +1,95 @@
+
+
+max. Speedmin-12500
+
+max. FrequencyHz86,21
+
+Rated current / AdjustedA5,9 / 4,4
+
+TypeSinamics G120
+
+ManufacturerSiemens
+
+Frequency converter
+calculatedFATSAT
+Load currentA
+Accessories
+StartingFrequenzy converter
+No load current at 50 HzA2,48
+Type of protectionIP55
+Insulation class155 (F)
+ConnectionY / ∆Y
+Type of constructionM1A / 180 (L) / n
+Rated voltageV254 / 440
+Rated frequencyHz60
+Leverage Gear1:90,04
+Rated speed Gearmin-120
+Rated currentA7,60 / 4,40
+Rated speedmin-11762
+Factor of effective powercos φ0,73
+Rated outputkW2,2
+TypeKA67 DRN100LM4/TF/EI7C
+Serial Number50.8178929001.0001.22
+Auxiliary driveXD1
+Motor data
+ManufacturerSEW Eurodrive
+Assignment
+ApplicationDrive weighing belt
+Position+110-160-M01
+Motor data sheet
+Customer:
+Grenzebach BSH, Bad HersfeldDWC- 7B/D-PN1
+Weigh feederE-DBW-H-I-6502,50 - 20,0 t / h
+Pos.No.: +110-160
+Project:
+Pachacutec-1 / PeruDevice No.: 976
+Type of ScaleTypeCapacity
+Fabr.No.: 11509
+Date: 10.02.20231/2Inspector: Huber M.
+
+max. Speedmin-12500
+
+max. FrequencyHz86,21
+
+Rated current / AdjustedA5,9 / 4,4
+
+TypeSinamics G120
+
+ManufacturerSiemens
+
+Frequency converter
+calculatedFATSAT
+Load currentA
+Accessories
+StartingFrequenzy converter
+No load current at 50 HzA2,39
+Type of protectionIP55
+Insulation class155 (F)
+ConnectionY / ∆Y
+Type of constructionM1B / 0 (R) / n
+Rated voltageV254 / 440
+Rated frequencyHz60
+Leverage Gear1:97,05
+Rated speed Gearmin-118
+Rated currentA7,60 / 4,40
+Rated speedmin-11762
+Factor of effective powercos φ0,73
+Rated outputkW2,2
+TypeK77 DRN100LM4/TF
+Serial Number50.8178929002.0001.22
+Auxiliary driveXD2
+Motor data
+ManufacturerSEW Eurodrive
+Assignment
+ApplicationDrive rotary vane feeder
+Position+110-160-M02
+Weigh feederE-DBW-H-I-6502,50 - 20,0 t / h
+Pos.No.: +110-160
+Project:
+Pachacutec-1 / PeruDevice No.: 976
+Type of ScaleTypeCapacity
+Fabr.No.: 11509
+Motor data sheet
+Customer:
+Grenzebach BSH, Bad HersfeldDWC- 7B/D-PN1
+Date: 10.02.20232/2Inspector: Huber M.

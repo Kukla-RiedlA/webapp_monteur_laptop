@@ -15,7 +15,7 @@ const {
 } = require('./anlagenstamm-documents-local');
 const fs = require('fs');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
-const { parseMlPdfBuffer } = require('./anlagenstamm-ml-pdf');
+const { parseMlPdfBuffer, isMlPdfCandidate, mlPdfLangRank } = require('./anlagenstamm-ml-pdf');
 const { readParameterSourceText, decodeParameterFileBytes, normalizeFabDigits } = require('./anlagenstamm-local');
 
 function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
@@ -115,6 +115,27 @@ async function fetchDispoApiMlPdfPrefill(ctx, technicianId, fab, pathRel, debug,
   } catch (_) {
     return null;
   }
+}
+
+function collectMlPdfRels(nodes, acc) {
+  for (const n of nodes || []) {
+    if (!n || typeof n !== 'object') continue;
+    const rel = String(n.rel || '').trim();
+    const name = String(n.name || (rel ? rel.split('/').pop() : '') || '');
+    if (rel && isMlPdfCandidate(name, rel)) acc.push(rel);
+    if (Array.isArray(n.children)) collectMlPdfRels(n.children, acc);
+  }
+}
+
+function sortMlPdfRels(rels, fab) {
+  const fd = String(fab || '').replace(/\D/g, '');
+  return [...new Set(rels.filter(Boolean))].sort((a, b) => {
+    const lang = mlPdfLangRank(a) - mlPdfLangRank(b);
+    if (lang) return lang;
+    const af = fd && String(a).includes(fd) ? 0 : 1;
+    const bf = fd && String(b).includes(fd) ? 0 : 1;
+    return af - bf;
+  });
 }
 
 async function parseLocalMlPdfPath(filePath) {
@@ -497,25 +518,38 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       return res.json(Object.assign({ source: 'dispo_api' }, apiData));
     }
 
-    let downloadPath = pathRel || String((apiData && apiData.file) || '').trim();
-    if (downloadPath) {
-      const buf = await downloadMlPdfViaSession(ctx, technicianId, fab, downloadPath);
-      if (buf) {
+    const explicitPath = pathRel !== '';
+    let mlRels = [];
+    if (explicitPath) {
+      mlRels = [pathRel];
+    } else {
+      const list = await fetchDispoApiFilesList(ctx, technicianId, fab);
+      const tree =
+        list && list.projekte_neu && Array.isArray(list.projekte_neu.tree) ? list.projekte_neu.tree : [];
+      collectMlPdfRels(tree, mlRels);
+      if (apiData && apiData.file) mlRels.push(String(apiData.file));
+      mlRels = sortMlPdfRels(mlRels, fab).slice(0, 4);
+    }
+    let downloadPath = mlRels[0] || pathRel || String((apiData && apiData.file) || '').trim();
+    for (const rel of mlRels) {
+      let parsed = null;
+      if (typeof ctx.resolveProjekteNeuLocalFile === 'function') {
         try {
-          const parsed = await parseMlPdfBuffer(buf);
-          const hit = await parsedOk(parsed, downloadPath, 'dispo_file');
-          if (hit) return res.json(hit);
-          if (parsed && parsed.ok) {
-            return res.json({
-              ok: true,
-              motors: [],
-              file: downloadPath,
-              note: parsed.note || 'PDF gelesen, aber keine Antriebe zugeordnet.',
-              source: 'dispo_file',
-            });
-          }
+          const localPath = ctx.resolveProjekteNeuLocalFile(technicianId, fab, rel, jobId);
+          if (localPath) parsed = await parseLocalMlPdfPath(localPath);
         } catch (_) {}
       }
+      if (!parsed) {
+        const buf = await downloadMlPdfViaSession(ctx, technicianId, fab, rel);
+        if (buf) {
+          try {
+            parsed = await parseMlPdfBuffer(buf);
+          } catch (_) {}
+        }
+      }
+      const hit = parsed ? await parsedOk(parsed, rel, 'dispo_file') : null;
+      if (hit) return res.json(hit);
+      downloadPath = rel;
     }
 
     if (apiData && typeof apiData === 'object' && (apiData.ok === true || apiData.ok === false)) {

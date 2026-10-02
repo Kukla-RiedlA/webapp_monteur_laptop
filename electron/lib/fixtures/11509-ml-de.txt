@@ -1,0 +1,95 @@
+
+
+max. Drehzahlmin-12500
+
+max. FrequenzHz86,21
+
+Nennstrom / EinstellungA5,9 / 4,4
+
+TypeSinamics G120
+
+HerstellerSiemens
+
+Frequenzumrichter
+berechnetFATSAT
+LaststromA
+Zubehörteile
+AnlaufFrequenzumrichter
+Leerlauflauf bei 50 HzA2,48
+SchutzartIP55
+Isolationsklasse155 (F)
+SchaltungY / ∆Y
+BauformM1A / 180 (L) / n
+NennspannungV254 / 440
+NennfrequenzHz60
+Übersetzung Getriebe1:90,04
+Nenndrehzahl Getriebemin-120
+NennstromA7,60 / 4,40
+Nenndrehzahl Motormin-11762
+Wirkleistungsfaktorcos φ0,73
+NennleistungkW2,2
+TypeKA67 DRN100LM4/TF/EI7C
+Fabrikationsnummer50.8178929001.0001.22
+ZusatzantriebXD1
+Motordaten
+HerstellerSEW Eurodrive
+Zuordnung
+VerwendungAntrieb Wiegeband
+Position+110-160-M01
+Motordatenblatt
+Kunde:
+Grenzebach BSH, Bad HersfeldDWC- 7B/D-PN1
+DosierbandwaageE-DBW-H-I-6502,50 - 20,0 t / h
+Pos.Nr.: +110-160
+Projekt:
+Pachacutec-1 / PeruGN.: 976
+WaagenartTypeLeistung
+FN.: 11509
+Datum: 10.02.20231/2Prüfer: Huber M.
+
+max. Drehzahlmin-12500
+
+max. FrequenzHz86,21
+
+Nennstrom / EinstellungA5,9 / 4,4
+
+TypeSinamics G120
+
+HerstellerSiemens
+
+Frequenzumrichter
+berechnetFATSAT
+LaststromA
+Zubehörteile
+AnlaufFrequenzumrichter
+Leerlaufstrom bei 50 HzA2,39
+SchutzartIP55
+Isolationsklasse155 (F)
+SchaltungY / ∆Y
+BauformM1B / 0 (R) / n
+NennspannungV254 / 440
+NennfrequenzHz60
+Übersetzung Getriebe1:97,05
+Nenndrehzahl Getriebemin-118
+NennstromA7,60 / 4,40
+Nenndrehzahl Motormin-11762
+Wirkleistungsfaktorcos φ0,73
+NennleistungkW2,2
+TypeK77 DRN100LM4/TF
+Fabrikationsnummer50.8178929002.0001.22
+ZusatzantriebXD2
+Motordaten
+HerstellerSEW Eurodrive
+Zuordnung
+VerwendungAntrieb Zellenradschleuse
+Position+110-160-M02
+DosierbandwaageE-DBW-H-I-6502,50 - 20,0 t / h
+Pos.Nr.: +110-160
+Projekt:
+Pachacutec-1 / PeruGN.: 976
+WaagenartTypeLeistung
+FN.: 11509
+Motordatenblatt
+Kunde:
+Grenzebach BSH, Bad HersfeldDWC- 7B/D-PN1
+Datum: 10.02.20232/2Prüfer: Huber M.

@@ -1,0 +1,161 @@
+
+
+Velocidad máxima
+min-12500
+
+Frecuencia máxima
+Hz86,21
+
+Corriente nominal / Ajuste
+A5,9 / 4,4
+
+Tipo
+Sinamics G120
+
+Fabricante
+Siemens
+
+Convertidor de frecuencia
+calculadoFATSAT
+Corriente de carga
+A
+Accesorios
+Arrancar
+Corriente sin carga en 50 Hz
+A2,48
+Protección
+IP55
+Clase de aislamiento
+155 (F)
+Circuito
+Y / ∆Y
+Diseño
+M1A / 180 (L) / n
+Voltaje nominal
+V254 / 440
+Frecuencia nominal
+Hz60
+Relación de transmisión
+1:90,04
+Velocidad nominal de la caja de engranajes
+min-120
+Corriente nominal
+A7,60 / 4,40
+Velocidad nominal del motor
+min-11762
+Factor de potencia activa
+cos φ0,73
+Potencia nominal
+kW2,2
+Tipo
+KA67 DRN100LM4/TF/EI7C
+Número de fabricación:
+50.8178929001.0001.22
+Accionamiento auxiliar
+XD1
+Datos de motor
+Fabricante
+SEW Eurodrive
+Asignación
+Aplicación
+Posición
++110-160-M01
+Ficha técnica motor
+Cliente:
+Grenzebach BSH, Bad Hersfeld
+DWC-
+7B/D-PN1
+E-DBW-H-I-6502,50 - 20,0 t / h
+Número de
+posición:
++110-160
+Proyecto:
+Pachacutec-1 / Peru
+Número de
+aparato:
+976
+BásculaTipo    Capacidad nominal
+Número de
+fabricación:
+11509
+Fecha: 10.02.20231/2Inspector: Huber M.
+
+Velocidad máxima
+min-12500
+
+Frecuencia máxima
+Hz86,21
+
+Corriente nominal / Ajuste
+A5,9 / 4,4
+
+Tipo
+Sinamics G120
+
+Fabricante
+Siemens
+
+Convertidor de frecuencia
+calculadoFATSAT
+Corriente de carga
+A
+Accesorios
+Arrancar
+Corriente sin carga en 50 Hz
+A2,39
+Protección
+IP55
+Clase de aislamiento
+155 (F)
+Circuito
+Y / ∆Y
+Diseño
+M1B / 0 (R) / n
+Voltaje nominal
+V254 / 440
+Frecuencia nominal
+Hz60
+Relación de transmisión
+1:97,05
+Velocidad nominal de la caja de engranajes
+min-118
+Corriente nominal
+A7,60 / 4,40
+Velocidad nominal del motor
+min-11762
+Factor de potencia activa
+cos φ0,73
+Potencia nominal
+kW2,2
+Tipo
+K77 DRN100LM4/TF
+Número de fabricación:
+50.8178929002.0001.22
+Accionamiento auxiliar
+XD2
+Datos de motor
+Fabricante
+SEW Eurodrive
+Asignación
+Aplicación
+Posición
++110-160-M02
+2,50 - 20,0 t / h
+Número de
+posición:
++110-160
+Proyecto:
+Pachacutec-1 / Peru
+Número de
+aparato:
+976
+BásculaTipo    Capacidad nominal
+Número de
+fabricación:
+11509
+Ficha técnica motor
+Cliente:
+Grenzebach BSH, Bad Hersfeld
+DWC-
+7B/D-PN1
+Fecha: 10.02.20232/2Inspector: Huber M.
