@@ -266,13 +266,29 @@ function getTechnicianName(db, technicianId) {
   return 'Monteur';
 }
 
+function previousPeriod(year, month) {
+  const y = Number(year);
+  const m = Number(month);
+  if (m <= 1) return { year: y - 1, month: 12 };
+  return { year: y, month: m - 1 };
+}
+
+function loadUebertragEingang(db, technicianId, year, month) {
+  const prev = previousPeriod(year, month);
+  const head = db
+    .prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+    .get(technicianId, prev.year, prev.month);
+  return calc.uebertragFromRecord(head);
+}
+
 function loadTimesheet(db, technicianId, year, month) {
   const head = db
     .prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
     .get(technicianId, year, month);
   if (!head) {
     const days = calc.buildMonthDays(year, month);
-    const sums = calc.columnSums(days);
+    const uebertrag = loadUebertragEingang(db, technicianId, year, month);
+    const sums = calc.addUebertragToSums(calc.columnSums(days), uebertrag);
     return {
       id: null,
       technician_id: technicianId,
@@ -282,7 +298,7 @@ function loadTimesheet(db, technicianId, year, month) {
       days,
       sums,
       gesamt: calc.gesamtSum(sums),
-      uebertrag: calc.emptyUebertrag(),
+      uebertrag,
       pdf_path: null,
       xlsx_path: null,
       server_id: null,
@@ -317,7 +333,7 @@ function loadTimesheet(db, technicianId, year, month) {
     days,
     sums,
     gesamt: head.gesamt,
-    uebertrag: calc.uebertragFromRecord(head),
+    uebertrag: loadUebertragEingang(db, technicianId, year, month),
     pdf_path: head.pdf_path,
     xlsx_path: head.xlsx_path,
     server_id: head.server_id,
@@ -411,7 +427,7 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
   const daySums = calc.columnSumsEffective
     ? calc.columnSumsEffective(days)
     : calc.columnSums(days);
-  const sums = calc.addUebertragToSums(daySums, calc.uebertragFromRecord(existing));
+  const sums = calc.addUebertragToSums(daySums, loadUebertragEingang(db, technicianId, year, month));
   const gesamt = calc.gesamtSum(sums);
 
   // Nach Freigabe nicht durch erneutes Speichern auf draft zurücksetzen.
@@ -544,10 +560,7 @@ async function writeExportFiles(dbDir, db, writeFileWithRetry, technicianId, yea
   const pdfPath = path.join(dir, `${stem}.pdf`);
   const xlsxPath = path.join(dir, `${stem}.xlsx`);
   const exportDays = calc.daysForExport(days);
-  const head = db
-    .prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
-    .get(technicianId, year, month);
-  const uebertrag = calc.uebertragFromRecord(head);
+  const uebertrag = loadUebertragEingang(db, technicianId, year, month);
   const exportSums = calc.addUebertragToSums(calc.columnSumsEffective(days), uebertrag);
   const exportGesamt = calc.gesamtSum(exportSums);
   const monLabel = calc.MONTH_NAMES[month] || String(month);
@@ -830,10 +843,25 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     }
   }
 
-  const serverUebertrag = data.timesheet && data.timesheet.uebertrag ? data.timesheet.uebertrag : null;
-  if (serverUebertrag && !uebertragSame(local.uebertrag, serverUebertrag)) {
-    storeUebertrag(db, technicianId, year, month, serverUebertrag);
+  const ts = data.timesheet || {};
+  const outgoing = ts.uebertrag_naechster_monat || null;
+  const incoming = ts.uebertrag || null;
+  const currentHead = db
+    .prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+    .get(technicianId, year, month);
+  if (outgoing && !uebertragSame(calc.uebertragFromRecord(currentHead), outgoing)) {
+    storeUebertrag(db, technicianId, year, month, outgoing);
     changed = true;
+  }
+  if (incoming) {
+    const prev = previousPeriod(year, month);
+    const prevHead = db
+      .prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
+      .get(technicianId, prev.year, prev.month);
+    if (!uebertragSame(calc.uebertragFromRecord(prevHead), incoming)) {
+      storeUebertrag(db, technicianId, prev.year, prev.month, incoming);
+      changed = true;
+    }
   }
 
   if (changed) {
@@ -1013,11 +1041,10 @@ function registerZeitschreibungRoutes(app, ctx) {
       for (const d of days) {
         if (d.day_sum == null) d.day_sum = calc.daySumEffective(d);
       }
-      const dbHead = body.technician_id
-        ? getDb().prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
-          .get(parseInt(String(body.technician_id), 10), year, month)
-        : null;
-      const uebertrag = calc.uebertragFromRecord(dbHead || body.uebertrag || null);
+      const techId = body.technician_id ? parseInt(String(body.technician_id), 10) : 0;
+      const uebertrag = techId
+        ? loadUebertragEingang(getDb(), techId, year, month)
+        : calc.uebertragFromRecord(body.uebertrag || null);
       const sums = calc.addUebertragToSums(calc.columnSumsEffective(days), uebertrag);
       const monLabel = calc.MONTH_NAMES[month] || String(month);
       const title =
