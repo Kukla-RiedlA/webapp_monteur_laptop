@@ -514,6 +514,8 @@
         p.setAttribute('hidden', '');
       }
     });
+    var allCard = document.getElementById('auftraegeAllCard');
+    if (allCard) allCard.hidden = tab !== 'list';
     if (tab === 'list' && typeof window.loadDienstreiseList === 'function') {
       window.loadDienstreiseList();
     }

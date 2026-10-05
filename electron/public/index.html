@@ -1000,6 +1000,8 @@
     .toolbar-dropdown-item { display: block; width: 100%; padding: 0.5rem 1rem; text-align: left; border: none; background: transparent; color: var(--text); font-size: 0.95rem; cursor: pointer; }
     .toolbar-dropdown-item:hover { background: var(--accent); }
     .dienstreise-list-wrap { margin-bottom: 1rem; }
+    .auftraege-all-card { margin-top: 0; }
+    .auftraege-all-hint { margin: 0 0 0.5rem; font-size: 0.85rem; }
     .dienstreise-list-wrap .job { cursor: pointer; }
     .dienstreise-list-wrap .job.selected { background: var(--accent); }
     .dienstreise-list-wrap .job:hover:not(.selected) { background: rgba(255,255,255,0.05); }
@@ -1202,6 +1204,64 @@
     .anlagenstamm-pn-parent-heading { font-weight: 600; font-size: 0.88rem; color: var(--text, #222); margin: 0.5rem 0 0.35rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--accent, #ccc); }
     .anlagenstamm-pn-tree-block > .anlagenstamm-pn-parent-heading:first-child { margin-top: 0; }
     .view-projektdaten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    html.is-job-window,
+    html.is-job-window body {
+      height: 100%;
+      max-height: 100%;
+      overflow: hidden;
+    }
+    html.is-job-window body {
+      display: flex;
+      flex-direction: column;
+    }
+    html.is-job-window .app-header,
+    html.is-job-window #multiDeviceBanner,
+    html.is-job-window #viewStart,
+    html.is-job-window #viewDienstreise,
+    html.is-job-window #auftraegeAllCard { display: none !important; }
+    html.is-job-window #viewProjektdaten {
+      display: block;
+      flex: 1 1 auto;
+      min-height: 0;
+      min-width: 0;
+      height: auto;
+      max-height: none;
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 0.75rem 1rem 2rem;
+    }
+    html.is-job-window #viewProjektdaten > .card {
+      min-width: 0;
+      max-width: 100%;
+    }
+    html.is-job-window .projektdaten-leistung-split {
+      grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+      min-width: 0;
+    }
+    html.is-job-window .projektdaten-leistung-split-main,
+    html.is-job-window .projektdaten-leistung-split-side {
+      min-width: 0;
+      max-width: 100%;
+    }
+    html.is-job-window .modal-leistung-cards {
+      grid-template-columns: minmax(0, 1fr);
+      min-width: 0;
+    }
+    html.is-job-window .modal-leistung-card,
+    html.is-job-window .modal-leistung-wrap {
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+    }
+    html.is-job-window .modal-leistung-table-compact {
+      width: 100%;
+      min-width: 22rem;
+    }
+    html.is-job-window .modal-leistung-table-compact th,
+    html.is-job-window .modal-leistung-table-compact td {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
     .view-projektdaten.active { display: block; }
     .view-projektdaten .projektdaten-leistung-row {
       cursor: pointer;
@@ -2211,6 +2271,9 @@
     .textbausteine-item-content { flex: 1; min-width: 0; max-height: 120px; overflow-y: auto; font-size: 0.9rem; }
     .textbausteine-item-actions { flex-shrink: 0; }
   </style>
+<script>
+  if (/[?&]job_window=1(?:&|$)/.test(location.search)) document.documentElement.classList.add('is-job-window');
+</script>
 </head>
 <body>
   <header class="app-header" role="banner">
@@ -2528,6 +2591,13 @@
         <div id="ramsJobsMessage" class="muted" style="margin:0.25rem 0 0.5rem 0;font-size:0.85rem"></div>
         <ul id="ramsJobsItems" class="rams-list"></ul>
       </section>
+    </div>
+    <div class="card auftraege-all-card" id="auftraegeAllCard">
+      <h2>Alle Aufträge</h2>
+      <p class="muted auftraege-all-hint">Andere Techniker und nicht zugewiesene. Doppelklick öffnet die Ansicht, ohne etwas zu ändern.</p>
+      <div id="auftraegeAllList" class="dienstreise-list-wrap">
+        <span class="empty">Wird geladen…</span>
+      </div>
     </div>
     <div id="ramsWizardOverlay" class="modal-overlay rams-wizard-overlay" aria-hidden="true" role="dialog" aria-labelledby="ramsWizardOverlayTitle">
       <div class="modal-box rams-wizard-modal-box">

@@ -3658,8 +3658,8 @@
     list.querySelectorAll('.job').forEach((row) => {
       row.addEventListener('dblclick', function (e) {
         if (e.target.closest('button')) return;
-        var jobId = row.getAttribute('data-job-id');
-        if (jobId) openJobDetailsModal(jobId);
+        var jobId = parseInt(row.getAttribute('data-job-id'), 10);
+        if (jobId) openJobInOwnWindow({ jobId: jobId, title: 'Auftrag' });
       });
     });
   }
@@ -3872,6 +3872,41 @@
       }
     }
     if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
+  }
+
+  function openJobInOwnWindow(spec) {
+    spec = spec || {};
+    var api = window.monteurApp && typeof window.monteurApp.openJobDetailWindow === 'function'
+      ? window.monteurApp.openJobDetailWindow
+      : null;
+    if (api) {
+      api(spec);
+      return;
+    }
+    var qs = new URLSearchParams();
+    qs.set('job_window', '1');
+    if (spec.jobId) qs.set('job_id', String(spec.jobId));
+    if (spec.serverJobId) qs.set('server_id', String(spec.serverJobId));
+    if (spec.viewOnly) qs.set('view_only', '1');
+    if (spec.calendarTechnicianId) qs.set('calendar_tech', String(spec.calendarTechnicianId));
+    if (spec.title) qs.set('title', spec.title);
+    window.open('/?' + qs.toString(), '_blank', 'noopener');
+  }
+
+  function jobWindowQuery() {
+    try {
+      var q = new URLSearchParams(window.location.search);
+      if (q.get('job_window') !== '1') return null;
+      return {
+        jobId: parseInt(q.get('job_id') || '0', 10) || 0,
+        serverJobId: parseInt(q.get('server_id') || '0', 10) || 0,
+        viewOnly: q.get('view_only') === '1',
+        calendarTechnicianId: parseInt(q.get('calendar_tech') || '0', 10) || 0,
+        title: q.get('title') || '',
+      };
+    } catch (_) {
+      return null;
+    }
   }
 
   function openJobDetailsModal(jobId, options) {
@@ -14512,15 +14547,14 @@
           }
           if (canOpenDetails) {
             band.addEventListener('dblclick', function () {
-              if (typeof openJobDetailsModal !== 'function') return;
               var calServerId = Number.isFinite(serverJobId) ? serverJobId : 0;
               var ownLocal = isOwnTechJob && actionJobId != null;
-              openJobDetailsModal(ownLocal ? actionJobId : calServerId, {
-                fromDispo: !ownLocal,
-                viewOnly: !isOwnTechJob,
+              openJobInOwnWindow({
+                jobId: ownLocal ? actionJobId : 0,
                 serverJobId: calServerId,
+                viewOnly: !isOwnTechJob,
                 calendarTechnicianId: Number.isFinite(jobTechId) ? jobTechId : 0,
-                calendarPreview: j,
+                title: (bar && bar.title) || 'Auftrag',
               });
             });
           }
@@ -15394,6 +15428,101 @@
       });
   }
 
+  var allJobsBrowseRows = [];
+
+  function browseJobIsMine(job, techId) {
+    var mine = Number(techId);
+    var tid = Number(job && (job.technician_id != null ? job.technician_id : job.technicianId));
+    return Number.isFinite(mine) && mine > 0 && Number.isFinite(tid) && tid === mine;
+  }
+
+  function openBrowseJobViewOnly(job) {
+    if (!job) return;
+    var jobTechId = Number(job.technician_id != null ? job.technician_id : job.technicianId);
+    var serverJobId = parseInt(job.server_id != null && String(job.server_id).trim() !== '' ? job.server_id : job.id, 10);
+    if (!Number.isFinite(serverJobId) || serverJobId <= 0) return;
+    var firma = String(job.customer_name || '').trim();
+    var ort = String(job.city || '').trim();
+    openJobInOwnWindow({
+      serverJobId: serverJobId,
+      viewOnly: true,
+      calendarTechnicianId: Number.isFinite(jobTechId) ? jobTechId : 0,
+      title: [firma, ort].filter(Boolean).join(' · ') || 'Auftrag',
+    });
+  }
+
+  function loadAllJobsBrowseList() {
+    var listEl = document.getElementById('auftraegeAllList');
+    if (!listEl) return;
+    var techId = getTechId();
+    if (!techId) {
+      allJobsBrowseRows = [];
+      listEl.innerHTML = '<span class="empty">Bitte Monteur-ID in Einstellungen eintragen.</span>';
+      return;
+    }
+    var range = getSyncDateRange();
+    fetch(API_BASE + '/api/calendar_cached?' + qs({ start: range.date_from, end: range.date_to }), {
+      headers: { 'X-Technician-Id': String(techId) },
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!listEl.parentNode) return;
+        var jobs = data && Array.isArray(data.jobs) ? data.jobs : [];
+        var seen = {};
+        var rows = [];
+        jobs.forEach(function (j) {
+          if (!j || isJobErledigtForOpenList(j)) return;
+          if (browseJobIsMine(j, techId)) return;
+          var sid = j.id != null ? String(j.id) : '';
+          var tid = j.technician_id != null ? String(j.technician_id) : '';
+          var key = sid + ':' + tid;
+          if (!sid || seen[key]) return;
+          seen[key] = true;
+          rows.push(j);
+        });
+        rows = sortOpenJobsByEinsatzdatumAsc(rows);
+        allJobsBrowseRows = rows;
+        if (!rows.length) {
+          setElementHtmlIfChanged(listEl, '<span class="empty">Keine weiteren Aufträge.</span>');
+          return;
+        }
+        var html = rows.map(function (j, idx) {
+          var dateStr = formatDateRange(j.start_datetime, j.end_datetime);
+          var stClass = jobStatusBadgeClass(j.status);
+          var stLabel = jobStatusDisplayLabel(j.status);
+          var firma = (j.customer_name || '').trim();
+          var ort = (j.city || '').trim();
+          var land = normalizeCountryToCode(j.country) || (j.country || '').trim().toUpperCase().slice(0, 2);
+          var flagHtml = countryFlagImg(land);
+          var parts = [];
+          if (flagHtml) parts.push(flagHtml);
+          if (firma) parts.push(escapeHtml(firma));
+          if (ort) parts.push(escapeHtml(ort));
+          if (land) parts.push(escapeHtml(land));
+          var titleLine = parts.join(' · ') || 'Auftrag';
+          var techName = isCalendarJobUnassigned(j)
+            ? 'Nicht zugewiesen'
+            : (String(j.technician_name || '').trim() || 'Techniker');
+          return '<div class="job" data-browse-idx="' + idx + '" title="Doppelklick zum Ansehen">' +
+            '<div class="job-info"><strong>' + titleLine + '</strong><br><span class="job-meta">' +
+            escapeHtml(dateStr) + ' · ' + escapeHtml(techName) + '</span></div>' +
+            '<div class="job-actions"><span class="status-badge status-' + stClass + '">' + escapeHtml(stLabel) + '</span></div></div>';
+        }).join('');
+        if (!setElementHtmlIfChanged(listEl, html)) return;
+        listEl.querySelectorAll('.job').forEach(function (el) {
+          el.addEventListener('dblclick', function () {
+            var idx = parseInt(el.getAttribute('data-browse-idx'), 10);
+            var job = allJobsBrowseRows[idx];
+            if (job) openBrowseJobViewOnly(job);
+          });
+        });
+      })
+      .catch(function () {
+        if (!listEl.parentNode) return;
+        listEl.innerHTML = '<span class="empty">Auftragsliste konnte nicht geladen werden.</span>';
+      });
+  }
+
   function loadDienstreiseList(opts) {
     opts = opts || {};
     var soft = opts.soft === true;
@@ -15401,8 +15530,10 @@
     if (!techId) {
       var listElMissing = document.getElementById('dienstreiseList');
       if (listElMissing) listElMissing.innerHTML = '<span class="empty">Bitte Monteur-ID in Einstellungen eintragen.</span>';
+      loadAllJobsBrowseList();
       return;
     }
+    loadAllJobsBrowseList();
     var range = getSyncDateRange();
     var listElBefore = document.getElementById('dienstreiseList');
     var hadJobs = !!(listElBefore && listElBefore.querySelector('.job'));
@@ -15533,7 +15664,21 @@
         el.addEventListener('dblclick', function (e) {
           if (e.target.closest('button')) return;
           var jobId = parseInt(el.getAttribute('data-job-id'), 10);
-          if (jobId && typeof openJobDetailsModal === 'function') openJobDetailsModal(jobId);
+          if (!jobId) return;
+          var snap = null;
+          for (var ji = 0; ji < dienstreisePageJobs.length; ji++) {
+            if (dienstreisePageJobs[ji] && Number(dienstreisePageJobs[ji].id) === jobId) {
+              snap = dienstreisePageJobs[ji];
+              break;
+            }
+          }
+          var firma = snap ? String(snap.customer_name || snap.customerName || '').trim() : '';
+          var ort = snap ? String(snap.city || '').trim() : '';
+          openJobInOwnWindow({
+            jobId: jobId,
+            serverJobId: snap && snap.server_id ? snap.server_id : 0,
+            title: [firma, ort].filter(Boolean).join(' · ') || 'Auftrag',
+          });
         });
       });
       if (acceptJobStreamBusy && acceptJobActiveLocalJobId != null) {
@@ -29139,4 +29284,28 @@
   window.maybeOpenGeneratedPdf = maybeOpenGeneratedPdf;
   window.maybeOpenGeneratedPdfs = maybeOpenGeneratedPdfs;
   window.loadDienstreiseList = loadDienstreiseList;
+
+  (function bootJobDetailWindow() {
+    var spec = jobWindowQuery();
+    if (!spec) return;
+    document.documentElement.classList.add('is-job-window');
+    if (spec.title) document.title = spec.title;
+    var openId = spec.viewOnly ? (spec.serverJobId || spec.jobId) : (spec.jobId || spec.serverJobId);
+    if (!openId) return;
+    var opts = {};
+    if (spec.viewOnly) {
+      opts.fromDispo = true;
+      opts.viewOnly = true;
+      opts.serverJobId = spec.serverJobId || openId;
+      opts.calendarTechnicianId = spec.calendarTechnicianId || 0;
+    }
+    function tryOpen(attempt) {
+      if (!getTechId() && attempt < 40) {
+        setTimeout(function () { tryOpen(attempt + 1); }, 150);
+        return;
+      }
+      openJobDetailsModal(openId, opts);
+    }
+    tryOpen(0);
+  })();
 })();

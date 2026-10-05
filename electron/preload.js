@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('monteurApp', {
   fetchImageDataUrl: (url) => ipcRenderer.invoke('dienstreise:fetch-image-data-url', url),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   openImageGallery: (payload) => ipcRenderer.invoke('image-gallery:open', payload),
+  openJobDetailWindow: (payload) => ipcRenderer.invoke('job-detail:open', payload || {}),
   anlagenstammSearch: (payload) => ipcRenderer.invoke('anlagenstamm:search', payload),
   anlagenstammSave: (payload) => ipcRenderer.invoke('anlagenstamm:save', payload),
   openAnlagenstammAkteWindow: (opts) => ipcRenderer.invoke('anlagenstamm:open-akte-window', opts || {}),

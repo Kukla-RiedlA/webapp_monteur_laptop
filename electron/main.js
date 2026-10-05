@@ -67,6 +67,7 @@ const { createImageGalleryWindowManager } = require('./lib/image-gallery-window'
 const { createPdfViewerWindowManager } = require('./lib/pdf-viewer-window');
 const { attachEditContextMenu } = require('./lib/edit-context-menu');
 const { createAnlagenstammAkteWindowManager } = require('./lib/anlagenstamm-akte-window');
+const { createJobDetailWindowManager } = require('./lib/job-detail-window');
 const { createBugReportWindowManager } = require('./lib/bug-report-window');
 const { configureSpellCheckerSession } = require('./lib/spellcheck-session');
 const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
@@ -91,6 +92,7 @@ let updateCheckScheduled = false;
 let imageGalleryWindows = null;
 let pdfViewerWindows = null;
 let anlagenstammAkteWindows = null;
+let jobDetailWindows = null;
 let bugReportWindows = null;
 
 function ensurePdfViewerWindows() {
@@ -875,6 +877,13 @@ ipcMain.handle('open-external', async (event, url) => {
   await shell.openExternal(url.trim());
 });
 
+ipcMain.handle('job-detail:open', async (_event, payload) => {
+  if (!jobDetailWindows) {
+    jobDetailWindows = createJobDetailWindowManager(() => PORT);
+  }
+  return jobDetailWindows.openJobDetailWindow(payload || {});
+});
+
 ipcMain.handle('image-gallery:open', async (_event, payload) => {
   if (!imageGalleryWindows) {
     imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
@@ -966,6 +975,7 @@ app.whenReady().then(() => {
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
   pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow, () => PORT);
   anlagenstammAkteWindows = createAnlagenstammAkteWindowManager(() => mainWindow, () => PORT);
+  jobDetailWindows = createJobDetailWindowManager(() => PORT);
   bugReportWindows = createBugReportWindowManager(() => mainWindow, () => PORT, () => app.getPath('userData'));
   initLaptopUpdater({ getMainWindow: () => mainWindow });
   getDb().then((db) => {
