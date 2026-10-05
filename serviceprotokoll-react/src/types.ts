@@ -16,6 +16,106 @@ export interface TestLoadValues {
   value4: string;
 }
 
+/** Zeile wie im Kontrollwiegungsprotokoll. */
+export interface WeighingRow {
+  bandwaage_kg: string;
+  kontrollwaage_kg: string;
+  fehler_kg: string;
+  fehler_prozent: string;
+  leistung_th: string;
+  tara_kg: string;
+  brutto_kg: string;
+  bemerkung: string;
+  in_summe: boolean;
+  in_pdf: boolean;
+}
+
+export function emptyWeighingRow(): WeighingRow {
+  return {
+    bandwaage_kg: '',
+    kontrollwaage_kg: '',
+    fehler_kg: '',
+    fehler_prozent: '',
+    leistung_th: '',
+    tara_kg: '',
+    brutto_kg: '',
+    bemerkung: '',
+    in_summe: true,
+    in_pdf: true,
+  };
+}
+
+export function weighingRowHasData(row: Partial<WeighingRow> | null | undefined): boolean {
+  if (!row) return false;
+  return ['bandwaage_kg', 'kontrollwaage_kg', 'fehler_kg', 'fehler_prozent', 'leistung_th', 'tara_kg', 'brutto_kg', 'bemerkung'].some(
+    (k) => String((row as Record<string, unknown>)[k] || '').trim() !== '',
+  );
+}
+
+/** Kettenzeile wie im Schleppkettenprotokoll. */
+export interface ChainRow {
+  tag: string;
+  ketten_type: string;
+  laenge: string;
+  gewicht_pro_kette: string;
+  gewicht_pro_meter: string;
+  in_summe: boolean;
+}
+
+/** Messzeile wie im Schleppkettenprotokoll. */
+export interface ChainMessRow {
+  bandwaage_t: string;
+  kg_pro_m: string;
+  geschwindigkeit_ms: string;
+  messzeit_s: string;
+  bemerkung: string;
+  in_summe: boolean;
+  in_pdf: boolean;
+  pruefkette_t: string;
+  fehler_prozent: string;
+  leistung_th: string;
+}
+
+export function emptyChainRow(): ChainRow {
+  return {
+    tag: '',
+    ketten_type: '',
+    laenge: '',
+    gewicht_pro_kette: '',
+    gewicht_pro_meter: '',
+    in_summe: true,
+  };
+}
+
+export function emptyChainMessRow(): ChainMessRow {
+  return {
+    bandwaage_t: '',
+    kg_pro_m: '',
+    geschwindigkeit_ms: '',
+    messzeit_s: '',
+    bemerkung: '',
+    in_summe: true,
+    in_pdf: true,
+    pruefkette_t: '',
+    fehler_prozent: '',
+    leistung_th: '',
+  };
+}
+
+export function chainRowHasData(row: Partial<ChainRow> | null | undefined): boolean {
+  if (!row) return false;
+  return ['tag', 'ketten_type', 'laenge', 'gewicht_pro_kette', 'gewicht_pro_meter'].some(
+    (k) => String((row as Record<string, unknown>)[k] || '').trim() !== '',
+  );
+}
+
+export function chainMessHasData(row: Partial<ChainMessRow> | null | undefined): boolean {
+  if (!row) return false;
+  return ['bandwaage_t', 'kg_pro_m', 'geschwindigkeit_ms', 'messzeit_s', 'bemerkung', 'pruefkette_t', 'fehler_prozent', 'leistung_th'].some(
+    (k) => String((row as Record<string, unknown>)[k] || '').trim() !== '',
+  );
+}
+
 export interface MeasurementRow {
   id: string;
   label: string;

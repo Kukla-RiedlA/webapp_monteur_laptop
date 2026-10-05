@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { SpIcon, type SpIconName } from './SpIcon';
 
 interface SectionCardProps {
@@ -6,12 +6,45 @@ interface SectionCardProps {
   title: string;
   icon?: SpIconName;
   headerExtra?: ReactNode;
+  /** Bleibt in Ansicht und Bearbeitung sichtbar, z. B. FN-Umschaltung. */
+  persistent?: ReactNode;
   children: ReactNode;
   className?: string;
   compact?: boolean;
+  /** Nur gefüllte Werte, Stift öffnet die Felder. */
+  viewEdit?: boolean;
+  summary?: ReactNode;
+  emptyHint?: string;
+  editLabel?: string;
+  applyLabel?: string;
+  cancelLabel?: string;
+  onEditStart?: () => void;
+  onApply?: () => void;
+  onCancel?: () => void;
 }
 
-export function SectionCard({ number, title, icon, headerExtra, children, className = '', compact = false }: SectionCardProps) {
+export function SectionCard({
+  number,
+  title,
+  icon,
+  headerExtra,
+  persistent = null,
+  children,
+  className = '',
+  compact = false,
+  viewEdit = true,
+  summary = null,
+  emptyHint = 'Stift zum Erfassen',
+  editLabel = 'Stift zum Ändern',
+  applyLabel = 'Übernehmen',
+  cancelLabel = 'Verwerfen',
+  onEditStart,
+  onApply,
+  onCancel,
+}: SectionCardProps) {
+  const [editing, setEditing] = useState(false);
+  const showEdit = !viewEdit || editing;
+
   return (
     <section className={`overflow-hidden rounded-xl border border-kukla-border bg-white shadow-card ${className}`}>
       <header
@@ -26,9 +59,62 @@ export function SectionCard({ number, title, icon, headerExtra, children, classN
           {icon ? <SpIcon name={icon} className={compact ? 'h-4 w-4 shrink-0' : 'h-5 w-5 shrink-0'} /> : null}
           <h2 className={`truncate font-semibold text-[#111827] ${compact ? 'text-xs' : 'text-sm'}`}>{title}</h2>
         </div>
-        {headerExtra ? <div className="shrink-0">{headerExtra}</div> : null}
+        <div className="flex shrink-0 items-center gap-1">
+          {showEdit ? headerExtra : null}
+          {viewEdit && !editing ? (
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-white/80"
+              aria-label={editLabel}
+              title={editLabel}
+              onClick={() => {
+                onEditStart?.();
+                setEditing(true);
+              }}
+            >
+              <SpIcon name="PenLine" className="h-4 w-4" />
+            </button>
+          ) : null}
+          {viewEdit && editing ? (
+            <>
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-white/80"
+                aria-label={applyLabel}
+                title={applyLabel}
+                onClick={() => {
+                  onApply?.();
+                  setEditing(false);
+                }}
+              >
+                <SpIcon name="Check" className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-kukla-border bg-white hover:bg-white/80"
+                aria-label={cancelLabel}
+                title={cancelLabel}
+                onClick={() => {
+                  onCancel?.();
+                  setEditing(false);
+                }}
+              >
+                <SpIcon name="X" className="h-4 w-4" />
+              </button>
+            </>
+          ) : null}
+        </div>
       </header>
-      <div className={compact ? 'p-3' : 'p-4'}>{children}</div>
+      <div className={compact ? 'p-3' : 'p-4'}>
+        {showEdit ? (
+          children
+        ) : summary ? (
+          summary
+        ) : (
+          <p className="m-0 text-sm text-[#6b7280]">{emptyHint}</p>
+        )}
+        {persistent}
+      </div>
     </section>
   );
 }

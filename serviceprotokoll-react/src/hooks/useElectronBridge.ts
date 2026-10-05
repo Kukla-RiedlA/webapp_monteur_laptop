@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mergeBridgePayload } from '../bridge-utils';
-import type { MeasurementRow, ServiceProtocolFormState, TestLoadValues, WorkStep } from '../types';
+import type { ChainMessRow, ChainRow, MeasurementRow, ServiceProtocolFormState, TestLoadValues, WeighingRow, WorkStep } from '../types';
 
 export interface SpBridgePayload {
   jobId: string;
@@ -11,6 +11,9 @@ export interface SpBridgePayload {
   measurements: MeasurementRow[];
   testLoad: TestLoadValues;
   workSteps: WorkStep[];
+  wiegungen: WeighingRow[];
+  ketten: ChainRow[];
+  kettenMessungen: ChainMessRow[];
 }
 
 type BridgeMessage =

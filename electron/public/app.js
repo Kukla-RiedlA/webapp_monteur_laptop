@@ -22287,6 +22287,99 @@
     var serviceprotokollAutosave = null;
     var arbeitsschritte = [];
     var serviceprotokollMotors = [];
+    function emptySpWiegung() {
+      return {
+        bandwaage_kg: '',
+        kontrollwaage_kg: '',
+        fehler_kg: '',
+        fehler_prozent: '',
+        leistung_th: '',
+        tara_kg: '',
+        brutto_kg: '',
+        bemerkung: '',
+        in_summe: true,
+        in_pdf: true
+      };
+    }
+    function normalizeSpWiegungen(arr) {
+      var src = Array.isArray(arr) && arr.length ? arr : [emptySpWiegung()];
+      return src.map(function (w) {
+        w = w || {};
+        return {
+          bandwaage_kg: w.bandwaage_kg != null ? String(w.bandwaage_kg) : '',
+          kontrollwaage_kg: w.kontrollwaage_kg != null ? String(w.kontrollwaage_kg) : '',
+          fehler_kg: w.fehler_kg != null ? String(w.fehler_kg) : '',
+          fehler_prozent: w.fehler_prozent != null ? String(w.fehler_prozent) : '',
+          leistung_th: w.leistung_th != null ? String(w.leistung_th) : '',
+          tara_kg: w.tara_kg != null ? String(w.tara_kg) : '',
+          brutto_kg: w.brutto_kg != null ? String(w.brutto_kg) : '',
+          bemerkung: w.bemerkung != null ? String(w.bemerkung) : '',
+          in_summe: w.in_summe !== false && w.in_summe !== 0 && w.in_summe !== '0',
+          in_pdf: w.in_pdf !== false && w.in_pdf !== 0 && w.in_pdf !== '0'
+        };
+      });
+    }
+    var spWiegungen = [emptySpWiegung()];
+    function emptySpKette() {
+      return { tag: '', ketten_type: '', laenge: '', gewicht_pro_kette: '', gewicht_pro_meter: '', in_summe: true };
+    }
+    function emptySpKettenMessung() {
+      return {
+        bandwaage_t: '', kg_pro_m: '', geschwindigkeit_ms: '', messzeit_s: '', bemerkung: '',
+        in_summe: true, in_pdf: true, pruefkette_t: '', fehler_prozent: '', leistung_th: ''
+      };
+    }
+    function spFlagOn(v) {
+      return v !== false && v !== 0 && v !== '0';
+    }
+    function normalizeSpKetten(arr) {
+      var src = Array.isArray(arr) && arr.length ? arr : [emptySpKette()];
+      return src.map(function (k) {
+        k = k || {};
+        return {
+          tag: k.tag != null ? String(k.tag) : '',
+          ketten_type: k.ketten_type != null ? String(k.ketten_type) : '',
+          laenge: k.laenge != null ? String(k.laenge) : '',
+          gewicht_pro_kette: k.gewicht_pro_kette != null ? String(k.gewicht_pro_kette) : '',
+          gewicht_pro_meter: k.gewicht_pro_meter != null ? String(k.gewicht_pro_meter) : '',
+          in_summe: spFlagOn(k.in_summe)
+        };
+      });
+    }
+    function normalizeSpKettenMessungen(arr) {
+      var src = Array.isArray(arr) && arr.length ? arr : [emptySpKettenMessung()];
+      return src.map(function (m) {
+        m = m || {};
+        return {
+          bandwaage_t: m.bandwaage_t != null ? String(m.bandwaage_t) : '',
+          kg_pro_m: m.kg_pro_m != null ? String(m.kg_pro_m) : '',
+          geschwindigkeit_ms: m.geschwindigkeit_ms != null ? String(m.geschwindigkeit_ms) : '',
+          messzeit_s: m.messzeit_s != null ? String(m.messzeit_s) : '',
+          bemerkung: m.bemerkung != null ? String(m.bemerkung) : '',
+          in_summe: spFlagOn(m.in_summe),
+          in_pdf: spFlagOn(m.in_pdf),
+          pruefkette_t: m.pruefkette_t != null ? String(m.pruefkette_t) : '',
+          fehler_prozent: m.fehler_prozent != null ? String(m.fehler_prozent) : '',
+          leistung_th: m.leistung_th != null ? String(m.leistung_th) : ''
+        };
+      });
+    }
+    function spKettenFromSource(draft) {
+      draft = draft || {};
+      var mess = draft.messwerte && typeof draft.messwerte === 'object' ? draft.messwerte : {};
+      var src = (Array.isArray(draft.ketten) && draft.ketten.length) ? draft.ketten : (Array.isArray(mess.ketten) ? mess.ketten : [emptySpKette()]);
+      return normalizeSpKetten(src);
+    }
+    function spKettenMessungenFromSource(draft) {
+      draft = draft || {};
+      var mess = draft.messwerte && typeof draft.messwerte === 'object' ? draft.messwerte : {};
+      var src = (Array.isArray(draft.ketten_messungen) && draft.ketten_messungen.length)
+        ? draft.ketten_messungen
+        : (Array.isArray(mess.ketten_messungen) ? mess.ketten_messungen : [emptySpKettenMessung()]);
+      return normalizeSpKettenMessungen(src);
+    }
+    var spKetten = [emptySpKette()];
+    var spKettenMessungen = [emptySpKettenMessung()];
     var lastProtokollId = null;
     var defaultsSource = 'global';
     var serviceprotokollDraftStore = { byFab: {} };
@@ -22957,6 +23050,9 @@
       clearAbschlussFields();
       arbeitsschritte = [];
       serviceprotokollMotors = [];
+      spWiegungen = [emptySpWiegung()];
+      spKetten = [emptySpKette()];
+      spKettenMessungen = [emptySpKettenMessung()];
       if (stepsContainer) {
         stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">Fabrikationsnummer wird geladen …</td></tr>';
       }
@@ -23128,6 +23224,10 @@
     var spMotorsHostLockUntil = 0;
     function lockHostMotorsFromReact(ms) {
       spMotorsHostLockUntil = Date.now() + (ms || 2500);
+    }
+    var spKopfHostLockUntil = 0;
+    function lockHostKopfFromReact(ms) {
+      spKopfHostLockUntil = Date.now() + (ms || 2000);
     }
 
     var spLoadMotorsBusy = false;
@@ -23582,6 +23682,9 @@
         languages: collectPdfLanguages(),
         pdf_languages: collectPdfLanguages(),
         motoren: collectSpMotors(),
+        wiegungen: normalizeSpWiegungen(spWiegungen),
+        ketten: normalizeSpKetten(spKetten),
+        ketten_messungen: normalizeSpKettenMessungen(spKettenMessungen),
         include_in_pdf: isFabIncluded(cached)
       };
     }
@@ -23628,6 +23731,9 @@
         kopf_dwc: payload.kopf_dwc,
         abschluss: payload.abschluss || { status: 'geprueft' },
         motoren: payload.motoren || [],
+        wiegungen: normalizeSpWiegungen(payload.wiegungen || (payload.messwerte && payload.messwerte.wiegungen)),
+        ketten: spKettenFromSource(payload),
+        ketten_messungen: spKettenMessungenFromSource(payload),
         languages: collectPdfLanguages(),
         pdf_languages: collectPdfLanguages(),
         include_in_pdf: payload.include_in_pdf !== false,
@@ -23754,6 +23860,9 @@
           kopf_type: (draft && draft.kopf_type) || '',
           kopf_dwc: (draft && draft.kopf_dwc) || '',
           motoren: (draft && Array.isArray(draft.motoren)) ? draft.motoren : [],
+          wiegungen: normalizeSpWiegungen((draft && draft.wiegungen) || (draft && draft.messwerte && draft.messwerte.wiegungen)),
+          ketten: spKettenFromSource(draft),
+          ketten_messungen: spKettenMessungenFromSource(draft),
           abschluss: (draft && draft.abschluss != null && !Array.isArray(draft.abschluss) && typeof draft.abschluss === 'object')
             ? normalizeSpAbschlussObject(draft.abschluss)
             : (fn === cur ? collectAbschlussPayload() : { status: 'geprueft' }),
@@ -23951,6 +24060,13 @@
         applyMessMatrixToForm(normalizeMessMatrix(mess));
       }
       applyPgTestToForm(normalizePgTestCells(mess));
+      spWiegungen = normalizeSpWiegungen(
+        (Array.isArray(draft.wiegungen) && draft.wiegungen.length)
+          ? draft.wiegungen
+          : (Array.isArray(mess.wiegungen) ? mess.wiegungen : [emptySpWiegung()])
+      );
+      spKetten = spKettenFromSource(draft);
+      spKettenMessungen = spKettenMessungenFromSource(draft);
       updateVersSpannungHint();
       if (draft.abschluss != null) applyAbschlussPayload(normalizeSpAbschlussObject(draft.abschluss));
       if (Array.isArray(draft.arbeitsschritte) && draft.arbeitsschritte.length > 0) {
@@ -24734,7 +24850,6 @@
         applyMessTypeFromStamm(null, jobKopf);
       }
       renderSteps();
-      notifyReactBridge(true);
 
       await applyAnlagenstammFelderFromLocalStamm(fab, {
         loadToken: loadToken,
@@ -24788,6 +24903,7 @@
       if (isServiceprotokollFabLoadCurrent(loadToken, fab)) {
         serviceprotokollFormReadyFab = fab;
         serviceprotokollHostHydrated = true;
+        lockHostKopfFromReact(2000);
         notifyReactBridge(true);
       }
     }
@@ -24835,7 +24951,10 @@
         vers_spannung: first.supplyVoltage || (document.getElementById('spMessVersSpannung') || {}).value || '',
         sensitivitaet: first.sensitivity || (document.getElementById('spMessSensitivitaet') || {}).value || '',
         pruefgewichtstest: collectPgTestFromForm(),
-        mess_matrix: matrix
+        mess_matrix: matrix,
+        wiegungen: normalizeSpWiegungen(spWiegungen),
+        ketten: normalizeSpKetten(spKetten),
+        ketten_messungen: normalizeSpKettenMessungen(spKettenMessungen)
       }, legacy);
     }
 
@@ -25003,6 +25122,9 @@
           kopf_type: (document.getElementById('serviceprotokollType') || {}).value || '',
           kopf_dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
           abschluss: abschlussPayload,
+          wiegungen: normalizeSpWiegungen(spWiegungen),
+          ketten: normalizeSpKetten(spKetten),
+          ketten_messungen: normalizeSpKettenMessungen(spKettenMessungen),
           signature_override_png: (abschlussPayload && abschlussPayload.signature_override_png) || '',
           jsonOnly: jsonOnly,
           local_only: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
@@ -25272,6 +25394,9 @@
           deviation: pgTest[2] || '',
           value4: pgTest[3] || ''
         },
+        wiegungen: normalizeSpWiegungen(spWiegungen),
+        ketten: normalizeSpKetten(spKetten),
+        kettenMessungen: normalizeSpKettenMessungen(spKettenMessungen),
         workSteps: arbeitsschritte.map(function (s, i) {
           var de = String(s.bezeichnung_de || '').trim();
           var en = String(s.bezeichnung_en || '').trim();
@@ -25325,18 +25450,28 @@
       if (serviceprotokollFabSwitching) return;
       if (!payload || !payload.form) return;
       var f = payload.form;
+      var payloadFab = f.activeFab != null ? String(f.activeFab).trim() : '';
+      var hostFab = getActiveFab();
+      if (hostFab && payloadFab && payloadFab !== hostFab) return;
       var setVal = function (id, val) {
         var el = document.getElementById(id);
         if (el && val != null) el.value = String(val);
       };
-      setVal('serviceprotokollProjekt', f.project);
+      var setKopfVal = function (id, val) {
+        var el = document.getElementById(id);
+        if (!el || val == null) return;
+        var next = String(val);
+        if (!next.trim() && String(el.value || '').trim() && Date.now() < spKopfHostLockUntil) return;
+        el.value = next;
+      };
+      setKopfVal('serviceprotokollProjekt', f.project);
       if (datumEl) datumEl.value = spDisplayToIso(f.date);
-      setVal('serviceprotokollType', f.plantType);
-      setVal('serviceprotokollQmax', clampServiceprotokollQmax(f.qmax));
-      setVal('serviceprotokollVmax', f.vmax);
-      updateServiceprotokollVmaxLabel(f.plantType);
-      setVal('serviceprotokollPos', f.position);
-      setVal('serviceprotokollDwc', f.dwc);
+      setKopfVal('serviceprotokollType', f.plantType);
+      setKopfVal('serviceprotokollQmax', clampServiceprotokollQmax(f.qmax));
+      setKopfVal('serviceprotokollVmax', f.vmax);
+      updateServiceprotokollVmaxLabel(f.plantType || (document.getElementById('serviceprotokollType') || {}).value || '');
+      setKopfVal('serviceprotokollPos', f.position);
+      setKopfVal('serviceprotokollDwc', f.dwc);
       if (Array.isArray(f.loadCells) && f.loadCells.length) {
         var incomingCellsSig = spReactLoadCellsSignature(f.loadCells);
         if (incomingCellsSig !== spLastReactLoadCellsSig) {
@@ -25395,6 +25530,15 @@
       if (payload.testLoad) {
         var tl = payload.testLoad;
         applyPgTestToForm([tl.weight || '', tl.display || '', tl.deviation || '', tl.value4 || '']);
+      }
+      if (Array.isArray(payload.wiegungen)) {
+        spWiegungen = normalizeSpWiegungen(payload.wiegungen);
+      }
+      if (Array.isArray(payload.ketten)) {
+        spKetten = normalizeSpKetten(payload.ketten);
+      }
+      if (Array.isArray(payload.kettenMessungen)) {
+        spKettenMessungen = normalizeSpKettenMessungen(payload.kettenMessungen);
       }
       if (serviceprotokollHostHydrated && Array.isArray(payload.workSteps) && Date.now() >= spWorkStepsHostLockUntil) {
         if (spReactWorkStepsSignature(payload.workSteps) !== spWorkStepsSignature(arbeitsschritte)) {
@@ -25464,6 +25608,7 @@
       applyServiceprotokollProjekt(serviceJobData, fab, merged.projekt || stammKopf.projekt);
       mergeSpMotorsFillGapsFromStamm(motorsFromStammRow(row), true);
       if (isServiceprotokollFormReadyForFab(fab)) stashDraftInMemory(fab);
+      lockHostKopfFromReact(2000);
       notifyReactBridge(true);
     }
     window.kuklaSyncServiceprotokollFromAnlagenstamm = syncServiceprotokollKopfFromAnlagenstamm;
@@ -25945,8 +26090,8 @@
     function setProtokollReactFrameActive(kind) {
       var ibn = document.getElementById('inbetriebnahmeReactFrame');
       var svc = document.getElementById('serviceprotokollReactFrame');
-      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn&v=langshare3';
-      var svcSrc = 'serviceprotokoll-react/index.html?v=langshare3';
+      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn&v=kette1';
+      var svcSrc = 'serviceprotokoll-react/index.html?v=kette1';
       function srcOf(el) {
         return String((el && el.getAttribute('src')) || '');
       }

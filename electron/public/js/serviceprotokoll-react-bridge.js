@@ -152,6 +152,25 @@
       }).join('||');
     }
 
+    function kopfField(form, key) {
+      if (!form) return '';
+      return String(form[key] == null ? '' : form[key]).trim();
+    }
+
+    function keepHostKopfIfStale(payload) {
+      if (!payload || !payload.form || Date.now() >= ignoreReactUntil || !lastReactPayload || !lastReactPayload.form) return payload;
+      var hostForm = lastReactPayload.form;
+      var hostFab = String(hostForm.activeFab || '').trim();
+      var incomingFab = String(payload.form.activeFab || '').trim();
+      if (hostFab && incomingFab && hostFab !== incomingFab) return payload;
+      ['project', 'plantType', 'qmax', 'vmax', 'position', 'dwc'].forEach(function (key) {
+        if (!kopfField(payload.form, key) && kopfField(hostForm, key)) {
+          payload.form[key] = hostForm[key];
+        }
+      });
+      return payload;
+    }
+
     function keepHostMotorsIfStale(payload) {
       if (!payload || !payload.form || Date.now() >= ignoreReactUntil || !lastReactPayload) return payload;
       var hostForm = lastReactPayload.form || {};
@@ -231,8 +250,12 @@
 
       if (data.type === 'SP_STATE_CHANGE' && data.payload) {
         if (!isActiveHost() || applying || fabSwitchPending || jobSwitchPending) return;
+        var stateFab = reactPayloadFab(data.payload);
+        var stateHostFab = hostActiveFab();
+        if (stateHostFab && stateFab && stateFab !== stateHostFab) return;
         keepHostWorkStepsIfStale(data.payload);
         keepHostMotorsIfStale(data.payload);
+        keepHostKopfIfStale(data.payload);
         scheduleApplyFromReact(data.payload);
         return;
       }
@@ -252,6 +275,7 @@
 
       if (data.type === 'SP_FAB_CHANGE' && data.fab != null && host && typeof host.selectFab === 'function') {
         if (!isActiveHost()) return;
+        cancelScheduledApply();
         var switchId = ++pendingFabSwitch;
         applyingDepth += 1;
         applying = true;

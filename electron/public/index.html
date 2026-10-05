@@ -3270,8 +3270,9 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="skV2Sec3Title">
-          <header class="sp-v2-section-head" id="skV2Sec3Title" data-i18n-en="Chain data"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Ketten Daten</header>
+          <header class="sp-v2-section-head" id="skV2Sec3Title" data-i18n-en="Chain test"><span class="sp-v2-num">3</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Schleppketten-Test</header>
           <div class="sp-v2-section-body">
+            <h3 class="sk-subhead" id="skV2KettenTitle" data-i18n-en="Chain data">Ketten Daten</h3>
             <div class="mb-v2-actions-row" style="margin-bottom:0.75rem">
               <button type="button" class="btn btn-ghost" id="schleppkettenAddKette">+ Kette hinzufügen</button>
             </div>
@@ -3301,12 +3302,7 @@
                 </tfoot>
               </table>
             </div>
-          </div>
-        </section>
-
-        <section class="sp-v2-section" aria-labelledby="skV2Sec4Title">
-          <header class="sp-v2-section-head" id="skV2Sec4Title" data-i18n-en="Measurements"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/scale-balance-green.svg" alt="" aria-hidden="true"> Messungen</header>
-          <div class="sp-v2-section-body">
+            <h3 class="sk-subhead" id="skV2MessTitle" data-i18n-en="Measurements">Messungen</h3>
             <div class="mb-v2-actions-row" style="margin-bottom:0.75rem">
               <button type="button" class="btn btn-ghost" id="schleppkettenAddRow">+ Messung hinzufügen</button>
             </div>
@@ -3347,7 +3343,7 @@
         </section>
 
         <section class="sp-v2-section" aria-labelledby="skV2Sec5Title">
-          <header class="sp-v2-section-head" id="skV2Sec5Title" data-i18n-en="Save &amp; export"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
+          <header class="sp-v2-section-head" id="skV2Sec5Title" data-i18n-en="Save &amp; export"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern &amp; Export</header>
           <div class="sp-v2-section-body">
             <div class="mb-v2-actions-row">
               <button type="submit" class="btn btn-primary" id="btnSchleppkettenSaveJson" title="Nur Daten speichern">Speichern (JSON)</button>
@@ -3797,7 +3793,7 @@
     </div>
   </main>
   <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">
-    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=langshare3" title="Serviceprotokoll"></iframe>
+    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=kette1" title="Serviceprotokoll"></iframe>
     <div id="serviceprotokollLegacyHost" class="sp-v2-legacy-host" hidden aria-hidden="true">
     <div class="card sp-v2-card">
       <div class="sp-v2-topbar">
@@ -4510,6 +4506,7 @@
   <script src="js/view-zeitschreibung.js?v=20261002"></script>
   <script src="js/signature-pad.js"></script>
   <script src="js/protocol-form-i18n.js"></script>
+  <script src="js/protocol-viewedit.js"></script>
   <script src="js/mb-image-draw.js"></script>
   <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>

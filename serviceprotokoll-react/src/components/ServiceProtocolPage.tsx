@@ -1,20 +1,38 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { cloneMeasurements, defaultBridgePayload, emptyBridgePayload, mergeBridgePayload } from '../bridge-utils';
 import type { SpBridgePayload } from '../hooks/useElectronBridge';
 import { useElectronBridge, useEmbeddedMode } from '../hooks/useElectronBridge';
 import { ActionPanel } from './ActionPanel';
 import { MeasurementTable } from './MeasurementTable';
+import { PdfViewTable } from './PdfViewTable';
 import { NumberChip } from './NumberChip';
 import { SectionCard } from './SectionCard';
 import { SignatureBox } from './SignatureBox';
 import { SpIcon } from './SpIcon';
 import { SelectInput, TextInput } from './TextInput';
 import { TestLoadFields } from './TestLoadFields';
+import { ChainTestTables, chainTestSummary } from './ChainTestTables';
+import { WeighingsTable, weighingSummary } from './WeighingsTable';
 import { WorkStepsTable } from './WorkStepsTable';
-import type { LoadCellRow, MeasurementRow, MotorRow, ServiceProtocolFormState, StepResult } from '../types';
-import { EMPTY_MEASUREMENTS, FAB_NUMBERS, emptyMotorRow } from '../types';
+import type { ChainMessRow, ChainRow, LoadCellRow, MeasurementRow, MotorRow, ServiceProtocolFormState, StepResult, WeighingRow, WorkStep } from '../types';
+import { EMPTY_MEASUREMENTS, FAB_NUMBERS, MOTOR_FIELD_KEYS, chainMessHasData, chainRowHasData, emptyChainMessRow, emptyChainRow, emptyMotorRow, emptyWeighingRow, weighingRowHasData } from '../types';
 import { localizeAutosaveHint, maskLangFromPdf, motorFieldLabel, t, type UiLang } from '../i18n';
 import { isFuAnlaufart } from '../motor-utils';
+
+function fieldRow(items: Array<{ label: string; value: string }>) {
+  if (!items.some((i) => String(i.value || '').trim())) return null;
+  return <PdfViewTable compact columns={items.map((i) => i.label)} rows={[items.map((i) => i.value)]} />;
+}
+
+function stepResultLabel(result: StepResult): string {
+  if (result === 'ok') return 'OK';
+  if (result === 'nok') return 'n.i.O.';
+  return '';
+}
+
+function stepsHaveData(steps: WorkStep[]): boolean {
+  return steps.some((s) => s.result !== 'na' || String(s.remark || '').trim() !== '');
+}
 
 function ensureLoadCells(form: ServiceProtocolFormState, fallbackMeasurements?: MeasurementRow[]): LoadCellRow[] {
   if (Array.isArray(form.loadCells) && form.loadCells.length) return form.loadCells;
@@ -36,7 +54,13 @@ export function ServiceProtocolPage() {
   const embedded = useEmbeddedMode();
   const [bridgeState, setBridgeState] = useState<SpBridgePayload>(defaultBridgePayload);
 
-  const { form, testLoad, workSteps, jobs, jobId, fabNumbers, fabIncludeByFab } = bridgeState;
+  const { form, testLoad, workSteps, jobs, jobId, fabNumbers, fabIncludeByFab, wiegungen, ketten, kettenMessungen } = bridgeState;
+  const weighRows = Array.isArray(wiegungen) && wiegungen.length ? wiegungen : [emptyWeighingRow()];
+  const chainRows: ChainRow[] = Array.isArray(ketten) && ketten.length ? ketten : [emptyChainRow()];
+  const chainMessRows: ChainMessRow[] = Array.isArray(kettenMessungen) && kettenMessungen.length ? kettenMessungen : [emptyChainMessRow()];
+  const stateRef = useRef(bridgeState);
+  stateRef.current = bridgeState;
+  const snaps = useRef<Record<string, SpBridgePayload>>({});
   const loadCells = ensureLoadCells(form, bridgeState.measurements);
   const motors: MotorRow[] = Array.isArray(form.motors) ? form.motors : [];
 
@@ -48,6 +72,28 @@ export function ServiceProtocolPage() {
   const titleKey = protocolKind === 'ibn' ? 'titleIbn' : 'title';
   const plantTypeNorm = String(form.plantType || '').toUpperCase().replace(/\s+/g, '');
   const vmaxIsBehaelter = /^D-?DW(?:$|[^A-Z])/.test(plantTypeNorm) || /V-?DG-?1(?:$|[^0-9])/.test(plantTypeNorm);
+  const beginEdit = useCallback((key: string) => {
+    snaps.current[key] = structuredClone(stateRef.current);
+  }, []);
+  const cancelEdit = useCallback((key: string) => {
+    const snap = snaps.current[key];
+    if (snap) setBridgeState(snap);
+  }, []);
+  const setWeighings = useCallback((rows: WeighingRow[]) => {
+    setBridgeState((prev) => mergeBridgePayload(prev, { wiegungen: rows }));
+  }, []);
+  const setChainTest = useCallback((nextChains: ChainRow[], nextMess: ChainMessRow[]) => {
+    setBridgeState((prev) => mergeBridgePayload(prev, { ketten: nextChains, kettenMessungen: nextMess }));
+  }, []);
+  const ve = (key: string) => ({
+    onEditStart: () => beginEdit(key),
+    onCancel: () => cancelEdit(key),
+    emptyHint: t(uiLang, 'penHint'),
+    editLabel: t(uiLang, 'penEdit'),
+    applyLabel: t(uiLang, 'applyEdit'),
+    cancelLabel: t(uiLang, 'cancelEdit'),
+  });
+
   const [pendingFab, setPendingFab] = useState<string | null>(null);
   const activeFabVisual = pendingFab || form.activeFab || '';
 
@@ -309,7 +355,39 @@ export function ServiceProtocolPage() {
         </header>
 
         <div className="space-y-4">
-          <SectionCard number={1} title={t(uiLang, 'secJob')} icon="Building2">
+          <SectionCard
+            number={1}
+            title={t(uiLang, 'secJob')}
+            icon="Building2"
+            {...ve('job')}
+            summary={fieldRow([
+              { label: t(uiLang, 'job'), value: jobs.find((j) => j.id === jobId)?.label || form.order },
+              { label: t(uiLang, 'project'), value: form.project },
+              { label: t(uiLang, 'date'), value: form.date },
+              { label: t(uiLang, 'language'), value: [form.pdfDe ? t(uiLang, 'german') : '', form.pdfEn ? t(uiLang, 'english') : ''].filter(Boolean).join(', ') },
+              { label: t(uiLang, 'serialNumber'), value: form.activeFab },
+            ])}
+            persistent={
+              fabChips.length > 0 ? (
+                <div className="mt-4">
+                  <span className="mb-2 block text-sm font-semibold text-[#111827]">{t(uiLang, 'serialNumber')}</span>
+                  <div className="flex flex-wrap gap-2">
+                    {fabChips.map((fab) => (
+                      <NumberChip
+                        key={fab}
+                        value={fab}
+                        active={activeFabVisual === fab}
+                        included={fabIncludeByFab?.[fab] !== false}
+                        includeLabel={t(uiLang, 'includeFnInProtocol') + ' ' + fab}
+                        onClick={() => handleFabChange(fab)}
+                        onToggleInclude={(included) => handleFabIncludeToggle(fab, included)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null
+            }
+          >
             <div className="grid gap-4">
               <SelectInput
                 label={t(uiLang, 'job')}
@@ -350,28 +428,22 @@ export function ServiceProtocolPage() {
                 </div>
               </div>
             </div>
-            {(fabChips.length ? fabChips : []).length > 0 ? (
-              <div className="mt-4">
-                <span className="mb-2 block text-sm font-semibold text-[#111827]">{t(uiLang, 'serialNumber')}</span>
-                <div className="flex flex-wrap gap-2">
-                  {fabChips.map((fab) => (
-                    <NumberChip
-                      key={fab}
-                      value={fab}
-                      active={activeFabVisual === fab}
-                      included={fabIncludeByFab?.[fab] !== false}
-                      includeLabel={t(uiLang, 'includeFnInProtocol') + ' ' + fab}
-                      onClick={() => handleFabChange(fab)}
-                      onToggleInclude={(included) => handleFabIncludeToggle(fab, included)}
-                    />
-                  ))}
-                </div>
-              </div>
-            ) : null}
           </SectionCard>
 
           <div className="space-y-4">
-            <SectionCard number={2} title={t(uiLang, 'plantData')} icon="Factory">
+            <SectionCard
+              number={2}
+              title={t(uiLang, 'plantData')}
+              icon="Factory"
+              {...ve('plant')}
+              summary={fieldRow([
+              { label: t(uiLang, 'type'), value: form.plantType },
+              { label: 'Qmax', value: form.qmax },
+              { label: vmaxIsBehaelter ? t(uiLang, 'behaelterNenninhalt') : 'v max', value: form.vmax },
+              { label: t(uiLang, 'posNr'), value: form.position },
+              { label: 'DWC', value: form.dwc },
+            ])}
+            >
               <div className="grid gap-3 md:grid-cols-2">
                 <TextInput label={t(uiLang, 'type')} value={form.plantType} onChange={(e) => patchForm({ plantType: e.target.value })} />
                 <div className="grid grid-cols-2 gap-3">
@@ -396,7 +468,49 @@ export function ServiceProtocolPage() {
               </div>
             </SectionCard>
 
-            <SectionCard number={3} title={t(uiLang, 'loadCell')} icon="Scale">
+            <SectionCard
+              number={3}
+              title={t(uiLang, 'loadCell')}
+              icon="Scale"
+              {...ve('load')}
+              summary={
+                loadCells.some(
+                  (cell) =>
+                    cell.type ||
+                    cell.serialNumber ||
+                    cell.position ||
+                    cell.supplyVoltage ||
+                    cell.sensitivity ||
+                    (cell.measurements || []).some((m) => m.kg || m.mv || m.ma || m.g),
+                ) ? (
+                  <div className="space-y-3">
+                    {loadCells.map((cell, i) => {
+                      const meas = (cell.measurements || []).filter((m) => m.kg || m.mv || m.ma || m.g);
+                      const meta = fieldRow([
+                        { label: t(uiLang, 'type'), value: cell.type },
+                        { label: t(uiLang, 'serial'), value: cell.serialNumber },
+                        { label: t(uiLang, 'pos'), value: cell.position },
+                        { label: t(uiLang, 'supplyV'), value: cell.supplyVoltage },
+                        { label: t(uiLang, 'sens'), value: cell.sensitivity },
+                      ]);
+                      if (!meta && !meas.length) return null;
+                      return (
+                        <div key={cell.id} className="space-y-2">
+                          {loadCells.length > 1 ? <div className="text-xs font-semibold text-[#0c6a4d]">{i + 1}</div> : null}
+                          {meta}
+                          {meas.length ? (
+                            <PdfViewTable
+                              columns={[t(uiLang, 'point'), 'kg', 'mV', 'mA', 'g %']}
+                              rows={meas.map((m) => [m.labelDe || m.labelEn || m.label, m.kg, m.mv, m.ma, m.g])}
+                            />
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null
+              }
+            >
               <div className="grid gap-3">
                 {loadCells.map((cell, idx) => (
                   <div
@@ -481,6 +595,18 @@ export function ServiceProtocolPage() {
               number={4}
               title={t(uiLang, 'motorDrive')}
               icon="Factory"
+              {...ve('motor')}
+              summary={(() => {
+                const filled = motors.filter((m) => MOTOR_FIELD_KEYS.some((k) => String(m[k] || '').trim()));
+                const keys = MOTOR_FIELD_KEYS.filter((k) => filled.some((m) => String(m[k] || '').trim()));
+                if (!filled.length || !keys.length) return null;
+                return (
+                  <PdfViewTable
+                    columns={keys.map((k) => motorFieldLabel(uiLang, String(k)))}
+                    rows={filled.map((m) => keys.map((k) => String(m[k] || '')))}
+                  />
+                );
+              })()}
               headerExtra={
                 <div className="flex items-center gap-1">
                   <button
@@ -568,7 +694,18 @@ export function ServiceProtocolPage() {
             </SectionCard>
           </div>
 
-          <SectionCard number={5} title={t(uiLang, 'testLoad')} icon="LineChart">
+          <SectionCard
+            number={5}
+            title={t(uiLang, 'testLoad')}
+            icon="LineChart"
+            {...ve('test')}
+            summary={fieldRow([
+              { label: '1 (%)', value: testLoad.weight },
+              { label: '2 (%)', value: testLoad.display },
+              { label: '3 (%)', value: testLoad.deviation },
+              { label: '4 (%)', value: testLoad.value4 },
+            ])}
+          >
             <TestLoadFields
               lang={uiLang}
               values={testLoad}
@@ -583,8 +720,53 @@ export function ServiceProtocolPage() {
 
           <SectionCard
             number={6}
+            title={t(uiLang, 'weighings')}
+            icon="Scale"
+            {...ve('wieg')}
+            summary={weighRows.some(weighingRowHasData) ? weighingSummary(weighRows, uiLang) : null}
+          >
+            <WeighingsTable lang={uiLang} rows={weighRows} onChange={setWeighings} />
+          </SectionCard>
+
+          <SectionCard
+            number={7}
+            title={t(uiLang, 'chainTest')}
+            icon="ClipboardList"
+            {...ve('kette')}
+            summary={
+              chainRows.some(chainRowHasData) || chainMessRows.some(chainMessHasData)
+                ? chainTestSummary(chainRows, chainMessRows, uiLang)
+                : null
+            }
+          >
+            <ChainTestTables lang={uiLang} chains={chainRows} measurements={chainMessRows} onChange={setChainTest} />
+          </SectionCard>
+
+          <SectionCard
+            number={8}
             title={t(uiLang, 'workSteps')}
             icon="ClipboardCheck"
+            {...ve('steps')}
+            summary={
+              stepsHaveData(workSteps) || String(form.generalRemarks || '').trim() ? (
+                <div className="space-y-2">
+                  <PdfViewTable
+                    columns={[t(uiLang, 'no'), t(uiLang, 'result'), t(uiLang, 'workStep'), t(uiLang, 'remark')]}
+                    rows={workSteps
+                      .filter((s) => s.result !== 'na' || String(s.remark || '').trim())
+                      .map((s, i) => [
+                        String(i + 1),
+                        stepResultLabel(s.result),
+                        (uiLang === 'en' ? s.labelEn || s.labelDe : s.labelDe || s.labelEn) || s.label,
+                        s.remark,
+                      ])}
+                  />
+                  {String(form.generalRemarks || '').trim()
+                    ? fieldRow([{ label: t(uiLang, 'generalRemarks'), value: form.generalRemarks }])
+                    : null}
+                </div>
+              ) : null
+            }
             headerExtra={
               <button
                 type="button"
@@ -618,7 +800,27 @@ export function ServiceProtocolPage() {
           </SectionCard>
 
           <div className="grid gap-4 lg:grid-cols-[1fr_min(280px,36%)]">
-            <SectionCard number={7} title={t(uiLang, 'closing')} icon="ClipboardCheck">
+            <SectionCard
+              number={9}
+              title={t(uiLang, 'closing')}
+              icon="ClipboardCheck"
+              {...ve('close')}
+              summary={fieldRow([
+                {
+                  label: t(uiLang, 'status'),
+                  value:
+                    form.status === 'justiert'
+                      ? t(uiLang, 'adjusted')
+                      : form.status === 'mangel'
+                        ? t(uiLang, 'defect')
+                        : form.status === 'geprueft'
+                          ? t(uiLang, 'checked')
+                          : '',
+                },
+                { label: t(uiLang, 'technician'), value: form.monteur },
+                { label: t(uiLang, 'remarks'), value: form.closingRemarks },
+              ])}
+            >
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <fieldset className="space-y-2 border-0 p-0">

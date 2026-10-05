@@ -5,12 +5,18 @@ import {
   EMPTY_FORM,
   EMPTY_MEASUREMENTS,
   emptyMotorRow,
+  emptyChainMessRow,
+  emptyChainRow,
+  emptyWeighingRow,
   MOTOR_FIELD_KEYS,
+  type ChainMessRow,
+  type ChainRow,
   type MeasurementRow,
   type MotorRow,
   type ServiceProtocolFormState,
   type StepResult,
   type TestLoadValues,
+  type WeighingRow,
   type WorkStep,
 } from './types';
 
@@ -65,7 +71,58 @@ export function emptyBridgePayload(jobs: SpBridgePayload['jobs'] = []): SpBridge
     measurements: EMPTY_MEASUREMENTS.map((r) => ({ ...r })),
     testLoad: { ...DEFAULT_TEST_LOAD },
     workSteps: DEFAULT_WORK_STEPS.map((r) => ({ ...r, result: 'na' as StepResult, remark: '' })),
+    wiegungen: [emptyWeighingRow()],
+    ketten: [emptyChainRow()],
+    kettenMessungen: [emptyChainMessRow()],
   };
+}
+
+function cloneChain(row: Partial<ChainRow> | null | undefined): ChainRow {
+  const base = emptyChainRow();
+  if (!row) return base;
+  const raw = row as Record<string, unknown>;
+  (Object.keys(base) as Array<keyof ChainRow>).forEach((k) => {
+    if (k === 'in_summe') {
+      const flag = raw[k];
+      base[k] = flag !== false && flag !== 0 && flag !== '0';
+      return;
+    }
+    const v = raw[k];
+    (base as unknown as Record<string, string>)[k] = v != null ? String(v) : '';
+  });
+  return base;
+}
+
+function cloneChainMess(row: Partial<ChainMessRow> | null | undefined): ChainMessRow {
+  const base = emptyChainMessRow();
+  if (!row) return base;
+  const raw = row as Record<string, unknown>;
+  (Object.keys(base) as Array<keyof ChainMessRow>).forEach((k) => {
+    if (k === 'in_summe' || k === 'in_pdf') {
+      const flag = raw[k];
+      base[k] = flag !== false && flag !== 0 && flag !== '0';
+      return;
+    }
+    const v = raw[k];
+    (base as unknown as Record<string, string>)[k] = v != null ? String(v) : '';
+  });
+  return base;
+}
+
+function cloneWeighing(row: Partial<WeighingRow> | null | undefined): WeighingRow {
+  const base = emptyWeighingRow();
+  if (!row) return base;
+  const raw = row as Record<string, unknown>;
+  (Object.keys(base) as Array<keyof WeighingRow>).forEach((k) => {
+    if (k === 'in_summe' || k === 'in_pdf') {
+      const flag = raw[k];
+      base[k] = flag !== false && flag !== 0 && flag !== '0';
+      return;
+    }
+    const v = raw[k];
+    (base as unknown as Record<string, string>)[k] = v != null ? String(v) : '';
+  });
+  return base;
 }
 
 export function mapStepStatus(raw: string): StepResult {
@@ -129,6 +186,15 @@ export function mergeBridgePayload(base: SpBridgePayload, patch: Partial<SpBridg
     measurements,
     testLoad: patch.testLoad ? { ...base.testLoad, ...patch.testLoad } : base.testLoad,
     workSteps: patch.workSteps ?? base.workSteps,
+    wiegungen: Array.isArray(patch.wiegungen)
+      ? (patch.wiegungen.length ? patch.wiegungen.map((w) => cloneWeighing(w)) : [emptyWeighingRow()])
+      : (Array.isArray(base.wiegungen) && base.wiegungen.length ? base.wiegungen.map((w) => cloneWeighing(w)) : [emptyWeighingRow()]),
+    ketten: Array.isArray(patch.ketten)
+      ? (patch.ketten.length ? patch.ketten.map((k) => cloneChain(k)) : [emptyChainRow()])
+      : (Array.isArray(base.ketten) && base.ketten.length ? base.ketten.map((k) => cloneChain(k)) : [emptyChainRow()]),
+    kettenMessungen: Array.isArray(patch.kettenMessungen)
+      ? (patch.kettenMessungen.length ? patch.kettenMessungen.map((m) => cloneChainMess(m)) : [emptyChainMessRow()])
+      : (Array.isArray(base.kettenMessungen) && base.kettenMessungen.length ? base.kettenMessungen.map((m) => cloneChainMess(m)) : [emptyChainMessRow()]),
     jobs: patch.jobs ?? base.jobs,
     fabNumbers: patch.fabNumbers ?? base.fabNumbers,
     fabIncludeByFab: patch.fabIncludeByFab ?? base.fabIncludeByFab,

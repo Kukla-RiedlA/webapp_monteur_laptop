@@ -681,9 +681,14 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         label: S(label),
         status: S(stepStatusLabel(s.status, lang)),
         bemerkung: S(stripHtml(s.bemerkung || '')),
+        rawStatus: String(s.status || 'na').toLowerCase(),
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((s) => {
+      const na = s.rawStatus === 'na' || s.rawStatus === 'n.a.' || s.rawStatus === 'n.a';
+      return !(na && !String(s.bemerkung || '').trim());
+    });
 
   const mess = payload.messwerte && typeof payload.messwerte === 'object' ? payload.messwerte : {};
   function protocolMotorsFromPayload(src) {
@@ -1214,9 +1219,27 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     motorRowsPdf.forEach((motor, index) => {
       blocks.push({ type: 'motor', motor, index });
     });
-    if (pgVals.some(Boolean)) {
-      blocks.push({ type: 'pg' });
-    }
+  if (pgVals.some(Boolean)) {
+    blocks.push({ type: 'pg' });
+  }
+  const wiegSource = Array.isArray(payload.wiegungen)
+    ? payload.wiegungen
+    : (Array.isArray(mess.wiegungen) ? mess.wiegungen : []);
+  const wiegRows = wiegSource.filter((row) => weighingRowHasData(row) && rowInPdf(row));
+  if (wiegRows.length) {
+    blocks.push({ type: 'wieg', rows: wiegRows });
+  }
+  const kettenSource = Array.isArray(payload.ketten)
+    ? payload.ketten
+    : (Array.isArray(mess.ketten) ? mess.ketten : []);
+  const kettenMessSource = Array.isArray(payload.ketten_messungen)
+    ? payload.ketten_messungen
+    : (Array.isArray(mess.ketten_messungen) ? mess.ketten_messungen : []);
+  const kettenRows = kettenSource.filter((row) => chainRowHasData(row) && rowInPdf(row));
+  const kettenMessRows = kettenMessSource.filter((row) => chainMessHasData(row) && rowInPdf(row));
+  if (kettenRows.length || kettenMessRows.length) {
+    blocks.push({ type: 'kette', ketten: kettenRows, messungen: kettenMessRows });
+  }
     const bemerk = stripHtml(payload.bemerkungen || '');
     if (bemerk) blocks.push({ type: 'bemerk', text: bemerk });
     // Status steht im Kopffeld; Abschluss-Box (Status/Monteur/Datum) entfällt.
@@ -1260,23 +1283,41 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   }));
   let trailQueue = trailing.slice();
   let targetIdx = pagesPlan.length - 1;
-  let lastUsed =
-    stepHeaderH +
-    pagesPlan[targetIdx].steps.reduce((s, st) => s + measureStepRowHeight(st), 0) +
-    (pagesPlan[targetIdx].steps.length ? 20 : 0);
+  // Zeichenhöhe der Arbeitsschritte: Titel 14 + Kopf 22 + Zeilen + Abstand 12.
+  let lastUsed = pagesPlan[targetIdx].steps.length
+    ? 14 +
+      stepHeaderH +
+      12 +
+      pagesPlan[targetIdx].steps.reduce((s, st) => s + measureStepRowHeight(st), 0)
+    : 0;
   while (trailQueue.length) {
     const block = trailQueue[0];
     let need = 40;
     if (block.type === 'wz') {
       const rowsN = (block.wz && block.wz.rows && block.wz.rows.length) || 0;
-      need = 20 + 28 + (rowsN ? 18 + rowsN * 16 + 14 : 8) + 10;
+      // Titel 14 + Meta 26 + Tabellenkopf 18 + Zeilen + Abschluss 10, plus Puffer.
+      need = 14 + 26 + (rowsN ? 18 + rowsN * 16 + 10 : 8) + 16;
     } else if (block.type === 'motor') need = 20 + 22 + 10 * 15 + 12;
     else if (block.type === 'mess') need = 20 + 18 + messRows.length * 16 + 14;
     else if (block.type === 'pg') need = 20 + 14 + 18 + 16 + 10;
-    else if (block.type === 'bemerk') need = 40;
-    else if (block.type === 'abschluss_bemerk') need = 40;
+    else if (block.type === 'wieg') {
+      const n = ((block.rows && block.rows.length) || 0) + 1;
+      need = 14 + 18 + n * 16 + 10 + 12;
+    } else if (block.type === 'kette') {
+      const kn = (block.ketten && block.ketten.length) || 0;
+      const mn = (block.messungen && block.messungen.length) || 0;
+      need =
+        14 +
+        (kn ? 14 + 18 + (kn + 1) * 16 + 10 : 0) +
+        (mn ? 14 + 18 + (mn + 1) * 16 + 10 : 0) +
+        12;
+    } else if (block.type === 'bemerk') need = 48;
+    else if (block.type === 'abschluss_bemerk') need = 48;
     const limit = targetIdx === 0 ? usableHFirst : usableHNext;
-    if (lastUsed + need > limit && pagesPlan[targetIdx].trailing.length) {
+    // Erster Folgebock darf die Fußzeile nicht übermalen. Passt er nicht mehr,
+    // kommt er auf die nächste Seite. Ein einzelner Block, der höher als eine
+    // leere Seite ist, bleibt (kein Endlos-Umbruch).
+    if (lastUsed + need > limit && lastUsed > 0) {
       pagesPlan.push({ steps: [], startIndex: 0, trailing: [] });
       targetIdx = pagesPlan.length - 1;
       lastUsed = 0;
@@ -1292,7 +1333,7 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       y = drawMeta(page, y);
     }
 
-    if (plan.steps.length || (pageIndex === 0 && !steps.length)) {
+    if (plan.steps.length) {
       const tableTop = y;
       y = drawSectionTitle(page, y, de ? 'Arbeitsschritte / work steps' : 'Work steps');
       const thTop = y;
@@ -1300,16 +1341,6 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
       plan.steps.forEach((st, i) => {
         y = drawStepRow(page, y, st, plan.startIndex + i);
       });
-      if (!plan.steps.length) {
-        y -= 16;
-        page.drawText(de ? 'Keine Arbeitsschritte' : 'No work steps', {
-          x: marginX + 8,
-          y: y + 4,
-          size: 8,
-          font,
-          color: grayMuted,
-        });
-      }
       page.drawRectangle({
         x: marginX,
         y,
@@ -1461,6 +1492,186 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
           S,
           title: de ? 'Prüfgewichtstest' : 'Test with test load',
         });
+      } else if (block.type === 'wieg') {
+        y = drawSectionTitle(page, y, de ? 'Wiegungen' : 'Weighings');
+        const wCols = [
+          { key: 'nr', label: '#', w: 22 },
+          { key: 'bandwaage_kg', label: de ? 'Band' : 'Belt', w: 52 },
+          { key: 'kontrollwaage_kg', label: de ? 'Kontr.' : 'Ctrl', w: 52 },
+          { key: 'fehler_kg', label: 'kg', w: 44 },
+          { key: 'fehler_prozent', label: '%', w: 40 },
+          { key: 'leistung_th', label: 't/h', w: 40 },
+          { key: 'tara_kg', label: de ? 'Tara' : 'Tare', w: 44 },
+          { key: 'brutto_kg', label: de ? 'Brutto' : 'Gross', w: 48 },
+          { key: 'bemerkung', label: de ? 'Bemerkung' : 'Remark', w: 0 },
+        ];
+        const fixedW = wCols.reduce((s, c) => s + (c.key === 'bemerkung' ? 0 : c.w), 0);
+        wCols.forEach((c) => {
+          if (c.key === 'bemerkung') c.w = Math.max(60, tableInnerW - fixedW);
+        });
+        const wRows = (block.rows || []).map((row, i) => ({
+          nr: String(i + 1),
+          bandwaage_kg: String(row.bandwaage_kg || ''),
+          kontrollwaage_kg: String(row.kontrollwaage_kg || ''),
+          fehler_kg: String(row.fehler_kg || ''),
+          fehler_prozent: String(row.fehler_prozent || ''),
+          leistung_th: String(row.leistung_th || ''),
+          tara_kg: String(row.tara_kg || ''),
+          brutto_kg: String(row.brutto_kg || ''),
+          bemerkung: String(row.bemerkung || ''),
+        }));
+        const sumSrc = rowsForPdfSum(block.rows || []).filter(weighingRowHasData);
+        if (sumSrc.length) {
+          const acc = {};
+          ['bandwaage_kg', 'kontrollwaage_kg', 'fehler_kg', 'tara_kg', 'brutto_kg'].forEach((k) => {
+            acc[k] = { s: 0, n: 0 };
+          });
+          let leistS = 0;
+          let leistN = 0;
+          let sumBand = 0;
+          let sumKontr = 0;
+          let hasPair = false;
+          sumSrc.forEach((row) => {
+            Object.keys(acc).forEach((k) => {
+              const n = parseLocaleNumber(row[k]);
+              if (n != null) {
+                acc[k].s += n;
+                acc[k].n += 1;
+              }
+            });
+            const lp = parseLocaleNumber(row.leistung_th);
+            if (lp != null) {
+              leistS += lp;
+              leistN += 1;
+            }
+            const b = parseLocaleNumber(row.bandwaage_kg);
+            const k = parseLocaleNumber(row.kontrollwaage_kg);
+            if (b != null && k != null) {
+              sumBand += b;
+              sumKontr += k;
+              hasPair = true;
+            }
+          });
+          const fmt2 = (n) => (Math.round(n * 100) / 100).toFixed(2).replace('.', ',');
+          wRows.push({
+            nr: 'Σ',
+            bandwaage_kg: acc.bandwaage_kg.n ? fmt2(acc.bandwaage_kg.s) : '',
+            kontrollwaage_kg: acc.kontrollwaage_kg.n ? fmt2(acc.kontrollwaage_kg.s) : '',
+            fehler_kg: hasPair ? fmt2(sumBand - sumKontr) : acc.fehler_kg.n ? fmt2(acc.fehler_kg.s) : '',
+            fehler_prozent: hasPair && sumKontr !== 0 ? fmt2(((sumBand - sumKontr) / sumKontr) * 100) : '',
+            leistung_th: leistN ? fmt2(leistS / leistN) : '',
+            tara_kg: acc.tara_kg.n ? fmt2(acc.tara_kg.s) : '',
+            brutto_kg: acc.brutto_kg.n ? fmt2(acc.brutto_kg.s) : '',
+            bemerkung: de ? 'Summe' : 'Total',
+          });
+        }
+        y = drawKeyValueTable(page, y, wRows, wCols);
+      } else if (block.type === 'kette') {
+        y = drawSectionTitle(page, y, de ? 'Schleppketten-Test' : 'Chain test');
+        const fitLast = (cols, lastKey) => {
+          const fixed = cols.reduce((s, c) => s + (c.key === lastKey ? 0 : c.w), 0);
+          cols.forEach((c) => {
+            if (c.key === lastKey) c.w = Math.max(48, tableInnerW - fixed);
+          });
+          return cols;
+        };
+        if (block.ketten && block.ketten.length) {
+          y = drawSectionTitle(page, y, de ? 'Ketten Daten' : 'Chain data');
+          const kCols = fitLast([
+            { key: 'nr', label: '#', w: 22 },
+            { key: 'tag', label: de ? 'Tag' : 'Tag', w: 70 },
+            { key: 'ketten_type', label: de ? 'Ketten Type' : 'Chain type', w: 150 },
+            { key: 'laenge', label: de ? 'Länge' : 'Length', w: 52 },
+            { key: 'gewicht_pro_kette', label: de ? 'Gew./Kette' : 'Wt/chain', w: 62 },
+            { key: 'gewicht_pro_meter', label: de ? 'Gew./m' : 'Wt/m', w: 0 },
+          ], 'gewicht_pro_meter');
+          const kRows = block.ketten.map((row, i) => ({
+            nr: String(i + 1),
+            tag: String(row.tag || ''),
+            ketten_type: String(row.ketten_type || ''),
+            laenge: String(row.laenge || ''),
+            gewicht_pro_kette: String(row.gewicht_pro_kette || ''),
+            gewicht_pro_meter: String(row.gewicht_pro_meter || ''),
+          }));
+          const kSum = rowsForPdfSum(block.ketten).filter(chainRowHasData);
+          if (kSum.length) {
+            let sumL = 0; let nL = 0; let sumG = 0; let nG = 0; let sumM = 0; let nM = 0;
+            kSum.forEach((row) => {
+              const l = parseLocaleNumber(row.laenge);
+              const g = parseLocaleNumber(row.gewicht_pro_kette);
+              const m = parseLocaleNumber(row.gewicht_pro_meter);
+              if (l != null) { sumL += l; nL += 1; }
+              if (g != null) { sumG += g; nG += 1; }
+              if (m != null) { sumM += m; nM += 1; }
+            });
+            const fmtN = (n, d) => (Math.round(n * (10 ** d)) / (10 ** d)).toFixed(d).replace('.', ',');
+            const meter = nM ? fmtN(sumM, 4) : (nL && nG && sumL !== 0 ? fmtN(sumG / sumL, 4) : '');
+            kRows.push({
+              nr: 'Σ',
+              tag: de ? 'Summe' : 'Total',
+              ketten_type: '',
+              laenge: nL ? fmtN(sumL, 3) : '',
+              gewicht_pro_kette: nG ? fmtN(sumG, 3) : '',
+              gewicht_pro_meter: meter,
+            });
+          }
+          y = drawKeyValueTable(page, y, kRows, kCols);
+        }
+        if (block.messungen && block.messungen.length) {
+          y = drawSectionTitle(page, y, de ? 'Messungen' : 'Measurements');
+          const mCols = fitLast([
+            { key: 'nr', label: '#', w: 20 },
+            { key: 'bandwaage_t', label: de ? 'Band' : 'Belt', w: 48 },
+            { key: 'pruefkette_t', label: de ? 'Prüfk.' : 'Chain', w: 48 },
+            { key: 'kg_pro_m', label: 'kg/m', w: 48 },
+            { key: 'geschwindigkeit_ms', label: 'm/s', w: 36 },
+            { key: 'messzeit_s', label: 's', w: 32 },
+            { key: 'fehler_prozent', label: '%', w: 40 },
+            { key: 'leistung_th', label: 't/h', w: 36 },
+            { key: 'bemerkung', label: de ? 'Bemerkung' : 'Remark', w: 0 },
+          ], 'bemerkung');
+          const mRows = block.messungen.map((row, i) => ({
+            nr: String(i + 1),
+            bandwaage_t: String(row.bandwaage_t || ''),
+            pruefkette_t: String(row.pruefkette_t || ''),
+            kg_pro_m: String(row.kg_pro_m || ''),
+            geschwindigkeit_ms: String(row.geschwindigkeit_ms || ''),
+            messzeit_s: String(row.messzeit_s || ''),
+            fehler_prozent: String(row.fehler_prozent || ''),
+            leistung_th: String(row.leistung_th || ''),
+            bemerkung: String(row.bemerkung || ''),
+          }));
+          const mSum = rowsForPdfSum(block.messungen).filter(chainMessHasData);
+          if (mSum.length) {
+            let sumBand = 0; let nBand = 0; let sumPk = 0; let nPk = 0; let sumK = 0; let nK = 0;
+            let sumZ = 0; let nZ = 0; let sumLeist = 0; let nLeist = 0;
+            mSum.forEach((row) => {
+              const b = parseLocaleNumber(row.bandwaage_t);
+              const p = parseLocaleNumber(row.pruefkette_t);
+              const k = parseLocaleNumber(row.kg_pro_m);
+              const z = parseLocaleNumber(row.messzeit_s);
+              const l = parseLocaleNumber(row.leistung_th);
+              if (b != null) { sumBand += b; nBand += 1; }
+              if (p != null) { sumPk += p; nPk += 1; }
+              if (k != null) { sumK += k; nK += 1; }
+              if (z != null) { sumZ += z; nZ += 1; }
+              if (l != null) { sumLeist += l; nLeist += 1; }
+            });
+            const fmtN = (n, d) => (Math.round(n * (10 ** d)) / (10 ** d)).toFixed(d).replace('.', ',');
+            mRows.push({
+              nr: 'Σ',
+              bandwaage_t: nBand ? fmtN(sumBand, 3) : '',
+              pruefkette_t: nPk ? fmtN(sumPk, 3) : '',
+              kg_pro_m: nK ? fmtN(sumK, 4) : '',
+              geschwindigkeit_ms: '',
+              messzeit_s: nZ ? fmtN(sumZ, 0) : '',
+              fehler_prozent: nPk && sumPk !== 0 ? ((sumBand - sumPk) / sumPk * 100 > 0 ? '+' : '') + fmtN(((sumBand - sumPk) / sumPk) * 100, 2) : '',
+              leistung_th: nLeist ? fmtN(sumLeist / nLeist, 1) : '',
+              bemerkung: de ? 'Summe' : 'Total',
+            });
+          }
+          y = drawKeyValueTable(page, y, mRows, mCols);
+        }
       } else if (block.type === 'bemerk') {
         y = drawSectionTitle(page, y, de ? 'Allgemeine Bemerkungen' : 'General remarks');
         y = drawWrappedText(page, font, block.text, marginX, y, tableInnerW, 8, 11, unicodeOk);
@@ -1644,6 +1855,37 @@ function rowsForPdfSum(rows) {
   return (Array.isArray(rows) ? rows : []).filter(rowInSumme);
 }
 
+function rowHasAnyValue(row) {
+  if (!row || typeof row !== 'object') return false;
+  return Object.keys(row).some((k) => {
+    if (k === 'in_summe' || k === 'in_pdf' || k === 'id' || k === 'nr') return false;
+    const v = row[k];
+    if (v == null || typeof v === 'boolean') return false;
+    return String(v).trim() !== '';
+  });
+}
+
+function weighingRowHasData(row) {
+  if (!row || typeof row !== 'object') return false;
+  return ['bandwaage_kg', 'kontrollwaage_kg', 'fehler_kg', 'fehler_prozent', 'leistung_th', 'tara_kg', 'brutto_kg', 'bemerkung'].some(
+    (k) => String(row[k] == null ? '' : row[k]).trim() !== '',
+  );
+}
+
+function chainRowHasData(row) {
+  if (!row || typeof row !== 'object') return false;
+  return ['tag', 'ketten_type', 'laenge', 'gewicht_pro_kette', 'gewicht_pro_meter'].some(
+    (k) => String(row[k] == null ? '' : row[k]).trim() !== '',
+  );
+}
+
+function chainMessHasData(row) {
+  if (!row || typeof row !== 'object') return false;
+  return ['bandwaage_t', 'kg_pro_m', 'geschwindigkeit_ms', 'messzeit_s', 'bemerkung', 'pruefkette_t', 'fehler_prozent', 'leistung_th'].some(
+    (k) => String(row[k] == null ? '' : row[k]).trim() !== '',
+  );
+}
+
 /**
  * Kontrollwiegungsprotokoll – A4 Querformat, Tabellenlayout (Kukla-Corporate).
  */
@@ -1671,7 +1913,7 @@ async function generateKontrollwiegungPdfBuffer(payload, options) {
   const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
   const rowsAll = Array.isArray(payload.wiegungen) ? payload.wiegungen : [];
   // PDF: nur Zeilen mit Druck-Flag (in_pdf); Summe erzwingt Druck
-  const dataRows = rowsAll.filter(rowInPdf);
+  const dataRows = rowsAll.filter((row) => rowInPdf(row) && rowHasAnyValue(row));
 
   const cols = de
     ? [
@@ -1898,8 +2140,11 @@ async function generateKontrollwiegungPdfBuffer(payload, options) {
       const gx = marginX + gi * colW + pad;
       let gy = yStart - 12;
       group.forEach(([label, val]) => {
+        const identity = /kunde|customer|^fn$|^sn$|projekt|project|datum|date|techniker|engineer|gespeichert|saved/i.test(String(label || ''));
+        const raw = String(val || '').trim();
+        if (!raw && !identity) return;
         page.drawText(S(label), { x: gx, y: gy, size: 6.5, font, color: grayMuted });
-        const display = String(val || '').trim() || '–';
+        const display = raw || '–';
         page.drawText(clip(fontBold, display, 9, colW - pad * 2), {
           x: gx,
           y: gy - 11,
@@ -2107,7 +2352,7 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
   const logo = await embedLogo(pdfDoc);
   const sigImg = await embedSignatureImage(pdfDoc, payload.technician_signature_png);
   const rowsAll = skLocal.enrichMessungen(Array.isArray(payload.messungen) ? payload.messungen : []);
-  const dataRows = rowsAll.filter(rowInPdf);
+  const dataRows = rowsAll.filter((row) => rowInPdf(row) && rowHasAnyValue(row));
 
   const cols = de
     ? [
@@ -2296,6 +2541,9 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
       const gx = marginX + gi * colW + pad;
       let gy = yStart - 12;
       group.forEach(([label, val]) => {
+        const identity = /kunde|customer|^fn$|^sn$|projekt|project|datum|date|techniker|engineer/i.test(String(label || ''));
+        const raw = String(val || '').trim();
+        if ((!raw || raw === '–' || raw === '-') && !identity) return;
         page.drawText(clip(font, label, 6.5, colW - pad * 2), {
           x: gx,
           y: gy,
@@ -2303,7 +2551,7 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
           font,
           color: grayMuted,
         });
-        page.drawText(clip(fontBold, String(val || '').trim() || '–', 9, colW - pad * 2), {
+        page.drawText(clip(fontBold, raw && raw !== '–' && raw !== '-' ? raw : '–', 9, colW - pad * 2), {
           x: gx,
           y: gy - 11,
           size: 9,
@@ -2361,7 +2609,7 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
       ? [
           { key: 'nr', label: 'Nr.', sub: 'No.', w: 28, align: 'center' },
           { key: 'tag', label: 'Tag (Name)', sub: 'tag', w: 140, align: 'left' },
-          { key: 'ketten_type', label: 'Ketten Type', sub: 'chain type', w: 90, align: 'left' },
+          { key: 'ketten_type', label: 'Ketten Type', sub: 'chain type', w: 180, align: 'left' },
           { key: 'laenge', label: 'Laenge', sub: 'length', w: 90, align: 'right', digits: 3 },
           { key: 'gewicht_pro_kette', label: 'Gewicht / Kette', sub: 'weight / chain', w: 110, align: 'right', digits: 3 },
           { key: 'gewicht_pro_meter', label: 'Gewicht / Meter', sub: 'weight / m', w: 0, align: 'right', digits: 4 },
@@ -2369,14 +2617,14 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
       : [
           { key: 'nr', label: 'No.', sub: 'Nr.', w: 28, align: 'center' },
           { key: 'tag', label: 'Tag (name)', sub: 'Tag', w: 140, align: 'left' },
-          { key: 'ketten_type', label: 'Chain type', sub: 'Ketten Type', w: 90, align: 'left' },
+          { key: 'ketten_type', label: 'Chain type', sub: 'Ketten Type', w: 180, align: 'left' },
           { key: 'laenge', label: 'Length', sub: 'Laenge', w: 90, align: 'right', digits: 3 },
           { key: 'gewicht_pro_kette', label: 'Weight / chain', sub: 'Gewicht / Kette', w: 110, align: 'right', digits: 3 },
           { key: 'gewicht_pro_meter', label: 'Weight / m', sub: 'Gewicht / Meter', w: 0, align: 'right', digits: 4 },
         ];
     const fixedK = colsK.reduce((s, c) => s + (c.key === 'gewicht_pro_meter' ? 0 : c.w), 0);
     colsK.forEach((c) => {
-      if (c.key === 'gewicht_pro_meter') c.w = Math.max(100, tableInnerW - fixedK);
+      if (c.key === 'gewicht_pro_meter') c.w = Math.max(64, tableInnerW - fixedK);
     });
 
     let sumLaenge = 0;
@@ -2620,7 +2868,14 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
     let y = drawHeader(page);
     if (pageIndex === 0) {
       y = drawMeta(page, y);
-      y = drawKettenDaten(page, y);
+      const kettenList = Array.isArray(payload.ketten) ? payload.ketten : [];
+      const kettenFilled = kettenList.some(rowHasAnyValue)
+        || ['ketten_type', 'ketten_laenge', 'gewicht_pro_kette', 'gewicht_pro_meter'].some((k) => String(payload[k] || '').trim());
+      if (kettenFilled) y = drawKettenDaten(page, y);
+    }
+    if (!plan.rows.length && !plan.withSum) {
+      drawFooter(page, pageIndex, pagesPlan.length, pageIndex === pagesPlan.length - 1);
+      return;
     }
     y = drawSectionTitle(page, y, 'Messungen', 'measurements');
     const tableTop = y;
@@ -3067,30 +3322,28 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     return Math.max(lineH, lines * lineH);
   }
 
-  // Build draw queue
+  // Build draw queue – leere Punkte weglassen
   const queue = [];
-  queue.push({ type: 'section', title: L.grund });
   if (grundBlocks.length) {
+    queue.push({ type: 'section', title: L.grund });
     grundBlocks.forEach((b) => queue.push(b));
-  } else {
-    queue.push({ type: 'text', text: '–' });
   }
   fnSections.forEach((sec) => {
+    const hasBody = sec.blocks && sec.blocks.length;
+    const hasMeta = String(sec.type || '').trim() || String(sec.position || '').trim();
+    if (!hasBody && !hasMeta && !String(sec.fn || '').trim()) return;
     queue.push({
       type: 'fn_header',
       fn: sec.fn || '–',
-      typeVal: sec.type || '–',
-      pos: sec.position || '–',
+      typeVal: sec.type || '',
+      pos: sec.position || '',
     });
-    if (sec.blocks.length) sec.blocks.forEach((b) => queue.push(b));
-    else queue.push({ type: 'text', text: '–' });
+    if (hasBody) sec.blocks.forEach((b) => queue.push(b));
     queue.push({ type: 'fn_sep' });
   });
-  queue.push({ type: 'section', title: L.bemerk });
   if (bemerkBlocks.length) {
+    queue.push({ type: 'section', title: L.bemerk });
     bemerkBlocks.forEach((b) => queue.push(b));
-  } else {
-    queue.push({ type: 'text', text: '–' });
   }
 
   const pages = [];
@@ -3619,7 +3872,6 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   y = metaTop - metaH;
 
   // —— Anlagendaten ——
-  drawSectionHead(t('Anlagendaten', 'Equipment data'));
   const plantRows = [
     [t('Type', 'Type'), payload.type, t('Pos.-Nr.', 'Pos. no.'), payload.pos_nr],
     [
@@ -3634,7 +3886,9 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
       t('Projekt / Auftrag', 'Project / Job'),
       payload.projekt || payload.job_number,
     ],
-  ];
+  ].filter((row) => String(row[1] || '').trim() || String(row[3] || '').trim());
+  if (plantRows.length) {
+  drawSectionHead(t('Anlagendaten', 'Equipment data'));
   const plantRowH = 15;
   const plantHalf = tableInnerW / 2;
   plantRows.forEach((row, idx) => {
@@ -3666,6 +3920,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     y = rowTop - plantRowH;
   });
   y -= GAP_AFTER_TABLE;
+  }
 
   // —— Verfahren ——
   const methods = [];
@@ -3673,8 +3928,9 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
   if (verfahren.schleppketten) methods.push(t('Schleppketten-Test', 'Chain calibration test'));
   if (verfahren.service) methods.push(t('Serviceprotokoll', 'Service protocol'));
   if (verfahren.inbetriebnahme) methods.push(t('Inbetriebnahme Protokoll', 'Commissioning report'));
+  if (methods.length) {
   drawSectionHead(t('Prüfverfahren', 'Inspection methods'));
-  page.drawText(S(methods.length ? methods.join('  ·  ') : '–'), {
+  page.drawText(S(methods.join('  ·  ')), {
     x: marginX,
     y,
     size: 8,
@@ -3682,6 +3938,7 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     color: grayText,
   });
   y -= GAP_LINE;
+  }
 
   // —— Ergebnisse ——
   const resultRows = [];
@@ -3708,10 +3965,10 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
     resultRows.push([t('Inbetriebnahme Protokoll', 'Commissioning report'), '–', '–', '–']);
   }
 
+  if (resultRows.length) {
   drawSectionHead(t('Ergebnisse', 'Results'));
   const colW = [tableInnerW * 0.4, tableInnerW * 0.2, tableInnerW * 0.2, tableInnerW * 0.2];
   const resultRowH = 15;
-  if (resultRows.length) {
     const headTop = y;
     page.drawRectangle({
       x: marginX,
@@ -3747,15 +4004,6 @@ async function generatePruefzertifikatPdfBuffer(payload, options) {
       });
       y = rowTop - resultRowH;
     });
-  } else {
-    page.drawText(S(t('Kein Prüfverfahren ausgewählt.', 'No inspection method selected.')), {
-      x: marginX,
-      y,
-      size: 8,
-      font,
-      color: grayMuted,
-    });
-    y -= GAP_LINE;
   }
 
   y -= 10;
@@ -4437,6 +4685,14 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
     y -= 12;
   }
 
+  const workFilled = work.filter((row) => {
+    return String(row.description || '').trim()
+      || String(row.item_time || '').trim()
+      || Number(row.normal_hours)
+      || Number(row.overtime_50)
+      || Number(row.overtime_100);
+  });
+  if (workFilled.length) {
   drawTxt(page, S(L.works), { x: marginX, y, size: 9, font: fontBold, color: greenDark });
   y -= 14;
   drawTableHead([L.date, L.time, L.works, L.normal, L.ot50, L.ot100], [colDate, colTime, colWorks, colN, col50, col100]);
@@ -4444,7 +4700,7 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   let sumN = 0;
   let sum50 = 0;
   let sum100 = 0;
-  work.forEach((row, idx) => {
+  workFilled.forEach((row, idx) => {
     const descLines = wrapPdfPlain(font, S(row.description || ''), 8, colWorks - 6);
     const h = Math.max(16, descLines.length * 10 + 8);
     if (ensureSpace(h + 2)) {
@@ -4486,14 +4742,18 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   drawCentered(page, fmtNum(sum50) || '0', nx + colN, col50, y - 12, 8, fontBold, greenDark);
   drawCentered(page, fmtNum(sum100) || '0', nx + colN + col50, col100, y - 12, 8, fontBold, greenDark);
   y -= 22;
+  }
 
-  if (parts.length) {
+  const partsFilled = parts.filter((row) => String(row.designation || '').trim() || String(row.type_no || '').trim() || String(row.description || row.comment || '').trim() || Number(row.quantity));
+  if (partsFilled.length) {
+    drawTxt(page, S(L.parts), { x: marginX, y, size: 9, font: fontBold, color: greenDark });
+    y -= 14;
     const colQty = 32;
     const colType = 72;
     const colComment = Math.floor(tableInnerW * 0.34);
     const colDes = tableInnerW - colQty - colType - colComment;
     drawTableHead([L.qty, L.designation, L.typeNo, L.comment], [colQty, colDes, colType, colComment]);
-    parts.forEach((row, idx) => {
+    partsFilled.forEach((row, idx) => {
       const desLines = wrapPdfPlain(font, S(row.designation || ''), 8, colDes - 6);
       const cmtLines = wrapPdfPlain(font, S(row.description || row.comment || ''), 8, colComment - 6);
       const h = Math.max(16, Math.max(desLines.length, cmtLines.length) * 10 + 6);

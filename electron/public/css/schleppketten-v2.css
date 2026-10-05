@@ -147,6 +147,18 @@ body.has-sticky-header .sk-mess-table-wrap thead th {
   overflow-x: hidden;
 }
 
+.sk-subhead {
+  margin: 0.15rem 0 0.55rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #0c6a4d;
+}
+.sk-subhead + .mb-v2-actions-row {
+  margin-top: 0;
+}
+.sk-mess-table-wrap + .sk-subhead {
+  margin-top: 1.1rem;
+}
 .sk-ketten-table {
   min-width: 0;
   width: 100%;

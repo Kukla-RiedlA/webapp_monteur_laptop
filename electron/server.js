@@ -9334,8 +9334,64 @@ function createApp(db) {
       '.bmp': 'image/bmp',
       '.tif': 'image/tiff',
       '.tiff': 'image/tiff',
+      '.heic': 'image/heic',
+      '.heif': 'image/heif',
     };
     return map[ext] || 'application/octet-stream';
+  }
+
+  function sniffImageContentType(buf) {
+    if (!buf || buf.length < 12) return '';
+    if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg';
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
+    if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif';
+    if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+    if (buf.toString('ascii', 0, 2) === 'BM') return 'image/bmp';
+    return '';
+  }
+
+  /** Galerie braucht image/*, sonst bleibt die Großansicht leer (octet-stream). */
+  function contentTypeForInlineImage(name, headerCt, buf) {
+    const sniffed = sniffImageContentType(buf);
+    if (sniffed) return sniffed;
+    const fromName = contentTypeForDownloadName(name);
+    if (fromName.startsWith('image/')) return fromName;
+    const ct = String(headerCt || '').split(';')[0].trim().toLowerCase();
+    if (ct.startsWith('image/')) return ct;
+    return fromName;
+  }
+
+  function sendInlineFile(res, buf, fileName, wantInline) {
+    const baseName = path.basename(String(fileName || 'download'));
+    const ct = contentTypeForInlineImage(baseName, '', buf);
+    res.setHeader('Content-Type', ct);
+    res.setHeader(
+      'Content-Disposition',
+      (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
+    );
+    res.setHeader('Content-Length', String(buf.length));
+    return res.send(buf);
+  }
+
+  function isCloudFilePath(filePath) {
+    const kind = hangDiag.classifyPathKind(filePath);
+    return kind === 'onedrive' || kind === 'unc';
+  }
+
+  function readFileBounded(filePath, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('read_timeout')), timeoutMs);
+      fs.promises.readFile(win32FsPath(filePath)).then(
+        (buf) => {
+          clearTimeout(timer);
+          resolve(buf);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      );
+    });
   }
 
   function bufferLooksLikeJsonError(buf) {
@@ -9531,22 +9587,34 @@ function createApp(db) {
         return serveProjekteNeuThumb(res, technicianId, fabValue, pnPath, thumbMax, null, thumbOpts);
       }
       if (sourceNorm === 'projekte_neu' && pnPath) {
-        const localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id, {
+        let localPath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, req.query.job_id, {
           skipDeepSearch: true,
         });
-        if (localPath && hangDiag.classifyPathKind(localPath) !== 'onedrive') {
+        if (localPath && isCloudFilePath(localPath)) {
+          const cached = readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
+          if (cached) localPath = cached;
+        }
+        if (localPath && !isCloudFilePath(localPath)) {
           try {
-            const buf = fs.readFileSync(localPath);
-            const baseName = path.basename(localPath);
-            res.setHeader('Content-Type', contentTypeForDownloadName(baseName));
-            res.setHeader(
-              'Content-Disposition',
-              (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
-            );
-            res.setHeader('Content-Length', String(buf.length));
-            return res.send(buf);
+            const buf = await fs.promises.readFile(win32FsPath(localPath));
+            if (buf && buf.length) {
+              return sendInlineFile(res, buf, path.basename(localPath), wantInline);
+            }
           } catch (_) {
             /* fall through */
+          }
+        } else if (!wantThumb && localPath && isCloudFilePath(localPath)) {
+          /* Großansicht: Datei async lesen. readFileSync auf OneDrive blockiert die App. */
+          try {
+            const buf = await readFileBounded(localPath, 45000);
+            if (buf && buf.length) {
+              try {
+                writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, buf);
+              } catch (_) {}
+              return sendInlineFile(res, buf, path.basename(localPath), wantInline);
+            }
+          } catch (_) {
+            /* fall through to Dispo */
           }
         }
         if (!wantThumb) {
@@ -9556,14 +9624,7 @@ function createApp(db) {
               writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, viaSess.buf);
             } catch (_) {}
             const baseName = pnPath.split(/[/\\]/).pop() || 'download';
-            const ct = contentTypeForDownloadName(baseName);
-            res.setHeader('Content-Type', ct);
-            res.setHeader(
-              'Content-Disposition',
-              (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
-            );
-            res.setHeader('Content-Length', String(viaSess.buf.length));
-            return res.send(viaSess.buf);
+            return sendInlineFile(res, viaSess.buf, baseName, wantInline);
           }
         }
       }
@@ -9580,19 +9641,23 @@ function createApp(db) {
           const relNorm = pnPath.replace(/\//g, path.sep);
           filePath = resolveDienstreiseProjectFilePath(localJobId, relNorm);
         }
-        if (filePath && hangDiag.classifyPathKind(filePath) === 'onedrive') {
-          filePath = null;
+        if (filePath && isCloudFilePath(filePath)) {
+          const cached = readCachedProjekteNeuFile(DB_DIR, fabValue, pnPath);
+          if (cached) filePath = cached;
         }
-        if (filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-          const buf = fs.readFileSync(filePath);
-          const baseName = path.basename(filePath);
-          res.setHeader('Content-Type', 'application/octet-stream');
-          res.setHeader(
-            'Content-Disposition',
-            (wantInline ? 'inline' : 'attachment') + '; filename="' + encodeURIComponent(baseName) + '"',
-          );
-          res.setHeader('Content-Length', String(buf.length));
-          return res.send(buf);
+        if (filePath && !isCloudFilePath(filePath) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+          const buf = await fs.promises.readFile(win32FsPath(filePath));
+          if (buf && buf.length) return sendInlineFile(res, buf, path.basename(filePath), wantInline);
+        } else if (filePath && isCloudFilePath(filePath)) {
+          try {
+            const buf = await readFileBounded(filePath, 45000);
+            if (buf && buf.length) {
+              try {
+                writeCachedProjekteNeuFile(DB_DIR, fabValue, pnPath, buf);
+              } catch (_) {}
+              return sendInlineFile(res, buf, path.basename(filePath), wantInline);
+            }
+          } catch (_) {}
         }
       }
       const fileValue = String(req.query.file || '').trim();
@@ -9640,9 +9705,9 @@ function createApp(db) {
           .json(data.ok === false || data.success === false ? data : { success: false, error: data.error || r.statusText });
       }
       const buf = Buffer.from(await r.arrayBuffer());
-      const ct = r.headers.get('content-type') || 'application/octet-stream';
       const fallbackFn =
         sourceNorm === 'projekte_neu' ? pnPath.split(/[/\\]/).pop() || 'download' : fileValue;
+      const ct = contentTypeForInlineImage(fallbackFn, r.headers.get('content-type') || '', buf);
       if (sourceNorm === 'projekte_neu' && pnPath && buf.length) {
         try {
           if (wantThumb) {
@@ -13779,7 +13844,21 @@ function createApp(db) {
         abschluss: normalizeServiceprotokollAbschluss(body.abschluss),
         motoren: pickProtocolMotors(body),
         include_in_pdf: body.include_in_pdf !== false,
+        wiegungen: Array.isArray(body.wiegungen)
+          ? body.wiegungen
+          : (body.messwerte && Array.isArray(body.messwerte.wiegungen) ? body.messwerte.wiegungen : []),
+        ketten: Array.isArray(body.ketten)
+          ? body.ketten
+          : (body.messwerte && Array.isArray(body.messwerte.ketten) ? body.messwerte.ketten : []),
+        ketten_messungen: Array.isArray(body.ketten_messungen)
+          ? body.ketten_messungen
+          : (body.messwerte && Array.isArray(body.messwerte.ketten_messungen) ? body.messwerte.ketten_messungen : []),
       };
+      if (draftPayload.messwerte && typeof draftPayload.messwerte === 'object') {
+        draftPayload.messwerte.wiegungen = draftPayload.wiegungen;
+        draftPayload.messwerte.ketten = draftPayload.ketten;
+        draftPayload.messwerte.ketten_messungen = draftPayload.ketten_messungen;
+      }
       const langsMaybe = parseProtocolLanguagesMaybe(body);
       if (langsMaybe && langsMaybe.length) {
         draftPayload.languages = langsMaybe;
@@ -14083,7 +14162,21 @@ function createApp(db) {
           pdf_languages: pdfLangs,
           motoren: pickProtocolMotors(p),
           include_in_pdf: p.include_in_pdf !== false,
+          wiegungen: Array.isArray(p.wiegungen)
+            ? p.wiegungen
+            : (p.messwerte && Array.isArray(p.messwerte.wiegungen) ? p.messwerte.wiegungen : []),
+          ketten: Array.isArray(p.ketten)
+            ? p.ketten
+            : (p.messwerte && Array.isArray(p.messwerte.ketten) ? p.messwerte.ketten : []),
+          ketten_messungen: Array.isArray(p.ketten_messungen)
+            ? p.ketten_messungen
+            : (p.messwerte && Array.isArray(p.messwerte.ketten_messungen) ? p.messwerte.ketten_messungen : []),
         };
+        if (draftPayload.messwerte && typeof draftPayload.messwerte === 'object') {
+          draftPayload.messwerte.wiegungen = draftPayload.wiegungen;
+          draftPayload.messwerte.ketten = draftPayload.ketten;
+          draftPayload.messwerte.ketten_messungen = draftPayload.ketten_messungen;
+        }
         if (applyToAnlagenstamm) {
           try {
             const messSync = await syncServiceprotokollMesswerteToAnlagenstammLocal(body, fab, draftPayload.messwerte, draftPayload.kopf_dwc, {
@@ -18754,7 +18847,9 @@ function createApp(db) {
         jobRows.map((r) => {
           const fn = normJobFabKey(r);
           const apiRow = fn ? byFab[fn] || {} : {};
-          const localRow = fn ? anlagenstammLookupByFab(db, fn) : null;
+          const localRow = fn
+            ? (debugInfo._source === 'local' && byFab[fn] ? byFab[fn] : anlagenstammLookupByFab(db, fn))
+            : null;
           const localDirty = localRow && Number(localRow.dirty) === 1 && hasNonemptyStammField(localRow);
           const jobRow = r && typeof r === 'object' ? r : { fabrikationsnummer: fn };
           // Unsynced Projektdaten-Edit nicht mit altem Stamm zurückschreiben.
@@ -20175,7 +20270,19 @@ function createApp(db) {
           .json({ ok: false, error: errBody || 'upstream_' + r.status });
       }
       const buf = Buffer.from(await r.arrayBuffer());
-      const ct = r.headers.get('content-type') || 'application/octet-stream';
+      if (r.status === 204 || !buf.length) {
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(204).end();
+      }
+      const urlName = decodeURIComponent(parsed.searchParams.get('path') || parsed.searchParams.get('file') || '');
+      const ct = contentTypeForInlineImage(
+        urlName || (item.label || ''),
+        r.headers.get('content-type') || '',
+        buf,
+      );
+      if (!String(ct).toLowerCase().startsWith('image/') && !String(ct).toLowerCase().startsWith('application/pdf')) {
+        return res.status(502).json({ ok: false, error: 'not_image' });
+      }
       res.setHeader('Content-Type', ct);
       res.setHeader('Cache-Control', 'private, max-age=300');
       res.setHeader('Content-Length', String(buf.length));

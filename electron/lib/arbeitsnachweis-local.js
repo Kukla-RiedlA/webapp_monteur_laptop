@@ -223,20 +223,27 @@ function fabsFromJob(db, rawJobId) {
   } catch (_) {
     return [];
   }
-  let best = [];
-  (rows || []).forEach((row) => {
-    const parsed = normalizeFabRows(row && row.fabrikationsnummern);
-    if (parsed.length > best.length) best = parsed;
-  });
-  return best;
+  const exact = (rows || []).find((row) => Number(row && row.id) === n);
+  const exactFabs = normalizeFabRows(exact && exact.fabrikationsnummern);
+  if (exactFabs.length) return exactFabs;
+  const byServer = (rows || []).find((row) => String(row && row.server_id) === String(n));
+  return normalizeFabRows(byServer && byServer.fabrikationsnummern);
 }
 
 function applyJobFabsToAn(an, jobFabs) {
   const out = an && typeof an === 'object' ? an : {};
   const incoming = normalizeFabRows(jobFabs);
   if (!incoming.length) return out;
-  // Live-Auftrag zuerst: der Beleg-Schnappschuss darf die Liste nicht anführen.
-  const merged = mergeFabRows(incoming, out.fabrikationsnummern);
+  // Auftrag ist die Liste. Ein älterer Beleg-Schnappschuss darf entfernte FN nicht zurückholen.
+  const snapshot = normalizeFabRows(out.fabrikationsnummern);
+  const typeByFn = new Map();
+  snapshot.forEach((r) => {
+    if (r.fabrikationsnummer && r.type) typeByFn.set(r.fabrikationsnummer, r.type);
+  });
+  const merged = incoming.map((r) => ({
+    fabrikationsnummer: r.fabrikationsnummer,
+    type: r.type || typeByFn.get(r.fabrikationsnummer) || '',
+  }));
   out.fabrikationsnummern = merged;
   out.fabrikationsnummer = merged.map((r) => r.fabrikationsnummer).filter(Boolean).join(', ');
   const types = merged.map((r) => r.type).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);

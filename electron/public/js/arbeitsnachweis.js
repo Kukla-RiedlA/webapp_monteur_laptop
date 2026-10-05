@@ -10,6 +10,7 @@
   var lastCustomerSig = false;
   var persistTimer = null;
   var jobLoadBusy = false;
+  var jobLoadToken = 0;
   var lastDocNumber = '';
 
   function el(id) { return document.getElementById(id); }
@@ -66,7 +67,7 @@
     el('anCustomer').value = job.customer_name || job.customer || '';
     el('anSite').value = siteFromJob(job);
     var fromJob = fabsFromJobSources(job);
-    if (fromJob.length) renderFabs(mergeFabs(currentFabs(), fromJob));
+    if (fromJob.length) renderFabs(fromJob);
     fillContacts(contactsFromJob(job));
   }
   function flagOn(v) {
@@ -141,21 +142,20 @@
     else if (data.local_uuid) el('anLocalUuid').value = data.local_uuid;
     if (doc.content_version) el('anContentVersion').value = String(doc.content_version);
     else if (data.content_version) el('anContentVersion').value = String(data.content_version);
-    var jobId = doc.server_job_id || doc.job_id || data.job_id;
-    if (jobId && el('anJob')) {
-      el('anJob').value = String(jobId);
-      if (el('anJob').value !== String(jobId)) {
-        var opts = el('anJob').options;
-        for (var i = 0; i < opts.length; i++) {
-          if (opts[i].value === String(jobId) || opts[i].dataset.serverId === String(jobId) || opts[i].dataset.localId === String(jobId)) {
-            el('anJob').selectedIndex = i;
-            break;
-          }
-        }
-      }
+    selectAnJob([
+      doc.server_job_id,
+      doc.job_id,
+      data.job_id,
+      doc.local_job_id,
+      data.local_job_id
+    ]);
+    if (!parseInt(el('anJob') && el('anJob').value, 10)) {
+      resetForm({ keepJob: true });
+      return;
     }
     setRadio('anLang', (doc.language || data.language) === 'en' ? 'en' : 'de');
-    var jobForContacts = jobData || findCachedJob(parseInt(jobId, 10) || 0, parseInt(jobId, 10) || 0);
+    var picked = selectedJobIds();
+    var jobForContacts = jobData || findCachedJob(picked.localId, picked.serverId);
     var signerName = data.signer_name || an.signer_name || '';
     var signerEmail = data.signer_email || an.signer_email || '';
     if (el('anSignerName')) el('anSignerName').value = signerName;
@@ -180,7 +180,7 @@
       selectedJobIds().localId,
       selectedJobIds().serverId
     ));
-    renderFabs(fromJob.length ? mergeFabs(fromJob, an.fabrikationsnummern) : an.fabrikationsnummern);
+    renderFabs(fromJob.length ? fromJob : an.fabrikationsnummern);
     var work = items.filter(function (r) { return r && r.item_type === 'arbeitszeile'; });
     var parts = items.filter(function (r) { return r && r.item_type === 'ersatzteil'; });
     el('anWorkBody').innerHTML = '';
@@ -353,6 +353,28 @@
     if (jn && label.indexOf(jn) === 0) return true;
     return false;
   }
+  function selectAnJob(ids) {
+    var sel = el('anJob');
+    if (!sel) return false;
+    var want = [];
+    (ids || []).forEach(function (v) {
+      var n = parseInt(v, 10) || 0;
+      if (n && want.indexOf(n) < 0) want.push(n);
+    });
+    if (!want.length) return false;
+    var opts = sel.options;
+    for (var i = 0; i < opts.length; i++) {
+      var keys = [opts[i].value, opts[i].dataset && opts[i].dataset.localId, opts[i].dataset && opts[i].dataset.serverId];
+      for (var k = 0; k < keys.length; k++) {
+        var n = parseInt(keys[k], 10) || 0;
+        if (n && want.indexOf(n) >= 0) {
+          sel.selectedIndex = i;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
   function selectedJobIds() {
     var sel = el('anJob');
     var opt = sel && sel.options[sel.selectedIndex];
@@ -363,20 +385,18 @@
   }
   function fabsFromJobSources(job) {
     var ids = selectedJobIds();
-    var out = normalizeFabs(job && job.fabrikationsnummern);
+    var stored = normalizeFabs(job && job.fabrikationsnummern);
     try {
       var pj = window.currentProjektdatenJob;
-      var rows = window.currentProjektdatenLeistungRows;
-      if (pj && (jobSourceIdsMatch(pj, ids.localId, ids.serverId) || (job && jobSourceIdsMatch(pj, parseInt(job.id, 10) || 0, dispoJobId(job))))) {
-        out = mergeFabs(out, pj.fabrikationsnummern);
-        out = mergeFabs(out, rows);
-      }
+      var rows = normalizeFabs(window.currentProjektdatenLeistungRows);
+      var same = pj && (jobSourceIdsMatch(pj, ids.localId, ids.serverId) || (job && jobSourceIdsMatch(pj, parseInt(job.id, 10) || 0, dispoJobId(job))));
+      if (same && rows.length) return rows;
     } catch (e) { /* optional */ }
-    return out;
+    return stored;
   }
   function syncFabsFromJob(job) {
-    var merged = mergeFabs(currentFabs(), fabsFromJobSources(job || jobData));
-    if (merged.length) renderFabs(merged);
+    var next = fabsFromJobSources(job || jobData);
+    if (next.length) renderFabs(next);
   }
   function siteAddressLines(job) {
     if (!job) return [];
@@ -877,6 +897,7 @@
       opt.textContent = (j.job_number || '#' + (sid || lid)) + ' ' + (j.customer_name || '');
       sel.appendChild(opt);
     });
+    var restored = false;
     if (prevLocal || prevServer) {
       var opts = sel.options;
       for (var i = 0; i < opts.length; i++) {
@@ -885,12 +906,15 @@
           (prevServer && (opts[i].dataset.serverId === prevServer || opts[i].value === prevServer))
         ) {
           sel.selectedIndex = i;
+          restored = true;
           break;
         }
       }
     }
+    if ((prevLocal || prevServer) && !restored) resetForm({ keepJob: true });
   }
   async function onJobChange() {
+    var token = ++jobLoadToken;
     jobLoadBusy = true;
     try {
     var sel = el('anJob');
@@ -906,13 +930,16 @@
     var detail = null;
     try {
       detail = await fetchLocalJob(localId, techId);
+      if (token !== jobLoadToken) return;
       if (!detail && serverId && serverId !== localId) detail = await fetchLocalJob(serverId, techId);
+      if (token !== jobLoadToken) return;
       if (detail) applyJobKopf(detail);
     } catch (e) { /* Liste reicht für die Kopfdaten */ }
     try {
       var saved = await fetch(anLocalGetUrl({ job_id: String(serverId || id) }), {
         headers: getHeaders()
       }).then(function (r) { return r.json(); });
+      if (token !== jobLoadToken) return;
       if (saved && saved.document) {
         applyPayload(saved);
         if (detail) applyJobKopf(detail);
@@ -923,13 +950,14 @@
     } catch (e2) { /* Prefill bleibt */ }
     proxy('prefill', { method: 'GET', queryParams: { job_id: serverId || id } })
       .then(function (pre) {
+        if (token !== jobLoadToken) return;
         var p = pre && pre.prefill;
         if (!p) return;
         if (p.customer_name && !el('anCustomer').value) el('anCustomer').value = p.customer_name;
         if (!el('anSite').value && p.site) el('anSite').value = p.site;
         if (p.technician_name && !el('anTech').value) el('anTech').value = p.technician_name;
         var preFabs = normalizeFabs(p.fabrikationsnummern);
-        if (preFabs.length) renderFabs(mergeFabs(currentFabs(), preFabs));
+        if (preFabs.length && !currentFabs().length) renderFabs(preFabs);
         var preContacts = p.job_contacts || p.contacts;
         if (preContacts && preContacts.length && !(el('anSignerContact') && el('anSignerContact').options.length > 1)) {
           fillContacts(preContacts);
@@ -937,7 +965,8 @@
       })
       .catch(function () {});
     } finally {
-      syncFabsFromJob(jobData);
+      if (token !== jobLoadToken) return;
+      if (parseInt(el('anJob') && el('anJob').value, 10)) syncFabsFromJob(jobData);
       jobLoadBusy = false;
     }
   }
@@ -1370,8 +1399,11 @@
     window.addEventListener('kukla-job-fabs-updated', function (ev) {
       var d = (ev && ev.detail) || {};
       var ids = selectedJobIds();
+      if (!ids.localId && !ids.serverId) return;
       if (d.job && !jobSourceIdsMatch(d.job, ids.localId, ids.serverId)) return;
-      renderFabs(mergeFabs(currentFabs(), mergeFabs(d.fabrikationsnummern, d.rows)));
+      var live = normalizeFabs(d.rows);
+      if (!live.length) live = normalizeFabs(d.fabrikationsnummern);
+      if (live.length) renderFabs(live);
     });
     window.addEventListener('kukla-jobs-synced', function () {
       hydrateJobFabsForForm().catch(function () {});

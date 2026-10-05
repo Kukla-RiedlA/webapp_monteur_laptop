@@ -107,7 +107,27 @@ describe('merge job FNs into Arbeitsnachweis', () => {
       ['10066', '10227', '11503'],
     );
   });
-  it('unions job FNs onto a short AN snapshot', () => {
+  it('drops FNs that were removed from the job', () => {
+    const an = applyJobFabsToAn(
+      {
+        fabrikationsnummern: [
+          { fabrikationsnummer: '4742', type: 'EBW-E-650' },
+          { fabrikationsnummer: '5927', type: 'E-DBW-A-800/4500' },
+          { fabrikationsnummer: '12019', type: 'E-DBW-AL-650/2100' },
+        ],
+      },
+      [
+        { fabrikationsnummer: '4742', type: 'EBW-E-650' },
+        { fabrikationsnummer: '5801', type: 'DFM-400' },
+        { fabrikationsnummer: '12019', type: 'E-DBW-AL-650/2100' },
+      ],
+    );
+    assert.deepEqual(
+      an.fabrikationsnummern.map((r) => r.fabrikationsnummer),
+      ['4742', '5801', '12019'],
+    );
+  });
+  it('uses the job list when the snapshot is shorter', () => {
     const an = applyJobFabsToAn(
       {
         fabrikationsnummern: [

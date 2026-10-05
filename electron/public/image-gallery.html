@@ -89,6 +89,16 @@
       align-items: center;
       justify-content: center;
       padding: 16px;
+      position: relative;
+    }
+    .gallery-stage .gallery-loader {
+      position: absolute;
+      left: 16px;
+      right: 16px;
+      bottom: 10px;
+      padding: 6px 10px;
+      background: rgba(0, 0, 0, 0.55);
+      border-radius: 6px;
     }
     .gallery-stage img {
       max-width: 100%;
@@ -204,21 +214,68 @@
         );
       }
 
+      var renderSeq = 0;
+      var stageObjectUrl = '';
+
+      function revokeStageObjectUrl() {
+        if (!stageObjectUrl) return;
+        try { URL.revokeObjectURL(stageObjectUrl); } catch (_) {}
+        stageObjectUrl = '';
+      }
+
+      function blobLooksLikeImage(blob, headerCt) {
+        var ct = String(headerCt || blob.type || '').toLowerCase();
+        return ct.indexOf('image/') === 0;
+      }
+
       function renderMain() {
         var item = images[current];
         if (!item) return;
+        var seq = ++renderSeq;
+        var idx = current;
+        revokeStageObjectUrl();
         elStage.innerHTML = '';
         var img = document.createElement('img');
         img.alt = item.label || '';
-        img.src = galleryMediaUrl(current, false);
-        img.addEventListener('error', function () {
-          showError('Bild konnte nicht geladen werden.');
-        });
+        img.src = galleryMediaUrl(idx, true);
+        var note = document.createElement('div');
+        note.className = 'gallery-loader';
+        note.textContent = 'Vollbild wird geladen…';
         elStage.appendChild(img);
+        elStage.appendChild(note);
         elTitle.textContent = item.label || 'Bildergalerie';
         document.title = item.label ? item.label + ' – Galerie' : 'Bildergalerie';
         btnExternal.hidden = false;
         updateNav();
+        fetch(galleryMediaUrl(idx, false), { cache: 'no-store' })
+          .then(function (r) {
+            var ct = r.headers.get('content-type') || '';
+            if (!r.ok) throw new Error('full');
+            return r.blob().then(function (blob) { return { blob: blob, ct: ct }; });
+          })
+          .then(function (got) {
+            if (seq !== renderSeq) return;
+            if (!blobLooksLikeImage(got.blob, got.ct)) throw new Error('full');
+            var typed = got.blob.type && got.blob.type.indexOf('image/') === 0
+              ? got.blob
+              : new Blob([got.blob], { type: String(got.ct).split(';')[0] || 'image/jpeg' });
+            revokeStageObjectUrl();
+            stageObjectUrl = URL.createObjectURL(typed);
+            img.addEventListener('error', function () {
+              if (seq !== renderSeq) return;
+              img.src = galleryMediaUrl(idx, true);
+              note.textContent = 'Vollbild nicht verfügbar, Vorschau wird gezeigt.';
+            }, { once: true });
+            img.addEventListener('load', function () {
+              if (seq !== renderSeq) return;
+              if (note.parentNode) note.parentNode.removeChild(note);
+            }, { once: true });
+            img.src = stageObjectUrl;
+          })
+          .catch(function () {
+            if (seq !== renderSeq) return;
+            note.textContent = 'Vollbild nicht verfügbar, Vorschau wird gezeigt.';
+          });
       }
 
       function buildStrip() {
