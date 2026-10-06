@@ -118,6 +118,7 @@ function isMotorListLayout(text) {
   const t = String(text || '');
   if (/M\s*O\s*T\s*O\s*R\s*[-–]\s*L\s*I\s*S\s*T/i.test(t)) return true;
   if (/Motorle\.doc/i.test(t)) return true;
+  if (/(^|[^a-z])motorl(?:iste)?(?![a-z])/i.test(t)) return true;
   if (/Typ of drive/i.test(t) && /Serial\s*-\s*No/i.test(t)) return true;
   return false;
 }
@@ -483,26 +484,54 @@ async function parseMlPdfBuffer(buf) {
   };
 }
 
-/** 0 Name, 1 Pfad, 2 Datenblatt, 3 nur Ordner 01.02, 9 kein Treffer. */
+/** MOTORL, Motorliste, Motordatenblatt, ML, Antriebsliste, Datos de motor — nicht Motorleistung oder Getriebe-Motor. */
+function labelIsMotorList(label) {
+  let s = String(label || '').toLowerCase();
+  s = s.replace(/\.(pdf|docx?|xlsx?|txt)$/i, '');
+  const flat = s.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!flat) return false;
+  const compact = flat.replace(/ /g, '');
+  if (/(^| )ml( |$)/.test(flat)) return true;
+  const phrases = [
+    'motordatenblatt', 'motordatenblaetter', 'motordaten',
+    'motordatasheet', 'motordata', 'motorblatt',
+    'motorenliste', 'motorliste', 'motorlist',
+    'antriebsliste', 'antriebsdatenblatt', 'antriebsdaten', 'antriebsblatt',
+    'drivelist', 'driveslist',
+    'datosdemotor', 'datosdelmotor', 'listademotores', 'listamotores',
+    'motlist', 'motlst', 'mlist', 'mliste',
+  ];
+  if (phrases.some((p) => compact.includes(p))) return true;
+  if (/motorle(?![a-z])/.test(compact) || /motorl(?![a-z])/.test(compact)) return true;
+  if (/(^|[^a-z])motoren(?![a-z])/.test(compact)) return true;
+  if (/\bmotor\s+list\b|\bmotor\s+data\b|\bdrive\s+list\b|\bdatos\s+de\s+motor\b|\blista\s+de\s+motores\b/.test(flat)) {
+    return true;
+  }
+  return /\bdata\s+sheet\b/.test(flat) && /\bmotor\b/.test(flat);
+}
+
+/** 0 Dateiname, 1 Ordnername, 2 Datenblatt, 3 nur Ordner 01.02, 9 kein Treffer. */
 function mlPdfMatchRank(filenameOrRel) {
   const rel = String(filenameOrRel || '').replace(/\\/g, '/');
-  const base = (rel.split('/').pop() || '').toLowerCase();
+  const parts = rel.split('/').filter(Boolean);
+  const base = parts.pop() || '';
+  if (labelIsMotorList(base)) return 0;
+  if (parts.some((part) => labelIsMotorList(part))) return 1;
   const path = rel.toLowerCase();
-  const strong =
-    /motordaten|motor[\s._-]*daten|motor[\s._-]*data|data[\s._-]*sheet|datasheet|motorle|motor[\s._-]*list|_ml_/i;
-  if (strong.test(base)) return 0;
-  if (strong.test(path)) return 1;
-  if (/datenblatt/i.test(base + '/' + path)) return 2;
-  if (path.includes('01.02') || path.includes('01_02')) return 3;
+  if (/datenblatt/i.test(path)) return 2;
+  if (/(^|\/)01[._]02(?![0-9])/.test(path)) return 3;
   return 9;
 }
 
 function isMlPdfCandidate(filename, relPath) {
   const name = String(filename || '');
   const ext = name.split('.').pop().toLowerCase();
-  if (ext !== 'pdf') return false;
+  if (ext !== 'pdf' && ext !== 'doc' && ext !== 'docx') return false;
   const rel = String(relPath || '').replace(/\\/g, '/');
-  return mlPdfMatchRank(name) < 9 || mlPdfMatchRank(rel) < 9;
+  const rank = Math.min(mlPdfMatchRank(name), mlPdfMatchRank(rel));
+  if (rank >= 9) return false;
+  if (ext === 'pdf') return true;
+  return rank === 0;
 }
 
 module.exports = {
