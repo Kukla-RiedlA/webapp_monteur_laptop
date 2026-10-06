@@ -483,17 +483,26 @@ async function parseMlPdfBuffer(buf) {
   };
 }
 
+/** 0 Name, 1 Pfad, 2 Datenblatt, 3 nur Ordner 01.02, 9 kein Treffer. */
+function mlPdfMatchRank(filenameOrRel) {
+  const rel = String(filenameOrRel || '').replace(/\\/g, '/');
+  const base = (rel.split('/').pop() || '').toLowerCase();
+  const path = rel.toLowerCase();
+  const strong =
+    /motordaten|motor[\s._-]*daten|motor[\s._-]*data|data[\s._-]*sheet|datasheet|motorle|motor[\s._-]*list|_ml_/i;
+  if (strong.test(base)) return 0;
+  if (strong.test(path)) return 1;
+  if (/datenblatt/i.test(base + '/' + path)) return 2;
+  if (path.includes('01.02') || path.includes('01_02')) return 3;
+  return 9;
+}
+
 function isMlPdfCandidate(filename, relPath) {
   const name = String(filename || '');
   const ext = name.split('.').pop().toLowerCase();
   if (ext !== 'pdf') return false;
-  const rel = String(relPath || '')
-    .replace(/\\/g, '/')
-    .toLowerCase();
-  if (/_ml_/i.test(name)) return true;
-  if (rel.includes('motor list') || rel.includes('01.02')) return true;
-  if (/motorle/i.test(name)) return true;
-  return /motor.?list/i.test(name);
+  const rel = String(relPath || '').replace(/\\/g, '/');
+  return mlPdfMatchRank(name) < 9 || mlPdfMatchRank(rel) < 9;
 }
 
 module.exports = {
@@ -503,4 +512,5 @@ module.exports = {
   isMlPdfCandidate,
   isMotorListLayout,
   mlPdfLangRank,
+  mlPdfMatchRank,
 };

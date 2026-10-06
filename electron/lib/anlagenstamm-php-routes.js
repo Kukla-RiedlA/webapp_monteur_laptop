@@ -15,7 +15,7 @@ const {
 } = require('./anlagenstamm-documents-local');
 const fs = require('fs');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
-const { parseMlPdfBuffer, isMlPdfCandidate, mlPdfLangRank } = require('./anlagenstamm-ml-pdf');
+const { parseMlPdfBuffer, isMlPdfCandidate, mlPdfLangRank, mlPdfMatchRank } = require('./anlagenstamm-ml-pdf');
 const { readParameterSourceText, decodeParameterFileBytes, normalizeFabDigits } = require('./anlagenstamm-local');
 
 function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
@@ -130,12 +130,37 @@ function collectMlPdfRels(nodes, acc) {
 function sortMlPdfRels(rels, fab) {
   const fd = String(fab || '').replace(/\D/g, '');
   return [...new Set(rels.filter(Boolean))].sort((a, b) => {
+    const match = mlPdfMatchRank(a) - mlPdfMatchRank(b);
+    if (match) return match;
     const lang = mlPdfLangRank(a) - mlPdfLangRank(b);
     if (lang) return lang;
     const af = fd && String(a).includes(fd) ? 0 : 1;
     const bf = fd && String(b).includes(fd) ? 0 : 1;
     return af - bf;
   });
+}
+
+function mergeMotorRows(into, add) {
+  const score = (row) =>
+    Object.keys(row || {}).reduce((n, k) => n + (String(row[k] || '').trim() ? 1 : 0), 0);
+  const index = new Map();
+  into.forEach((row, i) => {
+    const key = [row.positionsnummer, row.seriennummer, row.type].join('|');
+    index.set(key === '||' ? 'row-' + i : key, i);
+  });
+  for (const row of add || []) {
+    if (!row || typeof row !== 'object') continue;
+    let key = [row.positionsnummer, row.seriennummer, row.type].join('|');
+    if (key === '||' || !index.has(key)) {
+      if (key === '||') key = 'row-' + into.length;
+      index.set(key, into.length);
+      into.push(row);
+      continue;
+    }
+    const i = index.get(key);
+    if (score(row) > score(into[i])) into[i] = row;
+  }
+  return into;
 }
 
 async function parseLocalMlPdfPath(filePath) {
@@ -528,9 +553,11 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
         list && list.projekte_neu && Array.isArray(list.projekte_neu.tree) ? list.projekte_neu.tree : [];
       collectMlPdfRels(tree, mlRels);
       if (apiData && apiData.file) mlRels.push(String(apiData.file));
-      mlRels = sortMlPdfRels(mlRels, fab).slice(0, 4);
+      mlRels = sortMlPdfRels(mlRels, fab).slice(0, 60);
     }
     let downloadPath = mlRels[0] || pathRel || String((apiData && apiData.file) || '').trim();
+    const mergedMotors = [];
+    const usedFiles = [];
     for (const rel of mlRels) {
       let parsed = null;
       if (typeof ctx.resolveProjekteNeuLocalFile === 'function') {
@@ -547,9 +574,28 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
           } catch (_) {}
         }
       }
-      const hit = parsed ? await parsedOk(parsed, rel, 'dispo_file') : null;
-      if (hit) return res.json(hit);
+      const motors = parsed && Array.isArray(parsed.motors) ? parsed.motors : [];
+      if (explicitPath) {
+        const hit = parsed ? await parsedOk(parsed, rel, 'dispo_file') : null;
+        if (hit) return res.json(hit);
+      } else if (motors.length) {
+        mergeMotorRows(mergedMotors, motors);
+        usedFiles.push(rel);
+      }
       downloadPath = rel;
+    }
+    if (!explicitPath && mergedMotors.length) {
+      const label =
+        usedFiles.length === 1
+          ? usedFiles[0]
+          : usedFiles.length + ' PDFs, u. a. ' + String(usedFiles[0] || '').split('/').pop();
+      return res.json({
+        ok: true,
+        motors: mergedMotors,
+        file: label,
+        files: usedFiles,
+        source: 'dispo_file',
+      });
     }
 
     if (apiData && typeof apiData === 'object' && (apiData.ok === true || apiData.ok === false)) {
