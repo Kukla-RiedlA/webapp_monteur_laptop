@@ -56,16 +56,21 @@ function isPlaceholder(v) {
 }
 
 function isUnitLine(ln) {
-  return /^(?:kW|KW|A|V\s*\/\s*Hz|min\s*-?1|min⁻1|min|cos\s*[fφ]|cos\s*phi|-1|~)$/iu.test(String(ln || '').trim());
+  return /^(?:kW|KW|A|Hz|V(?:\s*\/\s*Hz)?|min(?:[-⁻^]\s*[1¹]|-?\s*1(?!\d))?|cos\s*[fφ]|cos\s*phi|-1|~)$/iu.test(String(ln || '').trim());
 }
 
 function stripLeadingUnit(v) {
   let s = String(v || '')
     .replace(/\s+/g, ' ')
     .trim();
-  s = s.replace(/^(?:kW|min-?1|min⁻1|Hz|V|A|cos\s*φ|cos\s*phi|cos\s*f)\b\s*/iu, '');
-  s = s.replace(/^~\s*/, '');
-  return s.trim();
+  let prev = '';
+  while (s !== prev) {
+    prev = s;
+    s = s.replace(/^(?:kW|KW|Hz|cos\s*φ|cos\s*phi|cos\s*f|V\s*\/\s*Hz|min(?:[-⁻^]\s*[1¹]|-?\s*1(?!\d))?|A|V)(?:\s+|(?=\d))/iu, '');
+    s = s.replace(/^~\s*/, '');
+    s = s.trim();
+  }
+  return s;
 }
 
 function cleanToken(v) {
@@ -153,7 +158,7 @@ function fieldFromLines(lines, labels, opts) {
 
 function itemCode(lines) {
   for (const ln of lines) {
-    const m = ln.match(/\b(W-M\d+)\b/i);
+    const m = ln.match(/\b(W-\d*M\d+)\b/i);
     if (m) return m[1].toUpperCase().replace('W-M', 'W-M');
   }
   return '';
@@ -201,7 +206,7 @@ function parseMotorListPage(page) {
   row.isolationsklasse = clamp(fieldFromLines(lines, ['Insulation classes', 'Insulation class'], { raw: true }));
   row.anlaufart = clamp(fieldFromLines(lines, ['Starting'], { raw: true }));
   row.leerlaufstrom_50hz = clamp(cleanValue(fieldFromLines(lines, ['No load operation', 'No load current at 50 Hz'])));
-  return normalizeOne(row);
+  return normalizeOne(finishMotorRow(row));
 }
 
 function parseMotorListText(text) {
@@ -213,8 +218,8 @@ function parseMotorListText(text) {
   for (const part of parts) {
     const chunk = String(part || '').trim();
     if (!chunk) continue;
-    if (!/\bItem\b/i.test(chunk) && !/\bW-M\d+\b/i.test(chunk)) continue;
-    if (!/\b(Manufacturer|Type\s*:|Rated output)\b/i.test(chunk)) continue;
+    if (!/\bItem\b/i.test(chunk) && !/\bW-\d*M\d+\b/i.test(chunk)) continue;
+    if (!/\b(Manufacturer|Type\s*:|Rated output|Hersteller|Nennleistung|Fabrikations)\b/i.test(chunk)) continue;
     const row = parseMotorListPage(chunk);
     if (!row) continue;
     const key = [row.positionsnummer, row.seriennummer, row.type].join('|');
@@ -238,16 +243,17 @@ const SHEET_LABELS = [
   ['nennleistung_kw', ['Rated output', 'Nennleistung', 'Potencia nominal']],
   ['nennspannung', ['Rated voltage', 'Nennspannung', 'Voltaje nominal', 'Tensión nominal', 'Tension nominal']],
   ['nennfrequenz', ['Rated frequency', 'Nennfrequenz', 'Frecuencia nominal']],
-  ['getriebeuebersetzung', ['Leverage Gear', 'Übersetzung Getriebe', 'Uebersetzung Getriebe', 'Relación de transmisión', 'Relacion de transmision']],
+  ['getriebeuebersetzung', ['Leverage Gear', 'Übersetzung Getriebe', 'Uebersetzung Getriebe', 'Übersetzung', 'Uebersetzung', 'Relación de transmisión', 'Relacion de transmision']],
   ['bauform', ['Type of construction', 'Bauform', 'Diseño', 'Diseno', 'Tipo de construcción', 'Tipo de construccion']],
   ['schutzart', ['Type of protection', 'Schutzart', 'Grado de protección', 'Grado de proteccion', 'Protección', 'Proteccion']],
   ['isolationsklasse', ['Insulation classes', 'Insulation class', 'Isolationsklasse', 'Clase de aislamiento']],
   ['schaltung', ['Connection', 'Schaltung', 'Circuito']],
-  ['anlaufart', ['Starting', 'Anlauf', 'Arranque', 'Arrancar']],
-  ['seriennummer', ['Serial Number', 'Serial - No.', 'Serial-No.', 'Seriennummer', 'Fabrikationsnummer', 'Número de fabricación', 'Numero de fabricacion']],
+  ['anlaufart', ['Starting', 'Anlaufart', 'Anlauf', 'Arranque', 'Arrancar']],
+  ['seriennummer', ['Serial Number', 'Serial - No.', 'Serial-No.', 'Seriennummer', 'Fabrikationsnummer', 'Fabrikations-Nr', 'Fabrikationsnr', 'Fabr.-Nr', 'Fabr. Nr', 'Número de fabricación', 'Numero de fabricacion']],
   ['auxiliary', ['Auxiliary drive', 'Zusatzantrieb', 'Hilfsantrieb', 'Accionamiento auxiliar']],
-  ['application', ['Application', 'Verwendung', 'Anwendung', 'Aplicación', 'Aplicacion']],
-  ['positionsnummer', ['Position', 'Posición', 'Posicion']],
+  ['application', ['Application', 'Verwendung', 'Anwendung', 'Antriebsart', 'Aplicación', 'Aplicacion']],
+  ['bauteil', ['Bauteil']],
+  ['positionsnummer', ['Position', 'Pos.', 'Posición', 'Posicion']],
   ['type', ['Type', 'Typ', 'Tipo']],
   ['hersteller', ['Manufacturer', 'Hersteller', 'Fabricante']],
 ].flatMap(([field, labels]) => labels.map((lab) => ({ field, lab: lab.toLowerCase() })));
@@ -274,6 +280,7 @@ const SHEET_MOTOR_FIELDS = new Set([
   'positionsnummer',
   'application',
   'auxiliary',
+  'bauteil',
 ]);
 
 function isSkippableSheetLine(ln) {
@@ -284,12 +291,12 @@ function isSkippableSheetLine(ln) {
 }
 
 function matchSheetLabel(line) {
-  const norm = String(line || '').trim();
+  let norm = String(line || '').trim().replace(/\s*-\s*/g, '-').replace(/\s+/g, ' ').trim();
   const low = norm.toLowerCase();
   for (const a of SHEET_LABELS) {
     if (low === a.lab || low === a.lab + ':') return { field: a.field, value: '' };
     if (!low.startsWith(a.lab)) continue;
-    const rest = norm.slice(a.lab.length).replace(/^[\s:]+/, '');
+    const rest = trimValueAtNextLabel(norm.slice(a.lab.length).replace(/^[\s:]+/, ''));
     return { field: a.field, value: rest };
   }
   return null;
@@ -302,12 +309,8 @@ function cleanSheetValue(raw) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!s || isPlaceholder(s)) return '';
-  s = s.replace(/^(?:kW|KW|Hz|cos\s*φ|cos\s*phi|cos\s*f)\s*/iu, '');
-  s = s.replace(/^min⁻1(?=\d)/u, '');
-  s = s.replace(/^min-1(?=\d)/, '');
+  s = stripLeadingUnit(s);
   s = s.replace(/^A(?=\d)/, '');
-  s = s.replace(/^V(?=\d)/, '');
-  s = s.replace(/^~\s*/, '');
   s = s.trim();
   if (!s || isPlaceholder(s)) return '';
   if (/^(?:calculated|berechnet|calculado)\s*FATSAT$/i.test(s)) return '';
@@ -339,12 +342,176 @@ function assignSheetHersteller(row, val, section) {
   else if (!row.fu_hersteller) row.fu_hersteller = val;
 }
 
+function finishMotorRow(row) {
+  const cleanKeys = [
+    'nenndrehzahl',
+    'getriebedrehzahl',
+    'nennstrom',
+    'nennleistung_kw',
+    'leistungsfaktor',
+    'nennspannung',
+    'nennfrequenz',
+    'leerlaufstrom_50hz',
+    'getriebeuebersetzung',
+  ];
+  for (const key of cleanKeys) {
+    if (String(row[key] || '').trim()) row[key] = cleanSheetValue(row[key]);
+  }
+  if (row.getriebeuebersetzung) {
+    row.getriebeuebersetzung = String(row.getriebeuebersetzung).replace(/^i\s*=?\s*/i, '').trim();
+  }
+  const speed = String(row.nenndrehzahl || '').trim();
+  const speedMatch = speed.match(/^(\d+(?:[.,]\d+)?)\s*\/\s*(\d+(?:[.,]\d+)?)$/);
+  if (speedMatch) {
+    row.nenndrehzahl = speedMatch[1];
+    if (!String(row.getriebedrehzahl || '').trim()) row.getriebedrehzahl = speedMatch[2];
+  }
+  const volt = String(row.nennspannung || '').trim();
+  const voltMatch = volt.match(/^(\d+(?:\s*-\s*\d+)?)\s*([YΔD△](?:\s*\/\s*[YΔD△])?)\s*\/\s*(\d+(?:[.,]\d+)?)$/i);
+  if (voltMatch) {
+    row.nennspannung = voltMatch[1].replace(/\s*-\s*/g, '-').trim();
+    if (!String(row.schaltung || '').trim()) {
+      row.schaltung = voltMatch[2].toUpperCase().replace(/\s+/g, '').replace(/[D△]/g, 'Δ');
+    }
+    if (!String(row.nennfrequenz || '').trim()) row.nennfrequenz = voltMatch[3];
+  }
+  return row;
+}
+
+function copyEmptyMotor(dst, src) {
+  if (String(dst.bezeichnung || '').trim() && String(dst.bezeichnung).trim() === String(dst.positionsnummer || '').trim()) {
+    dst.bezeichnung = '';
+  }
+  for (const key of Object.keys(src || {})) {
+    if (String(dst[key] || '').trim() === '' && String(src[key] || '').trim() !== '') dst[key] = src[key];
+  }
+  return finishMotorRow(dst);
+}
+
+function fillMotorRows(primary, extra) {
+  if (!primary.length) return extra;
+  if (!extra.length) return primary;
+  const used = new Set();
+  primary.forEach((row, i) => {
+    for (let j = 0; j < extra.length; j++) {
+      if (used.has(j)) continue;
+      const cand = extra[j];
+      const sameType = String(row.type || '').trim() && String(row.type).toLowerCase() === String(cand.type || '').toLowerCase();
+      const samePos = String(row.positionsnummer || '').trim() && row.positionsnummer === cand.positionsnummer;
+      const only = primary.length === 1 && extra.length === 1;
+      if (!sameType && !samePos && !only) continue;
+      primary[i] = copyEmptyMotor(row, cand);
+      used.add(j);
+      break;
+    }
+  });
+  extra.forEach((cand, j) => {
+    if (!used.has(j)) primary.push(cand);
+  });
+  return primary;
+}
+
+function trimValueAtNextLabel(rest) {
+  let s = String(rest || '').trim();
+  if (!s) return '';
+  const alts = ['fn\\.?', 'datum', 'blatt', 'projekt', 'maschinenlieferant'];
+  for (const a of SHEET_LABELS) {
+    if (a.lab.length < 4) continue;
+    alts.push(a.lab.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  }
+  const re = new RegExp('\\s(?:' + alts.join('|') + ')(?=$|[\\s:]|[^\\p{L}])', 'iu');
+  const m = re.exec(s);
+  if (m && m.index > 0) return s.slice(0, m.index).trim();
+  return s;
+}
+
+function pairsFromCells(cells) {
+  const out = [];
+  let i = 0;
+  while (i < cells.length) {
+    const hit = matchSheetLabel(cells[i]);
+    if (!hit) {
+      i++;
+      continue;
+    }
+    if (hit.value) {
+      out.push(cells[i]);
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    while (j < cells.length && isUnitLine(cells[j])) j++;
+    if (j >= cells.length) {
+      i++;
+      continue;
+    }
+    const next = matchSheetLabel(cells[j]);
+    if (next && !next.value) {
+      i++;
+      continue;
+    }
+    out.push(cells[i] + ' ' + cells[j]);
+    i = j + 1;
+  }
+  return out;
+}
+
+function pairsFromInline(line) {
+  const hits = [];
+  for (const a of SHEET_LABELS) {
+    const re = new RegExp('(?<![\\p{L}\\p{N}])' + a.lab.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=$|[\\s:]|[^\\p{L}])', 'giu');
+    let m;
+    while ((m = re.exec(line))) {
+      hits.push({ pos: m.index, len: m[0].length });
+      if (m.index === re.lastIndex) re.lastIndex++;
+    }
+  }
+  if (!hits.length) return [line];
+  hits.sort((a, b) => a.pos - b.pos || b.len - a.len);
+  const kept = [];
+  let coveredUntil = -1;
+  for (const h of hits) {
+    if (h.pos < coveredUntil) continue;
+    kept.push(h);
+    coveredUntil = h.pos + h.len;
+  }
+  const out = [];
+  for (let i = 0; i < kept.length; i++) {
+    const start = kept[i].pos;
+    const end = i + 1 < kept.length ? kept[i + 1].pos : line.length;
+    const piece = line.slice(start, end).trim();
+    if (piece) out.push(piece);
+  }
+  return out;
+}
+
+function expandTableLine(line) {
+  let s = String(line || '').trim().replace(/\s*-\s*/g, '-');
+  if (!s) return [];
+  const cells = s
+    .split(/\t+| {2,}/)
+    .map((c) => c.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  if (cells.length >= 2) return pairsFromCells(cells);
+  return pairsFromInline(s);
+}
+
 function parseDataSheetChunk(page) {
-  const lines = nonemptyLines(page).filter((ln) => !isSkippableSheetLine(ln));
+  const lines = [];
+  String(page || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split(/\n+/)
+    .forEach((ln) => {
+      expandTableLine(ln).forEach((piece) => {
+        if (!isSkippableSheetLine(piece)) lines.push(piece);
+      });
+    });
   const row = emptyMotorRow();
   let section = 'sheet';
   let application = '';
   let auxiliary = '';
+  let bauteil = '';
   for (let i = 0; i < lines.length; i++) {
     const hit = matchSheetLabel(lines[i]);
     if (!hit) continue;
@@ -357,7 +524,7 @@ function parseDataSheetChunk(page) {
         break;
       }
     }
-    const val = cleanSheetValue(raw);
+    let val = cleanSheetValue(raw);
     if (SHEET_FU_FIELDS.has(hit.field)) section = 'fu';
     if (SHEET_MOTOR_FIELDS.has(hit.field)) section = 'motor';
     if (!val) continue;
@@ -384,12 +551,19 @@ function parseDataSheetChunk(page) {
       if (!auxiliary) auxiliary = val;
       continue;
     }
+    if (hit.field === 'bauteil') {
+      if (!bauteil) bauteil = val;
+      continue;
+    }
+    if (hit.field === 'getriebeuebersetzung') val = String(val).replace(/^i\s*=?\s*/i, '').trim();
     if (!row[hit.field]) row[hit.field] = val;
   }
   const xd = (auxiliary.match(/\bXD\s*([1-7])\b/i) || [])[0] || '';
   const xdNorm = xd ? xd.replace(/\s+/g, '').toUpperCase() : '';
   let bez = application;
   if (xdNorm) bez = xdNorm + (bez ? ' ' + bez : '');
+  if (bauteil && bez) bez = bauteil + ' · ' + bez;
+  else if (!bez) bez = bauteil;
   row.bezeichnung = bez;
   if (!row.anlaufart) {
     for (const ln of lines) {
@@ -399,7 +573,7 @@ function parseDataSheetChunk(page) {
       }
     }
   }
-  return normalizeOne(row);
+  return normalizeOne(finishMotorRow(row));
 }
 
 function isDataSheetChunk(chunk) {
@@ -438,11 +612,9 @@ function parseDataSheetText(text) {
 
 function parseMlPdfText(text) {
   const raw = String(text || '');
-  if (isMotorListLayout(raw)) {
-    const list = parseMotorListText(raw);
-    if (list.length) return list;
-  }
-  return parseDataSheetText(raw);
+  const list = isMotorListLayout(raw) ? parseMotorListText(raw) : [];
+  const sheets = parseDataSheetText(raw);
+  return fillMotorRows(list, sheets);
 }
 
 /** 0 Deutsch, 1 Englisch, 2 sonstige, 3 Spanisch (Fallback). */
