@@ -76,14 +76,13 @@ function isPermanentSyncPushError(err) {
 }
 
 /**
- * @param {{ hasBaseUrl?: boolean, hasAuth?: boolean, forceOffline?: boolean }} opts
+ * Masken lesen und schreiben lokal. Dispo nur, wenn der Aufrufer der Hintergrund-Sync ist
+ * (`explicitSync: true`). Eine gesetzte Basis-URL verschiebt den Sync nicht mehr auf den Request.
+ * @param {{ explicitSync?: boolean }} opts
  */
 function shouldDeferDispoSync(opts) {
   const o = opts || {};
-  if (o.forceOffline) return true;
-  if (o.localOnly) return true;
-  if (!o.hasBaseUrl) return true;
-  return false;
+  return o.explicitSync !== true;
 }
 
 /** pending_changes-Typen, die pushToServer abarbeiten muss (Queue ohne Handler = Dead-Letter). */

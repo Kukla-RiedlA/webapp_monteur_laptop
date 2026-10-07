@@ -13,6 +13,7 @@ Fuer alle bestehenden und neuen Funktionen gilt:
 - Die Funktion muss offline benutzbar sein (lesen + schreiben).
 - Online dient nur dem Synchronisieren mit Dispo.
 - Fehlende Offline-Faehigkeit ist ein Defekt und als Umbaupunkt zu priorisieren.
+- Masken antworten sofort aus SQLite/Datei, auch wenn eine Dispo-URL in der Session steht. `shouldDeferDispoSync` verschiebt den Sync immer, ausser der Hintergrund-Sync setzt `explicitSync`. Pruefung: `node scripts/assert-mask-routes-local.cjs`.
 
 **Gateway:** Der Renderer spricht nur mit dem lokalen Express (`API_BASE`). Alle Dispo-Zugriffe laufen über `electron/server.js` und die gewählte Basis-URL (extern oder intern). Siehe `.cursor/rules/laptop-dispo-gateway.mdc` und `docs/API_CONTRACT.md` (Abschnitt Gateway).
 

@@ -1,0 +1,18 @@
+---
+description: KUKpit-Masken lesen und speichern nur lokal. Dispo nur im Hintergrund-Sync.
+globs:
+  - webapp_monteur_laptop/electron/**/*
+  - webapp_monteur_laptop/serviceprotokoll-react/**/*
+---
+
+# KUKpit: Masken offline
+
+Maßgeblich ist schlechtes Netz bei angezeigtem „online“, nicht nur der Flugmodus.
+
+- Öffnen, Tippen, Autosave, Speichern und lokales PDF antworten aus SQLite oder lokaler Datei.
+- Kein `await` auf Dispo und kein Anlegen des Reiseordners, bevor die Maske antwortet.
+- Masken-Requests enthalten keine Dispo-URL und kein Passwort.
+- Frische nur über den bestehenden Hintergrund-Sync (`sync_pull` / `sync_push`). Ein Masken-Open startet keinen Dispo-Call.
+- `shouldDeferDispoSync` in `electron/lib/local_first.js` ist auf dem Maskenpfad immer wahr. Live nur mit `explicitSync: true` aus dem Sync.
+- Datei noch nicht lokal: Maske bleibt bedienbar, Hinweis „noch nicht lokal“, Download als Hintergrund-Job.
+- Neue Masken-Route in `scripts/assert-mask-routes-local.cjs` eintragen. Der Check muss grün bleiben (`node scripts/assert-mask-routes-local.cjs`).

@@ -2298,24 +2298,6 @@ function createApp(db) {
       if (!technicianId) {
         return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
       }
-      const body = {
-        baseUrl: (req.query.base_url || req.query.dispoBaseUrl || '').toString(),
-        serverUsername: (req.query.username || '').toString(),
-        serverPassword: req.query.password != null ? String(req.query.password) : '',
-      };
-      const creds = resolveDispoServerCreds(body);
-      const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
-      const dispoBase =
-        String(creds.baseUrl || creds.externalUrl || '').replace(/\/$/, '') ||
-        String(req.query.base_url || '').replace(/\/$/, '');
-      if (dispoBase && auth) {
-        try {
-          await technicianSignature.syncWithDispo(db, technicianId, dispoBase, auth);
-          save();
-        } catch (_) {
-          /* offline: Cache */
-        }
-      }
       const local = technicianSignature.getLocal(db, technicianId);
       if (!local) {
         return res.json({ ok: true, has_signature: false, technician_id: technicianId });
@@ -2347,25 +2329,7 @@ function createApp(db) {
         return res.status(400).json({ ok: false, error: 'Ungültige Unterschrift (PNG/JPEG Base64).' });
       }
       const source = body.source === 'upload' ? 'upload' : 'draw';
-      const creds = resolveDispoServerCreds(body);
-      const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
-      const dispoBase = String(creds.baseUrl || body.dispoBaseUrl || body.base_url || '')
-        .trim()
-        .replace(/\/$/, '');
-      let updatedAt = '';
-      let dirty = true;
-      if (dispoBase && auth) {
-        try {
-          const pushed = await technicianSignature.pushDispoSignature(dispoBase, auth, png, source);
-          if (pushed && pushed.ok) {
-            updatedAt = pushed.updated_at || '';
-            dirty = false;
-          }
-        } catch (_) {
-          dirty = true;
-        }
-      }
-      const local = technicianSignature.setLocal(db, technicianId, png, source, updatedAt, dirty);
+      const local = technicianSignature.setLocal(db, technicianId, png, source, '', true);
       save();
       res.json({
         ok: true,
@@ -5896,12 +5860,8 @@ function createApp(db) {
       const mapped = getJobRowByLocalOrServerId(rawJobId);
       const localJobId = mapped ? mapped.id : rawJobId;
       const onlyFabs = parseOnlyFabsFilter(req.query.only_fabs || req.query.onlyFabs);
-      const preferLocal =
-        wantsLocalOnlyRequest(req.query) ||
-        req.query.local_first === '1' ||
-        req.query.local_first === 'true' ||
-        String(req.query.prefer_local || '') === '1';
-      // Offline-First: View-Open nutzt local_first=1; Dispo nur bei explizitem Sync/ohne Flag
+      const explicitSync = req.query.explicit_sync === '1' || req.query.explicit_sync === 'true';
+      const preferLocal = !explicitSync;
       if (preferLocal) {
         return res.json(
           buildLocalAcceptOfflinePreview(
@@ -7786,199 +7746,58 @@ function createApp(db) {
   });
 
   app.post('/api/job_from_dispo', express.json(), async (req, res) => {
-    const sendError = (status, msg) => {
-      if (!res.headersSent) res.status(status).json({ ok: false, error: msg });
-    };
     try {
       const technicianId = getTechnicianId(req);
-      const { baseUrl, externalUrl, internalUrl, jobId: localJobId } = req.body || {};
-      const resolved = await resolveDispoWorkingBase({
-        baseUrl,
-        externalUrl,
-        internalUrl,
-        technicianId,
-        serverUsername: req.body.serverUsername,
-        serverPassword: req.body.serverPassword,
-      });
-      const base = (resolved.base || '').toString().trim().replace(/\/$/, '');
-      if (!technicianId || localJobId == null) {
+      const body = req.body || {};
+      const serverJobIdArg = parseInt(body.serverJobId, 10) || 0;
+      const lookupId = serverJobIdArg > 0 ? serverJobIdArg : parseInt(body.jobId, 10);
+      if (!technicianId || !Number.isFinite(lookupId) || lookupId <= 0) {
         return res.status(400).json({ ok: false, error: 'jobId und technician_id erforderlich.' });
       }
-      if (!base) {
-        return res.status(502).json({ ok: false, error: resolved.error || 'Dispo nicht erreichbar.' });
-      }
-      const localId = parseInt(localJobId, 10);
-      if (!Number.isFinite(localId)) {
-        return res.status(400).json({ ok: false, error: 'jobId ungültig.' });
-      }
-      const viewOnly = req.body.viewOnly === true;
-      const serverJobIdArg = parseInt(req.body.serverJobId, 10) || 0;
-      const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
-      const dispoFetchId = serverJobIdArg > 0 ? serverJobIdArg : localId;
-      let row = null;
-      if (viewOnly || serverJobIdArg > 0) {
-        row = db
-          .prepare(
-            `SELECT j.id, j.server_id FROM jobs j
-             WHERE CAST(j.server_id AS TEXT) = CAST(? AS TEXT)
-             LIMIT 1`,
-          )
-          .get(dispoFetchId);
-      } else {
-        row = db
-          .prepare(
-            `SELECT j.id, j.server_id FROM jobs j
-             WHERE j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT)
-             ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
-             LIMIT 1`,
-          )
-          .get(localId, localId, localId);
-      }
-      if (row) {
-        row = { id: row.id, server_id: row.server_id };
-      }
-
-      async function finishWithDispoJob(data) {
-        if (!data.job || typeof data.job !== 'object') {
-          return sendError(404, (data && data.error) || 'Auftrag nicht gefunden.');
-        }
-        if (data.job.fabrikationsnummern == null && data.job.Fabrikationsnummern != null) {
-          data.job.fabrikationsnummern = data.job.Fabrikationsnummern;
-        }
-        // Stamm immer lokal mergen — nicht auf anlagenstamm_by_fab (HTTPS) warten.
-        data.job = await enrichJobFabWithAnlagenstamm(data.job, base, auth, { localOnly: true });
-        const contacts = normalizeJobContactsFromPayload(data.job);
-        data.job.job_contacts = contacts;
-        const calendarTechId = parseInt(req.body.calendarTechnicianId, 10) || 0;
-        const knownNotAssigned = data.job.assigned_to_me === false;
-        const dispoId = Number(data.job.id);
-        if (viewOnly) {
-          // Fremde/unzugeteilte Kalenderaufträge nicht in SQLite spiegeln:
-          // lokale jobs.id und Dispo-server_id können dieselbe Zahl haben (sonst landet CSR statt Alfred).
-          if (Number.isFinite(dispoId) && dispoId > 0) {
-            data.job.server_id = dispoId;
-          }
-          data.job.assignment_writable = false;
-          data.job.assigned_to_me = false;
-          if (!data.job.assignment_read_only_reason) {
-            data.job.assignment_read_only_reason = calendarTechId === 0
-              ? 'Nur Ansicht – Auftrag ist nicht zugeteilt.'
-              : 'Nur Ansicht – Auftrag ist einem anderen Techniker zugeteilt.';
-          }
-          return res.json(data);
-        }
-        try {
-          const custId = ensureCustomer(db, data.job);
-          const localId = insertOrUpdateJob(db, data.job, custId, technicianId, {
-            assignTechnician: !knownNotAssigned,
-            assignedTechnicianIds: knownNotAssigned && calendarTechId > 0 && calendarTechId !== Number(technicianId)
-              ? [calendarTechId]
-              : [],
-          });
-          if (localId) {
-            const serverId = data.job.id;
-            data.job.id = localId;
-            data.job.server_id = serverId;
-            Object.assign(data.job, jobAssignmentViewMeta(db, localId, technicianId));
-          }
-        } catch (persistErr) {
-          console.warn('[job_from_dispo] persist:', persistErr && persistErr.message ? persistErr.message : persistErr);
-        }
-        const localDbId = data.job.id != null ? data.job.id : (row ? row.id : null);
-        if (localDbId != null) {
-          try {
-            const hotel = db.prepare('SELECT endkunde, street, house_number, zip, city, country, address_extra_1, address_extra_2, phone, email, website FROM job_hotel_addresses WHERE job_id = ?').get(localDbId);
-            if (hotel) {
-              data.job.hotel_endkunde = hotel.endkunde;
-              data.job.hotel_street = hotel.street;
-              data.job.hotel_house_number = hotel.house_number;
-              data.job.hotel_zip = hotel.zip;
-              data.job.hotel_city = hotel.city;
-              data.job.hotel_country = hotel.country;
-              data.job.hotel_address_extra_1 = hotel.address_extra_1;
-              data.job.hotel_address_extra_2 = hotel.address_extra_2;
-              data.job.hotel_phone = hotel.phone;
-              data.job.hotel_email = hotel.email;
-              data.job.hotel_website = hotel.website;
-            }
-          } catch (e) { /* Tabelle fehlt – ignorieren */ }
-          try {
-            db.prepare('DELETE FROM job_contacts WHERE job_id = ?').run(localDbId);
-            for (let i = 0; i < contacts.length; i++) {
-              const n = normalizeJobContactPayload(contacts[i]);
-              if (!jobContactHasAny(n)) continue;
-              insertJobContactRow(db, localDbId, n, i);
-            }
-          } catch (e) { /* Tabelle fehlt oder Fehler – ignorieren */ }
-        }
-        res.json(data);
-      }
-
-      async function fetchDispoJob(urlToFetch) {
-        const headers = auth ? Object.assign({}, auth) : {};
-        if (headers.Authorization && !headers['X-Kukla-Authorization']) {
-          headers['X-Kukla-Authorization'] = headers.Authorization;
-        }
-        const r = await fetch(urlToFetch, Object.keys(headers).length ? { headers } : {});
-        const raw = await r.text();
-        let data = {};
-        try { data = raw ? JSON.parse(raw) : {}; } catch (_) { data = {}; }
-        if (!r.ok) {
-          logSyncPushError({
-            reason: 'job_from_dispo_http_error',
-            status: r.status,
-            statusText: r.statusText,
-            url: urlToFetch,
-            body_preview: (raw || '').slice(0, 1200),
-          });
-        }
-        return { ok: r.ok, status: r.status, statusText: r.statusText, data, raw };
-      }
-
-      async function fetchDispoJobForView(serverJobId) {
-        const id = encodeURIComponent(serverJobId);
-        const tid = encodeURIComponent(technicianId);
-        const mobile = `${base}/api/mobile/job.php?id=${id}`;
-        const rsMobile = await fetchDispoJob(mobile);
-        if (rsMobile.ok && rsMobile.data && rsMobile.data.job) return rsMobile;
-        const primary = `${base}/dispo_api/api/job.php?id=${id}&technician_id=${tid}&debug=1`;
-        return fetchDispoJob(primary);
-      }
-
-      // Ansicht aus dem Kalender: immer die Dispo-Server-ID holen, nie eine lokale SQLite-ID.
-      if (viewOnly || serverJobIdArg > 0) {
-        const rsView = await fetchDispoJobForView(dispoFetchId);
-        if (!rsView.ok) {
-          return sendError(rsView.status, rsView.data.error || rsView.statusText || 'Dispo-Fehler');
-        }
-        return await finishWithDispoJob({ ok: true, ...rsView.data });
-      }
-
-      // Kein lokaler SQLite-Eintrag: jobId ist oft die Dispo-Server-ID (z. B. Liste „Offene Aufträge“ / noch nicht synchronisiert)
+      const row = db.prepare(`
+        SELECT j.*, c.name AS customer_name, c.street AS customer_street, c.house_number AS customer_house_number,
+          c.zip AS customer_zip, c.city AS customer_city, c.phone AS customer_phone,
+          c.contact_person, c.contact_phone, c.contact_email,
+          ja.endkunde, ja.street, ja.house_number, ja.zip, ja.city, ja.country, ja.address_extra_1, ja.address_extra_2,
+          jha.endkunde AS hotel_endkunde, jha.street AS hotel_street, jha.house_number AS hotel_house_number,
+          jha.zip AS hotel_zip, jha.city AS hotel_city, jha.country AS hotel_country,
+          jha.address_extra_1 AS hotel_address_extra_1, jha.address_extra_2 AS hotel_address_extra_2,
+          jha.phone AS hotel_phone, jha.email AS hotel_email, jha.website AS hotel_website,
+          jhs.hotel_id AS hotel_id, jhs.comment AS hotel_comment, jhs.rating_stars AS hotel_rating_stars,
+          jhs.rating_avg AS hotel_rating_avg, jhs.rating_count AS hotel_rating_count
+        FROM jobs j
+        INNER JOIN customers c ON c.id = j.customer_id
+        LEFT JOIN job_addresses ja ON ja.job_id = j.id
+        LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
+        LEFT JOIN job_hotel_selection jhs ON jhs.job_id = j.id
+        WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
+        ORDER BY CASE WHEN CAST(j.server_id AS TEXT) = CAST(? AS TEXT) THEN 0 ELSE 1 END, j.id ASC
+        LIMIT 1
+      `).get(lookupId, lookupId, lookupId);
       if (!row) {
-        const rs0 = await fetchDispoJobForView(localId);
-        if (!rs0.ok) {
-          return sendError(rs0.status, rs0.data.error || rs0.statusText || 'Dispo-Fehler');
-        }
-        return await finishWithDispoJob({ ok: true, ...rs0.data });
+        return res.json({
+          ok: false,
+          code: 'local_missing',
+          error: 'Auftrag ist lokal noch nicht vorhanden. Er kommt mit dem nächsten Sync.',
+        });
       }
-
-      const serverJobId = (row.server_id != null && row.server_id !== '') ? row.server_id : row.id;
-      const rs = await fetchDispoJobForView(serverJobId);
-      if (!rs.ok) {
-        return sendError(rs.status, rs.data.error || rs.statusText || 'Dispo-Fehler');
+      let job = Object.assign({}, row, { local_job_id: row.id, job_contacts: [] });
+      try {
+        const contacts = db.prepare(`${JOB_CONTACTS_SELECT_SQL} WHERE job_id = ? ORDER BY sort_order, id`).all(row.id);
+        if (contacts && contacts.length) job.job_contacts = contacts;
+      } catch (_) { /* Kontakte optional */ }
+      Object.assign(job, jobAssignmentViewMeta(db, row.id, technicianId));
+      if (body.viewOnly === true) {
+        job.assignment_writable = false;
+        job.assigned_to_me = false;
       }
-      await finishWithDispoJob(rs.data);
+      try {
+        job = await enrichJobFabWithAnlagenstamm(job, '', null, { localOnly: true });
+      } catch (_) { /* lokaler Stamm optional */ }
+      return res.json({ ok: true, job, source: 'local' });
     } catch (e) {
-      const cause = e && e.cause && e.cause.message ? e.cause.message : '';
-      console.error('[job_from_dispo]', e.message, cause || '', e.stack);
-      logSyncPushError({
-        reason: 'job_from_dispo',
-        message: e.message,
-        cause: cause || undefined,
-        stack: e.stack,
-      });
-      sendError(500, e.message || 'Interner Fehler beim Laden von der Dispo');
+      console.error('[job_from_dispo]', e && e.message ? e.message : e);
+      return res.status(500).json({ ok: false, error: e.message || 'Auftrag lokal nicht lesbar' });
     }
   });
 
@@ -8154,7 +7973,7 @@ function createApp(db) {
         auth || {},
         auth && auth.Authorization ? { 'X-Kukla-Authorization': auth.Authorization } : {}
       );
-      const opts = { method: method, headers: headers };
+      const opts = { method: method, headers: headers, signal: AbortSignal.timeout(8000) };
       if (method !== 'GET' && method !== 'HEAD') {
         headers['Content-Type'] = 'application/json';
         opts.body = JSON.stringify(payload && typeof payload === 'object' ? payload : (payload || {}));
@@ -9892,27 +9711,34 @@ function createApp(db) {
     }
   });
 
-  /** TED/Mechanik-Excel-Index: gleiche Auth wie andere Dispo-Proxys (Basic über serverUsername/serverPassword). */
-  app.post('/api/mechanik_ted_excel_from_dispo', express.json(), async (req, res) => {
+  /** TED-Index nur aus SQLite. Frische kommt über sync_pull. */
+  app.post('/api/mechanik_ted_excel_from_dispo', express.json(), (req, res) => {
     const technicianId = getTechnicianId(req);
-    const { baseUrl, jobId: rawJobId, serverUsername, serverPassword } = req.body || {};
-    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
-    const jobId = parseInt(rawJobId, 10);
-    if (!technicianId || !base || !Number.isFinite(jobId)) {
-      return res.status(400).json({ ok: false, error: 'baseUrl, jobId und technician_id erforderlich.' });
+    const body = req.body || {};
+    const jobId = parseInt(body.jobId, 10);
+    const localHint = parseInt(body.local_job_id, 10);
+    if (!technicianId || !Number.isFinite(jobId)) {
+      return res.status(400).json({ ok: false, error: 'jobId und technician_id erforderlich.' });
     }
-    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    const url = `${base}/dispo_api/api/mechanik_ted_excel_list.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}`;
+    const mapped = typeof getJobRowByLocalOrServerId === 'function' ? getJobRowByLocalOrServerId(jobId) : null;
+    const localJobId = mapped && mapped.id ? mapped.id : (Number.isFinite(localHint) ? localHint : jobId);
+    let rows = [];
     try {
-      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
-      }
-      res.json(data);
-    } catch (e) {
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      rows = db.prepare(
+        `SELECT rel_path, file_name, fab FROM job_ted_index
+         WHERE local_job_id = ? OR CAST(server_job_id AS TEXT) = CAST(? AS TEXT)`,
+      ).all(localJobId, jobId);
+    } catch (_) {
+      rows = [];
     }
+    const by_fab = {};
+    for (const row of rows) {
+      const fab = String(row.fab || '').trim();
+      if (!fab) continue;
+      if (!by_fab[fab]) by_fab[fab] = [];
+      by_fab[fab].push({ rel_path: row.rel_path, file_name: row.file_name, fab });
+    }
+    res.json({ ok: true, by_fab, source: 'local' });
   });
 
   /** Alle TED-Excel eines Auftrags in Reiseordner/TED/ laden (gleiche Quelle wie FN-Liste). */
@@ -10507,14 +10333,6 @@ function createApp(db) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
       const reiseDir = null;
-      await pullOneJsonDraftForJob(
-        reiseDir,
-        localJobId,
-        jobRow.server_id,
-        technicianId,
-        'montagebericht.json',
-        req.query,
-      );
       const draftMeta = protocolDrafts.readDraft(db, localJobId, 'montagebericht.json', reiseDir);
       const payload = draftMeta && draftMeta.payload && Object.keys(draftMeta.payload).length ? draftMeta.payload : null;
       const data = payload
@@ -10587,22 +10405,6 @@ function createApp(db) {
       const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
       const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
       const serverJobId = hasServerJobId ? parsedServerJobId : null;
-      if (!localOnly && dispoBaseUrl && hasServerJobId) {
-        try {
-          const auth = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
-          const url = dispoBaseUrl + '/dispo_api/api/montagebericht_data.php?job_id=' + encodeURIComponent(serverJobId) + '&technician_id=' + encodeURIComponent(technicianId);
-          const r = await fetch(url, auth ? { headers: auth } : {});
-          const apiData = await r.json().catch(() => ({}));
-          if (r.ok && Array.isArray(apiData.data) && apiData.data.length > 0) {
-            dbFabRows = apiData.data.map((row) => ({
-              fabrikationsnummer: String(row.fabrikationsnummer ?? '').trim(),
-              type: String(row.type ?? '').trim(),
-              position: String(row.position ?? '').trim(),
-              textbausteine: Array.isArray(row.textbausteine) ? row.textbausteine.map((t) => ({ text: String(t && t.text != null ? t.text : '').trim() })).filter((t) => t.text) : [],
-            })).filter((row) => row.fabrikationsnummer);
-          }
-        } catch (_) { /* API-Fehler ignorieren */ }
-      }
       const rawFab = (jobRow.fabrikationsnummern || '').toString().trim();
       if (rawFab) {
         try {
@@ -10619,52 +10421,6 @@ function createApp(db) {
         if (dbFabRows.length === 0) {
           const parts = rawFab.split(/[\s;,]+/).map((p) => p.trim()).filter(Boolean);
           dbFabRows = parts.map((fn) => ({ fabrikationsnummer: fn, type: '', position: '' }));
-        }
-      }
-      if (dbFabRows.length === 0 && !localOnly && dispoBaseUrl) {
-        const reqFabs = (kopfdaten.fabrikationsnummern || []).map(toFab).filter(Boolean);
-        const reqFabsAlt = (fabBemerkungen || []).map((fb) => toFab(fb)).filter(Boolean);
-        const parts = reqFabs.length > 0 ? reqFabs : reqFabsAlt;
-        if (parts.length > 0) {
-          try {
-            const auth = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
-            const url = dispoBaseUrl + '/dispo_api/api/anlagenstamm_by_fab.php?fabs=' + encodeURIComponent(parts.join(','));
-            const r = await fetch(url, auth ? { headers: auth } : {});
-            const data = await r.json().catch(() => ({}));
-            if (r.ok && Array.isArray(data.data) && data.data.length > 0) {
-              dbFabRows = data.data.map((row) => ({
-                fabrikationsnummer: String(row.fabrikationsnummer ?? '').trim(),
-                type: String(row.type ?? '').trim(),
-                position: String(row.position ?? '').trim(),
-              })).filter((row) => row.fabrikationsnummer);
-            } else {
-              dbFabRows = parts.map((fn) => ({ fabrikationsnummer: fn, type: '', position: '' }));
-            }
-          } catch (_) {
-            dbFabRows = parts.map((fn) => ({ fabrikationsnummer: fn, type: '', position: '' }));
-          }
-        }
-      } else if (dbFabRows.length > 0 && !localOnly && dispoBaseUrl) {
-        const needsEnrich = dbFabRows.every((r) => !(r.type || r.position));
-        if (needsEnrich) {
-          try {
-            const auth = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
-            const fnList = dbFabRows.map((r) => r.fabrikationsnummer).filter(Boolean).join(',');
-            const url = dispoBaseUrl + '/dispo_api/api/anlagenstamm_by_fab.php?fabs=' + encodeURIComponent(fnList);
-            const r = await fetch(url, auth ? { headers: auth } : {});
-            const data = await r.json().catch(() => ({}));
-            if (r.ok && Array.isArray(data.data) && data.data.length > 0) {
-              const byFn = {};
-              for (const row of data.data) {
-                const fn = String(row.fabrikationsnummer ?? '').trim();
-                if (fn) byFn[fn] = { fabrikationsnummer: fn, type: String(row.type ?? '').trim(), position: String(row.position ?? '').trim() };
-              }
-              dbFabRows = dbFabRows.map((r) => {
-                const enriched = byFn[r.fabrikationsnummer];
-                return enriched || r;
-              });
-            }
-          } catch (_) { /* API-Fehler ignorieren */ }
         }
       }
       if (dbFabRows.length === 0) {
@@ -10738,6 +10494,8 @@ function createApp(db) {
       };
 
       const runMontageberichtDispoSync = async () => {
+        // Draft ist bereits gequeued. Speichern wartet nicht auf Dispo.
+        return;
         if (!(dispoBaseUrl && hasServerJobId)) return;
         if (multiDeviceApi && multiDeviceApi.pushJsonDraft) {
           try {
@@ -11316,15 +11074,6 @@ function createApp(db) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
       const reiseDir = null;
-      const credsKw = resolveDispoServerCreds(req.query || {});
-      await pullOneJsonDraftForJob(
-        reiseDir,
-        localJobId,
-        jobRow.server_id,
-        technicianId,
-        'kontrollwiegungsprotokoll.json',
-        req.query,
-      );
       const store = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir, db, localJobId);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 }, data: store });
     } catch (e) {
@@ -11767,14 +11516,6 @@ function createApp(db) {
       `).get(localJobId, technicianId);
       if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       const reiseDir = null;
-      await pullOneJsonDraftForJob(
-        reiseDir,
-        localJobId,
-        jobRow.server_id,
-        technicianId,
-        'schleppkettenprotokoll.json',
-        req.query,
-      );
       const store = schleppkettenLocal.readSchleppkettenStore(reiseDir, db, localJobId);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 } });
     } catch (e) {
@@ -12122,15 +11863,7 @@ function createApp(db) {
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      await pullOneJsonDraftForJob(
-        reiseDir,
-        localJobId,
-        jobRow.server_id,
-        technicianId,
-        'pruefzertifikat.json',
-        req.query,
-      );
+      const reiseDir = null;
       const store = pruefzertifikatLocal.readPruefzertifikatStore(reiseDir, db, localJobId);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 } });
     } catch (e) {
@@ -13767,20 +13500,8 @@ function createApp(db) {
       if (!jobRow) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
-      const localOnly = wantsLocalOnlyRequest(req.query);
-      const creds = resolveDispoServerCreds(req.query || {});
-      const parsedServerJobId = jobRow.server_id != null ? parseInt(jobRow.server_id, 10) : NaN;
-      const hasServerJobId = Number.isFinite(parsedServerJobId) && parsedServerJobId > 0;
-      let store = readServiceprotokollStore(reiseDir, localJobId, spec);
-      if (!localOnly && creds.baseUrl && hasServerJobId) {
-        const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
-        try {
-          store = await syncServiceprotokollStoreWithDispo(reiseDir, technicianId, parsedServerJobId, creds.baseUrl, auth, localJobId, spec);
-        } catch (_) {
-          /* lokaler Store bleibt */
-        }
-      }
+      const reiseDir = null;
+      const store = readServiceprotokollStore(reiseDir, localJobId, spec);
       if (fab && store.byFab[fab]) {
         return res.json({ ok: true, data: store.byFab[fab], store });
       }
@@ -13895,7 +13616,7 @@ function createApp(db) {
         }
       } catch (_) { /* optional */ }
 
-      const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
+      const reiseDir = jsonOnly ? null : getOrCreateDienstreiseFolderForJob(localJobId);
       writeServiceprotokollDraft(reiseDir, fab, draftPayload, localJobId, spec);
 
       let syncWarning = messSyncWarning;
@@ -18261,6 +17982,26 @@ function createApp(db) {
           });
         } catch (asErr) {
           console.warn('[sync_pull] arbeitsschritte:', asErr && asErr.message ? asErr.message : asErr);
+        }
+        try {
+          setProgress('sync_pull', 5, 8, 'Protokoll-Entwürfe …');
+          const draftJobs = db.prepare(`
+            SELECT j.id, j.server_id FROM jobs j
+            INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
+            WHERE j.server_id IS NOT NULL AND CAST(j.server_id AS INTEGER) > 0
+              AND lower(coalesce(j.status, '')) NOT IN ('abgerechnet')
+          `).all(technicianId);
+          for (const row of draftJobs) {
+            for (const basename of Object.keys(DRAFT_JSON_ENDPOINTS)) {
+              await pullOneJsonDraftForJob(null, row.id, row.server_id, technicianId, basename, {
+                baseUrl: base,
+                serverUsername: p.serverUsername,
+                serverPassword: p.serverPassword,
+              });
+            }
+          }
+        } catch (draftPullErr) {
+          console.warn('[sync_pull] protocol_drafts:', draftPullErr && draftPullErr.message ? draftPullErr.message : draftPullErr);
         }
         await dbLock.runWithDbLock(async () => {
           setProgress('sync_pull', 6, 8, 'Projektordner (Änderungen) …');

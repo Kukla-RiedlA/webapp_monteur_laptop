@@ -610,11 +610,111 @@ function parseDataSheetText(text) {
   return out;
 }
 
-function parseMlPdfText(text) {
+function mlSegmentFabs(part, len) {
+  if (len < 4) return [];
+  const re = new RegExp('(?<!\\d)(\\d{' + len + '})(?!\\d)', 'g');
+  const out = new Set();
+  let m;
+  while ((m = re.exec(String(part || '')))) out.add(m[1]);
+  return [...out];
+}
+
+/** 0 nur diese FN, 2 kein Einzel-FN, 3 andere FN. Spanne 9499-9509 ist nicht Eigentum der ersten Nummer. */
+function mlFabFit(rel, fab) {
+  const fd = String(fab || '').replace(/\D/g, '');
+  if (!fd) return 2;
+  let own = false;
+  let other = false;
+  for (const part of String(rel || '').replace(/\\/g, '/').toLowerCase().split('/')) {
+    if (!part) continue;
+    const nums = mlSegmentFabs(part, fd.length);
+    if (nums.length !== 1) continue;
+    if (nums[0] === fd) own = true;
+    else other = true;
+  }
+  if (other) return 3;
+  if (own) return 0;
+  return 2;
+}
+
+function fnNumbers(text) {
+  const out = new Set();
+  const re = /\bFN\.?\s*:?\s*(?:\r?\n\s*)?(\d{4,8})\b/giu;
+  let m;
+  const s = String(text || '');
+  while ((m = re.exec(s))) out.add(m[1]);
+  return [...out];
+}
+
+function splitByFn(text) {
+  const lines = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const blocks = [];
+  let cur = [];
+  let curFn = '';
+  let pending = false;
+  for (const line of lines) {
+    let fn = '';
+    const inline = line.match(/\bFN\.?\s*:?\s*(\d{4,8})\b/iu);
+    if (inline) {
+      fn = inline[1];
+      pending = false;
+    } else if (pending && /^\s*(\d{4,8})\b/u.test(line)) {
+      fn = line.match(/^\s*(\d{4,8})\b/u)[1];
+      pending = false;
+    } else if (/^\s*FN\.?\s*:?\s*$/iu.test(line)) {
+      pending = true;
+    }
+    if (fn && curFn && fn !== curFn) {
+      blocks.push(cur.join('\n'));
+      cur = [line];
+      curFn = fn;
+      continue;
+    }
+    if (fn && !curFn) curFn = fn;
+    cur.push(line);
+  }
+  if (cur.length) blocks.push(cur.join('\n'));
+  return blocks.length ? blocks : [String(text || '')];
+}
+
+function appendMotorRows(into, add) {
+  const score = (row) => Object.keys(row || {}).reduce((n, k) => n + (String(row[k] || '').trim() ? 1 : 0), 0);
+  const index = new Map();
+  into.forEach((row, i) => {
+    const key = [row.positionsnummer, row.seriennummer, row.type].join('|');
+    index.set(key === '||' ? 'row-' + i : key, i);
+  });
+  for (const row of add || []) {
+    if (!row) continue;
+    let key = [row.positionsnummer, row.seriennummer, row.type].join('|');
+    if (key === '||' || !index.has(key)) {
+      if (key === '||') key = 'row-' + into.length;
+      index.set(key, into.length);
+      into.push(row);
+      continue;
+    }
+    const i = index.get(key);
+    if (score(row) > score(into[i])) into[i] = row;
+  }
+  return into;
+}
+
+function parseMlPdfText(text, fab) {
   const raw = String(text || '');
-  const list = isMotorListLayout(raw) ? parseMotorListText(raw) : [];
-  const sheets = parseDataSheetText(raw);
-  return fillMotorRows(list, sheets);
+  const want = String(fab || '').replace(/\D/g, '');
+  const docHasFn = fnNumbers(raw).length > 0;
+  let merged = [];
+  for (const block of splitByFn(raw)) {
+    const fns = fnNumbers(block);
+    if (want) {
+      if (fns.some((n) => n !== want)) continue;
+      if (!fns.length && docHasFn) continue;
+    }
+    const list = isMotorListLayout(block) ? parseMotorListText(block) : [];
+    const sheets = parseDataSheetText(block);
+    merged = appendMotorRows(merged, fillMotorRows(list, sheets));
+  }
+  return merged;
 }
 
 /** 0 Deutsch, 1 Englisch, 2 sonstige, 3 Spanisch (Fallback). */
@@ -642,12 +742,12 @@ async function extractPdfText(buf) {
   return String((data && data.text) || '');
 }
 
-async function parseMlPdfBuffer(buf) {
+async function parseMlPdfBuffer(buf, fab) {
   const text = await extractPdfText(buf);
   if (!text.trim()) {
     return { ok: false, error: 'PDF ohne lesbaren Text.', motors: [], text: '' };
   }
-  const motors = parseMlPdfText(text);
+  const motors = parseMlPdfText(text, fab);
   return {
     ok: true,
     motors,
@@ -709,6 +809,7 @@ function isMlPdfCandidate(filename, relPath) {
 module.exports = {
   parseMlPdfText,
   parseMlPdfBuffer,
+  mlFabFit,
   extractPdfText,
   isMlPdfCandidate,
   isMotorListLayout,

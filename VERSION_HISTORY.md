@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.046
+- **Masken offline:** Protokolle, Auftrag, TED, Signatur, Zeitschreibung, Hinweise, Anlagenakte und Abrechnung antworten aus lokalen Daten. Ein gesetzter Dispo-Server blockiert die Eingabe nicht mehr; Sync läuft im Hintergrund.
+- **Motorliste:** Eine Nummernspanne im Ordnernamen (z. B. 9499-9509) gilt nicht als Eigentum der ersten Fabrikationsnummer.
+
 ## V 2.007.033
 - **Montagebericht:** Speichern nimmt deutsches Datum und das Enddatum, wenn der Start fehlt. Die Meldung nennt den echten Grund statt „kein gültiges Startdatum“.
 - **Anlagenstamm:** Parameter-PDF (Akte und Liste) hat denselben Aufbau wie unter Protokolle/Parameterlisten.

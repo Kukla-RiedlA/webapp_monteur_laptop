@@ -1302,15 +1302,7 @@ function registerAbrechnungRoutesInner(app, ctx) {
         const q = req.query || {};
         auth = authHeaderFromCredentials(q.serverUsername || q.server_username, q.serverPassword ?? q.server_password);
       }
-      let dispoCommentsError = null;
-      if (baseUrlRaw && auth && technicianId && dispoJobId) {
-        try {
-          await syncCommentsOnlyFromDispo(ctx, baseUrlRaw, technicianId, auth, dispoJobId);
-        } catch (e) {
-          dispoCommentsError = e && e.message ? String(e.message) : String(e);
-          console.warn('[abrechnung/bundle] Kommentare von Dispo:', dispoCommentsError);
-        }
-      }
+      const dispoCommentsError = null;
       let row = db
         .prepare('SELECT dispo, buchhaltung, comments_json, synced_at FROM abrechnung_notes_cache WHERE job_server_id = ?')
         .get(dispoJobId);
@@ -1334,47 +1326,7 @@ function registerAbrechnungRoutesInner(app, ctx) {
           )
           .all(dispoJobId, jobServerIdRaw),
       );
-      let dispoFilesError = null;
-      if (baseUrlRaw && technicianId && dispoJobId) {
-        if (!auth) {
-          dispoFilesError =
-            'Keine Zugangsdaten für Dispo (Benutzername/Passwort in den Einstellungen oder Authorization-Header).';
-        }
-      }
-      if (baseUrlRaw && auth && technicianId && dispoJobId) {
-        const base = dispoBase(baseUrlRaw);
-        const seenByBucket = new Map();
-        for (const fileRow of files) {
-          const b = fileRow.bucket;
-          if (!seenByBucket.has(b)) seenByBucket.set(b, new Set());
-          seenByBucket.get(b).add(fileRow.file_name);
-        }
-        try {
-          for (const bucket of ['dispo', 'buchhaltung']) {
-            const data = await dispoFetchAbrechnungBucketList(base, dispoJobId, bucket, auth, technicianId);
-            const remoteFiles = data.files || [];
-            if (!seenByBucket.has(bucket)) seenByBucket.set(bucket, new Set());
-            const seen = seenByBucket.get(bucket);
-            for (const rf of remoteFiles) {
-              const fn = String(rf.name || rf.file_name || '').trim();
-              if (!fn || seen.has(fn)) continue;
-              seen.add(fn);
-              files.push({
-                bucket,
-                file_name: fn,
-                size_bytes: rf.size_bytes != null ? rf.size_bytes : null,
-                synced_at: null,
-                uploaded_at: rf.uploaded_at != null ? rf.uploaded_at : null,
-                uploaded_by_name: rf.uploaded_by_name != null ? rf.uploaded_by_name : null,
-                remote_only: true,
-              });
-            }
-          }
-        } catch (e) {
-          dispoFilesError = e && e.message ? String(e.message) : String(e);
-          console.warn('[abrechnung/bundle] Dispo-Dateiliste:', dispoFilesError);
-        }
-      }
+      const dispoFilesError = null;
       for (const bucket of ['dispo', 'buchhaltung']) {
         const diskOnly = scanLocalAbrechnungFilesFromDisk(fileCtx, db, jobServerIdRaw, bucket, dbDir);
         const seenFn = new Set(files.map((fr) => `${fr.bucket}\0${fr.file_name}`));

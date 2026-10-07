@@ -83,8 +83,13 @@ function createDispoProxy(options = {}) {
           'Basic ' + Buffer.from(`${config.dispoUsername}:${config.dispoPassword}`, 'utf8').toString('base64');
       }
       let res;
+      const signal =
+        init.signal ||
+        (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(8000)
+          : undefined);
       try {
-        res = await fetch(url, { ...init, headers, redirect: init.redirect || 'follow' });
+        res = await fetch(url, { ...init, headers, redirect: init.redirect || 'follow', signal });
       } catch (err) {
         const wrapped = new Error(formatFetchError(err, base));
         wrapped.cause = err;

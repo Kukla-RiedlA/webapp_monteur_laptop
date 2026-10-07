@@ -76,66 +76,30 @@ function registerHinweiseRoutes(app, ctx) {
     return { status: r.status, data };
   }
 
-  app.get('/api/hinweise/mine', async (req, res) => {
+  app.get('/api/hinweise/mine', (req, res) => {
     const database = db();
-    if (database) ensureHinweiseLocalSchema(database);
-    try {
-      const got = await fetchDispoJson(req, '/api/mobile/hinweise.php?mine=1');
-      const data = got.data && typeof got.data === 'object' ? got.data : {};
-      if (database) {
-        data.items = mergeRemoteWithLocal(database, data.items || [], null);
-        if (!data.lamp || data.lamp === 'off') {
-          const pendingOpen = (data.items || []).some((it) => it && it.pending_push && it.status !== 'done');
-          if (pendingOpen) data.lamp = 'red';
-        }
-        data.ok = data.ok !== false;
-      }
-      res.status(got.status && got.status >= 400 && data.ok === false ? got.status : 200).json(data);
-    } catch (e) {
-      if (database) {
-        const items = mergeRemoteWithLocal(database, [], null);
-        return res.json({
-          ok: true,
-          items,
-          lamp: items.some((it) => it && it.status !== 'done') ? 'red' : 'off',
-          popup: [],
-          pending_push: true,
-          error: e.message || 'offline',
-        });
-      }
-      res.status(503).json({ ok: false, error: e.message || 'offline' });
-    }
+    if (!database) return res.status(503).json({ ok: false, error: 'Lokale Datenbank nicht bereit.' });
+    ensureHinweiseLocalSchema(database);
+    const items = mergeRemoteWithLocal(database, [], null);
+    res.json({
+      ok: true,
+      items,
+      lamp: items.some((it) => it && it.status !== 'done') ? 'red' : 'off',
+      popup: [],
+      source: 'local',
+    });
   });
 
-  app.get('/api/hinweise', async (req, res) => {
+  app.get('/api/hinweise', (req, res) => {
     const database = db();
-    if (database) ensureHinweiseLocalSchema(database);
+    if (!database) return res.status(503).json({ ok: false, error: 'Lokale Datenbank nicht bereit.' });
+    ensureHinweiseLocalSchema(database);
     const fab = String(req.query.fabrikationsnummer || '').trim();
-    try {
-      const q = new URLSearchParams();
-      ['fabrikationsnummer', 'job_id', 'id', 'mine'].forEach((k) => {
-        if (req.query[k] != null && req.query[k] !== '') q.set(k, String(req.query[k]));
-      });
-      const got = await fetchDispoJson(
-        req,
-        '/api/mobile/hinweise.php' + (q.toString() ? '?' + q.toString() : '?mine=1'),
-      );
-      const data = got.data && typeof got.data === 'object' ? got.data : {};
-      if (database) {
-        data.items = mergeRemoteWithLocal(database, data.items || [], fab || null);
-        data.ok = data.ok !== false;
-      }
-      res.status(got.status && got.status >= 400 && data.ok === false ? got.status : 200).json(data);
-    } catch (e) {
-      if (database) {
-        return res.json({
-          ok: true,
-          items: mergeRemoteWithLocal(database, [], fab || null),
-          pending_push: true,
-        });
-      }
-      res.status(503).json({ ok: false, error: e.message || 'offline' });
-    }
+    res.json({
+      ok: true,
+      items: mergeRemoteWithLocal(database, [], fab || null),
+      source: 'local',
+    });
   });
 
   app.post('/api/hinweise/create', async (req, res) => {
@@ -184,19 +148,22 @@ function registerHinweiseRoutes(app, ctx) {
     res.json({ ok: true, hinweis: local, pending_push: true });
   });
 
-  app.post('/api/hinweise/action', express.json(), async (req, res) => {
-    try {
-      const url = await dispoUrl('/api/mobile/hinweis_action.php');
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: headersFor(req, { 'Content-Type': 'application/json' }),
-        body: JSON.stringify(req.body || {}),
-      });
-      const body = await r.text();
-      res.status(r.status).type('json').send(body);
-    } catch (e) {
-      res.status(503).json({ ok: false, error: e.message || 'offline' });
+  app.post('/api/hinweise/action', express.json(), (req, res) => {
+    const database = db();
+    const body = req.body || {};
+    const action = String(body.action || '').toLowerCase();
+    const serverId = parseInt(body.id, 10);
+    if (database && (action === 'done' || action === 'erledigt')) {
+      ensureHinweiseLocalSchema(database);
+      if (Number.isFinite(serverId) && serverId > 0) {
+        database.prepare(`UPDATE hinweise_local SET status = 'done', pending_push = 1 WHERE server_id = ?`).run(serverId);
+      }
+      const uuid = String(body.client_uuid || '').trim();
+      if (uuid) {
+        database.prepare(`UPDATE hinweise_local SET status = 'done', pending_push = 1 WHERE client_uuid = ?`).run(uuid);
+      }
     }
+    res.json({ ok: true, pending_push: true, source: 'local' });
   });
 
   app.get('/api/hinweise/file', async (req, res) => {

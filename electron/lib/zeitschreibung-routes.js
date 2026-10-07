@@ -952,24 +952,10 @@ function registerZeitschreibungRoutes(app, ctx) {
       if (!technicianId || !year || !month || month < 1 || month > 12) {
         return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
       }
-      let pull = { ok: false, days: null };
-      try {
-        pull = await pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds);
-      } catch (_) {
-        /* offline / kein Dispo — lokale Locks behalten */
-      }
       const data = loadTimesheet(db, technicianId, year, month);
-      // Frisch von Dispo gemergte Tage bevorzugt (auch wenn Persist unverändert war)
-      if (pull && pull.ok && Array.isArray(pull.days) && pull.days.length) {
-        data.days = pull.days;
-        data.sums = calc.addUebertragToSums(calc.columnSumsEffective(pull.days), data.uebertrag);
-        data.gesamt = calc.gesamtSum(data.sums);
-        data.lohn_pulled = true;
-      } else {
-        data.sums = calc.addUebertragToSums(calc.columnSumsEffective(data.days || []), data.uebertrag);
-        data.gesamt = calc.gesamtSum(data.sums);
-        data.lohn_pulled = false;
-      }
+      data.sums = calc.addUebertragToSums(calc.columnSumsEffective(data.days || []), data.uebertrag);
+      data.gesamt = calc.gesamtSum(data.sums);
+      data.lohn_pulled = false;
       data.technician_name = getTechnicianName(db, technicianId);
       data.config = readConfig(dbDir);
       res.json({ ok: true, ...data });
@@ -989,11 +975,6 @@ function registerZeitschreibungRoutes(app, ctx) {
       if (!technicianId || !year || !month) {
         return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
       }
-      try {
-        await pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds);
-      } catch (_) {
-        /* offline */
-      }
       const saved = persistTimesheet(db, technicianId, year, month, body.days || [], 'draft');
       enqueueOutbox(db, saved.id, null, null, {
         technician_id: technicianId,
@@ -1001,16 +982,15 @@ function registerZeitschreibungRoutes(app, ctx) {
         month,
         status: saved.status,
       });
-      const flush = await tryFlushZeitschreibungNow(db, technicianId, resolveDispoPushCreds);
       res.json({
         ok: true,
         id: saved.id,
         sums: saved.sums,
         gesamt: saved.gesamt,
         status: saved.status,
-        synced: flush.flushed > 0,
-        sync_pending: flush.flushed === 0,
-        sync_errors: flush.errors || [],
+        synced: false,
+        sync_pending: true,
+        sync_errors: [],
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || String(e) });
@@ -1077,11 +1057,6 @@ function registerZeitschreibungRoutes(app, ctx) {
       if (!technicianId || !year || !month) {
         return res.status(400).json({ ok: false, error: 'technician_id, year, month erforderlich' });
       }
-      try {
-        await pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds);
-      } catch (_) {
-        /* offline */
-      }
       const saved = persistTimesheet(db, technicianId, year, month, body.days || [], 'submitted');
       const files = await writeExportFiles(
         dbDir,
@@ -1103,7 +1078,6 @@ function registerZeitschreibungRoutes(app, ctx) {
         month,
         status: 'submitted',
       });
-      const flush = await tryFlushZeitschreibungNow(db, technicianId, resolveDispoPushCreds);
       res.json({
         ok: true,
         id: saved.id,
@@ -1112,9 +1086,9 @@ function registerZeitschreibungRoutes(app, ctx) {
         gesamt: saved.gesamt,
         pdf_path: files.pdfPath,
         xlsx_path: files.xlsxPath,
-        synced: flush.flushed > 0,
-        sync_pending: flush.flushed === 0,
-        sync_errors: flush.errors || [],
+        synced: false,
+        sync_pending: true,
+        sync_errors: [],
       });
     } catch (e) {
       const code = e && e.code === 'NO_BASE_PATH' ? 400 : 500;

@@ -15,7 +15,7 @@ const {
 } = require('./anlagenstamm-documents-local');
 const fs = require('fs');
 const { applyKuklaAuditHeaders } = require('./audit-client-headers');
-const { parseMlPdfBuffer, isMlPdfCandidate, mlPdfLangRank, mlPdfMatchRank } = require('./anlagenstamm-ml-pdf');
+const { parseMlPdfBuffer, isMlPdfCandidate, mlPdfLangRank, mlPdfMatchRank, mlFabFit } = require('./anlagenstamm-ml-pdf');
 const { readParameterSourceText, decodeParameterFileBytes, normalizeFabDigits } = require('./anlagenstamm-local');
 
 function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
@@ -127,6 +127,13 @@ function collectMlPdfRels(nodes, acc) {
   }
 }
 
+function preferOwnMlRels(rels, fab) {
+  const list = [...new Set((rels || []).filter(Boolean))];
+  const own = list.filter((rel) => mlFabFit(rel, fab) === 0);
+  if (own.length) return own;
+  return list.filter((rel) => mlFabFit(rel, fab) === 2);
+}
+
 function sortMlPdfRels(rels, fab) {
   const fd = String(fab || '').replace(/\D/g, '');
   return [...new Set(rels.filter(Boolean))].sort((a, b) => {
@@ -163,10 +170,10 @@ function mergeMotorRows(into, add) {
   return into;
 }
 
-async function parseLocalMlPdfPath(filePath) {
+async function parseLocalMlPdfPath(filePath, fab) {
   try {
     const buf = fs.readFileSync(filePath);
-    return await parseMlPdfBuffer(buf);
+    return await parseMlPdfBuffer(buf, fab);
   } catch (_) {
     return null;
   }
@@ -387,38 +394,6 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
         source: 'local_fast',
       };
     }
-    const technicianId = ctx.getTechnicianId ? ctx.getTechnicianId(req) : 0;
-    let remote = null;
-    try {
-      remote = await fetchDispoApiDocumentsList(ctx, technicianId, fab);
-    } catch (_) {
-      remote = null;
-    }
-    if (
-      !(remote && (remote.ok === true || remote.success === true) && Array.isArray(remote.categories)) &&
-      typeof ctx.ensureProxyAuthenticated === 'function'
-    ) {
-      try {
-        const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds({}) : null;
-        const auth = await ctx.ensureProxyAuthenticated(creds);
-        if (auth && auth.ok && auth.authenticated && auth.proxy && typeof auth.proxy.getJson === 'function') {
-          const qs = new URLSearchParams({ fab }).toString();
-          remote = await auth.proxy.getJson('/api/anlagenstamm_documents_list.php?' + qs);
-        }
-      } catch (_) {
-        /* offline */
-      }
-    }
-    if (remote && (remote.ok === true || remote.success === true) && Array.isArray(remote.categories)) {
-      remote.source = remote.source || 'dispo_api';
-      const merged = mergeRemoteDocumentsList(local, remote);
-      try {
-        const paramCat = (merged.categories || []).find((c) => c.slug === 'parameterliste');
-        const n = paramCat && Array.isArray(paramCat.documents) ? paramCat.documents.length : 0;
-        console.log('[anlagenstamm_documents]', fab, 'source=' + merged.source, 'param=' + n);
-      } catch (_) {}
-      return res.json(merged);
-    }
     return res.json(local);
   });
 
@@ -527,17 +502,26 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       return out;
     }
 
+    if (pathRel && mlFabFit(pathRel, fab) === 3) {
+      return res.json({
+        ok: false,
+        error: 'Diese Datei gehört zu einer anderen Fabrikationsnummer.',
+        file: pathRel,
+      });
+    }
+
     if (pathRel && typeof ctx.resolveProjekteNeuLocalFile === 'function') {
       try {
         const localPath = ctx.resolveProjekteNeuLocalFile(technicianId, fab, pathRel, jobId);
         if (localPath) {
-          const parsed = await parseLocalMlPdfPath(localPath);
+          const parsed = await parseLocalMlPdfPath(localPath, fab);
           const hit = await parsedOk(parsed, pathRel, 'local_file');
           if (hit) return res.json(hit);
         }
       } catch (_) {}
     }
 
+    return res.json({ ok: true, motors: [], source: 'local_only', file: pathRel || '' });
     const apiData = await fetchDispoApiMlPdfPrefill(ctx, technicianId, fab, pathRel, debug);
     if (apiData && apiData.ok && Array.isArray(apiData.motors) && apiData.motors.length) {
       return res.json(Object.assign({ source: 'dispo_api' }, apiData));
@@ -553,7 +537,7 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
         list && list.projekte_neu && Array.isArray(list.projekte_neu.tree) ? list.projekte_neu.tree : [];
       collectMlPdfRels(tree, mlRels);
       if (apiData && apiData.file) mlRels.push(String(apiData.file));
-      mlRels = sortMlPdfRels(mlRels, fab).slice(0, 60);
+      mlRels = preferOwnMlRels(sortMlPdfRels(mlRels, fab), fab).slice(0, 60);
     }
     let downloadPath = mlRels[0] || pathRel || String((apiData && apiData.file) || '').trim();
     const mergedMotors = [];
@@ -563,14 +547,14 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       if (typeof ctx.resolveProjekteNeuLocalFile === 'function') {
         try {
           const localPath = ctx.resolveProjekteNeuLocalFile(technicianId, fab, rel, jobId);
-          if (localPath) parsed = await parseLocalMlPdfPath(localPath);
+          if (localPath) parsed = await parseLocalMlPdfPath(localPath, fab);
         } catch (_) {}
       }
       if (!parsed) {
         const buf = await downloadMlPdfViaSession(ctx, technicianId, fab, rel);
         if (buf) {
           try {
-            parsed = await parseMlPdfBuffer(buf);
+            parsed = await parseMlPdfBuffer(buf, fab);
           } catch (_) {}
         }
       }
@@ -615,10 +599,10 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
         }
         if (data && typeof data === 'object') {
           const fileFromDispo = String((data && data.file) || downloadPath || '').trim();
-          if (fileFromDispo) {
+          if (fileFromDispo && mlFabFit(fileFromDispo, fab) !== 3) {
             const buf = await downloadMlPdfViaSession(ctx, technicianId, fab, fileFromDispo);
             if (buf) {
-              const parsed = await parseMlPdfBuffer(buf);
+              const parsed = await parseMlPdfBuffer(buf, fab);
               const hit = await parsedOk(parsed, fileFromDispo, 'dispo_file');
               if (hit) return res.json(hit);
             }

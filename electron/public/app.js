@@ -5391,10 +5391,9 @@
     if (!el) return;
     var loadToken = ++mechanikTedLoadToken;
     var expectedJobId = job && job.id != null ? job.id : null;
-    var baseUrl = getDispoBaseUrl();
     var techId = getTechId();
-    if (!baseUrl || !techId || !job) {
-      el.innerHTML = '<p class="muted">Mechanik-Excel (TED): nur mit Dispo-Server-URL in den Einstellungen und Online-Verbindung.</p>';
+    if (!techId || !job) {
+      el.innerHTML = '<p class="muted">Mechanik-Excel (TED): kein Auftrag.</p>';
       return;
     }
     var jobId = (job.server_id != null && job.server_id !== '') ? job.server_id : job.id;
@@ -5407,10 +5406,8 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(techId) },
       body: JSON.stringify({
-        baseUrl: baseUrl,
         jobId: jobId,
-        serverUsername: getDispoUsername(),
-        serverPassword: getDispoPassword()
+        local_job_id: job.id
       })
     })
       .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
@@ -18590,9 +18587,7 @@
           var projEl = document.getElementById('montageberichtProjekt');
           if (projEl) projEl.value = deriveMontageberichtProjektFromAnlagenstamm(montageberichtJobData);
           try {
-            var mbLoadUrl = API_BASE + '/api/protokolle/montagebericht?job_id=' + id;
-            var mbBase = typeof getDispoBaseUrl === 'function' ? String(getDispoBaseUrl() || '').replace(/\/$/, '') : '';
-            if (mbBase) mbLoadUrl += '&baseUrl=' + encodeURIComponent(mbBase);
+            var mbLoadUrl = API_BASE + '/api/protokolle/montagebericht?job_id=' + id + '&local_only=1';
             var loadR = await fetch(mbLoadUrl, { headers: { 'X-Technician-Id': String(getTechId()) } });
             var loadData = await loadR.json();
             if (loadToken !== montageberichtJobLoadToken) return;
@@ -23949,12 +23944,8 @@
         pdf_languages: collectPdfLanguages(),
         include_in_pdf: payload.include_in_pdf !== false,
         jsonOnly: true,
-        skip_dispo_sync: opts.localOnly || (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
-        local_only: opts.localOnly || undefined,
-        base_url: (opts.localOnly || (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly())) ? undefined : getDispoBaseUrl(),
-        dispoBaseUrl: (opts.localOnly || (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly())) ? undefined : getDispoBaseUrl(),
-        serverUsername: getDispoUsername(),
-        serverPassword: getDispoPassword()
+        skip_dispo_sync: true,
+        local_only: true
       };
       var persistPromise = fetch(API_BASE + spProtocol.apiPath, {
         method: 'POST',
