@@ -58,10 +58,30 @@ body > main.view-protokolle .sp-v2-topbar {
 }
 
 body > #viewProtokolleService.active,
-body > #viewProtokolleInbetriebnahme.active {
+body > #viewProtokolleInbetriebnahme.active,
+body > #viewProtokolleKontrollwiegungen.active,
+body > #viewProtokolleSchleppketten.active {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+body > #viewProtokolleKontrollwiegungen.active > .kw-v2-page,
+body > #viewProtokolleSchleppketten.active > .sk-v2-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+body > #viewProtokolleKontrollwiegungen.active .sp-v2-form,
+body > #viewProtokolleSchleppketten.active .sp-v2-form,
+body > #viewProtokolleKontrollwiegungen.active .sp-fn-kartei,
+body > #viewProtokolleSchleppketten.active .sp-fn-kartei {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 body > main.view-protokolle.active > .sp-react-frame {

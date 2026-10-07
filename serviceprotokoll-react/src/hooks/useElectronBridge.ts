@@ -7,6 +7,7 @@ export interface SpBridgePayload {
   jobs: { id: string; label: string }[];
   fabNumbers: string[];
   fabIncludeByFab?: Record<string, boolean>;
+  fabTypeByFab?: Record<string, string>;
   form: ServiceProtocolFormState;
   measurements: MeasurementRow[];
   testLoad: TestLoadValues;

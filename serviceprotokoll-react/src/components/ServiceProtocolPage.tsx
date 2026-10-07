@@ -54,7 +54,7 @@ export function ServiceProtocolPage() {
   const embedded = useEmbeddedMode();
   const [bridgeState, setBridgeState] = useState<SpBridgePayload>(defaultBridgePayload);
 
-  const { form, testLoad, workSteps, jobs, jobId, fabNumbers, fabIncludeByFab, wiegungen, ketten, kettenMessungen } = bridgeState;
+  const { form, testLoad, workSteps, jobs, jobId, fabNumbers, fabIncludeByFab, fabTypeByFab, wiegungen, ketten, kettenMessungen } = bridgeState;
   const weighRows = Array.isArray(wiegungen) && wiegungen.length ? wiegungen : [emptyWeighingRow()];
   const chainRows: ChainRow[] = Array.isArray(ketten) && ketten.length ? ketten : [emptyChainRow()];
   const chainMessRows: ChainMessRow[] = Array.isArray(kettenMessungen) && kettenMessungen.length ? kettenMessungen : [emptyChainMessRow()];
@@ -66,6 +66,10 @@ export function ServiceProtocolPage() {
 
   const fabChips = fabNumbers.length ? fabNumbers : embedded ? [] : FAB_NUMBERS;
   const includedFabCount = fabChips.filter((fab) => fabIncludeByFab?.[fab] !== false).length;
+  function chipType(fab: string) {
+    if (fab === (form.activeFab || '') && String(form.plantType || '').trim()) return form.plantType;
+    return (fabTypeByFab && fabTypeByFab[fab]) || '';
+  }
   const uiLang: UiLang = maskLangFromPdf(form.pdfDe, form.pdfEn);
   const displayLang = uiLang;
   const protocolKind = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('kind') === 'ibn' ? 'ibn' : 'service';
@@ -319,11 +323,9 @@ export function ServiceProtocolPage() {
   };
 
   return (
-    <div className={embedded ? 'bg-kukla-page pb-6' : 'min-h-screen bg-kukla-page pb-10'} lang={uiLang}>
-      <div className="mx-auto max-w-[1280px] px-4 py-4 md:px-6">
-        <header
-          className={`mb-5 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20 -mx-4 bg-kukla-page/95 px-4 py-2 backdrop-blur md:-mx-6 md:px-6`}
-        >
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-kukla-page p-3 md:p-4" lang={uiLang}>
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-[1280px] flex-col overflow-hidden rounded-lg border border-[#0e7b5a] bg-white p-4">
+        <header className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-baseline gap-3">
             <SpIcon name="ClipboardList" className="h-8 w-8 shrink-0" />
             <h1 className="text-2xl font-bold text-[#111827] md:text-[1.75rem]">{t(uiLang, titleKey)}</h1>
@@ -354,7 +356,24 @@ export function ServiceProtocolPage() {
           </div>
         </header>
 
-        <div className="space-y-4">
+        <div className={fabChips.length ? 'flex min-h-0 flex-1 items-stretch overflow-hidden max-[720px]:flex-col' : 'min-h-0 flex-1 space-y-4 overflow-y-auto pb-6'}>
+          {fabChips.length ? (
+            <div className="relative z-[2] -mr-px flex w-[10.5rem] shrink-0 flex-col gap-1.5 overflow-y-auto pb-2 pt-3 max-[720px]:mb-[-1px] max-[720px]:mr-0 max-[720px]:max-h-36 max-[720px]:w-full max-[720px]:flex-row max-[720px]:flex-wrap max-[720px]:items-end max-[720px]:overflow-x-auto max-[720px]:pb-0 max-[720px]:pt-0" role="group" aria-label={t(uiLang, 'serialNumber')}>
+              {fabChips.map((fab) => (
+                <NumberChip
+                  key={fab}
+                  value={fab}
+                  subtitle={chipType(fab)}
+                  active={activeFabVisual === fab}
+                  included={fabIncludeByFab?.[fab] !== false}
+                  includeLabel={t(uiLang, 'includeFnInProtocol') + ' ' + fab}
+                  onClick={() => handleFabChange(fab)}
+                  onToggleInclude={(included) => handleFabIncludeToggle(fab, included)}
+                />
+              ))}
+            </div>
+          ) : null}
+          <div className={fabChips.length ? 'fn-kartei-sheet min-h-0 min-w-0 flex-1 space-y-0 overflow-y-auto border border-[#cfe8d1] bg-white px-3 pb-6 pt-1 md:px-4' : 'contents'}>
           <SectionCard
             number={1}
             title={t(uiLang, 'secJob')}
@@ -367,26 +386,6 @@ export function ServiceProtocolPage() {
               { label: t(uiLang, 'language'), value: [form.pdfDe ? t(uiLang, 'german') : '', form.pdfEn ? t(uiLang, 'english') : ''].filter(Boolean).join(', ') },
               { label: t(uiLang, 'serialNumber'), value: form.activeFab },
             ])}
-            persistent={
-              fabChips.length > 0 ? (
-                <div className="mt-4">
-                  <span className="mb-2 block text-sm font-semibold text-[#111827]">{t(uiLang, 'serialNumber')}</span>
-                  <div className="flex flex-wrap gap-2">
-                    {fabChips.map((fab) => (
-                      <NumberChip
-                        key={fab}
-                        value={fab}
-                        active={activeFabVisual === fab}
-                        included={fabIncludeByFab?.[fab] !== false}
-                        includeLabel={t(uiLang, 'includeFnInProtocol') + ' ' + fab}
-                        onClick={() => handleFabChange(fab)}
-                        onToggleInclude={(included) => handleFabIncludeToggle(fab, included)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              ) : null
-            }
           >
             <div className="grid gap-4">
               <SelectInput
@@ -874,6 +873,7 @@ export function ServiceProtocolPage() {
               onSaveData={() => sendAction('saveJson')}
               onCancel={() => sendAction('cancel')}
             />
+          </div>
           </div>
         </div>
       </div>

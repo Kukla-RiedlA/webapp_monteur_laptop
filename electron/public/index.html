@@ -1203,65 +1203,10 @@
     .anlagenstamm-pn-tree .anlagenstamm-pn-dir { display: block; margin: 0.35rem 0 0.1rem; font-weight: 600; }
     .anlagenstamm-pn-parent-heading { font-weight: 600; font-size: 0.88rem; color: var(--text, #222); margin: 0.5rem 0 0.35rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--accent, #ccc); }
     .anlagenstamm-pn-tree-block > .anlagenstamm-pn-parent-heading:first-child { margin-top: 0; }
+    html.is-popout-boot #viewStart { display: none; }
+    html.is-popout .app-header,
+    html.is-popout #multiDeviceBanner { display: none !important; }
     .view-projektdaten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
-    html.is-job-window,
-    html.is-job-window body {
-      height: 100%;
-      max-height: 100%;
-      overflow: hidden;
-    }
-    html.is-job-window body {
-      display: flex;
-      flex-direction: column;
-    }
-    html.is-job-window .app-header,
-    html.is-job-window #multiDeviceBanner,
-    html.is-job-window #viewStart,
-    html.is-job-window #viewDienstreise,
-    html.is-job-window #auftraegeAllCard { display: none !important; }
-    html.is-job-window #viewProjektdaten {
-      display: block;
-      flex: 1 1 auto;
-      min-height: 0;
-      min-width: 0;
-      height: auto;
-      max-height: none;
-      overflow-x: hidden;
-      overflow-y: auto;
-      padding: 0.75rem 1rem 2rem;
-    }
-    html.is-job-window #viewProjektdaten > .card {
-      min-width: 0;
-      max-width: 100%;
-    }
-    html.is-job-window .projektdaten-leistung-split {
-      grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
-      min-width: 0;
-    }
-    html.is-job-window .projektdaten-leistung-split-main,
-    html.is-job-window .projektdaten-leistung-split-side {
-      min-width: 0;
-      max-width: 100%;
-    }
-    html.is-job-window .modal-leistung-cards {
-      grid-template-columns: minmax(0, 1fr);
-      min-width: 0;
-    }
-    html.is-job-window .modal-leistung-card,
-    html.is-job-window .modal-leistung-wrap {
-      max-width: 100%;
-      min-width: 0;
-      overflow-x: auto;
-    }
-    html.is-job-window .modal-leistung-table-compact {
-      width: 100%;
-      min-width: 22rem;
-    }
-    html.is-job-window .modal-leistung-table-compact th,
-    html.is-job-window .modal-leistung-table-compact td {
-      white-space: normal;
-      overflow-wrap: anywhere;
-    }
     .view-projektdaten.active { display: block; }
     .view-projektdaten .projektdaten-leistung-row {
       cursor: pointer;
@@ -1338,7 +1283,11 @@
       align-items: start;
       margin-top: 0.5rem;
     }
-    .projektdaten-leistung-split-side { min-width: 0; }
+    .projektdaten-leistung-split-main,
+    .projektdaten-leistung-split-side { min-width: 0; max-width: 100%; }
+    .view-projektdaten .modal-leistung-cards { min-width: 0; max-width: 100%; overflow-x: auto; }
+    .view-projektdaten .modal-leistung-card,
+    .view-projektdaten .modal-leistung-wrap { min-width: 0; max-width: 100%; }
     .projektdaten-leistung-split-side h4 { margin: 0 0 0.35rem 0; font-size: 0.95rem; }
     .projektdaten-projekte-neu-hint {
       font-size: 0.8rem;
@@ -2272,7 +2221,10 @@
     .textbausteine-item-actions { flex-shrink: 0; }
   </style>
 <script>
-  if (/[?&]job_window=1(?:&|$)/.test(location.search)) document.documentElement.classList.add('is-job-window');
+  if (/[?&]popout=1(?:&|$)/.test(location.search)) {
+    document.documentElement.classList.add('is-popout');
+    document.documentElement.classList.add('is-popout-boot');
+  }
 </script>
 </head>
 <body>
@@ -2594,7 +2546,7 @@
     </div>
     <div class="card auftraege-all-card" id="auftraegeAllCard">
       <h2>Alle Aufträge</h2>
-      <p class="muted auftraege-all-hint">Andere Techniker und nicht zugewiesene. Doppelklick öffnet die Ansicht, ohne etwas zu ändern.</p>
+      <p class="muted auftraege-all-hint">Andere Techniker und nicht zugewiesene. Doppelklick öffnet die Ansicht hier, Rechtsklick in einem eigenen Fenster.</p>
       <div id="auftraegeAllList" class="dienstreise-list-wrap">
         <span class="empty">Wird geladen…</span>
       </div>
@@ -3128,6 +3080,12 @@
         </div>
       </div>
       <form id="kontrollwiegungForm" class="sp-v2-form">
+        <div class="sp-fn-kartei is-empty">
+          <div class="sp-fn-kartei-tabs" id="kontrollwiegungFabGroup" hidden>
+            <input type="hidden" id="kontrollwiegungFab" name="kontrollwiegungFab" value="">
+            <div id="kontrollwiegungFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
+          </div>
+          <div class="sp-fn-kartei-sheet">
         <section class="sp-v2-section" aria-labelledby="kwV2Sec1Title">
           <header class="sp-v2-section-head" id="kwV2Sec1Title" data-i18n-en="Job & identification"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
           <div class="sp-v2-section-body">
@@ -3155,12 +3113,7 @@
               </div>
             </div>
             <p id="kontrollwiegungKundeHint" class="mb-v2-hint-block" hidden></p>
-            <div class="sp-v2-fab-block" id="kontrollwiegungFabGroup" style="display:none">
-              <label data-i18n-en="Serial number">Fabrikationsnummer</label>
-              <input type="hidden" id="kontrollwiegungFab" name="kontrollwiegungFab" value="">
-              <div id="kontrollwiegungFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
-              <p id="kontrollwiegungSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
-            </div>
+            <p id="kontrollwiegungSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
           </div>
         </section>
 
@@ -3252,6 +3205,8 @@
             </div>
           </div>
         </section>
+          </div>
+        </div>
       </form>
     </div>
   </main>
@@ -3267,6 +3222,12 @@
         </div>
       </div>
       <form id="schleppkettenForm" class="sp-v2-form">
+        <div class="sp-fn-kartei is-empty">
+          <div class="sp-fn-kartei-tabs" id="schleppkettenFabGroup" hidden>
+            <input type="hidden" id="schleppkettenFab" name="schleppkettenFab" value="">
+            <div id="schleppkettenFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
+          </div>
+          <div class="sp-fn-kartei-sheet">
         <section class="sp-v2-section" aria-labelledby="skV2Sec1Title">
           <header class="sp-v2-section-head" id="skV2Sec1Title" data-i18n-en="Job & identification"><span class="sp-v2-num">1</span><img class="sp-v2-icon" src="icons/building2-green.svg" alt="" aria-hidden="true"> Auftrag &amp; Identifikation</header>
           <div class="sp-v2-section-body">
@@ -3294,12 +3255,7 @@
               </div>
             </div>
             <p id="schleppkettenKundeHint" class="mb-v2-hint-block" hidden></p>
-            <div class="sp-v2-fab-block" id="schleppkettenFabGroup" style="display:none">
-              <label data-i18n-en="Serial number">Fabrikationsnummer</label>
-              <input type="hidden" id="schleppkettenFab" name="schleppkettenFab" value="">
-              <div id="schleppkettenFabButtons" class="sp-fab-buttons" role="group" aria-label="Fabrikationsnummer wählen"></div>
-              <p id="schleppkettenSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
-            </div>
+            <p id="schleppkettenSpeicherMeta" class="mb-v2-hint-block" hidden style="margin-top:0.65rem;margin-bottom:0"></p>
           </div>
         </section>
 
@@ -3424,6 +3380,8 @@
             </div>
           </div>
         </section>
+          </div>
+        </div>
       </form>
     </div>
   </main>
@@ -3863,7 +3821,7 @@
     </div>
   </main>
   <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">
-    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=kette1" title="Serviceprotokoll"></iframe>
+    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=kartei4" title="Serviceprotokoll"></iframe>
     <div id="serviceprotokollLegacyHost" class="sp-v2-legacy-host" hidden aria-hidden="true">
     <div class="card sp-v2-card">
       <div class="sp-v2-topbar">

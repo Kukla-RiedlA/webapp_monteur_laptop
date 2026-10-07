@@ -67,8 +67,8 @@ const { createImageGalleryWindowManager } = require('./lib/image-gallery-window'
 const { createPdfViewerWindowManager } = require('./lib/pdf-viewer-window');
 const { attachEditContextMenu } = require('./lib/edit-context-menu');
 const { createAnlagenstammAkteWindowManager } = require('./lib/anlagenstamm-akte-window');
-const { createJobDetailWindowManager } = require('./lib/job-detail-window');
 const { createBugReportWindowManager } = require('./lib/bug-report-window');
+const { createPopoutWindowManager } = require('./lib/popout-window');
 const { configureSpellCheckerSession } = require('./lib/spellcheck-session');
 const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
 const {
@@ -92,8 +92,8 @@ let updateCheckScheduled = false;
 let imageGalleryWindows = null;
 let pdfViewerWindows = null;
 let anlagenstammAkteWindows = null;
-let jobDetailWindows = null;
 let bugReportWindows = null;
+let popoutWindows = null;
 
 function ensurePdfViewerWindows() {
   if (!pdfViewerWindows) {
@@ -877,11 +877,9 @@ ipcMain.handle('open-external', async (event, url) => {
   await shell.openExternal(url.trim());
 });
 
-ipcMain.handle('job-detail:open', async (_event, payload) => {
-  if (!jobDetailWindows) {
-    jobDetailWindows = createJobDetailWindowManager(() => PORT);
-  }
-  return jobDetailWindows.openJobDetailWindow(payload || {});
+ipcMain.handle('popout:open', async (_event, payload) => {
+  if (!popoutWindows) popoutWindows = createPopoutWindowManager(() => PORT);
+  return popoutWindows.openPopoutWindow(payload || {});
 });
 
 ipcMain.handle('image-gallery:open', async (_event, payload) => {
@@ -975,8 +973,8 @@ app.whenReady().then(() => {
   imageGalleryWindows = createImageGalleryWindowManager(() => mainWindow, () => PORT);
   pdfViewerWindows = createPdfViewerWindowManager(() => mainWindow, () => PORT);
   anlagenstammAkteWindows = createAnlagenstammAkteWindowManager(() => mainWindow, () => PORT);
-  jobDetailWindows = createJobDetailWindowManager(() => PORT);
   bugReportWindows = createBugReportWindowManager(() => mainWindow, () => PORT, () => app.getPath('userData'));
+  popoutWindows = createPopoutWindowManager(() => PORT);
   initLaptopUpdater({ getMainWindow: () => mainWindow });
   getDb().then((db) => {
     const serverApp = createApp(db);

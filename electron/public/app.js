@@ -3658,8 +3658,15 @@
     list.querySelectorAll('.job').forEach((row) => {
       row.addEventListener('dblclick', function (e) {
         if (e.target.closest('button')) return;
-        var jobId = parseInt(row.getAttribute('data-job-id'), 10);
-        if (jobId) openJobInOwnWindow({ jobId: jobId, title: 'Auftrag' });
+        var jobId = row.getAttribute('data-job-id');
+        if (jobId) openJobDetailsModal(jobId);
+      });
+      row.addEventListener('contextmenu', function (e) {
+        if (e.target.closest('button')) return;
+        var jobId = row.getAttribute('data-job-id');
+        if (!jobId) return;
+        e.preventDefault();
+        openAppPopout({ view: 'projektdaten', jobId: jobId, title: 'Auftrag' });
       });
     });
   }
@@ -3874,41 +3881,6 @@
     if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
   }
 
-  function openJobInOwnWindow(spec) {
-    spec = spec || {};
-    var api = window.monteurApp && typeof window.monteurApp.openJobDetailWindow === 'function'
-      ? window.monteurApp.openJobDetailWindow
-      : null;
-    if (api) {
-      api(spec);
-      return;
-    }
-    var qs = new URLSearchParams();
-    qs.set('job_window', '1');
-    if (spec.jobId) qs.set('job_id', String(spec.jobId));
-    if (spec.serverJobId) qs.set('server_id', String(spec.serverJobId));
-    if (spec.viewOnly) qs.set('view_only', '1');
-    if (spec.calendarTechnicianId) qs.set('calendar_tech', String(spec.calendarTechnicianId));
-    if (spec.title) qs.set('title', spec.title);
-    window.open('/?' + qs.toString(), '_blank', 'noopener');
-  }
-
-  function jobWindowQuery() {
-    try {
-      var q = new URLSearchParams(window.location.search);
-      if (q.get('job_window') !== '1') return null;
-      return {
-        jobId: parseInt(q.get('job_id') || '0', 10) || 0,
-        serverJobId: parseInt(q.get('server_id') || '0', 10) || 0,
-        viewOnly: q.get('view_only') === '1',
-        calendarTechnicianId: parseInt(q.get('calendar_tech') || '0', 10) || 0,
-        title: q.get('title') || '',
-      };
-    } catch (_) {
-      return null;
-    }
-  }
-
   function openJobDetailsModal(jobId, options) {
     options = options || {};
     // Hintergrund-Refresh (Sync): Ansicht nicht wechseln, wenn Nutzer woanders ist (z. B. Anlagenstamm).
@@ -3929,6 +3901,7 @@
     jobDetailsJobId = jobId;
     if (viewStart) viewStart.classList.add('hidden');
     if (viewEinstellungen) viewEinstellungen.classList.remove('active');
+    hideSiblingViewsForProjektdaten();
     viewProjektdaten.classList.add('active');
     updateProjektdatenHeadingMeta(null);
 
@@ -4093,6 +4066,12 @@
     if (!document.getElementById('anlageDetailModal')) {
       loadLocal(false, hasCachedJob && !forceReloadFromDb);
     }
+  }
+
+  function hideSiblingViewsForProjektdaten() {
+    document.querySelectorAll('body > main.active').forEach(function (el) {
+      if (el.id !== 'viewProjektdaten') el.classList.remove('active');
+    });
   }
 
   function closeJobDetailsModal() {
@@ -5154,6 +5133,24 @@
     return sortFabrikationsnummerStrings(out);
   }
 
+  /** Typ je FN aus der Auftragszeile (Feld type). */
+  function fabTypeByFabFromJob(job) {
+    var map = {};
+    var raw = job && job.fabrikationsnummern;
+    if (raw == null || raw === '') return map;
+    var parsed = null;
+    try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
+    if (!Array.isArray(parsed)) return map;
+    parsed.forEach(function (row) {
+      if (!row || typeof row !== 'object') return;
+      var fn = String(row.fabrikationsnummer || row.Fabrikationsnummer || '').trim();
+      if (!fn) return;
+      var type = String(row.type || row.Type || '').replace(/\s+/g, ' ').trim();
+      if (type) map[fn] = type;
+    });
+    return map;
+  }
+
   /** FN ist für das aktuelle Protokoll / Alle PDF angehakt (Default: ja). */
   function isFabIncluded(draft) {
     return !(draft && typeof draft === 'object' && draft.include_in_pdf === false);
@@ -5196,7 +5193,7 @@
 
   /**
    * FN-Chip mit Checkbox (nicht im Button, damit Abwahl den Chip nicht sperrt).
-   * @param {{ fn: string, active?: boolean, saved?: boolean, included?: boolean, title?: string, onSelect?: Function, onToggleInclude?: Function }} opts
+   * @param {{ fn: string, type?: string, active?: boolean, saved?: boolean, included?: boolean, title?: string, onSelect?: Function, onToggleInclude?: Function }} opts
    */
   function renderProtocolFabChip(opts) {
     opts = opts || {};
@@ -5225,7 +5222,17 @@
     btn.type = 'button';
     btn.className = 'btn btn-ghost sp-fab-btn' + (active ? ' is-active' : '') + (opts.saved ? ' is-saved' : '');
     btn.setAttribute('data-fab', fn);
-    btn.textContent = fn;
+    var fnEl = document.createElement('span');
+    fnEl.className = 'sp-fab-fn';
+    fnEl.textContent = fn;
+    btn.appendChild(fnEl);
+    var typeText = String(opts.type || '').replace(/\s+/g, ' ').trim();
+    if (typeText) {
+      var typeEl = document.createElement('span');
+      typeEl.className = 'sp-fab-type';
+      typeEl.textContent = typeText;
+      btn.appendChild(typeEl);
+    }
     btn.disabled = !included;
     if (opts.title) btn.title = opts.title;
     btn.addEventListener('click', function () {
@@ -6179,6 +6186,7 @@
     var viewEinstellungen = document.getElementById('viewEinstellungen');
     if (viewStart) viewStart.classList.add('hidden');
     if (viewEinstellungen) viewEinstellungen.classList.remove('active');
+    hideSiblingViewsForProjektdaten();
     if (viewProjektdaten) viewProjektdaten.classList.add('active');
     var content = document.getElementById('viewProjektdatenContent');
     if (content) {
@@ -9422,6 +9430,9 @@
   });
   // Startansicht und Kalender erst nach Layout-Aufbau, damit das Grid sofort sichtbar ist
   function initStartView() {
+    try {
+      if (new URLSearchParams(window.location.search).get('popout') === '1') return;
+    } catch (_) { /* normale Startansicht */ }
     showView('start');
   }
   function runAfterLayout(fn) {
@@ -14523,7 +14534,7 @@
           const maxChars = colSpan * 20;
           const bar = jobBarText(j, maxChars);
           band.title = canOpenDetails
-            ? ((bar.title || '') + ' (Doppelklick: Projektdaten)')
+            ? ((bar.title || '') + ' (Doppelklick: Projektdaten, Rechtsklick: eigenes Fenster)')
             : isOwnTechJob && !actionJobId
               ? ((bar.title || '') + ' (noch nicht lokal zugeordnet – Sync ausführen)')
               : (bar.title || '');
@@ -14547,9 +14558,23 @@
           }
           if (canOpenDetails) {
             band.addEventListener('dblclick', function () {
+              if (typeof openJobDetailsModal !== 'function') return;
               var calServerId = Number.isFinite(serverJobId) ? serverJobId : 0;
               var ownLocal = isOwnTechJob && actionJobId != null;
-              openJobInOwnWindow({
+              openJobDetailsModal(ownLocal ? actionJobId : calServerId, {
+                fromDispo: !ownLocal,
+                viewOnly: !isOwnTechJob,
+                serverJobId: calServerId,
+                calendarTechnicianId: Number.isFinite(jobTechId) ? jobTechId : 0,
+                calendarPreview: j,
+              });
+            });
+            band.addEventListener('contextmenu', function (ev) {
+              ev.preventDefault();
+              var calServerId = Number.isFinite(serverJobId) ? serverJobId : 0;
+              var ownLocal = isOwnTechJob && actionJobId != null;
+              openAppPopout({
+                view: 'projektdaten',
                 jobId: ownLocal ? actionJobId : 0,
                 serverJobId: calServerId,
                 viewOnly: !isOwnTechJob,
@@ -15441,9 +15466,24 @@
     var jobTechId = Number(job.technician_id != null ? job.technician_id : job.technicianId);
     var serverJobId = parseInt(job.server_id != null && String(job.server_id).trim() !== '' ? job.server_id : job.id, 10);
     if (!Number.isFinite(serverJobId) || serverJobId <= 0) return;
+    openJobDetailsModal(serverJobId, {
+      fromDispo: true,
+      viewOnly: true,
+      serverJobId: serverJobId,
+      calendarTechnicianId: Number.isFinite(jobTechId) ? jobTechId : 0,
+      calendarPreview: job,
+    });
+  }
+
+  function openBrowseJobPopout(job) {
+    if (!job) return;
+    var jobTechId = Number(job.technician_id != null ? job.technician_id : job.technicianId);
+    var serverJobId = parseInt(job.server_id != null && String(job.server_id).trim() !== '' ? job.server_id : job.id, 10);
+    if (!Number.isFinite(serverJobId) || serverJobId <= 0) return;
     var firma = String(job.customer_name || '').trim();
     var ort = String(job.city || '').trim();
-    openJobInOwnWindow({
+    openAppPopout({
+      view: 'projektdaten',
       serverJobId: serverJobId,
       viewOnly: true,
       calendarTechnicianId: Number.isFinite(jobTechId) ? jobTechId : 0,
@@ -15503,7 +15543,7 @@
           var techName = isCalendarJobUnassigned(j)
             ? 'Nicht zugewiesen'
             : (String(j.technician_name || '').trim() || 'Techniker');
-          return '<div class="job" data-browse-idx="' + idx + '" title="Doppelklick zum Ansehen">' +
+          return '<div class="job" data-browse-idx="' + idx + '" title="Doppelklick öffnet hier, Rechtsklick ein eigenes Fenster">' +
             '<div class="job-info"><strong>' + titleLine + '</strong><br><span class="job-meta">' +
             escapeHtml(dateStr) + ' · ' + escapeHtml(techName) + '</span></div>' +
             '<div class="job-actions"><span class="status-badge status-' + stClass + '">' + escapeHtml(stLabel) + '</span></div></div>';
@@ -15514,6 +15554,11 @@
             var idx = parseInt(el.getAttribute('data-browse-idx'), 10);
             var job = allJobsBrowseRows[idx];
             if (job) openBrowseJobViewOnly(job);
+          });
+          el.addEventListener('contextmenu', function (ev) {
+            ev.preventDefault();
+            var idx = parseInt(el.getAttribute('data-browse-idx'), 10);
+            openBrowseJobPopout(allJobsBrowseRows[idx]);
           });
         });
       })
@@ -15664,7 +15709,13 @@
         el.addEventListener('dblclick', function (e) {
           if (e.target.closest('button')) return;
           var jobId = parseInt(el.getAttribute('data-job-id'), 10);
+          if (jobId && typeof openJobDetailsModal === 'function') openJobDetailsModal(jobId);
+        });
+        el.addEventListener('contextmenu', function (e) {
+          if (e.target.closest('button')) return;
+          var jobId = parseInt(el.getAttribute('data-job-id'), 10);
           if (!jobId) return;
+          e.preventDefault();
           var snap = null;
           for (var ji = 0; ji < dienstreisePageJobs.length; ji++) {
             if (dienstreisePageJobs[ji] && Number(dienstreisePageJobs[ji].id) === jobId) {
@@ -15674,7 +15725,8 @@
           }
           var firma = snap ? String(snap.customer_name || snap.customerName || '').trim() : '';
           var ort = snap ? String(snap.city || '').trim() : '';
-          openJobInOwnWindow({
+          openAppPopout({
+            view: 'projektdaten',
             jobId: jobId,
             serverJobId: snap && snap.server_id ? snap.server_id : 0,
             title: [firma, ort].filter(Boolean).join(' · ') || 'Auftrag',
@@ -19564,18 +19616,25 @@
       function renderFabButtons(job) {
         if (!fabButtonsEl) return;
         var fns = job ? parseJobFabrikationsnummernOrdered(job) : [];
-        if (fabGroupEl) fabGroupEl.style.display = fns.length ? 'block' : 'none';
         updateAllPdfButtonVisibility(job);
         fabButtonsEl.innerHTML = '';
+        if (fabGroupEl) {
+          fabGroupEl.hidden = !fns.length;
+          var kartei = fabGroupEl.closest('.sp-fn-kartei');
+          if (kartei) kartei.classList.toggle('is-empty', !fns.length);
+        }
         if (!fns.length) {
           setActiveFabValue('');
           return;
         }
+        var typeByFab = fabTypeByFabFromJob(job);
         fns.forEach(function (fn) {
           var draft = kwDraftByFab[fn];
           var savedAt = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
+          var draftType = draft && draft.type ? String(draft.type).replace(/\s+/g, ' ').trim() : '';
           fabButtonsEl.appendChild(renderProtocolFabChip({
             fn: fn,
+            type: draftType || typeByFab[fn] || '',
             active: fn === getActiveFab(),
             saved: !!savedAt,
             included: isFabIncluded(draft),
@@ -20886,18 +20945,25 @@
     function renderFabButtons(job) {
       if (!fabButtonsEl) return;
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(job || {}) : [];
-      if (fabGroupEl) fabGroupEl.style.display = fns.length ? 'block' : 'none';
       updateAllPdfButtonVisibility(job);
       fabButtonsEl.innerHTML = '';
+      if (fabGroupEl) {
+        fabGroupEl.hidden = !fns.length;
+        var karteiSk = fabGroupEl.closest('.sp-fn-kartei');
+        if (karteiSk) karteiSk.classList.toggle('is-empty', !fns.length);
+      }
       if (!fns.length) {
         setActiveFabValue('');
         return;
       }
+      var typeByFabSk = fabTypeByFabFromJob(job);
       fns.forEach(function (fn) {
         var draft = skDraftByFab[fn];
         var savedAt = draft && (draft.gespeichert_am || draft.updated_at) ? (draft.gespeichert_am || draft.updated_at) : '';
+        var draftTypeSk = draft && draft.type ? String(draft.type).replace(/\s+/g, ' ').trim() : '';
         fabButtonsEl.appendChild(renderProtocolFabChip({
           fn: fn,
+          type: draftTypeSk || typeByFabSk[fn] || '',
           active: fn === getActiveFab(),
           saved: !!savedAt,
           included: isFabIncluded(draft),
@@ -25489,6 +25555,7 @@
         jobId: jobSelect ? String(jobSelect.value || '') : '',
         jobs: spCollectJobOptions(),
         fabNumbers: parseJobFabrikationsnummernOrdered(serviceJobData || {}),
+        fabTypeByFab: fabTypeByFabFromJob(serviceJobData || {}),
         fabIncludeByFab: (function () {
           var out = {};
           var fns = parseJobFabrikationsnummernOrdered(serviceJobData || {});
@@ -26235,8 +26302,8 @@
     function setProtokollReactFrameActive(kind) {
       var ibn = document.getElementById('inbetriebnahmeReactFrame');
       var svc = document.getElementById('serviceprotokollReactFrame');
-      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn&v=kette1';
-      var svcSrc = 'serviceprotokoll-react/index.html?v=kette1';
+      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn&v=kartei4';
+      var svcSrc = 'serviceprotokoll-react/index.html?v=kartei4';
       function srcOf(el) {
         return String((el && el.getAttribute('src')) || '');
       }
@@ -29285,27 +29352,84 @@
   window.maybeOpenGeneratedPdfs = maybeOpenGeneratedPdfs;
   window.loadDienstreiseList = loadDienstreiseList;
 
-  (function bootJobDetailWindow() {
-    var spec = jobWindowQuery();
-    if (!spec) return;
-    document.documentElement.classList.add('is-job-window');
-    if (spec.title) document.title = spec.title;
-    var openId = spec.viewOnly ? (spec.serverJobId || spec.jobId) : (spec.jobId || spec.serverJobId);
-    if (!openId) return;
-    var opts = {};
-    if (spec.viewOnly) {
-      opts.fromDispo = true;
-      opts.viewOnly = true;
-      opts.serverJobId = spec.serverJobId || openId;
-      opts.calendarTechnicianId = spec.calendarTechnicianId || 0;
+  var popoutMenuViews = {
+    btnViewStart: { view: 'start', title: 'Start' },
+    btnViewDienstreise: { view: 'dienstreise', title: 'Aufträge' },
+    btnViewAnlagenstamm: { view: 'anlagenstamm', title: 'Anlagenstamm' },
+    btnViewArchiv: { view: 'archiv', title: 'Archiv' },
+    btnViewEinstellungen: { view: 'einstellungen', title: 'Einstellungen' },
+    btnViewAbrechnung: { view: 'abrechnung', title: 'Abrechnung' },
+    btnViewZeitschreibung: { view: 'zeitschreibung', title: 'Zeitschreibung' },
+    btnViewAbwesenheiten: { view: 'abwesenheiten', title: 'Abwesenheiten' },
+  };
+
+  document.querySelectorAll('.app-nav .nav-item, .app-nav .nav-drop-item, #btnViewEinstellungen').forEach(function (btn) {
+    btn.addEventListener('contextmenu', function (ev) {
+      var spec = popoutMenuViews[btn.id];
+      if (!spec) {
+        var viewName = btn.getAttribute('data-view');
+        if (!viewName) {
+          if (btn.getAttribute('aria-haspopup') === 'true') {
+            ev.preventDefault();
+            btn.click();
+          }
+          return;
+        }
+        spec = { view: viewName, title: String(btn.textContent || '').replace(/\s+/g, ' ').trim() || viewName };
+      }
+      ev.preventDefault();
+      openAppPopout(spec);
+    });
+  });
+
+  (function bootPopoutWindow() {
+    var q;
+    try {
+      q = new URLSearchParams(window.location.search);
+    } catch (_) {
+      return;
     }
-    function tryOpen(attempt) {
-      if (!getTechId() && attempt < 40) {
-        setTimeout(function () { tryOpen(attempt + 1); }, 150);
+    if (q.get('popout') !== '1') return;
+    document.documentElement.classList.add('is-popout');
+    var view = q.get('view') || 'start';
+    var title = q.get('title') || '';
+    if (title) document.title = title;
+    function tryBoot(attempt) {
+      var needsTech = view === 'projektdaten' || view === 'abrechnung' || view === 'zeitschreibung';
+      if (needsTech && !getTechId() && attempt < 40) {
+        setTimeout(function () { tryBoot(attempt + 1); }, 150);
         return;
       }
-      openJobDetailsModal(openId, opts);
+      if (view === 'projektdaten') {
+        var viewOnly = q.get('view_only') === '1';
+        var jobId = parseInt(q.get('job_id') || '0', 10) || 0;
+        var serverId = parseInt(q.get('server_id') || '0', 10) || 0;
+        var openId = viewOnly ? (serverId || jobId) : (jobId || serverId);
+        if (!openId) {
+          showView('dienstreise');
+          return;
+        }
+        var opts = {};
+        if (viewOnly) {
+          opts.fromDispo = true;
+          opts.viewOnly = true;
+          opts.serverJobId = serverId || openId;
+          opts.calendarTechnicianId = parseInt(q.get('calendar_tech') || '0', 10) || 0;
+        }
+        openJobDetailsModal(openId, opts);
+      } else {
+        showView(view);
+      }
+      document.documentElement.classList.remove('is-popout-boot');
     }
-    tryOpen(0);
+    tryBoot(0);
   })();
+
+  function openAppPopout(spec) {
+    var api = window.monteurApp && typeof window.monteurApp.openPopoutWindow === 'function'
+      ? window.monteurApp.openPopoutWindow
+      : null;
+    if (!api) return;
+    api(spec || {});
+  }
 })();
