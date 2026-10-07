@@ -22593,6 +22593,16 @@
     var SP_LAST_JOB_KEY = 'kukla_sp_last_job_id';
     var serviceprotokollJobLoadToken = 0;
     var serviceprotokollFabLoadToken = 0;
+    var serviceprotokollLiveInput = false;
+    var SERVICEPROTOKOLL_LOCAL_FETCH_MS = 4000;
+
+    function fetchServiceprotokollLocal(url, options) {
+      var opts = Object.assign({}, options || {});
+      if (!opts.signal && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        opts.signal = AbortSignal.timeout(SERVICEPROTOKOLL_LOCAL_FETCH_MS);
+      }
+      return fetch(url, opts);
+    }
     var serviceprotokollFormReadyFab = '';
     var serviceprotokollFabSwitching = false;
     var serviceprotokollHostHydrated = false;
@@ -23125,7 +23135,7 @@
     function lookupAnlagenstammRowForFab(fab) {
       fab = String(fab || '').trim();
       if (!fab) return Promise.resolve(null);
-      return fetch(API_BASE + '/api/anlagenstamm_lookup', {
+      return fetchServiceprotokollLocal(API_BASE + '/api/anlagenstamm_lookup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
         body: JSON.stringify({ fab: fab, local_only: 1 })
@@ -24155,6 +24165,7 @@
         }
       }
       var loadToken = ++serviceprotokollFabLoadToken;
+      serviceprotokollLiveInput = false;
       serviceprotokollFabSwitching = true;
       serviceprotokollFormReadyFab = '';
       setActiveFabValue(newFab);
@@ -24167,7 +24178,7 @@
         if (loadToken === serviceprotokollFabLoadToken) {
           serviceprotokollFabSwitching = false;
           markServiceprotokollAutosaveFromDraft(newFab, { keepUncommitted: true, savedAt: savedAtFab });
-          notifyReactBridge(true);
+          if (!serviceprotokollLiveInput) notifyReactBridge(true);
         }
       }
     }
@@ -24285,7 +24296,7 @@
       serviceprotokollDraftStore = { byFab: {} };
       if (!jobId) return;
       try {
-        var r = await fetch(API_BASE + spProtocol.apiPath + '?job_id=' + encodeURIComponent(jobId), {
+        var r = await fetchServiceprotokollLocal(API_BASE + spProtocol.apiPath + '?job_id=' + encodeURIComponent(jobId), {
           headers: { 'X-Technician-Id': String(getTechId()) }
         });
         var data = await r.json().catch(function () { return {}; });
@@ -24649,6 +24660,7 @@
       opts = opts || {};
       var loadToken = opts.loadToken;
       var row = await lookupAnlagenstammRowForFab(fab);
+      if (serviceprotokollLiveInput) return;
       if (loadToken != null && !isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
       if (!row) return;
       var mapped = anlagenstammRowToKopfAndMess(row);
@@ -25057,16 +25069,17 @@
         loadToken: loadToken,
         preferStamm: !draftApplied
       });
-      if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
+      if (serviceprotokollLiveInput || !isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
 
       var techId = getTechId();
       var q = 'fabrikationsnummer=' + encodeURIComponent(fab) + '&technician_id=' + encodeURIComponent(techId) + '&local_only=1';
       try {
-        var r = await fetch(API_BASE + '/api/serviceprotokoll_defaults?' + q + '&catalog_kind=' + encodeURIComponent(spProtocol.catalogKind), {
+        var r = await fetchServiceprotokollLocal(API_BASE + '/api/serviceprotokoll_defaults?' + q + '&catalog_kind=' + encodeURIComponent(spProtocol.catalogKind), {
           headers: { 'X-Technician-Id': String(techId) }
         });
-        if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
+        if (serviceprotokollLiveInput || !isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
         var data = await r.json().catch(function () { return {}; });
+        if (serviceprotokollLiveInput || !isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
         var apiKopfRaw = data && data.ok ? data.kopf : null;
         if (r.ok && data.ok) {
           if (!draftApplied) {
@@ -25094,15 +25107,15 @@
       } catch (e) {
         if (!draftApplied) defaultsSource = 'builtin';
       }
-      if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
+      if (serviceprotokollLiveInput || !isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
       // Nochmal lokal: Vers/Sens aus Anlagenstamm, falls Defaults/Draft sie leer gelassen haben.
       await applyAnlagenstammFelderFromLocalStamm(fab, {
         loadToken: loadToken,
         preferStamm: false
       });
-      if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
+      if (serviceprotokollLiveInput || !isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
       renderSteps();
-      if (isServiceprotokollFabLoadCurrent(loadToken, fab)) {
+      if (isServiceprotokollFabLoadCurrent(loadToken, fab) && !serviceprotokollLiveInput) {
         serviceprotokollFormReadyFab = fab;
         serviceprotokollHostHydrated = true;
         lockHostKopfFromReact(2000);
@@ -25162,24 +25175,22 @@
 
     async function loadServiceJobWithAnlagenstamm(jobId) {
       var techId = getTechId();
-      var headers = Object.assign({ 'X-Technician-Id': String(techId) }, dispoBasicAuthHeaders(getDispoUsername, getDispoPassword));
+      var headers = { 'X-Technician-Id': String(techId) };
       var jobUrl = API_BASE + '/api/job?id=' + encodeURIComponent(jobId) + '&technician_id=' + encodeURIComponent(techId) +
         '&enrich_anlagenstamm=1&enrich_local_only=1';
       try {
-        var localRes = await fetch(jobUrl, { headers: headers });
+        var localRes = await fetchServiceprotokollLocal(jobUrl, { headers: headers });
         var localData = await localRes.json().catch(function () { return {}; });
         if (localRes.ok && localData.ok && localData.job) {
           return localData.job;
         }
-      } catch (e) { /* Fallback */ }
-      var url = API_BASE + '/api/job?id=' + jobId + '&technician_id=' + techId;
-      var r = await fetch(url, { headers: headers });
-      var data = await r.json();
-      return data.job;
+      } catch (e) { /* lokale Antwort bleibt aus */ }
+      return null;
     }
 
     async function applyServiceprotokollJobSelection(id) {
       var loadToken = ++serviceprotokollJobLoadToken;
+      serviceprotokollLiveInput = false;
       beginServiceprotokollJobSwitchGuard();
       serviceprotokollFormReadyFab = '';
       serviceJobData = null;
@@ -25208,7 +25219,7 @@
         var draftsPromise = loadServiceprotokollDraftsForJob(id);
         var job = await jobPromise;
         await draftsPromise;
-        if (loadToken !== serviceprotokollJobLoadToken) return;
+        if (serviceprotokollLiveInput || loadToken !== serviceprotokollJobLoadToken) return;
         serviceJobData = job;
         rememberServiceprotokollJobId(id);
         if (serviceJobData) renderKopfdatenService(serviceJobData);
@@ -25232,7 +25243,7 @@
         if (loadToken === serviceprotokollJobLoadToken) setServiceprotokollJobLoading(false);
         if (loadToken === serviceprotokollJobLoadToken) {
           endServiceprotokollJobSwitchGuard();
-          notifyReactBridge(true);
+          if (!serviceprotokollLiveInput) notifyReactBridge(true);
         }
       }
     }
@@ -25820,11 +25831,17 @@
       pullPayload: spPullPayloadForReact,
       applyPayload: spApplyPayloadFromReact,
       getActiveFab: getActiveFab,
+      noteLiveInput: function () {
+        serviceprotokollLiveInput = true;
+      },
+      hasLiveInput: function () {
+        return serviceprotokollLiveInput;
+      },
       selectJob: function (jobId) {
         if (!jobSelect || !jobId) return;
         jobSelect.value = jobId;
-        applyServiceprotokollJobSelection(jobId).then(function () {
-          notifyReactBridge();
+        return applyServiceprotokollJobSelection(jobId).then(function () {
+          if (!serviceprotokollLiveInput) notifyReactBridge();
         });
       },
       selectFab: function (fab) {

@@ -16,6 +16,10 @@
     var pendingFabSwitch = 0;
     var fabSwitchPending = false;
     var jobSwitchPending = false;
+    var inputGuardTimer = null;
+    var inputGuardEpoch = 0;
+    var inputGuardExpired = false;
+    var SWITCH_GUARD_MS = 2500;
     var lastReactPayload = null;
     var ignoreReactUntil = 0;
     var lastAutosave = { text: '', error: false };
@@ -117,9 +121,51 @@
       try {
         api.applyPayload(payload);
       } finally {
-        applyingDepth -= 1;
+        applyingDepth = Math.max(0, applyingDepth - 1);
         applying = applyingDepth > 0;
       }
+    }
+
+    function userTookOverInput() {
+      var api = bridgeApi();
+      return !!(api && typeof api.hasLiveInput === 'function' && api.hasLiveInput());
+    }
+
+    function noteLiveInput() {
+      var api = bridgeApi();
+      if (api && typeof api.noteLiveInput === 'function') api.noteLiveInput();
+    }
+
+    /** Sperre höchstens kurz. Danach bleiben Tastendrücke möglich, auch wenn der Sync noch läuft. */
+    function armInputGuard() {
+      var epoch = ++inputGuardEpoch;
+      inputGuardExpired = false;
+      if (inputGuardTimer) clearTimeout(inputGuardTimer);
+      inputGuardTimer = setTimeout(function () {
+        if (epoch !== inputGuardEpoch) return;
+        inputGuardTimer = null;
+        inputGuardExpired = true;
+        jobSwitchPending = false;
+        fabSwitchPending = false;
+        applyingDepth = 0;
+        applying = false;
+      }, SWITCH_GUARD_MS);
+    }
+
+    function clearInputGuard() {
+      inputGuardEpoch += 1;
+      if (inputGuardTimer) clearTimeout(inputGuardTimer);
+      inputGuardTimer = null;
+      inputGuardExpired = false;
+      jobSwitchPending = false;
+      fabSwitchPending = false;
+    }
+
+    function acceptReactInput() {
+      if (!isActiveHost()) return false;
+      if (inputGuardExpired) return applyingDepth <= 0;
+      if (applying || fabSwitchPending || jobSwitchPending || applyingDepth > 0) return false;
+      return true;
     }
 
     function workStepsSignature(steps) {
@@ -216,9 +262,10 @@
       beginJobSwitch: function () {
         jobSwitchPending = true;
         lastReactPayload = null;
+        armInputGuard();
       },
       endJobSwitch: function () {
-        jobSwitchPending = false;
+        clearInputGuard();
       },
     };
 
@@ -249,10 +296,11 @@
       }
 
       if (data.type === 'SP_STATE_CHANGE' && data.payload) {
-        if (!isActiveHost() || applying || fabSwitchPending || jobSwitchPending) return;
+        if (!acceptReactInput()) return;
         var stateFab = reactPayloadFab(data.payload);
         var stateHostFab = hostActiveFab();
         if (stateHostFab && stateFab && stateFab !== stateHostFab) return;
+        noteLiveInput();
         keepHostWorkStepsIfStale(data.payload);
         keepHostMotorsIfStale(data.payload);
         keepHostKopfIfStale(data.payload);
@@ -265,10 +313,11 @@
         jobSwitchPending = true;
         lastReactPayload = null;
         applying = true;
+        armInputGuard();
         Promise.resolve(host.selectJob(String(data.jobId))).finally(function () {
-          applying = false;
-          jobSwitchPending = false;
-          syncToReact();
+          applying = applyingDepth > 0;
+          clearInputGuard();
+          if (!userTookOverInput()) syncToReact();
         });
         return;
       }
@@ -280,15 +329,20 @@
         applyingDepth += 1;
         applying = true;
         fabSwitchPending = true;
+        armInputGuard();
         Promise.resolve(host.selectFab(String(data.fab))).finally(function () {
           if (switchId !== pendingFabSwitch) return;
-          applyingDepth -= 1;
+          applyingDepth = Math.max(0, applyingDepth - 1);
           applying = applyingDepth > 0;
+          if (userTookOverInput()) {
+            clearInputGuard();
+            return;
+          }
           syncToReact(true);
           window.setTimeout(function () {
             if (switchId !== pendingFabSwitch) return;
-            fabSwitchPending = false;
-            syncToReact(true);
+            clearInputGuard();
+            if (!userTookOverInput()) syncToReact(true);
           }, 80);
         });
         return;

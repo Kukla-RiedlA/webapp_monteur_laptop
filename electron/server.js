@@ -17506,19 +17506,19 @@ function createApp(db) {
         async function pushLocalChangesBeforePull() {
           setProgress('push_first', 0, 1, 'Lokale neuere Dateien zuerst senden …');
           try {
+            await pushToServer(
+              dispoBaseUrl,
+              technicianId,
+              db,
+              authHeader,
+              liveDispoCredsForPush(dispoBaseUrl, {
+                serverUsername: dispoUsername,
+                serverPassword: dispoPassword,
+                externalUrl: p.externalUrl,
+                internalUrl: p.internalUrl,
+              }),
+            );
             await dbLock.runWithDbLock(async () => {
-              await pushToServer(
-                dispoBaseUrl,
-                technicianId,
-                db,
-                authHeader,
-                liveDispoCredsForPush(dispoBaseUrl, {
-                  serverUsername: dispoUsername,
-                  serverPassword: dispoPassword,
-                  externalUrl: p.externalUrl,
-                  internalUrl: p.internalUrl,
-                }),
-              );
               save();
             });
           } catch (prePushErr) {
@@ -17858,21 +17858,21 @@ function createApp(db) {
             console.warn('[sync_pull] session persist:', sessErr && sessErr.message ? sessErr.message : sessErr);
           }
         }
-        await dbLock.runWithDbLock(async () => {
-          setProgress('sync_pull', 0, 8, 'Sende Status/Pending vor Pull …');
-          try {
-            await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, p));
+        setProgress('sync_pull', 0, 8, 'Sende Status/Pending vor Pull …');
+        try {
+          await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, p));
+          await dbLock.runWithDbLock(async () => {
             save();
-          } catch (prePushErr) {
-            console.warn(
-              '[sync_pull] pre-pull-push:',
-              prePushErr && prePushErr.message ? prePushErr.message : prePushErr,
-            );
-          }
-        });
+          });
+        } catch (prePushErr) {
+          console.warn(
+            '[sync_pull] pre-pull-push:',
+            prePushErr && prePushErr.message ? prePushErr.message : prePushErr,
+          );
+        }
+        setProgress('sync_pull', 1, 8, 'Ziehe Aufträge von Dispo …');
+        const pullResult = await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
         await dbLock.runWithDbLock(async () => {
-          setProgress('sync_pull', 1, 8, 'Ziehe Aufträge von Dispo …');
-          const pullResult = await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
           if (pullResult && Array.isArray(pullResult.warnings) && pullResult.warnings.length) {
             console.warn('[sync_pull] jobs-warnings:', pullResult.warnings.join(' · '));
             setProgress(
@@ -17892,18 +17892,18 @@ function createApp(db) {
           }
           save();
         });
-        await dbLock.runWithDbLock(async () => {
-          setProgress('sync_pull', 2, 8, 'Sende ausstehende Änderungen …');
-          try {
-            await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, p));
+        setProgress('sync_pull', 2, 8, 'Sende ausstehende Änderungen …');
+        try {
+          await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, p));
+          await dbLock.runWithDbLock(async () => {
             save();
-          } catch (pushErr) {
-            console.warn(
-              '[sync_pull] nach-pull-push:',
-              pushErr && pushErr.message ? pushErr.message : pushErr,
-            );
-          }
-        });
+          });
+        } catch (pushErr) {
+          console.warn(
+            '[sync_pull] nach-pull-push:',
+            pushErr && pushErr.message ? pushErr.message : pushErr,
+          );
+        }
         setProgress('sync_pull', 3, 8, 'Kalender-Cache …');
         const range = defaultFutureRange();
         const cacheStart = p.date_from && String(p.date_from).trim() ? String(p.date_from).trim() : range.start;
@@ -17972,16 +17972,16 @@ function createApp(db) {
           console.warn('Protokoll-Vorlagen Sync fehlgeschlagen:', tplErr.message);
         }
         try {
+          await pullTextbausteineFromDispo(base, technicianId, db, auth);
           await dbLock.runWithDbLock(async () => {
-            await pullTextbausteineFromDispo(base, technicianId, db, auth);
             save();
           });
         } catch (tbErr) {
           console.warn('[sync_pull] textbausteine:', tbErr && tbErr.message ? tbErr.message : tbErr);
         }
         try {
+          await pullArbeitsschritteFromDispo(base, technicianId, db, auth);
           await dbLock.runWithDbLock(async () => {
-            await pullArbeitsschritteFromDispo(base, technicianId, db, auth);
             save();
           });
         } catch (asErr) {
@@ -18003,6 +18003,7 @@ function createApp(db) {
                 serverPassword: p.serverPassword,
               });
             }
+            await new Promise((r) => setImmediate(r));
           }
         } catch (draftPullErr) {
           console.warn('[sync_pull] protocol_drafts:', draftPullErr && draftPullErr.message ? draftPullErr.message : draftPullErr);
@@ -18208,14 +18209,14 @@ function createApp(db) {
           console.warn('[sync_pull] abrechnung_refresh:', abErr && abErr.message ? abErr.message : abErr);
         }
         try {
+          await flushAbrechnungOutbox(
+            { db, save, dbDir: DB_DIR, authHeaderFromCredentials },
+            base,
+            technicianId,
+            p.serverUsername,
+            p.serverPassword,
+          );
           await dbLock.runWithDbLock(async () => {
-            await flushAbrechnungOutbox(
-              { db, save, dbDir: DB_DIR, authHeaderFromCredentials },
-              base,
-              technicianId,
-              p.serverUsername,
-              p.serverPassword,
-            );
             save();
           });
         } catch (flushErr) {
