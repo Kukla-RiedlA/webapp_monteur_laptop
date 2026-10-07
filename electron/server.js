@@ -10624,6 +10624,9 @@ function createApp(db) {
       }
 
       // Dateiname ohne führende Auftrags-Indexnummer; DE → …_Montage_DE, EN → …_Assembly_report_GB
+      if (!reiseDir) {
+        return res.status(500).json({ ok: false, error: 'Auftrag hat keinen lokalen Ordner für das PDF.' });
+      }
       const fileBase = sanitizeExportFileBase(String(path.basename(reiseDir) || '').replace(/^\d+_/, ''));
       const fileStemForLang = (lang) => montageberichtExportStem(fileBase, lang);
 
@@ -12156,6 +12159,7 @@ function createApp(db) {
 
   function serviceprotokollJsonPath(reiseDir, spec) {
     const s = serviceLikeSpecFromArg(spec);
+    if (!reiseDir) return '';
     return resolveMonteurDraftJsonPath(reiseDir, s.basename, true);
   }
 

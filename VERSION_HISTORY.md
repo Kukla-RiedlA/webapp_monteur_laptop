@@ -4,6 +4,9 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.047
+- **Speichern:** Serviceprotokoll und Inbetriebnahme speichern den Entwurf lokal, auch wenn noch kein Reiseordner existiert. Die Meldung „path must be of type string“ entfällt.
+
 ## V 2.007.046
 - **Masken offline:** Protokolle, Auftrag, TED, Signatur, Zeitschreibung, Hinweise, Anlagenakte und Abrechnung antworten aus lokalen Daten. Ein gesetzter Dispo-Server blockiert die Eingabe nicht mehr; Sync läuft im Hintergrund.
 - **Motorliste:** Eine Nummernspanne im Ordnernamen (z. B. 9499-9509) gilt nicht als Eigentum der ersten Fabrikationsnummer.

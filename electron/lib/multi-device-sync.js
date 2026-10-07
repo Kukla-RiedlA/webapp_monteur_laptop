@@ -77,7 +77,8 @@ function removeProtocolConflictCopies(rootDir) {
 /** Kanonischer Schreibpfad: Dokumente_Monteur/{basename}. */
 function monteurDraftJsonPath(reiseDir, basename) {
   const base = path.basename(String(basename || '').replace(/\\/g, '/'));
-  return path.join(reiseDir, 'Dokumente_Monteur', base);
+  if (!reiseDir) return '';
+  return path.join(String(reiseDir), 'Dokumente_Monteur', base);
 }
 
 /**
@@ -85,6 +86,7 @@ function monteurDraftJsonPath(reiseDir, basename) {
  * @returns {string} Zielpfad unter Dokumente_Monteur (auch wenn Datei noch fehlt)
  */
 function resolveMonteurDraftJsonPath(reiseDir, basename, migrate) {
+  if (!reiseDir) return '';
   const doMigrate = migrate !== false;
   const base = path.basename(String(basename || '').replace(/\\/g, '/'));
   const target = monteurDraftJsonPath(reiseDir, base);
