@@ -165,10 +165,13 @@
     openViewer(it.title || 'Bild', '<img src="' + esc(it.full_url) + '" alt="" style="max-width:100%;height:auto">');
   }
 
-  function renderGalleryGrid(root, items) {
+  function renderGalleryGrid(root, items, meta) {
     galleryItems = items || [];
     if (!galleryItems.length) {
-      root.innerHTML = '<p class="muted">Keine Bilder in der Akte. Weitere Rasterdateien stehen unter Dateien (PROJEKTE NEU).</p>';
+      var msg = meta && meta.offline
+        ? 'Vorschau offline nicht verfügbar'
+        : 'Keine Bilder in der Akte. Weitere Rasterdateien stehen unter Dateien (PROJEKTE NEU).';
+      root.innerHTML = '<p class="muted">' + esc(msg) + '</p>';
       return;
     }
     var groups = [];
@@ -227,7 +230,7 @@
       : endpoint('anlagenstamm_gallery.php', 'fab=' + encodeURIComponent(fab));
     function apply(d, pollLeft) {
       if (token !== galleryLoadToken) return;
-      renderGalleryGrid(root, (d && d.gallery) || []);
+      renderGalleryGrid(root, (d && d.gallery) || [], d || {});
       root.setAttribute('data-loaded', '1');
       if (d && d.montage_pending && pollLeft > 0) {
         setTimeout(function () {

@@ -4692,6 +4692,12 @@ function createApp(db) {
     }, 400);
   }
 
+  function stripLeadingUtf8Bom(buf) {
+    if (!buf || buf.length < 3) return buf;
+    if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return buf.subarray(3);
+    return buf;
+  }
+
   function thumbBufferLooksLikeImage(buf, contentType) {
     if (!buf || !buf.length) return false;
     const ct = String(contentType || '').toLowerCase();
@@ -4719,7 +4725,7 @@ function createApp(db) {
     try {
       const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth), signal: ac.signal });
       if (!r.ok) return null;
-      const buf = Buffer.from(await r.arrayBuffer());
+      const buf = Buffer.from(stripLeadingUtf8Bom(Buffer.from(await r.arrayBuffer())));
       const ct = String(r.headers.get('content-type') || 'image/webp').split(';')[0].trim();
       if (!thumbBufferLooksLikeImage(buf, ct)) return null;
       return { buf, contentType: ct || 'image/webp' };
@@ -4889,6 +4895,23 @@ function createApp(db) {
     }
     const jobIdOpt = opts && (opts.jobId || opts.job_id);
     if (preferCache) {
+      const remote = await fetchDispoProjekteNeuThumb(technicianId, fabValue, pnPath, thumbMax);
+      if (remote && remote.buf && remote.buf.length) {
+        try {
+          writeCachedProjekteNeuThumb(
+            db,
+            DB_DIR,
+            fabValue,
+            pnPath,
+            thumbMax,
+            remote.buf,
+            remote.contentType,
+            null,
+          );
+          scheduleThumbDbSave();
+        } catch (_) {}
+        return sendProjekteNeuThumbResponse(res, remote, 'dispo');
+      }
       enqueueProjekteNeuThumbFill(technicianId, fabValue, pnPath, thumbMax, filePathOpt, jobIdOpt).catch(() => {});
       res.setHeader('X-Thumb-Cache', 'miss');
       res.setHeader('Retry-After', '1');
@@ -9539,7 +9562,7 @@ function createApp(db) {
           .status(r.status)
           .json(data.ok === false || data.success === false ? data : { success: false, error: data.error || r.statusText });
       }
-      const buf = Buffer.from(await r.arrayBuffer());
+      const buf = Buffer.from(stripLeadingUtf8Bom(Buffer.from(await r.arrayBuffer())));
       const fallbackFn =
         sourceNorm === 'projekte_neu' ? pnPath.split(/[/\\]/).pop() || 'download' : fileValue;
       const ct = contentTypeForInlineImage(fallbackFn, r.headers.get('content-type') || '', buf);
