@@ -8,6 +8,7 @@
   var jobsCache = [];
   var signedFingerprint = '';
   var lastCustomerSig = false;
+  var anIsLocked = false;
   var persistTimer = null;
   var jobLoadBusy = false;
   var jobLoadToken = 0;
@@ -96,12 +97,14 @@
     var doc = data.document || {};
     var an = data.arbeitsnachweis || {};
     var st = data.status || doc.status || 'entwurf';
+    setAnLocked(st === 'unterzeichnet');
     var num = data.number || doc.number || '';
     if (num) lastDocNumber = String(num);
     if (an.timesheet_applied || data.timesheet_applied) {
       if (el('anTimesheetApplied')) el('anTimesheetApplied').value = flagOn(an.timesheet_applied) || flagOn(data.timesheet_applied) ? '1' : el('anTimesheetApplied').value;
     }
     var hint = (num ? num + ' – ' : '') + st;
+    if (st === 'unterzeichnet') hint += lang() === 'en' ? ' · locked' : ' · gesperrt';
     if (data.synced === false || data.offline) {
       hint += lang() === 'en' ? ' · locally' : ' · lokal';
     }
@@ -189,6 +192,16 @@
     el('anPartsBody').innerHTML = '';
     parts.forEach(function (r) { addPartRow(r); });
     applyStatusUi(data);
+    setAnLocked(data && (data.status === 'unterzeichnet' || (data.document && data.document.status === 'unterzeichnet')));
+  }
+  function setAnLocked(locked) {
+    anIsLocked = !!locked;
+    var form = el('anForm');
+    if (form) form.classList.toggle('an-is-locked', anIsLocked);
+    ['btnAnSave', 'btnAnTimesheet', 'btnAnPreview'].forEach(function (id) {
+      var b = el(id);
+      if (b) b.disabled = anIsLocked;
+    });
   }
   function dispoJobId(job) {
     if (!job) return 0;
@@ -970,15 +983,40 @@
       jobLoadBusy = false;
     }
   }
+  var persistInflight = null;
+  var persistAgain = false;
   async function persistLocal() {
+    if (persistInflight) {
+      persistAgain = true;
+      var pending = persistInflight;
+      await pending.catch(function () {});
+      return persistLocal();
+    }
+    var run = persistLocalOnce();
+    persistInflight = run;
+    try {
+      return await run;
+    } finally {
+      if (persistInflight === run) persistInflight = null;
+      if (persistAgain) {
+        persistAgain = false;
+        persistLocal();
+      }
+    }
+  }
+  async function persistLocalOnce() {
     var payload = collectPayload();
     if (!payload.job_id) return null;
     payload.baseUrl = (window.getDispoBaseUrl && window.getDispoBaseUrl()) || '';
-    var data = await fetch(API_BASE + '/api/arbeitsnachweis', {
+    var opts = {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(payload)
-    }).then(function (r) { return r.json(); }).catch(function () { return null; });
+    };
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      opts.signal = AbortSignal.timeout(4000);
+    }
+    var data = await fetch(API_BASE + '/api/arbeitsnachweis', opts).then(function (r) { return r.json(); }).catch(function () { return null; });
     if (data && data.ok) {
       if (data.local_id && el('anLocalDocId')) el('anLocalDocId').value = String(data.local_id);
       if (data.document_id) el('anDocumentId').value = String(data.document_id);
@@ -1165,34 +1203,76 @@
       window.alert(lang() === 'en' ? 'Customer name and e-mail are required.' : 'Name und E-Mail des Auftraggebers sind erforderlich.');
       return;
     }
-    var saved = await saveRemote();
-    if (!saved) return;
-    var sig = await proxy('signature', {
-      payload: {
-        document_id: saved.document_id,
-        signer_type: 'kunde',
-        signer_name: name,
-        signer_email: email,
-        signature_data: pad.toDataUrl(),
-        save_contact: el('anSaveContact').checked,
-        timezone: (Intl.DateTimeFormat().resolvedOptions().timeZone || '')
-      }
-    });
-    if (!sig || !sig.ok) {
-      window.alert((sig && sig.error) || 'Signatur fehlgeschlagen.');
-      return;
+    var btn = el('btnAnSign');
+    if (btn) btn.disabled = true;
+    var en = lang() === 'en';
+    if (el('anSigStatus')) {
+      el('anSigStatus').textContent = en ? 'Saving signature…' : 'Unterschrift wird gespeichert…';
     }
-    lastCustomerSig = true;
-    signedFingerprint = fingerprint(collectPayload());
-    el('anSigStatus').textContent = lang() === 'en' ? 'Signed.' : 'Unterzeichnet.';
-    var customerPng = pad.toDataUrl();
-    el('anPreviewModal').hidden = true;
     try {
+      var saved = await saveRemote();
+      if (!saved) return;
+      var localId = (saved && saved.local_id) || (el('anLocalDocId') && el('anLocalDocId').value);
+      var signOpts = {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          local_id: localId,
+          signer_name: name,
+          signer_email: email
+        })
+      };
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        signOpts.signal = AbortSignal.timeout(4000);
+      }
+      var signRes = await fetch(API_BASE + '/api/arbeitsnachweis/sign', signOpts)
+        .then(function (r) { return r.json(); })
+        .catch(function () { return null; });
+      if (!signRes || !signRes.ok) {
+        window.alert((signRes && signRes.error) || (en ? 'Signature could not be saved.' : 'Unterschrift konnte nicht gespeichert werden.'));
+        return;
+      }
+      lastCustomerSig = true;
+      signedFingerprint = fingerprint(collectPayload());
+      setAnLocked(true);
+      applyStatusUi({ status: 'unterzeichnet', number: saved.number, offline: true, synced: false });
+      if (el('anSigStatus')) {
+        el('anSigStatus').textContent = en
+          ? 'Signed and locked. Sending e-mail…'
+          : 'Unterzeichnet und gesperrt. E-Mail wird gesendet…';
+      }
+      var customerPng = pad.toDataUrl();
+      el('anPreviewModal').hidden = true;
       await generatePdfAndMail(saved, customerPng);
+      var baseUrl = (window.getDispoBaseUrl && window.getDispoBaseUrl()) || '';
+      var bgOpts = {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          baseUrl: baseUrl,
+          action: 'signature',
+          method: 'POST',
+          payload: {
+            document_id: saved.document_id,
+            signer_type: 'kunde',
+            signer_name: name,
+            signer_email: email,
+            signature_data: customerPng,
+            save_contact: el('anSaveContact') && el('anSaveContact').checked,
+            timezone: (Intl.DateTimeFormat().resolvedOptions().timeZone || '')
+          }
+        })
+      };
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        bgOpts.signal = AbortSignal.timeout(8000);
+      }
+      if (baseUrl) fetch(API_BASE + '/api/laptop_arbeitsnachweis_proxy', bgOpts).catch(function () {});
     } catch (e) {
-      window.alert((e && e.message) || (lang() === 'en'
+      window.alert((e && e.message) || (en
         ? 'PDF or e-mail failed after signing.'
         : 'PDF oder E-Mail nach dem Unterschreiben fehlgeschlagen.'));
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
   async function generatePdfAndMail(saved, customerPng) {
@@ -1208,25 +1288,24 @@
     payload.customer_signer_name = el('anSignerName').value;
     if (customerPng) payload.customer_signed_at = new Date().toISOString();
     payload.job_id = payload.job_id;
-    var pdfHttp = await fetch(API_BASE + '/api/arbeitsnachweis/pdf', {
+    var pdfOpts = {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(payload)
-    }).catch(function () { return null; });
+    };
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      pdfOpts.signal = AbortSignal.timeout(20000);
+    }
+    var pdfHttp = await fetch(API_BASE + '/api/arbeitsnachweis/pdf', pdfOpts).catch(function () { return null; });
     var pdfRes = null;
     if (pdfHttp) {
       pdfRes = await pdfHttp.json().catch(function () { return null; });
     }
     if (!pdfRes || !pdfRes.ok || !pdfRes.path) {
       window.alert((pdfRes && pdfRes.error) || (en
-        ? 'PDF could not be created. Outlook was not opened.'
-        : 'PDF konnte nicht erzeugt werden. Outlook wurde nicht geöffnet.'));
+        ? 'PDF could not be created. The e-mail was not sent.'
+        : 'PDF konnte nicht erzeugt werden. Die E-Mail wurde nicht gesendet.'));
       return;
-    }
-    if (pdfRes.pdf_base64 && saved && saved.document_id) {
-      await proxy('pdf_upload', {
-        payload: { document_id: saved.document_id, pdf_base64: pdfRes.pdf_base64 }
-      }).catch(function () { return null; });
     }
     var html = en
       ? '<p>Dear Sir or Madam,</p><p>Please find attached the working report.</p><p>Thank you very much.</p>'
@@ -1235,25 +1314,52 @@
       recipients: [el('anSignerEmail').value.trim()].filter(Boolean),
       attachments: [pdfRes.path],
       subject: en ? 'Working report' : 'Arbeitsnachweis',
-      html_body: html
+      html_body: html,
+      send: true
     };
-    var o = await fetch(API_BASE + '/api/arbeitsnachweis/outlook', {
+    var outlookOpts = {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(outlookBody)
-    }).then(function (r) { return r.json(); }).catch(function () { return null; });
+    };
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      outlookOpts.signal = AbortSignal.timeout(20000);
+    }
+    var o = await fetch(API_BASE + '/api/arbeitsnachweis/outlook', outlookOpts)
+      .then(function (r) { return r.json(); })
+      .catch(function () { return null; });
     if (o && o.outlook_error) {
-      window.alert((en ? 'Outlook could not be opened: ' : 'Outlook konnte nicht geöffnet werden: ') + o.outlook_error);
+      window.alert((en ? 'The e-mail could not be sent: ' : 'Die E-Mail konnte nicht gesendet werden: ') + o.outlook_error);
       return;
     }
     if (!o || o.ok === false) {
-      window.alert(en ? 'Outlook could not be opened.' : 'Outlook konnte nicht geöffnet werden.');
+      window.alert(en ? 'The e-mail could not be sent.' : 'Die E-Mail konnte nicht gesendet werden.');
       return;
     }
     if (o.outlook && o.outlook.attachmentCount === 0) {
       window.alert(en
-        ? 'Outlook opened, but the PDF could not be attached. File: ' + pdfRes.path
-        : 'Outlook wurde geöffnet, aber das PDF konnte nicht angehängt werden. Datei: ' + pdfRes.path);
+        ? 'The e-mail was sent, but the PDF could not be attached. File: ' + pdfRes.path
+        : 'Die E-Mail wurde gesendet, aber das PDF konnte nicht angehängt werden. Datei: ' + pdfRes.path);
+    } else if (el('anSigStatus')) {
+      el('anSigStatus').textContent = en
+        ? 'Signed, locked, e-mail sent.'
+        : 'Unterzeichnet, gesperrt, E-Mail gesendet.';
+    }
+    if (pdfRes.pdf_base64 && saved && saved.document_id) {
+      var upOpts = {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          baseUrl: (window.getDispoBaseUrl && window.getDispoBaseUrl()) || '',
+          action: 'pdf_upload',
+          method: 'POST',
+          payload: { document_id: saved.document_id, pdf_base64: pdfRes.pdf_base64 }
+        })
+      };
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        upOpts.signal = AbortSignal.timeout(8000);
+      }
+      fetch(API_BASE + '/api/laptop_arbeitsnachweis_proxy', upOpts).catch(function () {});
     }
   }
   async function transferTimesheet() {
@@ -1287,6 +1393,7 @@
     window.alert(lang() === 'en' ? 'Transferred to timesheet.' : 'In die Zeitschreibung übernommen.');
   }
   function schedulePersist() {
+    if (anIsLocked) return;
     if (jobLoadBusy) return;
     saveLocalDraft();
     if (persistTimer) clearTimeout(persistTimer);
@@ -1378,6 +1485,7 @@
     document.querySelectorAll('input[name="anLang"]').forEach(function (r) {
       r.addEventListener('change', applyLang);
     });
+    el('anForm').addEventListener('submit', function (ev) { ev.preventDefault(); });
     el('anForm').addEventListener('input', schedulePersist);
     el('anForm').addEventListener('change', schedulePersist);
     el('btnAnSave').addEventListener('click', function () { saveRemote(); });

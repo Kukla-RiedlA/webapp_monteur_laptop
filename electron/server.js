@@ -1583,15 +1583,13 @@ function dispoEntryMtimeMs(entry) {
 function applyLocalFileMtimeFromDispo(filePath, mtimeMs) {
   if (mtimeMs == null || !Number.isFinite(mtimeMs) || mtimeMs <= 0) return;
   const sec = mtimeMs / 1000;
-  try {
-    fs.utimesSync(win32FsPath(filePath), sec, sec);
-  } catch (_) {
-    try {
-      fs.utimesSync(filePath, sec, sec);
-    } catch (__) {
-      /* ignore */
-    }
-  }
+  // utimesSync auf OneDrive blockiert den Hauptprozess, bis die Dateisperre weg ist.
+  // Die Eingabe (z. B. Tagesauslösen) bleibt dann hängen, bis die App beendet wird.
+  const primary = win32FsPath(filePath);
+  fs.promises.utimes(primary, sec, sec).catch(() => {
+    if (primary === filePath) return;
+    return fs.promises.utimes(filePath, sec, sec).catch(() => {});
+  });
 }
 
 /** Hash für sync_push dedupe (createApp setzt ggf. eigene Variante – hier minimal). */
@@ -8166,13 +8164,13 @@ function createApp(db) {
           baseUrl: anDispoBaseUrl(req, payload),
         }));
       }
-      save();
       res.json(Object.assign({ ok: true, document_id: local.server_id || 0, local_id: localId }, local, {
         synced: false,
         offline: true,
       }));
-      if (!localId || !dispoPayload) return;
       setImmediate(() => {
+        try { save(); } catch (_) { /* Checkpoint darf die Antwort nicht aufhalten */ }
+        if (!localId || !dispoPayload) return;
         tryDispoArbeitsnachweisSave(req, dispoPayload)
           .then((remote) => {
             if (!remote || !remote.ok) return;
@@ -8248,6 +8246,21 @@ function createApp(db) {
     }
   });
 
+  app.post('/api/arbeitsnachweis/sign', express.json({ limit: '1mb' }), (req, res) => {
+    try {
+      anLocal.ensureArbeitsnachweisLocalSchema(db);
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const localId = parseInt(body.local_id || body.localId || body.id, 10) || 0;
+      const signed = anLocal.markCustomerSigned(db, localId, body);
+      res.json(signed);
+      setImmediate(() => {
+        try { save(); } catch (_) { /* Checkpoint nach der Antwort */ }
+      });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message || 'arbeitsnachweis_sign' });
+    }
+  });
+
   app.post('/api/arbeitsnachweis/pdf', express.json({ limit: '12mb' }), async (req, res) => {
     try {
       const payload = anLocal.mergeJobFabsIntoPayload(db, req.body && typeof req.body === 'object' ? req.body : {});
@@ -8263,21 +8276,6 @@ function createApp(db) {
       const num = (payload.document && payload.document.number) || ('AN-' + Date.now());
       const safe = String(num).replace(/[^\w.-]+/g, '_') || ('AN-' + Date.now());
       const fileName = labeledProtocolPdfFilename('arbeitsnachweis', safe, lang);
-      let archivePath = '';
-      try {
-        const jobId = parseInt(payload.job_id || (payload.document && payload.document.job_id) || 0, 10);
-        if (jobId > 0) {
-          const reiseDir = resolveDienstreiseReiseDirForJob(jobId, { createIfMissing: true });
-          if (reiseDir) {
-            const dir = path.join(reiseDir, 'Dokumente_Monteur', 'Arbeitsnachweise');
-            fs.mkdirSync(dir, { recursive: true });
-            archivePath = path.join(dir, fileName);
-            fs.writeFileSync(archivePath, pdfBytes);
-          }
-        }
-      } catch (e) {
-        console.error('[arbeitsnachweis/pdf] Archiv-Kopie fehlgeschlagen:', e && e.message);
-      }
       const tmpDir = path.join(os.tmpdir(), 'kukla-arbeitsnachweis');
       fs.mkdirSync(tmpDir, { recursive: true });
       const savedPath = path.join(tmpDir, fileName);
@@ -8285,12 +8283,29 @@ function createApp(db) {
       if (!fs.existsSync(savedPath) || fs.statSync(savedPath).size < 8) {
         throw new Error('PDF-Datei konnte nicht gespeichert werden.');
       }
+      const archiveJobId = parseInt(payload.job_id || (payload.document && payload.document.job_id) || 0, 10);
       res.json({
         ok: true,
         pdf_base64: pdfBase64,
         path: savedPath,
-        archive_path: archivePath || null,
+        archive_path: null,
       });
+      // Reiseordner liegt auf OneDrive. Die Kopie darf die E-Mail nicht aufhalten.
+      setTimeout(() => {
+        try {
+          if (archiveJobId <= 0) return;
+          const reiseDir = resolveDienstreiseReiseDirForJob(archiveJobId, { createIfMissing: false });
+          if (!reiseDir) return;
+          const dir = path.join(reiseDir, 'Dokumente_Monteur', 'Arbeitsnachweise');
+          fs.promises.mkdir(win32FsPath(dir), { recursive: true })
+            .then(() => fs.promises.writeFile(win32FsPath(path.join(dir, fileName)), pdfBytes))
+            .catch((e) => {
+              console.error('[arbeitsnachweis/pdf] Archiv-Kopie fehlgeschlagen:', e && e.message);
+            });
+        } catch (e) {
+          console.error('[arbeitsnachweis/pdf] Archiv-Kopie fehlgeschlagen:', e && e.message);
+        }
+      }, 2500);
     } catch (e) {
       console.error('[arbeitsnachweis/pdf]', e);
       res.status(500).json({ ok: false, error: e.message || 'PDF-Erzeugung fehlgeschlagen' });
@@ -8307,6 +8322,7 @@ function createApp(db) {
         subject: body.subject || 'Arbeitsnachweis / Working report',
         body: body.body || '',
         htmlBody: body.html_body || body.htmlBody || '',
+        send: body.send === true,
       });
       res.json({ ok: true, outlook: result });
     } catch (e) {
@@ -17430,14 +17446,23 @@ function createApp(db) {
           }
         }
 
-        function shouldSkip(relPath, expectedSize, expectedMtimeMs, completedArr) {
+        async function shouldSkip(relPath, expectedSize, expectedMtimeMs, completedArr) {
           const localRel = localRelsForPullFile(relPath)[0] || relPath;
           const lp = path.join(targetDir, localRel.replace(/\//g, path.sep));
-          if (!fsExistsSync(lp)) return false;
+          let st = null;
+          try {
+            st = await fs.promises.stat(win32FsPath(lp));
+          } catch (_) {
+            try {
+              st = await fs.promises.stat(lp);
+            } catch (__) {
+              return false;
+            }
+          }
+          if (!st || !st.isFile()) return false;
           let localSize = null;
           let localMtimeMs = null;
           try {
-            const st = fsStatSync(lp);
             localSize = st.size;
             localMtimeMs = st.mtimeMs != null ? st.mtimeMs : st.mtime ? st.mtime.getTime() : null;
           } catch (_) {
@@ -17499,7 +17524,7 @@ function createApp(db) {
         let completed = Array.isArray(chk.completed) ? chk.completed.slice() : [];
         let skippedStart = 0;
         for (const f of files) {
-          if (shouldSkip(f.path, f.size, f.mtime_ms, completed)) skippedStart++;
+          if (await shouldSkip(f.path, f.size, f.mtime_ms, completed)) skippedStart++;
         }
         setProgress('download', skippedStart, total, total ? '' : 'Keine Dateien.');
 
@@ -17636,7 +17661,7 @@ function createApp(db) {
           const expectedSize = files[i].size;
           const expectedMtimeMs = files[i].mtime_ms;
           try {
-          if (shouldSkip(relPath, expectedSize, expectedMtimeMs, completed)) {
+          if (await shouldSkip(relPath, expectedSize, expectedMtimeMs, completed)) {
             const localRelsSkip = localRelsForPullFile(relPath);
             const localRelSkip = localRelsSkip[0] || relPath;
             await copyPullFileToSiblingRels(path.join(targetDir, String(localRelSkip).replace(/\//g, path.sep)), localRelsSkip);

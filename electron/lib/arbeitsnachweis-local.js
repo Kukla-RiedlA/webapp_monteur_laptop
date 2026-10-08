@@ -459,7 +459,10 @@ function upsertFromPayload(db, payload, opts) {
     merged_fns: normalizeFabRows(an.fabrikationsnummern).length,
   });
   const ids = resolveJobIds(db, jobRaw);
-  const status = String((payload && payload.status) || (existing && existing.document.status) || 'entwurf');
+  let status = String((payload && payload.status) || (existing && existing.document.status) || 'entwurf');
+  if (existing && existing.document && existing.document.status === 'unterzeichnet') {
+    status = 'unterzeichnet';
+  }
   const language = String((payload && payload.language) || 'de') === 'en' ? 'en' : 'de';
   const customerName = String((payload && payload.customer_name) || '').trim();
   const documentDate = String((payload && payload.document_date) || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
@@ -501,7 +504,7 @@ function upsertFromPayload(db, payload, opts) {
         server_job_id = COALESCE(?, server_job_id),
         number = COALESCE(?, number),
         document_date = ?,
-        status = ?,
+        status = CASE WHEN status = 'unterzeichnet' THEN 'unterzeichnet' ELSE ? END,
         language = ?,
         content_version = ?,
         local_uuid = COALESCE(NULLIF(?, ''), local_uuid),
@@ -653,6 +656,38 @@ function markSynced(db, localId, serverId, extra) {
     n,
   );
   clearFailedPending(db, n);
+}
+
+function markCustomerSigned(db, localId, info) {
+  const id = parseInt(localId, 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    throw new Error('Arbeitsnachweis ist noch nicht lokal gespeichert.');
+  }
+  const doc = db.prepare('SELECT id, content_version FROM documents WHERE id = ?').get(id);
+  if (!doc) throw new Error('Arbeitsnachweis nicht gefunden.');
+  const meta = info && typeof info === 'object' ? info : {};
+  const now = new Date().toISOString();
+  const name = String(meta.signer_name || meta.signerName || '').trim();
+  const email = String(meta.signer_email || meta.signerEmail || '').trim();
+  db.prepare(
+    `UPDATE document_signatures SET invalidated_at = ?
+     WHERE document_id = ? AND signer_type = 'kunde' AND invalidated_at IS NULL`,
+  ).run(now, id);
+  db.prepare(
+    `INSERT INTO document_signatures (
+      document_id, signer_type, signer_name, signer_email, signed_at, content_version
+    ) VALUES (?, 'kunde', ?, ?, ?, ?)`,
+  ).run(id, name, email, now, parseInt(doc.content_version, 10) || 1);
+  db.prepare(
+    `UPDATE documents SET status = 'unterzeichnet', dirty = 1, updated_at = datetime('now') WHERE id = ?`,
+  ).run(id);
+  if (name || email) {
+    db.prepare(
+      `UPDATE document_arbeitsnachweis SET signer_name = COALESCE(NULLIF(?, ''), signer_name),
+        signer_email = COALESCE(NULLIF(?, ''), signer_email) WHERE document_id = ?`,
+    ).run(name, email, id);
+  }
+  return { ok: true, status: 'unterzeichnet', signed_at: now, local_id: id };
 }
 
 function markDirty(db, localId) {
@@ -814,6 +849,7 @@ module.exports = {
   fromDispoPublic,
   markSynced,
   markDirty,
+  markCustomerSigned,
   markTimesheetApplied,
   contentWeight,
   resolveSavePayload,

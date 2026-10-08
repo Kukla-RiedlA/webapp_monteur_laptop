@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.049
+- **Arbeitsnachweis:** Nach der Kundenunterschrift wird der Nachweis gesperrt und als E-Mail mit PDF versendet. Dispo wird dafür nicht mehr abgewartet.
+- **Tagesauslösen:** Speichern antwortet sofort. OneDrive-Dateizeiten im Hintergrund-Sync blockieren die Eingabe nicht mehr.
+
 ## V 2.007.048
 - **Serviceprotokoll:** Eingabe bleibt nach 2,5 Sekunden möglich, auch wenn das Laden des Auftrags noch läuft. Eine späte Antwort überschreibt keine bereits getippten Felder.
 - **Sync:** Dispo-Abrufe halten die lokale Datenbank nicht mehr für die ganze Netzlaufzeit gesperrt. Gespeichert wird erst danach.

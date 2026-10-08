@@ -266,6 +266,12 @@
 }
 .an-preview-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.9rem; }
 .an-sig-status { margin-top: 0.5rem; font-size: 0.9rem; color: #0e7b5a; }
+#anForm.an-is-locked input,
+#anForm.an-is-locked textarea,
+#anForm.an-is-locked select,
+#anForm.an-is-locked button {
+  pointer-events: none;
+}
 
 .an-pv-head {
   display: flex;

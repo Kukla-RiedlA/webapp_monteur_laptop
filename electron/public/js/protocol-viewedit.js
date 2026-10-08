@@ -102,7 +102,17 @@
     return html;
   }
 
+  var rendering = false;
+
+  function sectionHasFocus(section) {
+    var active = document.activeElement;
+    if (!active || !section.contains(active)) return false;
+    var tag = active.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  }
+
   function render(section) {
+    if (rendering) return;
     var view = section.querySelector('[data-proto-view]');
     var body = section.querySelector('.sp-v2-section-body');
     if (!view || !body) return;
@@ -158,9 +168,14 @@
       parts.push(caption + tableHtml(keep.map(function (c) { return c.label; }), rows, footer));
     });
 
-    view.innerHTML = parts.length
-      ? parts.join('')
-      : '<p class="proto-ve-empty">Stift zum Erfassen</p>';
+    rendering = true;
+    try {
+      view.innerHTML = parts.length
+        ? parts.join('')
+        : '<p class="proto-ve-empty">Stift zum Erfassen</p>';
+    } finally {
+      rendering = false;
+    }
   }
 
   function snapshot(section) {
@@ -180,8 +195,6 @@
       if (!row.el) return;
       if (row.el.type === 'checkbox' || row.el.type === 'radio') row.el.checked = row.checked;
       else row.el.value = row.value;
-      row.el.dispatchEvent(new Event('input', { bubbles: true }));
-      row.el.dispatchEvent(new Event('change', { bubbles: true }));
     });
   }
 
@@ -231,10 +244,12 @@
     });
     render(section);
     section.addEventListener('input', function () {
-      if (!section.classList.contains('is-editing')) render(section);
+      if (section.classList.contains('is-editing') || sectionHasFocus(section)) return;
+      render(section);
     });
     section.addEventListener('change', function () {
-      if (!section.classList.contains('is-editing')) render(section);
+      if (section.classList.contains('is-editing') || sectionHasFocus(section)) return;
+      render(section);
     });
     section._protoFp = fingerprint(section);
   }
@@ -256,7 +271,7 @@
           bind(section);
           return;
         }
-        if (section.classList.contains('is-editing')) return;
+        if (section.classList.contains('is-editing') || sectionHasFocus(section)) return;
         var fp = fingerprint(section);
         if (section._protoFp === fp) return;
         section._protoFp = fp;

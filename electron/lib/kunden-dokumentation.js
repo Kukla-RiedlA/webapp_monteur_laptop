@@ -393,7 +393,7 @@ $attachments = @(${attList})
 foreach ($a in $attachments) {
   if ($a -and (Test-Path -LiteralPath $a)) { [void]$mail.Attachments.Add($a) }
 }
-$mail.Display()
+${opts.send === true ? '$mail.Send()' : '$mail.Display()'}
 `;
 
   const r = spawnSync(
