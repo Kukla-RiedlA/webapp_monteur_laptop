@@ -36,7 +36,8 @@ body > main.active {
 }
 
 body > #view-abrechnung.active,
-body > #view-zeitschreibung.active {
+body > #view-zeitschreibung.active,
+body > #viewAnlagenstamm.active {
   overflow: hidden;
 }
 

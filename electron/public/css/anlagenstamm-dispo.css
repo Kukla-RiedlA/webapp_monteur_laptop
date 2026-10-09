@@ -7,10 +7,12 @@
   margin: 0;
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   min-height: 0;
   width: 100%;
   max-width: none;
-  height: calc(100vh - 108px);
+  height: auto;
+  overflow: hidden;
   background: #fff;
   color: var(--kukla-body-text, #1a1a1a);
   position: relative;
@@ -18,7 +20,9 @@
 }
 
 #viewAnlagenstamm.view-web-active {
-  height: calc(100vh - 108px);
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 #viewAnlagenstamm #anlagenstammModeBadge {
@@ -147,7 +151,9 @@
 
 #anlagenstamm-host .anlagen-table-scroll {
   overflow: auto;
-  flex: 1 1 0;
+  flex: 1 1 auto;
+  height: auto;
+  max-height: none;
   min-height: 0;
   margin-top: 8px;
   width: 100%;
