@@ -84,8 +84,28 @@ const {
   trustCertificateForUrl,
   isInsecureTlsAllowed,
 } = require('./lib/laptop-updater');
+const { loadWebSession } = require('./lib/monteur-dispo-web-routes');
+const { getOrCreateDeviceId } = require('./lib/device-id');
 const { installLocalGatewayWebRequest } = require('./lib/local-gateway-auth');
 const hangDiag = require('./lib/hang-diagnostics');
+
+function laptopUpdateAuthHeaders() {
+  try {
+    const dbDir = path.join(app.getPath('userData'), 'db');
+    const s = loadWebSession(dbDir) || {};
+    const u = String(s.dispo_username || '').trim();
+    const p = s.dispo_password != null ? String(s.dispo_password) : '';
+    if (!u || !p) return null;
+    const basic = 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64');
+    return {
+      Authorization: basic,
+      'X-Kukla-Authorization': basic,
+      'X-Kukla-Device-Id': getOrCreateDeviceId(dbDir),
+    };
+  } catch (_) {
+    return null;
+  }
+}
 
 let mainWindow;
 let updateCheckScheduled = false;
@@ -975,7 +995,10 @@ app.whenReady().then(() => {
   anlagenstammAkteWindows = createAnlagenstammAkteWindowManager(() => mainWindow, () => PORT);
   bugReportWindows = createBugReportWindowManager(() => mainWindow, () => PORT, () => app.getPath('userData'));
   popoutWindows = createPopoutWindowManager(() => PORT);
-  initLaptopUpdater({ getMainWindow: () => mainWindow });
+  initLaptopUpdater({
+    getMainWindow: () => mainWindow,
+    getAuthHeaders: laptopUpdateAuthHeaders,
+  });
   getDb().then((db) => {
     const serverApp = createApp(db);
     const http = require('http');

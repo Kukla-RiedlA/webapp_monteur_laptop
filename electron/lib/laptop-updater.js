@@ -15,6 +15,8 @@ let latestVersionLabel = '';
 let feedBaseUrl = '';
 let allowInsecureTls = false;
 let certificateVerifyProcInstalled = false;
+/** @type {null|(() => (Record<string, string>|null))} */
+let authHeadersProvider = null;
 const trustedInsecureHosts = new Set();
 let feedCheckDebounce = null;
 let periodicCheckTimer = null;
@@ -239,11 +241,23 @@ function buildFeedUrl() {
   return '';
 }
 
+function applyAuthHeaders() {
+  const headers =
+    typeof authHeadersProvider === 'function' ? authHeadersProvider() : null;
+  if (headers && headers.Authorization) {
+    autoUpdater.requestHeaders = { ...headers };
+    return true;
+  }
+  autoUpdater.requestHeaders = {};
+  return false;
+}
+
 function applyFeedUrl(url) {
   const u = (url || '').trim();
   if (!u) return false;
   feedBaseUrl = u.endsWith('/') ? u : u + '/';
   ensureUpdaterTlsReady(feedBaseUrl);
+  applyAuthHeaders();
   autoUpdater.setFeedURL({
     provider: 'generic',
     url: feedBaseUrl,
@@ -310,6 +324,17 @@ async function startDownload() {
     sendStatus('error', { message: 'Keine Dispo-Basis-URL für Updates.' });
     return;
   }
+  if (!applyAuthHeaders()) {
+    sendStatus('error', { message: 'Anmeldung erforderlich für App-Updates.' });
+    await dialog.showMessageBox(mainWindowGetter() || undefined, {
+      type: 'warning',
+      buttons: ['OK'],
+      title: 'Update fehlgeschlagen',
+      message: 'Bitte zuerst bei Dispo anmelden.',
+      detail: 'App-Updates sind nur mit gültiger Anmeldung möglich.',
+    });
+    return;
+  }
   sendStatus('downloading', { percent: 0 });
   try {
     await autoUpdater.downloadUpdate();
@@ -322,7 +347,7 @@ async function startDownload() {
       message: 'Das Update konnte nicht geladen werden.',
       detail:
         (e && e.message ? e.message : String(e)) +
-        '\n\nPrüfen Sie die Verbindung zur Dispo und ob ein Release aktiv ist.',
+        '\n\nPrüfen Sie die Anmeldung, die Verbindung zur Dispo und ob ein Release aktiv ist.',
     });
   }
 }
@@ -331,6 +356,9 @@ function initLaptopUpdater(opts) {
   if (!app.isPackaged) return;
 
   mainWindowGetter = opts.getMainWindow || (() => null);
+  if (opts && typeof opts.getAuthHeaders === 'function') {
+    authHeadersProvider = opts.getAuthHeaders;
+  }
   ensureUpdaterTlsReady();
 
   autoUpdater.autoDownload = false;
@@ -425,6 +453,10 @@ async function checkForUpdatesNow(opts) {
   if (!app.isPackaged) return { ok: false, skipped: true };
   if (!applyFeedUrl(buildFeedUrl())) {
     return { ok: false, error: 'no_feed' };
+  }
+  if (!applyAuthHeaders()) {
+    sendStatus('error', { message: 'Anmeldung erforderlich für App-Updates.' });
+    return { ok: false, error: 'auth_required' };
   }
   if (updateCheckInFlight) return { ok: false, skipped: true, reason: 'check_in_flight' };
   lastCheckWasManual = !!opts.manual;
