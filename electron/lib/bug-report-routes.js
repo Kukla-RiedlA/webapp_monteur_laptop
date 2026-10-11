@@ -1,6 +1,7 @@
 'use strict';
 
-const { applyKuklaAuditHeaders } = require('./audit-client-headers');
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
+const { getOrCreateDeviceId } = require('./device-id');
 
 function registerBugReportRoutes(app, ctx) {
   function authHeaders(req) {
@@ -8,13 +9,14 @@ function registerBugReportRoutes(app, ctx) {
     const auth = ctx.authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
     if (!creds.baseUrl || !auth) return null;
     const tid = ctx.getTechnicianId ? ctx.getTechnicianId(req) : 0;
-    const headers = applyKuklaAuditHeaders(
-      Object.assign(
-        { Accept: 'application/json', 'X-Technician-Id': String(tid || '') },
-        auth,
-      ),
-    );
-    if (auth.Authorization) headers['X-Kukla-Authorization'] = auth.Authorization;
+    const dbDir = ctx.dbDir || ctx.DB_DIR || '';
+    const deviceId = dbDir ? getOrCreateDeviceId(dbDir) : undefined;
+    const headers = buildDispoMonteurHeaders({
+      technicianId: tid || '',
+      authHeader: auth,
+      deviceId,
+      extra: { Accept: 'application/json' },
+    });
     return { baseUrl: String(creds.baseUrl).replace(/\/$/, ''), headers };
   }
 

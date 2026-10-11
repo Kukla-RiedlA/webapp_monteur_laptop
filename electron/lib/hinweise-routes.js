@@ -10,6 +10,8 @@ const {
   getLocalFile,
   flushPendingHinweise,
 } = require('./hinweise-local');
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
+const { getOrCreateDeviceId } = require('./device-id');
 
 function registerHinweiseRoutes(app, ctx) {
   function db() {
@@ -22,15 +24,15 @@ function registerHinweiseRoutes(app, ctx) {
 
   function headersFor(req, extra) {
     const c = creds();
-    const h = Object.assign({}, extra || {});
-    if (c && c.authHeader) Object.assign(h, c.authHeader);
     const techId = typeof ctx.getTechnicianId === 'function' ? ctx.getTechnicianId(req || {}) : 0;
-    if (techId) h['X-Technician-Id'] = String(techId);
-    if (h.Authorization) {
-      h['X-Kukla-Authorization'] = h.Authorization;
-      h['X-Authorization'] = h.Authorization;
-    }
-    return h;
+    const dbDir = ctx.dbDir || ctx.DB_DIR || '';
+    const deviceId = dbDir ? getOrCreateDeviceId(dbDir) : undefined;
+    return buildDispoMonteurHeaders({
+      technicianId: techId || '',
+      authHeader: c && c.authHeader ? c.authHeader : undefined,
+      deviceId,
+      extra: extra || {},
+    });
   }
 
   async function dispoUrl(pathPart) {

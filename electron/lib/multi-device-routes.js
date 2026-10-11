@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const { getOrCreateDeviceId, defaultDisplayName } = require('./device-id');
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
 const {
   readLocalDraftFile,
   writeLocalDraftFile,
@@ -91,6 +92,15 @@ function registerMultiDeviceRoutes(deps) {
 
   function deviceId() {
     return getOrCreateDeviceId(DB_DIR);
+  }
+
+  function dispoMonteurFetchHeaders(technicianId, authHeader, extra) {
+    return buildDispoMonteurHeaders({
+      technicianId,
+      authHeader,
+      deviceId: deviceId(),
+      extra: extra || {},
+    });
   }
 
   function draftBasename(opts) {
@@ -207,7 +217,7 @@ function registerMultiDeviceRoutes(deps) {
     try {
       const r = await fetchWithTimeout(base + '/dispo_api/api/monteur_device_register.php', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+        headers: dispoMonteurFetchHeaders(technicianId, auth, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           technician_id: technicianId,
           device_id: id,
@@ -239,7 +249,7 @@ function registerMultiDeviceRoutes(deps) {
     try {
       const r = await fetchWithTimeout(base + '/dispo_api/api/monteur_device_heartbeat.php', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+        headers: dispoMonteurFetchHeaders(technicianId, auth, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           technician_id: technicianId,
           device_id: deviceId(),
@@ -273,12 +283,10 @@ function registerMultiDeviceRoutes(deps) {
       return { ok: true, skipped: true, empty: true };
     }
     const auth = authHeaderFromCreds(opts.username, opts.password);
-    const postHeaders = {
+    const postHeaders = dispoMonteurFetchHeaders(technicianId, auth, {
       'Content-Type': 'application/json',
-      'X-Technician-Id': String(technicianId),
       'X-Device-Id': deviceId(),
-      ...auth,
-    };
+    });
 
     // Immer Server-Revision als base holen. Lokal kann hinterherhinken (erster Speichern
     // nach leerem Ordner, fehlendes Meta, paralleler Push) → sonst sofort 409 + .conflict-*.
@@ -292,7 +300,7 @@ function registerMultiDeviceRoutes(deps) {
         '&technician_id=' +
         encodeURIComponent(technicianId);
       const gr = await fetchWithTimeout(getUrl, {
-        headers: { 'X-Technician-Id': String(technicianId), ...auth },
+        headers: dispoMonteurFetchHeaders(technicianId, auth),
       });
       const gd = await gr.json().catch(() => ({}));
       if (gr.ok && gd && gd.ok) {
@@ -497,7 +505,7 @@ function registerMultiDeviceRoutes(deps) {
         '&technician_id=' +
         encodeURIComponent(technicianId);
       const r = await fetchWithTimeout(url, {
-        headers: { 'X-Technician-Id': String(technicianId), ...auth },
+        headers: dispoMonteurFetchHeaders(technicianId, auth),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
@@ -750,7 +758,7 @@ function registerMultiDeviceRoutes(deps) {
       const auth = authHeaderFromCreds(req.query.dispoUsername || req.query.serverUsername, req.query.dispoPassword ?? req.query.serverPassword);
       const r = await fetchWithTimeout(
         base + '/dispo_api/api/monteur_device_list.php?technician_id=' + encodeURIComponent(technicianId),
-        { headers: { 'X-Technician-Id': String(technicianId), ...auth } },
+        { headers: dispoMonteurFetchHeaders(technicianId, auth) },
       );
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
@@ -781,7 +789,7 @@ function registerMultiDeviceRoutes(deps) {
       const auth = authHeaderFromCreds(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
       const r = await fetchWithTimeout(base + '/dispo_api/api/monteur_device_revoke.php', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+        headers: dispoMonteurFetchHeaders(technicianId, auth, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({ technician_id: technicianId, device_id: target }),
       });
       const data = await r.json().catch(() => ({}));
@@ -844,7 +852,7 @@ function registerMultiDeviceRoutes(deps) {
             encodeURIComponent(serverJobId) +
             '&physical_only=1&rescan=1';
           const r = await fetchWithTimeout(url, {
-            headers: { 'X-Technician-Id': String(technicianId), ...auth },
+            headers: dispoMonteurFetchHeaders(technicianId, auth),
           });
           const data = await r.json().catch(() => ({}));
           const bytes = r.ok && data.ok ? Number(data.total_bytes) || 0 : 0;

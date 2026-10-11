@@ -238,19 +238,16 @@ const {
   fsReadFileSync,
 } = require('./lib/win32-long-path');
 const { sweepOnedriveNumberedDuplicates } = require('./lib/onedrive-numbered-duplicates');
-const { applyKuklaAuditHeaders } = require('./lib/audit-client-headers');
+const { buildDispoMonteurHeaders } = require('./lib/dispo-monteur-headers');
+const { getOrCreateDeviceId } = require('./lib/device-id');
 
 /** Apache/FPM liefert Authorization oft nicht an PHP — Dispo liest X-Kukla-Authorization. */
 function dispoMonteurFetchHeaders(technicianId, authHeader) {
-  const h = applyKuklaAuditHeaders(
-    Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {}),
-  );
-  const a = authHeader && authHeader.Authorization;
-  if (a) {
-    h['X-Kukla-Authorization'] = a;
-    h['X-Authorization'] = a;
-  }
-  return h;
+  return buildDispoMonteurHeaders({
+    technicianId,
+    authHeader,
+    deviceId: getOrCreateDeviceId(DB_DIR),
+  });
 }
 
 const {
@@ -328,6 +325,7 @@ const {
   readAnlagenstammTreeCacheRow,
   upsertAnlagenstammTreeCacheRow,
   parseKraftaufnehmerExtra,
+  payloadDeclaresMotors,
   normalizeMotorRows,
   mergeMotorRowsFillGaps,
   listMotorsForStamm,
@@ -1317,9 +1315,7 @@ async function performAnlagenstammSave(body, technicianIdFromHeader) {
   }
   ensureAnlagenstammLocalSchema(db);
   const bodyNorm = clampForDispoAnlagenstamm(body || {});
-  const hasMotorPayload = Object.prototype.hasOwnProperty.call(body || {}, 'motoren')
-    || Object.prototype.hasOwnProperty.call(body || {}, 'motor')
-    || Object.keys(body || {}).some((k) => /^motor\[\d+]\[/.test(k));
+  const hasMotorPayload = payloadDeclaresMotors(body);
   if (hasMotorPayload) {
     bodyNorm.motoren = normalizeMotorRows(body || {});
   }
@@ -1771,6 +1767,7 @@ function createApp(db) {
     authHeaderFromCredentials,
     fetchWithTimeout,
     getTechnicianId,
+    dbDir: DB_DIR,
     getAppVersion: () => {
       try {
         const v = require('./version.json');
@@ -2762,11 +2759,10 @@ function createApp(db) {
     const st = String(status || '').trim().toLowerCase();
     if (!st) return { ok: false, error: 'Status fehlt.' };
     const base = dispoBaseUrl.replace(/\/$/, '');
-    const headerForJob = {
-      'Content-Type': 'application/json',
-      'X-Technician-Id': String(technicianId),
-      ...(authHeader || {}),
-    };
+    const headerForJob = Object.assign(
+      { 'Content-Type': 'application/json' },
+      dispoMonteurFetchHeaders(technicianId, authHeader),
+    );
     const payload = { job_id: serverJobId, status: st };
     if (extraBody && typeof extraBody === 'object') {
       for (const key of Object.keys(extraBody)) {
@@ -5115,40 +5111,28 @@ function createApp(db) {
   function resolveLocalJobIdForFab(technicianId, fab) {
     const fabNorm = String(fab || '').trim();
     if (!fabNorm || !technicianId) return null;
+    const digits = fabNorm.replace(/\D/g, '');
+    const want = digits ? parseInt(digits, 10) : NaN;
+    if (!Number.isFinite(want) || want <= 0) return null;
     const jobs = db
       .prepare(
-        `SELECT j.id FROM jobs j
+        `SELECT j.id, j.fabrikationsnummern FROM jobs j
          INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
          ORDER BY j.id DESC`,
       )
       .all(technicianId);
-    let bestPullId = null;
-    let bestPullTs = 0;
-    let bestCtxId = null;
-    let bestCtxTs = 0;
+    const matched = [];
     for (const row of jobs) {
-      const jid = row.id;
-      const pull = db
-        .prepare(
-          `SELECT updated_at, status FROM background_jobs
-           WHERE type = 'dienstreise_pull' AND status = 'completed'
-             AND dedupe_key LIKE ? ORDER BY updated_at DESC LIMIT 1`,
-        )
-        .get('dienstreise_pull:' + jid + ':%');
-      const pullTs = pull && pull.updated_at ? Date.parse(String(pull.updated_at).replace(' ', 'T') + 'Z') : 0;
-      const ctx = getProjekteNeuLocalContext(jid, fabNorm);
-      if (!ctx) continue;
-      if (pullTs > 0 && pullTs >= bestPullTs) {
-        bestPullId = jid;
-        bestPullTs = pullTs;
-      }
-      const ctxTs = pullTs || Date.now();
-      if (!bestCtxId || ctxTs >= bestCtxTs) {
-        bestCtxId = jid;
-        bestCtxTs = ctxTs;
-      }
+      const nums = fabNumbersFromJobFabrikationsnummern(row.fabrikationsnummern);
+      if (!nums.has(want)) continue;
+      matched.push(row.id);
+      if (matched.length >= 3) break;
     }
-    return bestPullId != null ? bestPullId : bestCtxId;
+    // Nur die passenden Aufträge anfassen, nicht jeden Dienstreise-Ordner auf OneDrive.
+    for (const jid of matched) {
+      if (getProjekteNeuLocalContext(jid, fabNorm)) return jid;
+    }
+    return matched.length ? matched[0] : null;
   }
 
   app.get('/api/dienstreise/projekte_neu_tree', (req, res) => {
@@ -7989,11 +7973,8 @@ function createApp(db) {
         if (queryParams[k] !== undefined && queryParams[k] !== null) qs.set(k, String(queryParams[k]));
       });
       const url = `${baseUrl}/api/mobile/rams.php?${qs.toString()}`;
-      const headers = Object.assign(
-        { Accept: 'application/json' },
-        auth || {},
-        auth && auth.Authorization ? { 'X-Kukla-Authorization': auth.Authorization } : {}
-      );
+      const headers = dispoMonteurFetchHeaders(getTechnicianId(req), auth);
+      headers.Accept = 'application/json';
       const opts = { method: method, headers: headers, signal: AbortSignal.timeout(8000) };
       if (method !== 'GET' && method !== 'HEAD') {
         headers['Content-Type'] = 'application/json';
@@ -8033,17 +8014,11 @@ function createApp(db) {
 
   function anDispoAuthHeaders(req, extra) {
     const incoming = authHeaderFromIncomingBasicOrQuery(req);
-    const headers = Object.assign(
-      { Accept: 'application/json' },
-      incoming || {},
-      extra || {},
+    const tid = getTechnicianId(req);
+    return dispoMonteurFetchHeaders(
+      tid,
+      Object.assign({}, incoming || {}, extra || {}, { Accept: 'application/json' }),
     );
-    const a = headers.Authorization;
-    if (a) {
-      headers['X-Kukla-Authorization'] = a;
-      headers['X-Authorization'] = a;
-    }
-    return headers;
   }
 
   async function tryDispoArbeitsnachweisDraft(req, jobId) {
@@ -8244,11 +8219,8 @@ function createApp(db) {
         if (queryParams[k] !== undefined && queryParams[k] !== null) qs.set(k, String(queryParams[k]));
       });
       const url = `${baseUrl}/api/mobile/arbeitsnachweis.php?${qs.toString()}`;
-      const headers = Object.assign(
-        { Accept: 'application/json' },
-        auth || {},
-        auth && auth.Authorization ? { 'X-Kukla-Authorization': auth.Authorization } : {}
-      );
+      const headers = dispoMonteurFetchHeaders(getTechnicianId(req), auth);
+      headers.Accept = 'application/json';
       const opts = { method: method, headers: headers };
       if (method !== 'GET' && method !== 'HEAD') {
         headers['Content-Type'] = 'application/json';
@@ -8420,11 +8392,9 @@ function createApp(db) {
       }
       const payload = body.payload && typeof body.payload === 'object' ? body.payload : {};
       const url = `${baseUrl}${relPath}`;
-      const headers = Object.assign(
-        { Accept: 'application/json', 'Content-Type': 'application/json' },
-        auth || {},
-        auth && auth.Authorization ? { 'X-Kukla-Authorization': auth.Authorization } : {}
-      );
+      const headers = dispoMonteurFetchHeaders(getTechnicianId(req), auth);
+      headers.Accept = 'application/json';
+      headers['Content-Type'] = 'application/json';
       const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
       const raw = await r.text();
       res.status(r.status).type('application/json').send(raw);
@@ -10324,7 +10294,7 @@ function createApp(db) {
         encodeURIComponent(technicianId) +
         (catalogKind === 'ibn' ? '&catalog_kind=ibn' : '');
       try {
-        const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+        const r = await fetchWithTimeout(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
         const data = await r.json().catch(() => ({}));
         if (r.ok && data.ok && Array.isArray(data.arbeitsschritte) && data.arbeitsschritte.length > 0) {
           const localMotors = (local && (local.motoren || (local.kopf && local.kopf.motoren))) || [];
@@ -10571,7 +10541,10 @@ function createApp(db) {
           }
         }
         const authSync = authHeaderFromCredentials(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
-        const syncHeaders = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...(authSync || {}) };
+        const syncHeaders = Object.assign(
+          { 'Content-Type': 'application/json' },
+          dispoMonteurFetchHeaders(technicianId, authSync),
+        );
         try {
           const idxUrl = dispoBaseUrl + '/dispo_api/api/montagebericht_akte_index.php';
           const idxRes = await fetch(idxUrl, {
@@ -11331,7 +11304,7 @@ function createApp(db) {
           const url = dispoBaseUrl + '/dispo_api/api/kontrollwiegungsprotokoll_save.php';
           const r = await fetchWithTimeout(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+            headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, auth)),
             body: JSON.stringify(payload),
           });
           const data = await r.json().catch(() => ({}));
@@ -11502,7 +11475,7 @@ function createApp(db) {
         '&technician_id=' +
         encodeURIComponent(technicianId);
       const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
-      const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
         return res.status(r.status).json(data.ok === false ? data : { ok: false, error: r.statusText });
@@ -11749,7 +11722,7 @@ function createApp(db) {
           const url = dispoBaseUrl + '/dispo_api/api/schleppkettenprotokoll_save.php';
           const r = await fetch(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+            headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, auth)),
             body: JSON.stringify(payload),
           });
           const data = await r.json().catch(() => ({}));
@@ -11939,7 +11912,7 @@ function createApp(db) {
             encodeURIComponent(serverJobId) +
             '&fabrikationsnummer=' +
             encodeURIComponent(fab);
-          const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+          const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
           const data = await r.json().catch(() => ({}));
           if (r.ok && data.ok && data.prefill) {
             const prefill = data.prefill;
@@ -12144,7 +12117,7 @@ function createApp(db) {
             const url = dispoBaseUrl + '/dispo_api/api/pruefzertifikat_save.php';
             const r = await fetch(url, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+              headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, auth)),
               body: JSON.stringify(payload),
             });
             const data = await r.json().catch(() => ({}));
@@ -12521,7 +12494,7 @@ function createApp(db) {
     const url = base + '/dispo_api/api/' + s.draftPhp + '?job_id=' + encodeURIComponent(serverJobId) +
       '&technician_id=' + encodeURIComponent(technicianId);
     try {
-      const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId), ...(authHeader || {}) } });
+      const r = await fetchWithTimeout(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader) });
       const data = await r.json().catch(() => ({}));
       if (r.ok && data.ok && data.store && data.store.byFab) {
         return {
@@ -12594,12 +12567,11 @@ function createApp(db) {
           multiDeviceApi && multiDeviceApi.deviceId ? multiDeviceApi.deviceId() : undefined;
         const postRes = await fetchWithTimeout(postUrl, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Technician-Id': String(technicianId),
-            ...(deviceId ? { 'X-Device-Id': deviceId } : {}),
-            ...(authHeader || {}),
-          },
+          headers: Object.assign(
+            dispoMonteurFetchHeaders(technicianId, authHeader),
+            { 'Content-Type': 'application/json' },
+            deviceId ? { 'X-Device-Id': deviceId } : {},
+          ),
           body: JSON.stringify({
             technician_id: technicianId,
             job_id: serverJobId,
@@ -13502,7 +13474,7 @@ function createApp(db) {
           '&lang=' +
           encodeURIComponent(lang);
         const pdfRes = await fetchWithTimeout(pdfUrl, {
-          headers: { 'X-Technician-Id': String(technicianId), ...(auth || {}) },
+          headers: dispoMonteurFetchHeaders(technicianId, auth),
         }, 15000);
         if (!pdfRes.ok) {
           localWarning = (localWarning ? localWarning + ' ' : '') + 'Dispo-PDF ' + lang.toUpperCase() + ' nicht geladen.';
@@ -13772,7 +13744,7 @@ function createApp(db) {
             dispoBaseUrl + '/dispo_api/api/' + spec.savePhp,
             {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+              headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, auth)),
               body: JSON.stringify(savePayload),
             },
             10000,
@@ -14036,7 +14008,7 @@ function createApp(db) {
           };
           const saveRes = await fetch(saveAllUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+            headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, auth)),
             body: JSON.stringify(savePayload),
           });
           saveData = await saveRes.json().catch(() => ({}));
@@ -14108,7 +14080,7 @@ function createApp(db) {
       };
       const r = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId), ...auth },
+        headers: Object.assign({ 'Content-Type': 'application/json' }, dispoMonteurFetchHeaders(technicianId, auth)),
         body: JSON.stringify(payload),
       });
       const data = await r.json().catch(() => ({}));
@@ -14122,7 +14094,7 @@ function createApp(db) {
           const localJobId = resolved && resolved.localJobId ? resolved.localJobId : null;
           if (localJobId) {
             const pdfUrl = dispoBaseUrl + '/dispo_api/api/serviceprotokoll_pdf.php?id=' + encodeURIComponent(data.protokoll_id) + '&technician_id=' + encodeURIComponent(technicianId);
-            const pdfRes = await fetch(pdfUrl, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+            const pdfRes = await fetch(pdfUrl, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
             if (pdfRes.ok) {
               const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
               const reiseDir = getOrCreateDienstreiseFolderForJob(localJobId);
@@ -14190,7 +14162,7 @@ function createApp(db) {
       }
       const url = baseUrl + '/dispo_api/api/serviceprotokoll_pdf.php?id=' + encodeURIComponent(protokollId) + '&technician_id=' + encodeURIComponent(technicianId);
       const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
-      const r = await fetch(url, { headers: { 'X-Technician-Id': String(technicianId), ...auth } });
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
         return res.status(r.status).json(data.ok === false ? data : { ok: false, error: r.statusText });
@@ -15376,7 +15348,13 @@ function createApp(db) {
       try {
         const url =
           baseUrl + '/dispo_api/api/textbausteine_list.php?technician_id=' + encodeURIComponent(technicianId);
-        const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId) } });
+        const creds = resolveDispoServerCreds(req.query || {});
+        const auth =
+          authHeaderFromCredentials(
+            req.query.serverUsername || creds.serverUsername,
+            req.query.serverPassword != null ? req.query.serverPassword : creds.serverPassword,
+          ) || authHeaderFromIncomingBasicOrQuery(req);
+        const r = await fetchWithTimeout(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
         const data = await r.json().catch(() => ({}));
         if (r.ok && data.ok && Array.isArray(data.categories)) {
           textbausteineLocal.mergeTextbausteineFromRemote(db, technicianId, data);
@@ -15428,10 +15406,14 @@ function createApp(db) {
           formBody.append('sort_order', body.sort_order || 0);
           const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_save.php', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'X-Technician-Id': String(technicianId),
-            },
+            headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -15478,10 +15460,14 @@ function createApp(db) {
           formBody.append('technician_id', String(technicianId));
           const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_delete.php', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'X-Technician-Id': String(technicianId),
-            },
+            headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -15531,10 +15517,14 @@ function createApp(db) {
         catBody.append('sort_order', String(row.category_sort_order || 0));
         const catR = await fetch(baseUrl + '/dispo_api/api/textbausteine_category_save.php', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Technician-Id': String(technicianId),
-          },
+          headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
           body: catBody.toString(),
         });
         const catData = await catR.json().catch(() => ({}));
@@ -15562,10 +15552,14 @@ function createApp(db) {
         saveBody.append('sort_order', String(row.sort_order || 0));
         const saveR = await fetch(baseUrl + '/dispo_api/api/textbausteine_save.php', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Technician-Id': String(technicianId),
-          },
+          headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
           body: saveBody.toString(),
         });
         const saveData = await saveR.json().catch(() => ({}));
@@ -15588,10 +15582,14 @@ function createApp(db) {
       formBody.append('item_id', String(dispoItemId));
       const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_publish_global.php', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'X-Technician-Id': String(technicianId),
-        },
+        headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
         body: formBody.toString(),
       });
       const data = await r.json().catch(() => ({}));
@@ -15663,10 +15661,14 @@ function createApp(db) {
           formBody.append('sort_order', body.sort_order || 0);
           const r = await fetch(baseUrl + '/dispo_api/api/textbausteine_save.php', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'X-Technician-Id': String(technicianId),
-            },
+            headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -15767,7 +15769,13 @@ function createApp(db) {
           encodeURIComponent(technicianId) +
           '&catalog_kind=' +
           encodeURIComponent(catalogKind);
-        const r = await fetchWithTimeout(url, { headers: { 'X-Technician-Id': String(technicianId) } });
+        const creds = resolveDispoServerCreds(req.query || {});
+        const auth =
+          authHeaderFromCredentials(
+            req.query.serverUsername || creds.serverUsername,
+            req.query.serverPassword != null ? req.query.serverPassword : creds.serverPassword,
+          ) || authHeaderFromIncomingBasicOrQuery(req);
+        const r = await fetchWithTimeout(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
         const data = await r.json().catch(() => ({}));
         if (r.ok && data.ok) {
           data.catalog_kind = catalogKind;
@@ -15817,10 +15825,14 @@ function createApp(db) {
           formBody.append('catalog_kind', String(body.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_save.php', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'X-Technician-Id': String(technicianId),
-            },
+            headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -15877,10 +15889,14 @@ function createApp(db) {
           formBody.append('technician_id', String(technicianId));
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_delete.php', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'X-Technician-Id': String(technicianId),
-            },
+            headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -15933,10 +15949,14 @@ function createApp(db) {
         saveBody.append('sort_order', String(row.sort_order || 0));
         const saveR = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_save.php', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Technician-Id': String(technicianId),
-          },
+          headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
           body: saveBody.toString(),
         });
         const saveData = await saveR.json().catch(() => ({}));
@@ -15959,10 +15979,14 @@ function createApp(db) {
       formBody.append('id', String(dispoUserId));
       const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_publish_global.php', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'X-Technician-Id': String(technicianId),
-        },
+        headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
         body: formBody.toString(),
       });
       const data = await r.json().catch(() => ({}));
@@ -16011,10 +16035,14 @@ function createApp(db) {
           formBody.append('catalog_kind', String(body.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_preset_save.php', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'X-Technician-Id': String(technicianId),
-            },
+            headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -16058,10 +16086,14 @@ function createApp(db) {
           formBody.append('technician_id', String(technicianId));
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_preset_delete.php', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'X-Technician-Id': String(technicianId),
-            },
+            headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -16097,10 +16129,14 @@ function createApp(db) {
           formBody.append('orders', JSON.stringify(orders));
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_reorder.php', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'X-Technician-Id': String(technicianId),
-            },
+            headers: Object.assign(
+              dispoMonteurFetchHeaders(
+                technicianId,
+                authHeaderFromCredentials(body.serverUsername, body.serverPassword) ||
+                  authHeaderFromIncomingBasicOrQuery(req),
+              ),
+              { 'Content-Type': 'application/x-www-form-urlencoded' },
+            ),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -16545,9 +16581,11 @@ function createApp(db) {
       const localId = r.lastInsertRowid;
       save();
       if (baseUrl) {
-        const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId) };
         const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
-        if (auth) header.Authorization = auth.Authorization;
+        const header = Object.assign(
+          { 'Content-Type': 'application/json' },
+          dispoMonteurFetchHeaders(technicianId, auth),
+        );
         fetch(baseUrl + '/api/absence_request.php', {
           method: 'POST',
           headers: header,
@@ -16606,9 +16644,11 @@ function createApp(db) {
       save();
       const remoteId = parseInt(row.server_id, 10) || 0;
       if (baseUrl && remoteId) {
-        const header = { 'Content-Type': 'application/json', 'X-Technician-Id': String(technicianId) };
         const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
-        if (auth) header.Authorization = auth.Authorization;
+        const header = Object.assign(
+          { 'Content-Type': 'application/json' },
+          dispoMonteurFetchHeaders(technicianId, auth),
+        );
         fetch(baseUrl + '/api/absence_request.php', {
           method: 'PATCH',
           headers: header,
@@ -16767,7 +16807,13 @@ function createApp(db) {
       .replace(/\/$/, '');
     if (dispoBase && auth) {
       try {
-        await technicianSignature.syncWithDispo(db, technicianId, dispoBase, auth);
+        await technicianSignature.syncWithDispo(
+          db,
+          technicianId,
+          dispoBase,
+          auth,
+          getOrCreateDeviceId(DB_DIR),
+        );
         save();
       } catch (_) {
         /* offline */
@@ -16840,6 +16886,7 @@ function createApp(db) {
   });
   registerHinweiseRoutes(app, {
     getTechnicianId,
+    dbDir: DB_DIR,
     resolveDispoPushCreds: () => {
       try {
         const c = resolveDispoServerCreds({});
@@ -18445,12 +18492,12 @@ function createApp(db) {
           console.warn('[abrechnung] flush after sync_push:', e && e.message ? e.message : e);
         }
         try {
-          await flushZeitschreibungOutbox(db, baseUrl, auth, technicianId);
+          await flushZeitschreibungOutbox(db, baseUrl, auth, technicianId, undefined, DB_DIR);
         } catch (e) {
           console.warn('[zeitschreibung] flush after sync_push:', e && e.message ? e.message : e);
         }
         try {
-          await pullRecentLohnLocks(db, technicianId, baseUrl, auth);
+          await pullRecentLohnLocks(db, technicianId, baseUrl, auth, DB_DIR);
         } catch (e) {
           console.warn('[zeitschreibung] pull Lohn-Locks after sync_push:', e && e.message ? e.message : e);
         }
@@ -18781,10 +18828,7 @@ function createApp(db) {
       return { ok: false, error: 'Benutzername und Passwort erforderlich.' };
     }
     const auth = authHeaderFromCredentials(user, pass);
-    const headers = Object.assign({ 'X-Technician-Id': '0' }, auth || {});
-    if (auth && auth.Authorization) {
-      headers['X-Kukla-Authorization'] = auth.Authorization;
-    }
+    const headers = dispoMonteurFetchHeaders(0, auth);
     const urls = [`${base}/dispo_api/api/monteur_auth.php`, `${base}/api/monteur_auth.php`];
     for (const url of urls) {
       try {
@@ -19918,7 +19962,17 @@ function createApp(db) {
       return res.redirect(307, `/api/calendar_cached?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
     }
     try {
-      const r = await fetch(`${baseUrl}/api/calendar.php?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+      const technicianId = getTechnicianId(req);
+      const creds = resolveDispoServerCreds(req.query || {});
+      const auth =
+        authHeaderFromCredentials(
+          req.query.serverUsername || creds.serverUsername,
+          req.query.serverPassword != null ? req.query.serverPassword : creds.serverPassword,
+        ) || authHeaderFromIncomingBasicOrQuery(req);
+      const r = await fetch(
+        `${baseUrl}/api/calendar.php?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+        { headers: dispoMonteurFetchHeaders(technicianId, auth) },
+      );
       if (!r.ok) throw new Error('Calendar API: ' + r.status);
       const data = await r.json();
       res.json(data);
@@ -19946,8 +20000,9 @@ function createApp(db) {
       }
     }
     try {
+      const technicianId = getTechnicianId(req);
       const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-      const opts = auth ? { headers: auth } : {};
+      const opts = { headers: dispoMonteurFetchHeaders(technicianId, auth) };
       const r = await fetch(`${baseUrl}/api/calendar.php?start=${encodeURIComponent(s)}&end=${encodeURIComponent(e)}`, opts);
       if (!r.ok) throw new Error('Calendar API: ' + r.status);
       const data = await r.json();
@@ -20812,7 +20867,7 @@ async function pullTextbausteineFromDispo(baseUrl, technicianId, dbConn, authHea
   if (!base || !tid) return { ok: false, skipped: true };
   const url = base + '/dispo_api/api/textbausteine_list.php?technician_id=' + encodeURIComponent(tid);
   const r = await fetch(url, {
-    headers: Object.assign({ 'X-Technician-Id': String(tid) }, authHeader || {}),
+    headers: dispoMonteurFetchHeaders(tid, authHeader),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data.ok) {
@@ -20837,7 +20892,7 @@ async function pullArbeitsschritteFromDispo(baseUrl, technicianId, dbConn, authH
       encodeURIComponent(kind);
     try {
       const r = await fetch(url, {
-        headers: Object.assign({ 'X-Technician-Id': String(tid) }, authHeader || {}),
+        headers: dispoMonteurFetchHeaders(tid, authHeader),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
@@ -22688,7 +22743,10 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           if (outcome === 'retry' || outcome === 'offline') noteFail(absErr.message);
         }
       } else if (p.action === 'delete') {
-        const r = await fetch(`${base}/api/absence.php?id=${p.entity_id}&technician_id=${technicianId}`, { method: 'DELETE' });
+        const r = await fetch(`${base}/api/absence.php?id=${p.entity_id}&technician_id=${technicianId}`, {
+          method: 'DELETE',
+          headers: header,
+        });
         if (r.ok || r.status === 403) {
           db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
         } else {
@@ -22878,7 +22936,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           formBody.append('sort_order', payloadRaw.sort_order || 0);
           const r = await fetch(tbBase + '/dispo_api/api/textbausteine_category_save.php', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            headers: Object.assign({}, header, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId) }),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -22896,7 +22954,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           formBody.append('technician_id', String(techId));
           const r = await fetch(tbBase + '/dispo_api/api/textbausteine_category_delete.php', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            headers: Object.assign({}, header, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId) }),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -22930,7 +22988,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           formBody.append('sort_order', payloadRaw.sort_order || 0);
           const r = await fetch(tbBase + '/dispo_api/api/textbausteine_save.php', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            headers: Object.assign({}, header, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId) }),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -22989,7 +23047,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           formBody.append('catalog_kind', String(payloadRaw.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
           const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_save.php', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            headers: Object.assign({}, header, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId) }),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -23018,7 +23076,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           formBody.append('technician_id', String(techId));
           const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_delete.php', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            headers: Object.assign({}, header, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId) }),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -23042,7 +23100,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           formBody.append('catalog_kind', String(payloadRaw.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
           const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_preset_save.php', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            headers: Object.assign({}, header, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId) }),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));
@@ -23060,7 +23118,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           formBody.append('technician_id', String(techId));
           const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_preset_delete.php', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId), ...header },
+            headers: Object.assign({}, header, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId) }),
             body: formBody.toString(),
           });
           const data = await r.json().catch(() => ({}));

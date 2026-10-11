@@ -8,7 +8,7 @@ const {
 const {
   clampForDispoAnlagenstamm,
 } = require('./anlagenstamm-local');
-const { applyKuklaAuditHeaders } = require('./audit-client-headers');
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
 
 function authHeaderFromCredentials(username, password) {
   const u = (username || '').toString().trim();
@@ -18,15 +18,8 @@ function authHeaderFromCredentials(username, password) {
   return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
 }
 
-function dispoMonteurFetchHeaders(technicianId, authHeader) {
-  const h = applyKuklaAuditHeaders(
-    Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {}),
-  );
-  const a = authHeader && authHeader.Authorization;
-  if (a) {
-    h['X-Kukla-Authorization'] = a;
-  }
-  return h;
+function dispoMonteurFetchHeaders(technicianId, authHeader, deviceId) {
+  return buildDispoMonteurHeaders({ technicianId, authHeader, deviceId });
 }
 
 /**

@@ -6,7 +6,8 @@ const { Readable } = require('stream');
 const FormData = require('form-data');
 const express = require('express');
 const phpLocal = require('./abrechnung-php-local');
-const { applyKuklaAuditHeaders } = require('./audit-client-headers');
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
+const { getOrCreateDeviceId } = require('./device-id');
 
 function mkdirpSync(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -508,16 +509,15 @@ function appendTriedUrls(errMsg, urls) {
   return String(errMsg || '') + suffix;
 }
 
+/** Gesetzt in registerAbrechnungRoutes — für X-Kukla-Device-Id ohne ctx-Threading. */
+let _abrechnungDbDir = '';
+
 /** Apache übergibt Authorization oft nicht an PHP — gleicher Basic-Wert zusätzlich für require_login.php. */
-function dispoMonteurFetchHeaders(authHeader, technicianId) {
-  const h = applyKuklaAuditHeaders(
-    Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {}),
-  );
-  const a = authHeader && authHeader.Authorization;
-  if (a) {
-    h['X-Kukla-Authorization'] = a;
-  }
-  return h;
+function dispoMonteurFetchHeaders(authHeader, technicianId, deviceId) {
+  const did =
+    deviceId ||
+    (_abrechnungDbDir ? getOrCreateDeviceId(_abrechnungDbDir) : undefined);
+  return buildDispoMonteurHeaders({ technicianId, authHeader, deviceId: did });
 }
 
 /** Gleiche Zuordnung wie abrechnung_monteur_api.inc.php — über job_project_* erreichbar. */
@@ -750,10 +750,8 @@ function dispoUploadMultipartOnce(urlStr, fields, fileBuf, fileName, authHeader,
     Object.keys(fields).forEach((k) => form.append(k, String(fields[k])));
     form.append('file', fileBuf, path.basename(fileName || 'datei'));
     const parsed = new URL(urlStr);
-    const headers = form.getHeaders({
-      'X-Technician-Id': String(technicianId),
-      ...(authHeader || {}),
-    });
+    const monteurHeaders = dispoMonteurFetchHeaders(authHeader, technicianId);
+    const headers = form.getHeaders(monteurHeaders);
     const options = {
       method: 'POST',
       protocol: parsed.protocol,
@@ -983,6 +981,7 @@ async function syncJobFromDispo(ctx, baseUrl, technicianId, authHeader, jobServe
 
 async function flushAbrechnungOutbox(ctx, baseUrl, technicianId, serverUsername, serverPassword) {
   const { db, save, dbDir, authHeaderFromCredentials } = ctx;
+  if (dbDir) _abrechnungDbDir = dbDir;
   const base = dispoBase(baseUrl);
   if (!base || !technicianId) return;
   const authHeader = authHeaderFromCredentials(serverUsername, serverPassword);
@@ -1248,6 +1247,7 @@ async function runAbrechnungRefreshCore(ctx, body, onProgress) {
 
 function registerAbrechnungRoutesInner(app, ctx) {
   const { db, save, dbDir, authHeaderFromCredentials, authHeaderFromIncomingBasicOrQuery } = ctx;
+  if (dbDir) _abrechnungDbDir = dbDir;
   const fileCtx = abrechnungFileCtxFrom(ctx);
   ensureSchema(db);
 

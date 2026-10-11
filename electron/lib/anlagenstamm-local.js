@@ -24,6 +24,7 @@ const {
   sortParameterFilesByDisplayAsc,
   mergeParameterFileLists,
 } = require('./anlagenstamm-filename-datetime');
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
 
 const DISPO_EXPORT_CHUNK_TIMEOUT_MS = 90 * 1000;
 
@@ -81,11 +82,8 @@ function authHeaderFromCredentials(username, password) {
   return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
 }
 
-function dispoMonteurFetchHeaders(technicianId, authHeader) {
-  const h = Object.assign({ 'X-Technician-Id': String(technicianId) }, authHeader || {});
-  const a = authHeader && authHeader.Authorization;
-  if (a) h['X-Kukla-Authorization'] = a;
-  return h;
+function dispoMonteurFetchHeaders(technicianId, authHeader, deviceId) {
+  return buildDispoMonteurHeaders({ technicianId, authHeader, deviceId });
 }
 
 const anlagenstammSchemaReady = new WeakSet();
@@ -153,7 +151,8 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       pn_thumbs_total_pages INTEGER NOT NULL DEFAULT 0,
       pn_thumbs_phase_completed INTEGER NOT NULL DEFAULT 0,
       pn_thumbs_since TEXT,
-      pn_thumbs_last_full_at TEXT
+      pn_thumbs_last_full_at TEXT,
+      extras_last_full_at TEXT
     )`);
   if (dbOrSql && typeof dbOrSql.prepare === 'function') {
     try {
@@ -197,6 +196,9 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       }
       if (!names.has('pn_thumbs_last_full_at')) {
         run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN pn_thumbs_last_full_at TEXT');
+      }
+      if (!names.has('extras_last_full_at')) {
+        run('ALTER TABLE anlagenstamm_sync_state ADD COLUMN extras_last_full_at TEXT');
       }
     } catch (err) {
       const msg = err && err.message ? String(err.message) : String(err);
@@ -588,6 +590,14 @@ function parseIndexedFieldGroups(fields, prefix) {
     .map((i) => byIndex[i]);
 }
 
+function payloadDeclaresMotors(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  if (String(payload.motors_submitted || '') === '1') return true;
+  if (Object.prototype.hasOwnProperty.call(payload, 'motoren')) return true;
+  if (Object.prototype.hasOwnProperty.call(payload, 'motor')) return true;
+  return Object.keys(payload).some((k) => /^motor\[\d+]\[/.test(k));
+}
+
 function normalizeMotorRows(payload) {
   let raw = [];
   if (payload && Array.isArray(payload.motoren)) raw = payload.motoren;
@@ -777,9 +787,7 @@ function mergeAnlagenstammPayload(existing, incoming) {
   } else {
     out.kraftaufnehmer_extra = '';
   }
-  if (Object.prototype.hasOwnProperty.call(inc, 'motoren')
-    || Object.prototype.hasOwnProperty.call(inc, 'motor')
-    || Object.keys(inc).some((k) => /^motor\[\d+]\[/.test(k))) {
+  if (payloadDeclaresMotors(inc)) {
     out.motoren = normalizeMotorRows(inc);
   }
   return out;
@@ -806,9 +814,7 @@ function stripEmptyStammFieldsForDispoPush(payload, existing) {
   if (Object.prototype.hasOwnProperty.call(payload, 'kraftaufnehmer_extra')) {
     out.kraftaufnehmer_extra = merged.kraftaufnehmer_extra || '';
   }
-  if (Object.prototype.hasOwnProperty.call(payload, 'motoren')
-    || Object.prototype.hasOwnProperty.call(payload, 'motor')
-    || Object.keys(payload || {}).some((k) => /^motor\[\d+]\[/.test(k))) {
+  if (payloadDeclaresMotors(payload)) {
     out.motoren = normalizeMotorRows(payload);
   }
   return clampForDispoAnlagenstamm(out);
@@ -901,10 +907,10 @@ function lookupFabInExtrasMap(map, fab) {
 
 async function fetchAnlagenstammListExtrasChunk(base, authHeader, fabs) {
   const url = `${base}/api/anlagenstamm_list_extras.php`;
-  const headers = Object.assign({ 'Content-Type': 'application/json' }, authHeader || {});
-  if (authHeader && authHeader.Authorization) {
-    headers['X-Kukla-Authorization'] = authHeader.Authorization;
-  }
+  const headers = buildDispoMonteurHeaders({
+    authHeader,
+    extra: { 'Content-Type': 'application/json' },
+  });
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), DISPO_EXPORT_CHUNK_TIMEOUT_MS);
   try {
@@ -1398,9 +1404,7 @@ function saveLocal(db, payload) {
   const kept = lookupByFab(db, fab);
   if (kept && kept.id) id = kept.id;
   bumpAnlagenstammDataGeneration();
-  if (Object.prototype.hasOwnProperty.call(payload || {}, 'motoren')
-    || Object.prototype.hasOwnProperty.call(payload || {}, 'motor')
-    || Object.keys(payload || {}).some((k) => /^motor\[\d+]\[/.test(k))) {
+  if (payloadDeclaresMotors(payload)) {
     replaceMotorsForStamm(db, id, normalizeMotorRows(payload));
   }
   return { ok: true, id, fabrikationsnummer: fab, fields, _pending: true };
@@ -1409,11 +1413,7 @@ function saveLocal(db, payload) {
 /** Vollsync wie Dispo Desktop: GET /api/anlagenstamm_list.php?omit_fn_filter=1 */
 async function fetchAnlagenstammListPage(base, authHeader, page, pageSize) {
   const url = `${base}/api/anlagenstamm_list.php?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}&omit_fn_filter=1`;
-  const headers = {};
-  if (authHeader && authHeader.Authorization) {
-    headers.Authorization = authHeader.Authorization;
-    headers['X-Kukla-Authorization'] = authHeader.Authorization;
-  }
+  const headers = buildDispoMonteurHeaders({ authHeader });
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), DISPO_EXPORT_CHUNK_TIMEOUT_MS);
   try {
@@ -1510,6 +1510,7 @@ function defaultAnlagenstammSyncResumeState() {
     pn_thumbs_phase_completed: false,
     pn_thumbs_since: '',
     pn_thumbs_last_full_at: null,
+    extras_last_full_at: null,
     resume_pending: false,
   };
 }
@@ -1523,7 +1524,8 @@ function getAnlagenstammSyncResumeState(db) {
               pn_tree_next_page, pn_tree_total_pages, pn_tree_phase_completed,
               pn_tree_since, pn_tree_last_full_at,
               pn_thumbs_next_page, pn_thumbs_total_pages, pn_thumbs_phase_completed,
-              pn_thumbs_since, pn_thumbs_last_full_at
+              pn_thumbs_since, pn_thumbs_last_full_at,
+              extras_last_full_at
        FROM anlagenstamm_sync_state WHERE id = 1`,
     )
     .get();
@@ -1552,6 +1554,7 @@ function getAnlagenstammSyncResumeState(db) {
     pn_thumbs_phase_completed: pnThumbsDone,
     pn_thumbs_since: row.pn_thumbs_since ? String(row.pn_thumbs_since) : '',
     pn_thumbs_last_full_at: row.pn_thumbs_last_full_at || null,
+    extras_last_full_at: row.extras_last_full_at || null,
     resume_pending:
       (!stammDone && stammNext > 1) ||
       (!pnDone && pnNext > 1) ||
@@ -1773,6 +1776,168 @@ function finalizeAnlagenstammSyncRun(db) {
   ).run();
 }
 
+function backfillPnRootNamesFromTreeCache(db) {
+  ensureAnlagenstammLocalSchema(db);
+  ensureAnlagenstammTreeCacheSchema(db);
+  const info = db
+    .prepare(
+      `UPDATE anlagenstamm_local
+       SET pn_root_name = (
+         SELECT TRIM(c.root_folder_name) FROM anlagenstamm_tree_cache c
+         WHERE TRIM(c.fab) = TRIM(anlagenstamm_local.fabrikationsnummer)
+           AND TRIM(COALESCE(c.root_folder_name, '')) <> ''
+         LIMIT 1
+       )
+       WHERE dirty = 0
+         AND TRIM(COALESCE(pn_root_name, '')) = ''
+         AND EXISTS (
+           SELECT 1 FROM anlagenstamm_tree_cache c
+           WHERE TRIM(c.fab) = TRIM(anlagenstamm_local.fabrikationsnummer)
+             AND TRIM(COALESCE(c.root_folder_name, '')) <> ''
+         )`,
+    )
+    .run();
+  return info && info.changes ? info.changes : 0;
+}
+
+function markExtrasFullRefresh(db) {
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  db.prepare(
+    `INSERT INTO anlagenstamm_sync_state (id, extras_last_full_at)
+     VALUES (1, ?)
+     ON CONFLICT(id) DO UPDATE SET extras_last_full_at = excluded.extras_last_full_at`,
+  ).run(now);
+}
+
+const EXTRAS_SYNC_CHUNK = 40;
+
+async function fetchMobileExtrasChunk(base, authHeader, technicianId, fabs) {
+  const url = `${base}/api/mobile/anlagenstamm_sync_extras.php`;
+  const headers = Object.assign(
+    { 'Content-Type': 'application/json' },
+    dispoMonteurFetchHeaders(technicianId, authHeader),
+  );
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 45000);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ fabs }),
+      signal: ac.signal,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || (data && data.ok === false && data.success !== true)) {
+      return {
+        ok: false,
+        error: (data && data.error) || r.statusText || 'HTTP ' + r.status,
+        _httpStatus: r.status,
+      };
+    }
+    return {
+      ok: true,
+      pn_by_fab: data.pn_by_fab || {},
+      ted_by_fab: data.ted_by_fab || {},
+    };
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      return { ok: false, error: 'Timeout (Anlagenstamm-Extras)', _httpStatus: 0 };
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * TED- und PROJEKTE-NEU-Namen aus der Server-DB in SQLite.
+ * Der Monteur-Export setzt _skip_extras, deshalb fehlen die Spaltenlinks sonst.
+ * Kein Dateisystem: weder OneDrive noch Fileserver-Scan.
+ */
+async function syncAnlagenstammListExtrasFromDispo(db, payload, options) {
+  options = options || {};
+  const dbLock = options.dbLock;
+  const saveFn = options.save;
+  function withDbLock(fn) {
+    if (dbLock && typeof dbLock.runWithDbLock === 'function') {
+      return dbLock.runWithDbLock(fn);
+    }
+    return Promise.resolve(fn());
+  }
+
+  let backfilled = 0;
+  await withDbLock(async () => {
+    backfilled = backfillPnRootNamesFromTreeCache(db);
+    if (backfilled > 0) {
+      bumpAnlagenstammDataGeneration();
+      if (typeof saveFn === 'function') saveFn();
+    }
+  });
+
+  const resume = getAnlagenstammSyncResumeState(db);
+  if (!isPnFullRefreshDue(resume.extras_last_full_at)) {
+    return { ok: true, skipped: true, written: 0, backfilled };
+  }
+
+  const bases = buildAnlagenstammSyncBases(payload);
+  const technicianId = parseInt(payload.technician_id ?? payload.technicianId, 10);
+  const username = (payload.serverUsername || '').toString().trim();
+  if (!bases.length || !username || !Number.isFinite(technicianId) || technicianId <= 0) {
+    return { ok: false, error: 'baseUrl, technician_id und Anmeldedaten erforderlich.', backfilled };
+  }
+  const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
+  const fabs = db
+    .prepare(
+      `SELECT TRIM(fabrikationsnummer) AS fab FROM anlagenstamm_local
+       WHERE dirty = 0 AND TRIM(COALESCE(fabrikationsnummer, '')) <> ''`,
+    )
+    .all()
+    .map((r) => String(r.fab || '').trim())
+    .filter(Boolean);
+  if (!fabs.length) {
+    await withDbLock(async () => {
+      markExtrasFullRefresh(db);
+      if (typeof saveFn === 'function') saveFn();
+    });
+    return { ok: true, skipped: false, written: 0, backfilled };
+  }
+
+  const runOnBase = async (base) => {
+    let written = 0;
+    for (let i = 0; i < fabs.length; i += EXTRAS_SYNC_CHUNK) {
+      const chunk = fabs.slice(i, i + EXTRAS_SYNC_CHUNK);
+      const data = await fetchMobileExtrasChunk(base, auth, technicianId, chunk);
+      if (!data.ok) {
+        if (data._httpStatus === 404) {
+          return { ok: false, error: data.error || 'Extras-Export nicht verfügbar.', _notFound: true, written };
+        }
+        return { ok: false, error: data.error || 'Extras-Export fehlgeschlagen.', written, _httpStatus: data._httpStatus };
+      }
+      await withDbLock(async () => {
+        written += persistAnlagenstammExtras(db, data.pn_by_fab, data.ted_by_fab);
+        if (typeof saveFn === 'function') saveFn();
+      });
+      await yieldEventLoop();
+    }
+    await withDbLock(async () => {
+      if (written > 0) bumpAnlagenstammDataGeneration();
+      markExtrasFullRefresh(db);
+      if (typeof saveFn === 'function') saveFn();
+    });
+    return { ok: true, written, backfilled };
+  };
+
+  try {
+    const tried = await tryDispoBasesInOrder(bases, runOnBase);
+    if (tried.error) return { ok: false, error: tried.error, backfilled };
+    const inner = tried.result;
+    if (inner && inner.ok === false) return Object.assign({ backfilled }, inner);
+    return Object.assign({ ok: true, backfilled }, inner || {});
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e), backfilled };
+  }
+}
+
 async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
   options = options || {};
   const dbLock = options.dbLock;
@@ -1783,6 +1948,31 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
       return dbLock.runWithDbLock(fn);
     }
     return Promise.resolve(fn());
+  }
+
+  async function withListExtras(result) {
+    let extras = { ok: true, skipped: true, written: 0, backfilled: 0 };
+    try {
+      extras = await syncAnlagenstammListExtrasFromDispo(db, payload, options);
+    } catch (err) {
+      console.warn('[anlagenstamm_db_sync] extras:', err && err.message ? err.message : err);
+    }
+    if (extras && extras.ok === false) {
+      console.warn('[anlagenstamm_db_sync] extras:', extras.error || 'fehlgeschlagen');
+    } else if (extras && !extras.skipped) {
+      console.log(
+        '[anlagenstamm_db_sync] extras geschrieben:',
+        extras.written || 0,
+        ', Ordnernamen aus Baum:',
+        extras.backfilled || 0,
+      );
+    } else if (extras && extras.backfilled) {
+      console.log('[anlagenstamm_db_sync] Ordnernamen aus Baum:', extras.backfilled);
+    }
+    return Object.assign({}, result, {
+      extras_written: extras && extras.written ? extras.written : 0,
+      extras_backfilled: extras && extras.backfilled ? extras.backfilled : 0,
+    });
   }
 
   ensureAnlagenstammLocalSchema(db);
@@ -1812,7 +2002,7 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
       repaired = repairMergedFnLeistungLocal(db);
       if (repaired > 0 && typeof saveFn === 'function') saveFn();
     });
-    return {
+    return withListExtras({
       ok: true,
       skipped: true,
       resumed: false,
@@ -1820,7 +2010,7 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
       total_count: resumeFresh.stamm_total_pages || resumeFresh.total_count || 0,
       row_count: rowCount(db),
       purged: 0,
-    };
+    });
   }
 
   const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
@@ -1969,7 +2159,7 @@ async function syncAnlagenstammFromDispo(db, payload, onProgress, options) {
     if (inner && inner.ok === false) {
       return { ok: false, error: inner.error || 'Export fehlgeschlagen.' };
     }
-    return Object.assign({ ok: true }, inner || {});
+    return withListExtras(Object.assign({ ok: true }, inner || {}));
   } catch (e) {
     const msg = e && e.message ? e.message : String(e);
     console.warn('[anlagenstamm_db_sync]', msg, e && e.stack ? e.stack : '');
@@ -2916,6 +3106,7 @@ module.exports = {
   ANLAGENSTAMM_RECENT_LOCAL_GRACE_MS,
   isRecentLocalAnlagenstammGuard,
   clampForDispoAnlagenstamm,
+  payloadDeclaresMotors,
   normalizeMotorRows,
   mergeMotorRowsFillGaps,
   listMotorsForStamm,

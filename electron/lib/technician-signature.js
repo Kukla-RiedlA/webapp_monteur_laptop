@@ -103,27 +103,28 @@ function parseUpdatedAt(v) {
   return Number.isFinite(t) ? t : 0;
 }
 
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
+
 /**
  * Dispo-URL + Basic-Auth Headers bauen.
  */
-function buildDispoRequest(dispoBaseUrl, authHeader) {
+function buildDispoRequest(dispoBaseUrl, authHeader, technicianId, deviceId) {
   const base = String(dispoBaseUrl || '')
     .trim()
     .replace(/\/$/, '');
   if (!base) return null;
   const url = base + '/api/mobile/technician_signature.php';
-  const headers = Object.assign(
-    { Accept: 'application/json', 'Content-Type': 'application/json' },
-    authHeader || {},
-  );
-  if (authHeader && authHeader.Authorization) {
-    headers['X-Kukla-Authorization'] = authHeader.Authorization;
-  }
+  const headers = buildDispoMonteurHeaders({
+    technicianId,
+    authHeader,
+    deviceId,
+    extra: { Accept: 'application/json', 'Content-Type': 'application/json' },
+  });
   return { url, headers };
 }
 
-async function fetchDispoSignature(dispoBaseUrl, authHeader) {
-  const req = buildDispoRequest(dispoBaseUrl, authHeader);
+async function fetchDispoSignature(dispoBaseUrl, authHeader, technicianId, deviceId) {
+  const req = buildDispoRequest(dispoBaseUrl, authHeader, technicianId, deviceId);
   if (!req) return null;
   const r = await fetch(req.url, { method: 'GET', headers: req.headers });
   const data = await r.json().catch(() => ({}));
@@ -131,8 +132,8 @@ async function fetchDispoSignature(dispoBaseUrl, authHeader) {
   return data;
 }
 
-async function pushDispoSignature(dispoBaseUrl, authHeader, pngBase64, source) {
-  const req = buildDispoRequest(dispoBaseUrl, authHeader);
+async function pushDispoSignature(dispoBaseUrl, authHeader, pngBase64, source, technicianId, deviceId) {
+  const req = buildDispoRequest(dispoBaseUrl, authHeader, technicianId, deviceId);
   if (!req) return { ok: false, error: 'Keine Dispo-URL.' };
   const r = await fetch(req.url, {
     method: 'POST',
@@ -144,8 +145,8 @@ async function pushDispoSignature(dispoBaseUrl, authHeader, pngBase64, source) {
   return data;
 }
 
-async function deleteDispoSignature(dispoBaseUrl, authHeader) {
-  const req = buildDispoRequest(dispoBaseUrl, authHeader);
+async function deleteDispoSignature(dispoBaseUrl, authHeader, technicianId, deviceId) {
+  const req = buildDispoRequest(dispoBaseUrl, authHeader, technicianId, deviceId);
   if (!req) return { ok: false, error: 'Keine Dispo-URL.' };
   const r = await fetch(req.url, { method: 'DELETE', headers: req.headers });
   const data = await r.json().catch(() => ({}));
@@ -156,7 +157,7 @@ async function deleteDispoSignature(dispoBaseUrl, authHeader) {
 /**
  * Neueres updated_at gewinnt. Dirty-lokale Änderungen pushen zuerst.
  */
-async function syncWithDispo(db, technicianId, dispoBaseUrl, authHeader) {
+async function syncWithDispo(db, technicianId, dispoBaseUrl, authHeader, deviceId) {
   ensureSchema(db);
   const tid = parseInt(technicianId, 10);
   if (!Number.isFinite(tid) || tid <= 0 || !dispoBaseUrl || !authHeader) {
@@ -164,12 +165,19 @@ async function syncWithDispo(db, technicianId, dispoBaseUrl, authHeader) {
   }
   const local = getLocal(db, tid);
   if (local && local.dirty) {
-    const pushed = await pushDispoSignature(dispoBaseUrl, authHeader, local.png_base64, local.source);
+    const pushed = await pushDispoSignature(
+      dispoBaseUrl,
+      authHeader,
+      local.png_base64,
+      local.source,
+      tid,
+      deviceId,
+    );
     if (pushed && pushed.ok) {
       setLocal(db, tid, local.png_base64, local.source, pushed.updated_at || local.updated_at, false);
     }
   }
-  const remote = await fetchDispoSignature(dispoBaseUrl, authHeader);
+  const remote = await fetchDispoSignature(dispoBaseUrl, authHeader, tid, deviceId);
   if (!remote || remote.ok === false) {
     return { ok: false, error: (remote && remote.error) || 'Sync fehlgeschlagen', local: getLocal(db, tid) };
   }

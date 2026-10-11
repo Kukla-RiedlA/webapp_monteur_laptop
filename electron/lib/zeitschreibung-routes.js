@@ -7,7 +7,8 @@ const calc = require('./zeitschreibung-calc');
 const { generateZeitschreibungPdfBuffer } = require('./zeitschreibung-pdf');
 const { generateZeitschreibungXlsxBuffer } = require('./zeitschreibung-xlsx');
 const { buildPrintDocumentHtml } = require('./zeitschreibung-print-html');
-const { applyKuklaAuditHeaders } = require('./audit-client-headers');
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
+const { getOrCreateDeviceId } = require('./device-id');
 
 function cfgPath(dbDir) {
   return path.join(dbDir, 'zeitschreibung_config.json');
@@ -594,7 +595,7 @@ function enqueueOutbox(db, timesheetId, pdfPath, xlsxPath, payload) {
   ).run(timesheetId, JSON.stringify(payload || {}), pdfPath || null, xlsxPath || null);
 }
 
-async function tryFlushZeitschreibungNow(db, technicianId, resolveDispoPushCreds) {
+async function tryFlushZeitschreibungNow(db, technicianId, resolveDispoPushCreds, dbDir) {
   if (typeof resolveDispoPushCreds !== 'function') {
     return { flushed: 0, errors: [], attempted: false };
   }
@@ -613,6 +614,8 @@ async function tryFlushZeitschreibungNow(db, technicianId, resolveDispoPushCreds
       creds.baseUrl,
       creds.authHeader || null,
       technicianId,
+      undefined,
+      dbDir,
     );
     return { flushed: result.flushed || 0, errors: result.errors || [], attempted: true };
   } catch (e) {
@@ -627,12 +630,13 @@ async function tryFlushZeitschreibungNow(db, technicianId, resolveDispoPushCreds
 /**
  * Push pending timesheet saves/submits to Dispo.
  */
-async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, fetchFn) {
+async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, fetchFn, dbDir) {
   const rows = db.prepare('SELECT * FROM zeitschreibung_outbox ORDER BY id ASC LIMIT 20').all();
   if (!rows.length) return { flushed: 0, errors: [] };
   const fetchImpl = fetchFn || fetch;
   const errors = [];
   let flushed = 0;
+  const deviceId = dbDir ? getOrCreateDeviceId(dbDir) : undefined;
   for (const row of rows) {
     try {
       const ts = db.prepare('SELECT * FROM timesheets WHERE id = ?').get(row.timesheet_id);
@@ -682,14 +686,12 @@ async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, 
         })),
       };
       const url = String(baseUrl || '').replace(/\/$/, '') + '/api/monteur_timesheet_submit.php';
-      const headers = applyKuklaAuditHeaders({
-        'Content-Type': 'application/json',
-        'X-Technician-Id': String(body.technician_id),
+      const headers = buildDispoMonteurHeaders({
+        technicianId: body.technician_id,
+        authHeader,
+        deviceId,
+        extra: { 'Content-Type': 'application/json' },
       });
-      if (authHeader) {
-        headers.Authorization = authHeader;
-        headers['X-Kukla-Authorization'] = authHeader;
-      }
       const res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.ok === false) {
@@ -712,7 +714,7 @@ async function flushZeitschreibungOutbox(db, baseUrl, authHeader, technicianId, 
   return { flushed, errors };
 }
 
-async function pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds) {
+async function pullLohnLocksFromDispo(db, technicianId, year, month, resolveDispoPushCreds, dbDir) {
   if (typeof resolveDispoPushCreds !== 'function') {
     return { ok: false, changed: false, days: null };
   }
@@ -725,7 +727,15 @@ async function pullLohnLocksFromDispo(db, technicianId, year, month, resolveDisp
   if (!creds || !creds.baseUrl) {
     return { ok: false, changed: false, days: null };
   }
-  return pullLohnLocksWithCreds(db, technicianId, year, month, creds.baseUrl, creds.authHeader || null);
+  return pullLohnLocksWithCreds(
+    db,
+    technicianId,
+    year,
+    month,
+    creds.baseUrl,
+    creds.authHeader || null,
+    dbDir,
+  );
 }
 
 function storeUebertrag(db, technicianId, year, month, uebertrag) {
@@ -766,7 +776,7 @@ function uebertragSame(a, b) {
     && String(left.lohn_kommentar || '') === String(right.lohn_kommentar || '');
 }
 
-async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, authHeader) {
+async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, authHeader, dbDir) {
   if (!baseUrl || !technicianId || !year || !month) {
     return { ok: false, changed: false, days: null };
   }
@@ -778,15 +788,12 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     encodeURIComponent(year) +
     '&month=' +
     encodeURIComponent(month);
-  const headers = {
-    Accept: 'application/json',
-    'X-Technician-Id': String(technicianId),
-  };
-  if (authHeader && typeof authHeader === 'object' && authHeader.Authorization) {
-    headers.Authorization = authHeader.Authorization;
-  } else if (typeof authHeader === 'string' && authHeader) {
-    headers.Authorization = authHeader;
-  }
+  const headers = buildDispoMonteurHeaders({
+    technicianId,
+    authHeader,
+    deviceId: dbDir ? getOrCreateDeviceId(dbDir) : undefined,
+    extra: { Accept: 'application/json' },
+  });
   const r = await fetch(url, { headers });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data || !data.ok || !Array.isArray(data.days)) {
@@ -884,7 +891,7 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
  * Holt Lohn-Sperren für aktuelle/nahe Monate und lokal vorhandene Monatsblätter.
  * Aufruf z. B. nach sync_push und vor Speichern.
  */
-async function pullRecentLohnLocks(db, technicianId, baseUrl, authHeader) {
+async function pullRecentLohnLocks(db, technicianId, baseUrl, authHeader, dbDir) {
   if (!db || !technicianId || !baseUrl) return { pulled: 0 };
   ensureTables(db);
   const now = new Date();
@@ -911,7 +918,15 @@ async function pullRecentLohnLocks(db, technicianId, baseUrl, authHeader) {
   let pulled = 0;
   for (const { year, month } of pairs.values()) {
     try {
-      const res = await pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, authHeader);
+      const res = await pullLohnLocksWithCreds(
+        db,
+        technicianId,
+        year,
+        month,
+        baseUrl,
+        authHeader,
+        dbDir,
+      );
       if (res && res.ok && res.changed) pulled += 1;
     } catch (_) {
       /* ignore month */

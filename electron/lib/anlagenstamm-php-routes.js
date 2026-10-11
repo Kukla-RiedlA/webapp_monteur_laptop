@@ -14,7 +14,8 @@ const {
   mergeRemoteDocumentsList,
 } = require('./anlagenstamm-documents-local');
 const fs = require('fs');
-const { applyKuklaAuditHeaders } = require('./audit-client-headers');
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
+const { getOrCreateDeviceId } = require('./device-id');
 const { parseMlPdfBuffer, isMlPdfCandidate, mlPdfLangRank, mlPdfMatchRank, mlFabFit } = require('./anlagenstamm-ml-pdf');
 const { readParameterSourceText, decodeParameterFileBytes, normalizeFabDigits } = require('./anlagenstamm-local');
 
@@ -29,13 +30,13 @@ function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
     creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : '') || '',
   ).trim();
   const p = creds.serverPassword != null ? String(creds.serverPassword) : ctx.getDispoPassword ? String(ctx.getDispoPassword() || '') : '';
-  const h = applyKuklaAuditHeaders({ 'X-Technician-Id': String(technicianId || '') });
+  let authHeader;
   if (u && p) {
-    const auth = 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64');
-    h.Authorization = auth;
-    h['X-Kukla-Authorization'] = auth;
+    authHeader = { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
   }
-  return h;
+  const dbDir = ctx.dbDir || ctx.DB_DIR || '';
+  const deviceId = dbDir ? getOrCreateDeviceId(dbDir) : undefined;
+  return buildDispoMonteurHeaders({ technicianId, authHeader, deviceId });
 }
 
 async function fetchDispoApiGet(ctx, technicianId, fab, relativePhp, credsOpt, timeoutMs) {
@@ -257,7 +258,7 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
   });
 
   app.get('/api/anlagenstamm_list_extras.php', (req, res) => {
-    // Offline-first: TED/PN aus SQLite, kein Warten auf Dispo (sonst hängt die ganze App).
+    // Offline-first: TED/PN aus SQLite und Baum-Cache, kein Fileserver- und kein OneDrive-Scan.
     res.json(getAnlagenstammExtrasResponse(db(), req.query || {}));
   });
 
@@ -564,34 +565,50 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       });
     }
 
-    if (pathRel && typeof ctx.resolveProjekteNeuLocalFile === 'function') {
+    // Nur eine angeklickte Motorliste (MOTORL.doc, Motorliste.pdf, …) festnageln.
+    // Sonst den ganzen PROJEKTE-NEU-Baum dieser FN durchsuchen: die Liste liegt
+    // mal im FN-Ordner, mal darunter in einem Bereichsordner wie 9499-9509/9500.
+    const clickedName = pathRel.split(/[/\\]/).pop() || '';
+    const motorPath = pathRel && isMlPdfCandidate(clickedName, pathRel) ? pathRel : '';
+
+    if (motorPath && typeof ctx.resolveProjekteNeuLocalFile === 'function') {
       try {
-        const localPath = ctx.resolveProjekteNeuLocalFile(technicianId, fab, pathRel, jobId);
+        const localPath = ctx.resolveProjekteNeuLocalFile(technicianId, fab, motorPath, jobId);
         if (localPath) {
           const parsed = await parseLocalMlPdfPath(localPath, fab);
-          const hit = await parsedOk(parsed, pathRel, 'local_file');
+          const hit = await parsedOk(parsed, motorPath, 'local_file');
           if (hit) return res.json(hit);
         }
       } catch (_) {}
     }
 
-    return res.json({ ok: true, motors: [], source: 'local_only', file: pathRel || '' });
-    const apiData = await fetchDispoApiMlPdfPrefill(ctx, technicianId, fab, pathRel, debug);
+    let apiData = await fetchDispoApiMlPdfPrefill(ctx, technicianId, fab, motorPath, debug);
     if (apiData && apiData.ok && Array.isArray(apiData.motors) && apiData.motors.length) {
       return res.json(Object.assign({ source: 'dispo_api' }, apiData));
     }
 
-    const explicitPath = pathRel !== '';
+    const explicitPath = motorPath !== '';
     let mlRels = [];
     if (explicitPath) {
-      mlRels = [pathRel];
+      mlRels = [motorPath];
     } else {
-      const list = await fetchDispoApiFilesList(ctx, technicianId, fab);
-      const tree =
-        list && list.projekte_neu && Array.isArray(list.projekte_neu.tree) ? list.projekte_neu.tree : [];
-      collectMlPdfRels(tree, mlRels);
+      const loaded = await loadProjekteNeuTree(req, fab);
+      collectMlPdfRels(loaded && loaded.tree, mlRels);
+      if (!mlRels.length) {
+        const list = await fetchDispoApiFilesList(ctx, technicianId, fab);
+        const tree =
+          list && list.projekte_neu && Array.isArray(list.projekte_neu.tree) ? list.projekte_neu.tree : [];
+        collectMlPdfRels(tree, mlRels);
+      }
       if (apiData && apiData.file) mlRels.push(String(apiData.file));
-      mlRels = preferOwnMlRels(sortMlPdfRels(mlRels, fab), fab).slice(0, 60);
+      mlRels = preferOwnMlRels(sortMlPdfRels(mlRels, fab), fab).slice(0, 8);
+      for (const rel of mlRels) {
+        const one = await fetchDispoApiMlPdfPrefill(ctx, technicianId, fab, rel, debug);
+        if (one && one.ok && Array.isArray(one.motors) && one.motors.length) {
+          return res.json(Object.assign({ source: 'dispo_api', file: one.file || rel }, one));
+        }
+        if (one && (one.ok === true || one.ok === false)) apiData = one;
+      }
     }
     let downloadPath = mlRels[0] || pathRel || String((apiData && apiData.file) || '').trim();
     const mergedMotors = [];
@@ -626,13 +643,24 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       const label =
         usedFiles.length === 1
           ? usedFiles[0]
-          : usedFiles.length + ' PDFs, u. a. ' + String(usedFiles[0] || '').split('/').pop();
+          : usedFiles.length + ' Dateien, u. a. ' + String(usedFiles[0] || '').split('/').pop();
       return res.json({
         ok: true,
         motors: mergedMotors,
         file: label,
         files: usedFiles,
         source: 'dispo_file',
+      });
+    }
+
+    if (mlRels.length) {
+      const named = mlRels[0];
+      const serverError = apiData ? String(apiData.error || apiData.note || '').trim() : '';
+      return res.json({
+        ok: false,
+        error: serverError || ('Motorliste gefunden (' + named + '), der Text konnte nicht gelesen werden.'),
+        file: named,
+        files: mlRels,
       });
     }
 
@@ -645,7 +673,7 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     if (auth && auth.ok && auth.authenticated) {
       try {
         const qs = new URLSearchParams({ fab });
-        if (pathRel) qs.set('path', pathRel);
+        if (motorPath) qs.set('path', motorPath);
         if (debug) qs.set('debug', '1');
         const data = await auth.proxy.getJson(`/api/anlagenstamm_ml_pdf_prefill.php?${qs.toString()}`);
         if (data && data.ok && Array.isArray(data.motors) && data.motors.length) {
