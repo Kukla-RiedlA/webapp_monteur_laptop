@@ -5561,20 +5561,36 @@ function createApp(db) {
     for (const fabNum of fabNumsPreview) {
       const fab = String(fabNum);
       let folder_name_canonical = '';
-      const cachedRoot = readAnlagenstammRootFolderName(db, fab);
-      if (cachedRoot && !isBareFabFolderName(cachedRoot)) folder_name_canonical = cachedRoot;
+      let tree = [];
+      try {
+        const cached = readAnlagenstammTreeCache(db, fab);
+        if (cached) {
+          const cachedRoot = cached.root_folder_name && String(cached.root_folder_name).trim();
+          if (cachedRoot && !isBareFabFolderName(cachedRoot)) folder_name_canonical = cachedRoot;
+          if (Array.isArray(cached.tree) && cached.tree.length) {
+            tree = buildOfflinePreviewTree(cached.tree);
+          }
+        }
+      } catch (_) {}
+      if (!folder_name_canonical || isBareFabFolderName(folder_name_canonical)) {
+        const cachedRoot = readAnlagenstammRootFolderName(db, fab);
+        if (cachedRoot && !isBareFabFolderName(cachedRoot)) folder_name_canonical = cachedRoot;
+      }
       if (!folder_name_canonical || isBareFabFolderName(folder_name_canonical)) {
         folder_name_canonical = buildCanonicalFabFolderName(fab, jobDetail);
       }
       rememberSuggestedFnFolder(fab, folder_name_canonical);
-      fabsOut.push({ fab, folder_name_canonical, tree: [] });
+      fabsOut.push({ fab, folder_name_canonical, tree });
     }
+    const anyTree = fabsOut.some((f) => f.tree && f.tree.length > 0);
     return {
       ok: true,
-      preview_degraded: true,
-      hint:
-        degradedHint ||
-        'Server-Ordnerliste nicht verfügbar – „Keine“ für nur Status/Struktur oder erneut versuchen.',
+      preview_degraded: !anyTree,
+      from_cache: anyTree,
+      hint: anyTree
+        ? undefined
+        : degradedHint ||
+          'Server-Ordnerliste nicht verfügbar – „Keine“ für nur Status/Struktur oder erneut versuchen.',
       fabs: fabsOut,
       montage_folder_name: montageFolderName,
       fab_map: fabsOut.map((f) => ({ fab: f.fab, folder_name_canonical: f.folder_name_canonical })),
@@ -5865,8 +5881,13 @@ function createApp(db) {
       const mapped = getJobRowByLocalOrServerId(rawJobId);
       const localJobId = mapped ? mapped.id : rawJobId;
       const onlyFabs = parseOnlyFabsFilter(req.query.only_fabs || req.query.onlyFabs);
-      const explicitSync = req.query.explicit_sync === '1' || req.query.explicit_sync === 'true';
-      const preferLocal = !explicitSync;
+      // Local nur bei explizitem Flag. Online-Accept muss Dispo laden (Regression V 2.007.046:
+      // preferLocal = !explicit_sync lieferte immer leere Bäume, Frontend sendet kein explicit_sync).
+      const preferLocal =
+        wantsLocalOnlyRequest(req.query) ||
+        req.query.local_first === '1' ||
+        req.query.local_first === 'true' ||
+        String(req.query.prefer_local || '') === '1';
       if (preferLocal) {
         return res.json(
           buildLocalAcceptOfflinePreview(
