@@ -321,8 +321,28 @@
     }
   }
 
+  function syncFormData(fd) {
+    if (!fd || typeof fd.forEach !== 'function' || !getContainer()) return;
+    var drop = [];
+    fd.forEach(function (_val, key) {
+      if (key === 'motors_submitted' || key === 'motoren' || /^motor\[\d+\]\[/.test(key)) drop.push(key);
+    });
+    for (var d = 0; d < drop.length; d++) fd.delete(drop[d]);
+    fd.set('motors_submitted', '1');
+    var rows = collectRows();
+    for (var r = 0; r < rows.length; r++) {
+      var row = rows[r];
+      for (var k = 0; k < KEYS.length; k++) {
+        var key = KEYS[k];
+        if (!row[key]) continue;
+        fd.append('motor[' + r + '][' + key + ']', row[key]);
+      }
+    }
+  }
+
   global.kuklaInitMotorRows = init;
   global.kuklaMotorAddRow = addRow;
   global.kuklaMotorSetRows = setRows;
   global.kuklaMotorCollectRows = collectRows;
+  global.kuklaMotorSyncFormData = syncFormData;
 })(typeof window !== 'undefined' ? window : this);

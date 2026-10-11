@@ -4,7 +4,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { readTreeCachePn } = require('./anlagenstamm-php-local');
+const { readTreeCachePn, getAnlagenstammExtrasResponse } = require('./anlagenstamm-php-local');
 
 describe('readTreeCachePn', () => {
   it('liest root_folder_name und parst kein tree_json', () => {
@@ -159,5 +159,90 @@ describe('Dokumente: Raster nicht unter Montagebericht', () => {
     const bilderIdx = guess[0].indexOf("return 'bild'");
     const montageLoop = guess[0].indexOf('$folderMap[$low]');
     assert.ok(bilderIdx >= 0 && montageLoop > bilderIdx);
+  });
+});
+
+describe('Anlagenstamm-Links aus lokalem Cache', () => {
+  it('zeigt Ordnernamen und TED ohne tree_json und ohne Dateisystem', () => {
+    const sqls = [];
+    const db = {
+      prepare(sql) {
+        sqls.push(sql);
+        if (/PRAGMA table_info\(anlagenstamm_tree_cache\)/.test(sql)) {
+          return {
+            all() {
+              return [
+                { name: 'fab' },
+                { name: 'root_folder_name' },
+                { name: 'content_signature' },
+                { name: 'truncated' },
+              ];
+            },
+            run() {},
+          };
+        }
+        if (/FROM anlagenstamm_local/.test(sql)) {
+          return {
+            all() {
+              return [{ fabrikationsnummer: '12346', pn_root_name: '', ted_mechanik: '' }];
+            },
+            get() {
+              return undefined;
+            },
+            run() {},
+          };
+        }
+        if (/root_folder_name FROM anlagenstamm_tree_cache/.test(sql)) {
+          return {
+            all() {
+              return [{ fab: '12346', root_folder_name: 'Mayrische Hochöfen AG' }];
+            },
+            run() {},
+          };
+        }
+        if (/job_ted_index/.test(sql)) {
+          return {
+            all() {
+              return [{ fab: '12346', rel_path: 'ted/12446.pdf', file_name: '12446.Pdf' }];
+            },
+            run() {},
+          };
+        }
+        return { all() { return []; }, get() { return undefined; }, run() {} };
+      },
+    };
+    const res = getAnlagenstammExtrasResponse(db, { fabs: ['12346'] });
+    assert.equal(res.success, true);
+    assert.equal(res.pn_by_fab['12346'], 'Mayrische Hochöfen AG');
+    assert.equal(res.ted_by_fab['12346'][0].file_name, '12446.Pdf');
+    assert.equal(sqls.some((s) => /SELECT[\s\S]*tree_json/.test(s)), false);
+  });
+
+  it('lädt den Ordnerbaum nur aus dem Sync-Cache', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'public', 'js', 'anlagenstamm-laptop-bridge.js'),
+      'utf8',
+    );
+    const fn = src.match(/async function fetchPnTreeData\(fab, opts\) \{[\s\S]*?\n  function prefetchPnTree/);
+    assert.ok(fn, 'fetchPnTreeData nicht gefunden');
+    assert.match(fn[0], /cache_only=1/);
+    assert.equal(fn[0].includes('refreshPnTreeInBackground'), false);
+    assert.equal(/return fetchPnTreeFromServer\(fabNorm\)/.test(fn[0]), false);
+  });
+
+  it('Auftrag zur FN kommt aus der DB, nicht aus jedem OneDrive-Ordner', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    const fn = src.match(/function resolveLocalJobIdForFab\(technicianId, fab\) \{[\s\S]*?\n  \}/);
+    assert.ok(fn, 'resolveLocalJobIdForFab nicht gefunden');
+    assert.match(fn[0], /fabrikationsnummern/);
+    assert.match(fn[0], /matched\.length >= 3/);
+    assert.equal(fn[0].includes('dienstreise_pull'), false);
+  });
+
+  it('Sync holt TED und Ordnernamen über die Mobile-API', () => {
+    const src = fs.readFileSync(path.join(__dirname, 'anlagenstamm-local.js'), 'utf8');
+    assert.match(src, /\/api\/mobile\/anlagenstamm_sync_extras\.php/);
+    assert.match(src, /function syncAnlagenstammListExtrasFromDispo/);
+    assert.match(src, /withListExtras\(/);
   });
 });

@@ -1237,11 +1237,28 @@ function isMlPdfDokuPath(rel, name) {
   if (!rel || !name) return false;
   var n = String(name);
   var ext = (n.split('.').pop() || '').toLowerCase();
-  if (ext !== 'pdf') return false;
+  if (ext !== 'pdf' && ext !== 'doc' && ext !== 'docx') return false;
   var segs = String(rel).replace(/\\/g, '/').toLowerCase();
-  var inMotorList = segs.indexOf('motor list') >= 0 || segs.indexOf('01.02') >= 0;
-  var mlName = /_ml_/i.test(n) || /motor.?list/i.test(n) || /motorle/i.test(n);
-  return inMotorList || mlName;
+  function labelIsList(label) {
+    var s = String(label || '').toLowerCase().replace(/\.(pdf|docx?|xlsx?|txt)$/i, '');
+    var flat = s.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!flat) return false;
+    var compact = flat.replace(/ /g, '');
+    if (/(^| )ml( |$)/.test(flat)) return true;
+    if (/motordatenblatt|motordaten|motordata|motorblatt|motorenliste|motorliste|motorlist|antriebsliste|antriebsdaten|drivelist|datosdemotor|listademotores|motlist|motlst|mliste/.test(compact)) return true;
+    if (/motorle(?![a-z])/.test(compact) || /motorl(?![a-z])/.test(compact)) return true;
+    if (/(^|[^a-z])motoren(?![a-z])/.test(compact)) return true;
+    return /\bmotor\s+list\b|\bmotor\s+data\b|\bdrive\s+list\b|\bdatos\s+de\s+motor\b|\blista\s+de\s+motores\b/.test(flat);
+  }
+  if (labelIsList(n)) return true;
+  var parts = segs.split('/');
+  parts.pop();
+  for (var i = 0; i < parts.length; i++) {
+    if (labelIsList(parts[i])) return true;
+  }
+  if (ext !== 'pdf') return false;
+  if (/datenblatt/.test(n.toLowerCase() + '/' + segs)) return true;
+  return /(^|\/)01[._]02(?![0-9])/.test(segs);
 }
 
 function fillMotorsFromMlPdf() {
@@ -1255,6 +1272,10 @@ function fillMotorsFromMlPdf() {
   if (msgEl) msgEl.textContent = 'Lese Motorliste…';
   var u = anlagenstammApiUrl('api/anlagenstamm_ml_pdf_prefill.php?fab=' + encodeURIComponent(fab));
   var pr = (window.__anlagenSelectedMlPdfRel || '').trim();
+  if (pr) {
+    var prName = pr.split('/').pop() || pr;
+    if (!isMlPdfDokuPath(pr, prName)) pr = '';
+  }
   if (pr) u += '&path=' + encodeURIComponent(pr);
   var req = (typeof anlagenstammFetch === 'function')
     ? anlagenstammFetch(u, { credentials: 'same-origin' })
@@ -1281,7 +1302,7 @@ function fillMotorsFromMlPdf() {
       }
       var motors = Array.isArray(d.motors) ? d.motors : [];
       if (!motors.length) {
-        if (msgEl) msgEl.textContent = (d.note || 'Keine Antriebe im PDF erkannt.') + (d.file ? ' (' + d.file + ')' : '');
+        if (msgEl) msgEl.textContent = (d.note || (d.file ? 'Datei gelesen, aber keine Antriebe zugeordnet.' : 'Keine Motorliste im PROJEKTE-NEU-Ordner dieser FN gefunden.')) + (d.file ? ' (' + d.file + ')' : '');
         return;
       }
       if (typeof window.kuklaMotorSetRows === 'function') window.kuklaMotorSetRows(motors);
@@ -1568,6 +1589,7 @@ if (anlagenForm && !anlagenReadOnly) {
       fd.delete(el.name);
     });
   }
+  if (typeof window.kuklaMotorSyncFormData === 'function') window.kuklaMotorSyncFormData(fd);
   var fabElSave = document.getElementById('formFab');
   if (fabElSave) fd.set('fabrikationsnummer', String(fabElSave.value || '').trim());
   fetch(anlagenstammApiUrl('api/anlagenstamm_save.php'), { method: 'POST', body: fd, headers: anlagenstammApiHeaders() })

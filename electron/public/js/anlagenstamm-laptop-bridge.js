@@ -386,47 +386,21 @@
     return p;
   }
 
-  function refreshPnTreeInBackground(fab, target, modalParts) {
-    const fabNorm = String(fab || '').trim();
-    if (!fabNorm) return;
-    fetchPnTreeFromServer(fabNorm)
-      .then((fresh) => {
-        if (!fresh || pnExplorerState.fab !== fabNorm) return;
-        let t = target;
-        let parts = modalParts;
-        if (!t) {
-          const modal = document.getElementById('pnTreeModal');
-          if (modal && modal.classList.contains('active')) {
-            t = document.getElementById('pnTreeModalBody');
-            parts = parts || {
-              title: document.getElementById('pnTreeModalTitle'),
-              hint: document.getElementById('pnTreeModalHint'),
-            };
-          }
-        }
-        if (t) applyPnExplorerData(fabNorm, fresh, t, parts);
-      })
-      .catch(() => {});
-  }
-
   async function fetchPnTreeData(fab, opts) {
     opts = opts || {};
     const fabNorm = String(fab || '').trim();
     if (!fabNorm) return null;
 
     if (!opts.forceRefresh && pnTreeCache.has(fabNorm)) {
-      const cached = pnTreeCache.get(fabNorm);
-      refreshPnTreeInBackground(fabNorm);
-      return cached;
+      return pnTreeCache.get(fabNorm);
     }
 
+    // Nur der beim Sync geladene Baum. Kein Live-Aufbau über den Fileserver oder OneDrive.
     const fast = await fetchPnTreeFromServer(fabNorm, 'cache_only=1');
     if (fast && fast.projekte_neu && fast.projekte_neu.tree && fast.projekte_neu.tree.length) {
-      if (!opts.skipBackgroundRefresh) refreshPnTreeInBackground(fabNorm);
-      return fast;
+      pnTreeCache.set(fabNorm, fast);
     }
-
-    return fetchPnTreeFromServer(fabNorm);
+    return fast;
   }
 
   function prefetchPnTree(fab) {

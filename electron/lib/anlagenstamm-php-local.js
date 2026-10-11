@@ -10,6 +10,7 @@ const {
   normalizeFabDigits,
   repairMergedFnLeistungLocal,
   getAnlagenstammDataGeneration,
+  ensureAnlagenstammTreeCacheSchema,
 } = require('./anlagenstamm-local');
 const {
   paginateAnlagenstammList,
@@ -123,6 +124,113 @@ function readTedFromJobIndex(db, fab) {
   return [];
 }
 
+function fabLookupKeysLocal(fab) {
+  const s = String(fab || '').trim();
+  const keys = [];
+  if (s) keys.push(s);
+  const digits = s.replace(/\D/g, '');
+  if (digits && keys.indexOf(digits) === -1) keys.push(digits);
+  if (digits) {
+    const n = String(parseInt(digits, 10));
+    if (n && n !== 'NaN' && keys.indexOf(n) === -1) keys.push(n);
+  }
+  return keys;
+}
+
+/** Nur Ordnernamen, kein tree_json — sonst friert die Liste ein. */
+function readRootFolderNameMap(db, fabs) {
+  const out = new Map();
+  if (!db || !fabs || !fabs.length) return out;
+  try {
+    ensureAnlagenstammTreeCacheSchema(db);
+  } catch (_) {
+    return out;
+  }
+  const keys = [];
+  const seen = new Set();
+  for (const fab of fabs) {
+    for (const k of fabLookupKeysLocal(fab)) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      keys.push(k);
+    }
+  }
+  if (!keys.length) return out;
+  let rows = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT fab, root_folder_name FROM anlagenstamm_tree_cache WHERE fab IN (${keys.map(() => '?').join(',')})`,
+      )
+      .all(...keys);
+  } catch (_) {
+    return out;
+  }
+  const byStored = new Map();
+  for (const row of rows || []) {
+    const name = String((row && row.root_folder_name) || '').trim();
+    if (!name) continue;
+    byStored.set(String(row.fab || '').trim(), name);
+  }
+  for (const fab of fabs) {
+    for (const k of fabLookupKeysLocal(fab)) {
+      if (byStored.has(k)) {
+        out.set(fab, byStored.get(k));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function readJobTedMap(db, fabs) {
+  const out = new Map();
+  if (!db || !fabs || !fabs.length) return out;
+  const keys = [];
+  const seen = new Set();
+  for (const fab of fabs) {
+    for (const k of fabLookupKeysLocal(fab)) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      keys.push(k);
+    }
+  }
+  if (!keys.length) return out;
+  let rows = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT fab, rel_path, file_name FROM job_ted_index
+         WHERE TRIM(fab) IN (${keys.map(() => '?').join(',')})
+         ORDER BY file_name ASC`,
+      )
+      .all(...keys);
+  } catch (_) {
+    return out;
+  }
+  const byStored = new Map();
+  for (const row of rows || []) {
+    const fab = String((row && row.fab) || '').trim();
+    const entry = {
+      file_name: String((row && row.file_name) || '').trim(),
+      rel_path: String((row && row.rel_path) || '').trim(),
+    };
+    if (!fab || (!entry.file_name && !entry.rel_path)) continue;
+    const list = byStored.get(fab) || [];
+    list.push(entry);
+    byStored.set(fab, list);
+  }
+  for (const fab of fabs) {
+    for (const k of fabLookupKeysLocal(fab)) {
+      if (byStored.has(k) && byStored.get(k).length) {
+        out.set(fab, byStored.get(k));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 function lookupAnlagenExtrasForFab(db, fab) {
   const f = String(fab || '').trim();
   if (!f) return { pn: '', ted: [] };
@@ -166,6 +274,9 @@ function getAnlagenstammExtrasResponse(db, body = {}) {
   for (const row of rows) {
     byFab.set(String(row.fabrikationsnummer || '').trim(), row);
   }
+  const missingPn = [];
+  const missingTed = [];
+  const prelim = new Map();
   for (const fab of fabs) {
     const row = byFab.get(fab);
     const extra = row
@@ -174,6 +285,16 @@ function getAnlagenstammExtrasResponse(db, body = {}) {
         ted: parseTedMechanik(row.ted_mechanik),
       }
       : lookupAnlagenExtrasForFab(db, fab);
+    prelim.set(fab, extra);
+    if (!extra.pn) missingPn.push(fab);
+    if (!extra.ted.length) missingTed.push(fab);
+  }
+  const pnFromTree = missingPn.length ? readRootFolderNameMap(db, missingPn) : new Map();
+  const tedFromJobs = missingTed.length ? readJobTedMap(db, missingTed) : new Map();
+  for (const fab of fabs) {
+    const extra = prelim.get(fab) || { pn: '', ted: [] };
+    if (!extra.pn && pnFromTree.has(fab)) extra.pn = pnFromTree.get(fab);
+    if (!extra.ted.length && tedFromJobs.has(fab)) extra.ted = tedFromJobs.get(fab);
     pn_by_fab[fab] = extra.pn;
     ted_by_fab[fab] = extra.ted;
     if (extra.pn || extra.ted.length) source = 'local_cache';
