@@ -108,9 +108,8 @@ async function csvToPdfBufferDwc7(csvText, options) {
   const COL_GAP = 8;
   const totalGap = (numCols - 1) * COL_GAP;
   const contentWidth = pageWidth - totalGap;
-  const COL_PROPORTIONS_4 = [0.38, 0.12, 0.25, 0.25];
+  const COL_PROPORTIONS_4 = [0.40, 0.18, 0.14, 0.28];
   const colWidths = COL_PROPORTIONS_4.map((p) => contentWidth * p);
-  const colMaxChars = [120, 40, 48, 48];
 
   let logoImage = null;
   const baseDir = path.join(__dirname, '..');
@@ -241,12 +240,16 @@ async function csvToPdfBufferDwc7(csvText, options) {
     let xOffset = tableMargin;
     const cellPadding = 2;
     for (let col = 0; col < numCols; col++) {
-      const maxChars = (colMaxChars[col] != null) ? colMaxChars[col] : 50;
-      const cellText = sanitizeForWinAnsi((row[col] != null ? String(row[col]) : '').slice(0, maxChars));
-      const textW = font.widthOfTextAtSize(cellText, fontSize);
       const cellW = colWidths[col];
-      const x = col === 1 ? xOffset + cellW - cellPadding - textW : xOffset + cellPadding;
-      page.drawText(cellText, { x, y: y - fontSize, size: fontSize, font });
+      const maxW = Math.max(8, cellW - cellPadding * 2);
+      let cellText = sanitizeForWinAnsi(row[col] != null ? String(row[col]) : '');
+      if (font.widthOfTextAtSize(cellText, fontSize) > maxW) {
+        while (cellText.length > 1 && font.widthOfTextAtSize(cellText + '\u2026', fontSize) > maxW) {
+          cellText = cellText.slice(0, -1);
+        }
+        cellText += '...';
+      }
+      if (cellText) page.drawText(cellText, { x: xOffset + cellPadding, y: y - fontSize, size: fontSize, font });
       xOffset += cellW + (col < numCols - 1 ? COL_GAP : 0);
     }
     y -= lineHeight;
@@ -257,6 +260,6 @@ async function csvToPdfBufferDwc7(csvText, options) {
 }
 
 if (typeof process !== 'undefined' && process.versions && process.versions.electron) {
-  console.log('[Parameter-PDF] Modul geladen, Spalten: Name 38%, Value 12%, Unit 25%, Comment 25%');
+  console.log('[Parameter-PDF] Modul geladen, Spalten: Name 40%, Value 18%, Unit 14%, Comment 28%');
 }
 module.exports = { csvToPdfBuffer };

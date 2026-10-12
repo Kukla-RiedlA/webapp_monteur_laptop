@@ -734,6 +734,7 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
 
   /**
    * Parameter-PDF wie Protokolle/Parameterlisten (csv-to-pdf: PA-Ausdruck, PAL, DWC-7).
+   * Rohtext: lokale Datei, Einzelwerte, Monteur-Download, sonst Dispo-Session.
    */
   app.get('/api/anlagenstamm_parameter_pdf.php', async (req, res) => {
     const fab = normalizeFabDigits(String(req.query.fab || req.query.fabrikationsnummer || ''));
@@ -741,13 +742,36 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     if (!fab || !Number.isFinite(fileId) || fileId <= 0) {
       return res.status(400).json({ ok: false, error: 'file_id und fab erforderlich' });
     }
+    function textFromBuffer(buf) {
+      if (!buf || !buf.length) return '';
+      const head = buf.slice(0, 40).toString('utf8').trim();
+      if (head.startsWith('{') || head.startsWith('<')) return '';
+      return decodeParameterFileBytes(buf);
+    }
     let source = readParameterSourceText(db(), fileId, fab);
     let filename = source && source.filename ? source.filename : 'Parameterliste.csv';
     let text = source && source.text ? String(source.text) : '';
+    const serverFileId =
+      source && source.server_file_id && source.server_file_id > 0 ? source.server_file_id : fileId;
+    if (!text.trim()) {
+      const rel = String((source && (source.source_path || source.storage_relpath)) || '').trim();
+      if (rel && typeof ctx.resolveProjekteNeuLocalFile === 'function') {
+        try {
+          const localPath = ctx.resolveProjekteNeuLocalFile(ctx.getTechnicianId(req), fab, rel, 0);
+          if (localPath && fs.existsSync(localPath)) text = textFromBuffer(fs.readFileSync(localPath));
+        } catch (_) {}
+      }
+      if (!text.trim() && rel && ctx.dbDir) {
+        try {
+          const { readCachedProjekteNeuFile } = require('./projekte-neu-file-cache');
+          const cached = readCachedProjekteNeuFile(ctx.dbDir, fab, rel);
+          if (cached) text = textFromBuffer(fs.readFileSync(cached));
+        } catch (_) {}
+      }
+    }
+    let remoteError = '';
     if (!text.trim()) {
       const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds({}) : {};
-      const serverFileId =
-        source && source.server_file_id && source.server_file_id > 0 ? source.server_file_id : fileId;
       try {
         const { proxyAnlagenstammParameterDownload } = require('./anlagenstamm-dispo-proxy');
         const remote = await proxyAnlagenstammParameterDownload(
@@ -758,7 +782,7 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
           }),
         );
         if (remote && remote.ok && remote.buffer && remote.buffer.length) {
-          text = decodeParameterFileBytes(remote.buffer);
+          text = textFromBuffer(remote.buffer);
           const remoteName = remote.xDownloadFilename || '';
           if (remoteName) {
             try {
@@ -767,18 +791,29 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
               filename = remoteName;
             }
           }
+        } else if (remote && remote.error) {
+          remoteError = String(remote.error);
         }
       } catch (e) {
-        if (!text.trim()) {
-          return res.status(502).json({
-            ok: false,
-            error: e && e.message ? e.message : 'Parameterdatei nicht ladbar.',
-          });
-        }
+        remoteError = e && e.message ? e.message : 'Parameterdatei nicht ladbar.';
       }
     }
+    if (!text.trim() && typeof ctx.tryProxyFetchDispoBinary === 'function') {
+      try {
+        const suffix =
+          '/api/anlagenstamm_parameter_download.php?fab=' +
+          encodeURIComponent(fab) +
+          '&file_id=' +
+          encodeURIComponent(String(serverFileId));
+        const got = await ctx.tryProxyFetchDispoBinary(suffix);
+        if (got && got.buf) text = textFromBuffer(got.buf);
+      } catch (_) {}
+    }
     if (!text.trim()) {
-      return res.status(404).json({ ok: false, error: 'Kein Rohtext für PDF' });
+      return res.status(404).json({
+        ok: false,
+        error: remoteError || 'Kein Rohtext für PDF',
+      });
     }
     try {
       const { csvToPdfBuffer } = require('./csv-to-pdf');

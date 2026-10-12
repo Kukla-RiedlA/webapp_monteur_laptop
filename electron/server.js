@@ -309,6 +309,7 @@ const {
   stripEmptyStammFieldsForDispoPush,
   uploadCachePath,
   upsertParameterFile,
+  decodeParameterFileBytes,
   cacheParameterFilesFromDispo,
   listParameterFilesByFab,
   deleteParameterFileByFabSha,
@@ -2039,6 +2040,7 @@ function createApp(db) {
       content_fn: parsed.content_fab || null,
       used_fn: usedFab,
       server_file_id: opts && opts.serverFileId != null ? Number(opts.serverFileId) : null,
+      raw_content: decodeParameterFileBytes(buf),
       entries: parsed.entries || [],
     });
     if (insert && insert.ok) save();
@@ -9144,7 +9146,7 @@ function createApp(db) {
     }
   });
 
-  app.get(['/api/anlagenstamm_parameter_download.php', '/api/anlagenstamm_parameter_pdf.php'], async (req, res) => {
+  app.get(['/api/anlagenstamm_parameter_download.php'], async (req, res) => {
     const fabNorm = normalizeParameterFab(req.query.fab || req.query.fabrikationsnummer || '');
     const fileId = parseInt(req.query.file_id, 10);
     const wantPdf = String(req.path || '').indexOf('_pdf') >= 0;

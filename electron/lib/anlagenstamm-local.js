@@ -2786,8 +2786,8 @@ function upsertParameterFile(db, payload) {
       original_filename = excluded.original_filename,
       mime = excluded.mime,
       size = excluded.size,
-      storage_relpath = excluded.storage_relpath,
-      source_path = excluded.source_path,
+      storage_relpath = COALESCE(excluded.storage_relpath, storage_relpath),
+      source_path = COALESCE(excluded.source_path, source_path),
       filename_fn = excluded.filename_fn,
       content_fn = excluded.content_fn,
       used_fn = excluded.used_fn,
@@ -2825,6 +2825,9 @@ function upsertParameterFile(db, payload) {
   const fileId = row && row.id ? Number(row.id) : 0;
   if (!fileId) return { ok: false, error: 'file_id konnte nicht ermittelt werden' };
   const entries = Array.isArray(payload && payload.entries) ? payload.entries : [];
+  if (!entries.length) {
+    return { ok: true, file_id: fileId, fab, source };
+  }
   db.prepare('DELETE FROM anlagenstamm_parameter_entries WHERE file_id = ?').run(fileId);
   const insEntrySql =
     'INSERT INTO anlagenstamm_parameter_entries (file_id, line_no, param_key, param_value, unit, raw_line) VALUES (?, ?, ?, ?, ?, ?)';
@@ -2852,6 +2855,13 @@ function cacheParameterFilesFromDispo(db, fab, files) {
     const sha = String(f.sha256 || '').trim();
     if (!sha) continue;
     const decorated = decorateParameterListItem(f);
+    const incomingPath = String(f.source_path || f.storage_rel_path || f.storage_relpath || '').trim();
+    let localFile = null;
+    if (incomingPath) {
+      try {
+        if (fs.existsSync(incomingPath) && fs.statSync(incomingPath).isFile()) localFile = incomingPath;
+      } catch (_) {}
+    }
     upsertParameterFile(db, {
       fab: fabNorm,
       source: f.source,
@@ -2863,10 +2873,9 @@ function cacheParameterFilesFromDispo(db, fab, files) {
       mime: f.mime,
       size: f.size,
       sha256: sha,
-      storage_relpath: f.source_path || f.storage_rel_path || null,
-      source_path: f.source_path || null,
+      storage_relpath: localFile,
+      source_path: localFile || incomingPath || null,
       server_file_id: f.id != null ? Number(f.id) : null,
-      entries: [],
     });
   }
 }
@@ -2967,7 +2976,7 @@ function readParameterSourceText(db, fileId, fab) {
   if (!db || !Number.isFinite(fid) || fid <= 0 || !fabNorm) return null;
   const row = db
     .prepare(
-      `SELECT id, original_filename, raw_content, storage_relpath, source_path, server_file_id
+      `SELECT id, original_filename, raw_content, storage_relpath, source_path, server_file_id, source
        FROM anlagenstamm_parameter_files
        WHERE fab = ? AND (id = ? OR server_file_id = ?)
        ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id DESC
@@ -2977,19 +2986,47 @@ function readParameterSourceText(db, fileId, fab) {
   if (!row) return null;
   let text = row.raw_content != null ? String(row.raw_content) : '';
   if (!text.trim()) {
-    const p = String(row.storage_relpath || row.source_path || '').trim();
-    if (p && fs.existsSync(p)) {
+    const candidates = [row.storage_relpath, row.source_path];
+    for (const candidate of candidates) {
+      const p = String(candidate || '').trim();
+      if (!p) continue;
       try {
-        text = decodeParameterFileBytes(fs.readFileSync(p));
-      } catch (_) {
-        text = '';
-      }
+        if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+          text = decodeParameterFileBytes(fs.readFileSync(p));
+          if (text.trim()) break;
+        }
+      } catch (_) {}
     }
+  }
+  if (!text.trim()) {
+    const lines = db
+      .prepare(
+        `SELECT raw_line, param_key, param_value, unit
+         FROM anlagenstamm_parameter_entries
+         WHERE file_id = ?
+         ORDER BY line_no ASC, id ASC`,
+      )
+      .all(row.id);
+    const rebuilt = [];
+    for (const ent of lines) {
+      const rawLine = ent && ent.raw_line != null ? String(ent.raw_line) : '';
+      if (rawLine.trim()) {
+        rebuilt.push(rawLine);
+        continue;
+      }
+      const key = ent && ent.param_key != null ? String(ent.param_key).trim() : '';
+      if (!key) continue;
+      rebuilt.push([key, ent.param_value || '', ent.unit || '', ''].join(';'));
+    }
+    if (rebuilt.length) text = rebuilt.join('\n');
   }
   return {
     local_id: row.id,
     server_file_id: row.server_file_id != null ? Number(row.server_file_id) : null,
     filename: String(row.original_filename || 'Parameterliste.csv'),
+    source_path: row.source_path != null ? String(row.source_path) : '',
+    storage_relpath: row.storage_relpath != null ? String(row.storage_relpath) : '',
+    source: row.source != null ? String(row.source) : '',
     text,
   };
 }
