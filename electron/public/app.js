@@ -4026,7 +4026,7 @@
           jobId: options.serverJobId || jobId,
           serverJobId: options.serverJobId || 0,
           calendarTechnicianId: options.calendarTechnicianId || 0,
-          viewOnly: options.fromDispo === true || options.viewOnly === true,
+          viewOnly: options.viewOnly === true,
           serverUsername: getDispoUsername(),
           serverPassword: getDispoPassword()
         }, dispoBasePayloadExtra()))

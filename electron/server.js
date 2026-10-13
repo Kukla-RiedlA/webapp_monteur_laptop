@@ -7782,6 +7782,89 @@ function createApp(db) {
       if (!technicianId || !Number.isFinite(lookupId) || lookupId <= 0) {
         return res.status(400).json({ ok: false, error: 'jobId und technician_id erforderlich.' });
       }
+      // Fremde/unzugeteilte Kalenderaufträge: live von der Dispo lesen, nie in SQLite spiegeln.
+      // Lokale jobs.id und Dispo-server_id können dieselbe Zahl haben (sonst falscher Auftrag).
+      if (body.viewOnly === true) {
+        const resolved = await resolveDispoWorkingBase({
+          baseUrl: body.baseUrl,
+          externalUrl: body.externalUrl,
+          internalUrl: body.internalUrl,
+          technicianId,
+          serverUsername: body.serverUsername,
+          serverPassword: body.serverPassword,
+        });
+        const base = (resolved.base || '').toString().trim().replace(/\/$/, '');
+        if (!base) {
+          return res.json({
+            ok: false,
+            code: 'dispo_unreachable',
+            error: resolved.error || 'Dispo nicht erreichbar. Projektdaten fremder Aufträge sind nur online lesbar.',
+          });
+        }
+        const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
+        const headers = Object.assign(
+          { Accept: 'application/json' },
+          dispoMonteurFetchHeaders(technicianId, auth),
+        );
+        const idEnc = encodeURIComponent(lookupId);
+        const tidEnc = encodeURIComponent(technicianId);
+        const urls = [
+          `${base}/api/mobile/job.php?id=${idEnc}`,
+          `${base}/dispo_api/api/job.php?id=${idEnc}&technician_id=${tidEnc}`,
+        ];
+        let fetched = null;
+        let lastErr = 'Auftrag nicht gefunden.';
+        for (const url of urls) {
+          try {
+            const r = await fetchWithTimeout(url, { headers }, 12000);
+            const raw = await r.text();
+            let data = {};
+            try {
+              data = raw ? JSON.parse(raw) : {};
+            } catch (_) {
+              data = {};
+            }
+            if (r.ok && data && data.job && typeof data.job === 'object') {
+              fetched = data.job;
+              break;
+            }
+            if (data && data.error) lastErr = String(data.error);
+          } catch (e) {
+            if (isLikelyOfflineSyncError(e)) {
+              return res.json({
+                ok: false,
+                code: 'dispo_unreachable',
+                error: 'Dispo nicht erreichbar. Projektdaten fremder Aufträge sind nur online lesbar.',
+              });
+            }
+            lastErr = e && e.message ? e.message : lastErr;
+          }
+        }
+        if (!fetched) {
+          return res.json({ ok: false, error: lastErr });
+        }
+        let job = fetched;
+        if (job.fabrikationsnummern == null && job.Fabrikationsnummern != null) {
+          job.fabrikationsnummern = job.Fabrikationsnummern;
+        }
+        const dispoId = Number(job.id);
+        if (Number.isFinite(dispoId) && dispoId > 0) {
+          job.server_id = dispoId;
+        }
+        delete job.local_job_id;
+        const calendarTechId = parseInt(body.calendarTechnicianId, 10) || 0;
+        job.assignment_writable = false;
+        job.assigned_to_me = false;
+        if (!job.assignment_read_only_reason) {
+          job.assignment_read_only_reason = calendarTechId === 0
+            ? 'Nur Ansicht – Auftrag ist nicht zugeteilt.'
+            : 'Nur Ansicht – Auftrag ist einem anderen Techniker zugeteilt.';
+        }
+        try {
+          job = await enrichJobFabWithAnlagenstamm(job, base, auth, { localOnly: true });
+        } catch (_) { /* lokaler Stamm optional */ }
+        return res.json({ ok: true, job, source: 'dispo_readonly' });
+      }
       const row = db.prepare(`
         SELECT j.*, c.name AS customer_name, c.street AS customer_street, c.house_number AS customer_house_number,
           c.zip AS customer_zip, c.city AS customer_city, c.phone AS customer_phone,
@@ -7815,10 +7898,6 @@ function createApp(db) {
         if (contacts && contacts.length) job.job_contacts = contacts;
       } catch (_) { /* Kontakte optional */ }
       Object.assign(job, jobAssignmentViewMeta(db, row.id, technicianId));
-      if (body.viewOnly === true) {
-        job.assignment_writable = false;
-        job.assigned_to_me = false;
-      }
       try {
         job = await enrichJobFabWithAnlagenstamm(job, '', null, { localOnly: true });
       } catch (_) { /* lokaler Stamm optional */ }
