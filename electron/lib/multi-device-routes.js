@@ -54,7 +54,8 @@ function ensureMultiDeviceTables(db) {
 function authHeaderFromCreds(username, password) {
   const u = String(username || '').trim();
   const p = password != null ? String(password) : '';
-  if (!u) return {};
+  // Leeres Passwort nicht mitschicken: der Server zählt „Name ohne Passwort“ als 401.
+  if (!u || !p) return {};
   const token = Buffer.from(u + ':' + p, 'utf8').toString('base64');
   return { Authorization: 'Basic ' + token };
 }
@@ -77,7 +78,27 @@ function registerMultiDeviceRoutes(deps) {
     getBgJobs,
     enqueueDienstreisePushForJob,
     getAppVersion,
+    resolveDispoCreds,
   } = deps;
+
+  function authForDispo(opts) {
+    const o = opts && typeof opts === 'object' ? opts : {};
+    let user = o.username != null ? o.username : o.serverUsername || o.dispoUsername;
+    let pass = o.password != null ? o.password : o.serverPassword != null ? o.serverPassword : o.dispoPassword;
+    if (typeof resolveDispoCreds === 'function') {
+      const c =
+        resolveDispoCreds({
+          serverUsername: user,
+          dispoUsername: user,
+          serverPassword: pass,
+          dispoPassword: pass,
+          baseUrl: o.dispoBaseUrl || o.baseUrl || o.base_url,
+        }) || {};
+      if (c.serverUsername) user = c.serverUsername;
+      if (c.serverPassword) pass = c.serverPassword;
+    }
+    return authHeaderFromCreds(user, pass);
+  }
 
   const resolveBgJobs = () => (typeof getBgJobs === 'function' ? getBgJobs() : bgJobs);
 
@@ -169,8 +190,7 @@ function registerMultiDeviceRoutes(deps) {
       reiseDir: opts.reiseDir || '',
       filePath: opts.filePath || '',
       basename,
-      username: opts.username,
-      password: opts.password,
+      username: opts.username || '',
     };
     try {
       db.prepare(
@@ -213,7 +233,8 @@ function registerMultiDeviceRoutes(deps) {
     const technicianId = parseInt(opts.technicianId, 10);
     if (!base || !technicianId) return { ok: false, error: 'missing_params' };
     const id = deviceId();
-    const auth = authHeaderFromCreds(opts.username, opts.password);
+    const auth = authForDispo(opts);
+    if (!auth.Authorization) return { ok: false, error: 'Dispo-Zugangsdaten fehlen.', peer_count: 0 };
     try {
       const r = await fetchWithTimeout(base + '/dispo_api/api/monteur_device_register.php', {
         method: 'POST',
@@ -245,7 +266,8 @@ function registerMultiDeviceRoutes(deps) {
     const base = String(opts.dispoBaseUrl || '').replace(/\/$/, '');
     const technicianId = parseInt(opts.technicianId, 10);
     if (!base || !technicianId) return { ok: false };
-    const auth = authHeaderFromCreds(opts.username, opts.password);
+    const auth = authForDispo(opts);
+    if (!auth.Authorization) return { ok: false, peer_count: 0, peers_on_job: [] };
     try {
       const r = await fetchWithTimeout(base + '/dispo_api/api/monteur_device_heartbeat.php', {
         method: 'POST',
@@ -282,7 +304,10 @@ function registerMultiDeviceRoutes(deps) {
     if (isEmptyMonteurDraftPayload(local.payload) && (!local.revision || local.revision <= 0)) {
       return { ok: true, skipped: true, empty: true };
     }
-    const auth = authHeaderFromCreds(opts.username, opts.password);
+    const auth = authForDispo(opts);
+    if (!auth.Authorization) {
+      return { ok: false, skipped: true, error: 'Dispo-Zugangsdaten fehlen.' };
+    }
     const postHeaders = dispoMonteurFetchHeaders(technicianId, auth, {
       'Content-Type': 'application/json',
       'X-Device-Id': deviceId(),
@@ -495,7 +520,10 @@ function registerMultiDeviceRoutes(deps) {
     if (!base || !endpoint || !technicianId || !serverJobId || !basename) {
       return { ok: false };
     }
-    const auth = authHeaderFromCreds(opts.username, opts.password);
+    const auth = authForDispo(opts);
+    if (!auth.Authorization) {
+      return { ok: false, skipped: true, error: 'Dispo-Zugangsdaten fehlen.' };
+    }
     try {
       const url =
         base +
@@ -755,7 +783,14 @@ function registerMultiDeviceRoutes(deps) {
       if (!technicianId || !base) {
         return res.status(400).json({ ok: false, error: 'technician_id und base_url erforderlich.' });
       }
-      const auth = authHeaderFromCreds(req.query.dispoUsername || req.query.serverUsername, req.query.dispoPassword ?? req.query.serverPassword);
+      const auth = authForDispo({
+        username: req.query.dispoUsername || req.query.serverUsername,
+        password: req.query.dispoPassword ?? req.query.serverPassword,
+        dispoBaseUrl: base,
+      });
+      if (!auth.Authorization) {
+        return res.json({ ok: false, error: 'Dispo-Zugangsdaten fehlen.' });
+      }
       const r = await fetchWithTimeout(
         base + '/dispo_api/api/monteur_device_list.php?technician_id=' + encodeURIComponent(technicianId),
         { headers: dispoMonteurFetchHeaders(technicianId, auth) },
@@ -786,7 +821,14 @@ function registerMultiDeviceRoutes(deps) {
       if (target === deviceId()) {
         return res.status(400).json({ ok: false, error: 'Das aktuelle Gerät kann nicht widerrufen werden.' });
       }
-      const auth = authHeaderFromCreds(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
+      const auth = authForDispo({
+        username: body.dispoUsername || body.serverUsername,
+        password: body.dispoPassword ?? body.serverPassword,
+        dispoBaseUrl: base,
+      });
+      if (!auth.Authorization) {
+        return res.json({ ok: false, error: 'Dispo-Zugangsdaten fehlen.' });
+      }
       const r = await fetchWithTimeout(base + '/dispo_api/api/monteur_device_revoke.php', {
         method: 'POST',
         headers: dispoMonteurFetchHeaders(technicianId, auth, { 'Content-Type': 'application/json' }),
@@ -828,7 +870,14 @@ function registerMultiDeviceRoutes(deps) {
       if (!technicianId || !base) {
         return res.status(400).json({ ok: false, error: 'technician_id und base_url erforderlich.' });
       }
-      const auth = authHeaderFromCreds(body.dispoUsername || body.serverUsername, body.dispoPassword ?? body.serverPassword);
+      const auth = authForDispo({
+        username: body.dispoUsername || body.serverUsername,
+        password: body.dispoPassword ?? body.serverPassword,
+        dispoBaseUrl: base,
+      });
+      if (!auth.Authorization) {
+        return res.json({ ok: false, error: 'Dispo-Zugangsdaten fehlen.' });
+      }
       const jobs = db
         .prepare(
           `SELECT j.id AS local_job_id, j.server_id, j.status, c.name AS customer_name

@@ -334,7 +334,9 @@ const {
   getAnlagenstammSyncResumeState,
   prepareAnlagenstammSyncRun,
   finalizeAnlagenstammSyncRun,
+  setDispoDeviceIdResolver,
 } = require('./lib/anlagenstamm-local');
+setDispoDeviceIdResolver(() => getOrCreateDeviceId(DB_DIR));
 const {
   anlagenstammTypeHasBehaelterNenninhalt,
   anlagenstammVmaxValueFromRow,
@@ -1799,6 +1801,7 @@ function createApp(db) {
         return '';
       }
     },
+    resolveDispoCreds: (body) => resolveDispoServerCreds(body || {}),
   });
   protocolDraftPushImpl = (opts) => multiDeviceApi.pushJsonDraft(opts);
 
@@ -10235,13 +10238,17 @@ function createApp(db) {
   async function syncProtokollTemplates(dispoBaseUrl) {
     const base = (dispoBaseUrl || '').trim().replace(/\/$/, '');
     if (!base) return;
+    const creds = resolveDispoServerCreds({ baseUrl: base });
+    const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+    if (!auth) return;
+    const headers = dispoMonteurFetchHeaders(0, auth);
     const cacheDir = path.join(DB_DIR, 'protokoll_templates');
     if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
     for (const lang of ['de', 'en']) {
       const filename = lang === 'en' ? 'Montagebericht_EN.docx' : 'Montagebericht_DE.docx';
       const url = base + '/dispo_api/api/protokoll_template_download.php?language=' + encodeURIComponent(lang);
       try {
-        const r = await fetch(url);
+        const r = await fetch(url, { headers });
         if (!r.ok) continue;
         const buf = Buffer.from(await r.arrayBuffer());
         if (buf.length > 0) {
@@ -10253,7 +10260,7 @@ function createApp(db) {
     }
     try {
       const spUrl = base + '/dispo_api/api/protokoll_template_download.php?id=serviceprotokoll';
-      const spRes = await fetch(spUrl);
+      const spRes = await fetch(spUrl, { headers });
       if (spRes.ok) {
         const spBuf = Buffer.from(await spRes.arrayBuffer());
         if (spBuf.length > 0) {
@@ -18108,7 +18115,7 @@ function createApp(db) {
         let calendarCacheOk = false;
         let calendarCacheError = '';
         try {
-          const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, auth);
+          const calData = await fetchCalendarFromDispo(base, cacheStart, cacheEnd, fetchHeaders);
           await dbLock.runWithDbLock(async () => {
             upsertCalendarCache(db, calData, { replaceAll: true });
             reconcileLocalJobsFromCalendarCache(db, technicianId, calData);
@@ -19906,7 +19913,10 @@ function createApp(db) {
       .toString()
       .trim();
     const technicianId = parseInt(body.technicianId ?? body.technician_id, 10);
-    const { serverUsername, serverPassword, date_from, date_to } = body;
+    const queuedCreds = resolveDispoServerCreds(body);
+    const serverUsername = queuedCreds.serverUsername || body.serverUsername;
+    const serverPassword = queuedCreds.serverPassword || body.serverPassword;
+    const { date_from, date_to } = body;
     const forceAnlagenstammFull =
       body.forceAnlagenstammFull === true ||
       body.force_anlagenstamm_full === true ||
@@ -19955,7 +19965,9 @@ function createApp(db) {
       .toString()
       .trim();
     const technicianId = parseInt(body.technicianId ?? body.technician_id, 10);
-    const { serverUsername, serverPassword } = body;
+    const queuedCreds = resolveDispoServerCreds(body);
+    const serverUsername = queuedCreds.serverUsername || body.serverUsername;
+    const serverPassword = queuedCreds.serverPassword || body.serverPassword;
     if (!baseUrl || !Number.isFinite(technicianId) || technicianId <= 0) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
@@ -20262,7 +20274,8 @@ function defaultFutureRange() {
 async function fetchCalendarFromDispo(baseUrl, start, end, authHeader) {
   const base = baseUrl.replace(/\/$/, '');
   const url = `${base}/api/calendar.php?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-  const opts = authHeader ? { headers: authHeader } : {};
+  const headers = authHeader ? dispoMonteurFetchHeaders(null, authHeader) : null;
+  const opts = headers ? { headers } : {};
   const r = await fetch(url, opts);
   const text = await r.text();
   let data = null;
@@ -23402,9 +23415,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
           basename: payloadRaw.basename,
           username: payloadRaw.username || payloadRaw.serverUsername || live.serverUsername,
           password:
-            payloadRaw.password != null
+            payloadRaw.password != null && String(payloadRaw.password) !== ''
               ? payloadRaw.password
-              : payloadRaw.serverPassword != null
+              : payloadRaw.serverPassword != null && String(payloadRaw.serverPassword) !== ''
                 ? payloadRaw.serverPassword
                 : live.serverPassword,
         });

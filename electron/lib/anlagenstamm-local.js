@@ -26,6 +26,24 @@ const {
 } = require('./anlagenstamm-filename-datetime');
 const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
 
+let dispoDeviceIdResolver = null;
+
+function setDispoDeviceIdResolver(fn) {
+  dispoDeviceIdResolver = typeof fn === 'function' ? fn : null;
+}
+
+function resolveLaptopDeviceId(explicit) {
+  const given = explicit != null ? String(explicit).trim() : '';
+  if (given) return given;
+  if (dispoDeviceIdResolver) {
+    try {
+      const fromApp = String(dispoDeviceIdResolver() || '').trim();
+      if (fromApp) return fromApp;
+    } catch (_) {}
+  }
+  return '';
+}
+
 const DISPO_EXPORT_CHUNK_TIMEOUT_MS = 90 * 1000;
 
 let anlagenstammDataGeneration = 0;
@@ -83,7 +101,11 @@ function authHeaderFromCredentials(username, password) {
 }
 
 function dispoMonteurFetchHeaders(technicianId, authHeader, deviceId) {
-  return buildDispoMonteurHeaders({ technicianId, authHeader, deviceId });
+  return buildDispoMonteurHeaders({
+    technicianId,
+    authHeader,
+    deviceId: resolveLaptopDeviceId(deviceId),
+  });
 }
 
 const anlagenstammSchemaReady = new WeakSet();
@@ -3178,6 +3200,7 @@ module.exports = {
   upsertAnlagenstammTreeCacheRow,
   authHeaderFromCredentials,
   dispoMonteurFetchHeaders,
+  setDispoDeviceIdResolver,
   fabDirForCache,
   uploadCachePath,
   upsertParameterFile,

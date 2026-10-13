@@ -4,6 +4,10 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.059
+- **Außenzugriff:** Kalender- und Anlagenstamm-Sync senden die Laptop-Geräte-ID. Ein bereits freigegebenes KUKpit bekommt von außen kein 403 mehr.
+- **Sync:** Protokoll-Entwürfe und Vorlagen gehen mit dem gespeicherten Dispo-Passwort raus. Ein leeres Basic-Auth wird nicht mehr gesendet.
+
 ## V 2.007.049
 - **Arbeitsnachweis:** Nach der Kundenunterschrift wird der Nachweis gesperrt und als E-Mail mit PDF versendet. Dispo wird dafür nicht mehr abgewartet.
 - **Tagesauslösen:** Speichern antwortet sofort. OneDrive-Dateizeiten im Hintergrund-Sync blockieren die Eingabe nicht mehr.
