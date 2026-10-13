@@ -1,59 +1,13 @@
 ---
-description: Einheitliche Formatierung der Kalender-Balken (WebApp + Dispo)
-globs: "**/app.js","**/index.html","**/calendar*.php","**/modules/calendar.php","**/dispatch.css"
+description: Verweis — Kalender-Balken kanonisch im Plattform-Parent
+globs: "**/app.js","**/index.html"
 alwaysApply: false
 ---
 
-# Kalender-Balken – verbindliche Formatierung
+# Kalender-Balken
 
-Diese Regel ist die **einzige Quelle** für die Darstellung von Auftrags- und Abwesenheitsbalken in allen Kalenderansichten (WebApp Monat, Dispo Woche/Monat). Änderungen an der Balken-Darstellung müssen mit dieser Regel übereinstimmen und die Regel bei Abweichungen anpassen.
+Kanonisch: `Kukla_Monteur_Plattform/.cursor/rules/kalender-balken.mdc`.
 
-## Geltungsbereich
-
-- **WebApp:** `electron/public/app.js` (Kalender-Logik), `electron/public/index.html` (Kalender-CSS)
-- **Dispo:** `dispo/modules/calendar.php`, `dispo/calendar_month.php`, `dispo/calendar_month_lanes.php` (falls vorhanden), `dispo/assets/js/calendar_bar_labels.js`, `dispo/assets/css/dispatch.css`
-
-## 1. Inhalt der Balken (Aufträge)
-
-- **Text zentriert:** Der Balken-Text (Label + ggf. Häkchen) ist in allen Kalenderansichten **zentriert** darzustellen (horizontal und vertikal im Balken).
-- **Bei kurzen Balken Text kürzen:** Wenn der Balken wenig Platz hat, wird der Text mit `text-overflow: ellipsis` gekürzt („…“). Keine feste Zeichenzahl allein – die sichtbare Breite des Balkens entscheidet; ggf. zusätzlich max. Zeichen pro Ansicht (z. B. 14 in Zellen, 40 in mehrtägigen Balken).
-- **Balken niemals mehrzeilig:** Jeder Balken ist **immer einzeilig** (`white-space: nowrap`). Kein Zeilenumbruch, keine mehrzeilige Darstellung; bei Platzmangel Kürzung mit Ellipse.
-- **Label-Format:** Firma, Ort, Länderkürzel (z. B. „Firma, Ort, AT“).
-- **Status-Häckchen nur vor dem Text** (Reihenfolge links nach rechts, nur wenn Bedingung erfüllt):
-  1. **Blau** (`cal-check-erledigt`): Auftrag **erledigt** oder **abgerechnet** (`status` ∈ `{erledigt, abgerechnet}`).
-  2. **Gelb/Gold** (`cal-check-montage`): **Fakturierung Montage** gesetzt (`montage_verrechnet === 1`).
-  3. **Grün** (`cal-check-reise`): **Reisekosten abgerechnet** vollständig (`billing_travel_complete === 1` — alle `job_technicians.reise_abgerechnet`, ohne Zuordnung Fallback `jobs.montage_abgerechnet`, siehe `job_billing_travel_complete()`).
-- Der **Label-Text darf nie fehlen** – mindestens Fallback „Auftrag“, damit nie nur Häkchen ohne Text sichtbar sind.
-- **Technik:** Dispo: `kuklaApplyCalendarBarLabel(band, job, label)` aus `assets/js/calendar_bar_labels.js`; WebApp: gleiche Logik in `jobBarText()`. Label immer HTML-escapen (`<span class="cal-bar-label">`). Kein Häckchen **nach** dem Text.
-
-## 2. Abwesenheitsbalken
-
-- **Abwesenheit schraffiert in Farbe des Technikers:** Immer als Schraffur/Streifen (kein Vollton), Farbe = Techniker-Farbe. Keine Häkchen. Label: Typ (z. B. „Abwesenheit“) + ggf. Techniker-Name.
-
-## 3. Layout
-
-- **Eintägige Einträge:** In der Tageszelle als einzelne Balken, untereinander.
-- **Mehrtägige Einträge:** Ein **durchgehender Balken** über alle betroffenen Tage (Overlay-Layer). **Teilung nur am Sonntag:** Ein Balken wird nur an der Wochengrenze (Ende Sonntag / Anfang Montag) getrennt – nie mitten in der Woche. Pro Kalenderwoche (Mo–So) höchstens ein durchgehender Balken pro Auftrag/Abwesenheit; geht der Eintrag in die nächste Woche, folgt ein weiterer Balken ab Montag.
-- **Keine Überlagerung, immer nach unten ausweichen:** Kein Balken darf einen anderen überdecken. Jeder Balken erhält die **erste (oberste) freie Lane**, in der er mit keinem bereits platzierten Balken überlappt. **Reihenfolge der Zuweisung:** nach Startspalte (startCol), dann nach Span – damit nicht überlappende Balken (z. B. Termin nur am 16. und Termin 17.–20.) die **gleiche oberste Lane** teilen können; nur wo echte Überlappung herrscht, weicht der nächste in die Lane darunter aus. Lanes strikt mit vertikalem Abstand rendern (z. B. Lane 0 = 0px, Lane 1 = 22px, …); Lane 0 hat höchsten z-Index, damit kein unterer Balken einen oberen verdeckt. Abwesenheit über Aufträgen (z-index).
-
-### WebApp: Mehrtägige Balken (Overlay, gleiche Routine für einen und alle Techniker)
-
-- **Kein Subgrid:** In der WebApp mehrtägige Balken **nicht** per CSS-Subgrid ins Grid legen (in Electron/Chromium werden Zeilenhöhen oft nicht übernommen → Balken landen im Kopfbereich außerhalb des Kalenders). Stattdessen: **Overlay** (ein Layer mit `position: absolute` über dem Kalender-Grid) und **Positionierung per getBoundingClientRect()**.
-- **Positionierung erst bei gültigem Layout:** Balken nur zeichnen, wenn das Overlay und die erste Lane-Zelle eine **Breite > 0** haben. Mit `requestAnimationFrame` mehrfach versuchen (z. B. bis zu 15 Frames), bis das Layout steht – damit das Verhalten bei „nur angemeldeter Techniker“ und „Alle Techniker anzeigen“ identisch ist.
-- **Gleiche vertikale Referenz pro Woche:** Damit Lanes bei einem Techniker genauso aussehen wie bei allen: **Top (Y)** für alle Balken einer Woche aus **derselben Referenz** berechnen – **Montag-Zelle (erste Spalte) der Woche** als Basis: `top = Montag-Lane.top + lane * 22` (relativ zum Overlay). **Left** und **Breite** weiterhin aus der jeweiligen Start- und Endzelle des Balkens. So sind Lane 0 und Lane 1 immer exakt 22px versetzt, unabhängig von unterschiedlichen Zellenhöhen.
-
-## 4. CSS (verbindlich)
-
-- **Auftragsbalken:** Hintergrund = Techniker-Farbe (z. B. `#4a90e2`), Schrift schwarz, einheitliche Schriftgröße (z. B. 10px WebApp, 12px Dispo), `border-radius` 3–4px, Padding 2px 4–6px. **Immer einzeilig:** `white-space: nowrap`, `overflow: hidden`, `text-overflow: ellipsis` (bei kurzen Balken Text kürzen mit „…“). **Text zentriert** (z. B. `text-align: center` bzw. Flexbox `justify-content: center`, `align-items: center`). Niemals mehrzeilig.
-- **Status-Häckchen:** `.cal-check { font-weight: bold; margin-right: 1px; }` — `.cal-check-erledigt { color: #2563eb; }`, `.cal-check-montage { color: #b45309; text-shadow: … }` (lesbar auf gelben Balken), `.cal-check-reise { color: #16a34a; }` (gleich in WebApp und Dispo).
-- **Abwesenheit schraffiert in Farbe des Technikers:** `repeating-linear-gradient` (Streifen/Schraffur), CSS-Variable `--stripes` = Techniker-Farbe. Kein Vollton-Hintergrund. Text zentriert wie bei Auftragsbalken. Ebenfalls einzeilig (`white-space: nowrap`), bei kurzen Balken mit Ellipse kürzen. Mehrtägige Abwesenheitsbalken (Overlay): nur `--stripes` setzen, kein `background` (damit die Schraffur aus der Klasse greift).
-
-## 5. Tooltips
-
-- Einheitlich: „Firmenname – Ort CC – Technikername“, optional „| +1“/„-2“ (Zeitverschiebung). Keine Auftragsnummer im Tooltip.
-
-## Änderungen
-
-- Neue Kalender-Ansichten oder -Themen müssen diese Formatierung übernehmen.
-- Wenn die Formatierung geändert werden soll: zuerst diese Regel anpassen, dann Code in WebApp und/oder **dispo** (nicht mehr htdocs).
-- WebApp mehrtägige Balken: Bei Änderungen an der Positionierung (Overlay, Messung, Montag-Referenz) diese Regel und `electron/public/app.js` (positionSpanBarsOnce, tryPositionSpanBars) anpassen.
+- Einzeilig, zentriert, Häkchen nur vor dem Label, Label nie leer.
+- `jobBarText` kürzt mit `,...`. Laptop: Spanne × 20, nicht auf den PWA-Faktor × 10 ändern.
+- CSS-Ellipse bleibt zusätzlich. Mehrtage bleiben Overlay, kein Subgrid.

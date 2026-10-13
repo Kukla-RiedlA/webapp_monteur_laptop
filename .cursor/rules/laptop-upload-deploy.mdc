@@ -11,10 +11,11 @@ Vollständige Anleitung: **`Kukla_Monteur_Plattform/.cursor/rules/laptop-upload-
 ## Schnellablauf
 
 1. **Git-Release** (optional aber üblich): `.\release.ps1 --bump` in diesem Repo → commit + push + Tag; danach Parent-Submodule-Zeiger.
-2. **Build + Upload + Activate** vom Plattform-Root:
+2. **2FA:** Vor dem Upload den Nutzer nach dem aktuellen Dispo-TOTP-Code fragen. Danach **Build + Upload + Activate** vom Plattform-Root:
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish-laptop-release.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish-laptop-release.ps1 -TotpCode "<code vom Nutzer>"
    ```
+   Code nicht speichern. Schlägt TOTP fehl, erneut fragen. Keinen anderen Upload-Weg suchen.
 3. Config: `%USERPROFILE%\.kukla\laptop-publish.json` (Vorlage `scripts\laptop-publish.example.json`).
 
 ## Wichtig

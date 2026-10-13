@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "2.7.57",
+  "version": "2.7.58",
   "description": "KUKpit - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",

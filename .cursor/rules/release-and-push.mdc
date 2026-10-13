@@ -1,5 +1,5 @@
 ---
-description: Release erstellen – Version setzen, Commit, Tag, Push (Monteur-WebApp). Bei Release-Anfragen Ablauf ohne Rückfragen ausführen.
+description: Release Monteur-WebApp — Version, Commit, Tag, Push. Klare Anweisung ausfuehren, ohne zweite Rueckfrage.
 alwaysApply: true
 globs: release.ps1,VERSION_HISTORY.md,config/version.php,electron/version.json
 ---
@@ -10,7 +10,9 @@ globs: release.ps1,VERSION_HISTORY.md,config/version.php,electron/version.json
 
 **Release-Regel Dispo:** `dispo/.cursor/rules/release-and-push.mdc`.  
 **Release-Regel Handy-PWA:** `webapp_handy/.cursor/rules/release-and-push.mdc`.  
-**Workspace-Root:** C:\Kukla_Monteur_Plattform (Kukla_Plattform.code-workspace mit dispo, webapp_monteur_laptop, webapp_handy). Für jedes Repo die Regel im jeweiligen Ordner verwenden.
+**Workspace:** dieser Plattform-Workspace. Server-Befehle nach `Kukla_Monteur_Plattform/.cursor/rules/server-pfade-only.mdc`. Version von der aktuellen `version.php` weiterzählen. Beispielzahlen wie `V 1.100.000` sind kein Ziel.
+
+**Rückfragen:** Eine klare Release-, Commit- oder Push-Anweisung wird ausgeführt. Ob fremder WIP mit rein soll, klärt `Kukla_Monteur_Plattform/.cursor/rules/commit-push-bestaetigung-als-buttons.mdc`.
 
 ---
 
@@ -21,16 +23,16 @@ Kurzablauf **nur WebApp** (wenn ausschließlich dieses Repo betroffen ist):
 1. **Optional:** In `VERSION_HISTORY.md` die Änderungen für die neue Version eintragen (nur im **expliziten Release**). Format: `## V 1.100.000` mit Bullet-Points.
 2. **Release ausführen:** Im Projektroot (webapp_monteur_laptop) PowerShell:
    - Patch hochzählen: `.\release.ps1 --bump`
-   - Oder Version explizit: `.\release.ps1 "V 1.100.001"`
+   - Oder Version explizit, nur wenn der Nutzer den Zielstring nennt: `.\release.ps1 "V <ziel>"`
 3. Das Skript `release.ps1`:
    - Setzt die Version in `config/version.php`, `electron/version.json` und `electron/package.json` (SemVer)
    - Führt `git add -A`, `git commit -m "Release V …"` aus
-   - Setzt annotierten Tag (z. B. `v1.100.001`)
+   - Setzt annotierten Tag auf die gesetzte Version
    - Führt `git push` und `git push origin <tag>` aus
 
 ## Versionsformat
 
-**V &lt;major&gt;.&lt;release&gt;.&lt;patch&gt;** (z. B. `V 1.100.000`) – Major ohne führende Null; Release und Patch je dreistellig. Git-Tag: `v1.100.000`.
+**V &lt;major&gt;.&lt;release&gt;.&lt;patch&gt;** aus der aktuellen `version.php`. Major ohne führende Null; Release und Patch je dreistellig. Git-Tag ohne Leerzeichen nach `v`.
 
 **Pre-commit:** **`npm install`** / **`npm ci`** setzt `core.hooksPath` per `prepare` (siehe `package.json`, `githooks/README.md`) – Patch +1 bei jedem Commit, sobald `HEAD` das neue Format nutzt. Ohne npm: `git config core.hooksPath githooks`. **Notfall:** `KUKLA_SKIP_VERSION_HOOK=1`.
 

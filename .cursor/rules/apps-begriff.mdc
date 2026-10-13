@@ -12,3 +12,5 @@ Wenn von **Apps**, **alle Apps** oder **den Apps** die Rede ist, sind damit stet
 3. **Native Handy-App** – `native_handy_app` (Android Native App)
 
 Bei Anforderungen wie „in allen Apps umsetzen“, „mit den Apps synchronisieren“ oder „für die Apps bereitstellen“ sind alle drei zu berücksichtigen, sofern nicht ausdrücklich nur eine genannt wird.
+
+Dispo-Web und Dispo-Desktop gehoeren nicht dazu. Dafuer gilt `Kukla_Monteur_Plattform/.cursor/rules/dispo-desktop-feature-parity.mdc`. Eine App-Aenderung ersetzt diese Paritaet nicht.
