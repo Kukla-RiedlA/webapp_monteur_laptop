@@ -2388,6 +2388,27 @@ function createApp(db) {
     return 'Dokumenten-Safe nicht verfügbar.';
   }
 
+  app.get('/api/travel-entry-hint', async (req, res) => {
+    const country = String(req.query.country || '').trim().toUpperCase();
+    res.set('Cache-Control', 'private, no-store');
+    if (!/^[A-Z]{2}$/.test(country)) {
+      return res.json({ ok: true, bmeia_url: '', hint: '', status: 'no_country' });
+    }
+    if (!getTechnicianId(req)) {
+      return res.status(400).json({ ok: false, error: 'technician_id' });
+    }
+    try {
+      const auth = await ensureProxyAuthenticated(DB_DIR, null);
+      if (!auth || !auth.ok || !auth.proxy || typeof auth.proxy.getJson !== 'function') {
+        return res.json({ ok: true, bmeia_url: '', hint: 'Prüfung nur online', status: 'offline' });
+      }
+      const data = await auth.proxy.getJson('/api/travel_entry_hint.php?country=' + encodeURIComponent(country));
+      return res.json(data && typeof data === 'object' ? data : { ok: true, bmeia_url: '', hint: 'Prüfung nur online', status: 'offline' });
+    } catch (_) {
+      return res.json({ ok: true, bmeia_url: '', hint: 'Prüfung nur online', status: 'offline' });
+    }
+  });
+
   app.get('/api/doc-safe', (req, res) => {
     try {
       docSafeLocal.ensureSchema(db);

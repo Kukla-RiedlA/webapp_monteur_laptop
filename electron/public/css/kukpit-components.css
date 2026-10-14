@@ -4,6 +4,18 @@
   border-radius: var(--kukpit-radius-sm, 6px);
 }
 
+.job-country-visa {
+  margin-top: 12px;
+}
+
+.job-country-visa h4 {
+  margin: 0 0 6px;
+}
+
+.job-country-visa-own {
+  margin: 6px 0 0;
+}
+
 .card {
   border-radius: var(--kukpit-radius, 8px);
 }

@@ -3851,6 +3851,7 @@
     window.currentProjektdatenJob = job;
     updateProjektdatenHeadingMeta(job);
     content.innerHTML = renderJobDetailsContent(job);
+    bindJobCountryVisa(content, job);
     bindLeistungActions();
     bindJobSchedule();
     if (window.KuklaLaptopHinweise && typeof window.KuklaLaptopHinweise.loadJob === 'function') {
@@ -4879,6 +4880,177 @@
     });
   }
 
+  function countryIso2(raw) {
+    var s = String(raw || '').trim();
+    if (/^[A-Za-z]{2}$/.test(s)) return s.toUpperCase();
+    var list = window.HOTEL_COUNTRIES || [];
+    var lower = s.toLowerCase();
+    var i;
+    for (i = 0; i < list.length; i++) {
+      if (String(list[i].name || '').toLowerCase() === lower) {
+        var named = String(list[i].code || '').toUpperCase();
+        if (/^[A-Z]{2}$/.test(named)) return named;
+      }
+    }
+    var mapped = normalizeCountryToCode(s);
+    return /^[A-Z]{2}$/.test(mapped) ? mapped : '';
+  }
+
+  function countryNameDe(codeOrName) {
+    var code = countryIso2(codeOrName);
+    var list = window.HOTEL_COUNTRIES || [];
+    var i;
+    for (i = 0; i < list.length; i++) {
+      if (String(list[i].code || '').toUpperCase() === code && list[i].name) return String(list[i].name);
+    }
+    return String(codeOrName || '').trim();
+  }
+
+  function bmeiaCountrySlug(name) {
+    var s = String(name || '').trim();
+    if (!s) return '';
+    s = s.replace(/[äÄ]/g, 'ae').replace(/[öÖ]/g, 'oe').replace(/[üÜ]/g, 'ue').replace(/ß/g, 'ss');
+    s = s.replace(/[áàâåÅ]/g, 'a').replace(/[éèê]/g, 'e').replace(/[íì]/g, 'i').replace(/[óòô]/g, 'o').replace(/[úùû]/g, 'u');
+    s = s.replace(/ç/g, 'c').replace(/ñ/g, 'n');
+    s = s.toLowerCase();
+    s = s.replace(/\([^)]*\)/g, ' ');
+    s = s.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return s;
+  }
+
+  function bmeiaCountryUrl(codeOrName) {
+    var slug = bmeiaCountrySlug(countryNameDe(codeOrName));
+    if (!slug) return '';
+    return 'https://www.bmeia.gv.at/reise-services/reiseinformation/land/' + slug;
+  }
+
+  function jobDateYmd(raw) {
+    var s = String(raw || '').trim();
+    var iso = s.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (iso) return iso[1];
+    var de = s.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+    if (de) return de[3] + '-' + de[2] + '-' + de[1];
+    return '';
+  }
+
+  function addDaysYmd(ymd, days) {
+    var p = String(ymd || '').split('-');
+    if (p.length !== 3) return '';
+    var dt = new Date(Date.UTC(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10)));
+    if (isNaN(dt.getTime())) return '';
+    dt.setUTCDate(dt.getUTCDate() + days);
+    var m = String(dt.getUTCMonth() + 1);
+    var d = String(dt.getUTCDate());
+    if (m.length < 2) m = '0' + m;
+    if (d.length < 2) d = '0' + d;
+    return dt.getUTCFullYear() + '-' + m + '-' + d;
+  }
+
+  function ownVisaStatus(docs, country, endRaw) {
+    var end = jobDateYmd(endRaw);
+    var best = '';
+    (docs || []).forEach(function (doc) {
+      if (!doc || doc.doc_type !== 'visum_eta_esta') return;
+      if (String(doc.valid_for || '').toUpperCase() !== country) return;
+      var until = String(doc.valid_until || '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return;
+      if (!best || until > best) best = until;
+    });
+    if (!end || !best || best < end) return 'missing';
+    if (best < addDaysYmd(end, 14)) return 'soon';
+    return 'ok';
+  }
+
+  function renderJobCountryVisaHtml(job) {
+    var code = countryIso2(job && job.country);
+    if (!code) return '';
+    var url = bmeiaCountryUrl(code);
+    var html = '<div class="modal-detail-section job-country-visa" data-country="' + escapeHtml(code) + '">';
+    html += '<h4>Länder Info Visa</h4>';
+    if (url) {
+      html += '<p><button type="button" class="btn job-country-visa-btn" data-url="' + escapeHtml(url) + '">Reisehinweise</button></p>';
+    }
+    if (code === 'AT') {
+      html += '<p class="muted job-country-visa-hint">Einsatz in Österreich. Kein Einreisevisum.</p>';
+    } else {
+      html += '<p class="muted job-country-visa-hint"></p>';
+      html += '<p class="job-country-visa-own"></p>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function paintOwnVisa(el, status) {
+    if (!el) return;
+    var map = {
+      ok: ['✓', '#0e7b5a', 'Gültiges Visum/ETA/ESTA, noch 14 Tage nach Einsatzende'],
+      soon: ['●', '#b8860b', 'Läuft innerhalb von 14 Tagen nach dem Einsatzende ab'],
+      missing: ['✕', '#b91c1c', 'Kein gültiges Visum/ETA/ESTA für dieses Land'],
+      unknown: ['?', '#5b6b66', 'Safe nicht lesbar']
+    };
+    var item = map[status];
+    if (!item) {
+      el.textContent = '';
+      return;
+    }
+    el.textContent = '';
+    var mark = document.createElement('span');
+    mark.textContent = item[0];
+    mark.style.color = item[1];
+    mark.style.fontWeight = '700';
+    mark.style.marginRight = '6px';
+    mark.title = item[2];
+    el.appendChild(mark);
+    el.appendChild(document.createTextNode(item[2]));
+  }
+
+  function bindJobCountryVisa(root, job) {
+    if (!root || !job) return;
+    var box = root.querySelector('.job-country-visa');
+    if (!box || box.dataset.bound === '1') return;
+    box.dataset.bound = '1';
+    var code = box.getAttribute('data-country') || '';
+    var btn = box.querySelector('.job-country-visa-btn');
+    if (btn) {
+      btn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        var url = btn.getAttribute('data-url') || '';
+        if (!url) return;
+        if (window.monteurApp && typeof window.monteurApp.openExternal === 'function') {
+          window.monteurApp.openExternal(url);
+        }
+      });
+    }
+    if (code === 'AT') return;
+    var ownEl = box.querySelector('.job-country-visa-own');
+    var hintEl = box.querySelector('.job-country-visa-hint');
+    var techId = getTechId();
+    if (ownEl && techId) {
+      fetch(API_BASE + '/api/doc-safe?technician_id=' + encodeURIComponent(String(techId)), {
+        headers: { 'X-Technician-Id': String(techId) }
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        if (!ownEl.isConnected) return;
+        if (!data || data.ok === false) {
+          paintOwnVisa(ownEl, 'unknown');
+          return;
+        }
+        paintOwnVisa(ownEl, ownVisaStatus(data.documents || [], code, job.end_datetime));
+      }).catch(function () {
+        if (ownEl.isConnected) paintOwnVisa(ownEl, 'unknown');
+      });
+    }
+    if (!hintEl) return;
+    fetch(API_BASE + '/api/travel-entry-hint?country=' + encodeURIComponent(code) + (techId ? '&technician_id=' + encodeURIComponent(String(techId)) : ''), {
+      headers: { 'X-Technician-Id': String(techId || '') }
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (!hintEl.isConnected) return;
+      hintEl.textContent = (data && data.hint) ? String(data.hint) : 'Prüfung nur online';
+      if (btn && data && data.bmeia_url) btn.setAttribute('data-url', String(data.bmeia_url));
+    }).catch(function () {
+      if (hintEl.isConnected) hintEl.textContent = 'Prüfung nur online';
+    });
+  }
+
   function renderJobDetailsContent(job) {
     var assignmentRo = isJobAssignmentReadOnly(job);
     var readOnlyAngelegt = isJobProjektdatenReadOnly(job);
@@ -4979,7 +5151,7 @@
       html += '<div class="projektdaten-meta-details-body">';
       html += '<div class="modal-detail-section modal-detail-section-address-row">';
       html += '<div class="modal-address-contact-row">';
-      html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address job-site-address-display' + (readOnlyAngelegt ? ' job-site-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + addressLine + '</p>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
+      html += '<div class="modal-detail-section"><h4>Auftragsadresse</h4><p class="modal-address job-site-address-display' + (readOnlyAngelegt ? ' job-site-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + addressLine + '</p>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + renderJobCountryVisaHtml(job) + '</div>';
       html += '<div class="modal-detail-section modal-hotel-display-wrap"><h4>Hotel Adresse</h4><p class="modal-address hotel-address-display' + (readOnlyAngelegt ? ' hotel-address-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>' + hotelAddressLine + '</p>' + (readOnlyAngelegt ? '' : '<p class="modal-hotel-hint muted">Doppelklick zum Bearbeiten</p>') + '</div>';
       html += '<div class="modal-detail-section"><h4>Kontakt (Baustellen-Ansprechpartner)</h4>';
       html += '<div class="job-site-contact-display' + (readOnlyAngelegt ? ' job-site-contact-readonly' : '') + '" data-job-id="' + escapeHtml(String(job.id)) + '"' + (readOnlyAngelegt ? '' : ' title="Doppelklick zum Bearbeiten"') + '>';
@@ -10655,7 +10827,7 @@
     html += '<dt>Ort</dt><dd>' + v(job.customer_zip) + ' ' + v(job.customer_city) + '</dd>';
     html += '<dt>Telefon</dt><dd>' + v(job.customer_phone) + '</dd>';
     html += '</dl></div>';
-    html += '<div class="archiv-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p></div>';
+    html += '<div class="archiv-detail-section"><h4>Auftragsadresse</h4><p class="modal-address">' + addressLine + '</p>' + renderJobCountryVisaHtml(job) + '</div>';
     html += '<div class="archiv-detail-section"><h4>Kontakt</h4><dl class="modal-detail-dl">';
     html += renderArchivJobContactsHtml(job, v);
     html += '</dl></div>';
@@ -11161,6 +11333,7 @@
       extra += '<p class="muted archiv-section-hint">Reste nach „erledigt“ (mit „Nicht löschen“ geschützt).</p>';
       extra += '<div class="archiv-folder-container" data-job-id="' + jobId + '"></div></div>';
       expandEl.innerHTML = detailHtml + extra;
+      bindJobCountryVisa(expandEl, job);
       var container = expandEl.querySelector('.archiv-folder-container');
       if (container) renderArchivFolderTree(jobId, container);
       bindArchivProjekteNeu(expandEl, job, jobId);
