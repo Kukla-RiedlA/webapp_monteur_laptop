@@ -270,6 +270,7 @@ const textbausteineLocal = require('./lib/textbausteine-local');
 const arbeitsschritteLocal = require('./lib/arbeitsschritte-local');
 const protocolPdf = require('./lib/protocol_pdf');
 const technicianSignature = require('./lib/technician-signature');
+const docSafeLocal = require('./lib/doc-safe-local');
 const kontrollwiegungLocal = require('./lib/kontrollwiegung-local');
 const schleppkettenLocal = require('./lib/schleppketten-local');
 const pruefzertifikatLocal = require('./lib/pruefzertifikat-local');
@@ -1920,23 +1921,27 @@ function createApp(db) {
     try {
       const ws = new WebSocket(wsUrl);
       ws.on('open', () => {
-        let username = '';
-        let permAdmin = false;
-        try {
-          const row = db.prepare('SELECT username, COALESCE(perm_admin, 0) AS perm_admin, role FROM users WHERE id = ? LIMIT 1').get(technicianId);
-          if (row) {
-            username = String(row.username || '');
-            permAdmin = Number(row.perm_admin) === 1 || String(row.role || '') === 'admin';
+        void (async () => {
+          let ticket = '';
+          try {
+            const creds = loadDispoWebSessionCreds();
+            const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+            const base = String(baseUrl || creds.baseUrl || '').replace(/\/$/, '');
+            if (base && auth && auth.Authorization) {
+              const res = await fetch(base + '/api/push_ws_ticket.php', { headers: auth });
+              const data = await res.json().catch(() => ({}));
+              ticket = data && data.ticket ? String(data.ticket) : '';
+            }
+          } catch (_) {
+            ticket = '';
           }
-        } catch (e) {}
-        ws.send(JSON.stringify({
-          type: 'auth',
-          technician_id: technicianId,
-          user_id: technicianId,
-          username,
-          perm_admin: permAdmin || undefined,
-          role: permAdmin ? 'admin' : 'monteur',
-        }));
+          if (!ticket || ws.readyState !== WebSocket.OPEN) {
+            try { ws.close(); } catch (_) { /* ignore */ }
+            pushWsByTechnician.delete(technicianId);
+            return;
+          }
+          ws.send(JSON.stringify({ type: 'auth', ticket }));
+        })();
       });
       ws.on('message', (data) => {
         try {
@@ -1952,7 +1957,7 @@ function createApp(db) {
             }
             const set = sseClients.get(technicianId);
             if (set) set.forEach((res) => { res.write('data: ' + JSON.stringify(msg) + '\n\n'); });
-          } else if (msg.channel === 'server_status' || msg.channel === 'auth_security') {
+          } else if (msg.channel === 'doc_safe_expiry' || msg.channel === 'server_status' || msg.channel === 'auth_security') {
             const set = sseClients.get(technicianId);
             if (set) set.forEach((res) => { res.write('data: ' + JSON.stringify(msg) + '\n\n'); });
           }
@@ -2371,6 +2376,93 @@ function createApp(db) {
       res.json({ ok: true, has_signature: false, technician_id: technicianId });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Signatur konnte nicht gelöscht werden.' });
+    }
+  });
+
+  function docSafeErrorMessage(err) {
+    const code = err && err.message ? String(err.message) : '';
+    if (code === 'device_key_unavailable') return 'Verschlüsselung auf diesem PC nicht verfügbar.';
+    if (code === 'file_type') return 'Nur PDF, JPEG oder PNG, höchstens 8 MB.';
+    if (code === 'doc_type') return 'Dokumentenart fehlt.';
+    if (code === 'not_found') return 'Dokument nicht gefunden.';
+    return 'Dokumenten-Safe nicht verfügbar.';
+  }
+
+  app.get('/api/doc-safe', (req, res) => {
+    try {
+      docSafeLocal.ensureSchema(db);
+      const technicianId = getTechnicianId(req);
+      if (!technicianId) return res.status(400).json({ ok: false, error: 'technician_id' });
+      res.set('Cache-Control', 'private, no-store');
+      res.set('X-Content-Type-Options', 'nosniff');
+      res.json({
+        ok: true,
+        technician_id: technicianId,
+        documents: docSafeLocal.listLocal(db, technicianId),
+        types: docSafeLocal.TYPES,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: docSafeErrorMessage(e) });
+    }
+  });
+
+  app.get('/api/doc-safe/file', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const id = parseInt(req.query.id, 10);
+      const part = req.query.part === 'preview' ? 'preview' : 'file';
+      if (!technicianId || !id) return res.status(400).json({ ok: false, error: 'id' });
+      const file = docSafeLocal.readFile(db, technicianId, id, part);
+      if (!file) return res.status(404).json({ ok: false, error: 'no_file' });
+      const name = String(file.filename || 'dokument').replace(/["\r\n\\]/g, '');
+      res.set('Cache-Control', 'private, no-store');
+      res.set('X-Content-Type-Options', 'nosniff');
+      res.set('Content-Type', file.mime || 'application/octet-stream');
+      res.set('Content-Disposition', 'inline; filename="' + name + '"');
+      res.send(file.buf);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: docSafeErrorMessage(e) });
+    }
+  });
+
+  app.post('/api/doc-safe', express.json({ limit: '12mb' }), (req, res) => {
+    try {
+      docSafeLocal.ensureSchema(db);
+      const technicianId = getTechnicianId(req);
+      if (!technicianId) return res.status(400).json({ ok: false, error: 'technician_id' });
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      if (body.action === 'delete') {
+        const okDel = docSafeLocal.deleteLocal(db, technicianId, parseInt(body.id, 10));
+        if (!okDel) return res.status(404).json({ ok: false, error: 'not_found' });
+        save();
+        return res.json({ ok: true });
+      }
+      let fileBuf = null;
+      if (body.file_base64) {
+        const raw = String(body.file_base64).replace(/^data:[^;]+;base64,/i, '').replace(/\s+/g, '');
+        fileBuf = Buffer.from(raw, 'base64');
+      }
+      const doc = docSafeLocal.saveLocal(db, technicianId, body, fileBuf);
+      save();
+      res.json({ ok: true, document: doc });
+    } catch (e) {
+      const code = e && e.message === 'file_type' ? 400 : 500;
+      res.status(code).json({ ok: false, error: docSafeErrorMessage(e) });
+    }
+  });
+
+  app.post('/api/doc-safe/sync', express.json({ limit: '100kb' }), async (req, res) => {
+    try {
+      docSafeLocal.ensureSchema(db);
+      const technicianId = getTechnicianId(req);
+      if (!technicianId) return res.status(400).json({ ok: false, error: 'technician_id' });
+      const creds = resolveDispoServerCreds(req.body || {});
+      const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+      const result = await docSafeLocal.syncWithServer(db, technicianId, creds.baseUrl, auth);
+      save();
+      res.json(result && result.ok ? { ok: true } : { ok: false, error: 'sync' });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: 'sync' });
     }
   });
 

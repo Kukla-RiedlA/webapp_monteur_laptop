@@ -250,6 +250,12 @@ function applyRuntimeMigrations(db) {
     /* optional during early boot */
   }
   try {
+    const docSafeLocal = require('./doc-safe-local');
+    docSafeLocal.ensureSchema(db);
+  } catch (_) {
+    /* optional during early boot */
+  }
+  try {
     const anLocal = require('./arbeitsnachweis-local');
     anLocal.ensureArbeitsnachweisLocalSchema(db);
   } catch (_) {

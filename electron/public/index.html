@@ -1270,6 +1270,19 @@
     .view-archiv.active { display: block; }
     .view-abwesenheiten { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-abwesenheiten.active { display: block; }
+    .view-dokumente { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
+    .view-dokumente.active { display: block; }
+    .dok-table-wrap { overflow-x: auto; }
+    .dok-table-wrap thead th { position: static; top: auto; }
+    .dok-thumb { width: 72px; height: 72px; object-fit: cover; cursor: pointer; border-radius: 6px; }
+    .dok-kind { width: 28px; height: 28px; vertical-align: middle; }
+    .dok-types { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
+    .dok-type { border: 1px solid var(--accent); background: var(--card); border-radius: 8px; padding: 0.35rem 0.5rem; cursor: pointer; }
+    .dok-type.is-on { border-color: #0e7b5a; background: #eefaf5; }
+    .dok-type img { width: 36px; height: 36px; display: block; margin: 0 auto 0.2rem; }
+    #dokModal[hidden] { display: none; }
+    #dokModal { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 400; display: flex; align-items: flex-start; justify-content: center; padding: 2rem 1rem; overflow: auto; }
+    #dokModal .card { width: min(640px, 100%); }
     .view-anlagenstamm { display: none; padding: 0; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-anlagenstamm.active { display: flex; flex-direction: column; width: 100%; max-width: none; }
     #viewAnlagenstamm .view-module-host { width: 100%; max-width: none; flex: 1; min-width: 0; }
@@ -2468,6 +2481,7 @@
           <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewAbrechnung" title="Abrechnung">Abrechnung</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewZeitschreibung" title="Zeitschreibung">Zeitschreibung</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewAbwesenheiten" data-view="abwesenheiten">Abwesenheiten</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewDokumente" data-view="dokumente">Dokumente</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="arbeitsschritte">Arbeitsschritte Service</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="arbeitsschritte-ibn">Arbeitsschritte Inbetriebnahme</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="textbausteine">Textbausteine</button>
@@ -4629,6 +4643,42 @@
       <div id="archivList"><span class="empty">Keine Aufträge im Archiv.</span></div>
     </div>
   </main>
+  <main id="viewDokumente" class="view-dokumente" aria-label="Dokumente">
+    <div class="card">
+      <h2>Dokumente</h2>
+      <p id="dokMsg" class="muted"></p>
+      <button type="button" class="btn" id="dokAdd">Hinzufügen</button>
+      <div class="dok-table-wrap" style="margin-top:0.75rem">
+        <table>
+          <thead>
+            <tr><th>Vorschau</th><th>Dokumentenart</th><th>Details</th><th></th></tr>
+          </thead>
+          <tbody id="dokBody"><tr><td colspan="4">Wird geladen…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="dokModal" hidden>
+      <form class="card" id="dokForm">
+        <h3 id="dokFormTitle">Dokument hinzufügen</h3>
+        <div class="dok-types" id="dokTypes"></div>
+        <label>Datei (PDF, JPEG, PNG)<input type="file" id="dokFile" accept="application/pdf,image/jpeg,image/png"></label>
+        <label>Bezeichnung<input type="text" id="dokTitle" maxlength="240"></label>
+        <label>Nummer<input type="text" id="dokNumber" maxlength="240" autocomplete="off"></label>
+        <label>Name<input type="text" id="dokName" maxlength="240"></label>
+        <label>Land<input type="text" id="dokCountry" maxlength="240"></label>
+        <label>Aussteller<input type="text" id="dokIssuer" maxlength="240"></label>
+        <label>Ausstellung<input type="date" id="dokIssued"></label>
+        <label>Ablauf<input type="date" id="dokUntil"></label>
+        <label>Notiz<textarea id="dokNotes" maxlength="240"></textarea></label>
+        <label>Vorlauf in Tagen<input type="number" id="dokDays" min="1" max="365" value="30"></label>
+        <label><input type="checkbox" id="dokRemind"> Erinnerung</label>
+        <div style="display:flex;gap:0.5rem;margin-top:0.75rem">
+          <button type="submit" class="btn">Speichern</button>
+          <button type="button" class="btn btn-ghost" id="dokCancel">Abbrechen</button>
+        </div>
+      </form>
+    </div>
+  </main>
   <main id="viewAbwesenheiten" class="view-abwesenheiten" aria-label="Abwesenheiten">
     <div class="card">
       <h2>Abwesenheiten</h2>
@@ -4911,6 +4961,7 @@
   <script src="js/mb-image-draw.js"></script>
   <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>
+  <script src="js/dokumente-view.js?v=1"></script>
   <script src="app.js?v=langshare2"></script>
   <script src="js/profinet-tool.js?v=20261014"></script>
   <script src="js/tools-vnc.js?v=20261014"></script>

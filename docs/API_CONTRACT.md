@@ -333,6 +333,24 @@ Nur für die **interne** PHP/JS-Oberfläche; keine Monteur-Apps. Antworten nutze
 
 ---
 
+### 5.2 Dokumenten-Safe
+
+Nur der angemeldete Techniker (KUKpit, lokales Gateway) bzw. Dispo/Admin (Dispo-Session). Buchhaltung und Lohnbuchhaltung haben keinen Zugriff. Die PWA hat keine Safe-Maske, nur Web-Push.
+
+| Endpunkt | Methode | Kurzbeschreibung |
+|----------|---------|------------------|
+| `dispo/api/doc_safe.php` | GET | Liste `technician_id`. Ohne Dateibytes. |
+| `dispo/api/doc_safe.php?part=file\|preview&id=` | GET | Stream, `Cache-Control: private, no-store`, `nosniff` |
+| `dispo/api/doc_safe.php` | POST JSON/multipart | `action=save` oder `action=delete` |
+| `GET /api/doc-safe` | lokal | Entschlüsselte Metadaten aus SQLite |
+| `GET /api/doc-safe/file` | lokal | `part=file` oder `part=preview` |
+| `POST /api/doc-safe` | lokal | Speichern oder Löschen, danach Sync |
+| `POST /api/doc-safe/sync` | lokal | Outbox hoch, Serverstand herunter |
+
+Felder `snake_case`, Envelope `ok`. Klartext-Felder: `title`, `document_number`, `holder_name`, `country`, `issuer`, `issued_on`, `valid_until`, `notes`, `original_filename`, `reminder_enabled`, `reminder_days_before`. Dateien nur PDF, JPEG, PNG.
+
+---
+
 ## 6. Arbeitspaket bei Contract-Änderungen
 
 1. **Alle Gegenstellen** im gleichen Paket anpassen: `dispo`, `webapp_monteur_laptop`, `webapp_handy` (soweit betroffen).

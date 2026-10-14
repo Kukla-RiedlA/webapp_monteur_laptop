@@ -300,6 +300,32 @@ CREATE TABLE IF NOT EXISTS protocol_draft_meta (
 );
 CREATE INDEX IF NOT EXISTS idx_protocol_draft_meta_job ON protocol_draft_meta(local_job_id);
 
+-- Dokumenten-Safe: nur Chiffretext, Schlüssel separat per safeStorage
+CREATE TABLE IF NOT EXISTS doc_safe_key (
+  id INTEGER PRIMARY KEY,
+  sealed TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS technician_documents (
+  local_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER,
+  public_id TEXT NOT NULL,
+  technician_id INTEGER NOT NULL,
+  doc_type TEXT NOT NULL,
+  payload_cipher BLOB NOT NULL,
+  payload_iv BLOB NOT NULL,
+  payload_tag BLOB NOT NULL,
+  file_cipher BLOB,
+  file_iv BLOB,
+  file_tag BLOB,
+  file_mime TEXT,
+  preview_cipher BLOB,
+  preview_iv BLOB,
+  preview_tag BLOB,
+  dirty INTEGER NOT NULL DEFAULT 1,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT
+);
+
 -- Profil-Unterschrift (Cache von Dispo technician_signatures)
 CREATE TABLE IF NOT EXISTS technician_signature (
   technician_id INTEGER PRIMARY KEY,

@@ -9215,6 +9215,12 @@
             else if (status === 'rejected') showToast('Ihre Abwesenheit wurde abgelehnt.');
             loadJobsAndAbsences();
             pollAbsenceRequestDecisions();
+          } else if (msg.channel === 'doc_safe_expiry' && msg.payload) {
+            var dokText = msg.payload.message || msg.payload.title || 'Dokument läuft ab';
+            if (typeof showToast === 'function') showToast(dokText);
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              try { new Notification(msg.payload.title || 'Dokument', { body: dokText }); } catch (eDok) {}
+            }
           } else if (msg.channel === 'hinweis') {
             if (window.KuklaLaptopHinweise && typeof window.KuklaLaptopHinweise.refresh === 'function') {
               window.KuklaLaptopHinweise.refresh();
@@ -13463,6 +13469,8 @@
     if (viewArbeitsschritteIbn) viewArbeitsschritteIbn.classList.remove('active');
     if (viewArchiv) viewArchiv.classList.remove('active');
     if (viewAbwesenheiten) viewAbwesenheiten.classList.remove('active');
+    const viewDokumente = document.getElementById('viewDokumente');
+    if (viewDokumente) viewDokumente.classList.remove('active');
     if (viewAnlagenstamm) viewAnlagenstamm.classList.remove('active');
     if (name === 'einstellungen') {
       viewStart.classList.add('hidden');
@@ -13612,6 +13620,12 @@
       viewStart.classList.add('hidden');
       if (viewAbwesenheiten) viewAbwesenheiten.classList.add('active');
       loadJobsAndAbsences();
+      return;
+    }
+    if (name === 'dokumente') {
+      viewStart.classList.add('hidden');
+      if (viewDokumente) viewDokumente.classList.add('active');
+      if (typeof window.kuklaLoadDokumente === 'function') window.kuklaLoadDokumente();
       return;
     }
     if (name === 'anlagenstamm') {
@@ -29487,7 +29501,7 @@
     var title = q.get('title') || '';
     if (title) document.title = title;
     function tryBoot(attempt) {
-      var needsTech = view === 'projektdaten' || view === 'abrechnung' || view === 'zeitschreibung';
+      var needsTech = view === 'projektdaten' || view === 'abrechnung' || view === 'zeitschreibung' || view === 'dokumente';
       if (needsTech && !getTechId() && attempt < 40) {
         setTimeout(function () { tryBoot(attempt + 1); }, 150);
         return;

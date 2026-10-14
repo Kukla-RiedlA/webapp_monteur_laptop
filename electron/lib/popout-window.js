@@ -26,6 +26,7 @@ const VIEWS = new Set([
   'tools-csvlog',
   'anlagenstamm',
   'abwesenheiten',
+  'dokumente',
   'archiv',
   'einstellungen',
   'textbausteine',
