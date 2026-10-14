@@ -36,6 +36,7 @@
   <link rel="stylesheet" href="css/file_preview_hover.css?v=20260908hover">
   <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20261002save">
   <link rel="stylesheet" href="css/hinweise.css?v=20260902files">
+  <link rel="stylesheet" href="css/csv-log-viewer.css?v=20261014">
   <link rel="stylesheet" href="css/kukpit-shell.css?v=20261009toolbar">
   <style>
     * { box-sizing: border-box; }
@@ -243,6 +244,171 @@
     @media (min-width: 960px) {
       .parameterlisten-split { grid-template-columns: 1fr 1fr; }
     }
+    #viewProtokolleParameterlisten.is-tools-kuklink .parameterlisten-split,
+    #viewProtokolleParameterlisten.is-tools-parameterliste .parameterlisten-split,
+    #viewProtokolleParameterlisten.is-tools-profinet .parameterlisten-split,
+    #viewProtokolleParameterlisten.is-tools-vnc .parameterlisten-split {
+      grid-template-columns: 1fr;
+    }
+    #viewProtokolleParameterlisten.is-tools-kuklink [data-tools-panel="parameterliste"],
+    #viewProtokolleParameterlisten.is-tools-kuklink [data-tools-panel="profinet"],
+    #viewProtokolleParameterlisten.is-tools-kuklink [data-tools-panel="vnc"],
+    #viewProtokolleParameterlisten.is-tools-parameterliste [data-tools-panel="kuklink"],
+    #viewProtokolleParameterlisten.is-tools-parameterliste [data-tools-panel="profinet"],
+    #viewProtokolleParameterlisten.is-tools-parameterliste [data-tools-panel="vnc"],
+    #viewProtokolleParameterlisten.is-tools-profinet [data-tools-panel="kuklink"],
+    #viewProtokolleParameterlisten.is-tools-profinet [data-tools-panel="parameterliste"],
+    #viewProtokolleParameterlisten.is-tools-profinet [data-tools-panel="vnc"],
+    #viewProtokolleParameterlisten.is-tools-vnc [data-tools-panel="kuklink"],
+    #viewProtokolleParameterlisten.is-tools-vnc [data-tools-panel="parameterliste"],
+    #viewProtokolleParameterlisten.is-tools-vnc [data-tools-panel="profinet"] {
+      display: none;
+    }
+    #viewProtokolleParameterlisten:not(.is-tools-profinet) [data-tools-panel="profinet"],
+    #viewProtokolleParameterlisten:not(.is-tools-vnc) [data-tools-panel="vnc"],
+    #viewProtokolleParameterlisten:not(.is-tools-ftp) [data-tools-panel="ftp"] {
+      display: none;
+    }
+    #viewProtokolleParameterlisten.is-tools-ftp .parameterlisten-split {
+      grid-template-columns: 1fr;
+    }
+    #viewProtokolleParameterlisten.is-tools-ftp [data-tools-panel="parameterliste"],
+    #viewProtokolleParameterlisten.is-tools-ftp [data-tools-panel="kuklink"],
+    #viewProtokolleParameterlisten.is-tools-ftp [data-tools-panel="profinet"],
+    #viewProtokolleParameterlisten.is-tools-ftp [data-tools-panel="vnc"] {
+      display: none;
+    }
+    .fz-client {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      min-height: calc(100vh - 8.5rem);
+    }
+    .fz-quick {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem 0.65rem;
+      align-items: flex-end;
+      background: #fff;
+      border: 1px solid #cfe8d1;
+      border-radius: 8px;
+      padding: 0.5rem 0.65rem;
+    }
+    .fz-quick .form-group { margin: 0; }
+    .fz-quick input, .fz-quick select { min-width: 7.5rem; }
+    .fz-check {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin: 0 0 0.35rem;
+      font-size: 0.9rem;
+    }
+    .fz-hint { margin: 0; flex: 1 1 16rem; font-size: 0.82rem; }
+    .fz-panes {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: 0.4rem;
+      min-height: 280px;
+      flex: 1;
+    }
+    .fz-pane {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      background: #fff;
+      border: 1px solid #cfe8d1;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .fz-pane-head {
+      background: #eefaf5;
+      color: #0c6a4d;
+      font-weight: 600;
+      padding: 0.35rem 0.65rem;
+      border-bottom: 1px solid #cfe8d1;
+    }
+    .fz-path {
+      display: flex;
+      gap: 0.35rem;
+      align-items: center;
+      padding: 0.35rem 0.5rem;
+      border-bottom: 1px solid #cfe8d1;
+    }
+    .fz-path input { flex: 1; min-width: 0; }
+    .fz-mid {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .fz-table-wrap { overflow: auto; flex: 1; min-height: 220px; max-height: calc(100vh - 22rem); }
+    body.has-sticky-header .fz-table-wrap thead th,
+    .fz-table-wrap thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #eefaf5;
+      color: #0c6a4d;
+    }
+    .fz-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+    .fz-table th, .fz-table td {
+      text-align: left;
+      padding: 0.28rem 0.45rem;
+      border-bottom: 1px solid #cfe8d1;
+      white-space: nowrap;
+    }
+    .fz-table td.is-name { white-space: nowrap; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; }
+    .fz-table tr.is-dir td.is-name { color: #0c6a4d; font-weight: 600; }
+    .fz-table tr.is-selected { background: rgba(14, 123, 90, 0.1); }
+    .fz-table tr { cursor: pointer; }
+    .fz-log {
+      background: #fff;
+      border: 1px solid #cfe8d1;
+      border-radius: 8px;
+      min-height: 5.5rem;
+      max-height: 8.5rem;
+      overflow: auto;
+      padding: 0.4rem 0.65rem;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.8rem;
+    }
+    .fz-log p { margin: 0.1rem 0; }
+    .fz-log .is-err { color: #991b1b; }
+    @media (max-width: 900px) {
+      .fz-panes { grid-template-columns: 1fr; }
+      .fz-mid { justify-content: flex-start; }
+    }
+    .vnc-fields {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      align-items: flex-end;
+      margin-bottom: 0.75rem;
+    }
+    .vnc-fields .form-group { margin: 0; }
+    .vnc-fields input { min-width: 8rem; }
+    .vnc-field-grow { flex: 1 1 12rem; }
+    .vnc-field-grow input { width: 100%; }
+    .vnc-screen {
+      background: #111827;
+      border: 1px solid #cfe8d1;
+      border-radius: 8px;
+      min-height: 420px;
+      height: calc(100vh - 16rem);
+      overflow: hidden;
+    }
+    body.has-sticky-header .profinet-table-wrap thead th,
+    .profinet-table-wrap thead th {
+      position: static;
+      top: auto;
+    }
+    .profinet-table-wrap { overflow-x: auto; }
+    .profinet-table { width: 100%; border-collapse: collapse; }
+    .profinet-table th, .profinet-table td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #cfe8d1; }
+    .profinet-table th { background: #eefaf5; color: #0c6a4d; }
+    .profinet-topo { width: 100%; height: auto; min-height: 140px; }
+    #profinetHint { background: #eefaf5; border: 1px solid #cfe8d1; border-radius: 8px; padding: 0.75rem 1rem; margin: 0 0 0.75rem; }
+    #profinetDialog[hidden] { display: none; }
     .parameterlisten-split > .card { margin-bottom: 0; min-width: 0; }
     .kuklink-term-head {
       display: flex;
@@ -2267,13 +2433,26 @@
         <div class="toolbar-dropdown nav-drop-menu" id="protokolleDropdown" role="menu" aria-label="Protokolle Untermenü">
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-arbeitsnachweis">Arbeitsnachweis</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-montagebericht">Montagebericht</button>
-          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-parameterlisten">Parameterlisten</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-kontrollwiegungen">Kontrollwiegungen</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-schleppketten">Schleppketten-Test</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-pruefzertifikat">Prüfzertifikat</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-service">Service</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-kunden">Protokolle für Kunden</button>
+        </div>
+      </div>
+      <div class="nav-drop toolbar-dropdown-wrap">
+        <button type="button" class="nav-item" id="btnViewTools" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l2.1-2.1a4.2 4.2 0 0 1-5.6 5.6L8.5 18.5a1.8 1.8 0 0 1-2.5 0l-.5-.5a1.8 1.8 0 0 1 0-2.5l5.7-5.7a4.2 4.2 0 0 1 5.6-5.6z"/></svg>
+          Tools ▾
+        </button>
+        <div class="toolbar-dropdown nav-drop-menu" id="toolsDropdown" role="menu" aria-label="Tools">
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-kuklink">Kuklink</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-parameterliste">Parameterliste</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-profinet">Profinet</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-vnc">VNC</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-ftp">FTP</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-csvlog">CSV-Log</button>
         </div>
       </div>
       <button type="button" class="nav-item" id="btnViewAnlagenstamm">
@@ -2922,9 +3101,9 @@
       </div>
     </div>
   </main>
-  <main id="viewProtokolleParameterlisten" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Parameterlisten">
+  <main id="viewProtokolleParameterlisten" class="view-protokolle view-protokolle-sub" aria-label="Tools">
     <div class="parameterlisten-split">
-      <div class="card sp-v2-card">
+      <div class="card sp-v2-card" data-tools-panel="parameterliste">
         <div class="sp-v2-topbar">
           <h2 class="sp-v2-page-title">Parameterlisten</h2>
         </div>
@@ -2975,7 +3154,7 @@
           </section>
         </div>
       </div>
-      <div class="card">
+      <div class="card" data-tools-panel="kuklink">
         <h2>KUKLink</h2>
         <div class="form-group" style="margin-bottom:0.75rem">
           <label for="kuklinkJob">Auftrag</label>
@@ -3054,6 +3233,163 @@
         </div>
         <pre id="kuklinkPreview" class="kuklink-term" aria-live="polite"></pre>
       </div>
+      <div class="card" data-tools-panel="profinet">
+        <h2>Profinet</h2>
+        <div id="profinetHint" hidden></div>
+        <div class="form-group" style="margin-bottom:0.75rem">
+          <label for="profinetAdapter">Adapter</label>
+          <select id="profinetAdapter" class="dienstreise-select"></select>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
+          <button type="button" class="btn btn-primary" id="btnProfinetScan">Scannen</button>
+        </div>
+        <p id="profinetStatus" class="muted" style="margin:0 0 0.75rem">Noch nicht geprüft.</p>
+        <div id="profinetTopo" class="profinet-topo-wrap"></div>
+        <div class="profinet-table-wrap">
+          <table class="profinet-table">
+            <thead>
+              <tr>
+                <th>MAC</th>
+                <th>Name</th>
+                <th>IP</th>
+                <th>Maske</th>
+                <th>Gateway</th>
+                <th>Hersteller</th>
+              </tr>
+            </thead>
+            <tbody id="profinetBody">
+              <tr><td colspan="6">Noch kein Scan.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="profinetDialog" hidden style="margin-top:1rem;border:1px solid #cfe8d1;border-radius:8px;padding:0.75rem;background:#eefaf5">
+          <h3 style="margin:0 0 0.5rem">Teilnehmer</h3>
+          <p style="margin:0 0 0.5rem">MAC <strong id="profinetDlgMac"></strong></p>
+          <p class="muted" style="margin:0 0 0.75rem">Ist: Name <span id="profinetDlgIstName"></span>, IP <span id="profinetDlgIstIp"></span></p>
+          <div class="form-group"><label for="profinetDlgName">Soll-Name</label><input id="profinetDlgName" type="text"></div>
+          <div class="form-group"><label for="profinetDlgIp">Soll-IP</label><input id="profinetDlgIp" type="text"></div>
+          <div class="form-group"><label for="profinetDlgMask">Soll-Maske</label><input id="profinetDlgMask" type="text"></div>
+          <div class="form-group"><label for="profinetDlgGw">Soll-Gateway</label><input id="profinetDlgGw" type="text"></div>
+          <div class="form-group"><label for="profinetFab">Fabrikationsnummer</label><input id="profinetFab" type="text"></div>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+            <button type="button" class="btn btn-ghost" id="btnProfinetBlink">Blinken</button>
+            <button type="button" class="btn btn-primary" id="btnProfinetWrite">Taufen</button>
+            <button type="button" class="btn btn-primary" id="btnProfinetAssign">Zuordnen</button>
+            <button type="button" class="btn btn-ghost" id="btnProfinetDialogClose">Schließen</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" data-tools-panel="vnc">
+        <h2>VNC</h2>
+        <p class="muted" style="margin:0 0 0.75rem">Anzeige der Waagen-Elektronik. Maus und Tastatur gehen an das Gerät.</p>
+        <div class="vnc-fields">
+          <div class="form-group">
+            <label for="vncHost">IP-Adresse</label>
+            <input id="vncHost" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="10.0.1.1">
+          </div>
+          <div class="form-group">
+            <label for="vncPort">Port</label>
+            <input id="vncPort" type="number" min="1" max="65535" value="5900">
+          </div>
+          <div class="form-group vnc-field-grow">
+            <label for="vncLabel">Anzeigebezeichner</label>
+            <input id="vncLabel" type="text" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="form-group">
+            <label for="vncPassword">VNC-Passwort</label>
+            <input id="vncPassword" type="password" autocomplete="new-password">
+          </div>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
+          <button type="button" class="btn btn-primary" id="btnVncConnect">Verbinden</button>
+          <button type="button" class="btn btn-ghost" id="btnVncDisconnect">Trennen</button>
+        </div>
+        <p id="vncStatus" class="muted" style="margin:0 0 0.75rem">Nicht verbunden</p>
+        <div id="vncScreen" class="vnc-screen"></div>
+      </div>
+      <div class="card" data-tools-panel="ftp">
+        <div class="fz-client">
+          <div class="fz-quick">
+            <div class="form-group">
+              <label for="ftpHost">Server</label>
+              <input id="ftpHost" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="10.0.1.20">
+            </div>
+            <div class="form-group">
+              <label for="ftpUser">Benutzer</label>
+              <input id="ftpUser" type="text" autocomplete="off" spellcheck="false" value="kukla">
+            </div>
+            <div class="form-group">
+              <label for="ftpPassword">Passwort</label>
+              <input id="ftpPassword" type="password" autocomplete="new-password" value="kukla">
+            </div>
+            <div class="form-group">
+              <label for="ftpPort">Port</label>
+              <input id="ftpPort" type="number" min="1" max="65535" value="21">
+            </div>
+            <button type="button" class="btn btn-primary" id="btnFtpConnect">Verbinden</button>
+            <div class="form-group">
+              <label for="ftpJob">Auftrag</label>
+              <select id="ftpJob" class="dienstreise-select">
+                <option value="">– Bitte wählen –</option>
+              </select>
+            </div>
+            <label class="fz-check" for="ftpSaveAnlagenstamm">
+              <input id="ftpSaveAnlagenstamm" type="checkbox" checked>
+              Parameterliste im Anlagenstamm speichern
+            </label>
+            <p id="ftpSaveHint" class="muted fz-hint"></p>
+          </div>
+          <div class="fz-panes">
+            <section class="fz-pane" aria-label="Lokaler Computer">
+              <div class="fz-pane-head">Lokaler Computer</div>
+              <div class="fz-path">
+                <button type="button" class="btn btn-ghost" id="btnFtpLocalUp" title="Ordner hoch">↑</button>
+                <input id="ftpLocalPath" type="text" spellcheck="false" autocomplete="off">
+                <button type="button" class="btn btn-ghost" id="btnFtpLocalBrowse" title="Ordner wählen">…</button>
+              </div>
+              <div class="fz-table-wrap">
+                <table class="fz-table">
+                  <thead>
+                    <tr>
+                      <th>Dateiname</th>
+                      <th>Größe</th>
+                      <th>Typ</th>
+                      <th>Geändert</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ftpLocalBody"></tbody>
+                </table>
+              </div>
+            </section>
+            <div class="fz-mid">
+              <button type="button" class="btn btn-primary" id="btnFtpDownload" title="Ausgewählte Dateien herunterladen">◀</button>
+            </div>
+            <section class="fz-pane" aria-label="Server">
+              <div class="fz-pane-head">Server</div>
+              <div class="fz-path">
+                <button type="button" class="btn btn-ghost" id="btnFtpUp" title="Ordner hoch">↑</button>
+                <input id="ftpRemotePath" type="text" spellcheck="false" autocomplete="off" value="/" readonly>
+              </div>
+              <div class="fz-table-wrap">
+                <table class="fz-table">
+                  <thead>
+                    <tr>
+                      <th><input type="checkbox" id="ftpSelectAll" aria-label="Alle Dateien"></th>
+                      <th>Dateiname</th>
+                      <th>Größe</th>
+                      <th>Typ</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ftpRemoteBody">
+                    <tr><td colspan="4">Nicht verbunden</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+          <div id="ftpLog" class="fz-log" aria-live="polite"></div>
+        </div>
+      </div>
     </div>
     <div id="parameterlistenDeleteModal" class="parameterlisten-modal" hidden>
       <div class="parameterlisten-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="parameterlistenDeleteTitle">
@@ -3066,6 +3402,43 @@
           <button type="button" class="btn btn-primary" id="parameterlistenDeleteConfirm">Löschen</button>
         </div>
       </div>
+    </div>
+  </main>
+  <main id="viewCsvLog" class="view-protokolle view-protokolle-sub view-csvlog" aria-label="CSV-Log">
+    <div class="csvlog">
+      <div class="csvlog-head">
+        <h2 class="csvlog-title" id="csvLogTitle">CSV-Log</h2>
+        <p class="csvlog-sub" id="csvLogSub">Kurven aus Logdateien</p>
+      </div>
+      <div class="csvlog-toolbar">
+        <button type="button" class="btn btn-primary" id="csvLogOpenFolder">Ordner …</button>
+        <button type="button" class="btn btn-ghost" id="csvLogOpenFiles">Dateien …</button>
+        <input type="file" id="csvLogFolderInput" webkitdirectory multiple hidden>
+        <input type="file" id="csvLogFilesInput" accept=".csv,text/csv" multiple hidden>
+        <button type="button" class="btn btn-ghost" id="csvLogAuto">Auto-Skalierung</button>
+        <button type="button" class="btn btn-ghost" id="csvLogZoomIn" title="Mausrad: Zoom, Umschalt+Mausrad: verschieben">Zoom +</button>
+        <button type="button" class="btn btn-ghost" id="csvLogZoomOut">Zoom −</button>
+        <button type="button" class="btn btn-ghost" id="csvLogLeft">« Rückwärts</button>
+        <button type="button" class="btn btn-ghost" id="csvLogRight">Vorwärts »</button>
+        <button type="button" class="btn btn-ghost csvlog-ruler is-r1" id="csvLogRuler1" aria-pressed="false">Lineal 1</button>
+        <button type="button" class="btn btn-ghost csvlog-ruler is-r2" id="csvLogRuler2" aria-pressed="false">Lineal 2</button>
+        <button type="button" class="btn btn-ghost" id="csvLogPrint">Drucken</button>
+        <span class="csvlog-delta" id="csvLogDelta"></span>
+        <button type="button" class="btn btn-ghost" id="csvLogLang">EN</button>
+      </div>
+      <div class="csvlog-body">
+        <div class="csvlog-chart">
+          <div class="csvlog-plot">
+            <canvas id="csvLogCanvas" aria-label="CSV-Log Kurve"></canvas>
+            <div id="csvLogTooltip" class="csvlog-tooltip" hidden></div>
+          </div>
+          <div id="csvLogLegend" class="csvlog-legend"></div>
+        </div>
+        <div class="csvlog-table-scroll" id="csvLogTableScroll">
+          <table class="csvlog-table" id="csvLogTable"></table>
+        </div>
+      </div>
+      <div class="csvlog-status" id="csvLogStatus">Bereit</div>
     </div>
   </main>
   <main id="viewProtokolleKontrollwiegungen" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Kontrollwiegungen">
@@ -4539,6 +4912,11 @@
   <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="app.js?v=langshare2"></script>
+  <script src="js/profinet-tool.js?v=20261014"></script>
+  <script src="js/tools-vnc.js?v=20261014"></script>
+  <script src="js/ftp-tool.js?v=20261014b"></script>
+  <script src="js/csv-log-viewer.js?v=20261014"></script>
+  <script src="assets/js/dispo/anlagenstamm-profinet.js?v=20261014"></script>
   <script src="js/hinweis-lamp.js?v=20260902files"></script>
   <script src="js/probe-copilot-text.js"></script>
   <script src="js/serviceprotokoll-react-bridge.js?v=langshare2"></script>

@@ -121,6 +121,11 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
       dbOrSql.prepare(sql).run();
     }
   };
+  try {
+    require('./profinet/store').ensureSchema(dbOrSql);
+  } catch (err) {
+    console.warn('[profinet] schema:', err && err.message ? err.message : err);
+  }
   run(`CREATE TABLE IF NOT EXISTS anlagenstamm_local (
       id INTEGER PRIMARY KEY,
       fabrikationsnummer TEXT NOT NULL,

@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "2.7.59",
+  "version": "2.7.60",
   "description": "KUKpit - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -29,15 +29,22 @@
     "test:sync-offline": "node --test lib/sync-lww.test.js lib/sync-offline-verify.test.js lib/arbeitsnachweis-weight.test.js lib/job-id-map.test.js lib/job-technician-gate.test.js",
     "test:dispo-probe": "node --test lib/dispo-probe.test.js",
     "test:kuklink-format": "node --test lib/kuklink/format-detect.test.js",
+    "test:profinet": "node --test lib/profinet/dcp.test.js",
+    "test:vnc": "node --test lib/vnc/validate.test.js lib/vnc/bridge.test.js",
+    "test:ftp": "node --test lib/ftp/validate.test.js lib/ftp/classify.test.js lib/ftp/local-dir.test.js",
+    "build:novnc": "node scripts/build-novnc.js",
     "test:pdf-annotator": "node --test lib/pdf-flatten-markup.test.js lib/pdf-annotator-sessions.test.js"
   },
   "devDependencies": {
     "electron": "^41.2.0",
-    "electron-builder": "^26.8.1"
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.2"
   },
   "dependencies": {
     "@azure/msal-node": "^3.8.4",
+    "@novnc/novnc": "^1.6.0",
     "@pdf-lib/fontkit": "^1.1.1",
+    "basic-ftp": "^5.3.1",
     "better-sqlite3": "^12.10.0",
     "busboy": "^1.6.0",
     "docx": "^9.6.1",
@@ -53,6 +60,9 @@
     "serialport": "^12.0.0",
     "sharp": "^0.33.5",
     "ws": "^8.14.2"
+  },
+  "optionalDependencies": {
+    "cap": "^0.2.1"
   },
   "build": {
     "appId": "de.kukla.monteur-webapp",
@@ -81,6 +91,7 @@
       "**/node_modules/better-sqlite3/**",
       "**/node_modules/serialport/**",
       "**/node_modules/@serialport/**",
+      "**/node_modules/cap/**",
       "**/node_modules/docx2pdf-converter/**"
     ],
     "publish": {

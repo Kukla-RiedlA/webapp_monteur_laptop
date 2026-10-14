@@ -418,6 +418,7 @@
 
   const getTechId = () => parseInt(document.getElementById('technicianId').value, 10) || 0;
   window.getTechId = getTechId;
+  window.showView = showView;
   window.getDispoBaseUrl = getDispoBaseUrl;
   window.getDispoUsername = getDispoUsername;
   window.getDispoPassword = getDispoPassword;
@@ -13342,6 +13343,18 @@
     });
   }
 
+  function setToolsPanel(which) {
+    var el = document.getElementById('viewProtokolleParameterlisten');
+    if (!el) return;
+    el.classList.toggle('is-tools-kuklink', which === 'kuklink');
+    el.classList.toggle('is-tools-parameterliste', which === 'parameterliste');
+    el.classList.toggle('is-tools-profinet', which === 'profinet');
+    el.classList.toggle('is-tools-vnc', which === 'vnc');
+    el.classList.toggle('is-tools-ftp', which === 'ftp');
+    var labels = { kuklink: 'Tools – Kuklink', profinet: 'Tools – Profinet', vnc: 'Tools – VNC', ftp: 'Tools – FTP' };
+    el.setAttribute('aria-label', labels[which] || 'Tools – Parameterliste');
+  }
+
   function updateKukpitNavActive(name) {
     var officeNames = {
       abrechnung: 1,
@@ -13351,7 +13364,7 @@
       arbeitsschritte: 1,
       'arbeitsschritte-ibn': 1
     };
-    var ids = ['btnViewStart', 'btnViewDienstreise', 'btnViewProtokolle', 'btnViewAnlagenstamm', 'btnViewOffice', 'btnViewArchiv', 'btnViewEinstellungen'];
+    var ids = ['btnViewStart', 'btnViewDienstreise', 'btnViewProtokolle', 'btnViewTools', 'btnViewAnlagenstamm', 'btnViewOffice', 'btnViewArchiv', 'btnViewEinstellungen'];
     ids.forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.classList.remove('is-active');
@@ -13362,6 +13375,7 @@
     else if (name === 'archiv') targetId = 'btnViewArchiv';
     else if (name === 'anlagenstamm') targetId = 'btnViewAnlagenstamm';
     else if (name === 'einstellungen') targetId = 'btnViewEinstellungen';
+    else if (name === 'tools-kuklink' || name === 'tools-parameterliste' || name === 'tools-profinet' || name === 'tools-vnc' || name === 'tools-ftp' || name === 'tools-csvlog' || name === 'protokolle-parameterlisten') targetId = 'btnViewTools';
     else if (name && String(name).indexOf('protokolle-') === 0) targetId = 'btnViewProtokolle';
     else if (officeNames[name]) targetId = 'btnViewOffice';
     var t = targetId && document.getElementById(targetId);
@@ -13408,6 +13422,12 @@
       flushProtocolAutosaveOnViewChange(name);
     }
     updateKukpitNavActive(name);
+    if (name !== 'tools-kuklink' && typeof window.stopKuklinkLiveTerminal === 'function') {
+      window.stopKuklinkLiveTerminal();
+    }
+    if (name !== 'tools-vnc' && typeof window.stopVncViewer === 'function') {
+      window.stopVncViewer();
+    }
     if (typeof window.kuklaCloseSpStepPicker === 'function' && name !== 'protokolle-service' && name !== 'protokolle-inbetriebnahme') {
       window.kuklaCloseSpStepPicker();
     }
@@ -13420,7 +13440,7 @@
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
     const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
-    const protokolleViewIds = ['viewProtokolleArbeitsnachweis', 'viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleKunden', 'viewProtokolleService'];
+    const protokolleViewIds = ['viewProtokolleArbeitsnachweis', 'viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleKunden', 'viewProtokolleService', 'viewCsvLog'];
     viewStart.classList.remove('only-left', 'only-right', 'hidden');
     viewEinstellungen.classList.remove('active');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
@@ -13479,9 +13499,15 @@
       }
       return;
     }
-    if (name && name.startsWith('protokolle-')) {
+    if (name === 'tools-kuklink' || name === 'tools-parameterliste' || name === 'tools-profinet' || name === 'tools-vnc' || name === 'tools-ftp' || name === 'tools-csvlog' || (name && name.startsWith('protokolle-'))) {
       viewStart.classList.add('hidden');
       const map = {
+        'tools-kuklink': 'viewProtokolleParameterlisten',
+        'tools-parameterliste': 'viewProtokolleParameterlisten',
+        'tools-profinet': 'viewProtokolleParameterlisten',
+        'tools-vnc': 'viewProtokolleParameterlisten',
+        'tools-ftp': 'viewProtokolleParameterlisten',
+        'tools-csvlog': 'viewCsvLog',
         'protokolle-arbeitsnachweis': 'viewProtokolleArbeitsnachweis',
         'protokolle-montagebericht': 'viewProtokolleMontagebericht',
         'protokolle-parameterlisten': 'viewProtokolleParameterlisten',
@@ -13503,7 +13529,32 @@
       if (name === 'protokolle-montagebericht' && typeof window.openAndResetMontageberichtForm === 'function') {
         window.openAndResetMontageberichtForm();
       }
-      if (name === 'protokolle-parameterlisten' && typeof window.openProtokolleParameterlisten === 'function') {
+      if (name === 'tools-kuklink' || name === 'tools-parameterliste' || name === 'tools-profinet' || name === 'tools-vnc' || name === 'tools-ftp' || name === 'protokolle-parameterlisten') {
+        var toolsPanel = {
+          'tools-kuklink': 'kuklink',
+          'tools-profinet': 'profinet',
+          'tools-vnc': 'vnc',
+          'tools-ftp': 'ftp'
+        };
+        setToolsPanel(toolsPanel[name] || 'parameterliste');
+      }
+      if (name === 'tools-ftp' && typeof window.openFtpTool === 'function') {
+        window.openFtpTool();
+      }
+      if (name === 'tools-csvlog' && typeof window.openCsvLogTool === 'function') {
+        window.openCsvLogTool();
+      }
+      if (name === 'tools-vnc' && typeof window.openVncTool === 'function') {
+        window.openVncTool();
+      }
+      if (name === 'tools-profinet' && typeof window.openProfinetTool === 'function') {
+        window.openProfinetTool(window.kuklaProfinetPending || {});
+        window.kuklaProfinetPending = null;
+      }
+      if (name === 'tools-kuklink' && typeof window.openProtokolleKuklink === 'function') {
+        window.openProtokolleKuklink();
+      }
+      if ((name === 'tools-parameterliste' || name === 'protokolle-parameterlisten') && typeof window.openProtokolleParameterlisten === 'function') {
         window.openProtokolleParameterlisten();
       }
       if (name === 'protokolle-kontrollwiegungen' && typeof window.openProtokolleKontrollwiegungen === 'function') {
@@ -15863,14 +15914,50 @@
       });
     }
   })();
+  function closeOtherNavMenus(exceptDropdownId) {
+    ['protokolleDropdown', 'toolsDropdown', 'officeDropdown'].forEach(function (id) {
+      if (id === exceptDropdownId) return;
+      var menu = document.getElementById(id);
+      if (!menu) return;
+      menu.classList.remove('open');
+      var toggle = menu.parentElement && menu.parentElement.querySelector
+        ? menu.parentElement.querySelector('.nav-item[aria-expanded]')
+        : null;
+      if (toggle) toggle.setAttribute('aria-expanded', 'false');
+    });
+  }
   (function initProtokolleDropdown() {
     const btn = document.getElementById('btnViewProtokolle');
     const dropdown = document.getElementById('protokolleDropdown');
     if (!btn || !dropdown) return;
     btn.addEventListener('click', function (e) {
       e.stopPropagation();
-      var office = document.getElementById('officeDropdown');
-      if (office) office.classList.remove('open');
+      closeOtherNavMenus('protokolleDropdown');
+      dropdown.classList.toggle('open');
+      btn.setAttribute('aria-expanded', dropdown.classList.contains('open'));
+    });
+    dropdown.querySelectorAll('.toolbar-dropdown-item').forEach(function (item) {
+      item.addEventListener('click', function () {
+        const view = item.getAttribute('data-view');
+        if (view) showView(view);
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+    });
+    document.addEventListener('click', function (e) {
+      if (dropdown.classList.contains('open') && !dropdown.contains(e.target) && !btn.contains(e.target)) {
+        dropdown.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
+  (function initToolsDropdown() {
+    const btn = document.getElementById('btnViewTools');
+    const dropdown = document.getElementById('toolsDropdown');
+    if (!btn || !dropdown) return;
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      closeOtherNavMenus('toolsDropdown');
       dropdown.classList.toggle('open');
       btn.setAttribute('aria-expanded', dropdown.classList.contains('open'));
     });
@@ -15895,8 +15982,7 @@
     if (!btn || !dropdown) return;
     btn.addEventListener('click', function (e) {
       e.stopPropagation();
-      var proto = document.getElementById('protokolleDropdown');
-      if (proto) proto.classList.remove('open');
+      closeOtherNavMenus('officeDropdown');
       dropdown.classList.toggle('open');
       btn.setAttribute('aria-expanded', dropdown.classList.contains('open'));
     });
@@ -26958,9 +27044,6 @@
       loadParameterlistenJobs().then(function () {
         loadParameterlistenLists();
       });
-      if (typeof window.openProtokolleKuklink === 'function') {
-        window.openProtokolleKuklink();
-      }
     };
 
     function escapeHtml(s) {
@@ -27445,8 +27528,8 @@
       });
     }
 
-    if (document.getElementById('btnViewProtokolle')) {
-      document.getElementById('btnViewProtokolle').addEventListener('click', function () {
+    if (document.getElementById('btnViewTools')) {
+      document.getElementById('btnViewTools').addEventListener('click', function () {
         loadParameterlistenJobs();
       });
     }
@@ -27560,6 +27643,7 @@
         liveTimer = null;
       }
     }
+    window.stopKuklinkLiveTerminal = stopLiveTerminal;
 
     function appendTerminalChunk(chunk, reset) {
       if (!previewEl) return;

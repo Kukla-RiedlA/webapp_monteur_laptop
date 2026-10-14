@@ -227,12 +227,18 @@ function registerMonteurDispoWebRoutes(app, ctx) {
   });
 }
 
-/** Schneller Download-Versuch mit vorhandenen Session-Cookies (ohne Login-Probe). */
-async function tryProxyFetchDispoBinary(dbDir, pathSuffix) {
+/** Download mit vorhandenen Session-Cookies (ohne Login-Probe).
+ *  Eigenes Timeout: fetchDispo bricht sonst nach 8 s ab — zu kurz für ZIP/PDF. */
+async function tryProxyFetchDispoBinary(dbDir, pathSuffix, timeoutMs) {
   const { proxy } = applySessionToProxy(dbDir);
   const suffix = pathSuffix.startsWith('/') ? pathSuffix : `/${pathSuffix}`;
+  const limit = Number(timeoutMs) > 0 ? Number(timeoutMs) : 10 * 60 * 1000;
+  const signal =
+    typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(limit)
+      : undefined;
   try {
-    const { res } = await proxy.fetchDispo(suffix, { method: 'GET' });
+    const { res } = await proxy.fetchDispo(suffix, { method: 'GET', signal });
     const ct = (res.headers.get('content-type') || '').toLowerCase();
     if (!res.ok || ct.includes('application/json')) return null;
     const buf = Buffer.from(await res.arrayBuffer());

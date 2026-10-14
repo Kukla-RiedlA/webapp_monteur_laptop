@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.060
+- **Tools:** Profinet (Scan, Taufen, Zuordnen), VNC, FTP und CSV-Log direkt in KUKpit.
+- **Anlagenakte:** Reiter Bussystem mit Profinet-Soll je Fabrikationsnummer; Doppelklick öffnet Profinet.
+- **Navigation:** Rechtsklick auf Menüeinträge, auch unter Tools, öffnet die Maske im eigenen Fenster.
+
 ## V 2.007.059
 - **Außenzugriff:** Kalender- und Anlagenstamm-Sync senden die Laptop-Geräte-ID. Ein bereits freigegebenes KUKpit bekommt von außen kein 403 mehr.
 - **Sync:** Protokoll-Entwürfe und Vorlagen gehen mit dem gespeicherten Dispo-Passwort raus. Ein leeres Basic-Auth wird nicht mehr gesendet.

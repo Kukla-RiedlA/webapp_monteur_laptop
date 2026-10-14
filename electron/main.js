@@ -354,6 +354,14 @@ ipcMain.handle('anlagenstamm:open-akte-window', async (_event, opts) => {
   if (!anlagenstammAkteWindows) return { ok: false, error: 'not_ready' };
   return anlagenstammAkteWindows.openAnlagenstammAkteWindow(opts || {});
 });
+ipcMain.handle('profinet:open', async (_event, opts) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'Hauptfenster fehlt' };
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send('profinet-open', opts || {});
+  return { ok: true };
+});
 ipcMain.handle('anlagenstamm:notify-saved', async (_event, payload) => {
   if (anlagenstammAkteWindows) anlagenstammAkteWindows.notifyListSaved(payload || {});
   return { ok: true };
@@ -1003,6 +1011,7 @@ app.whenReady().then(() => {
     const serverApp = createApp(db);
     const http = require('http');
     const server = http.createServer(serverApp);
+    require('./lib/vnc/bridge').attachVncBridge(server);
     server.on('error', (err) => {
       console.error('Server-Start fehlgeschlagen:', err);
       const busy = err && err.code === 'EADDRINUSE';

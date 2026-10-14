@@ -23,7 +23,8 @@
       '/assets/js/dispo/anlagenstamm_kraftaufnehmer_rows.js?v=20260819akte',
       '/assets/js/dispo/anlagenstamm_motor_rows.js?v=20260904motor3',
       '/assets/js/dispo/anlagenstamm.js?v=20260906ml',
-      '/js/anlagenstamm-laptop-bridge.js?v=20260908csv2',
+      '/assets/js/dispo/anlagenstamm-profinet.js?v=20261014',
+      '/js/anlagenstamm-laptop-bridge.js?v=20261014zip',
     ];
     await global.kuklaWebPage.mount(host, { html: shell, scripts: scripts });
   }

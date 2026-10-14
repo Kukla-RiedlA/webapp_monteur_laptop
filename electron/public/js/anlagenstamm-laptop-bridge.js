@@ -96,6 +96,14 @@
   }
 
   let bridgeStatusEl = null;
+  let bridgeStatusTicker = null;
+
+  function stopBridgeStatusTicker() {
+    if (bridgeStatusTicker) {
+      clearInterval(bridgeStatusTicker);
+      bridgeStatusTicker = null;
+    }
+  }
 
   function ensureBridgeStatusModal() {
     if (bridgeStatusEl) return bridgeStatusEl;
@@ -124,15 +132,25 @@
   }
 
   function showBridgeStatus(message, opts) {
+    stopBridgeStatusTicker();
     const el = ensureBridgeStatusModal();
     const text = el.querySelector('.kukla-bridge-status-text');
     const okBtn = el.querySelector('.kukla-bridge-status-ok');
-    if (text) text.textContent = String(message || '');
+    const base = String(message || '');
+    if (text) text.textContent = base;
     if (okBtn) okBtn.style.display = opts && opts.error ? 'inline-block' : 'none';
     el.style.display = 'flex';
+    if (opts && opts.tick && text) {
+      const started = Date.now();
+      bridgeStatusTicker = setInterval(() => {
+        const sec = Math.max(1, Math.round((Date.now() - started) / 1000));
+        text.textContent = base + ' · ' + sec + ' s';
+      }, 1000);
+    }
   }
 
   function hideBridgeStatus() {
+    stopBridgeStatusTicker();
     if (bridgeStatusEl) bridgeStatusEl.style.display = 'none';
   }
 
@@ -498,40 +516,63 @@
     };
   }
 
-  async function openPnFileExternal(fab, relPath) {
-    const localPath = await resolvePnLocalPath(fab, relPath);
-    const originalName = (relPath || '').split(/[/\\]/).pop() || '';
+  function pnLoadLabel(relPath, meta) {
+    const name =
+      (meta && meta.fileName) ||
+      String(relPath || '').split(/[/\\]/).pop() ||
+      'Datei';
+    const size = meta && meta.sizeLabel ? String(meta.sizeLabel).trim() : '';
+    return size ? name + ' · ' + size + ' wird geladen…' : name + ' wird geladen…';
+  }
+
+  async function openPnFileExternal(fab, relPath, meta) {
+    const localPath = await resolvePnLocalPath(fab, relPath, meta);
+    const originalName = (meta && meta.fileName) || (relPath || '').split(/[/\\]/).pop() || '';
     await openLocalFilePath(localPath, { excel: false, fileName: originalName });
     return { ok: true, path: localPath };
   }
 
-  async function resolvePnLocalPath(fab, relPath) {
+  async function resolvePnLocalPath(fab, relPath, meta) {
     if (!relPath) throw new Error('Dateipfad fehlt.');
     const creds = getDispoCreds();
 
-    showBridgeStatus('Datei wird geladen…');
+    showBridgeStatus(pnLoadLabel(relPath, meta), { tick: true });
 
-    const r = await fetch(api + '/api/anlagenstamm_file_open', {
-      method: 'POST',
-      headers: techHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-        baseUrl: creds.baseUrl,
-        fab: fab,
-        source: 'projekte_neu',
-        path: relPath,
-        job_id: pnExplorerState.jobId || undefined,
-        fallbackName: relPath.split('/').pop() || 'download',
-        serverUsername: creds.serverUsername,
-      }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!d.ok || !d.path) {
-      const err = d.error || 'Datei konnte nicht geladen werden';
+    let d = {};
+    try {
+      const r = await fetch(api + '/api/anlagenstamm_file_open', {
+        method: 'POST',
+        headers: techHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          baseUrl: creds.baseUrl,
+          fab: fab,
+          source: 'projekte_neu',
+          path: relPath,
+          job_id: pnExplorerState.jobId || undefined,
+          fallbackName: (meta && meta.fileName) || relPath.split('/').pop() || 'download',
+          serverUsername: creds.serverUsername,
+        }),
+      });
+      d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok || !d.path) {
+        throw new Error((d && d.error) || 'Datei konnte nicht geladen werden');
+      }
+    } catch (e) {
+      const err = e && e.message ? e.message : 'Datei konnte nicht geladen werden';
       showBridgeError(err);
       throw new Error(err);
     }
     hideBridgeStatus();
     return d.path;
+  }
+
+  function pnRowMeta(row, rel) {
+    const fileNameEl = row && row.querySelector('.dienstreise-explorer-filename');
+    const sizeEl = row && row.querySelector('.dienstreise-explorer-size');
+    return {
+      fileName: (fileNameEl && fileNameEl.textContent.trim()) || String(rel || '').split('/').pop() || 'Datei',
+      sizeLabel: sizeEl ? sizeEl.textContent.trim() : '',
+    };
   }
 
   async function openPnFile(fab, relPath) {
@@ -544,7 +585,7 @@
 
   async function showPnFileContextMenu(fab, relPath, fileName) {
     if (!global.monteurApp || typeof global.monteurApp.showFileContextMenu !== 'function') return;
-    const localPath = await resolvePnLocalPath(fab, relPath);
+    const localPath = await resolvePnLocalPath(fab, relPath, { fileName: fileName });
     await global.monteurApp.showFileContextMenu({
       localPath: localPath,
       fileName: fileName || relPath.split('/').pop() || 'Datei',
@@ -679,7 +720,7 @@
         const row = btn.closest('.dienstreise-explorer-row');
         const rel = row && row.getAttribute('data-relative-path');
         if (!rel) return;
-        openPnFileExternal(fab, rel).catch((e) => {
+        openPnFileExternal(fab, rel, pnRowMeta(row, rel)).catch((e) => {
           if (!bridgeStatusEl || bridgeStatusEl.style.display === 'none') {
             showBridgeError(e && e.message ? e.message : String(e));
           }
@@ -709,7 +750,7 @@
           });
           return;
         }
-        openPnFileExternal(fab, rel).catch((e) => {
+        openPnFileExternal(fab, rel, pnRowMeta(row, rel)).catch((e) => {
           if (!bridgeStatusEl || bridgeStatusEl.style.display === 'none') {
             showBridgeError(e && e.message ? e.message : String(e));
           }

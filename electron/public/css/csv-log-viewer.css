@@ -1,0 +1,264 @@
+/* CSV-Log: Kurvenansicht im KUKpit, Kukla-Flächen und Primärgrün. */
+
+body > #viewCsvLog.view-protokolle.active {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  padding: 0.75rem 1rem 0.55rem;
+}
+
+#viewCsvLog .csvlog {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--card, #fff);
+  color: var(--text, #1a1a1a);
+  border: 1px solid #cfe8d1;
+  border-left: 4px solid var(--kukla-primary, #0e7b5a);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(14, 123, 90, 0.06);
+  overflow: hidden;
+}
+
+#viewCsvLog .csvlog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 0.9rem 0.45rem;
+}
+
+#viewCsvLog .csvlog-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #0c6a4d;
+}
+
+#viewCsvLog .csvlog-sub {
+  margin: 0;
+  color: var(--muted, #5c5c5c);
+  font-size: 0.85rem;
+}
+
+#viewCsvLog .csvlog-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.7rem;
+  background: #eefaf5;
+  border-top: 1px solid #cfe8d1;
+  border-bottom: 1px solid #cfe8d1;
+}
+
+#viewCsvLog .csvlog-toolbar .btn {
+  padding: 0.32rem 0.65rem;
+  font-size: 0.82rem;
+  border-radius: 8px;
+}
+
+#viewCsvLog .csvlog-toolbar .btn-ghost:hover,
+#viewCsvLog .csvlog-toolbar .btn-primary:hover {
+  color: #fff;
+}
+
+#viewCsvLog .csvlog-ruler.is-on.is-r1 {
+  background: #b42318;
+  border-color: #b42318;
+  color: #fff;
+}
+
+#viewCsvLog .csvlog-ruler.is-on.is-r2 {
+  background: #1d4e89;
+  border-color: #1d4e89;
+  color: #fff;
+}
+
+#viewCsvLog .csvlog-delta {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--kukla-primary, #0e7b5a);
+  font-size: 0.92rem;
+  min-height: 1.2em;
+}
+
+#viewCsvLog .csvlog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1.45fr) minmax(140px, 0.85fr);
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem 0.45rem;
+}
+
+#viewCsvLog .csvlog-chart {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+#viewCsvLog .csvlog-plot {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 180px;
+  border: 1px solid #cfe8d1;
+  border-radius: 8px;
+  background: var(--card, #fff);
+  overflow: hidden;
+}
+
+#viewCsvLog .csvlog-plot canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: var(--card, #fff);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+#viewCsvLog .csvlog-tooltip {
+  position: absolute;
+  z-index: 3;
+  max-width: min(360px, 70%);
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  background: #143d32;
+  color: #fff;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  pointer-events: none;
+  white-space: pre-wrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+#viewCsvLog .csvlog-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  max-height: 4.6rem;
+  overflow: auto;
+}
+
+#viewCsvLog .csvlog-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid #cfe8d1;
+  background: var(--card, #fff);
+  color: var(--text, #1a1a1a);
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem 0.12rem 0.35rem;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+#viewCsvLog .csvlog-chip.is-off {
+  opacity: 0.45;
+}
+
+#viewCsvLog .csvlog-swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+#viewCsvLog .csvlog-table-scroll {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid #cfe8d1;
+  border-radius: 8px;
+  background: var(--card, #fff);
+}
+
+#viewCsvLog .csvlog-table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-size: 0.78rem;
+}
+
+#viewCsvLog .csvlog-table th,
+#viewCsvLog .csvlog-table td {
+  padding: 0 0.55rem;
+  height: 28px;
+  box-sizing: border-box;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid #e7f3ec;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#viewCsvLog .csvlog-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eefaf5;
+  color: #0c6a4d;
+  font-weight: 600;
+}
+
+#viewCsvLog .csvlog-table tr.is-selected td {
+  background: rgba(14, 123, 90, 0.14);
+}
+
+#viewCsvLog .csvlog-table tbody tr[data-i] {
+  cursor: pointer;
+}
+
+#viewCsvLog .csvlog-pad td {
+  padding: 0;
+  border: 0;
+  background: transparent !important;
+}
+
+#viewCsvLog .csvlog-status {
+  flex: 0 0 auto;
+  padding: 0.28rem 0.75rem;
+  background: var(--kukla-primary, #0e7b5a);
+  color: #fff;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-ui-theme="dark"] #viewCsvLog .csvlog,
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-plot,
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-table-scroll,
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-chip {
+  border-color: var(--accent, #0f3460);
+}
+
+html[data-ui-theme="dark"] #viewCsvLog .csvlog {
+  border-left-color: var(--kukla-primary, #0e7b5a);
+}
+
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-title,
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-table thead th {
+  color: #d7f5ea;
+}
+
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-toolbar,
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-table thead th {
+  background: rgba(14, 123, 90, 0.16);
+  border-color: var(--accent, #0f3460);
+}
+
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-table th,
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-table td {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+html[data-ui-theme="dark"] #viewCsvLog .csvlog-delta {
+  color: #8ddec4;
+}

@@ -42,6 +42,9 @@ function installLocalGatewayWebRequest(port) {
       `http://127.0.0.1:${n}/*`,
       `http://localhost:${n}/*`,
       `http://[::1]:${n}/*`,
+      `ws://127.0.0.1:${n}/*`,
+      `ws://localhost:${n}/*`,
+      `ws://[::1]:${n}/*`,
     ],
   };
   session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {

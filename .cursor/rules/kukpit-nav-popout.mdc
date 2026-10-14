@@ -1,0 +1,22 @@
+---
+description: KUKpit-Navigation — Rechtsklick öffnet die Maske im eigenen Fenster, auch Tools
+alwaysApply: true
+---
+
+# KUKpit: Rechtsklick öffnet ein eigenes Fenster
+
+Linksklick bleibt im Hauptfenster. Rechtsklick auf einen Eintrag der Hauptnavigation öffnet dieselbe Maske in einem eigenen Fenster. Das gilt für Protokolle, Tools, Office und die übrigen Menüpunkte mit `data-view`.
+
+## Verhalten
+
+- Eintrag im Untermenü (z. B. Arbeitsnachweis, Kuklink, Parameterliste, Profinet): Rechtsklick öffnet das Fenster.
+- Gruppen-Schaltfläche (Protokolle ▾, Tools ▾, Office ▾): Rechtsklick öffnet nur das Menü, kein Fenster.
+- Ein zweiter Rechtsklick auf denselben Eintrag holt das schon offene Fenster nach vorn.
+
+## Pflicht bei einem neuen Menüpunkt
+
+1. Button mit Klasse `nav-drop-item` und `data-view` in `electron/public/index.html`.
+2. Dieselbe `data-view` in `showView()` in `electron/public/app.js`, damit das Popout die Maske wirklich anzeigt (Panel und Init, nicht nur die leere Hülle).
+3. Dieselbe `data-view` in die Allowlist `VIEWS` in `electron/lib/popout-window.js`. Ohne diesen Eintrag passiert beim Rechtsklick nichts.
+
+Der Kontextmenü-Handler in `app.js` liest `data-view` und ruft `openPopoutWindow`. Die Allowlist ist die Stelle, die Tools bisher ausgelassen hat.

@@ -29,6 +29,13 @@ contextBridge.exposeInMainWorld('monteurApp', {
   anlagenstammSearch: (payload) => ipcRenderer.invoke('anlagenstamm:search', payload),
   anlagenstammSave: (payload) => ipcRenderer.invoke('anlagenstamm:save', payload),
   openAnlagenstammAkteWindow: (opts) => ipcRenderer.invoke('anlagenstamm:open-akte-window', opts || {}),
+  openProfinet: (opts) => ipcRenderer.invoke('profinet:open', opts || {}),
+  onProfinetOpen: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('profinet-open', handler);
+    return () => ipcRenderer.removeListener('profinet-open', handler);
+  },
   openBugReport: () => ipcRenderer.invoke('bug-report:open'),
   setBugReportAlwaysOnTop: (on) => ipcRenderer.invoke('bug-report:always-on-top', !!on),
   notifyAnlagenstammSaved: (payload) => ipcRenderer.invoke('anlagenstamm:notify-saved', payload || {}),

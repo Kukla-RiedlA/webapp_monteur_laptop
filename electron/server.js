@@ -97,6 +97,9 @@ const { copyProtocolsToLocalAbrechnung } = require('./lib/abrechnung-protocol-co
 const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, pullRecentLohnLocks, ensureTables: ensureZeitschreibungTables } = require('./lib/zeitschreibung-routes');
 const { registerHinweiseRoutes } = require('./lib/hinweise-routes');
 const { registerKuklinkRoutes } = require('./lib/kuklink/register-routes');
+const { registerProfinetRoutes } = require('./lib/profinet/register-routes');
+const { registerVncRoutes } = require('./lib/vnc/register-routes');
+const { registerFtpRoutes } = require('./lib/ftp/register-routes');
 const kuklinkFormat = require('./lib/kuklink/format-detect');
 const { idPaToPal, isIdPaFormat } = require('./lib/kuklink/idpa-to-pal');
 const { createBackgroundJobService } = require('./lib/background_jobs');
@@ -9393,7 +9396,7 @@ function createApp(db) {
     }
     if (sourceNorm === 'projekte_neu' && pnPath) {
       const filePath = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdRaw, {
-        skipDeepSearch: false,
+        skipDeepSearch: true,
       });
       if (filePath) {
         try {
@@ -9699,7 +9702,7 @@ function createApp(db) {
     }
     if (sourceNorm === 'projekte_neu' && pnPath) {
       const localAll = resolveProjekteNeuLocalFilePathAll(technicianId, fabValue, pnPath, jobIdRaw, {
-        skipDeepSearch: false,
+        skipDeepSearch: true,
       });
       if (localAll) {
         try {
@@ -9800,7 +9803,12 @@ function createApp(db) {
       url = `${base}/dispo_api/api/anlagenstamm_file_download.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}&file=${encodeURIComponent(fileValue)}`;
     }
     try {
-      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
+      const signal =
+        typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(10 * 60 * 1000)
+          : undefined;
+      try { console.log('[anlagenstamm_file_open] download', fabValue, pnPath || fileValue); } catch (_) {}
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth), signal });
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
         try { console.warn('[anlagenstamm_file_open] upstream error', r.status, data && data.error ? data.error : r.statusText); } catch (_) {}
@@ -9820,8 +9828,15 @@ function createApp(db) {
       try { console.log('[anlagenstamm_file_open] ready', targetPath, 'bytes=' + buf.length); } catch (_) {}
       return res.json({ ok: true, path: targetPath, filename: safeName, size: buf.length, source: 'dispo' });
     } catch (e) {
-      try { console.warn('[anlagenstamm_file_open] fetch exception', e.message); } catch (_) {}
-      return res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      const raw = e && e.message ? String(e.message) : String(e);
+      const timedOut = (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) || /timeout|aborted/i.test(raw);
+      try { console.warn('[anlagenstamm_file_open] fetch exception', raw); } catch (_) {}
+      return res.status(timedOut ? 504 : 502).json({
+        ok: false,
+        error: timedOut
+          ? 'Download nach 10 Minuten abgebrochen. Verbindung prüfen und erneut öffnen.'
+          : 'Dispo nicht erreichbar: ' + raw,
+      });
     }
   });
 
@@ -14638,13 +14653,18 @@ function createApp(db) {
     }
   });
 
-  app.post('/api/protokolle/parameterlisten', express.json(), async (req, res) => {
+  async function handleParameterlistenUpload(req, res) {
     try {
-      const body = req.body || {};
+      const ftpFile = req && req._ftpFile;
+      const body = Object.assign({}, (req && req.body) || {}, (ftpFile && ftpFile.body) || {});
       const technicianId = getTechnicianId(req);
-      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
-      const filename = (body.filename || '').toString().trim();
-      const contentBase64 = body.content;
+      const localJobId = parseInt(
+        ftpFile && ftpFile.jobId != null ? ftpFile.jobId : (body.job_id != null ? body.job_id : body.jobId),
+        10,
+      );
+      const filename = ((ftpFile && ftpFile.filename) || body.filename || '').toString().trim();
+      let csvBuffer = ftpFile && Buffer.isBuffer(ftpFile.buffer) ? ftpFile.buffer : null;
+      const contentBase64 = csvBuffer ? csvBuffer.toString('base64') : body.content;
 
       if (!localJobId || !technicianId) {
         return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
@@ -14672,11 +14692,12 @@ function createApp(db) {
       const layoutPl = await ensureJobReiseFolderLayout(localJobId, reiseDir, technicianId);
       const montageFolderNamePl =
         layoutPl.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
-      let csvBuffer;
-      try {
-        csvBuffer = Buffer.from(contentBase64, 'base64');
-      } catch (e) {
-        return res.status(400).json({ ok: false, error: 'Ungültiger Base64-Inhalt.' });
+      if (!csvBuffer) {
+        try {
+          csvBuffer = Buffer.from(contentBase64, 'base64');
+        } catch (e) {
+          return res.status(400).json({ ok: false, error: 'Ungültiger Base64-Inhalt.' });
+        }
       }
       const parsedParam = parseParameterFile(csvBuffer, { fileName: filename });
       const filenameFn = parsedParam && parsedParam.filename_fab ? parseInt(parsedParam.filename_fab, 10) : null;
@@ -14857,7 +14878,9 @@ function createApp(db) {
       console.error('[parameterlisten] Upload:', errMsg, e);
       res.status(500).json({ ok: false, error: 'Parameterlisten-Upload fehlgeschlagen: ' + errMsg });
     }
-  });
+  }
+
+  app.post('/api/protokolle/parameterlisten', express.json(), handleParameterlistenUpload);
 
   function collectJobParameterDirs(localJobId, technicianId, jobRow) {
     const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
@@ -17235,6 +17258,62 @@ function createApp(db) {
   registerKuklinkRoutes(app, {
     dbDir: DB_DIR,
     saveDumpToJob: saveKuklinkDumpToJob,
+  });
+  registerProfinetRoutes(app, { db });
+  function assignFtpParameterList(req, file) {
+    const creds = resolveDispoServerCreds({});
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const fakeRes = {
+        statusCode: 200,
+        status(code) {
+          this.statusCode = code;
+          return this;
+        },
+        json(payload) {
+          if (settled) return;
+          settled = true;
+          resolve(Object.assign({ status: this.statusCode }, payload || {}));
+        },
+      };
+      const remotePath = file && file.remotePath ? String(file.remotePath) : '';
+      const filename = file && file.filename ? String(file.filename) : '';
+      const fakeReq = {
+        body: {
+          job_id: file && file.jobId,
+          filename,
+          source_path: remotePath ? remotePath + '/' + filename : filename,
+          baseUrl: creds.baseUrl,
+          externalUrl: creds.externalUrl,
+          internalUrl: creds.internalUrl,
+          serverUsername: creds.serverUsername,
+          serverPassword: creds.serverPassword,
+        },
+        query: req.query,
+        headers: req.headers,
+        get(name) {
+          return req.get ? req.get(name) : '';
+        },
+        _ftpFile: {
+          jobId: file && file.jobId,
+          filename,
+          buffer: file && file.buffer,
+        },
+      };
+      Promise.resolve(handleParameterlistenUpload(fakeReq, fakeRes))
+        .then(() => {
+          if (!settled) {
+            settled = true;
+            resolve({ ok: false, error: 'Zuordnung ohne Antwort.' });
+          }
+        })
+        .catch(reject);
+    });
+  }
+
+  registerVncRoutes(app);
+  registerFtpRoutes(app, {
+    assignParameterList: assignFtpParameterList,
   });
 
   try {
