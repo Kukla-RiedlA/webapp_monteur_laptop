@@ -99,6 +99,7 @@ function publicMeta(row, payload) {
     document_number: payload.document_number || '',
     holder_name: payload.holder_name || '',
     country: payload.country || '',
+    valid_for: payload.valid_for || '',
     issuer: payload.issuer || '',
     issued_on: payload.issued_on || '',
     valid_until: payload.valid_until || '',
@@ -151,16 +152,28 @@ function saveLocal(db, technicianId, fields, fileBuf) {
   if (fields.id && !existing) throw new Error('not_found');
   if (existing && existing.deleted) throw new Error('not_found');
   const prev = existing ? readPayload(db, existing) : {};
+  function pickText(key, maxLen) {
+    var raw;
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      raw = fields[key] == null ? '' : String(fields[key]);
+    } else {
+      raw = prev && prev[key] != null ? String(prev[key]) : '';
+    }
+    raw = raw.trim();
+    if (maxLen && raw.length > maxLen) raw = raw.slice(0, maxLen);
+    return raw;
+  }
   const payload = {
-    title: String(fields.title || prev.title || '').slice(0, 240),
-    document_number: String(fields.document_number || prev.document_number || '').slice(0, 240),
-    holder_name: String(fields.holder_name || prev.holder_name || '').slice(0, 240),
-    country: String(fields.country || prev.country || '').slice(0, 240),
-    issuer: String(fields.issuer || prev.issuer || '').slice(0, 240),
-    issued_on: String(fields.issued_on || prev.issued_on || ''),
-    valid_until: String(fields.valid_until || prev.valid_until || ''),
-    notes: String(fields.notes || prev.notes || '').slice(0, 2000),
-    original_filename: String(fields.original_filename || prev.original_filename || ''),
+    title: pickText('title', 240),
+    document_number: pickText('document_number', 240),
+    holder_name: pickText('holder_name', 240),
+    country: pickText('country', 240),
+    valid_for: pickText('valid_for', 16).toUpperCase(),
+    issuer: pickText('issuer', 240),
+    issued_on: pickText('issued_on', 10),
+    valid_until: pickText('valid_until', 10),
+    notes: pickText('notes', 240),
+    original_filename: String((fields.original_filename || prev.original_filename || '')).slice(0, 240),
     reminder_enabled: fields.reminder_enabled === true || fields.reminder_enabled === 1 || fields.reminder_enabled === '1',
     reminder_days_before: Math.min(365, Math.max(1, parseInt(fields.reminder_days_before || prev.reminder_days_before || 30, 10) || 30)),
   };
@@ -250,6 +263,7 @@ function storeServerDoc(db, technicianId, doc, fileBuf, previewBuf) {
     document_number: doc.document_number || '',
     holder_name: doc.holder_name || '',
     country: doc.country || '',
+    valid_for: doc.valid_for || '',
     issuer: doc.issuer || '',
     issued_on: doc.issued_on || '',
     valid_until: doc.valid_until || '',

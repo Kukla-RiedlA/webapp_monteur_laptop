@@ -1274,15 +1274,45 @@
     .view-dokumente.active { display: block; }
     .dok-table-wrap { overflow-x: auto; }
     .dok-table-wrap thead th { position: static; top: auto; }
-    .dok-thumb { width: 72px; height: 72px; object-fit: cover; cursor: pointer; border-radius: 6px; }
-    .dok-kind { width: 28px; height: 28px; vertical-align: middle; }
+    .dok-thumb { width: 96px; height: 72px; object-fit: cover; cursor: pointer; border-radius: 6px; border: 1px solid var(--accent); background: var(--bg); }
+    .dok-kind { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 84px; text-align: center; font-size: 12px; font-weight: 600; line-height: 1.2; }
+    .dok-kind img { width: 48px; height: 48px; }
+    .dok-facts { display: flex; flex-direction: column; gap: 8px; }
+    .dok-factline { display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: end; }
+    .dok-fact { display: flex; flex-direction: column; gap: 1px; min-width: 7.5rem; }
+    .dok-fact span { font-size: 11px; opacity: 0.75; font-weight: 600; }
+    .dok-fact strong { font-size: 14px; font-weight: 600; }
+    #viewDokumente table td { vertical-align: middle; padding: 14px 10px; }
+    #viewDokumente table tbody td { border-bottom: 3px solid #0e7b5a; }
+    #viewDokumente .dok-actions { white-space: nowrap; }
     .dok-types { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0; }
     .dok-type { border: 1px solid var(--accent); background: var(--card); border-radius: 8px; padding: 0.35rem 0.5rem; cursor: pointer; }
     .dok-type.is-on { border-color: #0e7b5a; background: #eefaf5; }
     .dok-type img { width: 36px; height: 36px; display: block; margin: 0 auto 0.2rem; }
     #dokModal[hidden] { display: none; }
     #dokModal { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 400; display: flex; align-items: flex-start; justify-content: center; padding: 2rem 1rem; overflow: auto; }
-    #dokModal .card { width: min(640px, 100%); }
+    #dokModal .card { width: min(880px, 100%); padding: 1.25rem 1.4rem; }
+    #dokModal .dok-form { display: flex; flex-direction: column; gap: 14px; }
+    #dokModal .dok-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+    #dokModal .dok-field { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; font-size: 13px; font-weight: 600; }
+    #dokModal .dok-field input, #dokModal .dok-field textarea, #dokModal .dok-field select { width: 100%; box-sizing: border-box; min-height: 40px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; font-weight: 400; }
+    #dokModal .dok-field textarea { min-height: 76px; resize: vertical; }
+    #dokModal .dok-notes { grid-column: 1 / -1; }
+    #dokModal .dok-hint { font-size: 12px; font-weight: 400; opacity: 0.75; }
+    #dokModal .dok-check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 600; }
+    #dokModal .dok-check input { width: auto; min-height: 0; }
+    #dokImageEdit { display: flex; flex-direction: column; gap: 8px; }
+    #dokImageEdit[hidden] { display: none; }
+    #dokImageCanvas { max-width: 100%; border: 1px solid var(--accent); border-radius: 8px; cursor: crosshair; background: #fff; }
+    .dok-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .dok-drop { border: 2px dashed #0e7b5a; border-radius: 8px; background: #eefaf5; padding: 14px 16px; text-align: center; color: #0c6a4d; }
+    .dok-drop.is-over { background: #dff6ec; }
+    .dok-drop-name { display: block; margin-top: 6px; font-weight: 600; color: #1a1a1a; }
+    .dok-fact strong { display: inline-flex; align-items: center; gap: 6px; }
+    .dok-flag { width: 20px; height: 15px; object-fit: cover; flex: 0 0 auto; }
+    .dok-country { display: flex; align-items: center; gap: 8px; }
+    .dok-country select { flex: 1; min-width: 0; }
+    @media (max-width: 640px) { #dokModal .dok-grid { grid-template-columns: 1fr; } }
     .view-anlagenstamm { display: none; padding: 0; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-anlagenstamm.active { display: flex; flex-direction: column; width: 100%; max-width: none; }
     #viewAnlagenstamm .view-module-host { width: 100%; max-width: none; flex: 1; min-width: 0; }
@@ -4651,28 +4681,50 @@
       <div class="dok-table-wrap" style="margin-top:0.75rem">
         <table>
           <thead>
-            <tr><th>Vorschau</th><th>Dokumentenart</th><th>Details</th><th></th></tr>
+            <tr><th>Art</th><th>Datei</th><th>Angaben</th><th></th></tr>
           </thead>
           <tbody id="dokBody"><tr><td colspan="4">Wird geladen…</td></tr></tbody>
         </table>
       </div>
     </div>
     <div id="dokModal" hidden>
-      <form class="card" id="dokForm">
+      <form class="card dok-form" id="dokForm">
         <h3 id="dokFormTitle">Dokument hinzufügen</h3>
         <div class="dok-types" id="dokTypes"></div>
-        <label>Datei (PDF, JPEG, PNG)<input type="file" id="dokFile" accept="application/pdf,image/jpeg,image/png"></label>
-        <label>Bezeichnung<input type="text" id="dokTitle" maxlength="240"></label>
-        <label>Nummer<input type="text" id="dokNumber" maxlength="240" autocomplete="off"></label>
-        <label>Name<input type="text" id="dokName" maxlength="240"></label>
-        <label>Land<input type="text" id="dokCountry" maxlength="240"></label>
-        <label>Aussteller<input type="text" id="dokIssuer" maxlength="240"></label>
-        <label>Ausstellung<input type="date" id="dokIssued"></label>
-        <label>Ablauf<input type="date" id="dokUntil"></label>
-        <label>Notiz<textarea id="dokNotes" maxlength="240"></textarea></label>
-        <label>Vorlauf in Tagen<input type="number" id="dokDays" min="1" max="365" value="30"></label>
-        <label><input type="checkbox" id="dokRemind"> Erinnerung</label>
-        <div style="display:flex;gap:0.5rem;margin-top:0.75rem">
+        <label class="dok-field">Datei
+          <input type="file" id="dokFile" accept="application/pdf,image/jpeg,image/png">
+          <span class="dok-hint">PDF, JPEG oder PNG. Datei wählen, hierher ziehen oder mit Strg+V einfügen. Leere Textfelder werden geleert.</span>
+        </label>
+        <div class="dok-drop" id="dokDrop" tabindex="0">Bild oder PDF hierher ziehen oder einfügen<span class="dok-drop-name" id="dokDropName"></span></div>
+        <button type="button" class="btn btn-ghost" id="dokEditImage" hidden>Vorhandenes Bild drehen oder beschneiden</button>
+        <div id="dokImageEdit" hidden>
+          <canvas id="dokImageCanvas"></canvas>
+          <p class="dok-hint">Zum Beschneiden ein Rechteck auf das Bild ziehen, dann Ausschnitt übernehmen.</p>
+          <div class="dok-edit-actions">
+            <button type="button" class="btn btn-ghost" id="dokRotLeft">Links drehen</button>
+            <button type="button" class="btn btn-ghost" id="dokRotRight">Rechts drehen</button>
+            <button type="button" class="btn btn-ghost" id="dokCropApply">Ausschnitt übernehmen</button>
+          </div>
+        </div>
+        <div class="dok-grid">
+          <label class="dok-field">Bezeichnung<input type="text" id="dokTitle" maxlength="240"></label>
+          <label class="dok-field">Nummer<input type="text" id="dokNumber" maxlength="240" autocomplete="off"></label>
+          <label class="dok-field">Name<input type="text" id="dokName" maxlength="240"></label>
+          <label class="dok-field">Land<input type="text" id="dokCountry" maxlength="240"></label>
+          <label class="dok-field">Gültig für
+            <span class="dok-country">
+              <img id="dokValidForFlag" class="dok-flag" alt="" width="20" height="15" hidden>
+              <select id="dokValidFor"></select>
+            </span>
+          </label>
+          <label class="dok-field">Aussteller<input type="text" id="dokIssuer" maxlength="240"></label>
+          <label class="dok-field">Ausstellung<input type="date" id="dokIssued"></label>
+          <label class="dok-field">Ablauf<input type="date" id="dokUntil"></label>
+          <label class="dok-field">Vorlauf in Tagen<input type="number" id="dokDays" min="1" max="365" value="30"></label>
+          <label class="dok-field dok-notes">Notiz<textarea id="dokNotes" maxlength="240" rows="3"></textarea></label>
+          <label class="dok-check"><input type="checkbox" id="dokRemind"> Erinnerung vor Ablauf</label>
+        </div>
+        <div style="display:flex;gap:0.5rem">
           <button type="submit" class="btn">Speichern</button>
           <button type="button" class="btn btn-ghost" id="dokCancel">Abbrechen</button>
         </div>
@@ -4961,7 +5013,7 @@
   <script src="js/mb-image-draw.js"></script>
   <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>
-  <script src="js/dokumente-view.js?v=1"></script>
+  <script src="js/dokumente-view.js?v=3"></script>
   <script src="app.js?v=langshare2"></script>
   <script src="js/profinet-tool.js?v=20261014"></script>
   <script src="js/tools-vnc.js?v=20261014"></script>

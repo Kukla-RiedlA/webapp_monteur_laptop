@@ -21,6 +21,60 @@
     return h;
   }
 
+  function countryList() {
+    return window.HOTEL_COUNTRIES || [];
+  }
+
+  function countryByCode(code) {
+    var want = String(code || '').toUpperCase();
+    if (!want) return null;
+    var list = countryList();
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].code || '').toUpperCase() === want) return list[i];
+    }
+    return null;
+  }
+
+  function flagSrc(code) {
+    var c = String(code || '').toLowerCase().slice(0, 2);
+    return /^[a-z]{2}$/.test(c) ? 'flags/' + c + '.png' : '';
+  }
+
+  function validForFact(code) {
+    var entry = countryByCode(code);
+    if (!entry) return '<div class="dok-fact"><span>Gültig für</span><strong>—</strong></div>';
+    var src = flagSrc(entry.code);
+    var img = src ? '<img class="dok-flag" src="' + esc(src) + '" alt="" width="20" height="15">' : '';
+    var mark = entry.flag ? esc(entry.flag) + ' ' : '';
+    return '<div class="dok-fact"><span>Gültig für</span><strong>' + img + mark + esc(entry.name) + '</strong></div>';
+  }
+
+  function fillValidFor() {
+    var sel = document.getElementById('dokValidFor');
+    if (!sel || sel.getAttribute('data-ready') === '1') return;
+    var html = '<option value="">Keine Angabe</option>';
+    countryList().forEach(function (c, idx) {
+      if (idx === 5) html += '<option value="" disabled>──────────</option>';
+      html += '<option value="' + esc(c.code) + '">' + esc((c.name || '') + ' ' + (c.flag || '') + ' (' + (c.code || '') + ')') + '</option>';
+    });
+    sel.innerHTML = html;
+    sel.setAttribute('data-ready', '1');
+  }
+
+  function showValidForFlag(code) {
+    var img = document.getElementById('dokValidForFlag');
+    if (!img) return;
+    var src = flagSrc(code);
+    if (!src) {
+      img.hidden = true;
+      img.removeAttribute('src');
+      return;
+    }
+    img.hidden = false;
+    img.onerror = function () { img.hidden = true; };
+    img.src = src;
+  }
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
@@ -53,18 +107,23 @@
       } else if (d.has_file && (d.file_mime === 'image/jpeg' || d.file_mime === 'image/png')) {
         thumb = '<img class="dok-thumb" alt="" data-id="' + d.id + '" data-part="file" src="' + esc(fileUrl(d.id, 'file')) + '">';
       }
-      var details = [
-        d.title, d.document_number, d.holder_name, d.country, d.issuer,
-        d.issued_on ? ('Ausstellung ' + d.issued_on) : '',
-        d.valid_until ? ('Ablauf ' + d.valid_until) : ''
-      ].filter(Boolean).map(esc).join('<br>');
+      function fact(label, value) {
+        return '<div class="dok-fact"><span>' + esc(label) + '</span><strong>' + esc(value || '—') + '</strong></div>';
+      }
+      function deDate(value) {
+        var m = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        return m ? (m[3] + '.' + m[2] + '.' + m[1]) : '—';
+      }
+      var line1 = fact('Nummer', d.document_number) + fact('Name', d.holder_name) + fact('Land', d.country) + validForFact(d.valid_for) + fact('Aussteller', d.issuer);
+      if (d.title) line1 = fact('Bezeichnung', d.title) + line1;
+      var line2 = fact('Ausstellung', deDate(d.issued_on)) + fact('Ablauf', deDate(d.valid_until))
+        + fact('Vorlauf', String(d.reminder_days_before || 30) + ' Tage')
+        + '<label class="dok-fact"><span>Erinnerung</span><strong><input type="checkbox" class="dok-remind" data-id="' + d.id + '"' + (d.reminder_enabled ? ' checked' : '') + '></strong></label>';
       return '<tr data-id="' + d.id + '">'
+        + '<td><div class="dok-kind"><img alt="" src="icons/beleg/' + esc(d.doc_type) + '.png"><span>' + esc(d.doc_type_label || d.doc_type) + '</span></div></td>'
         + '<td>' + thumb + '</td>'
-        + '<td><img class="dok-kind" alt="" src="icons/beleg/' + esc(d.doc_type) + '.png"> ' + esc(d.doc_type_label || d.doc_type) + '</td>'
-        + '<td>' + details
-        + '<div>Vorlauf: ' + esc(String(d.reminder_days_before || 30)) + ' Tage</div>'
-        + '<label><input type="checkbox" class="dok-remind" data-id="' + d.id + '"' + (d.reminder_enabled ? ' checked' : '') + '> Erinnerung</label></td>'
-        + '<td><button type="button" class="btn btn-ghost dok-edit" data-id="' + d.id + '">Ändern</button> '
+        + '<td><div class="dok-facts"><div class="dok-factline">' + line1 + '</div><div class="dok-factline">' + line2 + '</div></div></td>'
+        + '<td class="dok-actions"><button type="button" class="btn btn-ghost dok-edit" data-id="' + d.id + '">Ändern</button> '
         + '<button type="button" class="btn btn-danger dok-del" data-id="' + d.id + '">Löschen</button></td>'
         + '</tr>';
     }).join('');
@@ -72,6 +131,133 @@
 
   var docs = [];
   var editingId = 0;
+  var imageSource = null;
+  var imageEdited = false;
+  var imageViewScale = 1;
+  var cropRect = null;
+  var cropDrag = null;
+
+  function hideImageEdit() {
+    imageSource = null;
+    imageEdited = false;
+    cropRect = null;
+    cropDrag = null;
+    var box = document.getElementById('dokImageEdit');
+    if (box) box.hidden = true;
+  }
+
+  function drawImageEdit() {
+    var canvas = document.getElementById('dokImageCanvas');
+    if (!canvas || !imageSource) return;
+    var maxW = 640;
+    imageViewScale = imageSource.width > maxW ? maxW / imageSource.width : 1;
+    canvas.width = Math.max(1, Math.round(imageSource.width * imageViewScale));
+    canvas.height = Math.max(1, Math.round(imageSource.height * imageViewScale));
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(imageSource, 0, 0, canvas.width, canvas.height);
+    if (cropRect && cropRect.w > 2 && cropRect.h > 2) {
+      ctx.strokeStyle = '#0e7b5a';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(cropRect.x, cropRect.y, cropRect.w, cropRect.h);
+    }
+  }
+
+  function showImageEdit(dataUrl) {
+    var img = new Image();
+    img.onload = function () {
+      imageSource = img;
+      imageEdited = false;
+      cropRect = null;
+      var box = document.getElementById('dokImageEdit');
+      if (box) box.hidden = false;
+      drawImageEdit();
+    };
+    img.src = dataUrl;
+  }
+
+  function paintSource(width, height, draw) {
+    var c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(width));
+    c.height = Math.max(1, Math.round(height));
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    draw(ctx, c);
+    var img = new Image();
+    img.onload = function () {
+      imageSource = img;
+      imageEdited = true;
+      cropRect = null;
+      drawImageEdit();
+    };
+    img.src = c.toDataURL('image/jpeg', 0.92);
+  }
+
+  function rotateImage(dir) {
+    if (!imageSource) return;
+    var src = imageSource;
+    paintSource(src.height, src.width, function (ctx, c) {
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate(dir * Math.PI / 2);
+      ctx.drawImage(src, -src.width / 2, -src.height / 2);
+    });
+  }
+
+  function applyCrop() {
+    if (!imageSource || !cropRect || cropRect.w < 8 || cropRect.h < 8) {
+      setMsg('Zum Beschneiden zuerst ein Rechteck aufziehen.', true);
+      return;
+    }
+    var sx = cropRect.x / imageViewScale;
+    var sy = cropRect.y / imageViewScale;
+    var sw = cropRect.w / imageViewScale;
+    var sh = cropRect.h / imageViewScale;
+    var src = imageSource;
+    paintSource(sw, sh, function (ctx, c) {
+      ctx.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
+    });
+  }
+
+  function exportEditedJpeg() {
+    return new Promise(function (resolve, reject) {
+      if (!imageSource) { reject(new Error('image')); return; }
+      var c = document.createElement('canvas');
+      c.width = imageSource.width;
+      c.height = imageSource.height;
+      var ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(imageSource, 0, 0);
+      c.toBlob(function (blob) {
+        if (!blob) { reject(new Error('image')); return; }
+        var reader = new FileReader();
+        reader.onload = function () {
+          var raw = String(reader.result || '');
+          var comma = raw.indexOf(',');
+          resolve({ b64: comma >= 0 ? raw.slice(comma + 1) : raw, name: 'dokument.jpg' });
+        };
+        reader.onerror = function () { reject(new Error('image')); };
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', 0.92);
+    });
+  }
+
+  function loadExistingImage(id) {
+    fetch(fileUrl(id, 'file'), { headers: headers(false) })
+      .then(function (r) { if (!r.ok) throw new Error('file'); return r.blob(); })
+      .then(function (blob) {
+        if (blob.type !== 'image/jpeg' && blob.type !== 'image/png') {
+          setMsg('Nur Fotos lassen sich drehen und beschneiden.', true);
+          return;
+        }
+        var reader = new FileReader();
+        reader.onload = function () { showImageEdit(String(reader.result || '')); };
+        reader.readAsDataURL(blob);
+      })
+      .catch(function () { setMsg('Bild nicht verfügbar.', true); });
+  }
 
   function load() {
     return fetch(apiBase() + '/api/doc-safe?technician_id=' + encodeURIComponent(String(techId() || '')), { headers: headers(false) })
@@ -133,8 +319,75 @@
     }).join('');
   }
 
+  function fileKind(file) {
+    var type = String(file && file.type || '').toLowerCase();
+    var name = String(file && file.name || '').toLowerCase();
+    if (type === 'image/jpeg' || type === 'image/jpg' || /\.jpe?g$/.test(name)) return 'image/jpeg';
+    if (type === 'image/png' || /\.png$/.test(name)) return 'image/png';
+    if (type === 'application/pdf' || type === 'application/x-pdf' || /\.pdf$/.test(name)) return 'application/pdf';
+    return '';
+  }
+
+  function namedIncoming(file) {
+    var kind = fileKind(file);
+    if (!kind) return null;
+    var fallback = kind === 'application/pdf' ? 'einfuegen.pdf' : (kind === 'image/png' ? 'einfuegen.png' : 'einfuegen.jpg');
+    var name = file.name && file.name !== 'image.png' ? file.name : fallback;
+    if (file.type === kind && file.name === name) return file;
+    return new File([file], name, { type: kind });
+  }
+
+  function setDropName(name) {
+    var el = document.getElementById('dokDropName');
+    if (el) el.textContent = name || '';
+  }
+
+  function clipboardFile(ev) {
+    var cd = ev.clipboardData;
+    if (!cd) return null;
+    if (cd.files && cd.files.length) return cd.files[0];
+    var items = cd.items || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].kind === 'file') {
+        var f = items[i].getAsFile();
+        if (f) return f;
+      }
+    }
+    return null;
+  }
+
+  function takeIncoming(file) {
+    var ready = namedIncoming(file);
+    if (!ready) { setMsg('Nur PDF, JPEG oder PNG.', true); return; }
+    var modal = document.getElementById('dokModal');
+    if (modal && modal.hidden) openForm(null);
+    var input = document.getElementById('dokFile');
+    var dt = new DataTransfer();
+    dt.items.add(ready);
+    input.files = dt.files;
+    setDropName(ready.name);
+    input.dispatchEvent(new Event('change'));
+  }
+
+  function bindFileTarget(el) {
+    if (!el) return;
+    el.addEventListener('dragover', function (ev) {
+      ev.preventDefault();
+      el.classList.add('is-over');
+    });
+    el.addEventListener('dragleave', function () { el.classList.remove('is-over'); });
+    el.addEventListener('drop', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      el.classList.remove('is-over');
+      var dropped = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+      if (dropped) takeIncoming(dropped);
+    });
+  }
+
   function openForm(doc) {
     fillTypes();
+    fillValidFor();
     editingId = doc ? doc.id : 0;
     document.getElementById('dokFormTitle').textContent = doc ? 'Dokument ändern' : 'Dokument hinzufügen';
     document.querySelectorAll('.dok-type').forEach(function (btn) {
@@ -144,6 +397,9 @@
     document.getElementById('dokNumber').value = doc ? (doc.document_number || '') : '';
     document.getElementById('dokName').value = doc ? (doc.holder_name || '') : '';
     document.getElementById('dokCountry').value = doc ? (doc.country || '') : '';
+    var validFor = document.getElementById('dokValidFor');
+    if (validFor) validFor.value = doc && doc.valid_for ? doc.valid_for : '';
+    showValidForFlag(validFor ? validFor.value : '');
     document.getElementById('dokIssuer').value = doc ? (doc.issuer || '') : '';
     document.getElementById('dokIssued').value = doc ? (doc.issued_on || '') : '';
     document.getElementById('dokUntil').value = doc ? (doc.valid_until || '') : '';
@@ -151,6 +407,13 @@
     document.getElementById('dokDays').value = String(doc ? (doc.reminder_days_before || 30) : 30);
     document.getElementById('dokRemind').checked = !!(doc && doc.reminder_enabled);
     document.getElementById('dokFile').value = '';
+    setDropName('');
+    hideImageEdit();
+    var editBtn = document.getElementById('dokEditImage');
+    if (editBtn) {
+      var isImg = !!(doc && doc.has_file && (doc.file_mime === 'image/jpeg' || doc.file_mime === 'image/png'));
+      editBtn.hidden = !isImg;
+    }
     document.getElementById('dokModal').hidden = false;
   }
 
@@ -164,9 +427,72 @@
     if (!root || root.getAttribute('data-bound') === '1') return;
     root.setAttribute('data-bound', '1');
     document.getElementById('dokAdd').addEventListener('click', function () { openForm(null); });
+    var validFor = document.getElementById('dokValidFor');
+    if (validFor) validFor.addEventListener('change', function () { showValidForFlag(validFor.value); });
+    root.addEventListener('error', function (ev) {
+      if (ev.target && ev.target.classList && ev.target.classList.contains('dok-flag')) ev.target.hidden = true;
+    }, true);
     document.getElementById('dokCancel').addEventListener('click', function () {
+      hideImageEdit();
       document.getElementById('dokModal').hidden = true;
     });
+    bindFileTarget(document.getElementById('dokDrop'));
+    bindFileTarget(root);
+    document.addEventListener('paste', function (ev) {
+      var viewOn = root.classList.contains('active');
+      var modal = document.getElementById('dokModal');
+      if (!viewOn && !(modal && !modal.hidden)) return;
+      var active = document.activeElement;
+      var typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') && active.id !== 'dokFile';
+      var pasted = clipboardFile(ev);
+      if (!pasted) return;
+      if (typing && ev.clipboardData && ev.clipboardData.getData('text')) return;
+      ev.preventDefault();
+      takeIncoming(pasted);
+    });
+    document.getElementById('dokFile').addEventListener('change', function () {
+      var file = document.getElementById('dokFile').files[0];
+      setDropName(file ? file.name : '');
+      imageEdited = false;
+      if (!file || (file.type !== 'image/jpeg' && file.type !== 'image/png')) {
+        hideImageEdit();
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () { showImageEdit(String(reader.result || '')); };
+      reader.readAsDataURL(file);
+    });
+    document.getElementById('dokEditImage').addEventListener('click', function () {
+      if (editingId) loadExistingImage(editingId);
+    });
+    document.getElementById('dokRotLeft').addEventListener('click', function () { rotateImage(-1); });
+    document.getElementById('dokRotRight').addEventListener('click', function () { rotateImage(1); });
+    document.getElementById('dokCropApply').addEventListener('click', applyCrop);
+    var canvas = document.getElementById('dokImageCanvas');
+    canvas.addEventListener('pointerdown', function (ev) {
+      if (!imageSource) return;
+      var rect = canvas.getBoundingClientRect();
+      var x = (ev.clientX - rect.left) * (canvas.width / rect.width);
+      var y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+      cropDrag = { x: x, y: y };
+      cropRect = { x: x, y: y, w: 0, h: 0 };
+    });
+    canvas.addEventListener('pointermove', function (ev) {
+      if (!cropDrag) return;
+      var rect = canvas.getBoundingClientRect();
+      var x = (ev.clientX - rect.left) * (canvas.width / rect.width);
+      var y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+      cropRect = {
+        x: Math.min(cropDrag.x, x),
+        y: Math.min(cropDrag.y, y),
+        w: Math.abs(x - cropDrag.x),
+        h: Math.abs(y - cropDrag.y)
+      };
+      drawImageEdit();
+    });
+    function endCropDrag() { cropDrag = null; }
+    canvas.addEventListener('pointerup', endCropDrag);
+    canvas.addEventListener('pointerleave', endCropDrag);
     document.getElementById('dokTypes').addEventListener('click', function (ev) {
       var btn = ev.target.closest('.dok-type');
       if (!btn) return;
@@ -189,6 +515,7 @@
           document_number: document.getElementById('dokNumber').value,
           holder_name: document.getElementById('dokName').value,
           country: document.getElementById('dokCountry').value,
+          valid_for: document.getElementById('dokValidFor').value,
           issuer: document.getElementById('dokIssuer').value,
           issued_on: document.getElementById('dokIssued').value,
           valid_until: document.getElementById('dokUntil').value,
@@ -207,6 +534,12 @@
             syncThenLoad();
           })
           .catch(function () { setMsg('Speichern fehlgeschlagen.', true); });
+      }
+      if (imageEdited && imageSource) {
+        exportEditedJpeg().then(function (out) { send(out.b64, out.name); }).catch(function () {
+          setMsg('Bild konnte nicht übernommen werden.', true);
+        });
+        return;
       }
       if (!file) { send('', ''); return; }
       var reader = new FileReader();
