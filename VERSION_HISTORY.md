@@ -4,6 +4,11 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.064
+- **VNC:** Die Verbindung zur Waagen-Elektronik bleibt stehen (8-Bit-Farbe). Der Mauszeiger bleibt über dem Bild sichtbar.
+- **VNC:** Rechtsklick öffnet das Fenster im Vordergrund.
+- **Profinet:** Die Scan-Kacheln entfallen. Bearbeiten in der Tabelle öffnet die Teilnehmer-Maske (Name, IP, Maske, Gateway, Blinken, Taufen, Zuordnen).
+
 ## V 2.007.060
 - **Tools:** Profinet (Scan, Taufen, Zuordnen), VNC, FTP und CSV-Log direkt in KUKpit.
 - **Anlagenakte:** Reiter Bussystem mit Profinet-Soll je Fabrikationsnummer; Doppelklick öffnet Profinet.

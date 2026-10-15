@@ -905,6 +905,10 @@ ipcMain.handle('open-external', async (event, url) => {
   await shell.openExternal(url.trim());
 });
 
+ipcMain.on('popout:nav-context', () => {
+  require('./lib/edit-context-menu').suppressEditContextMenuBriefly();
+});
+
 ipcMain.handle('popout:open', async (_event, payload) => {
   if (!popoutWindows) popoutWindows = createPopoutWindowManager(() => PORT);
   return popoutWindows.openPopoutWindow(payload || {});

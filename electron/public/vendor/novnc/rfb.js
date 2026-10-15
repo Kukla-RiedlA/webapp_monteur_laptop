@@ -7,6 +7,52 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
+// lib/vnc/low-color.js
+var require_low_color = __commonJS({
+  "lib/vnc/low-color.js"(exports, module) {
+    "use strict";
+    function clientFormatForServer(fmt) {
+      const bpp = Number(fmt && fmt.bpp);
+      const trueColor = Number(fmt && fmt.trueColor) ? 1 : 0;
+      if (bpp > 8) return null;
+      if (!Number.isFinite(bpp) || bpp < 1) return null;
+      const advertised = Number(fmt.redMax) > 0 && Number(fmt.greenMax) > 0 && Number(fmt.blueMax) > 0;
+      if (!advertised) {
+        return {
+          bpp: 8,
+          depth: 8,
+          trueColor: 1,
+          redMax: 7,
+          greenMax: 7,
+          blueMax: 3,
+          redShift: 0,
+          greenShift: 3,
+          blueShift: 6
+        };
+      }
+      return {
+        bpp: 8,
+        depth: 8,
+        trueColor: 1,
+        redMax: Number(fmt.redMax) & 65535,
+        greenMax: Number(fmt.greenMax) & 65535,
+        blueMax: Number(fmt.blueMax) & 65535,
+        redShift: Number(fmt.redShift) & 255,
+        greenShift: Number(fmt.greenShift) & 255,
+        blueShift: Number(fmt.blueShift) & 255
+      };
+    }
+    function expandChannel(pixel, shift, max) {
+      if (!max) return 0;
+      return (pixel >>> shift & max) * 255 / max;
+    }
+    module.exports = {
+      clientFormatForServer,
+      expandChannel
+    };
+  }
+});
+
 // node_modules/@novnc/novnc/lib/util/int.js
 var require_int = __commonJS({
   "node_modules/@novnc/novnc/lib/util/int.js"(exports) {
@@ -12977,7 +13023,7 @@ var require_ra2 = __commonJS({
 // node_modules/@novnc/novnc/lib/decoders/raw.js
 var require_raw = __commonJS({
   "node_modules/@novnc/novnc/lib/decoders/raw.js"(exports) {
-    "use strict";
+    var kuklaExpandChannel = require_low_color().expandChannel;
     Object.defineProperty(exports, "__esModule", {
       value: true
     });
@@ -13039,11 +13085,18 @@ var require_raw = __commonJS({
             var curY = y + (height - this._lines);
             var data = sock.rQshiftBytes(bytesPerLine, false);
             if (depth == 8) {
+              var ch = display && display._kuklaChannel;
+              var redMax = ch ? ch.redMax : 3;
+              var greenMax = ch ? ch.greenMax : 3;
+              var blueMax = ch ? ch.blueMax : 3;
+              var redShift = ch ? ch.redShift : 0;
+              var greenShift = ch ? ch.greenShift : 2;
+              var blueShift = ch ? ch.blueShift : 4;
               var newdata = new Uint8Array(width * 4);
               for (var i = 0; i < width; i++) {
-                newdata[i * 4 + 0] = (data[i] >> 0 & 3) * 255 / 3;
-                newdata[i * 4 + 1] = (data[i] >> 2 & 3) * 255 / 3;
-                newdata[i * 4 + 2] = (data[i] >> 4 & 3) * 255 / 3;
+                newdata[i * 4 + 0] = kuklaExpandChannel(data[i], redShift, redMax);
+                newdata[i * 4 + 1] = kuklaExpandChannel(data[i], greenShift, greenMax);
+                newdata[i * 4 + 2] = kuklaExpandChannel(data[i], blueShift, blueMax);
                 newdata[i * 4 + 3] = 255;
               }
               data = newdata;
@@ -14870,6 +14923,7 @@ var require_h264 = __commonJS({
 // node_modules/@novnc/novnc/lib/rfb.js
 var require_rfb = __commonJS({
   "node_modules/@novnc/novnc/lib/rfb.js"(exports) {
+    var kuklaClientFormat = require_low_color().clientFormatForServer;
     function _typeof(o) {
       "@babel/helpers - typeof";
       return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function(o2) {
@@ -17263,11 +17317,29 @@ var require_rfb = __commonJS({
             this._keyboard.grab();
           }
           this._fbDepth = 24;
+          this._kuklaChannel = null;
           if (this._fbName === "Intel(r) AMT KVM") {
             Log.Warn("Intel AMT KVM only supports 8/16 bit depths. Using low color mode.");
             this._fbDepth = 8;
           }
-          RFB2.messages.pixelFormat(this._sock, this._fbDepth, true);
+          var kuklaFmt = kuklaClientFormat({
+            bpp,
+            trueColor,
+            redMax,
+            greenMax,
+            blueMax,
+            redShift,
+            greenShift,
+            blueShift
+          });
+          if (kuklaFmt) {
+            this._fbDepth = kuklaFmt.depth;
+            this._kuklaChannel = kuklaFmt;
+            this._display._kuklaChannel = kuklaFmt;
+            RFB2.messages.pixelFormatChannels(this._sock, kuklaFmt.bpp, kuklaFmt.depth, kuklaFmt.redMax, kuklaFmt.greenMax, kuklaFmt.blueMax, kuklaFmt.redShift, kuklaFmt.greenShift, kuklaFmt.blueShift);
+          } else {
+            RFB2.messages.pixelFormat(this._sock, this._fbDepth, true);
+          }
           this._sendEncodings();
           RFB2.messages.fbUpdateRequest(this._sock, false, 0, 0, this._fbWidth, this._fbHeight);
           this._updateConnectionState("connected");
@@ -18127,6 +18199,26 @@ var require_rfb = __commonJS({
         sock.sQpush16(y);
         sock.sQpush16(width);
         sock.sQpush16(height);
+        sock.flush();
+      },
+      pixelFormatChannels: function pixelFormatChannels(sock, bpp, depth, redMax, greenMax, blueMax, redShift, greenShift, blueShift) {
+        sock.sQpush8(0);
+        sock.sQpush8(0);
+        sock.sQpush8(0);
+        sock.sQpush8(0);
+        sock.sQpush8(bpp);
+        sock.sQpush8(depth);
+        sock.sQpush8(0);
+        sock.sQpush8(1);
+        sock.sQpush16(redMax);
+        sock.sQpush16(greenMax);
+        sock.sQpush16(blueMax);
+        sock.sQpush8(redShift);
+        sock.sQpush8(greenShift);
+        sock.sQpush8(blueShift);
+        sock.sQpush8(0);
+        sock.sQpush8(0);
+        sock.sQpush8(0);
         sock.flush();
       },
       pixelFormat: function pixelFormat(sock, depth, trueColor) {

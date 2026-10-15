@@ -92,7 +92,7 @@
 
   async function loadRfb() {
     if (rfbCtor) return rfbCtor;
-    var href = new URL('/vendor/novnc/rfb.js', apiBase().replace(/\/+$/, '') + '/').href;
+    var href = new URL('/vendor/novnc/rfb.js?v=20261015-8bit', apiBase().replace(/\/+$/, '') + '/').href;
     var mod = await import(href);
     var ctor = mod.default || mod.RFB || mod;
     if (ctor && typeof ctor !== 'function' && typeof ctor.default === 'function') ctor = ctor.default;

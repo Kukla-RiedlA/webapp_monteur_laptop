@@ -29643,6 +29643,13 @@
   };
 
   document.querySelectorAll('.app-nav .nav-item, .app-nav .nav-drop-item, #btnViewEinstellungen').forEach(function (btn) {
+    btn.addEventListener('mousedown', function (ev) {
+      if (ev.button !== 2) return;
+      if (!btn.getAttribute('data-view') && !popoutMenuViews[btn.id]) return;
+      if (window.monteurApp && typeof window.monteurApp.noteNavContextMenu === 'function') {
+        try { window.monteurApp.noteNavContextMenu(); } catch (_) { /* Menü darf den Fenster-Start nicht blockieren */ }
+      }
+    });
     btn.addEventListener('contextmenu', function (ev) {
       var spec = popoutMenuViews[btn.id];
       if (!spec) {

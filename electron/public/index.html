@@ -397,6 +397,9 @@
       height: calc(100vh - 16rem);
       overflow: hidden;
     }
+    .vnc-screen canvas {
+      cursor: default !important;
+    }
     body.has-sticky-header .profinet-table-wrap thead th,
     .profinet-table-wrap thead th {
       position: static;
@@ -406,9 +409,30 @@
     .profinet-table { width: 100%; border-collapse: collapse; }
     .profinet-table th, .profinet-table td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #cfe8d1; }
     .profinet-table th { background: #eefaf5; color: #0c6a4d; }
-    .profinet-topo { width: 100%; height: auto; min-height: 140px; }
+    .profinet-topo-wrap { overflow-x: auto; }
+    .profinet-topo { width: auto; height: auto; max-width: none; display: block; }
     #profinetHint { background: #eefaf5; border: 1px solid #cfe8d1; border-radius: 8px; padding: 0.75rem 1rem; margin: 0 0 0.75rem; }
-    #profinetDialog[hidden] { display: none; }
+    #profinetDialog[hidden] { display: none !important; }
+    #profinetDialog:not([hidden]) {
+      position: fixed;
+      inset: 0;
+      z-index: 4500;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      background: rgba(0, 0, 0, 0.35);
+    }
+    .profinet-dialog-card {
+      width: min(520px, 100%);
+      max-height: calc(100vh - 2rem);
+      overflow: auto;
+      margin: 0;
+      background: #eefaf5;
+      border: 1px solid #cfe8d1;
+      border-radius: 8px;
+      padding: 0.75rem 1rem 1rem;
+    }
     .parameterlisten-split > .card { margin-bottom: 0; min-width: 0; }
     .kuklink-term-head {
       display: flex;
@@ -3288,7 +3312,6 @@
           <button type="button" class="btn btn-primary" id="btnProfinetScan">Scannen</button>
         </div>
         <p id="profinetStatus" class="muted" style="margin:0 0 0.75rem">Noch nicht geprüft.</p>
-        <div id="profinetTopo" class="profinet-topo-wrap"></div>
         <div class="profinet-table-wrap">
           <table class="profinet-table">
             <thead>
@@ -3299,15 +3322,17 @@
                 <th>Maske</th>
                 <th>Gateway</th>
                 <th>Hersteller</th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="profinetBody">
-              <tr><td colspan="6">Noch kein Scan.</td></tr>
+              <tr><td colspan="7">Noch kein Scan.</td></tr>
             </tbody>
           </table>
         </div>
-        <div id="profinetDialog" hidden style="margin-top:1rem;border:1px solid #cfe8d1;border-radius:8px;padding:0.75rem;background:#eefaf5">
-          <h3 style="margin:0 0 0.5rem">Teilnehmer</h3>
+        <div id="profinetDialog" hidden>
+          <div class="profinet-dialog-card" role="dialog" aria-modal="true" aria-labelledby="profinetDialogTitle">
+          <h3 id="profinetDialogTitle" style="margin:0 0 0.5rem">Teilnehmer</h3>
           <p style="margin:0 0 0.5rem">MAC <strong id="profinetDlgMac"></strong></p>
           <p class="muted" style="margin:0 0 0.75rem">Ist: Name <span id="profinetDlgIstName"></span>, IP <span id="profinetDlgIstIp"></span></p>
           <div class="form-group"><label for="profinetDlgName">Soll-Name</label><input id="profinetDlgName" type="text"></div>
@@ -3320,6 +3345,7 @@
             <button type="button" class="btn btn-primary" id="btnProfinetWrite">Taufen</button>
             <button type="button" class="btn btn-primary" id="btnProfinetAssign">Zuordnen</button>
             <button type="button" class="btn btn-ghost" id="btnProfinetDialogClose">Schließen</button>
+          </div>
           </div>
         </div>
       </div>
@@ -5014,12 +5040,12 @@
   <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="js/dokumente-view.js?v=3"></script>
-  <script src="app.js?v=langshare2"></script>
-  <script src="js/profinet-tool.js?v=20261014"></script>
+  <script src="app.js?v=vnc-popout"></script>
+  <script src="js/profinet-tool.js?v=20261015-dialog"></script>
   <script src="js/tools-vnc.js?v=20261014"></script>
   <script src="js/ftp-tool.js?v=20261014b"></script>
   <script src="js/csv-log-viewer.js?v=20261014"></script>
-  <script src="assets/js/dispo/anlagenstamm-profinet.js?v=20261014"></script>
+  <script src="assets/js/dispo/anlagenstamm-profinet.js?v=20261015-topo"></script>
   <script src="js/hinweis-lamp.js?v=20260902files"></script>
   <script src="js/probe-copilot-text.js"></script>
   <script src="js/serviceprotokoll-react-bridge.js?v=langshare2"></script>

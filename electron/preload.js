@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('monteurApp', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   openImageGallery: (payload) => ipcRenderer.invoke('image-gallery:open', payload),
   openPopoutWindow: (payload) => ipcRenderer.invoke('popout:open', payload || {}),
+  noteNavContextMenu: () => ipcRenderer.sendSync('popout:nav-context'),
   anlagenstammSearch: (payload) => ipcRenderer.invoke('anlagenstamm:search', payload),
   anlagenstammSave: (payload) => ipcRenderer.invoke('anlagenstamm:save', payload),
   openAnlagenstammAkteWindow: (opts) => ipcRenderer.invoke('anlagenstamm:open-akte-window', opts || {}),

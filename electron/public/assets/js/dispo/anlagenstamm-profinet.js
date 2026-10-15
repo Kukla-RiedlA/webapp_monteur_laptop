@@ -79,17 +79,37 @@
       return '<p class="muted">Noch keine Teilnehmer an dieser Fabrikationsnummer.</p>';
     }
     var info = layout(rows, edges);
-    var unlinked = rows.filter(function (row) {
-      return !info.linked[String(row.mac || '').toLowerCase()];
+    var linkedRows = [];
+    var openRows = [];
+    rows.forEach(function (row) {
+      if (edges.length && info.linked[String(row.mac || '').toLowerCase()]) linkedRows.push(row);
+      else openRows.push(row);
     });
-    var width = Math.max(640, rows.length * 170);
-    var height = edges.length ? 280 : 160;
-    var html = '<svg class="profinet-topo" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Profinet-Topologie">';
+    var split = linkedRows.length > 0 && openRows.length > 0;
+    function placeBand(list, originY) {
+      var cols = Math.min(4, Math.max(1, list.length));
+      var colW = 220;
+      var rowH = 108;
+      var positions = [];
+      list.forEach(function (row, index) {
+        positions.push({
+          row: row,
+          x: 20 + (index % cols) * colW + colW / 2,
+          y: originY + Math.floor(index / cols) * rowH + rowH / 2,
+        });
+      });
+      var lines = Math.max(1, Math.ceil(list.length / cols));
+      return { positions: positions, width: 20 + cols * colW + 12, height: lines * rowH };
+    }
+    var top = placeBand(split ? linkedRows : rows, 8);
+    var gap = split ? 36 : 0;
+    var bottom = split ? placeBand(openRows, top.height + gap) : { positions: [], width: 0, height: 0 };
+    var width = Math.max(top.width, bottom.width, 240);
+    var height = top.height + gap + bottom.height + 8;
+    var html = '<svg class="profinet-topo" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Profinet-Topologie">';
     var pos = {};
-    rows.forEach(function (row, index) {
-      var x = 90 + (index % 6) * 160;
-      var y = edges.length && info.linked[String(row.mac || '').toLowerCase()] ? 70 : (edges.length ? 210 : 70);
-      pos[String(row.mac || '').toLowerCase()] = { x: x, y: y };
+    top.positions.concat(bottom.positions).forEach(function (item) {
+      pos[String(item.row.mac || '').toLowerCase()] = item;
     });
     edges.forEach(function (link) {
       var a = pos[String(link.local_mac || '').toLowerCase()];
@@ -97,21 +117,20 @@
       if (!a || !b) return;
       html += '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" stroke="#0e7b5a" stroke-width="2"/>';
     });
-    rows.forEach(function (row) {
-      var p = pos[String(row.mac || '').toLowerCase()];
-      if (!p) return;
+    if (split) {
+      html += '<text x="20" y="' + (top.height + 24) + '" font-size="14" fill="#0c6a4d">ohne Verbindung</text>';
+    }
+    top.positions.concat(bottom.positions).forEach(function (item) {
+      var row = item.row;
       var label = nodeLabel(row).split('\n');
+      var title = String(label[0] || '');
+      if (title.length > 18) title = title.slice(0, 17) + '…';
       html += '<g class="profinet-node" data-mac="' + esc(row.mac) + '" style="cursor:pointer">';
-      html += '<rect x="' + (p.x - 62) + '" y="' + (p.y - 28) + '" width="124" height="56" rx="10" fill="#eefaf5" stroke="#0e7b5a"/>';
-      html += '<text x="' + p.x + '" y="' + (p.y - 6) + '" text-anchor="middle" font-size="12" fill="#1a1a1a">' + esc(label[0] || '') + '</text>';
-      html += '<text x="' + p.x + '" y="' + (p.y + 12) + '" text-anchor="middle" font-size="11" fill="#1a1a1a">' + esc(label[1] || '') + '</text>';
+      html += '<rect x="' + (item.x - 96) + '" y="' + (item.y - 36) + '" width="192" height="72" rx="12" fill="#eefaf5" stroke="#0e7b5a" stroke-width="2"/>';
+      html += '<text x="' + item.x + '" y="' + (item.y - 6) + '" text-anchor="middle" font-size="16" fill="#1a1a1a">' + esc(title) + '</text>';
+      html += '<text x="' + item.x + '" y="' + (item.y + 18) + '" text-anchor="middle" font-size="14" fill="#1a1a1a">' + esc(label[1] || '') + '</text>';
       html += '</g>';
     });
-    if (unlinked.length && edges.length) {
-      html += '<text x="16" y="188" font-size="12" fill="#0c6a4d">ohne Verbindung</text>';
-    } else if (!edges.length && rows.length) {
-      html += '<text x="16" y="24" font-size="12" fill="#0c6a4d">ohne Verbindung</text>';
-    }
     html += '</svg>';
     return html;
   }

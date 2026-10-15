@@ -120,51 +120,11 @@
     return !name || !ip || ip === '0.0.0.0';
   }
 
-  function renderTopology() {
-    var host = document.getElementById('profinetTopo');
-    if (!host) return;
-    var rows = state.teilnehmer || [];
-    if (!rows.length) {
-      host.innerHTML = '<p class="muted">Noch kein Scan.</p>';
-      return;
-    }
-    var linked = {};
-    (state.links || []).forEach(function (link) {
-      if (link.local_mac) linked[String(link.local_mac).toLowerCase()] = true;
-      if (link.peer_mac) linked[String(link.peer_mac).toLowerCase()] = true;
-    });
-    var width = Math.max(640, rows.length * 170);
-    var height = (state.links || []).length ? 280 : 150;
-    var html = '<svg class="profinet-topo" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Gescannte Profinet-Teilnehmer">';
-    var pos = {};
-    rows.forEach(function (row, index) {
-      var y = (state.links || []).length && linked[String(row.mac).toLowerCase()] ? 64 : ((state.links || []).length ? 200 : 70);
-      pos[String(row.mac).toLowerCase()] = { x: 90 + (index % 6) * 160, y: y };
-    });
-    (state.links || []).forEach(function (link) {
-      var a = pos[String(link.local_mac || '').toLowerCase()];
-      var b = pos[String(link.peer_mac || '').toLowerCase()];
-      if (!a || !b) return;
-      html += '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" stroke="#0e7b5a" stroke-width="2"/>';
-    });
-    rows.forEach(function (row) {
-      var p = pos[String(row.mac).toLowerCase()];
-      html += '<g class="profinet-scan-node" data-mac="' + esc(row.mac) + '" style="cursor:pointer">';
-      html += '<rect x="' + (p.x - 62) + '" y="' + (p.y - 28) + '" width="124" height="56" rx="10" fill="#eefaf5" stroke="#0e7b5a"/>';
-      html += '<text x="' + p.x + '" y="' + (p.y - 4) + '" text-anchor="middle" font-size="12" fill="#1a1a1a">' + esc(row.station_name || row.mac) + '</text>';
-      html += '<text x="' + p.x + '" y="' + (p.y + 14) + '" text-anchor="middle" font-size="11" fill="#1a1a1a">' + esc(row.ip_address || '0.0.0.0') + '</text>';
-      html += '</g>';
-    });
-    html += '<text x="12" y="' + ((state.links || []).length ? 176 : 22) + '" font-size="12" fill="#0c6a4d">ohne Verbindung</text>';
-    html += '</svg>';
-    host.innerHTML = html;
-  }
-
   function renderTable() {
     var body = document.getElementById('profinetBody');
     if (!body) return;
     if (!state.teilnehmer.length) {
-      body.innerHTML = '<tr><td colspan="6">Keine Teilnehmer im letzten Scan.</td></tr>';
+      body.innerHTML = '<tr><td colspan="7">Keine Teilnehmer im letzten Scan.</td></tr>';
       return;
     }
     body.innerHTML = state.teilnehmer.map(function (row) {
@@ -175,6 +135,7 @@
         + '<td>' + esc(row.subnet_mask || '') + '</td>'
         + '<td>' + esc(row.gateway || '') + '</td>'
         + '<td>' + esc(row.vendor || '') + '</td>'
+        + '<td><button type="button" class="btn btn-ghost" data-profinet-edit="1" data-mac="' + esc(row.mac) + '">Bearbeiten</button></td>'
         + '</tr>';
     }).join('');
   }
@@ -221,7 +182,10 @@
     state.selectedMac = row.mac;
     var dialog = document.getElementById('profinetDialog');
     if (!dialog) return;
+    if (dialog.parentNode !== document.body) document.body.appendChild(dialog);
     dialog.hidden = false;
+    var nameInput = document.getElementById('profinetDlgName');
+    if (nameInput) nameInput.focus();
     document.getElementById('profinetDlgMac').textContent = row.mac;
     document.getElementById('profinetDlgIstName').textContent = row.station_name || '(leer)';
     document.getElementById('profinetDlgIstIp').textContent = row.ip_address || '0.0.0.0';
@@ -251,7 +215,6 @@
     var data = await localApi('/api/profinet/scan', { method: 'POST', body: adapter });
     state.teilnehmer = data.teilnehmer || [];
     state.links = data.links || [];
-    renderTopology();
     renderTable();
     setStatus(state.teilnehmer.length + ' Teilnehmer. Leitungen nur, wenn die Nachbarschaft gelesen werden konnte.');
   }
@@ -360,16 +323,6 @@
       assign().catch(function (e) { setStatus(e.message); });
     });
     document.getElementById('btnProfinetDialogClose').addEventListener('click', closeDialog);
-    document.getElementById('profinetBody').addEventListener('dblclick', function (ev) {
-      var tr = ev.target.closest('tr');
-      if (!tr) return;
-      openDialog(tr.getAttribute('data-mac'));
-    });
-    document.getElementById('profinetTopo').addEventListener('dblclick', function (ev) {
-      var node = ev.target.closest('.profinet-scan-node');
-      if (!node) return;
-      openDialog(node.getAttribute('data-mac'));
-    });
     var linkHost = document.getElementById('profinetHint');
     if (linkHost) {
       linkHost.addEventListener('click', function (ev) {
@@ -394,10 +347,16 @@
     if (opts && opts.device && opts.mac && !findRow(opts.mac)) {
       state.teilnehmer = state.teilnehmer.concat([opts.device]);
     }
-    renderTopology();
     renderTable();
     if (opts && opts.mac) openDialog(opts.mac);
   }
+
+  document.addEventListener('click', function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest('[data-profinet-edit]') : null;
+    if (!btn) return;
+    ev.preventDefault();
+    openDialog(btn.getAttribute('data-mac'));
+  });
 
   window.openProfinetTool = function (opts) {
     return open(opts || window.kuklaProfinetPending || {});

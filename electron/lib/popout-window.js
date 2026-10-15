@@ -48,6 +48,20 @@ function windowKey(payload) {
   return 'view:' + view;
 }
 
+function raiseWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  try { win.moveTop(); } catch (_) { /* ältere Electron-Version */ }
+  win.focus();
+  if (process.platform === 'win32') {
+    win.setAlwaysOnTop(true);
+    win.show();
+    win.focus();
+    win.setAlwaysOnTop(false);
+  }
+}
+
 function createPopoutWindowManager(getPort) {
   const windows = new Map();
 
@@ -64,8 +78,8 @@ function createPopoutWindowManager(getPort) {
     const key = windowKey(p);
     const existing = windows.get(key);
     if (existing && !existing.isDestroyed()) {
-      if (existing.isMinimized()) existing.restore();
-      existing.focus();
+      raiseWindow(existing);
+      setTimeout(() => raiseWindow(existing), 200);
       return { ok: true, focused: true };
     }
 
@@ -91,7 +105,7 @@ function createPopoutWindowManager(getPort) {
       minHeight: 560,
       title: title,
       modal: false,
-      show: true,
+      show: false,
       backgroundColor: '#f4f7f5',
       autoHideMenuBar: true,
       webPreferences: {
@@ -105,8 +119,10 @@ function createPopoutWindowManager(getPort) {
     win.on('closed', () => {
       if (windows.get(key) === win) windows.delete(key);
     });
+    win.once('ready-to-show', () => raiseWindow(win));
     attachEditContextMenu(win.webContents);
     win.loadURL('http://127.0.0.1:' + port + '/?' + qs.toString()).catch(() => {});
+    setTimeout(() => raiseWindow(win), 200);
     return { ok: true };
   }
 

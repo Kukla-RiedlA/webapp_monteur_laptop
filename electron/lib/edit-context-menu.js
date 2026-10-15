@@ -8,9 +8,16 @@ const { Menu, app } = require('electron');
  * Renderer-Handler mit preventDefault (z. B. Dateilisten) unterdrücken das
  * Chromium-Default; dieses Menü erscheint nur, wenn Electron den Event liefert.
  */
+let suppressUntil = 0;
+
+function suppressEditContextMenuBriefly(ms) {
+  suppressUntil = Date.now() + (Number(ms) || 800);
+}
+
 function attachEditContextMenu(webContents) {
   if (!webContents || webContents.isDestroyed()) return;
   webContents.on('context-menu', (_event, params) => {
+    if (Date.now() < suppressUntil) return;
     if (!params || webContents.isDestroyed()) return;
 
     const flags = params.editFlags || {};
@@ -87,4 +94,4 @@ function attachEditContextMenu(webContents) {
   });
 }
 
-module.exports = { attachEditContextMenu };
+module.exports = { attachEditContextMenu, suppressEditContextMenuBriefly };
