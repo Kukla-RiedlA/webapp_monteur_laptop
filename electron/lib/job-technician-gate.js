@@ -10,6 +10,30 @@ function parsePositiveInt(v) {
  * @param {number|string} localJobId
  * @param {number|string} technicianId
  */
+function formatJobIdConflictMessage(dbConn, ref, localRow, serverRow) {
+  function label(row) {
+    if (!row || row.id == null) return 'unbekannt';
+    let num = '';
+    let name = '';
+    try {
+      const extra = dbConn.prepare(
+        `SELECT j.job_number, c.name AS customer_name
+         FROM jobs j
+         LEFT JOIN customers c ON c.id = j.customer_id
+         WHERE j.id = ?`,
+      ).get(row.id);
+      num = extra && extra.job_number != null ? String(extra.job_number).trim() : '';
+      name = extra && extra.customer_name != null ? String(extra.customer_name).trim() : '';
+    } catch (_) { /* Anzeige ohne Zusatzfelder */ }
+    const head = num !== '' ? num : ('ohne ERP-Nummer, lokale ID ' + row.id);
+    return name !== '' ? (head + ', ' + name) : head;
+  }
+  return 'Konflikt: Die Zahl ' + ref
+    + ' trifft zwei Aufträge. Lokal: ' + label(localRow)
+    + '. Über die Dispo-ID: ' + label(serverRow)
+    + '. Es wurde kein Auftrag geöffnet.';
+}
+
 function jobAssignmentViewMeta(dbConn, localJobId, technicianId) {
   const assigned = isJobAssignedToTechnician(dbConn, localJobId, technicianId);
   if (assigned) {
@@ -151,10 +175,10 @@ function resolveLocalJobIdForTechnician(dbConn, technicianId, ref, opts) {
     });
     return {
       ok: false,
-      error:
-        'Job-ID-Konflikt (lokale ID und Server-ID verweisen auf verschiedene Aufträge). Bitte Dispo-Sync ausführen oder Support.',
+      error: formatJobIdConflictMessage(dbConn, n, byLocal, byServer),
       status: 409,
       conflict: true,
+      code: 'job_id_conflict',
     };
   }
 
@@ -176,6 +200,7 @@ function resolveLocalJobIdForTechnician(dbConn, technicianId, ref, opts) {
 }
 
 module.exports = {
+  formatJobIdConflictMessage,
   isJobAssignedToTechnician,
   requireJobAssignedToTechnician,
   resolveLocalJobIdForTechnician,

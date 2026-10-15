@@ -103,7 +103,8 @@
   var FORMS = {
     arbeitsnachweis: {
       root: 'viewProtokolleArbeitsnachweis',
-      radios: 'anLang',
+      de: 'anLangDe',
+      en: 'anLangEn',
       map: [
         { sel: '#anSec1Title', en: 'Job & identification' },
         { sel: 'label[for="anJob"]', en: 'Job' },

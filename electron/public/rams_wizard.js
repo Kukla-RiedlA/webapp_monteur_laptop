@@ -328,7 +328,7 @@
         if (msg) msg.textContent = '';
         var html = '';
         jobs.forEach(function (job) {
-          var label = job.job_number || ('#' + job.id);
+          var label = job.job_number || '–';
           var sub = [job.customer_name, job.city].filter(Boolean).join(' · ');
           html += '<li><div class="rams-line"><strong>' + htmlEscape(String(label)) + '</strong>';
           if (sub) html += ' <span class="muted">' + htmlEscape(sub) + '</span>';

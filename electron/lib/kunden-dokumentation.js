@@ -344,7 +344,113 @@ function copyAttachmentForOutlook(src) {
 }
 
 /**
+ * PowerShell für klassischen Outlook-Entwurf oder Sofortversand.
+ * HTML muss als olFormatHTML (2) gesetzt werden. Sonst wirft Send()
+ * ArgumentException „Der Wert liegt außerhalb des erwarteten Bereichs“,
+ * sobald das Konto Rich-Text ist oder die Signatur ein vollständiges
+ * HTML-Dokument ist und der Text davor geklebt wird.
+ */
+function buildOutlookDraftScript(opts) {
+  const recipients = Array.isArray(opts.recipients)
+    ? opts.recipients.map((e) => String(e || '').trim()).filter(Boolean)
+    : [];
+  const attachments = Array.isArray(opts.attachments)
+    ? opts.attachments.map((p) => String(p || '').trim()).filter(Boolean)
+    : [];
+  const subject = String(opts.subject || 'Kundendokumentation');
+  const body = String(opts.body || '');
+  const htmlBody = opts.htmlBody != null ? String(opts.htmlBody) : '';
+  const send = opts.send === true;
+  const errorFile = String(opts.errorFile || '');
+
+  const recipList = recipients.map((e) => "'" + escapePsSingleQuoted(e) + "'").join(',');
+  const attList = attachments.map((p) => "'" + escapePsSingleQuoted(p) + "'").join(',');
+  const htmlEscaped = htmlBody.replace(/'@/g, "'@ ");
+  const useHtml = htmlEscaped.trim() !== '';
+
+  const bodyAssign = useHtml
+    ? `
+$mail.BodyFormat = 2
+$inspector = $mail.GetInspector
+try { $signatureHtml = [string]$mail.HTMLBody } catch { $signatureHtml = '' }
+$html = @'
+${htmlEscaped}
+'@
+$bodyOpen = [regex]::Match([string]$signatureHtml, '(?is)<body[^>]*>')
+if ($bodyOpen.Success) {
+  $cut = $bodyOpen.Index + $bodyOpen.Length
+  $mail.HTMLBody = $signatureHtml.Substring(0, $cut) + $html + $signatureHtml.Substring($cut)
+} elseif (-not [string]::IsNullOrWhiteSpace([string]$signatureHtml)) {
+  $mail.HTMLBody = '<html><body>' + $html + $signatureHtml + '</body></html>'
+} else {
+  $mail.HTMLBody = '<html><body>' + $html + '</body></html>'
+}
+`
+    : `$mail.Body = '${escapePsSingleQuoted(body)}'`;
+
+  const finish = send
+    ? `
+if ($mail.Recipients.Count -lt 1) { throw 'Kein E-Mail-Empfänger angegeben.' }
+try { if ($null -ne $inspector) { $inspector.Close(0) | Out-Null } } catch {}
+$mail.Save()
+$mail.Send()
+`
+    : '$mail.Display()';
+
+  return `
+$ErrorActionPreference = 'Stop'
+$inspector = $null
+$signatureHtml = ''
+try {
+  try {
+    $outlook = New-Object -ComObject Outlook.Application
+  } catch {
+    throw "Outlook COM nicht verfügbar (klassisches Desktop-Outlook erforderlich)."
+  }
+  $mail = $outlook.CreateItem(0)
+  $mail.Subject = '${escapePsSingleQuoted(subject)}'
+  ${bodyAssign}
+  $recipients = @(${recipList})
+  foreach ($r in $recipients) {
+    if (-not $r -or $r.Trim() -eq '') { continue }
+    $addr = $r.Trim()
+    $rcpt = $mail.Recipients.Add($addr)
+    $rcpt.Type = 1
+    $resolved = $false
+    try { $resolved = [bool]$rcpt.Resolve() } catch { $resolved = $false }
+    if (-not $resolved -and $addr.Contains('@')) {
+      foreach ($tag in @(
+        'http://schemas.microsoft.com/mapi/proptag/0x39FE001F',
+        'http://schemas.microsoft.com/mapi/proptag/0x39FE001E'
+      )) {
+        try { $null = $rcpt.PropertyAccessor.SetProperty($tag, $addr); break } catch {}
+      }
+      try { $resolved = [bool]$rcpt.Resolve() } catch { $resolved = $false }
+    }
+  }
+  $attachments = @(${attList})
+  foreach ($a in $attachments) {
+    if ($a -and (Test-Path -LiteralPath $a)) { [void]$mail.Attachments.Add($a) }
+  }
+  ${finish}
+} catch {
+  $text = ''
+  if ($_.Exception -and $_.Exception.Message) { $text = [string]$_.Exception.Message }
+  if (-not $text) { $text = [string]$_ }
+  if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
+    $text = $text + [Environment]::NewLine + [string]$_.InvocationInfo.PositionMessage
+  }
+  try {
+    [System.IO.File]::WriteAllText('${escapePsSingleQuoted(errorFile)}', $text, (New-Object System.Text.UTF8Encoding $false))
+  } catch {}
+  exit 1
+}
+`;
+}
+
+/**
  * Öffnet klassischen Outlook-Entwurf mit Empfängern und Anhängen.
+ * opts.send === true versendet sofort (Arbeitsnachweis nach der Unterschrift).
  */
 function openOutlookDraft(opts) {
   const recipients = Array.isArray(opts.recipients)
@@ -353,57 +459,37 @@ function openOutlookDraft(opts) {
   const attachments = Array.isArray(opts.attachments)
     ? opts.attachments.map((p) => copyAttachmentForOutlook(p)).filter(Boolean)
     : [];
-  const subject = String(opts.subject || 'Kundendokumentation');
-  const body = String(opts.body || '');
-  const htmlBody = opts.htmlBody != null ? String(opts.htmlBody) : '';
-
-  const recipList = recipients.map((e) => "'" + escapePsSingleQuoted(e) + "'").join(',');
-  const attList = attachments.map((p) => "'" + escapePsSingleQuoted(p) + "'").join(',');
-
-  const htmlEscaped = htmlBody.replace(/'@/g, "'@ ");
-  const useHtml = htmlEscaped.trim() !== '';
-
-  const bodyAssign = useHtml
-    ? `
-$inspector = $mail.GetInspector
-$signatureHtml = [string]$mail.HTMLBody
-$html = @'
-${htmlEscaped}
-'@
-$mail.HTMLBody = $html + $signatureHtml
-`
-    : `$mail.Body = '${escapePsSingleQuoted(body)}'`;
-
-  const ps = `
-$ErrorActionPreference = 'Stop'
-try {
-  $outlook = New-Object -ComObject Outlook.Application
-} catch {
-  throw "Outlook COM nicht verfügbar (klassisches Desktop-Outlook erforderlich)."
-}
-$mail = $outlook.CreateItem(0)
-$mail.Subject = '${escapePsSingleQuoted(subject)}'
-${bodyAssign}
-$recipients = @(${recipList})
-foreach ($r in $recipients) {
-  if ($r -and $r.Trim() -ne '') { [void]$mail.Recipients.Add($r.Trim()) }
-}
-[void]$mail.Recipients.ResolveAll()
-$attachments = @(${attList})
-foreach ($a in $attachments) {
-  if ($a -and (Test-Path -LiteralPath $a)) { [void]$mail.Attachments.Add($a) }
-}
-${opts.send === true ? '$mail.Send()' : '$mail.Display()'}
-`;
-
-  const r = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-    { windowsHide: true, encoding: 'utf8', timeout: 60000 },
-  );
-  if (r.status !== 0) {
-    const msg = (r.stderr || r.stdout || 'Outlook konnte nicht geöffnet werden').toString().trim();
-    throw new Error(msg);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kukla-outlook-'));
+  const scriptPath = path.join(tmpDir, 'draft.ps1');
+  const errorFile = path.join(tmpDir, 'error.txt');
+  const ps = buildOutlookDraftScript({
+    recipients,
+    attachments,
+    subject: opts.subject,
+    body: opts.body,
+    htmlBody: opts.htmlBody,
+    send: opts.send === true,
+    errorFile,
+  });
+  fs.writeFileSync(scriptPath, '\uFEFF' + ps, 'utf8');
+  try {
+    const r = spawnSync(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+      { windowsHide: true, encoding: 'utf8', timeout: 60000 },
+    );
+    if (r.status !== 0) {
+      let msg = '';
+      try {
+        if (fs.existsSync(errorFile)) msg = fs.readFileSync(errorFile, 'utf8').replace(/^\uFEFF/, '').trim();
+      } catch (_) { /* stderr unten */ }
+      if (!msg) {
+        msg = (r.stderr || r.stdout || (r.error && r.error.message) || 'Outlook konnte nicht geöffnet werden').toString().trim();
+      }
+      throw new Error(msg || 'Outlook konnte nicht geöffnet werden');
+    }
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) { /* ignore */ }
   }
   return { ok: true, recipients, attachmentCount: attachments.length };
 }
@@ -429,6 +515,7 @@ module.exports = {
   copyKundenDokumentationItems,
   createZipFromCopied,
   openOutlookDraft,
+  buildOutlookDraftScript,
   collectRecipientEmails,
   ensureKundenDocDir,
   targetNameForItem,

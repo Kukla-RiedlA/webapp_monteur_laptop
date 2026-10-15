@@ -5,6 +5,19 @@
  * Offline Source of Truth; Dispo-Sync über pending_changes.
  */
 
+function normalizeArbeitsnachweisLanguage(value) {
+  const parts = String(value || 'de')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .split(/[,+]/)
+    .filter((part) => part === 'de' || part === 'en');
+  const de = parts.includes('de');
+  const en = parts.includes('en');
+  if (de && en) return 'de,en';
+  if (en) return 'en';
+  return 'de';
+}
+
 function tryExec(db, sql) {
   try {
     db.exec(sql);
@@ -463,7 +476,7 @@ function upsertFromPayload(db, payload, opts) {
   if (existing && existing.document && existing.document.status === 'unterzeichnet') {
     status = 'unterzeichnet';
   }
-  const language = String((payload && payload.language) || 'de') === 'en' ? 'en' : 'de';
+  const language = normalizeArbeitsnachweisLanguage(payload && payload.language);
   const customerName = String((payload && payload.customer_name) || '').trim();
   const documentDate = String((payload && payload.document_date) || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
   const contentVersion = parseInt((payload && payload.content_version) || (existing && existing.document.content_version) || 1, 10) || 1;
@@ -857,6 +870,7 @@ module.exports = {
   queuePending,
   clearFailedPending,
   resolveJobIds,
+  normalizeArbeitsnachweisLanguage,
   normalizeFabRows,
   mergeFabRows,
   fabsFromJob,

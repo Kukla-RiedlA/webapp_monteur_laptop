@@ -21,3 +21,7 @@ export KUKLA_SKIP_VERSION_HOOK=1
 ```
 
 PowerShell: `$env:KUKLA_SKIP_VERSION_HOOK = "1"`
+
+## OneDrive-Sicherung (pre-push)
+
+`githooks/pre-push` spiegelt den gesamten Plattform-Ordner nach `P:\OneDrive - KUKLA Waagenfabrik GmbH & Co KG\Software Tools AI\Kukla_Monteur_Plattform`, inklusive Dateien ausserhalb von Git. Abschalten: `KUKLA_SKIP_ONEDRIVE_BACKUP=1`. Ein Sicherungsfehler stoppt den Push nicht. Skript: `scripts/backup-push-to-onedrive.ps1` im Plattform-Root.

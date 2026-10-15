@@ -15,9 +15,54 @@
   var lastDocNumber = '';
 
   function el(id) { return document.getElementById(id); }
+  function selectedLangs() {
+    var de = !!(el('anLangDe') && el('anLangDe').checked);
+    var en = !!(el('anLangEn') && el('anLangEn').checked);
+    if (!de && !en) return ['de'];
+    var out = [];
+    if (de) out.push('de');
+    if (en) out.push('en');
+    return out;
+  }
   function lang() {
-    var r = document.querySelector('input[name="anLang"]:checked');
-    return r && r.value === 'en' ? 'en' : 'de';
+    var langs = selectedLangs();
+    return langs.length === 1 && langs[0] === 'en' ? 'en' : 'de';
+  }
+  function langsFromStored(value) {
+    var parts = String(value || 'de').toLowerCase().replace(/\s+/g, '').split(/[,+]/);
+    var de = parts.indexOf('de') >= 0;
+    var en = parts.indexOf('en') >= 0;
+    if (de && en) return ['de', 'en'];
+    if (en) return ['en'];
+    return ['de'];
+  }
+  function setLangs(list) {
+    var langs = langsFromStored(Array.isArray(list) ? list.join(',') : list);
+    if (el('anLangDe')) el('anLangDe').checked = langs.indexOf('de') >= 0;
+    if (el('anLangEn')) el('anLangEn').checked = langs.indexOf('en') >= 0;
+  }
+  function mailDraftContent(langs) {
+    var de = langs.indexOf('de') >= 0;
+    var en = langs.indexOf('en') >= 0;
+    var subject = de && en
+      ? 'Arbeitsnachweis DE / Working report GB'
+      : (en ? 'Working report GB' : 'Arbeitsnachweis DE');
+    var blocks = [];
+    if (de) {
+      blocks.push(
+        '<p>Sehr geehrte Damen und Herren,</p>' +
+        '<p>anbei erhalten Sie den Arbeitsnachweis.</p>' +
+        '<p>Mit freundlichen Grüßen</p>'
+      );
+    }
+    if (en) {
+      blocks.push(
+        '<p>Dear Sir or Madam,</p>' +
+        '<p>Please find attached the working report.</p>' +
+        '<p>Kind regards</p>'
+      );
+    }
+    return { subject: subject, html: blocks.join('') };
   }
   function uuid() {
     if (crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -156,7 +201,7 @@
       resetForm({ keepJob: true });
       return;
     }
-    setRadio('anLang', (doc.language || data.language) === 'en' ? 'en' : 'de');
+    setLangs(doc.language || data.language);
     var picked = selectedJobIds();
     var jobForContacts = jobData || findCachedJob(picked.localId, picked.serverId);
     var signerName = data.signer_name || an.signer_name || '';
@@ -567,7 +612,7 @@
       id: parseInt(el('anDocumentId').value, 10) || 0,
       local_uuid: el('anLocalUuid').value,
       job_id: parseInt(el('anJob').value, 10) || 0,
-      language: lang(),
+      language: selectedLangs().join(','),
       document_date: (collectWork()[0] && collectWork()[0].item_date) || todayIso(),
       customer_name: el('anCustomer').value,
       signer_name: el('anSignerName').value,
@@ -907,7 +952,7 @@
       opt.value = String(sid || lid);
       opt.dataset.localId = String(lid);
       opt.dataset.serverId = String(sid || '');
-      opt.textContent = (j.job_number || '#' + (sid || lid)) + ' ' + (j.customer_name || '');
+      opt.textContent = (j.job_number || '–') + ' ' + (j.customer_name || '');
       sel.appendChild(opt);
     });
     var restored = false;
@@ -1238,8 +1283,8 @@
       applyStatusUi({ status: 'unterzeichnet', number: saved.number, offline: true, synced: false });
       if (el('anSigStatus')) {
         el('anSigStatus').textContent = en
-          ? 'Signed and locked. Sending e-mail…'
-          : 'Unterzeichnet und gesperrt. E-Mail wird gesendet…';
+          ? 'Signed and locked. Opening the e-mail draft…'
+          : 'Unterzeichnet und gesperrt. E-Mail-Entwurf wird geöffnet…';
       }
       var customerPng = pad.toDataUrl();
       el('anPreviewModal').hidden = true;
@@ -1269,53 +1314,73 @@
       if (baseUrl) fetch(API_BASE + '/api/laptop_arbeitsnachweis_proxy', bgOpts).catch(function () {});
     } catch (e) {
       window.alert((e && e.message) || (en
-        ? 'PDF or e-mail failed after signing.'
-        : 'PDF oder E-Mail nach dem Unterschreiben fehlgeschlagen.'));
+        ? 'PDF or e-mail draft failed after signing.'
+        : 'PDF oder E-Mail-Entwurf nach dem Unterschreiben fehlgeschlagen.'));
     } finally {
       if (btn) btn.disabled = false;
     }
   }
   async function generatePdfAndMail(saved, customerPng) {
     var en = lang() === 'en';
-    var payload = collectPayload();
-    payload.document = {
-      number: saved && saved.number,
-      language: payload.language,
-      job_id: payload.job_id,
-      content_version: saved && saved.content_version
-    };
-    payload.customer_signature_png = customerPng || '';
-    payload.customer_signer_name = el('anSignerName').value;
-    if (customerPng) payload.customer_signed_at = new Date().toISOString();
-    payload.job_id = payload.job_id;
-    var pdfOpts = {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify(payload)
-    };
-    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-      pdfOpts.signal = AbortSignal.timeout(20000);
+    var langs = selectedLangs();
+    var mail = mailDraftContent(langs);
+    var basePayload = collectPayload();
+    var paths = [];
+    for (var i = 0; i < langs.length; i++) {
+      var payload = collectPayload();
+      payload.language = langs[i];
+      payload.document = {
+        number: saved && saved.number,
+        language: langs[i],
+        job_id: basePayload.job_id,
+        content_version: saved && saved.content_version
+      };
+      payload.customer_signature_png = customerPng || '';
+      payload.customer_signer_name = el('anSignerName').value;
+      if (customerPng) payload.customer_signed_at = new Date().toISOString();
+      payload.job_id = basePayload.job_id;
+      var pdfOpts = {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(payload)
+      };
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        pdfOpts.signal = AbortSignal.timeout(20000);
+      }
+      var pdfHttp = await fetch(API_BASE + '/api/arbeitsnachweis/pdf', pdfOpts).catch(function () { return null; });
+      var pdfRes = null;
+      if (pdfHttp) {
+        pdfRes = await pdfHttp.json().catch(function () { return null; });
+      }
+      if (!pdfRes || !pdfRes.ok || !pdfRes.path) {
+        window.alert((pdfRes && pdfRes.error) || (en
+          ? 'PDF could not be created. The e-mail draft was not opened.'
+          : 'PDF konnte nicht erzeugt werden. Der E-Mail-Entwurf wurde nicht geöffnet.'));
+        return;
+      }
+      paths.push(pdfRes.path);
+      if (pdfRes.pdf_base64 && saved && saved.document_id && langs[i] === langs[0]) {
+        var upOpts = {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            baseUrl: (window.getDispoBaseUrl && window.getDispoBaseUrl()) || '',
+            action: 'pdf_upload',
+            method: 'POST',
+            payload: { document_id: saved.document_id, pdf_base64: pdfRes.pdf_base64 }
+          })
+        };
+        if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+          upOpts.signal = AbortSignal.timeout(8000);
+        }
+        fetch(API_BASE + '/api/laptop_arbeitsnachweis_proxy', upOpts).catch(function () {});
+      }
     }
-    var pdfHttp = await fetch(API_BASE + '/api/arbeitsnachweis/pdf', pdfOpts).catch(function () { return null; });
-    var pdfRes = null;
-    if (pdfHttp) {
-      pdfRes = await pdfHttp.json().catch(function () { return null; });
-    }
-    if (!pdfRes || !pdfRes.ok || !pdfRes.path) {
-      window.alert((pdfRes && pdfRes.error) || (en
-        ? 'PDF could not be created. The e-mail was not sent.'
-        : 'PDF konnte nicht erzeugt werden. Die E-Mail wurde nicht gesendet.'));
-      return;
-    }
-    var html = en
-      ? '<p>Dear Sir or Madam,</p><p>Please find attached the working report.</p><p>Thank you very much.</p>'
-      : '<p>Sehr geehrte Damen und Herren,</p><p>anbei erhalten Sie den Arbeitsnachweis.</p><p>Vielen Dank.</p>';
     var outlookBody = {
       recipients: [el('anSignerEmail').value.trim()].filter(Boolean),
-      attachments: [pdfRes.path],
-      subject: en ? 'Working report' : 'Arbeitsnachweis',
-      html_body: html,
-      send: true
+      attachments: paths,
+      subject: mail.subject,
+      html_body: mail.html
     };
     var outlookOpts = {
       method: 'POST',
@@ -1329,37 +1394,21 @@
       .then(function (r) { return r.json(); })
       .catch(function () { return null; });
     if (o && o.outlook_error) {
-      window.alert((en ? 'The e-mail could not be sent: ' : 'Die E-Mail konnte nicht gesendet werden: ') + o.outlook_error);
+      window.alert((en ? 'The e-mail draft could not be opened: ' : 'Der E-Mail-Entwurf konnte nicht geöffnet werden: ') + o.outlook_error);
       return;
     }
     if (!o || o.ok === false) {
-      window.alert(en ? 'The e-mail could not be sent.' : 'Die E-Mail konnte nicht gesendet werden.');
+      window.alert(en ? 'The e-mail draft could not be opened.' : 'Der E-Mail-Entwurf konnte nicht geöffnet werden.');
       return;
     }
     if (o.outlook && o.outlook.attachmentCount === 0) {
       window.alert(en
-        ? 'The e-mail was sent, but the PDF could not be attached. File: ' + pdfRes.path
-        : 'Die E-Mail wurde gesendet, aber das PDF konnte nicht angehängt werden. Datei: ' + pdfRes.path);
+        ? 'The draft is open, but the PDF could not be attached.'
+        : 'Der Entwurf ist geöffnet, aber das PDF konnte nicht angehängt werden.');
     } else if (el('anSigStatus')) {
       el('anSigStatus').textContent = en
-        ? 'Signed, locked, e-mail sent.'
-        : 'Unterzeichnet, gesperrt, E-Mail gesendet.';
-    }
-    if (pdfRes.pdf_base64 && saved && saved.document_id) {
-      var upOpts = {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          baseUrl: (window.getDispoBaseUrl && window.getDispoBaseUrl()) || '',
-          action: 'pdf_upload',
-          method: 'POST',
-          payload: { document_id: saved.document_id, pdf_base64: pdfRes.pdf_base64 }
-        })
-      };
-      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-        upOpts.signal = AbortSignal.timeout(8000);
-      }
-      fetch(API_BASE + '/api/laptop_arbeitsnachweis_proxy', upOpts).catch(function () {});
+        ? 'Signed, locked. E-mail draft is open.'
+        : 'Unterzeichnet, gesperrt. E-Mail-Entwurf ist geöffnet.';
     }
   }
   async function transferTimesheet() {
@@ -1406,7 +1455,7 @@
     var jobEl = el('anJob');
     var keepJobValue = opts.keepJob && jobEl ? jobEl.value : '';
     var keepJobIndex = opts.keepJob && jobEl ? jobEl.selectedIndex : -1;
-    var keepLang = opts.keepJob ? lang() : 'de';
+    var keepLang = opts.keepJob ? selectedLangs().join(',') : 'de';
     el('anForm').reset();
     if (opts.keepJob && jobEl) {
       jobEl.value = keepJobValue;
@@ -1435,7 +1484,7 @@
       el('anLastSaved').textContent = '–';
       el('anLastSaved').title = lang() === 'en' ? 'Not saved yet' : 'Noch nicht gespeichert';
     }
-    setRadio('anLang', keepLang);
+    setLangs(keepLang);
     applyLang();
     applyStatusUi({ status: 'entwurf' });
   }
@@ -1482,8 +1531,13 @@
         updateTotalKm();
       });
     });
-    document.querySelectorAll('input[name="anLang"]').forEach(function (r) {
-      r.addEventListener('change', applyLang);
+    ['anLangDe', 'anLangEn'].forEach(function (id) {
+      var box = el(id);
+      if (!box) return;
+      box.addEventListener('change', function () {
+        if (!el('anLangDe').checked && !el('anLangEn').checked) el('anLangDe').checked = true;
+        applyLang();
+      });
     });
     el('anForm').addEventListener('submit', function (ev) { ev.preventDefault(); });
     el('anForm').addEventListener('input', schedulePersist);

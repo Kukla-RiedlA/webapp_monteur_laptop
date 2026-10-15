@@ -158,7 +158,7 @@
     jobs.forEach(function (job) {
       var opt = document.createElement('option');
       opt.value = job.id;
-      opt.textContent = (job.job_number || job.id) + (job.customer_name ? ' – ' + job.customer_name : '');
+      opt.textContent = (job.job_number || '–') + (job.customer_name ? ' – ' + job.customer_name : '');
       select.appendChild(opt);
     });
     if (current && Array.prototype.some.call(select.options, function (o) { return o.value === current; })) {

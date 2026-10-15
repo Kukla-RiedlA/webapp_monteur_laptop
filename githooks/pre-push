@@ -1,0 +1,31 @@
+#!/bin/sh
+# Sichert die Dateien dieses Push in den Firmen-OneDrive.
+# Fehler und ein fehlendes Skript halten den Push nicht auf.
+# Abschalten: KUKLA_SKIP_ONEDRIVE_BACKUP=1
+if [ -n "$KUKLA_SKIP_ONEDRIVE_BACKUP" ]; then
+  cat >/dev/null
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+SCRIPT=""
+if [ -f "$ROOT/scripts/backup-push-to-onedrive.ps1" ]; then
+  SCRIPT="$ROOT/scripts/backup-push-to-onedrive.ps1"
+elif [ -f "$ROOT/../scripts/backup-push-to-onedrive.ps1" ]; then
+  SCRIPT="$ROOT/../scripts/backup-push-to-onedrive.ps1"
+fi
+
+if [ -z "$SCRIPT" ] || [ ! -f "$SCRIPT" ]; then
+  echo "OneDrive-Sicherung: Skript nicht gefunden, Push geht weiter." >&2
+  cat >/dev/null
+  exit 0
+fi
+
+TMP="$(mktemp)"
+cat > "$TMP"
+WIN_ROOT="$(cygpath -w "$ROOT")"
+WIN_SCRIPT="$(cygpath -w "$SCRIPT")"
+WIN_TMP="$(cygpath -w "$TMP")"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$WIN_SCRIPT" -RepoRoot "$WIN_ROOT" -RefLinesFile "$WIN_TMP"
+rm -f "$TMP"
+exit 0

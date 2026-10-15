@@ -109,6 +109,7 @@ const {
   resolveLocalJobIdForTechnician,
   resolvePatchJobRef,
   jobAssignmentViewMeta,
+  formatJobIdConflictMessage,
 } = require('./lib/job-technician-gate');
 const { createDbLock } = require('./lib/db-lock');
 const hangDiag = require('./lib/hang-diagnostics');
@@ -2554,8 +2555,15 @@ function createApp(db) {
 
   /**
    * rawJobId = lokale jobs.id oder Dispo server_id.
-   * Bei Kollision (z. B. Etex server_id 47 vs. Gebtron jobs.id 47): Dispo server_id gewinnt.
+   * Treffen beide verschiedene Aufträge, wird nichts geöffnet.
    */
+  function throwJobIdConflict(ref, byLocal, byServer) {
+    const err = new Error(formatJobIdConflictMessage(db, ref, byLocal, byServer));
+    err.code = 'job_id_conflict';
+    err.httpStatus = 409;
+    throw err;
+  }
+
   function resolveJobRowByAmbiguousRef(rawJobId, selectSql) {
     const n = parseInt(rawJobId, 10);
     if (!Number.isFinite(n) || n <= 0) return null;
@@ -2564,11 +2572,11 @@ function createApp(db) {
       .prepare(`SELECT ${selectSql} FROM jobs j WHERE CAST(j.server_id AS TEXT) = CAST(? AS TEXT) LIMIT 1`)
       .get(n);
     if (byLocal && byServer && byLocal.id !== byServer.id) {
-      console.warn('[resolveJobRowByAmbiguousRef] ID-Konflikt ref=' + n + ' — bevorzuge server_id-Zeile', {
+      console.warn('[resolveJobRowByAmbiguousRef] ID-Konflikt ref=' + n, {
         local_match_id: byLocal.id,
         server_match_id: byServer.id,
       });
-      return byServer;
+      throwJobIdConflict(n, byLocal, byServer);
     }
     return byLocal || byServer || null;
   }
@@ -2673,7 +2681,7 @@ function createApp(db) {
     if (!targetDir || !fs.existsSync(targetDir)) {
       throw Object.assign(new Error('Zielordner konnte nicht erstellt werden.'), { httpStatus: 400 });
     }
-    const jobDetail = lookupDienstreiseJobRow(localJobId);
+    const jobDetail = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     let fabMap = Array.isArray(body.fab_map) ? body.fab_map : [];
     if (!fabMap.length && jobDetail) {
       for (const fn of fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)) {
@@ -3113,7 +3121,7 @@ function createApp(db) {
   }
 
   function resolveMonteurAuftragsordnerName(localJobId, technicianId) {
-    const jobRow = lookupDienstreiseJobRow(localJobId);
+    const jobRow = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     if (!jobRow) return '';
     return buildMonteurMontageFolderName(jobRow, getTechnicianDisplayName(technicianId) || 'Monteur');
   }
@@ -3553,11 +3561,13 @@ function createApp(db) {
       .prepare(`SELECT ${cols} ${joinSql} WHERE CAST(j.server_id AS TEXT) = CAST(? AS TEXT) LIMIT 1`)
       .get(id);
     if (byLocal && byServer && byLocal.id !== byServer.id) {
-      console.warn('[lookupDienstreiseJobRow] ID-Konflikt ref=' + id + ' — bevorzuge server_id-Zeile', {
+      if (opts && opts.idMode === 'local') return byLocal;
+      if (opts && opts.idMode === 'server') return byServer;
+      console.warn('[lookupDienstreiseJobRow] ID-Konflikt ref=' + id, {
         local_match_id: byLocal.id,
         server_match_id: byServer.id,
       });
-      return byServer;
+      throwJobIdConflict(id, byLocal, byServer);
     }
     return byLocal || byServer || null;
   }
@@ -3963,7 +3973,7 @@ function createApp(db) {
 
   /** Kanonische Fileserver-FN-Namen für Explorer/Pfade (Cache + Platte, fab_map persistieren). */
   async function ensureFabMapCanonicalForJob(localJobId, reiseDir) {
-    const jobRow = lookupDienstreiseJobRow(localJobId);
+    const jobRow = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     const jobFabs = jobRow ? fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern) : [];
     const offlineCfg = getOfflinePullConfig(db, localJobId);
     const fabMap = resolveFabMapLocal(
@@ -4011,7 +4021,7 @@ function createApp(db) {
     const previousName = getStickyMontageFolderName(localJobId);
     let montageFolderName = resolveMonteurAuftragsordnerName(localJobId, techId);
     if (!montageFolderName) {
-      const jobRow = lookupDienstreiseJobRow(localJobId);
+      const jobRow = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
       montageFolderName = buildMonteurMontageFolderName(jobRow || {}, techDisplay);
     }
     if (montageFolderName && (fabMap.length || previousName)) {
@@ -4306,7 +4316,8 @@ function createApp(db) {
       });
       res.json({ ok: true, folderPath: reiseDir, subpath: subpath || '', entries });
     } catch (e) {
-      res.status(500).json({ ok: false, error: e.message || 'Dateiliste konnte nicht gelesen werden.' });
+      const status = e && e.httpStatus ? e.httpStatus : 500;
+      res.status(status).json({ ok: false, error: e.message || 'Dateiliste konnte nicht gelesen werden.', code: e && e.code ? e.code : undefined });
     }
   });
 
@@ -4392,7 +4403,8 @@ function createApp(db) {
       });
       res.json({ ok: true, photos, folder_missing: false });
     } catch (e) {
-      res.status(500).json({ ok: false, error: e.message || 'Fotoliste konnte nicht gelesen werden.' });
+      const status = e && e.httpStatus ? e.httpStatus : 500;
+      res.status(status).json({ ok: false, error: e.message || 'Fotoliste konnte nicht gelesen werden.', code: e && e.code ? e.code : undefined });
     }
   });
 
@@ -4408,7 +4420,7 @@ function createApp(db) {
     if (!parts.length) return null;
     let fabMap = [];
     try {
-      const jobRow = lookupDienstreiseJobRow(jobId);
+      const jobRow = lookupDienstreiseJobRow(jobId, { idMode: 'local' });
       const jobFabs = jobRow ? fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern) : [];
       const offlineCfg = getOfflinePullConfig(db, jobId);
       fabMap = resolveFabMapLocal(
@@ -4525,7 +4537,7 @@ function createApp(db) {
   });
 
   function jobFabsForLocalJob(localJobId, extraFab) {
-    const jobRow = lookupDienstreiseJobRow(localJobId);
+    const jobRow = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     const set = new Set();
     if (jobRow) {
       for (const n of fabNumbersFromJobFabrikationsnummern(jobRow.fabrikationsnummern)) {
@@ -4541,7 +4553,7 @@ function createApp(db) {
   function canonicalProjekteNeuFolderForJob(localJobId, fab) {
     const fabNorm = String(fab || '').trim();
     if (!fabNorm) return '';
-    const jobRow = lookupDienstreiseJobRow(localJobId);
+    const jobRow = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     const jobFabs = jobFabsForLocalJob(localJobId, fabNorm);
     let fabMapIn = [];
     try {
@@ -4564,7 +4576,7 @@ function createApp(db) {
   function resolveWritableMonteurFnFolder(localJobId, fab, docMonteurBase, docAnlageBase, fabMapOpt) {
     const fabStr = String(fab || '').trim();
     if (!fabStr) return '';
-    const jobRow = lookupDienstreiseJobRow(localJobId);
+    const jobRow = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     let name = '';
     if (Array.isArray(fabMapOpt)) {
       const hit = fabMapOpt.find((e) => String(e.fab) === fabStr);
@@ -4592,7 +4604,7 @@ function createApp(db) {
     const da = path.join(reiseDir, 'Dokumente_Anlage');
     const offlineCfg = getOfflinePullConfig(db, localJobId);
     const montageFolderName = offlineCfg.montage_folder_name || null;
-    const jobRow = lookupDienstreiseJobRow(localJobId);
+    const jobRow = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     const jobFabs = jobFabsForLocalJob(localJobId, fab);
     const fabMap = resolveFabMapLocal(
       reiseDir,
@@ -5681,7 +5693,7 @@ function createApp(db) {
   }
 
   function buildLocalAcceptOfflinePreview(localJobId, technicianId, degradedHint, onlyFabs) {
-    const jobDetail = lookupDienstreiseJobRow(localJobId);
+    const jobDetail = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     if (!jobDetail) throw new Error('Auftrag nicht gefunden.');
     const montageFolderName = buildMonteurMontageFolderName(jobDetail, getTechnicianDisplayName(technicianId));
     const fabsOut = [];
@@ -5880,7 +5892,7 @@ function createApp(db) {
   }
 
   async function buildAcceptOfflinePreview(localJobId, technicianId, dispoBaseUrl, authHeader, urlOpts) {
-    const jobDetail = lookupDienstreiseJobRow(localJobId);
+    const jobDetail = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
     if (!jobDetail) throw new Error('Auftrag nicht gefunden.');
     const serverJobId = jobDetail.server_id != null ? jobDetail.server_id : localJobId;
     const montageFolderName = buildMonteurMontageFolderName(jobDetail, getTechnicianDisplayName(technicianId));
@@ -6349,7 +6361,7 @@ function createApp(db) {
 
       let offlinePullMode = null;
       if (Object.prototype.hasOwnProperty.call(body, 'offline_paths')) {
-        const jobDetail = lookupDienstreiseJobRow(localJobId);
+        const jobDetail = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
         let fabMap = Array.isArray(body.fab_map) ? body.fab_map : [];
         if (!fabMap.length && jobDetail) {
           for (const fn of fabNumbersFromJobFabrikationsnummern(jobDetail.fabrikationsnummern)) {
@@ -7245,7 +7257,7 @@ function createApp(db) {
         fnFolder = listed.fn_options[0] || '';
       }
       if (!fnFolder) {
-        const jobRow = lookupDienstreiseJobRow(localJobId);
+        const jobRow = lookupDienstreiseJobRow(localJobId, { idMode: 'local' });
         const fabs = fabNumbersFromJobFabrikationsnummern(jobRow && jobRow.fabrikationsnummern);
         const firstFab = fabs && fabs.size ? [...fabs][0] : null;
         if (firstFab) {
@@ -8507,8 +8519,8 @@ function createApp(db) {
       }
       const pdfBytes = await protocolPdf.generateArbeitsnachweisPdfBuffer(payload, { lang });
       const pdfBase64 = Buffer.from(pdfBytes).toString('base64');
-      const num = (payload.document && payload.document.number) || ('AN-' + Date.now());
-      const safe = String(num).replace(/[^\w.-]+/g, '_') || ('AN-' + Date.now());
+      const num = (payload.document && payload.document.number) || ('ohne-Nummer-' + Date.now());
+      const safe = String(num).replace(/[^\w.-]+/g, '_') || ('ohne-Nummer-' + Date.now());
       const fileName = labeledProtocolPdfFilename('arbeitsnachweis', safe, lang);
       const tmpDir = path.join(os.tmpdir(), 'kukla-arbeitsnachweis');
       fs.mkdirSync(tmpDir, { recursive: true });
@@ -14908,20 +14920,18 @@ function createApp(db) {
       const technicianName = getTechnicianDisplayName(technicianId);
       let serverFileId = null;
       let dispoIngestError = null;
-      const dispoCandidates = buildDispoBaseCandidates({
-        baseUrl: body.baseUrl,
-        externalUrl: body.externalUrl,
-        internalUrl: body.internalUrl,
-      });
+      // Passwortfeld ist nach dem Login leer; die Anmeldung liegt im Tresor.
+      const dispoCreds = resolveDispoServerCreds(body);
+      const dispoCandidates = buildDispoBaseCandidates(dispoCreds);
       if (dispoCandidates.length > 0) {
         try {
           const remote = await proxyAnlagenstammParameterIngest({
             technician_id: technicianId,
-            baseUrl: body.baseUrl,
-            externalUrl: body.externalUrl,
-            internalUrl: body.internalUrl,
-            serverUsername: body.serverUsername,
-            serverPassword: body.serverPassword,
+            baseUrl: dispoCreds.baseUrl,
+            externalUrl: dispoCreds.externalUrl,
+            internalUrl: dispoCreds.internalUrl,
+            serverUsername: dispoCreds.serverUsername,
+            serverPassword: dispoCreds.serverPassword,
             filename,
             content: contentBase64,
             source: 'upload',
@@ -16419,13 +16429,27 @@ function createApp(db) {
   function getLocalJobMetaForFabrikationsnummernPatch(dbConn, technicianId, rawJobId) {
     const n = parseInt(rawJobId, 10);
     if (!Number.isFinite(n)) return { error: 'job_id ungültig.', status: 400 };
-    const row = dbConn.prepare(`
-      SELECT j.id, j.status FROM jobs j
+    const rows = dbConn.prepare(`
+      SELECT j.id, j.server_id, j.status FROM jobs j
       WHERE (j.id = ? OR CAST(j.server_id AS TEXT) = CAST(? AS TEXT))
         AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-      ORDER BY CASE WHEN j.id = ? THEN 0 ELSE 1 END, j.id ASC
-      LIMIT 1
-    `).get(n, n, technicianId, n);
+    `).all(n, n, technicianId);
+    const distinct = [];
+    const seen = new Set();
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      distinct.push(row);
+    }
+    if (distinct.length > 1) {
+      const byLocal = distinct.find((row) => Number(row.id) === n) || distinct[0];
+      const byServer = distinct.find((row) => Number(row.id) !== Number(byLocal.id)) || distinct[1];
+      return {
+        error: formatJobIdConflictMessage(dbConn, n, byLocal, byServer),
+        status: 409,
+      };
+    }
+    const row = distinct[0];
     if (!row) return { error: 'Auftrag nicht gefunden.', status: 404 };
     const s = String(row.status || '').trim().toLowerCase();
     if (s === 'abgerechnet') {
@@ -17320,20 +17344,17 @@ function createApp(db) {
     const technicianName = getTechnicianDisplayName(technicianId);
     let serverFileId = null;
     let dispoIngestError = null;
-    const dispoCandidates = buildDispoBaseCandidates({
-      baseUrl: args.baseUrl,
-      externalUrl: args.externalUrl,
-      internalUrl: args.internalUrl,
-    });
+    const dispoCreds = resolveDispoServerCreds(args || {});
+    const dispoCandidates = buildDispoBaseCandidates(dispoCreds);
     if (dispoCandidates.length > 0) {
       try {
         const remote = await proxyAnlagenstammParameterIngest({
           technician_id: technicianId,
-          baseUrl: args.baseUrl,
-          externalUrl: args.externalUrl,
-          internalUrl: args.internalUrl,
-          serverUsername: args.serverUsername,
-          serverPassword: args.serverPassword,
+          baseUrl: dispoCreds.baseUrl,
+          externalUrl: dispoCreds.externalUrl,
+          internalUrl: dispoCreds.internalUrl,
+          serverUsername: dispoCreds.serverUsername,
+          serverPassword: dispoCreds.serverPassword,
           filename,
           content: csvBuffer.toString('base64'),
           source: 'upload',
@@ -17514,7 +17535,7 @@ function createApp(db) {
         if (!resolvedJob.ok) throw new Error(resolvedJob.error);
         const assignGate = requireJobAssignedToTechnician(db, resolvedJob.localId, technicianId);
         if (assignGate) throw new Error(assignGate.error);
-        const jobRowFull = lookupDienstreiseJobRow(resolvedJob.localId);
+        const jobRowFull = lookupDienstreiseJobRow(resolvedJob.localId, { idMode: 'local' });
         if (!jobRowFull) throw new Error('Auftrag nicht gefunden.');
         const statusRow = db.prepare('SELECT status FROM jobs WHERE id = ?').get(resolvedJob.localId);
         jobRowFull.status = statusRow ? statusRow.status : null;
@@ -21957,8 +21978,13 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
       if (purgedMirrors) {
         console.log('[sync_pull] unzugewiesene Spiegel-Aufträge entfernt:', purgedMirrors);
       }
+      removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerIds);
+    } else {
+      console.warn(
+        '[sync_pull] removeLocalAbsencesNotInDispo übersprungen:',
+        pullGuard.warning || 'suspicious pull',
+      );
     }
-    removeLocalAbsencesNotInDispo(db, technicianId, receivedAbsenceServerIds);
     for (const j of jobs) {
       const custId = ensureCustomer(db, j);
       const localId = insertOrUpdateJob(db, j, custId, technicianId);
@@ -22633,12 +22659,13 @@ function insertOrUpdateJob(db, j, customerId, technicianId, opts) {
   const customerName = (j.customer_name != null && String(j.customer_name).trim() !== '') ? String(j.customer_name).trim() : null;
   const startDate = start.substring(0, 10); // YYYY-MM-DD
   if (jobNumber) {
-    orphan = db.prepare(`
+    const orphansByNumber = db.prepare(`
       SELECT j.id FROM jobs j
       INNER JOIN job_technicians jt ON jt.job_id = j.id AND jt.technician_id = ?
       WHERE (j.server_id IS NULL OR j.server_id = '') AND j.job_number = ?
-      LIMIT 1
-    `).get(technicianId, jobNumber);
+      LIMIT 2
+    `).all(technicianId, jobNumber);
+    if (orphansByNumber.length === 1) orphan = orphansByNumber[0];
   }
   if (!orphan && customerName && startDate) {
     const orphans = db.prepare(`

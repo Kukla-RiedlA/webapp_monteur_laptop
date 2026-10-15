@@ -5088,7 +5088,7 @@
     html += '<div class="projektdaten-meta-details-body">';
     html += '<div class="modal-detail-section modal-detail-section-address-row"><div class="modal-address-contact-row">';
     html += '<div class="modal-detail-section"><h4>Auftrag</h4><dl class="modal-detail-dl">';
-    html += '<dt>Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
+    html += '<dt>ERP / Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
     html += '<dt>Typ</dt><dd>' + v(job.job_type) + '</dd>';
     html += '<dt>Zeitraum</dt><dd>' + renderJobScheduleFieldHtml(job, assignmentRo || readOnlyAngelegt) + '</dd>';
     html += '<dt>Status</dt><dd>' + v(job.status) + '</dd>';
@@ -5099,8 +5099,13 @@
     html += '<dt>Ort</dt><dd>' + v(job.customer_zip) + ' ' + v(job.customer_city) + '</dd>';
     html += '<dt>Telefon</dt><dd>' + v(job.customer_phone) + '</dd>';
     html += '</dl></div>';
-    html += '<div class="modal-detail-section"><h4>Auftrag: ERP-Nummer / Bestellnummer</h4>';
-    html += '<dl class="modal-detail-dl"><dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
+    var eapAbweichend = job.eap_nummer != null ? String(job.eap_nummer).trim() : '';
+    var auftragNrAnzeige = job.job_number != null ? String(job.job_number).trim() : '';
+    html += '<div class="modal-detail-section"><h4>Bestellnummer</h4>';
+    html += '<dl class="modal-detail-dl">';
+    if (eapAbweichend && eapAbweichend !== auftragNrAnzeige) {
+      html += '<dt>EAP abweichend</dt><dd>' + v(job.eap_nummer) + '</dd>';
+    }
     html += '<dt>Bestellnummer</dt><dd>' + v(job.bestellnummer) + '</dd></dl></div>';
     html += '</div></div>';
     html += '</div></details>';
@@ -10816,7 +10821,7 @@
     var cell = function (x) { return (x == null || String(x).trim() === '' ? '' : escapeHtml(String(x).trim())); };
     var html = '<div class="archiv-detail-grid">';
     html += '<div class="archiv-detail-section"><h4>Auftrag</h4><dl class="modal-detail-dl">';
-    html += '<dt>Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
+    html += '<dt>ERP / Auftragsnummer</dt><dd>' + v(job.job_number) + '</dd>';
     html += '<dt>Typ</dt><dd>' + v(job.job_type) + '</dd>';
     html += '<dt>Zeitraum</dt><dd>' + (dateRangeStr ? v(dateRangeStr) : v(formatDateOnly(job.start_datetime) || job.start_datetime)) + '</dd>';
     html += '<dt>Status</dt><dd>' + v(job.status) + '</dd>';
@@ -10831,8 +10836,12 @@
     html += '<div class="archiv-detail-section"><h4>Kontakt</h4><dl class="modal-detail-dl">';
     html += renderArchivJobContactsHtml(job, v);
     html += '</dl></div>';
-    html += '<div class="archiv-detail-section"><h4>ERP / Bestellung</h4><dl class="modal-detail-dl">';
-    html += '<dt>ERP-Nummer</dt><dd>' + v(job.eap_nummer) + '</dd>';
+    var archivEap = job.eap_nummer != null ? String(job.eap_nummer).trim() : '';
+    var archivAuftrag = job.job_number != null ? String(job.job_number).trim() : '';
+    html += '<div class="archiv-detail-section"><h4>Bestellung</h4><dl class="modal-detail-dl">';
+    if (archivEap && archivEap !== archivAuftrag) {
+      html += '<dt>EAP abweichend</dt><dd>' + v(job.eap_nummer) + '</dd>';
+    }
     html += '<dt>Bestellnummer</dt><dd>' + v(job.bestellnummer) + '</dd></dl></div>';
     html += '</div>';
     var fabRows = parseFabrikationsnummernRows(job);
@@ -26698,7 +26707,7 @@
       jobs.forEach(function (job) {
         var opt = document.createElement('option');
         opt.value = job.id;
-        opt.textContent = (job.job_number || job.id) + (job.customer_name ? ' – ' + job.customer_name : '');
+        opt.textContent = (job.job_number || '–') + (job.customer_name ? ' – ' + job.customer_name : '');
         jobSelect.appendChild(opt);
       });
       if (currentVal && Array.prototype.some.call(jobSelect.options, function (o) { return o.value === currentVal; })) {
@@ -27904,7 +27913,7 @@
       jobs.forEach(function (job) {
         var opt = document.createElement('option');
         opt.value = job.id;
-        opt.textContent = (job.job_number || job.id) + (job.customer_name ? ' – ' + job.customer_name : '');
+        opt.textContent = (job.job_number || '–') + (job.customer_name ? ' – ' + job.customer_name : '');
         jobSelect.appendChild(opt);
       });
       if (currentVal && Array.prototype.some.call(jobSelect.options, function (o) { return o.value === currentVal; })) {
@@ -28314,7 +28323,7 @@
       (jobs || []).forEach(function (j) {
         var opt = document.createElement('option');
         opt.value = String(j.id);
-        opt.textContent = (j.job_number || j.id) + (j.customer_name ? ' – ' + j.customer_name : '');
+        opt.textContent = (j.job_number || '–') + (j.customer_name ? ' – ' + j.customer_name : '');
         jobSelect.appendChild(opt);
       });
       if (currentVal && Array.prototype.some.call(jobSelect.options, function (o) { return o.value === currentVal; })) {

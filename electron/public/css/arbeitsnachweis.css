@@ -128,7 +128,8 @@
   font-size: 0.8rem;
   margin: 0;
 }
-.an-radio-opts input[type="radio"] {
+.an-radio-opts input[type="radio"],
+.an-radio-opts input[type="checkbox"] {
   width: 0.85rem;
   height: 0.85rem;
   margin: 0;
