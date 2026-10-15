@@ -387,7 +387,13 @@ function registerMultiDeviceRoutes(deps) {
           'job=',
           serverJobId,
         );
-        return { ok: false, code: 'job_closed', error: data.error };
+        clearDraftPushPending(opts);
+        return {
+          ok: true,
+          skipped: true,
+          code: 'job_closed',
+          error: data.error || 'Auftrag ist abgeschlossen; Schreiben nicht erlaubt.',
+        };
       }
       if (r.status === 409 && data.code === 'conflict') {
         const remotePayload = data.store || data.data || {};
@@ -445,7 +451,13 @@ function registerMultiDeviceRoutes(deps) {
             return { ok: true, revision: data.revision, code: null, retried: true };
           }
           if (r.status === 409 && data.code === 'job_closed') {
-            return { ok: false, code: 'job_closed', error: data.error };
+            clearDraftPushPending(opts);
+            return {
+              ok: true,
+              skipped: true,
+              code: 'job_closed',
+              error: data.error || 'Auftrag ist abgeschlossen; Schreiben nicht erlaubt.',
+            };
           }
         }
         console.warn(

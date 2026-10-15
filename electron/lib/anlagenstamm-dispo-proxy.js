@@ -18,8 +18,35 @@ function authHeaderFromCredentials(username, password) {
   return { Authorization: 'Basic ' + Buffer.from(u + ':' + p, 'utf8').toString('base64') };
 }
 
+let deviceIdResolver = null;
+
+function setAnlagenstammProxyDeviceIdResolver(fn) {
+  deviceIdResolver = typeof fn === 'function' ? fn : null;
+}
+
+/**
+ * Laptop-Geräte-ID für X-Kukla-Device-Id.
+ * Ohne Header wertet die Dispo von außen jeden Aufruf als „wartet auf Freigabe“,
+ * auch wenn das Gerät in der Disposition schon freigegeben ist.
+ */
+function resolveProxyDeviceId(explicit) {
+  const given = explicit != null ? String(explicit).trim() : '';
+  if (given) return given;
+  if (deviceIdResolver) {
+    try {
+      const fromApp = String(deviceIdResolver() || '').trim();
+      if (fromApp) return fromApp;
+    } catch (_) {}
+  }
+  return '';
+}
+
 function dispoMonteurFetchHeaders(technicianId, authHeader, deviceId) {
-  return buildDispoMonteurHeaders({ technicianId, authHeader, deviceId });
+  return buildDispoMonteurHeaders({
+    technicianId,
+    authHeader,
+    deviceId: resolveProxyDeviceId(deviceId),
+  });
 }
 
 /**
@@ -38,10 +65,15 @@ function monteurUpstreamHttpError(status, statusText, jsonError, relativePhpPath
     );
   }
   if (status === 403) {
-    return (
-      (detail || 'Zugriff verweigert') +
-        ' — Monteur-ID muss in Dispo als aktiver Monteur existieren (users.role = monteur).'
-    );
+    const text = detail || 'Zugriff verweigert';
+    // Nur die echte Rollenprüfung ergänzen. Geräte-Freigabe, Widerruf und Konto-Mismatch
+    // haben bereits eine eigene Server-Meldung — der Monteur-Hinweis wäre irreführend.
+    if (!detail || /Kein gültiger Monteur/i.test(text)) {
+      return (
+        text + ' — Monteur-ID muss in Dispo als aktiver Monteur existieren (users.role = monteur).'
+      );
+    }
+    return text;
   }
   if (status >= 500) {
     return (detail || statusText || 'Serverfehler') + ' (HTTP ' + status + ').';
@@ -66,7 +98,7 @@ async function proxyAnlagenstammSearchOnce(payload, base) {
     method: 'POST',
     headers: Object.assign(
       { 'Content-Type': 'application/json' },
-      dispoMonteurFetchHeaders(technicianId, authHeader)
+      dispoMonteurFetchHeaders(technicianId, authHeader, payload.device_id || payload.deviceId)
     ),
     body: JSON.stringify(forward),
   });
@@ -101,7 +133,7 @@ async function proxyAnlagenstammSaveOnce(payload, base) {
     method: 'POST',
     headers: Object.assign(
       { 'Content-Type': 'application/json' },
-      dispoMonteurFetchHeaders(technicianId, authHeader)
+      dispoMonteurFetchHeaders(technicianId, authHeader, payload.device_id || payload.deviceId)
     ),
     body: JSON.stringify(savePayload),
   });
@@ -202,7 +234,7 @@ async function proxyDispoPostJsonOnce(payload, base, relativePhp, forwardBody) {
     method: 'POST',
     headers: Object.assign(
       { 'Content-Type': 'application/json' },
-      dispoMonteurFetchHeaders(technicianId, authHeader),
+      dispoMonteurFetchHeaders(technicianId, authHeader, payload.device_id || payload.deviceId),
     ),
     body: JSON.stringify(forwardBody || {}),
   });
@@ -253,7 +285,7 @@ async function proxyAnlagenstammDeleteOnce(payload, base) {
     method: 'POST',
     headers: Object.assign(
       { 'Content-Type': 'application/json' },
-      dispoMonteurFetchHeaders(technicianId, authHeader),
+      dispoMonteurFetchHeaders(technicianId, authHeader, payload.device_id || payload.deviceId),
     ),
     body: JSON.stringify({ id: serverId }),
   });
@@ -349,7 +381,9 @@ async function proxyAnlagenstammParameterDownloadOnce(payload, base) {
     file_id: String(payload.file_id || ''),
   });
   const url = `${base}${relativePhp}?${q.toString()}`;
-  const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader) });
+  const r = await fetch(url, {
+    headers: dispoMonteurFetchHeaders(technicianId, authHeader, payload.device_id || payload.deviceId),
+  });
   if (!r.ok) {
     const data = await r.json().catch(() => ({}));
     const apiErr = data && data.error ? data.error : '';
@@ -409,4 +443,7 @@ module.exports = {
   proxyAnlagenstammParameterDownload,
   authHeaderFromCredentials,
   dispoMonteurFetchHeaders,
+  setAnlagenstammProxyDeviceIdResolver,
+  resolveProxyDeviceId,
+  monteurUpstreamHttpError,
 };

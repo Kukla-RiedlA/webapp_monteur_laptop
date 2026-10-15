@@ -934,10 +934,8 @@ function lookupFabInExtrasMap(map, fab) {
 
 async function fetchAnlagenstammListExtrasChunk(base, authHeader, fabs) {
   const url = `${base}/api/anlagenstamm_list_extras.php`;
-  const headers = buildDispoMonteurHeaders({
-    authHeader,
-    extra: { 'Content-Type': 'application/json' },
-  });
+  const headers = dispoMonteurFetchHeaders(null, authHeader);
+  headers['Content-Type'] = 'application/json';
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), DISPO_EXPORT_CHUNK_TIMEOUT_MS);
   try {
@@ -1440,7 +1438,7 @@ function saveLocal(db, payload) {
 /** Vollsync wie Dispo Desktop: GET /api/anlagenstamm_list.php?omit_fn_filter=1 */
 async function fetchAnlagenstammListPage(base, authHeader, page, pageSize) {
   const url = `${base}/api/anlagenstamm_list.php?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}&omit_fn_filter=1`;
-  const headers = buildDispoMonteurHeaders({ authHeader });
+  const headers = dispoMonteurFetchHeaders(null, authHeader);
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), DISPO_EXPORT_CHUNK_TIMEOUT_MS);
   try {

@@ -139,6 +139,13 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
     assert.ok(chunk.includes('dispoMonteurFetchHeaders'), 'pushToServer muss dispoMonteurFetchHeaders nutzen');
   });
 
+  it('Anlagenstamm-Proxy bekommt dieselbe Laptop-Geräte-ID wie die übrigen Syncs', () => {
+    assert.ok(
+      serverSrc.includes('setAnlagenstammProxyDeviceIdResolver'),
+      'server.js muss die Geräte-ID an den Anlagenstamm-Proxy durchreichen',
+    );
+  });
+
   it('Token fehlt ist nicht sofort Dead-Letter', () => {
     const err = new Error('Token fehlt');
     err.status = 401;

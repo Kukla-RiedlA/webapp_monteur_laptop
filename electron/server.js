@@ -123,6 +123,7 @@ const {
   proxyAnlagenstammParameterIngest,
   proxyAnlagenstammParameterDownload,
   proxyAnlagenstammParameterDelete,
+  setAnlagenstammProxyDeviceIdResolver,
 } = require('./lib/anlagenstamm-dispo-proxy');
 const {
   buildDispoBaseCandidates,
@@ -341,6 +342,7 @@ const {
   setDispoDeviceIdResolver,
 } = require('./lib/anlagenstamm-local');
 setDispoDeviceIdResolver(() => getOrCreateDeviceId(DB_DIR));
+setAnlagenstammProxyDeviceIdResolver(() => getOrCreateDeviceId(DB_DIR));
 const {
   anlagenstammTypeHasBehaelterNenninhalt,
   anlagenstammVmaxValueFromRow,
@@ -1928,7 +1930,9 @@ function createApp(db) {
             const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
             const base = String(baseUrl || creds.baseUrl || '').replace(/\/$/, '');
             if (base && auth && auth.Authorization) {
-              const res = await fetch(base + '/api/push_ws_ticket.php', { headers: auth });
+              const res = await fetch(base + '/api/push_ws_ticket.php', {
+                headers: dispoMonteurFetchHeaders(technicianId, auth),
+              });
               const data = await res.json().catch(() => ({}));
               ticket = data && data.ticket ? String(data.ticket) : '';
             }
@@ -2478,7 +2482,10 @@ function createApp(db) {
       const technicianId = getTechnicianId(req);
       if (!technicianId) return res.status(400).json({ ok: false, error: 'technician_id' });
       const creds = resolveDispoServerCreds(req.body || {});
-      const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+      const auth = dispoMonteurFetchHeaders(
+        technicianId,
+        authHeaderFromCredentials(creds.serverUsername, creds.serverPassword),
+      );
       const result = await docSafeLocal.syncWithServer(db, technicianId, creds.baseUrl, auth);
       save();
       res.json(result && result.ok ? { ok: true } : { ok: false, error: 'sync' });
@@ -2585,7 +2592,12 @@ function createApp(db) {
     const base = String(dispoBaseUrl).replace(/\/$/, '');
     const url = `${base}/dispo_api/api/job.php?id=${encodeURIComponent(serverId)}&technician_id=${encodeURIComponent(technicianId)}`;
     try {
-      const r = await fetch(url, authHeader && authHeader.Authorization ? { headers: authHeader } : {});
+      const r = await fetch(
+        url,
+        authHeader && authHeader.Authorization
+          ? { headers: dispoMonteurFetchHeaders(technicianId, authHeader) }
+          : {},
+      );
       if (!r.ok) return row;
       const data = await r.json();
       const remote = data && data.job ? data.job : null;
@@ -7779,7 +7791,7 @@ function createApp(db) {
       (filterNoDate ? '&filter_no_date=1' : '') +
       (filterNoTechnician ? '&filter_no_technician=1' : '');
     try {
-      const r = await fetch(url, auth ? { headers: auth } : {});
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
       const text = await r.text();
       let data = null;
       if (text) {
@@ -8048,7 +8060,10 @@ function createApp(db) {
       const url = `${base}/dispo_api/api/signature_session_open.php?technician_id=${encodeURIComponent(technicianId)}`;
       const r = await fetch(url, {
         method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json' }, auth || {}),
+        headers: Object.assign(
+          { 'Content-Type': 'application/json', Accept: 'application/json' },
+          dispoMonteurFetchHeaders(technicianId, auth),
+        ),
         body: JSON.stringify(payload && typeof payload === 'object' ? payload : {}),
       });
       const raw = await r.text();
@@ -8090,7 +8105,10 @@ function createApp(db) {
       const url = `${base}/dispo_api/api/signature_submit.php?technician_id=${encodeURIComponent(technicianId)}`;
       const r = await fetch(url, {
         method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json' }, auth || {}),
+        headers: Object.assign(
+          { 'Content-Type': 'application/json', Accept: 'application/json' },
+          dispoMonteurFetchHeaders(technicianId, auth),
+        ),
         body: JSON.stringify(pl),
       });
       const raw = await r.text();
@@ -8142,7 +8160,7 @@ function createApp(db) {
       const url = `${base}/dispo_api/api/signature_stage_pdf.php`;
       const r = await fetch(url, {
         method: 'POST',
-        headers: Object.assign({}, auth || {}, fd.getHeaders()),
+        headers: Object.assign(dispoMonteurFetchHeaders(technicianId, auth), fd.getHeaders()),
         body: fd,
       });
       const raw = await r.text();
@@ -8566,7 +8584,13 @@ function createApp(db) {
       }
       const auth = authHeaderFromIncomingBasicOrQuery(req);
       const url = `${baseUrl}/dispo_api/api/jobs_open.php?technician_id=${encodeURIComponent(technicianId)}`;
-      const r = await fetch(url, { method: 'GET', headers: Object.assign({ Accept: 'application/json' }, auth || {}) });
+      const r = await fetch(url, {
+        method: 'GET',
+        headers: Object.assign(
+          { Accept: 'application/json' },
+          dispoMonteurFetchHeaders(technicianId, auth),
+        ),
+      });
       const raw = await r.text();
       let parsed = null;
       try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
@@ -8671,7 +8695,7 @@ function createApp(db) {
       const url = `${base}/dispo_api/api/signature_stage_pdf.php`;
       const r = await fetch(url, {
         method: 'POST',
-        headers: Object.assign({}, auth || {}, fd.getHeaders()),
+        headers: Object.assign(dispoMonteurFetchHeaders(technicianId, auth), fd.getHeaders()),
         body: fd,
       });
       const raw = await r.text();
@@ -8702,7 +8726,7 @@ function createApp(db) {
     const auth = authHeaderFromCredentials(req.body.serverUsername, req.body.serverPassword);
     const url = `${base}/dispo_api/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(list.join(','))}`;
     try {
-      const r = await fetch(url, auth ? { headers: auth } : {});
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(getTechnicianId(req), auth) });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
@@ -8763,7 +8787,7 @@ function createApp(db) {
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     const url = `${base}/dispo_api/api/anlagenstamm_lookup.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}`;
     try {
-      const r = await fetch(url, auth ? { headers: auth } : {});
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
       res.json(data);
@@ -8792,10 +8816,7 @@ function createApp(db) {
           `&technician_id=${encodeURIComponent(technicianId)}`;
         try {
           const r = await fetch(url, {
-            headers: Object.assign(
-              { 'X-Technician-Id': String(technicianId) },
-              auth || {},
-            ),
+            headers: dispoMonteurFetchHeaders(technicianId, auth),
           });
           remote = await r.json().catch(() => ({}));
           if (r.ok && remote && remote.ok && Array.isArray(remote.motors) && remote.motors.length) {
@@ -10351,7 +10372,7 @@ function createApp(db) {
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
     const url = `${base}/dispo_api/api/job_hotels_by_fab.php?technician_id=${encodeURIComponent(technicianId)}&job_id=${encodeURIComponent(jobId)}`;
     try {
-      const r = await fetch(url, auth ? { headers: auth } : {});
+      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
@@ -17372,7 +17393,7 @@ function createApp(db) {
     dbDir: DB_DIR,
     saveDumpToJob: saveKuklinkDumpToJob,
   });
-  registerProfinetRoutes(app, { db });
+  registerProfinetRoutes(app, { db, dbDir: DB_DIR });
   function assignFtpParameterList(req, file) {
     const creds = resolveDispoServerCreds({});
     return new Promise((resolve, reject) => {
@@ -18961,7 +18982,9 @@ function createApp(db) {
       const url = `${base}/dispo_api/api/anlagenstamm_by_fab.php?fabs=${encodeURIComponent(parts.join(','))}`;
       debugInfo.url = url;
       try {
-        const r = await fetch(url, authHeader ? { headers: authHeader } : {});
+        const r = await fetch(url, {
+          headers: dispoMonteurFetchHeaders(null, authHeader),
+        });
         data = await r.json().catch(() => ({}));
         debugInfo.ok = !!r.ok;
         debugInfo.status = r.status;
@@ -19065,7 +19088,7 @@ function createApp(db) {
       return { ok: false, error: 'Server-URL fehlt.' };
     }
     const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    const opts = auth ? { headers: auth, signal } : { signal };
+    const opts = { headers: dispoMonteurFetchHeaders(technicianId, auth), signal };
 
     try {
       const rMy = await fetch(urls.myJobs, opts);
@@ -20619,7 +20642,7 @@ async function fetchMechanikTedListFromDispo(base, technicianId, serverJobId, au
   }
 
   async function fetchListUrl(url) {
-    const r = await fetch(url, { headers: authHeader, signal });
+    const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader), signal });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || data.ok === false) {
       throw new Error((data && data.error) || 'TED-Liste fehlgeschlagen (HTTP ' + r.status + ').');
@@ -20743,7 +20766,7 @@ async function downloadMechanikTedByFabMobile(base, relPath, fabOpt, authHeader,
   for (const url of urls) {
     let r;
     try {
-      r = await fetch(url, { headers: authHeader, signal });
+      r = await fetch(url, { headers: dispoMonteurFetchHeaders(null, authHeader), signal });
     } catch (fetchErr) {
       lastErr = fetchErr.message || String(fetchErr);
       continue;
@@ -20823,7 +20846,7 @@ async function downloadMechanikTedBuffer(base, technicianId, serverJobId, relPat
   for (const url of urls) {
     let r;
     try {
-      r = await fetch(url, { headers: authHeader, signal });
+      r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, authHeader), signal });
     } catch (fetchErr) {
       lastErr = fetchErr.message || String(fetchErr);
       continue;
@@ -23792,7 +23815,9 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
     } catch (e) {}
   }
   try {
-    const statusRes = await fetch(`${base}/api/absence_request_status.php?technician_id=${technicianId}`, { headers: authHeader || {} });
+    const statusRes = await fetch(`${base}/api/absence_request_status.php?technician_id=${technicianId}`, {
+      headers: dispoMonteurFetchHeaders(technicianId, authHeader),
+    });
     const statusData = await statusRes.json().catch(() => ({}));
     if (statusData.ok && Array.isArray(statusData.requests)) {
       reconcileAbsenceRequestsWithServerStatus(db, technicianId, statusData.requests);

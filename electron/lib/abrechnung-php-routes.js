@@ -6,7 +6,8 @@ const express = require('express');
 const { parseMultipart } = require('./multipart-upload');
 const phpLocal = require('./abrechnung-php-local');
 const preview = require('./job-file-preview');
-const { applyKuklaAuditHeaders } = require('./audit-client-headers');
+const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
+const { getOrCreateDeviceId } = require('./device-id');
 
 function getCore() {
   return require('./abrechnung-routes');
@@ -56,8 +57,11 @@ function makePreviewProxy(d) {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
-        const headers = applyKuklaAuditHeaders({ ...(d.authHeader || {}) });
-        if (d.technicianId) headers['X-Technician-Id'] = String(d.technicianId);
+        const headers = buildDispoMonteurHeaders({
+          technicianId: d.technicianId,
+          authHeader: d.authHeader,
+          deviceId: d.dbDir ? getOrCreateDeviceId(d.dbDir) : '',
+        });
         const suffix = String(urlPath || '').startsWith('/') ? urlPath : '/' + urlPath;
         const res = await fetch(base + suffix, {
           method: (init && init.method) || 'GET',

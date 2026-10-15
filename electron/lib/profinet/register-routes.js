@@ -3,6 +3,8 @@
 const capture = require('./capture');
 const store = require('./store');
 const { detectNpcap } = require('./npcap-detect');
+const { buildDispoMonteurHeaders } = require('../dispo-monteur-headers');
+const { getOrCreateDeviceId } = require('../device-id');
 
 function fabOf(req) {
   const q = req.query || {};
@@ -18,7 +20,7 @@ function rowsOf(body) {
   };
 }
 
-async function pushToDispo(body, saved) {
+async function pushToDispo(body, saved, deviceId) {
   const base = String(body.base_url || body.baseUrl || '').trim().replace(/\/+$/, '');
   const user = String(body.server_username || body.serverUsername || '').trim();
   const pass = body.server_password != null ? String(body.server_password) : (body.serverPassword != null ? String(body.serverPassword) : '');
@@ -27,11 +29,11 @@ async function pushToDispo(body, saved) {
   const auth = 'Basic ' + Buffer.from(user + ':' + pass, 'utf8').toString('base64');
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      Authorization: auth,
-    },
+    headers: buildDispoMonteurHeaders({
+      authHeader: { Authorization: auth },
+      deviceId,
+      extra: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    }),
     body: JSON.stringify({
       fabrikationsnummer: body.fabrikationsnummer,
       teilnehmer: saved.teilnehmer,
@@ -47,6 +49,7 @@ async function pushToDispo(body, saved) {
 
 function registerProfinetRoutes(app, ctx) {
   const db = ctx && ctx.db;
+  const dbDir = ctx && (ctx.dbDir || ctx.DB_DIR) ? String(ctx.dbDir || ctx.DB_DIR) : '';
   if (db) store.ensureSchema(db);
 
   function fail(res, e) {
@@ -113,7 +116,8 @@ function registerProfinetRoutes(app, ctx) {
       const saved = store.replaceSet(db, fab, rows.teilnehmer, rows.links, { dirty: 1 });
       let sync = { pushed: false };
       try {
-        sync = await pushToDispo(Object.assign({ fabrikationsnummer: fab }, body), saved);
+        const deviceId = dbDir ? getOrCreateDeviceId(dbDir) : '';
+        sync = await pushToDispo(Object.assign({ fabrikationsnummer: fab }, body), saved, deviceId);
         if (sync.pushed) store.markClean(db, fab);
       } catch (e) {
         sync = { pushed: false, error: e && e.message ? e.message : String(e) };

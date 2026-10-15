@@ -7,6 +7,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const { createDispoProxy, loadSession, saveSession } = require('./dispo-proxy');
+const { getOrCreateDeviceId } = require('./device-id');
 const { performDispoLogin } = require('./dispo-login');
 const { takePasswordFromRecord, attachSealedPassword, takeCookiesFromRecord, attachSealedCookies } = require('./credential-vault');
 const { applyDispoTlsPreference } = require('./dispo-tls');
@@ -73,6 +74,7 @@ function applySessionToProxy(dbDir) {
     urlMode: stored.urlMode || 'auto',
     dispoUsername: stored.dispo_username || '',
     dispoPassword: stored.dispo_password || '',
+    deviceId: dbDir ? getOrCreateDeviceId(dbDir) : '',
     allowInsecureTls: true,
   });
   return { proxy, stored };

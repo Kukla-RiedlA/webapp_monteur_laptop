@@ -70,7 +70,17 @@ const { createAnlagenstammAkteWindowManager } = require('./lib/anlagenstamm-akte
 const { createBugReportWindowManager } = require('./lib/bug-report-window');
 const { createPopoutWindowManager } = require('./lib/popout-window');
 const { configureSpellCheckerSession } = require('./lib/spellcheck-session');
-const { proxyAnlagenstammSearch } = require('./lib/anlagenstamm-dispo-proxy');
+const {
+  proxyAnlagenstammSearch,
+  setAnlagenstammProxyDeviceIdResolver,
+} = require('./lib/anlagenstamm-dispo-proxy');
+setAnlagenstammProxyDeviceIdResolver(() => {
+  try {
+    return getOrCreateDeviceId(path.join(app.getPath('userData'), 'db'));
+  } catch (_) {
+    return '';
+  }
+});
 const {
   searchLocal: anlagenstammSearchLocal,
   rowCount: anlagenstammLocalRowCount,

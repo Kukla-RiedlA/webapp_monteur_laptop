@@ -82,6 +82,10 @@ function createDispoProxy(options = {}) {
         headers.Authorization =
           'Basic ' + Buffer.from(`${config.dispoUsername}:${config.dispoPassword}`, 'utf8').toString('base64');
       }
+      const deviceId = config.deviceId != null ? String(config.deviceId).trim() : '';
+      if (deviceId && !headers['X-Kukla-Device-Id']) {
+        headers['X-Kukla-Device-Id'] = deviceId;
+      }
       let res;
       const signal =
         init.signal ||
