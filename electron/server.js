@@ -93,6 +93,11 @@ function configurePersistentDbDir() {
 }
 const { registerAbrechnungRoutes, flushAbrechnungOutbox, runAbrechnungRefreshCore, queueAbrechnungLocalFile } = require('./lib/abrechnung-routes');
 const { applyDispoServerJobIdToPayload } = require('./lib/job-id-map');
+const {
+  createJobLocal,
+  upsertCustomersFromExport,
+  searchCustomersLocal,
+} = require('./lib/job-create-local');
 const { copyProtocolsToLocalAbrechnung } = require('./lib/abrechnung-protocol-copy');
 const { registerZeitschreibungRoutes, flushZeitschreibungOutbox, pullRecentLohnLocks, ensureTables: ensureZeitschreibungTables } = require('./lib/zeitschreibung-routes');
 const { registerHinweiseRoutes } = require('./lib/hinweise-routes');
@@ -16458,6 +16463,52 @@ function createApp(db) {
     return { localId: row.id };
   }
 
+  app.get('/api/customers', (req, res) => {
+    try {
+      const q = req.query.q != null ? String(req.query.q) : '';
+      const limit = req.query.limit != null ? req.query.limit : 12;
+      const rows = searchCustomersLocal(db, q, limit);
+      return res.json({
+        ok: true,
+        customers: rows.map((r) => ({
+          id: r.id,
+          server_id: r.server_id != null ? r.server_id : null,
+          name: r.name || '',
+          street: r.street || '',
+          house_number: r.house_number || '',
+          zip: r.zip || '',
+          city: r.city || '',
+          country: r.country || '',
+          phone: r.phone || '',
+          email: r.email || '',
+          address_extra_1: r.address_extra_1 || '',
+          address_extra_2: r.address_extra_2 || '',
+        })),
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : 'customers' });
+    }
+  });
+
+  app.post('/api/job', express.json({ limit: '2mb' }), (req, res) => {
+    const technicianId = getTechnicianId(req);
+    if (!technicianId) {
+      return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+    }
+    try {
+      ensureTechnician(db, technicianId);
+      const result = createJobLocal(db, technicianId, req.body || {}, {
+        insertOrUpdateJobAddress,
+        ensureTechnician,
+      });
+      save();
+      return res.json(result);
+    } catch (e) {
+      const status = e && e.status ? e.status : 500;
+      return res.status(status).json({ ok: false, error: e && e.message ? e.message : 'Auftrag anlegen fehlgeschlagen.' });
+    }
+  });
+
   app.patch('/api/job', express.json(), (req, res) => {
     const technicianId = getTechnicianId(req);
     const body = req.body || {};
@@ -22021,6 +22072,29 @@ async function pullFromServer(baseUrl, technicianId, db, authHeader, dateFrom, d
       }
     }
   }
+  try {
+    const custUrl =
+      base +
+      '/dispo_api/api/customers_export.php?technician_id=' +
+      encodeURIComponent(String(technicianId)) +
+      '&limit=10000';
+    const custHeaders = Object.assign({}, dispoMonteurFetchHeaders(technicianId, authHeader));
+    const custRes = await fetch(custUrl, { headers: custHeaders });
+    if (custRes.ok) {
+      const custData = await custRes.json();
+      if (custData && custData.ok && Array.isArray(custData.customers)) {
+        const n = upsertCustomersFromExport(db, custData.customers);
+        console.log('[sync_pull] customers upserted:', n);
+      }
+    } else if (custRes.status !== 404) {
+      warnings.push('Kundenstamm-Pull: HTTP ' + custRes.status);
+    }
+  } catch (custErr) {
+    warnings.push(
+      'Kundenstamm-Pull: ' + (custErr && custErr.message ? custErr.message : String(custErr)),
+    );
+  }
+
   return { fabs, warnings, pull_guard: pullGuard };
 }
 
@@ -22038,10 +22112,34 @@ function ensureTechnician(db, technicianId) {
 
 function ensureCustomer(db, j) {
   const name = j.customer_name || 'Unbekannt';
-  const row = db.prepare('SELECT id FROM customers WHERE name = ? LIMIT 1').get(name);
-  if (row) return row.id;
-  const r = db.prepare('INSERT INTO customers (name, street, house_number, zip, city, phone, contact_person, contact_phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-    name, j.street || '', j.house_number || '', j.zip || '', j.city || '', j.customer_phone || '', j.contact_person || '', j.contact_phone || ''
+  const serverCustId = parseInt(j.customer_id, 10);
+  if (Number.isFinite(serverCustId) && serverCustId > 0) {
+    const byServer = db.prepare('SELECT id FROM customers WHERE server_id = ? LIMIT 1').get(serverCustId);
+    if (byServer) return byServer.id;
+  }
+  const row = db.prepare('SELECT id, server_id FROM customers WHERE name = ? LIMIT 1').get(name);
+  if (row) {
+    if (Number.isFinite(serverCustId) && serverCustId > 0 && (row.server_id == null || String(row.server_id).trim() === '')) {
+      try {
+        db.prepare('UPDATE customers SET server_id = ? WHERE id = ?').run(serverCustId, row.id);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    return row.id;
+  }
+  const r = db.prepare(
+    'INSERT INTO customers (server_id, name, street, house_number, zip, city, phone, contact_person, contact_phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(
+    Number.isFinite(serverCustId) && serverCustId > 0 ? serverCustId : null,
+    name,
+    j.street || '',
+    j.house_number || '',
+    j.zip || '',
+    j.city || '',
+    j.customer_phone || '',
+    j.contact_person || '',
+    j.contact_phone || '',
   );
   return r.lastInsertRowid;
 }
@@ -22866,6 +22964,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
   const pending = db.prepare('SELECT * FROM pending_changes ORDER BY id').all();
   pending.sort((a, b) => {
     const score = (p) => {
+      if (p.entity_type === 'job' && p.action === 'create') return -1;
       if (p.entity_type === 'job') return 0;
       if (p.entity_type !== 'anlagenstamm') return 10;
       if (p.action === 'save') return 5;
@@ -22883,6 +22982,79 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds) {
   );
   for (const p of pending) {
     let handled = false;
+    if (p.entity_type === 'job' && p.action === 'create') {
+      handled = true;
+      const job = db.prepare('SELECT id, server_id, client_create_token FROM jobs WHERE id = ?').get(p.entity_id);
+      if (!job) {
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        continue;
+      }
+      if (job.server_id != null && String(job.server_id).trim() !== '') {
+        db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        continue;
+      }
+      const payload = JSON.parse(p.payload || '{}');
+      if (!payload.client_create_token && job.client_create_token) {
+        payload.client_create_token = job.client_create_token;
+      }
+      const techRow = db.prepare('SELECT technician_id FROM job_technicians WHERE job_id = ? LIMIT 1').get(job.id);
+      const techIdForPush = techRow && techRow.technician_id != null ? techRow.technician_id : technicianId;
+      const headerForJob = Object.assign(
+        { 'Content-Type': 'application/json' },
+        dispoMonteurFetchHeaders(techIdForPush, auth || authHeader),
+      );
+      try {
+        const r = await fetch(
+          `${base}/dispo_api/api/job_create.php?technician_id=${techIdForPush}`,
+          { method: 'POST', headers: headerForJob, body: JSON.stringify(payload) },
+        );
+        let result = null;
+        try {
+          result = await r.json();
+        } catch (_) {
+          result = null;
+        }
+        if (r.ok && result && result.ok && result.job_id) {
+          db.prepare('UPDATE jobs SET server_id = ?, synced_at = datetime(\'now\') WHERE id = ?').run(
+            result.job_id,
+            job.id,
+          );
+          if (result.customer_id) {
+            const cust = db.prepare('SELECT customer_id FROM jobs WHERE id = ?').get(job.id);
+            if (cust && cust.customer_id) {
+              try {
+                db.prepare(
+                  'UPDATE customers SET server_id = COALESCE(server_id, ?) WHERE id = ?',
+                ).run(result.customer_id, cust.customer_id);
+              } catch (_) {
+                /* unique */
+              }
+            }
+          }
+          db.prepare('DELETE FROM pending_changes WHERE id = ?').run(p.id);
+        } else {
+          const errMsg =
+            (result && result.error) ||
+            'Auftrag anlegen fehlgeschlagen (HTTP ' + r.status + ')';
+          logSyncPushError({
+            reason: 'job_create',
+            status: r.status,
+            body: result,
+            pending_id: p.id,
+            entity_id: p.entity_id,
+          });
+          const jobErr = new Error(errMsg);
+          jobErr.status = r.status;
+          const outcome = resolveSyncPushFailure(db, p, jobErr, 'job_create');
+          if (outcome === 'retry' || outcome === 'offline') noteFail(errMsg);
+        }
+      } catch (pushCreateErr) {
+        const msg = pushCreateErr && pushCreateErr.message ? pushCreateErr.message : String(pushCreateErr);
+        const outcome = resolveSyncPushFailure(db, p, pushCreateErr, 'job_create');
+        if (outcome === 'retry' || outcome === 'offline') noteFail(msg);
+      }
+      continue;
+    }
     if (p.entity_type === 'job' && (p.action === 'status' || p.action === 'description' || p.action === 'schedule' || p.action === 'fabrikationsnummern' || p.action === 'hotel_address' || p.action === 'hotel_selection' || p.action === 'job_address' || p.action === 'job_contacts')) {
       handled = true;
       let job = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(p.entity_id);

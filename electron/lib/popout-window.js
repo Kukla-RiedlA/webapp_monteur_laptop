@@ -7,6 +7,7 @@ const { attachEditContextMenu } = require('./edit-context-menu');
 const VIEWS = new Set([
   'start',
   'dienstreise',
+  'auftrag-neu',
   'abrechnung',
   'zeitschreibung',
   'protokolle-arbeitsnachweis',

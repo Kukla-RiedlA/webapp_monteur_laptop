@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS customers (
   id INTEGER PRIMARY KEY,
+  server_id INTEGER UNIQUE,
   name TEXT NOT NULL,
   street TEXT,
   house_number TEXT,
@@ -18,6 +19,9 @@ CREATE TABLE IF NOT EXISTS customers (
   city TEXT,
   country TEXT,
   phone TEXT,
+  email TEXT,
+  address_extra_1 TEXT,
+  address_extra_2 TEXT,
   contact_person TEXT,
   contact_phone TEXT,
   contact_email TEXT
@@ -37,6 +41,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   fabrikationsnummern TEXT,
   eap_nummer TEXT,
   bestellnummer TEXT,
+  date_not_fixed INTEGER DEFAULT 0,
+  entry_permit_required INTEGER NOT NULL DEFAULT 0,
+  client_create_token TEXT UNIQUE,
   updated_at TEXT,
   server_updated_at TEXT,
   synced_at TEXT,

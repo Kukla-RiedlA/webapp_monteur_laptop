@@ -46,6 +46,14 @@ function migrateJobTedIndexToFabRelPk(db) {
 function applyRuntimeMigrations(db) {
   tryExec(db, 'ALTER TABLE jobs ADD COLUMN eap_nummer TEXT');
   tryExec(db, 'ALTER TABLE jobs ADD COLUMN bestellnummer TEXT');
+  tryExec(db, 'ALTER TABLE jobs ADD COLUMN entry_permit_required INTEGER NOT NULL DEFAULT 0');
+  tryExec(db, 'ALTER TABLE jobs ADD COLUMN client_create_token TEXT');
+  tryExec(db, 'CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_client_create_token ON jobs(client_create_token)');
+  tryExec(db, 'ALTER TABLE customers ADD COLUMN server_id INTEGER');
+  tryExec(db, 'CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_server_id ON customers(server_id)');
+  tryExec(db, 'ALTER TABLE customers ADD COLUMN email TEXT');
+  tryExec(db, 'ALTER TABLE customers ADD COLUMN address_extra_1 TEXT');
+  tryExec(db, 'ALTER TABLE customers ADD COLUMN address_extra_2 TEXT');
   tryExec(db, 'ALTER TABLE job_addresses ADD COLUMN endkunde TEXT');
   tryExec(db, 'ALTER TABLE absences ADD COLUMN comment TEXT');
   tryExec(db, 'ALTER TABLE absence_requests ADD COLUMN comment TEXT');

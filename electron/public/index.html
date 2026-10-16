@@ -698,7 +698,21 @@
     .auftraege-pane { display: none; }
     .auftraege-pane.is-active { display: block; }
     .auftraege-pane-toolbar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+    .auftraege-pane-toolbar .btn-primary { margin-left: auto; }
     .auftraege-pane-filter { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--muted); }
+    .auftrag-neu-suggest {
+      position: absolute; left: 0; right: 0; top: 100%; z-index: 40;
+      list-style: none; margin: 0; padding: 0.25rem 0;
+      background: var(--kukla-surface, #fff); border: 1px solid #cfe8d1; border-radius: 8px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.12); max-height: 240px; overflow: auto;
+    }
+    .auftrag-neu-suggest li {
+      padding: 0.45rem 0.75rem; cursor: pointer; font-size: 0.9rem;
+    }
+    .auftrag-neu-suggest li:hover,
+    .auftrag-neu-suggest li:focus { background: #eefaf5; }
+    #viewAuftragNeu { display: none; }
+    #viewAuftragNeu.active { display: block; }
     .rams-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
     .rams-list li { background: var(--card); border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.75rem; }
     .rams-list .rams-line { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
@@ -2752,7 +2766,10 @@
         <button type="button" class="auftraege-tab" role="tab" aria-selected="false" id="auftraegeTabRamsCreate" data-auftraege-tab="rams-create">RAMS Erstellen</button>
       </div>
       <section id="auftraegePaneList" class="auftraege-pane is-active" role="tabpanel" aria-labelledby="auftraegeTabList">
-        <h2>Meine Aufträge</h2>
+        <div class="auftraege-pane-toolbar">
+          <h2 style="margin:0">Meine Aufträge</h2>
+          <button type="button" class="btn btn-primary" id="btnNeuerAuftrag">Neuer Auftrag</button>
+        </div>
         <div id="acceptJobProgressWrap" class="dienstreise-copy-progress" style="display:none; margin-bottom:0.75rem;">
           <div class="dienstreise-copy-progress-label" id="acceptJobProgressLabel">Lade …</div>
           <progress id="acceptJobProgress" value="0" max="100" style="width:100%; height:8px;"></progress>
@@ -2803,6 +2820,143 @@
         <h3 id="ramsWizardOverlayTitle" class="visually-hidden">RAMS Quiz</h3>
         <div id="ramsWizardContainer"></div>
       </div>
+    </div>
+  </main>
+  <main id="viewAuftragNeu" class="view-auftrag-neu" aria-label="Neuer Auftrag">
+    <div class="card sp-v2-card">
+      <div class="sp-v2-topbar">
+        <div class="sp-v2-topbar-title-wrap">
+          <h2 class="sp-v2-page-title">Neuer Auftrag</h2>
+        </div>
+        <div class="sp-v2-topbar-actions">
+          <button type="button" class="btn btn-ghost" id="btnAuftragNeuCancel">Abbrechen</button>
+          <button type="button" class="btn btn-primary" id="btnAuftragNeuSave">Speichern</button>
+        </div>
+      </div>
+      <p id="auftragNeuHint" class="muted" style="margin:0 0 0.75rem 0;font-size:0.9rem" aria-live="polite"></p>
+      <form id="auftragNeuForm" class="sp-v2-form" autocomplete="off">
+        <section class="sp-v2-section">
+          <div class="sp-v2-section-head"><span class="sp-v2-num">1</span><h2>Kunde</h2></div>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field" style="position:relative;grid-column:1/-1">
+                <label for="anNeuCustomerName">Firma</label>
+                <input type="text" id="anNeuCustomerName" name="customer_name" required autocomplete="off">
+                <input type="hidden" id="anNeuCustomerServerId" name="customer_server_id" value="">
+                <ul id="anNeuCustomerSuggest" class="auftrag-neu-suggest" hidden></ul>
+              </div>
+              <div class="sp-v2-field"><label for="anNeuCustStreet">Straße</label><input type="text" id="anNeuCustStreet" name="customer_street"></div>
+              <div class="sp-v2-field"><label for="anNeuCustHouse">Hausnr.</label><input type="text" id="anNeuCustHouse" name="customer_house_number"></div>
+              <div class="sp-v2-field"><label for="anNeuCustZip">PLZ</label><input type="text" id="anNeuCustZip" name="customer_zip"></div>
+              <div class="sp-v2-field"><label for="anNeuCustCity">Ort</label><input type="text" id="anNeuCustCity" name="customer_city"></div>
+              <div class="sp-v2-field"><label for="anNeuCustCountry">Land</label><input type="text" id="anNeuCustCountry" name="customer_country" value="AT"></div>
+              <div class="sp-v2-field"><label for="anNeuCustPhone">Telefon</label><input type="text" id="anNeuCustPhone" name="customer_phone"></div>
+              <div class="sp-v2-field"><label for="anNeuCustEmail">E-Mail</label><input type="email" id="anNeuCustEmail" name="customer_email"></div>
+              <div class="sp-v2-field"><label for="anNeuCustEx1">Adresszusatz 1</label><input type="text" id="anNeuCustEx1" name="customer_address_extra_1"></div>
+              <div class="sp-v2-field"><label for="anNeuCustEx2">Adresszusatz 2</label><input type="text" id="anNeuCustEx2" name="customer_address_extra_2"></div>
+            </div>
+          </div>
+        </section>
+        <section class="sp-v2-section">
+          <div class="sp-v2-section-head"><span class="sp-v2-num">2</span><h2>Auftrag</h2></div>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="anNeuJobType">Job-Typ</label>
+                <select id="anNeuJobType" name="job_type" required>
+                  <option value="Service">Service</option>
+                  <option value="Montage">Montage</option>
+                  <option value="Stoerung">Störung</option>
+                  <option value="Wartung">Wartung</option>
+                  <option value="Vertrieb">Vertrieb</option>
+                  <option value="Inbetriebnahme">Inbetriebnahme</option>
+                </select>
+              </div>
+              <div class="sp-v2-field">
+                <label for="anNeuStatus">Status</label>
+                <select id="anNeuStatus" name="status">
+                  <option value="angelegt">angelegt</option>
+                  <option value="zugeteilt" selected>zugeteilt</option>
+                </select>
+              </div>
+              <div class="sp-v2-field">
+                <label for="anNeuRequired">Techniker Anz.</label>
+                <input type="number" id="anNeuRequired" name="required_technicians" min="1" value="1">
+              </div>
+              <div class="sp-v2-field">
+                <label><input type="checkbox" id="anNeuDateNotFixed" name="date_not_fixed" value="1"> Datum nicht fix</label>
+              </div>
+              <div class="sp-v2-field">
+                <label><input type="checkbox" id="anNeuNoDate" name="no_date" value="1"> Ohne Datum</label>
+              </div>
+              <div class="sp-v2-field"><label for="anNeuStart">Von</label><input type="datetime-local" id="anNeuStart" name="start_datetime"></div>
+              <div class="sp-v2-field"><label for="anNeuEnd">Bis</label><input type="datetime-local" id="anNeuEnd" name="end_datetime"></div>
+              <div class="sp-v2-field">
+                <label><input type="checkbox" id="anNeuEntryPermit" name="entry_permit_required" value="1"> Visum/ETA/ESTA erforderlich</label>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="sp-v2-section">
+          <div class="sp-v2-section-head"><span class="sp-v2-num">3</span><h2>Einsatzadresse</h2></div>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field" style="grid-column:1/-1"><label for="anNeuSiteEndkunde">Endkunde / Firma vor Ort</label><input type="text" id="anNeuSiteEndkunde" name="endkunde"></div>
+              <div class="sp-v2-field"><label for="anNeuSiteStreet">Straße</label><input type="text" id="anNeuSiteStreet" name="street"></div>
+              <div class="sp-v2-field"><label for="anNeuSiteHouse">Hausnr.</label><input type="text" id="anNeuSiteHouse" name="house_number"></div>
+              <div class="sp-v2-field"><label for="anNeuSiteZip">PLZ</label><input type="text" id="anNeuSiteZip" name="zip"></div>
+              <div class="sp-v2-field"><label for="anNeuSiteCity">Ort</label><input type="text" id="anNeuSiteCity" name="city"></div>
+              <div class="sp-v2-field"><label for="anNeuSiteCountry">Land</label><input type="text" id="anNeuSiteCountry" name="country" value="AT"></div>
+              <div class="sp-v2-field"><label for="anNeuSiteEx1">Adresszusatz 1</label><input type="text" id="anNeuSiteEx1" name="address_extra_1"></div>
+              <div class="sp-v2-field"><label for="anNeuSiteEx2">Adresszusatz 2</label><input type="text" id="anNeuSiteEx2" name="address_extra_2"></div>
+            </div>
+            <p class="sp-v2-hint"><button type="button" class="btn btn-ghost" id="btnAuftragNeuCopyCustomerAddr">Kundenadresse übernehmen</button></p>
+          </div>
+        </section>
+        <section class="sp-v2-section">
+          <div class="sp-v2-section-head"><span class="sp-v2-num">4</span><h2>Baustellen-Ansprechpartner</h2></div>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field"><label for="anNeuContactFirst">Vorname</label><input type="text" id="anNeuContactFirst"></div>
+              <div class="sp-v2-field"><label for="anNeuContactLast">Nachname</label><input type="text" id="anNeuContactLast"></div>
+              <div class="sp-v2-field"><label for="anNeuContactTitle">Titel</label><input type="text" id="anNeuContactTitle"></div>
+              <div class="sp-v2-field"><label for="anNeuContactDept">Abteilung</label><input type="text" id="anNeuContactDept"></div>
+              <div class="sp-v2-field"><label for="anNeuContactPhone">Telefon</label><input type="text" id="anNeuContactPhone"></div>
+              <div class="sp-v2-field"><label for="anNeuContactMobile">Mobil</label><input type="text" id="anNeuContactMobile"></div>
+              <div class="sp-v2-field"><label for="anNeuContactEmail">E-Mail</label><input type="email" id="anNeuContactEmail"></div>
+            </div>
+          </div>
+        </section>
+        <section class="sp-v2-section">
+          <div class="sp-v2-section-head"><span class="sp-v2-num">5</span><h2>Hotel</h2></div>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field" style="grid-column:1/-1"><label for="anNeuHotelName">Hotel / Name</label><input type="text" id="anNeuHotelName"></div>
+              <div class="sp-v2-field"><label for="anNeuHotelStreet">Straße</label><input type="text" id="anNeuHotelStreet"></div>
+              <div class="sp-v2-field"><label for="anNeuHotelHouse">Hausnr.</label><input type="text" id="anNeuHotelHouse"></div>
+              <div class="sp-v2-field"><label for="anNeuHotelZip">PLZ</label><input type="text" id="anNeuHotelZip"></div>
+              <div class="sp-v2-field"><label for="anNeuHotelCity">Ort</label><input type="text" id="anNeuHotelCity"></div>
+              <div class="sp-v2-field"><label for="anNeuHotelCountry">Land</label><input type="text" id="anNeuHotelCountry"></div>
+              <div class="sp-v2-field"><label for="anNeuHotelPhone">Telefon</label><input type="text" id="anNeuHotelPhone"></div>
+              <div class="sp-v2-field"><label for="anNeuHotelEmail">E-Mail</label><input type="email" id="anNeuHotelEmail"></div>
+              <div class="sp-v2-field"><label for="anNeuHotelWeb">Website</label><input type="text" id="anNeuHotelWeb"></div>
+            </div>
+          </div>
+        </section>
+        <section class="sp-v2-section">
+          <div class="sp-v2-section-head"><span class="sp-v2-num">6</span><h2>Anlage &amp; Bemerkungen</h2></div>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-field">
+              <label for="anNeuFab">Fabrikationsnummern (eine pro Zeile oder Semikolon)</label>
+              <textarea id="anNeuFab" rows="3" placeholder="z. B. 12345&#10;67890"></textarea>
+            </div>
+            <div class="sp-v2-field">
+              <label for="anNeuDescription">Bemerkungen</label>
+              <textarea id="anNeuDescription" name="description" rows="4"></textarea>
+            </div>
+          </div>
+        </section>
+      </form>
     </div>
   </main>
   <main id="viewProtokolleArbeitsnachweis" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Arbeitsnachweis">
@@ -5040,6 +5194,7 @@
   <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="js/dokumente-view.js?v=3"></script>
+  <script src="js/auftrag-neu.js?v=1"></script>
   <script src="app.js?v=vnc-popout"></script>
   <script src="js/profinet-tool.js?v=20261015-dialog"></script>
   <script src="js/tools-vnc.js?v=20261014"></script>

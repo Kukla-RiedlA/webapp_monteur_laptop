@@ -13559,7 +13559,7 @@
     });
     var targetId = null;
     if (name === 'start' || !name) targetId = 'btnViewStart';
-    else if (name === 'dienstreise') targetId = 'btnViewDienstreise';
+    else if (name === 'dienstreise' || name === 'auftrag-neu') targetId = 'btnViewDienstreise';
     else if (name === 'archiv') targetId = 'btnViewArchiv';
     else if (name === 'anlagenstamm') targetId = 'btnViewAnlagenstamm';
     else if (name === 'einstellungen') targetId = 'btnViewEinstellungen';
@@ -13623,6 +13623,7 @@
     const viewEinstellungen = document.getElementById('viewEinstellungen');
     const viewProjektdaten = document.getElementById('viewProjektdaten');
     const viewDienstreise = document.getElementById('viewDienstreise');
+    const viewAuftragNeu = document.getElementById('viewAuftragNeu');
     const viewAbrechnung = document.getElementById('view-abrechnung');
     const viewZeitschreibung = document.getElementById('view-zeitschreibung');
     const viewArchiv = document.getElementById('viewArchiv');
@@ -13637,6 +13638,7 @@
     projektdatenExplorerJobId = null;
     if (typeof updateProjektdatenHeadingMeta === 'function') updateProjektdatenHeadingMeta(null);
     if (viewDienstreise) viewDienstreise.classList.remove('active');
+    if (viewAuftragNeu) viewAuftragNeu.classList.remove('active');
     if (viewAbrechnung) viewAbrechnung.classList.remove('active');
     if (viewZeitschreibung) viewZeitschreibung.classList.remove('active');
     protokolleViewIds.forEach(function (id) {
@@ -13668,6 +13670,12 @@
       viewStart.classList.add('hidden');
       viewDienstreise.classList.add('active');
       loadDienstreiseList();
+      return;
+    }
+    if (name === 'auftrag-neu') {
+      viewStart.classList.add('hidden');
+      if (viewAuftragNeu) viewAuftragNeu.classList.add('active');
+      if (typeof window.initAuftragNeuView === 'function') window.initAuftragNeuView();
       return;
     }
     if (name === 'abrechnung') {
@@ -29639,6 +29647,7 @@
   window.maybeOpenGeneratedPdf = maybeOpenGeneratedPdf;
   window.maybeOpenGeneratedPdfs = maybeOpenGeneratedPdfs;
   window.loadDienstreiseList = loadDienstreiseList;
+  window.openJobDetailsModal = openJobDetailsModal;
 
   var popoutMenuViews = {
     btnViewStart: { view: 'start', title: 'Start' },
