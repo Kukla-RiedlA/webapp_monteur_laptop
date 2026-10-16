@@ -97,6 +97,42 @@ function registerHinweiseRoutes(app, ctx) {
     if (!database) return res.status(503).json({ ok: false, error: 'Lokale Datenbank nicht bereit.' });
     ensureHinweiseLocalSchema(database);
     const fab = String(req.query.fabrikationsnummer || '').trim();
+    const status = String(req.query.status || '').trim().toLowerCase();
+    if (status === 'done') {
+      const rows = database
+        .prepare(
+          `SELECT * FROM hinweise_local WHERE status = 'done' ORDER BY datetime(created_at) DESC LIMIT 200`,
+        )
+        .all();
+      const items = rows.map((row) => {
+        const files = database
+          .prepare(
+            `SELECT id, original_name, mime, size_bytes FROM hinweis_files_local WHERE client_uuid = ? ORDER BY id`,
+          )
+          .all(row.client_uuid)
+          .map((f) => ({
+            id: f.id,
+            original_name: f.original_name,
+            mime: f.mime || '',
+            url: '/api/hinweise/file?local=1&file_id=' + encodeURIComponent(String(f.id)),
+          }));
+        return {
+          hinweis_id: row.server_id || 0,
+          client_uuid: row.client_uuid,
+          scope: row.scope,
+          fabrikationsnummer: row.fabrikationsnummer || '',
+          body: row.body || '',
+          tag: row.tag || 'allgemein',
+          deadline: row.deadline || null,
+          validity: row.validity || 'permanent',
+          pruefablauf: Number(row.pruefablauf) === 1,
+          status: 'done',
+          files,
+          created_at: row.created_at,
+        };
+      });
+      return res.json({ ok: true, items, total: items.length, source: 'local' });
+    }
     res.json({
       ok: true,
       items: mergeRemoteWithLocal(database, [], fab || null),
@@ -128,6 +164,9 @@ function registerHinweiseRoutes(app, ctx) {
     if (!body && !files.length) {
       return res.status(400).json({ ok: false, error: 'Text oder mindestens eine Datei erforderlich.' });
     }
+    if (String(fields.validity || '') === 'until_date' && !String(fields.deadline || '').trim()) {
+      return res.status(400).json({ ok: false, error: 'Datum erforderlich bei Gültigkeit „bis Datum“.' });
+    }
     let local;
     try {
       local = saveCreateLocal(database, ctx.dbDir, fields, files);
@@ -147,7 +186,13 @@ function registerHinweiseRoutes(app, ctx) {
         )
         .catch((e) => console.warn('[hinweise] immediate flush:', e && e.message ? e.message : e));
     });
-    res.json({ ok: true, hinweis: local, pending_push: true });
+    res.json({
+      ok: true,
+      hinweis: local && local.hinweis ? local.hinweis : local,
+      hinweise: local && local.hinweise ? local.hinweise : local ? [local] : [],
+      count: local && local.count != null ? local.count : 1,
+      pending_push: true,
+    });
   });
 
   app.post('/api/hinweise/action', express.json(), (req, res) => {

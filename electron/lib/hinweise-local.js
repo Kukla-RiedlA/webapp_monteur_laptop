@@ -17,6 +17,8 @@ function ensureHinweiseLocalSchema(db) {
       body TEXT,
       tag TEXT DEFAULT 'allgemein',
       deadline TEXT,
+      validity TEXT DEFAULT 'permanent',
+      pruefablauf INTEGER NOT NULL DEFAULT 0,
       status TEXT DEFAULT 'open',
       source TEXT DEFAULT 'techniker',
       created_at TEXT DEFAULT (datetime('now')),
@@ -34,6 +36,44 @@ function ensureHinweiseLocalSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_hinweise_local_fab ON hinweise_local(fabrikationsnummer);
     CREATE INDEX IF NOT EXISTS idx_hinweise_local_pending ON hinweise_local(pending_push);
   `);
+  try {
+    db.exec(`ALTER TABLE hinweise_local ADD COLUMN validity TEXT DEFAULT 'permanent'`);
+  } catch (_) {}
+  try {
+    db.exec(`ALTER TABLE hinweise_local ADD COLUMN pruefablauf INTEGER NOT NULL DEFAULT 0`);
+  } catch (_) {}
+}
+
+function parseFabInput(str) {
+  if (!str || typeof str !== 'string') return [];
+  const parts = str.split(/[\s]*[,;][\s]*/).map((p) => p.trim()).filter(Boolean);
+  const numbers = [];
+  for (const p of parts) {
+    const m = p.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m) {
+      let a = parseInt(m[1], 10);
+      let b = parseInt(m[2], 10);
+      if (String(m[2]).length < String(a).length) {
+        const pow = Math.pow(10, m[2].length);
+        b = Math.floor(a / pow) * pow + b;
+      }
+      if (a > b) {
+        const t = a;
+        a = b;
+        b = t;
+      }
+      if (b - a > 500) continue;
+      for (let n = a; n <= b; n++) numbers.push(String(n));
+    } else {
+      numbers.push(p);
+    }
+  }
+  const seen = new Set();
+  return numbers.filter((n) => {
+    if (seen.has(n)) return false;
+    seen.add(n);
+    return true;
+  });
 }
 
 function outboxRoot(dbDir) {
@@ -48,42 +88,64 @@ function safeName(name) {
 
 function saveCreateLocal(db, dbDir, fields, files) {
   ensureHinweiseLocalSchema(db);
-  const uuid = String(fields.client_uuid || '').trim() || crypto.randomUUID();
   const scope = String(fields.scope || 'fn').toLowerCase() === 'job' ? 'job' : 'fn';
-  const fab = String(fields.fabrikationsnummer || '').trim();
   const jobId = parseInt(fields.job_id, 10) || null;
   const body = String(fields.body || '').trim();
   const tag = String(fields.tag || 'allgemein').trim() || 'allgemein';
-  const deadline = String(fields.deadline || '').trim() || null;
-  const dir = path.join(outboxRoot(dbDir), uuid);
-  fs.mkdirSync(dir, { recursive: true });
-  const storedFiles = [];
+  let validity = String(fields.validity || 'permanent').trim().toLowerCase() || 'permanent';
+  if (validity === 'dauerhaft') validity = 'permanent';
+  if (validity === 'bis_service' || validity === 'next_service') validity = 'until_next_service';
+  if (validity === 'bis_datum' || validity === 'date') validity = 'until_date';
+  if (!['permanent', 'until_date', 'until_next_service'].includes(validity)) validity = 'permanent';
+  let deadline = String(fields.deadline || '').trim() || null;
+  if (validity !== 'until_date') deadline = null;
+  const pruefRaw = fields.pruefablauf;
+  const pruefablauf =
+    pruefRaw === true || pruefRaw === 1 || pruefRaw === '1' || pruefRaw === 'on' || pruefRaw === 'true' ? 1 : 0;
+  let fnList = [];
+  if (scope === 'fn') {
+    fnList = parseFabInput(String(fields.fabrikationsnummer || fields.fabrikationsnummern || ''));
+    if (!fnList.length) {
+      const single = String(fields.fabrikationsnummer || '').trim();
+      if (single) fnList = [single];
+    }
+  } else {
+    fnList = [null];
+  }
+  const baseUuid = String(fields.client_uuid || '').trim() || crypto.randomUUID();
+  const created = [];
+  const sharedFiles = [];
   (files || []).forEach((f, idx) => {
     const buf = f && f.buffer;
     if (!buf || !buf.length) return;
-    const orig = safeName(f.filename || f.original_name || 'datei-' + (idx + 1));
-    const abs = path.join(dir, orig);
-    fs.writeFileSync(abs, buf);
-    storedFiles.push({
-      original_name: orig,
-      abs_path: abs,
+    sharedFiles.push({
+      buffer: buf,
+      original_name: safeName(f.filename || f.original_name || 'datei-' + (idx + 1)),
       mime: String(f.mimeType || f.mime || ''),
-      size_bytes: buf.length,
     });
   });
-  db.prepare(
+  const ins = db.prepare(
     `INSERT INTO hinweise_local (
-      client_uuid, scope, fabrikationsnummer, job_id, body, tag, deadline, status, source, pending_push
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', 'techniker', 1)`,
-  ).run(uuid, scope, fab || null, jobId, body || null, tag, deadline);
+      client_uuid, scope, fabrikationsnummer, job_id, body, tag, deadline, validity, pruefablauf, status, source, pending_push
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'techniker', 1)`,
+  );
   const insFile = db.prepare(
     `INSERT INTO hinweis_files_local (client_uuid, original_name, abs_path, mime, size_bytes)
      VALUES (?, ?, ?, ?, ?)`,
   );
-  storedFiles.forEach((sf) => {
-    insFile.run(uuid, sf.original_name, sf.abs_path, sf.mime, sf.size_bytes);
+  fnList.forEach((fab, idx) => {
+    const uuid = fnList.length === 1 ? baseUuid : baseUuid + '-' + (idx + 1);
+    const dir = path.join(outboxRoot(dbDir), uuid);
+    fs.mkdirSync(dir, { recursive: true });
+    ins.run(uuid, scope, fab || null, jobId, body || null, tag, deadline, validity, pruefablauf);
+    sharedFiles.forEach((sf) => {
+      const abs = path.join(dir, sf.original_name);
+      fs.writeFileSync(abs, sf.buffer);
+      insFile.run(uuid, sf.original_name, abs, sf.mime, sf.buffer.length);
+    });
+    created.push(getLocalByUuid(db, uuid));
   });
-  return getLocalByUuid(db, uuid);
+  return { hinweis: created[0] || null, hinweise: created, count: created.length };
 }
 
 function fileRows(db, uuid) {
@@ -128,7 +190,9 @@ function toApiItem(db, row) {
     body: row.body || '',
     tag: row.tag || 'allgemein',
     deadline: row.deadline || null,
-    overdue: isOverdue(row.deadline),
+    validity: row.validity || (row.deadline ? 'until_date' : 'permanent'),
+    pruefablauf: Number(row.pruefablauf) === 1,
+    overdue: (row.validity || (row.deadline ? 'until_date' : 'permanent')) === 'until_date' && isOverdue(row.deadline),
     status: row.status || 'open',
     files,
     pending_push: pending,
@@ -207,6 +271,8 @@ async function pushOneToDispo(row, files, dispoUrl, headers) {
   if (row.body) fd.append('body', row.body);
   if (row.tag) fd.append('tag', row.tag);
   if (row.deadline) fd.append('deadline', row.deadline);
+  if (row.validity) fd.append('validity', row.validity);
+  fd.append('pruefablauf', Number(row.pruefablauf) === 1 ? '1' : '0');
   files.forEach((f) => {
     if (!f.abs_path || !fs.existsSync(f.abs_path)) return;
     fd.append('files[]', fs.readFileSync(f.abs_path), {

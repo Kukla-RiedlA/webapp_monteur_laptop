@@ -11,6 +11,13 @@
     service: 'Service',
     betrieb: 'Betrieb'
   };
+  var VALIDITY_LABELS = {
+    permanent: 'Dauerhaft',
+    until_next_service: 'Bis nächsten Service',
+    until_date: 'Bis Datum'
+  };
+  var modalTab = 'open';
+  var lastOpenItems = [];
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -85,18 +92,61 @@
     return html + '</ul>';
   }
 
+  function parseFabInput(str) {
+    if (!str || typeof str !== 'string') return [];
+    var parts = str.split(/[\s]*[,;][\s]*/).map(function (p) { return p.trim(); }).filter(Boolean);
+    var numbers = [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      var m = p.match(/^(\d+)\s*-\s*(\d+)$/);
+      if (m) {
+        var a = parseInt(m[1], 10);
+        var b = parseInt(m[2], 10);
+        if (String(m[2]).length < String(a).length) {
+          var pow = Math.pow(10, m[2].length);
+          b = Math.floor(a / pow) * pow + b;
+        }
+        if (a > b) { var t = a; a = b; b = t; }
+        if (b - a > 500) continue;
+        for (var n = a; n <= b; n++) numbers.push(String(n));
+      } else numbers.push(p);
+    }
+    var seen = {};
+    return numbers.filter(function (x) {
+      if (seen[x]) return false;
+      seen[x] = true;
+      return true;
+    });
+  }
+
+  function renderModalFnChips(root) {
+    var input = root.querySelector('[name="fabrikationsnummer"]');
+    var box = root.querySelector('[data-hinweis-fn-chips]');
+    if (!input || !box) return;
+    var nums = parseFabInput(input.value || '');
+    box.innerHTML = nums.map(function (fn) {
+      return '<span class="hinweis-fn-chip" data-fn="' + esc(fn) + '">' +
+        '<span class="hinweis-fn-chip-label">' + esc(fn) + '</span>' +
+        '<button type="button" class="hinweis-fn-chip-x" data-hinweis-fn-remove="' + esc(fn) + '" aria-label="FN entfernen">✕</button></span>';
+    }).join('');
+  }
+
   function cardHtml(it, opts) {
     opts = opts || {};
     var overdue = !!it.overdue;
-    var html = '<article class="hinweis-card' + (overdue ? ' is-overdue' : '') + '" data-hinweis-id="' + esc(it.hinweis_id) + '">';
+    var pruef = !!(it.pruefablauf === true || it.pruefablauf === 1 || it.pruefablauf === '1');
+    var html = '<article class="hinweis-card' + (overdue ? ' is-overdue' : '') + (pruef ? ' is-pruefablauf' : '') + '" data-hinweis-id="' + esc(it.hinweis_id) + '">';
     html += '<div class="hinweis-card-meta">';
     html += '<span class="hinweis-tag">' + esc(TAGS[it.tag] || it.tag || '') + '</span>';
+    if (pruef) html += '<span class="hinweis-badge-pruef">Bedienung / Prüfablauf</span>';
     html += it.scope === 'job' ? 'Auftrag' : 'FN';
     if (it.fabrikationsnummer) html += ' · FN ' + esc(it.fabrikationsnummer);
     if (it.job_number) html += ' · ' + esc(it.job_number);
     else if (it.job_id) html += ' · Auftrag #' + esc(it.job_id);
     html += ' · ' + esc(it.created_by_name || '') + ' · ' + esc(fmtDt(it.created_at));
-    if (it.deadline) html += ' · Deadline ' + esc(fmtDt(it.deadline));
+    var val = it.validity || (it.deadline ? 'until_date' : 'permanent');
+    if (VALIDITY_LABELS[val]) html += ' · ' + esc(VALIDITY_LABELS[val]);
+    if (it.deadline) html += ' · ' + esc(fmtDt(it.deadline));
     if (overdue) html += ' · <strong>überfällig</strong>';
     if (it.status === 'done') html += ' · erledigt';
     html += '</div>';
@@ -128,23 +178,162 @@
     return html;
   }
 
+  function createFormHtml() {
+    return '<form class="hinweis-create-form" id="hinweisModalCreateForm">' +
+      '<input type="hidden" name="scope" value="fn">' +
+      '<div class="hinweis-field hinweis-field-full"><label>Fabrikationsnummern</label>' +
+      '<input type="text" name="fabrikationsnummer" autocomplete="off" placeholder="z. B. 11030; 11031-33">' +
+      '<div class="hinweis-fn-chips" data-hinweis-fn-chips></div></div>' +
+      '<div class="hinweis-field"><label>Tag</label><select name="tag">' +
+      '<option value="allgemein">Allgemein</option><option value="inbetriebnahme">Inbetriebnahme</option>' +
+      '<option value="service">Service</option><option value="betrieb">Betrieb</option></select></div>' +
+      '<div class="hinweis-field"><label>Gültigkeit</label><select name="validity">' +
+      '<option value="permanent">Dauerhaft</option>' +
+      '<option value="until_next_service">Bis zum nächsten Service</option>' +
+      '<option value="until_date">Bis zu einem Datum</option></select></div>' +
+      '<div class="hinweis-field" data-hinweis-deadline-wrap style="display:none"><label>Gültig bis</label>' +
+      '<input type="date" name="deadline"></div>' +
+      '<div class="hinweis-field hinweis-field-full"><label class="hinweis-check">' +
+      '<input type="checkbox" name="pruefablauf" value="1"> Bedienung / Prüfablauf</label></div>' +
+      '<div class="hinweis-field hinweis-field-full"><label>Text</label>' +
+      '<textarea name="body" rows="4" placeholder="Hinweistext und/oder Dateien"></textarea></div>' +
+      '<div class="hinweis-field hinweis-field-full"><div class="hinweis-drop" data-hinweis-drop>' +
+      'Dateien hierher ziehen oder klicken' +
+      '<input type="file" name="files[]" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.docx,.xlsx,.zip">' +
+      '<div class="hinweis-drop-list" data-hinweis-drop-list></div></div></div>' +
+      '<div class="hinweis-create-actions"><button type="button" class="btn btn-primary" data-hinweis-save>Speichern</button></div>' +
+      '</form>';
+  }
+
   function ensureModal() {
     var m = document.getElementById('hinweisModal');
     if (m) return m;
     m = document.createElement('div');
     m.id = 'hinweisModal';
     m.className = 'hinweis-modal';
-    m.innerHTML = '<div class="hinweis-modal-card"><h2>Montagehinweise</h2><div id="hinweisModalBody"></div><button type="button" class="btn" id="hinweisModalClose">Schließen</button></div>';
+    m.innerHTML =
+      '<div class="hinweis-modal-card hinweis-modal-wide">' +
+      '<h2>Montagehinweise</h2>' +
+      '<div class="hinweis-modal-tabs" role="tablist">' +
+      '<button type="button" data-hinweis-tab="open" class="is-active">Offen</button>' +
+      '<button type="button" data-hinweis-tab="new">Neu</button>' +
+      '<button type="button" data-hinweis-tab="history">Historie</button></div>' +
+      '<div id="hinweisModalBody"></div>' +
+      '<button type="button" class="btn" id="hinweisModalClose">Schließen</button></div>';
     document.body.appendChild(m);
     m.addEventListener('click', function (e) { if (e.target === m) m.classList.remove('is-open'); });
     document.getElementById('hinweisModalClose').addEventListener('click', function () { m.classList.remove('is-open'); });
+    m.querySelector('.hinweis-modal-tabs').addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-hinweis-tab]');
+      if (!btn) return;
+      modalTab = btn.getAttribute('data-hinweis-tab') || 'open';
+      m.querySelectorAll('[data-hinweis-tab]').forEach(function (b) {
+        b.classList.toggle('is-active', b.getAttribute('data-hinweis-tab') === modalTab);
+      });
+      renderModalBody();
+    });
     return m;
   }
 
+  function sortPruefFirst(items) {
+    return (items || []).slice().sort(function (a, b) {
+      var ap = a && (a.pruefablauf === true || a.pruefablauf === 1) ? 1 : 0;
+      var bp = b && (b.pruefablauf === true || b.pruefablauf === 1) ? 1 : 0;
+      return bp - ap;
+    });
+  }
+
+  function bindModalCreateForm(form) {
+    if (!form || form.getAttribute('data-bound')) return;
+    form.setAttribute('data-bound', '1');
+    bindDropzone(form.querySelector('[data-hinweis-drop]'));
+    var fabInput = form.querySelector('[name="fabrikationsnummer"]');
+    if (fabInput) {
+      fabInput.addEventListener('input', function () { renderModalFnChips(form); });
+    }
+    var valSel = form.querySelector('[name="validity"]');
+    var wrap = form.querySelector('[data-hinweis-deadline-wrap]');
+    function syncVal() {
+      var v = valSel ? valSel.value : 'permanent';
+      if (wrap) wrap.style.display = v === 'until_date' ? '' : 'none';
+    }
+    if (valSel) valSel.addEventListener('change', syncVal);
+    syncVal();
+    form.addEventListener('click', function (e) {
+      var rm = e.target.closest && e.target.closest('[data-hinweis-fn-remove]');
+      if (rm && form.contains(rm)) {
+        e.preventDefault();
+        var fn = rm.getAttribute('data-hinweis-fn-remove');
+        if (fabInput) {
+          fabInput.value = parseFabInput(fabInput.value || '').filter(function (n) { return n !== fn; }).join('; ');
+          renderModalFnChips(form);
+        }
+        return;
+      }
+      var btn = e.target.closest && e.target.closest('[data-hinweis-save]');
+      if (!btn || !form.contains(btn)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var fd = collectFormData(form);
+      fd.set('scope', 'fn');
+      if (!fd.get('pruefablauf')) fd.set('pruefablauf', '0');
+      fetch(API_BASE + '/api/hinweise/create', { method: 'POST', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d || d.ok === false) throw new Error((d && d.error) || 'Fehler');
+          resetCreateForm(form);
+          renderModalFnChips(form);
+          syncVal();
+          modalTab = 'open';
+          ensureModal().querySelectorAll('[data-hinweis-tab]').forEach(function (b) {
+            b.classList.toggle('is-active', b.getAttribute('data-hinweis-tab') === 'open');
+          });
+          refresh().then(function () {
+            return fetch(API_BASE + '/api/hinweise/mine').then(function (r) { return r.json(); });
+          }).then(function (d2) {
+            lastOpenItems = (d2 && d2.items) || [];
+            renderModalBody();
+          });
+        })
+        .catch(function (err) { window.alert(err.message || 'Speichern fehlgeschlagen'); });
+    });
+  }
+
+  function renderModalBody() {
+    var body = document.getElementById('hinweisModalBody');
+    if (!body) return;
+    if (modalTab === 'new') {
+      body.innerHTML = createFormHtml();
+      bindModalCreateForm(document.getElementById('hinweisModalCreateForm'));
+      return;
+    }
+    if (modalTab === 'history') {
+      body.innerHTML = '<p class="muted">Historie wird geladen…</p>';
+      fetch(API_BASE + '/api/hinweise?status=done&overview=1&limit=100')
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var items = sortPruefFirst((d && d.items) || []).filter(function (it) { return it && it.status === 'done'; });
+          body.innerHTML = items.length
+            ? items.map(function (it) { return cardHtml(it, { readOnly: true }); }).join('')
+            : '<p class="muted">Keine erledigten Hinweise.</p>';
+        })
+        .catch(function () {
+          body.innerHTML = '<p class="muted">Historie nicht verfügbar (offline?).</p>';
+        });
+      return;
+    }
+    var open = sortPruefFirst((lastOpenItems || []).filter(function (it) { return !it || it.status !== 'done'; }));
+    body.innerHTML = open.length ? open.map(function (it) { return cardHtml(it); }).join('') : '<p>Keine Hinweise.</p>';
+  }
+
   function openModal(items) {
+    lastOpenItems = items || [];
+    modalTab = 'open';
     var m = ensureModal();
-    document.getElementById('hinweisModalBody').innerHTML =
-      items && items.length ? items.map(function (it) { return cardHtml(it); }).join('') : '<p>Keine Hinweise.</p>';
+    m.querySelectorAll('[data-hinweis-tab]').forEach(function (b) {
+      b.classList.toggle('is-active', b.getAttribute('data-hinweis-tab') === 'open');
+    });
+    renderModalBody();
     m.classList.add('is-open');
   }
 
@@ -152,8 +341,9 @@
     return fetch(API_BASE + '/api/hinweise/mine')
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d || d.ok === false) return;
+        if (!d || d.ok === false) return d;
         setLamp(d.lamp || 'off');
+        lastOpenItems = d.items || lastOpenItems;
         var fresh = [];
         (d.popup || []).forEach(function (it) {
           var id = String(it.hinweis_id || '');
@@ -162,8 +352,9 @@
           fresh.push(it);
         });
         if (fresh.length) openModal(fresh);
+        return d;
       })
-      .catch(function () {});
+      .catch(function () { return null; });
   }
 
   function bindDropzone(zone) {
@@ -246,6 +437,7 @@
       e.stopPropagation();
       var fd = collectFormData(form);
       fd.set('scope', 'fn');
+      if (!fd.get('pruefablauf')) fd.set('pruefablauf', '0');
       fetch(API_BASE + '/api/hinweise/create', { method: 'POST', body: fd })
         .then(function (r) { return r.json(); })
         .then(function (d) {

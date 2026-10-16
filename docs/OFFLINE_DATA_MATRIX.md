@@ -54,7 +54,7 @@ Legende:
 | **RAMS** | — | Live | Live / Queue bei Fehler | Nein — **Bootstrap-Ausnahme** GAP-009 | Nein | Live-only |
 | TED-Metadaten | `job_ted_index` | `sync_pull` / `dienstreise_pull` | — | Ja (Index); Datei wenn im Ordner | Pull online | Ja |
 | **Geräte / Multi-Device** | `device_id` in userData | register/heartbeat | — | — | — | Ja (`monteur_devices`) |
-| **Montagehinweise** | — (Live) | GET `/api/hinweise/mine` + Job-Felder `open_hinweise` / `has_open_hinweise` | Action/Create an Dispo; Dateien als Pfad (`userData/hinweise-outbox/`), kein Base64 in `pending_changes` | Lampe/Popup nur online (Poll) | Create FN online; Outbox-Pfad geplant | Ja (Dispo kanonisch) |
+| **Montagehinweise** | `hinweise_local` (+ Dateien under `hinweise-outbox/`) | GET `/api/hinweise/mine` / `status=done` Historie lokal; Job-Felder `open_hinweise` | Create Multi-FN lokal + Flush an `hinweise_create`; Validity/Prüfablauf; Dateien als Pfad, kein Base64 | Lampe lokal + Poll; Modal Tabs Offen/Neu/Historie | Ja (FN Create lokal, Queue) | Ja (Dispo kanonisch) |
 | **Dokumenten-Safe** | `technician_documents` (AES-GCM-BLOB), Schlüssel `doc_safe_key` via Electron `safeStorage` | `POST /api/doc-safe/sync` holt Klartext über TLS und verschlüsselt lokal neu | Dieselbe Sync-Route, dirty-Zeilen an `POST /api/doc_safe.php` | Ja, nur der angemeldete Techniker | Ja, lokal sofort; Server nach Sync | Ja (MariaDB kanonisch, kein Dateiordner) |
 
 ---

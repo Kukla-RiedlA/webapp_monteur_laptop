@@ -68,6 +68,10 @@
   display: block;
   flex: 0 0 auto;
 }
+.hinweis-files-cell .hinweis-file-thumb { width: 36px; height: 36px; }
+.hinweis-files-cell { font-size: 12px; }
+.hinweis-edit-existing { margin: 4px 0 8px; }
+.hinweis-modal-card.hinweis-edit-card { max-width: 720px; }
 .hinweis-tag {
   display: inline-block;
   font-size: 11px;
@@ -316,18 +320,100 @@ body.has-sticky-header .hinweise-table-wrap thead th {
   }
 }
 
-.projektdaten-hinweise-section {
-  margin-top: 0.85rem;
+.hinweis-card.is-pruefablauf {
+  border-left-color: #0c6a4d;
+  border-left-width: 6px;
+  background: #eefaf5;
+  box-shadow: 0 0 0 1px #cfe8d1;
 }
-.projektdaten-hinweise-section[hidden] {
-  display: none !important;
+.hinweis-badge-pruef {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  background: #0e7b5a;
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 7px;
+  margin-right: 6px;
 }
-.projektdaten-hinweise-section .hinweis-card-job .hinweis-card-body {
-  margin-bottom: 10px;
+.hinweise-table tr.is-pruefablauf { background: #eefaf5; }
+
+.hinweis-fn-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
-.projektdaten-hinweise-section .hinweis-files {
-  margin: 0 0 10px;
+.hinweis-fn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #eefaf5;
+  border: 1px solid #cfe8d1;
+  border-radius: 8px;
+  padding: 4px 6px 4px 10px;
+  font-size: 13px;
 }
-.projektdaten-hinweise-section .hinweis-files a {
-  font-weight: 600;
+.hinweis-fn-chip-x {
+  border: 0;
+  background: transparent;
+  color: #b91c1c;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
 }
+.hinweis-fn-chip-x:hover { background: #fee2e2; }
+.hinweis-fn-hint { margin: 6px 0 0; font-size: 12px; }
+.hinweis-check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.hinweis-job-filter { width: 100%; margin-bottom: 6px; box-sizing: border-box; }
+.hinweis-import-actions { margin-top: 8px; }
+.hinweis-import-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+  max-height: 50vh;
+  overflow: auto;
+}
+.hinweis-import-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #cfe8d1;
+  border-radius: 8px;
+  padding: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  background: #fff;
+}
+.hinweis-import-item img {
+  width: 100%;
+  height: 90px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #eefaf5;
+}
+.hinweis-modal-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.hinweis-modal-tabs button {
+  border: 1px solid #cfe8d1;
+  background: #fff;
+  color: #0c6b4f;
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.hinweis-modal-tabs button.is-active {
+  background: #0e7b5a;
+  color: #fff;
+  border-color: #0e7b5a;
+}
+.hinweis-modal-card.hinweis-modal-wide { max-width: 760px; }

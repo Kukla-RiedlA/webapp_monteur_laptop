@@ -302,21 +302,24 @@ Hinweise zu Fabrikationsnummer (`scope=fn`) und Auftrag (`scope=job`). Envelope 
 
 | Endpunkt | Methode | Kurzbeschreibung |
 |----------|---------|------------------|
-| `api/hinweise.php` | GET | Query `mine=1` (Lampe+Popup), `fabrikationsnummer`, `job_id`, Übersicht `q`, `date_from/to`, `deadline_from/to`, `overdue`, `sort_col/dir` → `{ ok, items[], lamp?, popup?, total? }` |
-| `api/hinweise.php` | POST | Anlegen: JSON oder multipart `files[]` mit `scope`, `body` und/oder Datei, `tag`, `deadline`, `fabrikationsnummer` oder `job_id`, optional `client_uuid`. Bearbeiten: zusätzlich `hinweis_id` — ändert `body`/`tag`/`deadline`, hängt neue Dateien an; Scope/FN/Auftrag unverändert. |
+| `api/hinweise.php` | GET | Query `mine=1` (Lampe+Popup), `fabrikationsnummer`, `job_id`, Übersicht `q`, `status` (`open`/`done`), `validity`, `pruefablauf=1`, `date_from/to`, `deadline_from/to`, `overdue`, `sort_col/dir` → `{ ok, items[], lamp?, popup?, total? }` |
+| `api/hinweise.php` | POST | Anlegen: JSON/multipart `files[]` mit `scope`, `body` und/oder Datei, `tag`, `validity` (`permanent`\|`until_date`\|`until_next_service`), `deadline` (nur bei `until_date`), `pruefablauf` (0/1), `fabrikationsnummer` (Mehrfach: `,`/`;`/Bereiche → **ein Hinweis pro FN**) oder `job_id`, optional `client_uuid`. Antwort: `{ ok, hinweis, hinweise[], count }`. Bearbeiten: `hinweis_id` — `body`/`tag`/`deadline`/`validity`/`pruefablauf` + neue Dateien. |
+| `api/hinweise_job_images.php` | GET | `job_id` — Bildliste aus `job_files` für Import in Create-UI |
 | `api/hinweis_action.php` | POST JSON | `hinweis_id`, `action` (`verwerfen`/`aufheben`/`shown`/`kept`/`dismissed`), optional `client_action_id` |
 | `api/hinweis_done.php` | POST JSON | `hinweis_id` — global `status=done` |
 | `api/hinweis_file.php` | GET | `id` — Dateibytes |
 | `api/mobile/hinweise.php` | GET | wie Dispo GET, URLs unter `/api/mobile/hinweis_file.php` |
-| `api/mobile/hinweise_create.php` | POST | nur `scope=fn`, `source=techniker` |
+| `api/mobile/hinweise_create.php` | POST | nur `scope=fn`, `source=techniker`; gleiche Felder wie Create inkl. Multi-FN / `validity` / `pruefablauf` |
 | `api/mobile/hinweis_action.php` | POST JSON | `verwerfen` \| `aufheben` \| `erledigt` |
 | `api/mobile/hinweis_file.php` | GET | `id` |
 
-Antwortfelder u. a.: `hinweis_id`, `scope`, `fabrikationsnummer`, `job_id`, `body`, `tag`, `deadline`, `overdue`, `files`, `created_at`, `created_by_name`, `my_action`, `status`. Job-Liste: `has_open_hinweise`. Job-Detail: `open_hinweise` (ohne Binärdaten).
+Antwortfelder u. a.: `hinweis_id`, `scope`, `fabrikationsnummer`, `job_id`, `body`, `tag`, `validity`, `pruefablauf`, `deadline`, `overdue`, `files`, `created_at`, `created_by_name`, `my_action`, `status`. Job-Liste: `has_open_hinweise`. Job-Detail: `open_hinweise` (ohne Binärdaten).
 
-**Monteur-Laptop:** `GET /api/hinweise/mine`, `GET /api/hinweise`, `POST /api/hinweise/create`, `POST /api/hinweise/action`, `GET /api/hinweise/file` → `api/mobile/hinweise*.php`.
+**Auto-Erledigt:** Bei Auftrag `job_type` Service/Wartung und Status `erledigt`/`abgerechnet` werden offene Hinweise mit `validity=until_next_service` (gleiche FN bzw. `scope=job`) auf `done` gesetzt.
 
-**Tags:** `inbetriebnahme` \| `allgemein` \| `service` \| `betrieb`. Lampe: `red` / `yellow` / `off`.
+**Monteur-Laptop:** `GET /api/hinweise/mine`, `GET /api/hinweise` (inkl. `status=done` Historie lokal), `POST /api/hinweise/create` (Multi-FN), `POST /api/hinweise/action`, `GET /api/hinweise/file` → `api/mobile/hinweise*.php`.
+
+**Tags:** `inbetriebnahme` \| `allgemein` \| `service` \| `betrieb`. Lampe: `red` / `yellow` / `off`. Modal-Tabs: Offen / Neu / Historie.
 
 ### 5.1 Dispo-Web Admin (nur eingeloggte Dispo-Session, `perm_admin`)
 
