@@ -1,5 +1,10 @@
 # Versionshistorie – Monteur WebApp
 
+## V 3.000.000
+- **Major-Release:** Plattformweite Stufe 3.000; Patch-Zähler auf 000.
+- **Offline-First:** Accept-Preview Timeout 8 s mit lokaler Fallback-Vorschau.
+- **Sicherheit:** Dispo-Passwort nicht mehr aus URL-Query.
+
 Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer wie in der Dispo: **V &lt;Hauptversion&gt;.&lt;Build&gt;** (z. B. V 1.001).
 
 ---
