@@ -1963,6 +1963,8 @@
     var base = (typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '') || '';
     if (!String(base).trim()) return true;
     if (!hasDispoAuth()) return true;
+    // Flugmodus / explizit offline — Maske wartet nicht auf Dispo (I-OFF-1)
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
     return false;
   }
 
@@ -2040,7 +2042,8 @@
   var acceptOfflinePreviewAbort = null;
   var acceptOfflinePreviewTimer = null;
   var acceptOfflinePreviewTriggerBtn = null;
-  var ACCEPT_OFFLINE_PREVIEW_TIMEOUT_MS = 120000;
+  // S2: schlechtes Netz — nach wenigen Sekunden lokale Vorschau, nicht 2 Min. hängen
+  var ACCEPT_OFFLINE_PREVIEW_TIMEOUT_MS = 8000;
 
   function acceptOfflineLoadingHtml(message) {
     var msg = message || 'Verbinde mit Dispo …';
@@ -2571,6 +2574,7 @@
         } catch (_) {}
       }
     }, ACCEPT_OFFLINE_PREVIEW_TIMEOUT_MS);
+    var preferLocal = shouldPreferOfflineAccept();
     var q =
       'job_id=' + encodeURIComponent(localJobId) +
       '&technician_id=' + encodeURIComponent(getTechId()) +
@@ -2580,21 +2584,45 @@
     if (extra.internalUrl) q += '&internalUrl=' + encodeURIComponent(extra.internalUrl);
     if (getDispoUsername()) q += '&dispo_username=' + encodeURIComponent(getDispoUsername());
     if (onlyFabs.length) q += '&only_fabs=' + encodeURIComponent(onlyFabs.join(','));
+    if (preferLocal) q += '&local_first=1';
     var fetchOpts = {};
     if (acceptOfflinePreviewAbort) fetchOpts.signal = acceptOfflinePreviewAbort.signal;
     var msgElInit = document.getElementById('acceptOfflineLoadingMsg');
-    if (msgElInit) msgElInit.textContent = 'Lade Ordnerliste von Dispo …';
+    if (msgElInit) {
+      msgElInit.textContent = preferLocal
+        ? 'Lade lokale Ordnerliste …'
+        : 'Lade Ordnerliste von Dispo …';
+    }
+
+    function applyPreviewData(data, fromLocalFallback) {
+      if (!acceptOfflinePending || acceptOfflinePending.localJobId !== localJobId) return;
+      acceptOfflinePending.fab_map = data.fab_map || [];
+      acceptOfflinePending.montage_folder_name = data.montage_folder_name || null;
+      if (fromLocalFallback) acceptOfflinePending.previewFailed = true;
+      renderAcceptOfflinePreview(data);
+      if (confirmBtn) confirmBtn.disabled = false;
+      if (mode === 'accept' && hint) hint.textContent = '';
+      if (mode === 'add_fabs' && projektdatenHint) projektdatenHint.textContent = '';
+      if (fromLocalFallback && hintEl) {
+        hintEl.textContent = 'Lokale Vorschau — Dispo nicht rechtzeitig erreichbar. „Keine“ = nur Status.';
+      }
+    }
+
+    function loadLocalPreviewFallback(shown) {
+      var lq = q + (q.indexOf('local_first=') >= 0 ? '' : '&local_first=1');
+      return fetch(API_BASE + '/api/dienstreise/accept_offline_preview?' + lq)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data || data.ok === false) throw new Error((data && data.error) || shown || 'Lokale Vorschau fehlgeschlagen.');
+          applyPreviewData(data, true);
+        });
+    }
+
     fetch(API_BASE + '/api/dienstreise/accept_offline_preview?' + q, fetchOpts)
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data || data.ok === false) throw new Error((data && data.error) || 'Vorschau fehlgeschlagen.');
-        if (!acceptOfflinePending || acceptOfflinePending.localJobId !== localJobId) return;
-        acceptOfflinePending.fab_map = data.fab_map || [];
-        acceptOfflinePending.montage_folder_name = data.montage_folder_name || null;
-        renderAcceptOfflinePreview(data);
-        if (confirmBtn) confirmBtn.disabled = false;
-        if (mode === 'accept' && hint) hint.textContent = '';
-        if (mode === 'add_fabs' && projektdatenHint) projektdatenHint.textContent = '';
+        applyPreviewData(data, false);
       })
       .catch(function (err) {
         if (!acceptOfflinePending || acceptOfflinePending.localJobId !== localJobId) return;
@@ -2605,23 +2633,31 @@
             ? err.message
             : 'Vorschau fehlgeschlagen.';
         var shown = userFacingNetworkErrorMessage(rawMsg, 'Vorschau fehlgeschlagen.');
-        bodyEl.innerHTML =
-          '<p class="muted">' +
-          escapeHtml(shown) +
-          '</p>';
-        if (hintEl) {
-          hintEl.textContent = aborted
-            ? (mode === 'add_fabs'
-              ? '„Keine“ wählen → nur Ordnerstruktur. Oder erneut versuchen.'
-              : '„Keine“ wählen → nur Status/Struktur offline. Oder erneut versuchen.')
-            : (mode === 'add_fabs'
-              ? 'Sie können „Keine“ wählen und ohne zusätzliche Projektdateien fortfahren.'
-              : 'Sie können „Keine“ wählen und ohne Projektdateien annehmen.');
+        if (preferLocal) {
+          bodyEl.innerHTML = '<p class="muted">' + escapeHtml(shown) + '</p>';
+          acceptOfflinePending.previewFailed = true;
+          acceptOfflinePending.fab_map = [];
+          if (confirmBtn) confirmBtn.disabled = false;
+          if (mode === 'accept' && hint) hint.textContent = shown;
+          return;
         }
-        acceptOfflinePending.previewFailed = true;
-        acceptOfflinePending.fab_map = [];
-        if (confirmBtn) confirmBtn.disabled = false;
-        if (mode === 'accept' && hint && !aborted) hint.textContent = shown;
+        if (msgElInit) msgElInit.textContent = 'Dispo langsam — lade lokale Vorschau …';
+        return loadLocalPreviewFallback(shown).catch(function () {
+          bodyEl.innerHTML = '<p class="muted">' + escapeHtml(shown) + '</p>';
+          if (hintEl) {
+            hintEl.textContent = aborted
+              ? (mode === 'add_fabs'
+                ? '„Keine“ wählen → nur Ordnerstruktur. Oder erneut versuchen.'
+                : '„Keine“ wählen → nur Status/Struktur offline. Oder erneut versuchen.')
+              : (mode === 'add_fabs'
+                ? 'Sie können „Keine“ wählen und ohne zusätzliche Projektdateien fortfahren.'
+                : 'Sie können „Keine“ wählen und ohne Projektdateien annehmen.');
+          }
+          acceptOfflinePending.previewFailed = true;
+          acceptOfflinePending.fab_map = [];
+          if (confirmBtn) confirmBtn.disabled = false;
+          if (mode === 'accept' && hint && !aborted) hint.textContent = shown;
+        });
       })
       .finally(function () {
         clearTimeout(previewTimeoutId);

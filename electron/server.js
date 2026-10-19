@@ -6418,12 +6418,12 @@ function createApp(db) {
           ),
         );
       }
+      // Passwort nie aus Query (I-SEC-1). Session/Vault; URLs/Username nur für Dual-URL-Auswahl.
       const creds = resolveDispoServerCreds({
         baseUrl: req.query.dispoBaseUrl || req.query.dispo_base_url,
         externalUrl: req.query.externalUrl,
         internalUrl: req.query.internalUrl,
         dispo_username: req.query.dispo_username,
-        dispo_password: req.query.dispo_password,
       });
       const authHeader = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword) || {};
       if (!authHeader.Authorization) {
