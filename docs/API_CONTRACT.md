@@ -188,6 +188,7 @@ Authentifizierung wie Kontrollwiegung: Query/Header `technician_id`, Dispo-Basic
 | Endpunkt | Methode | Kurzbeschreibung |
 |----------|---------|------------------|
 | `dispo_api/api/serviceprotokoll_defaults.php` | GET | `fabrikationsnummer`, `technician_id` → `{ ok, source: "fn"\|"preset"\|"global"\|"builtin", arbeitsschritte: [{ bezeichnung }], kopf?: { projekt, kopf_pos_nr, kopf_qmax, kopf_type, kopf_dwc }, preset_name?, preset_type_code? }` — Lade-Priorität: FN-Vorlage → Typ-Preset (kompakter Substring in `anlagenstamm.type`, Bindestriche ignoriert, z. B. `DDW` trifft `D-DW-1ASG-800`) → globaler Grundstock → Builtin |
+| `dispo_api/api/serviceprotokoll_prior.php` | GET | `fabrikationsnummer`, `technician_id`, optional `exclude_job_id` → `{ ok, prior: { datum, job_id, protokoll_id, messwerte } \| null }` — letztes gespeichertes Protokoll derselben FN, ohne den aktuellen Auftrag. Nur Vergleichsanzeige. `messwerte` werden nicht ins neue Protokoll und nicht ins PDF übernommen. |
 | `dispo_api/api/serviceprotokoll_save.php` | POST JSON | … → erzeugt PDF unter `Dokumente_Monteur/{FN}/Montage/{Auftragsordner}/Protokolle/` → `{ ok, protokoll_id, pdf_path?, warning? }` |
 | `dispo_api/api/serviceprotokoll_pdf.php` | GET | `id`, `technician_id` → PDF-Binary (aus Projektordner oder Regenerierung) |
 | `dispo_api/api/serviceprotokoll_draft.php` | GET / POST | Zwischenstand **in DB** (`monteur_protocol_drafts` je FN, Meta-Revision): GET → `{ ok, store, revision, server_updated_at, schema_version }`; POST `store` + optional `base_revision`, `device_id` → bei `base_revision`-Mismatch **409** `{ ok:false, code:"conflict", revision, store }`; Job nicht `in_arbeit` → **409** `job_closed` / `job_not_writable`; nach Erledigt ist die FN-Zeile `frozen` (Versionsarchiv). Keine leere `serviceprotokoll.json` im Jobordner. Server-Revision (nicht Client-`updatedAt`) ist maßgeblich. |
@@ -236,6 +237,8 @@ Plattform-Übersicht: [`docs/MULTI_DEVICE_LAPTOP_SYNC.md`](../../docs/MULTI_DEVI
 - `GET /api/protokolle/serviceprotokoll?job_id=` → lädt Draft aus lokaler SQLite (`protocol_drafts`) + Merge mit Dispo `serviceprotokoll_draft.php` wenn `server_id` und Dispo-Creds → `{ ok, store: { byFab: { [fn]: draft } } }`.
 - `POST /api/protokolle/serviceprotokoll` JSON: … `jsonOnly: false` → JSON + `serviceprotokoll_save` Dispo + PDF lokal unter `Dokumente_Monteur/{FN}/Montage/{Auftragsordner}/Protokolle/` → `{ ok, jsonOnly?, protokoll_id?, saved?: [relPath], warning? }`.
 - `GET /api/serviceprotokoll_defaults` (Proxy + lokaler Fallback), `GET /api/serviceprotokoll_pdf` (Proxy).
+- `GET /api/protokolle/serviceprotokoll/prior?job_id=&fabrikationsnummer=` — lokale Vorwerte (andere Aufträge plus Cache), blockiert die Maske nicht.
+- `POST /api/protokolle/serviceprotokoll/prior/refresh` — Hintergrund: Dispo `serviceprotokoll_prior.php`, Cache, Antwort `{ ok, prior }`. `prior` ist keine Formulareingabe.
 
 **FN-Vorlage:** Beim Save werden Bezeichnung + Reihenfolge der Arbeitsschritte pro `fabrikationsnummer` persistiert; Status/Bemerkungen starten beim nächsten Formular leer.
 

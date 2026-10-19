@@ -54,7 +54,7 @@ export function ServiceProtocolPage() {
   const embedded = useEmbeddedMode();
   const [bridgeState, setBridgeState] = useState<SpBridgePayload>(defaultBridgePayload);
 
-  const { form, testLoad, workSteps, jobs, jobId, fabNumbers, fabIncludeByFab, fabTypeByFab, wiegungen, ketten, kettenMessungen } = bridgeState;
+  const { form, testLoad, workSteps, jobs, jobId, fabNumbers, fabIncludeByFab, fabTypeByFab, wiegungen, ketten, kettenMessungen, prior } = bridgeState;
   const weighRows = Array.isArray(wiegungen) && wiegungen.length ? wiegungen : [emptyWeighingRow()];
   const chainRows: ChainRow[] = Array.isArray(ketten) && ketten.length ? ketten : [emptyChainRow()];
   const chainMessRows: ChainMessRow[] = Array.isArray(kettenMessungen) && kettenMessungen.length ? kettenMessungen : [emptyChainMessRow()];
@@ -73,6 +73,7 @@ export function ServiceProtocolPage() {
   const uiLang: UiLang = maskLangFromPdf(form.pdfDe, form.pdfEn);
   const displayLang = uiLang;
   const protocolKind = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('kind') === 'ibn' ? 'ibn' : 'service';
+  const priorView = protocolKind === 'ibn' ? null : prior;
   const titleKey = protocolKind === 'ibn' ? 'titleIbn' : 'title';
   const plantTypeNorm = String(form.plantType || '').toUpperCase().replace(/\s+/g, '');
   const vmaxIsBehaelter = /^D-?DW(?:$|[^A-Z])/.test(plantTypeNorm) || /V-?DG-?1(?:$|[^0-9])/.test(plantTypeNorm);
@@ -562,6 +563,8 @@ export function ServiceProtocolPage() {
                       <TextInput
                         label={t(uiLang, 'supplyV')}
                         title={t(uiLang, 'supplyVTitle')}
+                        priorPrefix={t(uiLang, 'lastValue')}
+                        prior={priorView?.loadCells?.[idx]?.supplyVoltage || ''}
                         className="h-8 text-sm"
                         value={cell.supplyVoltage || ''}
                         inputMode="decimal"
@@ -570,6 +573,8 @@ export function ServiceProtocolPage() {
                       <TextInput
                         label={t(uiLang, 'sens')}
                         title={t(uiLang, 'sensTitle')}
+                        priorPrefix={t(uiLang, 'lastValue')}
+                        prior={priorView?.loadCells?.[idx]?.sensitivity || ''}
                         className="h-8 text-sm"
                         value={cell.sensitivity || ''}
                         inputMode="decimal"
@@ -579,6 +584,7 @@ export function ServiceProtocolPage() {
                     <div className="mt-3 w-full">
                       <MeasurementTable
                         rows={cell.measurements || EMPTY_MEASUREMENTS}
+                        priorRows={priorView?.loadCells?.[idx]?.measurements}
                         displayLang={displayLang}
                         onChange={(rowId, field, value) =>
                           patchLoadCellMeasurement(cell.id, rowId, field, value)
@@ -708,6 +714,7 @@ export function ServiceProtocolPage() {
             <TestLoadFields
               lang={uiLang}
               values={testLoad}
+              prior={priorView?.testLoad}
               onChange={(field, value) =>
                 setBridgeState((prev) => ({
                   ...prev,
@@ -724,7 +731,7 @@ export function ServiceProtocolPage() {
             {...ve('wieg')}
             summary={weighRows.some(weighingRowHasData) ? weighingSummary(weighRows, uiLang) : null}
           >
-            <WeighingsTable lang={uiLang} rows={weighRows} onChange={setWeighings} />
+            <WeighingsTable lang={uiLang} rows={weighRows} priorRows={priorView?.wiegungen} onChange={setWeighings} />
           </SectionCard>
 
           <SectionCard
@@ -738,7 +745,14 @@ export function ServiceProtocolPage() {
                 : null
             }
           >
-            <ChainTestTables lang={uiLang} chains={chainRows} measurements={chainMessRows} onChange={setChainTest} />
+            <ChainTestTables
+              lang={uiLang}
+              chains={chainRows}
+              measurements={chainMessRows}
+              priorChains={priorView?.ketten}
+              priorMeasurements={priorView?.kettenMessungen}
+              onChange={setChainTest}
+            />
           </SectionCard>
 
           <SectionCard

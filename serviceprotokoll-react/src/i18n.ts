@@ -46,6 +46,7 @@ const STRINGS = {
   serial: { de: 'Seriennummer', en: 'Serial number' },
   pos: { de: 'Pos.', en: 'Pos.' },
   supplyV: { de: 'Vers. V', en: 'Supply V' },
+  lastValue: { de: 'Zuletzt', en: 'Last' },
   supplyVTitle: { de: 'Versorgungsspannung V', en: 'Supply voltage V' },
   sens: { de: 'Sens. mV/V', en: 'Sens. mV/V' },
   sensTitle: { de: 'Sensitivität mV/V', en: 'Sensitivity mV/V' },

@@ -1,9 +1,11 @@
 import { memo } from 'react';
 import type { MeasurementRow } from '../types';
 import { t, type UiLang } from '../i18n';
+import { PriorInput } from './TextInput';
 
 interface MeasurementTableProps {
   rows: MeasurementRow[];
+  priorRows?: MeasurementRow[] | null;
   displayLang?: UiLang;
   onChange: (id: string, field: keyof Omit<MeasurementRow, 'id' | 'label' | 'labelDe' | 'labelEn'>, value: string) => void;
 }
@@ -15,7 +17,7 @@ function measurementLabel(row: MeasurementRow, displayLang: UiLang): string {
   return de || en || row.label;
 }
 
-export const MeasurementTable = memo(function MeasurementTable({ rows, displayLang = 'de', onChange }: MeasurementTableProps) {
+export const MeasurementTable = memo(function MeasurementTable({ rows, priorRows, displayLang = 'de', onChange }: MeasurementTableProps) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">
@@ -29,22 +31,28 @@ export const MeasurementTable = memo(function MeasurementTable({ rows, displayLa
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {rows.map((row) => {
+            const priorRow = (priorRows || []).find((item) => item.id === row.id);
+            return (
             <tr key={row.id}>
               <th scope="row" className="sp-table-cell bg-kukla-mint/40 text-left text-xs font-semibold text-[#4b5563]">
                 {measurementLabel(row, displayLang)}
               </th>
               {(['kg', 'mv', 'ma', 'g'] as const).map((field) => (
                 <td key={field} className="sp-table-cell p-1">
-                  <input
+                  <PriorInput
+                    align="center"
+                    priorPrefix={t(displayLang, 'lastValue')}
                     className="sp-input h-8 w-full text-center text-sm"
+                    prior={priorRow ? priorRow[field] : ''}
                     value={row[field]}
                     onChange={(e) => onChange(row.id, field, e.target.value)}
                   />
                 </td>
               ))}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

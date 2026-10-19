@@ -1,6 +1,7 @@
 import type { WeighingRow } from '../types';
 import { emptyWeighingRow, weighingRowHasData } from '../types';
 import { t, type UiLang } from '../i18n';
+import { PriorInput } from './TextInput';
 
 function parseNum(raw: string): number | null {
   const s = String(raw || '').trim().replace(',', '.');
@@ -119,10 +120,11 @@ export function weighingSummary(rows: WeighingRow[], lang: UiLang) {
 interface WeighingsTableProps {
   lang: UiLang;
   rows: WeighingRow[];
+  priorRows?: WeighingRow[] | null;
   onChange: (rows: WeighingRow[]) => void;
 }
 
-export function WeighingsTable({ lang, rows, onChange }: WeighingsTableProps) {
+export function WeighingsTable({ lang, rows, priorRows, onChange }: WeighingsTableProps) {
   const list = rows.length ? rows : [emptyWeighingRow()];
 
   function patch(idx: number, partial: Partial<WeighingRow>, fromTaraBrutto: boolean) {
@@ -175,7 +177,9 @@ export function WeighingsTable({ lang, rows, onChange }: WeighingsTableProps) {
             </tr>
           </thead>
           <tbody>
-            {list.map((row, idx) => (
+            {list.map((row, idx) => {
+              const priorRow = priorRows && priorRows[idx];
+              return (
               <tr key={idx} className="border-t border-kukla-border">
                 <td className="px-1 py-1 font-semibold">{idx + 1}</td>
                 {(
@@ -190,17 +194,21 @@ export function WeighingsTable({ lang, rows, onChange }: WeighingsTableProps) {
                   ] as Array<[keyof WeighingRow, boolean]>
                 ).map(([key, tara]) => (
                   <td key={key} className="px-1 py-1">
-                    <input
+                    <PriorInput
+                      priorPrefix={t(lang, 'lastValue')}
                       className="h-8 w-full rounded border border-kukla-border px-1"
                       inputMode="decimal"
+                      prior={priorRow ? String(priorRow[key] || '') : ''}
                       value={String(row[key] || '')}
                       onChange={(e) => patch(idx, { [key]: e.target.value }, tara)}
                     />
                   </td>
                 ))}
                 <td className="px-1 py-1">
-                  <input
+                  <PriorInput
+                    priorPrefix={t(lang, 'lastValue')}
                     className="h-8 w-full rounded border border-kukla-border px-1"
+                    prior={priorRow ? priorRow.bemerkung : ''}
                     value={row.bemerkung}
                     onChange={(e) => patch(idx, { bemerkung: e.target.value }, false)}
                   />
@@ -230,7 +238,8 @@ export function WeighingsTable({ lang, rows, onChange }: WeighingsTableProps) {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
           <tfoot>
             <tr className="border-t border-kukla-border bg-kukla-mint/60 font-semibold">

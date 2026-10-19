@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { mergeBridgePayload } from '../bridge-utils';
-import type { ChainMessRow, ChainRow, MeasurementRow, ServiceProtocolFormState, TestLoadValues, WeighingRow, WorkStep } from '../types';
+import type { ChainMessRow, ChainRow, MeasurementRow, ServiceProtocolFormState, ServiceProtocolPrior, TestLoadValues, WeighingRow, WorkStep } from '../types';
 
 export interface SpBridgePayload {
   jobId: string;
@@ -15,6 +15,8 @@ export interface SpBridgePayload {
   wiegungen: WeighingRow[];
   ketten: ChainRow[];
   kettenMessungen: ChainMessRow[];
+  /** Vergleich aus einem älteren Protokoll. Nur Anzeige, nicht speichern, nicht ins PDF. */
+  prior?: ServiceProtocolPrior | null;
 }
 
 type BridgeMessage =

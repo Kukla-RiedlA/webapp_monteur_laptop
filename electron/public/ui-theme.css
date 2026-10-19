@@ -179,7 +179,8 @@ html[data-ui-theme="kukla"] .textbausteine-category:hover {
   color: #fff;
 }
 
-html[data-ui-theme="kukla"] .dienstreise-explorer-row:hover {
+html[data-ui-theme="kukla"] .dienstreise-explorer-row:hover,
+html[data-ui-theme="kukla"] .projektdaten-protokoll-row:hover {
   background: var(--subtle-row-hover);
 }
 

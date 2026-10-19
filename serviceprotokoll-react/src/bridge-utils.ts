@@ -75,6 +75,7 @@ export function emptyBridgePayload(jobs: SpBridgePayload['jobs'] = []): SpBridge
     wiegungen: [emptyWeighingRow()],
     ketten: [emptyChainRow()],
     kettenMessungen: [emptyChainMessRow()],
+    prior: null,
   };
 }
 
@@ -200,6 +201,7 @@ export function mergeBridgePayload(base: SpBridgePayload, patch: Partial<SpBridg
     fabNumbers: patch.fabNumbers ?? base.fabNumbers,
     fabIncludeByFab: patch.fabIncludeByFab ?? base.fabIncludeByFab,
     fabTypeByFab: patch.fabTypeByFab ?? base.fabTypeByFab,
+    prior: Object.prototype.hasOwnProperty.call(patch, 'prior') ? (patch.prior ?? null) : (base.prior ?? null),
   };
 }
 

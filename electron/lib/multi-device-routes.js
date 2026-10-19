@@ -21,6 +21,7 @@ const {
   writeConflictCopy,
   writePayloadConflictCopy,
   mergeByFabStores,
+  diffProtocolPayloads,
   mergeFlatProtocolStores,
   classifyDraftSides,
   payloadForServerPush,
@@ -968,6 +969,71 @@ function registerMultiDeviceRoutes(deps) {
       db.prepare('DELETE FROM multi_device_conflicts WHERE id = ?').run(id);
       save();
       res.json({ ok: true, choice });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/multi_device/conflicts/diff', express.json(), (req, res) => {
+    try {
+      const id = parseInt((req.body && req.body.id) || '', 10);
+      if (!id) return res.status(400).json({ ok: false, error: 'id erforderlich.' });
+      const row = db.prepare('SELECT * FROM multi_device_conflicts WHERE id = ?').get(id);
+      if (!row) return res.status(404).json({ ok: false, error: 'Abweichung nicht mehr vorhanden.' });
+      let detail = {};
+      try {
+        detail = JSON.parse(row.detail_json || '{}');
+      } catch (_) {
+        detail = {};
+      }
+      const summary = detail.summary || row.rel_path || 'Eintrag';
+      if (detail.kind === 'file') {
+        return res.json({
+          ok: true,
+          kind: 'file',
+          summary,
+          local_at: null,
+          remote_at: detail.remote_at || row.created_at || null,
+          rows: [
+            {
+              group: '',
+              label: 'Datei',
+              local: detail.rel_path || row.rel_path || summary,
+              remote: 'geänderter Stand auf dem anderen Laptop',
+            },
+          ],
+          note: 'Bei Dateien wird nur gemeldet, dass der Inhalt abweicht. Der feldweise Vergleich gilt für Protokolle.',
+        });
+      }
+      const conflictsDir = path.resolve(DB_DIR, 'protocol-conflicts');
+      const remoteFile = path.resolve(String(detail.remote_file || ''));
+      const rel = path.relative(conflictsDir, remoteFile);
+      if (!detail.remote_file || rel.startsWith('..') || path.isAbsolute(rel)) {
+        return res.status(404).json({ ok: false, error: 'Der Stand des anderen Laptops liegt nicht mehr vor.' });
+      }
+      let remotePayload = {};
+      try {
+        remotePayload = JSON.parse(fs.readFileSync(remoteFile, 'utf8'));
+      } catch (_) {
+        return res.status(404).json({ ok: false, error: 'Der Stand des anderen Laptops liegt nicht mehr vor.' });
+      }
+      const basename = detail.basename || row.rel_path;
+      const local = readDraftState({
+        localJobId: row.local_job_id,
+        basename,
+        reiseDir: '',
+      });
+      const localPayload = local && local.payload ? local.payload : {};
+      const rows = diffProtocolPayloads(localPayload, remotePayload);
+      res.json({
+        ok: true,
+        kind: 'draft',
+        summary,
+        local_at: (local && (local.local_updated_at || local.server_updated_at)) || null,
+        remote_at: detail.remote_at || null,
+        rows,
+        note: '',
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }

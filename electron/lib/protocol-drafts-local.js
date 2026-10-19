@@ -13,6 +13,12 @@ const {
   stripDraftMeta,
   resolveMonteurDraftJsonPath,
 } = require('./multi-device-sync');
+const {
+  cellText: priorCellText,
+  priorHasComparisonValues,
+  messwerteFromDraftPayload,
+  chooseServiceprotokollPrior,
+} = require('./serviceprotokoll-prior');
 
 const KIND_BY_BASENAME = {
   'serviceprotokoll.json': 'serviceprotokoll',
@@ -28,6 +34,43 @@ const SENTINEL_FAB = '';
 function kindFromBasename(basename) {
   const base = path.basename(String(basename || '').replace(/\\/g, '/')).toLowerCase();
   return KIND_BY_BASENAME[base] || null;
+}
+
+function basenameForKind(kind) {
+  const wanted = String(kind || '').trim();
+  if (!wanted) return '';
+  for (const [base, mapped] of Object.entries(KIND_BY_BASENAME)) {
+    if (mapped === wanted) return base;
+  }
+  return '';
+}
+
+/** Entwurf hat Fachinhalt, nicht nur Metadaten oder eine leere Hülle. */
+function protocolDraftHasContent(draft) {
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return false;
+  const ignore = {
+    include_in_pdf: 1,
+    local_id: 1,
+    updatedAt: 1,
+    updated_at: 1,
+    nextLocalId: 1,
+    languages: 1,
+    pdf_rel: 1,
+    pdf_rels: 1,
+    last_pdf_rel: 1,
+    last_pdf_paths: 1,
+    pdf_path: 1,
+    pdf_paths: 1,
+  };
+  for (const key of Object.keys(draft)) {
+    if (ignore[key]) continue;
+    const value = draft[key];
+    if (value == null || value === false || value === '') continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) continue;
+    return true;
+  }
+  return false;
 }
 
 function isByFabKind(kind) {
@@ -489,6 +532,134 @@ function readStore(db, localJobId, basename, reiseDir) {
   return payload;
 }
 
+function removeProtocolEntry(db, localJobId, kind, fab) {
+  ensureProtocolDraftsSchema(db);
+  const id = parseInt(localJobId, 10);
+  const protocolKind = String(kind || '').trim();
+  if (!id || !protocolKind) return { ok: false, error: 'Protokoll fehlt.' };
+  if (jobStatusIsClosed(db, id)) {
+    return { ok: false, code: 'draft_frozen', error: 'Auftrag ist abgeschlossen.' };
+  }
+  const basename = basenameForKind(protocolKind);
+  if (!basename) return { ok: false, error: 'Unbekannte Protokollart.' };
+  if (isByFabKind(protocolKind)) {
+    const key = String(fab || '').trim();
+    if (!key) return { ok: false, error: 'Fabrikationsnummer fehlt.' };
+    const store = readStore(db, id, basename, null);
+    if (!store.byFab || !Object.prototype.hasOwnProperty.call(store.byFab, key)) {
+      return { ok: false, error: 'Protokoll nicht gefunden.' };
+    }
+    delete store.byFab[key];
+    const written = writeStore(db, id, basename, store, null);
+    if (written && written.ok === false) return written;
+    return { ok: true, basename };
+  }
+  const written = writeStore(db, id, basename, {}, null);
+  if (written && written.ok === false) return written;
+  return { ok: true, basename };
+}
+
+function ensurePriorCacheSchema(db) {
+  if (!db) return;
+  tryExec(
+    db,
+    `CREATE TABLE IF NOT EXISTS serviceprotokoll_prior_cache (
+      fabrikationsnummer TEXT PRIMARY KEY,
+      source_job_id INTEGER,
+      source_datum TEXT,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+  );
+}
+
+function priorRecordFromMesswerte(messwerte, meta) {
+  const mess = messwerte && typeof messwerte === 'object' ? messwerte : null;
+  if (!priorHasComparisonValues(mess)) return null;
+  const info = meta && typeof meta === 'object' ? meta : {};
+  return {
+    datum: priorCellText(info.datum),
+    job_id: parseInt(info.job_id, 10) || 0,
+    local_job_id: parseInt(info.local_job_id, 10) || 0,
+    messwerte: mess,
+    source: priorCellText(info.source) || 'local',
+  };
+}
+
+function findLocalServiceprotokollPrior(db, excludeLocalJobId, fab) {
+  ensureProtocolDraftsSchema(db);
+  const fn = priorCellText(fab);
+  const excludeId = parseInt(excludeLocalJobId, 10) || 0;
+  if (!db || !fn) return null;
+  const rows =
+    db
+      .prepare(
+        `SELECT local_job_id, payload_json, updated_at, frozen_at
+         FROM protocol_drafts
+         WHERE protocol_kind = 'serviceprotokoll'
+           AND fabrikationsnummer = ?
+           AND local_job_id != ?
+         ORDER BY COALESCE(frozen_at, updated_at) DESC, id DESC
+         LIMIT 40`,
+      )
+      .all(fn, excludeId) || [];
+  let best = null;
+  for (const row of rows) {
+    const payload = parseJsonObject(row.payload_json, null);
+    const mess = messwerteFromDraftPayload(payload);
+    const datum = priorCellText(payload && (payload.durchfuehrungsdatum || payload.datum)) || priorCellText(row.frozen_at || row.updated_at);
+    const record = priorRecordFromMesswerte(mess, {
+      datum,
+      local_job_id: row.local_job_id,
+      source: 'local',
+    });
+    if (record) best = chooseServiceprotokollPrior(best, record);
+  }
+  return best;
+}
+
+function readServiceprotokollPriorCache(db, fab, excludeServerJobId) {
+  ensurePriorCacheSchema(db);
+  const fn = priorCellText(fab);
+  if (!db || !fn) return null;
+  const row = db.prepare('SELECT source_job_id, source_datum, payload_json FROM serviceprotokoll_prior_cache WHERE fabrikationsnummer = ?').get(fn);
+  if (!row) return null;
+  const sourceJobId = parseInt(row.source_job_id, 10) || 0;
+  const excludeId = parseInt(excludeServerJobId, 10) || 0;
+  if (excludeId > 0 && sourceJobId === excludeId) return null;
+  const payload = parseJsonObject(row.payload_json, null);
+  const mess = payload && payload.messwerte ? payload.messwerte : payload;
+  return priorRecordFromMesswerte(mess, {
+    datum: priorCellText(row.source_datum || (payload && payload.datum)),
+    job_id: sourceJobId,
+    source: 'cache',
+  });
+}
+
+function writeServiceprotokollPriorCache(db, fab, record) {
+  ensurePriorCacheSchema(db);
+  const fn = priorCellText(fab);
+  if (!db || !fn || !record || !priorHasComparisonValues(record.messwerte)) return;
+  db.prepare(
+    `INSERT INTO serviceprotokoll_prior_cache (fabrikationsnummer, source_job_id, source_datum, payload_json, updated_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(fabrikationsnummer) DO UPDATE SET
+       source_job_id = excluded.source_job_id,
+       source_datum = excluded.source_datum,
+       payload_json = excluded.payload_json,
+       updated_at = datetime('now')`,
+  ).run(
+    fn,
+    parseInt(record.job_id, 10) || 0,
+    priorCellText(record.datum),
+    JSON.stringify({
+      datum: priorCellText(record.datum),
+      job_id: parseInt(record.job_id, 10) || 0,
+      messwerte: record.messwerte,
+    }),
+  );
+}
+
 function writeStore(db, localJobId, basename, store, reiseDir) {
   if (jobStatusIsClosed(db, localJobId)) {
     freezeJob(db, localJobId);
@@ -505,6 +676,8 @@ module.exports = {
   KIND_BY_BASENAME,
   SENTINEL_FAB,
   kindFromBasename,
+  basenameForKind,
+  protocolDraftHasContent,
   ensureProtocolDraftsSchema,
   freezeJob,
   jobStatusIsClosed,
@@ -513,6 +686,10 @@ module.exports = {
   readStore,
   writeStore,
   listDraftsForJob,
+  findLocalServiceprotokollPrior,
+  readServiceprotokollPriorCache,
+  writeServiceprotokollPriorCache,
+  removeProtocolEntry,
   importLegacyFile,
   deleteLegacyDraftFiles,
 };

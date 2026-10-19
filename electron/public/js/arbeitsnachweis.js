@@ -1607,11 +1607,17 @@
     return persistLocal().catch(function () {});
   };
   window.openAndResetArbeitsnachweisForm = function () {
+    var armed = window.consumeProjektdatenProtokollTarget
+      ? window.consumeProjektdatenProtokollTarget('arbeitsnachweis')
+      : null;
     jobLoadBusy = true;
     jobData = null;
     renderFabs([]);
     var jobsP = loadJobs().catch(function () {});
-    fetch(anLocalGetUrl({ latest: '1' }), {
+    var loadUrl = armed && armed.documentId
+      ? anLocalGetUrl({ id: String(armed.documentId) })
+      : anLocalGetUrl({ latest: '1' });
+    fetch(loadUrl, {
       headers: getHeaders()
     })
       .then(function (r) { return r.json(); })

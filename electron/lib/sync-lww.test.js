@@ -7,7 +7,7 @@ const {
   timestampsAreUncertain,
   HANDLED_PENDING_ENTITY_TYPES,
 } = require('./local_first');
-const { mergeByFabStores, classifyDraftSides, decideSharedFile, payloadForServerPush } = require('./multi-device-sync');
+const { mergeByFabStores, classifyDraftSides, decideSharedFile, payloadForServerPush, diffProtocolPayloads } = require('./multi-device-sync');
 
 describe('isLocalFresher', () => {
   it('returns true when local is newer', () => {
@@ -153,5 +153,55 @@ describe('payloadForServerPush', () => {
     );
     assert.equal(safe.byFab.A.v, 'remote');
     assert.equal(safe.byFab.B.v, 'union');
+  });
+});
+
+describe('diffProtocolPayloads', () => {
+  it('lists only changed montagebericht fields and groups them by FN', () => {
+    const rows = diffProtocolPayloads(
+      {
+        grundDesEinsatzes: 'Wartung',
+        grundDesEinsatzes_html: '<p>Wartung</p>',
+        fabBemerkungen: [
+          { fabrikationsnummer: '9500', type: 'A', bemerkungen: 'dieser Laptop', bemerkungen_html: '<p>dieser Laptop</p>' },
+          { fabrikationsnummer: '10832', bemerkungen: 'gleich', bemerkungen_html: '<p>gleich</p>' },
+        ],
+      },
+      {
+        grundDesEinsatzes: 'Austausch',
+        grundDesEinsatzes_html: '<p>Austausch</p>',
+        revision: 4,
+        fabBemerkungen: [
+          { fabrikationsnummer: '9500', type: 'A', bemerkungen: 'anderer Laptop', bemerkungen_html: '<p>anderer Laptop</p>' },
+          { fabrikationsnummer: '10832', bemerkungen: 'gleich', bemerkungen_html: '<p>gleich</p>' },
+        ],
+      },
+    );
+    assert.deepEqual(
+      rows.map((row) => row.group + '|' + row.label + '|' + row.local + '|' + row.remote),
+      ['|Grund des Einsatzes|Wartung|Austausch', 'FN 9500|Bemerkungen|dieser Laptop|anderer Laptop'],
+    );
+  });
+
+  it('treats the same text with different html as equal and reports a changed image', () => {
+    const rows = diffProtocolPayloads(
+      { bemerkungen: 'Text', bemerkungen_html: '<p>Text</p><img src="data:image/png;base64,aaa">' },
+      { bemerkungen: 'Text', bemerkungen_html: '<p>Text</p><img src="data:image/png;base64,bbb">' },
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].label, 'Bemerkungen (Bild)');
+    assert.equal(rows[0].local, 'Bild auf diesem Laptop');
+    assert.equal(rows[0].remote, 'anderes Bild');
+  });
+
+  it('groups byFab differences under the FN', () => {
+    const rows = diffProtocolPayloads(
+      { byFab: { '9500': { messwert: '1', updatedAt: '2026-10-01' }, '10832': { messwert: '9' } } },
+      { byFab: { '9500': { messwert: '2', updatedAt: '2026-10-08' }, '10832': { messwert: '9' } } },
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].group, 'FN 9500');
+    assert.equal(rows[0].local, '1');
+    assert.equal(rows[0].remote, '2');
   });
 });

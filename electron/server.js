@@ -303,6 +303,7 @@ const {
   decideSharedFile,
 } = require('./lib/multi-device-sync');
 const protocolDrafts = require('./lib/protocol-drafts-local');
+const { chooseServiceprotokollPrior } = require('./lib/serviceprotokoll-prior');
 const {
   isFinishUploadRelPath,
   isSonstigesRel,
@@ -8769,6 +8770,9 @@ function createApp(db) {
               }
               mapped.arbeitsnachweis = mappedAn;
               const keptLocalSigner = !remoteSigner && !!String(loc.signer_name || '').trim();
+              if (anLocal.isDeletedMarker(db, mapped)) {
+                return res.json({ ok: true, document: null, deleted: true });
+              }
               return res.json(anLocal.upsertFromPayload(db, mapped, {
                 technicianId: getTechnicianId(req),
                 dirty: keptLocalSigner,
@@ -8971,6 +8975,245 @@ function createApp(db) {
       res.json({ ok: true, outlook: result });
     } catch (e) {
       res.json({ ok: false, outlook_error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  const PROTOKOLL_CARD_LABELS = {
+    serviceprotokoll: 'Service',
+    inbetriebnahme: 'Inbetriebnahme',
+    kontrollwiegung: 'Kontrollwiegung',
+    schleppkette: 'Schleppketten-Test',
+    pruefzertifikat: 'Prüfzertifikat',
+    montagebericht: 'Montagebericht',
+    arbeitsnachweis: 'Arbeitsnachweis',
+  };
+
+  function jobAllowsProtokollCardDelete(status) {
+    const s = String(status || '').trim().toLowerCase();
+    return s !== 'erledigt' && s !== 'abgerechnet' && s !== 'angelegt' && s !== 'geplant';
+  }
+
+  function existingProtokollPdfPath(reiseDir, draft) {
+    if (!draft || typeof draft !== 'object') return '';
+    const rels = [];
+    const add = (rel, lang) => {
+      const value = String(rel || '').trim();
+      if (!value) return;
+      rels.push({ rel: value, lang: String(lang || '').trim().toLowerCase() });
+    };
+    add(draft.pdf_rel, '');
+    add(draft.last_pdf_rel, '');
+    const lists = [draft.pdf_rels, draft.last_pdf_paths, draft.pdf_paths];
+    lists.forEach((list) => {
+      if (!Array.isArray(list)) return;
+      list.forEach((item) => {
+        if (typeof item === 'string') add(item, '');
+        else if (item && typeof item === 'object') add(item.rel || item.path, item.lang);
+      });
+    });
+    const existing = [];
+    rels.forEach((item) => {
+      let full = '';
+      if (path.isAbsolute(item.rel) && fs.existsSync(item.rel)) full = item.rel;
+      else if (reiseDir) {
+        const candidate = path.normalize(path.join(reiseDir, item.rel.replace(/\//g, path.sep)));
+        if (fs.existsSync(candidate)) full = candidate;
+      }
+      if (full) existing.push({ full, lang: item.lang, rel: item.rel });
+    });
+    if (!existing.length) return '';
+    const de = existing.find(
+      (entry) => entry.lang === 'de' || /_DE\.pdf$/i.test(entry.rel) || (entry.lang !== 'en' && !/_EN\.pdf$/i.test(entry.rel)),
+    );
+    return (de || existing[0]).full;
+  }
+
+  function existingArbeitsnachweisPdfPath(reiseDir, number) {
+    const ident = String(number || '').trim();
+    if (!reiseDir || !ident) return '';
+    const dir = path.join(reiseDir, 'Dokumente_Monteur', 'Arbeitsnachweise');
+    if (!fs.existsSync(dir)) return '';
+    const needle = ident.replace(/[^\w.-]+/g, '_');
+    let names = [];
+    try {
+      names = fs.readdirSync(dir);
+    } catch (_) {
+      return '';
+    }
+    const hits = names.filter((name) => /\.pdf$/i.test(name) && name.indexOf(needle) !== -1);
+    const de = hits.find((name) => /_DE\.pdf$/i.test(name));
+    const pick = de || hits[0];
+    if (!pick) return '';
+    const full = path.join(dir, pick);
+    return fs.existsSync(full) ? full : '';
+  }
+
+  function listCreatedProtokollRows(localJobId) {
+    const job = db.prepare('SELECT id, status FROM jobs WHERE id = ?').get(localJobId);
+    if (!job) return null;
+    const deletable = jobAllowsProtokollCardDelete(job.status);
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+    const rows = [];
+    const drafts = protocolDrafts.listDraftsForJob(db, localJobId);
+    drafts.forEach((item) => {
+      const kind = item.kind;
+      const label = PROTOKOLL_CARD_LABELS[kind] || kind;
+      if (kind === 'montagebericht') {
+        if (protocolDrafts.protocolDraftHasContent && !protocolDrafts.protocolDraftHasContent(item.payload) && !(item.revision > 0)) {
+          return;
+        }
+        const pdfPath = existingProtokollPdfPath(reiseDir, item.payload || {});
+        rows.push({
+          kind,
+          label,
+          fab: '',
+          document_id: 0,
+          updated_at: item.local_updated_at || item.server_updated_at || '',
+          pdf_path: pdfPath,
+          deletable,
+        });
+        return;
+      }
+      const byFab = item.payload && item.payload.byFab && typeof item.payload.byFab === 'object' ? item.payload.byFab : {};
+      Object.keys(byFab).forEach((fab) => {
+        const draft = byFab[fab];
+        if (!protocolDrafts.protocolDraftHasContent(draft)) return;
+        const pdfPath = existingProtokollPdfPath(reiseDir, draft);
+        rows.push({
+          kind,
+          label,
+          fab: String(fab || '').trim(),
+          document_id: 0,
+          updated_at: (draft && (draft.updatedAt || draft.updated_at || draft.gespeichert_am)) || item.local_updated_at || '',
+          pdf_path: pdfPath,
+          deletable,
+        });
+      });
+    });
+    try {
+      anLocal.ensureArbeitsnachweisLocalSchema(db);
+      const docs = anLocal.listForLocalJob(db, localJobId) || [];
+      docs.forEach((doc) => {
+        const number = doc && doc.number ? String(doc.number).trim() : '';
+        rows.push({
+          kind: 'arbeitsnachweis',
+          label: number ? 'Arbeitsnachweis ' + number : 'Arbeitsnachweis',
+          fab: '',
+          document_id: doc.id,
+          updated_at: doc.updated_at || doc.document_date || '',
+          pdf_path: existingArbeitsnachweisPdfPath(reiseDir, number),
+          deletable,
+        });
+      });
+    } catch (anErr) {
+      console.warn('[job_created] arbeitsnachweis', anErr && anErr.message ? anErr.message : anErr);
+    }
+    rows.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+    return rows;
+  }
+
+  app.get('/api/protokolle/job_created', (req, res) => {
+    try {
+      const localJobId = parseInt(req.query.job_id, 10);
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const rows = listCreatedProtokollRows(localJobId);
+      if (!rows) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      return res.json({ ok: true, protokolle: rows });
+    } catch (e) {
+      console.warn('[job_created]', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/job_created_pull', express.json(), async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const localJobId = parseInt(body.job_id, 10);
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const job = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(localJobId);
+      if (!job) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const serverJobId = parseInt(job.server_id, 10) || 0;
+      const technicianId = getTechnicianId(req) || parseInt(body.technician_id, 10) || 0;
+      if (!serverJobId || !technicianId || wantsLocalOnlyRequest(body)) {
+        return res.json({ ok: true, skipped: true });
+      }
+      const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      for (const basename of Object.keys(DRAFT_JSON_ENDPOINTS)) {
+        await pullOneJsonDraftForJob(reiseDir, localJobId, serverJobId, technicianId, basename, body);
+      }
+      try { save(); } catch (_) { /* Checkpoint nach dem Pull */ }
+      return res.json({ ok: true });
+    } catch (e) {
+      console.warn('[job_created_pull]', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/job_created_delete', express.json(), (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const localJobId = parseInt(body.job_id, 10);
+      const kind = String(body.kind || '').trim();
+      const fab = String(body.fab || '').trim();
+      const documentId = parseInt(body.document_id, 10) || 0;
+      if (!localJobId || !kind) return res.status(400).json({ ok: false, error: 'Protokoll fehlt.' });
+      const job = db.prepare('SELECT id, server_id, status FROM jobs WHERE id = ?').get(localJobId);
+      if (!job) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      if (!jobAllowsProtokollCardDelete(job.status)) {
+        return res.status(409).json({ ok: false, code: 'draft_frozen', error: 'Auftrag ist abgeschlossen.' });
+      }
+      if (kind === 'arbeitsnachweis') {
+        const removed = anLocal.deleteLocal(db, documentId);
+        if (!removed || removed.ok === false) {
+          return res.status(400).json(removed || { ok: false, error: 'Löschen fehlgeschlagen.' });
+        }
+        try { save(); } catch (_) { /* ignore */ }
+        return res.json({ ok: true });
+      }
+      const removed = protocolDrafts.removeProtocolEntry(db, localJobId, kind, fab);
+      if (!removed || removed.ok === false) {
+        const status = removed && removed.code === 'draft_frozen' ? 409 : 400;
+        return res.status(status).json(removed || { ok: false, error: 'Löschen fehlgeschlagen.' });
+      }
+      try { save(); } catch (_) { /* ignore */ }
+      const serverJobId = parseInt(job.server_id, 10) || 0;
+      const technicianId = getTechnicianId(req) || parseInt(body.technician_id, 10) || 0;
+      const creds = resolveDispoServerCreds(body);
+      const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      const basename = removed.basename || protocolDrafts.basenameForKind(kind);
+      if (basename && serverJobId > 0) {
+        queueProtocolDraftAndFiles({
+          localJobId,
+          technicianId,
+          serverJobId,
+          dispoBaseUrl: creds.baseUrl,
+          basename,
+          reiseDir,
+          username: creds.serverUsername,
+          password: creds.serverPassword,
+          skipFolderPush: true,
+        });
+        if (creds.baseUrl && multiDeviceApi && multiDeviceApi.pushJsonDraft) {
+          const draftPushOpts = {
+            dispoBaseUrl: creds.baseUrl,
+            endpoint: DRAFT_JSON_ENDPOINTS[basename],
+            technicianId,
+            serverJobId,
+            localJobId,
+            reiseDir,
+            basename,
+            username: creds.serverUsername,
+            password: creds.serverPassword,
+          };
+          setImmediate(() => {
+            multiDeviceApi.pushJsonDraft(draftPushOpts).catch(() => {});
+          });
+        }
+      }
+      return res.json({ ok: true });
+    } catch (e) {
+      console.warn('[job_created_delete]', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
     }
   });
 
@@ -14195,6 +14438,96 @@ function createApp(db) {
   }
   app.get('/api/protokolle/serviceprotokoll', handleServiceLikeProtokollGet);
   app.get('/api/protokolle/inbetriebnahme', handleServiceLikeProtokollGet);
+
+  function serviceprotokollPriorServerJobId(localJobId) {
+    try {
+      const row = db.prepare('SELECT server_id FROM jobs WHERE id = ?').get(localJobId);
+      const id = parseInt(row && row.server_id, 10);
+      return Number.isFinite(id) && id > 0 ? id : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function readCombinedServiceprotokollPrior(localJobId, fab) {
+    const excludeServerJobId = serviceprotokollPriorServerJobId(localJobId);
+    const localPrior = protocolDrafts.findLocalServiceprotokollPrior(db, localJobId, fab);
+    const cached = protocolDrafts.readServiceprotokollPriorCache(db, fab, excludeServerJobId);
+    return chooseServiceprotokollPrior(localPrior, cached);
+  }
+
+  function technicianOwnsLocalJob(localJobId, technicianId) {
+    try {
+      const row = db.prepare(`
+        SELECT j.id FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+      `).get(localJobId, technicianId);
+      return !!row;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  app.get('/api/protokolle/serviceprotokoll/prior', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
+      const fab = String(req.query.fabrikationsnummer || req.query.fab || '').trim();
+      if (!technicianId || !localJobId || !fab) {
+        return res.status(400).json({ ok: false, error: 'job_id, fabrikationsnummer und technician_id erforderlich.' });
+      }
+      if (!technicianOwnsLocalJob(localJobId, technicianId)) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      return res.json({ ok: true, prior: readCombinedServiceprotokollPrior(localJobId, fab) });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || 'Vorwerte konnten nicht gelesen werden.' });
+    }
+  });
+
+  app.post('/api/protokolle/serviceprotokoll/prior/refresh', express.json(), async (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const body = req.body || {};
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const fab = String(body.fabrikationsnummer || '').trim();
+      const dispoBaseUrl = String(body.dispoBaseUrl || body.base_url || body.baseUrl || '').trim().replace(/\/$/, '');
+      if (!technicianId || !localJobId || !fab) {
+        return res.status(400).json({ ok: false, error: 'job_id, fabrikationsnummer und technician_id erforderlich.' });
+      }
+      if (!technicianOwnsLocalJob(localJobId, technicianId)) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      const excludeServerJobId = serviceprotokollPriorServerJobId(localJobId);
+      if (dispoBaseUrl) {
+        const auth = authHeaderFromCredentials(body.serverUsername, body.serverPassword);
+        const url =
+          dispoBaseUrl +
+          '/dispo_api/api/serviceprotokoll_prior.php?fabrikationsnummer=' +
+          encodeURIComponent(fab) +
+          '&technician_id=' +
+          encodeURIComponent(technicianId) +
+          (excludeServerJobId > 0 ? '&exclude_job_id=' + encodeURIComponent(excludeServerJobId) : '');
+        try {
+          const r = await fetchWithTimeout(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok && data && data.ok && data.prior && data.prior.messwerte) {
+            protocolDrafts.writeServiceprotokollPriorCache(db, fab, {
+              datum: data.prior.datum,
+              job_id: data.prior.job_id,
+              messwerte: data.prior.messwerte,
+            });
+          }
+        } catch (_) {
+          /* Offline oder Server nicht erreichbar: lokaler Stand bleibt. */
+        }
+      }
+      return res.json({ ok: true, prior: readCombinedServiceprotokollPrior(localJobId, fab) });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || 'Vorwerte konnten nicht aktualisiert werden.' });
+    }
+  });
 
   app.post('/api/protokolle/serviceprotokoll', express.json(), handleServiceLikeProtokollPost);
   app.post('/api/protokolle/inbetriebnahme', express.json(), handleServiceLikeProtokollPost);

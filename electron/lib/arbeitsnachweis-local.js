@@ -63,6 +63,18 @@ function ensureArbeitsnachweisLocalSchema(db) {
   tryExec(db, 'CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_local_uuid ON documents(local_uuid)');
   tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_documents_server_id ON documents(server_id)');
   tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_documents_job ON documents(server_job_id, local_job_id)');
+  tryExec(
+    db,
+    `CREATE TABLE IF NOT EXISTS arbeitsnachweis_local_deleted (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      local_uuid TEXT,
+      server_id INTEGER,
+      local_job_id INTEGER,
+      deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+  );
+  tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_an_deleted_uuid ON arbeitsnachweis_local_deleted(local_uuid)');
+  tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_an_deleted_server ON arbeitsnachweis_local_deleted(server_id)');
   ['server_id', 'local_job_id', 'server_job_id', 'customer_name', 'dirty', 'local_uuid', 'content_version', 'language'].forEach(
     (col) => {
       if (!tableHasColumn(db, 'documents', col)) {
@@ -429,6 +441,77 @@ function listByJob(db, rawJobId) {
     )
     .all(ids.serverJobId || -1, ids.localJobId || -1);
   return rows || [];
+}
+
+/**
+ * Nachweis zu einer lokalen Auftragszeile.
+ * jobs.id nicht über resolveJobIds auflösen: die lokale ID kann der server_id eines anderen Auftrags gleichen.
+ */
+function listForLocalJob(db, localJobId) {
+  ensureArbeitsnachweisLocalSchema(db);
+  const id = parseInt(localJobId, 10);
+  if (!id) return [];
+  const job = db.prepare('SELECT id, server_id FROM jobs WHERE id = ?').get(id);
+  if (!job) return [];
+  const serverId = parseInt(job.server_id, 10) || 0;
+  const rows = db
+    .prepare(
+      `SELECT id, server_id, local_uuid, number, document_date, status, language, dirty, updated_at, customer_name,
+              server_job_id, local_job_id
+       FROM documents WHERE document_type = 'arbeitsnachweis'
+         AND (local_job_id = ? OR (? > 0 AND server_job_id = ?))
+       ORDER BY updated_at DESC, id DESC LIMIT 50`,
+    )
+    .all(id, serverId, serverId);
+  return rows || [];
+}
+
+function isDeletedMarker(db, hint) {
+  ensureArbeitsnachweisLocalSchema(db);
+  const src = hint && typeof hint === 'object' ? hint : {};
+  const doc = src.document && typeof src.document === 'object' ? src.document : {};
+  const uuid = String(src.local_uuid || doc.local_uuid || '').trim();
+  const serverId = parseInt(src.server_id || src.document_id || doc.server_id || 0, 10) || 0;
+  try {
+    if (uuid) {
+      const byUuid = db.prepare('SELECT 1 AS n FROM arbeitsnachweis_local_deleted WHERE local_uuid = ?').get(uuid);
+      if (byUuid) return true;
+    }
+    if (serverId > 0) {
+      const byServer = db.prepare('SELECT 1 AS n FROM arbeitsnachweis_local_deleted WHERE server_id = ?').get(serverId);
+      if (byServer) return true;
+    }
+  } catch (_) {
+    return false;
+  }
+  return false;
+}
+
+function deleteLocal(db, documentId) {
+  ensureArbeitsnachweisLocalSchema(db);
+  const id = parseInt(documentId, 10);
+  if (!id) return { ok: false, error: 'Protokoll fehlt.' };
+  const loaded = loadRow(db, id);
+  if (!loaded || !loaded.document) return { ok: false, error: 'Protokoll nicht gefunden.' };
+  const doc = loaded.document;
+  const uuid = String(doc.local_uuid || '').trim();
+  const serverId = parseInt(doc.server_id, 10) || 0;
+  db.prepare(
+    `INSERT INTO arbeitsnachweis_local_deleted (local_uuid, server_id, local_job_id, deleted_at)
+     VALUES (?, ?, ?, datetime('now'))`,
+  ).run(uuid || null, serverId || null, parseInt(doc.local_job_id, 10) || null);
+  try {
+    db.prepare('DELETE FROM document_signatures WHERE document_id = ?').run(id);
+  } catch (_) { /* Tabelle optional */ }
+  db.prepare('DELETE FROM document_items WHERE document_id = ?').run(id);
+  db.prepare('DELETE FROM document_arbeitsnachweis WHERE document_id = ?').run(id);
+  db.prepare('DELETE FROM documents WHERE id = ?').run(id);
+  try {
+    db.prepare(`DELETE FROM pending_changes WHERE entity_type = 'arbeitsnachweis' AND entity_id = ?`).run(String(id));
+  } catch (_) {
+    /* pending_changes optional */
+  }
+  return { ok: true };
 }
 
 function upsertFromPayload(db, payload, opts) {
@@ -857,6 +940,9 @@ module.exports = {
   findByJob,
   findLatest,
   listByJob,
+  listForLocalJob,
+  isDeletedMarker,
+  deleteLocal,
   loadRow,
   toPublic,
   fromDispoPublic,

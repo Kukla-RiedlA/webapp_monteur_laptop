@@ -3880,6 +3880,9 @@
         projektdatenExplorerJobId = jobDetailsJobId;
       }
     }
+    if (typeof loadProjektdatenProtokollListe === 'function' && document.getElementById('projektdatenProtokollListe')) {
+      loadProjektdatenProtokollListe(jobDetailsJobId);
+    }
     if (typeof updateDienstreiseWriteControlsState === 'function') updateDienstreiseWriteControlsState();
   }
 
@@ -5263,10 +5266,11 @@
     html += '<div id="projektdatenProjekteNeuTree" class="projektdaten-projekte-neu-tree"></div>';
     html += '</aside>';
     html += '</div>';
-    html += '<div class="modal-detail-section projektdaten-projektordner-section" style="margin-top:1rem">';
+    html += '<div class="projektdaten-ordner-protokoll-split">';
+    html += '<div class="modal-detail-section projektdaten-projektordner-section">';
     html += '<h4>Projektordner (lokal)</h4>';
-    html += '<div class="dienstreise-explorer-toolbar" style="margin:0.35rem 0">';
-    html += '<span class="dienstreise-explorer-breadcrumb" id="dienstreiseExplorerBreadcrumb" title="Projektordner">Projektordner</span>';
+    html += '<div class="dienstreise-explorer-toolbar" id="dienstreiseExplorerToolbar" hidden style="margin:0.35rem 0">';
+    html += '<span class="dienstreise-explorer-breadcrumb" id="dienstreiseExplorerBreadcrumb"></span>';
     html += '</div>';
     html += '<div id="dienstreiseExplorerList" class="dienstreise-explorer-list" aria-label="Dateien im Projektordner">';
     html += '<span class="empty" id="dienstreiseExplorerPlaceholder">Noch kein Projektordner – Auftrag unter Aufträge annehmen.</span>';
@@ -5285,9 +5289,167 @@
       html += '</div>';
     }
     html += '</div>';
+    html += '<div class="modal-detail-section projektdaten-protokoll-section">';
+    html += '<h4>Protokolle</h4>';
+    html += '<div id="projektdatenProtokollListe" class="projektdaten-protokoll-liste" aria-label="Protokolle dieses Auftrags">';
+    html += '<span class="empty">Wird geladen…</span>';
+    html += '</div></div></div>';
     html += '<div class="modal-detail-section" id="mechanikTedLinksContainer"><h4>Mechanik-Excel (TED)</h4><p class="muted">Wird geladen…</p></div>';
     if (job.description) html += '<div class="modal-detail-section modal-detail-section-description"><h4>Bemerkungen</h4><div class="modal-description-wrap"><div class="modal-description-display">' + formatDescriptionForDisplay(job.description) + '</div></div></div>';
     return html;
+  }
+
+  var projektdatenProtokollLoadToken = 0;
+  var PROTOKOLL_CARD_VIEWS = {
+    serviceprotokoll: 'protokolle-service',
+    inbetriebnahme: 'protokolle-inbetriebnahme',
+    kontrollwiegung: 'protokolle-kontrollwiegungen',
+    schleppkette: 'protokolle-schleppketten',
+    pruefzertifikat: 'protokolle-pruefzertifikat',
+    montagebericht: 'protokolle-montagebericht',
+    arbeitsnachweis: 'protokolle-arbeitsnachweis'
+  };
+
+  function renderProjektdatenProtokollListe(listEl, jobId, data) {
+    if (!listEl) return;
+    var rows = data && data.ok && Array.isArray(data.protokolle) ? data.protokolle : [];
+    if (!data || data.ok === false) {
+      listEl.innerHTML = '<p class="empty">' + escapeHtml((data && data.error) || 'Protokolle konnten nicht geladen werden.') + '</p>';
+      return;
+    }
+    if (!rows.length) {
+      listEl.innerHTML = '<p class="empty">Noch kein Protokoll für diesen Auftrag.</p>';
+      return;
+    }
+    var html = '';
+    rows.forEach(function (row, idx) {
+      var label = String((row && row.label) || 'Protokoll');
+      if (row && row.fab) label += ' · FN ' + String(row.fab);
+      html += '<div class="projektdaten-protokoll-row">';
+      html += '<div class="projektdaten-protokoll-name" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</div>';
+      html += '<div class="projektdaten-protokoll-actions">';
+      html += '<button type="button" class="btn btn-ghost projektdaten-protokoll-open" data-idx="' + idx + '">Öffnen</button>';
+      if (row && row.deletable !== false) {
+        html += '<button type="button" class="btn btn-ghost projektdaten-protokoll-delete" data-idx="' + idx + '">Löschen</button>';
+      }
+      if (row && row.pdf_path) {
+        html += '<button type="button" class="btn btn-ghost projektdaten-protokoll-pdf" data-idx="' + idx + '">PDF</button>';
+      }
+      html += '</div></div>';
+    });
+    listEl.innerHTML = html;
+    listEl.querySelectorAll('.projektdaten-protokoll-open').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var row = rows[parseInt(btn.getAttribute('data-idx'), 10)];
+        if (!row) return;
+        var view = PROTOKOLL_CARD_VIEWS[row.kind];
+        if (!view || typeof showView !== 'function') return;
+        window.__projektdatenProtokollTarget = {
+          kind: row.kind,
+          jobId: jobId,
+          fab: row.fab || '',
+          documentId: row.document_id || 0
+        };
+        showView(view);
+      });
+    });
+    listEl.querySelectorAll('.projektdaten-protokoll-delete').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var row = rows[parseInt(btn.getAttribute('data-idx'), 10)];
+        if (!row) return;
+        var name = String(row.label || 'Protokoll');
+        if (row.fab) name += ' · FN ' + String(row.fab);
+        if (!window.confirm(name + ' löschen? Die PDF im Projektordner bleibt erhalten.')) return;
+        var headers = { 'Content-Type': 'application/json' };
+        var techId = getTechId();
+        if (techId) headers['X-Technician-Id'] = String(techId);
+        btn.disabled = true;
+        fetch(API_BASE + '/api/protokolle/job_created_delete', {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify({
+            job_id: jobId,
+            kind: row.kind,
+            fab: row.fab || '',
+            document_id: row.document_id || 0,
+            technician_id: techId,
+            serverUsername: getDispoUsername(),
+            serverPassword: getDispoPassword(),
+            baseUrl: getDispoBaseUrl(),
+            externalUrl: getDispoExternalUrl(),
+            internalUrl: getDispoInternalUrl()
+          })
+        }).then(function (r) { return r.json().then(function (body) { return { okHttp: r.ok, body: body }; }); })
+          .then(function (res) {
+            if (!res.okHttp || !res.body || res.body.ok === false) {
+              btn.disabled = false;
+              showToast((res.body && res.body.error) || 'Löschen fehlgeschlagen.');
+              return;
+            }
+            showToast('Protokoll gelöscht.');
+            loadProjektdatenProtokollListe(jobId);
+          })
+          .catch(function (err) {
+            btn.disabled = false;
+            showToast('Löschen fehlgeschlagen: ' + (err && err.message ? err.message : String(err)));
+          });
+      });
+    });
+    listEl.querySelectorAll('.projektdaten-protokoll-pdf').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var row = rows[parseInt(btn.getAttribute('data-idx'), 10)];
+        if (!row || !row.pdf_path || typeof openProtocolPdfInApp !== 'function') return;
+        openProtocolPdfInApp(String(row.pdf_path)).then(function (openResult) {
+          if (openResult && openResult.ok === false) {
+            showToast('PDF öffnen fehlgeschlagen' + (openResult.error ? ': ' + openResult.error : '.'));
+          }
+        }).catch(function (err) {
+          showToast('PDF öffnen fehlgeschlagen: ' + (err && err.message ? err.message : String(err)));
+        });
+      });
+    });
+  }
+
+  function loadProjektdatenProtokollListe(jobId) {
+    var listEl = document.getElementById('projektdatenProtokollListe');
+    var localJobId = parseInt(jobId, 10);
+    if (!listEl || !localJobId) return;
+    var token = ++projektdatenProtokollLoadToken;
+    var headers = {};
+    var techId = getTechId();
+    if (techId) headers['X-Technician-Id'] = String(techId);
+    function fetchList() {
+      return fetch(API_BASE + '/api/protokolle/job_created?job_id=' + encodeURIComponent(localJobId), { headers: headers })
+        .then(function (r) { return r.json(); });
+    }
+    fetchList().then(function (data) {
+      if (token !== projektdatenProtokollLoadToken) return;
+      renderProjektdatenProtokollListe(listEl, localJobId, data);
+      if (typeof hasDispoAuth !== 'function' || !hasDispoAuth()) return;
+      return fetch(API_BASE + '/api/protokolle/job_created_pull', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
+        body: JSON.stringify({
+          job_id: localJobId,
+          technician_id: techId,
+          serverUsername: getDispoUsername(),
+          serverPassword: getDispoPassword(),
+          baseUrl: getDispoBaseUrl(),
+          externalUrl: typeof getDispoExternalUrl === 'function' ? getDispoExternalUrl() : '',
+          internalUrl: typeof getDispoInternalUrl === 'function' ? getDispoInternalUrl() : ''
+        })
+      }).then(function (r) { return r.json(); }).then(function (pull) {
+        if (token !== projektdatenProtokollLoadToken) return;
+        if (!pull || pull.ok === false || pull.skipped) return;
+        return fetchList().then(function (fresh) {
+          if (token !== projektdatenProtokollLoadToken) return;
+          renderProjektdatenProtokollListe(listEl, localJobId, fresh);
+        });
+      }).catch(function () { /* lokaler Stand bleibt */ });
+    }).catch(function (err) {
+      if (token !== projektdatenProtokollLoadToken) return;
+      listEl.innerHTML = '<p class="empty">' + escapeHtml(err && err.message ? err.message : 'Protokolle konnten nicht geladen werden.') + '</p>';
+    });
   }
 
   /** @returns {string[]} Fabrikationsnummern aufsteigend nach FN. */
@@ -8469,6 +8631,76 @@
     return kind + ' ' + name + fns + (when ? ', Stand ' + when : '');
   }
 
+  function closeConflictDiffModal() {
+    var modal = document.getElementById('modalConflictDiff');
+    if (!modal) return;
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
+  function formatConflictStamp(value) {
+    if (!value) return '';
+    return String(value).replace('T', ' ').replace(/\.\d+Z$/, '').replace(/Z$/, '');
+  }
+
+  function renderConflictDiff(data) {
+    var body = document.getElementById('conflictDiffBody');
+    var lead = document.getElementById('conflictDiffLead');
+    if (!body) return;
+    var summary = data && data.summary ? String(data.summary) : '';
+    var stamps = [];
+    if (data && data.local_at) stamps.push('Dieser Laptop: ' + formatConflictStamp(data.local_at));
+    if (data && data.remote_at) stamps.push('Anderer Laptop: ' + formatConflictStamp(data.remote_at));
+    if (lead) lead.textContent = [summary, stamps.join(' · ')].filter(Boolean).join(' — ');
+    var rows = data && Array.isArray(data.rows) ? data.rows : [];
+    if (!rows.length) {
+      body.innerHTML = '<p>Keine Textunterschiede. Nur der Zeitpunkt der Stände weicht ab.</p>';
+      return;
+    }
+    var html = '<table class="conflict-diff-table"><thead><tr><th>Feld</th><th>Dieser Laptop</th><th>Anderer Laptop</th></tr></thead><tbody>';
+    var lastGroup = null;
+    rows.forEach(function (row) {
+      var group = row && row.group ? String(row.group) : '';
+      if (group !== lastGroup) {
+        lastGroup = group;
+        if (group) html += '<tr class="conflict-diff-group"><th colspan="3">' + escapeHtml(group) + '</th></tr>';
+      }
+      var localCell = row && row.local ? escapeHtml(row.local).replace(/\n/g, '<br>') : '<span class="muted">leer</span>';
+      var remoteCell = row && row.remote ? escapeHtml(row.remote).replace(/\n/g, '<br>') : '<span class="muted">leer</span>';
+      html += '<tr><th>' + escapeHtml((row && row.label) || 'Inhalt') + '</th><td>' + localCell + '</td><td>' + remoteCell + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    if (data && data.note) html += '<p class="muted">' + escapeHtml(data.note) + '</p>';
+    body.innerHTML = html;
+  }
+
+  async function openConflictDiff() {
+    var row = multiDeviceConflictRows && multiDeviceConflictRows[0];
+    var modal = document.getElementById('modalConflictDiff');
+    var body = document.getElementById('conflictDiffBody');
+    var lead = document.getElementById('conflictDiffLead');
+    if (!row || !row.id || !modal || !body) return;
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    if (lead) lead.textContent = conflictChoiceText(row);
+    body.innerHTML = '<p class="muted">Vergleich wird geladen…</p>';
+    try {
+      var r = await fetch(API_BASE + '/api/multi_device/conflicts/diff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id }),
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        body.innerHTML = '<p>' + escapeHtml((data && data.error) || 'Vergleich nicht verfügbar.') + '</p>';
+        return;
+      }
+      renderConflictDiff(data);
+    } catch (e) {
+      body.innerHTML = '<p>' + escapeHtml(e && e.message ? e.message : 'Vergleich nicht verfügbar.') + '</p>';
+    }
+  }
+
   function showProtocolConflictChoices(rows) {
     multiDeviceConflictRows = Array.isArray(rows) ? rows.filter(function (row) { return row && row.id; }) : [];
     updateMultiDeviceUiFromSyncStatus({
@@ -8482,8 +8714,10 @@
     if (!row || !row.id) return;
     var keepBtn = document.getElementById('btnConflictKeepLocal');
     var remoteBtn = document.getElementById('btnConflictTakeRemote');
+    var diffBtn = document.getElementById('btnConflictDiff');
     if (keepBtn) keepBtn.disabled = true;
     if (remoteBtn) remoteBtn.disabled = true;
+    if (diffBtn) diffBtn.disabled = true;
     try {
       var r = await fetch(API_BASE + '/api/multi_device/conflicts/resolve', {
         method: 'POST',
@@ -8504,6 +8738,7 @@
         alert((data && data.error) || 'Konflikt konnte nicht gelöst werden.');
         return;
       }
+      closeConflictDiffModal();
       multiDeviceConflictRows = multiDeviceConflictRows.slice(1);
       if (multiDeviceConflictRows.length) {
         showProtocolConflictChoices(multiDeviceConflictRows);
@@ -8524,6 +8759,7 @@
     } finally {
       if (keepBtn) keepBtn.disabled = false;
       if (remoteBtn) remoteBtn.disabled = false;
+      if (diffBtn) diffBtn.disabled = false;
     }
   }
 
@@ -8574,6 +8810,7 @@
         : '';
     var keepBtn = document.getElementById('btnConflictKeepLocal');
     var remoteBtn = document.getElementById('btnConflictTakeRemote');
+    var diffBtn = document.getElementById('btnConflictDiff');
     if (cleanup.length) {
       var item = cleanup[0];
       multiDevicePendingCleanupJobId = item.local_job_id;
@@ -8596,6 +8833,7 @@
       if (btnDel) btnDel.hidden = false;
       if (keepBtn) keepBtn.hidden = true;
       if (remoteBtn) remoteBtn.hidden = true;
+      if (diffBtn) diffBtn.hidden = true;
       banner.hidden = false;
       return;
     }
@@ -8614,6 +8852,7 @@
       if (btnDel) btnDel.hidden = true;
       if (keepBtn) keepBtn.hidden = !blocking;
       if (remoteBtn) remoteBtn.hidden = !blocking;
+      if (diffBtn) diffBtn.hidden = !blocking;
       banner.hidden = false;
       return;
     }
@@ -8621,6 +8860,7 @@
     multiDeviceConflictRows = [];
     if (keepBtn) keepBtn.hidden = true;
     if (remoteBtn) remoteBtn.hidden = true;
+    if (diffBtn) diffBtn.hidden = true;
     if (peerHint) {
       textEl.textContent = peerHint.trim();
       if (btnDel) btnDel.hidden = true;
@@ -10467,6 +10707,42 @@
       resolveShownProtocolConflict('remote');
     });
   }
+  var btnConflictDiff = document.getElementById('btnConflictDiff');
+  if (btnConflictDiff) {
+    btnConflictDiff.addEventListener('click', function () {
+      openConflictDiff();
+    });
+  }
+  var btnConflictDiffClose = document.getElementById('btnConflictDiffClose');
+  if (btnConflictDiffClose) {
+    btnConflictDiffClose.addEventListener('click', function () {
+      closeConflictDiffModal();
+    });
+  }
+  var btnConflictDiffKeep = document.getElementById('btnConflictDiffKeep');
+  if (btnConflictDiffKeep) {
+    btnConflictDiffKeep.addEventListener('click', function () {
+      resolveShownProtocolConflict('local');
+    });
+  }
+  var btnConflictDiffTake = document.getElementById('btnConflictDiffTake');
+  if (btnConflictDiffTake) {
+    btnConflictDiffTake.addEventListener('click', function () {
+      resolveShownProtocolConflict('remote');
+    });
+  }
+  var modalConflictDiff = document.getElementById('modalConflictDiff');
+  if (modalConflictDiff) {
+    modalConflictDiff.addEventListener('click', function (ev) {
+      if (ev.target === modalConflictDiff) closeConflictDiffModal();
+    });
+  }
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Escape') return;
+    var modal = document.getElementById('modalConflictDiff');
+    if (!modal || !modal.classList.contains('active')) return;
+    closeConflictDiffModal();
+  });
 
   document.getElementById('btnSyncNow').addEventListener('click', function () {
     var hint = document.getElementById('syncNowHint');
@@ -13720,6 +13996,38 @@
     if (t) t.classList.add('is-active');
   }
 
+  function consumeProjektdatenProtokollTarget(kind) {
+    var target = window.__projektdatenProtokollTarget;
+    if (!target || String(target.kind || '') !== String(kind || '')) return null;
+    window.__projektdatenProtokollTarget = null;
+    var fab = String(target.fab || '').trim();
+    window.__projektdatenProtokollFab = fab;
+    return target;
+  }
+  window.consumeProjektdatenProtokollTarget = consumeProjektdatenProtokollTarget;
+
+  function preferProtokollFab(fallback, fns) {
+    var fab = String(window.__projektdatenProtokollFab || '').trim();
+    window.__projektdatenProtokollFab = '';
+    if (!fab) return fallback;
+    if (Array.isArray(fns) && fns.length) {
+      for (var i = 0; i < fns.length; i++) {
+        if (String(fns[i]) === fab) return fns[i];
+      }
+      return fallback;
+    }
+    return fab;
+  }
+
+  function protokollTargetJobId(target, jobs, fallbackId) {
+    var pick = target && target.jobId != null ? parseInt(target.jobId, 10) : 0;
+    if (!pick || !Array.isArray(jobs)) return fallbackId;
+    for (var i = 0; i < jobs.length; i++) {
+      if (parseInt(jobs[i] && jobs[i].id, 10) === pick) return pick;
+    }
+    return fallbackId;
+  }
+
   function showView(name) {
     if (typeof skipProtocolLeaveGuard !== 'undefined' && skipProtocolLeaveGuard) {
       skipProtocolLeaveGuard = false;
@@ -13738,8 +14046,14 @@
           protocolLeaveDialogOpen = true;
           showProtocolUncommittedLeaveDialog().then(function (choice) {
             protocolLeaveDialogOpen = false;
-            if (choice === 'stay') return;
+            if (choice === 'stay') {
+              window.__projektdatenProtokollTarget = null;
+              window.__projektdatenProtokollFab = '';
+              return;
+            }
             if (choice === 'save') {
+              window.__projektdatenProtokollTarget = null;
+              window.__projektdatenProtokollFab = '';
               if (typeof leaveCtrl.commitSave === 'function') leaveCtrl.commitSave();
               return;
             }
@@ -15719,6 +16033,17 @@
       });
   }
 
+  function syncExplorerBreadcrumb(breadcrumbEl, subpath) {
+    if (!breadcrumbEl) return;
+    var pathText = subpath ? String(subpath) : '';
+    var projektdaten = breadcrumbEl.id === 'dienstreiseExplorerBreadcrumb';
+    var crumb = projektdaten ? pathText : (pathText ? 'Projektordner / ' + pathText : 'Projektordner');
+    if (breadcrumbEl.textContent !== crumb) breadcrumbEl.textContent = crumb;
+    if (!projektdaten) return;
+    var toolbar = breadcrumbEl.parentElement;
+    if (toolbar && toolbar.classList.contains('dienstreise-explorer-toolbar')) toolbar.hidden = !crumb;
+  }
+
   function loadDienstreiseExplorer(jobId, subpath, uiKey, opts) {
     opts = opts || {};
     var ui = getDienstreiseExplorerUi(uiKey || 'modal');
@@ -15739,7 +16064,7 @@
         ui.key === 'start'
           ? '<span class="empty">Kein Auftrag ausgewählt.</span>'
           : '<span class="empty" id="dienstreiseExplorerPlaceholder">Auftrag wählen, dann Ordnerinhalt hier.</span>';
-      if (breadcrumbEl) breadcrumbEl.textContent = 'Projektordner';
+      syncExplorerBreadcrumb(breadcrumbEl, '');
       ui.setRootEntries([]);
       ui.clearExpanded();
       ui.setLoadedJobId(null);
@@ -15772,10 +16097,7 @@
       listEl.innerHTML = '<span class="empty">Wird geladen …</span>';
       ui.clearExpanded();
     }
-    if (breadcrumbEl) {
-      var crumb = ui.getSubpath() ? 'Projektordner / ' + ui.getSubpath() : 'Projektordner';
-      if (breadcrumbEl.textContent !== crumb) breadcrumbEl.textContent = crumb;
-    }
+    syncExplorerBreadcrumb(breadcrumbEl, ui.getSubpath());
 
     if (!explorerLoadSeqByUi[seqKey]) explorerLoadSeqByUi[seqKey] = 0;
     var loadSeq = ++explorerLoadSeqByUi[seqKey];
@@ -18984,6 +19306,7 @@
     }
 
     function openAndResetMontageberichtForm() {
+      var armedJob = consumeProjektdatenProtokollTarget('montagebericht');
       if (divMontage) divMontage.style.display = 'block';
       montageberichtJobData = null;
       montageberichtFormReady = false;
@@ -18998,7 +19321,7 @@
         if (jobSelect) {
           jobSelect.innerHTML = '<option value="">-- Auftrag wählen --</option>' +
             jobs.map(function (j) { return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>'; }).join('');
-          var defaultJobId = resolveTodayProtokollJobId(jobs);
+          var defaultJobId = protokollTargetJobId(armedJob, jobs, resolveTodayProtokollJobId(jobs));
           if (defaultJobId) {
             jobSelect.value = defaultJobId;
             jobSelect.dispatchEvent(new Event('change', { bubbles: true }));
@@ -20419,7 +20742,7 @@
         applySharedProtocolLanguages('kontrollwiegungLangDe', 'kontrollwiegungLangEn', kwDraftByFab);
         renderFabButtons(kontrollwiegungJobData);
         var fns = parseJobFabrikationsnummernOrdered(kontrollwiegungJobData || {});
-        var preferredFab = firstIncludedFab(fns, kwDraftByFab);
+        var preferredFab = preferProtokollFab(firstIncludedFab(fns, kwDraftByFab), fns);
         if (fns.length) {
           if (preferredFab) loadFabIntoForm(preferredFab);
           else setActiveFabValue('');
@@ -20700,6 +21023,7 @@
       }
   
       window.openProtokolleKontrollwiegungen = function () {
+        var armedJob = consumeProjektdatenProtokollTarget('kontrollwiegung');
         loadKontrollwiegungJobs().then(function (jobs) {
           if (jobSelect) {
             jobSelect.innerHTML = '<option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>' +
@@ -20707,7 +21031,7 @@
                 return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
               }).join('');
             refreshProtocolFormLang('viewProtokolleKontrollwiegungen');
-            var defaultJobId = resolveTodayProtokollJobId(jobs);
+            var defaultJobId = protokollTargetJobId(armedJob, jobs, resolveTodayProtokollJobId(jobs));
             if (defaultJobId) {
               jobSelect.value = defaultJobId;
               jobSelect.dispatchEvent(new Event('change', { bubbles: true }));
@@ -21732,7 +22056,7 @@
       applySharedProtocolLanguages('schleppkettenLangDe', 'schleppkettenLangEn', skDraftByFab);
       renderFabButtons(skJobData);
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(skJobData || {}) : [];
-      var preferredFab = firstIncludedFab(fns, skDraftByFab);
+      var preferredFab = preferProtokollFab(firstIncludedFab(fns, skDraftByFab), fns);
       if (fns.length) {
         if (preferredFab) loadFabIntoForm(preferredFab);
         else setActiveFabValue('');
@@ -21980,13 +22304,14 @@
     }
 
     window.openProtokolleSchleppketten = function () {
+      var armedJob = consumeProjektdatenProtokollTarget('schleppkette');
       loadJobs().then(function (jobs) {
         jobSelect.innerHTML = '<option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>' +
           jobs.map(function (j) {
             return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
           }).join('');
         refreshProtocolFormLang('viewProtokolleSchleppketten');
-        var defaultJobId = typeof resolveTodayProtokollJobId === 'function' ? resolveTodayProtokollJobId(jobs) : 0;
+        var defaultJobId = protokollTargetJobId(armedJob, jobs, typeof resolveTodayProtokollJobId === 'function' ? resolveTodayProtokollJobId(jobs) : 0);
         if (defaultJobId) {
           jobSelect.value = defaultJobId;
           jobSelect.dispatchEvent(new Event('change', { bubbles: true }));
@@ -22555,7 +22880,7 @@
       applySharedProtocolLanguages('pzPdfDe', 'pzPdfEn', pzDraftByFab);
       renderFabButtons(pzJobData);
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(pzJobData) : [];
-      var preferred = firstIncludedFab(fns, pzDraftByFab);
+      var preferred = preferProtokollFab(firstIncludedFab(fns, pzDraftByFab), fns);
       if (fns.length) {
         if (preferred) await loadFab(preferred);
         else setActiveFabValue('');
@@ -22880,13 +23205,14 @@
     });
 
     window.openProtokollePruefzertifikat = function () {
+      var armedJob = consumeProjektdatenProtokollTarget('pruefzertifikat');
       loadJobs().then(function (jobs) {
         jobSelect.innerHTML = '<option value="" data-i18n-en="– Please select –">– Bitte wählen –</option>' +
           (jobs || []).map(function (j) {
             return '<option value="' + j.id + '">' + escapeHtml((j.job_number || '') + ' ' + (j.customer_name || '')) + '</option>';
           }).join('');
         refreshProtocolFormLang('viewProtokollePruefzertifikat');
-        var defaultJobId = typeof resolveTodayProtokollJobId === 'function' ? resolveTodayProtokollJobId(jobs || []) : 0;
+        var defaultJobId = protokollTargetJobId(armedJob, jobs || [], typeof resolveTodayProtokollJobId === 'function' ? resolveTodayProtokollJobId(jobs || []) : 0);
         if (defaultJobId) {
           jobSelect.value = String(defaultJobId);
           return applyJobSelection(defaultJobId);
@@ -23035,6 +23361,7 @@
     var lastProtokollId = null;
     var defaultsSource = 'global';
     var serviceprotokollDraftStore = { byFab: {} };
+    var serviceprotokollPrior = null;
     var activeFab = '';
     var SP_LAST_JOB_KEY = 'kukla_sp_last_job_id';
     var serviceprotokollJobLoadToken = 0;
@@ -25486,8 +25813,97 @@
       }
     }
 
+    function reactPriorFromMesswerte(mess) {
+      if (!mess || typeof mess !== 'object') return null;
+      var cells = Array.isArray(mess.waegezellen) && mess.waegezellen.length ? mess.waegezellen : null;
+      var loadCells = cells
+        ? cells.map(function (c, i) {
+          var mm = (c && c.mess_matrix) || (i === 0 ? mess.mess_matrix : null);
+          return {
+            supplyVoltage: String((c && (c.supplyVoltage || c.vers_spannung)) || (i === 0 ? mess.vers_spannung : '') || ''),
+            sensitivity: String((c && (c.sensitivity || c.sensitivitaet)) || (i === 0 ? mess.sensitivitaet : '') || ''),
+            measurements: matrixToMeasurementsRows(mm || emptyMessMatrix())
+          };
+        })
+        : [{
+          supplyVoltage: String(mess.vers_spannung || ''),
+          sensitivity: String(mess.sensitivitaet || ''),
+          measurements: matrixToMeasurementsRows(mess.mess_matrix || emptyMessMatrix())
+        }];
+      var pg = Array.isArray(mess.pruefgewichtstest) ? mess.pruefgewichtstest : [];
+      return {
+        loadCells: loadCells,
+        testLoad: {
+          weight: pg[0] != null ? String(pg[0]) : '',
+          display: pg[1] != null ? String(pg[1]) : '',
+          deviation: pg[2] != null ? String(pg[2]) : '',
+          value4: pg[3] != null ? String(pg[3]) : ''
+        },
+        wiegungen: normalizeSpWiegungen(mess.wiegungen),
+        ketten: normalizeSpKetten(mess.ketten),
+        kettenMessungen: normalizeSpKettenMessungen(mess.ketten_messungen)
+      };
+    }
+
+    function applyServiceprotokollPriorRecord(record) {
+      if (spProtocol.catalogKind !== 'service' || !record || !record.messwerte) {
+        serviceprotokollPrior = null;
+        return;
+      }
+      serviceprotokollPrior = reactPriorFromMesswerte(record.messwerte);
+    }
+
+    async function loadServiceprotokollPriorLocal(fab) {
+      serviceprotokollPrior = null;
+      if (spProtocol.catalogKind !== 'service') return;
+      fab = String(fab || '').trim();
+      var jobId = jobSelect ? parseInt(jobSelect.value, 10) : 0;
+      if (!fab || !jobId) return;
+      try {
+        var r = await fetchServiceprotokollLocal(
+          API_BASE + '/api/protokolle/serviceprotokoll/prior?job_id=' + encodeURIComponent(jobId) +
+            '&fabrikationsnummer=' + encodeURIComponent(fab),
+          { headers: { 'X-Technician-Id': String(getTechId()) } }
+        );
+        var data = await r.json().catch(function () { return {}; });
+        if (r.ok && data && data.ok) applyServiceprotokollPriorRecord(data.prior);
+      } catch (e) { /* lokale Vorwerte bleiben leer */ }
+    }
+
+    function refreshServiceprotokollPriorFromDispo(fab, loadToken) {
+      if (spProtocol.catalogKind !== 'service') return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      if (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) return;
+      var base = typeof getDispoBaseUrl === 'function' ? String(getDispoBaseUrl() || '').trim() : '';
+      if (!base) return;
+      fab = String(fab || '').trim();
+      var jobId = jobSelect ? parseInt(jobSelect.value, 10) : 0;
+      if (!fab || !jobId) return;
+      fetch(API_BASE + '/api/protokolle/serviceprotokoll/prior/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Technician-Id': String(getTechId()) },
+        body: JSON.stringify({
+          job_id: jobId,
+          fabrikationsnummer: fab,
+          base_url: base,
+          serverUsername: typeof getDispoUsername === 'function' ? getDispoUsername() : '',
+          serverPassword: typeof getDispoPassword === 'function' ? getDispoPassword() : ''
+        })
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (data) {
+          return { ok: r.ok, data: data };
+        });
+      }).then(function (res) {
+        if (!isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
+        if (!res.ok || !res.data || !res.data.ok) return;
+        applyServiceprotokollPriorRecord(res.data.prior);
+        if (!serviceprotokollLiveInput) notifyReactBridge(true);
+      }).catch(function () { /* Hintergrund, Maske bleibt offen */ });
+    }
+
     async function loadDefaultsForFab(fab, loadToken) {
       fab = fab ? String(fab).trim() : '';
+      serviceprotokollPrior = null;
       if (loadToken == null) loadToken = ++serviceprotokollFabLoadToken;
       serviceprotokollFormReadyFab = '';
       if (!fab) {
@@ -25563,10 +25979,13 @@
       if (serviceprotokollLiveInput || !isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
       renderSteps();
       if (isServiceprotokollFabLoadCurrent(loadToken, fab) && !serviceprotokollLiveInput) {
+        await loadServiceprotokollPriorLocal(fab);
+        if (serviceprotokollLiveInput || !isServiceprotokollFabLoadCurrent(loadToken, fab)) return;
         serviceprotokollFormReadyFab = fab;
         serviceprotokollHostHydrated = true;
         lockHostKopfFromReact(2000);
         notifyReactBridge(true);
+        refreshServiceprotokollPriorFromDispo(fab, loadToken);
       }
     }
 
@@ -25642,6 +26061,7 @@
       serviceprotokollFormReadyFab = '';
       serviceJobData = null;
       serviceprotokollDraftStore = { byFab: {} };
+      serviceprotokollPrior = null;
       lastProtokollId = null;
       setActiveFabValue('');
       clearServiceprotokollFabFormShell();
@@ -25673,7 +26093,7 @@
         applySharedProtocolLanguages('spPdfDe', 'spPdfEn', serviceprotokollDraftStore.byFab);
         renderFabButtons(serviceJobData);
         var fns = parseJobFabrikationsnummernOrdered(serviceJobData || {});
-        var firstFab = firstIncludedFab(fns, serviceprotokollDraftStore.byFab);
+        var firstFab = preferProtokollFab(firstIncludedFab(fns, serviceprotokollDraftStore.byFab), fns);
         if (firstFab) {
           var fabLoadToken = ++serviceprotokollFabLoadToken;
           setActiveFabValue(firstFab);
@@ -26058,6 +26478,7 @@
         wiegungen: normalizeSpWiegungen(spWiegungen),
         ketten: normalizeSpKetten(spKetten),
         kettenMessungen: normalizeSpKettenMessungen(spKettenMessungen),
+        prior: spProtocol.catalogKind === 'service' ? serviceprotokollPrior : null,
         workSteps: arbeitsschritte.map(function (s, i) {
           var de = String(s.bezeichnung_de || '').trim();
           var en = String(s.bezeichnung_en || '').trim();
@@ -26110,6 +26531,7 @@
     function spApplyPayloadFromReact(payload) {
       if (serviceprotokollFabSwitching) return;
       if (!payload || !payload.form) return;
+      // prior ist nur die hellblaue Vergleichsanzeige und darf weder Felder noch Entwurf noch PDF füllen.
       var f = payload.form;
       var payloadFab = f.activeFab != null ? String(f.activeFab).trim() : '';
       var hostFab = getActiveFab();
@@ -26757,8 +27179,8 @@
     function setProtokollReactFrameActive(kind) {
       var ibn = document.getElementById('inbetriebnahmeReactFrame');
       var svc = document.getElementById('serviceprotokollReactFrame');
-      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn&v=kartei4';
-      var svcSrc = 'serviceprotokoll-react/index.html?v=kartei4';
+      var ibnSrc = 'serviceprotokoll-react/index.html?kind=ibn&v=prior1';
+      var svcSrc = 'serviceprotokoll-react/index.html?v=prior1';
       function srcOf(el) {
         return String((el && el.getAttribute('src')) || '');
       }
@@ -26776,6 +27198,8 @@
     function openServiceLikeProtokoll(kindCfg) {
       spProtocol = kindCfg || SP_PROTOCOL_SERVICE;
       window.__kuklaProtokollHostKind = spProtocol.hostKind;
+      var armedKind = spProtocol.hostKind === 'ibn' ? 'inbetriebnahme' : 'serviceprotokoll';
+      var armedJob = consumeProjektdatenProtokollTarget(armedKind);
       setProtokollReactFrameActive(spProtocol.hostKind);
       loadServiceJobs().then(function (jobs) {
         rememberServiceAssignedJobs(jobs);
@@ -26789,6 +27213,7 @@
         notifyReactBridge(true);
         serviceJobData = null;
         serviceprotokollDraftStore = { byFab: {} };
+        serviceprotokollPrior = null;
         serviceprotokollFormReadyFab = '';
         arbeitsschritte = [];
         setActiveFabValue('');
@@ -26812,7 +27237,7 @@
         }
         lastProtokollId = null;
         if (stepsContainer) stepsContainer.innerHTML = '<tr><td colspan="5" class="muted" style="padding:0.75rem;text-align:center">Auftrag wählen, um Arbeitsschritte zu laden.</td></tr>';
-        var defaultJobId = resolveDefaultServiceprotokollJobId(jobs);
+        var defaultJobId = protokollTargetJobId(armedJob, jobs, resolveDefaultServiceprotokollJobId(jobs));
         if (defaultJobId && jobSelect) {
           jobSelect.value = defaultJobId;
           applyServiceprotokollJobSelection(defaultJobId);

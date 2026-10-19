@@ -9,6 +9,19 @@ export interface WorkStep {
   remark: string;
 }
 
+/** Hellblaue Vorwerte aus einem älteren Protokoll. Nicht Teil des gespeicherten Formulars. */
+export interface ServiceProtocolPrior {
+  loadCells: Array<{
+    supplyVoltage: string;
+    sensitivity: string;
+    measurements: MeasurementRow[];
+  }>;
+  testLoad: TestLoadValues;
+  wiegungen: WeighingRow[];
+  ketten: ChainRow[];
+  kettenMessungen: ChainMessRow[];
+}
+
 export interface TestLoadValues {
   weight: string;
   display: string;

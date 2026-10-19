@@ -1,6 +1,7 @@
 import type { ChainMessRow, ChainRow } from '../types';
 import { chainMessHasData, chainRowHasData, emptyChainMessRow, emptyChainRow } from '../types';
 import { t, type UiLang } from '../i18n';
+import { PriorInput } from './TextInput';
 
 function parseNum(raw: string): number | null {
   const s = String(raw || '').trim().replace(',', '.');
@@ -275,10 +276,12 @@ interface ChainTestTablesProps {
   lang: UiLang;
   chains: ChainRow[];
   measurements: ChainMessRow[];
+  priorChains?: ChainRow[] | null;
+  priorMeasurements?: ChainMessRow[] | null;
   onChange: (chains: ChainRow[], measurements: ChainMessRow[]) => void;
 }
 
-export function ChainTestTables({ lang, chains, measurements, onChange }: ChainTestTablesProps) {
+export function ChainTestTables({ lang, chains, measurements, priorChains, priorMeasurements, onChange }: ChainTestTablesProps) {
   const chainList = chains.length ? chains : [emptyChainRow()];
   const messList = measurements.length ? measurements : [emptyChainMessRow()];
   const cSums = chainSums(chainList);
@@ -327,15 +330,19 @@ export function ChainTestTables({ lang, chains, measurements, onChange }: ChainT
               </tr>
             </thead>
             <tbody>
-              {chainList.map((row, idx) => (
+              {chainList.map((row, idx) => {
+                const priorChain = priorChains && priorChains[idx];
+                return (
                 <tr key={idx} className="border-t border-kukla-border">
                   <td className="px-1 py-1 font-semibold">{idx + 1}</td>
                   <td className="px-1 py-1">
-                    <input className="h-8 w-full rounded border border-kukla-border px-1" value={row.tag} onChange={(e) => patchChain(idx, { tag: e.target.value }, false)} />
+                    <PriorInput priorPrefix={t(lang, 'lastValue')} className="h-8 w-full rounded border border-kukla-border px-1" prior={priorChain ? priorChain.tag : ''} value={row.tag} onChange={(e) => patchChain(idx, { tag: e.target.value }, false)} />
                   </td>
                   <td className="px-1 py-1">
-                    <input
+                    <PriorInput
+                      priorPrefix={t(lang, 'lastValue')}
                       className="h-8 w-full min-w-[10rem] rounded border border-kukla-border px-1"
+                      prior={priorChain ? priorChain.ketten_type : ''}
                       value={row.ketten_type}
                       onChange={(e) => patchChain(idx, { ketten_type: e.target.value }, false)}
                     />
@@ -347,19 +354,23 @@ export function ChainTestTables({ lang, chains, measurements, onChange }: ChainT
                     ] as Array<[keyof ChainRow, boolean]>
                   ).map(([key, calc]) => (
                     <td key={key} className="px-1 py-1">
-                      <input
+                      <PriorInput
+                        priorPrefix={t(lang, 'lastValue')}
                         className="h-8 w-full rounded border border-kukla-border px-1"
                         inputMode="decimal"
+                        prior={priorChain ? String(priorChain[key] || '') : ''}
                         value={String(row[key] || '')}
                         onChange={(e) => patchChain(idx, { [key]: e.target.value }, calc)}
                       />
                     </td>
                   ))}
                   <td className="px-1 py-1">
-                    <input
+                    <PriorInput
+                      priorPrefix={t(lang, 'lastValue')}
                       className="h-8 w-full rounded border border-kukla-border px-1"
                       inputMode="decimal"
                       title={lang === 'en' ? 'Calculated from weight/length, still editable' : 'Wird aus Gewicht/Länge berechnet, ist aber editierbar'}
+                      prior={priorChain ? priorChain.gewicht_pro_meter : ''}
                       value={row.gewicht_pro_meter}
                       onChange={(e) => patchChain(idx, { gewicht_pro_meter: e.target.value }, false)}
                     />
@@ -387,7 +398,8 @@ export function ChainTestTables({ lang, chains, measurements, onChange }: ChainT
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="border-t border-kukla-border bg-kukla-mint font-semibold text-[#0c6a4d]">
@@ -443,7 +455,9 @@ export function ChainTestTables({ lang, chains, measurements, onChange }: ChainT
               </tr>
             </thead>
             <tbody>
-              {messList.map((row, idx) => (
+              {messList.map((row, idx) => {
+                const priorMess = priorMeasurements && priorMeasurements[idx];
+                return (
                 <tr key={idx} className="border-t border-kukla-border">
                   <td className="px-1 py-1 font-semibold">{idx + 1}</td>
                   {(
@@ -458,19 +472,23 @@ export function ChainTestTables({ lang, chains, measurements, onChange }: ChainT
                     ] as Array<[keyof ChainMessRow, boolean]>
                   ).map(([key, readonly]) => (
                     <td key={key} className="px-1 py-1">
-                      <input
+                      <PriorInput
+                        priorPrefix={t(lang, 'lastValue')}
                         className="h-8 w-full rounded border border-kukla-border px-1 read-only:bg-[#f3f4f6]"
                         inputMode="decimal"
                         readOnly={readonly}
                         tabIndex={readonly ? -1 : undefined}
+                        prior={priorMess ? String(priorMess[key] || '') : ''}
                         value={String(row[key] || '')}
                         onChange={(e) => patchMess(idx, { [key]: e.target.value })}
                       />
                     </td>
                   ))}
                   <td className="px-1 py-1">
-                    <input
+                    <PriorInput
+                      priorPrefix={t(lang, 'lastValue')}
                       className="h-8 w-full rounded border border-kukla-border px-1"
+                      prior={priorMess ? priorMess.bemerkung : ''}
                       value={row.bemerkung}
                       onChange={(e) => patchMess(idx, { bemerkung: e.target.value })}
                     />
@@ -508,7 +526,8 @@ export function ChainTestTables({ lang, chains, measurements, onChange }: ChainT
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="border-t border-kukla-border bg-kukla-mint font-semibold text-[#0c6a4d]">

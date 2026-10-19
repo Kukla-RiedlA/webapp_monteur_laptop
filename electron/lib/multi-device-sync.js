@@ -641,6 +641,302 @@ function formatBytes(n) {
   return (v / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
+const DIFF_SKIP_KEYS = new Set([
+  'revision',
+  'schema_version',
+  'server_updated_at',
+  'updatedAt',
+  'updated_at',
+  'gespeichert_am',
+  'nextLocalId',
+  'textbausteine',
+  'jsonOnly',
+  'local_only',
+  'skip_dispo_sync',
+  'freitext',
+  'technicianId',
+  'technician_id',
+  'job_id',
+  'pdf_rel',
+  'pdf_rels',
+  'last_pdf_rel',
+  'last_pdf_paths',
+  'last_pdf_abs',
+  'pdf_path',
+  'pdf_paths',
+  'id',
+  'nr',
+  'zeile',
+  'row',
+  'fabrikationsnummer',
+  'fabrikationsnummern',
+]);
+
+const DIFF_FIELD_LABELS = {
+  grundDesEinsatzes: 'Grund des Einsatzes',
+  bemerkungen: 'Bemerkungen',
+  type: 'Type',
+  position: 'Pos.Nr.',
+  projekt: 'Projekt',
+  languages: 'Sprache',
+  language: 'Sprache',
+  kopfdaten: 'Kopfdaten',
+  kunde: 'Kunde',
+  customer: 'Kunde',
+  datum: 'Datum',
+  servicetechniker: 'Servicetechniker',
+  ansprechperson: 'Ansprechperson',
+  geliefertUeber: 'Geliefert über',
+  geliefert_ueber: 'Geliefert über',
+  unterschrift: 'Unterschrift',
+  signature: 'Unterschrift',
+  signature_override_png: 'Unterschrift',
+  signature_png: 'Unterschrift',
+};
+
+const DIFF_KEY_ORDER = [
+  'grundDesEinsatzes',
+  'languages',
+  'language',
+  'projekt',
+  'kopfdaten',
+  'bemerkungen',
+  'fabBemerkungen',
+  'byFab',
+];
+
+function diffFieldLabel(key) {
+  if (DIFF_FIELD_LABELS[key]) return DIFF_FIELD_LABELS[key];
+  return String(key || '')
+    .replace(/_html$/, '')
+    .replace(/_/g, ' ')
+    .replace(/([a-zäöü])([A-Z])/g, '$1 $2')
+    .trim();
+}
+
+function diffOrderedKeys(a, b) {
+  const set = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  const pref = DIFF_KEY_ORDER.filter((key) => set.has(key));
+  const rest = [...set].filter((key) => pref.indexOf(key) < 0).sort();
+  return pref.concat(rest);
+}
+
+function diffIsLeaf(value) {
+  return value == null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
+function diffIsImageBlob(value) {
+  return typeof value === 'string' && /^data:image\//i.test(value.trim());
+}
+
+function diffDecodeText(value) {
+  return String(value || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+function diffPlain(value) {
+  if (value == null) return { text: '', imgKey: '' };
+  if (typeof value === 'number') return { text: String(value), imgKey: '' };
+  if (typeof value === 'boolean') return { text: value ? 'ja' : '', imgKey: '' };
+  if (typeof value !== 'string') return { text: '', imgKey: '' };
+  if (diffIsImageBlob(value)) return { text: '', imgKey: String(value.length) + ':' + value.slice(30, 50) };
+  const imgs = [];
+  let text = value.replace(/<img\b[^>]*src=["']([^"']*)["'][^>]*>/gi, (_, src) => {
+    const raw = String(src || '');
+    imgs.push(String(raw.length) + ':' + raw.slice(0, 24));
+    return ' [Bild] ';
+  });
+  text = text.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n');
+  text = diffDecodeText(text.replace(/<[^>]+>/g, ''));
+  text = text.replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return { text, imgKey: imgs.join('|') };
+}
+
+function diffClip(value) {
+  const text = String(value || '');
+  if (text.length <= 800) return text;
+  return text.slice(0, 800) + '…';
+}
+
+function diffPushRow(rows, group, label, local, remote) {
+  const loc = String(local || '');
+  const rem = String(remote || '');
+  if (loc.trim() === rem.trim()) return;
+  rows.push({
+    group: group || '',
+    label: label || 'Inhalt',
+    local: diffClip(loc),
+    remote: diffClip(rem),
+  });
+}
+
+function diffTextOf(value, html) {
+  if (diffIsImageBlob(value) || diffIsImageBlob(html)) {
+    const blob = diffIsImageBlob(html) ? html : value;
+    return { text: '', imgKey: String(blob.length) + ':' + String(blob).slice(30, 50) };
+  }
+  const source = html != null && String(html).trim() !== '' ? html : value;
+  return diffPlain(source);
+}
+
+function diffCompareScalar(rows, group, label, local, remote, localHtml, remoteHtml) {
+  const loc = diffTextOf(local, localHtml);
+  const rem = diffTextOf(remote, remoteHtml);
+  const locBlank = !String(loc.text || '').trim() && !loc.imgKey;
+  const remBlank = !String(rem.text || '').trim() && !rem.imgKey;
+  if (locBlank && remBlank) return;
+  if (loc.text !== rem.text) diffPushRow(rows, group, label, loc.text, rem.text);
+  else if (loc.imgKey !== rem.imgKey) {
+    diffPushRow(
+      rows,
+      group,
+      label + ' (Bild)',
+      loc.imgKey ? 'Bild auf diesem Laptop' : 'kein Bild',
+      rem.imgKey ? (loc.imgKey ? 'anderes Bild' : 'Bild auf dem anderen Laptop') : 'kein Bild',
+    );
+  }
+}
+
+function diffIndexByFn(list) {
+  const map = new Map();
+  (Array.isArray(list) ? list : []).forEach((row) => {
+    if (!row || typeof row !== 'object') return;
+    const fn = String(row.fabrikationsnummer || row.fab || '').trim();
+    if (fn) map.set(fn, row);
+  });
+  return map;
+}
+
+function diffStructured(rows, group, labelPrefix, local, remote, depth) {
+  const level = depth || 0;
+  if (level > 6) {
+    if (stableStringify(local) !== stableStringify(remote)) {
+      diffPushRow(rows, group, labelPrefix || 'Inhalt', 'Inhalt auf diesem Laptop', 'anderer Inhalt');
+    }
+    return;
+  }
+  if ((local == null || diffIsLeaf(local)) && (remote == null || diffIsLeaf(remote))) {
+    diffCompareScalar(rows, group, labelPrefix || 'Inhalt', local, remote);
+    return;
+  }
+  if (Array.isArray(local) || Array.isArray(remote)) {
+    diffArray(rows, group, labelPrefix, local, remote, level);
+    return;
+  }
+  const left = local && typeof local === 'object' ? local : {};
+  const right = remote && typeof remote === 'object' ? remote : {};
+  diffOrderedKeys(left, right).forEach((key) => {
+    diffConsiderKey(rows, group, left, right, key, labelPrefix, level);
+  });
+}
+
+function diffArray(rows, group, labelPrefix, local, remote, depth) {
+  const left = Array.isArray(local) ? local : [];
+  const right = Array.isArray(remote) ? remote : [];
+  if (left.every(diffIsLeaf) && right.every(diffIsLeaf)) {
+    const join = (list) =>
+      list
+        .filter((item) => item != null && item !== false && String(item).trim() !== '')
+        .map((item) => (typeof item === 'boolean' ? 'ja' : String(item)))
+        .join(', ');
+    diffCompareScalar(rows, group, labelPrefix || 'Liste', join(left), join(right));
+    return;
+  }
+  const leftFn = diffIndexByFn(left);
+  const rightFn = diffIndexByFn(right);
+  if (leftFn.size || rightFn.size) {
+    const fns = [];
+    left.forEach((row) => {
+      const fn = row && String(row.fabrikationsnummer || row.fab || '').trim();
+      if (fn && fns.indexOf(fn) < 0) fns.push(fn);
+    });
+    right.forEach((row) => {
+      const fn = row && String(row.fabrikationsnummer || row.fab || '').trim();
+      if (fn && fns.indexOf(fn) < 0) fns.push(fn);
+    });
+    fns.forEach((fn) => {
+      diffStructured(rows, 'FN ' + fn, '', leftFn.get(fn), rightFn.get(fn), (depth || 0) + 1);
+    });
+    return;
+  }
+  const count = Math.max(left.length, right.length);
+  for (let i = 0; i < count; i += 1) {
+    const prefix = (labelPrefix || 'Eintrag') + ' ' + (i + 1);
+    diffStructured(rows, group, prefix, left[i], right[i], (depth || 0) + 1);
+  }
+}
+
+function diffConsiderKey(rows, group, left, right, key, labelPrefix, depth) {
+  if (DIFF_SKIP_KEYS.has(key)) return;
+  if (key.endsWith('_html')) {
+    const base = key.slice(0, -5);
+    const hasBase =
+      (left && Object.prototype.hasOwnProperty.call(left, base)) ||
+      (right && Object.prototype.hasOwnProperty.call(right, base));
+    if (hasBase) return;
+    const label = labelPrefix ? labelPrefix + ' · ' + diffFieldLabel(base) : diffFieldLabel(base);
+    diffCompareScalar(rows, group, label, undefined, undefined, left && left[key], right && right[key]);
+    return;
+  }
+  const label = labelPrefix ? labelPrefix + ' · ' + diffFieldLabel(key) : diffFieldLabel(key);
+  const lv = left ? left[key] : undefined;
+  const rv = right ? right[key] : undefined;
+  const htmlKey = key + '_html';
+  const lh = left ? left[htmlKey] : undefined;
+  const rh = right ? right[htmlKey] : undefined;
+  if (diffIsImageBlob(lv) || diffIsImageBlob(rv)) {
+    if (lv === rv) return;
+    diffPushRow(
+      rows,
+      group,
+      label,
+      diffIsImageBlob(lv) ? 'Unterschrift vorhanden' : 'keine Unterschrift',
+      diffIsImageBlob(rv) ? (diffIsImageBlob(lv) ? 'andere Unterschrift' : 'Unterschrift vorhanden') : 'keine Unterschrift',
+    );
+    return;
+  }
+  const leftLeaf = lv == null || diffIsLeaf(lv);
+  const rightLeaf = rv == null || diffIsLeaf(rv);
+  if (leftLeaf && rightLeaf) {
+    diffCompareScalar(rows, group, label, lv, rv, lh, rh);
+    return;
+  }
+  diffStructured(rows, group, label, lv !== undefined ? lv : lh, rv !== undefined ? rv : rh, (depth || 0) + 1);
+}
+
+/** Feldunterschiede zwischen lokalem und fremdem Protokollstand. */
+function diffProtocolPayloads(localPayload, remotePayload) {
+  const local = stripDraftMeta(localPayload || {});
+  const remote = stripDraftMeta(remotePayload || {});
+  const rows = [];
+  if (local.byFab || remote.byFab) {
+    const left = local.byFab && typeof local.byFab === 'object' ? local.byFab : {};
+    const right = remote.byFab && typeof remote.byFab === 'object' ? remote.byFab : {};
+    const fns = [];
+    Object.keys(left).forEach((fn) => {
+      if (fns.indexOf(fn) < 0) fns.push(fn);
+    });
+    Object.keys(right).forEach((fn) => {
+      if (fns.indexOf(fn) < 0) fns.push(fn);
+    });
+    fns.forEach((fn) => {
+      const name = String(fn || '').trim();
+      if (!name) return;
+      diffStructured(rows, 'FN ' + name, '', left[fn] || left[name], right[fn] || right[name], 0);
+    });
+  }
+  diffOrderedKeys(local, remote).forEach((key) => {
+    if (key === 'byFab') return;
+    diffConsiderKey(rows, '', local, remote, key, '', 0);
+  });
+  return rows;
+}
+
 function decideSharedFile(opts) {
   const o = opts || {};
   const localSha = String(o.localSha || '');
@@ -680,6 +976,7 @@ module.exports = {
   classifyDraftSides,
   payloadForServerPush,
   decideSharedFile,
+  diffProtocolPayloads,
   mergeByFabStores,
   sha256File,
   reconcileLocalTreeWithManifest,

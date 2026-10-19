@@ -715,7 +715,31 @@
       font-size: 0.9rem;
     }
     .multi-device-banner[hidden] { display: none !important; }
-    .multi-device-banner-actions { display: flex; gap: 0.35rem; flex-shrink: 0; }
+    .multi-device-banner-actions { display: flex; gap: 0.35rem; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+    #modalConflictDiff .conflict-diff-box { max-width: 56rem; width: 95%; max-height: 85vh; }
+    .conflict-diff-lead { margin: 0 0 0.75rem; font-size: 0.9rem; }
+    .conflict-diff-body { overflow: auto; min-height: 6rem; flex: 1; }
+    .conflict-diff-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    .conflict-diff-table th,
+    .conflict-diff-table td {
+      border: 1px solid #cfe8d1;
+      padding: 0.45rem 0.55rem;
+      vertical-align: top;
+      text-align: left;
+      white-space: pre-wrap;
+      color: var(--text);
+      background: var(--card);
+    }
+    .conflict-diff-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #eefaf5;
+      color: #0c6a4d;
+    }
+    .conflict-diff-table tbody th { width: 11rem; font-weight: 600; }
+    .conflict-diff-group th { background: #eefaf5; color: #0c6a4d; }
+    .conflict-diff-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.75rem; }
     .monteur-devices-list { font-size: 0.88rem; }
     .monteur-device-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border, #ddd); }
     .monteur-device-row.self { font-weight: 600; }
@@ -1338,6 +1362,35 @@
     .dienstreise-explorer-toolbar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--muted); flex-wrap: wrap; }
     .dienstreise-explorer-breadcrumb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dienstreise-explorer-list { border: 1px solid var(--accent); border-radius: 6px; overflow: auto; max-height: 320px; font-size: 0.85rem; background: var(--bg); }
+    .projektdaten-ordner-protokoll-split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; align-items: start; }
+    .projektdaten-ordner-protokoll-split > .modal-detail-section { min-width: 0; margin-bottom: 0; }
+    .projektdaten-ordner-protokoll-split > .modal-detail-section > h4 { margin: 0 0 0.5rem; }
+    .projektdaten-ordner-protokoll-split .dienstreise-explorer-toolbar[hidden] { display: none !important; }
+    .projektdaten-protokoll-liste { border: 1px solid var(--accent); border-radius: 6px; overflow: auto; max-height: 320px; font-size: 0.85rem; background: var(--bg); }
+    .projektdaten-ordner-protokoll-split .dienstreise-explorer-list,
+    .projektdaten-ordner-protokoll-split .projektdaten-protokoll-liste { margin-top: 0; }
+    .projektdaten-ordner-protokoll-split .dienstreise-explorer-row,
+    .projektdaten-ordner-protokoll-split .projektdaten-protokoll-row {
+      box-sizing: border-box;
+      height: 2.55rem;
+      min-height: 2.55rem;
+      max-height: 2.55rem;
+      padding-top: 0;
+      padding-bottom: 0;
+    }
+    .projektdaten-ordner-protokoll-split .dienstreise-explorer-actions .btn,
+    .projektdaten-ordner-protokoll-split .projektdaten-protokoll-actions .btn {
+      padding: 0.15rem 0.5rem;
+      line-height: 1.2;
+    }
+    .projektdaten-protokoll-row { display: flex; align-items: center; gap: 0.5rem; padding: 0 0.6rem; border-bottom: 1px solid var(--accent); }
+    .projektdaten-protokoll-row:last-child { border-bottom: none; }
+    .projektdaten-protokoll-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .projektdaten-protokoll-actions { display: flex; gap: 0.25rem; flex-shrink: 0; }
+    .projektdaten-protokoll-actions .btn { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
+    @media (max-width: 900px) {
+      .projektdaten-ordner-protokoll-split { grid-template-columns: 1fr; }
+    }
     .dienstreise-explorer-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 0.5rem 1rem; align-items: center; padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--accent); }
     .dienstreise-explorer-row:last-child { border-bottom: none; }
     .dienstreise-explorer-row:hover { background: rgba(255,255,255,0.05); }
@@ -2722,10 +2775,23 @@
   <div id="multiDeviceBanner" class="multi-device-banner" hidden role="status" aria-live="polite">
     <div id="multiDeviceBannerText" class="multi-device-banner-text"></div>
     <div class="multi-device-banner-actions">
+      <button type="button" class="btn btn-ghost" id="btnConflictDiff" hidden>Unterschiede</button>
       <button type="button" class="btn btn-ghost" id="btnConflictKeepLocal" hidden>Diesen Laptop behalten</button>
       <button type="button" class="btn btn-ghost" id="btnConflictTakeRemote" hidden>Anderen Laptop übernehmen</button>
       <button type="button" class="btn btn-ghost" id="btnMultiDeviceDeleteLocal" hidden>Lokale Kopie löschen</button>
       <button type="button" class="btn btn-ghost" id="btnMultiDeviceDismiss" title="Ausblenden">×</button>
+    </div>
+  </div>
+  <div id="modalConflictDiff" class="modal-overlay accept-offline-overlay" aria-hidden="true">
+    <div class="modal-box conflict-diff-box" role="dialog" aria-labelledby="conflictDiffTitle">
+      <h3 id="conflictDiffTitle">Unterschiede</h3>
+      <p id="conflictDiffLead" class="conflict-diff-lead muted"></p>
+      <div id="conflictDiffBody" class="conflict-diff-body"></div>
+      <div class="conflict-diff-actions">
+        <button type="button" class="btn btn-ghost" id="btnConflictDiffKeep">Diesen Laptop behalten</button>
+        <button type="button" class="btn btn-ghost" id="btnConflictDiffTake">Anderen Laptop übernehmen</button>
+        <button type="button" class="btn btn-ghost" id="btnConflictDiffClose">Schließen</button>
+      </div>
     </div>
   </div>
   <div id="viewStart" class="view-start">
@@ -4563,7 +4629,7 @@
     </div>
   </main>
   <main id="viewProtokolleService" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Service">
-    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=kartei4" title="Serviceprotokoll"></iframe>
+    <iframe id="serviceprotokollReactFrame" class="sp-react-frame" src="serviceprotokoll-react/index.html?v=prior1" title="Serviceprotokoll"></iframe>
     <div id="serviceprotokollLegacyHost" class="sp-v2-legacy-host" hidden aria-hidden="true">
     <div class="card sp-v2-card">
       <div class="sp-v2-topbar">
