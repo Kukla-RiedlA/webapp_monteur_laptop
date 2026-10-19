@@ -168,6 +168,25 @@ describe('job-parameter-uploads cache', () => {
     assert.equal(listed2[0].is_backup, false);
   });
 
+  it('zeigt CSV und PDF aus dem Auftragsordner', () => {
+    const buf = Buffer.from('name;value;unit;comment\nA;1;;\n', 'utf8');
+    const dir = path.join(root, 'Parameter');
+    fs.mkdirSync(dir, { recursive: true });
+    const csv = path.join(dir, 'FN12186.csv');
+    const pdf = path.join(dir, 'FN12186.pdf');
+    fs.writeFileSync(csv, buf);
+    fs.writeFileSync(pdf, Buffer.from('%PDF-1.4'));
+    const listed = listMergedJobUploads(db, {
+      local_job_id: 4,
+      paramDirs: [{ dir: dir, fab: '12186' }],
+    });
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].csv_path, csv);
+    assert.equal(listed[0].pdf_path, pdf);
+    assert.equal(listed[0].has_pdf, true);
+    assert.equal(listed[0].folder_path, dir);
+  });
+
   it('löscht Cache-Zeile und Datei', () => {
     const buf = Buffer.from('x', 'utf8');
     const sha = sha256Buffer(buf);

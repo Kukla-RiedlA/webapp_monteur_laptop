@@ -187,6 +187,33 @@ describe('monteur-montage-paths lazy mkdir', () => {
       ),
       true,
     );
+    assert.equal(
+      shouldPullManifestFile(
+        'Dokumente_Monteur/10066_Knauf/Montage/2026-05-12_Knauf_UK_Riedl/Protokolle/Montage_Bericht_de.pdf',
+        'explicit',
+        new Map(),
+        [],
+      ),
+      true,
+    );
+    assert.equal(
+      shouldPullManifestFile(
+        'Dokumente_Monteur/10066_Knauf/Montage/2026-05-12_Knauf_UK_Riedl/Parameter/liste.csv',
+        'explicit',
+        new Map(),
+        [],
+      ),
+      true,
+    );
+    assert.equal(
+      shouldPullManifestFile(
+        'Dokumente_Monteur/10066_Knauf/Montage/2026-05-12_Knauf_UK_Riedl/TED/plan.pdf',
+        'explicit',
+        new Map(),
+        [],
+      ),
+      false,
+    );
   });
 
   it('Bereichs-FN-Fotos werden auf den kanonischen FN-Ordner gemappt', () => {

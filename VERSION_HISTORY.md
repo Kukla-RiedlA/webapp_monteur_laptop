@@ -4,6 +4,12 @@ Kurzfassung der wesentlichen Änderungen je Version. Format der Versionsnummer w
 
 ---
 
+## V 2.007.069
+- **Zwei Laptops:** Sobald ein Gerät online ist, gleichen sich Protokolle und Parameter eines Auftrags per Prüfsumme ab. Ein fachlicher Konflikt bleibt stehen, bis einer der beiden Stände ausdrücklich behalten wird.
+- **Bedienung:** Speichern, Datei-Abgleich und Netz laufen auf einer eigenen Spur. Die Maske wartet nicht auf den Server.
+- **Profinet:** Steuerzeichen in Stationsnamen und Adressen werden vor Anzeige und Speichern entfernt.
+- **Auftrag:** Neuer Auftrag bleibt lokal anlegbar. Der Server setzt den Status selbst auf angelegt.
+
 ## V 2.007.064
 - **VNC:** Die Verbindung zur Waagen-Elektronik bleibt stehen (8-Bit-Farbe). Der Mauszeiger bleibt über dem Bild sichtbar.
 - **VNC:** Rechtsklick öffnet das Fenster im Vordergrund.

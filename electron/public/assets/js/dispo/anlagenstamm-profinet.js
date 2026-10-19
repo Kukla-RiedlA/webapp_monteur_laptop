@@ -11,6 +11,14 @@
       .replace(/"/g, '&quot;');
   }
 
+  function cleanText(value) {
+    return String(value == null ? '' : value)
+      .replace(/\u0000/g, '')
+      .replace(/\uFFFD/g, '')
+      .replace(/[\u0001-\u001F\u007F]/g, '')
+      .trim();
+  }
+
   function currentFab() {
     var input = document.getElementById('formFab');
     if (input && String(input.value || '').trim()) return String(input.value).trim();
@@ -66,7 +74,7 @@
   }
 
   function nodeLabel(row) {
-    var name = row && (row.station_name || row.name) ? (row.station_name || row.name) : '';
+    var name = cleanText(row && (row.station_name || row.name) ? (row.station_name || row.name) : '');
     var ip = row && row.ip_address ? row.ip_address : '';
     var mac = row && row.mac ? row.mac : '';
     return [name || mac || 'Teilnehmer', ip].filter(Boolean).join('\n');
@@ -146,11 +154,11 @@
     rows.forEach(function (row) {
       html += '<tr data-mac="' + esc(row.mac) + '">';
       html += '<td>' + esc(row.mac) + '</td>';
-      html += '<td>' + esc(row.station_name || '') + '</td>';
+      html += '<td>' + esc(cleanText(row.station_name)) + '</td>';
       html += '<td>' + esc(row.ip_address || '') + '</td>';
       html += '<td>' + esc(row.subnet_mask || '') + '</td>';
       html += '<td>' + esc(row.gateway || '') + '</td>';
-      html += '<td>' + esc(row.vendor || '') + '</td>';
+      html += '<td>' + esc(cleanText(row.vendor)) + '</td>';
       html += '</tr>';
     });
     html += '</tbody></table></div>';
@@ -219,7 +227,7 @@
       + '<h2 style="margin-top:0">Soll-Werte</h2>'
       + '<p class="muted">Scan, Blinken, Taufen und Umtaufen nur in KUKpit unter Tools → Profinet, und nur mit Npcap. Download: <a href="' + DOWNLOAD_URL + '" target="_blank" rel="noopener">npcap.com</a></p>'
       + '<div class="form-group"><label>MAC</label><input name="mac" required value="' + esc(row.mac || '') + '"></div>'
-      + '<div class="form-group"><label>Stationsname</label><input name="station_name" value="' + esc(row.station_name || '') + '"></div>'
+      + '<div class="form-group"><label>Stationsname</label><input name="station_name" value="' + esc(cleanText(row.station_name)) + '"></div>'
       + '<div class="form-group"><label>IP</label><input name="ip_address" value="' + esc(row.ip_address || '') + '"></div>'
       + '<div class="form-group"><label>Maske</label><input name="subnet_mask" value="' + esc(row.subnet_mask || '') + '"></div>'
       + '<div class="form-group"><label>Gateway</label><input name="gateway" value="' + esc(row.gateway || '') + '"></div>'
@@ -235,12 +243,12 @@
       var form = ev.target;
       var next = {
         mac: String(form.mac.value || '').trim().toLowerCase(),
-        station_name: String(form.station_name.value || '').trim(),
+        station_name: cleanText(form.station_name.value),
         ip_address: String(form.ip_address.value || '').trim(),
         subnet_mask: String(form.subnet_mask.value || '').trim(),
         gateway: String(form.gateway.value || '').trim(),
-        vendor: row.vendor || '',
-        last_seen_name: row.last_seen_name || '',
+        vendor: cleanText(row.vendor || ''),
+        last_seen_name: cleanText(row.last_seen_name || ''),
         last_seen_ip: row.last_seen_ip || '',
         last_written_at: row.last_written_at || '',
       };

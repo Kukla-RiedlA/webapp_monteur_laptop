@@ -99,10 +99,10 @@ function createJobLocal(db, technicianId, body, helpers) {
     throw Object.assign(new Error('Ungültiger job_type.'), { status: 400 });
   }
 
-  let status = str(payload.status) || 'angelegt';
-  if (['angelegt', 'zugeteilt', 'in_arbeit'].indexOf(status) < 0) status = 'angelegt';
+  // Status nicht vom Client: Dispo-/Server-Regeln (mit Techniker → zugeteilt).
+  let status = 'angelegt';
 
-  const required = Math.max(1, parseInt(payload.required_technicians, 10) || 1);
+  const required = Math.min(99, Math.max(1, parseInt(payload.required_technicians, 10) || 1));
   const dateNotFixed = Number(payload.date_not_fixed) === 1 ? 1 : 0;
   const entryPermit = Number(payload.entry_permit_required) === 1 ? 1 : 0;
   const description = payload.description != null ? String(payload.description) : null;
@@ -253,7 +253,6 @@ function createJobLocal(db, technicianId, body, helpers) {
   const pushPayload = {
     client_create_token: token,
     job_type: type,
-    status,
     required_technicians: required,
     entry_permit_required: entryPermit,
     date_not_fixed: dateNotFixed,

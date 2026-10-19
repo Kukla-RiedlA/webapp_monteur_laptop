@@ -454,8 +454,8 @@ describe('pullJsonDraft Last-Write-Wins (simuliertes Dispo)', () => {
       store: { byFab: { FN1: { bemerkungen: 'online-alt', updated_at: '2026-08-20T10:00:00Z' } } },
     });
     assert.equal(result.ok, true);
-    assert.equal(result.local_newer, true);
-    assert.equal(result.skipped, true);
+    assert.equal(result.conflict, true);
+    assert.equal(result.kept_local, true);
     const local = readLocalDraftFile(filePath(basename));
     assert.equal(local.payload.byFab.FN1.bemerkungen, 'offline-neu');
   });
@@ -584,7 +584,8 @@ describe('pullJsonDraft Last-Write-Wins (simuliertes Dispo)', () => {
       store: { byFab: { K: { v: 'remote-ohne-ts' } } },
     });
     assert.equal(result.ok, true);
-    assert.equal(result.skipped, true);
+    assert.equal(result.conflict, true);
+    assert.equal(result.kept_local, true);
     const local = readLocalDraftFile(p);
     assert.equal(local.payload.byFab.K.v, 'unsicher-lokal');
   });

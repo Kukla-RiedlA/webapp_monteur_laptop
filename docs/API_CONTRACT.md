@@ -171,7 +171,7 @@ Gleiche Basis-URL wie die Dispo. Authentifizierung wie bisher: Monteur mit `tech
 
 | Endpunkt | Methode | Kurzbeschreibung |
 |----------|---------|------------------|
-| `dispo/api/job_project_files_list.php` | GET | `job_id`, `technician_id`, optional `path` (relativ zum Projektordner). **`Dokumente_Monteur`:** physische Uploads ∪ ELEKTRO-Mount (`$FILESERVER_ELEKTRO_PROJEKTE_NEU_ROOT`), ohne Kopie. **`Dokumente_Anlage`:** physische Dateien ∪ Zentral-Anlagen (`FILESERVER_BASE_PATH` / Anlagen), ohne Kopie. |
+| `dispo/api/job_project_files_list.php` | GET | `job_id`, `technician_id`, optional `path` (relativ zum Projektordner), optional `with_sha=1` (nur dann `sha256` je Datei, für den Laptop-Abgleich von `Protokolle/` und `Parameter/`). **`Dokumente_Monteur`:** physische Uploads ∪ ELEKTRO-Mount (`$FILESERVER_ELEKTRO_PROJEKTE_NEU_ROOT`), ohne Kopie. **`Dokumente_Anlage`:** physische Dateien ∪ Zentral-Anlagen (`FILESERVER_BASE_PATH` / Anlagen), ohne Kopie. Unbekannte Felder darf der Handy-Client ignorieren. |
 | `dispo/api/job_project_file_download.php` | GET | `job_id`, `technician_id`, `path` – Datei aus Projektordner; unter `Dokumente_Monteur` bzw. `Dokumente_Anlage` zuerst physische Datei, sonst Stream vom Mount bzw. Zentral-Anlagen-Pfad. |
 | `dispo/api/job_project_refresh.php` | POST JSON | `job_id`, `technician_id`, optional `include_bilder` (wird ignoriert) – stellt nur die Standard-Unterordner sicher; **kein** Kopieren vom Fileserver. |
 | `dispo/api/job_project_file_delete.php` | POST form | `job_id`, `technician_id`, `path` – nur **physische** Dateien; reine ELEKTRO- oder Zentral-Anlagen-Quelle → 403. |
@@ -225,6 +225,10 @@ Plattform-Übersicht: [`docs/MULTI_DEVICE_LAPTOP_SYNC.md`](../../docs/MULTI_DEVI
 **Laptop-Gateway (Ergänzungen):**
 - `device_id` in `userData` / Sync-Bodies; Sync-Zyklus **Push → Pull → File-Reconcile**.
 - `GET /api/sync_status` liefert u. a. `device_id`, `peer_count`, `conflicts[]`, `jobs_pending_local_cleanup[]`.
+- `POST /api/protokolle/align` — Hintergrund-Abgleich eines Auftrags (Entwürfe, dann `Protokolle/` und `Parameter/` per sha256, danach Push ohne offene Konflikte). Antwort `{ ok, offline, updated, conflicts }`.
+- `GET /api/protokolle/kunden-dokumentation` wartet diesen Abgleich ab und liefert `conflicts` plus `offline`.
+- `POST /api/dienstreise/finish_and_cleanup` antwortet **409** `code: conflict`, solange ein blockierender Konflikt offen ist.
+- `POST /api/multi_device/conflicts/resolve` JSON `{ id, choice: "local"|"remote" }`. Ack löscht blockierende Zeilen nicht.
 - `POST /api/dienstreise/delete_local_copy` — manuelles „Lokale Kopie löschen“ nach Finish/Release auf anderem Gerät.
 - `POST /api/device_bootstrap` — Speicherschätzung + voller physischer Pull für `in_arbeit`-Jobs.
 

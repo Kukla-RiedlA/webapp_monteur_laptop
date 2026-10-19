@@ -1,7 +1,7 @@
 'use strict';
 
 const { parseFtpTarget, assertRemoteFileName, publicFtpError } = require('./validate');
-const { listFtpDirectory, downloadFtpFiles } = require('./client');
+const { listFtpDirectory, downloadFtpFiles, deleteFtpFiles } = require('./client');
 const { isParameterListBuffer } = require('./classify');
 const { listLocalDirectory, saveLocalFile } = require('./local-dir');
 
@@ -83,8 +83,11 @@ function registerFtpRoutes(app, deps) {
               kind: 'parameterliste',
               destination: 'anlagenstamm',
               fab: assigned && assigned.fab_used != null ? String(assigned.fab_used) : '',
-              saved_path: assigned && assigned.savedCsv ? assigned.savedCsv : '',
+              saved_path: assigned && assigned.csv_path ? assigned.csv_path : (assigned && assigned.savedCsv ? assigned.savedCsv : ''),
               saved_pdf: assigned && assigned.savedPdf ? assigned.savedPdf : '',
+              csv_path: assigned && assigned.csv_path ? assigned.csv_path : '',
+              pdf_path: assigned && assigned.pdf_path ? assigned.pdf_path : '',
+              pdf_error: assigned && assigned.pdf_error ? assigned.pdf_error : '',
               error: assigned && assigned.ok ? undefined : (assigned && assigned.error) || 'Zuordnung fehlgeschlagen',
             });
             continue;
@@ -110,6 +113,29 @@ function registerFtpRoutes(app, deps) {
           files.push({ name: item.name, ok: false, error: publicFtpError(fileErr) });
         }
       }
+      res.json({ ok: true, path: target.remotePath, files });
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: publicFtpError(err),
+        code: (err && err.code) || 'ftp_failed',
+      });
+    }
+  });
+
+  app.post('/api/ftp/delete', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const target = parseFtpTarget(body);
+      const rawNames = Array.isArray(body.names) ? body.names : [];
+      if (!rawNames.length) {
+        return res.status(400).json({ ok: false, error: 'Keine Dateien ausgewählt.' });
+      }
+      if (rawNames.length > MAX_FILES) {
+        return res.status(400).json({ ok: false, error: 'Zu viele Dateien auf einmal.' });
+      }
+      const names = rawNames.map((name) => assertRemoteFileName(name));
+      const files = await deleteFtpFiles(target, names);
       res.json({ ok: true, path: target.remotePath, files });
     } catch (err) {
       res.status(400).json({

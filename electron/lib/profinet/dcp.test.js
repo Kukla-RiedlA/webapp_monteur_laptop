@@ -71,6 +71,64 @@ test('Set-Frame schreibt den Namen unicast und nicht an die Multicast-Adresse', 
   assert.ok(frame.includes(Buffer.from('neue-waage')));
 });
 
+test('Identify-Name mit BlockInfo hat keine führenden Nullbytes', () => {
+  const name = Buffer.concat([Buffer.from([0x00, 0x00]), Buffer.from('waage1', 'latin1'), Buffer.from([0x00])]);
+  const vendor = Buffer.concat([Buffer.from([0x00, 0x00]), Buffer.from('Siemens', 'latin1')]);
+  const blocks = Buffer.concat([
+    block(2, 2, name),
+    block(2, 1, vendor),
+  ]);
+  const head = Buffer.alloc(12);
+  head.writeUInt16BE(0xfeff, 0);
+  head[2] = 5;
+  head[3] = 1;
+  head.writeUInt32BE(3, 4);
+  head.writeUInt16BE(blocks.length, 10);
+  const eth = Buffer.alloc(14);
+  eth.writeUInt16BE(dcp.ETHERTYPE, 12);
+  const parsed = dcp.parseIdentifyResponse(Buffer.concat([eth, head, blocks]));
+  assert.equal(parsed.station_name, 'waage1');
+  assert.equal(parsed.vendor, 'Siemens');
+  assert.equal(parsed.station_name.includes('\0'), false);
+});
+
+test('Stationsname lehnt Sonderzeichen ab', () => {
+  assert.equal(dcp.stationNameError('neue-waage'), '');
+  assert.match(dcp.stationNameError('Wäge-1'), /Sonderzeichen/);
+  assert.match(dcp.stationNameError(''), /fehlt/);
+});
+
+test('DCP-Rahmen sind mindestens 60 Byte', () => {
+  assert.ok(dcp.buildIdentifyAll(SRC, 1).length >= 60);
+  assert.ok(dcp.buildSetName(SRC, DST, 'a', 2).length >= 60);
+  assert.ok(dcp.buildSignal(SRC, DST, 3).length >= 60);
+  const combined = dcp.buildCombinedSet(SRC, DST, 4, {
+    name: 'waage1',
+    ip: '10.0.0.5',
+    mask: '255.255.255.0',
+    gateway: '10.0.0.1',
+  });
+  assert.ok(combined.length >= 60);
+  assert.ok(combined.includes(Buffer.from('waage1')));
+});
+
+test('Set-Antwort mit BlockError 6 wird als Ablehnung gelesen', () => {
+  const body = Buffer.from([0x02, 0x02, 0x00, 0x01, 0x06, 0x00]);
+  const head = Buffer.alloc(12);
+  head.writeUInt16BE(0xfefc, 0);
+  head[2] = 4;
+  head[3] = 1;
+  head.writeUInt32BE(9, 4);
+  head.writeUInt16BE(body.length, 10);
+  const eth = Buffer.alloc(14);
+  dcp.parseMac(DST).copy(eth, 6);
+  eth.writeUInt16BE(dcp.ETHERTYPE, 12);
+  const parsed = dcp.parseSetResponse(Buffer.concat([eth, head, body]));
+  assert.equal(parsed.xid, 9);
+  assert.equal(parsed.errors.length, 1);
+  assert.match(parsed.errors[0], /Betrieb/);
+});
+
 test('PDPortDataReal-Fixture ergibt zwei Knoten und eine Kante', () => {
   const fixture = dcp.buildPdPortFixture([
     { mac: '00:1b:1b:aa:bb:cc', port: 'port-001', name: 'switch1' },

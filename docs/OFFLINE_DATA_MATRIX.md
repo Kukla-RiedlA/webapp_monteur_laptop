@@ -63,15 +63,17 @@ Legende:
 
 Speicherort Zwischenstände: **kanonisch SQLite `protocol_drafts` / `protocol_draft_meta`** (Laptop) und MariaDB `monteur_protocol_drafts` (Dispo), **eine JSON-Zeile je Auftrag + Art + FN**. Während `in_arbeit` überschreibbar; sobald der Auftrag **erledigt** ist, `frozen=1` (unveränderbares Versionsarchiv). PDFs bleiben Dateien im Dienstreise-Ordner. Flache `Dokumente_Monteur/*.json` nur noch Legacy-Import. Upload beim Abschluss / `dienstreise_push` überspringt Draft-JSON-Namen.
 
+Zwei Laptops: der explicit-Pull lässt Montage-Arbeitsdateien lokal, holt aber `Montage/<Auftrag>/Protokolle/` und `.../Parameter/` immer. TED und PROJEKTE-NEU bleiben draußen. Der Abgleich vergleicht sha256, nicht die Änderungszeit. Eine PDF wird nicht aus dem Entwurf neu gerendert; sie kommt als Datei vom Laptop, der sie gespeichert hat. Fehlt sie nach dem Abgleich, entsteht sie beim nächsten Speichern.
+
 | Protokoll | Lokale Ablage | Sync In | Sync Out | Offline lesen (Formular) | Offline schreiben | Multi-Device |
 |-----------|--------------|---------|----------|---------------------------|-------------------|--------------|
 | **Montagebericht** | SQLite `protocol_drafts` (Kind `montagebericht`, je FN; ohne Datei) + PDF/DOCX lokal | Draft-GET + optional Anreicherung | Draft-POST bei Save (Server-Revision) | Ja | Ja: Daten + PDF lokal; **Kunden-Signatur online** (GAP-008) | Ja (`montagebericht_draft`) |
 | **Serviceprotokoll** | SQLite `protocol_drafts` (`byFab` je FN) | Draft-GET | Draft-POST bei Save | Ja | Ja: Daten + **PDF lokal** (`protocol_pdf.js`) | Ja (`serviceprotokoll_draft`) |
-| **Parameterlisten** | CSV + PDF im Ordner | — | Ingest optional (kein Outbox) | Ja | Ja lokal; Ingest queued fehlt — GAP-015 | Teilweise (Datei-Manifest) |
+| **Parameterlisten** | CSV + PDF im Ordner | Datei-Pull `Protokolle/` und `Parameter/` per sha256 | Datei-Push plus `pending_changes` `parameter_ingest` (Zugangsdaten erst beim Flush) | Ja | Ja lokal; Ingest wird nachgeholt — GAP-015 geschlossen | Ja, gleicher Auftrag auf zwei Laptops |
 | **Kontrollwiegungen** | SQLite `protocol_drafts` (`kontrollwiegung`) | Draft-GET | Draft-POST / `pending_changes` | Ja | Ja lokal + PDF lokal | Ja (`kontrollwiegungsprotokoll_draft`) |
 | **Schleppkette** | SQLite `protocol_drafts` (`schleppkette`) | Draft-GET | Draft-POST | Ja | Ja lokal + PDF lokal | Ja (`schleppkettenprotokoll_draft`) |
 | **Prüfzertifikat** | SQLite `protocol_drafts` (`pruefzertifikat`) | Draft-GET | Draft-POST | Ja | Ja lokal + PDF lokal | Ja (`pruefzertifikat_draft`) |
-| **Inbetriebnahme** | — | — | — | Nein (Platzhalter) | Nein (nicht implementiert) | — |
+| **Inbetriebnahme** | SQLite `protocol_drafts` wie Serviceprotokoll | Draft-GET, im Hintergrund beim Öffnen | Draft-POST | Ja | Ja lokal + PDF lokal | Ja, gleicher Abgleich wie Serviceprotokoll |
 | **Arbeitsnachweis (Beleg, nicht Protokoll)** | SQLite `documents` + `document_arbeitsnachweis` + `document_items` (Laptop); PWA IndexedDB `arbeitsnachweis_drafts` je `job:{id}` | Mobile `arbeitsnachweis.php?action=draft` (je Techniker+Auftrag) bzw. `get/list` | `POST` Dispo `action=save` (Autosave Laptop+PWA); Laptop zusätzlich `POST /api/arbeitsnachweis` + `pending_changes` / `signature` / `pdf_upload` | Ja | Ja (Pull: vollerer lokaler Stand gewinnt; Queue sendet aktuelle SQLite, nicht stale Dead-Letter) | Ja (`local_uuid`, ein Beleg je Techniker+Auftrag) |
 
 **Badge / Verbindung:** `offline`-Event setzt Badge sofort auf Offline; State `degraded` zeigt „Sync-Probleme“ (nicht „Online“); während Sync Badge-Text **Sync…**. Verdächtiger leerer Jobs-Pull → `pull_warnings` + `degraded`, lokale Aufträge bleiben.

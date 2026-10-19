@@ -24,6 +24,34 @@
       .replace(/"/g, '&quot;');
   }
 
+  function cleanText(value) {
+    return String(value == null ? '' : value)
+      .replace(/\u0000/g, '')
+      .replace(/\uFFFD/g, '')
+      .replace(/[\u0001-\u001F\u007F]/g, '')
+      .trim();
+  }
+
+  function stationNameError(raw) {
+    var name = cleanText(raw).toLowerCase();
+    if (!name) return 'Stationsname fehlt.';
+    if (name.length > 240) return 'Stationsname ist zu lang (max. 240 Zeichen).';
+    if (!/^[a-z0-9.-]+$/.test(name)) {
+      return 'Stationsname darf nur a–z, 0–9, Punkt und Bindestrich enthalten. Umlaute und andere Sonderzeichen nimmt das Gerät nicht an.';
+    }
+    if (name.charAt(0) === '.' || name.charAt(name.length - 1) === '.' || name.indexOf('..') >= 0) {
+      return 'Stationsname darf nicht mit einem Punkt beginnen oder enden.';
+    }
+    var labels = name.split('.');
+    for (var i = 0; i < labels.length; i += 1) {
+      var label = labels[i];
+      if (!label || label.length > 63 || label.charAt(0) === '-' || label.charAt(label.length - 1) === '-') {
+        return 'Jeder Namensteil darf 1–63 Zeichen haben und nicht mit einem Bindestrich beginnen oder enden.';
+      }
+    }
+    return '';
+  }
+
   async function localApi(path, opts) {
     var tech = typeof window.getTechId === 'function' ? window.getTechId() : 0;
     var url = apiBase() + path + (path.indexOf('?') >= 0 ? '&' : '?') + (tech ? 'technician_id=' + tech : '');
@@ -115,7 +143,7 @@
   }
 
   function isUnbaptized(row) {
-    var name = String((row && row.station_name) || '').trim();
+    var name = cleanText(row && row.station_name);
     var ip = String((row && row.ip_address) || '').trim();
     return !name || !ip || ip === '0.0.0.0';
   }
@@ -130,11 +158,11 @@
     body.innerHTML = state.teilnehmer.map(function (row) {
       return '<tr data-mac="' + esc(row.mac) + '">'
         + '<td>' + esc(row.mac) + '</td>'
-        + '<td>' + esc(row.station_name || '') + '</td>'
+        + '<td>' + esc(cleanText(row.station_name)) + '</td>'
         + '<td>' + esc(row.ip_address || '') + '</td>'
         + '<td>' + esc(row.subnet_mask || '') + '</td>'
         + '<td>' + esc(row.gateway || '') + '</td>'
-        + '<td>' + esc(row.vendor || '') + '</td>'
+        + '<td>' + esc(cleanText(row.vendor)) + '</td>'
         + '<td><button type="button" class="btn btn-ghost" data-profinet-edit="1" data-mac="' + esc(row.mac) + '">Bearbeiten</button></td>'
         + '</tr>';
     }).join('');
@@ -187,9 +215,9 @@
     var nameInput = document.getElementById('profinetDlgName');
     if (nameInput) nameInput.focus();
     document.getElementById('profinetDlgMac').textContent = row.mac;
-    document.getElementById('profinetDlgIstName').textContent = row.station_name || '(leer)';
+    document.getElementById('profinetDlgIstName').textContent = cleanText(row.station_name) || '(leer)';
     document.getElementById('profinetDlgIstIp').textContent = row.ip_address || '0.0.0.0';
-    document.getElementById('profinetDlgName').value = row.station_name || '';
+    document.getElementById('profinetDlgName').value = cleanText(row.station_name);
     document.getElementById('profinetDlgIp').value = row.ip_address && row.ip_address !== '0.0.0.0' ? row.ip_address : '';
     document.getElementById('profinetDlgMask').value = row.subnet_mask && row.subnet_mask !== '0.0.0.0' ? row.subnet_mask : '255.255.255.0';
     document.getElementById('profinetDlgGw').value = row.gateway && row.gateway !== '0.0.0.0' ? row.gateway : '';
@@ -223,12 +251,13 @@
     if (!ready()) return;
     var row = findRow(state.selectedMac);
     if (!row) return;
-    var name = String(document.getElementById('profinetDlgName').value || '').trim().toLowerCase();
+    var name = cleanText(document.getElementById('profinetDlgName').value).toLowerCase();
     var ip = String(document.getElementById('profinetDlgIp').value || '').trim();
     var mask = String(document.getElementById('profinetDlgMask').value || '').trim();
     var gw = String(document.getElementById('profinetDlgGw').value || '').trim();
-    if (!name) {
-      window.alert('Stationsname fehlt.');
+    var nameError = stationNameError(name);
+    if (nameError) {
+      window.alert(nameError);
       return;
     }
     if (ip && !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
@@ -236,7 +265,7 @@
       return;
     }
     var verb = isUnbaptized(row) ? 'Taufen' : 'Umtaufen';
-    var text = verb + '?\n\nName: ' + (row.station_name || '(leer)') + ' → ' + name
+    var text = verb + '?\n\nName: ' + (cleanText(row.station_name) || '(leer)') + ' → ' + name
       + '\nIP: ' + (row.ip_address || '0.0.0.0') + ' → ' + (ip || '0.0.0.0');
     if (!window.confirm(text)) return;
     setStatus(verb + ' …');
@@ -244,7 +273,7 @@
       method: 'POST',
       body: Object.assign({ mac: row.mac, station_name: name, ip_address: ip, subnet_mask: mask, gateway: gw }, selectedAdapter()),
     });
-    setStatus(verb + ' gesendet. Bitte erneut scannen.');
+    setStatus(verb + ' vom Gerät bestätigt. Bitte erneut scannen.');
     closeDialog();
   }
 
@@ -257,7 +286,7 @@
       method: 'POST',
       body: Object.assign({ mac: row.mac }, selectedAdapter()),
     });
-    setStatus('Blink-Signal an ' + row.mac + ' gesendet.');
+    setStatus('Blinken von ' + row.mac + ' bestätigt.');
   }
 
   async function assign() {
@@ -271,7 +300,7 @@
       window.alert('Zuerst einen Teilnehmer wählen.');
       return;
     }
-    var name = String(document.getElementById('profinetDlgName').value || row.station_name || '').trim();
+    var name = cleanText(document.getElementById('profinetDlgName').value || row.station_name || '');
     var ip = String(document.getElementById('profinetDlgIp').value || row.ip_address || '').trim();
     var mask = String(document.getElementById('profinetDlgMask').value || row.subnet_mask || '').trim();
     var gw = String(document.getElementById('profinetDlgGw').value || row.gateway || '').trim();

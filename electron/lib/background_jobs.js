@@ -399,6 +399,11 @@ function createBackgroundJobService(db, save, hooks) {
           jobTimedOut,
         ]);
         bump(job.id, { status: 'completed', progress_phase: 'done', message: 'Fertig.', error: null });
+        const followKey = job.dedupe_key;
+        if (followKey && followUpKeys.has(followKey) && job.type === 'dienstreise_push') {
+          followUpKeys.delete(followKey);
+          enqueue(job.type, job.payload, followKey);
+        }
       } catch (e) {
         const aborted = ac.signal.aborted || (e && e.name === 'AbortError');
         const chkRow = db.prepare('SELECT checkpoint_json FROM background_jobs WHERE id = ?').get(job.id);
@@ -468,6 +473,8 @@ function createBackgroundJobService(db, save, hooks) {
     return row && row.id ? row.id : null;
   }
 
+  const followUpKeys = new Set();
+
   function enqueue(type, payload, dedupeKey) {
     if (!ALLOWED_TYPES.has(type)) {
       throw new Error('Unbekannter Job-Typ: ' + type);
@@ -477,6 +484,8 @@ function createBackgroundJobService(db, save, hooks) {
       const row = db.prepare('SELECT status FROM background_jobs WHERE id = ?').get(existingId);
       if (row && row.status === 'queued') {
         bump(existingId, { payload_json: JSON.stringify(payload || {}) });
+      } else if (row && row.status === 'running' && type === 'dienstreise_push' && dedupeKey) {
+        followUpKeys.add(dedupeKey);
       }
       setImmediate(() => {
         pump().catch(() => {});

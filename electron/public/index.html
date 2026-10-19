@@ -286,24 +286,62 @@
     }
     .fz-quick {
       display: flex;
-      flex-wrap: wrap;
-      gap: 0.45rem 0.65rem;
-      align-items: flex-end;
+      flex-direction: column;
+      gap: 0.65rem;
+      align-items: stretch;
       background: #fff;
       border: 1px solid #cfe8d1;
       border-radius: 8px;
-      padding: 0.5rem 0.65rem;
+      padding: 0.7rem 0.75rem 0.75rem;
     }
-    .fz-quick .form-group { margin: 0; }
-    .fz-quick input, .fz-quick select { min-width: 7.5rem; }
+    .fz-connect {
+      display: grid;
+      grid-template-columns: minmax(9rem, 1.4fr) minmax(8rem, 1fr) minmax(8rem, 1fr) 5.75rem auto;
+      gap: 0.55rem 0.7rem;
+      align-items: end;
+    }
+    .fz-jobline {
+      display: grid;
+      grid-template-columns: minmax(16rem, 28rem) minmax(0, 1fr);
+      gap: 0.55rem 1rem;
+      align-items: end;
+    }
+    .fz-quick .form-group { margin: 0; min-width: 0; }
+    .fz-quick .form-group label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin: 0 0 0.22rem;
+      color: #0c6a4d;
+    }
+    .fz-quick .form-group input,
+    .fz-quick .form-group select {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .fz-connect-btn {
+      display: flex;
+      align-items: flex-end;
+    }
+    .fz-connect-btn .btn { white-space: nowrap; }
     .fz-check {
       display: flex;
       align-items: center;
-      gap: 0.4rem;
-      margin: 0 0 0.35rem;
+      gap: 0.45rem;
+      margin: 0 0 0.4rem;
       font-size: 0.9rem;
+      line-height: 1.3;
     }
-    .fz-hint { margin: 0; flex: 1 1 16rem; font-size: 0.82rem; }
+    .fz-hint {
+      margin: 0;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+    @media (max-width: 900px) {
+      .fz-connect, .fz-jobline { grid-template-columns: 1fr 1fr; }
+      .fz-connect-btn, .fz-check { grid-column: 1 / -1; }
+    }
     .fz-panes {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -328,6 +366,16 @@
       padding: 0.35rem 0.65rem;
       border-bottom: 1px solid #cfe8d1;
     }
+    .fz-pane-head-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .fz-pane-head-row .btn {
+      padding: 0.2rem 0.55rem;
+      font-size: 0.82rem;
+    }
     .fz-path {
       display: flex;
       gap: 0.35rem;
@@ -341,7 +389,7 @@
       align-items: center;
       justify-content: center;
     }
-    .fz-table-wrap { overflow: auto; flex: 1; min-height: 220px; max-height: calc(100vh - 22rem); }
+    .fz-table-wrap { overflow: auto; flex: 1; min-height: 220px; max-height: calc(100vh - 26rem); }
     body.has-sticky-header .fz-table-wrap thead th,
     .fz-table-wrap thead th {
       position: sticky;
@@ -366,13 +414,13 @@
       border: 1px solid #cfe8d1;
       border-radius: 8px;
       min-height: 5.5rem;
-      max-height: 8.5rem;
+      max-height: 11rem;
       overflow: auto;
       padding: 0.4rem 0.65rem;
       font-family: Consolas, "Courier New", monospace;
       font-size: 0.8rem;
     }
-    .fz-log p { margin: 0.1rem 0; }
+    .fz-log p { margin: 0.1rem 0; white-space: pre-wrap; }
     .fz-log .is-err { color: #991b1b; }
     @media (max-width: 900px) {
       .fz-panes { grid-template-columns: 1fr; }
@@ -713,6 +761,72 @@
     .auftrag-neu-suggest li:focus { background: #eefaf5; }
     #viewAuftragNeu { display: none; }
     #viewAuftragNeu.active { display: block; }
+    #viewAuftragNeu .sp-v2-section { overflow: visible; }
+    #viewAuftragNeu .auftrag-neu-checks {
+      display: flex; justify-content: center; align-items: center; gap: 1.5rem;
+      flex-wrap: wrap; margin: 0.25rem 0 0.65rem; text-align: center;
+    }
+    #viewAuftragNeu .auftrag-neu-checks label {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      font-size: 0.92rem; font-weight: 500; cursor: pointer; margin: 0;
+    }
+    #viewAuftragNeu .auftrag-neu-date-wrap { max-width: 420px; margin: 0 auto; }
+    #viewAuftragNeu .auftrag-neu-date-btn {
+      width: 100%; min-height: 44px; text-align: center;
+      border: 1px solid #cfe8d1; border-radius: 8px; background: #fff;
+      color: var(--text, #1a1a1a); font-size: 1rem; font-weight: 600;
+      cursor: pointer; padding: 0.55rem 0.85rem;
+    }
+    #viewAuftragNeu .auftrag-neu-date-btn:hover { background: #eefaf5; border-color: #0e7b5a; }
+    #viewAuftragNeu .auftrag-neu-date-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    #viewAuftragNeu .auftrag-neu-date-btn.is-empty { font-weight: 500; color: var(--muted, #666); }
+    #viewAuftragNeu .an-neu-narrow-house { max-width: 5.5rem; }
+    #viewAuftragNeu .an-neu-narrow-zip { max-width: 8.5rem; }
+    #viewAuftragNeu .an-neu-narrow-country { max-width: 4.25rem; }
+    #viewAuftragNeu .an-neu-narrow-tech { max-width: 5rem; }
+    #viewAuftragNeu .auftrag-neu-assigned {
+      margin: 0.35rem 0 0.75rem; font-size: 0.9rem; color: var(--muted, #555);
+    }
+    .kukla-daterange-modal {
+      position: fixed; inset: 0; z-index: 2200; display: flex;
+      align-items: center; justify-content: center; padding: 16px;
+      pointer-events: none; opacity: 0; visibility: hidden;
+      transition: opacity 0.15s ease, visibility 0.15s;
+    }
+    .kukla-daterange-modal.is-open { pointer-events: auto; opacity: 1; visibility: visible; }
+    .kukla-daterange-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.35); cursor: pointer; }
+    .kukla-daterange-panel {
+      position: relative; z-index: 1; width: 100%; max-width: 380px;
+      background: #fff; color: #1a1a1a; border-radius: 12px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.18); border: 1px solid #cfe8d1;
+      padding: 14px 12px 12px; max-height: min(90vh, 560px); overflow: auto;
+    }
+    .kukla-daterange-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+    .kukla-daterange-header h3 { margin: 0; font-size: 1rem; font-weight: 600; flex: 1; text-align: center; }
+    .kukla-daterange-nav {
+      min-width: 40px; min-height: 40px; border-radius: 8px; border: 1px solid #cfe8d1;
+      background: #eefaf5; color: #0c6a4d; font-size: 1.25rem; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .kukla-daterange-weekdays {
+      display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px;
+      margin-bottom: 4px; font-size: 0.7rem; color: #666; text-align: center; font-weight: 600;
+    }
+    .kukla-daterange-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; user-select: none; }
+    .kukla-daterange-day {
+      aspect-ratio: 1; min-height: 36px; max-height: 48px; border: none; border-radius: 8px;
+      background: #f5f5f5; color: #1a1a1a; font-size: 0.9rem; font-weight: 500;
+      cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0;
+    }
+    .kukla-daterange-day--muted { color: #999; background: #f0f0f0; font-size: 0.8rem; }
+    .kukla-daterange-day--inrange { background: #e7f2ee; color: #0c6a4d; }
+    .kukla-daterange-day--start,
+    .kukla-daterange-day--end { background: #0e7b5a !important; color: #fff !important; font-weight: 700; }
+    .kukla-daterange-hint { font-size: 0.8rem; color: #666; margin: 10px 0 8px; line-height: 1.35; }
+    .kukla-daterange-actions { display: flex; gap: 8px; margin-top: 4px; }
+    .kukla-daterange-actions .btn { flex: 1; padding: 10px 12px; border-radius: 8px; font-weight: 600; cursor: pointer; border: 1px solid #cfe8d1; }
+    .kukla-daterange-actions .btn--secondary { background: #f5f5f5; }
+    .kukla-daterange-actions .btn--primary { background: #0e7b5a; color: #fff; border-color: #0e7b5a; }
     .rams-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
     .rams-list li { background: var(--card); border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.75rem; }
     .rams-list .rams-line { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
@@ -977,6 +1091,13 @@
       margin-top: 0.15rem;
       font-size: 0.78rem;
       color: var(--muted, #4b5563);
+    }
+    .parameterlisten-file-path {
+      margin-top: 0.12rem;
+      font-size: 0.78rem;
+      line-height: 1.35;
+      color: var(--muted, #4b5563);
+      word-break: break-all;
     }
     .parameterlisten-file-actions {
       display: flex;
@@ -2601,6 +2722,8 @@
   <div id="multiDeviceBanner" class="multi-device-banner" hidden role="status" aria-live="polite">
     <div id="multiDeviceBannerText" class="multi-device-banner-text"></div>
     <div class="multi-device-banner-actions">
+      <button type="button" class="btn btn-ghost" id="btnConflictKeepLocal" hidden>Diesen Laptop behalten</button>
+      <button type="button" class="btn btn-ghost" id="btnConflictTakeRemote" hidden>Anderen Laptop übernehmen</button>
       <button type="button" class="btn btn-ghost" id="btnMultiDeviceDeleteLocal" hidden>Lokale Kopie löschen</button>
       <button type="button" class="btn btn-ghost" id="btnMultiDeviceDismiss" title="Ausblenden">×</button>
     </div>
@@ -2835,8 +2958,8 @@
       </div>
       <p id="auftragNeuHint" class="muted" style="margin:0 0 0.75rem 0;font-size:0.9rem" aria-live="polite"></p>
       <form id="auftragNeuForm" class="sp-v2-form" autocomplete="off">
-        <section class="sp-v2-section">
-          <div class="sp-v2-section-head"><span class="sp-v2-num">1</span><h2>Kunde</h2></div>
+        <section class="sp-v2-section" aria-labelledby="anNeuSec1Title">
+          <header class="sp-v2-section-head" id="anNeuSec1Title"><span class="sp-v2-num">1</span> Kunde</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field" style="position:relative;grid-column:1/-1">
@@ -2846,10 +2969,10 @@
                 <ul id="anNeuCustomerSuggest" class="auftrag-neu-suggest" hidden></ul>
               </div>
               <div class="sp-v2-field"><label for="anNeuCustStreet">Straße</label><input type="text" id="anNeuCustStreet" name="customer_street"></div>
-              <div class="sp-v2-field"><label for="anNeuCustHouse">Hausnr.</label><input type="text" id="anNeuCustHouse" name="customer_house_number"></div>
-              <div class="sp-v2-field"><label for="anNeuCustZip">PLZ</label><input type="text" id="anNeuCustZip" name="customer_zip"></div>
+              <div class="sp-v2-field an-neu-narrow-house"><label for="anNeuCustHouse">Hausnr.</label><input type="text" id="anNeuCustHouse" name="customer_house_number" maxlength="10" size="5" inputmode="text" autocomplete="off"></div>
+              <div class="sp-v2-field an-neu-narrow-zip"><label for="anNeuCustZip">PLZ</label><input type="text" id="anNeuCustZip" name="customer_zip" maxlength="12" size="10" inputmode="text" autocomplete="postal-code"></div>
               <div class="sp-v2-field"><label for="anNeuCustCity">Ort</label><input type="text" id="anNeuCustCity" name="customer_city"></div>
-              <div class="sp-v2-field"><label for="anNeuCustCountry">Land</label><input type="text" id="anNeuCustCountry" name="customer_country" value="AT"></div>
+              <div class="sp-v2-field an-neu-narrow-country"><label for="anNeuCustCountry">Land</label><input type="text" id="anNeuCustCountry" name="customer_country" value="AT" maxlength="2" size="3" autocomplete="country" title="ISO-Ländercode, z. B. AT"></div>
               <div class="sp-v2-field"><label for="anNeuCustPhone">Telefon</label><input type="text" id="anNeuCustPhone" name="customer_phone"></div>
               <div class="sp-v2-field"><label for="anNeuCustEmail">E-Mail</label><input type="email" id="anNeuCustEmail" name="customer_email"></div>
               <div class="sp-v2-field"><label for="anNeuCustEx1">Adresszusatz 1</label><input type="text" id="anNeuCustEx1" name="customer_address_extra_1"></div>
@@ -2857,8 +2980,8 @@
             </div>
           </div>
         </section>
-        <section class="sp-v2-section">
-          <div class="sp-v2-section-head"><span class="sp-v2-num">2</span><h2>Auftrag</h2></div>
+        <section class="sp-v2-section" aria-labelledby="anNeuSec2Title">
+          <header class="sp-v2-section-head" id="anNeuSec2Title"><span class="sp-v2-num">2</span> Auftrag &amp; Zeitraum</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
@@ -2872,49 +2995,43 @@
                   <option value="Inbetriebnahme">Inbetriebnahme</option>
                 </select>
               </div>
-              <div class="sp-v2-field">
-                <label for="anNeuStatus">Status</label>
-                <select id="anNeuStatus" name="status">
-                  <option value="angelegt">angelegt</option>
-                  <option value="zugeteilt" selected>zugeteilt</option>
-                </select>
-              </div>
-              <div class="sp-v2-field">
+              <div class="sp-v2-field an-neu-narrow-tech">
                 <label for="anNeuRequired">Techniker Anz.</label>
-                <input type="number" id="anNeuRequired" name="required_technicians" min="1" value="1">
+                <input type="number" id="anNeuRequired" name="required_technicians" min="1" max="99" step="1" value="1" inputmode="numeric">
               </div>
-              <div class="sp-v2-field">
-                <label><input type="checkbox" id="anNeuDateNotFixed" name="date_not_fixed" value="1"> Datum nicht fix</label>
-              </div>
-              <div class="sp-v2-field">
-                <label><input type="checkbox" id="anNeuNoDate" name="no_date" value="1"> Ohne Datum</label>
-              </div>
-              <div class="sp-v2-field"><label for="anNeuStart">Von</label><input type="datetime-local" id="anNeuStart" name="start_datetime"></div>
-              <div class="sp-v2-field"><label for="anNeuEnd">Bis</label><input type="datetime-local" id="anNeuEnd" name="end_datetime"></div>
-              <div class="sp-v2-field">
-                <label><input type="checkbox" id="anNeuEntryPermit" name="entry_permit_required" value="1"> Visum/ETA/ESTA erforderlich</label>
-              </div>
+            </div>
+            <p class="auftrag-neu-assigned" id="anNeuAssignedHint">Zugewiesen: Sie (Auftragsersteller)</p>
+            <div class="auftrag-neu-checks">
+              <label><input type="checkbox" id="anNeuNoDate" name="no_date" value="1"> Ohne Datum</label>
+              <label><input type="checkbox" id="anNeuDateNotFixed" name="date_not_fixed" value="1"> Datum nicht fix</label>
+              <label><input type="checkbox" id="anNeuEntryPermit" name="entry_permit_required" value="1"> Visum/ETA/ESTA</label>
+            </div>
+            <div class="auftrag-neu-date-wrap">
+              <label for="anNeuDateBtn">Zeitraum (Von–Bis)</label>
+              <button type="button" class="auftrag-neu-date-btn is-empty" id="anNeuDateBtn" aria-haspopup="dialog" aria-expanded="false">Zeitraum wählen …</button>
+              <input type="hidden" id="anNeuStart" name="start_datetime" value="">
+              <input type="hidden" id="anNeuEnd" name="end_datetime" value="">
             </div>
           </div>
         </section>
-        <section class="sp-v2-section">
-          <div class="sp-v2-section-head"><span class="sp-v2-num">3</span><h2>Einsatzadresse</h2></div>
+        <section class="sp-v2-section" aria-labelledby="anNeuSec3Title">
+          <header class="sp-v2-section-head" id="anNeuSec3Title"><span class="sp-v2-num">3</span> Einsatzadresse</header>
           <div class="sp-v2-section-body">
+            <p class="sp-v2-hint" style="margin-top:0"><button type="button" class="btn btn-ghost" id="btnAuftragNeuCopyCustomerAddr">Kundenadresse übernehmen</button></p>
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field" style="grid-column:1/-1"><label for="anNeuSiteEndkunde">Endkunde / Firma vor Ort</label><input type="text" id="anNeuSiteEndkunde" name="endkunde"></div>
               <div class="sp-v2-field"><label for="anNeuSiteStreet">Straße</label><input type="text" id="anNeuSiteStreet" name="street"></div>
-              <div class="sp-v2-field"><label for="anNeuSiteHouse">Hausnr.</label><input type="text" id="anNeuSiteHouse" name="house_number"></div>
-              <div class="sp-v2-field"><label for="anNeuSiteZip">PLZ</label><input type="text" id="anNeuSiteZip" name="zip"></div>
+              <div class="sp-v2-field an-neu-narrow-house"><label for="anNeuSiteHouse">Hausnr.</label><input type="text" id="anNeuSiteHouse" name="house_number" maxlength="10" size="5" inputmode="text" autocomplete="off"></div>
+              <div class="sp-v2-field an-neu-narrow-zip"><label for="anNeuSiteZip">PLZ</label><input type="text" id="anNeuSiteZip" name="zip" maxlength="12" size="10" inputmode="text" autocomplete="postal-code"></div>
               <div class="sp-v2-field"><label for="anNeuSiteCity">Ort</label><input type="text" id="anNeuSiteCity" name="city"></div>
-              <div class="sp-v2-field"><label for="anNeuSiteCountry">Land</label><input type="text" id="anNeuSiteCountry" name="country" value="AT"></div>
+              <div class="sp-v2-field an-neu-narrow-country"><label for="anNeuSiteCountry">Land</label><input type="text" id="anNeuSiteCountry" name="country" value="AT" maxlength="2" size="3" autocomplete="country" title="ISO-Ländercode, z. B. AT"></div>
               <div class="sp-v2-field"><label for="anNeuSiteEx1">Adresszusatz 1</label><input type="text" id="anNeuSiteEx1" name="address_extra_1"></div>
               <div class="sp-v2-field"><label for="anNeuSiteEx2">Adresszusatz 2</label><input type="text" id="anNeuSiteEx2" name="address_extra_2"></div>
             </div>
-            <p class="sp-v2-hint"><button type="button" class="btn btn-ghost" id="btnAuftragNeuCopyCustomerAddr">Kundenadresse übernehmen</button></p>
           </div>
         </section>
-        <section class="sp-v2-section">
-          <div class="sp-v2-section-head"><span class="sp-v2-num">4</span><h2>Baustellen-Ansprechpartner</h2></div>
+        <section class="sp-v2-section" aria-labelledby="anNeuSec4Title">
+          <header class="sp-v2-section-head" id="anNeuSec4Title"><span class="sp-v2-num">4</span> Baustellen-Ansprechpartner</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field"><label for="anNeuContactFirst">Vorname</label><input type="text" id="anNeuContactFirst"></div>
@@ -2927,28 +3044,28 @@
             </div>
           </div>
         </section>
-        <section class="sp-v2-section">
-          <div class="sp-v2-section-head"><span class="sp-v2-num">5</span><h2>Hotel</h2></div>
+        <section class="sp-v2-section" aria-labelledby="anNeuSec5Title">
+          <header class="sp-v2-section-head" id="anNeuSec5Title"><span class="sp-v2-num">5</span> Hotel</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field" style="grid-column:1/-1"><label for="anNeuHotelName">Hotel / Name</label><input type="text" id="anNeuHotelName"></div>
               <div class="sp-v2-field"><label for="anNeuHotelStreet">Straße</label><input type="text" id="anNeuHotelStreet"></div>
-              <div class="sp-v2-field"><label for="anNeuHotelHouse">Hausnr.</label><input type="text" id="anNeuHotelHouse"></div>
-              <div class="sp-v2-field"><label for="anNeuHotelZip">PLZ</label><input type="text" id="anNeuHotelZip"></div>
+              <div class="sp-v2-field an-neu-narrow-house"><label for="anNeuHotelHouse">Hausnr.</label><input type="text" id="anNeuHotelHouse" maxlength="10" size="5" inputmode="text" autocomplete="off"></div>
+              <div class="sp-v2-field an-neu-narrow-zip"><label for="anNeuHotelZip">PLZ</label><input type="text" id="anNeuHotelZip" maxlength="12" size="10" inputmode="text" autocomplete="postal-code"></div>
               <div class="sp-v2-field"><label for="anNeuHotelCity">Ort</label><input type="text" id="anNeuHotelCity"></div>
-              <div class="sp-v2-field"><label for="anNeuHotelCountry">Land</label><input type="text" id="anNeuHotelCountry"></div>
+              <div class="sp-v2-field an-neu-narrow-country"><label for="anNeuHotelCountry">Land</label><input type="text" id="anNeuHotelCountry" maxlength="2" size="3" autocomplete="country" title="ISO-Ländercode"></div>
               <div class="sp-v2-field"><label for="anNeuHotelPhone">Telefon</label><input type="text" id="anNeuHotelPhone"></div>
               <div class="sp-v2-field"><label for="anNeuHotelEmail">E-Mail</label><input type="email" id="anNeuHotelEmail"></div>
               <div class="sp-v2-field"><label for="anNeuHotelWeb">Website</label><input type="text" id="anNeuHotelWeb"></div>
             </div>
           </div>
         </section>
-        <section class="sp-v2-section">
-          <div class="sp-v2-section-head"><span class="sp-v2-num">6</span><h2>Anlage &amp; Bemerkungen</h2></div>
+        <section class="sp-v2-section" aria-labelledby="anNeuSec6Title">
+          <header class="sp-v2-section-head" id="anNeuSec6Title"><span class="sp-v2-num">6</span> Anlage &amp; Bemerkungen</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-field">
-              <label for="anNeuFab">Fabrikationsnummern (eine pro Zeile oder Semikolon)</label>
-              <textarea id="anNeuFab" rows="3" placeholder="z. B. 12345&#10;67890"></textarea>
+              <label for="anNeuFab">Fabrikationsnummern</label>
+              <textarea id="anNeuFab" rows="3" placeholder="Eine FN pro Zeile oder mit Semikolon"></textarea>
             </div>
             <div class="sp-v2-field">
               <label for="anNeuDescription">Bemerkungen</label>
@@ -2957,6 +3074,25 @@
           </div>
         </section>
       </form>
+    </div>
+    <div id="anNeuDateModal" class="kukla-daterange-modal" aria-hidden="true" role="presentation">
+      <div class="kukla-daterange-backdrop" id="anNeuDateBackdrop"></div>
+      <div class="kukla-daterange-panel" id="anNeuDatePanel" role="dialog" aria-modal="true" aria-labelledby="anNeuDateTitle" tabindex="-1">
+        <div class="kukla-daterange-header">
+          <button type="button" class="kukla-daterange-nav" id="anNeuDatePrev" aria-label="Vorheriger Monat">‹</button>
+          <h3 id="anNeuDateTitle">Monat</h3>
+          <button type="button" class="kukla-daterange-nav" id="anNeuDateNext" aria-label="Nächster Monat">›</button>
+        </div>
+        <div class="kukla-daterange-weekdays" aria-hidden="true">
+          <span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span>
+        </div>
+        <div class="kukla-daterange-grid" id="anNeuDateGrid"></div>
+        <p class="kukla-daterange-hint" id="anNeuDateHint">Mit der Maus von–bis ziehen, oder zwei Tage anklicken.</p>
+        <div class="kukla-daterange-actions">
+          <button type="button" class="btn btn--secondary" id="anNeuDateCancel">Abbrechen</button>
+          <button type="button" class="btn btn--primary" id="anNeuDateOk">Übernehmen</button>
+        </div>
+      </div>
     </div>
   </main>
   <main id="viewProtokolleArbeitsnachweis" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Arbeitsnachweis">
@@ -3360,7 +3496,7 @@
           <section class="sp-v2-section" aria-labelledby="plV2SecJob">
             <header class="sp-v2-section-head" id="plV2SecJob"><span class="sp-v2-num">2</span> In diesem Auftrag</header>
             <div class="sp-v2-section-body">
-              <p class="muted" style="margin:0 0 0.5rem;font-size:0.85rem">Hochgeladene Parameterlisten inkl. Backup nach Freigabe und erneuter Annahme.</p>
+              <p class="muted" style="margin:0 0 0.5rem;font-size:0.85rem">CSV und PDF dieses Auftrags. Liegen lokal im Auftragsordner und bleiben ohne Dispo sichtbar.</p>
               <div id="parameterlistenJobUploads" class="parameterlisten-lists">
                 <p class="parameterlisten-empty">Bitte einen Auftrag wählen.</p>
               </div>
@@ -3534,33 +3670,39 @@
       <div class="card" data-tools-panel="ftp">
         <div class="fz-client">
           <div class="fz-quick">
-            <div class="form-group">
-              <label for="ftpHost">Server</label>
-              <input id="ftpHost" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="10.0.1.20">
+            <div class="fz-connect">
+              <div class="form-group">
+                <label for="ftpHost">Server</label>
+                <input id="ftpHost" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="10.0.1.20">
+              </div>
+              <div class="form-group">
+                <label for="ftpUser">Benutzer</label>
+                <input id="ftpUser" type="text" autocomplete="off" spellcheck="false" value="kukla">
+              </div>
+              <div class="form-group">
+                <label for="ftpPassword">Passwort</label>
+                <input id="ftpPassword" type="password" autocomplete="new-password" value="kukla">
+              </div>
+              <div class="form-group">
+                <label for="ftpPort">Port</label>
+                <input id="ftpPort" type="number" min="1" max="65535" value="21">
+              </div>
+              <div class="fz-connect-btn">
+                <button type="button" class="btn btn-primary" id="btnFtpConnect">Verbinden</button>
+              </div>
             </div>
-            <div class="form-group">
-              <label for="ftpUser">Benutzer</label>
-              <input id="ftpUser" type="text" autocomplete="off" spellcheck="false" value="kukla">
+            <div class="fz-jobline">
+              <div class="form-group">
+                <label for="ftpJob">Auftrag</label>
+                <select id="ftpJob" class="dienstreise-select">
+                  <option value="">– Bitte wählen –</option>
+                </select>
+              </div>
+              <label class="fz-check" for="ftpSaveAnlagenstamm">
+                <input id="ftpSaveAnlagenstamm" type="checkbox" checked>
+                Parameterliste im Anlagenstamm speichern
+              </label>
             </div>
-            <div class="form-group">
-              <label for="ftpPassword">Passwort</label>
-              <input id="ftpPassword" type="password" autocomplete="new-password" value="kukla">
-            </div>
-            <div class="form-group">
-              <label for="ftpPort">Port</label>
-              <input id="ftpPort" type="number" min="1" max="65535" value="21">
-            </div>
-            <button type="button" class="btn btn-primary" id="btnFtpConnect">Verbinden</button>
-            <div class="form-group">
-              <label for="ftpJob">Auftrag</label>
-              <select id="ftpJob" class="dienstreise-select">
-                <option value="">– Bitte wählen –</option>
-              </select>
-            </div>
-            <label class="fz-check" for="ftpSaveAnlagenstamm">
-              <input id="ftpSaveAnlagenstamm" type="checkbox" checked>
-              Parameterliste im Anlagenstamm speichern
-            </label>
             <p id="ftpSaveHint" class="muted fz-hint"></p>
           </div>
           <div class="fz-panes">
@@ -3589,7 +3731,10 @@
               <button type="button" class="btn btn-primary" id="btnFtpDownload" title="Ausgewählte Dateien herunterladen">◀</button>
             </div>
             <section class="fz-pane" aria-label="Server">
-              <div class="fz-pane-head">Server</div>
+              <div class="fz-pane-head fz-pane-head-row">
+                <span>Server</span>
+                <button type="button" class="btn btn-ghost" id="btnFtpDelete" title="Markierte Dateien auf dem Server löschen">Löschen</button>
+              </div>
               <div class="fz-path">
                 <button type="button" class="btn btn-ghost" id="btnFtpUp" title="Ordner hoch">↑</button>
                 <input id="ftpRemotePath" type="text" spellcheck="false" autocomplete="off" value="/" readonly>
@@ -5194,13 +5339,13 @@
   <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="js/dokumente-view.js?v=3"></script>
-  <script src="js/auftrag-neu.js?v=1"></script>
+  <script src="js/auftrag-neu.js?v=3"></script>
   <script src="app.js?v=vnc-popout"></script>
-  <script src="js/profinet-tool.js?v=20261015-dialog"></script>
+  <script src="js/profinet-tool.js?v=20261019-name"></script>
   <script src="js/tools-vnc.js?v=20261014"></script>
-  <script src="js/ftp-tool.js?v=20261014b"></script>
+  <script src="js/ftp-tool.js?v=20261019b"></script>
   <script src="js/csv-log-viewer.js?v=20261014"></script>
-  <script src="assets/js/dispo/anlagenstamm-profinet.js?v=20261015-topo"></script>
+  <script src="assets/js/dispo/anlagenstamm-profinet.js?v=20261019-name"></script>
   <script src="js/hinweis-lamp.js?v=20260902files"></script>
   <script src="js/probe-copilot-text.js"></script>
   <script src="js/serviceprotokoll-react-bridge.js?v=langshare2"></script>

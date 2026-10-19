@@ -67,6 +67,22 @@ async function listFtpDirectory(target) {
   });
 }
 
+async function deleteFtpFiles(target, names) {
+  return withFtpClient(target, async (client) => {
+    await client.cd(target.remotePath);
+    const out = [];
+    for (const name of names) {
+      try {
+        await client.remove(name);
+        out.push({ name, ok: true });
+      } catch (err) {
+        out.push({ name, ok: false, error: publicFtpError(err) });
+      }
+    }
+    return out;
+  });
+}
+
 async function downloadFtpFiles(target, names) {
   return withFtpClient(target, async (client) => {
     await client.cd(target.remotePath);
@@ -87,4 +103,5 @@ module.exports = {
   MAX_BYTES,
   listFtpDirectory,
   downloadFtpFiles,
+  deleteFtpFiles,
 };

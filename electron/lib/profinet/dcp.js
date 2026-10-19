@@ -77,7 +77,62 @@ function buildEthernet(dstMac, srcMac, payload) {
   parseMac(dstMac).copy(eth, 0);
   parseMac(srcMac).copy(eth, 6);
   eth.writeUInt16BE(ETHERTYPE, 12);
-  return Buffer.concat([eth, payload]);
+  const frame = Buffer.concat([eth, payload]);
+  // Npcap verwirft Rahmen unter 60 Byte. Kurze Set-/Blink-Rahmen kamen deshalb nie am Gerät an.
+  if (frame.length >= 60) return frame;
+  return Buffer.concat([frame, Buffer.alloc(60 - frame.length)]);
+}
+
+function looksPrintableName(buf) {
+  let seen = 0;
+  for (let i = 0; i < buf.length; i += 1) {
+    const byte = buf[i];
+    if (byte === 0) continue;
+    seen += 1;
+    if (byte < 0x20 || byte > 0x7e) return false;
+  }
+  return seen > 0;
+}
+
+/** NameOfStation und Hersteller: BlockInfo (2 Byte, meist 0x0000) steht vor dem Text. */
+function decodeVisible(data) {
+  let buf = Buffer.isBuffer(data) ? data : Buffer.from(data || []);
+  if (buf.length >= 2 && buf[0] === 0 && buf[1] <= 1 && looksPrintableName(buf.subarray(2))) {
+    buf = buf.subarray(2);
+  }
+  return buf.toString('latin1').replace(/[\u0000-\u001F\u007F]/g, '').trim();
+}
+
+function stationNameError(raw) {
+  const name = String(raw || '').trim().toLowerCase();
+  if (!name) return 'Stationsname fehlt.';
+  if (name.length > 240) return 'Stationsname ist zu lang (max. 240 Zeichen).';
+  if (!/^[a-z0-9.-]+$/.test(name)) {
+    return 'Stationsname darf nur a–z, 0–9, Punkt und Bindestrich enthalten. Umlaute und andere Sonderzeichen nimmt das Gerät nicht an.';
+  }
+  if (name.startsWith('.') || name.endsWith('.') || name.includes('..')) {
+    return 'Stationsname darf nicht mit einem Punkt beginnen oder enden.';
+  }
+  const labels = name.split('.');
+  for (let i = 0; i < labels.length; i += 1) {
+    const label = labels[i];
+    if (!label || label.length > 63 || label.startsWith('-') || label.endsWith('-')) {
+      return 'Jeder Namensteil darf 1–63 Zeichen haben und nicht mit einem Bindestrich beginnen oder enden.';
+    }
+  }
+  return '';
+}
+
+function blockErrorText(code) {
+  switch (code) {
+    case 1: return 'Das Gerät unterstützt dieses Feld nicht.';
+    case 2: return 'Das Gerät unterstützt diesen Wert nicht.';
+    case 3: return 'Der Wert wurde nicht übernommen.';
+    case 4: return 'Das Gerät hat den Namen oder die IP abgelehnt.';
+    case 5: return 'Setzen ist an diesem Gerät gerade nicht möglich.';
+    case 6: return 'Das Gerät ist in Betrieb. Taufen geht erst, wenn der IO-Controller die Verbindung gelöst hat.';
+    default: return 'Das Gerät hat die Anfrage abgelehnt (Fehler ' + code + ').';
+  }
 }
 
 function buildIdentifyAll(srcMac, xid) {
@@ -87,25 +142,48 @@ function buildIdentifyAll(srcMac, xid) {
   return buildEthernet(MULTICAST_MAC, srcMac, dcp);
 }
 
-function buildSetName(srcMac, dstMac, name, xid) {
-  const nameBuf = Buffer.from(String(name || ''), 'utf8');
+function pushNameBlock(blocks, name) {
+  const nameBuf = Buffer.from(String(name || ''), 'latin1');
   const data = Buffer.alloc(2 + nameBuf.length);
   data.writeUInt16BE(1, 0);
   nameBuf.copy(data, 2);
-  const blocks = [];
   writeBlock(blocks, 2, 2, data);
-  const dcp = buildDcp(FRAME_GETSET_REQ, SERVICE_SET, SERVICE_REQUEST, xid, 0, blocks);
-  return buildEthernet(dstMac, srcMac, dcp);
 }
 
-function buildSetIp(srcMac, dstMac, ip, mask, gateway, xid) {
+function pushIpBlock(blocks, ip, mask, gateway) {
   const data = Buffer.alloc(14);
   data.writeUInt16BE(1, 0);
   ipv4ToBuf(ip).copy(data, 2);
   ipv4ToBuf(mask || '255.255.255.0').copy(data, 6);
   ipv4ToBuf(gateway || '0.0.0.0').copy(data, 10);
-  const blocks = [];
   writeBlock(blocks, 1, 2, data);
+}
+
+function buildSetName(srcMac, dstMac, name, xid) {
+  const blocks = [];
+  pushNameBlock(blocks, name);
+  const dcp = buildDcp(FRAME_GETSET_REQ, SERVICE_SET, SERVICE_REQUEST, xid, 0, blocks);
+  return buildEthernet(dstMac, srcMac, dcp);
+}
+
+function buildSetIp(srcMac, dstMac, ip, mask, gateway, xid) {
+  const blocks = [];
+  pushIpBlock(blocks, ip, mask, gateway);
+  const dcp = buildDcp(FRAME_GETSET_REQ, SERVICE_SET, SERVICE_REQUEST, xid, 0, blocks);
+  return buildEthernet(dstMac, srcMac, dcp);
+}
+
+function buildCombinedSet(srcMac, dstMac, xid, opts) {
+  const blocks = [];
+  const name = opts && opts.name ? String(opts.name) : '';
+  const ip = opts && opts.ip ? String(opts.ip) : '';
+  if (name) pushNameBlock(blocks, name);
+  if (ip) pushIpBlock(blocks, ip, opts.mask, opts.gateway);
+  if (!blocks.length) {
+    const err = new Error('Name oder IP fehlt.');
+    err.code = 'empty_set';
+    throw err;
+  }
   const dcp = buildDcp(FRAME_GETSET_REQ, SERVICE_SET, SERVICE_REQUEST, xid, 0, blocks);
   return buildEthernet(dstMac, srcMac, dcp);
 }
@@ -159,9 +237,9 @@ function parseIdentifyResponse(frame) {
   };
   blocks.forEach((b) => {
     if (b.option === 2 && b.suboption === 2) {
-      device.station_name = b.data.toString('utf8').replace(/\0+$/g, '');
+      device.station_name = decodeVisible(b.data);
     } else if (b.option === 2 && b.suboption === 1) {
-      device.vendor = b.data.toString('utf8').replace(/\0+$/g, '');
+      device.vendor = decodeVisible(b.data);
     } else if (b.option === 1 && b.suboption === 2 && b.data.length >= 12) {
       const off = b.data.length >= 14 ? 2 : 0;
       if (b.data.length >= off + 12) {
@@ -172,6 +250,34 @@ function parseIdentifyResponse(frame) {
     }
   });
   return device;
+}
+
+function parseSetResponse(frame) {
+  if (!frame || frame.length < 26) return null;
+  if (frame.readUInt16BE(12) !== ETHERTYPE) return null;
+  const dcp = 14;
+  const frameId = frame.readUInt16BE(dcp);
+  if (frameId !== FRAME_GETSET_RES) return null;
+  const serviceId = frame[dcp + 2];
+  if (serviceId !== SERVICE_SET) return null;
+  const serviceType = frame[dcp + 3];
+  const xid = frame.readUInt32BE(dcp + 4);
+  const dataLen = frame.readUInt16BE(dcp + 10);
+  const blocks = readBlocks(frame, dcp + 12, Math.min(frame.length, dcp + 12 + dataLen));
+  const errors = [];
+  if (serviceType === 5) errors.push('Das Gerät unterstützt Taufen oder Blinken nicht.');
+  blocks.forEach((block) => {
+    let code = null;
+    if (block.option === 5 && block.suboption === 4 && block.data.length >= 3) code = block.data[2];
+    else if (block.data.length === 1) code = block.data[0];
+    if (code) errors.push(blockErrorText(code));
+  });
+  return {
+    mac: formatMac(frame, 6),
+    xid,
+    service_type: serviceType,
+    errors,
+  };
 }
 
 function isUnbaptized(device) {
@@ -259,8 +365,12 @@ module.exports = {
   buildIdentifyAll,
   buildSetName,
   buildSetIp,
+  buildCombinedSet,
   buildSignal,
   parseIdentifyResponse,
+  parseSetResponse,
+  decodeVisible,
+  stationNameError,
   isUnbaptized,
   parsePdPortDataReal,
   buildPdPortFixture,

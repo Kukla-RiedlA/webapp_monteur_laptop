@@ -288,10 +288,18 @@
 
   function resultLine(file) {
     if (!file.ok) return file.name + ': ' + (file.error || 'fehlgeschlagen');
+    var lines = [];
     if (file.destination === 'anlagenstamm') {
-      return file.name + ' → Anlagenstamm FN ' + (file.fab || '?') + ' (Protokolle und Kundendokumentation)';
+      lines.push(file.name + ' → Auftrag, FN ' + (file.fab || '?'));
+    } else {
+      lines.push(file.name + ' → lokaler Ordner');
     }
-    return file.name + ' → ' + (file.saved_path || state.localPath || 'lokaler Ordner');
+    var csvPath = file.csv_path || file.saved_path || '';
+    var pdfPath = file.pdf_path || '';
+    if (csvPath) lines.push('CSV: ' + csvPath);
+    if (pdfPath) lines.push('PDF: ' + pdfPath);
+    else if (file.pdf_error) lines.push('PDF nicht erstellt: ' + file.pdf_error);
+    return lines.join('\n');
   }
 
   async function downloadNames(names) {
@@ -328,6 +336,29 @@
     if (state.localPath) {
       try { await openLocal(state.localPath); } catch (_) { /* Liste bleibt */ }
     }
+  }
+
+  async function deleteNames(names) {
+    if (!names.length) {
+      log('Keine Datei auf dem Server ausgewählt.', true);
+      return;
+    }
+    var preview = names.slice(0, 8).join('\n');
+    if (names.length > 8) preview += '\n… und ' + (names.length - 8) + ' weitere';
+    var question = 'Diese Dateien auf dem FTP-Server löschen?\n\n' + preview;
+    if (typeof window.confirm === 'function' && !window.confirm(question)) {
+      log('Löschen abgebrochen');
+      return;
+    }
+    log('Löschen auf dem Server: ' + names.length + ' Datei(en)');
+    var data = await localPost('/api/ftp/delete', connectionBody({ names: names }));
+    var failed = 0;
+    (data.files || []).forEach(function (file) {
+      if (!file.ok) failed += 1;
+      log((file.ok ? file.name + ' gelöscht' : file.name + ': ' + (file.error || 'Löschen fehlgeschlagen')), !file.ok);
+    });
+    if (!failed) log('Löschen fertig');
+    await openRemote(state.remotePath || '/');
   }
 
   function bindTable(body, kind) {
@@ -388,6 +419,7 @@
     var localUp = el('btnFtpLocalUp');
     var browse = el('btnFtpLocalBrowse');
     var downloadBtn = el('btnFtpDownload');
+    var deleteBtn = el('btnFtpDelete');
     var selectAll = el('ftpSelectAll');
     var saveBox = el('ftpSaveAnlagenstamm');
     if (connectBtn && !connectBtn.dataset.bound) {
@@ -444,6 +476,16 @@
         state.busy = true;
         downloadNames(selectedNames()).catch(function (err) {
           log(err && err.message ? err.message : 'Download fehlgeschlagen', true);
+        }).then(function () { state.busy = false; });
+      });
+    }
+    if (deleteBtn && !deleteBtn.dataset.bound) {
+      deleteBtn.dataset.bound = '1';
+      deleteBtn.addEventListener('click', function () {
+        if (state.busy) return;
+        state.busy = true;
+        deleteNames(selectedNames()).catch(function (err) {
+          log(err && err.message ? err.message : 'Löschen fehlgeschlagen', true);
         }).then(function () { state.busy = false; });
       });
     }

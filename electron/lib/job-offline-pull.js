@@ -206,6 +206,9 @@ function shouldPullManifestFile(relPath, pullMode, pathsByFab, fabMap) {
   if (slash < 0) return false;
   const fnFolder = tail.slice(0, slash);
   const inner = tail.slice(slash + 1);
+  // Protokoll-PDFs und Parameterlisten gehören auf jeden Laptop desselben Auftrags,
+  // auch wenn die Offline-Auswahl den restlichen Montage-Ordner lokal lässt.
+  if (/^Montage\/[^/]+\/(Protokolle|Parameter)(\/|$)/i.test(inner)) return true;
   // Montage-Arbeitsdateien lokal — außer PWA-Fotos unter …/Montage/…/Bilder/
   if (inner.startsWith('Montage/') && !/^Montage\/[^/]+\/Bilder(\/|$)/i.test(inner)) return false;
   if (isTedInnerPath(inner)) return false;

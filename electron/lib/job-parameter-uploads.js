@@ -249,6 +249,26 @@ function scanParameterDir(paramDir, fab) {
   return out;
 }
 
+function siblingPdfPath(filePath) {
+  if (!filePath) return '';
+  const pdf = pdfBasenameFor(filePath);
+  if (!pdf || pdf === filePath) return '';
+  return fileExists(pdf) ? pdf : '';
+}
+
+function attachLocalCopies(item) {
+  const row = item || {};
+  const csvJob = row.abs_path && fileExists(row.abs_path) ? row.abs_path : '';
+  const csvCache = row.cache_path && fileExists(row.cache_path) ? row.cache_path : '';
+  const csvPath = csvJob || csvCache;
+  const pdfPath = siblingPdfPath(csvJob) || siblingPdfPath(csvCache) || siblingPdfPath(row.abs_path) || siblingPdfPath(row.cache_path);
+  row.csv_path = csvPath;
+  row.pdf_path = pdfPath;
+  row.has_pdf = !!pdfPath;
+  row.folder_path = csvJob ? path.dirname(csvJob) : (pdfPath && csvJob === '' && row.abs_path ? path.dirname(row.abs_path) : (csvPath ? path.dirname(csvPath) : ''));
+  return row;
+}
+
 function listMergedJobUploads(db, opts) {
   const cacheRows = listUploadsForJob(db, opts);
   const folderFiles = [];
@@ -315,7 +335,7 @@ function listMergedJobUploads(db, opts) {
     });
   }
   out.sort((a, b) => String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || '')));
-  return sortParameterFilesByDisplayDesc(out.map((item) => decorateParameterListItem(item)));
+  return sortParameterFilesByDisplayDesc(out.map((item) => decorateParameterListItem(attachLocalCopies(item))));
 }
 
 function resolveUploadBytes(row) {
@@ -348,6 +368,12 @@ function restoreUploadsToJobFolder(db, opts) {
       fs.copyFileSync(row.cache_path, dest);
     } catch (_) {
       continue;
+    }
+    const pdfSrc = pdfBasenameFor(row.cache_path);
+    if (fileExists(pdfSrc)) {
+      try {
+        fs.copyFileSync(pdfSrc, pdfBasenameFor(dest));
+      } catch (_) {}
     }
     const rel = relFor ? relFor(row.fab, row.original_filename) : null;
     if (rel) {

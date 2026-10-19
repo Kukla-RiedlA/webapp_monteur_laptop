@@ -215,8 +215,20 @@ function rowHasDataImage(row) {
 function mergeFlatProtocolStores(localPayload, remotePayload) {
   const local = stripDraftMeta(localPayload || {});
   const remote = stripDraftMeta(remotePayload || {});
-  const out = Object.assign({}, remote, local);
+  const out = Object.assign({}, remote);
   delete out.byFab;
+  for (const key of Object.keys(local)) {
+    if (key === 'byFab' || key === 'fabBemerkungen') continue;
+    const lv = local[key];
+    const rv = remote[key];
+    const localEmpty = lv == null || (typeof lv === 'string' && lv.trim() === '');
+    const remoteFilled = rv != null && !(typeof rv === 'string' && rv.trim() === '');
+    if (localEmpty && remoteFilled) {
+      out[key] = rv;
+    } else if (lv !== undefined) {
+      out[key] = lv;
+    }
+  }
   ['grundDesEinsatzes_html', 'bemerkungen_html'].forEach((k) => {
     if (local[k] != null || remote[k] != null) {
       out[k] = pickHtmlPreferringImages(local[k], remote[k]);
@@ -360,25 +372,113 @@ function draftEntryTimestamp(entry) {
   return String(entry.updatedAt || entry.updated_at || entry.gespeichert_am || entry.server_updated_at || '').trim();
 }
 
-/** 0 = leerer Autosave-Stub, >0 = fachlicher Inhalt (z. B. Wiegungen). */
+const DRAFT_PREFILL_KEYS = new Set([
+  'customer',
+  'kunde',
+  'customer_name',
+  'kundenname',
+  'adresse',
+  'address',
+  'anschrift',
+  'datum',
+  'date',
+  'durchfuehrungsdatum',
+  'start',
+  'ende',
+  'fabrikationsnummer',
+  'fabrikationsnummern',
+  'fab',
+  'fn',
+  'pdf_rel',
+  'pdf_rels',
+  'last_pdf_rel',
+  'last_pdf_paths',
+  'last_pdf_abs',
+  'pdf_path',
+  'pdf_paths',
+  'languages',
+  'language',
+  'revision',
+  'updatedAt',
+  'updated_at',
+  'server_updated_at',
+  'gespeichert_am',
+  'schema_version',
+  'nextLocalId',
+  'id',
+  'nr',
+  'zeile',
+  'row',
+  'job_id',
+  'job_number',
+  'technician_id',
+  'technician_name',
+  'projekt',
+  'projektnummer',
+  'auftrag',
+  'auftragsnummer',
+]);
+
+function draftValueFilled(v) {
+  if (v == null) return false;
+  if (typeof v === 'number') return Number.isFinite(v);
+  if (typeof v === 'boolean') return v === true;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s || /^<p>\s*<\/p>$/i.test(s)) return false;
+    return true;
+  }
+  return false;
+}
+
+function scoreDraftObject(obj, depth) {
+  if (!obj || typeof obj !== 'object' || depth > 5) return 0;
+  let n = 0;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      if (item && typeof item === 'object') n += scoreDraftObject(item, depth + 1);
+      else if (draftValueFilled(item)) n += 1;
+    }
+    return n;
+  }
+  for (const key of Object.keys(obj)) {
+    if (DRAFT_PREFILL_KEYS.has(key)) continue;
+    const v = obj[key];
+    if (v && typeof v === 'object') n += scoreDraftObject(v, depth + 1);
+    else if (draftValueFilled(v)) n += 1;
+  }
+  return n;
+}
+
+/** 0 = leerer oder nur aus dem Auftrag vorbefüllter Stub, >0 = fachlicher Inhalt. */
 function draftEntryContentScore(entry) {
   if (!entry || typeof entry !== 'object') return 0;
   if (Array.isArray(entry.wiegungen)) {
     let n = 0;
     for (const row of entry.wiegungen) {
       if (!row || typeof row !== 'object') continue;
-      const filled = Object.keys(row).some((k) => {
-        if (k === 'id' || k === 'nr' || k === 'zeile' || k === 'row') return false;
-        const v = row[k];
-        if (v == null) return false;
-        if (typeof v === 'number') return Number.isFinite(v);
-        return String(v).trim() !== '';
-      });
-      if (filled) n += 1;
+      if (scoreDraftObject(row, 0) > 0) n += 1;
     }
     return n;
   }
-  return 1;
+  return scoreDraftObject(entry, 0);
+}
+
+/**
+ * same: gleicher oder leerer Inhalt.
+ * local/remote: nur eine Seite hat fachlichen Inhalt.
+ * conflict: beide Seiten sind gefüllt und unterschiedlich.
+ */
+function classifyDraftSides(localPayload, remotePayload) {
+  const local = localPayload && typeof localPayload === 'object' ? localPayload : {};
+  const remote = remotePayload && typeof remotePayload === 'object' ? remotePayload : {};
+  if (draftPayloadsEqual(local, remote)) return 'same';
+  const locScore = draftEntryContentScore(local);
+  const remScore = draftEntryContentScore(remote);
+  if (locScore === 0 && remScore === 0) return 'same';
+  if (locScore === 0 && remScore > 0) return 'remote';
+  if (remScore === 0 && locScore > 0) return 'local';
+  return 'conflict';
 }
 
 /**
@@ -393,6 +493,7 @@ function mergeByFabStores(localPayload, remotePayload, opts) {
   const remoteBy = remote.byFab && typeof remote.byFab === 'object' ? remote.byFab : {};
   const keys = new Set([...Object.keys(localBy), ...Object.keys(remoteBy)]);
   const byFab = {};
+  const conflicts = [];
   let usedBoth = false;
   for (const raw of keys) {
     const key = String(raw || '').trim();
@@ -400,24 +501,16 @@ function mergeByFabStores(localPayload, remotePayload, opts) {
     const loc = localBy[raw] || localBy[key];
     const rem = remoteBy[raw] || remoteBy[key];
     if (loc && rem && typeof loc === 'object' && typeof rem === 'object') {
-      if (preferLocal) {
+      const side = classifyDraftSides(loc, rem);
+      if (side === 'remote') {
+        byFab[key] = rem;
+      } else if (side === 'conflict' && !preferLocal) {
         byFab[key] = loc;
+        conflicts.push(key);
+      } else if (preferLocal && draftEntryContentScore(loc) === 0 && draftEntryContentScore(rem) > 0) {
+        byFab[key] = rem;
       } else {
-        const locScore = draftEntryContentScore(loc);
-        const remScore = draftEntryContentScore(rem);
-        if (locScore === 0 && remScore > 0) {
-          byFab[key] = rem;
-        } else if (remScore === 0 && locScore > 0) {
-          byFab[key] = loc;
-        } else {
-          const locMs = Date.parse(draftEntryTimestamp(loc)) || 0;
-          const remMs = Date.parse(draftEntryTimestamp(rem)) || 0;
-          if (locMs && remMs && remMs > locMs + 2000) {
-            byFab[key] = rem;
-          } else {
-            byFab[key] = loc;
-          }
-        }
+        byFab[key] = loc;
       }
       usedBoth = true;
     } else if (loc && typeof loc === 'object') {
@@ -437,7 +530,22 @@ function mergeByFabStores(localPayload, remotePayload, opts) {
   if (local.nextLocalId != null || remote.nextLocalId != null) {
     out.nextLocalId = Math.max(Number(local.nextLocalId) || 1, Number(remote.nextLocalId) || 1);
   }
-  return { payload: out, merged: usedBoth };
+  return { payload: out, merged: usedBoth, conflicts };
+}
+
+/** Konflikt-FN bleiben auf dem Server; die übrigen FN sind die Vereinigung. */
+function payloadForServerPush(mergedPayload, remotePayload, conflictKeys) {
+  const keys = Array.isArray(conflictKeys) ? conflictKeys.filter(Boolean) : [];
+  if (!keys.length) return mergedPayload;
+  const remote = remotePayload && typeof remotePayload === 'object' ? remotePayload : {};
+  const remoteBy = remote.byFab && typeof remote.byFab === 'object' ? remote.byFab : {};
+  const out = JSON.parse(JSON.stringify(mergedPayload && typeof mergedPayload === 'object' ? mergedPayload : {}));
+  if (!out.byFab || typeof out.byFab !== 'object') out.byFab = {};
+  for (const key of keys) {
+    if (remoteBy[key] && typeof remoteBy[key] === 'object') out.byFab[key] = remoteBy[key];
+    else delete out.byFab[key];
+  }
+  return out;
 }
 
 function writeConflictCopy(filePath, deviceId) {
@@ -533,6 +641,19 @@ function formatBytes(n) {
   return (v / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
+function decideSharedFile(opts) {
+  const o = opts || {};
+  const localSha = String(o.localSha || '');
+  const remoteSha = String(o.remoteSha || '');
+  if (!remoteSha && !localSha) return 'keep';
+  if (!localSha && remoteSha) return 'download';
+  if (!remoteSha) return 'keep';
+  if (localSha === remoteSha) return 'keep';
+  if (o.draftConflict) return 'conflict';
+  if (o.localUnchanged) return 'download';
+  return 'conflict';
+}
+
 module.exports = {
   MONTEUR_DRAFT_BASENAMES,
   DRAFT_JSON_ENDPOINTS,
@@ -555,6 +676,10 @@ module.exports = {
   isProtocolConflictCopyName,
   removeProtocolConflictCopies,
   draftEntryTimestamp,
+  draftEntryContentScore,
+  classifyDraftSides,
+  payloadForServerPush,
+  decideSharedFile,
   mergeByFabStores,
   sha256File,
   reconcileLocalTreeWithManifest,

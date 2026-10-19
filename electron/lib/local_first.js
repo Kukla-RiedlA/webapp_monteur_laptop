@@ -97,6 +97,7 @@ const HANDLED_PENDING_ENTITY_TYPES = [
   'schleppketten',
   'pruefzertifikat',
   'protocol_draft',
+  'parameter_ingest',
   'signature',
   'rams',
   'arbeitsnachweis',

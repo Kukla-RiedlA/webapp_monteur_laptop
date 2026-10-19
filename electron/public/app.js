@@ -7725,6 +7725,9 @@
         var response = pack.response;
         var data = pack.data;
         if (!response.ok || !data || data.ok === false) {
+          if (response.status === 409 && data && data.code === 'conflict') {
+            showProtocolConflictChoices(data.conflicts || []);
+          }
           throw new Error((data && data.error) || 'Fehler ' + response.status);
         }
         if (response.status !== 202) {
@@ -8430,6 +8433,132 @@
 
   var multiDeviceBannerDismissedKey = '';
   var multiDevicePendingCleanupJobId = null;
+  var multiDeviceConflictRows = [];
+  var protocolAlignTyped = false;
+  var protocolAlignReload = null;
+
+  document.addEventListener('input', function () {
+    protocolAlignTyped = true;
+  }, true);
+
+  function conflictDetail(row) {
+    if (!row) return {};
+    if (row.detail && typeof row.detail === 'object') return row.detail;
+    if (row.detail_json && typeof row.detail_json === 'object') return row.detail_json;
+    try {
+      return JSON.parse(row.detail_json || '{}');
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function conflictIsBlocking(row) {
+    var detail = conflictDetail(row);
+    if (detail.blocking === true) return true;
+    if (detail.kind === 'draft' || detail.kind === 'file') return true;
+    if (row && (row.kind === 'draft' || row.kind === 'file')) return true;
+    return false;
+  }
+
+  function conflictChoiceText(row) {
+    var detail = conflictDetail(row);
+    var name = detail.summary || (row && (row.summary || row.rel_path)) || 'Eintrag';
+    var fns = Array.isArray(detail.fns) && detail.fns.length ? ' (FN ' + detail.fns.join(', ') + ')' : '';
+    var when = detail.remote_at || (row && row.created_at) || '';
+    var kind = detail.kind === 'file' || (row && row.kind === 'file') ? 'Datei' : 'Protokoll';
+    return kind + ' ' + name + fns + (when ? ', Stand ' + when : '');
+  }
+
+  function showProtocolConflictChoices(rows) {
+    multiDeviceConflictRows = Array.isArray(rows) ? rows.filter(function (row) { return row && row.id; }) : [];
+    updateMultiDeviceUiFromSyncStatus({
+      conflicts: multiDeviceConflictRows,
+      jobs_pending_local_cleanup: [],
+    });
+  }
+
+  async function resolveShownProtocolConflict(choice) {
+    var row = multiDeviceConflictRows && multiDeviceConflictRows[0];
+    if (!row || !row.id) return;
+    var keepBtn = document.getElementById('btnConflictKeepLocal');
+    var remoteBtn = document.getElementById('btnConflictTakeRemote');
+    if (keepBtn) keepBtn.disabled = true;
+    if (remoteBtn) remoteBtn.disabled = true;
+    try {
+      var r = await fetch(API_BASE + '/api/multi_device/conflicts/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: row.id,
+          choice: choice,
+          technician_id: typeof getTechId === 'function' ? getTechId() : 0,
+          dispoBaseUrl: typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '',
+          dispoExternalUrl: typeof getDispoExternalUrl === 'function' ? getDispoExternalUrl() : '',
+          dispoInternalUrl: typeof getDispoInternalUrl === 'function' ? getDispoInternalUrl() : '',
+          dispoUsername: typeof getDispoUsername === 'function' ? getDispoUsername() : '',
+          dispoPassword: typeof getDispoPassword === 'function' ? getDispoPassword() : '',
+        }),
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) {
+        alert((data && data.error) || 'Konflikt konnte nicht gelöst werden.');
+        return;
+      }
+      multiDeviceConflictRows = multiDeviceConflictRows.slice(1);
+      if (multiDeviceConflictRows.length) {
+        showProtocolConflictChoices(multiDeviceConflictRows);
+      } else {
+        var banner = document.getElementById('multiDeviceBanner');
+        if (banner) banner.hidden = true;
+        if (typeof loadSettingsSyncStatus === 'function') {
+          loadSettingsSyncStatus().catch(function () {});
+        }
+      }
+      if (typeof protocolAlignReload === 'function') {
+        var reload = protocolAlignReload;
+        protocolAlignTyped = true;
+        Promise.resolve(reload()).catch(function () {});
+      }
+    } catch (e) {
+      alert(e && e.message ? e.message : 'Konflikt konnte nicht gelöst werden.');
+    } finally {
+      if (keepBtn) keepBtn.disabled = false;
+      if (remoteBtn) remoteBtn.disabled = false;
+    }
+  }
+
+  function startBackgroundProtocolAlign(jobId, reload) {
+    var id = parseInt(jobId, 10);
+    if (!id || startBackgroundProtocolAlign._reloading) return;
+    protocolAlignReload = typeof reload === 'function' ? reload : protocolAlignReload;
+    protocolAlignTyped = false;
+    fetch(API_BASE + '/api/protokolle/align', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job_id: id,
+        technician_id: typeof getTechId === 'function' ? getTechId() : 0,
+        dispoBaseUrl: typeof getDispoBaseUrl === 'function' ? getDispoBaseUrl() : '',
+        dispoExternalUrl: typeof getDispoExternalUrl === 'function' ? getDispoExternalUrl() : '',
+        dispoInternalUrl: typeof getDispoInternalUrl === 'function' ? getDispoInternalUrl() : '',
+        dispoUsername: typeof getDispoUsername === 'function' ? getDispoUsername() : '',
+        dispoPassword: typeof getDispoPassword === 'function' ? getDispoPassword() : '',
+      }),
+    })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) {
+        if (!data) return;
+        if (data.conflicts && data.conflicts.length) showProtocolConflictChoices(data.conflicts);
+        if (data.updated && !protocolAlignTyped && typeof reload === 'function') {
+          startBackgroundProtocolAlign._reloading = true;
+          protocolAlignTyped = true;
+          Promise.resolve(reload()).catch(function () {}).finally(function () {
+            startBackgroundProtocolAlign._reloading = false;
+          });
+        }
+      })
+      .catch(function () {});
+  }
 
   function updateMultiDeviceUiFromSyncStatus(st) {
     if (!st || typeof st !== 'object') return;
@@ -8443,6 +8572,8 @@
       st.peer_count != null && Number(st.peer_count) > 0
         ? 'Weitere Geräte online: ' + st.peer_count + '. '
         : '';
+    var keepBtn = document.getElementById('btnConflictKeepLocal');
+    var remoteBtn = document.getElementById('btnConflictTakeRemote');
     if (cleanup.length) {
       var item = cleanup[0];
       multiDevicePendingCleanupJobId = item.local_job_id;
@@ -8463,26 +8594,33 @@
         reasonLabel +
         '. Schreiben ist gesperrt. Lokale Kopie bei Bedarf manuell löschen.';
       if (btnDel) btnDel.hidden = false;
+      if (keepBtn) keepBtn.hidden = true;
+      if (remoteBtn) remoteBtn.hidden = true;
       banner.hidden = false;
       return;
     }
     if (conflicts.length) {
+      var blocking = conflicts.some(conflictIsBlocking);
       var ckey = 'conflict:' + conflicts[0].id;
-      if (multiDeviceBannerDismissedKey === ckey) {
+      if (!blocking && multiDeviceBannerDismissedKey === ckey) {
         banner.hidden = true;
         return;
       }
+      multiDeviceConflictRows = conflicts;
       multiDevicePendingCleanupJobId = null;
-      textEl.textContent =
-        peerHint +
-        'Sync-Konflikt: ' +
-        (conflicts[0].rel_path || 'Datei') +
-        ' — lokale Kopie als .conflict-* gesichert, Server-Stand übernommen.';
+      textEl.textContent = peerHint + (blocking
+        ? 'Abweichung zum anderen Laptop: ' + conflictChoiceText(conflicts[0]) + '. Bitte einen Stand wählen.'
+        : 'Sync-Hinweis: ' + (conflicts[0].rel_path || 'Datei') + '.');
       if (btnDel) btnDel.hidden = true;
+      if (keepBtn) keepBtn.hidden = !blocking;
+      if (remoteBtn) remoteBtn.hidden = !blocking;
       banner.hidden = false;
       return;
     }
     multiDevicePendingCleanupJobId = null;
+    multiDeviceConflictRows = [];
+    if (keepBtn) keepBtn.hidden = true;
+    if (remoteBtn) remoteBtn.hidden = true;
     if (peerHint) {
       textEl.textContent = peerHint.trim();
       if (btnDel) btnDel.hidden = true;
@@ -10305,16 +10443,28 @@
   var btnMultiDeviceDismiss = document.getElementById('btnMultiDeviceDismiss');
   if (btnMultiDeviceDismiss) {
     btnMultiDeviceDismiss.addEventListener('click', function () {
+      if (multiDeviceConflictRows && multiDeviceConflictRows.some(conflictIsBlocking)) return;
       var banner = document.getElementById('multiDeviceBanner');
       if (banner) banner.hidden = true;
       multiDeviceBannerDismissedKey =
         'dismiss:' + Date.now() + ':' + (multiDevicePendingCleanupJobId || '');
-      // Persistierten Konflikt-Banner aus DB entfernen
       fetch(API_BASE + '/api/multi_device/conflicts/ack', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       }).catch(function () {});
+    });
+  }
+  var btnConflictKeepLocal = document.getElementById('btnConflictKeepLocal');
+  if (btnConflictKeepLocal) {
+    btnConflictKeepLocal.addEventListener('click', function () {
+      resolveShownProtocolConflict('local');
+    });
+  }
+  var btnConflictTakeRemote = document.getElementById('btnConflictTakeRemote');
+  if (btnConflictTakeRemote) {
+    btnConflictTakeRemote.addEventListener('click', function () {
+      resolveShownProtocolConflict('remote');
     });
   }
 
@@ -18930,6 +19080,9 @@
           if (loadToken !== montageberichtJobLoadToken) return;
           montageberichtFormReady = true;
           if (montageberichtAutosave) montageberichtAutosave.markSaved();
+          startBackgroundProtocolAlign(id, function () {
+            if (jobSelect) jobSelect.dispatchEvent(new Event('change'));
+          });
         } catch (e) {
           if (loadToken !== montageberichtJobLoadToken) return;
           kopfdatenEl.innerHTML = '<span class="empty">Fehler: ' + escapeHtml(e.message) + '</span>';
@@ -20230,6 +20383,7 @@
             if (draft) kwDraftByFab[String(fab).trim()] = draft;
           });
         } catch (e) { /* gespeicherte Daten optional */ }
+        startBackgroundProtocolAlign(jobId);
       }
 
       async function applyJobSelection(jobId) {
@@ -21500,6 +21654,7 @@
           if (draft) skDraftByFab[String(fn).trim()] = draft;
         });
       } catch (_) { /* optional */ }
+      startBackgroundProtocolAlign(jobId);
     }
     async function loadJobWithAnlagenstammSk(jobId) {
       var baseUrl = getDispoBaseUrl();
@@ -22396,6 +22551,7 @@
           pzDraftByFab = storeData.store.byFab;
         }
       } catch (_) { /* ignore */ }
+      startBackgroundProtocolAlign(jobId);
       applySharedProtocolLanguages('pzPdfDe', 'pzPdfEn', pzDraftByFab);
       renderFabButtons(pzJobData);
       var fns = typeof parseJobFabrikationsnummernOrdered === 'function' ? parseJobFabrikationsnummernOrdered(pzJobData) : [];
@@ -24600,6 +24756,7 @@
           serviceprotokollDraftStore = data.store;
         }
       } catch (e) { /* optional */ }
+      startBackgroundProtocolAlign(jobId);
     }
 
     function escapeHtml(s) {
@@ -26787,7 +26944,20 @@
       html += '<span class="name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</span>';
       if (fab) html += '<span class="parameterlisten-pill">FN ' + escapeHtml(fab) + '</span>';
       if (item && item.is_backup) html += '<span class="parameterlisten-pill is-backup">Backup</span>';
-      html += '</div><div class="parameterlisten-file-meta">' + escapeHtml(meta.join(' · ')) + '</div></div>';
+      if (kind === 'job' && item && item.has_pdf) html += '<span class="parameterlisten-pill">PDF</span>';
+      html += '</div><div class="parameterlisten-file-meta">' + escapeHtml(meta.join(' · ')) + '</div>';
+      if (kind === 'job') {
+        var csvShown = (item && (item.csv_path || item.abs_path || item.cache_path)) || name;
+        var pdfShown = item && item.pdf_path ? item.pdf_path : '';
+        var folderShown = item && (item.folder_path || item.job_rel_path) ? (item.folder_path || item.job_rel_path) : '';
+        html += '<div class="parameterlisten-file-path">CSV: ' + escapeHtml(csvShown) + '</div>';
+        html += '<div class="parameterlisten-file-path">PDF: ' +
+          (pdfShown ? escapeHtml(pdfShown) : 'noch nicht erstellt') + '</div>';
+        if (folderShown && folderShown !== csvShown) {
+          html += '<div class="parameterlisten-file-path">Ordner: ' + escapeHtml(folderShown) + '</div>';
+        }
+      }
+      html += '</div>';
       html += renderParamActionButtons(item, kind);
       html += '</div>';
       return html;
@@ -27121,6 +27291,10 @@
     }
 
     async function pdfStoredParameterFile(kind, item) {
+      if (item && item.pdf_path && typeof monteurApp !== 'undefined' && monteurApp && typeof monteurApp.openPdf === 'function') {
+        await monteurApp.openPdf(String(item.pdf_path));
+        return;
+      }
       var payload = itemActionPayload(kind, item);
       var r = await fetch(API_BASE + '/api/protokolle/parameterlisten/pdf', {
         method: 'POST',
@@ -27132,6 +27306,7 @@
         throw new Error((data && data.error) ? data.error : 'PDF fehlgeschlagen.');
       }
       if (typeof maybeOpenGeneratedPdfs === 'function') await maybeOpenGeneratedPdfs(data);
+      if (kind === 'job') await loadParameterlistenLists();
     }
 
     function closeDeleteModal() {
@@ -28379,6 +28554,7 @@
         if (recipientsHint) {
           recipientsHint.value = state.recipients.length ? state.recipients.join('; ') : 'keine E-Mail hinterlegt';
         }
+        if (data.conflicts && data.conflicts.length) showProtocolConflictChoices(data.conflicts);
         if (data.folder_missing || data.hint) setHint(statusHint, data.hint || 'Kein Reiseordner.', true);
         renderDocs();
         updatePhotoBadge();

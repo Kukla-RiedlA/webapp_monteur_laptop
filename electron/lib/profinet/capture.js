@@ -116,35 +116,76 @@ async function scan(body) {
   return { adapter, teilnehmer, links: [] };
 }
 
+function sendFrame(handle, frame) {
+  const sent = handle.send(frame, frame.length);
+  if (sent === false) {
+    const err = new Error('Der Adapter hat das Profinet-Paket nicht gesendet. Npcap im WinPcap-Modus prüfen.');
+    err.code = 'send_failed';
+    throw err;
+  }
+}
+
+async function roundTrip(adapter, frame, xid, action) {
+  const replies = [];
+  const prime = dcp.buildIdentifyAll(adapter.mac, (xid + 7) >>> 0);
+  await withCapture(adapter, async (handle, buffer) => {
+    handle.on('packet', (nbytes) => {
+      const copy = Buffer.from(buffer.subarray(0, nbytes));
+      const parsed = dcp.parseSetResponse(copy);
+      if (!parsed || parsed.xid !== xid) return;
+      replies.push(parsed);
+    });
+    sendFrame(handle, prime);
+    await delay(250);
+    sendFrame(handle, frame);
+    const deadline = Date.now() + 1200;
+    while (Date.now() < deadline && !replies.length) {
+      await delay(40);
+    }
+  });
+  if (!replies.length) {
+    const err = new Error(action + ': das Gerät hat nicht geantwortet. Bitte erneut scannen und den Ethernet-Adapter direkt an der Anlage prüfen.');
+    err.code = 'no_response';
+    throw err;
+  }
+  const errors = [];
+  replies.forEach((reply) => {
+    (reply.errors || []).forEach((text) => errors.push(text));
+  });
+  if (errors.length) {
+    const err = new Error(errors.join(' '));
+    err.code = 'device_rejected';
+    throw err;
+  }
+  return { mac: dcp.normalizeMac(frame && frame.length >= 6 ? dcp.formatMac(frame, 0) : '') };
+}
+
 async function applySet(body) {
   const adapter = findAdapter(body);
   const mac = dcp.normalizeMac(body && body.mac);
-  const xid = (Math.random() * 0xffffffff) >>> 0;
-  const frames = [];
-  if (body && body.station_name != null) {
-    frames.push(dcp.buildSetName(adapter.mac, mac, body.station_name, xid));
+  const name = body && body.station_name != null ? String(body.station_name).trim().toLowerCase() : '';
+  const ip = body && body.ip_address ? String(body.ip_address).trim() : '';
+  if (name) {
+    const nameError = dcp.stationNameError(name);
+    if (nameError) {
+      const err = new Error(nameError);
+      err.code = 'bad_name';
+      throw err;
+    }
   }
-  if (body && body.ip_address) {
-    frames.push(dcp.buildSetIp(
-      adapter.mac,
-      mac,
-      body.ip_address,
-      body.subnet_mask,
-      body.gateway,
-      (xid + 1) >>> 0,
-    ));
-  }
-  if (!frames.length) {
+  if (!name && !ip) {
     const err = new Error('Name oder IP fehlt.');
     err.code = 'empty_set';
     throw err;
   }
-  await withCapture(adapter, async (handle) => {
-    for (let i = 0; i < frames.length; i += 1) {
-      handle.send(frames[i], frames[i].length);
-      await delay(250);
-    }
+  const xid = (Math.random() * 0xffffffff) >>> 0;
+  const frame = dcp.buildCombinedSet(adapter.mac, mac, xid, {
+    name,
+    ip,
+    mask: body.subnet_mask,
+    gateway: body.gateway,
   });
+  await roundTrip(adapter, frame, xid, name ? 'Taufen' : 'IP setzen');
   return { mac };
 }
 
@@ -153,10 +194,7 @@ async function signal(body) {
   const mac = dcp.normalizeMac(body && body.mac);
   const xid = (Math.random() * 0xffffffff) >>> 0;
   const frame = dcp.buildSignal(adapter.mac, mac, xid);
-  await withCapture(adapter, async (handle) => {
-    handle.send(frame, frame.length);
-    await delay(200);
-  });
+  await roundTrip(adapter, frame, xid, 'Blinken');
   return { mac };
 }
 

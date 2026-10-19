@@ -40,7 +40,11 @@ function ensureSchema(db) {
 
 function text(value) {
   if (value == null) return '';
-  return String(value).trim();
+  return String(value)
+    .replace(/\u0000/g, '')
+    .replace(/\uFFFD/g, '')
+    .replace(/[\u0001-\u001F\u007F]/g, '')
+    .trim();
 }
 
 function listByFab(db, fab) {
@@ -53,14 +57,22 @@ function listByFab(db, fab) {
      FROM anlagenstamm_profinet_teilnehmer
      WHERE fabrikationsnummer = ?
      ORDER BY mac`,
-  ).all(fn);
+  ).all(fn).map(cleanStored);
   const links = db.prepare(
     `SELECT id, fabrikationsnummer, local_mac, local_port, peer_mac, peer_port, peer_name, scanned_at, dirty
      FROM anlagenstamm_profinet_link
      WHERE fabrikationsnummer = ?
      ORDER BY id`,
-  ).all(fn);
+  ).all(fn).map(cleanStored);
   return { teilnehmer, links };
+}
+
+function cleanStored(row) {
+  const out = Object.assign({}, row);
+  ['station_name', 'ip_address', 'subnet_mask', 'gateway', 'vendor', 'last_seen_name', 'last_seen_ip', 'local_port', 'peer_port', 'peer_name'].forEach((key) => {
+    if (out[key] != null) out[key] = text(out[key]);
+  });
+  return out;
 }
 
 function replaceSet(db, fab, teilnehmer, links, opts) {
