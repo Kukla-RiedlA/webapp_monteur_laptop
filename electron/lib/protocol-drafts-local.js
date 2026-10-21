@@ -297,18 +297,19 @@ function readMetaRow(db, localJobId, kind) {
   }
 }
 
-function upsertRow(db, localJobId, kind, fab, payload) {
+function upsertRow(db, localJobId, kind, fab, payload, forceFrozen) {
   const safePayload = stripPasswordFields(payload && typeof payload === 'object' ? payload : {});
   const payloadJson = JSON.stringify(safePayload || {});
+  const force = forceFrozen ? 1 : 0;
   if (hasFrozenColumn(db)) {
     db.prepare(
       `INSERT INTO protocol_drafts (local_job_id, protocol_kind, fabrikationsnummer, payload_json, updated_at, frozen)
        VALUES (?, ?, ?, ?, datetime('now'), 0)
        ON CONFLICT(local_job_id, protocol_kind, fabrikationsnummer)
        DO UPDATE SET
-         payload_json = CASE WHEN protocol_drafts.frozen = 1 THEN protocol_drafts.payload_json ELSE excluded.payload_json END,
-         updated_at = CASE WHEN protocol_drafts.frozen = 1 THEN protocol_drafts.updated_at ELSE datetime('now') END`,
-    ).run(localJobId, kind, fab, payloadJson);
+         payload_json = CASE WHEN protocol_drafts.frozen = 1 AND ? = 0 THEN protocol_drafts.payload_json ELSE excluded.payload_json END,
+         updated_at = CASE WHEN protocol_drafts.frozen = 1 AND ? = 0 THEN protocol_drafts.updated_at ELSE datetime('now') END`,
+    ).run(localJobId, kind, fab, payloadJson, force, force);
     return;
   }
   db.prepare(
@@ -340,7 +341,7 @@ function deleteKindRows(db, localJobId, kind) {
   db.prepare('DELETE FROM protocol_drafts WHERE local_job_id = ? AND protocol_kind = ?').run(localJobId, kind);
 }
 
-function persistPayload(db, localJobId, kind, payload, revision, serverUpdatedAt) {
+function persistPayload(db, localJobId, kind, payload, revision, serverUpdatedAt, forceFrozen) {
   const keep = [];
   let extra = {};
   if (isByFabKind(kind)) {
@@ -348,7 +349,7 @@ function persistPayload(db, localJobId, kind, payload, revision, serverUpdatedAt
     for (const [fabRaw, draft] of Object.entries(byFab)) {
       const fab = String(fabRaw || '').trim();
       if (!fab || !draft || typeof draft !== 'object') continue;
-      upsertRow(db, localJobId, kind, fab, draft);
+      upsertRow(db, localJobId, kind, fab, draft, forceFrozen);
       keep.push(fab);
     }
     extra = Object.assign({}, stripDraftMeta(payload || {}));
@@ -356,7 +357,7 @@ function persistPayload(db, localJobId, kind, payload, revision, serverUpdatedAt
   } else {
     const fabs = montageberichtTargetFabs(db, localJobId, payload);
     for (const fab of fabs) {
-      upsertRow(db, localJobId, kind, fab, stripDraftMeta(payload || {}));
+      upsertRow(db, localJobId, kind, fab, stripDraftMeta(payload || {}), forceFrozen);
       keep.push(fab);
     }
   }
@@ -469,12 +470,13 @@ function readDraft(db, localJobId, basename, reiseDir) {
   return assembleFromDb(db, localJobId, kind);
 }
 
-function writeDraft(db, localJobId, basename, payload, revision, serverUpdatedAt, reiseDir) {
+function writeDraft(db, localJobId, basename, payload, revision, serverUpdatedAt, reiseDir, writeOpts) {
   ensureProtocolDraftsSchema(db);
   const kind = kindFromBasename(basename);
   if (!kind || !localJobId) return { ok: false };
+  const forceFrozen = !!(writeOpts && writeOpts.forceFrozen);
   const closed = jobStatusIsClosed(db, localJobId);
-  if (closed) freezeJob(db, localJobId);
+  if (closed && !forceFrozen) freezeJob(db, localJobId);
   const clean = stripDraftMeta(payload && typeof payload === 'object' ? payload : {});
   const empty = isEmptyMonteurDraftPayload(clean);
   const rev = Math.max(0, parseInt(revision, 10) || 0);
@@ -506,7 +508,7 @@ function writeDraft(db, localJobId, basename, payload, revision, serverUpdatedAt
     deleteLegacyDraftFiles(reiseDir, basename);
     return { ok: true, payload: emptyPayloadForKind(kind), revision: rev, server_updated_at: ts };
   }
-  persistPayload(db, localJobId, kind, clean, rev, ts);
+  persistPayload(db, localJobId, kind, clean, rev, ts, forceFrozen);
   if (closed) freezeJob(db, localJobId);
   deleteLegacyDraftFiles(reiseDir, basename);
   return { ok: true, payload: clean, revision: rev, server_updated_at: ts };

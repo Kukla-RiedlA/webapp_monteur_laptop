@@ -254,7 +254,12 @@ const {
   fsRealpathSync,
   fsReadFileSync,
 } = require('./lib/win32-long-path');
-const { sweepOnedriveNumberedDuplicates } = require('./lib/onedrive-numbered-duplicates');
+const {
+  sweepOnedriveNumberedDuplicates,
+  sweepOnedriveNumberedWorkFolders,
+  isWorkFolderNumberedCopy,
+  parseOnedriveNumberedCopy,
+} = require('./lib/onedrive-numbered-duplicates');
 const { buildDispoMonteurHeaders } = require('./lib/dispo-monteur-headers');
 const { getOrCreateDeviceId } = require('./lib/device-id');
 
@@ -847,7 +852,7 @@ function hasPendingOrDirtyAnlagenstamm(db) {
 /** Schreiben mit Retry bei EBUSY (OneDrive/Word sperrt Datei). Überschreibt, ohne vorher zu löschen. */
 function writeFileWithRetry(filePath, data, maxRetries = 3) {
   replaceFileWithoutUnlinkSync(filePath, data, { maxRetries });
-  if (/\.(pdf|docx)$/i.test(String(filePath || ''))) {
+  if (/\.(pdf|docx|csv|txt|pa3|pa4|pa5|pal)$/i.test(String(filePath || ''))) {
     sweepOnedriveNumberedDuplicates(path.dirname(filePath));
   }
 }
@@ -2386,10 +2391,37 @@ function createApp(db) {
           } catch (_) {
             continue;
           }
+          const localBucket = path.join(reiseDir, bucketRel.split('/').join(path.sep));
+          try {
+            sweepOnedriveNumberedDuplicates(localBucket);
+          } catch (_) {
+            /* Ordner fehlt oder OneDrive sperrt */
+          }
           for (const fileEnt of files) {
             if (!fileEnt || String(fileEnt.type || '').toLowerCase() !== 'file') continue;
             const name = String(fileEnt.name || '');
             if (!name || /\.conflict-/i.test(name)) continue;
+            const numbered = parseOnedriveNumberedCopy(name);
+            if (numbered) {
+              const canonicalName = numbered.canonical;
+              const hasCanonicalRemote = files.some(
+                (f) => String((f && f.name) || '').toLowerCase() === canonicalName.toLowerCase(),
+              );
+              const canonicalRel = bucketRel + '/' + canonicalName;
+              const canonicalLocal = path.join(reiseDir, canonicalRel.split('/').join(path.sep));
+              if (hasCanonicalRemote || (await existsOffMainThread(canonicalLocal))) continue;
+              const buf = await downloadDispoProjectFile(
+                base,
+                serverJobId,
+                technicianId,
+                authHeader,
+                bucketRel + '/' + name,
+              );
+              await replaceFileOffMainThread(canonicalLocal, buf);
+              await recordDienstreisePushCacheOffThread(db, localJobId, canonicalRel, canonicalLocal);
+              actions.downloaded += 1;
+              continue;
+            }
             const rel = bucketRel + '/' + name;
             const localPath = path.join(reiseDir, rel.split('/').join(path.sep));
             const remoteSha = String(fileEnt.sha256 || '');
@@ -3471,6 +3503,11 @@ function createApp(db) {
     } catch (_) {
       return result;
     }
+    try {
+      sweepOnedriveNumberedWorkFolders(startDir);
+    } catch (_) {
+      /* OneDrive-Sperre: nummerierte Kopien bleiben und werden unten nicht hochgeladen */
+    }
     let seen = 0;
     async function walk(currentDir, relBase) {
       let entries;
@@ -3487,8 +3524,8 @@ function createApp(db) {
         if (e.isDirectory()) {
           await walk(full, rel);
         } else if (e.isFile()) {
-          // Protokoll-Drafts nur über *_draft.php, nicht als generischer Datei-Sync.
           if (isMonteurDraftJsonBasename(e.name)) continue;
+          if (isWorkFolderNumberedCopy(rel, e.name)) continue;
           result.push({
             relPathFromRoot: subfolder + (rel ? '/' + rel : ''),
             fullPath: full,
@@ -3789,6 +3826,11 @@ function createApp(db) {
       } catch (_) {
         return result;
       }
+      try {
+        sweepOnedriveNumberedWorkFolders(startDir);
+      } catch (_) {
+        /* OneDrive-Sperre */
+      }
       let seen = 0;
       async function walk(currentDir, relBase) {
         let entries;
@@ -3806,6 +3848,7 @@ function createApp(db) {
             await walk(full, rel);
           } else if (e.isFile()) {
             if (isMonteurDraftJsonBasename(e.name)) continue;
+            if (isWorkFolderNumberedCopy(rel, e.name)) continue;
             result.push({ relPathFromSub: rel, fullPath: full });
             seen += 1;
             if (seen % 8 === 0) await yieldEventLoop();
@@ -7985,10 +8028,7 @@ function createApp(db) {
       LEFT JOIN job_hotel_addresses jha ON jha.job_id = j.id
       WHERE j.status IN ('erledigt', 'abgerechnet')
         AND strftime('%Y', j.end_datetime) = ?
-        AND (
-          EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
-          OR NOT EXISTS (SELECT 1 FROM job_technicians jt2 WHERE jt2.job_id = j.id)
-        )`;
+        AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)`;
     const params = [String(year), technicianId];
 
     if (customer) {
@@ -19101,6 +19141,20 @@ function createApp(db) {
           const expectedSize = files[i].size;
           const expectedMtimeMs = files[i].mtime_ms;
           try {
+          const relNormIncoming = String(relPath || '').replace(/\\/g, '/');
+          const incomingBase = relNormIncoming.split('/').pop() || '';
+          const incomingCopy = parseOnedriveNumberedCopy(incomingBase);
+          if (incomingCopy && isWorkFolderNumberedCopy(relNormIncoming, incomingBase)) {
+            const canonicalRel = relNormIncoming.replace(/[^/]+$/, incomingCopy.canonical);
+            const canonicalListed = files.some(
+              (f) => String((f && f.path) || '').replace(/\\/g, '/').toLowerCase() === canonicalRel.toLowerCase(),
+            );
+            const canonicalLocal = path.join(targetDir, canonicalRel.replace(/\//g, path.sep));
+            if (canonicalListed || (await existsOffMainThread(canonicalLocal))) {
+              setProgress('file', i + 1, total, relPath);
+              continue;
+            }
+          }
           if (await shouldSkip(relPath, expectedSize, expectedMtimeMs, completed)) {
             const localRelsSkip = localRelsForPullFile(relPath);
             const localRelSkip = localRelsSkip[0] || relPath;

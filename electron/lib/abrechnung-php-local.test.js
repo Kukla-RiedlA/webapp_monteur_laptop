@@ -126,6 +126,11 @@ describe('Beleg-Dateinamen', () => {
     fs.writeFileSync(path.join(dir, first), 'x');
     const second = phpLocal.resolveUniqueStoredName('rechnung.pdf', 'Angebot', dir, opts);
     assert.equal(second, 'Angebot_2026-09-11_rechnung-1.pdf');
+    const again = phpLocal.resolveUniqueStoredName('rechnung.pdf', 'Angebot', dir, {
+      ...opts,
+      buffer: Buffer.from('x'),
+    });
+    assert.equal(again, first);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

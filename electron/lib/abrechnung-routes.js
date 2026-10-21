@@ -1483,7 +1483,7 @@ function registerAbrechnungRoutesInner(app, ctx) {
     const probePath = filePathLocal(dbDir, jid, b, 'probe.tmp', fileCtx);
     const targetDir = path.dirname(probePath);
     mkdirpSync(targetDir);
-    const safeName = phpLocal.resolveUniqueStoredName(origName, belegPrefix, targetDir);
+    const safeName = phpLocal.resolveUniqueStoredName(origName, belegPrefix, targetDir, { buffer: buf });
     const localPath = path.join(targetDir, path.basename(safeName));
     fs.writeFileSync(localPath, buf);
     const uploaderName = phpLocal.resolveTechnicianDisplayName(db, tid);

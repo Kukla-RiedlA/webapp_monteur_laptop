@@ -1,5 +1,11 @@
 # Versionshistorie – Monteur WebApp
 
+## V 3.000.002
+- **Archiv:** Nur erledigte Aufträge, die diesem Monteur zugewiesen sind. Aufträge ohne Monteur (z. B. Service Vito, LG) erscheinen nicht mehr.
+- **Zwei Laptops:** Die Wahl „Diesen Laptop behalten“ oder „Anderen Laptop übernehmen“ bleibt nach einem Neustart für denselben Protokollstand erhalten.
+- **OneDrive:** Nummerierte Kopien in Protokollen und Parametern werden auf den Originalnamen gelegt und nicht extra hochgeladen.
+- **Abrechnung:** Dieselbe Datei wird nicht noch einmal als `-1` abgelegt.
+
 ## V 3.000.001
 - **Kalender:** Ein Auftrag mit zwei offenen Techniker-Slots zeigt zwei Balken. Der zweite graue Balken „Nicht zugewiesen“ bleibt erhalten.
 - **PDF:** Drucken im PDF-Annotator.

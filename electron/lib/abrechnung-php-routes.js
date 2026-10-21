@@ -426,7 +426,9 @@ function registerAbrechnungPhpRoutes(app, ctx) {
       );
       const targetDir = path.dirname(probePath);
       getCore().mkdirpSync(targetDir);
-      const safeName = phpLocal.resolveUniqueStoredName(origName, belegPrefix, targetDir);
+      const safeName = phpLocal.resolveUniqueStoredName(origName, belegPrefix, targetDir, {
+        buffer: file.buffer,
+      });
       const localPath = path.join(targetDir, path.basename(safeName));
       fs.writeFileSync(localPath, file.buffer);
       try {

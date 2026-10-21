@@ -1019,6 +1019,7 @@ module.exports = {
   monteurDraftJsonPath,
   resolveMonteurDraftJsonPath,
   stripDraftMeta,
+  stripForContentEquality,
   stableStringify,
   draftPayloadsEqual,
   isEmptyMonteurDraftPayload,

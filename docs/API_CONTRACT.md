@@ -221,7 +221,7 @@ Plattform-Übersicht: [`docs/MULTI_DEVICE_LAPTOP_SYNC.md`](../../docs/MULTI_DEVI
 - `GET /api/pruefzertifikat_prefill` — Dispo-Prefill mit lokalem Fallback
 - `POST /api/pruefzertifikat_save` — lokal + Dispo; `pdf_languages: ['de','en']` erzeugt je Sprache ein PDF
 
-**Upload:** `job_project_file_upload.php` prüft Job-Status (`in_arbeit`); sonst **409** `code: job_closed`. Antwort ergänzt `sha256`, `size_bytes`, `rel_path`, `revision`.
+**Upload:** `job_project_file_upload.php` prüft Job-Status (`in_arbeit`); sonst **409** `code: job_closed`. Antwort ergänzt `sha256`, `size_bytes`, `rel_path`, `revision`. Derselbe Dateiname wird überschrieben. OneDrive-Kopien `Name-1.ext` werden auf den Originalnamen gelegt und nicht zusätzlich abgelegt.
 
 **Laptop-Gateway (Ergänzungen):**
 - `device_id` in `userData` / Sync-Bodies; Sync-Zyklus **Push → Pull → File-Reconcile**.

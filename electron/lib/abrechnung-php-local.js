@@ -158,12 +158,25 @@ function applyBelegPrefix(origName, prefix, options = {}) {
   return `${p}_${ymd}_${stem}${ext}`;
 }
 
+function sameStoredContent(abs, buf) {
+  if (!Buffer.isBuffer(buf)) return false;
+  try {
+    const st = fs.statSync(abs);
+    if (!st.isFile() || st.size !== buf.length) return false;
+    return fs.readFileSync(abs).equals(buf);
+  } catch (_) {
+    return false;
+  }
+}
+
 function resolveUniqueStoredName(origName, prefix, targetDir, options = {}) {
   let stored = applyBelegPrefix(origName, prefix, options);
   const ext = path.extname(stored);
   let baseName = ext ? path.basename(stored, ext) : stored;
   let counter = 1;
+  const buf = options && (options.buffer || options.content);
   while (targetDir && fs.existsSync(path.join(targetDir, stored))) {
+    if (buf && sameStoredContent(path.join(targetDir, stored), buf)) return stored;
     stored = `${baseName}-${counter}${ext}`;
     counter += 1;
   }

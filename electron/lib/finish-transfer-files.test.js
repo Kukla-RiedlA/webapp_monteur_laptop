@@ -64,6 +64,26 @@ describe('finish-transfer-files', () => {
     assert.equal(proto.fn_label, '12304_Kunde');
   });
 
+  it('zeigt OneDrive-Parameterkopien -1/-21 nicht und lässt das Original stehen', () => {
+    const param = `Dokumente_Monteur/12360_Kunde/Montage/${AO}/Parameter`;
+    writeRel(reise, param + '/FN12360_PA7_EN_20261019_1528.CSV', 'csv');
+    writeRel(reise, param + '/FN12360_PA7_EN_20261019_1528-1.CSV', 'dup');
+    writeRel(reise, param + '/FN12360_PA7_EN_20261019_1528-21.CSV', 'dup');
+    writeRel(reise, param + '/FN12360_PA7_EN_20261019_1521.CSV', 'other');
+    writeRel(reise, `Dokumente_Monteur/Montage/${AO}/Bilder/Allgemein/10066_2026-09-09_11-28-51.jpg`, 'img');
+    writeRel(reise, `Dokumente_Monteur/12360_Kunde/Montage/${AO}/Sonstiges/Notiz-1.pdf`, 'keep');
+    const listed = listFinishTransferFiles(reise, AO);
+    const names = listed.files.map((f) => f.name).sort();
+    assert.deepEqual(names, [
+      '10066_2026-09-09_11-28-51.jpg',
+      'FN12360_PA7_EN_20261019_1521.CSV',
+      'FN12360_PA7_EN_20261019_1528.CSV',
+      'Notiz-1.pdf',
+    ]);
+    assert.equal(fs.existsSync(path.join(reise, param, 'FN12360_PA7_EN_20261019_1528-1.CSV')), false);
+    assert.equal(fs.existsSync(path.join(reise, param, 'FN12360_PA7_EN_20261019_1528-21.CSV')), false);
+  });
+
   it('matches whitelist with and without Dokumente_Monteur prefix', () => {
     const rel = `Dokumente_Monteur/12304_Kunde/Montage/${AO}/Protokolle/bericht.pdf`;
     const list = [`12304_Kunde/Montage/${AO}/Protokolle/bericht.pdf`];

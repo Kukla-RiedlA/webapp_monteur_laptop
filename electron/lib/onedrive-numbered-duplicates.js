@@ -3,8 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
-/** OneDrive/Windows „Keep both“: Datei.pdf → Datei-1.pdf (Zahl direkt vor der Endung). */
-const NUMBERED_COPY_RE = /^(.*)-(\d{1,2})(\.[^.]+)$/i;
+/** OneDrive/Windows „Keep both“: Datei.pdf → Datei-1.pdf (Zahl direkt vor der Endung, bis 999). */
+const NUMBERED_COPY_RE = /^(.*)-(\d{1,3})(\.[^.]+)$/i;
 
 function parseOnedriveNumberedCopy(name) {
   const n = String(name || '');
@@ -126,6 +126,42 @@ function sweepOnedriveNumberedDuplicates(dir) {
   return changed;
 }
 
+/** Parameter- und Protokollordner. Abrechnung in Dokumente_Dispo nutzt „-1“ für einen zweiten Beleg. */
+function relIsProtocolOrParameter(rel) {
+  const n = String(rel || '').replace(/\\/g, '/');
+  return /(?:^|\/)(Parameter|Protokolle)(?:\/|$)/i.test(n);
+}
+
+function isWorkFolderNumberedCopy(rel, name) {
+  if (!relIsProtocolOrParameter(rel)) return false;
+  return isOnedriveNumberedCopyName(name || rel);
+}
+
+function sweepOnedriveNumberedWorkFolders(rootDir) {
+  const changed = [];
+  if (!rootDir || !fs.existsSync(rootDir)) return changed;
+  const stack = [rootDir];
+  while (stack.length) {
+    const dir = stack.pop();
+    let names;
+    try {
+      names = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_) {
+      continue;
+    }
+    if (/^(parameter|protokolle)$/i.test(path.basename(dir))) {
+      changed.push(...sweepOnedriveNumberedDuplicates(dir));
+    }
+    for (const ent of names) {
+      if (!ent.isDirectory()) continue;
+      const n = String(ent.name || '');
+      if (!n || n === '.' || n === '..' || n.startsWith('.')) continue;
+      stack.push(path.join(dir, n));
+    }
+  }
+  return changed;
+}
+
 function sweepOnedriveNumberedDuplicatesTree(rootDir) {
   const changed = [];
   if (!rootDir || !fs.existsSync(rootDir)) return changed;
@@ -151,4 +187,7 @@ module.exports = {
   isOnedriveNumberedCopyName,
   sweepOnedriveNumberedDuplicates,
   sweepOnedriveNumberedDuplicatesTree,
+  sweepOnedriveNumberedWorkFolders,
+  relIsProtocolOrParameter,
+  isWorkFolderNumberedCopy,
 };

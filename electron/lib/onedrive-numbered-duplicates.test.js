@@ -90,4 +90,23 @@ describe('onedrive-numbered-duplicates', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('räumt Parameter-CSV -1 bis -21 auf, Original bleibt', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kukla-od-csv-'));
+    try {
+      const keep = 'FN12360_PA7_EN_20261019_1528.CSV';
+      fs.writeFileSync(path.join(dir, keep), 'csv');
+      fs.writeFileSync(path.join(dir, 'FN12360_PA7_EN_20261019_1528-1.CSV'), 'dup');
+      fs.writeFileSync(path.join(dir, 'FN12360_PA7_EN_20261019_1528-21.CSV'), 'dup');
+      fs.writeFileSync(path.join(dir, 'FN12360_PA7_EN_20261019_1521.CSV'), 'other');
+      sweepOnedriveNumberedDuplicates(dir);
+      assert.equal(fs.existsSync(path.join(dir, keep)), true);
+      assert.equal(fs.existsSync(path.join(dir, 'FN12360_PA7_EN_20261019_1521.CSV')), true);
+      assert.equal(fs.existsSync(path.join(dir, 'FN12360_PA7_EN_20261019_1528-1.CSV')), false);
+      assert.equal(fs.existsSync(path.join(dir, 'FN12360_PA7_EN_20261019_1528-21.CSV')), false);
+      assert.equal(parseOnedriveNumberedCopy('FN12360_PA7_EN_20261019_1528-100.CSV').n, 100);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

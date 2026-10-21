@@ -6,6 +6,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const { getOrCreateDeviceId, defaultDisplayName } = require('./device-id');
 const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
@@ -13,7 +14,9 @@ const {
   readLocalDraftFile,
   writeLocalDraftFile,
   stripDraftMeta,
+  stripForContentEquality,
   draftPayloadsEqual,
+  stableStringify,
   isEmptyMonteurDraftPayload,
   pruneEmptyMonteurDraftJsons,
   reconcileLocalTreeWithManifest,
@@ -52,7 +55,24 @@ function ensureMultiDeviceTables(db) {
       status_on_server TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS multi_device_conflict_resolutions (
+      local_job_id INTEGER NOT NULL,
+      rel_path TEXT NOT NULL,
+      remote_hash TEXT NOT NULL,
+      remote_revision INTEGER,
+      choice TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (local_job_id, rel_path, remote_hash)
+    );
   `);
+}
+
+/** Gleicher Fachstand des anderen Laptops, unabhängig von der Schlüsselreihenfolge. */
+function remoteDraftHash(payload) {
+  const clean = stripForContentEquality(
+    stripDraftMeta(payload && typeof payload === 'object' ? payload : {}),
+  );
+  return crypto.createHash('sha256').update(stableStringify(clean)).digest('hex');
 }
 
 function authHeaderFromCreds(username, password) {
@@ -153,6 +173,7 @@ function registerMultiDeviceRoutes(deps) {
         revision,
         serverUpdatedAt,
         opts.reiseDir,
+        opts.writeOpts,
       );
       return;
     }
@@ -182,6 +203,44 @@ function registerMultiDeviceRoutes(deps) {
     }
   }
 
+  function draftConflictChoice(localJobId, basename, remotePayload) {
+    const id = parseInt(localJobId, 10);
+    const rel = String(basename || '');
+    if (!db || !id || !rel) return '';
+    try {
+      const row = db
+        .prepare(
+          `SELECT choice FROM multi_device_conflict_resolutions
+           WHERE local_job_id = ? AND rel_path = ? AND remote_hash = ?`,
+        )
+        .get(id, rel, remoteDraftHash(remotePayload));
+      return row && row.choice ? String(row.choice) : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function rememberDraftResolution(localJobId, basename, remotePayload, choice, remoteRev) {
+    const id = parseInt(localJobId, 10);
+    const rel = String(basename || '');
+    const picked = choice === 'remote' ? 'remote' : choice === 'local' ? 'local' : '';
+    if (!db || !id || !rel || !picked || remotePayload == null) return;
+    try {
+      db.prepare(
+        `INSERT INTO multi_device_conflict_resolutions
+           (local_job_id, rel_path, remote_hash, remote_revision, choice)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(local_job_id, rel_path, remote_hash) DO UPDATE SET
+           choice = excluded.choice,
+           remote_revision = excluded.remote_revision,
+           created_at = datetime('now')`,
+      ).run(id, rel, remoteDraftHash(remotePayload), parseInt(remoteRev, 10) || 0, picked);
+      save();
+    } catch (e) {
+      console.warn('[draft_conflict] resolution not stored', rel, e && e.message ? e.message : e);
+    }
+  }
+
   function rememberBlockingDraftConflict(opts, remotePayload, remoteRev, remoteAt, fns) {
     const localJobId = parseInt(opts && opts.localJobId, 10);
     const basename = draftBasename(opts || {});
@@ -203,6 +262,12 @@ function registerMultiDeviceRoutes(deps) {
       }
       console.warn('[draft_conflict] skipped (timestamp-only / no text diff)', basename);
       return;
+    }
+    const priorChoice = draftConflictChoice(localJobId, basename, remoteClean);
+    if (priorChoice) {
+      clearConflictsForFile(localJobId, opts.serverJobId, basename);
+      console.warn('[draft_conflict] skipped (Stand bereits gewählt)', basename, priorChoice);
+      return { alreadyResolved: true, choice: priorChoice };
     }
     const dir = path.join(DB_DIR, 'protocol-conflicts');
     try {
@@ -435,8 +500,16 @@ function registerMultiDeviceRoutes(deps) {
           } else {
             const side = classifyDraftSides(local.payload, remotePayload);
             if (side === 'conflict') {
-              rememberBlockingDraftConflict(opts, remotePayload, remoteRev, gd.server_updated_at || null);
+              const remembered = rememberBlockingDraftConflict(
+                opts,
+                remotePayload,
+                remoteRev,
+                gd.server_updated_at || null,
+              );
               clearDraftPushPending(opts);
+              if (remembered && remembered.alreadyResolved) {
+                return { ok: true, skipped: true, resolved: true, revision: remoteRev };
+              }
               return {
                 ok: false,
                 code: 'conflict',
@@ -571,8 +644,16 @@ function registerMultiDeviceRoutes(deps) {
           } else if (!opts.forceLocal) {
             const side = classifyDraftSides(local.payload, remoteClean);
             if (side === 'conflict') {
-              rememberBlockingDraftConflict(opts, remoteClean, remoteRev, data.server_updated_at || null);
+              const remembered = rememberBlockingDraftConflict(
+                opts,
+                remoteClean,
+                remoteRev,
+                data.server_updated_at || null,
+              );
               clearDraftPushPending(opts);
+              if (remembered && remembered.alreadyResolved) {
+                return { ok: true, skipped: true, resolved: true, revision: remoteRev };
+              }
               return { ok: false, code: 'conflict', revision: remoteRev, kept_local: true };
             }
             local.payload = mergeFlatProtocolStores(local.payload, remoteClean);
@@ -616,12 +697,15 @@ function registerMultiDeviceRoutes(deps) {
         );
         preserveLocalDraftCopy(opts, opts._keepLocalPayload || local.payload);
         if (opts.filePath) writeConflictCopy(opts.filePath, deviceId());
-        rememberBlockingDraftConflict(
+        const remembered = rememberBlockingDraftConflict(
           opts,
           stripDraftMeta(remotePayload),
           remoteRev,
           data.server_updated_at || null,
         );
+        if (remembered && remembered.alreadyResolved) {
+          return { ok: true, skipped: true, resolved: true, revision: remoteRev };
+        }
         return {
           ok: false,
           code: 'conflict',
@@ -715,6 +799,22 @@ function registerMultiDeviceRoutes(deps) {
       if (localEmpty) {
         writeDraftState(opts, payload, remoteRev, remoteTs);
         return { ok: true, revision: remoteRev, store: payload };
+      }
+
+      // Derselbe Server-Stand wurde schon gewählt. Nicht erneut fragen und den lokalen
+      // Entwurf nicht wieder mit diesem Stand vermischen (auch wenn der Server ihn nicht
+      // übernehmen konnte, z. B. Auftrag abgeschlossen).
+      const priorChoice = draftConflictChoice(opts.localJobId, basename, payload);
+      if (priorChoice) {
+        if (priorChoice === 'remote' && !draftPayloadsEqual(local.payload, payload)) {
+          writeDraftState(
+            Object.assign({}, opts, { writeOpts: { forceFrozen: true } }),
+            payload,
+            remoteRev,
+            remoteTs,
+          );
+        }
+        return { ok: true, skipped: true, resolved: true, revision: local.revision };
       }
 
       /* Gerät hat schon Inhalt: FN mergen (Inhalt vor Stub, sonst Zeitstempel). Leere Dispo wischt nicht.
@@ -1006,6 +1106,14 @@ function registerMultiDeviceRoutes(deps) {
       const creds = typeof resolveDispoCreds === 'function' ? resolveDispoCreds(body) : {};
       const technicianId = parseInt(body.technician_id != null ? body.technician_id : getTechnicianId(req), 10);
       const basename = detail.basename || row.rel_path;
+      let remoteSnapshot = null;
+      if (detail.kind !== 'file' && detail.remote_file) {
+        try {
+          remoteSnapshot = JSON.parse(fs.readFileSync(detail.remote_file, 'utf8'));
+        } catch (_) {
+          remoteSnapshot = null;
+        }
+      }
       if (detail.kind === 'file') {
         const apply = deps.applySharedFileChoice;
         if (typeof apply !== 'function') {
@@ -1023,17 +1131,16 @@ function registerMultiDeviceRoutes(deps) {
           return res.status(502).json({ ok: false, error: (applied && applied.error) || 'Datei-Sync fehlgeschlagen.' });
         }
       } else if (choice === 'remote') {
-        let remotePayload = {};
-        try {
-          remotePayload = JSON.parse(fs.readFileSync(detail.remote_file, 'utf8'));
-        } catch (e) {
+        if (!remoteSnapshot || typeof remoteSnapshot !== 'object') {
           return res.status(500).json({ ok: false, error: 'Server-Stand liegt nicht mehr vor.' });
         }
+        const remotePayload = remoteSnapshot;
         writeDraftState(
           {
             localJobId: row.local_job_id,
             basename,
             reiseDir: body.reiseDir || '',
+            writeOpts: { forceFrozen: true },
           },
           remotePayload,
           detail.remote_revision || 0,
@@ -1063,6 +1170,15 @@ function registerMultiDeviceRoutes(deps) {
             code: pushed && pushed.code,
           });
         }
+      }
+      if (detail.kind !== 'file' && remoteSnapshot) {
+        rememberDraftResolution(
+          row.local_job_id,
+          basename,
+          remoteSnapshot,
+          choice,
+          detail.remote_revision,
+        );
       }
       try {
         if (detail.remote_file && fs.existsSync(detail.remote_file)) fs.unlinkSync(detail.remote_file);

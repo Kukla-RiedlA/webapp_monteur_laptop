@@ -3,6 +3,10 @@
 const fs = require('fs');
 const path = require('path');
 const { isMonteurWorkRelPath, isMonteurPhotoCategoryRel } = require('./monteur-montage-paths');
+const {
+  isOnedriveNumberedCopyName,
+  sweepOnedriveNumberedWorkFolders,
+} = require('./onedrive-numbered-duplicates');
 
 const SIDECAR_NAME = '.kukla_transfer_rel_paths.json';
 
@@ -32,6 +36,7 @@ function shouldSkipFinishTransferFile(rel, baseName) {
   const relLower = normRel(rel).toLowerCase();
   if (!baseLower || baseLower === '.' || baseLower === '..') return true;
   if (baseLower.startsWith('.')) return true;
+  if (isOnedriveNumberedCopyName(base) && /\/(parameter|protokolle)\//i.test(relLower)) return true;
   if (baseLower.includes('debug')) return true;
   if (/\.(json|tmp|temp|bak|part|crdownload|ds_store)$/i.test(baseLower)) return true;
   if (baseLower === 'thumbs.db' || baseLower === 'desktop.ini') return true;
@@ -165,6 +170,13 @@ function listFinishTransferFiles(reiseDir, auftragsordner) {
   const root = path.resolve(String(reiseDir || ''));
   const ao = String(auftragsordner || '').trim();
   const dm = path.join(root, 'Dokumente_Monteur');
+  if (fs.existsSync(dm)) {
+    try {
+      sweepOnedriveNumberedWorkFolders(dm);
+    } catch (_) {
+      /* gesperrte OneDrive-Kopie bleibt, wird unten aus der Liste gelassen */
+    }
+  }
   const files = [];
   const walked = [];
   if (fs.existsSync(dm)) walkFiles(dm, 'Dokumente_Monteur', walked);

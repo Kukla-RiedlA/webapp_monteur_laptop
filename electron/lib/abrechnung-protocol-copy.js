@@ -67,17 +67,29 @@ function destHasStem(targetDir, stemKey) {
   return false;
 }
 
-function uniqueStoredName(targetDir, stored) {
+function uniqueStoredName(targetDir, stored, sourceAbs) {
   const ext = path.extname(stored);
   const baseName = ext ? stored.slice(0, -ext.length) : stored;
   let candidate = stored;
   let counter = 1;
   while (targetDir && fs.existsSync(path.join(targetDir, candidate))) {
+    if (sourceAbs && sameFileBytes(path.join(targetDir, candidate), sourceAbs)) return candidate;
     candidate = `${baseName}-${counter}${ext}`;
     counter += 1;
     if (counter > 999) break;
   }
   return candidate;
+}
+
+function sameFileBytes(a, b) {
+  try {
+    const sa = fs.statSync(a);
+    const sb = fs.statSync(b);
+    if (!sa.isFile() || !sb.isFile() || sa.size !== sb.size) return false;
+    return fs.readFileSync(a).equals(fs.readFileSync(b));
+  } catch (_) {
+    return false;
+  }
 }
 
 /**
@@ -120,7 +132,7 @@ function copyProtocolsToLocalAbrechnung(reiseDir) {
   for (const src of sources) {
     const stemKey = abrechnungStemKey(src.name);
     if (destHasStem(targetDir, stemKey)) continue;
-    const stored = uniqueStoredName(targetDir, applyBelegPrefix(src.name, src.prefix));
+    const stored = uniqueStoredName(targetDir, applyBelegPrefix(src.name, src.prefix), src.abs);
     const destAbs = path.join(targetDir, stored);
     try {
       fs.copyFileSync(src.abs, destAbs);
