@@ -5,6 +5,7 @@ const path = require('path');
 const express = require('express');
 const { getPdfAnnotatorSession } = require('./pdf-annotator-sessions');
 const { flattenPdfMarkup, suggestedAnnotatedPath } = require('./pdf-flatten-markup');
+const { printAnnotatorPdf } = require('./pdf-print');
 
 function pdfjsPackageDir() {
   try {
@@ -115,6 +116,33 @@ function registerPdfAnnotatorRoutes(app, opts) {
         ok: true,
         path: destPath,
         fileName: path.basename(destPath),
+      });
+    } catch (e) {
+      return res.status(500).json({
+        ok: false,
+        error: e && e.message ? e.message : String(e),
+      });
+    }
+  });
+
+  app.post('/api/pdf-annotator/print', async (req, res) => {
+    try {
+      const id = String((req.body && req.body.id) || '').trim();
+      const session = getPdfAnnotatorSession(id);
+      if (!session) return res.status(404).json({ ok: false, error: 'Sitzung unbekannt.' });
+      const sourcePath = session.viewPath && fs.existsSync(session.viewPath)
+        ? session.viewPath
+        : session.sourcePath;
+      if (!sourcePath || !fs.existsSync(sourcePath)) {
+        return res.status(404).json({ ok: false, error: 'PDF nicht gefunden.' });
+      }
+      const result = await printAnnotatorPdf({
+        sourcePath,
+        markup: req.body && req.body.markup,
+      });
+      return res.json({
+        ok: true,
+        cancelled: !!(result && result.cancelled),
       });
     } catch (e) {
       return res.status(500).json({

@@ -308,8 +308,11 @@ function upsertCustomersFromExport(db, customers) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   let n = 0;
-  const tx = db.transaction((rows) => {
-    for (const c of rows) {
+  // db-compat: transaction(fn) führt fn sofort ohne Args aus.
+  // better-sqlite3 native: transaction(fn) liefert eine Runner-Funktion.
+  // Deshalb Closure über customers, keine Parameter an den Callback.
+  const apply = () => {
+    for (const c of customers) {
       const serverId = parseInt(c.id != null ? c.id : c.server_id, 10);
       if (!Number.isFinite(serverId) || serverId <= 0) continue;
       const name = str(c.name) || 'Unbekannt';
@@ -380,8 +383,13 @@ function upsertCustomersFromExport(db, customers) {
       }
       n += 1;
     }
-  });
-  tx(customers);
+  };
+  if (db && typeof db.transaction === 'function') {
+    const runner = db.transaction(apply);
+    if (typeof runner === 'function') runner();
+  } else {
+    apply();
+  }
   return n;
 }
 

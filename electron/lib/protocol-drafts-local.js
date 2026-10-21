@@ -1,5 +1,7 @@
 'use strict';
 
+const { stripPasswordFields, scrubPasswordColumnsInTableOnce } = require('./credential-vault');
+
 /**
  * Lokale Protokoll-Zwischenstände an FN (SQLite), analog Dispo monteur_protocol_drafts.
  * Legacy-JSON unter Dokumente_Monteur/ wird einmal importiert und danach entfernt.
@@ -121,6 +123,11 @@ function ensureProtocolDraftsSchema(db) {
     )`,
   );
   tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_protocol_draft_meta_job ON protocol_draft_meta(local_job_id)');
+  try {
+    scrubPasswordColumnsInTableOnce(db, 'protocol_drafts', 'payload_json', 'protocol_drafts.payload_json.v1');
+  } catch (_) {
+    /* ignore scrub errors */
+  }
 }
 
 function tableHasColumn(db, table, column) {
@@ -291,6 +298,8 @@ function readMetaRow(db, localJobId, kind) {
 }
 
 function upsertRow(db, localJobId, kind, fab, payload) {
+  const safePayload = stripPasswordFields(payload && typeof payload === 'object' ? payload : {});
+  const payloadJson = JSON.stringify(safePayload || {});
   if (hasFrozenColumn(db)) {
     db.prepare(
       `INSERT INTO protocol_drafts (local_job_id, protocol_kind, fabrikationsnummer, payload_json, updated_at, frozen)
@@ -299,7 +308,7 @@ function upsertRow(db, localJobId, kind, fab, payload) {
        DO UPDATE SET
          payload_json = CASE WHEN protocol_drafts.frozen = 1 THEN protocol_drafts.payload_json ELSE excluded.payload_json END,
          updated_at = CASE WHEN protocol_drafts.frozen = 1 THEN protocol_drafts.updated_at ELSE datetime('now') END`,
-    ).run(localJobId, kind, fab, JSON.stringify(payload || {}));
+    ).run(localJobId, kind, fab, payloadJson);
     return;
   }
   db.prepare(
@@ -307,7 +316,7 @@ function upsertRow(db, localJobId, kind, fab, payload) {
      VALUES (?, ?, ?, ?, datetime('now'))
      ON CONFLICT(local_job_id, protocol_kind, fabrikationsnummer)
      DO UPDATE SET payload_json = excluded.payload_json, updated_at = datetime('now')`,
-  ).run(localJobId, kind, fab, JSON.stringify(payload || {}));
+  ).run(localJobId, kind, fab, payloadJson);
 }
 
 function upsertMeta(db, localJobId, kind, revision, serverUpdatedAt, extra) {

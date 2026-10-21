@@ -9199,6 +9199,7 @@
             date_from: range.date_from,
             date_to: range.date_to,
             force_anlagenstamm_full: opts.forceAnlagenstammFull === true,
+            force_dienstreise_delta: opts.forceDienstreiseDelta === true || opts.forceAnlagenstammFull === true,
           }),
         ),
       });
@@ -9222,6 +9223,7 @@
                   date_from: range.date_from,
                   date_to: range.date_to,
                   force_anlagenstamm_full: opts.forceAnlagenstammFull === true,
+                  force_dienstreise_delta: opts.forceDienstreiseDelta === true || opts.forceAnlagenstammFull === true,
                 }),
               ),
             });
@@ -9486,6 +9488,7 @@
           var syncProblems = await runDispoPushPull(auth, range, {
             connectedBaseFallback: connectedBase,
             forceAnlagenstammFull: opts.forceAnlagenstammFull === true,
+            forceDienstreiseDelta: opts.forceDienstreiseDelta === true || opts.forceAnlagenstammFull === true,
           });
           applySyncBadgeAfterRun(syncProblems);
           scheduleAutoAppUpdateCheck();
@@ -9869,11 +9872,40 @@
   let countdownTickId = null;
   let nextSyncTime = 0;
 
+  function hasActiveHeavySyncJobs(jobs) {
+    var list = Array.isArray(jobs) ? jobs : [];
+    return list.some(function (j) {
+      if (!j) return false;
+      if (j.status !== 'queued' && j.status !== 'running') return false;
+      return j.type === 'sync_pull' || j.type === 'dienstreise_pull';
+    });
+  }
+
+  function fetchActiveHeavySyncJobs() {
+    return fetch(API_BASE + '/api/background_jobs?active=1&limit=40')
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        return (data && data.jobs) || [];
+      })
+      .catch(function () {
+        return [];
+      });
+  }
+
   function startSyncInterval() {
     if (syncIntervalId) clearInterval(syncIntervalId);
     const ms = getSyncIntervalMinutes() * 60 * 1000;
     syncIntervalId = setInterval(function () {
-      checkConnectionAndSync({ blockingSync: false });
+      fetchActiveHeavySyncJobs().then(function (jobs) {
+        if (hasActiveHeavySyncJobs(jobs)) {
+          console.log('[Sync] Auto-Sync übersprungen — Pull noch aktiv');
+          setNextSyncTime();
+          return;
+        }
+        checkConnectionAndSync({ blockingSync: false });
+      });
     }, ms);
     if (!countdownTickId) {
       countdownTickId = setInterval(updateCountdownRing, 1000);
@@ -9909,7 +9941,14 @@
         reject(new Error('Sync dauert zu lange (>' + Math.round(maxMs / 60000) + ' Min) — bitte erneut versuchen'));
       }, maxMs);
     });
-    return Promise.race([checkConnectionAndSync({ blockingSync: true, forceAnlagenstammFull: true }), guard])
+    return Promise.race([
+      checkConnectionAndSync({
+        blockingSync: true,
+        forceAnlagenstammFull: true,
+        forceDienstreiseDelta: true,
+      }),
+      guard,
+    ])
       .catch(function (e) {
         console.warn('[manual_sync]', e && e.message ? e.message : e);
         setConnectionBadge(
@@ -10796,7 +10835,11 @@
     var prep = hasLogin && !techId ? resolveMonteurProfileFromDispo() : Promise.resolve();
     var syncNowMaxMs = 40 * 60 * 1000;
     var syncWork = prep.then(function () {
-      return checkConnectionAndSync({ blockingSync: true, forceAnlagenstammFull: true });
+      return checkConnectionAndSync({
+        blockingSync: true,
+        forceAnlagenstammFull: true,
+        forceDienstreiseDelta: true,
+      });
     });
     Promise.race([
       syncWork,
@@ -14435,7 +14478,9 @@
       : (job.id != null ? String(job.id) : null);
     if (sid == null) return null;
     var tid = job.technician_id != null ? job.technician_id : job.technicianId;
-    return sid + ':' + String(tid != null ? tid : '');
+    var slot = job.calendar_unassigned_slot;
+    var slotPart = (slot !== undefined && slot !== null && String(slot) !== '') ? (':' + String(slot)) : '';
+    return sid + ':' + String(tid != null ? tid : '') + slotPart;
   }
 
   function calendarJobTechFields(job, techById, viewerTechId) {
@@ -14588,6 +14633,7 @@
         it.start_datetime || '',
         it.end_datetime || '',
         it.technician_id != null ? it.technician_id : '',
+        it.calendar_unassigned_slot != null && String(it.calendar_unassigned_slot) !== '' ? it.calendar_unassigned_slot : '',
         it.technician_color || '',
         it.technician_name || '',
         it.status || '',
@@ -14722,8 +14768,8 @@
         });
         // Keine lokalen Aufträge mehr anhängen, die im Dispo-Cache fehlen — sonst bleiben
         // umgebuchte Termine (z. B. Georgia-Pacific / alte Köprinner-Zuweisung) sichtbar.
-        // Duplikate nur pro Auftrag+Techniker entfernen, damit Mehrfachzuweisungen
-        // (ein Auftrag, zwei Monteure) als zwei Balken bleiben.
+        // Duplikate nur pro Auftrag+Techniker+offenem Slot entfernen, damit
+        // Mehrfachzuweisungen und mehrere „Nicht zugewiesen“-Slots als eigene Balken bleiben.
         var seenJobKey = {};
         jobs = jobs.filter(function (j) {
           var key = calendarJobAssignmentKey(j);

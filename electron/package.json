@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "KUKpit - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -27,13 +27,14 @@
     "test:serviceprotokoll-pdf": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js",
     "test:serviceprotokoll-pdf:open": "node ./node_modules/electron/cli.js scripts/test-serviceprotokoll-pdf.js --open",
     "test:sync-offline": "node --test lib/sync-lww.test.js lib/sync-offline-verify.test.js lib/arbeitsnachweis-weight.test.js lib/job-id-map.test.js lib/job-technician-gate.test.js",
+    "test:credential-vault": "node --test lib/credential-vault.test.js",
     "test:dispo-probe": "node --test lib/dispo-probe.test.js",
     "test:kuklink-format": "node --test lib/kuklink/format-detect.test.js",
     "test:profinet": "node --test lib/profinet/dcp.test.js",
     "test:vnc": "node --test lib/vnc/validate.test.js lib/vnc/bridge.test.js lib/vnc/low-color.test.js",
     "test:ftp": "node --test lib/ftp/validate.test.js lib/ftp/classify.test.js lib/ftp/local-dir.test.js",
     "build:novnc": "node scripts/build-novnc.js",
-    "test:pdf-annotator": "node --test lib/pdf-flatten-markup.test.js lib/pdf-annotator-sessions.test.js"
+    "test:pdf-annotator": "node --test lib/pdf-flatten-markup.test.js lib/pdf-annotator-sessions.test.js lib/pdf-print.test.js"
   },
   "devDependencies": {
     "electron": "^41.2.0",

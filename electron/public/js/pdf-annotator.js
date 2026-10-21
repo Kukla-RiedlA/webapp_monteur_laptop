@@ -878,6 +878,53 @@ window.__pdfAnnotatorSaveForClose = async function () {
   return !!(result && result.ok);
 };
 
+let printing = false;
+
+function statusAfterPrint() {
+  if (state.dirty) return 'Gedruckt. Noch nicht gespeichert.';
+  return 'Gedruckt.';
+}
+
+function commitEditingText() {
+  const active = document.activeElement;
+  if (!active || !active.classList || !active.classList.contains('is-editing')) return;
+  if (typeof active.blur === 'function') active.blur();
+}
+
+async function printDocument() {
+  if (!sessionId || printing) return;
+  commitEditingText();
+  printing = true;
+  const btn = document.getElementById('pdfPrint');
+  if (btn) btn.disabled = true;
+  setStatus('Druckdialog …');
+  try {
+    const res = await fetch('/api/pdf-annotator/print', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: sessionId,
+        markup: currentMarkup(),
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (data && data.cancelled) {
+      setStatus(state.dirty ? 'Ungespeichert' : (state.pdf ? state.pdf.numPages + ' Seite(n)' : ''));
+      return;
+    }
+    if (!res.ok || !data || !data.ok) {
+      setStatus((data && data.error) || 'Drucken fehlgeschlagen.');
+      return;
+    }
+    setStatus(statusAfterPrint());
+  } catch (e) {
+    setStatus(e && e.message ? e.message : 'Drucken fehlgeschlagen.');
+  } finally {
+    printing = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function boot() {
   if (!sessionId) {
     stageEl.innerHTML = '<div class="pdf-annot-error">Keine PDF-Sitzung.</div>';
@@ -931,6 +978,7 @@ if (textSizeEl) {
   });
 }
 document.getElementById('pdfUndo').addEventListener('click', undoLast);
+document.getElementById('pdfPrint').addEventListener('click', () => printDocument());
 document.getElementById('pdfSave').addEventListener('click', () => save(false));
 document.getElementById('pdfSaveAs').addEventListener('click', () => save(true));
 zoomOutEl.addEventListener('click', () => zoomBy(-ZOOM_STEP, null, true));
@@ -953,6 +1001,10 @@ document.addEventListener('keydown', (ev) => {
   if ((ev.ctrlKey || ev.metaKey) && key === 's') {
     ev.preventDefault();
     save(ev.shiftKey);
+  }
+  if ((ev.ctrlKey || ev.metaKey) && key === 'p') {
+    ev.preventDefault();
+    printDocument();
   }
   if ((ev.ctrlKey || ev.metaKey) && (key === '+' || key === '=' || ev.code === 'NumpadAdd')) {
     ev.preventDefault();

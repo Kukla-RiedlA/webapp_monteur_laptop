@@ -186,6 +186,24 @@ function registerMultiDeviceRoutes(deps) {
     const localJobId = parseInt(opts && opts.localJobId, 10);
     const basename = draftBasename(opts || {});
     if (!db || !localJobId || !basename) return;
+    const local = readDraftState(opts);
+    const localPayload = local && local.payload ? local.payload : {};
+    const remoteClean = remotePayload == null ? {} : remotePayload;
+    // Nur Zeitstempel/Meta: kein Blocking-Dialog (auch bei einem Laptop).
+    if (
+      draftPayloadsEqual(localPayload, remoteClean) ||
+      diffProtocolPayloads(localPayload, remoteClean).length === 0
+    ) {
+      try {
+        const rev = Math.max(parseInt(local && local.revision, 10) || 0, parseInt(remoteRev, 10) || 0);
+        writeDraftState(opts, stripDraftMeta(remoteClean), rev, remoteAt || local.server_updated_at || null);
+        clearConflictsForFile(localJobId, opts.serverJobId, basename);
+      } catch (_) {
+        /* ignore */
+      }
+      console.warn('[draft_conflict] skipped (timestamp-only / no text diff)', basename);
+      return;
+    }
     const dir = path.join(DB_DIR, 'protocol-conflicts');
     try {
       fs.mkdirSync(dir, { recursive: true });
@@ -199,7 +217,7 @@ function registerMultiDeviceRoutes(deps) {
       '.json';
     const remoteFile = path.join(dir, fileName);
     try {
-      fs.writeFileSync(remoteFile, JSON.stringify(remotePayload == null ? {} : remotePayload));
+      fs.writeFileSync(remoteFile, JSON.stringify(remoteClean));
     } catch (_) {
       return;
     }
@@ -842,6 +860,90 @@ function registerMultiDeviceRoutes(deps) {
     }
   }
 
+  /**
+   * Konflikte ohne Fachunterschied (nur Zeitstempel/Meta) still auflösen —
+   * tritt oft bei einem Laptop nach Speichern/Push auf.
+   */
+  function purgeTimestampOnlyDraftConflicts() {
+    let rows;
+    try {
+      rows = db
+        .prepare(
+          `SELECT id, local_job_id, rel_path, detail_json FROM multi_device_conflicts
+           WHERE detail_json LIKE '%"blocking":true%' AND detail_json LIKE '%"kind":"draft"%'`,
+        )
+        .all();
+    } catch (_) {
+      return 0;
+    }
+    let n = 0;
+    const conflictsDir = path.resolve(DB_DIR, 'protocol-conflicts');
+    for (const row of rows) {
+      let detail = {};
+      try {
+        detail = JSON.parse(row.detail_json || '{}');
+      } catch (_) {
+        continue;
+      }
+      if (detail.kind !== 'draft' || !detail.remote_file) continue;
+      const remoteFile = path.resolve(String(detail.remote_file || ''));
+      const rel = path.relative(conflictsDir, remoteFile);
+      if (!remoteFile || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+      let remotePayload = null;
+      try {
+        remotePayload = JSON.parse(fs.readFileSync(remoteFile, 'utf8'));
+      } catch (_) {
+        continue;
+      }
+      const basename = detail.basename || row.rel_path;
+      const local = readDraftState({
+        localJobId: row.local_job_id,
+        basename,
+        reiseDir: '',
+      });
+      const localPayload = local && local.payload ? local.payload : {};
+      const equal = draftPayloadsEqual(localPayload, remotePayload);
+      const noTextDiff = equal || diffProtocolPayloads(localPayload, remotePayload).length === 0;
+      if (!noTextDiff) continue;
+      try {
+        if (equal && remotePayload && typeof remotePayload === 'object') {
+          const rev = Math.max(
+            parseInt(local && local.revision, 10) || 0,
+            parseInt(detail.remote_revision, 10) || 0,
+          );
+          writeDraftState(
+            { localJobId: row.local_job_id, basename, reiseDir: '' },
+            stripDraftMeta(remotePayload),
+            rev,
+            detail.remote_at || (local && local.server_updated_at) || null,
+          );
+        }
+      } catch (_) {
+        /* Meta-Align optional */
+      }
+      try {
+        if (fs.existsSync(remoteFile)) fs.unlinkSync(remoteFile);
+      } catch (_) {
+        /* ignore */
+      }
+      try {
+        db.prepare('DELETE FROM multi_device_conflicts WHERE id = ?').run(row.id);
+        n += 1;
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    if (n) {
+      try {
+        save();
+      } catch (_) {
+        /* ignore */
+      }
+      console.log('[multi_device] timestamp-only conflicts purged:', n);
+    }
+    return n;
+  }
+
   function listRecentConflicts(limit) {
     try {
       db.prepare(
@@ -849,6 +951,7 @@ function registerMultiDeviceRoutes(deps) {
          WHERE datetime(created_at) < datetime('now', '-30 minutes')
            AND (detail_json IS NULL OR detail_json NOT LIKE '%"blocking":true%')`,
       ).run();
+      purgeTimestampOnlyDraftConflicts();
       return db
         .prepare(
           `SELECT id, local_job_id, server_job_id, rel_path, detail_json, created_at
@@ -1025,6 +1128,43 @@ function registerMultiDeviceRoutes(deps) {
       });
       const localPayload = local && local.payload ? local.payload : {};
       const rows = diffProtocolPayloads(localPayload, remotePayload);
+      const contentEqual = draftPayloadsEqual(localPayload, remotePayload);
+      if ((!rows.length || contentEqual) && detail.kind === 'draft') {
+        try {
+          const rev = Math.max(
+            parseInt(local && local.revision, 10) || 0,
+            parseInt(detail.remote_revision, 10) || 0,
+          );
+          writeDraftState(
+            { localJobId: row.local_job_id, basename, reiseDir: '' },
+            stripDraftMeta(remotePayload),
+            rev,
+            detail.remote_at || (local && local.server_updated_at) || null,
+          );
+          try {
+            if (fs.existsSync(remoteFile)) fs.unlinkSync(remoteFile);
+          } catch (_) {
+            /* ignore */
+          }
+          db.prepare('DELETE FROM multi_device_conflicts WHERE id = ?').run(id);
+          save();
+        } catch (softErr) {
+          console.warn(
+            '[conflicts/diff] soft-resolve timestamp-only:',
+            softErr && softErr.message ? softErr.message : softErr,
+          );
+        }
+        return res.json({
+          ok: true,
+          kind: 'draft',
+          summary,
+          local_at: (local && (local.local_updated_at || local.server_updated_at)) || null,
+          remote_at: detail.remote_at || null,
+          rows: [],
+          soft_resolved: true,
+          note: 'Nur Zeitstempel abweichend — Konflikt automatisch aufgelöst.',
+        });
+      }
       res.json({
         ok: true,
         kind: 'draft',

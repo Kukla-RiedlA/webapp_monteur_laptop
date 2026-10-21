@@ -1711,6 +1711,39 @@ function createApp(db) {
     };
   }
 
+  /**
+   * Hintergrund-Jobs: Username/URL aus Payload, Passwort nur aus Vault
+   * (Payload speichert keine Klartext-Passwörter mehr).
+   */
+  function credsForBackgroundJob(payload) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const user = String(p.serverUsername || p.dispo_username || p.dispoUsername || '').trim();
+    const baseHint = String(p.baseUrl || p.dispo_base_url || p.dispoBaseUrl || '')
+      .trim()
+      .replace(/\/$/, '');
+    const resolved = resolveDispoServerCreds({
+      serverUsername: user,
+      baseUrl: baseHint,
+      externalUrl: p.externalUrl || '',
+      internalUrl: p.internalUrl || '',
+    });
+    return {
+      serverUsername: resolved.serverUsername || user,
+      serverPassword: resolved.serverPassword || '',
+      baseUrl: resolved.baseUrl || baseHint,
+      externalUrl:
+        resolved.externalUrl ||
+        String(p.externalUrl || '')
+          .trim()
+          .replace(/\/$/, ''),
+      internalUrl:
+        resolved.internalUrl ||
+        String(p.internalUrl || '')
+          .trim()
+          .replace(/\/$/, ''),
+    };
+  }
+
   const { registerAnlagenstammPhpRoutes } = require('./lib/anlagenstamm-php-routes');
   const { registerAbrechnungPhpRoutes } = require('./lib/abrechnung-php-routes');
   let prewarmAnlagenstammGalleryThumbsImpl = null;
@@ -5951,6 +5984,11 @@ function createApp(db) {
   });
 
   const DIENSTREISE_DELTA_MIN_INTERVAL_MS = 5 * 60 * 1000;
+  /** periodisches Manifest/Refresh: wiederverwenden bis dahin (neue Dateien spätestens danach / bei manuellem Sync). */
+  const DIENSTREISE_PERIODIC_MANIFEST_TTL_MS = 15 * 60 * 1000;
+  const DIENSTREISE_REFRESH_TTL_MS = 15 * 60 * 1000;
+  /** Auto-Sync: Abrechnung nicht öfter als so oft neu einplanen. */
+  const ABRECHNUNG_AUTO_REFRESH_TTL_MS = 30 * 60 * 1000;
 
   function parseBackgroundJobTimestamp(ts) {
     if (!ts) return 0;
@@ -6036,7 +6074,7 @@ function createApp(db) {
         continue;
       }
       const dedupeKey = 'dienstreise_pull:' + localJobId + ':copy';
-      const { job_id: pullJobId } = bgJobs.enqueue(
+      const enq = bgJobs.enqueue(
         'dienstreise_pull',
         {
           job_id: localJobId,
@@ -6052,8 +6090,9 @@ function createApp(db) {
         },
         dedupeKey,
       );
-      if (pullJobId) jobIds.push(pullJobId);
-      enqueued++;
+      if (enq && enq.job_id) jobIds.push(enq.job_id);
+      if (enq && enq.created) enqueued++;
+      else skipped++;
     }
     return { enqueued, skipped, job_ids: jobIds };
   }
@@ -18410,21 +18449,22 @@ function createApp(db) {
     switch (job.type) {
       case 'dienstreise_pull': {
         const p = job.payload || {};
+        const jobCreds = credsForBackgroundJob(p);
         const rawJobId = parseInt(p.job_id, 10);
-        let dispoBaseUrl = (p.dispo_base_url || '').trim().replace(/\/$/, '');
+        let dispoBaseUrl = (p.dispo_base_url || jobCreds.baseUrl || '').trim().replace(/\/$/, '');
         const technicianId = parseInt(p.technician_id, 10);
         const includeBilder = !!p.include_bilder;
         const acceptJob = !!p.accept_job;
         const periodicDelta = !!p.periodic_delta;
-        const dispoUsername = (p.dispo_username || '').trim();
-        const dispoPassword = p.dispo_password != null ? String(p.dispo_password) : '';
+        const dispoUsername = (p.dispo_username || jobCreds.serverUsername || '').trim();
+        const dispoPassword = jobCreds.serverPassword || '';
         if (!rawJobId || !technicianId) throw new Error('dienstreise_pull: job_id und technician_id erforderlich.');
         const authHeader = authHeaderFromCredentials(dispoUsername, dispoPassword) || {};
         if (!authHeader.Authorization) throw new Error('Dispo-Zugangsdaten fehlen.');
         const resolvedPull = await resolveDispoWorkingBase({
           baseUrl: dispoBaseUrl,
-          externalUrl: p.externalUrl,
-          internalUrl: p.internalUrl,
+          externalUrl: p.externalUrl || jobCreds.externalUrl,
+          internalUrl: p.internalUrl || jobCreds.internalUrl,
           technicianId,
           serverUsername: dispoUsername,
           serverPassword: dispoPassword,
@@ -18548,7 +18588,9 @@ function createApp(db) {
                 if (Array.isArray(prev.ted_completed) && prev.ted_completed.length) {
                   seed.ted_completed = prev.ted_completed.slice();
                 }
-                if (prev.refresh_done_at && !periodicDelta) seed.refresh_done_at = prev.refresh_done_at;
+                if (prev.refresh_done_at) seed.refresh_done_at = prev.refresh_done_at;
+                if (Array.isArray(prev.files) && prev.files.length) seed.files = prev.files.slice();
+                if (prev.manifest_fresh_at) seed.manifest_fresh_at = prev.manifest_fresh_at;
                 mergeCheckpoint(seed);
                 chk = readCheckpoint();
               }
@@ -18558,8 +18600,7 @@ function createApp(db) {
         const refreshAge = chk.refresh_done_at ? Date.now() - new Date(chk.refresh_done_at).getTime() : Infinity;
         const skipRefresh =
           !forceRefresh &&
-          !periodicDelta &&
-          !!(chk.refresh_done_at && refreshAge < 15 * 60 * 1000 && chk.dispo_base_fingerprint === fp);
+          !!(chk.refresh_done_at && refreshAge < DIENSTREISE_REFRESH_TTL_MS && chk.dispo_base_fingerprint === fp);
         let copyWarning = null;
         let skipCopyDueToNetwork = false;
         setProgress('refresh', 0, 1, skipRefresh ? 'Dispo-Refresh (Checkpoint, TTL).' : 'Dispo wird aktualisiert …');
@@ -18682,16 +18723,35 @@ function createApp(db) {
         }
 
         let files = null;
+        const manifestFreshAge = chk.manifest_fresh_at
+          ? Date.now() - new Date(chk.manifest_fresh_at).getTime()
+          : Infinity;
+        const canReusePeriodicManifest =
+          periodicDelta &&
+          !forceRefresh &&
+          Array.isArray(chk.files) &&
+          chk.files.length > 0 &&
+          Number.isFinite(manifestFreshAge) &&
+          manifestFreshAge < DIENSTREISE_PERIODIC_MANIFEST_TTL_MS;
+        const canResumeManifest =
+          !forceRefresh &&
+          !periodicDelta &&
+          Array.isArray(chk.files) &&
+          chk.files.length > 0;
         if (skipCopyDueToNetwork) {
           files = [];
-        } else if (!forceRefresh && !periodicDelta && Array.isArray(chk.files) && chk.files.length) {
+        } else if (canResumeManifest || canReusePeriodicManifest) {
           files = filterManifestForPull(chk.files, pullMode, pathsByFab, fabMap);
         } else {
           files = [];
           try {
             await collectManifest('', files);
             files = filterManifestForPull(files, pullMode, pathsByFab, fabMap);
-            mergeCheckpoint({ files, completed: [] });
+            mergeCheckpoint({
+              files,
+              completed: [],
+              manifest_fresh_at: new Date().toISOString(),
+            });
           } catch (listErr) {
             if (acceptJob) {
               copyWarning = formatFetchError(listErr, dispoBaseUrl);
@@ -18719,6 +18779,8 @@ function createApp(db) {
          * Download nur wenn Dispo-Datei fehlt lokal, neuer ist (mtime) oder Größe abweicht.
          */
         let pullFnEntries = null;
+        /** @type {Map<string, { size: number, mtimeMs: number }> | null} */
+        let localFileIndex = null;
         async function ensurePullFnEntries() {
           if (pullFnEntries) return pullFnEntries;
           const extra = [];
@@ -18747,6 +18809,51 @@ function createApp(db) {
           return expandTopLevelMontageRelToFnFolders(mapped, localFnEntriesForPull());
         }
 
+        async function buildLocalFileIndex() {
+          const map = new Map();
+          let seen = 0;
+          async function walk(absDir, relBase) {
+            let entries;
+            try {
+              entries = await readdirOffMainThread(absDir);
+            } catch (_) {
+              return;
+            }
+            for (const ent of entries) {
+              const name = ent && ent.name != null ? String(ent.name) : '';
+              if (!name || name === '.' || name === '..') continue;
+              if (typeof isIgnorableDirEntry === 'function' && isIgnorableDirEntry(name)) continue;
+              const childAbs = path.join(absDir, name);
+              const childRel = relBase ? relBase + '/' + name : name;
+              if (ent.isDirectory) {
+                await walk(childAbs, childRel);
+              } else if (ent.isFile) {
+                try {
+                  const st = await statOffMainThread(childAbs);
+                  if (st && st.isFile) {
+                    map.set(childRel.replace(/\\/g, '/'), {
+                      size: Number(st.size) || 0,
+                      mtimeMs:
+                        st.mtimeMs != null
+                          ? Number(st.mtimeMs)
+                          : st.mtime
+                            ? st.mtime.getTime()
+                            : 0,
+                    });
+                  }
+                } catch (_) {
+                  /* ignore */
+                }
+                seen += 1;
+                if (seen % 24 === 0) await yieldEventLoop();
+              }
+            }
+          }
+          await walk(targetDir, '');
+          localFileIndex = map;
+          return map;
+        }
+
         async function copyPullFileToSiblingRels(primaryAbs, localRels) {
           if (!primaryAbs || !(await existsOffMainThread(primaryAbs))) return;
           for (let s = 1; s < localRels.length; s++) {
@@ -18765,22 +18872,29 @@ function createApp(db) {
         }
 
         async function shouldSkip(relPath, expectedSize, expectedMtimeMs, completedArr) {
-          const localRel = localRelsForPullFile(relPath)[0] || relPath;
-          const lp = path.join(targetDir, localRel.replace(/\//g, path.sep));
-          let st = null;
-          try {
-            st = await statOffMainThread(lp);
-          } catch (_) {
-            return false;
-          }
-          if (!st || !st.isFile) return false;
+          const localRel = (localRelsForPullFile(relPath)[0] || relPath || '').replace(/\\/g, '/');
           let localSize = null;
           let localMtimeMs = null;
-          try {
-            localSize = st.size;
-            localMtimeMs = st.mtimeMs != null ? st.mtimeMs : st.mtime ? st.mtime.getTime() : null;
-          } catch (_) {
-            return false;
+          if (localFileIndex) {
+            const hit = localFileIndex.get(localRel);
+            if (!hit) return false;
+            localSize = hit.size;
+            localMtimeMs = hit.mtimeMs;
+          } else {
+            const lp = path.join(targetDir, localRel.replace(/\//g, path.sep));
+            let st = null;
+            try {
+              st = await statOffMainThread(lp);
+            } catch (_) {
+              return false;
+            }
+            if (!st || !st.isFile) return false;
+            try {
+              localSize = st.size;
+              localMtimeMs = st.mtimeMs != null ? st.mtimeMs : st.mtime ? st.mtime.getTime() : null;
+            } catch (_) {
+              return false;
+            }
           }
           if (expectedMtimeMs != null && Number.isFinite(expectedMtimeMs) && expectedMtimeMs > 0) {
             if (localMtimeMs == null || !Number.isFinite(localMtimeMs)) return false;
@@ -18837,6 +18951,16 @@ function createApp(db) {
         const total = files.length;
         let completed = Array.isArray(chk.completed) ? chk.completed.slice() : [];
         await ensurePullFnEntries();
+        try {
+          setProgress('download', 0, total, 'Lokaler Dateiindex …');
+          await buildLocalFileIndex();
+        } catch (idxErr) {
+          console.warn(
+            '[dienstreise_pull] localFileIndex:',
+            idxErr && idxErr.message ? idxErr.message : idxErr,
+          );
+          localFileIndex = null;
+        }
         let pullCkPending = 0;
         let skippedStart = 0;
         for (const f of files) {
@@ -19153,20 +19277,23 @@ function createApp(db) {
       }
       case 'dienstreise_push': {
         const p = job.payload || {};
+        const jobCreds = credsForBackgroundJob(p);
         const localJobId = parseInt(p.job_id, 10);
-        const dispoBaseUrl = (p.dispo_base_url || p.dispoBaseUrl || '').trim().replace(/\/$/, '');
+        const dispoBaseUrl = (p.dispo_base_url || p.dispoBaseUrl || jobCreds.baseUrl || '')
+          .trim()
+          .replace(/\/$/, '');
         const technicianId = parseInt(p.technician_id != null ? p.technician_id : p.technicianId, 10);
         setProgress('dienstreise_push', 0, 1, 'Synchronisiere Dienstreise-Ordner …');
         await syncDienstreiseFoldersToDispo(
           localJobId,
           dispoBaseUrl,
           technicianId,
-          String(p.dispo_username || p.dispoUsername || ''),
-          String(p.dispo_password != null ? p.dispo_password : p.dispoPassword || ''),
+          String(p.dispo_username || p.dispoUsername || jobCreds.serverUsername || ''),
+          String(jobCreds.serverPassword || ''),
           {
             onlyChanged: p.onlyChanged !== false,
-            externalUrl: p.externalUrl,
-            internalUrl: p.internalUrl,
+            externalUrl: p.externalUrl || jobCreds.externalUrl,
+            internalUrl: p.internalUrl || jobCreds.internalUrl,
           },
         );
         if (dispoBaseUrl) {
@@ -19180,10 +19307,16 @@ function createApp(db) {
       }
       case 'sync_pull': {
         const p = job.payload || {};
-        const pair = normalizeDispoBasePair(p.externalUrl, p.internalUrl);
-        let base = (p.baseUrl || pair.external || pair.internal || '').trim().replace(/\/$/, '');
+        const jobCreds = credsForBackgroundJob(p);
+        const pair = normalizeDispoBasePair(
+          p.externalUrl || jobCreds.externalUrl,
+          p.internalUrl || jobCreds.internalUrl,
+        );
+        let base = (p.baseUrl || jobCreds.baseUrl || pair.external || pair.internal || '')
+          .trim()
+          .replace(/\/$/, '');
         const technicianId = parseInt(p.technicianId, 10);
-        const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
+        const auth = authHeaderFromCredentials(jobCreds.serverUsername, jobCreds.serverPassword);
         const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
         if (pair.external && pair.internal) {
           const resolved = await resolveDispoWorkingBase({
@@ -19191,27 +19324,14 @@ function createApp(db) {
             externalUrl: pair.external,
             internalUrl: pair.internal,
             technicianId,
-            serverUsername: p.serverUsername,
-            serverPassword: p.serverPassword,
+            serverUsername: jobCreds.serverUsername,
+            serverPassword: jobCreds.serverPassword,
           });
           if (resolved.base) base = resolved.base;
         }
-        if (p.serverUsername && p.serverPassword) {
-          try {
-            saveWebSession(DB_DIR, {
-              dispo_username: String(p.serverUsername),
-              dispo_password: String(p.serverPassword),
-              dispo_base: base,
-              dispo_external_url: p.externalUrl || pair.external || base,
-              dispo_internal_url: p.internalUrl || pair.internal || '',
-            });
-          } catch (sessErr) {
-            console.warn('[sync_pull] session persist:', sessErr && sessErr.message ? sessErr.message : sessErr);
-          }
-        }
         setProgress('sync_pull', 0, 8, 'Sende Status/Pending vor Pull …');
         try {
-          await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, p));
+          await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, jobCreds));
           await dbLock.runWithDbLock(async () => {
             save();
           });
@@ -19245,7 +19365,7 @@ function createApp(db) {
         });
         setProgress('sync_pull', 2, 8, 'Sende ausstehende Änderungen …');
         try {
-          await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, p));
+          await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, jobCreds));
           await dbLock.runWithDbLock(async () => {
             save();
           });
@@ -19350,8 +19470,8 @@ function createApp(db) {
             for (const basename of Object.keys(DRAFT_JSON_ENDPOINTS)) {
               await pullOneJsonDraftForJob(null, row.id, row.server_id, technicianId, basename, {
                 baseUrl: base,
-                serverUsername: p.serverUsername,
-                serverPassword: p.serverPassword,
+                serverUsername: jobCreds.serverUsername,
+                serverPassword: jobCreds.serverPassword,
               });
             }
             await new Promise((r) => setImmediate(r));
@@ -19361,45 +19481,67 @@ function createApp(db) {
         }
         await dbLock.runWithDbLock(async () => {
           setProgress('sync_pull', 6, 8, 'Projektordner (Änderungen) …');
-          try {
-            const openJobs = listLocalJobsForPeriodicDienstreisePull(technicianId);
-            for (const row of openJobs) {
-              enqueueDienstreisePushChanged(row.id, technicianId, base, p.serverUsername, p.serverPassword, {
-                externalUrl: p.externalUrl,
-                internalUrl: p.internalUrl,
-              });
-            }
-          } catch (pushChangedErr) {
-            console.warn(
-              '[sync_pull] dienstreise_changed_push:',
-              pushChangedErr && pushChangedErr.message ? pushChangedErr.message : pushChangedErr,
-            );
-          }
-          try {
-            const delta = enqueuePeriodicDienstreiseDeltaPulls({
-              technicianId,
-              dispoBaseUrl: base,
-              externalUrl: p.externalUrl,
-              internalUrl: p.internalUrl,
-              dispoUsername: p.serverUsername,
-              dispoPassword: p.serverPassword,
-              force: true,
-            });
-            if (delta.enqueued > 0) {
-              console.log('[sync_pull] dienstreise_delta enqueued:', delta.enqueued);
-            }
-          } catch (deltaErr) {
-            console.warn(
-              '[sync_pull] dienstreise_delta:',
-              deltaErr && deltaErr.message ? deltaErr.message : deltaErr,
-            );
-          }
           if (hasPendingOrDirtyAnlagenstamm(db)) {
             console.log(
               '[sync_pull] anlagenstamm_db_sync mit lokalen Änderungen/Pending — Server-Daten werden ergänzt (dirty Zeilen bleiben erhalten)',
             );
           }
         });
+        const forceDienstreiseDelta =
+          p.forceDienstreiseDelta === true ||
+          p.force_dienstreise_delta === true ||
+          p.forceAnlagenstammFull === true;
+        try {
+          const openJobs = listLocalJobsForPeriodicDienstreisePull(technicianId);
+          for (const row of openJobs) {
+            try {
+              const reiseDir = resolveDienstreiseReiseDirForJob(row.id, { createIfMissing: false });
+              if (!reiseDir) continue;
+              const changed = await collectChangedDienstreiseSyncFileEntries(db, reiseDir, row.id);
+              if (!changed.length) continue;
+              enqueueDienstreisePushChanged(row.id, technicianId, base, jobCreds.serverUsername, jobCreds.serverPassword, {
+                externalUrl: p.externalUrl,
+                internalUrl: p.internalUrl,
+              });
+            } catch (onePushErr) {
+              console.warn(
+                '[sync_pull] dienstreise_changed_push job',
+                row.id,
+                onePushErr && onePushErr.message ? onePushErr.message : onePushErr,
+              );
+            }
+          }
+        } catch (pushChangedErr) {
+          console.warn(
+            '[sync_pull] dienstreise_changed_push:',
+            pushChangedErr && pushChangedErr.message ? pushChangedErr.message : pushChangedErr,
+          );
+        }
+        try {
+          const delta = enqueuePeriodicDienstreiseDeltaPulls({
+            technicianId,
+            dispoBaseUrl: base,
+            externalUrl: p.externalUrl,
+            internalUrl: p.internalUrl,
+            dispoUsername: jobCreds.serverUsername,
+            dispoPassword: jobCreds.serverPassword,
+            force: forceDienstreiseDelta,
+          });
+          if (delta.enqueued > 0 || delta.skipped > 0) {
+            console.log(
+              '[sync_pull] dienstreise_delta enqueued:',
+              delta.enqueued,
+              'skipped:',
+              delta.skipped,
+              forceDienstreiseDelta ? '(force)' : '',
+            );
+          }
+        } catch (deltaErr) {
+          console.warn(
+            '[sync_pull] dienstreise_delta:',
+            deltaErr && deltaErr.message ? deltaErr.message : deltaErr,
+          );
+        }
         setProgress('anlagenstamm_db_sync', 0, 1, 'Anlagenstamm-Stammdaten …');
         try {
           await dbLock.runWithDbLock(async () => {
@@ -19413,8 +19555,8 @@ function createApp(db) {
               externalUrl: p.externalUrl,
               internalUrl: p.internalUrl,
               technician_id: technicianId,
-              serverUsername: p.serverUsername,
-              serverPassword: p.serverPassword,
+              serverUsername: jobCreds.serverUsername,
+              serverPassword: jobCreds.serverPassword,
             },
             (prog) => {
               if (prog && prog.page && prog.totalPages) {
@@ -19450,8 +19592,8 @@ function createApp(db) {
                   externalUrl: p.externalUrl,
                   internalUrl: p.internalUrl,
                   technician_id: technicianId,
-                  serverUsername: p.serverUsername,
-                  serverPassword: p.serverPassword,
+                  serverUsername: jobCreds.serverUsername,
+                  serverPassword: jobCreds.serverPassword,
                 },
                 (prog) => {
                   if (prog && prog.page && prog.totalPages) {
@@ -19488,8 +19630,8 @@ function createApp(db) {
                       externalUrl: p.externalUrl,
                       internalUrl: p.internalUrl,
                       technician_id: technicianId,
-                      serverUsername: p.serverUsername,
-                      serverPassword: p.serverPassword,
+                      serverUsername: jobCreds.serverUsername,
+                      serverPassword: jobCreds.serverPassword,
                     },
                     (prog) => {
                       if (prog && prog.page && prog.totalPages) {
@@ -19547,14 +19689,26 @@ function createApp(db) {
           console.warn('[sync_pull] anlagenstamm_db_sync:', syncErr && syncErr.message ? syncErr.message : syncErr);
         }
         try {
+          const forceAbrechnung =
+            p.forceDienstreiseDelta === true ||
+            p.force_dienstreise_delta === true ||
+            p.forceAnlagenstammFull === true;
           const abSync = enqueueAbrechnungBackgroundSync({
             baseUrl: base,
             technicianId,
-            serverUsername: p.serverUsername,
-            serverPassword: p.serverPassword,
+            serverUsername: jobCreds.serverUsername,
+            serverPassword: jobCreds.serverPassword,
+            respectTtl: !forceAbrechnung,
           });
-          if (abSync.enqueued > 0) {
-            console.log('[sync_pull] abrechnung_refresh enqueued:', abSync.enqueued, abSync.periods);
+          if (abSync.enqueued > 0 || abSync.skipped > 0) {
+            console.log(
+              '[sync_pull] abrechnung_refresh enqueued:',
+              abSync.enqueued,
+              'skipped:',
+              abSync.skipped || 0,
+              abSync.periods,
+              forceAbrechnung ? '(force)' : '(ttl)',
+            );
           }
         } catch (abErr) {
           console.warn('[sync_pull] abrechnung_refresh:', abErr && abErr.message ? abErr.message : abErr);
@@ -19564,8 +19718,8 @@ function createApp(db) {
             { db, save, dbDir: DB_DIR, authHeaderFromCredentials },
             base,
             technicianId,
-            p.serverUsername,
-            p.serverPassword,
+            jobCreds.serverUsername,
+            jobCreds.serverPassword,
           );
           await dbLock.runWithDbLock(async () => {
             save();
@@ -19580,7 +19734,8 @@ function createApp(db) {
       }
       case 'anlagenstamm_db_sync': {
         const p = job.payload || {};
-        const base = (p.baseUrl || '').trim().replace(/\/$/, '');
+        const jobCreds = credsForBackgroundJob(p);
+        const base = (p.baseUrl || jobCreds.baseUrl || '').trim().replace(/\/$/, '');
         const technicianId = parseInt(p.technicianId, 10);
         await dbLock.runWithDbLock(async () => {
           prepareAnlagenstammSyncRun(db, { forceFull: !!p.forceAnlagenstammFull });
@@ -19593,8 +19748,8 @@ function createApp(db) {
             externalUrl: p.externalUrl,
             internalUrl: p.internalUrl,
             technician_id: technicianId,
-            serverUsername: p.serverUsername,
-            serverPassword: p.serverPassword,
+            serverUsername: jobCreds.serverUsername,
+            serverPassword: jobCreds.serverPassword,
           },
           (prog) => {
             if (prog && prog.page && prog.totalPages) {
@@ -19619,7 +19774,7 @@ function createApp(db) {
             syncResult.purged != null ? syncResult.purged : 0,
           );
         }
-        const auth = authHeaderFromCredentials(p.serverUsername, p.serverPassword);
+        const auth = authHeaderFromCredentials(jobCreds.serverUsername, jobCreds.serverPassword);
         const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
         try {
           const pnTreeSync = await syncProjekteNeuTreesFromDispo(
@@ -19629,8 +19784,8 @@ function createApp(db) {
               externalUrl: p.externalUrl,
               internalUrl: p.internalUrl,
               technician_id: technicianId,
-              serverUsername: p.serverUsername,
-              serverPassword: p.serverPassword,
+              serverUsername: jobCreds.serverUsername,
+              serverPassword: jobCreds.serverPassword,
             },
             (prog) => {
               if (prog && prog.page && prog.totalPages) {
@@ -19670,8 +19825,8 @@ function createApp(db) {
                   externalUrl: p.externalUrl,
                   internalUrl: p.internalUrl,
                   technician_id: technicianId,
-                  serverUsername: p.serverUsername,
-                  serverPassword: p.serverPassword,
+                  serverUsername: jobCreds.serverUsername,
+                  serverPassword: jobCreds.serverPassword,
                 },
                 (prog) => {
                   if (prog && prog.page && prog.totalPages) {
@@ -19762,14 +19917,15 @@ function createApp(db) {
       }
       case 'abrechnung_refresh': {
         const p = job.payload || {};
+        const jobCreds = credsForBackgroundJob(p);
         setProgress('abrechnung_refresh', 0, 1, 'Abrechnung wird abgeglichen …');
         const result = await runAbrechnungRefreshCore(
           abrechnungRefreshCtx,
           {
-            baseUrl: p.baseUrl,
+            baseUrl: p.baseUrl || jobCreds.baseUrl,
             technicianId: p.technicianId,
-            serverUsername: p.serverUsername,
-            serverPassword: p.serverPassword,
+            serverUsername: jobCreds.serverUsername,
+            serverPassword: jobCreds.serverPassword,
             period_ym: p.period_ym,
             job_server_id: p.job_server_id,
             sync_all_jobs: p.sync_all_jobs !== false,
@@ -19819,21 +19975,45 @@ function createApp(db) {
     return periods;
   }
 
+  function lastAbrechnungRefreshCompletedAtMs(technicianId, period) {
+    const tid = parseInt(technicianId, 10);
+    const ym = String(period || '').trim();
+    if (!Number.isFinite(tid) || tid <= 0 || !ym) return 0;
+    const row = db
+      .prepare(
+        `SELECT updated_at FROM background_jobs
+         WHERE type = 'abrechnung_refresh' AND status = 'completed'
+           AND dedupe_key = ? ORDER BY datetime(updated_at) DESC LIMIT 1`,
+      )
+      .get('abrechnung_refresh:' + tid + ':' + ym);
+    return parseBackgroundJobTimestamp(row && row.updated_at);
+  }
+
   function enqueueAbrechnungBackgroundSync(opts) {
     opts = opts || {};
-    if (!bgJobs) return { enqueued: 0, job_ids: [], periods: [] };
+    if (!bgJobs) return { enqueued: 0, job_ids: [], periods: [], skipped: 0 };
     const dispoBaseUrl = (opts.baseUrl || opts.dispoBaseUrl || '').trim().replace(/\/+$/, '');
     const technicianId = parseInt(opts.technicianId, 10);
     const serverUsername = (opts.serverUsername || '').trim();
     const serverPassword = opts.serverPassword != null ? String(opts.serverPassword) : '';
     const jobServerId = parseInt(opts.job_server_id, 10) || 0;
+    const respectTtl = opts.respectTtl === true;
     if (!dispoBaseUrl || !Number.isFinite(technicianId) || technicianId <= 0) {
-      return { enqueued: 0, job_ids: [], periods: [] };
+      return { enqueued: 0, job_ids: [], periods: [], skipped: 0 };
     }
     const periods = defaultAbrechnungSyncPeriods(opts.period_ym);
     const job_ids = [];
     let enqueued = 0;
+    let skipped = 0;
+    const now = Date.now();
     for (const period of periods) {
+      if (respectTtl) {
+        const lastMs = lastAbrechnungRefreshCompletedAtMs(technicianId, period);
+        if (lastMs > 0 && now - lastMs < ABRECHNUNG_AUTO_REFRESH_TTL_MS) {
+          skipped += 1;
+          continue;
+        }
+      }
       const dedupeKey = 'abrechnung_refresh:' + technicianId + ':' + period;
       const enq = bgJobs.enqueue(
         'abrechnung_refresh',
@@ -19848,12 +20028,15 @@ function createApp(db) {
         },
         dedupeKey,
       );
-      if (enq && enq.job_id) {
+      if (enq && enq.created) {
         job_ids.push(enq.job_id);
         enqueued += 1;
+      } else if (enq && enq.job_id) {
+        job_ids.push(enq.job_id);
+        skipped += 1;
       }
     }
-    return { enqueued, job_ids, periods };
+    return { enqueued, job_ids, periods, skipped };
   }
 
   app.post('/api/abrechnung/schedule_refresh', express.json(), (req, res) => {
@@ -21071,6 +21254,12 @@ function createApp(db) {
       body.force_anlagenstamm_full === true ||
       body.forceAnlagenstammFull === 1 ||
       body.force_anlagenstamm_full === 1;
+    const forceDienstreiseDelta =
+      body.forceDienstreiseDelta === true ||
+      body.force_dienstreise_delta === true ||
+      body.forceDienstreiseDelta === 1 ||
+      body.force_dienstreise_delta === 1 ||
+      forceAnlagenstammFull;
     if (!baseUrl || !Number.isFinite(technicianId) || technicianId <= 0) {
       return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
     }
@@ -21092,6 +21281,7 @@ function createApp(db) {
           date_from,
           date_to,
           forceAnlagenstammFull,
+          forceDienstreiseDelta,
         },
         dedupeKey,
       );
@@ -22220,6 +22410,24 @@ function queueDispoProxyPending(dbConn, entityType, entityId, action, payload) {
     .run(entityType, String(entityId), action, JSON.stringify(payload));
 }
 
+/** Offene Slots teilen sich technician_id 0; der Slot steht ab dem dritten Key-Teil. */
+function slotFromCalendarCacheKey(cacheKey) {
+  const parts = String(cacheKey || '').split(':');
+  if (parts.length < 3 || parts[2] === '') return '';
+  return parts.slice(2).join(':');
+}
+
+function withCalendarUnassignedSlot(rows) {
+  return (rows || []).map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const slot = slotFromCalendarCacheKey(row.cache_key);
+    const out = { ...row };
+    delete out.cache_key;
+    if (slot !== '') out.calendar_unassigned_slot = Number(slot);
+    return out;
+  });
+}
+
 function readCalendarCachePayload(dbConn, start, end, technicianId) {
   const s = String(start || '').trim();
   const e = String(end || '').trim();
@@ -22234,7 +22442,7 @@ function readCalendarCachePayload(dbConn, start, end, technicianId) {
         .prepare(
           `
         SELECT
-          c.server_job_id AS id, c.technician_id, c.customer_name, c.job_number, c.city, c.country, c.status,
+          c.cache_key, c.server_job_id AS id, c.technician_id, c.customer_name, c.job_number, c.city, c.country, c.status,
           c.start_datetime, c.end_datetime, c.technician_name, c.technician_color,
           c.montage_verrechnet, c.billing_travel_complete, c.date_not_fixed,
           (
@@ -22252,7 +22460,7 @@ function readCalendarCachePayload(dbConn, start, end, technicianId) {
         .prepare(
           `
         SELECT
-          server_job_id AS id, technician_id, customer_name, job_number, city, country, status,
+          cache_key, server_job_id AS id, technician_id, customer_name, job_number, city, country, status,
           start_datetime, end_datetime, technician_name, technician_color,
           montage_verrechnet, billing_travel_complete, date_not_fixed,
           NULL AS local_job_id
@@ -22261,6 +22469,7 @@ function readCalendarCachePayload(dbConn, start, end, technicianId) {
       `,
         )
         .all(s + ' 00:00:00', e + ' 23:59:59');
+  const jobsWithSlots = withCalendarUnassignedSlot(jobs);
   const absencesRaw = dbConn
     .prepare(
       `
@@ -22273,7 +22482,7 @@ function readCalendarCachePayload(dbConn, start, end, technicianId) {
     )
     .all(s + ' 00:00:00', e + ' 23:59:59');
   const absences = absencesRaw.filter((a) => !isAbsenceExpiredByEnd(a.end_datetime));
-  return { technicians, jobs, absences };
+  return { technicians, jobs: jobsWithSlots, absences };
 }
 
 function readAnlagenstammRootFolderName(db, fab) {
@@ -22394,7 +22603,13 @@ function upsertCalendarCache(db, calendarData, opts) {
       const start = pickCalendarEventDateTime(j, false);
       const end = pickCalendarEventDateTime(j, true);
       if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(tid) || tid < 0 || !start || !end) continue;
-      const cacheKey = String(sid) + ':' + String(tid);
+      const slotRaw = j.calendar_unassigned_slot;
+      const slot = (slotRaw !== undefined && slotRaw !== null && String(slotRaw) !== '')
+        ? String(slotRaw)
+        : '';
+      const cacheKey = slot
+        ? String(sid) + ':' + String(tid) + ':' + slot
+        : String(sid) + ':' + String(tid);
       insJob.run(
         cacheKey, sid, tid,
         String(j.customer_name || j.customer || ''), String(j.job_number || ''),
@@ -23797,15 +24012,17 @@ function cleanup_completed_job_files(db, jobId) {
   }
 }
 
+/** Aufrufer müssen Vault-Creds übergeben (z. B. resolveDispoServerCreds / credsForBackgroundJob). */
 function liveDispoCredsForPush(baseUrl, payloadOrCreds) {
   const p = payloadOrCreds && typeof payloadOrCreds === 'object' ? payloadOrCreds : {};
-  const creds = typeof resolveDispoServerCreds === 'function' ? resolveDispoServerCreds(p) : p;
   return {
-    baseUrl: String(baseUrl || '').trim().replace(/\/$/, ''),
-    externalUrl: creds.externalUrl || p.externalUrl || '',
-    internalUrl: creds.internalUrl || p.internalUrl || '',
-    serverUsername: creds.serverUsername || p.serverUsername || '',
-    serverPassword: creds.serverPassword || p.serverPassword || '',
+    baseUrl: String(baseUrl || p.baseUrl || '')
+      .trim()
+      .replace(/\/$/, ''),
+    externalUrl: p.externalUrl || '',
+    internalUrl: p.internalUrl || '',
+    serverUsername: p.serverUsername || p.dispo_username || '',
+    serverPassword: p.serverPassword || p.dispo_password || '',
   };
 }
 
@@ -23822,7 +24039,12 @@ function mergeLiveDispoIntoPendingPayload(payloadRaw, live, fallbackBase) {
   });
   if (base) out.dispoBaseUrl = base;
   if (liveObj.serverUsername) out.serverUsername = liveObj.serverUsername;
+  // In-Memory für den aktuellen Push; darf nicht wieder in SQLite landen.
   if (liveObj.serverPassword) out.serverPassword = liveObj.serverPassword;
+  delete out.dispo_password;
+  delete out.dispoPassword;
+  delete out.server_password;
+  delete out.password;
   return out;
 }
 

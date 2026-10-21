@@ -277,8 +277,56 @@ function stableStringify(value) {
   );
 }
 
+/**
+ * Nur Meta/Zeitstempel — kein Fachinhalt. Abweichungen hier dürfen keinen
+ * „Anderer Laptop“-Konflikt auslösen (auch bei einem Gerät nach Speichern/Push).
+ */
+const DRAFT_CONTENT_IGNORE_KEYS = new Set([
+  'revision',
+  'schema_version',
+  'server_updated_at',
+  'updatedAt',
+  'updated_at',
+  'gespeichert_am',
+  'local_updated_at',
+  'nextLocalId',
+  'textbausteine',
+  'jsonOnly',
+  'local_only',
+  'skip_dispo_sync',
+  '_conflict',
+  'device_id',
+  'deviceId',
+  'technicianId',
+  'technician_id',
+  'job_id',
+  'pdf_rel',
+  'pdf_rels',
+  'last_pdf_rel',
+  'last_pdf_paths',
+  'last_pdf_abs',
+  'pdf_path',
+  'pdf_paths',
+]);
+
+function stripForContentEquality(value, depth) {
+  const d = depth == null ? 0 : depth;
+  if (value == null || typeof value !== 'object' || d > 12) return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => stripForContentEquality(item, d + 1));
+  }
+  const out = {};
+  for (const key of Object.keys(value)) {
+    if (DRAFT_CONTENT_IGNORE_KEYS.has(key)) continue;
+    out[key] = stripForContentEquality(value[key], d + 1);
+  }
+  return out;
+}
+
 function draftPayloadsEqual(a, b) {
-  return stableStringify(stripDraftMeta(a || {})) === stableStringify(stripDraftMeta(b || {}));
+  const left = stripForContentEquality(stripDraftMeta(a || {}));
+  const right = stripForContentEquality(stripDraftMeta(b || {}));
+  return stableStringify(left) === stableStringify(right);
 }
 
 /** Leerer Store (kein byFab-Inhalt / leeres Objekt) — Datei nicht anlegen oder behalten. */
@@ -670,6 +718,20 @@ const DIFF_SKIP_KEYS = new Set([
   'row',
   'fabrikationsnummer',
   'fabrikationsnummern',
+  // Auth nie im Diff (Klartext-Leck in „Unterschiede“)
+  'serverPassword',
+  'server_password',
+  'dispo_password',
+  'dispoPassword',
+  'password',
+  'dispo_password_enc',
+  'serverUsername',
+  'server_username',
+  'dispo_username',
+  'dispoUsername',
+  'dispoBaseUrl',
+  'dispo_base_url',
+  'baseUrl',
 ]);
 
 const DIFF_FIELD_LABELS = {

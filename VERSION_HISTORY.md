@@ -1,5 +1,11 @@
 # Versionshistorie – Monteur WebApp
 
+## V 3.000.001
+- **Kalender:** Ein Auftrag mit zwei offenen Techniker-Slots zeigt zwei Balken. Der zweite graue Balken „Nicht zugewiesen“ bleibt erhalten.
+- **PDF:** Drucken im PDF-Annotator.
+- **Sicherheit:** Dispo-Passwörter werden aus Hintergrundjobs, Protokollentwürfen und dem Geräte-Abgleich entfernt.
+- **Zwei Laptops:** Reine Zeitstempel-Unterschiede bei Entwürfen blockieren nicht mehr.
+
 ## V 3.000.000
 - **Major-Release:** Plattformweite Stufe 3.000; Patch-Zähler auf 000.
 - **Offline-First:** Accept-Preview Timeout 8 s mit lokaler Fallback-Vorschau.

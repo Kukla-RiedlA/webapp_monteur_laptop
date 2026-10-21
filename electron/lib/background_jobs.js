@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const hangDiag = require('./hang-diagnostics');
+const { stripPasswordFields, scrubPasswordColumnsInTableOnce } = require('./credential-vault');
 const {
   isJobAssignedToTechnician,
 } = require('./job-technician-gate');
@@ -111,6 +112,15 @@ function ensureBackgroundJobsSchema(db) {
   } catch (e) {
     /* ignore */
   }
+  try {
+    scrubPasswordColumnsInTableOnce(db, 'background_jobs', 'payload_json', 'background_jobs.payload_json.v1');
+  } catch (_) {
+    /* ignore scrub errors */
+  }
+}
+
+function sanitizeJobPayload(payload) {
+  return stripPasswordFields(payload && typeof payload === 'object' ? payload : {});
 }
 
 function newJobId() {
@@ -479,18 +489,19 @@ function createBackgroundJobService(db, save, hooks) {
     if (!ALLOWED_TYPES.has(type)) {
       throw new Error('Unbekannter Job-Typ: ' + type);
     }
+    const safePayload = sanitizeJobPayload(payload);
     const existingId = findActiveJobIdByDedupe(dedupeKey);
     if (existingId) {
       const row = db.prepare('SELECT status FROM background_jobs WHERE id = ?').get(existingId);
       if (row && row.status === 'queued') {
-        bump(existingId, { payload_json: JSON.stringify(payload || {}) });
+        bump(existingId, { payload_json: JSON.stringify(safePayload) });
       } else if (row && row.status === 'running' && type === 'dienstreise_push' && dedupeKey) {
         followUpKeys.add(dedupeKey);
       }
       setImmediate(() => {
         pump().catch(() => {});
       });
-      return { job_id: existingId };
+      return { job_id: existingId, created: false };
     }
     const id = newJobId();
     deleteQueuedByDedupe(dedupeKey);
@@ -503,12 +514,12 @@ function createBackgroundJobService(db, save, hooks) {
     db.prepare(
       `INSERT INTO background_jobs (id, type, status, payload_json, dedupe_key, progress_phase, progress_current, progress_total)
        VALUES (?, ?, 'queued', ?, ?, NULL, 0, 0)`,
-    ).run(id, type, JSON.stringify(payload || {}), dedupeKey || null);
+    ).run(id, type, JSON.stringify(safePayload), dedupeKey || null);
     save();
     setImmediate(() => {
       pump().catch(() => {});
     });
-    return { job_id: id };
+    return { job_id: id, created: true };
   }
 
   /**
