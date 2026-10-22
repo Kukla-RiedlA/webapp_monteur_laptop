@@ -4881,8 +4881,223 @@ async function generateArbeitsnachweisPdfBuffer(payload, options) {
   return Buffer.from(await pdfDoc.save());
 }
 
+async function generateSchulungsprotokollPdfBuffer(payload, options) {
+  const { PDFDocument, rgb } = require('pdf-lib');
+  const lang = (options && options.lang) === 'en' ? 'en' : 'de';
+  const de = lang !== 'en';
+  const pdfDoc = await PDFDocument.create();
+  const fonts = await embedProtocolFonts(pdfDoc);
+  const font = fonts.font;
+  const fontBold = fonts.fontBold;
+  const unicodeOk = !!fonts.unicode;
+  const S = (t) => sanitizePdfText(t, unicodeOk);
+  const PAGE_W = 595.28;
+  const PAGE_H = 841.89;
+  const marginX = 32;
+  const marginBottom = 40;
+  const { green, greenDark, greenSoft, greenHeader, grayText, grayMuted, lineGray, white } = kuklaPdfColors(rgb);
+  const tableInnerW = PAGE_W - marginX * 2;
+  const contentBottom = marginBottom + PROTOCOL_FOOTER_RESERVED_H;
+  const L = {
+    title: de ? 'Schulungsprotokoll' : 'Training report',
+    sub: de ? 'Training report' : 'Schulungsprotokoll',
+    kunde: de ? 'Kunde' : 'Customer',
+    projekt: de ? 'Projekt' : 'Project',
+    datum: de ? 'Datum' : 'Date',
+    geliefert: de ? 'geliefert über' : 'Delivered via',
+    tech: de ? 'Servicetechniker' : 'Service engineer',
+    contact: de ? 'Ansprechperson' : 'Contact person',
+    anlagen: de ? 'Anlagen' : 'Equipment',
+    fab: de ? 'Fabr.-Nr.' : 'Serial No.',
+    type: de ? 'Typ' : 'Type',
+    themen: de ? 'Schulungsthemen' : 'Training topics',
+    teilnehmer: de ? 'Teilnehmer' : 'Participants',
+    name: de ? 'Name' : 'Name',
+    funktion: de ? 'Funktion' : 'Function',
+    sign: de ? 'Unterschrift' : 'Signature',
+    page: de ? 'Seite' : 'Page',
+    status: { ok: de ? 'vermittelt' : 'covered', nok: de ? 'offen' : 'open', na: de ? 'entfällt' : 'n/a' },
+  };
+  const kopf = (payload && payload.kopfdaten) || {};
+  const anlagen = Array.isArray(payload && payload.anlagen) ? payload.anlagen : [];
+  const themen = Array.isArray(payload && payload.themen) ? payload.themen : [];
+  const teilnehmer = Array.isArray(payload && payload.teilnehmer) ? payload.teilnehmer : [];
+  const logo = await embedLogo(pdfDoc);
+  const pages = [];
+  let page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+  pages.push(page);
+  let y = PAGE_H - 28;
+
+  function newPage() {
+    page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+    pages.push(page);
+    y = PAGE_H - 36;
+    page.drawText(S(L.title), { x: marginX, y: PAGE_H - 22, size: 9, font: fontBold, color: greenDark });
+    y = PAGE_H - 40;
+  }
+  function ensure(h) {
+    if (y - h < contentBottom) newPage();
+  }
+  function wrap(text, size, maxW, useBold) {
+    const f = useBold ? fontBold : font;
+    const words = S(text).split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = '';
+    words.forEach(function (word) {
+      const next = line ? line + ' ' + word : word;
+      if (f.widthOfTextAtSize(next, size) <= maxW) line = next;
+      else {
+        if (line) lines.push(line);
+        line = word;
+      }
+    });
+    if (line) lines.push(line);
+    return lines.length ? lines : [''];
+  }
+
+  if (logo) {
+    const scale = Math.min(92 / logo.width, 28 / logo.height);
+    page.drawImage(logo, { x: marginX, y: y - 26, width: logo.width * scale, height: logo.height * scale });
+  }
+  page.drawText(S(L.title), { x: marginX + 110, y: y - 8, size: 16, font: fontBold, color: greenDark });
+  page.drawText(S(L.sub), { x: marginX + 110, y: y - 22, size: 9, font, color: grayMuted });
+  y -= 40;
+
+  const metaH = 78;
+  page.drawRectangle({ x: marginX, y: y - metaH, width: tableInnerW, height: metaH, color: greenHeader, borderColor: greenSoft, borderWidth: 0.6 });
+  const left = [
+    [L.kunde, kopf.kunde],
+    [L.projekt, kopf.projekt],
+    [L.datum, kopf.datum],
+  ];
+  const right = [
+    [L.geliefert, kopf.geliefertUeber],
+    [L.tech, kopf.servicetechniker],
+    [L.contact, kopf.ansprechperson],
+  ];
+  let rowY = y - 16;
+  for (let i = 0; i < 3; i++) {
+    page.drawText(S(left[i][0]), { x: marginX + 8, y: rowY, size: 8, font, color: grayMuted });
+    page.drawText(S(left[i][1] || '–'), { x: marginX + 8, y: rowY - 11, size: 10, font: fontBold, color: grayText });
+    page.drawText(S(right[i][0]), { x: marginX + tableInnerW / 2, y: rowY, size: 8, font, color: grayMuted });
+    const contactLines = wrap(right[i][1] || '–', 10, tableInnerW / 2 - 16, true);
+    page.drawText(contactLines[0], { x: marginX + tableInnerW / 2, y: rowY - 11, size: 10, font: fontBold, color: grayText });
+    rowY -= 24;
+  }
+  y -= metaH + 14;
+
+  ensure(36);
+  page.drawText(S(L.anlagen), { x: marginX, y, size: 11, font: fontBold, color: greenDark });
+  y -= 16;
+  const pairs = [];
+  anlagen.forEach(function (row) {
+    const fn = String((row && (row.fabrikationsnummer || row.fn)) || '').trim();
+    const type = String((row && (row.type || row.typ)) || '').trim();
+    if (fn || type) pairs.push({ fn, type });
+  });
+  if (!pairs.length) pairs.push({ fn: '', type: '' });
+  for (let i = 0; i < pairs.length; i += 2) {
+    ensure(28);
+    page.drawRectangle({ x: marginX, y: y - 22, width: tableInnerW, height: 22, color: white, borderColor: lineGray, borderWidth: 0.4 });
+    page.drawText(S(L.fab + '  ' + (pairs[i].fn || '–') + '    ' + L.type + '  ' + (pairs[i].type || '–')), {
+      x: marginX + 6, y: y - 14, size: 9, font, color: grayText,
+    });
+    if (pairs[i + 1]) {
+      const half = tableInnerW / 2;
+      page.drawText(S(L.fab + '  ' + (pairs[i + 1].fn || '–') + '    ' + L.type + '  ' + (pairs[i + 1].type || '–')), {
+        x: marginX + half, y: y - 14, size: 9, font, color: grayText,
+      });
+    }
+    y -= 24;
+  }
+  y -= 8;
+
+  ensure(22);
+  page.drawText(S(L.themen), { x: marginX, y, size: 11, font: fontBold, color: greenDark });
+  y -= 8;
+  for (const thema of themen) {
+    const title = de
+      ? (thema.bezeichnung_de || thema.bezeichnung || '')
+      : (thema.bezeichnung_en || thema.bezeichnung_de || '');
+    const statusKey = String(thema.status || 'na');
+    const status = L.status[statusKey] || L.status.na;
+    const remark = String(thema.bemerkung || '').trim();
+    const titleLines = wrap(title, 10, tableInnerW - 90, true);
+    const remarkLines = remark ? wrap(remark, 9, tableInnerW - 16, false) : [];
+    const blockH = 18 + titleLines.length * 12 + remarkLines.length * 11 + 8;
+    ensure(blockH);
+    page.drawRectangle({
+      x: marginX, y: y - 16, width: tableInnerW, height: 16, color: green, borderWidth: 0,
+    });
+    page.drawText(titleLines[0] || '–', { x: marginX + 6, y: y - 12, size: 9, font: fontBold, color: white });
+    const st = S(status);
+    page.drawText(st, {
+      x: marginX + tableInnerW - 8 - fontBold.widthOfTextAtSize(st, 8),
+      y: y - 12,
+      size: 8,
+      font: fontBold,
+      color: white,
+    });
+    y -= 18;
+    for (let n = 1; n < titleLines.length; n++) {
+      page.drawText(titleLines[n], { x: marginX + 6, y, size: 10, font: fontBold, color: grayText });
+      y -= 12;
+    }
+    remarkLines.forEach(function (line) {
+      page.drawText(line, { x: marginX + 6, y, size: 9, font, color: grayText });
+      y -= 11;
+    });
+    y -= 6;
+  }
+
+  y -= 6;
+  ensure(22);
+  page.drawText(S(L.teilnehmer), { x: marginX, y, size: 11, font: fontBold, color: greenDark });
+  y -= 6;
+  const colW = [180, 140, tableInnerW - 320];
+  ensure(18);
+  page.drawRectangle({ x: marginX, y: y - 16, width: tableInnerW, height: 16, color: greenHeader });
+  page.drawText(S(L.name), { x: marginX + 4, y: y - 12, size: 8, font: fontBold, color: greenDark });
+  page.drawText(S(L.funktion), { x: marginX + colW[0], y: y - 12, size: 8, font: fontBold, color: greenDark });
+  page.drawText(S(L.sign), { x: marginX + colW[0] + colW[1], y: y - 12, size: 8, font: fontBold, color: greenDark });
+  y -= 18;
+  const people = teilnehmer.length ? teilnehmer : [{ name: '', funktion: '', signature_png: '' }];
+  for (const person of people) {
+    ensure(42);
+    page.drawLine({ start: { x: marginX, y }, end: { x: marginX + tableInnerW, y }, thickness: 0.4, color: lineGray });
+    page.drawText(S(person.name || '–'), { x: marginX + 4, y: y - 14, size: 10, font, color: grayText });
+    page.drawText(S(person.funktion || ''), { x: marginX + colW[0], y: y - 14, size: 10, font, color: grayText });
+    const sig = await embedSignatureImage(pdfDoc, person.signature_png);
+    if (sig) {
+      const scale = Math.min(110 / sig.width, 28 / sig.height, 1);
+      page.drawImage(sig, {
+        x: marginX + colW[0] + colW[1],
+        y: y - 32,
+        width: sig.width * scale,
+        height: sig.height * scale,
+      });
+    }
+    y -= 36;
+  }
+
+  pages.forEach(function (p, idx) {
+    const footerLineY = marginBottom + PROTOCOL_FOOTER_RESERVED_H - 10;
+    p.drawLine({
+      start: { x: marginX, y: footerLineY },
+      end: { x: marginX + tableInnerW, y: footerLineY },
+      thickness: 0.6,
+      color: greenSoft,
+    });
+    const pageLabel = L.page + ' ' + (idx + 1);
+    const tw = font.widthOfTextAtSize(pageLabel, 8);
+    p.drawText(pageLabel, { x: PAGE_W - marginX - tw, y: marginBottom, size: 8, font, color: grayMuted });
+  });
+  return Buffer.from(await pdfDoc.save());
+}
+
 module.exports = {
   generateServiceprotokollPdfBuffer,
+  generateSchulungsprotokollPdfBuffer,
   generateKontrollwiegungPdfBuffer,
   generateSchleppkettenPdfBuffer,
   generateMontageberichtPdfBuffer,

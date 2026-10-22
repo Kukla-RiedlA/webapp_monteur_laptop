@@ -18,6 +18,7 @@ const VIEWS = new Set([
   'protokolle-pruefzertifikat',
   'protokolle-inbetriebnahme',
   'protokolle-service',
+  'protokolle-schulung',
   'protokolle-kunden',
   'tools-kuklink',
   'tools-parameterliste',
@@ -33,6 +34,7 @@ const VIEWS = new Set([
   'textbausteine',
   'arbeitsschritte',
   'arbeitsschritte-ibn',
+  'arbeitsschritte-schulung',
   'projektdaten',
 ]);
 

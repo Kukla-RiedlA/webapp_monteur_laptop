@@ -679,3 +679,76 @@ svg.mb-draw-layer-float.is-erasing {
 .mb-copilot-modal-box {
   overflow: auto;
 }
+
+.schulung-anlagen {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  margin-top: 12px;
+}
+.schulung-anlage {
+  background: var(--sp-mint, #eefaf5);
+  border: 1px solid var(--kukla-tile-border, #cfe8d1);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.schulung-thema {
+  border: 1px solid var(--kukla-tile-border, #cfe8d1);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  overflow: visible;
+}
+.schulung-thema-bar {
+  background: var(--kukla-primary, #0e7b5a);
+  color: #fff;
+  padding: 8px 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.schulung-thema-bar strong { font-weight: 600; }
+.schulung-thema-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.schulung-status { display: flex; gap: 6px; flex-wrap: wrap; }
+.schulung-status button.is-on { background: var(--kukla-primary, #0e7b5a); color: #fff; border-color: var(--kukla-primary, #0e7b5a); }
+.schulung-tn-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.schulung-table-wrap { overflow-x: auto; }
+.schulung-tn-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.schulung-tn-table thead th { position: static; top: auto; background: var(--sp-mint, #eefaf5); text-align: left; padding: 8px; }
+.schulung-tn-table td { padding: 8px; border-top: 1px solid var(--kukla-tile-border, #cfe8d1); vertical-align: middle; }
+.schulung-tn-table input { width: 100%; }
+.schulung-sig-preview { max-height: 48px; max-width: 140px; display: block; }
+.schulung-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(17, 24, 39, 0.45);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 16px;
+}
+.schulung-popup[hidden] { display: none; }
+.schulung-popup-card {
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid var(--kukla-tile-border, #cfe8d1);
+  padding: 16px;
+  width: min(720px, 100%);
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.schulung-popup-card canvas {
+  width: 100%;
+  height: 180px;
+  border: 1px solid var(--kukla-tile-border, #cfe8d1);
+  border-radius: 8px;
+  touch-action: none;
+  background: #fff;
+}
+.schulung-popup-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+@media (max-width: 720px) {
+  .schulung-anlagen { grid-template-columns: 1fr; }
+}

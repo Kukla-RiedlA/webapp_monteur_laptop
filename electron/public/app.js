@@ -14055,7 +14055,8 @@
       abwesenheiten: 1,
       textbausteine: 1,
       arbeitsschritte: 1,
-      'arbeitsschritte-ibn': 1
+      'arbeitsschritte-ibn': 1,
+      'arbeitsschritte-schulung': 1
     };
     var ids = ['btnViewStart', 'btnViewDienstreise', 'btnViewProtokolle', 'btnViewTools', 'btnViewAnlagenstamm', 'btnViewOffice', 'btnViewArchiv', 'btnViewEinstellungen'];
     ids.forEach(function (id) {
@@ -14172,7 +14173,7 @@
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
     const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
-    const protokolleViewIds = ['viewProtokolleArbeitsnachweis', 'viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleKunden', 'viewProtokolleService', 'viewCsvLog'];
+    const protokolleViewIds = ['viewProtokolleArbeitsnachweis', 'viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleKunden', 'viewProtokolleService', 'viewProtokolleSchulung', 'viewCsvLog'];
     viewStart.classList.remove('only-left', 'only-right', 'hidden');
     viewEinstellungen.classList.remove('active');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
@@ -14194,6 +14195,8 @@
     if (viewArbeitsschritte) viewArbeitsschritte.classList.remove('active');
     const viewArbeitsschritteIbn = document.getElementById('viewArbeitsschritteIbn');
     if (viewArbeitsschritteIbn) viewArbeitsschritteIbn.classList.remove('active');
+    const viewArbeitsschritteSchulung = document.getElementById('viewArbeitsschritteSchulung');
+    if (viewArbeitsschritteSchulung) viewArbeitsschritteSchulung.classList.remove('active');
     if (viewArchiv) viewArchiv.classList.remove('active');
     if (viewAbwesenheiten) viewAbwesenheiten.classList.remove('active');
     const viewDokumente = document.getElementById('viewDokumente');
@@ -14257,7 +14260,8 @@
         'protokolle-pruefzertifikat': 'viewProtokollePruefzertifikat',
         'protokolle-inbetriebnahme': 'viewProtokolleInbetriebnahme',
         'protokolle-kunden': 'viewProtokolleKunden',
-        'protokolle-service': 'viewProtokolleService'
+        'protokolle-service': 'viewProtokolleService',
+        'protokolle-schulung': 'viewProtokolleSchulung'
       };
       const viewId = map[name];
       if (viewId) {
@@ -14316,6 +14320,9 @@
       if (name === 'protokolle-inbetriebnahme' && typeof window.openProtokolleInbetriebnahme === 'function') {
         window.openProtokolleInbetriebnahme();
       }
+      if (name === 'protokolle-schulung' && typeof window.openProtokolleSchulung === 'function') {
+        window.openProtokolleSchulung();
+      }
       return;
     }
     if (name === 'textbausteine') {
@@ -14339,6 +14346,14 @@
       if (viewArbeitsschritteIbn) {
         viewArbeitsschritteIbn.classList.add('active');
         if (typeof loadArbeitsschritteIbnView === 'function') loadArbeitsschritteIbnView();
+      }
+      return;
+    }
+    if (name === 'arbeitsschritte-schulung') {
+      viewStart.classList.add('hidden');
+      if (viewArbeitsschritteSchulung) {
+        viewArbeitsschritteSchulung.classList.add('active');
+        if (typeof loadArbeitsschritteSchulungView === 'function') loadArbeitsschritteSchulungView();
       }
       return;
     }
@@ -29801,7 +29816,7 @@
   })();
 
   function createArbeitsschritteView(cfg) {
-    var catalogKind = cfg.catalogKind === 'ibn' ? 'ibn' : 'service';
+    var catalogKind = (cfg.catalogKind === 'ibn' || cfg.catalogKind === 'schulung') ? cfg.catalogKind : 'service';
     var ids = cfg.ids || {};
     function el(name) {
       return document.getElementById(ids[name]);
@@ -30275,6 +30290,26 @@
       stepEn: 'asIbnStepEn',
       btnStepSave: 'btnAsIbnStepSave',
       btnStepCancel: 'btnAsIbnStepCancel'
+    }
+  });
+  createArbeitsschritteView({
+    catalogKind: 'schulung',
+    loadName: 'loadArbeitsschritteSchulungView',
+    ids: {
+      presetSelect: 'asSchulungPresetSelect',
+      presetName: 'asSchulungPresetName',
+      presetType: 'asSchulungPresetType',
+      btnPresetSave: 'btnAsSchulungPresetSave',
+      btnPresetCreate: 'btnAsSchulungPresetCreate',
+      btnPresetDelete: 'btnAsSchulungPresetDelete',
+      btnNewStep: 'btnAsSchulungNewStep',
+      stepList: 'asSchulungStepList',
+      modal: 'modalAsSchulungStep',
+      modalTitle: 'modalAsSchulungStepTitle',
+      stepDe: 'asSchulungStepDe',
+      stepEn: 'asSchulungStepEn',
+      btnStepSave: 'btnAsSchulungStepSave',
+      btnStepCancel: 'btnAsSchulungStepCancel'
     }
   });
 

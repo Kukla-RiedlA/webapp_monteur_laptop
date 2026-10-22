@@ -29,6 +29,7 @@ const KIND_BY_BASENAME = {
   'kontrollwiegungsprotokoll.json': 'kontrollwiegung',
   'schleppkettenprotokoll.json': 'schleppkette',
   'pruefzertifikat.json': 'pruefzertifikat',
+  'schulungsprotokoll.json': 'schulungsprotokoll',
 };
 
 const SENTINEL_FAB = '';
@@ -76,7 +77,7 @@ function protocolDraftHasContent(draft) {
 }
 
 function isByFabKind(kind) {
-  return kind !== 'montagebericht';
+  return kind !== 'montagebericht' && kind !== 'schulungsprotokoll';
 }
 
 function emptyPayloadForKind(kind) {

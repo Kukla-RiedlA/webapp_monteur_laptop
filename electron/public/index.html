@@ -27,7 +27,7 @@
   <link rel="stylesheet" href="css/anlagenakte.css">
   <link rel="stylesheet" href="css/anlagenakte-form-viewer.css">
   <link rel="stylesheet" href="css/serviceprotokoll-v2.css?v=20260910sticky">
-  <link rel="stylesheet" href="css/montagebericht-v2.css">
+  <link rel="stylesheet" href="css/montagebericht-v2.css?v=schulung1">
   <link rel="stylesheet" href="css/arbeitsnachweis.css">
   <link rel="stylesheet" href="css/kontrollwiegung-v2.css">
   <link rel="stylesheet" href="css/schleppketten-v2.css">
@@ -2693,6 +2693,7 @@
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-pruefzertifikat">Prüfzertifikat</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-inbetriebnahme">Inbetriebnahme</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-service">Service</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-schulung">Schulungsprotokoll</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="protokolle-kunden">Protokolle für Kunden</button>
         </div>
       </div>
@@ -2726,6 +2727,7 @@
           <button type="button" class="toolbar-dropdown-item nav-drop-item" id="btnViewDokumente" data-view="dokumente">Dokumente</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="arbeitsschritte">Arbeitsschritte Service</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="arbeitsschritte-ibn">Arbeitsschritte Inbetriebnahme</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="arbeitsschritte-schulung">Schulungsschritte</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" data-view="textbausteine">Textbausteine</button>
         </div>
       </div>
@@ -3347,6 +3349,85 @@
           <button type="button" class="btn btn-ghost" id="btnAnPreviewClose">Schließen</button>
         </div>
       </div>
+    </div>
+  </main>
+  <main id="viewProtokolleSchulung" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Schulungsprotokoll">
+    <div class="card sp-v2-card mb-v2-page">
+      <div class="sp-v2-topbar mb-v2-topbar">
+        <div class="mb-v2-topbar-row">
+          <div class="sp-v2-topbar-title-wrap">
+            <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/beleg/schulungsprotokoll.png" alt="" aria-hidden="true"> Schulungsprotokoll</h2>
+          </div>
+          <div class="mb-v2-topbar-actions-stack">
+            <div class="sp-v2-topbar-actions">
+              <button type="button" class="btn btn-primary" id="btnSchulungSave">Speichern</button>
+              <button type="button" class="btn btn-primary" id="btnSchulungPdf">PDF</button>
+            </div>
+            <p id="schulungAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
+          </div>
+        </div>
+      </div>
+      <form id="schulungForm" class="sp-v2-form mb-v2-form">
+        <section class="sp-v2-section">
+          <header class="sp-v2-section-head"><span class="sp-v2-num">1</span> Auftrag &amp; Identifikation</header>
+          <div class="sp-v2-section-body">
+            <div class="sp-v2-grid-3">
+              <div class="sp-v2-field">
+                <label for="schulungJob">Auftrag</label>
+                <select id="schulungJob" class="dienstreise-select" required></select>
+              </div>
+              <div class="sp-v2-field">
+                <label for="schulungProjekt">Projekt</label>
+                <input type="text" id="schulungProjekt" autocomplete="off">
+              </div>
+              <div class="sp-v2-field">
+                <span id="schulungLangLabel">Sprache</span>
+                <div class="mb-lang-checks" role="group" aria-labelledby="schulungLangLabel">
+                  <label class="mb-lang-check"><input type="checkbox" id="schulungLangDe" value="de" checked> Deutsch</label>
+                  <label class="mb-lang-check"><input type="checkbox" id="schulungLangEn" value="en"> Englisch</label>
+                </div>
+              </div>
+            </div>
+            <div id="schulungKopf" class="mb-v2-kopfdaten" hidden></div>
+            <div id="schulungAnlagen" class="schulung-anlagen"></div>
+          </div>
+        </section>
+        <section class="sp-v2-section">
+          <header class="sp-v2-section-head"><span class="sp-v2-num">2</span> Schulungsthemen</header>
+          <div class="sp-v2-section-body" id="schulungThemen"></div>
+        </section>
+        <section class="sp-v2-section">
+          <header class="sp-v2-section-head"><span class="sp-v2-num">3</span> Teilnehmer</header>
+          <div class="sp-v2-section-body">
+            <div class="schulung-tn-actions">
+              <button type="button" class="btn btn-primary" id="btnSchulungTeilnehmerAdd">Teilnehmer eintragen</button>
+              <button type="button" class="btn btn-primary" id="btnSchulungSelbst">Teilnehmer trägt sich ein</button>
+            </div>
+            <div class="schulung-table-wrap">
+              <table class="schulung-tn-table">
+                <thead><tr><th>Name</th><th>Funktion</th><th>Unterschrift</th><th></th></tr></thead>
+                <tbody id="schulungTeilnehmer"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </form>
+    </div>
+    <div id="schulungPopup" class="schulung-popup" hidden>
+      <form id="schulungPopupForm" class="schulung-popup-card">
+        <h3>Teilnehmer</h3>
+        <label for="schulungPopupName">Name</label>
+        <input type="text" id="schulungPopupName" autocomplete="name" required>
+        <label for="schulungPopupFunktion">Funktion</label>
+        <input type="text" id="schulungPopupFunktion" autocomplete="organization-title">
+        <label>Unterschrift</label>
+        <canvas id="schulungPopupCanvas" width="640" height="180"></canvas>
+        <div class="schulung-popup-actions">
+          <button type="button" class="btn btn-ghost" id="btnSchulungPopupClear">Löschen</button>
+          <button type="button" class="btn btn-ghost" id="btnSchulungPopupCancel">Abbrechen</button>
+          <button type="submit" class="btn btn-primary" id="btnSchulungPopupOk">Fertig</button>
+        </div>
+      </form>
     </div>
   </main>
   <main id="viewProtokolleMontagebericht" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Montagebericht">
@@ -5009,6 +5090,51 @@
       </div>
     </div>
   </main>
+  <main id="viewArbeitsschritteSchulung" class="view-arbeitsschritte" aria-label="Schulungsschritte">
+    <div class="sp-v2-page" style="padding:1rem;max-width:1100px;margin:0 auto">
+      <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Schulungsschritte</h2>
+      <p class="muted" style="margin:0 0 1rem">Masterliste und Typ-Presets für Schulungsprotokolle. Der Grundstock gilt immer, Presets EBW, DBW und DDW kommen zum Anlagentyp dazu.</p>
+      <section class="sp-v2-section">
+        <div class="sp-v2-section-body">
+          <div class="as-preset-toolbar">
+            <div class="as-field as-field-grow">
+              <label for="asSchulungPresetSelect">Preset laden</label>
+              <select id="asSchulungPresetSelect"><option value="">— Preset wählen —</option></select>
+            </div>
+            <div class="as-field as-field-grow">
+              <label for="asSchulungPresetName">Name</label>
+              <input type="text" id="asSchulungPresetName" placeholder="z. B. Bandwaage DBW">
+            </div>
+            <div class="as-field" style="max-width:110px">
+              <label for="asSchulungPresetType">Typ</label>
+              <input type="text" id="asSchulungPresetType" maxlength="6" placeholder="DBW">
+            </div>
+            <div class="as-preset-actions">
+              <button type="button" class="btn btn-primary" id="btnAsSchulungPresetSave" disabled>Preset speichern</button>
+              <button type="button" class="btn btn-primary" id="btnAsSchulungPresetCreate">Preset erstellen</button>
+              <button type="button" class="btn btn-ghost" id="btnAsSchulungPresetDelete" disabled title="Eigenes Preset löschen">Löschen</button>
+            </div>
+          </div>
+          <div class="as-list-header">
+            <strong>Schritte</strong>
+            <button type="button" class="btn btn-primary" id="btnAsSchulungNewStep">+ Schritt</button>
+          </div>
+          <div id="asSchulungStepList"></div>
+        </div>
+      </section>
+    </div>
+    <div id="modalAsSchulungStep" class="modal-overlay" aria-hidden="true">
+      <div class="modal-box" style="max-width:520px">
+        <h3 id="modalAsSchulungStepTitle">Schulungsschritt</h3>
+        <div class="form-group"><label>Bezeichnung DE</label><input type="text" id="asSchulungStepDe" style="width:100%"></div>
+        <div class="form-group"><label>Bezeichnung EN</label><input type="text" id="asSchulungStepEn" style="width:100%"></div>
+        <div style="display:flex;gap:0.5rem;margin-top:1rem">
+          <button type="button" class="btn btn-primary" id="btnAsSchulungStepSave">Speichern</button>
+          <button type="button" class="btn btn-ghost" id="btnAsSchulungStepCancel">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+  </main>
   <div id="modalSpCatalog" class="modal-overlay accept-offline-overlay" aria-hidden="true">
     <div class="modal-box" style="max-width:1280px;width:min(96vw,1280px)">
       <h3>Arbeitsschritte hinzufügen</h3>
@@ -5407,6 +5533,7 @@
   <script src="js/dokumente-view.js?v=3"></script>
   <script src="js/auftrag-neu.js?v=3"></script>
   <script src="app.js?v=vnc-popout"></script>
+  <script src="js/schulungsprotokoll.js?v=1"></script>
   <script src="js/profinet-tool.js?v=20261019-name"></script>
   <script src="js/tools-vnc.js?v=20261014"></script>
   <script src="js/ftp-tool.js?v=20261019b"></script>

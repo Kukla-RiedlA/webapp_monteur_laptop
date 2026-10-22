@@ -11209,7 +11209,7 @@ function createApp(db) {
 
   function buildServiceprotokollDefaultsFromLocal(fab, technicianId, catalogKind) {
     const fn = String(fab || '').trim();
-    const kind = String(catalogKind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service';
+    const kind = arbeitsschritteLocal.normalizeCatalogKind(catalogKind);
     let anlagenType = '';
     let kopf = {};
     try {
@@ -11248,7 +11248,7 @@ function createApp(db) {
       return {
         ok: true,
         source: 'builtin',
-        arbeitsschritte: kind === 'ibn' ? [] : arbeitsschritteLocal.builtinDefaults(),
+        arbeitsschritte: kind === 'ibn' ? [] : (kind === 'schulung' ? require('./lib/schulung-topics').stepsForTypes([]) : arbeitsschritteLocal.builtinDefaults()),
         kopf,
         motoren: kopf.motoren || [],
       };
@@ -11268,21 +11268,23 @@ function createApp(db) {
       if (!technicianId) {
         return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
       }
-      const catalogKind = String(req.query.catalog_kind || req.query.catalogKind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service';
+      const catalogKind = arbeitsschritteLocal.normalizeCatalogKind(req.query.catalog_kind || req.query.catalogKind);
       const local = buildServiceprotokollDefaultsFromLocal(fab, technicianId, catalogKind);
       if (localOnly || !dispoBaseUrl) {
         if (local) return res.json(local);
         return res.status(400).json({ ok: false, error: 'Kein lokaler Defaults-Cache – bitte einmal online synchronisieren.' });
       }
       const auth = authHeaderFromCredentials(req.query.serverUsername, req.query.serverPassword);
-      const defaultsPhp = catalogKind === 'ibn' ? 'inbetriebnahme_defaults.php' : 'serviceprotokoll_defaults.php';
+      const defaultsPhp = catalogKind === 'ibn'
+        ? 'inbetriebnahme_defaults.php'
+        : (catalogKind === 'schulung' ? 'schulungsprotokoll_defaults.php' : 'serviceprotokoll_defaults.php');
       const url =
         dispoBaseUrl +
         '/dispo_api/api/' + defaultsPhp + '?fabrikationsnummer=' +
         encodeURIComponent(fab) +
         '&technician_id=' +
         encodeURIComponent(technicianId) +
-        (catalogKind === 'ibn' ? '&catalog_kind=ibn' : '');
+        (catalogKind === 'service' ? '' : '&catalog_kind=' + encodeURIComponent(catalogKind));
       try {
         const r = await fetchWithTimeout(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
         const data = await r.json().catch(() => ({}));
@@ -11343,6 +11345,125 @@ function createApp(db) {
       res.json({ ok: true, data });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
+    }
+  });
+
+  function schulungJobRow(localJobId, technicianId) {
+    return db.prepare(`
+      SELECT j.id, j.server_id FROM jobs j
+      WHERE j.id = ?
+        AND EXISTS (SELECT 1 FROM job_technicians jt WHERE jt.job_id = j.id AND jt.technician_id = ?)
+    `).get(localJobId, technicianId);
+  }
+
+  app.get('/api/schulungsprotokoll/defaults', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      if (!technicianId) return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      const types = String(req.query.types || '').split('|').map((s) => s.trim()).filter(Boolean);
+      const resolved = arbeitsschritteLocal.schulungStepsForTypes(db, technicianId, types);
+      res.json(Object.assign({ ok: true }, resolved));
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Defaults fehlgeschlagen.' });
+    }
+  });
+
+  app.get('/api/protokolle/schulungsprotokoll', (req, res) => {
+    try {
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(req.query.job_id || req.query.jobId, 10);
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      if (!schulungJobRow(localJobId, technicianId)) {
+        return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      }
+      const draftMeta = protocolDrafts.readDraft(db, localJobId, 'schulungsprotokoll.json', null);
+      const payload = draftMeta && draftMeta.payload && Object.keys(draftMeta.payload).length ? draftMeta.payload : null;
+      res.json({
+        ok: true,
+        data: payload ? Object.assign({}, payload, { revision: draftMeta.revision }) : null,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Daten konnten nicht geladen werden.' });
+    }
+  });
+
+  app.post('/api/protokolle/schulungsprotokoll', express.json({ limit: '20mb' }), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const technicianId = getTechnicianId(req);
+      const localJobId = parseInt(body.job_id != null ? body.job_id : body.jobId, 10);
+      const localOnly = wantsLocalOnlyRequest(body);
+      const wantPdf = body.pdf === true || body.want_pdf === true;
+      if (!localJobId || !technicianId) {
+        return res.status(400).json({ ok: false, error: 'job_id und technician_id erforderlich.' });
+      }
+      const jobRow = schulungJobRow(localJobId, technicianId);
+      if (!jobRow) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const languages = Array.isArray(body.languages) && body.languages.length ? body.languages : ['de'];
+      const payload = {
+        job_id: localJobId,
+        server_job_id: jobRow.server_id || null,
+        languages,
+        projekt: body.projekt || (body.kopfdaten && body.kopfdaten.projekt) || '',
+        kopfdaten: body.kopfdaten || {},
+        anlagen: Array.isArray(body.anlagen) ? body.anlagen : [],
+        themen: Array.isArray(body.themen) ? body.themen : [],
+        teilnehmer: Array.isArray(body.teilnehmer) ? body.teilnehmer : [],
+      };
+      const written = protocolDrafts.writeDraft(db, localJobId, 'schulungsprotokoll.json', payload, body.base_revision, null, null, {});
+      let dispoSynced = false;
+      let dispoError = '';
+      const creds = resolveDispoServerCreds(body);
+      const dispoBaseUrl = String(creds.baseUrl || '').trim().replace(/\/$/, '');
+      if (!localOnly && dispoBaseUrl && jobRow.server_id) {
+        try {
+          const auth = authHeaderFromCredentials(creds.serverUsername, creds.serverPassword);
+          const headers = Object.assign(
+            { 'Content-Type': 'application/json' },
+            dispoMonteurFetchHeaders(technicianId, auth),
+          );
+          const store = Object.assign({}, payload, { job_id: jobRow.server_id });
+          const draftRes = await fetchWithTimeout(dispoBaseUrl + '/dispo_api/api/schulungsprotokoll_draft.php', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              technician_id: technicianId,
+              job_id: jobRow.server_id,
+              store,
+              device_id: body.device_id || '',
+            }),
+          });
+          const saveRes = await fetchWithTimeout(dispoBaseUrl + '/dispo_api/api/schulungsprotokoll_save.php', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(Object.assign({ technician_id: technicianId }, store)),
+          });
+          dispoSynced = draftRes.ok && saveRes.ok;
+          if (!dispoSynced) dispoError = 'Dispo-Sync nicht bestätigt.';
+        } catch (syncErr) {
+          dispoError = syncErr && syncErr.message ? syncErr.message : 'Dispo nicht erreichbar.';
+        }
+      }
+      let pdfBase64 = '';
+      let pdfFilename = '';
+      if (wantPdf) {
+        const lang = languages.indexOf('en') !== -1 && languages.indexOf('de') === -1 ? 'en' : 'de';
+        const pdfBytes = await protocolPdf.generateSchulungsprotokollPdfBuffer(payload, { lang });
+        pdfBase64 = Buffer.from(pdfBytes).toString('base64');
+        pdfFilename = lang === 'en' ? 'Schulungsprotokoll_EN.pdf' : 'Schulungsprotokoll_DE.pdf';
+      }
+      res.json({
+        ok: true,
+        revision: written && written.revision,
+        dispo_synced: dispoSynced,
+        dispo_error: dispoError,
+        pdf_base64: pdfBase64,
+        pdf_filename: pdfFilename,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message || 'Speichern fehlgeschlagen.' });
     }
   });
 
@@ -16962,7 +17083,7 @@ function createApp(db) {
     const baseUrl = (req.query.base_url || req.query.baseUrl || '').toString().trim().replace(/\/$/, '');
     const technicianId = getTechnicianId(req);
     const localOnly = wantsLocalOnlyRequest(req.query);
-    const catalogKind = String(req.query.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service';
+    const catalogKind = arbeitsschritteLocal.normalizeCatalogKind(req.query.catalog_kind);
     try {
       arbeitsschritteLocal.ensureArbeitsschritteSchema(db);
       let local = arbeitsschritteLocal.listArbeitsschritteLocal(db, technicianId, catalogKind);
@@ -17030,7 +17151,7 @@ function createApp(db) {
           formBody.append('bezeichnung_de', body.bezeichnung_de || '');
           formBody.append('bezeichnung_en', body.bezeichnung_en || '');
           formBody.append('sort_order', body.sort_order || 0);
-          formBody.append('catalog_kind', String(body.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
+          formBody.append('catalog_kind', arbeitsschritteLocal.normalizeCatalogKind(body.catalog_kind));
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_save.php', {
             method: 'POST',
             headers: Object.assign(
@@ -17240,7 +17361,7 @@ function createApp(db) {
           formBody.append('type_code', body.type_code || '');
           formBody.append('sort_order', body.sort_order || 0);
           formBody.append('step_refs', JSON.stringify(body.step_refs || []));
-          formBody.append('catalog_kind', String(body.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
+          formBody.append('catalog_kind', arbeitsschritteLocal.normalizeCatalogKind(body.catalog_kind));
           const r = await fetch(baseUrl + '/dispo_api/api/arbeitsschritte_preset_save.php', {
             method: 'POST',
             headers: Object.assign(
@@ -24756,7 +24877,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds, pu
           formBody.append('bezeichnung_de', payloadRaw.bezeichnung_de || '');
           formBody.append('bezeichnung_en', payloadRaw.bezeichnung_en || '');
           formBody.append('sort_order', payloadRaw.sort_order || 0);
-          formBody.append('catalog_kind', String(payloadRaw.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
+          formBody.append('catalog_kind', arbeitsschritteLocal.normalizeCatalogKind(payloadRaw.catalog_kind));
           const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_save.php', {
             method: 'POST',
             headers: Object.assign({}, header, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId) }),
@@ -24809,7 +24930,7 @@ async function pushToServer(baseUrl, technicianId, db, authHeader, liveCreds, pu
           formBody.append('type_code', payloadRaw.type_code || '');
           formBody.append('sort_order', payloadRaw.sort_order || 0);
           formBody.append('step_refs', JSON.stringify(payloadRaw.step_refs || []));
-          formBody.append('catalog_kind', String(payloadRaw.catalog_kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service');
+          formBody.append('catalog_kind', arbeitsschritteLocal.normalizeCatalogKind(payloadRaw.catalog_kind));
           const r = await fetch(asBase + '/dispo_api/api/arbeitsschritte_preset_save.php', {
             method: 'POST',
             headers: Object.assign({}, header, { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Technician-Id': String(techId) }),

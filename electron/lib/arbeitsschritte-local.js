@@ -33,7 +33,9 @@ function combineBezeichnung(de, en) {
 }
 
 function normalizeCatalogKind(kind) {
-  return String(kind || 'service').toLowerCase() === 'ibn' ? 'ibn' : 'service';
+  const k = String(kind || 'service').toLowerCase();
+  if (k === 'ibn' || k === 'schulung') return k;
+  return 'service';
 }
 
 function tableHasColumn(db, table, column) {
@@ -637,6 +639,62 @@ function builtinDefaults() {
   });
 }
 
+function schulungStepsForTypes(db, technicianId, types) {
+  ensureArbeitsschritteSchema(db);
+  const topics = require('./schulung-topics');
+  const listed = listArbeitsschritteLocal(db, technicianId, 'schulung');
+  const steps = listed.steps || [];
+  const presets = listed.presets || [];
+  if (!steps.length) {
+    return { source: 'builtin', arbeitsschritte: topics.stepsForTypes(types) };
+  }
+  const inPreset = {};
+  presets.forEach(function (preset) {
+    (preset.step_refs || []).forEach(function (ref) {
+      inPreset[String(ref.step_scope) + ':' + String(ref.step_id)] = 1;
+    });
+  });
+  const out = [];
+  function pushStep(step) {
+    if (!step) return;
+    const de = String(step.bezeichnung_de || '').trim();
+    if (!de) return;
+    if (out.some(function (row) { return row.bezeichnung_de === de; })) return;
+    out.push({
+      sort_order: out.length + 1,
+      bezeichnung_de: de,
+      bezeichnung_en: String(step.bezeichnung_en || '').trim(),
+      status: 'na',
+      bemerkung: '',
+    });
+  }
+  steps.forEach(function (step) {
+    const key = String(step.scope || 'global') + ':' + String(step.id);
+    if (!inPreset[key]) pushStep(step);
+  });
+  const wanted = {};
+  (types || []).forEach(function (anlagenType) {
+    presets.forEach(function (preset) {
+      if (typeTokenContainsCode(anlagenType, preset.type_code)) {
+        wanted[String(preset.scope) + ':' + String(preset.id)] = preset;
+      }
+    });
+  });
+  Object.keys(wanted).forEach(function (key) {
+    const preset = wanted[key];
+    (preset.step_refs || []).forEach(function (ref) {
+      const found = steps.find(function (step) {
+        return String(step.id) === String(ref.step_id) && String(step.scope || 'global') === String(ref.step_scope);
+      });
+      pushStep(found);
+    });
+  });
+  if (!out.length) {
+    return { source: 'builtin', arbeitsschritte: topics.stepsForTypes(types) };
+  }
+  return { source: 'catalog', arbeitsschritte: out };
+}
+
 function resolveDefaultsLocal(db, technicianId, anlagenType, catalogKind) {
   ensureArbeitsschritteSchema(db);
   const kind = normalizeCatalogKind(catalogKind);
@@ -655,6 +713,9 @@ function resolveDefaultsLocal(db, technicianId, anlagenType, catalogKind) {
   const global = globalStepsAsDefaults(db, kind);
   if (global.length) return { source: 'global', arbeitsschritte: global };
   if (kind === 'ibn') return { source: 'builtin', arbeitsschritte: [] };
+  if (kind === 'schulung') {
+    return { source: 'builtin', arbeitsschritte: require('./schulung-topics').stepsForTypes([anlagenType]) };
+  }
   return { source: 'builtin', arbeitsschritte: builtinDefaults() };
 }
 
@@ -685,6 +746,8 @@ module.exports = {
   deletePresetLocal,
   queueArbeitsschrittePending,
   resolveDefaultsLocal,
+  schulungStepsForTypes,
+  normalizeCatalogKind,
   reorderUserStepsLocal,
   builtinDefaults,
   combineBezeichnung,
