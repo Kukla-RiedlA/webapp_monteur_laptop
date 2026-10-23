@@ -125,26 +125,51 @@ function sendFrame(handle, frame) {
   }
 }
 
+function macAt(frame, offset) {
+  if (!frame || frame.length < offset + 6) return '';
+  return dcp.formatMac(frame, offset);
+}
+
 async function roundTrip(adapter, frame, xid, action) {
   const replies = [];
-  const prime = dcp.buildIdentifyAll(adapter.mac, (xid + 7) >>> 0);
+  const target = macAt(frame, 0);
+  const ownMac = String(adapter.mac || '').toLowerCase();
+  if (!target || target === ownMac) {
+    const err = new Error(action + ': die MAC des Teilnehmers fehlt. Der Rahmen würde an den PC gehen.');
+    err.code = 'bad_mac';
+    throw err;
+  }
+  let seen = 0;
+  let fromDevice = 0;
   await withCapture(adapter, async (handle, buffer) => {
     handle.on('packet', (nbytes) => {
       const copy = Buffer.from(buffer.subarray(0, nbytes));
+      if (copy.length < 14 || copy.readUInt16BE(12) !== dcp.ETHERTYPE) return;
+      const src = macAt(copy, 6);
+      if (!src || src === ownMac) return;
+      seen += 1;
+      if (src === target) fromDevice += 1;
       const parsed = dcp.parseSetResponse(copy);
-      if (!parsed || parsed.xid !== xid) return;
+      if (!parsed || parsed.xid !== xid || parsed.mac !== target) return;
       replies.push(parsed);
     });
-    sendFrame(handle, prime);
-    await delay(250);
     sendFrame(handle, frame);
-    const deadline = Date.now() + 1200;
-    while (Date.now() < deadline && !replies.length) {
-      await delay(40);
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && !replies.length) await delay(40);
+    if (!replies.length) {
+      sendFrame(handle, frame);
+      const again = Date.now() + 2000;
+      while (Date.now() < again && !replies.length) await delay(40);
     }
   });
   if (!replies.length) {
-    const err = new Error(action + ': das Gerät hat nicht geantwortet. Bitte erneut scannen und den Ethernet-Adapter direkt an der Anlage prüfen.');
+    let detail = 'Es kam kein Profinet-Rahmen zurück. Adapter und Leitung prüfen.';
+    if (fromDevice > 0) {
+      detail = 'Es kamen Rahmen von diesem Teilnehmer, aber keine Antwort auf ' + action + '.';
+    } else if (seen > 0) {
+      detail = 'Es kamen andere Profinet-Rahmen, aber keine Antwort von diesem Teilnehmer.';
+    }
+    const err = new Error(action + ': das Gerät hat nicht geantwortet. ' + detail);
     err.code = 'no_response';
     throw err;
   }

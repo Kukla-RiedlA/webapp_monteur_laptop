@@ -115,7 +115,7 @@ test('DCP-Rahmen sind mindestens 60 Byte', () => {
 test('Set-Antwort mit BlockError 6 wird als Ablehnung gelesen', () => {
   const body = Buffer.from([0x02, 0x02, 0x00, 0x01, 0x06, 0x00]);
   const head = Buffer.alloc(12);
-  head.writeUInt16BE(0xfefc, 0);
+  head.writeUInt16BE(0xfefd, 0);
   head[2] = 4;
   head[3] = 1;
   head.writeUInt32BE(9, 4);
@@ -127,6 +127,52 @@ test('Set-Antwort mit BlockError 6 wird als Ablehnung gelesen', () => {
   assert.equal(parsed.xid, 9);
   assert.equal(parsed.errors.length, 1);
   assert.match(parsed.errors[0], /Betrieb/);
+});
+
+test('Blink-Rahmen geht an den Teilnehmer und trägt Signal 0x0100', () => {
+  const frame = dcp.buildSignal(SRC, DST, 0x4444);
+  assert.equal(dcp.formatMac(frame, 0), DST);
+  assert.equal(dcp.formatMac(frame, 6), SRC);
+  assert.ok(frame.includes(Buffer.from([0x05, 0x03, 0x00, 0x04, 0x00, 0x00, 0x01, 0x00])));
+  assert.equal(dcp.parseSetResponse(frame), null);
+});
+
+function setAnswer(body) {
+  const head = Buffer.alloc(12);
+  head.writeUInt16BE(0xfefd, 0);
+  head[2] = 4;
+  head[3] = 1;
+  head.writeUInt32BE(1, 4);
+  head.writeUInt16BE(body.length, 10);
+  const eth = Buffer.alloc(14);
+  dcp.parseMac(DST).copy(eth, 6);
+  eth.writeUInt16BE(dcp.ETHERTYPE, 12);
+  return Buffer.concat([eth, head, body]);
+}
+
+test('Blink-Antwort mit BlockError 2 wird abgelehnt, Fehler 0 nicht', () => {
+  const bad = dcp.parseSetResponse(setAnswer(Buffer.from([0x05, 0x04, 0x00, 0x03, 0x05, 0x03, 0x02, 0x00])));
+  assert.equal(bad.errors.length, 1);
+  assert.match(bad.errors[0], /Wert/);
+  const ok = dcp.parseSetResponse(setAnswer(Buffer.from([0x05, 0x04, 0x00, 0x03, 0x05, 0x03, 0x00, 0x00])));
+  assert.equal(ok.errors.length, 0);
+});
+
+test('Hilscher-Set-Antwort FEFD mit Fehler 0 ist Erfolg, die eigene Anfrage nicht', () => {
+  const body = Buffer.from([0x05, 0x04, 0x00, 0x03, 0x02, 0x02, 0x00, 0x00]);
+  const head = Buffer.alloc(12);
+  head.writeUInt16BE(0xfefd, 0);
+  head[2] = 4;
+  head[3] = 1;
+  head.writeUInt32BE(0x3333, 4);
+  head.writeUInt16BE(body.length, 10);
+  const eth = Buffer.alloc(14);
+  dcp.parseMac(DST).copy(eth, 6);
+  eth.writeUInt16BE(dcp.ETHERTYPE, 12);
+  const parsed = dcp.parseSetResponse(Buffer.concat([eth, head, body]));
+  assert.equal(parsed.xid, 0x3333);
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(dcp.parseSetResponse(dcp.buildSetName(SRC, DST, 'dwc7b', 0x3333)), null);
 });
 
 test('PDPortDataReal-Fixture ergibt zwei Knoten und eine Kante', () => {

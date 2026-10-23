@@ -85,7 +85,9 @@ function replaceSet(db, fab, teilnehmer, links, opts) {
   }
   const dirty = opts && opts.dirty === 0 ? 0 : 1;
   const now = new Date().toISOString();
-  const tx = db.transaction(() => {
+  // db-compat.transaction() führt die Funktion sofort aus und gibt undefined zurück.
+  // better-sqlite3 gibt eine Runner-Funktion zurück, die noch aufgerufen werden muss.
+  const apply = () => {
     db.prepare('DELETE FROM anlagenstamm_profinet_teilnehmer WHERE fabrikationsnummer = ?').run(fn);
     db.prepare('DELETE FROM anlagenstamm_profinet_link WHERE fabrikationsnummer = ?').run(fn);
     const ins = db.prepare(
@@ -129,8 +131,13 @@ function replaceSet(db, fab, teilnehmer, links, opts) {
         dirty,
       );
     });
-  });
-  tx();
+  };
+  if (db && typeof db.transaction === 'function') {
+    const ret = db.transaction(apply);
+    if (typeof ret === 'function') ret();
+  } else {
+    apply();
+  }
   return listByFab(db, fn);
 }
 

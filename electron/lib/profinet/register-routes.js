@@ -114,6 +114,7 @@ function registerProfinetRoutes(app, ctx) {
       const fab = fabOf(req);
       const rows = rowsOf(body);
       const saved = store.replaceSet(db, fab, rows.teilnehmer, rows.links, { dirty: 1 });
+      if (typeof db.save === 'function') db.save();
       let sync = { pushed: false };
       try {
         const deviceId = dbDir ? getOrCreateDeviceId(dbDir) : '';

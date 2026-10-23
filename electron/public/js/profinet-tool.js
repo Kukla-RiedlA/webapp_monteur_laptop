@@ -142,6 +142,14 @@
     };
   }
 
+  function deviceRequest(extra) {
+    var adapter = selectedAdapter() || {};
+    return Object.assign({
+      name: adapter.name || '',
+      address: adapter.address || '',
+    }, extra || {});
+  }
+
   function isUnbaptized(row) {
     var name = cleanText(row && row.station_name);
     var ip = String((row && row.ip_address) || '').trim();
@@ -271,7 +279,7 @@
     setStatus(verb + ' …');
     await localApi('/api/profinet/set', {
       method: 'POST',
-      body: Object.assign({ mac: row.mac, station_name: name, ip_address: ip, subnet_mask: mask, gateway: gw }, selectedAdapter()),
+      body: deviceRequest({ mac: row.mac, station_name: name, ip_address: ip, subnet_mask: mask, gateway: gw }),
     });
     setStatus(verb + ' vom Gerät bestätigt. Bitte erneut scannen.');
     closeDialog();
@@ -284,7 +292,7 @@
     setStatus('Blinken …');
     await localApi('/api/profinet/signal', {
       method: 'POST',
-      body: Object.assign({ mac: row.mac }, selectedAdapter()),
+      body: deviceRequest({ mac: row.mac }),
     });
     setStatus('Blinken von ' + row.mac + ' bestätigt.');
   }

@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "3.0.3",
+  "version": "3.0.4",
   "description": "KUKpit - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -30,7 +30,7 @@
     "test:credential-vault": "node --test lib/credential-vault.test.js",
     "test:dispo-probe": "node --test lib/dispo-probe.test.js",
     "test:kuklink-format": "node --test lib/kuklink/format-detect.test.js",
-    "test:profinet": "node --test lib/profinet/dcp.test.js",
+    "test:profinet": "node --test lib/profinet/dcp.test.js lib/profinet/store.test.js",
     "test:vnc": "node --test lib/vnc/validate.test.js lib/vnc/bridge.test.js lib/vnc/low-color.test.js",
     "test:ftp": "node --test lib/ftp/validate.test.js lib/ftp/classify.test.js lib/ftp/local-dir.test.js",
     "build:novnc": "node scripts/build-novnc.js",

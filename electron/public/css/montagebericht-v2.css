@@ -716,7 +716,20 @@ svg.mb-draw-layer-float.is-erasing {
 .schulung-tn-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .schulung-tn-table thead th { position: static; top: auto; background: var(--sp-mint, #eefaf5); text-align: left; padding: 8px; }
 .schulung-tn-table td { padding: 8px; border-top: 1px solid var(--kukla-tile-border, #cfe8d1); vertical-align: middle; }
-.schulung-tn-table input { width: 100%; }
+#viewProtokolleSchulung .schulung-thema-body input,
+#viewProtokolleSchulung .schulung-tn-table input,
+#viewProtokolleSchulung .schulung-popup-card input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 0.3rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--sp-text, #111827);
+  background: #fff;
+  box-sizing: border-box;
+}
 .schulung-sig-preview { max-height: 48px; max-width: 140px; display: block; }
 .schulung-popup {
   position: fixed;

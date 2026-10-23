@@ -5,6 +5,8 @@ const MULTICAST_MAC = '01:0e:cf:00:00:00';
 const FRAME_IDENTIFY_REQ = 0xfefe;
 const FRAME_IDENTIFY_RES = 0xfeff;
 const FRAME_GETSET_REQ = 0xfefd;
+// 0xFEFC ist DCP-Hello. Get/Set-Anfrage und -Antwort nutzen beide 0xFEFD;
+// die Antwort unterscheidet ServiceType ungleich 0. Einzelne Stapel senden 0xFEFC.
 const FRAME_GETSET_RES = 0xfefc;
 const SERVICE_SET = 4;
 const SERVICE_IDENTIFY = 5;
@@ -257,10 +259,12 @@ function parseSetResponse(frame) {
   if (frame.readUInt16BE(12) !== ETHERTYPE) return null;
   const dcp = 14;
   const frameId = frame.readUInt16BE(dcp);
-  if (frameId !== FRAME_GETSET_RES) return null;
   const serviceId = frame[dcp + 2];
-  if (serviceId !== SERVICE_SET) return null;
   const serviceType = frame[dcp + 3];
+  const getSetAnswer = frameId === FRAME_GETSET_REQ && serviceType !== SERVICE_REQUEST;
+  const legacyAnswer = frameId === FRAME_GETSET_RES && serviceType !== SERVICE_REQUEST;
+  if (!getSetAnswer && !legacyAnswer) return null;
+  if (serviceId !== SERVICE_SET) return null;
   const xid = frame.readUInt32BE(dcp + 4);
   const dataLen = frame.readUInt16BE(dcp + 10);
   const blocks = readBlocks(frame, dcp + 12, Math.min(frame.length, dcp + 12 + dataLen));
