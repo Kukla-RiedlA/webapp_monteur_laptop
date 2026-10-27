@@ -12200,6 +12200,14 @@ function createApp(db) {
         return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
       }
       const reiseDir = null;
+      await pullOneJsonDraftForJob(
+        reiseDir,
+        localJobId,
+        jobRow.server_id,
+        technicianId,
+        'kontrollwiegungsprotokoll.json',
+        req.query,
+      );
       const store = kontrollwiegungLocal.readKontrollwiegungStore(reiseDir, db, localJobId);
       res.json({ ok: true, store: store || { byFab: {}, nextLocalId: 1 }, data: store });
     } catch (e) {

@@ -2,7 +2,8 @@
   "name": "webapp-monteur-laptop",
   "private": true,
   "scripts": {
-    "prepare": "node scripts/install-githooks.cjs"
+    "prepare": "node scripts/install-githooks.cjs",
+    "test": "npm test --prefix electron"
   },
   "devDependencies": {
     "archiver": "^7.0.1"

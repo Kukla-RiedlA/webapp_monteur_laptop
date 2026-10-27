@@ -14,6 +14,14 @@ git config core.hooksPath githooks
 
 Voraussetzung beim Commit: **`node`** im PATH.
 
+## Schnelle Lib-Tests (pre-commit)
+
+Wenn der Commit Dateien unter `electron/lib/` enthaelt, laeuft vor dem Versions-Bump `node scripts/run-lib-unit-tests.js` (alle `lib/**/*.test.js`). PDF-Skripte unter `electron/scripts/` bleiben manuell.
+
+Manuell aus `electron/`: `npm test`.
+
+Ueberspringen, Versions-Bump bleibt: `KUKLA_SKIP_UNIT_TESTS=1`. `KUKLA_SKIP_VERSION_HOOK=1` ueberspringt den ganzen Hook, also auch die Tests.
+
 ## Notfall / Amend
 
 ```bash

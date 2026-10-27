@@ -379,15 +379,21 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     return { tree: [], source: 'local_cache_empty', offline: true, technicianId };
   }
 
-  app.get('/api/anlagenstamm_gallery.php', async (req, res) => {
+  function loadGalleryTreeFromCache(req, fab) {
+    const technicianId = ctx.getTechnicianId(req);
+    if (typeof ctx.readAnlagenstammTreeCache === 'function') {
+      const cached = ctx.readAnlagenstammTreeCache(db(), fab);
+      if (cached && Array.isArray(cached.tree) && cached.tree.length) {
+        return { tree: cached.tree, source: 'local_cache', offline: true, technicianId };
+      }
+    }
+    return { tree: [], source: 'local_cache_empty', offline: true, technicianId };
+  }
+
+  app.get('/api/anlagenstamm_gallery.php', (req, res) => {
     const fab = String(req.query.fabrikationsnummer || req.query.fab || '').trim();
     if (!fab) return res.status(400).json({ ok: false, error: 'Fabrikationsnummer fehlt' });
-    let loaded;
-    try {
-      loaded = await loadProjekteNeuTree(req, fab);
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: e.message || String(e) });
-    }
+    const loaded = loadGalleryTreeFromCache(req, fab);
     const tree = loaded.tree || [];
     const source = loaded.source || 'local_cache_empty';
     let extraFiles = [];

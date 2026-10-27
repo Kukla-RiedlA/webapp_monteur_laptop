@@ -4,5 +4,12 @@ cd "$ROOT" || exit 1
 if [ -n "$KUKLA_SKIP_VERSION_HOOK" ]; then
   exit 0
 fi
+if [ -z "$KUKLA_SKIP_UNIT_TESTS" ]; then
+  staged=$(git diff --cached --name-only | tr -d '\r')
+  if printf '%s\n' "$staged" | grep -q '^electron/lib/'; then
+    echo "pre-commit: schnelle Lib-Tests (electron/lib/)"
+    (cd "$ROOT/electron" && node scripts/run-lib-unit-tests.js) || exit 1
+  fi
+fi
 node "$ROOT/githooks/version-bump.cjs" || exit 1
 exit 0

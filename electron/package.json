@@ -1,6 +1,6 @@
 {
   "name": "monteur-webapp",
-  "version": "3.0.4",
+  "version": "3.0.5",
   "description": "KUKpit - Offline-faehige Windows-App (Electron) mit lokaler SQLite-DB",
   "main": "main.js",
   "author": "",
@@ -12,6 +12,7 @@
     "predist": "node scripts/generate-icons.js",
     "dist": "node ./node_modules/electron-builder/cli.js --win",
     "postinstall": "electron-builder install-app-deps",
+    "test": "node scripts/run-lib-unit-tests.js",
     "test:parameter-pdf": "node scripts/test-parameter-pdf.js",
     "test:parameter-pdf:open": "node scripts/test-parameter-pdf.js --open",
     "test:html-rich-text": "node --test lib/html_rich_text.test.js",
