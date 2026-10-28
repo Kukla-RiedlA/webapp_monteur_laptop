@@ -16,7 +16,7 @@ Voraussetzung beim Commit: **`node`** im PATH.
 
 ## Schnelle Lib-Tests (pre-commit)
 
-Wenn der Commit Dateien unter `electron/lib/` enthaelt, laeuft vor dem Versions-Bump `node scripts/run-lib-unit-tests.js` (alle `lib/**/*.test.js`). PDF-Skripte unter `electron/scripts/` bleiben manuell.
+Wenn der Commit Dateien unter `electron/lib/` enthaelt, laeuft vor dem Versions-Bump `node scripts/run-lib-unit-tests.js` (alle `lib/**/*.test.js`). Der Lauf startet Electrons Node (`ELECTRON_RUN_AS_NODE`), damit `better-sqlite3` (fuer die App gebaut) geladen wird. Ein zweites Build fuer das System-Node gibt es nicht. PDF-Skripte unter `electron/scripts/` bleiben manuell.
 
 Manuell aus `electron/`: `npm test`.
 

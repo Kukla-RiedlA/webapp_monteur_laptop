@@ -29,8 +29,27 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const result = spawnSync(process.execPath, ['--test', ...files], {
+/**
+ * better-sqlite3 liegt fuer Electron (ABI 145) vor, nicht fuer das System-Node (ABI 137).
+ * ELECTRON_RUN_AS_NODE nutzt dieselbe Binary wie die App, ohne sie neu zu bauen.
+ */
+function testRuntime() {
+  const exeName = process.platform === 'win32' ? 'electron.exe' : 'electron';
+  const electronExe = path.join(electronRoot, 'node_modules', 'electron', 'dist', exeName);
+  if (fs.existsSync(electronExe)) {
+    return {
+      execPath: electronExe,
+      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }),
+    };
+  }
+  console.error('run-lib-unit-tests: electron.exe fehlt, System-Node. SQLite-Tests koennen uebersprungen werden.');
+  return { execPath: process.execPath, env: process.env };
+}
+
+const runtime = testRuntime();
+const result = spawnSync(runtime.execPath, ['--test', ...files], {
   stdio: 'inherit',
   cwd: electronRoot,
+  env: runtime.env,
 });
 process.exit(result.status === null ? 1 : result.status);
