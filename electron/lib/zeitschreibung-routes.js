@@ -227,6 +227,20 @@ function localDayHasMonteurHours(day) {
   return false;
 }
 
+/** Stunde, Bemerkung, Sperre oder Lohn-Kommentar — so ein Tag darf nicht still verschwinden. */
+function dayHasStoredContent(day) {
+  const d = day || {};
+  if (localDayHasMonteurHours(d)) return true;
+  if (Number(d.lohn_gesperrt)) return true;
+  if (String(d.lohn_kommentar || '').trim()) return true;
+  if (d.lohn_bemerkung != null && String(d.lohn_bemerkung) !== '') return true;
+  for (const f of calc.HOUR_FIELDS) {
+    const v = d['lohn_' + f];
+    if (v != null && v !== '' && calc.num(v) !== 0) return true;
+  }
+  return false;
+}
+
 function serverDayHasMonteurHours(day) {
   return localDayHasMonteurHours(day);
 }
@@ -352,16 +366,12 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     .prepare('SELECT * FROM timesheets WHERE technician_id = ? AND year = ? AND month = ?')
     .get(technicianId, year, month);
 
-  // Gesperrte Tage + Lohn-Overrides aus lokaler DB behalten.
-  const lockedByDate = {};
+  // Bisherige Tage lesen, damit ein unvollständiges Payload nichts löscht.
   const prevByDate = {};
   if (existing) {
     try {
       const allPrev = db.prepare('SELECT * FROM timesheet_days WHERE timesheet_id = ?').all(existing.id);
-      for (const r of allPrev) {
-        prevByDate[r.day_date] = r;
-        if (Number(r.lohn_gesperrt)) lockedByDate[r.day_date] = r;
-      }
+      for (const r of allPrev) prevByDate[r.day_date] = r;
     } catch (_) {
       /* Spalte ggf. noch nicht da */
     }
@@ -375,18 +385,23 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     const locked = Number(d.lohn_gesperrt) ? 1 : 0;
     let row = Object.assign({}, d, { lohn_gesperrt: locked });
     if (locked && prev) {
+      // Gesperrte Tage: vorhandene lokale Stunden nicht durch Leerwerte ersetzen.
+      // Leere lokale Tage dürfen Stunden vom Server übernehmen.
+      const hourSrc = localDayHasMonteurHours(prev) || !localDayHasMonteurHours(row) ? prev : row;
+      const prevBem = prev.bemerkung != null ? String(prev.bemerkung) : '';
+      const nextBem = row.bemerkung != null ? String(row.bemerkung) : '';
       row = Object.assign({}, row, {
-        anw: prev.anw,
-        montage: prev.montage,
-        ue50: prev.ue50,
-        ue100: prev.ue100,
-        weg: prev.weg,
-        urlaub: prev.urlaub,
-        za_plus: prev.za_plus,
-        za_minus: prev.za_minus,
-        krank: prev.krank,
-        arzt: prev.arzt,
-        bemerkung: prev.bemerkung != null ? prev.bemerkung : row.bemerkung,
+        anw: hourSrc.anw,
+        montage: hourSrc.montage,
+        ue50: hourSrc.ue50,
+        ue100: hourSrc.ue100,
+        weg: hourSrc.weg,
+        urlaub: hourSrc.urlaub,
+        za_plus: hourSrc.za_plus,
+        za_minus: hourSrc.za_minus,
+        krank: hourSrc.krank,
+        arzt: hourSrc.arzt,
+        bemerkung: prevBem.trim() ? prevBem : nextBem,
         lohn_gesperrt: 1,
       });
     }
@@ -410,12 +425,13 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     byDate[d.day_date] = row;
   }
 
-  // Gesperrte Tage, die nicht im Payload waren, trotzdem behalten
-  // (nur wenn sie in diesem Lauf nicht explizit entsperrt wurden)
-  for (const dk of Object.keys(lockedByDate)) {
+  // Tage mit Inhalt, die der Aufruf gar nicht geschickt hat, bleiben erhalten.
+  // Ein leeres oder abgeschnittenes Payload darf den Monat nicht löschen.
+  for (const dk of Object.keys(prevByDate)) {
     if (byDate[dk]) continue;
-    const r = lockedByDate[dk];
-    byDate[dk] = Object.assign({}, r, { lohn_gesperrt: 1 });
+    const r = prevByDate[dk];
+    if (!dayHasStoredContent(r)) continue;
+    byDate[dk] = Object.assign({}, r, { lohn_gesperrt: Number(r.lohn_gesperrt) ? 1 : 0 });
     copyLohnOverrides(r, byDate[dk]);
   }
 
@@ -423,6 +439,13 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
   for (const d of days) {
     // Monteur-day_sum bleibt Original; UI/Export nutzen effektiv
     d.day_sum = calc.daySum(d);
+  }
+  const covered = new Set(days.map((d) => d.day_date));
+  for (const dk of Object.keys(byDate)) {
+    if (covered.has(dk)) continue;
+    const extra = Object.assign({}, byDate[dk], { day_date: dk });
+    if (extra.day_sum == null) extra.day_sum = calc.daySum(extra);
+    days.push(extra);
   }
   // Header-Summen effektiv (mit Lohn-Overrides)
   const daySums = calc.columnSumsEffective
@@ -437,57 +460,9 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     nextStatus = 'submitted';
   }
 
-  let id;
-  if (existing) {
-    id = existing.id;
-    db.prepare(
-      `UPDATE timesheets SET status = ?, sum_anw=?, sum_montage=?, sum_ue50=?, sum_ue100=?, sum_weg=?,
-       sum_urlaub=?, sum_za_plus=?, sum_za_minus=?, sum_krank=?, sum_arzt=?, sum_day=?, gesamt=?, updated_at=datetime('now')
-       WHERE id = ?`,
-    ).run(
-      nextStatus,
-      sums.anw,
-      sums.montage,
-      sums.ue50,
-      sums.ue100,
-      sums.weg,
-      sums.urlaub,
-      sums.za_plus,
-      sums.za_minus,
-      sums.krank,
-      sums.arzt,
-      sums.day_sum,
-      gesamt,
-      id,
-    );
-    db.prepare('DELETE FROM timesheet_days WHERE timesheet_id = ?').run(id);
-  } else {
-    const info = db
-      .prepare(
-        `INSERT INTO timesheets (
-          technician_id, year, month, status, sum_anw, sum_montage, sum_ue50, sum_ue100, sum_weg,
-          sum_urlaub, sum_za_plus, sum_za_minus, sum_krank, sum_arzt, sum_day, gesamt, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
-      )
-      .run(
-        technicianId,
-        year,
-        month,
-        nextStatus,
-        sums.anw,
-        sums.montage,
-        sums.ue50,
-        sums.ue100,
-        sums.weg,
-        sums.urlaub,
-        sums.za_plus,
-        sums.za_minus,
-        sums.krank,
-        sums.arzt,
-        sums.day_sum,
-        gesamt,
-      );
-    id = Number(info.lastInsertRowid);
+  const dayList = Array.isArray(days) ? days : [];
+  if (!dayList.length && Object.keys(prevByDate).some((dk) => dayHasStoredContent(prevByDate[dk]))) {
+    throw new Error('Zeitschreibung: leeres Blatt würde vorhandene Tage löschen.');
   }
 
   const ins = db.prepare(
@@ -499,8 +474,41 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
       lohn_korrektur_meta, korrekturen_json
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
-  const dayList = Array.isArray(days) ? days : [];
-  db.transaction(() => {
+  const updateHead = db.prepare(
+    `UPDATE timesheets SET status = ?, sum_anw=?, sum_montage=?, sum_ue50=?, sum_ue100=?, sum_weg=?,
+     sum_urlaub=?, sum_za_plus=?, sum_za_minus=?, sum_krank=?, sum_arzt=?, sum_day=?, gesamt=?, updated_at=datetime('now')
+     WHERE id = ?`,
+  );
+  const insertHead = db.prepare(
+    `INSERT INTO timesheets (
+      technician_id, year, month, status, sum_anw, sum_montage, sum_ue50, sum_ue100, sum_weg,
+      sum_urlaub, sum_za_plus, sum_za_minus, sum_krank, sum_arzt, sum_day, gesamt, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
+  );
+  const deleteDays = db.prepare('DELETE FROM timesheet_days WHERE timesheet_id = ?');
+  const countDays = db.prepare('SELECT COUNT(*) AS c FROM timesheet_days WHERE timesheet_id = ?');
+
+  // Kopf, Löschen und Einfügen in einer Transaktion. Schlägt das Schreiben fehl,
+  // bleiben die bisherigen Tage erhalten.
+  let id = existing ? existing.id : 0;
+  const writeAll = db.transaction(() => {
+    if (existing) {
+      updateHead.run(
+        nextStatus,
+        sums.anw, sums.montage, sums.ue50, sums.ue100, sums.weg,
+        sums.urlaub, sums.za_plus, sums.za_minus, sums.krank, sums.arzt,
+        sums.day_sum, gesamt, id,
+      );
+      deleteDays.run(id);
+    } else {
+      const info = insertHead.run(
+        technicianId, year, month, nextStatus,
+        sums.anw, sums.montage, sums.ue50, sums.ue100, sums.weg,
+        sums.urlaub, sums.za_plus, sums.za_minus, sums.krank, sums.arzt,
+        sums.day_sum, gesamt,
+      );
+      id = Number(info.lastInsertRowid);
+    }
     for (const d of dayList) {
       const ov = copyLohnOverrides(d, {});
       ins.run(
@@ -537,7 +545,12 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
         ov.korrekturen_json,
       );
     }
+    const written = Number(countDays.get(id).c);
+    if (written !== dayList.length) {
+      throw new Error('Zeitschreibung unvollständig: ' + written + ' von ' + dayList.length + ' Tagen geschrieben.');
+    }
   });
+  writeAll();
 
   return { id, days: dayList, sums, gesamt, status: nextStatus };
 }
@@ -815,11 +828,17 @@ async function pullLohnLocksWithCreds(db, technicianId, year, month, baseUrl, au
     const next = Object.assign({}, cur);
     copyLohnOverrides(sd, next);
     next.lohn_gesperrt = lock;
-    // Immer vom Server übernehmen (auch wenn leer → lokale Reste löschen)
-    next.lohn_kommentar = sd.lohn_kommentar != null ? String(sd.lohn_kommentar) : '';
+    // Kommentar nur überschreiben, wenn der Server das Feld wirklich sendet.
+    if (Object.prototype.hasOwnProperty.call(sd, 'lohn_kommentar')) {
+      next.lohn_kommentar = sd.lohn_kommentar != null ? String(sd.lohn_kommentar) : '';
+    }
     if (lock) {
-      copyMonteurHoursFromServer(sd, next);
-      next.bemerkung = sd.bemerkung != null ? sd.bemerkung : cur.bemerkung;
+      // Vorhandene lokale Stunden nicht durch ein leeres Serverblatt ersetzen.
+      if (localDayHasMonteurHours(cur)) copyMonteurHoursFromServer(cur, next);
+      else copyMonteurHoursFromServer(sd, next);
+      const curBem = cur.bemerkung != null ? String(cur.bemerkung) : '';
+      const srvBem = sd.bemerkung != null ? String(sd.bemerkung) : '';
+      next.bemerkung = curBem.trim() ? curBem : srvBem;
       next.holiday_label = sd.holiday_label || cur.holiday_label || '';
       next.lohn_gesperrt = 1;
     } else if (!localDayHasMonteurHours(cur) && serverDayHasMonteurHours(sd)) {
@@ -1118,5 +1137,6 @@ module.exports = {
   pullRecentLohnLocks,
   ensureTables,
   loadTimesheet,
+  persistTimesheet,
   readConfig,
 };

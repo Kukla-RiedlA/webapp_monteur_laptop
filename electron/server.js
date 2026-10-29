@@ -19512,6 +19512,14 @@ function createApp(db) {
           });
           if (resolved.base) base = resolved.base;
         }
+        // Lohn-Sperren vor dem langen Sync: ein Abbruch bei Thumbs darf den Status nicht verpassen.
+        if (base && technicianId) {
+          try {
+            await pullRecentLohnLocks(db, technicianId, base, auth, DB_DIR);
+          } catch (e) {
+            console.warn('[zeitschreibung] pull Lohn-Locks in sync_pull:', e && e.message ? e.message : e);
+          }
+        }
         setProgress('sync_pull', 0, 8, 'Sende Status/Pending vor Pull …');
         try {
           await pushToServer(base, technicianId, db, auth, liveDispoCredsForPush(base, jobCreds));
@@ -20069,8 +20077,20 @@ function createApp(db) {
           serverUsername: creds.serverUsername,
           serverPassword: creds.serverPassword,
         });
-        const baseUrl = (resolved.base || '').trim().replace(/\/$/, '');
+        const resolvedBase = (resolved.base || '').trim().replace(/\/$/, '');
+        const fallbackBase = String(p.baseUrl || creds.externalUrl || creds.baseUrl || '')
+          .trim()
+          .replace(/\/$/, '');
+        const baseUrl = resolvedBase || fallbackBase;
+        // Sperren auch holen, wenn die interne URL tot ist und der Push danach abbricht.
         if (!baseUrl) throw new Error(resolved.error || 'Dispo-Basis-URL fehlt.');
+        if (technicianId) {
+          try {
+            await pullRecentLohnLocks(db, technicianId, baseUrl, auth, DB_DIR);
+          } catch (e) {
+            console.warn('[zeitschreibung] pull Lohn-Locks before sync_push:', e && e.message ? e.message : e);
+          }
+        }
         setProgress('sync_push', 0, 2, 'Sende Änderungen zur Dispo …');
         await pushToServer(baseUrl, technicianId, db, auth, liveDispoCredsForPush(baseUrl, creds));
         setProgress('sync_push', 1, 2, 'Abrechnungs-Outbox …');
