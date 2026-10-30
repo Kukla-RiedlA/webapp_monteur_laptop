@@ -87,4 +87,30 @@ describe('persistTimesheet verliert keine Tage', () => {
     assert.equal(day(loaded, '2026-10-01').montage, 8.5);
     assert.equal(day(loaded, '2026-10-01').bemerkung, 'bleiben');
   });
+
+  it('db-compat-Transaktion (sofort ausführen, undefined) speichert ohne writeAll-Fehler', () => {
+    const raw = mem();
+    const db = {
+      exec(sql) { raw.exec(sql); },
+      prepare(sql) {
+        const stmt = raw.prepare(sql);
+        return {
+          run(...params) { return stmt.run(...params); },
+          get(...params) { return stmt.get(...params); },
+          all(...params) { return stmt.all(...params); },
+        };
+      },
+      transaction(fn) {
+        raw.transaction(fn)();
+      },
+    };
+    const saved = persistTimesheet(db, 14, 2026, 10, [
+      { day_date: '2026-10-05', montage: 7.5, bemerkung: 'compat' },
+    ], 'submitted');
+    assert.equal(saved.status, 'submitted');
+    const loaded = loadTimesheet(db, 14, 2026, 10);
+    assert.equal(day(loaded, '2026-10-05').montage, 7.5);
+    assert.equal(day(loaded, '2026-10-05').bemerkung, 'compat');
+    assert.equal(loaded.status, 'submitted');
+  });
 });

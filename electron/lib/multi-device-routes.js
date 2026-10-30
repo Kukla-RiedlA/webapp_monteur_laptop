@@ -495,6 +495,7 @@ function registerMultiDeviceRoutes(deps) {
               }
               local.payload = safe;
             } else {
+              clearConflictsForFile(opts.localJobId, serverJobId, basename);
               local.payload = merged.payload;
             }
           } else {
@@ -639,6 +640,7 @@ function registerMultiDeviceRoutes(deps) {
               }
               local.payload = safe;
             } else {
+              clearConflictsForFile(opts.localJobId, serverJobId, basename);
               local.payload = mergedConflict.payload;
             }
           } else if (!opts.forceLocal) {
@@ -825,6 +827,8 @@ function registerMultiDeviceRoutes(deps) {
         });
         if (merged.conflicts && merged.conflicts.length) {
           rememberBlockingDraftConflict(opts, payload, remoteRev, remoteTs, merged.conflicts);
+        } else {
+          clearConflictsForFile(opts.localJobId, opts.serverJobId, basename);
         }
         if (!draftPayloadsEqual(merged.payload, local.payload)) {
           preserveLocalDraftCopy(opts, local.payload);

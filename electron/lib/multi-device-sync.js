@@ -530,7 +530,21 @@ function classifyDraftSides(localPayload, remotePayload) {
 }
 
 /**
- * Union der byFab-Stores. Pro FN: Inhalt vor leerem Stub, sonst neuerer updatedAt.
+ * Beide Seiten gefüllt und unterschiedlich: klar neuerer updatedAt gewinnt (Abstand > 2 s).
+ * Fehlender Stempel oder Abstand innerhalb der Toleranz bleibt ein Konflikt.
+ * @returns {'local'|'remote'|''}
+ */
+function pickNewerDraftEntry(localEntry, remoteEntry) {
+  const localTs = draftEntryTimestamp(localEntry);
+  const remoteTs = draftEntryTimestamp(remoteEntry);
+  if (draftTimestampNewer(localTs, remoteTs)) return 'local';
+  if (draftTimestampNewer(remoteTs, localTs)) return 'remote';
+  return '';
+}
+
+/**
+ * Union der byFab-Stores. Pro FN: Inhalt vor leerem Stub.
+ * Beide Seiten gefüllt: der eindeutig neuere updatedAt gewinnt, sonst Konflikt.
  * preferLocal: vorhandene lokale FN nie durch Dispo ersetzen (nur fehlende FN ergänzen).
  */
 function mergeByFabStores(localPayload, remotePayload, opts) {
@@ -553,8 +567,15 @@ function mergeByFabStores(localPayload, remotePayload, opts) {
       if (side === 'remote') {
         byFab[key] = rem;
       } else if (side === 'conflict' && !preferLocal) {
-        byFab[key] = loc;
-        conflicts.push(key);
+        const winner = pickNewerDraftEntry(loc, rem);
+        if (winner === 'remote') {
+          byFab[key] = rem;
+        } else if (winner === 'local') {
+          byFab[key] = loc;
+        } else {
+          byFab[key] = loc;
+          conflicts.push(key);
+        }
       } else if (preferLocal && draftEntryContentScore(loc) === 0 && draftEntryContentScore(rem) > 0) {
         byFab[key] = rem;
       } else {
@@ -1035,6 +1056,7 @@ module.exports = {
   isProtocolConflictCopyName,
   removeProtocolConflictCopies,
   draftEntryTimestamp,
+  pickNewerDraftEntry,
   draftEntryContentScore,
   classifyDraftSides,
   payloadForServerPush,

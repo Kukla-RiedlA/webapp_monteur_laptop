@@ -9274,9 +9274,22 @@
             typeof loadDienstreiseExplorer === 'function'
           ) {
             try {
-              loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath, 'page');
+              loadDienstreiseExplorer(selectedJobIdOnDienstreisePage, dienstreiseExplorerSubpath, 'page', {
+                skipAutoPull: true,
+                soft: true,
+              });
             } catch (explorerErr) {
               console.warn('[Sync] Explorer-Refresh:', explorerErr);
+            }
+          }
+          if (startExplorerLoadedJobId && typeof loadDienstreiseExplorer === 'function') {
+            try {
+              loadDienstreiseExplorer(startExplorerLoadedJobId, startExplorerSubpath, 'start', {
+                skipAutoPull: true,
+                soft: true,
+              });
+            } catch (startExplorerErr) {
+              console.warn('[Sync] Start-Explorer:', startExplorerErr);
             }
           }
           var skipProjektRefresh =
@@ -9872,13 +9885,27 @@
   let countdownTickId = null;
   let nextSyncTime = 0;
 
-  function hasActiveHeavySyncJobs(jobs) {
-    var list = Array.isArray(jobs) ? jobs : [];
-    return list.some(function (j) {
-      if (!j) return false;
-      if (j.status !== 'queued' && j.status !== 'running') return false;
-      return j.type === 'sync_pull' || j.type === 'dienstreise_pull';
+  function activeBackgroundPulls(jobs) {
+    var syncPull = false;
+    var projectPull = false;
+    (Array.isArray(jobs) ? jobs : []).forEach(function (j) {
+      if (!j || (j.status !== 'queued' && j.status !== 'running')) return;
+      if (j.type === 'sync_pull') syncPull = true;
+      if (j.type === 'dienstreise_pull') projectPull = true;
     });
+    return { syncPull: syncPull, projectPull: projectPull };
+  }
+
+  function postAcceptedProjectDelta() {
+    var payload = typeof buildDispoSyncAuthPayload === 'function' ? buildDispoSyncAuthPayload() : null;
+    if (!payload || !isValidDispoSyncAuth(payload)) return Promise.resolve();
+    var pw = typeof getServerPassword === 'function' ? getServerPassword() : '';
+    if (pw) payload.serverPassword = pw;
+    return fetch(API_BASE + '/api/dienstreise/periodic_delta', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(function () {});
   }
 
   function fetchActiveHeavySyncJobs() {
@@ -9899,8 +9926,15 @@
     const ms = getSyncIntervalMinutes() * 60 * 1000;
     syncIntervalId = setInterval(function () {
       fetchActiveHeavySyncJobs().then(function (jobs) {
-        if (hasActiveHeavySyncJobs(jobs)) {
-          console.log('[Sync] Auto-Sync übersprungen — Pull noch aktiv');
+        var active = activeBackgroundPulls(jobs);
+        if (active.syncPull) {
+          console.log('[Sync] Sync läuft — Projektdateien angenommener Aufträge werden vorgezogen');
+          postAcceptedProjectDelta();
+          setNextSyncTime();
+          return;
+        }
+        if (active.projectPull) {
+          console.log('[Sync] Auto-Sync übersprungen — Projektordner-Abruf noch aktiv');
           setNextSyncTime();
           return;
         }
@@ -9930,10 +9964,22 @@
     updateCountdownRing();
   }
 
+  var manualSyncWanted = false;
+
   function triggerManualSync() {
-    if (checkConnectionAndSyncInFlight) {
+    if (manualSyncWanted && checkConnectionAndSyncInFlight) {
       return checkConnectionAndSyncInFlight;
     }
+    if (checkConnectionAndSyncInFlight) {
+      manualSyncWanted = true;
+      setConnectionBadge('online_syncing', 'Sync startet gleich …');
+      return checkConnectionAndSyncInFlight.finally(function () {
+        if (!manualSyncWanted) return;
+        manualSyncWanted = false;
+        return triggerManualSync();
+      });
+    }
+    manualSyncWanted = true;
     setConnectionBadge('checking', 'Manueller Sync…');
     var maxMs = 10 * 60 * 1000;
     var guard = new Promise(function (_, reject) {
@@ -9957,6 +10003,7 @@
         );
       })
       .finally(function () {
+        manualSyncWanted = false;
         startSyncInterval();
       });
   }

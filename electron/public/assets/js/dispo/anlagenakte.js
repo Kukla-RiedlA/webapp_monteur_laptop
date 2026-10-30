@@ -210,37 +210,60 @@
     });
   }
 
+  var galleryLoadedAt = 0;
+
   function loadGallery() {
     var root = document.getElementById('akteGalleryRoot');
     var fabEl = document.getElementById('formFab');
     if (!root || !fabEl) return;
     var fab = (fabEl.value || '').trim();
-    if (fab === lastGalleryFab && root.getAttribute('data-loaded') === '1') return;
+    var pendingNow = root.getAttribute('data-montage-pending') === '1';
+    var loadedFresh =
+      fab === lastGalleryFab &&
+      root.getAttribute('data-loaded') === '1' &&
+      !pendingNow &&
+      galleryLoadedAt &&
+      Date.now() - galleryLoadedAt < 20000;
+    if (loadedFresh) return;
+    var soft = fab === lastGalleryFab && root.getAttribute('data-loaded') === '1';
     lastGalleryFab = fab;
     if (!fab) {
       root.innerHTML = '<p class="muted">Keine Fabrikationsnummer.</p>';
       root.removeAttribute('data-loaded');
+      root.removeAttribute('data-montage-pending');
       galleryItems = [];
+      galleryLoadedAt = 0;
       return;
     }
     var token = ++galleryLoadToken;
-    root.innerHTML = '<p class="muted">Lade Galerie…</p>';
+    galleryLoadedAt = Date.now();
+    if (!soft) root.innerHTML = '<p class="muted">Lade Galerie…</p>';
     var url = window.KUKLA_ANLAGENAKTE_GALLERY_URL
       ? (window.KUKLA_ANLAGENAKTE_GALLERY_URL + (window.KUKLA_ANLAGENAKTE_GALLERY_URL.indexOf('?') >= 0 ? '&' : '?') + 'fab=' + encodeURIComponent(fab))
       : endpoint('anlagenstamm_gallery.php', 'fab=' + encodeURIComponent(fab));
     function apply(d, pollLeft) {
       if (token !== galleryLoadToken) return;
       renderGalleryGrid(root, (d && d.gallery) || [], d || {});
-      root.setAttribute('data-loaded', '1');
-      if (d && d.montage_pending && pollLeft > 0) {
+      var pending = !!(d && d.montage_pending);
+      if (pending) {
+        root.setAttribute('data-montage-pending', '1');
+        root.removeAttribute('data-loaded');
+      } else {
+        root.removeAttribute('data-montage-pending');
+        root.setAttribute('data-loaded', '1');
+        galleryLoadedAt = Date.now();
+      }
+      if (pending && pollLeft > 0) {
         setTimeout(function () {
           if (token !== galleryLoadToken) return;
           jsonGet(url).then(function (d2) { apply(d2, pollLeft - 1); }).catch(function () {});
         }, 800);
+      } else if (pending) {
+        root.removeAttribute('data-montage-pending');
       }
     }
     jsonGet(url)
-      .then(function (d) { apply(d, 3); })
+      .then(function (d) { apply(d, 12); })
       .catch(function () {
         if (token !== galleryLoadToken) return;
         galleryItems = [];
@@ -347,7 +370,12 @@
         var el = qs('#formFab');
         if (!el) return;
         var v = (el.value || '').trim();
-        if (isGalerieTabActive() && v !== lastGalleryFab) loadGallery();
+        if (isGalerieTabActive() && v) {
+          var galRoot = qs('#akteGalleryRoot');
+          var galPending = galRoot && galRoot.getAttribute('data-montage-pending') === '1';
+          var galStale = !galleryLoadedAt || Date.now() - galleryLoadedAt > 20000;
+          if (v !== lastGalleryFab || (!galPending && galStale)) loadGallery();
+        }
         syncTitle();
       }, 700);
     }

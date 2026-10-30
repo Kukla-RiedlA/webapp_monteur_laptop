@@ -404,8 +404,11 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       } catch (_) {
         extraFiles = [];
       }
-      montagePending =
+      const cacheMissing =
         typeof ctx.hasMontageGalleryCache === 'function' ? !ctx.hasMontageGalleryCache(fab) : extraFiles.length === 0;
+      const cacheStale =
+        typeof ctx.isMontageGalleryCacheStale === 'function' && ctx.isMontageGalleryCacheStale(fab);
+      montagePending = cacheMissing || cacheStale;
     } else if (typeof ctx.listMontageGalleryFiles === 'function') {
       try {
         extraFiles = ctx.listMontageGalleryFiles(fab) || [];

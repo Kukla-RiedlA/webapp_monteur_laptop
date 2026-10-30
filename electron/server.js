@@ -1754,6 +1754,7 @@ function createApp(db) {
   let prewarmAnlagenstammGalleryThumbsImpl = null;
   const montageGalleryFileCache = new Map();
   const montageGalleryRefreshInflight = new Map();
+  const MONTAGE_GALLERY_CACHE_TTL_MS = 20 * 1000;
   function montageGalleryCacheKey(fab) {
     return String(fab || '').replace(/\D/g, '') || String(fab || '').trim();
   }
@@ -1764,6 +1765,12 @@ function createApp(db) {
   function hasMontageGalleryCache(fab) {
     return montageGalleryFileCache.has(montageGalleryCacheKey(fab));
   }
+  function isMontageGalleryCacheStale(fab) {
+    const hit = montageGalleryFileCache.get(montageGalleryCacheKey(fab));
+    if (!hit || !hit.at) return true;
+    return Date.now() - hit.at >= MONTAGE_GALLERY_CACHE_TTL_MS;
+  }
+  let invalidateMontageGalleryForLocalJob = function () {};
   let refreshMontageGalleryFilesImpl = async () => {};
   async function refreshMontageGalleryFiles(fab) {
     return refreshMontageGalleryFilesImpl(fab);
@@ -1811,6 +1818,7 @@ function createApp(db) {
     },
     getCachedMontageGalleryFiles: (fab) => getCachedMontageGalleryFiles(fab),
     hasMontageGalleryCache: (fab) => hasMontageGalleryCache(fab),
+    isMontageGalleryCacheStale: (fab) => isMontageGalleryCacheStale(fab),
     refreshMontageGalleryFiles: (fab) => refreshMontageGalleryFiles(fab),
   });
   registerAbrechnungPhpRoutes(app, {
@@ -5575,6 +5583,22 @@ function createApp(db) {
     return run;
   };
 
+  invalidateMontageGalleryForLocalJob = function invalidateMontageGalleryForLocalJob(localJobId) {
+    const id = parseInt(localJobId, 10);
+    if (!Number.isFinite(id) || id <= 0) return;
+    let row = null;
+    try {
+      row = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(id);
+    } catch (_) {
+      row = null;
+    }
+    if (!row) return;
+    const fabs = fabNumbersFromJobFabrikationsnummern(row.fabrikationsnummern);
+    for (const fabNum of fabs) {
+      montageGalleryFileCache.delete(montageGalleryCacheKey(fabNum));
+    }
+  };
+
   function cacheProjekteNeuTreesForJob(localJobId) {
     const jobRow = db.prepare('SELECT fabrikationsnummern FROM jobs WHERE id = ?').get(localJobId);
     if (!jobRow) return;
@@ -6026,7 +6050,6 @@ function createApp(db) {
     }
   });
 
-  const DIENSTREISE_DELTA_MIN_INTERVAL_MS = 5 * 60 * 1000;
   /** periodisches Manifest/Refresh: wiederverwenden bis dahin (neue Dateien spätestens danach / bei manuellem Sync). */
   const DIENSTREISE_PERIODIC_MANIFEST_TTL_MS = 15 * 60 * 1000;
   const DIENSTREISE_REFRESH_TTL_MS = 15 * 60 * 1000;
@@ -6055,15 +6078,12 @@ function createApp(db) {
     }
   }
 
-  function lastDienstreisePullCompletedAtMs(localJobId) {
-    const row = db
-      .prepare(
-        `SELECT updated_at FROM background_jobs
-         WHERE type = 'dienstreise_pull' AND status = 'completed'
-           AND dedupe_key LIKE ? ORDER BY datetime(updated_at) DESC LIMIT 1`,
-      )
-      .get('dienstreise_pull:' + localJobId + ':%');
-    return parseBackgroundJobTimestamp(row && row.updated_at);
+  /** Zeitpunkt der letzten echten Server-Dateiliste. Fortsetzungsabrufe zählen nicht. */
+  function lastDienstreiseManifestFreshAtMs(localJobId) {
+    const prev = loadLastCompletedDienstreisePullCheckpoint(localJobId);
+    if (!prev || !prev.manifest_fresh_at) return 0;
+    const n = Date.parse(String(prev.manifest_fresh_at));
+    return Number.isFinite(n) ? n : 0;
   }
 
   /** Aufträge mit lokalem Reise-Ordner, die nach regulärem sync_pull Projektdateien nachziehen sollen. */
@@ -6111,12 +6131,31 @@ function createApp(db) {
     const now = Date.now();
     for (const row of jobs) {
       const localJobId = row.id;
-      const lastMs = lastDienstreisePullCompletedAtMs(localJobId);
-      if (!force && lastMs > 0 && now - lastMs < DIENSTREISE_DELTA_MIN_INTERVAL_MS) {
+      const freshAt = lastDienstreiseManifestFreshAtMs(localJobId);
+      const manifestStillFresh = freshAt > 0 && now - freshAt < DIENSTREISE_PERIODIC_MANIFEST_TTL_MS;
+      if (!force && manifestStillFresh) {
         skipped++;
         continue;
       }
       const dedupeKey = 'dienstreise_pull:' + localJobId + ':copy';
+      const active =
+        typeof bgJobs.getActiveByDedupe === 'function' ? bgJobs.getActiveByDedupe(dedupeKey) : null;
+      if (active && !force) {
+        const payload = active.payload || {};
+        const willRefresh = !!payload.periodic_delta || !!payload.force_refresh;
+        if (willRefresh) {
+          skipped++;
+          continue;
+        }
+        if (typeof bgJobs.cancelActiveByDedupe === 'function') {
+          bgJobs.cancelActiveByDedupe(
+            dedupeKey,
+            'Dateiliste des angenommenen Auftrags wird neu geladen.',
+          );
+        }
+      } else if (force && typeof bgJobs.cancelActiveByDedupe === 'function') {
+        bgJobs.cancelActiveByDedupe(dedupeKey, 'Manueller Sync lädt die Projektdateien neu.');
+      }
       const enq = bgJobs.enqueue(
         'dienstreise_pull',
         {
@@ -6130,6 +6169,7 @@ function createApp(db) {
           include_bilder: true,
           accept_job: false,
           periodic_delta: true,
+          force_refresh: !!force,
         },
         dedupeKey,
       );
@@ -18895,16 +18935,18 @@ function createApp(db) {
         const manifestFreshAge = chk.manifest_fresh_at
           ? Date.now() - new Date(chk.manifest_fresh_at).getTime()
           : Infinity;
+        const manifestIsFresh =
+          Number.isFinite(manifestFreshAge) && manifestFreshAge < DIENSTREISE_PERIODIC_MANIFEST_TTL_MS;
         const canReusePeriodicManifest =
           periodicDelta &&
           !forceRefresh &&
+          manifestIsFresh &&
           Array.isArray(chk.files) &&
-          chk.files.length > 0 &&
-          Number.isFinite(manifestFreshAge) &&
-          manifestFreshAge < DIENSTREISE_PERIODIC_MANIFEST_TTL_MS;
+          chk.files.length > 0;
         const canResumeManifest =
           !forceRefresh &&
           !periodicDelta &&
+          manifestIsFresh &&
           Array.isArray(chk.files) &&
           chk.files.length > 0;
         if (skipCopyDueToNetwork) {
@@ -19532,6 +19574,62 @@ function createApp(db) {
             prePushErr && prePushErr.message ? prePushErr.message : prePushErr,
           );
         }
+        const forceDienstreiseDelta =
+          p.forceDienstreiseDelta === true ||
+          p.force_dienstreise_delta === true ||
+          p.forceAnlagenstammFull === true;
+        try {
+          setProgress('sync_pull', 0, 8, 'Projektordner angenommener Aufträge …');
+          const openJobs = listLocalJobsForPeriodicDienstreisePull(technicianId);
+          for (const row of openJobs) {
+            try {
+              const reiseDir = resolveDienstreiseReiseDirForJob(row.id, { createIfMissing: false });
+              if (!reiseDir) continue;
+              const changed = await collectChangedDienstreiseSyncFileEntries(db, reiseDir, row.id);
+              if (!changed.length) continue;
+              enqueueDienstreisePushChanged(row.id, technicianId, base, jobCreds.serverUsername, jobCreds.serverPassword, {
+                externalUrl: p.externalUrl,
+                internalUrl: p.internalUrl,
+              });
+            } catch (onePushErr) {
+              console.warn(
+                '[sync_pull] dienstreise_changed_push job',
+                row.id,
+                onePushErr && onePushErr.message ? onePushErr.message : onePushErr,
+              );
+            }
+          }
+        } catch (pushChangedErr) {
+          console.warn(
+            '[sync_pull] dienstreise_changed_push:',
+            pushChangedErr && pushChangedErr.message ? pushChangedErr.message : pushChangedErr,
+          );
+        }
+        try {
+          const delta = enqueuePeriodicDienstreiseDeltaPulls({
+            technicianId,
+            dispoBaseUrl: base,
+            externalUrl: p.externalUrl,
+            internalUrl: p.internalUrl,
+            dispoUsername: jobCreds.serverUsername,
+            dispoPassword: jobCreds.serverPassword,
+            force: forceDienstreiseDelta,
+          });
+          if (delta.enqueued > 0 || delta.skipped > 0) {
+            console.log(
+              '[sync_pull] dienstreise_delta enqueued:',
+              delta.enqueued,
+              'skipped:',
+              delta.skipped,
+              forceDienstreiseDelta ? '(force)' : '',
+            );
+          }
+        } catch (deltaErr) {
+          console.warn(
+            '[sync_pull] dienstreise_delta:',
+            deltaErr && deltaErr.message ? deltaErr.message : deltaErr,
+          );
+        }
         setProgress('sync_pull', 1, 8, 'Ziehe Aufträge von Dispo …');
         const pullResult = await pullFromServer(base, technicianId, db, auth, p.date_from, p.date_to);
         await dbLock.runWithDbLock(async () => {
@@ -19671,68 +19769,13 @@ function createApp(db) {
           console.warn('[sync_pull] protocol_drafts:', draftPullErr && draftPullErr.message ? draftPullErr.message : draftPullErr);
         }
         await dbLock.runWithDbLock(async () => {
-          setProgress('sync_pull', 6, 8, 'Projektordner (Änderungen) …');
+          setProgress('sync_pull', 6, 8, 'Anlagenstamm …');
           if (hasPendingOrDirtyAnlagenstamm(db)) {
             console.log(
               '[sync_pull] anlagenstamm_db_sync mit lokalen Änderungen/Pending — Server-Daten werden ergänzt (dirty Zeilen bleiben erhalten)',
             );
           }
         });
-        const forceDienstreiseDelta =
-          p.forceDienstreiseDelta === true ||
-          p.force_dienstreise_delta === true ||
-          p.forceAnlagenstammFull === true;
-        try {
-          const openJobs = listLocalJobsForPeriodicDienstreisePull(technicianId);
-          for (const row of openJobs) {
-            try {
-              const reiseDir = resolveDienstreiseReiseDirForJob(row.id, { createIfMissing: false });
-              if (!reiseDir) continue;
-              const changed = await collectChangedDienstreiseSyncFileEntries(db, reiseDir, row.id);
-              if (!changed.length) continue;
-              enqueueDienstreisePushChanged(row.id, technicianId, base, jobCreds.serverUsername, jobCreds.serverPassword, {
-                externalUrl: p.externalUrl,
-                internalUrl: p.internalUrl,
-              });
-            } catch (onePushErr) {
-              console.warn(
-                '[sync_pull] dienstreise_changed_push job',
-                row.id,
-                onePushErr && onePushErr.message ? onePushErr.message : onePushErr,
-              );
-            }
-          }
-        } catch (pushChangedErr) {
-          console.warn(
-            '[sync_pull] dienstreise_changed_push:',
-            pushChangedErr && pushChangedErr.message ? pushChangedErr.message : pushChangedErr,
-          );
-        }
-        try {
-          const delta = enqueuePeriodicDienstreiseDeltaPulls({
-            technicianId,
-            dispoBaseUrl: base,
-            externalUrl: p.externalUrl,
-            internalUrl: p.internalUrl,
-            dispoUsername: jobCreds.serverUsername,
-            dispoPassword: jobCreds.serverPassword,
-            force: forceDienstreiseDelta,
-          });
-          if (delta.enqueued > 0 || delta.skipped > 0) {
-            console.log(
-              '[sync_pull] dienstreise_delta enqueued:',
-              delta.enqueued,
-              'skipped:',
-              delta.skipped,
-              forceDienstreiseDelta ? '(force)' : '',
-            );
-          }
-        } catch (deltaErr) {
-          console.warn(
-            '[sync_pull] dienstreise_delta:',
-            deltaErr && deltaErr.message ? deltaErr.message : deltaErr,
-          );
-        }
         setProgress('anlagenstamm_db_sync', 0, 1, 'Anlagenstamm-Stammdaten …');
         try {
           await dbLock.runWithDbLock(async () => {
@@ -20149,7 +20192,19 @@ function createApp(db) {
     }
   }
 
-  bgJobs = createBackgroundJobService(db, save, { executeJob: executeBackgroundJob });
+  bgJobs = createBackgroundJobService(db, save, {
+    executeJob: async (job, helpers) => {
+      try {
+        await executeBackgroundJob(job, helpers);
+      } finally {
+        if (job && job.type === 'dienstreise_pull' && job.payload) {
+          try {
+            invalidateMontageGalleryForLocalJob(job.payload.job_id);
+          } catch (_) {}
+        }
+      }
+    },
+  });
   monteurRuntime.bgJobs = bgJobs;
   bgJobs.markStaleRunningAsInterrupted();
   purgeOrphanReiseFolderBindings();
@@ -21435,6 +21490,46 @@ function createApp(db) {
     }
   });
 
+  app.post('/api/dienstreise/periodic_delta', express.json(), (req, res) => {
+    const body = req.body || {};
+    const pair = normalizeDispoBasePair(body.externalUrl, body.internalUrl);
+    const baseUrl = (
+      body.baseUrl ||
+      body.base_url ||
+      pair.external ||
+      pair.internal ||
+      ''
+    )
+      .toString()
+      .trim();
+    const technicianId = parseInt(body.technicianId ?? body.technician_id, 10);
+    const queuedCreds = resolveDispoServerCreds(body);
+    const serverUsername = queuedCreds.serverUsername || body.serverUsername;
+    const serverPassword = queuedCreds.serverPassword || body.serverPassword;
+    if (!baseUrl || !Number.isFinite(technicianId) || technicianId <= 0) {
+      return res.status(400).json({ ok: false, error: 'baseUrl und technician_id erforderlich.' });
+    }
+    try {
+      const delta = enqueuePeriodicDienstreiseDeltaPulls({
+        technicianId,
+        dispoBaseUrl: baseUrl.replace(/\/$/, ''),
+        externalUrl: pair.external,
+        internalUrl: pair.internal,
+        dispoUsername: serverUsername,
+        dispoPassword: serverPassword,
+        force: false,
+      });
+      return res.json({
+        ok: true,
+        enqueued: delta.enqueued,
+        skipped: delta.skipped,
+        job_ids: delta.job_ids,
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
+    }
+  });
+
   app.post('/api/sync_pull', express.json(), async (req, res) => {
     const body = req.body || {};
     const pair = normalizeDispoBasePair(body.externalUrl, body.internalUrl);
@@ -21472,7 +21567,7 @@ function createApp(db) {
       const base = (baseUrl || '').trim().replace(/\/$/, '');
       const tid = parseInt(technicianId, 10);
       const dedupeKey = 'sync_pull:' + tid + ':' + fingerprintDispoBase(base);
-      const { job_id } = bgJobs.enqueue(
+      const enqueuedPull = bgJobs.enqueue(
         'sync_pull',
         {
           baseUrl: base,
@@ -21488,7 +21583,25 @@ function createApp(db) {
         },
         dedupeKey,
       );
-      return res.status(202).json({ ok: true, job_id, async: true });
+      if (enqueuedPull && enqueuedPull.reused === 'running' && forceDienstreiseDelta) {
+        try {
+          enqueuePeriodicDienstreiseDeltaPulls({
+            technicianId: tid,
+            dispoBaseUrl: base,
+            externalUrl: pair.external,
+            internalUrl: pair.internal,
+            dispoUsername: serverUsername,
+            dispoPassword: serverPassword,
+            force: true,
+          });
+        } catch (deltaErr) {
+          console.warn(
+            '[sync_pull] force delta:',
+            deltaErr && deltaErr.message ? deltaErr.message : deltaErr,
+          );
+        }
+      }
+      return res.status(202).json({ ok: true, job_id: enqueuedPull.job_id, async: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }

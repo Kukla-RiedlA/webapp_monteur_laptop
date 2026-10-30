@@ -39,16 +39,33 @@ describe('mergeByFabStores', () => {
     assert.equal(merged.payload.byFab.A.x, 1);
     assert.equal(merged.payload.byFab.B.y, 2);
   });
-  it('keeps newer local FN over older remote', () => {
+  it('keeps newer local FN over older remote without a conflict', () => {
     const merged = mergeByFabStores(
       { byFab: { A: { updated_at: '2026-08-26T13:00:00Z', v: 'local' } } },
       { byFab: { A: { updated_at: '2026-08-26T10:00:00Z', v: 'remote' } } },
     );
     assert.equal(merged.payload.byFab.A.v, 'local');
+    assert.deepEqual(merged.conflicts, []);
   });
-  it('keeps both filled FN stands as a conflict instead of last-writer-wins', () => {
+  it('takes the clearly newer remote FN without a conflict', () => {
     const merged = mergeByFabStores(
       { byFab: { A: { updated_at: '2026-08-26T10:00:00Z', v: 'local' } } },
+      { byFab: { A: { updated_at: '2026-08-26T13:00:00Z', v: 'remote' } } },
+    );
+    assert.equal(merged.payload.byFab.A.v, 'remote');
+    assert.deepEqual(merged.conflicts, []);
+  });
+  it('keeps a conflict when both filled timestamps are within tolerance', () => {
+    const merged = mergeByFabStores(
+      { byFab: { A: { updated_at: '2026-08-26T13:00:00.000Z', v: 'local' } } },
+      { byFab: { A: { updated_at: '2026-08-26T13:00:01.000Z', v: 'remote' } } },
+    );
+    assert.equal(merged.payload.byFab.A.v, 'local');
+    assert.deepEqual(merged.conflicts, ['A']);
+  });
+  it('keeps a conflict when a filled FN has no timestamp', () => {
+    const merged = mergeByFabStores(
+      { byFab: { A: { v: 'local' } } },
       { byFab: { A: { updated_at: '2026-08-26T13:00:00Z', v: 'remote' } } },
     );
     assert.equal(merged.payload.byFab.A.v, 'local');

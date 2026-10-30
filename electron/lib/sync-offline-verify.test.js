@@ -273,6 +273,24 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
     assert.ok(delta > changed);
   });
 
+  it('manueller Delta-Pull holt die Dateiliste neu (PWA-Fotos)', () => {
+    const fn = serverSrc.indexOf('function enqueuePeriodicDienstreiseDeltaPulls');
+    const chunk = serverSrc.slice(fn, fn + 4500);
+    assert.ok(chunk.includes('force_refresh: !!force'));
+    assert.ok(chunk.includes('manifestStillFresh'));
+    assert.ok(chunk.includes('cancelActiveByDedupe'));
+    assert.ok(serverSrc.includes("enqueuedPull.reused === 'running' && forceDienstreiseDelta"));
+    const resume = serverSrc.indexOf('const canResumeManifest');
+    const resumeChunk = serverSrc.slice(resume, resume + 280);
+    assert.ok(resumeChunk.includes('manifestIsFresh'));
+    assert.ok(serverSrc.includes("app.post('/api/dienstreise/periodic_delta'"));
+    assert.ok(serverSrc.includes('invalidateMontageGalleryForLocalJob'));
+    const syncIdx = serverSrc.indexOf("case 'sync_pull'");
+    const delta = serverSrc.indexOf('enqueuePeriodicDienstreiseDeltaPulls', syncIdx);
+    const thumbs = serverSrc.indexOf('PROJEKTE-NEU-Thumbs', syncIdx);
+    if (thumbs > 0) assert.ok(delta > syncIdx && delta < thumbs);
+  });
+
   it('dienstreise_push verwendet onlyChanged', () => {
     const idx = serverSrc.indexOf("case 'dienstreise_push'");
     const chunk = serverSrc.slice(idx, idx + 900);
@@ -454,8 +472,8 @@ describe('pullJsonDraft Last-Write-Wins (simuliertes Dispo)', () => {
       store: { byFab: { FN1: { bemerkungen: 'online-alt', updated_at: '2026-08-20T10:00:00Z' } } },
     });
     assert.equal(result.ok, true);
-    assert.equal(result.conflict, true);
-    assert.equal(result.kept_local, true);
+    assert.notEqual(result.conflict, true);
+    assert.equal(result.local_newer, true);
     const local = readLocalDraftFile(filePath(basename));
     assert.equal(local.payload.byFab.FN1.bemerkungen, 'offline-neu');
   });

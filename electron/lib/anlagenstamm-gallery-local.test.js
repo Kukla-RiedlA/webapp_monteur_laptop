@@ -377,6 +377,37 @@ describe('Anlagenstamm-Galerie lokal', () => {
     assert.equal(res.body.montage_pending, true);
     assert.equal(res.body.gallery.length, 0);
   });
+
+  it('veralteter Montage-Cache bleibt sichtbar und wird neu geladen', () => {
+    const app = mockApp();
+    let refreshCalls = 0;
+    registerAnlagenstammPhpRoutes(app, {
+      db: {},
+      getTechnicianId: () => '14',
+      readAnlagenstammTreeCache: () => null,
+      getCachedMontageGalleryFiles: () => [
+        {
+          name: '12304_2026-09-01_11-00-52.jpg',
+          rel: 'Dokumente_Monteur/12304_Kunde/Montage/2026-08-31_AO/Bilder/12304_2026-09-01_11-00-52.jpg',
+          jobId: 166,
+        },
+      ],
+      hasMontageGalleryCache: () => true,
+      isMontageGalleryCacheStale: () => true,
+      refreshMontageGalleryFiles: () => {
+        refreshCalls += 1;
+        return Promise.resolve();
+      },
+    });
+    const res = jsonRes();
+    app.handlers['/api/anlagenstamm_gallery.php']({ query: { fab: '12304' } }, res);
+    assert.equal(res.body.montage_pending, true);
+    assert.equal(res.body.gallery.length, 1);
+    assert.equal(refreshCalls, 0);
+    return new Promise((resolve) => setImmediate(resolve)).then(() => {
+      assert.equal(refreshCalls, 1);
+    });
+  });
 });
 
 describe('Galerie-Request-Pfad ohne OneDrive', () => {

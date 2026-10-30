@@ -501,7 +501,11 @@ function createBackgroundJobService(db, save, hooks) {
       setImmediate(() => {
         pump().catch(() => {});
       });
-      return { job_id: existingId, created: false };
+      return {
+        job_id: existingId,
+        created: false,
+        reused: row && row.status === 'queued' ? 'queued' : 'running',
+      };
     }
     const id = newJobId();
     deleteQueuedByDedupe(dedupeKey);
@@ -720,6 +724,27 @@ function createBackgroundJobService(db, save, hooks) {
     return n;
   }
 
+  function getActiveByDedupe(dedupeKey) {
+    const id = findActiveJobIdByDedupe(dedupeKey);
+    if (!id) return null;
+    return getJob(id);
+  }
+
+  /** Laufenden oder wartenden Job mit diesem Dedupe-Key abbrechen, damit ein Ersatz starten kann. */
+  function cancelActiveByDedupe(dedupeKey, reason) {
+    const id = findActiveJobIdByDedupe(dedupeKey);
+    if (!id) return false;
+    const row = db.prepare('SELECT status FROM background_jobs WHERE id = ?').get(id);
+    if (!row) return false;
+    const why = reason || 'Ersetzt.';
+    if (row.status === 'queued') {
+      bump(id, { status: 'cancelled', error: why, message: null });
+      return true;
+    }
+    const cancelled = cancelJob(id);
+    return !!(cancelled && cancelled.ok);
+  }
+
   /** Pull/Push/Finish für denselben lokalen Auftrag abbrechen (vor Abschluss). */
   function cancelRunningDienstreiseForLocalJob(localJobId) {
     const lid = parseInt(localJobId, 10);
@@ -790,6 +815,8 @@ function createBackgroundJobService(db, save, hooks) {
     reapStuckJobs,
     cancelJob,
     cancelRunningOfType,
+    cancelActiveByDedupe,
+    getActiveByDedupe,
     cancelRunningDienstreiseForLocalJob,
     cancelUnsafeDienstreisePullsOnAccept,
     purgeUnassignedDienstreisePullJobs,

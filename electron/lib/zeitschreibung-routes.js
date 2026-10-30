@@ -490,8 +490,10 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
 
   // Kopf, Löschen und Einfügen in einer Transaktion. Schlägt das Schreiben fehl,
   // bleiben die bisherigen Tage erhalten.
+  // better-sqlite3 liefert eine Runner-Funktion. db-compat führt sofort aus und
+  // gibt undefined zurück — ein zweiter Aufruf wäre "writeAll is not a function".
   let id = existing ? existing.id : 0;
-  const writeAll = db.transaction(() => {
+  const applyWrite = () => {
     if (existing) {
       updateHead.run(
         nextStatus,
@@ -549,8 +551,13 @@ function persistTimesheet(db, technicianId, year, month, daysIn, status) {
     if (written !== dayList.length) {
       throw new Error('Zeitschreibung unvollständig: ' + written + ' von ' + dayList.length + ' Tagen geschrieben.');
     }
-  });
-  writeAll();
+  };
+  if (typeof db.transaction === 'function') {
+    const writeAll = db.transaction(applyWrite);
+    if (typeof writeAll === 'function') writeAll();
+  } else {
+    applyWrite();
+  }
 
   return { id, days: dayList, sums, gesamt, status: nextStatus };
 }

@@ -1,5 +1,10 @@
 # Versionshistorie – Monteur WebApp
 
+## V 3.000.008
+- **Zwei Laptops:** Inbetriebnahme und Serviceprotokoll fragen nicht mehr nach einem Stand, wenn der Zeitstempel eindeutig neuer ist. Die Meldung bleibt nur, wenn die Stempel fehlen oder fast gleich sind.
+- **Zeitschreibung:** Speichern schreibt die Tage in einer Transaktion, auch mit der Datenbank-Schicht der App.
+- **Anlagenstamm:** Die Montage-Galerie lädt nach, wenn der Cache veraltet ist. Ein manueller Sync holt die Projektdateien angenommener Aufträge, auch während ein anderer Abruf läuft.
+
 ## V 3.000.002
 - **Archiv:** Nur erledigte Aufträge, die diesem Monteur zugewiesen sind. Aufträge ohne Monteur (z. B. Service Vito, LG) erscheinen nicht mehr.
 - **Zwei Laptops:** Die Wahl „Diesen Laptop behalten“ oder „Anderen Laptop übernehmen“ bleibt nach einem Neustart für denselben Protokollstand erhalten.
