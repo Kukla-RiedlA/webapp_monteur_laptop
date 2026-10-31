@@ -672,6 +672,63 @@ function writeServiceprotokollPriorCache(db, fab, record) {
   );
 }
 
+/** Merkt PDF-Hash und Pfade, ohne updated_at zu verschieben. */
+function stampPdfContentHash(db, localJobId, kind, fab, hash, extra) {
+  ensureProtocolDraftsSchema(db);
+  const id = parseInt(localJobId, 10);
+  const protocolKind = String(kind || '').trim();
+  const digest = String(hash || '').trim();
+  if (!id || !protocolKind || !digest) return { ok: false };
+  const apply = (payloadJson) => {
+    let payload = {};
+    try {
+      payload = JSON.parse(payloadJson) || {};
+    } catch (_) {
+      payload = {};
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) payload = {};
+    payload.pdf_content_hash = digest;
+    if (extra && typeof extra === 'object') {
+      Object.keys(extra).forEach((key) => {
+        if (key && key !== 'pdf_content_hash') payload[key] = extra[key];
+      });
+    }
+    return JSON.stringify(payload);
+  };
+  if (isByFabKind(protocolKind)) {
+    const key = String(fab || '').trim();
+    if (!key) return { ok: false };
+    const row = db
+      .prepare(
+        `SELECT payload_json FROM protocol_drafts
+         WHERE local_job_id = ? AND protocol_kind = ? AND fabrikationsnummer = ?`,
+      )
+      .get(id, protocolKind, key);
+    if (!row) return { ok: false };
+    db.prepare(
+      `UPDATE protocol_drafts SET payload_json = ?
+       WHERE local_job_id = ? AND protocol_kind = ? AND fabrikationsnummer = ?`,
+    ).run(apply(row.payload_json), id, protocolKind, key);
+    return { ok: true };
+  }
+  const rows =
+    db
+      .prepare(
+        `SELECT fabrikationsnummer, payload_json FROM protocol_drafts
+         WHERE local_job_id = ? AND protocol_kind = ?`,
+      )
+      .all(id, protocolKind) || [];
+  if (!rows.length) return { ok: false };
+  const stmt = db.prepare(
+    `UPDATE protocol_drafts SET payload_json = ?
+     WHERE local_job_id = ? AND protocol_kind = ? AND fabrikationsnummer = ?`,
+  );
+  for (const row of rows) {
+    stmt.run(apply(row.payload_json), id, protocolKind, row.fabrikationsnummer);
+  }
+  return { ok: true };
+}
+
 function writeStore(db, localJobId, basename, store, reiseDir) {
   if (jobStatusIsClosed(db, localJobId)) {
     freezeJob(db, localJobId);
@@ -689,7 +746,9 @@ module.exports = {
   SENTINEL_FAB,
   kindFromBasename,
   basenameForKind,
+  isByFabKind,
   protocolDraftHasContent,
+  stampPdfContentHash,
   ensureProtocolDraftsSchema,
   freezeJob,
   jobStatusIsClosed,

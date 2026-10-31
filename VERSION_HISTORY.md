@@ -1,5 +1,13 @@
 # Versionshistorie – Monteur WebApp
 
+## V 3.000.009
+- **Projektdateien:** Wolke heißt nur online, grünes Häkchen im grünen Kreis heißt offline. Das gilt für Anlagenstamm, Auftrag und die beim Annehmen gewählten PROJEKTE-NEU-Dateien.
+- **TED:** Die mechanische Berechnung des ganzen Anlagenstamms lädt im Hintergrund und blockiert den übrigen Sync nicht. Auf der Auftragsseite steht „Mechanische Berechnung:“, ein grünes Häkchen öffnet die lokale Datei.
+- **PROJEKTE-NEU:** Ordnerbäume werden nachgeladen und lokal gespeichert. Schon gespeicherte Stämme bleiben beim nächsten Sync stehen.
+- **Schulung:** Arbeitsschritt-Sets und das Schulungsprotokoll.
+- **PDF:** Ob ein Protokoll-PDF aktuell ist, hängt am Fachinhalt, nicht allein am Zeitstempel.
+- **Anlagenakte:** Dokumente bleiben lokal verfügbar.
+
 ## V 3.000.008
 - **Zwei Laptops:** Inbetriebnahme und Serviceprotokoll fragen nicht mehr nach einem Stand, wenn der Zeitstempel eindeutig neuer ist. Die Meldung bleibt nur, wenn die Stempel fehlen oder fast gleich sind.
 - **Zeitschreibung:** Speichern schreibt die Tage in einer Transaktion, auch mit der Datenbank-Schicht der App.

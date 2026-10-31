@@ -424,7 +424,9 @@ function tedExcelCellHtml(tedList) {
         dt = ' ' + day + '.' + month + '.' + d.getFullYear();
       }
     }
-    return '<div class="ted-excel-line"><a href="' + escapeAttr(viewUrl) + '" target="_blank" rel="noopener" class="ted-view-link">' + name + '</a>'
+    const offline = t.is_offline === true || t.is_offline === 1;
+    const badge = typeof window.kukpitFileAvailabilityHtml === 'function' ? window.kukpitFileAvailabilityHtml(offline) + ' ' : '';
+    return '<div class="ted-excel-line">' + badge + '<a href="' + escapeAttr(viewUrl) + '" target="_blank" rel="noopener" class="ted-view-link">' + name + '</a>'
       + ' <a href="' + escapeAttr(dlUrl) + '" class="ted-dl-link muted" title="Herunterladen">↓</a>'
       + '<span class="muted">' + escapeHtml(dt) + '</span>' + warn + '</div>';
   }).join('') + '</div>';
@@ -1015,6 +1017,9 @@ function renderPnModalTree(fab, nodes, target) {
           });
         }
         wrap.appendChild(link);
+        if (typeof window.kukpitAppendFileAvailability === 'function') {
+          window.kukpitAppendFileAvailability(wrap, node.is_offline === true || node.is_offline === 1);
+        }
         li.appendChild(wrap);
       }
       ul.appendChild(li);
@@ -1058,7 +1063,7 @@ function renderPnModalTree(fab, nodes, target) {
 function fetchPnTreeByFab(fab) {
   if (!fab) return Promise.resolve(null);
   if (pnTreeCache.has(fab)) return Promise.resolve(pnTreeCache.get(fab));
-  const url = '/api/anlagenstamm_files_list.php?fabrikationsnummer=' + encodeURIComponent(fab) + '&fab=' + encodeURIComponent(fab) + '&compact=1&_ts=' + Date.now();
+  const url = '/api/anlagenstamm_files_list.php?fabrikationsnummer=' + encodeURIComponent(fab) + '&fab=' + encodeURIComponent(fab) + '&compact=1&cache_only=1&_ts=' + Date.now();
   return fetch(url, { credentials: 'include', cache: 'no-store' })
     .then(r => r.json())
     .then(data => {

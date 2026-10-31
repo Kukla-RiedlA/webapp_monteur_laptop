@@ -44,10 +44,11 @@ describe('Akte-Fenster und files_list', () => {
   it('files_list schreibt Cache ohne saveDb auf dem Request-Pfad', () => {
     const src = fs.readFileSync(path.join(__dirname, 'anlagenstamm-php-routes.js'), 'utf8');
     const files = src.match(
-      /app\.get\('\/api\/anlagenstamm_files_list\.php'[\s\S]*?app\.get\('\/api\/anlagenstamm_td_pdf_prefill\.php'/,
+      /app\.get\('\/api\/anlagenstamm_files_list\.php'[\s\S]*?app\.get\(\['\/api\/anlagenstamm_ml_pdf_prefill\.php'/,
     );
     assert.ok(files, 'files_list-Handler nicht gefunden');
     assert.equal(files[0].includes('saveDb'), false);
+    assert.equal(files[0].includes('fetchDispoApiFilesList'), false);
   });
 
   it('Akte laedt Dateibaum erst wenn Dateien-Tab aktiv ist', () => {

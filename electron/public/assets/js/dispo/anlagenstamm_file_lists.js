@@ -332,6 +332,9 @@
           });
         }
         wrap.appendChild(link);
+        if (typeof window.kukpitAppendFileAvailability === 'function') {
+          window.kukpitAppendFileAvailability(wrap, n.is_offline === true || n.is_offline === 1);
+        }
         var meta = document.createElement('span');
         meta.className = 'muted anlagen-pn-meta';
         meta.textContent = ' · ' + fmtSize(n.size) + ' · ' + fmtDate(n.mtime);
@@ -403,7 +406,10 @@
       var files = data.files || [];
       listUl.innerHTML = files.length
         ? files.map(function (f) {
-          return '<li><a href="' + base + '?fabrikationsnummer=' + encodeURIComponent(fab) +
+          var fileBadge = typeof window.kukpitFileAvailabilityHtml === 'function'
+            ? window.kukpitFileAvailabilityHtml(f.is_offline === true || f.is_offline === 1) + ' '
+            : '';
+          return '<li>' + fileBadge + '<a href="' + base + '?fabrikationsnummer=' + encodeURIComponent(fab) +
             '&fab=' + encodeURIComponent(fab) +
             '&file=' + encodeURIComponent(f.name) + '" target="_blank" rel="noopener">' + esc(f.name) + '</a></li>';
         }).join('')
@@ -476,7 +482,7 @@
     var pageQs = '';
     try { pageQs = (window.location && window.location.search) ? window.location.search : ''; } catch (e) { pageQs = ''; }
     var debugPn = pageQs.indexOf('debugpn=1') >= 0;
-    var url = '/api/anlagenstamm_files_list.php?fabrikationsnummer=' + encodeURIComponent(fab) + '&fab=' + encodeURIComponent(fab) + '&_ts=' + Date.now() + (debugPn ? '&debugpn=1' : '');
+    var url = '/api/anlagenstamm_files_list.php?fabrikationsnummer=' + encodeURIComponent(fab) + '&fab=' + encodeURIComponent(fab) + '&cache_only=1&_ts=' + Date.now() + (debugPn ? '&debugpn=1' : '');
     return pnFetchJsonForList(url)
       .then(function (pack) {
         if (seq !== fetchSeq) return;

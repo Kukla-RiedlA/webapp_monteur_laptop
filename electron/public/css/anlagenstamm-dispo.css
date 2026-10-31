@@ -316,3 +316,30 @@
 .anlagenstamm-form-wrap .kraftaufnehmer-block .btn-kraftaufnehmer-add {
   margin-top: 4px;
 }
+
+/* Projektdatei: Häkchen im Kreis = offline, Wolke = nur online */
+.kukpit-file-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+  flex: 0 0 auto;
+}
+
+.kukpit-file-badge--offline {
+  border-radius: 50%;
+  background: #0e7b5a;
+  color: #fff;
+  font-size: 0.68rem;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.kukpit-file-badge--online {
+  color: #5c6b73;
+  font-size: 0.95rem;
+  line-height: 1;
+}

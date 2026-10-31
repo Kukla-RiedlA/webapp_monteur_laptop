@@ -13,6 +13,7 @@ const REAL_DOC_EXT = /\.(pdf|docx?|xlsx?|xlsm|odt|ods|rtf|csv|txt)$/i;
 
 function emptyCategories() {
   return [
+    { slug: 'technische_berechnung', label: 'Technische Berechnung', is_image: false, documents: [] },
     { slug: 'montagebericht', label: 'Montageberichte', is_image: false, documents: [] },
     { slug: 'parameterliste', label: 'Parameterlisten', is_image: false, documents: [] },
     { slug: 'wiegeprotokoll', label: 'Wiegeprotokolle', is_image: false, documents: [] },
@@ -117,6 +118,92 @@ function mapParameterDocs(db, fabNorm) {
   });
 }
 
+function tedEntryToDocument(item) {
+  if (item == null) return null;
+  let rel = '';
+  let name = '';
+  let mtime = '';
+  let fnMatch = true;
+  let offline = false;
+  let size = 0;
+  if (typeof item === 'object') {
+    rel = String(item.rel_path || '').replace(/\\/g, '/').trim();
+    name = String(item.file_name || item.original_name || item.display_name || '').trim();
+    mtime = item.file_mtime ? String(item.file_mtime) : '';
+    if (item.fn_matches_filename === false || item.fn_matches_filename === 0) fnMatch = false;
+    offline = item.is_offline === true || item.is_offline === 1;
+    size = item.size != null ? Number(item.size) : item.size_bytes != null ? Number(item.size_bytes) : 0;
+  } else {
+    rel = String(item).replace(/\\/g, '/').trim();
+  }
+  if (!name) name = rel.split('/').filter(Boolean).pop() || '';
+  if ((!rel && !name) || rel.includes('..')) return null;
+  return {
+    id: 0,
+    document_type: 'technische_berechnung',
+    view_kind: 'ted',
+    file_path: rel,
+    rel_path: rel,
+    original_name: name || rel,
+    display_name: name || rel,
+    mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    size_bytes: Number.isFinite(size) ? size : 0,
+    notes: fnMatch ? '' : 'FN nicht im Dateinamen',
+    document_date: '',
+    created_at: mtime,
+    display_datetime: mtime,
+    source_mtime: mtime,
+    is_offline: offline,
+    fn_matches_filename: fnMatch,
+    legacy: false,
+  };
+}
+
+function applyTedDocuments(payload, tedEntries) {
+  if (!payload || !Array.isArray(payload.categories)) return payload;
+  const cat = payload.categories.find((c) => c && c.slug === 'technische_berechnung');
+  if (!cat) return payload;
+  const seen = new Set();
+  const docs = [];
+  for (const item of tedEntries || []) {
+    const doc = tedEntryToDocument(item);
+    if (!doc) continue;
+    const key = (doc.rel_path || doc.display_name).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    docs.push(doc);
+  }
+  cat.documents = docs;
+  return payload;
+}
+
+function tedEntriesForFab(db, fab, fabNorm) {
+  let getAnlagenstammExtrasResponse;
+  try {
+    ({ getAnlagenstammExtrasResponse } = require('./anlagenstamm-php-local'));
+  } catch (_) {
+    return [];
+  }
+  const keys = [];
+  const raw = String(fab || '').trim();
+  if (raw) keys.push(raw);
+  if (fabNorm && keys.indexOf(fabNorm) === -1) keys.push(fabNorm);
+  if (!keys.length || !db) return [];
+  let extras;
+  try {
+    extras = getAnlagenstammExtrasResponse(db, { fabs: keys });
+  } catch (_) {
+    return [];
+  }
+  const tedMap = extras && extras.ted_by_fab ? extras.ted_by_fab : {};
+  let best = [];
+  for (const key of keys) {
+    const list = Array.isArray(tedMap[key]) ? tedMap[key] : [];
+    if (list.length > best.length) best = list;
+  }
+  return best;
+}
+
 function buildLocalAnlagenstammDocumentsList(db, fab) {
   const fabNorm = normalizeFabDigits(fab) || fabDigits(fab);
   const categories = emptyCategories();
@@ -141,6 +228,11 @@ function buildLocalAnlagenstammDocumentsList(db, fab) {
     }
   } catch (_) {
     /* Tabelle fehlt */
+  }
+  try {
+    applyTedDocuments({ categories }, tedEntriesForFab(db, fab, fabNorm));
+  } catch (_) {
+    /* TED-Index fehlt */
   }
   return {
     ok: true,
@@ -267,6 +359,8 @@ module.exports = {
   buildLocalAnlagenstammDocumentsList,
   mergeRemoteDocumentsList,
   mapParameterFilesFromDocumentsList,
+  applyTedDocuments,
+  tedEntryToDocument,
   emptyCategories,
   isRealListedDocument,
   jobHasFab,

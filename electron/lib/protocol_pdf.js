@@ -4910,13 +4910,13 @@ async function generateSchulungsprotokollPdfBuffer(payload, options) {
     anlagen: de ? 'Anlagen' : 'Equipment',
     fab: de ? 'Fabr.-Nr.' : 'Serial No.',
     type: de ? 'Typ' : 'Type',
+    pos: 'Pos.',
     themen: de ? 'Schulungsthemen' : 'Training topics',
     teilnehmer: de ? 'Teilnehmer' : 'Participants',
     name: de ? 'Name' : 'Name',
     funktion: de ? 'Funktion' : 'Function',
     sign: de ? 'Unterschrift' : 'Signature',
     page: de ? 'Seite' : 'Page',
-    status: { ok: de ? 'vermittelt' : 'covered', nok: de ? 'offen' : 'open', na: de ? 'entfällt' : 'n/a' },
   };
   const kopf = (payload && payload.kopfdaten) || {};
   const anlagen = Array.isArray(payload && payload.anlagen) ? payload.anlagen : [];
@@ -4963,7 +4963,15 @@ async function generateSchulungsprotokollPdfBuffer(payload, options) {
   page.drawText(S(L.sub), { x: marginX + 110, y: y - 22, size: 9, font, color: grayMuted });
   y -= 40;
 
-  const metaH = 78;
+  const contactRaw = String(kopf.ansprechperson || '').trim();
+  const contactDrawn = [];
+  (contactRaw ? contactRaw.split(/\n+/) : []).forEach(function (name) {
+    wrap(name, 10, tableInnerW / 2 - 16, true).forEach(function (line) {
+      if (line) contactDrawn.push(line);
+    });
+  });
+  if (!contactDrawn.length) contactDrawn.push('–');
+  const metaH = 78 + Math.max(0, contactDrawn.length - 1) * 12;
   page.drawRectangle({ x: marginX, y: y - metaH, width: tableInnerW, height: metaH, color: greenHeader, borderColor: greenSoft, borderWidth: 0.6 });
   const left = [
     [L.kunde, kopf.kunde],
@@ -4973,81 +4981,164 @@ async function generateSchulungsprotokollPdfBuffer(payload, options) {
   const right = [
     [L.geliefert, kopf.geliefertUeber],
     [L.tech, kopf.servicetechniker],
-    [L.contact, kopf.ansprechperson],
+    [L.contact, ''],
   ];
   let rowY = y - 16;
   for (let i = 0; i < 3; i++) {
     page.drawText(S(left[i][0]), { x: marginX + 8, y: rowY, size: 8, font, color: grayMuted });
-    page.drawText(S(left[i][1] || '–'), { x: marginX + 8, y: rowY - 11, size: 10, font: fontBold, color: grayText });
+    const leftLines = wrap(left[i][1] || '–', 10, tableInnerW / 2 - 16, true);
+    page.drawText(leftLines[0], { x: marginX + 8, y: rowY - 11, size: 10, font: fontBold, color: grayText });
     page.drawText(S(right[i][0]), { x: marginX + tableInnerW / 2, y: rowY, size: 8, font, color: grayMuted });
-    const contactLines = wrap(right[i][1] || '–', 10, tableInnerW / 2 - 16, true);
-    page.drawText(contactLines[0], { x: marginX + tableInnerW / 2, y: rowY - 11, size: 10, font: fontBold, color: grayText });
+    if (i === 2) {
+      contactDrawn.forEach(function (line, li) {
+        page.drawText(line, {
+          x: marginX + tableInnerW / 2,
+          y: rowY - 11 - li * 12,
+          size: 10,
+          font: fontBold,
+          color: grayText,
+        });
+      });
+    } else {
+      const rightLines = wrap(right[i][1] || '–', 10, tableInnerW / 2 - 16, true);
+      page.drawText(rightLines[0], { x: marginX + tableInnerW / 2, y: rowY - 11, size: 10, font: fontBold, color: grayText });
+    }
     rowY -= 24;
   }
   y -= metaH + 14;
 
-  ensure(36);
-  page.drawText(S(L.anlagen), { x: marginX, y, size: 11, font: fontBold, color: greenDark });
-  y -= 16;
   const pairs = [];
   anlagen.forEach(function (row) {
     const fn = String((row && (row.fabrikationsnummer || row.fn)) || '').trim();
-    const type = String((row && (row.type || row.typ)) || '').trim();
-    if (fn || type) pairs.push({ fn, type });
+    const type = String((row && (row.type || row.typ || row.Type)) || '').trim();
+    const position = String((row && (row.position || row.Position || row.pos)) || '').trim();
+    if (fn || type || position) pairs.push({ fn, type, position });
   });
-  if (!pairs.length) pairs.push({ fn: '', type: '' });
-  for (let i = 0; i < pairs.length; i += 2) {
-    ensure(28);
-    page.drawRectangle({ x: marginX, y: y - 22, width: tableInnerW, height: 22, color: white, borderColor: lineGray, borderWidth: 0.4 });
-    page.drawText(S(L.fab + '  ' + (pairs[i].fn || '–') + '    ' + L.type + '  ' + (pairs[i].type || '–')), {
-      x: marginX + 6, y: y - 14, size: 9, font, color: grayText,
-    });
-    if (pairs[i + 1]) {
-      const half = tableInnerW / 2;
-      page.drawText(S(L.fab + '  ' + (pairs[i + 1].fn || '–') + '    ' + L.type + '  ' + (pairs[i + 1].type || '–')), {
-        x: marginX + half, y: y - 14, size: 9, font, color: grayText,
+  if (pairs.length) {
+    const colFn = 100;
+    const colPos = 72;
+    const colType = tableInnerW - colFn - colPos;
+    const fabWidths = [colFn, colType, colPos];
+    const headH = 16;
+    function drawFabHead() {
+      page.drawRectangle({
+        x: marginX,
+        y: y - headH,
+        width: tableInnerW,
+        height: headH,
+        color: greenHeader,
+      });
+      let x = marginX;
+      [L.fab, L.type, L.pos].forEach(function (hTxt, i) {
+        page.drawText(S(hTxt), { x: x + 3, y: y - 12, size: 7, font: fontBold, color: greenDark });
+        x += fabWidths[i];
+      });
+      y -= headH;
+    }
+    function drawCellLines(arr, x, useFont) {
+      arr.forEach(function (ln, li) {
+        const t = String(ln || '').trim();
+        if (!t) return;
+        page.drawText(t, { x: x, y: y - 11 - li * 10, size: 8, font: useFont, color: grayText });
       });
     }
-    y -= 24;
+    if (y - (14 + headH + 18) < contentBottom) newPage();
+    page.drawText(S(L.anlagen), { x: marginX, y, size: 11, font: fontBold, color: greenDark });
+    y -= 14;
+    drawFabHead();
+    pairs.forEach(function (row, i) {
+      const fnLines = wrapPdfPlain(fontBold, S(row.fn), 8, colFn - 8);
+      const typeLines = wrapPdfPlain(font, S(row.type), 8, colType - 8);
+      const posLines = wrapPdfPlain(font, S(row.position), 8, colPos - 8);
+      const lineCount = Math.max(fnLines.length, typeLines.length, posLines.length, 1);
+      const h = Math.max(16, lineCount * 10 + 6);
+      if (y - h - 2 < contentBottom) {
+        newPage();
+        drawFabHead();
+      }
+      if (i % 2 === 1) {
+        page.drawRectangle({ x: marginX, y: y - h, width: tableInnerW, height: h, color: greenHeader });
+      }
+      page.drawLine({
+        start: { x: marginX, y: y - h },
+        end: { x: marginX + tableInnerW, y: y - h },
+        thickness: 0.3,
+        color: lineGray,
+      });
+      drawCellLines(fnLines, marginX + 4, fontBold);
+      drawCellLines(typeLines, marginX + colFn + 4, font);
+      drawCellLines(posLines, marginX + colFn + colType + 4, font);
+      y -= h;
+    });
+    y -= 8;
   }
-  y -= 8;
+
+  function splitHeading(text) {
+    const value = String(text || '').trim();
+    const idx = value.indexOf(': ');
+    if (idx <= 0) return { title: value, body: value };
+    const title = value.slice(0, idx).trim();
+    const body = value.slice(idx + 2).trim();
+    return { title: title || value, body: body || title || value };
+  }
+  function topicParts(thema) {
+    const titleRaw = de
+      ? (thema.bezeichnung_de || thema.bezeichnung || '')
+      : (thema.bezeichnung_en || thema.bezeichnung_de || '');
+    const explainGiven = de ? thema.erklaerung_de : (thema.erklaerung_en || thema.erklaerung_de);
+    let title = String(titleRaw || '').trim();
+    let explain = explainGiven == null ? '' : String(explainGiven).trim();
+    if (explainGiven == null && title.indexOf(': ') > 0) {
+      const parts = splitHeading(title);
+      title = parts.title;
+      explain = parts.body;
+    }
+    if (!explain) explain = title;
+    return { title, explain };
+  }
 
   ensure(22);
   page.drawText(S(L.themen), { x: marginX, y, size: 11, font: fontBold, color: greenDark });
   y -= 8;
   for (const thema of themen) {
-    const title = de
-      ? (thema.bezeichnung_de || thema.bezeichnung || '')
-      : (thema.bezeichnung_en || thema.bezeichnung_de || '');
-    const statusKey = String(thema.status || 'na');
-    const status = L.status[statusKey] || L.status.na;
+    const parts = topicParts(thema || {});
     const remark = String(thema.bemerkung || '').trim();
-    const titleLines = wrap(title, 10, tableInnerW - 90, true);
-    const remarkLines = remark ? wrap(remark, 9, tableInnerW - 16, false) : [];
-    const blockH = 18 + titleLines.length * 12 + remarkLines.length * 11 + 8;
+    const titleLines = wrap(parts.title, 9, tableInnerW - 16, true);
+    const explainLines = wrap(parts.explain, 9, tableInnerW - 16, false);
+    const remarkLines = remark ? wrap(remark, 8, tableInnerW - 16, false) : [];
+    const barH = Math.max(16, titleLines.length * 11 + 6);
+    const whiteH = 8 + explainLines.length * 11 + (remarkLines.length ? 4 + remarkLines.length * 10 : 0);
+    const blockH = barH + whiteH + 6;
     ensure(blockH);
     page.drawRectangle({
-      x: marginX, y: y - 16, width: tableInnerW, height: 16, color: green, borderWidth: 0,
+      x: marginX, y: y - barH, width: tableInnerW, height: barH, color: green, borderWidth: 0,
     });
-    page.drawText(titleLines[0] || '–', { x: marginX + 6, y: y - 12, size: 9, font: fontBold, color: white });
-    const st = S(status);
-    page.drawText(st, {
-      x: marginX + tableInnerW - 8 - fontBold.widthOfTextAtSize(st, 8),
-      y: y - 12,
-      size: 8,
-      font: fontBold,
+    titleLines.forEach(function (line, li) {
+      page.drawText(line || '–', { x: marginX + 6, y: y - 12 - li * 11, size: 9, font: fontBold, color: white });
+    });
+    y -= barH;
+    page.drawRectangle({
+      x: marginX,
+      y: y - whiteH,
+      width: tableInnerW,
+      height: whiteH,
       color: white,
+      borderColor: greenSoft,
+      borderWidth: 0.6,
     });
-    y -= 18;
-    for (let n = 1; n < titleLines.length; n++) {
-      page.drawText(titleLines[n], { x: marginX + 6, y, size: 10, font: fontBold, color: grayText });
-      y -= 12;
-    }
-    remarkLines.forEach(function (line) {
-      page.drawText(line, { x: marginX + 6, y, size: 9, font, color: grayText });
-      y -= 11;
+    explainLines.forEach(function (line, li) {
+      page.drawText(line, { x: marginX + 8, y: y - 14 - li * 11, size: 9, font, color: grayText });
     });
-    y -= 6;
+    remarkLines.forEach(function (line, li) {
+      page.drawText(line, {
+        x: marginX + 8,
+        y: y - 14 - explainLines.length * 11 - 4 - li * 10,
+        size: 8,
+        font,
+        color: grayMuted,
+      });
+    });
+    y -= whiteH + 6;
   }
 
   y -= 6;

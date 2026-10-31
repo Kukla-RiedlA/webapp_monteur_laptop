@@ -436,9 +436,39 @@
       });
       var isImage = !!cat.is_image;
       if (isImage) return;
+      var isTed = slug === 'technische_berechnung';
       html += '<details class="anlagen-doc-cat">';
       html += '<summary>' + esc(label) + ' <span class="muted">(' + docs.length + ')</span></summary>';
       html += '<div class="anlagen-doc-cat-body">';
+      if (isTed) {
+        if (docs.length) {
+          html += '<ul class="files-list" style="margin:0;padding-left:0;list-style:none">';
+          docs.forEach(function (d) {
+            var rel = String(d.rel_path || d.file_path || '');
+            var name = d.display_name || d.original_name || 'Excel';
+            var offline = d.is_offline === true || d.is_offline === 1;
+            var badge = typeof window.kukpitFileAvailabilityHtml === 'function' ? window.kukpitFileAvailabilityHtml(offline) + ' ' : '';
+            var href = '/api/mechanik_ted_excel_view.php?rel_path=' + encodeURIComponent(rel) +
+              '&fab=' + encodeURIComponent(fab) +
+              '&file_name=' + encodeURIComponent(name);
+            html += '<li class="ted-excel-line" data-ted-fab="' + esc(fab) + '" style="margin:6px 0;display:flex;flex-wrap:wrap;align-items:center;gap:8px">';
+            html += badge;
+            html += '<a href="' + esc(href) + '" class="ted-view-link" data-ted-rel-path="' + esc(rel) + '" data-ted-fab="' + esc(fab) + '" data-ted-filename="' + esc(name) + '" data-ted-offline="' + (offline ? '1' : '0') + '">' + esc(name) + '</a>';
+            var meta = [];
+            if (d.size_bytes) meta.push(fmtSize(d.size_bytes));
+            var stamp = fmtDocStamp(d);
+            if (stamp) meta.push(stamp);
+            if (meta.length) html += '<span class="muted">' + esc(meta.join(' · ')) + '</span>';
+            if (d.fn_matches_filename === false) html += '<span class="muted" title="FN nicht im Dateinamen">⚠</span>';
+            html += '</li>';
+          });
+          html += '</ul>';
+        } else {
+          html += '<p class="muted" style="margin:0;font-size:12px">Keine Einträge.</p>';
+        }
+        html += '</div></details>';
+        return;
+      }
       if (!readOnly) {
         html += '<div class="anlagen-doc-upload-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:10px">';
         html += '<input type="file" class="anlagen-doc-file" data-slug="' + esc(slug) + '" style="max-width:220px;font-size:12px">';
@@ -523,6 +553,7 @@
   function eventTypeOptions(categories) {
     var o = '<option value="">— Typ —</option>';
     (categories || []).forEach(function (c) {
+      if (!c || c.slug === 'technische_berechnung') return;
       o += '<option value="' + esc(c.slug) + '">' + esc(c.label) + '</option>';
     });
     o += '<option value="sonstiges">Sonstiges</option>';

@@ -27,7 +27,7 @@
   <link rel="stylesheet" href="css/anlagenakte.css">
   <link rel="stylesheet" href="css/anlagenakte-form-viewer.css">
   <link rel="stylesheet" href="css/serviceprotokoll-v2.css?v=20260910sticky">
-  <link rel="stylesheet" href="css/montagebericht-v2.css?v=schulung2">
+  <link rel="stylesheet" href="css/montagebericht-v2.css?v=schulung-x">
   <link rel="stylesheet" href="css/arbeitsnachweis.css">
   <link rel="stylesheet" href="css/kontrollwiegung-v2.css">
   <link rel="stylesheet" href="css/schleppketten-v2.css">
@@ -2101,6 +2101,22 @@
       padding: 1rem;
       z-index: 250;
     }
+    #modalProtocolPdfRefresh.modal-overlay.active {
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 260;
+    }
+    #modalProtocolPdfRefresh .protocol-pdf-refresh-box {
+      width: min(96vw, 36rem);
+      max-width: min(96vw, 36rem);
+    }
+    #protocolPdfRefreshList {
+      margin: 0 0 0.75rem;
+      padding-left: 1.15rem;
+      max-height: 16rem;
+      overflow: auto;
+    }
     #modalFinishJobFiles .finish-job-files-box {
       width: min(96vw, 42rem);
       max-width: min(96vw, 42rem);
@@ -2404,7 +2420,7 @@
     @media (max-width: 720px) { .modal-leistung-cards { grid-template-columns: 1fr; } }
     .modal-leistung-card { margin-bottom: 0; width: fit-content; max-width: 100%; }
     .modal-leistung-card .modal-leistung-wrap { margin-top: 0; }
-    /* Mechanik TED + PROJEKTE NEU je Fabrikationsnummer */
+    /* Mechanische Berechnung: eine Zeile je Datei, FN neben dem Dateinamen */
     .kukla-ted-fab-list { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.35rem; }
     .kukla-ted-fab-box.card {
       margin: 0; padding: 0.65rem 0.85rem; max-width: 100%;
@@ -2412,10 +2428,11 @@
       box-sizing: border-box;
     }
     .kukla-ted-fab-head { margin-bottom: 0.45rem; font-size: 0.95rem; }
-    .kukla-ted-fab-body { min-width: 0; }
-    .kukla-ted-ul { margin: 0 0 0.5rem 1.1rem; padding: 0; }
-    .kukla-ted-ul li { margin: 0.25rem 0; }
-    .kukla-ted-empty { margin: 0 0 0.5rem 0; font-size: 0.85rem; }
+    .kukla-ted-rows { list-style: none; margin: 0; padding: 0; }
+    .kukla-ted-row { display: flex; align-items: center; gap: 0.75rem; margin: 0.2rem 0; min-width: 0; }
+    .kukla-ted-fn { flex: 0 0 auto; min-width: 4.5rem; font-variant-numeric: tabular-nums; }
+    .kukla-ted-file { min-width: 0; }
+    .kukla-ted-empty { margin: 0; font-size: 0.85rem; }
     .kukla-ted-pn-details { margin-top: 0.35rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.45rem; }
     .kukla-ted-pn-summary { cursor: pointer; font-size: 0.88rem; color: var(--muted); user-select: none; list-style: none; }
     .kukla-ted-pn-summary::-webkit-details-marker { display: none; }
@@ -2875,7 +2892,7 @@
   <div id="modalAcceptOffline" class="modal-overlay accept-offline-overlay" aria-hidden="true">
     <div class="modal-box modal-box--wide" role="dialog" style="max-width:42rem;max-height:85vh;display:flex;flex-direction:column;">
       <h3 id="acceptOfflineTitle">Offline-Ordner für PROJEKTE NEU</h3>
-      <p class="muted" style="margin-bottom:0.5rem;font-size:0.9rem;">Dokumente_Dispo und Dokumente_Buchhaltung werden immer mitgeladen. Nicht ausgewählte PROJEKTE-NEU-Ordner bleiben online (beim Öffnen laden). TED-Excel wird immer mitgeladen.</p>
+      <p class="muted" style="margin-bottom:0.5rem;font-size:0.9rem;">Dokumente_Dispo, Dokumente_Buchhaltung und TED-Excel werden immer vollständig geladen. Hier nur PROJEKTE NEU wählen. Nicht angehakte Ordner bleiben online.</p>
       <div id="acceptOfflineBody" style="flex:1;overflow:auto;min-height:8rem;margin-bottom:0.75rem;"></div>
       <p id="acceptOfflineHint" class="muted" style="font-size:0.85rem;margin-bottom:0.5rem;" aria-live="polite"></p>
       <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end;">
@@ -2906,6 +2923,18 @@
         <button type="button" class="btn btn-ghost" id="finishJobFilesBtnNone">Keine</button>
         <button type="button" class="btn btn-ghost" id="finishJobFilesBtnCancel">Abbrechen</button>
         <button type="button" class="btn btn-primary" id="finishJobFilesBtnConfirm">Erledigt &amp; kopieren</button>
+      </div>
+    </div>
+  </div>
+  <div id="modalProtocolPdfRefresh" class="modal-overlay accept-offline-overlay" aria-hidden="true">
+    <div class="modal-box protocol-pdf-refresh-box" role="dialog" aria-labelledby="protocolPdfRefreshTitle">
+      <h3 id="protocolPdfRefreshTitle">Protokolle ohne aktuelles PDF</h3>
+      <p id="protocolPdfRefreshLead" class="muted finish-job-files-hint">Diese ausgefüllten Protokolle haben kein PDF oder das Formular wurde danach geändert.</p>
+      <ul id="protocolPdfRefreshList"></ul>
+      <p id="protocolPdfRefreshMsg" class="muted" style="font-size:0.85rem;margin:0 0 0.5rem;" aria-live="polite"></p>
+      <div class="finish-job-files-footer">
+        <button type="button" class="btn btn-ghost" id="protocolPdfRefreshBtnNo">Ohne PDF fortsetzen</button>
+        <button type="button" class="btn btn-primary" id="protocolPdfRefreshBtnYes">PDF erstellen</button>
       </div>
     </div>
   </div>
@@ -3351,16 +3380,16 @@
       </div>
     </div>
   </main>
-  <main id="viewProtokolleSchulung" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Schulungsprotokoll">
+  <main id="viewProtokolleSchulung" class="view-protokolle view-protokolle-sub" aria-label="Protokolle – Schulungsprotokoll" data-i18n-aria-en="Protocols – Training report">
     <div class="card sp-v2-card mb-v2-page">
       <div class="sp-v2-topbar mb-v2-topbar">
         <div class="mb-v2-topbar-row">
           <div class="sp-v2-topbar-title-wrap">
-            <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/beleg/schulungsprotokoll.png" alt="" aria-hidden="true"> Schulungsprotokoll</h2>
+            <h2 class="sp-v2-page-title" data-i18n-en="Training report"><img class="sp-v2-icon" src="icons/beleg/schulungsprotokoll.png" alt="" aria-hidden="true"> Schulungsprotokoll</h2>
           </div>
           <div class="mb-v2-topbar-actions-stack">
             <div class="sp-v2-topbar-actions">
-              <button type="button" class="btn btn-primary" id="btnSchulungSave">Speichern</button>
+              <button type="button" class="btn btn-primary" id="btnSchulungSave" data-i18n-en="Save">Speichern</button>
               <button type="button" class="btn btn-primary" id="btnSchulungPdf">PDF</button>
             </div>
             <p id="schulungAutosaveHint" class="protocol-autosave-hint">Zuletzt gespeichert: –</p>
@@ -3369,19 +3398,19 @@
       </div>
       <form id="schulungForm" class="sp-v2-form mb-v2-form">
         <section class="sp-v2-section">
-          <header class="sp-v2-section-head"><span class="sp-v2-num">1</span> Auftrag &amp; Identifikation</header>
+          <header class="sp-v2-section-head" data-i18n-en="Job &amp; identification"><span class="sp-v2-num">1</span> Auftrag &amp; Identifikation</header>
           <div class="sp-v2-section-body">
             <div class="sp-v2-grid-3">
               <div class="sp-v2-field">
-                <label for="schulungJob">Auftrag</label>
+                <label for="schulungJob" data-i18n-en="Job">Auftrag</label>
                 <select id="schulungJob" class="dienstreise-select" required></select>
               </div>
               <div class="sp-v2-field">
-                <label for="schulungProjekt">Projekt</label>
+                <label for="schulungProjekt" data-i18n-en="Project">Projekt</label>
                 <input type="text" id="schulungProjekt" autocomplete="off">
               </div>
               <div class="sp-v2-field">
-                <span id="schulungLangLabel">Sprache</span>
+                <span id="schulungLangLabel" data-i18n-en="Language">Sprache</span>
                 <div class="mb-lang-checks" role="group" aria-labelledby="schulungLangLabel">
                   <label class="mb-lang-check"><input type="checkbox" id="schulungLangDe" value="de" checked> Deutsch</label>
                   <label class="mb-lang-check"><input type="checkbox" id="schulungLangEn" value="en"> Englisch</label>
@@ -3389,23 +3418,35 @@
               </div>
             </div>
             <div id="schulungKopf" class="mb-v2-kopfdaten" hidden></div>
-            <div id="schulungAnlagen" class="schulung-anlagen"></div>
+            <div id="schulungAnlagen"></div>
           </div>
         </section>
         <section class="sp-v2-section">
-          <header class="sp-v2-section-head"><span class="sp-v2-num">2</span> Schulungsthemen</header>
-          <div class="sp-v2-section-body" id="schulungThemen"></div>
+          <header class="sp-v2-section-head" data-i18n-en="Training topics"><span class="sp-v2-num">2</span> Schulungsthemen</header>
+          <div class="sp-v2-section-body">
+            <p id="schulungPresetHint" class="muted" style="margin:0 0 0.75rem"></p>
+            <div id="schulungThemen"></div>
+            <div class="schulung-tn-actions" style="margin-top:0.75rem">
+              <button type="button" class="btn btn-primary" id="btnSchulungAddStep" data-i18n-en="Add step">+ Schritt</button>
+              <button type="button" class="btn btn-ghost" id="btnSchulungResetSteps" data-i18n-en="Reset list">Liste zurücksetzen</button>
+            </div>
+          </div>
         </section>
         <section class="sp-v2-section">
-          <header class="sp-v2-section-head"><span class="sp-v2-num">3</span> Teilnehmer</header>
+          <header class="sp-v2-section-head" data-i18n-en="Participants"><span class="sp-v2-num">3</span> Teilnehmer</header>
           <div class="sp-v2-section-body">
             <div class="schulung-tn-actions">
-              <button type="button" class="btn btn-primary" id="btnSchulungTeilnehmerAdd">Teilnehmer eintragen</button>
-              <button type="button" class="btn btn-primary" id="btnSchulungSelbst">Teilnehmer trägt sich ein</button>
+              <button type="button" class="btn btn-primary" id="btnSchulungTeilnehmerAdd" data-i18n-en="Add participant">Teilnehmer eintragen</button>
+              <button type="button" class="btn btn-primary" id="btnSchulungSelbst" data-i18n-en="Participant enters own details">Teilnehmer trägt sich ein</button>
             </div>
             <div class="schulung-table-wrap">
               <table class="schulung-tn-table">
-                <thead><tr><th>Name</th><th>Funktion</th><th>Unterschrift</th><th></th></tr></thead>
+                <thead><tr>
+                  <th data-i18n-en="Name">Name</th>
+                  <th data-i18n-en="Function">Funktion</th>
+                  <th data-i18n-en="Signature">Unterschrift</th>
+                  <th></th>
+                </tr></thead>
                 <tbody id="schulungTeilnehmer"></tbody>
               </table>
             </div>
@@ -3413,19 +3454,30 @@
         </section>
       </form>
     </div>
+    <div id="schulungStepPicker" class="modal-overlay" aria-hidden="true">
+      <div class="modal-box" style="max-width:720px">
+        <h3 data-i18n-en="Add training step">Schulungsschritt hinzufügen</h3>
+        <p class="muted" style="margin:0 0 0.75rem" data-i18n-en="Choose steps from the Schulungsschritte catalog.">Schritte aus dem Katalog Schulungsschritte wählen.</p>
+        <div id="schulungStepPickerList" class="sp-catalog-list"></div>
+        <div style="display:flex;gap:0.5rem;margin-top:1rem">
+          <button type="button" class="btn btn-primary" id="btnSchulungStepPickerOk" data-i18n-en="Apply">Übernehmen</button>
+          <button type="button" class="btn btn-ghost" id="btnSchulungStepPickerCancel" data-i18n-en="Cancel">Abbrechen</button>
+        </div>
+      </div>
+    </div>
     <div id="schulungPopup" class="schulung-popup" hidden>
       <form id="schulungPopupForm" class="schulung-popup-card">
-        <h3>Teilnehmer</h3>
-        <label for="schulungPopupName">Name</label>
+        <h3 data-i18n-en="Participant">Teilnehmer</h3>
+        <label for="schulungPopupName" data-i18n-en="Name">Name</label>
         <input type="text" id="schulungPopupName" autocomplete="name" required>
-        <label for="schulungPopupFunktion">Funktion</label>
+        <label for="schulungPopupFunktion" data-i18n-en="Function">Funktion</label>
         <input type="text" id="schulungPopupFunktion" autocomplete="organization-title">
-        <label>Unterschrift</label>
+        <label data-i18n-en="Signature">Unterschrift</label>
         <canvas id="schulungPopupCanvas" width="640" height="180"></canvas>
         <div class="schulung-popup-actions">
-          <button type="button" class="btn btn-ghost" id="btnSchulungPopupClear">Löschen</button>
-          <button type="button" class="btn btn-ghost" id="btnSchulungPopupCancel">Abbrechen</button>
-          <button type="submit" class="btn btn-primary" id="btnSchulungPopupOk">Fertig</button>
+          <button type="button" class="btn btn-ghost" id="btnSchulungPopupClear" data-i18n-en="Clear">Löschen</button>
+          <button type="button" class="btn btn-ghost" id="btnSchulungPopupCancel" data-i18n-en="Cancel">Abbrechen</button>
+          <button type="submit" class="btn btn-primary" id="btnSchulungPopupOk" data-i18n-en="Done">Fertig</button>
         </div>
       </form>
     </div>
@@ -5093,7 +5145,7 @@
   <main id="viewArbeitsschritteSchulung" class="view-arbeitsschritte" aria-label="Schulungsschritte">
     <div class="sp-v2-page" style="padding:1rem;max-width:1100px;margin:0 auto">
       <h2 class="sp-v2-page-title"><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Schulungsschritte</h2>
-      <p class="muted" style="margin:0 0 1rem">Masterliste und Typ-Presets für Schulungsprotokolle. Der Grundstock gilt immer, Presets EBW, DBW und DDW kommen zum Anlagentyp dazu.</p>
+      <p class="muted" style="margin:0 0 1rem">Masterliste und Typ-Presets für Schulungsprotokolle. Vorbereitete Sets: EBW, E-DBW und DDW. Jedes Set enthält den Grundstock plus die Schritte des Typs.</p>
       <section class="sp-v2-section">
         <div class="sp-v2-section-body">
           <div class="as-preset-toolbar">
@@ -5103,11 +5155,11 @@
             </div>
             <div class="as-field as-field-grow">
               <label for="asSchulungPresetName">Name</label>
-              <input type="text" id="asSchulungPresetName" placeholder="z. B. Bandwaage DBW">
+              <input type="text" id="asSchulungPresetName" placeholder="z. B. Dosierbandwaage E-DBW">
             </div>
             <div class="as-field" style="max-width:110px">
               <label for="asSchulungPresetType">Typ</label>
-              <input type="text" id="asSchulungPresetType" maxlength="6" placeholder="DBW">
+              <input type="text" id="asSchulungPresetType" maxlength="6" placeholder="E-DBW">
             </div>
             <div class="as-preset-actions">
               <button type="button" class="btn btn-primary" id="btnAsSchulungPresetSave" disabled>Preset speichern</button>
@@ -5525,15 +5577,16 @@
   <script src="js/view-abrechnung.js?v=20260908hover"></script>
   <script src="js/view-zeitschreibung.js?v=20261002"></script>
   <script src="js/signature-pad.js"></script>
-  <script src="js/protocol-form-i18n.js"></script>
+  <script src="js/protocol-form-i18n.js?v=schulung-en"></script>
   <script src="js/protocol-viewedit.js"></script>
   <script src="js/mb-image-draw.js"></script>
   <script src="js/arbeitsnachweis.js?v=fn7"></script>
   <script src="js/monteur-image-gallery.js"></script>
   <script src="js/dokumente-view.js?v=3"></script>
   <script src="js/auftrag-neu.js?v=3"></script>
-  <script src="app.js?v=vnc-popout"></script>
-  <script src="js/schulungsprotokoll.js?v=1"></script>
+  <script src="js/kukpit-file-availability.js?v=20261031offline"></script>
+  <script src="app.js?v=schulung-auftrag"></script>
+  <script src="js/schulungsprotokoll.js?v=8"></script>
   <script src="js/profinet-tool.js?v=20261022-blink"></script>
   <script src="js/tools-vnc.js?v=20261014"></script>
   <script src="js/ftp-tool.js?v=20261019b"></script>

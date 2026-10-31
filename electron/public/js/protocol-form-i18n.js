@@ -455,6 +455,12 @@
         { sel: '#btnServiceprotokollSaveJson', en: 'Save' },
         { sel: '#serviceprotokollAbbrechen', en: 'Cancel' }
       ]
+    },
+    schulung: {
+      root: 'viewProtokolleSchulung',
+      de: 'schulungLangDe',
+      en: 'schulungLangEn',
+      map: []
     }
   };
 

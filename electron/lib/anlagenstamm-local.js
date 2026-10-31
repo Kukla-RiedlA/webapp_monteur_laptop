@@ -2419,8 +2419,24 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
   }
 
   const resumeBefore = getAnlagenstammSyncResumeState(db);
-  const resumeInterrupted = !resumeBefore.pn_tree_phase_completed && resumeBefore.pn_tree_next_page > 1;
-  const fullRefresh = !resumeInterrupted && isPnFullRefreshDue(resumeBefore.pn_tree_last_full_at);
+  let resumeInterrupted = !resumeBefore.pn_tree_phase_completed && resumeBefore.pn_tree_next_page > 1;
+  let fullRefresh = !resumeInterrupted && isPnFullRefreshDue(resumeBefore.pn_tree_last_full_at);
+  let usefulTrees = 0;
+  try {
+    const usefulTreeRow = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM anlagenstamm_tree_cache
+          WHERE tree_json IS NOT NULL AND length(tree_json) > 2`,
+      )
+      .get();
+    usefulTrees = usefulTreeRow ? Number(usefulTreeRow.n) || 0 : 0;
+  } catch (_) {
+    usefulTrees = 0;
+  }
+  if (usefulTrees === 0) {
+    fullRefresh = true;
+    resumeInterrupted = false;
+  }
   const since = fullRefresh ? '' : String(resumeBefore.pn_tree_since || '').trim();
   const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
   const pageSize = 25;
@@ -2434,8 +2450,8 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
   let watermark = since;
 
   const runOnBase = async (base) => {
+    let data = null;
     do {
-      let data;
       try {
         data = await fetchPnTreeExportChunk(base, technicianId, auth, page, pageSize, since);
       } catch (err) {
@@ -2496,6 +2512,34 @@ async function syncProjekteNeuTreesFromDispo(db, payload, onProgress, options) {
       await yieldEventLoop();
       page += 1;
     } while (page <= totalPages);
+    const emptyCatalog = !since && totalCount === 0 && written === 0;
+    if (emptyCatalog) {
+      console.warn(
+        '[anlagenstamm_pn_tree] Export ohne Strukturen (tree_db_available='
+          + String(data && data.tree_db_available)
+          + ', ' + base + '). Wasserzeichen zurückgesetzt, Nachzug über files_list.',
+      );
+      await withDbLock(async () => {
+        db.prepare(
+          `UPDATE anlagenstamm_sync_state
+              SET pn_tree_last_full_at = NULL,
+                  pn_tree_since = NULL,
+                  pn_tree_phase_completed = 0,
+                  pn_tree_next_page = 1`,
+        ).run();
+        if (typeof saveFn === 'function') saveFn();
+      });
+      return {
+        ok: true,
+        total_count: 0,
+        written: 0,
+        skipped: 0,
+        resumed: resuming,
+        delta: false,
+        empty_catalog: true,
+        tree_db_available: data.tree_db_available !== false,
+      };
+    }
     await withDbLock(async () => {
       if (!since) {
         purgeAnlagenstammTreeCacheOrphans(db, seenFabs);

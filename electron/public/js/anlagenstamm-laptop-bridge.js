@@ -609,6 +609,7 @@
           isDir: isDir,
           size: isDir ? null : (node.size != null ? node.size : ''),
           mtime: pnNodeMtimeIso(node),
+          isOffline: !isDir && (node.is_offline === true || node.is_offline === 1),
         });
         if (isDir && rel && expanded[rel]) {
           walk(pnNodeChildren(node), lvl + 1, rel);
@@ -656,7 +657,11 @@
         nameVisual +
         ' <span class="dienstreise-explorer-filename">' +
         escapeHtml(r.name) +
-        '</span></div>' +
+        '</span>' +
+        (!r.isDir && typeof window.kukpitFileAvailabilityHtml === 'function'
+          ? ' ' + window.kukpitFileAvailabilityHtml(r.isOffline)
+          : '') +
+        '</div>' +
         '<div class="dienstreise-explorer-size">' +
         escapeHtml(r.isDir ? '' : formatFileSize(r.size)) +
         '</div>' +
@@ -843,7 +848,7 @@
     });
   }
 
-  async function openTedExcel(rel, fab, fileName) {
+  async function openTedExcel(rel, fab, fileName, opts) {
     const relPath = String(rel || '').trim();
     if (!relPath) {
       showBridgeError('TED-Datei: Pfad (rel_path) fehlt.');
@@ -851,7 +856,8 @@
     }
 
     const creds = getDispoCreds();
-    showBridgeStatus('Datei wird geladen…');
+    const localOnly = !!(opts && opts.localOnly);
+    showBridgeStatus(localOnly ? 'Öffne Excel…' : 'Datei wird geladen…');
 
     const r = await fetch(api + '/api/mechanik_ted_excel_open', {
       method: 'POST',
@@ -861,6 +867,7 @@
         rel_path: relPath,
         fab: fab,
         file_name: fileName,
+        local_only: localOnly,
         serverUsername: creds.serverUsername,
       }),
     });
@@ -878,20 +885,37 @@
     return d;
   }
 
+  function tedLinkHost(link) {
+    const ids = ['anlagenstamm-host', 'anlagenstamm-akte-host'];
+    for (let i = 0; i < ids.length; i++) {
+      const el = document.getElementById(ids[i]);
+      if (el && el.contains(link)) return el;
+    }
+    return null;
+  }
+
   function handleTedLinkClick(link) {
     const line = link.closest('.ted-excel-line');
-    const rel = parseTedRelFromLine(link, line);
+    const rel = (link && link.dataset.tedRelPath) || parseTedRelFromLine(link, line);
     const fab =
+      (link && link.getAttribute('data-ted-fab')) ||
+      (line && line.getAttribute('data-ted-fab')) ||
       (link.closest('tr') && link.closest('tr').getAttribute('data-fab')) ||
       (link.closest('tr') &&
         link.closest('tr').querySelector('.pn-root-link') &&
         link.closest('tr').querySelector('.pn-root-link').getAttribute('data-fab')) ||
       '';
     const viewLink = line && line.querySelector('.ted-view-link');
-    const fileName = ((viewLink && viewLink.textContent) || link.textContent || '').trim();
+    const fileName = (
+      (link && link.getAttribute('data-ted-filename')) ||
+      (viewLink && viewLink.textContent) ||
+      link.textContent ||
+      ''
+    ).trim();
+    const localOnly = link && link.getAttribute('data-ted-offline') === '1';
     const loadingEl = viewLink || link;
     loadingEl.classList.add('ted-excel-loading');
-    openTedExcel(rel, fab, fileName)
+    openTedExcel(rel, fab, fileName, { localOnly: localOnly })
       .catch((err) => {
         if (!bridgeStatusEl || bridgeStatusEl.style.display === 'none') {
           showBridgeError(err && err.message ? err.message : String(err));
@@ -922,8 +946,7 @@
       (e) => {
         const link = e.target.closest('.ted-view-link, .ted-dl-link');
         if (!link) return;
-        const host = document.getElementById('anlagenstamm-host');
-        if (!host || !host.contains(link)) return;
+        if (!tedLinkHost(link)) return;
         e.preventDefault();
         e.stopImmediatePropagation();
         handleTedLinkClick(link);
@@ -1016,7 +1039,11 @@
   }
 
   const observer = new MutationObserver(() => {
-    bindTedLinks(document.getElementById('anlagenstamm-host') || document.body);
+    const stamm = document.getElementById('anlagenstamm-host');
+    const akte = document.getElementById('anlagenstamm-akte-host');
+    if (stamm) bindTedLinks(stamm);
+    if (akte) bindTedLinks(akte);
+    if (!stamm && !akte) bindTedLinks(document.body);
   });
 
   global.monteurAnlagenstammBridge = {
@@ -1024,9 +1051,15 @@
     renderPnTree,
     openPnProjectExplorer,
     init() {
-      const host = document.getElementById('anlagenstamm-host');
-      if (host) observer.observe(host, { childList: true, subtree: true });
-      bindTedLinks(host || document.body);
+      ['anlagenstamm-host', 'anlagenstamm-akte-host'].forEach((id) => {
+        const host = document.getElementById(id);
+        if (!host) return;
+        observer.observe(host, { childList: true, subtree: true });
+        bindTedLinks(host);
+      });
+      if (!document.getElementById('anlagenstamm-host') && !document.getElementById('anlagenstamm-akte-host')) {
+        bindTedLinks(document.body);
+      }
       setupPnRootLinks();
       setupTedLinks();
       setupPnDownloadIntercept();

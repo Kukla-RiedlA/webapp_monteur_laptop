@@ -37,7 +37,7 @@ async function pickSavePath(session, defaultPath) {
     const { dialog, BrowserWindow } = require('electron');
     const win = BrowserWindow.getFocusedWindow();
     const result = await dialog.showSaveDialog(win || undefined, {
-      title: 'Kommentierte PDF speichern',
+      title: 'PDF speichern',
       defaultPath: defaultPath || suggestedAnnotatedPath(session.sourcePath),
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
     });
@@ -106,11 +106,21 @@ function registerPdfAnnotatorRoutes(app, opts) {
       const sourcePath = session.viewPath && fs.existsSync(session.viewPath)
         ? session.viewPath
         : session.sourcePath;
-      await flattenPdfMarkup({
-        sourcePath,
-        destPath,
-        markup: req.body && req.body.markup,
-      });
+      const markup = req.body && req.body.markup;
+      const strokes = markup && Array.isArray(markup.strokes) ? markup.strokes : [];
+      const texts = markup && Array.isArray(markup.texts) ? markup.texts : [];
+      if (!strokes.length && !texts.length) {
+        if (path.resolve(destPath) !== path.resolve(sourcePath)) {
+          fs.mkdirSync(path.dirname(destPath), { recursive: true });
+          fs.copyFileSync(sourcePath, destPath);
+        }
+      } else {
+        await flattenPdfMarkup({
+          sourcePath,
+          destPath,
+          markup,
+        });
+      }
       session.lastSavedPath = destPath;
       return res.json({
         ok: true,

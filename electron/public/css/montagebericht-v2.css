@@ -680,6 +680,13 @@ svg.mb-draw-layer-float.is-erasing {
   overflow: auto;
 }
 
+#schulungAnlagen .schulung-fab-table th:nth-child(3),
+#schulungAnlagen .schulung-fab-table td:nth-child(3) {
+  border-left: 0;
+  padding-left: 0.5rem;
+  width: 5.5rem;
+  white-space: nowrap;
+}
 .schulung-anlagen {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -708,14 +715,35 @@ svg.mb-draw-layer-float.is-erasing {
   align-items: center;
 }
 .schulung-thema-bar strong { font-weight: 600; }
+.schulung-thema-bar .schulung-remove {
+  color: #fff;
+  border: 0;
+  background: transparent;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0 4px;
+  min-width: 28px;
+  cursor: pointer;
+}
 .schulung-thema-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
-.schulung-status { display: flex; gap: 6px; flex-wrap: wrap; }
-.schulung-status button.is-on { background: var(--kukla-primary, #0e7b5a); color: #fff; border-color: var(--kukla-primary, #0e7b5a); }
 .schulung-tn-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .schulung-table-wrap { overflow-x: auto; }
 .schulung-tn-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .schulung-tn-table thead th { position: static; top: auto; background: var(--sp-mint, #eefaf5); text-align: left; padding: 8px; }
 .schulung-tn-table td { padding: 8px; border-top: 1px solid var(--kukla-tile-border, #cfe8d1); vertical-align: middle; }
+#viewProtokolleSchulung .schulung-thema-body textarea.schulung-erklaerung {
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid var(--kukla-tile-border, #cfe8d1);
+  border-radius: 8px;
+  background: #fff;
+  color: #1a1a1a;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  resize: vertical;
+  box-sizing: border-box;
+}
 #viewProtokolleSchulung .schulung-thema-body input,
 #viewProtokolleSchulung .schulung-tn-table input,
 #viewProtokolleSchulung .schulung-popup-card input[type="text"] {

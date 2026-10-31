@@ -75,7 +75,7 @@ function ensureArbeitsnachweisLocalSchema(db) {
   );
   tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_an_deleted_uuid ON arbeitsnachweis_local_deleted(local_uuid)');
   tryExec(db, 'CREATE INDEX IF NOT EXISTS idx_an_deleted_server ON arbeitsnachweis_local_deleted(server_id)');
-  ['server_id', 'local_job_id', 'server_job_id', 'customer_name', 'dirty', 'local_uuid', 'content_version', 'language'].forEach(
+  ['server_id', 'local_job_id', 'server_job_id', 'customer_name', 'dirty', 'local_uuid', 'content_version', 'language', 'pdf_content_hash'].forEach(
     (col) => {
       if (!tableHasColumn(db, 'documents', col)) {
         const types = {
@@ -922,6 +922,15 @@ function toDispoSavePayload(loaded, db) {
   };
 }
 
+function setPdfContentHash(db, documentId, hash) {
+  ensureArbeitsnachweisLocalSchema(db);
+  const id = parseInt(documentId, 10);
+  const digest = String(hash || '').trim();
+  if (!id || !digest) return { ok: false };
+  db.prepare('UPDATE documents SET pdf_content_hash = ? WHERE id = ?').run(digest, id);
+  return { ok: true };
+}
+
 function queuePending(db, localId, action, payload) {
   const n = parseInt(localId, 10);
   if (!Number.isFinite(n) || n <= 0) return;
@@ -953,6 +962,7 @@ module.exports = {
   contentWeight,
   resolveSavePayload,
   toDispoSavePayload,
+  setPdfContentHash,
   queuePending,
   clearFailedPending,
   resolveJobIds,

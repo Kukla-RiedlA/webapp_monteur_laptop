@@ -419,7 +419,9 @@
       if (f.entry_count) meta.push(String(f.entry_count) + ' Werte');
       html += '<div class="parameterlisten-file-row" data-pl-file-id="' + esc(id) + '">';
       html += '<label class="parameterlisten-compare-check"><input type="checkbox" data-pl-compare="1"></label>';
-      html += '<div class="parameterlisten-file-main"><div class="parameterlisten-file-title"><span class="name">' +
+      var offline = f.is_offline === true || f.is_offline === 1;
+      var badge = typeof window.kukpitFileAvailabilityHtml === 'function' ? window.kukpitFileAvailabilityHtml(offline) + ' ' : '';
+      html += '<div class="parameterlisten-file-main"><div class="parameterlisten-file-title">' + badge + '<span class="name">' +
         esc(name) + '</span></div><div class="parameterlisten-file-meta">' + esc(meta.join(' · ')) + '</div></div>';
       html += '<div class="parameterlisten-file-actions">';
       html += '<button type="button" class="btn btn-secondary kukla-jobs-refresh" data-pl-act="open">Öffnen</button>';

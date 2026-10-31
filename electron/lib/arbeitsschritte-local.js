@@ -129,6 +129,7 @@ function ensureArbeitsschritteSchema(db) {
     /* Spalte fehlt noch */
   }
   seedGrundstockIfEmpty(db);
+  ensureSchulungPresetSets(db);
 }
 
 function seedGrundstockIfEmpty(db) {
@@ -143,6 +144,105 @@ function seedGrundstockIfEmpty(db) {
     const id = idx + 1;
     ins.run(id, pair[0], pair[1], idx + 1, id, now);
   });
+}
+
+function schulungPresetHasStep(db, typeCode, bezeichnungDe) {
+  const row = db.prepare(
+    `SELECT 1 AS ok
+     FROM arbeitsschritte_preset_global p
+     JOIN arbeitsschritte_preset_step x ON x.preset_scope = 'global' AND x.preset_id = p.id
+     JOIN arbeitsschritte_global s ON s.id = x.step_id AND x.step_scope = 'global'
+     WHERE p.catalog_kind = 'schulung' AND p.type_code = ? AND s.bezeichnung_de = ?
+     LIMIT 1`,
+  ).get(typeCode, bezeichnungDe);
+  return !!(row && row.ok);
+}
+
+function deleteLegacySchulungSteps(db, topics) {
+  const find = db.prepare(
+    `SELECT id FROM arbeitsschritte_global WHERE catalog_kind = 'schulung' AND bezeichnung_de = ?`,
+  );
+  const used = db.prepare(
+    `SELECT 1 AS ok FROM arbeitsschritte_preset_step WHERE step_scope = 'global' AND step_id = ? LIMIT 1`,
+  );
+  const del = db.prepare(`DELETE FROM arbeitsschritte_global WHERE id = ? AND catalog_kind = 'schulung'`);
+  (topics.LEGACY_DE || []).forEach(function (de) {
+    const row = find.get(de);
+    if (!row) return;
+    if (used.get(row.id)) return;
+    del.run(row.id);
+  });
+}
+
+function ensureSchulungPresetSets(db) {
+  const topics = require('./schulung-topics');
+  const marker = topics.GRUNDSTOCK[0][0];
+  const ddwMarker = topics.DDW[1][0];
+  if (
+    schulungPresetHasStep(db, 'EBW', marker)
+    && schulungPresetHasStep(db, 'E-DBW', marker)
+    && schulungPresetHasStep(db, 'DDW', ddwMarker)
+  ) {
+    deleteLegacySchulungSteps(db, topics);
+    return;
+  }
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const findStep = db.prepare(
+    `SELECT id FROM arbeitsschritte_global WHERE catalog_kind = 'schulung' AND bezeichnung_de = ?`,
+  );
+  const insStep = db.prepare(
+    `INSERT INTO arbeitsschritte_global (bezeichnung_de, bezeichnung_en, sort_order, updated_at, catalog_kind)
+     VALUES (?, ?, ?, ?, 'schulung')`,
+  );
+  const stepIdByDe = {};
+  topics.allCatalogSteps().forEach(function (step) {
+    let row = findStep.get(step.de);
+    if (!row) {
+      const info = insStep.run(step.de, step.en, step.sort_order, now);
+      row = { id: info.lastInsertRowid };
+    }
+    stepIdByDe[step.de] = row.id;
+  });
+  const oldDbw = db.prepare(
+    `SELECT id FROM arbeitsschritte_preset_global
+     WHERE catalog_kind = 'schulung' AND type_code = 'DBW' AND name = 'Bandwaage und Dosierbandwaage DBW'`,
+  ).get();
+  const hasEdbw = db.prepare(
+    `SELECT id FROM arbeitsschritte_preset_global WHERE catalog_kind = 'schulung' AND type_code = 'E-DBW'`,
+  ).get();
+  if (oldDbw && !hasEdbw) {
+    db.prepare(
+      `UPDATE arbeitsschritte_preset_global SET name = ?, type_code = 'E-DBW', updated_at = ? WHERE id = ?`,
+    ).run('Dosierbandwaage E-DBW', now, oldDbw.id);
+  }
+  const findPreset = db.prepare(
+    `SELECT id FROM arbeitsschritte_preset_global WHERE catalog_kind = 'schulung' AND type_code = ?`,
+  );
+  const insPreset = db.prepare(
+    `INSERT INTO arbeitsschritte_preset_global (name, type_code, sort_order, updated_at, catalog_kind)
+     VALUES (?, ?, ?, ?, 'schulung')`,
+  );
+  const updPreset = db.prepare(
+    `UPDATE arbeitsschritte_preset_global SET name = ?, sort_order = ?, updated_at = ? WHERE id = ?`,
+  );
+  topics.PRESETS.forEach(function (preset) {
+    let row = findPreset.get(preset.type_code);
+    if (!row) {
+      const info = insPreset.run(preset.name, preset.type_code, preset.sort_order, now);
+      row = { id: info.lastInsertRowid };
+    } else {
+      updPreset.run(preset.name, preset.sort_order, now, row.id);
+    }
+    const refs = preset.steps.map(function (pair, index) {
+      return {
+        step_scope: 'global',
+        step_id: stepIdByDe[pair[0]],
+        sort_order: index + 1,
+      };
+    }).filter(function (ref) { return ref.step_id; });
+    replacePresetStepsLocal(db, 'global', row.id, refs);
+  });
+  deleteLegacySchulungSteps(db, topics);
 }
 
 function mapGlobalSteps(db, catalogKind) {
@@ -645,54 +745,95 @@ function schulungStepsForTypes(db, technicianId, types) {
   const listed = listArbeitsschritteLocal(db, technicianId, 'schulung');
   const steps = listed.steps || [];
   const presets = listed.presets || [];
-  if (!steps.length) {
-    return { source: 'builtin', arbeitsschritte: topics.stepsForTypes(types) };
+  if (!steps.length || !presets.length) {
+    const builtinPresets = topics.presetsForTypes(types);
+    return {
+      source: 'builtin',
+      preset_names: builtinPresets.map(function (preset) { return preset.name; }),
+      arbeitsschritte: topics.stepsForTypes(types),
+    };
   }
-  const inPreset = {};
-  presets.forEach(function (preset) {
-    (preset.step_refs || []).forEach(function (ref) {
-      inPreset[String(ref.step_scope) + ':' + String(ref.step_id)] = 1;
+  const matched = [];
+  const seen = {};
+  (types || []).forEach(function (anlagenType) {
+    let found = findMatchingPresetLocal(db, technicianId, anlagenType, 'schulung');
+    if (!found && compactTypeToken(anlagenType).indexOf('dbw') !== -1) {
+      const edbw = presets.find(function (row) { return compactTypeToken(row.type_code) === 'edbw'; });
+      if (edbw) {
+        found = {
+          preset_scope: edbw.scope === 'global' ? 'global' : 'user',
+          preset_id: edbw.id,
+        };
+      }
+    }
+    if (!found) return;
+    const key = found.preset_scope + ':' + found.preset_id;
+    if (seen[key]) return;
+    seen[key] = 1;
+    const preset = presets.find(function (row) {
+      return String(row.id) === String(found.preset_id)
+        && (row.scope === 'global' ? 'global' : 'user') === found.preset_scope;
     });
+    if (preset) matched.push(preset);
   });
   const out = [];
   function pushStep(step) {
     if (!step) return;
     const de = String(step.bezeichnung_de || '').trim();
     if (!de) return;
-    if (out.some(function (row) { return row.bezeichnung_de === de; })) return;
+    if (out.some(function (row) { return row.bezeichnung_de === de || row._catalog_de === de; })) return;
+    const deParts = topics.splitHeading(de);
+    const enParts = topics.splitHeading(step.bezeichnung_en);
     out.push({
       sort_order: out.length + 1,
-      bezeichnung_de: de,
-      bezeichnung_en: String(step.bezeichnung_en || '').trim(),
+      bezeichnung_de: deParts.title,
+      bezeichnung_en: enParts.title,
+      erklaerung_de: deParts.body,
+      erklaerung_en: enParts.body,
+      _catalog_de: de,
       status: 'na',
       bemerkung: '',
     });
   }
-  steps.forEach(function (step) {
-    const key = String(step.scope || 'global') + ':' + String(step.id);
-    if (!inPreset[key]) pushStep(step);
-  });
-  const wanted = {};
-  (types || []).forEach(function (anlagenType) {
-    presets.forEach(function (preset) {
-      if (typeTokenContainsCode(anlagenType, preset.type_code)) {
-        wanted[String(preset.scope) + ':' + String(preset.id)] = preset;
-      }
-    });
-  });
-  Object.keys(wanted).forEach(function (key) {
-    const preset = wanted[key];
+  function pushPreset(preset) {
     (preset.step_refs || []).forEach(function (ref) {
       const found = steps.find(function (step) {
         return String(step.id) === String(ref.step_id) && String(step.scope || 'global') === String(ref.step_scope);
       });
       pushStep(found);
     });
-  });
-  if (!out.length) {
-    return { source: 'builtin', arbeitsschritte: topics.stepsForTypes(types) };
   }
-  return { source: 'catalog', arbeitsschritte: out };
+  if (!matched.length) {
+    const grund = {};
+    topics.GRUNDSTOCK.forEach(function (pair) { grund[pair[0]] = 1; });
+    steps.forEach(function (step) {
+      if (grund[String(step.bezeichnung_de || '').trim()]) pushStep(step);
+    });
+    if (!out.length) {
+      return { source: 'builtin', preset_names: [], arbeitsschritte: topics.stepsForTypes([]) };
+    }
+    return { source: 'grundstock', preset_names: [], arbeitsschritte: publishSchulungSteps(out) };
+  }
+  matched.forEach(pushPreset);
+  return {
+    source: 'preset',
+    preset_names: matched.map(function (preset) { return preset.name; }),
+    arbeitsschritte: publishSchulungSteps(out),
+  };
+}
+
+function publishSchulungSteps(rows) {
+  return rows.map(function (row) {
+    return {
+      sort_order: row.sort_order,
+      bezeichnung_de: row.bezeichnung_de,
+      bezeichnung_en: row.bezeichnung_en,
+      erklaerung_de: row.erklaerung_de,
+      erklaerung_en: row.erklaerung_en,
+      status: row.status || 'na',
+      bemerkung: row.bemerkung || '',
+    };
+  });
 }
 
 function resolveDefaultsLocal(db, technicianId, anlagenType, catalogKind) {

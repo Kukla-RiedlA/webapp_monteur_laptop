@@ -114,6 +114,41 @@ describe('local documents list', () => {
     assert.equal(data.source, 'local_fast');
   });
 
+  it('stellt Technische Berechnung vor Montageberichte und listet TED-Excel', () => {
+    const db = {
+      prepare(sql) {
+        const s = String(sql);
+        if (s.includes('FROM anlagenstamm_parameter_files')) {
+          return { all() { return []; } };
+        }
+        if (s.includes('FROM anlagenstamm_local')) {
+          return {
+            all() {
+              return [{
+                fabrikationsnummer: '12481',
+                pn_root_name: 'Anlage 12481',
+                ted_mechanik: JSON.stringify([
+                  { file_name: '12481_Berechnung.xlsx', rel_path: 'Berechnung/12481_Berechnung.xlsx' },
+                  { file_name: '12481_Berechnung.xlsx', rel_path: 'Berechnung/12481_Berechnung.xlsx' },
+                ]),
+              }];
+            },
+            get() { return null; },
+          };
+        }
+        return { all() { return []; }, get() { return null; }, run() {} };
+      },
+    };
+    const data = buildLocalAnlagenstammDocumentsList(db, '12481');
+    assert.equal(data.categories[0].slug, 'technische_berechnung');
+    assert.equal(data.categories[0].label, 'Technische Berechnung');
+    assert.equal(data.categories[1].slug, 'montagebericht');
+    assert.equal(data.categories[0].documents.length, 1);
+    assert.equal(data.categories[0].documents[0].view_kind, 'ted');
+    assert.equal(data.categories[0].documents[0].display_name, '12481_Berechnung.xlsx');
+    assert.equal(data.categories[0].documents[0].rel_path, 'Berechnung/12481_Berechnung.xlsx');
+  });
+
   it('mappt Dokumente-Parameterlisten auf die Akte-Parameter-Liste', () => {
     const { mapParameterFilesFromDocumentsList } = require('./anlagenstamm-documents-local');
     const files = mapParameterFilesFromDocumentsList({

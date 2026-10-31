@@ -2485,7 +2485,7 @@
     if (hintEl) {
       hintEl.textContent = preview.preview_degraded
         ? (preview.hint || preview.error || 'Vorschau eingeschränkt – Sie können trotzdem annehmen (ohne Projektdateien).')
-        : 'Dokumente_Dispo und Dokumente_Buchhaltung werden immer vollständig geladen. Hier nur PROJEKTE NEU wählen; TED liegt im Anlagenstamm.';
+        : 'Dokumente_Dispo, Dokumente_Buchhaltung und TED-Excel werden immer vollständig geladen. Hier nur PROJEKTE NEU wählen. Nicht angehakte Ordner bleiben online.';
     }
     if (acceptOfflinePending) {
       acceptOfflinePending.validKeys = validKeys;
@@ -5628,29 +5628,6 @@
     return String(fab || '').trim();
   }
 
-  /** Kurzname oder Index-Relativpfad zu PROJEKTE NEU (Schlüssel inkl. numerischer FN-Normalisierung). */
-  function projekteNeuDisplayPathForFab(fab, pnByFab, pnRelByFab) {
-    var keys = [];
-    var s = String(fab || '').trim();
-    if (s) keys.push(s);
-    if (s && /^\d+$/.test(s)) {
-      var n = String(parseInt(s, 10));
-      if (keys.indexOf(n) === -1) keys.push(n);
-    }
-    var i;
-    for (i = 0; i < keys.length; i++) {
-      var k = keys[i];
-      var label = pnByFab && pnByFab[k];
-      if (label != null && String(label).trim() !== '') return String(label).trim();
-    }
-    for (i = 0; i < keys.length; i++) {
-      var k2 = keys[i];
-      var rel = pnRelByFab && pnRelByFab[k2];
-      if (rel != null && String(rel).trim() !== '') return String(rel).trim();
-    }
-    return '';
-  }
-
   var mechanikTedLoadToken = 0;
   var mechanikTedPullInFlightByJob = {};
   var mechanikTedPullLastStartedAt = {};
@@ -5658,8 +5635,7 @@
   var MECHANIK_TED_PULL_MIN_INTERVAL_MS = 30000;
 
   /**
-   * TED-Liste kommt live von Dispo; Projektordner/TED zeigt nur lokal Gespeichertes.
-   * Nach Anzeige der FN-Liste fehlende Excel-Dateien nachladen.
+   * TED-Liste aus job_ted_index. Fehlende Excel nur im Hintergrund nachladen.
    */
   function refreshTedFoldersAfterSync() {
     var seen = {};
@@ -5794,8 +5770,6 @@
           return;
         }
         var byFab = result.data.by_fab || {};
-        var pnByFab = result.data.pn_by_fab || {};
-        var pnRelByFab = result.data.pn_folder_relpath_by_fab || {};
         var keysFromApi = Object.keys(byFab);
         if (keysFromApi.length === 0) {
           el.innerHTML = '<p class="muted">Keine Fabrikationsnummern am Auftrag (oder keine Daten von der Dispo).</p>';
@@ -5816,33 +5790,30 @@
             orderedFabs.push(f);
           }
         });
-        var html = '<div class="kukla-ted-fab-list">';
+        var html = '<div class="kukla-ted-fab-list"><div class="kukla-ted-fab-box card">';
+        html += '<div class="kukla-ted-fab-head"><strong>Mechanische Berechnung:</strong></div>';
+        html += '<ul class="kukla-ted-rows">';
+        var tedMissingLocal = false;
         orderedFabs.forEach(function (fab) {
           var files = byFab[fab] || [];
-          var pnLabel = projekteNeuDisplayPathForFab(fab, pnByFab, pnRelByFab);
-          html += '<div class="kukla-ted-fab-box card">';
-          html += '<div class="kukla-ted-fab-head"><strong>FN ' + escapeHtml(String(fab)) + '</strong></div>';
-          html += '<div class="kukla-ted-fab-body">';
           if (files.length === 0) {
-            html += '<p class="muted kukla-ted-empty">Keine TED-Dateien im Index für diese FN.</p>';
-          } else {
-            html += '<ul class="kukla-ted-ul">';
-            files.forEach(function (f) {
-              var rel = String(f.rel_path || '').trim();
-              var dt = (f.file_mtime || '').toString();
-              var w = f.fn_matches_filename === false ? ' ⚠' : '';
-              var fn = String(f.file_name || '').trim();
-              html += '<li><button type="button" class="btn btn-ghost ted-open-file" data-ted-rel="' + String(rel).replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '" data-ted-job-id="' + String(jobId).replace(/"/g, '&quot;') + '" data-ted-local-job-id="' + String(job.id).replace(/"/g, '&quot;') + '" data-ted-fab="' + String(fab).replace(/"/g, '&quot;') + '" data-ted-filename="' + String(fn).replace(/"/g, '&quot;') + '">' + escapeHtml(fn || rel.split(/[/\\]/).pop() || 'Excel') + '</button> <span class="muted">' + escapeHtml(dt) + '</span>' + w + '</li>';
-            });
-            html += '</ul>';
+            html += '<li class="kukla-ted-row"><span class="kukla-ted-fn">' + escapeHtml(String(fab)) + '</span><span class="muted kukla-ted-empty">Keine Datei</span></li>';
+            return;
           }
-          html += '<details class="kukla-ted-pn-details">';
-          html += '<summary class="kukla-ted-pn-summary">Projekte Neu Pfad</summary>';
-          html += '<div class="kukla-ted-pn-path">' + (pnLabel ? escapeHtml(pnLabel) : '<span class="muted">—</span>') + '</div>';
-          html += '</details>';
-          html += '</div></div>';
+          files.forEach(function (f) {
+            var rel = String(f.rel_path || '').trim();
+            var dt = (f.file_mtime || '').toString();
+            var w = f.fn_matches_filename === false ? ' ⚠' : '';
+            var fn = String(f.file_name || '').trim();
+            var offline = f.is_offline === true || f.is_offline === 1;
+            if (!offline) tedMissingLocal = true;
+            var badge = typeof window.kukpitFileAvailabilityHtml === 'function' ? window.kukpitFileAvailabilityHtml(offline) + ' ' : '';
+            html += '<li class="kukla-ted-row"><span class="kukla-ted-fn">' + escapeHtml(String(fab)) + '</span><span class="kukla-ted-file">' + badge + '<button type="button" class="btn btn-ghost ted-open-file" data-ted-rel="' + String(rel).replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '" data-ted-job-id="' + String(jobId).replace(/"/g, '&quot;') + '" data-ted-local-job-id="' + String(job.id).replace(/"/g, '&quot;') + '" data-ted-fab="' + String(fab).replace(/"/g, '&quot;') + '" data-ted-filename="' + String(fn).replace(/"/g, '&quot;') + '" data-ted-offline="' + (offline ? '1' : '0') + '">' + escapeHtml(fn || rel.split(/[/\\]/).pop() || 'Excel') + '</button>';
+            if (dt) html += ' <span class="muted">' + escapeHtml(dt) + '</span>';
+            html += w + '</span></li>';
+          });
         });
-        html += '</div>';
+        html += '</ul></div></div>';
         el.innerHTML = html;
         el.querySelectorAll('.ted-open-file[data-ted-rel]').forEach(function (btn) {
           btn.addEventListener('click', function () {
@@ -5851,11 +5822,12 @@
             var tedLocalJobId = btn.getAttribute('data-ted-local-job-id') || '';
             var tedFab = btn.getAttribute('data-ted-fab') || '';
             var tedFileName = btn.getAttribute('data-ted-filename') || '';
+            var tedOffline = btn.getAttribute('data-ted-offline') === '1';
             if (!rel) return;
-            openTedExcelOnDevice(rel, tedJobId, tedLocalJobId, tedFab, tedFileName, btn);
+            openTedExcelOnDevice(rel, tedJobId, tedLocalJobId, tedFab, tedFileName, btn, tedOffline);
           });
         });
-        if (jobStatusAllowsTedFilePull(job)) {
+        if (tedMissingLocal && jobStatusAllowsTedFilePull(job)) {
           pullMechanikTedExcelIntoProjectFolder(job);
         }
       })
@@ -5947,22 +5919,23 @@
     }
   }
 
-  function openTedExcelOnDevice(relPath, jobId, localJobId, fab, fileName, triggerBtn) {
+  function openTedExcelOnDevice(relPath, jobId, localJobId, fab, fileName, triggerBtn, offlineKnown) {
     relPath = String(relPath || '').trim();
     jobId = jobId != null && jobId !== '' ? jobId : null;
     localJobId = localJobId != null && localJobId !== '' ? localJobId : null;
     fab = String(fab || '').trim();
     fileName = String(fileName || '').trim();
+    var localOnly = offlineKnown === true;
     var baseUrl = getDispoBaseUrl();
     var techId = getTechId();
-    if (!relPath || !baseUrl || !techId || jobId == null || jobId === '') {
-      alert('TED-Datei kann nicht geöffnet werden (Pfad, Auftrag oder Verbindung fehlt).');
+    if (!relPath || !techId || jobId == null || jobId === '') {
+      alert('TED-Datei kann nicht geöffnet werden (Pfad oder Auftrag fehlt).');
       return;
     }
     var loadToken = ++tedExcelDownloadToken;
-    var loadLabel = fileName
-      ? 'Lädt ' + fileName + '…'
-      : 'Excel wird geladen…';
+    var loadLabel = localOnly
+      ? (fileName ? 'Öffne ' + fileName + '…' : 'Öffne Excel…')
+      : (fileName ? 'Lädt ' + fileName + '…' : 'Excel wird geladen…');
     setTedExcelDownloadLoading(true, loadLabel);
     if (triggerBtn) {
       triggerBtn.disabled = true;
@@ -5986,6 +5959,7 @@
         rel_path: relPath,
         fab: fab,
         file_name: fileName,
+        local_only: localOnly,
         serverUsername: getDispoUsername(),
         serverPassword: getDispoPassword()
       })
@@ -7960,8 +7934,167 @@
       });
   }
 
+  var protocolPdfRefreshToken = 0;
+  var closeProtocolPdfRefreshModal = null;
+
+  function protocolPdfRefreshLine(item) {
+    var label = item && item.label ? String(item.label) : 'Protokoll';
+    var fab = item && item.fab ? String(item.fab) : '';
+    var reason = item && item.reason ? String(item.reason) : '';
+    var text = label + (fab ? ' · FN ' + fab : '');
+    if (reason) text += ' — ' + reason;
+    return text;
+  }
+
+  function renderProtocolPdfRefreshList(items) {
+    var list = document.getElementById('protocolPdfRefreshList');
+    if (!list) return;
+    var rows = items || [];
+    list.innerHTML = rows.map(function (item) {
+      return '<li>' + escapeHtml(protocolPdfRefreshLine(item)) + '</li>';
+    }).join('');
+  }
+
+  function showProtocolPdfRefreshModal(jobId, items) {
+    return new Promise(function (resolve) {
+      var modal = document.getElementById('modalProtocolPdfRefresh');
+      var yes = document.getElementById('protocolPdfRefreshBtnYes');
+      var no = document.getElementById('protocolPdfRefreshBtnNo');
+      var msg = document.getElementById('protocolPdfRefreshMsg');
+      var lead = document.getElementById('protocolPdfRefreshLead');
+      if (!modal || !yes || !no) {
+        resolve({ proceed: true, created: false });
+        return;
+      }
+      var settled = false;
+      function finish(result) {
+        if (settled) return;
+        settled = true;
+        closeProtocolPdfRefreshModal = null;
+        yes.onclick = null;
+        no.onclick = null;
+        modal.classList.remove('active');
+        modal.setAttribute('aria-hidden', 'true');
+        resolve(result || { proceed: true, created: false });
+      }
+      closeProtocolPdfRefreshModal = finish;
+      if (lead) {
+        lead.textContent = 'Diese ausgefüllten Protokolle haben kein PDF oder das Formular wurde danach geändert.';
+      }
+      if (msg) msg.textContent = '';
+      yes.textContent = 'PDF erstellen';
+      no.textContent = 'Ohne PDF fortsetzen';
+      yes.disabled = false;
+      no.disabled = false;
+      renderProtocolPdfRefreshList(items);
+      modal.classList.add('active');
+      modal.setAttribute('aria-hidden', 'false');
+      no.onclick = function () { finish({ proceed: true, created: false }); };
+      yes.onclick = function () {
+        yes.disabled = true;
+        no.disabled = true;
+        if (msg) msg.textContent = 'PDFs werden erstellt …';
+        var techId = getTechId();
+        fetch(API_BASE + '/api/protokolle/pdf_refresh', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Technician-Id': String(techId || ''),
+          },
+          body: JSON.stringify({
+            job_id: jobId,
+            technician_id: techId || undefined,
+            items: items,
+          }),
+        })
+          .then(function (response) {
+            return response.json().then(function (data) {
+              return { response: response, data: data };
+            });
+          })
+          .then(function (pack) {
+            if (settled) return;
+            var data = pack.data || {};
+            if (!pack.response.ok && (!data.errors || !data.errors.length)) {
+              throw new Error((data && data.error) || 'PDF-Erstellung fehlgeschlagen.');
+            }
+            var created = Array.isArray(data.created) && data.created.length > 0;
+            var errors = Array.isArray(data.errors) ? data.errors : [];
+            if (!errors.length) {
+              finish({ proceed: true, created: created });
+              return;
+            }
+            if (lead) lead.textContent = 'Einige PDFs konnten nicht erstellt werden.';
+            if (msg) msg.textContent = 'Die übrigen Dateien sind gespeichert.';
+            renderProtocolPdfRefreshList(errors.map(function (err) {
+              return {
+                label: err.label,
+                fab: err.fab,
+                reason: err.error || 'fehlgeschlagen',
+              };
+            }));
+            yes.textContent = 'Trotzdem fortsetzen';
+            no.textContent = 'Abbrechen';
+            yes.disabled = false;
+            no.disabled = false;
+            yes.onclick = function () { finish({ proceed: true, created: created }); };
+            no.onclick = function () { finish({ proceed: false, created: created }); };
+          })
+          .catch(function (err) {
+            if (settled) return;
+            if (lead) lead.textContent = 'PDF-Erstellung fehlgeschlagen.';
+            if (msg) msg.textContent = err && err.message ? err.message : 'Unbekannter Fehler';
+            yes.textContent = 'Trotzdem fortsetzen';
+            no.textContent = 'Abbrechen';
+            yes.disabled = false;
+            no.disabled = false;
+            yes.onclick = function () { finish({ proceed: true, created: false }); };
+            no.onclick = function () { finish({ proceed: false, created: false }); };
+          });
+      };
+    });
+  }
+
+  function askProtocolPdfRefresh(jobId) {
+    if (closeProtocolPdfRefreshModal) {
+      closeProtocolPdfRefreshModal({ proceed: false, created: false, skipped: true });
+    }
+    var token = ++protocolPdfRefreshToken;
+    var techId = getTechId();
+    var qs = 'job_id=' + encodeURIComponent(jobId);
+    if (techId) qs += '&technician_id=' + encodeURIComponent(String(techId));
+    return fetch(API_BASE + '/api/protokolle/pdf_freshness?' + qs, {
+      headers: techId ? { 'X-Technician-Id': String(techId) } : {},
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { response: response, data: data };
+        });
+      })
+      .then(function (pack) {
+        if (token !== protocolPdfRefreshToken) return { proceed: false, created: false, skipped: true };
+        var data = pack.data || {};
+        if (!pack.response.ok || data.ok === false) return { proceed: true, created: false };
+        var items = Array.isArray(data.items) ? data.items : [];
+        if (!items.length) return { proceed: true, created: false };
+        return showProtocolPdfRefreshModal(jobId, items).then(function (result) {
+          if (token !== protocolPdfRefreshToken) {
+            return { proceed: false, created: !!(result && result.created), skipped: true };
+          }
+          return result;
+        });
+      })
+      .catch(function () {
+        if (token !== protocolPdfRefreshToken) return { proceed: false, created: false, skipped: true };
+        return { proceed: true, created: false };
+      });
+  }
+
   function finishAndCleanup(jobId, triggerButton) {
-    openFinishJobFilesModal(jobId, triggerButton);
+    askProtocolPdfRefresh(jobId).then(function (res) {
+      if (!res || res.proceed === false || res.skipped) return;
+      openFinishJobFilesModal(jobId, triggerButton);
+    });
   }
 
   function releaseDienstreiseJob(jobId, triggerButton) {
@@ -13817,6 +13950,9 @@
           });
         });
         fileNameCol.appendChild(openBtn);
+        if (typeof window.kukpitAppendFileAvailability === 'function') {
+          window.kukpitAppendFileAvailability(fileNameCol, n.is_offline === true || n.is_offline === 1);
+        }
         fileRow.appendChild(fileNameCol);
         var sizeCell = document.createElement('div');
         sizeCell.className = 'dienstreise-explorer-size';
@@ -13928,7 +14064,6 @@
     var msg = opts.msgEl || null;
     var treeHost = opts.treeHost || null;
     var toggleEl = opts.toggleEl != null ? opts.toggleEl : null;
-    var allowOnline = opts.allowOnline !== false;
     var cacheOnly = opts.cacheOnly === true;
     var technicianId = getTechId();
     if (!treeHost) return;
@@ -14020,43 +14155,31 @@
         if (localTree && localTree.ok && Array.isArray(localTree.tree) && localTree.tree.length) {
           return renderTree(localTree.tree, '', localTree.folder);
         }
-        if (localTree && localTree.ok && localTree.folder && allowOnline === false) {
+        if (localTree && localTree.ok && localTree.folder) {
           return renderTree([], localTree.message || '', localTree.folder);
         }
       }
-      if (!allowOnline) {
-        if (msg) {
-          if (jobId && localTree && localTree.folder) {
-            renderTree([], localTree.message || '', localTree.folder);
-          } else {
-            msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten für diese FN. Bitte Anlagenstamm synchronisieren (lädt Ordnerstruktur aus der Server-DB) – Dateien werden bei Bedarf online geladen und lokal zwischengespeichert.';
-          }
-        }
-        return;
-      }
-      // Gleicher Endpoint wie Anlagenakte DATEIEN: Cache, sonst Dispo-DB-Baum, und Cache füllen.
       var files = await fetchJsonLocal(
         API_BASE +
           '/api/anlagenstamm_files_list.php?fab=' +
           encodeURIComponent(fab) +
           '&fabrikationsnummer=' +
           encodeURIComponent(fab) +
-          '&_ts=' +
-          Date.now(),
+          '&cache_only=1',
         hdrs,
-        25000,
+        8000,
       );
+      if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
       var pnRaw = files && files.projekte_neu ? files.projekte_neu : {};
       var tree = Array.isArray(pnRaw.tree) ? pnRaw.tree : [];
       if (tree.length) {
         renderTree(tree, '', pnRaw.folder_name || pnRaw.root_name);
         return;
       }
-      if (!pnRaw || pnRaw.enabled === false) {
-        if (msg) msg.textContent = 'PROJEKTE NEU ist für diese Anlage nicht verfügbar (weder lokal noch am Server).';
-        return;
+      if (msg) {
+        msg.textContent = 'Keine lokalen PROJEKTE-NEU-Daten für diese FN.';
+        msg.classList.remove('projektdaten-projekte-neu-folder');
       }
-      if (msg) msg.textContent = 'Keine Dokumente im PROJEKTE-NEU-Baum gefunden.';
     } catch (e) {
       if (!isProjekteNeuHostTokenCurrent(treeHost, loadToken)) return;
       var errText = (e && e.message) ? e.message : String(e);
@@ -14368,7 +14491,7 @@
         window.openProtokolleInbetriebnahme();
       }
       if (name === 'protokolle-schulung' && typeof window.openProtokolleSchulung === 'function') {
-        window.openProtokolleSchulung();
+        window.openProtokolleSchulung(startPageActiveJobId || '');
       }
       return;
     }
@@ -15604,11 +15727,15 @@
   }
 
   function dienstreiseAnlageOfflineBadge(e) {
-    if (!isDienstreiseAnlageDbEntry(e) || e.isDirectory) return '';
-    if (e.isOffline || e.is_offline) {
-      return ' <span class="dienstreise-anlage-offline-badge" title="Offline verfügbar" style="color:#2e7d32;font-size:0.75rem;">●</span>';
+    if (!e || e.isDirectory) return '';
+    var offline = !!(e.isOffline || e.is_offline);
+    if (typeof window.kukpitFileAvailabilityHtml === 'function') {
+      return ' ' + window.kukpitFileAvailabilityHtml(offline);
     }
-    return ' <span class="dienstreise-anlage-online-badge muted" title="Online – wird beim Öffnen geladen" style="font-size:0.75rem;">☁</span>';
+    if (offline) {
+      return ' <span class="kukpit-file-badge kukpit-file-badge--offline" title="Offline verfügbar" aria-label="Offline verfügbar"><span class="kukpit-file-badge-mark" aria-hidden="true">✓</span></span>';
+    }
+    return ' <span class="kukpit-file-badge kukpit-file-badge--online" title="Nur online" aria-label="Nur online">☁</span>';
   }
 
   function openDienstreiseAnlageDbFile(row, jobId) {
@@ -28885,6 +29012,7 @@
       selectedPhotos: {},
       galleryDraft: {},
     };
+    var kundenCatalogSeq = 0;
 
     function escapeHtml(s) {
       if (s == null) return '';
@@ -29086,7 +29214,9 @@
       }
     }
 
-    async function loadCatalog() {
+    async function loadCatalog(opts) {
+      var seq = ++kundenCatalogSeq;
+      var skipPdfCheck = !!(opts && opts.skipPdfCheck);
       state.documents = [];
       state.photos = [];
       state.recipients = [];
@@ -29102,6 +29232,13 @@
         if (recipientsHint) recipientsHint.value = '–';
         return;
       }
+      if (!skipPdfCheck && typeof askProtocolPdfRefresh === 'function') {
+        var decision = await askProtocolPdfRefresh(jobId);
+        if (seq !== kundenCatalogSeq) return;
+        if (decision && decision.skipped) return;
+        if (decision && decision.created) return loadCatalog({ skipPdfCheck: true });
+      }
+      if (seq !== kundenCatalogSeq) return;
       try {
         var r = await fetch(
           API_BASE + '/api/protokolle/kunden-dokumentation?job_id=' + encodeURIComponent(jobId) +
@@ -29109,6 +29246,7 @@
           { headers: { 'X-Technician-Id': String(getTechId() || '') } },
         );
         var data = await r.json().catch(function () { return {}; });
+        if (seq !== kundenCatalogSeq) return;
         if (!r.ok || !data.ok) {
           setHint(statusHint, data.error || 'Laden fehlgeschlagen.', true);
           renderDocs();

@@ -157,6 +157,13 @@ const {
   isFnFolderAlias,
 } = require('./lib/projekte-neu-local');
 const {
+  isKukpitFileOffline,
+  annotateTreeOffline,
+  resolveKukpitOfflinePath,
+  resolveStammTedFile,
+  stammTedFabDir,
+} = require('./lib/kukpit-file-availability');
+const {
   buildMonteurMontageFolderName,
   buildFnProjectFolderName,
   buildMonteurWorkRelPath,
@@ -308,6 +315,7 @@ const {
   decideSharedFile,
 } = require('./lib/multi-device-sync');
 const protocolDrafts = require('./lib/protocol-drafts-local');
+const protocolPdfFreshness = require('./lib/protocol-pdf-freshness');
 const { chooseServiceprotokollPrior } = require('./lib/serviceprotokoll-prior');
 const {
   isFinishUploadRelPath,
@@ -361,6 +369,7 @@ const {
   prepareAnlagenstammSyncRun,
   finalizeAnlagenstammSyncRun,
   setDispoDeviceIdResolver,
+  parseTedMechanik,
 } = require('./lib/anlagenstamm-local');
 setDispoDeviceIdResolver(() => getOrCreateDeviceId(DB_DIR));
 setAnlagenstammProxyDeviceIdResolver(() => getOrCreateDeviceId(DB_DIR));
@@ -1788,20 +1797,9 @@ function createApp(db) {
     resolveDispoServerCreds: (body) => resolveDispoServerCreds(body || {}),
     readAnlagenstammTreeCache,
     upsertAnlagenstammTreeCache,
-    buildLocalProjekteNeuTreeForFab: (technicianId, fab) => {
-      const f = String(fab || '').trim();
-      if (!f) return null;
-      const cached = readAnlagenstammTreeCache(db, f);
-      if (cached && cached.tree && cached.tree.length) {
-        const first = cached.tree[0];
-        return {
-          enabled: cached.projects_enabled !== false,
-          tree: cached.tree,
-          root_name: first && (first.name || first.label) ? String(first.name || first.label) : '',
-        };
-      }
-      return null;
-    },
+    buildLocalProjekteNeuTreeForFab: (technicianId, fab) => localProjekteNeuTreeForFab(technicianId, fab),
+    annotateProjekteNeuTree: (technicianId, fab, tree) => annotatePnTreeOffline(technicianId, fab, tree),
+    annotateTedByFab: (technicianId, tedByFab) => annotateTedByFabOffline(technicianId, tedByFab),
     getDispoUsername: () => resolveDispoServerCreds({}).serverUsername || '',
     getDispoPassword: () => resolveDispoServerCreds({}).serverPassword || '',
     getDispoBaseUrl: () => resolveDispoServerCreds({}).baseUrl || '',
@@ -4345,6 +4343,245 @@ function createApp(db) {
     };
   }
 
+  /** TED-Excel jeder Anlage aus anlagenstamm_local, nicht nur vom angenommenen Auftrag. */
+  async function pullAnlagenstammTedCache(base, authHeader, signal, creds) {
+    const rows = db
+      .prepare(
+        `SELECT TRIM(fabrikationsnummer) AS fab, ted_mechanik FROM anlagenstamm_local
+         WHERE TRIM(COALESCE(ted_mechanik, '')) NOT IN ('', '[]')`,
+      )
+      .all();
+    let downloaded = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const row of rows) {
+      if (signal && signal.aborted) break;
+      const fab = String(row.fab || '').trim();
+      if (!fab) continue;
+      const list = parseTedMechanik(row.ted_mechanik);
+      for (const item of list) {
+        if (signal && signal.aborted) break;
+        const rel =
+          item && typeof item === 'object'
+            ? String(item.rel_path || '').trim().replace(/\\/g, '/')
+            : String(item || '').trim().replace(/\\/g, '/');
+        const fileName =
+          item && typeof item === 'object' ? String(item.file_name || '').trim() : '';
+        if (!rel || rel.includes('..')) continue;
+        if (resolveStammTedFile(DB_DIR, fab, rel, fileName)) {
+          skipped++;
+          continue;
+        }
+        let dl = null;
+        try {
+          dl = await downloadMechanikTedByFabMobile(base, rel, fab, authHeader, signal);
+        } catch (_) {
+          dl = null;
+        }
+        if (!dl || !dl.buf || !dl.buf.length) {
+          try {
+            dl = await downloadMechanikTedViaSessionProxy(DB_DIR, creds && creds.technicianId, 0, rel, fab, creds);
+          } catch (_) {
+            dl = null;
+          }
+        }
+        if (!dl || !dl.buf || !dl.buf.length) {
+          failed++;
+          console.warn('[anlagenstamm_ted]', fab, rel, 'Datei nicht gefunden.');
+          await yieldEventLoop();
+          continue;
+        }
+        try {
+          const safeName = safeTedLocalFileName({ rel_path: rel, file_name: fileName, fab });
+          const destDir = stammTedFabDir(DB_DIR, fab);
+          fs.mkdirSync(destDir, { recursive: true });
+          fs.writeFileSync(path.join(destDir, safeName), dl.buf);
+          downloaded++;
+        } catch (err) {
+          failed++;
+          console.warn(
+            '[anlagenstamm_ted]',
+            fab,
+            rel,
+            err && err.message ? err.message : err,
+          );
+        }
+        await yieldEventLoop();
+      }
+    }
+    return { downloaded, skipped, failed, fabs: rows.length };
+  }
+
+  let anlagenstammTedCachePull = null;
+
+  /** TED-Dateien im Hintergrund. Der übrige Sync wartet nicht darauf. */
+  function startAnlagenstammTedCachePull(base, authHeader, creds) {
+    if (anlagenstammTedCachePull) {
+      console.log('[anlagenstamm_ted] läuft bereits parallel, kein zweiter Lauf');
+      return;
+    }
+    anlagenstammTedCachePull = pullAnlagenstammTedCache(base, authHeader, undefined, creds)
+      .then((tedCache) => {
+        console.log(
+          '[anlagenstamm_ted] parallel fertig:',
+          tedCache.downloaded,
+          'neu,',
+          tedCache.skipped,
+          'vorhanden,',
+          tedCache.failed,
+          'fehlgeschlagen',
+        );
+      })
+      .catch((err) => {
+        console.warn('[anlagenstamm_ted] parallel:', err && err.message ? err.message : err);
+      })
+      .finally(() => {
+        anlagenstammTedCachePull = null;
+      });
+  }
+
+  let anlagenstammPnTreeFill = null;
+
+  /**
+   * Ordnerstrukturen, die der Baum-Export nicht geliefert hat, einzeln aus files_list holen.
+   * Läuft neben TED und dem übrigen Sync, eine Anfrage nach der anderen.
+   */
+  async function pullAnlagenstammPnTreesFromFilesList(base, authHeader, creds) {
+    const technicianId = creds && creds.technicianId;
+    const rows = db
+      .prepare(
+        `SELECT TRIM(fabrikationsnummer) AS fab
+           FROM anlagenstamm_local
+          WHERE TRIM(COALESCE(pn_root_name, '')) <> ''
+          ORDER BY fabrikationsnummer`,
+      )
+      .all();
+    const hdr = dispoMonteurFetchHeaders(technicianId, authHeader);
+    const root = String(base || '').replace(/\/$/, '');
+    let written = 0;
+    let skipped = 0;
+    let failed = 0;
+    let empty = 0;
+    for (const row of rows) {
+      const fab = String(row.fab || '').trim();
+      if (!fab) continue;
+      let existing = null;
+      try {
+        existing = readAnlagenstammTreeCache(db, fab);
+      } catch (_) {
+        existing = null;
+      }
+      if (
+        existing &&
+        ((Array.isArray(existing.tree) && existing.tree.length > 0) ||
+          existing.content_signature === 'files_list_empty')
+      ) {
+        skipped += 1;
+        continue;
+      }
+      const url =
+        root +
+        '/dispo_api/api/anlagenstamm_files_list.php?technician_id=' +
+        encodeURIComponent(technicianId) +
+        '&fab=' +
+        encodeURIComponent(fab);
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 45000);
+      try {
+        const r = await fetch(url, { headers: hdr, signal: ac.signal });
+        const data = await r.json().catch(() => ({}));
+        const pn = data && data.projekte_neu;
+        const tree = pn && Array.isArray(pn.tree) ? pn.tree : null;
+        if (!r.ok || !tree) {
+          failed += 1;
+          if (failed <= 5) {
+            console.warn(
+              '[anlagenstamm_pn_tree] files_list',
+              fab,
+              (data && data.error) || r.status,
+            );
+          }
+        } else {
+          const sig = tree.length ? 'files_list' : 'files_list_empty';
+          await dbLock.runWithDbLock(async () => {
+            upsertAnlagenstammTreeCache(db, fab, pn, { content_signature: sig });
+          });
+          if (tree.length) {
+            written += 1;
+            if (written === 1) {
+              console.log('[anlagenstamm_pn_tree] erster Stamm offline:', fab, 'Einträge', tree.length);
+            }
+          } else {
+            empty += 1;
+          }
+          if ((written + empty) % 25 === 0) {
+            try {
+              save();
+            } catch (_) {}
+          }
+        }
+      } catch (err) {
+        failed += 1;
+        if (failed <= 5) {
+          console.warn(
+            '[anlagenstamm_pn_tree] files_list',
+            fab,
+            err && err.message ? err.message : err,
+          );
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+      if ((written + empty + failed) % 50 === 0 && written + empty + failed > 0) {
+        console.log(
+          '[anlagenstamm_pn_tree] Nachzug',
+          written,
+          'Bäume,',
+          empty,
+          'leer,',
+          skipped,
+          'vorhanden,',
+          failed,
+          'fehlgeschlagen, von',
+          rows.length,
+        );
+      }
+      await yieldEventLoop();
+    }
+    try {
+      save();
+    } catch (_) {}
+    return { written, skipped, empty, failed, fabs: rows.length };
+  }
+
+  function startAnlagenstammPnTreeFill(base, authHeader, creds) {
+    if (anlagenstammPnTreeFill) {
+      console.log('[anlagenstamm_pn_tree] Nachzug läuft bereits parallel');
+      return;
+    }
+    console.log('[anlagenstamm_pn_tree] Nachzug der Ordnerstrukturen gestartet');
+    anlagenstammPnTreeFill = pullAnlagenstammPnTreesFromFilesList(base, authHeader, creds)
+      .then((result) => {
+        console.log(
+          '[anlagenstamm_pn_tree] Nachzug fertig:',
+          result.written,
+          'Bäume,',
+          result.empty,
+          'leer,',
+          result.skipped,
+          'vorhanden,',
+          result.failed,
+          'fehlgeschlagen',
+        );
+      })
+      .catch((err) => {
+        console.warn('[anlagenstamm_pn_tree] Nachzug:', err && err.message ? err.message : err);
+      })
+      .finally(() => {
+        anlagenstammPnTreeFill = null;
+      });
+  }
+
   app.post('/api/dienstreise/create_folder', express.json(), (req, res) => {
     try {
       const body = req.body || {};
@@ -4681,7 +4918,14 @@ function createApp(db) {
           db,
           readTreeCache: (fab) => readAnlagenstammTreeCache(db, fab),
           resolveLocalFile: (lid, fab, pnRel) =>
-            resolveProjekteNeuLocalFilePath(lid, fab, pnRel, { skipDeepSearch: true }),
+            resolveKukpitOfflinePath({
+              resolveReiseFile: (_f, rel) =>
+                resolveProjekteNeuLocalFilePath(lid, fab, rel, { skipDeepSearch: true }),
+              dbDir: DB_DIR,
+              fab,
+              relPath: pnRel,
+              reiseDir: resolveDienstreiseReiseDirForJob(lid, { createIfMissing: false }),
+            }),
         });
         if (anlageResult) {
           return res.json({
@@ -4765,6 +5009,7 @@ function createApp(db) {
           isDirectory,
           size,
           mtime,
+          isOffline: !isDirectory,
         });
         listed += 1;
         if (listed % 8 === 0) await yieldEventLoop();
@@ -5057,6 +5302,105 @@ function createApp(db) {
     }
     if (!name) name = sanitizeDienstreiseFolderPart(fabStr);
     return name;
+  }
+
+  function localProjekteNeuTreeForFab(technicianId, fab) {
+    const f = String(fab || '').trim();
+    if (!f) return null;
+    const cached = readAnlagenstammTreeCache(db, f);
+    if (cached && cached.tree && cached.tree.length) {
+      const first = cached.tree[0];
+      return {
+        enabled: cached.projects_enabled !== false,
+        tree: cached.tree,
+        root_name: first && (first.name || first.label) ? String(first.name || first.label) : '',
+        source: 'local_cache',
+      };
+    }
+    let jobId = null;
+    try {
+      jobId = technicianId ? resolveLocalJobIdForFab(technicianId, f) : null;
+    } catch (_) {}
+    if (!jobId) return null;
+    const ctx = getProjekteNeuLocalContext(jobId, f);
+    if (!ctx || !ctx.resolved || !ctx.resolved.root) return null;
+    let scanned;
+    try {
+      scanned = scanProjekteNeuTree(ctx.resolved.root, {});
+    } catch (_) {
+      return null;
+    }
+    if (!scanned || !Array.isArray(scanned.tree) || !scanned.tree.length) return null;
+    return {
+      enabled: true,
+      tree: scanned.tree,
+      root_name: ctx.resolved.folderName || '',
+      source: 'local_scan',
+    };
+  }
+
+  /** Ein Ordner-Kontext pro Auftrag, danach nur noch einzelne Dateiprüfungen. */
+  function projekteNeuOfflineProbe(localJobId, fab) {
+    const fabStr = String(fab || '').trim();
+    let ctx = null;
+    if (localJobId && fabStr) {
+      try {
+        ctx = getProjekteNeuLocalContext(localJobId, fabStr);
+      } catch (_) {}
+    }
+    let reiseDir = ctx && ctx.reiseDir ? ctx.reiseDir : null;
+    if (!reiseDir && localJobId) {
+      try {
+        reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+      } catch (_) {}
+    }
+    return (relPath, fileName) =>
+      resolveKukpitOfflinePath({
+        resolveReiseFile: (_fab, rel) =>
+          ctx ? resolveProjekteNeuLocalFilePathForCtx(ctx, rel, { skipDeepSearch: true }) : null,
+        dbDir: DB_DIR,
+        fab: fabStr,
+        relPath,
+        fileName,
+        reiseDir,
+      });
+  }
+
+  function annotatePnTreeOffline(technicianId, fab, tree) {
+    const fabStr = String(fab || '').trim();
+    if (!fabStr || !Array.isArray(tree)) return Array.isArray(tree) ? tree : [];
+    let jobId = null;
+    try {
+      jobId = technicianId ? resolveLocalJobIdForFab(technicianId, fabStr) : null;
+    } catch (_) {}
+    const probe = projekteNeuOfflineProbe(jobId, fabStr);
+    return annotateTreeOffline(tree, (rel, node) => !!probe(rel, node && (node.name || node.file_name)));
+  }
+
+  function tedEntryIsOffline(localJobId, fab, relPath, fileName) {
+    return !!projekteNeuOfflineProbe(localJobId, fab)(relPath, fileName);
+  }
+
+  function annotateTedByFabOffline(technicianId, tedByFab) {
+    const src = tedByFab && typeof tedByFab === 'object' ? tedByFab : {};
+    const out = {};
+    for (const fab of Object.keys(src)) {
+      let jobId = null;
+      try {
+        jobId = technicianId ? resolveLocalJobIdForFab(technicianId, fab) : null;
+      } catch (_) {}
+      out[fab] = (Array.isArray(src[fab]) ? src[fab] : []).map((t) =>
+        Object.assign({}, t, {
+          is_offline: tedEntryIsOffline(
+            jobId,
+            fab,
+            t && t.rel_path,
+            t && t.file_name,
+          ),
+        }),
+      );
+    }
+    return out;
   }
 
   function getProjekteNeuLocalContext(localJobId, fab) {
@@ -5775,7 +6119,7 @@ function createApp(db) {
         const mapped = getJobRowByLocalOrServerId(rawJobId);
         jobId = mapped ? mapped.id : rawJobId;
       }
-      if (!rescan) {
+        if (!rescan) {
         const cached = readAnlagenstammTreeCache(db, fab);
         if (cached && cached.tree.length > 0) {
           const fromCacheRaw =
@@ -5790,11 +6134,24 @@ function createApp(db) {
             ok: true,
             local: true,
             enabled: true,
-            tree: cached.tree,
+            tree: annotatePnTreeOffline(calTechId, fab, cached.tree),
             from_cache: true,
             synced_at: cached.synced_at,
             job_id: jobId,
             folder: folderFromCache,
+          });
+        }
+        const scannedLocal = localProjekteNeuTreeForFab(calTechId, fab);
+        if (scannedLocal && scannedLocal.tree && scannedLocal.tree.length) {
+          return res.json({
+            ok: true,
+            local: true,
+            enabled: true,
+            tree: annotatePnTreeOffline(calTechId, fab, scannedLocal.tree),
+            from_cache: false,
+            from_scan: true,
+            job_id: jobId,
+            folder: scannedLocal.root_name || '',
           });
         }
         const suggested = canonicalProjekteNeuFolderForJob(jobId, fab);
@@ -5805,7 +6162,7 @@ function createApp(db) {
           tree: [],
           folder: suggested || '',
           from_cache: false,
-          message: 'Kein lokaler PROJEKTE-NEU-Cache für diese FN.',
+          message: 'Kein lokaler PROJEKTE-NEU-Ordner für diese FN.',
         });
       }
       const ctx = getProjekteNeuLocalContext(jobId, fab);
@@ -5833,7 +6190,7 @@ function createApp(db) {
         ok: true,
         local: true,
         enabled: true,
-        tree: scanned.tree,
+        tree: annotatePnTreeOffline(calTechId, fab, scanned.tree),
         truncated: scanned.truncated,
         folder: ctx.resolved.folderName,
         job_id: jobId,
@@ -9336,6 +9693,358 @@ function createApp(db) {
     }
   });
 
+  function statStoredPdfRefs(reiseDir, draft) {
+    return protocolPdfFreshness.collectStoredPdfRefs(draft).map((ref) => {
+      const rel = String(ref.rel || '').trim();
+      let full = '';
+      if (rel && path.isAbsolute(rel) && fs.existsSync(rel)) full = rel;
+      else if (rel && reiseDir) {
+        const candidate = path.normalize(path.join(reiseDir, rel.replace(/\//g, path.sep)));
+        if (fs.existsSync(candidate)) full = candidate;
+      }
+      let mtimeMs = null;
+      if (full) {
+        try {
+          mtimeMs = fs.statSync(full).mtimeMs;
+        } catch (_) {
+          mtimeMs = null;
+        }
+      }
+      return {
+        lang: ref.lang || protocolPdfFreshness.langFromPdfName(rel),
+        exists: !!full,
+        mtimeMs,
+        rel,
+        full,
+      };
+    });
+  }
+
+  function listArbeitsnachweisPdfStats(reiseDir, number) {
+    const ident = String(number || '').trim();
+    if (!reiseDir || !ident) return [];
+    const dir = path.join(reiseDir, 'Dokumente_Monteur', 'Arbeitsnachweise');
+    if (!fs.existsSync(dir)) return [];
+    const needle = ident.replace(/[^\w.-]+/g, '_');
+    let names = [];
+    try {
+      names = fs.readdirSync(dir);
+    } catch (_) {
+      return [];
+    }
+    return names
+      .filter((name) => /\.pdf$/i.test(name) && name.indexOf(needle) !== -1)
+      .map((name) => {
+        const full = path.join(dir, name);
+        let mtimeMs = null;
+        try {
+          mtimeMs = fs.statSync(full).mtimeMs;
+        } catch (_) {
+          mtimeMs = null;
+        }
+        return {
+          lang: protocolPdfFreshness.langFromPdfName(name),
+          exists: true,
+          mtimeMs,
+          rel: 'Dokumente_Monteur/Arbeitsnachweise/' + name,
+          full,
+        };
+      });
+  }
+
+  function pushProtocolPdfGap(gaps, kind, fab, documentId, label, assessed) {
+    if (!assessed || assessed.status === 'current') return;
+    gaps.push({
+      kind,
+      label: label || protocolPdfFreshness.labelForKind(kind),
+      fab: fab || '',
+      document_id: documentId || 0,
+      status: assessed.status,
+      reason: assessed.reason,
+      languages: assessed.languages || [],
+    });
+  }
+
+  function listProtocolPdfGaps(localJobId) {
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false });
+    const gaps = [];
+    const drafts = protocolDrafts.listDraftsForJob(db, localJobId);
+    drafts.forEach((item) => {
+      const kind = item.kind;
+      const consider = (draft, fab) => {
+        const assessed = protocolPdfFreshness.assessProtocolPdf({
+          kind,
+          draft,
+          pdfs: statStoredPdfRefs(reiseDir, draft),
+          formUpdatedMs: protocolPdfFreshness.formUpdatedMs(
+            draft,
+            protocolDrafts.isByFabKind(kind) ? null : item.local_updated_at,
+          ),
+          canWrite: protocolPdfFreshness.canWriteProtocolPdf(kind),
+        });
+        pushProtocolPdfGap(gaps, kind, fab, 0, protocolPdfFreshness.labelForKind(kind), assessed);
+      };
+      if (!protocolDrafts.isByFabKind(kind)) {
+        consider(item.payload || {}, '');
+        return;
+      }
+      const byFab = item.payload && item.payload.byFab && typeof item.payload.byFab === 'object' ? item.payload.byFab : {};
+      Object.keys(byFab).forEach((fab) => consider(byFab[fab], String(fab || '').trim()));
+    });
+    try {
+      anLocal.ensureArbeitsnachweisLocalSchema(db);
+      const docs = anLocal.listForLocalJob(db, localJobId) || [];
+      docs.forEach((doc) => {
+        const loaded = anLocal.loadRow(db, doc.id);
+        if (!loaded || !loaded.document) return;
+        const source = anLocal.toDispoSavePayload(loaded, db);
+        if (!source || anLocal.contentWeight(source) <= 0) return;
+        const draft = Object.assign({}, source, {
+          pdf_content_hash: loaded.document.pdf_content_hash || '',
+          updated_at: doc.updated_at || loaded.document.updated_at || '',
+        });
+        const number = String(doc.number || loaded.document.number || '').trim();
+        const assessed = protocolPdfFreshness.assessProtocolPdf({
+          kind: 'arbeitsnachweis',
+          draft,
+          pdfs: listArbeitsnachweisPdfStats(reiseDir, number),
+          formUpdatedMs: protocolPdfFreshness.formUpdatedMs(draft),
+        });
+        pushProtocolPdfGap(
+          gaps,
+          'arbeitsnachweis',
+          '',
+          doc.id,
+          number ? 'Arbeitsnachweis ' + number : 'Arbeitsnachweis',
+          assessed,
+        );
+      });
+    } catch (anErr) {
+      console.warn('[pdf_freshness] arbeitsnachweis', anErr && anErr.message ? anErr.message : anErr);
+    }
+    return gaps;
+  }
+
+  function pdfMetaFromSaved(reiseDir, savedAbs, langs) {
+    const paths = [];
+    (savedAbs || []).forEach((abs, index) => {
+      if (!abs) return;
+      let rel = '';
+      if (reiseDir) {
+        rel = path.relative(reiseDir, abs).replace(/\\/g, '/');
+        if (!rel || rel.startsWith('..')) rel = '';
+      }
+      if (!rel) rel = String(abs);
+      const lang = (langs && langs[index]) || protocolPdfFreshness.langFromPdfName(abs);
+      paths.push({ rel, lang: lang || '' });
+    });
+    return {
+      last_pdf_rel: paths[0] ? paths[0].rel : '',
+      last_pdf_paths: paths,
+      pdf_rels: paths.map((item) => item.rel),
+    };
+  }
+
+  async function writeSchulungsprotokollPdfsFromPayload(localJobId, technicianId, payload) {
+    const languages = protocolPdfFreshness.wantedLanguages(payload);
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true });
+    if (!reiseDir) throw new Error('Kein Reiseordner.');
+    const savedAbs = [];
+    const savedLangs = [];
+    const fabs = (payload.anlagen || [])
+      .map((row) => String((row && (row.fabrikationsnummer || row.fn)) || '').trim())
+      .filter(Boolean);
+    const fabTargets = fabs.length ? fabs : [''];
+    for (const lang of languages) {
+      const pdfBytes = await protocolPdf.generateSchulungsprotokollPdfBuffer(payload, { lang });
+      const pdfFilename = lang === 'en' ? 'Schulungsprotokoll_EN.pdf' : 'Schulungsprotokoll_DE.pdf';
+      const seenDirs = new Set();
+      for (const fab of fabTargets) {
+        const target = await resolveMonteurProtokollePdfTarget(reiseDir, localJobId, fab, technicianId);
+        if (!target || !target.targetDir || seenDirs.has(target.targetDir)) continue;
+        seenDirs.add(target.targetDir);
+        if (!fs.existsSync(target.targetDir)) fs.mkdirSync(target.targetDir, { recursive: true });
+        const absPdf = path.join(target.targetDir, pdfFilename);
+        writeFileWithRetry(absPdf, pdfBytes);
+        savedAbs.push(absPdf);
+        savedLangs.push(lang);
+        if (target.relDir) {
+          protectPathIfUnderDokumenteMonteur(
+            db,
+            localJobId,
+            String(target.relDir).replace(/\\/g, '/').replace(/\/+$/, '') + '/' + pdfFilename,
+          );
+        }
+      }
+    }
+    if (!savedAbs.length) throw new Error('Schulungsprotokoll-PDF konnte nicht gespeichert werden.');
+    return { savedAbs, savedLangs, reiseDir };
+  }
+
+  async function writeArbeitsnachweisPdfNow(localJobId, technicianId, documentId) {
+    const loaded = anLocal.loadRow(db, documentId);
+    if (!loaded || !loaded.document) throw new Error('Arbeitsnachweis nicht gefunden.');
+    const payload = anLocal.mergeJobFabsIntoPayload(db, anLocal.toPublic(loaded, db));
+    const source = anLocal.toDispoSavePayload(anLocal.loadRow(db, documentId) || loaded, db);
+    const lang = payload.language === 'en' || (payload.document && payload.document.language === 'en') ? 'en' : 'de';
+    payload.language = lang;
+    if (!payload.technician_signature_png && technicianId) {
+      try {
+        payload.technician_signature_png = await resolveTechnicianSignaturePng(technicianId, payload);
+      } catch (_) {
+        /* Profil-Unterschrift bleibt leer */
+      }
+    }
+    const pdfBytes = await protocolPdf.generateArbeitsnachweisPdfBuffer(payload, { lang });
+    const num = (payload.document && payload.document.number) || ('ohne-Nummer-' + documentId);
+    const safe = String(num).replace(/[^\w.-]+/g, '_') || ('ohne-Nummer-' + documentId);
+    const fileName = labeledProtocolPdfFilename('arbeitsnachweis', safe, lang);
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true });
+    if (!reiseDir) throw new Error('Kein Reiseordner.');
+    const dir = path.join(reiseDir, 'Dokumente_Monteur', 'Arbeitsnachweise');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const full = path.join(dir, fileName);
+    writeFileWithRetry(full, pdfBytes);
+    anLocal.setPdfContentHash(db, documentId, protocolPdfFreshness.contentHash(source));
+    return full;
+  }
+
+  async function refreshOneProtocolPdf(localJobId, technicianId, item) {
+    const kind = String(item.kind || '').trim();
+    if (!protocolPdfFreshness.canWriteProtocolPdf(kind)) {
+      throw new Error('PDF-Erzeugung für diese Art fehlt');
+    }
+    const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true });
+    if (!reiseDir) throw new Error('Kein Reiseordner.');
+    if (kind === 'arbeitsnachweis') {
+      await writeArbeitsnachweisPdfNow(localJobId, technicianId, parseInt(item.document_id, 10) || 0);
+      return;
+    }
+    if (kind === 'schulungsprotokoll') {
+      const meta = protocolDrafts.readDraft(db, localJobId, 'schulungsprotokoll.json', reiseDir);
+      const payload = (meta && meta.payload) || {};
+      const contentHash = protocolPdfFreshness.contentHash(payload);
+      const written = await writeSchulungsprotokollPdfsFromPayload(localJobId, technicianId, payload);
+      protocolDrafts.stampPdfContentHash(
+        db,
+        localJobId,
+        kind,
+        '',
+        contentHash,
+        pdfMetaFromSaved(written.reiseDir, written.savedAbs, written.savedLangs),
+      );
+      return;
+    }
+    if (kind === 'montagebericht') {
+      const meta = protocolDrafts.readDraft(db, localJobId, 'montagebericht.json', reiseDir);
+      const payload = (meta && meta.payload) || {};
+      const contentHash = protocolPdfFreshness.contentHash(payload);
+      const result = await generateArchivProtocolPdfsFromJson({
+        reiseDir,
+        localJobId,
+        technicianId,
+        payload,
+        kind: 'montagebericht',
+      });
+      protocolDrafts.stampPdfContentHash(
+        db,
+        localJobId,
+        kind,
+        '',
+        contentHash,
+        pdfMetaFromSaved(reiseDir, result.savedAbs),
+      );
+      return;
+    }
+    const basename = protocolDrafts.basenameForKind(kind);
+    if (!basename) throw new Error('PDF-Erzeugung für diese Art fehlt');
+    const fab = String(item.fab || '').trim();
+    const meta = protocolDrafts.readDraft(db, localJobId, basename, reiseDir);
+    const store = (meta && meta.payload) || {};
+    const rec = store.byFab && store.byFab[fab];
+    if (!rec || typeof rec !== 'object') throw new Error('Protokoll nicht gefunden.');
+    const contentHash = protocolPdfFreshness.contentHash(rec);
+    const result = await generateArchivProtocolPdfsFromJson({
+      reiseDir,
+      localJobId,
+      technicianId,
+      payload: { byFab: { [fab]: rec } },
+      kind: protocolPdfFreshness.archivPdfKind(kind),
+    });
+    protocolDrafts.stampPdfContentHash(
+      db,
+      localJobId,
+      kind,
+      fab,
+      contentHash,
+      pdfMetaFromSaved(reiseDir, result.savedAbs),
+    );
+  }
+
+  function sameProtocolPdfItem(a, b) {
+    return String((a && a.kind) || '') === String((b && b.kind) || '')
+      && String((a && a.fab) || '') === String((b && b.fab) || '')
+      && (parseInt(a && a.document_id, 10) || 0) === (parseInt(b && b.document_id, 10) || 0);
+  }
+
+  app.get('/api/protokolle/pdf_freshness', (req, res) => {
+    try {
+      const localJobId = parseInt(req.query.job_id, 10);
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      const job = db.prepare('SELECT id FROM jobs WHERE id = ?').get(localJobId);
+      if (!job) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      return res.json({ ok: true, items: listProtocolPdfGaps(localJobId) });
+    } catch (e) {
+      console.warn('[pdf_freshness]', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  app.post('/api/protokolle/pdf_refresh', express.json({ limit: '1mb' }), async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const localJobId = parseInt(body.job_id, 10);
+      const technicianId = getTechnicianId(req) || parseInt(body.technician_id, 10) || 0;
+      if (!localJobId) return res.status(400).json({ ok: false, error: 'job_id erforderlich.' });
+      if (!technicianId) return res.status(400).json({ ok: false, error: 'technician_id erforderlich.' });
+      const job = db.prepare('SELECT id FROM jobs WHERE id = ?').get(localJobId);
+      if (!job) return res.status(404).json({ ok: false, error: 'Auftrag nicht gefunden.' });
+      const gaps = listProtocolPdfGaps(localJobId);
+      const requested = Array.isArray(body.items) ? body.items : [];
+      const todo = requested.length ? gaps.filter((gap) => requested.some((item) => sameProtocolPdfItem(gap, item))) : gaps;
+      const created = [];
+      const errors = [];
+      for (const item of todo) {
+        try {
+          await refreshOneProtocolPdf(localJobId, technicianId, item);
+          created.push({
+            kind: item.kind,
+            label: item.label,
+            fab: item.fab || '',
+            document_id: item.document_id || 0,
+          });
+        } catch (itemErr) {
+          errors.push({
+            kind: item.kind,
+            label: item.label,
+            fab: item.fab || '',
+            document_id: item.document_id || 0,
+            error: itemErr && itemErr.message ? itemErr.message : String(itemErr),
+          });
+        }
+      }
+      try {
+        save();
+      } catch (_) {
+        /* Checkpoint nach den PDFs */
+      }
+      return res.json({ ok: errors.length === 0, created, errors });
+    } catch (e) {
+      console.warn('[pdf_refresh]', e);
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  });
+
   /**
    * Aktive Auftraege des Technikers fuer "RAMS Erstellen" im Laptop.
    * Liefert das schon vorhandene Dispo-Endpoint `dispo_api/api/jobs_open.php`.
@@ -9670,75 +10379,40 @@ function createApp(db) {
     res.json(result);
   });
 
-  app.post('/api/anlagenstamm_files_list', express.json(), async (req, res) => {
+  app.post('/api/anlagenstamm_files_list', express.json(), (req, res) => {
     const technicianId = getTechnicianId(req);
     const body = req.body || {};
-    const { baseUrl, fab, serverUsername, serverPassword } = body;
-    const base = (baseUrl || '').toString().trim().replace(/\/$/, '');
-    const fabValue = (fab || '').toString().trim();
-    const forceOnline =
-      body.force_online === true ||
-      body.force_online === 1 ||
-      String(body.force_online || '').toLowerCase() === 'true';
+    const fabValue = (body.fab || '').toString().trim();
     if (!technicianId || !fabValue) {
       return res.status(400).json({ ok: false, error: 'fab und technician_id erforderlich.' });
     }
-    // Offline-First: Cache zuerst, außer force_online
     try {
-      const cached = readAnlagenstammTreeCache(db, fabValue);
-      if (cached && cached.tree && cached.tree.length && !forceOnline) {
-        const folder =
-          (cached.root_folder_name && String(cached.root_folder_name).trim()) ||
-          readAnlagenstammRootFolderName(db, fabValue) ||
-          '';
+      const local = localProjekteNeuTreeForFab(technicianId, fabValue);
+      if (local && local.tree && local.tree.length) {
+        const folder = local.root_name || readAnlagenstammRootFolderName(db, fabValue) || '';
         return res.json({
           ok: true,
           fab: fabValue,
-          projekte_neu: { enabled: !!cached.projects_enabled, tree: cached.tree },
-          data_source: 'cache',
+          files: [],
+          projekte_neu: {
+            enabled: local.enabled !== false,
+            tree: annotatePnTreeOffline(technicianId, fabValue, local.tree),
+            root_name: folder,
+          },
+          data_source: local.source || 'local_cache',
           folder,
-          cache_notice: 'Cache – Sync aktualisiert im Hintergrund.',
         });
       }
+      return res.json({
+        ok: true,
+        fab: fabValue,
+        files: [],
+        projekte_neu: { enabled: false, tree: [] },
+        data_source: 'local_empty',
+        folder: '',
+      });
     } catch (e) {
-      if (!base) {
-        return res.status(500).json({ ok: false, error: e.message || String(e) });
-      }
-    }
-    if (!base) {
-      return res.status(503).json({ ok: false, error: 'Kein Anlagenstamm-Dateibaum im lokalen Cache.' });
-    }
-    const auth = authHeaderFromCredentials(serverUsername, serverPassword);
-    const url = `${base}/dispo_api/api/anlagenstamm_files_list.php?technician_id=${encodeURIComponent(technicianId)}&fab=${encodeURIComponent(fabValue)}`;
-    try {
-      const r = await fetch(url, { headers: dispoMonteurFetchHeaders(technicianId, auth) });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) return res.status(r.status).json(data.ok === false ? data : { ok: false, error: data.error || r.statusText });
-      try {
-        const pnRaw = data && data.projekte_neu ? data.projekte_neu : { enabled: false, tree: [] };
-        upsertAnlagenstammTreeCache(db, fabValue, pnRaw);
-        save();
-      } catch (_) { /* cache ist best-effort */ }
-      res.json(data);
-    } catch (e) {
-      try {
-        const cached = readAnlagenstammTreeCache(db, fabValue);
-        if (cached && cached.tree && cached.tree.length) {
-          const folder =
-            (cached.root_folder_name && String(cached.root_folder_name).trim()) ||
-            readAnlagenstammRootFolderName(db, fabValue) ||
-            '';
-          return res.json({
-            ok: true,
-            fab: fabValue,
-            projekte_neu: { enabled: !!cached.projects_enabled, tree: cached.tree },
-            data_source: 'cache',
-            folder,
-            cache_notice: 'Cache – Dispo nicht erreichbar.',
-          });
-        }
-      } catch (_) {}
-      res.status(502).json({ ok: false, error: 'Dispo nicht erreichbar: ' + e.message });
+      return res.status(500).json({ ok: false, error: e.message || String(e) });
     }
   });
 
@@ -10064,7 +10738,7 @@ function createApp(db) {
         found: true,
         fab: cached.fab,
         projects_enabled: cached.projects_enabled,
-        tree: cached.tree,
+        tree: annotatePnTreeOffline(getTechnicianId(req), fab, cached.tree),
         synced_at: cached.synced_at,
         folder,
       });
@@ -10771,7 +11445,12 @@ function createApp(db) {
       const fab = String(row.fab || '').trim();
       if (!fab) continue;
       if (!by_fab[fab]) by_fab[fab] = [];
-      by_fab[fab].push({ rel_path: row.rel_path, file_name: row.file_name, fab });
+      by_fab[fab].push({
+        rel_path: row.rel_path,
+        file_name: row.file_name,
+        fab,
+        is_offline: tedEntryIsOffline(localJobId, fab, row.rel_path, row.file_name),
+      });
     }
     res.json({ ok: true, by_fab, source: 'local' });
   });
@@ -10856,21 +11535,12 @@ function createApp(db) {
     }
   });
 
-  /** TED-Excel lokal auflösen (Projektordner/TED, Cache). */
+  /** Dieselbe lokale Datei wie das grüne Häkchen. Kein Mechanik-Laufwerk, kein Server. */
   function tryOpenLocalTedExcel(localJobId, relPath, fab, fileName) {
-    const reiseDir =
-      localJobId && Number(localJobId) > 0
-        ? resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: false })
-        : null;
-    const hit = resolveTedExcelLocal({
-      reiseDir,
-      relPath,
-      fab,
-      fileName,
-    });
+    const hit = projekteNeuOfflineProbe(localJobId, fab)(relPath, fileName);
     if (!hit || !isExcelFilePath(hit)) return null;
     const st = fs.statSync(hit);
-    return { path: hit, filename: path.basename(hit), size: st.size };
+    return { path: hit, filename: path.basename(hit), size: st.size, source: 'local' };
   }
 
   function resolveServerJobIdForFab(technicianId, fab) {
@@ -11072,6 +11742,13 @@ function createApp(db) {
         file_name: rawName,
         fab,
       });
+      const stammDir = stammTedFabDir(DB_DIR, fab);
+      try {
+        fs.mkdirSync(stammDir, { recursive: true });
+        fs.writeFileSync(path.join(stammDir, safeName), buf);
+      } catch (stammErr) {
+        console.warn('[mechanik_ted_excel_open] stamm-cache', stammErr && stammErr.message ? stammErr.message : stammErr);
+      }
       if (reiseDir) {
         const tedDir = path.join(reiseDir, 'TED');
         if (!fs.existsSync(tedDir)) fs.mkdirSync(tedDir, { recursive: true });
@@ -11488,11 +12165,43 @@ function createApp(db) {
       }
       let pdfBase64 = '';
       let pdfFilename = '';
+      let pdfPath = '';
+      const pdfPaths = [];
       if (wantPdf) {
         const lang = languages.indexOf('en') !== -1 && languages.indexOf('de') === -1 ? 'en' : 'de';
         const pdfBytes = await protocolPdf.generateSchulungsprotokollPdfBuffer(payload, { lang });
-        pdfBase64 = Buffer.from(pdfBytes).toString('base64');
         pdfFilename = lang === 'en' ? 'Schulungsprotokoll_EN.pdf' : 'Schulungsprotokoll_DE.pdf';
+        const reiseDir = resolveDienstreiseReiseDirForJob(localJobId, { createIfMissing: true });
+        const fabs = (payload.anlagen || [])
+          .map((row) => String((row && (row.fabrikationsnummer || row.fn)) || '').trim())
+          .filter(Boolean);
+        const fabTargets = fabs.length ? fabs : [''];
+        const seenDirs = new Set();
+        if (reiseDir) {
+          for (const fab of fabTargets) {
+            const target = await resolveMonteurProtokollePdfTarget(reiseDir, localJobId, fab, technicianId);
+            if (!target || !target.targetDir || seenDirs.has(target.targetDir)) continue;
+            seenDirs.add(target.targetDir);
+            if (!fs.existsSync(target.targetDir)) fs.mkdirSync(target.targetDir, { recursive: true });
+            const absPdf = path.join(target.targetDir, pdfFilename);
+            writeFileWithRetry(absPdf, pdfBytes);
+            pdfPaths.push(absPdf);
+            if (target.relDir) {
+              protectPathIfUnderDokumenteMonteur(
+                db,
+                localJobId,
+                String(target.relDir).replace(/\\/g, '/').replace(/\/+$/, '') + '/' + pdfFilename,
+              );
+            }
+          }
+        }
+        if (!pdfPaths.length) {
+          const tmpPdf = path.join(os.tmpdir(), 'kukla-' + Date.now() + '-' + pdfFilename);
+          writeFileWithRetry(tmpPdf, pdfBytes);
+          pdfPaths.push(tmpPdf);
+        }
+        pdfPath = pdfPaths[0] || '';
+        if (!pdfPath) pdfBase64 = Buffer.from(pdfBytes).toString('base64');
       }
       res.json({
         ok: true,
@@ -11501,6 +12210,8 @@ function createApp(db) {
         dispo_error: dispoError,
         pdf_base64: pdfBase64,
         pdf_filename: pdfFilename,
+        pdf_path: pdfPath || undefined,
+        pdf_paths: pdfPaths,
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message || 'Speichern fehlgeschlagen.' });
@@ -16149,6 +16860,18 @@ function createApp(db) {
     return { reiseDir, dirs, montageFolderName: ao || '' };
   }
 
+  function parameterFileIsOffline(row) {
+    const paths = [row && row.storage_relpath, row && row.source_path];
+    for (const p of paths) {
+      const s = String(p || '').trim();
+      if (!s) continue;
+      try {
+        if (fs.existsSync(s) && fs.statSync(s).isFile()) return true;
+      } catch (_) {}
+    }
+    return Number(row && row.entry_count) > 0;
+  }
+
   async function mapAnlagenstammParameterFiles(fabNorm, technicianId, body, localJobId, opts) {
     const { mapParameterFilesFromDocumentsList } = require('./lib/anlagenstamm-documents-local');
     const mapLocalFiles = (rows) =>
@@ -16171,6 +16894,7 @@ function createApp(db) {
             storage_relpath: row.storage_relpath || null,
             sha256: row.sha256 || null,
             display_datetime: row.display_datetime || null,
+            is_offline: parameterFileIsOffline(row),
           }),
         ),
       );
@@ -18722,7 +19446,8 @@ function createApp(db) {
         const offlineCfg = getOfflinePullConfig(db, localJobId);
         const pullMode = p.offline_pull_mode || offlineCfg.pull_mode || 'legacy';
         const forceRefresh = !!p.force_refresh;
-        const skipTedOnPull = acceptJob || pullMode === 'explicit';
+        // TED wird immer mitgeladen, auch beim Annehmen und im Modus explicit.
+        const skipTedOnPull = false;
         const pathsByFab = getOfflinePullPathsByFab(db, localJobId);
         let fabMap = offlineCfg.fab_map || [];
         if (!fabMap.length) {
@@ -19818,6 +20543,14 @@ function createApp(db) {
               );
             }
             await new Promise((r) => setImmediate(r));
+            startAnlagenstammTedCachePull(base, auth, {
+              technicianId,
+              serverUsername: jobCreds.serverUsername,
+              serverPassword: jobCreds.serverPassword,
+              baseUrl: base,
+              externalUrl: p.externalUrl,
+              internalUrl: p.internalUrl,
+            });
             try {
               const pnTreeSync = await syncProjekteNeuTreesFromDispo(
                 db,
@@ -19856,6 +20589,14 @@ function createApp(db) {
                     pnTreeSync.delta ? '(delta)' : '(voll)',
                   );
                 }
+                startAnlagenstammPnTreeFill(base, auth, {
+                  technicianId,
+                  serverUsername: jobCreds.serverUsername,
+                  serverPassword: jobCreds.serverPassword,
+                  baseUrl: base,
+                  externalUrl: p.externalUrl,
+                  internalUrl: p.internalUrl,
+                });
                 try {
                   const pnThumbSync = await syncProjekteNeuThumbsFromDispo(
                     db,
@@ -19910,8 +20651,16 @@ function createApp(db) {
                 }
               } else if (pnTreeSync._notFound) {
                 console.warn(
-                  '[sync_pull] anlagenstamm_pn_tree: DB-Export nicht verfügbar (Server-Update / anlagenstamm_pn_tree_export_chunk.php). Kein Dateisystem-Fallback im Sync.',
+                  '[sync_pull] anlagenstamm_pn_tree: DB-Export nicht verfügbar (Server-Update / anlagenstamm_pn_tree_export_chunk.php). Nachzug über files_list.',
                 );
+                startAnlagenstammPnTreeFill(base, auth, {
+                  technicianId,
+                  serverUsername: jobCreds.serverUsername,
+                  serverPassword: jobCreds.serverPassword,
+                  baseUrl: base,
+                  externalUrl: p.externalUrl,
+                  internalUrl: p.internalUrl,
+                });
               } else {
                 console.warn('[sync_pull] anlagenstamm_pn_tree:', pnTreeSync.error || 'fehlgeschlagen');
               }
@@ -20010,6 +20759,14 @@ function createApp(db) {
         }
         const auth = authHeaderFromCredentials(jobCreds.serverUsername, jobCreds.serverPassword);
         const fetchHeaders = dispoMonteurFetchHeaders(technicianId, auth);
+        startAnlagenstammTedCachePull(base, auth, {
+          technicianId,
+          serverUsername: jobCreds.serverUsername,
+          serverPassword: jobCreds.serverPassword,
+          baseUrl: base,
+          externalUrl: p.externalUrl,
+          internalUrl: p.internalUrl,
+        });
         try {
           const pnTreeSync = await syncProjekteNeuTreesFromDispo(
             db,
@@ -20051,6 +20808,14 @@ function createApp(db) {
               pnTreeSync.total_count || 0,
               pnTreeSync.delta ? '(delta)' : '(voll)',
             );
+            startAnlagenstammPnTreeFill(base, auth, {
+              technicianId,
+              serverUsername: jobCreds.serverUsername,
+              serverPassword: jobCreds.serverPassword,
+              baseUrl: base,
+              externalUrl: p.externalUrl,
+              internalUrl: p.internalUrl,
+            });
             try {
               const pnThumbSync = await syncProjekteNeuThumbsFromDispo(
                 db,
@@ -20096,8 +20861,16 @@ function createApp(db) {
             }
           } else if (pnTreeSync._notFound) {
             console.warn(
-              '[anlagenstamm_db_sync] anlagenstamm_pn_tree: DB-Export nicht verfügbar — kein Dateisystem-Fallback im Sync.',
+              '[anlagenstamm_db_sync] anlagenstamm_pn_tree: DB-Export nicht verfügbar. Nachzug über files_list.',
             );
+            startAnlagenstammPnTreeFill(base, auth, {
+              technicianId,
+              serverUsername: jobCreds.serverUsername,
+              serverPassword: jobCreds.serverPassword,
+              baseUrl: base,
+              externalUrl: p.externalUrl,
+              internalUrl: p.internalUrl,
+            });
           } else {
             console.warn('[anlagenstamm_db_sync] anlagenstamm_pn_tree:', pnTreeSync.error || 'fehlgeschlagen');
           }

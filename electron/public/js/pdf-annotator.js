@@ -829,7 +829,7 @@ async function save(saveAs) {
     setStatus('Keine Sitzung.');
     return { ok: false };
   }
-  if (!state.strokes.length && !state.texts.length) {
+  if (!saveAs && !state.strokes.length && !state.texts.length) {
     setDirty(false);
     setStatus('Nichts zu speichern.');
     return { ok: true };

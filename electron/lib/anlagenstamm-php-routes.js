@@ -257,13 +257,22 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     res.json(getAnlagenstammFnFocusResponse(db(), req.query));
   });
 
+  function extrasWithOffline(req, payload) {
+    if (payload && typeof ctx.annotateTedByFab === 'function') {
+      try {
+        payload.ted_by_fab = ctx.annotateTedByFab(ctx.getTechnicianId(req), payload.ted_by_fab || {});
+      } catch (_) {}
+    }
+    return payload;
+  }
+
   app.get('/api/anlagenstamm_list_extras.php', (req, res) => {
-    // Offline-first: TED/PN aus SQLite und Baum-Cache, kein Fileserver- und kein OneDrive-Scan.
-    res.json(getAnlagenstammExtrasResponse(db(), req.query || {}));
+    // Offline-first: TED/PN aus SQLite. is_offline prüft nur bekannte lokale Pfade.
+    res.json(extrasWithOffline(req, getAnlagenstammExtrasResponse(db(), req.query || {})));
   });
 
   app.post('/api/anlagenstamm_list_extras.php', express.json({ limit: '4mb' }), (req, res) => {
-    res.json(getAnlagenstammExtrasResponse(db(), req.body || {}));
+    res.json(extrasWithOffline(req, getAnlagenstammExtrasResponse(db(), req.body || {})));
   });
 
   app.post('/api/anlagenstamm_save.php', async (req, res) => {
@@ -458,6 +467,24 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
         source: 'local_fast',
       };
     }
+    try {
+      const cat = (local.categories || []).find((c) => c && c.slug === 'technische_berechnung');
+      const docs = cat && Array.isArray(cat.documents) ? cat.documents : [];
+      if (docs.length && typeof ctx.annotateTedByFab === 'function') {
+        const ted = docs.map((d) => ({
+          rel_path: d.rel_path || d.file_path || '',
+          file_name: d.display_name || d.original_name || '',
+        }));
+        const annotated = ctx.annotateTedByFab(ctx.getTechnicianId(req), { [fab]: ted }) || {};
+        const marked = Array.isArray(annotated[fab]) ? annotated[fab] : [];
+        for (let i = 0; i < docs.length; i++) {
+          const flag = marked[i] && (marked[i].is_offline === true || marked[i].is_offline === 1);
+          docs[i].is_offline = !!flag;
+        }
+      }
+    } catch (_) {
+      /* Status bleibt unbekannt */
+    }
     return res.json(local);
   });
 
@@ -468,7 +495,12 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
     const cacheOnly = String(req.query.cache_only || '') === '1';
 
     function filesListPayload(pnRaw, source) {
-      const tree = (pnRaw && pnRaw.tree) || [];
+      let tree = (pnRaw && pnRaw.tree) || [];
+      if (typeof ctx.annotateProjekteNeuTree === 'function') {
+        try {
+          tree = ctx.annotateProjekteNeuTree(technicianId, fab, tree);
+        } catch (_) {}
+      }
       const rootName =
         (pnRaw && pnRaw.root_name) ||
         (tree[0] && (tree[0].name || tree[0].label) ? String(tree[0].name || tree[0].label) : '');
@@ -514,40 +546,19 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
       }
     }
 
-    if (cacheOnly) {
-      return res.json(filesListPayload({ enabled: false, tree: [], root_name: '' }, 'cache_miss'));
-    }
-
     if (typeof ctx.buildLocalProjekteNeuTreeForFab === 'function') {
       const local = ctx.buildLocalProjekteNeuTreeForFab(technicianId, fab);
       if (local && local.tree && local.tree.length) {
-        return res.json(filesListPayload(local, 'local_cache'));
+        return res.json(filesListPayload(local, local.source || 'local_scan'));
       }
     }
 
-    const apiData = await fetchDispoApiFilesList(ctx, technicianId, fab);
-    if (apiData && apiData.projekte_neu) {
-      if (typeof ctx.upsertAnlagenstammTreeCache === 'function') {
-        ctx.upsertAnlagenstammTreeCache(db(), fab, apiData.projekte_neu);
-      }
-      return res.json(Object.assign({ source: 'dispo_api' }, apiData));
-    }
-
-    const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds({}) : null;
-    const auth = await ctx.ensureProxyAuthenticated(creds);
-    if (!auth.ok || !auth.authenticated) {
-      return res.json(filesListPayload({ enabled: false, tree: [], root_name: '' }, 'local_empty'));
-    }
-    try {
-      const qs = new URLSearchParams(req.query).toString();
-      const data = await auth.proxy.getJson(`/api/anlagenstamm_files_list.php${qs ? `?${qs}` : ''}`);
-      if (typeof ctx.upsertAnlagenstammTreeCache === 'function' && data && data.projekte_neu) {
-        ctx.upsertAnlagenstammTreeCache(db(), fab, data.projekte_neu);
-      }
-      return res.json(Object.assign({ source: 'dispo_online' }, data));
-    } catch (e) {
-      return res.status(502).json({ success: false, error: e.message || String(e) });
-    }
+    return res.json(
+      filesListPayload(
+        { enabled: false, tree: [], root_name: '' },
+        cacheOnly ? 'cache_miss' : 'local_empty',
+      ),
+    );
   });
 
   app.get(['/api/anlagenstamm_ml_pdf_prefill.php', '/api/anlagenstamm_ml_pdf_prefill'], async (req, res) => {
